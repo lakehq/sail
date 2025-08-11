@@ -1,7 +1,7 @@
 use std::any::Any;
 use std::sync::Arc;
 
-use arrow::array::{AsArray, Float32Array, Int32Array, IntervalMonthDayNanoBuilder};
+use arrow::array::{Array, AsArray, Float32Array, Int32Array, IntervalMonthDayNanoBuilder};
 use arrow::datatypes::IntervalUnit::MonthDayNano;
 use arrow::datatypes::{Float32Type, Int32Type, IntervalMonthDayNano};
 use datafusion::arrow::datatypes::DataType;
@@ -157,19 +157,29 @@ impl ScalarUDFImpl for SparkMakeInterval {
         };
         let mut builder = IntervalMonthDayNanoBuilder::with_capacity(number_rows);
         for i in 0..number_rows {
-            let (year, month, week, day, hour, min, sec) = (
+            if years.is_null(i)
+                || months.is_null(i)
+                || weeks.is_null(i)
+                || days.is_null(i)
+                || hours.is_null(i)
+                || mins.is_null(i)
+                || secs.is_null(i)
+            {
+                builder.append_null();
+                continue;
+            }
+            match make_interval_month_day_nano(
                 years.value(i),
                 months.value(i),
                 weeks.value(i),
                 days.value(i),
                 hours.value(i),
                 mins.value(i),
-                secs.value(i),
-            );
-
-            let interval: IntervalMonthDayNano =
-                make_interval_month_day_nano(year, month, week, day, hour, min, sec as f64);
-            builder.append_value(interval);
+                secs.value(i) as f64,
+            ) {
+                Ok(interval) => builder.append_value(interval),
+                Err(_) => builder.append_null(),
+            }
         }
 
         Ok(ColumnarValue::Array(Arc::new(builder.finish())))
@@ -204,17 +214,51 @@ fn make_interval_month_day_nano(
     hour: i32,
     min: i32,
     sec: f64,
-) -> IntervalMonthDayNano {
-    let months = year * 12 + month;
-    let total_days = week * 7 + day;
-    let hours = i64::checked_mul(hour as i64, 3_600_000_000_000);
-    let mins = i64::checked_mul(min as i64, 60_000_000_000);
-    let secs = i64::checked_mul(sec as i64, 1_000_000_000);
+) -> Result<IntervalMonthDayNano> {
+    use datafusion_common::DataFusionError;
+
+    if !sec.is_finite() {
+        return Err(DataFusionError::Execution(
+            "seconds value is NaN or infinite".to_string(),
+        ));
+    }
+
+    let months = year
+        .checked_mul(12)
+        .and_then(|v| v.checked_add(month))
+        .ok_or_else(|| {
+            DataFusionError::Execution("overflow while calculating total months".to_string())
+        })?;
+
+    let total_days = week
+        .checked_mul(7)
+        .and_then(|v| v.checked_add(day))
+        .ok_or_else(|| {
+            DataFusionError::Execution("overflow while calculating total days".to_string())
+        })?;
+
+    let hours = i64::checked_mul(hour as i64, 3_600_000_000_000).ok_or_else(|| {
+        DataFusionError::Execution("overflow while calculating nanoseconds from hours".to_string())
+    })?;
+
+    let mins = i64::checked_mul(min as i64, 60_000_000_000).ok_or_else(|| {
+        DataFusionError::Execution(
+            "overflow while calculating nanoseconds from minutes".to_string(),
+        )
+    })?;
+
+    let secs = i64::checked_mul(sec.round() as i64, 1_000_000_000).ok_or_else(|| {
+        DataFusionError::Execution(
+            "overflow while calculating nanoseconds from seconds".to_string(),
+        )
+    })?;
 
     let total_nanos = hours
-        .and_then(|h| mins.and_then(|m| h.checked_add(m)))
-        .and_then(|hm| secs.and_then(|s| hm.checked_add(s)))
-        .unwrap_or(0);
+        .checked_add(mins)
+        .and_then(|v| v.checked_add(secs))
+        .ok_or_else(|| {
+            DataFusionError::Execution("overflow while summing total nanoseconds".to_string())
+        })?;
 
-    IntervalMonthDayNano::new(months, total_days, total_nanos)
+    Ok(IntervalMonthDayNano::new(months, total_days, total_nanos))
 }
