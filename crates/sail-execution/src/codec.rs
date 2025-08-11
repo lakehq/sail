@@ -84,10 +84,8 @@ use sail_plan::extension::function::math::spark_bin::SparkBin;
 use sail_plan::extension::function::math::spark_bround::SparkBRound;
 use sail_plan::extension::function::math::spark_ceil_floor::{SparkCeil, SparkFloor};
 use sail_plan::extension::function::math::spark_conv::SparkConv;
-use sail_plan::extension::function::math::spark_csc::SparkCsc;
 use sail_plan::extension::function::math::spark_hex_unhex::{SparkHex, SparkUnHex};
 use sail_plan::extension::function::math::spark_pmod::SparkPmod;
-use sail_plan::extension::function::math::spark_sec::SparkSec;
 use sail_plan::extension::function::math::spark_signum::SparkSignum;
 use sail_plan::extension::function::math::spark_try_add::SparkTryAdd;
 use sail_plan::extension::function::math::spark_try_div::SparkTryDiv;
@@ -836,7 +834,6 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
             "spark_try_to_number" | "rey_to_number" => {
                 Ok(Arc::new(ScalarUDF::from(SparkTryToNumber::new())))
             }
-            "spark_csc" | "csc" => Ok(Arc::new(ScalarUDF::from(SparkCsc::new()))),
             "spark_hex" | "hex" => Ok(Arc::new(ScalarUDF::from(SparkHex::new()))),
             "spark_unhex" | "unhex" => Ok(Arc::new(ScalarUDF::from(SparkUnHex::new()))),
             "spark_murmur3_hash" | "hash" => Ok(Arc::new(ScalarUDF::from(SparkMurmur3Hash::new()))),
@@ -868,7 +865,6 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
             }
             "spark_abs" | "abs" => Ok(Arc::new(ScalarUDF::from(SparkAbs::new()))),
             "spark_conv" | "conv" => Ok(Arc::new(ScalarUDF::from(SparkConv::new()))),
-            "spark_sec" | "sec" => Ok(Arc::new(ScalarUDF::from(SparkSec::new()))),
             "spark_signum" | "signum" => Ok(Arc::new(ScalarUDF::from(SparkSignum::new()))),
             "spark_element_at" | "element_at" => {
                 Ok(Arc::new(ScalarUDF::from(SparkElementAt::new())))
@@ -964,8 +960,6 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
             || node.inner().as_any().is::<SparkAbs>()
             || node.inner().as_any().is::<SparkBRound>()
             || node.inner().as_any().is::<SparkConv>()
-            || node.inner().as_any().is::<SparkCsc>()
-            || node.inner().as_any().is::<SparkSec>()
             || node.inner().as_any().is::<SparkSignum>()
             || node.inner().as_any().is::<SparkToBinary>()
             || node.inner().as_any().is::<SparkTryToBinary>()
