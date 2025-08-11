@@ -115,6 +115,7 @@ use sail_plan::extension::function::string::spark_encode_decode::{SparkDecode, S
 use sail_plan::extension::function::string::spark_mask::SparkMask;
 use sail_plan::extension::function::string::spark_to_binary::{SparkToBinary, SparkTryToBinary};
 use sail_plan::extension::function::string::spark_to_number::SparkToNumber;
+use sail_plan::extension::function::string::spark_try_to_number::SparkTryToNumber;
 use sail_plan::extension::function::struct_function::StructFunction;
 use sail_plan::extension::function::update_struct_field::UpdateStructField;
 use sail_plan::extension::function::url::parse_url::ParseUrl;
@@ -832,6 +833,9 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
             "spark_concat" | "concat" => Ok(Arc::new(ScalarUDF::from(SparkConcat::new()))),
             "spark_from_csv" | "from_csv" => Ok(Arc::new(ScalarUDF::from(SparkFromCSV::new()))),
             "spark_to_number" | "to_number" => Ok(Arc::new(ScalarUDF::from(SparkToNumber::new()))),
+            "spark_try_to_number" | "rey_to_number" => {
+                Ok(Arc::new(ScalarUDF::from(SparkTryToNumber::new())))
+            }
             "spark_csc" | "csc" => Ok(Arc::new(ScalarUDF::from(SparkCsc::new()))),
             "spark_hex" | "hex" => Ok(Arc::new(ScalarUDF::from(SparkHex::new()))),
             "spark_unhex" | "unhex" => Ok(Arc::new(ScalarUDF::from(SparkUnHex::new()))),
@@ -943,6 +947,7 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
             || node.inner().as_any().is::<SparkHex>()
             || node.inner().as_any().is::<SparkFromCSV>()
             || node.inner().as_any().is::<SparkToNumber>()
+            || node.inner().as_any().is::<SparkTryToNumber>()
             || node.inner().as_any().is::<SparkUnHex>()
             || node.inner().as_any().is::<SparkMurmur3Hash>()
             || node.inner().as_any().is::<SparkReverse>()
