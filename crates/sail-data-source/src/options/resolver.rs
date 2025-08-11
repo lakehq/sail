@@ -377,6 +377,14 @@ impl<'a> DataSourceOptionsResolver<'a> {
         for opt in options {
             apply_parquet_write_options(load_options(opt)?, &mut parquet_options)?;
         }
+        // When the FPP or NDV is set, the parquet writer will enable bloom filter implicitly.
+        // This is not desired since we want those values to take effect only when the bloom filter
+        // is explicitly enabled on write.
+        // So here we set FPP and NDV to `None` if the bloom filter is not enabled on write.
+        if !parquet_options.global.bloom_filter_on_write {
+            parquet_options.global.bloom_filter_fpp = None;
+            parquet_options.global.bloom_filter_ndv = None;
+        }
         Ok(parquet_options)
     }
 
