@@ -1,5 +1,4 @@
 >>> from pyspark.sql import Row, functions as F
-
 >>> data = [
 ...     Row(y=1, m=2, w=3, d=4, h=5, mi=6, s=7.5),
 ...     Row(y=None, m=2, w=3, d=4, h=5, mi=6, s=7.5),
