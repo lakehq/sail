@@ -50,8 +50,6 @@ impl ScalarUDFImpl for SparkMakeInterval {
         let ScalarFunctionArgs {
             args, number_rows, ..
         } = args;
-        println!("[make_interval] args received ({}): {:?}", args.len(), args);
-        println!("args type {:?}", args[0].data_type());
         if args.is_empty() || args.len() > 7 {
             return Err(invalid_arg_count_exec_err(
                 "make_interval",
@@ -209,9 +207,14 @@ fn make_interval_month_day_nano(
 ) -> IntervalMonthDayNano {
     let months = year * 12 + month;
     let total_days = week * 7 + day;
-    let total_nanos = (hour as i64) * 3_600_000_000_000
-        + (min as i64) * 60_000_000_000
-        + (sec * 1_000_000_000.0).round() as i64;
+    let hours = i64::checked_mul(hour as i64, 3_600_000_000_000);
+    let mins = i64::checked_mul(min as i64, 60_000_000_000);
+    let secs = i64::checked_mul(sec as i64, 1_000_000_000);
+
+    let total_nanos = hours
+        .and_then(|h| mins.and_then(|m| h.checked_add(m)))
+        .and_then(|hm| secs.and_then(|s| hm.checked_add(s)))
+        .unwrap_or(0);
 
     IntervalMonthDayNano::new(months, total_days, total_nanos)
 }
