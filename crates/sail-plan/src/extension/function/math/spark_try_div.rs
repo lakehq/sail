@@ -155,7 +155,7 @@ impl ScalarUDFImpl for SparkTryDiv {
             }
             (l, r) => Err(unsupported_data_types_exec_err(
                 "try_divide",
-                "Int32, Int64 o Interval(YearMonth) / Int32,,,,",
+                "Int32, Int64 o Interval(YearMonth) / Int32",
                 &[l.clone(), r.clone()],
             )),
         }
