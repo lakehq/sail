@@ -532,25 +532,31 @@ fn partitioned_file_from_action(
     let partition_values = partition_columns
         .iter()
         .map(|part| {
-            action
-                .partition_values
-                .get(part)
-                .map(|val| {
-                    schema
-                        .field_with_name(part)
-                        .map(|field| match val {
-                            Some(value) => to_correct_scalar_value(
-                                &serde_json::Value::String(value.to_string()),
-                                field.data_type(),
-                            )
-                            .unwrap_or(Some(ScalarValue::Null))
-                            .unwrap_or(ScalarValue::Null),
-                            None => ScalarValue::try_new_null(field.data_type())
-                                .unwrap_or(ScalarValue::Null),
-                        })
-                        .unwrap_or(ScalarValue::Null)
-                })
-                .unwrap_or(ScalarValue::Null)
+            let partition_value = match action.partition_values.get(part) {
+                Some(val) => val,
+                None => return ScalarValue::Null,
+            };
+
+            let field = match schema.field_with_name(part) {
+                Ok(field) => field,
+                Err(_) => return ScalarValue::Null,
+            };
+
+            // Convert partition value to ScalarValue
+            match partition_value {
+                Some(value) => {
+                    to_correct_scalar_value(
+                        &serde_json::Value::String(value.to_string()),
+                        field.data_type(),
+                    )
+                    .ok()
+                    .flatten()
+                    .unwrap_or(ScalarValue::Null)
+                }
+                None => {
+                    ScalarValue::try_new_null(field.data_type()).unwrap_or(ScalarValue::Null)
+                }
+            }
         })
         .collect::<Vec<_>>();
 
