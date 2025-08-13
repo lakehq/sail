@@ -917,20 +917,11 @@ pub struct WriteStream {
     pub format: String,
     pub options: Vec<(String, String)>,
     pub partitioning_column_names: Vec<Identifier>,
-    pub output_mode: WriteStreamOutputMode,
     pub query_name: String,
     pub foreach_writer: Option<FunctionDefinition>,
     pub foreach_batch: Option<FunctionDefinition>,
     pub clustering_column_names: Vec<Identifier>,
     pub sink_destination: Option<WriteStreamSinkDestination>,
-}
-
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase")]
-pub enum WriteStreamOutputMode {
-    Append,
-    Complete,
-    Update,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]

@@ -250,6 +250,8 @@ pub(crate) async fn handle_execute_write_stream_operation_start(
 ) -> SparkResult<ExecutePlanResponseStream> {
     let spark = ctx.extension::<SparkSession>()?;
     let operation_id = metadata.operation_id.clone();
+    let reattachable = metadata.reattachable;
+    let query_name = start.query_name.clone();
     let plan = spec::Plan::Command(spec::CommandPlan::new(start.try_into()?));
     let plan = resolve_and_execute_plan(ctx, spark.plan_config()?, plan).await?;
     let stream = spark.job_runner().execute(ctx, plan).await?;
@@ -258,12 +260,15 @@ pub(crate) async fn handle_execute_write_stream_operation_start(
     spark.add_executor(executor)?;
     let result = WriteStreamOperationStartResult {
         query_id: None,
-        name: "".to_string(),
+        name: query_name,
         query_started_event_json: None,
     };
-    let output = vec![ExecutorOutput::new(
+    let mut output = vec![ExecutorOutput::new(
         ExecutorBatch::WriteStreamOperationStartResult(Box::new(result)),
     )];
+    if reattachable {
+        output.push(ExecutorOutput::complete());
+    }
     Ok(ExecutePlanResponseStream::new(
         spark.session_id().to_string(),
         operation_id,
@@ -332,9 +337,12 @@ pub(crate) async fn handle_execute_streaming_query_command(
         query_id: Some(query_id),
         result_type,
     };
-    let output = vec![ExecutorOutput::new(
+    let mut output = vec![ExecutorOutput::new(
         ExecutorBatch::StreamingQueryCommandResult(Box::new(result)),
     )];
+    if metadata.reattachable {
+        output.push(ExecutorOutput::complete());
+    }
     Ok(ExecutePlanResponseStream::new(
         spark.session_id().to_string(),
         metadata.operation_id,
@@ -395,9 +403,12 @@ pub(crate) async fn handle_execute_streaming_query_manager_command(
         }
     };
     let result = StreamingQueryManagerCommandResult { result_type };
-    let output = vec![ExecutorOutput::new(
+    let mut output = vec![ExecutorOutput::new(
         ExecutorBatch::StreamingQueryManagerCommandResult(Box::new(result)),
     )];
+    if metadata.reattachable {
+        output.push(ExecutorOutput::complete());
+    }
     Ok(ExecutePlanResponseStream::new(
         spark.session_id().to_string(),
         metadata.operation_id,

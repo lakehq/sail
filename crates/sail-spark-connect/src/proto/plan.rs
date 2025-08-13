@@ -1682,12 +1682,17 @@ impl TryFrom<WriteStreamOperationStart> for spec::CommandNode {
             format,
             options,
             partitioning_column_names,
-            output_mode,
+            // The output mode is ignored since the sink always accepts a record batch stream
+            // that represent incremental changes (either append-only or upserts).
+            // The sink will decide internally whether it can write incremental changes
+            // or needs a full overwrite.
+            output_mode: _,
             query_name,
             foreach_writer,
             foreach_batch,
             clustering_column_names,
             // The trigger is ignored since we always do continuous processing.
+            // The source determines how the processing is triggered.
             trigger: _,
             sink_destination,
         } = start;
@@ -1697,17 +1702,6 @@ impl TryFrom<WriteStreamOperationStart> for spec::CommandNode {
             .into_iter()
             .map(|x| x.into())
             .collect();
-        let output_mode = match output_mode.to_ascii_lowercase().as_str() {
-            "append" => spec::WriteStreamOutputMode::Append,
-            "complete" => spec::WriteStreamOutputMode::Complete,
-            "update" => spec::WriteStreamOutputMode::Update,
-            _ => {
-                return Err(SparkError::invalid(format!(
-                    "unsupported output mode: {}",
-                    output_mode
-                )));
-            }
-        };
         let foreach_writer = foreach_writer.map(|x| x.try_into()).transpose()?;
         let foreach_batch = foreach_batch.map(|x| x.try_into()).transpose()?;
         let clustering_column_names = clustering_column_names
@@ -1729,7 +1723,6 @@ impl TryFrom<WriteStreamOperationStart> for spec::CommandNode {
             format,
             options,
             partitioning_column_names,
-            output_mode,
             query_name,
             foreach_writer,
             foreach_batch,
