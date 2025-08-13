@@ -4,7 +4,7 @@ use std::sync::Arc;
 use crate::extension::function::error_utils::{generic_exec_err, unsupported_data_types_exec_err};
 use crate::extension::function::functions_nested_utils::downcast_arg;
 use crate::extension::function::functions_utils::make_scalar_function;
-use arrow::array::{Array, ArrayRef, Int32Array, Int64Array, ListBuilder, StringArray, StringBuilder};
+use arrow::array::{Array, ArrayRef, Int32Array, ListBuilder, StringArray, StringBuilder};
 use arrow::datatypes::{DataType, Field};
 use datafusion::common::DataFusionError;
 use datafusion_common::Result;
@@ -59,7 +59,7 @@ impl ScalarUDFImpl for SparkSplit {
                 Ok(vec![
                     arg_types[0].clone(),
                     arg_types[1].clone(),
-                    DataType::Int64,
+                    DataType::Int32,
                 ])
             }
             [DataType::Utf8 | DataType::Utf8View | DataType::LargeUtf8, DataType::Utf8 | DataType::Utf8View | DataType::LargeUtf8, DataType::Int32 | DataType::Int64 | DataType::UInt32 | DataType::UInt64] => {
@@ -86,9 +86,9 @@ impl ScalarUDFImpl for SparkSplit {
 pub fn spark_split_inner(args: &[ArrayRef]) -> Result<ArrayRef> {
     let values: &StringArray = downcast_arg!(&args[0], StringArray);
     let format: &StringArray = downcast_arg!(&args[1], StringArray);
-    let limit: &Int64Array = match args.get(2) {
-        Some(limit) => downcast_arg!(limit, Int64Array),
-        None => &Int64Array::from(vec![0; values.len()]),
+    let limit: &Int32Array = match args.get(2) {
+        Some(limit) => downcast_arg!(limit, Int32Array),
+        None => &Int32Array::from(vec![0; values.len()]),
     };
 
     let mut builder = ListBuilder::new(StringBuilder::new());
@@ -137,7 +137,7 @@ pub fn spark_split_inner(args: &[ArrayRef]) -> Result<ArrayRef> {
     // Ok(Arc::new(GenericListBuilder::<i32>::new(children_arrays, validity).finish()))
 }
 
-pub fn split_to_array(value: &str, format: &str, limit: i64) -> Result<Vec<Option<String>>> {
+pub fn split_to_array(value: &str, format: &str, limit: i32) -> Result<Vec<Option<String>>> {
     let format: Regex =
         Regex::new(format).map_err(|_| generic_exec_err(SparkSplit::NAME, "Invalid regex"))?;
     let values = format.split(value).collect::<Vec<&str>>();
