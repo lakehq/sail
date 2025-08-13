@@ -54,13 +54,6 @@ impl ScalarUDFImpl for SparkSplit {
         ))))
     }
 
-    /// AnalysisException: Failed to coerce arguments to satisfy a call to 'split' function:
-    /// coercion from [Utf8, Utf8] to the signature UserDefined failed No function matches the
-    /// given name and argument types 'split(Utf8, Utf8)'.
-    /// You might need to add explicit type casts. Candidate functions: split(UserDefined)
-    ///
-    ///
-    ///
     fn coerce_types(&self, arg_types: &[DataType]) -> Result<Vec<DataType>> {
         match arg_types {
 
