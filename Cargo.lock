@@ -5635,6 +5635,7 @@ dependencies = [
  "chrono",
  "datafusion",
  "datafusion-common",
+ "datafusion-physical-expr",
  "delta_kernel",
  "deltalake",
  "futures",
