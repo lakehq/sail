@@ -8,7 +8,7 @@
 The mission of Sail is to unify stream processing, batch processing, and compute-intensive (AI) workloads.
 Currently, Sail features a drop-in replacement for Spark SQL and the Spark DataFrame API in both single-host and distributed settings.
 
-**✨Please check out our [MCP server](https://lakesail.com/blog/spark-mcp-server/) that brings data analytics in Spark to both LLM agents and humans!✨**
+**✨Using Sail? [Tell us your story](https://lakesail.com/share-story/) and get free merch!✨**
 
 ## Installation
 
