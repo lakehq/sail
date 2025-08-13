@@ -57,7 +57,10 @@ impl ScalarUDFImpl for SparkSplit {
     fn coerce_types(&self, arg_types: &[DataType]) -> Result<Vec<DataType>> {
         match arg_types {
 
-            [DataType::Utf8 | DataType::Utf8View | DataType::LargeUtf8 | DataType::Null , DataType::Utf8 | DataType::Utf8View | DataType::LargeUtf8 | DataType::Null] => {
+            [
+                DataType::Utf8 | DataType::Utf8View | DataType::LargeUtf8 | DataType::Null ,
+                DataType::Utf8 | DataType::Utf8View | DataType::LargeUtf8 | DataType::Null
+            ] => {
                 Ok(vec![
                     arg_types[0].clone(),
                     arg_types[1].clone(),
@@ -65,9 +68,9 @@ impl ScalarUDFImpl for SparkSplit {
                 ])
             }
             [
-            DataType::Utf8 | DataType::Utf8View | DataType::LargeUtf8 | DataType::Null ,
-            DataType::Utf8 | DataType::Utf8View | DataType::LargeUtf8 | DataType::Null ,
-            DataType::Int32 | DataType::Int64 | DataType::UInt32 | DataType::UInt64 | DataType::Null | DataType::Utf8
+                DataType::Utf8 | DataType::Utf8View | DataType::LargeUtf8 | DataType::Null ,
+                DataType::Utf8 | DataType::Utf8View | DataType::LargeUtf8 | DataType::Null ,
+                DataType::Int32 | DataType::Int64 | DataType::UInt32 | DataType::UInt64 | DataType::Null | DataType::Utf8
             ] => {
                 Ok(vec![
                     arg_types[0].clone(),
@@ -90,11 +93,11 @@ impl ScalarUDFImpl for SparkSplit {
 }
 
 pub fn spark_split_inner(args: &[ArrayRef]) -> Result<ArrayRef> {
-    let len = args[0].len();
+    let len: usize = args[0].len();
     // Initialize default values in case of nulls
     let default_nulls: Vec<Option<&str>> = vec![None; len];
-    let default_nulls = StringArray::from(default_nulls);
-    let default_limit = Int32Array::from(vec![0; len]);
+    let default_nulls: StringArray = StringArray::from(default_nulls);
+    let default_limit: Int32Array = Int32Array::from(vec![0; len]);
 
     // Getting the arrays
     let values: &StringArray = opt_downcast_arg!(&args[0], StringArray).unwrap_or(&default_nulls);
@@ -121,7 +124,7 @@ pub fn spark_split_inner(args: &[ArrayRef]) -> Result<ArrayRef> {
 pub fn split_to_array(value: &str, format: &str, limit: i32) -> Result<Vec<Option<String>>> {
     let format: Regex =
         Regex::new(format).map_err(|_| generic_exec_err(SparkSplit::NAME, "Invalid regex"))?;
-    let values = if limit > 0 {
+    let values: Vec<&str> = if limit > 0 {
         format.splitn(value, limit as usize).collect::<Vec<&str>>()
     } else {
         format.split(value).collect::<Vec<&str>>()
