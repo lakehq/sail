@@ -12,7 +12,7 @@ use datafusion::physical_expr::PhysicalExpr;
 /// A Physical Expression Adapter Factory which provides casting and rewriting of physical expressions
 /// for Delta Lake conventions.
 #[derive(Debug)]
-pub(crate) struct DeltaPhysicalExprAdapterFactory {}
+pub struct DeltaPhysicalExprAdapterFactory {}
 
 impl PhysicalExprAdapterFactory for DeltaPhysicalExprAdapterFactory {
     fn create(

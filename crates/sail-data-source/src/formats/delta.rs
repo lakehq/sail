@@ -6,10 +6,8 @@ use datafusion::catalog::{Session, TableProvider};
 use datafusion::datasource::listing::ListingTableUrl;
 use datafusion::datasource::sink::DataSinkExec;
 use datafusion::execution::SessionStateBuilder;
-use datafusion::physical_expr_common::physical_expr::{fmt_sql, PhysicalExpr};
 use datafusion::physical_plan::ExecutionPlan;
-use datafusion::sql::sqlparser::ast::escape_quoted_string;
-use datafusion_common::{not_impl_err, plan_err, DataFusionError, Result, ScalarValue, ToDFSchema};
+use datafusion::common::{not_impl_err, plan_err, DataFusionError, Result, ToDFSchema};
 use deltalake::kernel::{Action, Remove};
 use deltalake::protocol::{DeltaOperation, SaveMode};
 use sail_common_datafusion::datasource::{PhysicalSinkMode, SinkInfo, SourceInfo, TableFormat};
@@ -185,24 +183,13 @@ impl TableFormat for DeltaTableFormat {
                     let snapshot = table
                         .snapshot()
                         .map_err(|e| DataFusionError::External(Box::new(e)))?;
-                    let df_schema = snapshot
-                        .arrow_schema()
-                        .map_err(|e| DataFusionError::External(Box::new(e)))?
-                        .to_dfschema()?;
                     let session_state = SessionStateBuilder::new()
                         .with_runtime_env(ctx.runtime_env().clone())
                         .build();
 
-                    // Convert PhysicalExpr to sql string
-                    let condition_str = physical_expr_to_sql_string(condition.as_ref());
-                    let logical_expr =
-                        parse_predicate_expression(&df_schema, &condition_str, &session_state)
-                            .map_err(|e| DataFusionError::External(Box::new(e)))?;
-                    predicate_str = Some(condition_str);
-
                     #[allow(clippy::unwrap_used)]
-                    let (remove_actions, _) = prepare_predicate_actions(
-                        logical_expr,
+                    let (remove_actions, _) = sail_delta_lake::operations::write::execution::prepare_predicate_actions_physical(
+                        condition.clone(),
                         table.log_store(),
                         snapshot,
                         session_state,
@@ -218,6 +205,10 @@ impl TableFormat for DeltaTableFormat {
                     .await
                     .map_err(|e| DataFusionError::External(Box::new(e)))?;
                     initial_actions.extend(remove_actions);
+
+                    // Leave predicate empty
+                    // The actual filtering logic is handled directly by PhysicalExpr
+                    predicate_str = None;
                 }
                 operation = Some(DeltaOperation::Write {
                     mode: SaveMode::Overwrite,
@@ -226,6 +217,7 @@ impl TableFormat for DeltaTableFormat {
                     } else {
                         Some(partition_by.clone())
                     },
+                    // predicate_str is None for OverwriteIf since we use PhysicalExpr directly
                     predicate: predicate_str.clone(),
                 });
             }
@@ -270,44 +262,5 @@ impl DeltaTableFormat {
             (Some(path), true) => Ok(<ListingTableUrl as AsRef<Url>>::as_ref(&path).clone()),
             _ => plan_err!("expected a single path for Delta table sink: {paths:?}"),
         }
-    }
-}
-
-/// Convert a PhysicalExpr to a properly formatted SQL string
-/// This function handles string literals correctly by adding quotes
-fn physical_expr_to_sql_string(expr: &dyn PhysicalExpr) -> String {
-    // Try to downcast to a BinaryExpr first
-    if let Some(binary) = expr
-        .as_any()
-        .downcast_ref::<datafusion::physical_plan::expressions::BinaryExpr>()
-    {
-        let left = physical_expr_to_sql_string(binary.left().as_ref());
-        let right = physical_expr_to_sql_string(binary.right().as_ref());
-        let op = binary.op();
-        return format!("{left} {op} {right}");
-    }
-
-    // Try to downcast to a Literal expression
-    if let Some(literal) = expr
-        .as_any()
-        .downcast_ref::<datafusion::physical_plan::expressions::Literal>()
-    {
-        // Handle string literals specially by adding quotes
-        match literal.value() {
-            ScalarValue::Utf8(Some(s))
-            | ScalarValue::LargeUtf8(Some(s))
-            | ScalarValue::Utf8View(Some(s)) => {
-                format!("'{}'", escape_quoted_string(s, '\''))
-            }
-            _ => literal.value().to_string(),
-        }
-    } else if let Some(column) = expr
-        .as_any()
-        .downcast_ref::<datafusion::physical_plan::expressions::Column>()
-    {
-        column.name().to_string()
-    } else {
-        // For other expressions, use the default fmt_sql
-        fmt_sql(expr).to_string()
     }
 }
