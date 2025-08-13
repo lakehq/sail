@@ -295,8 +295,8 @@ impl CatalogCommand {
                 build_record_batch(schema, &rows)
             }
             CatalogCommand::GetTable { table } => {
-                // We are supposed to return an error if the table does not exist.
-                let table = manager.get_table(&table).await?;
+                // We are supposed to return an error if the table or view does not exist.
+                let table = manager.get_table_or_view(&table).await?;
                 let table = D::table(table);
                 build_record_batch(schema, &[table])
             }

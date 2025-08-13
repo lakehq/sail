@@ -2,7 +2,8 @@ use std::sync::Arc;
 
 use datafusion::datasource::provider_as_source;
 use datafusion::execution::context::SessionState;
-use datafusion::logical_expr::{Expr, LogicalPlanBuilder};
+use datafusion::logical_expr::LogicalPlanBuilder;
+use datafusion::physical_expr::PhysicalExpr;
 use datafusion::physical_plan::{ExecutionPlan, ExecutionPlanProperties};
 use datafusion::prelude::DataFrame;
 use deltalake::errors::DeltaResult;
@@ -15,8 +16,7 @@ use uuid::Uuid;
 
 /// [Credit]: <https://github.com/delta-io/delta-rs/blob/3607c314cbdd2ad06c6ee0677b92a29f695c71f3/crates/core/src/operations/write/execution.rs>
 use crate::delta_datafusion::{
-    datafusion_to_delta_error, find_files, DataFusionMixins, DeltaScanConfigBuilder,
-    DeltaTableProvider,
+    datafusion_to_delta_error, DataFusionMixins, DeltaScanConfigBuilder, DeltaTableProvider,
 };
 use crate::operations::write::writer::{DeltaWriter, WriterConfig};
 
@@ -40,20 +40,23 @@ impl WriterStatsConfig {
 }
 
 #[allow(clippy::too_many_arguments)]
-pub(crate) async fn execute_non_empty_expr(
+pub(crate) async fn execute_non_empty_expr_physical(
     snapshot: &DeltaTableState,
     log_store: LogStoreRef,
     state: SessionState,
     partition_columns: Vec<String>,
-    expression: &Expr,
+    physical_expression: Arc<dyn PhysicalExpr>,
     rewrite: &[Add],
     writer_properties: Option<WriterProperties>,
     writer_stats_config: WriterStatsConfig,
     partition_scan: bool,
     operation_id: Uuid,
 ) -> DeltaResult<(Vec<Action>, Option<DataFrame>)> {
-    // For each identified file perform a parquet scan + filter + limit (1) + count.
-    // If returned count is not zero then append the file to be rewritten and removed from the log. Otherwise do nothing to the file.
+    use datafusion::logical_expr::Operator;
+    use datafusion::physical_expr::expressions::{BinaryExpr, Literal, NotExpr};
+    use datafusion::physical_plan::filter::FilterExec;
+    use datafusion_common::ScalarValue;
+
     let mut actions: Vec<Action> = Vec::new();
 
     // Take the insert plan schema since it might have been schema evolved, if its not
@@ -73,19 +76,27 @@ pub(crate) async fn execute_non_empty_expr(
         .build()
         .map_err(datafusion_to_delta_error)?;
 
-    let df = DataFrame::new(state.clone(), source);
+    // Create the base physical plan from the logical plan
+    let base_physical_plan = state
+        .create_physical_plan(&source)
+        .await
+        .map_err(datafusion_to_delta_error)?;
 
     let cdf_df = if !partition_scan {
-        // Apply the negation of the filter and rewrite files
-        let negated_expression = Expr::Not(Box::new(Expr::IsTrue(Box::new(expression.clone()))));
+        // Create IsTrue(expression) as IsNotDistinctFrom(expression, true)
+        let true_literal = Arc::new(Literal::new(ScalarValue::Boolean(Some(true))));
+        let is_true_expr = Arc::new(BinaryExpr::new(
+            physical_expression,
+            Operator::IsNotDistinctFrom,
+            true_literal,
+        ));
 
-        let filter = df
-            .clone()
-            .filter(negated_expression)
-            .map_err(datafusion_to_delta_error)?
-            .create_physical_plan()
-            .await
-            .map_err(datafusion_to_delta_error)?;
+        let negated_physical_expr = Arc::new(NotExpr::new(is_true_expr));
+
+        let filter = Arc::new(
+            FilterExec::try_new(negated_physical_expr, base_physical_plan)
+                .map_err(datafusion_to_delta_error)?,
+        );
 
         let add_actions: Vec<Action> = write_execution_plan(
             Some(snapshot),
@@ -162,8 +173,8 @@ async fn write_execution_plan(
 }
 
 #[allow(clippy::too_many_arguments)]
-pub async fn prepare_predicate_actions(
-    predicate: Expr,
+pub async fn prepare_predicate_actions_physical(
+    predicate: Arc<dyn PhysicalExpr>,
     log_store: LogStoreRef,
     snapshot: &DeltaTableState,
     state: SessionState,
@@ -173,15 +184,23 @@ pub async fn prepare_predicate_actions(
     writer_stats_config: WriterStatsConfig,
     operation_id: Uuid,
 ) -> DeltaResult<(Vec<Action>, Option<DataFrame>)> {
-    let candidates =
-        find_files(snapshot, log_store.clone(), &state, Some(predicate.clone())).await?;
+    let adapter_factory =
+        Arc::new(crate::delta_datafusion::schema_rewriter::DeltaPhysicalExprAdapterFactory {});
+    let candidates = crate::delta_datafusion::find_files_physical(
+        snapshot,
+        log_store.clone(),
+        &state,
+        Some(predicate.clone()),
+        adapter_factory,
+    )
+    .await?;
 
-    let (mut actions, cdf_df) = execute_non_empty_expr(
+    let (mut actions, cdf_df) = execute_non_empty_expr_physical(
         snapshot,
         log_store,
         state,
         partition_columns,
-        &predicate,
+        predicate,
         &candidates.candidates,
         writer_properties,
         writer_stats_config,
@@ -190,17 +209,16 @@ pub async fn prepare_predicate_actions(
     )
     .await?;
 
-    let remove = candidates.candidates;
-
-    for action in remove {
+    // Remove actions for files that match the predicate
+    for action in &candidates.candidates {
         actions.push(Action::Remove(Remove {
-            path: action.path,
+            path: action.path.clone(),
             deletion_timestamp: Some(deletion_timestamp),
             data_change: true,
             extended_file_metadata: Some(true),
-            partition_values: Some(action.partition_values),
+            partition_values: Some(action.partition_values.clone()),
             size: Some(action.size),
-            deletion_vector: action.deletion_vector,
+            deletion_vector: action.deletion_vector.clone(),
             tags: None,
             base_row_id: action.base_row_id,
             default_row_commit_version: action.default_row_commit_version,
