@@ -9,7 +9,15 @@ macro_rules! downcast_arg {
         })?
     }};
 }
+
+macro_rules! opt_downcast_arg {
+    ($ARG:expr, $ARRAY_TYPE:ident) => {{
+        $ARG.as_any().downcast_ref::<$ARRAY_TYPE>()
+    }};
+}
+
 pub(crate) use downcast_arg;
+pub(crate) use opt_downcast_arg;
 
 /// array function wrapper that differentiates between scalar (length 1) and array.
 pub(crate) fn make_scalar_function<F>(

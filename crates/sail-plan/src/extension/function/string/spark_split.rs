@@ -2,19 +2,17 @@ use std::any::Any;
 use std::sync::Arc;
 
 use crate::extension::function::error_utils::{generic_exec_err, unsupported_data_types_exec_err};
-use crate::extension::function::functions_nested_utils::downcast_arg;
+use crate::extension::function::functions_nested_utils::opt_downcast_arg;
 use crate::extension::function::functions_utils::make_scalar_function;
 use arrow::array::{
-    Array, ArrayRef, Int64Array, ListArray, ListBuilder, StringArray, StringBuilder,
+    Array, ArrayRef, Int32Array, ListArray, ListBuilder, StringArray, StringBuilder,
 };
 use arrow::datatypes::{DataType, Field};
-use datafusion::common::DataFusionError;
 use datafusion_common::Result;
 use datafusion_expr::{ScalarFunctionArgs, ScalarUDFImpl};
 use datafusion_expr_common::columnar_value::ColumnarValue;
 use datafusion_expr_common::signature::{Signature, Volatility};
 use regex::Regex;
-use std::any::type_name;
 
 #[derive(Debug)]
 pub struct SparkSplit {
@@ -57,14 +55,19 @@ impl ScalarUDFImpl for SparkSplit {
 
     fn coerce_types(&self, arg_types: &[DataType]) -> Result<Vec<DataType>> {
         match arg_types {
-            [DataType::Utf8 | DataType::Utf8View | DataType::LargeUtf8, DataType::Utf8 | DataType::Utf8View | DataType::LargeUtf8] => {
+
+            [DataType::Utf8 | DataType::Utf8View | DataType::LargeUtf8 | DataType::Null , DataType::Utf8 | DataType::Utf8View | DataType::LargeUtf8 | DataType::Null] => {
                 Ok(vec![
                     arg_types[0].clone(),
                     arg_types[1].clone(),
                     DataType::Int64,
                 ])
             }
-            [DataType::Utf8 | DataType::Utf8View | DataType::LargeUtf8, DataType::Utf8 | DataType::Utf8View | DataType::LargeUtf8, DataType::Int32 | DataType::Int64 | DataType::UInt32 | DataType::UInt64] => {
+            [
+            DataType::Utf8 | DataType::Utf8View | DataType::LargeUtf8 | DataType::Null ,
+            DataType::Utf8 | DataType::Utf8View | DataType::LargeUtf8 | DataType::Null ,
+            DataType::Int32 | DataType::Int64 | DataType::UInt32 | DataType::UInt64 | DataType::Null | DataType::Utf8
+            ] => {
                 Ok(vec![
                     arg_types[0].clone(),
                     arg_types[1].clone(),
@@ -73,7 +76,7 @@ impl ScalarUDFImpl for SparkSplit {
             }
             _ => Err(unsupported_data_types_exec_err(
                 Self::NAME,
-                "Expected (STRING, STRING) or (STRING, STRING, INT). Adjust the value to match the syntax, or change its target type. Use try_cast to handle malformed input and return NULL instead.",
+                "Expected (STRING, STRING) or (STRING, STRING, INT). Adjust the value to match the syntax, or change its target type. Use try_cast to handle malformed input and return NULL instead",
                 arg_types,
             )),
         }
@@ -86,20 +89,24 @@ impl ScalarUDFImpl for SparkSplit {
 }
 
 pub fn spark_split_inner(args: &[ArrayRef]) -> Result<ArrayRef> {
-    let values: &StringArray = downcast_arg!(&args[0], StringArray);
-    let format: &StringArray = downcast_arg!(&args[1], StringArray);
-    let default_limit = Int64Array::from(vec![0; values.len()]);
-    let limit: &Int64Array = args[2]
-        .as_any()
-        .downcast_ref::<Int64Array>()
-        .unwrap_or(&default_limit);
+    let len = args[0].len();
+    // Initialize default values in case of nulls
+    let default_nulls: Vec<Option<&str>> = vec![None; len];
+    let default_nulls = StringArray::from(default_nulls);
+    let default_limit = Int32Array::from(vec![0; len]);
+
+    // Getting the arrays
+    let values: &StringArray = opt_downcast_arg!(&args[0], StringArray).unwrap_or(&default_nulls);
+    let format: &StringArray = opt_downcast_arg!(&args[1], StringArray).unwrap_or(&default_nulls);
+    let limit: &Int32Array = opt_downcast_arg!(&args[2], Int32Array).unwrap_or(&default_limit);
+
     let mut builder = ListBuilder::new(StringBuilder::new());
 
-    for i in 0..values.len() {
+    for i in 0..len {
         if values.is_null(i) || format.is_null(i) || limit.is_null(i) {
             builder.append_null();
         } else {
-            let (value, format, limit): (&str, &str, i64) =
+            let (value, format, limit): (&str, &str, i32) =
                 (values.value(i), format.value(i), limit.value(i));
             let values_format: Vec<Option<String>> = split_to_array(value, format, limit)?;
             builder.append_value(values_format);
@@ -110,7 +117,7 @@ pub fn spark_split_inner(args: &[ArrayRef]) -> Result<ArrayRef> {
     Ok(Arc::new(array))
 }
 
-pub fn split_to_array(value: &str, format: &str, limit: i64) -> Result<Vec<Option<String>>> {
+pub fn split_to_array(value: &str, format: &str, limit: i32) -> Result<Vec<Option<String>>> {
     let format: Regex =
         Regex::new(format).map_err(|_| generic_exec_err(SparkSplit::NAME, "Invalid regex"))?;
     let values = if limit > 0 {
