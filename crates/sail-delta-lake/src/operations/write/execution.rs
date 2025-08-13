@@ -306,7 +306,6 @@ pub async fn prepare_predicate_actions_physical(
     writer_stats_config: WriterStatsConfig,
     operation_id: Uuid,
 ) -> DeltaResult<(Vec<Action>, Option<DataFrame>)> {
-
     let adapter_factory =
         Arc::new(crate::delta_datafusion::schema_rewriter::DeltaPhysicalExprAdapterFactory {});
     let candidates = crate::delta_datafusion::find_files_physical(

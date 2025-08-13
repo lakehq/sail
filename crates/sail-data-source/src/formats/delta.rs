@@ -3,11 +3,11 @@ use std::time::{SystemTime, UNIX_EPOCH};
 
 use async_trait::async_trait;
 use datafusion::catalog::{Session, TableProvider};
+use datafusion::common::{not_impl_err, plan_err, DataFusionError, Result, ToDFSchema};
 use datafusion::datasource::listing::ListingTableUrl;
 use datafusion::datasource::sink::DataSinkExec;
 use datafusion::execution::SessionStateBuilder;
 use datafusion::physical_plan::ExecutionPlan;
-use datafusion::common::{not_impl_err, plan_err, DataFusionError, Result, ToDFSchema};
 use deltalake::kernel::{Action, Remove};
 use deltalake::protocol::{DeltaOperation, SaveMode};
 use sail_common_datafusion::datasource::{PhysicalSinkMode, SinkInfo, SourceInfo, TableFormat};
