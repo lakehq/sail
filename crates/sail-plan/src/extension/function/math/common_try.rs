@@ -1,8 +1,9 @@
 use std::sync::Arc;
 
 use arrow::array::{
-    Array, ArrowPrimitiveType, Date32Array, Date32Builder, DurationMicrosecondArray,
-    PrimitiveArray, PrimitiveBuilder, TimestampMicrosecondArray, TimestampMicrosecondBuilder,
+    Array, ArrowPrimitiveType, Date32Array, Date32Builder, DurationMicrosecondArray, Int32Array,
+    Int64Array, IntervalMonthDayNanoArray, IntervalMonthDayNanoBuilder, PrimitiveArray,
+    PrimitiveBuilder, TimestampMicrosecondArray, TimestampMicrosecondBuilder,
 };
 use arrow::datatypes::{
     Date32Type, Float64Type, Int32Type, Int64Type, IntervalMonthDayNano, IntervalMonthDayNanoType,
@@ -11,6 +12,8 @@ use arrow::datatypes::{
 use chrono::{Duration, Months, NaiveDate};
 use datafusion_common::ScalarValue;
 use datafusion_expr_common::columnar_value::ColumnarValue;
+
+const DAY_NANOS_I128: i128 = 86_400_000_000_000;
 
 pub fn binary_op_scalar_or_array<T: ArrowPrimitiveType>(
     left: &ColumnarValue,
@@ -363,6 +366,101 @@ where
     }
 
     builder.finish()
+}
+
+fn div_monthdaynano_by_i64_one(
+    iv: arrow::datatypes::IntervalMonthDayNano,
+    denom: i64,
+) -> Option<arrow::datatypes::IntervalMonthDayNano> {
+    if denom == 0 {
+        return None;
+    }
+
+    let months_out = (iv.months as i64).checked_div(denom)? as i32;
+
+    let total_i128 = (iv.days as i128)
+        .checked_mul(DAY_NANOS_I128)
+        .and_then(|v| v.checked_add(iv.nanoseconds as i128))?;
+
+    let q = (total_i128 as f64) / (denom as f64);
+    let q_rounded = q.round() as i128;
+
+    let days = (q_rounded / DAY_NANOS_I128) as i32;
+    let nanos = (q_rounded % DAY_NANOS_I128) as i64;
+
+    Some(arrow::datatypes::IntervalMonthDayNano::new(
+        months_out, days, nanos,
+    ))
+}
+
+pub fn try_div_interval_monthdaynano_i32(
+    intervals: &IntervalMonthDayNanoArray,
+    divisors: &Int32Array,
+) -> datafusion_common::Result<IntervalMonthDayNanoArray> {
+    let len = intervals.len().max(divisors.len());
+    let mut b = IntervalMonthDayNanoBuilder::with_capacity(len);
+
+    for i in 0..len {
+        let iv_is_null = if i < intervals.len() {
+            intervals.is_null(i)
+        } else {
+            true
+        };
+        let d_is_null = if i < divisors.len() {
+            divisors.is_null(i)
+        } else {
+            true
+        };
+
+        if iv_is_null || d_is_null {
+            b.append_null();
+            continue;
+        }
+
+        let iv = intervals.value(i.min(intervals.len() - 1));
+        let denom = divisors.value(i.min(divisors.len() - 1)) as i64;
+
+        match div_monthdaynano_by_i64_one(iv, denom) {
+            Some(out) => b.append_value(out),
+            None => b.append_null(), // denom=0
+        }
+    }
+    Ok(b.finish())
+}
+
+pub fn try_div_interval_monthdaynano_i64(
+    intervals: &IntervalMonthDayNanoArray,
+    divisors: &Int64Array,
+) -> datafusion_common::Result<IntervalMonthDayNanoArray> {
+    let len = intervals.len().max(divisors.len());
+    let mut b = IntervalMonthDayNanoBuilder::with_capacity(len);
+
+    for i in 0..len {
+        let iv_is_null = if i < intervals.len() {
+            intervals.is_null(i)
+        } else {
+            true
+        };
+        let d_is_null = if i < divisors.len() {
+            divisors.is_null(i)
+        } else {
+            true
+        };
+
+        if iv_is_null || d_is_null {
+            b.append_null();
+            continue;
+        }
+
+        let iv = intervals.value(i.min(intervals.len() - 1));
+        let denom = divisors.value(i.min(divisors.len() - 1));
+
+        match div_monthdaynano_by_i64_one(iv, denom) {
+            Some(out) => b.append_value(out),
+            None => b.append_null(), // denom=0
+        }
+    }
+    Ok(b.finish())
 }
 
 #[cfg(test)]

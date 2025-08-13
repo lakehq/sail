@@ -12,8 +12,9 @@ use crate::extension::function::error_utils::{
     invalid_arg_count_exec_err, unsupported_data_types_exec_err,
 };
 use crate::extension::function::math::common_try::{
-    binary_op_scalar_or_array, try_binary_op_to_float64, try_op_interval_monthdaynano_i32,
-    try_op_interval_monthdaynano_i64, try_op_interval_yearmonth_i32,
+    binary_op_scalar_or_array, try_binary_op_to_float64, try_div_interval_monthdaynano_i32,
+    try_div_interval_monthdaynano_i64, try_op_interval_monthdaynano_i32,
+    try_op_interval_yearmonth_i32,
 };
 
 #[derive(Debug)]
@@ -123,12 +124,6 @@ impl ScalarUDFImpl for SparkTryDiv {
                 let result = try_op_interval_yearmonth_i32(l, r, i32::checked_div);
                 binary_op_scalar_or_array(left, right, result)
             }
-            (DataType::Interval(MonthDayNano), DataType::Int32) => {
-                let l = left_arr.as_primitive::<IntervalMonthDayNanoType>();
-                let r = right_arr.as_primitive::<Int32Type>();
-                let result = try_op_interval_monthdaynano_i32(l, r, |a, b| a.checked_div(b as i64));
-                binary_op_scalar_or_array(left, right, result)
-            }
             (DataType::Int32, DataType::Interval(MonthDayNano)) => {
                 let l = left_arr.as_primitive::<Int32Type>();
                 let r = right_arr.as_primitive::<IntervalMonthDayNanoType>();
@@ -136,22 +131,17 @@ impl ScalarUDFImpl for SparkTryDiv {
 
                 binary_op_scalar_or_array(left, right, result)
             }
+            (DataType::Interval(MonthDayNano), DataType::Int32) => {
+                let l = left_arr.as_primitive::<IntervalMonthDayNanoType>();
+                let r = right_arr.as_primitive::<Int32Type>();
+                let out = try_div_interval_monthdaynano_i32(l, r)?;
+                binary_op_scalar_or_array(left, right, out)
+            }
             (DataType::Interval(MonthDayNano), DataType::Int64) => {
                 let l = left_arr.as_primitive::<IntervalMonthDayNanoType>();
                 let r = right_arr.as_primitive::<Int64Type>();
-                let result =
-                    try_op_interval_monthdaynano_i64(
-                        l,
-                        r,
-                        |a, b| {
-                            if b == 0 {
-                                None
-                            } else {
-                                Some(a / b)
-                            }
-                        },
-                    );
-                binary_op_scalar_or_array(left, right, result)
+                let out = try_div_interval_monthdaynano_i64(l, r)?;
+                binary_op_scalar_or_array(left, right, out)
             }
             (l, r) => Err(unsupported_data_types_exec_err(
                 "try_divide",
