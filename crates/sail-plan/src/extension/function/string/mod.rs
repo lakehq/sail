@@ -3,7 +3,7 @@ pub mod make_valid_utf8;
 pub mod spark_base64;
 pub mod spark_encode_decode;
 pub mod spark_mask;
-mod spark_split;
 pub mod spark_to_binary;
 pub mod spark_to_number;
 pub mod spark_try_to_number;
+pub mod spark_split;

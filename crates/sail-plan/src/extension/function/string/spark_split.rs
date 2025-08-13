@@ -4,10 +4,10 @@ use std::sync::Arc;
 use crate::extension::function::error_utils::{generic_exec_err, unsupported_data_types_exec_err};
 use crate::extension::function::functions_nested_utils::downcast_arg;
 use crate::extension::function::functions_utils::make_scalar_function;
-use arrow::array::{ArrayRef, Int32Array, StringArray};
+use arrow::array::{Array, ArrayRef, Int32Array, Int64Array, ListBuilder, StringArray, StringBuilder};
 use arrow::datatypes::{DataType, Field};
 use datafusion::common::DataFusionError;
-use datafusion_common::{Result, ScalarValue};
+use datafusion_common::Result;
 use datafusion_expr::{ScalarFunctionArgs, ScalarUDFImpl};
 use datafusion_expr_common::columnar_value::ColumnarValue;
 use datafusion_expr_common::signature::{Signature, Volatility};
@@ -59,10 +59,10 @@ impl ScalarUDFImpl for SparkSplit {
                 Ok(vec![
                     arg_types[0].clone(),
                     arg_types[1].clone(),
-                    DataType::Int32,
+                    DataType::Int64,
                 ])
             }
-            [DataType::Utf8 | DataType::Utf8View | DataType::LargeUtf8, DataType::Utf8 | DataType::Utf8View | DataType::LargeUtf8, DataType::Int32] => {
+            [DataType::Utf8 | DataType::Utf8View | DataType::LargeUtf8, DataType::Utf8 | DataType::Utf8View | DataType::LargeUtf8, DataType::Int32 | DataType::Int64 | DataType::UInt32 | DataType::UInt64] => {
                 Ok(vec![
                     arg_types[0].clone(),
                     arg_types[1].clone(),
@@ -84,36 +84,70 @@ impl ScalarUDFImpl for SparkSplit {
 }
 
 pub fn spark_split_inner(args: &[ArrayRef]) -> Result<ArrayRef> {
-    let limit: i32 = match args.get(2) {
-        Some(limit) => limit
-            .as_any()
-            .downcast_ref::<Int32Array>()
-            .map(|array| array.value(0))
-            .unwrap_or(0),
-        None => 0,
-    };
-
     let values: &StringArray = downcast_arg!(&args[0], StringArray);
     let format: &StringArray = downcast_arg!(&args[1], StringArray);
-    let values_format = values
-        .iter()
-        .zip(format.iter())
-        .map(|(value, format)| match (value, format) {
-            (Some(value), Some(format)) => Ok(todo!()),
-            _ => Ok(ScalarValue::Null),
-        })
-        .collect::<Result<Vec<ScalarValue>>>();
+    let limit: &Int64Array = match args.get(2) {
+        Some(limit) => downcast_arg!(limit, Int64Array),
+        None => &Int64Array::from(vec![0; values.len()]),
+    };
 
-    todo!()
+    let mut builder = ListBuilder::new(StringBuilder::new());
+
+    for i in 0..values.len() {
+        if values.is_null(i) {
+            builder.append_null();
+        } else {
+            let values: &str = values.value(i);
+            let format: &str = format.value(i);
+            let limit = if limit.is_null(i) { 0 } else { limit.value(i) };
+            let values_format = split_to_array(values, format, limit)?;
+            builder.append_value(values_format);
+        }
+    }
+
+    let array = builder.finish();
+    Ok(Arc::new(array))
+
+    // let mut children_scalars: Vec<Vec<ScalarValue>> =
+    //     vec![Vec::with_capacity(values.len()); format.len()];
+    // let mut validity: Vec<bool> = Vec::with_capacity(values.len());
+    //
+    // for  i in 0..values.len() {
+    //     if values.is_null(i) {
+    //         for j in 0..children_scalars.len() {
+    //             children_scalars[j].push(ScalarValue::try_new_null(format.value_type()));
+    //         }
+    //         validity.push(false);
+    //     } else {
+    //         let values: &str = values.value(i);
+    //         let format: &str = format.value(i);
+    //         let values_format = split_to_array(values, format);
+    //         for (j, value) in values_format.into_iter().enumerate() {
+    //             children_scalars[j].push(value);
+    //         }
+    //         validity.push(true);
+    //     }
+    // }
+    //
+    // let children_arrays: Vec<ArrayRef> = children_scalars
+    //     .into_iter()
+    //     .map(|arr| ScalarValue::iter_to_array(arr))
+    //     .collect::<Result<Vec<_>>>()?;
+    //
+    // Ok(Arc::new(GenericListBuilder::<i32>::new(children_arrays, validity).finish()))
 }
 
-pub fn split_to_array(value: &str, format: &str) -> Result<ArrayRef> {
+pub fn split_to_array(value: &str, format: &str, limit: i64) -> Result<Vec<Option<String>>> {
     let format: Regex =
-        Regex::new(format).map_err(|e| generic_exec_err(SparkSplit::NAME, "Invalid regex"))?;
+        Regex::new(format).map_err(|_| generic_exec_err(SparkSplit::NAME, "Invalid regex"))?;
     let values = format.split(value).collect::<Vec<&str>>();
-    let a = values
+    let values = if limit <= 0 {
+        values
+    } else {
+        values[..limit as usize].to_vec()
+    };
+    Ok(values
         .iter()
-        .map(|value| ScalarValue::try_from_string(value.to_string(), &DataType::Utf8))
-        .collect::<Result<Vec<ScalarValue>>>()?;
-    todo!()
+        .map(|value| Some(value.to_string()))
+        .collect::<Vec<Option<String>>>())
 }
