@@ -66,6 +66,8 @@ pub(crate) const PATH_COLUMN: &str = "__delta_rs_path";
 
 pub(crate) mod schema_rewriter;
 
+pub mod type_converter;
+
 /// Convert DeltaTableError to DataFusionError
 pub fn delta_to_datafusion_error(err: DeltaTableError) -> DataFusionError {
     match err {

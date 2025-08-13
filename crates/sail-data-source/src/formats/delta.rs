@@ -14,7 +14,9 @@ use sail_common_datafusion::datasource::{PhysicalSinkMode, SinkInfo, SourceInfo,
 use sail_delta_lake::create_delta_provider;
 use sail_delta_lake::delta_datafusion::{parse_predicate_expression, DataFusionMixins};
 use sail_delta_lake::delta_format::DeltaDataSink;
-use sail_delta_lake::operations::write::execution::{prepare_predicate_actions, WriterStatsConfig};
+use sail_delta_lake::operations::write::execution::{
+    prepare_predicate_actions_physical, WriterStatsConfig,
+};
 use sail_delta_lake::table::open_table_with_object_store;
 use url::Url;
 use uuid::Uuid;
@@ -73,7 +75,6 @@ impl TableFormat for DeltaTableFormat {
 
         let mut initial_actions: Vec<Action> = Vec::new();
         let mut operation: Option<DeltaOperation> = None;
-        let mut predicate_str: Option<String> = None;
 
         let object_store = ctx
             .runtime_env()
@@ -116,14 +117,21 @@ impl TableFormat for DeltaTableFormat {
                         let session_state = SessionStateBuilder::new()
                             .with_runtime_env(ctx.runtime_env().clone())
                             .build();
+
+                        // Parse string predicate to logical expression
                         let predicate_expr =
                             parse_predicate_expression(&df_schema, &replace_where, &session_state)
                                 .map_err(|e| DataFusionError::External(Box::new(e)))?;
-                        predicate_str = Some(replace_where);
 
+                        // Convert logical expression to physical expression
+                        let physical_predicate = session_state
+                            .create_physical_expr(predicate_expr, &df_schema)
+                            .map_err(|e| DataFusionError::External(Box::new(e)))?;
+
+                        // Use the PhysicalExpr path
                         #[allow(clippy::unwrap_used)]
-                        let (remove_actions, _) = prepare_predicate_actions(
-                            predicate_expr,
+                        let (remove_actions, _) = prepare_predicate_actions_physical(
+                            physical_predicate,
                             table.log_store(),
                             snapshot,
                             session_state,
@@ -174,7 +182,7 @@ impl TableFormat for DeltaTableFormat {
                     } else {
                         Some(partition_by.clone())
                     },
-                    predicate: predicate_str.clone(),
+                    predicate: None, // Leave predicate_str as None since we're using PhysicalExpr directly
                 });
             }
             PhysicalSinkMode::OverwriteIf { condition } => {
@@ -188,7 +196,7 @@ impl TableFormat for DeltaTableFormat {
                         .build();
 
                     #[allow(clippy::unwrap_used)]
-                    let (remove_actions, _) = sail_delta_lake::operations::write::execution::prepare_predicate_actions_physical(
+                    let (remove_actions, _) = prepare_predicate_actions_physical(
                         condition.clone(),
                         table.log_store(),
                         snapshot,
@@ -205,10 +213,6 @@ impl TableFormat for DeltaTableFormat {
                     .await
                     .map_err(|e| DataFusionError::External(Box::new(e)))?;
                     initial_actions.extend(remove_actions);
-
-                    // Leave predicate empty
-                    // The actual filtering logic is handled directly by PhysicalExpr
-                    predicate_str = None;
                 }
                 operation = Some(DeltaOperation::Write {
                     mode: SaveMode::Overwrite,
@@ -218,7 +222,7 @@ impl TableFormat for DeltaTableFormat {
                         Some(partition_by.clone())
                     },
                     // predicate_str is None for OverwriteIf since we use PhysicalExpr directly
-                    predicate: predicate_str.clone(),
+                    predicate: None,
                 });
             }
             PhysicalSinkMode::ErrorIfExists => {
