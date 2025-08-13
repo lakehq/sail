@@ -19,10 +19,8 @@ use crate::extension::function::math::spark_bin::SparkBin;
 use crate::extension::function::math::spark_bround::SparkBRound;
 use crate::extension::function::math::spark_ceil_floor::{SparkCeil, SparkFloor};
 use crate::extension::function::math::spark_conv::SparkConv;
-use crate::extension::function::math::spark_csc::SparkCsc;
 use crate::extension::function::math::spark_hex_unhex::{SparkHex, SparkUnHex};
 use crate::extension::function::math::spark_pmod::SparkPmod;
-use crate::extension::function::math::spark_sec::SparkSec;
 use crate::extension::function::math::spark_signum::SparkSignum;
 use crate::extension::function::math::spark_try_add::SparkTryAdd;
 use crate::extension::function::math::spark_try_div::SparkTryDiv;
@@ -384,6 +382,34 @@ fn ceil_floor(input: ScalarFunctionInput, name: &str) -> PlanResult<Expr> {
     }))
 }
 
+fn ln(expr: Expr) -> Expr {
+    expr_fn::ln(positive_or_null(expr))
+}
+
+fn log(base: Expr, num: Expr) -> Expr {
+    expr_fn::log(base, positive_or_null(num))
+}
+
+fn log10(expr: Expr) -> Expr {
+    expr_fn::log10(positive_or_null(expr))
+}
+
+fn log1p(expr: Expr) -> Expr {
+    expr_fn::ln(positive_or_null(expr + lit(1.0_f64)))
+}
+
+fn log2(expr: Expr) -> Expr {
+    expr_fn::log2(positive_or_null(expr))
+}
+
+fn double(func: impl Fn(Expr) -> Expr) -> impl Fn(Expr) -> Expr {
+    move |arg: Expr| func(cast(arg, DataType::Float64))
+}
+
+fn double2(func: impl Fn(Expr, Expr) -> Expr) -> impl Fn(Expr, Expr) -> Expr {
+    move |arg1: Expr, arg2| func(cast(arg1, DataType::Float64), cast(arg2, DataType::Float64))
+}
+
 pub(super) fn list_built_in_math_functions() -> Vec<(&'static str, ScalarFunction)> {
     use crate::function::common::ScalarFunctionBuilder as F;
 
@@ -394,27 +420,27 @@ pub(super) fn list_built_in_math_functions() -> Vec<(&'static str, ScalarFunctio
         ("-", F::custom(spark_minus)),
         ("/", F::custom(spark_divide)),
         ("abs", F::udf(SparkAbs::new())),
-        ("acos", F::unary(expr_fn::acos)),
-        ("acosh", F::unary(expr_fn::acosh)),
-        ("asin", F::unary(expr_fn::asin)),
-        ("asinh", F::unary(expr_fn::asinh)),
-        ("atan", F::unary(expr_fn::atan)),
-        ("atan2", F::binary(expr_fn::atan2)),
-        ("atanh", F::unary(expr_fn::atanh)),
+        ("acos", F::unary(double(expr_fn::acos))),
+        ("acosh", F::unary(double(expr_fn::acosh))),
+        ("asin", F::unary(double(expr_fn::asin))),
+        ("asinh", F::unary(double(expr_fn::asinh))),
+        ("atan", F::unary(double(expr_fn::atan))),
+        ("atan2", F::binary(double2(expr_fn::atan2))),
+        ("atanh", F::unary(double(expr_fn::atanh))),
         ("bin", F::udf(SparkBin::new())),
         ("bround", F::udf(SparkBRound::new())),
-        ("cbrt", F::unary(expr_fn::cbrt)),
+        ("cbrt", F::unary(double(expr_fn::cbrt))),
         ("ceil", F::custom(|arg| ceil_floor(arg, "ceil"))),
         ("ceiling", F::custom(|arg| ceil_floor(arg, "ceil"))),
         ("conv", F::udf(SparkConv::new())),
-        ("cos", F::unary(expr_fn::cos)),
-        ("cosh", F::unary(expr_fn::cosh)),
-        ("cot", F::unary(expr_fn::cot)),
-        ("csc", F::udf(SparkCsc::new())),
-        ("degrees", F::unary(expr_fn::degrees)),
+        ("cos", F::unary(double(expr_fn::cos))),
+        ("cosh", F::unary(double(expr_fn::cosh))),
+        ("cot", F::unary(double(expr_fn::cot))),
+        ("csc", F::unary(double(|arg| lit(1.0) / expr_fn::sin(arg)))),
+        ("degrees", F::unary(double(expr_fn::degrees))),
         ("div", F::custom(spark_div)),
         ("e", F::nullary(eulers_constant)),
-        ("exp", F::unary(expr_fn::exp)),
+        ("exp", F::unary(double(expr_fn::exp))),
         ("expm1", F::udf(SparkExpm1::new())),
         ("factorial", F::unary(expr_fn::factorial)),
         ("floor", F::custom(|arg| ceil_floor(arg, "floor"))),
@@ -422,20 +448,11 @@ pub(super) fn list_built_in_math_functions() -> Vec<(&'static str, ScalarFunctio
         ("hex", F::udf(SparkHex::new())),
         ("hypot", F::binary(hypot)),
         ("least", F::udf(least_greatest::Least::new())),
-        ("ln", F::unary(|arg| expr_fn::ln(positive_or_null(arg)))),
-        (
-            "log",
-            F::binary(|base, num| expr_fn::log(base, positive_or_null(num))),
-        ),
-        (
-            "log10",
-            F::unary(|arg| expr_fn::log10(positive_or_null(arg))),
-        ),
-        (
-            "log1p",
-            F::unary(|arg| expr_fn::ln(positive_or_null(arg + lit(1.0_f64)))),
-        ),
-        ("log2", F::unary(|arg| expr_fn::log2(positive_or_null(arg)))),
+        ("ln", F::unary(double(ln))),
+        ("log", F::binary(double2(log))),
+        ("log10", F::unary(double(log10))),
+        ("log1p", F::unary(double(log1p))),
+        ("log2", F::unary(double(log2))),
         ("mod", F::binary_op(Operator::Modulo)),
         ("negative", F::unary(|x| Expr::Negative(Box::new(x)))),
         ("pi", F::nullary(expr_fn::pi)),
@@ -443,21 +460,21 @@ pub(super) fn list_built_in_math_functions() -> Vec<(&'static str, ScalarFunctio
         ("positive", F::unary(positive)),
         ("pow", F::binary(power)),
         ("power", F::binary(power)),
-        ("radians", F::unary(expr_fn::radians)),
+        ("radians", F::unary(double(expr_fn::radians))),
         ("rand", F::udf(Random::new())),
         ("random_poisson", F::udf(RandPoisson::new())),
         ("randn", F::udf(Randn::new())),
         ("random", F::udf(Random::new())),
         ("rint", F::unary(rint)),
         ("round", F::var_arg(expr_fn::round)),
-        ("sec", F::udf(SparkSec::new())),
+        ("sec", F::unary(double(|arg| lit(1.0) / expr_fn::cos(arg)))),
         ("sign", F::udf(SparkSignum::new())),
         ("signum", F::udf(SparkSignum::new())),
-        ("sin", F::unary(expr_fn::sin)),
-        ("sinh", F::unary(expr_fn::sinh)),
-        ("sqrt", F::unary(expr_fn::sqrt)),
-        ("tan", F::unary(expr_fn::tan)),
-        ("tanh", F::unary(expr_fn::tanh)),
+        ("sin", F::unary(double(expr_fn::sin))),
+        ("sinh", F::unary(double(expr_fn::sinh))),
+        ("sqrt", F::unary(double(expr_fn::sqrt))),
+        ("tan", F::unary(double(expr_fn::tan))),
+        ("tanh", F::unary(double(expr_fn::tanh))),
         ("try_add", F::udf(SparkTryAdd::new())),
         ("try_divide", F::udf(SparkTryDiv::new())),
         ("try_multiply", F::udf(SparkTryMult::new())),

@@ -449,7 +449,14 @@ macro_rules! primitive_display_float {
             fn write(&self, idx: usize, f: &mut dyn Write) -> FormatResult {
                 let value = self.value(idx);
                 let mut buffer = ryu::Buffer::new();
-                f.write_str(buffer.format(value))?;
+                if value.is_infinite() {
+                    if !value.is_sign_positive() {
+                        f.write_str("-")?;
+                    }
+                    f.write_str("Infinity")?;
+                } else {
+                    f.write_str(buffer.format(value))?;
+                }
                 Ok(())
             }
         })+
