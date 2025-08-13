@@ -28,7 +28,7 @@ use datafusion::datasource::memory::MemTable;
 use datafusion::datasource::object_store::ObjectStoreUrl;
 use datafusion::datasource::physical_plan::{
     wrap_partition_type_in_dict, wrap_partition_value_in_dict, FileGroup, FileScanConfigBuilder,
-    FileSource, ParquetSource,
+    ParquetSource,
 };
 use datafusion::datasource::{TableProvider, TableType};
 use datafusion::execution::context::{SessionContext, SessionState, TaskContext};
@@ -59,12 +59,12 @@ use object_store::ObjectMeta;
 use serde::{Deserialize, Serialize};
 use url::Url;
 
-use crate::delta_datafusion::schema_adapter::DeltaSchemaAdapterFactory;
+use crate::delta_datafusion::schema_rewriter::DeltaPhysicalExprAdapterFactory;
 use crate::kernel::log_data::SailLogDataHandler;
 /// [Credit]: <https://github.com/delta-io/delta-rs/blob/3607c314cbdd2ad06c6ee0677b92a29f695c71f3/crates/core/src/delta_datafusion/mod.rs>
 pub(crate) const PATH_COLUMN: &str = "__delta_rs_path";
 
-mod schema_adapter;
+mod schema_rewriter;
 
 /// Convert DeltaTableError to DataFusionError
 pub fn delta_to_datafusion_error(err: DeltaTableError) -> DataFusionError {
@@ -974,9 +974,7 @@ impl TableProvider for DeltaTableProvider {
             }
         }
 
-        // Apply schema adapter factory and get the file source
-        let file_source =
-            parquet_source.with_schema_adapter_factory(Arc::new(DeltaSchemaAdapterFactory {}))?;
+        let file_source = Arc::new(parquet_source);
 
         let object_store_url = create_object_store_url(&self.log_store.config().location)
             .map_err(delta_to_datafusion_error)?;
@@ -997,6 +995,7 @@ impl TableProvider for DeltaTableProvider {
                 .with_projection(projection.cloned())
                 .with_limit(limit)
                 .with_table_partition_cols(table_partition_cols)
+                .with_expr_adapter(Some(Arc::new(DeltaPhysicalExprAdapterFactory {})))
                 .build();
 
         Ok(DataSourceExec::from_data_source(file_scan_config))
