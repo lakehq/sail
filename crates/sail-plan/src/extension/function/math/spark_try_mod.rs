@@ -121,8 +121,8 @@ impl ScalarUDFImpl for SparkTryMod {
                 let l_in = left_arr.as_primitive::<Decimal128Type>();
                 let r_in = right_arr.as_primitive::<Decimal128Type>();
 
-                let l_rescaled = rescale_decimal_up(l_in, *s1, result_scale, *p1)?;
-                let r_rescaled = rescale_decimal_up(r_in, *s2, result_scale, *p2)?;
+                let l_rescaled = rescale_decimal_up(l_in, *s1, result_scale, result_precision)?;
+                let r_rescaled = rescale_decimal_up(r_in, *s2, result_scale, result_precision)?;
 
                 let raw = try_binary_op_primitive::<Decimal128Type, _>(
                     &l_rescaled,
