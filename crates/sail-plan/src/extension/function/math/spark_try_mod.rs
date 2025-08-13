@@ -83,7 +83,7 @@ impl ScalarUDFImpl for SparkTryMod {
             ));
         };
 
-        let len: usize = match (&left, &right) {
+        let len = match (&left, &right) {
             (ColumnarValue::Array(arr), _) => arr.len(),
             (_, ColumnarValue::Array(arr)) => arr.len(),
             (ColumnarValue::Scalar(_), ColumnarValue::Scalar(_)) => 1,
