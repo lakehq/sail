@@ -3,6 +3,7 @@ use std::task::{Context, Poll};
 
 use datafusion::arrow::compute::concat_batches;
 use datafusion::prelude::SessionContext;
+use futures::stream;
 use log::debug;
 use sail_common::spec;
 use sail_common_datafusion::extension::SessionExtensionAccessor;
@@ -11,34 +12,32 @@ use tonic::codegen::tokio_stream::wrappers::ReceiverStream;
 use tonic::codegen::tokio_stream::Stream;
 use tonic::Status;
 
-use crate::error::{SparkError, SparkResult};
+use crate::error::{ProtoFieldExt, SparkError, SparkResult};
 use crate::executor::{
     read_stream, to_arrow_batch, Executor, ExecutorBatch, ExecutorMetadata, ExecutorOutput,
+    ExecutorOutputStream,
 };
 use crate::session::SparkSession;
-use crate::spark::connect as sc;
 use crate::spark::connect::execute_plan_response::{
     ResponseType, ResultComplete, SqlCommandResult,
 };
 use crate::spark::connect::{
     relation, CommonInlineUserDefinedFunction, CommonInlineUserDefinedTableFunction,
     CreateDataFrameViewCommand, ExecutePlanResponse, GetResourcesCommand, LocalRelation, Relation,
-    SqlCommand, StreamingQueryCommand, StreamingQueryManagerCommand, WriteOperation,
-    WriteOperationV2, WriteStreamOperationStart,
+    SqlCommand, StreamingQueryCommand, StreamingQueryCommandResult,
+    StreamingQueryListenerBusCommand, StreamingQueryManagerCommand,
+    StreamingQueryManagerCommandResult, WriteOperation, WriteOperationV2,
+    WriteStreamOperationStart, WriteStreamOperationStartResult,
 };
 
 pub struct ExecutePlanResponseStream {
     session_id: String,
     operation_id: String,
-    inner: ReceiverStream<ExecutorOutput>,
+    inner: ExecutorOutputStream,
 }
 
 impl ExecutePlanResponseStream {
-    pub(crate) fn new(
-        session_id: String,
-        operation_id: String,
-        inner: ReceiverStream<ExecutorOutput>,
-    ) -> Self {
+    pub fn new(session_id: String, operation_id: String, inner: ExecutorOutputStream) -> Self {
         Self {
             session_id,
             operation_id,
@@ -54,7 +53,7 @@ impl Stream for ExecutePlanResponseStream {
         mut self: Pin<&mut Self>,
         cx: &mut Context<'_>,
     ) -> Poll<Option<Result<ExecutePlanResponse, Status>>> {
-        Pin::new(&mut self.inner).poll_next(cx).map(|poll| {
+        self.inner.as_mut().poll_next(cx).map(|poll| {
             poll.map(|item| {
                 let mut response = ExecutePlanResponse::default();
                 response.session_id.clone_from(&self.session_id);
@@ -66,16 +65,22 @@ impl Stream for ExecutePlanResponseStream {
                         response.response_type = Some(ResponseType::ArrowBatch(batch));
                     }
                     ExecutorBatch::SqlCommandResult(result) => {
-                        response.response_type = Some(ResponseType::SqlCommandResult(result));
+                        response.response_type = Some(ResponseType::SqlCommandResult(*result));
+                    }
+                    ExecutorBatch::WriteStreamOperationStartResult(result) => {
+                        response.response_type =
+                            Some(ResponseType::WriteStreamOperationStartResult(*result));
+                    }
+                    ExecutorBatch::StreamingQueryCommandResult(result) => {
+                        response.response_type =
+                            Some(ResponseType::StreamingQueryCommandResult(*result));
+                    }
+                    ExecutorBatch::StreamingQueryManagerCommandResult(result) => {
+                        response.response_type =
+                            Some(ResponseType::StreamingQueryManagerCommandResult(*result));
                     }
                     ExecutorBatch::Schema(schema) => {
-                        response.schema = Some(schema);
-                    }
-                    ExecutorBatch::Metrics(metrics) => {
-                        response.metrics = Some(metrics);
-                    }
-                    ExecutorBatch::ObservedMetrics(metrics) => {
-                        response.observed_metrics = metrics;
+                        response.schema = Some(*schema);
                     }
                     ExecutorBatch::Complete => {
                         response.response_type =
@@ -130,7 +135,7 @@ async fn handle_execute_plan(
     Ok(ExecutePlanResponseStream::new(
         spark.session_id().to_string(),
         operation_id,
-        rx,
+        Box::pin(rx),
     ))
 }
 
@@ -197,7 +202,7 @@ pub(crate) async fn handle_execute_sql_command(
         Relation {
             common: None,
             #[expect(deprecated)]
-            rel_type: Some(relation::RelType::Sql(sc::Sql {
+            rel_type: Some(relation::RelType::Sql(crate::spark::connect::Sql {
                 query: sql.sql,
                 args: sql.args,
                 pos_args: sql.pos_args,
@@ -224,35 +229,117 @@ pub(crate) async fn handle_execute_sql_command(
             }
         }
     };
-    let result = ExecutorBatch::SqlCommandResult(SqlCommandResult {
+    let result = ExecutorBatch::SqlCommandResult(Box::new(SqlCommandResult {
         relation: Some(relation),
-    });
-    let (tx, rx) = tokio::sync::mpsc::channel(2);
-    tx.send(ExecutorOutput::new(result)).await?;
+    }));
+    let mut output = vec![ExecutorOutput::new(result)];
     if metadata.reattachable {
-        tx.send(ExecutorOutput::complete()).await?;
+        output.push(ExecutorOutput::complete());
     }
     Ok(ExecutePlanResponseStream::new(
         spark.session_id().to_string(),
         metadata.operation_id,
-        ReceiverStream::new(rx),
+        Box::pin(stream::iter(output)),
     ))
 }
 
 pub(crate) async fn handle_execute_write_stream_operation_start(
-    _ctx: &SessionContext,
-    _start: WriteStreamOperationStart,
-    _metadata: ExecutorMetadata,
+    ctx: &SessionContext,
+    start: WriteStreamOperationStart,
+    metadata: ExecutorMetadata,
 ) -> SparkResult<ExecutePlanResponseStream> {
-    Err(SparkError::todo("write stream operation start"))
+    let spark = ctx.extension::<SparkSession>()?;
+    let operation_id = metadata.operation_id.clone();
+    let plan = spec::Plan::Command(spec::CommandPlan::new(start.try_into()?));
+    let plan = resolve_and_execute_plan(ctx, spark.plan_config()?, plan).await?;
+    let stream = spark.job_runner().execute(ctx, plan).await?;
+    let executor = Executor::new(metadata, stream);
+    let _rx = executor.start()?;
+    spark.add_executor(executor)?;
+    let result = WriteStreamOperationStartResult {
+        query_id: None,
+        name: "".to_string(),
+        query_started_event_json: None,
+    };
+    let output = vec![ExecutorOutput::new(
+        ExecutorBatch::WriteStreamOperationStartResult(Box::new(result)),
+    )];
+    Ok(ExecutePlanResponseStream::new(
+        spark.session_id().to_string(),
+        operation_id,
+        Box::pin(stream::iter(output)),
+    ))
 }
 
 pub(crate) async fn handle_execute_streaming_query_command(
-    _ctx: &SessionContext,
-    _stream: StreamingQueryCommand,
-    _metadata: ExecutorMetadata,
+    ctx: &SessionContext,
+    stream: StreamingQueryCommand,
+    metadata: ExecutorMetadata,
 ) -> SparkResult<ExecutePlanResponseStream> {
-    Err(SparkError::todo("streaming query command"))
+    use crate::spark::connect::streaming_query_command::{
+        AwaitTerminationCommand, Command, ExplainCommand,
+    };
+    use crate::spark::connect::streaming_query_command_result::{
+        AwaitTerminationResult, ExceptionResult, ExplainResult, RecentProgressResult, ResultType,
+        StatusResult,
+    };
+
+    let spark = ctx.extension::<SparkSession>()?;
+    let StreamingQueryCommand { query_id, command } = stream;
+    let query_id = query_id.required("streaming query ID")?;
+    let command = command.required("streaming query command")?;
+    let result_type = match command {
+        Command::Status(true) => Some(ResultType::Status(StatusResult {
+            status_message: "".to_string(),
+            is_data_available: false,
+            is_trigger_active: false,
+            is_active: false,
+        })),
+        Command::LastProgress(true) | Command::RecentProgress(true) => {
+            Some(ResultType::RecentProgress(RecentProgressResult {
+                recent_progress_json: vec![],
+            }))
+        }
+        Command::Stop(true) => None,
+        Command::ProcessAllAvailable(true) => None,
+        Command::Explain(ExplainCommand { extended: _ }) => {
+            Some(ResultType::Explain(ExplainResult {
+                result: "".to_string(),
+            }))
+        }
+        Command::Exception(true) => Some(ResultType::Exception(ExceptionResult {
+            exception_message: None,
+            error_class: None,
+            stack_trace: None,
+        })),
+        Command::AwaitTermination(AwaitTerminationCommand { timeout_ms: _ }) => {
+            Some(ResultType::AwaitTermination(AwaitTerminationResult {
+                terminated: false,
+            }))
+        }
+        Command::Status(false)
+        | Command::LastProgress(false)
+        | Command::RecentProgress(false)
+        | Command::Stop(false)
+        | Command::ProcessAllAvailable(false)
+        | Command::Exception(false) => {
+            return Err(SparkError::invalid(format!(
+                "invalid streaming query command: {command:?}"
+            )))
+        }
+    };
+    let result = StreamingQueryCommandResult {
+        query_id: Some(query_id),
+        result_type,
+    };
+    let output = vec![ExecutorOutput::new(
+        ExecutorBatch::StreamingQueryCommandResult(Box::new(result)),
+    )];
+    Ok(ExecutePlanResponseStream::new(
+        spark.session_id().to_string(),
+        metadata.operation_id,
+        Box::pin(stream::iter(output)),
+    ))
 }
 
 pub(crate) async fn handle_execute_get_resources_command(
@@ -264,11 +351,58 @@ pub(crate) async fn handle_execute_get_resources_command(
 }
 
 pub(crate) async fn handle_execute_streaming_query_manager_command(
-    _ctx: &SessionContext,
-    _manager: StreamingQueryManagerCommand,
-    _metadata: ExecutorMetadata,
+    ctx: &SessionContext,
+    command: StreamingQueryManagerCommand,
+    metadata: ExecutorMetadata,
 ) -> SparkResult<ExecutePlanResponseStream> {
-    Err(SparkError::todo("streaming query manager command"))
+    use crate::spark::connect::streaming_query_manager_command::{
+        AwaitAnyTerminationCommand, Command,
+    };
+    use crate::spark::connect::streaming_query_manager_command_result::{
+        ActiveResult, AwaitAnyTerminationResult, ResultType, StreamingQueryInstance,
+    };
+
+    let spark = ctx.extension::<SparkSession>()?;
+    let StreamingQueryManagerCommand { command } = command;
+    let command = command.required("streaming query manager command")?;
+    let result_type = match command {
+        Command::Active(true) => Some(ResultType::Active(ActiveResult {
+            active_queries: vec![],
+        })),
+        Command::GetQuery(_id) => Some(ResultType::Query(StreamingQueryInstance {
+            id: None,
+            name: None,
+        })),
+        Command::AwaitAnyTermination(AwaitAnyTerminationCommand { timeout_ms: _ }) => {
+            Some(ResultType::AwaitAnyTermination(AwaitAnyTerminationResult {
+                terminated: false,
+            }))
+        }
+        Command::ResetTerminated(true) => Some(ResultType::ResetTerminated(true)),
+        Command::AddListener(_) => {
+            return Err(SparkError::NotImplemented("add listener".to_string()))
+        }
+        Command::RemoveListener(_) => {
+            return Err(SparkError::NotImplemented("remove listener".to_string()))
+        }
+        Command::ListListeners(_) => {
+            return Err(SparkError::NotImplemented("list listeners".to_string()))
+        }
+        Command::Active(false) | Command::ResetTerminated(false) => {
+            return Err(SparkError::invalid(format!(
+                "invalid streaming query manager command: {command:?}"
+            )))
+        }
+    };
+    let result = StreamingQueryManagerCommandResult { result_type };
+    let output = vec![ExecutorOutput::new(
+        ExecutorBatch::StreamingQueryManagerCommandResult(Box::new(result)),
+    )];
+    Ok(ExecutePlanResponseStream::new(
+        spark.session_id().to_string(),
+        metadata.operation_id,
+        Box::pin(stream::iter(output)),
+    ))
 }
 
 pub(crate) async fn handle_execute_register_table_function(
@@ -280,6 +414,16 @@ pub(crate) async fn handle_execute_register_table_function(
         spec::CommandNode::RegisterTableFunction(udtf.try_into()?),
     ));
     handle_execute_plan(ctx, plan, metadata, ExecutePlanMode::EagerSilent).await
+}
+
+pub(crate) async fn handle_execute_streaming_query_listener_bus_command(
+    _ctx: &SessionContext,
+    _command: StreamingQueryListenerBusCommand,
+    _metadata: ExecutorMetadata,
+) -> SparkResult<ExecutePlanResponseStream> {
+    Err(SparkError::NotImplemented(
+        "streaming query listener bus".to_string(),
+    ))
 }
 
 pub(crate) async fn handle_interrupt_all(ctx: &SessionContext) -> SparkResult<Vec<String>> {
@@ -339,7 +483,7 @@ pub(crate) async fn handle_reattach_execute(
     Ok(ExecutePlanResponseStream::new(
         spark.session_id().to_string(),
         operation_id,
-        rx,
+        Box::pin(rx),
     ))
 }
 

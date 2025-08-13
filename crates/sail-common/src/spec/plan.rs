@@ -9,7 +9,7 @@ use crate::spec::expression::{
     SortOrder,
 };
 use crate::spec::literal::Literal;
-use crate::spec::{DataType, Identifier};
+use crate::spec::{DataType, FunctionDefinition, Identifier};
 
 /// Unresolved logical plan node for Sail.
 /// As a starting point, the definition matches the structure of the `Relation` message
@@ -409,6 +409,7 @@ pub enum CommandNode {
     },
     Write(Write),
     WriteTo(WriteTo),
+    WriteStream(WriteStream),
     Explain {
         // TODO: Support stringified_plans
         mode: ExplainMode,
@@ -907,6 +908,36 @@ pub enum WriteToMode {
     Overwrite { condition: Box<Expr> },
     OverwritePartitions,
     Replace,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct WriteStream {
+    pub input: Box<QueryPlan>,
+    pub format: String,
+    pub options: Vec<(String, String)>,
+    pub partitioning_column_names: Vec<Identifier>,
+    pub output_mode: WriteStreamOutputMode,
+    pub query_name: String,
+    pub foreach_writer: Option<FunctionDefinition>,
+    pub foreach_batch: Option<FunctionDefinition>,
+    pub clustering_column_names: Vec<Identifier>,
+    pub sink_destination: Option<WriteStreamSinkDestination>,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub enum WriteStreamOutputMode {
+    Append,
+    Complete,
+    Update,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", rename_all_fields = "camelCase")]
+pub enum WriteStreamSinkDestination {
+    Path { path: String },
+    Table { table: ObjectName },
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
