@@ -60,6 +60,7 @@ use deltalake::errors::{DeltaResult, DeltaTableError};
 use deltalake::kernel::{Add, EagerSnapshot, Snapshot};
 use deltalake::logstore::LogStoreRef;
 use deltalake::table::state::DeltaTableState;
+use object_store::path::Path;
 use object_store::ObjectMeta;
 use serde::{Deserialize, Serialize};
 use url::Url;
@@ -93,16 +94,8 @@ pub fn datafusion_to_delta_error(err: DataFusionError) -> DeltaTableError {
     }
 }
 
-pub(crate) fn create_object_store_url(location: &Url) -> ObjectStoreUrl {
-    use object_store::path::DELIMITER;
-    #[allow(clippy::expect_used)]
-    ObjectStoreUrl::parse(format!(
-        "delta-rs://{}-{}{}",
-        location.scheme(),
-        location.host_str().unwrap_or("-"),
-        location.path().replace(DELIMITER, "-").replace(':', "-")
-    ))
-    .expect("Invalid object store url.")
+pub(crate) fn create_object_store_url(location: &Url) -> DeltaResult<ObjectStoreUrl> {
+    ObjectStoreUrl::parse(&location[..url::Position::BeforePath]).map_err(datafusion_to_delta_error)
 }
 
 /// Convenience trait for calling common methods on snapshot hierarchies
@@ -842,6 +835,19 @@ impl<'a> DeltaScanBuilder<'a> {
                 .push(part);
         }
 
+        // Rewrite the file groups so that the file paths are prepended with
+        // the Delta table location.
+        file_groups.iter_mut().for_each(|(_, files)| {
+            files.iter_mut().for_each(|file| {
+                file.object_meta.location = Path::from(format!(
+                    "{}{}{}",
+                    self.log_store.config().location.path(),
+                    object_store::path::DELIMITER,
+                    file.object_meta.location
+                ));
+            });
+        });
+
         let mut table_partition_cols = table_partition_cols
             .iter()
             .map(|col| {
@@ -902,15 +908,7 @@ impl<'a> DeltaScanBuilder<'a> {
             .with_schema_adapter_factory(Arc::new(DeltaSchemaAdapterFactory {}))
             .map_err(datafusion_to_delta_error)?;
 
-        // Create object store URL using delta-rs object_store_url logic
-        // This generates a unique URL with only scheme and authority for DataFusion
-        let object_store_url = create_object_store_url(&self.log_store.config().location);
-
-        // Register the object store with DataFusion's RuntimeEnv so it can resolve the custom URL
-        self.session
-            .runtime_env()
-            .register_object_store(object_store_url.as_ref(), self.log_store.object_store(None));
-
+        let object_store_url = create_object_store_url(&self.log_store.config().location)?;
         let file_scan_config =
             FileScanConfigBuilder::new(object_store_url, file_schema, file_source)
                 .with_file_groups(
@@ -1199,9 +1197,8 @@ impl TableProvider for DeltaTableProvider {
         if let Some(files) = &self.files {
             scan = scan.with_files(files);
         }
-        Ok(Arc::new(
-            scan.build().await.map_err(delta_to_datafusion_error)?,
-        ))
+        let plan = scan.build().await.map_err(delta_to_datafusion_error)?;
+        Ok(Arc::new(plan))
     }
 
     fn supports_filters_pushdown(

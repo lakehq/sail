@@ -10,11 +10,12 @@ use datafusion::datasource::memory::MemorySourceConfig;
 use datafusion::datasource::physical_plan::{
     ArrowSource, FileScanConfig, FileScanConfigBuilder, JsonSource,
 };
+use datafusion::datasource::sink::DataSinkExec;
 use datafusion::datasource::source::{DataSource, DataSourceExec};
 use datafusion::execution::FunctionRegistry;
 use datafusion::functions::string::overlay::OverlayFunc;
 use datafusion::logical_expr::{AggregateUDF, AggregateUDFImpl, ScalarUDF, ScalarUDFImpl};
-use datafusion::physical_expr::LexOrdering;
+use datafusion::physical_expr::{LexOrdering, LexRequirement, PhysicalSortExpr};
 use datafusion::physical_plan::joins::utils::{ColumnIndex, JoinFilter};
 use datafusion::physical_plan::joins::SortMergeJoinExec;
 use datafusion::physical_plan::recursive_query::RecursiveQueryExec;
@@ -36,12 +37,14 @@ use datafusion_proto::physical_plan::to_proto::{
 use datafusion_proto::physical_plan::{AsExecutionPlan, PhysicalExtensionCodec};
 use datafusion_proto::protobuf::{
     JoinType as ProtoJoinType, PhysicalPlanNode, PhysicalSortExprNode,
+    PhysicalSortExprNodeCollection,
 };
 use datafusion_spark::function::math::expm1::SparkExpm1;
 use prost::bytes::BytesMut;
 use prost::Message;
 use sail_common_datafusion::udf::StreamUDF;
 use sail_common_datafusion::utils::{read_record_batches, write_record_batches};
+use sail_delta_lake::delta_format::DeltaDataSink;
 use sail_plan::extension::function::array::arrays_zip::ArraysZip;
 use sail_plan::extension::function::array::spark_array::SparkArray;
 use sail_plan::extension::function::array::spark_array_empty_to_null::ArrayEmptyToNull;
@@ -53,8 +56,8 @@ use sail_plan::extension::function::bitmap_count::BitmapCount;
 use sail_plan::extension::function::collection::spark_concat::SparkConcat;
 use sail_plan::extension::function::collection::spark_reverse::SparkReverse;
 use sail_plan::extension::function::csv::spark_from_csv::SparkFromCSV;
+use sail_plan::extension::function::datetime::convert_tz::ConvertTz;
 use sail_plan::extension::function::datetime::spark_date::SparkDate;
-use sail_plan::extension::function::datetime::spark_from_to_utc_timestamp::SparkFromToUtcTimestamp;
 use sail_plan::extension::function::datetime::spark_interval::{
     SparkCalendarInterval, SparkDayTimeInterval, SparkYearMonthInterval,
 };
@@ -81,10 +84,8 @@ use sail_plan::extension::function::math::spark_bin::SparkBin;
 use sail_plan::extension::function::math::spark_bround::SparkBRound;
 use sail_plan::extension::function::math::spark_ceil_floor::{SparkCeil, SparkFloor};
 use sail_plan::extension::function::math::spark_conv::SparkConv;
-use sail_plan::extension::function::math::spark_csc::SparkCsc;
 use sail_plan::extension::function::math::spark_hex_unhex::{SparkHex, SparkUnHex};
 use sail_plan::extension::function::math::spark_pmod::SparkPmod;
-use sail_plan::extension::function::math::spark_sec::SparkSec;
 use sail_plan::extension::function::math::spark_signum::SparkSignum;
 use sail_plan::extension::function::math::spark_try_add::SparkTryAdd;
 use sail_plan::extension::function::math::spark_try_div::SparkTryDiv;
@@ -112,6 +113,7 @@ use sail_plan::extension::function::string::spark_encode_decode::{SparkDecode, S
 use sail_plan::extension::function::string::spark_mask::SparkMask;
 use sail_plan::extension::function::string::spark_to_binary::{SparkToBinary, SparkTryToBinary};
 use sail_plan::extension::function::string::spark_to_number::SparkToNumber;
+use sail_plan::extension::function::string::spark_try_to_number::SparkTryToNumber;
 use sail_plan::extension::function::struct_function::StructFunction;
 use sail_plan::extension::function::update_struct_field::UpdateStructField;
 use sail_plan::extension::function::url::parse_url::ParseUrl;
@@ -129,13 +131,14 @@ use sail_python_udf::udf::pyspark_map_iter_udf::{PySparkMapIterKind, PySparkMapI
 use sail_python_udf::udf::pyspark_udaf::PySparkGroupAggregateUDF;
 use sail_python_udf::udf::pyspark_udf::{PySparkUDF, PySparkUdfKind};
 use sail_python_udf::udf::pyspark_udtf::{PySparkUDTF, PySparkUdtfKind};
+use url::Url;
 
 use crate::plan::gen::extended_aggregate_udf::UdafKind;
 use crate::plan::gen::extended_physical_plan_node::NodeKind;
 use crate::plan::gen::extended_scalar_udf::UdfKind;
 use crate::plan::gen::extended_stream_udf::StreamUdfKind;
 use crate::plan::gen::{
-    ExtendedAggregateUdf, ExtendedPhysicalPlanNode, ExtendedScalarUdf, ExtendedStreamUdf,
+    DeltaSink, ExtendedAggregateUdf, ExtendedPhysicalPlanNode, ExtendedScalarUdf, ExtendedStreamUdf,
 };
 use crate::plan::{gen, ShuffleConsumption, ShuffleReadExec, ShuffleWriteExec};
 use crate::stream::reader::TaskReadLocation;
@@ -422,6 +425,29 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
                     null_equality,
                 )?))
             }
+            NodeKind::DeltaSink(gen::DeltaSinkExecNode {
+                input,
+                sink,
+                sink_schema,
+                sort_order,
+            }) => {
+                let input = self.try_decode_plan(&input, registry)?;
+                let sink = if let Some(sink) = sink {
+                    self.try_decode_delta_sink(sink)?
+                } else {
+                    return plan_err!("no DeltaSink found");
+                };
+                let sink_schema = self.try_decode_schema(&sink_schema)?;
+                let sort_order = sort_order
+                    .map(|x| self.try_decode_lex_requirement(&x, registry, &sink_schema))
+                    .transpose()?
+                    .flatten();
+                Ok(Arc::new(DataSinkExec::new(
+                    input,
+                    Arc::new(sink),
+                    sort_order,
+                )))
+            }
             // TODO: StreamingTableExec?
             _ => plan_err!("unsupported physical plan node: {node_kind:?}"),
         }
@@ -631,6 +657,25 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
             } else {
                 return plan_err!("unsupported data source node: {data_source:?}");
             }
+        } else if let Some(data_sink) = node.as_any().downcast_ref::<DataSinkExec>() {
+            let input = self.try_encode_plan(data_sink.input().clone())?;
+            let sort_order = data_sink
+                .sort_order()
+                .as_ref()
+                .map(|x| self.try_encode_lex_requirement(x))
+                .transpose()?;
+            let sink_schema = self.try_encode_schema(&data_sink.schema())?;
+            if let Some(sink) = data_sink.sink().as_any().downcast_ref::<DeltaDataSink>() {
+                let sink = self.try_encode_delta_sink(sink)?;
+                NodeKind::DeltaSink(gen::DeltaSinkExecNode {
+                    input,
+                    sink: Some(sink),
+                    sink_schema,
+                    sort_order,
+                })
+            } else {
+                return plan_err!("unsupported data sink: {data_sink:?}");
+            }
         } else {
             return plan_err!("unsupported physical plan node: {node:?}");
         };
@@ -759,15 +804,6 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
                 let udf = SparkTimestamp::try_new(timezone.map(Arc::from))?;
                 return Ok(Arc::new(ScalarUDF::from(udf)));
             }
-            UdfKind::SparkFromToUtcTimestamp(gen::SparkFromToUtcTimestampUdf {
-                time_unit,
-                is_to,
-            }) => {
-                let time_unit = gen_datafusion_common::TimeUnit::from_str_name(time_unit.as_str())
-                    .ok_or_else(|| plan_datafusion_err!("invalid time unit: {time_unit}"))?;
-                let udf = SparkFromToUtcTimestamp::new(time_unit.into(), is_to);
-                return Ok(Arc::new(ScalarUDF::from(udf)));
-            }
         };
         match name {
             "array_item_with_position" => {
@@ -778,6 +814,7 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
             "array_max" => Ok(Arc::new(ScalarUDF::from(ArrayMax::new()))),
             "arrays_zip" => Ok(Arc::new(ScalarUDF::from(ArraysZip::new()))),
             "bitmap_count" => Ok(Arc::new(ScalarUDF::from(BitmapCount::new()))),
+            "convert_tz" => Ok(Arc::new(ScalarUDF::from(ConvertTz::new()))),
             "greatest" => Ok(Arc::new(ScalarUDF::from(Greatest::new()))),
             "least" => Ok(Arc::new(ScalarUDF::from(Least::new()))),
             "levenshtein" => Ok(Arc::new(ScalarUDF::from(Levenshtein::new()))),
@@ -794,7 +831,9 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
             "spark_concat" | "concat" => Ok(Arc::new(ScalarUDF::from(SparkConcat::new()))),
             "spark_from_csv" | "from_csv" => Ok(Arc::new(ScalarUDF::from(SparkFromCSV::new()))),
             "spark_to_number" | "to_number" => Ok(Arc::new(ScalarUDF::from(SparkToNumber::new()))),
-            "spark_csc" | "csc" => Ok(Arc::new(ScalarUDF::from(SparkCsc::new()))),
+            "spark_try_to_number" | "rey_to_number" => {
+                Ok(Arc::new(ScalarUDF::from(SparkTryToNumber::new())))
+            }
             "spark_hex" | "hex" => Ok(Arc::new(ScalarUDF::from(SparkHex::new()))),
             "spark_unhex" | "unhex" => Ok(Arc::new(ScalarUDF::from(SparkUnHex::new()))),
             "spark_murmur3_hash" | "hash" => Ok(Arc::new(ScalarUDF::from(SparkMurmur3Hash::new()))),
@@ -826,7 +865,6 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
             }
             "spark_abs" | "abs" => Ok(Arc::new(ScalarUDF::from(SparkAbs::new()))),
             "spark_conv" | "conv" => Ok(Arc::new(ScalarUDF::from(SparkConv::new()))),
-            "spark_sec" | "sec" => Ok(Arc::new(ScalarUDF::from(SparkSec::new()))),
             "spark_signum" | "signum" => Ok(Arc::new(ScalarUDF::from(SparkSignum::new()))),
             "spark_element_at" | "element_at" => {
                 Ok(Arc::new(ScalarUDF::from(SparkElementAt::new())))
@@ -889,6 +927,7 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
             || node.inner().as_any().is::<ArrayMax>()
             || node.inner().as_any().is::<ArraysZip>()
             || node.inner().as_any().is::<BitmapCount>()
+            || node.inner().as_any().is::<ConvertTz>()
             || node.inner().as_any().is::<Greatest>()
             || node.inner().as_any().is::<Least>()
             || node.inner().as_any().is::<Levenshtein>()
@@ -904,6 +943,7 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
             || node.inner().as_any().is::<SparkHex>()
             || node.inner().as_any().is::<SparkFromCSV>()
             || node.inner().as_any().is::<SparkToNumber>()
+            || node.inner().as_any().is::<SparkTryToNumber>()
             || node.inner().as_any().is::<SparkUnHex>()
             || node.inner().as_any().is::<SparkMurmur3Hash>()
             || node.inner().as_any().is::<SparkReverse>()
@@ -920,8 +960,6 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
             || node.inner().as_any().is::<SparkAbs>()
             || node.inner().as_any().is::<SparkBRound>()
             || node.inner().as_any().is::<SparkConv>()
-            || node.inner().as_any().is::<SparkCsc>()
-            || node.inner().as_any().is::<SparkSec>()
             || node.inner().as_any().is::<SparkSignum>()
             || node.inner().as_any().is::<SparkToBinary>()
             || node.inner().as_any().is::<SparkTryToBinary>()
@@ -1032,17 +1070,6 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
         } else if let Some(func) = node.inner().as_any().downcast_ref::<SparkTimestamp>() {
             let timezone = func.timezone().map(|x| x.to_string());
             UdfKind::SparkTimestamp(gen::SparkTimestampUdf { timezone })
-        } else if let Some(func) = node
-            .inner()
-            .as_any()
-            .downcast_ref::<SparkFromToUtcTimestamp>()
-        {
-            let time_unit: gen_datafusion_common::TimeUnit = func.time_unit().into();
-            let time_unit = time_unit.as_str_name().to_string();
-            UdfKind::SparkFromToUtcTimestamp(gen::SparkFromToUtcTimestampUdf {
-                time_unit,
-                is_to: func.is_to(),
-            })
         } else {
             return Ok(());
         };
@@ -1215,6 +1242,47 @@ impl RemoteExecutionCodec {
         Self { context }
     }
 
+    fn try_decode_delta_sink(&self, sink: DeltaSink) -> Result<DeltaDataSink> {
+        let table_url = Url::parse(&sink.table_url)
+            .map_err(|e| plan_datafusion_err!("failed to parse table URL: {e}"))?;
+        let options =
+            serde_json::from_str(&sink.options).map_err(|e| plan_datafusion_err!("{e}"))?;
+        let schema = self.try_decode_schema(&sink.schema)?;
+        let initial_actions =
+            serde_json::from_str(&sink.initial_actions).map_err(|e| plan_datafusion_err!("{e}"))?;
+        let operation = match sink.operation {
+            Some(op) => Some(serde_json::from_str(&op).map_err(|e| plan_datafusion_err!("{e}"))?),
+            None => None,
+        };
+        Ok(DeltaDataSink::new(
+            table_url,
+            options,
+            Arc::new(schema),
+            sink.partition_columns,
+            initial_actions,
+            operation,
+            sink.table_exists,
+        ))
+    }
+
+    fn try_encode_delta_sink(&self, sink: &DeltaDataSink) -> Result<DeltaSink> {
+        Ok(DeltaSink {
+            table_url: sink.table_url().to_string(),
+            options: serde_json::to_string(sink.options())
+                .map_err(|e| plan_datafusion_err!("{e}"))?,
+            schema: self.try_encode_schema(sink.schema())?,
+            partition_columns: sink.partition_columns().to_vec(),
+            initial_actions: serde_json::to_string(sink.initial_actions())
+                .map_err(|e| plan_datafusion_err!("{e}"))?,
+            operation: sink
+                .operation()
+                .map(serde_json::to_string)
+                .transpose()
+                .map_err(|e| plan_datafusion_err!("{e}"))?,
+            table_exists: sink.table_exists(),
+        })
+    }
+
     fn try_decode_stream_udf(&self, udf: ExtendedStreamUdf) -> Result<Arc<dyn StreamUDF>> {
         let ExtendedStreamUdf { stream_udf_kind } = udf;
         let stream_udf_kind = match stream_udf_kind {
@@ -1335,6 +1403,40 @@ impl RemoteExecutionCodec {
         };
         Ok(ExtendedStreamUdf {
             stream_udf_kind: Some(stream_udf_kind),
+        })
+    }
+
+    fn try_decode_lex_requirement(
+        &self,
+        buf: &[u8],
+        registry: &dyn FunctionRegistry,
+        schema: &Schema,
+    ) -> Result<Option<LexRequirement>> {
+        let collection: PhysicalSortExprNodeCollection = self.try_decode_message(buf)?;
+        let exprs = parse_physical_sort_exprs(
+            &collection.physical_sort_expr_nodes,
+            registry,
+            schema,
+            self,
+        )?;
+        Ok(LexRequirement::new(exprs.into_iter().map(Into::into)))
+    }
+
+    fn try_encode_lex_requirement(&self, lex_requirement: &LexRequirement) -> Result<Vec<u8>> {
+        let expr = lex_requirement
+            .iter()
+            .map(|requirement| {
+                let expr: PhysicalSortExpr = requirement.to_owned().into();
+                let sort_expr = PhysicalSortExprNode {
+                    expr: Some(Box::new(serialize_physical_expr(&expr.expr, self)?)),
+                    asc: !expr.options.descending,
+                    nulls_first: expr.options.nulls_first,
+                };
+                Ok(sort_expr)
+            })
+            .collect::<Result<Vec<_>>>()?;
+        self.try_encode_message(PhysicalSortExprNodeCollection {
+            physical_sort_expr_nodes: expr,
         })
     }
 
