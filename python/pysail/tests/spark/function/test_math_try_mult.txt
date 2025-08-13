@@ -1,4 +1,4 @@
-from pyspark.sql import functions as sf
+>>> from pyspark.sql import functions as sf
 
 >>> spark.range(1).select(
 ...     sf.try_multiply(sf.make_interval(days=sf.lit(1)), sf.lit(2)).alias("result")
