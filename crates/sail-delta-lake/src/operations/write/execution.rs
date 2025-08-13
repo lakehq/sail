@@ -2,7 +2,7 @@ use std::sync::Arc;
 
 use datafusion::datasource::provider_as_source;
 use datafusion::execution::context::SessionState;
-use datafusion::logical_expr::{Expr, LogicalPlanBuilder};
+use datafusion::logical_expr::LogicalPlanBuilder;
 use datafusion::physical_expr::PhysicalExpr;
 use datafusion::physical_plan::{ExecutionPlan, ExecutionPlanProperties};
 use datafusion::prelude::DataFrame;
@@ -16,8 +16,7 @@ use uuid::Uuid;
 
 /// [Credit]: <https://github.com/delta-io/delta-rs/blob/3607c314cbdd2ad06c6ee0677b92a29f695c71f3/crates/core/src/operations/write/execution.rs>
 use crate::delta_datafusion::{
-    datafusion_to_delta_error, find_files, DataFusionMixins, DeltaScanConfigBuilder,
-    DeltaTableProvider,
+    datafusion_to_delta_error, DataFusionMixins, DeltaScanConfigBuilder, DeltaTableProvider,
 };
 use crate::operations::write::writer::{DeltaWriter, WriterConfig};
 
@@ -38,79 +37,6 @@ impl WriterStatsConfig {
             stats_columns,
         }
     }
-}
-
-#[allow(clippy::too_many_arguments)]
-pub(crate) async fn execute_non_empty_expr(
-    snapshot: &DeltaTableState,
-    log_store: LogStoreRef,
-    state: SessionState,
-    partition_columns: Vec<String>,
-    expression: &Expr,
-    rewrite: &[Add],
-    writer_properties: Option<WriterProperties>,
-    writer_stats_config: WriterStatsConfig,
-    partition_scan: bool,
-    operation_id: Uuid,
-) -> DeltaResult<(Vec<Action>, Option<DataFrame>)> {
-    // For each identified file perform a parquet scan + filter + limit (1) + count.
-    // If returned count is not zero then append the file to be rewritten and removed from the log. Otherwise do nothing to the file.
-    let mut actions: Vec<Action> = Vec::new();
-
-    // Take the insert plan schema since it might have been schema evolved, if its not
-    // it is simply the table schema
-    let scan_config = DeltaScanConfigBuilder::new()
-        .with_schema(snapshot.input_schema()?)
-        .build(snapshot)?;
-
-    let target_provider = Arc::new(
-        DeltaTableProvider::try_new(snapshot.clone(), log_store.clone(), scan_config.clone())?
-            .with_files(rewrite.to_vec()),
-    );
-
-    let target_provider = provider_as_source(target_provider);
-    let source = LogicalPlanBuilder::scan("target", target_provider.clone(), None)
-        .map_err(datafusion_to_delta_error)?
-        .build()
-        .map_err(datafusion_to_delta_error)?;
-
-    let df = DataFrame::new(state.clone(), source);
-
-    let cdf_df = if !partition_scan {
-        // Apply the negation of the filter and rewrite files
-        let negated_expression = Expr::Not(Box::new(Expr::IsTrue(Box::new(expression.clone()))));
-
-        let filter = df
-            .clone()
-            .filter(negated_expression)
-            .map_err(datafusion_to_delta_error)?
-            .create_physical_plan()
-            .await
-            .map_err(datafusion_to_delta_error)?;
-
-        let add_actions: Vec<Action> = write_execution_plan(
-            Some(snapshot),
-            state.clone(),
-            filter,
-            partition_columns.clone(),
-            log_store.object_store(Some(operation_id)),
-            Path::from(""),
-            Some(snapshot.table_config().target_file_size() as usize),
-            None,
-            writer_properties.clone(),
-            writer_stats_config.clone(),
-        )
-        .await?;
-
-        actions.extend(add_actions);
-
-        // TODO: support CDC
-        None
-    } else {
-        None
-    };
-
-    Ok((actions, cdf_df))
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -244,54 +170,6 @@ async fn write_execution_plan(
 
     let add_actions = writer.close().await?;
     Ok(add_actions.into_iter().map(Action::Add).collect())
-}
-
-#[allow(clippy::too_many_arguments)]
-pub async fn prepare_predicate_actions(
-    predicate: Expr,
-    log_store: LogStoreRef,
-    snapshot: &DeltaTableState,
-    state: SessionState,
-    partition_columns: Vec<String>,
-    writer_properties: Option<WriterProperties>,
-    deletion_timestamp: i64,
-    writer_stats_config: WriterStatsConfig,
-    operation_id: Uuid,
-) -> DeltaResult<(Vec<Action>, Option<DataFrame>)> {
-    let candidates =
-        find_files(snapshot, log_store.clone(), &state, Some(predicate.clone())).await?;
-
-    let (mut actions, cdf_df) = execute_non_empty_expr(
-        snapshot,
-        log_store,
-        state,
-        partition_columns,
-        &predicate,
-        &candidates.candidates,
-        writer_properties,
-        writer_stats_config,
-        candidates.partition_scan,
-        operation_id,
-    )
-    .await?;
-
-    let remove = candidates.candidates;
-
-    for action in remove {
-        actions.push(Action::Remove(Remove {
-            path: action.path,
-            deletion_timestamp: Some(deletion_timestamp),
-            data_change: true,
-            extended_file_metadata: Some(true),
-            partition_values: Some(action.partition_values),
-            size: Some(action.size),
-            deletion_vector: action.deletion_vector,
-            tags: None,
-            base_row_id: action.base_row_id,
-            default_row_commit_version: action.default_row_commit_version,
-        }))
-    }
-    Ok((actions, cdf_df))
 }
 
 #[allow(clippy::too_many_arguments)]

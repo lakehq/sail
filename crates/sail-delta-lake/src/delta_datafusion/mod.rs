@@ -12,7 +12,6 @@ use datafusion::arrow::datatypes::{
     DataType as ArrowDataType, Field, Schema as ArrowSchema, SchemaRef,
     SchemaRef as ArrowSchemaRef, TimeUnit, UInt16Type,
 };
-use datafusion::arrow::error::ArrowError;
 use datafusion::catalog::memory::DataSourceExec;
 use datafusion::catalog::Session;
 use datafusion::common::config::ConfigOptions;
@@ -24,28 +23,26 @@ use datafusion::common::{
 };
 use datafusion::config::TableParquetOptions;
 use datafusion::datasource::listing::PartitionedFile;
-use datafusion::datasource::memory::MemTable;
 use datafusion::datasource::object_store::ObjectStoreUrl;
 use datafusion::datasource::physical_plan::{
     wrap_partition_type_in_dict, wrap_partition_value_in_dict, FileGroup, FileScanConfigBuilder,
     ParquetSource,
 };
 use datafusion::datasource::{TableProvider, TableType};
-use datafusion::execution::context::{SessionContext, SessionState, TaskContext};
 use datafusion::execution::runtime_env::RuntimeEnv;
-use datafusion::execution::SessionStateBuilder;
+use datafusion::execution::{SessionState, SessionStateBuilder};
 use datafusion::logical_expr::execution_props::ExecutionProps;
 use datafusion::logical_expr::planner::ExprPlanner;
 use datafusion::logical_expr::simplify::SimplifyContext;
 use datafusion::logical_expr::utils::{conjunction, split_conjunction};
 use datafusion::logical_expr::{
-    col, AggregateUDF, BinaryExpr, Expr, LogicalPlan, Operator, ScalarUDF,
-    TableProviderFilterPushDown, TableSource, Volatility,
+    AggregateUDF, BinaryExpr, Expr, LogicalPlan, Operator, ScalarUDF, TableProviderFilterPushDown,
+    TableSource, Volatility,
 };
 use datafusion::optimizer::simplify_expressions::ExprSimplifier;
 use datafusion::physical_expr::PhysicalExpr;
 use datafusion::physical_optimizer::pruning::PruningPredicate;
-use datafusion::physical_plan::{ExecutionPlan, ExecutionPlanProperties};
+use datafusion::physical_plan::ExecutionPlan;
 use datafusion::sql::planner::{ContextProvider, SqlToRel};
 use datafusion::sql::sqlparser::dialect::GenericDialect;
 use datafusion::sql::sqlparser::parser::Parser;
@@ -1107,53 +1104,14 @@ pub(crate) fn get_path_column<'a>(
         .map(move |key| key.and_then(|k| values.value(k as usize).into())))
 }
 
-pub(crate) struct FindFilesExprProperties {
-    pub partition_columns: Vec<String>,
-    pub partition_only: bool,
-    pub result: DeltaResult<()>,
-}
-
 /// Properties for analyzing PhysicalExpr to determine if it only references partition columns
 #[allow(dead_code)]
 pub(crate) struct FindFilesPhysicalExprProperties {
     pub partition_columns: Vec<String>,
     pub partition_only: bool,
     pub schema: SchemaRef,
-}
-
-/// Check if a PhysicalExpr only references partition columns
-fn is_partition_only_physical_expr(
-    expr: &Arc<dyn PhysicalExpr>,
-    properties: &FindFilesPhysicalExprProperties,
-) -> bool {
-    use datafusion::physical_expr::expressions::NotExpr;
-    use datafusion::physical_plan::expressions::{BinaryExpr, Column, Literal};
-
-    // Check if this expression is a column reference
-    if let Some(column) = expr.as_any().downcast_ref::<Column>() {
-        return properties
-            .partition_columns
-            .contains(&column.name().to_string());
-    }
-
-    // Check if this is a literal (always partition-only)
-    if expr.as_any().downcast_ref::<Literal>().is_some() {
-        return true;
-    }
-
-    // Check if this is a NOT expression
-    if let Some(not_expr) = expr.as_any().downcast_ref::<NotExpr>() {
-        return is_partition_only_physical_expr(not_expr.arg(), properties);
-    }
-
-    // Check if this is a binary expression
-    if let Some(binary_expr) = expr.as_any().downcast_ref::<BinaryExpr>() {
-        return is_partition_only_physical_expr(binary_expr.left(), properties)
-            && is_partition_only_physical_expr(binary_expr.right(), properties);
-    }
-
-    // For other expression types, assume they are not partition-only
-    false
+    pub result: DeltaResult<()>,
+    pub referenced_columns: HashSet<String>,
 }
 
 /// Scan memory table (for partition-only predicates)
@@ -1238,7 +1196,7 @@ pub(crate) async fn find_files_scan_physical(
     snapshot: &DeltaTableState,
     log_store: LogStoreRef,
     state: &SessionState,
-    _physical_predicate: Arc<dyn PhysicalExpr>,
+    physical_predicate: Arc<dyn PhysicalExpr>,
 ) -> DeltaResult<Vec<Add>> {
     use datafusion::execution::context::TaskContext;
     use datafusion::physical_plan::common::collect;
@@ -1258,10 +1216,28 @@ pub(crate) async fn find_files_scan_physical(
     let logical_schema = df_logical_schema(snapshot, &scan_config.file_column_name, None)?;
 
     let mut used_columns = Vec::new();
-    // TODO: traverse the expression tree
-    // For now, include all columns to be safe
-    for (i, _field) in logical_schema.fields().iter().enumerate() {
-        used_columns.push(i);
+
+    let referenced_columns = collect_physical_columns(&physical_predicate);
+
+    for (i, field) in logical_schema.fields().iter().enumerate() {
+        if referenced_columns.contains(field.name()) {
+            used_columns.push(i);
+        }
+    }
+
+    if let Some(file_column_name) = &scan_config.file_column_name {
+        if let Ok(idx) = logical_schema.index_of(file_column_name) {
+            if !used_columns.contains(&idx) {
+                used_columns.push(idx);
+            }
+        }
+    }
+
+    // If no columns were referenced, include all columns to be safe
+    if used_columns.is_empty() {
+        for (i, _field) in logical_schema.fields().iter().enumerate() {
+            used_columns.push(i);
+        }
     }
 
     let table_provider = DeltaTableProvider::try_new(snapshot.clone(), log_store, scan_config)?;
@@ -1291,12 +1267,54 @@ pub(crate) async fn find_files_scan_physical(
     join_batches_with_add_actions(partitions, map, PATH_COLUMN, true)
 }
 
-impl TreeNodeVisitor<'_> for FindFilesExprProperties {
+/// Extract column names referenced by a PhysicalExpr
+pub(crate) fn collect_physical_columns(expr: &Arc<dyn PhysicalExpr>) -> HashSet<String> {
+    use datafusion::physical_plan::expressions::Column;
+
+    let mut columns = HashSet::<String>::new();
+    let _ = expr.apply(|expr| {
+        if let Some(column) = expr.as_any().downcast_ref::<Column>() {
+            columns.insert(column.name().to_string());
+        }
+        Ok(TreeNodeRecursion::Continue)
+    });
+    columns
+}
+
+impl FindFilesPhysicalExprProperties {
+    pub fn new(partition_columns: Vec<String>, schema: SchemaRef) -> Self {
+        Self {
+            partition_columns,
+            partition_only: true,
+            schema,
+            result: Ok(()),
+            referenced_columns: HashSet::new(),
+        }
+    }
+
+    pub fn analyze_physical_expr(&mut self, expr: &Arc<dyn PhysicalExpr>) -> DeltaResult<()> {
+        // Extract all column references from the physical expression
+        self.referenced_columns = collect_physical_columns(expr);
+
+        self.partition_only = self
+            .referenced_columns
+            .iter()
+            .all(|col| self.partition_columns.contains(col));
+
+        match &self.result {
+            Ok(()) => Ok(()),
+            Err(e) => Err(DeltaTableError::Generic(e.to_string())),
+        }
+    }
+}
+
+impl TreeNodeVisitor<'_> for FindFilesPhysicalExprProperties {
     type Node = Expr;
 
     fn f_down(&mut self, expr: &Self::Node) -> datafusion::common::Result<TreeNodeRecursion> {
         match expr {
             Expr::Column(c) => {
+                self.referenced_columns.insert(c.name.clone());
                 if !self.partition_columns.contains(&c.name) {
                     self.partition_only = false;
                 }
@@ -1391,168 +1409,6 @@ fn join_batches_with_add_actions(
         }
     }
     Ok(files)
-}
-
-pub(crate) async fn find_files_scan(
-    snapshot: &DeltaTableState,
-    log_store: LogStoreRef,
-    state: &SessionState,
-    expression: Expr,
-) -> DeltaResult<Vec<Add>> {
-    let candidate_map: HashMap<String, Add> = snapshot
-        .file_actions_iter()?
-        .map(|add| (add.path.clone(), add.to_owned()))
-        .collect();
-
-    let scan_config = DeltaScanConfigBuilder {
-        include_file_column: true,
-        ..Default::default()
-    }
-    .build(snapshot)?;
-
-    let logical_schema = df_logical_schema(snapshot, &scan_config.file_column_name, None)?;
-
-    let mut used_columns = expression
-        .column_refs()
-        .into_iter()
-        .map(|column| logical_schema.index_of(&column.name))
-        .collect::<Result<Vec<usize>, ArrowError>>()?;
-    #[allow(clippy::unwrap_used)]
-    used_columns.push(logical_schema.index_of(scan_config.file_column_name.as_ref().unwrap())?);
-
-    // Create a DeltaTableProvider and use its scan method
-    let table_provider = DeltaTableProvider::try_new(snapshot.clone(), log_store, scan_config)?;
-
-    let filters = vec![expression.clone()];
-    let scan = table_provider
-        .scan(state, Some(&used_columns), &filters, Some(1))
-        .await
-        .map_err(datafusion_to_delta_error)?;
-
-    // For find_files_scan, we want to find files that contain ANY matching data
-    // For non-partition columns, we scan without filtering to identify candidate files
-    // For partition columns, we can use the normal filtering logic
-    let limit: Arc<dyn ExecutionPlan> = scan;
-
-    let task_ctx = Arc::new(TaskContext::from(state));
-    let mut partitions = Vec::new();
-
-    for i in 0..limit.output_partitioning().partition_count() {
-        let stream = limit
-            .execute(i, task_ctx.clone())
-            .map_err(datafusion_to_delta_error)?;
-        let data = datafusion::physical_plan::common::collect(stream)
-            .await
-            .map_err(datafusion_to_delta_error)?;
-        partitions.extend(data);
-    }
-
-    let map = candidate_map.into_iter().collect::<HashMap<String, Add>>();
-
-    join_batches_with_add_actions(partitions, map, PATH_COLUMN, true)
-}
-
-pub(crate) async fn scan_memory_table(
-    snapshot: &DeltaTableState,
-    state: &SessionState,
-    predicate: &Expr,
-) -> DeltaResult<Vec<Add>> {
-    let actions = snapshot.file_actions()?;
-
-    let batch = snapshot.add_actions_table(true)?;
-    let mut arrays = Vec::new();
-    let mut fields = Vec::new();
-
-    let schema = batch.schema();
-
-    arrays.push(
-        batch
-            .column_by_name("path")
-            .ok_or(DeltaTableError::Generic(
-                "Column with name `path` does not exist".to_owned(),
-            ))?
-            .to_owned(),
-    );
-    fields.push(Field::new(PATH_COLUMN, ArrowDataType::Utf8, false));
-
-    for field in schema.fields() {
-        #[allow(clippy::unwrap_used)]
-        if field.name().starts_with("partition.") {
-            let name = field.name().strip_prefix("partition.").unwrap();
-
-            arrays.push(batch.column_by_name(field.name()).unwrap().to_owned());
-            fields.push(Field::new(
-                name,
-                field.data_type().to_owned(),
-                field.is_nullable(),
-            ));
-        }
-    }
-
-    let schema = Arc::new(ArrowSchema::new(fields));
-    let batch = RecordBatch::try_new(schema, arrays)?;
-    let mem_table =
-        MemTable::try_new(batch.schema(), vec![vec![batch]]).map_err(datafusion_to_delta_error)?;
-
-    let ctx = SessionContext::new_with_state(state.clone());
-    let mut df = ctx
-        .read_table(Arc::new(mem_table))
-        .map_err(datafusion_to_delta_error)?;
-    df = df
-        .filter(predicate.to_owned())
-        .map_err(datafusion_to_delta_error)?
-        .select(vec![col(PATH_COLUMN)])
-        .map_err(datafusion_to_delta_error)?;
-    let batches = df.collect().await.map_err(datafusion_to_delta_error)?;
-
-    let map = actions
-        .into_iter()
-        .map(|action| (action.path.clone(), action))
-        .collect::<HashMap<String, Add>>();
-
-    join_batches_with_add_actions(batches, map, PATH_COLUMN, false)
-}
-
-pub async fn find_files(
-    snapshot: &DeltaTableState,
-    log_store: LogStoreRef,
-    state: &SessionState,
-    predicate: Option<Expr>,
-) -> DeltaResult<FindFiles> {
-    let current_metadata = snapshot.metadata();
-
-    match &predicate {
-        Some(predicate) => {
-            let mut expr_properties = FindFilesExprProperties {
-                partition_only: true,
-                partition_columns: current_metadata.partition_columns().clone(),
-                result: Ok(()),
-            };
-
-            TreeNode::visit(predicate, &mut expr_properties).map_err(datafusion_to_delta_error)?;
-            expr_properties.result?;
-
-            if expr_properties.partition_only {
-                let candidates = scan_memory_table(snapshot, state, predicate).await?;
-                Ok(FindFiles {
-                    candidates,
-                    partition_scan: true,
-                })
-            } else {
-                let candidates =
-                    find_files_scan(snapshot, log_store, state, predicate.to_owned()).await?;
-
-                Ok(FindFiles {
-                    candidates,
-                    partition_scan: false,
-                })
-            }
-        }
-        None => Ok(FindFiles {
-            candidates: snapshot.file_actions()?,
-            partition_scan: true,
-        }),
-    }
 }
 
 /// Simple context provider for Delta Lake expression parsing
@@ -1660,13 +1516,13 @@ pub async fn find_files_physical(
                 .map_err(datafusion_to_delta_error)?;
 
             // Check if the predicate only references partition columns
-            let expr_properties = FindFilesPhysicalExprProperties {
-                partition_only: true,
-                partition_columns: current_metadata.partition_columns().clone(),
-                schema: snapshot.arrow_schema()?,
-            };
+            let mut expr_properties = FindFilesPhysicalExprProperties::new(
+                current_metadata.partition_columns().clone(),
+                snapshot.arrow_schema()?,
+            );
+            expr_properties.analyze_physical_expr(&adapted_predicate)?;
 
-            if is_partition_only_physical_expr(&adapted_predicate, &expr_properties) {
+            if expr_properties.partition_only {
                 // Use partition-only scanning (memory table approach)
                 let candidates =
                     scan_memory_table_physical(snapshot, state, adapted_predicate).await?;
