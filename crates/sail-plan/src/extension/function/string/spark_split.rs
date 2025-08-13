@@ -1,9 +1,6 @@
 use std::any::Any;
 use std::sync::Arc;
 
-use crate::extension::function::error_utils::{generic_exec_err, unsupported_data_types_exec_err};
-use crate::extension::function::functions_nested_utils::opt_downcast_arg;
-use crate::extension::function::functions_utils::make_scalar_function;
 use arrow::array::{
     Array, ArrayRef, Int32Array, ListArray, ListBuilder, StringArray, StringBuilder,
 };
@@ -13,6 +10,10 @@ use datafusion_expr::{ScalarFunctionArgs, ScalarUDFImpl};
 use datafusion_expr_common::columnar_value::ColumnarValue;
 use datafusion_expr_common::signature::{Signature, Volatility};
 use regex::Regex;
+
+use crate::extension::function::error_utils::{generic_exec_err, unsupported_data_types_exec_err};
+use crate::extension::function::functions_nested_utils::opt_downcast_arg;
+use crate::extension::function::functions_utils::make_scalar_function;
 
 #[derive(Debug)]
 pub struct SparkSplit {
