@@ -4,7 +4,9 @@ use std::fmt;
 use std::sync::Arc;
 
 use async_trait::async_trait;
+use datafusion::arrow::compute::cast;
 use datafusion::arrow::datatypes::SchemaRef;
+use datafusion::arrow::record_batch::RecordBatch;
 use datafusion::datasource::sink::DataSink;
 use datafusion::execution::context::TaskContext;
 use datafusion::physical_plan::{DisplayAs, DisplayFormatType, SendableRecordBatchStream};
@@ -21,6 +23,7 @@ use futures::StreamExt;
 use sail_common_datafusion::datasource::TableDeltaOptions;
 use url::Url;
 
+use crate::delta_datafusion::type_converter::DeltaTypeConverter;
 use crate::operations::write::writer::{DeltaWriter, WriterConfig};
 use crate::table::{create_delta_table_with_object_store, open_table_with_object_store};
 
@@ -220,7 +223,8 @@ impl DeltaDataSink {
 
             if let Some(existing_field) = field_map.get(&field_name) {
                 // Field exists in both schemas - check for type compatibility and promotion
-                let promoted_field = self.promote_field_types(existing_field, input_field)?;
+                let promoted_field =
+                    DeltaTypeConverter::promote_field_types(existing_field, input_field)?;
                 field_map.insert(field_name, promoted_field);
             } else {
                 // New field from input schema
@@ -237,80 +241,6 @@ impl DeltaDataSink {
             .collect();
 
         Ok(std::sync::Arc::new(Schema::new(merged_fields)))
-    }
-
-    fn promote_field_types(
-        &self,
-        table_field: &datafusion::arrow::datatypes::Field,
-        input_field: &datafusion::arrow::datatypes::Field,
-    ) -> Result<datafusion::arrow::datatypes::Field> {
-        use datafusion::arrow::compute::can_cast_types;
-        use datafusion::arrow::datatypes::DataType;
-
-        let table_type = table_field.data_type();
-        let input_type = input_field.data_type();
-
-        // If types are identical, return the table field (preserve table metadata)
-        if table_type == input_type {
-            return Ok(table_field.clone());
-        }
-
-        let merged_type = match (table_type, input_type) {
-            (
-                DataType::Utf8 | DataType::Utf8View | DataType::LargeUtf8,
-                DataType::Utf8 | DataType::LargeUtf8 | DataType::Utf8View,
-            ) => Some(input_type.clone()),
-            (
-                DataType::Binary | DataType::BinaryView | DataType::LargeBinary,
-                DataType::Binary | DataType::LargeBinary | DataType::BinaryView,
-            ) => Some(input_type.clone()),
-
-            (
-                DataType::Decimal128(table_precision, table_scale)
-                | DataType::Decimal256(table_precision, table_scale),
-                DataType::Decimal128(input_precision, input_scale),
-            ) => {
-                if input_precision <= table_precision && input_scale <= table_scale {
-                    Some(table_type.clone()) // Keep table type for decimals
-                } else {
-                    return Err(DataFusionError::Plan(format!(
-                        "Cannot merge field {} from {} to {}. Decimal precision/scale mismatch.",
-                        table_field.name(),
-                        input_type,
-                        table_type
-                    )));
-                }
-            }
-
-            // For other types, use Arrow's can_cast_types to determine compatibility
-            // Prefer widening conversions (table -> input) over narrowing (input -> table)
-            (table_dt, input_dt) => {
-                if can_cast_types(table_dt, input_dt) {
-                    Some(input_type.clone())
-                } else if can_cast_types(input_dt, table_dt) {
-                    Some(table_type.clone())
-                } else {
-                    None
-                }
-            }
-        };
-
-        if let Some(new_type) = merged_type {
-            // Create new field with merged type, combining nullability
-            let is_nullable = table_field.is_nullable() || input_field.is_nullable();
-            Ok(datafusion::arrow::datatypes::Field::new(
-                table_field.name(),
-                new_type,
-                is_nullable,
-            ))
-        } else {
-            Err(DataFusionError::Plan(format!(
-                "Schema evolution failed: incompatible types for field '{}'. Cannot merge from {:?} to {:?}. Consider using overwriteSchema=true if you want to replace the schema entirely.",
-                table_field.name(),
-                table_type,
-                input_type
-            )))
-        }
     }
 
     /// Validate schema compatibility
@@ -424,7 +354,7 @@ impl DataSink for DeltaDataSink {
 
         // Create writer with potentially evolved schema
         let writer_config = WriterConfig::new(
-            final_schema,
+            final_schema.clone(),
             self.partition_columns.clone(),
             None, // TODO: Make compression configurable
             *target_file_size,
@@ -444,8 +374,10 @@ impl DataSink for DeltaDataSink {
             total_rows += batch.num_rows() as u64;
             has_data = true;
 
+            let validated_batch = self.validate_and_adapt_batch(batch, &final_schema)?;
+
             writer
-                .write(&batch)
+                .write(&validated_batch)
                 .await
                 .map_err(|e| DataFusionError::External(Box::new(e)))?;
         }
@@ -530,5 +462,65 @@ impl DataSink for DeltaDataSink {
             .map_err(|e| DataFusionError::External(Box::new(e)))?;
 
         Ok(total_rows)
+    }
+}
+
+impl DeltaDataSink {
+    fn validate_and_adapt_batch(
+        &self,
+        batch: RecordBatch,
+        final_schema: &SchemaRef,
+    ) -> Result<RecordBatch> {
+        let batch_schema = batch.schema();
+
+        // If schemas are identical, no adaptation needed
+        if batch_schema.as_ref() == final_schema.as_ref() {
+            return Ok(batch);
+        }
+
+        // Check if all required fields are present and types are compatible
+        let mut adapted_columns = Vec::with_capacity(final_schema.fields().len());
+
+        for final_field in final_schema.fields() {
+            match batch_schema.column_with_name(final_field.name()) {
+                Some((batch_index, batch_field)) => {
+                    let batch_column = batch.column(batch_index);
+
+                    if batch_field.data_type() == final_field.data_type() {
+                        adapted_columns.push(batch_column.clone());
+                    } else {
+                        // Types don't match, validate cast safety and attempt casting
+                        DeltaTypeConverter::validate_cast_safety(
+                            batch_field.data_type(),
+                            final_field.data_type(),
+                            final_field.name(),
+                        )?;
+
+                        let casted_column = cast(batch_column, final_field.data_type())
+                            .map_err(|e| DataFusionError::ArrowError(Box::new(e), None))?;
+                        adapted_columns.push(casted_column);
+                    }
+                }
+                None => {
+                    // Column missing from batch
+                    if final_field.is_nullable() {
+                        let null_array = datafusion::arrow::array::new_null_array(
+                            final_field.data_type(),
+                            batch.num_rows(),
+                        );
+                        adapted_columns.push(null_array);
+                    } else {
+                        return Err(DataFusionError::Plan(format!(
+                            "Required non-nullable column '{}' is missing from input data",
+                            final_field.name()
+                        )));
+                    }
+                }
+            }
+        }
+
+        // Create new RecordBatch with adapted columns
+        RecordBatch::try_new(final_schema.clone(), adapted_columns)
+            .map_err(|e| DataFusionError::ArrowError(Box::new(e), None))
     }
 }

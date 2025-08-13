@@ -191,19 +191,58 @@ class TestDeltaIO:
             new_data = [
                 Row(id=5, category="A", value=100),
                 Row(id=6, category="A", value=200),
+                Row(id=7, category="A", value=10),
+                Row(id=8, category="B", value=999),
             ]
             new_df = spark.createDataFrame(new_data)
 
-            new_df.writeTo(table_name).overwrite(F.col("category") == "A")
-            # spark.sql(f"INSERT INTO TABLE {table_name} REPLACE WHERE category = 'A' SELECT * FROM VALUES (5, 'A', 100), (6, 'A', 200)")
+            condition = (F.col("category") == "A") & (F.col("value") < F.lit(50).cast("bigint"))
+            new_df.writeTo(table_name).overwrite(condition)
 
             result_df = spark.read.format("delta").load(delta_table_path).sort("id")
             result = result_df.collect()
 
-            assert {row.id for row in result} == {2, 4, 5, 6}
-            assert {row.category for row in result if row.category == "A"} == {"A"}
-            assert {row.value for row in result if row.category == "A"} == {100, 200}
-            assert {row.value for row in result if row.category == "B"} == {20, 40}
+            assert {row.id for row in result} == {2, 4, 5, 6, 8, 7}
+            assert {row.value for row in result if row.category == "A" and row.value < 50} == {10}  # noqa: PLR2004
+            assert {row.value for row in result if row.category == "A" and row.value >= 100} == {100, 200}  # noqa: PLR2004
+            assert {row.value for row in result if row.category == "B"} == {20, 40, 999}
+        finally:
+            spark.sql(f"DROP TABLE IF EXISTS {table_name}")
+
+    def test_delta_io_overwrite_partitions_with_sql_condition(self, spark, tmp_path):
+        """Test Delta Lake overwrite with a complex condition using SQL REPLACE WHERE."""
+        from pyspark.sql.types import Row
+
+        delta_path = tmp_path / "delta_condition_sql"
+        delta_table_path = f"{delta_path}"
+        table_name = "delta_sql_overwrite_test"
+        table_columns = "(id bigint, category string, value bigint)"
+
+        data = [
+            Row(id=1, category="A", value=10),
+            Row(id=2, category="B", value=20),
+            Row(id=3, category="A", value=30),
+            Row(id=4, category="B", value=40),
+        ]
+        df = spark.createDataFrame(data)
+        df.write.format("delta").mode("overwrite").save(str(delta_path))
+
+        spark.sql(
+            f"CREATE OR REPLACE TABLE {table_name} {table_columns} USING DELTA LOCATION '{escape_sql_string_literal(delta_table_path)}'"
+        )
+
+        try:
+            spark.sql(
+                f"INSERT INTO TABLE {table_name} REPLACE WHERE category = 'A' AND value < CAST(50 AS BIGINT) SELECT * FROM VALUES (5, 'A', 100), (6, 'A', 200), (7, 'A', 10), (8, 'B', 999) AS tab(id, category, value)"  # noqa: S608
+            )
+
+            result_df = spark.read.format("delta").load(delta_table_path).sort("id")
+            result = result_df.collect()
+
+            assert {row.id for row in result} == {2, 4, 5, 6, 8, 7}
+            assert {row.value for row in result if row.category == "A" and row.value < 50} == {10}  # noqa: PLR2004
+            assert {row.value for row in result if row.category == "A" and row.value >= 100} == {100, 200}  # noqa: PLR2004
+            assert {row.value for row in result if row.category == "B"} == {20, 40, 999}
         finally:
             spark.sql(f"DROP TABLE IF EXISTS {table_name}")
 
