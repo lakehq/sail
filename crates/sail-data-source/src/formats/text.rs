@@ -3,6 +3,7 @@ use std::str::FromStr;
 use std::sync::Arc;
 
 use async_trait::async_trait;
+use bytes::{Buf, Bytes};
 use datafusion::arrow::datatypes::SchemaRef;
 use datafusion::catalog::Session;
 use datafusion::datasource::file_format::file_compression_type::FileCompressionType;
@@ -11,15 +12,28 @@ use datafusion::datasource::physical_plan::{FileScanConfig, FileSinkConfig, File
 use datafusion::physical_expr::LexRequirement;
 use datafusion::physical_expr_common::physical_expr::PhysicalExpr;
 use datafusion::physical_plan::ExecutionPlan;
-use datafusion_common::{GetExt, Result, Statistics};
-use object_store::{ObjectMeta, ObjectStore};
+use datafusion_common::parsers::CompressionTypeVariant;
+use datafusion_common::{DataFusionError, GetExt, Result, Statistics};
+use futures::stream::BoxStream;
+use futures::{pin_mut, Stream, StreamExt, TryStreamExt};
+use object_store::{delimited::newline_delimited_stream, ObjectMeta, ObjectStore};
 use serde::{Deserialize, Serialize};
 
-#[derive(Debug, Clone, PartialEq, Default, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq)]
 pub struct TableTextOptions {
-    pub whole_text: Option<bool>,
+    pub whole_text: bool,
     pub line_sep: Option<char>,
-    pub compression: Option<String>,
+    pub compression: CompressionTypeVariant,
+}
+
+impl Default for TableTextOptions {
+    fn default() -> Self {
+        Self {
+            whole_text: false,
+            line_sep: None,
+            compression: CompressionTypeVariant::UNCOMPRESSED,
+        }
+    }
 }
 
 #[derive(Debug)]
@@ -39,11 +53,11 @@ impl TextFileFormat {
     }
 
     pub fn with_whole_text(mut self, enable: bool) -> Self {
-        self.options.whole_text = Some(enable);
+        self.options.whole_text = enable;
         self
     }
 
-    pub fn whole_text(&self) -> Option<bool> {
+    pub fn whole_text(&self) -> bool {
         self.options.whole_text
     }
 
@@ -56,13 +70,59 @@ impl TextFileFormat {
         self.options.line_sep
     }
 
-    pub fn with_compression(mut self, compression: String) -> Self {
-        self.options.compression = Some(compression);
+    pub fn with_compression(mut self, compression: CompressionTypeVariant) -> Self {
+        self.options.compression = compression;
         self
     }
 
-    pub fn compression(&self) -> Option<String> {
+    pub fn compression(&self) -> CompressionTypeVariant {
         self.options.compression
+    }
+
+    async fn read_to_delimited_chunks<'a>(
+        &self,
+        store: &Arc<dyn ObjectStore>,
+        object: &ObjectMeta,
+    ) -> BoxStream<'a, Result<Bytes>> {
+        let stream = store
+            .get(&object.location)
+            .await
+            .map_err(|e| DataFusionError::ObjectStore(Box::new(e)));
+        let stream = match stream {
+            Ok(stream) => self
+                .read_to_delimited_chunks_from_stream(
+                    stream
+                        .into_stream()
+                        .map_err(|e| DataFusionError::ObjectStore(Box::new(e)))
+                        .boxed(),
+                )
+                .await
+                .map_err(DataFusionError::from)
+                .left_stream(),
+            Err(e) => futures::stream::once(futures::future::ready(Err(e))).right_stream(),
+        };
+        stream.boxed()
+    }
+
+    pub async fn read_to_delimited_chunks_from_stream<'a>(
+        &self,
+        stream: BoxStream<'a, Result<Bytes>>,
+    ) -> BoxStream<'a, Result<Bytes>> {
+        let file_compression_type: FileCompressionType = self.options.compression.into();
+        let decoder = file_compression_type.convert_stream(stream);
+        let stream = match decoder {
+            Ok(decoded_stream) => newline_delimited_stream(decoded_stream.map_err(|e| match e {
+                DataFusionError::ObjectStore(e) => *e,
+                err => object_store::Error::Generic {
+                    store: "read to delimited chunks failed",
+                    source: Box::new(err),
+                },
+            }))
+            .map_err(DataFusionError::from)
+            .left_stream(),
+            Err(e) => futures::stream::once(futures::future::ready(Err(e))).right_stream(),
+        };
+        stream.boxed()
     }
 }
 
@@ -86,11 +146,7 @@ impl FileFormat for TextFileFormat {
     }
 
     fn compression_type(&self) -> Option<FileCompressionType> {
-        // CHECK HERE DO NOT MERGE. Need validation for compression type.
-        self.options
-            .compression
-            .as_ref()
-            .and_then(|c| FileCompressionType::from_str(c).ok())
+        Some(self.options.compression.into())
     }
 
     async fn infer_schema(

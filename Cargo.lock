@@ -5601,6 +5601,7 @@ name = "sail-data-source"
 version = "0.3.2"
 dependencies = [
  "async-trait",
+ "bytes",
  "chumsky",
  "datafusion",
  "datafusion-common",

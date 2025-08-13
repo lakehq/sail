@@ -11,6 +11,7 @@ use datafusion::catalog::Session;
 use datafusion::datasource::file_format::file_compression_type::FileCompressionType;
 use datafusion_common::config::{CsvOptions, JsonOptions, TableParquetOptions};
 use datafusion_common::{plan_err, Result};
+use datafusion_common::parsers::CompressionTypeVariant;
 use sail_common_datafusion::datasource::TableDeltaOptions;
 
 fn char_to_u8(c: char, option: &str) -> Result<u8> {
@@ -302,7 +303,7 @@ fn apply_delta_write_options(from: DeltaWriteOptions, to: &mut TableDeltaOptions
 
 fn apply_text_read_options(from: TextReadOptions, to: &mut TableTextOptions) -> Result<()> {
     if let Some(whole_text) = from.whole_text {
-        to.whole_text = Some(whole_text);
+        to.whole_text = whole_text;
     }
     if let Some(Some(line_sep)) = from.line_sep {
         to.line_sep = Some(line_sep);
@@ -315,7 +316,7 @@ fn apply_text_write_options(from: TextWriteOptions, to: &mut TableTextOptions) -
         to.line_sep = Some(line_sep);
     }
     if let Some(compression) = from.compression {
-        to.compression = Some(compression);
+        to.compression = CompressionTypeVariant::from_str(compression.as_str())?;
     }
     Ok(())
 }
