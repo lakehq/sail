@@ -4,30 +4,39 @@ use std::sync::Arc;
 use datafusion::arrow::datatypes::{DataType, Field, Schema};
 use datafusion::catalog::Session;
 use datafusion::datasource::listing::{ListingOptions, ListingTableConfig, ListingTableUrl};
-use datafusion_common::{internal_err, plan_err, Result};
+use datafusion_common::{internal_err, plan_err, DataFusionError, Result};
+use futures::stream::BoxStream;
 use futures::{StreamExt, TryStreamExt};
+use log::debug;
+use object_store::{ObjectMeta, ObjectStore};
 
 pub async fn resolve_listing_schema(
     ctx: &dyn Session,
     urls: &[ListingTableUrl],
     options: &ListingOptions,
+    extension_with_compression: Option<String>,
 ) -> Result<Arc<Schema>> {
     // The logic is similar to `ListingOptions::infer_schema()`
     // but here we also check for the existence of files.
     let mut file_groups = vec![];
     for url in urls {
         let store = ctx.runtime_env().object_store(url)?;
-        let files: Vec<_> = url
-            .list_all_files(ctx, &store, &options.file_extension)
-            .await?
-            // Here we sample up to 10 files to infer the schema.
-            // The value is hard-coded here since DataFusion uses the same hard-coded value
-            // for operations such as `infer_partitions_from_path`.
-            // We can make it configurable if DataFusion makes those operations configurable
-            // as well in the future.
-            .take(10)
-            .try_collect()
-            .await?;
+        let files: Vec<_> = list_all_files(
+            url,
+            ctx,
+            &store,
+            &options.file_extension,
+            extension_with_compression.as_deref(),
+        )
+        .await?
+        // Here we sample up to 10 files to infer the schema.
+        // The value is hard-coded here since DataFusion uses the same hard-coded value
+        // for operations such as `infer_partitions_from_path`.
+        // We can make it configurable if DataFusion makes those operations configurable
+        // as well in the future.
+        .take(10)
+        .try_collect()
+        .await?;
         file_groups.push((store, files));
     }
     let empty = file_groups.iter().all(|(_, files)| files.is_empty());
@@ -75,6 +84,48 @@ pub async fn resolve_listing_schema(
         new_fields,
         schema.metadata().clone(),
     )))
+}
+
+/// List all files identified by this [`ListingTableUrl`] for the provided `file_extension`
+pub async fn list_all_files<'a>(
+    url: &'a ListingTableUrl,
+    ctx: &'a dyn Session,
+    store: &'a dyn ObjectStore,
+    file_extension: &'a str,
+    extension_with_compression: Option<&'a str>,
+) -> Result<BoxStream<'a, Result<ObjectMeta>>> {
+    let exec_options = &ctx.config_options().execution;
+    let ignore_subdirectory = exec_options.listing_table_ignore_subdirectory;
+    // If the prefix is a file, use a head request, otherwise list
+    let list = match url.is_collection() {
+        true => match ctx.runtime_env().cache_manager.get_list_files_cache() {
+            None => store.list(Some(&url.prefix())),
+            Some(cache) => {
+                if let Some(res) = cache.get(&url.prefix()) {
+                    debug!("Hit list all files cache");
+                    futures::stream::iter(res.as_ref().clone().into_iter().map(Ok)).boxed()
+                } else {
+                    let list_res = store.list(Some(&url.prefix()));
+                    let vec = list_res.try_collect::<Vec<ObjectMeta>>().await?;
+                    cache.put(&url.prefix(), Arc::new(vec.clone()));
+                    futures::stream::iter(vec.into_iter().map(Ok)).boxed()
+                }
+            }
+        },
+        false => futures::stream::once(store.head(&url.prefix())).boxed(),
+    };
+    Ok(list
+        .try_filter(move |meta| {
+            let path = &meta.location;
+            let extension_with_compression_match =
+                extension_with_compression.is_some_and(|ext| path.as_ref().ends_with(ext));
+            let extension_match =
+                path.as_ref().ends_with(file_extension) || extension_with_compression_match;
+            let glob_match = url.contains(path, ignore_subdirectory);
+            futures::future::ready(extension_match && glob_match)
+        })
+        .map_err(|e| DataFusionError::ObjectStore(Box::new(e)))
+        .boxed())
 }
 
 /// The inferred partition columns are of `Dictionary` types by default, which cannot be
