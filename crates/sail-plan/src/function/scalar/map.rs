@@ -2,18 +2,12 @@ use datafusion::functions_nested::expr_fn;
 use datafusion_expr::expr;
 use datafusion_functions_nested::map::map_udf;
 
-use crate::error::PlanResult;
 use crate::extension::function::map::map_function::MapFunction;
 use crate::extension::function::map::spark_element_at::{SparkElementAt, SparkTryElementAt};
-use crate::function::common::{ScalarFunction, ScalarFunctionInput};
-use crate::utils::ItemTaker;
+use crate::function::common::ScalarFunction;
 
-fn map_contains_key(input: ScalarFunctionInput) -> PlanResult<expr::Expr> {
-    let ScalarFunctionInput { arguments, .. } = input;
-    let (map, key) = arguments.two()?;
-    Ok(expr::Expr::Not(Box::new(expr_fn::array_empty(
-        expr_fn::map_extract(map, key),
-    ))))
+fn map_contains_key(map: expr::Expr, key: expr::Expr) -> expr::Expr {
+    expr_fn::array_has(expr_fn::map_keys(map), key)
 }
 
 pub(super) fn list_built_in_map_functions() -> Vec<(&'static str, ScalarFunction)> {
@@ -23,7 +17,7 @@ pub(super) fn list_built_in_map_functions() -> Vec<(&'static str, ScalarFunction
         ("element_at", F::udf(SparkElementAt::new())),
         ("map", F::udf(MapFunction::new())),
         ("map_concat", F::unknown("map_concat")),
-        ("map_contains_key", F::custom(map_contains_key)),
+        ("map_contains_key", F::binary(map_contains_key)),
         ("map_entries", F::unknown("map_entries")),
         ("map_from_arrays", F::scalar_udf(map_udf)),
         ("map_from_entries", F::unknown("map_from_entries")),
