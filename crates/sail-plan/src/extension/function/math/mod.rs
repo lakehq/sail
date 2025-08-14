@@ -17,6 +17,7 @@ pub mod spark_pmod;
 pub mod spark_signum;
 pub mod spark_try_add;
 pub mod spark_try_div;
+pub mod spark_try_mod;
 pub mod spark_try_mult;
 pub mod spark_try_substract;
 
