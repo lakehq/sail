@@ -35,10 +35,13 @@ impl TableFormat for SocketTableFormat {
         _ctx: &dyn Session,
         _info: SourceInfo,
     ) -> Result<Arc<dyn TableProvider>> {
-        Ok(Arc::new(SocketTableProvider::new(
-            "localhost".to_string(),
-            9999,
-        )))
+        let options = SocketTableOptions {
+            host: "localhost".to_string(),
+            port: 9999,
+            max_batch_size: 1000,
+            timeout: Duration::from_secs(1),
+        };
+        Ok(Arc::new(SocketTableProvider::new(options)))
     }
 
     async fn create_writer(
@@ -50,18 +53,24 @@ impl TableFormat for SocketTableFormat {
     }
 }
 
+#[derive(Debug, Clone, Default)]
+pub struct SocketTableOptions {
+    pub host: String,
+    pub port: u16,
+    pub max_batch_size: usize,
+    pub timeout: Duration,
+}
+
 #[derive(Debug, Clone)]
 struct SocketTableProvider {
-    host: String,
-    port: u16,
+    options: SocketTableOptions,
     schema: SchemaRef,
 }
 
 impl SocketTableProvider {
-    pub fn new(host: String, port: u16) -> Self {
+    pub fn new(options: SocketTableOptions) -> Self {
         Self {
-            host,
-            port,
+            options,
             schema: Arc::new(Schema::new(vec![Arc::new(Field::new(
                 "value",
                 DataType::Utf8,
@@ -93,8 +102,7 @@ impl TableProvider for SocketTableProvider {
         _limit: Option<usize>,
     ) -> Result<Arc<dyn ExecutionPlan>> {
         Ok(Arc::new(SocketSourceExec::new(
-            self.host.clone(),
-            self.port,
+            self.options.clone(),
             Arc::clone(&self.schema),
         )))
     }
@@ -102,14 +110,13 @@ impl TableProvider for SocketTableProvider {
 
 #[derive(Debug)]
 struct SocketSourceExec {
-    host: String,
-    port: u16,
+    options: SocketTableOptions,
     schema: SchemaRef,
     properties: PlanProperties,
 }
 
 impl SocketSourceExec {
-    pub fn new(host: String, port: u16, schema: SchemaRef) -> Self {
+    pub fn new(options: SocketTableOptions, schema: SchemaRef) -> Self {
         let properties = PlanProperties::new(
             EquivalenceProperties::new(schema.clone()),
             Partitioning::UnknownPartitioning(1),
@@ -119,8 +126,7 @@ impl SocketSourceExec {
             },
         );
         Self {
-            host,
-            port,
+            options,
             schema,
             properties,
         }
@@ -135,10 +141,10 @@ impl DisplayAs for SocketSourceExec {
     ) -> std::fmt::Result {
         write!(
             f,
-            "{}: host={}, port={})",
+            "{}: host={}, port={}",
             self.name(),
-            self.host,
-            self.port
+            self.options.host,
+            self.options.port
         )
     }
 }
@@ -176,23 +182,30 @@ impl ExecutionPlan for SocketSourceExec {
         partition: usize,
         _context: Arc<TaskContext>,
     ) -> Result<SendableRecordBatchStream> {
-        const BATCH_SIZE: usize = 1024;
-        const TIMEOUT_DURATION: Duration = Duration::from_secs(1);
-
         if partition != 0 {
             return plan_err!("{} only supports a single partition", self.name());
         }
-
-        let host = self.host.clone();
-        let port = self.port;
+        if self.options.host.is_empty() {
+            return plan_err!("host is required for reading from socket");
+        }
+        if self.options.port == 0 {
+            return plan_err!("port must be greater than 0 for reading from socket");
+        }
+        if self.options.max_batch_size == 0 {
+            return plan_err!("maximum batch size must be greater than 0 for reading from socket");
+        }
+        if self.options.timeout == Duration::ZERO {
+            return plan_err!("timeout must be greater than 0 for reading from socket");
+        }
+        let options = self.options.clone();
         let schema = Arc::clone(&self.schema);
         let output = futures::stream::once(async move {
-            let stream = tokio::net::TcpStream::connect((host.as_str(), port))
+            let stream = tokio::net::TcpStream::connect((options.host.as_str(), options.port))
                 .await
                 .map_err(|e| exec_datafusion_err!("failed to connect to socket: {e}"))?;
             let reader = BufReader::new(stream);
             let output = LinesStream::new(reader.lines())
-                .chunks_timeout(BATCH_SIZE, TIMEOUT_DURATION)
+                .chunks_timeout(options.max_batch_size, options.timeout)
                 .map(move |lines| {
                     let values = lines
                         .into_iter()

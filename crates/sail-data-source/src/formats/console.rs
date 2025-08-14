@@ -126,7 +126,7 @@ impl ExecutionPlan for ConsoleExec {
         })
         .flatten();
         Ok(Box::pin(RecordBatchStreamAdapter::new(
-            self.properties.eq_properties.schema().clone(),
+            self.schema(),
             output,
         )))
     }

@@ -18,6 +18,8 @@ mod internal {
     include!(concat!(env!("OUT_DIR"), "/options/parquet_write.rs"));
     include!(concat!(env!("OUT_DIR"), "/options/delta_read.rs"));
     include!(concat!(env!("OUT_DIR"), "/options/delta_write.rs"));
+    // include!(concat!(env!("OUT_DIR"), "/options/socket_read.rs"));
+    // include!(concat!(env!("OUT_DIR"), "/options/rate_read.rs"));
 }
 
 pub trait DataSourceOptions: for<'de> serde::Deserialize<'de> {
