@@ -79,8 +79,18 @@ impl<T: ListingFormat> TableFormat for ListingTableFormat<T> {
 
         let urls = crate::url::resolve_listing_urls(ctx, paths).await?;
         let file_format = self.inner.create_read_format(ctx, options)?;
+        let listing_file_extension = if let Some(compression_type) = file_format.compression_type()
+        {
+            match file_format.get_ext_with_compression(&compression_type) {
+                Ok(ext) => Some(ext),
+                Err(_) => None,
+            }
+        } else {
+            None
+        };
+
         let config = ctx.config();
-        let listing_options = ListingOptions::new(file_format)
+        let mut listing_options = ListingOptions::new(file_format)
             .with_target_partitions(config.target_partitions())
             .with_collect_stat(config.collect_statistics());
 
@@ -91,6 +101,9 @@ impl<T: ListingFormat> TableFormat for ListingTableFormat<T> {
                 (Arc::new(schema), partition_by)
             }
             _ => {
+                if let Some(listing_file_extension) = listing_file_extension {
+                    listing_options = listing_options.with_file_extension(listing_file_extension);
+                }
                 let schema =
                     crate::listing::resolve_listing_schema(ctx, &urls, &listing_options).await?;
                 let partition_by = partition_by
