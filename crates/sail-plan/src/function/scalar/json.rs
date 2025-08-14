@@ -1,5 +1,6 @@
+use datafusion::arrow::datatypes::DataType;
 use datafusion_common::ScalarValue;
-use datafusion_expr::expr;
+use datafusion_expr::{cast, expr};
 use datafusion_functions_json::udfs;
 
 use crate::error::PlanResult;
@@ -41,13 +42,23 @@ fn get_json_object(input: ScalarFunctionInput) -> PlanResult<expr::Expr> {
     }))
 }
 
+fn json_array_length(json_data: expr::Expr) -> expr::Expr {
+    cast(
+        expr::Expr::ScalarFunction(expr::ScalarFunction {
+            func: udfs::json_length_udf(),
+            args: vec![json_data],
+        }),
+        DataType::Int32,
+    )
+}
+
 pub(super) fn list_built_in_json_functions() -> Vec<(&'static str, ScalarFunction)> {
     use crate::function::common::ScalarFunctionBuilder as F;
 
     vec![
         ("from_json", F::unknown("from_json")),
         ("get_json_object", F::custom(get_json_object)),
-        ("json_array_length", F::scalar_udf(udfs::json_length_udf)),
+        ("json_array_length", F::unary(json_array_length)),
         ("json_object_keys", F::unknown("json_object_keys")),
         ("json_tuple", F::unknown("json_tuple")),
         ("schema_of_json", F::unknown("schema_of_json")),
