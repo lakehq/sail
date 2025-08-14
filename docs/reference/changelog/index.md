@@ -5,6 +5,12 @@ next: false
 
 # Changelog
 
+## 0.3.3
+
+_August 13, 2025_
+
+### Contributors
+
 ## 0.3.2
 
 _August 8, 2025_
