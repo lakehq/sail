@@ -9,7 +9,30 @@ next: false
 
 _August 13, 2025_
 
+- Fixed issues with the `Catalog.getTable()` command ([#752](https://github.com/lakehq/sail/pull/752))
+- Fixed issues with slow performance when using Delta Lake ([#750](https://github.com/lakehq/sail/pull/750))
+- Added support for `NaN` values in `VALUES` like in spark([#739](https://github.com/lakehq/sail/pull/739))
+- Fixed issues with the `parquet.bloom_filter_on_write` config option not being respected ([#735](https://github.com/lakehq/sail/pull/735))
+- Added support for the following SQL functions and operators ([#670](https://github.com/lakehq/sail/pull/670), and [#725](https://github.com/lakehq/sail/pull/725)):
+  - `try_to_number`
+  - `convert_timezone`
+  - `make_timestamp_ltz`
+- Improved the following SQL functions and operators ([#725](https://github.com/lakehq/sail/pull/725), [#730](https://github.com/lakehq/sail/pull/730), [734](https://github.com/lakehq/sail/pull/734), [743](https://github.com/lakehq/sail/pull/743), and [#754](https://github.com/lakehq/sail/pull/754)):
+  - `make_timestamp`
+  - `from_utc_timestamp`
+  - `to_utc_timestamp`
+  - `skewness`
+  - `kurtosis`
+  - `log`
+  - `log10`
+  - `csc`
+  - `atan2`
+  - `cot`
+  - `json_array_length`
+
 ### Contributors
+
+Huge thanks to [@SparkApplicationMaster](https://github.com/SparkApplicationMaster), [rafafrdz](https://github.com/rafafrdz), [lonless9](https://github.com/lonless9), and [linhr](https://github.com/linhr)!
 
 ## 0.3.2
 
