@@ -131,8 +131,7 @@ impl DeltaTypeConverter {
     ) -> Result<()> {
         if !can_cast_types(from_type, to_type) {
             return Err(DataFusionError::Plan(format!(
-                "Unsafe cast for field '{}': cannot cast from '{}' to '{}'",
-                field_name, from_type, to_type
+                "Unsafe cast for field '{field_name}': cannot cast from '{from_type}' to '{to_type}'"
             )));
         }
 
@@ -143,8 +142,7 @@ impl DeltaTypeConverter {
             ) => {
                 if from_precision > to_precision || from_scale > to_scale {
                     return Err(DataFusionError::Plan(format!(
-                        "Potential precision loss in decimal cast for field '{}': from Decimal({},{}) to Decimal({},{})",
-                        field_name, from_precision, from_scale, to_precision, to_scale
+                        "Potential precision loss in decimal cast for field '{field_name}': from Decimal({from_precision},{from_scale}) to Decimal({to_precision},{to_scale})"
                     )));
                 }
             }

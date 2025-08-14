@@ -158,7 +158,6 @@ pub fn parse_s3_url(
     let first_path_segment = url.path_segments().into_iter().flatten().next();
     debug!("Parsing S3 url: {url} scheme: {scheme} host: {host} first_path_segment: {first_path_segment:?}");
 
-    // TODO: S3 Express support
     match scheme {
         "s3" | "s3a" => {
             builder = builder.with_bucket_name(host);
