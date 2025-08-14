@@ -32,7 +32,7 @@ _August 13, 2025_
 
 ### Contributors
 
-Huge thanks to [@SparkApplicationMaster](https://github.com/SparkApplicationMaster), [rafafrdz](https://github.com/rafafrdz), [lonless9](https://github.com/lonless9), and [linhr](https://github.com/linhr)!
+Huge thanks to [@SparkApplicationMaster](https://github.com/SparkApplicationMaster) and [rafafrdz](https://github.com/rafafrdz)!
 
 ## 0.3.2
 
