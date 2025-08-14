@@ -17,7 +17,7 @@ _August 14, 2025_
   - `try_to_number`
   - `convert_timezone`
   - `make_timestamp_ltz`
-- Improved the following SQL functions ([#725](https://github.com/lakehq/sail/pull/725), [#730](https://github.com/lakehq/sail/pull/730), [#734](https://github.com/lakehq/sail/pull/734), [#743](https://github.com/lakehq/sail/pull/743), and [#754](https://github.com/lakehq/sail/pull/754)):
+- Improved the following SQL functions ([#725](https://github.com/lakehq/sail/pull/725), [#730](https://github.com/lakehq/sail/pull/730), [#734](https://github.com/lakehq/sail/pull/734), [#743](https://github.com/lakehq/sail/pull/743), [#754](https://github.com/lakehq/sail/pull/754), and (#756)(https://github.com/lakehq/sail/pull/756)):
   - `make_timestamp`
   - `from_utc_timestamp`
   - `to_utc_timestamp`
@@ -50,6 +50,7 @@ _August 14, 2025_
   - `tan`
   - `tanh`
   - `json_array_length`
+  - `map_contains_key`
 
 ### Contributors
 
