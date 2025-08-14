@@ -349,8 +349,7 @@ fn convert_timezone(input: ScalarFunctionInput) -> PlanResult<Expr> {
             Ok((session_tz, to_tz, ts))
         }
         _ => Err(PlanError::invalid(format!(
-            "convert_timezone takes 2 or three arguments, got {:?}",
-            args
+            "convert_timezone takes 2 or three arguments, got {args:?}"
         ))),
     }?;
     Ok(convert_tz(from_tz, to_tz, ts))
