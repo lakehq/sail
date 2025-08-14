@@ -26,7 +26,7 @@ use crate::extension::function::math::spark_try_add::SparkTryAdd;
 use crate::extension::function::math::spark_try_div::SparkTryDiv;
 use crate::extension::function::math::spark_try_mod::SparkTryMod;
 use crate::extension::function::math::spark_try_mult::SparkTryMult;
-use crate::extension::function::math::spark_try_substract::SparkTrySubtract;
+use crate::extension::function::math::spark_try_subtract::SparkTrySubtract;
 use crate::function::common::{ScalarFunction, ScalarFunctionInput};
 use crate::utils::ItemTaker;
 
