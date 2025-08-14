@@ -4,6 +4,7 @@ use std::sync::Arc;
 use arrow::array::{
     Array, ArrayRef, Int32Array, ListArray, ListBuilder, StringArray, StringBuilder,
 };
+use arrow::buffer::NullBuffer;
 use arrow::datatypes::{DataType, Field};
 use datafusion_common::Result;
 use datafusion_expr::{ScalarFunctionArgs, ScalarUDFImpl};
@@ -63,8 +64,7 @@ impl ScalarUDFImpl for SparkSplit {
             ] => {
                 Ok(vec![
                     arg_types[0].clone(),
-                    arg_types[1].clone(),
-                    DataType::Int64,
+                    arg_types[1].clone()
                 ])
             }
             [
@@ -93,16 +93,29 @@ impl ScalarUDFImpl for SparkSplit {
 }
 
 pub fn spark_split_inner(args: &[ArrayRef]) -> Result<ArrayRef> {
+    if args.len() < 2 || args.len() > 3 {
+        return Err(generic_exec_err(
+            SparkSplit::NAME,
+            "requires 2 or 3 arguments",
+        ));
+    }
     let len: usize = args[0].len();
     // Initialize default values in case of nulls
     let default_nulls: Vec<Option<&str>> = vec![None; len];
+    let default_zeros: Vec<i32> = vec![0; len];
     let default_nulls: StringArray = StringArray::from(default_nulls);
+    let default_limit_nulls: NullBuffer = NullBuffer::from(vec![false; len]);
+    let default_limit_nulls: Int32Array =
+        Int32Array::new(default_zeros.into(), Some(default_limit_nulls));
     let default_limit: Int32Array = Int32Array::from(vec![0; len]);
 
     // Getting the arrays
     let values: &StringArray = opt_downcast_arg!(&args[0], StringArray).unwrap_or(&default_nulls);
     let format: &StringArray = opt_downcast_arg!(&args[1], StringArray).unwrap_or(&default_nulls);
-    let limit: &Int32Array = opt_downcast_arg!(&args[2], Int32Array).unwrap_or(&default_limit);
+    let limit: &Int32Array = args
+        .get(2)
+        .map(|array| opt_downcast_arg!(array, Int32Array).unwrap_or(&default_limit_nulls))
+        .unwrap_or(&default_limit);
 
     let mut builder = ListBuilder::new(StringBuilder::new());
 
