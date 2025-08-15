@@ -171,6 +171,9 @@ jobs:
           pattern: coverage-*
           path: coverage-reports
           merge-multiple: true # Merge all artifacts into one directory
+      
+      - name: Record Rust version
+        run: echo "RUST=$(rustc --version)" >> "$GITHUB_ENV"
 
       - name: Upload coverage reports to Codecov
         uses: codecov/codecov-action@v5
@@ -180,3 +183,4 @@ jobs:
           files: ./*.info
           flags: integration
           fail_ci_if_error: true
+          env_vars: OS,RUST
