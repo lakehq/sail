@@ -15,7 +15,7 @@ pub async fn resolve_listing_schema(
     urls: &[ListingTableUrl],
     options: &ListingOptions,
     extension_with_compression: Option<String>,
-) -> Result<Arc<Schema>> {
+) -> Result<(Arc<Schema>, Option<String>)> {
     // The logic is similar to `ListingOptions::infer_schema()`
     // but here we also check for the existence of files.
     let mut file_groups = vec![];
@@ -80,10 +80,49 @@ pub async fn resolve_listing_schema(
             }
         })
         .collect();
-    Ok(Arc::new(Schema::new_with_metadata(
-        new_fields,
-        schema.metadata().clone(),
-    )))
+
+    let file_extension = if let Some(extension_with_compression) = extension_with_compression {
+        resolve_listing_file_extension(
+            &file_groups,
+            &options.file_extension,
+            &extension_with_compression,
+        )
+    } else {
+        None
+    };
+
+    Ok((
+        Arc::new(Schema::new_with_metadata(
+            new_fields,
+            schema.metadata().clone(),
+        )),
+        file_extension,
+    ))
+}
+
+fn resolve_listing_file_extension(
+    file_groups: &[(Arc<dyn ObjectStore>, Vec<ObjectMeta>)],
+    file_extension: &str,
+    extension_with_compression: &str,
+) -> Option<String> {
+    // TODO: Future work can support reading all files of the same `FileFormat` regardless of the file extension.
+    let mut count_with_compression = 0;
+    let mut count_without_compression = 0;
+    for (_, object_metas) in file_groups {
+        for object_meta in object_metas {
+            let path = &object_meta.location;
+            if path.as_ref().ends_with(extension_with_compression) {
+                count_with_compression += 1;
+            } else if path.as_ref().ends_with(file_extension) {
+                count_without_compression += 1;
+            }
+        }
+    }
+    if count_with_compression > count_without_compression {
+        Some(extension_with_compression.to_string())
+    } else {
+        None
+    }
 }
 
 /// List all files identified by this [`ListingTableUrl`] for the provided `file_extension`
@@ -99,20 +138,20 @@ pub async fn list_all_files<'a>(
     // If the prefix is a file, use a head request, otherwise list
     let list = match url.is_collection() {
         true => match ctx.runtime_env().cache_manager.get_list_files_cache() {
-            None => store.list(Some(&url.prefix())),
+            None => store.list(Some(url.prefix())),
             Some(cache) => {
-                if let Some(res) = cache.get(&url.prefix()) {
+                if let Some(res) = cache.get(url.prefix()) {
                     debug!("Hit list all files cache");
                     futures::stream::iter(res.as_ref().clone().into_iter().map(Ok)).boxed()
                 } else {
-                    let list_res = store.list(Some(&url.prefix()));
+                    let list_res = store.list(Some(url.prefix()));
                     let vec = list_res.try_collect::<Vec<ObjectMeta>>().await?;
-                    cache.put(&url.prefix(), Arc::new(vec.clone()));
+                    cache.put(url.prefix(), Arc::new(vec.clone()));
                     futures::stream::iter(vec.into_iter().map(Ok)).boxed()
                 }
             }
         },
-        false => futures::stream::once(store.head(&url.prefix())).boxed(),
+        false => futures::stream::once(store.head(url.prefix())).boxed(),
     };
     Ok(list
         .try_filter(move |meta| {
