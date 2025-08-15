@@ -58,8 +58,6 @@ jobs:
       - name: Install Hatch
         uses: pypa/hatch@install
 
-      - uses: ./.github/actions/setup-rust
-
       - name: Install grcov
         run: |
           wget -q -O grcov.tar.bz2 "https://github.com/mozilla/grcov/releases/download/v0.10.5/grcov-x86_64-unknown-linux-gnu.tar.bz2"
