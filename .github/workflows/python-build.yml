@@ -26,6 +26,8 @@ jobs:
       - name: Install Hatch
         uses: pypa/hatch@install
 
+      - uses: ./.github/actions/setup-rust
+
       - name: Format Check
         run: hatch fmt --check
 
