@@ -585,5 +585,5 @@
 
 - key: spark.session_timeout_secs
   type: number
-  default: "120"
+  default: "900"
   description: The Spark session timeout in seconds.
