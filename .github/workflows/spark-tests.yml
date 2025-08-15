@@ -60,9 +60,11 @@ jobs:
 
       - name: Install Rust toolchain and coverage tools
         run: |
-          rustup toolchain install stable
-          rustup component add --toolchain stable llvm-tools
-          cargo install grcov
+          {
+            rustup toolchain install stable
+            rustup component add --toolchain stable llvm-tools
+            cargo install grcov
+          } &
 
       - name: Install grpc_health_probe
         run: |
@@ -144,12 +146,15 @@ jobs:
             fi
             rm -f /tmp/spark-server.pid
           fi
+          sleep 10
 
       # Generate coverage report after Spark tests
       - name: Generate coverage report
         # Only run if tests succeed
         if: success()
         run: |
+          # Wait for background Rust toolchain installation to complete
+          wait
           BINARY_PATH=$(hatch run python -c 'import pysail._native; import os; print(os.path.dirname(pysail._native.__file__))')
           echo "Binary path: $BINARY_PATH"
           grcov target --binary-path "$BINARY_PATH" -s . -t lcov --branch --ignore-not-existing -o coverage-spark-${{ inputs.spark_version }}.info
