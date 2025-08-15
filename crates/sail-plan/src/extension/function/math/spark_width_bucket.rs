@@ -3,9 +3,8 @@ use std::cmp::Ordering;
 use std::sync::Arc;
 
 use arrow::array::{
-    Array,
-    ArrayRef,
-    Int32Builder,
+    Array, ArrayRef, DurationMicrosecondArray, Float64Array, Int32Array, Int32Builder,
+    IntervalYearMonthArray,
 };
 use arrow::datatypes::{DataType, IntervalUnit, TimeUnit};
 use datafusion_common::cast::{
@@ -156,228 +155,103 @@ fn width_bucket_kern(args: &[ArrayRef]) -> Result<ArrayRef> {
     }
 }
 
-fn width_bucket_float64(
-    v: &arrow::array::Float64Array,
-    min: &arrow::array::Float64Array,
-    max: &arrow::array::Float64Array,
-    n_bucket: &arrow::array::Int32Array,
-) -> arrow::array::Int32Array {
-    let len = v.len();
-    let mut b = Int32Builder::with_capacity(len);
+macro_rules! width_bucket_kernel_impl {
+    ($name:ident, $arr_ty:ty, $to_f64:expr, $check_nan:expr) => {
+        pub(crate) fn $name(v: &$arr_ty, lo: &$arr_ty, hi: &$arr_ty, n: &Int32Array) -> Int32Array {
+            let len = v.len();
+            let mut b = Int32Builder::with_capacity(len);
 
-    for i in 0..len {
-        if v.is_null(i) || min.is_null(i) || max.is_null(i) || n_bucket.is_null(i) {
-            b.append_null();
-            continue;
-        }
-        let x = v.value(i);
-        let l = min.value(i);
-        let h = max.value(i);
-        let buckets = n_bucket.value(i);
+            for i in 0..len {
+                if v.is_null(i) || lo.is_null(i) || hi.is_null(i) || n.is_null(i) {
+                    b.append_null();
+                    continue;
+                }
+                let x = ($to_f64)(v, i);
+                let l = ($to_f64)(lo, i);
+                let h = ($to_f64)(hi, i);
+                let buckets = n.value(i);
 
-        if buckets <= 0 || x.is_nan() || l.is_nan() || h.is_nan() {
-            b.append_null();
-            continue;
-        }
-        let ord = match l.partial_cmp(&h) {
-            Some(o) => o,
-            None => {
-                b.append_null();
-                continue;
+                if buckets <= 0 {
+                    b.append_null();
+                    continue;
+                }
+                if $check_nan {
+                    if !x.is_finite() || !l.is_finite() || !h.is_finite() {
+                        b.append_null();
+                        continue;
+                    }
+                }
+
+                let ord = match l.partial_cmp(&h) {
+                    Some(o) => o,
+                    None => {
+                        b.append_null();
+                        continue;
+                    }
+                };
+                if matches!(ord, Ordering::Equal) {
+                    b.append_null();
+                    continue;
+                }
+                let asc = matches!(ord, Ordering::Less);
+
+                if asc {
+                    if x < l {
+                        b.append_value(0);
+                        continue;
+                    }
+                    if x > h {
+                        b.append_value(buckets + 1);
+                        continue;
+                    }
+                } else {
+                    if x > l {
+                        b.append_value(0);
+                        continue;
+                    }
+                    if x < h {
+                        b.append_value(buckets + 1);
+                        continue;
+                    }
+                }
+
+                let width = (h - l) / (buckets as f64);
+                if width == 0.0 || !width.is_finite() {
+                    b.append_null();
+                    continue;
+                }
+                let mut bucket = ((x - l) / width).floor() as i32 + 1;
+                if bucket > buckets {
+                    bucket = buckets;
+                }
+                if bucket < 1 {
+                    bucket = 1;
+                }
+                b.append_value(bucket);
             }
-        };
 
-        if matches!(ord, Ordering::Equal) {
-            b.append_null();
-            continue;
+            b.finish()
         }
-        let asc = matches!(ord, Ordering::Less);
-
-        if asc {
-            if x < l {
-                b.append_value(0);
-                continue;
-            }
-            if x > h {
-                b.append_value(buckets + 1);
-                continue;
-            }
-        } else {
-            if x > l {
-                b.append_value(0);
-                continue;
-            }
-            if x < h {
-                b.append_value(buckets + 1);
-                continue;
-            }
-        }
-
-        let width = (h - l) / (buckets as f64);
-        if width == 0.0 || !width.is_finite() {
-            b.append_null();
-            continue;
-        }
-        let mut bucket = ((x - l) / width).floor() as i32 + 1;
-        if bucket > buckets {
-            bucket = buckets;
-        }
-        if bucket < 1 {
-            bucket = 1;
-        }
-        b.append_value(bucket);
-    }
-
-    b.finish()
+    };
 }
 
-fn width_bucket_i64_as_float(
-    v: &arrow::array::DurationMicrosecondArray,
-    min: &arrow::array::DurationMicrosecondArray,
-    max: &arrow::array::DurationMicrosecondArray,
-    n_bucket: &arrow::array::Int32Array,
-) -> arrow::array::Int32Array {
-    let len = v.len();
-    let mut b = Int32Builder::with_capacity(len);
+width_bucket_kernel_impl!(
+    width_bucket_float64,
+    Float64Array,
+    |arr: &Float64Array, i: usize| arr.value(i),
+    true
+);
 
-    for i in 0..len {
-        if v.is_null(i) || min.is_null(i) || max.is_null(i) || n_bucket.is_null(i) {
-            b.append_null();
-            continue;
-        }
-        let x = v.value(i) as f64;
-        let l = min.value(i) as f64;
-        let h = max.value(i) as f64;
-        let buckets = n_bucket.value(i);
+width_bucket_kernel_impl!(
+    width_bucket_i64_as_float,
+    DurationMicrosecondArray,
+    |arr: &DurationMicrosecondArray, i: usize| arr.value(i) as f64,
+    false
+);
 
-        if buckets <= 0 {
-            b.append_null();
-            continue;
-        }
-
-        let ord = match l.partial_cmp(&h) {
-            Some(o) => o,
-            None => {
-                b.append_null();
-                continue;
-            }
-        };
-        if matches!(ord, Ordering::Equal) {
-            b.append_null();
-            continue;
-        }
-        let asc = matches!(ord, Ordering::Less);
-
-        if asc {
-            if x < l {
-                b.append_value(0);
-                continue;
-            }
-            if x > h {
-                b.append_value(buckets + 1);
-                continue;
-            }
-        } else {
-            if x > l {
-                b.append_value(0);
-                continue;
-            }
-            if x < h {
-                b.append_value(buckets + 1);
-                continue;
-            }
-        }
-
-        let width = (h - l) / (buckets as f64);
-        if width == 0.0 || !width.is_finite() {
-            b.append_null();
-            continue;
-        }
-        let mut bucket = ((x - l) / width).floor() as i32 + 1;
-        if bucket > buckets {
-            bucket = buckets;
-        }
-        if bucket < 1 {
-            bucket = 1;
-        }
-        b.append_value(bucket);
-    }
-
-    b.finish()
-}
-
-// ---------- Interval(YearMonth): valores i32 (meses) ----------
-fn width_bucket_i32_as_float(
-    v: &arrow::array::IntervalYearMonthArray,
-    min: &arrow::array::IntervalYearMonthArray,
-    max: &arrow::array::IntervalYearMonthArray,
-    n_bucket: &arrow::array::Int32Array,
-) -> arrow::array::Int32Array {
-    let len = v.len();
-    let mut b = Int32Builder::with_capacity(len);
-
-    for i in 0..len {
-        if v.is_null(i) || min.is_null(i) || max.is_null(i) || n_bucket.is_null(i) {
-            b.append_null();
-            continue;
-        }
-        let x = v.value(i) as f64;
-        let l = min.value(i) as f64;
-        let h = max.value(i) as f64;
-        let buckets = n_bucket.value(i);
-
-        if buckets <= 0 {
-            b.append_null();
-            continue;
-        }
-
-        let ord = match l.partial_cmp(&h) {
-            Some(o) => o,
-            None => {
-                b.append_null();
-                continue;
-            }
-        };
-        if matches!(ord, Ordering::Equal) {
-            b.append_null();
-            continue;
-        }
-        let asc = matches!(ord, Ordering::Less);
-
-        if asc {
-            if x < l {
-                b.append_value(0);
-                continue;
-            }
-            if x > h {
-                b.append_value(buckets + 1);
-                continue;
-            }
-        } else {
-            if x > l {
-                b.append_value(0);
-                continue;
-            }
-            if x < h {
-                b.append_value(buckets + 1);
-                continue;
-            }
-        }
-
-        let width = (h - l) / (buckets as f64);
-        if width == 0.0 || !width.is_finite() {
-            b.append_null();
-            continue;
-        }
-        let mut bucket = ((x - l) / width).floor() as i32 + 1;
-        if bucket > buckets {
-            bucket = buckets;
-        }
-        if bucket < 1 {
-            bucket = 1;
-        }
-        b.append_value(bucket);
-    }
-
-    b.finish()
-}
+width_bucket_kernel_impl!(
+    width_bucket_i32_as_float,
+    IntervalYearMonthArray,
+    |arr: &IntervalYearMonthArray, i: usize| arr.value(i) as f64,
+    false
+);
