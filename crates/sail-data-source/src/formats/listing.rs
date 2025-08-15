@@ -180,6 +180,14 @@ impl<T: ListingFormat> TableFormat for ListingTableFormat<T> {
             .map(|s| (s.clone(), DataType::Null))
             .collect::<Vec<_>>();
         let format = self.inner.create_write_format(ctx, options)?;
+        let file_extension = if let Some(file_compression_type) = format.compression_type() {
+            match format.get_ext_with_compression(&file_compression_type) {
+                Ok(ext) => ext,
+                Err(_) => format.get_ext(),
+            }
+        } else {
+            format.get_ext()
+        };
         let conf = FileSinkConfig {
             original_url: path,
             object_store_url,
@@ -189,7 +197,7 @@ impl<T: ListingFormat> TableFormat for ListingTableFormat<T> {
             table_partition_cols,
             insert_op: InsertOp::Append,
             keep_partition_by_columns: false,
-            file_extension: format.get_ext(),
+            file_extension,
         };
         format
             .create_writer_physical_plan(input, ctx, conf, sort_order)
