@@ -138,7 +138,7 @@ jobs:
             PID=$(cat /tmp/spark-server.pid)
             if kill -0 "$PID" 2>/dev/null; then
               kill -INT "$PID"
-              for i in {1..10}; do
+              for i in {1..30}; do
                 if ! kill -0 "$PID" 2>/dev/null; then break; fi
                 sleep 1
               done
@@ -146,7 +146,6 @@ jobs:
             fi
             rm -f /tmp/spark-server.pid
           fi
-          sleep 10
 
       # Generate coverage report after Spark tests
       - name: Generate coverage report
