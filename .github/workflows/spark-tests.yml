@@ -154,7 +154,9 @@ jobs:
         run: |
           # Wait for background Rust toolchain installation to complete
           wait
-          BINARY_PATH=$(hatch run python -c 'import pysail._native; import os; print(os.path.dirname(pysail._native.__file__))')
+          SAIL_EXECUTABLE=$(hatch run which sail)
+          BINARY_PATH=$(dirname "$SAIL_EXECUTABLE")
+          echo "Sail executable: $SAIL_EXECUTABLE"
           echo "Binary path: $BINARY_PATH"
           grcov target --binary-path "$BINARY_PATH" -s . -t lcov --branch --ignore-not-existing -o coverage-spark-${{ inputs.spark_version }}.info
 
