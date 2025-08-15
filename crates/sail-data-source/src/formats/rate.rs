@@ -35,7 +35,7 @@ impl TableFormat for RateTableFormat {
         _info: SourceInfo,
     ) -> Result<Arc<dyn TableProvider>> {
         let options = RateTableOptions {
-            rows_per_second: 2000,
+            rows_per_second: 1,
             num_partitions: 1,
         };
         let tz = Arc::from(ctx.config().options().execution.time_zone.clone());

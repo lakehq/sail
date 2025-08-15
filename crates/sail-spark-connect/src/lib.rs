@@ -9,6 +9,7 @@ pub mod server;
 mod service;
 mod session;
 mod session_manager;
+mod streaming;
 
 pub use proto::data_type_json::JsonDataType;
 

@@ -198,8 +198,9 @@ where
     }
 }
 
+#[derive(Debug, Clone)]
 #[allow(clippy::enum_variant_names)]
-enum SparkThrowable {
+pub(crate) enum SparkThrowable {
     ParseException(String),
     AnalysisException(String),
     #[allow(dead_code)]
@@ -221,7 +222,7 @@ enum SparkThrowable {
 }
 
 impl SparkThrowable {
-    fn message(&self) -> &str {
+    pub fn message(&self) -> &str {
         match self {
             SparkThrowable::ParseException(message)
             | SparkThrowable::AnalysisException(message)
@@ -239,7 +240,7 @@ impl SparkThrowable {
         }
     }
 
-    fn class_name(&self) -> &'static str {
+    pub fn class_name(&self) -> &'static str {
         match self {
             SparkThrowable::ParseException(_) => {
                 "org.apache.spark.sql.catalyst.parser.ParseException"

@@ -29,6 +29,7 @@ use crate::spark::connect::{
     StreamingQueryManagerCommandResult, WriteOperation, WriteOperationV2,
     WriteStreamOperationStart, WriteStreamOperationStartResult,
 };
+use crate::streaming::timeout_millis;
 
 pub struct ExecutePlanResponseStream {
     session_id: String,
@@ -114,7 +115,7 @@ async fn handle_execute_plan(
 ) -> SparkResult<ExecutePlanResponseStream> {
     let spark = ctx.extension::<SparkSession>()?;
     let operation_id = metadata.operation_id.clone();
-    let plan = resolve_and_execute_plan(ctx, spark.plan_config()?, plan).await?;
+    let (plan, _) = resolve_and_execute_plan(ctx, spark.plan_config()?, plan).await?;
     let stream = spark.job_runner().execute(ctx, plan).await?;
     let rx = match mode {
         ExecutePlanMode::Lazy => {
@@ -215,7 +216,7 @@ pub(crate) async fn handle_execute_sql_command(
     let relation = match plan {
         spec::Plan::Query(_) => relation,
         command @ spec::Plan::Command(_) => {
-            let plan = resolve_and_execute_plan(ctx, spark.plan_config()?, command).await?;
+            let (plan, _) = resolve_and_execute_plan(ctx, spark.plan_config()?, command).await?;
             let stream = spark.job_runner().execute(ctx, plan).await?;
             let schema = stream.schema();
             let data = read_stream(stream).await?;
@@ -253,14 +254,13 @@ pub(crate) async fn handle_execute_write_stream_operation_start(
     let reattachable = metadata.reattachable;
     let query_name = start.query_name.clone();
     let plan = spec::Plan::Command(spec::CommandPlan::new(start.try_into()?));
-    let plan = resolve_and_execute_plan(ctx, spark.plan_config()?, plan).await?;
+    let (plan, info) = resolve_and_execute_plan(ctx, spark.plan_config()?, plan).await?;
     let stream = spark.job_runner().execute(ctx, plan).await?;
-    let executor = Executor::new(metadata, stream);
-    let _rx = executor.start()?;
-    spark.add_executor(executor)?;
+    let id = spark.start_streaming_query(query_name.clone(), info, stream)?;
     let result = WriteStreamOperationStartResult {
-        query_id: None,
+        query_id: Some(id.into()),
         name: query_name,
+        // The event is for the client-side listener, which is not supported yet.
         query_started_event_json: None,
     };
     let mut output = vec![ExecutorOutput::new(
@@ -294,32 +294,59 @@ pub(crate) async fn handle_execute_streaming_query_command(
     let query_id = query_id.required("streaming query ID")?;
     let command = command.required("streaming query command")?;
     let result_type = match command {
-        Command::Status(true) => Some(ResultType::Status(StatusResult {
-            status_message: "".to_string(),
-            is_data_available: false,
-            is_trigger_active: false,
-            is_active: false,
-        })),
+        Command::Status(true) => {
+            let status = spark.get_streaming_query_status(&query_id.clone().into())?;
+            Some(ResultType::Status(StatusResult {
+                status_message: status.message,
+                is_data_available: true,
+                is_trigger_active: true,
+                is_active: status.is_active,
+            }))
+        }
         Command::LastProgress(true) | Command::RecentProgress(true) => {
             Some(ResultType::RecentProgress(RecentProgressResult {
                 recent_progress_json: vec![],
             }))
         }
-        Command::Stop(true) => None,
+        Command::Stop(true) => {
+            spark.stop_streaming_query(&query_id.clone().into())?;
+            None
+        }
         Command::ProcessAllAvailable(true) => None,
-        Command::Explain(ExplainCommand { extended: _ }) => {
-            Some(ResultType::Explain(ExplainResult {
-                result: "".to_string(),
+        Command::Explain(ExplainCommand { extended }) => {
+            let mut result = spark.explain_streaming_query(&query_id.clone().into(), extended)?;
+            while result.ends_with('\n') {
+                result.pop();
+            }
+            Some(ResultType::Explain(ExplainResult { result }))
+        }
+        Command::Exception(true) => {
+            let (message, class) = if let Some(throwable) =
+                spark.get_streaming_query_exception(&query_id.clone().into())?
+            {
+                (
+                    Some(throwable.message().to_string()),
+                    Some(throwable.class_name().to_string()),
+                )
+            } else {
+                (None, None)
+            };
+            Some(ResultType::Exception(ExceptionResult {
+                exception_message: message,
+                error_class: class,
+                stack_trace: None,
             }))
         }
-        Command::Exception(true) => Some(ResultType::Exception(ExceptionResult {
-            exception_message: None,
-            error_class: None,
-            stack_trace: None,
-        })),
-        Command::AwaitTermination(AwaitTerminationCommand { timeout_ms: _ }) => {
+        Command::AwaitTermination(AwaitTerminationCommand { timeout_ms }) => {
+            let timeout = timeout_ms.map(timeout_millis).transpose()?;
+            let handle = spark.await_streaming_query(&query_id.clone().into())?;
+            let terminated = if let Some(handle) = handle {
+                handle.terminated(timeout).await?
+            } else {
+                true
+            };
             Some(ResultType::AwaitTermination(AwaitTerminationResult {
-                terminated: false,
+                terminated,
             }))
         }
         Command::Status(false)
@@ -374,19 +401,36 @@ pub(crate) async fn handle_execute_streaming_query_manager_command(
     let StreamingQueryManagerCommand { command } = command;
     let command = command.required("streaming query manager command")?;
     let result_type = match command {
-        Command::Active(true) => Some(ResultType::Active(ActiveResult {
-            active_queries: vec![],
-        })),
-        Command::GetQuery(_id) => Some(ResultType::Query(StreamingQueryInstance {
-            id: None,
-            name: None,
-        })),
-        Command::AwaitAnyTermination(AwaitAnyTerminationCommand { timeout_ms: _ }) => {
-            Some(ResultType::AwaitAnyTermination(AwaitAnyTerminationResult {
-                terminated: false,
+        Command::Active(true) => {
+            let active_queries = spark
+                .list_active_streaming_queries()?
+                .into_iter()
+                .map(|(id, status)| StreamingQueryInstance {
+                    id: Some(id.into()),
+                    name: Some(status.name),
+                })
+                .collect();
+            Some(ResultType::Active(ActiveResult { active_queries }))
+        }
+        Command::GetQuery(id) => {
+            let (id, status) = spark.find_streaming_query_by_query_id(&id)?;
+            Some(ResultType::Query(StreamingQueryInstance {
+                id: Some(id.into()),
+                name: Some(status.name),
             }))
         }
-        Command::ResetTerminated(true) => Some(ResultType::ResetTerminated(true)),
+        Command::AwaitAnyTermination(AwaitAnyTerminationCommand { timeout_ms }) => {
+            let timeout = timeout_ms.map(timeout_millis).transpose()?;
+            let handles = spark.await_streaming_queries()?;
+            let terminated = handles.any_terminated(timeout).await?;
+            Some(ResultType::AwaitAnyTermination(AwaitAnyTerminationResult {
+                terminated,
+            }))
+        }
+        Command::ResetTerminated(true) => {
+            spark.reset_terminated_streaming_queries()?;
+            Some(ResultType::ResetTerminated(true))
+        }
         Command::AddListener(_) => {
             return Err(SparkError::NotImplemented("add listener".to_string()))
         }
