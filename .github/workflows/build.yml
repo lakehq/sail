@@ -162,7 +162,8 @@ jobs:
     needs:
       - build
       - spark-tests
-    if: success() || (failure() && (needs.build.result == 'success' || needs.spark-tests.result == 'success'))
+      - python-build
+    if: success() || (failure() && (needs.build.result == 'success' || needs.spark-tests.result == 'success' || needs.python-build.result == 'success'))
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4

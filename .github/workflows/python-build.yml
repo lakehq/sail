@@ -12,6 +12,10 @@ jobs:
         spark-version: ["3.5.5", "4.0.0"]
     env:
       HATCH_ENV: "test.spark-${{ matrix.spark-version }}"
+      # Coverage environment variables
+      SAIL_BUILD_INSTRUMENT_COVERAGE: 1
+      RUSTC_WORKSPACE_WRAPPER: ${{ github.workspace }}/.github/scripts/rustc-workspace-wrapper.sh
+      LLVM_PROFILE_FILE: ${{ github.workspace }}/target/sail-python-${{ matrix.spark-version }}-%p-%m.profraw
     steps:
       - uses: actions/checkout@v4
 
@@ -48,3 +52,17 @@ jobs:
 
       - name: Run Tests
         run: hatch run pytest --pyargs pysail
+
+      # Generate coverage report after Python tests
+      - name: Generate coverage report
+        # Only run if tests succeed
+        if: success()
+        run: grcov target --binary-path target/debug/ -s . -t lcov --branch --ignore-not-existing -o coverage-python-${{ matrix.spark-version }}.info
+
+      - name: Upload coverage report
+        if: success()
+        uses: actions/upload-artifact@v4
+        with:
+          name: coverage-python-${{ matrix.spark-version }}
+          path: coverage-python-${{ matrix.spark-version }}.info
+          retention-days: 1
