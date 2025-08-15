@@ -63,11 +63,12 @@ jobs:
       - name: Run Tests
         run: hatch run pytest --pyargs pysail
 
+
       # Generate coverage report after Python tests
       - name: Generate coverage report
         # Only run if tests succeed
         if: success()
-        run: grcov target --binary-path target/debug/ -s . -t lcov --branch --ignore-not-existing -o coverage-python-${{ matrix.spark-version }}.info
+        run: grcov target --binary-path python/pysail/ -s . -t lcov --branch --ignore-not-existing -o coverage-python-${{ matrix.spark-version }}.info
 
       - name: Upload coverage report
         if: success()
