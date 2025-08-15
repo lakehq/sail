@@ -2939,7 +2939,7 @@
         }
       },
       "output": {
-        "failure": "error in DataFusion: Error during planning: two values expected: [Literal(Utf8(\"oneAtwoBthreeC\"), None), Literal(Utf8(\"[ABC]\"), None), Negative(Literal(Int32(1), None))]"
+        "success": "ok"
       }
     },
     {
@@ -2965,7 +2965,7 @@
         }
       },
       "output": {
-        "failure": "error in DataFusion: Error during planning: two values expected: [Literal(Utf8(\"oneAtwoBthreeC\"), None), Literal(Utf8(\"[ABC]\"), None), Literal(Int32(2), None)]"
+        "success": "ok"
       }
     },
     {

@@ -5,7 +5,6 @@ use datafusion::functions;
 use datafusion::functions::expr_fn;
 use datafusion::functions::regex::regexpcount::RegexpCountFunc;
 use datafusion::functions::string::contains::ContainsFunc;
-use datafusion::functions_array::string::string_to_array;
 use datafusion_common::ScalarValue;
 use datafusion_expr::{cast, expr, lit, try_cast, ExprSchemable, ScalarUDF};
 
@@ -15,6 +14,7 @@ use crate::extension::function::string::make_valid_utf8::MakeValidUtf8;
 use crate::extension::function::string::spark_base64::{SparkBase64, SparkUnbase64};
 use crate::extension::function::string::spark_encode_decode::{SparkDecode, SparkEncode};
 use crate::extension::function::string::spark_mask::SparkMask;
+use crate::extension::function::string::spark_split::SparkSplit;
 use crate::extension::function::string::spark_to_binary::{SparkToBinary, SparkTryToBinary};
 use crate::extension::function::string::spark_to_number::SparkToNumber;
 use crate::extension::function::string::spark_try_to_number::SparkTryToNumber;
@@ -391,10 +391,7 @@ pub(super) fn list_built_in_string_functions() -> Vec<(&'static str, ScalarFunct
         ("sentences", F::unknown("sentences")),
         ("soundex", F::unknown("soundex")),
         ("space", F::unary(space)),
-        (
-            "split",
-            F::binary(|arg1, arg2| string_to_array(arg1, arg2, lit(ScalarValue::Utf8(None)))),
-        ),
+        ("split", F::udf(SparkSplit::new())),
         ("split_part", F::ternary(expr_fn::split_part)),
         ("startswith", F::binary(startswith)),
         ("substr", F::custom(substr)),
