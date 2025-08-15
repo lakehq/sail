@@ -180,6 +180,7 @@ jobs:
         with:
           token: ${{ secrets.CODECOV_TOKEN }}
           flags: integration
+          root_dir: ${{ github.workspace }}
           working-directory: ${{ github.workspace }}
           fail_ci_if_error: true
           env_vars: OS,RUST
