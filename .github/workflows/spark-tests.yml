@@ -156,6 +156,7 @@ jobs:
           else
             echo "No sail server processes found"
           fi
+          sleep 10
 
       # Generate coverage report after Spark tests
       - name: Generate coverage report
@@ -164,9 +165,7 @@ jobs:
         run: |
           # Wait for background Rust toolchain installation to complete
           wait
-          SAIL_EXECUTABLE=$(hatch run which sail)
-          BINARY_PATH=$(dirname "$SAIL_EXECUTABLE")
-          echo "Sail executable: $SAIL_EXECUTABLE"
+          BINARY_PATH=$(hatch run python -c 'import pysail._native; import os; print(os.path.dirname(pysail._native.__file__))')
           echo "Binary path: $BINARY_PATH"
           grcov target --binary-path "$BINARY_PATH" -s . -t lcov --branch --ignore-not-existing -o coverage-spark-${{ inputs.spark_version }}.info
 
