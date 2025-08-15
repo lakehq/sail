@@ -2659,7 +2659,7 @@
         }
       },
       "output": {
-        "failure": "error in DataFusion: Error during planning: Execution error: Function 'width_bucket' user-defined coercion failed with \"Execution error: Unsupported Data Type: Spark `spark_try_subtract` function expects Float,Float,Float, Int, got Duration(Microsecond), Duration(Microsecond), Duration(Microsecond), Int32\" No function matches the given name and argument types 'width_bucket(Duration(Microsecond), Duration(Microsecond), Duration(Microsecond), Int32)'. You might need to add explicit type casts.\n\tCandidate functions:\n\twidth_bucket(UserDefined)"
+        "success": "ok"
       }
     },
     {
@@ -2681,7 +2681,7 @@
         }
       },
       "output": {
-        "failure": "error in DataFusion: Error during planning: Execution error: Function 'width_bucket' user-defined coercion failed with \"Execution error: Unsupported Data Type: Spark `spark_try_subtract` function expects Float,Float,Float, Int, got Interval(YearMonth), Interval(YearMonth), Interval(YearMonth), Int32\" No function matches the given name and argument types 'width_bucket(Interval(YearMonth), Interval(YearMonth), Interval(YearMonth), Int32)'. You might need to add explicit type casts.\n\tCandidate functions:\n\twidth_bucket(UserDefined)"
+        "success": "ok"
       }
     },
     {
@@ -2703,7 +2703,7 @@
         }
       },
       "output": {
-        "failure": "error in DataFusion: Error during planning: Execution error: Function 'width_bucket' user-defined coercion failed with \"Execution error: Unsupported Data Type: Spark `spark_try_subtract` function expects Float,Float,Float, Int, got Duration(Microsecond), Duration(Microsecond), Duration(Microsecond), Int32\" No function matches the given name and argument types 'width_bucket(Duration(Microsecond), Duration(Microsecond), Duration(Microsecond), Int32)'. You might need to add explicit type casts.\n\tCandidate functions:\n\twidth_bucket(UserDefined)"
+        "success": "ok"
       }
     },
     {
@@ -2725,7 +2725,7 @@
         }
       },
       "output": {
-        "failure": "error in DataFusion: Error during planning: Execution error: Function 'width_bucket' user-defined coercion failed with \"Execution error: Unsupported Data Type: Spark `spark_try_subtract` function expects Float,Float,Float, Int, got Interval(YearMonth), Interval(YearMonth), Interval(YearMonth), Int32\" No function matches the given name and argument types 'width_bucket(Interval(YearMonth), Interval(YearMonth), Interval(YearMonth), Int32)'. You might need to add explicit type casts.\n\tCandidate functions:\n\twidth_bucket(UserDefined)"
+        "success": "ok"
       }
     }
   ]
