@@ -1,4 +1,5 @@
 use std::any::Any;
+use std::cmp::Ordering;
 use std::sync::Arc;
 
 use arrow::array::{Array, ArrayRef, Int32Builder};
@@ -50,6 +51,8 @@ impl ScalarUDFImpl for SparkWidthBucket {
     }
 
     fn coerce_types(&self, types: &[DataType]) -> Result<Vec<DataType>> {
+        // width_bucket(Interval(YearMonth), Interval(YearMonth), Interval(YearMonth), Int32)
+        // width_bucket(Duration(Microsecond), Duration(Microsecond), Duration(Microsecond), Int32)
         use DataType::*;
         if types.len() != 4 {
             return Err(invalid_arg_count_exec_err(
@@ -108,26 +111,60 @@ fn width_bucket_kern(args: &[ArrayRef]) -> Result<ArrayRef> {
         let hi = maxv.value(i);
         let n = nb.value(i);
 
-        let valid_range = matches!(lo.partial_cmp(&hi), Some(std::cmp::Ordering::Less));
-        if n <= 0 || !valid_range {
+        if n <= 0 || x.is_nan() || lo.is_nan() || hi.is_nan() {
             b.append_null();
             continue;
         }
 
-        if x < lo {
-            b.append_value(0);
-            continue;
-        }
-        if x > hi {
-            b.append_value(n + 1);
+        let ord: Ordering = match lo.partial_cmp(&hi) {
+            Some(o) => o,
+            None => {
+                b.append_null();
+                continue;
+            }
+        };
+
+        if matches!(ord, Ordering::Equal) {
+            b.append_null();
             continue;
         }
 
-        let width = (hi - lo) / (n as f64);
-        let mut bucket = ((x - lo) / width).floor() as i32 + 1;
+        let asc: bool = matches!(ord, Ordering::Less);
+
+        if asc {
+            if x < lo {
+                b.append_value(0);
+                continue;
+            }
+            if x > hi {
+                b.append_value(n + 1);
+                continue;
+            }
+        } else {
+            if x > lo {
+                b.append_value(0);
+                continue;
+            }
+            if x < hi {
+                b.append_value(n + 1);
+                continue;
+            }
+        }
+        let width: f64 = (hi - lo) / (n as f64);
+        if width == 0.0 || !width.is_finite() {
+            b.append_null();
+            continue;
+        }
+
+        let mut bucket: i32 = ((x - lo) / width).floor() as i32 + 1;
+
         if bucket > n {
             bucket = n;
         }
+        if bucket < 1 {
+            bucket = 1;
+        }
+
         b.append_value(bucket);
     }
 
