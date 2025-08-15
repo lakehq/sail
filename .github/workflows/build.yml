@@ -156,34 +156,88 @@ jobs:
       stage: ${{ matrix.stage }}
       version: main
 
-  upload-coverage:
-    name: Upload Coverage Report
-    # Ensure this task runs after all tasks that generate coverage reports
+  upload-cargo-coverage:
+    name: Upload Cargo Coverage Report
     needs:
       - build
-      - spark-tests
-      - python-build
-    if: success() || (failure() && (needs.build.result == 'success' || needs.spark-tests.result == 'success' || needs.python-build.result == 'success'))
+    if: success() || (failure() && needs.build.result == 'success')
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
 
-      - name: Download all coverage artifacts
+      - name: Download cargo coverage artifacts
         uses: actions/download-artifact@v4
         with:
-          pattern: coverage-*
+          name: coverage-build
           path: coverage-reports
-          merge-multiple: true # Merge all artifacts into one directory
 
       - name: Record Rust version
         run: echo "RUST=$(rustc --version)" >> "$GITHUB_ENV"
 
-      - name: Upload coverage reports to Codecov
+      - name: Upload cargo coverage reports to Codecov
         uses: codecov/codecov-action@v5
         with:
           token: ${{ secrets.CODECOV_TOKEN }}
-          flags: integration
+          flags: cargo
           fail_ci_if_error: true
           env_vars: OS,RUST
           directory: coverage-reports
-          files: "*.info"
+          files: "coverage-build.info"
+
+  upload-spark-coverage:
+    name: Upload Spark Coverage Report
+    needs:
+      - spark-tests
+    if: success() || (failure() && needs.spark-tests.result == 'success')
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Download spark coverage artifacts
+        uses: actions/download-artifact@v4
+        with:
+          pattern: coverage-spark-*
+          path: coverage-reports
+          merge-multiple: true
+
+      - name: Record Rust version
+        run: echo "RUST=$(rustc --version)" >> "$GITHUB_ENV"
+
+      - name: Upload spark coverage reports to Codecov
+        uses: codecov/codecov-action@v5
+        with:
+          token: ${{ secrets.CODECOV_TOKEN }}
+          flags: spark
+          fail_ci_if_error: true
+          env_vars: OS,RUST
+          directory: coverage-reports
+          files: "coverage-spark-*.info"
+
+  upload-python-coverage:
+    name: Upload Python Coverage Report
+    needs:
+      - python-build
+    if: success() || (failure() && needs.python-build.result == 'success')
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Download python coverage artifacts
+        uses: actions/download-artifact@v4
+        with:
+          pattern: coverage-python-*
+          path: coverage-reports
+          merge-multiple: true
+
+      - name: Record Rust version
+        run: echo "RUST=$(rustc --version)" >> "$GITHUB_ENV"
+
+      - name: Upload python coverage reports to Codecov
+        uses: codecov/codecov-action@v5
+        with:
+          token: ${{ secrets.CODECOV_TOKEN }}
+          flags: python
+          fail_ci_if_error: true
+          env_vars: OS,RUST
+          directory: coverage-reports
+          files: "coverage-python-*.info"
