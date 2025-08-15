@@ -135,7 +135,7 @@ jobs:
           if [ -f /tmp/spark-server.pid ]; then
             PID=$(cat /tmp/spark-server.pid)
             if kill -0 "$PID" 2>/dev/null; then
-              kill -TERM "$PID"
+              kill -INT "$PID"
               for i in {1..10}; do
                 if ! kill -0 "$PID" 2>/dev/null; then break; fi
                 sleep 1
