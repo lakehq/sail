@@ -6,7 +6,8 @@ use arrow::array::{
     Array, ArrayRef, DurationMicrosecondArray, Float64Array, Int32Array, Int32Builder,
     IntervalYearMonthArray,
 };
-use arrow::datatypes::{DataType, IntervalUnit, TimeUnit};
+use arrow::datatypes::IntervalUnit::YearMonth;
+use arrow::datatypes::{DataType, TimeUnit};
 use datafusion_common::cast::{
     as_duration_microsecond_array, as_float64_array, as_int32_array, as_interval_ym_array,
 };
@@ -41,15 +42,19 @@ impl ScalarUDFImpl for SparkWidthBucket {
     fn as_any(&self) -> &dyn Any {
         self
     }
+
     fn name(&self) -> &str {
         "width_bucket"
     }
+
     fn signature(&self) -> &Signature {
         &self.signature
     }
+
     fn return_type(&self, _arg_types: &[DataType]) -> Result<DataType> {
         Ok(DataType::Int32)
     }
+
     fn invoke_with_args(&self, args: ScalarFunctionArgs) -> Result<ColumnarValue> {
         let ScalarFunctionArgs { args, .. } = args;
         make_scalar_function(width_bucket_kern)(&args)
@@ -89,15 +94,15 @@ impl ScalarUDFImpl for SparkWidthBucket {
             ]);
         }
 
-        if matches!(v, Interval(IntervalUnit::YearMonth))
-            && matches!(lo, Interval(IntervalUnit::YearMonth))
-            && matches!(hi, Interval(IntervalUnit::YearMonth))
+        if matches!(v, Interval(YearMonth))
+            && matches!(lo, Interval(YearMonth))
+            && matches!(hi, Interval(YearMonth))
             && is_int(n)
         {
             return Ok(vec![
-                Interval(IntervalUnit::YearMonth),
-                Interval(IntervalUnit::YearMonth),
-                Interval(IntervalUnit::YearMonth),
+                Interval(YearMonth),
+                Interval(YearMonth),
+                Interval(YearMonth),
                 Int32,
             ]);
         }
@@ -122,24 +127,24 @@ fn width_bucket_kern(args: &[ArrayRef]) -> Result<ArrayRef> {
     match v.data_type() {
         DataType::Float64 => {
             let v = as_float64_array(v)?;
-            let lo = as_float64_array(minv)?;
-            let hi = as_float64_array(maxv)?;
-            let n = as_int32_array(nb)?;
-            Ok(Arc::new(width_bucket_float64(v, lo, hi, n)))
+            let min = as_float64_array(minv)?;
+            let max = as_float64_array(maxv)?;
+            let n_bucket = as_int32_array(nb)?;
+            Ok(Arc::new(width_bucket_float64(v, min, max, n_bucket)))
         }
         DataType::Duration(TimeUnit::Microsecond) => {
             let v = as_duration_microsecond_array(v)?;
-            let lo = as_duration_microsecond_array(minv)?;
-            let hi = as_duration_microsecond_array(maxv)?;
-            let n = as_int32_array(nb)?;
-            Ok(Arc::new(width_bucket_i64_as_float(v, lo, hi, n)))
+            let min = as_duration_microsecond_array(minv)?;
+            let max = as_duration_microsecond_array(maxv)?;
+            let n_bucket = as_int32_array(nb)?;
+            Ok(Arc::new(width_bucket_i64_as_float(v, min, max, n_bucket)))
         }
-        DataType::Interval(IntervalUnit::YearMonth) => {
+        DataType::Interval(YearMonth) => {
             let v = as_interval_ym_array(v)?;
-            let lo = as_interval_ym_array(minv)?;
-            let hi = as_interval_ym_array(maxv)?;
-            let n = as_int32_array(nb)?;
-            Ok(Arc::new(width_bucket_i32_as_float(v, lo, hi, n)))
+            let min = as_interval_ym_array(minv)?;
+            let max = as_interval_ym_array(maxv)?;
+            let n_bucket = as_int32_array(nb)?;
+            Ok(Arc::new(width_bucket_i32_as_float(v, min, max, n_bucket)))
         }
 
         other => Err(unsupported_data_types_exec_err(
@@ -157,19 +162,24 @@ fn width_bucket_kern(args: &[ArrayRef]) -> Result<ArrayRef> {
 
 macro_rules! width_bucket_kernel_impl {
     ($name:ident, $arr_ty:ty, $to_f64:expr, $check_nan:expr) => {
-        pub(crate) fn $name(v: &$arr_ty, lo: &$arr_ty, hi: &$arr_ty, n: &Int32Array) -> Int32Array {
+        pub(crate) fn $name(
+            v: &$arr_ty,
+            min: &$arr_ty,
+            max: &$arr_ty,
+            n_bucket: &Int32Array,
+        ) -> Int32Array {
             let len = v.len();
             let mut b = Int32Builder::with_capacity(len);
 
             for i in 0..len {
-                if v.is_null(i) || lo.is_null(i) || hi.is_null(i) || n.is_null(i) {
+                if v.is_null(i) || min.is_null(i) || max.is_null(i) || n_bucket.is_null(i) {
                     b.append_null();
                     continue;
                 }
                 let x = ($to_f64)(v, i);
-                let l = ($to_f64)(lo, i);
-                let h = ($to_f64)(hi, i);
-                let buckets = n.value(i);
+                let l = ($to_f64)(min, i);
+                let h = ($to_f64)(max, i);
+                let buckets = n_bucket.value(i);
 
                 if buckets <= 0 {
                     b.append_null();
