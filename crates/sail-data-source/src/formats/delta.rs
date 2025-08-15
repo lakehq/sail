@@ -23,7 +23,7 @@ use uuid::Uuid;
 
 use crate::options::DataSourceOptionsResolver;
 
-#[derive(Debug, Default)]
+#[derive(Debug)]
 pub struct DeltaTableFormat;
 
 #[async_trait]

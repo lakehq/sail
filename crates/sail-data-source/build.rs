@@ -135,5 +135,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     build_options("ParquetWriteOptions", "parquet_write")?;
     build_options("DeltaReadOptions", "delta_read")?;
     build_options("DeltaWriteOptions", "delta_write")?;
+    build_options("SocketReadOptions", "socket_read")?;
+    build_options("RateReadOptions", "rate_read")?;
     Ok(())
 }

@@ -1,0 +1,28 @@
+- key: rows_per_second
+  aliases:
+    - rowsPerSecond
+  default: "1"
+  description: |
+    The maximum number of rows that are generated per second.
+  supported: true
+  rust_type: usize
+  rust_deserialize_with: crate::options::serde::deserialize_usize
+
+- key: ramp_up_time
+  aliases:
+    - rampUpTime
+  description: |
+    The time in seconds to ramp up to the number of rows per second.
+  supported: false
+  rust_type: usize
+  rust_deserialize_with: crate::options::serde::deserialize_usize
+
+- key: num_partitions
+  aliases:
+    - numPartitions
+  default: "1"
+  description: |
+    The number of partitions for data generation.
+  supported: true
+  rust_type: usize
+  rust_deserialize_with: crate::options::serde::deserialize_usize
