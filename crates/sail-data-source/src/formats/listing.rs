@@ -79,8 +79,17 @@ impl<T: ListingFormat> TableFormat for ListingTableFormat<T> {
 
         let urls = crate::url::resolve_listing_urls(ctx, paths).await?;
         let file_format = self.inner.create_read_format(ctx, options)?;
+        let extension_with_compression =
+            file_format.compression_type().and_then(|compression_type| {
+                match file_format.get_ext_with_compression(&compression_type) {
+                    // if the extension is the same as the file format, we don't need to add it
+                    Ok(ext) if ext != file_format.get_ext() => Some(ext),
+                    _ => None,
+                }
+            });
+
         let config = ctx.config();
-        let listing_options = ListingOptions::new(file_format)
+        let mut listing_options = ListingOptions::new(file_format)
             .with_target_partitions(config.target_partitions())
             .with_collect_stat(config.collect_statistics());
 
@@ -91,8 +100,16 @@ impl<T: ListingFormat> TableFormat for ListingTableFormat<T> {
                 (Arc::new(schema), partition_by)
             }
             _ => {
-                let schema =
-                    crate::listing::resolve_listing_schema(ctx, &urls, &listing_options).await?;
+                let (schema, file_extension) = crate::listing::resolve_listing_schema(
+                    ctx,
+                    &urls,
+                    &listing_options,
+                    extension_with_compression,
+                )
+                .await?;
+                if let Some(file_extension) = file_extension {
+                    listing_options = listing_options.with_file_extension(file_extension);
+                }
                 let partition_by = partition_by
                     .into_iter()
                     .map(|col| (col, DataType::Utf8))
@@ -163,6 +180,14 @@ impl<T: ListingFormat> TableFormat for ListingTableFormat<T> {
             .map(|s| (s.clone(), DataType::Null))
             .collect::<Vec<_>>();
         let format = self.inner.create_write_format(ctx, options)?;
+        let file_extension = if let Some(file_compression_type) = format.compression_type() {
+            match format.get_ext_with_compression(&file_compression_type) {
+                Ok(ext) => ext,
+                Err(_) => format.get_ext(),
+            }
+        } else {
+            format.get_ext()
+        };
         let conf = FileSinkConfig {
             original_url: path,
             object_store_url,
@@ -172,7 +197,7 @@ impl<T: ListingFormat> TableFormat for ListingTableFormat<T> {
             table_partition_cols,
             insert_op: InsertOp::Append,
             keep_partition_by_columns: false,
-            file_extension: format.get_ext(),
+            file_extension,
         };
         format
             .create_writer_physical_plan(input, ctx, conf, sort_order)
