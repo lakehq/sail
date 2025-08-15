@@ -112,6 +112,7 @@ jobs:
       - name: Run Spark Connect Server
         run: |
           nohup hatch run scripts/spark-tests/run-server.sh > /dev/null 2>&1 < /dev/null &
+          echo $! > /tmp/spark-server.pid
 
       - name: Wait for Spark Connect Server to Start
         run: |
@@ -127,6 +128,22 @@ jobs:
           TEST_RUN_GIT_REF: ${{ github.ref }}
         run: |
           hatch run scripts/spark-tests/run-tests.sh
+
+      - name: Shutdown Spark Connect Server
+        if: always()
+        run: |
+          if [ -f /tmp/spark-server.pid ]; then
+            PID=$(cat /tmp/spark-server.pid)
+            if kill -0 "$PID" 2>/dev/null; then
+              kill -TERM "$PID"
+              for i in {1..10}; do
+                if ! kill -0 "$PID" 2>/dev/null; then break; fi
+                sleep 1
+              done
+              kill -KILL "$PID" 2>/dev/null || true
+            fi
+            rm -f /tmp/spark-server.pid
+          fi
 
       # Generate coverage report after Spark tests
       - name: Generate coverage report
