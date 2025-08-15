@@ -171,7 +171,7 @@ jobs:
           pattern: coverage-*
           path: coverage-reports
           merge-multiple: true # Merge all artifacts into one directory
-      
+
       - name: Record Rust version
         run: echo "RUST=$(rustc --version)" >> "$GITHUB_ENV"
 
@@ -179,8 +179,7 @@ jobs:
         uses: codecov/codecov-action@v5
         with:
           token: ${{ secrets.CODECOV_TOKEN }}
-          directory: ./coverage-reports/
-          files: ./*.info
           flags: integration
+          directory: ${{ github.workspace }}
           fail_ci_if_error: true
-          env_vars: OS,RUST
+          env_vars: OS, RUST
