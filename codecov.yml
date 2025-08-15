@@ -1,0 +1,49 @@
+coverage:
+  status:
+    patch: off # disable patch status
+    project:
+      default: false # disable the default status that measures entire project
+      cargo:
+        only_pulls: true # no status will be posted for commits not on a pull request
+        flags:
+          - cargo
+        paths:
+          - "crates/"
+        target: auto # compared with the coverage from the base commit
+        threshold: 0.1% # allow the coverage to drop by 0.1% and posting a success status
+      spark:
+        only_pulls: true
+        flags:
+          - spark
+        paths:
+          - "crates/"
+          - "python/"
+        target: auto
+        threshold: 0.1%
+      python:
+        only_pulls: true
+        flags:
+          - python
+        paths:
+          - "crates/"
+          - "python/"
+        target: auto
+        threshold: 0.1%
+
+codecov:
+  allow_coverage_offsets: true
+
+comment: false
+
+flags:
+  cargo:
+    paths:
+      - crates/
+  spark:
+    paths:
+      - crates/
+      - python/
+  python:
+    paths:
+      - crates/
+      - python/

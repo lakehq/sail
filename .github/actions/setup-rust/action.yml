@@ -16,8 +16,13 @@ runs:
       run: |
         rustup toolchain install stable
         rustup toolchain install nightly
-        rustup component add --toolchain stable rustfmt clippy
+        rustup component add --toolchain stable rustfmt clippy llvm-tools
         rustup component add --toolchain nightly rustfmt
+      shell: bash
+
+    # Install grcov for code coverage
+    - name: Install grcov
+      run: cargo install grcov
       shell: bash
 
     - name: Show versions
