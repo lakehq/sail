@@ -165,6 +165,8 @@ jobs:
     if: success() || (failure() && (needs.build.result == 'success' || needs.spark-tests.result == 'success'))
     runs-on: ubuntu-latest
     steps:
+      - uses: actions/checkout@v4
+
       - name: Download all coverage artifacts
         uses: actions/download-artifact@v4
         with:
@@ -180,7 +182,7 @@ jobs:
         with:
           token: ${{ secrets.CODECOV_TOKEN }}
           flags: integration
-          root_dir: ${{ github.workspace }}
-          working-directory: ${{ github.workspace }}
           fail_ci_if_error: true
           env_vars: OS,RUST
+          directory: coverage-reports
+          files: "*.info"
