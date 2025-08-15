@@ -45,7 +45,7 @@ def local_cluster_spark(local_cluster_server):
 def large_dataset(local_cluster_spark):
     """Create a larger dataset to test distributed execution."""
     total = []
-    for i in range(1000):
+    for i in range(100000):
         data = Row(id=i, group=i % 10, value=i * 2, name=f"item_{i}", category=f"cat_{i % 5}")
         total.append(data)
 
@@ -88,11 +88,11 @@ class TestLocalClusterExecution:
         )
 
         assert len(result) == 10  # noqa: PLR2004
-        assert result["count"].sum() == 1000  # noqa: PLR2004
+        assert result["count"].sum() == 100000  # noqa: PLR2004
 
         group_0 = result[result["group"] == 0].iloc[0]
-        assert group_0["count"] == 100  # noqa: PLR2004
-        assert group_0["sum_value"] == sum(i * 2 for i in range(0, 1000, 10))
+        assert group_0["count"] == 10000  # noqa: PLR2004
+        assert group_0["sum_value"] == sum(i * 2 for i in range(0, 100000, 10))
 
     def test_join_operations(self, local_cluster_spark):
         """Test join operations in local-cluster mode."""
@@ -234,7 +234,7 @@ class TestLocalClusterExecution:
 
         original_count = large_dataset.count()
         repartitioned_count = repartitioned.count()
-        assert original_count == repartitioned_count == 1000  # noqa: PLR2004
+        assert original_count == repartitioned_count == 100000  # noqa: PLR2004
 
         original_sum = large_dataset.agg(F.sum("value")).collect()[0][0]
         repartitioned_sum = repartitioned.agg(F.sum("value")).collect()[0][0]
@@ -243,5 +243,5 @@ class TestLocalClusterExecution:
         coalesced = large_dataset.coalesce(4)
         coalesced_count = coalesced.count()
         coalesced_sum = coalesced.agg(F.sum("value")).collect()[0][0]
-        assert coalesced_count == 1000  # noqa: PLR2004
+        assert coalesced_count == 100000  # noqa: PLR2004
         assert coalesced_sum == original_sum
