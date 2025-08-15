@@ -60,6 +60,14 @@ jobs:
 
       - uses: ./.github/actions/setup-rust
 
+      - name: Install grcov
+        run: |
+          wget -q -O grcov.tar.bz2 "https://github.com/mozilla/grcov/releases/download/v0.10.5/grcov-x86_64-unknown-linux-gnu.tar.bz2"
+          tar -xjf grcov.tar.bz2
+          sudo mv grcov /usr/local/bin/
+          chmod +x /usr/local/bin/grcov
+          rm grcov.tar.bz2
+
       - name: Install grpc_health_probe
         run: |
           wget -q -O /usr/local/bin/grpc_health_probe "https://github.com/grpc-ecosystem/grpc-health-probe/releases/download/v0.4.26/grpc_health_probe-linux-amd64"
@@ -128,7 +136,7 @@ jobs:
       - name: Generate coverage report
         # Only run if tests succeed
         if: success()
-        run: grcov target --binary-path target/debug/ -s . -t lcov --branch --ignore-not-existing --ignore -o coverage-spark-${{ inputs.spark_version }}.info
+        run: grcov target --binary-path target/debug/ -s . -t lcov --branch --ignore-not-existing -o coverage-spark-${{ inputs.spark_version }}.info
 
       - name: Upload coverage report
         if: success()
