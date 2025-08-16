@@ -1,0 +1,71 @@
+>>> spark.sql("SELECT try_mod(CAST(3.0  AS DECIMAL(2,1)), CAST(2.00 AS DECIMAL(3,2))) AS r").printSchema()
+root
+ |-- r: decimal(3,2) (nullable = true)
+
+>>> spark.sql("SELECT try_mod(CAST(12.34 AS DECIMAL(4,2)), CAST(5.67 AS DECIMAL(3,2))) AS r").printSchema()
+root
+ |-- r: decimal(3,2) (nullable = true)
+
+>>> spark.sql("SELECT try_mod(CAST(1.2 AS DECIMAL(2,1)), CAST(0.03 AS DECIMAL(3,2))) AS r").printSchema()
+root
+ |-- r: decimal(3,2) (nullable = true)
+
+>>> spark.sql("SELECT try_mod(CAST(1.23 AS DECIMAL(3,2)), CAST(0.00 AS DECIMAL(3,2))) AS r").printSchema()
+root
+ |-- r: decimal(3,2) (nullable = true)
+
+>>> spark.sql("SELECT try_mod(CAST(0.00 AS DECIMAL(3,2)), CAST(2.50 AS DECIMAL(3,2))) AS r").printSchema()
+root
+ |-- r: decimal(3,2) (nullable = true)
+
+>>> spark.sql("SELECT try_mod(CAST(1.23 AS DECIMAL(3,2)), CAST(9.99 AS DECIMAL(3,2))) AS r").printSchema()
+root
+ |-- r: decimal(3,2) (nullable = true)
+
+>>> spark.sql("SELECT try_mod(CAST(5.00 AS DECIMAL(3,2)), CAST(5.00 AS DECIMAL(3,2))) AS r").printSchema()
+root
+ |-- r: decimal(3,2) (nullable = true)
+
+>>> spark.sql("SELECT try_mod(CAST(9.9 AS DECIMAL(38,1)), CAST(0.000000000000000001 AS DECIMAL(18,18))) AS r").printSchema()
+root
+ |-- r: decimal(18,18) (nullable = true)
+
+>>> spark.sql("SELECT try_mod(CAST(99999999999999999999999999999999999999 AS DECIMAL(38,0)), CAST(10 AS DECIMAL(2,0))) AS r").printSchema()
+root
+ |-- r: decimal(2,0) (nullable = true)
+
+>>> spark.sql("SELECT try_mod(3, CAST(2.00 AS DECIMAL(3,2))) AS r").printSchema()
+root
+ |-- r: decimal(3,2) (nullable = true)
+
+>>> spark.sql("SELECT try_mod(CAST(3.00 AS DECIMAL(3,2)), 2) AS r").printSchema()
+root
+ |-- r: decimal(3,2) (nullable = true)
+
+>>> spark.sql("SELECT try_mod(NULL, CAST(2.00 AS DECIMAL(3,2))) AS r").printSchema()
+root
+ |-- r: decimal(3,2) (nullable = true)
+
+>>> spark.sql("SELECT try_mod(CAST(3.00 AS DECIMAL(3,2)), NULL) AS r").printSchema()
+root
+ |-- r: decimal(3,2) (nullable = true)
+
+>>> spark.sql("SELECT try_mod(CAST(1.23 AS DECIMAL(3,2)), CAST(0.000000000001 AS DECIMAL(13,12))) AS r").printSchema()
+root
+ |-- r: decimal(13,12) (nullable = true)
+
+>>> spark.sql("SELECT try_mod(CAST(10.00 AS DECIMAL(4,2)), CAST(2.50 AS DECIMAL(3,2))) AS r").printSchema()
+root
+ |-- r: decimal(3,2) (nullable = true)
+
+>>> spark.sql("""SELECT
+... try_mod(CAST( 7.5 AS DECIMAL(3,1)), CAST( 2.0 AS DECIMAL(2,1))) AS p_p,
+... try_mod(CAST(-7.5 AS DECIMAL(3,1)), CAST( 2.0 AS DECIMAL(2,1))) AS n_p,
+... try_mod(CAST( 7.5 AS DECIMAL(3,1)), CAST(-2.0 AS DECIMAL(2,1))) AS p_n,
+... try_mod(CAST(-7.5 AS DECIMAL(3,1)), CAST(-2.0 AS DECIMAL(2,1))) AS n_n
+... """).printSchema()
+root
+ |-- p_p: decimal(2,1) (nullable = true)
+ |-- n_p: decimal(2,1) (nullable = true)
+ |-- p_n: decimal(2,1) (nullable = true)
+ |-- n_n: decimal(2,1) (nullable = true)
