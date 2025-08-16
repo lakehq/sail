@@ -27,6 +27,7 @@ use crate::extension::function::math::spark_try_div::SparkTryDiv;
 use crate::extension::function::math::spark_try_mod::SparkTryMod;
 use crate::extension::function::math::spark_try_mult::SparkTryMult;
 use crate::extension::function::math::spark_try_subtract::SparkTrySubtract;
+use crate::extension::function::math::spark_width_bucket::SparkWidthBucket;
 use crate::function::common::{ScalarFunction, ScalarFunctionInput};
 use crate::utils::ItemTaker;
 
@@ -482,6 +483,6 @@ pub(super) fn list_built_in_math_functions() -> Vec<(&'static str, ScalarFunctio
         ("try_mod", F::udf(SparkTryMod::new())),
         ("try_subtract", F::udf(SparkTrySubtract::new())),
         ("unhex", F::udf(SparkUnHex::new())),
-        ("width_bucket", F::unknown("width_bucket")),
+        ("width_bucket", F::udf(SparkWidthBucket::new())),
     ]
 }

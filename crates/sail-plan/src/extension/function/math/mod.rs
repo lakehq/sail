@@ -20,6 +20,7 @@ pub mod spark_try_div;
 pub mod spark_try_mod;
 pub mod spark_try_mult;
 pub mod spark_try_subtract;
+pub mod spark_width_bucket;
 
 #[inline]
 pub(crate) fn both_are_decimal(left: &DataType, right: &DataType) -> bool {
