@@ -7,20 +7,13 @@ use crate::options::{
     DeltaWriteOptions, JsonReadOptions, JsonWriteOptions, ParquetReadOptions, ParquetWriteOptions,
     TextReadOptions, TextWriteOptions,
 };
+use crate::utils::char_to_u8;
 use datafusion::catalog::Session;
 use datafusion::datasource::file_format::file_compression_type::FileCompressionType;
 use datafusion_common::config::{CsvOptions, JsonOptions, TableParquetOptions};
 use datafusion_common::parsers::CompressionTypeVariant;
 use datafusion_common::{plan_err, Result};
 use sail_common_datafusion::datasource::TableDeltaOptions;
-
-fn char_to_u8(c: char, option: &str) -> Result<u8> {
-    if c.is_ascii() {
-        Ok(c as u8)
-    } else {
-        plan_err!("invalid {option} character '{c}': must be an ASCII character")
-    }
-}
 
 fn apply_json_read_options(from: JsonReadOptions, to: &mut JsonOptions) -> Result<()> {
     let JsonReadOptions {
