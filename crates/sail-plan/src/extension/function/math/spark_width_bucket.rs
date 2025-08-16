@@ -237,6 +237,7 @@ macro_rules! width_bucket_kernel_impl {
                 if bucket > buckets + 1 {
                     bucket = buckets + 1;
                 }
+
                 b.append_value(bucket);
             }
 
