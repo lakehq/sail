@@ -231,11 +231,11 @@ macro_rules! width_bucket_kernel_impl {
                     continue;
                 }
                 let mut bucket = ((x - l) / width).floor() as i32 + 1;
-                if bucket > buckets {
-                    bucket = buckets;
-                }
                 if bucket < 1 {
                     bucket = 1;
+                }
+                if bucket > buckets + 1 {
+                    bucket = buckets + 1;
                 }
                 b.append_value(bucket);
             }
