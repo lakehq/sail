@@ -5602,9 +5602,11 @@ name = "sail-data-source"
 version = "0.3.3"
 dependencies = [
  "async-trait",
+ "bytes",
  "chumsky",
  "datafusion",
  "datafusion-common",
+ "datafusion-datasource",
  "deltalake",
  "futures",
  "glob",
@@ -5616,7 +5618,6 @@ dependencies = [
  "proc-macro2",
  "quote",
  "regex",
- "sail-common",
  "sail-common-datafusion",
  "sail-delta-lake",
  "serde",
