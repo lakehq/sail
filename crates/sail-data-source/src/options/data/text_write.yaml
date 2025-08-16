@@ -14,7 +14,6 @@
   rust_type: Option<char>
   rust_deserialize_with: crate::options::serde::deserialize_optional_char
 
-# CHECK HERE: MAKE SURE ALL LISTED ARE SUPPORTED BEFORE MERGING IN
 - key: compression
   aliases:
     - codec
@@ -25,7 +24,5 @@
       - `"BZIP2"` or `"BZ2"`
       - `"GZIP"` or `"GZ"`
       - `"ZSTD"` or `"ZST"`
-      - `"SNAPPY"`
-      - `"LZ4"`
       - `"XZ"`
   supported: true

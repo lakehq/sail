@@ -316,6 +316,11 @@ fn apply_text_write_options(from: TextWriteOptions, to: &mut TableTextOptions) -
         to.line_sep = Some(line_sep);
     }
     if let Some(compression) = from.compression {
+        let compression = if compression.to_uppercase() == "NONE" {
+            "UNCOMPRESSED".to_string()
+        } else {
+            compression
+        };
         to.compression = CompressionTypeVariant::from_str(compression.as_str())?;
     }
     Ok(())

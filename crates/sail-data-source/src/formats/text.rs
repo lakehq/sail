@@ -141,7 +141,6 @@ impl FileFormat for TextFileFormat {
         file_compression_type: &FileCompressionType,
     ) -> Result<String> {
         let ext = self.get_ext();
-        // CHECK HERE DO NOT MERGE. Make sure supported compression matches data source option doc.
         Ok(format!("{ext}{}", file_compression_type.get_ext()))
     }
 
