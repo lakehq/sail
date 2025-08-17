@@ -19,10 +19,8 @@ pub struct Format {
     line_sep: Option<u8>,
 }
 
-// CHECK HERE
-#[allow(unused)]
 impl Format {
-    pub fn whole_text(mut self, whole_text: bool) -> Self {
+    pub fn with_whole_text(mut self, whole_text: bool) -> Self {
         self.whole_text = whole_text;
         self
     }
@@ -50,14 +48,6 @@ where
         f.debug_struct("Reader")
             .field("decoder", &self.decoder)
             .finish()
-    }
-}
-
-impl<R: Read> Reader<R> {
-    // CHECK HERE
-    #[allow(unused)]
-    pub fn schema(&self) -> SchemaRef {
-        self.decoder.schema.clone()
     }
 }
 
@@ -196,22 +186,11 @@ impl ReaderBuilder {
         }
     }
 
-    // CHECK HERE
-    #[allow(unused)]
     pub fn with_format(mut self, format: Format) -> Self {
         self.format = format;
         self
     }
 
-    pub fn with_whole_text(mut self, whole_text: bool) -> Self {
-        self.format.whole_text = whole_text;
-        self
-    }
-
-    pub fn with_line_sep(mut self, line_sep: u8) -> Self {
-        self.format.line_sep = Some(line_sep);
-        self
-    }
     pub fn with_batch_size(mut self, batch_size: usize) -> Self {
         self.batch_size = batch_size;
         self
@@ -301,7 +280,7 @@ impl RecordDecoder {
     ///
     /// Note: this expects to be called with an empty `input` to signal EOF.
     pub fn decode(&mut self, input: &[u8], to_read: usize) -> Result<(usize, usize), ArrowError> {
-        // CHECK HERE
+        // CHECK HERE: Validate function logic
         if to_read == 0 {
             return Ok((0, 0));
         }
@@ -507,7 +486,7 @@ impl RecordDecoder {
     }
 
     pub fn flush(&mut self) -> Result<StringRecords<'_>, ArrowError> {
-        // CHECK HERE
+        // CHECK HERE: Validate if statement logic
         // Handle last line without terminator (common at EOF)
         if !self.partial_line.is_empty() {
             // Ensure capacity

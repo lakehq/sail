@@ -1,11 +1,13 @@
 use std::any::Any;
 use std::fmt;
 use std::fmt::Debug;
+use std::io::Write;
 use std::sync::Arc;
 
 use bytes::Bytes;
-use datafusion::arrow::array::RecordBatch;
+use datafusion::arrow::array::{Array, RecordBatch, StringArray};
 use datafusion::arrow::datatypes::SchemaRef;
+use datafusion::arrow::error::ArrowError;
 use datafusion::common::runtime::SpawnedTask;
 use datafusion::execution::{SendableRecordBatchStream, TaskContext};
 use datafusion::physical_plan::{DisplayAs, DisplayFormatType};
@@ -28,14 +30,15 @@ pub struct TextWriterOptions {
     pub compression: CompressionTypeVariant,
 }
 
-// impl TextWriterOptions {
-//     pub fn new(line_sep: u8, compression: CompressionTypeVariant) -> Self {
-//         Self {
-//             line_sep,
-//             compression,
-//         }
-//     }
-// }
+impl TextWriterOptions {
+    #[allow(unused)]
+    pub fn new(line_sep: u8, compression: CompressionTypeVariant) -> Self {
+        Self {
+            line_sep,
+            compression,
+        }
+    }
+}
 
 impl TryFrom<&TableTextOptions> for TextWriterOptions {
     type Error = DataFusionError;
@@ -53,6 +56,58 @@ impl TryFrom<&TableTextOptions> for TextWriterOptions {
     }
 }
 
+struct TextWriter<W: Write> {
+    writer: W,
+    line_sep: u8,
+}
+
+impl<W: Write> TextWriter<W> {
+    fn new(writer: W, line_sep: u8) -> Self {
+        Self { writer, line_sep }
+    }
+
+    fn write(&mut self, batch: &RecordBatch) -> Result<()> {
+        if batch.num_columns() != 1 {
+            return Err(DataFusionError::Internal(format!(
+                "Text files must have exactly 1 column, found {}",
+                batch.num_columns()
+            )));
+        }
+
+        let column = batch.column(0);
+        let string_array = column
+            .as_any()
+            .downcast_ref::<StringArray>()
+            .ok_or_else(|| {
+                ArrowError::CastError("Failed to cast column to StringArray".to_string())
+            })?;
+
+        // BufWriter uses a buffer size of 8KB, so double this and flush once we have more than 8KB
+        let mut buffer = Vec::with_capacity(16 * 1024);
+        for row_idx in 0..batch.num_rows() {
+            if !string_array.is_null(row_idx) {
+                buffer.extend_from_slice(string_array.value(row_idx).as_bytes());
+            }
+            if buffer.len() > 8 * 1024 {
+                self.writer.write_all(&buffer)?;
+                buffer.clear();
+            }
+            buffer.write_all(&[self.line_sep])?;
+        }
+
+        if !buffer.is_empty() {
+            self.writer.write_all(&buffer)?;
+        }
+
+        Ok(())
+    }
+
+    #[allow(unused)]
+    fn into_inner(self) -> W {
+        self.writer
+    }
+}
+
 pub struct TextSerializer {
     line_sep: u8,
 }
@@ -65,10 +120,6 @@ impl TextSerializer {
 
 impl BatchSerializer for TextSerializer {
     fn serialize(&self, batch: RecordBatch, _initial: bool) -> Result<Bytes> {
-        // CHECK HERE
-        let _line_sep = self.line_sep;
-        let buffer = Vec::with_capacity(4096);
-
         // Text files should have exactly one column named "value"
         if batch.num_columns() != 1 {
             return Err(DataFusionError::Internal(format!(
@@ -76,7 +127,9 @@ impl BatchSerializer for TextSerializer {
                 batch.num_columns()
             )));
         }
-
+        let mut buffer = Vec::with_capacity(4096);
+        let mut writer = TextWriter::new(&mut buffer, self.line_sep);
+        writer.write(&batch)?;
         Ok(Bytes::from(buffer))
     }
 }
@@ -116,9 +169,10 @@ impl TextSink {
         }
     }
 
-    // pub fn writer_options(&self) -> &TextWriterOptions {
-    //     &self.writer_options
-    // }
+    #[allow(unused)]
+    pub fn writer_options(&self) -> &TextWriterOptions {
+        &self.writer_options
+    }
 }
 
 #[async_trait::async_trait]
@@ -134,8 +188,6 @@ impl FileSink for TextSink {
         file_stream_rx: DemuxedStreamReceiver,
         object_store: Arc<dyn ObjectStore>,
     ) -> Result<u64> {
-        // CHECK HERE: WRITER BUILDER?
-        //         let builder = self.writer_options.writer_options.clone();
         let serializer = Arc::new(TextSerializer::new(self.writer_options.line_sep)) as _;
         spawn_writer_tasks_and_join(
             context,

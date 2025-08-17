@@ -22,7 +22,7 @@ use futures::{StreamExt, TryStreamExt};
 use object_store::{GetOptions, GetResultPayload, ObjectStore};
 
 use crate::formats::text;
-use crate::formats::text::reader::ReaderBuilder;
+use crate::formats::text::reader::{Format, ReaderBuilder};
 use crate::formats::text::DEFAULT_TEXT_EXTENSION;
 
 #[derive(Debug, Clone, Default)]
@@ -75,12 +75,13 @@ impl TextSource {
             ))
         }?;
         let schema = Arc::new(Schema::new(vec![Field::new("value", DataType::Utf8, true)]));
-        let mut builder = ReaderBuilder::new(schema)
-            .with_batch_size(batch_size)
-            .with_whole_text(self.whole_text);
+        let mut format = Format::default().with_whole_text(self.whole_text);
         if let Some(line_sep) = self.line_sep {
-            builder = builder.with_line_sep(line_sep);
+            format = format.with_line_sep(line_sep);
         }
+        let builder = ReaderBuilder::new(schema)
+            .with_batch_size(batch_size)
+            .with_format(format);
         Ok(builder)
     }
 }
@@ -92,8 +93,6 @@ pub struct TextOpener {
 }
 
 impl TextOpener {
-    // CHECK HERE
-    #[allow(unused)]
     pub fn new(
         config: Arc<TextSource>,
         file_compression_type: FileCompressionType,
@@ -120,11 +119,11 @@ impl FileSource for TextSource {
         base_config: &FileScanConfig,
         _partition: usize,
     ) -> Arc<dyn FileOpener> {
-        Arc::new(TextOpener {
-            config: Arc::new(self.clone()),
-            file_compression_type: base_config.file_compression_type,
+        Arc::new(TextOpener::new(
+            Arc::new(self.clone()),
+            base_config.file_compression_type,
             object_store,
-        })
+        ))
     }
 
     fn as_any(&self) -> &dyn Any {
@@ -253,67 +252,6 @@ impl FileOpener for TextOpener {
         }))
     }
 }
-
-// CHECK HERE
-//
-// pub async fn plan_to_text(
-//     task_ctx: Arc<TaskContext>,
-//     plan: Arc<dyn ExecutionPlan>,
-//     path: impl AsRef<str>,
-// ) -> Result<()> {
-//     let path = path.as_ref();
-//     let parsed = ListingTableUrl::parse(path)?;
-//     let object_store_url = parsed.object_store();
-//     let store = task_ctx.runtime_env().object_store(&object_store_url)?;
-//     let writer_buffer_size = task_ctx
-//         .session_config()
-//         .options()
-//         .execution
-//         .objectstore_writer_buffer_size;
-//     let mut join_set = JoinSet::new();
-//     for i in 0..plan.output_partitioning().partition_count() {
-//         let storeref = Arc::clone(&store);
-//         let plan: Arc<dyn ExecutionPlan> = Arc::clone(&plan);
-//         let filename = format!("{}/part-{i}.txt", parsed.prefix());
-//         let file = object_store::path::Path::parse(filename)?;
-//
-//         let mut stream = plan.execute(i, Arc::clone(&task_ctx))?;
-//         join_set.spawn(async move {
-//             let mut buf_writer =
-//                 BufWriter::with_capacity(storeref, file.clone(), writer_buffer_size);
-//             let mut buffer = Vec::with_capacity(1024);
-//             //only write headers on first iteration
-//             let mut write_headers = true;
-//             while let Some(batch) = stream.next().await.transpose()? {
-//                 let mut writer = text::WriterBuilder::new()
-//                     .with_header(write_headers)
-//                     .build(buffer);
-//                 writer.write(&batch)?;
-//                 buffer = writer.into_inner();
-//                 buf_writer.write_all(&buffer).await?;
-//                 buffer.clear();
-//                 //prevent writing headers more than once
-//                 write_headers = false;
-//             }
-//             buf_writer.shutdown().await.map_err(DataFusionError::from)
-//         });
-//     }
-//
-//     while let Some(result) = join_set.join_next().await {
-//         match result {
-//             Ok(res) => res?, // propagate DataFusion error
-//             Err(e) => {
-//                 if e.is_panic() {
-//                     std::panic::resume_unwind(e.into_panic());
-//                 } else {
-//                     unreachable!();
-//                 }
-//             }
-//         }
-//     }
-//
-//     Ok(())
-// }
 
 #[derive(Debug)]
 pub struct TextDecoder {

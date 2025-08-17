@@ -811,6 +811,12 @@ mod tests {
         let state = ctx.state();
         let resolver = DataSourceOptionsResolver::new(&state);
 
+        let kv = build_options(&[]);
+        let options = resolver.resolve_text_read_options(vec![kv])?;
+        assert!(!options.whole_text);
+        assert_eq!(options.line_sep, None);
+        assert_eq!(options.compression, CompressionTypeVariant::UNCOMPRESSED);
+
         let kv = build_options(&[
             ("whole_text", "true"),
             ("line_sep", "\r"),
@@ -819,12 +825,6 @@ mod tests {
         let options = resolver.resolve_text_read_options(vec![kv])?;
         assert!(options.whole_text);
         assert_eq!(options.line_sep, Some('\r'));
-        assert_eq!(options.compression, CompressionTypeVariant::BZIP2);
-
-        let kv = build_options(&[]);
-        let options = resolver.resolve_text_read_options(vec![kv])?;
-        assert!(!options.whole_text);
-        assert_eq!(options.line_sep, None);
         assert_eq!(options.compression, CompressionTypeVariant::UNCOMPRESSED);
 
         Ok(())
@@ -836,15 +836,15 @@ mod tests {
         let state = ctx.state();
         let resolver = DataSourceOptionsResolver::new(&state);
 
-        let kv = build_options(&[("line_sep", "\r"), ("compression", "bzip2")]);
-        let options = resolver.resolve_text_write_options(vec![kv])?;
-        assert_eq!(options.line_sep, Some('\r'));
-        assert_eq!(options.compression, CompressionTypeVariant::BZIP2);
-
         let kv = build_options(&[]);
         let options = resolver.resolve_text_write_options(vec![kv])?;
         assert_eq!(options.line_sep, Some('\n'));
         assert_eq!(options.compression, CompressionTypeVariant::UNCOMPRESSED);
+
+        let kv = build_options(&[("line_sep", "\r"), ("compression", "bzip2")]);
+        let options = resolver.resolve_text_write_options(vec![kv])?;
+        assert_eq!(options.line_sep, Some('\r'));
+        assert_eq!(options.compression, CompressionTypeVariant::BZIP2);
 
         Ok(())
     }
