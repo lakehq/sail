@@ -92,6 +92,8 @@ pub struct TextOpener {
 }
 
 impl TextOpener {
+    // CHECK HERE
+    #[allow(unused)]
     pub fn new(
         config: Arc<TextSource>,
         file_compression_type: FileCompressionType,

@@ -35,33 +35,40 @@ impl TextFileFormat {
         }
     }
 
+    #[allow(unused)]
     pub fn options(&self) -> &TableTextOptions {
         &self.options
     }
 
+    #[allow(unused)]
     pub fn with_whole_text(mut self, enable: bool) -> Self {
         self.options.whole_text = enable;
         self
     }
 
+    #[allow(unused)]
     pub fn whole_text(&self) -> bool {
         self.options.whole_text
     }
 
+    #[allow(unused)]
     pub fn with_line_sep(mut self, line_sep: char) -> Self {
         self.options.line_sep = Some(line_sep);
         self
     }
 
+    #[allow(unused)]
     pub fn line_sep(&self) -> Option<char> {
         self.options.line_sep
     }
 
+    #[allow(unused)]
     pub fn with_compression(mut self, compression: CompressionTypeVariant) -> Self {
         self.options.compression = compression;
         self
     }
 
+    #[allow(unused)]
     pub fn compression(&self) -> CompressionTypeVariant {
         self.options.compression
     }

@@ -19,7 +19,7 @@ pub struct Format {
     line_sep: Option<u8>,
 }
 
-// CHECK HERE!!
+// CHECK HERE
 #[allow(unused)]
 impl Format {
     pub fn whole_text(mut self, whole_text: bool) -> Self {
@@ -54,7 +54,7 @@ where
 }
 
 impl<R: Read> Reader<R> {
-    // CHECK HERE!!
+    // CHECK HERE
     #[allow(unused)]
     pub fn schema(&self) -> SchemaRef {
         self.decoder.schema.clone()
@@ -196,7 +196,7 @@ impl ReaderBuilder {
         }
     }
 
-    // CHECK HERE!!
+    // CHECK HERE
     #[allow(unused)]
     pub fn with_format(mut self, format: Format) -> Self {
         self.format = format;
@@ -217,7 +217,7 @@ impl ReaderBuilder {
         self
     }
 
-    // CHECK HERE!!
+    // CHECK HERE
     #[allow(unused)]
     pub fn with_bounds(mut self, start: usize, end: usize) -> Self {
         self.bounds = Some((start, end));

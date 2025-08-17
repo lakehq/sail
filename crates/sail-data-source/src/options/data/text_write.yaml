@@ -11,8 +11,8 @@
     Supports \\r, \\r\\n and \\n.
     For writing, defaults to \\n.
   supported: true
-  rust_type: Option<char>
-  rust_deserialize_with: crate::options::serde::deserialize_optional_char
+  rust_type: char
+  rust_deserialize_with: crate::options::serde::deserialize_char
 
 - key: compression
   aliases:

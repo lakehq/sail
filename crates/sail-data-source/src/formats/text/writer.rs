@@ -65,7 +65,7 @@ impl TextSerializer {
 
 impl BatchSerializer for TextSerializer {
     fn serialize(&self, batch: RecordBatch, _initial: bool) -> Result<Bytes> {
-        // CHECK HERE!!!
+        // CHECK HERE
         let _line_sep = self.line_sep;
         let buffer = Vec::with_capacity(4096);
 

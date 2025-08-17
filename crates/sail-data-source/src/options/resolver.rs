@@ -306,7 +306,7 @@ fn apply_text_read_options(from: TextReadOptions, to: &mut TableTextOptions) -> 
 }
 
 fn apply_text_write_options(from: TextWriteOptions, to: &mut TableTextOptions) -> Result<()> {
-    if let Some(Some(line_sep)) = from.line_sep {
+    if let Some(line_sep) = from.line_sep {
         to.line_sep = Some(line_sep);
     }
     if let Some(compression) = from.compression {
@@ -437,7 +437,6 @@ impl<'a> DataSourceOptionsResolver<'a> {
         &self,
         options: Vec<HashMap<String, String>>,
     ) -> Result<TableTextOptions> {
-        // CHECK HERE: Add tests.
         let mut text_options = TableTextOptions::default();
         apply_text_read_options(load_default_options()?, &mut text_options)?;
         for opt in options {
@@ -450,7 +449,6 @@ impl<'a> DataSourceOptionsResolver<'a> {
         &self,
         options: Vec<HashMap<String, String>>,
     ) -> Result<TableTextOptions> {
-        // CHECK HERE: Add tests.
         let mut text_options = TableTextOptions::default();
         apply_text_write_options(load_default_options()?, &mut text_options)?;
         for opt in options {
@@ -803,6 +801,50 @@ mod tests {
         assert_eq!(options.global.column_index_truncate_length, Some(32));
         assert_eq!(options.global.statistics_truncate_length, Some(99));
         assert_eq!(options.global.encoding, Some("bit_packed".to_string()));
+
+        Ok(())
+    }
+
+    #[test]
+    fn test_resolve_text_read_options() -> Result<()> {
+        let ctx = SessionContext::default();
+        let state = ctx.state();
+        let resolver = DataSourceOptionsResolver::new(&state);
+
+        let kv = build_options(&[
+            ("whole_text", "true"),
+            ("line_sep", "\r"),
+            ("compression", "bzip2"),
+        ]);
+        let options = resolver.resolve_text_read_options(vec![kv])?;
+        assert!(options.whole_text);
+        assert_eq!(options.line_sep, Some('\r'));
+        assert_eq!(options.compression, CompressionTypeVariant::BZIP2);
+
+        let kv = build_options(&[]);
+        let options = resolver.resolve_text_read_options(vec![kv])?;
+        assert!(!options.whole_text);
+        assert_eq!(options.line_sep, None);
+        assert_eq!(options.compression, CompressionTypeVariant::UNCOMPRESSED);
+
+        Ok(())
+    }
+
+    #[test]
+    fn test_resolve_text_write_options() -> Result<()> {
+        let ctx = SessionContext::default();
+        let state = ctx.state();
+        let resolver = DataSourceOptionsResolver::new(&state);
+
+        let kv = build_options(&[("line_sep", "\r"), ("compression", "bzip2")]);
+        let options = resolver.resolve_text_write_options(vec![kv])?;
+        assert_eq!(options.line_sep, Some('\r'));
+        assert_eq!(options.compression, CompressionTypeVariant::BZIP2);
+
+        let kv = build_options(&[]);
+        let options = resolver.resolve_text_write_options(vec![kv])?;
+        assert_eq!(options.line_sep, Some('\n'));
+        assert_eq!(options.compression, CompressionTypeVariant::UNCOMPRESSED);
 
         Ok(())
     }
