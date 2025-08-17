@@ -366,7 +366,7 @@ pub(crate) struct TextListingFormat;
 
 impl ListingFormat for TextListingFormat {
     fn name(&self) -> &'static str {
-        "txt"
+        "text"
     }
 
     fn create_read_format(
