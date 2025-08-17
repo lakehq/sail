@@ -2,8 +2,6 @@ use std::collections::HashMap;
 use std::fmt::Debug;
 use std::sync::Arc;
 
-use crate::formats::text::TextFileFormat;
-use crate::options::DataSourceOptionsResolver;
 use async_trait::async_trait;
 use datafusion::arrow::datatypes::DataType;
 use datafusion::catalog::{Session, TableProvider};
@@ -21,7 +19,9 @@ use datafusion_common::{internal_err, not_impl_err, Result};
 use sail_common_datafusion::datasource::{
     get_partition_columns_and_file_schema, SinkInfo, SourceInfo, TableFormat,
 };
-use serde::{Deserialize, Serialize};
+
+use crate::formats::text::file_format::TextFileFormat;
+use crate::options::DataSourceOptionsResolver;
 
 // TODO: infer compression type from file extension
 // TODO: support global configuration to ignore file extension (by setting it to empty)

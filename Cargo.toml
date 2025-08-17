@@ -115,7 +115,7 @@ prost-build = "0.13.5"
 prost = "0.13.5"
 datafusion = { version = "49.0.0", features = ["serde", "avro"] }
 datafusion-common = { version = "49.0.0", features = ["object_store", "avro"] }
-datafusion-datasource = { version = "49.0.0" }
+datafusion-datasource = { version = "49.0.0", features = ["compression", "parquet"] }
 datafusion-expr = { version = "49.0.0" }
 datafusion-expr-common = { version = "49.0.0" }
 datafusion-proto = { version = "49.0.0" }

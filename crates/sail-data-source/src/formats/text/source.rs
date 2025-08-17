@@ -1,42 +1,29 @@
-use crate::utils::char_to_u8;
-use async_trait::async_trait;
-use bytes::{Buf, Bytes};
-use datafusion_datasource::decoder::{deserialize_stream, DecoderDeserializer};
-use datafusion_datasource::file_compression_type::FileCompressionType;
-use datafusion_datasource::file_meta::FileMeta;
-use datafusion_datasource::file_stream::{FileOpenFuture, FileOpener};
-use datafusion_datasource::{
-    as_file_source, calculate_range, FileRange, ListingTableUrl, PartitionedFile, RangeCalculation,
-};
 use std::any::Any;
 use std::fmt;
-use std::io::{Seek, SeekFrom};
-use std::str::FromStr;
+use std::io::{Read, Seek, SeekFrom};
 use std::sync::Arc;
 use std::task::Poll;
 
-use datafusion::arrow::datatypes::SchemaRef;
-use datafusion::catalog::Session;
-use datafusion::execution::TaskContext;
-use datafusion::logical_expr::dml::InsertOp;
-use datafusion::physical_expr::LexRequirement;
+use datafusion::arrow::array::RecordBatch;
+use datafusion::arrow::datatypes::{DataType, Field, Schema, SchemaRef};
+use datafusion::arrow::error::ArrowError;
 use datafusion::physical_plan::metrics::ExecutionPlanMetricsSet;
-use datafusion::physical_plan::{DisplayFormatType, ExecutionPlan};
-use datafusion_common::parsers::CompressionTypeVariant;
-use datafusion_common::{not_impl_err, DataFusionError, GetExt, Result, Statistics};
+use datafusion::physical_plan::DisplayFormatType;
+use datafusion_common::{DataFusionError, Result, Statistics};
+use datafusion_datasource::decoder::{deserialize_stream, Decoder, DecoderDeserializer};
 use datafusion_datasource::file::FileSource;
-use datafusion_datasource::file_format::FileFormat;
-use datafusion_datasource::file_scan_config::{FileScanConfig, FileScanConfigBuilder};
-use datafusion_datasource::file_sink_config::FileSinkConfig;
+use datafusion_datasource::file_compression_type::FileCompressionType;
+use datafusion_datasource::file_meta::FileMeta;
+use datafusion_datasource::file_scan_config::FileScanConfig;
+use datafusion_datasource::file_stream::{FileOpenFuture, FileOpener};
 use datafusion_datasource::schema_adapter::SchemaAdapterFactory;
-use datafusion_datasource::sink::DataSinkExec;
-use datafusion_datasource::source::DataSourceExec;
-use futures::stream::BoxStream;
-use futures::{pin_mut, Stream, StreamExt, TryStreamExt};
-use object_store::{
-    delimited::newline_delimited_stream, GetOptions, GetResultPayload, ObjectMeta, ObjectStore,
-};
-use serde::{Deserialize, Serialize};
+use datafusion_datasource::{calculate_range, PartitionedFile, RangeCalculation};
+use futures::{StreamExt, TryStreamExt};
+use object_store::{GetOptions, GetResultPayload, ObjectStore};
+
+use crate::formats::text;
+use crate::formats::text::reader::ReaderBuilder;
+use crate::formats::text::DEFAULT_TEXT_EXTENSION;
 
 #[derive(Debug, Clone, Default)]
 pub struct TextSource {
@@ -73,6 +60,28 @@ impl TextSource {
     pub fn with_line_sep(mut self, line_sep: Option<u8>) -> Self {
         self.line_sep = line_sep;
         self
+    }
+
+    fn open<R: Read>(&self, reader: R) -> Result<text::reader::Reader<R>> {
+        Ok(self.builder()?.build(reader)?)
+    }
+
+    fn builder(&self) -> Result<ReaderBuilder> {
+        let batch_size = if let Some(batch_size) = self.batch_size {
+            Ok(batch_size)
+        } else {
+            Err(DataFusionError::Internal(
+                "batch_size must be set before calling builder()".to_string(),
+            ))
+        }?;
+        let schema = Arc::new(Schema::new(vec![Field::new("value", DataType::Utf8, true)]));
+        let mut builder = ReaderBuilder::new(schema)
+            .with_batch_size(batch_size)
+            .with_whole_text(self.whole_text);
+        if let Some(line_sep) = self.line_sep {
+            builder = builder.with_line_sep(line_sep);
+        }
+        Ok(builder)
     }
 }
 
@@ -129,14 +138,14 @@ impl FileSource for TextSource {
     fn with_schema(&self, _schema: SchemaRef) -> Arc<dyn FileSource> {
         Arc::new(Self { ..self.clone() })
     }
+    fn with_projection(&self, _config: &FileScanConfig) -> Arc<dyn FileSource> {
+        Arc::new(Self { ..self.clone() })
+    }
+
     fn with_statistics(&self, statistics: Statistics) -> Arc<dyn FileSource> {
         let mut conf = self.clone();
         conf.projected_statistics = Some(statistics);
         Arc::new(conf)
-    }
-
-    fn with_projection(&self, _config: &FileScanConfig) -> Arc<dyn FileSource> {
-        Arc::new(Self { ..self.clone() })
     }
 
     fn metrics(&self) -> &ExecutionPlanMetricsSet {
@@ -153,7 +162,7 @@ impl FileSource for TextSource {
     }
 
     fn file_type(&self) -> &str {
-        "txt"
+        &DEFAULT_TEXT_EXTENSION[1..]
     }
 
     fn fmt_extra(&self, t: DisplayFormatType, f: &mut fmt::Formatter) -> fmt::Result {
@@ -185,12 +194,146 @@ impl FileSource for TextSource {
 }
 
 impl FileOpener for TextOpener {
-    fn open(&self, file_meta: FileMeta, _file: PartitionedFile) -> Result<FileOpenFuture> {}
+    fn open(&self, file_meta: FileMeta, _file: PartitionedFile) -> Result<FileOpenFuture> {
+        let file_compression_type = self.file_compression_type.to_owned();
+        if file_meta.range.is_some() && file_compression_type.is_compressed() {
+            return Err(DataFusionError::Internal(
+                "Reading compressed .txt in parallel is not supported".to_string(),
+            ));
+        }
+
+        let store = Arc::clone(&self.object_store);
+        let line_sep = self.config.line_sep;
+        let config = self.config.clone();
+
+        Ok(Box::pin(async move {
+            // Current partition contains bytes [start_byte, end_byte) (might contain incomplete lines at boundaries)
+            let calculated_range = calculate_range(&file_meta, &store, line_sep).await?;
+            let range = match calculated_range {
+                RangeCalculation::Range(None) => None,
+                RangeCalculation::Range(Some(range)) => Some(range.into()),
+                RangeCalculation::TerminateEarly => {
+                    return Ok(futures::stream::poll_fn(move |_| Poll::Ready(None)).boxed())
+                }
+            };
+            let options = GetOptions {
+                range,
+                ..Default::default()
+            };
+            let result = store.get_opts(file_meta.location(), options).await?;
+
+            match result.payload {
+                #[cfg(not(target_arch = "wasm32"))]
+                GetResultPayload::File(mut file, _) => {
+                    let is_whole_file_scanned = file_meta.range.is_none();
+                    let decoder = if is_whole_file_scanned {
+                        // Don't seek if no range as breaks FIFO files
+                        file_compression_type.convert_read(file)?
+                    } else {
+                        file.seek(SeekFrom::Start(result.range.start as _))?;
+                        file_compression_type
+                            .convert_read(file.take(result.range.end - result.range.start))?
+                    };
+
+                    Ok(futures::stream::iter(config.open(decoder)?).boxed())
+                }
+                GetResultPayload::Stream(s) => {
+                    let decoder = config.builder()?.build_decoder();
+                    let s = s.map_err(DataFusionError::from);
+                    let input = file_compression_type.convert_stream(s.boxed())?.fuse();
+
+                    Ok(deserialize_stream(
+                        input,
+                        DecoderDeserializer::new(TextDecoder::new(decoder)),
+                    ))
+                }
+            }
+        }))
+    }
 }
 
-pub async fn plan_to_text(
-    task_ctx: Arc<TaskContext>,
-    plan: Arc<dyn ExecutionPlan>,
-    path: impl AsRef<str>,
-) -> Result<()> {
+// CHECK HERE
+//
+// pub async fn plan_to_text(
+//     task_ctx: Arc<TaskContext>,
+//     plan: Arc<dyn ExecutionPlan>,
+//     path: impl AsRef<str>,
+// ) -> Result<()> {
+//     let path = path.as_ref();
+//     let parsed = ListingTableUrl::parse(path)?;
+//     let object_store_url = parsed.object_store();
+//     let store = task_ctx.runtime_env().object_store(&object_store_url)?;
+//     let writer_buffer_size = task_ctx
+//         .session_config()
+//         .options()
+//         .execution
+//         .objectstore_writer_buffer_size;
+//     let mut join_set = JoinSet::new();
+//     for i in 0..plan.output_partitioning().partition_count() {
+//         let storeref = Arc::clone(&store);
+//         let plan: Arc<dyn ExecutionPlan> = Arc::clone(&plan);
+//         let filename = format!("{}/part-{i}.txt", parsed.prefix());
+//         let file = object_store::path::Path::parse(filename)?;
+//
+//         let mut stream = plan.execute(i, Arc::clone(&task_ctx))?;
+//         join_set.spawn(async move {
+//             let mut buf_writer =
+//                 BufWriter::with_capacity(storeref, file.clone(), writer_buffer_size);
+//             let mut buffer = Vec::with_capacity(1024);
+//             //only write headers on first iteration
+//             let mut write_headers = true;
+//             while let Some(batch) = stream.next().await.transpose()? {
+//                 let mut writer = text::WriterBuilder::new()
+//                     .with_header(write_headers)
+//                     .build(buffer);
+//                 writer.write(&batch)?;
+//                 buffer = writer.into_inner();
+//                 buf_writer.write_all(&buffer).await?;
+//                 buffer.clear();
+//                 //prevent writing headers more than once
+//                 write_headers = false;
+//             }
+//             buf_writer.shutdown().await.map_err(DataFusionError::from)
+//         });
+//     }
+//
+//     while let Some(result) = join_set.join_next().await {
+//         match result {
+//             Ok(res) => res?, // propagate DataFusion error
+//             Err(e) => {
+//                 if e.is_panic() {
+//                     std::panic::resume_unwind(e.into_panic());
+//                 } else {
+//                     unreachable!();
+//                 }
+//             }
+//         }
+//     }
+//
+//     Ok(())
+// }
+
+#[derive(Debug)]
+pub struct TextDecoder {
+    inner: text::reader::Decoder,
+}
+
+impl TextDecoder {
+    pub fn new(decoder: text::reader::Decoder) -> Self {
+        Self { inner: decoder }
+    }
+}
+
+impl Decoder for TextDecoder {
+    fn decode(&mut self, buf: &[u8]) -> Result<usize, ArrowError> {
+        self.inner.decode(buf)
+    }
+
+    fn flush(&mut self) -> Result<Option<RecordBatch>, ArrowError> {
+        self.inner.flush()
+    }
+
+    fn can_flush_early(&self) -> bool {
+        self.inner.capacity() == 0
+    }
 }

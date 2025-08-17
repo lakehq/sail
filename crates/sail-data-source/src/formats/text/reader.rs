@@ -1,0 +1,586 @@
+use std::fmt::{self, Debug};
+use std::io::{BufRead, BufReader as StdBufReader, Read};
+use std::sync::Arc;
+
+use datafusion::arrow::array::{RecordBatch, RecordBatchOptions, RecordBatchReader, StringArray};
+use datafusion::arrow::datatypes::SchemaRef;
+use datafusion::arrow::error::ArrowError;
+
+// TODO: CSV has `arrow_csv::reader::records::AVERAGE_FIELD_SIZE` set to 8.
+//  Not sure if this is a reasonable value for text files or not.
+const AVERAGE_LINE_SIZE: usize = 128;
+
+const MIN_CAPACITY: usize = 1024;
+
+#[derive(Debug, Clone, Default)]
+pub struct Format {
+    whole_text: bool,
+    // defaults to CRLF
+    line_sep: Option<u8>,
+}
+
+// CHECK HERE!!
+#[allow(unused)]
+impl Format {
+    pub fn whole_text(mut self, whole_text: bool) -> Self {
+        self.whole_text = whole_text;
+        self
+    }
+
+    pub fn with_line_sep(mut self, line_sep: u8) -> Self {
+        self.line_sep = Some(line_sep);
+        self
+    }
+}
+
+type Bounds = Option<(usize, usize)>;
+
+pub type Reader<R> = BufReader<StdBufReader<R>>;
+
+pub struct BufReader<R> {
+    reader: R,
+    decoder: Decoder,
+}
+
+impl<R> Debug for BufReader<R>
+where
+    R: BufRead,
+{
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("Reader")
+            .field("decoder", &self.decoder)
+            .finish()
+    }
+}
+
+impl<R: Read> Reader<R> {
+    // CHECK HERE!!
+    #[allow(unused)]
+    pub fn schema(&self) -> SchemaRef {
+        self.decoder.schema.clone()
+    }
+}
+
+impl<R: BufRead> BufReader<R> {
+    fn read(&mut self) -> Result<Option<RecordBatch>, ArrowError> {
+        loop {
+            let buf = self.reader.fill_buf()?;
+            let decoded = self.decoder.decode(buf)?;
+            self.reader.consume(decoded);
+            if decoded == 0 || self.decoder.capacity() == 0 {
+                break;
+            }
+        }
+        self.decoder.flush()
+    }
+}
+
+impl<R: BufRead> Iterator for BufReader<R> {
+    type Item = Result<RecordBatch, ArrowError>;
+
+    fn next(&mut self) -> Option<Self::Item> {
+        self.read().transpose()
+    }
+}
+
+impl<R: BufRead> RecordBatchReader for BufReader<R> {
+    fn schema(&self) -> SchemaRef {
+        self.decoder.schema.clone()
+    }
+}
+
+#[derive(Debug)]
+pub struct Decoder {
+    /// Schema for text files (single "value" column)
+    schema: SchemaRef,
+
+    /// Number of records per batch
+    batch_size: usize,
+
+    /// Rows to skip
+    to_skip: usize,
+
+    /// Current line number
+    line_number: usize,
+
+    /// End line number
+    end: usize,
+
+    /// A decoder for [`StringRecords`]
+    record_decoder: RecordDecoder,
+}
+
+impl Decoder {
+    /// Decode records from `buf` returning the number of bytes read
+    ///
+    /// This method returns once `batch_size` objects have been parsed since the
+    /// last call to [`Self::flush`], or `buf` is exhausted. Any remaining bytes
+    /// should be included in the next call to [`Self::decode`]
+    ///
+    /// There is no requirement that `buf` contains a whole number of records, facilitating
+    /// integration with arbitrary byte streams, such as that yielded by [`BufRead`] or
+    /// network sources such as object storage
+    pub fn decode(&mut self, buf: &[u8]) -> Result<usize, ArrowError> {
+        if self.to_skip != 0 {
+            // Skip in units of `to_read` to avoid over-allocating buffers
+            let to_skip = self.to_skip.min(self.batch_size);
+            let (skipped, bytes) = self.record_decoder.decode(buf, to_skip)?;
+            self.to_skip -= skipped;
+            self.record_decoder.clear();
+            return Ok(bytes);
+        }
+
+        let to_read = self.batch_size.min(self.end - self.line_number) - self.record_decoder.len();
+        let (_, bytes) = self.record_decoder.decode(buf, to_read)?;
+        Ok(bytes)
+    }
+
+    /// Flushes the currently buffered data to a [`RecordBatch`]
+    ///
+    /// This should only be called after [`Self::decode`] has returned `Ok(0)`,
+    /// otherwise may return an error if part way through decoding a record
+    ///
+    /// Returns `Ok(None)` if no buffered data
+    pub fn flush(&mut self) -> Result<Option<RecordBatch>, ArrowError> {
+        if self.record_decoder.is_empty() {
+            return Ok(None);
+        }
+
+        let rows = self.record_decoder.flush()?;
+        let batch = parse(&rows, self.schema.clone())?;
+        self.line_number += rows.len();
+        Ok(Some(batch))
+    }
+
+    /// Returns the number of records that can be read before requiring a call to [`Self::flush`]
+    pub fn capacity(&self) -> usize {
+        self.batch_size - self.record_decoder.len()
+    }
+}
+
+fn parse(rows: &StringRecords<'_>, schema: SchemaRef) -> Result<RecordBatch, ArrowError> {
+    if schema.fields().len() != 1 {
+        return Err(ArrowError::ParseError(format!(
+            "Text files must have exactly 1 column, but schema has {} columns",
+            schema.fields().len()
+        )));
+    }
+    let array = StringArray::from_iter_values(rows.iter());
+    RecordBatch::try_new_with_options(
+        schema,
+        vec![Arc::new(array)],
+        &RecordBatchOptions::new().with_row_count(Some(rows.len())),
+    )
+}
+
+#[derive(Debug)]
+pub struct ReaderBuilder {
+    /// Schema of the Text file
+    schema: SchemaRef,
+    /// Format of the Text file
+    format: Format,
+    /// The default batch size when using the `ReaderBuilder` is 1024 records
+    batch_size: usize,
+    /// The bounds within which to scan the reader.
+    /// If set to `None`, scanning starts at position 0 and continues until EOF.
+    bounds: Bounds,
+}
+
+impl ReaderBuilder {
+    pub fn new(schema: SchemaRef) -> ReaderBuilder {
+        Self {
+            schema,
+            format: Format::default(),
+            batch_size: 1024,
+            bounds: None,
+        }
+    }
+
+    // CHECK HERE!!
+    #[allow(unused)]
+    pub fn with_format(mut self, format: Format) -> Self {
+        self.format = format;
+        self
+    }
+
+    pub fn with_whole_text(mut self, whole_text: bool) -> Self {
+        self.format.whole_text = whole_text;
+        self
+    }
+
+    pub fn with_line_sep(mut self, line_sep: u8) -> Self {
+        self.format.line_sep = Some(line_sep);
+        self
+    }
+    pub fn with_batch_size(mut self, batch_size: usize) -> Self {
+        self.batch_size = batch_size;
+        self
+    }
+
+    // CHECK HERE!!
+    #[allow(unused)]
+    pub fn with_bounds(mut self, start: usize, end: usize) -> Self {
+        self.bounds = Some((start, end));
+        self
+    }
+
+    pub fn build<R: Read>(self, reader: R) -> Result<Reader<R>, ArrowError> {
+        self.build_buffered(StdBufReader::new(reader))
+    }
+
+    pub fn build_buffered<R: BufRead>(self, reader: R) -> Result<BufReader<R>, ArrowError> {
+        Ok(BufReader {
+            reader,
+            decoder: self.build_decoder(),
+        })
+    }
+
+    pub fn build_decoder(self) -> Decoder {
+        let record_decoder = RecordDecoder::new(self.format.line_sep, self.format.whole_text);
+        let (start, end) = match self.bounds {
+            Some((start, end)) => (start, end),
+            None => (0, usize::MAX),
+        };
+        Decoder {
+            schema: self.schema,
+            batch_size: self.batch_size,
+            to_skip: start,
+            line_number: start,
+            end,
+            record_decoder,
+        }
+    }
+}
+
+#[derive(Debug)]
+pub struct RecordDecoder {
+    /// Line separator (None means use CRLF)
+    line_sep: Option<u8>,
+
+    /// Whether we're in whole text mode (read entire file as one record)
+    whole_text: bool,
+
+    /// The current line number
+    line_number: usize,
+
+    /// Offsets delimiting field start positions
+    offsets: Vec<usize>,
+
+    /// The current offset is tracked independently of Vec to avoid re-zeroing memory
+    offsets_len: usize,
+
+    /// The number of rows buffered
+    num_rows: usize,
+
+    /// Decoded line data
+    data: Vec<u8>,
+
+    /// Offsets into data are tracked independently of Vec to avoid re-zeroing memory
+    data_len: usize,
+
+    /// Partial line buffer for incomplete lines at buffer boundaries
+    partial_line: Vec<u8>,
+}
+
+impl RecordDecoder {
+    pub fn new(line_sep: Option<u8>, whole_text: bool) -> Self {
+        Self {
+            line_sep,
+            whole_text,
+            line_number: 1,
+            offsets: vec![0], // First offset is always 0
+            offsets_len: 1,   // The first offset is always 0
+            num_rows: 0,
+            data: vec![],
+            data_len: 0,
+            partial_line: vec![],
+        }
+    }
+
+    /// Decodes records from `input` returning the number of records and bytes read.
+    ///
+    /// Note: this expects to be called with an empty `input` to signal EOF.
+    pub fn decode(&mut self, input: &[u8], to_read: usize) -> Result<(usize, usize), ArrowError> {
+        // CHECK HERE
+        if to_read == 0 {
+            return Ok((0, 0));
+        }
+
+        // Reserve sufficient capacity in offsets
+        // For text files, num_columns = 1
+        self.offsets.resize(self.offsets_len + to_read, 0);
+
+        // The current offset into `input`
+        let mut input_offset = 0;
+
+        // The number of rows decoded in this pass
+        let mut read = 0;
+
+        if self.whole_text {
+            // In whole text mode, treat everything as one record
+            if !input.is_empty() {
+                let capacity = self.data_len + input.len();
+                self.data.resize(capacity, 0);
+                self.data[self.data_len..self.data_len + input.len()].copy_from_slice(input);
+                self.data_len += input.len();
+            }
+
+            // Only count as a record once we have data
+            if self.num_rows == 0 && self.data_len > 0 {
+                self.num_rows = 1;
+                self.offsets[1] = self.data_len;
+                self.offsets_len = 2;
+                read = 1;
+            } else if self.num_rows == 1 {
+                // Update the end offset
+                self.offsets[1] = self.data_len;
+            }
+
+            return Ok((read.min(to_read), input.len()));
+        }
+
+        // Line-by-line mode
+        // Reserve capacity for data
+        let estimated_size = to_read * AVERAGE_LINE_SIZE;
+        let capacity = (self.data_len + estimated_size).max(MIN_CAPACITY);
+        self.data.resize(capacity, 0);
+
+        // Helper closure to check for line ending
+        // Returns (is_line_end, bytes_to_skip)
+        let is_line_end = |bytes: &[u8], pos: usize| -> (bool, usize) {
+            if let Some(sep) = self.line_sep {
+                // Single byte separator specified
+                if bytes[pos] == sep {
+                    (true, 1)
+                } else {
+                    (false, 0)
+                }
+            } else {
+                // Default CRLF handling: treat \r, \n, or \r\n as line terminators
+                if bytes[pos] == b'\r' {
+                    // Check if followed by \n
+                    if pos + 1 < bytes.len() && bytes[pos + 1] == b'\n' {
+                        // \r\n - single terminator, skip both
+                        (true, 2)
+                    } else {
+                        // Just \r - single terminator
+                        (true, 1)
+                    }
+                } else if bytes[pos] == b'\n' {
+                    // Just \n - single terminator
+                    (true, 1)
+                } else {
+                    (false, 0)
+                }
+            }
+        };
+
+        // Process any partial line from previous call
+        if !self.partial_line.is_empty() && input_offset < input.len() {
+            // Look for line separator to complete the partial line
+            let mut found_end = false;
+            let mut end_pos = 0;
+            let mut skip_bytes = 0;
+
+            for i in 0..input.len() {
+                let (is_end, skip) = is_line_end(input, i);
+                if is_end {
+                    found_end = true;
+                    end_pos = i;
+                    skip_bytes = skip;
+                    break;
+                }
+            }
+
+            if found_end {
+                // Complete the partial line
+                self.partial_line.extend_from_slice(&input[..end_pos]);
+
+                // Ensure we have capacity
+                if self.data_len + self.partial_line.len() > self.data.len() {
+                    self.data
+                        .resize(self.data_len + self.partial_line.len() + MIN_CAPACITY, 0);
+                }
+
+                // Copy completed line to data buffer
+                self.data[self.data_len..self.data_len + self.partial_line.len()]
+                    .copy_from_slice(&self.partial_line);
+                self.data_len += self.partial_line.len();
+
+                // Record the offset
+                self.offsets[self.offsets_len] = self.data_len;
+                self.offsets_len += 1;
+
+                self.partial_line.clear();
+                read += 1;
+                self.num_rows += 1;
+                self.line_number += 1;
+                input_offset = end_pos + skip_bytes;
+
+                if read >= to_read {
+                    return Ok((read, input_offset));
+                }
+            } else {
+                // No separator found, append all to partial and continue
+                self.partial_line.extend_from_slice(input);
+                return Ok((read, input.len()));
+            }
+        }
+
+        // Process complete lines in input
+        let mut line_start = input_offset;
+        let mut i = input_offset;
+
+        while i < input.len() {
+            let (is_end, skip_bytes) = is_line_end(input, i);
+
+            if is_end {
+                let line_len = i - line_start;
+
+                // Ensure we have capacity for data
+                if self.data_len + line_len > self.data.len() {
+                    let new_capacity =
+                        (self.data_len + line_len + estimated_size).max(self.data.len() * 2);
+                    self.data.resize(new_capacity, 0);
+                }
+
+                // Copy line to data buffer (excluding separator)
+                if line_len > 0 {
+                    self.data[self.data_len..self.data_len + line_len]
+                        .copy_from_slice(&input[line_start..i]);
+                    self.data_len += line_len;
+                }
+                // Empty line - no data to copy but still a record
+
+                // Ensure we have capacity for offset
+                if self.offsets_len >= self.offsets.len() {
+                    self.offsets.resize(self.offsets_len + to_read, 0);
+                }
+
+                // Record the offset
+                self.offsets[self.offsets_len] = self.data_len;
+                self.offsets_len += 1;
+
+                read += 1;
+                self.num_rows += 1;
+                self.line_number += 1;
+
+                i += skip_bytes;
+                line_start = i;
+                input_offset = i;
+
+                if read >= to_read {
+                    return Ok((read, input_offset));
+                }
+
+                if input.len() == input_offset {
+                    // Input exhausted, need to read more
+                    // Without this check, we might continue and store empty partial line
+                    return Ok((read, input_offset));
+                }
+            } else {
+                i += 1;
+            }
+        }
+
+        // Store any remaining partial line
+        if line_start < input.len() {
+            self.partial_line.extend_from_slice(&input[line_start..]);
+            input_offset = input.len();
+        }
+
+        Ok((read, input_offset))
+    }
+
+    pub fn len(&self) -> usize {
+        self.num_rows
+    }
+
+    pub fn is_empty(&self) -> bool {
+        self.num_rows == 0
+    }
+
+    pub fn clear(&mut self) {
+        self.offsets_len = 1;
+        self.data_len = 0;
+        self.num_rows = 0;
+    }
+
+    pub fn flush(&mut self) -> Result<StringRecords<'_>, ArrowError> {
+        // CHECK HERE
+        // Handle last line without terminator (common at EOF)
+        if !self.partial_line.is_empty() {
+            // Ensure capacity
+            if self.data_len + self.partial_line.len() > self.data.len() {
+                self.data.resize(self.data_len + self.partial_line.len(), 0);
+            }
+
+            // Copy partial line to data
+            self.data[self.data_len..self.data_len + self.partial_line.len()]
+                .copy_from_slice(&self.partial_line);
+            self.data_len += self.partial_line.len();
+
+            // Record the offset
+            if self.offsets_len >= self.offsets.len() {
+                self.offsets.push(self.data_len);
+            } else {
+                self.offsets[self.offsets_len] = self.data_len;
+            }
+            self.offsets_len += 1;
+
+            self.num_rows += 1;
+            self.line_number += 1;
+            self.partial_line.clear();
+        }
+
+        // Truncate data to the actual amount of data read
+        let data = std::str::from_utf8(&self.data[..self.data_len]).map_err(|e| {
+            let valid_up_to = e.valid_up_to();
+            let line_idx = self.offsets[..self.offsets_len]
+                .iter()
+                .rposition(|&offset| offset > valid_up_to)
+                .unwrap_or(0);
+            let line_offset = self.line_number - self.num_rows;
+            let line = line_offset + line_idx;
+            ArrowError::ParseError(format!("Encountered invalid UTF-8 data at line {line}"))
+        })?;
+
+        let offsets = &self.offsets[..self.offsets_len];
+        let num_rows = self.num_rows;
+
+        // Reset state
+        self.offsets_len = 1;
+        self.data_len = 0;
+        self.num_rows = 0;
+
+        Ok(StringRecords {
+            num_rows,
+            offsets,
+            data,
+        })
+    }
+}
+
+#[derive(Debug)]
+pub struct StringRecords<'a> {
+    num_rows: usize,
+    offsets: &'a [usize],
+    data: &'a str,
+}
+
+impl<'a> StringRecords<'a> {
+    fn get(&self, index: usize) -> &'a str {
+        let start = self.offsets[index];
+        let end = self.offsets[index + 1];
+        // SAFETY: Parsing produces offsets at valid UTF-8 boundaries
+        unsafe { self.data.get_unchecked(start..end) }
+    }
+
+    pub fn len(&self) -> usize {
+        self.num_rows
+    }
+
+    pub fn iter(&self) -> impl Iterator<Item = &'a str> + '_ {
+        (0..self.num_rows).map(|x| self.get(x))
+    }
+}
