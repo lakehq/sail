@@ -69,7 +69,7 @@ impl<W: Write> TextWriter<W> {
     fn write(&mut self, batch: &RecordBatch) -> Result<()> {
         if batch.num_columns() != 1 {
             return Err(DataFusionError::Internal(format!(
-                "Text files must have exactly 1 column, found {}",
+                "Text data source supports only a single column, and you have {} columns.",
                 batch.num_columns()
             )));
         }
@@ -123,7 +123,7 @@ impl BatchSerializer for TextSerializer {
         // Text files should have exactly one column named "value"
         if batch.num_columns() != 1 {
             return Err(DataFusionError::Internal(format!(
-                "Text files must have exactly 1 column, found {}",
+                "Text data source supports only a single column, and you have {} columns.",
                 batch.num_columns()
             )));
         }

@@ -3,7 +3,7 @@ use std::io::{BufRead, BufReader as StdBufReader, Read};
 use std::sync::Arc;
 
 use datafusion::arrow::array::{RecordBatch, RecordBatchOptions, RecordBatchReader, StringArray};
-use datafusion::arrow::datatypes::SchemaRef;
+use datafusion::arrow::datatypes::{Fields, Schema, SchemaRef};
 use datafusion::arrow::error::ArrowError;
 
 // TODO: CSV has `arrow_csv::reader::records::AVERAGE_FIELD_SIZE` set to 8.
@@ -51,6 +51,20 @@ where
     }
 }
 
+impl<R: Read> Reader<R> {
+    #[allow(unused)]
+    pub fn schema(&self) -> SchemaRef {
+        match &self.decoder.projection {
+            Some(projection) => {
+                let fields = self.decoder.schema.fields();
+                let projected = projection.iter().map(|i| fields[*i].clone());
+                Arc::new(Schema::new(projected.collect::<Fields>()))
+            }
+            None => self.decoder.schema.clone(),
+        }
+    }
+}
+
 impl<R: BufRead> BufReader<R> {
     fn read(&mut self) -> Result<Option<RecordBatch>, ArrowError> {
         loop {
@@ -83,6 +97,9 @@ impl<R: BufRead> RecordBatchReader for BufReader<R> {
 pub struct Decoder {
     /// Schema for text files (single "value" column)
     schema: SchemaRef,
+
+    /// Optional projection for which columns to load (zero-based column indices)
+    projection: Option<Vec<usize>>,
 
     /// Number of records per batch
     batch_size: usize,
@@ -132,7 +149,7 @@ impl Decoder {
     ///
     /// Returns `Ok(None)` if no buffered data
     pub fn flush(&mut self) -> Result<Option<RecordBatch>, ArrowError> {
-        if self.record_decoder.is_empty() {
+        if self.record_decoder.is_empty() && self.record_decoder.partial_line.is_empty() {
             return Ok(None);
         }
 
@@ -151,7 +168,7 @@ impl Decoder {
 fn parse(rows: &StringRecords<'_>, schema: SchemaRef) -> Result<RecordBatch, ArrowError> {
     if schema.fields().len() != 1 {
         return Err(ArrowError::ParseError(format!(
-            "Text files must have exactly 1 column, but schema has {} columns",
+            "Text data source supports only a single column, and you have {} columns.",
             schema.fields().len()
         )));
     }
@@ -174,6 +191,8 @@ pub struct ReaderBuilder {
     /// The bounds within which to scan the reader.
     /// If set to `None`, scanning starts at position 0 and continues until EOF.
     bounds: Bounds,
+    /// Optional projection for which columns to load (zero-based column indices)
+    projection: Option<Vec<usize>>,
 }
 
 impl ReaderBuilder {
@@ -183,6 +202,7 @@ impl ReaderBuilder {
             format: Format::default(),
             batch_size: 1024,
             bounds: None,
+            projection: None,
         }
     }
 
@@ -200,6 +220,11 @@ impl ReaderBuilder {
     #[allow(unused)]
     pub fn with_bounds(mut self, start: usize, end: usize) -> Self {
         self.bounds = Some((start, end));
+        self
+    }
+
+    pub fn with_projection(mut self, projection: Vec<usize>) -> Self {
+        self.projection = Some(projection);
         self
     }
 
@@ -222,6 +247,7 @@ impl ReaderBuilder {
         };
         Decoder {
             schema: self.schema,
+            projection: self.projection,
             batch_size: self.batch_size,
             to_skip: start,
             line_number: start,
@@ -517,7 +543,7 @@ impl RecordDecoder {
             let valid_up_to = e.valid_up_to();
             let line_idx = self.offsets[..self.offsets_len]
                 .iter()
-                .rposition(|&offset| offset > valid_up_to)
+                .rposition(|offset| *offset <= valid_up_to)
                 .unwrap_or(0);
             let line_offset = self.line_number - self.num_rows;
             let line = line_offset + line_idx;

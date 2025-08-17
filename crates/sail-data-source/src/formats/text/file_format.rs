@@ -102,7 +102,6 @@ impl FileFormat for TextFileFormat {
         _store: &Arc<dyn ObjectStore>,
         _objects: &[ObjectMeta],
     ) -> Result<SchemaRef> {
-        // TODO: Should we infer if the DataType should be Utf8 or LargeUtf8?
         let schema = SchemaRef::new(datafusion::arrow::datatypes::Schema::new(vec![
             datafusion::arrow::datatypes::Field::new(
                 "value",

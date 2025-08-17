@@ -5,7 +5,7 @@ use std::sync::Arc;
 use std::task::Poll;
 
 use datafusion::arrow::array::RecordBatch;
-use datafusion::arrow::datatypes::{DataType, Field, Schema, SchemaRef};
+use datafusion::arrow::datatypes::SchemaRef;
 use datafusion::arrow::error::ArrowError;
 use datafusion::physical_plan::metrics::ExecutionPlanMetricsSet;
 use datafusion::physical_plan::DisplayFormatType;
@@ -30,6 +30,8 @@ pub struct TextSource {
     whole_text: bool,
     line_sep: Option<u8>,
     batch_size: Option<usize>,
+    file_schema: Option<SchemaRef>,
+    file_projection: Option<Vec<usize>>,
     metrics: ExecutionPlanMetricsSet,
     projected_statistics: Option<Statistics>,
     schema_adapter_factory: Option<Arc<dyn SchemaAdapterFactory>>,
@@ -67,21 +69,26 @@ impl TextSource {
     }
 
     fn builder(&self) -> Result<ReaderBuilder> {
-        let batch_size = if let Some(batch_size) = self.batch_size {
-            Ok(batch_size)
+        let batch_size = self.batch_size.ok_or_else(|| {
+            DataFusionError::Internal("batch_size must be set before calling builder()".to_string())
+        })?;
+        let schema = if let Some(schema) = &self.file_schema {
+            Arc::clone(schema)
         } else {
-            Err(DataFusionError::Internal(
-                "batch_size must be set before calling builder()".to_string(),
-            ))
-        }?;
-        let schema = Arc::new(Schema::new(vec![Field::new("value", DataType::Utf8, true)]));
+            return Err(DataFusionError::Internal(
+                "Schema must be set before calling builder()".to_string(),
+            ));
+        };
         let mut format = Format::default().with_whole_text(self.whole_text);
         if let Some(line_sep) = self.line_sep {
             format = format.with_line_sep(line_sep);
         }
-        let builder = ReaderBuilder::new(schema)
+        let mut builder = ReaderBuilder::new(schema)
             .with_batch_size(batch_size)
             .with_format(format);
+        if let Some(file_projection) = &self.file_projection {
+            builder = builder.with_projection(file_projection.clone());
+        }
         Ok(builder)
     }
 }
@@ -136,11 +143,16 @@ impl FileSource for TextSource {
         Arc::new(conf)
     }
 
-    fn with_schema(&self, _schema: SchemaRef) -> Arc<dyn FileSource> {
-        Arc::new(Self { ..self.clone() })
+    fn with_schema(&self, schema: SchemaRef) -> Arc<dyn FileSource> {
+        let mut conf = self.clone();
+        conf.file_schema = Some(schema);
+        Arc::new(conf)
     }
-    fn with_projection(&self, _config: &FileScanConfig) -> Arc<dyn FileSource> {
-        Arc::new(Self { ..self.clone() })
+
+    fn with_projection(&self, config: &FileScanConfig) -> Arc<dyn FileSource> {
+        let mut conf = self.clone();
+        conf.file_projection = config.file_column_projection_indices();
+        Arc::new(conf)
     }
 
     fn with_statistics(&self, statistics: Statistics) -> Arc<dyn FileSource> {

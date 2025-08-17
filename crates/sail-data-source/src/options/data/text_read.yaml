@@ -3,7 +3,6 @@
 
 - key: whole_text
   aliases:
-    - wholetext
     - wholeText
   default: "false"
   description: |

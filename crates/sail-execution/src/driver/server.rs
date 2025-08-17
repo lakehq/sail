@@ -30,7 +30,7 @@ impl DriverService for DriverServer {
         request: Request<RegisterWorkerRequest>,
     ) -> Result<Response<RegisterWorkerResponse>, Status> {
         let request = request.into_inner();
-        debug!("{:?}", request);
+        debug!("{request:?}");
         let RegisterWorkerRequest {
             worker_id,
             host,
@@ -52,7 +52,7 @@ impl DriverService for DriverServer {
             .map_err(ExecutionError::from)?;
         rx.await.map_err(ExecutionError::from)??;
         let response = RegisterWorkerResponse {};
-        debug!("{:?}", response);
+        debug!("{response:?}");
         Ok(Response::new(response))
     }
 
@@ -61,7 +61,7 @@ impl DriverService for DriverServer {
         request: Request<ReportWorkerHeartbeatRequest>,
     ) -> Result<Response<ReportWorkerHeartbeatResponse>, Status> {
         let request = request.into_inner();
-        debug!("{:?}", request);
+        debug!("{request:?}");
         let ReportWorkerHeartbeatRequest { worker_id } = request;
         let event = DriverEvent::WorkerHeartbeat {
             worker_id: worker_id.into(),
@@ -71,7 +71,7 @@ impl DriverService for DriverServer {
             .await
             .map_err(ExecutionError::from)?;
         let response = ReportWorkerHeartbeatResponse {};
-        debug!("{:?}", response);
+        debug!("{response:?}");
         Ok(Response::new(response))
     }
 
@@ -80,7 +80,7 @@ impl DriverService for DriverServer {
         request: Request<ReportTaskStatusRequest>,
     ) -> Result<Response<ReportTaskStatusResponse>, Status> {
         let request = request.into_inner();
-        debug!("{:?}", request);
+        debug!("{request:?}");
         let ReportTaskStatusRequest {
             task_id,
             status,
@@ -107,7 +107,7 @@ impl DriverService for DriverServer {
             .await
             .map_err(ExecutionError::from)?;
         let response = ReportTaskStatusResponse {};
-        debug!("{:?}", response);
+        debug!("{response:?}");
         Ok(Response::new(response))
     }
 }

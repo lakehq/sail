@@ -778,16 +778,15 @@ impl TableProvider for DeltaTableProvider {
                     self.snapshot.metadata().partition_columns().as_slice(),
                 );
 
-                let filtered_predicates = predicates
-                    .into_iter()
-                    .zip(pushdown_filters.into_iter())
-                    .filter_map(|(filter, pushdown)| {
+                let filtered_predicates = predicates.into_iter().zip(pushdown_filters).filter_map(
+                    |(filter, pushdown)| {
                         if pushdown == TableProviderFilterPushDown::Inexact {
                             Some((*filter).clone())
                         } else {
                             None
                         }
-                    });
+                    },
+                );
                 conjunction(filtered_predicates)
             })
             .map(|expr| simplify_expr(session.runtime_env().clone(), &df_schema, expr));
