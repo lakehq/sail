@@ -2,7 +2,9 @@ use std::fmt::{self, Debug};
 use std::io::{BufRead, BufReader as StdBufReader, Read};
 use std::sync::Arc;
 
-use datafusion::arrow::array::{RecordBatch, RecordBatchOptions, RecordBatchReader, StringArray};
+use datafusion::arrow::array::{
+    Array, RecordBatch, RecordBatchOptions, RecordBatchReader, StringArray,
+};
 use datafusion::arrow::datatypes::{Fields, Schema, SchemaRef};
 use datafusion::arrow::error::ArrowError;
 
@@ -154,7 +156,7 @@ impl Decoder {
         }
 
         let rows = self.record_decoder.flush()?;
-        let batch = parse(&rows, self.schema.clone())?;
+        let batch = parse(&rows, self.schema.clone(), self.projection.as_ref())?;
         self.line_number += rows.len();
         Ok(Some(batch))
     }
@@ -165,17 +167,48 @@ impl Decoder {
     }
 }
 
-fn parse(rows: &StringRecords<'_>, schema: SchemaRef) -> Result<RecordBatch, ArrowError> {
+fn parse(
+    rows: &StringRecords<'_>,
+    schema: SchemaRef,
+    projection: Option<&Vec<usize>>,
+) -> Result<RecordBatch, ArrowError> {
     if schema.fields().len() != 1 {
         return Err(ArrowError::ParseError(format!(
             "Text data source supports only a single column, and you have {} columns.",
             schema.fields().len()
         )));
     }
-    let array = StringArray::from_iter_values(rows.iter());
+
+    let projection: Vec<usize> = match projection {
+        Some(v) => v.clone(),
+        None => vec![0], // Default to including the single column
+    };
+    let projected_fields: Fields = projection
+        .iter()
+        .map(|i| schema.fields()[*i].clone())
+        .collect();
+    let projected_schema = if schema.metadata.is_empty() {
+        Arc::new(Schema::new(projected_fields))
+    } else {
+        Arc::new(Schema::new_with_metadata(
+            projected_fields,
+            schema.metadata.clone(),
+        ))
+    };
+
+    let arrays: Vec<Arc<dyn Array>> = if projection == vec![0] {
+        let array = StringArray::from_iter_values(rows.iter());
+        vec![Arc::new(array)]
+    } else if projection.is_empty() {
+        vec![]
+    } else {
+        return Err(ArrowError::ParseError(format!(
+            "Invalid projection {projection:?} for Text file with single column"
+        )));
+    };
     RecordBatch::try_new_with_options(
-        schema,
-        vec![Arc::new(array)],
+        projected_schema,
+        arrays,
         &RecordBatchOptions::new().with_row_count(Some(rows.len())),
     )
 }
@@ -548,6 +581,7 @@ impl RecordDecoder {
             let line_offset = self.line_number - self.num_rows;
             let line = line_offset + line_idx;
             ArrowError::ParseError(format!("Encountered invalid UTF-8 data at line {line}"))
+            // CHECK HERE: COMPRESSED DOES NOT WORK YET AND IS CRASHING HERE. DO NOT MERGE
         })?;
 
         let offsets = &self.offsets[..self.offsets_len];

@@ -1,5 +1,6 @@
 use std::collections::HashMap;
 use std::fmt::Debug;
+use std::str::FromStr;
 use std::sync::Arc;
 
 use async_trait::async_trait;
@@ -15,6 +16,7 @@ use datafusion::datasource::listing::{ListingOptions, ListingTable, ListingTable
 use datafusion::datasource::physical_plan::FileSinkConfig;
 use datafusion::logical_expr::dml::InsertOp;
 use datafusion::physical_plan::ExecutionPlan;
+use datafusion_common::parsers::CompressionTypeVariant;
 use datafusion_common::{internal_err, not_impl_err, Result};
 use sail_common_datafusion::datasource::{
     get_partition_columns_and_file_schema, SinkInfo, SourceInfo, TableFormat,
@@ -32,6 +34,7 @@ pub(crate) trait ListingFormat: Debug + Send + Sync + 'static {
         &self,
         ctx: &dyn Session,
         options: Vec<HashMap<String, String>>,
+        compression: Option<CompressionTypeVariant>, // CHECK HERE: Just testing remove later
     ) -> Result<Arc<dyn FileFormat>>;
     fn create_write_format(
         &self,
@@ -79,7 +82,7 @@ impl<T: ListingFormat> TableFormat for ListingTableFormat<T> {
         } = info;
 
         let urls = crate::url::resolve_listing_urls(ctx, paths).await?;
-        let file_format = self.inner.create_read_format(ctx, options)?;
+        let file_format = self.inner.create_read_format(ctx, options.clone(), None)?;
         let extension_with_compression =
             file_format.compression_type().and_then(|compression_type| {
                 match file_format.get_ext_with_compression(&compression_type) {
@@ -90,6 +93,7 @@ impl<T: ListingFormat> TableFormat for ListingTableFormat<T> {
             });
 
         let config = ctx.config();
+        let file_format_ext = file_format.get_ext();
         let mut listing_options = ListingOptions::new(file_format)
             .with_target_partitions(config.target_partitions())
             .with_collect_stat(config.collect_statistics());
@@ -105,10 +109,43 @@ impl<T: ListingFormat> TableFormat for ListingTableFormat<T> {
                     ctx,
                     &urls,
                     &listing_options,
-                    extension_with_compression,
+                    &extension_with_compression,
                 )
                 .await?;
                 if let Some(file_extension) = file_extension {
+                    // CHECK HERE: Clean up dirty code
+                    println!(
+                        "check here: file extension: {file_extension}, file format extension: {file_format_ext}, extension with compression: {extension_with_compression:?}, starting with: {}",
+                        file_extension.starts_with(file_format_ext.as_str())
+                    );
+                    if extension_with_compression.is_none()
+                        && file_extension != file_format_ext
+                        && (file_extension.starts_with(file_format_ext.as_str())
+                            || file_extension.starts_with(&format!(".{file_format_ext}")))
+                    {
+                        println!("check here: file extension {file_extension} is not the same as file format extension {file_format_ext}");
+                        let compression_type = file_extension
+                            .strip_prefix(&format!(".{file_format_ext}"))
+                            .or_else(|| file_extension.strip_prefix(file_format_ext.as_str()));
+                        println!(
+                            "check here: file extension {file_extension} with compression type: {compression_type:?}"
+                        );
+                        if let Some(compression_type) = compression_type {
+                            listing_options.format = self.inner.create_read_format(
+                                ctx,
+                                options,
+                                Some(CompressionTypeVariant::from_str(
+                                    compression_type
+                                        .strip_prefix(".")
+                                        .unwrap_or(compression_type),
+                                )?),
+                            )?;
+                            println!(
+                                "check here: Using file format: {} with compression: {compression_type}",
+                                listing_options.format.get_ext(),
+                            );
+                        }
+                    }
                     listing_options = listing_options.with_file_extension(file_extension);
                 }
                 let partition_by = partition_by
@@ -221,6 +258,7 @@ impl ListingFormat for ArrowListingFormat {
         &self,
         _ctx: &dyn Session,
         _options: Vec<HashMap<String, String>>,
+        _compression: Option<CompressionTypeVariant>,
     ) -> Result<Arc<dyn FileFormat>> {
         Ok(Arc::new(ArrowFormat))
     }
@@ -249,6 +287,7 @@ impl ListingFormat for AvroListingFormat {
         &self,
         _ctx: &dyn Session,
         _options: Vec<HashMap<String, String>>,
+        _compression: Option<CompressionTypeVariant>,
     ) -> Result<Arc<dyn FileFormat>> {
         Ok(Arc::new(AvroFormat))
     }
@@ -277,9 +316,13 @@ impl ListingFormat for CsvListingFormat {
         &self,
         ctx: &dyn Session,
         options: Vec<HashMap<String, String>>,
+        compression: Option<CompressionTypeVariant>,
     ) -> Result<Arc<dyn FileFormat>> {
         let resolver = DataSourceOptionsResolver::new(ctx);
-        let options = resolver.resolve_csv_read_options(options)?;
+        let mut options = resolver.resolve_csv_read_options(options)?;
+        if let Some(compression) = compression {
+            options.compression = compression;
+        }
         Ok(Arc::new(CsvFormat::default().with_options(options)))
     }
 
@@ -309,9 +352,13 @@ impl ListingFormat for JsonListingFormat {
         &self,
         ctx: &dyn Session,
         options: Vec<HashMap<String, String>>,
+        compression: Option<CompressionTypeVariant>,
     ) -> Result<Arc<dyn FileFormat>> {
         let resolver = DataSourceOptionsResolver::new(ctx);
-        let options = resolver.resolve_json_read_options(options)?;
+        let mut options = resolver.resolve_json_read_options(options)?;
+        if let Some(compression) = compression {
+            options.compression = compression;
+        }
         Ok(Arc::new(JsonFormat::default().with_options(options)))
     }
 
@@ -341,6 +388,7 @@ impl ListingFormat for ParquetListingFormat {
         &self,
         ctx: &dyn Session,
         options: Vec<HashMap<String, String>>,
+        _compression: Option<CompressionTypeVariant>,
     ) -> Result<Arc<dyn FileFormat>> {
         let resolver = DataSourceOptionsResolver::new(ctx);
         let options = resolver.resolve_parquet_read_options(options)?;
@@ -373,9 +421,13 @@ impl ListingFormat for TextListingFormat {
         &self,
         ctx: &dyn Session,
         options: Vec<HashMap<String, String>>,
+        compression: Option<CompressionTypeVariant>,
     ) -> Result<Arc<dyn FileFormat>> {
         let resolver = DataSourceOptionsResolver::new(ctx);
-        let options = resolver.resolve_text_read_options(options)?;
+        let mut options = resolver.resolve_text_read_options(options)?;
+        if let Some(compression) = compression {
+            options.compression = compression;
+        }
         Ok(Arc::new(TextFileFormat::new(options)))
     }
 

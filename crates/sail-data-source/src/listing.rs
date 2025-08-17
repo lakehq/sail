@@ -1,10 +1,12 @@
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
 
 use datafusion::arrow::datatypes::{DataType, Field, Schema};
 use datafusion::catalog::Session;
 use datafusion::datasource::listing::{ListingOptions, ListingTableConfig, ListingTableUrl};
-use datafusion_common::{internal_err, plan_err, DataFusionError, Result};
+use datafusion_common::parsers::CompressionTypeVariant;
+use datafusion_common::{internal_err, plan_err, DataFusionError, GetExt, Result};
+use datafusion_datasource::file_compression_type::FileCompressionType;
 use futures::stream::BoxStream;
 use futures::{StreamExt, TryStreamExt};
 use log::debug;
@@ -14,7 +16,7 @@ pub async fn resolve_listing_schema(
     ctx: &dyn Session,
     urls: &[ListingTableUrl],
     options: &ListingOptions,
-    extension_with_compression: Option<String>,
+    extension_with_compression: &Option<String>,
 ) -> Result<(Arc<Schema>, Option<String>)> {
     // The logic is similar to `ListingOptions::infer_schema()`
     // but here we also check for the existence of files.
@@ -85,11 +87,12 @@ pub async fn resolve_listing_schema(
         resolve_listing_file_extension(
             &file_groups,
             &options.file_extension,
-            &extension_with_compression,
+            extension_with_compression,
         )
     } else {
-        None
+        infer_listing_file_extension(&file_groups, &options.file_extension)
     };
+    println!("CHECK HERE RESOLVE file_extension: {file_extension:?}");
 
     Ok((
         Arc::new(Schema::new_with_metadata(
@@ -120,6 +123,46 @@ fn resolve_listing_file_extension(
     }
     if count_with_compression > count_without_compression {
         Some(extension_with_compression.to_string())
+    } else {
+        None
+    }
+}
+
+fn infer_listing_file_extension(
+    file_groups: &[(Arc<dyn ObjectStore>, Vec<ObjectMeta>)],
+    file_extension: &str,
+) -> Option<String> {
+    // TODO: Future work can support reading all files of the same `FileFormat` regardless of the file extension.
+    let mut counts: HashMap<String, usize> = HashMap::new();
+    let mut base_count = 0;
+    for (_, object_metas) in file_groups {
+        for object_meta in object_metas {
+            let path = &object_meta.location;
+            if path.as_ref().ends_with(file_extension) {
+                base_count += 1;
+            }
+            for c in [
+                FileCompressionType::from(CompressionTypeVariant::GZIP),
+                FileCompressionType::from(CompressionTypeVariant::BZIP2),
+                FileCompressionType::from(CompressionTypeVariant::XZ),
+                FileCompressionType::from(CompressionTypeVariant::ZSTD),
+            ] {
+                let candidate = format!("{file_extension}{}", c.get_ext());
+                if path.as_ref().ends_with(&candidate) {
+                    *counts.entry(candidate).or_default() += 1;
+                }
+            }
+        }
+    }
+    println!(
+        "CHECK HERE file_extension: {file_extension}, counts: {counts:?}, base_count: {base_count}"
+    );
+    // If ALL files do not end with the plain base extension, pick the most common compressed one.
+    if base_count == 0 && !counts.is_empty() {
+        counts
+            .into_iter()
+            .max_by_key(|(_, count)| *count)
+            .map(|(ext, _)| ext)
     } else {
         None
     }
@@ -160,6 +203,11 @@ pub async fn list_all_files<'a>(
                 extension_with_compression.is_some_and(|ext| path.as_ref().ends_with(ext));
             let extension_match =
                 path.as_ref().ends_with(file_extension) || extension_with_compression_match;
+            let extension_match = if !extension_match {
+                path.as_ref().contains(file_extension)
+            } else {
+                extension_match
+            };
             let glob_match = url.contains(path, ignore_subdirectory);
             futures::future::ready(extension_match && glob_match)
         })
