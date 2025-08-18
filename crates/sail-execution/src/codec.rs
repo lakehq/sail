@@ -44,7 +44,7 @@ use prost::bytes::BytesMut;
 use prost::Message;
 use sail_common_datafusion::udf::StreamUDF;
 use sail_common_datafusion::utils::{read_record_batches, write_record_batches};
-use sail_delta_lake::delta_format::DeltaDataSink;
+use sail_delta_lake::delta_format::{DeltaDataSink, DeltaSinkExec};
 use sail_plan::extension::function::array::arrays_zip::ArraysZip;
 use sail_plan::extension::function::array::spark_array::SparkArray;
 use sail_plan::extension::function::array::spark_array_empty_to_null::ArrayEmptyToNull;
@@ -435,20 +435,28 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
             }) => {
                 let input = self.try_decode_plan(&input, registry)?;
                 let sink = if let Some(sink) = sink {
-                    self.try_decode_delta_sink(sink)?
+                    sink
                 } else {
                     return plan_err!("no DeltaSink found");
                 };
-                let sink_schema = self.try_decode_schema(&sink_schema)?;
-                let sort_order = sort_order
-                    .map(|x| self.try_decode_lex_requirement(&x, registry, &sink_schema))
-                    .transpose()?
-                    .flatten();
-                Ok(Arc::new(DataSinkExec::new(
-                    input,
-                    Arc::new(sink),
-                    sort_order,
-                )))
+
+                // If sort_order is None, this is the new DeltaSinkExec format
+                if sort_order.is_none() {
+                    self.try_decode_delta_sink_exec(input, sink)
+                } else {
+                    // Legacy DataSinkExec + DeltaDataSink format
+                    let delta_data_sink = self.try_decode_delta_sink(sink)?;
+                    let sink_schema = self.try_decode_schema(&sink_schema)?;
+                    let sort_order = sort_order
+                        .map(|x| self.try_decode_lex_requirement(&x, registry, &sink_schema))
+                        .transpose()?
+                        .flatten();
+                    Ok(Arc::new(DataSinkExec::new(
+                        input,
+                        Arc::new(delta_data_sink),
+                        sort_order,
+                    )))
+                }
             }
             // TODO: StreamingTableExec?
             _ => plan_err!("unsupported physical plan node: {node_kind:?}"),
@@ -659,6 +667,15 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
             } else {
                 return plan_err!("unsupported data source node: {data_source:?}");
             }
+        } else if let Some(delta_sink_exec) = node.as_any().downcast_ref::<DeltaSinkExec>() {
+            let input = self.try_encode_plan(delta_sink_exec.input().clone())?;
+            let sink = self.try_encode_delta_sink_exec(delta_sink_exec)?;
+            NodeKind::DeltaSink(gen::DeltaSinkExecNode {
+                input,
+                sink: Some(sink),
+                sink_schema: self.try_encode_schema(&delta_sink_exec.schema())?,
+                sort_order: None, // DeltaSinkExec doesn't have sort_order
+            })
         } else if let Some(data_sink) = node.as_any().downcast_ref::<DataSinkExec>() {
             let input = self.try_encode_plan(data_sink.input().clone())?;
             let sort_order = data_sink
@@ -1273,6 +1290,35 @@ impl RemoteExecutionCodec {
         ))
     }
 
+    fn try_decode_delta_sink_exec(
+        &self,
+        input: Arc<dyn ExecutionPlan>,
+        sink: DeltaSink,
+    ) -> Result<Arc<dyn ExecutionPlan>> {
+        let table_url = Url::parse(&sink.table_url)
+            .map_err(|e| plan_datafusion_err!("failed to parse table URL: {e}"))?;
+        let options =
+            serde_json::from_str(&sink.options).map_err(|e| plan_datafusion_err!("{e}"))?;
+        let initial_actions =
+            serde_json::from_str(&sink.initial_actions).map_err(|e| plan_datafusion_err!("{e}"))?;
+        let operation = match sink.operation {
+            Some(op) => Some(serde_json::from_str(&op).map_err(|e| plan_datafusion_err!("{e}"))?),
+            None => None,
+        };
+
+        let delta_sink_exec = DeltaSinkExec::new(
+            input,
+            table_url,
+            options,
+            sink.partition_columns,
+            initial_actions,
+            operation,
+            sink.table_exists,
+        );
+
+        Ok(Arc::new(delta_sink_exec))
+    }
+
     fn try_encode_delta_sink(&self, sink: &DeltaDataSink) -> Result<DeltaSink> {
         Ok(DeltaSink {
             table_url: sink.table_url().to_string(),
@@ -1288,6 +1334,24 @@ impl RemoteExecutionCodec {
                 .transpose()
                 .map_err(|e| plan_datafusion_err!("{e}"))?,
             table_exists: sink.table_exists(),
+        })
+    }
+
+    fn try_encode_delta_sink_exec(&self, sink_exec: &DeltaSinkExec) -> Result<DeltaSink> {
+        Ok(DeltaSink {
+            table_url: sink_exec.table_url().to_string(),
+            options: serde_json::to_string(sink_exec.options())
+                .map_err(|e| plan_datafusion_err!("{e}"))?,
+            schema: self.try_encode_schema(&sink_exec.input().schema())?,
+            partition_columns: sink_exec.partition_columns().to_vec(),
+            initial_actions: serde_json::to_string(sink_exec.initial_actions())
+                .map_err(|e| plan_datafusion_err!("{e}"))?,
+            operation: sink_exec
+                .operation()
+                .map(serde_json::to_string)
+                .transpose()
+                .map_err(|e| plan_datafusion_err!("{e}"))?,
+            table_exists: sink_exec.table_exists(),
         })
     }
 

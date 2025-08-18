@@ -5,7 +5,6 @@ use async_trait::async_trait;
 use datafusion::catalog::{Session, TableProvider};
 use datafusion::common::{not_impl_err, plan_err, DataFusionError, Result, ToDFSchema};
 use datafusion::datasource::listing::ListingTableUrl;
-use datafusion::datasource::sink::DataSinkExec;
 use datafusion::execution::SessionStateBuilder;
 use datafusion::physical_plan::ExecutionPlan;
 use deltalake::kernel::{Action, Remove};
@@ -13,7 +12,7 @@ use deltalake::protocol::{DeltaOperation, SaveMode};
 use sail_common_datafusion::datasource::{PhysicalSinkMode, SinkInfo, SourceInfo, TableFormat};
 use sail_delta_lake::create_delta_provider;
 use sail_delta_lake::delta_datafusion::{parse_predicate_expression, DataFusionMixins};
-use sail_delta_lake::delta_format::DeltaDataSink;
+use sail_delta_lake::delta_format::DeltaSinkExec;
 use sail_delta_lake::operations::write::execution::{
     prepare_predicate_actions_physical, WriterStatsConfig,
 };
@@ -61,7 +60,7 @@ impl TableFormat for DeltaTableFormat {
             mode,
             partition_by,
             bucket_by,
-            sort_order,
+            sort_order: _,
             options,
         } = info;
 
@@ -245,17 +244,17 @@ impl TableFormat for DeltaTableFormat {
             }
         };
 
-        let sink = Arc::new(DeltaDataSink::new(
+        let sink_exec = DeltaSinkExec::new(
+            input,
             table_url,
             delta_options,
-            input.schema(),
             partition_by,
             initial_actions,
             operation,
             table_exists,
-        ));
+        );
 
-        Ok(Arc::new(DataSinkExec::new(input, sink, sort_order)))
+        Ok(Arc::new(sink_exec))
     }
 }
 
