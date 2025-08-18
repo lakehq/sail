@@ -103,7 +103,7 @@ pub fn spark_split_inner(args: &[ArrayRef]) -> Result<ArrayRef> {
     let values: Arc<Option<&StringArray>> = Arc::new(opt_downcast_arg!(&args[0], StringArray));
     let format: Arc<Option<&StringArray>> = Arc::new(opt_downcast_arg!(&args[1], StringArray));
 
-    let limit_is_none = args.get(2).is_none();
+    let limit_arg_is_none = args.get(2).is_none();
     let limit = Arc::new(
         args.get(2)
             .and_then(|array| opt_downcast_arg!(array, Int32Array)),
@@ -123,7 +123,7 @@ pub fn spark_split_inner(args: &[ArrayRef]) -> Result<ArrayRef> {
                 builder.append_value(values_format);
             }
 
-            (Some(values), Some(format), None) if limit_is_none => {
+            (Some(values), Some(format), None) if limit_arg_is_none => {
                 let (value, format, limit): (&str, &str, i32) =
                     (values.value(i), format.value(i), -1);
                 let values_format: Vec<Option<String>> = split_to_array(value, format, limit)?;
