@@ -110,13 +110,6 @@
 |NULL  |array<string>|
 +------+-------------+
 
->>> spark.sql("SELECT split(NULL, '[1-9]+', 'a') AS result, typeof(split(NULL, '[1-9]+', 'a')) AS type").show(truncate=False)
-+------+-------------+
-|result|type         |
-+------+-------------+
-|NULL  |array<string>|
-+------+-------------+
-
 >>> spark.sql("SELECT split(s, p, l) AS result, typeof(split(s, p, l)) AS type FROM VALUES ('oneAtwoBthreeC', '[ABC]', -4), ('oneAtwoBthreeC', '[ABC]', -1), ('oneAtwoBthreeC', '[ABC]', 0), ('oneAtwoBthreeC', '[ABC]', 1), ('oneAtwoBthreeC', '[ABC]', 2), ('oneAtwoBthreeC', '[ABC]', 10), ('1A2B3C', '[1-9]+', 1), ('aa2bb3cc4', '[1-9]+', -1), ('aa2bb3cc4', '[1-9]+', 2), ('aa2bb3cc4', '[1-9]+', NULL), ('aa2bb3cc4', NULL, -1), (NULL, '[1-9]+', -1) AS T(s, p, l)").show(truncate=False)
 +-------------------+-------------+
 |result             |type         |

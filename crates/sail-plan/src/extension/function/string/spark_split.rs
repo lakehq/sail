@@ -4,7 +4,6 @@ use std::sync::Arc;
 use arrow::array::{
     Array, ArrayRef, Int32Array, ListArray, ListBuilder, StringArray, StringBuilder,
 };
-use arrow::buffer::NullBuffer;
 use arrow::datatypes::{DataType, Field};
 use datafusion_common::Result;
 use datafusion_expr::{ScalarFunctionArgs, ScalarUDFImpl};
@@ -57,10 +56,9 @@ impl ScalarUDFImpl for SparkSplit {
 
     fn coerce_types(&self, arg_types: &[DataType]) -> Result<Vec<DataType>> {
         match arg_types {
-
             [
-                DataType::Utf8 | DataType::Utf8View | DataType::LargeUtf8 | DataType::Null ,
-                DataType::Utf8 | DataType::Utf8View | DataType::LargeUtf8 | DataType::Null
+            DataType::Utf8 | DataType::Utf8View | DataType::LargeUtf8 | DataType::Null,
+            DataType::Utf8 | DataType::Utf8View | DataType::LargeUtf8 | DataType::Null
             ] => {
                 Ok(vec![
                     arg_types[0].clone(),
@@ -68,9 +66,9 @@ impl ScalarUDFImpl for SparkSplit {
                 ])
             }
             [
-                DataType::Utf8 | DataType::Utf8View | DataType::LargeUtf8 | DataType::Null ,
-                DataType::Utf8 | DataType::Utf8View | DataType::LargeUtf8 | DataType::Null ,
-                DataType::Int32 | DataType::Int64 | DataType::UInt32 | DataType::UInt64 | DataType::Null | DataType::Utf8
+            DataType::Utf8 | DataType::Utf8View | DataType::LargeUtf8 | DataType::Null,
+            DataType::Utf8 | DataType::Utf8View | DataType::LargeUtf8 | DataType::Null,
+            DataType::Int32 | DataType::Int64 | DataType::UInt32 | DataType::UInt64 | DataType::Null
             ] => {
                 Ok(vec![
                     arg_types[0].clone(),
@@ -100,33 +98,40 @@ pub fn spark_split_inner(args: &[ArrayRef]) -> Result<ArrayRef> {
         ));
     }
     let len: usize = args[0].len();
-    // Initialize default values in case of nulls
-    let default_nulls: Vec<Option<&str>> = vec![None; len];
-    let default_zeros: Vec<i32> = vec![0; len];
-    let default_nulls: StringArray = StringArray::from(default_nulls);
-    let default_limit_nulls: NullBuffer = NullBuffer::from(vec![false; len]);
-    let default_limit_nulls: Int32Array =
-        Int32Array::new(default_zeros.into(), Some(default_limit_nulls));
-    let default_limit: Int32Array = Int32Array::from(vec![0; len]);
 
     // Getting the arrays
-    let values: &StringArray = opt_downcast_arg!(&args[0], StringArray).unwrap_or(&default_nulls);
-    let format: &StringArray = opt_downcast_arg!(&args[1], StringArray).unwrap_or(&default_nulls);
-    let limit: &Int32Array = args
-        .get(2)
-        .map(|array| opt_downcast_arg!(array, Int32Array).unwrap_or(&default_limit_nulls))
-        .unwrap_or(&default_limit);
+    let values: Arc<Option<&StringArray>> = Arc::new(opt_downcast_arg!(&args[0], StringArray));
+    let format: Arc<Option<&StringArray>> = Arc::new(opt_downcast_arg!(&args[1], StringArray));
+
+    let limit_is_none = args.get(2).is_none();
+    let limit = Arc::new(
+        args.get(2)
+            .and_then(|array| opt_downcast_arg!(array, Int32Array)),
+    );
 
     let mut builder = ListBuilder::new(StringBuilder::new());
 
     for i in 0..len {
-        if values.is_null(i) || format.is_null(i) || limit.is_null(i) {
-            builder.append_null();
-        } else {
-            let (value, format, limit): (&str, &str, i32) =
-                (values.value(i), format.value(i), limit.value(i));
-            let values_format: Vec<Option<String>> = split_to_array(value, format, limit)?;
-            builder.append_value(values_format);
+        let (values, format, limit) = (values.clone(), format.clone(), limit.clone());
+        match (values.as_deref(), format.as_deref(), limit.as_deref()) {
+            (Some(values), Some(format), Some(limit))
+                if !(values.is_null(i) || format.is_null(i) || limit.is_null(i)) =>
+            {
+                let (value, format, limit): (&str, &str, i32) =
+                    (values.value(i), format.value(i), limit.value(i));
+                let values_format: Vec<Option<String>> = split_to_array(value, format, limit)?;
+                builder.append_value(values_format);
+            }
+
+            (Some(values), Some(format), None) if limit_is_none => {
+                let (value, format, limit): (&str, &str, i32) =
+                    (values.value(i), format.value(i), -1);
+                let values_format: Vec<Option<String>> = split_to_array(value, format, limit)?;
+                builder.append_value(values_format);
+            }
+            _ => {
+                builder.append_null();
+            }
         }
     }
 
