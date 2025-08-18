@@ -3,9 +3,10 @@ use std::str::FromStr;
 
 use datafusion::catalog::Session;
 use datafusion::datasource::file_format::file_compression_type::FileCompressionType;
+use datafusion::parquet::basic::{BrotliLevel, GzipLevel, ZstdLevel};
 use datafusion_common::config::{CsvOptions, JsonOptions, TableParquetOptions};
 use datafusion_common::parsers::CompressionTypeVariant;
-use datafusion_common::{plan_err, Result};
+use datafusion_common::{plan_err, DataFusionError, Result};
 use sail_common_datafusion::datasource::TableDeltaOptions;
 
 use crate::formats::text::TableTextOptions;
@@ -15,6 +16,35 @@ use crate::options::{
     TextReadOptions, TextWriteOptions,
 };
 use crate::utils::char_to_u8;
+
+// [CREDIT]: https://github.com/apache/datafusion/blob/92d516cc9b1bb8912f7b9c4f122903491c0c9a85/datafusion/common/src/file_options/parquet_writer.rs#L308-L325
+fn split_parquet_compression_string(str_setting: &str) -> Result<(String, Option<u32>)> {
+    // ignore string literal chars passed from sqlparser i.e. remove single quotes
+    let str_setting = str_setting.replace('\'', "");
+    let split_setting = str_setting.split_once('(');
+
+    match split_setting {
+        Some((codec, rh)) => {
+            let level = &rh[..rh.len() - 1].parse::<u32>().map_err(|_| {
+                DataFusionError::Configuration(format!(
+                    "Could not parse compression string. \
+                    Got codec: {codec} and unknown level from {str_setting}"
+                ))
+            })?;
+            Ok((codec.to_owned(), Some(*level)))
+        }
+        None => Ok((str_setting.to_owned(), None)),
+    }
+}
+
+fn check_parquet_level_is_none(codec: &str, level: &Option<u32>) -> Result<()> {
+    if level.is_some() {
+        return Err(DataFusionError::Configuration(format!(
+            "Compression {codec} does not support specifying a level"
+        )));
+    }
+    Ok(())
+}
 
 fn apply_json_read_options(from: JsonReadOptions, to: &mut JsonOptions) -> Result<()> {
     let JsonReadOptions {
@@ -224,7 +254,65 @@ fn apply_parquet_write_options(
         to.global.skip_arrow_metadata = v;
     }
     if let Some(v) = compression {
-        to.global.compression = Some(v);
+        let (codec, level) = split_parquet_compression_string(&v.to_lowercase())?;
+        let compression = match codec.as_str() {
+            "uncompressed" => {
+                check_parquet_level_is_none(codec.as_str(), &level)?;
+                Ok(v)
+            }
+            "snappy" => {
+                check_parquet_level_is_none(codec.as_str(), &level)?;
+                Ok(v)
+            }
+            "gzip" => {
+                if level.is_some() {
+                    Ok(v)
+                } else {
+                    Ok(format!(
+                        "gzip({})",
+                        GzipLevel::default().compression_level()
+                    ))
+                }
+            }
+            "lzo" => {
+                check_parquet_level_is_none(codec.as_str(), &level)?;
+                Ok(v)
+            }
+            "brotli" => {
+                if level.is_some() {
+                    Ok(v)
+                } else {
+                    Ok(format!(
+                        "brotli({})",
+                        BrotliLevel::default().compression_level()
+                    ))
+                }
+            }
+            "lz4" => {
+                check_parquet_level_is_none(codec.as_str(), &level)?;
+                Ok(v)
+            }
+            "zstd" => {
+                if level.is_some() {
+                    Ok(v)
+                } else {
+                    Ok(format!(
+                        "zstd({})",
+                        ZstdLevel::default().compression_level()
+                    ))
+                }
+            }
+            "lz4_raw" => {
+                check_parquet_level_is_none(codec.as_str(), &level)?;
+                Ok(v)
+            }
+            _ => Err(DataFusionError::Configuration(format!(
+                "Unknown or unsupported parquet compression: \
+        {v}. Valid values are: uncompressed, snappy, gzip(level), \
+        lzo, brotli(level), lz4, zstd(level), and lz4_raw."
+            ))),
+        }?;
+        to.global.compression = Some(compression);
     }
     if let Some(v) = dictionary_enabled {
         to.global.dictionary_enabled = Some(v);

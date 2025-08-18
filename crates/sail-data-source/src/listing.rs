@@ -203,8 +203,18 @@ pub async fn list_all_files<'a>(
                 extension_with_compression.is_some_and(|ext| path.as_ref().ends_with(ext));
             let extension_match =
                 path.as_ref().ends_with(file_extension) || extension_with_compression_match;
-            let extension_match = if !extension_match {
-                path.as_ref().contains(file_extension)
+            let extension_match = if !extension_match && extension_with_compression.is_none() {
+                [
+                    FileCompressionType::from(CompressionTypeVariant::GZIP),
+                    FileCompressionType::from(CompressionTypeVariant::BZIP2),
+                    FileCompressionType::from(CompressionTypeVariant::XZ),
+                    FileCompressionType::from(CompressionTypeVariant::ZSTD),
+                ]
+                .iter()
+                .any(|c| {
+                    let candidate = format!("{file_extension}{}", c.get_ext());
+                    path.as_ref().ends_with(&candidate)
+                })
             } else {
                 extension_match
             };
