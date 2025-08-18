@@ -6,8 +6,8 @@ use datafusion::sql::sqlparser::ast::NullTreatment;
 use datafusion_common::DFSchemaRef;
 use datafusion_expr::expr::{AggregateFunction, AggregateFunctionParams, WindowFunctionParams};
 use datafusion_expr::{
-    expr, AggregateUDF, BinaryExpr, Operator, ScalarUDF, ScalarUDFImpl, WindowFrame,
-    WindowFunctionDefinition, WindowUDF,
+    cast, expr, AggregateUDF, BinaryExpr, ExprSchemable, Operator, ScalarUDF, ScalarUDFImpl,
+    WindowFrame, WindowFunctionDefinition, WindowUDF,
 };
 
 use crate::config::PlanConfig;
@@ -295,10 +295,10 @@ impl WinFunctionBuilder {
                 order_by,
                 window_frame,
                 ignore_nulls,
-                function_context: _function_context,
+                function_context,
             } = input;
             let null_treatment = get_null_treatment(ignore_nulls);
-            Ok(expr::Expr::WindowFunction(Box::new(expr::WindowFunction {
+            let win_func_expr = expr::Expr::WindowFunction(Box::new(expr::WindowFunction {
                 fun: WindowFunctionDefinition::WindowUDF(f()),
                 params: WindowFunctionParams {
                     args: arguments,
@@ -307,7 +307,11 @@ impl WinFunctionBuilder {
                     window_frame,
                     null_treatment,
                 },
-            })))
+            }));
+            Ok(match win_func_expr.get_type(function_context.schema)? {
+                DataType::UInt64 => cast(win_func_expr.clone(), DataType::Int32),
+                _ => win_func_expr,
+            })
         })
     }
 
