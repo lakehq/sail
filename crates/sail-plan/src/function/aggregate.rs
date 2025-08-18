@@ -12,7 +12,7 @@ use datafusion::functions_nested::string::array_to_string;
 use datafusion::sql::sqlparser::ast::NullTreatment;
 use datafusion_common::ScalarValue;
 use datafusion_expr::expr::{AggregateFunction, AggregateFunctionParams};
-use datafusion_expr::{expr, lit, when, AggregateUDF, ExprSchemable};
+use datafusion_expr::{cast, expr, lit, when, AggregateUDF, ExprSchemable};
 use lazy_static::lazy_static;
 
 use crate::error::{PlanError, PlanResult};
@@ -316,6 +316,22 @@ fn listagg(input: AggFunctionInput) -> PlanResult<expr::Expr> {
         .end()?)
 }
 
+fn median(input: AggFunctionInput) -> PlanResult<expr::Expr> {
+    Ok(cast(
+        expr::Expr::AggregateFunction(AggregateFunction {
+            func: median::median_udaf(),
+            params: AggregateFunctionParams {
+                args: input.arguments.clone(),
+                distinct: input.distinct,
+                order_by: input.order_by,
+                filter: input.filter,
+                null_treatment: get_null_treatment(input.ignore_nulls),
+            },
+        }),
+        DataType::Float64,
+    ))
+}
+
 fn list_built_in_aggregate_functions() -> Vec<(&'static str, AggFunction)> {
     use crate::function::common::AggFunctionBuilder as F;
 
@@ -362,7 +378,7 @@ fn list_built_in_aggregate_functions() -> Vec<(&'static str, AggFunction)> {
         ("max", F::default(min_max::max_udaf)),
         ("max_by", F::custom(max_by)),
         ("mean", F::default(average::avg_udaf)),
-        ("median", F::default(median::median_udaf)),
+        ("median", F::custom(median)),
         ("min", F::default(min_max::min_udaf)),
         ("min_by", F::custom(min_by)),
         ("mode", F::custom(mode)),
