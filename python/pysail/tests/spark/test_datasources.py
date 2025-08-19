@@ -127,11 +127,11 @@ class TestCsvDataSource:
         assert sorted(sample_df.collect(), key=safe_sort_key) == sorted(read_df.collect(), key=safe_sort_key)
         assert len(list((tmp_path / "csv_compressed_gzip").glob("*.csv.gz"))) > 0
 
-        # FIXME: Doesn't work when compression type not explicitly set.
-        # read_df = spark.read.format("csv").option("header", "true").load(path)
-        # assert sample_df.count() == read_df.count()
-        # assert sorted(sample_df.collect(), key=safe_sort_key) == sorted(read_df.collect(), key=safe_sort_key)
-        # assert len(list((tmp_path / "csv_compressed_gzip").glob("*.csv.gz"))) > 0
+        # Compression type not explicitly set.
+        read_df = spark.read.format("csv").option("header", "true").load(path)
+        assert sample_df.count() == read_df.count()
+        assert sorted(sample_df.collect(), key=safe_sort_key) == sorted(read_df.collect(), key=safe_sort_key)
+        assert len(list((tmp_path / "csv_compressed_gzip").glob("*.csv.gz"))) > 0
 
         # Test reading a compressed CSV file written by Pandas.
         path = tmp_path / "csv_compressed_gzip_pandas_1"
@@ -231,6 +231,7 @@ class TestJsonDataSource:
         assert sample_df.count() == read_df.count()
         assert sorted(sample_df.collect(), key=safe_sort_key) == sorted(read_df.collect(), key=safe_sort_key)
 
+        # Compression type not explicitly set.
         read_df = spark.read.format("json").load(path).select("col1", "col2")
         assert sample_df.count() == read_df.count()
         assert sorted(sample_df.collect(), key=safe_sort_key) == sorted(read_df.collect(), key=safe_sort_key)

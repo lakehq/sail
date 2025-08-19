@@ -1,4 +1,5 @@
 use std::collections::{HashMap, HashSet};
+use std::str::FromStr;
 use std::sync::Arc;
 
 use datafusion::arrow::datatypes::{DataType, Field, Schema};
@@ -12,11 +13,15 @@ use futures::{StreamExt, TryStreamExt};
 use log::debug;
 use object_store::{ObjectMeta, ObjectStore};
 
-pub async fn resolve_listing_schema(
+use crate::formats::listing::{ListingFormat, ListingTableFormat};
+
+pub async fn resolve_listing_schema<T: ListingFormat>(
     ctx: &dyn Session,
     urls: &[ListingTableUrl],
-    options: &ListingOptions,
+    options: &mut ListingOptions,
     extension_with_compression: &Option<String>,
+    options_vec: Vec<HashMap<String, String>>,
+    listing_format: &ListingTableFormat<T>,
 ) -> Result<(Arc<Schema>, Option<String>)> {
     // The logic is similar to `ListingOptions::infer_schema()`
     // but here we also check for the existence of files.
@@ -41,6 +46,7 @@ pub async fn resolve_listing_schema(
         .await?;
         file_groups.push((store, files));
     }
+
     let empty = file_groups.iter().all(|(_, files)| files.is_empty());
     if empty {
         let urls = urls
@@ -50,6 +56,36 @@ pub async fn resolve_listing_schema(
             .join(", ");
         return plan_err!("No files found in the specified paths: {urls}")?;
     }
+
+    let file_extension = if let Some(extension_with_compression) = extension_with_compression {
+        resolve_listing_file_extension(
+            &file_groups,
+            &options.file_extension,
+            extension_with_compression,
+        )
+    } else {
+        let result = infer_listing_file_extension(&file_groups, &options.file_extension);
+        if let Some(result) = result {
+            let (file_extension, compression_type) = result;
+            let file_compression_type = CompressionTypeVariant::from_str(
+                compression_type
+                    .strip_prefix(".")
+                    .unwrap_or(compression_type.as_str()),
+            )?;
+            options.format = listing_format.inner().create_read_format(
+                ctx,
+                options_vec,
+                Some(file_compression_type),
+            )?;
+            Some(file_extension)
+        } else {
+            None
+        }
+    };
+    if let Some(file_extension) = file_extension.clone() {
+        options.file_extension = file_extension;
+    };
+    println!("CHECK HERE RESOLVE file_extension: {file_extension:?}");
 
     let mut schemas = vec![];
     for (store, files) in file_groups.iter() {
@@ -82,17 +118,6 @@ pub async fn resolve_listing_schema(
             }
         })
         .collect();
-
-    let file_extension = if let Some(extension_with_compression) = extension_with_compression {
-        resolve_listing_file_extension(
-            &file_groups,
-            &options.file_extension,
-            extension_with_compression,
-        )
-    } else {
-        infer_listing_file_extension(&file_groups, &options.file_extension)
-    };
-    println!("CHECK HERE RESOLVE file_extension: {file_extension:?}");
 
     Ok((
         Arc::new(Schema::new_with_metadata(
@@ -131,9 +156,9 @@ fn resolve_listing_file_extension(
 fn infer_listing_file_extension(
     file_groups: &[(Arc<dyn ObjectStore>, Vec<ObjectMeta>)],
     file_extension: &str,
-) -> Option<String> {
+) -> Option<(String, String)> {
     // TODO: Future work can support reading all files of the same `FileFormat` regardless of the file extension.
-    let mut counts: HashMap<String, usize> = HashMap::new();
+    let mut counts: HashMap<(String, String), usize> = HashMap::new();
     let mut base_count = 0;
     for (_, object_metas) in file_groups {
         for object_meta in object_metas {
@@ -147,9 +172,10 @@ fn infer_listing_file_extension(
                 FileCompressionType::from(CompressionTypeVariant::XZ),
                 FileCompressionType::from(CompressionTypeVariant::ZSTD),
             ] {
-                let candidate = format!("{file_extension}{}", c.get_ext());
+                let compression_ext = c.get_ext();
+                let candidate = format!("{file_extension}{compression_ext}");
                 if path.as_ref().ends_with(&candidate) {
-                    *counts.entry(candidate).or_default() += 1;
+                    *counts.entry((candidate, compression_ext)).or_default() += 1;
                 }
             }
         }
