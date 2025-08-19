@@ -1,7 +1,8 @@
 use std::collections::HashSet;
+use std::sync::Arc;
 
 use datafusion::arrow::array::{Array, StringArray};
-use datafusion::arrow::datatypes as adt;
+use datafusion::arrow::datatypes::DataType;
 use datafusion::functions_aggregate::approx_median::approx_median_udaf;
 use datafusion::functions_aggregate::approx_percentile_cont::approx_percentile_cont_udaf;
 use datafusion::functions_aggregate::average::avg_udaf;
@@ -10,16 +11,20 @@ use datafusion::functions_aggregate::min_max::{max_udaf, min_udaf};
 use datafusion::functions_aggregate::stddev::stddev_udaf;
 use datafusion::functions_aggregate::sum::sum_udaf;
 use datafusion_common::{Column, ExprSchema, ScalarValue};
-use datafusion_expr::expr::AggregateFunctionParams;
-use datafusion_expr::{col, expr, lit, Expr, ExprSchemable, LogicalPlan, LogicalPlanBuilder};
+use datafusion_expr::expr::{AggregateFunctionParams, ScalarFunction};
+use datafusion_expr::{
+    and, col, expr, lit, or, Expr, ExprSchemable, LogicalPlan, LogicalPlanBuilder, ScalarUDF,
+};
 use sail_common::spec;
 
 use crate::error::{PlanError, PlanResult};
+use crate::extension::function::math::random::Random;
 use crate::resolver::state::PlanResolverState;
 use crate::resolver::PlanResolver;
+use crate::utils::ItemTaker;
 
 impl PlanResolver<'_> {
-    pub(super) async fn resolve_query_summary(
+    pub(in crate::resolver) async fn resolve_query_stat_summary(
         &self,
         input: spec::QueryPlan,
         columns: Vec<spec::Identifier>,
@@ -193,7 +198,7 @@ impl PlanResolver<'_> {
                             .alias(&summary_alias),
                     ];
                 for (col_name, expr) in stats_by_column {
-                    let expr = expr.cast_to(&adt::DataType::Utf8, stats_plan_clone.schema())?;
+                    let expr = expr.cast_to(&DataType::Utf8, stats_plan_clone.schema())?;
                     projections.push(expr.alias(&col_name));
                 }
                 let plan = LogicalPlanBuilder::from(stats_plan_clone)
@@ -274,7 +279,24 @@ impl PlanResolver<'_> {
         union_plan.ok_or_else(|| PlanError::internal("No describe statistics generated"))
     }
 
-    pub(super) async fn resolve_query_cross_tab(
+    pub(in crate::resolver) async fn resolve_query_stat_describe(
+        &self,
+        input: spec::QueryPlan,
+        columns: Vec<spec::Identifier>,
+        state: &mut PlanResolverState,
+    ) -> PlanResult<LogicalPlan> {
+        let statistics = vec![
+            "count".to_string(),
+            "mean".to_string(),
+            "stddev".to_string(),
+            "min".to_string(),
+            "max".to_string(),
+        ];
+        self.resolve_query_stat_summary(input, columns, statistics, state)
+            .await
+    }
+
+    pub(in crate::resolver) async fn resolve_query_stat_cross_tab(
         &self,
         input: spec::QueryPlan,
         left_column: spec::Identifier,
@@ -293,7 +315,7 @@ impl PlanResolver<'_> {
         let projected_plan = LogicalPlanBuilder::from(input.clone())
             .project(vec![Expr::Cast(expr::Cast {
                 expr: Box::new(col(right_column.clone())),
-                data_type: adt::DataType::Utf8,
+                data_type: DataType::Utf8,
             })
             .alias_qualified(
                 right_column.relation.clone(),
@@ -378,7 +400,7 @@ impl PlanResolver<'_> {
                 if column.name() == cross_tab_alias {
                     Expr::Cast(expr::Cast {
                         expr: Box::new(Expr::Column(column.clone())),
-                        data_type: adt::DataType::Utf8,
+                        data_type: DataType::Utf8,
                     })
                 } else {
                     Expr::Column(column)
@@ -389,5 +411,161 @@ impl PlanResolver<'_> {
             .project(expr)?
             .build()
             .map_err(Into::into)
+    }
+
+    pub(in crate::resolver) async fn resolve_query_stat_cov(
+        &self,
+        input: spec::QueryPlan,
+        left_column: spec::Identifier,
+        right_column: spec::Identifier,
+        state: &mut PlanResolverState,
+    ) -> PlanResult<LogicalPlan> {
+        let input = self.resolve_query_plan(input, state).await?;
+        let covar_samp = Expr::AggregateFunction(expr::AggregateFunction {
+            func: datafusion::functions_aggregate::covariance::covar_samp_udaf(),
+            params: AggregateFunctionParams {
+                args: vec![
+                    Expr::Column(self.resolve_one_column(
+                        input.schema(),
+                        left_column.as_ref(),
+                        state,
+                    )?),
+                    Expr::Column(self.resolve_one_column(
+                        input.schema(),
+                        right_column.as_ref(),
+                        state,
+                    )?),
+                ],
+                distinct: false,
+                filter: None,
+                order_by: vec![],
+                null_treatment: None,
+            },
+        })
+        .alias(state.register_field_name("cov"));
+        Ok(LogicalPlanBuilder::from(input)
+            .aggregate(Vec::<Expr>::new(), vec![covar_samp])?
+            .build()?)
+    }
+
+    pub(in crate::resolver) async fn resolve_query_stat_corr(
+        &self,
+        input: spec::QueryPlan,
+        left_column: spec::Identifier,
+        right_column: spec::Identifier,
+        method: String,
+        state: &mut PlanResolverState,
+    ) -> PlanResult<LogicalPlan> {
+        if !method.eq_ignore_ascii_case("pearson") {
+            return Err(PlanError::unsupported(format!(
+                "Unsupported correlation method: {method}. Currently only Pearson is supported.",
+            )));
+        }
+        let input = self.resolve_query_plan(input, state).await?;
+        let corr = Expr::AggregateFunction(expr::AggregateFunction {
+            func: datafusion::functions_aggregate::correlation::corr_udaf(),
+            params: AggregateFunctionParams {
+                args: vec![
+                    Expr::Column(self.resolve_one_column(
+                        input.schema(),
+                        left_column.as_ref(),
+                        state,
+                    )?),
+                    Expr::Column(self.resolve_one_column(
+                        input.schema(),
+                        right_column.as_ref(),
+                        state,
+                    )?),
+                ],
+                distinct: false,
+                filter: None,
+                order_by: vec![],
+                null_treatment: None,
+            },
+        })
+        .alias(state.register_field_name("corr"));
+        Ok(LogicalPlanBuilder::from(input)
+            .aggregate(Vec::<Expr>::new(), vec![corr])?
+            .build()?)
+    }
+
+    pub(in crate::resolver) async fn resolve_query_stat_sample_by(
+        &self,
+        input: spec::QueryPlan,
+        column: spec::Expr,
+        fractions: Vec<spec::Fraction>,
+        seed: Option<i64>,
+        state: &mut PlanResolverState,
+    ) -> PlanResult<LogicalPlan> {
+        if fractions
+            .iter()
+            .any(|f| f.fraction < 0.0 || f.fraction > 1.0)
+        {
+            return Err(PlanError::invalid(
+                "All fraction values must be >= 0.0 and <= 1.0",
+            ));
+        }
+
+        let input: LogicalPlan = self
+            .resolve_query_plan_with_hidden_fields(input, state)
+            .await?;
+        let schema = input.schema();
+        let column_expr: Column = match &column {
+            spec::Expr::UnresolvedAttribute {
+                name,
+                plan_id,
+                is_metadata_column: false,
+            } => {
+                let name: Vec<String> = name.clone().into();
+                let Ok(name) = name.one() else {
+                    return Err(PlanError::invalid("Expected simple column name"));
+                };
+                match self.resolve_optional_column(schema, &name, *plan_id, state)? {
+                    Some(col) => col,
+                    None => {
+                        return Err(PlanError::invalid(format!(
+                            "Could not resolve column: {name}"
+                        )));
+                    }
+                }
+            }
+            _ => {
+                return Err(PlanError::invalid("Expected UnresolvedAttribute"));
+            }
+        };
+
+        let init_exprs: Vec<Expr> = input
+            .schema()
+            .columns()
+            .into_iter()
+            .map(Expr::Column)
+            .collect();
+        let rand_column_name: String = state.register_hidden_field_name("rand_value");
+
+        let rand_expr: Expr = Expr::ScalarFunction(ScalarFunction {
+            func: Arc::new(ScalarUDF::from(Random::new())),
+            args: vec![Expr::Literal(ScalarValue::Int64(seed), None)],
+        })
+        .alias(&rand_column_name);
+        let mut all_exprs: Vec<Expr> = init_exprs.clone();
+        all_exprs.push(rand_expr);
+        let plan_with_rand: LogicalPlan = LogicalPlanBuilder::from(input)
+            .project(all_exprs)?
+            .build()?;
+
+        let mut acc_exprs: Vec<Expr> = vec![];
+        for frac in &fractions {
+            let key_val = self.resolve_literal(frac.stratum.clone(), state)?;
+            let f = and(
+                Expr::Column(column_expr.clone()).eq(lit(key_val)),
+                col(&rand_column_name).lt_eq(lit(frac.fraction)),
+            );
+            acc_exprs.push(f);
+        }
+
+        let final_expr: Expr = acc_exprs.into_iter().reduce(or).unwrap_or(lit(false));
+        Ok(LogicalPlanBuilder::from(plan_with_rand)
+            .filter(final_expr)?
+            .build()?)
     }
 }

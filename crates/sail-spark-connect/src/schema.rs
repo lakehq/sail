@@ -1,15 +1,14 @@
 use std::fmt;
 use std::fmt::Display;
 
-use datafusion::arrow::datatypes as adt;
-use datafusion::arrow::datatypes::DataType;
+use datafusion::arrow::datatypes::{DataType, SchemaRef};
 use sail_common::string::escape_meta_characters;
 
 use crate::error::SparkResult;
 use crate::spark::connect as sc;
 use crate::spark::connect::data_type::Kind;
 
-pub(crate) fn to_spark_schema(schema: adt::SchemaRef) -> SparkResult<sc::DataType> {
+pub(crate) fn to_spark_schema(schema: SchemaRef) -> SparkResult<sc::DataType> {
     DataType::Struct(schema.fields().clone()).try_into()
 }
 

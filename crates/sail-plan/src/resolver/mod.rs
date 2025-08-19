@@ -11,9 +11,9 @@ mod expression;
 mod function;
 mod literal;
 pub mod plan;
+mod query;
 mod schema;
 mod state;
-mod statistic;
 mod tree;
 
 pub struct PlanResolver<'a> {
