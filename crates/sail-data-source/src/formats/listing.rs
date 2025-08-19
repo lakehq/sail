@@ -106,7 +106,7 @@ impl<T: ListingFormat> TableFormat for ListingTableFormat<T> {
                 (Arc::new(schema), partition_by)
             }
             _ => {
-                let (schema, _file_extension) = crate::listing::resolve_listing_schema(
+                let schema = crate::listing::resolve_listing_schema(
                     ctx,
                     &urls,
                     &mut listing_options,

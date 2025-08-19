@@ -22,7 +22,7 @@ pub async fn resolve_listing_schema<T: ListingFormat>(
     extension_with_compression: &Option<String>,
     options_vec: Vec<HashMap<String, String>>,
     listing_format: &ListingTableFormat<T>,
-) -> Result<(Arc<Schema>, Option<String>)> {
+) -> Result<Arc<Schema>> {
     // The logic is similar to `ListingOptions::infer_schema()`
     // but here we also check for the existence of files.
     let mut file_groups = vec![];
@@ -118,13 +118,10 @@ pub async fn resolve_listing_schema<T: ListingFormat>(
         })
         .collect();
 
-    Ok((
-        Arc::new(Schema::new_with_metadata(
-            new_fields,
-            schema.metadata().clone(),
-        )),
-        file_extension,
-    ))
+    Ok(Arc::new(Schema::new_with_metadata(
+        new_fields,
+        schema.metadata().clone(),
+    )))
 }
 
 fn resolve_listing_file_extension(
