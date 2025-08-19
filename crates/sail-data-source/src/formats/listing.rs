@@ -24,7 +24,6 @@ use sail_common_datafusion::datasource::{
 use crate::formats::text::file_format::TextFileFormat;
 use crate::options::DataSourceOptionsResolver;
 
-// TODO: infer compression type from file extension
 // TODO: support global configuration to ignore file extension (by setting it to empty)
 /// A trait for defining the specifics of a listing table format.
 pub(crate) trait ListingFormat: Debug + Send + Sync + 'static {
