@@ -33,7 +33,7 @@ pub(crate) trait ListingFormat: Debug + Send + Sync + 'static {
         &self,
         ctx: &dyn Session,
         options: Vec<HashMap<String, String>>,
-        compression: Option<CompressionTypeVariant>, // CHECK HERE: Just testing remove later
+        compression: Option<CompressionTypeVariant>,
     ) -> Result<Arc<dyn FileFormat>>;
     fn create_write_format(
         &self,
@@ -116,42 +116,6 @@ impl<T: ListingFormat> TableFormat for ListingTableFormat<T> {
                     self,
                 )
                 .await?;
-                // if let Some(file_extension) = file_extension {
-                //     // CHECK HERE: Clean up dirty code
-                //     println!(
-                //         "check here: file extension: {file_extension}, file format extension: {file_format_ext}, extension with compression: {extension_with_compression:?}, starting with: {}",
-                //         file_extension.starts_with(file_format_ext.as_str())
-                //     );
-                //     if extension_with_compression.is_none()
-                //         && file_extension != file_format_ext
-                //         && (file_extension.starts_with(file_format_ext.as_str())
-                //             || file_extension.starts_with(&format!(".{file_format_ext}")))
-                //     {
-                //         println!("check here: file extension {file_extension} is not the same as file format extension {file_format_ext}");
-                //         let compression_type = file_extension
-                //             .strip_prefix(&format!(".{file_format_ext}"))
-                //             .or_else(|| file_extension.strip_prefix(file_format_ext.as_str()));
-                //         println!(
-                //             "check here: file extension {file_extension} with compression type: {compression_type:?}"
-                //         );
-                //         if let Some(compression_type) = compression_type {
-                //             listing_options.format = self.inner.create_read_format(
-                //                 ctx,
-                //                 options,
-                //                 Some(CompressionTypeVariant::from_str(
-                //                     compression_type
-                //                         .strip_prefix(".")
-                //                         .unwrap_or(compression_type),
-                //                 )?),
-                //             )?;
-                //             println!(
-                //                 "check here: Using file format: {} with compression: {compression_type}",
-                //                 listing_options.format.get_ext(),
-                //             );
-                //         }
-                //     }
-                //     listing_options = listing_options.with_file_extension(file_extension);
-                // }
                 let partition_by = partition_by
                     .into_iter()
                     .map(|col| (col, DataType::Utf8))

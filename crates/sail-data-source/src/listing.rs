@@ -85,7 +85,6 @@ pub async fn resolve_listing_schema<T: ListingFormat>(
     if let Some(file_extension) = file_extension.clone() {
         options.file_extension = file_extension;
     };
-    println!("CHECK HERE RESOLVE file_extension: {file_extension:?}");
 
     let mut schemas = vec![];
     for (store, files) in file_groups.iter() {
@@ -180,9 +179,7 @@ fn infer_listing_file_extension(
             }
         }
     }
-    println!(
-        "CHECK HERE file_extension: {file_extension}, counts: {counts:?}, base_count: {base_count}"
-    );
+
     // If ALL files do not end with the plain base extension, pick the most common compressed one.
     if base_count == 0 && !counts.is_empty() {
         counts

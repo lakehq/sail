@@ -581,7 +581,6 @@ impl RecordDecoder {
             let line_offset = self.line_number - self.num_rows;
             let line = line_offset + line_idx;
             ArrowError::ParseError(format!("Encountered invalid UTF-8 data at line {line}"))
-            // CHECK HERE: COMPRESSED DOES NOT WORK YET AND IS CRASHING HERE. DO NOT MERGE
         })?;
 
         let offsets = &self.offsets[..self.offsets_len];
