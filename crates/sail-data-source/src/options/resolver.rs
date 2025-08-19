@@ -15,27 +15,7 @@ use crate::options::{
     DeltaWriteOptions, JsonReadOptions, JsonWriteOptions, ParquetReadOptions, ParquetWriteOptions,
     TextReadOptions, TextWriteOptions,
 };
-use crate::utils::char_to_u8;
-
-// [CREDIT]: https://github.com/apache/datafusion/blob/92d516cc9b1bb8912f7b9c4f122903491c0c9a85/datafusion/common/src/file_options/parquet_writer.rs#L308-L325
-fn split_parquet_compression_string(str_setting: &str) -> Result<(String, Option<u32>)> {
-    // ignore string literal chars passed from sqlparser i.e. remove single quotes
-    let str_setting = str_setting.replace('\'', "");
-    let split_setting = str_setting.split_once('(');
-
-    match split_setting {
-        Some((codec, rh)) => {
-            let level = &rh[..rh.len() - 1].parse::<u32>().map_err(|_| {
-                DataFusionError::Configuration(format!(
-                    "Could not parse compression string. \
-                    Got codec: {codec} and unknown level from {str_setting}"
-                ))
-            })?;
-            Ok((codec.to_owned(), Some(*level)))
-        }
-        None => Ok((str_setting.to_owned(), None)),
-    }
-}
+use crate::utils::{char_to_u8, split_parquet_compression_string};
 
 fn check_parquet_level_is_none(codec: &str, level: &Option<u32>) -> Result<()> {
     if level.is_some() {
@@ -256,9 +236,9 @@ fn apply_parquet_write_options(
     if let Some(v) = compression {
         let (codec, level) = split_parquet_compression_string(&v.to_lowercase())?;
         let compression = match codec.as_str() {
-            "uncompressed" => {
+            "uncompressed" | "none" | "" => {
                 check_parquet_level_is_none(codec.as_str(), &level)?;
-                Ok(v)
+                Ok("uncompressed".to_string())
             }
             "snappy" => {
                 check_parquet_level_is_none(codec.as_str(), &level)?;

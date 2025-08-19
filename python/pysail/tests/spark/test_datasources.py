@@ -55,7 +55,7 @@ class TestParquetDataSource:
         read_df = spark.read.parquet(path)
         assert sample_df.count() == read_df.count()
         assert sorted(sample_df.collect(), key=safe_sort_key) == sorted(read_df.collect(), key=safe_sort_key)
-        assert len(list((tmp_path / "parquet_compressed_zstd").glob("*.parquet"))) > 0
+        assert len(list((tmp_path / "parquet_compressed_zstd").glob("*.zst.parquet"))) > 0
 
         # Test reading a compressed Parquet file written by Pandas.
         path = tmp_path / "parquet_compressed_gzip_pandas_1"
@@ -91,12 +91,14 @@ class TestParquetDataSource:
         read_df = spark.read.parquet(path)
         assert sample_df.count() == read_df.count()
         assert sorted(sample_df.collect(), key=safe_sort_key) == sorted(read_df.collect(), key=safe_sort_key)
+        assert len(list((tmp_path / "parquet_write_options").glob("*.gz.parquet"))) > 0
 
         path = str(tmp_path / "parquet_write_options_1")
-        (sample_df.write.option("compression", "zstd").option("writerVersion", "1.0").parquet(path, mode="overwrite"))
+        (sample_df.write.option("compression", "snappy").option("writerVersion", "1.0").parquet(path, mode="overwrite"))
         read_df = spark.read.parquet(path)
         assert sample_df.count() == read_df.count()
         assert sorted(sample_df.collect(), key=safe_sort_key) == sorted(read_df.collect(), key=safe_sort_key)
+        assert len(list((tmp_path / "parquet_write_options_1").glob("*.snappy.parquet"))) > 0
 
     def test_parquet_read_options(self, spark, sample_df, tmp_path):
         path = str(tmp_path / "parquet_read_options")

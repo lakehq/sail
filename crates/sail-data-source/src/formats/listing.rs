@@ -1,5 +1,6 @@
 use std::collections::HashMap;
 use std::fmt::Debug;
+use std::str::FromStr;
 use std::sync::Arc;
 
 use async_trait::async_trait;
@@ -16,13 +17,15 @@ use datafusion::datasource::physical_plan::FileSinkConfig;
 use datafusion::logical_expr::dml::InsertOp;
 use datafusion::physical_plan::ExecutionPlan;
 use datafusion_common::parsers::CompressionTypeVariant;
-use datafusion_common::{internal_err, not_impl_err, Result};
+use datafusion_common::{internal_err, not_impl_err, GetExt, Result};
+use datafusion_datasource::file_compression_type::FileCompressionType;
 use sail_common_datafusion::datasource::{
     get_partition_columns_and_file_schema, SinkInfo, SourceInfo, TableFormat,
 };
 
 use crate::formats::text::file_format::TextFileFormat;
 use crate::options::DataSourceOptionsResolver;
+use crate::utils::split_parquet_compression_string;
 
 // TODO: support global configuration to ignore file extension (by setting it to empty)
 /// A trait for defining the specifics of a listing table format.
@@ -38,7 +41,7 @@ pub(crate) trait ListingFormat: Debug + Send + Sync + 'static {
         &self,
         ctx: &dyn Session,
         options: Vec<HashMap<String, String>>,
-    ) -> Result<Arc<dyn FileFormat>>;
+    ) -> Result<(Arc<dyn FileFormat>, Option<String>)>;
 }
 
 #[derive(Debug)]
@@ -184,14 +187,35 @@ impl<T: ListingFormat> TableFormat for ListingTableFormat<T> {
             .iter()
             .map(|s| (s.clone(), DataType::Null))
             .collect::<Vec<_>>();
-        let format = self.inner.create_write_format(ctx, options)?;
+        let (format, compression) = self.inner.create_write_format(ctx, options)?;
         let file_extension = if let Some(file_compression_type) = format.compression_type() {
             match format.get_ext_with_compression(&file_compression_type) {
                 Ok(ext) => ext,
                 Err(_) => format.get_ext(),
             }
         } else {
-            format.get_ext()
+            let ext = format.get_ext();
+            if let Some(compression) = compression {
+                if matches!(ext.as_str(), ".parquet" | "parquet") {
+                    let ext = ext.strip_prefix('.').unwrap_or(&ext);
+                    let compression = compression.strip_prefix('.').unwrap_or(&compression);
+                    let (compression, _level) =
+                        split_parquet_compression_string(&compression.to_lowercase())?;
+                    let file_compression_type = FileCompressionType::from_str(compression.as_str());
+                    let compression = match file_compression_type {
+                        // Parquet has compression types not supported by FileCompressionType
+                        Ok(compression) => compression.get_ext(),
+                        Err(_) => compression,
+                    };
+                    let compression = compression.strip_prefix('.').unwrap_or(&compression);
+                    let result = format!("{compression}.{ext}");
+                    result
+                } else {
+                    ext
+                }
+            } else {
+                ext
+            }
         };
         let conf = FileSinkConfig {
             original_url: path,
@@ -234,8 +258,8 @@ impl ListingFormat for ArrowListingFormat {
         &self,
         _ctx: &dyn Session,
         _options: Vec<HashMap<String, String>>,
-    ) -> Result<Arc<dyn FileFormat>> {
-        Ok(Arc::new(ArrowFormat))
+    ) -> Result<(Arc<dyn FileFormat>, Option<String>)> {
+        Ok((Arc::new(ArrowFormat), None))
     }
 }
 
@@ -263,8 +287,8 @@ impl ListingFormat for AvroListingFormat {
         &self,
         _ctx: &dyn Session,
         _options: Vec<HashMap<String, String>>,
-    ) -> Result<Arc<dyn FileFormat>> {
-        Ok(Arc::new(AvroFormat))
+    ) -> Result<(Arc<dyn FileFormat>, Option<String>)> {
+        Ok((Arc::new(AvroFormat), None))
     }
 }
 
@@ -297,10 +321,10 @@ impl ListingFormat for CsvListingFormat {
         &self,
         ctx: &dyn Session,
         options: Vec<HashMap<String, String>>,
-    ) -> Result<Arc<dyn FileFormat>> {
+    ) -> Result<(Arc<dyn FileFormat>, Option<String>)> {
         let resolver = DataSourceOptionsResolver::new(ctx);
         let options = resolver.resolve_csv_write_options(options)?;
-        Ok(Arc::new(CsvFormat::default().with_options(options)))
+        Ok((Arc::new(CsvFormat::default().with_options(options)), None))
     }
 }
 
@@ -333,10 +357,10 @@ impl ListingFormat for JsonListingFormat {
         &self,
         ctx: &dyn Session,
         options: Vec<HashMap<String, String>>,
-    ) -> Result<Arc<dyn FileFormat>> {
+    ) -> Result<(Arc<dyn FileFormat>, Option<String>)> {
         let resolver = DataSourceOptionsResolver::new(ctx);
         let options = resolver.resolve_json_write_options(options)?;
-        Ok(Arc::new(JsonFormat::default().with_options(options)))
+        Ok((Arc::new(JsonFormat::default().with_options(options)), None))
     }
 }
 
@@ -366,10 +390,14 @@ impl ListingFormat for ParquetListingFormat {
         &self,
         ctx: &dyn Session,
         options: Vec<HashMap<String, String>>,
-    ) -> Result<Arc<dyn FileFormat>> {
+    ) -> Result<(Arc<dyn FileFormat>, Option<String>)> {
         let resolver = DataSourceOptionsResolver::new(ctx);
         let options = resolver.resolve_parquet_write_options(options)?;
-        Ok(Arc::new(ParquetFormat::default().with_options(options)))
+        let compression = options.global.compression.clone();
+        Ok((
+            Arc::new(ParquetFormat::default().with_options(options)),
+            compression,
+        ))
     }
 }
 
@@ -402,9 +430,9 @@ impl ListingFormat for TextListingFormat {
         &self,
         ctx: &dyn Session,
         options: Vec<HashMap<String, String>>,
-    ) -> Result<Arc<dyn FileFormat>> {
+    ) -> Result<(Arc<dyn FileFormat>, Option<String>)> {
         let resolver = DataSourceOptionsResolver::new(ctx);
         let options = resolver.resolve_text_write_options(options)?;
-        Ok(Arc::new(TextFileFormat::new(options)))
+        Ok((Arc::new(TextFileFormat::new(options)), None))
     }
 }
