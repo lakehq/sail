@@ -14,7 +14,7 @@ use datafusion::datasource::source::{DataSource, DataSourceExec};
 use datafusion::execution::FunctionRegistry;
 use datafusion::functions::string::overlay::OverlayFunc;
 use datafusion::logical_expr::{AggregateUDF, AggregateUDFImpl, ScalarUDF, ScalarUDFImpl};
-use datafusion::physical_expr::{LexOrdering, LexRequirement, PhysicalSortExpr};
+use datafusion::physical_expr::LexOrdering;
 use datafusion::physical_plan::joins::utils::{ColumnIndex, JoinFilter};
 use datafusion::physical_plan::joins::SortMergeJoinExec;
 use datafusion::physical_plan::recursive_query::RecursiveQueryExec;
@@ -36,12 +36,10 @@ use datafusion_proto::physical_plan::to_proto::{
 use datafusion_proto::physical_plan::{AsExecutionPlan, PhysicalExtensionCodec};
 use datafusion_proto::protobuf::{
     JoinType as ProtoJoinType, PhysicalPlanNode, PhysicalSortExprNode,
-    PhysicalSortExprNodeCollection,
 };
 use datafusion_spark::function::math::expm1::SparkExpm1;
 use prost::bytes::BytesMut;
 use prost::Message;
-use sail_common_datafusion::datasource::TableDeltaOptions;
 use sail_common_datafusion::udf::StreamUDF;
 use sail_common_datafusion::utils::{read_record_batches, write_record_batches};
 use sail_delta_lake::delta_format::{DeltaCommitExec, DeltaWriterExec};
@@ -1294,8 +1292,7 @@ impl RemoteExecutionCodec {
     ) -> Result<Arc<dyn ExecutionPlan>> {
         let table_url = Url::parse(&table_url)
             .map_err(|e| plan_datafusion_err!("failed to parse table URL: {e}"))?;
-        let options =
-            serde_json::from_str(&options).map_err(|e| plan_datafusion_err!("{e}"))?;
+        let options = serde_json::from_str(&options).map_err(|e| plan_datafusion_err!("{e}"))?;
         let operation = match operation {
             Some(op) => Some(serde_json::from_str(&op).map_err(|e| plan_datafusion_err!("{e}"))?),
             None => None,
@@ -1341,8 +1338,6 @@ impl RemoteExecutionCodec {
             sink_schema,
         )))
     }
-
-
 
     fn try_decode_stream_udf(&self, udf: ExtendedStreamUdf) -> Result<Arc<dyn StreamUDF>> {
         let ExtendedStreamUdf { stream_udf_kind } = udf;
@@ -1464,40 +1459,6 @@ impl RemoteExecutionCodec {
         };
         Ok(ExtendedStreamUdf {
             stream_udf_kind: Some(stream_udf_kind),
-        })
-    }
-
-    fn try_decode_lex_requirement(
-        &self,
-        buf: &[u8],
-        registry: &dyn FunctionRegistry,
-        schema: &Schema,
-    ) -> Result<Option<LexRequirement>> {
-        let collection: PhysicalSortExprNodeCollection = self.try_decode_message(buf)?;
-        let exprs = parse_physical_sort_exprs(
-            &collection.physical_sort_expr_nodes,
-            registry,
-            schema,
-            self,
-        )?;
-        Ok(LexRequirement::new(exprs.into_iter().map(Into::into)))
-    }
-
-    fn try_encode_lex_requirement(&self, lex_requirement: &LexRequirement) -> Result<Vec<u8>> {
-        let expr = lex_requirement
-            .iter()
-            .map(|requirement| {
-                let expr: PhysicalSortExpr = requirement.to_owned().into();
-                let sort_expr = PhysicalSortExprNode {
-                    expr: Some(Box::new(serialize_physical_expr(&expr.expr, self)?)),
-                    asc: !expr.options.descending,
-                    nulls_first: expr.options.nulls_first,
-                };
-                Ok(sort_expr)
-            })
-            .collect::<Result<Vec<_>>>()?;
-        self.try_encode_message(PhysicalSortExprNodeCollection {
-            physical_sort_expr_nodes: expr,
         })
     }
 
