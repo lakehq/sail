@@ -1600,9 +1600,21 @@ impl PlanResolver<'_> {
         state: &mut PlanResolverState,
     ) -> PlanResult<LogicalPlan> {
         let input = self.resolve_query_plan(input, state).await?;
-        let rename_columns_map: HashMap<String, String> = rename_columns_map
+
+        let mut inverse_map: HashMap<String, HashSet<String>> = HashMap::new();
+        for (from, to) in rename_columns_map
+            .iter()
+            .map(|(a, b)| (a.as_ref().to_string(), b.as_ref().to_string()))
+        {
+            let from_froms = inverse_map.remove(&from).unwrap_or_default(); //.unwrap_or_else(|| HashSet::new());
+            let to_froms = inverse_map.entry(to.clone()).or_default();
+            to_froms.extend(from_froms);
+            to_froms.insert(from);
+        }
+
+        let rename_columns_map: HashMap<String, String> = inverse_map
             .into_iter()
-            .map(|(k, v)| (k.into(), v.into()))
+            .flat_map(|(to, froms)| froms.into_iter().map(move |from| (from, to.clone())))
             .collect();
         let schema = input.schema();
         let expr = schema
