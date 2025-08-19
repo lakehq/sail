@@ -112,7 +112,7 @@ impl<T: ListingFormat> TableFormat for ListingTableFormat<T> {
                     &urls,
                     &mut listing_options,
                     &extension_with_compression,
-                    options.clone(),
+                    options,
                     self,
                 )
                 .await?;
