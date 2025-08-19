@@ -12,7 +12,7 @@ use deltalake::protocol::{DeltaOperation, SaveMode};
 use sail_common_datafusion::datasource::{PhysicalSinkMode, SinkInfo, SourceInfo, TableFormat};
 use sail_delta_lake::create_delta_provider;
 use sail_delta_lake::delta_datafusion::{parse_predicate_expression, DataFusionMixins};
-use sail_delta_lake::delta_format::DeltaSinkExec;
+use sail_delta_lake::delta_format::DeltaPlanBuilder;
 use sail_delta_lake::operations::write::execution::{
     prepare_predicate_actions_physical, WriterStatsConfig,
 };
@@ -244,8 +244,7 @@ impl TableFormat for DeltaTableFormat {
             }
         };
 
-        let sink_schema = input.schema();
-        let sink_exec = DeltaSinkExec::new(
+        let plan_builder = DeltaPlanBuilder::new(
             input,
             table_url,
             delta_options,
@@ -253,11 +252,11 @@ impl TableFormat for DeltaTableFormat {
             initial_actions,
             operation,
             table_exists,
-            sink_schema,
             sort_order,
         );
+        let sink_exec = plan_builder.build()?;
 
-        Ok(Arc::new(sink_exec))
+        Ok(sink_exec)
     }
 }
 

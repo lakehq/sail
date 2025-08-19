@@ -26,7 +26,8 @@ message ExtendedPhysicalPlanNode {
     RecursiveQueryExecNode recursive_query = 12;
     SortMergeJoinExecNode sort_merge_join = 13;
     PartialSortExecNode partial_sort = 14;
-    DeltaSinkExecNode delta_sink = 15;
+    DeltaWriterExecNode delta_writer = 15;
+    DeltaCommitExecNode delta_commit = 16;
   }
 }
 
@@ -283,21 +284,24 @@ message PartialSortExecNode {
   uint64 common_prefix_length = 3;
 }
 
-message DeltaSinkExecNode {
+message DeltaWriterExecNode {
   bytes input = 1;
-  DeltaSink sink = 2;
-  bytes sink_schema = 3;
-  optional bytes sort_order = 4;
-}
-
-message DeltaSink {
-  string table_url = 1;
-  string options = 2;
-  bytes schema = 3;
-  repeated string partition_columns = 4;
-  string initial_actions = 5;
+  string table_url = 2;
+  string options = 3;
+  bytes sink_schema = 4;
+  repeated string partition_columns = 5;
   optional string operation = 6;
   bool table_exists = 7;
+}
+
+message DeltaCommitExecNode {
+  bytes input = 1;
+  string table_url = 2;
+  repeated string partition_columns = 3;
+  string initial_actions = 4;
+  optional string operation = 5;
+  bool table_exists = 6;
+  bytes sink_schema = 7;
 }
 
 message JoinOn {
