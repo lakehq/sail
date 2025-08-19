@@ -60,7 +60,7 @@ impl TableFormat for DeltaTableFormat {
             mode,
             partition_by,
             bucket_by,
-            sort_order: _,
+            sort_order,
             options,
         } = info;
 
@@ -244,6 +244,7 @@ impl TableFormat for DeltaTableFormat {
             }
         };
 
+        let sink_schema = input.schema();
         let sink_exec = DeltaSinkExec::new(
             input,
             table_url,
@@ -252,6 +253,8 @@ impl TableFormat for DeltaTableFormat {
             initial_actions,
             operation,
             table_exists,
+            sink_schema,
+            sort_order,
         );
 
         Ok(Arc::new(sink_exec))
