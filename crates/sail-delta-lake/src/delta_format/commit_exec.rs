@@ -240,13 +240,13 @@ impl ExecutionPlan for DeltaCommitExec {
                 return Ok(batch);
             }
 
-            // Use the actual Add actions from the writer
+            // Use the Add actions from the writer
             let mut actions: Vec<Action> = initial_actions.to_vec();
             actions.extend(schema_actions); // Add schema actions first
             actions.extend(writer_add_actions.into_iter().map(Action::Add)); // Then add actions
 
             if actions.is_empty() && !table_exists {
-                // For new tables, we still need to add protocol and metadata even if no data
+                // For new tables, add protocol and metadata even if no data
                 let array = Arc::new(UInt64Array::from(vec![0]));
                 let batch = RecordBatch::try_new(schema, vec![array])?;
                 return Ok(batch);

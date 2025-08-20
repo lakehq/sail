@@ -1,4 +1,5 @@
 use std::any::Any;
+use std::collections::HashMap;
 use std::fmt;
 use std::sync::Arc;
 
@@ -373,14 +374,7 @@ impl DeltaWriterExec {
     }
 
     /// Merge two Arrow schemas
-    fn merge_schemas(
-        table_schema: &datafusion::arrow::datatypes::Schema,
-        input_schema: &datafusion::arrow::datatypes::Schema,
-    ) -> Result<SchemaRef> {
-        use std::collections::HashMap;
-
-        use datafusion::arrow::datatypes::{Field, Schema};
-
+    fn merge_schemas(table_schema: &Schema, input_schema: &Schema) -> Result<SchemaRef> {
         let mut field_map: HashMap<String, Field> = HashMap::new();
         let mut field_order: Vec<String> = Vec::new();
 
@@ -418,10 +412,7 @@ impl DeltaWriterExec {
     }
 
     /// Validate schema compatibility
-    fn validate_schema_compatibility(
-        table_schema: &datafusion::arrow::datatypes::Schema,
-        input_schema: &datafusion::arrow::datatypes::Schema,
-    ) -> Result<()> {
+    fn validate_schema_compatibility(table_schema: &Schema, input_schema: &Schema) -> Result<()> {
         // Simple validation: check if all input fields exist in table schema with compatible types
         for input_field in input_schema.fields() {
             match table_schema.field_with_name(input_field.name()) {
