@@ -7,9 +7,7 @@ use datafusion::physical_plan::sorts::sort::SortExec;
 use datafusion::physical_plan::{ExecutionPlan, Partitioning};
 use datafusion_common::Result;
 use datafusion_physical_expr::expressions::col;
-use deltalake::kernel::Action;
-use deltalake::protocol::DeltaOperation;
-use sail_common_datafusion::datasource::TableDeltaOptions;
+use sail_common_datafusion::datasource::{PhysicalSinkMode, TableDeltaOptions};
 use url::Url;
 
 use super::commit_exec::DeltaCommitExec;
@@ -22,21 +20,18 @@ pub struct DeltaPlanBuilder {
     table_url: Url,
     options: TableDeltaOptions,
     partition_columns: Vec<String>,
-    initial_actions: Vec<Action>,
-    operation: Option<DeltaOperation>,
+    sink_mode: PhysicalSinkMode,
     table_exists: bool,
     sort_order: Option<LexRequirement>,
 }
 
 impl DeltaPlanBuilder {
-    #[allow(clippy::too_many_arguments)]
     pub fn new(
         input: Arc<dyn ExecutionPlan>,
         table_url: Url,
         options: TableDeltaOptions,
         partition_columns: Vec<String>,
-        initial_actions: Vec<Action>,
-        operation: Option<DeltaOperation>,
+        sink_mode: PhysicalSinkMode,
         table_exists: bool,
         sort_order: Option<LexRequirement>,
     ) -> Self {
@@ -45,8 +40,7 @@ impl DeltaPlanBuilder {
             table_url,
             options,
             partition_columns,
-            initial_actions,
-            operation,
+            sink_mode,
             table_exists,
             sort_order,
         }
@@ -164,7 +158,7 @@ impl DeltaPlanBuilder {
             self.table_url.clone(),
             self.options.clone(),
             self.partition_columns.clone(),
-            self.operation.clone(),
+            self.sink_mode.clone(),
             self.table_exists,
             schema,
         )))
@@ -175,8 +169,6 @@ impl DeltaPlanBuilder {
             input,
             self.table_url.clone(),
             self.partition_columns.clone(),
-            self.initial_actions.clone(),
-            self.operation.clone(),
             self.table_exists,
             self.input.schema(), // Use original input schema for metadata
         )))

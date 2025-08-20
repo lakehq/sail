@@ -40,6 +40,7 @@ use datafusion_proto::protobuf::{
 use datafusion_spark::function::math::expm1::SparkExpm1;
 use prost::bytes::BytesMut;
 use prost::Message;
+use sail_common_datafusion::datasource::PhysicalSinkMode;
 use sail_common_datafusion::udf::StreamUDF;
 use sail_common_datafusion::utils::{read_record_batches, write_record_batches};
 use sail_delta_lake::delta_format::{DeltaCommitExec, DeltaWriterExec};
@@ -431,18 +432,24 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
                 options,
                 sink_schema,
                 partition_columns,
-                operation,
                 table_exists,
+                sink_mode,
             }) => {
                 let input = self.try_decode_plan(&input, registry)?;
                 let sink_schema = self.try_decode_schema(&sink_schema)?;
+                let sink_mode = match sink_mode {
+                    Some(mode) => mode,
+                    None => return plan_err!("Missing sink_mode"),
+                };
+                let sink_mode =
+                    self.try_decode_physical_sink_mode(sink_mode, &input.schema(), registry)?;
                 self.try_decode_delta_writer_exec(
                     input,
                     table_url,
                     options,
                     Arc::new(sink_schema),
                     partition_columns,
-                    operation,
+                    sink_mode,
                     table_exists,
                 )
             }
@@ -450,8 +457,6 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
                 input,
                 table_url,
                 partition_columns,
-                initial_actions,
-                operation,
                 table_exists,
                 sink_schema,
             }) => {
@@ -461,8 +466,6 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
                     input,
                     table_url,
                     partition_columns,
-                    initial_actions,
-                    operation,
                     table_exists,
                     Arc::new(sink_schema),
                 )
@@ -678,6 +681,7 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
             }
         } else if let Some(delta_writer_exec) = node.as_any().downcast_ref::<DeltaWriterExec>() {
             let input = self.try_encode_plan(delta_writer_exec.input().clone())?;
+            let sink_mode = self.try_encode_physical_sink_mode(delta_writer_exec.sink_mode())?;
             NodeKind::DeltaWriter(gen::DeltaWriterExecNode {
                 input,
                 table_url: delta_writer_exec.table_url().to_string(),
@@ -685,12 +689,8 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
                     .map_err(|e| plan_datafusion_err!("{e}"))?,
                 sink_schema: self.try_encode_schema(delta_writer_exec.sink_schema())?,
                 partition_columns: delta_writer_exec.partition_columns().to_vec(),
-                operation: delta_writer_exec
-                    .operation()
-                    .map(serde_json::to_string)
-                    .transpose()
-                    .map_err(|e| plan_datafusion_err!("{e}"))?,
                 table_exists: delta_writer_exec.table_exists(),
+                sink_mode: Some(sink_mode),
             })
         } else if let Some(delta_commit_exec) = node.as_any().downcast_ref::<DeltaCommitExec>() {
             let input = self.try_encode_plan(delta_commit_exec.input().clone())?;
@@ -698,13 +698,6 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
                 input,
                 table_url: delta_commit_exec.table_url().to_string(),
                 partition_columns: delta_commit_exec.partition_columns().to_vec(),
-                initial_actions: serde_json::to_string(delta_commit_exec.initial_actions())
-                    .map_err(|e| plan_datafusion_err!("{e}"))?,
-                operation: delta_commit_exec
-                    .operation()
-                    .map(serde_json::to_string)
-                    .transpose()
-                    .map_err(|e| plan_datafusion_err!("{e}"))?,
                 table_exists: delta_commit_exec.table_exists(),
                 sink_schema: self.try_encode_schema(delta_commit_exec.sink_schema())?,
             })
@@ -1280,6 +1273,63 @@ impl RemoteExecutionCodec {
         Self { context }
     }
 
+    fn try_decode_physical_sink_mode(
+        &self,
+        proto_mode: gen::PhysicalSinkMode,
+        schema: &Schema,
+        registry: &dyn FunctionRegistry,
+    ) -> Result<PhysicalSinkMode> {
+        let gen::PhysicalSinkMode { mode } = proto_mode;
+        match mode {
+            Some(gen::physical_sink_mode::Mode::Append(_)) => Ok(PhysicalSinkMode::Append),
+            Some(gen::physical_sink_mode::Mode::Overwrite(_)) => Ok(PhysicalSinkMode::Overwrite),
+            Some(gen::physical_sink_mode::Mode::OverwriteIf(overwrite_if)) => {
+                let expr_node = self.try_decode_message(&overwrite_if.condition)?;
+                let condition = parse_physical_expr(&expr_node, registry, schema, self)?;
+                Ok(PhysicalSinkMode::OverwriteIf { condition })
+            }
+            Some(gen::physical_sink_mode::Mode::ErrorIfExists(_)) => {
+                Ok(PhysicalSinkMode::ErrorIfExists)
+            }
+            Some(gen::physical_sink_mode::Mode::IgnoreIfExists(_)) => {
+                Ok(PhysicalSinkMode::IgnoreIfExists)
+            }
+            Some(gen::physical_sink_mode::Mode::OverwritePartitions(_)) => {
+                Ok(PhysicalSinkMode::OverwritePartitions)
+            }
+            None => plan_err!("PhysicalSinkMode is missing"),
+        }
+    }
+
+    fn try_encode_physical_sink_mode(
+        &self,
+        mode: &PhysicalSinkMode,
+    ) -> Result<gen::PhysicalSinkMode> {
+        let mode = match mode {
+            PhysicalSinkMode::Append => gen::physical_sink_mode::Mode::Append(gen::AppendMode {}),
+            PhysicalSinkMode::Overwrite => {
+                gen::physical_sink_mode::Mode::Overwrite(gen::OverwriteMode {})
+            }
+            PhysicalSinkMode::OverwriteIf { condition } => {
+                let proto_expr = serialize_physical_expr(condition, self)?;
+                let condition_bytes = self.try_encode_message(proto_expr)?;
+                gen::physical_sink_mode::Mode::OverwriteIf(gen::OverwriteIfMode {
+                    condition: condition_bytes,
+                })
+            }
+            PhysicalSinkMode::ErrorIfExists => {
+                gen::physical_sink_mode::Mode::ErrorIfExists(gen::ErrorIfExistsMode {})
+            }
+            PhysicalSinkMode::IgnoreIfExists => {
+                gen::physical_sink_mode::Mode::IgnoreIfExists(gen::IgnoreIfExistsMode {})
+            }
+            PhysicalSinkMode::OverwritePartitions => {
+                gen::physical_sink_mode::Mode::OverwritePartitions(gen::OverwritePartitionsMode {})
+            }
+        };
+        Ok(gen::PhysicalSinkMode { mode: Some(mode) })
+    }
+
     fn try_decode_delta_writer_exec(
         &self,
         input: Arc<dyn ExecutionPlan>,
@@ -1287,23 +1337,19 @@ impl RemoteExecutionCodec {
         options: String,
         sink_schema: SchemaRef,
         partition_columns: Vec<String>,
-        operation: Option<String>,
+        sink_mode: PhysicalSinkMode,
         table_exists: bool,
     ) -> Result<Arc<dyn ExecutionPlan>> {
         let table_url = Url::parse(&table_url)
             .map_err(|e| plan_datafusion_err!("failed to parse table URL: {e}"))?;
         let options = serde_json::from_str(&options).map_err(|e| plan_datafusion_err!("{e}"))?;
-        let operation = match operation {
-            Some(op) => Some(serde_json::from_str(&op).map_err(|e| plan_datafusion_err!("{e}"))?),
-            None => None,
-        };
 
         Ok(Arc::new(DeltaWriterExec::new(
             input,
             table_url,
             options,
             partition_columns,
-            operation,
+            sink_mode,
             table_exists,
             sink_schema,
         )))
@@ -1314,26 +1360,16 @@ impl RemoteExecutionCodec {
         input: Arc<dyn ExecutionPlan>,
         table_url: String,
         partition_columns: Vec<String>,
-        initial_actions: String,
-        operation: Option<String>,
         table_exists: bool,
         sink_schema: SchemaRef,
     ) -> Result<Arc<dyn ExecutionPlan>> {
         let table_url = Url::parse(&table_url)
             .map_err(|e| plan_datafusion_err!("failed to parse table URL: {e}"))?;
-        let initial_actions =
-            serde_json::from_str(&initial_actions).map_err(|e| plan_datafusion_err!("{e}"))?;
-        let operation = match operation {
-            Some(op) => Some(serde_json::from_str(&op).map_err(|e| plan_datafusion_err!("{e}"))?),
-            None => None,
-        };
 
         Ok(Arc::new(DeltaCommitExec::new(
             input,
             table_url,
             partition_columns,
-            initial_actions,
-            operation,
             table_exists,
             sink_schema,
         )))

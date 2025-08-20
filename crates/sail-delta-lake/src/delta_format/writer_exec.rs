@@ -2,12 +2,15 @@ use std::any::Any;
 use std::collections::HashMap;
 use std::fmt;
 use std::sync::Arc;
+use std::time::{SystemTime, UNIX_EPOCH};
 
 use async_trait::async_trait;
 use datafusion::arrow::array::{StringArray, UInt64Array};
 use datafusion::arrow::datatypes::{DataType, Field, Schema, SchemaRef};
 use datafusion::arrow::record_batch::RecordBatch;
+use datafusion::common::ToDFSchema;
 use datafusion::execution::context::TaskContext;
+use datafusion::execution::SessionStateBuilder;
 use datafusion::physical_plan::execution_plan::{Boundedness, EmissionType};
 use datafusion::physical_plan::stream::RecordBatchStreamAdapter;
 use datafusion::physical_plan::{
@@ -19,15 +22,18 @@ use datafusion_physical_expr::EquivalenceProperties;
 use deltalake::kernel::engine::arrow_conversion::{TryIntoArrow, TryIntoKernel};
 use deltalake::kernel::schema::StructType;
 #[allow(deprecated)]
-use deltalake::kernel::{Action, MetadataExt}; // TODO: Follow upstream for `MetadataExt`.
+use deltalake::kernel::{Action, MetadataExt, Remove}; // TODO: Follow upstream for `MetadataExt`.
 use deltalake::logstore::StorageConfig;
 use deltalake::protocol::{DeltaOperation, SaveMode};
 use futures::stream::once;
 use futures::StreamExt;
-use sail_common_datafusion::datasource::TableDeltaOptions;
+use sail_common_datafusion::datasource::{PhysicalSinkMode, TableDeltaOptions};
 use url::Url;
+use uuid::Uuid;
 
 use crate::delta_datafusion::type_converter::DeltaTypeConverter;
+use crate::delta_datafusion::{parse_predicate_expression, DataFusionMixins};
+use crate::operations::write::execution::{prepare_predicate_actions_physical, WriterStatsConfig};
 use crate::operations::write::writer::{DeltaWriter, WriterConfig};
 use crate::table::open_table_with_object_store;
 
@@ -47,7 +53,7 @@ pub struct DeltaWriterExec {
     table_url: Url,
     options: TableDeltaOptions,
     partition_columns: Vec<String>,
-    operation: Option<DeltaOperation>,
+    sink_mode: PhysicalSinkMode,
     table_exists: bool,
     sink_schema: SchemaRef,
     cache: PlanProperties,
@@ -59,7 +65,7 @@ impl DeltaWriterExec {
         table_url: Url,
         options: TableDeltaOptions,
         partition_columns: Vec<String>,
-        operation: Option<DeltaOperation>,
+        sink_mode: PhysicalSinkMode,
         table_exists: bool,
         sink_schema: SchemaRef,
     ) -> Self {
@@ -67,6 +73,8 @@ impl DeltaWriterExec {
             Field::new("row_count", DataType::UInt64, true),
             Field::new("add_actions_json", DataType::Utf8, true),
             Field::new("schema_actions_json", DataType::Utf8, true),
+            Field::new("initial_actions_json", DataType::Utf8, true),
+            Field::new("operation_json", DataType::Utf8, true),
         ]));
         let cache = Self::compute_properties(schema);
         Self {
@@ -74,7 +82,7 @@ impl DeltaWriterExec {
             table_url,
             options,
             partition_columns,
-            operation,
+            sink_mode,
             table_exists,
             sink_schema,
             cache,
@@ -110,8 +118,8 @@ impl DeltaWriterExec {
         &self.sink_schema
     }
 
-    pub fn operation(&self) -> Option<&DeltaOperation> {
-        self.operation.as_ref()
+    pub fn sink_mode(&self) -> &PhysicalSinkMode {
+        &self.sink_mode
     }
 
     pub fn table_exists(&self) -> bool {
@@ -150,7 +158,7 @@ impl ExecutionPlan for DeltaWriterExec {
             self.table_url.clone(),
             self.options.clone(),
             self.partition_columns.clone(),
-            self.operation.clone(),
+            self.sink_mode.clone(),
             self.table_exists,
             self.sink_schema.clone(),
         )))
@@ -170,7 +178,7 @@ impl ExecutionPlan for DeltaWriterExec {
         let table_url = self.table_url.clone();
         let options = self.options.clone();
         let partition_columns = self.partition_columns.clone();
-        let operation = self.operation.clone();
+        let sink_mode = self.sink_mode.clone();
         let table_exists = self.table_exists;
         let input_schema = self.input.schema();
         // let sink_schema = self.sink_schema.clone();
@@ -186,16 +194,185 @@ impl ExecutionPlan for DeltaWriterExec {
             let storage_config = StorageConfig::default();
             let object_store = Self::get_object_store(&context, &table_url)?;
 
-            // Handle schema evolution if table exists
-            let (final_schema, schema_actions) = if table_exists {
-                let table = open_table_with_object_store(
-                    table_url.clone(),
-                    object_store.clone(),
-                    storage_config.clone(),
-                )
-                .await
-                .map_err(|e| DataFusionError::External(Box::new(e)))?;
+            // Calculate initial_actions and operation based on sink_mode
+            let mut initial_actions: Vec<Action> = Vec::new();
+            let mut operation: Option<DeltaOperation> = None;
 
+            let table_result = open_table_with_object_store(
+                table_url.clone(),
+                object_store.clone(),
+                storage_config.clone(),
+            )
+            .await;
+
+            #[allow(clippy::unwrap_used)]
+            let table = if table_exists {
+                Some(table_result.unwrap())
+            } else {
+                None
+            };
+
+            match &sink_mode {
+                PhysicalSinkMode::Append => {
+                    operation = Some(DeltaOperation::Write {
+                        mode: SaveMode::Append,
+                        partition_by: if partition_columns.is_empty() {
+                            None
+                        } else {
+                            Some(partition_columns.clone())
+                        },
+                        predicate: None,
+                    });
+                }
+                PhysicalSinkMode::Overwrite => {
+                    if let Some(table) = &table {
+                        if let Some(replace_where) = options.replace_where.clone() {
+                            let snapshot = table
+                                .snapshot()
+                                .map_err(|e| DataFusionError::External(Box::new(e)))?;
+                            let df_schema = snapshot
+                                .arrow_schema()
+                                .map_err(|e| DataFusionError::External(Box::new(e)))?
+                                .to_dfschema()?;
+                            let session_state = SessionStateBuilder::new()
+                                .with_runtime_env(context.runtime_env().clone())
+                                .build();
+
+                            let predicate_expr = parse_predicate_expression(
+                                &df_schema,
+                                &replace_where,
+                                &session_state,
+                            )
+                            .map_err(|e| DataFusionError::External(Box::new(e)))?;
+
+                            let physical_predicate = session_state
+                                .create_physical_expr(predicate_expr, &df_schema)
+                                .map_err(|e| DataFusionError::External(Box::new(e)))?;
+
+                            #[allow(clippy::unwrap_used)]
+                            let (remove_actions, _) = prepare_predicate_actions_physical(
+                                physical_predicate,
+                                table.log_store(),
+                                snapshot,
+                                session_state,
+                                partition_columns.clone(),
+                                None,
+                                SystemTime::now()
+                                    .duration_since(UNIX_EPOCH)
+                                    .unwrap()
+                                    .as_millis() as i64,
+                                WriterStatsConfig::new(32, None),
+                                Uuid::new_v4(),
+                            )
+                            .await
+                            .map_err(|e| DataFusionError::External(Box::new(e)))?;
+                            initial_actions.extend(remove_actions);
+                        } else {
+                            let snapshot = table
+                                .snapshot()
+                                .map_err(|e| DataFusionError::External(Box::new(e)))?;
+                            let remove_actions: Vec<Action> = snapshot
+                                .file_actions()
+                                .map_err(|e| DataFusionError::External(Box::new(e)))?
+                                .into_iter()
+                                .map(|add| {
+                                    #[allow(clippy::unwrap_used)]
+                                    Action::Remove(Remove {
+                                        path: add.path.clone(),
+                                        deletion_timestamp: Some(
+                                            SystemTime::now()
+                                                .duration_since(UNIX_EPOCH)
+                                                .unwrap()
+                                                .as_millis()
+                                                as i64,
+                                        ),
+                                        data_change: true,
+                                        ..Default::default()
+                                    })
+                                })
+                                .collect();
+                            initial_actions.extend(remove_actions);
+                        }
+                    }
+                    operation = Some(DeltaOperation::Write {
+                        mode: SaveMode::Overwrite,
+                        partition_by: if partition_columns.is_empty() {
+                            None
+                        } else {
+                            Some(partition_columns.clone())
+                        },
+                        predicate: None,
+                    });
+                }
+                PhysicalSinkMode::OverwriteIf { condition } => {
+                    if let Some(table) = &table {
+                        let snapshot = table
+                            .snapshot()
+                            .map_err(|e| DataFusionError::External(Box::new(e)))?;
+                        let session_state = SessionStateBuilder::new()
+                            .with_runtime_env(context.runtime_env().clone())
+                            .build();
+
+                        #[allow(clippy::unwrap_used)]
+                        let (remove_actions, _) = prepare_predicate_actions_physical(
+                            condition.clone(),
+                            table.log_store(),
+                            snapshot,
+                            session_state,
+                            partition_columns.clone(),
+                            None,
+                            SystemTime::now()
+                                .duration_since(UNIX_EPOCH)
+                                .unwrap()
+                                .as_millis() as i64,
+                            WriterStatsConfig::new(32, None),
+                            Uuid::new_v4(),
+                        )
+                        .await
+                        .map_err(|e| DataFusionError::External(Box::new(e)))?;
+                        initial_actions.extend(remove_actions);
+                    }
+                    operation = Some(DeltaOperation::Write {
+                        mode: SaveMode::Overwrite,
+                        partition_by: if partition_columns.is_empty() {
+                            None
+                        } else {
+                            Some(partition_columns.clone())
+                        },
+                        predicate: None,
+                    });
+                }
+                PhysicalSinkMode::ErrorIfExists => {
+                    if table_exists {
+                        return Err(DataFusionError::Plan(format!(
+                            "Delta table already exists at path: {table_url}"
+                        )));
+                    }
+                }
+                PhysicalSinkMode::IgnoreIfExists => {
+                    if table_exists {
+                        let batch = RecordBatch::try_new(
+                            schema,
+                            vec![
+                                Arc::new(UInt64Array::from(vec![0])),
+                                Arc::new(StringArray::from(vec!["[]"])),
+                                Arc::new(StringArray::from(vec!["[]"])),
+                                Arc::new(StringArray::from(vec!["[]"])),
+                                Arc::new(StringArray::from(vec!["null"])),
+                            ],
+                        )?;
+                        return Ok(batch);
+                    }
+                }
+                PhysicalSinkMode::OverwritePartitions => {
+                    return Err(DataFusionError::NotImplemented(
+                        "OverwritePartitions mode not implemented".to_string(),
+                    ));
+                }
+            }
+
+            // Handle schema evolution if table exists
+            let (final_schema, schema_actions) = if let Some(table) = &table {
                 // Determine save mode from operation
                 let save_mode = match &operation {
                     Some(DeltaOperation::Write { mode, .. }) => *mode,
@@ -206,7 +383,7 @@ impl ExecutionPlan for DeltaWriterExec {
                 // Get schema mode based on options
                 let schema_mode = Self::get_schema_mode(&options, save_mode)?;
 
-                Self::handle_schema_evolution(&table, &input_schema, schema_mode).await?
+                Self::handle_schema_evolution(table, &input_schema, schema_mode).await?
             } else {
                 (input_schema.clone(), Vec::new())
             };
@@ -244,20 +421,30 @@ impl ExecutionPlan for DeltaWriterExec {
                 .await
                 .map_err(|e| DataFusionError::External(Box::new(e)))?;
 
-            // Serialize Add actions to JSON for transfer to CommitExec
+            // Serialize all actions and operation to JSON for transfer to CommitExec
             let add_actions_json = serde_json::to_string(&add_actions)
                 .map_err(|e| DataFusionError::External(Box::new(e)))?;
-
-            // Serialize Schema actions to JSON for transfer to CommitExec
             let schema_actions_json = serde_json::to_string(&schema_actions)
+                .map_err(|e| DataFusionError::External(Box::new(e)))?;
+            let initial_actions_json = serde_json::to_string(&initial_actions)
+                .map_err(|e| DataFusionError::External(Box::new(e)))?;
+            let operation_json = serde_json::to_string(&operation)
                 .map_err(|e| DataFusionError::External(Box::new(e)))?;
 
             let row_count_array = Arc::new(UInt64Array::from(vec![total_rows]));
             let add_actions_array = Arc::new(StringArray::from(vec![add_actions_json]));
             let schema_actions_array = Arc::new(StringArray::from(vec![schema_actions_json]));
+            let initial_actions_array = Arc::new(StringArray::from(vec![initial_actions_json]));
+            let operation_array = Arc::new(StringArray::from(vec![operation_json]));
             let batch = RecordBatch::try_new(
                 schema,
-                vec![row_count_array, add_actions_array, schema_actions_array],
+                vec![
+                    row_count_array,
+                    add_actions_array,
+                    schema_actions_array,
+                    initial_actions_array,
+                    operation_array,
+                ],
             )?;
             Ok(batch)
         };

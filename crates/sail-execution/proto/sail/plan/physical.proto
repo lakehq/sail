@@ -284,24 +284,42 @@ message PartialSortExecNode {
   uint64 common_prefix_length = 3;
 }
 
+message AppendMode {}
+message OverwriteMode {}
+message OverwriteIfMode {
+  bytes condition = 1;
+}
+message ErrorIfExistsMode {}
+message IgnoreIfExistsMode {}
+message OverwritePartitionsMode {}
+
+message PhysicalSinkMode {
+  oneof mode {
+    AppendMode append = 1;
+    OverwriteMode overwrite = 2;
+    OverwriteIfMode overwrite_if = 3;
+    ErrorIfExistsMode error_if_exists = 4;
+    IgnoreIfExistsMode ignore_if_exists = 5;
+    OverwritePartitionsMode overwrite_partitions = 6;
+  }
+}
+
 message DeltaWriterExecNode {
   bytes input = 1;
   string table_url = 2;
   string options = 3;
   bytes sink_schema = 4;
   repeated string partition_columns = 5;
-  optional string operation = 6;
-  bool table_exists = 7;
+  bool table_exists = 6;
+  PhysicalSinkMode sink_mode = 7;
 }
 
 message DeltaCommitExecNode {
   bytes input = 1;
   string table_url = 2;
   repeated string partition_columns = 3;
-  string initial_actions = 4;
-  optional string operation = 5;
-  bool table_exists = 6;
-  bytes sink_schema = 7;
+  bool table_exists = 4;
+  bytes sink_schema = 5;
 }
 
 message JoinOn {

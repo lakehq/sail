@@ -35,8 +35,6 @@ pub struct DeltaCommitExec {
     input: Arc<dyn ExecutionPlan>,
     table_url: Url,
     partition_columns: Vec<String>,
-    initial_actions: Vec<Action>,
-    operation: Option<DeltaOperation>,
     table_exists: bool,
     sink_schema: SchemaRef,
     cache: PlanProperties,
@@ -47,8 +45,6 @@ impl DeltaCommitExec {
         input: Arc<dyn ExecutionPlan>,
         table_url: Url,
         partition_columns: Vec<String>,
-        initial_actions: Vec<Action>,
-        operation: Option<DeltaOperation>,
         table_exists: bool,
         sink_schema: SchemaRef,
     ) -> Self {
@@ -62,8 +58,6 @@ impl DeltaCommitExec {
             input,
             table_url,
             partition_columns,
-            initial_actions,
-            operation,
             table_exists,
             sink_schema,
             cache,
@@ -85,14 +79,6 @@ impl DeltaCommitExec {
 
     pub fn partition_columns(&self) -> &[String] {
         &self.partition_columns
-    }
-
-    pub fn initial_actions(&self) -> &[Action] {
-        &self.initial_actions
-    }
-
-    pub fn operation(&self) -> Option<&DeltaOperation> {
-        self.operation.as_ref()
     }
 
     pub fn table_exists(&self) -> bool {
@@ -138,8 +124,6 @@ impl ExecutionPlan for DeltaCommitExec {
             Arc::clone(&children[0]),
             self.table_url.clone(),
             self.partition_columns.clone(),
-            self.initial_actions.clone(),
-            self.operation.clone(),
             self.table_exists,
             self.sink_schema.clone(),
         )))
@@ -158,8 +142,6 @@ impl ExecutionPlan for DeltaCommitExec {
 
         let table_url = self.table_url.clone();
         let partition_columns = self.partition_columns.clone();
-        let initial_actions = self.initial_actions.clone();
-        let operation = self.operation.clone();
         let table_exists = self.table_exists;
         let sink_schema = self.sink_schema.clone();
 
@@ -187,16 +169,12 @@ impl ExecutionPlan for DeltaCommitExec {
                 .into()
             };
 
-            let save_mode = match &operation {
-                Some(DeltaOperation::Write { mode, .. }) => *mode,
-                Some(DeltaOperation::Create { mode, .. }) => *mode,
-                _ => SaveMode::Append,
-            };
-
             let mut total_rows = 0u64;
             let mut has_data = false;
             let mut writer_add_actions: Vec<Add> = Vec::new();
             let mut schema_actions: Vec<Action> = Vec::new();
+            let mut initial_actions: Vec<Action> = Vec::new();
+            let mut operation: Option<DeltaOperation> = None;
             let mut data = input_stream;
 
             while let Some(batch_result) = data.next().await {
@@ -232,6 +210,28 @@ impl ExecutionPlan for DeltaCommitExec {
                         }
                     }
                 }
+
+                // Extract initial_actions from fourth column
+                if batch.columns().len() > 3 {
+                    if let Some(array) = batch.column(3).as_any().downcast_ref::<StringArray>() {
+                        if array.len() > 0 {
+                            let initial_actions_json = array.value(0);
+                            initial_actions = serde_json::from_str(initial_actions_json)
+                                .map_err(|e| DataFusionError::External(Box::new(e)))?;
+                        }
+                    }
+                }
+
+                // Extract operation from fifth column
+                if batch.columns().len() > 4 {
+                    if let Some(array) = batch.column(4).as_any().downcast_ref::<StringArray>() {
+                        if array.len() > 0 {
+                            let operation_json = array.value(0);
+                            operation = serde_json::from_str(operation_json)
+                                .map_err(|e| DataFusionError::External(Box::new(e)))?;
+                        }
+                    }
+                }
             }
 
             if !has_data {
@@ -241,7 +241,7 @@ impl ExecutionPlan for DeltaCommitExec {
             }
 
             // Use the Add actions from the writer
-            let mut actions: Vec<Action> = initial_actions.to_vec();
+            let mut actions: Vec<Action> = initial_actions;
             actions.extend(schema_actions); // Add schema actions first
             actions.extend(writer_add_actions.into_iter().map(Action::Add)); // Then add actions
 
@@ -288,7 +288,7 @@ impl ExecutionPlan for DeltaCommitExec {
                 }
             } else {
                 operation.clone().unwrap_or(DeltaOperation::Write {
-                    mode: save_mode,
+                    mode: SaveMode::Append,
                     partition_by: if partition_columns.is_empty() {
                         None
                     } else {
