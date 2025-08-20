@@ -205,7 +205,7 @@ class TestLocalClusterExecution:
         spark.catalog.dropTempView("sales")
 
     def test_multiple_operations(self, spark):
-        """Test that multiple operations can run concurrently in local-cluster mode."""
+        """Test that multiple operations in local-cluster mode."""
         df1 = spark.range(100).select(F.col("id").alias("id1"))
         df2 = spark.range(100).select(F.col("id").alias("id2"))
 

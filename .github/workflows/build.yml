@@ -83,11 +83,9 @@ jobs:
         run: grcov target --binary-path target/debug/ -s . -t lcov --branch --ignore-not-existing -o coverage-build.info
 
       - name: Record Rust version
-        if: success()
         run: echo "RUST=$(rustc --version)" >> "$GITHUB_ENV"
 
       - name: Upload cargo coverage reports to Codecov
-        if: success()
         uses: codecov/codecov-action@v5
         with:
           token: ${{ secrets.CODECOV_TOKEN }}
