@@ -18,7 +18,7 @@ pub(super) fn list_built_in_map_functions() -> Vec<(&'static str, ScalarFunction
         ("map", F::udf(MapFunction::new())),
         ("map_concat", F::unknown("map_concat")),
         ("map_contains_key", F::binary(map_contains_key)),
-        ("map_entries", F::unknown("map_entries")),
+        ("map_entries", F::unary(expr_fn::map_entries)),
         ("map_from_arrays", F::scalar_udf(map_udf)),
         ("map_from_entries", F::unknown("map_from_entries")),
         ("map_keys", F::unary(expr_fn::map_keys)),

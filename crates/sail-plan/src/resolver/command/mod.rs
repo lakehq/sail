@@ -1,14 +1,21 @@
-use datafusion_expr::LogicalPlan;
+use std::sync::Arc;
+
+use datafusion_expr::{Extension, LogicalPlan};
 use sail_catalog::command::CatalogCommand;
 use sail_catalog::provider::{DropDatabaseOptions, DropTableOptions};
 use sail_common::spec;
 
 use crate::error::{PlanError, PlanResult};
+use crate::extension::logical::CatalogCommandNode;
 use crate::resolver::state::PlanResolverState;
 use crate::resolver::PlanResolver;
 
 mod catalog;
+mod explain;
+mod function;
 mod insert;
+mod show;
+mod variable;
 mod write;
 mod write_v1;
 mod write_v2;
@@ -261,5 +268,11 @@ impl PlanResolver<'_> {
                 Err(PlanError::todo("CommandNode::CommentOnColumn"))
             }
         }
+    }
+
+    fn resolve_catalog_command(&self, command: CatalogCommand) -> PlanResult<LogicalPlan> {
+        Ok(LogicalPlan::Extension(Extension {
+            node: Arc::new(CatalogCommandNode::try_new(command, self.config.clone())?),
+        }))
     }
 }
