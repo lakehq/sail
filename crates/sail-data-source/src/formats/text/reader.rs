@@ -577,3 +577,135 @@ impl<'a> StringRecords<'a> {
         (0..self.num_rows).map(|x| self.get(x))
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use std::io::Cursor;
+
+    use datafusion::arrow::datatypes::Field;
+
+    use super::*;
+
+    #[allow(clippy::unwrap_used)]
+    #[test]
+    fn test_text() {
+        let schema = Arc::new(Schema::new(vec![Field::new(
+            "value",
+            datafusion::arrow::datatypes::DataType::Utf8,
+            true,
+        )]));
+        let mut text = ReaderBuilder::new(schema)
+            .build(Cursor::new(b"line1\nline2\nline3\nline4\nline5"))
+            .unwrap();
+        let batch = text.next().unwrap().unwrap();
+        let value = batch
+            .column(0)
+            .as_any()
+            .downcast_ref::<StringArray>()
+            .unwrap();
+        assert_eq!("line1", value.value(0));
+        assert_eq!("line2", value.value(1));
+        assert_eq!("line3", value.value(2));
+        assert_eq!("line4", value.value(3));
+        assert_eq!("line5", value.value(4));
+    }
+
+    #[allow(clippy::unwrap_used)]
+    #[test]
+    fn test_text_schema_metadata() {
+        let mut metadata = std::collections::HashMap::new();
+        metadata.insert("foo".to_owned(), "bar".to_owned());
+        let schema = Arc::new(Schema::new_with_metadata(
+            vec![Field::new(
+                "value",
+                datafusion::arrow::datatypes::DataType::Utf8,
+                true,
+            )],
+            metadata.clone(),
+        ));
+        let mut text = ReaderBuilder::new(schema.clone())
+            .build(Cursor::new(b"line1\nline2\nline3\nline4\nline5"))
+            .unwrap();
+        assert_eq!(schema, text.schema());
+        let batch = text.next().unwrap().unwrap();
+        assert_eq!(5, batch.num_rows());
+        assert_eq!(1, batch.num_columns());
+        assert_eq!(&metadata, batch.schema().metadata());
+    }
+
+    #[allow(clippy::unwrap_used)]
+    #[test]
+    fn test_text_builder_with_bounds() {
+        let schema = Arc::new(Schema::new(vec![Field::new(
+            "value",
+            datafusion::arrow::datatypes::DataType::Utf8,
+            true,
+        )]));
+        let mut text = ReaderBuilder::new(schema)
+            .with_bounds(0, 2)
+            .build(Cursor::new(b"line1\nline2\nline3\nline4\nline5"))
+            .unwrap();
+        let batch = text.next().unwrap().unwrap();
+        let value = batch
+            .column(0)
+            .as_any()
+            .downcast_ref::<StringArray>()
+            .unwrap();
+        assert_eq!("line1", value.value(0));
+        let result = std::panic::catch_unwind(|| value.value(3));
+        assert!(
+            result.is_err(),
+            "Accessing value outside of bounds should panic"
+        );
+    }
+
+    #[allow(clippy::unwrap_used)]
+    #[test]
+    fn test_whole_text() {
+        let schema = Arc::new(Schema::new(vec![Field::new(
+            "value",
+            datafusion::arrow::datatypes::DataType::Utf8,
+            true,
+        )]));
+        let mut text = ReaderBuilder::new(schema)
+            .with_format(Format::default().with_whole_text(true))
+            .build(Cursor::new(b"line1\nline2\nline3\nline4\nline5"))
+            .unwrap();
+        let batch = text.next().unwrap().unwrap();
+        let value = batch
+            .column(0)
+            .as_any()
+            .downcast_ref::<StringArray>()
+            .unwrap();
+        assert_eq!("line1\nline2\nline3\nline4\nline5", value.value(0));
+        assert_eq!(1, batch.num_rows());
+        assert_eq!(1, batch.num_columns());
+    }
+
+    #[allow(clippy::unwrap_used)]
+    #[test]
+    fn test_line_sep() {
+        let schema = Arc::new(Schema::new(vec![Field::new(
+            "value",
+            datafusion::arrow::datatypes::DataType::Utf8,
+            true,
+        )]));
+        let mut text = ReaderBuilder::new(schema)
+            .with_format(Format::default().with_line_sep(b';'))
+            .build(Cursor::new(b"line1;line2;line3;line4;line5"))
+            .unwrap();
+        let batch = text.next().unwrap().unwrap();
+        let value = batch
+            .column(0)
+            .as_any()
+            .downcast_ref::<StringArray>()
+            .unwrap();
+        assert_eq!("line1", value.value(0));
+        assert_eq!("line2", value.value(1));
+        assert_eq!("line3", value.value(2));
+        assert_eq!("line4", value.value(3));
+        assert_eq!("line5", value.value(4));
+        assert_eq!(5, batch.num_rows());
+        assert_eq!(1, batch.num_columns());
+    }
+}
