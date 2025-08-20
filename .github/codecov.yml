@@ -1,0 +1,49 @@
+coverage:
+  status:
+    patch: false
+    project:
+      default: false
+      cargo:
+        only_pulls: true
+        flags:
+          - cargo
+        paths:
+          - "crates/"
+        target: auto
+        threshold: 0.1%
+      spark:
+        only_pulls: true
+        flags:
+          - spark
+        paths:
+          - "crates/"
+          - "python/"
+        target: auto
+        threshold: 0.1%
+      python:
+        only_pulls: true
+        flags:
+          - python
+        paths:
+          - "crates/"
+          - "python/"
+        target: auto
+        threshold: 0.1%
+
+codecov:
+  allow_coverage_offsets: true
+
+comment: false
+
+flags:
+  cargo:
+    paths:
+      - crates/
+  spark:
+    paths:
+      - crates/
+      - python/
+  python:
+    paths:
+      - crates/
+      - python/
