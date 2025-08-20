@@ -80,8 +80,6 @@ jobs:
 
       # Generate coverage report after tests
       - name: Generate coverage report
-        # Only run if tests succeed
-        if: success()
         run: grcov target --binary-path target/debug/ -s . -t lcov --branch --ignore-not-existing -o coverage-build.info
 
       - name: Record Rust version

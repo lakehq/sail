@@ -172,8 +172,6 @@ jobs:
 
       # Generate coverage report after Spark tests
       - name: Generate coverage report
-        # Only run if tests succeed
-        if: success()
         run: |
           # Wait for background Rust toolchain installation to complete
           wait
