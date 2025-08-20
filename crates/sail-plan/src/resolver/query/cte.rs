@@ -9,7 +9,7 @@ use crate::resolver::state::PlanResolverState;
 use crate::resolver::PlanResolver;
 
 impl PlanResolver<'_> {
-    pub(in crate::resolver) async fn resolve_query_with_ctes(
+    pub(super) async fn resolve_query_with_ctes(
         &self,
         input: spec::QueryPlan,
         recursive: bool,

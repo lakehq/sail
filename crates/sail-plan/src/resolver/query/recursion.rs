@@ -6,7 +6,7 @@ use crate::resolver::state::PlanResolverState;
 use crate::resolver::PlanResolver;
 
 impl PlanResolver<'_> {
-    pub(in crate::resolver) async fn resolve_recursive_query_plan(
+    pub(super) async fn resolve_recursive_query_plan(
         &self,
         plan: spec::QueryPlan,
         state: &mut PlanResolverState,

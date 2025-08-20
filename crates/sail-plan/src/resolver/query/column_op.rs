@@ -14,7 +14,7 @@ use crate::resolver::PlanResolver;
 use crate::utils::ItemTaker;
 
 impl PlanResolver<'_> {
-    pub(in crate::resolver) async fn resolve_query_to_df(
+    pub(super) async fn resolve_query_to_df(
         &self,
         input: spec::QueryPlan,
         columns: Vec<spec::Identifier>,
@@ -42,7 +42,7 @@ impl PlanResolver<'_> {
         )?))
     }
 
-    pub(in crate::resolver) async fn resolve_query_to_schema(
+    pub(super) async fn resolve_query_to_schema(
         &self,
         input: spec::QueryPlan,
         schema: spec::Schema,
@@ -75,7 +75,7 @@ impl PlanResolver<'_> {
         Ok(projected_plan)
     }
 
-    pub(in crate::resolver) async fn resolve_query_with_columns_renamed(
+    pub(super) async fn resolve_query_with_columns_renamed(
         &self,
         input: spec::QueryPlan,
         rename_columns_map: Vec<(spec::Identifier, spec::Identifier)>,
@@ -117,7 +117,7 @@ impl PlanResolver<'_> {
         )?))
     }
 
-    pub(in crate::resolver) async fn resolve_query_drop(
+    pub(super) async fn resolve_query_drop(
         &self,
         input: spec::QueryPlan,
         columns: Vec<spec::Expr>,
@@ -170,7 +170,7 @@ impl PlanResolver<'_> {
         )?))
     }
 
-    pub(in crate::resolver) async fn resolve_query_with_columns(
+    pub(super) async fn resolve_query_with_columns(
         &self,
         input: spec::QueryPlan,
         aliases: Vec<spec::Expr>,
@@ -241,7 +241,7 @@ impl PlanResolver<'_> {
         )?))
     }
 
-    pub(in crate::resolver) async fn resolve_query_replace(
+    pub(super) async fn resolve_query_replace(
         &self,
         input: spec::QueryPlan,
         columns: Vec<spec::Identifier>,

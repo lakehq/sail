@@ -8,7 +8,7 @@ use crate::resolver::state::PlanResolverState;
 use crate::resolver::PlanResolver;
 
 impl PlanResolver<'_> {
-    pub(in crate::resolver) async fn resolve_query_repartition(
+    pub(super) async fn resolve_query_repartition(
         &self,
         input: spec::QueryPlan,
         num_partitions: usize,
@@ -24,7 +24,7 @@ impl PlanResolver<'_> {
         }))
     }
 
-    pub(in crate::resolver) async fn resolve_query_repartition_by_expression(
+    pub(super) async fn resolve_query_repartition_by_expression(
         &self,
         input: spec::QueryPlan,
         partition_expressions: Vec<spec::Expr>,

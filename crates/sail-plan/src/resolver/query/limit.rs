@@ -14,7 +14,7 @@ use crate::resolver::state::PlanResolverState;
 use crate::resolver::PlanResolver;
 
 impl PlanResolver<'_> {
-    pub(in crate::resolver) async fn resolve_query_limit(
+    pub(super) async fn resolve_query_limit(
         &self,
         input: spec::QueryPlan,
         skip: Option<spec::Expr>,
@@ -44,7 +44,7 @@ impl PlanResolver<'_> {
         }))
     }
 
-    pub(in crate::resolver) async fn resolve_query_tail(
+    pub(super) async fn resolve_query_tail(
         &self,
         input: spec::QueryPlan,
         limit: spec::Expr,

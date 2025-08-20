@@ -13,7 +13,7 @@ use crate::resolver::state::PlanResolverState;
 use crate::resolver::PlanResolver;
 
 impl PlanResolver<'_> {
-    pub(in crate::resolver) async fn resolve_query_set_operation(
+    pub(super) async fn resolve_query_set_operation(
         &self,
         op: spec::SetOperation,
         state: &mut PlanResolverState,

@@ -15,7 +15,7 @@ use crate::utils::ItemTaker;
 
 impl PlanResolver<'_> {
     #[allow(clippy::too_many_arguments)]
-    pub(in crate::resolver) async fn resolve_query_lateral_view(
+    pub(super) async fn resolve_query_lateral_view(
         &self,
         input: Option<spec::QueryPlan>,
         function: spec::ObjectName,
@@ -41,7 +41,7 @@ impl PlanResolver<'_> {
         }
         let input = match input {
             Some(x) => self.resolve_query_plan(x, state).await?,
-            None => self.resolve_empty_query_plan()?,
+            None => self.resolve_query_empty(true)?,
         };
         let schema = input.schema().clone();
 

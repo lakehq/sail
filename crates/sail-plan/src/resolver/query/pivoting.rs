@@ -6,7 +6,7 @@ use crate::resolver::state::PlanResolverState;
 use crate::resolver::PlanResolver;
 
 impl PlanResolver<'_> {
-    pub(in crate::resolver) async fn resolve_query_pivot(
+    pub(super) async fn resolve_query_pivot(
         &self,
         _pivot: spec::Pivot,
         _state: &mut PlanResolverState,
@@ -14,7 +14,7 @@ impl PlanResolver<'_> {
         Err(PlanError::todo("pivot"))
     }
 
-    pub(in crate::resolver) async fn resolve_query_unpivot(
+    pub(super) async fn resolve_query_unpivot(
         &self,
         _unpivot: spec::Unpivot,
         _state: &mut PlanResolverState,

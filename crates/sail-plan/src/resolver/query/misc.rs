@@ -3,8 +3,8 @@ use std::sync::Arc;
 
 use datafusion::catalog::MemTable;
 use datafusion::datasource::provider_as_source;
-use datafusion_common::{DFSchema, ParamValues};
-use datafusion_expr::{Extension, LogicalPlan, TableScan, UNNAMED_TABLE};
+use datafusion_common::{DFSchema, DFSchemaRef, ParamValues};
+use datafusion_expr::{EmptyRelation, Extension, LogicalPlan, TableScan, UNNAMED_TABLE};
 use sail_common::spec;
 use sail_common_datafusion::utils::{cast_record_batch, read_record_batches};
 
@@ -16,7 +16,16 @@ use crate::resolver::state::PlanResolverState;
 use crate::resolver::PlanResolver;
 
 impl PlanResolver<'_> {
-    pub(in crate::resolver) async fn resolve_query_range(
+    /// Resolves a query plan that produces an empty relation.
+    /// When `produce_one_row` is true, it can be used for literal projection with no input.
+    pub(super) fn resolve_query_empty(&self, produce_one_row: bool) -> PlanResult<LogicalPlan> {
+        Ok(LogicalPlan::EmptyRelation(EmptyRelation {
+            produce_one_row,
+            schema: DFSchemaRef::new(DFSchema::empty()),
+        }))
+    }
+
+    pub(super) async fn resolve_query_range(
         &self,
         range: spec::Range,
         state: &mut PlanResolverState,
@@ -41,7 +50,7 @@ impl PlanResolver<'_> {
         }))
     }
 
-    pub(in crate::resolver) async fn resolve_query_with_parameters(
+    pub(super) async fn resolve_query_with_parameters(
         &self,
         input: spec::QueryPlan,
         positional: Vec<spec::Expr>,
@@ -87,7 +96,7 @@ impl PlanResolver<'_> {
         }
     }
 
-    pub(in crate::resolver) async fn resolve_query_local_relation(
+    pub(super) async fn resolve_query_local_relation(
         &self,
         data: Option<Vec<u8>>,
         schema: Option<spec::Schema>,
@@ -124,7 +133,7 @@ impl PlanResolver<'_> {
         )?))
     }
 
-    pub(in crate::resolver) async fn resolve_query_hint(
+    pub(super) async fn resolve_query_hint(
         &self,
         _input: spec::QueryPlan,
         _name: String,
@@ -134,7 +143,7 @@ impl PlanResolver<'_> {
         Err(PlanError::todo("hint"))
     }
 
-    pub(in crate::resolver) async fn resolve_query_collect_metrics(
+    pub(super) async fn resolve_query_collect_metrics(
         &self,
         _input: spec::QueryPlan,
         _name: String,
@@ -144,7 +153,7 @@ impl PlanResolver<'_> {
         Err(PlanError::todo("collect metrics"))
     }
 
-    pub(in crate::resolver) async fn resolve_query_parse(
+    pub(super) async fn resolve_query_parse(
         &self,
         _parse: spec::Parse,
         _state: &mut PlanResolverState,
@@ -152,7 +161,7 @@ impl PlanResolver<'_> {
         Err(PlanError::todo("parse"))
     }
 
-    pub(in crate::resolver) async fn resolve_query_with_watermark(
+    pub(super) async fn resolve_query_with_watermark(
         &self,
         _watermark: spec::WithWatermark,
         _state: &mut PlanResolverState,

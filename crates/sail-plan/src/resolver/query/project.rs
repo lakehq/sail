@@ -20,7 +20,7 @@ use crate::resolver::PlanResolver;
 use crate::utils::ItemTaker;
 
 impl PlanResolver<'_> {
-    pub(in crate::resolver) async fn resolve_query_project(
+    pub(super) async fn resolve_query_project(
         &self,
         input: Option<spec::QueryPlan>,
         expr: Vec<spec::Expr>,
@@ -28,7 +28,7 @@ impl PlanResolver<'_> {
     ) -> PlanResult<LogicalPlan> {
         let input = match input {
             Some(x) => self.resolve_query_plan_with_hidden_fields(x, state).await?,
-            None => self.resolve_empty_query_plan()?,
+            None => self.resolve_query_empty(true)?,
         };
         let schema = input.schema();
         let expr = self.resolve_named_expressions(expr, schema, state).await?;
@@ -115,7 +115,7 @@ impl PlanResolver<'_> {
         Ok((input, projected))
     }
 
-    pub(in crate::resolver) fn rewrite_projection<'s, T>(
+    pub(super) fn rewrite_projection<'s, T>(
         &self,
         input: LogicalPlan,
         expr: Vec<NamedExpr>,
@@ -188,7 +188,7 @@ impl PlanResolver<'_> {
     /// A field is registered for each name.
     /// If the expression is a column expression, all plan IDs for the column are registered for the field.
     /// This means the column must refer to a **registered field** of the input plan. Otherwise, the column must be wrapped with an alias.
-    pub(in crate::resolver) fn rewrite_named_expressions(
+    pub(super) fn rewrite_named_expressions(
         &self,
         expr: Vec<NamedExpr>,
         state: &mut PlanResolverState,

@@ -24,7 +24,7 @@ use crate::resolver::PlanResolver;
 use crate::utils::ItemTaker;
 
 impl PlanResolver<'_> {
-    pub(in crate::resolver) async fn resolve_query_stat_summary(
+    pub(super) async fn resolve_query_stat_summary(
         &self,
         input: spec::QueryPlan,
         columns: Vec<spec::Identifier>,
@@ -279,7 +279,7 @@ impl PlanResolver<'_> {
         union_plan.ok_or_else(|| PlanError::internal("No describe statistics generated"))
     }
 
-    pub(in crate::resolver) async fn resolve_query_stat_describe(
+    pub(super) async fn resolve_query_stat_describe(
         &self,
         input: spec::QueryPlan,
         columns: Vec<spec::Identifier>,
@@ -296,7 +296,7 @@ impl PlanResolver<'_> {
             .await
     }
 
-    pub(in crate::resolver) async fn resolve_query_stat_cross_tab(
+    pub(super) async fn resolve_query_stat_cross_tab(
         &self,
         input: spec::QueryPlan,
         left_column: spec::Identifier,
@@ -413,7 +413,7 @@ impl PlanResolver<'_> {
             .map_err(Into::into)
     }
 
-    pub(in crate::resolver) async fn resolve_query_stat_cov(
+    pub(super) async fn resolve_query_stat_cov(
         &self,
         input: spec::QueryPlan,
         left_column: spec::Identifier,
@@ -448,7 +448,7 @@ impl PlanResolver<'_> {
             .build()?)
     }
 
-    pub(in crate::resolver) async fn resolve_query_stat_corr(
+    pub(super) async fn resolve_query_stat_corr(
         &self,
         input: spec::QueryPlan,
         left_column: spec::Identifier,
@@ -489,7 +489,7 @@ impl PlanResolver<'_> {
             .build()?)
     }
 
-    pub(in crate::resolver) async fn resolve_query_stat_sample_by(
+    pub(super) async fn resolve_query_stat_sample_by(
         &self,
         input: spec::QueryPlan,
         column: spec::Expr,

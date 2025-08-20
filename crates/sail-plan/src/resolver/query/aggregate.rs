@@ -13,7 +13,7 @@ use crate::resolver::PlanResolver;
 use crate::utils::ItemTaker;
 
 impl PlanResolver<'_> {
-    pub(in crate::resolver) async fn resolve_query_aggregate(
+    pub(super) async fn resolve_query_aggregate(
         &self,
         aggregate: spec::Aggregate,
         state: &mut PlanResolverState,

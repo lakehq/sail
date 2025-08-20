@@ -8,7 +8,7 @@ use crate::resolver::state::PlanResolverState;
 use crate::resolver::PlanResolver;
 
 impl PlanResolver<'_> {
-    pub(in crate::resolver) async fn resolve_query_deduplicate(
+    pub(super) async fn resolve_query_deduplicate(
         &self,
         deduplicate: spec::Deduplicate,
         state: &mut PlanResolverState,

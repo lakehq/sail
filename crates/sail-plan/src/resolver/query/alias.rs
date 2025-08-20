@@ -9,7 +9,7 @@ use crate::resolver::state::PlanResolverState;
 use crate::resolver::PlanResolver;
 
 impl PlanResolver<'_> {
-    pub(in crate::resolver) async fn resolve_query_subquery_alias(
+    pub(super) async fn resolve_query_subquery_alias(
         &self,
         input: spec::QueryPlan,
         alias: spec::Identifier,
@@ -25,7 +25,7 @@ impl PlanResolver<'_> {
         )?))
     }
 
-    pub(in crate::resolver) async fn resolve_query_table_alias(
+    pub(super) async fn resolve_query_table_alias(
         &self,
         input: spec::QueryPlan,
         name: spec::Identifier,

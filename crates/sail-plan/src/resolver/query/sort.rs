@@ -12,7 +12,7 @@ use crate::resolver::PlanResolver;
 use crate::utils::ItemTaker;
 
 impl PlanResolver<'_> {
-    pub(in crate::resolver) async fn resolve_query_sort(
+    pub(super) async fn resolve_query_sort(
         &self,
         input: spec::QueryPlan,
         order: Vec<spec::SortOrder>,

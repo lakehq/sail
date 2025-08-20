@@ -8,7 +8,7 @@ use crate::resolver::state::PlanResolverState;
 use crate::resolver::PlanResolver;
 
 impl PlanResolver<'_> {
-    pub(in crate::resolver) async fn resolve_query_filter(
+    pub(super) async fn resolve_query_filter(
         &self,
         input: spec::QueryPlan,
         condition: spec::Expr,

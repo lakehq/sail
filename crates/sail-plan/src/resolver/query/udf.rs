@@ -1,10 +1,11 @@
 use std::sync::Arc;
 
 use datafusion::arrow::datatypes::{DataType, Field, Schema};
-use datafusion_common::{Column, JoinType};
+use datafusion_common::{Column, DFSchema, JoinType};
 use datafusion_expr::expr::{AggregateFunctionParams, ScalarFunction};
 use datafusion_expr::{
-    expr, ident, AggregateUDF, Expr, Extension, LogicalPlan, LogicalPlanBuilder, ScalarUDF,
+    expr, ident, AggregateUDF, Expr, ExprSchemable, Extension, LogicalPlan, LogicalPlanBuilder,
+    ScalarUDF,
 };
 use datafusion_functions::core::expr_ext::FieldAccessor;
 use sail_common::spec;
@@ -23,7 +24,7 @@ use crate::resolver::PlanResolver;
 use crate::utils::ItemTaker;
 
 impl PlanResolver<'_> {
-    pub(in crate::resolver) async fn resolve_query_map_partitions(
+    pub(super) async fn resolve_query_map_partitions(
         &self,
         input: spec::QueryPlan,
         function: spec::CommonInlineUserDefinedFunction,
@@ -94,7 +95,7 @@ impl PlanResolver<'_> {
         }))
     }
 
-    pub(in crate::resolver) async fn resolve_query_group_map(
+    pub(super) async fn resolve_query_group_map(
         &self,
         map: spec::GroupMap,
         state: &mut PlanResolverState,
@@ -238,7 +239,7 @@ impl PlanResolver<'_> {
         Ok(plan)
     }
 
-    pub(in crate::resolver) async fn resolve_query_co_group_map(
+    pub(super) async fn resolve_query_co_group_map(
         &self,
         map: spec::CoGroupMap,
         state: &mut PlanResolverState,
@@ -434,7 +435,7 @@ impl PlanResolver<'_> {
         })
     }
 
-    pub(in crate::resolver) async fn resolve_query_apply_in_pandas_with_state(
+    pub(super) async fn resolve_query_apply_in_pandas_with_state(
         &self,
         _apply: spec::ApplyInPandasWithState,
         _state: &mut PlanResolverState,
@@ -476,6 +477,16 @@ impl PlanResolver<'_> {
         offsets.extend(key_offsets);
         offsets.extend(value_offsets);
         Ok((out, offsets))
+    }
+
+    fn resolve_expression_types(exprs: &[Expr], schema: &DFSchema) -> PlanResult<Vec<DataType>> {
+        exprs
+            .iter()
+            .map(|arg| {
+                let (data_type, _) = arg.data_type_and_nullable(schema)?;
+                Ok(data_type)
+            })
+            .collect::<PlanResult<Vec<_>>>()
     }
 }
 

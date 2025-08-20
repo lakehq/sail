@@ -10,7 +10,7 @@ use crate::resolver::state::PlanResolverState;
 use crate::resolver::PlanResolver;
 
 impl PlanResolver<'_> {
-    pub(in crate::resolver) async fn resolve_query_join(
+    pub(super) async fn resolve_query_join(
         &self,
         join: spec::Join,
         state: &mut PlanResolverState,

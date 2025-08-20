@@ -23,7 +23,7 @@ use crate::resolver::PlanResolver;
 use crate::utils::ItemTaker;
 
 impl PlanResolver<'_> {
-    pub(in crate::resolver) async fn resolve_query_read_named_table(
+    pub(super) async fn resolve_query_read_named_table(
         &self,
         table: spec::ReadNamedTable,
         state: &mut PlanResolverState,
@@ -105,7 +105,7 @@ impl PlanResolver<'_> {
         Ok(plan)
     }
 
-    pub(in crate::resolver) async fn resolve_query_read_udtf(
+    pub(super) async fn resolve_query_read_udtf(
         &self,
         udtf: spec::ReadUdtf,
         state: &mut PlanResolverState,
@@ -152,7 +152,7 @@ impl PlanResolver<'_> {
                         command: f.command().to_vec(),
                         return_type: f.output_type().clone(),
                     };
-                    let input = self.resolve_empty_query_plan()?;
+                    let input = self.resolve_query_empty(true)?;
                     let arguments = self
                         .resolve_named_expressions(arguments, input.schema(), state)
                         .await?;
@@ -198,7 +198,7 @@ impl PlanResolver<'_> {
         }
     }
 
-    pub(in crate::resolver) async fn resolve_query_read_data_source(
+    pub(super) async fn resolve_query_read_data_source(
         &self,
         source: spec::ReadDataSource,
         state: &mut PlanResolverState,

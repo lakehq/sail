@@ -15,7 +15,7 @@ use crate::resolver::state::PlanResolverState;
 use crate::resolver::PlanResolver;
 
 impl PlanResolver<'_> {
-    pub(in crate::resolver) async fn resolve_query_sample(
+    pub(super) async fn resolve_query_sample(
         &self,
         sample: spec::Sample,
         state: &mut PlanResolverState,

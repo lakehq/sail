@@ -11,7 +11,7 @@ use crate::resolver::state::PlanResolverState;
 use crate::resolver::PlanResolver;
 
 impl PlanResolver<'_> {
-    pub(in crate::resolver) async fn resolve_query_values(
+    pub(super) async fn resolve_query_values(
         &self,
         values: Vec<Vec<spec::Expr>>,
         state: &mut PlanResolverState,

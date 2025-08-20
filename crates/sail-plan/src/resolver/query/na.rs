@@ -15,7 +15,7 @@ use crate::resolver::PlanResolver;
 use crate::utils::ItemTaker;
 
 impl PlanResolver<'_> {
-    pub(in crate::resolver) async fn resolve_query_fill_na(
+    pub(super) async fn resolve_query_fill_na(
         &self,
         input: spec::QueryPlan,
         columns: Vec<spec::Identifier>,
@@ -110,7 +110,7 @@ impl PlanResolver<'_> {
         }
     }
 
-    pub(in crate::resolver) async fn resolve_query_drop_na(
+    pub(super) async fn resolve_query_drop_na(
         &self,
         input: spec::QueryPlan,
         columns: Vec<spec::Identifier>,
