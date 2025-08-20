@@ -1,12 +1,12 @@
 use std::any::Any;
+use std::collections::HashSet;
 use std::sync::Arc;
 
-use arrow::compute::cast;
-use datafusion::arrow::array::{ArrayRef, MapArray, NullArray, StructArray};
+use datafusion::arrow::array::{Array, ArrayRef, BooleanBuilder, MapArray, NullArray, StructArray};
 use datafusion::arrow::buffer::OffsetBuffer;
-use datafusion::arrow::compute::interleave;
+use datafusion::arrow::compute::{cast, filter, interleave};
 use datafusion::arrow::datatypes::{DataType, Field, Fields};
-use datafusion_common::{exec_err, Result};
+use datafusion_common::{exec_err, Result, ScalarValue};
 use datafusion_expr::{
     ColumnarValue, ScalarFunctionArgs, ScalarUDFImpl, Signature, TypeSignature, Volatility,
 };
@@ -65,28 +65,51 @@ fn to_map_array(args: &[ArrayRef], num_rows: usize) -> Result<ArrayRef> {
         return exec_err!("map requires all value types to be the same");
     }
 
-    let (keys, values) = match (key_type, value_type) {
+    let (keys, values, offsets) = match (key_type, value_type) {
         (&DataType::Null, &DataType::Null) => {
             let keys = Arc::new(NullArray::new(0)) as ArrayRef;
             let values = Arc::new(NullArray::new(0)) as ArrayRef;
-            (keys, values)
+            (keys, values, vec![0, 0])
         }
         _ => {
             // TODO: avoid materializing the indices
-            // TODO: implement key deduplication:
-            // https://github.com/apache/spark/blob/cf3a34e19dfcf70e2d679217ff1ba21302212472/sql/catalyst/src/main/scala/org/apache/spark/sql/internal/SQLConf.scala#L4961
             let indices = (0..num_rows)
                 .flat_map(|i| (0..num_entries).map(move |j| (j, i)))
                 .collect::<Vec<_>>();
             let keys = interleave(keys.as_slice(), indices.as_slice())?;
             let values = interleave(values.as_slice(), indices.as_slice())?;
-            (keys, values)
+
+            let mut offsets = Vec::with_capacity(num_rows + 1);
+            offsets.push(0);
+            let mut last_offset = 0;
+
+            let mut needed_rows_builder = BooleanBuilder::new();
+            for row_num in 0..num_rows {
+                let keys_slice = keys.slice(row_num * num_entries, num_entries);
+                let mut seen_keys = HashSet::new();
+                let mut needed_rows_one = [false].repeat(num_entries);
+                for index in (0..num_entries).rev() {
+                    let key = ScalarValue::try_from_array(&keys_slice, index)?.compacted();
+                    if seen_keys.contains(&key) {
+                        // TODO: implement configuration and logic for spark.sql.mapKeyDedupPolicy=EXCEPTION (this is default spark-config)
+                        // exec_err!("invalid argument: duplicate keys in map")
+                        // https://github.com/apache/spark/blob/cf3a34e19dfcf70e2d679217ff1ba21302212472/sql/catalyst/src/main/scala/org/apache/spark/sql/internal/SQLConf.scala#L4961
+                    } else {
+                        // This code implements deduplication logic for spark.sql.mapKeyDedupPolicy=LAST_WIN (this is NOT default spark-config)
+                        needed_rows_one[index] = true;
+                        seen_keys.insert(key);
+                        last_offset += 1;
+                    }
+                }
+                needed_rows_builder.append_array(&needed_rows_one.into());
+                offsets.push(last_offset);
+            }
+            let needed_rows = needed_rows_builder.finish();
+            let needed_keys = filter(&keys, &needed_rows)?;
+            let needed_values = filter(&values, &needed_rows)?;
+            (needed_keys, needed_values, offsets)
         }
     };
-
-    let offsets = (0..num_rows + 1)
-        .map(|i| i as i32 * num_entries as i32)
-        .collect::<Vec<_>>();
     let offsets = OffsetBuffer::new(offsets.into());
     let fields = Fields::from(vec![
         Field::new("key", key_type.clone(), false),
