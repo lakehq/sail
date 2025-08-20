@@ -2,7 +2,7 @@ use std::fmt::{Debug, Formatter};
 use std::sync::Arc;
 
 use datafusion::arrow::compute::SortOptions;
-use datafusion::arrow::datatypes::{DataType, Schema, SchemaRef, TimeUnit};
+use datafusion::arrow::datatypes::{DataType, Schema, TimeUnit};
 use datafusion::common::parsers::CompressionTypeVariant;
 use datafusion::common::{plan_datafusion_err, plan_err, JoinSide, Result};
 use datafusion::datasource::file_format::file_compression_type::FileCompressionType;
@@ -443,15 +443,22 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
                 };
                 let sink_mode =
                     self.try_decode_physical_sink_mode(sink_mode, &input.schema(), registry)?;
-                self.try_decode_delta_writer_exec(
-                    input,
-                    table_url,
-                    options,
-                    Arc::new(sink_schema),
-                    partition_columns,
-                    sink_mode,
-                    table_exists,
-                )
+                {
+                    let table_url = Url::parse(&table_url)
+                        .map_err(|e| plan_datafusion_err!("failed to parse table URL: {e}"))?;
+                    let options =
+                        serde_json::from_str(&options).map_err(|e| plan_datafusion_err!("{e}"))?;
+
+                    Ok(Arc::new(DeltaWriterExec::new(
+                        input,
+                        table_url,
+                        options,
+                        partition_columns,
+                        sink_mode,
+                        table_exists,
+                        Arc::new(sink_schema),
+                    )))
+                }
             }
             NodeKind::DeltaCommit(gen::DeltaCommitExecNode {
                 input,
@@ -462,13 +469,18 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
             }) => {
                 let input = self.try_decode_plan(&input, registry)?;
                 let sink_schema = self.try_decode_schema(&sink_schema)?;
-                self.try_decode_delta_commit_exec(
-                    input,
-                    table_url,
-                    partition_columns,
-                    table_exists,
-                    Arc::new(sink_schema),
-                )
+                {
+                    let table_url = Url::parse(&table_url)
+                        .map_err(|e| plan_datafusion_err!("failed to parse table URL: {e}"))?;
+
+                    Ok(Arc::new(DeltaCommitExec::new(
+                        input,
+                        table_url,
+                        partition_columns,
+                        table_exists,
+                        Arc::new(sink_schema),
+                    )))
+                }
             }
             // TODO: StreamingTableExec?
             _ => plan_err!("unsupported physical plan node: {node_kind:?}"),
@@ -1328,51 +1340,6 @@ impl RemoteExecutionCodec {
             }
         };
         Ok(gen::PhysicalSinkMode { mode: Some(mode) })
-    }
-
-    fn try_decode_delta_writer_exec(
-        &self,
-        input: Arc<dyn ExecutionPlan>,
-        table_url: String,
-        options: String,
-        sink_schema: SchemaRef,
-        partition_columns: Vec<String>,
-        sink_mode: PhysicalSinkMode,
-        table_exists: bool,
-    ) -> Result<Arc<dyn ExecutionPlan>> {
-        let table_url = Url::parse(&table_url)
-            .map_err(|e| plan_datafusion_err!("failed to parse table URL: {e}"))?;
-        let options = serde_json::from_str(&options).map_err(|e| plan_datafusion_err!("{e}"))?;
-
-        Ok(Arc::new(DeltaWriterExec::new(
-            input,
-            table_url,
-            options,
-            partition_columns,
-            sink_mode,
-            table_exists,
-            sink_schema,
-        )))
-    }
-
-    fn try_decode_delta_commit_exec(
-        &self,
-        input: Arc<dyn ExecutionPlan>,
-        table_url: String,
-        partition_columns: Vec<String>,
-        table_exists: bool,
-        sink_schema: SchemaRef,
-    ) -> Result<Arc<dyn ExecutionPlan>> {
-        let table_url = Url::parse(&table_url)
-            .map_err(|e| plan_datafusion_err!("failed to parse table URL: {e}"))?;
-
-        Ok(Arc::new(DeltaCommitExec::new(
-            input,
-            table_url,
-            partition_columns,
-            table_exists,
-            sink_schema,
-        )))
     }
 
     fn try_decode_stream_udf(&self, udf: ExtendedStreamUdf) -> Result<Arc<dyn StreamUDF>> {
