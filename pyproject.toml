@@ -84,6 +84,10 @@ env.CI.installer = "uv"
 # The scripts can be inherited by other environments.
 install-pysail = "\"{env:HATCH_UV}\" pip install pysail --no-index -f target/wheels --force-reinstall"
 
+[tool.hatch.envs.coverage]
+template = "default"
+env-vars = { RUSTC_WORKSPACE_WRAPPER = ".github/scripts/rustc-workspace-wrapper.sh", LLVM_PROFILE_FILE = "target/coverage/sail-%p-%m.profraw" }
+
 [tool.hatch.envs.docs]
 python = "3.11"
 installer = "pip"
