@@ -119,6 +119,7 @@ pub struct Decoder {
     record_decoder: RecordDecoder,
 }
 
+// [Credit]: https://github.com/apache/arrow-rs/blob/ebb6ede98b2b4d96a1a4f501a28ab42a3b937f73/arrow-csv/src/reader/mod.rs#L581-L634
 impl Decoder {
     /// Decode records from `buf` returning the number of bytes read
     ///
@@ -249,7 +250,6 @@ impl ReaderBuilder {
         self
     }
 
-    // CHECK HERE
     #[allow(unused)]
     pub fn with_bounds(mut self, start: usize, end: usize) -> Self {
         self.bounds = Some((start, end));
@@ -339,23 +339,15 @@ impl RecordDecoder {
     ///
     /// Note: this expects to be called with an empty `input` to signal EOF.
     pub fn decode(&mut self, input: &[u8], to_read: usize) -> Result<(usize, usize), ArrowError> {
-        // CHECK HERE: Validate function logic
         if to_read == 0 {
             return Ok((0, 0));
         }
 
-        // Reserve sufficient capacity in offsets
-        // For text files, num_columns = 1
         self.offsets.resize(self.offsets_len + to_read, 0);
-
-        // The current offset into `input`
         let mut input_offset = 0;
-
-        // The number of rows decoded in this pass
         let mut read = 0;
 
         if self.whole_text {
-            // In whole text mode, treat everything as one record
             if !input.is_empty() {
                 let capacity = self.data_len + input.len();
                 self.data.resize(capacity, 0);
@@ -363,59 +355,43 @@ impl RecordDecoder {
                 self.data_len += input.len();
             }
 
-            // Only count as a record once we have data
             if self.num_rows == 0 && self.data_len > 0 {
                 self.num_rows = 1;
                 self.offsets[1] = self.data_len;
                 self.offsets_len = 2;
                 read = 1;
             } else if self.num_rows == 1 {
-                // Update the end offset
                 self.offsets[1] = self.data_len;
             }
 
             return Ok((read.min(to_read), input.len()));
         }
 
-        // Line-by-line mode
-        // Reserve capacity for data
         let estimated_size = to_read * AVERAGE_LINE_SIZE;
         let capacity = (self.data_len + estimated_size).max(MIN_CAPACITY);
         self.data.resize(capacity, 0);
 
-        // Helper closure to check for line ending
-        // Returns (is_line_end, bytes_to_skip)
         let is_line_end = |bytes: &[u8], pos: usize| -> (bool, usize) {
             if let Some(sep) = self.line_sep {
-                // Single byte separator specified
                 if bytes[pos] == sep {
                     (true, 1)
                 } else {
                     (false, 0)
                 }
-            } else {
-                // Default CRLF handling: treat \r, \n, or \r\n as line terminators
-                if bytes[pos] == b'\r' {
-                    // Check if followed by \n
-                    if pos + 1 < bytes.len() && bytes[pos + 1] == b'\n' {
-                        // \r\n - single terminator, skip both
-                        (true, 2)
-                    } else {
-                        // Just \r - single terminator
-                        (true, 1)
-                    }
-                } else if bytes[pos] == b'\n' {
-                    // Just \n - single terminator
-                    (true, 1)
+            } else if bytes[pos] == b'\r' {
+                if pos + 1 < bytes.len() && bytes[pos + 1] == b'\n' {
+                    (true, 2)
                 } else {
-                    (false, 0)
+                    (true, 1)
                 }
+            } else if bytes[pos] == b'\n' {
+                (true, 1)
+            } else {
+                (false, 0)
             }
         };
 
-        // Process any partial line from previous call
         if !self.partial_line.is_empty() && input_offset < input.len() {
-            // Look for line separator to complete the partial line
             let mut found_end = false;
             let mut end_pos = 0;
             let mut skip_bytes = 0;
@@ -431,21 +407,17 @@ impl RecordDecoder {
             }
 
             if found_end {
-                // Complete the partial line
                 self.partial_line.extend_from_slice(&input[..end_pos]);
 
-                // Ensure we have capacity
                 if self.data_len + self.partial_line.len() > self.data.len() {
                     self.data
                         .resize(self.data_len + self.partial_line.len() + MIN_CAPACITY, 0);
                 }
 
-                // Copy completed line to data buffer
                 self.data[self.data_len..self.data_len + self.partial_line.len()]
                     .copy_from_slice(&self.partial_line);
                 self.data_len += self.partial_line.len();
 
-                // Record the offset
                 self.offsets[self.offsets_len] = self.data_len;
                 self.offsets_len += 1;
 
@@ -459,13 +431,11 @@ impl RecordDecoder {
                     return Ok((read, input_offset));
                 }
             } else {
-                // No separator found, append all to partial and continue
                 self.partial_line.extend_from_slice(input);
                 return Ok((read, input.len()));
             }
         }
 
-        // Process complete lines in input
         let mut line_start = input_offset;
         let mut i = input_offset;
 
@@ -475,27 +445,22 @@ impl RecordDecoder {
             if is_end {
                 let line_len = i - line_start;
 
-                // Ensure we have capacity for data
                 if self.data_len + line_len > self.data.len() {
                     let new_capacity =
                         (self.data_len + line_len + estimated_size).max(self.data.len() * 2);
                     self.data.resize(new_capacity, 0);
                 }
 
-                // Copy line to data buffer (excluding separator)
                 if line_len > 0 {
                     self.data[self.data_len..self.data_len + line_len]
                         .copy_from_slice(&input[line_start..i]);
                     self.data_len += line_len;
                 }
-                // Empty line - no data to copy but still a record
 
-                // Ensure we have capacity for offset
                 if self.offsets_len >= self.offsets.len() {
                     self.offsets.resize(self.offsets_len + to_read, 0);
                 }
 
-                // Record the offset
                 self.offsets[self.offsets_len] = self.data_len;
                 self.offsets_len += 1;
 
@@ -512,8 +477,6 @@ impl RecordDecoder {
                 }
 
                 if input.len() == input_offset {
-                    // Input exhausted, need to read more
-                    // Without this check, we might continue and store empty partial line
                     return Ok((read, input_offset));
                 }
             } else {
@@ -521,7 +484,6 @@ impl RecordDecoder {
             }
         }
 
-        // Store any remaining partial line
         if line_start < input.len() {
             self.partial_line.extend_from_slice(&input[line_start..]);
             input_offset = input.len();
@@ -545,20 +507,15 @@ impl RecordDecoder {
     }
 
     pub fn flush(&mut self) -> Result<StringRecords<'_>, ArrowError> {
-        // CHECK HERE: Validate if statement logic
-        // Handle last line without terminator (common at EOF)
         if !self.partial_line.is_empty() {
-            // Ensure capacity
             if self.data_len + self.partial_line.len() > self.data.len() {
                 self.data.resize(self.data_len + self.partial_line.len(), 0);
             }
 
-            // Copy partial line to data
             self.data[self.data_len..self.data_len + self.partial_line.len()]
                 .copy_from_slice(&self.partial_line);
             self.data_len += self.partial_line.len();
 
-            // Record the offset
             if self.offsets_len >= self.offsets.len() {
                 self.offsets.push(self.data_len);
             } else {
@@ -571,7 +528,6 @@ impl RecordDecoder {
             self.partial_line.clear();
         }
 
-        // Truncate data to the actual amount of data read
         let data = std::str::from_utf8(&self.data[..self.data_len]).map_err(|e| {
             let valid_up_to = e.valid_up_to();
             let line_idx = self.offsets[..self.offsets_len]
@@ -586,7 +542,6 @@ impl RecordDecoder {
         let offsets = &self.offsets[..self.offsets_len];
         let num_rows = self.num_rows;
 
-        // Reset state
         self.offsets_len = 1;
         self.data_len = 0;
         self.num_rows = 0;
