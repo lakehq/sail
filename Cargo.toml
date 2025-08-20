@@ -20,7 +20,7 @@ expect_used = "deny"
 panic = "deny"
 
 [workspace.dependencies]
-thiserror = { version = "2.0.12" }
+thiserror = { version = "2.0.15" }
 tokio = { version = "1.47.1", features = ["full"] }
 tokio-stream = "0.1.17"
 pbjson = "0.7.0"
@@ -28,7 +28,7 @@ pbjson-types = "0.7.0"
 pbjson-build = "0.7.0"
 tower = { version = "0.5.2", features = ["full"] }
 uuid = { version = "1.18.0", features = ["v4"] }
-async-trait = "0.1.88"
+async-trait = "0.1.89"
 async-recursion = "1.1.1"
 async-stream = "0.3.6"
 lazy_static = "1.5.0"
@@ -45,10 +45,10 @@ chrono-tz = "0.10.4"
 futures = "0.3.31"
 comfy-table = "7.1.4"
 html-escape = "0.2.13"
-syn = "2.0.104"
+syn = "2.0.106"
 quote = "1.0.40"
 paste = "1.0.15"
-proc-macro2 = "1.0.96"
+proc-macro2 = "1.0.101"
 prettyplease = "0.2.36"
 phf = { version = "0.12.1", features = ["macros"] }
 ryu = "1.0.20"
