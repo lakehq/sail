@@ -83,11 +83,7 @@ class TestParquetDataSource:
 
     def test_parquet_write_options(self, spark, sample_df, tmp_path):
         path = str(tmp_path / "parquet_write_options")
-        (
-            sample_df.write.option("compression", "gzip(4)")
-            .option("writerVersion", "1.0")
-            .parquet(path, mode="overwrite")
-        )
+        sample_df.write.option("writerVersion", "1.0").parquet(path, mode="overwrite", compression="gzip(4)")
         read_df = spark.read.parquet(path)
         assert sample_df.count() == read_df.count()
         assert sorted(sample_df.collect(), key=safe_sort_key) == sorted(read_df.collect(), key=safe_sort_key)
