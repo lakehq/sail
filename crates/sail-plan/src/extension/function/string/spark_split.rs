@@ -2,7 +2,8 @@ use std::any::Any;
 use std::sync::Arc;
 
 use arrow::array::{
-    Array, ArrayRef, Int32Array, ListArray, ListBuilder, StringArray, StringBuilder,
+    Array, ArrayRef, GenericStringArray, Int32Array, ListArray, ListBuilder, OffsetSizeTrait,
+    StringBuilder,
 };
 use arrow::datatypes::{DataType, Field};
 use datafusion_common::Result;
@@ -97,11 +98,38 @@ pub fn spark_split_inner(args: &[ArrayRef]) -> Result<ArrayRef> {
             "requires 2 or 3 arguments",
         ));
     }
+
+    match (args[0].data_type(), args[1].data_type()) {
+        (DataType::LargeUtf8, DataType::LargeUtf8) => spark_split_inner_downcast::<i64, i64>(args),
+        (_, DataType::LargeUtf8) => spark_split_inner_downcast::<i32, i64>(args),
+        (DataType::LargeUtf8, _) => spark_split_inner_downcast::<i64, i32>(args),
+        _ => spark_split_inner_downcast::<i32, i32>(args),
+    }
+}
+pub fn spark_split_inner_downcast<FirstOffset, SecondOffset>(args: &[ArrayRef]) -> Result<ArrayRef>
+where
+    FirstOffset: OffsetSizeTrait,
+    SecondOffset: OffsetSizeTrait,
+{
+    if args.len() < 2 || args.len() > 3 {
+        return Err(generic_exec_err(
+            SparkSplit::NAME,
+            "requires 2 or 3 arguments",
+        ));
+    }
     let len: usize = args[0].len();
 
     // Getting the arrays
-    let values: Arc<Option<&StringArray>> = Arc::new(opt_downcast_arg!(&args[0], StringArray));
-    let format: Arc<Option<&StringArray>> = Arc::new(opt_downcast_arg!(&args[1], StringArray));
+    let values: Arc<Option<&GenericStringArray<FirstOffset>>> = Arc::new(
+        args[0]
+            .as_any()
+            .downcast_ref::<GenericStringArray<FirstOffset>>(),
+    );
+    let format: Arc<Option<&GenericStringArray<SecondOffset>>> = Arc::new(
+        args[1]
+            .as_any()
+            .downcast_ref::<GenericStringArray<SecondOffset>>(),
+    );
 
     let limit_arg_is_none = args.get(2).is_none();
     let limit = Arc::new(
