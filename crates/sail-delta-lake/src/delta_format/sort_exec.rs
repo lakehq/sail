@@ -6,12 +6,12 @@ use datafusion::arrow::compute::SortOptions;
 use datafusion::common::Result as DFResult;
 use datafusion::error::DataFusionError;
 use datafusion::execution::TaskContext;
-use datafusion::physical_expr::{LexOrdering, LexRequirement, PhysicalSortExpr};
+use datafusion::physical_expr::{LexOrdering, LexRequirement, PhysicalExpr, PhysicalSortExpr};
 use datafusion::physical_plan::sorts::sort::SortExec;
 use datafusion::physical_plan::{
     DisplayAs, DisplayFormatType, ExecutionPlan, PlanProperties, SendableRecordBatchStream,
 };
-use datafusion_physical_expr::expressions::col;
+use datafusion_physical_expr::expressions::Column;
 
 /// DeltaSortExec is a wrapper that encapsulates the logic for
 /// data sorting for Delta Lake writes.
@@ -33,15 +33,18 @@ impl DeltaSortExec {
         sort_order: Option<LexRequirement>,
     ) -> DFResult<Self> {
         // Build sort expressions
-        let mut sort_exprs: Vec<PhysicalSortExpr> = partition_columns
-            .iter()
-            .map(|name| {
-                Ok(PhysicalSortExpr {
-                    expr: col(name, &input.schema())?,
-                    options: SortOptions::default(), // Default ascending
-                })
+        // Since DeltaProjectExec moves partition columns to the end, we can rely on their positions.
+        let schema = input.schema();
+        let num_cols = schema.fields().len();
+        let num_part_cols = partition_columns.len();
+
+        let mut sort_exprs: Vec<PhysicalSortExpr> = (num_cols - num_part_cols..num_cols)
+            .zip(partition_columns.iter())
+            .map(|(idx, name)| PhysicalSortExpr {
+                expr: Arc::new(Column::new(name, idx)) as Arc<dyn PhysicalExpr>,
+                options: SortOptions::default(), // Default ascending
             })
-            .collect::<DFResult<_>>()?;
+            .collect();
 
         // Add user-specified sort columns
         if let Some(ref user_sort_order) = sort_order {

@@ -11,7 +11,7 @@ use datafusion::physical_plan::{
     DisplayAs, DisplayFormatType, ExecutionPlan, Partitioning, PlanProperties,
     SendableRecordBatchStream,
 };
-use datafusion_physical_expr::expressions::col;
+use datafusion_physical_expr::expressions::Column;
 
 /// DeltaRepartitionExec is a wrapper that encapsulates the logic for
 /// data repartitioning for Delta Lake writes.
@@ -34,11 +34,14 @@ impl DeltaRepartitionExec {
             // TODO: Make partition count configurable
             Partitioning::RoundRobinBatch(4)
         } else {
-            // Use the original partition column names (DeltaProjectExec has moved them to the end)
-            let partition_exprs: Vec<Arc<dyn PhysicalExpr>> = partition_columns
-                .iter()
-                .map(|name| col(name, &input.schema()))
-                .collect::<DFResult<_>>()?;
+            // Since DeltaProjectExec moves partition columns to the end, we can rely on their positions.
+            let schema = input.schema();
+            let num_cols = schema.fields().len();
+            let num_part_cols = partition_columns.len();
+            let partition_exprs: Vec<Arc<dyn PhysicalExpr>> = (num_cols - num_part_cols..num_cols)
+                .zip(partition_columns.iter())
+                .map(|(idx, name)| Arc::new(Column::new(name, idx)) as Arc<dyn PhysicalExpr>)
+                .collect();
 
             // TODO: Partition count should be configurable
             let num_partitions = 4;
