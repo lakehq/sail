@@ -1,52 +1,23 @@
 use std::any::Any;
 use std::sync::Arc;
 
-use async_trait::async_trait;
 use datafusion::arrow::datatypes::Schema;
 use datafusion::arrow::util::pretty::print_batches;
-use datafusion::catalog::{Session, TableProvider};
 use datafusion::execution::{SendableRecordBatchStream, TaskContext};
 use datafusion::physical_expr::{EquivalenceProperties, Partitioning};
 use datafusion::physical_plan::execution_plan::{Boundedness, EmissionType};
 use datafusion::physical_plan::stream::RecordBatchStreamAdapter;
 use datafusion::physical_plan::{DisplayAs, ExecutionPlan, PlanProperties};
-use datafusion_common::{not_impl_err, plan_err, Result};
+use datafusion_common::plan_err;
 use futures::StreamExt;
-use sail_common_datafusion::datasource::{SinkInfo, SourceInfo, TableFormat};
 
 #[derive(Debug)]
-pub struct ConsoleTableFormat;
-
-#[async_trait]
-impl TableFormat for ConsoleTableFormat {
-    fn name(&self) -> &str {
-        "console"
-    }
-
-    async fn create_provider(
-        &self,
-        _ctx: &dyn Session,
-        _info: SourceInfo,
-    ) -> Result<Arc<dyn TableProvider>> {
-        not_impl_err!("console table format does not support reading")
-    }
-
-    async fn create_writer(
-        &self,
-        _ctx: &dyn Session,
-        info: SinkInfo,
-    ) -> Result<Arc<dyn ExecutionPlan>> {
-        Ok(Arc::new(ConsoleExec::new(info.input)))
-    }
-}
-
-#[derive(Debug)]
-struct ConsoleExec {
+pub struct ConsoleSinkExec {
     input: Arc<dyn ExecutionPlan>,
     properties: PlanProperties,
 }
 
-impl ConsoleExec {
+impl ConsoleSinkExec {
     pub fn new(input: Arc<dyn ExecutionPlan>) -> Self {
         let properties = PlanProperties::new(
             EquivalenceProperties::new(Arc::new(Schema::empty())),
@@ -59,9 +30,13 @@ impl ConsoleExec {
         );
         Self { input, properties }
     }
+
+    pub fn input(&self) -> &Arc<dyn ExecutionPlan> {
+        &self.input
+    }
 }
 
-impl DisplayAs for ConsoleExec {
+impl DisplayAs for ConsoleSinkExec {
     fn fmt_as(
         &self,
         _t: datafusion::physical_plan::DisplayFormatType,
@@ -71,7 +46,7 @@ impl DisplayAs for ConsoleExec {
     }
 }
 
-impl ExecutionPlan for ConsoleExec {
+impl ExecutionPlan for ConsoleSinkExec {
     fn name(&self) -> &str {
         Self::static_name()
     }
@@ -91,9 +66,9 @@ impl ExecutionPlan for ConsoleExec {
     fn with_new_children(
         self: Arc<Self>,
         mut children: Vec<Arc<dyn ExecutionPlan>>,
-    ) -> Result<Arc<dyn ExecutionPlan>> {
+    ) -> datafusion_common::Result<Arc<dyn ExecutionPlan>> {
         match (children.pop(), children.is_empty()) {
-            (Some(child), true) => Ok(Arc::new(ConsoleExec::new(child))),
+            (Some(child), true) => Ok(Arc::new(ConsoleSinkExec::new(child))),
             _ => plan_err!("{} should have exactly one child", self.name()),
         }
     }
@@ -102,7 +77,7 @@ impl ExecutionPlan for ConsoleExec {
         &self,
         partition: usize,
         context: Arc<TaskContext>,
-    ) -> Result<SendableRecordBatchStream> {
+    ) -> datafusion_common::Result<SendableRecordBatchStream> {
         let stream = self.input.execute(partition, context)?;
         let output = futures::stream::once(async move {
             stream

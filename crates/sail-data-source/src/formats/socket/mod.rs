@@ -1,0 +1,73 @@
+mod options;
+mod reader;
+
+use std::ops::Deref;
+use std::sync::Arc;
+
+use async_trait::async_trait;
+use datafusion::arrow::datatypes::{DataType, Field, Schema};
+use datafusion::catalog::{Session, TableProvider};
+use datafusion::physical_plan::ExecutionPlan;
+use datafusion_common::{not_impl_err, plan_err, Result};
+use sail_common_datafusion::datasource::{SinkInfo, SourceInfo, TableFormat};
+
+use crate::formats::socket::options::resolve_socket_read_options;
+pub use crate::formats::socket::options::TableSocketOptions;
+pub use crate::formats::socket::reader::SocketSourceExec;
+use crate::formats::socket::reader::SocketTableProvider;
+
+#[derive(Debug)]
+pub struct SocketTableFormat;
+
+#[async_trait]
+impl TableFormat for SocketTableFormat {
+    fn name(&self) -> &str {
+        "socket"
+    }
+
+    async fn create_provider(
+        &self,
+        _ctx: &dyn Session,
+        info: SourceInfo,
+    ) -> Result<Arc<dyn TableProvider>> {
+        let SourceInfo {
+            paths,
+            schema,
+            constraints,
+            partition_by,
+            bucket_by,
+            sort_order,
+            options,
+        } = info;
+        if !paths.is_empty() {
+            return plan_err!("the socket table format does not support paths");
+        }
+        if !constraints.deref().is_empty() {
+            return plan_err!("the socket table format does not support constraints");
+        }
+        if !partition_by.is_empty() {
+            return plan_err!("the socket table format does not support partitioning");
+        }
+        if bucket_by.is_some() || !sort_order.is_empty() {
+            return plan_err!("the socket table format does not support bucketing");
+        }
+        let schema = if let Some(schema) = schema {
+            schema
+        } else {
+            Schema::new(vec![Arc::new(Field::new("value", DataType::Utf8, false))])
+        };
+        let options = resolve_socket_read_options(options)?;
+        Ok(Arc::new(SocketTableProvider::try_new(
+            options,
+            Arc::new(schema),
+        )?))
+    }
+
+    async fn create_writer(
+        &self,
+        _ctx: &dyn Session,
+        _info: SinkInfo,
+    ) -> Result<Arc<dyn ExecutionPlan>> {
+        not_impl_err!("socket table format writer")
+    }
+}

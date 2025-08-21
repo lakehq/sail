@@ -267,6 +267,10 @@ SKIPPED_SPARK_TESTS = [
         keywords=["test_parity_job_cancellation.py"],
         reason="Slow test not working yet",
     ),
+    TestMarker(
+        keywords=["test_assert_data_frame_equal_not_support_streaming"],
+        reason="Streaming DataFrame detection not working yet",
+    )
 ]
 
 

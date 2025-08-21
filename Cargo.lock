@@ -5674,6 +5674,7 @@ dependencies = [
  "rand 0.9.2",
  "sail-common",
  "sail-common-datafusion",
+ "sail-data-source",
  "sail-delta-lake",
  "sail-object-store",
  "sail-plan",

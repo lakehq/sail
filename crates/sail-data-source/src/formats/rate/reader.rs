@@ -5,7 +5,7 @@ use std::time::Duration;
 
 use async_trait::async_trait;
 use datafusion::arrow::array::{Int64Array, RecordBatch, TimestampMicrosecondArray};
-use datafusion::arrow::datatypes::{DataType, SchemaRef, TimeUnit};
+use datafusion::arrow::datatypes::{DataType, Schema, SchemaRef, TimeUnit};
 use datafusion::catalog::{Session, TableProvider};
 use datafusion::datasource::TableType;
 use datafusion::execution::{SendableRecordBatchStream, TaskContext};
@@ -15,69 +15,40 @@ use datafusion::physical_plan::execution_plan::{Boundedness, EmissionType};
 use datafusion::physical_plan::stream::RecordBatchStreamAdapter;
 use datafusion::physical_plan::{DisplayAs, ExecutionPlan, PlanProperties};
 use datafusion_common::{arrow_datafusion_err, plan_err, DataFusionError, Result};
-use deltalake::arrow::datatypes::{Field, Schema};
 use futures::Stream;
 use rand::Rng;
-use sail_common_datafusion::datasource::{SinkInfo, SourceInfo, TableFormat};
 
-#[derive(Debug)]
-pub struct RateTableFormat;
-
-#[async_trait]
-impl TableFormat for RateTableFormat {
-    fn name(&self) -> &str {
-        "rate"
-    }
-
-    async fn create_provider(
-        &self,
-        ctx: &dyn Session,
-        _info: SourceInfo,
-    ) -> Result<Arc<dyn TableProvider>> {
-        let options = RateTableOptions {
-            rows_per_second: 1,
-            num_partitions: 1,
-        };
-        let tz = Arc::from(ctx.config().options().execution.time_zone.clone());
-        Ok(Arc::new(RateTableProvider::new(options, tz)))
-    }
-
-    async fn create_writer(
-        &self,
-        _ctx: &dyn Session,
-        _info: SinkInfo,
-    ) -> Result<Arc<dyn ExecutionPlan>> {
-        plan_err!("the rate table format does not support writing")
-    }
-}
-
-#[derive(Debug, Clone, Default)]
-pub struct RateTableOptions {
-    pub rows_per_second: usize,
-    pub num_partitions: usize,
-}
+use crate::formats::rate::options::TableRateOptions;
 
 #[derive(Debug, Clone)]
-struct RateTableProvider {
-    options: RateTableOptions,
-    time_zone: Arc<str>,
+pub struct RateTableProvider {
+    options: TableRateOptions,
     schema: SchemaRef,
 }
 
 impl RateTableProvider {
-    pub fn new(options: RateTableOptions, time_zone: Arc<str>) -> Self {
-        let schema = Arc::new(Schema::new(vec![
-            Arc::new(Field::new(
-                "timestamp",
-                DataType::Timestamp(TimeUnit::Microsecond, Some(Arc::clone(&time_zone))),
-                true,
-            )),
-            Arc::new(Field::new("value", DataType::Int64, true)),
-        ]));
-        Self {
-            options,
-            time_zone,
-            schema,
+    pub fn try_new(options: TableRateOptions, schema: SchemaRef) -> Result<Self> {
+        Self::validate_schema(&schema)?;
+        Ok(Self { options, schema })
+    }
+
+    fn validate_schema(schema: &Schema) -> Result<()> {
+        match schema.fields.iter().as_slice() {
+            [t, v] => {
+                if !matches!(
+                    t.data_type(),
+                    DataType::Timestamp(TimeUnit::Microsecond, Some(_tz))
+                ) {
+                    plan_err!("invalid timestamp type for rate table")
+                } else if !matches!(v.data_type(), DataType::Int64) {
+                    plan_err!("invalid value type for rate table")
+                } else {
+                    Ok(())
+                }
+            }
+            _ => {
+                plan_err!("invalid schema for rate table")
+            }
         }
     }
 }
@@ -103,23 +74,23 @@ impl TableProvider for RateTableProvider {
         _filters: &[Expr],
         _limit: Option<usize>,
     ) -> Result<Arc<dyn ExecutionPlan>> {
-        Ok(Arc::new(RateExec::new(
+        Ok(Arc::new(RateSourceExec::try_new(
             self.options.clone(),
-            Arc::clone(&self.time_zone),
             Arc::clone(&self.schema),
-        )))
+        )?))
     }
 }
 
 #[derive(Debug)]
-struct RateExec {
-    options: RateTableOptions,
+pub struct RateSourceExec {
+    options: TableRateOptions,
     time_zone: Arc<str>,
     properties: PlanProperties,
 }
 
-impl RateExec {
-    pub fn new(options: RateTableOptions, time_zone: Arc<str>, schema: SchemaRef) -> Self {
+impl RateSourceExec {
+    pub fn try_new(options: TableRateOptions, schema: SchemaRef) -> Result<Self> {
+        let time_zone = Self::infer_time_zone(&schema)?;
         let properties = PlanProperties::new(
             EquivalenceProperties::new(schema.clone()),
             Partitioning::UnknownPartitioning(options.num_partitions),
@@ -128,15 +99,34 @@ impl RateExec {
                 requires_infinite_memory: false,
             },
         );
-        Self {
+        Ok(Self {
             options,
             time_zone,
             properties,
+        })
+    }
+
+    pub fn options(&self) -> &TableRateOptions {
+        &self.options
+    }
+
+    fn infer_time_zone(schema: &Schema) -> Result<Arc<str>> {
+        match schema.fields.iter().as_slice() {
+            [t, _] => {
+                if let DataType::Timestamp(_, Some(tz)) = t.data_type() {
+                    Ok(Arc::clone(tz))
+                } else {
+                    plan_err!("invalid timestamp type for rate table schema")
+                }
+            }
+            _ => {
+                plan_err!("invalid schema for rate table")
+            }
         }
     }
 }
 
-impl DisplayAs for RateExec {
+impl DisplayAs for RateSourceExec {
     fn fmt_as(
         &self,
         _t: datafusion::physical_plan::DisplayFormatType,
@@ -152,7 +142,7 @@ impl DisplayAs for RateExec {
     }
 }
 
-impl ExecutionPlan for RateExec {
+impl ExecutionPlan for RateSourceExec {
     fn name(&self) -> &str {
         Self::static_name()
     }

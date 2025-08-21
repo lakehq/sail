@@ -112,7 +112,6 @@ where
     Ok(Some(value))
 }
 
-#[expect(unused)]
 pub fn deserialize_u16<'de, D>(deserializer: D) -> Result<Option<u16>, D::Error>
 where
     D: serde::Deserializer<'de>,

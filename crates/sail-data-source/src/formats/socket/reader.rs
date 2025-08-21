@@ -4,7 +4,7 @@ use std::time::Duration;
 
 use async_trait::async_trait;
 use datafusion::arrow::array::{RecordBatch, StringArray};
-use datafusion::arrow::datatypes::{DataType, SchemaRef};
+use datafusion::arrow::datatypes::{DataType, Schema, SchemaRef};
 use datafusion::catalog::{Session, TableProvider};
 use datafusion::datasource::TableType;
 use datafusion::execution::{SendableRecordBatchStream, TaskContext};
@@ -13,69 +13,38 @@ use datafusion::physical_expr::{EquivalenceProperties, Partitioning};
 use datafusion::physical_plan::execution_plan::{Boundedness, EmissionType};
 use datafusion::physical_plan::stream::RecordBatchStreamAdapter;
 use datafusion::physical_plan::{DisplayAs, ExecutionPlan, PlanProperties};
-use datafusion_common::{exec_datafusion_err, not_impl_err, plan_err, DataFusionError, Result};
-use deltalake::arrow::datatypes::{Field, Schema};
+use datafusion_common::{exec_datafusion_err, plan_err, DataFusionError, Result};
 use futures::TryStreamExt;
-use sail_common_datafusion::datasource::{SinkInfo, SourceInfo, TableFormat};
 use tokio::io::{AsyncBufReadExt, BufReader};
 use tokio_stream::wrappers::LinesStream;
 use tokio_stream::StreamExt;
 
-#[derive(Debug)]
-pub struct SocketTableFormat;
-
-#[async_trait]
-impl TableFormat for SocketTableFormat {
-    fn name(&self) -> &str {
-        "socket"
-    }
-
-    async fn create_provider(
-        &self,
-        _ctx: &dyn Session,
-        _info: SourceInfo,
-    ) -> Result<Arc<dyn TableProvider>> {
-        let options = SocketTableOptions {
-            host: "localhost".to_string(),
-            port: 9999,
-            max_batch_size: 1000,
-            timeout: Duration::from_secs(1),
-        };
-        Ok(Arc::new(SocketTableProvider::new(options)))
-    }
-
-    async fn create_writer(
-        &self,
-        _ctx: &dyn Session,
-        _info: SinkInfo,
-    ) -> Result<Arc<dyn ExecutionPlan>> {
-        not_impl_err!("socket table format writer")
-    }
-}
-
-#[derive(Debug, Clone, Default)]
-pub struct SocketTableOptions {
-    pub host: String,
-    pub port: u16,
-    pub max_batch_size: usize,
-    pub timeout: Duration,
-}
+use crate::formats::socket::options::TableSocketOptions;
 
 #[derive(Debug, Clone)]
-struct SocketTableProvider {
-    options: SocketTableOptions,
+pub struct SocketTableProvider {
+    options: TableSocketOptions,
     schema: SchemaRef,
 }
 
 impl SocketTableProvider {
-    pub fn new(options: SocketTableOptions) -> Self {
-        Self {
-            options,
-            schema: Arc::new(Schema::new(vec![Arc::new(Field::new(
-                "value",
-                DataType::Utf8,
-                false,
-            ))])),
+    pub fn try_new(options: TableSocketOptions, schema: SchemaRef) -> Result<Self> {
+        Self::validate_schema(&schema)?;
+        Ok(Self { options, schema })
+    }
+
+    fn validate_schema(schema: &Schema) -> Result<()> {
+        match schema.fields.iter().as_slice() {
+            [value] => {
+                if !matches!(value.data_type(), DataType::Utf8) {
+                    plan_err!("invalid value type for socket table")
+                } else {
+                    Ok(())
+                }
+            }
+            _ => {
+                plan_err!("invalid schema for socket table")
+            }
         }
     }
 }
@@ -109,14 +78,14 @@ impl TableProvider for SocketTableProvider {
 }
 
 #[derive(Debug)]
-struct SocketSourceExec {
-    options: SocketTableOptions,
+pub struct SocketSourceExec {
+    options: TableSocketOptions,
     schema: SchemaRef,
     properties: PlanProperties,
 }
 
 impl SocketSourceExec {
-    pub fn new(options: SocketTableOptions, schema: SchemaRef) -> Self {
+    pub fn new(options: TableSocketOptions, schema: SchemaRef) -> Self {
         let properties = PlanProperties::new(
             EquivalenceProperties::new(schema.clone()),
             Partitioning::UnknownPartitioning(1),
@@ -130,6 +99,10 @@ impl SocketSourceExec {
             schema,
             properties,
         }
+    }
+
+    pub fn options(&self) -> &TableSocketOptions {
+        &self.options
     }
 }
 
@@ -194,7 +167,7 @@ impl ExecutionPlan for SocketSourceExec {
         if self.options.max_batch_size == 0 {
             return plan_err!("maximum batch size must be greater than 0 for reading from socket");
         }
-        if self.options.timeout == Duration::ZERO {
+        if self.options.timeout_sec == 0 {
             return plan_err!("timeout must be greater than 0 for reading from socket");
         }
         let options = self.options.clone();
@@ -205,7 +178,10 @@ impl ExecutionPlan for SocketSourceExec {
                 .map_err(|e| exec_datafusion_err!("failed to connect to socket: {e}"))?;
             let reader = BufReader::new(stream);
             let output = LinesStream::new(reader.lines())
-                .chunks_timeout(options.max_batch_size, options.timeout)
+                .chunks_timeout(
+                    options.max_batch_size,
+                    Duration::from_secs(options.timeout_sec),
+                )
                 .map(move |lines| {
                     let values = lines
                         .into_iter()
