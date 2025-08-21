@@ -14,7 +14,7 @@ use datafusion::datasource::source::{DataSource, DataSourceExec};
 use datafusion::execution::FunctionRegistry;
 use datafusion::functions::string::overlay::OverlayFunc;
 use datafusion::logical_expr::{AggregateUDF, AggregateUDFImpl, ScalarUDF, ScalarUDFImpl};
-use datafusion::physical_expr::LexOrdering;
+use datafusion::physical_expr::{LexOrdering, LexRequirement};
 use datafusion::physical_plan::joins::utils::{ColumnIndex, JoinFilter};
 use datafusion::physical_plan::joins::SortMergeJoinExec;
 use datafusion::physical_plan::recursive_query::RecursiveQueryExec;
@@ -43,7 +43,9 @@ use prost::Message;
 use sail_common_datafusion::datasource::PhysicalSinkMode;
 use sail_common_datafusion::udf::StreamUDF;
 use sail_common_datafusion::utils::{read_record_batches, write_record_batches};
-use sail_delta_lake::delta_format::{DeltaCommitExec, DeltaWriterExec};
+use sail_delta_lake::delta_format::{
+    DeltaCommitExec, DeltaProjectExec, DeltaRepartitionExec, DeltaSortExec, DeltaWriterExec,
+};
 use sail_plan::extension::function::array::arrays_zip::ArraysZip;
 use sail_plan::extension::function::array::spark_array::SparkArray;
 use sail_plan::extension::function::array::spark_array_empty_to_null::ArrayEmptyToNull;
@@ -482,6 +484,40 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
                     )))
                 }
             }
+            NodeKind::DeltaProject(gen::DeltaProjectExecNode {
+                input,
+                partition_columns,
+            }) => {
+                let input = self.try_decode_plan(&input, registry)?;
+                Ok(Arc::new(DeltaProjectExec::new(input, partition_columns)?))
+            }
+            NodeKind::DeltaRepartition(gen::DeltaRepartitionExecNode {
+                input,
+                partition_columns,
+            }) => {
+                let input = self.try_decode_plan(&input, registry)?;
+                Ok(Arc::new(DeltaRepartitionExec::try_new(
+                    input,
+                    partition_columns,
+                )?))
+            }
+            NodeKind::DeltaSort(gen::DeltaSortExecNode {
+                input,
+                partition_columns,
+                sort_order,
+            }) => {
+                let input = self.try_decode_plan(&input, registry)?;
+                let sort_order = if let Some(sort_order_bytes) = sort_order {
+                    self.try_decode_lex_requirement(&sort_order_bytes, registry, &input.schema())?
+                } else {
+                    None
+                };
+                Ok(Arc::new(DeltaSortExec::new(
+                    input,
+                    partition_columns,
+                    sort_order,
+                )?))
+            }
             // TODO: StreamingTableExec?
             _ => plan_err!("unsupported physical plan node: {node_kind:?}"),
         }
@@ -712,6 +748,32 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
                 partition_columns: delta_commit_exec.partition_columns().to_vec(),
                 table_exists: delta_commit_exec.table_exists(),
                 sink_schema: self.try_encode_schema(delta_commit_exec.sink_schema())?,
+            })
+        } else if let Some(delta_project_exec) = node.as_any().downcast_ref::<DeltaProjectExec>() {
+            let input = self.try_encode_plan(delta_project_exec.children()[0].clone())?;
+            NodeKind::DeltaProject(gen::DeltaProjectExecNode {
+                input,
+                partition_columns: delta_project_exec.partition_columns().to_vec(),
+            })
+        } else if let Some(delta_repartition_exec) =
+            node.as_any().downcast_ref::<DeltaRepartitionExec>()
+        {
+            let input = self.try_encode_plan(delta_repartition_exec.children()[0].clone())?;
+            NodeKind::DeltaRepartition(gen::DeltaRepartitionExecNode {
+                input,
+                partition_columns: delta_repartition_exec.partition_columns().to_vec(),
+            })
+        } else if let Some(delta_sort_exec) = node.as_any().downcast_ref::<DeltaSortExec>() {
+            let input = self.try_encode_plan(delta_sort_exec.children()[0].clone())?;
+            let sort_order = if let Some(sort_order) = delta_sort_exec.sort_order() {
+                Some(self.try_encode_lex_requirement(sort_order)?)
+            } else {
+                None
+            };
+            NodeKind::DeltaSort(gen::DeltaSortExecNode {
+                input,
+                partition_columns: delta_sort_exec.partition_columns().to_vec(),
+                sort_order,
             })
         } else {
             return plan_err!("unsupported physical plan node: {node:?}");
@@ -1521,6 +1583,44 @@ impl RemoteExecutionCodec {
             result.push(lex_ordering)
         }
         Ok(result)
+    }
+
+    fn try_decode_lex_requirement(
+        &self,
+        buf: &[u8],
+        registry: &dyn FunctionRegistry,
+        schema: &Schema,
+    ) -> Result<Option<LexRequirement>> {
+        use datafusion_proto::protobuf::PhysicalSortExprNodeCollection;
+        let collection: PhysicalSortExprNodeCollection = self.try_decode_message(buf)?;
+        let exprs = parse_physical_sort_exprs(
+            &collection.physical_sort_expr_nodes,
+            registry,
+            schema,
+            self,
+        )?;
+        Ok(LexRequirement::new(exprs.into_iter().map(Into::into)))
+    }
+
+    fn try_encode_lex_requirement(&self, lex_requirement: &LexRequirement) -> Result<Vec<u8>> {
+        use datafusion::physical_expr::PhysicalSortExpr;
+        use datafusion_proto::protobuf::{PhysicalSortExprNode, PhysicalSortExprNodeCollection};
+
+        let expr = lex_requirement
+            .iter()
+            .map(|requirement| {
+                let expr: PhysicalSortExpr = requirement.to_owned().into();
+                let sort_expr = PhysicalSortExprNode {
+                    expr: Some(Box::new(serialize_physical_expr(&expr.expr, self)?)),
+                    asc: !expr.options.descending,
+                    nulls_first: expr.options.nulls_first,
+                };
+                Ok(sort_expr)
+            })
+            .collect::<Result<Vec<_>>>()?;
+        self.try_encode_message(PhysicalSortExprNodeCollection {
+            physical_sort_expr_nodes: expr,
+        })
     }
 
     fn try_decode_show_string_style(&self, style: i32) -> Result<ShowStringStyle> {

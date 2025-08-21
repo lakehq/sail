@@ -175,96 +175,20 @@ impl SailLogDataHandler {
             expected_data_type.clone(),
         );
 
-        // For non-partition columns, we need per-file statistics for conditional overwrite
-        // For partition columns, we can concatenate all results
-        if is_partition_column {
-            let mut results = Vec::new();
+        let results = self
+            .data
+            .iter()
+            .map(|batch| evaluator.evaluate_arrow(batch.clone()))
+            .collect::<Result<Vec<_>, _>>()
+            .ok()?;
 
-            for batch in self.data.iter() {
-                match evaluator.evaluate_arrow(batch.clone()) {
-                    Ok(result) => {
-                        results.push(result);
-                    }
-                    Err(_) => {
-                        return None;
-                    }
-                }
-            }
-
-            if results.is_empty() {
-                return None;
-            }
-
-            let schema = results[0].schema();
-            let batch = concat_batches(&schema, &results).ok()?;
-            batch.column_by_name("output").cloned()
-        } else {
-            // For non-partition columns (per-file statistics)
-            let mut all_values = Vec::new();
-
-            for batch in self.data.iter() {
-                match evaluator.evaluate_arrow(batch.clone()) {
-                    Ok(result) => {
-                        // Extract values from this batch and add to our collection
-                        if let Some(output_column) = result.column_by_name("output") {
-                            // Each batch should contain one row per file in that batch
-                            for row_idx in 0..output_column.len() {
-                                if output_column.is_null(row_idx) {
-                                    // Handle null values based on data type
-                                    match &expected_data_type {
-                                        DataType::Primitive(PrimitiveType::String) => {
-                                            all_values.push(ScalarValue::Utf8(None));
-                                        }
-                                        DataType::Primitive(PrimitiveType::Long) => {
-                                            all_values.push(ScalarValue::Int64(None));
-                                        }
-                                        _ => {
-                                            all_values.push(ScalarValue::Null);
-                                        }
-                                    }
-                                } else {
-                                    // Extract the actual value
-                                    match &expected_data_type {
-                                        DataType::Primitive(PrimitiveType::String) => {
-                                            if let Some(string_array) =
-                                                output_column.as_any().downcast_ref::<StringArray>()
-                                            {
-                                                let value = string_array.value(row_idx);
-                                                all_values.push(ScalarValue::Utf8(Some(
-                                                    value.to_string(),
-                                                )));
-                                            }
-                                        }
-                                        DataType::Primitive(PrimitiveType::Long) => {
-                                            if let Some(int_array) =
-                                                output_column.as_any().downcast_ref::<Int64Array>()
-                                            {
-                                                let value = int_array.value(row_idx);
-                                                all_values.push(ScalarValue::Int64(Some(value)));
-                                            }
-                                        }
-                                        _ => {
-                                            all_values.push(ScalarValue::Null);
-                                        }
-                                    }
-                                }
-                            }
-                        }
-                    }
-                    Err(_) => {
-                        return None;
-                    }
-                }
-            }
-
-            if all_values.is_empty() {
-                return None;
-            }
-
-            // Convert ScalarValues back to ArrayRef
-            let result = ScalarValue::iter_to_array(all_values.into_iter()).ok()?;
-            Some(result)
+        if results.is_empty() {
+            return None;
         }
+
+        let schema = results[0].schema();
+        let batch = concat_batches(&schema, &results).ok()?;
+        batch.column_by_name("output").cloned()
     }
 
     /// Get the number of containers (files) being pruned

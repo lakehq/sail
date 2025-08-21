@@ -14,8 +14,8 @@ use datafusion::execution::SessionStateBuilder;
 use datafusion::physical_plan::execution_plan::{Boundedness, EmissionType};
 use datafusion::physical_plan::stream::RecordBatchStreamAdapter;
 use datafusion::physical_plan::{
-    DisplayAs, DisplayFormatType, ExecutionPlan, Partitioning, PlanProperties,
-    SendableRecordBatchStream,
+    DisplayAs, DisplayFormatType, ExecutionPlan, ExecutionPlanProperties, Partitioning,
+    PlanProperties, SendableRecordBatchStream,
 };
 use datafusion_common::{internal_err, DataFusionError, Result};
 use datafusion_physical_expr::EquivalenceProperties;
@@ -25,8 +25,7 @@ use deltalake::kernel::schema::StructType;
 use deltalake::kernel::{Action, MetadataExt, Remove}; // TODO: Follow upstream for `MetadataExt`.
 use deltalake::logstore::StorageConfig;
 use deltalake::protocol::{DeltaOperation, SaveMode};
-use futures::stream::once;
-use futures::StreamExt;
+use futures::stream::{self, once, StreamExt};
 use sail_common_datafusion::datasource::{PhysicalSinkMode, TableDeltaOptions};
 use url::Url;
 use uuid::Uuid;
@@ -173,7 +172,11 @@ impl ExecutionPlan for DeltaWriterExec {
             return internal_err!("DeltaWriterExec can only be executed in a single partition");
         }
 
-        let input_stream = self.input.execute(0, Arc::clone(&context))?;
+        let input_partitions = self.input.output_partitioning().partition_count();
+        let mut streams = Vec::with_capacity(input_partitions);
+        for i in 0..input_partitions {
+            streams.push(self.input.execute(i, Arc::clone(&context))?);
+        }
 
         let table_url = self.table_url.clone();
         let options = self.options.clone();
@@ -402,7 +405,7 @@ impl ExecutionPlan for DeltaWriterExec {
             let mut writer = DeltaWriter::new(object_store.clone(), writer_path, writer_config);
 
             let mut total_rows = 0u64;
-            let mut data = input_stream;
+            let mut data = stream::iter(streams).flatten();
 
             while let Some(batch_result) = data.next().await {
                 let batch = batch_result?;

@@ -28,6 +28,9 @@ message ExtendedPhysicalPlanNode {
     PartialSortExecNode partial_sort = 14;
     DeltaWriterExecNode delta_writer = 15;
     DeltaCommitExecNode delta_commit = 16;
+    DeltaProjectExecNode delta_project = 17;
+    DeltaRepartitionExecNode delta_repartition = 18;
+    DeltaSortExecNode delta_sort = 19;
   }
 }
 
@@ -320,6 +323,22 @@ message DeltaCommitExecNode {
   repeated string partition_columns = 3;
   bool table_exists = 4;
   bytes sink_schema = 5;
+}
+
+message DeltaProjectExecNode {
+  bytes input = 1;
+  repeated string partition_columns = 2;
+}
+
+message DeltaRepartitionExecNode {
+  bytes input = 1;
+  repeated string partition_columns = 2;
+}
+
+message DeltaSortExecNode {
+  bytes input = 1;
+  repeated string partition_columns = 2;
+  optional bytes sort_order = 3;
 }
 
 message JoinOn {

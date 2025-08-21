@@ -11,8 +11,8 @@ use datafusion::execution::context::TaskContext;
 use datafusion::physical_plan::execution_plan::{Boundedness, EmissionType};
 use datafusion::physical_plan::stream::RecordBatchStreamAdapter;
 use datafusion::physical_plan::{
-    DisplayAs, DisplayFormatType, ExecutionPlan, Partitioning, PlanProperties,
-    SendableRecordBatchStream,
+    DisplayAs, DisplayFormatType, ExecutionPlan, ExecutionPlanProperties, Partitioning,
+    PlanProperties, SendableRecordBatchStream,
 };
 use datafusion_common::{internal_err, DataFusionError, Result};
 use datafusion_physical_expr::EquivalenceProperties;
@@ -23,8 +23,7 @@ use deltalake::kernel::transaction::{CommitBuilder, CommitProperties, TableRefer
 use deltalake::kernel::{Action, Add, Protocol};
 use deltalake::logstore::StorageConfig;
 use deltalake::protocol::{DeltaOperation, SaveMode};
-use futures::stream::once;
-use futures::StreamExt;
+use futures::stream::{self, StreamExt};
 use url::Url;
 
 use crate::table::{create_delta_table_with_object_store, open_table_with_object_store};
@@ -138,7 +137,11 @@ impl ExecutionPlan for DeltaCommitExec {
             return internal_err!("DeltaCommitExec can only be executed in a single partition");
         }
 
-        let input_stream = self.input.execute(0, Arc::clone(&context))?;
+        let input_partitions = self.input.output_partitioning().partition_count();
+        let mut streams = Vec::with_capacity(input_partitions);
+        for i in 0..input_partitions {
+            streams.push(self.input.execute(i, Arc::clone(&context))?);
+        }
 
         let table_url = self.table_url.clone();
         let partition_columns = self.partition_columns.clone();
@@ -175,7 +178,7 @@ impl ExecutionPlan for DeltaCommitExec {
             let mut schema_actions: Vec<Action> = Vec::new();
             let mut initial_actions: Vec<Action> = Vec::new();
             let mut operation: Option<DeltaOperation> = None;
-            let mut data = input_stream;
+            let mut data = stream::iter(streams).flatten();
 
             while let Some(batch_result) = data.next().await {
                 let batch = batch_result?;
@@ -321,7 +324,7 @@ impl ExecutionPlan for DeltaCommitExec {
             Ok(batch)
         };
 
-        let stream = once(future);
+        let stream = stream::once(future);
         Ok(Box::pin(RecordBatchStreamAdapter::new(
             self.schema(),
             stream,
