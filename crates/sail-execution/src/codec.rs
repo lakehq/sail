@@ -428,6 +428,40 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
                     null_equality,
                 )?))
             }
+            NodeKind::DeltaProject(gen::DeltaProjectExecNode {
+                input,
+                partition_columns,
+            }) => {
+                let input = self.try_decode_plan(&input, registry)?;
+                Ok(Arc::new(DeltaProjectExec::new(input, partition_columns)?))
+            }
+            NodeKind::DeltaRepartition(gen::DeltaRepartitionExecNode {
+                input,
+                partition_columns,
+            }) => {
+                let input = self.try_decode_plan(&input, registry)?;
+                Ok(Arc::new(DeltaRepartitionExec::try_new(
+                    input,
+                    partition_columns,
+                )?))
+            }
+            NodeKind::DeltaSort(gen::DeltaSortExecNode {
+                input,
+                partition_columns,
+                sort_order,
+            }) => {
+                let input = self.try_decode_plan(&input, registry)?;
+                let sort_order = if let Some(sort_order_bytes) = sort_order {
+                    self.try_decode_lex_requirement(&sort_order_bytes, registry, &input.schema())?
+                } else {
+                    None
+                };
+                Ok(Arc::new(DeltaSortExec::new(
+                    input,
+                    partition_columns,
+                    sort_order,
+                )?))
+            }
             NodeKind::DeltaWriter(gen::DeltaWriterExecNode {
                 input,
                 table_url,
@@ -483,40 +517,6 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
                         Arc::new(sink_schema),
                     )))
                 }
-            }
-            NodeKind::DeltaProject(gen::DeltaProjectExecNode {
-                input,
-                partition_columns,
-            }) => {
-                let input = self.try_decode_plan(&input, registry)?;
-                Ok(Arc::new(DeltaProjectExec::new(input, partition_columns)?))
-            }
-            NodeKind::DeltaRepartition(gen::DeltaRepartitionExecNode {
-                input,
-                partition_columns,
-            }) => {
-                let input = self.try_decode_plan(&input, registry)?;
-                Ok(Arc::new(DeltaRepartitionExec::try_new(
-                    input,
-                    partition_columns,
-                )?))
-            }
-            NodeKind::DeltaSort(gen::DeltaSortExecNode {
-                input,
-                partition_columns,
-                sort_order,
-            }) => {
-                let input = self.try_decode_plan(&input, registry)?;
-                let sort_order = if let Some(sort_order_bytes) = sort_order {
-                    self.try_decode_lex_requirement(&sort_order_bytes, registry, &input.schema())?
-                } else {
-                    None
-                };
-                Ok(Arc::new(DeltaSortExec::new(
-                    input,
-                    partition_columns,
-                    sort_order,
-                )?))
             }
             // TODO: StreamingTableExec?
             _ => plan_err!("unsupported physical plan node: {node_kind:?}"),
@@ -727,28 +727,6 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
             } else {
                 return plan_err!("unsupported data source node: {data_source:?}");
             }
-        } else if let Some(delta_writer_exec) = node.as_any().downcast_ref::<DeltaWriterExec>() {
-            let input = self.try_encode_plan(delta_writer_exec.input().clone())?;
-            let sink_mode = self.try_encode_physical_sink_mode(delta_writer_exec.sink_mode())?;
-            NodeKind::DeltaWriter(gen::DeltaWriterExecNode {
-                input,
-                table_url: delta_writer_exec.table_url().to_string(),
-                options: serde_json::to_string(delta_writer_exec.options())
-                    .map_err(|e| plan_datafusion_err!("{e}"))?,
-                sink_schema: self.try_encode_schema(delta_writer_exec.sink_schema())?,
-                partition_columns: delta_writer_exec.partition_columns().to_vec(),
-                table_exists: delta_writer_exec.table_exists(),
-                sink_mode: Some(sink_mode),
-            })
-        } else if let Some(delta_commit_exec) = node.as_any().downcast_ref::<DeltaCommitExec>() {
-            let input = self.try_encode_plan(delta_commit_exec.input().clone())?;
-            NodeKind::DeltaCommit(gen::DeltaCommitExecNode {
-                input,
-                table_url: delta_commit_exec.table_url().to_string(),
-                partition_columns: delta_commit_exec.partition_columns().to_vec(),
-                table_exists: delta_commit_exec.table_exists(),
-                sink_schema: self.try_encode_schema(delta_commit_exec.sink_schema())?,
-            })
         } else if let Some(delta_project_exec) = node.as_any().downcast_ref::<DeltaProjectExec>() {
             let input = self.try_encode_plan(delta_project_exec.children()[0].clone())?;
             NodeKind::DeltaProject(gen::DeltaProjectExecNode {
@@ -774,6 +752,28 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
                 input,
                 partition_columns: delta_sort_exec.partition_columns().to_vec(),
                 sort_order,
+            })
+        } else if let Some(delta_writer_exec) = node.as_any().downcast_ref::<DeltaWriterExec>() {
+            let input = self.try_encode_plan(delta_writer_exec.input().clone())?;
+            let sink_mode = self.try_encode_physical_sink_mode(delta_writer_exec.sink_mode())?;
+            NodeKind::DeltaWriter(gen::DeltaWriterExecNode {
+                input,
+                table_url: delta_writer_exec.table_url().to_string(),
+                options: serde_json::to_string(delta_writer_exec.options())
+                    .map_err(|e| plan_datafusion_err!("{e}"))?,
+                sink_schema: self.try_encode_schema(delta_writer_exec.sink_schema())?,
+                partition_columns: delta_writer_exec.partition_columns().to_vec(),
+                table_exists: delta_writer_exec.table_exists(),
+                sink_mode: Some(sink_mode),
+            })
+        } else if let Some(delta_commit_exec) = node.as_any().downcast_ref::<DeltaCommitExec>() {
+            let input = self.try_encode_plan(delta_commit_exec.input().clone())?;
+            NodeKind::DeltaCommit(gen::DeltaCommitExecNode {
+                input,
+                table_url: delta_commit_exec.table_url().to_string(),
+                partition_columns: delta_commit_exec.partition_columns().to_vec(),
+                table_exists: delta_commit_exec.table_exists(),
+                sink_schema: self.try_encode_schema(delta_commit_exec.sink_schema())?,
             })
         } else {
             return plan_err!("unsupported physical plan node: {node:?}");
