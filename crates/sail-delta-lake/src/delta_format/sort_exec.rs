@@ -13,8 +13,6 @@ use datafusion::physical_plan::{
 };
 use datafusion_physical_expr::expressions::col;
 
-use super::project_exec::PARTITION_COLUMN_PREFIX;
-
 /// DeltaSortExec is a wrapper that encapsulates the logic for
 /// data sorting for Delta Lake writes.
 #[derive(Debug)]
@@ -38,9 +36,8 @@ impl DeltaSortExec {
         let mut sort_exprs: Vec<PhysicalSortExpr> = partition_columns
             .iter()
             .map(|name| {
-                let prefixed_name = format!("{}{}", PARTITION_COLUMN_PREFIX, name);
                 Ok(PhysicalSortExpr {
-                    expr: col(&prefixed_name, &input.schema())?,
+                    expr: col(name, &input.schema())?,
                     options: SortOptions::default(), // Default ascending
                 })
             })

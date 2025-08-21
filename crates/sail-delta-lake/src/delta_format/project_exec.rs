@@ -1,4 +1,5 @@
 use std::any::Any;
+use std::collections::HashSet;
 use std::fmt::{Debug, Formatter};
 use std::sync::Arc;
 
@@ -12,23 +13,26 @@ use datafusion::physical_plan::stream::RecordBatchStreamAdapter;
 use datafusion::physical_plan::{DisplayAs, DisplayFormatType, ExecutionPlan, PlanProperties};
 use futures::stream::StreamExt;
 
-/// Prefix for partition columns to avoid conflicts with user data columns
-pub(crate) const PARTITION_COLUMN_PREFIX: &str = "__partition_";
-
-/// DeltaProjectExec creates copies of partition columns with special prefixes.
+/// `DeltaProjectExec` is responsible for reordering columns so that partition columns
+/// are placed at the end of the `RecordBatch`.
 #[derive(Debug, Clone)]
 pub struct DeltaProjectExec {
     input: Arc<dyn ExecutionPlan>,
-    /// User-specified partition column names (original column names)
+    /// User-specified partition column names.
     partition_columns: Vec<String>,
-    /// Output schema containing original columns and prefixed partition columns
+    /// The output schema with partition columns moved to the end.
     output_schema: ArrowSchemaRef,
+    /// The projection indices to reorder columns.
+    projection_indices: Vec<usize>,
     cache: PlanProperties,
 }
 
 impl DeltaProjectExec {
     pub fn new(input: Arc<dyn ExecutionPlan>, partition_columns: Vec<String>) -> DFResult<Self> {
-        let output_schema = Self::create_output_schema(&input.schema(), &partition_columns)?;
+        let input_schema = input.schema();
+        let (output_schema, projection_indices) =
+            Self::create_output_schema_and_projection(&input_schema, &partition_columns)?;
+
         let cache = Self::compute_properties(input.properties(), output_schema.clone());
 
         Ok(Self {
@@ -36,32 +40,53 @@ impl DeltaProjectExec {
             partition_columns,
             output_schema,
             cache,
+            projection_indices,
         })
     }
 
-    /// Create output schema based on input schema and partition column names
-    fn create_output_schema(
+    /// Creates an output schema with partition columns moved to the end and returns the
+    /// projection indices needed to perform this reordering.
+    fn create_output_schema_and_projection(
         input_schema: &ArrowSchema,
         partition_columns: &[String],
-    ) -> DFResult<ArrowSchemaRef> {
-        if partition_columns.is_empty() {
-            return Ok(Arc::new(input_schema.clone()));
+    ) -> DFResult<(ArrowSchemaRef, Vec<usize>)> {
+        let mut non_partition_fields: Vec<Arc<Field>> = Vec::new();
+        let mut partition_fields: Vec<Arc<Field>> = Vec::new();
+        let mut non_partition_indices = Vec::new();
+        let mut partition_indices_map = std::collections::HashMap::new();
+
+        let partition_set: HashSet<&String> = partition_columns.iter().collect();
+
+        for (i, field) in input_schema.fields().iter().enumerate() {
+            if partition_set.contains(field.name()) {
+                partition_indices_map.insert(field.name().clone(), i);
+            } else {
+                non_partition_fields.push(field.clone());
+                non_partition_indices.push(i);
+            }
         }
 
-        let mut fields: Vec<Arc<Field>> = input_schema.fields().to_vec();
-
-        // Add a prefixed copy field for each partition column
+        // Ensure partition columns are added in the specified order.
         for col_name in partition_columns {
-            let field = input_schema.field_with_name(col_name)?;
-            let partition_field = Field::new(
-                format!("{}{}", PARTITION_COLUMN_PREFIX, col_name),
-                field.data_type().clone(),
-                field.is_nullable(),
-            );
-            fields.push(Arc::new(partition_field));
+            let idx = *partition_indices_map.get(col_name).ok_or_else(|| {
+                DataFusionError::Plan(format!(
+                    "Partition column '{}' not found in schema",
+                    col_name
+                ))
+            })?;
+            partition_fields.push(Arc::new(input_schema.field(idx).clone()));
         }
 
-        Ok(Arc::new(ArrowSchema::new(fields)))
+        let mut fields = non_partition_fields;
+        fields.extend(partition_fields);
+
+        let mut projection_indices = non_partition_indices;
+        for col_name in partition_columns {
+            #[allow(clippy::unwrap_used)]
+            projection_indices.push(*partition_indices_map.get(col_name).unwrap());
+        }
+
+        Ok((Arc::new(ArrowSchema::new(fields)), projection_indices))
     }
 
     fn compute_properties(
@@ -80,20 +105,14 @@ impl DeltaProjectExec {
         &self.partition_columns
     }
 
-    /// Process a single RecordBatch, adding partition column copies
+    /// Process a single RecordBatch, reordering columns so partition columns are at the end
     fn project_batch(&self, batch: RecordBatch) -> DFResult<RecordBatch> {
-        if self.partition_columns.is_empty() {
+        if self.partition_columns.is_empty() || self.projection_indices.is_empty() {
             return Ok(batch);
         }
 
-        let mut projected_columns = batch.columns().to_vec();
-
-        for col_name in &self.partition_columns {
-            let column_index = batch.schema().index_of(col_name)?;
-            projected_columns.push(batch.column(column_index).clone());
-        }
-
-        RecordBatch::try_new(self.output_schema.clone(), projected_columns)
+        batch
+            .project(&self.projection_indices)
             .map_err(|e| DataFusionError::ArrowError(Box::new(e), None))
     }
 }
