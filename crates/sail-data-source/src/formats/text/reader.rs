@@ -573,6 +573,10 @@ impl<'a> StringRecords<'a> {
         self.num_rows
     }
 
+    pub fn is_empty(&self) -> bool {
+        self.num_rows == 0
+    }
+
     pub fn iter(&self) -> impl Iterator<Item = &'a str> + '_ {
         (0..self.num_rows).map(|x| self.get(x))
     }

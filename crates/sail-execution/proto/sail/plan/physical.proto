@@ -27,6 +27,7 @@ message ExtendedPhysicalPlanNode {
     SortMergeJoinExecNode sort_merge_join = 13;
     PartialSortExecNode partial_sort = 14;
     DeltaSinkExecNode delta_sink = 15;
+    TextExecNode text = 16;
   }
 }
 
@@ -253,6 +254,13 @@ message NdJsonExecNode {
 
 message ArrowExecNode {
   bytes base_config = 1;
+}
+
+message TextExecNode {
+  bytes base_config = 1;
+  CompressionTypeVariant file_compression_type = 2;
+  bool whole_text = 3;
+  optional bytes line_sep = 4;
 }
 
 message WorkTableExecNode {

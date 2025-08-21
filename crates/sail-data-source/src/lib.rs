@@ -1,4 +1,4 @@
-mod formats;
+pub mod formats;
 mod listing;
 pub mod options;
 mod registry;
