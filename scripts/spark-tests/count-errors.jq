@@ -61,7 +61,7 @@ def count_errors:
 | map({
     diff: (.diff | delta | pad_right(8)),
     count: (.count | tostring | pad_left(4)),
-    error: (.error | truncate(100))
+    error: (.error | truncate(200))
 })
 | . = [
     {
