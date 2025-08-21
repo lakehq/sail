@@ -191,7 +191,7 @@
         }
       },
       "output": {
-        "failure": "not implemented: function: map_from_entries"
+        "success": "ok"
       }
     },
     {
