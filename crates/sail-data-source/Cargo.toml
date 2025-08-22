@@ -30,7 +30,6 @@ bytes = { workspace = true }
 tokio = { workspace = true }
 tokio-stream = { workspace = true }
 chrono = { workspace = true }
-rand = { workspace = true }
 
 [build-dependencies]
 serde = { workspace = true }

@@ -31,7 +31,7 @@ impl TableFormat for SocketTableFormat {
         info: SourceInfo,
     ) -> Result<Arc<dyn TableProvider>> {
         let SourceInfo {
-            paths,
+            paths: _,
             schema,
             constraints,
             partition_by,
@@ -39,9 +39,6 @@ impl TableFormat for SocketTableFormat {
             sort_order,
             options,
         } = info;
-        if !paths.is_empty() {
-            return plan_err!("the socket table format does not support paths");
-        }
         if !constraints.deref().is_empty() {
             return plan_err!("the socket table format does not support constraints");
         }
@@ -51,10 +48,9 @@ impl TableFormat for SocketTableFormat {
         if bucket_by.is_some() || !sort_order.is_empty() {
             return plan_err!("the socket table format does not support bucketing");
         }
-        let schema = if let Some(schema) = schema {
-            schema
-        } else {
-            Schema::new(vec![Arc::new(Field::new("value", DataType::Utf8, false))])
+        let schema = match schema {
+            Some(schema) if !schema.fields.is_empty() => schema,
+            _ => Schema::new(vec![Arc::new(Field::new("value", DataType::Utf8, false))]),
         };
         let options = resolve_socket_read_options(options)?;
         Ok(Arc::new(SocketTableProvider::try_new(

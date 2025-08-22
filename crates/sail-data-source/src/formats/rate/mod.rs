@@ -31,7 +31,7 @@ impl TableFormat for RateTableFormat {
         info: SourceInfo,
     ) -> Result<Arc<dyn TableProvider>> {
         let SourceInfo {
-            paths,
+            paths: _,
             schema,
             constraints,
             partition_by,
@@ -39,9 +39,6 @@ impl TableFormat for RateTableFormat {
             sort_order,
             options,
         } = info;
-        if !paths.is_empty() {
-            return plan_err!("the rate table format does not support paths");
-        }
         if !constraints.deref().is_empty() {
             return plan_err!("the rate table format does not support constraints");
         }
@@ -52,18 +49,19 @@ impl TableFormat for RateTableFormat {
             return plan_err!("the rate table format does not support bucketing");
         }
 
-        let schema = if let Some(schema) = schema {
-            schema
-        } else {
-            let tz = Arc::from(ctx.config().options().execution.time_zone.clone());
-            Schema::new(vec![
-                Arc::new(Field::new(
-                    "timestamp",
-                    DataType::Timestamp(TimeUnit::Microsecond, Some(tz)),
-                    true,
-                )),
-                Arc::new(Field::new("value", DataType::Int64, true)),
-            ])
+        let schema = match schema {
+            Some(schema) if !schema.fields.is_empty() => schema,
+            _ => {
+                let tz = Arc::from(ctx.config().options().execution.time_zone.clone());
+                Schema::new(vec![
+                    Arc::new(Field::new(
+                        "timestamp",
+                        DataType::Timestamp(TimeUnit::Microsecond, Some(tz)),
+                        true,
+                    )),
+                    Arc::new(Field::new("value", DataType::Int64, true)),
+                ])
+            }
         };
         let options = resolve_rate_read_options(options)?;
         Ok(Arc::new(RateTableProvider::try_new(

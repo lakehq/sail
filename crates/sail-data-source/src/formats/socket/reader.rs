@@ -66,43 +66,64 @@ impl TableProvider for SocketTableProvider {
     async fn scan(
         &self,
         _state: &dyn Session,
-        _projection: Option<&Vec<usize>>,
+        projection: Option<&Vec<usize>>,
         _filters: &[Expr],
         _limit: Option<usize>,
     ) -> Result<Arc<dyn ExecutionPlan>> {
-        Ok(Arc::new(SocketSourceExec::new(
+        let projection = projection
+            .cloned()
+            .unwrap_or_else(|| (0..self.schema.fields.len()).collect());
+        Ok(Arc::new(SocketSourceExec::try_new(
             self.options.clone(),
             Arc::clone(&self.schema),
-        )))
+            projection,
+        )?))
     }
 }
 
 #[derive(Debug)]
 pub struct SocketSourceExec {
     options: TableSocketOptions,
-    schema: SchemaRef,
+    original_schema: SchemaRef,
+    projection: Vec<usize>,
     properties: PlanProperties,
 }
 
 impl SocketSourceExec {
-    pub fn new(options: TableSocketOptions, schema: SchemaRef) -> Self {
+    /// Creates a new execution plan for the socket source.
+    /// The schema should be the original schema before projection.
+    pub fn try_new(
+        options: TableSocketOptions,
+        schema: SchemaRef,
+        projection: Vec<usize>,
+    ) -> Result<Self> {
+        let projected_schema = Arc::new(schema.project(&projection)?);
         let properties = PlanProperties::new(
-            EquivalenceProperties::new(schema.clone()),
+            EquivalenceProperties::new(projected_schema),
             Partitioning::UnknownPartitioning(1),
             EmissionType::Both,
             Boundedness::Unbounded {
                 requires_infinite_memory: false,
             },
         );
-        Self {
+        Ok(Self {
             options,
-            schema,
+            original_schema: schema,
+            projection,
             properties,
-        }
+        })
     }
 
     pub fn options(&self) -> &TableSocketOptions {
         &self.options
+    }
+
+    pub fn original_schema(&self) -> &SchemaRef {
+        &self.original_schema
+    }
+
+    pub fn projection(&self) -> &[usize] {
+        &self.projection
     }
 }
 
@@ -171,7 +192,7 @@ impl ExecutionPlan for SocketSourceExec {
             return plan_err!("timeout must be greater than 0 for reading from socket");
         }
         let options = self.options.clone();
-        let schema = Arc::clone(&self.schema);
+        let schema = self.schema();
         let output = futures::stream::once(async move {
             let stream = tokio::net::TcpStream::connect((options.host.as_str(), options.port))
                 .await
@@ -188,7 +209,10 @@ impl ExecutionPlan for SocketSourceExec {
                         .map(|x| Ok(Some(x?)))
                         .collect::<Result<Vec<Option<String>>>>()?;
                     let array = Arc::new(StringArray::from(values));
-                    Ok(RecordBatch::try_new(schema.clone(), vec![array])?)
+                    Ok(RecordBatch::try_new(
+                        schema.clone(),
+                        vec![array; schema.fields.len()],
+                    )?)
                 });
             Ok::<_, DataFusionError>(Box::pin(output))
         })

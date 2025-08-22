@@ -345,12 +345,14 @@ message SocketSourceExecNode {
   uint64 max_batch_size = 3;
   uint64 timeout_sec = 4;
   bytes schema = 5;
+  repeated uint64 projection = 6;
 }
 
 message RateSourceExecNode {
   uint64 rows_per_second = 1;
   uint64 num_partitions = 2;
   bytes schema = 3;
+  repeated uint64 projection = 4;
 }
 
 message JoinOn {

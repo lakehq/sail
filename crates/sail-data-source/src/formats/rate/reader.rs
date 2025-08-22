@@ -4,7 +4,7 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use async_trait::async_trait;
-use datafusion::arrow::array::{Int64Array, RecordBatch, TimestampMicrosecondArray};
+use datafusion::arrow::array::{ArrayRef, Int64Array, RecordBatch, TimestampMicrosecondArray};
 use datafusion::arrow::datatypes::{DataType, Schema, SchemaRef, TimeUnit};
 use datafusion::catalog::{Session, TableProvider};
 use datafusion::datasource::TableType;
@@ -16,7 +16,6 @@ use datafusion::physical_plan::stream::RecordBatchStreamAdapter;
 use datafusion::physical_plan::{DisplayAs, ExecutionPlan, PlanProperties};
 use datafusion_common::{arrow_datafusion_err, plan_err, DataFusionError, Result};
 use futures::Stream;
-use rand::Rng;
 
 use crate::formats::rate::options::TableRateOptions;
 
@@ -70,13 +69,17 @@ impl TableProvider for RateTableProvider {
     async fn scan(
         &self,
         _state: &dyn Session,
-        _projection: Option<&Vec<usize>>,
+        projection: Option<&Vec<usize>>,
         _filters: &[Expr],
         _limit: Option<usize>,
     ) -> Result<Arc<dyn ExecutionPlan>> {
+        let projection = projection
+            .cloned()
+            .unwrap_or_else(|| (0..self.schema.fields.len()).collect());
         Ok(Arc::new(RateSourceExec::try_new(
             self.options.clone(),
             Arc::clone(&self.schema),
+            projection,
         )?))
     }
 }
@@ -85,14 +88,23 @@ impl TableProvider for RateTableProvider {
 pub struct RateSourceExec {
     options: TableRateOptions,
     time_zone: Arc<str>,
+    original_schema: SchemaRef,
+    projection: Vec<usize>,
     properties: PlanProperties,
 }
 
 impl RateSourceExec {
-    pub fn try_new(options: TableRateOptions, schema: SchemaRef) -> Result<Self> {
+    /// Creates a new execution plan for the rate source.
+    /// The schema should be the original schema before projection.
+    pub fn try_new(
+        options: TableRateOptions,
+        schema: SchemaRef,
+        projection: Vec<usize>,
+    ) -> Result<Self> {
         let time_zone = Self::infer_time_zone(&schema)?;
+        let projected_schema = Arc::new(schema.project(&projection)?);
         let properties = PlanProperties::new(
-            EquivalenceProperties::new(schema.clone()),
+            EquivalenceProperties::new(projected_schema),
             Partitioning::UnknownPartitioning(options.num_partitions),
             EmissionType::Both,
             Boundedness::Unbounded {
@@ -102,12 +114,22 @@ impl RateSourceExec {
         Ok(Self {
             options,
             time_zone,
+            original_schema: schema,
+            projection,
             properties,
         })
     }
 
     pub fn options(&self) -> &TableRateOptions {
         &self.options
+    }
+
+    pub fn original_schema(&self) -> &SchemaRef {
+        &self.original_schema
+    }
+
+    pub fn projection(&self) -> &[usize] {
+        &self.projection
     }
 
     fn infer_time_zone(schema: &Schema) -> Result<Arc<str>> {
@@ -191,37 +213,115 @@ impl ExecutionPlan for RateSourceExec {
                 });
                 Box::pin(output)
             } else {
-                let rows_per_second_per_partition =
+                let rows_per_second =
                     (self.options.rows_per_second / self.options.num_partitions).max(1);
-                let resolution = rows_per_second_per_partition.min(1_000);
-                let batch_size = rows_per_second_per_partition / resolution;
-                let interval = Duration::from_secs(1) / (resolution as u32);
-                let output = futures::stream::unfold(
-                    (self.schema(), Arc::clone(&self.time_zone)),
-                    move |(schema, tz)| async move {
-                        tokio::time::sleep(interval).await;
-                        let mut rng = rand::rng();
-                        let timestamp = chrono::Utc::now().timestamp_micros();
-                        let values = (0..batch_size).map(|_| rng.random()).collect::<Vec<i64>>();
-                        let batch = RecordBatch::try_new(
-                            schema.clone(),
-                            vec![
-                                Arc::new(
-                                    TimestampMicrosecondArray::from(vec![timestamp; batch_size])
-                                        .with_timezone(Arc::clone(&tz)),
-                                ),
-                                Arc::new(Int64Array::from(values)),
-                            ],
-                        )
-                        .map_err(|e| arrow_datafusion_err!(e));
-                        Some((batch, (schema, tz)))
-                    },
-                );
+                // We generate at most 1000 batches per second
+                // since the sleep function only has millisecond accuracy.
+                let batches_per_second = rows_per_second.min(1_000);
+                let batch_size = rows_per_second / batches_per_second;
+                let interval = Duration::from_secs(1) / (batches_per_second as u32);
+                let generator = BatchGenerator::try_new(
+                    Arc::clone(&self.time_zone),
+                    &self.projection,
+                    self.schema(),
+                )?;
+                let output = futures::stream::unfold(generator, move |mut generator| async move {
+                    // The interval does not take into account the time it takes to generate data,
+                    // but the sleep itself is inaccurate anyway.
+                    tokio::time::sleep(interval).await;
+                    let result = generator.generate(batch_size);
+                    Some((result, generator))
+                });
                 Box::pin(output)
             };
         Ok(Box::pin(RecordBatchStreamAdapter::new(
             self.schema(),
             output,
         )))
+    }
+}
+
+/// The action for generating each column in the record batch.
+enum BatchGeneratorAction {
+    /// Generates a timestamp array.
+    Timestamp,
+    /// Generates a value array.
+    Value,
+    /// Copies a previously generated array.
+    Copy(usize),
+}
+
+struct BatchGenerator {
+    offset: usize,
+    projected_schema: SchemaRef,
+    time_zone: Arc<str>,
+    actions: Vec<BatchGeneratorAction>,
+}
+
+impl BatchGenerator {
+    fn try_new(
+        time_zone: Arc<str>,
+        projection: &[usize],
+        projected_schema: SchemaRef,
+    ) -> Result<Self> {
+        let mut actions = vec![];
+        let mut timestamp_index = None;
+        let mut value_index = None;
+        for i in projection {
+            match i {
+                0 => {
+                    if let Some(j) = timestamp_index {
+                        actions.push(BatchGeneratorAction::Copy(j));
+                    } else {
+                        timestamp_index = Some(actions.len());
+                        actions.push(BatchGeneratorAction::Timestamp);
+                    }
+                }
+                1 => {
+                    if let Some(j) = value_index {
+                        actions.push(BatchGeneratorAction::Copy(j));
+                    } else {
+                        value_index = Some(actions.len());
+                        actions.push(BatchGeneratorAction::Value);
+                    }
+                }
+                _ => {
+                    return plan_err!("invalid projection index {i} for rate source table");
+                }
+            }
+        }
+        Ok(Self {
+            offset: 0,
+            projected_schema,
+            time_zone,
+            actions,
+        })
+    }
+
+    fn generate(&mut self, batch_size: usize) -> Result<RecordBatch> {
+        let mut columns: Vec<ArrayRef> = Vec::with_capacity(self.actions.len());
+        for action in &self.actions {
+            match action {
+                BatchGeneratorAction::Timestamp => {
+                    let ts = chrono::Utc::now().timestamp_micros();
+                    let array = TimestampMicrosecondArray::from(vec![ts; batch_size])
+                        .with_timezone(Arc::clone(&self.time_zone));
+                    columns.push(Arc::new(array) as _);
+                }
+                BatchGeneratorAction::Value => {
+                    let values = (0..batch_size)
+                        .map(|i| (self.offset + i) as i64)
+                        .collect::<Vec<_>>();
+                    let array = Int64Array::from(values);
+                    columns.push(Arc::new(array) as _);
+                }
+                BatchGeneratorAction::Copy(index) => {
+                    columns.push(columns[*index].clone());
+                }
+            }
+        }
+        self.offset += batch_size;
+        RecordBatch::try_new(self.projected_schema.clone(), columns)
+            .map_err(|e| arrow_datafusion_err!(e))
     }
 }
