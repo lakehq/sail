@@ -1,28 +1,9 @@
 coverage:
   status:
-    patch: false
+    patch: true
     project:
-      default: false
-      cargo:
+      default:
         only_pulls: true
-        flags:
-          - cargo
-        paths:
-          - "crates/"
-        target: 0
-        informational: true
-      spark:
-        only_pulls: true
-        flags:
-          - spark
-        paths:
-          - "crates/"
-        target: 0
-        informational: true
-      python:
-        only_pulls: true
-        flags:
-          - python
         paths:
           - "crates/"
         target: 0

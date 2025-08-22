@@ -165,7 +165,6 @@ jobs:
         with:
           token: ${{ secrets.CODECOV_TOKEN }}
           directory: ./coverage-reports/
-          flags: cargo,python,spark
           fail_ci_if_error: true
           env_vars: OS,RUST
 
