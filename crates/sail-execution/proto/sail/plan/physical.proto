@@ -26,8 +26,9 @@ message ExtendedPhysicalPlanNode {
     RecursiveQueryExecNode recursive_query = 12;
     SortMergeJoinExecNode sort_merge_join = 13;
     PartialSortExecNode partial_sort = 14;
-    DeltaSinkExecNode delta_sink = 15;
-    TextExecNode text = 16;
+    TextExecNode text = 15;
+    DeltaWriterExecNode delta_writer = 16;
+    DeltaCommitExecNode delta_commit = 17;
   }
 }
 
@@ -291,21 +292,44 @@ message PartialSortExecNode {
   uint64 common_prefix_length = 3;
 }
 
-message DeltaSinkExecNode {
-  bytes input = 1;
-  DeltaSink sink = 2;
-  bytes sink_schema = 3;
-  optional bytes sort_order = 4;
+
+
+message AppendMode {}
+message OverwriteMode {}
+message OverwriteIfMode {
+  bytes condition = 1;
+}
+message ErrorIfExistsMode {}
+message IgnoreIfExistsMode {}
+message OverwritePartitionsMode {}
+
+message PhysicalSinkMode {
+  oneof mode {
+    AppendMode append = 1;
+    OverwriteMode overwrite = 2;
+    OverwriteIfMode overwrite_if = 3;
+    ErrorIfExistsMode error_if_exists = 4;
+    IgnoreIfExistsMode ignore_if_exists = 5;
+    OverwritePartitionsMode overwrite_partitions = 6;
+  }
 }
 
-message DeltaSink {
-  string table_url = 1;
-  string options = 2;
-  bytes schema = 3;
-  repeated string partition_columns = 4;
-  string initial_actions = 5;
-  optional string operation = 6;
-  bool table_exists = 7;
+message DeltaWriterExecNode {
+  bytes input = 1;
+  string table_url = 2;
+  string options = 3;
+  bytes sink_schema = 4;
+  repeated string partition_columns = 5;
+  bool table_exists = 6;
+  PhysicalSinkMode sink_mode = 7;
+}
+
+message DeltaCommitExecNode {
+  bytes input = 1;
+  string table_url = 2;
+  repeated string partition_columns = 3;
+  bool table_exists = 4;
+  bytes sink_schema = 5;
 }
 
 message JoinOn {
