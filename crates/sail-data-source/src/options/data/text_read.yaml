@@ -1,0 +1,25 @@
+# References:
+#   - https://spark.apache.org/docs/latest/sql-data-sources-text.html
+
+- key: whole_text
+  aliases:
+    - wholeText
+  default: "false"
+  description: |
+    If true, read each file from input path(s) as a single row.
+  supported: true
+  rust_type: bool
+  rust_deserialize_with: crate::options::serde::deserialize_bool
+
+- key: line_sep
+  aliases:
+    - lineSep
+    - terminator
+  default: ""
+  description: |
+    Sets the single character line separator that should be used for parsing.
+    Supports \\r, \\r\\n and \\n.
+    For reading, defaults to None (CRLF: \\r, \\r\\n and \\n).
+  supported: true
+  rust_type: Option<char>
+  rust_deserialize_with: crate::options::serde::deserialize_optional_char

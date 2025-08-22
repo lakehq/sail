@@ -9,6 +9,7 @@ workspace = true
 [dependencies]
 sail-common = { path = "../sail-common" }
 sail-common-datafusion = { path = "../sail-common-datafusion" }
+sail-data-source = { path = "../sail-data-source" }
 sail-server = { path = "../sail-server" }
 sail-plan = { path = "../sail-plan" }
 sail-python-udf = { path = "../sail-python-udf" }

@@ -51,7 +51,7 @@
         }
       },
       "output": {
-        "failure": "not implemented: function: map_concat"
+        "success": "ok"
       }
     },
     {

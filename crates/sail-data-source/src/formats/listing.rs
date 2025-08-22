@@ -1,28 +1,25 @@
 use std::collections::HashMap;
 use std::fmt::Debug;
+use std::str::FromStr;
 use std::sync::Arc;
 
 use async_trait::async_trait;
 use datafusion::arrow::datatypes::DataType;
 use datafusion::catalog::{Session, TableProvider};
-use datafusion::datasource::file_format::arrow::ArrowFormat;
-use datafusion::datasource::file_format::avro::AvroFormat;
-use datafusion::datasource::file_format::csv::CsvFormat;
-use datafusion::datasource::file_format::json::JsonFormat;
-use datafusion::datasource::file_format::parquet::ParquetFormat;
 use datafusion::datasource::file_format::FileFormat;
 use datafusion::datasource::listing::{ListingOptions, ListingTable, ListingTableConfig};
 use datafusion::datasource::physical_plan::FileSinkConfig;
 use datafusion::logical_expr::dml::InsertOp;
 use datafusion::physical_plan::ExecutionPlan;
-use datafusion_common::{internal_err, not_impl_err, Result};
+use datafusion_common::parsers::CompressionTypeVariant;
+use datafusion_common::{internal_err, not_impl_err, GetExt, Result};
+use datafusion_datasource::file_compression_type::FileCompressionType;
 use sail_common_datafusion::datasource::{
     get_partition_columns_and_file_schema, SinkInfo, SourceInfo, TableFormat,
 };
 
-use crate::options::DataSourceOptionsResolver;
+use crate::utils::split_parquet_compression_string;
 
-// TODO: infer compression type from file extension
 // TODO: support global configuration to ignore file extension (by setting it to empty)
 /// A trait for defining the specifics of a listing table format.
 pub(crate) trait ListingFormat: Debug + Send + Sync + 'static {
@@ -31,12 +28,13 @@ pub(crate) trait ListingFormat: Debug + Send + Sync + 'static {
         &self,
         ctx: &dyn Session,
         options: Vec<HashMap<String, String>>,
+        compression: Option<CompressionTypeVariant>,
     ) -> Result<Arc<dyn FileFormat>>;
     fn create_write_format(
         &self,
         ctx: &dyn Session,
         options: Vec<HashMap<String, String>>,
-    ) -> Result<Arc<dyn FileFormat>>;
+    ) -> Result<(Arc<dyn FileFormat>, Option<String>)>;
 }
 
 #[derive(Debug)]
@@ -47,6 +45,10 @@ pub(crate) struct ListingTableFormat<T: ListingFormat> {
 impl<T: ListingFormat> ListingTableFormat<T> {
     pub fn new(format_def: T) -> Self {
         Self { inner: format_def }
+    }
+
+    pub fn inner(&self) -> &T {
+        &self.inner
     }
 }
 
@@ -78,7 +80,7 @@ impl<T: ListingFormat> TableFormat for ListingTableFormat<T> {
         } = info;
 
         let urls = crate::url::resolve_listing_urls(ctx, paths).await?;
-        let file_format = self.inner.create_read_format(ctx, options)?;
+        let file_format = self.inner.create_read_format(ctx, options.clone(), None)?;
         let extension_with_compression =
             file_format.compression_type().and_then(|compression_type| {
                 match file_format.get_ext_with_compression(&compression_type) {
@@ -100,16 +102,15 @@ impl<T: ListingFormat> TableFormat for ListingTableFormat<T> {
                 (Arc::new(schema), partition_by)
             }
             _ => {
-                let (schema, file_extension) = crate::listing::resolve_listing_schema(
+                let schema = crate::listing::resolve_listing_schema(
                     ctx,
                     &urls,
-                    &listing_options,
-                    extension_with_compression,
+                    &mut listing_options,
+                    &extension_with_compression,
+                    options,
+                    self,
                 )
                 .await?;
-                if let Some(file_extension) = file_extension {
-                    listing_options = listing_options.with_file_extension(file_extension);
-                }
                 let partition_by = partition_by
                     .into_iter()
                     .map(|col| (col, DataType::Utf8))
@@ -179,14 +180,35 @@ impl<T: ListingFormat> TableFormat for ListingTableFormat<T> {
             .iter()
             .map(|s| (s.clone(), DataType::Null))
             .collect::<Vec<_>>();
-        let format = self.inner.create_write_format(ctx, options)?;
+        let (format, compression) = self.inner.create_write_format(ctx, options)?;
         let file_extension = if let Some(file_compression_type) = format.compression_type() {
             match format.get_ext_with_compression(&file_compression_type) {
                 Ok(ext) => ext,
                 Err(_) => format.get_ext(),
             }
         } else {
-            format.get_ext()
+            let ext = format.get_ext();
+            if let Some(compression) = compression {
+                if matches!(ext.as_str(), ".parquet" | "parquet") {
+                    let ext = ext.strip_prefix('.').unwrap_or(&ext);
+                    let compression = compression.strip_prefix('.').unwrap_or(&compression);
+                    let (compression, _level) =
+                        split_parquet_compression_string(&compression.to_lowercase())?;
+                    let file_compression_type = FileCompressionType::from_str(compression.as_str());
+                    let compression = match file_compression_type {
+                        // Parquet has compression types not supported by FileCompressionType
+                        Ok(compression) => compression.get_ext(),
+                        Err(_) => compression,
+                    };
+                    let compression = compression.strip_prefix('.').unwrap_or(&compression);
+                    let result = format!("{compression}.{ext}");
+                    result
+                } else {
+                    ext
+                }
+            } else {
+                ext
+            }
         };
         let conf = FileSinkConfig {
             original_url: path,
@@ -202,157 +224,5 @@ impl<T: ListingFormat> TableFormat for ListingTableFormat<T> {
         format
             .create_writer_physical_plan(input, ctx, conf, sort_order)
             .await
-    }
-}
-
-// Arrow
-pub(crate) type ArrowTableFormat = ListingTableFormat<ArrowListingFormat>;
-
-#[derive(Debug, Default)]
-pub(crate) struct ArrowListingFormat;
-
-impl ListingFormat for ArrowListingFormat {
-    fn name(&self) -> &'static str {
-        "arrow"
-    }
-
-    fn create_read_format(
-        &self,
-        _ctx: &dyn Session,
-        _options: Vec<HashMap<String, String>>,
-    ) -> Result<Arc<dyn FileFormat>> {
-        Ok(Arc::new(ArrowFormat))
-    }
-
-    fn create_write_format(
-        &self,
-        _ctx: &dyn Session,
-        _options: Vec<HashMap<String, String>>,
-    ) -> Result<Arc<dyn FileFormat>> {
-        Ok(Arc::new(ArrowFormat))
-    }
-}
-
-// Avro
-pub(crate) type AvroTableFormat = ListingTableFormat<AvroListingFormat>;
-
-#[derive(Debug, Default)]
-pub(crate) struct AvroListingFormat;
-
-impl ListingFormat for AvroListingFormat {
-    fn name(&self) -> &'static str {
-        "avro"
-    }
-
-    fn create_read_format(
-        &self,
-        _ctx: &dyn Session,
-        _options: Vec<HashMap<String, String>>,
-    ) -> Result<Arc<dyn FileFormat>> {
-        Ok(Arc::new(AvroFormat))
-    }
-
-    fn create_write_format(
-        &self,
-        _ctx: &dyn Session,
-        _options: Vec<HashMap<String, String>>,
-    ) -> Result<Arc<dyn FileFormat>> {
-        Ok(Arc::new(AvroFormat))
-    }
-}
-
-// Csv
-pub(crate) type CsvTableFormat = ListingTableFormat<CsvListingFormat>;
-
-#[derive(Debug, Default)]
-pub(crate) struct CsvListingFormat;
-
-impl ListingFormat for CsvListingFormat {
-    fn name(&self) -> &'static str {
-        "csv"
-    }
-
-    fn create_read_format(
-        &self,
-        ctx: &dyn Session,
-        options: Vec<HashMap<String, String>>,
-    ) -> Result<Arc<dyn FileFormat>> {
-        let resolver = DataSourceOptionsResolver::new(ctx);
-        let options = resolver.resolve_csv_read_options(options)?;
-        Ok(Arc::new(CsvFormat::default().with_options(options)))
-    }
-
-    fn create_write_format(
-        &self,
-        ctx: &dyn Session,
-        options: Vec<HashMap<String, String>>,
-    ) -> Result<Arc<dyn FileFormat>> {
-        let resolver = DataSourceOptionsResolver::new(ctx);
-        let options = resolver.resolve_csv_write_options(options)?;
-        Ok(Arc::new(CsvFormat::default().with_options(options)))
-    }
-}
-
-// Json
-pub(crate) type JsonTableFormat = ListingTableFormat<JsonListingFormat>;
-
-#[derive(Debug, Default)]
-pub(crate) struct JsonListingFormat;
-
-impl ListingFormat for JsonListingFormat {
-    fn name(&self) -> &'static str {
-        "json"
-    }
-
-    fn create_read_format(
-        &self,
-        ctx: &dyn Session,
-        options: Vec<HashMap<String, String>>,
-    ) -> Result<Arc<dyn FileFormat>> {
-        let resolver = DataSourceOptionsResolver::new(ctx);
-        let options = resolver.resolve_json_read_options(options)?;
-        Ok(Arc::new(JsonFormat::default().with_options(options)))
-    }
-
-    fn create_write_format(
-        &self,
-        ctx: &dyn Session,
-        options: Vec<HashMap<String, String>>,
-    ) -> Result<Arc<dyn FileFormat>> {
-        let resolver = DataSourceOptionsResolver::new(ctx);
-        let options = resolver.resolve_json_write_options(options)?;
-        Ok(Arc::new(JsonFormat::default().with_options(options)))
-    }
-}
-
-// Parquet
-pub(crate) type ParquetTableFormat = ListingTableFormat<ParquetListingFormat>;
-
-#[derive(Debug, Default)]
-pub(crate) struct ParquetListingFormat;
-
-impl ListingFormat for ParquetListingFormat {
-    fn name(&self) -> &'static str {
-        "parquet"
-    }
-
-    fn create_read_format(
-        &self,
-        ctx: &dyn Session,
-        options: Vec<HashMap<String, String>>,
-    ) -> Result<Arc<dyn FileFormat>> {
-        let resolver = DataSourceOptionsResolver::new(ctx);
-        let options = resolver.resolve_parquet_read_options(options)?;
-        Ok(Arc::new(ParquetFormat::default().with_options(options)))
-    }
-
-    fn create_write_format(
-        &self,
-        ctx: &dyn Session,
-        options: Vec<HashMap<String, String>>,
-    ) -> Result<Arc<dyn FileFormat>> {
-        let resolver = DataSourceOptionsResolver::new(ctx);
-        let options = resolver.resolve_parquet_write_options(options)?;
-        Ok(Arc::new(ParquetFormat::default().with_options(options)))
     }
 }

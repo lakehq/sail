@@ -28,7 +28,7 @@ impl WorkerService for WorkerServer {
         request: Request<RunTaskRequest>,
     ) -> Result<Response<RunTaskResponse>, Status> {
         let request = request.into_inner();
-        debug!("{:?}", request);
+        debug!("{request:?}");
         let RunTaskRequest {
             task_id,
             attempt,
@@ -48,7 +48,7 @@ impl WorkerService for WorkerServer {
             .await
             .map_err(ExecutionError::from)?;
         let response = RunTaskResponse {};
-        debug!("{:?}", response);
+        debug!("{response:?}");
         Ok(Response::new(response))
     }
 
@@ -57,7 +57,7 @@ impl WorkerService for WorkerServer {
         request: Request<StopTaskRequest>,
     ) -> Result<Response<StopTaskResponse>, Status> {
         let request = request.into_inner();
-        debug!("{:?}", request);
+        debug!("{request:?}");
         let StopTaskRequest { task_id, attempt } = request;
         let event = WorkerEvent::StopTask {
             task_id: task_id.into(),
@@ -68,7 +68,7 @@ impl WorkerService for WorkerServer {
             .await
             .map_err(ExecutionError::from)?;
         let response = StopTaskResponse {};
-        debug!("{:?}", response);
+        debug!("{response:?}");
         Ok(Response::new(response))
     }
 
@@ -77,7 +77,7 @@ impl WorkerService for WorkerServer {
         request: Request<RemoveStreamRequest>,
     ) -> Result<Response<RemoveStreamResponse>, Status> {
         let request = request.into_inner();
-        debug!("{:?}", request);
+        debug!("{request:?}");
         let RemoveStreamRequest { channel_prefix } = request;
         let event = WorkerEvent::RemoveLocalStream { channel_prefix };
         self.handle
@@ -85,7 +85,7 @@ impl WorkerService for WorkerServer {
             .await
             .map_err(ExecutionError::from)?;
         let response = RemoveStreamResponse {};
-        debug!("{:?}", response);
+        debug!("{response:?}");
         Ok(Response::new(response))
     }
 
@@ -94,14 +94,14 @@ impl WorkerService for WorkerServer {
         request: Request<StopWorkerRequest>,
     ) -> Result<Response<StopWorkerResponse>, Status> {
         let request = request.into_inner();
-        debug!("{:?}", request);
+        debug!("{request:?}");
         let StopWorkerRequest {} = request;
         self.handle
             .send(WorkerEvent::Shutdown)
             .await
             .map_err(ExecutionError::from)?;
         let response = StopWorkerResponse {};
-        debug!("{:?}", response);
+        debug!("{response:?}");
         Ok(Response::new(response))
     }
 }
