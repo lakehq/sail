@@ -25,7 +25,7 @@ use deltalake::kernel::schema::StructType;
 use deltalake::kernel::{Action, MetadataExt, Remove}; // TODO: Follow upstream for `MetadataExt`.
 use deltalake::logstore::StorageConfig;
 use deltalake::protocol::{DeltaOperation, SaveMode};
-use futures::stream::{self, once, StreamExt};
+use futures::stream::{once, StreamExt};
 use sail_common_datafusion::datasource::PhysicalSinkMode;
 use url::Url;
 use uuid::Uuid;
@@ -169,10 +169,14 @@ impl ExecutionPlan for DeltaWriterExec {
         }
 
         let input_partitions = self.input.output_partitioning().partition_count();
-        let mut streams = Vec::with_capacity(input_partitions);
-        for i in 0..input_partitions {
-            streams.push(self.input.execute(i, Arc::clone(&context))?);
+        if input_partitions != 1 {
+            return internal_err!(
+                "DeltaWriterExec requires exactly one input partition, got {}",
+                input_partitions
+            );
         }
+
+        let stream = self.input.execute(0, Arc::clone(&context))?;
 
         let table_url = self.table_url.clone();
         let options = self.options.clone();
@@ -401,7 +405,7 @@ impl ExecutionPlan for DeltaWriterExec {
             let mut writer = DeltaWriter::new(object_store.clone(), writer_path, writer_config);
 
             let mut total_rows = 0u64;
-            let mut data = stream::iter(streams).flatten();
+            let mut data = stream;
 
             while let Some(batch_result) = data.next().await {
                 let batch = batch_result?;

@@ -7,11 +7,7 @@ use datafusion_common::Result;
 use sail_common_datafusion::datasource::PhysicalSinkMode;
 use url::Url;
 
-use super::commit_exec::DeltaCommitExec;
-use super::project_exec::DeltaProjectExec;
-use super::repartition_exec::DeltaRepartitionExec;
-use super::sort_exec::DeltaSortExec;
-use super::writer_exec::DeltaWriterExec;
+use super::{create_projection, create_repartition, create_sort, DeltaCommitExec, DeltaWriterExec};
 use crate::options::TableDeltaOptions;
 
 /// Builder for creating a Delta Lake execution plan with the specified structure:
@@ -64,7 +60,7 @@ impl DeltaPlanBuilder {
         let current_plan = self.add_coalesce_partitions_node(current_plan)?;
 
         // 5. Writer Node
-        let current_plan = self.add_writer_node(current_plan)?;
+        let current_plan = self.add_writer_node(current_plan)?; // TODO: Support multiple partitions
 
         // 6. Commit Node
         let current_plan = self.add_commit_node(current_plan)?;
@@ -73,25 +69,19 @@ impl DeltaPlanBuilder {
     }
 
     fn add_projection_node(&self, input: Arc<dyn ExecutionPlan>) -> Result<Arc<dyn ExecutionPlan>> {
-        Ok(DeltaProjectExec::create_projection(
-            input,
-            self.partition_columns.clone(),
-        )?)
+        Ok(create_projection(input, self.partition_columns.clone())?)
     }
 
     fn add_repartition_node(
         &self,
         input: Arc<dyn ExecutionPlan>,
     ) -> Result<Arc<dyn ExecutionPlan>> {
-        Ok(DeltaRepartitionExec::create_repartition(
-            input,
-            self.partition_columns.clone(),
-        )?)
+        Ok(create_repartition(input, self.partition_columns.clone())?)
     }
 
     fn add_sort_node(&self, input: Arc<dyn ExecutionPlan>) -> Result<Arc<dyn ExecutionPlan>> {
-        // DeltaSortExec handles both partition columns and user-specified sort order
-        Ok(DeltaSortExec::create_sort(
+        // create_sort handles both partition columns and user-specified sort order
+        Ok(create_sort(
             input,
             self.partition_columns.clone(),
             self.sort_order.clone(),

@@ -139,6 +139,14 @@ impl ExecutionPlan for DeltaCommitExec {
         }
 
         let input_partitions = self.input.output_partitioning().partition_count();
+        // if input_partitions != 1 {
+        //     return internal_err!(
+        //         "DeltaCommitExec requires exactly one input partition, got {}",
+        //         input_partitions
+        //     );
+        // }
+
+        // let stream = self.input.execute(0, Arc::clone(&context))?;
         let mut streams = Vec::with_capacity(input_partitions);
         for i in 0..input_partitions {
             streams.push(self.input.execute(i, Arc::clone(&context))?);
@@ -179,6 +187,7 @@ impl ExecutionPlan for DeltaCommitExec {
             let mut schema_actions: Vec<Action> = Vec::new();
             let mut initial_actions: Vec<Action> = Vec::new();
             let mut operation: Option<DeltaOperation> = None;
+            // let mut data = stream;
             let mut data = stream::iter(streams).flatten();
 
             while let Some(batch_result) = data.next().await {
@@ -191,11 +200,16 @@ impl ExecutionPlan for DeltaCommitExec {
                         let commit_info: CommitInfo = serde_json::from_str(commit_info_json)
                             .map_err(|e| DataFusionError::External(Box::new(e)))?;
 
-                        total_rows = commit_info.row_count;
+                        total_rows += commit_info.row_count;
                         writer_add_actions.extend(commit_info.add_actions);
                         schema_actions.extend(commit_info.schema_actions);
-                        initial_actions = commit_info.initial_actions;
-                        operation = commit_info.operation;
+
+                        if initial_actions.is_empty() {
+                            initial_actions = commit_info.initial_actions;
+                        }
+                        if operation.is_none() {
+                            operation = commit_info.operation;
+                        }
                         has_data = true;
                     }
                 }
