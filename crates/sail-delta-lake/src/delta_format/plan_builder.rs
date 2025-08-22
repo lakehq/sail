@@ -1,6 +1,7 @@
 use std::sync::Arc;
 
 use datafusion::physical_expr::LexRequirement;
+use datafusion::physical_plan::coalesce_partitions::CoalescePartitionsExec;
 use datafusion::physical_plan::ExecutionPlan;
 use datafusion_common::Result;
 use sail_common_datafusion::datasource::{PhysicalSinkMode, TableDeltaOptions};
@@ -13,7 +14,7 @@ use super::sort_exec::DeltaSortExec;
 use super::writer_exec::DeltaWriterExec;
 
 /// Builder for creating a Delta Lake execution plan with the specified structure:
-/// Input -> Project -> Repartition -> Sort -> Writer -> Commit
+/// Input -> Project -> Repartition -> Sort -> CoalescePartitions -> Writer -> Commit
 pub struct DeltaPlanBuilder {
     input: Arc<dyn ExecutionPlan>,
     table_url: Url,
@@ -58,10 +59,13 @@ impl DeltaPlanBuilder {
         // 3. Sort Node
         let current_plan = self.add_sort_node(current_plan)?;
 
-        // 4. Writer Node
+        // 4. Coalesce Partitions Node
+        let current_plan = self.add_coalesce_partitions_node(current_plan)?;
+
+        // 5. Writer Node
         let current_plan = self.add_writer_node(current_plan)?;
 
-        // 5. Commit Node
+        // 6. Commit Node
         let current_plan = self.add_commit_node(current_plan)?;
 
         Ok(current_plan)
@@ -91,6 +95,14 @@ impl DeltaPlanBuilder {
             self.partition_columns.clone(),
             self.sort_order.clone(),
         )?)
+    }
+
+    fn add_coalesce_partitions_node(
+        &self,
+        input: Arc<dyn ExecutionPlan>,
+    ) -> Result<Arc<dyn ExecutionPlan>> {
+        // Merge all partitions into a single partition
+        Ok(Arc::new(CoalescePartitionsExec::new(input)))
     }
 
     fn add_writer_node(&self, input: Arc<dyn ExecutionPlan>) -> Result<Arc<dyn ExecutionPlan>> {
