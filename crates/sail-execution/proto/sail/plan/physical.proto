@@ -26,11 +26,9 @@ message ExtendedPhysicalPlanNode {
     RecursiveQueryExecNode recursive_query = 12;
     SortMergeJoinExecNode sort_merge_join = 13;
     PartialSortExecNode partial_sort = 14;
-    DeltaProjectExecNode delta_project = 15;
-    DeltaRepartitionExecNode delta_repartition = 16;
-    DeltaSortExecNode delta_sort = 17;
-    DeltaWriterExecNode delta_writer = 18;
-    DeltaCommitExecNode delta_commit = 19;
+
+    DeltaWriterExecNode delta_writer = 15;
+    DeltaCommitExecNode delta_commit = 16;
   }
 }
 
@@ -287,21 +285,7 @@ message PartialSortExecNode {
   uint64 common_prefix_length = 3;
 }
 
-message DeltaProjectExecNode {
-  bytes input = 1;
-  repeated string partition_columns = 2;
-}
 
-message DeltaRepartitionExecNode {
-  bytes input = 1;
-  repeated string partition_columns = 2;
-}
-
-message DeltaSortExecNode {
-  bytes input = 1;
-  repeated string partition_columns = 2;
-  optional bytes sort_order = 3;
-}
 
 message AppendMode {}
 message OverwriteMode {}

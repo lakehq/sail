@@ -68,29 +68,29 @@ impl DeltaPlanBuilder {
     }
 
     fn add_projection_node(&self, input: Arc<dyn ExecutionPlan>) -> Result<Arc<dyn ExecutionPlan>> {
-        Ok(Arc::new(DeltaProjectExec::new(
+        Ok(DeltaProjectExec::create_projection(
             input,
             self.partition_columns.clone(),
-        )?))
+        )?)
     }
 
     fn add_repartition_node(
         &self,
         input: Arc<dyn ExecutionPlan>,
     ) -> Result<Arc<dyn ExecutionPlan>> {
-        Ok(Arc::new(DeltaRepartitionExec::try_new(
+        Ok(DeltaRepartitionExec::create_repartition(
             input,
             self.partition_columns.clone(),
-        )?))
+        )?)
     }
 
     fn add_sort_node(&self, input: Arc<dyn ExecutionPlan>) -> Result<Arc<dyn ExecutionPlan>> {
         // DeltaSortExec handles both partition columns and user-specified sort order
-        Ok(Arc::new(DeltaSortExec::new(
+        Ok(DeltaSortExec::create_sort(
             input,
             self.partition_columns.clone(),
             self.sort_order.clone(),
-        )?))
+        )?)
     }
 
     fn add_writer_node(&self, input: Arc<dyn ExecutionPlan>) -> Result<Arc<dyn ExecutionPlan>> {
