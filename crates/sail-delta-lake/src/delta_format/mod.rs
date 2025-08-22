@@ -58,10 +58,7 @@ fn create_projection_expressions(
     // Then, add partition columns in the specified order
     for col_name in partition_columns {
         let idx = *partition_indices_map.get(col_name).ok_or_else(|| {
-            DataFusionError::Plan(format!(
-                "Partition column '{}' not found in schema",
-                col_name
-            ))
+            DataFusionError::Plan(format!("Partition column '{col_name}' not found in schema"))
         })?;
         let column_expr = Arc::new(Column::new(col_name, idx)) as Arc<dyn PhysicalExpr>;
         projection_exprs.push((column_expr, col_name.clone()));
