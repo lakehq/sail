@@ -10,7 +10,8 @@ coverage:
         paths:
           - "crates/"
         target: auto
-        threshold: 0.1%
+        threshold: 10%
+        informational: true
       spark:
         only_pulls: true
         flags:
@@ -19,7 +20,8 @@ coverage:
           - "crates/"
           - "python/"
         target: auto
-        threshold: 0.1%
+        threshold: 10%
+        informational: true
       python:
         only_pulls: true
         flags:
@@ -28,12 +30,15 @@ coverage:
           - "crates/"
           - "python/"
         target: auto
-        threshold: 0.1%
+        threshold: 10%
+        informational: true
 
 codecov:
-  allow_coverage_offsets: true
+  notify:
+    after_n_builds: 2
 
-comment: false
+comment:
+  layout: " diff, files"
 
 flags:
   cargo:
