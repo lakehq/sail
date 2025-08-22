@@ -30,10 +30,10 @@ coverage:
 
 codecov:
   notify:
-    after_n_builds: 2
+    after_n_builds: 4
 
 comment:
-  layout: "diff, files"
+  layout: "files"
 
 ignore:
   - "crates/sail-gold-test"
