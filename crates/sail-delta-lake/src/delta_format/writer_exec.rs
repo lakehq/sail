@@ -32,6 +32,7 @@ use uuid::Uuid;
 
 use crate::delta_datafusion::type_converter::DeltaTypeConverter;
 use crate::delta_datafusion::{parse_predicate_expression, DataFusionMixins};
+use crate::delta_format::CommitInfo;
 use crate::operations::write::execution::{prepare_predicate_actions_physical, WriterStatsConfig};
 use crate::operations::write::writer::{DeltaWriter, WriterConfig};
 use crate::table::open_table_with_object_store;
@@ -68,13 +69,7 @@ impl DeltaWriterExec {
         table_exists: bool,
         sink_schema: SchemaRef,
     ) -> Self {
-        let schema = Arc::new(Schema::new(vec![
-            Field::new("row_count", DataType::UInt64, true),
-            Field::new("add_actions_json", DataType::Utf8, true),
-            Field::new("schema_actions_json", DataType::Utf8, true),
-            Field::new("initial_actions_json", DataType::Utf8, true),
-            Field::new("operation_json", DataType::Utf8, true),
-        ]));
+        let schema = Arc::new(Schema::new(vec![Field::new("data", DataType::Utf8, true)]));
         let cache = Self::compute_properties(schema);
         Self {
             input,
@@ -424,31 +419,18 @@ impl ExecutionPlan for DeltaWriterExec {
                 .await
                 .map_err(|e| DataFusionError::External(Box::new(e)))?;
 
-            // Serialize all actions and operation to JSON for transfer to CommitExec
-            let add_actions_json = serde_json::to_string(&add_actions)
-                .map_err(|e| DataFusionError::External(Box::new(e)))?;
-            let schema_actions_json = serde_json::to_string(&schema_actions)
-                .map_err(|e| DataFusionError::External(Box::new(e)))?;
-            let initial_actions_json = serde_json::to_string(&initial_actions)
-                .map_err(|e| DataFusionError::External(Box::new(e)))?;
-            let operation_json = serde_json::to_string(&operation)
+            let commit_info = CommitInfo {
+                row_count: total_rows,
+                add_actions,
+                schema_actions,
+                initial_actions,
+                operation,
+            };
+            let commit_info_json = serde_json::to_string(&commit_info)
                 .map_err(|e| DataFusionError::External(Box::new(e)))?;
 
-            let row_count_array = Arc::new(UInt64Array::from(vec![total_rows]));
-            let add_actions_array = Arc::new(StringArray::from(vec![add_actions_json]));
-            let schema_actions_array = Arc::new(StringArray::from(vec![schema_actions_json]));
-            let initial_actions_array = Arc::new(StringArray::from(vec![initial_actions_json]));
-            let operation_array = Arc::new(StringArray::from(vec![operation_json]));
-            let batch = RecordBatch::try_new(
-                schema,
-                vec![
-                    row_count_array,
-                    add_actions_array,
-                    schema_actions_array,
-                    initial_actions_array,
-                    operation_array,
-                ],
-            )?;
+            let data_array = Arc::new(StringArray::from(vec![commit_info_json]));
+            let batch = RecordBatch::try_new(schema, vec![data_array])?;
             Ok(batch)
         };
 

@@ -26,6 +26,7 @@ use deltalake::protocol::{DeltaOperation, SaveMode};
 use futures::stream::{self, StreamExt};
 use url::Url;
 
+use crate::delta_format::CommitInfo;
 use crate::table::{create_delta_table_with_object_store, open_table_with_object_store};
 
 /// Physical execution node for Delta Lake commit operations
@@ -183,56 +184,19 @@ impl ExecutionPlan for DeltaCommitExec {
             while let Some(batch_result) = data.next().await {
                 let batch = batch_result?;
 
-                // Extract row count from first column
-                if let Some(array) = batch.column(0).as_any().downcast_ref::<UInt64Array>() {
-                    if !array.is_empty() {
-                        total_rows = array.value(0);
-                        has_data = true;
-                    }
-                }
-
-                // Extract Add actions from second column
-                if let Some(array) = batch.column(1).as_any().downcast_ref::<StringArray>() {
+                // Extract commit info from the single data column
+                if let Some(array) = batch.column(0).as_any().downcast_ref::<StringArray>() {
                     if array.len() > 0 {
-                        let add_actions_json = array.value(0);
-                        let add_actions: Vec<Add> = serde_json::from_str(add_actions_json)
+                        let commit_info_json = array.value(0);
+                        let commit_info: CommitInfo = serde_json::from_str(commit_info_json)
                             .map_err(|e| DataFusionError::External(Box::new(e)))?;
-                        writer_add_actions.extend(add_actions);
-                    }
-                }
 
-                // Extract Schema actions from third column
-                if batch.columns().len() > 2 {
-                    if let Some(array) = batch.column(2).as_any().downcast_ref::<StringArray>() {
-                        if array.len() > 0 {
-                            let schema_actions_json = array.value(0);
-                            let writer_schema_actions: Vec<Action> =
-                                serde_json::from_str(schema_actions_json)
-                                    .map_err(|e| DataFusionError::External(Box::new(e)))?;
-                            schema_actions.extend(writer_schema_actions);
-                        }
-                    }
-                }
-
-                // Extract initial_actions from fourth column
-                if batch.columns().len() > 3 {
-                    if let Some(array) = batch.column(3).as_any().downcast_ref::<StringArray>() {
-                        if array.len() > 0 {
-                            let initial_actions_json = array.value(0);
-                            initial_actions = serde_json::from_str(initial_actions_json)
-                                .map_err(|e| DataFusionError::External(Box::new(e)))?;
-                        }
-                    }
-                }
-
-                // Extract operation from fifth column
-                if batch.columns().len() > 4 {
-                    if let Some(array) = batch.column(4).as_any().downcast_ref::<StringArray>() {
-                        if array.len() > 0 {
-                            let operation_json = array.value(0);
-                            operation = serde_json::from_str(operation_json)
-                                .map_err(|e| DataFusionError::External(Box::new(e)))?;
-                        }
+                        total_rows = commit_info.row_count;
+                        writer_add_actions.extend(commit_info.add_actions);
+                        schema_actions.extend(commit_info.schema_actions);
+                        initial_actions = commit_info.initial_actions;
+                        operation = commit_info.operation;
+                        has_data = true;
                     }
                 }
             }
