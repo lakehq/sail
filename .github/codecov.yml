@@ -36,7 +36,7 @@ codecov:
     after_n_builds: 2
 
 comment:
-  layout: "header, files, footer"
+  layout: "diff, files"
 
 ignore:
   - "crates/sail-gold-test"
