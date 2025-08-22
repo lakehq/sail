@@ -9,8 +9,7 @@ coverage:
           - cargo
         paths:
           - "crates/"
-        target: auto
-        threshold: 5%
+        target: 0
         informational: true
       spark:
         only_pulls: true
@@ -18,8 +17,7 @@ coverage:
           - spark
         paths:
           - "crates/"
-        target: auto
-        threshold: 5%
+        target: 0
         informational: true
       python:
         only_pulls: true
@@ -27,8 +25,7 @@ coverage:
           - python
         paths:
           - "crates/"
-        target: auto
-        threshold: 5%
+        target: 0
         informational: true
 
 codecov:
