@@ -1,13 +1,13 @@
 mod loader;
-mod resolver;
 mod serde;
 
 pub use internal::{
     CsvReadOptions, CsvWriteOptions, DeltaReadOptions, DeltaWriteOptions, JsonReadOptions,
     JsonWriteOptions, ParquetReadOptions, ParquetWriteOptions, TextReadOptions, TextWriteOptions,
 };
+#[cfg(test)]
+pub use loader::build_options;
 pub use loader::{load_default_options, load_options};
-pub use resolver::DataSourceOptionsResolver;
 
 mod internal {
     include!(concat!(env!("OUT_DIR"), "/options/csv_read.rs"));

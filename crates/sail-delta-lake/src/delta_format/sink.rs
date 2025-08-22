@@ -20,11 +20,11 @@ use deltalake::kernel::{Action, MetadataExt, Protocol};
 use deltalake::logstore::StorageConfig;
 use deltalake::protocol::{DeltaOperation, SaveMode};
 use futures::StreamExt;
-use sail_common_datafusion::datasource::TableDeltaOptions;
 use url::Url;
 
 use crate::delta_datafusion::type_converter::DeltaTypeConverter;
 use crate::operations::write::writer::{DeltaWriter, WriterConfig};
+use crate::options::TableDeltaOptions;
 use crate::table::{create_delta_table_with_object_store, open_table_with_object_store};
 
 /// Schema handling mode for Delta Lake writes
