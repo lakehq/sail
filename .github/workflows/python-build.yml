@@ -2,10 +2,6 @@ name: Python Build
 
 on:
   workflow_call:
-    secrets:
-      CODECOV_TOKEN:
-        description: Token for uploading coverage to Codecov
-        required: true
 
 jobs:
   python-build:
@@ -85,11 +81,9 @@ jobs:
       - name: Record Rust version
         run: echo "RUST=$(rustc --version)" >> "$GITHUB_ENV"
 
-      - name: Upload python coverage reports to Codecov
-        uses: codecov/codecov-action@v5
+      - name: Upload python coverage artifact
+        uses: actions/upload-artifact@v4
         with:
-          token: ${{ secrets.CODECOV_TOKEN }}
-          flags: python
-          fail_ci_if_error: true
-          env_vars: OS,RUST
-          files: "coverage-python-${{ matrix.spark-version }}.info"
+          name: python-coverage-report-${{ matrix.spark-version }}
+          path: coverage-python-${{ matrix.spark-version }}.info
+          retention-days: 1

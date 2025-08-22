@@ -85,14 +85,12 @@ jobs:
       - name: Record Rust version
         run: echo "RUST=$(rustc --version)" >> "$GITHUB_ENV"
 
-      - name: Upload cargo coverage reports to Codecov
-        uses: codecov/codecov-action@v5
+      - name: Upload cargo coverage artifact
+        uses: actions/upload-artifact@v4
         with:
-          token: ${{ secrets.CODECOV_TOKEN }}
-          flags: cargo
-          fail_ci_if_error: true
-          env_vars: OS,RUST
-          files: "coverage-build.info"
+          name: cargo-coverage-report
+          path: coverage-build.info
+          retention-days: 1
 
       - name: Build Python Package
         uses: PyO3/maturin-action@v1
@@ -113,8 +111,6 @@ jobs:
         spark-version: ["3.5.5", "4.0.0"]
     with:
       spark_version: ${{ matrix.spark-version }}
-    secrets:
-      CODECOV_TOKEN: ${{ secrets.CODECOV_TOKEN }}
     needs:
       - setup
       - build
@@ -123,8 +119,6 @@ jobs:
     name: Python Build
     if: ${{ needs.setup.outputs.build_package == 'true' }}
     uses: ./.github/workflows/python-build.yml
-    secrets:
-      CODECOV_TOKEN: ${{ secrets.CODECOV_TOKEN }}
     needs:
       - setup
       - build
@@ -144,6 +138,36 @@ jobs:
       stage: ${{ matrix.stage }}
       version: main
       package_run_id: ${{ needs.setup.outputs.build_package == 'true' && github.run_id || needs.setup.outputs.baseline_run_id }}
+
+  upload-coverage:
+    name: Upload Coverage Reports
+    runs-on: ubuntu-latest
+    needs:
+      - build
+      - python-build
+      - spark-tests
+    steps:
+      - name: Download all coverage artifacts
+        uses: actions/download-artifact@v4
+        with:
+          path: coverage-reports
+          pattern: "*-coverage-report*"
+          merge-multiple: true
+
+      - name: List downloaded files
+        run: |
+          echo "Downloaded coverage reports:"
+          find coverage-reports -type f -name "*.info" || echo "No .info files found"
+          ls -la coverage-reports/ || echo "No coverage-reports directory"
+
+      - name: Upload all coverage reports to Codecov
+        uses: codecov/codecov-action@v5
+        with:
+          token: ${{ secrets.CODECOV_TOKEN }}
+          directory: ./coverage-reports/
+          flags: cargo,python,spark
+          fail_ci_if_error: true
+          env_vars: OS,RUST
 
   docs-deploy:
     name: Docs Deploy

@@ -30,7 +30,7 @@ coverage:
 
 codecov:
   notify:
-    after_n_builds: 4
+    after_n_builds: 1
 
 comment:
   layout: "files"
