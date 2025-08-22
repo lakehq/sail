@@ -147,6 +147,8 @@ jobs:
       - python-build
       - spark-tests
     steps:
+      - uses: actions/checkout@v4
+
       - name: Download all coverage artifacts
         uses: actions/download-artifact@v4
         with:
