@@ -129,6 +129,10 @@ impl ExecutionPlan for DeltaCommitExec {
         )))
     }
 
+    fn benefits_from_input_partitioning(&self) -> Vec<bool> {
+        vec![false]
+    }
+
     fn execute(
         &self,
         partition: usize,
@@ -139,14 +143,14 @@ impl ExecutionPlan for DeltaCommitExec {
         }
 
         let input_partitions = self.input.output_partitioning().partition_count();
-        // if input_partitions != 1 {
-        //     return internal_err!(
-        //         "DeltaCommitExec requires exactly one input partition, got {}",
-        //         input_partitions
-        //     );
-        // }
+        if input_partitions != 1 {
+            return internal_err!(
+                "DeltaCommitExec requires exactly one input partition, got {}",
+                input_partitions
+            );
+        }
 
-        // let stream = self.input.execute(0, Arc::clone(&context))?;
+        let stream = self.input.execute(0, Arc::clone(&context))?;
         let mut streams = Vec::with_capacity(input_partitions);
         for i in 0..input_partitions {
             streams.push(self.input.execute(i, Arc::clone(&context))?);
@@ -187,8 +191,7 @@ impl ExecutionPlan for DeltaCommitExec {
             let mut schema_actions: Vec<Action> = Vec::new();
             let mut initial_actions: Vec<Action> = Vec::new();
             let mut operation: Option<DeltaOperation> = None;
-            // let mut data = stream;
-            let mut data = stream::iter(streams).flatten();
+            let mut data = stream;
 
             while let Some(batch_result) = data.next().await {
                 let batch = batch_result?;
