@@ -5645,6 +5645,7 @@ dependencies = [
  "log",
  "object_store",
  "parquet",
+ "sail-common-datafusion",
  "serde",
  "serde_json",
  "tokio",

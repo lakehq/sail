@@ -4,6 +4,7 @@ version = { workspace = true }
 edition = { workspace = true }
 
 [dependencies]
+sail-common-datafusion = { path = "../sail-common-datafusion" }
 # Delta Lake
 deltalake = { workspace = true }
 delta_kernel = { workspace = true }

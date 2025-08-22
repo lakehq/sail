@@ -4,7 +4,7 @@ use datafusion::physical_expr::LexRequirement;
 use datafusion::physical_plan::coalesce_partitions::CoalescePartitionsExec;
 use datafusion::physical_plan::ExecutionPlan;
 use datafusion_common::Result;
-use sail_common_datafusion::datasource::{PhysicalSinkMode, TableDeltaOptions};
+use sail_common_datafusion::datasource::PhysicalSinkMode;
 use url::Url;
 
 use super::commit_exec::DeltaCommitExec;
@@ -12,6 +12,7 @@ use super::project_exec::DeltaProjectExec;
 use super::repartition_exec::DeltaRepartitionExec;
 use super::sort_exec::DeltaSortExec;
 use super::writer_exec::DeltaWriterExec;
+use crate::options::TableDeltaOptions;
 
 /// Builder for creating a Delta Lake execution plan with the specified structure:
 /// Input -> Project -> Repartition -> Sort -> CoalescePartitions -> Writer -> Commit

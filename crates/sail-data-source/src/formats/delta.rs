@@ -9,6 +9,7 @@ use datafusion::physical_plan::ExecutionPlan;
 use sail_common_datafusion::datasource::{PhysicalSinkMode, SinkInfo, SourceInfo, TableFormat};
 use sail_delta_lake::create_delta_provider;
 use sail_delta_lake::delta_format::DeltaPlanBuilder;
+use sail_delta_lake::options::TableDeltaOptions;
 use sail_delta_lake::table::open_table_with_object_store;
 use url::Url;
 

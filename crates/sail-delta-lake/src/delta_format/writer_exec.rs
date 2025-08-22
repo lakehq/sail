@@ -26,7 +26,7 @@ use deltalake::kernel::{Action, MetadataExt, Remove}; // TODO: Follow upstream f
 use deltalake::logstore::StorageConfig;
 use deltalake::protocol::{DeltaOperation, SaveMode};
 use futures::stream::{self, once, StreamExt};
-use sail_common_datafusion::datasource::{PhysicalSinkMode, TableDeltaOptions};
+use sail_common_datafusion::datasource::PhysicalSinkMode;
 use url::Url;
 use uuid::Uuid;
 
@@ -35,6 +35,7 @@ use crate::delta_datafusion::{parse_predicate_expression, DataFusionMixins};
 use crate::delta_format::CommitInfo;
 use crate::operations::write::execution::{prepare_predicate_actions_physical, WriterStatsConfig};
 use crate::operations::write::writer::{DeltaWriter, WriterConfig};
+use crate::options::TableDeltaOptions;
 use crate::table::open_table_with_object_store;
 
 /// Schema handling mode for Delta Lake writes
