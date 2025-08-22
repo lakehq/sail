@@ -10,6 +10,7 @@ use object_store::ObjectStore;
 use url::Url;
 
 use crate::delta_datafusion::{delta_to_datafusion_error, DeltaScanConfig, DeltaTableProvider};
+use crate::options::TableDeltaOptions;
 
 pub async fn open_table_with_object_store(
     location: Url,
@@ -75,13 +76,8 @@ pub async fn create_delta_provider(
     ctx: &dyn Session,
     table_url: Url,
     schema: Option<Schema>,
-    options: &[std::collections::HashMap<String, String>],
-) -> Result<std::sync::Arc<dyn datafusion::catalog::TableProvider>> {
-    // TODO: Parse options (with overwrite logic) when needed
-    // let resolver = DataSourceOptionsResolver::new(ctx);
-    // let delta_options = resolver.resolve_delta_read_options(options.clone())?;
-    let _ = options;
-
+    _options: TableDeltaOptions,
+) -> Result<Arc<dyn datafusion::catalog::TableProvider>> {
     let url = ListingTableUrl::try_new(table_url.clone(), None)?;
     let object_store = ctx.runtime_env().object_store(&url)?;
 

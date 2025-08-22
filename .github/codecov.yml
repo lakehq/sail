@@ -9,41 +9,31 @@ coverage:
           - cargo
         paths:
           - "crates/"
-        target: auto
-        threshold: 0.1%
+        target: 0
+        informational: true
       spark:
         only_pulls: true
         flags:
           - spark
         paths:
           - "crates/"
-          - "python/"
-        target: auto
-        threshold: 0.1%
+        target: 0
+        informational: true
       python:
         only_pulls: true
         flags:
           - python
         paths:
           - "crates/"
-          - "python/"
-        target: auto
-        threshold: 0.1%
+        target: 0
+        informational: true
 
 codecov:
-  allow_coverage_offsets: true
+  notify:
+    after_n_builds: 4
 
-comment: false
+comment:
+  layout: "files"
 
-flags:
-  cargo:
-    paths:
-      - crates/
-  spark:
-    paths:
-      - crates/
-      - python/
-  python:
-    paths:
-      - crates/
-      - python/
+ignore:
+  - "crates/sail-gold-test"

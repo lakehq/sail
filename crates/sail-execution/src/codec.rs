@@ -679,19 +679,11 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
             let source = data_source.data_source();
             if let Some(file_scan) = source.as_any().downcast_ref::<FileScanConfig>() {
                 let file_source = file_scan.file_source();
-                if file_source.as_any().is::<TextSource>() {
+                if let Some(text_source) = file_source.as_any().downcast_ref::<TextSource>() {
                     let base_config =
                         self.try_encode_message(serialize_file_scan_config(file_scan, self)?)?;
                     let file_compression_type =
                         self.try_encode_file_compression_type(file_scan.file_compression_type)?;
-                    let text_source = file_source
-                        .as_any()
-                        .downcast_ref::<TextSource>()
-                        .ok_or_else(|| {
-                            plan_datafusion_err!(
-                                "try_encode: TextSource not found in FileScanConfig"
-                            )
-                        })?;
                     NodeKind::Text(gen::TextExecNode {
                         base_config,
                         file_compression_type,
