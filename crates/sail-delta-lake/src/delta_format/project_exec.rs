@@ -2,7 +2,7 @@ use std::collections::HashSet;
 use std::sync::Arc;
 
 use datafusion::arrow::datatypes::Schema as ArrowSchema;
-use datafusion::common::Result as DFResult;
+use datafusion::common::Result;
 use datafusion::error::DataFusionError;
 use datafusion::physical_expr::expressions::Column;
 use datafusion::physical_expr::PhysicalExpr;
@@ -17,7 +17,7 @@ impl DeltaProjectExec {
     pub fn create_projection(
         input: Arc<dyn ExecutionPlan>,
         partition_columns: Vec<String>,
-    ) -> DFResult<Arc<ProjectionExec>> {
+    ) -> Result<Arc<ProjectionExec>> {
         let input_schema = input.schema();
         let projection_exprs =
             Self::create_projection_expressions(&input_schema, &partition_columns)?;
@@ -28,7 +28,7 @@ impl DeltaProjectExec {
     fn create_projection_expressions(
         input_schema: &ArrowSchema,
         partition_columns: &[String],
-    ) -> DFResult<Vec<(Arc<dyn PhysicalExpr>, String)>> {
+    ) -> Result<Vec<(Arc<dyn PhysicalExpr>, String)>> {
         let mut projection_exprs = Vec::new();
         let mut partition_indices_map = std::collections::HashMap::new();
 

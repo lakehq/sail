@@ -1,6 +1,6 @@
 use std::sync::Arc;
 
-use datafusion::common::Result as DFResult;
+use datafusion::common::Result;
 use datafusion::physical_expr::PhysicalExpr;
 use datafusion::physical_plan::repartition::RepartitionExec;
 use datafusion::physical_plan::{ExecutionPlan, Partitioning};
@@ -14,7 +14,7 @@ impl DeltaRepartitionExec {
     pub fn create_repartition(
         input: Arc<dyn ExecutionPlan>,
         partition_columns: Vec<String>,
-    ) -> DFResult<Arc<RepartitionExec>> {
+    ) -> Result<Arc<RepartitionExec>> {
         let partitioning = if partition_columns.is_empty() {
             // No partition columns, ensure some parallelism
             // TODO: Make partition count configurable

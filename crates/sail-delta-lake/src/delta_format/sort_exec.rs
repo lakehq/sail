@@ -1,7 +1,7 @@
 use std::sync::Arc;
 
 use datafusion::arrow::compute::SortOptions;
-use datafusion::common::Result as DFResult;
+use datafusion::common::Result;
 use datafusion::error::DataFusionError;
 use datafusion::physical_expr::{LexOrdering, LexRequirement, PhysicalExpr, PhysicalSortExpr};
 use datafusion::physical_plan::sorts::sort::SortExec;
@@ -13,12 +13,11 @@ use datafusion_physical_expr::expressions::Column;
 pub struct DeltaSortExec;
 
 impl DeltaSortExec {
-
     pub fn create_sort(
         input: Arc<dyn ExecutionPlan>,
         partition_columns: Vec<String>,
         sort_order: Option<LexRequirement>,
-    ) -> DFResult<Arc<SortExec>> {
+    ) -> Result<Arc<SortExec>> {
         let schema = input.schema();
         let num_cols = schema.fields().len();
         let num_part_cols = partition_columns.len();

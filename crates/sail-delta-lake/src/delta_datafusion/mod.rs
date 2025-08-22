@@ -18,9 +18,7 @@ use datafusion::common::config::ConfigOptions;
 use datafusion::common::scalar::ScalarValue;
 use datafusion::common::stats::Statistics;
 use datafusion::common::tree_node::{TreeNode, TreeNodeRecursion, TreeNodeVisitor};
-use datafusion::common::{
-    Column, DFSchema, DataFusionError, Result as DFResult, Result as DataFusionResult, ToDFSchema,
-};
+use datafusion::common::{Column, DFSchema, DataFusionError, Result, ToDFSchema};
 use datafusion::config::TableParquetOptions;
 use datafusion::datasource::listing::PartitionedFile;
 use datafusion::datasource::object_store::ObjectStoreUrl;
@@ -579,10 +577,7 @@ fn partitioned_file_from_action(
     }
 }
 
-fn parse_date(
-    stat_val: &serde_json::Value,
-    field_dt: &ArrowDataType,
-) -> DataFusionResult<ScalarValue> {
+fn parse_date(stat_val: &serde_json::Value, field_dt: &ArrowDataType) -> Result<ScalarValue> {
     let string = match stat_val {
         serde_json::Value::String(s) => s.to_owned(),
         _ => stat_val.to_string(),
@@ -600,10 +595,7 @@ fn parse_date(
     ScalarValue::try_from_array(&cast_arr, 0)
 }
 
-fn parse_timestamp(
-    stat_val: &serde_json::Value,
-    field_dt: &ArrowDataType,
-) -> DataFusionResult<ScalarValue> {
+fn parse_timestamp(stat_val: &serde_json::Value, field_dt: &ArrowDataType) -> Result<ScalarValue> {
     let string = match stat_val {
         serde_json::Value::String(s) => s.to_owned(),
         _ => stat_val.to_string(),
@@ -627,7 +619,7 @@ fn parse_timestamp(
 pub(crate) fn to_correct_scalar_value(
     stat_val: &serde_json::Value,
     field_dt: &ArrowDataType,
-) -> DataFusionResult<Option<ScalarValue>> {
+) -> Result<Option<ScalarValue>> {
     match stat_val {
         serde_json::Value::Array(_) => Ok(None),
         serde_json::Value::Object(_) => Ok(None),
@@ -714,7 +706,7 @@ impl TableProvider for DeltaTableProvider {
         projection: Option<&Vec<usize>>,
         filters: &[Expr],
         limit: Option<usize>,
-    ) -> DataFusionResult<Arc<dyn ExecutionPlan>> {
+    ) -> Result<Arc<dyn ExecutionPlan>> {
         let filter_expr = conjunction(filters.iter().cloned());
         let config = self.config.clone();
 
@@ -1002,7 +994,7 @@ impl TableProvider for DeltaTableProvider {
     fn supports_filters_pushdown(
         &self,
         filter: &[&Expr],
-    ) -> DataFusionResult<Vec<TableProviderFilterPushDown>> {
+    ) -> Result<Vec<TableProviderFilterPushDown>> {
         let partition_cols = self.snapshot.metadata().partition_columns().as_slice();
         Ok(get_pushdown_filters(filter, partition_cols))
     }
@@ -1425,7 +1417,7 @@ impl ContextProvider for DeltaContextProvider<'_> {
     fn get_table_source(
         &self,
         _name: datafusion::common::TableReference,
-    ) -> DFResult<Arc<dyn TableSource>> {
+    ) -> Result<Arc<dyn TableSource>> {
         unimplemented!("DeltaContextProvider does not support table sources")
     }
 
