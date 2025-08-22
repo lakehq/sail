@@ -270,7 +270,7 @@ SKIPPED_SPARK_TESTS = [
     TestMarker(
         keywords=["test_assert_data_frame_equal_not_support_streaming"],
         reason="Streaming DataFrame detection not working yet",
-    )
+    ),
 ]
 
 
