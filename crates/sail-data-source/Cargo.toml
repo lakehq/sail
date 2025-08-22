@@ -15,6 +15,7 @@ serde = { workspace = true }
 futures = { workspace = true }
 datafusion = { workspace = true }
 datafusion-common = { workspace = true }
+datafusion-datasource = { workspace = true }
 object_store = { workspace = true }
 chumsky = { workspace = true }
 glob = { workspace = true }
@@ -25,6 +26,7 @@ once_cell = { workspace = true }
 deltalake = { workspace = true }
 log = { workspace = true }
 uuid = { workspace = true }
+bytes = { workspace = true }
 tokio = { workspace = true }
 tokio-stream = { workspace = true }
 chrono = { workspace = true }

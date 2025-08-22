@@ -1,0 +1,39 @@
+coverage:
+  status:
+    patch: false
+    project:
+      default: false
+      cargo:
+        only_pulls: true
+        flags:
+          - cargo
+        paths:
+          - "crates/"
+        target: 0
+        informational: true
+      spark:
+        only_pulls: true
+        flags:
+          - spark
+        paths:
+          - "crates/"
+        target: 0
+        informational: true
+      python:
+        only_pulls: true
+        flags:
+          - python
+        paths:
+          - "crates/"
+        target: 0
+        informational: true
+
+codecov:
+  notify:
+    after_n_builds: 4
+
+comment:
+  layout: "files"
+
+ignore:
+  - "crates/sail-gold-test"

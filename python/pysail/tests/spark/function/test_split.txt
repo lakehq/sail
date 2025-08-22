@@ -1,0 +1,129 @@
+>>> spark.sql("SELECT split('oneAtwoBthreeC', '[ABC]') AS result, typeof(split('oneAtwoBthreeC', '[ABC]')) AS type").show(truncate=False)
++-------------------+-------------+
+|result             |type         |
++-------------------+-------------+
+|[one, two, three, ]|array<string>|
++-------------------+-------------+
+
+>>> spark.sql("SELECT split('1A2B3C', '[1-9]+') AS result, typeof(split('1A2B3C', '[1-9]+')) AS type").show(truncate=False)
++-----------+-------------+
+|result     |type         |
++-----------+-------------+
+|[, A, B, C]|array<string>|
++-----------+-------------+
+
+>>> spark.sql("SELECT split('aa2bb3cc4', NULL) AS result, typeof(split('aa2bb3cc4', NULL)) AS type").show(truncate=False)
++------+-------------+
+|result|type         |
++------+-------------+
+|NULL  |array<string>|
++------+-------------+
+
+>>> spark.sql("SELECT split(NULL, '[1-9]+') AS result, typeof(split(NULL, '[1-9]+')) AS type").show(truncate=False)
++------+-------------+
+|result|type         |
++------+-------------+
+|NULL  |array<string>|
++------+-------------+
+
+>>> spark.sql("SELECT split('oneAtwoBthreeC', '[ABC]', -4) AS result, typeof(split('oneAtwoBthreeC', '[ABC]', -4)) AS type").show(truncate=False)
++-------------------+-------------+
+|result             |type         |
++-------------------+-------------+
+|[one, two, three, ]|array<string>|
++-------------------+-------------+
+
+>>> spark.sql("SELECT split('oneAtwoBthreeC', '[ABC]', -1) AS result, typeof(split('oneAtwoBthreeC', '[ABC]', -1)) AS type").show(truncate=False)
++-------------------+-------------+
+|result             |type         |
++-------------------+-------------+
+|[one, two, three, ]|array<string>|
++-------------------+-------------+
+
+>>> spark.sql("SELECT split('oneAtwoBthreeC', '[ABC]', 0) AS result, typeof(split('oneAtwoBthreeC', '[ABC]', 0)) AS type").show(truncate=False)
++-------------------+-------------+
+|result             |type         |
++-------------------+-------------+
+|[one, two, three, ]|array<string>|
++-------------------+-------------+
+
+>>> spark.sql("SELECT split('oneAtwoBthreeC', '[ABC]', 1) AS result, typeof(split('oneAtwoBthreeC', '[ABC]', 1)) AS type").show(truncate=False)
++----------------+-------------+
+|result          |type         |
++----------------+-------------+
+|[oneAtwoBthreeC]|array<string>|
++----------------+-------------+
+
+>>> spark.sql("SELECT split('oneAtwoBthreeC', '[ABC]', 2) AS result, typeof(split('oneAtwoBthreeC', '[ABC]', 2)) AS type").show(truncate=False)
++-----------------+-------------+
+|result           |type         |
++-----------------+-------------+
+|[one, twoBthreeC]|array<string>|
++-----------------+-------------+
+
+>>> spark.sql("SELECT split('oneAtwoBthreeC', '[ABC]', 10) AS result, typeof(split('oneAtwoBthreeC', '[ABC]', 10)) AS type").show(truncate=False)
++-------------------+-------------+
+|result             |type         |
++-------------------+-------------+
+|[one, two, three, ]|array<string>|
++-------------------+-------------+
+
+>>> spark.sql("SELECT split('1A2B3C', '[1-9]+', 1) AS result, typeof(split('1A2B3C', '[1-9]+', 1)) AS type").show(truncate=False)
++--------+-------------+
+|result  |type         |
++--------+-------------+
+|[1A2B3C]|array<string>|
++--------+-------------+
+
+>>> spark.sql("SELECT split('aa2bb3cc4', '[1-9]+', -1) AS result, typeof(split('aa2bb3cc4', '[1-9]+', -1)) AS type").show(truncate=False)
++--------------+-------------+
+|result        |type         |
++--------------+-------------+
+|[aa, bb, cc, ]|array<string>|
++--------------+-------------+
+
+>>> spark.sql("SELECT split('aa2bb3cc4', '[1-9]+', 2) AS result, typeof(split('aa2bb3cc4', '[1-9]+', 2)) AS type").show(truncate=False)
++------------+-------------+
+|result      |type         |
++------------+-------------+
+|[aa, bb3cc4]|array<string>|
++------------+-------------+
+
+>>> spark.sql("SELECT split('aa2bb3cc4', '[1-9]+', NULL) AS result, typeof(split('aa2bb3cc4', '[1-9]+', NULL)) AS type").show(truncate=False)
++------+-------------+
+|result|type         |
++------+-------------+
+|NULL  |array<string>|
++------+-------------+
+
+>>> spark.sql("SELECT split('aa2bb3cc4', NULL, -1) AS result, typeof(split('aa2bb3cc4', NULL, -1)) AS type").show(truncate=False)
++------+-------------+
+|result|type         |
++------+-------------+
+|NULL  |array<string>|
++------+-------------+
+
+>>> spark.sql("SELECT split(NULL, '[1-9]+', -1) AS result, typeof(split(NULL, '[1-9]+', -1)) AS type").show(truncate=False)
++------+-------------+
+|result|type         |
++------+-------------+
+|NULL  |array<string>|
++------+-------------+
+
+>>> spark.sql("SELECT split(s, p, l) AS result, typeof(split(s, p, l)) AS type FROM VALUES ('oneAtwoBthreeC', '[ABC]', -4), ('oneAtwoBthreeC', '[ABC]', -1), ('oneAtwoBthreeC', '[ABC]', 0), ('oneAtwoBthreeC', '[ABC]', 1), ('oneAtwoBthreeC', '[ABC]', 2), ('oneAtwoBthreeC', '[ABC]', 10), ('1A2B3C', '[1-9]+', 1), ('aa2bb3cc4', '[1-9]+', -1), ('aa2bb3cc4', '[1-9]+', 2), ('aa2bb3cc4', '[1-9]+', NULL), ('aa2bb3cc4', NULL, -1), (NULL, '[1-9]+', -1) AS T(s, p, l)").show(truncate=False)
++-------------------+-------------+
+|result             |type         |
++-------------------+-------------+
+|[one, two, three, ]|array<string>|
+|[one, two, three, ]|array<string>|
+|[one, two, three, ]|array<string>|
+|[oneAtwoBthreeC]   |array<string>|
+|[one, twoBthreeC]  |array<string>|
+|[one, two, three, ]|array<string>|
+|[1A2B3C]           |array<string>|
+|[aa, bb, cc, ]     |array<string>|
+|[aa, bb3cc4]       |array<string>|
+|NULL               |array<string>|
+|NULL               |array<string>|
+|NULL               |array<string>|
++-------------------+-------------+

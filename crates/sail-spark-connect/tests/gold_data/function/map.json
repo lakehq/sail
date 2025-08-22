@@ -51,7 +51,7 @@
         }
       },
       "output": {
-        "failure": "not implemented: function: map_concat"
+        "success": "ok"
       }
     },
     {
@@ -137,7 +137,7 @@
         }
       },
       "output": {
-        "failure": "not implemented: function: map_entries"
+        "success": "ok"
       }
     },
     {
@@ -191,7 +191,7 @@
         }
       },
       "output": {
-        "failure": "not implemented: function: map_from_entries"
+        "success": "ok"
       }
     },
     {

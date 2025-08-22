@@ -20,7 +20,7 @@ expect_used = "deny"
 panic = "deny"
 
 [workspace.dependencies]
-thiserror = { version = "2.0.12" }
+thiserror = { version = "2.0.15" }
 tokio = { version = "1.47.1", features = ["full"] }
 tokio-stream = { version = "0.1.17", features = ["time", "io-util"] }
 pbjson = "0.7.0"
@@ -28,7 +28,7 @@ pbjson-types = "0.7.0"
 pbjson-build = "0.7.0"
 tower = { version = "0.5.2", features = ["full"] }
 uuid = { version = "1.18.0", features = ["v4"] }
-async-trait = "0.1.88"
+async-trait = "0.1.89"
 async-recursion = "1.1.1"
 async-stream = "0.3.6"
 lazy_static = "1.5.0"
@@ -45,10 +45,10 @@ chrono-tz = "0.10.4"
 futures = "0.3.31"
 comfy-table = "7.1.4"
 html-escape = "0.2.13"
-syn = "2.0.104"
+syn = "2.0.106"
 quote = "1.0.40"
 paste = "1.0.15"
-proc-macro2 = "1.0.96"
+proc-macro2 = "1.0.101"
 prettyplease = "0.2.36"
 phf = { version = "0.12.1", features = ["macros"] }
 ryu = "1.0.20"
@@ -115,10 +115,9 @@ prost-build = "0.13.5"
 prost = "0.13.5"
 datafusion = { version = "49.0.0", features = ["serde", "avro"] }
 datafusion-common = { version = "49.0.0", features = ["object_store", "avro"] }
+datafusion-datasource = { version = "49.0.0", features = ["compression", "parquet"] }
 datafusion-expr = { version = "49.0.0" }
 datafusion-expr-common = { version = "49.0.0" }
-datafusion-execution = { version = "49.0.0" }
-datafusion-physical-optimizer = { version = "49.0.0" }
 datafusion-proto = { version = "49.0.0" }
 datafusion-functions = { version = "49.0.0" }
 datafusion-functions-nested = { version = "49.0.0" }
@@ -143,7 +142,7 @@ hdfs-native-object-store = "0.14.2"
 # Lakehouse
 deltalake = { git = "https://github.com/delta-io/delta-rs.git", rev = "5ac08eb", default-features = false, features = ["rustls"] }
 delta_kernel = { version = "0.13.0", features = ["arrow-55", "internal-api", "default-engine"] }
-bytes = "1.9.0"
+bytes = "1.10.1"
 indexmap = "2.10.0"
 
 ######
@@ -166,3 +165,7 @@ lto = true
 panic = 'unwind'
 incremental = false
 codegen-units = 1
+
+[profile.coverage]
+inherits = "dev"
+incremental = false

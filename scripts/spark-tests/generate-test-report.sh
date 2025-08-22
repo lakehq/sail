@@ -80,8 +80,9 @@ function show_test_summary() {
 }
 
 function show_code_block() {
-  # A GitHub comment has a maximum length of 65536 characters.
-  # So we need to truncate the content if it is too long.
+  # Need to truncate the content if it's too long since a GitHub comment has a maximum length of 65536 characters.
+  # Although, the max character limit may be based off of the gzipped size:
+  #   https://github.com/orgs/community/discussions/41331#discussioncomment-9276173
   local file="$1"
   local language="$2"
   local limit="$3"
@@ -128,7 +129,7 @@ jq -r -f "${project_path}/scripts/spark-tests/count-errors.jq" \
 
 printf '<details>\n'
 printf '<summary>Error Counts</summary>\n\n'
-show_code_block "${tmp_dir}/errors.txt" "text" 20000
+show_code_block "${tmp_dir}/errors.txt" "text" 40000
 printf '</details>\n\n'
 
 mkdir "${tmp_dir}/passed-tests"
@@ -151,5 +152,5 @@ jq -r -f "${project_path}/scripts/spark-tests/show-failed-tests.jq" \
 
 printf '<details>\n'
 printf '<summary>Failed Tests</summary>\n\n'
-show_code_block "${tmp_dir}/failed-tests.txt" "text" 35000
+show_code_block "${tmp_dir}/failed-tests.txt" "text" 40000
 printf '</details>\n\n'

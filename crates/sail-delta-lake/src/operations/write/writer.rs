@@ -506,24 +506,19 @@ pub(crate) fn divide_by_partition_values(
 
     let schema = values.schema();
 
-    let projection = partition_columns
-        .iter()
-        .map(|n| {
-            schema
-                .index_of(n)
-                .map_err(|e| DeltaTableError::generic(e.to_string()))
-        })
-        .collect::<Result<Vec<_>, _>>()?;
+    // Since DeltaProjectExec moves partition columns to the end, we can rely on their positions.
+    let num_cols = schema.fields().len();
+    let num_part_cols = partition_columns.len();
+    let projection: Vec<usize> = (num_cols - num_part_cols..num_cols).collect();
+
     let sort_columns = values
         .project(&projection)
         .map_err(|e| DeltaTableError::generic(e.to_string()))?;
 
     let indices = lexsort_to_indices(sort_columns.columns());
-    let sorted_partition_columns = partition_columns
-        .iter()
-        .map(|c| {
-            #[allow(clippy::unwrap_used)]
-            let col = values.column(schema.index_of(c).unwrap());
+    let sorted_partition_columns = (num_cols - num_part_cols..num_cols)
+        .map(|idx| {
+            let col = values.column(idx);
             compute::take(col, &indices, None).map_err(|e| DeltaTableError::generic(e.to_string()))
         })
         .collect::<Result<Vec<_>, _>>()?;

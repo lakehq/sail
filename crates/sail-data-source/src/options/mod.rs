@@ -1,13 +1,13 @@
 mod loader;
-mod resolver;
 mod serde;
 
 pub use internal::{
     CsvReadOptions, CsvWriteOptions, DeltaReadOptions, DeltaWriteOptions, JsonReadOptions,
-    JsonWriteOptions, ParquetReadOptions, ParquetWriteOptions,
+    JsonWriteOptions, ParquetReadOptions, ParquetWriteOptions, TextReadOptions, TextWriteOptions,
 };
+#[cfg(test)]
+pub use loader::build_options;
 pub use loader::{load_default_options, load_options};
-pub use resolver::DataSourceOptionsResolver;
 
 pub(crate) mod internal {
     include!(concat!(env!("OUT_DIR"), "/options/csv_read.rs"));
@@ -18,6 +18,8 @@ pub(crate) mod internal {
     include!(concat!(env!("OUT_DIR"), "/options/parquet_write.rs"));
     include!(concat!(env!("OUT_DIR"), "/options/delta_read.rs"));
     include!(concat!(env!("OUT_DIR"), "/options/delta_write.rs"));
+    include!(concat!(env!("OUT_DIR"), "/options/text_read.rs"));
+    include!(concat!(env!("OUT_DIR"), "/options/text_write.rs"));
     include!(concat!(env!("OUT_DIR"), "/options/socket_read.rs"));
     include!(concat!(env!("OUT_DIR"), "/options/rate_read.rs"));
 }

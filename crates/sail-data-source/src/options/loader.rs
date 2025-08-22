@@ -25,3 +25,11 @@ pub fn load_default_options<T: DataSourceOptions>() -> Result<T> {
         .collect();
     load_options(options)
 }
+
+#[cfg(test)]
+pub fn build_options(options: &[(&str, &str)]) -> HashMap<String, String> {
+    options
+        .iter()
+        .map(|(k, v)| (k.to_string(), v.to_string()))
+        .collect()
+}

@@ -1,27 +1,19 @@
+use std::collections::HashMap;
 use std::sync::Arc;
-use std::time::{SystemTime, UNIX_EPOCH};
 
 use async_trait::async_trait;
 use datafusion::catalog::{Session, TableProvider};
-use datafusion::common::{not_impl_err, plan_err, DataFusionError, Result, ToDFSchema};
+use datafusion::common::{not_impl_err, plan_err, DataFusionError, Result};
 use datafusion::datasource::listing::ListingTableUrl;
-use datafusion::datasource::sink::DataSinkExec;
-use datafusion::execution::SessionStateBuilder;
 use datafusion::physical_plan::ExecutionPlan;
-use deltalake::kernel::{Action, Remove};
-use deltalake::protocol::{DeltaOperation, SaveMode};
 use sail_common_datafusion::datasource::{PhysicalSinkMode, SinkInfo, SourceInfo, TableFormat};
 use sail_delta_lake::create_delta_provider;
-use sail_delta_lake::delta_datafusion::{parse_predicate_expression, DataFusionMixins};
-use sail_delta_lake::delta_format::DeltaDataSink;
-use sail_delta_lake::operations::write::execution::{
-    prepare_predicate_actions_physical, WriterStatsConfig,
-};
+use sail_delta_lake::delta_format::DeltaPlanBuilder;
+use sail_delta_lake::options::TableDeltaOptions;
 use sail_delta_lake::table::open_table_with_object_store;
 use url::Url;
-use uuid::Uuid;
 
-use crate::options::DataSourceOptionsResolver;
+use crate::options::{load_default_options, load_options, DeltaReadOptions, DeltaWriteOptions};
 
 #[derive(Debug)]
 pub struct DeltaTableFormat;
@@ -47,7 +39,8 @@ impl TableFormat for DeltaTableFormat {
             options,
         } = info;
         let table_url = Self::parse_table_url(ctx, paths).await?;
-        create_delta_provider(ctx, table_url, schema, &options).await
+        let options = resolve_delta_read_options(options)?;
+        create_delta_provider(ctx, table_url, schema, options).await
     }
 
     async fn create_writer(
@@ -70,166 +63,25 @@ impl TableFormat for DeltaTableFormat {
         }
 
         let table_url = Self::parse_table_url(ctx, vec![path]).await?;
-        let resolver = DataSourceOptionsResolver::new(ctx);
-        let delta_options = resolver.resolve_delta_write_options(options)?;
+        let delta_options = resolve_delta_write_options(options)?;
 
-        let mut initial_actions: Vec<Action> = Vec::new();
-        let mut operation: Option<DeltaOperation> = None;
-
+        // Check for table existence
         let object_store = ctx
             .runtime_env()
             .object_store_registry
             .get_store(&table_url)
             .map_err(|e| DataFusionError::External(Box::new(e)))?;
-        let table_result =
-            open_table_with_object_store(table_url.clone(), object_store, Default::default()).await;
+        let table_exists =
+            open_table_with_object_store(table_url.clone(), object_store, Default::default())
+                .await
+                .is_ok();
 
-        let table_exists = table_result.is_ok();
-        #[allow(clippy::unwrap_used)]
-        let table = if table_exists {
-            Some(table_result.unwrap())
-        } else {
-            None
-        };
-
+        // Handle cases that don't require actual writing
         match mode {
-            PhysicalSinkMode::Append => {
-                operation = Some(DeltaOperation::Write {
-                    mode: SaveMode::Append,
-                    partition_by: if partition_by.is_empty() {
-                        None
-                    } else {
-                        Some(partition_by.clone())
-                    },
-                    predicate: None,
-                });
-            }
-            PhysicalSinkMode::Overwrite => {
-                if let Some(table) = &table {
-                    if let Some(replace_where) = delta_options.replace_where.clone() {
-                        let snapshot = table
-                            .snapshot()
-                            .map_err(|e| DataFusionError::External(Box::new(e)))?;
-                        let df_schema = snapshot
-                            .arrow_schema()
-                            .map_err(|e| DataFusionError::External(Box::new(e)))?
-                            .to_dfschema()?;
-                        let session_state = SessionStateBuilder::new()
-                            .with_runtime_env(ctx.runtime_env().clone())
-                            .build();
-
-                        // Parse string predicate to logical expression
-                        let predicate_expr =
-                            parse_predicate_expression(&df_schema, &replace_where, &session_state)
-                                .map_err(|e| DataFusionError::External(Box::new(e)))?;
-
-                        // Convert logical expression to physical expression
-                        let physical_predicate = session_state
-                            .create_physical_expr(predicate_expr, &df_schema)
-                            .map_err(|e| DataFusionError::External(Box::new(e)))?;
-
-                        // Use the PhysicalExpr path
-                        #[allow(clippy::unwrap_used)]
-                        let (remove_actions, _) = prepare_predicate_actions_physical(
-                            physical_predicate,
-                            table.log_store(),
-                            snapshot,
-                            session_state,
-                            partition_by.clone(),
-                            None,
-                            SystemTime::now()
-                                .duration_since(UNIX_EPOCH)
-                                .unwrap()
-                                .as_millis() as i64,
-                            WriterStatsConfig::new(32, None),
-                            Uuid::new_v4(),
-                        )
-                        .await
-                        .map_err(|e| DataFusionError::External(Box::new(e)))?;
-                        initial_actions.extend(remove_actions);
-                    } else {
-                        // Full overwrite
-                        let snapshot = table
-                            .snapshot()
-                            .map_err(|e| DataFusionError::External(Box::new(e)))?;
-                        let remove_actions: Vec<Action> = snapshot
-                            .file_actions()
-                            .map_err(|e| DataFusionError::External(Box::new(e)))?
-                            .into_iter()
-                            .map(|add| {
-                                #[allow(clippy::unwrap_used)]
-                                Action::Remove(Remove {
-                                    path: add.path.clone(),
-                                    deletion_timestamp: Some(
-                                        SystemTime::now()
-                                            .duration_since(UNIX_EPOCH)
-                                            .unwrap()
-                                            .as_millis()
-                                            as i64,
-                                    ),
-                                    data_change: true,
-                                    ..Default::default()
-                                })
-                            })
-                            .collect();
-                        initial_actions.extend(remove_actions);
-                    }
-                }
-                operation = Some(DeltaOperation::Write {
-                    mode: SaveMode::Overwrite,
-                    partition_by: if partition_by.is_empty() {
-                        None
-                    } else {
-                        Some(partition_by.clone())
-                    },
-                    predicate: None, // Leave predicate_str as None since we're using PhysicalExpr directly
-                });
-            }
-            PhysicalSinkMode::OverwriteIf { condition } => {
-                // V2 Overwrite with condition
-                if let Some(table) = &table {
-                    let snapshot = table
-                        .snapshot()
-                        .map_err(|e| DataFusionError::External(Box::new(e)))?;
-                    let session_state = SessionStateBuilder::new()
-                        .with_runtime_env(ctx.runtime_env().clone())
-                        .build();
-
-                    #[allow(clippy::unwrap_used)]
-                    let (remove_actions, _) = prepare_predicate_actions_physical(
-                        condition.clone(),
-                        table.log_store(),
-                        snapshot,
-                        session_state,
-                        partition_by.clone(),
-                        None,
-                        SystemTime::now()
-                            .duration_since(UNIX_EPOCH)
-                            .unwrap()
-                            .as_millis() as i64,
-                        WriterStatsConfig::new(32, None),
-                        Uuid::new_v4(),
-                    )
-                    .await
-                    .map_err(|e| DataFusionError::External(Box::new(e)))?;
-                    initial_actions.extend(remove_actions);
-                }
-                operation = Some(DeltaOperation::Write {
-                    mode: SaveMode::Overwrite,
-                    partition_by: if partition_by.is_empty() {
-                        None
-                    } else {
-                        Some(partition_by.clone())
-                    },
-                    // predicate_str is None for OverwriteIf since we use PhysicalExpr directly
-                    predicate: None,
-                });
-            }
             PhysicalSinkMode::ErrorIfExists => {
                 if table_exists {
                     return plan_err!("Delta table already exists at path: {table_url}");
                 }
-                // Operation will be Create for new table inside sink
             }
             PhysicalSinkMode::IgnoreIfExists => {
                 if table_exists {
@@ -238,24 +90,25 @@ impl TableFormat for DeltaTableFormat {
                         input.schema(),
                     )));
                 }
-                // Operation will be Create for new table inside sink
             }
             PhysicalSinkMode::OverwritePartitions => {
                 return not_impl_err!("unsupported sink mode for Delta: {mode:?}")
             }
-        };
+            _ => {} // Other modes will be handled in the execution phase
+        }
 
-        let sink = Arc::new(DeltaDataSink::new(
+        let plan_builder = DeltaPlanBuilder::new(
+            input,
             table_url,
             delta_options,
-            input.schema(),
             partition_by,
-            initial_actions,
-            operation,
+            mode,
             table_exists,
-        ));
+            sort_order,
+        );
+        let sink_exec = plan_builder.build()?;
 
-        Ok(Arc::new(DataSinkExec::new(input, sink, sort_order)))
+        Ok(sink_exec)
     }
 }
 
@@ -267,4 +120,51 @@ impl DeltaTableFormat {
             _ => plan_err!("expected a single path for Delta table sink: {paths:?}"),
         }
     }
+}
+
+fn apply_delta_read_options(from: DeltaReadOptions, to: &mut TableDeltaOptions) -> Result<()> {
+    // TODO: implement read options
+    let _ = (from, to);
+    Ok(())
+}
+
+fn apply_delta_write_options(from: DeltaWriteOptions, to: &mut TableDeltaOptions) -> Result<()> {
+    if let Some(replace_where) = from.replace_where {
+        to.replace_where = Some(replace_where);
+    }
+    if let Some(merge_schema) = from.merge_schema {
+        to.merge_schema = merge_schema;
+    }
+    if let Some(overwrite_schema) = from.overwrite_schema {
+        to.overwrite_schema = overwrite_schema;
+    }
+    if let Some(target_file_size) = from.target_file_size {
+        to.target_file_size = target_file_size;
+    }
+    if let Some(write_batch_size) = from.write_batch_size {
+        to.write_batch_size = write_batch_size;
+    }
+    Ok(())
+}
+
+pub fn resolve_delta_read_options(
+    options: Vec<HashMap<String, String>>,
+) -> Result<TableDeltaOptions> {
+    let mut delta_options = TableDeltaOptions::default();
+    apply_delta_read_options(load_default_options()?, &mut delta_options)?;
+    for opt in options {
+        apply_delta_read_options(load_options(opt)?, &mut delta_options)?;
+    }
+    Ok(delta_options)
+}
+
+pub fn resolve_delta_write_options(
+    options: Vec<HashMap<String, String>>,
+) -> Result<TableDeltaOptions> {
+    let mut delta_options = TableDeltaOptions::default();
+    apply_delta_write_options(load_default_options()?, &mut delta_options)?;
+    for opt in options {
+        apply_delta_write_options(load_options(opt)?, &mut delta_options)?;
+    }
+    Ok(delta_options)
 }

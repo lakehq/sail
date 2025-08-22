@@ -35,7 +35,7 @@ pip install "pyspark[connect]==3.5.5
 
 ::: info
 
-- `pyspark-client` is a lightweight PySpark client introduced in Spark 4.0 while `pyspark` remains as the full PySpark package containing all the JARs. The lightweight client cannot execute queries by itself, and can only connect to a Spark Connect server.
+- `pyspark-client` is a lightweight PySpark client introduced in Spark 4.0 while `pyspark` remains as the full PySpark package. The lightweight client does not contain the Spark JARs that are not needed for running the Sail Spark Connect server.
 - `pyspark[connect]` installs extra dependencies needed for Spark Connect. This is supported since Spark 3.4.
 - Since Spark 4.0, there is also a wrapper package `pyspark-connect` that you can use, which is equivalent to `pyspark[connect]`.
 
@@ -83,6 +83,20 @@ spark = SparkSession.builder.remote(f"sc://localhost:{port}").getOrCreate()
 
 spark.sql("SELECT 1 + 1").show()
 ```
+
+::: info
+
+If you use Sail in a notebook, you can adjust the session timeout to avoid ending the session due to inactivity. For example, the following code snippet sets the session timeout to 1 hour. The environment variable needs to be set before creating the `SparkConnectServer` instance.
+
+```python
+import os
+
+os.environ["SAIL_SPARK__SESSION_TIMEOUT_SECS"] = "3600"
+```
+
+You can refer to the [Configuration](/guide/configuration/) guide for more information about configuring Sail.
+
+:::
 
 ## Running the Sail Spark Connect Server
 
