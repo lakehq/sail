@@ -26,9 +26,9 @@ message ExtendedPhysicalPlanNode {
     RecursiveQueryExecNode recursive_query = 12;
     SortMergeJoinExecNode sort_merge_join = 13;
     PartialSortExecNode partial_sort = 14;
-
-    DeltaWriterExecNode delta_writer = 15;
-    DeltaCommitExecNode delta_commit = 16;
+    TextExecNode text = 15;
+    DeltaWriterExecNode delta_writer = 16;
+    DeltaCommitExecNode delta_commit = 17;
   }
 }
 
@@ -255,6 +255,13 @@ message NdJsonExecNode {
 
 message ArrowExecNode {
   bytes base_config = 1;
+}
+
+message TextExecNode {
+  bytes base_config = 1;
+  CompressionTypeVariant file_compression_type = 2;
+  bool whole_text = 3;
+  optional bytes line_sep = 4;
 }
 
 message WorkTableExecNode {

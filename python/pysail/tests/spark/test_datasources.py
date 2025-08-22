@@ -2,6 +2,7 @@ import glob
 
 import pandas as pd
 import pytest
+from pyspark.sql import Row
 from pyspark.sql.types import (
     IntegerType,
     StringType,
@@ -54,7 +55,7 @@ class TestParquetDataSource:
         read_df = spark.read.parquet(path)
         assert sample_df.count() == read_df.count()
         assert sorted(sample_df.collect(), key=safe_sort_key) == sorted(read_df.collect(), key=safe_sort_key)
-        assert len(list((tmp_path / "parquet_compressed_zstd").glob("*.parquet"))) > 0
+        assert len(list((tmp_path / "parquet_compressed_zstd").glob("*.zst.parquet"))) > 0
 
         # Test reading a compressed Parquet file written by Pandas.
         path = tmp_path / "parquet_compressed_gzip_pandas_1"
@@ -82,14 +83,18 @@ class TestParquetDataSource:
 
     def test_parquet_write_options(self, spark, sample_df, tmp_path):
         path = str(tmp_path / "parquet_write_options")
-        (
-            sample_df.write.option("compression", "gzip(4)")  # pyspark supports gzip keyword.
-            .option("writerVersion", "1.0")
-            .parquet(path, mode="overwrite")
-        )
+        sample_df.write.option("writerVersion", "1.0").parquet(path, mode="overwrite", compression="gzip(4)")
         read_df = spark.read.parquet(path)
         assert sample_df.count() == read_df.count()
         assert sorted(sample_df.collect(), key=safe_sort_key) == sorted(read_df.collect(), key=safe_sort_key)
+        assert len(list((tmp_path / "parquet_write_options").glob("*.gz.parquet"))) > 0
+
+        path = str(tmp_path / "parquet_write_options_1")
+        sample_df.write.option("writerVersion", "1.0").parquet(path, mode="overwrite", compression="snappy")
+        read_df = spark.read.parquet(path)
+        assert sample_df.count() == read_df.count()
+        assert sorted(sample_df.collect(), key=safe_sort_key) == sorted(read_df.collect(), key=safe_sort_key)
+        assert len(list((tmp_path / "parquet_write_options_1").glob("*.snappy.parquet"))) > 0
 
     def test_parquet_read_options(self, spark, sample_df, tmp_path):
         path = str(tmp_path / "parquet_read_options")
@@ -116,6 +121,12 @@ class TestCsvDataSource:
         path = str(tmp_path / "csv_compressed_gzip")
         sample_df.write.option("header", "true").option("compression", "gzip").csv(path, mode="overwrite")
         read_df = spark.read.format("csv").option("header", "true").option("compression", "gzip").load(path)
+        assert sample_df.count() == read_df.count()
+        assert sorted(sample_df.collect(), key=safe_sort_key) == sorted(read_df.collect(), key=safe_sort_key)
+        assert len(list((tmp_path / "csv_compressed_gzip").glob("*.csv.gz"))) > 0
+
+        # Compression type not explicitly set.
+        read_df = spark.read.format("csv").option("header", "true").load(path)
         assert sample_df.count() == read_df.count()
         assert sorted(sample_df.collect(), key=safe_sort_key) == sorted(read_df.collect(), key=safe_sort_key)
         assert len(list((tmp_path / "csv_compressed_gzip").glob("*.csv.gz"))) > 0
@@ -218,9 +229,87 @@ class TestJsonDataSource:
         assert sample_df.count() == read_df.count()
         assert sorted(sample_df.collect(), key=safe_sort_key) == sorted(read_df.collect(), key=safe_sort_key)
 
+        # Compression type not explicitly set.
+        read_df = spark.read.format("json").load(path).select("col1", "col2")
+        assert sample_df.count() == read_df.count()
+        assert sorted(sample_df.collect(), key=safe_sort_key) == sorted(read_df.collect(), key=safe_sort_key)
+
     def test_json_read_options(self, spark, sample_df, tmp_path):
         path = str(tmp_path / "json_read_options")
         sample_df.write.json(path, mode="overwrite")
         read_df = spark.read.option("schemaInferMaxRecords", 1).json(path).select("col1", "col2")
         assert read_df.count() == sample_df.count()
         assert sorted(sample_df.collect(), key=safe_sort_key) == sorted(read_df.collect(), key=safe_sort_key)
+
+
+class TestTextDataSource:
+    def test_read_write_basic(self, spark, sample_df, tmp_path):
+        path = str(tmp_path / "text_basic")
+        sample_df = sample_df.select("col1")
+        sample_df.write.text(path)
+
+        read_df = spark.read.text(path, wholetext=False)
+        new_rows = [Row(value=(r["col1"] if r["col1"] is not None else "")) for r in sample_df.collect()]
+        new_df = spark.createDataFrame(new_rows)
+        assert new_df.count() == read_df.count()
+        assert sorted(new_df.collect(), key=safe_sort_key) == sorted(read_df.collect(), key=safe_sort_key)
+
+        read_df = spark.read.text(path, wholetext=True)
+        joined = "\n".join([r["col1"] if r["col1"] is not None else "\n" for r in sample_df.collect()])
+        joined_df = spark.createDataFrame([Row(value=joined)])
+        assert joined_df.count() == read_df.count()
+        assert sorted(joined_df.collect(), key=safe_sort_key) == sorted(read_df.collect(), key=safe_sort_key)
+
+    def test_read_write_compressed(self, spark, sample_df, tmp_path):
+        path = str(tmp_path / "text_compressed_gzip")
+        sample_df = sample_df.select("col1")
+        sample_df.write.option("compression", "gzip").text(path)
+
+        read_df = spark.read.format("text").option("whole_text", False).load(path)
+        new_rows = [Row(value=(r["col1"] if r["col1"] is not None else "")) for r in sample_df.collect()]
+        new_df = spark.createDataFrame(new_rows)
+        assert new_df.count() == read_df.count()
+        assert sorted(new_df.collect(), key=safe_sort_key) == sorted(read_df.collect(), key=safe_sort_key)
+        assert len(list((tmp_path / "text_compressed_gzip").glob("*.txt.gz"))) > 0
+
+        read_df = spark.read.format("text").option("whole_text", True).load(path)
+        joined = "\n".join([r["col1"] if r["col1"] is not None else "\n" for r in sample_df.collect()])
+        joined_df = spark.createDataFrame([Row(value=joined)])
+        assert joined_df.count() == read_df.count()
+        assert sorted(joined_df.collect(), key=safe_sort_key) == sorted(read_df.collect(), key=safe_sort_key)
+
+    def test_text_write_options(self, spark, sample_df, tmp_path):
+        path = str(tmp_path / "text_write_options")
+        sample_df = sample_df.select("col1")
+        sample_df.write.option("line_sep", ";").option("compression", "gzip").text(path)
+
+        read_df = spark.read.option("line_sep", ";").text(path)
+        new_rows = [Row(value=(r["col1"] if r["col1"] is not None else "")) for r in sample_df.collect()]
+        new_df = spark.createDataFrame(new_rows)
+        assert new_df.count() == read_df.count()
+        assert sorted(new_df.collect(), key=safe_sort_key) == sorted(read_df.collect(), key=safe_sort_key)
+
+    def test_text_read_options(self, spark, sample_df, tmp_path):
+        path = str(tmp_path / "text_write_options")
+        sample_df = sample_df.select("col1")
+        sample_df.write.option("line_sep", ";").option("compression", "gzip").text(path)
+
+        read_df = spark.read.format("text").option("line_sep", ";").option("whole_text", False).load(path)
+        new_rows = [Row(value=(r["col1"] if r["col1"] is not None else "")) for r in sample_df.collect()]
+        new_df = spark.createDataFrame(new_rows)
+        assert new_df.count() == read_df.count()
+        assert sorted(new_df.collect(), key=safe_sort_key) == sorted(read_df.collect(), key=safe_sort_key)
+
+        read_df = spark.read.format("text").option("line_sep", ";").option("whole_text", True).load(path)
+        joined = ";".join([r["col1"] if r["col1"] is not None else ";" for r in sample_df.collect()])
+        joined_df = spark.createDataFrame([Row(value=joined)])
+        assert joined_df.count() == read_df.count()
+        assert sorted(joined_df.collect(), key=safe_sort_key) == sorted(read_df.collect(), key=safe_sort_key)
+
+        read_df = spark.read.text(path, wholetext=False)
+        assert joined_df.count() == read_df.count()
+        assert sorted(joined_df.collect(), key=safe_sort_key) == sorted(read_df.collect(), key=safe_sort_key)
+
+        read_df = spark.read.text(path, wholetext=True)
+        assert joined_df.count() == read_df.count()
+        assert sorted(joined_df.collect(), key=safe_sort_key) == sorted(read_df.collect(), key=safe_sort_key)

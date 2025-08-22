@@ -43,6 +43,7 @@ use prost::Message;
 use sail_common_datafusion::datasource::PhysicalSinkMode;
 use sail_common_datafusion::udf::StreamUDF;
 use sail_common_datafusion::utils::{read_record_batches, write_record_batches};
+use sail_data_source::formats::text::source::TextSource;
 use sail_delta_lake::delta_format::{DeltaCommitExec, DeltaWriterExec};
 use sail_plan::extension::function::array::arrays_zip::ArraysZip;
 use sail_plan::extension::function::array::spark_array::SparkArray;
@@ -112,6 +113,7 @@ use sail_plan::extension::function::string::make_valid_utf8::MakeValidUtf8;
 use sail_plan::extension::function::string::spark_base64::{SparkBase64, SparkUnbase64};
 use sail_plan::extension::function::string::spark_encode_decode::{SparkDecode, SparkEncode};
 use sail_plan::extension::function::string::spark_mask::SparkMask;
+use sail_plan::extension::function::string::spark_split::SparkSplit;
 use sail_plan::extension::function::string::spark_to_binary::{SparkToBinary, SparkTryToBinary};
 use sail_plan::extension::function::string::spark_to_number::SparkToNumber;
 use sail_plan::extension::function::string::spark_try_to_number::SparkTryToNumber;
@@ -320,6 +322,35 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
                     self,
                     Arc::new(ArrowSource::default()), // TODO: Look into configuring this if needed
                 )?;
+                Ok(Arc::new(DataSourceExec::new(Arc::new(source))))
+            }
+            NodeKind::Text(gen::TextExecNode {
+                base_config,
+                file_compression_type,
+                whole_text,
+                line_sep,
+            }) => {
+                let file_compression_type: FileCompressionType =
+                    self.try_decode_file_compression_type(file_compression_type)?;
+                let line_sep: Option<u8> = match line_sep {
+                    None => None,
+                    Some(bytes) if bytes.is_empty() => None,
+                    Some(bytes) if bytes.len() == 1 => Some(bytes[0]),
+                    Some(bytes) => {
+                        return plan_err!(
+                            "try_decode: line separator must be a single byte or empty, got: {bytes:?}"
+                        );
+                    }
+                };
+                let source = parse_protobuf_file_scan_config(
+                    &self.try_decode_message(&base_config)?,
+                    registry,
+                    self,
+                    Arc::new(TextSource::new(whole_text, line_sep)),
+                )?;
+                let source = FileScanConfigBuilder::from(source)
+                    .with_file_compression_type(file_compression_type)
+                    .build();
                 Ok(Arc::new(DataSourceExec::new(Arc::new(source))))
             }
             NodeKind::WorkTable(gen::WorkTableExecNode { name, schema }) => {
@@ -648,7 +679,27 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
             let source = data_source.data_source();
             if let Some(file_scan) = source.as_any().downcast_ref::<FileScanConfig>() {
                 let file_source = file_scan.file_source();
-                if file_source.as_any().is::<JsonSource>() {
+                if file_source.as_any().is::<TextSource>() {
+                    let base_config =
+                        self.try_encode_message(serialize_file_scan_config(file_scan, self)?)?;
+                    let file_compression_type =
+                        self.try_encode_file_compression_type(file_scan.file_compression_type)?;
+                    let text_source = file_source
+                        .as_any()
+                        .downcast_ref::<TextSource>()
+                        .ok_or_else(|| {
+                            plan_datafusion_err!(
+                                "try_encode: TextSource not found in FileScanConfig"
+                            )
+                        })?;
+                    NodeKind::Text(gen::TextExecNode {
+                        base_config,
+                        file_compression_type,
+                        whole_text: text_source.whole_text(),
+                        line_sep: text_source.line_sep().map(|x| vec![x]),
+                    })
+                } else if file_source.as_any().is::<JsonSource>() {
+                    // TODO: Check if we still need to have JsonSource: https://github.com/apache/datafusion/pull/14224
                     let base_config =
                         self.try_encode_message(serialize_file_scan_config(file_scan, self)?)?;
                     let file_compression_type =
@@ -658,6 +709,7 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
                         file_compression_type,
                     })
                 } else if file_source.as_any().is::<ArrowSource>() {
+                    // TODO: Check if we still need to have ArrowSource: https://github.com/apache/datafusion/pull/14224
                     let base_config =
                         self.try_encode_message(serialize_file_scan_config(file_scan, self)?)?;
                     NodeKind::Arrow(gen::ArrowExecNode { base_config })
@@ -665,6 +717,7 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
                     return plan_err!("unsupported data source node: {data_source:?}");
                 }
             } else if let Some(memory) = source.as_any().downcast_ref::<MemorySourceConfig>() {
+                // TODO: Check if we still need to have MemorySourceConfig: https://github.com/apache/datafusion/pull/14224
                 // `memory.schema()` is the schema after projection.
                 // We must use the original schema here.
                 let schema = memory.original_schema();
@@ -869,9 +922,10 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
             "spark_concat" | "concat" => Ok(Arc::new(ScalarUDF::from(SparkConcat::new()))),
             "spark_from_csv" | "from_csv" => Ok(Arc::new(ScalarUDF::from(SparkFromCSV::new()))),
             "spark_to_number" | "to_number" => Ok(Arc::new(ScalarUDF::from(SparkToNumber::new()))),
-            "spark_try_to_number" | "rey_to_number" => {
+            "spark_try_to_number" | "try_to_number" => {
                 Ok(Arc::new(ScalarUDF::from(SparkTryToNumber::new())))
             }
+            "spark_split" | "split" => Ok(Arc::new(ScalarUDF::from(SparkSplit::new()))),
             "spark_hex" | "hex" => Ok(Arc::new(ScalarUDF::from(SparkHex::new()))),
             "spark_unhex" | "unhex" => Ok(Arc::new(ScalarUDF::from(SparkUnHex::new()))),
             "spark_murmur3_hash" | "hash" => Ok(Arc::new(ScalarUDF::from(SparkMurmur3Hash::new()))),
@@ -986,6 +1040,7 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
             || node.inner().as_any().is::<SparkFromCSV>()
             || node.inner().as_any().is::<SparkToNumber>()
             || node.inner().as_any().is::<SparkTryToNumber>()
+            || node.inner().as_any().is::<SparkSplit>()
             || node.inner().as_any().is::<SparkUnHex>()
             || node.inner().as_any().is::<SparkMurmur3Hash>()
             || node.inner().as_any().is::<SparkReverse>()

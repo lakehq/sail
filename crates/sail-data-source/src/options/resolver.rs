@@ -3,21 +3,27 @@ use std::str::FromStr;
 
 use datafusion::catalog::Session;
 use datafusion::datasource::file_format::file_compression_type::FileCompressionType;
+use datafusion::parquet::basic::{BrotliLevel, GzipLevel, ZstdLevel};
 use datafusion_common::config::{CsvOptions, JsonOptions, TableParquetOptions};
-use datafusion_common::{plan_err, Result};
+use datafusion_common::parsers::CompressionTypeVariant;
+use datafusion_common::{plan_err, DataFusionError, Result};
 use sail_common_datafusion::datasource::TableDeltaOptions;
 
+use crate::formats::text::TableTextOptions;
 use crate::options::{
     load_default_options, load_options, CsvReadOptions, CsvWriteOptions, DeltaReadOptions,
     DeltaWriteOptions, JsonReadOptions, JsonWriteOptions, ParquetReadOptions, ParquetWriteOptions,
+    TextReadOptions, TextWriteOptions,
 };
+use crate::utils::{char_to_u8, split_parquet_compression_string};
 
-fn char_to_u8(c: char, option: &str) -> Result<u8> {
-    if c.is_ascii() {
-        Ok(c as u8)
-    } else {
-        plan_err!("invalid {option} character '{c}': must be an ASCII character")
+fn check_parquet_level_is_none(codec: &str, level: &Option<u32>) -> Result<()> {
+    if level.is_some() {
+        return Err(DataFusionError::Configuration(format!(
+            "Compression {codec} does not support specifying a level"
+        )));
     }
+    Ok(())
 }
 
 fn apply_json_read_options(from: JsonReadOptions, to: &mut JsonOptions) -> Result<()> {
@@ -228,7 +234,65 @@ fn apply_parquet_write_options(
         to.global.skip_arrow_metadata = v;
     }
     if let Some(v) = compression {
-        to.global.compression = Some(v);
+        let (codec, level) = split_parquet_compression_string(&v.to_lowercase())?;
+        let compression = match codec.as_str() {
+            "uncompressed" | "none" | "" => {
+                check_parquet_level_is_none(codec.as_str(), &level)?;
+                Ok("uncompressed".to_string())
+            }
+            "snappy" => {
+                check_parquet_level_is_none(codec.as_str(), &level)?;
+                Ok(v)
+            }
+            "gzip" => {
+                if level.is_some() {
+                    Ok(v)
+                } else {
+                    Ok(format!(
+                        "gzip({})",
+                        GzipLevel::default().compression_level()
+                    ))
+                }
+            }
+            "lzo" => {
+                check_parquet_level_is_none(codec.as_str(), &level)?;
+                Ok(v)
+            }
+            "brotli" => {
+                if level.is_some() {
+                    Ok(v)
+                } else {
+                    Ok(format!(
+                        "brotli({})",
+                        BrotliLevel::default().compression_level()
+                    ))
+                }
+            }
+            "lz4" => {
+                check_parquet_level_is_none(codec.as_str(), &level)?;
+                Ok(v)
+            }
+            "zstd" => {
+                if level.is_some() {
+                    Ok(v)
+                } else {
+                    Ok(format!(
+                        "zstd({})",
+                        ZstdLevel::default().compression_level()
+                    ))
+                }
+            }
+            "lz4_raw" => {
+                check_parquet_level_is_none(codec.as_str(), &level)?;
+                Ok(v)
+            }
+            _ => Err(DataFusionError::Configuration(format!(
+                "Unknown or unsupported parquet compression: \
+        {v}. Valid values are: uncompressed, snappy, gzip(level), \
+        lzo, brotli(level), lz4, zstd(level), and lz4_raw."
+            ))),
+        }?;
+        to.global.compression = Some(compression);
     }
     if let Some(v) = dictionary_enabled {
         to.global.dictionary_enabled = Some(v);
@@ -295,6 +359,31 @@ fn apply_delta_write_options(from: DeltaWriteOptions, to: &mut TableDeltaOptions
     }
     if let Some(write_batch_size) = from.write_batch_size {
         to.write_batch_size = write_batch_size;
+    }
+    Ok(())
+}
+
+fn apply_text_read_options(from: TextReadOptions, to: &mut TableTextOptions) -> Result<()> {
+    if let Some(whole_text) = from.whole_text {
+        to.whole_text = whole_text;
+    }
+    if let Some(Some(line_sep)) = from.line_sep {
+        to.line_sep = Some(line_sep);
+    }
+    Ok(())
+}
+
+fn apply_text_write_options(from: TextWriteOptions, to: &mut TableTextOptions) -> Result<()> {
+    if let Some(line_sep) = from.line_sep {
+        to.line_sep = Some(line_sep);
+    }
+    if let Some(compression) = from.compression {
+        let compression = if compression.to_uppercase() == "NONE" {
+            "UNCOMPRESSED".to_string()
+        } else {
+            compression
+        };
+        to.compression = CompressionTypeVariant::from_str(compression.as_str())?;
     }
     Ok(())
 }
@@ -410,6 +499,30 @@ impl<'a> DataSourceOptionsResolver<'a> {
             apply_delta_write_options(load_options(opt)?, &mut delta_options)?;
         }
         Ok(delta_options)
+    }
+
+    pub fn resolve_text_read_options(
+        &self,
+        options: Vec<HashMap<String, String>>,
+    ) -> Result<TableTextOptions> {
+        let mut text_options = TableTextOptions::default();
+        apply_text_read_options(load_default_options()?, &mut text_options)?;
+        for opt in options {
+            apply_text_read_options(load_options(opt)?, &mut text_options)?;
+        }
+        Ok(text_options)
+    }
+
+    pub fn resolve_text_write_options(
+        &self,
+        options: Vec<HashMap<String, String>>,
+    ) -> Result<TableTextOptions> {
+        let mut text_options = TableTextOptions::default();
+        apply_text_write_options(load_default_options()?, &mut text_options)?;
+        for opt in options {
+            apply_text_write_options(load_options(opt)?, &mut text_options)?;
+        }
+        Ok(text_options)
     }
 }
 
@@ -756,6 +869,50 @@ mod tests {
         assert_eq!(options.global.column_index_truncate_length, Some(32));
         assert_eq!(options.global.statistics_truncate_length, Some(99));
         assert_eq!(options.global.encoding, Some("bit_packed".to_string()));
+
+        Ok(())
+    }
+
+    #[test]
+    fn test_resolve_text_read_options() -> Result<()> {
+        let ctx = SessionContext::default();
+        let state = ctx.state();
+        let resolver = DataSourceOptionsResolver::new(&state);
+
+        let kv = build_options(&[]);
+        let options = resolver.resolve_text_read_options(vec![kv])?;
+        assert!(!options.whole_text);
+        assert_eq!(options.line_sep, None);
+        assert_eq!(options.compression, CompressionTypeVariant::UNCOMPRESSED);
+
+        let kv = build_options(&[
+            ("whole_text", "true"),
+            ("line_sep", "\r"),
+            ("compression", "bzip2"),
+        ]);
+        let options = resolver.resolve_text_read_options(vec![kv])?;
+        assert!(options.whole_text);
+        assert_eq!(options.line_sep, Some('\r'));
+        assert_eq!(options.compression, CompressionTypeVariant::UNCOMPRESSED);
+
+        Ok(())
+    }
+
+    #[test]
+    fn test_resolve_text_write_options() -> Result<()> {
+        let ctx = SessionContext::default();
+        let state = ctx.state();
+        let resolver = DataSourceOptionsResolver::new(&state);
+
+        let kv = build_options(&[]);
+        let options = resolver.resolve_text_write_options(vec![kv])?;
+        assert_eq!(options.line_sep, Some('\n'));
+        assert_eq!(options.compression, CompressionTypeVariant::UNCOMPRESSED);
+
+        let kv = build_options(&[("line_sep", "\r"), ("compression", "bzip2")]);
+        let options = resolver.resolve_text_write_options(vec![kv])?;
+        assert_eq!(options.line_sep, Some('\r'));
+        assert_eq!(options.compression, CompressionTypeVariant::BZIP2);
 
         Ok(())
     }

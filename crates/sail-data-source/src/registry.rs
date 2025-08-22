@@ -8,6 +8,7 @@ use sail_common_datafusion::datasource::TableFormat;
 use crate::formats::delta::DeltaTableFormat;
 use crate::formats::listing::{
     ArrowTableFormat, AvroTableFormat, CsvTableFormat, JsonTableFormat, ParquetTableFormat,
+    TextTableFormat,
 };
 
 static DEFAULT_REGISTRY: Lazy<Arc<TableFormatRegistry>> =
@@ -36,6 +37,7 @@ impl TableFormatRegistry {
         registry.register_format(Arc::new(DeltaTableFormat));
         registry.register_format(Arc::new(JsonTableFormat::default()));
         registry.register_format(Arc::new(ParquetTableFormat::default()));
+        registry.register_format(Arc::new(TextTableFormat::default()));
 
         registry
     }

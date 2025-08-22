@@ -115,10 +115,9 @@ prost-build = "0.13.5"
 prost = "0.13.5"
 datafusion = { version = "49.0.0", features = ["serde", "avro"] }
 datafusion-common = { version = "49.0.0", features = ["object_store", "avro"] }
+datafusion-datasource = { version = "49.0.0", features = ["compression", "parquet"] }
 datafusion-expr = { version = "49.0.0" }
 datafusion-expr-common = { version = "49.0.0" }
-datafusion-execution = { version = "49.0.0" }
-datafusion-physical-optimizer = { version = "49.0.0" }
 datafusion-proto = { version = "49.0.0" }
 datafusion-functions = { version = "49.0.0" }
 datafusion-functions-nested = { version = "49.0.0" }
@@ -143,7 +142,7 @@ hdfs-native-object-store = "0.14.2"
 # Lakehouse
 deltalake = { git = "https://github.com/delta-io/delta-rs.git", rev = "5ac08eb", default-features = false, features = ["rustls"] }
 delta_kernel = { version = "0.13.0", features = ["arrow-55", "internal-api", "default-engine"] }
-bytes = "1.9.0"
+bytes = "1.10.1"
 indexmap = "2.10.0"
 
 ######

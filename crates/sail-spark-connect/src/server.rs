@@ -58,7 +58,7 @@ impl SparkConnectService for SparkConnectServer {
         request: Request<ExecutePlanRequest>,
     ) -> Result<Response<Self::ExecutePlanStream>, Status> {
         let request = request.into_inner();
-        debug!("{:?}", request);
+        debug!("{request:?}");
         let session_key = SessionKey {
             user_id: request.user_context.map(|u| u.user_id),
             session_id: request.session_id,
@@ -164,7 +164,7 @@ impl SparkConnectService for SparkConnectServer {
         request: Request<AnalyzePlanRequest>,
     ) -> Result<Response<AnalyzePlanResponse>, Status> {
         let request = request.into_inner();
-        debug!("{:?}", request);
+        debug!("{request:?}");
         let session_key = SessionKey {
             user_id: request.user_context.map(|u| u.user_id),
             session_id: request.session_id.clone(),
@@ -237,7 +237,7 @@ impl SparkConnectService for SparkConnectServer {
             server_side_session_id: request.session_id,
             result,
         };
-        debug!("{:?}", response);
+        debug!("{response:?}");
         Ok(Response::new(response))
     }
 
@@ -246,7 +246,7 @@ impl SparkConnectService for SparkConnectServer {
         request: Request<ConfigRequest>,
     ) -> Result<Response<ConfigResponse>, Status> {
         let request = request.into_inner();
-        debug!("{:?}", request);
+        debug!("{request:?}");
         let session_key = SessionKey {
             user_id: request.user_context.map(|u| u.user_id),
             session_id: request.session_id.clone(),
@@ -282,7 +282,7 @@ impl SparkConnectService for SparkConnectServer {
                 service::handle_config_is_modifiable(&ctx, keys)?
             }
         };
-        debug!("{:?}", response);
+        debug!("{response:?}");
         Ok(Response::new(response))
     }
 
@@ -299,7 +299,7 @@ impl SparkConnectService for SparkConnectServer {
                 ));
             }
         };
-        debug!("{:?}", first);
+        debug!("{first:?}");
         let session_key = SessionKey {
             user_id: first.user_context.map(|u| u.user_id),
             session_id: first.session_id.clone(),
@@ -331,7 +331,7 @@ impl SparkConnectService for SparkConnectServer {
             server_side_session_id: first.session_id,
             artifacts,
         };
-        debug!("{:?}", response);
+        debug!("{response:?}");
         Ok(Response::new(response))
     }
 
@@ -340,7 +340,7 @@ impl SparkConnectService for SparkConnectServer {
         request: Request<ArtifactStatusesRequest>,
     ) -> Result<Response<ArtifactStatusesResponse>, Status> {
         let request = request.into_inner();
-        debug!("{:?}", request);
+        debug!("{request:?}");
         let session_key = SessionKey {
             user_id: request.user_context.map(|u| u.user_id),
             session_id: request.session_id.clone(),
@@ -355,7 +355,7 @@ impl SparkConnectService for SparkConnectServer {
             server_side_session_id: request.session_id,
             statuses,
         };
-        debug!("{:?}", response);
+        debug!("{response:?}");
         Ok(Response::new(response))
     }
 
@@ -364,7 +364,7 @@ impl SparkConnectService for SparkConnectServer {
         request: Request<InterruptRequest>,
     ) -> Result<Response<InterruptResponse>, Status> {
         let request = request.into_inner();
-        debug!("{:?}", request);
+        debug!("{request:?}");
         let session_key = SessionKey {
             user_id: request.user_context.map(|u| u.user_id),
             session_id: request.session_id.clone(),
@@ -398,7 +398,7 @@ impl SparkConnectService for SparkConnectServer {
             server_side_session_id: request.session_id,
             interrupted_ids: ids?,
         };
-        debug!("{:?}", response);
+        debug!("{response:?}");
         Ok(Response::new(response))
     }
 
@@ -409,7 +409,7 @@ impl SparkConnectService for SparkConnectServer {
         request: Request<ReattachExecuteRequest>,
     ) -> Result<Response<Self::ReattachExecuteStream>, Status> {
         let request = request.into_inner();
-        debug!("{:?}", request);
+        debug!("{request:?}");
         let session_key = SessionKey {
             user_id: request.user_context.map(|u| u.user_id),
             session_id: request.session_id,
@@ -429,7 +429,7 @@ impl SparkConnectService for SparkConnectServer {
         request: Request<ReleaseExecuteRequest>,
     ) -> Result<Response<ReleaseExecuteResponse>, Status> {
         let request = request.into_inner();
-        debug!("{:?}", request);
+        debug!("{request:?}");
         let session_key = SessionKey {
             user_id: request.user_context.map(|u| u.user_id),
             session_id: request.session_id.clone(),
@@ -448,7 +448,7 @@ impl SparkConnectService for SparkConnectServer {
             server_side_session_id: request.session_id,
             operation_id: Some(request.operation_id),
         };
-        debug!("{:?}", response);
+        debug!("{response:?}");
         Ok(Response::new(response))
     }
 
@@ -457,7 +457,7 @@ impl SparkConnectService for SparkConnectServer {
         request: Request<ReleaseSessionRequest>,
     ) -> Result<Response<ReleaseSessionResponse>, Status> {
         let request = request.into_inner();
-        debug!("{:?}", request);
+        debug!("{request:?}");
         Err(Status::unimplemented("release session"))
     }
 
@@ -466,7 +466,7 @@ impl SparkConnectService for SparkConnectServer {
         request: Request<FetchErrorDetailsRequest>,
     ) -> Result<Response<FetchErrorDetailsResponse>, Status> {
         let request = request.into_inner();
-        debug!("{:?}", request);
+        debug!("{request:?}");
         Err(Status::unimplemented("fetch error details"))
     }
 }
