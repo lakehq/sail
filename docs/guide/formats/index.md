@@ -17,9 +17,9 @@ Here is a summary of the supported (:white_check_mark:) and unsupported (:x:) da
 | CSV                   | :white_check_mark: | :white_check_mark: |
 | JSON                  | :white_check_mark: | :white_check_mark: |
 | Parquet               | :white_check_mark: | :white_check_mark: |
-| Text                  | :construction:     | :construction:     |
+| Text                  | :white_check_mark: | :white_check_mark: |
 | Binary                | :construction:     | :construction:     |
-| Avro                  | :construction:     | :construction:     |
+| Avro                  | :white_check_mark: | :white_check_mark: |
 | Protocol Buffers      | :construction:     | :construction:     |
 | ORC                   | :x:                | :x:                |
 | [Delta Lake](./delta) | :white_check_mark: | :white_check_mark: |

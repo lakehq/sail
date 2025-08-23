@@ -29,6 +29,7 @@ message ExtendedPhysicalPlanNode {
     TextExecNode text = 15;
     DeltaWriterExecNode delta_writer = 16;
     DeltaCommitExecNode delta_commit = 17;
+    AvroExecNode avro = 18;
   }
 }
 
@@ -262,6 +263,10 @@ message TextExecNode {
   CompressionTypeVariant file_compression_type = 2;
   bool whole_text = 3;
   optional bytes line_sep = 4;
+}
+
+message AvroExecNode {
+  bytes base_config = 1;
 }
 
 message WorkTableExecNode {
