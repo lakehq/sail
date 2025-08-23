@@ -1,6 +1,8 @@
 coverage:
   status:
-    patch: false
+    patch:
+      default:
+        target: 0
     project:
       default:
         only_pulls: true
