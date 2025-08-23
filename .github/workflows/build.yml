@@ -81,10 +81,8 @@ jobs:
       # Generate coverage report after tests
       - name: Generate coverage report
         run: grcov target --binary-path target/debug/ -s .
-            -t lcov --branch --ignore-not-existing
-            --excl-br-start "mod tests \{" --excl-start "mod tests \{"
-            --excl-br-line "#\[derive\(" --excl-line "#\[derive\("
-            -o coverage-build.info
+          -t lcov --branch --ignore-not-existing
+          -o coverage-build.info
 
       - name: Record Rust version
         run: echo "RUST=$(rustc --version)" >> "$GITHUB_ENV"

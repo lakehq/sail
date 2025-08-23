@@ -78,8 +78,6 @@ jobs:
           echo "Binary path: $BINARY_PATH"
           grcov target --binary-path "$BINARY_PATH" -s . \
             -t lcov --branch --ignore-not-existing \
-            --excl-br-start "mod tests \{" --excl-start "mod tests \{" \
-            --excl-br-line "#\[derive\(" --excl-line "#\[derive\(" \
             -o coverage-python-${{ matrix.spark-version }}.info
 
       - name: Record Rust version
