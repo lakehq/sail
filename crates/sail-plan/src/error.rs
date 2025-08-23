@@ -8,6 +8,22 @@ use thiserror::Error;
 
 pub type PlanResult<T> = Result<T, PlanError>;
 
+pub trait IntoPlanResult<T> {
+    fn into_plan_result(self) -> PlanResult<T>;
+}
+
+impl<T> IntoPlanResult<T> for T {
+    fn into_plan_result(self) -> PlanResult<T> {
+        Ok(self)
+    }
+}
+
+impl<T> IntoPlanResult<T> for PlanResult<T> {
+    fn into_plan_result(self) -> PlanResult<T> {
+        self
+    }
+}
+
 #[derive(Debug, Error)]
 #[allow(clippy::large_enum_variant)]
 pub enum PlanError {
