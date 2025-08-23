@@ -76,7 +76,11 @@ jobs:
           wait
           BINARY_PATH=$(hatch run python -c 'import pysail._native; import os; print(os.path.dirname(pysail._native.__file__))')
           echo "Binary path: $BINARY_PATH"
-          grcov target --binary-path "$BINARY_PATH" -s . -t lcov --branch --ignore-not-existing -o coverage-python-${{ matrix.spark-version }}.info
+          grcov target --binary-path "$BINARY_PATH" -s . \
+          -t lcov --branch --ignore-not-existing \
+          --excl-br-start "mod tests \{" --excl-start "mod tests \{" \
+          --excl-br-line "#\[derive\(" --excl-line "#\[derive\(" \
+          -o coverage-python-${{ matrix.spark-version }}.info
 
       - name: Record Rust version
         run: echo "RUST=$(rustc --version)" >> "$GITHUB_ENV"
