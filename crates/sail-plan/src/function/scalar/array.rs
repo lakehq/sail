@@ -112,10 +112,9 @@ fn array_insert(
         )
         .end()?;
 
-    let zero_index_error =
-        ScalarUDF::from(RaiseError::new())
-            .call(vec![lit("array_insert: The index 0 is invalid. 
-        An index shall be either < 0 or > 0 (the first element has index 1)")]);
+    let zero_index_error = ScalarUDF::from(RaiseError::new()).call(vec![lit(
+        "array_insert: the index 0 is invalid. An index shall be either < 0 or > 0 (the first element has index 1)"
+    )]);
 
     Ok(when(array.clone().is_null(), array.clone())
         .when(pos_from_zero.clone().is_null(), zero_index_error)
