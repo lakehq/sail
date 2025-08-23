@@ -337,3 +337,12 @@ pub(crate) fn get_null_treatment(ignore_nulls: Option<bool>) -> Option<NullTreat
         None => None,
     }
 }
+
+pub(crate) fn udf_expr<UDFType: ScalarUDFImpl + Default + 'static>(
+    args: Vec<expr::Expr>,
+) -> expr::Expr {
+    expr::Expr::ScalarFunction(expr::ScalarFunction {
+        func: Arc::new(ScalarUDF::from(UDFType::default())),
+        args,
+    })
+}
