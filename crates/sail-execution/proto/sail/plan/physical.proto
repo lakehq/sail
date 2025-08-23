@@ -29,9 +29,10 @@ message ExtendedPhysicalPlanNode {
     TextExecNode text = 15;
     DeltaWriterExecNode delta_writer = 16;
     DeltaCommitExecNode delta_commit = 17;
-    ConsoleSinkExecNode console_sink = 18;
-    SocketSourceExecNode socket_source = 19;
-    RateSourceExecNode rate_source = 20;
+    AvroExecNode avro = 18;
+    ConsoleSinkExecNode console_sink = 19;
+    SocketSourceExecNode socket_source = 20;
+    RateSourceExecNode rate_source = 21;
   }
 }
 
@@ -265,6 +266,10 @@ message TextExecNode {
   CompressionTypeVariant file_compression_type = 2;
   bool whole_text = 3;
   optional bytes line_sep = 4;
+}
+
+message AvroExecNode {
+  bytes base_config = 1;
 }
 
 message WorkTableExecNode {

@@ -8,7 +8,7 @@ use datafusion::common::{plan_datafusion_err, plan_err, JoinSide, Result};
 use datafusion::datasource::file_format::file_compression_type::FileCompressionType;
 use datafusion::datasource::memory::MemorySourceConfig;
 use datafusion::datasource::physical_plan::{
-    ArrowSource, FileScanConfig, FileScanConfigBuilder, JsonSource,
+    ArrowSource, AvroSource, FileScanConfig, FileScanConfigBuilder, JsonSource,
 };
 use datafusion::datasource::source::{DataSource, DataSourceExec};
 use datafusion::execution::FunctionRegistry;
@@ -354,6 +354,15 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
                 let source = FileScanConfigBuilder::from(source)
                     .with_file_compression_type(file_compression_type)
                     .build();
+                Ok(Arc::new(DataSourceExec::new(Arc::new(source))))
+            }
+            NodeKind::Avro(gen::AvroExecNode { base_config }) => {
+                let source = parse_protobuf_file_scan_config(
+                    &self.try_decode_message(&base_config)?,
+                    registry,
+                    self,
+                    Arc::new(AvroSource::new()),
+                )?;
                 Ok(Arc::new(DataSourceExec::new(Arc::new(source))))
             }
             NodeKind::WorkTable(gen::WorkTableExecNode { name, schema }) => {
@@ -755,6 +764,10 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
                     let base_config =
                         self.try_encode_message(serialize_file_scan_config(file_scan, self)?)?;
                     NodeKind::Arrow(gen::ArrowExecNode { base_config })
+                } else if file_source.as_any().is::<AvroSource>() {
+                    let base_config =
+                        self.try_encode_message(serialize_file_scan_config(file_scan, self)?)?;
+                    NodeKind::Avro(gen::AvroExecNode { base_config })
                 } else {
                     return plan_err!("unsupported data source node: {data_source:?}");
                 }
