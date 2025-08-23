@@ -16,6 +16,7 @@ class SocketServer:
         self.port = port
         self.data = list(data)
         self._socket = None
+        self._thread = None
         self._running = False
 
     def start(self):
@@ -28,40 +29,33 @@ class SocketServer:
         self._socket.listen(1)
 
         self._running = True
-        listener_thread = threading.Thread(target=self._run_server)
-        listener_thread.daemon = True
-        listener_thread.start()
+        self._thread = threading.Thread(target=self._run_server)
+        self._thread.daemon = True
+        self._thread.start()
 
     def stop(self):
         self._running = False
         if self._socket is not None:
             self._socket.close()
             self._socket = None
-        # We do not keep track of the listener thread and client threads,
-        # since they are daemon threads, and they will exit when the test process exits.
-        # So we do not join them here.
+        if self._thread is not None:
+            self._thread.join()
+            self._thread = None
 
     def _run_server(self):
         while self._running:
             try:
                 client_socket, _ = self._socket.accept()
                 client_socket.settimeout(1)
-                client_thread = threading.Thread(target=self._handle_client, args=(client_socket,))
-                client_thread.daemon = True
-                client_thread.start()
+                try:
+                    for line in self.data:
+                        if not self._running:
+                            break
+                        client_socket.send(f"{line}\n".encode())
+                finally:
+                    client_socket.close()
             except OSError:
-                break
-
-    def _handle_client(self, client_socket):
-        try:
-            for line in self.data:
-                if not self._running:
-                    break
-                client_socket.send(f"{line}\n".encode())
-        except OSError:
-            pass
-        finally:
-            client_socket.close()
+                continue
 
     def __enter__(self):
         self.start()
