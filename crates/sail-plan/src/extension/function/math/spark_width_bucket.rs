@@ -109,7 +109,7 @@ impl ScalarUDFImpl for SparkWidthBucket {
 
         Err(unsupported_data_types_exec_err(
             "width_bucket",
-            "Float/Decimal OR Duration(*) OR Interval(YearMonth) for first 3 args; Int for 4th",
+            "Float/Decimal OR Duration OR Interval(YearMonth) for first 3 args; Int for 4th",
             types,
         ))
     }
@@ -149,7 +149,7 @@ fn width_bucket_kern(args: &[ArrayRef]) -> Result<ArrayRef> {
 
         other => Err(unsupported_data_types_exec_err(
             "width_bucket",
-            "Float64 | Duration(Microsecond) | Interval(YearMonth)",
+            "Float/Decimal OR Duration OR Interval(YearMonth) for first 3 args; Int for 4th",
             &[
                 other.clone(),
                 minv.data_type().clone(),
