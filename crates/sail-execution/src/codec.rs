@@ -8,7 +8,7 @@ use datafusion::common::{plan_datafusion_err, plan_err, JoinSide, Result};
 use datafusion::datasource::file_format::file_compression_type::FileCompressionType;
 use datafusion::datasource::memory::MemorySourceConfig;
 use datafusion::datasource::physical_plan::{
-    ArrowSource, FileScanConfig, FileScanConfigBuilder, JsonSource,
+    ArrowSource, AvroSource, FileScanConfig, FileScanConfigBuilder, JsonSource,
 };
 use datafusion::datasource::source::{DataSource, DataSourceExec};
 use datafusion::execution::FunctionRegistry;
@@ -75,7 +75,6 @@ use sail_plan::extension::function::drop_struct_field::DropStructField;
 use sail_plan::extension::function::explode::{explode_name_to_kind, Explode};
 use sail_plan::extension::function::kurtosis::KurtosisFunction;
 use sail_plan::extension::function::map::map_function::MapFunction;
-use sail_plan::extension::function::map::spark_element_at::{SparkElementAt, SparkTryElementAt};
 use sail_plan::extension::function::math::least_greatest::{Greatest, Least};
 use sail_plan::extension::function::math::rand_poisson::RandPoisson;
 use sail_plan::extension::function::math::randn::Randn;
@@ -352,6 +351,15 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
                 let source = FileScanConfigBuilder::from(source)
                     .with_file_compression_type(file_compression_type)
                     .build();
+                Ok(Arc::new(DataSourceExec::new(Arc::new(source))))
+            }
+            NodeKind::Avro(gen::AvroExecNode { base_config }) => {
+                let source = parse_protobuf_file_scan_config(
+                    &self.try_decode_message(&base_config)?,
+                    registry,
+                    self,
+                    Arc::new(AvroSource::new()),
+                )?;
                 Ok(Arc::new(DataSourceExec::new(Arc::new(source))))
             }
             NodeKind::WorkTable(gen::WorkTableExecNode { name, schema }) => {
@@ -703,6 +711,10 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
                     let base_config =
                         self.try_encode_message(serialize_file_scan_config(file_scan, self)?)?;
                     NodeKind::Arrow(gen::ArrowExecNode { base_config })
+                } else if file_source.as_any().is::<AvroSource>() {
+                    let base_config =
+                        self.try_encode_message(serialize_file_scan_config(file_scan, self)?)?;
+                    NodeKind::Avro(gen::AvroExecNode { base_config })
                 } else {
                     return plan_err!("unsupported data source node: {data_source:?}");
                 }
@@ -948,12 +960,6 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
             "spark_abs" | "abs" => Ok(Arc::new(ScalarUDF::from(SparkAbs::new()))),
             "spark_conv" | "conv" => Ok(Arc::new(ScalarUDF::from(SparkConv::new()))),
             "spark_signum" | "signum" => Ok(Arc::new(ScalarUDF::from(SparkSignum::new()))),
-            "spark_element_at" | "element_at" => {
-                Ok(Arc::new(ScalarUDF::from(SparkElementAt::new())))
-            }
-            "spark_try_element_at" | "try_element_at" => {
-                Ok(Arc::new(ScalarUDF::from(SparkTryElementAt::new())))
-            }
             "spark_last_day" | "last_day" => Ok(Arc::new(ScalarUDF::from(SparkLastDay::new()))),
             "spark_next_day" | "next_day" => Ok(Arc::new(ScalarUDF::from(SparkNextDay::new()))),
             "spark_make_interval" | "make_interval" => {
@@ -1053,8 +1059,6 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
             || node.inner().as_any().is::<SparkSignum>()
             || node.inner().as_any().is::<SparkToBinary>()
             || node.inner().as_any().is::<SparkTryToBinary>()
-            || node.inner().as_any().is::<SparkElementAt>()
-            || node.inner().as_any().is::<SparkTryElementAt>()
             || node.inner().as_any().is::<SparkLastDay>()
             || node.inner().as_any().is::<SparkNextDay>()
             || node.inner().as_any().is::<SparkMakeInterval>()

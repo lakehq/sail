@@ -3,7 +3,6 @@ use datafusion_expr::expr;
 
 use crate::error::{PlanError, PlanResult};
 use crate::extension::function::map::map_function::MapFunction;
-use crate::extension::function::map::spark_element_at::{SparkElementAt, SparkTryElementAt};
 use crate::function::common::{ScalarFunction, ScalarFunctionInput};
 
 fn map(input: ScalarFunctionInput) -> PlanResult<expr::Expr> {
@@ -60,7 +59,6 @@ pub(super) fn list_built_in_map_functions() -> Vec<(&'static str, ScalarFunction
     use crate::function::common::ScalarFunctionBuilder as F;
 
     vec![
-        ("element_at", F::udf(SparkElementAt::new())),
         ("map", F::custom(map)),
         ("map_concat", F::custom(map_concat)),
         ("map_contains_key", F::binary(map_contains_key)),
@@ -70,6 +68,5 @@ pub(super) fn list_built_in_map_functions() -> Vec<(&'static str, ScalarFunction
         ("map_keys", F::unary(expr_fn::map_keys)),
         ("map_values", F::unary(expr_fn::map_values)),
         ("str_to_map", F::unknown("str_to_map")),
-        ("try_element_at", F::udf(SparkTryElementAt::new())),
     ]
 }
