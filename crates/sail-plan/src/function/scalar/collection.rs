@@ -1,6 +1,6 @@
 use datafusion::arrow::datatypes::DataType;
 use datafusion_common::ScalarValue;
-use datafusion_expr::{cast, expr, lit, when, ExprSchemable};
+use datafusion_expr::{cast, expr, lit, when, ExprSchemable, ScalarUDF};
 use datafusion_functions::math::expr_fn::abs;
 use datafusion_functions_nested::expr_fn;
 
@@ -8,7 +8,7 @@ use crate::error::{PlanError, PlanResult};
 use crate::extension::function::collection::spark_concat::SparkConcat;
 use crate::extension::function::collection::spark_reverse::SparkReverse;
 use crate::extension::function::raise_error::RaiseError;
-use crate::function::common::{udf_expr, ScalarFunction, ScalarFunctionInput};
+use crate::function::common::{ScalarFunction, ScalarFunctionInput};
 use crate::utils::ItemTaker;
 
 fn size(input: ScalarFunctionInput) -> PlanResult<expr::Expr> {
@@ -35,7 +35,8 @@ fn element_at(input: ScalarFunctionInput, is_try: bool) -> PlanResult<expr::Expr
         (
             "element_at",
             // TODO: respect spark.sql.ansi.enabled=false: https://spark.apache.org/docs/latest/api/sql/index.html#element_at
-            udf_expr::<RaiseError>(vec![lit("element_at: the index is out of bounds")]),
+            ScalarUDF::from(RaiseError::new())
+                .call(vec![lit("element_at: the index is out of bounds")]),
         )
     };
 
@@ -45,7 +46,7 @@ fn element_at(input: ScalarFunctionInput, is_try: bool) -> PlanResult<expr::Expr
         | DataType::FixedSizeList(..)
         | DataType::LargeList(_)
         | DataType::LargeListView(_) => {
-            when(element.clone().eq(lit(0)), udf_expr::<RaiseError>(
+            when(element.clone().eq(lit(0)), ScalarUDF::from(RaiseError::new()).call(
             vec![lit(format!("{name}: the index 0 is invalid. An index shall be either < 0 or > 0 (the first element has index 1)"))]
                 )).when( abs(element.clone()).not_between(lit(1), expr_fn::array_length(collection.clone())),
                 null_or_out_of_bounds
@@ -55,7 +56,7 @@ fn element_at(input: ScalarFunctionInput, is_try: bool) -> PlanResult<expr::Expr
         DataType::Map(..) => {
             expr_fn::array_element(expr_fn::map_extract(collection, element), lit(1))
         }
-        wrong_type => udf_expr::<RaiseError>(vec![lit(format!(
+        wrong_type => ScalarUDF::from(RaiseError::new()).call(vec![lit(format!(
             "{name} expects List or Map type as first argument, got {wrong_type:?}",
         ))]),
     })
