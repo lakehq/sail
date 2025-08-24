@@ -6,11 +6,15 @@ use datafusion::arrow::array::{Array, ArrayRef, StringArray};
 use datafusion::arrow::datatypes::{DataType, Field, Fields};
 use datafusion_common::utils::take_function_args;
 use datafusion_common::{internal_err, Result};
-use datafusion_expr::{ColumnarValue, ScalarUDFImpl, Signature, TypeSignature, Volatility};
+use datafusion_expr::function::Hint;
+use datafusion_expr::{
+    ColumnarValue, ReturnFieldArgs, ScalarFunctionArgs, ScalarUDFImpl, Signature, TypeSignature,
+    Volatility,
+};
 use datafusion_functions::utils::make_scalar_function;
 
 use crate::extension::function::map::map_function::map_from_arrays_inner;
-use crate::extension::function::string::spark_split::{spark_split_inner, split_to_array};
+use crate::extension::function::string::spark_split::{split_to_array, SparkSplit};
 
 #[derive(Debug)]
 pub struct StrToMap {
@@ -44,7 +48,7 @@ impl ScalarUDFImpl for StrToMap {
     }
 
     fn name(&self) -> &str {
-        "map"
+        "str_to_map"
     }
 
     fn signature(&self) -> &Signature {
@@ -69,16 +73,40 @@ impl ScalarUDFImpl for StrToMap {
     }
 
     fn invoke_with_args(&self, args: datafusion_expr::ScalarFunctionArgs) -> Result<ColumnarValue> {
-        make_scalar_function(str_to_map_inner, vec![])(&args.args)
+        let [strs, pair_delims, key_value_delims] = take_function_args("str_to_map", args.args)?;
+        let split_func = SparkSplit::new();
+
+        let args_for_split = vec![strs, pair_delims];
+        let fields_for_split = vec![args.arg_fields[0].clone(), args.arg_fields[1].clone()];
+        let scalars_for_split = args_for_split
+            .iter()
+            .map(|arg| match arg {
+                ColumnarValue::Scalar(scalar) => Some(scalar),
+                _ => None,
+            })
+            .collect::<Vec<_>>();
+        let split_return_field = split_func.return_field_from_args(ReturnFieldArgs {
+            arg_fields: fields_for_split.as_slice(),
+            scalar_arguments: scalars_for_split.as_slice(),
+        })?;
+
+        let split_result = split_func.invoke_with_args(ScalarFunctionArgs {
+            args: args_for_split,
+            arg_fields: fields_for_split,
+            number_rows: args.number_rows,
+            return_field: split_return_field,
+        })?;
+
+        make_scalar_function(str_to_map_inner, [Hint::AcceptsSingular].repeat(2))(&[
+            split_result,
+            key_value_delims,
+        ])
     }
 }
 
 fn str_to_map_inner(args: &[ArrayRef]) -> Result<ArrayRef> {
-    let [strs, pair_delims, key_value_delims] = take_function_args("str_to_map", args)?;
-
-    let pair_array = spark_split_inner(&[strs.clone(), pair_delims.clone()])?;
-    let pair_lists = pair_array.as_list::<i32>();
-
+    let [pair_strs, key_value_delims] = take_function_args("str_to_map", args)?;
+    let pair_lists = pair_strs.as_list::<i32>();
     match (
         pair_lists.values().as_any().downcast_ref::<StringArray>(),
         key_value_delims.as_any().downcast_ref::<StringArray>(),
@@ -89,11 +117,18 @@ fn str_to_map_inner(args: &[ArrayRef]) -> Result<ArrayRef> {
             let mut keys = Vec::with_capacity(result_row_cnt);
             let mut values = Vec::with_capacity(result_row_cnt);
 
+            let key_value_delim_scalar = if key_value_delim_strs.len() == 1 {
+                Some(key_value_delim_strs.value(0))
+            } else {
+                None
+            };
+
             for rn in 0..pair_offsets.len() - 1 {
                 if pair_lists.is_null(rn) {
                     continue;
                 }
-                let key_value_delim = key_value_delim_strs.value(rn);
+                let key_value_delim =
+                    key_value_delim_scalar.unwrap_or_else(|| key_value_delim_strs.value(rn));
 
                 for pair_rn in pair_offsets[rn]..pair_offsets[rn + 1] {
                     let pair = pair_strs.value(pair_rn as usize);

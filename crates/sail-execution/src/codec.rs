@@ -75,6 +75,7 @@ use sail_plan::extension::function::drop_struct_field::DropStructField;
 use sail_plan::extension::function::explode::{explode_name_to_kind, Explode};
 use sail_plan::extension::function::kurtosis::KurtosisFunction;
 use sail_plan::extension::function::map::map_function::MapFunction;
+use sail_plan::extension::function::map::str_to_map::StrToMap;
 use sail_plan::extension::function::math::least_greatest::{Greatest, Least};
 use sail_plan::extension::function::math::rand_poisson::RandPoisson;
 use sail_plan::extension::function::math::randn::Randn;
@@ -1003,6 +1004,7 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
             "spark_try_subtract" | "try_subtract" => {
                 Ok(Arc::new(ScalarUDF::from(SparkTrySubtract::new())))
             }
+            "str_to_map" => Ok(Arc::new(ScalarUDF::from(StrToMap::new()))),
             "parse_url" => Ok(Arc::new(ScalarUDF::from(ParseUrl::new()))),
             "url_decode" => Ok(Arc::new(ScalarUDF::from(UrlDecode::new()))),
             "url_encode" => Ok(Arc::new(ScalarUDF::from(UrlEncode::new()))),
@@ -1083,6 +1085,7 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
             || node.inner().as_any().is::<SparkTryMod>()
             || node.inner().as_any().is::<SparkTryMult>()
             || node.inner().as_any().is::<SparkTrySubtract>()
+            || node.inner().as_any().is::<StrToMap>()
             || node.inner().as_any().is::<ParseUrl>()
             || node.inner().as_any().is::<UrlDecode>()
             || node.inner().as_any().is::<UrlEncode>()
