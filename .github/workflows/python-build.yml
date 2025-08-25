@@ -80,9 +80,6 @@ jobs:
             -t lcov --branch --ignore-not-existing \
             -o coverage-python-${{ matrix.spark-version }}.info
 
-      - name: Record Rust version
-        run: echo "RUST=$(rustc --version)" >> "$GITHUB_ENV"
-
       - name: Upload python coverage artifact
         uses: actions/upload-artifact@v4
         with:

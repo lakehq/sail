@@ -84,9 +84,6 @@ jobs:
           -t lcov --branch --ignore-not-existing
           -o coverage-build.info
 
-      - name: Record Rust version
-        run: echo "RUST=$(rustc --version)" >> "$GITHUB_ENV"
-
       - name: Upload cargo coverage artifact
         uses: actions/upload-artifact@v4
         with:
@@ -170,7 +167,7 @@ jobs:
           token: ${{ secrets.CODECOV_TOKEN }}
           directory: ./coverage-reports/
           fail_ci_if_error: true
-          env_vars: OS,RUST
+          env_vars: OS
 
   docs-deploy:
     name: Docs Deploy

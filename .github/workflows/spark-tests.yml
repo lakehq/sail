@@ -177,9 +177,6 @@ jobs:
             -t lcov --branch --ignore-not-existing \
             -o coverage-spark-${{ inputs.spark_version }}.info
 
-      - name: Record Rust version
-        run: echo "RUST=$(rustc --version)" >> "$GITHUB_ENV"
-
       - name: Upload spark coverage artifact
         uses: actions/upload-artifact@v4
         with:
