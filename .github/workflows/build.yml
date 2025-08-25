@@ -80,19 +80,16 @@ jobs:
 
       # Generate coverage report after tests
       - name: Generate coverage report
-        run: grcov target --binary-path target/debug/ -s . -t lcov --branch --ignore-not-existing -o coverage-build.info
+        run: grcov target --binary-path target/debug/ -s .
+          -t lcov --branch --ignore-not-existing
+          -o coverage-build.info
 
-      - name: Record Rust version
-        run: echo "RUST=$(rustc --version)" >> "$GITHUB_ENV"
-
-      - name: Upload cargo coverage reports to Codecov
-        uses: codecov/codecov-action@v5
+      - name: Upload cargo coverage artifact
+        uses: actions/upload-artifact@v4
         with:
-          token: ${{ secrets.CODECOV_TOKEN }}
-          flags: cargo
-          fail_ci_if_error: true
-          env_vars: OS,RUST
-          files: "coverage-build.info"
+          name: cargo-coverage-report
+          path: coverage-build.info
+          retention-days: 1
 
       - name: Build Python Package
         uses: PyO3/maturin-action@v1
@@ -113,8 +110,6 @@ jobs:
         spark-version: ["3.5.5", "4.0.0"]
     with:
       spark_version: ${{ matrix.spark-version }}
-    secrets:
-      CODECOV_TOKEN: ${{ secrets.CODECOV_TOKEN }}
     needs:
       - setup
       - build
@@ -123,8 +118,6 @@ jobs:
     name: Python Build
     if: ${{ needs.setup.outputs.build_package == 'true' }}
     uses: ./.github/workflows/python-build.yml
-    secrets:
-      CODECOV_TOKEN: ${{ secrets.CODECOV_TOKEN }}
     needs:
       - setup
       - build
@@ -144,6 +137,44 @@ jobs:
       stage: ${{ matrix.stage }}
       version: main
       package_run_id: ${{ needs.setup.outputs.build_package == 'true' && github.run_id || needs.setup.outputs.baseline_run_id }}
+
+  upload-coverage:
+    name: Upload Coverage Reports
+    runs-on: ubuntu-latest
+    needs:
+      - build
+      - python-build
+      - spark-tests
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Download all coverage artifacts
+        uses: actions/download-artifact@v4
+        with:
+          path: coverage-reports
+          pattern: "*-coverage-report*"
+          merge-multiple: true
+
+      - name: List downloaded files and count coverage files
+        id: coverage-check
+        run: |
+          echo "Downloaded coverage reports:"
+          find coverage-reports -type f -name "*.info" || echo "No .info files found"
+          ls -la coverage-reports/ || echo "No coverage-reports directory"
+
+          # Count the number of .info files
+          coverage_count=$(find coverage-reports -type f -name "*.info" 2>/dev/null | wc -l)
+          echo "Number of coverage files found: $coverage_count"
+          echo "coverage_count=$coverage_count" >> $GITHUB_OUTPUT
+
+      - name: Upload all coverage reports to Codecov
+        if: steps.coverage-check.outputs.coverage_count >= 4
+        uses: codecov/codecov-action@v5
+        with:
+          token: ${{ secrets.CODECOV_TOKEN }}
+          directory: ./coverage-reports/
+          fail_ci_if_error: true
+          env_vars: OS
 
   docs-deploy:
     name: Docs Deploy

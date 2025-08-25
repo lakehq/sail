@@ -7,10 +7,6 @@ on:
         description: The Spark version to test
         type: string
         default: "4.0.0"
-    secrets:
-      CODECOV_TOKEN:
-        description: Token for uploading coverage to Codecov
-        required: true
 
 jobs:
   setup:
@@ -177,19 +173,16 @@ jobs:
           wait
           BINARY_PATH=$(hatch run python -c 'import pysail._native; import os; print(os.path.dirname(pysail._native.__file__))')
           echo "Binary path: $BINARY_PATH"
-          grcov target --binary-path "$BINARY_PATH" -s . -t lcov --branch --ignore-not-existing -o coverage-spark-${{ inputs.spark_version }}.info
+          grcov target --binary-path "$BINARY_PATH" -s . \
+            -t lcov --branch --ignore-not-existing \
+            -o coverage-spark-${{ inputs.spark_version }}.info
 
-      - name: Record Rust version
-        run: echo "RUST=$(rustc --version)" >> "$GITHUB_ENV"
-
-      - name: Upload spark coverage reports to Codecov
-        uses: codecov/codecov-action@v5
+      - name: Upload spark coverage artifact
+        uses: actions/upload-artifact@v4
         with:
-          token: ${{ secrets.CODECOV_TOKEN }}
-          flags: spark
-          fail_ci_if_error: true
-          env_vars: OS,RUST
-          files: "coverage-spark-${{ inputs.spark_version }}.info"
+          name: spark-coverage-report-${{ inputs.spark_version }}
+          path: coverage-spark-${{ inputs.spark_version }}.info
+          retention-days: 1
 
       - name: Upload Test Logs
         uses: actions/upload-artifact@v4
