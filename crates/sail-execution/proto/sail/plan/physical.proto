@@ -30,6 +30,9 @@ message ExtendedPhysicalPlanNode {
     DeltaWriterExecNode delta_writer = 16;
     DeltaCommitExecNode delta_commit = 17;
     AvroExecNode avro = 18;
+    ConsoleSinkExecNode console_sink = 19;
+    SocketSourceExecNode socket_source = 20;
+    RateSourceExecNode rate_source = 21;
   }
 }
 
@@ -335,6 +338,26 @@ message DeltaCommitExecNode {
   repeated string partition_columns = 3;
   bool table_exists = 4;
   bytes sink_schema = 5;
+}
+
+message ConsoleSinkExecNode {
+  bytes input = 1;
+}
+
+message SocketSourceExecNode {
+  string host = 1;
+  uint32 port = 2;
+  uint64 max_batch_size = 3;
+  uint64 timeout_sec = 4;
+  bytes schema = 5;
+  repeated uint64 projection = 6;
+}
+
+message RateSourceExecNode {
+  uint64 rows_per_second = 1;
+  uint64 num_partitions = 2;
+  bytes schema = 3;
+  repeated uint64 projection = 4;
 }
 
 message JoinOn {

@@ -1,8 +1,11 @@
 pub mod arrow;
 pub mod avro;
+pub mod console;
 pub mod csv;
 pub mod delta;
 pub mod json;
 pub mod listing;
 pub mod parquet;
+pub mod rate;
+pub mod socket;
 pub mod text;

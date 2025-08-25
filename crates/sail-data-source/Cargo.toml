@@ -27,6 +27,9 @@ deltalake = { workspace = true }
 log = { workspace = true }
 uuid = { workspace = true }
 bytes = { workspace = true }
+tokio = { workspace = true }
+tokio-stream = { workspace = true }
+chrono = { workspace = true }
 
 [build-dependencies]
 serde = { workspace = true }

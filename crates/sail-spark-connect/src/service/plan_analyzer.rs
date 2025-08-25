@@ -71,7 +71,7 @@ pub(crate) async fn handle_analyze_explain(
         mode: explain_mode.try_into()?,
         input: Box::new(plan.try_into()?),
     }));
-    let plan = resolve_and_execute_plan(ctx, spark.plan_config()?, explain).await?;
+    let (plan, _) = resolve_and_execute_plan(ctx, spark.plan_config()?, explain).await?;
     let stream = spark.job_runner().execute(ctx, plan).await?;
     let batches = read_stream(stream).await?;
     Ok(ExplainResponse {

@@ -2,6 +2,8 @@ use std::collections::HashMap;
 use std::fmt::Debug;
 use std::sync::{Arc, Mutex};
 
+use datafusion::execution::SendableRecordBatchStream;
+use datafusion::logical_expr::StringifiedPlan;
 use sail_common::datetime::get_system_timezone;
 use sail_common_datafusion::extension::SessionExtension;
 use sail_execution::job::JobRunner;
@@ -9,9 +11,13 @@ use sail_plan::config::PlanConfig;
 use tokio::time::Instant;
 
 use crate::config::{ConfigKeyValue, SparkRuntimeConfig};
-use crate::error::{SparkError, SparkResult};
+use crate::error::{SparkError, SparkResult, SparkThrowable};
 use crate::executor::Executor;
 use crate::spark::config::SPARK_SQL_SESSION_TIME_ZONE;
+use crate::streaming::{
+    StreamingQuery, StreamingQueryAwaitHandle, StreamingQueryAwaitHandleSet, StreamingQueryId,
+    StreamingQueryManager, StreamingQueryStatus,
+};
 
 /// A Spark session extension to the DataFusion [`SessionContext`].
 ///
@@ -175,6 +181,89 @@ impl SparkSession {
         Ok(removed)
     }
 
+    pub(crate) fn start_streaming_query(
+        &self,
+        name: String,
+        info: Vec<StringifiedPlan>,
+        stream: SendableRecordBatchStream,
+    ) -> SparkResult<StreamingQueryId> {
+        // Here we always generate new query ID and run ID regardless of whether the query
+        // is started from a checkpoint. This may be different from the Spark behavior.
+        let id = StreamingQueryId {
+            query_id: uuid::Uuid::new_v4().to_string(),
+            run_id: uuid::Uuid::new_v4().to_string(),
+        };
+        let mut state = self.state.lock()?;
+        let query = StreamingQuery::new(name, info, stream);
+        state.streaming_queries.add_query(id.clone(), query);
+        Ok(id)
+    }
+
+    pub(crate) fn stop_streaming_query(&self, id: &StreamingQueryId) -> SparkResult<()> {
+        let mut state = self.state.lock()?;
+        state.streaming_queries.stop_query(id)?;
+        Ok(())
+    }
+
+    pub(crate) fn explain_streaming_query(
+        &self,
+        id: &StreamingQueryId,
+        extended: bool,
+    ) -> SparkResult<String> {
+        let state = self.state.lock()?;
+        state.streaming_queries.explain_query(id, extended)
+    }
+
+    pub(crate) fn get_streaming_query_status(
+        &self,
+        id: &StreamingQueryId,
+    ) -> SparkResult<StreamingQueryStatus> {
+        let state = self.state.lock()?;
+        state.streaming_queries.get_query_status(id)
+    }
+
+    pub(crate) fn get_streaming_query_exception(
+        &self,
+        id: &StreamingQueryId,
+    ) -> SparkResult<Option<SparkThrowable>> {
+        let state = self.state.lock()?;
+        state.streaming_queries.get_query_error(id)
+    }
+
+    pub(crate) fn await_streaming_query(
+        &self,
+        id: &StreamingQueryId,
+    ) -> SparkResult<Option<StreamingQueryAwaitHandle>> {
+        let state = self.state.lock()?;
+        state.streaming_queries.await_query(id)
+    }
+
+    pub(crate) fn await_streaming_queries(&self) -> SparkResult<StreamingQueryAwaitHandleSet> {
+        let state = self.state.lock()?;
+        state.streaming_queries.await_queries()
+    }
+
+    pub(crate) fn list_active_streaming_queries(
+        &self,
+    ) -> SparkResult<Vec<(StreamingQueryId, StreamingQueryStatus)>> {
+        let state = self.state.lock()?;
+        Ok(state.streaming_queries.list_active_queries())
+    }
+
+    pub(crate) fn find_streaming_query_by_query_id(
+        &self,
+        query_id: &str,
+    ) -> SparkResult<(StreamingQueryId, StreamingQueryStatus)> {
+        let state = self.state.lock()?;
+        state.streaming_queries.find_query_by_query_id(query_id)
+    }
+
+    pub(crate) fn reset_terminated_streaming_queries(&self) -> SparkResult<()> {
+        let mut state = self.state.lock()?;
+        state.streaming_queries.reset_stopped_queries();
+        Ok(())
+    }
+
     pub(crate) fn job_runner(&self) -> &dyn JobRunner {
         self.job_runner.as_ref()
     }
@@ -194,6 +283,7 @@ impl SparkSession {
 struct SparkSessionState {
     config: SparkRuntimeConfig,
     executors: HashMap<String, Arc<Executor>>,
+    streaming_queries: StreamingQueryManager,
     /// The time when the Spark session is last seen as active.
     active_at: Instant,
 }
@@ -203,6 +293,7 @@ impl SparkSessionState {
         Self {
             config: SparkRuntimeConfig::new(),
             executors: HashMap::new(),
+            streaming_queries: StreamingQueryManager::new(),
             active_at: Instant::now(),
         }
     }
