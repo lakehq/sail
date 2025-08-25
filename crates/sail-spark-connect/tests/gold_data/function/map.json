@@ -270,7 +270,7 @@
         }
       },
       "output": {
-        "failure": "not implemented: function: str_to_map"
+        "success": "ok"
       }
     },
     {
@@ -297,7 +297,7 @@
         }
       },
       "output": {
-        "failure": "not implemented: function: str_to_map"
+        "success": "ok"
       }
     }
   ]
