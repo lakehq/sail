@@ -58,7 +58,7 @@ pub struct WriterConfig {
     /// Properties passed to underlying parquet writer
     pub writer_properties: WriterProperties,
     /// Size above which we will write a buffered parquet file to disk
-    pub target_file_size: usize,
+    pub target_file_size: u64,
     /// Row chunks passed to parquet writer
     pub write_batch_size: usize,
     /// Number of indexed columns for statistics
@@ -72,7 +72,7 @@ impl WriterConfig {
         table_schema: ArrowSchemaRef,
         partition_columns: Vec<String>,
         writer_properties: Option<WriterProperties>,
-        target_file_size: usize,
+        target_file_size: u64,
         write_batch_size: usize,
         num_indexed_cols: i32,
         stats_columns: Option<Vec<String>>,
@@ -224,7 +224,7 @@ pub struct PartitionWriterConfig {
     /// Properties passed to underlying parquet writer
     pub writer_properties: WriterProperties,
     /// Size above which we will write a buffered parquet file to disk
-    pub target_file_size: usize,
+    pub target_file_size: u64,
     /// Row chunks passed to parquet writer
     pub write_batch_size: usize,
 }
@@ -235,7 +235,7 @@ impl PartitionWriterConfig {
         file_schema: ArrowSchemaRef,
         partition_values: IndexMap<String, Scalar>,
         writer_properties: WriterProperties,
-        target_file_size: usize,
+        target_file_size: u64,
         write_batch_size: usize,
     ) -> Self {
         let partition_segments = partition_values.hive_partition_segments();
@@ -324,7 +324,7 @@ impl PartitionWriter {
             } else {
                 0
             };
-            let estimated_size = buffer_len + in_progress_size;
+            let estimated_size: u64 = buffer_len as u64 + in_progress_size as u64;
 
             if estimated_size >= self.config.target_file_size {
                 self.flush_writer().await?;

@@ -31,7 +31,9 @@ use url::Url;
 use uuid::Uuid;
 
 use crate::delta_datafusion::type_converter::DeltaTypeConverter;
-use crate::delta_datafusion::{parse_predicate_expression, DataFusionMixins};
+use crate::delta_datafusion::{
+    delta_to_datafusion_error, parse_predicate_expression, DataFusionMixins,
+};
 use crate::delta_format::CommitInfo;
 use crate::operations::write::execution::{prepare_predicate_actions_physical, WriterStatsConfig};
 use crate::operations::write::writer::{DeltaWriter, WriterConfig};
@@ -490,11 +492,12 @@ impl DeltaWriterExec {
         schema_mode: Option<SchemaMode>,
     ) -> Result<(SchemaRef, Vec<Action>)> {
         let table_metadata = table
-            .metadata()
-            .map_err(|e| DataFusionError::External(Box::new(e)))?;
+            .snapshot()
+            .map_err(delta_to_datafusion_error)?
+            .metadata();
         let table_schema = table_metadata
             .parse_schema()
-            .map_err(|e: delta_kernel::Error| DataFusionError::External(Box::new(e)))?;
+            .map_err(|e| DataFusionError::External(Box::new(e)))?;
         let table_arrow_schema = std::sync::Arc::new((&table_schema).try_into_arrow()?);
 
         match schema_mode {
@@ -509,8 +512,9 @@ impl DeltaWriterExec {
                         .map_err(|e| DataFusionError::External(Box::new(e)))?;
 
                     let current_metadata = table
-                        .metadata()
-                        .map_err(|e| DataFusionError::External(Box::new(e)))?;
+                        .snapshot()
+                        .map_err(delta_to_datafusion_error)?
+                        .metadata();
                     // TODO: Follow upstream for `with_schema`
                     #[allow(deprecated)]
                     let new_metadata = current_metadata
@@ -531,8 +535,9 @@ impl DeltaWriterExec {
                     .map_err(|e| DataFusionError::External(Box::new(e)))?;
 
                 let current_metadata = table
-                    .metadata()
-                    .map_err(|e| DataFusionError::External(Box::new(e)))?;
+                    .snapshot()
+                    .map_err(delta_to_datafusion_error)?
+                    .metadata();
                 // TODO: Follow upstream for `with_schema`
                 #[allow(deprecated)]
                 let new_metadata = current_metadata

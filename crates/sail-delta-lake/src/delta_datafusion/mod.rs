@@ -293,6 +293,7 @@ fn arrow_type_from_delta_type(
                 .collect::<Result<Vec<_>, DeltaTableError>>()?;
             ArrowDataType::Struct(fields.into())
         }
+        DeltaType::Variant(_) => todo!(),
     })
 }
 
