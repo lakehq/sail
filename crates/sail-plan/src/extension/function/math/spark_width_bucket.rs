@@ -210,7 +210,7 @@ macro_rules! width_bucket_kernel_impl {
                         b.append_value(0);
                         continue;
                     }
-                    if x > h {
+                    if x >= h {
                         b.append_value(buckets + 1);
                         continue;
                     }
@@ -219,7 +219,7 @@ macro_rules! width_bucket_kernel_impl {
                         b.append_value(0);
                         continue;
                     }
-                    if x < h {
+                    if x <= h {
                         b.append_value(buckets + 1);
                         continue;
                     }
