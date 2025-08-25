@@ -2571,7 +2571,7 @@
         }
       },
       "output": {
-        "failure": "not implemented: function: width_bucket"
+        "success": "ok"
       }
     },
     {
@@ -2593,7 +2593,7 @@
         }
       },
       "output": {
-        "failure": "not implemented: function: width_bucket"
+        "success": "ok"
       }
     },
     {
@@ -2615,7 +2615,7 @@
         }
       },
       "output": {
-        "failure": "not implemented: function: width_bucket"
+        "success": "ok"
       }
     },
     {
@@ -2637,7 +2637,7 @@
         }
       },
       "output": {
-        "failure": "not implemented: function: width_bucket"
+        "success": "ok"
       }
     },
     {
@@ -2659,7 +2659,7 @@
         }
       },
       "output": {
-        "failure": "not implemented: function: width_bucket"
+        "success": "ok"
       }
     },
     {
@@ -2681,7 +2681,7 @@
         }
       },
       "output": {
-        "failure": "not implemented: function: width_bucket"
+        "success": "ok"
       }
     },
     {
@@ -2703,7 +2703,7 @@
         }
       },
       "output": {
-        "failure": "not implemented: function: width_bucket"
+        "success": "ok"
       }
     },
     {
@@ -2725,7 +2725,7 @@
         }
       },
       "output": {
-        "failure": "not implemented: function: width_bucket"
+        "success": "ok"
       }
     }
   ]
