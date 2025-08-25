@@ -583,11 +583,8 @@ impl PlanFormatter for SparkPlanFormatter {
                 let arguments = arguments.join(", ");
                 Ok(format!("{}({arguments})", name.to_lowercase()))
             }
-            "regexp_replace" => {
-                let default_arg = if arguments.len() == 3 { ", 1" } else { "" };
-                let arguments = arguments.join(", ");
-                Ok(format!("{name}({arguments}{default_arg})"))
-            }
+            "position" | "locate" => Ok(append_start_pos_if_arglen_eq(2, name, arguments)),
+            "regexp_replace" => Ok(append_start_pos_if_arglen_eq(3, name, arguments)),
             // When the data type being exploded is `ExplodeDataType::List`, use "col" as the column name.
             "explode" | "explode_outer" => Ok("col".to_string()),
             "current_database" => Ok("current_schema()".to_string()),
@@ -631,6 +628,12 @@ impl Display for BinaryDisplay<'_> {
         }
         write!(f, "'")
     }
+}
+
+fn append_start_pos_if_arglen_eq(arglen: usize, name: &str, args: Vec<&str>) -> String {
+    let start_pos_str = if args.len() == arglen { ", 1" } else { "" };
+    let args = args.join(", ");
+    format!("{name}({args}{start_pos_str})")
 }
 
 fn format_decimal(value: &str, scale: i8) -> String {
