@@ -155,13 +155,20 @@ jobs:
           pattern: "*-coverage-report*"
           merge-multiple: true
 
-      - name: List downloaded files
+      - name: List downloaded files and count coverage files
+        id: coverage-check
         run: |
           echo "Downloaded coverage reports:"
           find coverage-reports -type f -name "*.info" || echo "No .info files found"
           ls -la coverage-reports/ || echo "No coverage-reports directory"
 
+          # Count the number of .info files
+          coverage_count=$(find coverage-reports -type f -name "*.info" 2>/dev/null | wc -l)
+          echo "Number of coverage files found: $coverage_count"
+          echo "coverage_count=$coverage_count" >> $GITHUB_OUTPUT
+
       - name: Upload all coverage reports to Codecov
+        if: steps.coverage-check.outputs.coverage_count >= 4
         uses: codecov/codecov-action@v5
         with:
           token: ${{ secrets.CODECOV_TOKEN }}
