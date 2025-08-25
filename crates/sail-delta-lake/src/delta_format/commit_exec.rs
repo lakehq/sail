@@ -151,10 +151,6 @@ impl ExecutionPlan for DeltaCommitExec {
         }
 
         let stream = self.input.execute(0, Arc::clone(&context))?;
-        let mut streams = Vec::with_capacity(input_partitions);
-        for i in 0..input_partitions {
-            streams.push(self.input.execute(i, Arc::clone(&context))?);
-        }
 
         let table_url = self.table_url.clone();
         let partition_columns = self.partition_columns.clone();
