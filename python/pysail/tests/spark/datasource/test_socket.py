@@ -24,7 +24,6 @@ class SocketServer:
             return
         self._socket = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
         self._socket.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
-        self._socket.settimeout(1)
         self._socket.bind((self.host, self.port))
         (_, self.port) = self._socket.getsockname()
         self._socket.listen(1)
@@ -37,6 +36,7 @@ class SocketServer:
     def stop(self):
         self._running = False
         if self._socket is not None:
+            self._socket.shutdown(socket.SHUT_RDWR)
             self._socket.close()
             self._socket = None
         if self._thread is not None:
