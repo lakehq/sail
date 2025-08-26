@@ -47,6 +47,7 @@ pub(crate) struct ScanMetadataArrow {
     /// - `None`: No transformation is needed; the data is already in the correct logical form.
     ///
     /// Note: This vector can be indexed by row number.
+    #[allow(dead_code)]
     pub scan_file_transforms: Vec<Option<ExpressionRef>>,
 }
 
@@ -529,6 +530,7 @@ impl<T: ExpressionEvaluator + ?Sized> ExpressionEvaluatorExt for T {
 /// for conveniently probing the fields / values contained within [`StructData`].
 ///
 /// This trait therefore adds convenience methods for accessing fields and values.
+#[allow(dead_code)]
 pub trait StructDataExt {
     /// Returns a reference to the field with the given name, if it exists.
     fn field(&self, name: &str) -> Option<&StructField>;

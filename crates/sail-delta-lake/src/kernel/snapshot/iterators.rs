@@ -22,7 +22,9 @@ const FIELD_NAME_SIZE: &str = "size";
 const FIELD_NAME_MODIFICATION_TIME: &str = "modificationTime";
 const FIELD_NAME_STATS: &str = "stats";
 const FIELD_NAME_STATS_PARSED: &str = "stats_parsed";
+#[allow(dead_code)]
 const FIELD_NAME_FILE_CONSTANT_VALUES: &str = "fileConstantValues";
+#[allow(dead_code)]
 const FIELD_NAME_PARTITION_VALUES: &str = "partitionValues";
 const FIELD_NAME_PARTITION_VALUES_PARSED: &str = "partitionValues_parsed";
 const FIELD_NAME_DELETION_VECTOR: &str = "deletionVector";
@@ -42,41 +44,48 @@ static FIELD_INDICES: LazyLock<HashMap<&'static str, usize>> = LazyLock::new(|| 
     let schema = scan_row_schema();
     let mut indices = HashMap::new();
 
-    let path_idx = schema.index_of(FIELD_NAME_PATH).unwrap();
-    indices.insert(FIELD_NAME_PATH, path_idx);
+    if let Some(path_idx) = schema.index_of(FIELD_NAME_PATH) {
+        indices.insert(FIELD_NAME_PATH, path_idx);
+    }
 
-    let size_idx = schema.index_of(FIELD_NAME_SIZE).unwrap();
-    indices.insert(FIELD_NAME_SIZE, size_idx);
+    if let Some(size_idx) = schema.index_of(FIELD_NAME_SIZE) {
+        indices.insert(FIELD_NAME_SIZE, size_idx);
+    }
 
-    let modification_time_idx = schema.index_of(FIELD_NAME_MODIFICATION_TIME).unwrap();
-    indices.insert(FIELD_NAME_MODIFICATION_TIME, modification_time_idx);
+    if let Some(modification_time_idx) = schema.index_of(FIELD_NAME_MODIFICATION_TIME) {
+        indices.insert(FIELD_NAME_MODIFICATION_TIME, modification_time_idx);
+    }
 
-    let stats_idx = schema.index_of(FIELD_NAME_STATS).unwrap();
-    indices.insert(FIELD_NAME_STATS, stats_idx);
+    if let Some(stats_idx) = schema.index_of(FIELD_NAME_STATS) {
+        indices.insert(FIELD_NAME_STATS, stats_idx);
+    }
 
     indices
 });
 
 static DV_FIELD_INDICES: LazyLock<HashMap<&'static str, usize>> = LazyLock::new(|| {
     let schema = scan_row_schema();
-    let dv_field = schema.field(FIELD_NAME_DELETION_VECTOR).unwrap();
-    let DataType::Struct(dv_type) = dv_field.data_type() else {
-        panic!("Expected DataType::Struct for deletion vector field");
-    };
-
     let mut indices = HashMap::new();
 
-    let storage_type_idx = dv_type.index_of(DV_FIELD_STORAGE_TYPE).unwrap();
-    indices.insert(DV_FIELD_STORAGE_TYPE, storage_type_idx);
+    if let Some(dv_field) = schema.field(FIELD_NAME_DELETION_VECTOR) {
+        if let DataType::Struct(dv_type) = dv_field.data_type() {
+            if let Some(storage_type_idx) = dv_type.index_of(DV_FIELD_STORAGE_TYPE) {
+                indices.insert(DV_FIELD_STORAGE_TYPE, storage_type_idx);
+            }
 
-    let path_or_inline_dv_idx = dv_type.index_of(DV_FIELD_PATH_OR_INLINE_DV).unwrap();
-    indices.insert(DV_FIELD_PATH_OR_INLINE_DV, path_or_inline_dv_idx);
+            if let Some(path_or_inline_dv_idx) = dv_type.index_of(DV_FIELD_PATH_OR_INLINE_DV) {
+                indices.insert(DV_FIELD_PATH_OR_INLINE_DV, path_or_inline_dv_idx);
+            }
 
-    let size_in_bytes_idx = dv_type.index_of(DV_FIELD_SIZE_IN_BYTES).unwrap();
-    indices.insert(DV_FIELD_SIZE_IN_BYTES, size_in_bytes_idx);
+            if let Some(size_in_bytes_idx) = dv_type.index_of(DV_FIELD_SIZE_IN_BYTES) {
+                indices.insert(DV_FIELD_SIZE_IN_BYTES, size_in_bytes_idx);
+            }
 
-    let cardinality_idx = dv_type.index_of(DV_FIELD_CARDINALITY).unwrap();
-    indices.insert(DV_FIELD_CARDINALITY, cardinality_idx);
+            if let Some(cardinality_idx) = dv_type.index_of(DV_FIELD_CARDINALITY) {
+                indices.insert(DV_FIELD_CARDINALITY, cardinality_idx);
+            }
+        }
+    }
 
     indices
 });
@@ -101,13 +110,12 @@ impl LogicalFileView {
 
     /// Returns the file path with URL decoding applied.
     pub fn path(&self) -> Cow<'_, str> {
-        let raw = get_string_value(
-            self.files
-                .column(*FIELD_INDICES.get(FIELD_NAME_PATH).unwrap()),
-            self.index,
-        )
-        .unwrap();
-        percent_decode_str(raw).decode_utf8_lossy()
+        if let Some(&path_idx) = FIELD_INDICES.get(FIELD_NAME_PATH) {
+            if let Some(raw) = get_string_value(self.files.column(path_idx), self.index) {
+                return percent_decode_str(raw).decode_utf8_lossy();
+            }
+        }
+        Cow::Borrowed("")
     }
 
     /// An object store [`Path`] to the file.
@@ -129,18 +137,26 @@ impl LogicalFileView {
 
     /// Returns the file size in bytes.
     pub fn size(&self) -> i64 {
-        self.files
-            .column(*FIELD_INDICES.get(FIELD_NAME_SIZE).unwrap())
-            .as_primitive::<Int64Type>()
-            .value(self.index)
+        if let Some(&size_idx) = FIELD_INDICES.get(FIELD_NAME_SIZE) {
+            self.files
+                .column(size_idx)
+                .as_primitive::<Int64Type>()
+                .value(self.index)
+        } else {
+            0
+        }
     }
 
     /// Returns the file modification time in milliseconds since Unix epoch.
     pub fn modification_time(&self) -> i64 {
-        self.files
-            .column(*FIELD_INDICES.get(FIELD_NAME_MODIFICATION_TIME).unwrap())
-            .as_primitive::<Int64Type>()
-            .value(self.index)
+        if let Some(&mod_time_idx) = FIELD_INDICES.get(FIELD_NAME_MODIFICATION_TIME) {
+            self.files
+                .column(mod_time_idx)
+                .as_primitive::<Int64Type>()
+                .value(self.index)
+        } else {
+            0
+        }
     }
 
     /// Returns the file modification time as a UTC DateTime.
@@ -155,11 +171,9 @@ impl LogicalFileView {
 
     /// Returns the raw JSON statistics string for this file, if available.
     pub fn stats(&self) -> Option<&str> {
-        get_string_value(
-            self.files
-                .column(*FIELD_INDICES.get(FIELD_NAME_STATS).unwrap()),
-            self.index,
-        )
+        FIELD_INDICES
+            .get(FIELD_NAME_STATS)
+            .and_then(|&stats_idx| get_string_value(self.files.column(stats_idx), self.index))
     }
 
     /// Returns the parsed partition values as structured data.
@@ -251,13 +265,16 @@ impl LogicalFileView {
         dv_col
             .is_valid(self.index)
             .then(|| {
-                let storage_col =
-                    dv_col.column(*DV_FIELD_INDICES.get(DV_FIELD_STORAGE_TYPE).unwrap());
-                storage_col
-                    .is_valid(self.index)
-                    .then(|| DeletionVectorView {
-                        data: dv_col,
-                        index: self.index,
+                DV_FIELD_INDICES
+                    .get(DV_FIELD_STORAGE_TYPE)
+                    .and_then(|&storage_idx| {
+                        let storage_col = dv_col.column(storage_idx);
+                        storage_col
+                            .is_valid(self.index)
+                            .then_some(DeletionVectorView {
+                                data: dv_col,
+                                index: self.index,
+                            })
                     })
             })
             .flatten()
@@ -322,18 +339,22 @@ where
     match value {
         Scalar::Timestamp(v) => Scalar::Timestamp(func(v)),
         Scalar::TimestampNtz(v) => Scalar::TimestampNtz(func(v)),
-        Scalar::Struct(struct_data) => {
+        Scalar::Struct(ref struct_data) => {
             let mut fields = Vec::new();
             let mut scalars = Vec::new();
 
-            for (field, value) in struct_data.fields().iter().zip(struct_data.values().iter()) {
+            for (field, scalar_value) in
+                struct_data.fields().iter().zip(struct_data.values().iter())
+            {
                 fields.push(field.clone());
-                scalars.push(round_ms_datetimes(value.clone(), func));
+                scalars.push(round_ms_datetimes(scalar_value.clone(), func));
             }
-            let data = StructData::try_new(fields, scalars).unwrap();
-            Scalar::Struct(data)
+            match StructData::try_new(fields, scalars) {
+                Ok(data) => Scalar::Struct(data),
+                Err(_) => value, // Return original value if struct creation fails
+            }
         }
-        value => value,
+        other => other,
     }
 }
 
@@ -352,7 +373,7 @@ impl DeletionVectorView<'_> {
     /// Converts this view into a DeletionVectorDescriptor.
     fn descriptor(&self) -> DeletionVectorDescriptor {
         DeletionVectorDescriptor {
-            storage_type: self.storage_type().parse().unwrap(),
+            storage_type: self.storage_type().parse().unwrap_or_default(),
             path_or_inline_dv: self.path_or_inline_dv().to_string(),
             size_in_bytes: self.size_in_bytes(),
             cardinality: self.cardinality(),
@@ -362,38 +383,44 @@ impl DeletionVectorView<'_> {
 
     /// Returns the storage type of the deletion vector.
     fn storage_type(&self) -> &str {
-        get_string_value(
-            self.data
-                .column(*DV_FIELD_INDICES.get(DV_FIELD_STORAGE_TYPE).unwrap()),
-            self.index,
-        )
-        .unwrap()
+        DV_FIELD_INDICES
+            .get(DV_FIELD_STORAGE_TYPE)
+            .and_then(|&idx| get_string_value(self.data.column(idx), self.index))
+            .unwrap_or("")
     }
 
     /// Returns the path or inline data for the deletion vector.
     fn path_or_inline_dv(&self) -> &str {
-        get_string_value(
-            self.data
-                .column(*DV_FIELD_INDICES.get(DV_FIELD_PATH_OR_INLINE_DV).unwrap()),
-            self.index,
-        )
-        .unwrap()
+        DV_FIELD_INDICES
+            .get(DV_FIELD_PATH_OR_INLINE_DV)
+            .and_then(|&idx| get_string_value(self.data.column(idx), self.index))
+            .unwrap_or("")
     }
 
     /// Returns the size of the deletion vector in bytes.
     fn size_in_bytes(&self) -> i32 {
-        self.data
-            .column(*DV_FIELD_INDICES.get(DV_FIELD_SIZE_IN_BYTES).unwrap())
-            .as_primitive::<Int32Type>()
-            .value(self.index)
+        DV_FIELD_INDICES
+            .get(DV_FIELD_SIZE_IN_BYTES)
+            .map(|&idx| {
+                self.data
+                    .column(idx)
+                    .as_primitive::<Int32Type>()
+                    .value(self.index)
+            })
+            .unwrap_or(0)
     }
 
     /// Returns the number of deleted rows represented by this deletion vector.
     fn cardinality(&self) -> i64 {
-        self.data
-            .column(*DV_FIELD_INDICES.get(DV_FIELD_CARDINALITY).unwrap())
-            .as_primitive::<Int64Type>()
-            .value(self.index)
+        DV_FIELD_INDICES
+            .get(DV_FIELD_CARDINALITY)
+            .map(|&idx| {
+                self.data
+                    .column(idx)
+                    .as_primitive::<Int64Type>()
+                    .value(self.index)
+            })
+            .unwrap_or(0)
     }
 
     /// Returns the offset within the deletion vector file, if applicable.
@@ -433,7 +460,8 @@ impl TryFrom<&LogicalFileView> for ObjectMeta {
 
     fn try_from(file_stats: &LogicalFileView) -> Result<Self, Self::Error> {
         Ok(ObjectMeta {
-            location: file_stats.object_store_path(),
+            #[allow(deprecated)]
+            location: file_stats.object_store_path(), // TODO: remove once delta-rs have full url support
             size: file_stats.size() as u64,
             last_modified: file_stats.modification_datetime()?,
             version: None,

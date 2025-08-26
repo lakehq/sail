@@ -116,6 +116,7 @@ pub async fn create_delta_provider(
     Ok(Arc::new(table_provider))
 }
 
+#[allow(dead_code)]
 pub(crate) fn get_partition_col_data_types<'a>(
     schema: &'a deltalake::StructType,
     metadata: &'a deltalake::kernel::Metadata,

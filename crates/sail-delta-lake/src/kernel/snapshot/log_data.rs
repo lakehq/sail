@@ -17,6 +17,7 @@ const COL_MIN_VALUES: &str = "minValues";
 const COL_MAX_VALUES: &str = "maxValues";
 const COL_NULL_COUNT: &str = "nullCount";
 
+#[allow(dead_code)]
 pub(crate) trait PartitionsExt {
     fn hive_partition_path(&self) -> String;
 }
@@ -83,18 +84,22 @@ impl<'a> LogDataHandler<'a> {
         Self { data, config }
     }
 
+    #[allow(dead_code)]
     pub(crate) fn table_configuration(&self) -> &TableConfiguration {
         self.config
     }
 
+    #[allow(dead_code)]
     pub(crate) fn table_properties(&self) -> &TableProperties {
         self.config.table_properties()
     }
 
+    #[allow(dead_code)]
     pub(crate) fn protocol(&self) -> &Protocol {
         self.config.protocol()
     }
 
+    #[allow(dead_code)]
     pub(crate) fn metadata(&self) -> &Metadata {
         self.config.metadata()
     }
@@ -213,7 +218,7 @@ mod datafusion {
 
                 if let Some(mut accumulator) = accumulator {
                     return accumulator
-                        .update_batch(&[array.clone()])
+                        .update_batch(std::slice::from_ref(array))
                         .ok()
                         .and_then(|_| accumulator.evaluate().ok())
                         .map(Precision::Exact)
@@ -239,11 +244,14 @@ mod datafusion {
                     })
                     .collect::<Option<Vec<_>>>()
                     .map(|o| {
-                        let arrays = o
-                            .into_iter()
-                            .map(|sv| sv.to_array())
-                            .collect::<Result<Vec<_>, DataFusionError>>()
-                            .unwrap();
+                        let arrays = match o.into_iter().map(|sv| sv.to_array()).collect::<Result<
+                            Vec<_>,
+                            DataFusionError,
+                        >>(
+                        ) {
+                            Ok(arrays) => arrays,
+                            Err(_) => return Precision::Absent,
+                        };
                         let sa = StructArray::new(fields.clone(), arrays, None);
                         Precision::Exact(ScalarValue::Struct(Arc::new(sa)))
                     })

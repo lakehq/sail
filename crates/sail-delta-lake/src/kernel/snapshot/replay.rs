@@ -72,14 +72,18 @@ pub(crate) fn parse_partitions(
                 .get(f.physical_name())
                 .cloned()
                 .unwrap_or(Scalar::Null(f.data_type().clone()));
-            values.get_mut(f.physical_name()).unwrap().push(value);
+            if let Some(field_values) = values.get_mut(f.physical_name()) {
+                field_values.push(value);
+            }
         });
     }
 
     let columns = partition_schema
         .fields()
         .map(|f| {
-            let values = values.get(f.physical_name()).unwrap();
+            let values = values.get(f.physical_name()).ok_or_else(|| {
+                DeltaTableError::generic(format!("Missing partition field: {}", f.physical_name()))
+            })?;
             match f.data_type() {
                 DataType::Primitive(p) => {
                     // Safety: we created the Scalars above using the parsing function of the same PrimitiveType
@@ -89,70 +93,70 @@ pub(crate) fn parse_partitions(
                             Arc::new(StringArray::from_iter(values.iter().map(|v| match v {
                                 Scalar::String(s) => Some(s.clone()),
                                 Scalar::Null(_) => None,
-                                _ => panic!("unexpected scalar type"),
+                                _ => None, 
                             }))) as ArrayRef
                         }
                         PrimitiveType::Long => {
                             Arc::new(Int64Array::from_iter(values.iter().map(|v| match v {
                                 Scalar::Long(i) => Some(*i),
                                 Scalar::Null(_) => None,
-                                _ => panic!("unexpected scalar type"),
+                                _ => None, 
                             }))) as ArrayRef
                         }
                         PrimitiveType::Integer => {
                             Arc::new(Int32Array::from_iter(values.iter().map(|v| match v {
                                 Scalar::Integer(i) => Some(*i),
                                 Scalar::Null(_) => None,
-                                _ => panic!("unexpected scalar type"),
+                                _ => None, 
                             }))) as ArrayRef
                         }
                         PrimitiveType::Short => {
                             Arc::new(Int16Array::from_iter(values.iter().map(|v| match v {
                                 Scalar::Short(i) => Some(*i),
                                 Scalar::Null(_) => None,
-                                _ => panic!("unexpected scalar type"),
+                                _ => None, 
                             }))) as ArrayRef
                         }
                         PrimitiveType::Byte => {
                             Arc::new(Int8Array::from_iter(values.iter().map(|v| match v {
                                 Scalar::Byte(i) => Some(*i),
                                 Scalar::Null(_) => None,
-                                _ => panic!("unexpected scalar type"),
+                                _ => None, 
                             }))) as ArrayRef
                         }
                         PrimitiveType::Float => {
                             Arc::new(Float32Array::from_iter(values.iter().map(|v| match v {
                                 Scalar::Float(f) => Some(*f),
                                 Scalar::Null(_) => None,
-                                _ => panic!("unexpected scalar type"),
+                                _ => None, 
                             }))) as ArrayRef
                         }
                         PrimitiveType::Double => {
                             Arc::new(Float64Array::from_iter(values.iter().map(|v| match v {
                                 Scalar::Double(f) => Some(*f),
                                 Scalar::Null(_) => None,
-                                _ => panic!("unexpected scalar type"),
+                                _ => None, 
                             }))) as ArrayRef
                         }
                         PrimitiveType::Boolean => {
                             Arc::new(BooleanArray::from_iter(values.iter().map(|v| match v {
                                 Scalar::Boolean(b) => Some(*b),
                                 Scalar::Null(_) => None,
-                                _ => panic!("unexpected scalar type"),
+                                _ => None, 
                             }))) as ArrayRef
                         }
                         PrimitiveType::Binary => {
                             Arc::new(BinaryArray::from_iter(values.iter().map(|v| match v {
                                 Scalar::Binary(b) => Some(b.clone()),
                                 Scalar::Null(_) => None,
-                                _ => panic!("unexpected scalar type"),
+                                _ => None, 
                             }))) as ArrayRef
                         }
                         PrimitiveType::Date => {
                             Arc::new(Date32Array::from_iter(values.iter().map(|v| match v {
                                 Scalar::Date(d) => Some(*d),
                                 Scalar::Null(_) => None,
-                                _ => panic!("unexpected scalar type"),
+                                _ => None, 
                             }))) as ArrayRef
                         }
 
@@ -160,7 +164,7 @@ pub(crate) fn parse_partitions(
                             TimestampMicrosecondArray::from_iter(values.iter().map(|v| match v {
                                 Scalar::Timestamp(t) => Some(*t),
                                 Scalar::Null(_) => None,
-                                _ => panic!("unexpected scalar type"),
+                                _ => None, 
                             }))
                             .with_timezone("UTC"),
                         ) as ArrayRef,
@@ -168,16 +172,22 @@ pub(crate) fn parse_partitions(
                             TimestampMicrosecondArray::from_iter(values.iter().map(|v| match v {
                                 Scalar::TimestampNtz(t) => Some(*t),
                                 Scalar::Null(_) => None,
-                                _ => panic!("unexpected scalar type"),
+                                _ => None, 
                             })),
                         ) as ArrayRef,
                         PrimitiveType::Decimal(decimal) => Arc::new(
                             Decimal128Array::from_iter(values.iter().map(|v| match v {
                                 Scalar::Decimal(decimal) => Some(decimal.bits()),
                                 Scalar::Null(_) => None,
-                                _ => panic!("unexpected scalar type"),
+                                _ => None, 
                             }))
-                            .with_precision_and_scale(decimal.precision(), decimal.scale() as i8)?,
+                            .with_precision_and_scale(decimal.precision(), decimal.scale() as i8)
+                            .map_err(|e| {
+                                DeltaTableError::generic(format!(
+                                    "Decimal precision/scale error: {}",
+                                    e
+                                ))
+                            })?,
                         ) as ArrayRef,
                     };
                     Ok(arr)

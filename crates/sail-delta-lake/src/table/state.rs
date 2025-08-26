@@ -134,17 +134,16 @@ impl DeltaTableState {
     }
 
     /// Get the number of files in the current table state
-    #[deprecated = "Count any of the file-like iterators instead."]
-    pub fn files_count(&self) -> usize {
-        self.snapshot.files_count()
-    }
+    // #[deprecated = "Count any of the file-like iterators instead."]
+    // pub fn files_count(&self) -> usize {
+    //     self.snapshot.files_count()
+    // }
 
     /// Returns an iterator of file names present in the loaded state
     // #[inline]
     // pub fn file_paths_iter(&self) -> impl Iterator<Item = Path> + '_ {
     //     self.log_data().iter().map(|add| add.object_store_path())
     // }
-
     /// Get the transaction version for the given application ID.
     ///
     /// Returns `None` if the application ID is not found.

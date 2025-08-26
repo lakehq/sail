@@ -37,8 +37,17 @@ pub mod replay;
 mod serde;
 mod stream;
 
-pub(crate) static SCAN_ROW_ARROW_SCHEMA: LazyLock<arrow_schema::SchemaRef> =
-    LazyLock::new(|| Arc::new(scan_row_schema().as_ref().try_into_arrow().unwrap()));
+pub(crate) static SCAN_ROW_ARROW_SCHEMA: LazyLock<arrow_schema::SchemaRef> = LazyLock::new(|| {
+    Arc::new(
+        scan_row_schema()
+            .as_ref()
+            .try_into_arrow()
+            .unwrap_or_else(|_| {
+                // Fallback to an empty schema if conversion fails
+                arrow_schema::Schema::empty()
+            }),
+    )
+});
 
 /// A snapshot of a Delta table
 #[derive(Debug, Clone, PartialEq)]
@@ -154,6 +163,7 @@ impl Snapshot {
     }
 
     /// Get the table root of the snapshot
+    #[allow(dead_code)]
     pub(crate) fn table_root_path(&self) -> DeltaResult<Path> {
         Ok(Path::from_url_path(self.table_url.path())?)
     }
@@ -237,6 +247,7 @@ impl Snapshot {
     ///
     /// A stream of commit infos.
     // TODO: move outer error into stream.
+    #[allow(dead_code)]
     pub(crate) async fn commit_infos(
         &self,
         log_store: &dyn LogStore,
@@ -255,7 +266,8 @@ impl Snapshot {
             .as_str(),
         );
 
-        let dummy_url = url::Url::parse("memory:///").unwrap();
+        let dummy_url = url::Url::parse("memory:///")
+            .map_err(|e| DeltaTableError::generic(format!("Failed to parse dummy URL: {}", e)))?;
         let mut commit_files = Vec::new();
         for meta in store
             .list_with_offset(Some(&log_root), &start_from)
@@ -263,7 +275,9 @@ impl Snapshot {
             .await?
         {
             // safety: object store path are always valid urls paths.
-            let dummy_path = dummy_url.join(meta.location.as_ref()).unwrap();
+            let dummy_path = dummy_url
+                .join(meta.location.as_ref())
+                .map_err(|e| DeltaTableError::generic(format!("Failed to join URL path: {}", e)))?;
             if let Some(parsed_path) = ParsedLogPath::try_from(dummy_path)? {
                 if matches!(parsed_path.file_type, LogPathFileType::Commit) {
                     commit_files.push(meta);
@@ -554,21 +568,17 @@ impl EagerSnapshot {
                 }
             };
 
-            let files = match concat_batches(&SCAN_ROW_ARROW_SCHEMA, &files)
+            match concat_batches(&SCAN_ROW_ARROW_SCHEMA, &files)
                 .map_err(DeltaTableError::from)
                 .and_then(|batch| self.snapshot.inner.parse_stats_column(&batch))
             {
                 Ok(files) => files,
                 Err(err) => return Box::pin(futures::stream::once(async { Err(err) })),
-            };
-
-            files
+            }
         } else {
             self.files.clone()
         };
-        let iter = (0..data.num_rows())
-            .into_iter()
-            .map(move |i| Ok(LogicalFileView::new(data.clone(), i)));
+        let iter = (0..data.num_rows()).map(move |i| Ok(LogicalFileView::new(data.clone(), i)));
         futures::stream::iter(iter).boxed()
     }
 
@@ -584,6 +594,7 @@ impl EagerSnapshot {
     }
 }
 
+#[allow(dead_code)]
 pub(crate) fn partitions_schema(
     schema: &StructType,
     partition_columns: &[String],

@@ -213,7 +213,7 @@ impl TableProvider for DeltaTableProvider {
 
         let log_data = self.snapshot.snapshot().log_data();
 
-        let (files, pruning_mask) = match &self.files {
+        let (files, _pruning_mask) = match &self.files {
             Some(files) => {
                 let files = files.to_owned();
                 (files, None)

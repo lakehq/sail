@@ -14,6 +14,7 @@ use tokio::task::JoinSet;
 /// Trait for types that stream [RecordBatch]
 ///
 /// See [`SendableRecordBatchStream`] for more details.
+#[allow(dead_code)]
 pub trait RecordBatchStream: Stream<Item = DeltaResult<RecordBatch>> {
     /// Returns the schema of this `RecordBatchStream`.
     ///
@@ -48,10 +49,12 @@ pub trait RecordBatchStream: Stream<Item = DeltaResult<RecordBatch>> {
 /// be polled after end of stream or returning an error. However, also like
 /// [`Stream`]s there is no mechanism to prevent callers polling  so returning
 /// `Ready(None)` is recommended.
+#[allow(dead_code)]
 pub type SendableRecordBatchStream = Pin<Box<dyn RecordBatchStream + Send>>;
 
 pub type SendableRBStream = Pin<Box<dyn Stream<Item = DeltaResult<RecordBatch>> + Send>>;
 
+#[allow(dead_code)]
 pub type SendableAddStream = Pin<Box<dyn Stream<Item = DeltaResult<Add>> + Send>>;
 
 /// Creates a stream from a collection of producing tasks, routing panics to the stream.
@@ -90,6 +93,7 @@ impl<O: Send + 'static> ReceiverStreamBuilder<O> {
 
     /// Spawn task that will be aborted if this builder (or the stream
     /// built from it) are dropped
+    #[allow(dead_code)]
     pub fn spawn<F>(&mut self, task: F)
     where
         F: Future<Output = DeltaResult<()>>,
