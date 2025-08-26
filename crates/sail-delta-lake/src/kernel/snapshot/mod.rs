@@ -30,8 +30,8 @@ use crate::kernel::snapshot::log_data::LogDataHandler;
 use crate::kernel::snapshot::parse::read_removes;
 use crate::kernel::snapshot::stream::{RecordBatchReceiverStreamBuilder, SendableRBStream};
 
-mod iterators;
-mod log_data;
+pub mod iterators;
+pub mod log_data;
 mod parse;
 pub mod replay;
 mod serde;

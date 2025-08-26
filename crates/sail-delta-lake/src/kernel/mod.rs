@@ -1,6 +1,7 @@
 pub mod arrow;
 pub mod log_data;
 pub mod models;
+pub mod schema;
 pub mod snapshot;
 
 use std::sync::LazyLock;

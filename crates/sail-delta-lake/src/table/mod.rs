@@ -12,6 +12,8 @@ use url::Url;
 use crate::delta_datafusion::{delta_to_datafusion_error, DeltaScanConfig, DeltaTableProvider};
 use crate::options::TableDeltaOptions;
 
+pub mod state;
+
 pub async fn open_table_with_object_store(
     location: Url,
     object_store: Arc<dyn ObjectStore>,
@@ -104,4 +106,26 @@ pub async fn create_delta_provider(
     .map_err(delta_to_datafusion_error)?;
 
     Ok(Arc::new(table_provider))
+}
+
+pub(crate) fn get_partition_col_data_types<'a>(
+    schema: &'a deltalake::StructType,
+    metadata: &'a deltalake::kernel::Metadata,
+) -> Vec<(&'a String, &'a deltalake::DataType)> {
+    // JSON add actions contain a `partitionValues` field which is a map<string, string>.
+    // When loading `partitionValues_parsed` we have to convert the stringified partition values back to the correct data type.
+    schema
+        .fields()
+        .filter_map(|f| {
+            if metadata
+                .partition_columns()
+                .iter()
+                .any(|s| s.as_str() == f.name())
+            {
+                Some((f.name(), f.data_type()))
+            } else {
+                None
+            }
+        })
+        .collect()
 }

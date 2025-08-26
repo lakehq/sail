@@ -140,7 +140,7 @@ object_store = { version = "0.12.3", features = ["aws", "gcp", "azure", "http"] 
 hdfs-native-object-store = "0.14.2"
 
 # Lakehouse
-deltalake = { git = "https://github.com/delta-io/delta-rs.git", rev = "b89d7a4", default-features = false, features = ["rustls"] }
+deltalake = { git = "https://github.com/delta-io/delta-rs.git", rev = "1f0b4d0", default-features = false, features = ["rustls"] }
 delta_kernel = { version = "0.14.0", features = ["arrow-55", "internal-api", "default-engine-rustls"] }
 bytes = "1.10.1"
 indexmap = "2.10.0"

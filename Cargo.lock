@@ -2363,7 +2363,7 @@ dependencies = [
 [[package]]
 name = "deltalake"
 version = "0.28.0"
-source = "git+https://github.com/delta-io/delta-rs.git?rev=b89d7a4#b89d7a4ca55263f708d56d417b083699c29466ee"
+source = "git+https://github.com/delta-io/delta-rs.git?rev=1f0b4d0#1f0b4d0965a85400c1effc6e9b4c7ebbb6795978"
 dependencies = [
  "delta_kernel",
  "deltalake-core",
@@ -2372,7 +2372,7 @@ dependencies = [
 [[package]]
 name = "deltalake-core"
 version = "0.28.0"
-source = "git+https://github.com/delta-io/delta-rs.git?rev=b89d7a4#b89d7a4ca55263f708d56d417b083699c29466ee"
+source = "git+https://github.com/delta-io/delta-rs.git?rev=1f0b4d0#1f0b4d0965a85400c1effc6e9b4c7ebbb6795978"
 dependencies = [
  "arrow",
  "arrow-arith",
@@ -2398,15 +2398,12 @@ dependencies = [
  "indexmap 2.10.0",
  "itertools 0.14.0",
  "maplit",
- "num-bigint",
- "num-traits",
  "num_cpus",
  "object_store",
  "parking_lot",
  "parquet",
  "percent-encoding",
  "percent-encoding-rfc3986",
- "pin-project-lite",
  "rand 0.8.5",
  "regex",
  "serde",
@@ -2424,7 +2421,7 @@ dependencies = [
 [[package]]
 name = "deltalake-derive"
 version = "0.28.0"
-source = "git+https://github.com/delta-io/delta-rs.git?rev=b89d7a4#b89d7a4ca55263f708d56d417b083699c29466ee"
+source = "git+https://github.com/delta-io/delta-rs.git?rev=1f0b4d0#1f0b4d0965a85400c1effc6e9b4c7ebbb6795978"
 dependencies = [
  "convert_case",
  "itertools 0.14.0",
