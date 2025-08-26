@@ -9,7 +9,6 @@ use datafusion::arrow::datatypes::{
     DataType as ArrowDataType, Field, Schema as ArrowSchema, SchemaRef,
     SchemaRef as ArrowSchemaRef, TimeUnit, UInt16Type,
 };
-
 use datafusion::common::config::ConfigOptions;
 use datafusion::common::scalar::ScalarValue;
 use datafusion::common::stats::Statistics;
@@ -20,14 +19,11 @@ use datafusion::datasource::object_store::ObjectStoreUrl;
 use datafusion::datasource::physical_plan::wrap_partition_type_in_dict;
 use datafusion::datasource::TableProvider;
 use datafusion::execution::SessionState;
-
 use datafusion::logical_expr::planner::ExprPlanner;
-
 use datafusion::logical_expr::{
     AggregateUDF, BinaryExpr, Expr, Operator, ScalarUDF, TableProviderFilterPushDown, TableSource,
     Volatility,
 };
-
 use datafusion::physical_expr::PhysicalExpr;
 use datafusion::sql::planner::{ContextProvider, SqlToRel};
 use datafusion::sql::sqlparser::dialect::GenericDialect;
@@ -474,8 +470,6 @@ pub struct DeltaScanConfig {
     /// Schema to read as
     pub schema: Option<SchemaRef>,
 }
-
-
 
 #[allow(dead_code)]
 fn prune_file_statistics(

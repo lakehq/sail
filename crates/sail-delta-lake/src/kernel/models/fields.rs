@@ -2,6 +2,29 @@
 use std::sync::{Arc, LazyLock};
 
 use delta_kernel::schema::{ArrayType, DataType, MapType, StructField, StructType};
+use deltalake::kernel::ActionType;
+
+pub trait ActionTypeExt {
+    fn schema_field(&self) -> &StructField;
+}
+
+impl ActionTypeExt for ActionType {
+    /// Returns the type of the corresponding field in the delta log schema
+    fn schema_field(&self) -> &StructField {
+        match self {
+            Self::Metadata => &METADATA_FIELD,
+            Self::Protocol => &PROTOCOL_FIELD,
+            Self::CommitInfo => &COMMIT_INFO_FIELD,
+            Self::Add => &ADD_FIELD,
+            Self::Remove => &REMOVE_FIELD,
+            Self::Cdc => &CDC_FIELD,
+            Self::Txn => &TXN_FIELD,
+            Self::DomainMetadata => &DOMAIN_METADATA_FIELD,
+            Self::CheckpointMetadata => &CHECKPOINT_METADATA_FIELD,
+            Self::Sidecar => &SIDECAR_FIELD,
+        }
+    }
+}
 
 // https://github.com/delta-io/delta/blob/master/PROTOCOL.md#change-metadata
 static METADATA_FIELD: LazyLock<StructField> = LazyLock::new(|| {

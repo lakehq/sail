@@ -31,6 +31,8 @@ parquet = { workspace = true }
 bytes = { workspace = true }
 indexmap = { workspace = true }
 log = { workspace = true }
+itertools = { workspace = true }
+percent-encoding = { workspace = true }
 
 [lints]
 workspace = true
