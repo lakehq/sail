@@ -78,7 +78,7 @@ impl ScalarUDFImpl for MapFunction {
     }
 }
 
-fn map_from_arrays_inner(args: &[ArrayRef]) -> Result<ArrayRef> {
+pub fn map_from_arrays_inner(args: &[ArrayRef]) -> Result<ArrayRef> {
     let lists = args
         .iter()
         .map(|list_arc| as_list_array(list_arc.as_ref()))

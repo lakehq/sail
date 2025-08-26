@@ -1491,7 +1491,7 @@
         }
       },
       "output": {
-        "failure": "not implemented: position with 3 arguments is not supported yet"
+        "success": "ok"
       }
     },
     {
@@ -2305,7 +2305,7 @@
         }
       },
       "output": {
-        "failure": "not implemented: position with 3 arguments is not supported yet"
+        "success": "ok"
       }
     },
     {

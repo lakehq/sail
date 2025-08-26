@@ -75,4 +75,10 @@ impl UserDefinedLogicalNodeCore for WithPreconditionsNode {
             plan: Arc::new(plan),
         })
     }
+
+    fn necessary_children_exprs(&self, _output_columns: &[usize]) -> Option<Vec<Vec<usize>>> {
+        // We do not need to precisely implement this method since this node is "executed"
+        // and removed before logical optimization.
+        None
+    }
 }
