@@ -446,7 +446,7 @@ mod datafusion {
             static ROW_COUNTS_EVAL: LazyLock<Arc<dyn ExpressionEvaluator>> = LazyLock::new(|| {
                 ARROW_HANDLER.new_expression_evaluator(
                     crate::kernel::models::fields::log_schema_ref().clone(),
-                    Expression::column(["add", "stats_parsed", "numRecords"]),
+                    Expression::column(["stats_parsed", "numRecords"]),
                     DataType::Primitive(PrimitiveType::Long),
                 )
             });
@@ -501,7 +501,9 @@ mod datafusion {
 
             for i in 0..partition_values.len() {
                 if partition_values.is_null(i) {
-                    contains.push(false);
+                    // For IS NULL predicates, we want to include NULL partitions
+                    let contains_null = value.iter().any(|scalar| scalar.is_null());
+                    contains.push(contains_null);
                 } else {
                     contains.push(
                         value
