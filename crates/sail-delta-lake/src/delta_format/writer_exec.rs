@@ -5,7 +5,7 @@ use std::sync::Arc;
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use async_trait::async_trait;
-use datafusion::arrow::array::{StringArray, UInt64Array};
+use datafusion::arrow::array::StringArray;
 use datafusion::arrow::datatypes::{DataType, Field, Schema, SchemaRef};
 use datafusion::arrow::record_batch::RecordBatch;
 use datafusion::common::ToDFSchema;
@@ -383,18 +383,20 @@ impl ExecutionPlan for DeltaWriterExec {
                     }
                 }
                 PhysicalSinkMode::IgnoreIfExists => {
-                    // FIXME: not correct
                     if table_exists {
-                        let batch = RecordBatch::try_new(
-                            schema,
-                            vec![
-                                Arc::new(UInt64Array::from(vec![0])),
-                                Arc::new(StringArray::from(vec!["[]"])),
-                                Arc::new(StringArray::from(vec!["[]"])),
-                                Arc::new(StringArray::from(vec!["[]"])),
-                                Arc::new(StringArray::from(vec!["null"])),
-                            ],
-                        )?;
+                        // Table exists, ignore the write operation and return empty commit info
+                        let commit_info = CommitInfo {
+                            row_count: 0,
+                            add_actions: Vec::new(),
+                            schema_actions: Vec::new(),
+                            initial_actions: Vec::new(),
+                            operation: None,
+                        };
+                        let commit_info_json = serde_json::to_string(&commit_info)
+                            .map_err(|e| DataFusionError::External(Box::new(e)))?;
+
+                        let data_array = Arc::new(StringArray::from(vec![commit_info_json]));
+                        let batch = RecordBatch::try_new(schema, vec![data_array])?;
                         return Ok(batch);
                     }
                 }
