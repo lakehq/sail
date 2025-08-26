@@ -27,10 +27,11 @@ use datafusion::optimizer::simplify_expressions::ExprSimplifier;
 use datafusion::physical_expr::PhysicalExpr;
 use datafusion::physical_optimizer::pruning::PruningPredicate;
 use datafusion::physical_plan::ExecutionPlan;
+use datafusion_common::pruning::PruningStatistics;
 use deltalake::errors::DeltaResult;
 use deltalake::kernel::Add;
 use deltalake::logstore::LogStoreRef;
-use deltalake::table::state::DeltaTableState;
+use futures::TryStreamExt;
 use object_store::path::Path;
 
 use crate::delta_datafusion::schema_rewriter::DeltaPhysicalExprAdapterFactory;
@@ -38,7 +39,7 @@ use crate::delta_datafusion::{
     create_object_store_url, delta_to_datafusion_error, df_logical_schema, get_pushdown_filters,
     partitioned_file_from_action, DataFusionMixins, DeltaScanConfig, DeltaTableStateExt,
 };
-use crate::kernel::log_data::SailLogDataHandler;
+use crate::table::state::DeltaTableState;
 
 /// A Delta table provider that enables additional metadata columns to be included during the scan
 #[derive(Debug)]
@@ -210,13 +211,7 @@ impl TableProvider for DeltaTableProvider {
                 .collect::<Vec<_>>(),
         ));
 
-        let log_data = SailLogDataHandler::new(
-            self.log_store.clone(),
-            self.snapshot.load_config().clone(),
-            Some(self.snapshot.version()),
-        )
-        .await
-        .map_err(delta_to_datafusion_error)?;
+        let log_data = self.snapshot.snapshot().log_data();
 
         let (files, pruning_mask) = match &self.files {
             Some(files) => {
@@ -228,9 +223,10 @@ impl TableProvider for DeltaTableProvider {
                 if logical_filter.is_none() && limit.is_none() {
                     let files: Vec<Add> = self
                         .snapshot
-                        .file_actions_iter()
-                        .map_err(delta_to_datafusion_error)?
-                        .collect();
+                        .file_actions_iter(&*self.log_store)
+                        .try_collect()
+                        .await
+                        .map_err(delta_to_datafusion_error)?;
                     (files, None)
                 } else {
                     let num_containers = log_data.num_containers();
@@ -243,19 +239,22 @@ impl TableProvider for DeltaTableProvider {
                         vec![true; num_containers]
                     };
 
+                    // For now, collect all files and apply pruning logic
+                    let all_files: Vec<Add> = self
+                        .snapshot
+                        .file_actions_iter(&*self.log_store)
+                        .try_collect()
+                        .await
+                        .map_err(delta_to_datafusion_error)?;
+
                     // needed to enforce limit and deal with missing statistics
                     let mut pruned_without_stats = vec![];
                     let mut rows_collected = 0;
                     let mut files = vec![];
 
-                    for (action, keep) in self
-                        .snapshot
-                        .file_actions_iter()
-                        .map_err(delta_to_datafusion_error)?
-                        .zip(files_to_prune.iter().cloned())
-                    {
+                    for (action, keep) in all_files.iter().zip(files_to_prune.iter()) {
                         // prune file based on predicate pushdown
-                        if keep {
+                        if *keep {
                             // prune file based on limit pushdown
                             if let Some(limit) = limit {
                                 if let Some(stats) = action.get_stats().map_err(|e| {
@@ -363,7 +362,7 @@ impl TableProvider for DeltaTableProvider {
         }
 
         let stats = log_data
-            .statistics(pruning_mask)
+            .statistics()
             .unwrap_or_else(|| Statistics::new_unknown(&schema));
 
         let parquet_options = TableParquetOptions {

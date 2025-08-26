@@ -29,13 +29,17 @@ use datafusion::sql::planner::{ContextProvider, SqlToRel};
 use datafusion::sql::sqlparser::dialect::GenericDialect;
 use datafusion::sql::sqlparser::parser::Parser;
 use datafusion::sql::sqlparser::tokenizer::Tokenizer;
+use delta_kernel::engine::arrow_conversion::TryIntoArrow;
 use deltalake::errors::{DeltaResult, DeltaTableError};
-use deltalake::kernel::{Add, EagerSnapshot, Snapshot};
-use deltalake::logstore::LogStoreRef;
-use deltalake::table::state::DeltaTableState;
+use deltalake::kernel::Add;
+use deltalake::logstore::{LogStore, LogStoreRef};
+use futures::TryStreamExt;
 use object_store::ObjectMeta;
 use serde::{Deserialize, Serialize};
 use url::Url;
+
+use crate::kernel::snapshot::{EagerSnapshot, Snapshot};
+use crate::table::state::DeltaTableState;
 /// [Credit]: <https://github.com/delta-io/delta-rs/blob/3607c314cbdd2ad06c6ee0677b92a29f695c71f3/crates/core/src/delta_datafusion/mod.rs>
 pub(crate) const PATH_COLUMN: &str = "__delta_rs_path";
 
@@ -104,11 +108,11 @@ impl DataFusionMixins for EagerSnapshot {
 
 impl DataFusionMixins for DeltaTableState {
     fn arrow_schema(&self) -> DeltaResult<ArrowSchemaRef> {
-        self.snapshot().arrow_schema()
+        Ok(Arc::new(self.schema().try_into_arrow()?))
     }
 
     fn input_schema(&self) -> DeltaResult<ArrowSchemaRef> {
-        self.snapshot().input_schema()
+        self.arrow_schema()
     }
 }
 
@@ -712,6 +716,7 @@ pub(crate) struct FindFilesPhysicalExprProperties {
 /// Scan memory table (for partition-only predicates)
 pub(crate) async fn scan_memory_table_physical(
     snapshot: &DeltaTableState,
+    log_store: &dyn LogStore,
     state: &SessionState,
     physical_predicate: Arc<dyn PhysicalExpr>,
 ) -> DeltaResult<Vec<Add>> {
@@ -724,7 +729,7 @@ pub(crate) async fn scan_memory_table_physical(
     use datafusion::physical_plan::filter::FilterExec;
     use datafusion::physical_plan::ExecutionPlan;
 
-    let actions = snapshot.file_actions()?;
+    let actions = snapshot.file_actions(log_store).await?;
     let batch = snapshot.add_actions_table(true)?;
     let mut arrays = Vec::new();
     let mut fields = Vec::new();
@@ -798,9 +803,10 @@ pub(crate) async fn find_files_scan_physical(
     use datafusion::physical_plan::ExecutionPlan;
 
     let candidate_map: HashMap<String, Add> = snapshot
-        .file_actions_iter()?
-        .map(|add| (add.path.clone(), add.to_owned()))
-        .collect();
+        .file_actions_iter(&*log_store)
+        .map_ok(|add| (add.path.clone(), add.to_owned()))
+        .try_collect()
+        .await?;
 
     let scan_config = DeltaScanConfigBuilder {
         include_file_column: true,
@@ -1120,7 +1126,8 @@ pub async fn find_files_physical(
             if expr_properties.partition_only {
                 // Use partition-only scanning (memory table approach)
                 let candidates =
-                    scan_memory_table_physical(snapshot, state, adapted_predicate).await?;
+                    scan_memory_table_physical(snapshot, &*log_store, state, adapted_predicate)
+                        .await?;
                 Ok(FindFiles {
                     candidates,
                     partition_scan: true,
@@ -1136,7 +1143,7 @@ pub async fn find_files_physical(
             }
         }
         None => Ok(FindFiles {
-            candidates: snapshot.file_actions()?,
+            candidates: snapshot.file_actions(&*log_store).await?,
             partition_scan: true,
         }),
     }

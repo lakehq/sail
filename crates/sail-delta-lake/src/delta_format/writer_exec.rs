@@ -232,9 +232,18 @@ impl ExecutionPlan for DeltaWriterExec {
                 PhysicalSinkMode::Overwrite => {
                     if let Some(table) = &table {
                         if let Some(replace_where) = options.replace_where.clone() {
-                            let snapshot = table
+                            let deltalake_snapshot = table
                                 .snapshot()
                                 .map_err(|e| DataFusionError::External(Box::new(e)))?;
+
+                            // Create sail DeltaTableState from deltalake snapshot
+                            let snapshot = crate::table::state::DeltaTableState::try_new(
+                                &*table.log_store(),
+                                table.config.clone(),
+                                Some(deltalake_snapshot.version()),
+                            )
+                            .await
+                            .map_err(|e| DataFusionError::External(Box::new(e)))?;
                             let df_schema = snapshot
                                 .arrow_schema()
                                 .map_err(|e| DataFusionError::External(Box::new(e)))?
@@ -258,7 +267,7 @@ impl ExecutionPlan for DeltaWriterExec {
                             let (remove_actions, _) = prepare_predicate_actions_physical(
                                 physical_predicate,
                                 table.log_store(),
-                                snapshot,
+                                &snapshot,
                                 session_state,
                                 partition_columns.clone(),
                                 None,
@@ -273,11 +282,21 @@ impl ExecutionPlan for DeltaWriterExec {
                             .map_err(|e| DataFusionError::External(Box::new(e)))?;
                             initial_actions.extend(remove_actions);
                         } else {
-                            let snapshot = table
+                            let deltalake_snapshot = table
                                 .snapshot()
                                 .map_err(|e| DataFusionError::External(Box::new(e)))?;
+
+                            // Create sail DeltaTableState from deltalake snapshot
+                            let snapshot = crate::table::state::DeltaTableState::try_new(
+                                &*table.log_store(),
+                                table.config.clone(),
+                                Some(deltalake_snapshot.version()),
+                            )
+                            .await
+                            .map_err(|e| DataFusionError::External(Box::new(e)))?;
                             let remove_actions: Vec<Action> = snapshot
-                                .file_actions()
+                                .file_actions(&*table.log_store())
+                                .await
                                 .map_err(|e| DataFusionError::External(Box::new(e)))?
                                 .into_iter()
                                 .map(|add| {
@@ -311,9 +330,18 @@ impl ExecutionPlan for DeltaWriterExec {
                 }
                 PhysicalSinkMode::OverwriteIf { condition } => {
                     if let Some(table) = &table {
-                        let snapshot = table
+                        let deltalake_snapshot = table
                             .snapshot()
                             .map_err(|e| DataFusionError::External(Box::new(e)))?;
+
+                        // Create sail DeltaTableState from deltalake snapshot
+                        let snapshot = crate::table::state::DeltaTableState::try_new(
+                            &*table.log_store(),
+                            table.config.clone(),
+                            Some(deltalake_snapshot.version()),
+                        )
+                        .await
+                        .map_err(|e| DataFusionError::External(Box::new(e)))?;
                         let session_state = SessionStateBuilder::new()
                             .with_runtime_env(context.runtime_env().clone())
                             .build();
@@ -322,7 +350,7 @@ impl ExecutionPlan for DeltaWriterExec {
                         let (remove_actions, _) = prepare_predicate_actions_physical(
                             condition.clone(),
                             table.log_store(),
-                            snapshot,
+                            &snapshot,
                             session_state,
                             partition_columns.clone(),
                             None,
