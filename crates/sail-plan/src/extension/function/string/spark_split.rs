@@ -93,7 +93,7 @@ impl ScalarUDFImpl for SparkSplit {
     }
 }
 
-pub fn spark_split_inner(args: &[ArrayRef]) -> Result<ArrayRef> {
+fn spark_split_inner(args: &[ArrayRef]) -> Result<ArrayRef> {
     match (args[0].data_type(), args[1].data_type()) {
         (DataType::LargeUtf8, DataType::LargeUtf8) => spark_split_inner_downcast::<i64, i64>(args),
         (_, DataType::LargeUtf8) => spark_split_inner_downcast::<i32, i64>(args),
@@ -101,7 +101,8 @@ pub fn spark_split_inner(args: &[ArrayRef]) -> Result<ArrayRef> {
         _ => spark_split_inner_downcast::<i32, i32>(args),
     }
 }
-pub fn spark_split_inner_downcast<FirstOffset, SecondOffset>(args: &[ArrayRef]) -> Result<ArrayRef>
+
+fn spark_split_inner_downcast<FirstOffset, SecondOffset>(args: &[ArrayRef]) -> Result<ArrayRef>
 where
     FirstOffset: OffsetSizeTrait,
     SecondOffset: OffsetSizeTrait,
