@@ -6,7 +6,7 @@ use datafusion::functions::expr_fn;
 use datafusion::functions::regex::regexpcount::RegexpCountFunc;
 use datafusion::functions::string::contains::ContainsFunc;
 use datafusion_common::ScalarValue;
-use datafusion_expr::{cast, expr, lit, try_cast, ExprSchemable, ScalarUDF};
+use datafusion_expr::{cast, expr, lit, try_cast, when, ExprSchemable, ScalarUDF};
 
 use crate::error::{PlanError, PlanResult};
 use crate::extension::function::string::levenshtein::Levenshtein;
@@ -133,19 +133,18 @@ fn overlay(input: ScalarFunctionInput) -> PlanResult<expr::Expr> {
     Err(PlanError::invalid("overlay requires 3 or 4 arguments"))
 }
 
-fn position(input: ScalarFunctionInput) -> PlanResult<expr::Expr> {
-    let ScalarFunctionInput { arguments, .. } = input;
-    if arguments.len() == 2 {
-        let (substr, str) = arguments.two()?;
-        return Ok(expr_fn::strpos(str, substr));
+fn position(args: Vec<expr::Expr>) -> PlanResult<expr::Expr> {
+    match args.as_slice() {
+        [substr, str] => Ok(expr_fn::strpos(str.clone(), substr.clone())),
+        [substr, str, start] => {
+            let str_from_pos = expr_fn::substr(str.clone(), start.clone());
+            let pos = expr_fn::strpos(str_from_pos, substr.clone());
+            Ok(when(pos.clone().eq(lit(0)), lit(0))
+                .when(pos.clone().gt(lit(0)), start.clone() + pos - lit(1))
+                .end()?)
+        }
+        _ => Err(PlanError::invalid("position requires 2 or 3 arguments")),
     }
-    if arguments.len() == 3 {
-        // TODO: optional third argument
-        return Err(PlanError::todo(
-            "position with 3 arguments is not supported yet",
-        ));
-    }
-    Err(PlanError::invalid("position requires 2 arguments"))
 }
 
 fn space(n: expr::Expr) -> expr::Expr {
@@ -360,7 +359,7 @@ pub(super) fn list_built_in_string_functions() -> Vec<(&'static str, ScalarFunct
         ("len", F::unary(expr_fn::length)),
         ("length", F::unary(expr_fn::length)),
         ("levenshtein", F::udf(Levenshtein::new())),
-        ("locate", F::custom(position)),
+        ("locate", F::var_arg(position)),
         ("lower", F::unary(expr_fn::lower)),
         ("lpad", F::var_arg(expr_fn::lpad)),
         (
@@ -372,7 +371,7 @@ pub(super) fn list_built_in_string_functions() -> Vec<(&'static str, ScalarFunct
         ("mask", F::udf(SparkMask::new())),
         ("octet_length", F::unary(octet_length)),
         ("overlay", F::custom(overlay)),
-        ("position", F::custom(position)),
+        ("position", F::var_arg(position)),
         ("printf", F::unknown("printf")),
         ("regexp_count", F::udf(RegexpCountFunc::new())),
         ("regexp_extract", F::unknown("regexp_extract")),

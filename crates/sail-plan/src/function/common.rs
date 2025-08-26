@@ -11,7 +11,7 @@ use datafusion_expr::{
 };
 
 use crate::config::PlanConfig;
-use crate::error::{PlanError, PlanResult};
+use crate::error::{IntoPlanResult, PlanError, PlanResult};
 use crate::utils::ItemTaker;
 
 pub struct FunctionContextInput<'a> {
@@ -38,9 +38,10 @@ pub(crate) type ScalarFunction =
 pub(crate) struct ScalarFunctionBuilder;
 
 impl ScalarFunctionBuilder {
-    pub fn nullary<F>(f: F) -> ScalarFunction
+    pub fn nullary<F, R>(f: F) -> ScalarFunction
     where
-        F: Fn() -> expr::Expr + Send + Sync + 'static,
+        F: Fn() -> R + Send + Sync + 'static,
+        R: IntoPlanResult<expr::Expr>,
     {
         Arc::new(
             move |ScalarFunctionInput {
@@ -48,26 +49,28 @@ impl ScalarFunctionBuilder {
                       function_context: _,
                   }| {
                 arguments.zero()?;
-                Ok(f())
+                f().into_plan_result()
             },
         )
     }
 
-    pub fn unary<F>(f: F) -> ScalarFunction
+    pub fn unary<F, R>(f: F) -> ScalarFunction
     where
-        F: Fn(expr::Expr) -> expr::Expr + Send + Sync + 'static,
+        F: Fn(expr::Expr) -> R + Send + Sync + 'static,
+        R: IntoPlanResult<expr::Expr>,
     {
         Arc::new(
             move |ScalarFunctionInput {
                       arguments,
                       function_context: _,
-                  }| Ok(f(arguments.one()?)),
+                  }| f(arguments.one()?).into_plan_result(),
         )
     }
 
-    pub fn binary<F>(f: F) -> ScalarFunction
+    pub fn binary<F, R>(f: F) -> ScalarFunction
     where
-        F: Fn(expr::Expr, expr::Expr) -> expr::Expr + Send + Sync + 'static,
+        F: Fn(expr::Expr, expr::Expr) -> R + Send + Sync + 'static,
+        R: IntoPlanResult<expr::Expr>,
     {
         Arc::new(
             move |ScalarFunctionInput {
@@ -75,14 +78,15 @@ impl ScalarFunctionBuilder {
                       function_context: _,
                   }| {
                 let (left, right) = arguments.two()?;
-                Ok(f(left, right))
+                f(left, right).into_plan_result()
             },
         )
     }
 
-    pub fn ternary<F>(f: F) -> ScalarFunction
+    pub fn ternary<F, R>(f: F) -> ScalarFunction
     where
-        F: Fn(expr::Expr, expr::Expr, expr::Expr) -> expr::Expr + Send + Sync + 'static,
+        F: Fn(expr::Expr, expr::Expr, expr::Expr) -> R + Send + Sync + 'static,
+        R: IntoPlanResult<expr::Expr>,
     {
         Arc::new(
             move |ScalarFunctionInput {
@@ -90,20 +94,21 @@ impl ScalarFunctionBuilder {
                       function_context: _,
                   }| {
                 let (first, second, third) = arguments.three()?;
-                Ok(f(first, second, third))
+                f(first, second, third).into_plan_result()
             },
         )
     }
 
-    pub fn var_arg<F>(f: F) -> ScalarFunction
+    pub fn var_arg<F, R>(f: F) -> ScalarFunction
     where
-        F: Fn(Vec<expr::Expr>) -> expr::Expr + Send + Sync + 'static,
+        F: Fn(Vec<expr::Expr>) -> R + Send + Sync + 'static,
+        R: IntoPlanResult<expr::Expr>,
     {
         Arc::new(
             move |ScalarFunctionInput {
                       arguments,
                       function_context: _,
-                  }| Ok(f(arguments)),
+                  }| f(arguments).into_plan_result(),
         )
     }
 
@@ -128,12 +133,7 @@ impl ScalarFunctionBuilder {
             move |ScalarFunctionInput {
                       arguments,
                       function_context: _,
-                  }| {
-                Ok(expr::Expr::Cast(expr::Cast {
-                    expr: Box::new(arguments.one()?),
-                    data_type: data_type.clone(),
-                }))
-            },
+                  }| { Ok(cast(arguments.one()?, data_type.clone())) },
         )
     }
 
@@ -141,17 +141,12 @@ impl ScalarFunctionBuilder {
     where
         F: ScalarUDFImpl + Send + Sync + 'static,
     {
-        let func = Arc::new(ScalarUDF::from(f));
+        let func = ScalarUDF::from(f);
         Arc::new(
             move |ScalarFunctionInput {
                       arguments,
                       function_context: _,
-                  }| {
-                Ok(expr::Expr::ScalarFunction(expr::ScalarFunction {
-                    func: func.clone(),
-                    args: arguments,
-                }))
-            },
+                  }| { Ok(func.call(arguments)) },
         )
     }
 
@@ -164,12 +159,7 @@ impl ScalarFunctionBuilder {
             move |ScalarFunctionInput {
                       arguments,
                       function_context: _,
-                  }| {
-                Ok(expr::Expr::ScalarFunction(expr::ScalarFunction {
-                    func: f(),
-                    args: arguments,
-                }))
-            },
+                  }| { Ok(f().call(arguments)) },
         )
     }
 

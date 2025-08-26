@@ -1,0 +1,48 @@
+>>> from decimal import Decimal
+>>> from pyspark.sql.types import StructType, StructField, DecimalType, IntegerType
+>>> from pyspark.sql.functions import width_bucket
+>>> schema = StructType([
+...     StructField("v",   DecimalType(10, 2)),
+...     StructField("min", DecimalType(10, 2)),
+...     StructField("max", DecimalType(10, 2)),
+...     StructField("n",   IntegerType()),
+... ])
+>>> rows = [
+...     (Decimal("0.00"),  Decimal("0.00"),  Decimal("10.00"), 5),  # v==min → 1
+...     (Decimal("2.00"),  Decimal("0.00"),  Decimal("10.00"), 5),  # width=2 → 2
+...     (Decimal("10.00"), Decimal("0.00"),  Decimal("10.00"), 5),  # v==max → 5
+...     (Decimal("10.01"), Decimal("0.00"),  Decimal("10.00"), 5),  # v>max → 6
+...     (Decimal("-0.01"), Decimal("0.00"),  Decimal("10.00"), 5),  # v<min → 0
+... ]
+>>> df = spark.createDataFrame(rows, schema)
+>>> df.select(width_bucket("v", "min", "max", "n")).show()
++----------------------------+
+|width_bucket(v, min, max, n)|
++----------------------------+
+|                           1|
+|                           2|
+|                           6|
+|                           6|
+|                           0|
++----------------------------+
+
+>>> spark.sql("SELECT width_bucket(0.0, 10.0, 0.0, 5)").show()
++-------------------------------+
+|width_bucket(0.0, 10.0, 0.0, 5)|
++-------------------------------+
+|                              6|
++-------------------------------+
+
+>>> spark.sql("SELECT width_bucket(10.0, 0.0, 10.0, 5)").show()
++--------------------------------+
+|width_bucket(10.0, 0.0, 10.0, 5)|
++--------------------------------+
+|                               6|
++--------------------------------+
+
+>>> spark.sql("SELECT width_bucket(10.0, 0.0, 0.0, 5)").show()
++-------------------------------+
+|width_bucket(10.0, 0.0, 0.0, 5)|
++-------------------------------+
+|                           NULL|
++-------------------------------+

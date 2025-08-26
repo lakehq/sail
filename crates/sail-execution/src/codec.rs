@@ -78,7 +78,7 @@ use sail_plan::extension::function::drop_struct_field::DropStructField;
 use sail_plan::extension::function::explode::{explode_name_to_kind, Explode};
 use sail_plan::extension::function::kurtosis::KurtosisFunction;
 use sail_plan::extension::function::map::map_function::MapFunction;
-use sail_plan::extension::function::map::spark_element_at::{SparkElementAt, SparkTryElementAt};
+use sail_plan::extension::function::map::str_to_map::StrToMap;
 use sail_plan::extension::function::math::least_greatest::{Greatest, Least};
 use sail_plan::extension::function::math::rand_poisson::RandPoisson;
 use sail_plan::extension::function::math::randn::Randn;
@@ -96,6 +96,7 @@ use sail_plan::extension::function::math::spark_try_div::SparkTryDiv;
 use sail_plan::extension::function::math::spark_try_mod::SparkTryMod;
 use sail_plan::extension::function::math::spark_try_mult::SparkTryMult;
 use sail_plan::extension::function::math::spark_try_subtract::SparkTrySubtract;
+use sail_plan::extension::function::math::spark_width_bucket::SparkWidthBucket;
 use sail_plan::extension::function::max_min_by::{MaxByFunction, MinByFunction};
 use sail_plan::extension::function::mode::ModeFunction;
 use sail_plan::extension::function::multi_expr::MultiExpr;
@@ -1047,12 +1048,6 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
             "spark_abs" | "abs" => Ok(Arc::new(ScalarUDF::from(SparkAbs::new()))),
             "spark_conv" | "conv" => Ok(Arc::new(ScalarUDF::from(SparkConv::new()))),
             "spark_signum" | "signum" => Ok(Arc::new(ScalarUDF::from(SparkSignum::new()))),
-            "spark_element_at" | "element_at" => {
-                Ok(Arc::new(ScalarUDF::from(SparkElementAt::new())))
-            }
-            "spark_try_element_at" | "try_element_at" => {
-                Ok(Arc::new(ScalarUDF::from(SparkTryElementAt::new())))
-            }
             "spark_last_day" | "last_day" => Ok(Arc::new(ScalarUDF::from(SparkLastDay::new()))),
             "spark_next_day" | "next_day" => Ok(Arc::new(ScalarUDF::from(SparkNextDay::new()))),
             "spark_make_interval" | "make_interval" => {
@@ -1097,6 +1092,10 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
             "spark_try_subtract" | "try_subtract" => {
                 Ok(Arc::new(ScalarUDF::from(SparkTrySubtract::new())))
             }
+            "spark_width_bucket" | "width_bucket" => {
+                Ok(Arc::new(ScalarUDF::from(SparkWidthBucket::new())))
+            }
+            "str_to_map" => Ok(Arc::new(ScalarUDF::from(StrToMap::new()))),
             "parse_url" => Ok(Arc::new(ScalarUDF::from(ParseUrl::new()))),
             "url_decode" => Ok(Arc::new(ScalarUDF::from(UrlDecode::new()))),
             "url_encode" => Ok(Arc::new(ScalarUDF::from(UrlEncode::new()))),
@@ -1149,8 +1148,6 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
             || node.inner().as_any().is::<SparkSignum>()
             || node.inner().as_any().is::<SparkToBinary>()
             || node.inner().as_any().is::<SparkTryToBinary>()
-            || node.inner().as_any().is::<SparkElementAt>()
-            || node.inner().as_any().is::<SparkTryElementAt>()
             || node.inner().as_any().is::<SparkLastDay>()
             || node.inner().as_any().is::<SparkNextDay>()
             || node.inner().as_any().is::<SparkMakeInterval>()
@@ -1179,6 +1176,8 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
             || node.inner().as_any().is::<SparkTryMod>()
             || node.inner().as_any().is::<SparkTryMult>()
             || node.inner().as_any().is::<SparkTrySubtract>()
+            || node.inner().as_any().is::<SparkWidthBucket>()
+            || node.inner().as_any().is::<StrToMap>()
             || node.inner().as_any().is::<ParseUrl>()
             || node.inner().as_any().is::<UrlDecode>()
             || node.inner().as_any().is::<UrlEncode>()
