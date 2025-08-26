@@ -354,7 +354,8 @@ impl ExecutionPlan for DeltaWriterExec {
                         )));
                     }
                 }
-                PhysicalSinkMode::IgnoreIfExists => { // FIXME: not correct
+                PhysicalSinkMode::IgnoreIfExists => {
+                    // FIXME: not correct
                     if table_exists {
                         let batch = RecordBatch::try_new(
                             schema,
