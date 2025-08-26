@@ -71,4 +71,8 @@ impl UserDefinedLogicalNodeCore for SortWithinPartitionsNode {
             fetch: self.fetch,
         })
     }
+
+    fn necessary_children_exprs(&self, output_columns: &[usize]) -> Option<Vec<Vec<usize>>> {
+        Some(vec![output_columns.to_vec()])
+    }
 }
