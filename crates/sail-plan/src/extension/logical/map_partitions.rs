@@ -100,4 +100,8 @@ impl UserDefinedLogicalNodeCore for MapPartitionsNode {
             ..self.clone()
         })
     }
+
+    fn necessary_children_exprs(&self, _output_columns: &[usize]) -> Option<Vec<Vec<usize>>> {
+        Some(vec![(0..self.input.schema().fields().len()).collect()])
+    }
 }
