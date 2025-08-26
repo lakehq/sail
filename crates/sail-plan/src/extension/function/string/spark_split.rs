@@ -6,6 +6,7 @@ use arrow::array::{
     StringBuilder,
 };
 use arrow::datatypes::{DataType, Field};
+use datafusion_common::utils::take_function_args;
 use datafusion_common::{Result, ScalarValue};
 use datafusion_expr::function::Hint;
 use datafusion_expr::{ScalarFunctionArgs, ScalarUDFImpl};
@@ -59,26 +60,32 @@ impl ScalarUDFImpl for SparkSplit {
     }
 
     fn coerce_types(&self, arg_types: &[DataType]) -> Result<Vec<DataType>> {
-        let num_args = arg_types.len();
-        match (num_args, arg_types.first(), arg_types.get(1), arg_types.get(2).map(|data_type| data_type.is_integer())) {
-            (
-                2 | 3,
-                Some(DataType::Utf8 | DataType::Utf8View | DataType::LargeUtf8 | DataType::Null),
-                Some(DataType::Utf8 | DataType::Utf8View | DataType::LargeUtf8 | DataType::Null),
-                None | Some(true),
-            ) => {
-                let mut res_types = vec![arg_types[0].clone(), arg_types[1].clone()];
-                if num_args == 3 {
-                    res_types.push(DataType::Int32);
+        let err = || {
+            Err(unsupported_data_types_exec_err(
+            Self::NAME,
+            "Expected (STRING, STRING) or (STRING, STRING, INT). Adjust the value to match the syntax, or change its target type. Use try_cast to handle malformed input and return NULL instead",
+            arg_types,
+        ))
+        };
+
+        let mut res_types = vec![];
+        for i in 0..=1 {
+            res_types.push(match arg_types.get(i) {
+                Some(DataType::Utf8 | DataType::Utf8View | DataType::LargeUtf8) => {
+                    Ok(arg_types[i].clone())
                 }
-                Ok(res_types)
-            }
-            _ => Err(unsupported_data_types_exec_err(
-                Self::NAME,
-                "Expected (STRING, STRING) or (STRING, STRING, INT). Adjust the value to match the syntax, or change its target type. Use try_cast to handle malformed input and return NULL instead",
-                arg_types,
-            )),
+                Some(DataType::Null) => Ok(DataType::Utf8),
+                _ => err(),
+            });
         }
+        if arg_types.len() == 3 {
+            res_types.push(if arg_types[2].is_null() || arg_types[2].is_integer() {
+                Ok(DataType::Int32)
+            } else {
+                err()
+            });
+        }
+        res_types.into_iter().collect::<Result<Vec<_>>>()
     }
 
     fn invoke_with_args(&self, args: ScalarFunctionArgs) -> Result<ColumnarValue> {
@@ -107,18 +114,18 @@ where
     FirstOffset: OffsetSizeTrait,
     SecondOffset: OffsetSizeTrait,
 {
-    // Getting the arrays
+    let [values_arr, format_arr, limit_arr] = take_function_args(SparkSplit::NAME, args)?;
     let values: Arc<Option<&GenericStringArray<FirstOffset>>> = Arc::new(
-        args[0]
+        values_arr
             .as_any()
             .downcast_ref::<GenericStringArray<FirstOffset>>(),
     );
     let format: Arc<Option<&GenericStringArray<SecondOffset>>> = Arc::new(
-        args[1]
+        format_arr
             .as_any()
             .downcast_ref::<GenericStringArray<SecondOffset>>(),
     );
-    let limit = opt_downcast_arg!(args[2], Int32Array);
+    let limit = opt_downcast_arg!(limit_arr, Int32Array);
 
     match (values.as_ref(), format.as_ref(), limit.as_ref()) {
         (Some(values), Some(format), Some(limit)) => {
