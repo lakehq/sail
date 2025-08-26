@@ -24,6 +24,7 @@ class SocketServer:
             return
         self._socket = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
         self._socket.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+        self._socket.settimeout(1)
         self._socket.bind((self.host, self.port))
         (_, self.port) = self._socket.getsockname()
         self._socket.listen(1)
