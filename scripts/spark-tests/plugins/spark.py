@@ -267,9 +267,38 @@ SKIPPED_SPARK_TESTS = [
         keywords=["test_parity_job_cancellation.py"],
         reason="Slow test not working yet",
     ),
+    # We skip all the streaming tests since some of them are slow,
+    # and some of them test behaviors that are tied to the specific JVM implementation
+    # of Spark Structured Streaming.
+    # Sail implements the streaming API but comes with its own extensions and behaviors.
+    # So we write our own streaming tests in the PySail test suite.
     TestMarker(
         keywords=["test_assert_data_frame_equal_not_support_streaming"],
-        reason="Streaming DataFrame detection not working yet",
+        reason="Streaming test",
+    ),
+    TestMarker(
+        keywords=["pyspark.sql.dataframe.DataFrame.readStream"],
+        reason="Streaming test",
+    ),
+    TestMarker(
+        keywords=["pyspark.sql.dataframe.DataFrame.writeStream"],
+        reason="Streaming test",
+    ),
+    TestMarker(
+        keywords=["connect", "streaming", "test_parity_foreach.py"],
+        reason="Streaming test",
+    ),
+    TestMarker(
+        keywords=["connect", "streaming", "test_parity_foreach_batch.py"],
+        reason="Streaming test",
+    ),
+    TestMarker(
+        keywords=["connect", "streaming", "test_parity_listener.py"],
+        reason="Streaming test",
+    ),
+    TestMarker(
+        keywords=["connect", "streaming", "test_parity_streaming.py"],
+        reason="Streaming test",
     ),
 ]
 

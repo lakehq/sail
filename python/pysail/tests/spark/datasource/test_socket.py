@@ -36,6 +36,8 @@ class SocketServer:
     def stop(self):
         self._running = False
         if self._socket is not None:
+            # We need to explicitly shut down the socket to unblock `accept()`,
+            # otherwise the thread may hang, and we will wait indefinitely in `join()`.
             self._socket.shutdown(socket.SHUT_RDWR)
             self._socket.close()
             self._socket = None
