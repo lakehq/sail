@@ -128,7 +128,8 @@ fn arrow_schema_from_snapshot(
         .filter(|f| !meta.partition_columns().contains(&f.name().to_string()))
         .map(|f| {
             let field_name = f.name().to_string();
-            let field_type = arrow_type_from_delta_type(f.data_type())?;
+            let field: Field = f.try_into_arrow()?;
+            let field_type = field.data_type().clone();
             Ok(Field::new(field_name, field_type, f.is_nullable()))
         })
         .chain(meta.partition_columns().iter().map(|partition_col| {
@@ -136,8 +137,9 @@ fn arrow_schema_from_snapshot(
             let f = schema
                 .field(partition_col)
                 .expect("Partition column should exist in schema");
+            let field: Field = f.try_into_arrow()?;
             let field_name = f.name().to_string();
-            let field_type = arrow_type_from_delta_type(f.data_type())?;
+            let field_type = field.data_type().clone();
             let field = Field::new(field_name, field_type, f.is_nullable());
             let corrected = if wrap_partitions {
                 match field.data_type() {
@@ -172,7 +174,8 @@ fn arrow_schema_from_struct_type(
         .map(|f| {
             // Convert StructField to Arrow Field
             let field_name = f.name().to_string();
-            let field_type = arrow_type_from_delta_type(f.data_type())?;
+            let field: Field = f.try_into_arrow()?;
+            let field_type = field.data_type().clone();
             Ok(Field::new(field_name, field_type, f.is_nullable()))
         })
         .chain(
@@ -183,8 +186,9 @@ fn arrow_schema_from_struct_type(
                 let f = schema
                     .field(partition_col)
                     .expect("Partition column should exist in schema");
+                let field: Field = f.try_into_arrow()?;
                 let field_name = f.name().to_string();
-                let field_type = arrow_type_from_delta_type(f.data_type())?;
+                let field_type = field.data_type().clone();
                 let field = Field::new(field_name, field_type, f.is_nullable());
                 let corrected = if wrap_partitions {
                     match field.data_type() {
@@ -207,82 +211,6 @@ fn arrow_schema_from_struct_type(
         .collect::<Result<Vec<Field>, DeltaTableError>>()?;
 
     Ok(Arc::new(ArrowSchema::new(fields)))
-}
-
-fn arrow_type_from_delta_type(
-    delta_type: &deltalake::kernel::DataType,
-) -> DeltaResult<ArrowDataType> {
-    use deltalake::kernel::DataType as DeltaType;
-
-    Ok(match delta_type {
-        DeltaType::Primitive(primitive) => {
-            use deltalake::kernel::PrimitiveType;
-            match primitive {
-                PrimitiveType::String => ArrowDataType::Utf8,
-                PrimitiveType::Long => ArrowDataType::Int64,
-                PrimitiveType::Integer => ArrowDataType::Int32,
-                PrimitiveType::Short => ArrowDataType::Int16,
-                PrimitiveType::Byte => ArrowDataType::Int8,
-                PrimitiveType::Float => ArrowDataType::Float32,
-                PrimitiveType::Double => ArrowDataType::Float64,
-                PrimitiveType::Boolean => ArrowDataType::Boolean,
-                PrimitiveType::Binary => ArrowDataType::Binary,
-                PrimitiveType::Date => ArrowDataType::Date32,
-                PrimitiveType::Timestamp => ArrowDataType::Timestamp(TimeUnit::Microsecond, None),
-                PrimitiveType::TimestampNtz => {
-                    ArrowDataType::Timestamp(TimeUnit::Microsecond, None)
-                }
-                PrimitiveType::Decimal(decimal_type) => {
-                    ArrowDataType::Decimal128(decimal_type.precision(), decimal_type.scale() as i8)
-                }
-            }
-        }
-        DeltaType::Array(array_type) => {
-            let element_type = arrow_type_from_delta_type(array_type.element_type())?;
-            ArrowDataType::List(Arc::new(Field::new(
-                "element",
-                element_type,
-                array_type.contains_null(),
-            )))
-        }
-        DeltaType::Map(map_type) => {
-            let key_type = arrow_type_from_delta_type(map_type.key_type())?;
-            let value_type = arrow_type_from_delta_type(map_type.value_type())?;
-            ArrowDataType::Map(
-                Arc::new(Field::new(
-                    "entries",
-                    ArrowDataType::Struct(
-                        vec![
-                            Arc::new(Field::new("key", key_type, false)),
-                            Arc::new(Field::new(
-                                "value",
-                                value_type,
-                                map_type.value_contains_null(),
-                            )),
-                        ]
-                        .into(),
-                    ),
-                    false,
-                )),
-                false,
-            )
-        }
-        DeltaType::Struct(struct_type) => {
-            let fields = struct_type
-                .fields()
-                .map(|f| {
-                    let field_type = arrow_type_from_delta_type(f.data_type())?;
-                    Ok(Arc::new(Field::new(
-                        f.name().to_string(),
-                        field_type,
-                        f.is_nullable(),
-                    )))
-                })
-                .collect::<Result<Vec<_>, DeltaTableError>>()?;
-            ArrowDataType::Struct(fields.into())
-        }
-        DeltaType::Variant(_) => todo!(),
-    })
 }
 
 fn arrow_schema_impl(snapshot: &Snapshot, wrap_partitions: bool) -> DeltaResult<ArrowSchemaRef> {
