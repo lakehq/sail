@@ -277,10 +277,6 @@ SKIPPED_SPARK_TESTS = [
         reason="Streaming test",
     ),
     TestMarker(
-        keywords=["pyspark.sql.dataframe.DataFrame.readStream"],
-        reason="Streaming test",
-    ),
-    TestMarker(
         keywords=["pyspark.sql.dataframe.DataFrame.writeStream"],
         reason="Streaming test",
     ),
