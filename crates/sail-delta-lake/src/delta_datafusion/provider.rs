@@ -39,7 +39,7 @@ use crate::delta_datafusion::{
     create_object_store_url, delta_to_datafusion_error, df_logical_schema, get_pushdown_filters,
     partitioned_file_from_action, DataFusionMixins, DeltaScanConfig, DeltaTableStateExt,
 };
-use crate::table::state::DeltaTableState;
+use crate::table::DeltaTableState;
 
 /// A Delta table provider that enables additional metadata columns to be included during the scan
 #[derive(Debug)]

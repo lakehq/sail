@@ -12,7 +12,8 @@ use url::Url;
 use crate::delta_datafusion::{delta_to_datafusion_error, DeltaScanConfig, DeltaTableProvider};
 use crate::options::TableDeltaOptions;
 
-pub mod state;
+mod state;
+pub use state::*;
 
 pub async fn open_table_with_object_store(
     location: Url,

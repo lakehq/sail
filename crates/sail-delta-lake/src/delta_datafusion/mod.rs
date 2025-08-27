@@ -39,7 +39,7 @@ use serde::{Deserialize, Serialize};
 use url::Url;
 
 use crate::kernel::snapshot::{EagerSnapshot, Snapshot};
-use crate::table::state::DeltaTableState;
+use crate::table::DeltaTableState;
 /// [Credit]: <https://github.com/delta-io/delta-rs/blob/3607c314cbdd2ad06c6ee0677b92a29f695c71f3/crates/core/src/delta_datafusion/mod.rs>
 pub(crate) const PATH_COLUMN: &str = "__delta_rs_path";
 

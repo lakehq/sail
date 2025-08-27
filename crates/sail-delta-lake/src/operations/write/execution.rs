@@ -18,7 +18,7 @@ use crate::delta_datafusion::{
     datafusion_to_delta_error, DataFusionMixins, DeltaScanConfigBuilder, DeltaTableProvider,
 };
 use crate::operations::write::writer::{DeltaWriter, WriterConfig};
-use crate::table::state::DeltaTableState;
+use crate::table::DeltaTableState;
 
 /// Configuration for the writer on how to collect stats
 #[derive(Clone)]

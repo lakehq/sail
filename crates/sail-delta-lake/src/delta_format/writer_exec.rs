@@ -38,7 +38,7 @@ use crate::delta_format::CommitInfo;
 use crate::operations::write::execution::{prepare_predicate_actions_physical, WriterStatsConfig};
 use crate::operations::write::writer::{DeltaWriter, WriterConfig};
 use crate::options::TableDeltaOptions;
-use crate::table::open_table_with_object_store;
+use crate::table::{open_table_with_object_store, DeltaTableState};
 
 /// Schema handling mode for Delta Lake writes
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -237,7 +237,7 @@ impl ExecutionPlan for DeltaWriterExec {
                                 .map_err(|e| DataFusionError::External(Box::new(e)))?;
 
                             // Create sail DeltaTableState from deltalake snapshot
-                            let snapshot = crate::table::state::DeltaTableState::try_new(
+                            let snapshot = DeltaTableState::try_new(
                                 &*table.log_store(),
                                 table.config.clone(),
                                 Some(deltalake_snapshot.version()),
@@ -287,7 +287,7 @@ impl ExecutionPlan for DeltaWriterExec {
                                 .map_err(|e| DataFusionError::External(Box::new(e)))?;
 
                             // Create sail DeltaTableState from deltalake snapshot
-                            let snapshot = crate::table::state::DeltaTableState::try_new(
+                            let snapshot = DeltaTableState::try_new(
                                 &*table.log_store(),
                                 table.config.clone(),
                                 Some(deltalake_snapshot.version()),
@@ -335,7 +335,7 @@ impl ExecutionPlan for DeltaWriterExec {
                             .map_err(|e| DataFusionError::External(Box::new(e)))?;
 
                         // Create sail DeltaTableState from deltalake snapshot
-                        let snapshot = crate::table::state::DeltaTableState::try_new(
+                        let snapshot = DeltaTableState::try_new(
                             &*table.log_store(),
                             table.config.clone(),
                             Some(deltalake_snapshot.version()),
