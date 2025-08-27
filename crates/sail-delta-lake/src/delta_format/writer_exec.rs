@@ -238,7 +238,7 @@ impl ExecutionPlan for DeltaWriterExec {
 
                             // Create sail DeltaTableState from deltalake snapshot
                             let snapshot = DeltaTableState::try_new(
-                                &*table.log_store(),
+                                &table.log_store(),
                                 table.config.clone(),
                                 Some(deltalake_snapshot.version()),
                             )
@@ -288,7 +288,7 @@ impl ExecutionPlan for DeltaWriterExec {
 
                             // Create sail DeltaTableState from deltalake snapshot
                             let snapshot = DeltaTableState::try_new(
-                                &*table.log_store(),
+                                &table.log_store(),
                                 table.config.clone(),
                                 Some(deltalake_snapshot.version()),
                             )
@@ -336,7 +336,7 @@ impl ExecutionPlan for DeltaWriterExec {
 
                         // Create sail DeltaTableState from deltalake snapshot
                         let snapshot = DeltaTableState::try_new(
-                            &*table.log_store(),
+                            &table.log_store(),
                             table.config.clone(),
                             Some(deltalake_snapshot.version()),
                         )

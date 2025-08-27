@@ -164,7 +164,7 @@ fn arrow_schema_from_snapshot(
 }
 
 fn arrow_schema_from_struct_type(
-    schema: &deltalake::kernel::StructType,
+    schema: &delta_kernel::schema::StructType,
     partition_columns: &[String],
     wrap_partitions: bool,
 ) -> DeltaResult<ArrowSchemaRef> {
@@ -731,7 +731,7 @@ pub(crate) async fn find_files_scan_physical(
     use datafusion::physical_plan::ExecutionPlan;
 
     let candidate_map: HashMap<String, Add> = snapshot
-        .file_actions_iter(&*log_store)
+        .file_actions_iter(&log_store)
         .map_ok(|add| (add.path.clone(), add.to_owned()))
         .try_collect()
         .await?;
@@ -1054,7 +1054,7 @@ pub async fn find_files_physical(
             if expr_properties.partition_only {
                 // Use partition-only scanning (memory table approach)
                 let candidates =
-                    scan_memory_table_physical(snapshot, &*log_store, state, adapted_predicate)
+                    scan_memory_table_physical(snapshot, &log_store, state, adapted_predicate)
                         .await?;
                 Ok(FindFiles {
                     candidates,
@@ -1071,7 +1071,7 @@ pub async fn find_files_physical(
             }
         }
         None => Ok(FindFiles {
-            candidates: snapshot.file_actions(&*log_store).await?,
+            candidates: snapshot.file_actions(&log_store).await?,
             partition_scan: true,
         }),
     }

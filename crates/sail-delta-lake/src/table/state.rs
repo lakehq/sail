@@ -15,9 +15,8 @@ use deltalake::table::config::TablePropertiesExt;
 use deltalake::{DeltaResult, DeltaTableConfig, DeltaTableError};
 use futures::stream::BoxStream;
 use futures::{StreamExt, TryStreamExt};
-// use object_store::path::Path;
-use serde::{Deserialize, Serialize};
 
+// use object_store::path::Path;
 use crate::kernel::arrow::engine_ext::{ExpressionEvaluatorExt, SnapshotExt};
 // use crate::kernel::schema::to_kernel_predicate;
 // use crate::kernel::snapshot::iterators::LogicalFileView;
@@ -26,8 +25,7 @@ use crate::kernel::snapshot::EagerSnapshot;
 use crate::kernel::ARROW_HANDLER;
 
 /// State snapshot currently held by the Delta Table instance.
-#[derive(Debug, Clone, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase")]
+#[derive(Debug, Clone)]
 pub struct DeltaTableState {
     pub(crate) snapshot: EagerSnapshot,
 }

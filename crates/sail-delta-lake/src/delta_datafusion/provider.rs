@@ -223,7 +223,7 @@ impl TableProvider for DeltaTableProvider {
                 if logical_filter.is_none() && limit.is_none() {
                     let files: Vec<Add> = self
                         .snapshot
-                        .file_actions_iter(&*self.log_store)
+                        .file_actions_iter(&self.log_store)
                         .try_collect()
                         .await
                         .map_err(delta_to_datafusion_error)?;
@@ -242,7 +242,7 @@ impl TableProvider for DeltaTableProvider {
                     // For now, collect all files and apply pruning logic
                     let all_files: Vec<Add> = self
                         .snapshot
-                        .file_actions_iter(&*self.log_store)
+                        .file_actions_iter(&self.log_store)
                         .try_collect()
                         .await
                         .map_err(delta_to_datafusion_error)?;

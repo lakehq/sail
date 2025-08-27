@@ -34,7 +34,6 @@ pub mod iterators;
 pub mod log_data;
 mod parse;
 pub mod replay;
-mod serde;
 mod stream;
 
 pub(crate) static SCAN_ROW_ARROW_SCHEMA: LazyLock<arrow_schema::SchemaRef> = LazyLock::new(|| {

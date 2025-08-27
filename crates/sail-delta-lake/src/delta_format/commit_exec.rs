@@ -287,7 +287,6 @@ impl ExecutionPlan for DeltaCommitExec {
             } else {
                 None
             };
-
             let reference = snapshot.as_ref().map(|s| *s as &dyn TableReference);
 
             CommitBuilder::from(CommitProperties::default())
