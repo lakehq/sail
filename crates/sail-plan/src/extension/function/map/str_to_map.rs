@@ -14,7 +14,7 @@ use datafusion_expr::{
 use datafusion_functions::utils::make_scalar_function;
 
 use crate::extension::function::map::map_function::map_from_arrays_inner;
-use crate::extension::function::string::spark_split::{split_to_array, SparkSplit};
+use crate::extension::function::string::spark_split::{parse_regex, split_to_array, SparkSplit};
 
 #[derive(Debug)]
 pub struct StrToMap {
@@ -97,7 +97,7 @@ impl ScalarUDFImpl for StrToMap {
             return_field: split_return_field,
         })?;
 
-        make_scalar_function(str_to_map_inner, [Hint::AcceptsSingular].repeat(2))(&[
+        make_scalar_function(str_to_map_inner, vec![Hint::Pad, Hint::AcceptsSingular])(&[
             split_result,
             key_value_delims,
         ])
@@ -117,22 +117,23 @@ fn str_to_map_inner(args: &[ArrayRef]) -> Result<ArrayRef> {
             let mut keys = Vec::with_capacity(result_row_cnt);
             let mut values = Vec::with_capacity(result_row_cnt);
 
-            let key_value_delim_scalar = if key_value_delim_strs.len() == 1 {
-                Some(key_value_delim_strs.value(0))
-            } else {
-                None
-            };
+            let key_value_delim_scalar = (key_value_delim_strs.len() == 1
+                && key_value_delim_strs.is_valid(0))
+            .then(|| parse_regex(key_value_delim_strs.value(0)))
+            .transpose()?;
 
             for rn in 0..pair_offsets.len() - 1 {
                 if pair_lists.is_null(rn) {
                     continue;
                 }
-                let key_value_delim =
-                    key_value_delim_scalar.unwrap_or_else(|| key_value_delim_strs.value(rn));
+                let key_value_delim = key_value_delim_scalar.as_ref().map_or_else(
+                    || parse_regex(key_value_delim_strs.value(rn)),
+                    |delim| Ok(delim.clone()),
+                )?;
 
                 for pair_rn in pair_offsets[rn]..pair_offsets[rn + 1] {
                     let pair = pair_strs.value(pair_rn as usize);
-                    let key_value = split_to_array(pair, key_value_delim, 2)?;
+                    let key_value = split_to_array(pair, &key_value_delim, 2)?;
                     keys.push(key_value.first().cloned().flatten());
                     values.push(key_value.get(1).cloned().flatten());
                 }
