@@ -26,7 +26,7 @@ use url::Url;
 use crate::kernel::arrow::engine_ext::{ScanExt, SnapshotExt};
 use crate::kernel::models::fields::ActionTypeExt;
 use crate::kernel::snapshot::iterators::LogicalFileView;
-use crate::kernel::snapshot::log_data::LogDataHandler;
+pub use crate::kernel::snapshot::log_data::LogDataHandler;
 use crate::kernel::snapshot::parse::read_removes;
 use crate::kernel::snapshot::stream::{RecordBatchReceiverStreamBuilder, SendableRBStream};
 
@@ -482,6 +482,11 @@ impl EagerSnapshot {
     /// Well known table configuration
     pub fn table_properties(&self) -> &TableProperties {
         self.snapshot.table_properties()
+    }
+
+    /// Well known table configuration (alias for table_properties)
+    pub fn config(&self) -> &TableProperties {
+        self.table_properties()
     }
 
     pub fn table_configuration(&self) -> &TableConfiguration {

@@ -16,9 +16,8 @@ use datafusion::physical_plan::{
 };
 use datafusion_common::{internal_err, DataFusionError, Result};
 use datafusion_physical_expr::EquivalenceProperties;
-use deltalake::kernel::engine::arrow_conversion::TryIntoKernel;
-use deltalake::kernel::schema::StructType;
-use deltalake::kernel::transaction::{CommitBuilder, CommitProperties, TableReference};
+use delta_kernel::engine::arrow_conversion::TryIntoKernel;
+use delta_kernel::schema::StructType;
 #[allow(deprecated)]
 use deltalake::kernel::{Action, Add, Protocol};
 use deltalake::logstore::StorageConfig;
@@ -27,6 +26,7 @@ use futures::stream::{self, StreamExt};
 use url::Url;
 
 use crate::delta_format::CommitInfo;
+use crate::kernel::transaction::{CommitBuilder, CommitProperties, TableReference};
 use crate::table::{create_delta_table_with_object_store, open_table_with_object_store};
 
 /// Physical execution node for Delta Lake commit operations
@@ -178,7 +178,6 @@ impl ExecutionPlan for DeltaCommitExec {
                 )
                 .await
                 .map_err(|e| DataFusionError::External(Box::new(e)))?
-                .into()
             };
 
             let mut total_rows = 0u64;

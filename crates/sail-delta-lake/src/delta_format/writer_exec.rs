@@ -518,7 +518,7 @@ impl DeltaWriterExec {
 
     /// Handle schema evolution based on the schema mode
     async fn handle_schema_evolution(
-        table: &deltalake::DeltaTable,
+        table: &crate::table::DeltaTable,
         input_schema: &SchemaRef,
         schema_mode: Option<SchemaMode>,
     ) -> Result<(SchemaRef, Vec<Action>)> {
