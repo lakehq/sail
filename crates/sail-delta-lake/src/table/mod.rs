@@ -154,19 +154,11 @@ pub(crate) async fn create_delta_table_provider_with_object_store(
     let log_store = create_logstore_with_object_store(object_store, location, storage_options)?;
 
     // Load the table state using deltalake's DeltaTable
-    let mut deltalake_table = deltalake::DeltaTable::new(log_store.clone(), Default::default());
+    let mut deltalake_table = DeltaTable::new(log_store.clone(), Default::default());
     deltalake_table.load().await?;
 
-    let deltalake_snapshot = deltalake_table.snapshot()?.clone();
+    let snapshot = deltalake_table.snapshot()?.clone();
     let config = scan_config.unwrap_or_default();
-
-    // Create sail DeltaTableState from deltalake snapshot
-    let snapshot = crate::table::state::DeltaTableState::try_new(
-        &*log_store,
-        deltalake_table.config.clone(),
-        Some(deltalake_snapshot.version()),
-    )
-    .await?;
 
     DeltaTableProvider::try_new(snapshot, log_store, config)
 }
