@@ -41,6 +41,9 @@ use prost::Message;
 use sail_common_datafusion::datasource::PhysicalSinkMode;
 use sail_common_datafusion::udf::StreamUDF;
 use sail_common_datafusion::utils::{read_record_batches, write_record_batches};
+use sail_data_source::formats::console::ConsoleSinkExec;
+use sail_data_source::formats::rate::{RateSourceExec, TableRateOptions};
+use sail_data_source::formats::socket::{SocketSourceExec, TableSocketOptions};
 use sail_data_source::formats::text::source::TextSource;
 use sail_delta_lake::delta_format::{DeltaCommitExec, DeltaWriterExec};
 use sail_plan::extension::function::array::arrays_zip::ArraysZip;
@@ -459,7 +462,6 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
                     null_equality,
                 )?))
             }
-
             NodeKind::DeltaWriter(gen::DeltaWriterExecNode {
                 input,
                 table_url,
@@ -511,6 +513,57 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
                     table_exists,
                     Arc::new(sink_schema),
                 )))
+            }
+            NodeKind::ConsoleSink(gen::ConsoleSinkExecNode { input }) => {
+                let input = self.try_decode_plan(&input, registry)?;
+                Ok(Arc::new(ConsoleSinkExec::new(input)))
+            }
+            NodeKind::SocketSource(gen::SocketSourceExecNode {
+                host,
+                port,
+                max_batch_size,
+                timeout_sec,
+                schema,
+                projection,
+            }) => {
+                let options = TableSocketOptions {
+                    host,
+                    port: u16::try_from(port)
+                        .map_err(|_| plan_datafusion_err!("invalid port for socket source"))?,
+                    max_batch_size: usize::try_from(max_batch_size).map_err(|_| {
+                        plan_datafusion_err!("invalid max batch size for socket source")
+                    })?,
+                    timeout_sec,
+                };
+                let schema = self.try_decode_schema(&schema)?;
+                let projection = self.try_decode_projection(&projection)?;
+                Ok(Arc::new(SocketSourceExec::try_new(
+                    options,
+                    Arc::new(schema),
+                    projection,
+                )?))
+            }
+            NodeKind::RateSource(gen::RateSourceExecNode {
+                rows_per_second,
+                num_partitions,
+                schema,
+                projection,
+            }) => {
+                let options = TableRateOptions {
+                    rows_per_second: usize::try_from(rows_per_second).map_err(|_| {
+                        plan_datafusion_err!("invalid rows per second for rate source")
+                    })?,
+                    num_partitions: usize::try_from(num_partitions).map_err(|_| {
+                        plan_datafusion_err!("invalid number of partitions for rate source")
+                    })?,
+                };
+                let projection = self.try_decode_projection(&projection)?;
+                let schema = self.try_decode_schema(&schema)?;
+                Ok(Arc::new(RateSourceExec::try_new(
+                    options,
+                    Arc::new(schema),
+                    projection,
+                )?))
             }
             // TODO: StreamingTableExec?
             _ => plan_err!("unsupported physical plan node: {node_kind:?}"),
@@ -764,6 +817,40 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
                 partition_columns: delta_commit_exec.partition_columns().to_vec(),
                 table_exists: delta_commit_exec.table_exists(),
                 sink_schema: self.try_encode_schema(delta_commit_exec.sink_schema())?,
+            })
+        } else if let Some(console_sink) = node.as_any().downcast_ref::<ConsoleSinkExec>() {
+            let input = self.try_encode_plan(console_sink.input().clone())?;
+            NodeKind::ConsoleSink(gen::ConsoleSinkExecNode { input })
+        } else if let Some(socket_source) = node.as_any().downcast_ref::<SocketSourceExec>() {
+            let options = socket_source.options();
+            let max_batch_size = u64::try_from(options.max_batch_size).map_err(|_| {
+                plan_datafusion_err!("cannot encode max batch size for socket source")
+            })?;
+            let schema = self.try_encode_schema(socket_source.schema().as_ref())?;
+            let projection = self.try_encode_projection(socket_source.projection())?;
+            NodeKind::SocketSource(gen::SocketSourceExecNode {
+                host: options.host.clone(),
+                port: options.port as u32,
+                max_batch_size,
+                timeout_sec: options.timeout_sec,
+                schema,
+                projection,
+            })
+        } else if let Some(rate_source) = node.as_any().downcast_ref::<RateSourceExec>() {
+            let options = rate_source.options();
+            let rows_per_second = u64::try_from(options.rows_per_second).map_err(|_| {
+                plan_datafusion_err!("cannot encode rows per second for rate source")
+            })?;
+            let num_partitions = u64::try_from(options.num_partitions).map_err(|_| {
+                plan_datafusion_err!("cannot encode number of partitions for rate source")
+            })?;
+            let schema = self.try_encode_schema(rate_source.original_schema())?;
+            let projection = self.try_encode_projection(rate_source.projection())?;
+            NodeKind::RateSource(gen::RateSourceExecNode {
+                rows_per_second,
+                num_partitions,
+                schema,
+                projection,
             })
         } else {
             return plan_err!("unsupported physical plan node: {node:?}");
@@ -1514,6 +1601,28 @@ impl RemoteExecutionCodec {
         Ok(ExtendedStreamUdf {
             stream_udf_kind: Some(stream_udf_kind),
         })
+    }
+
+    fn try_decode_projection(&self, projection: &[u64]) -> Result<Vec<usize>> {
+        let projection = projection
+            .iter()
+            .map(|x| {
+                usize::try_from(*x)
+                    .map_err(|_| plan_datafusion_err!("failed to decode projection index: {x}"))
+            })
+            .collect::<Result<_>>()?;
+        Ok(projection)
+    }
+
+    fn try_encode_projection(&self, projection: &[usize]) -> Result<Vec<u64>> {
+        let projection = projection
+            .iter()
+            .map(|x| {
+                u64::try_from(*x)
+                    .map_err(|_| plan_datafusion_err!("failed to encode projection index: {x}"))
+            })
+            .collect::<Result<Vec<_>>>()?;
+        Ok(projection)
     }
 
     fn try_decode_lex_ordering(

@@ -22,7 +22,7 @@ panic = "deny"
 [workspace.dependencies]
 thiserror = { version = "2.0.16" }
 tokio = { version = "1.47.1", features = ["full"] }
-tokio-stream = "0.1.17"
+tokio-stream = { version = "0.1.17", features = ["time", "io-util"] }
 pbjson = "0.7.0"
 pbjson-types = "0.7.0"
 pbjson-build = "0.7.0"

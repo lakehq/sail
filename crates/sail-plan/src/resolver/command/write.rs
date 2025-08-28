@@ -35,6 +35,7 @@ pub(super) enum WriteTarget {
     Path {
         location: String,
     },
+    Sink,
     ExistingTable {
         table: spec::ObjectName,
         column_match: WriteColumnMatch,
@@ -54,6 +55,7 @@ pub(super) enum WriteColumnMatch {
 
 pub(super) enum WriteTableAction {
     Create,
+    CreateIfNotExists,
     CreateOrReplace,
     Replace,
 }
@@ -200,10 +202,26 @@ impl PlanResolver<'_> {
                 file_write_options.path = location;
                 file_write_options.mode = self.resolve_write_mode(mode, None, state).await?;
             }
+            WriteTarget::Sink => {
+                if !table_properties.is_empty() {
+                    return Err(PlanError::invalid(
+                        "table properties are not supported for writing to a sink",
+                    ));
+                }
+                if file_write_options.format.is_empty() {
+                    file_write_options.format = self.config.default_table_file_format.clone();
+                }
+                file_write_options.mode = self.resolve_write_mode(mode, None, state).await?;
+            }
             WriteTarget::ExistingTable {
                 table,
                 column_match,
             } => {
+                if !table_properties.is_empty() {
+                    return Err(PlanError::invalid(
+                        "cannot specify table properties when writing to an existing table",
+                    ));
+                }
                 let Some(info) = self.resolve_table_info(&table).await? else {
                     return Err(PlanError::invalid(format!(
                         "table does not exist: {table:?}"
@@ -212,33 +230,8 @@ impl PlanResolver<'_> {
                 if matches!(mode, WriteMode::IgnoreIfExists) {
                     return Ok(LogicalPlanBuilder::empty(false).build()?);
                 }
+                info.validate_file_write_options(&file_write_options)?;
                 input = Self::rewrite_write_input(input, column_match, &info)?;
-                if !info.is_empty_or_equivalent_partitioning(&file_write_options.partition_by) {
-                    return Err(PlanError::invalid(
-                        "cannot specify a different partitioning when writing to an existing table",
-                    ));
-                }
-                if !info.is_empty_or_equivalent_bucketing(
-                    &file_write_options.bucket_by,
-                    &file_write_options.sort_by,
-                ) {
-                    return Err(PlanError::invalid(
-                        "cannot specify a different bucketing when writing to an existing table",
-                    ));
-                }
-                if !table_properties.is_empty() {
-                    return Err(PlanError::invalid(
-                        "cannot specify table properties when writing to an existing table",
-                    ));
-                }
-                if !file_write_options.format.is_empty()
-                    && !file_write_options.format.eq_ignore_ascii_case(&info.format)
-                {
-                    return Err(PlanError::invalid(format!(
-                        "the format '{}' does not match the format '{}' for table {table:?}",
-                        file_write_options.format, info.format
-                    )));
-                }
                 file_write_options.mode = self
                     .resolve_write_mode(mode, Some(&info.schema()), state)
                     .await?;
@@ -256,6 +249,12 @@ impl PlanResolver<'_> {
                 if matches!(mode, WriteMode::IgnoreIfExists) && info.is_some() {
                     return Ok(LogicalPlanBuilder::empty(false).build()?);
                 }
+                if matches!(action, WriteTableAction::CreateIfNotExists) {
+                    if let Some(ref info) = info {
+                        info.validate_file_write_options(&file_write_options)?;
+                        input = Self::rewrite_write_input(input, WriteColumnMatch::ByName, info)?;
+                    }
+                }
                 file_write_options.mode = self.resolve_write_mode(mode, None, state).await?;
                 if file_write_options.format.is_empty() {
                     if let Some(format) = info.as_ref().map(|x| &x.format) {
@@ -269,16 +268,17 @@ impl PlanResolver<'_> {
                 } else {
                     file_write_options.path = self.resolve_default_table_location(&table)?;
                 }
-                let replace = match action {
-                    WriteTableAction::Create => false,
-                    WriteTableAction::CreateOrReplace => true,
+                let (if_not_exists, replace) = match action {
+                    WriteTableAction::Create => (false, false),
+                    WriteTableAction::CreateIfNotExists => (true, false),
+                    WriteTableAction::CreateOrReplace => (false, true),
                     WriteTableAction::Replace => {
                         if info.is_none() {
                             return Err(PlanError::invalid(format!(
                                 "table does not exist: {table:?}"
                             )));
                         }
-                        true
+                        (false, true)
                     }
                 };
                 let columns = input
@@ -309,7 +309,7 @@ impl PlanResolver<'_> {
                         partition_by,
                         sort_by,
                         bucket_by,
-                        if_not_exists: false,
+                        if_not_exists,
                         replace,
                         options: file_write_options
                             .options
@@ -539,6 +539,26 @@ impl TableInfo {
             .map(|col| col.field())
             .collect::<Vec<_>>();
         Schema::new(fields)
+    }
+
+    fn validate_file_write_options(&self, options: &FileWriteOptions) -> PlanResult<()> {
+        if !self.is_empty_or_equivalent_partitioning(&options.partition_by) {
+            return Err(PlanError::invalid(
+                "cannot specify a different partitioning when writing to an existing table",
+            ));
+        }
+        if !self.is_empty_or_equivalent_bucketing(&options.bucket_by, &options.sort_by) {
+            return Err(PlanError::invalid(
+                "cannot specify a different bucketing when writing to an existing table",
+            ));
+        }
+        if !options.format.is_empty() && !options.format.eq_ignore_ascii_case(&self.format) {
+            return Err(PlanError::invalid(format!(
+                "the format '{}' does not match the table format '{}'",
+                options.format, self.format
+            )));
+        }
+        Ok(())
     }
 
     fn is_empty_or_equivalent_partitioning(&self, partition_by: &[String]) -> bool {

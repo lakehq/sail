@@ -5604,6 +5604,7 @@ version = "0.3.3"
 dependencies = [
  "async-trait",
  "bytes",
+ "chrono",
  "chumsky",
  "datafusion",
  "datafusion-common",
@@ -5624,6 +5625,8 @@ dependencies = [
  "serde",
  "serde_yaml",
  "syn",
+ "tokio",
+ "tokio-stream",
  "url",
  "uuid",
 ]

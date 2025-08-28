@@ -2511,7 +2511,7 @@
         }
       },
       "output": {
-        "failure": "not implemented: function: regexp_instr"
+        "success": "ok"
       }
     },
     {
@@ -2533,7 +2533,7 @@
         }
       },
       "output": {
-        "failure": "not implemented: function: regexp_instr"
+        "success": "ok"
       }
     },
     {

@@ -17,6 +17,7 @@ mod insert;
 mod show;
 mod variable;
 mod write;
+mod write_stream;
 mod write_v1;
 mod write_v2;
 
@@ -194,6 +195,9 @@ impl PlanResolver<'_> {
             }
             CommandNode::Write(write) => self.resolve_command_write(write, state).await,
             CommandNode::WriteTo(write_to) => self.resolve_command_write_to(write_to, state).await,
+            CommandNode::WriteStream(write_stream) => {
+                self.resolve_command_write_stream(write_stream, state).await
+            }
             CommandNode::Explain { mode, input } => {
                 self.resolve_command_explain(*input, mode, state).await
             }
