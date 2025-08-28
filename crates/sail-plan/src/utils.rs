@@ -13,7 +13,7 @@ pub(crate) trait ItemTaker {
     fn one(self) -> Result<Self::Item>;
     fn two(self) -> Result<(Self::Item, Self::Item)>;
     fn three(self) -> Result<(Self::Item, Self::Item, Self::Item)>;
-    #[allow(clippy::type_complexity)]
+    #[allow(clippy::type_complexity, dead_code)]
     fn four(self) -> Result<(Self::Item, Self::Item, Self::Item, Self::Item)>;
     fn at_least_one(self) -> Result<(Self::Item, Vec<Self::Item>)>;
     fn one_or_more(self) -> Result<Either<Self::Item, Vec<Self::Item>>>;
