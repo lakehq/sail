@@ -10,6 +10,7 @@ use sail_common_datafusion::datasource::{PhysicalSinkMode, SinkInfo, SourceInfo,
 
 pub use crate::formats::console::writer::ConsoleSinkExec;
 
+/// Write data to stdout for testing purposes.
 #[derive(Debug)]
 pub struct ConsoleTableFormat;
 

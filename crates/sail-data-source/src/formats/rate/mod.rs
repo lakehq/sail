@@ -16,6 +16,8 @@ pub use crate::formats::rate::options::TableRateOptions;
 pub use crate::formats::rate::reader::RateSourceExec;
 use crate::formats::rate::reader::RateTableProvider;
 
+/// Generate record batches at a fixed rate for testing purposes.
+/// The record batches contain two columns, a timestamp and an integer value.
 #[derive(Debug)]
 pub struct RateTableFormat;
 

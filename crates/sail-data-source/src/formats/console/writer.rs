@@ -1,8 +1,9 @@
 use std::any::Any;
+use std::io::Write;
 use std::sync::Arc;
 
 use datafusion::arrow::datatypes::Schema;
-use datafusion::arrow::util::pretty::print_batches;
+use datafusion::arrow::util::pretty::pretty_format_batches;
 use datafusion::execution::{SendableRecordBatchStream, TaskContext};
 use datafusion::physical_expr::{EquivalenceProperties, Partitioning};
 use datafusion::physical_plan::execution_plan::{Boundedness, EmissionType};
@@ -83,18 +84,20 @@ impl ExecutionPlan for ConsoleSinkExec {
             stream
                 .enumerate()
                 .for_each(|(i, batch)| async move {
-                    println!("partition {partition} batch {i}");
-                    match batch {
-                        Ok(batch) => match print_batches(&[batch]) {
-                            Ok(_) => {}
+                    let text = match batch {
+                        Ok(batch) => match pretty_format_batches(&[batch]) {
+                            Ok(batch) => format!("{batch}"),
                             Err(e) => {
-                                println!("error printing batch: {e}");
+                                format!("error formatting batch: {e}")
                             }
                         },
                         Err(e) => {
-                            println!("error: {e}");
+                            format!("error: {e}")
                         }
-                    }
+                    };
+                    let mut stdout = std::io::stdout().lock();
+                    let _ = writeln!(stdout, "partition {partition} batch {i}");
+                    let _ = writeln!(stdout, "{text}");
                 })
                 .await;
             futures::stream::empty()

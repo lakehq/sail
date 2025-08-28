@@ -194,9 +194,17 @@ impl ExecutionPlan for SocketSourceExec {
         let options = self.options.clone();
         let schema = self.schema();
         let output = futures::stream::once(async move {
+            // We do not perform retries or reconnections here
+            // since the socket source is for testing purposes only.
             let stream = tokio::net::TcpStream::connect((options.host.as_str(), options.port))
                 .await
-                .map_err(|e| exec_datafusion_err!("failed to connect to socket: {e}"))?;
+                .map_err(|e| {
+                    exec_datafusion_err!(
+                        "failed to connect to socket {}:{}: {e}",
+                        options.host,
+                        options.port
+                    )
+                })?;
             let reader = BufReader::new(stream);
             let output = LinesStream::new(reader.lines())
                 .chunks_timeout(

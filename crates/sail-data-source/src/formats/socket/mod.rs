@@ -16,6 +16,8 @@ pub use crate::formats::socket::options::TableSocketOptions;
 pub use crate::formats::socket::reader::SocketSourceExec;
 use crate::formats::socket::reader::SocketTableProvider;
 
+/// Read test data from a TCP socket for testing purposes.
+/// The record batches contain a single string column corresponding to lines read from the socket.
 #[derive(Debug)]
 pub struct SocketTableFormat;
 

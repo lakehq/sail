@@ -205,6 +205,8 @@ impl ExecutionPlan for RateSourceExec {
                 self.options.num_partitions
             );
         }
+        // TODO: consider token bucket algorithm for data generation with a more stable rate
+        // TODO: make the data generation algorithm configurable
         let output: Pin<Box<dyn Stream<Item = Result<RecordBatch>> + Send>> =
             if self.options.rows_per_second == 0 {
                 let output = futures::stream::unfold((), |()| async move {
