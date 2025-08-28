@@ -1,7 +1,8 @@
-use pyo3::sync::GILOnceCell;
-use pyo3::{PyObject, Python};
 use std::fmt::Debug;
 use std::hash::{Hash, Hasher};
+
+use pyo3::sync::GILOnceCell;
+use pyo3::{PyObject, Python};
 
 use crate::error::PyUdfResult;
 
