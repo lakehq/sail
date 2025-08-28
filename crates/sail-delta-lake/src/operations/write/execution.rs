@@ -12,7 +12,7 @@ use deltalake::logstore::LogStoreRef;
 use deltalake::parquet::file::properties::WriterProperties;
 use deltalake::table::config::TablePropertiesExt;
 use deltalake::table::state::DeltaTableState;
-use deltalake::Path;
+use deltalake::{DeltaTableError, Path};
 use uuid::Uuid;
 
 /// [Credit]: <https://github.com/delta-io/delta-rs/blob/3607c314cbdd2ad06c6ee0677b92a29f695c71f3/crates/core/src/operations/write/execution.rs>
@@ -104,7 +104,7 @@ pub(crate) async fn execute_non_empty_expr_physical(
             .target_file_size()
             .get()
             .try_into()
-            .map_err(|e| datafusion_to_delta_error)?;
+            .map_err(|e| DeltaTableError::generic(format!("Invalid target file size: {e}")))?;
         let add_actions: Vec<Action> = write_execution_plan(
             Some(snapshot),
             state.clone(),
