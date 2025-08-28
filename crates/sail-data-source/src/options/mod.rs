@@ -9,7 +9,7 @@ pub use internal::{
 pub use loader::build_options;
 pub use loader::{load_default_options, load_options};
 
-mod internal {
+pub(crate) mod internal {
     include!(concat!(env!("OUT_DIR"), "/options/csv_read.rs"));
     include!(concat!(env!("OUT_DIR"), "/options/csv_write.rs"));
     include!(concat!(env!("OUT_DIR"), "/options/json_read.rs"));
@@ -20,6 +20,8 @@ mod internal {
     include!(concat!(env!("OUT_DIR"), "/options/delta_write.rs"));
     include!(concat!(env!("OUT_DIR"), "/options/text_read.rs"));
     include!(concat!(env!("OUT_DIR"), "/options/text_write.rs"));
+    include!(concat!(env!("OUT_DIR"), "/options/socket_read.rs"));
+    include!(concat!(env!("OUT_DIR"), "/options/rate_read.rs"));
 }
 
 pub trait DataSourceOptions: for<'de> serde::Deserialize<'de> {

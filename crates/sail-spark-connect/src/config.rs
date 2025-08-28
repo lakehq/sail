@@ -14,7 +14,7 @@ use crate::spark::config::{
     SPARK_SQL_SESSION_TIME_ZONE, SPARK_SQL_SOURCES_DEFAULT, SPARK_SQL_TIMESTAMP_TYPE,
     SPARK_SQL_WAREHOUSE_DIR,
 };
-use crate::spark::connect as sc;
+use crate::spark::connect;
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash, PartialOrd)]
 pub struct ConfigKeyValue {
@@ -22,8 +22,8 @@ pub struct ConfigKeyValue {
     pub value: Option<String>,
 }
 
-impl From<sc::KeyValue> for ConfigKeyValue {
-    fn from(kv: sc::KeyValue) -> Self {
+impl From<connect::KeyValue> for ConfigKeyValue {
+    fn from(kv: connect::KeyValue) -> Self {
         Self {
             key: kv.key,
             value: kv.value,
@@ -31,7 +31,7 @@ impl From<sc::KeyValue> for ConfigKeyValue {
     }
 }
 
-impl From<ConfigKeyValue> for sc::KeyValue {
+impl From<ConfigKeyValue> for connect::KeyValue {
     fn from(kv: ConfigKeyValue) -> Self {
         Self {
             key: kv.key,

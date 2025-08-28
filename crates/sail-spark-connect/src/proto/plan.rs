@@ -8,9 +8,10 @@ use crate::proto::data_type::{parse_spark_data_type, DEFAULT_FIELD_NAME};
 use crate::spark::connect as sc;
 use crate::spark::connect::catalog::CatType;
 use crate::spark::connect::relation::RelType;
+use crate::spark::connect::write_stream_operation_start::SinkDestination;
 use crate::spark::connect::{
-    plan, Catalog, CreateDataFrameViewCommand, Plan, Relation, RelationCommon, WriteOperation,
-    WriteOperationV2,
+    plan, Catalog, CreateDataFrameViewCommand, Plan, Relation, RelationCommon,
+    StreamingForeachFunction, WriteOperation, WriteOperationV2, WriteStreamOperationStart,
 };
 
 struct RelationMetadata {
@@ -1669,6 +1670,86 @@ impl TryFrom<CreateDataFrameViewCommand> for spec::CommandNode {
                 properties: vec![],
             },
         })
+    }
+}
+
+impl TryFrom<WriteStreamOperationStart> for spec::CommandNode {
+    type Error = SparkError;
+
+    fn try_from(start: WriteStreamOperationStart) -> SparkResult<spec::CommandNode> {
+        let WriteStreamOperationStart {
+            input,
+            format,
+            options,
+            partitioning_column_names,
+            // The output mode is ignored since the sink always accepts a record batch stream
+            // that represent incremental changes (either append-only or upserts).
+            // The sink will decide internally whether it can write incremental changes
+            // or needs a full overwrite.
+            output_mode: _,
+            query_name,
+            foreach_writer,
+            foreach_batch,
+            clustering_column_names,
+            // The trigger is ignored since we always do continuous processing.
+            // The source determines how the processing is triggered.
+            trigger: _,
+            sink_destination,
+        } = start;
+        let input = input.required("input relation")?.try_into()?;
+        let options = options.into_iter().collect();
+        let partitioning_column_names = partitioning_column_names
+            .into_iter()
+            .map(|x| x.into())
+            .collect();
+        let foreach_writer = foreach_writer.map(|x| x.try_into()).transpose()?;
+        let foreach_batch = foreach_batch.map(|x| x.try_into()).transpose()?;
+        let clustering_column_names = clustering_column_names
+            .into_iter()
+            .map(|x| x.into())
+            .collect();
+        let sink_destination = match sink_destination {
+            Some(SinkDestination::Path(path)) => {
+                Some(spec::WriteStreamSinkDestination::Path { path })
+            }
+            Some(SinkDestination::TableName(table)) => {
+                let table = from_ast_object_name(parse_object_name(table.as_str())?)?;
+                Some(spec::WriteStreamSinkDestination::Table { table })
+            }
+            None => None,
+        };
+        Ok(spec::CommandNode::WriteStream(spec::WriteStream {
+            input: Box::new(input),
+            format,
+            options,
+            partitioning_column_names,
+            query_name,
+            foreach_writer,
+            foreach_batch,
+            clustering_column_names,
+            sink_destination,
+        }))
+    }
+}
+
+impl TryFrom<StreamingForeachFunction> for spec::FunctionDefinition {
+    type Error = SparkError;
+
+    fn try_from(function: StreamingForeachFunction) -> SparkResult<spec::FunctionDefinition> {
+        use crate::spark::connect::common_inline_user_defined_function;
+        use crate::spark::connect::streaming_foreach_function::Function;
+
+        let StreamingForeachFunction { function } = function;
+        let function = function.required("streaming foreach function")?;
+        let function = match function {
+            Function::PythonFunction(x) => {
+                common_inline_user_defined_function::Function::PythonUdf(x)
+            }
+            Function::ScalaFunction(x) => {
+                common_inline_user_defined_function::Function::ScalarScalaUdf(x)
+            }
+        };
+        function.try_into()
     }
 }
 
