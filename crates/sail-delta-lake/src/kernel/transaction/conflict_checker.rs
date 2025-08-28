@@ -1,4 +1,7 @@
 //! Helper module to check if a transaction can be committed in case of conflicting commits.
+
+// [Credit]: <https://github.com/delta-io/delta-rs/blob/1f0b4d0965a85400c1effc6e9b4c7ebbb6795978/crates/core/src/kernel/transaction/conflict_checker.rs>
+
 use std::collections::HashSet;
 
 use datafusion::logical_expr::Expr;

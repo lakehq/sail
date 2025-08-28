@@ -1,6 +1,5 @@
 pub mod arrow;
 pub mod models;
-pub mod schema;
 pub mod snapshot;
 pub mod transaction;
 

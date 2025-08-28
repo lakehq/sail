@@ -1,5 +1,7 @@
 //! the code in this file is hoisted from datafusion with only slight modifications
 //!
+// [Credit]: <https://github.com/delta-io/delta-rs/blob/1f0b4d0965a85400c1effc6e9b4c7ebbb6795978/crates/core/src/kernel/snapshot/stream.rs>
+
 use std::pin::Pin;
 
 use datafusion::arrow::datatypes::SchemaRef;

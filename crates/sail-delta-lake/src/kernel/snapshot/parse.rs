@@ -1,4 +1,7 @@
 //! Utilities for converting Arrow arrays into Delta data structures.
+
+// [Credit]: <https://github.com/delta-io/delta-rs/blob/1f0b4d0965a85400c1effc6e9b4c7ebbb6795978/crates/core/src/kernel/snapshot/parse.rs>
+
 use datafusion::arrow::array::{
     Array, BooleanArray, Int32Array, Int64Array, MapArray, StringArray, StructArray,
 };

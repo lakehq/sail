@@ -27,6 +27,7 @@ use delta_kernel::{
 use deltalake::errors::{DeltaResult as DeltaResultLocal, DeltaTableError};
 use itertools::Itertools;
 
+/// [Credit]: <https://github.com/delta-io/delta-rs/blob/1f0b4d0965a85400c1effc6e9b4c7ebbb6795978/crates/core/src/kernel/arrow/engine_ext.rs>
 use crate::kernel::snapshot::replay::parse_partitions;
 use crate::kernel::snapshot::SCAN_ROW_ARROW_SCHEMA;
 

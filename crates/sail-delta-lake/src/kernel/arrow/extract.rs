@@ -9,6 +9,8 @@ use datafusion::arrow::array::{
 };
 use deltalake::{DeltaResult, DeltaTableError};
 
+// [Credit]: <https://github.com/delta-io/delta-rs/blob/1f0b4d0965a85400c1effc6e9b4c7ebbb6795978/crates/core/src/kernel/arrow/extract.rs>
+
 /// Trait to extract a column by name from a record batch or nested / complex array.
 pub(crate) trait ProvidesColumnByName {
     fn column_by_name(&self, name: &str) -> Option<&Arc<dyn Array>>;

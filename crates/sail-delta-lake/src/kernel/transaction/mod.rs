@@ -1,3 +1,5 @@
+// [Credit]: <https://github.com/delta-io/delta-rs/blob/1f0b4d0965a85400c1effc6e9b4c7ebbb6795978/crates/core/src/kernel/transaction/mod.rs>
+
 use std::collections::HashMap;
 use std::sync::Arc;
 

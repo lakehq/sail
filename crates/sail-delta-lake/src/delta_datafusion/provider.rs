@@ -41,6 +41,8 @@ use crate::delta_datafusion::{
 };
 use crate::table::DeltaTableState;
 
+// [Credit]: <https://github.com/delta-io/delta-rs/blob/3607c314cbdd2ad06c6ee0677b92a29f695c71f3/crates/core/src/delta_datafusion/mod.rs>
+
 /// A Delta table provider that enables additional metadata columns to be included during the scan
 #[derive(Debug)]
 pub struct DeltaTableProvider {
