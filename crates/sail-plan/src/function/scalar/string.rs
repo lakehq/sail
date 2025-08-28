@@ -1,12 +1,10 @@
-use std::sync::Arc;
-
 use datafusion::arrow::datatypes::DataType;
-use datafusion::functions;
 use datafusion::functions::expr_fn;
+use datafusion::functions::regex::expr_fn as regex_fn;
 use datafusion::functions::regex::regexpcount::RegexpCountFunc;
-use datafusion::functions::string::contains::ContainsFunc;
-use datafusion_common::ScalarValue;
-use datafusion_expr::{cast, expr, lit, try_cast, when, ExprSchemable, ScalarUDF};
+use datafusion::functions::regex::regexpinstr::RegexpInstrFunc;
+use datafusion_common::{DFSchema, ScalarValue};
+use datafusion_expr::{cast, expr, lit, try_cast, when, ExprSchemable};
 
 use crate::error::{PlanError, PlanResult};
 use crate::extension::function::string::levenshtein::Levenshtein;
@@ -21,287 +19,129 @@ use crate::extension::function::string::spark_try_to_number::SparkTryToNumber;
 use crate::function::common::{ScalarFunction, ScalarFunctionInput};
 use crate::utils::ItemTaker;
 
-fn regexp_replace(input: ScalarFunctionInput) -> PlanResult<expr::Expr> {
-    let ScalarFunctionInput { mut arguments, .. } = input;
-    if arguments.len() != 3 {
-        return Err(PlanError::invalid("regexp_replace requires 3 arguments"));
-    }
-    // Spark replaces all occurrences of the pattern.
-    arguments.push(expr::Expr::Literal(
-        ScalarValue::Utf8(Some("g".to_string())),
-        None,
-    ));
-    Ok(expr::Expr::ScalarFunction(expr::ScalarFunction {
-        func: Arc::new(ScalarUDF::from(
-            functions::regex::regexpreplace::RegexpReplaceFunc::new(),
-        )),
-        args: arguments,
-    }))
+fn regexp_replace(string: expr::Expr, pattern: expr::Expr, replacement: expr::Expr) -> expr::Expr {
+    regex_fn::regexp_replace(string, pattern, replacement, Some(lit("g")))
 }
 
 fn substr(input: ScalarFunctionInput) -> PlanResult<expr::Expr> {
     let ScalarFunctionInput {
-        arguments,
+        mut arguments,
         function_context,
     } = input;
-    if arguments.len() == 2 {
-        let (first, second) = arguments.two()?;
-        let first = match &first {
-            expr::Expr::Literal(ScalarValue::Utf8(_), _metadata)
-            | expr::Expr::Literal(ScalarValue::LargeUtf8(_), _metadata)
-            | expr::Expr::Literal(ScalarValue::Utf8View(_), _metadata) => first,
-            _ => {
-                let first_data_type = first.get_type(function_context.schema)?;
-                if matches!(
-                    first_data_type,
-                    DataType::Utf8 | DataType::LargeUtf8 | DataType::Utf8View
-                ) {
-                    first
-                } else {
-                    expr::Expr::Cast(expr::Cast {
-                        expr: Box::new(first),
-                        data_type: DataType::Utf8,
-                    })
-                }
-            }
-        };
-        // TODO: Spark client throws "UNEXPECTED EXCEPTION: ArrowInvalid('Unrecognized type: 24')"
-        //  when the return type is Utf8View.
-        return Ok(expr::Expr::Cast(expr::Cast {
-            expr: Box::new(expr_fn::substr(first, second)),
-            data_type: DataType::Utf8,
-        }));
-    }
-    if arguments.len() == 3 {
-        let (first, second, third) = arguments.three()?;
-        let first = match &first {
-            expr::Expr::Literal(ScalarValue::Utf8(_), _metadata)
-            | expr::Expr::Literal(ScalarValue::LargeUtf8(_), _metadata)
-            | expr::Expr::Literal(ScalarValue::Utf8View(_), _metadata) => first,
-            _ => {
-                let first_data_type = first.get_type(function_context.schema)?;
-                if matches!(
-                    first_data_type,
-                    DataType::Utf8 | DataType::LargeUtf8 | DataType::Utf8View
-                ) {
-                    first
-                } else {
-                    expr::Expr::Cast(expr::Cast {
-                        expr: Box::new(first),
-                        data_type: DataType::Utf8,
-                    })
-                }
-            }
-        };
-        // TODO: Spark client throws "UNEXPECTED EXCEPTION: ArrowInvalid('Unrecognized type: 24')"
-        //  when the return type is Utf8View.
-        return Ok(expr::Expr::Cast(expr::Cast {
-            expr: Box::new(expr_fn::substring(first, second, third)),
-            data_type: DataType::Utf8,
-        }));
-    }
-    Err(PlanError::invalid("substr requires 2 or 3 arguments"))
+    let length_opt = (arguments.len() == 3).then(|| arguments.pop()).flatten();
+    let (string, position) = arguments
+        .two()
+        .map_err(|_| PlanError::invalid("substr requires 2 or 3 arguments"))?;
+    let string = cast_to_logical_string_or_try(string, function_context.schema, false)?;
+    let substr_res = match length_opt {
+        Some(length) => expr_fn::substring(string, position, length),
+        None => expr_fn::substr(string, position),
+    };
+    // TODO: Spark client throws "UNEXPECTED EXCEPTION: ArrowInvalid('Unrecognized type: 24')"
+    //  when the return type is Utf8View.
+    Ok(cast(substr_res, DataType::Utf8))
 }
 
-fn concat_ws(input: ScalarFunctionInput) -> PlanResult<expr::Expr> {
-    let ScalarFunctionInput { arguments, .. } = input;
-    let (delimiter, args) = arguments.at_least_one()?;
+fn concat_ws(args: Vec<expr::Expr>) -> PlanResult<expr::Expr> {
+    let (delimiter, args) = args.at_least_one()?;
     if args.is_empty() {
-        return Ok(expr::Expr::Literal(
-            ScalarValue::Utf8(Some("".to_string())),
-            None,
-        ));
+        return Ok(lit(""));
     }
     Ok(expr_fn::concat_ws(delimiter, args))
 }
 
-fn overlay(input: ScalarFunctionInput) -> PlanResult<expr::Expr> {
-    let ScalarFunctionInput { arguments, .. } = input;
-    if arguments.len() == 3 {
-        return Ok(expr_fn::overlay(arguments));
+fn overlay(mut args: Vec<expr::Expr>) -> PlanResult<expr::Expr> {
+    if args.len() == 4
+        && matches!(
+            args[3],
+            expr::Expr::Literal(ScalarValue::Int64(Some(-1)), _)
+                | expr::Expr::Literal(ScalarValue::Int32(Some(-1)), _)
+        )
+    {
+        args.pop();
     }
-    if arguments.len() == 4 {
-        let (str, substr, pos, count) = arguments.four()?;
-        return match count {
-            expr::Expr::Literal(ScalarValue::Int64(Some(-1)), _metadata)
-            | expr::Expr::Literal(ScalarValue::Int32(Some(-1)), _metadata) => {
-                Ok(expr_fn::overlay(vec![str, substr, pos]))
-            }
-            _ => Ok(expr_fn::overlay(vec![str, substr, pos, count])),
-        };
-    }
-    Err(PlanError::invalid("overlay requires 3 or 4 arguments"))
+    Ok(expr_fn::overlay(args))
 }
 
-fn position(args: Vec<expr::Expr>) -> PlanResult<expr::Expr> {
-    match args.as_slice() {
-        [substr, str] => Ok(expr_fn::strpos(str.clone(), substr.clone())),
-        [substr, str, start] => {
-            let str_from_pos = expr_fn::substr(str.clone(), start.clone());
-            let pos = expr_fn::strpos(str_from_pos, substr.clone());
-            Ok(when(pos.clone().eq(lit(0)), lit(0))
-                .when(pos.clone().gt(lit(0)), start.clone() + pos - lit(1))
-                .end()?)
+fn position(input: ScalarFunctionInput) -> PlanResult<expr::Expr> {
+    let ScalarFunctionInput {
+        mut arguments,
+        function_context,
+    } = input;
+    let start_opt = (arguments.len() == 3).then(|| arguments.pop()).flatten();
+    let (substr, str) = arguments
+        .into_iter()
+        .map(|expr| cast_to_logical_string_or_try(expr, function_context.schema, false))
+        .collect::<PlanResult<Vec<_>>>()?
+        .two()
+        .map_err(|_| PlanError::invalid("position requires 2 or 3 arguments"))?;
+    Ok(match start_opt {
+        Some(start) => {
+            let str_from_pos = expr_fn::substr(str, start.clone());
+            let pos = expr_fn::strpos(str_from_pos, substr);
+            when(pos.clone().eq(lit(0)), lit(0))
+                .when(pos.clone().gt(lit(0)), start + pos - lit(1))
+                .end()?
         }
-        _ => Err(PlanError::invalid("position requires 2 or 3 arguments")),
-    }
+        None => expr_fn::strpos(str, substr),
+    })
 }
 
 fn space(n: expr::Expr) -> expr::Expr {
     expr_fn::repeat(lit(" "), n)
 }
 
-fn replace(input: ScalarFunctionInput) -> PlanResult<expr::Expr> {
-    let ScalarFunctionInput { arguments, .. } = input;
-    if arguments.len() == 2 {
-        let (str, substr) = arguments.two()?;
-        return Ok(expr_fn::replace(str, substr, lit("")));
-    }
-    if arguments.len() == 3 {
-        let (str, substr, replacement) = arguments.three()?;
-        return Ok(expr_fn::replace(str, substr, replacement));
-    }
-    Err(PlanError::invalid("replace requires 2 or 3 arguments"))
+fn replace(mut args: Vec<expr::Expr>) -> PlanResult<expr::Expr> {
+    let replacement = (args.len() == 3)
+        .then(|| args.pop())
+        .flatten()
+        .unwrap_or_else(|| lit(""));
+    let (str, substr) = args
+        .two()
+        .map_err(|_| PlanError::invalid("replace requires 2 or 3 arguments"))?;
+    Ok(expr_fn::replace(str, substr, replacement))
 }
 
-fn upper(expr: expr::Expr) -> expr::Expr {
-    // FIXME: Create UDF for upper to properly determine datatype
-    let expr = match &expr {
-        expr::Expr::Literal(ScalarValue::Utf8(_), _metadata)
-        | expr::Expr::Literal(ScalarValue::LargeUtf8(_), _metadata)
-        | expr::Expr::Literal(ScalarValue::Utf8View(_), _metadata) => expr,
-        _ => expr::Expr::Cast(expr::Cast {
-            expr: Box::new(expr),
-            data_type: DataType::Utf8,
-        }),
-    };
-    expr_fn::upper(expr)
+fn lower(input: ScalarFunctionInput) -> PlanResult<expr::Expr> {
+    Ok(expr_fn::lower(validate_utf8(input)?))
 }
 
-fn startswith(str: expr::Expr, substr: expr::Expr) -> expr::Expr {
-    // FIXME: DataFusion 43.0.0 suddenly doesn't support casting to Utf8.
-    //  Looks like many issues have been opened for this. Revert once fixed.
-    let str = match &str {
-        expr::Expr::Literal(ScalarValue::Utf8(_), _metadata)
-        | expr::Expr::Literal(ScalarValue::LargeUtf8(_), _metadata)
-        | expr::Expr::Literal(ScalarValue::Utf8View(_), _metadata) => str,
-        _ => expr::Expr::Cast(expr::Cast {
-            expr: Box::new(str),
-            data_type: DataType::Utf8,
-        }),
-    };
-    let substr = match &substr {
-        expr::Expr::Literal(ScalarValue::Utf8(_), _metadata)
-        | expr::Expr::Literal(ScalarValue::LargeUtf8(_), _metadata)
-        | expr::Expr::Literal(ScalarValue::Utf8View(_), _metadata) => substr,
-        _ => expr::Expr::Cast(expr::Cast {
-            expr: Box::new(substr),
-            data_type: DataType::Utf8,
-        }),
-    };
-    expr_fn::starts_with(str, substr)
+fn upper(input: ScalarFunctionInput) -> PlanResult<expr::Expr> {
+    Ok(expr_fn::upper(validate_utf8(input)?))
 }
 
-fn endswith(str: expr::Expr, substr: expr::Expr) -> expr::Expr {
-    // FIXME: DataFusion 43.0.0 suddenly doesn't support casting to Utf8.
-    //  Looks like many issues have been opened for this. Revert once fixed.
-    let str = match &str {
-        expr::Expr::Literal(ScalarValue::Utf8(_), _metadata)
-        | expr::Expr::Literal(ScalarValue::LargeUtf8(_), _metadata)
-        | expr::Expr::Literal(ScalarValue::Utf8View(_), _metadata) => str,
-        _ => expr::Expr::Cast(expr::Cast {
-            expr: Box::new(str),
-            data_type: DataType::Utf8,
-        }),
-    };
-    let substr = match &substr {
-        expr::Expr::Literal(ScalarValue::Utf8(_), _metadata)
-        | expr::Expr::Literal(ScalarValue::LargeUtf8(_), _metadata)
-        | expr::Expr::Literal(ScalarValue::Utf8View(_), _metadata) => substr,
-        _ => expr::Expr::Cast(expr::Cast {
-            expr: Box::new(substr),
-            data_type: DataType::Utf8,
-        }),
-    };
-    expr_fn::ends_with(str, substr)
+fn startswith(input: ScalarFunctionInput) -> PlanResult<expr::Expr> {
+    in_str_str_out_bool(expr_fn::starts_with)(input)
 }
 
-fn bit_length(expr: expr::Expr) -> expr::Expr {
-    // FIXME: DataFusion 43.0.0 suddenly doesn't support casting to Utf8.
-    //  Looks like many issues have been opened for this. Revert once fixed.
-    let expr = match &expr {
-        expr::Expr::Literal(ScalarValue::Utf8(_), _metadata)
-        | expr::Expr::Literal(ScalarValue::LargeUtf8(_), _metadata)
-        | expr::Expr::Literal(ScalarValue::Utf8View(_), _metadata) => expr,
-        _ => expr::Expr::Cast(expr::Cast {
-            expr: Box::new(expr),
-            data_type: DataType::Utf8,
-        }),
-    };
-    expr_fn::bit_length(expr)
+fn endswith(input: ScalarFunctionInput) -> PlanResult<expr::Expr> {
+    in_str_str_out_bool(expr_fn::ends_with)(input)
 }
 
-fn octet_length(expr: expr::Expr) -> expr::Expr {
-    // FIXME: DataFusion 43.0.0 suddenly doesn't support casting to Utf8.
-    //  Looks like many issues have been opened for this. Revert once fixed.
-    let expr = match &expr {
-        expr::Expr::Literal(ScalarValue::Utf8(_), _metadata)
-        | expr::Expr::Literal(ScalarValue::LargeUtf8(_), _metadata)
-        | expr::Expr::Literal(ScalarValue::Utf8View(_), _metadata) => expr,
-        _ => expr::Expr::Cast(expr::Cast {
-            expr: Box::new(expr),
-            data_type: DataType::Utf8,
-        }),
-    };
-    expr_fn::octet_length(expr)
+fn contains(input: ScalarFunctionInput) -> PlanResult<expr::Expr> {
+    in_str_str_out_bool(expr_fn::contains)(input)
 }
 
-fn ascii(expr: expr::Expr) -> expr::Expr {
-    // FIXME: DataFusion 43.0.0 suddenly doesn't support casting to Utf8.
-    //  Looks like many issues have been opened for this. Revert once fixed.
-    let expr = match &expr {
-        expr::Expr::Literal(ScalarValue::Utf8(_), _metadata)
-        | expr::Expr::Literal(ScalarValue::LargeUtf8(_), _metadata)
-        | expr::Expr::Literal(ScalarValue::Utf8View(_), _metadata) => expr,
-        _ => expr::Expr::Cast(expr::Cast {
-            expr: Box::new(expr),
-            data_type: DataType::Utf8,
-        }),
-    };
-    expr_fn::ascii(expr)
+fn bit_length(input: ScalarFunctionInput) -> PlanResult<expr::Expr> {
+    in_str_out_i32(expr_fn::bit_length)(input)
 }
 
-fn contains(str: expr::Expr, search_str: expr::Expr) -> expr::Expr {
-    // FIXME: DataFusion 43.0.0 suddenly doesn't support casting to Utf8.
-    //  Looks like many issues have been opened for this. Revert once fixed.
-    let str = match &str {
-        expr::Expr::Literal(ScalarValue::Utf8(_), _metadata)
-        | expr::Expr::Literal(ScalarValue::LargeUtf8(_), _metadata)
-        | expr::Expr::Literal(ScalarValue::Utf8View(_), _metadata) => str,
-        _ => expr::Expr::Cast(expr::Cast {
-            expr: Box::new(str),
-            data_type: DataType::Utf8,
-        }),
-    };
-    let search_str = match &search_str {
-        expr::Expr::Literal(ScalarValue::Utf8(_), _metadata)
-        | expr::Expr::Literal(ScalarValue::LargeUtf8(_), _metadata)
-        | expr::Expr::Literal(ScalarValue::Utf8View(_), _metadata) => search_str,
-        _ => expr::Expr::Cast(expr::Cast {
-            expr: Box::new(search_str),
-            data_type: DataType::Utf8,
-        }),
-    };
-    expr::Expr::ScalarFunction(expr::ScalarFunction {
-        func: Arc::new(ScalarUDF::from(ContainsFunc::new())),
-        args: vec![str, search_str],
-    })
+fn octet_length(input: ScalarFunctionInput) -> PlanResult<expr::Expr> {
+    in_str_out_i32(expr_fn::octet_length)(input)
 }
 
-fn validate_utf8_or_try(input: ScalarFunctionInput, is_try: bool) -> PlanResult<expr::Expr> {
-    let arg = input.arguments.one()?;
-    let data_type = match arg.get_type(input.function_context.schema)? {
+fn ascii(input: ScalarFunctionInput) -> PlanResult<expr::Expr> {
+    in_str_out_i32(expr_fn::ascii)(input)
+}
+
+fn cast_to_logical_string_or_try(
+    arg: expr::Expr,
+    schema: &DFSchema,
+    is_try: bool,
+) -> PlanResult<expr::Expr> {
+    let data_type = match arg.get_type(schema)? {
         DataType::LargeBinary | DataType::LargeUtf8 => DataType::LargeUtf8,
+        DataType::Utf8View => DataType::Utf8View,
         _ => DataType::Utf8,
     };
     Ok(if is_try {
@@ -309,6 +149,14 @@ fn validate_utf8_or_try(input: ScalarFunctionInput, is_try: bool) -> PlanResult<
     } else {
         cast(arg, data_type)
     })
+}
+
+fn validate_utf8_or_try(input: ScalarFunctionInput, is_try: bool) -> PlanResult<expr::Expr> {
+    cast_to_logical_string_or_try(
+        input.arguments.one()?,
+        input.function_context.schema,
+        is_try,
+    )
 }
 
 fn validate_utf8(input: ScalarFunctionInput) -> PlanResult<expr::Expr> {
@@ -323,76 +171,89 @@ fn is_valid_utf8(input: ScalarFunctionInput) -> PlanResult<expr::Expr> {
     Ok(try_validate_utf8(input)?.is_not_null())
 }
 
-fn make_valid_utf8(input: ScalarFunctionInput) -> PlanResult<expr::Expr> {
-    Ok(expr::Expr::ScalarFunction(expr::ScalarFunction {
-        func: Arc::new(ScalarUDF::from(MakeValidUtf8::new())),
-        args: input.arguments.clone(),
-    }))
+fn in_str_str_out_bool(
+    func: impl Fn(expr::Expr, expr::Expr) -> expr::Expr,
+) -> impl Fn(ScalarFunctionInput) -> PlanResult<expr::Expr> {
+    move |input: ScalarFunctionInput| {
+        let (arg1, arg2) = input
+            .arguments
+            .into_iter()
+            .map(|expr| cast_to_logical_string_or_try(expr, input.function_context.schema, false))
+            .collect::<PlanResult<Vec<_>>>()?
+            .two()?;
+        Ok(func(arg1, arg2))
+    }
+}
+
+fn in_str_out_i32(
+    func: impl Fn(expr::Expr) -> expr::Expr,
+) -> impl Fn(ScalarFunctionInput) -> PlanResult<expr::Expr> {
+    move |input: ScalarFunctionInput| Ok(cast(func(validate_utf8(input)?), DataType::Int32))
+}
+
+fn rev_args(
+    func: impl Fn(Vec<expr::Expr>) -> expr::Expr,
+) -> impl Fn(Vec<expr::Expr>) -> expr::Expr {
+    move |args: Vec<expr::Expr>| func(args.into_iter().rev().collect())
 }
 
 pub(super) fn list_built_in_string_functions() -> Vec<(&'static str, ScalarFunction)> {
     use crate::function::common::ScalarFunctionBuilder as F;
 
     vec![
-        ("ascii", F::unary(ascii)),
+        ("ascii", F::custom(ascii)),
         ("base64", F::udf(SparkBase64::new())),
-        ("bit_length", F::unary(bit_length)),
+        ("bit_length", F::custom(bit_length)),
         ("btrim", F::var_arg(expr_fn::btrim)),
         ("char", F::unary(expr_fn::chr)),
         ("char_length", F::unary(expr_fn::char_length)),
         ("character_length", F::unary(expr_fn::char_length)),
         ("chr", F::unary(expr_fn::chr)),
-        ("concat_ws", F::custom(concat_ws)),
-        ("contains", F::binary(contains)),
+        ("concat_ws", F::var_arg(concat_ws)),
+        ("contains", F::custom(contains)),
         ("decode", F::udf(SparkDecode::new())),
         ("elt", F::unknown("elt")),
         ("encode", F::udf(SparkEncode::new())),
-        ("endswith", F::binary(endswith)),
+        ("endswith", F::custom(endswith)),
         ("find_in_set", F::binary(expr_fn::find_in_set)),
         ("format_number", F::unknown("format_number")),
         ("format_string", F::unknown("format_string")),
         ("initcap", F::unary(expr_fn::initcap)),
         ("instr", F::binary(expr_fn::instr)),
         ("is_valid_utf8", F::custom(is_valid_utf8)),
-        ("lcase", F::unary(expr_fn::lower)),
+        ("lcase", F::custom(lower)),
         ("left", F::binary(expr_fn::left)),
         ("len", F::unary(expr_fn::length)),
         ("length", F::unary(expr_fn::length)),
         ("levenshtein", F::udf(Levenshtein::new())),
-        ("locate", F::var_arg(position)),
-        ("lower", F::unary(expr_fn::lower)),
+        ("locate", F::custom(position)),
+        ("lower", F::custom(lower)),
         ("lpad", F::var_arg(expr_fn::lpad)),
-        (
-            "ltrim",
-            F::var_arg(|args| expr_fn::ltrim(args.into_iter().rev().collect())),
-        ),
+        ("ltrim", F::var_arg(rev_args(expr_fn::ltrim))),
         ("luhn_check", F::unknown("luhn_check")),
-        ("make_valid_utf8", F::custom(make_valid_utf8)),
+        ("make_valid_utf8", F::udf(MakeValidUtf8::new())),
         ("mask", F::udf(SparkMask::new())),
-        ("octet_length", F::unary(octet_length)),
-        ("overlay", F::custom(overlay)),
-        ("position", F::var_arg(position)),
+        ("octet_length", F::custom(octet_length)),
+        ("overlay", F::var_arg(overlay)),
+        ("position", F::custom(position)),
         ("printf", F::unknown("printf")),
         ("regexp_count", F::udf(RegexpCountFunc::new())),
         ("regexp_extract", F::unknown("regexp_extract")),
         ("regexp_extract_all", F::unknown("regexp_extract_all")),
-        ("regexp_instr", F::unknown("regexp_instr")),
-        ("regexp_replace", F::custom(regexp_replace)),
+        ("regexp_instr", F::udf(RegexpInstrFunc::new())),
+        ("regexp_replace", F::ternary(regexp_replace)),
         ("regexp_substr", F::unknown("regexp_substr")),
         ("repeat", F::binary(expr_fn::repeat)),
-        ("replace", F::custom(replace)),
+        ("replace", F::var_arg(replace)),
         ("right", F::binary(expr_fn::right)),
         ("rpad", F::var_arg(expr_fn::rpad)),
-        (
-            "rtrim",
-            F::var_arg(|args| expr_fn::rtrim(args.into_iter().rev().collect())),
-        ),
+        ("rtrim", F::var_arg(rev_args(expr_fn::rtrim))),
         ("sentences", F::unknown("sentences")),
         ("soundex", F::unknown("soundex")),
         ("space", F::unary(space)),
         ("split", F::udf(SparkSplit::new())),
         ("split_part", F::ternary(expr_fn::split_part)),
-        ("startswith", F::binary(startswith)),
+        ("startswith", F::custom(startswith)),
         ("substr", F::custom(substr)),
         ("substring", F::custom(substr)),
         ("substring_index", F::ternary(expr_fn::substr_index)),
@@ -401,16 +262,13 @@ pub(super) fn list_built_in_string_functions() -> Vec<(&'static str, ScalarFunct
         ("to_number", F::udf(SparkToNumber::new())),
         ("to_varchar", F::unknown("to_varchar")),
         ("translate", F::ternary(expr_fn::translate)),
-        (
-            "trim",
-            F::var_arg(|args| expr_fn::trim(args.into_iter().rev().collect())),
-        ),
+        ("trim", F::var_arg(rev_args(expr_fn::trim))),
         ("try_to_binary", F::udf(SparkTryToBinary::new())),
         ("try_to_number", F::udf(SparkTryToNumber::new())),
         ("try_validate_utf8", F::custom(try_validate_utf8)),
-        ("ucase", F::unary(upper)),
+        ("ucase", F::custom(upper)),
         ("unbase64", F::udf(SparkUnbase64::new())),
-        ("upper", F::unary(upper)),
+        ("upper", F::custom(upper)),
         ("validate_utf8", F::custom(validate_utf8)),
         ("strpos", F::binary(expr_fn::strpos)),
     ]
