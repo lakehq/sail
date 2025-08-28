@@ -33,10 +33,13 @@ fn substr(input: ScalarFunctionInput) -> PlanResult<expr::Expr> {
         .two()
         .map_err(|_| PlanError::invalid("substr requires 2 or 3 arguments"))?;
     let string = cast_to_logical_string_or_try(string, function_context.schema, false)?;
-    Ok(match length_opt {
+    let substr_res = match length_opt {
         Some(length) => expr_fn::substring(string, position, length),
         None => expr_fn::substr(string, position),
-    })
+    };
+    // TODO: Spark client throws "UNEXPECTED EXCEPTION: ArrowInvalid('Unrecognized type: 24')"
+    //  when the return type is Utf8View.
+    Ok(cast(substr_res, DataType::Utf8))
 }
 
 fn concat_ws(args: Vec<expr::Expr>) -> PlanResult<expr::Expr> {
@@ -138,8 +141,7 @@ fn cast_to_logical_string_or_try(
 ) -> PlanResult<expr::Expr> {
     let data_type = match arg.get_type(schema)? {
         DataType::LargeBinary | DataType::LargeUtf8 => DataType::LargeUtf8,
-        // TODO: Spark client throws "UNEXPECTED EXCEPTION: ArrowInvalid('Unrecognized type: 24')"
-        //  when the return type is Utf8View.
+        DataType::Utf8View => DataType::Utf8View,
         _ => DataType::Utf8,
     };
     Ok(if is_try {
