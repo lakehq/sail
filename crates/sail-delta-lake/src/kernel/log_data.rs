@@ -127,7 +127,7 @@ impl SailLogDataHandler {
         let snapshot = Snapshot::try_new(log_store.as_ref(), config.clone(), version).await?;
 
         let files: Vec<RecordBatch> = snapshot
-            .files(log_store.as_ref(), &mut vec![])?
+            .files(log_store.as_ref(), None)
             .try_collect()
             .await?;
 

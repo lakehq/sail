@@ -49,6 +49,7 @@ use deltalake::errors::{DeltaResult, DeltaTableError};
 use deltalake::kernel::{Add, EagerSnapshot, Snapshot};
 use deltalake::logstore::LogStoreRef;
 use deltalake::table::state::DeltaTableState;
+use futures::TryStreamExt;
 use object_store::path::Path;
 use object_store::ObjectMeta;
 use serde::{Deserialize, Serialize};
@@ -817,9 +818,10 @@ impl TableProvider for DeltaTableProvider {
                 if logical_filter.is_none() && limit.is_none() {
                     let files: Vec<Add> = self
                         .snapshot
-                        .file_actions_iter()
-                        .map_err(delta_to_datafusion_error)?
-                        .collect();
+                        .file_actions_iter(&self.log_store)
+                        .map_err(delta_to_datafusion_error)
+                        .try_collect()
+                        .await?;
                     (files, None)
                 } else {
                     let num_containers = log_data.num_containers();
@@ -839,8 +841,11 @@ impl TableProvider for DeltaTableProvider {
 
                     for (action, keep) in self
                         .snapshot
-                        .file_actions_iter()
-                        .map_err(delta_to_datafusion_error)?
+                        .file_actions_iter(&self.log_store)
+                        .map_err(delta_to_datafusion_error)
+                        .try_collect::<Vec<Add>>()
+                        .await?
+                        .into_iter()
                         .zip(files_to_prune.iter().cloned())
                     {
                         // prune file based on predicate pushdown
@@ -1201,9 +1206,10 @@ pub(crate) async fn find_files_scan_physical(
     use datafusion::physical_plan::ExecutionPlan;
 
     let candidate_map: HashMap<String, Add> = snapshot
-        .file_actions_iter()?
-        .map(|add| (add.path.clone(), add.to_owned()))
-        .collect();
+        .file_actions_iter(&log_store)
+        .map_ok(|add| (add.path.clone(), add.to_owned()))
+        .try_collect()
+        .await?;
 
     let scan_config = DeltaScanConfigBuilder {
         include_file_column: true,
