@@ -515,7 +515,7 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
                 )))
             }
             NodeKind::ConsoleSink(gen::ConsoleSinkExecNode { input }) => {
-                let input = self.try_decode_plan(&input, registry)?;
+                let input = self.try_decode_plan(&input)?;
                 Ok(Arc::new(ConsoleSinkExec::new(input)))
             }
             NodeKind::SocketSource(gen::SocketSourceExecNode {
