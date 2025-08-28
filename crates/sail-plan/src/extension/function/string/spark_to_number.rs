@@ -22,7 +22,7 @@ use regex::{Captures, Regex};
 use crate::extension::function::functions_nested_utils::downcast_arg;
 use crate::extension::function::functions_utils::make_scalar_function;
 
-#[derive(Debug)]
+#[derive(Debug, PartialEq, Eq, Hash)]
 pub struct SparkToNumber {
     signature: Signature,
 }
@@ -144,7 +144,7 @@ pub fn spark_to_number_inner(args: &[ArrayRef]) -> Result<ArrayRef> {
     Ok(decimal_array)
 }
 
-#[derive(Debug)]
+#[derive(Debug, PartialEq, Eq, Hash)]
 pub struct NumberComponents {
     pub numbers: String,
     pub decimals: Option<String>,
@@ -235,7 +235,7 @@ macro_rules! get_capture_group {
     };
 }
 
-#[derive(Debug)]
+#[derive(Debug, PartialEq, Eq, Hash)]
 pub struct RegexSpec {
     left_sign: Option<String>,
     currency_left: Option<String>,

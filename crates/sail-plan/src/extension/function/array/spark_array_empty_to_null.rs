@@ -10,7 +10,7 @@ use datafusion::logical_expr::{ColumnarValue, ScalarUDFImpl, Signature, Volatili
 use datafusion_common::exec_err;
 use datafusion_expr::ScalarFunctionArgs;
 
-#[derive(Debug)]
+#[derive(Debug, PartialEq, Eq, Hash)]
 pub struct ArrayEmptyToNull {
     signature: Signature,
 }

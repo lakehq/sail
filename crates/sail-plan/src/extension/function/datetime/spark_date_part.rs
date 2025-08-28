@@ -13,7 +13,7 @@ use datafusion_expr::{
 };
 use datafusion_functions::datetime::date_part::DatePartFunc;
 
-#[derive(Debug)]
+#[derive(Debug, PartialEq, Eq, Hash)]
 pub struct SparkDatePart {
     inner: DatePartFunc,
 }

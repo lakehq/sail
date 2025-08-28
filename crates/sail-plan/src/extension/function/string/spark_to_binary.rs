@@ -14,7 +14,7 @@ use crate::extension::function::math::spark_hex_unhex::SparkUnHex;
 use crate::extension::function::string::spark_base64::SparkUnbase64;
 use crate::utils::ItemTaker;
 
-#[derive(Debug)]
+#[derive(Debug, PartialEq, Eq, Hash)]
 pub struct SparkToBinary {
     signature: Signature,
 }
@@ -173,7 +173,7 @@ impl ScalarUDFImpl for SparkToBinary {
     }
 }
 
-#[derive(Debug)]
+#[derive(Debug, PartialEq, Eq, Hash)]
 pub struct SparkTryToBinary {
     signature: Signature,
 }

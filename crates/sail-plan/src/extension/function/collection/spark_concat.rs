@@ -13,7 +13,7 @@ use datafusion_expr::{
 };
 use datafusion_functions_nested::concat::ArrayConcat;
 
-#[derive(Debug)]
+#[derive(Debug, PartialEq, Eq, Hash)]
 pub struct SparkConcat {
     signature: Signature,
 }

@@ -104,44 +104,47 @@ moka = { version = "0.12.10", features = ["sync"] }
 
 # The `tonic` version must match the one used in `arrow-flight` (replace `RELEASE` with the release we are using):
 #   https://github.com/apache/arrow-rs/blob/RELEASE/arrow-flight/Cargo.toml
-tonic = { version = "0.12.3", features = ["tls", "tls-roots", "gzip", "zstd"] }
-tonic-build = "0.12.3"
-tonic-reflection = "0.12.3"
-tonic-health = "0.12.3"
-tonic-types = "0.12.3"
+tonic = { version = "0.13.1", features = ["tls-ring", "tls-native-roots", "gzip", "zstd"] }
+tonic-build = "0.13.1"
+tonic-reflection = "0.13.1"
+tonic-health = "0.13.1"
+tonic-types = "0.13.1"
 # The `prost` version must match the one used in `tonic` (replace `RELEASE` with the release we are using):
 #   https://github.com/hyperium/tonic/blob/vRELEASE/tonic/Cargo.toml
 prost-build = "0.13.5"
 prost = "0.13.5"
-datafusion = { version = "49.0.2", features = ["serde", "avro"] }
-datafusion-common = { version = "49.0.2", features = ["object_store", "avro"] }
-datafusion-datasource = { version = "49.0.2", features = ["compression", "parquet"] }
-datafusion-expr = { version = "49.0.2" }
-datafusion-expr-common = { version = "49.0.2" }
-datafusion-proto = { version = "49.0.2" }
-datafusion-functions = { version = "49.0.2" }
-datafusion-functions-nested = { version = "49.0.2" }
-datafusion-physical-expr = { version = "49.0.2" }
-datafusion-spark = { version = "49.0.2" }
-datafusion-functions-json = { git = "https://github.com/lakehq/datafusion-functions-json.git", rev = "d199e09" }
+# The `axum` version must match the one used in `tonic` (replace `RELEASE` with the release we are using):
+#   https://github.com/hyperium/tonic/blob/vRELEASE/tonic/Cargo.toml
+axum = "0.8.4"
+datafusion = { git = "https://github.com/apache/datafusion.git", rev = "1c86ec7", features = ["serde", "avro"] }
+datafusion-common = { git = "https://github.com/apache/datafusion.git", rev = "1c86ec7", features = ["object_store", "avro"] }
+datafusion-datasource = { git = "https://github.com/apache/datafusion.git", rev = "1c86ec7", features = ["compression", "parquet"] }
+datafusion-expr = { git = "https://github.com/apache/datafusion.git", rev = "1c86ec7" }
+datafusion-expr-common = { git = "https://github.com/apache/datafusion.git", rev = "1c86ec7" }
+datafusion-proto = { git = "https://github.com/apache/datafusion.git", rev = "1c86ec7" }
+datafusion-functions = { git = "https://github.com/apache/datafusion.git", rev = "1c86ec7" }
+datafusion-functions-nested = { git = "https://github.com/apache/datafusion.git", rev = "1c86ec7" }
+datafusion-physical-expr = { git = "https://github.com/apache/datafusion.git", rev = "1c86ec7" }
+datafusion-spark = { git = "https://github.com/apache/datafusion.git", rev = "1c86ec7" }
+datafusion-functions-json = { git = "https://github.com/lakehq/datafusion-functions-json.git", rev = "67e3fb4" }
 # The `pyo3` version must match the one used in `arrow-pyarrow` (replace `RELEASE` with the release we are using):
 #   https://github.com/apache/arrow-rs/blob/RELEASE/arrow-pyarrow/Cargo.toml
 # auto-initialize: Changes [`Python::with_gil`] to automatically initialize the Python interpreter if needed.
-pyo3 = { version = "0.24.2", features = ["auto-initialize", "serde"] }
-arrow = { version = "55.2.0", features = ["chrono-tz"] }
-arrow-buffer = { version = "55.2.0" }
-arrow-schema = { version = "55.2.0", features = ["serde"] }
-arrow-flight = { version = "55.2.0" }
-arrow-pyarrow = { version = "55.2.0" }
-parquet = { version = "55.2.0" }
-serde_arrow = { version = "0.13.5", features = ["arrow-55"] }
+pyo3 = { version = "0.25.1", features = ["auto-initialize", "serde"] }
+arrow = { version = "56.1.0", features = ["chrono-tz"] }
+arrow-buffer = { version = "56.1.0" }
+arrow-schema = { version = "56.1.0", features = ["serde"] }
+arrow-flight = { version = "56.1.0" }
+arrow-pyarrow = { version = "56.1.0" }
+parquet = { version = "56.1.0" }
+serde_arrow = { version = "0.13.5", features = ["arrow-56"] }
 # The `object_store` version must match the one used in DataFusion.
 object_store = { version = "0.12.3", features = ["aws", "gcp", "azure", "http"] }
 hdfs-native-object-store = "0.14.2"
 
 # Lakehouse
-deltalake = { git = "https://github.com/delta-io/delta-rs.git", rev = "5ac08eb", default-features = false, features = ["rustls"] }
-delta_kernel = { version = "0.13.0", features = ["arrow-55", "internal-api", "default-engine"] }
+deltalake = { git = "https://github.com/lakehq/delta-rs.git", rev = "345be82", default-features = false, features = ["rustls"] }
+delta_kernel = { git = "https://github.com/lakehq/delta-kernel-rs.git", rev = "6369606", features = ["arrow-56", "internal-api", "default-engine-native-tls"] }
 bytes = "1.10.1"
 indexmap = "2.11.0"
 
@@ -153,6 +156,42 @@ indexmap = "2.11.0"
 [patch.crates-io]
 # Override dependencies to use our forked versions.
 # You can use `path = "..."` to temporarily point to your local copy of the crates to speed up local development.
+datafusion = { git = "https://github.com/apache/datafusion.git", rev = "1c86ec7" }
+datafusion-catalog = { git = "https://github.com/apache/datafusion.git", rev = "1c86ec7" }
+datafusion-catalog-listing = { git = "https://github.com/apache/datafusion.git", rev = "1c86ec7" }
+datafusion-common = { git = "https://github.com/apache/datafusion.git", rev = "1c86ec7" }
+datafusion-common-runtime = { git = "https://github.com/apache/datafusion.git", rev = "1c86ec7" }
+datafusion-datasource = { git = "https://github.com/apache/datafusion.git", rev = "1c86ec7" }
+datafusion-datasource-avro = { git = "https://github.com/apache/datafusion.git", rev = "1c86ec7" }
+datafusion-datasource-csv = { git = "https://github.com/apache/datafusion.git", rev = "1c86ec7" }
+datafusion-datasource-json = { git = "https://github.com/apache/datafusion.git", rev = "1c86ec7" }
+datafusion-datasource-parquet = { git = "https://github.com/apache/datafusion.git", rev = "1c86ec7" }
+datafusion-doc = { git = "https://github.com/apache/datafusion.git", rev = "1c86ec7" }
+datafusion-execution = { git = "https://github.com/apache/datafusion.git", rev = "1c86ec7" }
+datafusion-expr = { git = "https://github.com/apache/datafusion.git", rev = "1c86ec7" }
+datafusion-expr-common = { git = "https://github.com/apache/datafusion.git", rev = "1c86ec7" }
+#datafusion-ffi = { git = "https://github.com/apache/datafusion.git", rev = "1c86ec7" }
+datafusion-functions = { git = "https://github.com/apache/datafusion.git", rev = "1c86ec7" }
+datafusion-functions-aggregate = { git = "https://github.com/apache/datafusion.git", rev = "1c86ec7" }
+datafusion-functions-aggregate-common = { git = "https://github.com/apache/datafusion.git", rev = "1c86ec7" }
+datafusion-functions-nested = { git = "https://github.com/apache/datafusion.git", rev = "1c86ec7" }
+datafusion-functions-table = { git = "https://github.com/apache/datafusion.git", rev = "1c86ec7" }
+datafusion-functions-window = { git = "https://github.com/apache/datafusion.git", rev = "1c86ec7" }
+datafusion-functions-window-common = { git = "https://github.com/apache/datafusion.git", rev = "1c86ec7" }
+datafusion-macros = { git = "https://github.com/apache/datafusion.git", rev = "1c86ec7" }
+datafusion-optimizer = { git = "https://github.com/apache/datafusion.git", rev = "1c86ec7" }
+datafusion-physical-expr = { git = "https://github.com/apache/datafusion.git", rev = "1c86ec7" }
+datafusion-physical-expr-adapter = { git = "https://github.com/apache/datafusion.git", rev = "1c86ec7" }
+datafusion-physical-expr-common = { git = "https://github.com/apache/datafusion.git", rev = "1c86ec7" }
+datafusion-physical-optimizer = { git = "https://github.com/apache/datafusion.git", rev = "1c86ec7" }
+datafusion-physical-plan = { git = "https://github.com/apache/datafusion.git", rev = "1c86ec7" }
+datafusion-proto = { git = "https://github.com/apache/datafusion.git", rev = "1c86ec7" }
+datafusion-proto-common = { git = "https://github.com/apache/datafusion.git", rev = "1c86ec7" }
+datafusion-pruning = { git = "https://github.com/apache/datafusion.git", rev = "1c86ec7" }
+datafusion-session = { git = "https://github.com/apache/datafusion.git", rev = "1c86ec7" }
+datafusion-spark = { git = "https://github.com/apache/datafusion.git", rev = "1c86ec7" }
+datafusion-sql = { git = "https://github.com/apache/datafusion.git", rev = "1c86ec7" }
+#datafusion-substrait = { git = "https://github.com/apache/datafusion.git", rev = "1c86ec7" }
 
 [profile.release]
 # https://doc.rust-lang.org/cargo/reference/profiles.html#release

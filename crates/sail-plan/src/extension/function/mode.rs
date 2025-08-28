@@ -134,7 +134,7 @@ impl AggregateUDFImpl for ModeFunction {
 }
 
 /// [Credit]: <https://github.com/datafusion-contrib/datafusion-functions-extra/blob/5fa184df2589f09e90035c5e6a0d2c88c57c298a/src/common/mode/native.rs>
-#[derive(Debug)]
+#[derive(Debug, PartialEq, Eq, Hash)]
 pub struct PrimitiveModeAccumulator<T>
 where
     T: ArrowPrimitiveType + Send,
@@ -249,7 +249,7 @@ where
     }
 }
 
-#[derive(Debug)]
+#[derive(Debug, PartialEq, Eq, Hash)]
 pub struct FloatModeAccumulator<T>
 where
     T: ArrowPrimitiveType,
@@ -366,7 +366,7 @@ where
 }
 
 /// [Credit]: <https://github.com/datafusion-contrib/datafusion-functions-extra/blob/5fa184df2589f09e90035c5e6a0d2c88c57c298a/src/common/mode/bytes.rs>
-#[derive(Debug)]
+#[derive(Debug, PartialEq, Eq, Hash)]
 pub struct BytesModeAccumulator {
     value_counts: HashMap<String, i64>,
     data_type: DataType,

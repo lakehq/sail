@@ -16,7 +16,7 @@ use datafusion_functions::utils::make_scalar_function;
 use crate::extension::function::map::map_function::map_from_arrays_inner;
 use crate::extension::function::string::spark_split::{parse_regex, split_to_array, SparkSplit};
 
-#[derive(Debug)]
+#[derive(Debug, PartialEq, Eq, Hash)]
 pub struct StrToMap {
     signature: Signature,
 }

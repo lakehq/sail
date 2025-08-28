@@ -11,7 +11,7 @@ use datafusion_expr::{ScalarFunctionArgs, ScalarUDFImpl};
 use datafusion_expr_common::columnar_value::ColumnarValue;
 use datafusion_expr_common::signature::{Signature, Volatility};
 
-#[derive(Debug)]
+#[derive(Debug, PartialEq, Eq, Hash)]
 pub struct SparkEncode {
     signature: Signature,
 }
@@ -246,7 +246,7 @@ impl ScalarUDFImpl for SparkEncode {
     }
 }
 
-#[derive(Debug)]
+#[derive(Debug, PartialEq, Eq, Hash)]
 pub struct SparkDecode {
     signature: Signature,
 }

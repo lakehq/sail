@@ -14,7 +14,7 @@ use crate::extension::function::string::spark_to_number::{
     NumberComponents, RegexSpec, SparkToNumber,
 };
 
-#[derive(Debug)]
+#[derive(Debug, PartialEq, Eq, Hash)]
 pub struct SparkTryToNumber {
     signature: Signature,
 }

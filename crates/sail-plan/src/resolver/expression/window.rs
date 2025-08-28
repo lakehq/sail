@@ -90,6 +90,7 @@ impl PlanResolver<'_> {
                     order_by: sorts,
                     window_frame,
                     ignore_nulls,
+                    distinct: is_distinct,
                     function_context: FunctionContextInput {
                         argument_display_names: &argument_display_names,
                         plan_config: &self.config,
@@ -115,9 +116,6 @@ impl PlanResolver<'_> {
                     arguments,
                     function,
                 } = function;
-                if is_distinct {
-                    return Err(PlanError::todo("distinct window function"));
-                }
                 let function_name: String = function_name.into();
                 let (argument_display_names, arguments) = self
                     .resolve_expressions_and_names(arguments, schema, state)
@@ -163,6 +161,7 @@ impl PlanResolver<'_> {
                         order_by: sorts,
                         window_frame,
                         null_treatment: get_null_treatment(None),
+                        distinct: is_distinct,
                     },
                 }));
                 (window, function_name, argument_display_names, false)

@@ -51,7 +51,7 @@ impl TimestampParser for TimestampNtzParser {
     }
 }
 
-#[derive(Debug)]
+#[derive(Debug, PartialEq, Eq, Hash)]
 pub struct SparkTimestamp {
     timezone: Option<Arc<str>>,
     parser: Box<dyn TimestampParser>,

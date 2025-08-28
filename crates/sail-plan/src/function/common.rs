@@ -240,6 +240,7 @@ pub struct WinFunctionInput<'a> {
     pub order_by: Vec<expr::Sort>,
     pub window_frame: WindowFrame,
     pub ignore_nulls: Option<bool>,
+    pub distinct: bool,
     pub function_context: FunctionContextInput<'a>,
 }
 
@@ -259,6 +260,7 @@ impl WinFunctionBuilder {
                 order_by,
                 window_frame,
                 ignore_nulls,
+                distinct,
                 function_context: _function_context,
             } = input;
             let null_treatment = get_null_treatment(ignore_nulls);
@@ -270,6 +272,7 @@ impl WinFunctionBuilder {
                     order_by,
                     window_frame,
                     null_treatment,
+                    distinct,
                 },
             })))
         })
@@ -286,6 +289,7 @@ impl WinFunctionBuilder {
                 order_by,
                 window_frame,
                 ignore_nulls,
+                distinct,
                 function_context,
             } = input;
             let null_treatment = get_null_treatment(ignore_nulls);
@@ -297,6 +301,7 @@ impl WinFunctionBuilder {
                     order_by,
                     window_frame,
                     null_treatment,
+                    distinct,
                 },
             }));
             Ok(match win_func_expr.get_type(function_context.schema)? {
