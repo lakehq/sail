@@ -121,6 +121,7 @@ datafusion-common = { git = "https://github.com/apache/datafusion.git", rev = "1
 datafusion-datasource = { git = "https://github.com/apache/datafusion.git", rev = "1c86ec7", features = ["compression", "parquet"] }
 datafusion-expr = { git = "https://github.com/apache/datafusion.git", rev = "1c86ec7" }
 datafusion-expr-common = { git = "https://github.com/apache/datafusion.git", rev = "1c86ec7" }
+datafusion-physical-expr-adapter = { git = "https://github.com/apache/datafusion.git", rev = "1c86ec7" }
 datafusion-proto = { git = "https://github.com/apache/datafusion.git", rev = "1c86ec7" }
 datafusion-functions = { git = "https://github.com/apache/datafusion.git", rev = "1c86ec7" }
 datafusion-functions-nested = { git = "https://github.com/apache/datafusion.git", rev = "1c86ec7" }

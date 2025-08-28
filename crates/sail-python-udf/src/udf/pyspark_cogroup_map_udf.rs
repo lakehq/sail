@@ -19,7 +19,7 @@ use crate::error::PyUdfResult;
 use crate::lazy::LazyPyObject;
 use crate::python::spark::PySpark;
 
-#[derive(Debug)]
+#[derive(Debug, PartialEq, Eq, Hash)]
 pub struct PySparkCoGroupMapUDF {
     signature: Signature,
     name: String,

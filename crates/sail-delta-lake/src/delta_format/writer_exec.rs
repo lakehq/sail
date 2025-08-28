@@ -26,6 +26,7 @@ use deltalake::kernel::{Action, MetadataExt, Remove}; // TODO: Follow upstream f
 use deltalake::logstore::StorageConfig;
 use deltalake::protocol::{DeltaOperation, SaveMode};
 use futures::stream::{once, StreamExt};
+use futures::TryFutureExt;
 use sail_common_datafusion::datasource::PhysicalSinkMode;
 use url::Url;
 use uuid::Uuid;
