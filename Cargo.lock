@@ -5794,6 +5794,7 @@ dependencies = [
  "sail-data-source",
  "sail-python-udf",
  "sail-sql-analyzer",
+ "sail-streaming",
  "serde",
  "sha1",
  "thiserror 2.0.16",
@@ -5937,6 +5938,22 @@ dependencies = [
  "quote",
  "sail-sql-macro",
  "syn",
+]
+
+[[package]]
+name = "sail-streaming"
+version = "0.3.4"
+dependencies = [
+ "chrono",
+ "datafusion",
+ "datafusion-common",
+ "datafusion-expr",
+ "futures",
+ "log",
+ "pin-project-lite",
+ "prost",
+ "tonic 0.12.3",
+ "tonic-build",
 ]
 
 [[package]]

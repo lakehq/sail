@@ -8,6 +8,10 @@ use datafusion::physical_planner::{ExtensionPlanner, PhysicalPlanner};
 use datafusion_common::{internal_err, Result};
 use datafusion_expr::{LogicalPlan, UserDefinedLogicalNode};
 use datafusion_physical_expr::{create_physical_sort_exprs, LexOrdering};
+use sail_streaming::logical_plan::sink::StreamSinkNode;
+use sail_streaming::logical_plan::source::StreamSourceNode;
+use sail_streaming::physical_plan::sink::StreamSinkExec;
+use sail_streaming::physical_plan::source::StreamSourceExec;
 
 use crate::extension::logical::{
     FileWriteNode, MapPartitionsNode, RangeNode, SchemaPivotNode, ShowStringNode,
@@ -18,7 +22,6 @@ use crate::extension::physical::map_partitions::MapPartitionsExec;
 use crate::extension::physical::range::RangeExec;
 use crate::extension::physical::schema_pivot::SchemaPivotExec;
 use crate::extension::physical::show_string::ShowStringExec;
-use crate::utils::ItemTaker;
 
 pub(crate) struct ExtensionPhysicalPlanner {}
 
@@ -32,7 +35,6 @@ impl ExtensionPlanner for ExtensionPhysicalPlanner {
         physical_inputs: &[Arc<dyn ExecutionPlan>],
         session_state: &SessionState,
     ) -> Result<Option<Arc<dyn ExecutionPlan>>> {
-        let physical_inputs = physical_inputs.to_vec();
         let plan: Arc<dyn ExecutionPlan> =
             if let Some(node) = node.as_any().downcast_ref::<RangeNode>() {
                 Arc::new(RangeExec::new(
@@ -41,20 +43,29 @@ impl ExtensionPlanner for ExtensionPhysicalPlanner {
                     node.schema().inner().clone(),
                 ))
             } else if let Some(node) = node.as_any().downcast_ref::<ShowStringNode>() {
+                let [input] = physical_inputs else {
+                    return internal_err!("ShowStringExec requires exactly one physical input");
+                };
                 Arc::new(ShowStringExec::new(
-                    physical_inputs.one()?,
+                    input.clone(),
                     node.names().to_vec(),
                     node.limit(),
                     node.format().clone(),
                     node.schema().inner().clone(),
                 ))
             } else if let Some(node) = node.as_any().downcast_ref::<MapPartitionsNode>() {
+                let [input] = physical_inputs else {
+                    return internal_err!("MapPartitionsExec requires exactly one physical input");
+                };
                 Arc::new(MapPartitionsExec::new(
-                    physical_inputs.one()?,
+                    input.clone(),
                     node.udf().clone(),
                     node.schema().inner().clone(),
                 ))
             } else if let Some(node) = node.as_any().downcast_ref::<SortWithinPartitionsNode>() {
+                let [input] = physical_inputs else {
+                    return internal_err!("SortExec requires exactly one physical input");
+                };
                 let expr = create_physical_sort_exprs(
                     node.sort_expr(),
                     node.schema(),
@@ -63,13 +74,16 @@ impl ExtensionPlanner for ExtensionPhysicalPlanner {
                 let Some(ordering) = LexOrdering::new(expr) else {
                     return internal_err!("SortExec requires at least one sort expression");
                 };
-                let sort = SortExec::new(ordering, physical_inputs.one()?)
+                let sort = SortExec::new(ordering, input.clone())
                     .with_fetch(node.fetch())
                     .with_preserve_partitioning(true);
                 Arc::new(sort)
             } else if let Some(node) = node.as_any().downcast_ref::<SchemaPivotNode>() {
+                let [input] = physical_inputs else {
+                    return internal_err!("SchemaPivotExec requires exactly one physical input");
+                };
                 Arc::new(SchemaPivotExec::new(
-                    physical_inputs.one()?,
+                    input.clone(),
                     node.names().to_vec(),
                     node.schema().inner().clone(),
                 ))
@@ -77,19 +91,32 @@ impl ExtensionPlanner for ExtensionPhysicalPlanner {
                 let [logical_input] = logical_inputs else {
                     return internal_err!("FileWriteNode requires exactly one logical input");
                 };
-                let Ok(physical_input) = physical_inputs.one() else {
+                let [physical_input] = physical_inputs else {
                     return internal_err!("FileWriteNode requires exactly one physical input");
                 };
                 create_file_write_physical_plan(
                     session_state,
                     planner,
                     logical_input,
-                    physical_input,
+                    physical_input.clone(),
                     node.options().clone(),
                 )
                 .await?
+            } else if node.as_any().is::<StreamSourceNode>() {
+                let [input] = physical_inputs else {
+                    return internal_err!("StreamSourceExec requires exactly one physical input");
+                };
+                Arc::new(StreamSourceExec::new(input.clone()))
+            } else if node.as_any().is::<StreamSinkNode>() {
+                let [input] = physical_inputs else {
+                    return internal_err!("StreamSinkExec requires exactly one physical input");
+                };
+                Arc::new(StreamSinkExec::try_new(
+                    input.clone(),
+                    node.schema().inner().clone(),
+                )?)
             } else {
-                return internal_err!("Unsupported logical extension node: {:?}", node);
+                return internal_err!("unsupported logical extension node: {:?}", node);
             };
         Ok(Some(plan))
     }

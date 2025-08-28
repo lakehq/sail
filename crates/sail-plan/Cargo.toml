@@ -13,6 +13,7 @@ sail-python-udf = { path = "../sail-python-udf" }
 sail-sql-analyzer = { path = "../sail-sql-analyzer" }
 sail-catalog = { path = "../sail-catalog" }
 sail-data-source = { path = "../sail-data-source" }
+sail-streaming = { path = "../sail-streaming" }
 
 datafusion = { workspace = true }
 datafusion-common = { workspace = true }
