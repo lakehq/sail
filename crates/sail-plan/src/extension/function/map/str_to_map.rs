@@ -95,6 +95,7 @@ impl ScalarUDFImpl for StrToMap {
             arg_fields: fields_for_split,
             number_rows: args.number_rows,
             return_field: split_return_field,
+            config_options: args.config_options,
         })?;
 
         make_scalar_function(str_to_map_inner, vec![Hint::Pad, Hint::AcceptsSingular])(&[
