@@ -19,8 +19,6 @@ use datafusion::physical_plan::joins::utils::{ColumnIndex, JoinFilter};
 use datafusion::physical_plan::joins::SortMergeJoinExec;
 use datafusion::physical_plan::recursive_query::RecursiveQueryExec;
 use datafusion::physical_plan::sorts::partial_sort::PartialSortExec;
-#[allow(deprecated)]
-use datafusion::physical_plan::values::ValuesExec;
 use datafusion::physical_plan::work_table::WorkTableExec;
 use datafusion::physical_plan::{ExecutionPlan, Partitioning};
 use datafusion::prelude::SessionContext;
@@ -163,7 +161,7 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
         &self,
         buf: &[u8],
         _inputs: &[Arc<dyn ExecutionPlan>],
-        registry: &dyn FunctionRegistry,
+        _registry: &dyn FunctionRegistry,
     ) -> Result<Arc<dyn ExecutionPlan>> {
         let node = ExtendedPhysicalPlanNode::decode(buf)
             .map_err(|e| plan_datafusion_err!("failed to decode plan: {e}"))?;
@@ -290,11 +288,8 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
             NodeKind::Values(gen::ValuesExecNode { data, schema }) => {
                 let schema = self.try_decode_schema(&schema)?;
                 let data = read_record_batches(&data)?;
-                #[allow(deprecated)]
-                Ok(Arc::new(ValuesExec::try_new_from_batches(
-                    Arc::new(schema),
-                    data,
-                )?))
+                let source = MemorySourceConfig::try_new_from_batches(Arc::new(schema), data)?;
+                Ok(source)
             }
             NodeKind::NdJson(gen::NdJsonExecNode {
                 base_config,
@@ -589,10 +584,6 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
                 consumption,
                 locations,
             })
-        } else if let Some(values) = node.as_any().downcast_ref::<ValuesExec>() {
-            let data = write_record_batches(&values.data(), &values.schema())?;
-            let schema = self.try_encode_schema(values.schema().as_ref())?;
-            NodeKind::Values(gen::ValuesExecNode { data, schema })
         } else if let Some(work_table) = node.as_any().downcast_ref::<WorkTableExec>() {
             let name = work_table.name().to_string();
             let schema = self.try_encode_schema(work_table.schema().as_ref())?;
@@ -741,6 +732,14 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
                     sort_information,
                     limit: memory.fetch().map(|x| x as u64),
                 })
+
+                // CHECK HERE: DON'T MERGE!
+                //
+                // else if let Some(values) = node.as_any().downcast_ref::<ValuesExec>() {
+                //     let data = write_record_batches(&values.data(), &values.schema())?;
+                //     let schema = self.try_encode_schema(values.schema().as_ref())?;
+                //     NodeKind::Values(gen::ValuesExecNode { data, schema })
+                // }
             } else {
                 return plan_err!("unsupported data source node: {data_source:?}");
             }
