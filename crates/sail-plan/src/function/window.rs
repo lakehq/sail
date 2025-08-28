@@ -53,6 +53,7 @@ fn nth_value(input: WinFunctionInput) -> PlanResult<expr::Expr> {
         order_by,
         window_frame,
         ignore_nulls,
+        distinct,
         function_context: _,
     } = input;
     let mut args = arguments;
@@ -77,6 +78,7 @@ fn nth_value(input: WinFunctionInput) -> PlanResult<expr::Expr> {
             order_by,
             window_frame,
             null_treatment,
+            distinct,
         },
     })))
 }

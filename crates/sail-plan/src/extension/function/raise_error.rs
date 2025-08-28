@@ -8,7 +8,7 @@ use datafusion_expr::ScalarFunctionArgs;
 
 use crate::utils::ItemTaker;
 
-#[derive(Debug, Clone)]
+#[derive(Debug, PartialEq, Eq, Hash, Clone)]
 pub struct RaiseError {
     signature: Signature,
 }

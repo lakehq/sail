@@ -24,7 +24,7 @@ pub struct Explode {
     kind: ExplodeKind,
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, PartialEq, Eq, Hash, Clone)]
 pub enum ExplodeKind {
     Explode,
     ExplodeOuter,

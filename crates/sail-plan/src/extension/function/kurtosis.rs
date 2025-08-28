@@ -17,6 +17,7 @@ use datafusion_expr_common::signature::{Coercion, TypeSignatureClass};
 
 use crate::extension::function::skewness::SkewnessAccumulator;
 
+#[derive(PartialEq, Eq, Hash)]
 pub struct KurtosisFunction {
     signature: Signature,
 }

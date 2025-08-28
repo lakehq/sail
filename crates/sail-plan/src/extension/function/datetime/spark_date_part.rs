@@ -37,6 +37,7 @@ impl SparkDatePart {
             arg_fields,
             number_rows,
             return_field,
+            config_options,
         } = args;
 
         args.get(1).map_or_else(
@@ -65,6 +66,7 @@ impl SparkDatePart {
                             DataType::Int32,
                             true,
                         )),
+                        config_options,
                     }),
                 }
                 .and_then(|value| value.cast_to(&DataType::Decimal128(8, 0), None))
