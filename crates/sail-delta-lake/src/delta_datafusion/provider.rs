@@ -26,6 +26,7 @@ use datafusion::logical_expr::{Expr, LogicalPlan, TableProviderFilterPushDown};
 use datafusion::optimizer::simplify_expressions::ExprSimplifier;
 use datafusion::physical_expr::PhysicalExpr;
 use datafusion::physical_optimizer::pruning::PruningPredicate;
+use datafusion::physical_plan::metrics::ExecutionPlanMetricsSet;
 use datafusion::physical_plan::ExecutionPlan;
 use datafusion_common::pruning::PruningStatistics;
 use deltalake::errors::DeltaResult;
@@ -214,7 +215,7 @@ impl TableProvider for DeltaTableProvider {
 
         let log_data = self.snapshot.snapshot().log_data();
 
-        let (files, _pruning_mask) = match &self.files {
+        let (files, pruning_mask) = match &self.files {
             Some(files) => {
                 let files = files.to_owned();
                 (files, None)
@@ -289,6 +290,15 @@ impl TableProvider for DeltaTableProvider {
             }
         };
 
+        // Calculate metrics for files scanned and pruned
+        let num_containers = if let Some(files) = &self.files {
+            files.len()
+        } else {
+            log_data.num_containers()
+        };
+        let files_scanned = files.len();
+        let _files_pruned = num_containers - files_scanned;
+
         // TODO we group files together by their partition values. If the table is partitioned
         // we may be able to reduce the number of groups by combining groups with the same partition values
         let mut file_groups: HashMap<Vec<ScalarValue>, Vec<PartitionedFile>> = HashMap::new();
@@ -362,8 +372,9 @@ impl TableProvider for DeltaTableProvider {
             ));
         }
 
-        let stats = log_data
-            .statistics()
+        let stats = self
+            .snapshot
+            .datafusion_table_statistics(pruning_mask.as_deref())
             .unwrap_or_else(|| Statistics::new_unknown(&schema));
 
         let parquet_options = TableParquetOptions {
@@ -403,6 +414,11 @@ impl TableProvider for DeltaTableProvider {
                 .with_table_partition_cols(table_partition_cols)
                 .with_expr_adapter(Some(Arc::new(DeltaPhysicalExprAdapterFactory {})))
                 .build();
+        let _metrics = ExecutionPlanMetricsSet::new();
+        // MetricBuilder::new(&metrics).global_counter("files_scanned").add(files_scanned);
+        // MetricBuilder::new(&metrics).global_counter("files_pruned").add(files_pruned);
+
+        // TODO: Properly expose these metrics
 
         Ok(DataSourceExec::from_data_source(file_scan_config))
     }
@@ -416,6 +432,6 @@ impl TableProvider for DeltaTableProvider {
     }
 
     fn statistics(&self) -> Option<Statistics> {
-        self.snapshot.datafusion_table_statistics(Option::None)
+        self.snapshot.datafusion_table_statistics(None)
     }
 }

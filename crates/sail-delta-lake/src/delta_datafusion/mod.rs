@@ -3,8 +3,8 @@ use std::fmt::Debug;
 use std::sync::Arc;
 
 use chrono::TimeZone;
-use datafusion::arrow::array::{DictionaryArray, RecordBatch, StringArray};
-use datafusion::arrow::compute::{cast_with_options, CastOptions};
+use datafusion::arrow::array::{BooleanArray, DictionaryArray, RecordBatch, StringArray};
+use datafusion::arrow::compute::{cast_with_options, filter_record_batch, CastOptions};
 use datafusion::arrow::datatypes::{
     DataType as ArrowDataType, Field, Schema as ArrowSchema, SchemaRef,
     SchemaRef as ArrowSchemaRef, TimeUnit, UInt16Type,
@@ -277,12 +277,19 @@ fn arrow_schema_impl(snapshot: &Snapshot, wrap_partitions: bool) -> DeltaResult<
 
 // Extension trait to add datafusion_table_statistics method to DeltaTableState
 trait DeltaTableStateExt {
-    fn datafusion_table_statistics(&self, mask: Option<Vec<bool>>) -> Option<Statistics>;
+    fn datafusion_table_statistics(&self, mask: Option<&[bool]>) -> Option<Statistics>;
 }
 
 impl DeltaTableStateExt for DeltaTableState {
-    fn datafusion_table_statistics(&self, _mask: Option<Vec<bool>>) -> Option<Statistics> {
-        unimplemented!("datafusion_table_statistics is not implemented for DeltaTableState");
+    fn datafusion_table_statistics(&self, mask: Option<&[bool]>) -> Option<Statistics> {
+        if let Some(mask) = mask {
+            let es = self.snapshot();
+            let boolean_array = BooleanArray::from(mask.to_vec());
+            let pruned_files = filter_record_batch(&es.files, &boolean_array).ok()?;
+            LogDataHandler::new(&pruned_files, es.table_configuration()).statistics()
+        } else {
+            self.snapshot().log_data().statistics()
+        }
     }
 }
 
