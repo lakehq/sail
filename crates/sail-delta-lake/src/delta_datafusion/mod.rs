@@ -339,7 +339,7 @@ pub struct DeltaScanConfigBuilder {
     /// Otherwise the user provided name will be used
     file_column_name: Option<String>,
     /// Whether to wrap partition values in a dictionary encoding to potentially save space
-    wrap_partition_values: Option<bool>,
+    wrap_partition_values: bool,
     /// Whether to push down filter in end result or just prune the files
     enable_parquet_pushdown: bool,
     /// Schema to scan table with
@@ -351,7 +351,7 @@ impl Default for DeltaScanConfigBuilder {
         DeltaScanConfigBuilder {
             include_file_column: false,
             file_column_name: None,
-            wrap_partition_values: None,
+            wrap_partition_values: true,
             enable_parquet_pushdown: true,
             schema: None,
         }
@@ -364,40 +364,39 @@ impl DeltaScanConfigBuilder {
         Self::default()
     }
 
-    /// Indicate that a column containing a records file path is included.
-    /// Column name is generated and can be determined once this Config is built
-    #[allow(dead_code)]
-    pub fn with_file_column(mut self, include: bool) -> Self {
-        self.include_file_column = include;
-        self.file_column_name = None;
-        self
-    }
+    // /// Indicate that a column containing a records file path is included.
+    // /// Column name is generated and can be determined once this Config is built
+    // #[allow(dead_code)]
+    // pub fn with_file_column(mut self, include: bool) -> Self {
+    //     self.include_file_column = include;
+    //     self.file_column_name = None;
+    //     self
+    // }
 
-    /// Indicate that a column containing a records file path is included and column name is user defined.
-    #[allow(dead_code)]
-    pub fn with_file_column_name<S: ToString>(mut self, name: &S) -> Self {
-        self.file_column_name = Some(name.to_string());
-        self.include_file_column = true;
-        self
-    }
+    // /// Indicate that a column containing a records file path is included and column name is user defined.
+    // #[allow(dead_code)]
+    // pub fn with_file_column_name<S: ToString>(mut self, name: &S) -> Self {
+    //     self.file_column_name = Some(name.to_string());
+    //     self.include_file_column = true;
+    //     self
+    // }
 
-    /// Whether to wrap partition values in a dictionary encoding
-    #[allow(dead_code)]
-    pub fn wrap_partition_values(mut self, wrap: bool) -> Self {
-        self.wrap_partition_values = Some(wrap);
-        self
-    }
+    // /// Whether to wrap partition values in a dictionary encoding
+    // #[allow(dead_code)]
+    // pub fn wrap_partition_values(mut self, wrap: bool) -> Self {
+    //     self.wrap_partition_values = Some(wrap);
+    //     self
+    // }
 
-    /// Allow pushdown of the scan filter
-    /// When disabled the filter will only be used for pruning files
-    #[allow(dead_code)]
-    pub fn with_parquet_pushdown(mut self, pushdown: bool) -> Self {
-        self.enable_parquet_pushdown = pushdown;
-        self
-    }
+    // /// Allow pushdown of the scan filter
+    // /// When disabled the filter will only be used for pruning files
+    // #[allow(dead_code)]
+    // pub fn with_parquet_pushdown(mut self, pushdown: bool) -> Self {
+    //     self.enable_parquet_pushdown = pushdown;
+    //     self
+    // }
 
     /// Use the provided [SchemaRef] for the [DeltaScan]
-    #[allow(dead_code)]
     pub fn with_schema(mut self, schema: SchemaRef) -> Self {
         self.schema = Some(schema);
         self
@@ -441,7 +440,7 @@ impl DeltaScanConfigBuilder {
 
         Ok(DeltaScanConfig {
             file_column_name,
-            wrap_partition_values: self.wrap_partition_values.unwrap_or(true),
+            wrap_partition_values: self.wrap_partition_values,
             enable_parquet_pushdown: self.enable_parquet_pushdown,
             schema: self.schema.clone(),
         })

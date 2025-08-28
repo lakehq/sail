@@ -199,9 +199,9 @@ pub async fn create_delta_provider(
 
 #[allow(dead_code)]
 pub(crate) fn get_partition_col_data_types<'a>(
-    schema: &'a deltalake::StructType,
-    metadata: &'a deltalake::kernel::Metadata,
-) -> Vec<(&'a String, &'a deltalake::DataType)> {
+    schema: &'a delta_kernel::schema::StructType,
+    metadata: &'a delta_kernel::actions::Metadata,
+) -> Vec<(&'a String, &'a delta_kernel::schema::DataType)> {
     // JSON add actions contain a `partitionValues` field which is a map<string, string>.
     // When loading `partitionValues_parsed` we have to convert the stringified partition values back to the correct data type.
     schema

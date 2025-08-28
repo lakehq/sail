@@ -66,7 +66,6 @@ impl DeltaTableProvider {
         })
     }
 
-    #[allow(dead_code)]
     pub fn with_files(mut self, files: Vec<Add>) -> DeltaTableProvider {
         self.files = Some(files);
         self
