@@ -2,7 +2,7 @@ use std::sync::Arc;
 
 use async_recursion::async_recursion;
 use datafusion_expr::expr::Sort;
-use datafusion_expr::{Aggregate, Extension, LogicalPlan, LogicalPlanBuilder, Projection};
+use datafusion_expr::{Aggregate, Extension, LogicalPlan, LogicalPlanBuilder, Projection, Window};
 use sail_common::spec;
 use sail_common_datafusion::utils::items::ItemTaker;
 use sail_logical_plan::sort::SortWithinPartitionsNode;
@@ -49,41 +49,52 @@ impl PlanResolver<'_> {
     /// SELECT a, sum(b) AS s FROM VALUES (1, 2) AS t(a, b) GROUP BY a ORDER BY sum(b)
     /// ```
     fn rebase_query_sort_orders(sorts: Vec<Sort>, plan: &LogicalPlan) -> PlanResult<Vec<Sort>> {
-        match plan {
+        let aggregate = match plan {
             LogicalPlan::Projection(Projection { input, .. }) => {
-                if let LogicalPlan::Aggregate(Aggregate {
-                    input,
-                    group_expr,
-                    aggr_expr,
-                    ..
-                }) = input.as_ref()
-                {
-                    let base = group_expr
-                        .iter()
-                        .cloned()
-                        .chain(aggr_expr.iter().cloned())
-                        .collect::<Vec<_>>();
-                    sorts
-                        .into_iter()
-                        .map(|x| {
-                            let Sort {
-                                expr,
-                                asc,
-                                nulls_first,
-                            } = x;
-                            let expr = Self::rebase_expression(expr, &base, input.as_ref())?;
-                            Ok(Sort {
-                                expr,
-                                asc,
-                                nulls_first,
-                            })
-                        })
-                        .collect::<PlanResult<Vec<_>>>()
+                if let LogicalPlan::Aggregate(aggregate) = input.as_ref() {
+                    Some(aggregate)
+                } else if let LogicalPlan::Window(Window { input, .. }) = input.as_ref() {
+                    if let LogicalPlan::Aggregate(aggregate) = input.as_ref() {
+                        Some(aggregate)
+                    } else {
+                        None
+                    }
                 } else {
-                    Ok(sorts)
+                    None
                 }
             }
-            _ => Ok(sorts),
+            _ => None,
+        };
+        if let Some(Aggregate {
+            input,
+            group_expr,
+            aggr_expr,
+            ..
+        }) = aggregate
+        {
+            let base = group_expr
+                .iter()
+                .cloned()
+                .chain(aggr_expr.iter().cloned())
+                .collect::<Vec<_>>();
+            sorts
+                .into_iter()
+                .map(|x| {
+                    let Sort {
+                        expr,
+                        asc,
+                        nulls_first,
+                    } = x;
+                    let expr = Self::rebase_expression(expr, &base, input.as_ref())?;
+                    Ok(Sort {
+                        expr,
+                        asc,
+                        nulls_first,
+                    })
+                })
+                .collect::<PlanResult<Vec<_>>>()
+        } else {
+            Ok(sorts)
         }
     }
 
