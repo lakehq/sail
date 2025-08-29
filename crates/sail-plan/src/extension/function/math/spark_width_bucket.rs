@@ -19,7 +19,7 @@ use crate::extension::function::error_utils::{
 };
 use crate::extension::function::functions_nested_utils::make_scalar_function;
 
-#[derive(Debug)]
+#[derive(Debug, PartialEq, Eq, Hash)]
 pub struct SparkWidthBucket {
     signature: Signature,
 }

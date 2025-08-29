@@ -16,7 +16,7 @@ use datafusion_common::{exec_err, DataFusionError, Result, ScalarValue};
 use datafusion_expr::ScalarFunctionArgs;
 use datafusion_expr_common::signature::TypeSignature;
 
-#[derive(Debug)]
+#[derive(Debug, PartialEq, Eq, Hash)]
 pub struct SparkHex {
     signature: Signature,
 }
@@ -73,7 +73,7 @@ impl ScalarUDFImpl for SparkHex {
     }
 }
 
-#[derive(Debug)]
+#[derive(Debug, PartialEq, Eq, Hash)]
 pub struct SparkUnHex {
     signature: Signature,
 }

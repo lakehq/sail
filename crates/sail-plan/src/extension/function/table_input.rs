@@ -8,7 +8,7 @@ use datafusion_expr::{
 };
 
 /// A placeholder UDF used to represent a table input in UDTF arguments.
-#[derive(Debug)]
+#[derive(Debug, PartialEq, Eq, Hash)]
 pub struct TableInput {
     plan: Arc<LogicalPlan>,
     signature: Signature,

@@ -10,7 +10,7 @@ use crate::extension::function::error_utils::{
     invalid_arg_count_exec_err, unsupported_data_type_exec_err,
 };
 
-#[derive(Debug)]
+#[derive(Debug, PartialEq, Eq, Hash)]
 pub struct SparkBin {
     signature: Signature,
 }

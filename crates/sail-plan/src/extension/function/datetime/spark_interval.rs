@@ -20,7 +20,7 @@ use crate::utils::ItemTaker;
 
 macro_rules! define_interval_udf {
     ($udf:ident, $name:expr, $return_type:expr, $primitive_type:ty, $func:expr, $scalar:expr $(,)?) => {
-        #[derive(Debug)]
+        #[derive(Debug, PartialEq, Eq, Hash)]
         pub struct $udf {
             signature: Signature,
         }

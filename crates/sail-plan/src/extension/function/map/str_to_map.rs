@@ -16,7 +16,7 @@ use datafusion_functions::utils::make_scalar_function;
 use crate::extension::function::map::map_function::map_from_arrays_inner;
 use crate::extension::function::string::spark_split::{parse_regex, split_to_array, SparkSplit};
 
-#[derive(Debug)]
+#[derive(Debug, PartialEq, Eq, Hash)]
 pub struct StrToMap {
     signature: Signature,
 }
@@ -95,6 +95,7 @@ impl ScalarUDFImpl for StrToMap {
             arg_fields: fields_for_split,
             number_rows: args.number_rows,
             return_field: split_return_field,
+            config_options: args.config_options,
         })?;
 
         make_scalar_function(str_to_map_inner, vec![Hint::Pad, Hint::AcceptsSingular])(&[

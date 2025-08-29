@@ -12,7 +12,7 @@ use url::Url;
 
 use crate::extension::function::functions_utils::make_scalar_function;
 
-#[derive(Debug)]
+#[derive(Debug, PartialEq, Eq, Hash)]
 pub struct ParseUrl {
     signature: Signature,
 }

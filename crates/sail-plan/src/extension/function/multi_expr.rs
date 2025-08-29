@@ -8,7 +8,7 @@ use datafusion_expr::{ColumnarValue, ScalarFunctionArgs, ScalarUDFImpl, Signatur
 /// of generator expressions or wildcard expressions.
 /// The UDF must only exist as a top-level expression in projection nodes,
 /// otherwise a planning error will be raised during logical plan analysis.
-#[derive(Debug)]
+#[derive(Debug, PartialEq, Eq, Hash)]
 pub struct MultiExpr {
     signature: Signature,
 }

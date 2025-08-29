@@ -10,7 +10,7 @@ use url::form_urlencoded::byte_serialize;
 
 use crate::extension::function::functions_utils::make_scalar_function;
 
-#[derive(Debug)]
+#[derive(Debug, PartialEq, Eq, Hash)]
 pub struct UrlEncode {
     signature: Signature,
 }

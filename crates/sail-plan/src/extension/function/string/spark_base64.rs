@@ -11,7 +11,7 @@ use datafusion::arrow::datatypes::DataType;
 use datafusion_common::{exec_datafusion_err, exec_err, plan_err, Result, ScalarValue};
 use datafusion_expr::{ColumnarValue, ScalarFunctionArgs, ScalarUDFImpl, Signature, Volatility};
 
-#[derive(Debug)]
+#[derive(Debug, PartialEq, Eq, Hash)]
 pub struct SparkBase64 {
     signature: Signature,
 }
@@ -157,7 +157,7 @@ impl ScalarUDFImpl for SparkBase64 {
     }
 }
 
-#[derive(Debug)]
+#[derive(Debug, PartialEq, Eq, Hash)]
 pub struct SparkUnbase64 {
     signature: Signature,
 }

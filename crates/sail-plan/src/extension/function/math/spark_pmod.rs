@@ -13,7 +13,7 @@ use crate::extension::function::error_utils::{
 };
 use crate::extension::function::math::both_are_decimal;
 
-#[derive(Debug)]
+#[derive(Debug, PartialEq, Eq, Hash)]
 pub struct SparkPmod {
     signature: Signature,
 }

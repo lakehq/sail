@@ -14,7 +14,7 @@ use datafusion_expr::ScalarFunctionArgs;
 use crate::extension::function::functions_nested_utils::*;
 use crate::extension::function::functions_utils::make_scalar_function;
 
-#[derive(Debug)]
+#[derive(Debug, PartialEq, Eq, Hash)]
 pub struct BitmapCount {
     signature: Signature,
 }

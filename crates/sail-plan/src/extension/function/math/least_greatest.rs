@@ -10,7 +10,7 @@ use datafusion_expr::ScalarFunctionArgs;
 
 use crate::utils::ItemTaker;
 
-#[derive(Debug)]
+#[derive(Debug, PartialEq, Eq, Hash)]
 pub struct Greatest {
     signature: Signature,
 }
@@ -60,7 +60,7 @@ impl ScalarUDFImpl for Greatest {
     }
 }
 
-#[derive(Debug)]
+#[derive(Debug, PartialEq, Eq, Hash)]
 pub struct Least {
     signature: Signature,
 }

@@ -15,7 +15,7 @@ use datafusion_expr_common::signature::{Coercion, TypeSignature, TypeSignatureCl
 
 use crate::extension::function::functions_utils::{make_scalar_function, utf8_to_int_type};
 
-#[derive(Debug)]
+#[derive(Debug, PartialEq, Eq, Hash)]
 pub struct Levenshtein {
     signature: Signature,
 }

@@ -12,7 +12,7 @@ use datafusion_expr::{
 };
 use half::f16;
 
-#[derive(Debug)]
+#[derive(Debug, PartialEq, Eq, Hash)]
 pub struct SparkSignum {
     signature: Signature,
 }

@@ -13,7 +13,7 @@ use sha1::{Digest, Sha1};
 
 use crate::extension::function::functions_utils::make_scalar_function;
 
-#[derive(Debug)]
+#[derive(Debug, PartialEq, Eq, Hash)]
 pub struct SparkSha1 {
     signature: Signature,
 }

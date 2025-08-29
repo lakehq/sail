@@ -11,7 +11,7 @@ use datafusion_expr_common::signature::{Coercion, TypeSignatureClass};
 
 use crate::utils::{spark_datetime_format_to_chrono_strftime, ItemTaker};
 
-#[derive(Debug)]
+#[derive(Debug, PartialEq, Eq, Hash)]
 pub struct SparkToChronoFmt {
     signature: Signature,
 }

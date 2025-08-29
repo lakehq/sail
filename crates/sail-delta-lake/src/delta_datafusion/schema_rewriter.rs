@@ -6,8 +6,8 @@ use datafusion::arrow::datatypes::{DataType, Field, FieldRef, Schema, SchemaRef}
 use datafusion::common::tree_node::{Transformed, TransformedResult, TreeNode};
 use datafusion::common::{exec_err, Result, ScalarValue};
 use datafusion::physical_expr::expressions::{Column, Literal};
-use datafusion::physical_expr::schema_rewriter::{PhysicalExprAdapter, PhysicalExprAdapterFactory};
 use datafusion::physical_expr::PhysicalExpr;
+use datafusion_physical_expr_adapter::{PhysicalExprAdapter, PhysicalExprAdapterFactory};
 
 use crate::delta_datafusion::type_converter::DeltaTypeConverter;
 

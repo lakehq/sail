@@ -6,7 +6,7 @@ use datafusion::functions::datetime::to_timestamp::ToTimestampMicrosFunc;
 use datafusion_common::{plan_err, Result, ScalarValue};
 use datafusion_expr::{ColumnarValue, ScalarFunctionArgs, ScalarUDFImpl, Signature, Volatility};
 
-#[derive(Debug)]
+#[derive(Debug, PartialEq, Eq, Hash)]
 pub struct SparkTryToTimestamp {
     signature: Signature,
 }

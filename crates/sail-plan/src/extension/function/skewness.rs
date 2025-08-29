@@ -12,6 +12,7 @@ use datafusion_common::types::{
 };
 use datafusion_expr_common::signature::{Coercion, TypeSignatureClass};
 
+#[derive(PartialEq, Eq, Hash)]
 pub struct SkewnessFunc {
     name: String,
     signature: Signature,

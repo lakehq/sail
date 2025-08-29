@@ -8,7 +8,7 @@ use datafusion_expr::{
     ColumnarValue, Expr, ScalarFunctionArgs, ScalarUDFImpl, Signature, Volatility,
 };
 
-#[derive(Debug)]
+#[derive(Debug, PartialEq, Eq, Hash)]
 pub struct TimestampNow {
     signature: Signature,
     timezone: Arc<str>,

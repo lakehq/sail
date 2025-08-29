@@ -49,6 +49,7 @@ use deltalake::errors::{DeltaResult, DeltaTableError};
 use deltalake::kernel::{Add, EagerSnapshot, Snapshot};
 use deltalake::logstore::LogStoreRef;
 use deltalake::table::state::DeltaTableState;
+use futures::TryStreamExt;
 use object_store::path::Path;
 use object_store::ObjectMeta;
 use serde::{Deserialize, Serialize};
@@ -226,41 +227,44 @@ fn arrow_type_from_delta_type(
 ) -> DeltaResult<ArrowDataType> {
     use deltalake::kernel::DataType as DeltaType;
 
-    Ok(match delta_type {
+    match delta_type {
         DeltaType::Primitive(primitive) => {
             use deltalake::kernel::PrimitiveType;
             match primitive {
-                PrimitiveType::String => ArrowDataType::Utf8,
-                PrimitiveType::Long => ArrowDataType::Int64,
-                PrimitiveType::Integer => ArrowDataType::Int32,
-                PrimitiveType::Short => ArrowDataType::Int16,
-                PrimitiveType::Byte => ArrowDataType::Int8,
-                PrimitiveType::Float => ArrowDataType::Float32,
-                PrimitiveType::Double => ArrowDataType::Float64,
-                PrimitiveType::Boolean => ArrowDataType::Boolean,
-                PrimitiveType::Binary => ArrowDataType::Binary,
-                PrimitiveType::Date => ArrowDataType::Date32,
-                PrimitiveType::Timestamp => ArrowDataType::Timestamp(TimeUnit::Microsecond, None),
+                PrimitiveType::String => Ok(ArrowDataType::Utf8),
+                PrimitiveType::Long => Ok(ArrowDataType::Int64),
+                PrimitiveType::Integer => Ok(ArrowDataType::Int32),
+                PrimitiveType::Short => Ok(ArrowDataType::Int16),
+                PrimitiveType::Byte => Ok(ArrowDataType::Int8),
+                PrimitiveType::Float => Ok(ArrowDataType::Float32),
+                PrimitiveType::Double => Ok(ArrowDataType::Float64),
+                PrimitiveType::Boolean => Ok(ArrowDataType::Boolean),
+                PrimitiveType::Binary => Ok(ArrowDataType::Binary),
+                PrimitiveType::Date => Ok(ArrowDataType::Date32),
+                PrimitiveType::Timestamp => {
+                    Ok(ArrowDataType::Timestamp(TimeUnit::Microsecond, None))
+                }
                 PrimitiveType::TimestampNtz => {
-                    ArrowDataType::Timestamp(TimeUnit::Microsecond, None)
+                    Ok(ArrowDataType::Timestamp(TimeUnit::Microsecond, None))
                 }
-                PrimitiveType::Decimal(decimal_type) => {
-                    ArrowDataType::Decimal128(decimal_type.precision(), decimal_type.scale() as i8)
-                }
+                PrimitiveType::Decimal(decimal_type) => Ok(ArrowDataType::Decimal128(
+                    decimal_type.precision(),
+                    decimal_type.scale() as i8,
+                )),
             }
         }
         DeltaType::Array(array_type) => {
             let element_type = arrow_type_from_delta_type(array_type.element_type())?;
-            ArrowDataType::List(Arc::new(Field::new(
+            Ok(ArrowDataType::List(Arc::new(Field::new(
                 "element",
                 element_type,
                 array_type.contains_null(),
-            )))
+            ))))
         }
         DeltaType::Map(map_type) => {
             let key_type = arrow_type_from_delta_type(map_type.key_type())?;
             let value_type = arrow_type_from_delta_type(map_type.value_type())?;
-            ArrowDataType::Map(
+            Ok(ArrowDataType::Map(
                 Arc::new(Field::new(
                     "entries",
                     ArrowDataType::Struct(
@@ -277,7 +281,7 @@ fn arrow_type_from_delta_type(
                     false,
                 )),
                 false,
-            )
+            ))
         }
         DeltaType::Struct(struct_type) => {
             let fields = struct_type
@@ -291,9 +295,12 @@ fn arrow_type_from_delta_type(
                     )))
                 })
                 .collect::<Result<Vec<_>, DeltaTableError>>()?;
-            ArrowDataType::Struct(fields.into())
+            Ok(ArrowDataType::Struct(fields.into()))
         }
-    })
+        DeltaType::Variant(_) => Err(DeltaTableError::Generic(format!(
+            "Delta type Variant is not supported in Arrow: {delta_type:?}"
+        ))),
+    }
 }
 
 fn arrow_schema_impl(snapshot: &Snapshot, wrap_partitions: bool) -> DeltaResult<ArrowSchemaRef> {
@@ -811,9 +818,10 @@ impl TableProvider for DeltaTableProvider {
                 if logical_filter.is_none() && limit.is_none() {
                     let files: Vec<Add> = self
                         .snapshot
-                        .file_actions_iter()
-                        .map_err(delta_to_datafusion_error)?
-                        .collect();
+                        .file_actions_iter(&self.log_store)
+                        .map_err(delta_to_datafusion_error)
+                        .try_collect()
+                        .await?;
                     (files, None)
                 } else {
                     let num_containers = log_data.num_containers();
@@ -831,11 +839,14 @@ impl TableProvider for DeltaTableProvider {
                     let mut rows_collected = 0;
                     let mut files = vec![];
 
-                    for (action, keep) in self
+                    let file_actions: Vec<_> = self
                         .snapshot
-                        .file_actions_iter()
-                        .map_err(delta_to_datafusion_error)?
-                        .zip(files_to_prune.iter().cloned())
+                        .file_actions_iter(&self.log_store)
+                        .map_err(delta_to_datafusion_error)
+                        .try_collect()
+                        .await?;
+                    for (action, keep) in
+                        file_actions.into_iter().zip(files_to_prune.iter().cloned())
                     {
                         // prune file based on predicate pushdown
                         if keep {
@@ -1108,6 +1119,7 @@ pub(crate) struct FindFilesPhysicalExprProperties {
 /// Scan memory table (for partition-only predicates)
 pub(crate) async fn scan_memory_table_physical(
     snapshot: &DeltaTableState,
+    log_store: LogStoreRef,
     state: &SessionState,
     physical_predicate: Arc<dyn PhysicalExpr>,
 ) -> DeltaResult<Vec<Add>> {
@@ -1120,7 +1132,7 @@ pub(crate) async fn scan_memory_table_physical(
     use datafusion::physical_plan::filter::FilterExec;
     use datafusion::physical_plan::ExecutionPlan;
 
-    let actions = snapshot.file_actions()?;
+    let actions = snapshot.file_actions(&log_store).await?;
     let batch = snapshot.add_actions_table(true)?;
     let mut arrays = Vec::new();
     let mut fields = Vec::new();
@@ -1194,9 +1206,10 @@ pub(crate) async fn find_files_scan_physical(
     use datafusion::physical_plan::ExecutionPlan;
 
     let candidate_map: HashMap<String, Add> = snapshot
-        .file_actions_iter()?
-        .map(|add| (add.path.clone(), add.to_owned()))
-        .collect();
+        .file_actions_iter(&log_store)
+        .map_ok(|add| (add.path.clone(), add.to_owned()))
+        .try_collect()
+        .await?;
 
     let scan_config = DeltaScanConfigBuilder {
         include_file_column: true,
@@ -1490,10 +1503,8 @@ pub async fn find_files_physical(
     snapshot: &DeltaTableState,
     log_store: LogStoreRef,
     state: &SessionState,
-    predicate: Option<Arc<dyn datafusion::physical_expr::PhysicalExpr>>,
-    adapter_factory: Arc<
-        dyn datafusion::physical_expr::schema_rewriter::PhysicalExprAdapterFactory,
-    >,
+    predicate: Option<Arc<dyn PhysicalExpr>>,
+    adapter_factory: Arc<dyn datafusion_physical_expr_adapter::PhysicalExprAdapterFactory>,
 ) -> DeltaResult<FindFiles> {
     let current_metadata = snapshot.metadata();
 
@@ -1516,7 +1527,8 @@ pub async fn find_files_physical(
             if expr_properties.partition_only {
                 // Use partition-only scanning (memory table approach)
                 let candidates =
-                    scan_memory_table_physical(snapshot, state, adapted_predicate).await?;
+                    scan_memory_table_physical(snapshot, log_store, state, adapted_predicate)
+                        .await?;
                 Ok(FindFiles {
                     candidates,
                     partition_scan: true,
@@ -1532,7 +1544,7 @@ pub async fn find_files_physical(
             }
         }
         None => Ok(FindFiles {
-            candidates: snapshot.file_actions()?,
+            candidates: snapshot.file_actions(&log_store).await?,
             partition_scan: true,
         }),
     }

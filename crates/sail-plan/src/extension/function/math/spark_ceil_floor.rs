@@ -173,7 +173,7 @@ fn get_return_type_precision_scale(return_type: &DataType) -> Result<(u8, i8)> {
     }
 }
 
-#[derive(Debug)]
+#[derive(Debug, PartialEq, Eq, Hash)]
 pub struct SparkCeil {
     signature: Signature,
 }
@@ -242,7 +242,7 @@ impl ScalarUDFImpl for SparkCeil {
     }
 }
 
-#[derive(Debug)]
+#[derive(Debug, PartialEq, Eq, Hash)]
 pub struct SparkFloor {
     signature: Signature,
 }

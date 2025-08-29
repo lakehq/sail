@@ -7,7 +7,7 @@ use datafusion_common::cast::as_struct_array;
 use datafusion_common::{exec_datafusion_err, exec_err, plan_err, Result, ScalarValue};
 use datafusion_expr::{ColumnarValue, ScalarFunctionArgs, ScalarUDFImpl, Signature, Volatility};
 
-#[derive(Debug)]
+#[derive(Debug, PartialEq, Eq, Hash)]
 pub struct UpdateStructField {
     signature: Signature,
     field_names: Vec<String>,

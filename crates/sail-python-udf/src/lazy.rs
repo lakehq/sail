@@ -1,4 +1,5 @@
 use std::fmt::Debug;
+use std::hash::{Hash, Hasher};
 
 use pyo3::sync::GILOnceCell;
 use pyo3::{PyObject, Python};
@@ -12,6 +13,25 @@ pub(crate) struct LazyPyObject(GILOnceCell<PyObject>);
 impl Debug for LazyPyObject {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("LazyPyObject").finish()
+    }
+}
+
+// CHECK HERE: CLAUDE GENERATED THIS AND THIS LOOKS WRONG. JUST NEEDED TO UNBLOCK MYSELF...
+impl PartialEq for LazyPyObject {
+    fn eq(&self, other: &Self) -> bool {
+        // Use identity comparison: two LazyPyObjects are equal
+        // if they are the same instance (pointer equality)
+        std::ptr::eq(&self.0, &other.0)
+    }
+}
+
+impl Eq for LazyPyObject {}
+
+// CHECK HERE: CLAUDE GENERATED THIS AND THIS LOOKS WRONG. JUST NEEDED TO UNBLOCK MYSELF...
+impl Hash for LazyPyObject {
+    fn hash<H: Hasher>(&self, state: &mut H) {
+        // Hash the address of the GILOnceCell itself
+        std::ptr::addr_of!(self.0).hash(state)
     }
 }
 

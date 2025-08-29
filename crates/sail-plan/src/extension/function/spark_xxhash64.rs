@@ -10,7 +10,7 @@ use datafusion_expr::ScalarFunctionArgs;
 
 use crate::extension::function::spark_hash_utils::create_xxhash64_hashes;
 
-#[derive(Debug)]
+#[derive(Debug, PartialEq, Eq, Hash)]
 pub struct SparkXxhash64 {
     signature: Signature,
 }

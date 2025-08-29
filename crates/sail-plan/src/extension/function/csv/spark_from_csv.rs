@@ -32,7 +32,7 @@ use crate::extension::function::functions_utils::make_scalar_function;
 ///   (e.g., "name STRING, age INT") for the CSV data.
 /// - Optionally, a third input can be provided as a `MapArray` containing options related to the parsing.
 ///   This may include a "sep" field to specify a custom separator, with the default being a comma (",").
-#[derive(Debug)]
+#[derive(Debug, PartialEq, Eq, Hash)]
 pub struct SparkFromCSV {
     signature: Signature,
 }

@@ -10,8 +10,9 @@ use deltalake::errors::DeltaResult;
 use deltalake::kernel::{Action, Add, Remove};
 use deltalake::logstore::LogStoreRef;
 use deltalake::parquet::file::properties::WriterProperties;
+use deltalake::table::config::TablePropertiesExt;
 use deltalake::table::state::DeltaTableState;
-use deltalake::Path;
+use deltalake::{DeltaTableError, Path};
 use uuid::Uuid;
 
 /// [Credit]: <https://github.com/delta-io/delta-rs/blob/3607c314cbdd2ad06c6ee0677b92a29f695c71f3/crates/core/src/operations/write/execution.rs>
@@ -98,6 +99,12 @@ pub(crate) async fn execute_non_empty_expr_physical(
                 .map_err(datafusion_to_delta_error)?,
         );
 
+        let target_file_size: usize = snapshot
+            .table_config()
+            .target_file_size()
+            .get()
+            .try_into()
+            .map_err(|e| DeltaTableError::generic(format!("Invalid target file size: {e}")))?;
         let add_actions: Vec<Action> = write_execution_plan(
             Some(snapshot),
             state.clone(),
@@ -105,7 +112,7 @@ pub(crate) async fn execute_non_empty_expr_physical(
             partition_columns.clone(),
             log_store.object_store(Some(operation_id)),
             Path::from(""),
-            Some(snapshot.table_config().target_file_size() as usize),
+            Some(target_file_size),
             None,
             writer_properties.clone(),
             writer_stats_config.clone(),

@@ -13,7 +13,7 @@ use crate::extension::function::math::common_try::{
     binary_op_scalar_or_array, try_binary_op_primitive,
 };
 
-#[derive(Debug)]
+#[derive(Debug, PartialEq, Eq, Hash)]
 pub struct SparkTryMod {
     signature: Signature,
 }

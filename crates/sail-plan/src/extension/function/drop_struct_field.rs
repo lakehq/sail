@@ -7,7 +7,7 @@ use datafusion_common::cast::as_struct_array;
 use datafusion_common::{exec_err, plan_err, Result};
 use datafusion_expr::{ColumnarValue, ScalarFunctionArgs, ScalarUDFImpl, Signature, Volatility};
 
-#[derive(Debug)]
+#[derive(Debug, PartialEq, Eq, Hash)]
 pub struct DropStructField {
     signature: Signature,
     field_names: Vec<String>,

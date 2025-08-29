@@ -408,7 +408,7 @@
 
 - key: parquet.statistics_truncate_length
   type: number
-  default: "0"
+  default: "64"
   description: |
     (Writing) The statistics truncate length for the Parquet writer.
     If the value is `0`, no truncation is applied.

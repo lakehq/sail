@@ -8,7 +8,7 @@ use datafusion_functions_nested::reverse::array_reverse_inner;
 
 use crate::extension::function::functions_nested_utils::make_scalar_function;
 
-#[derive(Debug)]
+#[derive(Debug, PartialEq, Eq, Hash)]
 pub struct SparkReverse {
     signature: Signature,
 }

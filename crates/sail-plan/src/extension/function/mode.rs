@@ -25,6 +25,7 @@ use datafusion::scalar::ScalarValue;
 ///
 /// - Null values are ignored during the calculation.
 /// - If multiple values have the same frequency, the MAX value with the highest frequency is returned.
+#[derive(PartialEq, Eq, Hash)]
 pub struct ModeFunction {
     signature: Signature,
 }

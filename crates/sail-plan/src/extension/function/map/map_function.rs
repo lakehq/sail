@@ -11,7 +11,7 @@ use datafusion_common::{exec_err, plan_err, Result, ScalarValue};
 use datafusion_expr::{ColumnarValue, ScalarUDFImpl, Signature, Volatility};
 use datafusion_functions::utils::make_scalar_function;
 
-#[derive(Debug)]
+#[derive(Debug, PartialEq, Eq, Hash)]
 pub struct MapFunction {
     signature: Signature,
 }

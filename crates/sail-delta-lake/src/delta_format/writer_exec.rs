@@ -17,7 +17,7 @@ use datafusion::physical_plan::{
     DisplayAs, DisplayFormatType, ExecutionPlan, ExecutionPlanProperties, Partitioning,
     PlanProperties, SendableRecordBatchStream,
 };
-use datafusion_common::{internal_err, DataFusionError, Result};
+use datafusion_common::{DataFusionError, Result};
 use datafusion_physical_expr::EquivalenceProperties;
 use deltalake::kernel::engine::arrow_conversion::{TryIntoArrow, TryIntoKernel};
 use deltalake::kernel::schema::StructType;
@@ -26,6 +26,7 @@ use deltalake::kernel::{Action, MetadataExt, Remove}; // TODO: Follow upstream f
 use deltalake::logstore::StorageConfig;
 use deltalake::protocol::{DeltaOperation, SaveMode};
 use futures::stream::{once, StreamExt};
+use futures::TryFutureExt;
 use sail_common_datafusion::datasource::PhysicalSinkMode;
 use url::Url;
 use uuid::Uuid;
@@ -145,7 +146,9 @@ impl ExecutionPlan for DeltaWriterExec {
         children: Vec<Arc<dyn ExecutionPlan>>,
     ) -> Result<Arc<dyn ExecutionPlan>> {
         if children.len() != 1 {
-            return internal_err!("DeltaWriterExec requires exactly one child");
+            return Err(DataFusionError::Internal(
+                "DeltaWriterExec requires exactly one child".to_string(),
+            ));
         }
 
         Ok(Arc::new(Self::new(
@@ -165,15 +168,16 @@ impl ExecutionPlan for DeltaWriterExec {
         context: Arc<TaskContext>,
     ) -> Result<SendableRecordBatchStream> {
         if partition != 0 {
-            return internal_err!("DeltaWriterExec can only be executed in a single partition");
+            return Err(DataFusionError::Internal(
+                "DeltaWriterExec can only be executed in a single partition".to_string(),
+            ));
         }
 
         let input_partitions = self.input.output_partitioning().partition_count();
         if input_partitions != 1 {
-            return internal_err!(
-                "DeltaWriterExec requires exactly one input partition, got {}",
-                input_partitions
-            );
+            return Err(DataFusionError::Internal(format!(
+                "DeltaWriterExec requires exactly one input partition, got {input_partitions}"
+            )));
         }
 
         let stream = self.input.execute(0, Arc::clone(&context))?;
@@ -275,8 +279,9 @@ impl ExecutionPlan for DeltaWriterExec {
                                 .snapshot()
                                 .map_err(|e| DataFusionError::External(Box::new(e)))?;
                             let remove_actions: Vec<Action> = snapshot
-                                .file_actions()
-                                .map_err(|e| DataFusionError::External(Box::new(e)))?
+                                .file_actions(&table.log_store())
+                                .map_err(|e| DataFusionError::External(Box::new(e)))
+                                .await?
                                 .into_iter()
                                 .map(|add| {
                                     #[allow(clippy::unwrap_used)]
@@ -490,8 +495,9 @@ impl DeltaWriterExec {
         schema_mode: Option<SchemaMode>,
     ) -> Result<(SchemaRef, Vec<Action>)> {
         let table_metadata = table
-            .metadata()
-            .map_err(|e| DataFusionError::External(Box::new(e)))?;
+            .snapshot()
+            .map_err(|e| DataFusionError::External(Box::new(e)))?
+            .metadata();
         let table_schema = table_metadata
             .parse_schema()
             .map_err(|e: delta_kernel::Error| DataFusionError::External(Box::new(e)))?;
@@ -509,8 +515,9 @@ impl DeltaWriterExec {
                         .map_err(|e| DataFusionError::External(Box::new(e)))?;
 
                     let current_metadata = table
-                        .metadata()
-                        .map_err(|e| DataFusionError::External(Box::new(e)))?;
+                        .snapshot()
+                        .map_err(|e| DataFusionError::External(Box::new(e)))?
+                        .metadata();
                     // TODO: Follow upstream for `with_schema`
                     #[allow(deprecated)]
                     let new_metadata = current_metadata
@@ -531,8 +538,9 @@ impl DeltaWriterExec {
                     .map_err(|e| DataFusionError::External(Box::new(e)))?;
 
                 let current_metadata = table
-                    .metadata()
-                    .map_err(|e| DataFusionError::External(Box::new(e)))?;
+                    .snapshot()
+                    .map_err(|e| DataFusionError::External(Box::new(e)))?
+                    .metadata();
                 // TODO: Follow upstream for `with_schema`
                 #[allow(deprecated)]
                 let new_metadata = current_metadata

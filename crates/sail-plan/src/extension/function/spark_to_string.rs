@@ -14,7 +14,7 @@ use crate::utils::ItemTaker;
 
 macro_rules! define_to_string_udf {
     ($udf:ident, $name:expr, $return_type:expr, $func:expr $(,)?) => {
-        #[derive(Debug)]
+        #[derive(Debug, PartialEq, Eq, Hash)]
         pub struct $udf {
             signature: Signature,
             options: FormatOptions<'static>,

@@ -11,7 +11,7 @@ use datafusion_expr::function::Hint;
 use datafusion_expr::{ColumnarValue, ScalarFunctionArgs, ScalarUDFImpl, Signature, Volatility};
 use datafusion_functions::utils::make_scalar_function;
 
-#[derive(Debug)]
+#[derive(Debug, PartialEq, Eq, Hash)]
 pub struct MakeValidUtf8 {
     signature: Signature,
 }
