@@ -1,6 +1,6 @@
 use std::collections::HashMap;
 
-use datafusion::functions_aggregate::{average, count, min_max, sum};
+use datafusion::functions_aggregate::{array_agg, average, count, min_max, sum};
 use datafusion::functions_window::cume_dist::cume_dist_udwf;
 use datafusion::functions_window::lead_lag::{lag_udwf, lead_udwf};
 use datafusion::functions_window::nth_value::{first_value_udwf, last_value_udwf, nth_value_udwf};
@@ -83,6 +83,7 @@ fn list_built_in_window_functions() -> Vec<(&'static str, WinFunction)> {
     use crate::function::common::WinFunctionBuilder as F;
     vec![
         ("avg", F::aggregate(average::avg_udaf)),
+        ("collect_list", F::aggregate(array_agg::array_agg_udaf)),
         ("min", F::aggregate(min_max::min_udaf)),
         ("max", F::aggregate(min_max::max_udaf)),
         ("sum", F::aggregate(sum::sum_udaf)),
