@@ -18,7 +18,6 @@ use datafusion_common::{internal_err, DataFusionError, Result};
 use datafusion_physical_expr::EquivalenceProperties;
 use delta_kernel::engine::arrow_conversion::TryIntoKernel;
 use delta_kernel::schema::StructType;
-#[allow(deprecated)]
 use deltalake::kernel::{Action, Add, Protocol};
 use deltalake::logstore::StorageConfig;
 use deltalake::protocol::{DeltaOperation, SaveMode};

@@ -24,6 +24,8 @@ use crate::kernel::snapshot::log_data::LogDataHandler;
 use crate::kernel::snapshot::EagerSnapshot;
 use crate::kernel::ARROW_HANDLER;
 
+// [Credit]: <https://github.com/delta-io/delta-rs/blob/1f0b4d0965a85400c1effc6e9b4c7ebbb6795978/crates/core/src/table/state.rs>
+
 /// State snapshot currently held by the Delta Table instance.
 #[derive(Debug, Clone)]
 pub struct DeltaTableState {
@@ -130,12 +132,6 @@ impl DeltaTableState {
             .map_ok(|v| v.add_action())
             .boxed()
     }
-
-    // Get the number of files in the current table state
-    // #[deprecated = "Count any of the file-like iterators instead."]
-    // pub fn files_count(&self) -> usize {
-    //     self.snapshot.files_count()
-    // }
 
     /// Returns an iterator of file names present in the loaded state
     // #[inline]

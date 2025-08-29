@@ -500,12 +500,6 @@ impl EagerSnapshot {
         LogDataHandler::new(&self.files, self.snapshot.table_configuration())
     }
 
-    /// Get the number of files in the snapshot
-    #[deprecated = "Count any of the file-like iterators instead."]
-    pub fn files_count(&self) -> usize {
-        self.files.num_rows()
-    }
-
     /// Stream the active files in the snapshot
     ///
     /// This function returns a stream of [`LogicalFileView`] objects,

@@ -15,8 +15,6 @@ use delta_kernel::schema::DataType;
 use deltalake::kernel::scalars::ScalarExt;
 use deltalake::kernel::{Add, DeletionVectorDescriptor, Remove};
 use deltalake::{DeltaResult, DeltaTableError};
-use object_store::path::Path;
-use object_store::ObjectMeta;
 use percent_encoding::percent_decode_str;
 
 const FIELD_NAME_PATH: &str = "path";
@@ -118,23 +116,6 @@ impl LogicalFileView {
             }
         }
         Cow::Borrowed("")
-    }
-
-    /// An object store [`Path`] to the file.
-    ///
-    /// this tries to parse the file string and if that fails, it will return the string as is.
-    // TODO assert consistent handling of the paths encoding when reading log data so this logic can be removed.
-    #[deprecated(
-        since = "0.27.1",
-        note = "Will no longer be meaningful once we have full url support"
-    )]
-    pub(crate) fn object_store_path(&self) -> Path {
-        let path = self.path();
-        // Try to preserve percent encoding if possible
-        match Path::parse(path.as_ref()) {
-            Ok(path) => path,
-            Err(_) => Path::from(path.as_ref()),
-        }
     }
 
     /// Returns the file size in bytes.
@@ -454,20 +435,5 @@ fn get_string_value(data: &dyn Array, index: usize) -> Option<&str> {
             arr.is_valid(index).then(|| arr.value(index))
         }
         _ => None,
-    }
-}
-
-impl TryFrom<&LogicalFileView> for ObjectMeta {
-    type Error = DeltaTableError;
-
-    fn try_from(file_stats: &LogicalFileView) -> Result<Self, Self::Error> {
-        Ok(ObjectMeta {
-            #[allow(deprecated)]
-            location: file_stats.object_store_path(), // TODO: remove once delta-rs have full url support
-            size: file_stats.size() as u64,
-            last_modified: file_stats.modification_datetime()?,
-            version: None,
-            e_tag: None,
-        })
     }
 }
