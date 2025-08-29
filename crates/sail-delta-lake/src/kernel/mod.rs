@@ -1,5 +1,7 @@
-pub mod log_data;
+pub mod arrow;
 pub mod models;
+pub mod snapshot;
+pub mod transaction;
 
 use std::sync::LazyLock;
 

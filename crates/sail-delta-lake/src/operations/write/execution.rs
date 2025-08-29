@@ -10,7 +10,6 @@ use deltalake::errors::DeltaResult;
 use deltalake::kernel::{Action, Add, Remove};
 use deltalake::logstore::LogStoreRef;
 use deltalake::parquet::file::properties::WriterProperties;
-use deltalake::table::state::DeltaTableState;
 use deltalake::Path;
 use uuid::Uuid;
 
@@ -19,6 +18,7 @@ use crate::delta_datafusion::{
     datafusion_to_delta_error, DataFusionMixins, DeltaScanConfigBuilder, DeltaTableProvider,
 };
 use crate::operations::write::writer::{DeltaWriter, WriterConfig};
+use crate::table::DeltaTableState;
 
 /// Configuration for the writer on how to collect stats
 #[derive(Clone)]
@@ -62,7 +62,7 @@ pub(crate) async fn execute_non_empty_expr_physical(
     // Take the insert plan schema since it might have been schema evolved, if its not
     // it is simply the table schema
     let scan_config = DeltaScanConfigBuilder::new()
-        .with_schema(snapshot.input_schema()?)
+        .with_schema(snapshot.arrow_schema()?)
         .build(snapshot)?;
 
     let target_provider = Arc::new(
@@ -105,7 +105,7 @@ pub(crate) async fn execute_non_empty_expr_physical(
             partition_columns.clone(),
             log_store.object_store(Some(operation_id)),
             Path::from(""),
-            Some(snapshot.table_config().target_file_size() as usize),
+            snapshot.table_config().target_file_size.map(|n| n.get()),
             None,
             writer_properties.clone(),
             writer_stats_config.clone(),
@@ -131,7 +131,7 @@ async fn write_execution_plan(
     partition_columns: Vec<String>,
     object_store: Arc<dyn object_store::ObjectStore>,
     table_path: Path,
-    target_file_size: Option<usize>,
+    target_file_size: Option<u64>,
     write_batch_size: Option<usize>,
     writer_properties: Option<WriterProperties>,
     writer_stats_config: WriterStatsConfig,

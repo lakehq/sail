@@ -292,6 +292,66 @@ class TestDeltaIO:
         assert result_pandas["age"].tolist() == [30, 25]
         assert result_pandas["is_active"].tolist() == [True, False]
 
+    def test_delta_io_ignore_mode(self, spark, delta_test_data, tmp_path):
+        """Test Delta Lake ignore mode (ignore if table exists)"""
+        delta_path = tmp_path / "delta_table"
+        delta_table_path = f"{delta_path}"
+
+        # Create initial table
+        df1 = spark.createDataFrame(delta_test_data)
+        df1.write.format("delta").mode("overwrite").save(str(delta_path))
+
+        # Read initial data
+        initial_result = spark.read.format("delta").load(delta_table_path).sort("id")
+        initial_data = initial_result.collect()
+        assert len(initial_data) == 3  # noqa: PLR2004
+
+        # Try to write new data with ignore mode - should be ignored since table exists
+        new_data = [
+            Row(id=20, event="X", score=0.95),
+            Row(id=21, event="Y", score=0.88),
+        ]
+        df2 = spark.createDataFrame(new_data)
+        df2.write.format("delta").mode("ignore").save(str(delta_path))
+
+        # Read data again - should be unchanged
+        result_df = spark.read.format("delta").load(delta_table_path).sort("id")
+        result_data = result_df.collect()
+
+        # Data should remain the same as initial data
+        assert len(result_data) == 3  # noqa: PLR2004
+        assert result_data[0].id == 10  # noqa: PLR2004
+        assert result_data[1].id == 11  # noqa: PLR2004
+        assert result_data[2].id == 12  # noqa: PLR2004
+        assert result_data[0].event == "A"
+        assert result_data[1].event == "B"
+        assert result_data[2].event == "A"
+
+    def test_delta_io_ignore_mode_new_table(self, spark, tmp_path):
+        """Test Delta Lake ignore mode when table doesn't exist (should create table)"""
+        delta_path = tmp_path / "delta_table_new"
+        delta_table_path = f"{delta_path}"
+
+        # Write data with ignore mode to non-existent table - should create table
+        new_data = [
+            Row(id=30, event="Z", score=0.92),
+            Row(id=31, event="W", score=0.85),
+        ]
+        df = spark.createDataFrame(new_data)
+        df.write.format("delta").mode("ignore").save(str(delta_path))
+
+        # Read data - should contain the new data
+        result_df = spark.read.format("delta").load(delta_table_path).sort("id")
+        result_data = result_df.collect()
+
+        assert len(result_data) == 2  # noqa: PLR2004
+        assert result_data[0].id == 30  # noqa: PLR2004
+        assert result_data[1].id == 31  # noqa: PLR2004
+        assert result_data[0].event == "Z"
+        assert result_data[1].event == "W"
+        assert result_data[0].score == 0.92  # noqa: PLR2004
+        assert result_data[1].score == 0.85  # noqa: PLR2004
+
     def test_delta_io_error_on_read_nonexistent_table(self, spark, tmp_path):
         """Test Delta Lake error handling"""
         from pysail.tests.spark.utils import is_jvm_spark

@@ -114,8 +114,8 @@
     Target size of files written by the Delta Lake writer. This is a hint and may not be strictly enforced.
   default: "104857600" # 100 MB
   supported: true
-  rust_type: usize
-  rust_deserialize_with: crate::options::serde::deserialize_non_zero_usize
+  rust_type: u64
+  rust_deserialize_with: crate::options::serde::deserialize_u64
 
 - key: write_batch_size
   aliases:

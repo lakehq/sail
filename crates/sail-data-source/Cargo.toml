@@ -23,9 +23,7 @@ url = { workspace = true }
 regex = { workspace = true }
 percent-encoding = { workspace = true }
 once_cell = { workspace = true }
-deltalake = { workspace = true }
 log = { workspace = true }
-uuid = { workspace = true }
 bytes = { workspace = true }
 tokio = { workspace = true }
 tokio-stream = { workspace = true }

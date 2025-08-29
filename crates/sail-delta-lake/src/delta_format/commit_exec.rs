@@ -16,10 +16,8 @@ use datafusion::physical_plan::{
 };
 use datafusion_common::{internal_err, DataFusionError, Result};
 use datafusion_physical_expr::EquivalenceProperties;
-use deltalake::kernel::engine::arrow_conversion::TryIntoKernel;
-use deltalake::kernel::schema::StructType;
-use deltalake::kernel::transaction::{CommitBuilder, CommitProperties, TableReference};
-#[allow(deprecated)]
+use delta_kernel::engine::arrow_conversion::TryIntoKernel;
+use delta_kernel::schema::StructType;
 use deltalake::kernel::{Action, Add, Protocol};
 use deltalake::logstore::StorageConfig;
 use deltalake::protocol::{DeltaOperation, SaveMode};
@@ -27,6 +25,7 @@ use futures::stream::{self, StreamExt};
 use url::Url;
 
 use crate::delta_format::CommitInfo;
+use crate::kernel::transaction::{CommitBuilder, CommitProperties, TableReference};
 use crate::table::{create_delta_table_with_object_store, open_table_with_object_store};
 
 /// Physical execution node for Delta Lake commit operations
@@ -151,10 +150,6 @@ impl ExecutionPlan for DeltaCommitExec {
         }
 
         let stream = self.input.execute(0, Arc::clone(&context))?;
-        let mut streams = Vec::with_capacity(input_partitions);
-        for i in 0..input_partitions {
-            streams.push(self.input.execute(i, Arc::clone(&context))?);
-        }
 
         let table_url = self.table_url.clone();
         let partition_columns = self.partition_columns.clone();
@@ -182,7 +177,6 @@ impl ExecutionPlan for DeltaCommitExec {
                 )
                 .await
                 .map_err(|e| DataFusionError::External(Box::new(e)))?
-                .into()
             };
 
             let mut total_rows = 0u64;
@@ -291,7 +285,6 @@ impl ExecutionPlan for DeltaCommitExec {
             } else {
                 None
             };
-
             let reference = snapshot.as_ref().map(|s| *s as &dyn TableReference);
 
             CommitBuilder::from(CommitProperties::default())

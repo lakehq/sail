@@ -5,7 +5,7 @@ use std::sync::Arc;
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use async_trait::async_trait;
-use datafusion::arrow::array::{StringArray, UInt64Array};
+use datafusion::arrow::array::StringArray;
 use datafusion::arrow::datatypes::{DataType, Field, Schema, SchemaRef};
 use datafusion::arrow::record_batch::RecordBatch;
 use datafusion::common::ToDFSchema;
@@ -31,7 +31,9 @@ use url::Url;
 use uuid::Uuid;
 
 use crate::delta_datafusion::type_converter::DeltaTypeConverter;
-use crate::delta_datafusion::{parse_predicate_expression, DataFusionMixins};
+use crate::delta_datafusion::{
+    delta_to_datafusion_error, parse_predicate_expression, DataFusionMixins,
+};
 use crate::delta_format::CommitInfo;
 use crate::operations::write::execution::{prepare_predicate_actions_physical, WriterStatsConfig};
 use crate::operations::write::writer::{DeltaWriter, WriterConfig};
@@ -233,6 +235,7 @@ impl ExecutionPlan for DeltaWriterExec {
                             let snapshot = table
                                 .snapshot()
                                 .map_err(|e| DataFusionError::External(Box::new(e)))?;
+
                             let df_schema = snapshot
                                 .arrow_schema()
                                 .map_err(|e| DataFusionError::External(Box::new(e)))?
@@ -274,8 +277,10 @@ impl ExecutionPlan for DeltaWriterExec {
                             let snapshot = table
                                 .snapshot()
                                 .map_err(|e| DataFusionError::External(Box::new(e)))?;
+
                             let remove_actions: Vec<Action> = snapshot
-                                .file_actions()
+                                .file_actions(&*table.log_store())
+                                .await
                                 .map_err(|e| DataFusionError::External(Box::new(e)))?
                                 .into_iter()
                                 .map(|add| {
@@ -312,6 +317,7 @@ impl ExecutionPlan for DeltaWriterExec {
                         let snapshot = table
                             .snapshot()
                             .map_err(|e| DataFusionError::External(Box::new(e)))?;
+
                         let session_state = SessionStateBuilder::new()
                             .with_runtime_env(context.runtime_env().clone())
                             .build();
@@ -354,16 +360,19 @@ impl ExecutionPlan for DeltaWriterExec {
                 }
                 PhysicalSinkMode::IgnoreIfExists => {
                     if table_exists {
-                        let batch = RecordBatch::try_new(
-                            schema,
-                            vec![
-                                Arc::new(UInt64Array::from(vec![0])),
-                                Arc::new(StringArray::from(vec!["[]"])),
-                                Arc::new(StringArray::from(vec!["[]"])),
-                                Arc::new(StringArray::from(vec!["[]"])),
-                                Arc::new(StringArray::from(vec!["null"])),
-                            ],
-                        )?;
+                        // Table exists, ignore the write operation and return empty commit info
+                        let commit_info = CommitInfo {
+                            row_count: 0,
+                            add_actions: Vec::new(),
+                            schema_actions: Vec::new(),
+                            initial_actions: Vec::new(),
+                            operation: None,
+                        };
+                        let commit_info_json = serde_json::to_string(&commit_info)
+                            .map_err(|e| DataFusionError::External(Box::new(e)))?;
+
+                        let data_array = Arc::new(StringArray::from(vec![commit_info_json]));
+                        let batch = RecordBatch::try_new(schema, vec![data_array])?;
                         return Ok(batch);
                     }
                 }
@@ -485,16 +494,17 @@ impl DeltaWriterExec {
 
     /// Handle schema evolution based on the schema mode
     async fn handle_schema_evolution(
-        table: &deltalake::DeltaTable,
+        table: &crate::table::DeltaTable,
         input_schema: &SchemaRef,
         schema_mode: Option<SchemaMode>,
     ) -> Result<(SchemaRef, Vec<Action>)> {
         let table_metadata = table
-            .metadata()
-            .map_err(|e| DataFusionError::External(Box::new(e)))?;
+            .snapshot()
+            .map_err(delta_to_datafusion_error)?
+            .metadata();
         let table_schema = table_metadata
             .parse_schema()
-            .map_err(|e: delta_kernel::Error| DataFusionError::External(Box::new(e)))?;
+            .map_err(|e| DataFusionError::External(Box::new(e)))?;
         let table_arrow_schema = std::sync::Arc::new((&table_schema).try_into_arrow()?);
 
         match schema_mode {
@@ -509,8 +519,9 @@ impl DeltaWriterExec {
                         .map_err(|e| DataFusionError::External(Box::new(e)))?;
 
                     let current_metadata = table
-                        .metadata()
-                        .map_err(|e| DataFusionError::External(Box::new(e)))?;
+                        .snapshot()
+                        .map_err(delta_to_datafusion_error)?
+                        .metadata();
                     // TODO: Follow upstream for `with_schema`
                     #[allow(deprecated)]
                     let new_metadata = current_metadata
@@ -531,8 +542,9 @@ impl DeltaWriterExec {
                     .map_err(|e| DataFusionError::External(Box::new(e)))?;
 
                 let current_metadata = table
-                    .metadata()
-                    .map_err(|e| DataFusionError::External(Box::new(e)))?;
+                    .snapshot()
+                    .map_err(delta_to_datafusion_error)?
+                    .metadata();
                 // TODO: Follow upstream for `with_schema`
                 #[allow(deprecated)]
                 let new_metadata = current_metadata

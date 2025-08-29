@@ -2323,9 +2323,9 @@ dependencies = [
 
 [[package]]
 name = "delta_kernel"
-version = "0.13.0"
+version = "0.14.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "f06f3676832e713e44f65804cebf82f46962d3e126f64f3251eb5fbeb0ad94e4"
+checksum = "cac0f0eae6345b0cfb67c4304da961e590370860aa51e88315e808c5d496629f"
 dependencies = [
  "arrow",
  "bytes",
@@ -2352,9 +2352,9 @@ dependencies = [
 
 [[package]]
 name = "delta_kernel_derive"
-version = "0.13.0"
+version = "0.14.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "059e70a67ae0c827a0e7f393eb05db2985533b3b612f8b33243433853570db45"
+checksum = "064456b054cf26b607f4cbcef6d2ca102f64ed8e4fa702d2e307ce67b5b93569"
 dependencies = [
  "proc-macro2",
  "quote",
@@ -2364,7 +2364,7 @@ dependencies = [
 [[package]]
 name = "deltalake"
 version = "0.28.0"
-source = "git+https://github.com/delta-io/delta-rs.git?rev=5ac08eb#5ac08eb1b2f8fd847af547d26f224c30916e4824"
+source = "git+https://github.com/delta-io/delta-rs.git?rev=f3a2712#f3a271225f30cb4b53ed3058ffb974e0e2ced571"
 dependencies = [
  "delta_kernel",
  "deltalake-core",
@@ -2373,7 +2373,7 @@ dependencies = [
 [[package]]
 name = "deltalake-core"
 version = "0.28.0"
-source = "git+https://github.com/delta-io/delta-rs.git?rev=5ac08eb#5ac08eb1b2f8fd847af547d26f224c30916e4824"
+source = "git+https://github.com/delta-io/delta-rs.git?rev=f3a2712#f3a271225f30cb4b53ed3058ffb974e0e2ced571"
 dependencies = [
  "arrow",
  "arrow-arith",
@@ -2399,14 +2399,12 @@ dependencies = [
  "indexmap 2.11.0",
  "itertools 0.14.0",
  "maplit",
- "num-bigint",
- "num-traits",
  "num_cpus",
  "object_store",
  "parking_lot",
  "parquet",
  "percent-encoding",
- "pin-project-lite",
+ "percent-encoding-rfc3986",
  "rand 0.8.5",
  "regex",
  "serde",
@@ -2417,7 +2415,6 @@ dependencies = [
  "tokio",
  "tracing",
  "url",
- "urlencoding",
  "uuid",
  "validator",
 ]
@@ -2425,7 +2422,7 @@ dependencies = [
 [[package]]
 name = "deltalake-derive"
 version = "0.28.0"
-source = "git+https://github.com/delta-io/delta-rs.git?rev=5ac08eb#5ac08eb1b2f8fd847af547d26f224c30916e4824"
+source = "git+https://github.com/delta-io/delta-rs.git?rev=f3a2712#f3a271225f30cb4b53ed3058ffb974e0e2ced571"
 dependencies = [
  "convert_case",
  "itertools 0.14.0",
@@ -4635,6 +4632,12 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "9b4f627cb1b25917193a259e49bdad08f671f8d9708acfd5fe0a8c1455d87220"
 
 [[package]]
+name = "percent-encoding-rfc3986"
+version = "0.1.3"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "3637c05577168127568a64e9dc5a6887da720efef07b3d9472d45f63ab191166"
+
+[[package]]
 name = "pest"
 version = "2.8.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -5629,7 +5632,6 @@ dependencies = [
  "datafusion",
  "datafusion-common",
  "datafusion-datasource",
- "deltalake",
  "futures",
  "glob",
  "log",
@@ -5648,7 +5650,6 @@ dependencies = [
  "tokio",
  "tokio-stream",
  "url",
- "uuid",
 ]
 
 [[package]]
@@ -5666,9 +5667,11 @@ dependencies = [
  "deltalake",
  "futures",
  "indexmap 2.11.0",
+ "itertools 0.14.0",
  "log",
  "object_store",
  "parquet",
+ "percent-encoding",
  "sail-common-datafusion",
  "serde",
  "serde_json",
