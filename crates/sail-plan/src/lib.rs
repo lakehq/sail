@@ -3,8 +3,9 @@ use std::sync::Arc;
 use async_recursion::async_recursion;
 use datafusion::dataframe::DataFrame;
 use datafusion::execution::context::QueryPlanner;
-use datafusion::physical_plan::ExecutionPlan;
+use datafusion::physical_plan::{displayable, ExecutionPlan};
 use datafusion::prelude::SessionContext;
+use datafusion_common::display::{PlanType, StringifiedPlan, ToStringifiedPlan};
 use datafusion_common::Result;
 use datafusion_expr::{Extension, LogicalPlan};
 use sail_common::spec;
@@ -55,16 +56,23 @@ pub async fn resolve_and_execute_plan(
     ctx: &SessionContext,
     config: Arc<PlanConfig>,
     plan: spec::Plan,
-) -> PlanResult<Arc<dyn ExecutionPlan>> {
+) -> PlanResult<(Arc<dyn ExecutionPlan>, Vec<StringifiedPlan>)> {
+    let mut info = vec![];
     let resolver = PlanResolver::new(ctx, config);
     let NamedPlan { plan, fields } = resolver.resolve_named_plan(plan).await?;
+    info.push(plan.to_stringified(PlanType::InitialLogicalPlan));
     let df = execute_logical_plan(ctx, plan).await?;
     let plan = df.create_physical_plan().await?;
-    if let Some(fields) = fields {
-        Ok(rename_physical_plan(plan, fields.as_slice())?)
+    let plan = if let Some(fields) = fields {
+        rename_physical_plan(plan, fields.as_slice())?
     } else {
-        Ok(plan)
-    }
+        plan
+    };
+    info.push(StringifiedPlan::new(
+        PlanType::FinalPhysicalPlan,
+        displayable(plan.as_ref()).indent(true).to_string(),
+    ));
+    Ok((plan, info))
 }
 
 pub fn new_query_planner() -> Arc<dyn QueryPlanner + Send + Sync> {

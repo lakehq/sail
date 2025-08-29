@@ -239,7 +239,7 @@
         }
       },
       "output": {
-        "failure": "not implemented: function: json_object_keys"
+        "success": "ok"
       }
     },
     {
@@ -265,7 +265,7 @@
         }
       },
       "output": {
-        "failure": "not implemented: function: json_object_keys"
+        "success": "ok"
       }
     },
     {
@@ -291,7 +291,7 @@
         }
       },
       "output": {
-        "failure": "not implemented: function: json_object_keys"
+        "success": "ok"
       }
     },
     {

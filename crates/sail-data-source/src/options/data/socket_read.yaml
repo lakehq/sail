@@ -1,0 +1,33 @@
+- key: host
+  description: |
+    The host to connect to when reading from a socket.
+  supported: true
+
+- key: port
+  description: |
+    The port to connect to when reading from a socket.
+  supported: true
+  rust_type: u16
+  rust_deserialize_with: crate::options::serde::deserialize_u16
+
+- key: max_batch_size
+  aliases:
+    - maxBatchSize
+  default: "1000"
+  description: |
+    The maximum number of rows to include in a single batch when reading from a socket.
+  supported: true
+  rust_type: usize
+  rust_deserialize_with: crate::options::serde::deserialize_usize
+
+- key: timeout_sec
+  aliases:
+    - timeoutSec
+  default: "1"
+  description: |
+    The timeout in seconds for reading from a socket.
+    If no more data is received within the timeout duration since receiving the first row,
+    a batch will be returned with the rows received so far.
+  supported: true
+  rust_type: u64
+  rust_deserialize_with: crate::options::serde::deserialize_u64

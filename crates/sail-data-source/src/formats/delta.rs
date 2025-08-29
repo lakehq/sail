@@ -15,7 +15,7 @@ use url::Url;
 
 use crate::options::{load_default_options, load_options, DeltaReadOptions, DeltaWriteOptions};
 
-#[derive(Debug, Default)]
+#[derive(Debug)]
 pub struct DeltaTableFormat;
 
 #[async_trait]
