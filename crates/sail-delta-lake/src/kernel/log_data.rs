@@ -17,6 +17,7 @@ use delta_kernel::engine::arrow_data::ArrowEngineData;
 use delta_kernel::expressions::Expression;
 use delta_kernel::schema::{DataType, PrimitiveType};
 use delta_kernel::{EngineData, EvaluationHandler, ExpressionEvaluator};
+use deltalake::kernel::arrow::engine_ext::SnapshotExt;
 use deltalake::kernel::{Metadata, Snapshot, StructType};
 use deltalake::logstore::LogStoreRef;
 use deltalake::{DeltaResult, DeltaTableConfig, DeltaTableError};
@@ -130,12 +131,14 @@ impl SailLogDataHandler {
             .files(log_store.as_ref(), None)
             .try_collect()
             .await?;
+        let scan_row_schema = snapshot.inner().scan_row_parsed_schema_arrow()?;
+        let files = concat_batches(&scan_row_schema, &files)?;
 
         let metadata = snapshot.metadata().clone();
         let schema = snapshot.schema().clone();
 
         Ok(Self {
-            data: files,
+            data: vec![files],
             metadata,
             schema,
         })
@@ -171,7 +174,7 @@ impl SailLogDataHandler {
 
         let evaluator = ARROW_HANDLER.new_expression_evaluator(
             crate::kernel::models::fields::log_schema_ref().clone(),
-            expression,
+            expression.into(),
             expected_data_type.clone(),
         );
 
@@ -395,7 +398,7 @@ impl PruningStatistics for SailLogDataHandler {
         static ROW_COUNTS_EVAL: LazyLock<Arc<dyn ExpressionEvaluator>> = LazyLock::new(|| {
             ARROW_HANDLER.new_expression_evaluator(
                 crate::kernel::models::fields::log_schema_ref().clone(),
-                Expression::column(["add", "stats_parsed", "numRecords"]),
+                Expression::column(["add", "stats_parsed", "numRecords"]).into(),
                 DataType::Primitive(PrimitiveType::Long),
             )
         });

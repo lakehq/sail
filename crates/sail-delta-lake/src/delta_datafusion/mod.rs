@@ -839,14 +839,14 @@ impl TableProvider for DeltaTableProvider {
                     let mut rows_collected = 0;
                     let mut files = vec![];
 
-                    for (action, keep) in self
+                    let file_actions: Vec<_> = self
                         .snapshot
                         .file_actions_iter(&self.log_store)
                         .map_err(delta_to_datafusion_error)
-                        .try_collect::<Vec<Add>>()
-                        .await?
-                        .into_iter()
-                        .zip(files_to_prune.iter().cloned())
+                        .try_collect()
+                        .await?;
+                    for (action, keep) in
+                        file_actions.into_iter().zip(files_to_prune.iter().cloned())
                     {
                         // prune file based on predicate pushdown
                         if keep {
