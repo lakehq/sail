@@ -17,7 +17,6 @@ use delta_kernel::engine::arrow_data::ArrowEngineData;
 use delta_kernel::expressions::Expression;
 use delta_kernel::schema::{DataType, PrimitiveType};
 use delta_kernel::{EngineData, EvaluationHandler, ExpressionEvaluator};
-use deltalake::kernel::arrow::engine_ext::SnapshotExt;
 use deltalake::kernel::{Metadata, Snapshot, StructType};
 use deltalake::logstore::LogStoreRef;
 use deltalake::{DeltaResult, DeltaTableConfig, DeltaTableError};
@@ -127,18 +126,15 @@ impl SailLogDataHandler {
     ) -> DeltaResult<Self> {
         let snapshot = Snapshot::try_new(log_store.as_ref(), config.clone(), version).await?;
 
-        let files: Vec<RecordBatch> = snapshot
-            .files(log_store.as_ref(), None)
-            .try_collect()
-            .await?;
-        let scan_row_schema = snapshot.inner().scan_row_parsed_schema_arrow()?;
-        let files = concat_batches(&scan_row_schema, &files)?;
+        let files_stream = snapshot.files(log_store.as_ref(), None);
+
+        let files: Vec<RecordBatch> = files_stream.try_collect().await?;
 
         let metadata = snapshot.metadata().clone();
         let schema = snapshot.schema().clone();
 
         Ok(Self {
-            data: vec![files],
+            data: files,
             metadata,
             schema,
         })
@@ -157,7 +153,7 @@ impl SailLogDataHandler {
 
         let (expression, expected_data_type) = if is_partition_column {
             (
-                Expression::column(["add", "partitionValues_parsed", &column.name]),
+                Expression::column(["partitionValues_parsed", &column.name]),
                 field.data_type().clone(),
             )
         } else {
@@ -167,7 +163,7 @@ impl SailLogDataHandler {
                 _ => field.data_type().clone(),
             };
             (
-                Expression::column(["add", "stats_parsed", stats_field, &column.name]),
+                Expression::column(["stats_parsed", stats_field, &column.name]),
                 data_type,
             )
         };
@@ -259,8 +255,8 @@ impl SailLogDataHandler {
         let null_count_col = format!("add.stats_parsed.nullCount.{name}");
         let null_count = self.collect_batch_stats(&null_count_col, mask);
 
-        let min_value = self.column_bounds("add.stats_parsed.minValues", name, mask, true);
-        let max_value = self.column_bounds("add.stats_parsed.maxValues", name, mask, false);
+        let min_value = self.column_bounds("stats_parsed.minValues", name, mask, true);
+        let max_value = self.column_bounds("stats_parsed.maxValues", name, mask, false);
 
         Some(ColumnStatistics {
             null_count,
@@ -398,7 +394,7 @@ impl PruningStatistics for SailLogDataHandler {
         static ROW_COUNTS_EVAL: LazyLock<Arc<dyn ExpressionEvaluator>> = LazyLock::new(|| {
             ARROW_HANDLER.new_expression_evaluator(
                 crate::kernel::models::fields::log_schema_ref().clone(),
-                Expression::column(["add", "stats_parsed", "numRecords"]).into(),
+                Expression::column(["stats_parsed", "numRecords"]).into(),
                 DataType::Primitive(PrimitiveType::Long),
             )
         });
