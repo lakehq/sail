@@ -55,7 +55,7 @@ class TpchBenchmark:
                 else:
                     start_time = time.time()
                     df = spark.sql(sql)
-                    rows = df.collect()
+                    rows = df.toPandas()
                     end_time = time.time()
                     query_time = end_time - start_time
                     total_time += query_time
