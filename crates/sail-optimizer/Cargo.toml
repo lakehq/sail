@@ -1,0 +1,15 @@
+[package]
+name = "sail-optimizer"
+version = { workspace = true }
+edition = { workspace = true }
+
+[lints]
+workspace = true
+
+[dependencies]
+sail-common = { path = "../sail-common" }
+
+thiserror = { workspace = true }
+datafusion = { workspace = true }
+datafusion-common = { workspace = true }
+datafusion-physical-expr = { workspace = true }
