@@ -19,6 +19,7 @@ use sail_common_datafusion::extension::SessionExtensionAccessor;
 use sail_execution::driver::DriverOptions;
 use sail_execution::job::{ClusterJobRunner, JobRunner, LocalJobRunner};
 use sail_object_store::DynamicObjectStoreRegistry;
+use sail_optimizer::get_physical_optimizers;
 use sail_plan::extension::analyzer::default_analyzer_rules;
 use sail_plan::extension::optimizer::default_optimizer_rules;
 use sail_plan::function::{
@@ -237,6 +238,7 @@ impl SessionManagerActor {
             .with_default_features()
             .with_analyzer_rules(default_analyzer_rules())
             .with_optimizer_rules(default_optimizer_rules())
+            .with_physical_optimizer_rules(get_physical_optimizers())
             .with_query_planner(new_query_planner())
             .build();
         let context = SessionContext::new_with_state(state);
