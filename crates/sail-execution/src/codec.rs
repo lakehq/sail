@@ -886,9 +886,9 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
                     .into_iter()
                     .map(|x| self.try_encode_message(x))
                     .collect::<Result<_>>()?;
-                gen::PhysicalSortExprNodeCollection {
+                Some(gen::PhysicalSortExprNodeCollection {
                     physical_sort_expr_nodes,
-                }
+                })
             } else {
                 None
             };
