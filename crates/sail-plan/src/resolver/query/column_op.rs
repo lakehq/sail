@@ -3,6 +3,7 @@ use std::sync::Arc;
 
 use datafusion_common::Column;
 use datafusion_expr::{col, lit, Expr, ExprSchemable, LogicalPlan, Projection, TryCast};
+use indexmap::IndexMap;
 use sail_common::spec;
 
 use crate::error::{PlanError, PlanResult};
@@ -178,8 +179,9 @@ impl PlanResolver<'_> {
     ) -> PlanResult<LogicalPlan> {
         let input = self.resolve_query_plan(input, state).await?;
         let schema = input.schema();
-        let mut aliases: HashMap<String, (Expr, bool, Vec<_>)> = async {
-            let mut results: HashMap<String, (Expr, bool, Vec<_>)> = HashMap::new();
+        // We use `IndexMap` to ensure the result schema has a deterministic column order.
+        let mut aliases: IndexMap<String, (Expr, bool, Vec<_>)> = async {
+            let mut results = IndexMap::new();
             for alias in aliases {
                 let (name, expr, metadata) = match alias {
                     spec::Expr::Alias {

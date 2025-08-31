@@ -5778,6 +5778,7 @@ dependencies = [
  "futures",
  "half",
  "html-escape",
+ "indexmap 2.11.0",
  "lazy_static",
  "num",
  "object_store",
