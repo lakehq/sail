@@ -1944,16 +1944,7 @@ impl RemoteExecutionCodec {
     }
 
     fn try_decode_file_compression_type(&self, variant: i32) -> Result<FileCompressionType> {
-        let variant = gen::CompressionTypeVariant::try_from(variant)
-            .map_err(|e| plan_datafusion_err!("failed to decode compression type variant: {e}"))?;
-        let file_compression_type = match variant {
-            gen::CompressionTypeVariant::Gzip => CompressionTypeVariant::GZIP,
-            gen::CompressionTypeVariant::Bzip2 => CompressionTypeVariant::BZIP2,
-            gen::CompressionTypeVariant::Xz => CompressionTypeVariant::XZ,
-            gen::CompressionTypeVariant::Zstd => CompressionTypeVariant::ZSTD,
-            gen::CompressionTypeVariant::Uncompressed => CompressionTypeVariant::UNCOMPRESSED,
-        };
-        Ok(file_compression_type.into())
+        Ok(self.try_decode_compression_type_variant(variant)?.into())
     }
 
     fn try_decode_compression_type_variant(&self, variant: i32) -> Result<CompressionTypeVariant> {
