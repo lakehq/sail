@@ -1,16 +1,6 @@
 use std::fmt::{Debug, Formatter};
 use std::sync::Arc;
 
-use crate::plan::gen::extended_aggregate_udf::UdafKind;
-use crate::plan::gen::extended_physical_plan_node::NodeKind;
-use crate::plan::gen::extended_scalar_udf::UdfKind;
-use crate::plan::gen::extended_stream_udf::StreamUdfKind;
-use crate::plan::gen::{
-    ExtendedAggregateUdf, ExtendedPhysicalPlanNode, ExtendedScalarUdf, ExtendedStreamUdf,
-};
-use crate::plan::{gen, ShuffleConsumption, ShuffleReadExec, ShuffleWriteExec};
-use crate::stream::reader::TaskReadLocation;
-use crate::stream::writer::{LocalStreamStorage, TaskWriteLocation};
 use datafusion::arrow::compute::SortOptions;
 use datafusion::arrow::datatypes::{DataType, Schema, TimeUnit};
 use datafusion::common::parsers::CompressionTypeVariant;
@@ -18,14 +8,15 @@ use datafusion::common::{plan_datafusion_err, plan_err, JoinSide, Result};
 use datafusion::datasource::file_format::file_compression_type::FileCompressionType;
 use datafusion::datasource::memory::MemorySourceConfig;
 use datafusion::datasource::physical_plan::{
-    ArrowSource, AvroSource, FileScanConfig, FileScanConfigBuilder, FileSink, JsonSource,
+    ArrowSource, AvroSource, FileScanConfig, FileScanConfigBuilder, FileSink, FileSinkConfig,
+    JsonSource,
 };
 use datafusion::datasource::sink::DataSinkExec;
 use datafusion::datasource::source::{DataSource, DataSourceExec};
 use datafusion::execution::FunctionRegistry;
 use datafusion::functions::string::overlay::OverlayFunc;
 use datafusion::logical_expr::{AggregateUDF, AggregateUDFImpl, ScalarUDF, ScalarUDFImpl};
-use datafusion::physical_expr::{LexOrdering, PhysicalSortExpr};
+use datafusion::physical_expr::{LexOrdering, LexRequirement, PhysicalSortExpr};
 use datafusion::physical_plan::joins::utils::{ColumnIndex, JoinFilter};
 use datafusion::physical_plan::joins::SortMergeJoinExec;
 use datafusion::physical_plan::recursive_query::RecursiveQueryExec;
@@ -58,7 +49,7 @@ use sail_data_source::formats::console::ConsoleSinkExec;
 use sail_data_source::formats::rate::{RateSourceExec, TableRateOptions};
 use sail_data_source::formats::socket::{SocketSourceExec, TableSocketOptions};
 use sail_data_source::formats::text::source::TextSource;
-use sail_data_source::formats::text::writer::TextSink;
+use sail_data_source::formats::text::writer::{TextSink, TextWriterOptions};
 use sail_delta_lake::delta_format::{DeltaCommitExec, DeltaWriterExec};
 use sail_plan::extension::function::array::arrays_zip::ArraysZip;
 use sail_plan::extension::function::array::spark_array::SparkArray;
@@ -151,6 +142,17 @@ use sail_python_udf::udf::pyspark_udaf::PySparkGroupAggregateUDF;
 use sail_python_udf::udf::pyspark_udf::{PySparkUDF, PySparkUdfKind};
 use sail_python_udf::udf::pyspark_udtf::{PySparkUDTF, PySparkUdtfKind};
 use url::Url;
+
+use crate::plan::gen::extended_aggregate_udf::UdafKind;
+use crate::plan::gen::extended_physical_plan_node::NodeKind;
+use crate::plan::gen::extended_scalar_udf::UdfKind;
+use crate::plan::gen::extended_stream_udf::StreamUdfKind;
+use crate::plan::gen::{
+    ExtendedAggregateUdf, ExtendedPhysicalPlanNode, ExtendedScalarUdf, ExtendedStreamUdf,
+};
+use crate::plan::{gen, ShuffleConsumption, ShuffleReadExec, ShuffleWriteExec};
+use crate::stream::reader::TaskReadLocation;
+use crate::stream::writer::{LocalStreamStorage, TaskWriteLocation};
 
 pub struct RemoteExecutionCodec {
     context: SessionContext,
@@ -575,6 +577,61 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
                     projection,
                 )?))
             }
+            NodeKind::TextSink(gen::TextSinkExecNode {
+                input,
+                base_config,
+                schema,
+                line_sep,
+                compression_type_variant,
+                sort_order,
+            }) => {
+                let input = self.try_decode_plan(&input, registry)?;
+                let schema = self.try_decode_schema(&schema)?;
+                let compression_type_variant =
+                    self.try_decode_compression_type_variant(compression_type_variant)?;
+                let line_sep = if line_sep.len() == 1 {
+                    line_sep[0]
+                } else {
+                    return plan_err!(
+                        "try_decode: line separator must be a single byte, got: {line_sep:?}"
+                    );
+                };
+                let file_sink_config: datafusion_proto::protobuf::FileSinkConfig =
+                    self.try_decode_message(&base_config)?;
+                let file_sink_config = FileSinkConfig::try_from(&file_sink_config)?;
+                let writer_options = TextWriterOptions::new(line_sep, compression_type_variant);
+                let data_sink = TextSink::new(file_sink_config, writer_options);
+                let physical_sort_expr_nodes = if let Some(sort_order) = sort_order {
+                    let physical_sort_expr_nodes: Vec<PhysicalSortExprNode> = sort_order
+                        .physical_sort_expr_nodes
+                        .iter()
+                        .map(|x| self.try_decode_message(x))
+                        .collect::<Result<Vec<_>>>()?;
+                    Some(physical_sort_expr_nodes)
+                } else {
+                    None
+                };
+                let sort_order = physical_sort_expr_nodes
+                    .as_ref()
+                    .map(|physical_sort_expr_nodes| {
+                        parse_physical_sort_exprs(
+                            &physical_sort_expr_nodes,
+                            registry,
+                            &schema,
+                            self,
+                        )
+                        .map(|sort_exprs| {
+                            LexRequirement::new(sort_exprs.into_iter().map(Into::into))
+                        })
+                    })
+                    .transpose()?
+                    .flatten();
+                Ok(Arc::new(DataSinkExec::new(
+                    input,
+                    Arc::new(data_sink),
+                    sort_order,
+                )))
+            }
             // TODO: StreamingTableExec?
             _ => plan_err!("unsupported physical plan node: {node_kind:?}"),
         }
@@ -866,7 +923,7 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
                         .iter()
                         .map(|requirement| {
                             let expr: PhysicalSortExpr = requirement.to_owned().into();
-                            let sort_expr = datafusion_proto::protobuf::PhysicalSortExprNode {
+                            let sort_expr = PhysicalSortExprNode {
                                 expr: Some(Box::new(serialize_physical_expr(&expr.expr, self)?)),
                                 asc: !expr.options.descending,
                                 nulls_first: expr.options.nulls_first,
