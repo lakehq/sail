@@ -8,13 +8,15 @@ use datafusion::common::{plan_datafusion_err, plan_err, JoinSide, Result};
 use datafusion::datasource::file_format::file_compression_type::FileCompressionType;
 use datafusion::datasource::memory::MemorySourceConfig;
 use datafusion::datasource::physical_plan::{
-    ArrowSource, AvroSource, FileScanConfig, FileScanConfigBuilder, JsonSource,
+    ArrowSource, AvroSource, FileScanConfig, FileScanConfigBuilder, FileSink, FileSinkConfig,
+    JsonSource,
 };
+use datafusion::datasource::sink::DataSinkExec;
 use datafusion::datasource::source::{DataSource, DataSourceExec};
 use datafusion::execution::FunctionRegistry;
 use datafusion::functions::string::overlay::OverlayFunc;
 use datafusion::logical_expr::{AggregateUDF, AggregateUDFImpl, ScalarUDF, ScalarUDFImpl};
-use datafusion::physical_expr::LexOrdering;
+use datafusion::physical_expr::{LexOrdering, LexRequirement, PhysicalSortExpr};
 use datafusion::physical_plan::joins::utils::{ColumnIndex, JoinFilter};
 use datafusion::physical_plan::joins::SortMergeJoinExec;
 use datafusion::physical_plan::recursive_query::RecursiveQueryExec;
@@ -47,6 +49,7 @@ use sail_data_source::formats::console::ConsoleSinkExec;
 use sail_data_source::formats::rate::{RateSourceExec, TableRateOptions};
 use sail_data_source::formats::socket::{SocketSourceExec, TableSocketOptions};
 use sail_data_source::formats::text::source::TextSource;
+use sail_data_source::formats::text::writer::{TextSink, TextWriterOptions};
 use sail_delta_lake::delta_format::{DeltaCommitExec, DeltaWriterExec};
 use sail_plan::extension::function::array::arrays_zip::ArraysZip;
 use sail_plan::extension::function::array::spark_array::SparkArray;
@@ -574,6 +577,56 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
                     projection,
                 )?))
             }
+            NodeKind::TextSink(gen::TextSinkExecNode {
+                input,
+                base_config,
+                schema,
+                line_sep,
+                compression_type_variant,
+                sort_order,
+            }) => {
+                let input = self.try_decode_plan(&input, registry)?;
+                let schema = self.try_decode_schema(&schema)?;
+                let compression_type_variant =
+                    self.try_decode_compression_type_variant(compression_type_variant)?;
+                let line_sep = if line_sep.len() == 1 {
+                    line_sep[0]
+                } else {
+                    return plan_err!(
+                        "try_decode: line separator must be a single byte, got: {line_sep:?}"
+                    );
+                };
+                let file_sink_config: datafusion_proto::protobuf::FileSinkConfig =
+                    self.try_decode_message(&base_config)?;
+                let file_sink_config = FileSinkConfig::try_from(&file_sink_config)?;
+                let writer_options = TextWriterOptions::new(line_sep, compression_type_variant);
+                let data_sink = TextSink::new(file_sink_config, writer_options);
+                let physical_sort_expr_nodes = if let Some(sort_order) = sort_order {
+                    let physical_sort_expr_nodes: Vec<PhysicalSortExprNode> = sort_order
+                        .physical_sort_expr_nodes
+                        .iter()
+                        .map(|x| self.try_decode_message(x))
+                        .collect::<Result<Vec<_>>>()?;
+                    Some(physical_sort_expr_nodes)
+                } else {
+                    None
+                };
+                let sort_order = physical_sort_expr_nodes
+                    .as_ref()
+                    .map(|physical_sort_expr_nodes| {
+                        parse_physical_sort_exprs(physical_sort_expr_nodes, registry, &schema, self)
+                            .map(|sort_exprs| {
+                                LexRequirement::new(sort_exprs.into_iter().map(Into::into))
+                            })
+                    })
+                    .transpose()?
+                    .flatten();
+                Ok(Arc::new(DataSinkExec::new(
+                    input,
+                    Arc::new(data_sink),
+                    sort_order,
+                )))
+            }
             // TODO: StreamingTableExec?
             _ => plan_err!("unsupported physical plan node: {node_kind:?}"),
         }
@@ -857,6 +910,61 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
                 schema,
                 projection,
             })
+        } else if let Some(data_sink) = node.as_any().downcast_ref::<DataSinkExec>() {
+            let input = self.try_encode_plan(data_sink.input().clone())?;
+            let sort_order = match data_sink.sort_order() {
+                Some(requirements) => {
+                    let expr = requirements
+                        .iter()
+                        .map(|requirement| {
+                            let expr: PhysicalSortExpr = requirement.to_owned().into();
+                            let sort_expr = PhysicalSortExprNode {
+                                expr: Some(Box::new(serialize_physical_expr(&expr.expr, self)?)),
+                                asc: !expr.options.descending,
+                                nulls_first: expr.options.nulls_first,
+                            };
+                            Ok(sort_expr)
+                        })
+                        .collect::<Result<Vec<_>>>()?;
+                    Some(datafusion_proto::protobuf::PhysicalSortExprNodeCollection {
+                        physical_sort_expr_nodes: expr,
+                    })
+                }
+                None => None,
+            };
+            let sort_order = if let Some(sort_order) = sort_order {
+                let physical_sort_expr_nodes = sort_order
+                    .physical_sort_expr_nodes
+                    .into_iter()
+                    .map(|x| self.try_encode_message(x))
+                    .collect::<Result<_>>()?;
+                Some(gen::PhysicalSortExprNodeCollection {
+                    physical_sort_expr_nodes,
+                })
+            } else {
+                None
+            };
+            if let Some(sink) = data_sink.sink().as_any().downcast_ref::<TextSink>() {
+                let base_config = self.try_encode_message(
+                    datafusion_proto::protobuf::FileSinkConfig::try_from(sink.config())
+                        .map_err(|e| plan_datafusion_err!("failed to encode text sink: {e}"))?,
+                )?;
+                let writer_options = sink.writer_options();
+                let compression_type_variant =
+                    self.try_encode_compression_type_variant(writer_options.compression)?;
+                let line_sep = vec![writer_options.line_sep];
+                let schema = self.try_encode_schema(data_sink.schema().as_ref())?;
+                NodeKind::TextSink(gen::TextSinkExecNode {
+                    input,
+                    base_config,
+                    schema,
+                    line_sep,
+                    compression_type_variant,
+                    sort_order,
+                })
+            } else {
+                return plan_err!("unsupported data sink node: {data_sink:?}");
+            }
         } else {
             return plan_err!("unsupported physical plan node: {node:?}");
         };
@@ -1836,16 +1944,20 @@ impl RemoteExecutionCodec {
     }
 
     fn try_decode_file_compression_type(&self, variant: i32) -> Result<FileCompressionType> {
+        Ok(self.try_decode_compression_type_variant(variant)?.into())
+    }
+
+    fn try_decode_compression_type_variant(&self, variant: i32) -> Result<CompressionTypeVariant> {
         let variant = gen::CompressionTypeVariant::try_from(variant)
             .map_err(|e| plan_datafusion_err!("failed to decode compression type variant: {e}"))?;
-        let file_compression_type = match variant {
+        let variant = match variant {
             gen::CompressionTypeVariant::Gzip => CompressionTypeVariant::GZIP,
             gen::CompressionTypeVariant::Bzip2 => CompressionTypeVariant::BZIP2,
             gen::CompressionTypeVariant::Xz => CompressionTypeVariant::XZ,
             gen::CompressionTypeVariant::Zstd => CompressionTypeVariant::ZSTD,
             gen::CompressionTypeVariant::Uncompressed => CompressionTypeVariant::UNCOMPRESSED,
         };
-        Ok(file_compression_type.into())
+        Ok(variant)
     }
 
     fn try_encode_file_compression_type(
@@ -1853,6 +1965,10 @@ impl RemoteExecutionCodec {
         file_compression_type: FileCompressionType,
     ) -> Result<i32> {
         let variant: CompressionTypeVariant = file_compression_type.into();
+        self.try_encode_compression_type_variant(variant)
+    }
+
+    fn try_encode_compression_type_variant(&self, variant: CompressionTypeVariant) -> Result<i32> {
         let variant = match variant {
             CompressionTypeVariant::GZIP => gen::CompressionTypeVariant::Gzip,
             CompressionTypeVariant::BZIP2 => gen::CompressionTypeVariant::Bzip2,
