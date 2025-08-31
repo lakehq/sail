@@ -614,15 +614,10 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
                 let sort_order = physical_sort_expr_nodes
                     .as_ref()
                     .map(|physical_sort_expr_nodes| {
-                        parse_physical_sort_exprs(
-                            &physical_sort_expr_nodes,
-                            registry,
-                            &schema,
-                            self,
-                        )
-                        .map(|sort_exprs| {
-                            LexRequirement::new(sort_exprs.into_iter().map(Into::into))
-                        })
+                        parse_physical_sort_exprs(physical_sort_expr_nodes, registry, &schema, self)
+                            .map(|sort_exprs| {
+                                LexRequirement::new(sort_exprs.into_iter().map(Into::into))
+                            })
                     })
                     .transpose()?
                     .flatten();
