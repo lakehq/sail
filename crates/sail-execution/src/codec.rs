@@ -1,6 +1,16 @@
 use std::fmt::{Debug, Formatter};
 use std::sync::Arc;
 
+use crate::plan::gen::extended_aggregate_udf::UdafKind;
+use crate::plan::gen::extended_physical_plan_node::NodeKind;
+use crate::plan::gen::extended_scalar_udf::UdfKind;
+use crate::plan::gen::extended_stream_udf::StreamUdfKind;
+use crate::plan::gen::{
+    ExtendedAggregateUdf, ExtendedPhysicalPlanNode, ExtendedScalarUdf, ExtendedStreamUdf,
+};
+use crate::plan::{gen, ShuffleConsumption, ShuffleReadExec, ShuffleWriteExec};
+use crate::stream::reader::TaskReadLocation;
+use crate::stream::writer::{LocalStreamStorage, TaskWriteLocation};
 use datafusion::arrow::compute::SortOptions;
 use datafusion::arrow::datatypes::{DataType, Schema, TimeUnit};
 use datafusion::common::parsers::CompressionTypeVariant;
@@ -8,13 +18,14 @@ use datafusion::common::{plan_datafusion_err, plan_err, JoinSide, Result};
 use datafusion::datasource::file_format::file_compression_type::FileCompressionType;
 use datafusion::datasource::memory::MemorySourceConfig;
 use datafusion::datasource::physical_plan::{
-    ArrowSource, AvroSource, FileScanConfig, FileScanConfigBuilder, JsonSource,
+    ArrowSource, AvroSource, FileScanConfig, FileScanConfigBuilder, FileSink, JsonSource,
 };
+use datafusion::datasource::sink::DataSinkExec;
 use datafusion::datasource::source::{DataSource, DataSourceExec};
 use datafusion::execution::FunctionRegistry;
 use datafusion::functions::string::overlay::OverlayFunc;
 use datafusion::logical_expr::{AggregateUDF, AggregateUDFImpl, ScalarUDF, ScalarUDFImpl};
-use datafusion::physical_expr::LexOrdering;
+use datafusion::physical_expr::{LexOrdering, PhysicalSortExpr};
 use datafusion::physical_plan::joins::utils::{ColumnIndex, JoinFilter};
 use datafusion::physical_plan::joins::SortMergeJoinExec;
 use datafusion::physical_plan::recursive_query::RecursiveQueryExec;
@@ -47,6 +58,7 @@ use sail_data_source::formats::console::ConsoleSinkExec;
 use sail_data_source::formats::rate::{RateSourceExec, TableRateOptions};
 use sail_data_source::formats::socket::{SocketSourceExec, TableSocketOptions};
 use sail_data_source::formats::text::source::TextSource;
+use sail_data_source::formats::text::writer::TextSink;
 use sail_delta_lake::delta_format::{DeltaCommitExec, DeltaWriterExec};
 use sail_plan::extension::function::array::arrays_zip::ArraysZip;
 use sail_plan::extension::function::array::spark_array::SparkArray;
@@ -139,17 +151,6 @@ use sail_python_udf::udf::pyspark_udaf::PySparkGroupAggregateUDF;
 use sail_python_udf::udf::pyspark_udf::{PySparkUDF, PySparkUdfKind};
 use sail_python_udf::udf::pyspark_udtf::{PySparkUDTF, PySparkUdtfKind};
 use url::Url;
-
-use crate::plan::gen::extended_aggregate_udf::UdafKind;
-use crate::plan::gen::extended_physical_plan_node::NodeKind;
-use crate::plan::gen::extended_scalar_udf::UdfKind;
-use crate::plan::gen::extended_stream_udf::StreamUdfKind;
-use crate::plan::gen::{
-    ExtendedAggregateUdf, ExtendedPhysicalPlanNode, ExtendedScalarUdf, ExtendedStreamUdf,
-};
-use crate::plan::{gen, ShuffleConsumption, ShuffleReadExec, ShuffleWriteExec};
-use crate::stream::reader::TaskReadLocation;
-use crate::stream::writer::{LocalStreamStorage, TaskWriteLocation};
 
 pub struct RemoteExecutionCodec {
     context: SessionContext,
@@ -857,6 +858,61 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
                 schema,
                 projection,
             })
+        } else if let Some(data_sink) = node.as_any().downcast_ref::<DataSinkExec>() {
+            let input = self.try_encode_plan(data_sink.input().clone())?;
+            let sort_order = match data_sink.sort_order() {
+                Some(requirements) => {
+                    let expr = requirements
+                        .iter()
+                        .map(|requirement| {
+                            let expr: PhysicalSortExpr = requirement.to_owned().into();
+                            let sort_expr = datafusion_proto::protobuf::PhysicalSortExprNode {
+                                expr: Some(Box::new(serialize_physical_expr(&expr.expr, self)?)),
+                                asc: !expr.options.descending,
+                                nulls_first: expr.options.nulls_first,
+                            };
+                            Ok(sort_expr)
+                        })
+                        .collect::<Result<Vec<_>>>()?;
+                    Some(datafusion_proto::protobuf::PhysicalSortExprNodeCollection {
+                        physical_sort_expr_nodes: expr,
+                    })
+                }
+                None => None,
+            };
+            let sort_order = if let Some(sort_order) = sort_order {
+                let physical_sort_expr_nodes = sort_order
+                    .physical_sort_expr_nodes
+                    .into_iter()
+                    .map(|x| self.try_encode_message(x))
+                    .collect::<Result<_>>()?;
+                gen::PhysicalSortExprNodeCollection {
+                    physical_sort_expr_nodes,
+                }
+            } else {
+                None
+            };
+            if let Some(sink) = data_sink.sink().as_any().downcast_ref::<TextSink>() {
+                let base_config = self.try_encode_message(
+                    datafusion_proto::protobuf::FileSinkConfig::try_from(sink.config())
+                        .map_err(|e| plan_datafusion_err!("failed to encode text sink: {e}"))?,
+                )?;
+                let writer_options = sink.writer_options();
+                let compression_type_variant =
+                    self.try_encode_compression_type_variant(writer_options.compression)?;
+                let line_sep = vec![writer_options.line_sep];
+                let schema = self.try_encode_schema(data_sink.schema().as_ref())?;
+                NodeKind::TextSink(gen::TextSinkExecNode {
+                    input,
+                    base_config,
+                    schema,
+                    line_sep,
+                    compression_type_variant,
+                    sort_order,
+                })
+            } else {
+                return plan_err!("unsupported data sink node: {data_sink:?}");
+            }
         } else {
             return plan_err!("unsupported physical plan node: {node:?}");
         };
@@ -1848,11 +1904,28 @@ impl RemoteExecutionCodec {
         Ok(file_compression_type.into())
     }
 
+    fn try_decode_compression_type_variant(&self, variant: i32) -> Result<CompressionTypeVariant> {
+        let variant = gen::CompressionTypeVariant::try_from(variant)
+            .map_err(|e| plan_datafusion_err!("failed to decode compression type variant: {e}"))?;
+        let variant = match variant {
+            gen::CompressionTypeVariant::Gzip => CompressionTypeVariant::GZIP,
+            gen::CompressionTypeVariant::Bzip2 => CompressionTypeVariant::BZIP2,
+            gen::CompressionTypeVariant::Xz => CompressionTypeVariant::XZ,
+            gen::CompressionTypeVariant::Zstd => CompressionTypeVariant::ZSTD,
+            gen::CompressionTypeVariant::Uncompressed => CompressionTypeVariant::UNCOMPRESSED,
+        };
+        Ok(variant)
+    }
+
     fn try_encode_file_compression_type(
         &self,
         file_compression_type: FileCompressionType,
     ) -> Result<i32> {
         let variant: CompressionTypeVariant = file_compression_type.into();
+        self.try_encode_compression_type_variant(variant)
+    }
+
+    fn try_encode_compression_type_variant(&self, variant: CompressionTypeVariant) -> Result<i32> {
         let variant = match variant {
             CompressionTypeVariant::GZIP => gen::CompressionTypeVariant::Gzip,
             CompressionTypeVariant::BZIP2 => gen::CompressionTypeVariant::Bzip2,

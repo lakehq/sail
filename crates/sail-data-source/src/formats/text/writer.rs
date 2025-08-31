@@ -169,7 +169,6 @@ impl TextSink {
         }
     }
 
-    #[allow(unused)]
     pub fn writer_options(&self) -> &TextWriterOptions {
         &self.writer_options
     }

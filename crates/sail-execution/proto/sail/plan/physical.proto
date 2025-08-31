@@ -33,6 +33,7 @@ message ExtendedPhysicalPlanNode {
     ConsoleSinkExecNode console_sink = 19;
     SocketSourceExecNode socket_source = 20;
     RateSourceExecNode rate_source = 21;
+    TextSinkExecNode text_sink = 22;
   }
 }
 
@@ -238,6 +239,10 @@ message LexOrdering {
   repeated bytes values = 1;
 }
 
+message PhysicalSortExprNodeCollection {
+  repeated bytes physical_sort_expr_nodes = 1;
+}
+
 message MemoryExecNode {
   repeated bytes partitions = 1;
   bytes schema = 2;
@@ -358,6 +363,15 @@ message RateSourceExecNode {
   uint64 num_partitions = 2;
   bytes schema = 3;
   repeated uint64 projection = 4;
+}
+
+message TextSinkExecNode {
+  bytes input = 1;
+  bytes base_config = 2;
+  bytes schema = 3;
+  bytes line_sep = 4;
+  CompressionTypeVariant compression_type_variant = 5;
+  optional PhysicalSortExprNodeCollection sort_order = 6;
 }
 
 message JoinOn {
