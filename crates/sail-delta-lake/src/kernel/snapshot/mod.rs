@@ -593,23 +593,3 @@ impl EagerSnapshot {
             .await
     }
 }
-
-#[allow(dead_code)]
-pub(crate) fn partitions_schema(
-    schema: &StructType,
-    partition_columns: &[String],
-) -> DeltaResult<Option<StructType>> {
-    if partition_columns.is_empty() {
-        return Ok(None);
-    }
-    Ok(Some(StructType::new(
-        partition_columns
-            .iter()
-            .map(|col| {
-                schema.field(col).cloned().ok_or_else(|| {
-                    DeltaTableError::Generic(format!("Partition column {col} not found in schema"))
-                })
-            })
-            .collect::<Result<Vec<_>, _>>()?,
-    )))
-}
