@@ -16,7 +16,7 @@ codecov:
     after_n_builds: 1
 
 comment:
-  layout: "condensed_header, condensed_files"
+  layout: "header, files"
 
 ignore:
   - "crates/sail-gold-test"
