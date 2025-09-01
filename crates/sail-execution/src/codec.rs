@@ -142,7 +142,7 @@ use sail_python_udf::udf::pyspark_udaf::PySparkGroupAggregateUDF;
 use sail_python_udf::udf::pyspark_udf::{PySparkUDF, PySparkUdfKind};
 use sail_python_udf::udf::pyspark_udtf::{PySparkUDTF, PySparkUdtfKind};
 use url::Url;
-
+use sail_plan::extension::function::string::spark_elt::SparkElt;
 use crate::plan::gen::extended_aggregate_udf::UdafKind;
 use crate::plan::gen::extended_physical_plan_node::NodeKind;
 use crate::plan::gen::extended_scalar_udf::UdfKind;
@@ -1170,6 +1170,7 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
             "spark_mask" | "mask" => Ok(Arc::new(ScalarUDF::from(SparkMask::new()))),
             "spark_sequence" | "sequence" => Ok(Arc::new(ScalarUDF::from(SparkSequence::new()))),
             "spark_encode" | "encode" => Ok(Arc::new(ScalarUDF::from(SparkEncode::new()))),
+            "spark_elt" | "elt" => Ok(Arc::new(ScalarUDF::from(SparkElt::new()))),
             "spark_decode" | "decode" => Ok(Arc::new(ScalarUDF::from(SparkDecode::new()))),
             "spark_bin" | "bin" => Ok(Arc::new(ScalarUDF::from(SparkBin::new()))),
             "spark_date" => Ok(Arc::new(ScalarUDF::from(SparkDate::new()))),
@@ -1264,6 +1265,7 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
             || node.inner().as_any().is::<SparkMask>()
             || node.inner().as_any().is::<SparkSequence>()
             || node.inner().as_any().is::<SparkEncode>()
+            || node.inner().as_any().is::<SparkElt>()
             || node.inner().as_any().is::<SparkDecode>()
             || node.inner().as_any().is::<SparkDate>()
             || node.inner().as_any().is::<SparkYearMonthInterval>()
