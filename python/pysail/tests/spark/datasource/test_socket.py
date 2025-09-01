@@ -1,3 +1,4 @@
+import contextlib
 import socket
 import threading
 import time
@@ -38,7 +39,8 @@ class SocketServer:
         if self._socket is not None:
             # We need to explicitly shut down the socket to unblock `accept()`,
             # otherwise the thread may hang, and we will wait indefinitely in `join()`.
-            self._socket.shutdown(socket.SHUT_RDWR)
+            with contextlib.suppress(OSError):
+                self._socket.shutdown(socket.SHUT_RDWR)
             self._socket.close()
             self._socket = None
         if self._thread is not None:
