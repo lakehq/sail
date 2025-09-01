@@ -18,7 +18,7 @@ use datafusion::physical_plan::{
     PlanProperties, SendableRecordBatchStream,
 };
 use datafusion_common::{internal_err, DataFusionError, Result};
-use datafusion_physical_expr::EquivalenceProperties;
+use datafusion_physical_expr::{Distribution, EquivalenceProperties};
 use deltalake::kernel::engine::arrow_conversion::{TryIntoArrow, TryIntoKernel};
 use deltalake::kernel::schema::StructType;
 #[allow(deprecated)]
@@ -159,6 +159,10 @@ impl ExecutionPlan for DeltaWriterExec {
             self.table_exists,
             self.sink_schema.clone(),
         )))
+    }
+
+    fn required_input_distribution(&self) -> Vec<Distribution> {
+        vec![Distribution::SinglePartition]
     }
 
     fn execute(
@@ -312,35 +316,7 @@ impl ExecutionPlan for DeltaWriterExec {
                         predicate: None,
                     });
                 }
-                PhysicalSinkMode::OverwriteIf { condition } => {
-                    if let Some(table) = &table {
-                        let snapshot = table
-                            .snapshot()
-                            .map_err(|e| DataFusionError::External(Box::new(e)))?;
-
-                        let session_state = SessionStateBuilder::new()
-                            .with_runtime_env(context.runtime_env().clone())
-                            .build();
-
-                        #[allow(clippy::unwrap_used)]
-                        let (remove_actions, _) = prepare_predicate_actions_physical(
-                            condition.clone(),
-                            table.log_store(),
-                            snapshot,
-                            session_state,
-                            partition_columns.clone(),
-                            None,
-                            SystemTime::now()
-                                .duration_since(UNIX_EPOCH)
-                                .unwrap()
-                                .as_millis() as i64,
-                            WriterStatsConfig::new(32, None),
-                            Uuid::new_v4(),
-                        )
-                        .await
-                        .map_err(|e| DataFusionError::External(Box::new(e)))?;
-                        initial_actions.extend(remove_actions);
-                    }
+                PhysicalSinkMode::OverwriteIf { .. } => {
                     operation = Some(DeltaOperation::Write {
                         mode: SaveMode::Overwrite,
                         partition_by: if partition_columns.is_empty() {

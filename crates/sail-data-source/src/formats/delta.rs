@@ -105,8 +105,9 @@ impl TableFormat for DeltaTableFormat {
             mode,
             table_exists,
             sort_order,
+            ctx,
         );
-        let sink_exec = plan_builder.build()?;
+        let sink_exec = plan_builder.build().await?;
 
         Ok(sink_exec)
     }
