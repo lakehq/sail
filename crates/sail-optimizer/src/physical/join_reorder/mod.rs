@@ -128,6 +128,8 @@ mod graph;
 mod relation;
 mod utils;
 
+// const EMIT_THRESHOLD: usize = 10000;
+
 #[derive(Default)]
 pub struct JoinReorder {}
 
@@ -153,7 +155,7 @@ impl PhysicalOptimizerRule for JoinReorder {
             }
             Ok(Transformed::no(plan))
         })
-            .data()
+        .data()
     }
 
     fn name(&self) -> &str {
@@ -208,7 +210,7 @@ fn count_leaves(plan: &Arc<dyn ExecutionPlan>, count: &mut usize) {
 
 struct JoinReorderState {
     join_relations: Vec<JoinRelation>,
-
+    #[allow(dead_code)]
     column_map: HashMap<(usize, usize), (usize, usize)>,
 
     dp_table: HashMap<Arc<Vec<usize>>, Arc<JoinNode>>,
@@ -218,7 +220,7 @@ struct JoinReorderState {
     relation_set_tree: RelationSetTree,
 
     non_equi_conditions: Vec<PhysicalExprRef>,
-
+    #[allow(dead_code)]
     config: ConfigOptions,
 }
 
@@ -286,10 +288,10 @@ impl JoinReorderState {
         let stats = plan.partition_statistics(Some(0))?;
         let relation_id = self.join_relations.len();
 
-        // Map columns from this plan's schema to this relation
-        for (_i, _field) in plan.schema().fields().iter().enumerate() {
-            // FIXME: handle column name collisions and use a unique ID per column if available.
-        }
+        // // Map columns from this plan's schema to this relation
+        // for (_i, _field) in plan.schema().fields().iter().enumerate() {
+        //     // FIXME: handle column name collisions and use a unique ID per column if available.
+        // }
 
         self.join_relations.push(JoinRelation {
             plan,
@@ -444,7 +446,7 @@ mod tests {
                 PartitionMode::Partitioned,
                 NullEquality::NullEqualsNull,
             )
-                .unwrap(),
+            .unwrap(),
         )
     }
 
@@ -483,7 +485,7 @@ mod tests {
                 PartitionMode::Partitioned,
                 NullEquality::NullEqualsNull,
             )
-                .unwrap(),
+            .unwrap(),
         );
         assert!(find_optimizable_join_chain(&non_inner_join).is_none());
     }

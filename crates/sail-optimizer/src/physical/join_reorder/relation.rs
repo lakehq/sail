@@ -14,6 +14,7 @@ pub struct JoinRelation {
 }
 
 #[derive(Debug, Clone)]
+#[allow(dead_code)]
 pub struct JoinNode {
     /// A sorted vector of relation IDs (`JoinRelation::id`) that this node covers.
     pub(crate) leaves: Arc<Vec<usize>>,

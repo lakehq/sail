@@ -91,6 +91,7 @@ impl QueryGraph {
     ///
     /// This function traverses the graph to find an edge that connects any subset of `left_set`
     /// to any subset of `right_set`.
+    #[allow(dead_code)]
     pub fn get_connections(
         &self,
         left_set: Arc<Vec<usize>>,
@@ -117,6 +118,7 @@ impl QueryGraph {
     /// Finds all unique neighbor relation IDs for a given `node_set`, excluding any IDs present in `forbidden_nodes`.
     ///
     /// This method uses a cache to speed up repeated lookups for the same `node_set`.
+    #[allow(dead_code)]
     pub fn neighbors(
         &mut self,
         node_set: Arc<Vec<usize>>,

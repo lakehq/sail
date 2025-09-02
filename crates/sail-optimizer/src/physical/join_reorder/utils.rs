@@ -1,9 +1,11 @@
 use itertools::Itertools;
 
+#[allow(dead_code)]
 pub fn union_sorted(left: &[usize], right: &[usize]) -> Vec<usize> {
     left.iter().merge(right.iter()).dedup().copied().collect()
 }
 
+#[allow(dead_code)]
 pub fn intersect_sorted<T: Ord>(left: &[T], right: &[T]) -> bool {
     left.iter()
         .merge_join_by(right.iter(), |a_val, b_val| a_val.cmp(b_val))
