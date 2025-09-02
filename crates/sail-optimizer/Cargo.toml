@@ -7,9 +7,4 @@ edition = { workspace = true }
 workspace = true
 
 [dependencies]
-sail-common = { path = "../sail-common" }
-
-thiserror = { workspace = true }
 datafusion = { workspace = true }
-datafusion-common = { workspace = true }
-datafusion-physical-expr = { workspace = true }

@@ -5755,10 +5755,6 @@ name = "sail-optimizer"
 version = "0.3.4"
 dependencies = [
  "datafusion",
- "datafusion-common",
- "datafusion-physical-expr",
- "sail-common",
- "thiserror 2.0.16",
 ]
 
 [[package]]
