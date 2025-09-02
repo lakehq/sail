@@ -136,7 +136,6 @@ fn elt(args: &[ArrayRef]) -> Result<ArrayRef, DataFusionError> {
 
 #[cfg(test)]
 mod tests {
-    use arrow::array::StringViewArray;
     use datafusion_common::Result;
 
     use super::*;
