@@ -12,8 +12,8 @@ importers:
         specifier: ^9.34.0
         version: 9.34.0
       '@ianvs/prettier-plugin-sort-imports':
-        specifier: ^4.6.2
-        version: 4.6.2(@vue/compiler-sfc@3.5.20)(prettier@3.6.2)
+        specifier: ^4.7.0
+        version: 4.7.0(@vue/compiler-sfc@3.5.20)(prettier@3.6.2)
       '@tailwindcss/vite':
         specifier: ^4.1.12
         version: 4.1.12(vite@5.4.19(@types/node@24.3.0)(lightningcss@1.30.1))
@@ -70,7 +70,7 @@ importers:
         version: 3.6.2
       prettier-plugin-tailwindcss:
         specifier: ^0.6.14
-        version: 0.6.14(@ianvs/prettier-plugin-sort-imports@4.6.2(@vue/compiler-sfc@3.5.20)(prettier@3.6.2))(prettier@3.6.2)
+        version: 0.6.14(@ianvs/prettier-plugin-sort-imports@4.7.0(@vue/compiler-sfc@3.5.20)(prettier@3.6.2))(prettier@3.6.2)
       prettier-plugin-vitepress:
         specifier: ^0.0.10
         version: 0.0.10(prettier@3.6.2)
@@ -442,8 +442,8 @@ packages:
     resolution: {integrity: sha512-bV0Tgo9K4hfPCek+aMAn81RppFKv2ySDQeMoSZuvTASywNTnVJCArCZE2FWqpvIatKu7VMRLWlR1EazvVhDyhQ==}
     engines: {node: '>=18.18'}
 
-  '@ianvs/prettier-plugin-sort-imports@4.6.2':
-    resolution: {integrity: sha512-kHiL1IghIodo43clNQaJJU2rPqXEioPG+Ink4/T5za46A0ggSNvIx4NM3hGgciQ2VpDaR/X8cTJIZDKRurWjPw==}
+  '@ianvs/prettier-plugin-sort-imports@4.7.0':
+    resolution: {integrity: sha512-soa2bPUJAFruLL4z/CnMfSEKGznm5ebz29fIa9PxYtu8HHyLKNE1NXAs6dylfw1jn/ilEIfO2oLLN6uAafb7DA==}
     peerDependencies:
       '@prettier/plugin-oxc': ^0.0.4
       '@vue/compiler-sfc': 2.7.x || 3.x
@@ -2518,7 +2518,7 @@ snapshots:
 
   '@humanwhocodes/retry@0.4.3': {}
 
-  '@ianvs/prettier-plugin-sort-imports@4.6.2(@vue/compiler-sfc@3.5.20)(prettier@3.6.2)':
+  '@ianvs/prettier-plugin-sort-imports@4.7.0(@vue/compiler-sfc@3.5.20)(prettier@3.6.2)':
     dependencies:
       '@babel/generator': 7.28.3
       '@babel/parser': 7.28.3
@@ -3801,11 +3801,11 @@ snapshots:
 
   prelude-ls@1.2.1: {}
 
-  prettier-plugin-tailwindcss@0.6.14(@ianvs/prettier-plugin-sort-imports@4.6.2(@vue/compiler-sfc@3.5.20)(prettier@3.6.2))(prettier@3.6.2):
+  prettier-plugin-tailwindcss@0.6.14(@ianvs/prettier-plugin-sort-imports@4.7.0(@vue/compiler-sfc@3.5.20)(prettier@3.6.2))(prettier@3.6.2):
     dependencies:
       prettier: 3.6.2
     optionalDependencies:
-      '@ianvs/prettier-plugin-sort-imports': 4.6.2(@vue/compiler-sfc@3.5.20)(prettier@3.6.2)
+      '@ianvs/prettier-plugin-sort-imports': 4.7.0(@vue/compiler-sfc@3.5.20)(prettier@3.6.2)
 
   prettier-plugin-vitepress@0.0.10(prettier@3.6.2):
     dependencies:
