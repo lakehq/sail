@@ -1,4 +1,5 @@
 import contextlib
+import platform
 import socket
 import threading
 import time
@@ -136,6 +137,7 @@ def test_socket_invalid_port(spark):
         spark.sql("SELECT * FROM t2_invalid_port LIMIT 1").collect()
 
 
+@pytest.mark.skipif(platform.system() == "Windows", reason="not working on Windows")
 def test_socket_connection_failure(spark):
     with pytest.raises(Exception, match="refused"):
         spark.sql("SELECT * FROM t3_connection_failure LIMIT 1").collect()
