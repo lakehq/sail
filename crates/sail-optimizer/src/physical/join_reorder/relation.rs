@@ -39,35 +39,17 @@ pub struct JoinNode {
     cost: f64,
 }
 
-/// A graph representing the connections (join predicates) between `JoinRelation`s.
-#[derive(Debug, Default)]
-pub struct QueryGraph {
-    /// The root of the Trie-like structure that stores connectivity information.
-    root_edge: QueryEdge,
-    /// Maps a set of relation IDs to their direct neighbors' IDs.
-    cached_neighbors: HashMap<Vec<usize>, Vec<usize>>,
-}
-
-/// A node in the `QueryGraph`'s Trie structure.
-#[derive(Debug, Default)]
-pub struct QueryEdge {
-    /// A list of neighbors for the relation set represented by the path to this edge.
-    neighbors: Vec<NeighborInfo>,
-    /// Child edges in the Trie, keyed by the next relation ID in a set.
-    children: HashMap<usize, QueryEdge>,
-}
-
-#[derive(Debug)]
-pub struct NeighborInfo {
-    /// The neighboring relation set.
-    neighbor_relations: Arc<Vec<usize>>,
-    /// The join conditions that connect the source set to this neighbor.
-    join_conditions: Vec<(PhysicalExprRef, PhysicalExprRef)>,
-}
-
 #[derive(Debug, Default)]
 pub struct RelationSetTree {
     root: RelationSetNode,
+}
+
+impl RelationSetTree {
+    pub(crate) fn new() -> Self {
+        Self {
+            root: RelationSetNode::default(),
+        }
+    }
 }
 
 #[derive(Debug, Default)]

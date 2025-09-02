@@ -115,7 +115,9 @@ use datafusion::physical_expr::PhysicalExprRef;
 use datafusion::physical_optimizer::PhysicalOptimizerRule;
 use datafusion::physical_plan::ExecutionPlan;
 
+use crate::physical::join_reorder::graph::QueryGraph;
 use crate::physical::join_reorder::relation::*;
+mod graph;
 mod relation;
 mod utils;
 
@@ -133,7 +135,7 @@ pub struct JoinReorder {
     pub non_equi_conditions: Vec<PhysicalExprRef>,
 }
 
-/// The [`JoinReorder`] optimizer rule implement.
+/// The [`JoinReorder`] optimizer rule implement based on DPHyp algorithm.
 impl JoinReorder {
     pub fn new() -> Self {
         Self {
