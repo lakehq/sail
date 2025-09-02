@@ -5,6 +5,53 @@ next: false
 
 # Changelog
 
+## 0.3.4
+
+_September 2, 2025_
+
+- Supported the text file format ([#737](https://github.com/lakehq/sail/pull/737) and [#813](https://github.com/lakehq/sail/pull/813)).
+- Supported the Spark DataFrame streaming API and added a few data sources/sinks for testing purposes ([#751](https://github.com/lakehq/sail/pull/751)). This provides a foundation for streaming support in Sail but is not ready for general use yet.
+- Improved the internals of the Delta Lake integration ([#768](https://github.com/lakehq/sail/pull/768) and [#794](https://github.com/lakehq/sail/pull/794)).
+- Improved idle session handling ([#761](https://github.com/lakehq/sail/pull/761) and [#818](https://github.com/lakehq/sail/pull/818)).
+- Fixed performance issues with the `DataFrame.show()` method in the Spark DataFrame API ([#790](https://github.com/lakehq/sail/pull/790)).
+- Fixed issues with reading and writing compressed files ([#760](https://github.com/lakehq/sail/pull/760)).
+- Fixed SQL parsing issues with negated predicates ([#776](https://github.com/lakehq/sail/pull/776)).
+- Fixed issues with the `DataFrame.withColumnsRenamed` method in the Spark DataFrame API ([#764](https://github.com/lakehq/sail/pull/764)).
+- Fixed issues with the `DataFrame.withColumns` method in the Spark DataFrame API ([#814](https://github.com/lakehq/sail/pull/814)).
+- Added support for the following SQL functions ([#727](https://github.com/lakehq/sail/pull/727), [#682](https://github.com/lakehq/sail/pull/682), [#774](https://github.com/lakehq/sail/pull/774), [#777](https://github.com/lakehq/sail/pull/777), [#779](https://github.com/lakehq/sail/pull/779), [#787](https://github.com/lakehq/sail/pull/787), [#762](https://github.com/lakehq/sail/pull/762), [#795](https://github.com/lakehq/sail/pull/795), and [#798](https://github.com/lakehq/sail/pull/798)):
+  - `try_mod`
+  - `make_interval`
+  - `map_entries`
+  - `map_from_entries`
+  - `map_concat`
+  - `str_to_map`
+  - `width_bucket`
+  - `regexp_instr`
+- Improved the following SQL functions ([#682](https://github.com/lakehq/sail/pull/682), [#767](https://github.com/lakehq/sail/pull/767), [#769](https://github.com/lakehq/sail/pull/769), [#777](https://github.com/lakehq/sail/pull/777), [#722](https://github.com/lakehq/sail/pull/722), [#785](https://github.com/lakehq/sail/pull/785), [#789](https://github.com/lakehq/sail/pull/789), [#795](https://github.com/lakehq/sail/pull/795), [#801](https://github.com/lakehq/sail/pull/801), and [#806](https://github.com/lakehq/sail/pull/806)):
+  - `try_add`
+  - `try_divide`
+  - `try_multiply`
+  - `try_subtract`
+  - `nth_value`
+  - `median`
+  - `map`
+  - `map_from_arrays`
+  - `split`
+  - `element_at`
+  - `try_element_at`
+  - `position`
+  - `locate`
+  - `get_json_object`
+  - `json_object_keys`
+  - `collect_list`
+- Improved a few window functions to return the correct types of integers ([#765](https://github.com/lakehq/sail/pull/765)).
+- Improved the implementation of array functions ([#786](https://github.com/lakehq/sail/pull/786)).
+- Improved the implementation of string functions ([#798](https://github.com/lakehq/sail/pull/798)).
+
+### Contributors
+
+Huge thanks to [@SparkApplicationMaster](https://github.com/SparkApplicationMaster), [@davidlghellin](https://github.com/davidlghellin), and [rafafrdz](https://github.com/rafafrdz) for the continued contributions!
+
 ## 0.3.3
 
 _August 14, 2025_
@@ -17,7 +64,7 @@ _August 14, 2025_
   - `try_to_number`
   - `convert_timezone`
   - `make_timestamp_ltz`
-- Improved the following SQL functions ([#725](https://github.com/lakehq/sail/pull/725), [#730](https://github.com/lakehq/sail/pull/730), [#734](https://github.com/lakehq/sail/pull/734), [#743](https://github.com/lakehq/sail/pull/743), [#754](https://github.com/lakehq/sail/pull/754), and (#756)(https://github.com/lakehq/sail/pull/756)):
+- Improved the following SQL functions ([#725](https://github.com/lakehq/sail/pull/725), [#730](https://github.com/lakehq/sail/pull/730), [#734](https://github.com/lakehq/sail/pull/734), [#743](https://github.com/lakehq/sail/pull/743), [#754](https://github.com/lakehq/sail/pull/754), and [#756](https://github.com/lakehq/sail/pull/756)):
   - `make_timestamp`
   - `from_utc_timestamp`
   - `to_utc_timestamp`
