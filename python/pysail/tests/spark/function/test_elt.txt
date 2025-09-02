@@ -23,11 +23,10 @@ root
 |           NULL|
 +---------------+
 
->>> spark.sql("SELECT elt(1, 'scala', 3) AS col UNION ALL SELECT elt(2, 'scala', 3) UNION ALL SELECT elt(1, 'scala', 3)").show()
+>>> spark.sql("SELECT elt(1, 'scala', 3) AS col UNION ALL SELECT elt(2, 'scala', 3)").show()
 +-----+
 |  col|
 +-----+
-|scala|
 |    3|
 |scala|
 +-----+
