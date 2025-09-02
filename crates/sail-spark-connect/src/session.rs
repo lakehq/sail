@@ -1,6 +1,7 @@
 use std::collections::HashMap;
 use std::fmt::Debug;
 use std::sync::{Arc, Mutex};
+use std::time::Duration;
 
 use datafusion::execution::SendableRecordBatchStream;
 use datafusion::logical_expr::StringifiedPlan;
@@ -19,6 +20,11 @@ use crate::streaming::{
     StreamingQueryManager, StreamingQueryStatus,
 };
 
+#[derive(Debug, Clone)]
+pub(crate) struct SparkSessionOptions {
+    pub execution_heartbeat_interval: Duration,
+}
+
 /// A Spark session extension to the DataFusion [`SessionContext`].
 ///
 /// [`SessionContext`]: datafusion::prelude::SessionContext
@@ -26,6 +32,7 @@ pub(crate) struct SparkSession {
     user_id: Option<String>,
     session_id: String,
     job_runner: Box<dyn JobRunner>,
+    options: SparkSessionOptions,
     state: Mutex<SparkSessionState>,
 }
 
@@ -34,6 +41,7 @@ impl Debug for SparkSession {
         f.debug_struct("SparkSession")
             .field("user_id", &self.user_id)
             .field("session_id", &self.session_id)
+            .field("options", &self.options)
             .finish()
     }
 }
@@ -49,11 +57,13 @@ impl SparkSession {
         user_id: Option<String>,
         session_id: String,
         job_runner: Box<dyn JobRunner>,
+        options: SparkSessionOptions,
     ) -> SparkResult<Self> {
         let extension = Self {
             user_id,
             session_id,
             job_runner,
+            options,
             state: Mutex::new(SparkSessionState::new()),
         };
         extension.set_config(vec![ConfigKeyValue {
@@ -70,6 +80,10 @@ impl SparkSession {
     #[allow(dead_code)]
     pub(crate) fn user_id(&self) -> Option<&str> {
         self.user_id.as_deref()
+    }
+
+    pub(crate) fn options(&self) -> &SparkSessionOptions {
+        &self.options
     }
 
     pub(crate) fn plan_config(&self) -> SparkResult<Arc<PlanConfig>> {
