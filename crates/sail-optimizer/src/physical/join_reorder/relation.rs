@@ -1,8 +1,9 @@
+use std::collections::{HashMap, HashSet};
+use std::sync::Arc;
+
 use datafusion::common::{JoinType, Statistics};
 use datafusion::physical_expr::PhysicalExprRef;
 use datafusion::physical_plan::ExecutionPlan;
-use std::collections::HashMap;
-use std::sync::Arc;
 
 /// Represents a base relation (a leaf node) in the join graph.
 pub struct JoinRelation {
@@ -54,7 +55,6 @@ pub struct QueryEdge {
     neighbors: Vec<NeighborInfo>,
     /// Child edges in the Trie, keyed by the next relation ID in a set.
     children: HashMap<usize, QueryEdge>,
-
 }
 
 #[derive(Debug)]
@@ -72,8 +72,29 @@ pub struct RelationSetTree {
 
 #[derive(Debug, Default)]
 pub struct RelationSetNode {
-    /// The canonical representation of the relation set if a set terminates at this node.
+    /// The representation of the relation set if a set terminates at this node.
     relations: Option<Arc<Vec<usize>>>,
     /// Children in the Trie, keyed by the next relation ID.
     children: HashMap<usize, RelationSetNode>,
+}
+
+impl RelationSetTree {
+    pub fn get_relation_set(&mut self, ids: &HashSet<usize>) -> Arc<Vec<usize>> {
+        if ids.is_empty() {
+            return Arc::new(vec![]);
+        }
+
+        let mut sorted_ids: Vec<usize> = ids.iter().copied().collect();
+        sorted_ids.sort_unstable();
+
+        let mut current_node = &mut self.root;
+        for id in &sorted_ids {
+            current_node = current_node.children.entry(*id).or_default();
+        }
+
+        current_node
+            .relations
+            .get_or_insert_with(|| Arc::new(sorted_ids))
+            .clone()
+    }
 }

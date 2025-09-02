@@ -1,14 +1,16 @@
+use std::collections::HashMap;
+use std::fmt::{Debug, Formatter};
+use std::sync::Arc;
+
 use datafusion::config::ConfigOptions;
 use datafusion::error::Result;
 use datafusion::physical_expr::PhysicalExprRef;
 use datafusion::physical_optimizer::PhysicalOptimizerRule;
 use datafusion::physical_plan::ExecutionPlan;
-use std::collections::HashMap;
-use std::fmt::{Debug, Formatter};
-use std::sync::Arc;
 
 use crate::physical::join_reorder::relation::*;
 mod relation;
+mod utils;
 
 pub struct JoinReorder {
     pub join_relations: Vec<JoinRelation>,
@@ -22,7 +24,6 @@ pub struct JoinReorder {
     pub relation_set_tree: RelationSetTree,
 
     pub non_equi_conditions: Vec<PhysicalExprRef>,
-
 }
 
 /// The [`JoinReorder`] optimizer rule implement.
