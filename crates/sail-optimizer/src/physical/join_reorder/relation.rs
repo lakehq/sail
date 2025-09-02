@@ -7,36 +7,36 @@ use datafusion::physical_plan::ExecutionPlan;
 
 /// Represents a base relation (a leaf node) in the join graph.
 pub struct JoinRelation {
-    plan: Arc<dyn ExecutionPlan>,
-    stats: Statistics,
+    pub(crate) plan: Arc<dyn ExecutionPlan>,
+    pub(crate) stats: Statistics,
     /// Unique identifier for the relation within the context of a single optimization run
-    id: usize,
+    pub(crate) id: usize,
 }
 
 #[derive(Debug, Clone)]
 pub struct JoinNode {
     /// A sorted vector of relation IDs (`JoinRelation::id`) that this node covers.
-    leaves: Arc<Vec<usize>>,
+    pub(crate) leaves: Arc<Vec<usize>>,
 
     /// The child nodes that were joined to create this node.
     /// For a leaf node, this is empty. For a join node, it contains two children.
-    children: Vec<Arc<JoinNode>>,
+    pub(crate) children: Vec<Arc<JoinNode>>,
 
     /// The physical expressions used to join the children.
-    join_conditions: Vec<(PhysicalExprRef, PhysicalExprRef)>,
+    pub(crate) join_conditions: Vec<(PhysicalExprRef, PhysicalExprRef)>,
 
     /// The join type. For the core DPHyp algorithm, this is always `Inner`.
-    join_type: JoinType,
+    pub(crate) join_type: JoinType,
 
     /// This plan is constructed and cached as the optimal plan for this `leaves` set is found.
-    plan: Arc<dyn ExecutionPlan>,
+    pub(crate) plan: Arc<dyn ExecutionPlan>,
 
     /// The estimated statistics for the output of this `plan`.
-    stats: Statistics,
+    pub(crate) stats: Statistics,
 
     /// The calculated cost of this plan. The goal of the optimizer is to find the
     /// final `JoinNode` (covering all relations) with the minimum cost.
-    cost: f64,
+    pub(crate) cost: f64,
 }
 
 #[derive(Debug, Default)]
