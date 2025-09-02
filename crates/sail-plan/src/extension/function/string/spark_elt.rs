@@ -80,7 +80,6 @@ fn elt(args: &[ArrayRef]) -> Result<ArrayRef, DataFusionError> {
     }
 
     let mut builder = StringBuilder::new();
-
     for row in 0..num_rows {
         let n_opt: Option<i64> = match args[0].data_type() {
             Int32 => {
