@@ -79,7 +79,7 @@ fn elt(args: &[ArrayRef]) -> Result<ArrayRef, DataFusionError> {
         vals.push(Arc::new(sa));
     }
 
-    let mut b = StringBuilder::new();
+    let mut builder = StringBuilder::new();
 
     for row in 0..num_rows {
         let n_opt: Option<i64> = match args[0].data_type() {
@@ -88,7 +88,6 @@ fn elt(args: &[ArrayRef]) -> Result<ArrayRef, DataFusionError> {
                     .as_any()
                     .downcast_ref::<Int32Array>()
                     .ok_or_else(|| DataFusionError::Internal("downcast Int32 failed".into()))?;
-
                 if arr.is_null(row) {
                     None
                 } else {
@@ -115,11 +114,11 @@ fn elt(args: &[ArrayRef]) -> Result<ArrayRef, DataFusionError> {
         };
 
         let Some(n) = n_opt else {
-            b.append_null();
+            builder.append_null();
             continue;
         };
         if n < 1 || (n as usize) > k {
-            b.append_null();
+            builder.append_null();
             continue;
         }
 
@@ -127,13 +126,13 @@ fn elt(args: &[ArrayRef]) -> Result<ArrayRef, DataFusionError> {
         let col = &vals[j];
 
         if col.is_null(row) {
-            b.append_null();
+            builder.append_null();
         } else {
-            b.append_value(col.value(row));
+            builder.append_value(col.value(row));
         }
     }
 
-    Ok(cast(&(Arc::new(b.finish()) as ArrayRef), &Utf8View)?)
+    Ok(cast(&(Arc::new(builder.finish()) as ArrayRef), &Utf8View)?)
 }
 
 #[cfg(test)]

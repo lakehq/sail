@@ -23,8 +23,6 @@ root
 |           NULL|
 +---------------+
 
-# If spark.sql.ansi.enabled is set to true, it throws ArrayIndexOutOfBoundsException for invalid indices.
-
 >>> spark.sql("SELECT elt(1, 'scala', 3) AS col UNION ALL SELECT elt(2, 'scala', 3) UNION ALL SELECT elt(1, 'scala', 3)").show()
 +-----+
 |  col|
@@ -33,3 +31,5 @@ root
 |    3|
 |scala|
 +-----+
+
+# If spark.sql.ansi.enabled is set to true, it throws ArrayIndexOutOfBoundsException for invalid indices.
