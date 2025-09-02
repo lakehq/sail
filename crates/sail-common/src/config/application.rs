@@ -269,6 +269,7 @@ pub enum CatalogType {
 #[serde(deny_unknown_fields)]
 pub struct SparkConfig {
     pub session_timeout_secs: u64,
+    pub execution_heartbeat_interval_secs: u64,
 }
 
 /// Environment variables for application cluster configuration.
