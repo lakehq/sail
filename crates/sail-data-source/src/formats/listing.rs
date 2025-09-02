@@ -1,47 +1,54 @@
 use std::collections::HashMap;
 use std::fmt::Debug;
+use std::str::FromStr;
 use std::sync::Arc;
 
 use async_trait::async_trait;
-use datafusion::catalog::TableProvider;
-use datafusion::datasource::file_format::arrow::{ArrowFormat, ArrowFormatFactory};
-use datafusion::datasource::file_format::avro::{AvroFormat, AvroFormatFactory};
-use datafusion::datasource::file_format::csv::{CsvFormat, CsvFormatFactory};
-use datafusion::datasource::file_format::json::{JsonFormat, JsonFormatFactory};
-use datafusion::datasource::file_format::parquet::{ParquetFormat, ParquetFormatFactory};
-use datafusion::datasource::file_format::{FileFormat, FileFormatFactory};
+use datafusion::arrow::datatypes::DataType;
+use datafusion::catalog::{Session, TableProvider};
+use datafusion::datasource::file_format::FileFormat;
 use datafusion::datasource::listing::{ListingOptions, ListingTable, ListingTableConfig};
-use datafusion::prelude::SessionContext;
-use datafusion_common::Result;
-use sail_common_datafusion::datasource::{SinkInfo, SourceInfo, TableFormat};
+use datafusion::datasource::physical_plan::FileSinkConfig;
+use datafusion::logical_expr::dml::InsertOp;
+use datafusion::physical_plan::ExecutionPlan;
+use datafusion_common::parsers::CompressionTypeVariant;
+use datafusion_common::{internal_err, not_impl_err, GetExt, Result};
+use datafusion_datasource::file_compression_type::FileCompressionType;
+use sail_common_datafusion::datasource::{
+    get_partition_columns_and_file_schema, SinkInfo, SourceInfo, TableFormat,
+};
 
-use crate::options::DataSourceOptionsResolver;
+use crate::utils::split_parquet_compression_string;
 
-// TODO: infer compression type from file extension
 // TODO: support global configuration to ignore file extension (by setting it to empty)
 /// A trait for defining the specifics of a listing table format.
 pub(crate) trait ListingFormat: Debug + Send + Sync + 'static {
     fn name(&self) -> &'static str;
-    fn create_format(
+    fn create_read_format(
         &self,
-        ctx: &SessionContext,
-        options: HashMap<String, String>,
+        ctx: &dyn Session,
+        options: Vec<HashMap<String, String>>,
+        compression: Option<CompressionTypeVariant>,
     ) -> Result<Arc<dyn FileFormat>>;
-    fn create_format_factory(
+    fn create_write_format(
         &self,
-        ctx: &SessionContext,
-        options: HashMap<String, String>,
-    ) -> Result<Arc<dyn FileFormatFactory>>;
+        ctx: &dyn Session,
+        options: Vec<HashMap<String, String>>,
+    ) -> Result<(Arc<dyn FileFormat>, Option<String>)>;
 }
 
 #[derive(Debug)]
 pub(crate) struct ListingTableFormat<T: ListingFormat> {
-    format_def: T,
+    inner: T,
 }
 
 impl<T: ListingFormat> ListingTableFormat<T> {
     pub fn new(format_def: T) -> Self {
-        Self { format_def }
+        Self { inner: format_def }
+    }
+
+    pub fn inner(&self) -> &T {
+        &self.inner
     }
 }
 
@@ -54,189 +61,168 @@ impl<T: ListingFormat + Default> Default for ListingTableFormat<T> {
 #[async_trait]
 impl<T: ListingFormat> TableFormat for ListingTableFormat<T> {
     fn name(&self) -> &str {
-        self.format_def.name()
+        self.inner.name()
     }
 
-    async fn create_provider(&self, info: SourceInfo<'_>) -> Result<Arc<dyn TableProvider>> {
+    async fn create_provider(
+        &self,
+        ctx: &dyn Session,
+        info: SourceInfo,
+    ) -> Result<Arc<dyn TableProvider>> {
         let SourceInfo {
-            ctx,
             paths,
             schema,
+            constraints,
+            partition_by,
+            bucket_by: _,
+            sort_order,
             options,
         } = info;
 
-        let file_format = self.format_def.create_format(ctx, options)?;
-        let listing_options = ListingOptions::new(file_format);
         let urls = crate::url::resolve_listing_urls(ctx, paths).await?;
+        let file_format = self.inner.create_read_format(ctx, options.clone(), None)?;
+        let extension_with_compression =
+            file_format.compression_type().and_then(|compression_type| {
+                match file_format.get_ext_with_compression(&compression_type) {
+                    // if the extension is the same as the file format, we don't need to add it
+                    Ok(ext) if ext != file_format.get_ext() => Some(ext),
+                    _ => None,
+                }
+            });
 
-        let schema = match schema {
-            Some(x) if !x.fields().is_empty() => Arc::new(x),
-            _ => crate::listing::resolve_listing_schema(ctx, &urls, &listing_options).await?,
+        let config = ctx.config();
+        let mut listing_options = ListingOptions::new(file_format)
+            .with_target_partitions(config.target_partitions())
+            .with_collect_stat(config.collect_statistics());
+
+        let (schema, partition_by) = match schema {
+            Some(schema) if !schema.fields().is_empty() => {
+                let (partition_by, schema) =
+                    get_partition_columns_and_file_schema(&schema, partition_by)?;
+                (Arc::new(schema), partition_by)
+            }
+            _ => {
+                let schema = crate::listing::resolve_listing_schema(
+                    ctx,
+                    &urls,
+                    &mut listing_options,
+                    &extension_with_compression,
+                    options,
+                    self,
+                )
+                .await?;
+                let partition_by = partition_by
+                    .into_iter()
+                    .map(|col| (col, DataType::Utf8))
+                    .collect();
+                (schema, partition_by)
+            }
         };
 
-        let config = ListingTableConfig::new_with_multi_paths(urls)
-            .with_listing_options(listing_options)
-            .with_schema(schema)
-            .infer_partitions_from_path(&ctx.state())
-            .await?;
+        let listing_options = listing_options
+            .with_file_sort_order(vec![sort_order])
+            .with_table_partition_cols(partition_by);
+
+        let config = ListingTableConfig::new_with_multi_paths(urls);
+        let config = if listing_options.table_partition_cols.is_empty() {
+            config
+                .with_listing_options(listing_options)
+                .infer_partitions_from_path(ctx)
+                .await?
+        } else {
+            for url in config.table_paths.iter() {
+                listing_options.validate_partitions(ctx, url).await?;
+            }
+            config.with_listing_options(listing_options)
+        };
+        // The schema must be set after the listing options, otherwise it will panic.
+        let config = config.with_schema(schema);
         let config = crate::listing::rewrite_listing_partitions(config)?;
-        Ok(Arc::new(ListingTable::try_new(config)?))
+        Ok(Arc::new(
+            ListingTable::try_new(config)?.with_constraints(constraints),
+        ))
     }
 
-    fn create_writer(&self, info: SinkInfo<'_>) -> Result<Arc<dyn FileFormatFactory>> {
-        let SinkInfo { ctx, options, .. } = info;
-        self.format_def.create_format_factory(ctx, options)
-    }
-}
-
-// Arrow
-pub(crate) type ArrowTableFormat = ListingTableFormat<ArrowListingFormat>;
-
-#[derive(Debug, Default)]
-pub(crate) struct ArrowListingFormat;
-
-impl ListingFormat for ArrowListingFormat {
-    fn name(&self) -> &'static str {
-        "arrow"
-    }
-
-    fn create_format(
+    async fn create_writer(
         &self,
-        _ctx: &SessionContext,
-        _options: HashMap<String, String>,
-    ) -> Result<Arc<dyn FileFormat>> {
-        Ok(Arc::new(ArrowFormat))
-    }
-
-    fn create_format_factory(
-        &self,
-        _ctx: &SessionContext,
-        _options: HashMap<String, String>,
-    ) -> Result<Arc<dyn FileFormatFactory>> {
-        Ok(Arc::new(ArrowFormatFactory::new()))
-    }
-}
-
-// Avro
-pub(crate) type AvroTableFormat = ListingTableFormat<AvroListingFormat>;
-
-#[derive(Debug, Default)]
-pub(crate) struct AvroListingFormat;
-
-impl ListingFormat for AvroListingFormat {
-    fn name(&self) -> &'static str {
-        "avro"
-    }
-
-    fn create_format(
-        &self,
-        _ctx: &SessionContext,
-        _options: HashMap<String, String>,
-    ) -> Result<Arc<dyn FileFormat>> {
-        Ok(Arc::new(AvroFormat))
-    }
-
-    fn create_format_factory(
-        &self,
-        _ctx: &SessionContext,
-        _options: HashMap<String, String>,
-    ) -> Result<Arc<dyn FileFormatFactory>> {
-        Ok(Arc::new(AvroFormatFactory::new()))
-    }
-}
-
-// Csv
-pub(crate) type CsvTableFormat = ListingTableFormat<CsvListingFormat>;
-
-#[derive(Debug, Default)]
-pub(crate) struct CsvListingFormat;
-
-impl ListingFormat for CsvListingFormat {
-    fn name(&self) -> &'static str {
-        "csv"
-    }
-
-    fn create_format(
-        &self,
-        ctx: &SessionContext,
-        options: HashMap<String, String>,
-    ) -> Result<Arc<dyn FileFormat>> {
-        let resolver = DataSourceOptionsResolver::new(ctx);
-        let options = resolver.resolve_csv_read_options(options)?;
-        Ok(Arc::new(CsvFormat::default().with_options(options)))
-    }
-
-    fn create_format_factory(
-        &self,
-        ctx: &SessionContext,
-        options: HashMap<String, String>,
-    ) -> Result<Arc<dyn FileFormatFactory>> {
-        let resolver = DataSourceOptionsResolver::new(ctx);
-        let options = resolver.resolve_csv_write_options(options)?;
-        Ok(Arc::new(CsvFormatFactory::new_with_options(options)))
-    }
-}
-
-// Json
-pub(crate) type JsonTableFormat = ListingTableFormat<JsonListingFormat>;
-
-#[derive(Debug, Default)]
-pub(crate) struct JsonListingFormat;
-
-impl ListingFormat for JsonListingFormat {
-    fn name(&self) -> &'static str {
-        "json"
-    }
-
-    fn create_format(
-        &self,
-        ctx: &SessionContext,
-        options: HashMap<String, String>,
-    ) -> Result<Arc<dyn FileFormat>> {
-        let resolver = DataSourceOptionsResolver::new(ctx);
-        let options = resolver.resolve_json_read_options(options)?;
-        Ok(Arc::new(JsonFormat::default().with_options(options)))
-    }
-
-    fn create_format_factory(
-        &self,
-        ctx: &SessionContext,
-        options: HashMap<String, String>,
-    ) -> Result<Arc<dyn FileFormatFactory>> {
-        let resolver = DataSourceOptionsResolver::new(ctx);
-        let options = resolver.resolve_json_write_options(options)?;
-        Ok(Arc::new(JsonFormatFactory::new_with_options(options)))
-    }
-}
-
-// Parquet
-pub(crate) type ParquetTableFormat = ListingTableFormat<ParquetListingFormat>;
-
-#[derive(Debug, Default)]
-pub(crate) struct ParquetListingFormat;
-
-impl ListingFormat for ParquetListingFormat {
-    fn name(&self) -> &'static str {
-        "parquet"
-    }
-
-    fn create_format(
-        &self,
-        ctx: &SessionContext,
-        options: HashMap<String, String>,
-    ) -> Result<Arc<dyn FileFormat>> {
-        let resolver = DataSourceOptionsResolver::new(ctx);
-        let options = resolver.resolve_parquet_read_options(options)?;
-        Ok(Arc::new(ParquetFormat::default().with_options(options)))
-    }
-
-    fn create_format_factory(
-        &self,
-        ctx: &SessionContext,
-        options: HashMap<String, String>,
-    ) -> Result<Arc<dyn FileFormatFactory>> {
-        let resolver = DataSourceOptionsResolver::new(ctx);
-        let options = resolver.resolve_parquet_write_options(options)?;
-        Ok(Arc::new(ParquetFormatFactory::new_with_options(options)))
+        ctx: &dyn Session,
+        info: SinkInfo,
+    ) -> Result<Arc<dyn ExecutionPlan>> {
+        let SinkInfo {
+            input,
+            path,
+            // TODO: sink mode is ignored since the file formats only support append operation
+            mode: _,
+            partition_by,
+            bucket_by,
+            sort_order,
+            options,
+        } = info;
+        if bucket_by.is_some() {
+            return not_impl_err!("bucketing for writing listing table format");
+        }
+        // always write multi-file output
+        let path = if path.ends_with(object_store::path::DELIMITER) {
+            path
+        } else {
+            format!("{path}{}", object_store::path::DELIMITER)
+        };
+        let table_paths = crate::url::resolve_listing_urls(ctx, vec![path.clone()]).await?;
+        let object_store_url = if let Some(path) = table_paths.first() {
+            path.object_store()
+        } else {
+            return internal_err!("empty listing table path: {path}");
+        };
+        // We do not need to specify the exact data type for partition columns,
+        // since the type is inferred from the record batch during writing.
+        // This is how DataFusion handles physical planning for `LogicalPlan::Copy`.
+        let table_partition_cols = partition_by
+            .iter()
+            .map(|s| (s.clone(), DataType::Null))
+            .collect::<Vec<_>>();
+        let (format, compression) = self.inner.create_write_format(ctx, options)?;
+        let file_extension = if let Some(file_compression_type) = format.compression_type() {
+            match format.get_ext_with_compression(&file_compression_type) {
+                Ok(ext) => ext,
+                Err(_) => format.get_ext(),
+            }
+        } else {
+            let ext = format.get_ext();
+            if let Some(compression) = compression {
+                if matches!(ext.as_str(), ".parquet" | "parquet") {
+                    let ext = ext.strip_prefix('.').unwrap_or(&ext);
+                    let compression = compression.strip_prefix('.').unwrap_or(&compression);
+                    let (compression, _level) =
+                        split_parquet_compression_string(&compression.to_lowercase())?;
+                    let file_compression_type = FileCompressionType::from_str(compression.as_str());
+                    let compression = match file_compression_type {
+                        // Parquet has compression types not supported by FileCompressionType
+                        Ok(compression) => compression.get_ext(),
+                        Err(_) => compression,
+                    };
+                    let compression = compression.strip_prefix('.').unwrap_or(&compression);
+                    let result = format!("{compression}.{ext}");
+                    result
+                } else {
+                    ext
+                }
+            } else {
+                ext
+            }
+        };
+        let conf = FileSinkConfig {
+            original_url: path,
+            object_store_url,
+            file_group: Default::default(),
+            table_paths,
+            output_schema: input.schema(),
+            table_partition_cols,
+            insert_op: InsertOp::Append,
+            keep_partition_by_columns: false,
+            file_extension,
+        };
+        format
+            .create_writer_physical_plan(input, ctx, conf, sort_order)
+            .await
     }
 }

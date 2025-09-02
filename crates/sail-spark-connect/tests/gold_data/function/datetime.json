@@ -260,7 +260,7 @@
         }
       },
       "output": {
-        "failure": "not implemented: function: convert_timezone"
+        "success": "ok"
       }
     },
     {
@@ -282,7 +282,7 @@
         }
       },
       "output": {
-        "failure": "not implemented: function: convert_timezone"
+        "success": "ok"
       }
     },
     {
@@ -1624,7 +1624,7 @@
         }
       },
       "output": {
-        "failure": "not implemented: function: make_interval"
+        "success": "ok"
       }
     },
     {
@@ -1646,7 +1646,7 @@
         }
       },
       "output": {
-        "failure": "not implemented: function: make_interval"
+        "success": "ok"
       }
     },
     {
@@ -1668,7 +1668,7 @@
         }
       },
       "output": {
-        "failure": "not implemented: function: make_interval"
+        "success": "ok"
       }
     },
     {
@@ -1712,7 +1712,7 @@
         }
       },
       "output": {
-        "failure": "not implemented: make_timestamp with timezone is not yet implemented"
+        "success": "ok"
       }
     },
     {
@@ -1800,7 +1800,7 @@
         }
       },
       "output": {
-        "failure": "not implemented: function: make_timestamp_ltz"
+        "success": "ok"
       }
     },
     {
@@ -1822,7 +1822,7 @@
         }
       },
       "output": {
-        "failure": "not implemented: function: make_timestamp_ltz"
+        "success": "ok"
       }
     },
     {
@@ -1844,7 +1844,7 @@
         }
       },
       "output": {
-        "failure": "not implemented: function: make_timestamp_ltz"
+        "success": "ok"
       }
     },
     {
@@ -1866,7 +1866,7 @@
         }
       },
       "output": {
-        "failure": "not implemented: function: make_timestamp_ltz"
+        "success": "ok"
       }
     },
     {
@@ -2086,7 +2086,7 @@
         }
       },
       "output": {
-        "failure": "not supported: unknown function: monthname"
+        "success": "ok"
       }
     },
     {
@@ -2504,7 +2504,7 @@
         }
       },
       "output": {
-        "failure": "not implemented: function: to_unix_timestamp"
+        "success": "ok"
       }
     },
     {
@@ -2526,7 +2526,7 @@
         }
       },
       "output": {
-        "failure": "not implemented: function: to_utc_timestamp"
+        "success": "ok"
       }
     },
     {

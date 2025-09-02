@@ -208,6 +208,40 @@
     Has no effect after the table is created.
   experimental: true
 
+- key: execution.file_listing_cache.type
+  type: string
+  default: "none"
+  description: |
+    The type of cache for file metadata when listing files.
+    The cache avoids repeatedly listing file metadata,
+    which may be expensive in certain situations (e.g., when using remote object storage).
+    When the cache is used, updates to the underlying location may not be visible until
+    the cache entry expires (controlled by `execution.file_listing_cache.ttl`).
+    Valid values are `none`, `global` (for a global cache), and `session` (for a per-session cache).
+  experimental: true
+
+- key: execution.file_listing_cache.ttl
+  type: number
+  default: "1800"
+  description: |
+    The time-to-live (TTL) in seconds for cached directory listings.
+    Entries expire after this duration from when they were cached,
+    ensuring eventual consistency with the file system.
+    This setting is only effective when the cache is enabled.
+    Setting the value to `0` disables the TTL.
+    This setting can only be configured at startup and cannot be changed at runtime.
+  experimental: true
+
+- key: execution.file_listing_cache.max_entries
+  type: number
+  default: "10000"
+  description: |
+    Maximum number of directory listings to cache.
+    This setting is only effective when the cache is enabled.
+    Setting the value to `0` disables the limit.
+    This setting can only be configured at startup and cannot be changed at runtime.
+  experimental: true
+
 - key: parquet.enable_page_index
   type: boolean
   default: "true"
@@ -447,6 +481,40 @@
     at the expense of higher memory usage.
   experimental: true
 
+- key: parquet.file_statistics_cache.type
+  type: string
+  default: "global"
+  description: |
+    (Reading) The type of cache for files statistics when reading Parquet files.
+    This setting avoids repeatedly computing statistics,
+    which may be expensive in certain situations (e.g., when using remote object storage).
+    The cache is automatically invalidated when the underlying file is modified.
+    Valid values are `none`, `global` (for a global cache), and `session` (for a per-session cache).
+  experimental: true
+
+- key: parquet.file_statistics_cache.ttl
+  type: number
+  default: "1800"
+  description: |
+    The time-to-live (TTL) in seconds for cached Parquet files statistics.
+    Entries expire after this duration from when they were cached,
+    ensuring eventual consistency with the file system.
+    This setting is only effective when the cache is enabled.
+    Setting the value to `0` disables the TTL.
+    This setting can only be configured at startup and cannot be changed at runtime.
+  experimental: true
+
+- key: parquet.file_statistics_cache.max_entries
+  type: number
+  default: "10000"
+  description: |
+    Maximum number of Parquet files statistics to cache.
+    This setting is only effective when the cache is enabled.
+    When the limit is reached, least recently used entries are evicted.
+    Setting the value to `0` disables the limit.
+    This setting can only be configured at startup and cannot be changed at runtime.
+  experimental: true
+
 - key: kubernetes.image
   type: string
   default: "sail:latest"
@@ -482,7 +550,40 @@
   default: "default"
   description: The name of the service account to use for the worker pods.
 
+- key: catalog.list
+  type: array
+  default: '[{name="sail", type="memory", initial_database=["default"], initial_database_comment="default database"}]'
+  description: |
+    The list of catalogs to use. Each catalog is defined by a name and a type, along with optional parameters.
+    `name` is used to refer to the catalog name, and `type` defines the catalog implementation.
+  experimental: true
+
+- key: catalog.default_catalog
+  type: string
+  default: "sail"
+  description: |
+    The name of the default catalog to use.
+  experimental: true
+
+- key: catalog.default_database
+  type: array
+  default: '["default"]'
+  description: |
+    The name of the default database (namespace) to use.
+    This is a list of strings, where each string is a part of the namespace.
+  experimental: true
+
+- key: catalog.global_temporary_database
+  type: array
+  default: '["global_temp"]'
+  description: |
+    The name of the global temporary database (namespace) to use.
+    This is a list of strings, where each string is a part of the namespace.
+    The global temporary database cannot be changed at runtime,
+    so setting the Spark configuration `spark.sql.globalTempDatabase` has no effect.
+  experimental: true
+
 - key: spark.session_timeout_secs
   type: number
-  default: "120"
+  default: "900"
   description: The Spark session timeout in seconds.

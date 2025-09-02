@@ -39,6 +39,9 @@ jobs:
     env:
       # Set the Hatch environment for `hatch run` commands.
       HATCH_ENV: "test-spark.spark-${{ inputs.spark_version }}"
+      # Coverage environment variables
+      RUSTC_WORKSPACE_WRAPPER: ${{ github.workspace }}/.github/scripts/rustc-workspace-wrapper.sh
+      LLVM_PROFILE_FILE: ${{ github.workspace }}/target/sail-spark-${{ inputs.spark_version }}-%p-%m.profraw
     steps:
       - uses: actions/checkout@v4
 
@@ -53,6 +56,23 @@ jobs:
 
       - name: Install Hatch
         uses: pypa/hatch@install
+
+      - name: Install Rust toolchain and coverage tools
+        run: |
+          {
+            rustup toolchain install stable
+            rustup component add --toolchain stable llvm-tools-preview
+          } &
+
+        # Install grcov for code coverage
+      - name: Install grcov
+        run: |
+          wget -q -O grcov.tar.bz2 "https://github.com/mozilla/grcov/releases/download/v0.10.5/grcov-x86_64-unknown-linux-gnu.tar.bz2"
+          tar -xjf grcov.tar.bz2
+          sudo mv grcov /usr/local/bin/
+          chmod +x /usr/local/bin/grcov
+          rm grcov.tar.bz2
+        shell: bash
 
       - name: Install grpc_health_probe
         run: |
@@ -101,8 +121,7 @@ jobs:
 
       - name: Run Spark Connect Server
         run: |
-          work_dir="$(hatch run python -c 'import os, pyspark; print(os.path.dirname(pyspark.__file__))')"
-          nohup hatch run sail spark server -C "${work_dir}" > /dev/null 2>&1 < /dev/null &
+          nohup hatch run scripts/spark-tests/run-server.sh > /dev/null 2>&1 < /dev/null &
 
       - name: Wait for Spark Connect Server to Start
         run: |
@@ -118,6 +137,52 @@ jobs:
           TEST_RUN_GIT_REF: ${{ github.ref }}
         run: |
           hatch run scripts/spark-tests/run-tests.sh
+
+      - name: Shutdown Spark Connect Server
+        if: always()
+        run: |
+          # Find and kill sail server processes
+          SAIL_PIDS=$(pgrep -f "sail spark server" || echo "")
+          if [ -n "$SAIL_PIDS" ]; then
+            echo "Found sail server processes: $SAIL_PIDS"
+            # Send SIGINT for graceful shutdown
+            kill -INT $SAIL_PIDS 2>/dev/null || true
+            # Wait up to 30 seconds for graceful shutdown
+            for i in {1..30}; do
+              if ! pgrep -f "sail spark server" > /dev/null; then
+                echo "Sail server stopped gracefully"
+                break
+              fi
+              sleep 1
+            done
+            # Force kill if still running
+            REMAINING_PIDS=$(pgrep -f "sail spark server" || echo "")
+            if [ -n "$REMAINING_PIDS" ]; then
+              echo "Force killing remaining processes: $REMAINING_PIDS"
+              kill -KILL $REMAINING_PIDS 2>/dev/null || true
+            fi
+          else
+            echo "No sail server processes found"
+          fi
+          sleep 10
+
+      # Generate coverage report after Spark tests
+      - name: Generate coverage report
+        run: |
+          # Wait for background Rust toolchain installation to complete
+          wait
+          BINARY_PATH=$(hatch run python -c 'import pysail._native; import os; print(os.path.dirname(pysail._native.__file__))')
+          echo "Binary path: $BINARY_PATH"
+          grcov target --binary-path "$BINARY_PATH" -s . \
+            -t lcov --branch --ignore-not-existing \
+            -o coverage-spark-${{ inputs.spark_version }}.info
+
+      - name: Upload spark coverage artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: spark-coverage-report-${{ inputs.spark_version }}
+          path: coverage-spark-${{ inputs.spark_version }}.info
+          retention-days: 1
 
       - name: Upload Test Logs
         uses: actions/upload-artifact@v4

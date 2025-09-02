@@ -7,22 +7,27 @@ edition = { workspace = true }
 workspace = true
 
 [dependencies]
+sail-common-datafusion = { path = "../sail-common-datafusion" }
+sail-delta-lake = { path = "../sail-delta-lake" }
+
 async-trait = { workspace = true }
 serde = { workspace = true }
 futures = { workspace = true }
 datafusion = { workspace = true }
 datafusion-common = { workspace = true }
+datafusion-datasource = { workspace = true }
 object_store = { workspace = true }
 chumsky = { workspace = true }
 glob = { workspace = true }
 url = { workspace = true }
 regex = { workspace = true }
 percent-encoding = { workspace = true }
-sail-common = { path = "../sail-common" }
-sail-common-datafusion = { path = "../sail-common-datafusion" }
-sail-delta-lake = { path = "../sail-delta-lake" }
 once_cell = { workspace = true }
 log = { workspace = true }
+bytes = { workspace = true }
+tokio = { workspace = true }
+tokio-stream = { workspace = true }
+chrono = { workspace = true }
 
 [build-dependencies]
 serde = { workspace = true }

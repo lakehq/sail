@@ -52,6 +52,10 @@ jobs:
     runs-on: ubuntu-latest
     needs:
       - setup
+    env:
+      # Coverage environment variables
+      RUSTC_WORKSPACE_WRAPPER: ${{ github.workspace }}/.github/scripts/rustc-workspace-wrapper.sh
+      LLVM_PROFILE_FILE: ${{ github.workspace }}/target/sail-%p-%m.profraw
     steps:
       - uses: actions/checkout@v4
 
@@ -73,6 +77,19 @@ jobs:
 
       - name: Run Cargo Test
         run: cargo test
+
+      # Generate coverage report after tests
+      - name: Generate coverage report
+        run: grcov target --binary-path target/debug/ -s .
+          -t lcov --branch --ignore-not-existing
+          -o coverage-build.info
+
+      - name: Upload cargo coverage artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: cargo-coverage-report
+          path: coverage-build.info
+          retention-days: 1
 
       - name: Build Python Package
         uses: PyO3/maturin-action@v1
@@ -120,6 +137,44 @@ jobs:
       stage: ${{ matrix.stage }}
       version: main
       package_run_id: ${{ needs.setup.outputs.build_package == 'true' && github.run_id || needs.setup.outputs.baseline_run_id }}
+
+  upload-coverage:
+    name: Upload Coverage Reports
+    runs-on: ubuntu-latest
+    needs:
+      - build
+      - python-build
+      - spark-tests
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Download all coverage artifacts
+        uses: actions/download-artifact@v4
+        with:
+          path: coverage-reports
+          pattern: "*-coverage-report*"
+          merge-multiple: true
+
+      - name: List downloaded files and count coverage files
+        id: coverage-check
+        run: |
+          echo "Downloaded coverage reports:"
+          find coverage-reports -type f -name "*.info" || echo "No .info files found"
+          ls -la coverage-reports/ || echo "No coverage-reports directory"
+
+          # Count the number of .info files
+          coverage_count=$(find coverage-reports -type f -name "*.info" 2>/dev/null | wc -l)
+          echo "Number of coverage files found: $coverage_count"
+          echo "coverage_count=$coverage_count" >> $GITHUB_OUTPUT
+
+      - name: Upload all coverage reports to Codecov
+        if: steps.coverage-check.outputs.coverage_count >= 4
+        uses: codecov/codecov-action@v5
+        with:
+          token: ${{ secrets.CODECOV_TOKEN }}
+          directory: ./coverage-reports/
+          fail_ci_if_error: true
+          env_vars: OS
 
   docs-deploy:
     name: Docs Deploy

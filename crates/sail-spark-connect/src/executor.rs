@@ -2,55 +2,58 @@ use std::collections::VecDeque;
 use std::io::Cursor;
 use std::mem;
 use std::ops::{Deref, DerefMut};
+use std::pin::Pin;
 use std::sync::{Arc, Mutex};
 
 use datafusion::arrow::array::RecordBatch;
 use datafusion::arrow::ipc::writer::StreamWriter;
 use datafusion::execution::SendableRecordBatchStream;
+use futures::stream::{StreamExt, TryStreamExt};
+use futures::Stream;
 use tokio::sync::{mpsc, oneshot};
 use tokio::task::JoinHandle;
 use tonic::codegen::tokio_stream::wrappers::ReceiverStream;
-use tonic::codegen::tokio_stream::StreamExt;
 use uuid::Uuid;
 
 use crate::error::{SparkError, SparkResult};
 use crate::schema::to_spark_schema;
-use crate::spark::connect::execute_plan_response::{
-    ArrowBatch, Metrics, ObservedMetrics, SqlCommandResult,
+use crate::spark::connect::execute_plan_response::{ArrowBatch, SqlCommandResult};
+use crate::spark::connect::{
+    DataType, StreamingQueryCommandResult, StreamingQueryManagerCommandResult,
+    WriteStreamOperationStartResult,
 };
-use crate::spark::connect::DataType;
 
 #[derive(Clone, Debug)]
-#[allow(clippy::large_enum_variant)]
-pub(crate) enum ExecutorBatch {
+pub enum ExecutorBatch {
     ArrowBatch(ArrowBatch),
-    SqlCommandResult(SqlCommandResult),
-    Schema(DataType),
-    #[allow(dead_code)]
-    Metrics(Metrics),
-    #[allow(dead_code)]
-    ObservedMetrics(Vec<ObservedMetrics>),
+    SqlCommandResult(Box<SqlCommandResult>),
+    WriteStreamOperationStartResult(Box<WriteStreamOperationStartResult>),
+    StreamingQueryCommandResult(Box<StreamingQueryCommandResult>),
+    StreamingQueryManagerCommandResult(Box<StreamingQueryManagerCommandResult>),
+    Schema(Box<DataType>),
     Complete,
 }
 
 #[derive(Clone, Debug)]
-pub(crate) struct ExecutorOutput {
+pub struct ExecutorOutput {
     pub(crate) id: String,
     pub(crate) batch: ExecutorBatch,
 }
 
 impl ExecutorOutput {
-    pub(crate) fn new(batch: ExecutorBatch) -> Self {
+    pub fn new(batch: ExecutorBatch) -> Self {
         Self {
             id: Uuid::new_v4().to_string(),
             batch,
         }
     }
 
-    pub(crate) fn complete() -> Self {
+    pub fn complete() -> Self {
         Self::new(ExecutorBatch::Complete)
     }
 }
+
+pub type ExecutorOutputStream = Pin<Box<dyn Stream<Item = ExecutorOutput> + Send>>;
 
 struct ExecutorBuffer {
     inner: VecDeque<ExecutorOutput>,
@@ -160,7 +163,7 @@ impl Executor {
             tx.send(out).await?;
         }
         let schema = to_spark_schema(context.stream.schema())?;
-        let out = ExecutorOutput::new(ExecutorBatch::Schema(schema));
+        let out = ExecutorOutput::new(ExecutorBatch::Schema(Box::new(schema)));
         context.save_output(&out)?;
         tx.send(out).await?;
 
@@ -279,14 +282,9 @@ impl Executor {
 }
 
 pub(crate) async fn read_stream(
-    mut stream: SendableRecordBatchStream,
+    stream: SendableRecordBatchStream,
 ) -> SparkResult<Vec<RecordBatch>> {
-    let mut output = vec![];
-    while let Some(batch) = stream.next().await {
-        let batch = batch?;
-        output.push(batch);
-    }
-    Ok(output)
+    stream.err_into().try_collect::<Vec<_>>().await
 }
 
 pub(crate) fn to_arrow_batch(batch: &RecordBatch) -> SparkResult<ArrowBatch> {

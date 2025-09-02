@@ -26,6 +26,14 @@ message ExtendedPhysicalPlanNode {
     RecursiveQueryExecNode recursive_query = 12;
     SortMergeJoinExecNode sort_merge_join = 13;
     PartialSortExecNode partial_sort = 14;
+    TextExecNode text = 15;
+    DeltaWriterExecNode delta_writer = 16;
+    DeltaCommitExecNode delta_commit = 17;
+    AvroExecNode avro = 18;
+    ConsoleSinkExecNode console_sink = 19;
+    SocketSourceExecNode socket_source = 20;
+    RateSourceExecNode rate_source = 21;
+    TextSinkExecNode text_sink = 22;
   }
 }
 
@@ -40,10 +48,8 @@ message ExtendedScalarUdf {
     SparkUnixTimestampUdf spark_unix_timestamp = 7;
     StructFunctionUdf struct_function = 8;
     UpdateStructFieldUdf update_struct_field = 9;
-    SparkWeekOfYearUdf spark_week_of_year = 10;
-    TimestampNowUdf timestamp_now = 11;
-    SparkTimestampUdf spark_timestamp = 12;
-    SparkFromUtcTimestampUdf spark_from_utc_timestamp = 13;
+    TimestampNowUdf timestamp_now = 10;
+    SparkTimestampUdf spark_timestamp = 11;
   }
 }
 
@@ -111,10 +117,6 @@ message UpdateStructFieldUdf {
   repeated string field_names = 1;
 }
 
-message SparkWeekOfYearUdf {
-  string timezone = 1;
-}
-
 message TimestampNowUdf {
   string timezone = 1;
   string time_unit = 2;
@@ -122,10 +124,6 @@ message TimestampNowUdf {
 
 message SparkTimestampUdf {
   optional string timezone = 1;
-}
-
-message SparkFromUtcTimestampUdf {
-  string time_unit = 1;
 }
 
 message StandardUdaf {}
@@ -241,6 +239,10 @@ message LexOrdering {
   repeated bytes values = 1;
 }
 
+message PhysicalSortExprNodeCollection {
+  repeated bytes physical_sort_expr_nodes = 1;
+}
+
 message MemoryExecNode {
   repeated bytes partitions = 1;
   bytes schema = 2;
@@ -261,6 +263,17 @@ message NdJsonExecNode {
 }
 
 message ArrowExecNode {
+  bytes base_config = 1;
+}
+
+message TextExecNode {
+  bytes base_config = 1;
+  CompressionTypeVariant file_compression_type = 2;
+  bool whole_text = 3;
+  optional bytes line_sep = 4;
+}
+
+message AvroExecNode {
   bytes base_config = 1;
 }
 
@@ -290,6 +303,75 @@ message PartialSortExecNode {
   LexOrdering expr = 1;
   bytes input = 2;
   uint64 common_prefix_length = 3;
+}
+
+
+
+message AppendMode {}
+message OverwriteMode {}
+message OverwriteIfMode {
+  bytes condition = 1;
+}
+message ErrorIfExistsMode {}
+message IgnoreIfExistsMode {}
+message OverwritePartitionsMode {}
+
+message PhysicalSinkMode {
+  oneof mode {
+    AppendMode append = 1;
+    OverwriteMode overwrite = 2;
+    OverwriteIfMode overwrite_if = 3;
+    ErrorIfExistsMode error_if_exists = 4;
+    IgnoreIfExistsMode ignore_if_exists = 5;
+    OverwritePartitionsMode overwrite_partitions = 6;
+  }
+}
+
+message DeltaWriterExecNode {
+  bytes input = 1;
+  string table_url = 2;
+  string options = 3;
+  bytes sink_schema = 4;
+  repeated string partition_columns = 5;
+  bool table_exists = 6;
+  PhysicalSinkMode sink_mode = 7;
+}
+
+message DeltaCommitExecNode {
+  bytes input = 1;
+  string table_url = 2;
+  repeated string partition_columns = 3;
+  bool table_exists = 4;
+  bytes sink_schema = 5;
+}
+
+message ConsoleSinkExecNode {
+  bytes input = 1;
+}
+
+message SocketSourceExecNode {
+  string host = 1;
+  uint32 port = 2;
+  uint64 max_batch_size = 3;
+  uint64 timeout_sec = 4;
+  bytes schema = 5;
+  repeated uint64 projection = 6;
+}
+
+message RateSourceExecNode {
+  uint64 rows_per_second = 1;
+  uint64 num_partitions = 2;
+  bytes schema = 3;
+  repeated uint64 projection = 4;
+}
+
+message TextSinkExecNode {
+  bytes input = 1;
+  bytes base_config = 2;
+  bytes schema = 3;
+  bytes line_sep = 4;
+  CompressionTypeVariant compression_type_variant = 5;
+  optional PhysicalSortExprNodeCollection sort_order = 6;
 }
 
 message JoinOn {

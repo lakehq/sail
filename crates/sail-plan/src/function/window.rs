@@ -1,12 +1,13 @@
 use std::collections::HashMap;
 
-use datafusion::functions_aggregate::{average, count, min_max, sum};
+use datafusion::functions_aggregate::{array_agg, average, count, min_max, sum};
 use datafusion::functions_window::cume_dist::cume_dist_udwf;
 use datafusion::functions_window::lead_lag::{lag_udwf, lead_udwf};
 use datafusion::functions_window::nth_value::{first_value_udwf, last_value_udwf, nth_value_udwf};
 use datafusion::functions_window::ntile::ntile_udwf;
 use datafusion::functions_window::rank::{dense_rank_udwf, percent_rank_udwf, rank_udwf};
 use datafusion::functions_window::row_number::row_number_udwf;
+use datafusion_common::ScalarValue;
 use datafusion_expr::expr::WindowFunctionParams;
 use datafusion_expr::{expr, WindowFunctionDefinition};
 use lazy_static::lazy_static;
@@ -43,10 +44,46 @@ fn count(input: WinFunctionInput) -> PlanResult<expr::Expr> {
     })))
 }
 
+fn nth_value(input: WinFunctionInput) -> PlanResult<expr::Expr> {
+    let WinFunctionInput {
+        arguments,
+        partition_by,
+        order_by,
+        window_frame,
+        ignore_nulls,
+        function_context: _,
+    } = input;
+    let mut args = arguments;
+    let null_treatment = get_null_treatment(if args.len() == 3 {
+        args.pop()
+            .map(|e| match e {
+                expr::Expr::Literal(ScalarValue::Boolean(value), _) => Ok(value),
+                _ => Err(PlanError::InvalidArgument(
+                    "nth_value third argument should be boolean scalar".to_string(),
+                )),
+            })
+            .transpose()?
+            .flatten()
+    } else {
+        ignore_nulls
+    });
+    Ok(expr::Expr::WindowFunction(Box::new(expr::WindowFunction {
+        fun: WindowFunctionDefinition::WindowUDF(nth_value_udwf()),
+        params: WindowFunctionParams {
+            args,
+            partition_by,
+            order_by,
+            window_frame,
+            null_treatment,
+        },
+    })))
+}
+
 fn list_built_in_window_functions() -> Vec<(&'static str, WinFunction)> {
     use crate::function::common::WinFunctionBuilder as F;
     vec![
         ("avg", F::aggregate(average::avg_udaf)),
+        ("collect_list", F::aggregate(array_agg::array_agg_udaf)),
         ("min", F::aggregate(min_max::min_udaf)),
         ("max", F::aggregate(min_max::max_udaf)),
         ("sum", F::aggregate(sum::sum_udaf)),
@@ -59,7 +96,7 @@ fn list_built_in_window_functions() -> Vec<(&'static str, WinFunction)> {
         ("last", F::window(last_value_udwf)),
         ("last_value", F::window(last_value_udwf)),
         ("lead", F::window(lead_udwf)),
-        ("nth_value", F::window(nth_value_udwf)),
+        ("nth_value", F::custom(nth_value)),
         ("ntile", F::window(ntile_udwf)),
         ("rank", F::window(rank_udwf)),
         ("row_number", F::window(row_number_udwf)),

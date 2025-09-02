@@ -18,6 +18,7 @@ pub struct AppConfig {
     pub execution: ExecutionConfig,
     pub kubernetes: KubernetesConfig,
     pub parquet: ParquetConfig,
+    pub catalog: CatalogConfig,
     pub spark: SparkConfig,
     /// Reserved for internal use.
     /// This field ensures that environment variables with prefix `SAIL_INTERNAL_`
@@ -164,6 +165,17 @@ mod retry_strategy {
 pub struct ExecutionConfig {
     pub batch_size: usize,
     pub collect_statistics: bool,
+    pub file_listing_cache: FileListingCacheConfig,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct FileListingCacheConfig {
+    pub r#type: CacheType,
+    #[serde(deserialize_with = "deserialize_non_zero")]
+    pub ttl: Option<u64>,
+    #[serde(deserialize_with = "deserialize_non_zero")]
+    pub max_entries: Option<u64>,
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -183,6 +195,7 @@ pub struct ParquetConfig {
     pub enable_page_index: bool,
     pub pruning: bool,
     pub skip_metadata: bool,
+    #[serde(deserialize_with = "deserialize_non_zero")]
     pub metadata_size_hint: Option<usize>,
     pub pushdown_filters: bool,
     pub reorder_filters: bool,
@@ -211,6 +224,45 @@ pub struct ParquetConfig {
     pub allow_single_file_parallelism: bool,
     pub maximum_parallel_row_group_writers: usize,
     pub maximum_buffered_record_batches_per_stream: usize,
+    pub file_statistics_cache: FileStatisticsCacheConfig,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct FileStatisticsCacheConfig {
+    pub r#type: CacheType,
+    #[serde(deserialize_with = "deserialize_non_zero")]
+    pub ttl: Option<u64>,
+    #[serde(deserialize_with = "deserialize_non_zero")]
+    pub max_entries: Option<u64>,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum CacheType {
+    None,
+    Global,
+    Session,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct CatalogConfig {
+    pub default_catalog: String,
+    pub default_database: Vec<String>,
+    pub global_temporary_database: Vec<String>,
+    pub list: Vec<CatalogType>,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+#[serde(deny_unknown_fields)]
+#[serde(tag = "type", rename_all = "snake_case")]
+pub enum CatalogType {
+    Memory {
+        name: String,
+        initial_database: Vec<String>,
+        initial_database_comment: Option<String>,
+    },
 }
 
 #[derive(Debug, Clone, Deserialize)]

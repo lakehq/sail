@@ -1,0 +1,17 @@
+[package]
+name = "sail-cache"
+version = { workspace = true }
+edition = { workspace = true }
+
+[lints]
+workspace = true
+
+[dependencies]
+sail-common = { path = "../sail-common" }
+
+thiserror = { workspace = true }
+object_store = { workspace = true }
+datafusion = { workspace = true }
+chrono = { workspace = true }
+log = { workspace = true }
+moka = { workspace = true }

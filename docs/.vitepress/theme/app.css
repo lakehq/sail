@@ -1,5 +1,7 @@
 @import "tailwindcss";
 
+@custom-variant dark (&:where(.dark, .dark *));
+
 :root {
   --vp-sidebar-width: 280px;
 }
@@ -34,4 +36,8 @@ dl dd {
 .pycon-prompt {
   /* The prompt is not selectable so that it is easier to copy code. */
   @apply select-none;
+}
+
+code span.placeholder {
+  @apply text-red-700 italic dark:text-red-200;
 }

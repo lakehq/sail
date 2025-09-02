@@ -55,23 +55,28 @@ class TpchBenchmark:
                 else:
                     start_time = time.time()
                     df = spark.sql(sql)
-                    rows = df.collect()
+                    rows = df.toPandas()
                     end_time = time.time()
                     query_time = end_time - start_time
                     total_time += query_time
                     print(f"The query returned {len(rows)} rows and took {query_time} seconds.")
         return total_time
 
-    def run(self, query: int | None = None, explain: bool = False):  # noqa: FBT001, FBT002
+    def run(self, query: int | None = None, explain: bool = False, num_runs: int = 1):  # noqa: FBT001, FBT002
         with self.spark_session() as spark:
             if query is not None:
                 self._run_query(spark, query, explain)
             else:
-                total_time = 0
-                for query in range(1, 23):
-                    total_time += self._run_query(spark, query, explain)
+                min_total_time = 0
+                for run in range(num_runs):
+                    total_time = 0
+                    for query in range(1, 23):
+                        total_time += self._run_query(spark, query, explain)
+                    min_total_time = total_time if run == 0 else min(min_total_time, total_time)
+                    if not explain:
+                        print(f"\n\nRun {run+1} Total time for all queries: {total_time} seconds.")
                 if not explain:
-                    print(f"\n\nTotal time for all queries: {total_time} seconds.")
+                    print(f"\n\nMin total time across {num_runs}: {min_total_time} seconds.")
 
 
 def main():
@@ -79,6 +84,7 @@ def main():
     parser.add_argument("--url", type=str, default="sc://localhost:50051")
     parser.add_argument("--data-path", type=str, required=True)
     parser.add_argument("--query-path", type=str, required=True)
+    parser.add_argument("--num-runs", type=int, default=1)
     group = parser.add_mutually_exclusive_group(required=True)
     group.add_argument("--console", action="store_true")
     group.add_argument("--query", type=int, choices=range(1, 23))
@@ -101,11 +107,11 @@ def main():
                 banner="Spark TPC-H Data Explorer\nThe Spark session is available as `spark`.",
             )
     elif args.query:
-        benchmark.run(args.query)
+        benchmark.run(args.query, explain=False, num_runs=args.num_runs)
     elif args.explain:
-        benchmark.run(args.explain, explain=True)
+        benchmark.run(args.explain, explain=True, num_runs=args.num_runs)
     elif args.query_all:
-        benchmark.run()
+        benchmark.run(query=None, explain=False, num_runs=args.num_runs)
 
 
 if __name__ == "__main__":

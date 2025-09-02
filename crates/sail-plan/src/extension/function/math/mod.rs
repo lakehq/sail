@@ -2,6 +2,7 @@ use std::cmp::{max, min};
 
 use datafusion::arrow::datatypes::{DataType, DECIMAL128_MAX_PRECISION, DECIMAL256_MAX_PRECISION};
 
+mod common_try;
 pub mod least_greatest;
 pub mod rand_poisson;
 pub mod randn;
@@ -11,11 +12,15 @@ pub mod spark_bin;
 pub mod spark_bround;
 pub mod spark_ceil_floor;
 pub mod spark_conv;
-pub mod spark_csc;
 pub mod spark_hex_unhex;
 pub mod spark_pmod;
-pub mod spark_sec;
 pub mod spark_signum;
+pub mod spark_try_add;
+pub mod spark_try_div;
+pub mod spark_try_mod;
+pub mod spark_try_mult;
+pub mod spark_try_subtract;
+pub mod spark_width_bucket;
 
 #[inline]
 pub(crate) fn both_are_decimal(left: &DataType, right: &DataType) -> bool {

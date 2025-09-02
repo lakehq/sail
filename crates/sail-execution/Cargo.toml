@@ -9,10 +9,12 @@ workspace = true
 [dependencies]
 sail-common = { path = "../sail-common" }
 sail-common-datafusion = { path = "../sail-common-datafusion" }
+sail-data-source = { path = "../sail-data-source" }
 sail-server = { path = "../sail-server" }
 sail-plan = { path = "../sail-plan" }
 sail-python-udf = { path = "../sail-python-udf" }
 sail-object-store = { path = "../sail-object-store" }
+sail-delta-lake = { path = "../sail-delta-lake" }
 
 thiserror = { workspace = true }
 tokio = { workspace = true }
@@ -30,6 +32,7 @@ serde_json = { workspace = true }
 kube = { workspace = true }
 k8s-openapi = { workspace = true }
 rand = { workspace = true }
+url = { workspace = true }
 
 [build-dependencies]
 prost-build = { workspace = true }

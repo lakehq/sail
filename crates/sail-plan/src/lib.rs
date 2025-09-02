@@ -1,9 +1,11 @@
 use std::sync::Arc;
 
+use async_recursion::async_recursion;
 use datafusion::dataframe::DataFrame;
 use datafusion::execution::context::QueryPlanner;
-use datafusion::physical_plan::ExecutionPlan;
+use datafusion::physical_plan::{displayable, ExecutionPlan};
 use datafusion::prelude::SessionContext;
+use datafusion_common::display::{PlanType, StringifiedPlan, ToStringifiedPlan};
 use datafusion_common::Result;
 use datafusion_expr::{Extension, LogicalPlan};
 use sail_common::spec;
@@ -11,6 +13,7 @@ use sail_common_datafusion::utils::rename_physical_plan;
 
 use crate::config::PlanConfig;
 use crate::error::PlanResult;
+use crate::extension::logical::WithPreconditionsNode;
 use crate::resolver::plan::NamedPlan;
 use crate::resolver::PlanResolver;
 
@@ -26,6 +29,7 @@ mod utils;
 /// Executes a logical plan.
 /// This replaces DDL statements and catalog operations with the execution results.
 /// Logical plan nodes with corresponding physical plan nodes remain unchanged.
+#[async_recursion]
 pub async fn execute_logical_plan(ctx: &SessionContext, plan: LogicalPlan) -> Result<DataFrame> {
     use crate::extension::logical::CatalogCommandNode;
 
@@ -33,6 +37,11 @@ pub async fn execute_logical_plan(ctx: &SessionContext, plan: LogicalPlan) -> Re
         LogicalPlan::Extension(Extension { node }) => {
             if let Some(n) = node.as_any().downcast_ref::<CatalogCommandNode>() {
                 n.execute(ctx).await?
+            } else if let Some(n) = node.as_any().downcast_ref::<WithPreconditionsNode>() {
+                for plan in n.preconditions() {
+                    let _ = execute_logical_plan(ctx, plan.as_ref().clone()).await?;
+                }
+                n.plan().clone()
             } else {
                 LogicalPlan::Extension(Extension { node })
             }
@@ -47,16 +56,23 @@ pub async fn resolve_and_execute_plan(
     ctx: &SessionContext,
     config: Arc<PlanConfig>,
     plan: spec::Plan,
-) -> PlanResult<Arc<dyn ExecutionPlan>> {
+) -> PlanResult<(Arc<dyn ExecutionPlan>, Vec<StringifiedPlan>)> {
+    let mut info = vec![];
     let resolver = PlanResolver::new(ctx, config);
     let NamedPlan { plan, fields } = resolver.resolve_named_plan(plan).await?;
+    info.push(plan.to_stringified(PlanType::InitialLogicalPlan));
     let df = execute_logical_plan(ctx, plan).await?;
     let plan = df.create_physical_plan().await?;
-    if let Some(fields) = fields {
-        Ok(rename_physical_plan(plan, fields.as_slice())?)
+    let plan = if let Some(fields) = fields {
+        rename_physical_plan(plan, fields.as_slice())?
     } else {
-        Ok(plan)
-    }
+        plan
+    };
+    info.push(StringifiedPlan::new(
+        PlanType::FinalPhysicalPlan,
+        displayable(plan.as_ref()).indent(true).to_string(),
+    ));
+    Ok((plan, info))
 }
 
 pub fn new_query_planner() -> Arc<dyn QueryPlanner + Send + Sync> {

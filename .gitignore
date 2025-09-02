@@ -90,3 +90,8 @@ node_modules/
 docs/.vitepress/dist
 docs/.vitepress/cache
 docs/.vitepress/.temp
+
+# LLVM coverage files
+*.profraw
+
+CLAUDE.md

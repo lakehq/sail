@@ -1,11 +1,28 @@
 use datafusion::arrow::error::ArrowError;
 use datafusion::common::DataFusionError;
+use sail_catalog::error::CatalogError;
 use sail_common::error::CommonError;
 use sail_python_udf::error::PyUdfError;
 use sail_sql_analyzer::error::SqlError;
 use thiserror::Error;
 
 pub type PlanResult<T> = Result<T, PlanError>;
+
+pub trait IntoPlanResult<T> {
+    fn into_plan_result(self) -> PlanResult<T>;
+}
+
+impl<T> IntoPlanResult<T> for T {
+    fn into_plan_result(self) -> PlanResult<T> {
+        Ok(self)
+    }
+}
+
+impl<T> IntoPlanResult<T> for PlanResult<T> {
+    fn into_plan_result(self) -> PlanResult<T> {
+        self
+    }
+}
 
 #[derive(Debug, Error)]
 #[allow(clippy::large_enum_variant)]
@@ -60,6 +77,19 @@ impl From<CommonError> for PlanError {
             CommonError::InvalidArgument(message) => PlanError::InvalidArgument(message),
             CommonError::NotSupported(message) => PlanError::NotSupported(message),
             CommonError::InternalError(message) => PlanError::InternalError(message),
+        }
+    }
+}
+
+impl From<CatalogError> for PlanError {
+    fn from(error: CatalogError) -> Self {
+        match error {
+            CatalogError::InvalidArgument(message) => PlanError::InvalidArgument(message),
+            e @ CatalogError::NotFound(_, _) => PlanError::AnalysisError(e.to_string()),
+            e @ CatalogError::AlreadyExists(_, _) => PlanError::AnalysisError(e.to_string()),
+            CatalogError::NotSupported(message) => PlanError::NotSupported(message),
+            CatalogError::Internal(message) => PlanError::InternalError(message),
+            CatalogError::External(message) => PlanError::AnalysisError(message),
         }
     }
 }

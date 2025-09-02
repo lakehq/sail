@@ -1,7 +1,6 @@
 use std::sync::Arc;
 
-use datafusion::arrow::datatypes::{Fields, Schema, SchemaRef};
-use datafusion_common::{Column, DFSchemaRef, SchemaReference, TableReference};
+use datafusion_common::{Column, DFSchemaRef, TableReference};
 use sail_common::spec;
 
 use crate::error::{PlanError, PlanResult};
@@ -10,23 +9,6 @@ use crate::resolver::PlanResolver;
 use crate::utils::ItemTaker;
 
 impl PlanResolver<'_> {
-    pub(super) fn resolve_schema_reference(
-        &self,
-        name: &spec::ObjectName,
-    ) -> PlanResult<SchemaReference> {
-        let names = name.parts();
-        match names {
-            [a] => Ok(SchemaReference::Bare {
-                schema: Arc::from(a.as_ref()),
-            }),
-            [a, b] => Ok(SchemaReference::Full {
-                catalog: Arc::from(a.as_ref()),
-                schema: Arc::from(b.as_ref()),
-            }),
-            _ => Err(PlanError::invalid(format!("schema reference: {names:?}"))),
-        }
-    }
-
     pub(super) fn resolve_table_reference(
         &self,
         name: &spec::ObjectName,
@@ -47,33 +29,6 @@ impl PlanResolver<'_> {
             }),
             _ => Err(PlanError::invalid(format!("table reference: {names:?}"))),
         }
-    }
-
-    pub(super) async fn resolve_schema_projection<T: AsRef<str>>(
-        &self,
-        schema: SchemaRef,
-        columns: &[T],
-    ) -> PlanResult<SchemaRef> {
-        let fields = columns
-            .iter()
-            .map(|column| {
-                let column = column.as_ref();
-                let matches = schema
-                    .fields()
-                    .iter()
-                    .filter(|f| f.name().eq_ignore_ascii_case(column))
-                    .collect::<Vec<_>>();
-                if matches.is_empty() {
-                    Err(PlanError::invalid(format!("column {column} not found")))
-                } else {
-                    matches
-                        .one()
-                        .map_err(|_| PlanError::invalid(format!("ambiguous column {column}")))
-                        .cloned()
-                }
-            })
-            .collect::<PlanResult<Vec<_>>>()?;
-        Ok(SchemaRef::new(Schema::new(Fields::from(fields))))
     }
 
     pub(super) fn resolve_column_candidates(

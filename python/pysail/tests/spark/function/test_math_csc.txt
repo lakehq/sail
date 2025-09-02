@@ -38,9 +38,8 @@
 +-------------------+
 
 >>> df.select(sf.csc(sf.lit(0)).alias("csc")).show()
-+---+
-|csc|
-+---+
-|inf|
-+---+
->>> # Infinity in pyspark
++--------+
+|     csc|
++--------+
+|Infinity|
++--------+

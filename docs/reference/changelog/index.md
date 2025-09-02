@@ -5,6 +5,134 @@ next: false
 
 # Changelog
 
+## 0.3.3
+
+_August 14, 2025_
+
+- Fixed issues with physical planning to avoid performance degradation when querying Delta Lake tables ([#750](https://github.com/lakehq/sail/pull/750)).
+- Fixed issues with the `Catalog.getTable()` method in the Spark DataFrame API ([#752](https://github.com/lakehq/sail/pull/752)).
+- Added support for `NaN` values in `VALUES` ([#739](https://github.com/lakehq/sail/pull/739)).
+- Fixed issues with the `parquet.bloom_filter_on_write` configuration option not being respected ([#735](https://github.com/lakehq/sail/pull/735)).
+- Added support for the following SQL functions ([#670](https://github.com/lakehq/sail/pull/670) and [#725](https://github.com/lakehq/sail/pull/725)):
+  - `try_to_number`
+  - `convert_timezone`
+  - `make_timestamp_ltz`
+- Improved the following SQL functions ([#725](https://github.com/lakehq/sail/pull/725), [#730](https://github.com/lakehq/sail/pull/730), [#734](https://github.com/lakehq/sail/pull/734), [#743](https://github.com/lakehq/sail/pull/743), [#754](https://github.com/lakehq/sail/pull/754), and (#756)(https://github.com/lakehq/sail/pull/756)):
+  - `make_timestamp`
+  - `from_utc_timestamp`
+  - `to_utc_timestamp`
+  - `skewness`
+  - `kurtosis`
+  - `ln`
+  - `log`
+  - `log10`
+  - `log1p`
+  - `log2`
+  - `acos`
+  - `acosh`
+  - `asin`
+  - `asinh`
+  - `atan`
+  - `atan2`
+  - `atanh`
+  - `cbrt`
+  - `cos`
+  - `cosh`
+  - `cot`
+  - `csc`
+  - `degrees`
+  - `exp`
+  - `radians`
+  - `sec`
+  - `sin`
+  - `sinh`
+  - `sqrt`
+  - `tan`
+  - `tanh`
+  - `json_array_length`
+  - `map_contains_key`
+
+### Contributors
+
+Huge thanks to [@SparkApplicationMaster](https://github.com/SparkApplicationMaster) and [rafafrdz](https://github.com/rafafrdz) for the continued contributions!
+
+## 0.3.2
+
+_August 8, 2025_
+
+- Added support for reading and writing Delta Lake tables ([#578](https://github.com/lakehq/sail/pull/578), [#634](https://github.com/lakehq/sail/pull/634), [#677](https://github.com/lakehq/sail/pull/677), [#680](https://github.com/lakehq/sail/pull/680), [#716](https://github.com/lakehq/sail/issues/716), [#717](https://github.com/lakehq/sail/pull/717), and [#723](https://github.com/lakehq/sail/pull/723)).
+- Added support for Azure storage services and Google Cloud Storage (GCS), and improved support for S3 ([#616](https://github.com/lakehq/sail/pull/616) and [#706](https://github.com/lakehq/sail/pull/706)).
+- Added support for file listing cache and file statistics cache ([#709](https://github.com/lakehq/sail/pull/709) and [#712](https://github.com/lakehq/sail/pull/712)).
+- Added support for the following SQL functions and operators ([#529](https://github.com/lakehq/sail/pull/529), [#580](https://github.com/lakehq/sail/pull/580), [#633](https://github.com/lakehq/sail/pull/633), [#645](https://github.com/lakehq/sail/pull/645), [#638](https://github.com/lakehq/sail/pull/638), [#654](https://github.com/lakehq/sail/pull/654), [#539](https://github.com/lakehq/sail/pull/539), [#661](https://github.com/lakehq/sail/pull/661), [#629](https://github.com/lakehq/sail/pull/629), [#676](https://github.com/lakehq/sail/pull/676), [#672](https://github.com/lakehq/sail/pull/672), [#635](https://github.com/lakehq/sail/pull/635), [#683](https://github.com/lakehq/sail/pull/683), [#702](https://github.com/lakehq/sail/pull/702), [#698](https://github.com/lakehq/sail/pull/698), [#708](https://github.com/lakehq/sail/pull/708), [#713](https://github.com/lakehq/sail/pull/713), and [#719](https://github.com/lakehq/sail/issues/719)):
+  - `from_csv`
+  - `bround`
+  - `conv`
+  - `csc`
+  - `sec`
+  - `bit_count`
+  - `bit_get`
+  - `getbit`
+  - `shiftrightunsigned`
+  - `>>>`
+  - `~`
+  - `array_insert`
+  - `listagg`
+  - `string_agg`
+  - `parse_url`
+  - `url_decode`
+  - `url_encode`
+  - `bitmap_bit_position`
+  - `bitmap_bucket_number`
+  - `bitmap_count`
+  - `to_number`
+  - `to_utc_timestamp`
+  - `try_add`
+  - `try_divide`
+  - `try_multiply`
+  - `try_subtract`
+  - `monthname`
+  - `arrays_zip`
+  - `is_valid_utf8`
+  - `try_validate_utf8`
+  - `validate_utf8`
+  - `make_valid_utf8`
+- Added support for the `Column.try_cast()` method in the Spark DataFrame API ([#694](https://github.com/lakehq/sail/pull/694)).
+- Improved the following SQL functions ([#609](https://github.com/lakehq/sail/pull/609), [#613](https://github.com/lakehq/sail/pull/613), [#619](https://github.com/lakehq/sail/pull/619), [#621](https://github.com/lakehq/sail/pull/621), [#623](https://github.com/lakehq/sail/pull/623), [#617](https://github.com/lakehq/sail/pull/617), [#640](https://github.com/lakehq/sail/pull/640), [#644](https://github.com/lakehq/sail/pull/644), [#642](https://github.com/lakehq/sail/pull/642), [#643](https://github.com/lakehq/sail/pull/643), [#647](https://github.com/lakehq/sail/pull/647), [#660](https://github.com/lakehq/sail/pull/660), [#666](https://github.com/lakehq/sail/pull/666), [#674](https://github.com/lakehq/sail/pull/674), and [#701](https://github.com/lakehq/sail/pull/701)):
+  - `date_part`
+  - `datepart`
+  - `extract`
+  - `nullifzero`
+  - `zeroifnull`
+  - `array_contains`
+  - `array_position`
+  - `array_append`
+  - `array_prepend`
+  - `array_size`
+  - `cardinality`
+  - `size`
+  - `array_agg`
+  - `collect_set`
+  - `flatten`
+  - `arrays_overlap`
+  - `concat`
+  - `map`
+  - `ltrim`
+  - `rtrim`
+  - `trim`
+  - `avg`
+  - `to_unix_timestamp`
+- Fixed issues with the `DataFrame.na.drop()` and `DataFrame.dropna()` methods in the Spark DataFrame API ([#693](https://github.com/lakehq/sail/pull/693)).
+- Fixed issues with casting timestamp and interval values from and to numeric values ([#691](https://github.com/lakehq/sail/pull/691)).
+- Fixed incorrect eager execution behavior of the `CASE` expression ([#649](https://github.com/lakehq/sail/pull/649)).
+- Fixed issues with PySpark UDF and UDTF execution ([#652](https://github.com/lakehq/sail/pull/652) and [#658](https://github.com/lakehq/sail/pull/658)).
+- Fixed issues with expression naming ([#668](https://github.com/lakehq/sail/pull/668) and [#685](https://github.com/lakehq/sail/pull/685)).
+- Improved the implementation of SQL math functions ([#699](https://github.com/lakehq/sail/pull/699)).
+- Improved the internals of catalog management, data reader, and data writer ([#592](https://github.com/lakehq/sail/pull/592), [#615](https://github.com/lakehq/sail/pull/615), [#628](https://github.com/lakehq/sail/pull/628), [#632](https://github.com/lakehq/sail/pull/632), [#681](https://github.com/lakehq/sail/pull/681), [#688](https://github.com/lakehq/sail/pull/688), [#705](https://github.com/lakehq/sail/pull/705), and [#707](https://github.com/lakehq/sail/pull/707)).
+
+### Contributors
+
+Shoutout to [@SparkApplicationMaster](https://github.com/SparkApplicationMaster) for contributions across bug fixes, features, and enhancements! Huge thanks to [@rafafrdz](https://github.com/rafafrdz), [@davidlghellin](https://github.com/davidlghellin), [@anhvdq](https://github.com/anhvdq) (_first-time contributor_), and [@jamesfricker](https://github.com/jamesfricker) (_first-time contributor_), for helping to further extend our parity with Spark SQL functions!
+
 ## 0.3.1
 
 _July 7, 2025_
@@ -30,7 +158,6 @@ _July 7, 2025_
 ### Contributors
 
 Huge thanks to [@SparkApplicationMaster](https://github.com/SparkApplicationMaster) for the first contributions related to SQL functions!
-
 Huge thanks to [@davidlghellin](https://github.com/davidlghellin) for the continued contributions related to the Spark DataFrame API!
 
 ## 0.3.0

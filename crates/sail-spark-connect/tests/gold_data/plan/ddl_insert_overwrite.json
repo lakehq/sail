@@ -103,8 +103,12 @@
                 "ns2",
                 "tbl"
               ],
-              "columns": [],
-              "partitionSpec": [
+              "mode": {
+                "insertByPosition": {
+                  "overwrite": true
+                }
+              },
+              "partition": [
                 [
                   "p1",
                   {
@@ -116,9 +120,7 @@
                   }
                 ]
               ],
-              "replace": null,
-              "ifNotExists": true,
-              "overwrite": true
+              "ifNotExists": true
             },
             "planId": null
           }
@@ -171,8 +173,12 @@
                 "ns2",
                 "tbl"
               ],
-              "columns": [],
-              "partitionSpec": [
+              "mode": {
+                "insertByPosition": {
+                  "overwrite": true
+                }
+              },
+              "partition": [
                 [
                   "p1",
                   {
@@ -188,9 +194,7 @@
                   null
                 ]
               ],
-              "replace": null,
-              "ifNotExists": false,
-              "overwrite": true
+              "ifNotExists": false
             },
             "planId": null
           }
@@ -243,11 +247,16 @@
                 "ns2",
                 "tbl"
               ],
-              "columns": [
-                "a",
-                "b"
-              ],
-              "partitionSpec": [
+              "mode": {
+                "insertByColumns": {
+                  "columns": [
+                    "a",
+                    "b"
+                  ],
+                  "overwrite": true
+                }
+              },
+              "partition": [
                 [
                   "p1",
                   {
@@ -263,9 +272,7 @@
                   null
                 ]
               ],
-              "replace": null,
-              "ifNotExists": false,
-              "overwrite": true
+              "ifNotExists": false
             },
             "planId": null
           }
@@ -319,8 +326,12 @@
                 "ns2",
                 "tbl"
               ],
-              "columns": [],
-              "partitionSpec": [
+              "mode": {
+                "insertByPosition": {
+                  "overwrite": true
+                }
+              },
+              "partition": [
                 [
                   "p1",
                   {
@@ -336,9 +347,7 @@
                   null
                 ]
               ],
-              "replace": null,
-              "ifNotExists": true,
-              "overwrite": true
+              "ifNotExists": true
             },
             "planId": null
           }
@@ -391,14 +400,17 @@
                 "ns2",
                 "tbl"
               ],
-              "columns": [
-                "a",
-                "b"
-              ],
-              "partitionSpec": [],
-              "replace": null,
-              "ifNotExists": false,
-              "overwrite": true
+              "mode": {
+                "insertByColumns": {
+                  "columns": [
+                    "a",
+                    "b"
+                  ],
+                  "overwrite": true
+                }
+              },
+              "partition": [],
+              "ifNotExists": false
             },
             "planId": null
           }
@@ -451,11 +463,13 @@
                 "ns2",
                 "tbl"
               ],
-              "columns": [],
-              "partitionSpec": [],
-              "replace": null,
-              "ifNotExists": false,
-              "overwrite": true
+              "mode": {
+                "insertByName": {
+                  "overwrite": true
+                }
+              },
+              "partition": [],
+              "ifNotExists": false
             },
             "planId": null
           }
@@ -508,11 +522,13 @@
                 "ns2",
                 "tbl"
               ],
-              "columns": [],
-              "partitionSpec": [],
-              "replace": null,
-              "ifNotExists": false,
-              "overwrite": true
+              "mode": {
+                "insertByPosition": {
+                  "overwrite": true
+                }
+              },
+              "partition": [],
+              "ifNotExists": false
             },
             "planId": null
           }
@@ -565,14 +581,17 @@
                 "ns2",
                 "tbl"
               ],
-              "columns": [
-                "a",
-                "b"
-              ],
-              "partitionSpec": [],
-              "replace": null,
-              "ifNotExists": false,
-              "overwrite": true
+              "mode": {
+                "insertByColumns": {
+                  "columns": [
+                    "a",
+                    "b"
+                  ],
+                  "overwrite": true
+                }
+              },
+              "partition": [],
+              "ifNotExists": false
             },
             "planId": null
           }
@@ -625,11 +644,13 @@
                 "ns2",
                 "tbl"
               ],
-              "columns": [],
-              "partitionSpec": [],
-              "replace": null,
-              "ifNotExists": false,
-              "overwrite": true
+              "mode": {
+                "insertByName": {
+                  "overwrite": true
+                }
+              },
+              "partition": [],
+              "ifNotExists": false
             },
             "planId": null
           }
@@ -682,11 +703,13 @@
                 "ns2",
                 "tbl"
               ],
-              "columns": [],
-              "partitionSpec": [],
-              "replace": null,
-              "ifNotExists": false,
-              "overwrite": true
+              "mode": {
+                "insertByPosition": {
+                  "overwrite": true
+                }
+              },
+              "partition": [],
+              "ifNotExists": false
             },
             "planId": null
           }

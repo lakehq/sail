@@ -1,0 +1,22 @@
+coverage:
+  status:
+    patch:
+      default:
+        target: 0
+    project:
+      default:
+        only_pulls: true
+        paths:
+          - "crates/"
+        target: 0
+        informational: true
+
+codecov:
+  notify:
+    after_n_builds: 1
+
+comment:
+  layout: "header, files"
+
+ignore:
+  - "crates/sail-gold-test"

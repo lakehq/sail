@@ -283,7 +283,7 @@
         }
       },
       "output": {
-        "failure": "error in DataFusion: Error during planning: Internal error: Function 'btrim' failed to match any signature, errors: Error during planning: Function 'btrim' expects 2 arguments but received 1,Internal error: Expect TypeSignatureClass::Native(LogicalType(Native(String), String)) but received NativeType::Binary, DataType: Binary.\nThis was likely caused by a bug in DataFusion's code and we would welcome that you file an bug report in our issue tracker.\nThis was likely caused by a bug in DataFusion's code and we would welcome that you file an bug report in our issue tracker No function matches the given name and argument types 'btrim(Binary)'. You might need to add explicit type casts.\n\tCandidate functions:\n\tbtrim(Coercion(TypeSignatureClass::Native(LogicalType(Native(String), String))), Coercion(TypeSignatureClass::Native(LogicalType(Native(String), String))))\n\tbtrim(Coercion(TypeSignatureClass::Native(LogicalType(Native(String), String))))"
+        "failure": "error in DataFusion: Error during planning: Internal error: Function 'btrim' failed to match any signature, errors: Error during planning: Function 'btrim' expects 2 arguments but received 1,Internal error: Expect TypeSignatureClass::Native(LogicalType(Native(String), String)) but received NativeType::Binary, DataType: Binary.\nThis issue was likely caused by a bug in DataFusion's code. Please help us to resolve this by filing a bug report in our issue tracker: https://github.com/apache/datafusion/issues.\nThis issue was likely caused by a bug in DataFusion's code. Please help us to resolve this by filing a bug report in our issue tracker: https://github.com/apache/datafusion/issues No function matches the given name and argument types 'btrim(Binary)'. You might need to add explicit type casts.\n\tCandidate functions:\n\tbtrim(Coercion(TypeSignatureClass::Native(LogicalType(Native(String), String))), Coercion(TypeSignatureClass::Native(LogicalType(Native(String), String))))\n\tbtrim(Coercion(TypeSignatureClass::Native(LogicalType(Native(String), String))))"
       }
     },
     {
@@ -305,7 +305,7 @@
         }
       },
       "output": {
-        "failure": "error in DataFusion: Error during planning: Internal error: Function 'btrim' failed to match any signature, errors: Internal error: Expect TypeSignatureClass::Native(LogicalType(Native(String), String)) but received NativeType::Binary, DataType: Binary.\nThis was likely caused by a bug in DataFusion's code and we would welcome that you file an bug report in our issue tracker,Error during planning: Function 'btrim' expects 1 arguments but received 2.\nThis was likely caused by a bug in DataFusion's code and we would welcome that you file an bug report in our issue tracker No function matches the given name and argument types 'btrim(Binary, Binary)'. You might need to add explicit type casts.\n\tCandidate functions:\n\tbtrim(Coercion(TypeSignatureClass::Native(LogicalType(Native(String), String))), Coercion(TypeSignatureClass::Native(LogicalType(Native(String), String))))\n\tbtrim(Coercion(TypeSignatureClass::Native(LogicalType(Native(String), String))))"
+        "failure": "error in DataFusion: Error during planning: Internal error: Function 'btrim' failed to match any signature, errors: Internal error: Expect TypeSignatureClass::Native(LogicalType(Native(String), String)) but received NativeType::Binary, DataType: Binary.\nThis issue was likely caused by a bug in DataFusion's code. Please help us to resolve this by filing a bug report in our issue tracker: https://github.com/apache/datafusion/issues,Error during planning: Function 'btrim' expects 1 arguments but received 2.\nThis issue was likely caused by a bug in DataFusion's code. Please help us to resolve this by filing a bug report in our issue tracker: https://github.com/apache/datafusion/issues No function matches the given name and argument types 'btrim(Binary, Binary)'. You might need to add explicit type casts.\n\tCandidate functions:\n\tbtrim(Coercion(TypeSignatureClass::Native(LogicalType(Native(String), String))), Coercion(TypeSignatureClass::Native(LogicalType(Native(String), String))))\n\tbtrim(Coercion(TypeSignatureClass::Native(LogicalType(Native(String), String))))"
       }
     },
     {
@@ -1183,7 +1183,7 @@
         }
       },
       "output": {
-        "failure": "not supported: unknown function: is_valid_utf8"
+        "success": "ok"
       }
     },
     {
@@ -1205,7 +1205,7 @@
         }
       },
       "output": {
-        "failure": "not supported: unknown function: is_valid_utf8"
+        "success": "ok"
       }
     },
     {
@@ -1227,7 +1227,7 @@
         }
       },
       "output": {
-        "failure": "not supported: unknown function: is_valid_utf8"
+        "success": "ok"
       }
     },
     {
@@ -1249,7 +1249,7 @@
         }
       },
       "output": {
-        "failure": "not supported: unknown function: is_valid_utf8"
+        "success": "ok"
       }
     },
     {
@@ -1491,7 +1491,7 @@
         }
       },
       "output": {
-        "failure": "not implemented: position with 3 arguments is not supported yet"
+        "success": "ok"
       }
     },
     {
@@ -1689,7 +1689,7 @@
         }
       },
       "output": {
-        "failure": "not supported: unknown function: make_valid_utf8"
+        "success": "ok"
       }
     },
     {
@@ -1711,7 +1711,7 @@
         }
       },
       "output": {
-        "failure": "not supported: unknown function: make_valid_utf8"
+        "success": "ok"
       }
     },
     {
@@ -1733,7 +1733,7 @@
         }
       },
       "output": {
-        "failure": "not supported: unknown function: make_valid_utf8"
+        "success": "ok"
       }
     },
     {
@@ -1755,7 +1755,7 @@
         }
       },
       "output": {
-        "failure": "not supported: unknown function: make_valid_utf8"
+        "success": "ok"
       }
     },
     {
@@ -2305,7 +2305,7 @@
         }
       },
       "output": {
-        "failure": "not implemented: position with 3 arguments is not supported yet"
+        "success": "ok"
       }
     },
     {
@@ -2511,7 +2511,7 @@
         }
       },
       "output": {
-        "failure": "not implemented: function: regexp_instr"
+        "success": "ok"
       }
     },
     {
@@ -2533,7 +2533,7 @@
         }
       },
       "output": {
-        "failure": "not implemented: function: regexp_instr"
+        "success": "ok"
       }
     },
     {
@@ -2939,7 +2939,7 @@
         }
       },
       "output": {
-        "failure": "error in DataFusion: Error during planning: two values expected: [Literal(Utf8(\"oneAtwoBthreeC\"), None), Literal(Utf8(\"[ABC]\"), None), Negative(Literal(Int32(1), None))]"
+        "success": "ok"
       }
     },
     {
@@ -2965,7 +2965,7 @@
         }
       },
       "output": {
-        "failure": "error in DataFusion: Error during planning: two values expected: [Literal(Utf8(\"oneAtwoBthreeC\"), None), Literal(Utf8(\"[ABC]\"), None), Literal(Int32(2), None)]"
+        "success": "ok"
       }
     },
     {
@@ -3669,7 +3669,7 @@
         }
       },
       "output": {
-        "failure": "not implemented: function: to_number"
+        "success": "ok"
       }
     },
     {
@@ -3691,7 +3691,7 @@
         }
       },
       "output": {
-        "failure": "not implemented: function: to_number"
+        "success": "ok"
       }
     },
     {
@@ -3713,7 +3713,7 @@
         }
       },
       "output": {
-        "failure": "not implemented: function: to_number"
+        "success": "ok"
       }
     },
     {
@@ -3735,7 +3735,7 @@
         }
       },
       "output": {
-        "failure": "not implemented: function: to_number"
+        "success": "ok"
       }
     },
     {
@@ -3757,7 +3757,7 @@
         }
       },
       "output": {
-        "failure": "not implemented: function: to_number"
+        "success": "ok"
       }
     },
     {
@@ -4197,7 +4197,7 @@
         }
       },
       "output": {
-        "failure": "not implemented: function: try_to_number"
+        "success": "ok"
       }
     },
     {
@@ -4219,7 +4219,7 @@
         }
       },
       "output": {
-        "failure": "not implemented: function: try_to_number"
+        "success": "ok"
       }
     },
     {
@@ -4241,7 +4241,7 @@
         }
       },
       "output": {
-        "failure": "not implemented: function: try_to_number"
+        "success": "ok"
       }
     },
     {
@@ -4263,7 +4263,7 @@
         }
       },
       "output": {
-        "failure": "not implemented: function: try_to_number"
+        "success": "ok"
       }
     },
     {
@@ -4285,7 +4285,7 @@
         }
       },
       "output": {
-        "failure": "not implemented: function: try_to_number"
+        "success": "ok"
       }
     },
     {
@@ -4307,7 +4307,7 @@
         }
       },
       "output": {
-        "failure": "not supported: unknown function: try_validate_utf8"
+        "success": "ok"
       }
     },
     {
@@ -4329,7 +4329,7 @@
         }
       },
       "output": {
-        "failure": "not supported: unknown function: try_validate_utf8"
+        "success": "ok"
       }
     },
     {
@@ -4351,7 +4351,7 @@
         }
       },
       "output": {
-        "failure": "not supported: unknown function: try_validate_utf8"
+        "success": "ok"
       }
     },
     {
@@ -4373,7 +4373,7 @@
         }
       },
       "output": {
-        "failure": "not supported: unknown function: try_validate_utf8"
+        "success": "ok"
       }
     },
     {
@@ -4461,7 +4461,7 @@
         }
       },
       "output": {
-        "failure": "not supported: unknown function: validate_utf8"
+        "success": "ok"
       }
     },
     {
@@ -4483,7 +4483,7 @@
         }
       },
       "output": {
-        "failure": "not supported: unknown function: validate_utf8"
+        "success": "ok"
       }
     },
     {

@@ -6,12 +6,12 @@ use datafusion::sql::sqlparser::ast::NullTreatment;
 use datafusion_common::DFSchemaRef;
 use datafusion_expr::expr::{AggregateFunction, AggregateFunctionParams, WindowFunctionParams};
 use datafusion_expr::{
-    expr, AggregateUDF, BinaryExpr, Operator, ScalarUDF, ScalarUDFImpl, WindowFrame,
-    WindowFunctionDefinition, WindowUDF,
+    cast, expr, AggregateUDF, BinaryExpr, ExprSchemable, Operator, ScalarUDF, ScalarUDFImpl,
+    WindowFrame, WindowFunctionDefinition, WindowUDF,
 };
 
 use crate::config::PlanConfig;
-use crate::error::{PlanError, PlanResult};
+use crate::error::{IntoPlanResult, PlanError, PlanResult};
 use crate::utils::ItemTaker;
 
 pub struct FunctionContextInput<'a> {
@@ -38,9 +38,10 @@ pub(crate) type ScalarFunction =
 pub(crate) struct ScalarFunctionBuilder;
 
 impl ScalarFunctionBuilder {
-    pub fn nullary<F>(f: F) -> ScalarFunction
+    pub fn nullary<F, R>(f: F) -> ScalarFunction
     where
-        F: Fn() -> expr::Expr + Send + Sync + 'static,
+        F: Fn() -> R + Send + Sync + 'static,
+        R: IntoPlanResult<expr::Expr>,
     {
         Arc::new(
             move |ScalarFunctionInput {
@@ -48,26 +49,28 @@ impl ScalarFunctionBuilder {
                       function_context: _,
                   }| {
                 arguments.zero()?;
-                Ok(f())
+                f().into_plan_result()
             },
         )
     }
 
-    pub fn unary<F>(f: F) -> ScalarFunction
+    pub fn unary<F, R>(f: F) -> ScalarFunction
     where
-        F: Fn(expr::Expr) -> expr::Expr + Send + Sync + 'static,
+        F: Fn(expr::Expr) -> R + Send + Sync + 'static,
+        R: IntoPlanResult<expr::Expr>,
     {
         Arc::new(
             move |ScalarFunctionInput {
                       arguments,
                       function_context: _,
-                  }| Ok(f(arguments.one()?)),
+                  }| f(arguments.one()?).into_plan_result(),
         )
     }
 
-    pub fn binary<F>(f: F) -> ScalarFunction
+    pub fn binary<F, R>(f: F) -> ScalarFunction
     where
-        F: Fn(expr::Expr, expr::Expr) -> expr::Expr + Send + Sync + 'static,
+        F: Fn(expr::Expr, expr::Expr) -> R + Send + Sync + 'static,
+        R: IntoPlanResult<expr::Expr>,
     {
         Arc::new(
             move |ScalarFunctionInput {
@@ -75,14 +78,15 @@ impl ScalarFunctionBuilder {
                       function_context: _,
                   }| {
                 let (left, right) = arguments.two()?;
-                Ok(f(left, right))
+                f(left, right).into_plan_result()
             },
         )
     }
 
-    pub fn ternary<F>(f: F) -> ScalarFunction
+    pub fn ternary<F, R>(f: F) -> ScalarFunction
     where
-        F: Fn(expr::Expr, expr::Expr, expr::Expr) -> expr::Expr + Send + Sync + 'static,
+        F: Fn(expr::Expr, expr::Expr, expr::Expr) -> R + Send + Sync + 'static,
+        R: IntoPlanResult<expr::Expr>,
     {
         Arc::new(
             move |ScalarFunctionInput {
@@ -90,20 +94,21 @@ impl ScalarFunctionBuilder {
                       function_context: _,
                   }| {
                 let (first, second, third) = arguments.three()?;
-                Ok(f(first, second, third))
+                f(first, second, third).into_plan_result()
             },
         )
     }
 
-    pub fn var_arg<F>(f: F) -> ScalarFunction
+    pub fn var_arg<F, R>(f: F) -> ScalarFunction
     where
-        F: Fn(Vec<expr::Expr>) -> expr::Expr + Send + Sync + 'static,
+        F: Fn(Vec<expr::Expr>) -> R + Send + Sync + 'static,
+        R: IntoPlanResult<expr::Expr>,
     {
         Arc::new(
             move |ScalarFunctionInput {
                       arguments,
                       function_context: _,
-                  }| Ok(f(arguments)),
+                  }| f(arguments).into_plan_result(),
         )
     }
 
@@ -128,12 +133,7 @@ impl ScalarFunctionBuilder {
             move |ScalarFunctionInput {
                       arguments,
                       function_context: _,
-                  }| {
-                Ok(expr::Expr::Cast(expr::Cast {
-                    expr: Box::new(arguments.one()?),
-                    data_type: data_type.clone(),
-                }))
-            },
+                  }| { Ok(cast(arguments.one()?, data_type.clone())) },
         )
     }
 
@@ -141,20 +141,16 @@ impl ScalarFunctionBuilder {
     where
         F: ScalarUDFImpl + Send + Sync + 'static,
     {
-        let func = Arc::new(ScalarUDF::from(f));
+        let func = ScalarUDF::from(f);
         Arc::new(
             move |ScalarFunctionInput {
                       arguments,
                       function_context: _,
-                  }| {
-                Ok(expr::Expr::ScalarFunction(expr::ScalarFunction {
-                    func: func.clone(),
-                    args: arguments,
-                }))
-            },
+                  }| { Ok(func.call(arguments)) },
         )
     }
 
+    #[allow(dead_code)]
     pub fn scalar_udf<F>(f: F) -> ScalarFunction
     where
         F: Fn() -> Arc<ScalarUDF> + Send + Sync + 'static,
@@ -163,12 +159,7 @@ impl ScalarFunctionBuilder {
             move |ScalarFunctionInput {
                       arguments,
                       function_context: _,
-                  }| {
-                Ok(expr::Expr::ScalarFunction(expr::ScalarFunction {
-                    func: f(),
-                    args: arguments,
-                }))
-            },
+                  }| { Ok(f().call(arguments)) },
         )
     }
 
@@ -190,7 +181,7 @@ pub struct AggFunctionInput<'a> {
     pub distinct: bool,
     pub ignore_nulls: Option<bool>,
     pub filter: Option<Box<expr::Expr>>,
-    pub order_by: Option<Vec<expr::Sort>>,
+    pub order_by: Vec<expr::Sort>,
     pub function_context: FunctionContextInput<'a>,
 }
 
@@ -295,10 +286,10 @@ impl WinFunctionBuilder {
                 order_by,
                 window_frame,
                 ignore_nulls,
-                function_context: _function_context,
+                function_context,
             } = input;
             let null_treatment = get_null_treatment(ignore_nulls);
-            Ok(expr::Expr::WindowFunction(Box::new(expr::WindowFunction {
+            let win_func_expr = expr::Expr::WindowFunction(Box::new(expr::WindowFunction {
                 fun: WindowFunctionDefinition::WindowUDF(f()),
                 params: WindowFunctionParams {
                     args: arguments,
@@ -307,7 +298,11 @@ impl WinFunctionBuilder {
                     window_frame,
                     null_treatment,
                 },
-            })))
+            }));
+            Ok(match win_func_expr.get_type(function_context.schema)? {
+                DataType::UInt64 => cast(win_func_expr.clone(), DataType::Int32),
+                _ => win_func_expr,
+            })
         })
     }
 

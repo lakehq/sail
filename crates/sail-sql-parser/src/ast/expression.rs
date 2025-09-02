@@ -1033,19 +1033,8 @@ where
                     right: Box::new(r),
                 },
             ),
-            prefix(
-                17,
-                choice((
-                    Not::parser((), options).map(UnaryOperator::Not),
-                    operator::ExclamationMark::parser((), options).map(UnaryOperator::LogicalNot),
-                )),
-                |op, e, _| ExprFragment::UnaryOperator {
-                    op,
-                    expr: Box::new(e),
-                },
-            ),
             postfix(
-                16,
+                17,
                 any()
                     .map_with(|t, extra: &mut MapExtra<'a, '_, _, _>| (t, extra.span()))
                     .rewind()
@@ -1059,7 +1048,7 @@ where
             ),
             // The "postfix" predicates and "infix" predicates are allowed to have the same binding power.
             postfix(
-                15,
+                16,
                 ExprPostfixPredicate::parser((expr.clone(), query.clone()), options),
                 |e, op, _| ExprFragment::PostfixPredicate {
                     expr: Box::new(e),
@@ -1067,7 +1056,7 @@ where
                 },
             ),
             infix(
-                left(15),
+                left(16),
                 any()
                     .map_with(|t, extra: &mut MapExtra<'a, '_, _, _>| (t, extra.span()))
                     .rewind()
@@ -1078,6 +1067,21 @@ where
                     left: Box::new(l),
                     predicate: op,
                     right: Box::new(r),
+                },
+            ),
+            // According to the Spark documentation, the logical `NOT` operator has a
+            // higher precedence than certain predicates, but here we lower the precedence for
+            // `NOT` to match the actual Spark behavior and provide better user experience.
+            // The Spark documentation may be inconsistent with the actual Spark implementation.
+            prefix(
+                15,
+                choice((
+                    Not::parser((), options).map(UnaryOperator::Not),
+                    operator::ExclamationMark::parser((), options).map(UnaryOperator::LogicalNot),
+                )),
+                |op, e, _| ExprFragment::UnaryOperator {
+                    op,
+                    expr: Box::new(e),
                 },
             ),
             infix(

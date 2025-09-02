@@ -1,0 +1,96 @@
+>>> from pyspark.sql import functions as sf
+
+>>> spark.range(1).select(
+...     sf.try_multiply(sf.make_interval(days=sf.lit(1)), sf.lit(2)).alias("result")
+... ).show(truncate=False)
++------+
+|result|
++------+
+|2 days|
++------+
+
+>>> spark.range(1).select(
+...     sf.try_multiply(sf.make_interval(hours=sf.lit(10)), sf.lit(4)).alias("result")
+... ).show(truncate=False)
++--------+
+|result  |
++--------+
+|40 hours|
++--------+
+
+>>> spark.range(1).select(
+...     sf.try_multiply(sf.make_interval(days=sf.lit(3), hours=sf.lit(12)), sf.lit(3)).alias("result")
+... ).show(truncate=False)
++---------------+
+|result         |
++---------------+
+|9 days 36 hours|
++---------------+
+
+>>> spark.range(1).select(
+...     sf.try_multiply(sf.make_interval(secs=sf.lit(10.5)), sf.lit(2)).alias("result")
+... ).show(truncate=False)
++----------+
+|result    |
++----------+
+|21 seconds|
++----------+
+
+>>> spark.range(1).select(
+...     sf.try_multiply(sf.make_interval(weeks=sf.lit(1)), sf.lit(2)).alias("result")
+... ).show(truncate=False)
++-------+
+|result |
++-------+
+|14 days|
++-------+
+
+>>> spark.range(1).select(
+...     sf.try_multiply(sf.make_interval(days=sf.lit(1)), sf.lit(None).cast("int")).alias("result")
+... ).show(truncate=False)
++------+
+|result|
++------+
+|NULL  |
++------+
+
+>>> spark.range(1).select(
+...     sf.try_multiply(sf.make_interval(days=sf.lit(1)), sf.lit(0)).alias("result")
+... ).show(truncate=False)
++---------+
+|result   |
++---------+
+|0 seconds|
++---------+
+
+>>> spark.range(1).select(
+...     sf.try_multiply(sf.make_interval(days=sf.lit(-1)), sf.lit(2)).alias("result")
+... ).show(truncate=False)
++-------+
+|result |
++-------+
+|-2 days|
++-------+
+
+>>> spark.range(1).select(
+...     sf.try_multiply(sf.make_interval(days=sf.lit(1), mins=sf.lit(90)), sf.lit(2)).alias("result")
+... ).show(truncate=False)
++--------------+
+|result        |
++--------------+
+|2 days 3 hours|
++--------------+
+
+>>> spark.sql("SELECT try_multiply(make_ym_interval(1, 6), 2) AS result").show(truncate=False)
++----------------------------+
+|result                      |
++----------------------------+
+|INTERVAL '3-0' YEAR TO MONTH|
++----------------------------+
+
+>>> spark.range(1).selectExpr("try_multiply(make_ym_interval(1, 6), 2) AS result").show(truncate=False)
++----------------------------+
+|result                      |
++----------------------------+
+|INTERVAL '3-0' YEAR TO MONTH|
++----------------------------+

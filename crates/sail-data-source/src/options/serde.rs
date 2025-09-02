@@ -9,6 +9,18 @@ where
     Ok(Some(value))
 }
 
+pub fn deserialize_non_empty_string<'de, D>(deserializer: D) -> Result<Option<String>, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    let value = String::deserialize(deserializer)?;
+    if value.is_empty() {
+        Ok(None)
+    } else {
+        Ok(Some(value))
+    }
+}
+
 pub fn deserialize_char<'de, D>(deserializer: D) -> Result<Option<char>, D::Error>
 where
     D: serde::Deserializer<'de>,
@@ -60,6 +72,24 @@ where
     Ok(Some(value))
 }
 
+pub fn deserialize_non_zero_usize<'de, D>(deserializer: D) -> Result<Option<usize>, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    let value = String::deserialize(deserializer)?;
+    if value.is_empty() {
+        return Ok(None);
+    }
+    let value = value
+        .parse()
+        .map_err(|e| Error::custom(format!("invalid usize value: {e}")))?;
+    if value == 0 {
+        Ok(None)
+    } else {
+        Ok(Some(value))
+    }
+}
+
 pub fn deserialize_f64<'de, D>(deserializer: D) -> Result<Option<f64>, D::Error>
 where
     D: serde::Deserializer<'de>,
@@ -79,5 +109,16 @@ where
     let value = value
         .parse()
         .map_err(|e| Error::custom(format!("invalid u64 value: {e}")))?;
+    Ok(Some(value))
+}
+
+pub fn deserialize_u16<'de, D>(deserializer: D) -> Result<Option<u16>, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    let value = String::deserialize(deserializer)?;
+    let value = value
+        .parse()
+        .map_err(|e| Error::custom(format!("invalid u16 value: {e}")))?;
     Ok(Some(value))
 }

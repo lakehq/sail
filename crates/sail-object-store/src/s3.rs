@@ -108,7 +108,6 @@ pub async fn get_s3_object_store(url: &Url) -> object_store::Result<AmazonS3> {
     let config = DEFAULT_AWS_CONFIG
         .get_or_init(|| aws_config::defaults(BehaviorVersion::latest()).load())
         .await;
-    debug!("Using AWS config: {config:#?}");
 
     if let Some(provider) = config.credentials_provider() {
         let cache = config
@@ -159,7 +158,6 @@ pub fn parse_s3_url(
     let first_path_segment = url.path_segments().into_iter().flatten().next();
     debug!("Parsing S3 url: {url} scheme: {scheme} host: {host} first_path_segment: {first_path_segment:?}");
 
-    // TODO: S3 Express support
     match scheme {
         "s3" | "s3a" => {
             builder = builder.with_bucket_name(host);

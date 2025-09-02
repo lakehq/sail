@@ -12,7 +12,7 @@ use datafusion::functions_nested::string::array_to_string;
 use datafusion::sql::sqlparser::ast::NullTreatment;
 use datafusion_common::ScalarValue;
 use datafusion_expr::expr::{AggregateFunction, AggregateFunctionParams};
-use datafusion_expr::{expr, lit, when, AggregateUDF, ExprSchemable};
+use datafusion_expr::{cast, expr, lit, when, AggregateUDF, ExprSchemable};
 use lazy_static::lazy_static;
 
 use crate::error::{PlanError, PlanResult};
@@ -63,6 +63,29 @@ fn get_arguments_and_null_treatment(
             "first/last value requires 1 or 2 arguments",
         ))
     }
+}
+
+fn avg(input: AggFunctionInput) -> PlanResult<expr::Expr> {
+    let (args, null_treatment) =
+        get_arguments_and_null_treatment(input.arguments, input.ignore_nulls)?;
+    if args
+        .first()
+        .map(|arg| arg.get_type(input.function_context.schema))
+        .transpose()?
+        == Some(DataType::Null)
+    {
+        return Ok(lit(ScalarValue::Null));
+    }
+    Ok(expr::Expr::AggregateFunction(AggregateFunction {
+        func: average::avg_udaf(),
+        params: AggregateFunctionParams {
+            args,
+            distinct: input.distinct,
+            filter: input.filter,
+            order_by: input.order_by,
+            null_treatment,
+        },
+    }))
 }
 
 fn first_value(input: AggFunctionInput) -> PlanResult<expr::Expr> {
@@ -265,7 +288,7 @@ fn listagg(input: AggFunctionInput) -> PlanResult<expr::Expr> {
             args: vec![agg_col.clone()],
             distinct: input.distinct,
             order_by: if input.distinct {
-                Some(vec![agg_col.clone().sort(true, true)])
+                vec![agg_col.clone().sort(true, true)]
             } else {
                 input.order_by
             },
@@ -293,6 +316,22 @@ fn listagg(input: AggFunctionInput) -> PlanResult<expr::Expr> {
         .end()?)
 }
 
+fn median(input: AggFunctionInput) -> PlanResult<expr::Expr> {
+    Ok(cast(
+        expr::Expr::AggregateFunction(AggregateFunction {
+            func: median::median_udaf(),
+            params: AggregateFunctionParams {
+                args: input.arguments.clone(),
+                distinct: input.distinct,
+                order_by: input.order_by,
+                filter: input.filter,
+                null_treatment: get_null_treatment(input.ignore_nulls),
+            },
+        }),
+        DataType::Float64,
+    ))
+}
+
 fn list_built_in_aggregate_functions() -> Vec<(&'static str, AggFunction)> {
     use crate::function::common::AggFunctionBuilder as F;
 
@@ -308,7 +347,7 @@ fn list_built_in_aggregate_functions() -> Vec<(&'static str, AggFunction)> {
             F::default(approx_percentile_cont::approx_percentile_cont_udaf),
         ),
         ("array_agg", F::custom(array_agg_compacted)),
-        ("avg", F::default(average::avg_udaf)),
+        ("avg", F::custom(avg)),
         ("bit_and", F::default(bit_and_or_xor::bit_and_udaf)),
         ("bit_or", F::default(bit_and_or_xor::bit_or_udaf)),
         ("bit_xor", F::default(bit_and_or_xor::bit_xor_udaf)),
@@ -339,7 +378,7 @@ fn list_built_in_aggregate_functions() -> Vec<(&'static str, AggFunction)> {
         ("max", F::default(min_max::max_udaf)),
         ("max_by", F::custom(max_by)),
         ("mean", F::default(average::avg_udaf)),
-        ("median", F::default(median::median_udaf)),
+        ("median", F::custom(median)),
         ("min", F::default(min_max::min_udaf)),
         ("min_by", F::custom(min_by)),
         ("mode", F::custom(mode)),

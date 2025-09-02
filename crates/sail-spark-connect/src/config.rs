@@ -2,19 +2,19 @@ use std::collections::HashMap;
 use std::sync::Arc;
 
 use sail_plan::config::{DefaultTimestampType, PlanConfig};
-use sail_plan::formatter::DefaultPlanFormatter;
+use sail_plan::formatter::SparkPlanFormatter;
 use sail_python_udf::config::PySparkUdfConfig;
 
 use crate::error::{SparkError, SparkResult};
 use crate::spark::config::{
     SPARK_CONFIG, SPARK_SQL_ANSI_ENABLED, SPARK_SQL_EXECUTION_ARROW_MAX_RECORDS_PER_BATCH,
     SPARK_SQL_EXECUTION_ARROW_USE_LARGE_VAR_TYPES,
-    SPARK_SQL_EXECUTION_PANDAS_CONVERT_TO_ARROW_ARRAY_SAFELY, SPARK_SQL_GLOBAL_TEMP_DATABASE,
+    SPARK_SQL_EXECUTION_PANDAS_CONVERT_TO_ARROW_ARRAY_SAFELY,
     SPARK_SQL_LEGACY_EXECUTION_PANDAS_GROUPED_MAP_ASSIGN_COLUMNS_BY_NAME,
     SPARK_SQL_SESSION_TIME_ZONE, SPARK_SQL_SOURCES_DEFAULT, SPARK_SQL_TIMESTAMP_TYPE,
     SPARK_SQL_WAREHOUSE_DIR,
 };
-use crate::spark::connect as sc;
+use crate::spark::connect;
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash, PartialOrd)]
 pub struct ConfigKeyValue {
@@ -22,8 +22,8 @@ pub struct ConfigKeyValue {
     pub value: Option<String>,
 }
 
-impl From<sc::KeyValue> for ConfigKeyValue {
-    fn from(kv: sc::KeyValue) -> Self {
+impl From<connect::KeyValue> for ConfigKeyValue {
+    fn from(kv: connect::KeyValue) -> Self {
         Self {
             key: kv.key,
             value: kv.value,
@@ -31,7 +31,7 @@ impl From<sc::KeyValue> for ConfigKeyValue {
     }
 }
 
-impl From<ConfigKeyValue> for sc::KeyValue {
+impl From<ConfigKeyValue> for connect::KeyValue {
     fn from(kv: ConfigKeyValue) -> Self {
         Self {
             key: kv.key,
@@ -190,15 +190,11 @@ impl TryFrom<&SparkRuntimeConfig> for PlanConfig {
             .get(SPARK_SQL_SOURCES_DEFAULT)?
             .map(|x| x.to_string())
         {
-            output.default_bounded_table_file_format = value;
+            output.default_table_file_format = value;
         }
 
         if let Some(value) = config.get(SPARK_SQL_WAREHOUSE_DIR)? {
             output.default_warehouse_directory = value.to_string();
-        }
-
-        if let Some(value) = config.get(SPARK_SQL_GLOBAL_TEMP_DATABASE)? {
-            output.global_temp_database = value.to_string();
         }
 
         if let Some(value) = config.get(SPARK_SQL_TIMESTAMP_TYPE)? {
@@ -222,7 +218,7 @@ impl TryFrom<&SparkRuntimeConfig> for PlanConfig {
             output.ansi_mode = value;
         }
 
-        output.plan_formatter = Arc::new(DefaultPlanFormatter);
+        output.plan_formatter = Arc::new(SparkPlanFormatter);
         output.pyspark_udf_config = Arc::new(PySparkUdfConfig::try_from(config)?);
 
         Ok(output)

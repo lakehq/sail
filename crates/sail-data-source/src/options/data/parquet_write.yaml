@@ -104,7 +104,7 @@
     Defaults to the Sail configuration option `parquet.column_index_truncate_length`.
   supported: true
   rust_type: usize
-  rust_deserialize_with: crate::options::serde::deserialize_usize
+  rust_deserialize_with: crate::options::serde::deserialize_non_zero_usize
 
 - key: statistics_truncate_length
   aliases:
@@ -115,7 +115,7 @@
     Defaults to the Sail configuration option `parquet.statistics_truncate_length`.
   supported: true
   rust_type: usize
-  rust_deserialize_with: crate::options::serde::deserialize_usize
+  rust_deserialize_with: crate::options::serde::deserialize_non_zero_usize
 
 - key: data_page_row_count_limit
   aliases:
@@ -138,6 +138,7 @@
     the encoding for each column to achieve good performance.
     Defaults to the Sail configuration option `parquet.encoding`.
   supported: true
+  rust_deserialize_with: crate::options::serde::deserialize_non_empty_string
 
 - key: bloom_filter_on_write
   aliases:

@@ -139,21 +139,22 @@ jobs:
     strategy:
       matrix:
         platform:
-          - runner: ubuntu-latest
+          - runner: ubuntu-24.04-x64-8-core
             target: x86_64
             os: linux
-          - runner: ubuntu-latest
+          # The x64 runner is used here since Maturin performs cross-compilation.
+          - runner: ubuntu-24.04-x64-8-core
             target: aarch64
             os: linux
-          - runner: windows-latest
-            target: x64
-            os: windows
           - runner: macos-13
             target: x86_64
             os: macos
           - runner: macos-14
             target: aarch64
             os: macos
+          - runner: windows-2022
+            target: x64
+            os: windows
     steps:
       - uses: actions/checkout@v4
 
@@ -240,13 +241,11 @@ jobs:
     strategy:
       matrix:
         platform:
-          - runner: ubuntu-latest
-          # FIXME: sdist installation becomes slow on `ubuntu-24.04-arm`.
-          #   We have skipped the ARM runner for now.
-          #   We should investigate the issue.
+          - runner: ubuntu-24.04-x64-8-core
+          - runner: ubuntu-24.04-arm-8-core
           - runner: macos-13
           - runner: macos-14
-          - runner: windows-latest
+          - runner: windows-2022
     needs:
       - setup
       - build-sdist
@@ -277,7 +276,8 @@ jobs:
         # We do not have this issue when building wheels since the temporary directory
         # in that case is much shorter than the temporary directory created by pip.
         run: |
-          if [[ "${TEST_SDIST_RUNS_ON}" == "windows-latest" ]]; then
+          if [[ "${TEST_SDIST_RUNS_ON}" == windows-* ]]; then
+            echo 'Setting temporary directory to a shorter path on Windows...'
             mkdir -p 'C:\Temp'
             export TEMP='C:\Temp'
           fi
@@ -301,11 +301,11 @@ jobs:
     strategy:
       matrix:
         platform:
-          - runner: ubuntu-latest
+          - runner: ubuntu-24.04
           - runner: ubuntu-24.04-arm
           - runner: macos-13
           - runner: macos-14
-          - runner: windows-latest
+          - runner: windows-2022
     needs:
       - setup
       - build-wheel

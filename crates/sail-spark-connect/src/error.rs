@@ -7,6 +7,7 @@ use datafusion::arrow::error::ArrowError;
 use datafusion::common::DataFusionError;
 use log::error;
 use prost::{DecodeError, UnknownEnumValue};
+use sail_cache::error::CacheError;
 use sail_common::error::CommonError;
 use sail_common_datafusion::error::CommonErrorCause;
 use sail_execution::error::ExecutionError;
@@ -125,6 +126,17 @@ impl From<ExecutionError> for SparkError {
     }
 }
 
+impl From<CacheError> for SparkError {
+    fn from(error: CacheError) -> Self {
+        match error {
+            CacheError::MissingArgument(message) => SparkError::MissingArgument(message),
+            CacheError::InvalidArgument(message) => SparkError::InvalidArgument(message),
+            CacheError::NotSupported(message) => SparkError::NotSupported(message),
+            CacheError::InternalError(message) => SparkError::InternalError(message),
+        }
+    }
+}
+
 impl<T> From<PoisonError<T>> for SparkError {
     fn from(error: PoisonError<T>) -> Self {
         SparkError::InternalError(error.to_string())
@@ -186,8 +198,9 @@ where
     }
 }
 
+#[derive(Debug, Clone)]
 #[allow(clippy::enum_variant_names)]
-enum SparkThrowable {
+pub(crate) enum SparkThrowable {
     ParseException(String),
     AnalysisException(String),
     #[allow(dead_code)]
@@ -209,7 +222,7 @@ enum SparkThrowable {
 }
 
 impl SparkThrowable {
-    fn message(&self) -> &str {
+    pub fn message(&self) -> &str {
         match self {
             SparkThrowable::ParseException(message)
             | SparkThrowable::AnalysisException(message)
@@ -227,7 +240,7 @@ impl SparkThrowable {
         }
     }
 
-    fn class_name(&self) -> &'static str {
+    pub fn class_name(&self) -> &'static str {
         match self {
             SparkThrowable::ParseException(_) => {
                 "org.apache.spark.sql.catalyst.parser.ParseException"
