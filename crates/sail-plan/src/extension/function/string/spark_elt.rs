@@ -4,7 +4,7 @@ use std::sync::Arc;
 use arrow::array::{Array, ArrayRef, Int32Array, Int64Array, StringArray, StringBuilder};
 use arrow::compute::cast;
 use arrow::datatypes::DataType;
-use arrow::datatypes::DataType::{Int32, Int64, Utf8, Utf8View};
+use arrow::datatypes::DataType::{Int32, Int64, Utf8};
 use datafusion_common::{exec_err, DataFusionError, Result};
 use datafusion_expr::{ColumnarValue, ScalarFunctionArgs, ScalarUDFImpl, Signature};
 use datafusion_expr_common::signature::Volatility::Immutable;
@@ -131,7 +131,7 @@ fn elt(args: &[ArrayRef]) -> Result<ArrayRef, DataFusionError> {
         }
     }
 
-    Ok(cast(&(Arc::new(builder.finish()) as ArrayRef), &Utf8View)?)
+    Ok(cast(&(Arc::new(builder.finish()) as ArrayRef), &Utf8)?)
 }
 
 #[cfg(test)]
@@ -183,8 +183,8 @@ mod tests {
         let out = run_elt_arrays(vec![idx, v1, v2, v3])?;
         let out = out
             .as_any()
-            .downcast_ref::<StringViewArray>()
-            .ok_or_else(|| DataFusionError::Internal("expected Utf8View".into()))?;
+            .downcast_ref::<StringArray>()
+            .ok_or_else(|| DataFusionError::Internal("expected Utf8".into()))?;
         assert_eq!(out.len(), 6);
         assert_eq!(out.value(0), "a1");
         assert_eq!(out.value(1), "b2");
@@ -204,8 +204,8 @@ mod tests {
         let out = run_elt_arrays(vec![idx, v1, v2])?;
         let out = out
             .as_any()
-            .downcast_ref::<StringViewArray>()
-            .ok_or_else(|| DataFusionError::Internal("expected Utf8View".into()))?;
+            .downcast_ref::<StringArray>()
+            .ok_or_else(|| DataFusionError::Internal("expected Utf8".into()))?;
         assert_eq!(out.len(), 3);
         assert_eq!(out.value(0), "100");
         assert_eq!(out.value(1), "20");
@@ -222,8 +222,8 @@ mod tests {
         let out = run_elt_arrays(vec![idx, v1, v2])?;
         let out = out
             .as_any()
-            .downcast_ref::<StringViewArray>()
-            .ok_or_else(|| DataFusionError::Internal("expected Utf8View".into()))?;
+            .downcast_ref::<StringArray>()
+            .ok_or_else(|| DataFusionError::Internal("expected Utf8".into()))?;
         assert!(out.is_null(0));
         assert!(out.is_null(1));
         assert!(out.is_null(2));
@@ -258,7 +258,7 @@ mod tests {
         let v2 = Arc::new(StringArray::from(vec![Some("java")]));
 
         let out = run_elt_arrays(vec![idx, v1, v2])?;
-        assert_eq!(out.data_type(), &Utf8View);
+        assert_eq!(out.data_type(), &Utf8);
         Ok(())
     }
 }
