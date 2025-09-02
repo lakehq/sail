@@ -60,7 +60,6 @@ fn elt(args: &[ArrayRef]) -> Result<ArrayRef, DataFusionError> {
     let num_rows = args[0].len();
     let k = args.len() - 1;
 
-    // casteamos valores siempre a Utf8 (para devolver string)
     let mut vals: Vec<Arc<StringArray>> = Vec::with_capacity(k);
     for (j, a) in args.iter().enumerate().skip(1) {
         if a.len() != num_rows {
@@ -80,14 +79,16 @@ fn elt(args: &[ArrayRef]) -> Result<ArrayRef, DataFusionError> {
         vals.push(Arc::new(sa));
     }
 
-    // salida siempre string
     let mut b = StringBuilder::new();
 
     for row in 0..num_rows {
-        // obtenemos índice según el tipo
         let n_opt: Option<i64> = match args[0].data_type() {
             Int32 => {
-                let arr = args[0].as_any().downcast_ref::<Int32Array>().unwrap();
+                let arr = args[0]
+                    .as_any()
+                    .downcast_ref::<Int32Array>()
+                    .ok_or_else(|| DataFusionError::Internal("downcast Int32 failed".into()))?;
+
                 if arr.is_null(row) {
                     None
                 } else {
@@ -95,7 +96,10 @@ fn elt(args: &[ArrayRef]) -> Result<ArrayRef, DataFusionError> {
                 }
             }
             Int64 => {
-                let arr = args[0].as_any().downcast_ref::<Int64Array>().unwrap();
+                let arr = args[0]
+                    .as_any()
+                    .downcast_ref::<Int64Array>()
+                    .ok_or_else(|| DataFusionError::Internal("downcast Int64 failed".into()))?;
                 if arr.is_null(row) {
                     None
                 } else {
@@ -135,6 +139,7 @@ fn elt(args: &[ArrayRef]) -> Result<ArrayRef, DataFusionError> {
 #[cfg(test)]
 mod tests {
     use arrow::array::StringViewArray;
+    use datafusion_common::Result;
 
     use super::*;
 
@@ -143,7 +148,7 @@ mod tests {
     }
 
     #[test]
-    fn elt_utf8_basic() {
+    fn elt_utf8_basic() -> Result<()> {
         let idx = Arc::new(Int32Array::from(vec![
             Some(1),
             Some(2),
@@ -177,9 +182,11 @@ mod tests {
             Some("c6"),
         ]));
 
-        let out = run_elt_arrays(vec![idx, v1, v2, v3]).unwrap();
-
-        let out = out.as_any().downcast_ref::<StringViewArray>().unwrap();
+        let out = run_elt_arrays(vec![idx, v1, v2, v3])?;
+        let out = out
+            .as_any()
+            .downcast_ref::<StringViewArray>()
+            .ok_or_else(|| DataFusionError::Internal("expected Utf8View".into()))?;
         assert_eq!(out.len(), 6);
         assert_eq!(out.value(0), "a1");
         assert_eq!(out.value(1), "b2");
@@ -187,60 +194,73 @@ mod tests {
         assert!(out.is_null(3));
         assert!(out.is_null(4));
         assert!(out.is_null(5));
+        Ok(())
     }
 
     #[test]
-    fn elt_int64_basic() {
+    fn elt_int64_basic() -> Result<()> {
         let idx = Arc::new(Int32Array::from(vec![Some(2), Some(1), Some(2)]));
         let v1 = Arc::new(Int64Array::from(vec![Some(10), Some(20), Some(30)]));
         let v2 = Arc::new(Int64Array::from(vec![Some(100), None, Some(300)]));
 
-        let out = run_elt_arrays(vec![idx, v1, v2]).unwrap();
+        let out = run_elt_arrays(vec![idx, v1, v2])?;
         let out = out
             .as_any()
             .downcast_ref::<StringViewArray>()
-            .expect("Utf8View expected");
+            .ok_or_else(|| DataFusionError::Internal("expected Utf8View".into()))?;
         assert_eq!(out.len(), 3);
         assert_eq!(out.value(0), "100");
         assert_eq!(out.value(1), "20");
         assert_eq!(out.value(2), "300");
+        Ok(())
     }
 
     #[test]
-    fn elt_out_of_range_all_null() {
+    fn elt_out_of_range_all_null() -> Result<()> {
         let idx = Arc::new(Int32Array::from(vec![Some(5), Some(-1), Some(0)]));
         let v1 = Arc::new(StringArray::from(vec![Some("x"), Some("y"), Some("z")]));
         let v2 = Arc::new(StringArray::from(vec![Some("a"), Some("b"), Some("c")]));
 
-        let out = run_elt_arrays(vec![idx, v1, v2]).unwrap();
-
-        let out = out.as_any().downcast_ref::<StringViewArray>().unwrap();
+        let out = run_elt_arrays(vec![idx, v1, v2])?;
+        let out = out
+            .as_any()
+            .downcast_ref::<StringViewArray>()
+            .ok_or_else(|| DataFusionError::Internal("expected Utf8View".into()))?;
         assert!(out.is_null(0));
         assert!(out.is_null(1));
         assert!(out.is_null(2));
+        Ok(())
     }
 
     #[test]
-    fn elt_len_mismatch_error() {
+    fn elt_len_mismatch_error() -> Result<()> {
         let idx = Arc::new(Int32Array::from(vec![Some(1), Some(2), Some(1)]));
         let v1 = Arc::new(StringArray::from(vec![Some("a"), Some("b"), Some("c")]));
         let v2 = Arc::new(StringArray::from(vec![Some("x"), Some("y")]));
 
-        let err = run_elt_arrays(vec![idx, v1, v2]).unwrap_err();
+        let res = run_elt_arrays(vec![idx, v1, v2]);
+        let msg = match res {
+            Ok(_) => {
+                // fallar el test sin `panic!`
+                return Err(DataFusionError::Internal(
+                    "expected error due to length mismatch".into(),
+                ));
+            }
+            Err(e) => e.to_string(),
+        };
 
-        let msg = format!("{err}");
         assert!(msg.contains("all arguments must have the same length"));
+        Ok(())
     }
 
     #[test]
-    fn elt_utf8_returns_utf8view() {
-        // this values fails in SELECT elt(1::int, 'scala', 'java')
+    fn elt_utf8_returns_utf8view() -> Result<()> {
         let idx = Arc::new(Int32Array::from(vec![Some(1)]));
         let v1 = Arc::new(StringArray::from(vec![Some("scala")]));
         let v2 = Arc::new(StringArray::from(vec![Some("java")]));
 
-        let out = run_elt_arrays(vec![idx, v1, v2]).unwrap();
-
+        let out = run_elt_arrays(vec![idx, v1, v2])?;
         assert_eq!(out.data_type(), &Utf8View);
+        Ok(())
     }
 }
