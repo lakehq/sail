@@ -1,15 +1,16 @@
-use arrow::array::{ArrayRef, Int64Array, Int64Builder, StringArray, StringBuilder, Array, Int32Array, Int32Builder};
-use arrow::datatypes::{DataType};
-use arrow::datatypes::DataType::{Utf8,Int32,Int64};
+use arrow::array::{
+    Array, ArrayRef, Int32Array, Int32Builder, Int64Array, Int64Builder, StringArray, StringBuilder,
+};
+use arrow::datatypes::DataType;
+use arrow::datatypes::DataType::{Int32, Int64, LargeUtf8, Utf8, Utf8View};
 use datafusion_common::{exec_err, DataFusionError, Result};
 use datafusion_expr::{ColumnarValue, ScalarFunctionArgs, ScalarUDFImpl, Signature};
 use datafusion_expr_common::signature::Volatility::Immutable;
 use std::any::Any;
 use std::sync::Arc;
 
-use arrow::compute::cast;
-use arrow::datatypes::DataType::{ Utf8View };
 use crate::extension::function::functions_nested_utils::make_scalar_function;
+use arrow::compute::cast;
 
 #[derive(Debug, PartialEq, Eq, Hash)]
 pub struct SparkElt {
@@ -17,32 +18,83 @@ pub struct SparkElt {
 }
 
 impl Default for SparkElt {
-    fn default() -> Self { SparkElt::new() }
+    fn default() -> Self {
+        SparkElt::new()
+    }
 }
 impl SparkElt {
     pub fn new() -> Self {
-        Self { signature: Signature::variadic_any(Immutable) }
+        Self {
+            signature: Signature::variadic_any(Immutable),
+        }
     }
 }
 
 impl ScalarUDFImpl for SparkElt {
-    fn as_any(&self) -> &dyn Any { self }
-    fn name(&self) -> &str { "elt" }
-    fn signature(&self) -> &Signature { &self.signature }
+    fn as_any(&self) -> &dyn Any {
+        self
+    }
+    fn name(&self) -> &str {
+        "elt"
+    }
+    fn signature(&self) -> &Signature {
+        &self.signature
+    }
 
     fn return_type(&self, arg_types: &[DataType]) -> Result<DataType> {
         if arg_types.len() < 2 {
             return exec_err!("elt expects at least 2 arguments: index, value1");
         }
-        Ok(match &arg_types[1] {
-          Utf8 => Utf8View,
-            other => other.clone(),
-        })
+        Ok(Utf8)
     }
 
     fn invoke_with_args(&self, args: ScalarFunctionArgs) -> Result<ColumnarValue> {
         make_scalar_function(elt)(&args.args)
     }
+}
+
+macro_rules! elt_kernel {
+    ($args:ident, $idx:ident, $num_rows:ident, $k:ident,
+     $arr_ty:ty, $builder_ty:ty, $push_val:expr) => {{
+        let mut vals: Vec<&$arr_ty> = Vec::with_capacity($k);
+        for (j, a) in $args.iter().enumerate().skip(1) {
+            if a.len() != $num_rows {
+                return exec_err!(
+                    "elt: all arguments must have the same length (arg {} has {}, expected {})",
+                    j,
+                    a.len(),
+                    $num_rows
+                );
+            }
+            vals.push(a.as_any().downcast_ref::<$arr_ty>().ok_or_else(|| {
+                DataFusionError::Internal(
+                    concat!("downcast ", stringify!($arr_ty), " failed").into(),
+                )
+            })?);
+        }
+
+        let mut b: $builder_ty = <$builder_ty>::new();
+        for row in 0..$num_rows {
+            if $idx.is_null(row) {
+                b.append_null();
+                continue;
+            }
+            let n = $idx.value(row);
+            if n < 1 || (n as usize) > $k {
+                b.append_null();
+                continue;
+            }
+            let j = (n as usize) - 1;
+            let col = vals[j];
+            if col.is_null(row) {
+                b.append_null();
+            } else {
+                $push_val(&mut b, col, row);
+            }
+        }
+
+        Arc::new(b.finish()) as ArrayRef
+    }};
 }
 
 fn elt(args: &[ArrayRef]) -> Result<ArrayRef, DataFusionError> {
@@ -52,8 +104,8 @@ fn elt(args: &[ArrayRef]) -> Result<ArrayRef, DataFusionError> {
 
     let idx = args[0]
         .as_any()
-        .downcast_ref::<Int32Array>()
-        .ok_or_else(|| DataFusionError::Plan("elt: first argument must be Int64".into()))?;
+        .downcast_ref::<Int64Array>()
+        .ok_or_else(|| DataFusionError::Plan("elt: first argument must be Int32".into()))?;
 
     let num_rows = args[0].len();
     let k = args.len() - 1;
@@ -63,90 +115,70 @@ fn elt(args: &[ArrayRef]) -> Result<ArrayRef, DataFusionError> {
         if a.len() != num_rows {
             return exec_err!(
                 "elt: all arguments must have the same length (arg {} has {}, expected {})",
-                j, a.len(), num_rows
+                j,
+                a.len(),
+                num_rows
             );
         }
         if a.data_type() != &val_dt {
             return exec_err!(
                 "elt: all value arguments must share the same type (arg 1 is {:?}, arg {} is {:?})",
-                val_dt, j, a.data_type()
+                val_dt,
+                j,
+                a.data_type()
             );
         }
     }
 
     match val_dt {
-        // do macro
         Utf8 => {
-            let mut vals: Vec<&StringArray> = Vec::with_capacity(k);
-            for a in &args[1..] {
-                vals.push(
-                    a.as_any()
-                        .downcast_ref::<StringArray>()
-                        .ok_or_else(|| DataFusionError::Internal("downcast Utf8 failed".into()))?,
-                );
-            }
-
-            let mut b= StringBuilder::new();
-            for row in 0..num_rows {
-                if idx.is_null(row) { b.append_null(); continue; }
-                let n = idx.value(row);
-                if n < 1 || (n as usize) > k { b.append_null(); continue; }
-                let j = (n as usize) - 1;
-                let col = vals[j];
-                if col.is_null(row) { b.append_null(); } else { b.append_value(col.value(row)); }
-            }
-            let out_utf8 = Arc::new(b.finish()) as ArrayRef;
-            let out_view = cast(&out_utf8, &Utf8View)?;
-            Ok(out_view)
+            let out_utf8 = elt_kernel!(
+                args,
+                idx,
+                num_rows,
+                k,
+                StringArray,
+                StringBuilder,
+                |b: &mut StringBuilder, col: &StringArray, row: usize| {
+                    b.append_value(col.value(row));
+                }
+            );
+            Ok(out_utf8)
         }
 
         Int64 => {
-            let mut vals: Vec<&Int64Array> = Vec::with_capacity(k);
-            for a in &args[1..] {
-                vals.push(
-                    a.as_any()
-                        .downcast_ref::<Int64Array>()
-                        .ok_or_else(|| DataFusionError::Internal("downcast Int64 failed".into()))?,
-                );
-            }
-
-            let mut b= Int64Builder::new();
-            for row in 0..num_rows {
-                if idx.is_null(row) { b.append_null(); continue; }
-                let n = idx.value(row);
-                if n < 1 || (n as usize) > k { b.append_null(); continue; }
-                let j = (n as usize) - 1;
-                let col = vals[j];
-                if col.is_null(row) { b.append_null(); } else { b.append_value(col.value(row)); }
-            }
-            Ok(Arc::new(b.finish()))
+            let out_i64 = elt_kernel!(
+                args,
+                idx,
+                num_rows,
+                k,
+                Int64Array,
+                Int64Builder,
+                |b: &mut Int64Builder, col: &Int64Array, row: usize| {
+                    b.append_value(col.value(row));
+                }
+            );
+            Ok(out_i64)
         }
-        Int32 => {
-            let mut vals: Vec<&Int32Array> = Vec::with_capacity(k);
-            for a in &args[1..] {
-                vals.push(
-                    a.as_any()
-                        .downcast_ref::<Int32Array>()
-                        .ok_or_else(|| DataFusionError::Internal("downcast Int64 failed".into()))?,
-                );
-            }
 
-            let mut b= Int32Builder::new();
-            for row in 0..num_rows {
-                if idx.is_null(row) { b.append_null(); continue; }
-                let n = idx.value(row);
-                if n < 1 || (n as usize) > k { b.append_null(); continue; }
-                let j = (n as usize) - 1;
-                let col = vals[j];
-                if col.is_null(row) { b.append_null(); } else { b.append_value(col.value(row)); }
-            }
-            Ok(Arc::new(b.finish()))
+        Int32 => {
+            let out_i32 = elt_kernel!(
+                args,
+                idx,
+                num_rows,
+                k,
+                Int32Array,
+                Int32Builder,
+                |b: &mut Int32Builder, col: &Int32Array, row: usize| {
+                    b.append_value(col.value(row));
+                }
+            );
+            Ok(out_i32)
         }
 
         other => exec_err!("elt: unsupported value type for now: {:?}", other),
     }
 }
-
 
 #[cfg(test)]
 mod tests {

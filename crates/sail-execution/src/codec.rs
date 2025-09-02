@@ -118,6 +118,7 @@ use sail_plan::extension::function::spark_xxhash64::SparkXxhash64;
 use sail_plan::extension::function::string::levenshtein::Levenshtein;
 use sail_plan::extension::function::string::make_valid_utf8::MakeValidUtf8;
 use sail_plan::extension::function::string::spark_base64::{SparkBase64, SparkUnbase64};
+use sail_plan::extension::function::string::spark_elt::SparkElt;
 use sail_plan::extension::function::string::spark_encode_decode::{SparkDecode, SparkEncode};
 use sail_plan::extension::function::string::spark_mask::SparkMask;
 use sail_plan::extension::function::string::spark_split::SparkSplit;
@@ -142,7 +143,7 @@ use sail_python_udf::udf::pyspark_udaf::PySparkGroupAggregateUDF;
 use sail_python_udf::udf::pyspark_udf::{PySparkUDF, PySparkUdfKind};
 use sail_python_udf::udf::pyspark_udtf::{PySparkUDTF, PySparkUdtfKind};
 use url::Url;
-use sail_plan::extension::function::string::spark_elt::SparkElt;
+
 use crate::plan::gen::extended_aggregate_udf::UdafKind;
 use crate::plan::gen::extended_physical_plan_node::NodeKind;
 use crate::plan::gen::extended_scalar_udf::UdfKind;

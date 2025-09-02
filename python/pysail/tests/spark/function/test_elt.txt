@@ -1,3 +1,7 @@
+>>> spark.sql("SELECT elt(1, 10, 20)").printSchema()
+root
+ |-- elt(1, 10, 20): string (nullable = true)
+
 >>> spark.sql("SELECT elt(1, 10, 20)").show()
 +--------------+
 |elt(1, 10, 20)|
@@ -20,3 +24,12 @@
 +---------------+
 
 # If spark.sql.ansi.enabled is set to true, it throws ArrayIndexOutOfBoundsException for invalid indices.
+
+>>> spark.sql("SELECT elt(1, 'scala', 3) AS col UNION ALL SELECT elt(2, 'scala', 3) UNION ALL SELECT elt(1, 'scala', 3)").show()
++-----+
+|  col|
++-----+
+|scala|
+|    3|
+|scala|
++-----+
