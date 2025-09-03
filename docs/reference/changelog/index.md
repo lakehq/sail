@@ -7,7 +7,7 @@ next: false
 
 ## 0.3.4
 
-_September 2, 2025_
+_September 3, 2025_
 
 - Supported the text file format ([#737](https://github.com/lakehq/sail/pull/737) and [#813](https://github.com/lakehq/sail/pull/813)).
 - Supported the Spark DataFrame streaming API and added a few data sources/sinks for testing purposes ([#751](https://github.com/lakehq/sail/pull/751)). This provides a foundation for streaming support in Sail but is not ready for general use yet.
