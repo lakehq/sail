@@ -119,7 +119,11 @@ async fn handle_execute_plan(
     let stream = spark.job_runner().execute(ctx, plan).await?;
     let rx = match mode {
         ExecutePlanMode::Lazy => {
-            let executor = Executor::new(metadata, stream);
+            let executor = Executor::new(
+                metadata,
+                stream,
+                spark.options().execution_heartbeat_interval,
+            );
             let rx = executor.start()?;
             spark.add_executor(executor)?;
             rx

@@ -10,7 +10,7 @@
   },
   "devDependencies": {
     "@eslint/js": "^9.34.0",
-    "@ianvs/prettier-plugin-sort-imports": "^4.6.2",
+    "@ianvs/prettier-plugin-sort-imports": "^4.7.0",
     "@tailwindcss/vite": "^4.1.12",
     "@types/js-yaml": "^4.0.9",
     "@types/markdown-it": "^14.1.2",
