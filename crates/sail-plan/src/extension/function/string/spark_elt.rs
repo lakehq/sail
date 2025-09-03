@@ -116,9 +116,15 @@ fn elt(args: &[ArrayRef]) -> Result<ArrayRef, DataFusionError> {
             builder.append_null();
             continue;
         };
+        // If spark.sql.ansi.enabled is set to true, it throws ArrayIndexOutOfBoundsException for invalid indices.
+        let ansi_enable: bool = false; // I need get value -> spark.sql.ansi.enabled
         if n < 1 || (n as usize) > k {
-            builder.append_null();
-            continue;
+            if !ansi_enable {
+                builder.append_null();
+                continue;
+            } else {
+                return exec_err!("ArrayIndexOutOfBoundsException");
+            }
         }
 
         let j = (n as usize) - 1;
@@ -238,7 +244,6 @@ mod tests {
         let res = run_elt_arrays(vec![idx, v1, v2]);
         let msg = match res {
             Ok(_) => {
-                // fallar el test sin `panic!`
                 return Err(DataFusionError::Internal(
                     "expected error due to length mismatch".into(),
                 ));
