@@ -50,7 +50,7 @@ _September 3, 2025_
 
 ### Contributors
 
-Huge thanks to [@SparkApplicationMaster](https://github.com/SparkApplicationMaster), [@davidlghellin](https://github.com/davidlghellin), and [rafafrdz](https://github.com/rafafrdz) for the continued contributions!
+Huge thanks to [@SparkApplicationMaster](https://github.com/SparkApplicationMaster), [@davidlghellin](https://github.com/davidlghellin), and [@rafafrdz](https://github.com/rafafrdz) for the continued contributions!
 
 ## 0.3.3
 
@@ -101,7 +101,7 @@ _August 14, 2025_
 
 ### Contributors
 
-Huge thanks to [@SparkApplicationMaster](https://github.com/SparkApplicationMaster) and [rafafrdz](https://github.com/rafafrdz) for the continued contributions!
+Huge thanks to [@SparkApplicationMaster](https://github.com/SparkApplicationMaster) and [@rafafrdz](https://github.com/rafafrdz) for the continued contributions!
 
 ## 0.3.2
 
