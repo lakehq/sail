@@ -61,7 +61,11 @@ impl ParseUrl {
             .map_err(|e| exec_datafusion_err!("{e:?}"))
             .map(|url| match part {
                 "HOST" => url.host_str().map(String::from),
-                "PATH" => Some(url.path().to_string()),
+                "PATH" => {
+                    let path: String = url.path().to_string();
+                    let path: String = if path == "/" { "".to_string() } else { path };
+                    Some(path)
+                }
                 "QUERY" => match key {
                     None => url.query().map(String::from),
                     Some(key) => url
