@@ -1287,11 +1287,11 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
             || node.inner().as_any().is::<SparkTryDiv>()
             || node.inner().as_any().is::<SparkTryMod>()
             || node.inner().as_any().is::<SparkTryMult>()
+            || node.inner().as_any().is::<SparkTryParseUrl>()
             || node.inner().as_any().is::<SparkTrySubtract>()
             || node.inner().as_any().is::<SparkWidthBucket>()
             || node.inner().as_any().is::<StrToMap>()
             || node.inner().as_any().is::<ParseUrl>()
-            || node.inner().as_any().is::<SparkTryParseUrl>()
             || node.inner().as_any().is::<UrlDecode>()
             || node.inner().as_any().is::<UrlEncode>()
             || node.name() == "json_length"
