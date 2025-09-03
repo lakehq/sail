@@ -31,7 +31,7 @@ fn slice(array: expr::Expr, start: expr::Expr, length: expr::Expr) -> expr::Expr
     expr_fn::array_slice(array, start, end, None)
 }
 
-fn sort_array(array: expr::Expr, asc: expr::Expr) -> PlanResult<expr::Expr> {
+fn array_sort(array: expr::Expr, asc: expr::Expr) -> PlanResult<expr::Expr> {
     let (sort, nulls) = match asc {
         expr::Expr::Literal(ScalarValue::Boolean(Some(true)), _metadata) => (
             lit(ScalarValue::Utf8(Some("ASC".to_string()))),
@@ -43,7 +43,7 @@ fn sort_array(array: expr::Expr, asc: expr::Expr) -> PlanResult<expr::Expr> {
         ),
         _ => {
             return Err(PlanError::invalid(format!(
-                "Invalid asc value for sort_array: {asc}"
+                "Invalid asc value for array_sort: {asc}"
             )))
         }
     };
@@ -248,7 +248,7 @@ pub(super) fn list_built_in_array_functions() -> Vec<(&'static str, ScalarFuncti
         ("sequence", F::udf(SparkSequence::new())),
         ("shuffle", F::unknown("shuffle")),
         ("slice", F::ternary(slice)),
-        ("sort_array", F::binary(sort_array)),
+        ("array_sort", F::binary(array_sort)),
     ]
 }
 
