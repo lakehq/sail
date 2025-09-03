@@ -127,6 +127,7 @@ use sail_plan::extension::function::string::spark_try_to_number::SparkTryToNumbe
 use sail_plan::extension::function::struct_function::StructFunction;
 use sail_plan::extension::function::update_struct_field::UpdateStructField;
 use sail_plan::extension::function::url::parse_url::ParseUrl;
+use sail_plan::extension::function::url::spark_try_parse_url::SparkTryParseUrl;
 use sail_plan::extension::function::url::url_decode::UrlDecode;
 use sail_plan::extension::function::url::url_encode::UrlEncode;
 use sail_plan::extension::logical::{Range, ShowStringFormat, ShowStringStyle};
@@ -1205,6 +1206,9 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
             }
             "str_to_map" => Ok(Arc::new(ScalarUDF::from(StrToMap::new()))),
             "parse_url" => Ok(Arc::new(ScalarUDF::from(ParseUrl::new()))),
+            "try_parse_url" | "spark_try_parse_url" => {
+                Ok(Arc::new(ScalarUDF::from(SparkTryParseUrl::new())))
+            }
             "url_decode" => Ok(Arc::new(ScalarUDF::from(UrlDecode::new()))),
             "url_encode" => Ok(Arc::new(ScalarUDF::from(UrlEncode::new()))),
             _ => plan_err!("could not find scalar function: {name}"),
@@ -1287,6 +1291,7 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
             || node.inner().as_any().is::<SparkWidthBucket>()
             || node.inner().as_any().is::<StrToMap>()
             || node.inner().as_any().is::<ParseUrl>()
+            || node.inner().as_any().is::<SparkTryParseUrl>()
             || node.inner().as_any().is::<UrlDecode>()
             || node.inner().as_any().is::<UrlEncode>()
             || node.name() == "json_length"
