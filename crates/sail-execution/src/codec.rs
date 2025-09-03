@@ -53,10 +53,8 @@ use sail_data_source::formats::text::writer::{TextSink, TextWriterOptions};
 use sail_delta_lake::delta_format::{DeltaCommitExec, DeltaWriterExec};
 use sail_plan::extension::function::array::arrays_zip::ArraysZip;
 use sail_plan::extension::function::array::spark_array::SparkArray;
-use sail_plan::extension::function::array::spark_array_empty_to_null::ArrayEmptyToNull;
 use sail_plan::extension::function::array::spark_array_item_with_position::ArrayItemWithPosition;
 use sail_plan::extension::function::array::spark_array_min_max::{ArrayMax, ArrayMin};
-use sail_plan::extension::function::array::spark_map_to_array::MapToArray;
 use sail_plan::extension::function::array::spark_sequence::SparkSequence;
 use sail_plan::extension::function::bitmap_count::BitmapCount;
 use sail_plan::extension::function::collection::spark_concat::SparkConcat;
@@ -1054,10 +1052,6 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
                 )?;
                 return Ok(Arc::new(ScalarUDF::from(udf)));
             }
-            UdfKind::MapToArray(gen::MapToArrayUdf { nullable }) => {
-                let udf = MapToArray::new(nullable);
-                return Ok(Arc::new(ScalarUDF::from(udf)));
-            }
             UdfKind::DropStructField(gen::DropStructFieldUdf { field_names }) => {
                 let udf = DropStructField::new(field_names);
                 return Ok(Arc::new(ScalarUDF::from(udf)));
@@ -1098,7 +1092,6 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
             "array_item_with_position" => {
                 Ok(Arc::new(ScalarUDF::from(ArrayItemWithPosition::new())))
             }
-            "array_empty_to_null" => Ok(Arc::new(ScalarUDF::from(ArrayEmptyToNull::new()))),
             "array_min" => Ok(Arc::new(ScalarUDF::from(ArrayMin::new()))),
             "array_max" => Ok(Arc::new(ScalarUDF::from(ArrayMax::new()))),
             "arrays_zip" => Ok(Arc::new(ScalarUDF::from(ArraysZip::new()))),
@@ -1214,7 +1207,6 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
     fn try_encode_udf(&self, node: &ScalarUDF, buf: &mut Vec<u8>) -> Result<()> {
         // TODO: Implement custom registry to avoid codec for built-in functions
         let udf_kind = if node.inner().as_any().is::<ArrayItemWithPosition>()
-            || node.inner().as_any().is::<ArrayEmptyToNull>()
             || node.inner().as_any().is::<ArrayMin>()
             || node.inner().as_any().is::<ArrayMax>()
             || node.inner().as_any().is::<ArraysZip>()
@@ -1336,9 +1328,6 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
                 output_type,
                 config: Some(config),
             })
-        } else if let Some(func) = node.inner().as_any().downcast_ref::<MapToArray>() {
-            let nullable = func.nullable();
-            UdfKind::MapToArray(gen::MapToArrayUdf { nullable })
         } else if let Some(func) = node.inner().as_any().downcast_ref::<DropStructField>() {
             let field_names = func.field_names().to_vec();
             UdfKind::DropStructField(gen::DropStructFieldUdf { field_names })

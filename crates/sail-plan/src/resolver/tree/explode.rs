@@ -9,12 +9,11 @@ use datafusion::logical_expr::builder::unnest_with_options;
 use datafusion::logical_expr::{Expr, ExprSchemable, LogicalPlan, Projection, ScalarUDF};
 use datafusion_common::{plan_err, ExprSchema};
 use datafusion_expr::expr::ScalarFunction;
-use datafusion_expr::ident;
+use datafusion_expr::{ident, when};
+use datafusion_functions_nested::expr_fn as nested_fn;
 use either::Either;
 
-use crate::extension::function::array::spark_array_empty_to_null::ArrayEmptyToNull;
 use crate::extension::function::array::spark_array_item_with_position::ArrayItemWithPosition;
-use crate::extension::function::array::spark_map_to_array::MapToArray;
 use crate::extension::function::explode::{Explode, ExplodeKind};
 use crate::extension::function::multi_expr::MultiExpr;
 use crate::resolver::state::PlanResolverState;
@@ -76,15 +75,12 @@ impl TreeNodeRewriter for ExplodeRewriter<'_> {
         };
         let arg = args.one()?;
         let data_type = ExplodeDataType::try_from_expr(&arg, self.plan.schema())?;
-
         let arg = match data_type {
             ExplodeDataType::List => arg,
-            ExplodeDataType::Map => {
-                ScalarUDF::from(MapToArray::new(preserve_nulls)).call(vec![arg])
-            }
+            ExplodeDataType::Map => nested_fn::map_entries(arg),
         };
         let arg = match preserve_nulls {
-            true => ScalarUDF::from(ArrayEmptyToNull::new()).call(vec![arg]),
+            true => when(nested_fn::array_empty(arg.clone()).is_false(), arg).end()?,
             false => arg,
         };
         let arg = match with_position {
