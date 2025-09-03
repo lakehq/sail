@@ -11,6 +11,7 @@ use crate::extension::function::string::levenshtein::Levenshtein;
 use crate::extension::function::string::make_valid_utf8::MakeValidUtf8;
 use crate::extension::function::string::spark_base64::{SparkBase64, SparkUnbase64};
 use crate::extension::function::string::spark_encode_decode::{SparkDecode, SparkEncode};
+use crate::extension::function::string::spark_luhn_check::SparkLuhnCheck;
 use crate::extension::function::string::spark_mask::SparkMask;
 use crate::extension::function::string::spark_split::SparkSplit;
 use crate::extension::function::string::spark_to_binary::{SparkToBinary, SparkTryToBinary};
@@ -230,7 +231,7 @@ pub(super) fn list_built_in_string_functions() -> Vec<(&'static str, ScalarFunct
         ("lower", F::custom(lower)),
         ("lpad", F::var_arg(expr_fn::lpad)),
         ("ltrim", F::var_arg(rev_args(expr_fn::ltrim))),
-        ("luhn_check", F::unknown("luhn_check")),
+        ("luhn_check", F::udf(SparkLuhnCheck::new())),
         ("make_valid_utf8", F::udf(MakeValidUtf8::new())),
         ("mask", F::udf(SparkMask::new())),
         ("octet_length", F::custom(octet_length)),

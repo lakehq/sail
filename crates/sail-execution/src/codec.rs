@@ -119,6 +119,7 @@ use sail_plan::extension::function::string::levenshtein::Levenshtein;
 use sail_plan::extension::function::string::make_valid_utf8::MakeValidUtf8;
 use sail_plan::extension::function::string::spark_base64::{SparkBase64, SparkUnbase64};
 use sail_plan::extension::function::string::spark_encode_decode::{SparkDecode, SparkEncode};
+use sail_plan::extension::function::string::spark_luhn_check::SparkLuhnCheck;
 use sail_plan::extension::function::string::spark_mask::SparkMask;
 use sail_plan::extension::function::string::spark_split::SparkSplit;
 use sail_plan::extension::function::string::spark_to_binary::{SparkToBinary, SparkTryToBinary};
@@ -1135,6 +1136,9 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
             "json_length" | "json_len" => Ok(datafusion_functions_json::udfs::json_length_udf()),
             "json_as_text" => Ok(datafusion_functions_json::udfs::json_as_text_udf()),
             "spark_base64" | "base64" => Ok(Arc::new(ScalarUDF::from(SparkBase64::new()))),
+            "spark_luhn_check" | "luhn_check" => {
+                Ok(Arc::new(ScalarUDF::from(SparkLuhnCheck::new())))
+            }
             "spark_bround" | "bround" => Ok(Arc::new(ScalarUDF::from(SparkBRound::new()))),
             "spark_unbase64" | "unbase64" => Ok(Arc::new(ScalarUDF::from(SparkUnbase64::new()))),
             "spark_aes_encrypt" | "aes_encrypt" => {
@@ -1257,6 +1261,7 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
             || node.inner().as_any().is::<SparkToBinary>()
             || node.inner().as_any().is::<SparkTryToBinary>()
             || node.inner().as_any().is::<SparkLastDay>()
+            || node.inner().as_any().is::<SparkLuhnCheck>()
             || node.inner().as_any().is::<SparkNextDay>()
             || node.inner().as_any().is::<SparkMakeInterval>()
             || node.inner().as_any().is::<SparkMakeYmInterval>()
