@@ -5,13 +5,32 @@ metadata:
 spec:
   template:
     spec:
-      volumes:
-        - name: data
-          hostPath:
-            path: /tmp/sail
-            type: DirectoryOrCreate
       containers:
         - name: server
-          volumeMounts:
-            - name: data
-              mountPath: /tmp/sail
+          env:
+            - name: SAIL_KUBERNETES__WORKER_POD_TEMPLATE
+              value: |
+                {
+                  "spec": {
+                    "volumes": [
+                      {
+                        "name": "data",
+                        "hostPath": {
+                          "path": "/tmp/sail",
+                          "type": "DirectoryOrCreate"
+                        }
+                      }
+                    ],
+                    "containers": [
+                      {
+                        "name": "worker",
+                        "volumeMounts": [
+                          {
+                            "name": "data",
+                            "mountPath": "/tmp/sail"
+                          }
+                        ]
+                      }
+                    ]
+                  }
+                }
