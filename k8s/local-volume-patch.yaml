@@ -1,0 +1,17 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: sail-spark-server
+spec:
+  template:
+    spec:
+      volumes:
+        - name: data
+          hostPath:
+            path: /tmp/sail
+            type: DirectoryOrCreate
+      containers:
+        - name: server
+          volumeMounts:
+            - name: data
+              mountPath: /tmp/sail
