@@ -5751,6 +5751,13 @@ dependencies = [
 ]
 
 [[package]]
+name = "sail-physical-optimizer"
+version = "0.3.4"
+dependencies = [
+ "datafusion",
+]
+
+[[package]]
 name = "sail-plan"
 version = "0.3.4"
 dependencies = [
@@ -5886,6 +5893,7 @@ dependencies = [
  "sail-common-datafusion",
  "sail-execution",
  "sail-object-store",
+ "sail-physical-optimizer",
  "sail-plan",
  "sail-python-udf",
  "sail-server",
