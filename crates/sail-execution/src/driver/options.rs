@@ -55,6 +55,7 @@ impl DriverOptions {
                         .kubernetes
                         .worker_service_account_name
                         .clone(),
+                    worker_pod_template: config.kubernetes.worker_pod_template.clone(),
                 })
             }
         };
