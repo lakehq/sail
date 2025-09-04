@@ -1,13 +1,15 @@
+use std::fmt::{Debug, Formatter};
+use std::sync::Arc;
+
 use datafusion::config::ConfigOptions;
 use datafusion::error::Result;
 use datafusion::physical_optimizer::PhysicalOptimizerRule;
 use datafusion::physical_plan::ExecutionPlan;
-use std::fmt::{Debug, Formatter};
-use std::sync::Arc;
 
 pub struct JoinReorder {}
 
 /// The [`JoinReorder`] optimizer rule implement.
+#[allow(dead_code)]
 impl JoinReorder {
     pub fn new() -> Self {
         Self {}
@@ -20,6 +22,7 @@ impl Default for JoinReorder {
     }
 }
 
+#[allow(dead_code)]
 impl PhysicalOptimizerRule for JoinReorder {
     fn optimize(
         &self,
