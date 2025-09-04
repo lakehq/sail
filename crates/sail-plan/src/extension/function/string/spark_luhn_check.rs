@@ -66,7 +66,7 @@ pub fn spark_luhn_check_inner(args: &[ArrayRef]) -> Result<ArrayRef> {
         .iter()
         .map(|value| {
             if let Some(value) = value {
-                luhn_check(value)
+                Ok(ScalarValue::Boolean(Some(luhn_check(value))))
             } else {
                 Ok(ScalarValue::Boolean(None))
             }
@@ -76,27 +76,29 @@ pub fn spark_luhn_check_inner(args: &[ArrayRef]) -> Result<ArrayRef> {
     Ok(result)
 }
 
-pub fn luhn_check(value: &str) -> Result<ScalarValue> {
-    let array = value
-        .chars()
-        .rev()
-        .enumerate()
-        .map(|(i, char)| {
-            let digit = char
-                .to_digit(10)
-                .ok_or_else(|| generic_internal_err(SparkLuhnCheck::NAME, "Invalid character"))?;
-            let digit = if i % 2 == 0 { digit * 2 } else { digit };
-            let digit = if digit > 9 { digit - 9 } else { digit };
-            Ok(digit)
-        })
-        .collect::<Result<Vec<u32>>>();
+pub fn luhn_check(value: &str) -> bool {
+    let digits: Option<Vec<u32>> = value.chars().map(|c| c.to_digit(10)).collect();
+    let digits: Vec<u32> = match digits {
+        Some(ds) if !ds.is_empty() => ds,
+        _ => return false,
+    };
 
-    match array {
-        Ok(array) => {
-            let value = array.iter().sum::<u32>();
-            let is_luhn = value % 10 == 0;
-            Ok(ScalarValue::Boolean(Some(is_luhn)))
-        }
-        Err(_) => Ok(ScalarValue::Boolean(Some(false))),
+    let len = digits.len();
+    if len < 2 {
+        return false;
     }
+
+    let sum: u32 = digits.iter().rev().enumerate().fold(0u32, |acc, (i, &d)| {
+        let digit = if i % 2 == 0 {
+            d
+        } else if d > 4 {
+            2 * d - 9
+        } else {
+            2 * d
+        };
+        acc + digit
+    });
+
+    let check_digit: u32 = (10 - (sum % 10)) % 10;
+    check_digit == 0
 }

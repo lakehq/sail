@@ -1,0 +1,90 @@
+>>> spark.sql("SELECT luhn_check('12345') AS result, typeof(luhn_check('4539578763621486')) AS type").show(truncate=False)
++------+-------+
+|result|type   |
++------+-------+
+|false |boolean|
++------+-------+
+
+>>> spark.sql("SELECT luhn_check('12344') AS result, typeof(luhn_check('4539578763621486')) AS type").show(truncate=False)
++------+-------+
+|result|type   |
++------+-------+
+|true  |boolean|
++------+-------+
+
+>>> spark.sql("SELECT luhn_check('1234 4') AS result, typeof(luhn_check('4539578763621486')) AS type").show(truncate=False)
++------+-------+
+|result|type   |
++------+-------+
+|false |boolean|
++------+-------+
+
+>>> spark.sql("SELECT luhn_check('4539578763621486') AS result, typeof(luhn_check('4539578763621486')) AS type").show(truncate=False)
++------+-------+
+|result|type   |
++------+-------+
+|true  |boolean|
++------+-------+
+
+>>> spark.sql("SELECT luhn_check('6011000990139424') AS result, typeof(luhn_check('6011000990139424')) AS type").show(truncate=False)
++------+-------+
+|result|type   |
++------+-------+
+|true  |boolean|
++------+-------+
+
+>>> spark.sql("SELECT luhn_check('371449635398431') AS result, typeof(luhn_check('371449635398431')) AS type").show(truncate=False)
++------+-------+
+|result|type   |
++------+-------+
+|true  |boolean|
++------+-------+
+
+>>> spark.sql("SELECT luhn_check('4539578763621487') AS result, typeof(luhn_check('4539578763621487')) AS type").show(truncate=False)
++------+-------+
+|result|type   |
++------+-------+
+|false |boolean|
++------+-------+
+
+>>> spark.sql("SELECT luhn_check('6011000990139425') AS result, typeof(luhn_check('6011000990139425')) AS type").show(truncate=False)
++------+-------+
+|result|type   |
++------+-------+
+|false |boolean|
++------+-------+
+
+>>> spark.sql("SELECT luhn_check('371449635398432') AS result, typeof(luhn_check('371449635398432')) AS type").show(truncate=False)
++------+-------+
+|result|type   |
++------+-------+
+|false |boolean|
++------+-------+
+
+>>> spark.sql("SELECT luhn_check('4539abcd8763621486') AS result, typeof(luhn_check('4539abcd8763621486')) AS type").show(truncate=False)
++------+-------+
+|result|type   |
++------+-------+
+|false |boolean|
++------+-------+
+
+>>> spark.sql("SELECT luhn_check('1234-5678-9012-3456') AS result, typeof(luhn_check('1234-5678-9012-3456')) AS type").show(truncate=False)
++------+-------+
+|result|type   |
++------+-------+
+|false |boolean|
++------+-------+
+
+>>> spark.sql("SELECT luhn_check('6011 0009 9013 9424') AS result, typeof(luhn_check('6011 0009 9013 9424')) AS type").show(truncate=False)
++------+-------+
+|result|type   |
++------+-------+
+|false |boolean|
++------+-------+
+
+>>> spark.sql("SELECT luhn_check('visa4539578763621486') AS result, typeof(luhn_check('visa4539578763621486')) AS type").show(truncate=False)
++------+-------+
+|result|type   |
++------+-------+
+|false |boolean|
++------+-------+
