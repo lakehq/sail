@@ -1,10 +1,22 @@
+use datafusion::physical_expr::expressions::Column;
+use datafusion::physical_plan::projection::ProjectionExec;
 use itertools::Itertools;
 
+/// Checks if a ProjectionExec only contains simple column references (no expressions).
+pub fn is_simple_projection(projection: &ProjectionExec) -> bool {
+    projection
+        .expr()
+        .iter()
+        .all(|(expr, _)| expr.as_any().downcast_ref::<Column>().is_some())
+}
+
+/// Computes the union of two sorted slices.
 #[allow(dead_code)]
 pub fn union_sorted(left: &[usize], right: &[usize]) -> Vec<usize> {
     left.iter().merge(right.iter()).dedup().copied().collect()
 }
 
+/// Checks if two sorted slices have a non-empty intersection.
 #[allow(dead_code)]
 pub fn intersect_sorted<T: Ord>(left: &[T], right: &[T]) -> bool {
     left.iter()
@@ -12,6 +24,7 @@ pub fn intersect_sorted<T: Ord>(left: &[T], right: &[T]) -> bool {
         .any(|item| item.is_both())
 }
 
+/// Checks if sorted slice `v1` is a subset of sorted slice `v2`.
 pub fn is_subset_sorted<T: Ord>(v1: &[T], v2: &[T]) -> bool {
     v1.iter()
         .merge_join_by(v2.iter(), |v1_val, v2_val| v1_val.cmp(v2_val))

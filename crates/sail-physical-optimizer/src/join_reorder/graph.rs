@@ -1,15 +1,58 @@
 use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
 
-use crate::join_reorder::relation::BaseColumn;
+use crate::join_reorder::plan::MappedJoinKey;
 use crate::join_reorder::utils::is_subset_sorted;
 
 /// A graph representing the connections (join predicates) between `JoinRelation`s.
+///
+/// ## Design Rationale: Trie-based Storage
+///
+/// The QueryGraph uses a sophisticated Trie-based data structure to efficiently store
+/// and query join conditions between relation sets. This design choice is crucial for
+/// the DPHyp algorithm's performance.
+///
+/// ### Why not a simple HashMap?
+///
+/// A naive approach might use `HashMap<Arc<Vec<usize>>, Vec<NeighborInfo>>` to map
+/// relation sets to their neighbors. However, this would be inefficient for DPHyp because:
+///
+/// 1. **Subset Queries**: DPHyp frequently needs to find all neighbors of any subset
+///    of a given relation set. With a HashMap, this would require checking every entry.
+///
+/// 2. **Memory Overhead**: Each relation set would need its own HashMap entry, leading
+///    to redundant storage when many sets share common prefixes.
+///
+/// ### Trie Structure Benefits
+///
+/// The Trie structure provides:
+///
+/// - **Efficient Subset Traversal**: `for_each_subset_edge` can traverse all subsets
+///   of a relation set in O(2^n) time, which is optimal for this operation.
+///
+/// - **Shared Storage**: Common prefixes of relation sets share the same Trie nodes,
+///   reducing memory usage.
+///
+/// - **Cache Locality**: Related relation sets are stored near each other in the Trie,
+///   improving cache performance during traversals.
+///
+/// ### Example Structure
+///
+/// For relations {0, 1, 2} with edges {0}-{1} and {1}-{2}:
+///
+/// ```text
+/// root_edge
+/// ├── 0 → QueryEdge { neighbors: [{1}], children: { 1 → ... } }
+/// ├── 1 → QueryEdge { neighbors: [{0}, {2}], children: { 2 → ... } }
+/// └── 2 → QueryEdge { neighbors: [{1}], children: {} }
+/// ```
 #[derive(Debug, Default)]
 pub(crate) struct QueryGraph {
     /// The root of the Trie-like structure that stores connectivity information.
+    /// Each path from root to a node represents a sorted relation set.
     root_edge: QueryEdge,
     /// Maps a set of relation IDs to their direct neighbors' IDs.
+    /// This cache speeds up repeated neighbor queries for the same relation set.
     cached_neighbors: HashMap<Arc<Vec<usize>>, Vec<usize>>,
 }
 
@@ -27,7 +70,7 @@ pub(crate) struct NeighborInfo {
     /// The neighboring relation set.
     neighbor_relations: Arc<Vec<usize>>,
     /// The join conditions that connect the source set to this neighbor.
-    join_conditions: Vec<(BaseColumn, BaseColumn)>,
+    join_conditions: Vec<(MappedJoinKey, MappedJoinKey)>,
 }
 
 impl QueryGraph {
@@ -44,7 +87,7 @@ impl QueryGraph {
         &mut self,
         left_set: Arc<Vec<usize>>,
         right_set: Arc<Vec<usize>>,
-        join_condition: (BaseColumn, BaseColumn),
+        join_condition: (MappedJoinKey, MappedJoinKey),
     ) {
         // Create edges in both directions to ensure symmetric lookups.
         self.add_edge_internal(left_set.clone(), right_set.clone(), join_condition.clone());
@@ -58,7 +101,7 @@ impl QueryGraph {
         &mut self,
         source_set: Arc<Vec<usize>>,
         neighbor_set: Arc<Vec<usize>>,
-        join_condition: (BaseColumn, BaseColumn),
+        join_condition: (MappedJoinKey, MappedJoinKey),
     ) {
         let mut current_edge = &mut self.root_edge;
         for &relation_id in source_set.iter() {
@@ -86,6 +129,24 @@ impl QueryGraph {
         }
     }
 
+    /// Returns the total number of edges in the query graph.
+    ///
+    /// This counts unique edges (not counting bidirectional edges twice).
+    pub fn edge_count(&self) -> usize {
+        let mut count = 0;
+        Self::count_edges_recursive(&self.root_edge, &mut count);
+        // Since edges are stored bidirectionally, divide by 2
+        count / 2
+    }
+
+    /// Recursively counts edges in the trie structure
+    fn count_edges_recursive(edge: &QueryEdge, count: &mut usize) {
+        *count += edge.neighbors.len();
+        for child in edge.children.values() {
+            Self::count_edges_recursive(child, count);
+        }
+    }
+
     /// Checks if two relation sets are directly connected and returns the connecting conditions.
     ///
     /// This function traverses the graph to find an edge that connects any subset of `left_set`
@@ -94,7 +155,7 @@ impl QueryGraph {
         &self,
         left_set: Arc<Vec<usize>>,
         right_set: Arc<Vec<usize>>,
-    ) -> Vec<(BaseColumn, BaseColumn)> {
+    ) -> Vec<(MappedJoinKey, MappedJoinKey)> {
         let mut all_conditions = vec![];
 
         // We need to check all subsets of left_set against right_set.
@@ -175,11 +236,24 @@ mod tests {
     use std::sync::Arc;
 
     use super::*;
-    use crate::join_reorder::RelationSetTree;
+    use crate::join_reorder::plan::RelationSetTree;
 
-    // Helper to create a dummy BaseColumn
-    fn dummy_base_column(relation_id: usize, index: usize) -> BaseColumn {
-        BaseColumn { relation_id, index }
+    // Helper to create a dummy MappedJoinKey for testing
+    fn dummy_mapped_join_key(relation_id: usize, index: usize) -> MappedJoinKey {
+        use std::collections::HashMap;
+
+        use datafusion::physical_expr::expressions::Column;
+
+        let mut column_map = HashMap::new();
+        column_map.insert(index, (relation_id, index));
+
+        MappedJoinKey::new(
+            Arc::new(Column::new(
+                &format!("col_{}_{}", relation_id, index),
+                index,
+            )),
+            column_map,
+        )
     }
 
     // Helper to create canonical sets for testing
@@ -204,13 +278,14 @@ mod tests {
         let set1 = sets[1].clone();
         let set2 = sets[2].clone();
 
-        let cond1 = (dummy_base_column(0, 0), dummy_base_column(1, 0));
+        let cond1 = (dummy_mapped_join_key(0, 0), dummy_mapped_join_key(1, 0));
         graph.create_edge(set0.clone(), set1.clone(), cond1.clone());
 
         let connections = graph.get_connections(set0.clone(), set1.clone());
         assert_eq!(connections.len(), 1);
-        assert_eq!(connections[0].0.relation_id, 0);
-        assert_eq!(connections[0].0.index, 0);
+        // Check that the connection contains the expected relation mapping
+        assert!(connections[0].0.column_map.contains_key(&0));
+        assert_eq!(connections[0].0.column_map[&0], (0, 0));
 
         let reverse_connections = graph.get_connections(set1.clone(), set0.clone());
         assert_eq!(reverse_connections.len(), 1);
@@ -234,15 +309,16 @@ mod tests {
 
         let set01 = tree.get_relation_set(&HashSet::from([0, 1]));
 
-        let cond1 = (dummy_base_column(0, 0), dummy_base_column(1, 0));
-        let cond2 = (dummy_base_column(1, 0), dummy_base_column(2, 0));
+        let cond1 = (dummy_mapped_join_key(0, 0), dummy_mapped_join_key(1, 0));
+        let cond2 = (dummy_mapped_join_key(1, 0), dummy_mapped_join_key(2, 0));
         graph.create_edge(set0.clone(), set1.clone(), cond1.clone());
         graph.create_edge(set1.clone(), set2.clone(), cond2.clone());
 
         let connections = graph.get_connections(set01.clone(), set2.clone());
         assert_eq!(connections.len(), 1);
-        assert_eq!(connections[0].0.relation_id, 1);
-        assert_eq!(connections[0].0.index, 0);
+        // Check that the connection contains the expected relation mapping
+        assert!(connections[0].0.column_map.contains_key(&0));
+        assert_eq!(connections[0].0.column_map[&0], (1, 0));
     }
 
     #[test]
@@ -252,15 +328,18 @@ mod tests {
         let set0 = sets[0].clone();
         let set1 = sets[1].clone();
 
-        let cond1 = (dummy_base_column(0, 0), dummy_base_column(1, 0));
-        let cond2 = (dummy_base_column(0, 1), dummy_base_column(1, 1));
+        let cond1 = (dummy_mapped_join_key(0, 0), dummy_mapped_join_key(1, 0));
+        let cond2 = (dummy_mapped_join_key(0, 1), dummy_mapped_join_key(1, 1));
 
         graph.create_edge(set0.clone(), set1.clone(), cond1.clone());
         graph.create_edge(set0.clone(), set1.clone(), cond2.clone());
 
         let connections = graph.get_connections(set0.clone(), set1.clone());
         assert_eq!(connections.len(), 2);
-        let indices: HashSet<usize> = connections.iter().map(|(l, _)| l.index).collect();
+        let indices: HashSet<usize> = connections
+            .iter()
+            .filter_map(|(l, _)| l.column_map.values().next().map(|v| v.1))
+            .collect();
         assert!(indices.contains(&0));
         assert!(indices.contains(&1));
     }
@@ -282,17 +361,17 @@ mod tests {
         graph.create_edge(
             set0.clone(),
             set1.clone(),
-            (dummy_base_column(0, 0), dummy_base_column(1, 0)),
+            (dummy_mapped_join_key(0, 0), dummy_mapped_join_key(1, 0)),
         );
         graph.create_edge(
             set0.clone(),
             set2.clone(),
-            (dummy_base_column(0, 1), dummy_base_column(2, 0)),
+            (dummy_mapped_join_key(0, 1), dummy_mapped_join_key(2, 0)),
         );
         graph.create_edge(
             set1.clone(),
             set3.clone(),
-            (dummy_base_column(1, 1), dummy_base_column(3, 0)),
+            (dummy_mapped_join_key(1, 1), dummy_mapped_join_key(3, 0)),
         );
 
         let empty_forbidden = HashSet::new();
@@ -327,12 +406,12 @@ mod tests {
         graph.create_edge(
             set0.clone(),
             set2.clone(),
-            (dummy_base_column(0, 0), dummy_base_column(2, 0)),
+            (dummy_mapped_join_key(0, 0), dummy_mapped_join_key(2, 0)),
         );
         graph.create_edge(
             set1.clone(),
             set3.clone(),
-            (dummy_base_column(1, 0), dummy_base_column(3, 0)),
+            (dummy_mapped_join_key(1, 0), dummy_mapped_join_key(3, 0)),
         );
 
         let empty_forbidden = HashSet::new();
