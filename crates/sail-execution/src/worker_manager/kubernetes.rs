@@ -2,10 +2,10 @@ use std::collections::BTreeMap;
 use std::env;
 
 use k8s_openapi::api::core::v1::{
-    Container, EnvVar, EnvVarSource, ObjectFieldSelector, Pod, PodSpec,
+    Container, EnvVar, EnvVarSource, ObjectFieldSelector, Pod, PodSpec, PodTemplateSpec,
 };
 use k8s_openapi::apimachinery::pkg::apis::meta::v1::{ObjectMeta, OwnerReference};
-use k8s_openapi::Resource;
+use k8s_openapi::{DeepMerge, Resource};
 use kube::Api;
 use rand::distr::Uniform;
 use rand::Rng;
@@ -25,6 +25,7 @@ pub struct KubernetesWorkerManagerOptions {
     pub driver_pod_name: String,
     pub worker_pod_name_prefix: String,
     pub worker_service_account_name: String,
+    pub worker_pod_template: String,
 }
 
 pub struct KubernetesWorkerManager {
@@ -209,6 +210,27 @@ impl WorkerManager for KubernetesWorkerManager {
             "{}{}-{}",
             self.options.worker_pod_name_prefix, self.name, id
         );
+        let spec = PodSpec {
+            containers: vec![Container {
+                name: "worker".to_string(),
+                command: Some(vec!["sail".to_string()]),
+                args: Some(vec!["worker".to_string()]),
+                env: Some(self.build_pod_env(id, options)),
+                image: Some(self.options.image.clone()),
+                image_pull_policy: Some(self.options.image_pull_policy.clone()),
+                ..Default::default()
+            }],
+            restart_policy: Some("Never".to_string()),
+            service_account_name: Some(self.options.worker_service_account_name.clone()),
+            ..Default::default()
+        };
+        let template: PodTemplateSpec = serde_json::from_str(&self.options.worker_pod_template)?;
+        let spec = if let Some(mut s) = template.spec {
+            s.merge_from(spec);
+            s
+        } else {
+            spec
+        };
         let p = Pod {
             metadata: ObjectMeta {
                 name: Some(name),
@@ -216,20 +238,7 @@ impl WorkerManager for KubernetesWorkerManager {
                 owner_references: Some(self.get_owner_references().await?),
                 ..Default::default()
             },
-            spec: Some(PodSpec {
-                containers: vec![Container {
-                    name: "worker".to_string(),
-                    command: Some(vec!["sail".to_string()]),
-                    args: Some(vec!["worker".to_string()]),
-                    env: Some(self.build_pod_env(id, options)),
-                    image: Some(self.options.image.clone()),
-                    image_pull_policy: Some(self.options.image_pull_policy.clone()),
-                    ..Default::default()
-                }],
-                restart_policy: Some("Never".to_string()),
-                service_account_name: Some(self.options.worker_service_account_name.clone()),
-                ..Default::default()
-            }),
+            spec: Some(spec),
             status: None,
         };
         let pp = Default::default();

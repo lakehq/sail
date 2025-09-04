@@ -187,6 +187,7 @@ pub struct KubernetesConfig {
     pub driver_pod_name: String,
     pub worker_pod_name_prefix: String,
     pub worker_service_account_name: String,
+    pub worker_pod_template: String,
 }
 
 #[derive(Debug, Clone, Deserialize)]
