@@ -19,7 +19,7 @@ use sail_common_datafusion::extension::SessionExtensionAccessor;
 use sail_execution::driver::DriverOptions;
 use sail_execution::job::{ClusterJobRunner, JobRunner, LocalJobRunner};
 use sail_object_store::DynamicObjectStoreRegistry;
-use sail_optimizer::get_physical_optimizers;
+use sail_physical_optimizer::get_physical_optimizers;
 use sail_plan::extension::analyzer::default_analyzer_rules;
 use sail_plan::extension::optimizer::default_optimizer_rules;
 use sail_plan::function::{

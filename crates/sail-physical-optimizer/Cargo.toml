@@ -1,5 +1,5 @@
 [package]
-name = "sail-optimizer"
+name = "sail-physical-optimizer"
 version = { workspace = true }
 edition = { workspace = true }
 
