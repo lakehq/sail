@@ -5762,6 +5762,7 @@ version = "0.3.3"
 dependencies = [
  "datafusion",
  "itertools 0.14.0",
+ "log",
 ]
 
 [[package]]

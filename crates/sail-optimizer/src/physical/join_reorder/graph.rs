@@ -1,8 +1,7 @@
 use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
 
-use datafusion::physical_expr::PhysicalExprRef;
-
+use crate::physical::join_reorder::relation::BaseColumn;
 use crate::physical::join_reorder::utils::is_subset_sorted;
 
 /// A graph representing the connections (join predicates) between `JoinRelation`s.
@@ -28,7 +27,7 @@ pub struct NeighborInfo {
     /// The neighboring relation set.
     neighbor_relations: Arc<Vec<usize>>,
     /// The join conditions that connect the source set to this neighbor.
-    join_conditions: Vec<(PhysicalExprRef, PhysicalExprRef)>,
+    join_conditions: Vec<(BaseColumn, BaseColumn)>,
 }
 
 impl QueryGraph {
@@ -45,7 +44,7 @@ impl QueryGraph {
         &mut self,
         left_set: Arc<Vec<usize>>,
         right_set: Arc<Vec<usize>>,
-        join_condition: (PhysicalExprRef, PhysicalExprRef),
+        join_condition: (BaseColumn, BaseColumn),
     ) {
         // Create edges in both directions to ensure symmetric lookups.
         self.add_edge_internal(left_set.clone(), right_set.clone(), join_condition.clone());
@@ -59,7 +58,7 @@ impl QueryGraph {
         &mut self,
         source_set: Arc<Vec<usize>>,
         neighbor_set: Arc<Vec<usize>>,
-        join_condition: (PhysicalExprRef, PhysicalExprRef),
+        join_condition: (BaseColumn, BaseColumn),
     ) {
         let mut current_edge = &mut self.root_edge;
         for &relation_id in source_set.iter() {
@@ -96,7 +95,7 @@ impl QueryGraph {
         &self,
         left_set: Arc<Vec<usize>>,
         right_set: Arc<Vec<usize>>,
-    ) -> Vec<(PhysicalExprRef, PhysicalExprRef)> {
+    ) -> Vec<(BaseColumn, BaseColumn)> {
         let mut all_conditions = vec![];
 
         // We need to check all subsets of left_set against right_set.
@@ -118,7 +117,6 @@ impl QueryGraph {
     /// Finds all unique neighbor relation IDs for a given `node_set`, excluding any IDs present in `forbidden_nodes`.
     ///
     /// This method uses a cache to speed up repeated lookups for the same `node_set`.
-    #[allow(dead_code)]
     pub fn neighbors(
         &mut self,
         node_set: Arc<Vec<usize>>,
@@ -131,12 +129,11 @@ impl QueryGraph {
                 .copied()
                 .collect();
         }
-
         let mut neighbor_ids = HashSet::new();
+
         self.for_each_subset_edge(&node_set, |edge| {
             for neighbor_info in &edge.neighbors {
                 for &id in neighbor_info.neighbor_relations.iter() {
-                    // Add neighbor if it's not in the current node_set or forbidden.
                     if !node_set.contains(&id) {
                         neighbor_ids.insert(id);
                     }
@@ -147,14 +144,7 @@ impl QueryGraph {
         let mut result: Vec<usize> = neighbor_ids.into_iter().collect();
         result.sort_unstable();
 
-        // Cache the full neighbor list (before filtering by forbidden_nodes)
-        let unfiltered_result = result
-            .iter()
-            .filter(|id| !node_set.contains(id))
-            .copied()
-            .collect();
-        self.cached_neighbors
-            .insert(node_set.clone(), unfiltered_result);
+        self.cached_neighbors.insert(node_set, result.clone());
 
         result.retain(|id| !forbidden_nodes.contains(id));
         result
@@ -185,14 +175,12 @@ impl QueryGraph {
 mod tests {
     use std::sync::Arc;
 
-    use datafusion::physical_expr::expressions::Column;
-
     use super::*;
     use crate::physical::join_reorder::RelationSetTree;
 
-    // Helper to create a dummy physical expression
-    fn dummy_phys_expr(name: &str) -> PhysicalExprRef {
-        Arc::new(Column::new(name, 0))
+    // Helper to create a dummy BaseColumn
+    fn dummy_base_column(relation_id: usize, index: usize) -> BaseColumn {
+        BaseColumn { relation_id, index }
     }
 
     // Helper to create canonical sets for testing
@@ -217,12 +205,13 @@ mod tests {
         let set1 = sets[1].clone();
         let set2 = sets[2].clone();
 
-        let cond1 = (dummy_phys_expr("a"), dummy_phys_expr("b"));
+        let cond1 = (dummy_base_column(0, 0), dummy_base_column(1, 0));
         graph.create_edge(set0.clone(), set1.clone(), cond1.clone());
 
         let connections = graph.get_connections(set0.clone(), set1.clone());
         assert_eq!(connections.len(), 1);
-        assert_eq!(connections[0].0.to_string(), "a@0");
+        assert_eq!(connections[0].0.relation_id, 0);
+        assert_eq!(connections[0].0.index, 0);
 
         let reverse_connections = graph.get_connections(set1.clone(), set0.clone());
         assert_eq!(reverse_connections.len(), 1);
@@ -246,14 +235,15 @@ mod tests {
 
         let set01 = tree.get_relation_set(&HashSet::from([0, 1]));
 
-        let cond1 = (dummy_phys_expr("c01"), dummy_phys_expr("c01_"));
-        let cond2 = (dummy_phys_expr("c12"), dummy_phys_expr("c12_"));
+        let cond1 = (dummy_base_column(0, 0), dummy_base_column(1, 0));
+        let cond2 = (dummy_base_column(1, 0), dummy_base_column(2, 0));
         graph.create_edge(set0.clone(), set1.clone(), cond1.clone());
         graph.create_edge(set1.clone(), set2.clone(), cond2.clone());
 
         let connections = graph.get_connections(set01.clone(), set2.clone());
         assert_eq!(connections.len(), 1);
-        assert_eq!(connections[0].0.to_string(), "c12@0");
+        assert_eq!(connections[0].0.relation_id, 1);
+        assert_eq!(connections[0].0.index, 0);
     }
 
     #[test]
@@ -263,17 +253,17 @@ mod tests {
         let set0 = sets[0].clone();
         let set1 = sets[1].clone();
 
-        let cond1 = (dummy_phys_expr("a"), dummy_phys_expr("b"));
-        let cond2 = (dummy_phys_expr("c"), dummy_phys_expr("d"));
+        let cond1 = (dummy_base_column(0, 0), dummy_base_column(1, 0));
+        let cond2 = (dummy_base_column(0, 1), dummy_base_column(1, 1));
 
         graph.create_edge(set0.clone(), set1.clone(), cond1.clone());
         graph.create_edge(set0.clone(), set1.clone(), cond2.clone());
 
         let connections = graph.get_connections(set0.clone(), set1.clone());
         assert_eq!(connections.len(), 2);
-        let names: HashSet<String> = connections.iter().map(|(l, _)| l.to_string()).collect();
-        assert!(names.contains("a@0"));
-        assert!(names.contains("c@0"));
+        let indices: HashSet<usize> = connections.iter().map(|(l, _)| l.index).collect();
+        assert!(indices.contains(&0));
+        assert!(indices.contains(&1));
     }
 
     #[test]
@@ -293,17 +283,17 @@ mod tests {
         graph.create_edge(
             set0.clone(),
             set1.clone(),
-            (dummy_phys_expr("a"), dummy_phys_expr("b")),
+            (dummy_base_column(0, 0), dummy_base_column(1, 0)),
         );
         graph.create_edge(
             set0.clone(),
             set2.clone(),
-            (dummy_phys_expr("c"), dummy_phys_expr("d")),
+            (dummy_base_column(0, 1), dummy_base_column(2, 0)),
         );
         graph.create_edge(
             set1.clone(),
             set3.clone(),
-            (dummy_phys_expr("e"), dummy_phys_expr("f")),
+            (dummy_base_column(1, 1), dummy_base_column(3, 0)),
         );
 
         let empty_forbidden = HashSet::new();
@@ -338,12 +328,12 @@ mod tests {
         graph.create_edge(
             set0.clone(),
             set2.clone(),
-            (dummy_phys_expr("a"), dummy_phys_expr("b")),
+            (dummy_base_column(0, 0), dummy_base_column(2, 0)),
         );
         graph.create_edge(
             set1.clone(),
             set3.clone(),
-            (dummy_phys_expr("c"), dummy_phys_expr("d")),
+            (dummy_base_column(1, 0), dummy_base_column(3, 0)),
         );
 
         let empty_forbidden = HashSet::new();
