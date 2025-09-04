@@ -7,6 +7,8 @@ use datafusion::physical_expr::PhysicalExprRef;
 use datafusion::physical_plan::joins::{HashJoinExec, PartitionMode};
 use datafusion::physical_plan::ExecutionPlan;
 
+type PlanWithColumnMap = (Arc<dyn ExecutionPlan>, HashMap<usize, (usize, usize)>);
+
 /// Represents a base relation (a leaf node) in the join graph.
 pub(crate) struct JoinRelation {
     pub(crate) plan: Arc<dyn ExecutionPlan>,
@@ -51,10 +53,7 @@ impl JoinNode {
     /// Recursively builds the final `ExecutionPlan` from the optimal `JoinNode` tree.
     /// Returns the plan and a map from its output column index to the base relation column origin.
     /// The map is `output_col_idx -> (relation_id, col_idx_in_relation)`.
-    pub fn build_plan_recursive(
-        &self,
-        relations: &[JoinRelation],
-    ) -> Result<(Arc<dyn ExecutionPlan>, HashMap<usize, (usize, usize)>)> {
+    pub fn build_plan_recursive(&self, relations: &[JoinRelation]) -> Result<PlanWithColumnMap> {
         if self.children.is_empty() {
             // This is a leaf node, representing a base relation.
             assert_eq!(self.leaves.len(), 1, "Leaf node must have one relation");
@@ -62,7 +61,9 @@ impl JoinNode {
             let plan = relations
                 .iter()
                 .find(|r| r.id == relation_id)
-                .unwrap()
+                .ok_or_else(|| {
+                    DataFusionError::Internal(format!("Relation with id {} not found", relation_id))
+                })?
                 .plan
                 .clone();
 

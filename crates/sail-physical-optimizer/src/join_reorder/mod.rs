@@ -127,6 +127,8 @@ use crate::join_reorder::graph::QueryGraph;
 use crate::join_reorder::relation::*;
 use crate::join_reorder::utils::union_sorted;
 
+type JoinOrderResult = (usize, usize, Arc<Vec<usize>>, Arc<Vec<usize>>);
+
 mod graph;
 mod relation;
 mod utils;
@@ -199,12 +201,13 @@ fn find_optimizable_join_chain(plan: &Arc<dyn ExecutionPlan>) -> Option<Arc<dyn 
     );
 
     // First, check if we can find a root join chain by penetrating through FilterExec and ProjectionExec
-    let join_root = find_join_root(plan);
-    if join_root.is_none() {
-        debug!("DPHyp: No join root found in plan");
-        return None;
-    }
-    let join_root = join_root.unwrap();
+    let join_root = match find_join_root(plan) {
+        Some(root) => root,
+        None => {
+            debug!("DPHyp: No join root found in plan");
+            return None;
+        }
+    };
 
     let mut relation_count = 0;
 
@@ -595,14 +598,13 @@ impl JoinReorderState {
 
             // Attempt to emit a join between `left_set` and `merged_set` as a csg-cmp pair
             // if the merged_set is already in the DP table
-            if self.dp_table.contains_key(&merged_set) {
-                if !self
+            if self.dp_table.contains_key(&merged_set)
+                && !self
                     .query_graph
                     .get_connections(left_set.clone(), merged_set.clone())
                     .is_empty()
-                {
-                    self.emit_csg_cmp(left_set.clone(), merged_set.clone(), emit_count)?;
-                }
+            {
+                self.emit_csg_cmp(left_set.clone(), merged_set.clone(), emit_count)?;
             }
             merged_sets.push(merged_set);
         }
@@ -718,7 +720,7 @@ impl JoinReorderState {
     fn find_best_cross_join_pair(
         &self,
         relation_sets: &[Arc<Vec<usize>>],
-    ) -> Result<(usize, usize, Arc<Vec<usize>>, Arc<Vec<usize>>)> {
+    ) -> Result<JoinOrderResult> {
         if relation_sets.len() < 2 {
             return plan_err!("Not enough relation sets to form a cross join pair.");
         }
@@ -902,8 +904,20 @@ impl JoinReorderState {
         left_leaves: &Arc<Vec<usize>>,
         right_leaves: &Arc<Vec<usize>>,
     ) -> Result<f64> {
-        let left_node = self.dp_table.get(left_leaves).unwrap();
-        let right_node = self.dp_table.get(right_leaves).unwrap();
+        let left_node = self
+            .dp_table
+            .get(left_leaves)
+            .ok_or_else(|| {
+                DataFusionError::Internal("Left node not found in DP table".to_string())
+            })?
+            .clone();
+        let right_node = self
+            .dp_table
+            .get(right_leaves)
+            .ok_or_else(|| {
+                DataFusionError::Internal("Right node not found in DP table".to_string())
+            })?
+            .clone();
 
         let left_card = *left_node.stats.num_rows.get_value().unwrap_or(&1) as f64;
         let right_card = *right_node.stats.num_rows.get_value().unwrap_or(&1) as f64;
@@ -936,7 +950,12 @@ impl JoinReorderState {
             original_indices.sort_unstable();
 
             for original_idx in original_indices {
-                let origin = self.original_output_map.get(&original_idx).unwrap(); // (relation_id, base_col_idx)
+                let origin = self.original_output_map.get(&original_idx).ok_or_else(|| {
+                    DataFusionError::Internal(format!(
+                        "Original column index {} not found in output map",
+                        original_idx
+                    ))
+                })?;
                 let new_idx = inverted_optimized_map.get(origin).ok_or_else(|| {
                     DataFusionError::Internal(format!(
                         "Could not find new index for original column {} with origin {:?}",
@@ -985,7 +1004,9 @@ impl JoinReorderState {
             .clone()
             .into_iter()
             .reduce(|acc, expr| Arc::new(BinaryExpr::new(acc, Operator::And, expr)))
-            .unwrap(); // This is safe because the list is not empty
+            .ok_or_else(|| {
+                DataFusionError::Internal("Non-equi conditions list is empty".to_string())
+            })?;
 
         // Apply a single FilterExec on top of the reordered join plan.
         // Subsequent optimizer, will handle pushing this predicate down to the optimal locations.
@@ -1059,7 +1080,9 @@ impl JoinReorderState {
 
         for (i, (expr, _name)) in projection.expr().iter().enumerate() {
             // This is safe due to the check in `recursive_decompose`.
-            let col = expr.as_any().downcast_ref::<Column>().unwrap();
+            let col = expr.as_any().downcast_ref::<Column>().ok_or_else(|| {
+                DataFusionError::Internal("Expected Column expression in projection".to_string())
+            })?;
             let origin = input_map.get(&col.index()).ok_or_else(|| {
                 DataFusionError::Internal(format!(
                     "Projection references column index {} which is not in its input map",
@@ -1514,7 +1537,7 @@ mod tests {
                     let prefix = "  ".repeat(indent);
                     println!("{}|- {}", prefix, plan.name());
                     for child in plan.children() {
-                        print_plan_tree(&child, indent + 1);
+                        print_plan_tree(child, indent + 1);
                     }
                 }
 
@@ -1890,13 +1913,17 @@ mod tests {
             assert_eq!(build_col.index(), 0);
             assert_eq!(build_col.name(), "a1");
         } else {
-            panic!("Expected Column expression for build side");
+            return Err(DataFusionError::Internal(
+                "Expected Column expression for build side".to_string(),
+            ));
         }
         if let Some(probe_col) = probe_expr_0.as_any().downcast_ref::<Column>() {
             assert_eq!(probe_col.index(), 0);
             assert_eq!(probe_col.name(), "b1");
         } else {
-            panic!("Expected Column expression for probe side");
+            return Err(DataFusionError::Internal(
+                "Expected Column expression for probe side".to_string(),
+            ));
         }
 
         Ok(())
@@ -1937,7 +1964,9 @@ mod tests {
             .get_relation_set(&HashSet::from([0, 1]));
         assert!(optimizer.dp_table.contains_key(&set_01));
 
-        let join_01_node = optimizer.dp_table.get(&set_01).unwrap();
+        let join_01_node = optimizer.dp_table.get(&set_01).ok_or_else(|| {
+            DataFusionError::Internal("Join node for set {0,1} not found".to_string())
+        })?;
         assert_eq!(*join_01_node.leaves, vec![0, 1]);
         assert_eq!(join_01_node.children.len(), 2);
         assert!(join_01_node.cost >= 0.0); // Should have non-negative cost
@@ -1972,7 +2001,9 @@ mod tests {
             "DP algorithm should produce a complete plan"
         );
 
-        let final_node = optimizer.dp_table.get(&final_set).unwrap();
+        let final_node = optimizer.dp_table.get(&final_set).ok_or_else(|| {
+            DataFusionError::Internal("Final node not found in DP table".to_string())
+        })?;
         assert_eq!(*final_node.leaves, vec![0, 1, 2]);
         assert!(final_node.cost >= 0.0);
 
@@ -2125,8 +2156,8 @@ mod tests {
 
         // Create a large join chain that should trigger greedy fallback
         let mut current_plan = scans[0].clone();
-        for i in 1..scans.len() {
-            current_plan = create_test_join(current_plan, scans[i].clone(), vec![("id", "id")]);
+        for scan in scans.iter().skip(1) {
+            current_plan = create_test_join(current_plan, scan.clone(), vec![("id", "id")]);
         }
 
         let mut optimizer = JoinReorderState::new(current_plan.schema());
@@ -2215,7 +2246,7 @@ mod tests {
 
         let mut relation_0_count = 0;
         let mut relation_1_count = 0;
-        for (_, (rel_id, _)) in &map_ab {
+        for (rel_id, _) in map_ab.values() {
             if *rel_id == 0 {
                 relation_0_count += 1;
             } else if *rel_id == 1 {
