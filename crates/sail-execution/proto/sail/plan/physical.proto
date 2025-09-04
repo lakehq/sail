@@ -33,6 +33,7 @@ message ExtendedPhysicalPlanNode {
     ConsoleSinkExecNode console_sink = 19;
     SocketSourceExecNode socket_source = 20;
     RateSourceExecNode rate_source = 21;
+    TextSinkExecNode text_sink = 22;
   }
 }
 
@@ -41,14 +42,13 @@ message ExtendedScalarUdf {
     StandardUdf standard = 1;
     PySparkUdf py_spark = 2;
     PySparkCoGroupMapUdf py_spark_co_group_map = 3;
-    MapToArrayUdf map_to_array = 4;
-    DropStructFieldUdf drop_struct_field = 5;
-    ExplodeUdf explode = 6;
-    SparkUnixTimestampUdf spark_unix_timestamp = 7;
-    StructFunctionUdf struct_function = 8;
-    UpdateStructFieldUdf update_struct_field = 9;
-    TimestampNowUdf timestamp_now = 10;
-    SparkTimestampUdf spark_timestamp = 11;
+    DropStructFieldUdf drop_struct_field = 4;
+    ExplodeUdf explode = 5;
+    SparkUnixTimestampUdf spark_unix_timestamp = 6;
+    StructFunctionUdf struct_function = 7;
+    UpdateStructFieldUdf update_struct_field = 8;
+    TimestampNowUdf timestamp_now = 9;
+    SparkTimestampUdf spark_timestamp = 10;
   }
 }
 
@@ -90,10 +90,6 @@ message PySparkCoGroupMapUdf {
   repeated string right_names = 7;
   bytes output_type = 8;
   PySparkUdfConfig config = 9;
-}
-
-message MapToArrayUdf {
-  bool nullable = 1;
 }
 
 message DropStructFieldUdf {
@@ -238,6 +234,10 @@ message LexOrdering {
   repeated bytes values = 1;
 }
 
+message PhysicalSortExprNodeCollection {
+  repeated bytes physical_sort_expr_nodes = 1;
+}
+
 message MemoryExecNode {
   repeated bytes partitions = 1;
   bytes schema = 2;
@@ -358,6 +358,15 @@ message RateSourceExecNode {
   uint64 num_partitions = 2;
   bytes schema = 3;
   repeated uint64 projection = 4;
+}
+
+message TextSinkExecNode {
+  bytes input = 1;
+  bytes base_config = 2;
+  bytes schema = 3;
+  bytes line_sep = 4;
+  CompressionTypeVariant compression_type_variant = 5;
+  optional PhysicalSortExprNodeCollection sort_order = 6;
 }
 
 message JoinOn {

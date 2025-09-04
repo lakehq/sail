@@ -123,9 +123,9 @@ use datafusion::physical_plan::projection::ProjectionExec;
 use datafusion::physical_plan::ExecutionPlan;
 use log::debug;
 
-use crate::physical::join_reorder::graph::QueryGraph;
-use crate::physical::join_reorder::relation::*;
-use crate::physical::join_reorder::utils::union_sorted;
+use crate::join_reorder::graph::QueryGraph;
+use crate::join_reorder::relation::*;
+use crate::join_reorder::utils::union_sorted;
 
 mod graph;
 mod relation;

@@ -19,7 +19,7 @@ use sail_common_datafusion::extension::SessionExtensionAccessor;
 use sail_execution::driver::DriverOptions;
 use sail_execution::job::{ClusterJobRunner, JobRunner, LocalJobRunner};
 use sail_object_store::DynamicObjectStoreRegistry;
-use sail_optimizer::get_physical_optimizers;
+use sail_physical_optimizer::get_physical_optimizers;
 use sail_plan::extension::analyzer::default_analyzer_rules;
 use sail_plan::extension::optimizer::default_optimizer_rules;
 use sail_plan::function::{
@@ -32,7 +32,7 @@ use tokio::sync::oneshot;
 use tokio::time::Instant;
 
 use crate::error::{SparkError, SparkResult};
-use crate::session::SparkSession;
+use crate::session::{SparkSession, SparkSessionOptions};
 
 #[derive(Eq, PartialEq, Hash, Clone, Debug)]
 pub struct SessionKey {
@@ -113,6 +113,11 @@ impl SessionManagerActor {
                 key.user_id,
                 key.session_id,
                 job_runner,
+                SparkSessionOptions {
+                    execution_heartbeat_interval: Duration::from_secs(
+                        options.config.spark.execution_heartbeat_interval_secs,
+                    ),
+                },
             )?));
 
         // execution options

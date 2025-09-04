@@ -8,7 +8,7 @@ use datafusion::physical_plan::joins::{HashJoinExec, PartitionMode};
 use datafusion::physical_plan::ExecutionPlan;
 
 /// Represents a base relation (a leaf node) in the join graph.
-pub struct JoinRelation {
+pub(crate) struct JoinRelation {
     pub(crate) plan: Arc<dyn ExecutionPlan>,
     pub(crate) stats: Statistics,
     /// Unique identifier for the relation within the context of a single optimization run
@@ -17,7 +17,7 @@ pub struct JoinRelation {
 
 /// A reference to a column in a base relation.
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
-pub struct BaseColumn {
+pub(crate) struct BaseColumn {
     /// The ID of the `JoinRelation` this column belongs to.
     pub(crate) relation_id: usize,
     /// The index of the column within its base relation's schema.
@@ -25,7 +25,7 @@ pub struct BaseColumn {
 }
 
 #[derive(Debug, Clone)]
-pub struct JoinNode {
+pub(crate) struct JoinNode {
     /// A sorted vector of relation IDs (`JoinRelation::id`) that this node covers.
     pub(crate) leaves: Arc<Vec<usize>>,
 
@@ -196,7 +196,7 @@ impl JoinNode {
 }
 
 #[derive(Debug, Default)]
-pub struct RelationSetTree {
+pub(crate) struct RelationSetTree {
     root: RelationSetNode,
 }
 
@@ -209,7 +209,7 @@ impl RelationSetTree {
 }
 
 #[derive(Debug, Default)]
-pub struct RelationSetNode {
+pub(crate) struct RelationSetNode {
     /// The representation of the relation set if a set terminates at this node.
     relations: Option<Arc<Vec<usize>>>,
     /// Children in the Trie, keyed by the next relation ID.

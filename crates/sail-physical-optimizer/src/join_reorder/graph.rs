@@ -1,12 +1,12 @@
 use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
 
-use crate::physical::join_reorder::relation::BaseColumn;
-use crate::physical::join_reorder::utils::is_subset_sorted;
+use crate::join_reorder::relation::BaseColumn;
+use crate::join_reorder::utils::is_subset_sorted;
 
 /// A graph representing the connections (join predicates) between `JoinRelation`s.
 #[derive(Debug, Default)]
-pub struct QueryGraph {
+pub(crate) struct QueryGraph {
     /// The root of the Trie-like structure that stores connectivity information.
     root_edge: QueryEdge,
     /// Maps a set of relation IDs to their direct neighbors' IDs.
@@ -15,7 +15,7 @@ pub struct QueryGraph {
 
 /// A node in the `QueryGraph`'s Trie structure.
 #[derive(Debug, Default)]
-pub struct QueryEdge {
+pub(crate) struct QueryEdge {
     /// A list of neighbors for the relation set represented by the path to this edge.
     neighbors: Vec<NeighborInfo>,
     /// Child edges in the Trie, keyed by the next relation ID in a set.
@@ -23,7 +23,7 @@ pub struct QueryEdge {
 }
 
 #[derive(Debug)]
-pub struct NeighborInfo {
+pub(crate) struct NeighborInfo {
     /// The neighboring relation set.
     neighbor_relations: Arc<Vec<usize>>,
     /// The join conditions that connect the source set to this neighbor.
@@ -90,7 +90,6 @@ impl QueryGraph {
     ///
     /// This function traverses the graph to find an edge that connects any subset of `left_set`
     /// to any subset of `right_set`.
-    #[allow(dead_code)]
     pub fn get_connections(
         &self,
         left_set: Arc<Vec<usize>>,
@@ -176,7 +175,7 @@ mod tests {
     use std::sync::Arc;
 
     use super::*;
-    use crate::physical::join_reorder::RelationSetTree;
+    use crate::join_reorder::RelationSetTree;
 
     // Helper to create a dummy BaseColumn
     fn dummy_base_column(relation_id: usize, index: usize) -> BaseColumn {

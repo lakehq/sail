@@ -31,7 +31,6 @@ pub struct TextWriterOptions {
 }
 
 impl TextWriterOptions {
-    #[allow(unused)]
     pub fn new(line_sep: u8, compression: CompressionTypeVariant) -> Self {
         Self {
             line_sep,
@@ -169,7 +168,6 @@ impl TextSink {
         }
     }
 
-    #[allow(unused)]
     pub fn writer_options(&self) -> &TextWriterOptions {
         &self.writer_options
     }

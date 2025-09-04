@@ -18,9 +18,9 @@ use datafusion::physical_optimizer::topk_aggregation::TopKAggregation;
 use datafusion::physical_optimizer::update_aggr_exprs::OptimizeAggregateOrder;
 use datafusion::physical_optimizer::PhysicalOptimizerRule;
 
-use crate::physical::JoinReorder;
+use crate::join_reorder::JoinReorder;
 
-pub mod physical;
+mod join_reorder;
 
 pub fn get_physical_optimizers() -> Vec<Arc<dyn PhysicalOptimizerRule + Send + Sync>> {
     vec![
