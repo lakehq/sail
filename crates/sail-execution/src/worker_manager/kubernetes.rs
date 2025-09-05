@@ -210,7 +210,7 @@ impl WorkerManager for KubernetesWorkerManager {
             "{}{}-{}",
             self.options.worker_pod_name_prefix, self.name, id
         );
-        let spec = PodSpec {
+        let mut spec = PodSpec {
             containers: vec![Container {
                 name: "worker".to_string(),
                 command: Some(vec!["sail".to_string()]),
@@ -224,13 +224,17 @@ impl WorkerManager for KubernetesWorkerManager {
             service_account_name: Some(self.options.worker_service_account_name.clone()),
             ..Default::default()
         };
-        let template: PodTemplateSpec = serde_json::from_str(&self.options.worker_pod_template)?;
-        let spec = if let Some(mut s) = template.spec {
-            spec.merge_from(s);
-            s
-        } else {
-            spec
-        };
+        if !self.options.worker_pod_template.is_empty() {
+            let template: PodTemplateSpec = serde_json::from_str(&self.options.worker_pod_template)
+                .map_err(|e| {
+                    ExecutionError::InternalError(format!(
+                        "failed to parse worker pod template: {e}",
+                    ))
+                })?;
+            if let Some(s) = template.spec {
+                spec.merge_from(s);
+            }
+        }
         let p = Pod {
             metadata: ObjectMeta {
                 name: Some(name),

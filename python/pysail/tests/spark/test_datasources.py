@@ -42,8 +42,6 @@ def sample_pandas_df():
 class TestParquetDataSource:
     def test_read_write_basic(self, spark, sample_df, tmp_path):
         path = str(tmp_path / "parquet_basic")
-        path = "/tmp/sail/parquet_basic"
-        print(path)
         sample_df.write.parquet(path, mode="overwrite")
         read_df = spark.read.parquet(path)
         assert sample_df.count() == read_df.count()

@@ -1,3 +1,5 @@
+import os
+
 def pytest_configure(config):
     """Configure pytest.
 
@@ -14,5 +16,6 @@ def pytest_configure(config):
     # of pytest.
     # In common cases, plugins only access the configuration for the first time after this hook,
     # so the cache is not a problem.
-
     config.inicfg["doctest_optionflags"] = "ELLIPSIS NORMALIZE_WHITESPACE IGNORE_EXCEPTION_DETAIL"
+    # In macOS, this ends up being /private/tmp/sail
+    os.environ["PYTEST_DEBUG_TEMPROOT"] = "/tmp/sail"
