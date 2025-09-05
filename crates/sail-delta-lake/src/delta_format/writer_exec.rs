@@ -18,7 +18,7 @@ use datafusion::physical_plan::{
     PlanProperties, SendableRecordBatchStream,
 };
 use datafusion_common::{internal_err, DataFusionError, Result};
-use datafusion_physical_expr::EquivalenceProperties;
+use datafusion_physical_expr::{Distribution, EquivalenceProperties};
 use deltalake::kernel::engine::arrow_conversion::{TryIntoArrow, TryIntoKernel};
 use deltalake::kernel::schema::StructType;
 #[allow(deprecated)]
@@ -136,6 +136,10 @@ impl ExecutionPlan for DeltaWriterExec {
 
     fn properties(&self) -> &PlanProperties {
         &self.cache
+    }
+
+    fn required_input_distribution(&self) -> Vec<Distribution> {
+        vec![Distribution::SinglePartition]
     }
 
     fn children(&self) -> Vec<&Arc<dyn ExecutionPlan>> {
