@@ -5,6 +5,17 @@ next: false
 
 # Changelog
 
+## 0.3.5
+
+_September 5, 2025_
+
+- Fixed issues with writing partitioned data to Delta Lake tables ([#837](https://github.com/lakehq/sail/pull/837)).
+- Improved type inference for `NULL` map values in the `VALUES` SQL clause ([#829](https://github.com/lakehq/sail/pull/829)).
+
+### Contributors
+
+Huge thanks to [@SparkApplicationMaster](https://github.com/SparkApplicationMaster) for the continued contributions!
+
 ## 0.3.4
 
 _September 3, 2025_
