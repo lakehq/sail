@@ -126,6 +126,25 @@ impl MappedJoinKey {
     }
 }
 
+/// A stable, context-free representation of a filter expression.
+/// Similar to MappedJoinKey but for non-equi conditions that need to be applied as filters.
+#[derive(Debug, Clone)]
+pub(crate) struct MappedFilterExpr {
+    /// The physical expression for the filter. Column indices within this expression
+    /// are relative to the sub-plan from which this filter was extracted.
+    pub(crate) expr: PhysicalExprRef,
+    /// Maps column indices within `expr` to stable `(relation_id, base_col_idx)` identifiers.
+    /// This is crucial for rewriting the expression as the plan shape changes.
+    pub(crate) column_map: HashMap<usize, (usize, usize)>,
+}
+
+impl MappedFilterExpr {
+    /// Creates a new MappedFilterExpr from an expression and its column mapping context.
+    pub(crate) fn new(expr: PhysicalExprRef, column_map: HashMap<usize, (usize, usize)>) -> Self {
+        Self { expr, column_map }
+    }
+}
+
 #[derive(Debug, Clone)]
 pub(crate) struct JoinNode {
     /// A sorted vector of relation IDs (`JoinRelation::id`) that this node covers.

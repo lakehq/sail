@@ -35,7 +35,7 @@ use datafusion::physical_plan::ExecutionPlan;
 use log::debug;
 
 use crate::join_reorder::graph::QueryGraph;
-use crate::join_reorder::plan::{JoinRelation, MappedJoinKey, RelationSetTree};
+use crate::join_reorder::plan::{JoinRelation, MappedFilterExpr, MappedJoinKey, RelationSetTree};
 use crate::join_reorder::utils::is_simple_projection;
 use crate::join_reorder::JoinReorder;
 
@@ -46,7 +46,7 @@ pub(crate) struct DecomposedPlan {
     /// Query graph representing equi-join conditions between relations.
     pub(crate) query_graph: QueryGraph,
     /// Non-equi conditions that should be applied as filters.
-    pub(crate) non_equi_conditions: Vec<PhysicalExprRef>,
+    pub(crate) non_equi_conditions: Vec<MappedFilterExpr>,
     /// Mapping from original plan output columns to (relation_id, base_col_idx).
     pub(crate) original_output_map: HashMap<usize, (usize, usize)>,
     /// Trie structure for managing canonical relation sets.
@@ -57,7 +57,7 @@ pub(crate) struct DecomposedPlan {
 pub(crate) struct Decomposer<'a> {
     join_relations: Vec<JoinRelation>,
     query_graph: QueryGraph,
-    non_equi_conditions: Vec<PhysicalExprRef>,
+    non_equi_conditions: Vec<MappedFilterExpr>,
     relation_set_tree: RelationSetTree,
     /// Reference to the main optimizer for recursive calls.
     optimizer: &'a JoinReorder,
@@ -150,7 +150,18 @@ impl<'a> Decomposer<'a> {
         }
 
         if let Some(filter_expr) = filter {
-            self.non_equi_conditions.push(filter_expr.clone());
+            // Combine left and right child maps to provide complete context for the filter
+            let combined_input_map = self.combine_column_maps(
+                left_map.clone(),
+                right_map.clone(),
+                left.schema().fields().len(),
+            )?;
+            let filter_local_column_map =
+                self.extract_local_column_map_for_expr(filter_expr, &combined_input_map)?;
+            self.non_equi_conditions.push(MappedFilterExpr::new(
+                filter_expr.clone(),
+                filter_local_column_map,
+            ));
         }
 
         self.combine_column_maps(left_map, right_map, left.schema().fields().len())
@@ -158,8 +169,23 @@ impl<'a> Decomposer<'a> {
 
     /// Decomposes a FilterExec by collecting its predicate and recursing on its input.
     fn decompose_filter(&mut self, filter: &FilterExec) -> Result<HashMap<usize, (usize, usize)>> {
-        self.non_equi_conditions.push(filter.predicate().clone());
-        self.recursive_decompose(filter.input().clone())
+        // First recursively decompose the input to get its column mapping
+        let input_map = self.recursive_decompose(filter.input().clone())?;
+        debug!(
+            "Decomposer: Found filter, adding to non-equi conditions: {}",
+            filter.predicate()
+        );
+
+        // Extract the local column mapping for the filter predicate
+        let filter_local_column_map =
+            self.extract_local_column_map_for_expr(filter.predicate(), &input_map)?;
+        self.non_equi_conditions.push(MappedFilterExpr::new(
+            filter.predicate().clone(),
+            filter_local_column_map,
+        ));
+
+        // FilterExec's output schema is the same as input schema
+        Ok(input_map)
     }
 
     /// Decomposes a ProjectionExec.
@@ -316,8 +342,16 @@ impl<'a> Decomposer<'a> {
                 left_expr.clone(),
                 Operator::Eq,
                 right_expr.clone(),
-            ));
-            self.non_equi_conditions.push(filter_expr);
+            )) as PhysicalExprRef;
+            // For same-relation filters, we need to create the combined map context
+            let mut combined_map = left_map.clone();
+            for (&right_idx, &origin) in right_map {
+                combined_map.insert(right_idx, origin);
+            }
+            let filter_local_column_map =
+                self.extract_local_column_map_for_expr(&filter_expr, &combined_map)?;
+            self.non_equi_conditions
+                .push(MappedFilterExpr::new(filter_expr, filter_local_column_map));
         }
         Ok(())
     }
@@ -334,5 +368,26 @@ impl<'a> Decomposer<'a> {
             combined_map.insert(left_schema_len + right_idx, origin);
         }
         Ok(combined_map)
+    }
+
+    /// Helper function: Extract local column mapping for a PhysicalExprRef
+    /// This mapping stores: (expr's local index) -> (global relation_id, base_col_idx)
+    fn extract_local_column_map_for_expr(
+        &self,
+        expr: &PhysicalExprRef,
+        input_map_from_parent: &HashMap<usize, (usize, usize)>, // Maps expr input schema index to (rel_id, base_idx)
+    ) -> Result<HashMap<usize, (usize, usize)>> {
+        let mut local_map = HashMap::new();
+        for col in collect_columns(expr) {
+            if let Some(&origin) = input_map_from_parent.get(&col.index()) {
+                local_map.insert(col.index(), origin); // Map expr's local index to (rel_id, base_idx)
+            } else {
+                return Err(DataFusionError::Internal(format!(
+                    "Column '{}' with index {} in expression not found in input map. Input map: {:?}",
+                    col.name(), col.index(), input_map_from_parent
+                )));
+            }
+        }
+        Ok(local_map)
     }
 }

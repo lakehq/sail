@@ -11,7 +11,6 @@ pub fn is_simple_projection(projection: &ProjectionExec) -> bool {
 }
 
 /// Computes the union of two sorted slices.
-#[allow(dead_code)]
 pub fn union_sorted(left: &[usize], right: &[usize]) -> Vec<usize> {
     left.iter().merge(right.iter()).dedup().copied().collect()
 }
