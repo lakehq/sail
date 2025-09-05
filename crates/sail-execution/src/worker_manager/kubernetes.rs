@@ -226,7 +226,7 @@ impl WorkerManager for KubernetesWorkerManager {
         };
         let template: PodTemplateSpec = serde_json::from_str(&self.options.worker_pod_template)?;
         let spec = if let Some(mut s) = template.spec {
-            s.merge_from(spec);
+            spec.merge_from(s);
             s
         } else {
             spec
