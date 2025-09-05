@@ -11,6 +11,7 @@
 use std::collections::HashMap;
 use std::sync::Arc;
 
+use datafusion::arrow::datatypes::{Field, Schema};
 use datafusion::common::tree_node::{Transformed, TreeNode, TreeNodeRewriter};
 use datafusion::common::DataFusionError;
 use datafusion::error::Result;
@@ -71,17 +72,28 @@ impl<'a> PlanFinalizer<'a> {
             stable_to_physical.len()
         );
 
+        let children_schemas: Vec<_> = children.iter().map(|c| c.schema()).collect();
+        let fields: Vec<Field> = children_schemas
+            .iter()
+            .flat_map(|s| s.fields().iter().map(|f| f.as_ref().clone()))
+            .collect();
+        let input_schema = Schema::new(fields);
+
         // Create a rewriter that will replace PlaceholderColumn with Column
         let mut rewriter = PlaceholderRewriter {
-            stable_to_physical,
+            stable_to_physical: &stable_to_physical,
+            input_schema: &input_schema,
             has_transformed: false,
         };
 
         // Rewrite expressions in this plan node
-        let rewritten_plan = self.rewrite_plan_expressions(plan, &mut rewriter)?;
+        let rewritten_plan = self.rewrite_plan_expressions(plan.clone(), &mut rewriter)?;
 
-        // Check if any transformations were made
-        let transformed = rewriter.has_transformed;
+        let transformed = if Arc::ptr_eq(&plan, &rewritten_plan) {
+            rewriter.has_transformed
+        } else {
+            true
+        };
 
         debug!(
             "Finalized plan node: {}, transformed: {}",
@@ -209,7 +221,7 @@ impl<'a> PlanFinalizer<'a> {
     fn rewrite_plan_expressions(
         &self,
         plan: Arc<dyn ExecutionPlan>,
-        rewriter: &mut PlaceholderRewriter,
+        rewriter: &mut PlaceholderRewriter<'_>,
     ) -> Result<Arc<dyn ExecutionPlan>> {
         // Handle different plan types
         if let Some(filter) = plan.as_any().downcast_ref::<FilterExec>() {
@@ -218,21 +230,42 @@ impl<'a> PlanFinalizer<'a> {
             debug!("Rewrote FilterExec predicate on node '{}'", filter.name());
             Ok(Arc::new(new_filter))
         } else if let Some(join) = plan.as_any().downcast_ref::<HashJoinExec>() {
+            // For joins, on-condition expressions must use child-relative indices.
+            // Build child-specific stable->physical mappings with no offsets.
+            let left_map_phys_to_stable = self.extract_column_map_from_plan(join.left())?;
+            let right_map_phys_to_stable = self.extract_column_map_from_plan(join.right())?;
+
+            let left_stable_to_local: HashMap<(usize, usize), usize> = left_map_phys_to_stable
+                .into_iter()
+                .map(|(i, s)| (s, i))
+                .collect();
+            let right_stable_to_local: HashMap<(usize, usize), usize> = right_map_phys_to_stable
+                .into_iter()
+                .map(|(i, s)| (s, i))
+                .collect();
+
+            let left_schema = join.left().schema();
+            let right_schema = join.right().schema();
+            let mut left_rewriter = PlaceholderRewriter {
+                stable_to_physical: &left_stable_to_local,
+                input_schema: left_schema.as_ref(),
+                has_transformed: false,
+            };
+            let mut right_rewriter = PlaceholderRewriter {
+                stable_to_physical: &right_stable_to_local,
+                input_schema: right_schema.as_ref(),
+                has_transformed: false,
+            };
+
             let mut new_on = Vec::new();
             for (left_expr, right_expr) in join.on() {
-                let new_left = left_expr.clone().rewrite(rewriter)?.data;
-                let new_right = right_expr.clone().rewrite(rewriter)?.data;
+                let new_left = left_expr.clone().rewrite(&mut left_rewriter)?.data;
+                let new_right = right_expr.clone().rewrite(&mut right_rewriter)?.data;
                 new_on.push((new_left, new_right));
             }
 
-            let new_filter = if let Some(filter) = join.filter() {
-                let _new_filter_expr = filter.expression().clone().rewrite(rewriter)?.data;
-                // Create a simple JoinFilter-like structure
-                // Note: This is simplified - in a full implementation we'd need proper JoinFilter handling
-                None // For now, skip complex filter handling
-            } else {
-                None
-            };
+            // Join filter handling is skipped for now as before.
+            let new_filter = None;
 
             let new_join = HashJoinExec::try_new(
                 join.left().clone(),
@@ -254,7 +287,17 @@ impl<'a> PlanFinalizer<'a> {
             let mut new_exprs = Vec::new();
             for (expr, name) in projection.expr() {
                 let new_expr = expr.clone().rewrite(rewriter)?.data;
-                new_exprs.push((new_expr, name.clone()));
+                // Preserve original alias names, only fix internal filter-only placeholders
+                let new_name = if name.starts_with("_reorder_filter_col_") {
+                    if let Some(col) = new_expr.as_any().downcast_ref::<Column>() {
+                        col.name().to_string()
+                    } else {
+                        name.clone()
+                    }
+                } else {
+                    name.clone()
+                };
+                new_exprs.push((new_expr, new_name));
             }
             let new_projection = ProjectionExec::try_new(new_exprs, projection.input().clone())?;
             // Count how many expressions are Columns after rewrite
@@ -278,12 +321,13 @@ impl<'a> PlanFinalizer<'a> {
 }
 
 /// TreeNodeRewriter that replaces PlaceholderColumn with Column
-struct PlaceholderRewriter {
-    stable_to_physical: HashMap<(usize, usize), usize>,
+struct PlaceholderRewriter<'a> {
+    stable_to_physical: &'a HashMap<(usize, usize), usize>,
+    input_schema: &'a Schema,
     has_transformed: bool,
 }
 
-impl TreeNodeRewriter for PlaceholderRewriter {
+impl<'a> TreeNodeRewriter for PlaceholderRewriter<'a> {
     type Node = PhysicalExprRef;
 
     fn f_up(&mut self, expr: Self::Node) -> Result<Transformed<Self::Node>> {
@@ -295,8 +339,9 @@ impl TreeNodeRewriter for PlaceholderRewriter {
 
             // Look up the physical index for this stable identifier
             if let Some(&physical_index) = self.stable_to_physical.get(&placeholder.stable_id) {
+                let correct_name = self.input_schema.field(physical_index).name();
                 // Create a new Column expression with the correct physical index
-                let column = Arc::new(Column::new(&placeholder.name, physical_index));
+                let column = Arc::new(Column::new(correct_name, physical_index));
                 debug!(
                     "Replaced PlaceholderColumn '{}' (stable_id: {:?}) with Column at index {}",
                     placeholder.name, placeholder.stable_id, physical_index

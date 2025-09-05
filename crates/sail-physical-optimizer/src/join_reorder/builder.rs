@@ -88,10 +88,42 @@ impl<'a> PlanBuilder<'a> {
 
         // Phase 2: Finalize the prototype plan
         let finalizer = PlanFinalizer::new(self.join_relations);
-        let final_plan = finalizer.finalize(proto_plan_with_filters)?;
+        let finalized_plan = finalizer.finalize(proto_plan_with_filters)?;
+
+        // Add a cleanup projection to drop internal filter-only columns
+        let final_plan = self.create_cleanup_projection(finalized_plan)?;
 
         debug!("Phase 2 complete: Plan finalized successfully");
         Ok(final_plan)
+    }
+
+    /// Adds a cleanup projection that drops filter-only columns and restores the original schema
+    fn create_cleanup_projection(
+        &self,
+        plan: Arc<dyn ExecutionPlan>,
+    ) -> Result<Arc<dyn ExecutionPlan>> {
+        let desired_len = self.original_schema.fields().len();
+        let current_len = plan.schema().fields().len();
+        if current_len <= desired_len {
+            return Ok(plan);
+        }
+
+        debug!(
+            "Adding cleanup projection: trimming columns from {} to {}",
+            current_len, desired_len
+        );
+
+        // Keep only the first N columns which correspond to original output order
+        let mut exprs = Vec::with_capacity(desired_len);
+        let schema = plan.schema();
+        for i in 0..desired_len {
+            let field = schema.field(i).clone();
+            let col = Arc::new(Column::new(field.name(), i)) as PhysicalExprRef;
+            exprs.push((col, field.name().clone()));
+        }
+
+        let projection = ProjectionExec::try_new(exprs, plan)?;
+        Ok(Arc::new(projection))
     }
 
     /// Creates a prototype schema restoration projection using PlaceholderColumn expressions
