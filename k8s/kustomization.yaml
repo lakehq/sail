@@ -5,7 +5,7 @@ resources:
   - sail.yaml
 
 patches:
-  - path: local-volume-patch.yaml
+  - path: test-volume-patch.yaml
     target:
       kind: Deployment
       name: sail-spark-server

@@ -11,7 +11,7 @@ kubectl apply -f k8s/sail.yaml
 kubectl delete -f k8s/sail.yaml
 ```
 
-## Deployment with Local Volume (hostPath) using Kustomize
+## Deployment with Local Volume (hostPath) using Kustomize for testing
 
 ```bash
 kubectl apply -k k8s/
