@@ -49,7 +49,9 @@ use crate::PhysicalOptimizerRule;
 mod builder;
 mod decomposer;
 mod enumerator;
+mod finalizer;
 mod graph;
+mod placeholder;
 mod plan;
 mod utils;
 

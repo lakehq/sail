@@ -492,42 +492,15 @@ impl<'a> Enumerator<'a> {
         }
 
         // Determine build and probe sides based on cardinality
-        let (build_node, probe_node, build_leaves_set) = if left_card <= right_card {
-            let build_leaves_set: HashSet<usize> = left_leaves.iter().copied().collect();
-            (left_node, right_node, build_leaves_set)
+        let (build_node, probe_node) = if left_card <= right_card {
+            (left_node, right_node)
         } else {
-            let build_leaves_set: HashSet<usize> = right_leaves.iter().copied().collect();
-            (right_node, left_node, build_leaves_set)
+            (right_node, left_node)
         };
-
-        // It is critical to preserve and correctly orient all join conditions.
-        // Using `map` ensures this, whereas `filter_map` could discard conditions,
-        // leading to an incorrect (cross) join.
-        let oriented_conditions = conditions
-            .into_iter()
-            .map(|(key1, key2)| {
-                // To determine which key belongs to the build side, we can check the relation ID
-                // of any column within the key. A valid equi-join key should not span across
-                // the build/probe boundary.
-                let key1_is_build_side = key1
-                    .column_map
-                    .values()
-                    .next() // Checking the first column is sufficient and efficient
-                    .is_some_and(|(rel_id, _)| build_leaves_set.contains(rel_id));
-
-                if key1_is_build_side {
-                    (key1, key2)
-                } else {
-                    // If key1 is not from the build side, key2 must be, so they are swapped.
-                    (key2, key1)
-                }
-            })
-            .collect::<Vec<_>>();
-
         let new_join_node = Arc::new(JoinNode {
             leaves: combined_leaves.clone(),
             children: vec![build_node, probe_node], // Always build first, probe second
-            join_conditions: oriented_conditions,   // Normalized conditions
+            join_conditions: conditions,            // Store raw conditions
             join_type: JoinType::Inner,
             stats: new_stats,
             cost: new_cost,

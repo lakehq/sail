@@ -18,6 +18,9 @@ use datafusion::physical_expr::PhysicalExprRef;
 use datafusion::physical_plan::joins::{HashJoinExec, PartitionMode};
 use datafusion::physical_plan::ExecutionPlan;
 
+use crate::join_reorder::placeholder::placeholder_column;
+use log::debug;
+
 /// Type alias for a plan with its column mapping context.
 /// The HashMap maps output column index to (relation_id, base_col_idx).
 pub(crate) type PlanWithColumnMap = (Arc<dyn ExecutionPlan>, HashMap<usize, (usize, usize)>);
@@ -98,7 +101,9 @@ impl MappedJoinKey {
                     let original_idx = col.index();
                     if let Some(&(rel_id, base_idx)) = self.key_column_map.get(&original_idx) {
                         if let Some(&new_idx) = self.target_inv_map.get(&(rel_id, base_idx)) {
-                            let new_name = self.target_schema.field(new_idx).name();
+                            let new_field = self.target_schema.field(new_idx);
+                            let new_name = new_field.name();
+
                             return Ok(Transformed::yes(Arc::new(Column::new(new_name, new_idx))));
                         } else {
                             return Err(DataFusionError::Internal(format!(
@@ -169,6 +174,159 @@ pub(crate) struct JoinNode {
 }
 
 impl JoinNode {
+    /// Builds a prototype plan using PlaceholderColumn expressions.
+    /// This is the new, simplified approach that separates plan structure from physical indices.
+    pub fn build_prototype_plan_recursive(
+        &self,
+        relations: &[JoinRelation],
+    ) -> Result<PlanWithColumnMap> {
+        if self.children.is_empty() {
+            // This is a leaf node, representing a base relation.
+            assert_eq!(self.leaves.len(), 1, "Leaf node must have one relation");
+            let relation_id = self.leaves[0];
+            let relation = relations
+                .iter()
+                .find(|r| r.id == relation_id)
+                .ok_or_else(|| {
+                    DataFusionError::Internal(format!("Relation with id {} not found", relation_id))
+                })?;
+
+            // For base relations, we return the original plan and create the column map
+            let column_map = (0..relation.plan.schema().fields().len())
+                .map(|i| (i, (relation_id, i)))
+                .collect();
+
+            debug!(
+                "Prototype leaf for relation {} with {} columns",
+                relation_id,
+                relation.plan.schema().fields().len()
+            );
+            return Ok((relation.plan.clone(), column_map));
+        }
+
+        // This is an internal node, representing a join.
+        assert_eq!(self.children.len(), 2, "JoinNode must have 2 children");
+
+        let build_child = &self.children[0];
+        let probe_child = &self.children[1];
+
+        let (build_plan, build_map) = build_child.build_prototype_plan_recursive(relations)?;
+        let (probe_plan, probe_map) = probe_child.build_prototype_plan_recursive(relations)?;
+
+        // Create join conditions using PlaceholderColumn
+        let on = self.create_placeholder_join_conditions(&build_map, &probe_map, relations)?;
+        debug!(
+            "Prototype join node: build leaves {:?}, probe leaves {:?}, on_conditions {}",
+            self.children[0].leaves,
+            self.children[1].leaves,
+            on.len()
+        );
+
+        // Create the join plan - use CrossJoinExec if no conditions
+        let joined_plan: Arc<dyn ExecutionPlan> = if on.is_empty() {
+            use datafusion::physical_plan::joins::CrossJoinExec;
+            Arc::new(CrossJoinExec::new(build_plan, probe_plan))
+        } else {
+            Arc::new(HashJoinExec::try_new(
+                build_plan,
+                probe_plan,
+                on,
+                None,
+                &self.join_type,
+                None,
+                PartitionMode::Partitioned,
+                NullEquality::NullEqualsNull,
+            )?)
+        };
+
+        // Create the combined column map
+        let mut new_column_map = build_map;
+        let build_plan_num_cols = joined_plan.children()[0].schema().fields().len();
+        for (probe_idx, origin) in probe_map {
+            new_column_map.insert(build_plan_num_cols + probe_idx, origin);
+        }
+
+        debug!(
+            "Prototype join produced schema with {} columns",
+            joined_plan.schema().fields().len()
+        );
+        Ok((joined_plan, new_column_map))
+    }
+
+    /// Creates join conditions using PlaceholderColumn expressions
+    fn create_placeholder_join_conditions(
+        &self,
+        build_map: &HashMap<usize, (usize, usize)>,
+        probe_map: &HashMap<usize, (usize, usize)>,
+        relations: &[JoinRelation],
+    ) -> Result<Vec<(PhysicalExprRef, PhysicalExprRef)>> {
+        use crate::join_reorder::utils::is_subset_sorted;
+
+        let mut on_conditions = vec![];
+
+        for (key1, key2) in &self.join_conditions {
+            // Determine which key belongs to build side and which to probe side
+            let mut key1_rels: Vec<usize> = key1.column_map.values().map(|(r, _)| *r).collect();
+            key1_rels.sort_unstable();
+            key1_rels.dedup();
+
+            if is_subset_sorted(&key1_rels, &self.children[0].leaves) {
+                // key1 is build, key2 is probe
+                let build_expr =
+                    self.create_placeholder_expr_for_key(key1, build_map, relations)?;
+                let probe_expr =
+                    self.create_placeholder_expr_for_key(key2, probe_map, relations)?;
+                on_conditions.push((build_expr, probe_expr));
+            } else {
+                // key2 is build, key1 is probe
+                let build_expr =
+                    self.create_placeholder_expr_for_key(key2, build_map, relations)?;
+                let probe_expr =
+                    self.create_placeholder_expr_for_key(key1, probe_map, relations)?;
+                on_conditions.push((build_expr, probe_expr));
+            }
+        }
+
+        Ok(on_conditions)
+    }
+
+    /// Creates a PlaceholderColumn expression for a join key
+    fn create_placeholder_expr_for_key(
+        &self,
+        key: &MappedJoinKey,
+        _column_map: &HashMap<usize, (usize, usize)>,
+        relations: &[JoinRelation],
+    ) -> Result<PhysicalExprRef> {
+        // For now, we'll create a simple PlaceholderColumn for the first column in the key
+        // In a more complete implementation, we'd need to handle complex expressions
+
+        if let Some((&_local_idx, &stable_id)) = key.column_map.iter().next() {
+            let (relation_id, col_idx) = stable_id;
+            let relation = relations
+                .iter()
+                .find(|r| r.id == relation_id)
+                .ok_or_else(|| {
+                    DataFusionError::Internal(format!("Relation {} not found", relation_id))
+                })?;
+
+            let schema = relation.plan.schema();
+            let field = schema.field(col_idx);
+            let placeholder =
+                placeholder_column(stable_id, field.name().clone(), field.data_type().clone());
+            debug!(
+                "Created PlaceholderColumn for join key: stable_id={:?}, name='{}'",
+                stable_id,
+                field.name()
+            );
+
+            Ok(placeholder)
+        } else {
+            Err(DataFusionError::Internal(
+                "Join key has no column mappings".to_string(),
+            ))
+        }
+    }
+
     /// Recursively builds the final `ExecutionPlan` from the optimal `JoinNode` tree.
     /// Returns the plan and a map from its output column index to the base relation column origin.
     /// The map is `output_col_idx -> (relation_id, col_idx_in_relation)`.
@@ -294,8 +452,9 @@ impl JoinNode {
             probe_map.iter().map(|(k, v)| (*v, *k)).collect();
 
         debug!(
-            "Created reverse maps - Build reverse map: {:?}, Probe reverse map: {:?}",
-            build_rev_map, probe_rev_map
+            "Created reverse maps - build={} entries, probe={} entries",
+            build_rev_map.len(),
+            probe_rev_map.len()
         );
 
         let mut on_conditions = vec![];
@@ -303,8 +462,10 @@ impl JoinNode {
         // Iterate through conditions and correctly identify build/probe sides
         for (condition_idx, (key1, key2)) in join_conditions.iter().enumerate() {
             debug!(
-                "Processing join condition {}: key1_expr='{}', key1_column_map={:?}, key2_expr='{}', key2_column_map={:?}",
-                condition_idx, key1.expr, key1.column_map, key2.expr, key2.column_map
+                "Processing join condition {}: key1_cols={}, key2_cols={}",
+                condition_idx,
+                key1.column_map.len(),
+                key2.column_map.len()
             );
 
             // Get relation IDs for key1 and sort them for is_subset_sorted
@@ -312,10 +473,7 @@ impl JoinNode {
             key1_rels.sort_unstable();
             key1_rels.dedup();
 
-            debug!(
-                "Key1 relations: {:?}, Build leaves: {:?}",
-                key1_rels, build_leaves
-            );
+            debug!("Key1 relations: {:?}", key1_rels);
 
             // Check if key1 belongs to the build side.
             // We use is_subset_sorted for efficiency as leaf sets are sorted.
@@ -354,7 +512,7 @@ impl JoinNode {
             }
 
             debug!(
-                "Successfully processed join condition {}, total conditions so far: {}",
+                "Processed condition {}, total {}",
                 condition_idx,
                 on_conditions.len()
             );
