@@ -15,14 +15,6 @@ pub fn union_sorted(left: &[usize], right: &[usize]) -> Vec<usize> {
     left.iter().merge(right.iter()).dedup().copied().collect()
 }
 
-/// Checks if two sorted slices have a non-empty intersection.
-#[allow(dead_code)]
-pub fn intersect_sorted<T: Ord>(left: &[T], right: &[T]) -> bool {
-    left.iter()
-        .merge_join_by(right.iter(), |a_val, b_val| a_val.cmp(b_val))
-        .any(|item| item.is_both())
-}
-
 /// Checks if sorted slice `v1` is a subset of sorted slice `v2`.
 pub fn is_subset_sorted<T: Ord>(v1: &[T], v2: &[T]) -> bool {
     v1.iter()
@@ -42,16 +34,6 @@ mod tests {
     #[test]
     fn test_union_overlap() {
         assert_eq!(union_sorted(&[1, 2, 3], &[3, 4, 5]), vec![1, 2, 3, 4, 5]);
-    }
-
-    #[test]
-    fn test_intersect_true() {
-        assert!(intersect_sorted(&[1, 2, 3], &[3, 4, 5]));
-    }
-
-    #[test]
-    fn test_intersect_false() {
-        assert!(!intersect_sorted(&[1, 2], &[3, 4, 5]));
     }
 
     #[test]

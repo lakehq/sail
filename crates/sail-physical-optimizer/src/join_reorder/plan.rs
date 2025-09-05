@@ -17,9 +17,10 @@ use datafusion::physical_expr::expressions::Column;
 use datafusion::physical_expr::PhysicalExprRef;
 use datafusion::physical_plan::joins::{HashJoinExec, PartitionMode};
 use datafusion::physical_plan::ExecutionPlan;
+use log::debug;
 
 use crate::join_reorder::placeholder::placeholder_column;
-use log::debug;
+use crate::join_reorder::utils::is_subset_sorted;
 
 /// Type alias for a plan with its column mapping context.
 /// The HashMap maps output column index to (relation_id, base_col_idx).
@@ -214,7 +215,7 @@ impl JoinNode {
         let (probe_plan, probe_map) = probe_child.build_prototype_plan_recursive(relations)?;
 
         // Create join conditions using PlaceholderColumn
-        let on = self.create_placeholder_join_conditions(&build_map, &probe_map, relations)?;
+        let on = self.create_placeholder_join_conditions(relations)?;
         debug!(
             "Prototype join node: build leaves {:?}, probe leaves {:?}, on_conditions {}",
             self.children[0].leaves,
@@ -256,8 +257,6 @@ impl JoinNode {
     /// Creates join conditions using PlaceholderColumn expressions
     fn create_placeholder_join_conditions(
         &self,
-        build_map: &HashMap<usize, (usize, usize)>,
-        probe_map: &HashMap<usize, (usize, usize)>,
         relations: &[JoinRelation],
     ) -> Result<Vec<(PhysicalExprRef, PhysicalExprRef)>> {
         use crate::join_reorder::utils::is_subset_sorted;
@@ -272,17 +271,13 @@ impl JoinNode {
 
             if is_subset_sorted(&key1_rels, &self.children[0].leaves) {
                 // key1 is build, key2 is probe
-                let build_expr =
-                    self.create_placeholder_expr_for_key(key1, build_map, relations)?;
-                let probe_expr =
-                    self.create_placeholder_expr_for_key(key2, probe_map, relations)?;
+                let build_expr = self.create_placeholder_expr_for_key(key1, relations)?;
+                let probe_expr = self.create_placeholder_expr_for_key(key2, relations)?;
                 on_conditions.push((build_expr, probe_expr));
             } else {
                 // key2 is build, key1 is probe
-                let build_expr =
-                    self.create_placeholder_expr_for_key(key2, build_map, relations)?;
-                let probe_expr =
-                    self.create_placeholder_expr_for_key(key1, probe_map, relations)?;
+                let build_expr = self.create_placeholder_expr_for_key(key2, relations)?;
+                let probe_expr = self.create_placeholder_expr_for_key(key1, relations)?;
                 on_conditions.push((build_expr, probe_expr));
             }
         }
@@ -290,15 +285,12 @@ impl JoinNode {
         Ok(on_conditions)
     }
 
-    /// Creates a PlaceholderColumn expression for a join key
     fn create_placeholder_expr_for_key(
         &self,
         key: &MappedJoinKey,
-        _column_map: &HashMap<usize, (usize, usize)>,
         relations: &[JoinRelation],
     ) -> Result<PhysicalExprRef> {
-        // For now, we'll create a simple PlaceholderColumn for the first column in the key
-        // In a more complete implementation, we'd need to handle complex expressions
+        // TODO: Handle complex expressions. Currently, this creates a PlaceholderColumn for the first column in the key.
 
         if let Some((&_local_idx, &stable_id)) = key.column_map.iter().next() {
             let (relation_id, col_idx) = stable_id;
@@ -368,7 +360,6 @@ impl JoinNode {
             &build_child.leaves,
             &build_map,
             &probe_map,
-            relations,
             &build_plan,
             &probe_plan,
         )?;
@@ -406,7 +397,6 @@ impl JoinNode {
         build_leaves: &[usize],
         build_map: &HashMap<usize, (usize, usize)>,
         probe_map: &HashMap<usize, (usize, usize)>,
-        _relations: &[JoinRelation],
         build_plan: &Arc<dyn ExecutionPlan>,
         probe_plan: &Arc<dyn ExecutionPlan>,
     ) -> Result<Vec<(PhysicalExprRef, PhysicalExprRef)>> {
@@ -433,10 +423,6 @@ impl JoinNode {
         build_map: &HashMap<usize, (usize, usize)>,
         probe_map: &HashMap<usize, (usize, usize)>,
     ) -> Result<Vec<(PhysicalExprRef, PhysicalExprRef)>> {
-        use log::debug;
-
-        use crate::join_reorder::utils::is_subset_sorted;
-
         debug!(
             "Recreating join conditions: {} conditions for build leaves {:?}. Build map: {:?}, Probe map: {:?}",
             join_conditions.len(),

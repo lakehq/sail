@@ -347,8 +347,7 @@ impl<'a> Enumerator<'a> {
             };
 
             {
-                let mut dummy_emit_count = 0;
-                self.emit_join(s1.clone(), s2.clone(), &mut dummy_emit_count)?;
+                self.emit_join(s1.clone(), s2.clone())?;
 
                 let new_set = union_sorted(&s1, &s2);
                 let new_set_arc = self
@@ -424,7 +423,7 @@ impl<'a> Enumerator<'a> {
             )));
         }
 
-        self.emit_join(left_leaves, right_leaves, emit_count)
+        self.emit_join(left_leaves, right_leaves)
     }
 
     /// Creates and evaluates a join between two relation sets
@@ -437,7 +436,6 @@ impl<'a> Enumerator<'a> {
         &mut self,
         left_leaves: Arc<Vec<usize>>,
         right_leaves: Arc<Vec<usize>>,
-        _emit_count: &mut usize,
     ) -> Result<()> {
         let left_node = self
             .dp_table

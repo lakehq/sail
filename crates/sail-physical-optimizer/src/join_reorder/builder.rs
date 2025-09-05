@@ -6,7 +6,7 @@
 //!
 //! ## Two-Phase Reconstruction Process
 //!
-//! The builder now uses a simplified two-phase approach:
+//! The builder uses a simplified two-phase approach:
 //!
 //! 1. **Prototype Construction**: Builds a prototype plan using PlaceholderColumn expressions
 //!    that maintain stable identifiers instead of physical indices
@@ -77,12 +77,10 @@ impl<'a> PlanBuilder<'a> {
         );
 
         // Add schema restoration projection using PlaceholderColumn
-        let proto_plan_with_projection =
-            self.create_prototype_schema_projection(proto_plan, &proto_column_map)?;
+        let proto_plan_with_projection = self.create_prototype_schema_projection(proto_plan)?;
 
         // Add non-equi filters using PlaceholderColumn
-        let proto_plan_with_filters =
-            self.create_prototype_filters(proto_plan_with_projection, &proto_column_map)?;
+        let proto_plan_with_filters = self.create_prototype_filters(proto_plan_with_projection)?;
 
         debug!("Phase 1 complete: Prototype plan with filters created");
 
@@ -130,7 +128,6 @@ impl<'a> PlanBuilder<'a> {
     fn create_prototype_schema_projection(
         &self,
         proto_plan: Arc<dyn ExecutionPlan>,
-        _proto_column_map: &HashMap<usize, (usize, usize)>,
     ) -> Result<Arc<dyn ExecutionPlan>> {
         debug!("Creating prototype schema restoration projection");
 
@@ -207,7 +204,6 @@ impl<'a> PlanBuilder<'a> {
     fn create_prototype_filters(
         &self,
         proto_plan: Arc<dyn ExecutionPlan>,
-        _proto_column_map: &HashMap<usize, (usize, usize)>,
     ) -> Result<Arc<dyn ExecutionPlan>> {
         if self.non_equi_conditions.is_empty() {
             return Ok(proto_plan);

@@ -18,11 +18,9 @@ use datafusion::error::Result;
 use datafusion::physical_expr::expressions::Column;
 use datafusion::physical_expr::PhysicalExprRef;
 use datafusion::physical_plan::filter::FilterExec;
+use datafusion::physical_plan::joins::{CrossJoinExec, HashJoinExec};
+use datafusion::physical_plan::projection::ProjectionExec;
 use datafusion::physical_plan::ExecutionPlan;
-use datafusion::physical_plan::{
-    joins::{CrossJoinExec, HashJoinExec},
-    projection::ProjectionExec,
-};
 use log::debug;
 
 use crate::join_reorder::placeholder::PlaceholderColumn;
@@ -264,7 +262,7 @@ impl<'a> PlanFinalizer<'a> {
                 new_on.push((new_left, new_right));
             }
 
-            // Join filter handling is skipped for now as before.
+            // TODO: Handle join filters.
             let new_filter = None;
 
             let new_join = HashJoinExec::try_new(
