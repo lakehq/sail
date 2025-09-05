@@ -1,13 +1,14 @@
 use std::any::Any;
 
+use arrow::array::ArrayRef;
 use arrow::datatypes::DataType;
 use datafusion::common::Result;
-use datafusion_common::ScalarValue;
 use datafusion_expr::{ScalarFunctionArgs, ScalarUDFImpl};
 use datafusion_expr_common::columnar_value::ColumnarValue;
 use datafusion_expr_common::signature::{Signature, Volatility};
 
-use crate::extension::function::url::parse_url::ParseUrl;
+use crate::extension::function::functions_utils::make_scalar_function;
+use crate::extension::function::url::parse_url::{spark_handled_parse_url, ParseUrl};
 
 #[derive(Debug)]
 pub struct SparkTryParseUrl {
@@ -52,10 +53,14 @@ impl ScalarUDFImpl for SparkTryParseUrl {
     }
 
     fn invoke_with_args(&self, args: ScalarFunctionArgs) -> Result<ColumnarValue> {
-        let parse_url: ParseUrl = ParseUrl::new();
-        match parse_url.invoke_with_args(args) {
-            Err(_) => Ok(ColumnarValue::Scalar(ScalarValue::Utf8(None))),
-            result => result,
-        }
+        let ScalarFunctionArgs { args, .. } = args;
+        make_scalar_function(spark_try_parse_url, vec![])(&args)
     }
+}
+
+fn spark_try_parse_url(args: &[ArrayRef]) -> Result<ArrayRef> {
+    spark_handled_parse_url(args, |x| match x {
+        Err(_) => Ok(None),
+        result => result,
+    })
 }
