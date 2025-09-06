@@ -1558,7 +1558,7 @@
         }
       },
       "output": {
-        "failure": "not implemented: function: make_dt_interval"
+        "success": "ok"
       }
     },
     {
@@ -1580,7 +1580,7 @@
         }
       },
       "output": {
-        "failure": "not implemented: function: make_dt_interval"
+        "success": "ok"
       }
     },
     {
@@ -1602,7 +1602,7 @@
         }
       },
       "output": {
-        "failure": "not implemented: function: make_dt_interval"
+        "success": "ok"
       }
     },
     {
