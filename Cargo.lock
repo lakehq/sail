@@ -5755,6 +5755,8 @@ name = "sail-physical-optimizer"
 version = "0.3.5"
 dependencies = [
  "datafusion",
+ "itertools 0.14.0",
+ "log",
 ]
 
 [[package]]
