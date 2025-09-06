@@ -12,15 +12,18 @@ This guide demonstrates how to deploy Sail on a Kubernetes cluster and connect t
 
 ## Building the Docker Image
 
-We first need to build the Docker image for Sail. Please refer to the [Docker Images Guide](/guide/deployment/docker-images/) for more information.
+We first need to build the Docker image for Sail. Please refer to
+the [Docker Images Guide](/guide/deployment/docker-images/) for more information.
 
 ## Loading the Docker Image
 
 You will need to make the Docker image available to your Kubernetes cluster.
 The exact steps depend on your Kubernetes environment.
-For example, you may want to push the Docker image to your private Docker registry accessible from the Kubernetes cluster.
+For example, you may want to push the Docker image to your private Docker registry accessible from the Kubernetes
+cluster.
 
-If you are using a local Kubernetes cluster, you may need to load the Docker image into the cluster. The command varies depending on the Kubernetes distribution you are using.
+If you are using a local Kubernetes cluster, you may need to load the Docker image into the cluster. The command varies
+depending on the Kubernetes distribution you are using.
 Here are the examples for some well-known Kubernetes distributions.
 You can refer to their documentation for more details.
 
@@ -48,11 +51,18 @@ docker save sail:latest | microk8s images import
 
 :::
 
-The following sections use [kind](https://kind.sigs.k8s.io/) as an example, but you can run Sail in other Kubernetes distributions of your choice.
+The following sections use [kind](https://kind.sigs.k8s.io/) as an example, but you can run Sail in other Kubernetes
+distributions of your choice.
 Run the following command to create a local Kubernetes cluster.
 
 ```bash
 kind create cluster
+```
+
+Alternatively, you can create a kind cluster with a custom configuration.
+
+```bash
+kind create cluster --config k8s/kind-config.yaml
 ```
 
 Then load the Docker image into the cluster.
@@ -85,6 +95,35 @@ The Sail Spark Connect server runs as a Kubernetes deployment, and the gRPC port
 kubectl apply -f sail.yaml
 ```
 
+## Overriding the Default Pod Spec
+
+By default, the worker pod spec is created programmatically. If a `worker_pod_template` is provided, it is merged into
+the generated spec, allowing you to customize the worker pods.
+
+### Using a Custom Pod Template
+
+You can use Kustomize to declaratively define the Kubernetes resources. This approach makes it easier to manage
+overrides and reuse manifests across environments. For example, you can specify a custom image in your `k8s/` overlay
+with the following content.
+
+::: code-group
+
+<<< ../../../k8s/kustomization.yaml
+
+:::
+
+::: code-group
+
+<<< ../../../k8s/test-volume-patch.yaml
+
+:::
+
+Apply the customized manifests with:
+
+```bash
+kubectl apply -k k8s/
+```
+
 ## Running Spark Jobs
 
 To connect to the Sail Spark Connect server, you can forward the service port to your local machine.
@@ -102,6 +141,17 @@ The worker pods are terminated after a certain period of inactivity.
 env SPARK_CONNECT_MODE_ENABLED=1 SPARK_REMOTE="sc://localhost:50051" pyspark
 ```
 
+## Running Pytest
+
+When running tests with pytest, the worker pods may need a writable volume for temporary files. To handle this, define a
+custom pod template (such as the `test-volume-patch.yaml` shown above) that mounts a temporary volume into the pod.
+
+Once the pod template is in place, you can run pytest locally against the cluster with the following command.
+
+```bash
+env SPARK_REMOTE="sc://localhost:50051" PYTEST_DEBUG_TEMPROOT="/tmp/sail" hatch run pytest
+```
+
 ## Cleaning Up
 
 Run the following command to clean up the Kubernetes resources for the Sail server.
@@ -109,6 +159,12 @@ All Sail worker pods will be terminated automatically as well.
 
 ```bash
 kubectl delete -f sail.yaml
+```
+
+If you used Kustomize to deploy the Sail server, you can clean up the resources with the following command.
+
+```bash
+kubectl delete -k k8s/
 ```
 
 You can delete the kind cluster using the following command.
