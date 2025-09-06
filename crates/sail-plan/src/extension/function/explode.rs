@@ -12,6 +12,8 @@ pub fn explode_name_to_kind(name: &str) -> Result<ExplodeKind> {
         "explode_outer" => Ok(ExplodeKind::ExplodeOuter),
         "posexplode" => Ok(ExplodeKind::PosExplode),
         "posexplode_outer" => Ok(ExplodeKind::PosExplodeOuter),
+        "inline" => Ok(ExplodeKind::Inline),
+        "inline_outer" => Ok(ExplodeKind::InlineOuter),
         _ => Err(datafusion::error::DataFusionError::Plan(
             "Invalid explode function name".to_string(),
         )),
