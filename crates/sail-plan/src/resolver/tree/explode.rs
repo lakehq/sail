@@ -67,13 +67,17 @@ impl TreeNodeRewriter for ExplodeRewriter<'_> {
                 return Ok(Transformed::no(func.call(args)));
             }
         };
-        let (with_position, preserve_nulls) = match explode.kind() {
-            ExplodeKind::Explode => (false, false),
-            ExplodeKind::ExplodeOuter => (false, true),
-            ExplodeKind::PosExplode => (true, false),
-            ExplodeKind::PosExplodeOuter => (true, true),
+        let (with_position, preserve_nulls, is_inline) = match explode.kind() {
+            ExplodeKind::Explode => (false, false, false),
+            ExplodeKind::ExplodeOuter => (false, true, false),
+            ExplodeKind::PosExplode => (true, false, false),
+            ExplodeKind::PosExplodeOuter => (true, true, false),
+            ExplodeKind::Inline => (false, false, true),
+            ExplodeKind::InlineOuter => (false, true, true),
         };
         let arg = args.one()?;
+        let arg_type = arg.get_type(self.plan.schema())?;
+        let return_type = func.return_type(&[arg_type])?;
         let data_type = ExplodeDataType::try_from_expr(&arg, self.plan.schema())?;
         let arg = match data_type {
             ExplodeDataType::List => arg,
@@ -89,21 +93,34 @@ impl TreeNodeRewriter for ExplodeRewriter<'_> {
         };
 
         let name = self.state.register_field_name("");
-        let out = match (data_type, with_position) {
-            (ExplodeDataType::List, false) => vec![ident(&name).alias("col")],
-            (ExplodeDataType::List, true) => {
+        let out = match (data_type, with_position, is_inline) {
+            (ExplodeDataType::List, false, false) => vec![ident(&name).alias("col")],
+            (ExplodeDataType::List, true, false) => {
                 vec![
                     ident(&name).field("pos").alias("pos"),
                     ident(&name).field("col").alias("col"),
                 ]
             }
-            (ExplodeDataType::Map, false) => {
+            (ExplodeDataType::List, _, true) => match return_type {
+                DataType::Struct(fields) => Ok(fields
+                    .into_iter()
+                    .map(|field| {
+                        ident(&name)
+                            .field(field.name().as_str())
+                            .alias(field.name().as_str())
+                    })
+                    .collect::<Vec<_>>()),
+                wrong_type => plan_err!(
+                    "inline/inline_outer expects List<Struct> as argument, got {wrong_type:?}"
+                ),
+            }?,
+            (ExplodeDataType::Map, false, _) => {
                 vec![
                     ident(&name).field("key").alias("key"),
                     ident(&name).field("value").alias("value"),
                 ]
             }
-            (ExplodeDataType::Map, true) => vec![
+            (ExplodeDataType::Map, true, _) => vec![
                 ident(&name).field("pos").alias("pos"),
                 ident(&name).field("col").field("key").alias("key"),
                 ident(&name).field("col").field("value").alias("value"),

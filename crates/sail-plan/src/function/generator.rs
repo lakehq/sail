@@ -10,8 +10,11 @@ pub(super) fn list_built_in_generator_functions() -> Vec<(&'static str, ScalarFu
             "explode_outer",
             F::udf(Explode::new(ExplodeKind::ExplodeOuter)),
         ),
-        ("inline", F::unknown("inline")),
-        ("inline_outer", F::unknown("inline_outer")),
+        ("inline", F::udf(Explode::new(ExplodeKind::Inline))),
+        (
+            "inline_outer",
+            F::udf(Explode::new(ExplodeKind::InlineOuter)),
+        ),
         ("posexplode", F::udf(Explode::new(ExplodeKind::PosExplode))),
         (
             "posexplode_outer",
