@@ -93,23 +93,23 @@ class TestWrite:
                 {"id": [1001] * n, "name": ["Alice"] * n},
             )
 
-        df.write.option("path", location).saveAsTable("t2")
+        df.write.saveAsTable("t2", path=location)
         actual = spark.sql("SELECT * FROM t2").toPandas()
         assert_frame_equal(actual, expected(1))
 
         if not is_jvm_spark():
             # The "ignore" mode seems broken in Spark Connect.
-            df.write.option("path", location).saveAsTable("t2", mode="ignore")
+            df.write.saveAsTable("t2", mode="ignore", path=location)
             actual = spark.sql("SELECT * FROM t2").toPandas()
             assert_frame_equal(actual, expected(1))
 
         with pytest.raises(Exception, match=".*"):
-            df.write.option("path", location).saveAsTable("t2", mode="error")
+            df.write.saveAsTable("t2", mode="error", location=location)
 
         with pytest.raises(Exception, match=".*"):
-            df.write.option("path", location).saveAsTable("t2")
+            df.write.saveAsTable("t2", location=location)
 
-        df.write.option("path", location).saveAsTable("t2", mode="append")
+        df.write.saveAsTable("t2", mode="append")
         actual = spark.sql("SELECT * FROM t2").toPandas()
         assert_frame_equal(actual, expected(2))
 
@@ -126,7 +126,7 @@ class TestWrite:
 
         if is_jvm_spark():
             # The "overwrite" mode is not supported in Sail yet.
-            df.write.option("path", location).saveAsTable("t2", mode="overwrite")
+            df.write.saveAsTable("t2", mode="overwrite", path=location)
             actual = spark.sql("SELECT * FROM t2").toPandas()
             assert_frame_equal(actual, expected(1))
 
@@ -142,7 +142,7 @@ class TestWrite:
 
         with pytest.raises(Exception, match=".*"):
             # The table does not exist yet.
-            df.writeTo("t3").option("path", location).replace()
+            df.writeTo("t3").option("location", location).replace()
 
         df.writeTo("t3").option("path", location).create()
         actual = spark.sql("SELECT * FROM t3").toPandas()
@@ -154,7 +154,7 @@ class TestWrite:
 
         pytest.skip("replace and overwrite are not supported in Sail yet")
 
-        df.writeTo("t3").option("path", location).replace()
+        df.writeTo("t3").option("location", location).replace()
         actual = spark.sql("SELECT * FROM t3").toPandas()
         assert_frame_equal(actual, expected(1))
 
@@ -162,7 +162,7 @@ class TestWrite:
         actual = spark.sql("SELECT * FROM t3").toPandas()
         assert_frame_equal(actual, expected(1))
 
-        df.writeTo("t3").option("path", location).overwrite(F.lit(True))
+        df.writeTo("t3").option("location", location).overwrite(F.lit(True))
         actual = spark.sql("SELECT * FROM t3").toPandas()
         assert_frame_equal(actual, expected(1))
 

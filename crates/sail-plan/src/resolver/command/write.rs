@@ -176,6 +176,10 @@ impl PlanResolver<'_> {
         if !cluster_by.is_empty() {
             return Err(PlanError::todo("CLUSTER BY for write"));
         }
+        let options_map = options
+            .clone()
+            .into_iter()
+            .collect::<std::collections::HashMap<_, _>>();
         let mut file_write_options = FileWriteOptions {
             path: String::new(),
             // The mode will be set later so the value here is just a placeholder.
@@ -265,6 +269,10 @@ impl PlanResolver<'_> {
                 }
                 if let Some(location) = info.as_ref().and_then(|x| x.location.as_ref()) {
                     file_write_options.path = location.clone();
+                } else if let Some(location) = options_map.get("location") {
+                    file_write_options.path = location.to_string();
+                } else if let Some(path) = options_map.get("path") {
+                    file_write_options.path = path.to_string();
                 } else {
                     file_write_options.path = self.resolve_default_table_location(&table)?;
                 }
