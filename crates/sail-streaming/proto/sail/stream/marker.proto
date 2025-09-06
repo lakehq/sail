@@ -1,0 +1,28 @@
+syntax = "proto3";
+
+package sail.stream;
+
+message FlowMarker {
+  oneof Kind {
+    LatencyTracker latency_tracker = 1;
+    Watermark watermark = 2;
+    Checkpoint checkpoint = 3;
+  }
+}
+
+message LatencyTracker {
+  string source = 1;
+  uint64 id = 2;
+  int64 timestamp_secs = 3;
+  uint32 timestamp_nanos = 4;
+}
+
+message Watermark {
+  string source = 1;
+  int64 timestamp_secs = 2;
+  uint32 timestamp_nanos = 3;
+}
+
+message Checkpoint {
+  uint64 id = 1;
+}
