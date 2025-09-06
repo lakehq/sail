@@ -350,7 +350,7 @@
         }
       },
       "output": {
-        "failure": "not implemented: function: stack"
+        "success": "ok"
       }
     }
   ]
