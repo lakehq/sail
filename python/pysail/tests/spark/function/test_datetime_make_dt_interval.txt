@@ -1,3 +1,4 @@
+# null
 >>> spark.sql("SELECT (make_dt_interval(null, 0, 0, 0))").show(truncate=False)
 +-------------------------------+
 |make_dt_interval(NULL, 0, 0, 0)|
@@ -30,15 +31,15 @@
 |INTERVAL '0 00:00:00' DAY TO SECOND|
 +-----------------------------------+
 
->>> spark.sql("SELECT (make_dt_interval(-1, 24, 0, 0))").show(truncate=False)
+>>> spark.sql("SELECT (make_dt_interval(-1, 24, 0, 0)) df").show(truncate=False)
 +-----------------------------------+
-|make_dt_interval((- 1), 24, 0, 0)  |
+|df                                 |
 +-----------------------------------+
 |INTERVAL '0 00:00:00' DAY TO SECOND|
 +-----------------------------------+
->>> spark.sql("SELECT (make_dt_interval(1, -24, 0, 0))").show(truncate=False)
+>>> spark.sql("SELECT (make_dt_interval(1, -24, 0, 0)) dt").show(truncate=False)
 +-----------------------------------+
-|make_dt_interval(1, (- 24), 0, 0)  |
+|dt                                 |
 +-----------------------------------+
 |INTERVAL '0 00:00:00' DAY TO SECOND|
 +-----------------------------------+
@@ -49,3 +50,7 @@
 +-------------------------------------+
 |INTERVAL '0 00:00:00.1' DAY TO SECOND|
 +-------------------------------------+
+
+# overflow
+# >>> spark.sql("SELECT (make_dt_interval(214748364, 0, 0, 0))").show(truncate=False)
+# pyspark.errors.exceptions.captured.ArithmeticException: long overflow
