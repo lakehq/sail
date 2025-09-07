@@ -5,7 +5,7 @@ use arrow::array::{Array, ArrayRef, AsArray, DurationMicrosecondBuilder, Primiti
 use arrow::datatypes::TimeUnit::Microsecond;
 use arrow::datatypes::{DurationMicrosecondType, Float64Type, Int32Type};
 use datafusion::arrow::datatypes::DataType;
-use datafusion_common::{exec_err, DataFusionError, Result};
+use datafusion_common::{DataFusionError, Result};
 use datafusion_expr::{ColumnarValue, ScalarFunctionArgs, ScalarUDFImpl, Signature, Volatility};
 
 use crate::extension::function::error_utils::invalid_arg_count_exec_err;
@@ -64,7 +64,7 @@ impl ScalarUDFImpl for SparkMakeDtInterval {
         if arg_types.is_empty() || arg_types.len() > 4 {
             return Err(invalid_arg_count_exec_err(
                 "make_dt_interval",
-                (1, 4),
+                (0, 4),
                 arg_types.len(),
             ));
         }
@@ -82,8 +82,12 @@ impl ScalarUDFImpl for SparkMakeDtInterval {
 }
 fn make_dt_interval_kernel(args: &[ArrayRef]) -> Result<ArrayRef, DataFusionError> {
     // 0 args is in invoke_with_args
-    if args.is_empty() || args.len() > 7 {
-        return exec_err!("make_interval expects between 0 and 7, got {}", args.len());
+    if args.is_empty() || args.len() > 4 {
+        return Err(invalid_arg_count_exec_err(
+            "make_dt_interval",
+            (0, 4),
+            args.len(),
+        ));
     }
 
     let n_rows = args[0].len();
@@ -132,29 +136,60 @@ pub fn make_interval_dt_nano(day: i32, hour: i32, min: i32, sec: f64) -> Result<
         return Ok(None);
     }
 
-    // checks if overflow
-    let total_hours = match day.checked_mul(24).and_then(|v| v.checked_add(hour)) {
-        Some(hr) => hr,
-        None => return Ok(None),
-    };
-    let total_min = match total_hours.checked_mul(60).and_then(|v| v.checked_add(min)) {
-        Some(n) => n,
-        None => return Ok(None),
-    };
-    let nanos_from_min = match (total_min as i64).checked_mul(60_000_000_000) {
-        Some(n) => n,
-        None => return Ok(None),
-    };
+    const HOURS_PER_DAY: i32 = 24;
+    const MINS_PER_HOUR: i32 = 60;
+    const SECS_PER_MINUTE: i64 = 60;
+    const MICROS_PER_SEC: i64 = 1_000_000;
 
-    let total_nanos = match (sec as i64)
-        .checked_mul(60_000_000_000)
-        .and_then(|v| v.checked_add(nanos_from_min))
+    let total_hours: i32 = match day
+        .checked_mul(HOURS_PER_DAY)
+        .and_then(|v| v.checked_add(hour))
     {
-        Some(n) => n,
+        Some(v) => v,
         None => return Ok(None),
     };
 
-    Ok(Some(total_nanos))
+    let total_mins: i32 = match total_hours
+        .checked_mul(MINS_PER_HOUR)
+        .and_then(|v| v.checked_add(min))
+    {
+        Some(v) => v,
+        None => return Ok(None),
+    };
+
+    let mut sec_whole: i64 = sec.trunc() as i64;
+    let sec_frac = sec - (sec_whole as f64);
+    let mut frac_us: i64 = (sec_frac * (MICROS_PER_SEC as f64)).round() as i64;
+
+    if frac_us.abs() >= MICROS_PER_SEC {
+        if frac_us > 0 {
+            frac_us -= MICROS_PER_SEC;
+            sec_whole = match sec_whole.checked_add(1) {
+                Some(v) => v,
+                None => return Ok(None),
+            };
+        } else {
+            frac_us += MICROS_PER_SEC;
+            sec_whole = match sec_whole.checked_sub(1) {
+                Some(v) => v,
+                None => return Ok(None),
+            };
+        }
+    }
+
+    let total_secs: i64 = match (total_mins as i64)
+        .checked_mul(SECS_PER_MINUTE)
+        .and_then(|v| v.checked_add(sec_whole))
+    {
+        Some(v) => v,
+        None => return Ok(None),
+    };
+
+    let total_us = total_secs
+        .checked_mul(MICROS_PER_SEC)
+        .and_then(|v| v.checked_add(frac_us));
+
+    Ok(total_us)
 }
 
 #[cfg(test)]
