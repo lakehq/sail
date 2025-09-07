@@ -118,7 +118,7 @@
         }
       },
       "output": {
-        "failure": "not implemented: function: inline"
+        "success": "ok"
       }
     },
     {
@@ -176,7 +176,7 @@
         }
       },
       "output": {
-        "failure": "not implemented: function: inline_outer"
+        "success": "ok"
       }
     },
     {
@@ -350,7 +350,7 @@
         }
       },
       "output": {
-        "failure": "not implemented: function: stack"
+        "success": "ok"
       }
     }
   ]

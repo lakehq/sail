@@ -1,7 +1,6 @@
 use std::sync::Arc;
 
 use datafusion::physical_expr::LexRequirement;
-use datafusion::physical_plan::coalesce_partitions::CoalescePartitionsExec;
 use datafusion::physical_plan::ExecutionPlan;
 use datafusion_common::Result;
 use sail_common_datafusion::datasource::PhysicalSinkMode;
@@ -45,27 +44,14 @@ impl DeltaPlanBuilder {
 
     /// Build the complete execution plan chain
     pub fn build(self) -> Result<Arc<dyn ExecutionPlan>> {
-        let current_plan = self.input.clone();
-
-        // 1. Project Node
-        let current_plan = self.add_projection_node(current_plan)?;
-
-        // 2. Repartition Node
-        let current_plan = self.add_repartition_node(current_plan)?;
-
-        // 3. Sort Node
-        let current_plan = self.add_sort_node(current_plan)?;
-
-        // 4. Coalesce Partitions Node
-        let current_plan = self.add_coalesce_partitions_node(current_plan)?;
-
-        // 5. Writer Node
-        let current_plan = self.add_writer_node(current_plan)?; // TODO: Support multiple partitions
-
-        // 6. Commit Node
-        let current_plan = self.add_commit_node(current_plan)?;
-
-        Ok(current_plan)
+        let plan = self.input.clone();
+        let plan = self.add_projection_node(plan)?;
+        let plan = self.add_repartition_node(plan)?;
+        let plan = self.add_sort_node(plan)?;
+        // TODO: support parallel writes
+        let plan = self.add_writer_node(plan)?;
+        let plan = self.add_commit_node(plan)?;
+        Ok(plan)
     }
 
     fn add_projection_node(&self, input: Arc<dyn ExecutionPlan>) -> Result<Arc<dyn ExecutionPlan>> {
@@ -86,14 +72,6 @@ impl DeltaPlanBuilder {
             self.partition_columns.clone(),
             self.sort_order.clone(),
         )?)
-    }
-
-    fn add_coalesce_partitions_node(
-        &self,
-        input: Arc<dyn ExecutionPlan>,
-    ) -> Result<Arc<dyn ExecutionPlan>> {
-        // Merge all partitions into a single partition
-        Ok(Arc::new(CoalescePartitionsExec::new(input)))
     }
 
     fn add_writer_node(&self, input: Arc<dyn ExecutionPlan>) -> Result<Arc<dyn ExecutionPlan>> {
