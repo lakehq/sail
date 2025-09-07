@@ -1,14 +1,14 @@
 use std::any::Any;
 use std::sync::Arc;
 
-use arrow::array::{Array, AsArray, Float64Array, Int32Array, IntervalMonthDayNanoBuilder};
-use arrow::datatypes::IntervalUnit::MonthDayNano;
-use arrow::datatypes::{Float64Type, Int32Type};
+use arrow::array::{Array, ArrayRef, AsArray, DurationMicrosecondBuilder, PrimitiveBuilder};
+use arrow::datatypes::{DurationMicrosecondType, Float64Type, Int32Type};
+use arrow::datatypes::TimeUnit::Microsecond;
 use datafusion::arrow::datatypes::DataType;
-use datafusion_common::{exec_err, Result, ScalarValue};
+use datafusion_common::{exec_err, DataFusionError, Result};
 use datafusion_expr::{ColumnarValue, ScalarFunctionArgs, ScalarUDFImpl, Signature, Volatility};
+use crate::extension::function::functions_nested_utils::make_scalar_function;
 
-use crate::extension::function::datetime::spark_make_interval::make_interval_month_day_nano;
 use crate::extension::function::error_utils::invalid_arg_count_exec_err;
 
 #[derive(Debug)]
@@ -44,120 +44,20 @@ impl ScalarUDFImpl for SparkMakeDtInterval {
     }
 
     fn return_type(&self, _arg_types: &[DataType]) -> Result<DataType> {
-        Ok(DataType::Interval(MonthDayNano))
+        Ok(DataType::Duration(Microsecond))
     }
 
     fn invoke_with_args(&self, args: ScalarFunctionArgs) -> Result<ColumnarValue> {
-        let ScalarFunctionArgs {
-            args, number_rows, ..
-        } = args;
-        if args.is_empty() || args.len() > 4 {
-            return Err(invalid_arg_count_exec_err(
-                "make_dt_interval",
-                (1, 4),
-                args.len(),
-            ));
+        if args.args.is_empty() {
+            let n: usize = std::cmp::max(args.number_rows, 1);
+            let mut b: PrimitiveBuilder<DurationMicrosecondType> =
+                DurationMicrosecondBuilder::with_capacity(n);
+            for _ in 0..n {
+                b.append_value(0_i64);
+            }
+            return Ok(ColumnarValue::Array(Arc::new(b.finish())));
         }
-
-        let mut args = args;
-        while args.len() < 4 {
-            if args.len() == 3 {
-                args.push(ColumnarValue::Scalar(ScalarValue::Float64(Some(0.0))));
-            } else {
-                args.push(ColumnarValue::Scalar(ScalarValue::Int32(Some(0))));
-            }
-        }
-
-        let to_int32_array_fn = |col: &ColumnarValue| -> Result<Int32Array> {
-            match col {
-                ColumnarValue::Array(array) => Ok(array.as_primitive::<Int32Type>().to_owned()),
-                ColumnarValue::Scalar(ScalarValue::Int32(Some(value))) => {
-                    Ok(Int32Array::from_value(*value, number_rows))
-                }
-                ColumnarValue::Scalar(ScalarValue::Null)
-                | ColumnarValue::Scalar(ScalarValue::Int32(None)) => {
-                    Ok(Int32Array::from(vec![None; number_rows]))
-                }
-                other => {
-                    exec_err!("Unsupported arg {other:?} for Spark function `make_dt_interval`")
-                }
-            }
-        };
-
-        let to_float64_array_fn = |col: &ColumnarValue| -> Result<Float64Array> {
-            match col {
-                ColumnarValue::Array(array) => Ok(array.as_primitive::<Float64Type>().to_owned()),
-                ColumnarValue::Scalar(ScalarValue::Float64(Some(value))) => {
-                    Ok(Float64Array::from_value(*value, number_rows))
-                }
-                ColumnarValue::Scalar(ScalarValue::Null)
-                | ColumnarValue::Scalar(ScalarValue::Float64(None)) => {
-                    Ok(Float64Array::from(vec![None; number_rows]))
-                }
-                other => {
-                    exec_err!("Unsupported arg {other:?} for Spark function `make_dt_interval`")
-                }
-            }
-        };
-
-        let days = to_int32_array_fn(&args[0]);
-        let hours = to_int32_array_fn(&args[1]);
-        let mins = to_int32_array_fn(&args[2]);
-        let secs = to_float64_array_fn(&args[3]);
-
-        let days = match days {
-            Ok(days) => days,
-            Err(_) => {
-                return Ok(ColumnarValue::Scalar(ScalarValue::IntervalMonthDayNano(
-                    None,
-                )))
-            }
-        };
-        let hours = match hours {
-            Ok(hours) => hours,
-            Err(_) => {
-                return Ok(ColumnarValue::Scalar(ScalarValue::IntervalMonthDayNano(
-                    None,
-                )))
-            }
-        };
-        let mins = match mins {
-            Ok(mins) => mins,
-            Err(_) => {
-                return Ok(ColumnarValue::Scalar(ScalarValue::IntervalMonthDayNano(
-                    None,
-                )))
-            }
-        };
-        let secs = match secs {
-            Ok(secs) => secs,
-            Err(_) => {
-                return Ok(ColumnarValue::Scalar(ScalarValue::IntervalMonthDayNano(
-                    None,
-                )))
-            }
-        };
-        let mut builder = IntervalMonthDayNanoBuilder::with_capacity(number_rows);
-        for i in 0..number_rows {
-            if days.is_null(i) || hours.is_null(i) || mins.is_null(i) || secs.is_null(i) {
-                builder.append_null();
-                continue;
-            }
-            match make_interval_month_day_nano(
-                0,
-                0,
-                0,
-                days.value(i),
-                hours.value(i),
-                mins.value(i),
-                secs.value(i),
-            ) {
-                Ok(interval) => builder.append_value(interval),
-                Err(_) => builder.append_null(),
-            }
-        }
-
-        Ok(ColumnarValue::Array(Arc::new(builder.finish())))
+        make_scalar_function(make_dt_interval_kernel)(&args.args)
     }
 
     fn coerce_types(&self, arg_types: &[DataType]) -> Result<Vec<DataType>> {
@@ -170,13 +70,89 @@ impl ScalarUDFImpl for SparkMakeDtInterval {
         }
 
         Ok((0..arg_types.len())
-            .map(|i| {
-                if i == 3 {
-                    DataType::Float64
-                } else {
-                    DataType::Int32
-                }
-            })
+            .map(|i| if i == 3 { DataType::Float64 } else { DataType::Int32 })
             .collect())
     }
+}
+fn make_dt_interval_kernel(args: &[ArrayRef]) -> Result<ArrayRef, DataFusionError> {
+
+
+    // 0 args is in invoke_with_args
+    if args.is_empty() || args.len() > 7 {
+        return exec_err!("make_interval expects between 0 and 7, got {}", args.len());
+    }
+
+    let n_rows = args[0].len();
+    debug_assert!(args.iter().all(|a| a.len() == n_rows));
+
+    let days  = args.get(0).map(|a| a.as_primitive::<Int32Type>());
+    let hours = args.get(1).map(|a| a.as_primitive::<Int32Type>());
+    let mins  = args.get(2).map(|a| a.as_primitive::<Int32Type>());
+    let secs  = args.get(3).map(|a| a.as_primitive::<Float64Type>());
+
+    let mut builder = DurationMicrosecondBuilder::with_capacity(n_rows);
+
+    for i in 0..n_rows {
+        // if one column is NULL → result NULL
+        let any_null_present =  days.as_ref().is_some_and(|a| a.is_null(i))
+            || hours.as_ref().is_some_and(|a| a.is_null(i))
+            || mins.as_ref().is_some_and(|a| a.is_null(i))
+            || secs.as_ref().is_some_and(|a| {
+            a.is_null(i) || a.value(i).is_infinite() || a.value(i).is_nan()
+        });
+
+        if any_null_present {
+            builder.append_null();
+            continue;
+        }
+
+        // default values 0 or 0.0
+        let d = days.as_ref().map_or(0, |a| a.value(i));
+        let h = hours.as_ref().map_or(0, |a| a.value(i));
+        let mi = mins.as_ref().map_or(0, |a| a.value(i));
+        let s = secs.as_ref().map_or(0.0, |a| a.value(i));
+
+        match make_interval_dt_nano(d, h, mi, s)? {
+            Some(v) => builder.append_value(v),
+            None => {
+                builder.append_null();
+                continue;
+            }
+        }
+    }
+
+    Ok(Arc::new(builder.finish()))
+}
+pub fn make_interval_dt_nano(
+    day: i32,
+    hour: i32,
+    min: i32,
+    sec: f64,
+) -> Result<Option<i64>> {
+
+    if !sec.is_finite() {
+        return Ok(None);
+    }
+
+    // checks if overflow
+    let total_hours = match day.checked_mul(24).and_then(|v| v.checked_add(hour)) {
+        Some(hr) => hr,
+        None => return Ok(None),
+    };
+    let total_min = match total_hours.checked_mul(60).and_then(|v| v.checked_add(min)) {
+        Some(n) => n,
+        None => return Ok(None),
+    };
+    let nanos_from_min = match (total_min as i64).checked_mul(60_000_000_000) {
+        Some(n) => n,
+        None => return Ok(None),
+    };
+
+    let total_nanos = match (sec as i64).checked_mul(60_000_000_000)
+        .and_then(|v| v.checked_add(nanos_from_min)) {
+        Some(n) => n,
+        None => return Ok(None),
+    };
+
+    Ok(Some(total_nanos))
 }
