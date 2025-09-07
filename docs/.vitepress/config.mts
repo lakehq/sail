@@ -131,7 +131,7 @@ class TransformPageData {
   static robots(pageData: PageData): void {
     const isDevGuide = pageData.relativePath.startsWith("development/");
     if (
-      Site.version() === "latest" ||
+      (Site.version() === "latest" && !isDevGuide) ||
       (Site.version() === "main" && isDevGuide)
     ) {
       return;
