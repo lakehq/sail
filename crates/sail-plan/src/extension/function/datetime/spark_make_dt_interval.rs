@@ -83,7 +83,7 @@ impl ScalarUDFImpl for SparkMakeDtInterval {
 
 fn make_dt_interval_kernel(args: &[ArrayRef]) -> Result<ArrayRef, DataFusionError> {
     // 0 args is in invoke_with_args
-    if args.is_empty() || args.len() > 4 {
+    if args.len() > 4 {
         return Err(invalid_arg_count_exec_err(
             "make_dt_interval",
             (0, 4),
