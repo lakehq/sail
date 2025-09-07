@@ -1,4 +1,10 @@
 # null
+>>> spark.sql("SELECT (make_dt_interval())").show(truncate=False)
++-----------------------------------+
+|make_dt_interval(0, 0, 0, 0.000000)|
++-----------------------------------+
+|INTERVAL '0 00:00:00' DAY TO SECOND|
++-----------------------------------+
 >>> spark.sql("SELECT (make_dt_interval(null, 0, 0, 0))").show(truncate=False)
 +-------------------------------+
 |make_dt_interval(NULL, 0, 0, 0)|
@@ -24,6 +30,36 @@
 |NULL                           |
 +-------------------------------+
 
+# missing params
+>>> spark.sql("SELECT (make_dt_interval(1))").show(truncate=False)
++-----------------------------------+
+|make_dt_interval(1, 0, 0, 0.000000)|
++-----------------------------------+
+|INTERVAL '1 00:00:00' DAY TO SECOND|
++-----------------------------------+
+
+>>> spark.sql("SELECT (make_dt_interval(1, 1))").show(truncate=False)
++-----------------------------------+
+|make_dt_interval(1, 1, 0, 0.000000)|
++-----------------------------------+
+|INTERVAL '1 01:00:00' DAY TO SECOND|
++-----------------------------------+
+
+>>> spark.sql("SELECT (make_dt_interval(1, 1, 1))").show(truncate=False)
++-----------------------------------+
+|make_dt_interval(1, 1, 1, 0.000000)|
++-----------------------------------+
+|INTERVAL '1 01:01:00' DAY TO SECOND|
++-----------------------------------+
+
+>>> spark.sql("SELECT (make_dt_interval(1, 1, 1, 1 ))").show(truncate=False)
++-----------------------------------+
+|make_dt_interval(1, 1, 1, 1)       |
++-----------------------------------+
+|INTERVAL '1 01:01:01' DAY TO SECOND|
++-----------------------------------+
+
+# all 0 values
 >>> spark.sql("SELECT (make_dt_interval(0, 0, 0, 0))").show(truncate=False)
 +-----------------------------------+
 |make_dt_interval(0, 0, 0, 0)       |
