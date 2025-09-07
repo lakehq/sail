@@ -133,9 +133,6 @@ fn make_dt_interval_kernel(args: &[ArrayRef]) -> Result<ArrayRef, DataFusionErro
     Ok(Arc::new(builder.finish()))
 }
 pub fn make_interval_dt_nano(day: i32, hour: i32, min: i32, sec: f64) -> Result<Option<i64>> {
-    if !sec.is_finite() {
-        return Ok(None);
-    }
 
     const HOURS_PER_DAY: i32 = 24;
     const MINS_PER_HOUR: i32 = 60;
