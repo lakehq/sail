@@ -2,14 +2,14 @@ use std::any::Any;
 use std::sync::Arc;
 
 use arrow::array::{Array, ArrayRef, AsArray, DurationMicrosecondBuilder, PrimitiveBuilder};
-use arrow::datatypes::{DurationMicrosecondType, Float64Type, Int32Type};
 use arrow::datatypes::TimeUnit::Microsecond;
+use arrow::datatypes::{DurationMicrosecondType, Float64Type, Int32Type};
 use datafusion::arrow::datatypes::DataType;
 use datafusion_common::{exec_err, DataFusionError, Result};
 use datafusion_expr::{ColumnarValue, ScalarFunctionArgs, ScalarUDFImpl, Signature, Volatility};
-use crate::extension::function::functions_nested_utils::make_scalar_function;
 
 use crate::extension::function::error_utils::invalid_arg_count_exec_err;
+use crate::extension::function::functions_nested_utils::make_scalar_function;
 
 #[derive(Debug)]
 pub struct SparkMakeDtInterval {
@@ -70,13 +70,17 @@ impl ScalarUDFImpl for SparkMakeDtInterval {
         }
 
         Ok((0..arg_types.len())
-            .map(|i| if i == 3 { DataType::Float64 } else { DataType::Int32 })
+            .map(|i| {
+                if i == 3 {
+                    DataType::Float64
+                } else {
+                    DataType::Int32
+                }
+            })
             .collect())
     }
 }
 fn make_dt_interval_kernel(args: &[ArrayRef]) -> Result<ArrayRef, DataFusionError> {
-
-
     // 0 args is in invoke_with_args
     if args.is_empty() || args.len() > 7 {
         return exec_err!("make_interval expects between 0 and 7, got {}", args.len());
@@ -85,21 +89,21 @@ fn make_dt_interval_kernel(args: &[ArrayRef]) -> Result<ArrayRef, DataFusionErro
     let n_rows = args[0].len();
     debug_assert!(args.iter().all(|a| a.len() == n_rows));
 
-    let days  = args.get(0).map(|a| a.as_primitive::<Int32Type>());
+    let days = args.first().map(|a| a.as_primitive::<Int32Type>());
     let hours = args.get(1).map(|a| a.as_primitive::<Int32Type>());
-    let mins  = args.get(2).map(|a| a.as_primitive::<Int32Type>());
-    let secs  = args.get(3).map(|a| a.as_primitive::<Float64Type>());
+    let mins = args.get(2).map(|a| a.as_primitive::<Int32Type>());
+    let secs = args.get(3).map(|a| a.as_primitive::<Float64Type>());
 
     let mut builder = DurationMicrosecondBuilder::with_capacity(n_rows);
 
     for i in 0..n_rows {
         // if one column is NULL → result NULL
-        let any_null_present =  days.as_ref().is_some_and(|a| a.is_null(i))
+        let any_null_present = days.as_ref().is_some_and(|a| a.is_null(i))
             || hours.as_ref().is_some_and(|a| a.is_null(i))
             || mins.as_ref().is_some_and(|a| a.is_null(i))
-            || secs.as_ref().is_some_and(|a| {
-            a.is_null(i) || a.value(i).is_infinite() || a.value(i).is_nan()
-        });
+            || secs
+                .as_ref()
+                .is_some_and(|a| a.is_null(i) || a.value(i).is_infinite() || a.value(i).is_nan());
 
         if any_null_present {
             builder.append_null();
@@ -123,13 +127,7 @@ fn make_dt_interval_kernel(args: &[ArrayRef]) -> Result<ArrayRef, DataFusionErro
 
     Ok(Arc::new(builder.finish()))
 }
-pub fn make_interval_dt_nano(
-    day: i32,
-    hour: i32,
-    min: i32,
-    sec: f64,
-) -> Result<Option<i64>> {
-
+pub fn make_interval_dt_nano(day: i32, hour: i32, min: i32, sec: f64) -> Result<Option<i64>> {
     if !sec.is_finite() {
         return Ok(None);
     }
@@ -148,11 +146,199 @@ pub fn make_interval_dt_nano(
         None => return Ok(None),
     };
 
-    let total_nanos = match (sec as i64).checked_mul(60_000_000_000)
-        .and_then(|v| v.checked_add(nanos_from_min)) {
+    let total_nanos = match (sec as i64)
+        .checked_mul(60_000_000_000)
+        .and_then(|v| v.checked_add(nanos_from_min))
+    {
         Some(n) => n,
         None => return Ok(None),
     };
 
     Ok(Some(total_nanos))
+}
+
+#[cfg(test)]
+mod tests {
+    use std::sync::Arc;
+
+    use arrow::array::{DurationMicrosecondArray, Float64Array, Int32Array};
+    use arrow::datatypes::DataType::Duration;
+    use arrow::datatypes::Field;
+    use arrow::datatypes::TimeUnit::Microsecond;
+    use datafusion_common::{DataFusionError, Result};
+    use datafusion_expr::{ColumnarValue, ScalarFunctionArgs};
+
+    use super::*;
+
+    fn run_make_dt_interval(arrs: Vec<ArrayRef>) -> Result<ArrayRef> {
+        make_dt_interval_kernel(&arrs)
+    }
+
+    #[test]
+    fn nulls_propagate_per_row() -> Result<()> {
+        let days = Arc::new(Int32Array::from(vec![
+            None,
+            Some(2),
+            Some(3),
+            Some(4),
+            Some(5),
+            Some(6),
+            Some(7),
+        ])) as ArrayRef;
+
+        let hours = Arc::new(Int32Array::from(vec![
+            Some(1),
+            None,
+            Some(3),
+            Some(4),
+            Some(5),
+            Some(6),
+            Some(7),
+        ])) as ArrayRef;
+
+        let mins = Arc::new(Int32Array::from(vec![
+            Some(1),
+            Some(2),
+            None,
+            Some(4),
+            Some(5),
+            Some(6),
+            Some(7),
+        ])) as ArrayRef;
+
+        let secs = Arc::new(Float64Array::from(vec![
+            Some(1.0),
+            Some(2.0),
+            Some(3.0),
+            None,
+            Some(f64::NAN),
+            Some(f64::INFINITY),
+            Some(f64::NEG_INFINITY),
+        ])) as ArrayRef;
+
+        let out = run_make_dt_interval(vec![days, hours, mins, secs])?;
+        let out = out
+            .as_any()
+            .downcast_ref::<DurationMicrosecondArray>()
+            .ok_or_else(|| DataFusionError::Internal("expected DurationMicrosecondArray".into()))?;
+
+        for i in 0..out.len() {
+            assert!(out.is_null(i), "row {i} should be NULL");
+        }
+        Ok(())
+    }
+
+    #[test]
+    fn overflow_should_be_null() -> Result<()> {
+        let days = Arc::new(Int32Array::from(vec![Some(i32::MAX)])) as ArrayRef;
+        let hours = Arc::new(Int32Array::from(vec![Some(0)])) as ArrayRef;
+        let mins = Arc::new(Int32Array::from(vec![Some(0)])) as ArrayRef;
+        let secs = Arc::new(Float64Array::from(vec![Some(0.0)])) as ArrayRef;
+
+        let out = run_make_dt_interval(vec![days, hours, mins, secs])?;
+        let out = out
+            .as_any()
+            .downcast_ref::<DurationMicrosecondArray>()
+            .ok_or_else(|| DataFusionError::Internal("expected DurationMicrosecondArray".into()))?;
+
+        assert_eq!(out.len(), 1);
+        assert!(out.is_null(0), "row 0 should be NULL due to overflow");
+        Ok(())
+    }
+
+    fn invoke_make_dt_interval_with_args(
+        args: Vec<ColumnarValue>,
+        number_rows: usize,
+    ) -> Result<ColumnarValue, DataFusionError> {
+        let arg_fields = args
+            .iter()
+            .map(|arg| Field::new("a", arg.data_type(), true).into())
+            .collect::<Vec<_>>();
+        let args = ScalarFunctionArgs {
+            args,
+            arg_fields,
+            number_rows,
+            return_field: Field::new("f", Duration(Microsecond), true).into(),
+        };
+        SparkMakeDtInterval::new().invoke_with_args(args)
+    }
+
+    #[test]
+    fn zero_args_returns_zero_duration() -> Result<()> {
+        let number_rows: usize = 3;
+
+        let res: ColumnarValue = invoke_make_dt_interval_with_args(vec![], number_rows)?;
+        let arr = res.into_array(number_rows)?;
+        let arr = arr
+            .as_any()
+            .downcast_ref::<DurationMicrosecondArray>()
+            .ok_or_else(|| DataFusionError::Internal("expected DurationMicrosecondArray".into()))?;
+
+        assert_eq!(arr.len(), number_rows);
+        for i in 0..number_rows {
+            assert!(!arr.is_null(i));
+            assert_eq!(arr.value(i), 0_i64);
+        }
+        Ok(())
+    }
+
+    #[test]
+    fn one_day_minus_24_hours_equals_zero() -> Result<()> {
+        let arr_days = Arc::new(Int32Array::from(vec![Some(1), Some(-1)])) as ArrayRef;
+        let arr_hours = Arc::new(Int32Array::from(vec![Some(-24), Some(24)])) as ArrayRef;
+        let arr_mins = Arc::new(Int32Array::from(vec![Some(0), Some(0)])) as ArrayRef;
+        let arr_secs = Arc::new(Float64Array::from(vec![Some(0.0), Some(0.0)])) as ArrayRef;
+
+        let out = run_make_dt_interval(vec![arr_days, arr_hours, arr_mins, arr_secs])?;
+        let out = out
+            .as_any()
+            .downcast_ref::<DurationMicrosecondArray>()
+            .ok_or_else(|| DataFusionError::Internal("expected DurationMicrosecondArray".into()))?;
+
+        assert_eq!(out.len(), 2);
+        assert_eq!(out.null_count(), 0);
+        assert_eq!(out.value(0), 0_i64);
+        assert_eq!(out.value(1), 0_i64);
+        Ok(())
+    }
+
+    #[test]
+    fn one_hour_minus_60_mins_equals_zero() -> Result<()> {
+        let arr_days = Arc::new(Int32Array::from(vec![Some(0), Some(0)])) as ArrayRef;
+        let arr_hours = Arc::new(Int32Array::from(vec![Some(-1), Some(1)])) as ArrayRef;
+        let arr_mins = Arc::new(Int32Array::from(vec![Some(60), Some(-60)])) as ArrayRef;
+        let arr_secs = Arc::new(Float64Array::from(vec![Some(0.0), Some(0.0)])) as ArrayRef;
+
+        let out = run_make_dt_interval(vec![arr_days, arr_hours, arr_mins, arr_secs])?;
+        let out = out
+            .as_any()
+            .downcast_ref::<DurationMicrosecondArray>()
+            .ok_or_else(|| DataFusionError::Internal("expected DurationMicrosecondArray".into()))?;
+
+        assert_eq!(out.len(), 2);
+        assert_eq!(out.null_count(), 0);
+        assert_eq!(out.value(0), 0_i64);
+        assert_eq!(out.value(1), 0_i64);
+        Ok(())
+    }
+
+    #[test]
+    fn one_mins_minus_60_secs_equals_zero() -> Result<()> {
+        let arr_days = Arc::new(Int32Array::from(vec![Some(0), Some(0)])) as ArrayRef;
+        let arr_hours = Arc::new(Int32Array::from(vec![Some(0), Some(0)])) as ArrayRef;
+        let arr_mins = Arc::new(Int32Array::from(vec![Some(-1), Some(1)])) as ArrayRef;
+        let arr_secs = Arc::new(Float64Array::from(vec![Some(60.0), Some(-60.0)])) as ArrayRef;
+
+        let out = run_make_dt_interval(vec![arr_days, arr_hours, arr_mins, arr_secs])?;
+        let out = out
+            .as_any()
+            .downcast_ref::<DurationMicrosecondArray>()
+            .ok_or_else(|| DataFusionError::Internal("expected DurationMicrosecondArray".into()))?;
+
+        assert_eq!(out.len(), 2);
+        assert_eq!(out.null_count(), 0);
+        assert_eq!(out.value(0), 0_i64);
+        assert_eq!(out.value(1), 0_i64);
+        Ok(())
+    }
 }
