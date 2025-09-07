@@ -61,7 +61,7 @@ impl ScalarUDFImpl for SparkMakeDtInterval {
     }
 
     fn coerce_types(&self, arg_types: &[DataType]) -> Result<Vec<DataType>> {
-        if arg_types.is_empty() || arg_types.len() > 4 {
+        if arg_types.len() > 4 {
             return Err(invalid_arg_count_exec_err(
                 "make_dt_interval",
                 (0, 4),
@@ -80,6 +80,7 @@ impl ScalarUDFImpl for SparkMakeDtInterval {
             .collect())
     }
 }
+
 fn make_dt_interval_kernel(args: &[ArrayRef]) -> Result<ArrayRef, DataFusionError> {
     // 0 args is in invoke_with_args
     if args.is_empty() || args.len() > 4 {
@@ -146,7 +147,11 @@ pub fn make_interval_dt_nano(day: i32, hour: i32, min: i32, sec: f64) -> Result<
         .and_then(|v| v.checked_add(hour))
     {
         Some(v) => v,
-        None => return Ok(None),
+        None => {
+            return Err(DataFusionError::Execution(
+                "make_dt_interval: long overflow".into(),
+            ))
+        }
     };
 
     let total_mins: i32 = match total_hours
@@ -154,7 +159,11 @@ pub fn make_interval_dt_nano(day: i32, hour: i32, min: i32, sec: f64) -> Result<
         .and_then(|v| v.checked_add(min))
     {
         Some(v) => v,
-        None => return Ok(None),
+        None => {
+            return Err(DataFusionError::Execution(
+                "make_dt_interval: long overflow".into(),
+            ))
+        }
     };
 
     let mut sec_whole: i64 = sec.trunc() as i64;
@@ -166,13 +175,21 @@ pub fn make_interval_dt_nano(day: i32, hour: i32, min: i32, sec: f64) -> Result<
             frac_us -= MICROS_PER_SEC;
             sec_whole = match sec_whole.checked_add(1) {
                 Some(v) => v,
-                None => return Ok(None),
+                None => {
+                    return Err(DataFusionError::Execution(
+                        "make_dt_interval: long overflow".into(),
+                    ))
+                }
             };
         } else {
             frac_us += MICROS_PER_SEC;
             sec_whole = match sec_whole.checked_sub(1) {
                 Some(v) => v,
-                None => return Ok(None),
+                None => {
+                    return Err(DataFusionError::Execution(
+                        "make_dt_interval: long overflow".into(),
+                    ))
+                }
             };
         }
     }
@@ -182,7 +199,11 @@ pub fn make_interval_dt_nano(day: i32, hour: i32, min: i32, sec: f64) -> Result<
         .and_then(|v| v.checked_add(sec_whole))
     {
         Some(v) => v,
-        None => return Ok(None),
+        None => {
+            return Err(DataFusionError::Execution(
+                "make_dt_interval: long overflow".into(),
+            ))
+        }
     };
 
     let total_us = total_secs
@@ -264,20 +285,20 @@ mod tests {
     }
 
     #[test]
-    fn overflow_should_be_null() -> Result<()> {
+    fn overflow_should_error() -> Result<()> {
         let days = Arc::new(Int32Array::from(vec![Some(i32::MAX)])) as ArrayRef;
         let hours = Arc::new(Int32Array::from(vec![Some(0)])) as ArrayRef;
         let mins = Arc::new(Int32Array::from(vec![Some(0)])) as ArrayRef;
         let secs = Arc::new(Float64Array::from(vec![Some(0.0)])) as ArrayRef;
 
-        let out = run_make_dt_interval(vec![days, hours, mins, secs])?;
-        let out = out
-            .as_any()
-            .downcast_ref::<DurationMicrosecondArray>()
-            .ok_or_else(|| DataFusionError::Internal("expected DurationMicrosecondArray".into()))?;
+        let res = run_make_dt_interval(vec![days, hours, mins, secs]);
 
-        assert_eq!(out.len(), 1);
-        assert!(out.is_null(0), "row 0 should be NULL due to overflow");
+        // Debe devolver un Execution error (overflow)
+        assert!(
+            matches!(res, Err(DataFusionError::Execution(_))),
+            "expected Execution error due to overflow, got: {res:?}"
+        );
+
         Ok(())
     }
 
