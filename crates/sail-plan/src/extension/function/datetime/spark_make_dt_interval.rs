@@ -133,7 +133,6 @@ fn make_dt_interval_kernel(args: &[ArrayRef]) -> Result<ArrayRef, DataFusionErro
     Ok(Arc::new(builder.finish()))
 }
 pub fn make_interval_dt_nano(day: i32, hour: i32, min: i32, sec: f64) -> Result<Option<i64>> {
-
     const HOURS_PER_DAY: i32 = 24;
     const MINS_PER_HOUR: i32 = 60;
     const SECS_PER_MINUTE: i64 = 60;
@@ -164,7 +163,7 @@ pub fn make_interval_dt_nano(day: i32, hour: i32, min: i32, sec: f64) -> Result<
     };
 
     let mut sec_whole: i64 = sec.trunc() as i64;
-    let sec_frac = sec - (sec_whole as f64);
+    let sec_frac: f64 = sec - (sec_whole as f64);
     let mut frac_us: i64 = (sec_frac * (MICROS_PER_SEC as f64)).round() as i64;
 
     if frac_us.abs() >= MICROS_PER_SEC {
@@ -290,7 +289,6 @@ mod tests {
 
         let res = run_make_dt_interval(vec![days, hours, mins, secs]);
 
-        // Debe devolver un Execution error (overflow)
         assert!(
             matches!(res, Err(DataFusionError::Execution(_))),
             "expected Execution error due to overflow, got: {res:?}"
@@ -392,6 +390,24 @@ mod tests {
         assert_eq!(out.null_count(), 0);
         assert_eq!(out.value(0), 0_i64);
         assert_eq!(out.value(1), 0_i64);
+        Ok(())
+    }
+
+    #[test]
+    fn no_more_than_4_params() -> Result<()> {
+        let other = Arc::new(Int32Array::from(vec![Some(0)])) as ArrayRef;
+        let days = Arc::new(Int32Array::from(vec![Some(0)])) as ArrayRef;
+        let hours = Arc::new(Int32Array::from(vec![Some(0)])) as ArrayRef;
+        let mins = Arc::new(Int32Array::from(vec![Some(0)])) as ArrayRef;
+        let secs = Arc::new(Float64Array::from(vec![Some(0.0)])) as ArrayRef;
+
+        let res = run_make_dt_interval(vec![other, days, hours, mins, secs]);
+
+        assert!(
+            matches!(res, Err(DataFusionError::Execution(_))),
+            "expected Execution error due to overflow, got: {res:?}"
+        );
+
         Ok(())
     }
 }
