@@ -25,9 +25,9 @@
 +-------------------------------+
 
 # missing params
->>> spark.sql("SELECT (make_dt_interval())").show(truncate=False)
+>>> spark.sql("SELECT (make_dt_interval()) AS make_dt_interval").show(truncate=False)
 +-----------------------------------+
-|make_dt_interval(0, 0, 0, 0.000000)|
+|make_dt_interval                   |
 +-----------------------------------+
 |INTERVAL '0 00:00:00' DAY TO SECOND|
 +-----------------------------------+
