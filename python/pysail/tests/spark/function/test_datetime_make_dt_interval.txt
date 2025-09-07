@@ -1,0 +1,51 @@
+>>> spark.sql("SELECT (make_dt_interval(null, 0, 0, 0))").show(truncate=False)
++-------------------------------+
+|make_dt_interval(NULL, 0, 0, 0)|
++-------------------------------+
+|NULL                           |
++-------------------------------+
+>>> spark.sql("SELECT (make_dt_interval(0, null, 0, 0))").show(truncate=False)
++-------------------------------+
+|make_dt_interval(0, NULL, 0, 0)|
++-------------------------------+
+|NULL                           |
++-------------------------------+
+>>> spark.sql("SELECT (make_dt_interval(0, 0, null, 0))").show(truncate=False)
++-------------------------------+
+|make_dt_interval(0, 0, NULL, 0)|
++-------------------------------+
+|NULL                           |
++-------------------------------+
+>>> spark.sql("SELECT (make_dt_interval(0, 0, 0, null))").show(truncate=False)
++-------------------------------+
+|make_dt_interval(0, 0, 0, NULL)|
++-------------------------------+
+|NULL                           |
++-------------------------------+
+
+>>> spark.sql("SELECT (make_dt_interval(0, 0, 0, 0))").show(truncate=False)
++-----------------------------------+
+|make_dt_interval(0, 0, 0, 0)       |
++-----------------------------------+
+|INTERVAL '0 00:00:00' DAY TO SECOND|
++-----------------------------------+
+
+>>> spark.sql("SELECT (make_dt_interval(-1, 24, 0, 0))").show(truncate=False)
++-----------------------------------+
+|make_dt_interval((- 1), 24, 0, 0)  |
++-----------------------------------+
+|INTERVAL '0 00:00:00' DAY TO SECOND|
++-----------------------------------+
+>>> spark.sql("SELECT (make_dt_interval(1, -24, 0, 0))").show(truncate=False)
++-----------------------------------+
+|make_dt_interval(1, (- 24), 0, 0)  |
++-----------------------------------+
+|INTERVAL '0 00:00:00' DAY TO SECOND|
++-----------------------------------+
+
+>>> spark.sql("SELECT (make_dt_interval(0, 0, 0, 0.1))").show(truncate=False)
++-------------------------------------+
+|make_dt_interval(0, 0, 0, 0.1)       |
++-------------------------------------+
+|INTERVAL '0 00:00:00.1' DAY TO SECOND|
++-------------------------------------+
