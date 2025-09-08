@@ -420,6 +420,52 @@ mod tests {
     }
 
     #[test]
+    fn frac_carries_up_to_next_second_positive() -> Result<()> {
+        // 0.9999995s → 1_000_000 µs (carry a +1s)
+        let days = Arc::new(Int32Array::from(vec![Some(0), Some(0)])) as ArrayRef;
+        let hours = Arc::new(Int32Array::from(vec![Some(0), Some(0)])) as ArrayRef;
+        let mins = Arc::new(Int32Array::from(vec![Some(0), Some(0)])) as ArrayRef;
+        let secs = Arc::new(Float64Array::from(vec![
+            Some(0.999_999_5),
+            Some(0.999_999_4),
+        ])) as ArrayRef;
+
+        let out = run_make_dt_interval(vec![days, hours, mins, secs])?;
+        let out = out
+            .as_any()
+            .downcast_ref::<DurationMicrosecondArray>()
+            .ok_or_else(|| DataFusionError::Internal("expected DurationMicrosecondArray".into()))?;
+
+        assert_eq!(out.len(), 2);
+        assert_eq!(out.value(0), 1_000_000);
+        assert_eq!(out.value(1), 999_999);
+        Ok(())
+    }
+
+    #[test]
+    fn frac_carries_down_to_prev_second_negative() -> Result<()> {
+        // -0.9999995s → -1_000_000 µs (carry a −1s)
+        let days = Arc::new(Int32Array::from(vec![Some(0), Some(0)])) as ArrayRef;
+        let hours = Arc::new(Int32Array::from(vec![Some(0), Some(0)])) as ArrayRef;
+        let mins = Arc::new(Int32Array::from(vec![Some(0), Some(0)])) as ArrayRef;
+        let secs = Arc::new(Float64Array::from(vec![
+            Some(-0.999_999_5),
+            Some(-0.999_999_4),
+        ])) as ArrayRef;
+
+        let out = run_make_dt_interval(vec![days, hours, mins, secs])?;
+        let out = out
+            .as_any()
+            .downcast_ref::<DurationMicrosecondArray>()
+            .ok_or_else(|| DataFusionError::Internal("expected DurationMicrosecondArray".into()))?;
+
+        assert_eq!(out.len(), 2);
+        assert_eq!(out.value(0), -1_000_000);
+        assert_eq!(out.value(1), -999_999);
+        Ok(())
+    }
+
+    #[test]
     fn no_more_than_4_params() -> Result<()> {
         let other = Arc::new(Int32Array::from(vec![Some(0)])) as ArrayRef;
         let days = Arc::new(Int32Array::from(vec![Some(0)])) as ArrayRef;
