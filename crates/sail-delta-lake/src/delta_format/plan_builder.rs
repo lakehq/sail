@@ -5,6 +5,7 @@ use datafusion::datasource::provider_as_source;
 use datafusion::logical_expr::LogicalPlanBuilder;
 use datafusion::physical_expr::{LexRequirement, PhysicalExpr};
 use datafusion::physical_plan::coalesce_partitions::CoalescePartitionsExec;
+use datafusion::physical_plan::filter::FilterExec;
 use datafusion::physical_plan::union::UnionExec;
 use datafusion::physical_plan::ExecutionPlan;
 use datafusion_common::Result;
@@ -66,27 +67,12 @@ impl<'a> DeltaPlanBuilder<'a> {
 
     /// Build the standard execution plan for non-OverwriteIf modes
     fn build_standard_plan(self) -> Result<Arc<dyn ExecutionPlan>> {
-        let current_plan = self.input.clone();
-
-        // 1. Project Node
-        let current_plan = self.add_projection_node(current_plan)?;
-
-        // 2. Repartition Node
-        let current_plan = self.add_repartition_node(current_plan)?;
-
-        // 3. Sort Node
-        let current_plan = self.add_sort_node(current_plan)?;
-
-        // 4. Coalesce Partitions Node
-        let current_plan = self.add_coalesce_partitions_node(current_plan)?;
-
-        // 5. Writer Node
-        let current_plan = self.add_writer_node(current_plan)?;
-
-        // 6. Commit Node
-        let current_plan = self.add_commit_node(current_plan)?;
-
-        Ok(current_plan)
+        self.add_projection_node(self.input.clone())
+            .and_then(|plan| self.add_repartition_node(plan))
+            .and_then(|plan| self.add_sort_node(plan))
+            .and_then(|plan| self.add_coalesce_partitions_node(plan))
+            .and_then(|plan| self.add_writer_node(plan))
+            .and_then(|plan| self.add_commit_node(plan))
     }
 
     /// Build a Union execution plan for OverwriteIf mode
@@ -94,42 +80,27 @@ impl<'a> DeltaPlanBuilder<'a> {
         self,
         condition: Arc<dyn PhysicalExpr>,
     ) -> Result<Arc<dyn ExecutionPlan>> {
-        // Branch 1: New data (from input)
-        let new_data_plan = self.input.clone();
-        let new_data_plan = self.add_projection_node(new_data_plan)?;
-        let new_data_plan = self.add_repartition_node(new_data_plan)?;
-        let new_data_plan = self.add_sort_node(new_data_plan)?;
-        // Ensure new data is in a single partition before Union
-        let new_data_plan = self.add_coalesce_partitions_node(new_data_plan)?;
+        // Build new data plan
+        let new_data_plan = self
+            .add_projection_node(self.input.clone())
+            .and_then(|plan| self.add_repartition_node(plan))
+            .and_then(|plan| self.add_sort_node(plan))
+            .and_then(|plan| self.add_coalesce_partitions_node(plan))?;
 
-        // Branch 2: Old data to keep (filtered existing table data)
-        let old_data_plan = self.build_old_data_plan(condition.clone()).await?;
+        // Build old data plan
+        let old_data_plan = self
+            .build_old_data_plan(condition)
+            .await
+            .and_then(|plan| self.add_coalesce_partitions_node(plan))?;
 
-        let old_data_plan = self.add_coalesce_partitions_node(old_data_plan)?;
-
-        let (aligned_new_data, aligned_old_data) =
-            self.align_schemas(new_data_plan, old_data_plan)?;
-
-        let union_plan: Arc<dyn ExecutionPlan> =
-            Arc::new(UnionExec::new(vec![aligned_new_data, aligned_old_data]));
-
-        // dbg!(
-        //     "Union plan created {}",
-        //     &union_plan.output_partitioning().partition_count()
-        // );
-
-        // Coalesce Union output to ensure single partition for DeltaWriterExec
-
-        // let current_plan = self.add_coalesce_partitions_node(union_plan)?;
-
-        // dbg!(
-        //     "CoalescePartitionsExec: output partitions: {}",
-        //     current_plan.output_partitioning().partition_count()
-        // );
-        let current_plan = self.add_writer_node(union_plan)?;
-        let current_plan = self.add_commit_node(current_plan)?;
-
-        Ok(current_plan)
+        // Create union and final processing chain
+        self.align_schemas(new_data_plan, old_data_plan)
+            .map(|(aligned_new_data, aligned_old_data)| {
+                Arc::new(UnionExec::new(vec![aligned_new_data, aligned_old_data]))
+                    as Arc<dyn ExecutionPlan>
+            })
+            .and_then(|union_plan| self.add_writer_node(union_plan))
+            .and_then(|plan| self.add_commit_node(plan))
     }
 
     /// Build the plan for scanning and filtering old data
@@ -137,8 +108,6 @@ impl<'a> DeltaPlanBuilder<'a> {
         &self,
         condition: Arc<dyn PhysicalExpr>,
     ) -> Result<Arc<dyn ExecutionPlan>> {
-        use datafusion::physical_plan::filter::FilterExec;
-
         // Create object store and load table using the session context
         let object_store = self
             .session_state
