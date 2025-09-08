@@ -2,6 +2,7 @@ use std::any::Any;
 use std::collections::HashMap;
 use std::fmt;
 use std::sync::Arc;
+use std::time::{SystemTime, UNIX_EPOCH};
 
 use async_trait::async_trait;
 use datafusion::arrow::array::{Array, StringArray, UInt64Array};
@@ -18,10 +19,11 @@ use datafusion_common::{internal_err, DataFusionError, Result};
 use datafusion_physical_expr::{Distribution, EquivalenceProperties, PhysicalExpr};
 use delta_kernel::engine::arrow_conversion::TryIntoKernel;
 use delta_kernel::schema::StructType;
-use deltalake::kernel::{Action, Add, Protocol};
+use deltalake::kernel::{Action, Add, Protocol, Remove};
 use deltalake::logstore::StorageConfig;
 use deltalake::protocol::{DeltaOperation, SaveMode};
 use futures::stream::{self, StreamExt};
+use sail_common_datafusion::datasource::PhysicalSinkMode;
 use url::Url;
 
 use crate::delta_format::CommitInfo;
@@ -36,7 +38,7 @@ pub struct DeltaCommitExec {
     partition_columns: Vec<String>,
     table_exists: bool,
     sink_schema: SchemaRef,
-    replace_where_predicate: Option<Arc<dyn PhysicalExpr>>,
+    sink_mode: PhysicalSinkMode,
     cache: PlanProperties,
 }
 
@@ -47,7 +49,7 @@ impl DeltaCommitExec {
         partition_columns: Vec<String>,
         table_exists: bool,
         sink_schema: SchemaRef,
-        replace_where_predicate: Option<Arc<dyn PhysicalExpr>>,
+        sink_mode: PhysicalSinkMode,
     ) -> Self {
         let schema = Arc::new(Schema::new(vec![Field::new(
             "count",
@@ -61,50 +63,68 @@ impl DeltaCommitExec {
             partition_columns,
             table_exists,
             sink_schema,
-            replace_where_predicate,
+            sink_mode,
             cache,
         }
     }
 
     async fn generate_remove_actions(
         table: &crate::table::DeltaTable,
-        predicate: Arc<dyn PhysicalExpr>,
-        context: &TaskContext,
+        predicate: Option<Arc<dyn PhysicalExpr>>,
+        context: Option<&TaskContext>,
     ) -> Result<Vec<Action>> {
-        use std::time::{SystemTime, UNIX_EPOCH};
-
-        use deltalake::kernel::Remove;
-
         // Get the current snapshot
         let snapshot = table
             .snapshot()
             .map_err(|e| DataFusionError::External(Box::new(e)))?;
 
-        let session_state = datafusion::execution::session_state::SessionStateBuilder::new()
-            .with_runtime_env(context.runtime_env().clone())
-            .build();
+        // Get files based on whether we have a predicate or not
+        let files = match predicate {
+            Some(pred) => {
+                // Filtered removal - find files matching the predicate
+                let context = context.ok_or_else(|| {
+                    DataFusionError::Internal(
+                        "TaskContext required for predicate-based removal".to_string(),
+                    )
+                })?;
 
-        let adapter_factory =
-            Arc::new(crate::delta_datafusion::schema_rewriter::DeltaPhysicalExprAdapterFactory {});
+                let session_state =
+                    datafusion::execution::session_state::SessionStateBuilder::new()
+                        .with_runtime_env(context.runtime_env().clone())
+                        .build();
 
-        let candidates = crate::delta_datafusion::find_files_physical(
-            snapshot,
-            table.log_store(),
-            &session_state,
-            Some(predicate),
-            adapter_factory,
-        )
-        .await
-        .map_err(|e| DataFusionError::External(Box::new(e)))?;
+                let adapter_factory = Arc::new(
+                    crate::delta_datafusion::schema_rewriter::DeltaPhysicalExprAdapterFactory {},
+                );
 
-        // Convert matching Add actions to Remove actions
+                let candidates = crate::delta_datafusion::find_files_physical(
+                    snapshot,
+                    table.log_store(),
+                    &session_state,
+                    Some(pred),
+                    adapter_factory,
+                )
+                .await
+                .map_err(|e| DataFusionError::External(Box::new(e)))?;
+
+                candidates.candidates
+            }
+            None => {
+                // Full overwrite - get all existing files
+                snapshot
+                    .file_actions(&*table.log_store())
+                    .await
+                    .map_err(|e| DataFusionError::External(Box::new(e)))?
+            }
+        };
+
+        // Convert Add actions to Remove actions
         let deletion_timestamp = SystemTime::now()
             .duration_since(UNIX_EPOCH)
             .map_err(|e| DataFusionError::External(Box::new(e)))?
             .as_millis() as i64;
 
-        let remove_actions: Vec<Action> = candidates
-            .candidates
+        let remove_actions: Vec<Action> = files
             .into_iter()
             .map(|add| {
                 Action::Remove(Remove {
@@ -154,8 +174,8 @@ impl DeltaCommitExec {
         &self.sink_schema
     }
 
-    pub fn replace_where_predicate(&self) -> &Option<Arc<dyn PhysicalExpr>> {
-        &self.replace_where_predicate
+    pub fn sink_mode(&self) -> &PhysicalSinkMode {
+        &self.sink_mode
     }
 }
 
@@ -191,7 +211,7 @@ impl ExecutionPlan for DeltaCommitExec {
             self.partition_columns.clone(),
             self.table_exists,
             self.sink_schema.clone(),
-            self.replace_where_predicate.clone(),
+            self.sink_mode.clone(),
         )))
     }
 
@@ -222,7 +242,7 @@ impl ExecutionPlan for DeltaCommitExec {
         let partition_columns = self.partition_columns.clone();
         let table_exists = self.table_exists;
         let sink_schema = self.sink_schema.clone();
-        let replace_where_predicate = self.replace_where_predicate.clone();
+        let sink_mode = self.sink_mode.clone();
 
         let schema = self.schema();
         let future = async move {
@@ -286,15 +306,32 @@ impl ExecutionPlan for DeltaCommitExec {
                 return Ok(batch);
             }
 
-            // Generate Remove actions for OverwriteIf operations
+            // Generate Remove actions based on sink_mode
             let mut actions: Vec<Action> = initial_actions;
 
-            // Add Remove actions if this is a replaceWhere operation
-            if let Some(predicate) = &replace_where_predicate {
-                if table_exists {
-                    let remove_actions =
-                        Self::generate_remove_actions(&table, predicate.clone(), &context).await?;
-                    actions.extend(remove_actions);
+            match &sink_mode {
+                PhysicalSinkMode::OverwriteIf { condition } => {
+                    // Add Remove actions if this is a replaceWhere operation
+                    if table_exists {
+                        let remove_actions = Self::generate_remove_actions(
+                            &table,
+                            Some(condition.clone()),
+                            Some(&context),
+                        )
+                        .await?;
+                        actions.extend(remove_actions);
+                    }
+                }
+                PhysicalSinkMode::Overwrite => {
+                    // For full overwrite, remove all existing files
+                    if table_exists {
+                        let remove_actions =
+                            Self::generate_remove_actions(&table, None, None).await?;
+                        actions.extend(remove_actions);
+                    }
+                }
+                _ => {
+                    // Append, ErrorIfExists, IgnoreIfExists don't generate remove actions
                 }
             }
 

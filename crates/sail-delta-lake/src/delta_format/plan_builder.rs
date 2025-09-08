@@ -6,7 +6,7 @@ use datafusion::logical_expr::LogicalPlanBuilder;
 use datafusion::physical_expr::{LexRequirement, PhysicalExpr};
 use datafusion::physical_plan::coalesce_partitions::CoalescePartitionsExec;
 use datafusion::physical_plan::union::UnionExec;
-use datafusion::physical_plan::{ExecutionPlan, ExecutionPlanProperties};
+use datafusion::physical_plan::ExecutionPlan;
 use datafusion_common::Result;
 use sail_common_datafusion::datasource::PhysicalSinkMode;
 use url::Url;
@@ -127,7 +127,7 @@ impl<'a> DeltaPlanBuilder<'a> {
         //     current_plan.output_partitioning().partition_count()
         // );
         let current_plan = self.add_writer_node(union_plan)?;
-        let current_plan = self.add_commit_node_with_condition(current_plan, Some(condition))?;
+        let current_plan = self.add_commit_node(current_plan)?;
 
         Ok(current_plan)
     }
@@ -169,7 +169,7 @@ impl<'a> DeltaPlanBuilder<'a> {
                     .arrow_schema()
                     .map_err(|e| datafusion_common::DataFusionError::External(Box::new(e)))?,
             )
-            .build(&snapshot_state)
+            .build(snapshot_state)
             .map_err(|e| datafusion_common::DataFusionError::External(Box::new(e)))?;
 
         let table_provider = Arc::new(
@@ -299,21 +299,13 @@ impl<'a> DeltaPlanBuilder<'a> {
     }
 
     fn add_commit_node(&self, input: Arc<dyn ExecutionPlan>) -> Result<Arc<dyn ExecutionPlan>> {
-        self.add_commit_node_with_condition(input, None)
-    }
-
-    fn add_commit_node_with_condition(
-        &self,
-        input: Arc<dyn ExecutionPlan>,
-        condition: Option<Arc<dyn PhysicalExpr>>,
-    ) -> Result<Arc<dyn ExecutionPlan>> {
         Ok(Arc::new(DeltaCommitExec::new(
             input,
             self.table_url.clone(),
             self.partition_columns.clone(),
             self.table_exists,
             self.input.schema(), // Use original input schema for metadata
-            condition,
+            self.sink_mode.clone(),
         )))
     }
 }
