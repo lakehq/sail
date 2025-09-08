@@ -8,5 +8,5 @@ workspace = true
 
 [dependencies]
 datafusion = { workspace = true }
-itertools = { workspace = true}
+itertools = { workspace = true }
 log = { workspace = true }

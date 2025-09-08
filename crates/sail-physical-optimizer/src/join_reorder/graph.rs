@@ -2,101 +2,43 @@ use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
 
 use crate::join_reorder::plan::MappedJoinKey;
-use crate::join_reorder::utils::is_subset_sorted;
+use crate::join_reorder::utils::is_subset;
 
-/// A graph representing the connections (join predicates) between `JoinRelation`s.
-///
-/// ## Design Rationale: Trie-based Storage
-///
-/// The QueryGraph uses a sophisticated Trie-based data structure to efficiently store
-/// and query join conditions between relation sets. This design choice is crucial for
-/// the DPHyp algorithm's performance.
-///
-/// ### Why not a simple HashMap?
-///
-/// A naive approach might use `HashMap<Arc<Vec<usize>>, Vec<NeighborInfo>>` to map
-/// relation sets to their neighbors. However, this would be inefficient for DPHyp because:
-///
-/// 1. **Subset Queries**: DPHyp frequently needs to find all neighbors of any subset
-///    of a given relation set. With a HashMap, this would require checking every entry.
-///
-/// 2. **Memory Overhead**: Each relation set would need its own HashMap entry, leading
-///    to redundant storage when many sets share common prefixes.
-///
-/// ### Trie Structure Benefits
-///
-/// The Trie structure provides:
-///
-/// - **Efficient Subset Traversal**: `for_each_subset_edge` can traverse all subsets
-///   of a relation set in O(2^n) time, which is optimal for this operation.
-///
-/// - **Shared Storage**: Common prefixes of relation sets share the same Trie nodes,
-///   reducing memory usage.
-///
-/// - **Cache Locality**: Related relation sets are stored near each other in the Trie,
-///   improving cache performance during traversals.
-///
-/// ### Example Structure
-///
-/// For relations {0, 1, 2} with edges {0}-{1} and {1}-{2}:
-///
-/// ```text
-/// root_edge
-/// ├── 0 → QueryEdge { neighbors: [{1}], children: { 1 → ... } }
-/// ├── 1 → QueryEdge { neighbors: [{0}, {2}], children: { 2 → ... } }
-/// └── 2 → QueryEdge { neighbors: [{1}], children: {} }
-/// ```
 #[derive(Debug, Default)]
 pub(crate) struct QueryGraph {
-    /// The root of the Trie-like structure that stores connectivity information.
-    /// Each path from root to a node represents a sorted relation set.
     root_edge: QueryEdge,
-    /// Maps a set of relation IDs to their direct neighbors' IDs.
-    /// This cache speeds up repeated neighbor queries for the same relation set.
     cached_neighbors: HashMap<Arc<Vec<usize>>, Vec<usize>>,
+    join_filters: HashMap<Arc<Vec<usize>>, Vec<MappedJoinKey>>,
 }
 
-/// A node in the `QueryGraph`'s Trie structure.
 #[derive(Debug, Default)]
 pub(crate) struct QueryEdge {
-    /// A list of neighbors for the relation set represented by the path to this edge.
     neighbors: Vec<NeighborInfo>,
-    /// Child edges in the Trie, keyed by the next relation ID in a set.
     children: HashMap<usize, QueryEdge>,
 }
 
 #[derive(Debug)]
 pub(crate) struct NeighborInfo {
-    /// The neighboring relation set.
     neighbor_relations: Arc<Vec<usize>>,
-    /// The join conditions that connect the source set to this neighbor.
     join_conditions: Vec<(MappedJoinKey, MappedJoinKey)>,
 }
 
 impl QueryGraph {
-    /// Creates a new, empty `QueryGraph`.
     pub fn new() -> Self {
         Self::default()
     }
 
-    /// Adds or updates an edge between two sets of relations.
-    ///
-    /// If an edge already exists, the new join conditions are appended to it.
-    /// Otherwise, a new edge is created.
     pub fn create_edge(
         &mut self,
         left_set: Arc<Vec<usize>>,
         right_set: Arc<Vec<usize>>,
         join_condition: (MappedJoinKey, MappedJoinKey),
     ) {
-        // Create edges in both directions to ensure symmetric lookups.
         self.add_edge_internal(left_set.clone(), right_set.clone(), join_condition.clone());
-        // Swap condition for the reverse edge if needed (though for inner joins it's symmetrical)
         let (right_cond, left_cond) = join_condition;
         self.add_edge_internal(right_set, left_set, (left_cond, right_cond));
     }
 
-    /// Internal helper to add a directed edge and update caches.
     fn add_edge_internal(
         &mut self,
         source_set: Arc<Vec<usize>>,
@@ -108,7 +50,6 @@ impl QueryGraph {
             current_edge = current_edge.children.entry(relation_id).or_default();
         }
 
-        // Check if this neighbor already exists
         if let Some(existing_neighbor) = current_edge
             .neighbors
             .iter_mut()
@@ -116,30 +57,24 @@ impl QueryGraph {
         {
             existing_neighbor.join_conditions.push(join_condition);
         } else {
-            // Add a new neighbor
             let new_neighbor = NeighborInfo {
                 neighbor_relations: neighbor_set.clone(),
                 join_conditions: vec![join_condition],
             };
             current_edge.neighbors.push(new_neighbor);
 
-            // Invalidate/update neighbor cache for the source set
-            // TODO: Update instead.
             self.cached_neighbors.remove(&source_set);
         }
     }
 
-    /// Returns the total number of edges in the query graph.
-    ///
-    /// This counts unique edges (not counting bidirectional edges twice).
+    #[allow(dead_code)]
     pub fn edge_count(&self) -> usize {
         let mut count = 0;
         Self::count_edges_recursive(&self.root_edge, &mut count);
-        // Since edges are stored bidirectionally, divide by 2
         count / 2
     }
 
-    /// Recursively counts edges in the trie structure
+    #[allow(dead_code)]
     fn count_edges_recursive(edge: &QueryEdge, count: &mut usize) {
         *count += edge.neighbors.len();
         for child in edge.children.values() {
@@ -147,10 +82,6 @@ impl QueryGraph {
         }
     }
 
-    /// Checks if two relation sets are directly connected and returns the connecting conditions.
-    ///
-    /// This function traverses the graph to find an edge that connects any subset of `left_set`
-    /// to any subset of `right_set`.
     pub fn get_connections(
         &self,
         left_set: Arc<Vec<usize>>,
@@ -158,14 +89,10 @@ impl QueryGraph {
     ) -> Vec<(MappedJoinKey, MappedJoinKey)> {
         let mut all_conditions = vec![];
 
-        // We need to check all subsets of left_set against right_set.
-        // The graph stores edges from specific sets, so we traverse for each subset.
-        // TODO: Efficient implementation could be done.
-        // For DPHyp, `left_set` will typically be a known entry from the DP table.
 
         self.for_each_subset_edge(&left_set, |edge| {
             for neighbor_info in &edge.neighbors {
-                if is_subset_sorted(&neighbor_info.neighbor_relations, &right_set) {
+                if is_subset(&neighbor_info.neighbor_relations, &right_set) {
                     all_conditions.extend(neighbor_info.join_conditions.clone());
                 }
             }
@@ -174,9 +101,6 @@ impl QueryGraph {
         all_conditions
     }
 
-    /// Finds all unique neighbor relation IDs for a given `node_set`, excluding any IDs present in `forbidden_nodes`.
-    ///
-    /// This method uses a cache to speed up repeated lookups for the same `node_set`.
     pub fn neighbors(
         &mut self,
         node_set: Arc<Vec<usize>>,
@@ -210,12 +134,10 @@ impl QueryGraph {
         result
     }
 
-    /// Helper to traverse the graph for all subsets of a given `node_set` and apply a function to their `QueryEdge`.
     fn for_each_subset_edge<F>(&self, node_set: &[usize], mut func: F)
     where
         F: FnMut(&QueryEdge),
     {
-        // Recursive helper
         fn traverse<'a, F2>(node_set: &'a [usize], current_edge: &'a QueryEdge, func: &mut F2)
         where
             F2: FnMut(&QueryEdge),
@@ -229,6 +151,58 @@ impl QueryGraph {
         }
         traverse(node_set, &self.root_edge, &mut func);
     }
+
+    pub fn has_connection_between_relations(&self, rel1: usize, rel2: usize) -> bool {
+        let set1 = Arc::new(vec![rel1]);
+        let set2 = Arc::new(vec![rel2]);
+
+        let connections = self.get_connections(set1, set2);
+        !connections.is_empty()
+    }
+
+    pub fn add_join_filter(&mut self, relation_set: Arc<Vec<usize>>, filter: MappedJoinKey) {
+        self.join_filters
+            .entry(relation_set)
+            .or_default()
+            .push(filter);
+    }
+
+    #[allow(dead_code)]
+    pub fn get_join_filters(&self, relation_set: &Arc<Vec<usize>>) -> Vec<MappedJoinKey> {
+        let mut filters = Vec::new();
+
+        for (filter_set, filter_list) in &self.join_filters {
+            if is_subset(filter_set, relation_set) {
+                filters.extend(filter_list.clone());
+            }
+        }
+
+        filters
+    }
+
+    pub fn get_newly_applicable_filters(
+        &self,
+        target_set: &Arc<Vec<usize>>,
+        subset1: &Arc<Vec<usize>>,
+        subset2: &Arc<Vec<usize>>,
+    ) -> Vec<MappedJoinKey> {
+
+        let mut new_filters = Vec::new();
+
+
+        for (filter_set, filter_list) in &self.join_filters {
+            let is_subset_target = is_subset(filter_set, target_set);
+            let is_subset_1 = is_subset(filter_set, subset1);
+            let is_subset_2 = is_subset(filter_set, subset2);
+
+
+            if is_subset_target && !is_subset_1 && !is_subset_2 {
+                new_filters.extend(filter_list.clone());
+            }
+        }
+
+        new_filters
+    }
 }
 
 #[cfg(test)]
@@ -238,14 +212,13 @@ mod tests {
     use super::*;
     use crate::join_reorder::plan::RelationSetTree;
 
-    // Helper to create a dummy MappedJoinKey for testing
     fn dummy_mapped_join_key(relation_id: usize, index: usize) -> MappedJoinKey {
         use std::collections::HashMap;
 
         use datafusion::physical_expr::expressions::Column;
 
         let mut column_map = HashMap::new();
-        column_map.insert(index, (relation_id, index));
+        column_map.insert(index, index); // Use stable_id directly for tests
 
         MappedJoinKey::new(
             Arc::new(Column::new(
@@ -256,7 +229,6 @@ mod tests {
         )
     }
 
-    // Helper to create canonical sets for testing
     fn get_sets(sets: Vec<HashSet<usize>>) -> (Vec<Arc<Vec<usize>>>, RelationSetTree) {
         let mut tree = RelationSetTree::new();
         let arcs = sets
@@ -283,9 +255,8 @@ mod tests {
 
         let connections = graph.get_connections(set0.clone(), set1.clone());
         assert_eq!(connections.len(), 1);
-        // Check that the connection contains the expected relation mapping
         assert!(connections[0].0.column_map.contains_key(&0));
-        assert_eq!(connections[0].0.column_map[&0], (0, 0));
+        assert_eq!(connections[0].0.column_map[&0], 0);
 
         let reverse_connections = graph.get_connections(set1.clone(), set0.clone());
         assert_eq!(reverse_connections.len(), 1);
@@ -316,9 +287,8 @@ mod tests {
 
         let connections = graph.get_connections(set01.clone(), set2.clone());
         assert_eq!(connections.len(), 1);
-        // Check that the connection contains the expected relation mapping
         assert!(connections[0].0.column_map.contains_key(&0));
-        assert_eq!(connections[0].0.column_map[&0], (1, 0));
+        assert_eq!(connections[0].0.column_map[&0], 0);
     }
 
     #[test]
@@ -338,7 +308,7 @@ mod tests {
         assert_eq!(connections.len(), 2);
         let indices: HashSet<usize> = connections
             .iter()
-            .filter_map(|(l, _)| l.column_map.values().next().map(|v| v.1))
+            .filter_map(|(l, _)| l.column_map.values().next().copied())
             .collect();
         assert!(indices.contains(&0));
         assert!(indices.contains(&1));
@@ -422,5 +392,53 @@ mod tests {
         let forbidden = HashSet::from([2]);
         let neighbors_forbidden = graph.neighbors(set01.clone(), &forbidden);
         assert_eq!(neighbors_forbidden, vec![3]);
+    }
+
+    #[test]
+    fn test_newly_applicable_filters() {
+        let mut graph = QueryGraph::new();
+        let (sets, mut tree) = get_sets(vec![
+            HashSet::from([0]),
+            HashSet::from([1]),
+            HashSet::from([2]),
+        ]);
+        let set0 = sets[0].clone();
+        let set1 = sets[1].clone();
+        let set2 = sets[2].clone();
+
+        let set01 = tree.get_relation_set(&HashSet::from([0, 1]));
+        let set012 = tree.get_relation_set(&HashSet::from([0, 1, 2]));
+
+        // Add filters for different relation sets
+        let filter_01 = dummy_mapped_join_key(0, 1); // Filter for relations {0, 1}
+        let filter_12 = dummy_mapped_join_key(1, 2); // Filter for relations {1, 2}
+        let filter_012 = dummy_mapped_join_key(0, 2); // Filter for relations {0, 1, 2}
+
+        graph.add_join_filter(set01.clone(), filter_01.clone());
+        graph.add_join_filter(
+            tree.get_relation_set(&HashSet::from([1, 2])),
+            filter_12.clone(),
+        );
+        graph.add_join_filter(set012.clone(), filter_012.clone());
+
+        // Test: When joining {0, 1} with {2}, only the filter for {1, 2} and {0, 1, 2} should be newly applicable
+        let newly_applicable = graph.get_newly_applicable_filters(&set012, &set01, &set2);
+        assert_eq!(newly_applicable.len(), 2);
+        let has_12_filter = newly_applicable
+            .iter()
+            .any(|f| f.column_map.get(&2) == Some(&2));
+        let has_012_filter = newly_applicable
+            .iter()
+            .any(|f| f.column_map.get(&2) == Some(&2));
+        assert!(has_12_filter, "Should have {{1, 2}} filter");
+        assert!(has_012_filter, "Should have {{0, 1, 2}} filter");
+
+        // Test: When joining {0} with {1}, the filter for {0, 1} should be newly applicable
+        let newly_applicable_01 = graph.get_newly_applicable_filters(&set01, &set0, &set1);
+        assert_eq!(newly_applicable_01.len(), 1);
+        assert_eq!(newly_applicable_01[0].column_map[&1], 1);
+
+        let all_filters = graph.get_join_filters(&set012);
+        assert_eq!(all_filters.len(), 3);
     }
 }

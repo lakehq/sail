@@ -24,17 +24,17 @@ mod join_reorder;
 
 pub fn get_physical_optimizers() -> Vec<Arc<dyn PhysicalOptimizerRule + Send + Sync>> {
     vec![
+        // Note: The order of rules is important
         Arc::new(OutputRequirements::new_add_mode()),
         Arc::new(AggregateStatistics::new()),
-        // Custom optimizer
-        Arc::new(JoinReorder::new()),
+        Arc::new(JoinReorder::new()), // Run before JoinSelection to determine optimal join order first
         Arc::new(JoinSelection::new()),
         Arc::new(LimitedDistinctAggregation::new()),
         Arc::new(FilterPushdown::new()),
         Arc::new(EnforceDistribution::new()),
         Arc::new(CombinePartialFinalAggregate::new()),
         Arc::new(EnforceSorting::new()),
-        Arc::new(OptimizeAggregateOrder::new()),
+        Arc::new(OptimizeAggregateOrder::new()), // re-enable CoalesceBatches and ProjectionPushdown
         Arc::new(ProjectionPushdown::new()),
         Arc::new(CoalesceBatches::new()),
         Arc::new(CoalesceAsyncExecInput::new()),
