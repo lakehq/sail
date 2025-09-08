@@ -1,0 +1,69 @@
+>>> spark.sql("SELECT try_parse_url('https://example.com/a?x=1', 'QUERY', 'x') AS result, typeof(try_parse_url('https://example.com/a?x=1', 'QUERY', 'x')) AS type").show(truncate=False)
++------+------+
+|result|type  |
++------+------+
+|1     |string|
++------+------+
+
+>>> spark.sql("SELECT try_parse_url('www.example.com/path?x=1', 'HOST') AS result, typeof(try_parse_url('www.example.com/path?x=1', 'HOST')) AS type").show(truncate=False)
++------+------+
+|result|type  |
++------+------+
+|NULL  |string|
++------+------+
+
+>>> spark.sql("SELECT try_parse_url('https://example.com/?a=1', 'QUERY', 'b') AS result, typeof(try_parse_url('https://example.com/?a=1', 'QUERY', 'b')) AS type").show(truncate=False)
++------+------+
+|result|type  |
++------+------+
+|NULL  |string|
++------+------+
+
+>>> spark.sql("SELECT try_parse_url('https://example.com/path#frag', 'REF') AS result, typeof(try_parse_url('https://example.com/path#frag', 'REF')) AS type").show(truncate=False)
++------+------+
+|result|type  |
++------+------+
+|frag  |string|
++------+------+
+
+>>> spark.sql("SELECT try_parse_url('ftp://user:pwd@ftp.example.com:21/files', 'USERINFO') AS result, typeof(try_parse_url('ftp://user:pwd@ftp.example.com:21/files', 'USERINFO')) AS type").show(truncate=False)
++--------+------+
+|result  |type  |
++--------+------+
+|user:pwd|string|
++--------+------+
+
+>>> spark.sql("SELECT try_parse_url('http://[2001:db8::2]:8080/index.html?ok=1', 'HOST') AS result, typeof(try_parse_url('http://[2001:db8::2]:8080/index.html?ok=1', 'HOST')) AS type").show(truncate=False)
++-------------+------+
+|result       |type  |
++-------------+------+
+|[2001:db8::2]|string|
++-------------+------+
+
+>>> spark.sql("SELECT try_parse_url('notaurl', 'HOST') AS result, typeof(try_parse_url('notaurl', 'HOST')) AS type").show(truncate=False)
++------+------+
+|result|type  |
++------+------+
+|NULL  |string|
++------+------+
+
+>>> spark.sql("SELECT try_parse_url('https://example.com', 'PATH') AS result, typeof(try_parse_url('https://example.com', 'PATH')) AS type").show(truncate=False)
++------+------+
+|result|type  |
++------+------+
+|      |string|
++------+------+
+
+>>> spark.sql("SELECT try_parse_url('https://example.com/a/b?x=1&y=2#frag', 'PROTOCOL') AS result, typeof(try_parse_url('https://example.com/a/b?x=1&y=2#frag', 'PROTOCOL')) AS type").show(truncate=False)
++------+------+
+|result|type  |
++------+------+
+|https |string|
++------+------+
+
+>>> spark.sql("SELECT try_parse_url('https://ex.com/?Tag=ok', 'QUERY', 'tag') AS result, typeof(try_parse_url('https://ex.com/?Tag=ok', 'QUERY', 'tag')) AS type").show(truncate=False)
++------+------+
+|result|type  |
++------+------+
+|NULL  |string|
++------+------+

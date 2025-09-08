@@ -193,6 +193,14 @@ impl ExecutionPlan for DeltaCommitExec {
         &self.cache
     }
 
+    fn required_input_distribution(&self) -> Vec<Distribution> {
+        vec![Distribution::SinglePartition]
+    }
+
+    fn benefits_from_input_partitioning(&self) -> Vec<bool> {
+        vec![false]
+    }
+
     fn children(&self) -> Vec<&Arc<dyn ExecutionPlan>> {
         vec![&self.input]
     }
@@ -213,10 +221,6 @@ impl ExecutionPlan for DeltaCommitExec {
             self.sink_schema.clone(),
             self.sink_mode.clone(),
         )))
-    }
-
-    fn required_input_distribution(&self) -> Vec<Distribution> {
-        vec![Distribution::SinglePartition]
     }
 
     fn execute(

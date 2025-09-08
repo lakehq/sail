@@ -6,9 +6,10 @@ from pandas.testing import assert_frame_equal
 from pysail.tests.spark.utils import escape_sql_string_literal, is_jvm_spark
 
 
-@pytest.fixture(scope="module", autouse=True)
-def tables(spark):
-    spark.sql("CREATE TABLE t1 (id LONG, name STRING, age LONG)")
+@pytest.fixture(autouse=True)
+def tables(spark, tmp_path):
+    location = str(tmp_path / "t1")
+    spark.sql(f"CREATE TABLE t1 (id LONG, name STRING, age LONG) LOCATION '{escape_sql_string_literal(location)}'")
     yield
     spark.sql("DROP TABLE t1")
     spark.sql("DROP TABLE IF EXISTS t2")
@@ -87,7 +88,8 @@ def test_insert_overwrite(spark):
     assert_frame_equal(actual, expected)
 
 
-def test_save_as_table(spark):
+def test_save_as_table(spark, tmp_path):
+    location = str(tmp_path / "t2")
     df = spark.createDataFrame([(1001, "Alice")], schema="id LONG, name STRING")
 
     def expected(n: int):
@@ -95,21 +97,21 @@ def test_save_as_table(spark):
             {"id": [1001] * n, "name": ["Alice"] * n},
         )
 
-    df.write.saveAsTable("t2")
+    df.write.saveAsTable("t2", path=location)
     actual = spark.sql("SELECT * FROM t2").toPandas()
     assert_frame_equal(actual, expected(1))
 
     if not is_jvm_spark():
         # The "ignore" mode seems broken in Spark Connect.
-        df.write.saveAsTable("t2", mode="ignore")
+        df.write.saveAsTable("t2", mode="ignore", path=location)
         actual = spark.sql("SELECT * FROM t2").toPandas()
         assert_frame_equal(actual, expected(1))
 
     with pytest.raises(Exception, match=".*"):
-        df.write.saveAsTable("t2", mode="error")
+        df.write.saveAsTable("t2", mode="error", location=location)
 
     with pytest.raises(Exception, match=".*"):
-        df.write.saveAsTable("t2")
+        df.write.saveAsTable("t2", location=location)
 
     df.write.saveAsTable("t2", mode="append")
     actual = spark.sql("SELECT * FROM t2").toPandas()
@@ -128,13 +130,14 @@ def test_save_as_table(spark):
 
     if is_jvm_spark():
         # The "overwrite" mode is not supported in Sail yet.
-        df.write.saveAsTable("t2", mode="overwrite")
+        df.write.saveAsTable("t2", mode="overwrite", path=location)
         actual = spark.sql("SELECT * FROM t2").toPandas()
         assert_frame_equal(actual, expected(1))
 
 
 @pytest.mark.skipif(is_jvm_spark(), reason="Spark does not handle v1 and v2 tables properly")
-def test_write_to(spark):
+def test_write_to(spark, tmp_path):
+    location = str(tmp_path / "t3")
     df = spark.createDataFrame([(2002, "Bob")], schema="id LONG, name STRING")
 
     def expected(n: int):
@@ -144,9 +147,9 @@ def test_write_to(spark):
 
     with pytest.raises(Exception, match=".*"):
         # The table does not exist yet.
-        df.writeTo("t3").replace()
+        df.writeTo("t3").option("location", location).replace()
 
-    df.writeTo("t3").create()
+    df.writeTo("t3").option("path", location).create()
     actual = spark.sql("SELECT * FROM t3").toPandas()
     assert_frame_equal(actual, expected(1))
 
@@ -156,22 +159,22 @@ def test_write_to(spark):
 
     pytest.skip("replace and overwrite are not supported in Sail yet")
 
-    df.writeTo("t3").replace()
+    df.writeTo("t3").option("location", location).replace()
     actual = spark.sql("SELECT * FROM t3").toPandas()
     assert_frame_equal(actual, expected(1))
 
-    df.writeTo("t3").createOrReplace()
+    df.writeTo("t3").option("path", location).createOrReplace()
     actual = spark.sql("SELECT * FROM t3").toPandas()
     assert_frame_equal(actual, expected(1))
 
-    df.writeTo("t3").overwrite(F.lit(True))
+    df.writeTo("t3").option("location", location).overwrite(F.lit(True))
     actual = spark.sql("SELECT * FROM t3").toPandas()
     assert_frame_equal(actual, expected(1))
 
 
 @pytest.mark.skipif(not is_jvm_spark(), reason="the options overwrite logic is not fully compatible yet")
-def test_write_options(spark, tmpdir):
-    location = str(tmpdir / "test")
+def test_write_options(spark, tmp_path):
+    location = str(tmp_path / "t4")
     spark.sql(f"""
         CREATE TABLE t4 (a STRING, b STRING) USING CSV
         LOCATION '{escape_sql_string_literal(location)}'
@@ -202,8 +205,8 @@ def test_write_options(spark, tmpdir):
     ]
 
 
-def test_write_with_partition_columns(spark, tmpdir):
-    location = str(tmpdir / "test")
+def test_write_with_partition_columns(spark, tmp_path):
+    location = str(tmp_path / "t5")
     spark.sql(f"""
         CREATE TABLE t5 (a INT, b STRING)
         USING PARQUET

@@ -116,6 +116,7 @@ use sail_plan::extension::function::spark_xxhash64::SparkXxhash64;
 use sail_plan::extension::function::string::levenshtein::Levenshtein;
 use sail_plan::extension::function::string::make_valid_utf8::MakeValidUtf8;
 use sail_plan::extension::function::string::spark_base64::{SparkBase64, SparkUnbase64};
+use sail_plan::extension::function::string::spark_elt::SparkElt;
 use sail_plan::extension::function::string::spark_encode_decode::{SparkDecode, SparkEncode};
 use sail_plan::extension::function::string::spark_mask::SparkMask;
 use sail_plan::extension::function::string::spark_split::SparkSplit;
@@ -125,6 +126,7 @@ use sail_plan::extension::function::string::spark_try_to_number::SparkTryToNumbe
 use sail_plan::extension::function::struct_function::StructFunction;
 use sail_plan::extension::function::update_struct_field::UpdateStructField;
 use sail_plan::extension::function::url::parse_url::ParseUrl;
+use sail_plan::extension::function::url::spark_try_parse_url::SparkTryParseUrl;
 use sail_plan::extension::function::url::url_decode::UrlDecode;
 use sail_plan::extension::function::url::url_encode::UrlEncode;
 use sail_plan::extension::logical::{Range, ShowStringFormat, ShowStringStyle};
@@ -1173,6 +1175,7 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
             "spark_mask" | "mask" => Ok(Arc::new(ScalarUDF::from(SparkMask::new()))),
             "spark_sequence" | "sequence" => Ok(Arc::new(ScalarUDF::from(SparkSequence::new()))),
             "spark_encode" | "encode" => Ok(Arc::new(ScalarUDF::from(SparkEncode::new()))),
+            "spark_elt" | "elt" => Ok(Arc::new(ScalarUDF::from(SparkElt::new()))),
             "spark_decode" | "decode" => Ok(Arc::new(ScalarUDF::from(SparkDecode::new()))),
             "spark_bin" | "bin" => Ok(Arc::new(ScalarUDF::from(SparkBin::new()))),
             "spark_date" => Ok(Arc::new(ScalarUDF::from(SparkDate::new()))),
@@ -1208,6 +1211,9 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
             }
             "str_to_map" => Ok(Arc::new(ScalarUDF::from(StrToMap::new()))),
             "parse_url" => Ok(Arc::new(ScalarUDF::from(ParseUrl::new()))),
+            "try_parse_url" | "spark_try_parse_url" => {
+                Ok(Arc::new(ScalarUDF::from(SparkTryParseUrl::new())))
+            }
             "url_decode" => Ok(Arc::new(ScalarUDF::from(UrlDecode::new()))),
             "url_encode" => Ok(Arc::new(ScalarUDF::from(UrlEncode::new()))),
             _ => plan_err!("could not find scalar function: {name}"),
@@ -1266,6 +1272,7 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
             || node.inner().as_any().is::<SparkMask>()
             || node.inner().as_any().is::<SparkSequence>()
             || node.inner().as_any().is::<SparkEncode>()
+            || node.inner().as_any().is::<SparkElt>()
             || node.inner().as_any().is::<SparkDecode>()
             || node.inner().as_any().is::<SparkDate>()
             || node.inner().as_any().is::<SparkYearMonthInterval>()
@@ -1285,6 +1292,7 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
             || node.inner().as_any().is::<SparkTryDiv>()
             || node.inner().as_any().is::<SparkTryMod>()
             || node.inner().as_any().is::<SparkTryMult>()
+            || node.inner().as_any().is::<SparkTryParseUrl>()
             || node.inner().as_any().is::<SparkTrySubtract>()
             || node.inner().as_any().is::<SparkWidthBucket>()
             || node.inner().as_any().is::<StrToMap>()
