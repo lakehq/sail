@@ -5,7 +5,7 @@ use arrow::array::{Array, ArrayRef, AsArray, DurationMicrosecondBuilder, Primiti
 use arrow::datatypes::TimeUnit::Microsecond;
 use arrow::datatypes::{Float64Type, Int32Type};
 use datafusion::arrow::datatypes::DataType;
-use datafusion_common::{plan_datafusion_err, DataFusionError, Result, ScalarValue};
+use datafusion_common::{exec_err, plan_datafusion_err, DataFusionError, Result, ScalarValue};
 use datafusion_expr::{ColumnarValue, ScalarFunctionArgs, ScalarUDFImpl, Signature, Volatility};
 
 use crate::extension::function::error_utils::invalid_arg_count_exec_err;
@@ -88,7 +88,14 @@ fn make_dt_interval_kernel(args: &[ArrayRef]) -> Result<ArrayRef, DataFusionErro
     }
 
     let n_rows = args[0].len();
-    debug_assert!(args.iter().all(|a| a.len() == n_rows));
+    for (i, a) in args.iter().enumerate().skip(1) {
+        if a.len() != n_rows {
+            return exec_err!(
+                "make_dt_interval: argument {i} has length {}, expected {n_rows}",
+                a.len()
+            );
+        }
+    }
 
     let days: Option<&PrimitiveArray<Int32Type>> = args
         .first()
