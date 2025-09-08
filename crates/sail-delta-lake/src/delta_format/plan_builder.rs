@@ -4,7 +4,6 @@ use datafusion::catalog::Session;
 use datafusion::datasource::provider_as_source;
 use datafusion::logical_expr::LogicalPlanBuilder;
 use datafusion::physical_expr::{LexRequirement, PhysicalExpr};
-use datafusion::physical_plan::coalesce_partitions::CoalescePartitionsExec;
 use datafusion::physical_plan::filter::FilterExec;
 use datafusion::physical_plan::union::UnionExec;
 use datafusion::physical_plan::ExecutionPlan;
@@ -70,7 +69,6 @@ impl<'a> DeltaPlanBuilder<'a> {
         self.add_projection_node(self.input.clone())
             .and_then(|plan| self.add_repartition_node(plan))
             .and_then(|plan| self.add_sort_node(plan))
-            .and_then(|plan| self.add_coalesce_partitions_node(plan))
             .and_then(|plan| self.add_writer_node(plan))
             .and_then(|plan| self.add_commit_node(plan))
     }
@@ -84,14 +82,10 @@ impl<'a> DeltaPlanBuilder<'a> {
         let new_data_plan = self
             .add_projection_node(self.input.clone())
             .and_then(|plan| self.add_repartition_node(plan))
-            .and_then(|plan| self.add_sort_node(plan))
-            .and_then(|plan| self.add_coalesce_partitions_node(plan))?;
+            .and_then(|plan| self.add_sort_node(plan))?;
 
         // Build old data plan
-        let old_data_plan = self
-            .build_old_data_plan(condition)
-            .await
-            .and_then(|plan| self.add_coalesce_partitions_node(plan))?;
+        let old_data_plan = self.build_old_data_plan(condition).await?;
 
         // Create union and final processing chain
         self.align_schemas(new_data_plan, old_data_plan)
@@ -242,16 +236,6 @@ impl<'a> DeltaPlanBuilder<'a> {
             self.partition_columns.clone(),
             self.sort_order.clone(),
         )?)
-    }
-
-    fn add_coalesce_partitions_node(
-        &self,
-        input: Arc<dyn ExecutionPlan>,
-    ) -> Result<Arc<dyn ExecutionPlan>> {
-        // Merge all partitions into a single partition
-        let coalesced: Arc<dyn ExecutionPlan> = Arc::new(CoalescePartitionsExec::new(input));
-
-        Ok(coalesced)
     }
 
     fn add_writer_node(&self, input: Arc<dyn ExecutionPlan>) -> Result<Arc<dyn ExecutionPlan>> {
