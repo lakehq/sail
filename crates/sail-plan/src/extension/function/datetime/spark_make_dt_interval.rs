@@ -1,11 +1,11 @@
 use std::any::Any;
 use std::sync::Arc;
 
-use arrow::array::{Array, ArrayRef, AsArray, DurationMicrosecondBuilder, PrimitiveBuilder};
+use arrow::array::{Array, ArrayRef, AsArray, DurationMicrosecondBuilder, PrimitiveArray};
 use arrow::datatypes::TimeUnit::Microsecond;
-use arrow::datatypes::{DurationMicrosecondType, Float64Type, Int32Type};
+use arrow::datatypes::{Float64Type, Int32Type};
 use datafusion::arrow::datatypes::DataType;
-use datafusion_common::{DataFusionError, Result};
+use datafusion_common::{plan_datafusion_err, DataFusionError, Result, ScalarValue};
 use datafusion_expr::{ColumnarValue, ScalarFunctionArgs, ScalarUDFImpl, Signature, Volatility};
 
 use crate::extension::function::error_utils::invalid_arg_count_exec_err;
@@ -49,13 +49,9 @@ impl ScalarUDFImpl for SparkMakeDtInterval {
 
     fn invoke_with_args(&self, args: ScalarFunctionArgs) -> Result<ColumnarValue> {
         if args.args.is_empty() {
-            let n: usize = std::cmp::max(args.number_rows, 1);
-            let mut b: PrimitiveBuilder<DurationMicrosecondType> =
-                DurationMicrosecondBuilder::with_capacity(n);
-            for _ in 0..n {
-                b.append_value(0_i64);
-            }
-            return Ok(ColumnarValue::Array(Arc::new(b.finish())));
+            return Ok(ColumnarValue::Scalar(ScalarValue::DurationMicrosecond(
+                Some(0),
+            )));
         }
         make_scalar_function(make_dt_interval_kernel)(&args.args)
     }
@@ -94,11 +90,34 @@ fn make_dt_interval_kernel(args: &[ArrayRef]) -> Result<ArrayRef, DataFusionErro
     let n_rows = args[0].len();
     debug_assert!(args.iter().all(|a| a.len() == n_rows));
 
-    let days = args.first().map(|a| a.as_primitive::<Int32Type>());
-    let hours = args.get(1).map(|a| a.as_primitive::<Int32Type>());
-    let mins = args.get(2).map(|a| a.as_primitive::<Int32Type>());
-    let secs = args.get(3).map(|a| a.as_primitive::<Float64Type>());
-
+    let days: Option<&PrimitiveArray<Int32Type>> = args
+        .first()
+        .map(|a| {
+            a.as_primitive_opt::<Int32Type>()
+                .ok_or_else(|| plan_datafusion_err!("make_dt_interval arg[0] must be Int32"))
+        })
+        .transpose()?;
+    let hours: Option<&PrimitiveArray<Int32Type>> = args
+        .get(1)
+        .map(|a| {
+            a.as_primitive_opt::<Int32Type>()
+                .ok_or_else(|| plan_datafusion_err!("make_dt_interval arg[1] must be Int32"))
+        })
+        .transpose()?;
+    let mins: Option<&PrimitiveArray<Int32Type>> = args
+        .get(2)
+        .map(|a| {
+            a.as_primitive_opt::<Int32Type>()
+                .ok_or_else(|| plan_datafusion_err!("make_dt_interval arg[2] must be Int32"))
+        })
+        .transpose()?;
+    let secs: Option<&PrimitiveArray<Float64Type>> = args
+        .get(3)
+        .map(|a| {
+            a.as_primitive_opt::<Float64Type>()
+                .ok_or_else(|| plan_datafusion_err!("make_dt_interval arg[3] must be Float64"))
+        })
+        .transpose()?;
     let mut builder = DurationMicrosecondBuilder::with_capacity(n_rows);
 
     for i in 0..n_rows {
