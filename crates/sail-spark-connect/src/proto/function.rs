@@ -67,7 +67,7 @@ mod tests {
             .primary()
             .block_on(async { SessionManager::new(options) });
         let session_key = SessionKey {
-            user_id: None,
+            user_id: "".to_string(),
             session_id: "test".to_string(),
         };
         let context = handle
