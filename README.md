@@ -6,8 +6,8 @@
 [![PyPI Downloads](https://img.shields.io/pepy/dt/pysail.svg?label=PyPI%20Downloads)](https://pypi.org/project/pysail/)
 [![Static Slack Badge](https://img.shields.io/badge/slack-LakeSail_Community-3762E0?logo=slack)](https://www.launchpass.com/lakesail-community/free)
 
-The mission of Sail is to unify stream processing, batch processing, and compute-intensive (AI) workloads.
-Currently, Sail features a drop-in replacement for Spark SQL and the Spark DataFrame API in both single-host and distributed settings.
+The mission of Sail is to unify stream processing, batch processing, and compute-intensive AI workloads.
+Currently, Sail features a drop-in replacement for the Spark SQL and the Spark DataFrame API in both single-host and distributed settings.
 
 **✨Using Sail? [Tell us your story](https://lakesail.com/share-story/) and get free merch!✨**
 
