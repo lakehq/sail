@@ -123,25 +123,24 @@ impl DeltaTableFormat {
 }
 
 fn apply_delta_read_options(from: DeltaReadOptions, to: &mut TableDeltaOptions) -> Result<()> {
-    // TODO: implement read options
-    if let Some(version_as_of) = from.version_as_of {
-        to.version_as_of = Some(version_as_of)
-    }
     if let Some(timestamp_as_of) = from.timestamp_as_of {
         to.timestamp_as_of = Some(timestamp_as_of)
+    }
+    if let Some(version_as_of) = from.version_as_of {
+        to.version_as_of = Some(version_as_of)
     }
     Ok(())
 }
 
 fn apply_delta_write_options(from: DeltaWriteOptions, to: &mut TableDeltaOptions) -> Result<()> {
-    if let Some(replace_where) = from.replace_where {
-        to.replace_where = Some(replace_where);
-    }
     if let Some(merge_schema) = from.merge_schema {
         to.merge_schema = merge_schema;
     }
     if let Some(overwrite_schema) = from.overwrite_schema {
         to.overwrite_schema = overwrite_schema;
+    }
+    if let Some(replace_where) = from.replace_where {
+        to.replace_where = Some(replace_where);
     }
     if let Some(target_file_size) = from.target_file_size {
         to.target_file_size = target_file_size;
