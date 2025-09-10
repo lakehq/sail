@@ -2,7 +2,7 @@ use std::any::Any;
 use std::fmt::Debug;
 use std::sync::Arc;
 
-use datafusion::arrow::datatypes::{DataType, Field, Schema, SchemaRef};
+use datafusion::arrow::datatypes::SchemaRef;
 use datafusion::catalog::Session;
 use datafusion::physical_expr::LexRequirement;
 use datafusion::physical_plan::ExecutionPlan;
@@ -17,7 +17,7 @@ use datafusion_datasource::source::DataSourceExec;
 use object_store::{ObjectMeta, ObjectStore};
 
 use crate::formats::binary::source::BinarySource;
-use crate::formats::binary::TableBinaryOptions;
+use crate::formats::binary::{read_schema, TableBinaryOptions};
 
 #[derive(Debug)]
 pub struct BinaryFileFormat {
@@ -65,21 +65,12 @@ impl FileFormat for BinaryFileFormat {
 
     async fn infer_schema(
         &self,
-        _state: &dyn Session,
+        state: &dyn Session,
         _store: &Arc<dyn ObjectStore>,
         _objects: &[ObjectMeta],
     ) -> Result<SchemaRef> {
-        let schema = SchemaRef::new(Schema::new(vec![
-            Field::new("path", DataType::Utf8, false),
-            Field::new(
-                "modificationTime",
-                DataType::Timestamp(datafusion::arrow::datatypes::TimeUnit::Microsecond, None),
-                false,
-            ),
-            Field::new("length", DataType::Int64, false),
-            Field::new("content", DataType::Binary, false),
-        ]));
-        Ok(schema)
+        let tz = Arc::from(state.config().options().execution.time_zone.clone());
+        Ok(read_schema(tz))
     }
 
     async fn infer_stats(

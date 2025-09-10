@@ -2,9 +2,9 @@ use std::any::Any;
 use std::sync::Arc;
 
 use datafusion::arrow::array::{RecordBatch, RecordBatchOptions};
-use datafusion::arrow::datatypes::{DataType, Field, Schema, SchemaRef};
+use datafusion::arrow::datatypes::{Schema, SchemaRef};
 use datafusion::physical_plan::metrics::ExecutionPlanMetricsSet;
-use datafusion_common::{DataFusionError, Result, Statistics};
+use datafusion_common::{internal_err, DataFusionError, Result, Statistics};
 use datafusion_datasource::file::FileSource;
 use datafusion_datasource::file_meta::FileMeta;
 use datafusion_datasource::file_scan_config::FileScanConfig;
@@ -153,18 +153,11 @@ impl FileOpener for BinaryOpener {
         let last_modified = file_meta.object_meta.last_modified;
         let size = file_meta.object_meta.size as i64;
         let projection = self.config.file_projection.clone();
-        let schema = self.config.file_schema.clone().unwrap_or_else(|| {
-            Arc::new(Schema::new(vec![
-                Field::new("path", DataType::Utf8, false),
-                Field::new(
-                    "modificationTime",
-                    DataType::Timestamp(datafusion::arrow::datatypes::TimeUnit::Microsecond, None),
-                    false,
-                ),
-                Field::new("length", DataType::Int64, false),
-                Field::new("content", DataType::Binary, false),
-            ]))
-        });
+        let schema = if let Some(schema) = &self.config.file_schema {
+            Arc::clone(schema)
+        } else {
+            return internal_err!("schema must be set before open the file");
+        };
 
         Ok(Box::pin(async move {
             let get_result = store.get(&location).await?;
@@ -175,46 +168,35 @@ impl FileOpener for BinaryOpener {
                 modification_time,
                 length: size,
             };
-            let mut reader = BinaryFileReader::new(metadata, content.to_vec());
+            // `content.into()` moves `Bytes` into `Vec<u8>` without copy.
+            // `content.to_vec()` would copy the data since this is a method on the slice.
+            let reader = BinaryFileReader::new(metadata, content.into(), schema.clone());
 
-            let stream = futures::stream::iter(std::iter::from_fn(move || {
-                match reader.next_batch() {
-                    Ok(Some(batch)) => {
-                        match &projection {
-                            Some(proj) => {
-                                if !proj.is_empty() {
-                                    // Project the batch to only include requested columns
-                                    let projected_columns: Vec<_> =
-                                        proj.iter().map(|&i| batch.column(i).clone()).collect();
-                                    let projected_fields: Vec<_> =
-                                        proj.iter().map(|&i| schema.field(i).clone()).collect();
-                                    let projected_schema = Arc::new(Schema::new(projected_fields));
-                                    match RecordBatch::try_new(projected_schema, projected_columns)
-                                    {
-                                        Ok(projected_batch) => Some(Ok(projected_batch)),
-                                        Err(e) => Some(Err(e)),
-                                    }
-                                } else {
-                                    // Empty projection - return empty batch with row count preserved
-                                    let empty_schema = Arc::new(Schema::empty());
-                                    match RecordBatch::try_new_with_options(
-                                        empty_schema,
-                                        vec![],
-                                        &RecordBatchOptions::new()
-                                            .with_row_count(Some(batch.num_rows())),
-                                    ) {
-                                        Ok(empty_batch) => Some(Ok(empty_batch)),
-                                        Err(e) => Some(Err(e)),
-                                    }
-                                }
-                            }
-                            None => Some(Ok(batch)),
+            let stream = futures::stream::once(async move {
+                let batch = reader.read()?;
+                match &projection {
+                    Some(proj) => {
+                        if !proj.is_empty() {
+                            // Project the batch to only include requested columns
+                            let projected_columns: Vec<_> =
+                                proj.iter().map(|&i| batch.column(i).clone()).collect();
+                            let projected_fields: Vec<_> =
+                                proj.iter().map(|&i| schema.field(i).clone()).collect();
+                            let projected_schema = Arc::new(Schema::new(projected_fields));
+                            RecordBatch::try_new(projected_schema, projected_columns)
+                        } else {
+                            // Empty projection - return empty batch with row count preserved
+                            let empty_schema = Arc::new(Schema::empty());
+                            RecordBatch::try_new_with_options(
+                                empty_schema,
+                                vec![],
+                                &RecordBatchOptions::new().with_row_count(Some(batch.num_rows())),
+                            )
                         }
                     }
-                    Ok(None) => None,
-                    Err(e) => Some(Err(e)),
+                    None => Ok(batch),
                 }
-            }))
+            })
             .boxed();
 
             Ok(stream)

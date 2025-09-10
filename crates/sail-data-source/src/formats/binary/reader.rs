@@ -1,12 +1,14 @@
-use std::io::Read;
 use std::sync::Arc;
 
 use datafusion::arrow::array::{
     BinaryArray, Int64Array, RecordBatch, RecordBatchOptions, StringArray,
     TimestampMicrosecondArray,
 };
-use datafusion::arrow::datatypes::{DataType, Field, Schema, SchemaRef};
+use datafusion::arrow::datatypes::{DataType, SchemaRef};
 use datafusion::arrow::error::ArrowError;
+use datafusion_common::arrow::array::ArrayData;
+
+use crate::formats::binary::time_zone_from_read_schema;
 
 #[derive(Debug, Clone)]
 pub struct BinaryFileMetadata {
@@ -19,55 +21,38 @@ pub struct BinaryFileReader {
     metadata: BinaryFileMetadata,
     content: Vec<u8>,
     schema: SchemaRef,
-    has_read: bool,
 }
 
 impl BinaryFileReader {
-    pub fn new(metadata: BinaryFileMetadata, content: Vec<u8>) -> Self {
-        let schema = Arc::new(Schema::new(vec![
-            Field::new("path", DataType::Utf8, false),
-            Field::new(
-                "modificationTime",
-                DataType::Timestamp(datafusion::arrow::datatypes::TimeUnit::Microsecond, None),
-                false,
-            ),
-            Field::new("length", DataType::Int64, false),
-            Field::new("content", DataType::Binary, false),
-        ]));
-
+    pub fn new(metadata: BinaryFileMetadata, content: Vec<u8>, schema: SchemaRef) -> Self {
         Self {
             metadata,
             content,
             schema,
-            has_read: false,
         }
     }
 
-    pub fn from_reader<R: Read>(
-        metadata: BinaryFileMetadata,
-        mut reader: R,
-    ) -> Result<Self, std::io::Error> {
-        let mut content = Vec::new();
-        reader.read_to_end(&mut content)?;
-        Ok(Self::new(metadata, content))
-    }
-
-    pub fn schema(&self) -> SchemaRef {
-        self.schema.clone()
-    }
-
-    pub fn next_batch(&mut self) -> Result<Option<RecordBatch>, ArrowError> {
-        if self.has_read {
-            return Ok(None);
-        }
-
+    pub fn read(self) -> Result<RecordBatch, ArrowError> {
+        let tz = time_zone_from_read_schema(&self.schema)?;
         let path_array = StringArray::from(vec![self.metadata.path.as_str()]);
         let modification_time_array =
-            TimestampMicrosecondArray::from(vec![self.metadata.modification_time]);
+            TimestampMicrosecondArray::from(vec![self.metadata.modification_time])
+                .with_timezone(tz);
         let length_array = Int64Array::from(vec![self.metadata.length]);
-        let content_array = BinaryArray::from_vec(vec![self.content.as_slice()]);
+        let content_array = {
+            // create a binary array without copying the content
+            let size = i32::try_from(self.content.len()).map_err(|e| {
+                ArrowError::ComputeError(format!("file content size too large: {}", e))
+            })?;
+            let array_data = ArrayData::builder(DataType::Binary)
+                .len(1)
+                .add_buffer(vec![0, size].into())
+                .add_buffer(self.content.into())
+                .build()?;
+            BinaryArray::from(array_data)
+        };
         let batch = RecordBatch::try_new_with_options(
-            self.schema.clone(),
+            self.schema,
             vec![
                 Arc::new(path_array),
                 Arc::new(modification_time_array),
@@ -77,9 +62,7 @@ impl BinaryFileReader {
             &RecordBatchOptions::new().with_row_count(Some(1)),
         )?;
 
-        self.has_read = true;
-
-        Ok(Some(batch))
+        Ok(batch)
     }
 }
 
@@ -87,6 +70,7 @@ impl BinaryFileReader {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::formats::binary::read_schema;
 
     #[test]
     fn test_binary_file_reader() -> Result<(), ArrowError> {
@@ -97,9 +81,10 @@ mod tests {
         };
         let content = vec![0u8, 1, 2, 3, 4, 5, 6, 7, 8, 9];
 
-        let mut reader = BinaryFileReader::new(metadata, content);
+        let schema = read_schema(Arc::from("UTC"));
+        let reader = BinaryFileReader::new(metadata, content, schema);
 
-        let batch = reader.next_batch()?.unwrap();
+        let batch = reader.read()?;
         assert_eq!(batch.num_rows(), 1);
         assert_eq!(batch.num_columns(), 4);
 
@@ -131,8 +116,6 @@ mod tests {
             .unwrap();
         assert_eq!(content_col.value(0), &[0u8, 1, 2, 3, 4, 5, 6, 7, 8, 9]);
 
-        assert!(reader.next_batch()?.is_none());
-
         Ok(())
     }
 
@@ -145,8 +128,9 @@ mod tests {
         };
         let png_content = vec![0x89, 0x50, 0x4E, 0x47, 0x0D, 0x0A, 0x1A, 0x0A];
 
-        let mut png_reader = BinaryFileReader::new(png_metadata, png_content.clone());
-        let png_batch = png_reader.next_batch()?.unwrap();
+        let schema = read_schema(Arc::from("UTC"));
+        let png_reader = BinaryFileReader::new(png_metadata, png_content.clone(), schema);
+        let png_batch = png_reader.read()?;
 
         let path_col = png_batch
             .column(0)
@@ -169,8 +153,9 @@ mod tests {
         };
         let pdf_content = vec![0x25, 0x50, 0x44, 0x46, 0x2D, 0x31, 0x2E, 0x34, 0x0A];
 
-        let mut pdf_reader = BinaryFileReader::new(pdf_metadata, pdf_content.clone());
-        let pdf_batch = pdf_reader.next_batch()?.unwrap();
+        let schema = read_schema(Arc::from("UTC"));
+        let pdf_reader = BinaryFileReader::new(pdf_metadata, pdf_content.clone(), schema);
+        let pdf_batch = pdf_reader.read()?;
 
         let path_col = pdf_batch
             .column(0)
@@ -202,8 +187,9 @@ mod tests {
             0xFF, 0xD8, 0xFF, 0xE0, 0x00, 0x10, 0x4A, 0x46, 0x49, 0x46, 0x00, 0x01,
         ];
 
-        let mut jpeg_reader = BinaryFileReader::new(jpeg_metadata, jpeg_content.clone());
-        let jpeg_batch = jpeg_reader.next_batch()?.unwrap();
+        let schema = read_schema(Arc::from("UTC"));
+        let jpeg_reader = BinaryFileReader::new(jpeg_metadata, jpeg_content.clone(), schema);
+        let jpeg_batch = jpeg_reader.read()?;
 
         let path_col = jpeg_batch
             .column(0)
@@ -238,8 +224,9 @@ mod tests {
         };
         let content = vec![];
 
-        let mut reader = BinaryFileReader::new(metadata, content);
-        let batch = reader.next_batch()?.unwrap();
+        let schema = read_schema(Arc::from("UTC"));
+        let reader = BinaryFileReader::new(metadata, content, schema);
+        let batch = reader.read()?;
 
         assert_eq!(batch.num_rows(), 1);
         assert_eq!(batch.num_columns(), 4);
