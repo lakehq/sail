@@ -34,6 +34,7 @@ message ExtendedPhysicalPlanNode {
     SocketSourceExecNode socket_source = 20;
     RateSourceExecNode rate_source = 21;
     TextSinkExecNode text_sink = 22;
+    BinarySourceExecNode binary_source = 23;
   }
 }
 
@@ -266,6 +267,11 @@ message TextExecNode {
   CompressionTypeVariant file_compression_type = 2;
   bool whole_text = 3;
   optional bytes line_sep = 4;
+}
+
+message BinarySourceExecNode {
+  bytes base_config = 1;
+  optional string path_glob_filter = 2;
 }
 
 message AvroExecNode {

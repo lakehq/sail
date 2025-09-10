@@ -127,6 +127,7 @@ fn build_options(name: &str, kind: &str) -> Result<(), Box<dyn std::error::Error
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
     println!("cargo:rerun-if-changed=build.rs");
+    build_options("BinaryReadOptions", "binary_read")?;
     build_options("CsvReadOptions", "csv_read")?;
     build_options("CsvWriteOptions", "csv_write")?;
     build_options("JsonReadOptions", "json_read")?;
