@@ -36,17 +36,13 @@ use crate::session::{SparkSession, SparkSessionOptions};
 
 #[derive(Eq, PartialEq, Hash, Clone, Debug)]
 pub struct SessionKey {
-    pub user_id: Option<String>,
+    pub user_id: String,
     pub session_id: String,
 }
 
 impl Display for SessionKey {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        if let Some(user_id) = &self.user_id {
-            write!(f, "{}@{}", user_id, self.session_id)
-        } else {
-            write!(f, "{}", self.session_id)
-        }
+        write!(f, "{}@{}", self.user_id, self.session_id)
     }
 }
 
