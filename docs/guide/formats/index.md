@@ -18,7 +18,7 @@ Here is a summary of the supported (:white_check_mark:) and unsupported (:x:) da
 | JSON                  | :white_check_mark: | :white_check_mark: |
 | Parquet               | :white_check_mark: | :white_check_mark: |
 | Text                  | :white_check_mark: | :white_check_mark: |
-| Binary                | :construction:     | :construction:     |
+| Binary                | :white_check_mark: | :construction:     |
 | Avro                  | :white_check_mark: | :white_check_mark: |
 | Protocol Buffers      | :construction:     | :construction:     |
 | ORC                   | :x:                | :x:                |

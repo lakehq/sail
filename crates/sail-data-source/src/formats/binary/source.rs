@@ -18,6 +18,7 @@ use crate::formats::binary::reader::{BinaryFileMetadata, BinaryFileReader};
 
 #[derive(Debug, Clone, Default)]
 pub struct BinarySource {
+    path_glob_filter: Option<String>,
     batch_size: Option<usize>,
     file_schema: Option<SchemaRef>,
     file_projection: Option<Vec<usize>>,
@@ -27,8 +28,20 @@ pub struct BinarySource {
 }
 
 impl BinarySource {
-    pub fn new() -> Self {
-        Self::default()
+    pub fn new(path_glob_filter: Option<String>) -> Self {
+        Self {
+            path_glob_filter,
+            ..Self::default()
+        }
+    }
+
+    pub fn with_path_glob_filter(mut self, path_glob_filter: Option<String>) -> Self {
+        self.path_glob_filter = path_glob_filter;
+        self
+    }
+
+    pub fn path_glob_filter(&self) -> Option<&String> {
+        self.path_glob_filter.as_ref()
     }
 }
 
@@ -124,6 +137,17 @@ impl BinaryOpener {
 
 impl FileOpener for BinaryOpener {
     fn open(&self, file_meta: FileMeta, _file: PartitionedFile) -> Result<FileOpenFuture> {
+        if let Some(ref glob_pattern) = self.config.path_glob_filter {
+            let file_name = file_meta.location().filename().unwrap_or("");
+            let pattern = glob::Pattern::new(glob_pattern)
+                .map_err(|e| DataFusionError::External(Box::new(e)))?;
+            if !pattern.matches(file_name) {
+                return Ok(Box::pin(
+                    async move { Ok(futures::stream::empty().boxed()) },
+                ));
+            }
+        }
+
         let store = Arc::clone(&self.object_store);
         let location = file_meta.location().clone();
         let last_modified = file_meta.object_meta.last_modified;
@@ -156,7 +180,6 @@ impl FileOpener for BinaryOpener {
             let stream = futures::stream::iter(std::iter::from_fn(move || {
                 match reader.next_batch() {
                     Ok(Some(batch)) => {
-                        // Apply projection if specified
                         match &projection {
                             Some(proj) => {
                                 if !proj.is_empty() {

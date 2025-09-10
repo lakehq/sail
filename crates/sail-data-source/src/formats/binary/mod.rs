@@ -6,13 +6,18 @@ use datafusion_common::parsers::CompressionTypeVariant;
 use datafusion_datasource::file_format::FileFormat;
 
 use crate::formats::binary::file_format::BinaryFileFormat;
+use crate::formats::binary::options::resolve_binary_read_options;
 use crate::formats::listing::{ListingFormat, ListingTableFormat};
 
 pub mod file_format;
+pub mod options;
 pub mod reader;
 pub mod source;
 
-pub const DEFAULT_BINARY_EXTENSION: &str = "";
+#[derive(Default, Debug, Clone, PartialEq)]
+pub struct TableBinaryOptions {
+    pub path_glob_filter: Option<String>,
+}
 
 pub(crate) type BinaryTableFormat = ListingTableFormat<BinaryListingFormat>;
 
@@ -27,10 +32,12 @@ impl ListingFormat for BinaryListingFormat {
     fn create_read_format(
         &self,
         _ctx: &dyn Session,
-        _options: Vec<HashMap<String, String>>,
+        options: Vec<HashMap<String, String>>,
         _compression: Option<CompressionTypeVariant>,
     ) -> datafusion_common::Result<Arc<dyn FileFormat>> {
-        Ok(Arc::new(BinaryFileFormat::new()))
+        Ok(Arc::new(BinaryFileFormat::new(
+            resolve_binary_read_options(options)?,
+        )))
     }
 
     fn create_write_format(

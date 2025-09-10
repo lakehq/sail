@@ -17,20 +17,23 @@ use datafusion_datasource::source::DataSourceExec;
 use object_store::{ObjectMeta, ObjectStore};
 
 use crate::formats::binary::source::BinarySource;
-use crate::formats::binary::DEFAULT_BINARY_EXTENSION;
+use crate::formats::binary::TableBinaryOptions;
 
 #[derive(Debug)]
-pub struct BinaryFileFormat;
-
-impl BinaryFileFormat {
-    pub fn new() -> Self {
-        Self
-    }
+pub struct BinaryFileFormat {
+    options: TableBinaryOptions,
 }
 
-impl Default for BinaryFileFormat {
-    fn default() -> Self {
-        Self::new()
+impl BinaryFileFormat {
+    pub fn new(table_binary_options: TableBinaryOptions) -> Self {
+        Self {
+            options: table_binary_options,
+        }
+    }
+
+    #[allow(unused)]
+    pub fn options(&self) -> &TableBinaryOptions {
+        &self.options
     }
 }
 
@@ -41,7 +44,7 @@ impl FileFormat for BinaryFileFormat {
     }
 
     fn get_ext(&self) -> String {
-        DEFAULT_BINARY_EXTENSION.to_string()
+        "".to_string()
     }
 
     fn get_ext_with_compression(
@@ -94,7 +97,7 @@ impl FileFormat for BinaryFileFormat {
         _state: &dyn Session,
         conf: FileScanConfig,
     ) -> Result<Arc<dyn ExecutionPlan>> {
-        let source = Arc::new(BinarySource::new());
+        let source = Arc::new(BinarySource::new(self.options.path_glob_filter.clone()));
         let conf = FileScanConfigBuilder::from(conf)
             .with_source(source)
             .build();

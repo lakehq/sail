@@ -45,6 +45,7 @@ use prost::Message;
 use sail_common_datafusion::datasource::PhysicalSinkMode;
 use sail_common_datafusion::udf::StreamUDF;
 use sail_common_datafusion::utils::{read_record_batches, write_record_batches};
+use sail_data_source::formats::binary::source::BinarySource;
 use sail_data_source::formats::console::ConsoleSinkExec;
 use sail_data_source::formats::rate::{RateSourceExec, TableRateOptions};
 use sail_data_source::formats::socket::{SocketSourceExec, TableSocketOptions};
@@ -359,6 +360,19 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
                 let source = FileScanConfigBuilder::from(source)
                     .with_file_compression_type(file_compression_type)
                     .build();
+                Ok(Arc::new(DataSourceExec::new(Arc::new(source))))
+            }
+            NodeKind::BinarySource(gen::BinarySourceExecNode {
+                base_config,
+                path_glob_filter,
+            }) => {
+                let source = parse_protobuf_file_scan_config(
+                    &self.try_decode_message(&base_config)?,
+                    registry,
+                    self,
+                    Arc::new(BinarySource::new(path_glob_filter)),
+                )?;
+                let source = FileScanConfigBuilder::from(source).build();
                 Ok(Arc::new(DataSourceExec::new(Arc::new(source))))
             }
             NodeKind::Avro(gen::AvroExecNode { base_config }) => {
@@ -803,6 +817,15 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
                         file_compression_type,
                         whole_text: text_source.whole_text(),
                         line_sep: text_source.line_sep().map(|x| vec![x]),
+                    })
+                } else if let Some(binary_source) =
+                    file_source.as_any().downcast_ref::<BinarySource>()
+                {
+                    let base_config =
+                        self.try_encode_message(serialize_file_scan_config(file_scan, self)?)?;
+                    NodeKind::BinarySource(gen::BinarySourceExecNode {
+                        base_config,
+                        path_glob_filter: binary_source.path_glob_filter().cloned(),
                     })
                 } else if file_source.as_any().is::<JsonSource>() {
                     // TODO: Check if we still need to have JsonSource: https://github.com/apache/datafusion/pull/14224
