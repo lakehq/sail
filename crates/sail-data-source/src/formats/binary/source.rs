@@ -1,7 +1,7 @@
 use std::any::Any;
 use std::sync::Arc;
 
-use datafusion::arrow::array::RecordBatch;
+use datafusion::arrow::array::{RecordBatch, RecordBatchOptions};
 use datafusion::arrow::datatypes::{DataType, Field, Schema, SchemaRef};
 use datafusion::physical_plan::metrics::ExecutionPlanMetricsSet;
 use datafusion_common::{DataFusionError, Result, Statistics};
@@ -153,30 +153,46 @@ impl FileOpener for BinaryOpener {
             };
             let mut reader = BinaryFileReader::new(metadata, content.to_vec());
 
-            let stream = if let Some(proj) = projection {
-                futures::stream::iter(std::iter::from_fn(move || {
-                    match reader.next_batch() {
-                        Ok(Some(batch)) => {
-                            // Project the batch to only include requested columns
-                            let projected_columns: Vec<_> =
-                                proj.iter().map(|&i| batch.column(i).clone()).collect();
-                            let projected_fields: Vec<_> =
-                                proj.iter().map(|&i| schema.field(i).clone()).collect();
-                            let projected_schema = Arc::new(Schema::new(projected_fields));
-                            match RecordBatch::try_new(projected_schema, projected_columns) {
-                                Ok(projected_batch) => Some(Ok(projected_batch)),
-                                Err(e) => Some(Err(e)),
+            let stream = futures::stream::iter(std::iter::from_fn(move || {
+                match reader.next_batch() {
+                    Ok(Some(batch)) => {
+                        // Apply projection if specified
+                        match &projection {
+                            Some(proj) => {
+                                if !proj.is_empty() {
+                                    // Project the batch to only include requested columns
+                                    let projected_columns: Vec<_> =
+                                        proj.iter().map(|&i| batch.column(i).clone()).collect();
+                                    let projected_fields: Vec<_> =
+                                        proj.iter().map(|&i| schema.field(i).clone()).collect();
+                                    let projected_schema = Arc::new(Schema::new(projected_fields));
+                                    match RecordBatch::try_new(projected_schema, projected_columns)
+                                    {
+                                        Ok(projected_batch) => Some(Ok(projected_batch)),
+                                        Err(e) => Some(Err(e)),
+                                    }
+                                } else {
+                                    // Empty projection - return empty batch with row count preserved
+                                    let empty_schema = Arc::new(Schema::empty());
+                                    match RecordBatch::try_new_with_options(
+                                        empty_schema,
+                                        vec![],
+                                        &RecordBatchOptions::new()
+                                            .with_row_count(Some(batch.num_rows())),
+                                    ) {
+                                        Ok(empty_batch) => Some(Ok(empty_batch)),
+                                        Err(e) => Some(Err(e)),
+                                    }
+                                }
                             }
+                            None => Some(Ok(batch)),
                         }
-                        Ok(None) => None,
-                        Err(e) => Some(Err(e)),
                     }
-                }))
-                .boxed()
-            } else {
-                futures::stream::iter(std::iter::from_fn(move || reader.next_batch().transpose()))
-                    .boxed()
-            };
+                    Ok(None) => None,
+                    Err(e) => Some(Err(e)),
+                }
+            }))
+            .boxed();
 
             Ok(stream)
         }))
