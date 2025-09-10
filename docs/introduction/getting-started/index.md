@@ -87,14 +87,13 @@ spark.sql("SELECT 1 + 1").show()
 # Use the DataFrame API to read multimodal data
 spark.read.format("binaryFile").option("pathGlobFilter", "*.png").load("/path/to/data").show()
 
-# Use Spark SQL to create a table that refers to multimodal data in Object Storage
-sql_query = """
+# Use Spark SQL to create a table that refers to multimodal data in an object storage
+spark.sql("""
 CREATE TABLE pdfs
 USING binaryFile
 OPTIONS (pathGlobFilter '*.pdf')
 LOCATION 's3://my-bucket/path/to/data'
-"""
-spark.sql(sql_query)
+""")
 spark.sql("SELECT * FROM pdfs").show()
 ```
 
