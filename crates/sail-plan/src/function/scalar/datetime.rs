@@ -1,12 +1,11 @@
-use std::sync::Arc;
-
 use datafusion::arrow::datatypes::{
     DataType, IntervalDayTimeType, IntervalUnit, IntervalYearMonthType, TimeUnit,
 };
 use datafusion::functions::expr_fn;
 use datafusion_common::ScalarValue;
 use datafusion_expr::expr::{self, Expr};
-use datafusion_expr::{cast, lit, BinaryExpr, Operator, ScalarUDF};
+use datafusion_expr::{cast, lit, try_cast, when, BinaryExpr, ExprSchemable, Operator, ScalarUDF};
+use sail_common::datetime::time_unit_to_multiplier;
 
 use crate::error::{PlanError, PlanResult};
 use crate::extension::function::datetime::convert_tz::ConvertTz;
@@ -60,58 +59,53 @@ fn trunc_part_conversion(part: Expr) -> Expr {
     })
 }
 
-fn trunc(input: ScalarFunctionInput) -> PlanResult<Expr> {
-    let (date, part) = input.arguments.two()?;
-    Ok(cast(
+fn trunc(date: Expr, part: Expr) -> Expr {
+    cast(
         expr_fn::date_trunc(trunc_part_conversion(part), date),
         DataType::Date32,
-    ))
+    )
 }
 
-fn date_trunc(input: ScalarFunctionInput) -> PlanResult<Expr> {
-    let (part, timestamp) = input.arguments.two()?;
-    Ok(cast(
+fn date_trunc(part: Expr, timestamp: Expr) -> Expr {
+    cast(
         expr_fn::date_trunc(trunc_part_conversion(part), timestamp),
         DataType::Timestamp(TimeUnit::Microsecond, None),
-    ))
+    )
 }
 
 fn interval_arithmetic(input: ScalarFunctionInput, unit: &str, op: Operator) -> PlanResult<Expr> {
     let (date, interval) = input.arguments.two()?;
-    let date = Expr::Cast(expr::Cast {
-        expr: Box::new(date),
-        data_type: DataType::Date32,
-    });
+
     let interval = match unit.to_lowercase().as_str() {
         "years" | "year" => match interval {
             Expr::Literal(ScalarValue::Int32(Some(years)), metadata) => Expr::Literal(
                 ScalarValue::IntervalYearMonth(Some(IntervalYearMonthType::make_value(years, 0))),
                 metadata,
             ),
-            _ => Expr::Cast(expr::Cast {
-                expr: Box::new(format_interval(interval, "years")),
-                data_type: DataType::Interval(IntervalUnit::YearMonth),
-            }),
+            _ => cast(
+                format_interval(interval, "years"),
+                DataType::Interval(IntervalUnit::YearMonth),
+            ),
         },
         "months" | "month" => match interval {
             Expr::Literal(ScalarValue::Int32(Some(months)), metadata) => Expr::Literal(
                 ScalarValue::IntervalYearMonth(Some(IntervalYearMonthType::make_value(0, months))),
                 metadata,
             ),
-            _ => Expr::Cast(expr::Cast {
-                expr: Box::new(format_interval(interval, "months")),
-                data_type: DataType::Interval(IntervalUnit::YearMonth),
-            }),
+            _ => cast(
+                format_interval(interval, "months"),
+                DataType::Interval(IntervalUnit::YearMonth),
+            ),
         },
         "days" | "day" => match interval {
             Expr::Literal(ScalarValue::Int32(Some(days)), metadata) => Expr::Literal(
                 ScalarValue::IntervalDayTime(Some(IntervalDayTimeType::make_value(days, 0))),
                 metadata,
             ),
-            _ => Expr::Cast(expr::Cast {
-                expr: Box::new(format_interval(interval, "days")),
-                data_type: DataType::Interval(IntervalUnit::DayTime),
-            }),
+            _ => cast(
+                format_interval(interval, "days"),
+                DataType::Interval(IntervalUnit::DayTime),
+            ),
         },
         _ => {
             return Err(PlanError::invalid(format!(
@@ -120,7 +114,7 @@ fn interval_arithmetic(input: ScalarFunctionInput, unit: &str, op: Operator) -> 
         }
     };
     Ok(Expr::BinaryExpr(BinaryExpr {
-        left: Box::new(date),
+        left: Box::new(cast(date, DataType::Date32)),
         op,
         right: Box::new(interval),
     }))
@@ -175,19 +169,16 @@ fn current_timezone(input: ScalarFunctionInput) -> PlanResult<Expr> {
     Ok(session_tz)
 }
 
-fn to_chrono_fmt(format: Expr) -> PlanResult<Expr> {
-    Ok(Expr::ScalarFunction(expr::ScalarFunction {
-        func: Arc::new(ScalarUDF::from(SparkToChronoFmt::new())),
-        args: vec![format],
-    }))
+fn to_chrono_fmt(format: Expr) -> Expr {
+    ScalarUDF::from(SparkToChronoFmt::new()).call(vec![format])
 }
 
-fn to_date(input: ScalarFunctionInput) -> PlanResult<Expr> {
-    if input.arguments.len() == 1 {
-        Ok(expr_fn::to_date(input.arguments))
-    } else if input.arguments.len() == 2 {
-        let (expr, format) = input.arguments.two()?;
-        let format = to_chrono_fmt(format)?;
+fn to_date(args: Vec<Expr>) -> PlanResult<Expr> {
+    if args.len() == 1 {
+        Ok(expr_fn::to_date(args))
+    } else if args.len() == 2 {
+        let (expr, format) = args.two()?;
+        let format = to_chrono_fmt(format);
         Ok(expr_fn::to_date(vec![expr, format]))
     } else {
         Err(PlanError::invalid("to_date requires 1 or 2 arguments"))
@@ -197,26 +188,14 @@ fn to_date(input: ScalarFunctionInput) -> PlanResult<Expr> {
 fn unix_timestamp(input: ScalarFunctionInput) -> PlanResult<Expr> {
     let timezone = input.function_context.plan_config.session_timezone.clone();
     if input.arguments.is_empty() {
-        let expr = Expr::ScalarFunction(expr::ScalarFunction {
-            func: Arc::new(ScalarUDF::from(TimestampNow::new(
-                timezone,
-                TimeUnit::Second,
-            ))),
-            args: vec![],
-        });
+        let expr = ScalarUDF::from(TimestampNow::new(timezone, TimeUnit::Second)).call(vec![]);
         Ok(cast(expr, DataType::Int64))
     } else if input.arguments.len() == 1 {
-        Ok(Expr::ScalarFunction(expr::ScalarFunction {
-            func: Arc::new(ScalarUDF::from(SparkUnixTimestamp::new(timezone))),
-            args: input.arguments,
-        }))
+        Ok(ScalarUDF::from(SparkUnixTimestamp::new(timezone)).call(input.arguments))
     } else if input.arguments.len() == 2 {
         let (expr, format) = input.arguments.two()?;
-        let format = to_chrono_fmt(format)?;
-        Ok(Expr::ScalarFunction(expr::ScalarFunction {
-            func: Arc::new(ScalarUDF::from(SparkUnixTimestamp::new(timezone))),
-            args: vec![expr, format],
-        }))
+        let format = to_chrono_fmt(format);
+        Ok(ScalarUDF::from(SparkUnixTimestamp::new(timezone)).call(vec![expr, format]))
     } else {
         Err(PlanError::invalid(
             "unix_timestamp requires 1 or 2 arguments",
@@ -234,40 +213,36 @@ fn to_unix_timestamp(input: ScalarFunctionInput) -> PlanResult<Expr> {
     }
 }
 
-fn date_format(input: ScalarFunctionInput) -> PlanResult<Expr> {
-    let (expr, format) = input.arguments.two()?;
-    let format = to_chrono_fmt(format)?;
-    Ok(expr_fn::to_char(expr, format))
+fn date_format(expr: Expr, format: Expr) -> Expr {
+    let format = to_chrono_fmt(format);
+    expr_fn::to_char(expr, format)
 }
 
-fn to_timestamp(input: ScalarFunctionInput) -> PlanResult<Expr> {
-    if input.arguments.len() == 1 {
-        Ok(Expr::Cast(expr::Cast::new(
-            Box::new(input.arguments.one()?),
+fn to_timestamp(args: Vec<Expr>) -> PlanResult<Expr> {
+    if args.len() == 1 {
+        Ok(cast(
+            args.one()?,
             DataType::Timestamp(TimeUnit::Microsecond, None),
-        )))
-    } else if input.arguments.len() == 2 {
-        let (expr, format) = input.arguments.two()?;
-        let format = to_chrono_fmt(format)?;
+        ))
+    } else if args.len() == 2 {
+        let (expr, format) = args.two()?;
+        let format = to_chrono_fmt(format);
         Ok(expr_fn::to_timestamp_micros(vec![expr, format]))
     } else {
         Err(PlanError::invalid("to_timestamp requires 1 or 2 arguments"))
     }
 }
 
-fn try_to_timestamp(input: ScalarFunctionInput) -> PlanResult<Expr> {
-    if input.arguments.len() == 1 {
-        Ok(Expr::TryCast(expr::TryCast::new(
-            Box::new(input.arguments.one()?),
+fn try_to_timestamp(args: Vec<Expr>) -> PlanResult<Expr> {
+    if args.len() == 1 {
+        Ok(try_cast(
+            args.one()?,
             DataType::Timestamp(TimeUnit::Microsecond, None),
-        )))
-    } else if input.arguments.len() == 2 {
-        let (expr, format) = input.arguments.two()?;
-        let format = to_chrono_fmt(format)?;
-        Ok(Expr::ScalarFunction(expr::ScalarFunction {
-            func: Arc::new(ScalarUDF::from(SparkTryToTimestamp::new())),
-            args: vec![expr, format],
-        }))
+        ))
+    } else if args.len() == 2 {
+        let (expr, format) = args.two()?;
+        let format = to_chrono_fmt(format);
+        Ok(ScalarUDF::from(SparkTryToTimestamp::new()).call(vec![expr, format]))
     } else {
         Err(PlanError::invalid(
             "try_to_timestamp requires 1 or 2 arguments",
@@ -279,10 +254,7 @@ fn from_unixtime(input: ScalarFunctionInput) -> PlanResult<Expr> {
     let (expr, format) = if input.arguments.len() == 1 {
         let expr = input.arguments.one()?;
         // default format is "yyyy-MM-dd HH:mm:ss"
-        Ok((
-            expr,
-            lit(ScalarValue::Utf8(Some("yyyy-MM-dd HH:mm:ss".to_string()))),
-        ))
+        Ok((expr, lit("yyyy-MM-dd HH:mm:ss")))
     } else if input.arguments.len() == 2 {
         input.arguments.two()
     } else {
@@ -292,7 +264,7 @@ fn from_unixtime(input: ScalarFunctionInput) -> PlanResult<Expr> {
     }?;
 
     let timezone = input.function_context.plan_config.session_timezone.clone();
-    let format = to_chrono_fmt(format)?;
+    let format = to_chrono_fmt(format);
     let expr = cast(expr, DataType::Timestamp(TimeUnit::Second, Some(timezone)));
     Ok(expr_fn::to_char(expr, format))
 }
@@ -314,13 +286,7 @@ fn unix_time_unit(input: ScalarFunctionInput, time_unit: TimeUnit) -> PlanResult
 fn current_timestamp_microseconds(input: ScalarFunctionInput) -> PlanResult<Expr> {
     if input.arguments.is_empty() {
         let timezone = input.function_context.plan_config.session_timezone.clone();
-        Ok(Expr::ScalarFunction(expr::ScalarFunction {
-            func: Arc::new(ScalarUDF::from(TimestampNow::new(
-                timezone,
-                TimeUnit::Microsecond,
-            ))),
-            args: vec![],
-        }))
+        Ok(ScalarUDF::from(TimestampNow::new(timezone, TimeUnit::Microsecond)).call(vec![]))
     } else {
         Err(PlanError::invalid(format!(
             "current_timestamp takes 0 arguments, got {:?}",
@@ -335,10 +301,7 @@ fn current_localtimestamp_microseconds(input: ScalarFunctionInput) -> PlanResult
 }
 
 fn convert_tz(from_tz: Expr, to_tz: Expr, ts: Expr) -> Expr {
-    Expr::ScalarFunction(expr::ScalarFunction {
-        func: Arc::new(ScalarUDF::from(ConvertTz::new())),
-        args: vec![from_tz, to_tz, ts],
-    })
+    ScalarUDF::from(ConvertTz::new()).call(vec![from_tz, to_tz, ts])
 }
 
 fn convert_timezone(input: ScalarFunctionInput) -> PlanResult<Expr> {
@@ -369,24 +332,18 @@ fn to_utc_timestamp(input: ScalarFunctionInput) -> PlanResult<Expr> {
     Ok(convert_tz(from_tz, session_tz, ts))
 }
 
-fn make_ym_interval(input: ScalarFunctionInput) -> PlanResult<Expr> {
-    let (years, months) = if input.arguments.len() == 2 {
-        input.arguments.two()?
+fn make_ym_interval(args: Vec<Expr>) -> PlanResult<Expr> {
+    let (years, months) = if args.len() == 2 {
+        args.two()?
     } else {
-        (input.arguments.one()?, lit(ScalarValue::Int32(Some(0))))
+        (args.one()?, lit(0_i32))
     };
-    Ok(Expr::ScalarFunction(expr::ScalarFunction {
-        func: Arc::new(ScalarUDF::from(SparkMakeYmInterval::new())),
-        args: vec![years, months],
-    }))
+    Ok(ScalarUDF::from(SparkMakeYmInterval::new()).call(vec![years, months]))
 }
 
 fn make_timestamp(input: ScalarFunctionInput) -> PlanResult<Expr> {
     if input.arguments.len() == 6 {
-        Ok(Expr::ScalarFunction(expr::ScalarFunction {
-            func: Arc::new(ScalarUDF::from(SparkMakeTimestampNtz::new())),
-            args: input.arguments,
-        }))
+        Ok(ScalarUDF::from(SparkMakeTimestampNtz::new()).call(input.arguments))
     } else if input.arguments.len() == 7 {
         let session_tz = session_timezone(&input);
         let mut args = input.arguments;
@@ -396,11 +353,7 @@ fn make_timestamp(input: ScalarFunctionInput) -> PlanResult<Expr> {
             )
         })?;
 
-        let ntz_ts = Expr::ScalarFunction(expr::ScalarFunction {
-            func: Arc::new(ScalarUDF::from(SparkMakeTimestampNtz::new())),
-            args,
-        });
-
+        let ntz_ts = ScalarUDF::from(SparkMakeTimestampNtz::new()).call(args);
         Ok(convert_tz(from_tz, session_tz, ntz_ts))
     } else {
         Err(PlanError::invalid(format!(
@@ -411,10 +364,78 @@ fn make_timestamp(input: ScalarFunctionInput) -> PlanResult<Expr> {
 }
 
 fn date_part(part: Expr, date: Expr) -> Expr {
-    Expr::ScalarFunction(expr::ScalarFunction {
-        func: Arc::new(ScalarUDF::from(SparkDatePart::new())),
-        args: vec![part, date],
-    })
+    ScalarUDF::from(SparkDatePart::new()).call(vec![part, date])
+}
+
+fn months_between(input: ScalarFunctionInput) -> PlanResult<Expr> {
+    // args extraction:
+    let ScalarFunctionInput {
+        mut arguments,
+        function_context,
+    } = input;
+    let round_off = (arguments.len() == 3)
+        .then(|| arguments.pop())
+        .flatten()
+        .unwrap_or(lit(true));
+    let (date1, date2) = arguments.two()?;
+
+    // consts:
+    let seconds_per_day: i64 = 24 * 60 * 60;
+    let seconds_in_month = cast(lit(31 * seconds_per_day), DataType::Float64);
+
+    // helper functions:
+    let ensure_timestamp = |dt: Expr| match dt.get_type(function_context.schema) {
+        Ok(DataType::Timestamp(time_unit, _tz)) => (dt.clone(), time_unit),
+        _ => (
+            cast(dt.clone(), DataType::Timestamp(TimeUnit::Microsecond, None)),
+            TimeUnit::Microsecond,
+        ),
+    };
+
+    let date_to_months =
+        |dt: Expr| integer_part(dt.clone(), "YEAR") * lit(12) + integer_part(dt, "MONTH");
+
+    let is_last_day = |dt: Expr| {
+        ScalarUDF::from(SparkLastDay::new())
+            .call(vec![cast(dt.clone(), DataType::Date32)])
+            .eq(cast(dt, DataType::Date32))
+    };
+
+    let seconds_in_day = |dt: Expr, tu: TimeUnit| {
+        (cast(dt.clone(), DataType::Int64) - cast(date_trunc(lit("DAY"), dt), DataType::Int64))
+            / lit(time_unit_to_multiplier(&tu))
+    };
+
+    // prerequisites
+    let (date1, tu1) = ensure_timestamp(date1.clone());
+    let (date2, tu2) = ensure_timestamp(date2.clone());
+
+    // calculations:
+    let days1 = integer_part(date1.clone(), "DAY");
+    let days2 = integer_part(date2.clone(), "DAY");
+
+    let month_diff = cast(
+        date_to_months(date1.clone()) - date_to_months(date2.clone()),
+        DataType::Float64,
+    );
+
+    let seconds_diff = (days1.clone() - days2.clone()) * lit(seconds_per_day)
+        + seconds_in_day(date1.clone(), tu1)
+        - seconds_in_day(date2.clone(), tu2);
+
+    let months_between = when(
+        (days1.eq(days2)).or(is_last_day(date1).and(is_last_day(date2))),
+        month_diff.clone(),
+    )
+    .when(lit(true), month_diff + seconds_diff / seconds_in_month)
+    .end()?;
+
+    Ok(when(
+        round_off,
+        expr_fn::round(vec![months_between.clone(), lit(8)]),
+    )
+    .when(lit(true), months_between)
+    .end()?)
 }
 
 pub(super) fn list_built_in_datetime_functions() -> Vec<(&'static str, ScalarFunction)> {
@@ -449,14 +470,14 @@ pub(super) fn list_built_in_datetime_functions() -> Vec<(&'static str, ScalarFun
             "date_diff",
             F::binary(|start, end| date_days_arithmetic(start, end, Operator::Minus)),
         ),
-        ("date_format", F::custom(date_format)),
+        ("date_format", F::binary(date_format)),
         ("date_from_unix_date", F::cast(DataType::Date32)),
         ("date_part", F::binary(date_part)),
         (
             "date_sub",
             F::custom(|input| interval_arithmetic(input, "days", Operator::Minus)),
         ),
-        ("date_trunc", F::custom(date_trunc)),
+        ("date_trunc", F::binary(date_trunc)),
         (
             "dateadd",
             F::custom(|input| interval_arithmetic(input, "days", Operator::Plus)),
@@ -489,14 +510,14 @@ pub(super) fn list_built_in_datetime_functions() -> Vec<(&'static str, ScalarFun
         ("make_timestamp", F::custom(make_timestamp)),
         ("make_timestamp_ltz", F::custom(make_timestamp)),
         ("make_timestamp_ntz", F::udf(SparkMakeTimestampNtz::new())),
-        ("make_ym_interval", F::custom(make_ym_interval)),
+        ("make_ym_interval", F::var_arg(make_ym_interval)),
         ("minute", F::unary(|arg| integer_part(arg, "MINUTE"))),
         ("month", F::unary(|arg| integer_part(arg, "MONTH"))),
         (
             "monthname",
             F::unary(|arg| expr_fn::to_char(arg, lit("%b"))),
         ),
-        ("months_between", F::unknown("months_between")),
+        ("months_between", F::custom(months_between)),
         ("next_day", F::udf(SparkNextDay::new())),
         ("now", F::custom(current_timestamp_microseconds)),
         ("quarter", F::unary(|arg| integer_part(arg, "QUARTER"))),
@@ -527,18 +548,18 @@ pub(super) fn list_built_in_datetime_functions() -> Vec<(&'static str, ScalarFun
                 )
             }),
         ),
-        ("to_date", F::custom(to_date)),
-        ("to_timestamp", F::custom(to_timestamp)),
+        ("to_date", F::var_arg(to_date)),
+        ("to_timestamp", F::var_arg(to_timestamp)),
         // The description for `to_timestamp_ltz` and `to_timestamp_ntz` are the same:
         //  "Parses the timestamp with the format to a timestamp without time zone. Returns null with invalid input."
         // https://spark.apache.org/docs/latest/api/python/reference/pyspark.sql/api/pyspark.sql.functions.to_timestamp_ltz.html
         // https://spark.apache.org/docs/latest/api/python/reference/pyspark.sql/api/pyspark.sql.functions.to_timestamp_ntz.html
-        ("to_timestamp_ltz", F::custom(to_timestamp)),
-        ("to_timestamp_ntz", F::custom(to_timestamp)),
+        ("to_timestamp_ltz", F::var_arg(to_timestamp)),
+        ("to_timestamp_ntz", F::var_arg(to_timestamp)),
         ("to_unix_timestamp", F::custom(to_unix_timestamp)),
         ("to_utc_timestamp", F::custom(to_utc_timestamp)),
-        ("trunc", F::custom(trunc)),
-        ("try_to_timestamp", F::custom(try_to_timestamp)),
+        ("trunc", F::binary(trunc)),
+        ("try_to_timestamp", F::var_arg(try_to_timestamp)),
         (
             "unix_date",
             F::unary(|arg| cast(cast(arg, DataType::Date32), DataType::Int32)),
