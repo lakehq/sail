@@ -66,6 +66,7 @@ use sail_plan::extension::function::datetime::spark_interval::{
     SparkCalendarInterval, SparkDayTimeInterval, SparkYearMonthInterval,
 };
 use sail_plan::extension::function::datetime::spark_last_day::SparkLastDay;
+use sail_plan::extension::function::datetime::spark_make_dt_interval::SparkMakeDtInterval;
 use sail_plan::extension::function::datetime::spark_make_interval::SparkMakeInterval;
 use sail_plan::extension::function::datetime::spark_make_timestamp::SparkMakeTimestampNtz;
 use sail_plan::extension::function::datetime::spark_make_ym_interval::SparkMakeYmInterval;
@@ -1163,6 +1164,9 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
             "spark_signum" | "signum" => Ok(Arc::new(ScalarUDF::from(SparkSignum::new()))),
             "spark_last_day" | "last_day" => Ok(Arc::new(ScalarUDF::from(SparkLastDay::new()))),
             "spark_next_day" | "next_day" => Ok(Arc::new(ScalarUDF::from(SparkNextDay::new()))),
+            "spark_make_dt_interval" | "make_dt_interval" => {
+                Ok(Arc::new(ScalarUDF::from(SparkMakeDtInterval::new())))
+            }
             "spark_make_interval" | "make_interval" => {
                 Ok(Arc::new(ScalarUDF::from(SparkMakeInterval::new())))
             }
@@ -1266,6 +1270,7 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
             || node.inner().as_any().is::<SparkTryToBinary>()
             || node.inner().as_any().is::<SparkLastDay>()
             || node.inner().as_any().is::<SparkNextDay>()
+            || node.inner().as_any().is::<SparkMakeDtInterval>()
             || node.inner().as_any().is::<SparkMakeInterval>()
             || node.inner().as_any().is::<SparkMakeYmInterval>()
             || node.inner().as_any().is::<SparkMakeTimestampNtz>()
