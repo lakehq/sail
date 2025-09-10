@@ -23,7 +23,6 @@ use object_store::{GetOptions, GetResultPayload, ObjectStore};
 
 use crate::formats::text;
 use crate::formats::text::reader::{Format, ReaderBuilder};
-use crate::formats::text::DEFAULT_TEXT_EXTENSION;
 
 #[derive(Debug, Clone, Default)]
 pub struct TextSource {
@@ -93,26 +92,6 @@ impl TextSource {
     }
 }
 
-pub struct TextOpener {
-    config: Arc<TextSource>,
-    file_compression_type: FileCompressionType,
-    object_store: Arc<dyn ObjectStore>,
-}
-
-impl TextOpener {
-    pub fn new(
-        config: Arc<TextSource>,
-        file_compression_type: FileCompressionType,
-        object_store: Arc<dyn ObjectStore>,
-    ) -> Self {
-        Self {
-            config,
-            file_compression_type,
-            object_store,
-        }
-    }
-}
-
 impl From<TextSource> for Arc<dyn FileSource> {
     fn from(source: TextSource) -> Self {
         Arc::new(source)
@@ -175,7 +154,7 @@ impl FileSource for TextSource {
     }
 
     fn file_type(&self) -> &str {
-        &DEFAULT_TEXT_EXTENSION[1..]
+        "text"
     }
 
     fn fmt_extra(&self, t: DisplayFormatType, f: &mut fmt::Formatter) -> fmt::Result {
@@ -203,6 +182,26 @@ impl FileSource for TextSource {
 
     fn schema_adapter_factory(&self) -> Option<Arc<dyn SchemaAdapterFactory>> {
         self.schema_adapter_factory.clone()
+    }
+}
+
+pub struct TextOpener {
+    config: Arc<TextSource>,
+    file_compression_type: FileCompressionType,
+    object_store: Arc<dyn ObjectStore>,
+}
+
+impl TextOpener {
+    pub fn new(
+        config: Arc<TextSource>,
+        file_compression_type: FileCompressionType,
+        object_store: Arc<dyn ObjectStore>,
+    ) -> Self {
+        Self {
+            config,
+            file_compression_type,
+            object_store,
+        }
     }
 }
 
@@ -237,7 +236,7 @@ impl FileOpener for TextOpener {
 
             match result.payload {
                 #[cfg(not(target_arch = "wasm32"))]
-                GetResultPayload::File(mut file, _) => {
+                GetResultPayload::File(mut file, _path) => {
                     let is_whole_file_scanned = file_meta.range.is_none();
                     let decoder = if is_whole_file_scanned {
                         // Don't seek if no range as breaks FIFO files
