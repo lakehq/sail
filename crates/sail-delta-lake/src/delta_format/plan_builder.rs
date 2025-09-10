@@ -78,16 +78,13 @@ impl<'a> DeltaPlanBuilder<'a> {
         self,
         condition: Arc<dyn PhysicalExpr>,
     ) -> Result<Arc<dyn ExecutionPlan>> {
-        // Build new data plan
+        let old_data_plan = self.build_old_data_plan(condition).await?;
+
         let new_data_plan = self
             .add_projection_node(self.input.clone())
             .and_then(|plan| self.add_repartition_node(plan))
             .and_then(|plan| self.add_sort_node(plan))?;
 
-        // Build old data plan
-        let old_data_plan = self.build_old_data_plan(condition).await?;
-
-        // Create union and final processing chain
         self.align_schemas(new_data_plan, old_data_plan)
             .map(|(aligned_new_data, aligned_old_data)| {
                 Arc::new(UnionExec::new(vec![aligned_new_data, aligned_old_data]))
@@ -173,7 +170,7 @@ impl<'a> DeltaPlanBuilder<'a> {
         let old_schema = old_data_plan.schema();
 
         // Ensure both schemas have the same fields
-        // TODO: handle schema evolution
+        // TODO: handle schema evolution?
         if new_schema.fields().len() != old_schema.fields().len() {
             return Err(datafusion_common::DataFusionError::Plan(
                 "Schema mismatch between new and old data - schema evolution not yet implemented"
