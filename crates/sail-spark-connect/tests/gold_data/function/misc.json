@@ -1119,7 +1119,7 @@
         }
       },
       "output": {
-        "failure": "not implemented: function: version"
+        "success": "ok"
       }
     }
   ]
