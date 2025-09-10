@@ -55,8 +55,5 @@ impl ScalarUDFImpl for SparkVersion {
 }
 
 fn spark_version(_args: &[ArrayRef]) -> Result<ArrayRef> {
-    Ok(Arc::new(StringArray::from(vec![Some(format!(
-        "{}",
-        SparkVersion::SAIL_VERSION,
-    ))])) as ArrayRef)
+    Ok(Arc::new(StringArray::from(vec![Some( SparkVersion::SAIL_VERSION)])) as ArrayRef)
 }
