@@ -143,7 +143,7 @@ use sail_python_udf::udf::pyspark_udaf::PySparkGroupAggregateUDF;
 use sail_python_udf::udf::pyspark_udf::{PySparkUDF, PySparkUdfKind};
 use sail_python_udf::udf::pyspark_udtf::{PySparkUDTF, PySparkUdtfKind};
 use url::Url;
-
+use sail_plan::extension::function::misc::version::SparkVersion;
 use crate::plan::gen::extended_aggregate_udf::UdafKind;
 use crate::plan::gen::extended_physical_plan_node::NodeKind;
 use crate::plan::gen::extended_scalar_udf::UdfKind;
@@ -1207,6 +1207,7 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
             "spark_try_multiply" | "try_multiply" => {
                 Ok(Arc::new(ScalarUDF::from(SparkTryMult::new())))
             }
+            "spark_version" | "version" => Ok(Arc::new(ScalarUDF::from(SparkVersion::new()))),
             "spark_try_subtract" | "try_subtract" => {
                 Ok(Arc::new(ScalarUDF::from(SparkTrySubtract::new())))
             }
@@ -1299,6 +1300,7 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
             || node.inner().as_any().is::<SparkTryMult>()
             || node.inner().as_any().is::<SparkTryParseUrl>()
             || node.inner().as_any().is::<SparkTrySubtract>()
+            || node.inner().as_any().is::<SparkVersion>()
             || node.inner().as_any().is::<SparkWidthBucket>()
             || node.inner().as_any().is::<StrToMap>()
             || node.inner().as_any().is::<ParseUrl>()

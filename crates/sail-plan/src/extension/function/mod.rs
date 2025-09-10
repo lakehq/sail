@@ -12,6 +12,7 @@ pub mod kurtosis;
 pub mod map;
 pub mod math;
 pub mod max_min_by;
+pub mod misc;
 pub mod mode;
 pub mod multi_expr;
 pub mod raise_error;
