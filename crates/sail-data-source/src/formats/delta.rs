@@ -124,7 +124,12 @@ impl DeltaTableFormat {
 
 fn apply_delta_read_options(from: DeltaReadOptions, to: &mut TableDeltaOptions) -> Result<()> {
     // TODO: implement read options
-    let _ = (from, to);
+    if let Some(version_as_of) = from.version_as_of {
+        to.version_as_of = Some(version_as_of)
+    }
+    if let Some(timestamp_as_of) = from.timestamp_as_of {
+        to.timestamp_as_of = Some(timestamp_as_of)
+    }
     Ok(())
 }
 

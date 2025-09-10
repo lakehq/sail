@@ -7,7 +7,6 @@ from pysail.tests.spark.utils import is_jvm_spark
 class TestDeltaAdvancedFeatures:
     """Delta Lake advanced features tests"""
 
-    @pytest.mark.skip(reason="Temporarily skipped")
     @pytest.mark.skipif(is_jvm_spark(), reason="Sail only - Delta Lake time travel")
     def test_delta_feature_time_travel(self, spark, tmp_path):
         """Test Delta Lake time travel functionality"""
