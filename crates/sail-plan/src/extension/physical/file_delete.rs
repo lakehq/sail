@@ -1,0 +1,45 @@
+use std::sync::Arc;
+
+use datafusion::execution::SessionState;
+use datafusion::physical_plan::ExecutionPlan;
+use datafusion::physical_planner::PhysicalPlanner;
+use datafusion_common::Result;
+use datafusion_expr::LogicalPlan;
+use sail_common_datafusion::datasource::DeleteInfo;
+use sail_data_source::default_registry;
+
+use crate::extension::logical::FileDeleteOptions;
+
+pub async fn create_file_delete_physical_plan(
+    ctx: &SessionState,
+    planner: &dyn PhysicalPlanner,
+    logical_plan: &LogicalPlan,
+    options: FileDeleteOptions,
+) -> Result<Arc<dyn ExecutionPlan>> {
+    let FileDeleteOptions {
+        path,
+        format,
+        condition,
+        options,
+    } = options;
+
+    let condition = if let Some(condition) = condition {
+        Some(planner.create_physical_expr(&condition, logical_plan.schema(), ctx)?)
+    } else {
+        None
+    };
+
+    let info = DeleteInfo {
+        path,
+        condition,
+        options: options
+            .into_iter()
+            .map(|x| x.into_iter().collect())
+            .collect(),
+    };
+
+    default_registry()
+        .get_format(&format)?
+        .create_deleter(ctx, info)
+        .await
+}

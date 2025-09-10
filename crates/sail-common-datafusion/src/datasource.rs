@@ -67,6 +67,16 @@ pub struct SinkInfo {
     pub options: Vec<HashMap<String, String>>,
 }
 
+/// Information required to create a data deleter.
+#[derive(Debug, Clone)]
+pub struct DeleteInfo {
+    pub path: String,
+    pub condition: Option<Arc<dyn PhysicalExpr>>,
+    /// The sets of options for the data deletion.
+    /// A later set of options can override earlier ones.
+    pub options: Vec<HashMap<String, String>>,
+}
+
 /// A trait for preparing physical execution for a specific format.
 #[async_trait]
 pub trait TableFormat: Send + Sync {
@@ -86,6 +96,19 @@ pub trait TableFormat: Send + Sync {
         ctx: &dyn Session,
         info: SinkInfo,
     ) -> Result<Arc<dyn ExecutionPlan>>;
+
+    /// Creates a `ExecutionPlan` for delete.
+    async fn create_deleter(
+        &self,
+        ctx: &dyn Session,
+        info: DeleteInfo,
+    ) -> Result<Arc<dyn ExecutionPlan>> {
+        let _ = (ctx, info);
+        plan_err!(
+            "DELETE operation is not supported for {} format",
+            self.name()
+        )
+    }
 }
 
 pub fn create_sort_order(

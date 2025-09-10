@@ -1,4 +1,5 @@
 mod catalog;
+mod file_delete;
 mod file_write;
 mod map_partitions;
 mod precondition;
@@ -8,6 +9,7 @@ mod show_string;
 mod sort;
 
 pub(crate) use catalog::CatalogCommandNode;
+pub(crate) use file_delete::{FileDeleteNode, FileDeleteOptions};
 pub(crate) use file_write::{FileWriteNode, FileWriteOptions};
 pub(crate) use map_partitions::MapPartitionsNode;
 pub(crate) use precondition::WithPreconditionsNode;

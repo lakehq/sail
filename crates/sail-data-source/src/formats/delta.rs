@@ -7,7 +7,9 @@ use datafusion::common::{not_impl_err, plan_err, DataFusionError, Result, ToDFSc
 use datafusion::datasource::listing::ListingTableUrl;
 use datafusion::execution::SessionStateBuilder;
 use datafusion::physical_plan::ExecutionPlan;
-use sail_common_datafusion::datasource::{PhysicalSinkMode, SinkInfo, SourceInfo, TableFormat};
+use sail_common_datafusion::datasource::{
+    DeleteInfo, PhysicalSinkMode, SinkInfo, SourceInfo, TableFormat,
+};
 use sail_delta_lake::create_delta_provider;
 use sail_delta_lake::delta_datafusion::{parse_predicate_expression, DataFusionMixins};
 use sail_delta_lake::delta_format::DeltaPlanBuilder;
@@ -125,6 +127,38 @@ impl TableFormat for DeltaTableFormat {
         let sink_exec = plan_builder.build().await?;
 
         Ok(sink_exec)
+    }
+
+    async fn create_deleter(
+        &self,
+        ctx: &dyn Session,
+        info: DeleteInfo,
+    ) -> Result<Arc<dyn ExecutionPlan>> {
+        let DeleteInfo {
+            path,
+            condition: _,
+            options: _,
+        } = info;
+
+        let table_url = Self::parse_table_url(ctx, vec![path]).await?;
+
+        // Check for table existence
+        let object_store = ctx
+            .runtime_env()
+            .object_store_registry
+            .get_store(&table_url)
+            .map_err(|e| DataFusionError::External(Box::new(e)))?;
+        let table_exists =
+            open_table_with_object_store(table_url.clone(), object_store, Default::default())
+                .await
+                .is_ok();
+
+        if !table_exists {
+            return plan_err!("Cannot delete from non-existent Delta table at path: {table_url}");
+        }
+
+        // TODO: Implement actual Delta delete execution plan
+        not_impl_err!("DELETE operation for Delta tables is not yet implemented")
     }
 }
 
