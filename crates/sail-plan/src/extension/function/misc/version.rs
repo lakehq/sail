@@ -7,7 +7,6 @@ use datafusion::common::Result;
 use datafusion_expr::{ScalarFunctionArgs, ScalarUDFImpl};
 use datafusion_expr_common::columnar_value::ColumnarValue;
 use datafusion_expr_common::signature::{Signature, Volatility};
-use git_version::git_version;
 
 use crate::extension::function::functions_utils::make_scalar_function;
 
@@ -24,7 +23,6 @@ impl Default for SparkVersion {
 }
 
 impl SparkVersion {
-    const GIT_VERSION: &'static str = git_version!(args = ["--long", "--always"]);
     const SAIL_VERSION: &'static str = env!("CARGO_PKG_VERSION");
     pub fn new() -> Self {
         Self {
@@ -58,8 +56,7 @@ impl ScalarUDFImpl for SparkVersion {
 
 fn spark_version(_args: &[ArrayRef]) -> Result<ArrayRef> {
     Ok(Arc::new(StringArray::from(vec![Some(format!(
-        "{} {}",
+        "{}",
         SparkVersion::SAIL_VERSION,
-        SparkVersion::GIT_VERSION
     ))])) as ArrayRef)
 }

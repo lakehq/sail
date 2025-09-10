@@ -99,7 +99,6 @@ itertools = "0.14.0"
 moka = { version = "0.12.10", features = ["sync"] }
 bytes = "1.10.1"
 indexmap = "2.11.0"
-git-version = "0.3.9"
 
 ######
 # The versions of the following dependencies are managed manually.

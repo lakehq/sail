@@ -57,4 +57,3 @@ uuid = { workspace = true }
 url = { workspace = true }
 percent-encoding = { workspace = true }
 indexmap = { workspace = true }
-git-version = { workspace = true }
