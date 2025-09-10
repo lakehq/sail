@@ -527,11 +527,18 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
                 partition_columns,
                 table_exists,
                 sink_schema,
+                sink_mode,
             }) => {
                 let input = self.try_decode_plan(&input, registry)?;
                 let sink_schema = self.try_decode_schema(&sink_schema)?;
                 let table_url = Url::parse(&table_url)
                     .map_err(|e| plan_datafusion_err!("failed to parse table URL: {e}"))?;
+
+                let sink_mode = if let Some(sink_mode) = sink_mode {
+                    self.try_decode_physical_sink_mode(sink_mode, &sink_schema, registry)?
+                } else {
+                    return plan_err!("Missing sink_mode for DeltaCommitExec");
+                };
 
                 Ok(Arc::new(DeltaCommitExec::new(
                     input,
@@ -539,6 +546,7 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
                     partition_columns,
                     table_exists,
                     Arc::new(sink_schema),
+                    sink_mode,
                 )))
             }
             NodeKind::ConsoleSink(gen::ConsoleSinkExecNode { input }) => {
@@ -893,12 +901,14 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
             })
         } else if let Some(delta_commit_exec) = node.as_any().downcast_ref::<DeltaCommitExec>() {
             let input = self.try_encode_plan(delta_commit_exec.input().clone())?;
+            let sink_mode = self.try_encode_physical_sink_mode(delta_commit_exec.sink_mode())?;
             NodeKind::DeltaCommit(gen::DeltaCommitExecNode {
                 input,
                 table_url: delta_commit_exec.table_url().to_string(),
                 partition_columns: delta_commit_exec.partition_columns().to_vec(),
                 table_exists: delta_commit_exec.table_exists(),
                 sink_schema: self.try_encode_schema(delta_commit_exec.sink_schema())?,
+                sink_mode: Some(sink_mode),
             })
         } else if let Some(console_sink) = node.as_any().downcast_ref::<ConsoleSinkExec>() {
             let input = self.try_encode_plan(console_sink.input().clone())?;
