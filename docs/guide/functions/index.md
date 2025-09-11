@@ -11,7 +11,7 @@ Please note that this list is continually being updated as new functions are add
 If you don't see a function you need, please open an issue on
 the [Sail GitHub repository](https://github.com/lakehq/sail)
 
-## Function Categories
+## Categories
 
 <PageList :data="data" :prefix="['guide', 'functions']" />
 
