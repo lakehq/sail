@@ -4,10 +4,12 @@ use std::task::{Context, Poll};
 
 use datafusion::arrow::array::{
     new_null_array, Array, ArrayData, ArrayRef, ArrowNativeTypeOp, ArrowPrimitiveType, BinaryArray,
-    BinaryViewArray, BooleanArray, BooleanBuilder, LargeBinaryArray, LargeStringArray, NullArray,
-    PrimitiveBuilder, RecordBatch, StringArray, StringViewArray,
+    BinaryViewArray, BooleanArray, BooleanBuilder, DictionaryArray, FixedSizeBinaryArray,
+    FixedSizeListArray, LargeBinaryArray, LargeListArray, LargeListViewArray, LargeStringArray,
+    ListArray, ListViewArray, MapArray, NullArray, PrimitiveArray, PrimitiveBuilder, RecordBatch,
+    RunArray, StringArray, StringViewArray, StructArray, UnionArray,
 };
-use datafusion::arrow::buffer::Buffer;
+use datafusion::arrow::buffer::{Buffer, ScalarBuffer};
 use datafusion::arrow::datatypes::{
     ArrowTimestampType, DataType, Date32Type, Date64Type, Decimal128Type, Decimal256Type,
     DurationMicrosecondType, DurationMillisecondType, DurationNanosecondType, DurationSecondType,
@@ -15,7 +17,7 @@ use datafusion::arrow::datatypes::{
     IntervalDayTimeType, IntervalMonthDayNanoType, IntervalUnit, IntervalYearMonthType, SchemaRef,
     Time32MillisecondType, Time32SecondType, Time64MicrosecondType, Time64NanosecondType, TimeUnit,
     TimestampMicrosecondType, TimestampMillisecondType, TimestampNanosecondType,
-    TimestampSecondType, UInt16Type, UInt32Type, UInt64Type, UInt8Type,
+    TimestampSecondType, UInt16Type, UInt32Type, UInt64Type, UInt8Type, UnionMode,
 };
 use datafusion::execution::{RecordBatchStream, SendableRecordBatchStream};
 use datafusion_common::{exec_datafusion_err, exec_err, internal_err, Result};
@@ -308,45 +310,239 @@ fn placeholder_array(data_type: &DataType, length: usize) -> Result<ArrayRef> {
             ),
         },
         DataType::Binary => Ok(Arc::new(BinaryArray::from(vec![&[] as &[u8]]))),
-        DataType::FixedSizeBinary(_size) => {
-            todo!()
+        DataType::FixedSizeBinary(size) => {
+            let values = vec![0u8; *size as usize * length];
+            let array_data = ArrayData::builder(data_type.clone())
+                .len(length)
+                .add_buffer(Buffer::from(values))
+                .build()?;
+            Ok(Arc::new(FixedSizeBinaryArray::from(array_data)))
         }
         DataType::LargeBinary => Ok(Arc::new(LargeBinaryArray::from(vec![&[] as &[u8]]))),
         DataType::BinaryView => Ok(Arc::new(BinaryViewArray::from(vec![&[] as &[u8]]))),
         DataType::Utf8 => Ok(Arc::new(StringArray::from(vec![""]))),
         DataType::LargeUtf8 => Ok(Arc::new(LargeStringArray::from(vec![""]))),
         DataType::Utf8View => Ok(Arc::new(StringViewArray::from(vec![""]))),
-        DataType::List(_) => {
-            todo!()
+        DataType::List(field) => {
+            let child_array = if field.is_nullable() {
+                new_null_array(field.data_type(), 0)
+            } else {
+                placeholder_array(field.data_type(), 0)?
+            };
+            let offsets = vec![0i32; length + 1];
+            let array_data = ArrayData::builder(data_type.clone())
+                .len(length)
+                .add_buffer(Buffer::from(offsets))
+                .add_child_data(child_array.to_data())
+                .build()?;
+            Ok(Arc::new(ListArray::from(array_data)))
         }
-        DataType::ListView(_) => {
-            todo!()
+        DataType::ListView(field) => {
+            let child_array = if field.is_nullable() {
+                new_null_array(field.data_type(), 0)
+            } else {
+                placeholder_array(field.data_type(), 0)?
+            };
+            let offsets = vec![0i32; length];
+            let sizes = vec![0i32; length];
+            let array_data = ArrayData::builder(data_type.clone())
+                .len(length)
+                .add_buffer(Buffer::from(offsets))
+                .add_buffer(Buffer::from(sizes))
+                .add_child_data(child_array.to_data())
+                .build()?;
+            Ok(Arc::new(ListViewArray::from(array_data)))
         }
-        DataType::FixedSizeList(_, _) => {
-            todo!()
+        DataType::FixedSizeList(field, list_size) => {
+            let child_length = (*list_size as usize) * length;
+            let child_array = if field.is_nullable() {
+                new_null_array(field.data_type(), child_length)
+            } else {
+                placeholder_array(field.data_type(), child_length)?
+            };
+            let array_data = ArrayData::builder(data_type.clone())
+                .len(length)
+                .add_child_data(child_array.to_data())
+                .build()?;
+            Ok(Arc::new(FixedSizeListArray::from(array_data)))
         }
-        DataType::LargeList(_) => {
-            todo!()
+        DataType::LargeList(field) => {
+            let child_array = if field.is_nullable() {
+                new_null_array(field.data_type(), 0)
+            } else {
+                placeholder_array(field.data_type(), 0)?
+            };
+            let offsets = vec![0i64; length + 1];
+            let array_data = ArrayData::builder(data_type.clone())
+                .len(length)
+                .add_buffer(Buffer::from(offsets))
+                .add_child_data(child_array.to_data())
+                .build()?;
+            Ok(Arc::new(LargeListArray::from(array_data)))
         }
-        DataType::LargeListView(_) => {
-            todo!()
+        DataType::LargeListView(field) => {
+            let child_array = if field.is_nullable() {
+                new_null_array(field.data_type(), 0)
+            } else {
+                placeholder_array(field.data_type(), 0)?
+            };
+            let offsets = vec![0i64; length];
+            let sizes = vec![0i64; length];
+            let array_data = ArrayData::builder(data_type.clone())
+                .len(length)
+                .add_buffer(Buffer::from(offsets))
+                .add_buffer(Buffer::from(sizes))
+                .add_child_data(child_array.to_data())
+                .build()?;
+            Ok(Arc::new(LargeListViewArray::from(array_data)))
         }
-        DataType::Struct(_) => {
-            todo!()
+        DataType::Struct(fields) => {
+            let mut child_data = Vec::new();
+            for field in fields {
+                let child_array = if field.is_nullable() {
+                    new_null_array(field.data_type(), length)
+                } else {
+                    placeholder_array(field.data_type(), length)?
+                };
+                child_data.push(child_array.to_data());
+            }
+            let array_data = ArrayData::builder(data_type.clone())
+                .len(length)
+                .child_data(child_data)
+                .build()?;
+            Ok(Arc::new(StructArray::from(array_data)))
         }
-        DataType::Union(_, _) => {
-            todo!()
+        DataType::Union(union_fields, union_mode) => {
+            // use first type ID for all entries
+            let Some(first_type_id) = union_fields.iter().next().map(|(type_id, _)| type_id) else {
+                return internal_err!("union type must have at least one field");
+            };
+            // create type IDs buffer
+            let type_ids: ScalarBuffer<i8> = vec![first_type_id; length].into();
+
+            // create child arrays for each field in the union
+            let mut children = Vec::new();
+            for (type_id, field) in union_fields.iter() {
+                let child_length = match union_mode {
+                    UnionMode::Sparse => length,
+                    UnionMode::Dense => {
+                        if type_id == first_type_id {
+                            length
+                        } else {
+                            0
+                        }
+                    }
+                };
+                let child_array = if field.is_nullable() {
+                    new_null_array(field.data_type(), child_length)
+                } else {
+                    placeholder_array(field.data_type(), child_length)?
+                };
+                children.push(child_array);
+            }
+
+            let offsets = match union_mode {
+                UnionMode::Dense => Some((0i32..length as i32).collect::<Vec<_>>().into()),
+                UnionMode::Sparse => None,
+            };
+
+            let union_array =
+                UnionArray::try_new(union_fields.clone(), type_ids, offsets, children)?;
+
+            Ok(Arc::new(union_array))
         }
-        DataType::Dictionary(_, _) => {
-            todo!()
+        DataType::Dictionary(key_type, value_type) => {
+            // create a minimal values array (single element)
+            let values_array = placeholder_array(value_type, 1)?;
+
+            // create keys array with all zeros pointing to the single value
+            match key_type.as_ref() {
+                DataType::Int8 => {
+                    let keys = PrimitiveArray::<Int8Type>::from(vec![0i8; length]);
+                    let dict_array = DictionaryArray::try_new(keys, values_array)?;
+                    Ok(Arc::new(dict_array))
+                }
+                DataType::Int16 => {
+                    let keys = PrimitiveArray::<Int16Type>::from(vec![0i16; length]);
+                    let dict_array = DictionaryArray::try_new(keys, values_array)?;
+                    Ok(Arc::new(dict_array))
+                }
+                DataType::Int32 => {
+                    let keys = PrimitiveArray::<Int32Type>::from(vec![0i32; length]);
+                    let dict_array = DictionaryArray::try_new(keys, values_array)?;
+                    Ok(Arc::new(dict_array))
+                }
+                DataType::Int64 => {
+                    let keys = PrimitiveArray::<Int64Type>::from(vec![0i64; length]);
+                    let dict_array = DictionaryArray::try_new(keys, values_array)?;
+                    Ok(Arc::new(dict_array))
+                }
+                DataType::UInt8 => {
+                    let keys = PrimitiveArray::<UInt8Type>::from(vec![0u8; length]);
+                    let dict_array = DictionaryArray::try_new(keys, values_array)?;
+                    Ok(Arc::new(dict_array))
+                }
+                DataType::UInt16 => {
+                    let keys = PrimitiveArray::<UInt16Type>::from(vec![0u16; length]);
+                    let dict_array = DictionaryArray::try_new(keys, values_array)?;
+                    Ok(Arc::new(dict_array))
+                }
+                DataType::UInt32 => {
+                    let keys = PrimitiveArray::<UInt32Type>::from(vec![0u32; length]);
+                    let dict_array = DictionaryArray::try_new(keys, values_array)?;
+                    Ok(Arc::new(dict_array))
+                }
+                DataType::UInt64 => {
+                    let keys = PrimitiveArray::<UInt64Type>::from(vec![0u64; length]);
+                    let dict_array = DictionaryArray::try_new(keys, values_array)?;
+                    Ok(Arc::new(dict_array))
+                }
+                _ => internal_err!("invalid dictionary key type: {key_type:?}"),
+            }
         }
         DataType::Decimal128(_, _) => Ok(placeholder_primitive_array::<Decimal128Type>(length)),
         DataType::Decimal256(_, _) => Ok(placeholder_primitive_array::<Decimal256Type>(length)),
-        DataType::Map(_, _) => {
-            todo!()
+        DataType::Map(field, _) => {
+            let child_array = if field.is_nullable() {
+                new_null_array(field.data_type(), 0)
+            } else {
+                placeholder_array(field.data_type(), 0)?
+            };
+            let offsets = vec![0i32; length + 1];
+            let array_data = ArrayData::builder(data_type.clone())
+                .len(length)
+                .add_buffer(Buffer::from(offsets))
+                .add_child_data(child_array.to_data())
+                .build()?;
+            Ok(Arc::new(MapArray::from(array_data)))
         }
-        DataType::RunEndEncoded(_, _) => {
-            todo!()
+        DataType::RunEndEncoded(run_ends_field, values_field) => {
+            // create a minimal values array (single element)
+            let values_array = if values_field.is_nullable() {
+                new_null_array(values_field.data_type(), 1)
+            } else {
+                placeholder_array(values_field.data_type(), 1)?
+            };
+
+            // create run-end array where all values point to the single run
+            match run_ends_field.data_type() {
+                DataType::Int16 => {
+                    let run_ends = PrimitiveArray::<Int16Type>::from(vec![length as i16]);
+                    let run_array = RunArray::try_new(&run_ends, &*values_array)?;
+                    Ok(Arc::new(run_array))
+                }
+                DataType::Int32 => {
+                    let run_ends = PrimitiveArray::<Int32Type>::from(vec![length as i32]);
+                    let run_array = RunArray::try_new(&run_ends, &*values_array)?;
+                    Ok(Arc::new(run_array))
+                }
+                DataType::Int64 => {
+                    let run_ends = PrimitiveArray::<Int64Type>::from(vec![length as i64]);
+                    let run_array = RunArray::try_new(&run_ends, &*values_array)?;
+                    Ok(Arc::new(run_array))
+                }
+                _ => internal_err!("invalid run ends type: {:?}", run_ends_field.data_type()),
+            }
         }
     }
 }
