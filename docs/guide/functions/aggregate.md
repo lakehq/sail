@@ -1,0 +1,61 @@
+---
+title: Aggregate Functions
+rank: 2
+---
+
+# List of Supported Built-in Spark Aggregate Functions
+
+- `any`
+- `any_value`
+- `approx_count_distinct`
+- `approx_percentile`
+- `array_agg`
+- `avg`
+- `bit_and`
+- `bit_or`
+- `bit_xor`
+- `bool_and`
+- `bool_or`
+- `collect_list`
+- `collect_set`
+- `corr`
+- `count`
+- `count_if`
+- `covar_pop`
+- `covar_samp`
+- `every`
+- `first`
+- `first_value`
+- `grouping`
+- `kurtosis`
+- `last`
+- `last_value`
+- `listagg`
+- `max`
+- `max_by`
+- `mean`
+- `median`
+- `min`
+- `min_by`
+- `mode`
+- `percentile_approx`
+- `regr_avgx`
+- `regr_avgy`
+- `regr_count`
+- `regr_intercept`
+- `regr_r2`
+- `regr_slope`
+- `regr_sxx`
+- `regr_sxy`
+- `regr_syy`
+- `skewness`
+- `some`
+- `std`
+- `stddev`
+- `stddev_pop`
+- `stddev_samp`
+- `string_agg`
+- `sum`
+- `var_pop`
+- `var_samp`
+- `variance`
