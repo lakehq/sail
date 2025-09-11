@@ -101,6 +101,7 @@ use sail_plan::extension::function::math::spark_try_mult::SparkTryMult;
 use sail_plan::extension::function::math::spark_try_subtract::SparkTrySubtract;
 use sail_plan::extension::function::math::spark_width_bucket::SparkWidthBucket;
 use sail_plan::extension::function::max_min_by::{MaxByFunction, MinByFunction};
+use sail_plan::extension::function::misc::version::SparkVersion;
 use sail_plan::extension::function::mode::ModeFunction;
 use sail_plan::extension::function::multi_expr::MultiExpr;
 use sail_plan::extension::function::raise_error::RaiseError;
@@ -1230,6 +1231,7 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
             "spark_try_multiply" | "try_multiply" => {
                 Ok(Arc::new(ScalarUDF::from(SparkTryMult::new())))
             }
+            "spark_version" | "version" => Ok(Arc::new(ScalarUDF::from(SparkVersion::new()))),
             "spark_try_subtract" | "try_subtract" => {
                 Ok(Arc::new(ScalarUDF::from(SparkTrySubtract::new())))
             }
@@ -1322,6 +1324,7 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
             || node.inner().as_any().is::<SparkTryMult>()
             || node.inner().as_any().is::<SparkTryParseUrl>()
             || node.inner().as_any().is::<SparkTrySubtract>()
+            || node.inner().as_any().is::<SparkVersion>()
             || node.inner().as_any().is::<SparkWidthBucket>()
             || node.inner().as_any().is::<StrToMap>()
             || node.inner().as_any().is::<ParseUrl>()

@@ -9,6 +9,7 @@ use sail_common_datafusion::extension::SessionExtensionAccessor;
 
 use crate::error::{PlanError, PlanResult};
 use crate::extension::function::bitmap_count::BitmapCount;
+use crate::extension::function::misc::version::SparkVersion;
 use crate::extension::function::raise_error::RaiseError;
 use crate::extension::function::spark_aes::{
     SparkAESDecrypt, SparkAESEncrypt, SparkTryAESDecrypt, SparkTryAESEncrypt,
@@ -156,6 +157,6 @@ pub(super) fn list_built_in_misc_functions() -> Vec<(&'static str, ScalarFunctio
         ("typeof", F::custom(type_of)),
         ("user", F::unknown("user")),
         ("uuid", F::nullary(expr_fn::uuid)),
-        ("version", F::unknown("version")),
+        ("version", F::udf(SparkVersion::new())),
     ]
 }
