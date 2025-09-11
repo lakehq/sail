@@ -161,4 +161,3 @@ pub(super) fn list_built_in_misc_functions() -> Vec<(&'static str, ScalarFunctio
         ("version", F::udf(SparkVersion::new())),
     ]
 }
-
