@@ -17,10 +17,12 @@ use deltalake::protocol::DeltaOperation;
 use serde::{Deserialize, Serialize};
 
 mod commit_exec;
+mod delete_exec;
 mod plan_builder;
 mod writer_exec;
 
 pub use commit_exec::DeltaCommitExec;
+pub use delete_exec::DeltaDeleteExec;
 pub use plan_builder::DeltaPlanBuilder;
 pub use writer_exec::DeltaWriterExec;
 

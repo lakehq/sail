@@ -12,7 +12,7 @@ use sail_common_datafusion::datasource::{
 };
 use sail_delta_lake::create_delta_provider;
 use sail_delta_lake::delta_datafusion::{parse_predicate_expression, DataFusionMixins};
-use sail_delta_lake::delta_format::DeltaPlanBuilder;
+use sail_delta_lake::delta_format::{DeltaDeleteExec, DeltaPlanBuilder};
 use sail_delta_lake::options::TableDeltaOptions;
 use sail_delta_lake::table::open_table_with_object_store;
 use url::Url;
@@ -136,7 +136,7 @@ impl TableFormat for DeltaTableFormat {
     ) -> Result<Arc<dyn ExecutionPlan>> {
         let DeleteInfo {
             path,
-            condition: _,
+            condition,
             options: _,
         } = info;
 
@@ -157,8 +157,10 @@ impl TableFormat for DeltaTableFormat {
             return plan_err!("Cannot delete from non-existent Delta table at path: {table_url}");
         }
 
-        // TODO: Implement actual Delta delete execution plan
-        not_impl_err!("DELETE operation for Delta tables is not yet implemented")
+        let condition = condition.ok_or_else(|| {
+            DataFusionError::Plan("DELETE operation requires a WHERE condition".to_string())
+        })?;
+        Ok(Arc::new(DeltaDeleteExec::new(table_url, condition)))
     }
 }
 
