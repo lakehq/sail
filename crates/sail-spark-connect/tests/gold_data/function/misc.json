@@ -832,7 +832,7 @@
         }
       },
       "output": {
-        "failure": "not supported: unknown function: session_user"
+        "success": "ok"
       }
     },
     {
@@ -1075,7 +1075,7 @@
         }
       },
       "output": {
-        "failure": "not implemented: function: user"
+        "success": "ok"
       }
     },
     {
