@@ -24,9 +24,8 @@ use futures::stream;
 use url::Url;
 use uuid::Uuid;
 
-use crate::delta_datafusion::{
-    find_files_physical, schema_rewriter::DeltaPhysicalExprAdapterFactory,
-};
+use crate::delta_datafusion::find_files_physical;
+use crate::delta_datafusion::schema_rewriter::DeltaPhysicalExprAdapterFactory;
 use crate::kernel::transaction::{CommitBuilder, CommitProperties, PROTOCOL};
 use crate::operations::write::execution::{prepare_predicate_actions_physical, WriterStatsConfig};
 use crate::table::open_table_with_object_store;

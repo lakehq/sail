@@ -1,10 +1,8 @@
 use std::collections::HashMap;
 use std::sync::Arc;
 
-use datafusion_common::{
-    tree_node::{Transformed, TreeNode},
-    Column, DFSchemaRef, ToDFSchema,
-};
+use datafusion_common::tree_node::{Transformed, TreeNode};
+use datafusion_common::{Column, DFSchemaRef, ToDFSchema};
 use datafusion_expr::{Expr, Extension, LogicalPlan};
 use sail_catalog::manager::CatalogManager;
 use sail_catalog::provider::{TableKind, TableStatus};
