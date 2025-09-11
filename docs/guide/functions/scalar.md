@@ -272,9 +272,11 @@ rank: 1
 - `current_user`
 - `equal_null`
 - `raise_error`
+- `session_user`
 - `try_aes_encrypt`
 - `try_aes_decrypt`
 - `typeof`
+- `user`
 - `uuid`
 - `version`
 
