@@ -2,38 +2,37 @@ use std::cmp::Ordering;
 use std::fmt::Formatter;
 use std::sync::Arc;
 
-use datafusion::arrow::datatypes::Schema;
+use datafusion::logical_expr::LogicalPlan;
 use datafusion_common::{plan_err, DFSchema, DFSchemaRef, Result};
-use datafusion_expr::{Expr, LogicalPlan, UserDefinedLogicalNodeCore};
-
-use crate::field::marker_field;
+use datafusion_expr::{Expr, UserDefinedLogicalNodeCore};
+use sail_common_datafusion::streaming::schema::to_flow_event_schema;
 
 #[derive(Clone, Debug, Eq, PartialEq, Hash)]
-pub struct StreamSourceNode {
+pub struct StreamSourceAdapterNode {
     input: Arc<LogicalPlan>,
     schema: DFSchemaRef,
 }
 
 #[derive(PartialEq, PartialOrd)]
-struct StreamSourceNodeOrd<'a> {
+struct StreamSourceAdapterNodeOrd<'a> {
     input: &'a Arc<LogicalPlan>,
 }
 
-impl<'a> From<&'a StreamSourceNode> for StreamSourceNodeOrd<'a> {
-    fn from(node: &'a StreamSourceNode) -> Self {
+impl<'a> From<&'a StreamSourceAdapterNode> for StreamSourceAdapterNodeOrd<'a> {
+    fn from(node: &'a StreamSourceAdapterNode) -> Self {
         Self { input: &node.input }
     }
 }
 
-impl PartialOrd for StreamSourceNode {
+impl PartialOrd for StreamSourceAdapterNode {
     fn partial_cmp(&self, other: &Self) -> Option<Ordering> {
-        StreamSourceNodeOrd::from(self).partial_cmp(&other.into())
+        StreamSourceAdapterNodeOrd::from(self).partial_cmp(&other.into())
     }
 }
 
-impl StreamSourceNode {
+impl StreamSourceAdapterNode {
     pub fn try_new(input: Arc<LogicalPlan>) -> Result<Self> {
-        let schema = DFSchema::try_from(Schema::new(vec![marker_field()]))?.join(input.schema())?;
+        let schema = DFSchema::try_from(to_flow_event_schema(input.schema().inner()))?;
         Ok(Self {
             input,
             schema: Arc::new(schema),
@@ -41,9 +40,9 @@ impl StreamSourceNode {
     }
 }
 
-impl UserDefinedLogicalNodeCore for StreamSourceNode {
+impl UserDefinedLogicalNodeCore for StreamSourceAdapterNode {
     fn name(&self) -> &str {
-        "StreamSource"
+        "StreamSourceAdapter"
     }
 
     fn inputs(&self) -> Vec<&LogicalPlan> {
@@ -59,7 +58,7 @@ impl UserDefinedLogicalNodeCore for StreamSourceNode {
     }
 
     fn fmt_for_explain(&self, f: &mut Formatter) -> std::fmt::Result {
-        write!(f, "StreamSource")
+        write!(f, "StreamSourceAdapter")
     }
 
     fn with_exprs_and_inputs(

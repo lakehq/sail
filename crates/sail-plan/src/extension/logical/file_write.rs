@@ -35,10 +35,6 @@ impl FileWriteNode {
         }
     }
 
-    pub fn input(&self) -> &Arc<LogicalPlan> {
-        &self.input
-    }
-
     pub fn options(&self) -> &FileWriteOptions {
         &self.options
     }

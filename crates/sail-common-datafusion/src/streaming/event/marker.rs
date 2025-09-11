@@ -3,7 +3,7 @@ use datafusion_common::{internal_datafusion_err, plan_datafusion_err, plan_err, 
 use prost::bytes::BytesMut;
 use prost::Message;
 
-use crate::event::gen;
+use crate::streaming::event::gen;
 
 #[derive(Debug, Clone)]
 pub enum FlowMarker {
@@ -19,6 +19,12 @@ pub enum FlowMarker {
     Checkpoint {
         id: u64,
     },
+    /// An indicator that the flow event stream will contain no more data events.
+    /// A bounded source cannot close the stream to indicate end of data, since
+    /// it is supposed to still wait for another checkpoint marker before finishing.
+    /// When a sink receives this marker from all its input, it should wait for
+    /// the next checkpoint marker and then the job can finish.
+    EndOfData,
 }
 
 impl FlowMarker {
@@ -44,6 +50,7 @@ impl FlowMarker {
             FlowMarker::Checkpoint { id } => {
                 gen::flow_marker::Kind::Checkpoint(gen::Checkpoint { id })
             }
+            FlowMarker::EndOfData => gen::flow_marker::Kind::EndOfData(gen::EndOfData {}),
         };
         let message = gen::FlowMarker { kind: Some(kind) };
         let mut buffer = BytesMut::new();
@@ -80,6 +87,7 @@ impl FlowMarker {
             Some(gen::flow_marker::Kind::Checkpoint(gen::Checkpoint { id })) => {
                 Ok(FlowMarker::Checkpoint { id })
             }
+            Some(gen::flow_marker::Kind::EndOfData(gen::EndOfData {})) => Ok(FlowMarker::EndOfData),
             None => plan_err!("missing marker kind"),
         }
     }

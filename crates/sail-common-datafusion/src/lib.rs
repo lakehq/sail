@@ -4,5 +4,6 @@ pub mod display;
 pub mod error;
 pub mod extension;
 pub mod formatter;
+pub mod streaming;
 pub mod udf;
 pub mod utils;

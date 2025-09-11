@@ -5,7 +5,7 @@ use datafusion::common::Result;
 use futures::Stream;
 use pin_project_lite::pin_project;
 
-use crate::event::FlowEvent;
+use crate::streaming::event::FlowEvent;
 
 pub trait FlowEventStream: Stream<Item = Result<FlowEvent>> {
     /// The schema of the data batches in the stream.

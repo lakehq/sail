@@ -1,12 +1,13 @@
 syntax = "proto3";
 
-package sail.stream;
+package sail.streaming;
 
 message FlowMarker {
   oneof Kind {
     LatencyTracker latency_tracker = 1;
     Watermark watermark = 2;
     Checkpoint checkpoint = 3;
+    EndOfData end_of_data = 4;
   }
 }
 
@@ -26,3 +27,5 @@ message Watermark {
 message Checkpoint {
   uint64 id = 1;
 }
+
+message EndOfData {}

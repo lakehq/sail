@@ -1,31 +1,27 @@
 use std::any::Any;
-use std::iter::once;
 use std::sync::Arc;
 
-use datafusion::arrow::datatypes::Schema;
 use datafusion::execution::{SendableRecordBatchStream, TaskContext};
 use datafusion::physical_expr::EquivalenceProperties;
 use datafusion::physical_plan::{
     DisplayAs, ExecutionPlan, ExecutionPlanProperties, PlanProperties,
 };
 use datafusion_common::{plan_err, Result};
-use futures::StreamExt;
-
-use crate::event::{EncodedFlowEventStream, FlowEvent, FlowEventStreamAdapter};
-use crate::field::marker_field;
+use futures::{stream, StreamExt};
+use sail_common_datafusion::streaming::event::{
+    EncodedFlowEventStream, FlowEvent, FlowEventStreamAdapter, FlowMarker,
+};
+use sail_common_datafusion::streaming::schema::to_flow_event_schema;
 
 #[derive(Debug)]
-pub struct StreamSourceExec {
+pub struct StreamSourceAdapterExec {
     input: Arc<dyn ExecutionPlan>,
     properties: PlanProperties,
 }
 
-impl StreamSourceExec {
+impl StreamSourceAdapterExec {
     pub fn new(input: Arc<dyn ExecutionPlan>) -> Self {
-        let fields = once(Arc::new(marker_field()))
-            .chain(input.schema().fields().iter().cloned())
-            .collect::<Vec<_>>();
-        let schema = Arc::new(Schema::new(fields));
+        let schema = Arc::new(to_flow_event_schema(&input.schema()));
         let properties = PlanProperties::new(
             EquivalenceProperties::new(schema),
             input.output_partitioning().clone(),
@@ -36,7 +32,7 @@ impl StreamSourceExec {
     }
 }
 
-impl DisplayAs for StreamSourceExec {
+impl DisplayAs for StreamSourceAdapterExec {
     fn fmt_as(
         &self,
         _t: datafusion::physical_plan::DisplayFormatType,
@@ -46,7 +42,7 @@ impl DisplayAs for StreamSourceExec {
     }
 }
 
-impl ExecutionPlan for StreamSourceExec {
+impl ExecutionPlan for StreamSourceAdapterExec {
     fn name(&self) -> &str {
         Self::static_name()
     }
@@ -70,7 +66,7 @@ impl ExecutionPlan for StreamSourceExec {
         let (Some(child), true) = (children.pop(), children.is_empty()) else {
             return plan_err!("{} expects exactly one child", self.name());
         };
-        Ok(Arc::new(StreamSourceExec::new(child)))
+        Ok(Arc::new(StreamSourceAdapterExec::new(child)))
     }
 
     fn execute(
@@ -81,7 +77,10 @@ impl ExecutionPlan for StreamSourceExec {
         let stream = self
             .input
             .execute(partition, context)?
-            .map(|x| Ok(FlowEvent::Data(x?)));
+            .map(|x| Ok(FlowEvent::append_only_data(x?)))
+            .chain(stream::once(async {
+                Ok(FlowEvent::Marker(FlowMarker::EndOfData))
+            }));
         let stream = Box::pin(FlowEventStreamAdapter::new(self.input.schema(), stream));
         Ok(Box::pin(EncodedFlowEventStream::new(stream)))
     }

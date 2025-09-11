@@ -25,6 +25,6 @@ impl<'a> ProtoBuilder<'a> {
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
     println!("cargo:rerun-if-changed=build.rs");
-    ProtoBuilder::new("stream", &["marker.proto"]).build()?;
+    ProtoBuilder::new("streaming", &["marker.proto"]).build()?;
     Ok(())
 }

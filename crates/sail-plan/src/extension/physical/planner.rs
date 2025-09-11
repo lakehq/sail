@@ -8,10 +8,13 @@ use datafusion::physical_planner::{ExtensionPlanner, PhysicalPlanner};
 use datafusion_common::{internal_err, Result};
 use datafusion_expr::{LogicalPlan, UserDefinedLogicalNode};
 use datafusion_physical_expr::{create_physical_sort_exprs, LexOrdering};
-use sail_streaming::logical_plan::sink::StreamSinkNode;
-use sail_streaming::logical_plan::source::StreamSourceNode;
-use sail_streaming::physical_plan::sink::StreamSinkExec;
-use sail_streaming::physical_plan::source::StreamSourceExec;
+use sail_common_datafusion::streaming::schema::{
+    to_flow_event_field_names, to_flow_event_projection,
+};
+use sail_common_datafusion::utils::rename_projected_physical_plan;
+use sail_logical_plan::streaming::source_adapter::StreamSourceAdapterNode;
+use sail_logical_plan::streaming::source_wrapper::StreamSourceWrapperNode;
+use sail_physical_plan::streaming::source::StreamSourceAdapterExec;
 
 use crate::extension::logical::{
     FileWriteNode, MapPartitionsNode, RangeNode, SchemaPivotNode, ShowStringNode,
@@ -102,19 +105,29 @@ impl ExtensionPlanner for ExtensionPhysicalPlanner {
                     node.options().clone(),
                 )
                 .await?
-            } else if node.as_any().is::<StreamSourceNode>() {
+            } else if node.as_any().is::<StreamSourceAdapterNode>() {
                 let [input] = physical_inputs else {
                     return internal_err!("StreamSourceExec requires exactly one physical input");
                 };
-                Arc::new(StreamSourceExec::new(input.clone()))
-            } else if node.as_any().is::<StreamSinkNode>() {
-                let [input] = physical_inputs else {
-                    return internal_err!("StreamSinkExec requires exactly one physical input");
-                };
-                Arc::new(StreamSinkExec::try_new(
-                    input.clone(),
-                    node.schema().inner().clone(),
-                )?)
+                Arc::new(StreamSourceAdapterExec::new(input.clone()))
+            } else if let Some(node) = node.as_any().downcast_ref::<StreamSourceWrapperNode>() {
+                let plan = node
+                    .source()
+                    .scan(
+                        session_state,
+                        node.projection(),
+                        node.filters(),
+                        node.fetch(),
+                    )
+                    .await?;
+                match node.names() {
+                    Some(names) => {
+                        let names = to_flow_event_field_names(names);
+                        let projection = node.projection().map(|x| to_flow_event_projection(x));
+                        rename_projected_physical_plan(plan, &names, projection.as_ref())?
+                    }
+                    None => plan,
+                }
             } else {
                 return internal_err!("unsupported logical extension node: {:?}", node);
             };

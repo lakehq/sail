@@ -5608,11 +5608,15 @@ dependencies = [
  "deltalake",
  "futures",
  "lexical-core",
+ "pin-project-lite",
+ "prost",
  "pyo3",
  "ryu",
  "sail-common",
  "serde",
  "thiserror 2.0.16",
+ "tonic 0.12.3",
+ "tonic-build",
 ]
 
 [[package]]
@@ -5636,6 +5640,7 @@ dependencies = [
  "proc-macro2",
  "quote",
  "regex",
+ "sail-common",
  "sail-common-datafusion",
  "sail-delta-lake",
  "serde",
@@ -5720,6 +5725,17 @@ dependencies = [
 ]
 
 [[package]]
+name = "sail-logical-plan"
+version = "0.3.5"
+dependencies = [
+ "datafusion",
+ "datafusion-common",
+ "datafusion-expr",
+ "sail-common",
+ "sail-common-datafusion",
+]
+
+[[package]]
 name = "sail-object-store"
 version = "0.3.5"
 dependencies = [
@@ -5755,6 +5771,16 @@ name = "sail-physical-optimizer"
 version = "0.3.5"
 dependencies = [
  "datafusion",
+]
+
+[[package]]
+name = "sail-physical-plan"
+version = "0.3.5"
+dependencies = [
+ "datafusion",
+ "datafusion-common",
+ "futures",
+ "sail-common-datafusion",
 ]
 
 [[package]]
@@ -5799,9 +5825,10 @@ dependencies = [
  "sail-common",
  "sail-common-datafusion",
  "sail-data-source",
+ "sail-logical-plan",
+ "sail-physical-plan",
  "sail-python-udf",
  "sail-sql-analyzer",
- "sail-streaming",
  "serde",
  "sha1",
  "thiserror 2.0.16",
@@ -5946,22 +5973,6 @@ dependencies = [
  "quote",
  "sail-sql-macro",
  "syn",
-]
-
-[[package]]
-name = "sail-streaming"
-version = "0.3.4"
-dependencies = [
- "chrono",
- "datafusion",
- "datafusion-common",
- "datafusion-expr",
- "futures",
- "log",
- "pin-project-lite",
- "prost",
- "tonic 0.12.3",
- "tonic-build",
 ]
 
 [[package]]

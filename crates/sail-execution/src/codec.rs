@@ -884,7 +884,7 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
             let max_batch_size = u64::try_from(options.max_batch_size).map_err(|_| {
                 plan_datafusion_err!("cannot encode max batch size for socket source")
             })?;
-            let schema = self.try_encode_schema(socket_source.schema().as_ref())?;
+            let schema = self.try_encode_schema(socket_source.original_schema())?;
             let projection = self.try_encode_projection(socket_source.projection())?;
             NodeKind::SocketSource(gen::SocketSourceExecNode {
                 host: options.host.clone(),
