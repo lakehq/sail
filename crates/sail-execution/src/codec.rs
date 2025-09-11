@@ -45,6 +45,7 @@ use prost::Message;
 use sail_common_datafusion::datasource::PhysicalSinkMode;
 use sail_common_datafusion::udf::StreamUDF;
 use sail_common_datafusion::utils::{read_record_batches, write_record_batches};
+use sail_data_source::formats::binary::source::BinarySource;
 use sail_data_source::formats::console::ConsoleSinkExec;
 use sail_data_source::formats::rate::{RateSourceExec, TableRateOptions};
 use sail_data_source::formats::socket::{SocketSourceExec, TableSocketOptions};
@@ -66,6 +67,7 @@ use sail_plan::extension::function::datetime::spark_interval::{
     SparkCalendarInterval, SparkDayTimeInterval, SparkYearMonthInterval,
 };
 use sail_plan::extension::function::datetime::spark_last_day::SparkLastDay;
+use sail_plan::extension::function::datetime::spark_make_dt_interval::SparkMakeDtInterval;
 use sail_plan::extension::function::datetime::spark_make_interval::SparkMakeInterval;
 use sail_plan::extension::function::datetime::spark_make_timestamp::SparkMakeTimestampNtz;
 use sail_plan::extension::function::datetime::spark_make_ym_interval::SparkMakeYmInterval;
@@ -99,6 +101,7 @@ use sail_plan::extension::function::math::spark_try_mult::SparkTryMult;
 use sail_plan::extension::function::math::spark_try_subtract::SparkTrySubtract;
 use sail_plan::extension::function::math::spark_width_bucket::SparkWidthBucket;
 use sail_plan::extension::function::max_min_by::{MaxByFunction, MinByFunction};
+use sail_plan::extension::function::misc::version::SparkVersion;
 use sail_plan::extension::function::mode::ModeFunction;
 use sail_plan::extension::function::multi_expr::MultiExpr;
 use sail_plan::extension::function::raise_error::RaiseError;
@@ -360,6 +363,19 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
                     .build();
                 Ok(Arc::new(DataSourceExec::new(Arc::new(source))))
             }
+            NodeKind::BinarySource(gen::BinarySourceExecNode {
+                base_config,
+                path_glob_filter,
+            }) => {
+                let source = parse_protobuf_file_scan_config(
+                    &self.try_decode_message(&base_config)?,
+                    registry,
+                    self,
+                    Arc::new(BinarySource::new(path_glob_filter)),
+                )?;
+                let source = FileScanConfigBuilder::from(source).build();
+                Ok(Arc::new(DataSourceExec::new(Arc::new(source))))
+            }
             NodeKind::Avro(gen::AvroExecNode { base_config }) => {
                 let source = parse_protobuf_file_scan_config(
                     &self.try_decode_message(&base_config)?,
@@ -512,11 +528,18 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
                 partition_columns,
                 table_exists,
                 sink_schema,
+                sink_mode,
             }) => {
                 let input = self.try_decode_plan(&input, registry)?;
                 let sink_schema = self.try_decode_schema(&sink_schema)?;
                 let table_url = Url::parse(&table_url)
                     .map_err(|e| plan_datafusion_err!("failed to parse table URL: {e}"))?;
+
+                let sink_mode = if let Some(sink_mode) = sink_mode {
+                    self.try_decode_physical_sink_mode(sink_mode, &sink_schema, registry)?
+                } else {
+                    return plan_err!("Missing sink_mode for DeltaCommitExec");
+                };
 
                 Ok(Arc::new(DeltaCommitExec::new(
                     input,
@@ -524,6 +547,7 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
                     partition_columns,
                     table_exists,
                     Arc::new(sink_schema),
+                    sink_mode,
                 )))
             }
             NodeKind::ConsoleSink(gen::ConsoleSinkExecNode { input }) => {
@@ -803,6 +827,15 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
                         whole_text: text_source.whole_text(),
                         line_sep: text_source.line_sep().map(|x| vec![x]),
                     })
+                } else if let Some(binary_source) =
+                    file_source.as_any().downcast_ref::<BinarySource>()
+                {
+                    let base_config =
+                        self.try_encode_message(serialize_file_scan_config(file_scan, self)?)?;
+                    NodeKind::BinarySource(gen::BinarySourceExecNode {
+                        base_config,
+                        path_glob_filter: binary_source.path_glob_filter().cloned(),
+                    })
                 } else if file_source.as_any().is::<JsonSource>() {
                     // TODO: Check if we still need to have JsonSource: https://github.com/apache/datafusion/pull/14224
                     let base_config =
@@ -869,12 +902,14 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
             })
         } else if let Some(delta_commit_exec) = node.as_any().downcast_ref::<DeltaCommitExec>() {
             let input = self.try_encode_plan(delta_commit_exec.input().clone())?;
+            let sink_mode = self.try_encode_physical_sink_mode(delta_commit_exec.sink_mode())?;
             NodeKind::DeltaCommit(gen::DeltaCommitExecNode {
                 input,
                 table_url: delta_commit_exec.table_url().to_string(),
                 partition_columns: delta_commit_exec.partition_columns().to_vec(),
                 table_exists: delta_commit_exec.table_exists(),
                 sink_schema: self.try_encode_schema(delta_commit_exec.sink_schema())?,
+                sink_mode: Some(sink_mode),
             })
         } else if let Some(console_sink) = node.as_any().downcast_ref::<ConsoleSinkExec>() {
             let input = self.try_encode_plan(console_sink.input().clone())?;
@@ -1153,6 +1188,9 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
             "spark_signum" | "signum" => Ok(Arc::new(ScalarUDF::from(SparkSignum::new()))),
             "spark_last_day" | "last_day" => Ok(Arc::new(ScalarUDF::from(SparkLastDay::new()))),
             "spark_next_day" | "next_day" => Ok(Arc::new(ScalarUDF::from(SparkNextDay::new()))),
+            "spark_make_dt_interval" | "make_dt_interval" => {
+                Ok(Arc::new(ScalarUDF::from(SparkMakeDtInterval::new())))
+            }
             "spark_make_interval" | "make_interval" => {
                 Ok(Arc::new(ScalarUDF::from(SparkMakeInterval::new())))
             }
@@ -1193,6 +1231,7 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
             "spark_try_multiply" | "try_multiply" => {
                 Ok(Arc::new(ScalarUDF::from(SparkTryMult::new())))
             }
+            "spark_version" | "version" => Ok(Arc::new(ScalarUDF::from(SparkVersion::new()))),
             "spark_try_subtract" | "try_subtract" => {
                 Ok(Arc::new(ScalarUDF::from(SparkTrySubtract::new())))
             }
@@ -1256,6 +1295,7 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
             || node.inner().as_any().is::<SparkTryToBinary>()
             || node.inner().as_any().is::<SparkLastDay>()
             || node.inner().as_any().is::<SparkNextDay>()
+            || node.inner().as_any().is::<SparkMakeDtInterval>()
             || node.inner().as_any().is::<SparkMakeInterval>()
             || node.inner().as_any().is::<SparkMakeYmInterval>()
             || node.inner().as_any().is::<SparkMakeTimestampNtz>()
@@ -1284,6 +1324,7 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
             || node.inner().as_any().is::<SparkTryMult>()
             || node.inner().as_any().is::<SparkTryParseUrl>()
             || node.inner().as_any().is::<SparkTrySubtract>()
+            || node.inner().as_any().is::<SparkVersion>()
             || node.inner().as_any().is::<SparkWidthBucket>()
             || node.inner().as_any().is::<StrToMap>()
             || node.inner().as_any().is::<ParseUrl>()

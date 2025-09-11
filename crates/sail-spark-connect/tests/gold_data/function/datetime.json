@@ -1558,7 +1558,7 @@
         }
       },
       "output": {
-        "failure": "not implemented: function: make_dt_interval"
+        "success": "ok"
       }
     },
     {
@@ -1580,7 +1580,7 @@
         }
       },
       "output": {
-        "failure": "not implemented: function: make_dt_interval"
+        "success": "ok"
       }
     },
     {
@@ -1602,7 +1602,7 @@
         }
       },
       "output": {
-        "failure": "not implemented: function: make_dt_interval"
+        "success": "ok"
       }
     },
     {
@@ -2108,7 +2108,7 @@
         }
       },
       "output": {
-        "failure": "not implemented: function: months_between"
+        "success": "ok"
       }
     },
     {
@@ -2130,7 +2130,7 @@
         }
       },
       "output": {
-        "failure": "not implemented: function: months_between"
+        "success": "ok"
       }
     },
     {

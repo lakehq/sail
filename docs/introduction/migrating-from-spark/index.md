@@ -41,15 +41,14 @@ which are the most commonly used features in Spark applications.
 
 There is no support for Spark RDD in Sail since it relies on the JVM implementation of Spark internals and is not covered by the Spark Connect protocol.
 
-| Feature                  | PySpark API                | Supported          |
-| ------------------------ | -------------------------- | ------------------ |
-| RDD                      | `pyspark.SparkContext`     | :x:                |
-| DataFrame and SQL        | `pyspark.sql.SparkSession` | :white_check_mark: |
-| Pandas on Spark          | `pyspark.pandas`           | :construction:     |
-| Structured Streaming     | `pyspark.sql.streaming`    | :construction:     |
-| Spark Streaming (Legacy) | `pyspark.streaming`        | :x:                |
-| MLlib (RDD-based)        | `pyspark.mllib`            | :x:                |
-| MLlib (DataFrame-based)  | `pyspark.ml`               | :x:                |
-| GraphX                   | -                          | :x:                |
+| Feature              | PySpark API                      | Supported          |
+| -------------------- | -------------------------------- | ------------------ |
+| SQL                  | `pyspark.sql.SparkSession`       | :white_check_mark: |
+| DataFrame            | `pyspark.sql.SparkSession`       | :white_check_mark: |
+| Structured Streaming | `pyspark.sql.streaming`          | :construction:     |
+| Pandas on Spark      | `pyspark.pandas`                 | :construction:     |
+| RDD                  | `pyspark.SparkContext`           | :x:                |
+| MLlib                | `pyspark.mllib` and `pyspark.ml` | :x:                |
+| GraphX               | -                                | :x:                |
 
 As you go through the rest of the documentation, you will find more details about the supported features as we cover different aspects of Sail.

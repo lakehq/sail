@@ -54,7 +54,7 @@ impl Default for PlanConfig {
             pyspark_udf_config: Arc::new(PySparkUdfConfig::default()),
             default_table_file_format: "PARQUET".to_string(),
             default_warehouse_directory: "spark-warehouse".to_string(),
-            session_user_id: "sail".to_string(),
+            session_user_id: "".to_string(),
             ansi_mode: false,
         }
     }

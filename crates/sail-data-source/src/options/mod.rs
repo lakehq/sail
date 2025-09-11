@@ -2,14 +2,16 @@ mod loader;
 mod serde;
 
 pub use internal::{
-    CsvReadOptions, CsvWriteOptions, DeltaReadOptions, DeltaWriteOptions, JsonReadOptions,
-    JsonWriteOptions, ParquetReadOptions, ParquetWriteOptions, TextReadOptions, TextWriteOptions,
+    BinaryReadOptions, CsvReadOptions, CsvWriteOptions, DeltaReadOptions, DeltaWriteOptions,
+    JsonReadOptions, JsonWriteOptions, ParquetReadOptions, ParquetWriteOptions, TextReadOptions,
+    TextWriteOptions,
 };
 #[cfg(test)]
 pub use loader::build_options;
 pub use loader::{load_default_options, load_options};
 
 pub(crate) mod internal {
+    include!(concat!(env!("OUT_DIR"), "/options/binary_read.rs"));
     include!(concat!(env!("OUT_DIR"), "/options/csv_read.rs"));
     include!(concat!(env!("OUT_DIR"), "/options/csv_write.rs"));
     include!(concat!(env!("OUT_DIR"), "/options/json_read.rs"));
