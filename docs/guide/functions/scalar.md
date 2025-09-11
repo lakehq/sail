@@ -371,7 +371,7 @@ rank: 1
 - `named_struct`
 - `struct`
 
-## Url
+## URL
 
 - `parse_url`
 - `try_parse_url`
