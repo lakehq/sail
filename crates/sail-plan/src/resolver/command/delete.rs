@@ -1,6 +1,6 @@
 use std::sync::Arc;
 
-use datafusion_common::DFSchema;
+use datafusion_common::ToDFSchema;
 use datafusion_expr::{Extension, LogicalPlan};
 use sail_catalog::manager::CatalogManager;
 use sail_catalog::provider::TableKind;
@@ -17,7 +17,7 @@ impl PlanResolver<'_> {
     pub(super) async fn resolve_command_delete(
         &self,
         delete: spec::Delete,
-        _state: &mut PlanResolverState,
+        state: &mut PlanResolverState,
     ) -> PlanResult<LogicalPlan> {
         let spec::Delete {
             table,
@@ -27,18 +27,25 @@ impl PlanResolver<'_> {
 
         // Look up the table in the catalog to get its metadata
         let catalog_manager = self.ctx.extension::<CatalogManager>()?;
-        let table_info = catalog_manager
-            .get_table(table.parts())
+        let table_status = catalog_manager
+            .get_table_or_view(table.parts())
             .await
-            .map_err(|e| PlanError::internal(format!("Failed to get table metadata: {e}")))?;
+            .map_err(PlanError::from)?;
 
-        let (location, format) = match table_info.kind {
+        let (location, format, table_schema) = match &table_status.kind {
             TableKind::Table {
-                location, format, ..
+                location,
+                format,
+                columns,
+                ..
             } => {
                 let location = location
+                    .clone()
                     .ok_or_else(|| PlanError::unsupported("DELETE on tables without location"))?;
-                (location, format)
+                let schema = datafusion::arrow::datatypes::Schema::new(
+                    columns.iter().map(|c| c.field()).collect::<Vec<_>>(),
+                );
+                (location, format.clone(), schema.to_dfschema_ref()?)
             }
             _ => {
                 return Err(PlanError::unsupported(
@@ -49,9 +56,8 @@ impl PlanResolver<'_> {
 
         // Convert the condition expression if present
         let condition = if let Some(condition) = condition {
-            // TODO: We need a proper schema for the table to resolve expressions
             Some(
-                self.resolve_expression(condition, &Arc::new(DFSchema::empty()), _state)
+                self.resolve_expression(condition, &table_schema, state)
                     .await?,
             )
         } else {
@@ -59,6 +65,7 @@ impl PlanResolver<'_> {
         };
 
         let file_delete_options = FileDeleteOptions {
+            table_name: table.into(),
             path: location,
             format,
             condition,

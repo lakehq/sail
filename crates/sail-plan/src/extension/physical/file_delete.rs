@@ -17,6 +17,7 @@ pub async fn create_file_delete_physical_plan(
     options: FileDeleteOptions,
 ) -> Result<Arc<dyn ExecutionPlan>> {
     let FileDeleteOptions {
+        table_name: _,
         path,
         format,
         condition,

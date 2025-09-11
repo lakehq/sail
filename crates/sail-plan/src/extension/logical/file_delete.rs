@@ -8,6 +8,7 @@ use crate::utils::ItemTaker;
 
 #[derive(Clone, Debug, Eq, PartialEq, Hash, PartialOrd)]
 pub struct FileDeleteOptions {
+    pub table_name: Vec<String>,
     pub path: String,
     pub format: String,
     pub condition: Option<Expr>,

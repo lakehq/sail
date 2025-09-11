@@ -5,9 +5,11 @@ use datafusion::execution::context::SessionState;
 use datafusion::physical_plan::sorts::sort::SortExec;
 use datafusion::physical_plan::ExecutionPlan;
 use datafusion::physical_planner::{ExtensionPlanner, PhysicalPlanner};
-use datafusion_common::{internal_err, Result};
-use datafusion_expr::{LogicalPlan, UserDefinedLogicalNode};
+use datafusion_common::{internal_datafusion_err, internal_err, Result, ToDFSchema};
+use datafusion_expr::{EmptyRelation, LogicalPlan, UserDefinedLogicalNode};
 use datafusion_physical_expr::{create_physical_sort_exprs, LexOrdering};
+use sail_catalog::manager::CatalogManager;
+use sail_catalog::provider::TableKind;
 
 use crate::extension::logical::{
     FileDeleteNode, FileWriteNode, MapPartitionsNode, RangeNode, SchemaPivotNode, ShowStringNode,
@@ -92,16 +94,29 @@ impl ExtensionPlanner for ExtensionPhysicalPlanner {
             )
             .await?
         } else if let Some(node) = node.as_any().downcast_ref::<FileDeleteNode>() {
-            if !logical_inputs.is_empty() {
-                return internal_err!("FileDeleteNode should not have logical inputs");
-            }
-            if !physical_inputs.is_empty() {
-                return internal_err!("FileDeleteNode should not have physical inputs");
+            if !logical_inputs.is_empty() || !physical_inputs.is_empty() {
+                return internal_err!("FileDeleteNode should have no inputs");
             }
             // Create a dummy logical plan for schema context
-            let dummy_logical_plan = LogicalPlan::EmptyRelation(datafusion_expr::EmptyRelation {
+            let catalog_manager = session_state
+                .config()
+                .get_extension::<CatalogManager>()
+                .ok_or_else(|| internal_datafusion_err!("CatalogManager extension not found"))?;
+            let table_status = catalog_manager
+                .get_table_or_view(&node.options().table_name)
+                .await
+                .map_err(|e| internal_datafusion_err!("Failed to get table: {e}"))?;
+
+            let schema = match &table_status.kind {
+                TableKind::Table { columns, .. } => Ok(datafusion::arrow::datatypes::Schema::new(
+                    columns.iter().map(|c| c.field()).collect::<Vec<_>>(),
+                )
+                .to_dfschema_ref()?),
+                _ => internal_err!("Expected a table for DELETE"),
+            }?;
+            let dummy_logical_plan = LogicalPlan::EmptyRelation(EmptyRelation {
                 produce_one_row: false,
-                schema: Arc::new(datafusion_common::DFSchema::empty()),
+                schema,
             });
             create_file_delete_physical_plan(
                 session_state,
