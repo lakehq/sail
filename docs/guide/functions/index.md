@@ -1,6 +1,6 @@
 ---
 title: Functions and Expressions
-rank: 9
+rank: 3
 ---
 
 # List of Supported Built-in Spark Functions and Expressions
