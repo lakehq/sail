@@ -1,0 +1,9 @@
+- key: path_glob_filter
+  aliases:
+    - pathGlobFilter
+  default: ""
+  description: |
+    A glob pattern is used to only include files with file names matching the pattern.
+    For example, `*.pdf` will only include files with a `.pdf` extension.
+  supported: true
+  rust_deserialize_with: crate::options::serde::deserialize_non_empty_string

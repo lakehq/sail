@@ -36,19 +36,19 @@ Here we recommend some practices to help you adopt Sail in your production envir
 
 Here is a summary of Spark features that are supported in Sail (:white_check_mark:), planned in our roadmap (:construction:), or unsupported due to technical limitations or low priorities (:x:).
 
-As you can see, Sail has a focus on the SQL API and the DataFrame API,
+As you can see, Sail has a focus on SQL and the DataFrame API,
 which are the most commonly used features in Spark applications.
 
 There is no support for Spark RDD in Sail since it relies on the JVM implementation of Spark internals and is not covered by the Spark Connect protocol.
 
-| Feature         | PySpark API                   | Supported          |
-| --------------- | ----------------------------- | ------------------ |
-| SQL             | `pyspark.sql.SparkSession`    | :white_check_mark: |
-| DataFrame       | `pyspark.sql.SparkSession`    | :white_check_mark: |
-| Streaming       | `pyspark.sql.streaming`       | :construction:     |
-| Pandas on Spark | `pyspark.pandas`              | :construction:     |
-| RDD             | `pyspark.SparkContext`        | :x:                |
-| MLlib           | `pyspark.mllib`, `pyspark.ml` | :x:                |
-| GraphX          | -                             | :x:                |
+| Feature              | PySpark API                      | Supported          |
+| -------------------- | -------------------------------- | ------------------ |
+| SQL                  | `pyspark.sql.SparkSession`       | :white_check_mark: |
+| DataFrame            | `pyspark.sql.SparkSession`       | :white_check_mark: |
+| Structured Streaming | `pyspark.sql.streaming`          | :construction:     |
+| Pandas on Spark      | `pyspark.pandas`                 | :construction:     |
+| RDD                  | `pyspark.SparkContext`           | :x:                |
+| MLlib                | `pyspark.mllib` and `pyspark.ml` | :x:                |
+| GraphX               | -                                | :x:                |
 
 As you go through the rest of the documentation, you will find more details about the supported features as we cover different aspects of Sail.
