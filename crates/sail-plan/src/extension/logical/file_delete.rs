@@ -67,11 +67,7 @@ impl UserDefinedLogicalNodeCore for FileDeleteNode {
     }
 
     fn expressions(&self) -> Vec<Expr> {
-        if let Some(ref condition) = self.options.condition {
-            vec![condition.clone()]
-        } else {
-            vec![]
-        }
+        vec![]
     }
 
     fn fmt_for_explain(&self, f: &mut Formatter) -> std::fmt::Result {
@@ -84,15 +80,11 @@ impl UserDefinedLogicalNodeCore for FileDeleteNode {
         exprs: Vec<Expr>,
         inputs: Vec<LogicalPlan>,
     ) -> datafusion_common::Result<Self> {
+        exprs.zero()?;
         inputs.zero()?;
-        let condition = if exprs.is_empty() {
-            None
-        } else {
-            Some(exprs.one()?)
-        };
+
         Ok(Self {
             options: FileDeleteOptions {
-                condition,
                 ..self.options.clone()
             },
             schema: self.schema.clone(),

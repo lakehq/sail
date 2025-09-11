@@ -10,6 +10,8 @@ use datafusion_expr::{EmptyRelation, LogicalPlan, UserDefinedLogicalNode};
 use datafusion_physical_expr::{create_physical_sort_exprs, LexOrdering};
 use sail_catalog::manager::CatalogManager;
 use sail_catalog::provider::TableKind;
+use sail_common_datafusion::datasource::SourceInfo;
+use sail_data_source::default_registry;
 
 use crate::extension::logical::{
     FileDeleteNode, FileWriteNode, MapPartitionsNode, RangeNode, SchemaPivotNode, ShowStringNode,
@@ -108,10 +110,36 @@ impl ExtensionPlanner for ExtensionPhysicalPlanner {
                 .map_err(|e| internal_datafusion_err!("Failed to get table: {e}"))?;
 
             let schema = match &table_status.kind {
-                TableKind::Table { columns, .. } => Ok(datafusion::arrow::datatypes::Schema::new(
-                    columns.iter().map(|c| c.field()).collect::<Vec<_>>(),
-                )
-                .to_dfschema_ref()?),
+                TableKind::Table {
+                    columns,
+                    format,
+                    location,
+                    ..
+                } if columns.is_empty() && format.eq_ignore_ascii_case("DELTA") => {
+                    let Some(location) = location.as_ref() else {
+                        return internal_err!("Table for delete has no location");
+                    };
+                    let source_info = SourceInfo {
+                        paths: vec![location.clone()],
+                        schema: None,
+                        constraints: Default::default(),
+                        partition_by: vec![],
+                        bucket_by: None,
+                        sort_order: vec![],
+                        options: vec![],
+                    };
+                    let provider = default_registry()
+                        .get_format(format)?
+                        .create_provider(session_state, source_info)
+                        .await?;
+                    Ok(provider.schema().to_dfschema_ref()?)
+                }
+                TableKind::Table { columns, .. } => {
+                    let schema = datafusion::arrow::datatypes::Schema::new(
+                        columns.iter().map(|c| c.field()).collect::<Vec<_>>(),
+                    );
+                    Ok(schema.to_dfschema_ref()?)
+                }
                 _ => internal_err!("Expected a table for DELETE"),
             }?;
             let dummy_logical_plan = LogicalPlan::EmptyRelation(EmptyRelation {
