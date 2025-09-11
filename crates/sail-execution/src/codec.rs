@@ -50,7 +50,7 @@ use sail_data_source::formats::rate::{RateSourceExec, TableRateOptions};
 use sail_data_source::formats::socket::{SocketSourceExec, TableSocketOptions};
 use sail_data_source::formats::text::source::TextSource;
 use sail_data_source::formats::text::writer::{TextSink, TextWriterOptions};
-use sail_delta_lake::delta_format::{DeltaCommitExec, DeltaWriterExec};
+use sail_delta_lake::delta_format::{DeltaCommitExec, DeltaDeleteExec, DeltaWriterExec};
 use sail_plan::extension::function::array::arrays_zip::ArraysZip;
 use sail_plan::extension::function::array::spark_array::SparkArray;
 use sail_plan::extension::function::array::spark_array_item_with_position::ArrayItemWithPosition;
@@ -535,6 +535,20 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
                     sink_mode,
                 )))
             }
+            NodeKind::DeltaDelete(gen::DeltaDeleteExecNode {
+                table_url,
+                condition,
+            }) => {
+                let table_url = Url::parse(&table_url)
+                    .map_err(|e| plan_datafusion_err!("failed to parse table URL: {e}"))?;
+                let condition = parse_physical_expr(
+                    &self.try_decode_message(&condition)?,
+                    registry,
+                    &Schema::empty(),
+                    self,
+                )?;
+                Ok(Arc::new(DeltaDeleteExec::new(table_url, condition)))
+            }
             NodeKind::ConsoleSink(gen::ConsoleSinkExecNode { input }) => {
                 let input = self.try_decode_plan(&input, registry)?;
                 Ok(Arc::new(ConsoleSinkExec::new(input)))
@@ -886,6 +900,14 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
                 table_exists: delta_commit_exec.table_exists(),
                 sink_schema: self.try_encode_schema(delta_commit_exec.sink_schema())?,
                 sink_mode: Some(sink_mode),
+            })
+        } else if let Some(delta_delete_exec) = node.as_any().downcast_ref::<DeltaDeleteExec>() {
+            let condition_node =
+                serialize_physical_expr(&delta_delete_exec.condition().clone(), self)?;
+            let condition = self.try_encode_message(condition_node)?;
+            NodeKind::DeltaDelete(gen::DeltaDeleteExecNode {
+                table_url: delta_delete_exec.table_url().to_string(),
+                condition,
             })
         } else if let Some(console_sink) = node.as_any().downcast_ref::<ConsoleSinkExec>() {
             let input = self.try_encode_plan(console_sink.input().clone())?;

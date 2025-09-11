@@ -29,11 +29,12 @@ message ExtendedPhysicalPlanNode {
     TextExecNode text = 15;
     DeltaWriterExecNode delta_writer = 16;
     DeltaCommitExecNode delta_commit = 17;
-    AvroExecNode avro = 18;
-    ConsoleSinkExecNode console_sink = 19;
-    SocketSourceExecNode socket_source = 20;
-    RateSourceExecNode rate_source = 21;
-    TextSinkExecNode text_sink = 22;
+    DeltaDeleteExecNode delta_delete = 18;
+    AvroExecNode avro = 19;
+    ConsoleSinkExecNode console_sink = 20;
+    SocketSourceExecNode socket_source = 21;
+    RateSourceExecNode rate_source = 22;
+    TextSinkExecNode text_sink = 23;
   }
 }
 
@@ -339,6 +340,11 @@ message DeltaCommitExecNode {
   bool table_exists = 4;
   bytes sink_schema = 5;
   PhysicalSinkMode sink_mode = 6;
+}
+
+message DeltaDeleteExecNode {
+  string table_url = 1;
+  bytes condition = 2;
 }
 
 message ConsoleSinkExecNode {
