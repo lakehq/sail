@@ -142,25 +142,37 @@ impl TableFormat for DeltaTableFormat {
 
         let table_url = Self::parse_table_url(ctx, vec![path]).await?;
 
-        // Check for table existence
+        // Check for table existence and get schema
         let object_store = ctx
             .runtime_env()
             .object_store_registry
             .get_store(&table_url)
             .map_err(|e| DataFusionError::External(Box::new(e)))?;
-        let table_exists =
+        let table =
             open_table_with_object_store(table_url.clone(), object_store, Default::default())
                 .await
-                .is_ok();
+                .map_err(|e| {
+                    DataFusionError::Plan(format!(
+                "Cannot delete from non-existent Delta table at path: {table_url}. Error: {e}"
+            ))
+                })?;
 
-        if !table_exists {
-            return plan_err!("Cannot delete from non-existent Delta table at path: {table_url}");
-        }
+        // Get table schema
+        let snapshot = table
+            .snapshot()
+            .map_err(|e| DataFusionError::External(Box::new(e)))?;
+        let table_schema = snapshot
+            .arrow_schema()
+            .map_err(|e| DataFusionError::External(Box::new(e)))?;
 
         let condition = condition.ok_or_else(|| {
             DataFusionError::Plan("DELETE operation requires a WHERE condition".to_string())
         })?;
-        Ok(Arc::new(DeltaDeleteExec::new(table_url, condition)))
+        Ok(Arc::new(DeltaDeleteExec::new(
+            table_url,
+            condition,
+            Some(table_schema),
+        )))
     }
 }
 

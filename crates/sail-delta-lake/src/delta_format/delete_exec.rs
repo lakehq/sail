@@ -35,12 +35,17 @@ use crate::table::open_table_with_object_store;
 pub struct DeltaDeleteExec {
     table_url: Url,
     condition: Arc<dyn PhysicalExpr>,
+    table_schema: SchemaRef,
     cache: PlanProperties,
 }
 
 impl DeltaDeleteExec {
     /// Create a new DeltaDeleteExec instance
-    pub fn new(table_url: Url, condition: Arc<dyn PhysicalExpr>) -> Self {
+    pub fn new(
+        table_url: Url,
+        condition: Arc<dyn PhysicalExpr>,
+        table_schema: Option<SchemaRef>,
+    ) -> Self {
         let schema = Arc::new(Schema::new(vec![
             Field::new("num_deleted_rows", DataType::UInt64, false),
             Field::new("num_added_files", DataType::UInt64, false),
@@ -50,6 +55,7 @@ impl DeltaDeleteExec {
         Self {
             table_url,
             condition,
+            table_schema: table_schema.unwrap_or_else(|| Arc::new(Schema::empty())),
             cache,
         }
     }
@@ -71,6 +77,11 @@ impl DeltaDeleteExec {
     /// Get the delete condition
     pub fn condition(&self) -> &Arc<dyn PhysicalExpr> {
         &self.condition
+    }
+
+    /// Get the table schema
+    pub fn table_schema(&self) -> &SchemaRef {
+        &self.table_schema
     }
 
     /// Core execution logic for delete operation
@@ -109,7 +120,7 @@ impl DeltaDeleteExec {
             table.log_store(),
             &session_state,
             Some(self.condition.clone()),
-            adapter_factory,
+            adapter_factory.clone(),
         )
         .await
         .map_err(|e| DataFusionError::External(Box::new(e)))?;
@@ -200,6 +211,7 @@ impl DeltaDeleteExec {
                 operation_id,
                 &candidates.candidates,
                 candidates.partition_scan,
+                adapter_factory.clone(),
             )
             .await
             .map_err(|e| DataFusionError::External(Box::new(e)))?;
@@ -291,7 +303,7 @@ impl ExecutionPlan for DeltaDeleteExec {
         let schema = self.schema();
 
         let future = async move {
-            let delete_exec = DeltaDeleteExec::new(table_url, condition);
+            let delete_exec = DeltaDeleteExec::new(table_url, condition, None);
             delete_exec.execute_delete(context).await
         };
 

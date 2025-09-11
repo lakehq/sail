@@ -51,6 +51,9 @@ pub(crate) async fn execute_non_empty_expr_physical(
     writer_stats_config: WriterStatsConfig,
     partition_scan: bool,
     operation_id: Uuid,
+    adapter_factory: Arc<
+        dyn datafusion::physical_expr::schema_rewriter::PhysicalExprAdapterFactory,
+    >,
 ) -> DeltaResult<(Vec<Action>, Option<DataFrame>)> {
     use datafusion::logical_expr::Operator;
     use datafusion::physical_expr::expressions::{BinaryExpr, Literal, NotExpr};
@@ -83,10 +86,19 @@ pub(crate) async fn execute_non_empty_expr_physical(
         .map_err(datafusion_to_delta_error)?;
 
     let cdf_df = if !partition_scan {
+        // Create an adapter for the schema of the plan that will actually provide the data
+        let logical_schema = snapshot.arrow_schema()?;
+        let adapter = adapter_factory.create(logical_schema, base_physical_plan.schema());
+
+        // Rewrite the expression to align indices with the new plan's schema
+        let adapted_physical_expression = adapter
+            .rewrite(physical_expression)
+            .map_err(datafusion_to_delta_error)?;
+
         // Create IsTrue(expression) as IsNotDistinctFrom(expression, true)
         let true_literal = Arc::new(Literal::new(ScalarValue::Boolean(Some(true))));
         let is_true_expr = Arc::new(BinaryExpr::new(
-            physical_expression,
+            adapted_physical_expression,
             Operator::IsNotDistinctFrom,
             true_literal,
         ));
@@ -185,6 +197,9 @@ pub async fn prepare_predicate_actions_physical(
     operation_id: Uuid,
     candidates: &[Add],
     partition_scan: bool,
+    adapter_factory: Arc<
+        dyn datafusion::physical_expr::schema_rewriter::PhysicalExprAdapterFactory,
+    >,
 ) -> DeltaResult<(Vec<Action>, Option<DataFrame>)> {
     let (mut actions, cdf_df) = execute_non_empty_expr_physical(
         snapshot,
@@ -197,6 +212,7 @@ pub async fn prepare_predicate_actions_physical(
         writer_stats_config,
         partition_scan,
         operation_id,
+        adapter_factory,
     )
     .await?;
 

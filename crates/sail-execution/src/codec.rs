@@ -553,16 +553,22 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
             NodeKind::DeltaDelete(gen::DeltaDeleteExecNode {
                 table_url,
                 condition,
+                table_schema,
             }) => {
                 let table_url = Url::parse(&table_url)
                     .map_err(|e| plan_datafusion_err!("failed to parse table URL: {e}"))?;
+                let table_schema = Arc::new(self.try_decode_schema(&table_schema)?);
                 let condition = parse_physical_expr(
                     &self.try_decode_message(&condition)?,
                     registry,
-                    &Schema::empty(),
+                    &table_schema,
                     self,
                 )?;
-                Ok(Arc::new(DeltaDeleteExec::new(table_url, condition)))
+                Ok(Arc::new(DeltaDeleteExec::new(
+                    table_url,
+                    condition,
+                    Some(table_schema),
+                )))
             }
             NodeKind::ConsoleSink(gen::ConsoleSinkExecNode { input }) => {
                 let input = self.try_decode_plan(&input, registry)?;
@@ -929,9 +935,11 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
             let condition_node =
                 serialize_physical_expr(&delta_delete_exec.condition().clone(), self)?;
             let condition = self.try_encode_message(condition_node)?;
+            let table_schema = self.try_encode_schema(delta_delete_exec.table_schema())?;
             NodeKind::DeltaDelete(gen::DeltaDeleteExecNode {
                 table_url: delta_delete_exec.table_url().to_string(),
                 condition,
+                table_schema,
             })
         } else if let Some(console_sink) = node.as_any().downcast_ref::<ConsoleSinkExec>() {
             let input = self.try_encode_plan(console_sink.input().clone())?;

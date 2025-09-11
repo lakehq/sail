@@ -351,6 +351,7 @@ message DeltaCommitExecNode {
 message DeltaDeleteExecNode {
   string table_url = 1;
   bytes condition = 2;
+  bytes table_schema = 3;
 }
 
 message ConsoleSinkExecNode {
