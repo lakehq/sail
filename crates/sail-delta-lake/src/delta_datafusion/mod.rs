@@ -739,12 +739,20 @@ pub(crate) async fn scan_memory_table_physical(
     fields.push(Field::new(PATH_COLUMN, DataType::Utf8, false));
 
     for partition_column in snapshot.metadata().partition_columns() {
-        if let Some(array) = batch.column_by_name(partition_column) {
+        // In add_actions_table, partition columns are prefixed with "partition."
+        let partition_column_name = format!("partition.{}", partition_column);
+        if let Some(array) = batch.column_by_name(&partition_column_name) {
             arrays.push(array.to_owned());
             let field = schema
-                .field_with_name(partition_column)
+                .field_with_name(&partition_column_name)
                 .map_err(|err| DeltaTableError::Generic(err.to_string()))?;
-            fields.push(field.clone());
+            // Create a new field with the original partition column name (without "partition." prefix)
+            let partition_field = Field::new(
+                partition_column,
+                field.data_type().clone(),
+                field.is_nullable(),
+            );
+            fields.push(partition_field);
         }
     }
 
@@ -1102,20 +1110,29 @@ pub async fn find_files_physical(
     match predicate {
         Some(physical_predicate) => {
             let logical_schema = snapshot.arrow_schema()?;
-            let physical_schema = logical_schema.clone(); // For now, assume same schema
-            let adapter = adapter_factory.create(logical_schema, physical_schema);
-            let adapted_predicate = adapter
-                .rewrite(physical_predicate)
-                .map_err(datafusion_to_delta_error)?;
 
             // Check if the predicate only references partition columns
             let mut expr_properties = FindFilesPhysicalExprProperties::new(
                 current_metadata.partition_columns().clone(),
                 snapshot.arrow_schema()?,
             );
-            expr_properties.analyze_physical_expr(&adapted_predicate)?;
+            expr_properties.analyze_physical_expr(&physical_predicate)?;
 
             if expr_properties.partition_only {
+                // For partition-only predicates, create a schema with just path and partition columns
+                let mut fields = vec![Field::new(PATH_COLUMN, ArrowDataType::Utf8, false)];
+                for partition_column in current_metadata.partition_columns() {
+                    if let Ok(field) = logical_schema.field_with_name(partition_column) {
+                        fields.push(field.clone());
+                    }
+                }
+                let partition_schema = Arc::new(ArrowSchema::new(fields));
+
+                let adapter = adapter_factory.create(logical_schema.clone(), partition_schema);
+                let adapted_predicate = adapter
+                    .rewrite(physical_predicate)
+                    .map_err(datafusion_to_delta_error)?;
+
                 // Use partition-only scanning (memory table approach)
                 let candidates =
                     scan_memory_table_physical(snapshot, &log_store, state, adapted_predicate)
@@ -1125,6 +1142,13 @@ pub async fn find_files_physical(
                     partition_scan: true,
                 })
             } else {
+                // For non-partition predicates, use the full schema
+                let physical_schema = logical_schema.clone();
+                let adapter = adapter_factory.create(logical_schema, physical_schema);
+                let adapted_predicate = adapter
+                    .rewrite(physical_predicate)
+                    .map_err(datafusion_to_delta_error)?;
+
                 // Use full file scanning
                 let candidates =
                     find_files_scan_physical(snapshot, log_store, state, adapted_predicate).await?;
