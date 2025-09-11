@@ -183,34 +183,25 @@ pub async fn prepare_predicate_actions_physical(
     deletion_timestamp: i64,
     writer_stats_config: WriterStatsConfig,
     operation_id: Uuid,
+    candidates: &[Add],
+    partition_scan: bool,
 ) -> DeltaResult<(Vec<Action>, Option<DataFrame>)> {
-    let adapter_factory =
-        Arc::new(crate::delta_datafusion::schema_rewriter::DeltaPhysicalExprAdapterFactory {});
-    let candidates = crate::delta_datafusion::find_files_physical(
-        snapshot,
-        log_store.clone(),
-        &state,
-        Some(predicate.clone()),
-        adapter_factory,
-    )
-    .await?;
-
     let (mut actions, cdf_df) = execute_non_empty_expr_physical(
         snapshot,
         log_store,
         state,
         partition_columns,
         predicate,
-        &candidates.candidates,
+        candidates,
         writer_properties,
         writer_stats_config,
-        candidates.partition_scan,
+        partition_scan,
         operation_id,
     )
     .await?;
 
     // Remove actions for files that match the predicate
-    for action in &candidates.candidates {
+    for action in candidates {
         actions.push(Action::Remove(Remove {
             path: action.path.clone(),
             deletion_timestamp: Some(deletion_timestamp),

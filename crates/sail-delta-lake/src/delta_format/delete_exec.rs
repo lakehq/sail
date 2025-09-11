@@ -199,6 +199,8 @@ impl DeltaDeleteExec {
                 deletion_timestamp,
                 writer_stats_config,
                 operation_id,
+                &candidates.candidates,
+                candidates.partition_scan,
             )
             .await
             .map_err(|e| DataFusionError::External(Box::new(e)))?;
