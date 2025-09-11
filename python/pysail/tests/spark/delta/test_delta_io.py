@@ -381,3 +381,46 @@ class TestDeltaIO:
 
         result = spark.read.format("delta").load(delta_table_path).collect()
         assert result == [Row(id=1, name="test")]
+
+
+class TestDeltaDelete:
+    """Delta Lake DELETE operations tests"""
+
+    @pytest.fixture(scope="class")
+    def delta_delete_test_data(self):
+        """Test data for DELETE operations"""
+        return [
+            Row(id=1, name="Alice", age=25, department="Engineering"),
+            Row(id=2, name="Bob", age=30, department="Marketing"),
+            Row(id=3, name="Charlie", age=35, department="Engineering"),
+            Row(id=4, name="Diana", age=28, department="Sales"),
+            Row(id=5, name="Eve", age=32, department="Marketing"),
+        ]
+
+    def test_delta_delete_with_condition(self, spark, delta_delete_test_data, tmp_path):
+        """Test DELETE with WHERE condition"""
+        delta_path = tmp_path / "delta_delete_test"
+        delta_table_path = f"{delta_path}"
+
+        df = spark.createDataFrame(delta_delete_test_data)
+        df.write.format("delta").mode("overwrite").save(str(delta_path))
+
+        initial_count = spark.read.format("delta").load(delta_table_path).count()
+        assert initial_count == 5, f"Expected 5 rows initially, got {initial_count}"
+
+        spark.sql(f"CREATE TABLE delta_delete_table USING DELTA LOCATION '{delta_table_path}'")
+
+        spark.sql("DELETE FROM delta_delete_table WHERE department = 'Engineering'")
+
+        result_df = spark.read.format("delta").load(delta_table_path)
+        remaining_count = result_df.count()
+        assert remaining_count == 3, f"Expected 3 rows after deletion, got {remaining_count}"
+
+        remaining_departments = [row.department for row in result_df.collect()]
+        assert "Engineering" not in remaining_departments, "Engineering department should be completely removed"
+        assert "Marketing" in remaining_departments, "Marketing department should remain"
+        assert "Sales" in remaining_departments, "Sales department should remain"
+
+        remaining_names = sorted([row.name for row in result_df.collect()])
+        expected_names = ["Bob", "Diana", "Eve"]
+        assert remaining_names == expected_names, f"Expected {expected_names}, got {remaining_names}"
