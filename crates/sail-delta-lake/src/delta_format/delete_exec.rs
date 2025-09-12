@@ -20,8 +20,7 @@ use datafusion_physical_expr::{Distribution, EquivalenceProperties, PhysicalExpr
 use deltalake::kernel::{Action, Remove};
 use deltalake::logstore::StorageConfig;
 use deltalake::protocol::DeltaOperation;
-use futures::stream;
-use futures::StreamExt;
+use futures::{stream, StreamExt};
 use url::Url;
 use uuid::Uuid;
 

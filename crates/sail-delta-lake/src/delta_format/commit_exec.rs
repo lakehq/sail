@@ -16,7 +16,7 @@ use datafusion::physical_plan::{
     PlanProperties, SendableRecordBatchStream,
 };
 use datafusion_common::{internal_err, DataFusionError, Result};
-use datafusion_physical_expr::{Distribution, EquivalenceProperties, PhysicalExpr};
+use datafusion_physical_expr::{Distribution, EquivalenceProperties};
 use delta_kernel::engine::arrow_conversion::TryIntoKernel;
 use delta_kernel::schema::StructType;
 use deltalake::kernel::{Action, Add, Protocol, Remove};
@@ -33,7 +33,10 @@ use crate::table::{create_delta_table_with_object_store, open_table_with_object_
 /// Physical execution node for Delta Lake commit operations
 #[derive(Debug)]
 pub struct DeltaCommitExec {
-    input: Arc<dyn ExecutionPlan>,
+    /// The plan that produces new data files' metadata.
+    writer_plan: Arc<dyn ExecutionPlan>,
+    /// The plan that finds files to be removed. Can be None.
+    remove_plan: Option<Arc<dyn ExecutionPlan>>,
     table_url: Url,
     partition_columns: Vec<String>,
     table_exists: bool,
@@ -44,7 +47,8 @@ pub struct DeltaCommitExec {
 
 impl DeltaCommitExec {
     pub fn new(
-        input: Arc<dyn ExecutionPlan>,
+        writer_plan: Arc<dyn ExecutionPlan>,
+        remove_plan: Option<Arc<dyn ExecutionPlan>>,
         table_url: Url,
         partition_columns: Vec<String>,
         table_exists: bool,
@@ -58,7 +62,8 @@ impl DeltaCommitExec {
         )]));
         let cache = Self::compute_properties(schema);
         Self {
-            input,
+            writer_plan,
+            remove_plan,
             table_url,
             partition_columns,
             table_exists,
@@ -68,63 +73,13 @@ impl DeltaCommitExec {
         }
     }
 
-    async fn generate_remove_actions(
-        table: &crate::table::DeltaTable,
-        predicate: Option<Arc<dyn PhysicalExpr>>,
-        context: Option<&TaskContext>,
-    ) -> Result<Vec<Action>> {
-        // Get the current snapshot
-        let snapshot = table
-            .snapshot()
-            .map_err(|e| DataFusionError::External(Box::new(e)))?;
-
-        // Get files based on whether we have a predicate or not
-        let files = match predicate {
-            Some(pred) => {
-                // Filtered removal - find files matching the predicate
-                let context = context.ok_or_else(|| {
-                    DataFusionError::Internal(
-                        "TaskContext required for predicate-based removal".to_string(),
-                    )
-                })?;
-
-                let session_state =
-                    datafusion::execution::session_state::SessionStateBuilder::new()
-                        .with_runtime_env(context.runtime_env().clone())
-                        .build();
-
-                let adapter_factory = Arc::new(
-                    crate::delta_datafusion::schema_rewriter::DeltaPhysicalExprAdapterFactory {},
-                );
-
-                let candidates = crate::delta_datafusion::find_files_physical(
-                    snapshot,
-                    table.log_store(),
-                    &session_state,
-                    Some(pred),
-                    adapter_factory,
-                )
-                .await
-                .map_err(|e| DataFusionError::External(Box::new(e)))?;
-
-                candidates.candidates
-            }
-            None => {
-                // Full overwrite - get all existing files
-                snapshot
-                    .file_actions(&*table.log_store())
-                    .await
-                    .map_err(|e| DataFusionError::External(Box::new(e)))?
-            }
-        };
-
-        // Convert Add actions to Remove actions
+    async fn adds_to_remove_actions(adds: Vec<Add>) -> Result<Vec<Action>> {
         let deletion_timestamp = SystemTime::now()
             .duration_since(UNIX_EPOCH)
             .map_err(|e| DataFusionError::External(Box::new(e)))?
             .as_millis() as i64;
 
-        let remove_actions: Vec<Action> = files
+        let remove_actions: Vec<Action> = adds
             .into_iter()
             .map(|add| {
                 Action::Remove(Remove {
@@ -166,8 +121,12 @@ impl DeltaCommitExec {
         self.table_exists
     }
 
-    pub fn input(&self) -> &Arc<dyn ExecutionPlan> {
-        &self.input
+    pub fn writer_plan(&self) -> &Arc<dyn ExecutionPlan> {
+        &self.writer_plan
+    }
+
+    pub fn remove_plan(&self) -> Option<&Arc<dyn ExecutionPlan>> {
+        self.remove_plan.as_ref()
     }
 
     pub fn sink_schema(&self) -> &SchemaRef {
@@ -194,27 +153,47 @@ impl ExecutionPlan for DeltaCommitExec {
     }
 
     fn required_input_distribution(&self) -> Vec<Distribution> {
-        vec![Distribution::SinglePartition]
+        let mut distributions = vec![Distribution::SinglePartition]; // writer_plan
+        if self.remove_plan.is_some() {
+            distributions.push(Distribution::SinglePartition); // remove_plan
+        }
+        distributions
     }
 
     fn benefits_from_input_partitioning(&self) -> Vec<bool> {
-        vec![false]
+        let mut benefits = vec![false]; // writer_plan
+        if self.remove_plan.is_some() {
+            benefits.push(false); // remove_plan
+        }
+        benefits
     }
 
     fn children(&self) -> Vec<&Arc<dyn ExecutionPlan>> {
-        vec![&self.input]
+        let mut children = vec![&self.writer_plan];
+        if let Some(remove_plan) = &self.remove_plan {
+            children.push(remove_plan);
+        }
+        children
     }
 
     fn with_new_children(
         self: Arc<Self>,
         children: Vec<Arc<dyn ExecutionPlan>>,
     ) -> Result<Arc<dyn ExecutionPlan>> {
-        if children.len() != 1 {
-            return internal_err!("DeltaCommitExec requires exactly one child");
+        if !(1..=2).contains(&children.len()) {
+            return internal_err!("DeltaCommitExec requires one or two children");
         }
 
+        let writer_plan = Arc::clone(&children[0]);
+        let remove_plan = if self.remove_plan.is_some() {
+            Some(Arc::clone(&children[1]))
+        } else {
+            None
+        };
+
         Ok(Arc::new(Self::new(
-            Arc::clone(&children[0]),
+            writer_plan,
+            remove_plan,
             self.table_url.clone(),
             self.partition_columns.clone(),
             self.table_exists,
@@ -232,15 +211,25 @@ impl ExecutionPlan for DeltaCommitExec {
             return internal_err!("DeltaCommitExec can only be executed in a single partition");
         }
 
-        let input_partitions = self.input.output_partitioning().partition_count();
+        let input_partitions = self.writer_plan.output_partitioning().partition_count();
         if input_partitions != 1 {
             return internal_err!(
                 "DeltaCommitExec requires exactly one input partition, got {}",
                 input_partitions
             );
         }
+        if let Some(remove_plan) = &self.remove_plan {
+            if remove_plan.output_partitioning().partition_count() != 1 {
+                return internal_err!("DeltaCommitExec's remove_plan requires a single partition");
+            }
+        }
 
-        let stream = self.input.execute(0, Arc::clone(&context))?;
+        let writer_stream = self.writer_plan.execute(0, Arc::clone(&context))?;
+        let remove_stream = self
+            .remove_plan
+            .as_ref()
+            .map(|p| p.execute(0, Arc::clone(&context)))
+            .transpose()?;
 
         let table_url = self.table_url.clone();
         let partition_columns = self.partition_columns.clone();
@@ -277,7 +266,7 @@ impl ExecutionPlan for DeltaCommitExec {
             let mut schema_actions: Vec<Action> = Vec::new();
             let mut initial_actions: Vec<Action> = Vec::new();
             let mut operation: Option<DeltaOperation> = None;
-            let mut data = stream;
+            let mut data = writer_stream;
 
             while let Some(batch_result) = data.next().await {
                 let batch = batch_result?;
@@ -312,32 +301,47 @@ impl ExecutionPlan for DeltaCommitExec {
 
             // Generate Remove actions based on sink_mode
             let mut actions: Vec<Action> = initial_actions;
-
-            match &sink_mode {
-                PhysicalSinkMode::OverwriteIf { condition } => {
+            let remove_actions = match (&sink_mode, remove_stream) {
+                (PhysicalSinkMode::OverwriteIf { .. }, Some(mut stream)) if table_exists => {
                     // Add Remove actions if this is a replaceWhere operation
-                    if table_exists {
-                        let remove_actions = Self::generate_remove_actions(
-                            &table,
-                            Some(condition.clone()),
-                            Some(&context),
-                        )
-                        .await?;
-                        actions.extend(remove_actions);
+                    let mut adds_to_remove = vec![];
+                    while let Some(batch_result) = stream.next().await {
+                        let batch = batch_result?;
+                        let adds_col = batch
+                            .column_by_name("add")
+                            .unwrap()
+                            .as_any()
+                            .downcast_ref::<StringArray>()
+                            .unwrap();
+                        for add_json in adds_col.iter().flatten() {
+                            let add: deltalake::kernel::Add = serde_json::from_str(add_json)
+                                .map_err(|e| DataFusionError::External(Box::new(e)))?;
+                            adds_to_remove.push(add);
+                        }
                     }
+                    Self::adds_to_remove_actions(adds_to_remove).await?
                 }
-                PhysicalSinkMode::Overwrite => {
+                (PhysicalSinkMode::Overwrite, _) => {
                     // For full overwrite, remove all existing files
                     if table_exists {
-                        let remove_actions =
-                            Self::generate_remove_actions(&table, None, None).await?;
-                        actions.extend(remove_actions);
+                        let snapshot = table
+                            .snapshot()
+                            .map_err(|e| DataFusionError::External(Box::new(e)))?;
+                        let all_files = snapshot
+                            .file_actions(&*table.log_store())
+                            .await
+                            .map_err(|e| DataFusionError::External(Box::new(e)))?;
+                        Self::adds_to_remove_actions(all_files).await?
+                    } else {
+                        vec![]
                     }
                 }
                 _ => {
                     // Append, ErrorIfExists, IgnoreIfExists don't generate remove actions
+                    vec![]
                 }
-            }
+            };
+            actions.extend(remove_actions);
 
             actions.extend(schema_actions); // Add schema actions
             actions.extend(writer_add_actions.into_iter().map(Action::Add)); // Then add actions

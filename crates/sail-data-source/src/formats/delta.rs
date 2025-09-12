@@ -102,16 +102,22 @@ impl TableFormat for DeltaTableFormat {
         }
 
         // Convert Overwrite with replace_where to OverwriteIf
-        let unified_mode = if let PhysicalSinkMode::Overwrite = mode {
+        let (unified_mode, table_schema_for_cond) = if let PhysicalSinkMode::Overwrite = mode {
             if let Some(replace_where) = &delta_options.replace_where {
                 // Parse the replace_where condition into a PhysicalExpr
-                Self::parse_replace_where_condition(ctx, &table_url, replace_where, table_exists)
-                    .await?
+                let (mode, schema) = Self::parse_replace_where_condition(
+                    ctx,
+                    &table_url,
+                    replace_where,
+                    table_exists,
+                )
+                .await?;
+                (mode, Some(schema))
             } else {
-                mode
+                (mode, None)
             }
         } else {
-            mode
+            (mode, None)
         };
 
         let plan_builder = DeltaPlanBuilder::new(
@@ -120,6 +126,7 @@ impl TableFormat for DeltaTableFormat {
             delta_options,
             partition_by,
             unified_mode,
+            table_schema_for_cond,
             table_exists,
             sort_order,
             ctx,
@@ -198,9 +205,10 @@ impl DeltaTableFormat {
         table_url: &Url,
         replace_where: &str,
         table_exists: bool,
-    ) -> Result<PhysicalSinkMode> {
+    ) -> Result<(PhysicalSinkMode, Arc<datafusion::arrow::datatypes::Schema>)> {
         if !table_exists {
-            return Ok(PhysicalSinkMode::Overwrite);
+            // When table doesn't exist, it's a simple overwrite and no condition is needed.
+            return plan_err!("Table does not exist, cannot use replaceWhere");
         }
 
         let object_store = ctx
@@ -222,7 +230,7 @@ impl DeltaTableFormat {
             .arrow_schema()
             .map_err(|e| DataFusionError::External(Box::new(e)))?;
 
-        let df_schema = arrow_schema.to_dfschema()?;
+        let df_schema = arrow_schema.clone().to_dfschema()?;
 
         let session_state = SessionStateBuilder::new()
             .with_runtime_env(ctx.runtime_env().clone())
@@ -233,9 +241,12 @@ impl DeltaTableFormat {
 
         let physical_expr = session_state.create_physical_expr(logical_expr, &df_schema)?;
 
-        Ok(PhysicalSinkMode::OverwriteIf {
-            condition: physical_expr,
-        })
+        Ok((
+            PhysicalSinkMode::OverwriteIf {
+                condition: physical_expr,
+            },
+            arrow_schema,
+        ))
     }
 }
 

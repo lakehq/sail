@@ -1,5 +1,6 @@
 use std::sync::Arc;
 
+use datafusion::arrow::datatypes::SchemaRef;
 use datafusion::catalog::Session;
 use datafusion::datasource::provider_as_source;
 use datafusion::logical_expr::LogicalPlanBuilder;
@@ -11,7 +12,10 @@ use datafusion_common::Result;
 use sail_common_datafusion::datasource::PhysicalSinkMode;
 use url::Url;
 
-use super::{create_projection, create_repartition, create_sort, DeltaCommitExec, DeltaWriterExec};
+use super::{
+    create_projection, create_repartition, create_sort, DeltaCommitExec, DeltaFindFilesExec,
+    DeltaWriterExec,
+};
 use crate::delta_datafusion::{
     delta_to_datafusion_error, DataFusionMixins, DeltaScanConfigBuilder, DeltaTableProvider,
 };
@@ -26,6 +30,7 @@ pub struct DeltaPlanBuilder<'a> {
     options: TableDeltaOptions,
     partition_columns: Vec<String>,
     sink_mode: PhysicalSinkMode,
+    table_schema_for_cond: Option<SchemaRef>,
     table_exists: bool,
     sort_order: Option<LexRequirement>,
     session_state: &'a dyn Session,
@@ -38,6 +43,7 @@ impl<'a> DeltaPlanBuilder<'a> {
         options: TableDeltaOptions,
         partition_columns: Vec<String>,
         sink_mode: PhysicalSinkMode,
+        table_schema_for_cond: Option<SchemaRef>,
         table_exists: bool,
         sort_order: Option<LexRequirement>,
         session_state: &'a dyn Session,
@@ -48,6 +54,7 @@ impl<'a> DeltaPlanBuilder<'a> {
             options,
             partition_columns,
             sink_mode,
+            table_schema_for_cond,
             table_exists,
             sort_order,
             session_state,
@@ -70,7 +77,7 @@ impl<'a> DeltaPlanBuilder<'a> {
             .and_then(|plan| self.add_repartition_node(plan))
             .and_then(|plan| self.add_sort_node(plan))
             .and_then(|plan| self.add_writer_node(plan))
-            .and_then(|plan| self.add_commit_node(plan))
+            .and_then(|plan| self.add_commit_node(plan, None))
     }
 
     /// Build a Union execution plan for OverwriteIf mode
@@ -78,6 +85,15 @@ impl<'a> DeltaPlanBuilder<'a> {
         self,
         condition: Arc<dyn PhysicalExpr>,
     ) -> Result<Arc<dyn ExecutionPlan>> {
+        let remove_plan = {
+            let table_schema = self.table_schema_for_cond.clone();
+            Some(Arc::new(DeltaFindFilesExec::new(
+                self.table_url.clone(),
+                Some(condition.clone()),
+                table_schema,
+            )) as Arc<dyn ExecutionPlan>)
+        };
+
         let old_data_plan = self.build_old_data_plan(condition).await?;
 
         let new_data_plan = self
@@ -91,7 +107,7 @@ impl<'a> DeltaPlanBuilder<'a> {
                     as Arc<dyn ExecutionPlan>
             })
             .and_then(|union_plan| self.add_writer_node(union_plan))
-            .and_then(|plan| self.add_commit_node(plan))
+            .and_then(|plan| self.add_commit_node(plan, remove_plan))
     }
 
     /// Build the plan for scanning and filtering old data
@@ -248,9 +264,14 @@ impl<'a> DeltaPlanBuilder<'a> {
         )))
     }
 
-    fn add_commit_node(&self, input: Arc<dyn ExecutionPlan>) -> Result<Arc<dyn ExecutionPlan>> {
+    fn add_commit_node(
+        &self,
+        input: Arc<dyn ExecutionPlan>,
+        remove_plan: Option<Arc<dyn ExecutionPlan>>,
+    ) -> Result<Arc<dyn ExecutionPlan>> {
         Ok(Arc::new(DeltaCommitExec::new(
             input,
+            remove_plan,
             self.table_url.clone(),
             self.partition_columns.clone(),
             self.table_exists,

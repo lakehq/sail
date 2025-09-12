@@ -347,6 +347,7 @@ message DeltaCommitExecNode {
   bool table_exists = 4;
   bytes sink_schema = 5;
   PhysicalSinkMode sink_mode = 6;
+  optional bytes remove_plan = 7;
 }
 
 message DeltaDeleteExecNode {

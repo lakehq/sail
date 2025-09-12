@@ -529,6 +529,7 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
                 table_exists,
                 sink_schema,
                 sink_mode,
+                remove_plan,
             }) => {
                 let input = self.try_decode_plan(&input, registry)?;
                 let sink_schema = self.try_decode_schema(&sink_schema)?;
@@ -541,8 +542,15 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
                     return plan_err!("Missing sink_mode for DeltaCommitExec");
                 };
 
+                let remove_plan = if let Some(remove_plan) = remove_plan {
+                    Some(self.try_decode_plan(&remove_plan, registry)?)
+                } else {
+                    None
+                };
+
                 Ok(Arc::new(DeltaCommitExec::new(
                     input,
+                    remove_plan,
                     table_url,
                     partition_columns,
                     table_exists,
@@ -958,8 +966,13 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
                 sink_mode: Some(sink_mode),
             })
         } else if let Some(delta_commit_exec) = node.as_any().downcast_ref::<DeltaCommitExec>() {
-            let input = self.try_encode_plan(delta_commit_exec.input().clone())?;
+            let input = self.try_encode_plan(delta_commit_exec.writer_plan().clone())?;
             let sink_mode = self.try_encode_physical_sink_mode(delta_commit_exec.sink_mode())?;
+            let remove_plan = if let Some(remove_plan) = delta_commit_exec.remove_plan() {
+                Some(self.try_encode_plan(remove_plan.clone())?)
+            } else {
+                None
+            };
             NodeKind::DeltaCommit(gen::DeltaCommitExecNode {
                 input,
                 table_url: delta_commit_exec.table_url().to_string(),
@@ -967,6 +980,7 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
                 table_exists: delta_commit_exec.table_exists(),
                 sink_schema: self.try_encode_schema(delta_commit_exec.sink_schema())?,
                 sink_mode: Some(sink_mode),
+                remove_plan,
             })
         } else if let Some(delta_delete_exec) = node.as_any().downcast_ref::<DeltaDeleteExec>() {
             let input = self.try_encode_plan(delta_delete_exec.input().clone())?;
