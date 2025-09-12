@@ -57,7 +57,6 @@ use sail_plan::extension::function::array::spark_array::SparkArray;
 use sail_plan::extension::function::array::spark_array_item_with_position::ArrayItemWithPosition;
 use sail_plan::extension::function::array::spark_array_min_max::{ArrayMax, ArrayMin};
 use sail_plan::extension::function::array::spark_sequence::SparkSequence;
-use sail_plan::extension::function::bitmap_count::BitmapCount;
 use sail_plan::extension::function::collection::spark_concat::SparkConcat;
 use sail_plan::extension::function::collection::spark_reverse::SparkReverse;
 use sail_plan::extension::function::csv::spark_from_csv::SparkFromCSV;
@@ -79,6 +78,10 @@ use sail_plan::extension::function::datetime::spark_unix_timestamp::SparkUnixTim
 use sail_plan::extension::function::datetime::timestamp_now::TimestampNow;
 use sail_plan::extension::function::drop_struct_field::DropStructField;
 use sail_plan::extension::function::explode::{explode_name_to_kind, Explode};
+use sail_plan::extension::function::hash::spark_crc32::SparkCrc32;
+use sail_plan::extension::function::hash::spark_murmur3_hash::SparkMurmur3Hash;
+use sail_plan::extension::function::hash::spark_sha1::SparkSha1;
+use sail_plan::extension::function::hash::spark_xxhash64::SparkXxhash64;
 use sail_plan::extension::function::kurtosis::KurtosisFunction;
 use sail_plan::extension::function::map::map_function::MapFunction;
 use sail_plan::extension::function::map::str_to_map::StrToMap;
@@ -101,21 +104,18 @@ use sail_plan::extension::function::math::spark_try_mult::SparkTryMult;
 use sail_plan::extension::function::math::spark_try_subtract::SparkTrySubtract;
 use sail_plan::extension::function::math::spark_width_bucket::SparkWidthBucket;
 use sail_plan::extension::function::max_min_by::{MaxByFunction, MinByFunction};
+use sail_plan::extension::function::misc::bitmap_count::BitmapCount;
+use sail_plan::extension::function::misc::raise_error::RaiseError;
+use sail_plan::extension::function::misc::spark_aes::{
+    SparkAESDecrypt, SparkAESEncrypt, SparkTryAESDecrypt, SparkTryAESEncrypt,
+};
 use sail_plan::extension::function::misc::version::SparkVersion;
 use sail_plan::extension::function::mode::ModeFunction;
 use sail_plan::extension::function::multi_expr::MultiExpr;
-use sail_plan::extension::function::raise_error::RaiseError;
 use sail_plan::extension::function::skewness::SkewnessFunc;
-use sail_plan::extension::function::spark_aes::{
-    SparkAESDecrypt, SparkAESEncrypt, SparkTryAESDecrypt, SparkTryAESEncrypt,
-};
-use sail_plan::extension::function::spark_crc32::SparkCrc32;
-use sail_plan::extension::function::spark_murmur3_hash::SparkMurmur3Hash;
-use sail_plan::extension::function::spark_sha1::SparkSha1;
 use sail_plan::extension::function::spark_to_string::{
     SparkToLargeUtf8, SparkToUtf8, SparkToUtf8View,
 };
-use sail_plan::extension::function::spark_xxhash64::SparkXxhash64;
 use sail_plan::extension::function::string::levenshtein::Levenshtein;
 use sail_plan::extension::function::string::make_valid_utf8::MakeValidUtf8;
 use sail_plan::extension::function::string::spark_base64::{SparkBase64, SparkUnbase64};
