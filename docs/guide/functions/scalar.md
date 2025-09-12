@@ -8,7 +8,7 @@ rank: 1
 ## Array
 
 | Function             | Supported          |
-| -------------------- | ------------------ |
+|----------------------|--------------------|
 | `array`              | :white_check_mark: |
 | `array_append`       | :white_check_mark: |
 | `array_compact`      | :white_check_mark: |
@@ -39,7 +39,7 @@ rank: 1
 ## Bitwise
 
 | Function                                      | Supported          |
-| --------------------------------------------- | ------------------ |
+|-----------------------------------------------|--------------------|
 | `&` (ampersand sign) operator                 | :white_check_mark: |
 | `^` (caret sign) operator                     | :white_check_mark: |
 | `bit_count`                                   | :white_check_mark: |
@@ -57,7 +57,7 @@ rank: 1
 ## Collection
 
 | Function         | Supported          |
-| ---------------- | ------------------ |
+|------------------|--------------------|
 | `cardinality`    | :white_check_mark: |
 | `deep_size`      | :white_check_mark: |
 | `element_at`     | :white_check_mark: |
@@ -69,7 +69,7 @@ rank: 1
 ## Conditional
 
 | Function     | Supported          |
-| ------------ | ------------------ |
+|--------------|--------------------|
 | `coalesce`   | :white_check_mark: |
 | `if`         | :white_check_mark: |
 | `ifnull`     | :white_check_mark: |
@@ -85,7 +85,7 @@ rank: 1
 ## Conversion
 
 | Function    | Supported          |
-| ----------- | ------------------ |
+|-------------|--------------------|
 | `bigint`    | :white_check_mark: |
 | `binary`    | :white_check_mark: |
 | `boolean`   | :white_check_mark: |
@@ -103,7 +103,7 @@ rank: 1
 ## CSV
 
 | Function        | Supported          |
-| --------------- | ------------------ |
+|-----------------|--------------------|
 | `from_csv`      | :white_check_mark: |
 | `schema_of_csv` | :construction:     |
 | `to_csv`        | :construction:     |
@@ -111,7 +111,7 @@ rank: 1
 ## Datetime
 
 | Function                 | Supported          |
-| ------------------------ | ------------------ |
+|--------------------------|--------------------|
 | `add_years`              | :white_check_mark: |
 | `add_months`             | :white_check_mark: |
 | `add_days`               | :white_check_mark: |
@@ -176,17 +176,17 @@ rank: 1
 | `weekofyear`             | :white_check_mark: |
 | `year`                   | :white_check_mark: |
 | `session_window`         | :construction:     |
-| `window`                 | :construction:     |
-| `window_time`            | :construction:     |
 | `try_make_interval`      | :construction:     |
 | `try_make_timestamp`     | :construction:     |
 | `try_make_timestamp_ltz` | :construction:     |
 | `try_make_timestamp_ntz` | :construction:     |
+| `window`                 | :construction:     |
+| `window_time`            | :construction:     |
 
 ## Hash
 
 | Function   | Supported          |
-| ---------- | ------------------ |
+|------------|--------------------|
 | `crc32`    | :white_check_mark: |
 | `hash`     | :white_check_mark: |
 | `md5`      | :white_check_mark: |
@@ -198,7 +198,7 @@ rank: 1
 ## JSON
 
 | Function            | Supported          |
-| ------------------- | ------------------ |
+|---------------------|--------------------|
 | `get_json_object`   | :white_check_mark: |
 | `json_array_length` | :white_check_mark: |
 | `json_object_keys`  | :white_check_mark: |
@@ -210,7 +210,7 @@ rank: 1
 ## Lambda
 
 | Function           | Supported      |
-| ------------------ | -------------- |
+|--------------------|----------------|
 | `aggregate`        | :construction: |
 | `array_sort`       | :construction: |
 | `exists`           | :construction: |
@@ -227,7 +227,7 @@ rank: 1
 ## Map
 
 | Function           | Supported          |
-| ------------------ | ------------------ |
+|--------------------|--------------------|
 | `map`              | :white_check_mark: |
 | `map_concat`       | :white_check_mark: |
 | `map_contains_key` | :white_check_mark: |
@@ -241,7 +241,7 @@ rank: 1
 ## Math
 
 | Function                     | Supported          |
-| ---------------------------- | ------------------ |
+|------------------------------|--------------------|
 | `%` (percent sign) operator  | :white_check_mark: |
 | `*` (asterisk sign) operator | :white_check_mark: |
 | `+` (plus sign) operator     | :white_check_mark: |
@@ -315,7 +315,7 @@ rank: 1
 ## Misc
 
 | Function                      | Supported          |
-| ----------------------------- | ------------------ |
+|-------------------------------|--------------------|
 | `aes_decrypt`                 | :white_check_mark: |
 | `aes_encrypt`                 | :white_check_mark: |
 | `assert_true`                 | :white_check_mark: |
@@ -335,6 +335,8 @@ rank: 1
 | `user`                        | :white_check_mark: |
 | `uuid`                        | :white_check_mark: |
 | `version`                     | :white_check_mark: |
+| `from_avro`                   | :construction:     |
+| `from_protobuf`               | :construction:     |
 | `hll_sketch_estimate`         | :construction:     |
 | `hll_union`                   | :construction:     |
 | `input_file_block_length`     | :construction:     |
@@ -342,19 +344,17 @@ rank: 1
 | `input_file_name`             | :construction:     |
 | `monotonically_increasing_id` | :construction:     |
 | `spark_partition_id`          | :construction:     |
-| `from_avro`                   | :construction:     |
-| `from_protobuf`               | :construction:     |
 | `schema_of_avro`              | :construction:     |
 | `to_avro`                     | :construction:     |
 | `to_protobuf`                 | :construction:     |
+| `java_method`                 | :x:                |
 | `reflect`                     | :x:                |
 | `try_reflect`                 | :x:                |
-| `java_method`                 | :x:                |
 
 ## Predicate
 
 | Function                       | Supported          |
-| ------------------------------ | ------------------ |
+|--------------------------------|--------------------|
 | `!` (bang sign) operator       | :white_check_mark: |
 | `!=` (bang eq sign) operator   | :white_check_mark: |
 | `<` (lt sign) operator         | :white_check_mark: |
@@ -380,7 +380,7 @@ rank: 1
 ## String
 
 | Function             | Supported          |
-| -------------------- | ------------------ |
+|----------------------|--------------------|
 | `ascii`              | :white_check_mark: |
 | `base64`             | :white_check_mark: |
 | `bit_length`         | :white_check_mark: |
@@ -458,14 +458,14 @@ rank: 1
 ## Struct
 
 | Function       | Supported          |
-| -------------- | ------------------ |
+|----------------|--------------------|
 | `named_struct` | :white_check_mark: |
 | `struct`       | :white_check_mark: |
 
 ## URL
 
 | Function         | Supported          |
-| ---------------- | ------------------ |
+|------------------|--------------------|
 | `parse_url`      | :white_check_mark: |
 | `try_parse_url`  | :white_check_mark: |
 | `url_decode`     | :white_check_mark: |
@@ -475,7 +475,7 @@ rank: 1
 ## Variant
 
 | Function                | Supported      |
-| ----------------------- | -------------- |
+|-------------------------|----------------|
 | `is_variant_null`       | :construction: |
 | `parse_json`            | :construction: |
 | `schema_of_variant`     | :construction: |
@@ -490,7 +490,7 @@ rank: 1
 ## XML
 
 | Function        | Supported      |
-| --------------- | -------------- |
+|-----------------|----------------|
 | `xpath`         | :construction: |
 | `xpath_boolean` | :construction: |
 | `xpath_double`  | :construction: |
