@@ -151,11 +151,12 @@ pub(super) fn list_built_in_misc_functions() -> Vec<(&'static str, ScalarFunctio
         ),
         ("raise_error", F::udf(RaiseError::new())),
         ("reflect", F::unknown("reflect")),
+        ("session_user", F::custom(current_user)),
         ("spark_partition_id", F::unknown("spark_partition_id")),
         ("try_aes_encrypt", F::udf(SparkTryAESEncrypt::new())),
         ("try_aes_decrypt", F::udf(SparkTryAESDecrypt::new())),
         ("typeof", F::custom(type_of)),
-        ("user", F::unknown("user")),
+        ("user", F::custom(current_user)),
         ("uuid", F::nullary(expr_fn::uuid)),
         ("version", F::udf(SparkVersion::new())),
     ]
