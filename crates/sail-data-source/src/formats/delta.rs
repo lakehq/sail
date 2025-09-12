@@ -12,7 +12,7 @@ use sail_common_datafusion::datasource::{
 };
 use sail_delta_lake::create_delta_provider;
 use sail_delta_lake::delta_datafusion::{parse_predicate_expression, DataFusionMixins};
-use sail_delta_lake::delta_format::{DeltaDeleteExec, DeltaPlanBuilder};
+use sail_delta_lake::delta_format::{DeltaDeleteExec, DeltaFindFilesExec, DeltaPlanBuilder};
 use sail_delta_lake::options::TableDeltaOptions;
 use sail_delta_lake::table::open_table_with_object_store;
 use url::Url;
@@ -168,10 +168,18 @@ impl TableFormat for DeltaTableFormat {
         let condition = condition.ok_or_else(|| {
             DataFusionError::Plan("DELETE operation requires a WHERE condition".to_string())
         })?;
+
+        let find_files_exec = Arc::new(DeltaFindFilesExec::new(
+            table_url.clone(),
+            Some(condition.clone()),
+            Some(table_schema.clone()),
+        ));
+
         Ok(Arc::new(DeltaDeleteExec::new(
+            find_files_exec,
             table_url,
             condition,
-            Some(table_schema),
+            table_schema,
         )))
     }
 }

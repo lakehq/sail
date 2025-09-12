@@ -18,11 +18,13 @@ use serde::{Deserialize, Serialize};
 
 mod commit_exec;
 mod delete_exec;
+pub mod find_files_exec;
 mod plan_builder;
 mod writer_exec;
 
 pub use commit_exec::DeltaCommitExec;
 pub use delete_exec::DeltaDeleteExec;
+pub use find_files_exec::DeltaFindFilesExec;
 pub use plan_builder::DeltaPlanBuilder;
 pub use writer_exec::DeltaWriterExec;
 

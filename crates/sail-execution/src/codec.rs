@@ -551,10 +551,12 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
                 )))
             }
             NodeKind::DeltaDelete(gen::DeltaDeleteExecNode {
+                input,
                 table_url,
                 condition,
                 table_schema,
             }) => {
+                let input = self.try_decode_plan(&input, registry)?;
                 let table_url = Url::parse(&table_url)
                     .map_err(|e| plan_datafusion_err!("failed to parse table URL: {e}"))?;
                 let table_schema = Arc::new(self.try_decode_schema(&table_schema)?);
@@ -564,11 +566,46 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
                     &table_schema,
                     self,
                 )?;
-                Ok(Arc::new(DeltaDeleteExec::new(
-                    table_url,
-                    condition,
-                    Some(table_schema),
-                )))
+                Ok(Arc::new(
+                    sail_delta_lake::delta_format::DeltaDeleteExec::new(
+                        input,
+                        table_url,
+                        condition,
+                        table_schema,
+                    ),
+                ))
+            }
+            NodeKind::DeltaFindFiles(gen::DeltaFindFilesExecNode {
+                table_url,
+                predicate,
+                table_schema,
+            }) => {
+                let table_url = Url::parse(&table_url)
+                    .map_err(|e| plan_datafusion_err!("failed to parse table URL: {e}"))?;
+                let table_schema = if let Some(schema_bytes) = table_schema {
+                    Some(Arc::new(self.try_decode_schema(&schema_bytes)?))
+                } else {
+                    None
+                };
+                let predicate = if let Some(pred_bytes) = predicate {
+                    let empty_schema = Arc::new(datafusion::arrow::datatypes::Schema::empty());
+                    let schema = table_schema.as_ref().unwrap_or(&empty_schema);
+                    Some(parse_physical_expr(
+                        &self.try_decode_message(&pred_bytes)?,
+                        registry,
+                        schema,
+                        self,
+                    )?)
+                } else {
+                    None
+                };
+                Ok(Arc::new(
+                    sail_delta_lake::delta_format::DeltaFindFilesExec::new(
+                        table_url,
+                        predicate,
+                        table_schema,
+                    ),
+                ))
             }
             NodeKind::ConsoleSink(gen::ConsoleSinkExecNode { input }) => {
                 let input = self.try_decode_plan(&input, registry)?;
@@ -932,13 +969,35 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
                 sink_mode: Some(sink_mode),
             })
         } else if let Some(delta_delete_exec) = node.as_any().downcast_ref::<DeltaDeleteExec>() {
+            let input = self.try_encode_plan(delta_delete_exec.input().clone())?;
             let condition_node =
                 serialize_physical_expr(&delta_delete_exec.condition().clone(), self)?;
             let condition = self.try_encode_message(condition_node)?;
             let table_schema = self.try_encode_schema(delta_delete_exec.table_schema())?;
             NodeKind::DeltaDelete(gen::DeltaDeleteExecNode {
+                input,
                 table_url: delta_delete_exec.table_url().to_string(),
                 condition,
+                table_schema,
+            })
+        } else if let Some(delta_find_files_exec) =
+            node.as_any()
+                .downcast_ref::<sail_delta_lake::delta_format::DeltaFindFilesExec>()
+        {
+            let predicate = if let Some(pred) = delta_find_files_exec.predicate() {
+                let predicate_node = serialize_physical_expr(&pred.clone(), self)?;
+                Some(self.try_encode_message(predicate_node)?)
+            } else {
+                None
+            };
+            let table_schema = if let Some(schema) = delta_find_files_exec.table_schema() {
+                Some(self.try_encode_schema(schema)?)
+            } else {
+                None
+            };
+            NodeKind::DeltaFindFiles(gen::DeltaFindFilesExecNode {
+                table_url: delta_find_files_exec.table_url().to_string(),
+                predicate,
                 table_schema,
             })
         } else if let Some(console_sink) = node.as_any().downcast_ref::<ConsoleSinkExec>() {

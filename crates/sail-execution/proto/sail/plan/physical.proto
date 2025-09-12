@@ -30,12 +30,13 @@ message ExtendedPhysicalPlanNode {
     DeltaWriterExecNode delta_writer = 16;
     DeltaCommitExecNode delta_commit = 17;
     DeltaDeleteExecNode delta_delete = 18;
-    AvroExecNode avro = 19;
-    ConsoleSinkExecNode console_sink = 20;
-    SocketSourceExecNode socket_source = 21;
-    RateSourceExecNode rate_source = 22;
-    TextSinkExecNode text_sink = 23;
-    BinarySourceExecNode binary_source = 24;
+    DeltaFindFilesExecNode delta_find_files = 19;
+    AvroExecNode avro = 29;
+    ConsoleSinkExecNode console_sink = 21;
+    SocketSourceExecNode socket_source = 22;
+    RateSourceExecNode rate_source = 23;
+    TextSinkExecNode text_sink = 24;
+    BinarySourceExecNode binary_source = 25;
   }
 }
 
@@ -349,9 +350,16 @@ message DeltaCommitExecNode {
 }
 
 message DeltaDeleteExecNode {
+  bytes input = 1;
+  string table_url = 2;
+  bytes condition = 3;
+  bytes table_schema = 4;
+}
+
+message DeltaFindFilesExecNode {
   string table_url = 1;
-  bytes condition = 2;
-  bytes table_schema = 3;
+  optional bytes predicate = 2;
+  optional bytes table_schema = 3;
 }
 
 message ConsoleSinkExecNode {
