@@ -137,7 +137,11 @@ impl DeltaDeleteExec {
                     })?
                     .as_any()
                     .downcast_ref::<datafusion::arrow::array::BooleanArray>()
-                    .unwrap();
+                    .ok_or_else(|| {
+                        DataFusionError::Internal(
+                            "Failed to downcast partition_scan column to BooleanArray".to_string(),
+                        )
+                    })?;
                 partition_scan = Some(scan_col.value(0));
             }
 
@@ -146,7 +150,11 @@ impl DeltaDeleteExec {
                 .ok_or_else(|| DataFusionError::Internal("add column not found".to_string()))?
                 .as_any()
                 .downcast_ref::<datafusion::arrow::array::StringArray>()
-                .unwrap();
+                .ok_or_else(|| {
+                    DataFusionError::Internal(
+                        "Failed to downcast add column to StringArray".to_string(),
+                    )
+                })?;
 
             for i in 0..adds_col.len() {
                 let add_json = adds_col.value(i);

@@ -309,10 +309,16 @@ impl ExecutionPlan for DeltaCommitExec {
                         let batch = batch_result?;
                         let adds_col = batch
                             .column_by_name("add")
-                            .unwrap()
+                            .ok_or_else(|| {
+                                DataFusionError::Internal("add column not found".to_string())
+                            })?
                             .as_any()
                             .downcast_ref::<StringArray>()
-                            .unwrap();
+                            .ok_or_else(|| {
+                                DataFusionError::Internal(
+                                    "Failed to downcast add column to StringArray".to_string(),
+                                )
+                            })?;
                         for add_json in adds_col.iter().flatten() {
                             let add: deltalake::kernel::Add = serde_json::from_str(add_json)
                                 .map_err(|e| DataFusionError::External(Box::new(e)))?;

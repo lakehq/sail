@@ -120,17 +120,15 @@ impl TableFormat for DeltaTableFormat {
             (mode, None)
         };
 
-        let plan_builder = DeltaPlanBuilder::new(
-            input,
+        let table_config = sail_delta_lake::delta_format::plan_builder::DeltaTableConfig {
             table_url,
-            delta_options,
-            partition_by,
-            unified_mode,
+            options: delta_options,
+            partition_columns: partition_by,
             table_schema_for_cond,
             table_exists,
-            sort_order,
-            ctx,
-        );
+        };
+        let plan_builder =
+            DeltaPlanBuilder::new(input, table_config, unified_mode, sort_order, ctx);
         let sink_exec = plan_builder.build().await?;
 
         Ok(sink_exec)

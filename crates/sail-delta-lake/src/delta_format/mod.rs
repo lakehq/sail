@@ -19,7 +19,7 @@ use serde::{Deserialize, Serialize};
 mod commit_exec;
 mod delete_exec;
 pub mod find_files_exec;
-mod plan_builder;
+pub mod plan_builder;
 mod writer_exec;
 
 pub use commit_exec::DeltaCommitExec;
