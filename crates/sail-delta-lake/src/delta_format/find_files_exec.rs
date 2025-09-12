@@ -37,6 +37,7 @@ pub struct DeltaFindFilesExec {
     table_url: Url,
     predicate: Option<Arc<dyn PhysicalExpr>>,
     table_schema: Option<SchemaRef>, // Schema of the table for predicate evaluation
+    version: i64,
     cache: PlanProperties,
 }
 
@@ -46,6 +47,7 @@ impl DeltaFindFilesExec {
         table_url: Url,
         predicate: Option<Arc<dyn PhysicalExpr>>,
         table_schema: Option<SchemaRef>,
+        version: i64,
     ) -> Self {
         let schema = Arc::new(Schema::new(vec![
             // JSON-serialized Add action
@@ -58,6 +60,7 @@ impl DeltaFindFilesExec {
             table_url,
             predicate,
             table_schema,
+            version,
             cache,
         }
     }
@@ -86,6 +89,11 @@ impl DeltaFindFilesExec {
         &self.table_schema
     }
 
+    /// Get the table version
+    pub fn version(&self) -> i64 {
+        self.version
+    }
+
     async fn find_files(
         &self,
         context: Arc<TaskContext>,
@@ -96,13 +104,17 @@ impl DeltaFindFilesExec {
             .get_store(&self.table_url)
             .map_err(|e| DataFusionError::External(Box::new(e)))?;
 
-        let table = open_table_with_object_store(
+        let mut table = open_table_with_object_store(
             self.table_url.clone(),
             object_store,
             StorageConfig::default(),
         )
         .await
         .map_err(|e| DataFusionError::External(Box::new(e)))?;
+        table
+            .load_version(self.version)
+            .await
+            .map_err(|e| DataFusionError::External(Box::new(e)))?;
 
         let snapshot = table
             .snapshot()
@@ -219,6 +231,7 @@ impl Clone for DeltaFindFilesExec {
             self.table_url.clone(),
             self.predicate.clone(),
             self.table_schema.clone(),
+            self.version,
         )
     }
 }

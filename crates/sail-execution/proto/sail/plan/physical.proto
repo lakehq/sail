@@ -355,12 +355,14 @@ message DeltaDeleteExecNode {
   string table_url = 2;
   bytes condition = 3;
   bytes table_schema = 4;
+  int64 version = 5;
 }
 
 message DeltaFindFilesExecNode {
   string table_url = 1;
   optional bytes predicate = 2;
   optional bytes table_schema = 3;
+  int64 version = 4;
 }
 
 message ConsoleSinkExecNode {

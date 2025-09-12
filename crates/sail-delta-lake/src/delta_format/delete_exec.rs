@@ -36,6 +36,7 @@ pub struct DeltaDeleteExec {
     condition: Arc<dyn PhysicalExpr>,
     table_url: Url,          // Keep for opening table
     table_schema: SchemaRef, // Schema of the table for condition evaluation
+    version: i64,
     cache: PlanProperties,
 }
 
@@ -46,6 +47,7 @@ impl DeltaDeleteExec {
         table_url: Url,
         condition: Arc<dyn PhysicalExpr>,
         table_schema: SchemaRef,
+        version: i64,
     ) -> Self {
         let schema = Arc::new(Schema::new(vec![
             Field::new("num_deleted_rows", DataType::UInt64, false),
@@ -58,6 +60,7 @@ impl DeltaDeleteExec {
             table_url,
             condition,
             table_schema,
+            version,
             cache,
         }
     }
@@ -91,6 +94,11 @@ impl DeltaDeleteExec {
         &self.table_schema
     }
 
+    /// Get the table version
+    pub fn version(&self) -> i64 {
+        self.version
+    }
+
     /// Core execution logic for delete operation
     async fn execute_delete(&self, context: Arc<TaskContext>) -> Result<RecordBatch> {
         let object_store = context
@@ -99,13 +107,17 @@ impl DeltaDeleteExec {
             .get_store(&self.table_url)
             .map_err(|e| DataFusionError::External(Box::new(e)))?;
 
-        let table = open_table_with_object_store(
+        let mut table = open_table_with_object_store(
             self.table_url.clone(),
             object_store,
             StorageConfig::default(),
         )
         .await
         .map_err(|e| DataFusionError::External(Box::new(e)))?;
+        table
+            .load_version(self.version)
+            .await
+            .map_err(|e| DataFusionError::External(Box::new(e)))?;
 
         let snapshot = table
             .snapshot()
@@ -336,6 +348,7 @@ impl ExecutionPlan for DeltaDeleteExec {
             self.table_url.clone(),
             self.condition.clone(),
             self.table_schema.clone(),
+            self.version,
         )))
     }
 
@@ -364,6 +377,7 @@ impl Clone for DeltaDeleteExec {
             self.table_url.clone(),
             self.condition.clone(),
             self.table_schema.clone(),
+            self.version,
         )
     }
 }

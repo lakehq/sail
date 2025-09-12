@@ -162,11 +162,14 @@ impl TableFormat for DeltaTableFormat {
             ))
                 })?;
 
-        // Get table schema
-        let snapshot = table
+        // Get table snapshot and version
+        let snapshot_state = table
             .snapshot()
             .map_err(|e| DataFusionError::External(Box::new(e)))?;
-        let table_schema = snapshot
+        let version = snapshot_state.version();
+
+        let table_schema = snapshot_state
+            .snapshot()
             .arrow_schema()
             .map_err(|e| DataFusionError::External(Box::new(e)))?;
 
@@ -178,6 +181,7 @@ impl TableFormat for DeltaTableFormat {
             table_url.clone(),
             Some(condition.clone()),
             Some(table_schema.clone()),
+            version,
         ));
 
         Ok(Arc::new(DeltaDeleteExec::new(
@@ -185,6 +189,7 @@ impl TableFormat for DeltaTableFormat {
             table_url,
             condition,
             table_schema,
+            version,
         )))
     }
 }

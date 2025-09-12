@@ -563,6 +563,7 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
                 table_url,
                 condition,
                 table_schema,
+                version,
             }) => {
                 let input = self.try_decode_plan(&input, registry)?;
                 let table_url = Url::parse(&table_url)
@@ -580,6 +581,7 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
                         table_url,
                         condition,
                         table_schema,
+                        version,
                     ),
                 ))
             }
@@ -587,6 +589,7 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
                 table_url,
                 predicate,
                 table_schema,
+                version,
             }) => {
                 let table_url = Url::parse(&table_url)
                     .map_err(|e| plan_datafusion_err!("failed to parse table URL: {e}"))?;
@@ -612,6 +615,7 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
                         table_url,
                         predicate,
                         table_schema,
+                        version,
                     ),
                 ))
             }
@@ -993,6 +997,7 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
                 table_url: delta_delete_exec.table_url().to_string(),
                 condition,
                 table_schema,
+                version: delta_delete_exec.version(),
             })
         } else if let Some(delta_find_files_exec) =
             node.as_any()
@@ -1013,6 +1018,7 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
                 table_url: delta_find_files_exec.table_url().to_string(),
                 predicate,
                 table_schema,
+                version: delta_find_files_exec.version(),
             })
         } else if let Some(console_sink) = node.as_any().downcast_ref::<ConsoleSinkExec>() {
             let input = self.try_encode_plan(console_sink.input().clone())?;

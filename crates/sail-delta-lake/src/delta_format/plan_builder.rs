@@ -82,12 +82,37 @@ impl<'a> DeltaPlanBuilder<'a> {
         self,
         condition: Arc<dyn PhysicalExpr>,
     ) -> Result<Arc<dyn ExecutionPlan>> {
+        // Load table to get current version
+        let object_store = self
+            .session_state
+            .runtime_env()
+            .object_store_registry
+            .get_store(&self.table_config.table_url)
+            .map_err(|e| datafusion_common::DataFusionError::External(Box::new(e)))?;
+
+        let log_store = deltalake::logstore::default_logstore(
+            object_store.clone(),
+            object_store,
+            &self.table_config.table_url,
+            &Default::default(),
+        );
+
+        let mut table = crate::table::DeltaTable::new(log_store, Default::default());
+        table
+            .load()
+            .await
+            .map_err(|e| datafusion_common::DataFusionError::External(Box::new(e)))?;
+
+        let snapshot_state = table.snapshot().map_err(delta_to_datafusion_error)?;
+        let version = snapshot_state.version();
+
         let remove_plan = {
             let table_schema = self.table_config.table_schema_for_cond.clone();
             Some(Arc::new(DeltaFindFilesExec::new(
                 self.table_config.table_url.clone(),
                 Some(condition.clone()),
                 table_schema,
+                version,
             )) as Arc<dyn ExecutionPlan>)
         };
 
