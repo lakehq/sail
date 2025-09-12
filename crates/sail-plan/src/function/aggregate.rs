@@ -1,15 +1,13 @@
 use std::collections::HashMap;
 use std::sync::Arc;
 
-use arrow::datatypes::Field;
-use datafusion::arrow::datatypes::DataType;
+use arrow::datatypes::{DataType, Field};
 use datafusion::functions_aggregate::{
     approx_distinct, approx_percentile_cont, array_agg, average, bit_and_or_xor, bool_and_or,
     correlation, count, covariance, first_last, grouping, median, min_max, regr, stddev, sum,
     variance,
 };
 use datafusion::functions_nested::string::array_to_string;
-use datafusion::sql::sqlparser::ast::NullTreatment;
 use datafusion_common::ScalarValue;
 use datafusion_expr::expr::{AggregateFunction, AggregateFunctionParams};
 use datafusion_expr::{cast, expr, lit, when, AggregateUDF, ExprSchemable};
@@ -20,49 +18,15 @@ use crate::extension::function::kurtosis::KurtosisFunction;
 use crate::extension::function::max_min_by::{MaxByFunction, MinByFunction};
 use crate::extension::function::mode::ModeFunction;
 use crate::extension::function::skewness::SkewnessFunc;
-use crate::function::common::{get_null_treatment, AggFunction, AggFunctionInput};
+use crate::function::common::{
+    get_arguments_and_null_treatment, get_null_treatment, AggFunction, AggFunctionInput,
+};
 use crate::function::transform_count_star_wildcard_expr;
 use crate::utils::ItemTaker;
 
 lazy_static! {
     static ref BUILT_IN_AGGREGATE_FUNCTIONS: HashMap<&'static str, AggFunction> =
         HashMap::from_iter(list_built_in_aggregate_functions());
-}
-
-fn get_arguments_and_null_treatment(
-    args: Vec<expr::Expr>,
-    ignore_nulls: Option<bool>,
-) -> PlanResult<(Vec<expr::Expr>, Option<NullTreatment>)> {
-    if args.len() == 1 {
-        let expr = args.one()?;
-        Ok((vec![expr], get_null_treatment(ignore_nulls)))
-    } else if args.len() == 2 {
-        if ignore_nulls.is_some() {
-            return Err(PlanError::invalid(
-                "first/last value arguments conflict with IGNORE NULLS clause",
-            ));
-        }
-        let (expr, ignore_nulls) = args.two()?;
-        let null_treatment = match ignore_nulls {
-            expr::Expr::Literal(ScalarValue::Boolean(Some(ignore_nulls)), _metadata) => {
-                if ignore_nulls {
-                    Some(NullTreatment::IgnoreNulls)
-                } else {
-                    Some(NullTreatment::RespectNulls)
-                }
-            }
-            _ => {
-                return Err(PlanError::invalid(
-                    "first/last value requires a boolean literal as the second argument",
-                ))
-            }
-        };
-        Ok((vec![expr], null_treatment))
-    } else {
-        Err(PlanError::invalid(
-            "first/last value requires 1 or 2 arguments",
-        ))
-    }
 }
 
 fn avg(input: AggFunctionInput) -> PlanResult<expr::Expr> {

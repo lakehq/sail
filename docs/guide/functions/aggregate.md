@@ -6,7 +6,7 @@ rank: 2
 # Built-in Spark Aggregate Functions
 
 | Function                | Supported          |
-|-------------------------|--------------------|
+| ----------------------- | ------------------ |
 | `any`                   | :white_check_mark: |
 | `any_value`             | :white_check_mark: |
 | `approx_count_distinct` | :white_check_mark: |
