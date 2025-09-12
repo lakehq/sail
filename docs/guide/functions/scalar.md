@@ -440,10 +440,13 @@ rank: 1
 | `upper`              | :white_check_mark: |
 | `validate_utf8`      | :white_check_mark: |
 | `strpos`             | :white_check_mark: |
+| `collate`            | :construction:     |
+| `collation`          | :construction:     |
 | `format_number`      | :construction:     |
 | `format_string`      | :construction:     |
 | `luhn_check`         | :construction:     |
 | `printf`             | :construction:     |
+| `randstr`            | :construction:     |
 | `regexp_extract`     | :construction:     |
 | `regexp_extract_all` | :construction:     |
 | `regexp_substr`      | :construction:     |
@@ -451,9 +454,6 @@ rank: 1
 | `soundex`            | :construction:     |
 | `to_char`            | :construction:     |
 | `to_varchar`         | :construction:     |
-| `collate`            | :construction:     |
-| `collation`          | :construction:     |
-| `randstr`            | :construction:     |
 
 ## Struct
 
