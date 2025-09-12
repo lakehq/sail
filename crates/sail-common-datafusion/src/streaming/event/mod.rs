@@ -2,8 +2,6 @@ mod encoding;
 mod marker;
 mod stream;
 
-use std::sync::Arc;
-
 use datafusion::arrow::array::{BooleanArray, BooleanBuilder, RecordBatch};
 pub use encoding::{DecodedFlowEventStream, EncodedFlowEventStream};
 pub use marker::FlowMarker;
@@ -18,7 +16,7 @@ pub(crate) mod gen {
 pub enum FlowEvent {
     Data {
         batch: RecordBatch,
-        retracted: Arc<BooleanArray>,
+        retracted: BooleanArray,
     },
     Marker(FlowMarker),
 }
@@ -29,7 +27,7 @@ impl FlowEvent {
         let retracted = {
             let mut builder = BooleanBuilder::with_capacity(len);
             builder.append_n(len, false);
-            Arc::new(builder.finish())
+            builder.finish()
         };
         Self::Data { batch, retracted }
     }

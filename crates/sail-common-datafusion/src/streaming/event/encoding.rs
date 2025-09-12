@@ -53,7 +53,7 @@ impl EncodedFlowEventStream {
             FlowEvent::Data { batch, retracted } => {
                 let mut columns: Vec<ArrayRef> = vec![
                     new_null_array(&DataType::Binary, batch.num_rows()),
-                    retracted,
+                    Arc::new(retracted),
                 ];
                 columns.extend(batch.columns().iter().cloned());
                 columns
@@ -160,7 +160,7 @@ impl DecodedMultiFlowEventStream {
                     let length = i - start;
                     events.push(FlowEvent::Data {
                         batch: data.slice(start, length),
-                        retracted: Arc::new(retracted.slice(start, length)),
+                        retracted: retracted.slice(start, length),
                     });
                     start_data_index = None;
                 }
@@ -175,7 +175,7 @@ impl DecodedMultiFlowEventStream {
             let length = batch.num_rows() - start;
             events.push(FlowEvent::Data {
                 batch: data.slice(start, length),
-                retracted: Arc::new(retracted.slice(start, length)),
+                retracted: retracted.slice(start, length),
             });
         }
         Ok(events)

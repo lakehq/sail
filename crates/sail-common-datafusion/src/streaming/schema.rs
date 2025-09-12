@@ -20,6 +20,14 @@ fn is_retracted_field(field: &Field) -> bool {
     field.name() == RETRACTED_FIELD_NAME && field.data_type() == &DataType::Boolean
 }
 
+pub fn is_flow_event_schema(schema: &Schema) -> bool {
+    let mut fields = schema.fields().iter();
+    fields.next().is_some_and(|x| is_marker_field(x.as_ref()))
+        && fields
+            .next()
+            .is_some_and(|x| is_retracted_field(x.as_ref()))
+}
+
 pub fn to_flow_event_schema(schema: &Schema) -> Schema {
     let mut fields = vec![
         Field::new(MARKER_FIELD_NAME, DataType::Binary, true),

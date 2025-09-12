@@ -5,13 +5,20 @@ use datafusion::datasource::{source_as_provider, TableProvider};
 use datafusion::logical_expr::{Extension, LogicalPlan};
 use datafusion_common::tree_node::{Transformed, TreeNodeRewriter};
 use datafusion_common::{internal_err, not_impl_err, plan_err, Result};
-use datafusion_expr::{col, or, Filter, Projection, TableScan};
-use sail_common_datafusion::streaming::schema::{MARKER_FIELD_NAME, RETRACTED_FIELD_NAME};
+use datafusion_expr::{
+    col, or, Explain, FetchType, Filter, Projection, SkipType, SubqueryAlias, TableScan, Union,
+    UserDefinedLogicalNode,
+};
+use sail_common_datafusion::streaming::schema::{
+    is_flow_event_schema, MARKER_FIELD_NAME, RETRACTED_FIELD_NAME,
+};
 use sail_common_datafusion::streaming::source::{StreamSource, StreamSourceTableProvider};
+use sail_logical_plan::streaming::collector::StreamCollectorNode;
+use sail_logical_plan::streaming::limit::StreamLimitNode;
 use sail_logical_plan::streaming::source_adapter::StreamSourceAdapterNode;
 use sail_logical_plan::streaming::source_wrapper::StreamSourceWrapperNode;
 
-use crate::extension::logical::{FileWriteNode, RangeNode};
+use crate::extension::logical::{FileWriteNode, RangeNode, ShowStringNode};
 use crate::extension::source::rename::RenameTableProvider;
 
 struct StreamingRewriter;
@@ -24,6 +31,13 @@ impl StreamingRewriter {
                 node: Arc::new(StreamSourceAdapterNode::try_new(Arc::new(
                     LogicalPlan::Extension(extension),
                 ))?),
+            })))
+        } else if let Some(show) = node.as_any().downcast_ref::<ShowStringNode>() {
+            let input = LogicalPlan::Extension(Extension {
+                node: Arc::new(StreamCollectorNode::try_new(Arc::clone(show.input()))?),
+            });
+            Ok(Transformed::yes(LogicalPlan::Extension(Extension {
+                node: show.with_exprs_and_inputs(vec![], vec![input])?,
             })))
         } else if node.as_any().is::<FileWriteNode>() {
             Ok(Transformed::no(LogicalPlan::Extension(extension)))
@@ -101,11 +115,22 @@ impl TreeNodeRewriter for StreamingRewriter {
                     })))
                 }
             }
-            LogicalPlan::Union(_) | LogicalPlan::SubqueryAlias(_) => Ok(Transformed::no(plan)),
-            LogicalPlan::Limit(_) => {
-                // We could support limit in the future, where the execution plan
-                // emits all the data within the limit and passthrough markers from the input.
-                plan_err!("limit is not supported for streaming: {plan:?}")
+            LogicalPlan::Union(union) => Ok(Transformed::yes(LogicalPlan::Union(
+                Union::try_new_with_loose_types(union.inputs)?,
+            ))),
+            LogicalPlan::SubqueryAlias(alias) => Ok(Transformed::yes(LogicalPlan::SubqueryAlias(
+                SubqueryAlias::try_new(alias.input, alias.alias)?,
+            ))),
+            LogicalPlan::Limit(ref limit) => {
+                let SkipType::Literal(skip) = limit.get_skip_type()? else {
+                    return plan_err!("streaming limit requires literal skip: {plan:?}");
+                };
+                let FetchType::Literal(fetch) = limit.get_fetch_type()? else {
+                    return plan_err!("streaming limit requires literal fetch: {plan:?}");
+                };
+                Ok(Transformed::yes(LogicalPlan::Extension(Extension {
+                    node: Arc::new(StreamLimitNode::new(Arc::clone(&limit.input), skip, fetch)),
+                })))
             }
             LogicalPlan::EmptyRelation(_) | LogicalPlan::Values(_) => {
                 Ok(Transformed::yes(LogicalPlan::Extension(Extension {
@@ -124,8 +149,16 @@ impl TreeNodeRewriter for StreamingRewriter {
             LogicalPlan::Subquery(_) | LogicalPlan::Distinct(_) => {
                 internal_err!("not rewritten before streaming rewriter: {plan:?}")
             }
-            LogicalPlan::Explain(_)
-            | LogicalPlan::Analyze(_)
+            LogicalPlan::Explain(explain) => {
+                let input = LogicalPlan::Extension(Extension {
+                    node: Arc::new(StreamCollectorNode::try_new(Arc::clone(&explain.plan))?),
+                });
+                Ok(Transformed::yes(LogicalPlan::Explain(Explain {
+                    plan: Arc::new(input),
+                    ..explain
+                })))
+            }
+            LogicalPlan::Analyze(_)
             | LogicalPlan::Statement(_)
             | LogicalPlan::Dml(_)
             | LogicalPlan::Ddl(_)
@@ -201,5 +234,17 @@ pub fn is_streaming_plan(plan: &LogicalPlan) -> Result<bool> {
 /// optimizer (e.g. subquery).
 pub fn rewrite_streaming_plan(plan: LogicalPlan) -> Result<LogicalPlan> {
     let node = plan.rewrite(&mut StreamingRewriter)?;
-    Ok(node.data)
+    let plan = node.data;
+
+    if is_flow_event_schema(plan.schema().inner()) {
+        // If the plan has a flow event schema, it is a streaming query without sink.
+        // So we need to collect the (retractable) data batches.
+        // During physical planning, the stream collector will return an error if the plan
+        // is not bounded, since the query result cannot have infinite size.
+        Ok(LogicalPlan::Extension(Extension {
+            node: Arc::new(StreamCollectorNode::try_new(Arc::new(plan))?),
+        }))
+    } else {
+        Ok(plan)
+    }
 }
