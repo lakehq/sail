@@ -3,12 +3,14 @@ title: Generator Functions
 rank: 4
 ---
 
-# List of Supported Built-in Spark Generator Functions
+# Built-in Spark Generator Functions
 
-- `explode`
-- `explode_outer`
-- `inline`
-- `inline_outer`
-- `posexplode`
-- `posexplode_outer`
-- `stack`
+| Function           | Supported          |
+| ------------------ | ------------------ |
+| `explode`          | :white_check_mark: |
+| `explode_outer`    | :white_check_mark: |
+| `inline`           | :white_check_mark: |
+| `inline_outer`     | :white_check_mark: |
+| `posexplode`       | :white_check_mark: |
+| `posexplode_outer` | :white_check_mark: |
+| `stack`            | :white_check_mark: |

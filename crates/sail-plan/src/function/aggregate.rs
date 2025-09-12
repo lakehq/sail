@@ -387,6 +387,8 @@ fn list_built_in_aggregate_functions() -> Vec<(&'static str, AggFunction)> {
             "percentile_approx",
             F::default(approx_percentile_cont::approx_percentile_cont_udaf),
         ),
+        ("percentile_cont", F::unknown("percentile_cont")),
+        ("percentile_disc", F::unknown("percentile_disc")),
         ("regr_avgx", F::default(regr::regr_avgx_udaf)),
         ("regr_avgy", F::default(regr::regr_avgy_udaf)),
         ("regr_count", F::default(regr::regr_count_udaf)),

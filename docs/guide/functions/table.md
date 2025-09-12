@@ -3,6 +3,8 @@ title: Table Functions
 rank: 5
 ---
 
-# List of Supported Built-in Spark Table Functions
+# Built-in Spark Table Functions
 
-- `range`
+| Function | Supported          |
+| -------- | ------------------ |
+| `range`  | :white_check_mark: |

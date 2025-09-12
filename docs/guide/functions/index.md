@@ -3,7 +3,7 @@ title: Functions and Expressions
 rank: 3
 ---
 
-# List of Supported Built-in Spark Functions and Expressions
+# Built-in Spark Functions and Expressions
 
 Sail supports a wide range of built-in Spark functions and expressions that can be used in your data processing tasks.
 Below is a comprehensive list of these functions and expressions, organized and categorized by their functionality.
