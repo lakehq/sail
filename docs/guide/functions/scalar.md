@@ -491,6 +491,9 @@ rank: 1
 
 | Function        | Supported      |
 | --------------- | -------------- |
+| `from_xml`      | :construction: |
+| `schema_of_xml` | :construction: |
+| `to_xml`        | :construction: |
 | `xpath`         | :construction: |
 | `xpath_boolean` | :construction: |
 | `xpath_double`  | :construction: |
@@ -500,6 +503,3 @@ rank: 1
 | `xpath_number`  | :construction: |
 | `xpath_short`   | :construction: |
 | `xpath_string`  | :construction: |
-| `from_xml`      | :construction: |
-| `schema_of_xml` | :construction: |
-| `to_xml`        | :construction: |
