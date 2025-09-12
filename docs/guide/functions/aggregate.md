@@ -69,7 +69,7 @@ rank: 2
 | `hll_sketch_agg`        | :construction:     |
 | `hll_union_agg`         | :construction:     |
 | `percentile`            | :construction:     |
-| `try_avg`               | :construction:     |
-| `try_sum`               | :construction:     |
 | `percentile_cont`       | :construction:     |
 | `percentile_disc`       | :construction:     |
+| `try_avg`               | :construction:     |
+| `try_sum`               | :construction:     |
