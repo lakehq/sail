@@ -11,6 +11,7 @@ use crate::resolver::state::PlanResolverState;
 use crate::resolver::PlanResolver;
 
 mod catalog;
+mod delete;
 mod explain;
 mod function;
 mod insert;
@@ -242,7 +243,18 @@ impl PlanResolver<'_> {
                 self.resolve_command_set_variable(variable, value).await
             }
             CommandNode::Update { .. } => Err(PlanError::todo("CommandNode::Update")),
-            CommandNode::Delete { .. } => Err(PlanError::todo("CommandNode::Delete")),
+            CommandNode::Delete {
+                table,
+                table_alias,
+                condition,
+            } => {
+                let delete = spec::Delete {
+                    table,
+                    table_alias,
+                    condition,
+                };
+                self.resolve_command_delete(delete, state).await
+            }
             CommandNode::AlterTable { .. } => Err(PlanError::todo("CommandNode::AlterTable")),
             CommandNode::AlterView { .. } => Err(PlanError::todo("CommandNode::AlterView")),
             CommandNode::LoadData { .. } => Err(PlanError::todo("CommandNode::LoadData")),
