@@ -145,7 +145,7 @@ use sail_python_udf::udf::pyspark_udaf::PySparkGroupAggregateUDF;
 use sail_python_udf::udf::pyspark_udf::{PySparkUDF, PySparkUdfKind};
 use sail_python_udf::udf::pyspark_udtf::{PySparkUDTF, PySparkUdtfKind};
 use url::Url;
-
+use sail_plan::extension::function::string::spark_to_char::SparkToChar;
 use crate::plan::gen::extended_aggregate_udf::UdafKind;
 use crate::plan::gen::extended_physical_plan_node::NodeKind;
 use crate::plan::gen::extended_scalar_udf::UdfKind;
@@ -1150,6 +1150,7 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
             "spark_concat" | "concat" => Ok(Arc::new(ScalarUDF::from(SparkConcat::new()))),
             "spark_from_csv" | "from_csv" => Ok(Arc::new(ScalarUDF::from(SparkFromCSV::new()))),
             "spark_to_number" | "to_number" => Ok(Arc::new(ScalarUDF::from(SparkToNumber::new()))),
+            "spark_to_char"   | "to_char" => Ok(Arc::new(ScalarUDF::from(SparkToChar::new()))),
             "spark_try_to_number" | "try_to_number" => {
                 Ok(Arc::new(ScalarUDF::from(SparkTryToNumber::new())))
             }
@@ -1272,6 +1273,7 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
             || node.inner().as_any().is::<SparkHex>()
             || node.inner().as_any().is::<SparkFromCSV>()
             || node.inner().as_any().is::<SparkToNumber>()
+            || node.inner().as_any().is::<SparkToChar>()
             || node.inner().as_any().is::<SparkTryToNumber>()
             || node.inner().as_any().is::<SparkSplit>()
             || node.inner().as_any().is::<SparkUnHex>()
