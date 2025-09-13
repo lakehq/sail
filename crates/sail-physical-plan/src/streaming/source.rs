@@ -30,6 +30,10 @@ impl StreamSourceAdapterExec {
         );
         Self { input, properties }
     }
+
+    pub fn input(&self) -> &Arc<dyn ExecutionPlan> {
+        &self.input
+    }
 }
 
 impl DisplayAs for StreamSourceAdapterExec {

@@ -5657,6 +5657,7 @@ dependencies = [
  "sail-data-source",
  "sail-delta-lake",
  "sail-object-store",
+ "sail-physical-plan",
  "sail-plan",
  "sail-python-udf",
  "sail-server",
