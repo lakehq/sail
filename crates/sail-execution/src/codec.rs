@@ -54,7 +54,7 @@ use sail_data_source::formats::text::writer::{TextSink, TextWriterOptions};
 use sail_delta_lake::delta_format::{DeltaCommitExec, DeltaWriterExec};
 use sail_physical_plan::streaming::collector::StreamCollectorExec;
 use sail_physical_plan::streaming::limit::StreamLimitExec;
-use sail_physical_plan::streaming::source::StreamSourceAdapterExec;
+use sail_physical_plan::streaming::source_adapter::StreamSourceAdapterExec;
 use sail_plan::extension::function::array::arrays_zip::ArraysZip;
 use sail_plan::extension::function::array::spark_array::SparkArray;
 use sail_plan::extension::function::array::spark_array_item_with_position::ArrayItemWithPosition;

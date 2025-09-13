@@ -8,10 +8,8 @@ use datafusion::physical_plan::stream::RecordBatchStreamAdapter;
 use datafusion::physical_plan::{
     DisplayAs, ExecutionPlan, ExecutionPlanProperties, PlanProperties,
 };
-use datafusion_common::tree_node::{TreeNode, TreeNodeRecursion};
 use datafusion_common::{internal_err, plan_err, Result};
 use futures::StreamExt;
-use log::debug;
 use sail_common_datafusion::streaming::event::{DecodedFlowEventStream, FlowEvent};
 use sail_common_datafusion::streaming::schema::try_from_flow_event_schema;
 
@@ -24,12 +22,6 @@ pub struct StreamCollectorExec {
 impl StreamCollectorExec {
     pub fn try_new(input: Arc<dyn ExecutionPlan>) -> Result<Self> {
         if input.properties().boundedness != Boundedness::Bounded {
-            input.apply(|n| {
-                if n.properties().boundedness != Boundedness::Bounded {
-                    debug!("unbounded child node: {}", n.name());
-                }
-                Ok(TreeNodeRecursion::Continue)
-            })?;
             return plan_err!("stream collector requires bounded input");
         }
         let schema = Arc::new(try_from_flow_event_schema(&input.schema())?);

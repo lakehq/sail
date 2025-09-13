@@ -18,7 +18,7 @@ use sail_logical_plan::streaming::source_adapter::StreamSourceAdapterNode;
 use sail_logical_plan::streaming::source_wrapper::StreamSourceWrapperNode;
 use sail_physical_plan::streaming::collector::StreamCollectorExec;
 use sail_physical_plan::streaming::limit::StreamLimitExec;
-use sail_physical_plan::streaming::source::StreamSourceAdapterExec;
+use sail_physical_plan::streaming::source_adapter::StreamSourceAdapterExec;
 
 use crate::extension::logical::{
     FileWriteNode, MapPartitionsNode, RangeNode, SchemaPivotNode, ShowStringNode,

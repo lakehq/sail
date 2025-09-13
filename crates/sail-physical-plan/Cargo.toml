@@ -12,4 +12,3 @@ sail-common-datafusion = { path = "../sail-common-datafusion" }
 datafusion = { workspace = true }
 datafusion-common = { workspace = true }
 futures = { workspace = true }
-log = { workspace = true }

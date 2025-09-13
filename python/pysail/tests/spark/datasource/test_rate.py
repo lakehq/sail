@@ -27,7 +27,7 @@ def test_rate_basic(spark):
 
 
 def test_rate_with_options(spark):
-    actual = spark.sql("SELECT * FROM t2 LIMIT 2").collect()
+    actual = spark.sql("SELECT * FROM t2 OFFSET 0 LIMIT 2").collect()
 
     assert len(actual) == 2  # noqa: PLR2004
     assert actual[1]["timestamp"] >= actual[0]["timestamp"]
@@ -36,8 +36,8 @@ def test_rate_with_options(spark):
 
 
 def test_rate_with_projection(spark):
-    actual = spark.sql("SELECT value FROM t2 LIMIT 1").collect()
-    assert actual == [(0,)]
+    actual = spark.sql("SELECT value FROM t2 OFFSET 42 LIMIT 1").collect()
+    assert actual == [(42,)]
 
     actual = spark.sql("SELECT value, value, timestamp FROM t2 LIMIT 1").collect()
     assert actual == [(0, 0, actual[0]["timestamp"])]
@@ -53,5 +53,5 @@ def test_rate_with_filtering(spark):
 
 def test_rate_union_all_with_non_streaming_source(spark):
     # This is not working in cluster mode yet since the boundedness for shuffle nodes are not correct in all cases.
-    actual = spark.sql("(SELECT a.value FROM t1 AS a LIMIT 1) UNION ALL (SELECT * FROM VALUES (10), (20))").collect()
+    actual = spark.sql("(SELECT a.value FROM t2 AS a LIMIT 1) UNION ALL (SELECT * FROM VALUES (10), (20))").collect()
     assert sorted(actual) == [(0,), (10,), (20,)]

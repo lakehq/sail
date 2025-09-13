@@ -5738,7 +5738,6 @@ dependencies = [
  "datafusion",
  "datafusion-common",
  "futures",
- "log",
  "sail-common-datafusion",
 ]
 
