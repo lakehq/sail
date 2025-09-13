@@ -49,3 +49,9 @@ def test_rate_with_filtering(spark):
     assert len(actual) == 2  # noqa: PLR2004
     assert actual[0]["value"] > 1
     assert actual[1]["value"] > 1
+
+
+def test_rate_union_all_with_non_streaming_source(spark):
+    # This is not working in cluster mode yet since the boundedness for shuffle nodes are not correct in all cases.
+    actual = spark.sql("(SELECT a.value FROM t1 AS a LIMIT 1) UNION ALL (SELECT * FROM VALUES (10), (20))").collect()
+    assert sorted(actual) == [(0,), (10,), (20,)]

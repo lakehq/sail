@@ -5,7 +5,7 @@ use prost::Message;
 
 use crate::streaming::event::gen;
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub enum FlowMarker {
     LatencyTracker {
         source: String,
@@ -90,5 +90,53 @@ impl FlowMarker {
             Some(gen::flow_marker::Kind::EndOfData(gen::EndOfData {})) => Ok(FlowMarker::EndOfData),
             None => plan_err!("missing marker kind"),
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_encode_decode_latency_tracker() -> Result<()> {
+        let marker = FlowMarker::LatencyTracker {
+            source: "s".to_string(),
+            id: 42,
+            timestamp: Utc::now(),
+        };
+        let encoded = marker.clone().encode()?;
+        let decoded = FlowMarker::decode(&encoded)?;
+        assert_eq!(marker, decoded);
+        Ok(())
+    }
+
+    #[test]
+    fn test_encode_decode_watermark() -> Result<()> {
+        let marker = FlowMarker::Watermark {
+            source: "s".to_string(),
+            timestamp: Utc::now(),
+        };
+        let encoded = marker.clone().encode()?;
+        let decoded = FlowMarker::decode(&encoded)?;
+        assert_eq!(marker, decoded);
+        Ok(())
+    }
+
+    #[test]
+    fn test_encode_decode_checkpoint() -> Result<()> {
+        let marker = FlowMarker::Checkpoint { id: 42 };
+        let encoded = marker.clone().encode()?;
+        let decoded = FlowMarker::decode(&encoded)?;
+        assert_eq!(marker, decoded);
+        Ok(())
+    }
+
+    #[test]
+    fn test_encode_decode_end_of_data() -> Result<()> {
+        let marker = FlowMarker::EndOfData;
+        let encoded = marker.clone().encode()?;
+        let decoded = FlowMarker::decode(&encoded)?;
+        assert_eq!(marker, decoded);
+        Ok(())
     }
 }
