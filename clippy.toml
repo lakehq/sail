@@ -15,6 +15,7 @@ disallowed-types = [
     { path = "datafusion_expr::logical_plan::DescribeTable" },
     { path = "datafusion_expr::logical_plan::DmlStatement" },
     { path = "datafusion_expr::logical_plan::Statement" },
+    { path = "datafusion_expr::logical_plan::dml::CopyTo" },
 ]
 disallowed-methods = [
     { path = "datafusion::execution::context::SessionContext::catalog" },

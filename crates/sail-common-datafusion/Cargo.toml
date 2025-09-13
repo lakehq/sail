@@ -20,5 +20,10 @@ futures = { workspace = true }
 serde = { workspace = true }
 pyo3 = { workspace = true }
 async-trait = { workspace = true }
-
+prost = { workspace = true }
+tonic = { workspace = true }
+pin-project-lite = { workspace = true }
 deltalake = { workspace = true }
+
+[build-dependencies]
+tonic-build = { workspace = true }

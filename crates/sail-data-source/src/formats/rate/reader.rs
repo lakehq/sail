@@ -6,26 +6,29 @@ use std::time::Duration;
 use async_trait::async_trait;
 use datafusion::arrow::array::{ArrayRef, Int64Array, RecordBatch, TimestampMicrosecondArray};
 use datafusion::arrow::datatypes::{DataType, Schema, SchemaRef, TimeUnit};
-use datafusion::catalog::{Session, TableProvider};
-use datafusion::datasource::TableType;
+use datafusion::catalog::Session;
 use datafusion::execution::{SendableRecordBatchStream, TaskContext};
 use datafusion::logical_expr::Expr;
 use datafusion::physical_expr::{EquivalenceProperties, Partitioning};
 use datafusion::physical_plan::execution_plan::{Boundedness, EmissionType};
-use datafusion::physical_plan::stream::RecordBatchStreamAdapter;
 use datafusion::physical_plan::{DisplayAs, ExecutionPlan, PlanProperties};
 use datafusion_common::{arrow_datafusion_err, plan_err, DataFusionError, Result};
-use futures::Stream;
+use futures::{Stream, StreamExt};
+use sail_common_datafusion::streaming::event::{
+    EncodedFlowEventStream, FlowEvent, FlowEventStreamAdapter,
+};
+use sail_common_datafusion::streaming::schema::to_flow_event_schema;
+use sail_common_datafusion::streaming::source::StreamSource;
 
 use crate::formats::rate::options::TableRateOptions;
 
 #[derive(Debug, Clone)]
-pub struct RateTableProvider {
+pub struct RateStreamSource {
     options: TableRateOptions,
     schema: SchemaRef,
 }
 
-impl RateTableProvider {
+impl RateStreamSource {
     pub fn try_new(options: TableRateOptions, schema: SchemaRef) -> Result<Self> {
         Self::validate_schema(&schema)?;
         Ok(Self { options, schema })
@@ -53,17 +56,9 @@ impl RateTableProvider {
 }
 
 #[async_trait]
-impl TableProvider for RateTableProvider {
-    fn as_any(&self) -> &dyn Any {
-        self
-    }
-
+impl StreamSource for RateStreamSource {
     fn schema(&self) -> SchemaRef {
         Arc::clone(&self.schema)
-    }
-
-    fn table_type(&self) -> TableType {
-        TableType::Base
     }
 
     async fn scan(
@@ -89,6 +84,7 @@ pub struct RateSourceExec {
     options: TableRateOptions,
     time_zone: Arc<str>,
     original_schema: SchemaRef,
+    projected_schema: SchemaRef,
     projection: Vec<usize>,
     properties: PlanProperties,
 }
@@ -103,8 +99,9 @@ impl RateSourceExec {
     ) -> Result<Self> {
         let time_zone = Self::infer_time_zone(&schema)?;
         let projected_schema = Arc::new(schema.project(&projection)?);
+        let output_schema = Arc::new(to_flow_event_schema(&projected_schema));
         let properties = PlanProperties::new(
-            EquivalenceProperties::new(projected_schema),
+            EquivalenceProperties::new(output_schema),
             Partitioning::UnknownPartitioning(options.num_partitions),
             EmissionType::Both,
             Boundedness::Unbounded {
@@ -115,6 +112,7 @@ impl RateSourceExec {
             options,
             time_zone,
             original_schema: schema,
+            projected_schema,
             projection,
             properties,
         })
@@ -225,7 +223,7 @@ impl ExecutionPlan for RateSourceExec {
                 let generator = BatchGenerator::try_new(
                     Arc::clone(&self.time_zone),
                     &self.projection,
-                    self.schema(),
+                    self.projected_schema.clone(),
                 )?;
                 let output = futures::stream::unfold(generator, move |mut generator| async move {
                     // The interval does not take into account the time it takes to generate data,
@@ -236,10 +234,12 @@ impl ExecutionPlan for RateSourceExec {
                 });
                 Box::pin(output)
             };
-        Ok(Box::pin(RecordBatchStreamAdapter::new(
-            self.schema(),
+        let output = output.map(|x| Ok(FlowEvent::append_only_data(x?)));
+        let stream = Box::pin(FlowEventStreamAdapter::new(
+            self.projected_schema.clone(),
             output,
-        )))
+        ));
+        Ok(Box::pin(EncodedFlowEventStream::new(stream)))
     }
 }
 

@@ -9,7 +9,7 @@ use datafusion::physical_expr::{EquivalenceProperties, Partitioning};
 use datafusion::physical_plan::execution_plan::{Boundedness, EmissionType};
 use datafusion::physical_plan::stream::RecordBatchStreamAdapter;
 use datafusion::physical_plan::{DisplayAs, ExecutionPlan, PlanProperties};
-use datafusion_common::plan_err;
+use datafusion_common::{plan_err, Result};
 use futures::StreamExt;
 
 #[derive(Debug)]
@@ -67,7 +67,7 @@ impl ExecutionPlan for ConsoleSinkExec {
     fn with_new_children(
         self: Arc<Self>,
         mut children: Vec<Arc<dyn ExecutionPlan>>,
-    ) -> datafusion_common::Result<Arc<dyn ExecutionPlan>> {
+    ) -> Result<Arc<dyn ExecutionPlan>> {
         match (children.pop(), children.is_empty()) {
             (Some(child), true) => Ok(Arc::new(ConsoleSinkExec::new(child))),
             _ => plan_err!("{} should have exactly one child", self.name()),
@@ -78,7 +78,7 @@ impl ExecutionPlan for ConsoleSinkExec {
         &self,
         partition: usize,
         context: Arc<TaskContext>,
-    ) -> datafusion_common::Result<SendableRecordBatchStream> {
+    ) -> Result<SendableRecordBatchStream> {
         let stream = self.input.execute(partition, context)?;
         let output = futures::stream::once(async move {
             stream

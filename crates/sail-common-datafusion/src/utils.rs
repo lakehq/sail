@@ -12,7 +12,8 @@ use datafusion::physical_expr::PhysicalExpr;
 use datafusion::physical_plan::projection::ProjectionExec;
 use datafusion::physical_plan::stream::RecordBatchStreamAdapter;
 use datafusion::physical_plan::ExecutionPlan;
-use datafusion_common::{exec_err, plan_err, Result};
+use datafusion_common::tree_node::{Transformed, TransformedResult, TreeNode};
+use datafusion_common::{exec_err, plan_datafusion_err, plan_err, Result};
 use datafusion_expr::{Expr, LogicalPlan, Projection};
 use futures::StreamExt;
 
@@ -129,6 +130,22 @@ pub fn rename_physical_plan(
     Ok(Arc::new(ProjectionExec::try_new(expr, plan)?))
 }
 
+pub fn rename_projected_physical_plan(
+    plan: Arc<dyn ExecutionPlan>,
+    names: &[String],
+    projection: Option<&Vec<usize>>,
+) -> Result<Arc<dyn ExecutionPlan>> {
+    if let Some(projection) = projection {
+        let names = projection
+            .iter()
+            .map(|i| names[*i].clone())
+            .collect::<Vec<_>>();
+        rename_physical_plan(plan, &names)
+    } else {
+        rename_physical_plan(plan, names)
+    }
+}
+
 pub fn rename_record_batch_stream(
     stream: SendableRecordBatchStream,
     names: &[String],
@@ -142,4 +159,34 @@ pub fn rename_record_batch_stream(
         })
     };
     Ok(Box::pin(RecordBatchStreamAdapter::new(schema, stream)))
+}
+
+pub fn expression_before_rename(
+    expr: &Expr,
+    names: &[String],
+    schema_before_rename: &SchemaRef,
+    remove_qualifier: bool,
+) -> Result<Expr> {
+    let rewrite = |e: Expr| -> Result<Transformed<Expr>> {
+        if let Expr::Column(datafusion_common::Column {
+            name,
+            relation,
+            spans,
+        }) = e
+        {
+            let index = names
+                .iter()
+                .position(|n| n == &name)
+                .ok_or_else(|| plan_datafusion_err!("column {name} not found"))?;
+            let name = schema_before_rename.field(index).name().to_string();
+            Ok(Transformed::yes(Expr::Column(datafusion_common::Column {
+                name,
+                relation: if remove_qualifier { None } else { relation },
+                spans,
+            })))
+        } else {
+            Ok(Transformed::no(e))
+        }
+    };
+    expr.clone().transform(rewrite).data()
 }

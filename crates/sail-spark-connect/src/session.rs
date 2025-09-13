@@ -198,6 +198,11 @@ impl SparkSession {
         info: Vec<StringifiedPlan>,
         stream: SendableRecordBatchStream,
     ) -> SparkResult<StreamingQueryId> {
+        if !stream.schema().fields().is_empty() {
+            return Err(SparkError::invalid(
+                "streaming query must write data to a sink",
+            ));
+        }
         // Here we always generate new query ID and run ID regardless of whether the query
         // is started from a checkpoint. This may be different from the Spark behavior.
         let id = StreamingQueryId {

@@ -262,6 +262,10 @@ impl ShowStringNode {
         })
     }
 
+    pub fn input(&self) -> &Arc<LogicalPlan> {
+        &self.input
+    }
+
     pub fn names(&self) -> &[String] {
         &self.names
     }

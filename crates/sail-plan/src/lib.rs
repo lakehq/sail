@@ -16,6 +16,7 @@ use crate::error::PlanResult;
 use crate::extension::logical::WithPreconditionsNode;
 use crate::resolver::plan::NamedPlan;
 use crate::resolver::PlanResolver;
+use crate::streaming::rewriter::{is_streaming_plan, rewrite_streaming_plan};
 
 pub mod config;
 pub mod error;
@@ -24,6 +25,7 @@ pub mod formatter;
 pub mod function;
 pub mod literal;
 pub mod resolver;
+mod streaming;
 mod utils;
 
 /// Executes a logical plan.
@@ -62,9 +64,20 @@ pub async fn resolve_and_execute_plan(
     let NamedPlan { plan, fields } = resolver.resolve_named_plan(plan).await?;
     info.push(plan.to_stringified(PlanType::InitialLogicalPlan));
     let df = execute_logical_plan(ctx, plan).await?;
-    let plan = df.create_physical_plan().await?;
+    let (session_state, plan) = df.into_parts();
+    let plan = session_state.optimize(&plan)?;
+    let plan = if is_streaming_plan(&plan)? {
+        rewrite_streaming_plan(plan)?
+    } else {
+        plan
+    };
+    info.push(plan.to_stringified(PlanType::FinalLogicalPlan));
+    let plan = session_state
+        .query_planner()
+        .create_physical_plan(&plan, &session_state)
+        .await?;
     let plan = if let Some(fields) = fields {
-        rename_physical_plan(plan, fields.as_slice())?
+        rename_physical_plan(plan, &fields)?
     } else {
         plan
     };
