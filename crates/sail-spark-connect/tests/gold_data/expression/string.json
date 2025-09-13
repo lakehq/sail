@@ -85,7 +85,7 @@
         "success": {
           "literal": {
             "utf8": {
-              "value": "Z"
+              "value": "\u001a"
             }
           }
         }
@@ -181,7 +181,7 @@
         "success": {
           "literal": {
             "utf8": {
-              "value": "no-pattern%"
+              "value": "no-pattern\\%"
             }
           }
         }
@@ -217,7 +217,7 @@
         "success": {
           "literal": {
             "utf8": {
-              "value": "pattern\\%"
+              "value": "pattern\\\\%"
             }
           }
         }
