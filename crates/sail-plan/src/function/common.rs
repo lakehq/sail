@@ -3,7 +3,7 @@ use std::sync::Arc;
 use datafusion::arrow::datatypes::DataType;
 use datafusion::prelude::SessionContext;
 use datafusion::sql::sqlparser::ast::NullTreatment;
-use datafusion_common::DFSchemaRef;
+use datafusion_common::{DFSchemaRef, ScalarValue};
 use datafusion_expr::expr::{AggregateFunction, AggregateFunctionParams, WindowFunctionParams};
 use datafusion_expr::{
     cast, expr, AggregateUDF, BinaryExpr, ExprSchemable, Operator, ScalarUDF, ScalarUDFImpl,
@@ -325,5 +325,41 @@ pub(crate) fn get_null_treatment(ignore_nulls: Option<bool>) -> Option<NullTreat
         Some(true) => Some(NullTreatment::IgnoreNulls),
         Some(false) => Some(NullTreatment::RespectNulls),
         None => None,
+    }
+}
+
+pub(crate) fn get_arguments_and_null_treatment(
+    args: Vec<expr::Expr>,
+    ignore_nulls: Option<bool>,
+) -> PlanResult<(Vec<expr::Expr>, Option<NullTreatment>)> {
+    if args.len() == 1 {
+        let expr = args.one()?;
+        Ok((vec![expr], get_null_treatment(ignore_nulls)))
+    } else if args.len() == 2 {
+        if ignore_nulls.is_some() {
+            return Err(PlanError::invalid(
+                "first/last value arguments conflict with IGNORE NULLS clause",
+            ));
+        }
+        let (expr, ignore_nulls) = args.two()?;
+        let null_treatment = match ignore_nulls {
+            expr::Expr::Literal(ScalarValue::Boolean(Some(ignore_nulls)), _metadata) => {
+                if ignore_nulls {
+                    Some(NullTreatment::IgnoreNulls)
+                } else {
+                    Some(NullTreatment::RespectNulls)
+                }
+            }
+            _ => {
+                return Err(PlanError::invalid(
+                    "first/last value requires a boolean literal as the second argument",
+                ))
+            }
+        };
+        Ok((vec![expr], null_treatment))
+    } else {
+        Err(PlanError::invalid(
+            "first/last value requires 1 or 2 arguments",
+        ))
     }
 }
