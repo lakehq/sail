@@ -3471,7 +3471,7 @@
         }
       },
       "output": {
-        "failure": "not implemented: function: to_char"
+        "success": "ok"
       }
     },
     {
@@ -3493,7 +3493,7 @@
         }
       },
       "output": {
-        "failure": "not implemented: function: to_char"
+        "success": "ok"
       }
     },
     {
@@ -3515,7 +3515,7 @@
         }
       },
       "output": {
-        "failure": "not implemented: function: to_char"
+        "success": "ok"
       }
     },
     {
@@ -3537,7 +3537,7 @@
         }
       },
       "output": {
-        "failure": "not implemented: function: to_char"
+        "success": "ok"
       }
     },
     {
@@ -3559,7 +3559,7 @@
         }
       },
       "output": {
-        "failure": "not implemented: function: to_char"
+        "success": "ok"
       }
     },
     {
