@@ -300,7 +300,7 @@ SELECT -0.4321 AS col;
 |-0.4321 |
 +--------+
 
-SELECT 250. BD AS col;
+SELECT 250.BD AS col;
 +-----+
 | col |
 +-----+
