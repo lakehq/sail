@@ -1,10 +1,11 @@
+use crate::extension::function::string::format_tokens::{tokenize_format, FormatToken};
 use arrow::datatypes::DataType;
+use chrono::NaiveDate;
 use datafusion_common::{exec_err, not_impl_err, Result, ScalarValue};
 use datafusion_expr::{ScalarFunctionArgs, ScalarUDFImpl};
 use datafusion_expr_common::columnar_value::ColumnarValue;
 use datafusion_expr_common::signature::{Signature, Volatility};
 use std::any::Any;
-use crate::extension::function::string::format_tokens::{tokenize_format, FormatToken};
 
 #[derive(Debug)]
 pub struct SparkToChar {
@@ -191,17 +192,46 @@ fn format_number(value: f64, tokens: &[FormatToken]) -> String {
     out
 }
 
+/// Format date using chrono crate
+fn format_date(date: NaiveDate, fmt: &str) -> Result<String> {
+    // Map simple Spark-style patterns to chrono patterns
+    let chrono_fmt = fmt
+        .replace("y", "%Y")
+        .replace("M", "%m")
+        .replace("d", "%d");
+
+    Ok(date.format(&chrono_fmt).to_string())
+}
+
 fn format_scalar_value(value: &ScalarValue, fmt: &str) -> Result<String> {
     let tokens = tokenize_format(fmt)?;
 
-    let number = match value {
-        ScalarValue::Int64(Some(v)) => *v as f64,
-        ScalarValue::Float64(Some(v)) => *v,
-        ScalarValue::Decimal128(Some(v), _, _) => *v as f64,
-        _ => return not_impl_err!("Unsupported type in to_char"),
-    };
+     match value {
+        ScalarValue::Int64(Some(v)) => {
+            let tokens = tokenize_format(fmt)?;
+            Ok(format_number(*v as f64, &tokens))
+        },
+        ScalarValue::Float64(Some(v)) => {
+            let tokens = tokenize_format(fmt)?;
+            Ok(format_number(*v, &tokens))
+        },
+        ScalarValue::Decimal128(Some(v), _, _) => {
+            let tokens = tokenize_format(fmt)?;
+            Ok(format_number(*v as f64, &tokens))
+        },
 
-    Ok(format_number(number, &tokens))
+        // ----------------------
+        // Date type (Date32)
+        // ----------------------
+        ScalarValue::Date32(Some(days)) => {
+            if let Some(date) = NaiveDate::from_num_days_from_ce_opt(*days) {
+                format_date(date, fmt)
+            } else {
+                return exec_err!("Invalid Date32 value: {}", days);
+            }
+        }
+         _ => return not_impl_err!("Unsupported type in to_char")
+    }
 }
 impl ScalarUDFImpl for SparkToChar {
     fn as_any(&self) -> &dyn Any {
