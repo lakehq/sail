@@ -25,6 +25,9 @@ pub(crate) fn from_ast_number_literal(value: NumberLiteral) -> SqlResult<spec::E
         Some(NumberSuffix::Bd) => {
             parse_decimal_128_string(&value).or_else(|_| parse_decimal_256_string(&value))?
         }
+        Some(NumberSuffix::E) => parse_f64_string(&value)
+            .or_else(|_| parse_decimal_128_string(&value))
+            .or_else(|_| parse_decimal_256_string(&value))?,
         None => parse_i32_string(&value)
             .or_else(|_| parse_i64_string(&value))
             .or_else(|_| parse_decimal_128_string(&value))

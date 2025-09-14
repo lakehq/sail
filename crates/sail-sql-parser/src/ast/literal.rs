@@ -27,6 +27,7 @@ pub enum NumberSuffix {
     F,
     D,
     Bd,
+    E,
 }
 
 impl NumberSuffix {
@@ -38,6 +39,7 @@ impl NumberSuffix {
             NumberSuffix::F => "F",
             NumberSuffix::D => "D",
             NumberSuffix::Bd => "BD",
+            NumberSuffix::E => "E",
         }
     }
 }
@@ -141,9 +143,8 @@ impl NumberState {
 
     fn finalize(self) -> Option<(String, Option<NumberSuffix>)> {
         match self {
-            NumberState::WholeNumber(x)
-            | NumberState::DecimalNumber(x)
-            | NumberState::Exponent(x) => Some((x, None)),
+            NumberState::WholeNumber(x) | NumberState::DecimalNumber(x) => Some((x, None)),
+            NumberState::Exponent(x) => Some((x, Some(NumberSuffix::E))),
             NumberState::SuffixY(x) => Some((x, Some(NumberSuffix::Y))),
             NumberState::SuffixS(x) => Some((x, Some(NumberSuffix::S))),
             NumberState::SuffixL(x) => Some((x, Some(NumberSuffix::L))),
