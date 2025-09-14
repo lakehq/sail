@@ -396,6 +396,8 @@ TIMESTAMP { 'yyyy' |
   - +|-hhmmss
 - Region-based zone IDs in the form area/city, such as Europe/Paris
 
+Note: defaults to the session local timezone (set via `spark.sql.session.timeZone`) if `zone_id` is not specified.
+
 **Timestamp Examples**
 
 ```sql
