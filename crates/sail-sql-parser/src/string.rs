@@ -120,9 +120,6 @@ where
         just("\\n").map(|_| Char::One('\n')),
         just("\\r").map(|_| Char::One('\r')),
         just("\\t").map(|_| Char::One('\t')),
-        just("\\Z").map(|_| Char::One('\x1a')),
-        just("\\%").map(|_| Char::Two('\\', '%')),
-        just("\\_").map(|_| Char::Two('\\', '_')),
         just('\\')
             .ignore_then(octal().repeated().at_least(1).at_most(3).to_slice())
             .map_with(|s, e| Char::from_str::<8>(s, e.slice())),
@@ -271,6 +268,7 @@ where
 
 enum Char<'a> {
     One(char),
+    #[allow(unused)]
     Two(char, char),
     Invalid(&'a str),
 }
