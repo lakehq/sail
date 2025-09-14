@@ -316,7 +316,7 @@ SELECT 250.BD AS col;
 |250  |
 +-----+
 
-SELECT 6.9 D AS col;
+SELECT 6.9D AS col;
 +-----+
 | col |
 +-----+
@@ -330,7 +330,7 @@ SELECT -18BD AS col;
 |-18 |
 +----+
 
-SELECT .789E3 F AS col;
+SELECT .789E3F AS col;
 +------+
 | col  |
 +------+
