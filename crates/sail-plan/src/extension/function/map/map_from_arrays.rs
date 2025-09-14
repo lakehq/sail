@@ -62,7 +62,6 @@ impl ScalarUDFImpl for MapFromArrays {
 
 fn map_from_arrays_inner(args: &[ArrayRef]) -> Result<ArrayRef> {
     let [keys, values] = take_function_args("map_from_arrays", args)?;
-    println!("{:?}\n{:?}", keys, values);
 
     if matches!(keys.data_type(), DataType::Null) || matches!(values.data_type(), DataType::Null) {
         return Ok(cast(

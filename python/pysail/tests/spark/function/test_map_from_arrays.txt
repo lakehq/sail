@@ -24,7 +24,7 @@
 
 >>> spark.sql("select map_from_arrays(NULL, NULL) as result, typeof(map_from_arrays(NULL, NULL)) as type").show(truncate=False)
 +------+--------------+
-|result|          type|
+|result|type          |
 +------+--------------+
-|  NULL|map<void,void>|
+|NULL  |map<void,void>|
 +------+--------------+
