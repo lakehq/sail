@@ -460,24 +460,24 @@ Supported year-month interval literals and their formats:
 
 | Qualifier     | String Pattern      | Example                             |
 | ------------- | ------------------- | ----------------------------------- |
-| YEAR          | `[\+\-]'[\+\-]y'`   | `INTERVAL -'1999' YEAR`             |
-| YEAR TO MONTH | `[\+\-]'[\+\-]y-m'` | `INTERVAL '-1999-11' YEAR TO MONTH` |
-| MONTH         | `[\+\-]'[\+\-]m'`   | `INTERVAL '24' MONTH`               |
+| YEAR          | `[+|-]'[+|-]y'`   | `INTERVAL -'1999' YEAR`             |
+| YEAR TO MONTH | `[+|-]'[+|-]y-m'` | `INTERVAL '-1999-11' YEAR TO MONTH` |
+| MONTH         | `[+|-]'[+|-]m'`   | `INTERVAL '24' MONTH`               |
 
 Supported day-time interval formats:
 
 | Qualifier        | String Pattern            | Example                                        |
 | ---------------- | ------------------------- | ---------------------------------------------- |
-| DAY              | `[\+\-]'[\+\-]d'`         | `INTERVAL '365' DAY`                           |
-| DAY TO HOUR      | `[\+\-]'[\+\-]d h'`       | `INTERVAL '10 05' DAY TO HOUR`                 |
-| DAY TO MINUTE    | `[\+\-]'[\+\-]d h:m'`     | `INTERVAL '100 10:30' DAY TO MINUTE`           |
-| DAY TO SECOND    | `[\+\-]'[\+\-]d h:m:s.n'` | `INTERVAL '100 10:30:40.999999' DAY TO SECOND` |
-| HOUR             | `[\+\-]'[\+\-]h'`         | `INTERVAL '123' HOUR`                          |
-| HOUR TO MINUTE   | `[\+\-]'[\+\-]h:m'`       | `INTERVAL '-15:45' HOUR TO MINUTE`             |
-| HOUR TO SECOND   | `[\+\-]'[\+\-]h:m:s.n'`   | `INTERVAL '123:10:59' HOUR TO SECOND`          |
-| MINUTE           | `[\+\-]'[\+\-]m'`         | `INTERVAL '5000' MINUTE`                       |
-| MINUTE TO SECOND | `[\+\-]'[\+\-]m:s.n'`     | `INTERVAL '2000:02.002' MINUTE TO SECOND`      |
-| SECOND           | `[\+\-]'[\+\-]s.n'`       | `INTERVAL '2000.000002' SECOND`                |
+| DAY              | `[+|-]'[+|-]d'`         | `INTERVAL '365' DAY`                           |
+| DAY TO HOUR      | `[+|-]'[+|-]d h'`       | `INTERVAL '10 05' DAY TO HOUR`                 |
+| DAY TO MINUTE    | `[+|-]'[+|-]d h:m'`     | `INTERVAL '100 10:30' DAY TO MINUTE`           |
+| DAY TO SECOND    | `[+|-]'[+|-]d h:m:s.n'` | `INTERVAL '100 10:30:40.999999' DAY TO SECOND` |
+| HOUR             | `[+|-]'[+|-]h'`         | `INTERVAL '123' HOUR`                          |
+| HOUR TO MINUTE   | `[+|-]'[+|-]h:m'`       | `INTERVAL '-15:45' HOUR TO MINUTE`             |
+| HOUR TO SECOND   | `[+|-]'[+|-]h:m:s.n'`   | `INTERVAL '123:10:59' HOUR TO SECOND`          |
+| MINUTE           | `[+|-]'[+|-]m'`         | `INTERVAL '5000' MINUTE`                       |
+| MINUTE TO SECOND | `[+|-]'[+|-]m:s.n'`     | `INTERVAL '2000:02.002' MINUTE TO SECOND`      |
+| SECOND           | `[+|-]'[+|-]s.n'`       | `INTERVAL '2000.000002' SECOND`                |
 
 **ANSI Examples**
 
