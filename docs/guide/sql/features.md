@@ -404,7 +404,7 @@ TIMESTAMP { 'yyyy' |
   - +|-hhmmss
 - Region-based zone IDs in the form area/city, such as Europe/Paris
 
-Note: defaults to the session local timezone (set via `spark.sql.session.timeZone`) if `zone_id` is not specified.
+**Note**: defaults to the session local timezone (set via `spark.sql.session.timeZone`) if `zone_id` is not specified.
 
 **Timestamp Examples**
 
@@ -538,37 +538,38 @@ INTERVAL 'interval_value interval_unit [ interval_value interval_unit ... ]' |
   Mix of the YEAR[S] or MONTH[S] interval units with other units is not allowed.
   ```
 
+**Note**: Although Sail supports `YEAR[S]` and `MONTH[S]` interval units in multi-unit syntax, the Spark client is unable to convert these from Arrow when invoking `.collect` or `.toPandas`.
+
 **Multi-units Examples**
 
 ```sql
-SELECT INTERVAL 2 YEAR AS col;
-+-------+
-|    col|
-+-------+
-|2 years|
-+-------+
+SELECT INTERVAL 3 WEEK AS col;
++-----------------+
+|col              |
++-----------------+
+|INTERVAL '21' DAY|
++-----------------+
 
-SELECT INTERVAL -2 HOUR '3' MINUTE AS col;
-+--------------------+
-|                 col|
-+--------------------+
-|-1 hours -57 minutes|
-+--------------------+
+SELECT INTERVAL -2 WEEKS '3' DAYS AS col;
++------------------+
+|col               |
++------------------+
+|INTERVAL '-11' DAY|
++------------------+
 
-SELECT INTERVAL '1 YEAR 3 DAYS 6 HOURS';
-+----------------------+
-|                   col|
-+----------------------+
-|1 years 3 days 6 hours|
-+----------------------+
+SELECT INTERVAL '3 DAYS 50 SECONDS' AS col;
++-----------------------------------+
+|col                                |
++-----------------------------------+
+|INTERVAL '3 00:00:50' DAY TO SECOND|
++-----------------------------------+
 
-SELECT INTERVAL 1 YEARS 3 MONTH 3 WEEK 4 DAYS 7 HOUR 8 MINUTES 9 SECOND 8
-  MILLISECOND 9 MICROSECONDS AS col;
-+-----------------------------------------------------------+
-|                                                        col|
-+-----------------------------------------------------------+
-|1 years 3 months 25 days 7 hours 8 minutes 9.008009 seconds|
-+-----------------------------------------------------------+
+SELECT INTERVAL 3 WEEK 4 DAYS 5 HOUR 6 MINUTES 7 SECOND 8 MILLISECOND 9 MICROSECONDS AS col;
++-------------------------------------------+
+|col                                        |
++-------------------------------------------+
+|INTERVAL '25 05:06:07.008009' DAY TO SECOND|
++-------------------------------------------+
 ```
 
 ## Data Types
