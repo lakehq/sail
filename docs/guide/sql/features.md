@@ -171,7 +171,7 @@ Numeric literals express fixed-point or floating-point numbers. There are two ki
 **Integral Literal Syntax**
 
 ```sql
-[ + | - ] digits [ ... ] [ L | S | Y ]
+[ + | - ] digit [ ... ] [ L | S | Y ]
 ```
 
 - **digit**
