@@ -1,3 +1,8 @@
+//! Utilities for working with the schema of encoded flow event streams.
+//! A flow event stream can contain both data or markers, and the flow event stream
+//! can be encoded as a stream of Arrow record batches with additional fields
+//! that carry the information about the marker and data retraction.
+
 use datafusion::arrow::datatypes::{DataType, Field, Schema};
 use datafusion_common::{plan_err, Result};
 

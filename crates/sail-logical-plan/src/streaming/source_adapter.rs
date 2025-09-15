@@ -5,7 +5,7 @@ use std::sync::Arc;
 use datafusion::logical_expr::LogicalPlan;
 use datafusion_common::{plan_err, DFSchema, DFSchemaRef, Result};
 use datafusion_expr::{Expr, UserDefinedLogicalNodeCore};
-use sail_common_datafusion::streaming::schema::to_flow_event_schema;
+use sail_common_datafusion::streaming::event::schema::to_flow_event_schema;
 
 #[derive(Clone, Debug, Eq, PartialEq, Hash)]
 pub struct StreamSourceAdapterNode {

@@ -6,7 +6,7 @@ use std::sync::Arc;
 use datafusion::logical_expr::LogicalPlan;
 use datafusion_common::{plan_err, DFSchema, DFSchemaRef, Result, TableReference};
 use datafusion_expr::{Expr, UserDefinedLogicalNodeCore};
-use sail_common_datafusion::streaming::schema::to_flow_event_schema;
+use sail_common_datafusion::streaming::event::schema::to_flow_event_schema;
 use sail_common_datafusion::streaming::source::StreamSource;
 use sail_common_datafusion::utils::{expression_before_rename, rename_schema};
 
@@ -77,8 +77,8 @@ impl StreamSourceWrapperNode {
         fetch: Option<usize>,
     ) -> Result<Self> {
         let schema = match &names {
-            Some(names) => rename_schema(&source.schema(), names)?,
-            None => source.schema(),
+            Some(names) => rename_schema(&source.data_schema(), names)?,
+            None => source.data_schema(),
         };
         let schema = match &projection {
             Some(projection) => Arc::new(schema.project(projection)?),
@@ -88,7 +88,7 @@ impl StreamSourceWrapperNode {
             DFSchema::try_from_qualified_schema(table_name, &to_flow_event_schema(&schema))?;
         let filters = match &names {
             Some(names) => {
-                let source_schema = source.schema();
+                let source_schema = source.data_schema();
                 filters
                     .iter()
                     .map(|e| expression_before_rename(e, names, &source_schema, true))

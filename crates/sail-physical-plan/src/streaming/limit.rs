@@ -11,11 +11,14 @@ use datafusion::physical_plan::{
 use datafusion_common::arrow::datatypes::SchemaRef;
 use datafusion_common::{internal_err, plan_err, Result, Statistics};
 use futures::StreamExt;
-use sail_common_datafusion::streaming::event::{
-    DecodedFlowEventStream, EncodedFlowEventStream, FlowEvent, FlowEventStreamAdapter,
-    SendableFlowEventStream,
+use sail_common_datafusion::streaming::event::encoding::{
+    DecodedFlowEventStream, EncodedFlowEventStream,
 };
-use sail_common_datafusion::streaming::schema::try_from_flow_event_schema;
+use sail_common_datafusion::streaming::event::schema::try_from_flow_event_schema;
+use sail_common_datafusion::streaming::event::stream::{
+    FlowEventStreamAdapter, SendableFlowEventStream,
+};
+use sail_common_datafusion::streaming::event::FlowEvent;
 
 #[derive(Debug)]
 pub struct StreamLimitExec {

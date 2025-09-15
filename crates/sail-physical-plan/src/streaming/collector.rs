@@ -10,8 +10,9 @@ use datafusion::physical_plan::{
 };
 use datafusion_common::{internal_err, plan_err, Result};
 use futures::StreamExt;
-use sail_common_datafusion::streaming::event::{DecodedFlowEventStream, FlowEvent};
-use sail_common_datafusion::streaming::schema::try_from_flow_event_schema;
+use sail_common_datafusion::streaming::event::encoding::DecodedFlowEventStream;
+use sail_common_datafusion::streaming::event::schema::try_from_flow_event_schema;
+use sail_common_datafusion::streaming::event::FlowEvent;
 
 #[derive(Debug)]
 pub struct StreamCollectorExec {

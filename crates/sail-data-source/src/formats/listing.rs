@@ -17,7 +17,7 @@ use datafusion_datasource::file_compression_type::FileCompressionType;
 use sail_common_datafusion::datasource::{
     get_partition_columns_and_file_schema, SinkInfo, SourceInfo, TableFormat,
 };
-use sail_common_datafusion::streaming::schema::is_flow_event_schema;
+use sail_common_datafusion::streaming::event::schema::is_flow_event_schema;
 
 use crate::utils::split_parquet_compression_string;
 

@@ -8,10 +8,11 @@ use datafusion::physical_plan::{
 };
 use datafusion_common::{plan_err, Result};
 use futures::{stream, StreamExt};
-use sail_common_datafusion::streaming::event::{
-    EncodedFlowEventStream, FlowEvent, FlowEventStreamAdapter, FlowMarker,
-};
-use sail_common_datafusion::streaming::schema::to_flow_event_schema;
+use sail_common_datafusion::streaming::event::encoding::EncodedFlowEventStream;
+use sail_common_datafusion::streaming::event::marker::FlowMarker;
+use sail_common_datafusion::streaming::event::schema::to_flow_event_schema;
+use sail_common_datafusion::streaming::event::stream::FlowEventStreamAdapter;
+use sail_common_datafusion::streaming::event::FlowEvent;
 
 #[derive(Debug)]
 pub struct StreamSourceAdapterExec {

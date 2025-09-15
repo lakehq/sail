@@ -14,10 +14,10 @@ use datafusion::physical_plan::execution_plan::{Boundedness, EmissionType};
 use datafusion::physical_plan::{DisplayAs, ExecutionPlan, PlanProperties};
 use datafusion_common::{arrow_datafusion_err, plan_err, DataFusionError, Result};
 use futures::{Stream, StreamExt};
-use sail_common_datafusion::streaming::event::{
-    EncodedFlowEventStream, FlowEvent, FlowEventStreamAdapter,
-};
-use sail_common_datafusion::streaming::schema::to_flow_event_schema;
+use sail_common_datafusion::streaming::event::encoding::EncodedFlowEventStream;
+use sail_common_datafusion::streaming::event::schema::to_flow_event_schema;
+use sail_common_datafusion::streaming::event::stream::FlowEventStreamAdapter;
+use sail_common_datafusion::streaming::event::FlowEvent;
 use sail_common_datafusion::streaming::source::StreamSource;
 
 use crate::formats::rate::options::TableRateOptions;
@@ -57,7 +57,7 @@ impl RateStreamSource {
 
 #[async_trait]
 impl StreamSource for RateStreamSource {
-    fn schema(&self) -> SchemaRef {
+    fn data_schema(&self) -> SchemaRef {
         Arc::clone(&self.schema)
     }
 

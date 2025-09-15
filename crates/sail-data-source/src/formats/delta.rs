@@ -8,7 +8,7 @@ use datafusion::datasource::listing::ListingTableUrl;
 use datafusion::execution::SessionStateBuilder;
 use datafusion::physical_plan::ExecutionPlan;
 use sail_common_datafusion::datasource::{PhysicalSinkMode, SinkInfo, SourceInfo, TableFormat};
-use sail_common_datafusion::streaming::schema::is_flow_event_schema;
+use sail_common_datafusion::streaming::event::schema::is_flow_event_schema;
 use sail_delta_lake::create_delta_provider;
 use sail_delta_lake::delta_datafusion::{parse_predicate_expression, DataFusionMixins};
 use sail_delta_lake::delta_format::DeltaPlanBuilder;

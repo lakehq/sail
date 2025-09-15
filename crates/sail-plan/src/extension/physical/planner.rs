@@ -8,7 +8,7 @@ use datafusion::physical_planner::{ExtensionPlanner, PhysicalPlanner};
 use datafusion_common::{internal_err, Result};
 use datafusion_expr::{LogicalPlan, UserDefinedLogicalNode};
 use datafusion_physical_expr::{create_physical_sort_exprs, LexOrdering};
-use sail_common_datafusion::streaming::schema::{
+use sail_common_datafusion::streaming::event::schema::{
     to_flow_event_field_names, to_flow_event_projection,
 };
 use sail_common_datafusion::utils::rename_projected_physical_plan;

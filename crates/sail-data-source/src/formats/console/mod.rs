@@ -7,7 +7,7 @@ use datafusion::catalog::{Session, TableProvider};
 use datafusion::physical_plan::ExecutionPlan;
 use datafusion_common::{not_impl_err, plan_err, Result};
 use sail_common_datafusion::datasource::{PhysicalSinkMode, SinkInfo, SourceInfo, TableFormat};
-use sail_common_datafusion::streaming::schema::is_flow_event_schema;
+use sail_common_datafusion::streaming::event::schema::is_flow_event_schema;
 
 pub use crate::formats::console::writer::ConsoleSinkExec;
 

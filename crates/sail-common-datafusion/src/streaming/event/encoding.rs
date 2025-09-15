@@ -12,10 +12,12 @@ use datafusion_common::{exec_datafusion_err, exec_err, Result};
 use futures::{Stream, TryStreamExt};
 
 use crate::array::placeholder::{placeholder_array, placeholder_boolean_array};
-use crate::streaming::event::{FlowEvent, FlowEventStream, FlowMarker, SendableFlowEventStream};
-use crate::streaming::schema::{to_flow_event_schema, try_from_flow_event_schema};
+use crate::streaming::event::marker::FlowMarker;
+use crate::streaming::event::schema::{to_flow_event_schema, try_from_flow_event_schema};
+use crate::streaming::event::stream::{FlowEventStream, SendableFlowEventStream};
+use crate::streaming::event::FlowEvent;
 
-/// A stream of [`RecordBatch`] for encoded flow events.
+/// A stream for encoded flow events.
 /// The encoded [`RecordBatch`] has a special schema.
 /// The first field contains the encoded marker if not null.
 /// The other fields are valid only if the marker is null.
@@ -186,6 +188,7 @@ impl Stream for DecodedMultiFlowEventStream {
     }
 }
 
+/// A record batch stream for decoded flow events.
 pub struct DecodedFlowEventStream {
     inner: Pin<Box<dyn Stream<Item = Result<FlowEvent>> + Send>>,
     schema: SchemaRef,

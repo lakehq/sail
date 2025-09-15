@@ -9,10 +9,14 @@ use datafusion::logical_expr::{Expr, TableProviderFilterPushDown};
 use datafusion::physical_plan::ExecutionPlan;
 use datafusion_common::{internal_err, Constraints, Result};
 
+/// A streaming data source.
+/// The streaming logical plan rewriter will identify such data sources
+/// that are wrapped in the [`TableProvider`] and rewrite the logical plan.
 #[async_trait::async_trait]
 pub trait StreamSource: Send + Sync + fmt::Debug {
-    /// The schema without flow event fields.
-    fn schema(&self) -> SchemaRef;
+    /// The data schema for the data source.
+    /// This is the schema without flow event fields.
+    fn data_schema(&self) -> SchemaRef;
 
     fn constraints(&self) -> Option<&Constraints> {
         None
@@ -30,6 +34,7 @@ pub trait StreamSource: Send + Sync + fmt::Debug {
 
     /// Creates an execution plan that will scan the source.
     /// An encoded flow event stream is returned from execution.
+    /// The schema of the scan is the flow event schema derived from the data schema.
     async fn scan(
         &self,
         state: &dyn Session,
@@ -39,6 +44,7 @@ pub trait StreamSource: Send + Sync + fmt::Debug {
     ) -> Result<Arc<dyn ExecutionPlan>>;
 }
 
+///A [`TableProvider`] implementation for a streaming source.
 #[derive(Debug)]
 pub struct StreamSourceTableProvider {
     source: Arc<dyn StreamSource>,
@@ -61,7 +67,9 @@ impl TableProvider for StreamSourceTableProvider {
     }
 
     fn schema(&self) -> SchemaRef {
-        self.source.schema()
+        // The schema of the table provider is the data schema of the source
+        // since this table provider only exists before streaming logical plan rewriting.
+        self.source.data_schema()
     }
 
     fn constraints(&self) -> Option<&Constraints> {
