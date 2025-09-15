@@ -32,6 +32,20 @@ impl JoinReorder {
         &self,
         join_chain: Arc<dyn ExecutionPlan>,
     ) -> Result<Arc<dyn ExecutionPlan>> {
+        use datafusion::physical_plan::display::DisplayableExecutionPlan;
+        use std::fmt::Write;
+
+        // Log input plan
+        let mut input_log = String::new();
+        let displayable_input = DisplayableExecutionPlan::new(join_chain.as_ref());
+        writeln!(
+            input_log,
+            "JoinReorder Input Plan:\n{}",
+            displayable_input.indent(true)
+        )
+        .unwrap();
+        log::info!("{}", input_log);
+
         let decomposer = self::decomposer::Decomposer::new();
         let mut decomposed_plan = decomposer.decompose(join_chain.clone())?;
 
@@ -44,6 +58,17 @@ impl JoinReorder {
 
         let builder = self::builder::PlanBuilder::new(&decomposed_plan, join_chain.schema());
         let final_plan = builder.build(optimal_node)?;
+
+        // Log output plan
+        let mut output_log = String::new();
+        let displayable_output = DisplayableExecutionPlan::new(final_plan.as_ref());
+        writeln!(
+            output_log,
+            "JoinReorder Output Plan:\n{}",
+            displayable_output.indent(true)
+        )
+        .unwrap();
+        log::info!("{}", output_log);
 
         Ok(final_plan)
     }
@@ -90,13 +115,7 @@ impl PhysicalOptimizerRule for JoinReorder {
         plan: Arc<dyn ExecutionPlan>,
         _config: &ConfigOptions,
     ) -> Result<Arc<dyn ExecutionPlan>> {
-        use datafusion::physical_plan::display::DisplayableExecutionPlan;
-        let _displayable = DisplayableExecutionPlan::new(plan.as_ref());
-
         let optimized_plan = self.visit_and_optimize(plan)?;
-
-        let _displayable = DisplayableExecutionPlan::new(optimized_plan.as_ref());
-
         Ok(optimized_plan)
     }
 
