@@ -80,7 +80,8 @@ use sail_plan::extension::function::datetime::timestamp_now::TimestampNow;
 use sail_plan::extension::function::drop_struct_field::DropStructField;
 use sail_plan::extension::function::explode::{explode_name_to_kind, Explode};
 use sail_plan::extension::function::kurtosis::KurtosisFunction;
-use sail_plan::extension::function::map::map_function::MapFunction;
+use sail_plan::extension::function::map::map_from_arrays::MapFromArrays;
+use sail_plan::extension::function::map::map_from_entries::MapFromEntries;
 use sail_plan::extension::function::map::str_to_map::StrToMap;
 use sail_plan::extension::function::math::least_greatest::{Greatest, Least};
 use sail_plan::extension::function::math::rand_poisson::RandPoisson;
@@ -1138,7 +1139,8 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
             "least" => Ok(Arc::new(ScalarUDF::from(Least::new()))),
             "levenshtein" => Ok(Arc::new(ScalarUDF::from(Levenshtein::new()))),
             "make_valid_utf8" => Ok(Arc::new(ScalarUDF::from(MakeValidUtf8::new()))),
-            "map" => Ok(Arc::new(ScalarUDF::from(MapFunction::new()))),
+            "map_from_arrays" => Ok(Arc::new(ScalarUDF::from(MapFromArrays::new()))),
+            "map_from_entries" => Ok(Arc::new(ScalarUDF::from(MapFromEntries::new()))),
             "multi_expr" => Ok(Arc::new(ScalarUDF::from(MultiExpr::new()))),
             "raise_error" => Ok(Arc::new(ScalarUDF::from(RaiseError::new()))),
             "random_poisson" => Ok(Arc::new(ScalarUDF::from(RandPoisson::new()))),
@@ -1261,7 +1263,8 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
             || node.inner().as_any().is::<Least>()
             || node.inner().as_any().is::<Levenshtein>()
             || node.inner().as_any().is::<MakeValidUtf8>()
-            || node.inner().as_any().is::<MapFunction>()
+            || node.inner().as_any().is::<MapFromArrays>()
+            || node.inner().as_any().is::<MapFromEntries>()
             || node.inner().as_any().is::<MultiExpr>()
             || node.inner().as_any().is::<RaiseError>()
             || node.inner().as_any().is::<Randn>()
