@@ -4090,19 +4090,20 @@ dependencies = [
 
 [[package]]
 name = "monostate"
-version = "0.1.15"
+version = "0.1.16"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "de2d6d85e10b411dc84861249f08dda16accf6147d2181725543f7855eb1ce4d"
+checksum = "5f766eeb5719df144c29802e56f3f7e0b3f29bd3ec8ab6c819aa1eaddec3f80c"
 dependencies = [
  "monostate-impl",
+ "serde",
  "serde_core",
 ]
 
 [[package]]
 name = "monostate-impl"
-version = "0.1.15"
+version = "0.1.16"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "d95324d045d5ec8db75d6ece8c226cf06a47a78ed9ffa4b06e7cabc0992d9614"
+checksum = "88d4b3dcd6ce9277a52fb05f00bf3e45d475af8cce7376de2f8d6bd065fa4adb"
 dependencies = [
  "proc-macro2",
  "quote",
@@ -6073,13 +6074,14 @@ dependencies = [
 
 [[package]]
 name = "serde_json"
-version = "1.0.144"
+version = "1.0.145"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "56177480b00303e689183f110b4e727bb4211d692c62d4fcd16d02be93077d40"
+checksum = "402a6f66d8c709116cf22f558eab210f5a50187f702eb4d7e5ef38d9a7f1c79c"
 dependencies = [
  "itoa",
  "memchr",
  "ryu",
+ "serde",
  "serde_core",
 ]
 
