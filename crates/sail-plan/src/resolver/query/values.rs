@@ -34,7 +34,9 @@ impl PlanResolver<'_> {
             .columns()
             .into_iter()
             .enumerate()
-            .map(|(i, col)| Expr::Column(col).alias(state.register_field_name(format!("col{i}"))))
+            .map(|(i, col)| {
+                Expr::Column(col).alias(state.register_field_name(format!("col{}", i + 1)))
+            })
             .collect::<Vec<_>>();
         Ok(LogicalPlan::Projection(Projection::try_new(
             expr,
