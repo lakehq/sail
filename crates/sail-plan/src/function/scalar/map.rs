@@ -2,7 +2,8 @@ use datafusion::functions_nested::expr_fn;
 use datafusion_expr::{expr, lit};
 
 use crate::error::{PlanError, PlanResult};
-use crate::extension::function::map::map_function::MapFunction;
+use crate::extension::function::map::map_from_arrays::MapFromArrays;
+use crate::extension::function::map::map_from_entries::MapFromEntries;
 use crate::extension::function::map::str_to_map::StrToMap;
 use crate::function::common::{ScalarFunction, ScalarFunctionInput};
 use crate::utils::ItemTaker;
@@ -25,7 +26,7 @@ fn map(input: ScalarFunctionInput) -> PlanResult<expr::Expr> {
 
     let keys = expr_fn::make_array(keys);
     let values = expr_fn::make_array(values);
-    F::udf(MapFunction::new())(ScalarFunctionInput {
+    F::udf(MapFromArrays::new())(ScalarFunctionInput {
         arguments: vec![keys, values],
         function_context: input.function_context,
     })
@@ -47,7 +48,7 @@ fn map_concat(input: ScalarFunctionInput) -> PlanResult<expr::Expr> {
 
     let keys = expr_fn::array_concat(keys);
     let values = expr_fn::array_concat(values);
-    F::udf(MapFunction::new())(ScalarFunctionInput {
+    F::udf(MapFromArrays::new())(ScalarFunctionInput {
         arguments: vec![keys, values],
         function_context: input.function_context,
     })
@@ -79,8 +80,8 @@ pub(super) fn list_built_in_map_functions() -> Vec<(&'static str, ScalarFunction
         ("map_concat", F::custom(map_concat)),
         ("map_contains_key", F::binary(map_contains_key)),
         ("map_entries", F::unary(expr_fn::map_entries)),
-        ("map_from_arrays", F::udf(MapFunction::new())),
-        ("map_from_entries", F::udf(MapFunction::new())),
+        ("map_from_arrays", F::udf(MapFromArrays::new())),
+        ("map_from_entries", F::udf(MapFromEntries::new())),
         ("map_keys", F::unary(expr_fn::map_keys)),
         ("map_values", F::unary(expr_fn::map_values)),
         ("str_to_map", F::custom(str_to_map)),

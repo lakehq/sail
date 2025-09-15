@@ -1,0 +1,14 @@
+>>> spark.sql(r"""
+... SELECT
+...     '\0' AS zero,
+...     '\b' AS b,
+...     '\n' AS n,
+...     '\r' AS r,
+...     '\t' AS t,
+...     '\Z' AS z,
+...     '\%' AS percent,
+...     '\_' AS underscore,
+...     '\meow' AS meow,
+...     "It\'s about $25." AS text
+... """).collect()
+[Row(zero='\x00', b='\x08', n='\n', r='\r', t='\t', z='\x1a', percent='\\%', underscore='\\_', meow='meow', text="It's about $25.")]
