@@ -2636,7 +2636,7 @@
         }
       },
       "output": {
-        "failure": "not supported: unknown function: try_make_interval"
+        "failure": "not implemented: function: try_make_interval"
       }
     },
     {
@@ -2658,7 +2658,7 @@
         }
       },
       "output": {
-        "failure": "not supported: unknown function: try_make_interval"
+        "failure": "not implemented: function: try_make_interval"
       }
     },
     {
@@ -2680,7 +2680,7 @@
         }
       },
       "output": {
-        "failure": "not supported: unknown function: try_make_interval"
+        "failure": "not implemented: function: try_make_interval"
       }
     },
     {
@@ -2702,7 +2702,7 @@
         }
       },
       "output": {
-        "failure": "not supported: unknown function: try_make_interval"
+        "failure": "not implemented: function: try_make_interval"
       }
     },
     {
@@ -2724,7 +2724,7 @@
         }
       },
       "output": {
-        "failure": "not supported: unknown function: try_make_timestamp"
+        "failure": "not implemented: function: try_make_timestamp"
       }
     },
     {
@@ -2746,7 +2746,7 @@
         }
       },
       "output": {
-        "failure": "not supported: unknown function: try_make_timestamp"
+        "failure": "not implemented: function: try_make_timestamp"
       }
     },
     {
@@ -2768,7 +2768,7 @@
         }
       },
       "output": {
-        "failure": "not supported: unknown function: try_make_timestamp"
+        "failure": "not implemented: function: try_make_timestamp"
       }
     },
     {
@@ -2790,7 +2790,7 @@
         }
       },
       "output": {
-        "failure": "not supported: unknown function: try_make_timestamp"
+        "failure": "not implemented: function: try_make_timestamp"
       }
     },
     {
@@ -2812,7 +2812,7 @@
         }
       },
       "output": {
-        "failure": "not supported: unknown function: try_make_timestamp"
+        "failure": "not implemented: function: try_make_timestamp"
       }
     },
     {
@@ -2834,7 +2834,7 @@
         }
       },
       "output": {
-        "failure": "not supported: unknown function: try_make_timestamp"
+        "failure": "not implemented: function: try_make_timestamp"
       }
     },
     {
@@ -2856,7 +2856,7 @@
         }
       },
       "output": {
-        "failure": "not supported: unknown function: try_make_timestamp_ltz"
+        "failure": "not implemented: function: try_make_timestamp_ltz"
       }
     },
     {
@@ -2878,7 +2878,7 @@
         }
       },
       "output": {
-        "failure": "not supported: unknown function: try_make_timestamp_ltz"
+        "failure": "not implemented: function: try_make_timestamp_ltz"
       }
     },
     {
@@ -2900,7 +2900,7 @@
         }
       },
       "output": {
-        "failure": "not supported: unknown function: try_make_timestamp_ltz"
+        "failure": "not implemented: function: try_make_timestamp_ltz"
       }
     },
     {
@@ -2922,7 +2922,7 @@
         }
       },
       "output": {
-        "failure": "not supported: unknown function: try_make_timestamp_ltz"
+        "failure": "not implemented: function: try_make_timestamp_ltz"
       }
     },
     {
@@ -2944,7 +2944,7 @@
         }
       },
       "output": {
-        "failure": "not supported: unknown function: try_make_timestamp_ltz"
+        "failure": "not implemented: function: try_make_timestamp_ltz"
       }
     },
     {
@@ -2966,7 +2966,7 @@
         }
       },
       "output": {
-        "failure": "not supported: unknown function: try_make_timestamp_ntz"
+        "failure": "not implemented: function: try_make_timestamp_ntz"
       }
     },
     {
@@ -2988,7 +2988,7 @@
         }
       },
       "output": {
-        "failure": "not supported: unknown function: try_make_timestamp_ntz"
+        "failure": "not implemented: function: try_make_timestamp_ntz"
       }
     },
     {
@@ -3010,7 +3010,7 @@
         }
       },
       "output": {
-        "failure": "not supported: unknown function: try_make_timestamp_ntz"
+        "failure": "not implemented: function: try_make_timestamp_ntz"
       }
     },
     {
@@ -3032,7 +3032,7 @@
         }
       },
       "output": {
-        "failure": "not supported: unknown function: try_make_timestamp_ntz"
+        "failure": "not implemented: function: try_make_timestamp_ntz"
       }
     },
     {

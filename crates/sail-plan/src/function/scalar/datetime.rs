@@ -559,6 +559,16 @@ pub(super) fn list_built_in_datetime_functions() -> Vec<(&'static str, ScalarFun
         ("to_unix_timestamp", F::custom(to_unix_timestamp)),
         ("to_utc_timestamp", F::custom(to_utc_timestamp)),
         ("trunc", F::binary(trunc)),
+        ("try_make_interval", F::unknown("try_make_interval")),
+        ("try_make_timestamp", F::unknown("try_make_timestamp")),
+        (
+            "try_make_timestamp_ltz",
+            F::unknown("try_make_timestamp_ltz"),
+        ),
+        (
+            "try_make_timestamp_ntz",
+            F::unknown("try_make_timestamp_ntz"),
+        ),
         ("try_to_timestamp", F::var_arg(try_to_timestamp)),
         (
             "unix_date",

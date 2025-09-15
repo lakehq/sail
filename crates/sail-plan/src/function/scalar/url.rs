@@ -10,6 +10,7 @@ pub(super) fn list_built_in_url_functions() -> Vec<(&'static str, ScalarFunction
     vec![
         ("parse_url", F::udf(ParseUrl::new())),
         ("try_parse_url", F::udf(SparkTryParseUrl::new())),
+        ("try_url_decode", F::unknown("try_url_decode")),
         ("url_decode", F::udf(UrlDecode::new())),
         ("url_encode", F::udf(UrlEncode::new())),
     ]
