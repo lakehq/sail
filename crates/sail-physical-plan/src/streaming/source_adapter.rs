@@ -14,6 +14,9 @@ use sail_common_datafusion::streaming::event::schema::to_flow_event_schema;
 use sail_common_datafusion::streaming::event::stream::FlowEventStreamAdapter;
 use sail_common_datafusion::streaming::event::FlowEvent;
 
+/// A physical plan node that adapts a non-streaming source to a streaming source.
+/// The input schema is the original data schema, while the output schema is the
+/// corresponding flow event schema.
 #[derive(Debug)]
 pub struct StreamSourceAdapterExec {
     input: Arc<dyn ExecutionPlan>,

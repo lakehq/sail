@@ -20,6 +20,8 @@ use sail_common_datafusion::streaming::event::stream::{
 };
 use sail_common_datafusion::streaming::event::FlowEvent;
 
+/// A physical plan node that limits the number of retractable rows during
+/// streaming query execution.
 #[derive(Debug)]
 pub struct StreamLimitExec {
     input: Arc<dyn ExecutionPlan>,

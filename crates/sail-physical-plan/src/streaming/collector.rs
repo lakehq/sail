@@ -14,6 +14,10 @@ use sail_common_datafusion::streaming::event::encoding::DecodedFlowEventStream;
 use sail_common_datafusion::streaming::event::schema::try_from_flow_event_schema;
 use sail_common_datafusion::streaming::event::FlowEvent;
 
+/// A physical plan node that collects a stream of retractable data batches
+/// into final data batches.
+/// The input schema must be a flow event schema, while the output schema
+/// is the corresponding data schema.
 #[derive(Debug)]
 pub struct StreamCollectorExec {
     input: Arc<dyn ExecutionPlan>,

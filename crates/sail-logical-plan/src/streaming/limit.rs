@@ -5,6 +5,9 @@ use datafusion::logical_expr::LogicalPlan;
 use datafusion_common::{plan_err, DFSchemaRef, Result};
 use datafusion_expr::{Expr, UserDefinedLogicalNodeCore};
 
+/// A logical plan node that limits the number of retractable rows in a stream
+/// while passing through all data flow markers.
+/// This turns an unbounded stream query into a bounded one.
 #[derive(Clone, Debug, Eq, PartialEq, Hash, PartialOrd)]
 pub struct StreamLimitNode {
     input: Arc<LogicalPlan>,

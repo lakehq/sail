@@ -7,6 +7,10 @@ use datafusion_common::{plan_err, DFSchema, DFSchemaRef, Result};
 use datafusion_expr::{Expr, UserDefinedLogicalNodeCore};
 use sail_common_datafusion::streaming::event::schema::try_from_flow_event_schema;
 
+/// A logical plan node that collects a stream of retractable data batches
+/// into final data batches.
+/// This is a special "streaming sink" that allows returning query results
+/// for streaming queries, with the requirement that the query is bounded.
 #[derive(Clone, Debug, Eq, PartialEq, Hash)]
 pub struct StreamCollectorNode {
     input: Arc<LogicalPlan>,

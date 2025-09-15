@@ -10,6 +10,7 @@ use sail_common_datafusion::streaming::event::schema::to_flow_event_schema;
 use sail_common_datafusion::streaming::source::StreamSource;
 use sail_common_datafusion::utils::{expression_before_rename, rename_schema};
 
+/// A logical plan node that wraps a streaming source after streaming query rewrite.
 #[derive(Clone, Debug)]
 pub struct StreamSourceWrapperNode {
     source: Arc<dyn StreamSource>,

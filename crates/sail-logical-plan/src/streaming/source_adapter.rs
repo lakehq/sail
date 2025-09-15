@@ -7,6 +7,10 @@ use datafusion_common::{plan_err, DFSchema, DFSchemaRef, Result};
 use datafusion_expr::{Expr, UserDefinedLogicalNodeCore};
 use sail_common_datafusion::streaming::event::schema::to_flow_event_schema;
 
+/// A logical plan node that adapts a non-streaming data source
+/// to a streaming source so that it can be used in a streaming query.
+/// The wrapped source contains retraction flag for each row,
+/// and emits data flow markers.
 #[derive(Clone, Debug, Eq, PartialEq, Hash)]
 pub struct StreamSourceAdapterNode {
     input: Arc<LogicalPlan>,
