@@ -167,6 +167,9 @@ where
         let s = s.trim_matches(' ');
         if s.eq_ignore_ascii_case("Z") {
             "UTC"
+        } else if s.starts_with("UTC+") || s.starts_with("UTC-") {
+            // Convert "UTC+xx:xx" to "+xx:xx" and "UTC-xx:xx" to "-xx:xx"
+            &s[3..]
         } else {
             s
         }
