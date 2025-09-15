@@ -1,5 +1,6 @@
 use crate::extension::function::string::format_tokens::{tokenize_format, FormatToken};
-use arrow::datatypes::DataType;
+use arrow::array::{Array, Decimal128Array, Float64Array, Int64Array, PrimitiveArray, StringArray};
+use arrow::datatypes::{ArrowNumericType, DataType};
 use chrono::NaiveDate;
 use datafusion_common::{exec_err, not_impl_err, DataFusionError, Result, ScalarValue};
 use datafusion_expr::{ScalarFunctionArgs, ScalarUDFImpl};
@@ -7,7 +8,6 @@ use datafusion_expr_common::columnar_value::ColumnarValue;
 use datafusion_expr_common::signature::{Signature, Volatility};
 use std::any::Any;
 use std::sync::Arc;
-use arrow::array::{Array, Date32Array, Decimal128Array, Float64Array, Int64Array, StringArray};
 
 #[derive(Debug)]
 pub struct SparkToChar {
@@ -236,48 +236,64 @@ fn format_scalar_value(value: &ScalarValue, fmt: &str) -> Result<String> {
     }
 }
 
-macro_rules! handle_array_type {
-    ($array:expr, $len:expr, $fmt_fn:expr, $result:expr, $arrow_ty:ty, $scalar_ty:ident) => {{
-        let arr = $array
-            .as_any()
-            .downcast_ref::<$arrow_ty>()
-            .ok_or_else(|| exec_err!("Expected"))
-            .map_err(|e| DataFusionError::Execution(format!("")))?;
+/// Handles primitive numeric arrays (Int64, Float64) + Scalar format string
+pub fn format_primitive_array<T, F>(
+    array: &PrimitiveArray<T>,
+    fmt_fn: F,
+    make_scalar: fn(T::Native) -> ScalarValue,
+) -> Result<Arc<StringArray>>
+where
+    T: arrow::datatypes::ArrowNumericType,
+    F: Fn(usize) -> String,
+{
+    let len = array.len();
+    let mut result: Vec<Option<String>> = Vec::with_capacity(len);
 
-        for i in 0..$len {
-            let fmt_str = $fmt_fn(i);
-            let s = if arr.is_null(i) || fmt_str.is_empty() {
-                None
-            } else {
-                Some(format_scalar_value(&ScalarValue::$scalar_ty(Some(arr.value(i))), fmt_str)
-                    .map_err(|e| DataFusionError::Execution(format!("to_char formatting error:")))?)
-            };
-            $result.push(s);
-        }
-        Ok(())
-    }};
+    for i in 0..len {
+        let fmt_str = fmt_fn(i);
 
-    ($array:expr, $len:expr, $fmt_fn:expr, $result:expr, $arrow_ty:ty, Decimal128, $precision:expr, $scale:expr) => {{
-        let arr = $array
-            .as_any()
-            .downcast_ref::<$arrow_ty>()
-            .ok_or_else(|| exec_err!("Expected"))
-            .map_err(|e| DataFusionError::Execution(format!("")))?;
+        let s = if array.is_null(i) || fmt_str.is_empty() {
+            None
+        } else {
+            let scalar_val = make_scalar(array.value(i));
+            Some(format_scalar_value(&scalar_val, &fmt_str)?)
+        };
 
-        for i in 0..$len {
-            let fmt_str = $fmt_fn(i);
-            let s = if arr.is_null(i) || fmt_str.is_empty() {
-                None
-            } else {
-                let scalar_val = ScalarValue::Decimal128(Some(arr.value(i)), $precision, $scale);
-                Some(format_scalar_value(&scalar_val, fmt_str)
-                    .map_err(|e| DataFusionError::Execution(format!("to_char formatting error:")))?)
-            };
-            $result.push(s);
-        }
-        Ok(())
-    }};
+        result.push(s);
+    }
+
+    Ok(Arc::new(StringArray::from(result)))
 }
+
+/// Specialized wrapper for Decimal128Array
+pub fn format_decimal_array<F>(
+    array: &Decimal128Array,
+    fmt_fn: F,
+    precision: u8,
+    scale: i8,
+) -> Result<Arc<StringArray>>
+where
+    F: Fn(usize) -> String,
+{
+    let len = array.len();
+    let mut result: Vec<Option<String>> = Vec::with_capacity(len);
+
+    for i in 0..len {
+        let fmt_str = fmt_fn(i);
+
+        let s = if array.is_null(i) || fmt_str.is_empty() {
+            None
+        } else {
+            let scalar_val = ScalarValue::Decimal128(Some(array.value(i)), precision, scale);
+            Some(format_scalar_value(&scalar_val, &fmt_str)?)
+        };
+
+        result.push(s);
+    }
+
+    Ok(Arc::new(StringArray::from(result)))
+}
+
 
 impl ScalarUDFImpl for SparkToChar {
     fn as_any(&self) -> &dyn Any {
@@ -302,66 +318,127 @@ impl ScalarUDFImpl for SparkToChar {
             return exec_err!("to_char requires 2 arguments (value, format), got {}", args.len());
         }
 
-        match (&args[0], args.get(1).unwrap()) {
+        match (&args[0], &args[1]) {
+            // ------------------------
             // Scalar + Scalar
-            (ColumnarValue::Scalar(v), ColumnarValue::Scalar(ScalarValue::Utf8(Some(fmt)))) => {
-                if v.is_null() {
+            // ------------------------
+            (ColumnarValue::Scalar(val), ColumnarValue::Scalar(ScalarValue::Utf8(Some(fmt)))) => {
+                if val.is_null() {
                     Ok(ColumnarValue::Scalar(ScalarValue::Utf8(None)))
                 } else {
-                    let s = format_scalar_value(v, fmt)
-                        .or_else(|e| exec_err!("to_char formatting error:"))?;
-                   Ok(ColumnarValue::Scalar(ScalarValue::Utf8(Some(s))))
+                    let s = format_scalar_value(val, fmt)
+                        .map_err(|e| DataFusionError::Execution(format!("to_char formatting error: {e}")))?;
+                    Ok(ColumnarValue::Scalar(ScalarValue::Utf8(Some(s))))
                 }
             }
 
+            // ------------------------
             // Array + Scalar
+            // ------------------------
             (ColumnarValue::Array(array), ColumnarValue::Scalar(ScalarValue::Utf8(Some(fmt)))) => {
-                let len = array.len();
-                let mut result: Vec<Option<String>> = Vec::with_capacity(len);
-                let format_fn = |i| fmt.as_str();
-
-                let macro_result: Result<(), DataFusionError> = match array.data_type() {
-                    DataType::Int64 => handle_array_type!(array, len, format_fn, result, Int64Array, Int64),
-                    DataType::Float64 => handle_array_type!(array, len, format_fn, result, Float64Array, Float64),
-                    DataType::Decimal128(precision, scale) => handle_array_type!(array, len, format_fn,
-                        result,
-                        Decimal128Array,
-                        Decimal128,
-                        *precision,
-                        *scale),
-                    DataType::Date32 => handle_array_type!(array, len, format_fn, result, Date32Array, Date32),
+                let result = match array.data_type() {
+                    DataType::Int64 => {
+                        format_primitive_array(
+                            array.as_any()
+                                .downcast_ref::<Int64Array>()
+                                .ok_or_else(|| DataFusionError::Execution("Expected Int64Array".to_string()))?,
+                            |_| fmt.clone(),
+                            |v| ScalarValue::Int64(Some(v)),
+                        )?
+                    }
+                    DataType::Float64 => {
+                        format_primitive_array(
+                            array.as_any()
+                                .downcast_ref::<Float64Array>()
+                                .ok_or_else(|| DataFusionError::Execution("Expected Int64Array".to_string()))?,
+                            |_| fmt.clone(),
+                            |v| ScalarValue::Float64(Some(v)),
+                        )?
+                    }
+                    DataType::Decimal128(precision, scale) => {
+                        format_decimal_array(
+                            array.as_any()
+                                .downcast_ref::<Decimal128Array>()
+                                .ok_or_else(|| DataFusionError::Execution("Expected Int64Array".to_string()))?,
+                            |_| fmt.clone(),
+                            *precision,
+                            *scale,
+                        )?
+                    }
+                    DataType::Date32 => {
+                        format_primitive_array(
+                            array.as_any()
+                                .downcast_ref::<arrow::array::Date32Array>()
+                                .ok_or_else(|| DataFusionError::Execution("Expected Int64Array".to_string()))?,
+                            |_| fmt.clone(),
+                            |v| ScalarValue::Date32(Some(v)),
+                        )?
+                    }
                     _ => return not_impl_err!("Unsupported array type in to_char"),
                 };
 
-                macro_result?;
-                Ok(ColumnarValue::Array(Arc::new(StringArray::from(result))))
+                Ok(ColumnarValue::Array(result))
             }
 
+            // ------------------------
             // Array + Array
+            // ------------------------
             (ColumnarValue::Array(values), ColumnarValue::Array(formats)) => {
                 if values.len() != formats.len() {
                     return exec_err!("Value and format arrays must have the same length");
                 }
 
-                let len = values.len();
-                let mut result = Vec::with_capacity(len);
-
+                // Downcast format array
                 let fmt_array = formats.as_any()
                     .downcast_ref::<StringArray>()
-                    .ok_or_else(|| DataFusionError::Execution("Expected StringArray for formats".to_string()))?;
+                    .ok_or_else(|| DataFusionError::Execution("Expected Int64Array".to_string()))?;
 
-                let format_fn = |i| if fmt_array.is_null(i) { "" } else { fmt_array.value(i) };
-
-                let macro_result: Result<(), DataFusionError> = match values.data_type() {
-                    DataType::Int64 => handle_array_type!(values, len, format_fn, result, Int64Array, Int64),
-                    DataType::Float64 => handle_array_type!(values, len, format_fn, result, Float64Array, Float64),
-                    DataType::Decimal128(precision, scale) => handle_array_type!(values, len, format_fn, result, Decimal128Array, Decimal128, *precision, *scale),
-                    DataType::Date32 => handle_array_type!(values, len, format_fn, result, Date32Array, Date32),
+                let result: Arc<StringArray> = match values.data_type() {
+                    DataType::Int64 => {
+                        let arr = values.as_any()
+                            .downcast_ref::<Int64Array>()
+                            .ok_or_else(|| DataFusionError::Execution("Expected Int64Array".to_string()))?;
+                        format_primitive_array(
+                            arr,
+                            |i| fmt_array.value(i).to_string(),
+                            |v| ScalarValue::Int64(Some(v)),
+                        )?
+                    }
+                    DataType::Float64 => {
+                        let arr = values.as_any()
+                            .downcast_ref::<Float64Array>()
+                            .ok_or_else(|| DataFusionError::Execution("Expected Int64Array".to_string()))?;
+                        format_primitive_array(
+                            arr,
+                            |i| fmt_array.value(i).to_string(),
+                            |v| ScalarValue::Float64(Some(v)),
+                        )?
+                    }
+                    DataType::Decimal128(precision, scale) => {
+                        let arr = values.as_any()
+                            .downcast_ref::<Decimal128Array>()
+                            .ok_or_else(|| DataFusionError::Execution("Expected Int64Array".to_string()))?;
+                        format_decimal_array(
+                            arr,
+                            |i| fmt_array.value(i).to_string(),
+                            *precision,
+                            *scale,
+                        )?
+                    }
+                    DataType::Date32 => {
+                        let arr = values.as_any()
+                            .downcast_ref::<arrow::array::Date32Array>()
+                            .ok_or_else(|| DataFusionError::Execution("Expected Int64Array".to_string()))?;
+                        format_primitive_array(
+                            arr,
+                            |i| fmt_array.value(i).to_string(),
+                            |v| ScalarValue::Date32(Some(v)),
+                        )?
+                    }
                     _ => return not_impl_err!("Unsupported array type in to_char"),
                 };
 
-                macro_result?;
-                Ok(ColumnarValue::Array(Arc::new(StringArray::from(result))))
+                Ok(ColumnarValue::Array(result))
             }
 
             _ => not_impl_err!("to_char currently supports only scalar or array values with literal format string"),
