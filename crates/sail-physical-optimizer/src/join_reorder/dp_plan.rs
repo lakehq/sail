@@ -18,7 +18,7 @@ impl DPPlan {
     pub fn new_leaf(relation_id: usize, cardinality: f64) -> Self {
         Self {
             join_set: JoinSet::new_singleton(relation_id),
-            cost: 0.0, // Leaf nodes have zero cost
+            cost: cardinality, // Leaf nodes cost equals their cardinality (scan cost)
             cardinality,
             plan_type: PlanType::Leaf { relation_id },
         }
@@ -114,7 +114,7 @@ mod tests {
         assert!(plan.is_leaf());
         assert_eq!(plan.relation_count(), 1);
         assert_eq!(plan.cardinality, 1000.0);
-        assert_eq!(plan.cost, 0.0);
+        assert_eq!(plan.cost, 1000.0); // Cost equals cardinality for leaf nodes
 
         if let PlanType::Leaf { relation_id } = plan.plan_type {
             assert_eq!(relation_id, 0);
