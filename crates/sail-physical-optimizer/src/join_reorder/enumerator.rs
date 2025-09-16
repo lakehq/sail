@@ -9,166 +9,160 @@ use crate::join_reorder::dp_plan::DPPlan;
 use crate::join_reorder::graph::QueryGraph;
 use crate::join_reorder::join_set::JoinSet;
 
-/// Plan enumerator using dynamic programming or greedy algorithm to find optimal join order.
+/// Plan enumerator that implements dynamic programming algorithm to find optimal join order.
 pub struct PlanEnumerator {
     pub query_graph: QueryGraph,
-    /// DP table: JoinSet -> optimal DPPlan
     pub dp_table: HashMap<JoinSet, Arc<DPPlan>>,
-    /// Cardinality estimator
     cardinality_estimator: CardinalityEstimator,
-    /// Cost model
     cost_model: CostModel,
-    /// Whether to use greedy algorithm (when there are too many relations)
-    use_greedy: bool,
-    /// Threshold for greedy algorithm
-    greedy_threshold: usize,
 }
 
 impl PlanEnumerator {
+    /// Creates a new plan enumerator.
     pub fn new(query_graph: QueryGraph) -> Self {
         let cardinality_estimator = CardinalityEstimator::new(query_graph.clone());
+        let cost_model = CostModel::new();
 
         Self {
             query_graph,
             dp_table: HashMap::new(),
             cardinality_estimator,
-            cost_model: CostModel::new(),
-            use_greedy: false,
-            greedy_threshold: 8, // Use greedy algorithm when more than 8 relations
+            cost_model,
         }
     }
 
-    /// Solve for optimal join order.
+    /// Main method that solves for the optimal join order using dynamic programming.
     pub fn solve(&mut self) -> Result<Arc<DPPlan>> {
         let relation_count = self.query_graph.relation_count();
 
         if relation_count == 0 {
             return Err(datafusion::error::DataFusionError::Internal(
-                "Empty query graph".to_string(),
+                "Cannot solve empty query graph".to_string(),
             ));
         }
 
-        if relation_count == 1 {
-            // Only one relation, return directly
-            return self.create_single_relation_plan(0);
-        }
+        // Initialize leaf plans for all single relations
+        self.init_leaf_plans()?;
 
-        // Choose algorithm based on number of relations
-        if relation_count > self.greedy_threshold {
-            self.use_greedy = true;
-            self.solve_greedy()
-        } else {
-            self.solve_dynamic_programming()
-        }
-    }
-
-    /// Solve using dynamic programming algorithm.
-    fn solve_dynamic_programming(&mut self) -> Result<Arc<DPPlan>> {
-        let relation_count = self.query_graph.relation_count();
-
-        // Initialize leaf nodes (single relations)
-        for i in 0..relation_count {
-            let plan = self.create_single_relation_plan(i)?;
-            let join_set = JoinSet::new_singleton(i);
-            self.dp_table.insert(join_set, plan);
-        }
-
-        // Fill DP table bottom-up
+        // Iterate through subset sizes from 2 to relation_count
         for subset_size in 2..=relation_count {
-            self.enumerate_subsets_of_size(subset_size)?;
+            // Generate all subsets of the given size
+            let subsets = self.generate_subsets_of_size(subset_size);
+
+            // Find the best plan for each subset
+            for subset in subsets {
+                self.find_best_plan_for_subset(subset)?;
+            }
         }
 
-        // Return optimal plan containing all relations
-        let all_relations = self.create_all_relations_set();
-        self.dp_table.get(&all_relations).cloned().ok_or_else(|| {
-            datafusion::error::DataFusionError::Internal("Failed to find optimal plan".to_string())
-        })
+        // Find and return the plan containing all relations
+        let all_relations_set = self.create_all_relations_set();
+        self.dp_table
+            .get(&all_relations_set)
+            .cloned()
+            .ok_or_else(|| {
+                datafusion::error::DataFusionError::Internal(
+                    "No optimal plan found for all relations".to_string(),
+                )
+            })
     }
 
-    /// Solve using greedy algorithm.
-    fn solve_greedy(&mut self) -> Result<Arc<DPPlan>> {
-        // TODO: Implement greedy algorithm
-        // 1. Start with the smallest join
-        // 2. Add relations iteratively, choosing the join with the smallest cost each time
-        // 3. Stop when all relations are included
+    /// Initialize leaf plans for all single relations.
+    fn init_leaf_plans(&mut self) -> Result<()> {
+        for relation in &self.query_graph.relations {
+            let relation_id = relation.relation_id;
+            let join_set = JoinSet::new_singleton(relation_id);
 
-        // Placeholder implementation
-        self.solve_dynamic_programming()
-    }
+            // Estimate cardinality for single relation
+            let cardinality = self.cardinality_estimator.estimate_cardinality(join_set);
 
-    /// Enumerate all subsets of a given size.
-    fn enumerate_subsets_of_size(&mut self, size: usize) -> Result<()> {
-        let relation_count = self.query_graph.relation_count();
+            // Create leaf plan (cost is set to cardinality in DPPlan::new_leaf)
+            let plan = Arc::new(DPPlan::new_leaf(relation_id, cardinality));
 
-        // Generate all subsets of size size
-        let subsets = self.generate_subsets(relation_count, size);
-
-        for subset in subsets {
-            self.find_best_plan_for_subset(subset)?;
+            // Insert into DP table
+            self.dp_table.insert(join_set, plan);
         }
 
         Ok(())
     }
 
-    /// Find the best plan for a given relation subset.
+    /// Find the best plan for a given subset of relations.
     fn find_best_plan_for_subset(&mut self, subset: JoinSet) -> Result<()> {
         let mut best_plan: Option<Arc<DPPlan>> = None;
-        let mut best_cost = f64::INFINITY;
 
-        // Try all possible splits
-        for left_subset in self.generate_proper_subsets(subset) {
-            let right_subset_bits = subset.bits() & !left_subset.bits();
-            let right_subset = JoinSet::from_bits(right_subset_bits);
+        // Generate all non-empty proper subsets of the given subset
+        let left_subsets = self.generate_proper_subsets(subset);
 
-            if left_subset.is_disjoint(&right_subset)
-                && !left_subset.is_empty()
-                && !right_subset.is_empty()
-            {
-                if let (Some(left_plan), Some(right_plan)) = (
-                    self.dp_table.get(&left_subset),
-                    self.dp_table.get(&right_subset),
-                ) {
-                    // Check if there are edges connecting these two subsets
-                    let connecting_edges = self
-                        .query_graph
-                        .get_connecting_edges(left_subset, right_subset);
+        for left_subset in left_subsets {
+            let right_subset = self.compute_complement(subset, left_subset);
 
-                    if !connecting_edges.is_empty() {
-                        // Get the actual edge indices from the query graph
-                        let edge_indices: Vec<usize> = connecting_edges
-                            .iter()
-                            .map(|edge| {
-                                // Find the index of this edge in the query graph
-                                self.query_graph
-                                    .edges
-                                    .iter()
-                                    .position(|e| std::ptr::eq(e as *const _, *edge as *const _))
-                                    .unwrap_or(0) // fallback, should not happen
-                            })
-                            .collect();
+            // Skip if right subset is empty
+            if right_subset.is_empty() {
+                continue;
+            }
 
-                        // Estimate the cardinality and cost of the new plan
-                        let new_cardinality =
-                            self.cardinality_estimator.estimate_cardinality(subset);
-                        let new_cost =
-                            self.cost_model
-                                .compute_cost(left_plan, right_plan, new_cardinality);
+            // Check connectivity: skip disconnected splits to avoid cartesian products
+            if !self.are_subsets_connected(left_subset, right_subset) {
+                continue;
+            }
 
-                        if new_cost < best_cost {
-                            best_cost = new_cost;
-                            best_plan = Some(Arc::new(DPPlan::new_join(
-                                left_subset,
-                                right_subset,
-                                edge_indices,
-                                new_cost,
-                                new_cardinality,
-                            )));
-                        }
+            // Get existing plans from DP table
+            let left_plan = match self.dp_table.get(&left_subset) {
+                Some(plan) => plan.clone(),
+                None => continue, // Skip if left plan doesn't exist
+            };
+
+            let right_plan = match self.dp_table.get(&right_subset) {
+                Some(plan) => plan.clone(),
+                None => continue, // Skip if right plan doesn't exist
+            };
+
+            // Estimate cardinality of the new join
+            let new_cardinality = self.cardinality_estimator.estimate_cardinality(subset);
+
+            // Compute cost of the new plan
+            let new_cost = self
+                .cost_model
+                .compute_cost(&left_plan, &right_plan, new_cardinality);
+
+            // Get connecting edges for the join
+            let connecting_edges = self
+                .query_graph
+                .get_connecting_edges(left_subset, right_subset);
+            let edge_indices: Vec<usize> = connecting_edges
+                .iter()
+                .enumerate()
+                .map(|(i, _)| i)
+                .collect();
+
+            // Create new join plan
+            let new_plan = Arc::new(DPPlan::new_join(
+                left_subset,
+                right_subset,
+                edge_indices,
+                new_cost,
+                new_cardinality,
+            ));
+
+            // Update best plan if this is better
+            match &best_plan {
+                Some(current_best) => {
+                    if new_plan.cost < current_best.cost {
+                        best_plan = Some(new_plan);
                     }
+                }
+                None => {
+                    best_plan = Some(new_plan);
                 }
             }
         }
 
+        // If no connected plan was found, try to create a cartesian product plan
+        if best_plan.is_none() {
+            best_plan = self.create_cartesian_product_plan(subset)?;
+        }
+
+        // Insert the best plan into DP table
         if let Some(plan) = best_plan {
             self.dp_table.insert(subset, plan);
         }
@@ -176,75 +170,156 @@ impl PlanEnumerator {
         Ok(())
     }
 
-    /// Create a plan for a single relation.
-    fn create_single_relation_plan(&mut self, relation_id: usize) -> Result<Arc<DPPlan>> {
-        let cardinality = self
-            .cardinality_estimator
-            .estimate_cardinality(JoinSet::new_singleton(relation_id));
+    /// Check if two disjoint subsets are connected by at least one edge.
+    fn are_subsets_connected(&self, left_subset: JoinSet, right_subset: JoinSet) -> bool {
+        !self
+            .query_graph
+            .get_connecting_edges(left_subset, right_subset)
+            .is_empty()
+    }
 
-        Ok(Arc::new(DPPlan::new_leaf(relation_id, cardinality)))
+    /// Create a cartesian product plan for disconnected subgraphs.
+    fn create_cartesian_product_plan(&mut self, subset: JoinSet) -> Result<Option<Arc<DPPlan>>> {
+        // Generate all non-empty proper subsets again, but this time without connectivity check
+        let left_subsets = self.generate_proper_subsets(subset);
+        let mut best_plan: Option<Arc<DPPlan>> = None;
+
+        for left_subset in left_subsets {
+            let right_subset = self.compute_complement(subset, left_subset);
+
+            if right_subset.is_empty() {
+                continue;
+            }
+
+            // Get existing plans from DP table
+            let left_plan = match self.dp_table.get(&left_subset) {
+                Some(plan) => plan.clone(),
+                None => continue,
+            };
+
+            let right_plan = match self.dp_table.get(&right_subset) {
+                Some(plan) => plan.clone(),
+                None => continue,
+            };
+
+            // For cartesian product, cardinality is the product of both sides
+            let new_cardinality = left_plan.cardinality * right_plan.cardinality;
+
+            // Cartesian product has very high cost
+            let cartesian_penalty = 1000000.0; // Large penalty for cartesian products
+            let new_cost = self
+                .cost_model
+                .compute_cost(&left_plan, &right_plan, new_cardinality)
+                + cartesian_penalty;
+
+            // Create cartesian product plan (no connecting edges)
+            let new_plan = Arc::new(DPPlan::new_join(
+                left_subset,
+                right_subset,
+                vec![], // No connecting edges for cartesian product
+                new_cost,
+                new_cardinality,
+            ));
+
+            // Update best plan
+            match &best_plan {
+                Some(current_best) => {
+                    if new_plan.cost < current_best.cost {
+                        best_plan = Some(new_plan);
+                    }
+                }
+                None => {
+                    best_plan = Some(new_plan);
+                }
+            }
+        }
+
+        Ok(best_plan)
     }
 
     /// Generate all subsets of a given size.
-    fn generate_subsets(&self, n: usize, k: usize) -> Vec<JoinSet> {
-        let mut result = Vec::new();
-        self.generate_subsets_recursive(n, k, 0, JoinSet::default(), &mut result);
-        result
+    fn generate_subsets_of_size(&self, size: usize) -> Vec<JoinSet> {
+        let relation_count = self.query_graph.relation_count();
+        let mut subsets = Vec::new();
+
+        // Generate all combinations of `size` relations from `relation_count` relations
+        self.generate_combinations(0, size, 0, relation_count, &mut subsets);
+
+        subsets
     }
 
-    /// Recursively generate subsets.
-    fn generate_subsets_recursive(
+    /// Recursive helper to generate combinations.
+    fn generate_combinations(
         &self,
-        n: usize,
-        k: usize,
-        start: usize,
-        current: JoinSet,
+        current_bits: u64,
+        remaining_size: usize,
+        start_relation: usize,
+        total_relations: usize,
         result: &mut Vec<JoinSet>,
     ) {
-        if k == 0 {
-            result.push(current);
+        if remaining_size == 0 {
+            result.push(JoinSet::from_bits(current_bits));
             return;
         }
 
-        for i in start..n {
-            if n - i >= k {
-                let new_set = current.union(&JoinSet::new_singleton(i));
-                self.generate_subsets_recursive(n, k - 1, i + 1, new_set, result);
-            }
+        if start_relation >= total_relations {
+            return;
         }
+
+        // Try including current relation
+        let new_bits = current_bits | (1 << start_relation);
+        self.generate_combinations(
+            new_bits,
+            remaining_size - 1,
+            start_relation + 1,
+            total_relations,
+            result,
+        );
+
+        // Try not including current relation
+        self.generate_combinations(
+            current_bits,
+            remaining_size,
+            start_relation + 1,
+            total_relations,
+            result,
+        );
     }
 
-    /// Generate all proper subsets of a given set.
+    /// Generate all non-empty proper subsets of a given set.
     fn generate_proper_subsets(&self, set: JoinSet) -> Vec<JoinSet> {
-        let mut result = Vec::new();
-        let relations: Vec<usize> = set.iter().collect();
+        let mut subsets = Vec::new();
+        let bits = set.bits();
 
-        // Generate all non-empty proper subsets
-        for i in 1..(1 << relations.len()) - 1 {
-            let mut subset = JoinSet::default();
-            for (j, &relation_id) in relations.iter().enumerate() {
-                if (i & (1 << j)) != 0 {
-                    subset = subset.union(&JoinSet::new_singleton(relation_id));
-                }
+        // Iterate through all possible subsets using bit manipulation
+        for subset_bits in 1..bits {
+            // Check if this is actually a subset
+            if (subset_bits & bits) == subset_bits {
+                subsets.push(JoinSet::from_bits(subset_bits));
             }
-            result.push(subset);
         }
 
-        result
+        subsets
     }
 
-    /// Create a set containing all relations.
+    /// Compute the complement of left_subset within the given set.
+    fn compute_complement(&self, set: JoinSet, left_subset: JoinSet) -> JoinSet {
+        let complement_bits = set.bits() & !left_subset.bits();
+        JoinSet::from_bits(complement_bits)
+    }
+
+    /// Create a JoinSet containing all relations.
     fn create_all_relations_set(&self) -> JoinSet {
-        let mut result = JoinSet::default();
-        for i in 0..self.query_graph.relation_count() {
-            result = result.union(&JoinSet::new_singleton(i));
-        }
-        result
+        let relation_count = self.query_graph.relation_count();
+        let all_bits = (1u64 << relation_count) - 1;
+        JoinSet::from_bits(all_bits)
     }
 }
 
 #[cfg(test)]
 mod tests {
+    use std::sync::Arc;
+
     use datafusion::arrow::datatypes::{DataType, Field, Schema};
     use datafusion::common::Statistics;
     use datafusion::physical_plan::empty::EmptyExec;
@@ -270,31 +345,75 @@ mod tests {
     }
 
     #[test]
-    fn test_enumerator_creation() {
+    fn test_plan_enumerator_creation() {
         let graph = create_test_graph_with_relations(2);
         let enumerator = PlanEnumerator::new(graph);
-        assert_eq!(enumerator.greedy_threshold, 8);
-        assert!(!enumerator.use_greedy);
+        assert_eq!(enumerator.query_graph.relation_count(), 2);
+        assert!(enumerator.dp_table.is_empty());
     }
 
     #[test]
-    fn test_single_relation_solve() -> Result<()> {
-        let graph = create_test_graph_with_relations(1);
+    fn test_init_leaf_plans() {
+        let graph = create_test_graph_with_relations(2);
         let mut enumerator = PlanEnumerator::new(graph);
 
-        let result = enumerator.solve()?;
-        assert!(result.is_leaf());
-        assert_eq!(result.relation_count(), 1);
+        enumerator.init_leaf_plans().unwrap();
 
-        Ok(())
+        assert_eq!(enumerator.dp_table.len(), 2);
+
+        let set0 = JoinSet::new_singleton(0);
+        let set1 = JoinSet::new_singleton(1);
+
+        assert!(enumerator.dp_table.contains_key(&set0));
+        assert!(enumerator.dp_table.contains_key(&set1));
     }
 
     #[test]
-    fn test_generate_subsets() {
+    fn test_generate_subsets_of_size() {
         let graph = create_test_graph_with_relations(3);
         let enumerator = PlanEnumerator::new(graph);
 
-        let subsets = enumerator.generate_subsets(3, 2);
-        assert_eq!(subsets.len(), 3); // C(3,2) = 3
+        let subsets_size_2 = enumerator.generate_subsets_of_size(2);
+        assert_eq!(subsets_size_2.len(), 3); // C(3,2) = 3
+
+        let subsets_size_3 = enumerator.generate_subsets_of_size(3);
+        assert_eq!(subsets_size_3.len(), 1); // C(3,3) = 1
+    }
+
+    #[test]
+    fn test_generate_proper_subsets() {
+        let graph = create_test_graph_with_relations(3);
+        let enumerator = PlanEnumerator::new(graph);
+
+        // Create a set with relations 0 and 1 (bits: 011 = 3)
+        let set = JoinSet::from_bits(3);
+        let subsets = enumerator.generate_proper_subsets(set);
+
+        // Should have 2 proper subsets: {0} and {1}
+        assert_eq!(subsets.len(), 2);
+        assert!(subsets.contains(&JoinSet::new_singleton(0)));
+        assert!(subsets.contains(&JoinSet::new_singleton(1)));
+    }
+
+    #[test]
+    fn test_compute_complement() {
+        let graph = create_test_graph_with_relations(3);
+        let enumerator = PlanEnumerator::new(graph);
+
+        let full_set = JoinSet::from_bits(7); // {0, 1, 2}
+        let left_subset = JoinSet::from_bits(3); // {0, 1}
+        let complement = enumerator.compute_complement(full_set, left_subset);
+
+        assert_eq!(complement, JoinSet::new_singleton(2));
+    }
+
+    #[test]
+    fn test_create_all_relations_set() {
+        let graph = create_test_graph_with_relations(3);
+        let enumerator = PlanEnumerator::new(graph);
+
+        let all_set = enumerator.create_all_relations_set();
+        assert_eq!(all_set.bits(), 7); // 111 in binary = 7
+        assert_eq!(all_set.cardinality(), 3);
     }
 }
