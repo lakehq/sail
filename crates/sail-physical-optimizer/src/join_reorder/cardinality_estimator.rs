@@ -286,9 +286,18 @@ impl CardinalityEstimator {
         let mut selectivity = 1.0;
 
         for edge in connecting_edges {
-            let tdom = self.get_tdom_for_edge(edge);
-            if tdom > 1.0 {
-                selectivity *= 1.0 / tdom;
+            // Use pre-computed selectivity if available and valid
+            if edge.selectivity > 0.0 && edge.selectivity <= 1.0 {
+                selectivity *= edge.selectivity;
+            } else {
+                // Fall back to TDom-based estimation
+                let tdom = self.get_tdom_for_edge(edge);
+                if tdom > 1.0 {
+                    selectivity *= 1.0 / tdom;
+                } else {
+                    // Default selectivity for unknown cases
+                    selectivity *= 0.1;
+                }
             }
         }
 

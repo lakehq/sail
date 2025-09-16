@@ -96,16 +96,19 @@ impl<'a> PlanReconstructor<'a> {
         // 3. Build physical join conditions
         let on_conditions = self.build_join_conditions(edge_indices, &left_map, &right_map)?;
 
-        // 4. Create HashJoinExec
-        // For Join Reorder, we only handle INNER JOIN
+        // 4. Determine join type from edge information
+        let join_type = self.determine_join_type(edge_indices)?;
+
+        // 5. Create HashJoinExec
+        // TODO: Implement proper join filter construction in the future
         let join_plan = Arc::new(HashJoinExec::try_new(
             left_plan,
             right_plan,
             on_conditions,
-            None, // filter, our filter logic is in ON conditions
-            &JoinType::Inner,
-            None,                            // projection
-            PartitionMode::Auto,             // partition_mode
+            None,                // TODO: Use JoinEdge.filter to construct proper JoinFilter
+            &join_type,          // Use determined join type
+            None,                // projection
+            PartitionMode::Auto, // partition_mode
             NullEquality::NullEqualsNothing, // null_equality
         )?);
 
@@ -160,6 +163,21 @@ impl<'a> PlanReconstructor<'a> {
             }
         }
         Ok(on_conditions)
+    }
+
+    /// Determines join type from edge information.
+    fn determine_join_type(&self, edge_indices: &[usize]) -> Result<JoinType> {
+        // Use the join type from the first edge, or default to Inner
+        for &edge_index in edge_indices {
+            let edge = self.query_graph.edges.get(edge_index).ok_or_else(|| {
+                DataFusionError::Internal(format!("Edge with index {} not found", edge_index))
+            })?;
+
+            return Ok(edge.join_type);
+        }
+
+        // Default to Inner join if no edges found
+        Ok(JoinType::Inner)
     }
 
     /// Clear plan cache.

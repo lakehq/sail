@@ -117,18 +117,23 @@ impl PlanEnumerator {
                 None => continue, // Skip if right plan doesn't exist
             };
 
-            // Estimate cardinality of the new join
-            let new_cardinality = self.cardinality_estimator.estimate_cardinality(subset);
+            // Get connecting edges for the join
+            let connecting_edges = self
+                .query_graph
+                .get_connecting_edges(left_subset, right_subset);
+
+            // Use more precise join cardinality estimation
+            let new_cardinality = self.cardinality_estimator.estimate_join_cardinality(
+                left_plan.cardinality,
+                right_plan.cardinality,
+                &connecting_edges,
+            );
 
             // Compute cost of the new plan
             let new_cost = self
                 .cost_model
                 .compute_cost(&left_plan, &right_plan, new_cardinality);
 
-            // Get connecting edges for the join
-            let connecting_edges = self
-                .query_graph
-                .get_connecting_edges(left_subset, right_subset);
             let edge_indices: Vec<usize> = connecting_edges
                 .iter()
                 .enumerate()

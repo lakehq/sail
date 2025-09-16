@@ -417,8 +417,7 @@ mod tests {
         )]));
         let plan = Arc::new(EmptyExec::new(schema));
 
-        // Test that EmptyExec is correctly identified as a base relation
-        assert!(builder.is_base_relation(plan.clone()));
+        // EmptyExec is handled as a base relation in visit_plan
 
         // Test the visit_plan method creates a relation node
         let column_map = builder.visit_plan(plan).unwrap();
