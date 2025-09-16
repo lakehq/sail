@@ -1,6 +1,6 @@
 use std::collections::{HashMap, HashSet};
 
-use crate::join_reorder::graph::{QueryGraph, StableColumn};
+use crate::join_reorder::graph::{JoinEdge, QueryGraph, StableColumn};
 use crate::join_reorder::join_set::JoinSet;
 
 /// Represents a group of columns that have the same domain due to equi-joins.
@@ -192,97 +192,107 @@ impl CardinalityEstimator {
 
     /// Estimate cardinality after joining a set of relations.
     pub fn estimate_cardinality(&mut self, join_set: JoinSet) -> f64 {
+        // a. Cache: Check cardinality_cache first
         if let Some(card) = self.cardinality_cache.get(&join_set) {
             return *card;
         }
 
         let estimated_card = if join_set.cardinality() == 1 {
-            // Single relation cardinality
-            self.estimate_single_relation_cardinality(join_set)
+            // b. Single relation: Get initial cardinality from query graph
+            let relation_id = join_set.iter().next().unwrap();
+            if let Some(relation) = self.graph.get_relation(relation_id) {
+                relation.initial_cardinality
+            } else {
+                1.0
+            }
         } else {
-            // Multi-relation join cardinality
-            self.estimate_join_cardinality(join_set)
+            // c. Multi-relation: Use numerator/denominator formula
+            self.estimate_multi_relation_cardinality(join_set)
         };
 
         self.cardinality_cache.insert(join_set, estimated_card);
         estimated_card
     }
 
-    /// Estimate cardinality of a single relation.
-    fn estimate_single_relation_cardinality(&self, join_set: JoinSet) -> f64 {
-        let relation_id = join_set
+    /// Estimate cardinality for multi-relation joins using numerator/denominator formula.
+    fn estimate_multi_relation_cardinality(&self, join_set: JoinSet) -> f64 {
+        // i. Numerator: Product of all relation initial cardinalities
+        let numerator = join_set
             .iter()
-            .next()
-            .expect("Single relation set should have one element");
+            .map(|id| {
+                self.graph
+                    .get_relation(id)
+                    .map(|r| r.initial_cardinality)
+                    .unwrap_or(1.0)
+            })
+            .product::<f64>();
 
-        if let Some(relation) = self.graph.get_relation(relation_id) {
-            relation.initial_cardinality
-        } else {
-            1.0 // Default value
-        }
-    }
+        // ii. Denominator: Find all JoinEdges completely contained in join_set
+        let mut denominator = 1.0;
+        let contained_edges = self.get_edges_contained_in_set(join_set);
 
-    /// Estimate cardinality of join operation.
-    fn estimate_join_cardinality(&self, join_set: JoinSet) -> f64 {
-        // TODO: Implement complex cardinality estimation logic.
-        // Simple model:
-        // 1. Calculate product of all relation cardinalities (Cartesian product).
-        // 2. Apply selectivity factor for each connecting edge.
-
-        // Calculate Cartesian product cardinality
-        let mut cartesian_product = 1.0;
-        for relation_id in join_set.iter() {
-            if let Some(relation) = self.graph.get_relation(relation_id) {
-                cartesian_product *= relation.initial_cardinality;
+        for edge in contained_edges {
+            // For each edge, find TDom of its join keys
+            let tdom = self.get_tdom_for_edge(edge);
+            if tdom > 1.0 {
+                denominator *= tdom;
             }
         }
 
-        // Apply selectivity of join conditions
-        let edges = self.graph.get_edges_for_set(join_set);
-        let mut selectivity_factor = 1.0;
-
-        for edge in edges {
-            // Simplified selectivity model
-            selectivity_factor *= edge.selectivity;
-        }
-
-        // Apply equivalence set constraints
-        let equivalence_factor = self.compute_equivalence_factor(join_set);
-
-        cartesian_product * selectivity_factor * equivalence_factor
+        numerator / denominator
     }
 
-    /// Calculate the impact factor of equivalence sets on cardinality.
-    fn compute_equivalence_factor(&self, join_set: JoinSet) -> f64 {
-        let mut factor = 1.0;
+    /// Get all edges that are completely contained within the given join_set.
+    fn get_edges_contained_in_set(&self, join_set: JoinSet) -> Vec<&JoinEdge> {
+        self.graph
+            .edges
+            .iter()
+            .filter(|edge| join_set.is_subset(&edge.join_set))
+            .collect()
+    }
 
+    /// Get TDom count for a join edge by finding the equivalence set of its join keys.
+    fn get_tdom_for_edge(&self, edge: &JoinEdge) -> f64 {
+        // Find the equivalence set that contains the join keys from this edge
         for equiv_set in &self.equivalence_sets {
-            let involved_relations: Vec<_> = equiv_set
-                .columns
-                .iter()
-                .map(|stable_col| stable_col.relation_id)
-                .filter(|rid| join_set.iter().any(|id| id == *rid))
-                .collect();
-
-            if involved_relations.len() > 1 {
-                // If multiple relations participate in the same equivalence set, apply T-dom constraint
-                let max_cardinality = involved_relations
-                    .iter()
-                    .map(|&rid| {
-                        self.graph
-                            .get_relation(rid)
-                            .map(|r| r.initial_cardinality)
-                            .unwrap_or(1.0)
-                    })
-                    .fold(0.0, f64::max);
-
-                if equiv_set.t_dom_count > 0.0 {
-                    factor *= (equiv_set.t_dom_count / max_cardinality).min(1.0);
+            // Check if any equi-pair from the edge is in this equivalence set
+            for (left_col, right_col) in &edge.equi_pairs {
+                if equiv_set.columns.contains(left_col) || equiv_set.columns.contains(right_col) {
+                    return equiv_set.t_dom_count;
                 }
             }
         }
 
-        factor
+        // If no equivalence set found, use a conservative estimate
+        // Take the maximum cardinality of relations involved in this edge
+        edge.join_set
+            .iter()
+            .map(|id| {
+                self.graph
+                    .get_relation(id)
+                    .map(|r| r.initial_cardinality)
+                    .unwrap_or(1.0)
+            })
+            .fold(1.0, f64::max)
+    }
+
+    /// Estimate join cardinality for a specific split (used by PlanEnumerator).
+    pub fn estimate_join_cardinality(
+        &self,
+        left_card: f64,
+        right_card: f64,
+        connecting_edges: &[&JoinEdge],
+    ) -> f64 {
+        let mut selectivity = 1.0;
+
+        for edge in connecting_edges {
+            let tdom = self.get_tdom_for_edge(edge);
+            if tdom > 1.0 {
+                selectivity *= 1.0 / tdom;
+            }
+        }
+
+        left_card * right_card * selectivity
     }
 
     /// Get reference to the query graph.
