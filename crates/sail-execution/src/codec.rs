@@ -52,6 +52,9 @@ use sail_data_source::formats::socket::{SocketSourceExec, TableSocketOptions};
 use sail_data_source::formats::text::source::TextSource;
 use sail_data_source::formats::text::writer::{TextSink, TextWriterOptions};
 use sail_delta_lake::delta_format::{DeltaCommitExec, DeltaWriterExec};
+use sail_physical_plan::streaming::collector::StreamCollectorExec;
+use sail_physical_plan::streaming::limit::StreamLimitExec;
+use sail_physical_plan::streaming::source_adapter::StreamSourceAdapterExec;
 use sail_plan::extension::function::array::arrays_zip::ArraysZip;
 use sail_plan::extension::function::array::spark_array::SparkArray;
 use sail_plan::extension::function::array::spark_array_item_with_position::ArrayItemWithPosition;
@@ -652,7 +655,24 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
                     sort_order,
                 )))
             }
-            // TODO: StreamingTableExec?
+            NodeKind::StreamCollector(gen::StreamCollectorExecNode { input }) => {
+                let input = self.try_decode_plan(&input, registry)?;
+                Ok(Arc::new(StreamCollectorExec::try_new(input)?))
+            }
+            NodeKind::StreamLimit(gen::StreamLimitExecNode { input, skip, fetch }) => {
+                let input = self.try_decode_plan(&input, registry)?;
+                let skip = usize::try_from(skip)
+                    .map_err(|_| plan_datafusion_err!("invalid skip value for StreamLimitExec"))?;
+                let fetch = fetch
+                    .map(usize::try_from)
+                    .transpose()
+                    .map_err(|_| plan_datafusion_err!("invalid fetch value for StreamLimitExec"))?;
+                Ok(Arc::new(StreamLimitExec::try_new(input, skip, fetch)?))
+            }
+            NodeKind::StreamSourceAdapter(gen::StreamSourceAdapterExecNode { input }) => {
+                let input = self.try_decode_plan(&input, registry)?;
+                Ok(Arc::new(StreamSourceAdapterExec::new(input)))
+            }
             _ => plan_err!("unsupported physical plan node: {node_kind:?}"),
         }
     }
@@ -920,7 +940,7 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
             let max_batch_size = u64::try_from(options.max_batch_size).map_err(|_| {
                 plan_datafusion_err!("cannot encode max batch size for socket source")
             })?;
-            let schema = self.try_encode_schema(socket_source.schema().as_ref())?;
+            let schema = self.try_encode_schema(socket_source.original_schema())?;
             let projection = self.try_encode_projection(socket_source.projection())?;
             NodeKind::SocketSource(gen::SocketSourceExecNode {
                 host: options.host.clone(),
@@ -1001,10 +1021,30 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
             } else {
                 return plan_err!("unsupported data sink node: {data_sink:?}");
             }
+        } else if let Some(stream_collector) = node.as_any().downcast_ref::<StreamCollectorExec>() {
+            let input = self.try_encode_plan(stream_collector.input().clone())?;
+            NodeKind::StreamCollector(gen::StreamCollectorExecNode { input })
+        } else if let Some(stream_limit) = node.as_any().downcast_ref::<StreamLimitExec>() {
+            let input = self.try_encode_plan(stream_limit.input().clone())?;
+            let skip = u64::try_from(stream_limit.skip()).map_err(|_| {
+                plan_datafusion_err!("cannot encode skip value for StreamLimitExec")
+            })?;
+            let fetch = stream_limit
+                .fetch()
+                .map(u64::try_from)
+                .transpose()
+                .map_err(|_| {
+                    plan_datafusion_err!("cannot encode fetch value for StreamLimitExec")
+                })?;
+            NodeKind::StreamLimit(gen::StreamLimitExecNode { input, skip, fetch })
+        } else if let Some(stream_source_adapter) =
+            node.as_any().downcast_ref::<StreamSourceAdapterExec>()
+        {
+            let input = self.try_encode_plan(stream_source_adapter.input().clone())?;
+            NodeKind::StreamSourceAdapter(gen::StreamSourceAdapterExecNode { input })
         } else {
             return plan_err!("unsupported physical plan node: {node:?}");
         };
-        // TODO: StreamingTableExec?
         let node = ExtendedPhysicalPlanNode {
             node_kind: Some(node_kind),
         };

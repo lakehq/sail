@@ -5,8 +5,9 @@ use std::sync::Arc;
 use async_trait::async_trait;
 use datafusion::catalog::{Session, TableProvider};
 use datafusion::physical_plan::ExecutionPlan;
-use datafusion_common::{not_impl_err, Result};
+use datafusion_common::{not_impl_err, plan_err, Result};
 use sail_common_datafusion::datasource::{PhysicalSinkMode, SinkInfo, SourceInfo, TableFormat};
+use sail_common_datafusion::streaming::event::schema::is_flow_event_schema;
 
 pub use crate::formats::console::writer::ConsoleSinkExec;
 
@@ -42,8 +43,11 @@ impl TableFormat for ConsoleTableFormat {
             sort_order,
             options,
         } = info;
+        if !is_flow_event_schema(&input.schema()) {
+            return plan_err!("the console table format only supports streaming data");
+        }
         if !path.is_empty() {
-            return not_impl_err!("the console table format does not support path");
+            return plan_err!("the console table format does not support path");
         }
         if !matches!(mode, PhysicalSinkMode::Append) {
             return not_impl_err!("the console table format only supports append mode");
