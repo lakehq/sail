@@ -5,11 +5,11 @@ use datafusion_common::ScalarValue;
 use datafusion_expr::{expr, ScalarUDF};
 
 use crate::error::PlanResult;
+use crate::extension::function::hash::spark_crc32::SparkCrc32;
+use crate::extension::function::hash::spark_murmur3_hash::SparkMurmur3Hash;
+use crate::extension::function::hash::spark_sha1::SparkSha1;
+use crate::extension::function::hash::spark_xxhash64::SparkXxhash64;
 use crate::extension::function::math::spark_hex_unhex::SparkHex;
-use crate::extension::function::spark_crc32::SparkCrc32;
-use crate::extension::function::spark_murmur3_hash::SparkMurmur3Hash;
-use crate::extension::function::spark_sha1::SparkSha1;
-use crate::extension::function::spark_xxhash64::SparkXxhash64;
 use crate::function::common::{ScalarFunction, ScalarFunctionInput};
 use crate::utils::ItemTaker;
 
