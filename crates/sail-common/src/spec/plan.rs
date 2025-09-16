@@ -1187,3 +1187,11 @@ pub enum AlterViewOperation {
     Unknown,
     // TODO: add all the alter view operations
 }
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct Delete {
+    pub table: ObjectName,
+    pub table_alias: Option<Identifier>,
+    pub condition: Option<Expr>,
+}

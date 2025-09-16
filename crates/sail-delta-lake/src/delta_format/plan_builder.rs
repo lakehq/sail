@@ -1,5 +1,6 @@
 use std::sync::Arc;
 
+use datafusion::arrow::datatypes::SchemaRef;
 use datafusion::catalog::Session;
 use datafusion::datasource::provider_as_source;
 use datafusion::logical_expr::LogicalPlanBuilder;
@@ -11,22 +12,31 @@ use datafusion_common::Result;
 use sail_common_datafusion::datasource::PhysicalSinkMode;
 use url::Url;
 
-use super::{create_projection, create_repartition, create_sort, DeltaCommitExec, DeltaWriterExec};
+use super::{
+    create_projection, create_repartition, create_sort, DeltaCommitExec, DeltaFindFilesExec,
+    DeltaWriterExec,
+};
 use crate::delta_datafusion::{
     delta_to_datafusion_error, DataFusionMixins, DeltaScanConfigBuilder, DeltaTableProvider,
 };
 use crate::options::TableDeltaOptions;
+
+/// Configuration for Delta table operations
+pub struct DeltaTableConfig {
+    pub table_url: Url,
+    pub options: TableDeltaOptions,
+    pub partition_columns: Vec<String>,
+    pub table_schema_for_cond: Option<SchemaRef>,
+    pub table_exists: bool,
+}
 
 /// Builder for creating a Delta Lake execution plan with the specified structure:
 /// Input -> Project -> Repartition -> Sort -> CoalescePartitions -> Writer -> Commit
 /// For OverwriteIf mode: NewData + OldData -> Union -> Writer -> Commit
 pub struct DeltaPlanBuilder<'a> {
     input: Arc<dyn ExecutionPlan>,
-    table_url: Url,
-    options: TableDeltaOptions,
-    partition_columns: Vec<String>,
+    table_config: DeltaTableConfig,
     sink_mode: PhysicalSinkMode,
-    table_exists: bool,
     sort_order: Option<LexRequirement>,
     session_state: &'a dyn Session,
 }
@@ -34,21 +44,15 @@ pub struct DeltaPlanBuilder<'a> {
 impl<'a> DeltaPlanBuilder<'a> {
     pub fn new(
         input: Arc<dyn ExecutionPlan>,
-        table_url: Url,
-        options: TableDeltaOptions,
-        partition_columns: Vec<String>,
+        table_config: DeltaTableConfig,
         sink_mode: PhysicalSinkMode,
-        table_exists: bool,
         sort_order: Option<LexRequirement>,
         session_state: &'a dyn Session,
     ) -> Self {
         Self {
             input,
-            table_url,
-            options,
-            partition_columns,
+            table_config,
             sink_mode,
-            table_exists,
             sort_order,
             session_state,
         }
@@ -70,7 +74,7 @@ impl<'a> DeltaPlanBuilder<'a> {
             .and_then(|plan| self.add_repartition_node(plan))
             .and_then(|plan| self.add_sort_node(plan))
             .and_then(|plan| self.add_writer_node(plan))
-            .and_then(|plan| self.add_commit_node(plan))
+            .and_then(|plan| self.add_commit_node(plan, None))
     }
 
     /// Build a Union execution plan for OverwriteIf mode
@@ -78,6 +82,40 @@ impl<'a> DeltaPlanBuilder<'a> {
         self,
         condition: Arc<dyn PhysicalExpr>,
     ) -> Result<Arc<dyn ExecutionPlan>> {
+        // Load table to get current version
+        let object_store = self
+            .session_state
+            .runtime_env()
+            .object_store_registry
+            .get_store(&self.table_config.table_url)
+            .map_err(|e| datafusion_common::DataFusionError::External(Box::new(e)))?;
+
+        let log_store = deltalake::logstore::default_logstore(
+            object_store.clone(),
+            object_store,
+            &self.table_config.table_url,
+            &Default::default(),
+        );
+
+        let mut table = crate::table::DeltaTable::new(log_store, Default::default());
+        table
+            .load()
+            .await
+            .map_err(|e| datafusion_common::DataFusionError::External(Box::new(e)))?;
+
+        let snapshot_state = table.snapshot().map_err(delta_to_datafusion_error)?;
+        let version = snapshot_state.version();
+
+        let remove_plan = {
+            let table_schema = self.table_config.table_schema_for_cond.clone();
+            Some(Arc::new(DeltaFindFilesExec::new(
+                self.table_config.table_url.clone(),
+                Some(condition.clone()),
+                table_schema,
+                version,
+            )) as Arc<dyn ExecutionPlan>)
+        };
+
         let old_data_plan = self.build_old_data_plan(condition).await?;
 
         let new_data_plan = self
@@ -91,7 +129,7 @@ impl<'a> DeltaPlanBuilder<'a> {
                     as Arc<dyn ExecutionPlan>
             })
             .and_then(|union_plan| self.add_writer_node(union_plan))
-            .and_then(|plan| self.add_commit_node(plan))
+            .and_then(|plan| self.add_commit_node(plan, remove_plan))
     }
 
     /// Build the plan for scanning and filtering old data
@@ -104,13 +142,13 @@ impl<'a> DeltaPlanBuilder<'a> {
             .session_state
             .runtime_env()
             .object_store_registry
-            .get_store(&self.table_url)
+            .get_store(&self.table_config.table_url)
             .map_err(|e| datafusion_common::DataFusionError::External(Box::new(e)))?;
 
         let log_store = deltalake::logstore::default_logstore(
             object_store.clone(),
             object_store,
-            &self.table_url,
+            &self.table_config.table_url,
             &Default::default(),
         );
 
@@ -216,21 +254,27 @@ impl<'a> DeltaPlanBuilder<'a> {
     }
 
     fn add_projection_node(&self, input: Arc<dyn ExecutionPlan>) -> Result<Arc<dyn ExecutionPlan>> {
-        Ok(create_projection(input, self.partition_columns.clone())?)
+        Ok(create_projection(
+            input,
+            self.table_config.partition_columns.clone(),
+        )?)
     }
 
     fn add_repartition_node(
         &self,
         input: Arc<dyn ExecutionPlan>,
     ) -> Result<Arc<dyn ExecutionPlan>> {
-        Ok(create_repartition(input, self.partition_columns.clone())?)
+        Ok(create_repartition(
+            input,
+            self.table_config.partition_columns.clone(),
+        )?)
     }
 
     fn add_sort_node(&self, input: Arc<dyn ExecutionPlan>) -> Result<Arc<dyn ExecutionPlan>> {
         // create_sort handles both partition columns and user-specified sort order
         Ok(create_sort(
             input,
-            self.partition_columns.clone(),
+            self.table_config.partition_columns.clone(),
             self.sort_order.clone(),
         )?)
     }
@@ -239,21 +283,26 @@ impl<'a> DeltaPlanBuilder<'a> {
         let schema = input.schema();
         Ok(Arc::new(DeltaWriterExec::new(
             input,
-            self.table_url.clone(),
-            self.options.clone(),
-            self.partition_columns.clone(),
+            self.table_config.table_url.clone(),
+            self.table_config.options.clone(),
+            self.table_config.partition_columns.clone(),
             self.sink_mode.clone(),
-            self.table_exists,
+            self.table_config.table_exists,
             schema,
         )))
     }
 
-    fn add_commit_node(&self, input: Arc<dyn ExecutionPlan>) -> Result<Arc<dyn ExecutionPlan>> {
+    fn add_commit_node(
+        &self,
+        input: Arc<dyn ExecutionPlan>,
+        remove_plan: Option<Arc<dyn ExecutionPlan>>,
+    ) -> Result<Arc<dyn ExecutionPlan>> {
         Ok(Arc::new(DeltaCommitExec::new(
             input,
-            self.table_url.clone(),
-            self.partition_columns.clone(),
-            self.table_exists,
+            remove_plan,
+            self.table_config.table_url.clone(),
+            self.table_config.partition_columns.clone(),
+            self.table_config.table_exists,
             self.input.schema(), // Use original input schema for metadata
             self.sink_mode.clone(),
         )))

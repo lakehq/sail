@@ -7,10 +7,12 @@ use datafusion::common::{not_impl_err, plan_err, DataFusionError, Result, ToDFSc
 use datafusion::datasource::listing::ListingTableUrl;
 use datafusion::execution::SessionStateBuilder;
 use datafusion::physical_plan::ExecutionPlan;
-use sail_common_datafusion::datasource::{PhysicalSinkMode, SinkInfo, SourceInfo, TableFormat};
+use sail_common_datafusion::datasource::{
+    DeleteInfo, PhysicalSinkMode, SinkInfo, SourceInfo, TableFormat,
+};
 use sail_delta_lake::create_delta_provider;
 use sail_delta_lake::delta_datafusion::{parse_predicate_expression, DataFusionMixins};
-use sail_delta_lake::delta_format::DeltaPlanBuilder;
+use sail_delta_lake::delta_format::{DeltaDeleteExec, DeltaFindFilesExec, DeltaPlanBuilder};
 use sail_delta_lake::options::TableDeltaOptions;
 use sail_delta_lake::table::open_table_with_object_store;
 use url::Url;
@@ -100,31 +102,95 @@ impl TableFormat for DeltaTableFormat {
         }
 
         // Convert Overwrite with replace_where to OverwriteIf
-        let unified_mode = if let PhysicalSinkMode::Overwrite = mode {
+        let (unified_mode, table_schema_for_cond) = if let PhysicalSinkMode::Overwrite = mode {
             if let Some(replace_where) = &delta_options.replace_where {
                 // Parse the replace_where condition into a PhysicalExpr
-                Self::parse_replace_where_condition(ctx, &table_url, replace_where, table_exists)
-                    .await?
+                let (mode, schema) = Self::parse_replace_where_condition(
+                    ctx,
+                    &table_url,
+                    replace_where,
+                    table_exists,
+                )
+                .await?;
+                (mode, Some(schema))
             } else {
-                mode
+                (mode, None)
             }
         } else {
-            mode
+            (mode, None)
         };
 
-        let plan_builder = DeltaPlanBuilder::new(
-            input,
+        let table_config = sail_delta_lake::delta_format::plan_builder::DeltaTableConfig {
             table_url,
-            delta_options,
-            partition_by,
-            unified_mode,
+            options: delta_options,
+            partition_columns: partition_by,
+            table_schema_for_cond,
             table_exists,
-            sort_order,
-            ctx,
-        );
+        };
+        let plan_builder =
+            DeltaPlanBuilder::new(input, table_config, unified_mode, sort_order, ctx);
         let sink_exec = plan_builder.build().await?;
 
         Ok(sink_exec)
+    }
+
+    async fn create_deleter(
+        &self,
+        ctx: &dyn Session,
+        info: DeleteInfo,
+    ) -> Result<Arc<dyn ExecutionPlan>> {
+        let DeleteInfo {
+            path,
+            condition,
+            options: _,
+        } = info;
+
+        let table_url = Self::parse_table_url(ctx, vec![path]).await?;
+
+        // Check for table existence and get schema
+        let object_store = ctx
+            .runtime_env()
+            .object_store_registry
+            .get_store(&table_url)
+            .map_err(|e| DataFusionError::External(Box::new(e)))?;
+        let table =
+            open_table_with_object_store(table_url.clone(), object_store, Default::default())
+                .await
+                .map_err(|e| {
+                    DataFusionError::Plan(format!(
+                "Cannot delete from non-existent Delta table at path: {table_url}. Error: {e}"
+            ))
+                })?;
+
+        // Get table snapshot and version
+        let snapshot_state = table
+            .snapshot()
+            .map_err(|e| DataFusionError::External(Box::new(e)))?;
+        let version = snapshot_state.version();
+
+        let table_schema = snapshot_state
+            .snapshot()
+            .arrow_schema()
+            .map_err(|e| DataFusionError::External(Box::new(e)))?;
+
+        let condition = condition.ok_or_else(|| {
+            DataFusionError::Plan("DELETE operation requires a WHERE condition".to_string())
+        })?;
+
+        let find_files_exec = Arc::new(DeltaFindFilesExec::new(
+            table_url.clone(),
+            Some(condition.clone()),
+            Some(table_schema.clone()),
+            version,
+        ));
+
+        Ok(Arc::new(DeltaDeleteExec::new(
+            find_files_exec,
+            table_url,
+            condition,
+            table_schema,
+            version,
+        )))
     }
 }
 
@@ -142,9 +208,10 @@ impl DeltaTableFormat {
         table_url: &Url,
         replace_where: &str,
         table_exists: bool,
-    ) -> Result<PhysicalSinkMode> {
+    ) -> Result<(PhysicalSinkMode, Arc<datafusion::arrow::datatypes::Schema>)> {
         if !table_exists {
-            return Ok(PhysicalSinkMode::Overwrite);
+            // When table doesn't exist, it's a simple overwrite and no condition is needed.
+            return plan_err!("Table does not exist, cannot use replaceWhere");
         }
 
         let object_store = ctx
@@ -166,7 +233,7 @@ impl DeltaTableFormat {
             .arrow_schema()
             .map_err(|e| DataFusionError::External(Box::new(e)))?;
 
-        let df_schema = arrow_schema.to_dfschema()?;
+        let df_schema = arrow_schema.clone().to_dfschema()?;
 
         let session_state = SessionStateBuilder::new()
             .with_runtime_env(ctx.runtime_env().clone())
@@ -177,9 +244,12 @@ impl DeltaTableFormat {
 
         let physical_expr = session_state.create_physical_expr(logical_expr, &df_schema)?;
 
-        Ok(PhysicalSinkMode::OverwriteIf {
-            condition: physical_expr,
-        })
+        Ok((
+            PhysicalSinkMode::OverwriteIf {
+                condition: physical_expr,
+            },
+            arrow_schema,
+        ))
     }
 }
 
