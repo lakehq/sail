@@ -7,6 +7,13 @@ use datafusion::physical_plan::ExecutionPlan;
 
 use crate::join_reorder::join_set::JoinSet;
 
+/// Represents a stable column identifier across the query graph.
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub struct StableColumn {
+    pub relation_id: usize,
+    pub column_index: usize,
+}
+
 /// Represents a single reorderable relation (e.g., TableScanExec).
 #[derive(Debug, Clone)]
 pub struct RelationNode {
@@ -48,6 +55,8 @@ pub struct JoinEdge {
     pub join_type: JoinType,
     /// Selectivity estimate (between 0.0 and 1.0)
     pub selectivity: f64,
+    /// Parsed equi-join pairs from the join condition
+    pub equi_pairs: Vec<(StableColumn, StableColumn)>,
 }
 
 impl JoinEdge {
@@ -56,12 +65,14 @@ impl JoinEdge {
         filter: Arc<dyn PhysicalExpr>,
         join_type: JoinType,
         selectivity: f64,
+        equi_pairs: Vec<(StableColumn, StableColumn)>,
     ) -> Self {
         Self {
             join_set,
             filter,
             join_type,
             selectivity,
+            equi_pairs,
         }
     }
 }

@@ -3,10 +3,13 @@ use std::sync::Arc;
 
 use datafusion::error::{DataFusionError, Result};
 use datafusion::logical_expr::JoinType;
-use datafusion::physical_expr::{expressions::Column, PhysicalExpr};
-use datafusion::physical_plan::{joins::HashJoinExec, projection::ProjectionExec, ExecutionPlan};
+use datafusion::physical_expr::expressions::Column;
+use datafusion::physical_expr::PhysicalExpr;
+use datafusion::physical_plan::joins::HashJoinExec;
+use datafusion::physical_plan::projection::ProjectionExec;
+use datafusion::physical_plan::ExecutionPlan;
 
-use crate::join_reorder::graph::{JoinEdge, QueryGraph, RelationNode};
+use crate::join_reorder::graph::{JoinEdge, QueryGraph, RelationNode, StableColumn};
 use crate::join_reorder::join_set::JoinSet;
 
 /// Maps an output column from an ExecutionPlan back to a stable identifier.
@@ -126,6 +129,7 @@ impl GraphBuilder {
 
         // Parse Join conditions, create JoinEdge
         let mut all_relations_in_condition = JoinSet::default();
+        let mut equi_pairs = Vec::new();
 
         for (left_on, right_on) in join_plan.on() {
             // Parse left and right expressions, find their corresponding stable IDs
@@ -137,6 +141,14 @@ impl GraphBuilder {
                 all_relations_in_condition =
                     all_relations_in_condition.union(&JoinSet::new_singleton(*rel_id));
             }
+
+            // Try to resolve expressions to single stable columns for equi-join pairs
+            if let (Some(left_stable_col), Some(right_stable_col)) = (
+                self.resolve_to_single_stable_col(left_on, &left_map)?,
+                self.resolve_to_single_stable_col(right_on, &right_map)?,
+            ) {
+                equi_pairs.push((left_stable_col, right_stable_col));
+            }
         }
 
         // Create an expression representing the entire ON condition
@@ -147,6 +159,7 @@ impl GraphBuilder {
             filter_expr,
             join_plan.join_type().clone(),
             0.1, // TODO: Initial selectivity estimate
+            equi_pairs,
         );
         self.graph.add_edge(edge);
 
@@ -265,6 +278,37 @@ impl GraphBuilder {
         }
 
         Ok(relation_ids)
+    }
+
+    /// Helper function to resolve an expression to a single StableColumn if possible.
+    /// Returns None if the expression is not a simple column reference.
+    fn resolve_to_single_stable_col(
+        &self,
+        expr: &Arc<dyn PhysicalExpr>,
+        column_map: &ColumnMap,
+    ) -> Result<Option<StableColumn>> {
+        if let Some(col) = expr.as_any().downcast_ref::<Column>() {
+            // This is a direct column reference
+            if let Some(entry) = column_map.get(col.index()) {
+                match entry {
+                    ColumnMapEntry::Stable {
+                        relation_id,
+                        column_index,
+                    } => {
+                        return Ok(Some(StableColumn {
+                            relation_id: *relation_id,
+                            column_index: *column_index,
+                        }));
+                    }
+                    ColumnMapEntry::Expression(_) => {
+                        // This column comes from a complex expression
+                        return Ok(None);
+                    }
+                }
+            }
+        }
+        // For complex expressions, return None
+        Ok(None)
     }
 
     /// Helper function to build a conjunction expression from join ON conditions.
