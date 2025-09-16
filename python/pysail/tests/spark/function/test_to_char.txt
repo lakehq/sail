@@ -1,0 +1,104 @@
+>>> spark.sql("SELECT to_char(12345.67, '99999.99') AS result, typeof(to_char(12345.67, '99999.99')) AS type").show(truncate=False)
++--------+------+
+|result  |type  |
++--------+------+
+|12345.67|string|
++--------+------+
+
+>>> spark.sql("SELECT to_char(7, '099') AS result, typeof(to_char(7, '099')) AS type").show(truncate=False)
++------+------+
+|result|type  |
++------+------+
+|007   |string|
++------+------+
+
+>>> spark.sql("SELECT to_char(1234567, '999,999,999') AS result, typeof(to_char(1234567, '999,999,999')) AS type").show(truncate=False)
++-----------+------+
+|result     |type  |
++-----------+------+
+|1,234,567  |string|
++-----------+------+
+
+>>> spark.sql("SELECT to_char(123.456, '999.99') AS result, typeof(to_char(123.456, '999.99')) AS type").show(truncate=False)
++--------+------+
+|result  |type  |
++--------+------+
+|123.46  |string|
++--------+------+
+
+>>> spark.sql("SELECT to_char(-12345.67, '99999.99') AS result, typeof(to_char(-12345.67, '99999.99')) AS type").show(truncate=False)
++---------+------+
+|result   |type  |
++---------+------+
+|-12345.67|string|
++---------+------+
+
+>>> spark.sql("SELECT to_char(12345.67, '$99999.99') AS result, typeof(to_char(12345.67, '$99999.99')) AS type").show(truncate=False)
++-----------+------+
+|result     |type  |
++-----------+------+
+|$12345.67  |string|
++-----------+------+
+
+>>> spark.sql("SELECT to_char(-12345.67, '99999.99S') AS result, typeof(to_char(-12345.67, '99999.99S')) AS type").show(truncate=False)
++-----------+------+
+|result     |type  |
++-----------+------+
+|12345.67-  |string|
++-----------+------+
+
+>>> spark.sql("SELECT to_char(123456789, '99999') AS result, typeof(to_char(123456789, '99999')) AS type").show(truncate=False)
++-----------+------+
+|result     |type  |
++-----------+------+
+|123456789  |string|
++-----------+------+
+
+>>> spark.sql("SELECT to_char(NULL, '99999.99') AS result, typeof(to_char(NULL, '99999.99')) AS type").show(truncate=False)
++------+------+
+|result|type  |
++------+------+
+|NULL  |string|
++------+------+
+
+>>> spark.sql("SELECT to_char(12345.67, '') AS result, typeof(to_char(12345.67, '')) AS type").show(truncate=False)
++--------+------+
+|result  |type  |
++--------+------+
+|12345.67|string|
++--------+------+
+
+>>> spark.sql("SELECT to_char(0, '00000') AS result, typeof(to_char(0, '00000')) AS type").show(truncate=False)
++-------+------+
+|result |type  |
++-------+------+
+|00000  |string|
++-------+------+
+
+>>> spark.sql("SELECT to_char(42, '9999') AS result, typeof(to_char(42, '9999')) AS type").show(truncate=False)
++------+------+
+|result|type  |
++------+------+
+|  42  |string|
++------+------+
+
+>>> spark.sql("SELECT to_char(9876.543, '9999.9') AS result, typeof(to_char(9876.543, '9999.9')) AS type").show(truncate=False)
++--------+------+
+|result  |type  |
++--------+------+
+|9876.5  |string|
++--------+------+
+
+>>> spark.sql("SELECT to_char(-9876.543, 'S9999.9') AS result, typeof(to_char(-9876.543, 'S9999.9')) AS type").show(truncate=False)
++--------+------+
+|result  |type  |
++--------+------+
+|-9876.5 |string|
++--------+------+
+
+>>> spark.sql("SELECT to_char(-9876.543, '9999.9S') AS result, typeof(to_char(-9876.543, '9999.9S')) AS type").show(truncate=False)
++--------+------+
+|result  |type  |
++--------+------+
+|9876.5- |string|
++--------+------+
