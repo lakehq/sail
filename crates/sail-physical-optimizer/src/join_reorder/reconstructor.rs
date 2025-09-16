@@ -1,146 +1,165 @@
+use std::collections::HashMap;
 use std::sync::Arc;
 
-use datafusion::error::Result;
+use datafusion::common::NullEquality;
+use datafusion::error::{DataFusionError, Result};
+use datafusion::logical_expr::JoinType;
+use datafusion::physical_expr::expressions::Column;
+use datafusion::physical_expr::PhysicalExpr;
+use datafusion::physical_plan::joins::{HashJoinExec, PartitionMode};
 use datafusion::physical_plan::ExecutionPlan;
 
+use crate::join_reorder::builder::{ColumnMap, ColumnMapEntry};
 use crate::join_reorder::dp_plan::{DPPlan, PlanType};
-use crate::join_reorder::graph::QueryGraph;
+use crate::join_reorder::graph::{QueryGraph, StableColumn};
+use crate::join_reorder::join_set::JoinSet;
 
 /// Plan reconstructor, converting the optimal DPPlan back to ExecutionPlan.
-pub struct PlanReconstructor {
+pub struct PlanReconstructor<'a> {
+    /// Reference to the complete DP table for looking up subproblems
+    dp_table: &'a HashMap<JoinSet, Arc<DPPlan>>,
+    /// Reference to the query graph
+    query_graph: &'a QueryGraph,
     /// Cache for reconstructed plans to avoid duplicate construction
-    plan_cache:
-        std::collections::HashMap<crate::join_reorder::join_set::JoinSet, Arc<dyn ExecutionPlan>>,
+    plan_cache: HashMap<JoinSet, (Arc<dyn ExecutionPlan>, ColumnMap)>,
 }
 
-impl PlanReconstructor {
-    pub fn new() -> Self {
+impl<'a> PlanReconstructor<'a> {
+    pub fn new(dp_table: &'a HashMap<JoinSet, Arc<DPPlan>>, query_graph: &'a QueryGraph) -> Self {
         Self {
-            plan_cache: std::collections::HashMap::new(),
+            dp_table,
+            query_graph,
+            plan_cache: HashMap::new(),
         }
     }
 
-    /// Reconstruct ExecutionPlan from the optimal DPPlan.
-    pub fn reconstruct(
-        &mut self,
-        dp_plan: Arc<DPPlan>,
-        query_graph: &QueryGraph,
-    ) -> Result<Arc<dyn ExecutionPlan>> {
+    /// Main entry point: recursively reconstruct ExecutionPlan from DPPlan
+    /// Returns tuple: (reconstructed plan, column mapping for that plan's output)
+    pub fn reconstruct(&mut self, dp_plan: &DPPlan) -> Result<(Arc<dyn ExecutionPlan>, ColumnMap)> {
         // Check cache
-        if let Some(cached_plan) = self.plan_cache.get(&dp_plan.join_set) {
-            return Ok(cached_plan.clone());
+        if let Some(cached) = self.plan_cache.get(&dp_plan.join_set) {
+            return Ok(cached.clone());
         }
 
-        let execution_plan = match &dp_plan.plan_type {
-            PlanType::Leaf { relation_id } => {
-                // Leaf node: return the original relation plan
-                self.reconstruct_leaf(*relation_id, query_graph)?
-            }
+        let result = match &dp_plan.plan_type {
+            PlanType::Leaf { relation_id } => self.reconstruct_leaf(*relation_id)?,
             PlanType::Join {
                 left_set,
                 right_set,
                 edge_indices,
-            } => {
-                // Join node: recursively reconstruct left and right child plans, then create Join
-                self.reconstruct_join(*left_set, *right_set, edge_indices, query_graph)?
-            }
+            } => self.reconstruct_join(*left_set, *right_set, edge_indices)?,
         };
 
-        // Cache result
-        self.plan_cache
-            .insert(dp_plan.join_set, execution_plan.clone());
-        Ok(execution_plan)
+        // Store in cache and return
+        self.plan_cache.insert(dp_plan.join_set, result.clone());
+        Ok(result)
     }
 
     /// Reconstruct leaf node (single relation).
-    fn reconstruct_leaf(
-        &self,
-        relation_id: usize,
-        query_graph: &QueryGraph,
-    ) -> Result<Arc<dyn ExecutionPlan>> {
-        query_graph
-            .get_relation(relation_id)
-            .map(|relation| relation.plan.clone())
-            .ok_or_else(|| {
-                datafusion::error::DataFusionError::Internal(format!(
-                    "Relation {} not found in query graph",
-                    relation_id
-                ))
+    fn reconstruct_leaf(&self, relation_id: usize) -> Result<(Arc<dyn ExecutionPlan>, ColumnMap)> {
+        let relation_node = self.query_graph.get_relation(relation_id).ok_or_else(|| {
+            DataFusionError::Internal(format!("Relation {} not found in query graph", relation_id))
+        })?;
+
+        let plan = relation_node.plan.clone();
+
+        // Create a fresh ColumnMap for this base relation
+        let column_map = (0..plan.schema().fields().len())
+            .map(|i| ColumnMapEntry::Stable {
+                relation_id,
+                column_index: i,
             })
+            .collect();
+
+        Ok((plan, column_map))
     }
 
     /// Reconstruct Join node.
     fn reconstruct_join(
         &mut self,
-        _left_set: crate::join_reorder::join_set::JoinSet,
-        _right_set: crate::join_reorder::join_set::JoinSet,
-        _edge_indices: &[usize],
-        _query_graph: &QueryGraph,
-    ) -> Result<Arc<dyn ExecutionPlan>> {
-        // TODO: Implement Join node reconstruction logic
-        // 1. Recursively reconstruct left and right child plans
-        // 2. Get Join conditions from edge_indices
-        // 3. Create appropriate Join execution plan (HashJoinExec etc.)
-        // 4. Set Join type, conditions, etc.
+        left_set: JoinSet,
+        right_set: JoinSet,
+        edge_indices: &[usize],
+    ) -> Result<(Arc<dyn ExecutionPlan>, ColumnMap)> {
+        // 1. Find left and right subplans from DP table
+        let left_dp_plan = self.dp_table.get(&left_set).ok_or_else(|| {
+            DataFusionError::Internal("Left subplan not found in DP table".to_string())
+        })?;
+        let right_dp_plan = self.dp_table.get(&right_set).ok_or_else(|| {
+            DataFusionError::Internal("Right subplan not found in DP table".to_string())
+        })?;
 
-        // TODO: Placeholder implementation
-        // - Create corresponding DPPlan from left and right child sets
-        // - Recursively call reconstruct to get left and right child plans
-        // - Build Join conditions from edge_indices
-        // - Create HashJoinExec or other Join implementation
+        // 2. Recursively reconstruct left and right subplans
+        let (left_plan, left_map) = self.reconstruct(left_dp_plan)?;
+        let (right_plan, right_map) = self.reconstruct(right_dp_plan)?;
 
-        Err(datafusion::error::DataFusionError::NotImplemented(
-            "Join reconstruction not yet implemented".to_string(),
-        ))
+        // 3. Build physical join conditions
+        let on_conditions = self.build_join_conditions(edge_indices, &left_map, &right_map)?;
+
+        // 4. Create HashJoinExec
+        // For Join Reorder, we only handle INNER JOIN
+        let join_plan = Arc::new(HashJoinExec::try_new(
+            left_plan,
+            right_plan,
+            on_conditions,
+            None, // filter, our filter logic is in ON conditions
+            &JoinType::Inner,
+            None,                            // projection
+            PartitionMode::Auto,             // partition_mode
+            NullEquality::NullEqualsNothing, // null_equality
+        )?);
+
+        // 5. Merge left and right ColumnMap to create output ColumnMap for new Join plan
+        let mut join_output_map = left_map;
+        join_output_map.extend(right_map);
+
+        Ok((join_plan, join_output_map))
     }
 
-    /// Build Join conditions from edge indices.
+    /// Builds physical join conditions (`on` clause) from edge information.
     fn build_join_conditions(
         &self,
         edge_indices: &[usize],
-        query_graph: &QueryGraph,
-        _left_plan: &Arc<dyn ExecutionPlan>,
-        _right_plan: &Arc<dyn ExecutionPlan>,
-    ) -> Result<
-        Vec<(
-            Arc<dyn datafusion::physical_expr::PhysicalExpr>,
-            Arc<dyn datafusion::physical_expr::PhysicalExpr>,
-        )>,
-    > {
-        // TODO: Implement Join condition building logic
-        // 1. Get the edge from query_graph.edges with the specified index
-        // 2. Parse the filter expression of the edge
-        // 3. Separate the expressions on both sides
-        // 4. Build equi-join conditions
-
-        let join_conditions = Vec::new();
+        left_map: &ColumnMap,
+        right_map: &ColumnMap,
+    ) -> Result<Vec<(Arc<dyn PhysicalExpr>, Arc<dyn PhysicalExpr>)>> {
+        let mut on_conditions = vec![];
 
         for &edge_index in edge_indices {
-            if let Some(_edge) = query_graph.edges.get(edge_index) {
-                // TODO: Parse edge.filter, extract equi-join conditions
-                // This requires expression analysis and rewriting logic
+            let edge = self.query_graph.edges.get(edge_index).ok_or_else(|| {
+                DataFusionError::Internal(format!("Edge with index {} not found", edge_index))
+            })?;
+
+            // Use the pre-processed equi-pairs from GraphBuilder
+            for (col1_stable, col2_stable) in &edge.equi_pairs {
+                // Find these two stable columns in left_map and right_map
+                let col1_left_idx = find_physical_index(col1_stable, left_map);
+                let col1_right_idx = find_physical_index(col1_stable, right_map);
+                let col2_left_idx = find_physical_index(col2_stable, left_map);
+                let col2_right_idx = find_physical_index(col2_stable, right_map);
+
+                // Ensure one comes from left and one from right
+                if let (Some(left_idx), Some(right_idx)) = (col1_left_idx, col2_right_idx) {
+                    let left_col: Arc<dyn PhysicalExpr> =
+                        Arc::new(Column::new(&col1_stable.name, left_idx));
+                    let right_col: Arc<dyn PhysicalExpr> =
+                        Arc::new(Column::new(&col2_stable.name, right_idx));
+                    on_conditions.push((left_col, right_col));
+                } else if let (Some(left_idx), Some(right_idx)) = (col2_left_idx, col1_right_idx) {
+                    let left_col: Arc<dyn PhysicalExpr> =
+                        Arc::new(Column::new(&col2_stable.name, left_idx));
+                    let right_col: Arc<dyn PhysicalExpr> =
+                        Arc::new(Column::new(&col1_stable.name, right_idx));
+                    on_conditions.push((left_col, right_col));
+                } else {
+                    // This is an important check - if we can't find matching columns, logic is wrong
+                    return Err(DataFusionError::Internal(
+                        "Could not map stable join columns to physical plan outputs".to_string(),
+                    ));
+                }
             }
         }
-
-        Ok(join_conditions)
-    }
-
-    /// Choose the best Join algorithm.
-    fn choose_join_algorithm(
-        &self,
-        _left_cardinality: f64,
-        _right_cardinality: f64,
-        _join_conditions: &[(
-            Arc<dyn datafusion::physical_expr::PhysicalExpr>,
-            Arc<dyn datafusion::physical_expr::PhysicalExpr>,
-        )],
-    ) -> JoinAlgorithmChoice {
-        // TODO: Implement Join algorithm selection logic
-        // 1. Choose Hash Join or Nested Loop Join based on data size
-        // 2. Consider if there are equi-conditions
-        // 3. Consider memory limitations, etc.
-
-        JoinAlgorithmChoice::Hash // Default choice
+        Ok(on_conditions)
     }
 
     /// Clear plan cache.
@@ -149,18 +168,15 @@ impl PlanReconstructor {
     }
 }
 
-/// Join algorithm choice.
-#[derive(Debug, Clone, Copy)]
-enum JoinAlgorithmChoice {
-    Hash,
-    NestedLoop,
-    SortMerge,
-}
-
-impl Default for PlanReconstructor {
-    fn default() -> Self {
-        Self::new()
-    }
+/// Helper to find the physical index of a stable column in a ColumnMap.
+fn find_physical_index(stable_col: &StableColumn, map: &ColumnMap) -> Option<usize> {
+    map.iter().position(|entry| match entry {
+        ColumnMapEntry::Stable {
+            relation_id,
+            column_index,
+        } => relation_id == &stable_col.relation_id && column_index == &stable_col.column_index,
+        _ => false,
+    })
 }
 
 #[cfg(test)]
@@ -190,25 +206,29 @@ mod tests {
 
     #[test]
     fn test_reconstructor_creation() {
-        let reconstructor = PlanReconstructor::new();
+        let dp_table = HashMap::new();
+        let graph = QueryGraph::new();
+        let reconstructor = PlanReconstructor::new(&dp_table, &graph);
         assert!(reconstructor.plan_cache.is_empty());
     }
 
     #[test]
     fn test_reconstruct_leaf() -> Result<()> {
-        let mut reconstructor = PlanReconstructor::new();
+        let mut dp_table = HashMap::new();
         let graph = create_test_graph();
-
         let leaf_plan = Arc::new(DPPlan::new_leaf(0, 1000.0));
-        let result = reconstructor.reconstruct(leaf_plan, &graph);
+        dp_table.insert(leaf_plan.join_set, leaf_plan.clone());
+
+        let mut reconstructor = PlanReconstructor::new(&dp_table, &graph);
+        let result = reconstructor.reconstruct(&leaf_plan);
 
         assert!(result.is_ok());
         Ok(())
     }
 
     #[test]
-    fn test_reconstruct_join_not_implemented() {
-        let mut reconstructor = PlanReconstructor::new();
+    fn test_reconstruct_join_missing_subplans() {
+        let dp_table = HashMap::new(); // Empty table
         let graph = create_test_graph();
 
         let left_set = JoinSet::new_singleton(0);
@@ -221,20 +241,23 @@ mod tests {
             500.0,
         ));
 
-        let result = reconstructor.reconstruct(join_plan, &graph);
+        let mut reconstructor = PlanReconstructor::new(&dp_table, &graph);
+        let result = reconstructor.reconstruct(&join_plan);
         assert!(result.is_err());
 
-        // Should return NotImplemented error
-        if let Err(datafusion::error::DataFusionError::NotImplemented(_)) = result {
+        // Should return Internal error about missing subplan
+        if let Err(DataFusionError::Internal(_)) = result {
             // Expected error type
         } else {
-            panic!("Expected NotImplemented error");
+            panic!("Expected Internal error about missing subplan");
         }
     }
 
     #[test]
     fn test_clear_cache() {
-        let mut reconstructor = PlanReconstructor::new();
+        let dp_table = HashMap::new();
+        let graph = QueryGraph::new();
+        let mut reconstructor = PlanReconstructor::new(&dp_table, &graph);
 
         // Add some cache items (simulated)
         let schema = Arc::new(Schema::new(vec![Field::new(
@@ -243,8 +266,11 @@ mod tests {
             false,
         )]));
         let plan = Arc::new(EmptyExec::new(schema));
+        let column_map = vec![];
         let join_set = JoinSet::new_singleton(0);
-        reconstructor.plan_cache.insert(join_set, plan);
+        reconstructor
+            .plan_cache
+            .insert(join_set, (plan, column_map));
 
         assert!(!reconstructor.plan_cache.is_empty());
 

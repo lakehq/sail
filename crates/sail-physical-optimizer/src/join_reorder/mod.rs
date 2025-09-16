@@ -2,11 +2,14 @@ use std::fmt::{Debug, Formatter};
 use std::sync::Arc;
 
 use datafusion::config::ConfigOptions;
-use datafusion::error::Result;
+use datafusion::error::{DataFusionError, Result};
+use datafusion::physical_expr::expressions::Column;
+use datafusion::physical_plan::projection::ProjectionExec;
 use datafusion::physical_plan::ExecutionPlan;
 
-use crate::join_reorder::builder::GraphBuilder;
+use crate::join_reorder::builder::{ColumnMap, ColumnMapEntry, GraphBuilder};
 use crate::join_reorder::enumerator::PlanEnumerator;
+use crate::join_reorder::graph::StableColumn;
 use crate::join_reorder::reconstructor::PlanReconstructor;
 use crate::PhysicalOptimizerRule;
 
@@ -36,15 +39,20 @@ impl PhysicalOptimizerRule for JoinReorder {
     ) -> Result<Arc<dyn ExecutionPlan>> {
         // Build query graph from DataFusion ExecutionPlan
         let mut graph_builder = GraphBuilder::new();
-        if let Some(query_graph) = graph_builder.build(plan.clone())? {
+        if let Some((query_graph, target_column_map)) = graph_builder.build(plan.clone())? {
             // Initialize plan enumerator and solve for optimal join order
             let mut enumerator = PlanEnumerator::new(query_graph);
             let best_plan = enumerator.solve()?;
 
-            // Reconstruct ExecutionPlan from optimal plan
-            let mut reconstructor = PlanReconstructor::new();
-            let optimized_plan = reconstructor.reconstruct(best_plan, &enumerator.query_graph)?;
-            return Ok(optimized_plan);
+            // Reconstruct the base join tree
+            let mut reconstructor =
+                PlanReconstructor::new(&enumerator.dp_table, &enumerator.query_graph);
+            let (join_tree, final_map) = reconstructor.reconstruct(&best_plan)?;
+
+            // Build the final projection on top of the join tree
+            let final_plan =
+                self.build_final_projection(join_tree, &final_map, &target_column_map)?;
+            return Ok(final_plan);
         }
 
         // Return original plan if reordering is not possible
@@ -58,6 +66,70 @@ impl PhysicalOptimizerRule for JoinReorder {
     fn schema_check(&self) -> bool {
         true
     }
+}
+
+impl JoinReorder {
+    fn build_final_projection(
+        &self,
+        input_plan: Arc<dyn ExecutionPlan>,
+        final_map: &ColumnMap,
+        target_map: &ColumnMap,
+    ) -> Result<Arc<dyn ExecutionPlan>> {
+        let mut projection_exprs: Vec<(Arc<dyn datafusion::physical_expr::PhysicalExpr>, String)> =
+            vec![];
+
+        for target_entry in target_map.iter() {
+            match target_entry {
+                ColumnMapEntry::Stable {
+                    relation_id,
+                    column_index,
+                } => {
+                    let stable_target = StableColumn {
+                        relation_id: *relation_id,
+                        column_index: *column_index,
+                        name: "".to_string(), // name will be retrieved from schema
+                    };
+
+                    // Find this stable column's position in the final join tree output
+                    let physical_idx =
+                        find_physical_index(&stable_target, final_map).ok_or_else(|| {
+                            DataFusionError::Internal(
+                                "Final projection column not found".to_string(),
+                            )
+                        })?;
+
+                    // Get column name from input plan schema
+                    let name = input_plan.schema().field(physical_idx).name().clone();
+                    projection_exprs.push((Arc::new(Column::new(&name, physical_idx)), name));
+                }
+                ColumnMapEntry::Expression(_expr) => {
+                    // TODO: This is a complex case. We need an expression rewriter
+                    // to replace old column references with new plan column references.
+                    // For now, return error or only support Stable columns.
+                    return Err(DataFusionError::NotImplemented(
+                        "Reconstructing projections with complex expressions is not yet supported"
+                            .to_string(),
+                    ));
+                }
+            }
+        }
+
+        Ok(Arc::new(ProjectionExec::try_new(
+            projection_exprs,
+            input_plan,
+        )?))
+    }
+}
+
+/// Helper to find the physical index of a stable column in a ColumnMap.
+fn find_physical_index(stable_col: &StableColumn, map: &ColumnMap) -> Option<usize> {
+    map.iter().position(|entry| match entry {
+        ColumnMapEntry::Stable {
+            relation_id,
+            column_index,
+        } => relation_id == &stable_col.relation_id && column_index == &stable_col.column_index,
+        _ => false,
+    })
 }
 
 impl Debug for JoinReorder {

@@ -14,11 +14,11 @@ use crate::join_reorder::join_set::JoinSet;
 
 /// Maps an output column from an ExecutionPlan back to a stable identifier.
 /// The vector is indexed by the column index in the plan's output schema.
-type ColumnMap = Vec<ColumnMapEntry>;
+pub type ColumnMap = Vec<ColumnMapEntry>;
 
 /// Represents how a column is derived.
 #[derive(Debug, Clone)]
-enum ColumnMapEntry {
+pub enum ColumnMapEntry {
     /// The column is a direct reference to a column from a base relation.
     Stable {
         relation_id: usize,
@@ -52,14 +52,18 @@ impl GraphBuilder {
 
     /// Build query graph from the given execution plan.
     /// Returns None if the plan contains no reorderable joins.
-    pub fn build(&mut self, plan: Arc<dyn ExecutionPlan>) -> Result<Option<QueryGraph>> {
+    /// Returns (QueryGraph, ColumnMap) where ColumnMap represents the original plan's output columns.
+    pub fn build(
+        &mut self,
+        plan: Arc<dyn ExecutionPlan>,
+    ) -> Result<Option<(QueryGraph, ColumnMap)>> {
         // Call core recursive function to traverse plan and populate graph
-        self.visit_plan(plan)?;
+        let original_column_map = self.visit_plan(plan)?;
 
         // Check if the built graph is worth reordering
         // (e.g., at least 2 or 3 relations needed for reordering)
         if self.graph.relation_count() >= 2 {
-            Ok(Some(self.graph.clone()))
+            Ok(Some((self.graph.clone(), original_column_map)))
         } else {
             // If too few relations, no need to reorder, return None
             Ok(None)
@@ -298,6 +302,7 @@ impl GraphBuilder {
                         return Ok(Some(StableColumn {
                             relation_id: *relation_id,
                             column_index: *column_index,
+                            name: col.name().to_string(),
                         }));
                     }
                     ColumnMapEntry::Expression(_) => {

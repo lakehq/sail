@@ -12,6 +12,7 @@ use crate::join_reorder::join_set::JoinSet;
 pub struct StableColumn {
     pub relation_id: usize,
     pub column_index: usize,
+    pub name: String,
 }
 
 /// Represents a single reorderable relation (e.g., TableScanExec).

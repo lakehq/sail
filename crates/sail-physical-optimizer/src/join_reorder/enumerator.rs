@@ -13,7 +13,7 @@ use crate::join_reorder::join_set::JoinSet;
 pub struct PlanEnumerator {
     pub query_graph: QueryGraph,
     /// DP table: JoinSet -> optimal DPPlan
-    dp_table: HashMap<JoinSet, Arc<DPPlan>>,
+    pub dp_table: HashMap<JoinSet, Arc<DPPlan>>,
     /// Cardinality estimator
     cardinality_estimator: CardinalityEstimator,
     /// Cost model
@@ -134,10 +134,17 @@ impl PlanEnumerator {
                         .get_connecting_edges(left_subset, right_subset);
 
                     if !connecting_edges.is_empty() {
+                        // Get the actual edge indices from the query graph
                         let edge_indices: Vec<usize> = connecting_edges
                             .iter()
-                            .enumerate()
-                            .map(|(i, _)| i)
+                            .map(|edge| {
+                                // Find the index of this edge in the query graph
+                                self.query_graph
+                                    .edges
+                                    .iter()
+                                    .position(|e| std::ptr::eq(e as *const _, *edge as *const _))
+                                    .unwrap_or(0) // fallback, should not happen
+                            })
                             .collect();
 
                         // Estimate the cardinality and cost of the new plan

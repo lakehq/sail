@@ -80,6 +80,7 @@ impl CardinalityEstimator {
                 let stable_col = StableColumn {
                     relation_id,
                     column_index,
+                    name: format!("col_{}", column_index),
                 };
                 // DataFusion's distinct_count is a Precision enum
                 let count_val = match distinct_count {
@@ -350,10 +351,12 @@ mod tests {
         equiv_set.add_column(StableColumn {
             relation_id: 0,
             column_index: 1,
+            name: "col1".to_string(),
         });
         equiv_set.add_column(StableColumn {
             relation_id: 1,
             column_index: 2,
+            name: "col2".to_string(),
         });
         equiv_set.set_t_dom_count(500.0);
 
