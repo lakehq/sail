@@ -8,11 +8,12 @@ use sail_catalog::utils::quote_namespace_if_needed;
 use sail_common_datafusion::extension::SessionExtensionAccessor;
 
 use crate::error::{PlanError, PlanResult};
-use crate::extension::function::bitmap_count::BitmapCount;
-use crate::extension::function::raise_error::RaiseError;
-use crate::extension::function::spark_aes::{
+use crate::extension::function::misc::bitmap_count::BitmapCount;
+use crate::extension::function::misc::raise_error::RaiseError;
+use crate::extension::function::misc::spark_aes::{
     SparkAESDecrypt, SparkAESEncrypt, SparkTryAESDecrypt, SparkTryAESEncrypt,
 };
+use crate::extension::function::misc::version::SparkVersion;
 use crate::function::common::{ScalarFunction, ScalarFunctionInput};
 use crate::utils::ItemTaker;
 
@@ -131,6 +132,8 @@ pub(super) fn list_built_in_misc_functions() -> Vec<(&'static str, ScalarFunctio
         ("current_database", F::custom(current_database)),
         ("current_schema", F::custom(current_database)),
         ("current_user", F::custom(current_user)),
+        ("from_avro", F::unknown("from_avro")),
+        ("from_protobuf", F::unknown("from_protobuf")),
         ("equal_null", F::binary_op(Operator::IsNotDistinctFrom)),
         ("hll_sketch_estimate", F::unknown("hll_sketch_estimate")),
         ("hll_union", F::unknown("hll_union")),
@@ -150,12 +153,17 @@ pub(super) fn list_built_in_misc_functions() -> Vec<(&'static str, ScalarFunctio
         ),
         ("raise_error", F::udf(RaiseError::new())),
         ("reflect", F::unknown("reflect")),
+        ("schema_of_avro", F::unknown("schema_of_avro")),
+        ("session_user", F::custom(current_user)),
         ("spark_partition_id", F::unknown("spark_partition_id")),
+        ("to_avro", F::unknown("to_avro")),
+        ("to_protobuf", F::unknown("to_protobuf")),
         ("try_aes_encrypt", F::udf(SparkTryAESEncrypt::new())),
         ("try_aes_decrypt", F::udf(SparkTryAESDecrypt::new())),
+        ("try_reflect", F::unknown("try_reflect")),
         ("typeof", F::custom(type_of)),
-        ("user", F::unknown("user")),
+        ("user", F::custom(current_user)),
         ("uuid", F::nullary(expr_fn::uuid)),
-        ("version", F::unknown("version")),
+        ("version", F::udf(SparkVersion::new())),
     ]
 }

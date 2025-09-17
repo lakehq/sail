@@ -1,6 +1,7 @@
 use std::collections::HashMap;
 use std::fmt::Debug;
 use std::sync::{Arc, Mutex};
+use std::time::Duration;
 
 use datafusion::execution::SendableRecordBatchStream;
 use datafusion::logical_expr::StringifiedPlan;
@@ -19,13 +20,19 @@ use crate::streaming::{
     StreamingQueryManager, StreamingQueryStatus,
 };
 
+#[derive(Debug, Clone)]
+pub(crate) struct SparkSessionOptions {
+    pub execution_heartbeat_interval: Duration,
+}
+
 /// A Spark session extension to the DataFusion [`SessionContext`].
 ///
 /// [`SessionContext`]: datafusion::prelude::SessionContext
 pub(crate) struct SparkSession {
-    user_id: Option<String>,
+    user_id: String,
     session_id: String,
     job_runner: Box<dyn JobRunner>,
+    options: SparkSessionOptions,
     state: Mutex<SparkSessionState>,
 }
 
@@ -34,6 +41,7 @@ impl Debug for SparkSession {
         f.debug_struct("SparkSession")
             .field("user_id", &self.user_id)
             .field("session_id", &self.session_id)
+            .field("options", &self.options)
             .finish()
     }
 }
@@ -46,14 +54,16 @@ impl SessionExtension for SparkSession {
 
 impl SparkSession {
     pub(crate) fn try_new(
-        user_id: Option<String>,
+        user_id: String,
         session_id: String,
         job_runner: Box<dyn JobRunner>,
+        options: SparkSessionOptions,
     ) -> SparkResult<Self> {
         let extension = Self {
             user_id,
             session_id,
             job_runner,
+            options,
             state: Mutex::new(SparkSessionState::new()),
         };
         extension.set_config(vec![ConfigKeyValue {
@@ -67,17 +77,18 @@ impl SparkSession {
         &self.session_id
     }
 
-    #[allow(dead_code)]
-    pub(crate) fn user_id(&self) -> Option<&str> {
-        self.user_id.as_deref()
+    pub(crate) fn user_id(&self) -> &str {
+        &self.user_id
+    }
+
+    pub(crate) fn options(&self) -> &SparkSessionOptions {
+        &self.options
     }
 
     pub(crate) fn plan_config(&self) -> SparkResult<Arc<PlanConfig>> {
         let state = self.state.lock()?;
         let mut config = PlanConfig::try_from(&state.config)?;
-        if let Some(user_id) = self.user_id() {
-            config.session_user_id = user_id.to_string();
-        }
+        config.session_user_id = self.user_id().to_string();
         Ok(Arc::new(config))
     }
 
@@ -187,6 +198,11 @@ impl SparkSession {
         info: Vec<StringifiedPlan>,
         stream: SendableRecordBatchStream,
     ) -> SparkResult<StreamingQueryId> {
+        if !stream.schema().fields().is_empty() {
+            return Err(SparkError::invalid(
+                "streaming query must write data to a sink",
+            ));
+        }
         // Here we always generate new query ID and run ID regardless of whether the query
         // is started from a checkpoint. This may be different from the Spark behavior.
         let id = StreamingQueryId {

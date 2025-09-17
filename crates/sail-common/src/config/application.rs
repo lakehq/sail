@@ -187,6 +187,7 @@ pub struct KubernetesConfig {
     pub driver_pod_name: String,
     pub worker_pod_name_prefix: String,
     pub worker_service_account_name: String,
+    pub worker_pod_template: String,
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -269,6 +270,7 @@ pub enum CatalogType {
 #[serde(deny_unknown_fields)]
 pub struct SparkConfig {
     pub session_timeout_secs: u64,
+    pub execution_heartbeat_interval_secs: u64,
 }
 
 /// Environment variables for application cluster configuration.

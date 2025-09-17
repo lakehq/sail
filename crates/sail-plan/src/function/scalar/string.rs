@@ -10,6 +10,7 @@ use crate::error::{PlanError, PlanResult};
 use crate::extension::function::string::levenshtein::Levenshtein;
 use crate::extension::function::string::make_valid_utf8::MakeValidUtf8;
 use crate::extension::function::string::spark_base64::{SparkBase64, SparkUnbase64};
+use crate::extension::function::string::spark_elt::SparkElt;
 use crate::extension::function::string::spark_encode_decode::{SparkDecode, SparkEncode};
 use crate::extension::function::string::spark_mask::SparkMask;
 use crate::extension::function::string::spark_split::SparkSplit;
@@ -209,10 +210,12 @@ pub(super) fn list_built_in_string_functions() -> Vec<(&'static str, ScalarFunct
         ("char_length", F::unary(expr_fn::char_length)),
         ("character_length", F::unary(expr_fn::char_length)),
         ("chr", F::unary(expr_fn::chr)),
+        ("collate", F::unknown("collate")),
+        ("collation", F::unknown("collation")),
         ("concat_ws", F::var_arg(concat_ws)),
         ("contains", F::custom(contains)),
         ("decode", F::udf(SparkDecode::new())),
-        ("elt", F::unknown("elt")),
+        ("elt", F::udf(SparkElt::new())),
         ("encode", F::udf(SparkEncode::new())),
         ("endswith", F::custom(endswith)),
         ("find_in_set", F::binary(expr_fn::find_in_set)),
@@ -237,6 +240,7 @@ pub(super) fn list_built_in_string_functions() -> Vec<(&'static str, ScalarFunct
         ("overlay", F::var_arg(overlay)),
         ("position", F::custom(position)),
         ("printf", F::unknown("printf")),
+        ("randstr", F::unknown("randstr")),
         ("regexp_count", F::udf(RegexpCountFunc::new())),
         ("regexp_extract", F::unknown("regexp_extract")),
         ("regexp_extract_all", F::unknown("regexp_extract_all")),

@@ -12,7 +12,7 @@ use crate::extension::function::array::arrays_zip::ArraysZip;
 use crate::extension::function::array::spark_array::SparkArray;
 use crate::extension::function::array::spark_array_min_max::{ArrayMax, ArrayMin};
 use crate::extension::function::array::spark_sequence::SparkSequence;
-use crate::extension::function::raise_error::RaiseError;
+use crate::extension::function::misc::raise_error::RaiseError;
 use crate::function::common::{ScalarFunction, ScalarFunctionInput};
 use crate::utils::ItemTaker;
 

@@ -35,7 +35,7 @@
         }
       },
       "output": {
-        "failure": "not supported: unknown function: from_xml"
+        "failure": "not implemented: function: from_xml"
       }
     },
     {
@@ -93,7 +93,7 @@
         }
       },
       "output": {
-        "failure": "not supported: unknown function: from_xml"
+        "failure": "not implemented: function: from_xml"
       }
     },
     {
@@ -125,7 +125,7 @@
         }
       },
       "output": {
-        "failure": "not supported: unknown function: from_xml"
+        "failure": "not implemented: function: from_xml"
       }
     },
     {
@@ -147,7 +147,7 @@
         }
       },
       "output": {
-        "failure": "not supported: unknown function: schema_of_xml"
+        "failure": "not implemented: function: schema_of_xml"
       }
     },
     {
@@ -169,7 +169,7 @@
         }
       },
       "output": {
-        "failure": "not supported: unknown function: schema_of_xml"
+        "failure": "not implemented: function: schema_of_xml"
       }
     },
     {
@@ -194,7 +194,7 @@
         }
       },
       "output": {
-        "failure": "not supported: unknown function: to_xml"
+        "failure": "not implemented: function: to_xml"
       }
     },
     {
@@ -218,7 +218,7 @@
         }
       },
       "output": {
-        "failure": "not supported: unknown function: to_xml"
+        "failure": "not implemented: function: to_xml"
       }
     },
     {

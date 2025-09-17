@@ -1,0 +1,41 @@
+>>> spark.sql("SELECT parse_url('https://example.com/a?x=1', 'QUERY', 'x') AS result, typeof(parse_url('https://example.com/a?x=1', 'QUERY', 'x')) AS type").show(truncate=False)
++------+------+
+|result|type  |
++------+------+
+|1     |string|
++------+------+
+
+>>> spark.sql("SELECT parse_url('https://example.com/path#frag', 'REF') AS result, typeof(parse_url('https://example.com/path#frag', 'REF')) AS type").show(truncate=False)
++------+------+
+|result|type  |
++------+------+
+|frag  |string|
++------+------+
+
+>>> spark.sql("SELECT parse_url('ftp://user:pwd@ftp.example.com:21/files', 'USERINFO') AS result, typeof(parse_url('ftp://user:pwd@ftp.example.com:21/files', 'USERINFO')) AS type").show(truncate=False)
++--------+------+
+|result  |type  |
++--------+------+
+|user:pwd|string|
++--------+------+
+
+>>> spark.sql("SELECT parse_url('http://[2001:db8::2]:8080/index.html?ok=1', 'HOST') AS result, typeof(parse_url('http://[2001:db8::2]:8080/index.html?ok=1', 'HOST')) AS type").show(truncate=False)
++-------------+------+
+|result       |type  |
++-------------+------+
+|[2001:db8::2]|string|
++-------------+------+
+
+>>> spark.sql("SELECT parse_url('https://example.com', 'PATH') AS result, typeof(parse_url('https://example.com', 'PATH')) AS type").show(truncate=False)
++------+------+
+|result|type  |
++------+------+
+|      |string|
++------+------+
+
+>>> spark.sql("SELECT parse_url('https://example.com/a/b?x=1&y=2#frag', 'PROTOCOL') AS result, typeof(parse_url('https://example.com/a/b?x=1&y=2#frag', 'PROTOCOL')) AS type").show(truncate=False)
++------+------+
+|result|type  |
++------+------+
+|https |string|
++------+------+

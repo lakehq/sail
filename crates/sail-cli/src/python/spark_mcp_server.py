@@ -129,6 +129,31 @@ def create_spark_mcp_server(host: str, port: int, spark_remote: str):
         return json.dumps(results)
 
     @mcp.tool()
+    def create_parquet_views_from_s3(bucket: str, prefix: str, region: str, ctx: Context) -> str:
+        """
+        Create temporary views for all Parquet datasets stored under a given S3 prefix.
+        Uses `list_s3_directories` to enumerate directories within the prefix and
+        registers a temporary view for each one using the directory name as the view name.
+
+        Args:
+            bucket: The AWS S3 bucket name.
+            prefix: The AWS S3 key prefix.
+            region: The AWS region (e.g. "us-east-1").
+            ctx: The context object.
+
+        Returns:
+            An empty JSON object.
+        """
+        spark: SparkSession = ctx.request_context.lifespan_context
+        directories = json.loads(list_s3_directories(bucket, prefix, region, ctx))
+        for directory in directories:
+            dir_prefix = prefix + directory
+            view_name = directory.rstrip("/").replace("/", "_").replace("-", "_")
+            s3_path = f"s3a://{bucket}/{dir_prefix}"
+            spark.read.parquet(s3_path).createOrReplaceTempView(view_name)
+        return json.dumps({})
+
+    @mcp.tool()
     def create_parquet_view(name: str, path: str, ctx: Context) -> str:
         """
         Create a temporary view from a Parquet dataset.
@@ -143,6 +168,32 @@ def create_spark_mcp_server(host: str, port: int, spark_remote: str):
         """
         spark: SparkSession = ctx.request_context.lifespan_context
         spark.read.parquet(path).createOrReplaceTempView(name)
+        return json.dumps({})
+
+    @mcp.tool()
+    def create_csv_views_from_s3(bucket: str, prefix: str, region: str, header: bool, ctx: Context) -> str:  # noqa: FBT001
+        """
+        Create temporary views for all CSV datasets stored under a given S3 prefix.
+        Uses `list_s3_directories` to enumerate directories within the prefix and
+        registers a temporary view for each one using the directory name as the view name.
+
+        Args:
+            bucket: The AWS S3 bucket name.
+            prefix: The AWS S3 key prefix.
+            region: The AWS region (e.g. "us-east-1").
+            header: Whether the CSV file has a header row.
+            ctx: The context object.
+
+        Returns:
+            An empty JSON object.
+        """
+        spark: SparkSession = ctx.request_context.lifespan_context
+        directories = json.loads(list_s3_directories(bucket, prefix, region, ctx))
+        for directory in directories:
+            dir_prefix = prefix + directory
+            view_name = directory.rstrip("/").replace("/", "_").replace("-", "_")
+            s3_path = f"s3a://{bucket}/{dir_prefix}"
+            spark.read.option("header", header).csv(s3_path).createOrReplaceTempView(view_name)
         return json.dumps({})
 
     @mcp.tool()
@@ -161,6 +212,31 @@ def create_spark_mcp_server(host: str, port: int, spark_remote: str):
         """
         spark: SparkSession = ctx.request_context.lifespan_context
         spark.read.option("header", header).csv(path).createOrReplaceTempView(name)
+        return json.dumps({})
+
+    @mcp.tool()
+    def create_json_views_from_s3(bucket: str, prefix: str, region: str, ctx: Context) -> str:
+        """
+        Create temporary views for all JSON datasets stored under a given S3 prefix.
+        Uses `list_s3_directories` to enumerate directories within the prefix and
+        registers a temporary view for each one using the directory name as the view name.
+
+        Args:
+            bucket: The AWS S3 bucket name.
+            prefix: The AWS S3 key prefix.
+            region: The AWS region (e.g. "us-east-1").
+            ctx: The context object.
+
+        Returns:
+            An empty JSON object.
+        """
+        spark: SparkSession = ctx.request_context.lifespan_context
+        directories = json.loads(list_s3_directories(bucket, prefix, region, ctx))
+        for directory in directories:
+            dir_prefix = prefix + directory
+            view_name = directory.rstrip("/").replace("/", "_").replace("-", "_")
+            s3_path = f"s3a://{bucket}/{dir_prefix}"
+            spark.read.json(s3_path).createOrReplaceTempView(view_name)
         return json.dumps({})
 
     @mcp.tool()

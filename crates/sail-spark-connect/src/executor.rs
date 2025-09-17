@@ -4,6 +4,7 @@ use std::mem;
 use std::ops::{Deref, DerefMut};
 use std::pin::Pin;
 use std::sync::{Arc, Mutex};
+use std::time::Duration;
 
 use datafusion::arrow::array::RecordBatch;
 use datafusion::arrow::ipc::writer::StreamWriter;
@@ -116,14 +117,25 @@ struct ExecutorTask {
 
 struct ExecutorTaskContext {
     stream: SendableRecordBatchStream,
+    heartbeat_interval: Duration,
     buffer: Arc<Mutex<ExecutorBuffer>>,
 }
 
 impl ExecutorTaskContext {
-    fn new(stream: SendableRecordBatchStream) -> Self {
+    fn new(stream: SendableRecordBatchStream, heartbeat_interval: Duration) -> Self {
         Self {
             stream,
+            heartbeat_interval,
             buffer: Arc::new(Mutex::new(ExecutorBuffer::new())),
+        }
+    }
+
+    async fn next(&mut self) -> SparkResult<Option<RecordBatch>> {
+        tokio::select! {
+            batch = self.stream.next() => Ok(batch.transpose()?),
+            _ = tokio::time::sleep(self.heartbeat_interval) => {
+                Ok(Some(RecordBatch::new_empty(self.stream.schema())))
+            }
         }
     }
 
@@ -148,10 +160,17 @@ enum ExecutorTaskResult {
 }
 
 impl Executor {
-    pub(crate) fn new(metadata: ExecutorMetadata, stream: SendableRecordBatchStream) -> Self {
+    pub(crate) fn new(
+        metadata: ExecutorMetadata,
+        stream: SendableRecordBatchStream,
+        heartbeat_interval: Duration,
+    ) -> Self {
         Self {
             metadata,
-            state: Mutex::new(ExecutorState::Pending(ExecutorTaskContext::new(stream))),
+            state: Mutex::new(ExecutorState::Pending(ExecutorTaskContext::new(
+                stream,
+                heartbeat_interval,
+            ))),
         }
     }
 
@@ -168,8 +187,7 @@ impl Executor {
         tx.send(out).await?;
 
         let mut empty = true;
-        while let Some(batch) = context.stream.next().await {
-            let batch = batch?;
+        while let Some(batch) = context.next().await? {
             let batch = to_arrow_batch(&batch)?;
             let out = ExecutorOutput::new(ExecutorBatch::ArrowBatch(batch));
             context.save_output(&out)?;

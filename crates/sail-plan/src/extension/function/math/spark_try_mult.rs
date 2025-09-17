@@ -1,19 +1,21 @@
 use std::any::Any;
+use std::sync::Arc;
 
-use arrow::array::{Array, AsArray};
+use arrow::array::{Array, ArrayRef, AsArray};
+use arrow::compute::{cast_with_options, CastOptions};
 use arrow::datatypes::IntervalUnit::{MonthDayNano, YearMonth};
 use arrow::datatypes::{
     DataType, Int32Type, Int64Type, IntervalMonthDayNanoType, IntervalYearMonthType,
 };
+use datafusion_common::utils::take_function_args;
 use datafusion_common::Result;
 use datafusion_expr::{ColumnarValue, ScalarFunctionArgs, ScalarUDFImpl, Signature, Volatility};
+use datafusion_functions::utils::make_scalar_function;
 
-use crate::extension::function::error_utils::{
-    invalid_arg_count_exec_err, unsupported_data_types_exec_err,
-};
+use crate::extension::function::error_utils::unsupported_data_types_exec_err;
 use crate::extension::function::math::common_try::{
-    binary_op_scalar_or_array, try_binary_op_primitive, try_op_interval_monthdaynano_i32,
-    try_op_interval_monthdaynano_i64, try_op_interval_yearmonth_i32,
+    try_binary_op_primitive, try_op_interval_monthdaynano_i32, try_op_interval_monthdaynano_i64,
+    try_op_interval_yearmonth_i32,
 };
 
 #[derive(Debug)]
@@ -54,12 +56,12 @@ impl ScalarUDFImpl for SparkTryMult {
             [DataType::Int64, DataType::Int64]
             | [DataType::Int32, DataType::Int64]
             | [DataType::Int64, DataType::Int32] => Ok(DataType::Int64),
-            [DataType::Interval(YearMonth), DataType::Int32]
-            | [DataType::Int32, DataType::Interval(YearMonth)] => Ok(DataType::Interval(YearMonth)),
-            [DataType::Interval(MonthDayNano), DataType::Int32]
-            | [DataType::Int32, DataType::Interval(MonthDayNano)]
-            | [DataType::Interval(MonthDayNano), DataType::Int64]
-            | [DataType::Int64, DataType::Interval(MonthDayNano)] => {
+            [DataType::Interval(YearMonth), DataType::Int32 | DataType::Int64]
+            | [DataType::Int32 | DataType::Int64, DataType::Interval(YearMonth)] => {
+                Ok(DataType::Interval(YearMonth))
+            }
+            [DataType::Interval(MonthDayNano), DataType::Int32 | DataType::Int64]
+            | [DataType::Int32 | DataType::Int64, DataType::Interval(MonthDayNano)] => {
                 Ok(DataType::Interval(MonthDayNano))
             }
 
@@ -71,154 +73,92 @@ impl ScalarUDFImpl for SparkTryMult {
         }
     }
 
-    fn invoke_with_args(&self, args: ScalarFunctionArgs) -> Result<ColumnarValue> {
-        let ScalarFunctionArgs { args, .. } = args;
+    fn coerce_types(&self, types: &[DataType]) -> Result<Vec<DataType>> {
+        let [left, right] = take_function_args("try_multiply", types)?;
 
-        let [left, right] = args.as_slice() else {
-            return Err(invalid_arg_count_exec_err(
+        match (left, right) {
+            (DataType::Null, _) => Ok(vec![right.clone(), right.clone()]),
+            (_, DataType::Null) => Ok(vec![left.clone(), left.clone()]),
+            (DataType::Int32, DataType::Int32)
+            | (DataType::Int64, DataType::Int64)
+            | (
+                DataType::Interval(YearMonth) | DataType::Interval(MonthDayNano),
+                DataType::Int32 | DataType::Int64,
+            )
+            | (
+                DataType::Int32 | DataType::Int64,
+                DataType::Interval(YearMonth) | DataType::Interval(MonthDayNano),
+            ) => Ok(vec![left.clone(), right.clone()]),
+            (DataType::Int32, DataType::Int64) | (DataType::Int64, DataType::Int32) => {
+                Ok(vec![DataType::Int64, DataType::Int64])
+            }
+            _ => Err(unsupported_data_types_exec_err(
                 "try_multiply",
-                (2, 2),
-                args.len(),
-            ));
-        };
-
-        let len = match (&left, &right) {
-            (ColumnarValue::Array(arr), _) => arr.len(),
-            (_, ColumnarValue::Array(arr)) => arr.len(),
-            (ColumnarValue::Scalar(_), ColumnarValue::Scalar(_)) => 1,
-        };
-
-        let left_arr = match left {
-            ColumnarValue::Array(arr) => arr.clone(),
-            ColumnarValue::Scalar(scalar) => scalar.to_array_of_size(len)?,
-        };
-
-        let right_arr = match right {
-            ColumnarValue::Array(arr) => arr.clone(),
-            ColumnarValue::Scalar(scalar) => scalar.to_array_of_size(len)?,
-        };
-
-        match (left_arr.data_type(), right_arr.data_type()) {
-            (DataType::Int32, DataType::Int32) => {
-                let l = left_arr.as_primitive::<Int32Type>();
-                let r = right_arr.as_primitive::<Int32Type>();
-                let result = try_binary_op_primitive::<Int32Type, _>(l, r, i32::checked_mul);
-                binary_op_scalar_or_array(left, right, result)
-            }
-            (DataType::Int64, DataType::Int64) => {
-                let l = left_arr.as_primitive::<Int64Type>();
-                let r = right_arr.as_primitive::<Int64Type>();
-                let result = try_binary_op_primitive::<Int64Type, _>(l, r, i64::checked_mul);
-                binary_op_scalar_or_array(left, right, result)
-            }
-            (DataType::Interval(YearMonth), DataType::Int32) => {
-                let l = left_arr.as_primitive::<IntervalYearMonthType>();
-                let r = right_arr.as_primitive::<Int32Type>();
-                let result = try_op_interval_yearmonth_i32(l, r, i32::checked_mul);
-                binary_op_scalar_or_array(left, right, result)
-            }
-            (DataType::Int32, DataType::Interval(YearMonth)) => {
-                let l = left_arr.as_primitive::<Int32Type>();
-                let r = right_arr.as_primitive::<IntervalYearMonthType>();
-                let result = try_op_interval_yearmonth_i32(r, l, i32::checked_mul);
-                binary_op_scalar_or_array(left, right, result)
-            }
-            (DataType::Interval(MonthDayNano), DataType::Int32) => {
-                let l = left_arr.as_primitive::<IntervalMonthDayNanoType>();
-                let r = right_arr.as_primitive::<Int32Type>();
-                let result = try_op_interval_monthdaynano_i32(l, r, |a, b| a.checked_mul(b as i64));
-                binary_op_scalar_or_array(left, right, result)
-            }
-            (DataType::Int32, DataType::Interval(MonthDayNano)) => {
-                let l = left_arr.as_primitive::<Int32Type>();
-                let r = right_arr.as_primitive::<IntervalMonthDayNanoType>();
-                let result = try_op_interval_monthdaynano_i32(r, l, |a, b| a.checked_mul(b as i64));
-
-                binary_op_scalar_or_array(left, right, result)
-            }
-            (DataType::Interval(MonthDayNano), DataType::Int64) => {
-                let l = left_arr.as_primitive::<IntervalMonthDayNanoType>();
-                let r = right_arr.as_primitive::<Int64Type>();
-                let result =
-                    try_op_interval_monthdaynano_i64(
-                        l,
-                        r,
-                        |a, b| {
-                            if b == 0 {
-                                None
-                            } else {
-                                Some(a * b)
-                            }
-                        },
-                    );
-                binary_op_scalar_or_array(left, right, result)
-            }
-
-            (l, r) => Err(unsupported_data_types_exec_err(
-                "try_multiply",
-                "Int32 o Int64",
-                &[l.clone(), r.clone()],
+                "Int32, Int64, Interval(YearMonth), Interval(MonthDayNano)",
+                types,
             )),
         }
     }
 
-    fn coerce_types(&self, types: &[DataType]) -> Result<Vec<DataType>> {
-        if types.len() != 2 {
-            return Err(invalid_arg_count_exec_err(
-                "try_multiply",
-                (2, 2),
-                types.len(),
-            ));
-        }
+    fn invoke_with_args(&self, args: ScalarFunctionArgs) -> Result<ColumnarValue> {
+        make_scalar_function(try_multiply_inner, vec![])(&args.args)
+    }
+}
 
-        let left = &types[0];
-        let right = &types[1];
+fn try_multiply_inner(args: &[ArrayRef]) -> Result<ArrayRef> {
+    let [left_arr, right_arr] = take_function_args("try_multiply", args)?;
 
-        // Null propagation
-        if *left == DataType::Null {
-            return Ok(vec![right.clone(), right.clone()]);
-        } else if *right == DataType::Null {
-            return Ok(vec![left.clone(), left.clone()]);
+    let (left_arr, right_arr) = if matches!(
+        right_arr.data_type(),
+        DataType::Interval(YearMonth) | DataType::Interval(MonthDayNano)
+    ) {
+        (right_arr, left_arr)
+    } else {
+        (left_arr, right_arr)
+    };
+
+    match (left_arr.data_type(), right_arr.data_type()) {
+        (DataType::Int32, DataType::Int32) => {
+            let l = left_arr.as_primitive::<Int32Type>();
+            let r = right_arr.as_primitive::<Int32Type>();
+            Ok(Arc::new(try_binary_op_primitive(l, r, i32::checked_mul)))
         }
-        if matches!(
-            (left, right),
-            (DataType::Interval(YearMonth), DataType::Int32)
-                | (DataType::Int32, DataType::Interval(YearMonth))
-        ) {
-            return Ok(vec![DataType::Interval(YearMonth), DataType::Int32]);
+        (DataType::Int64, DataType::Int64) => {
+            let l = left_arr.as_primitive::<Int64Type>();
+            let r = right_arr.as_primitive::<Int64Type>();
+            Ok(Arc::new(try_binary_op_primitive(l, r, i64::checked_mul)))
         }
-        if matches!(
-            (left, right),
-            (DataType::Int32, DataType::Int32)
-                | (DataType::Int64, DataType::Int64)
-                | (DataType::Int32, DataType::Int64)
-                | (DataType::Int64, DataType::Int32)
-        ) {
-            if *left == DataType::Int64 || *right == DataType::Int64 {
-                return Ok(vec![DataType::Int64, DataType::Int64]);
+        (DataType::Interval(YearMonth), DataType::Int32 | DataType::Int64) => {
+            let right_arr = if matches!(right_arr.data_type(), DataType::Int32) {
+                Ok(right_arr.clone())
             } else {
-                return Ok(vec![DataType::Int32, DataType::Int32]);
-            }
+                cast_with_options(&right_arr, &DataType::Int32, &CastOptions::default())
+            }?;
+            let l = left_arr.as_primitive::<IntervalYearMonthType>();
+            let r = right_arr.as_primitive::<Int32Type>();
+            Ok(Arc::new(try_op_interval_yearmonth_i32(
+                l,
+                r,
+                i32::checked_mul,
+            )))
         }
-        if matches!(
-            (left, right),
-            (DataType::Interval(MonthDayNano), DataType::Int32)
-                | (DataType::Int32, DataType::Interval(MonthDayNano))
-        ) {
-            return Ok(vec![DataType::Interval(MonthDayNano), DataType::Int32]);
-        }
-        if matches!(
-            (left, right),
-            (DataType::Interval(MonthDayNano), DataType::Int64)
-                | (DataType::Int64, DataType::Interval(MonthDayNano))
-        ) {
-            return Ok(vec![DataType::Interval(MonthDayNano), DataType::Int64]);
-        }
+        (DataType::Interval(MonthDayNano), DataType::Int32 | DataType::Int64) => {
+            let l = left_arr.as_primitive::<IntervalMonthDayNanoType>();
 
-        Err(unsupported_data_types_exec_err(
+            Ok(Arc::new(
+                if matches!(right_arr.data_type(), DataType::Int32) {
+                    let r = right_arr.as_primitive::<Int32Type>();
+                    try_op_interval_monthdaynano_i32(l, r, |a, b| a.checked_mul(b as i64))
+                } else {
+                    let r = right_arr.as_primitive::<Int64Type>();
+                    try_op_interval_monthdaynano_i64(l, r, i64::checked_mul)
+                },
+            ))
+        }
+        (l, r) => Err(unsupported_data_types_exec_err(
             "try_multiply",
-            "Int32, Int64 o Interval(YearMonth) con escalar",
-            types,
-        ))
+            "Int32, Int64, Interval(YearMonth), Interval(MonthDayNano)",
+            &[l.clone(), r.clone()],
+        )),
     }
 }

@@ -1,0 +1,75 @@
+---
+title: Aggregate Functions
+rank: 2
+---
+
+# Built-in Spark Aggregate Functions
+
+| Function                | Supported          |
+| ----------------------- | ------------------ |
+| `any`                   | :white_check_mark: |
+| `any_value`             | :white_check_mark: |
+| `approx_count_distinct` | :white_check_mark: |
+| `approx_percentile`     | :white_check_mark: |
+| `array_agg`             | :white_check_mark: |
+| `avg`                   | :white_check_mark: |
+| `bit_and`               | :white_check_mark: |
+| `bit_or`                | :white_check_mark: |
+| `bit_xor`               | :white_check_mark: |
+| `bool_and`              | :white_check_mark: |
+| `bool_or`               | :white_check_mark: |
+| `collect_list`          | :white_check_mark: |
+| `collect_set`           | :white_check_mark: |
+| `corr`                  | :white_check_mark: |
+| `count`                 | :white_check_mark: |
+| `count_if`              | :white_check_mark: |
+| `covar_pop`             | :white_check_mark: |
+| `covar_samp`            | :white_check_mark: |
+| `every`                 | :white_check_mark: |
+| `first`                 | :white_check_mark: |
+| `first_value`           | :white_check_mark: |
+| `grouping`              | :white_check_mark: |
+| `kurtosis`              | :white_check_mark: |
+| `last`                  | :white_check_mark: |
+| `last_value`            | :white_check_mark: |
+| `listagg`               | :white_check_mark: |
+| `max`                   | :white_check_mark: |
+| `max_by`                | :white_check_mark: |
+| `mean`                  | :white_check_mark: |
+| `median`                | :white_check_mark: |
+| `min`                   | :white_check_mark: |
+| `min_by`                | :white_check_mark: |
+| `mode`                  | :white_check_mark: |
+| `percentile_approx`     | :white_check_mark: |
+| `regr_avgx`             | :white_check_mark: |
+| `regr_avgy`             | :white_check_mark: |
+| `regr_count`            | :white_check_mark: |
+| `regr_intercept`        | :white_check_mark: |
+| `regr_r2`               | :white_check_mark: |
+| `regr_slope`            | :white_check_mark: |
+| `regr_sxx`              | :white_check_mark: |
+| `regr_sxy`              | :white_check_mark: |
+| `regr_syy`              | :white_check_mark: |
+| `skewness`              | :white_check_mark: |
+| `some`                  | :white_check_mark: |
+| `std`                   | :white_check_mark: |
+| `stddev`                | :white_check_mark: |
+| `stddev_pop`            | :white_check_mark: |
+| `stddev_samp`           | :white_check_mark: |
+| `string_agg`            | :white_check_mark: |
+| `sum`                   | :white_check_mark: |
+| `var_pop`               | :white_check_mark: |
+| `var_samp`              | :white_check_mark: |
+| `variance`              | :white_check_mark: |
+| `bitmap_construct_agg`  | :construction:     |
+| `bitmap_or_agg`         | :construction:     |
+| `count_min_sketch`      | :construction:     |
+| `grouping_id`           | :construction:     |
+| `histogram_numeric`     | :construction:     |
+| `hll_sketch_agg`        | :construction:     |
+| `hll_union_agg`         | :construction:     |
+| `percentile`            | :construction:     |
+| `percentile_cont`       | :construction:     |
+| `percentile_disc`       | :construction:     |
+| `try_avg`               | :construction:     |
+| `try_sum`               | :construction:     |

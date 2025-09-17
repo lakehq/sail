@@ -3,11 +3,14 @@ use std::sync::Arc;
 
 use async_trait::async_trait;
 use datafusion::catalog::{Session, TableProvider};
-use datafusion::common::{not_impl_err, plan_err, DataFusionError, Result};
+use datafusion::common::{not_impl_err, plan_err, DataFusionError, Result, ToDFSchema};
 use datafusion::datasource::listing::ListingTableUrl;
+use datafusion::execution::SessionStateBuilder;
 use datafusion::physical_plan::ExecutionPlan;
 use sail_common_datafusion::datasource::{PhysicalSinkMode, SinkInfo, SourceInfo, TableFormat};
+use sail_common_datafusion::streaming::event::schema::is_flow_event_schema;
 use sail_delta_lake::create_delta_provider;
+use sail_delta_lake::delta_datafusion::{parse_predicate_expression, DataFusionMixins};
 use sail_delta_lake::delta_format::DeltaPlanBuilder;
 use sail_delta_lake::options::TableDeltaOptions;
 use sail_delta_lake::table::open_table_with_object_store;
@@ -58,6 +61,9 @@ impl TableFormat for DeltaTableFormat {
             options,
         } = info;
 
+        if is_flow_event_schema(&input.schema()) {
+            return not_impl_err!("writing streaming data to Delta table");
+        }
         if bucket_by.is_some() {
             return not_impl_err!("bucketing for Delta format");
         }
@@ -97,16 +103,30 @@ impl TableFormat for DeltaTableFormat {
             _ => {} // Other modes will be handled in the execution phase
         }
 
+        // Convert Overwrite with replace_where to OverwriteIf
+        let unified_mode = if let PhysicalSinkMode::Overwrite = mode {
+            if let Some(replace_where) = &delta_options.replace_where {
+                // Parse the replace_where condition into a PhysicalExpr
+                Self::parse_replace_where_condition(ctx, &table_url, replace_where, table_exists)
+                    .await?
+            } else {
+                mode
+            }
+        } else {
+            mode
+        };
+
         let plan_builder = DeltaPlanBuilder::new(
             input,
             table_url,
             delta_options,
             partition_by,
-            mode,
+            unified_mode,
             table_exists,
             sort_order,
+            ctx,
         );
-        let sink_exec = plan_builder.build()?;
+        let sink_exec = plan_builder.build().await?;
 
         Ok(sink_exec)
     }
@@ -120,23 +140,72 @@ impl DeltaTableFormat {
             _ => plan_err!("expected a single path for Delta table sink: {paths:?}"),
         }
     }
+
+    async fn parse_replace_where_condition(
+        ctx: &dyn Session,
+        table_url: &Url,
+        replace_where: &str,
+        table_exists: bool,
+    ) -> Result<PhysicalSinkMode> {
+        if !table_exists {
+            return Ok(PhysicalSinkMode::Overwrite);
+        }
+
+        let object_store = ctx
+            .runtime_env()
+            .object_store_registry
+            .get_store(table_url)
+            .map_err(|e| DataFusionError::External(Box::new(e)))?;
+
+        let table =
+            open_table_with_object_store(table_url.clone(), object_store, Default::default())
+                .await
+                .map_err(|e| DataFusionError::External(Box::new(e)))?;
+
+        let snapshot = table
+            .snapshot()
+            .map_err(|e| DataFusionError::External(Box::new(e)))?;
+
+        let arrow_schema = snapshot
+            .arrow_schema()
+            .map_err(|e| DataFusionError::External(Box::new(e)))?;
+
+        let df_schema = arrow_schema.to_dfschema()?;
+
+        let session_state = SessionStateBuilder::new()
+            .with_runtime_env(ctx.runtime_env().clone())
+            .build();
+
+        let logical_expr = parse_predicate_expression(&df_schema, replace_where, &session_state)
+            .map_err(|e| DataFusionError::External(Box::new(e)))?;
+
+        let physical_expr = session_state.create_physical_expr(logical_expr, &df_schema)?;
+
+        Ok(PhysicalSinkMode::OverwriteIf {
+            condition: physical_expr,
+        })
+    }
 }
 
 fn apply_delta_read_options(from: DeltaReadOptions, to: &mut TableDeltaOptions) -> Result<()> {
-    // TODO: implement read options
-    let _ = (from, to);
+    if let Some(timestamp_as_of) = from.timestamp_as_of {
+        to.timestamp_as_of = Some(timestamp_as_of)
+    }
+    if let Some(version_as_of) = from.version_as_of {
+        to.version_as_of = Some(version_as_of)
+    }
     Ok(())
 }
 
 fn apply_delta_write_options(from: DeltaWriteOptions, to: &mut TableDeltaOptions) -> Result<()> {
-    if let Some(replace_where) = from.replace_where {
-        to.replace_where = Some(replace_where);
-    }
     if let Some(merge_schema) = from.merge_schema {
         to.merge_schema = merge_schema;
     }
     if let Some(overwrite_schema) = from.overwrite_schema {
         to.overwrite_schema = overwrite_schema;
+    }
+    if let Some(replace_where) = from.replace_where {
+        to.replace_where = Some(replace_where);
     }
     if let Some(target_file_size) = from.target_file_size {
         to.target_file_size = target_file_size;

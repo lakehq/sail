@@ -550,6 +550,13 @@
   default: "default"
   description: The name of the service account to use for the worker pods.
 
+- key: kubernetes.worker_pod_template
+  type: string
+  default: ""
+  description: |
+    If non-empty, a JSON string representing a Kubernetes Pod template
+    with the schema of `PodTemplateSpec` in the Kubernetes API.
+
 - key: catalog.list
   type: array
   default: '[{name="sail", type="memory", initial_database=["default"], initial_database_comment="default database"}]'
@@ -586,4 +593,16 @@
 - key: spark.session_timeout_secs
   type: number
   default: "900"
-  description: The Spark session timeout in seconds.
+  description: |
+    The duration in seconds allowed for the session to be idle.
+    If the server does not receive any requests from the client after this duration,
+    the session will be removed from the server.
+
+- key: spark.execution_heartbeat_interval_secs
+  type: number
+  default: "15"
+  description: |
+    The interval in seconds for the server to send empty response to the client
+    during long-running operations. The empty response serves as a heartbeat to keep
+    the session active.
+  experimental: true

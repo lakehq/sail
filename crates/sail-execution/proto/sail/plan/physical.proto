@@ -34,6 +34,10 @@ message ExtendedPhysicalPlanNode {
     SocketSourceExecNode socket_source = 20;
     RateSourceExecNode rate_source = 21;
     TextSinkExecNode text_sink = 22;
+    BinarySourceExecNode binary_source = 23;
+    StreamCollectorExecNode stream_collector = 24;
+    StreamLimitExecNode stream_limit = 25;
+    StreamSourceAdapterExecNode stream_source_adapter = 26;
   }
 }
 
@@ -42,14 +46,13 @@ message ExtendedScalarUdf {
     StandardUdf standard = 1;
     PySparkUdf py_spark = 2;
     PySparkCoGroupMapUdf py_spark_co_group_map = 3;
-    MapToArrayUdf map_to_array = 4;
-    DropStructFieldUdf drop_struct_field = 5;
-    ExplodeUdf explode = 6;
-    SparkUnixTimestampUdf spark_unix_timestamp = 7;
-    StructFunctionUdf struct_function = 8;
-    UpdateStructFieldUdf update_struct_field = 9;
-    TimestampNowUdf timestamp_now = 10;
-    SparkTimestampUdf spark_timestamp = 11;
+    DropStructFieldUdf drop_struct_field = 4;
+    ExplodeUdf explode = 5;
+    SparkUnixTimestampUdf spark_unix_timestamp = 6;
+    StructFunctionUdf struct_function = 7;
+    UpdateStructFieldUdf update_struct_field = 8;
+    TimestampNowUdf timestamp_now = 9;
+    SparkTimestampUdf spark_timestamp = 10;
   }
 }
 
@@ -91,10 +94,6 @@ message PySparkCoGroupMapUdf {
   repeated string right_names = 7;
   bytes output_type = 8;
   PySparkUdfConfig config = 9;
-}
-
-message MapToArrayUdf {
-  bool nullable = 1;
 }
 
 message DropStructFieldUdf {
@@ -273,6 +272,11 @@ message TextExecNode {
   optional bytes line_sep = 4;
 }
 
+message BinarySourceExecNode {
+  bytes base_config = 1;
+  optional string path_glob_filter = 2;
+}
+
 message AvroExecNode {
   bytes base_config = 1;
 }
@@ -343,6 +347,7 @@ message DeltaCommitExecNode {
   repeated string partition_columns = 3;
   bool table_exists = 4;
   bytes sink_schema = 5;
+  PhysicalSinkMode sink_mode = 6;
 }
 
 message ConsoleSinkExecNode {
@@ -372,6 +377,20 @@ message TextSinkExecNode {
   bytes line_sep = 4;
   CompressionTypeVariant compression_type_variant = 5;
   optional PhysicalSortExprNodeCollection sort_order = 6;
+}
+
+message StreamCollectorExecNode {
+  bytes input = 1;
+}
+
+message StreamLimitExecNode {
+  bytes input = 1;
+  uint64 skip = 2;
+  optional uint64 fetch = 3;
+}
+
+message StreamSourceAdapterExecNode {
+  bytes input = 1;
 }
 
 message JoinOn {
