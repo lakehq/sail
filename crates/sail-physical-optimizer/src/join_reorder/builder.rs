@@ -97,6 +97,12 @@ impl GraphBuilder {
             if join_plan.join_type() == &JoinType::Inner {
                 info!("Visiting inner join: {}", join_plan.name());
                 return self.visit_inner_join(join_plan);
+            } else {
+                info!(
+                    "Skipping non-inner join ({:?}): {}",
+                    join_plan.join_type(),
+                    join_plan.name()
+                );
             }
         }
 

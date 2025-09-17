@@ -95,8 +95,17 @@ impl JoinReorder {
                     displayable(join_tree.as_ref()).indent(true)
                 );
 
-                let final_plan =
-                    self.build_final_projection(join_tree, &final_map, &target_column_map)?;
+                // Preserve original output column names from the region root
+                let target_names: Vec<String> = (0..plan.schema().fields().len())
+                    .map(|i| plan.schema().field(i).name().clone())
+                    .collect();
+
+                let final_plan = self.build_final_projection(
+                    join_tree,
+                    &final_map,
+                    &target_column_map,
+                    &target_names,
+                )?;
 
                 info!("JoinReorder: Optimization successful at current level. Returning new plan.");
                 debug!(
@@ -113,6 +122,11 @@ impl JoinReorder {
         //    recursively optimize the children of the current node.
         info!("find_and_optimize_regions: No reorderable region found at {}, recursing to {} children", 
               plan.name(), plan.children().len());
+
+        // Allow recursion through Left Joins to find Inner Join regions below.
+        // Left Joins themselves won't be included in reorderable regions (handled by GraphBuilder),
+        // but we recursively optimize their children to find Inner Join regions below.
+
         let optimized_children = plan
             .children()
             .into_iter()
@@ -132,11 +146,21 @@ impl JoinReorder {
         input_plan: Arc<dyn ExecutionPlan>,
         final_map: &ColumnMap,
         target_map: &ColumnMap,
+        target_names: &[String],
     ) -> Result<Arc<dyn ExecutionPlan>> {
+        debug!(
+            "build_final_projection: target_map has {} entries, final_map has {} entries",
+            target_map.len(),
+            final_map.len()
+        );
+        debug!(
+            "build_final_projection: input_plan schema has {} fields",
+            input_plan.schema().fields().len()
+        );
         let mut projection_exprs: Vec<(Arc<dyn datafusion::physical_expr::PhysicalExpr>, String)> =
             vec![];
 
-        for target_entry in target_map.iter() {
+        for (output_idx, target_entry) in target_map.iter().enumerate() {
             match target_entry {
                 ColumnMapEntry::Stable {
                     relation_id,
@@ -148,17 +172,43 @@ impl JoinReorder {
                         name: "".to_string(), // name will be retrieved from schema
                     };
 
+                    debug!(
+                        "build_final_projection: Looking for stable column R{}.C{} (output_idx={})",
+                        relation_id, column_index, output_idx
+                    );
+
                     // Find this stable column's position in the final join tree output
                     let physical_idx =
                         find_physical_index(&stable_target, final_map).ok_or_else(|| {
-                            DataFusionError::Internal(
-                                "Final projection column not found".to_string(),
-                            )
+                            debug!("build_final_projection: Failed to find R{}.C{} in final_map", relation_id, column_index);
+                            for (i, entry) in final_map.iter().enumerate() {
+                                match entry {
+                                    ColumnMapEntry::Stable { relation_id: r, column_index: c } => {
+                                        debug!("  final_map[{}] = R{}.C{}", i, r, c);
+                                    }
+                                    ColumnMapEntry::Expression(_) => {
+                                        debug!("  final_map[{}] = Expression", i);
+                                    }
+                                }
+                            }
+                            DataFusionError::Internal(format!(
+                                "Final projection column not found: relation_id={}, column_index={}, target_map_len={}, final_map_len={}",
+                                relation_id, column_index, target_map.len(), final_map.len()
+                            ))
                         })?;
 
-                    // Get column name from input plan schema
-                    let name = input_plan.schema().field(physical_idx).name().clone();
-                    projection_exprs.push((Arc::new(Column::new(&name, physical_idx)), name));
+                    // Use the input field name for the Column expression
+                    let input_name = input_plan.schema().field(physical_idx).name().clone();
+                    // Preserve the original output name for this position
+                    let output_name = target_names
+                        .get(output_idx)
+                        .cloned()
+                        .unwrap_or_else(|| input_name.clone());
+                    // Build expression referencing input by index/name, but alias to the original output name
+                    projection_exprs.push((
+                        Arc::new(Column::new(&input_name, physical_idx)),
+                        output_name,
+                    ));
                 }
                 ColumnMapEntry::Expression(_expr) => {
                     // TODO: This is a complex case. We need an expression rewriter

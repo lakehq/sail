@@ -134,10 +134,17 @@ impl PlanEnumerator {
                 .cost_model
                 .compute_cost(&left_plan, &right_plan, new_cardinality);
 
+            // Get the actual indices of connecting edges in the query graph
             let edge_indices: Vec<usize> = connecting_edges
                 .iter()
-                .enumerate()
-                .map(|(i, _)| i)
+                .map(|edge| {
+                    // Find the index of this edge in the query graph's edges vector
+                    self.query_graph
+                        .edges
+                        .iter()
+                        .position(|graph_edge| std::ptr::eq(*edge, graph_edge))
+                        .expect("Edge should exist in query graph")
+                })
                 .collect();
 
             // Create new join plan
