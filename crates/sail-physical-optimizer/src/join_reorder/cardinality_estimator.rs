@@ -1,5 +1,7 @@
 use std::collections::{HashMap, HashSet};
 
+use log::debug;
+
 use crate::join_reorder::graph::{JoinEdge, QueryGraph, StableColumn};
 use crate::join_reorder::join_set::JoinSet;
 
@@ -75,6 +77,22 @@ impl CardinalityEstimator {
 
         estimator.populate_initial_distinct_counts();
         estimator.init_equivalence_sets();
+
+        debug!(
+            "CardinalityEstimator: Initialized with {} equivalence sets.",
+            estimator.equivalence_sets.len()
+        );
+        for (i, set) in estimator.equivalence_sets.iter().enumerate() {
+            debug!(
+                "  - Set {}: TDom = {:.2}, Columns = {:?}",
+                i,
+                set.t_dom_count,
+                set.columns
+                    .iter()
+                    .map(|c| format!("R{}.C{}", c.relation_id, c.column_index))
+                    .collect::<Vec<_>>()
+            );
+        }
 
         estimator
     }

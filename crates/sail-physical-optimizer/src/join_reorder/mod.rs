@@ -38,35 +38,54 @@ impl PhysicalOptimizerRule for JoinReorder {
         plan: Arc<dyn ExecutionPlan>,
         _config: &ConfigOptions,
     ) -> Result<Arc<dyn ExecutionPlan>> {
-        // Log input plan
-        info!("JoinReorder: Input plan:");
-        debug!("{}", displayable(plan.as_ref()).indent(true));
+        info!("JoinReorder: Entering optimization rule.");
+        debug!(
+            "JoinReorder: Input plan:\n{}",
+            displayable(plan.as_ref()).indent(true)
+        );
 
         // Build query graph from DataFusion ExecutionPlan
         let mut graph_builder = GraphBuilder::new();
         if let Some((query_graph, target_column_map)) = graph_builder.build(plan.clone())? {
+            info!(
+                "JoinReorder: Built query graph with {} relations and {} edges. Starting plan enumeration.",
+                query_graph.relation_count(),
+                query_graph.edges.len()
+            );
+            debug!("JoinReorder: QueryGraph structure:\n{:#?}", query_graph);
+
             // Initialize plan enumerator and solve for optimal join order
             let mut enumerator = PlanEnumerator::new(query_graph);
             let best_plan = enumerator.solve()?;
+            info!(
+                "JoinReorder: Optimal plan found with cost {:.2} and estimated cardinality {:.2}. Reconstructing plan.",
+                best_plan.cost, best_plan.cardinality
+            );
+            debug!("JoinReorder: Optimal DPPlan structure:\n{:#?}", best_plan);
 
             // Reconstruct the base join tree
             let mut reconstructor =
                 PlanReconstructor::new(&enumerator.dp_table, &enumerator.query_graph);
             let (join_tree, final_map) = reconstructor.reconstruct(&best_plan)?;
 
+            debug!(
+                "JoinReorder: Reconstructed join tree (before final projection):\n{}",
+                displayable(join_tree.as_ref()).indent(true)
+            );
+
             // Build the final projection on top of the join tree
             let final_plan =
                 self.build_final_projection(join_tree, &final_map, &target_column_map)?;
-
-            // Log optimized output plan
-            info!("JoinReorder: Optimized plan:");
-            debug!("{}", displayable(final_plan.as_ref()).indent(true));
+            info!("JoinReorder: Optimization successful. Returning new plan.");
+            debug!(
+                "JoinReorder: Optimized plan:\n{}",
+                displayable(final_plan.as_ref()).indent(true)
+            );
 
             return Ok(final_plan);
         }
 
-        // Return original plan if reordering is not possible
-        info!("JoinReorder: No optimization applied, returning original plan");
+        info!("JoinReorder: No reorderable joins found. Returning original plan.");
         Ok(plan)
     }
 
