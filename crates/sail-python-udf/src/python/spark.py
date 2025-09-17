@@ -404,7 +404,6 @@ def _arrow_array_to_output_type(data, data_type: pa.DataType) -> pa.Array:
         struct_arrays.append(pa.StructArray.from_arrays(arrays, names=names))
 
     return pa.concat_arrays(struct_arrays)
-        
 
 
 def _named_arrays_to_pandas(
@@ -551,17 +550,6 @@ class PySparkGroupMapUdf:
             inputs = [pa.RecordBatch.from_arrays(args, self._input_names)]
             [(output, output_type)] = list(self._udf(None, (inputs,)))
             return _arrow_array_to_output_type(output, output_type)
-            
-        
-
-#[([pyarrow.RecordBatch
-#    id: int64
-#    value: int64
-#    ----
-#    id: [0,1,2,3]
-#    value: [0,10,20,30]], 
-#    StructType(struct<id: int64, value: int64>)
-#)]
 
 
 class PySparkCoGroupMapUdf:
