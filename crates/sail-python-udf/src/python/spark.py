@@ -523,7 +523,7 @@ class PySparkGroupMapUdf:
         self,
         udf: Callable[..., Any],
         input_names: Sequence[str],
-        is_pandas: bool, # noqa: FBT001
+        is_pandas: bool,  # noqa: FBT001
         config,
     ):
         self._udf = udf
