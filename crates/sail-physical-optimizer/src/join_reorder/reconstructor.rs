@@ -5,7 +5,8 @@ use datafusion::common::{JoinSide, NullEquality};
 use datafusion::error::{DataFusionError, Result};
 use datafusion::logical_expr::{JoinType, Operator};
 use datafusion::physical_expr::expressions::{BinaryExpr, Column};
-use datafusion::physical_expr::{utils::collect_columns, PhysicalExpr};
+use datafusion::physical_expr::utils::collect_columns;
+use datafusion::physical_expr::PhysicalExpr;
 use datafusion::physical_plan::joins::utils::{ColumnIndex, JoinFilter};
 use datafusion::physical_plan::joins::{HashJoinExec, PartitionMode};
 use datafusion::physical_plan::ExecutionPlan;
@@ -196,7 +197,7 @@ impl<'a> PlanReconstructor<'a> {
 
         // Collect all non-equi filter expressions from edges
         let mut non_equi_filters = Vec::new();
-        let mut required_columns = Vec::new();
+        let mut all_column_indices = Vec::new();
 
         for &edge_index in edge_indices {
             let edge = self.query_graph.edges.get(edge_index).ok_or_else(|| {
@@ -204,11 +205,11 @@ impl<'a> PlanReconstructor<'a> {
             })?;
 
             // Extract non-equi conditions from the edge filter
-            if let Some(non_equi_expr) =
+            if let Some((non_equi_expr, column_indices)) =
                 self.extract_non_equi_conditions(edge, left_map, right_map)?
             {
-                non_equi_filters.push(non_equi_expr.0);
-                required_columns.extend(non_equi_expr.1);
+                non_equi_filters.push(non_equi_expr);
+                all_column_indices.extend(column_indices);
             }
         }
 
@@ -223,47 +224,20 @@ impl<'a> PlanReconstructor<'a> {
             self.combine_filters_with_and(non_equi_filters)?
         };
 
-        // Build intermediate schema for the filter
-        let left_schema = left_map
-            .iter()
-            .enumerate()
-            .map(|(i, _)| format!("left_{}", i))
-            .collect::<Vec<_>>();
-        let right_schema = right_map
-            .iter()
-            .enumerate()
-            .map(|(i, _)| format!("right_{}", i))
-            .collect::<Vec<_>>();
-
-        // Create a simple schema for the intermediate batch
-        // TODO: We would need to get the actual field types
-        // from the left and right plans' schemas
-        let mut schema_fields = Vec::new();
-        for (i, _) in left_schema.iter().enumerate() {
-            schema_fields.push(datafusion::arrow::datatypes::Field::new(
-                &format!("left_{}", i),
-                datafusion::arrow::datatypes::DataType::Int32, // Placeholder type
-                true,
-            ));
-        }
-        for (i, _) in right_schema.iter().enumerate() {
-            schema_fields.push(datafusion::arrow::datatypes::Field::new(
-                &format!("right_{}", i),
-                datafusion::arrow::datatypes::DataType::Int32, // Placeholder type
-                true,
-            ));
-        }
+        // Build intermediate schema for the filter from actual plan schemas
+        let left_plan_schema = self.get_plan_schema_for_map(left_map)?;
+        let right_plan_schema = self.get_plan_schema_for_map(right_map)?;
 
         let intermediate_schema =
-            Arc::new(datafusion::arrow::datatypes::Schema::new(schema_fields));
+            self.build_intermediate_schema(&left_plan_schema, &right_plan_schema)?;
 
-        // Remove duplicates from required_columns
-        required_columns.sort_by_key(|col| (col.side as u8, col.index));
-        required_columns.dedup_by_key(|col| (col.side as u8, col.index));
+        // Remove duplicates from column indices and sort them
+        all_column_indices.sort_by_key(|col| (col.side as u8, col.index));
+        all_column_indices.dedup_by_key(|col| (col.side as u8, col.index));
 
         Ok(Some(JoinFilter::new(
             combined_filter,
-            required_columns,
+            all_column_indices,
             intermediate_schema,
         )))
     }
@@ -296,26 +270,89 @@ impl<'a> PlanReconstructor<'a> {
         filter: &Arc<dyn PhysicalExpr>,
         equi_pairs: &[(StableColumn, StableColumn)],
     ) -> Result<Option<Arc<dyn PhysicalExpr>>> {
-        // This is a simplified implementation that checks if the filter is more complex
-        // than just the equi-join conditions
+        // Separate equi and non-equi conditions
+        let non_equi_expr = self.extract_non_equi_from_expression(filter, equi_pairs)?;
+        Ok(non_equi_expr)
+    }
 
-        // If we have the same number of equi-pairs as AND conditions in the filter,
-        // then the filter likely contains only equi-join conditions
-        let equi_count = equi_pairs.len();
-        let filter_condition_count = self.count_and_conditions(filter);
+    /// Extract non-equi conditions from a complex expression by removing equi-join conditions.
+    fn extract_non_equi_from_expression(
+        &self,
+        expr: &Arc<dyn PhysicalExpr>,
+        equi_pairs: &[(StableColumn, StableColumn)],
+    ) -> Result<Option<Arc<dyn PhysicalExpr>>> {
+        use datafusion::physical_expr::expressions::BinaryExpr;
 
-        if filter_condition_count > equi_count {
-            // There are more conditions than equi-joins, so there might be non-equi conditions
-            // Return the entire filter as a placeholder
-            // TODO: Implement proper expression tree parsing to extract only non-equi parts
-            Ok(Some(filter.clone()))
+        if let Some(binary_expr) = expr.as_any().downcast_ref::<BinaryExpr>() {
+            match binary_expr.op() {
+                Operator::And => {
+                    // For AND expressions, recursively process left and right sides
+                    let left_non_equi =
+                        self.extract_non_equi_from_expression(binary_expr.left(), equi_pairs)?;
+                    let right_non_equi =
+                        self.extract_non_equi_from_expression(binary_expr.right(), equi_pairs)?;
+
+                    match (left_non_equi, right_non_equi) {
+                        (Some(left), Some(right)) => {
+                            // Both sides have non-equi conditions, combine them with AND
+                            Ok(Some(Arc::new(BinaryExpr::new(left, Operator::And, right))))
+                        }
+                        (Some(expr), None) | (None, Some(expr)) => {
+                            // Only one side has non-equi conditions
+                            Ok(Some(expr))
+                        }
+                        (None, None) => {
+                            // No non-equi conditions found
+                            Ok(None)
+                        }
+                    }
+                }
+                Operator::Eq => {
+                    // Check if this equality is part of the equi-join conditions
+                    if self.is_equi_join_condition(binary_expr, equi_pairs) {
+                        Ok(None) // This is an equi-join condition, exclude it
+                    } else {
+                        Ok(Some(expr.clone())) // This is a non-equi condition
+                    }
+                }
+                _ => {
+                    // All other operators (>, <, >=, <=, !=, etc.) are non-equi conditions
+                    Ok(Some(expr.clone()))
+                }
+            }
         } else {
-            // Filter likely contains only equi-join conditions
-            Ok(None)
+            // Non-binary expressions are considered non-equi conditions
+            Ok(Some(expr.clone()))
         }
     }
 
+    /// Check if a binary equality expression matches any of the equi-join pairs.
+    fn is_equi_join_condition(
+        &self,
+        binary_expr: &BinaryExpr,
+        equi_pairs: &[(StableColumn, StableColumn)],
+    ) -> bool {
+        use datafusion::physical_expr::expressions::Column;
+
+        // Extract column references from both sides of the equality
+        let left_col = binary_expr.left().as_any().downcast_ref::<Column>();
+        let right_col = binary_expr.right().as_any().downcast_ref::<Column>();
+
+        if let (Some(left), Some(right)) = (left_col, right_col) {
+            // Check if this column pair matches any equi-join pair
+            for (col1, col2) in equi_pairs {
+                if (left.name() == &col1.name && right.name() == &col2.name)
+                    || (left.name() == &col2.name && right.name() == &col1.name)
+                {
+                    return true;
+                }
+            }
+        }
+        false
+    }
+
     /// Count the number of AND conditions in an expression tree.
+    #[allow(dead_code)]
     fn count_and_conditions(&self, expr: &Arc<dyn PhysicalExpr>) -> usize {
         if let Some(binary_expr) = expr.as_any().downcast_ref::<BinaryExpr>() {
             match binary_expr.op() {
@@ -338,33 +375,52 @@ impl<'a> PlanReconstructor<'a> {
         left_map: &ColumnMap,
         right_map: &ColumnMap,
     ) -> Result<(Arc<dyn PhysicalExpr>, Vec<ColumnIndex>)> {
-        // Collect all columns referenced in the filter
-        let columns = collect_columns(&filter);
-        let mut column_indices = Vec::new();
-        let rewritten_expr = filter;
+        use datafusion::common::tree_node::{Transformed, TreeNode};
+        use datafusion::physical_expr::expressions::Column;
 
-        // For each column in the filter, determine if it comes from left or right side
-        // and create appropriate ColumnIndex entries
-        for column in columns {
+        let mut column_indices = Vec::new();
+        let mut column_mapping = HashMap::new();
+
+        // First pass: collect all columns and build mapping
+        let columns = collect_columns(&filter);
+        for column in &columns {
+            let column_key = (column.name().to_string(), column.index());
+
             // Try to find this column in the left map first
-            if let Some(left_idx) = self.find_column_in_map(&column, left_map) {
-                column_indices.push(ColumnIndex {
+            if let Some(left_idx) = self.find_column_in_map(column, left_map) {
+                let column_index = ColumnIndex {
                     index: left_idx,
                     side: JoinSide::Left,
-                });
+                };
+                column_indices.push(column_index);
+                // Map to intermediate schema position (left columns come first)
+                column_mapping.insert(column_key, left_idx);
             }
             // Try to find this column in the right map
-            else if let Some(right_idx) = self.find_column_in_map(&column, right_map) {
-                column_indices.push(ColumnIndex {
+            else if let Some(right_idx) = self.find_column_in_map(column, right_map) {
+                let column_index = ColumnIndex {
                     index: right_idx,
                     side: JoinSide::Right,
-                });
+                };
+                column_indices.push(column_index);
+                // Map to intermediate schema position (right columns come after left)
+                let intermediate_idx = left_map.len() + right_idx;
+                column_mapping.insert(column_key, intermediate_idx);
             }
         }
 
-        // TODO: Rewrite column references in the expression to use the correct indices
-        // for the intermediate join schema. This would require a more sophisticated
-        // expression rewriter that maps original column references to the new schema.
+        // Second pass: rewrite the expression to use intermediate schema column indices
+        let transform_result = filter.transform(|expr| {
+            if let Some(column) = expr.as_any().downcast_ref::<Column>() {
+                let column_key = (column.name().to_string(), column.index());
+                if let Some(&new_index) = column_mapping.get(&column_key) {
+                    let new_column = Column::new(column.name(), new_index);
+                    return Ok(Transformed::yes(Arc::new(new_column)));
+                }
+            }
+            Ok(Transformed::no(expr))
+        })?;
+        let rewritten_expr = transform_result.data;
 
         Ok((rewritten_expr, column_indices))
     }
@@ -406,6 +462,71 @@ impl<'a> PlanReconstructor<'a> {
             result = Arc::new(BinaryExpr::new(result, Operator::And, filter));
         }
         Ok(result)
+    }
+
+    /// Get the schema for a plan based on its ColumnMap.
+    fn get_plan_schema_for_map(
+        &self,
+        map: &ColumnMap,
+    ) -> Result<Arc<datafusion::arrow::datatypes::Schema>> {
+        use datafusion::arrow::datatypes::{DataType, Field, Schema};
+
+        let mut fields = Vec::new();
+        for (idx, entry) in map.iter().enumerate() {
+            match entry {
+                ColumnMapEntry::Stable {
+                    relation_id,
+                    column_index,
+                } => {
+                    let relation =
+                        self.query_graph.get_relation(*relation_id).ok_or_else(|| {
+                            DataFusionError::Internal(format!("Relation {} not found", relation_id))
+                        })?;
+                    let relation_schema = relation.plan.schema();
+                    let field = relation_schema.field(*column_index);
+                    fields.push(field.clone());
+                }
+                ColumnMapEntry::Expression(_) => {
+                    // For expression entries, use a generic type
+                    // TODO: In a complete implementation, we should evaluate the expression type
+                    fields.push(Field::new(&format!("expr_{}", idx), DataType::Utf8, true));
+                }
+            }
+        }
+        Ok(Arc::new(Schema::new(fields)))
+    }
+
+    /// Build intermediate schema for join filter by combining left and right schemas.
+    fn build_intermediate_schema(
+        &self,
+        left_schema: &Arc<datafusion::arrow::datatypes::Schema>,
+        right_schema: &Arc<datafusion::arrow::datatypes::Schema>,
+    ) -> Result<Arc<datafusion::arrow::datatypes::Schema>> {
+        use datafusion::arrow::datatypes::{Field, Schema};
+
+        let mut fields = Vec::new();
+
+        // Add left schema fields with "left_" prefix
+        for field in left_schema.fields() {
+            let new_field = Field::new(
+                &format!("left_{}", field.name()),
+                field.data_type().clone(),
+                field.is_nullable(),
+            );
+            fields.push(new_field);
+        }
+
+        // Add right schema fields with "right_" prefix
+        for field in right_schema.fields() {
+            let new_field = Field::new(
+                &format!("right_{}", field.name()),
+                field.data_type().clone(),
+                field.is_nullable(),
+            );
+            fields.push(new_field);
+        }
+
+        Ok(Arc::new(Schema::new(fields)))
     }
 
     /// Clear plan cache.

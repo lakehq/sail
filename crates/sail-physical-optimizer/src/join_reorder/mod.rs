@@ -4,9 +4,8 @@ use std::sync::Arc;
 use datafusion::config::ConfigOptions;
 use datafusion::error::{DataFusionError, Result};
 use datafusion::physical_expr::expressions::Column;
-use datafusion::physical_plan::displayable;
 use datafusion::physical_plan::projection::ProjectionExec;
-use datafusion::physical_plan::ExecutionPlan;
+use datafusion::physical_plan::{displayable, ExecutionPlan};
 use log::{debug, info};
 
 use crate::join_reorder::builder::{ColumnMap, ColumnMapEntry, GraphBuilder};
