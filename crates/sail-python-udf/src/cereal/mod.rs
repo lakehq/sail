@@ -47,6 +47,7 @@ fn supports_kwargs(eval_type: spec::PySparkUdfType) -> bool {
     match eval_type {
         PySparkUdfType::None
         | PySparkUdfType::GroupedMapPandas
+        | PySparkUdfType::GroupedMapArrow
         | PySparkUdfType::WindowAggPandas
         | PySparkUdfType::MapPandasIter
         | PySparkUdfType::CogroupedMapPandas
@@ -70,6 +71,7 @@ fn should_write_config(eval_type: spec::PySparkUdfType) -> bool {
         PySparkUdfType::ArrowBatched
         | PySparkUdfType::ScalarPandas
         | PySparkUdfType::GroupedMapPandas
+        | PySparkUdfType::GroupedMapArrow
         | PySparkUdfType::GroupedAggPandas
         | PySparkUdfType::WindowAggPandas
         | PySparkUdfType::ScalarPandasIter

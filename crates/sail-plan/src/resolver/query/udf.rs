@@ -172,11 +172,15 @@ impl PlanResolver<'_> {
             DataType::Struct(output_fields.clone()),
             false,
         )));
-        if !matches!(function.eval_type, spec::PySparkUdfType::GroupedMapPandas) {
+        if !matches!(
+            function.eval_type,
+            spec::PySparkUdfType::GroupedMapPandas | spec::PySparkUdfType::GroupedMapArrow
+        ) {
             return Err(PlanError::invalid(
-                "only MapPandasIter UDF is supported in MapPartitions",
+                "only GroupedMapArrow/GroupedMapPandas UDF is supported in GroupedMap",
             ));
         }
+        let is_pandas = matches!(function.eval_type, spec::PySparkUdfType::GroupedMapPandas);
         let input = self.resolve_query_plan(*input, state).await?;
         let schema = input.schema();
         let args = self
@@ -207,6 +211,7 @@ impl PlanResolver<'_> {
             input_names,
             input_types,
             udf_output_type,
+            is_pandas,
             self.config.pyspark_udf_config.clone(),
         );
         let agg = Expr::AggregateFunction(expr::AggregateFunction {

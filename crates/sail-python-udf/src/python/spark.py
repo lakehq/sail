@@ -373,6 +373,40 @@ def _pandas_to_arrow_array(data, data_type: pa.DataType, serializer: ArrowStream
     return serializer._create_array(data, data_type, arrow_cast=serializer._arrow_cast)  # noqa: SLF001
 
 
+def _arrow_array_to_output_type(data, data_type: pa.DataType) -> pa.Array:
+    if len(data) == 0:
+        return pa.array([], type=data_type)
+
+    struct_arrays = []
+
+    for batch in data:
+        if len(data_type.fields) != batch.num_columns:
+            raise ValueError("schema mismatch:", batch.schema, data_type)
+        
+        arrays = []
+        names = []
+        
+        for i, target_field in enumerate(data_type.fields):
+            target_name = target_field.name
+            target_type = target_field.type
+            
+            if target_name in batch.schema.names:
+                source_array = batch[target_name]
+            else:
+                source_array = batch.column(i)
+
+            if source_array.type != target_type:
+                source_array = source_array.cast(target_type)
+
+            arrays.append(source_array)
+            names.append(target_name)
+        
+        struct_arrays.append(pa.StructArray.from_arrays(arrays, names=names))
+
+    return pa.concat_arrays(struct_arrays)
+        
+
+
 def _named_arrays_to_pandas(
     data: Sequence[pa.Array], names: Sequence[str], serializer: ArrowStreamPandasUDFSerializer
 ) -> Sequence[pd.Series]:
@@ -492,10 +526,12 @@ class PySparkGroupMapUdf:
         self,
         udf: Callable[..., Any],
         input_names: Sequence[str],
+        is_pandas: bool,
         config,
     ):
         self._udf = udf
         self._input_names = input_names
+        self.is_pandas = is_pandas
         self._serializer = ArrowStreamPandasUDFSerializer(
             timezone=config.session_timezone,
             safecheck=config.arrow_convert_safely,
@@ -507,9 +543,25 @@ class PySparkGroupMapUdf:
         )
 
     def __call__(self, args: list[pa.Array]) -> pa.Array:
-        inputs = _named_arrays_to_pandas(args, self._input_names, self._serializer)
-        [[(output, output_type)]] = list(self._udf(None, (inputs,)))
-        return _pandas_to_arrow_array(output, output_type, self._serializer)
+        if self.is_pandas:
+            inputs = _named_arrays_to_pandas(args, self._input_names, self._serializer)
+            [[(output, output_type)]] = list(self._udf(None, (inputs,)))
+            return _pandas_to_arrow_array(output, output_type, self._serializer)
+        else:
+            inputs = [pa.RecordBatch.from_arrays(args, self._input_names)]
+            [(output, output_type)] = list(self._udf(None, (inputs,)))
+            return _arrow_array_to_output_type(output, output_type)
+            
+        
+
+#[([pyarrow.RecordBatch
+#    id: int64
+#    value: int64
+#    ----
+#    id: [0,1,2,3]
+#    value: [0,10,20,30]], 
+#    StructType(struct<id: int64, value: int64>)
+#)]
 
 
 class PySparkCoGroupMapUdf:
