@@ -99,6 +99,7 @@ impl From<CommonErrorCause> for TaskStreamError {
             | CommonErrorCause::ArrowArithmeticOverflow(x)
             | CommonErrorCause::ArrowDictionaryKeyOverflow(x)
             | CommonErrorCause::ArrowRunEndIndexOverflow(x)
+            | CommonErrorCause::ArrowOffsetOverflow(x)
             | CommonErrorCause::FormatCsv(x)
             | CommonErrorCause::FormatJson(x)
             | CommonErrorCause::FormatParquet(x)
@@ -108,7 +109,6 @@ impl From<CommonErrorCause> for TaskStreamError {
             | CommonErrorCause::Configuration(x)
             | CommonErrorCause::Execution(x)
             | CommonErrorCause::DeltaTable(x) => Self::Unknown(x),
-            CommonErrorCause::ArrowOffsetOverflowError(x) => Self::Unknown(format!("{x}")),
             CommonErrorCause::Python { summary, traceback } => {
                 Self::External(Arc::new(RemotePythonError { summary, traceback }))
             }

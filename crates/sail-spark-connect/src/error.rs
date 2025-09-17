@@ -305,7 +305,8 @@ impl From<CommonErrorCause> for SparkThrowable {
             | CommonErrorCause::FormatParquet(x)
             | CommonErrorCause::FormatAvro(x)
             | CommonErrorCause::ArrowDictionaryKeyOverflow(x)
-            | CommonErrorCause::ArrowRunEndIndexOverflow(x) => {
+            | CommonErrorCause::ArrowRunEndIndexOverflow(x)
+            | CommonErrorCause::ArrowOffsetOverflow(x) => {
                 SparkThrowable::QueryExecutionException(x)
             }
             CommonErrorCause::ArrowDivideByZero(x)
@@ -333,11 +334,6 @@ impl From<CommonErrorCause> for SparkThrowable {
                 SparkThrowable::AnalysisException(x)
             }
             CommonErrorCause::DeltaTable(x) => SparkThrowable::QueryExecutionException(x),
-            CommonErrorCause::ArrowOffsetOverflowError(offset) => {
-                SparkThrowable::QueryExecutionException(format!(
-                    "Arrow offset overflow error: {offset}"
-                ))
-            }
         }
     }
 }
