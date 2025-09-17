@@ -2,8 +2,11 @@ use log::info;
 use std::collections::HashMap;
 use std::sync::Arc;
 
+use datafusion::common::tree_node::{Transformed, TreeNode};
 use datafusion::error::{DataFusionError, Result};
 use datafusion::logical_expr::JoinType;
+use datafusion::logical_expr::Operator;
+use datafusion::physical_expr::expressions::BinaryExpr;
 use datafusion::physical_expr::expressions::Column;
 use datafusion::physical_expr::PhysicalExpr;
 use datafusion::physical_plan::aggregates::AggregateExec;
@@ -171,7 +174,21 @@ impl GraphBuilder {
         }
 
         // Create an expression representing the entire ON condition
-        let filter_expr = self.build_conjunction_from_on(join_plan.on())?;
+        let mut filter_expr = self.build_conjunction_from_on(join_plan.on())?;
+
+        // If the original join had an additional non-equi filter, incorporate it
+        if let Some(join_filter) = join_plan.filter() {
+            // Rewrite the filter expression to use stable column names (R{relation}.C{index})
+            // rather than ephemeral projection names like "#37" and join-local indices.
+            let extra = self.rewrite_join_filter_to_stable(
+                join_plan,
+                join_filter.expression(),
+                &left_map,
+                &right_map,
+            )?;
+            filter_expr = Arc::new(BinaryExpr::new(filter_expr, Operator::And, extra))
+                as Arc<dyn PhysicalExpr>;
+        }
 
         let edge = JoinEdge::new(
             all_relations_in_condition,
@@ -187,6 +204,56 @@ impl GraphBuilder {
         let mut output_map = left_map;
         output_map.extend(right_map);
         Ok(output_map)
+    }
+
+    /// Rewrite a HashJoin's JoinFilter expression so that any Column references are
+    /// converted to stable names based on base relations: "R{relation_id}.C{column_index}".
+    /// This avoids depending on transient projection aliases like "#37" and local indices.
+    fn rewrite_join_filter_to_stable(
+        &self,
+        join_plan: &HashJoinExec,
+        expr: &Arc<dyn PhysicalExpr>,
+        left_map: &ColumnMap,
+        right_map: &ColumnMap,
+    ) -> Result<Arc<dyn PhysicalExpr>> {
+        if join_plan.filter().is_none() {
+            return Ok(Arc::clone(expr));
+        }
+
+        let indices = join_plan.filter().unwrap().column_indices();
+
+        let expr_arc = Arc::clone(expr);
+        let transformed = expr_arc.transform(|node| {
+            if let Some(col) = node.as_any().downcast_ref::<Column>() {
+                let i = col.index();
+                // Safeguard: if index out of bounds, leave as-is
+                if i >= indices.len() {
+                    return Ok(Transformed::no(node));
+                }
+                let ci = &indices[i];
+                // Determine which stable column this refers to
+                let stable_entry_opt = match ci.side {
+                    datafusion::common::JoinSide::Left => left_map.get(ci.index),
+                    datafusion::common::JoinSide::Right => right_map.get(ci.index),
+                    _ => None,
+                };
+
+                if let Some(ColumnMapEntry::Stable {
+                    relation_id,
+                    column_index,
+                }) = stable_entry_opt.cloned()
+                {
+                    // Build a stable name like R{relation_id}.C{column_index}
+                    let stable_name = format!("R{}.C{}", relation_id, column_index);
+                    // Keep index 0 for now; reconstructor will retarget indices to its compact schema
+                    let new_col = Column::new(&stable_name, 0);
+                    return Ok(Transformed::yes(Arc::new(new_col) as Arc<dyn PhysicalExpr>));
+                }
+            }
+            Ok(Transformed::no(node))
+        })?;
+
+        Ok(transformed.data)
     }
 
     fn visit_projection(&mut self, proj_plan: &ProjectionExec) -> Result<ColumnMap> {

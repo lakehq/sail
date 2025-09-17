@@ -108,7 +108,8 @@ impl<'a> PlanReconstructor<'a> {
         let join_type = self.determine_join_type(edge_indices)?;
 
         // 5. Build join filter for non-equi conditions
-        let join_filter = self.build_join_filter(edge_indices, &left_map, &right_map)?;
+        let join_filter =
+            self.build_join_filter(edge_indices, &left_map, &right_map, &left_plan, &right_plan)?;
 
         // 6. Create HashJoinExec
         let join_plan = Arc::new(HashJoinExec::try_new(
@@ -216,6 +217,8 @@ impl<'a> PlanReconstructor<'a> {
         edge_indices: &[usize],
         left_map: &ColumnMap,
         right_map: &ColumnMap,
+        left_plan: &Arc<dyn ExecutionPlan>,
+        right_plan: &Arc<dyn ExecutionPlan>,
     ) -> Result<Option<JoinFilter>> {
         if edge_indices.is_empty() {
             return Ok(None);
@@ -250,20 +253,98 @@ impl<'a> PlanReconstructor<'a> {
             self.combine_filters_with_and(non_equi_filters)?
         };
 
-        // Build intermediate schema for the filter from actual plan schemas
-        let left_plan_schema = self.get_plan_schema_for_map(left_map)?;
-        let right_plan_schema = self.get_plan_schema_for_map(right_map)?;
+        use datafusion::common::tree_node::{Transformed, TreeNode};
+        use datafusion::physical_expr::expressions::Column;
 
-        let intermediate_schema =
-            self.build_intermediate_schema(&left_plan_schema, &right_plan_schema)?;
+        // Helper: parse stable name like "R{rel}.C{col}" -> (rel, col)
+        let parse_stable = |name: &str| -> Option<(usize, usize)> {
+            if !name.starts_with('R') {
+                return None;
+            }
+            let dot = name.find('.')?;
+            let rel_str = &name[1..dot];
+            if !name[dot + 1..].starts_with('C') {
+                return None;
+            }
+            let col_str = &name[dot + 2..];
+            let rel = rel_str.parse::<usize>().ok()?;
+            let col = col_str.parse::<usize>().ok()?;
+            Some((rel, col))
+        };
 
-        // Remove duplicates from column indices and sort them
-        all_column_indices.sort_by_key(|col| (col.side as u8, col.index));
-        all_column_indices.dedup_by_key(|col| (col.side as u8, col.index));
+        // Find side and base index for a column, supporting stable names and schema field names
+        let find_side_and_index = |col: &Column| -> Option<(JoinSide, usize)> {
+            if let Some((rel, cidx)) = parse_stable(col.name()) {
+                // Look up in left_map by stable, else right_map
+                if let Some(pos) = left_map.iter().position(|e| matches!(e, ColumnMapEntry::Stable{ relation_id, column_index } if *relation_id==rel && *column_index==cidx)) {
+                    return Some((JoinSide::Left, pos));
+                }
+                if let Some(pos) = right_map.iter().position(|e| matches!(e, ColumnMapEntry::Stable{ relation_id, column_index } if *relation_id==rel && *column_index==cidx)) {
+                    return Some((JoinSide::Right, pos));
+                }
+            }
+            // Fallback by matching current plan schema names
+            let lname = left_plan.schema();
+            for (i, f) in lname.fields().iter().enumerate() {
+                if f.name() == col.name() {
+                    return Some((JoinSide::Left, i));
+                }
+            }
+            let rname = right_plan.schema();
+            for (i, f) in rname.fields().iter().enumerate() {
+                if f.name() == col.name() {
+                    return Some((JoinSide::Right, i));
+                }
+            }
+            None
+        };
+
+        // Build compact column index list in first-appearance order
+        let mut compact_indices: Vec<ColumnIndex> = Vec::new();
+        let mut seen: Vec<(JoinSide, usize)> = Vec::new();
+        let cols_in_expr = collect_columns(&combined_filter);
+        for c in &cols_in_expr {
+            if let Some((side, idx)) = find_side_and_index(c) {
+                if !seen.iter().any(|(s, i)| *s == side && *i == idx) {
+                    seen.push((side, idx));
+                    compact_indices.push(ColumnIndex { side, index: idx });
+                }
+            }
+        }
+
+        let index_of = |side: JoinSide, base_idx: usize| -> Option<usize> {
+            compact_indices
+                .iter()
+                .position(|ci| ci.side == side && ci.index == base_idx)
+        };
+
+        let retargeted = combined_filter.transform(|expr| {
+            if let Some(col) = expr.as_any().downcast_ref::<Column>() {
+                if let Some((side, base_idx)) = find_side_and_index(col) {
+                    if let Some(new_pos) = index_of(side, base_idx) {
+                        let new_col = Column::new(col.name(), new_pos);
+                        return Ok(Transformed::yes(Arc::new(new_col)));
+                    }
+                }
+            }
+            Ok(Transformed::no(expr))
+        })?;
+        let rewritten_expr = retargeted.data;
+
+        use datafusion::arrow::datatypes::Schema;
+        let mut fields = Vec::with_capacity(compact_indices.len());
+        for ci in &compact_indices {
+            match ci.side {
+                JoinSide::Left => fields.push(left_plan.schema().field(ci.index).clone()),
+                JoinSide::Right => fields.push(right_plan.schema().field(ci.index).clone()),
+                JoinSide::None => unreachable!(),
+            }
+        }
+        let intermediate_schema = Arc::new(Schema::new(fields));
 
         Ok(Some(JoinFilter::new(
-            combined_filter,
-            all_column_indices,
+            rewritten_expr,
+            compact_indices,
             intermediate_schema,
         )))
     }
