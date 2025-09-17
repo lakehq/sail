@@ -160,6 +160,7 @@ impl PlanResolver<'_> {
                         partition_by,
                         order_by: sorts,
                         window_frame,
+                        filter: None,
                         null_treatment: get_null_treatment(None),
                         distinct: is_distinct,
                     },
