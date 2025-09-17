@@ -113,19 +113,6 @@ impl GraphBuilder {
         }
     }
 
-    fn is_base_relation(&self, plan: Arc<dyn ExecutionPlan>) -> bool {
-        let plan_name = plan.name();
-        matches!(
-            plan_name,
-            "ParquetScanExec"
-                | "CsvScanExec"
-                | "AvroScanExec"
-                | "JsonScanExec"
-                | "EmptyExec"
-                | "GenerateSeriesExec"
-        )
-    }
-
     fn visit_inner_join(&mut self, join_plan: &HashJoinExec) -> Result<ColumnMap> {
         // Recursively visit left and right child nodes
         let left_map = self.visit_plan(join_plan.left().clone())?;

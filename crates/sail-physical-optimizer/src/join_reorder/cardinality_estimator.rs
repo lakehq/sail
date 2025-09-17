@@ -28,6 +28,8 @@ impl EquivalenceSet {
     }
 
     /// Check if the specified relation participates in this equivalence set.
+    /// TODO: Will be used in more complex cardinality estimation models
+    #[allow(dead_code)]
     pub fn involves_relation(&self, relation_id: usize) -> bool {
         self.columns
             .iter()
@@ -35,12 +37,19 @@ impl EquivalenceSet {
     }
 
     /// Get the set of relations participating in this equivalence set.
+    /// TODO: Will be used in more complex cardinality estimation models
+    #[allow(dead_code)]
     pub fn get_relation_set(&self) -> JoinSet {
         let mut result = JoinSet::default();
         for stable_col in &self.columns {
             result = result.union(&JoinSet::new_singleton(stable_col.relation_id));
         }
         result
+    }
+
+    /// Check if the equivalence set contains a specific column.
+    pub fn contains(&self, stable_column: &StableColumn) -> bool {
+        self.columns.contains(stable_column)
     }
 }
 
@@ -125,10 +134,10 @@ impl CardinalityEstimator {
 
         // Find which sets contain col1 and col2
         for (i, set) in sets.iter().enumerate() {
-            if set.columns.contains(&col1) {
+            if set.contains(&col1) {
                 idx1 = Some(i);
             }
-            if set.columns.contains(&col2) {
+            if set.contains(&col2) {
                 idx2 = Some(i);
             }
         }
@@ -145,23 +154,25 @@ impl CardinalityEstimator {
                     let set_to_merge = sets.remove(larger_idx);
 
                     // Merge into the set with smaller index
-                    sets[smaller_idx].columns.extend(set_to_merge.columns);
+                    for col in set_to_merge.columns {
+                        sets[smaller_idx].add_column(col);
+                    }
                 }
                 // else: already in the same set, no action needed
             }
             (Some(i), None) => {
                 // col1 is in a set, col2 is not
-                sets[i].columns.insert(col2);
+                sets[i].add_column(col2);
             }
             (None, Some(i)) => {
                 // col2 is in a set, col1 is not
-                sets[i].columns.insert(col1);
+                sets[i].add_column(col1);
             }
             (None, None) => {
                 // Neither column is in any set, create a new set
                 let mut new_set = EquivalenceSet::new();
-                new_set.columns.insert(col1);
-                new_set.columns.insert(col2);
+                new_set.add_column(col1);
+                new_set.add_column(col2);
                 sets.push(new_set);
             }
         }
@@ -187,7 +198,7 @@ impl CardinalityEstimator {
             }
         }
 
-        set.t_dom_count = max_distinct_count;
+        set.set_t_dom_count(max_distinct_count);
     }
 
     /// Estimate cardinality after joining a set of relations.
@@ -257,7 +268,7 @@ impl CardinalityEstimator {
         for equiv_set in &self.equivalence_sets {
             // Check if any equi-pair from the edge is in this equivalence set
             for (left_col, right_col) in &edge.equi_pairs {
-                if equiv_set.columns.contains(left_col) || equiv_set.columns.contains(right_col) {
+                if equiv_set.contains(left_col) || equiv_set.contains(right_col) {
                     return equiv_set.t_dom_count;
                 }
             }
@@ -302,16 +313,6 @@ impl CardinalityEstimator {
         }
 
         left_card * right_card * selectivity
-    }
-
-    /// Get reference to the query graph.
-    pub fn graph(&self) -> &QueryGraph {
-        &self.graph
-    }
-
-    /// Clear cardinality cache.
-    pub fn clear_cache(&mut self) {
-        self.cardinality_cache.clear();
     }
 }
 

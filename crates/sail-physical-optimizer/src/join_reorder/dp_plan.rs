@@ -43,16 +43,6 @@ impl DPPlan {
             },
         }
     }
-
-    /// Checks if this is a leaf node.
-    pub fn is_leaf(&self) -> bool {
-        matches!(self.plan_type, PlanType::Leaf { .. })
-    }
-
-    /// Gets the number of relations.
-    pub fn relation_count(&self) -> u32 {
-        self.join_set.cardinality()
-    }
 }
 
 #[derive(Debug, Clone)]
@@ -68,40 +58,6 @@ pub enum PlanType {
         /// Edges used to connect left and right subplans (indices in QueryGraph).
         edge_indices: Vec<usize>,
     },
-}
-
-impl PlanType {
-    /// Gets the left subplan's relation set (if this is a join node).
-    pub fn left_set(&self) -> Option<JoinSet> {
-        match self {
-            PlanType::Join { left_set, .. } => Some(*left_set),
-            PlanType::Leaf { .. } => None,
-        }
-    }
-
-    /// Gets the right subplan's relation set (if this is a join node).
-    pub fn right_set(&self) -> Option<JoinSet> {
-        match self {
-            PlanType::Join { right_set, .. } => Some(*right_set),
-            PlanType::Leaf { .. } => None,
-        }
-    }
-
-    /// Gets the edge index list (if this is a join node).
-    pub fn edge_indices(&self) -> Option<&[usize]> {
-        match self {
-            PlanType::Join { edge_indices, .. } => Some(edge_indices),
-            PlanType::Leaf { .. } => None,
-        }
-    }
-
-    /// Gets the relation ID (if this is a leaf node).
-    pub fn relation_id(&self) -> Option<usize> {
-        match self {
-            PlanType::Leaf { relation_id } => Some(*relation_id),
-            PlanType::Join { .. } => None,
-        }
-    }
 }
 
 #[cfg(test)]

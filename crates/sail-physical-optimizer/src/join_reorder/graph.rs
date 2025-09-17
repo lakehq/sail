@@ -113,27 +113,9 @@ impl QueryGraph {
             .collect()
     }
 
-    /// Gets all edges involving a specific relation set.
-    pub fn get_edges_for_set(&self, join_set: JoinSet) -> Vec<&JoinEdge> {
-        self.edges
-            .iter()
-            .filter(|edge| !edge.join_set.is_disjoint(&join_set))
-            .collect()
-    }
-
     /// Gets the number of relations.
     pub fn relation_count(&self) -> usize {
         self.relations.len()
-    }
-
-    /// Gets the number of edges.
-    pub fn edge_count(&self) -> usize {
-        self.edges.len()
-    }
-
-    /// Checks if the query graph is empty.
-    pub fn is_empty(&self) -> bool {
-        self.relations.is_empty()
     }
 
     /// Gets the relation node with the specified ID.

@@ -4,8 +4,10 @@ use std::sync::Arc;
 use datafusion::config::ConfigOptions;
 use datafusion::error::{DataFusionError, Result};
 use datafusion::physical_expr::expressions::Column;
+use datafusion::physical_plan::displayable;
 use datafusion::physical_plan::projection::ProjectionExec;
 use datafusion::physical_plan::ExecutionPlan;
+use log::{debug, info};
 
 use crate::join_reorder::builder::{ColumnMap, ColumnMapEntry, GraphBuilder};
 use crate::join_reorder::enumerator::PlanEnumerator;
@@ -37,6 +39,10 @@ impl PhysicalOptimizerRule for JoinReorder {
         plan: Arc<dyn ExecutionPlan>,
         _config: &ConfigOptions,
     ) -> Result<Arc<dyn ExecutionPlan>> {
+        // Log input plan
+        info!("JoinReorder: Input plan:");
+        debug!("{}", displayable(plan.as_ref()).indent(true));
+
         // Build query graph from DataFusion ExecutionPlan
         let mut graph_builder = GraphBuilder::new();
         if let Some((query_graph, target_column_map)) = graph_builder.build(plan.clone())? {
@@ -52,10 +58,16 @@ impl PhysicalOptimizerRule for JoinReorder {
             // Build the final projection on top of the join tree
             let final_plan =
                 self.build_final_projection(join_tree, &final_map, &target_column_map)?;
+
+            // Log optimized output plan
+            info!("JoinReorder: Optimized plan:");
+            debug!("{}", displayable(final_plan.as_ref()).indent(true));
+
             return Ok(final_plan);
         }
 
         // Return original plan if reordering is not possible
+        info!("JoinReorder: No optimization applied, returning original plan");
         Ok(plan)
     }
 
