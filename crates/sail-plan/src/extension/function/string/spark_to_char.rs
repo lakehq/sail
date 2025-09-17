@@ -3,7 +3,6 @@ use std::sync::Arc;
 
 use arrow::array::{Array, Decimal128Array, Float64Array, Int64Array, PrimitiveArray, StringArray};
 use arrow::datatypes::DataType;
-use chrono::NaiveDate;
 use datafusion_common::{exec_err, not_impl_err, DataFusionError, Result, ScalarValue};
 use datafusion_expr::{ScalarFunctionArgs, ScalarUDFImpl};
 use datafusion_expr_common::columnar_value::ColumnarValue;
@@ -145,13 +144,11 @@ fn format_number(value: f64, tokens: &[FormatToken]) -> String {
     if has_grouping && !overflow {
         let chars: Vec<char> = int_out.chars().collect();
         let mut grouped = String::new();
-        let mut count = 0;
-        for ch in chars.iter().rev() {
+        for (count, ch) in chars.iter().rev().enumerate() {
             if count > 0 && count % 3 == 0 && ch.is_ascii_digit() {
                 grouped.push(',');
             }
             grouped.push(*ch);
-            count += 1;
         }
         int_out = grouped.chars().rev().collect();
     }
