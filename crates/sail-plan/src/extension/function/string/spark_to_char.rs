@@ -210,15 +210,12 @@ fn format_scalar_value(value: &ScalarValue, fmt: &str) -> Result<String> {
 
      match value {
         ScalarValue::Int64(Some(v)) => {
-            let tokens = tokenize_format(fmt)?;
             Ok(format_number(*v as f64, &tokens))
         },
         ScalarValue::Float64(Some(v)) => {
-            let tokens = tokenize_format(fmt)?;
             Ok(format_number(*v, &tokens))
         },
         ScalarValue::Decimal128(Some(v), _, _) => {
-            let tokens = tokenize_format(fmt)?;
             Ok(format_number(*v as f64, &tokens))
         },
 
@@ -350,7 +347,7 @@ impl ScalarUDFImpl for SparkToChar {
                         format_primitive_array(
                             array.as_any()
                                 .downcast_ref::<Float64Array>()
-                                .ok_or_else(|| DataFusionError::Execution("Expected Int64Array".to_string()))?,
+                                .ok_or_else(|| DataFusionError::Execution("Expected Float64Array".to_string()))?,
                             |_| fmt.clone(),
                             |v| ScalarValue::Float64(Some(v)),
                         )?
@@ -359,7 +356,7 @@ impl ScalarUDFImpl for SparkToChar {
                         format_decimal_array(
                             array.as_any()
                                 .downcast_ref::<Decimal128Array>()
-                                .ok_or_else(|| DataFusionError::Execution("Expected Int64Array".to_string()))?,
+                                .ok_or_else(|| DataFusionError::Execution("Expected Decimal128Array".to_string()))?,
                             |_| fmt.clone(),
                             *precision,
                             *scale,
@@ -369,7 +366,7 @@ impl ScalarUDFImpl for SparkToChar {
                         format_primitive_array(
                             array.as_any()
                                 .downcast_ref::<arrow::array::Date32Array>()
-                                .ok_or_else(|| DataFusionError::Execution("Expected Int64Array".to_string()))?,
+                                .ok_or_else(|| DataFusionError::Execution("Expected Date32Array".to_string()))?,
                             |_| fmt.clone(),
                             |v| ScalarValue::Date32(Some(v)),
                         )?
@@ -391,7 +388,7 @@ impl ScalarUDFImpl for SparkToChar {
                 // Downcast format array
                 let fmt_array = formats.as_any()
                     .downcast_ref::<StringArray>()
-                    .ok_or_else(|| DataFusionError::Execution("Expected Int64Array".to_string()))?;
+                    .ok_or_else(|| DataFusionError::Execution("Expected StringArray".to_string()))?;
 
                 let result: Arc<StringArray> = match values.data_type() {
                     DataType::Int64 => {
@@ -407,7 +404,7 @@ impl ScalarUDFImpl for SparkToChar {
                     DataType::Float64 => {
                         let arr = values.as_any()
                             .downcast_ref::<Float64Array>()
-                            .ok_or_else(|| DataFusionError::Execution("Expected Int64Array".to_string()))?;
+                            .ok_or_else(|| DataFusionError::Execution("Expected Float64Array".to_string()))?;
                         format_primitive_array(
                             arr,
                             |i| fmt_array.value(i).to_string(),
@@ -417,7 +414,7 @@ impl ScalarUDFImpl for SparkToChar {
                     DataType::Decimal128(precision, scale) => {
                         let arr = values.as_any()
                             .downcast_ref::<Decimal128Array>()
-                            .ok_or_else(|| DataFusionError::Execution("Expected Int64Array".to_string()))?;
+                            .ok_or_else(|| DataFusionError::Execution("Expected Decimal128Array".to_string()))?;
                         format_decimal_array(
                             arr,
                             |i| fmt_array.value(i).to_string(),
@@ -428,7 +425,7 @@ impl ScalarUDFImpl for SparkToChar {
                     DataType::Date32 => {
                         let arr = values.as_any()
                             .downcast_ref::<arrow::array::Date32Array>()
-                            .ok_or_else(|| DataFusionError::Execution("Expected Int64Array".to_string()))?;
+                            .ok_or_else(|| DataFusionError::Execution("Expected Date32Array".to_string()))?;
                         format_primitive_array(
                             arr,
                             |i| fmt_array.value(i).to_string(),
