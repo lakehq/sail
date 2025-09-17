@@ -381,26 +381,24 @@ def _arrow_array_to_output_type(data, data_type: pa.DataType) -> pa.Array:
 
     for batch in data:
         if len(data_type.fields) != batch.num_columns:
-            raise ValueError("schema mismatch:", batch.schema, data_type)
-        
+            error = f"column number doesn't match: expected {len(data_type.fields)}, got {batch.num_columns}"
+            raise ValueError(error)
+
         arrays = []
         names = []
-        
+
         for i, target_field in enumerate(data_type.fields):
             target_name = target_field.name
             target_type = target_field.type
-            
-            if target_name in batch.schema.names:
-                source_array = batch[target_name]
-            else:
-                source_array = batch.column(i)
+
+            source_array = batch[target_name] if target_name in batch.schema.names else batch.column(i)
 
             if source_array.type != target_type:
                 source_array = source_array.cast(target_type)
 
             arrays.append(source_array)
             names.append(target_name)
-        
+
         struct_arrays.append(pa.StructArray.from_arrays(arrays, names=names))
 
     return pa.concat_arrays(struct_arrays)
@@ -525,7 +523,7 @@ class PySparkGroupMapUdf:
         self,
         udf: Callable[..., Any],
         input_names: Sequence[str],
-        is_pandas: bool,
+        is_pandas: bool, # noqa: FBT001
         config,
     ):
         self._udf = udf
@@ -546,10 +544,10 @@ class PySparkGroupMapUdf:
             inputs = _named_arrays_to_pandas(args, self._input_names, self._serializer)
             [[(output, output_type)]] = list(self._udf(None, (inputs,)))
             return _pandas_to_arrow_array(output, output_type, self._serializer)
-        else:
-            inputs = [pa.RecordBatch.from_arrays(args, self._input_names)]
-            [(output, output_type)] = list(self._udf(None, (inputs,)))
-            return _arrow_array_to_output_type(output, output_type)
+
+        inputs = [pa.RecordBatch.from_arrays(args, self._input_names)]
+        [(output, output_type)] = list(self._udf(None, (inputs,)))
+        return _arrow_array_to_output_type(output, output_type)
 
 
 class PySparkCoGroupMapUdf:
