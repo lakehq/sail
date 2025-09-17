@@ -68,8 +68,8 @@ mod tests {
             .filter(|name| datafusion_optimizer_names.contains(name))
             .collect();
         assert_eq!(
-            actual_datafusion_optimizer_names,
             datafusion_optimizer_names,
+            actual_datafusion_optimizer_names,
             "the custom physical optimizer rules should include all the default DataFusion optimizer rules in the same order"
         );
 

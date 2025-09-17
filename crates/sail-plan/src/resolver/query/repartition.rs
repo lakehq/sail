@@ -18,12 +18,12 @@ impl PlanResolver<'_> {
         let input = self
             .resolve_query_plan_with_hidden_fields(input, state)
             .await?;
-        let expressions = input.schema().columns().into_iter().map(col).collect();
+        let expr = input.schema().columns().into_iter().map(col).collect();
         Ok(LogicalPlan::Extension(Extension {
             node: Arc::new(ExplicitRepartitionNode::new(
                 Arc::new(input),
                 Some(num_partitions),
-                expressions,
+                expr,
             )),
         }))
     }
