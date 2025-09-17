@@ -1,17 +1,18 @@
 use datafusion_common::Result;
+
 use crate::extension::function::string::spark_to_number::RegexSpec;
 
 /// Spark-style format tokens
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum FormatToken {
-    Zero,            // '0' required digit
-    Nine,            // '9' optional digit
-    DecimalPoint,    // '.' or 'D'
-    GroupSeparator,  // ',' or 'G'
-    SignLeading,     // 'S' or '-' leading
-    SignTrailing,    // 'S' or '-' trailing
-    Currency,        // '$'
-    Literal(char),   // any literal character
+    Zero,           // '0' required digit
+    Nine,           // '9' optional digit
+    DecimalPoint,   // '.' or 'D'
+    GroupSeparator, // ',' or 'G'
+    SignLeading,    // 'S' or '-' leading
+    SignTrailing,   // 'S' or '-' trailing
+    Currency,       // '$'
+    Literal(char),  // any literal character
 }
 
 /// Parses a format string into a vector of `FormatToken`s for `format_number`.

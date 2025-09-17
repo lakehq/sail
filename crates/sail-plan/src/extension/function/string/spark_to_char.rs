@@ -1,19 +1,20 @@
-use crate::extension::function::string::format_tokens::{tokenize_format, FormatToken};
+use std::any::Any;
+use std::sync::Arc;
+
 use arrow::array::{Array, Decimal128Array, Float64Array, Int64Array, PrimitiveArray, StringArray};
-use arrow::datatypes::{ArrowNumericType, DataType};
+use arrow::datatypes::DataType;
 use chrono::NaiveDate;
 use datafusion_common::{exec_err, not_impl_err, DataFusionError, Result, ScalarValue};
 use datafusion_expr::{ScalarFunctionArgs, ScalarUDFImpl};
 use datafusion_expr_common::columnar_value::ColumnarValue;
 use datafusion_expr_common::signature::{Signature, Volatility};
-use std::any::Any;
-use std::sync::Arc;
+
+use crate::extension::function::string::format_tokens::{tokenize_format, FormatToken};
 
 #[derive(Debug)]
 pub struct SparkToChar {
     signature: Signature,
 }
-
 
 impl SparkToChar {
     pub fn new() -> Self {
@@ -68,7 +69,7 @@ fn format_number(value: f64, tokens: &[FormatToken]) -> String {
 
     // Separate integer and fractional parts
     let integer_part = abs_val.trunc() as i64;
-    let mut frac_part = abs_val.fract();
+    let frac_part = abs_val.fract();
 
     // Count integer and fraction digits
     let mut int_positions = 0;
@@ -176,7 +177,7 @@ fn format_number(value: f64, tokens: &[FormatToken]) -> String {
     let mut out = String::new();
 
     // Leading sign if exists
-    if tokens.iter().any(|t| *t == FormatToken::SignLeading) && negative {
+    if tokens.contains(&FormatToken::SignLeading) && negative {
         out.push('-');
     }
 
@@ -194,30 +195,13 @@ fn format_number(value: f64, tokens: &[FormatToken]) -> String {
     out
 }
 
-/// Format date using chrono crate
-fn format_date(date: NaiveDate, fmt: &str) -> Result<String> {
-    // Map simple Spark-style patterns to chrono patterns
-    let chrono_fmt = fmt
-        .replace("y", "%Y")
-        .replace("M", "%m")
-        .replace("d", "%d");
-
-    Ok(date.format(&chrono_fmt).to_string())
-}
-
 fn format_scalar_value(value: &ScalarValue, fmt: &str) -> Result<String> {
-    let tokens = tokenize_format(fmt)?;
+    let tokens: Vec<FormatToken> = tokenize_format(fmt)?;
 
-     match value {
-        ScalarValue::Int64(Some(v)) => {
-            Ok(format_number(*v as f64, &tokens))
-        },
-        ScalarValue::Float64(Some(v)) => {
-            Ok(format_number(*v, &tokens))
-        },
-        ScalarValue::Decimal128(Some(v), _, _) => {
-            Ok(format_number(*v as f64, &tokens))
-        },
+    match value {
+        ScalarValue::Int64(Some(v)) => Ok(format_number(*v as f64, &tokens)),
+        ScalarValue::Float64(Some(v)) => Ok(format_number(*v, &tokens)),
+        ScalarValue::Decimal128(Some(v), _, _) => Ok(format_number(*v as f64, &tokens)),
 
         // ----------------------
         // Date type (Date32)
@@ -229,7 +213,7 @@ fn format_scalar_value(value: &ScalarValue, fmt: &str) -> Result<String> {
         //          exec_err!("Invalid Date32 value: {}", days);
         //     }
         // }
-         _ =>  not_impl_err!("Unsupported type in to_char")
+        _ => not_impl_err!("Unsupported type in to_char"),
     }
 }
 
@@ -291,7 +275,6 @@ where
     Ok(Arc::new(StringArray::from(result)))
 }
 
-
 impl ScalarUDFImpl for SparkToChar {
     fn as_any(&self) -> &dyn Any {
         self
@@ -312,7 +295,10 @@ impl ScalarUDFImpl for SparkToChar {
     fn invoke_with_args(&self, args: ScalarFunctionArgs) -> Result<ColumnarValue> {
         let args = args.args;
         if args.len() != 2 {
-            return exec_err!("to_char requires 2 arguments (value, format), got {}", args.len());
+            return exec_err!(
+                "to_char requires 2 arguments (value, format), got {}",
+                args.len()
+            );
         }
 
         match (&args[0], &args[1]) {
@@ -323,8 +309,9 @@ impl ScalarUDFImpl for SparkToChar {
                 if val.is_null() {
                     Ok(ColumnarValue::Scalar(ScalarValue::Utf8(None)))
                 } else {
-                    let s = format_scalar_value(val, fmt)
-                        .map_err(|e| DataFusionError::Execution(format!("to_char formatting error: {e}")))?;
+                    let s = format_scalar_value(val, fmt).map_err(|e| {
+                        DataFusionError::Execution(format!("to_char formatting error: {e}"))
+                    })?;
                     Ok(ColumnarValue::Scalar(ScalarValue::Utf8(Some(s))))
                 }
             }
@@ -334,43 +321,44 @@ impl ScalarUDFImpl for SparkToChar {
             // ------------------------
             (ColumnarValue::Array(array), ColumnarValue::Scalar(ScalarValue::Utf8(Some(fmt)))) => {
                 let result = match array.data_type() {
-                    DataType::Int64 => {
-                        format_primitive_array(
-                            array.as_any()
-                                .downcast_ref::<Int64Array>()
-                                .ok_or_else(|| DataFusionError::Execution("Expected Int64Array".to_string()))?,
-                            |_| fmt.clone(),
-                            |v| ScalarValue::Int64(Some(v)),
-                        )?
-                    }
-                    DataType::Float64 => {
-                        format_primitive_array(
-                            array.as_any()
-                                .downcast_ref::<Float64Array>()
-                                .ok_or_else(|| DataFusionError::Execution("Expected Float64Array".to_string()))?,
-                            |_| fmt.clone(),
-                            |v| ScalarValue::Float64(Some(v)),
-                        )?
-                    }
-                    DataType::Decimal128(precision, scale) => {
-                        format_decimal_array(
-                            array.as_any()
-                                .downcast_ref::<Decimal128Array>()
-                                .ok_or_else(|| DataFusionError::Execution("Expected Decimal128Array".to_string()))?,
-                            |_| fmt.clone(),
-                            *precision,
-                            *scale,
-                        )?
-                    }
-                    DataType::Date32 => {
-                        format_primitive_array(
-                            array.as_any()
-                                .downcast_ref::<arrow::array::Date32Array>()
-                                .ok_or_else(|| DataFusionError::Execution("Expected Date32Array".to_string()))?,
-                            |_| fmt.clone(),
-                            |v| ScalarValue::Date32(Some(v)),
-                        )?
-                    }
+                    DataType::Int64 => format_primitive_array(
+                        array.as_any().downcast_ref::<Int64Array>().ok_or_else(|| {
+                            DataFusionError::Execution("Expected Int64Array".to_string())
+                        })?,
+                        |_| fmt.clone(),
+                        |v| ScalarValue::Int64(Some(v)),
+                    )?,
+                    DataType::Float64 => format_primitive_array(
+                        array
+                            .as_any()
+                            .downcast_ref::<Float64Array>()
+                            .ok_or_else(|| {
+                                DataFusionError::Execution("Expected Float64Array".to_string())
+                            })?,
+                        |_| fmt.clone(),
+                        |v| ScalarValue::Float64(Some(v)),
+                    )?,
+                    DataType::Decimal128(precision, scale) => format_decimal_array(
+                        array
+                            .as_any()
+                            .downcast_ref::<Decimal128Array>()
+                            .ok_or_else(|| {
+                                DataFusionError::Execution("Expected Decimal128Array".to_string())
+                            })?,
+                        |_| fmt.clone(),
+                        *precision,
+                        *scale,
+                    )?,
+                    DataType::Date32 => format_primitive_array(
+                        array
+                            .as_any()
+                            .downcast_ref::<arrow::array::Date32Array>()
+                            .ok_or_else(|| {
+                                DataFusionError::Execution("Expected Date32Array".to_string())
+                            })?,
+                        |_| fmt.clone(),
+                        |v| ScalarValue::Date32(Some(v)),
+                    )?,
                     _ => return not_impl_err!("Unsupported array type in to_char"),
                 };
 
@@ -386,15 +374,23 @@ impl ScalarUDFImpl for SparkToChar {
                 }
 
                 // Downcast format array
-                let fmt_array = formats.as_any()
-                    .downcast_ref::<StringArray>()
-                    .ok_or_else(|| DataFusionError::Execution("Expected StringArray".to_string()))?;
+                let fmt_array =
+                    formats
+                        .as_any()
+                        .downcast_ref::<StringArray>()
+                        .ok_or_else(|| {
+                            DataFusionError::Execution("Expected StringArray".to_string())
+                        })?;
 
                 let result: Arc<StringArray> = match values.data_type() {
                     DataType::Int64 => {
-                        let arr = values.as_any()
-                            .downcast_ref::<Int64Array>()
-                            .ok_or_else(|| DataFusionError::Execution("Expected Int64Array".to_string()))?;
+                        let arr =
+                            values
+                                .as_any()
+                                .downcast_ref::<Int64Array>()
+                                .ok_or_else(|| {
+                                    DataFusionError::Execution("Expected Int64Array".to_string())
+                                })?;
                         format_primitive_array(
                             arr,
                             |i| fmt_array.value(i).to_string(),
@@ -402,9 +398,13 @@ impl ScalarUDFImpl for SparkToChar {
                         )?
                     }
                     DataType::Float64 => {
-                        let arr = values.as_any()
-                            .downcast_ref::<Float64Array>()
-                            .ok_or_else(|| DataFusionError::Execution("Expected Float64Array".to_string()))?;
+                        let arr =
+                            values
+                                .as_any()
+                                .downcast_ref::<Float64Array>()
+                                .ok_or_else(|| {
+                                    DataFusionError::Execution("Expected Float64Array".to_string())
+                                })?;
                         format_primitive_array(
                             arr,
                             |i| fmt_array.value(i).to_string(),
@@ -412,9 +412,12 @@ impl ScalarUDFImpl for SparkToChar {
                         )?
                     }
                     DataType::Decimal128(precision, scale) => {
-                        let arr = values.as_any()
+                        let arr = values
+                            .as_any()
                             .downcast_ref::<Decimal128Array>()
-                            .ok_or_else(|| DataFusionError::Execution("Expected Decimal128Array".to_string()))?;
+                            .ok_or_else(|| {
+                                DataFusionError::Execution("Expected Decimal128Array".to_string())
+                            })?;
                         format_decimal_array(
                             arr,
                             |i| fmt_array.value(i).to_string(),
@@ -423,9 +426,12 @@ impl ScalarUDFImpl for SparkToChar {
                         )?
                     }
                     DataType::Date32 => {
-                        let arr = values.as_any()
+                        let arr = values
+                            .as_any()
                             .downcast_ref::<arrow::array::Date32Array>()
-                            .ok_or_else(|| DataFusionError::Execution("Expected Date32Array".to_string()))?;
+                            .ok_or_else(|| {
+                                DataFusionError::Execution("Expected Date32Array".to_string())
+                            })?;
                         format_primitive_array(
                             arr,
                             |i| fmt_array.value(i).to_string(),
@@ -438,15 +444,18 @@ impl ScalarUDFImpl for SparkToChar {
                 Ok(ColumnarValue::Array(result))
             }
 
-            _ => not_impl_err!("to_char currently supports only scalar or array values with literal format string"),
+            _ => not_impl_err!(
+                "to_char currently supports only scalar or array values with literal format string"
+            ),
         }
     }
 }
 
 #[cfg(test)]
 mod tests {
-    use super::*;
     use datafusion_common::ScalarValue;
+
+    use super::*;
 
     #[test]
     fn test_format_scalar_value_basic() {
@@ -455,12 +464,5 @@ mod tests {
 
         let result = format_scalar_value(&input, fmt).unwrap();
         assert_eq!(result, "0045.00"); // Expected output
-    }
-
-    fn test_format_scalar_value_optional_digits_ok() {
-        let input = ScalarValue::Int64(Some(7));
-        let fmt = "999.9";
-        let result = format_scalar_value(&input, fmt).unwrap();
-        assert_eq!(result, "  7.0"); // ✅ This should pass
     }
 }
