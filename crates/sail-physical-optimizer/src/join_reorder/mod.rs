@@ -63,6 +63,8 @@ impl JoinReorder {
         &self,
         plan: Arc<dyn ExecutionPlan>,
     ) -> Result<Arc<dyn ExecutionPlan>> {
+        info!("find_and_optimize_regions: Processing {}", plan.name());
+
         // 1. Attempt to build a query graph starting from the CURRENT node.
         // The GraphBuilder will traverse downwards to find a complete reorderable region.
         let mut graph_builder = GraphBuilder::new();
@@ -109,6 +111,8 @@ impl JoinReorder {
 
         // 2. If no significant reorderable region was found starting at the current node,
         //    recursively optimize the children of the current node.
+        info!("find_and_optimize_regions: No reorderable region found at {}, recursing to {} children", 
+              plan.name(), plan.children().len());
         let optimized_children = plan
             .children()
             .into_iter()

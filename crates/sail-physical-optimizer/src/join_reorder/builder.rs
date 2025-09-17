@@ -6,6 +6,7 @@ use datafusion::error::{DataFusionError, Result};
 use datafusion::logical_expr::JoinType;
 use datafusion::physical_expr::expressions::Column;
 use datafusion::physical_expr::PhysicalExpr;
+use datafusion::physical_plan::aggregates::AggregateExec;
 use datafusion::physical_plan::joins::HashJoinExec;
 use datafusion::physical_plan::projection::ProjectionExec;
 use datafusion::physical_plan::ExecutionPlan;
@@ -28,6 +29,14 @@ pub enum ColumnMapEntry {
     /// The column is a derived expression (e.g., a + b, or a literal).
     /// We need to store the expression itself to reconstruct it later.
     Expression(Arc<dyn PhysicalExpr>),
+}
+
+impl ColumnMapEntry {
+    /// Returns true if this entry represents a stable column from a base relation.
+    #[allow(dead_code)]
+    pub fn is_stable(&self) -> bool {
+        matches!(self, ColumnMapEntry::Stable { .. })
+    }
 }
 
 /// Builder for constructing query graph from ExecutionPlan.
@@ -99,8 +108,20 @@ impl GraphBuilder {
         // NEW LOGIC: If it's not a reorderable join or a projection we can see through,
         // it's either a boundary (leaf of our graph) or not part of a reorderable region at all.
 
+        // For AggregateExec and other transformation nodes, we should NOT try to build
+        // a query graph that includes them. Instead, we should return an error to indicate
+        // that this node is not part of a reorderable region.
+        // The recursive optimizer will handle these nodes by optimizing their children separately.
+
+        if any_plan.is::<AggregateExec>() {
+            info!("AggregateExec encountered - not part of reorderable region");
+            return Err(DataFusionError::Internal(
+                "AggregateExec is not part of a reorderable join region".to_string(),
+            ));
+        }
+
         // Treat any other node type as a potential leaf for the query graph.
-        // This includes DataSourceExec, AggregateExec, non-inner joins, etc.
+        // This includes DataSourceExec, non-inner joins, etc.
         // The key is that we *stop* descending here.
         self.visit_boundary_or_leaf(plan)
     }
@@ -240,11 +261,12 @@ impl GraphBuilder {
                         relation_ids.push(*relation_id);
                     }
                     ColumnMapEntry::Expression(_) => {
-                        // This column comes from a complex expression, we can't easily determine
-                        // which relations it depends on without deeper analysis
-                        // For now, we'll skip it or handle it conservatively
+                        // This column comes from a complex expression (e.g., aggregate output)
+                        // We cannot resolve it to a *specific base relation* for join condition purposes.
+                        // If a join condition relies on a column that is an aggregate output,
+                        // that join condition cannot be directly mapped to base relations.
                         return Err(DataFusionError::Internal(
-                            "Cannot resolve expression column to relation".to_string(),
+                            "Join condition uses a column derived from an expression (e.g., aggregate), cannot map to stable join columns.".to_string(),
                         ));
                     }
                 }

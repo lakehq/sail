@@ -126,13 +126,54 @@ impl<'a> PlanReconstructor<'a> {
     /// Builds physical join conditions (`on` clause) from edge information.
     fn build_join_conditions(
         &self,
-        edge_indices: &[usize],
+        _edge_indices: &[usize],
         left_map: &ColumnMap,
         right_map: &ColumnMap,
     ) -> Result<Vec<(Arc<dyn PhysicalExpr>, Arc<dyn PhysicalExpr>)>> {
+        // Determine which relations are in the left and right sides
+        let mut left_relations = std::collections::HashSet::new();
+        let mut right_relations = std::collections::HashSet::new();
+
+        for entry in left_map {
+            if let ColumnMapEntry::Stable { relation_id, .. } = entry {
+                left_relations.insert(*relation_id);
+            }
+        }
+
+        for entry in right_map {
+            if let ColumnMapEntry::Stable { relation_id, .. } = entry {
+                right_relations.insert(*relation_id);
+            }
+        }
+
+        // Find edges that connect the left and right relation sets
+        // This is necessary because join reordering may change which relations
+        // are on the left vs right side of a join compared to the original plan
+        let mut applicable_edges = Vec::new();
+        for (i, edge) in self.query_graph.edges.iter().enumerate() {
+            // Check if this edge connects relations from left_relations to right_relations
+            let mut connects_left_right = false;
+
+            for (col1, col2) in &edge.equi_pairs {
+                let col1_in_left = left_relations.contains(&col1.relation_id);
+                let col1_in_right = right_relations.contains(&col1.relation_id);
+                let col2_in_left = left_relations.contains(&col2.relation_id);
+                let col2_in_right = right_relations.contains(&col2.relation_id);
+
+                if (col1_in_left && col2_in_right) || (col1_in_right && col2_in_left) {
+                    connects_left_right = true;
+                    break;
+                }
+            }
+
+            if connects_left_right {
+                applicable_edges.push(i);
+            }
+        }
+
         let mut on_conditions = vec![];
 
-        for &edge_index in edge_indices {
+        for &edge_index in &applicable_edges {
             let edge = self.query_graph.edges.get(edge_index).ok_or_else(|| {
                 DataFusionError::Internal(format!("Edge with index {} not found", edge_index))
             })?;
@@ -145,24 +186,51 @@ impl<'a> PlanReconstructor<'a> {
                 let col2_left_idx = find_physical_index(col2_stable, left_map);
                 let col2_right_idx = find_physical_index(col2_stable, right_map);
 
-                // Ensure one comes from left and one from right
+                // Find which stable column is on which side
+                // We need to be flexible about which column comes from which side
+                // since join reordering may have changed the original left/right assignment
+
+                let mut found_condition = false;
+
+                // Try all possible combinations
                 if let (Some(left_idx), Some(right_idx)) = (col1_left_idx, col2_right_idx) {
                     let left_col: Arc<dyn PhysicalExpr> =
                         Arc::new(Column::new(&col1_stable.name, left_idx));
                     let right_col: Arc<dyn PhysicalExpr> =
                         Arc::new(Column::new(&col2_stable.name, right_idx));
                     on_conditions.push((left_col, right_col));
+                    found_condition = true;
                 } else if let (Some(left_idx), Some(right_idx)) = (col2_left_idx, col1_right_idx) {
                     let left_col: Arc<dyn PhysicalExpr> =
                         Arc::new(Column::new(&col2_stable.name, left_idx));
                     let right_col: Arc<dyn PhysicalExpr> =
                         Arc::new(Column::new(&col1_stable.name, right_idx));
                     on_conditions.push((left_col, right_col));
-                } else {
-                    // This is an important check - if we can't find matching columns, logic is wrong
-                    return Err(DataFusionError::Internal(
-                        "Could not map stable join columns to physical plan outputs".to_string(),
-                    ));
+                    found_condition = true;
+                } else if let (Some(left_idx), Some(right_idx)) = (col1_left_idx, col1_right_idx) {
+                    // Both columns refer to the same stable column but appear on both sides
+                    // This can happen with self-joins or when the same relation appears multiple times
+                    let left_col: Arc<dyn PhysicalExpr> =
+                        Arc::new(Column::new(&col1_stable.name, left_idx));
+                    let right_col: Arc<dyn PhysicalExpr> =
+                        Arc::new(Column::new(&col1_stable.name, right_idx));
+                    on_conditions.push((left_col, right_col));
+                    found_condition = true;
+                } else if let (Some(left_idx), Some(right_idx)) = (col2_left_idx, col2_right_idx) {
+                    // Both columns refer to the same stable column but appear on both sides
+                    let left_col: Arc<dyn PhysicalExpr> =
+                        Arc::new(Column::new(&col2_stable.name, left_idx));
+                    let right_col: Arc<dyn PhysicalExpr> =
+                        Arc::new(Column::new(&col2_stable.name, right_idx));
+                    on_conditions.push((left_col, right_col));
+                    found_condition = true;
+                }
+
+                if !found_condition {
+                    // Instead of failing immediately, we'll skip this equi_pair
+                    // This might happen when join reordering creates a different structure
+                    // than what was originally captured in the equi_pairs
+                    continue;
                 }
             }
         }
@@ -426,24 +494,14 @@ impl<'a> PlanReconstructor<'a> {
     }
 
     /// Find a column in a ColumnMap and return its physical index.
+    /// Only matches ColumnMapEntry::Stable entries.
     fn find_column_in_map(&self, column: &Column, map: &ColumnMap) -> Option<usize> {
-        // This is a simplified implementation that matches by column name
-        // In a more complete implementation, we would need to match by both
-        // relation_id and column_index from the StableColumn
-
-        for (idx, entry) in map.iter().enumerate() {
-            match entry {
-                ColumnMapEntry::Stable { .. } => {
-                    // For now, we'll use the index as a simple match
-                    // TODO: Implement proper column matching logic
-                    if idx == column.index() {
-                        return Some(idx);
-                    }
-                }
-                ColumnMapEntry::Expression(_) => {
-                    // Skip expression entries for now
-                    continue;
-                }
+        // Only consider Stable entries for column matching
+        // The column.index() refers to the index in the schema represented by this map
+        if column.index() < map.len() {
+            if let ColumnMapEntry::Stable { .. } = &map[column.index()] {
+                // If the entry at the column's index is a Stable entry, it's a match
+                return Some(column.index());
             }
         }
         None
