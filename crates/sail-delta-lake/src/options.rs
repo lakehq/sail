@@ -8,4 +8,7 @@ pub struct TableDeltaOptions {
     pub overwrite_schema: bool,
     pub target_file_size: u64,
     pub write_batch_size: usize,
+
+    pub version_as_of: Option<i64>,
+    pub timestamp_as_of: Option<String>,
 }

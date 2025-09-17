@@ -78,10 +78,8 @@
             "arguments": [
               {
                 "literal": {
-                  "decimal128": {
-                    "precision": 2,
-                    "scale": 0,
-                    "value": "90"
+                  "float64": {
+                    "value": 90.0
                   }
                 }
               }
@@ -132,10 +130,8 @@
       "output": {
         "success": {
           "literal": {
-            "decimal128": {
-              "precision": 2,
-              "scale": 0,
-              "value": "90"
+            "float64": {
+              "value": 90.0
             }
           }
         }
@@ -153,10 +149,8 @@
       "output": {
         "success": {
           "literal": {
-            "decimal128": {
-              "precision": 2,
-              "scale": 0,
-              "value": "90"
+            "float64": {
+              "value": 90.0
             }
           }
         }
@@ -450,10 +444,8 @@
       "output": {
         "success": {
           "literal": {
-            "decimal128": {
-              "precision": 2,
-              "scale": 0,
-              "value": "90"
+            "float64": {
+              "value": 90.0
             }
           }
         }
@@ -520,10 +512,8 @@
       "output": {
         "success": {
           "literal": {
-            "decimal128": {
-              "precision": 1,
-              "scale": 1,
-              "value": "9"
+            "float64": {
+              "value": 0.9
             }
           }
         }
@@ -534,10 +524,8 @@
       "output": {
         "success": {
           "literal": {
-            "decimal128": {
-              "precision": 2,
-              "scale": 0,
-              "value": "90"
+            "float64": {
+              "value": 90.0
             }
           }
         }

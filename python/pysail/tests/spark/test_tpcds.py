@@ -17,7 +17,7 @@ def duck():
 def data(spark, duck):
     tables = list(duck.sql("SHOW TABLES").df()["name"])
     for table in tables:
-        df = duck.sql(f"SELECT * FROM {table}").arrow().to_pandas()  # noqa: S608
+        df = duck.sql(f"SELECT * FROM {table}").fetch_arrow_table().to_pandas()  # noqa: S608
         spark.createDataFrame(df).createOrReplaceTempView(table)
     yield
     for table in tables:

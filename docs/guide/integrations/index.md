@@ -1,6 +1,6 @@
 ---
 title: Integrations
-rank: 6
+rank: 7
 ---
 
 # Integrations

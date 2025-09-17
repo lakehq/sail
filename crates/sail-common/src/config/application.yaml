@@ -550,6 +550,13 @@
   default: "default"
   description: The name of the service account to use for the worker pods.
 
+- key: kubernetes.worker_pod_template
+  type: string
+  default: ""
+  description: |
+    If non-empty, a JSON string representing a Kubernetes Pod template
+    with the schema of `PodTemplateSpec` in the Kubernetes API.
+
 - key: catalog.list
   type: array
   default: '[{name="sail", type="memory", initial_database=["default"], initial_database_comment="default database"}]'

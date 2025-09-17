@@ -12,11 +12,12 @@ use datafusion::datasource::physical_plan::FileSinkConfig;
 use datafusion::logical_expr::dml::InsertOp;
 use datafusion::physical_plan::ExecutionPlan;
 use datafusion_common::parsers::CompressionTypeVariant;
-use datafusion_common::{internal_err, not_impl_err, GetExt, Result};
+use datafusion_common::{internal_err, not_impl_err, plan_err, GetExt, Result};
 use datafusion_datasource::file_compression_type::FileCompressionType;
 use sail_common_datafusion::datasource::{
     get_partition_columns_and_file_schema, SinkInfo, SourceInfo, TableFormat,
 };
+use sail_common_datafusion::streaming::event::schema::is_flow_event_schema;
 
 use crate::utils::split_parquet_compression_string;
 
@@ -158,6 +159,9 @@ impl<T: ListingFormat> TableFormat for ListingTableFormat<T> {
             sort_order,
             options,
         } = info;
+        if is_flow_event_schema(&input.schema()) {
+            return plan_err!("cannot write streaming data to listing table");
+        }
         if bucket_by.is_some() {
             return not_impl_err!("bucketing for writing listing table format");
         }

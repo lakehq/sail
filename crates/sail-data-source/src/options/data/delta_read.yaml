@@ -9,8 +9,9 @@
     - versionAsOf
   description: |
     Query an older snapshot of a table based on a version number.
-  supported: false
-  rust_type: String
+  supported: true
+  rust_type: i64
+  rust_deserialize_with: crate::options::serde::deserialize_i64
 
 - key: timestamp_as_of
   aliases:
@@ -18,7 +19,7 @@
   description: |
     Query an older snapshot of a table based on a timestamp.
     The timestamp can be a string in the format 'yyyy-MM-dd HH:mm:ss.SSS'.
-  supported: false
+  supported: true
   rust_type: String
 
 - key: read_change_feed

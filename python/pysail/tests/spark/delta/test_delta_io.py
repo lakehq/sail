@@ -25,6 +25,15 @@ class TestDeltaIO:
             {"id": "int32", "event": "string", "score": "float64"}
         )
 
+    def test_delta_io_write_with_input_partitions(self, spark, tmp_path):
+        delta_path = tmp_path / "delta_table"
+
+        spark.range(1).write.format("delta").save(str(delta_path))
+        assert spark.read.format("delta").load(f"{delta_path}").count() == 1
+
+        spark.range(1, 101, 1, 10).write.format("delta").mode("overwrite").save(str(delta_path))
+        assert spark.read.format("delta").load(f"{delta_path}").count() == 100  # noqa: PLR2004
+
     def test_delta_io_basic_overwrite_and_read(self, spark, delta_test_data, expected_pandas_df, tmp_path):
         """Test basic Delta Lake write and read operations"""
         delta_path = tmp_path / "delta_table"

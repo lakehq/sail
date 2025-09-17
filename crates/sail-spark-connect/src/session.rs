@@ -29,7 +29,7 @@ pub(crate) struct SparkSessionOptions {
 ///
 /// [`SessionContext`]: datafusion::prelude::SessionContext
 pub(crate) struct SparkSession {
-    user_id: Option<String>,
+    user_id: String,
     session_id: String,
     job_runner: Box<dyn JobRunner>,
     options: SparkSessionOptions,
@@ -54,7 +54,7 @@ impl SessionExtension for SparkSession {
 
 impl SparkSession {
     pub(crate) fn try_new(
-        user_id: Option<String>,
+        user_id: String,
         session_id: String,
         job_runner: Box<dyn JobRunner>,
         options: SparkSessionOptions,
@@ -77,9 +77,8 @@ impl SparkSession {
         &self.session_id
     }
 
-    #[allow(dead_code)]
-    pub(crate) fn user_id(&self) -> Option<&str> {
-        self.user_id.as_deref()
+    pub(crate) fn user_id(&self) -> &str {
+        &self.user_id
     }
 
     pub(crate) fn options(&self) -> &SparkSessionOptions {
@@ -89,9 +88,7 @@ impl SparkSession {
     pub(crate) fn plan_config(&self) -> SparkResult<Arc<PlanConfig>> {
         let state = self.state.lock()?;
         let mut config = PlanConfig::try_from(&state.config)?;
-        if let Some(user_id) = self.user_id() {
-            config.session_user_id = user_id.to_string();
-        }
+        config.session_user_id = self.user_id().to_string();
         Ok(Arc::new(config))
     }
 
@@ -201,6 +198,11 @@ impl SparkSession {
         info: Vec<StringifiedPlan>,
         stream: SendableRecordBatchStream,
     ) -> SparkResult<StreamingQueryId> {
+        if !stream.schema().fields().is_empty() {
+            return Err(SparkError::invalid(
+                "streaming query must write data to a sink",
+            ));
+        }
         // Here we always generate new query ID and run ID regardless of whether the query
         // is started from a checkpoint. This may be different from the Spark behavior.
         let id = StreamingQueryId {

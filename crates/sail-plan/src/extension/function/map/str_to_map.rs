@@ -1,9 +1,8 @@
 use std::any::Any;
 use std::sync::Arc;
 
-use arrow::array::{AsArray, ListArray};
-use datafusion::arrow::array::{Array, ArrayRef, StringArray};
-use datafusion::arrow::datatypes::{DataType, Field, Fields};
+use datafusion::arrow::array::{Array, ArrayRef, AsArray, ListArray, StringArray};
+use datafusion::arrow::datatypes::{DataType, Field};
 use datafusion_common::utils::take_function_args;
 use datafusion_common::{internal_err, Result};
 use datafusion_expr::function::Hint;
@@ -13,9 +12,13 @@ use datafusion_expr::{
 };
 use datafusion_functions::utils::make_scalar_function;
 
-use crate::extension::function::map::map_function::map_from_arrays_inner;
+use crate::extension::function::map::utils::{
+    map_from_keys_values_offsets_nulls, map_type_from_key_value_types,
+};
 use crate::extension::function::string::spark_split::{parse_regex, split_to_array, SparkSplit};
 
+/// Spark-compatible `str_to_map` expression
+/// <https://spark.apache.org/docs/latest/api/sql/index.html#str_to_map>
 #[derive(Debug)]
 pub struct StrToMap {
     signature: Signature,
@@ -56,19 +59,9 @@ impl ScalarUDFImpl for StrToMap {
     }
 
     fn return_type(&self, _arg_types: &[DataType]) -> Result<DataType> {
-        let (key_type, value_type) = (DataType::Utf8, DataType::Utf8);
-
-        Ok(DataType::Map(
-            Arc::new(Field::new(
-                "entries",
-                DataType::Struct(Fields::from(vec![
-                    // the key must not be nullable
-                    Field::new("key", key_type.clone(), false),
-                    Field::new("value", value_type.clone(), true),
-                ])),
-                false, // the entry is not nullable
-            )),
-            false, // the keys are not sorted
+        Ok(map_type_from_key_value_types(
+            &DataType::Utf8,
+            &DataType::Utf8,
         ))
     }
 
@@ -150,7 +143,15 @@ fn str_to_map_inner(args: &[ArrayRef]) -> Result<ArrayRef> {
 
             let keys = create_list_array(keys, "key", false);
             let values = create_list_array(values, "value", true);
-            map_from_arrays_inner(&[keys, values])
+
+            map_from_keys_values_offsets_nulls(
+                keys.values(),
+                values.values(),
+                keys.offsets(),
+                values.offsets(),
+                keys.nulls(),
+                values.nulls(),
+            )
         }
         _ => internal_err!("str_to_map: failed to downcast arguments to StringArrays"),
     }

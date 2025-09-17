@@ -496,7 +496,7 @@
         }
       },
       "output": {
-        "failure": "not supported: unknown function: from_avro"
+        "failure": "not implemented: function: from_avro"
       }
     },
     {
@@ -511,7 +511,7 @@
         }
       },
       "output": {
-        "failure": "not supported: unknown function: from_protobuf"
+        "failure": "not implemented: function: from_protobuf"
       }
     },
     {
@@ -810,7 +810,7 @@
         }
       },
       "output": {
-        "failure": "not supported: unknown function: schema_of_avro"
+        "failure": "not implemented: function: schema_of_avro"
       }
     },
     {
@@ -832,7 +832,7 @@
         }
       },
       "output": {
-        "failure": "not supported: unknown function: session_user"
+        "success": "ok"
       }
     },
     {
@@ -869,7 +869,7 @@
         }
       },
       "output": {
-        "failure": "not supported: unknown function: to_avro"
+        "failure": "not implemented: function: to_avro"
       }
     },
     {
@@ -884,7 +884,7 @@
         }
       },
       "output": {
-        "failure": "not supported: unknown function: to_avro"
+        "failure": "not implemented: function: to_avro"
       }
     },
     {
@@ -899,7 +899,7 @@
         }
       },
       "output": {
-        "failure": "not supported: unknown function: to_protobuf"
+        "failure": "not implemented: function: to_protobuf"
       }
     },
     {
@@ -965,7 +965,7 @@
         }
       },
       "output": {
-        "failure": "not supported: unknown function: try_reflect"
+        "failure": "not implemented: function: try_reflect"
       }
     },
     {
@@ -987,7 +987,7 @@
         }
       },
       "output": {
-        "failure": "not supported: unknown function: try_reflect"
+        "failure": "not implemented: function: try_reflect"
       }
     },
     {
@@ -1009,7 +1009,7 @@
         }
       },
       "output": {
-        "failure": "not supported: unknown function: try_reflect"
+        "failure": "not implemented: function: try_reflect"
       }
     },
     {
@@ -1075,7 +1075,7 @@
         }
       },
       "output": {
-        "failure": "not implemented: function: user"
+        "success": "ok"
       }
     },
     {
@@ -1119,7 +1119,7 @@
         }
       },
       "output": {
-        "failure": "not implemented: function: version"
+        "success": "ok"
       }
     }
   ]
