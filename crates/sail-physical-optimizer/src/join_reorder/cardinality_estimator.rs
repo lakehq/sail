@@ -1,9 +1,15 @@
 use std::collections::{HashMap, HashSet};
+use std::sync::Arc;
 
+use datafusion::logical_expr::Operator;
+use datafusion::physical_expr::expressions::BinaryExpr;
 use log::debug;
 
 use crate::join_reorder::graph::{JoinEdge, QueryGraph, StableColumn};
 use crate::join_reorder::join_set::JoinSet;
+
+/// Heuristic selectivity for non-equi filter conditions
+const HEURISTIC_FILTER_SELECTIVITY: f64 = 0.1;
 
 /// Represents a group of columns that have the same domain due to equi-joins.
 #[derive(Debug, Default, Clone)]
@@ -315,22 +321,42 @@ impl CardinalityEstimator {
         let mut selectivity = 1.0;
 
         for edge in connecting_edges {
-            // Use pre-computed selectivity if available and valid
-            if edge.selectivity > 0.0 && edge.selectivity <= 1.0 {
-                selectivity *= edge.selectivity;
+            // TDom-based estimation for equi-joins
+            let tdom = self.get_tdom_for_edge(edge);
+            if tdom > 1.0 {
+                selectivity *= 1.0 / tdom;
             } else {
-                // Fall back to TDom-based estimation
-                let tdom = self.get_tdom_for_edge(edge);
-                if tdom > 1.0 {
-                    selectivity *= 1.0 / tdom;
-                } else {
-                    // Default selectivity for unknown cases
-                    selectivity *= 0.1;
-                }
+                selectivity *= HEURISTIC_FILTER_SELECTIVITY; // Default for unknown TDom
+            }
+
+            // Apply additional selectivity for non-equi filters
+            if self.has_non_equi_filter(edge) {
+                selectivity *= HEURISTIC_FILTER_SELECTIVITY;
             }
         }
 
         left_card * right_card * selectivity
+    }
+
+    /// Helper function to determine if an edge contains non-equi filter conditions.
+    fn has_non_equi_filter(&self, edge: &JoinEdge) -> bool {
+        // A simple heuristic: if `equi_pairs` is empty but filter exists, or if
+        // filter is more complex than equi_pairs, then assume there are non-equi filters.
+        // More precise method would require recursively checking the expression tree.
+
+        // Recursively count the number of base conditions in the expression
+        fn count_conditions(expr: &Arc<dyn datafusion::physical_expr::PhysicalExpr>) -> usize {
+            if let Some(binary_expr) = expr.as_any().downcast_ref::<BinaryExpr>() {
+                if binary_expr.op() == &Operator::And {
+                    return count_conditions(binary_expr.left())
+                        + count_conditions(binary_expr.right());
+                }
+            }
+            1 // Not an AND, count as one condition
+        }
+
+        let condition_count = count_conditions(&edge.filter);
+        condition_count > edge.equi_pairs.len()
     }
 }
 
@@ -402,5 +428,72 @@ mod tests {
         assert!(equiv_set.involves_relation(1));
         assert!(!equiv_set.involves_relation(2));
         assert_eq!(equiv_set.t_dom_count, 500.0);
+    }
+
+    #[test]
+    fn test_has_non_equi_filter() {
+        use datafusion::logical_expr::{JoinType, Operator};
+        use datafusion::physical_expr::expressions::{BinaryExpr, Column};
+        use datafusion::physical_expr::PhysicalExpr;
+
+        use crate::join_reorder::graph::JoinEdge;
+
+        let graph = create_test_graph();
+        let estimator = CardinalityEstimator::new(graph);
+
+        // Create a simple equi-join edge (id = id)
+        let left_col = Arc::new(Column::new("id", 0)) as Arc<dyn PhysicalExpr>;
+        let right_col = Arc::new(Column::new("id", 0)) as Arc<dyn PhysicalExpr>;
+        let equi_condition =
+            Arc::new(BinaryExpr::new(left_col, Operator::Eq, right_col)) as Arc<dyn PhysicalExpr>;
+
+        let equi_pairs = vec![(
+            StableColumn {
+                relation_id: 0,
+                column_index: 0,
+                name: "id".to_string(),
+            },
+            StableColumn {
+                relation_id: 1,
+                column_index: 0,
+                name: "id".to_string(),
+            },
+        )];
+
+        let equi_edge = JoinEdge::new(
+            JoinSet::new_singleton(0).union(&JoinSet::new_singleton(1)),
+            equi_condition,
+            JoinType::Inner,
+            0.1,
+            equi_pairs.clone(),
+        );
+
+        // This should not have non-equi filters
+        assert!(!estimator.has_non_equi_filter(&equi_edge));
+
+        // Create a combined edge with both equi and non-equi conditions
+        let name_col = Arc::new(Column::new("name", 1)) as Arc<dyn PhysicalExpr>;
+        let literal_expr = Arc::new(datafusion::physical_expr::expressions::Literal::new(
+            datafusion::common::ScalarValue::Utf8(Some("test".to_string())),
+        )) as Arc<dyn PhysicalExpr>;
+        let non_equi_condition = Arc::new(BinaryExpr::new(name_col, Operator::NotEq, literal_expr))
+            as Arc<dyn PhysicalExpr>;
+
+        let combined_condition = Arc::new(BinaryExpr::new(
+            equi_edge.filter.clone(),
+            Operator::And,
+            non_equi_condition,
+        )) as Arc<dyn PhysicalExpr>;
+
+        let combined_edge = JoinEdge::new(
+            JoinSet::new_singleton(0).union(&JoinSet::new_singleton(1)),
+            combined_condition,
+            JoinType::Inner,
+            0.1,
+            equi_pairs,
+        );
+
+        // This should have non-equi filters
+        assert!(estimator.has_non_equi_filter(&combined_edge));
     }
 }

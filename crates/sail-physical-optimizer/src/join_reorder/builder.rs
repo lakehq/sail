@@ -2,9 +2,10 @@ use std::collections::HashMap;
 use std::sync::Arc;
 
 use datafusion::error::{DataFusionError, Result};
-use datafusion::logical_expr::JoinType;
-use datafusion::physical_expr::expressions::Column;
+use datafusion::logical_expr::{JoinType, Operator};
+use datafusion::physical_expr::expressions::{BinaryExpr, Column};
 use datafusion::physical_expr::PhysicalExpr;
+use datafusion::physical_plan::filter::FilterExec;
 use datafusion::physical_plan::joins::HashJoinExec;
 use datafusion::physical_plan::projection::ProjectionExec;
 use datafusion::physical_plan::ExecutionPlan;
@@ -95,6 +96,15 @@ impl GraphBuilder {
                 self.visit_non_reorderable_relation(plan)
             }
 
+            // Filter can be "penetrated" - check if it wraps a reorderable join
+            "FilterExec" => {
+                if let Some(filter_plan) = plan.as_any().downcast_ref::<FilterExec>() {
+                    self.visit_filter(filter_plan)
+                } else {
+                    self.visit_non_reorderable_relation(plan)
+                }
+            }
+
             // Projection can be "penetrated" - we look through it
             "ProjectionExec" => {
                 if let Some(proj_plan) = plan.as_any().downcast_ref::<ProjectionExec>() {
@@ -111,6 +121,44 @@ impl GraphBuilder {
             // All other nodes are treated as atomic relations
             _ => self.visit_non_reorderable_relation(plan),
         }
+    }
+
+    fn visit_filter(&mut self, filter_plan: &FilterExec) -> Result<ColumnMap> {
+        let input = filter_plan.input();
+
+        // Check if the child node is a reorderable Inner HashJoin
+        if let Some(join_plan) = input.as_any().downcast_ref::<HashJoinExec>() {
+            if join_plan.join_type() == &JoinType::Inner {
+                // 1. First process this Join as usual
+                let column_map = self.visit_inner_join(join_plan)?;
+
+                // 2. Get the JoinEdge that was just created (it should be the last one)
+                let edge = self.graph.edges.last_mut().ok_or_else(|| {
+                    DataFusionError::Internal(
+                        "Failed to find the created edge for the join".to_string(),
+                    )
+                })?;
+
+                // 3. Get FilterExec's predicate
+                let filter_predicate = filter_plan.predicate().clone();
+
+                // 4. Combine the on condition and filter predicate with AND
+                let combined_filter = Arc::new(BinaryExpr::new(
+                    edge.filter.clone(), // Original on condition expression
+                    Operator::And,
+                    filter_predicate, // New filter predicate
+                )) as Arc<dyn PhysicalExpr>;
+
+                // 5. Update the edge's filter field
+                edge.filter = combined_filter;
+
+                // 6. Return the Join's ColumnMap, since FilterExec doesn't change schema
+                return Ok(column_map);
+            }
+        }
+
+        // If the child node is not a reorderable Join, treat the entire FilterExec as an atomic relation
+        self.visit_non_reorderable_relation(Arc::new(filter_plan.clone()) as Arc<dyn ExecutionPlan>)
     }
 
     fn visit_inner_join(&mut self, join_plan: &HashJoinExec) -> Result<ColumnMap> {
@@ -350,7 +398,11 @@ impl Default for GraphBuilder {
 #[cfg(test)]
 mod tests {
     use datafusion::arrow::datatypes::{DataType, Field, Schema};
+    use datafusion::logical_expr::Operator;
+    use datafusion::physical_expr::expressions::{BinaryExpr, Column};
     use datafusion::physical_plan::empty::EmptyExec;
+    use datafusion::physical_plan::filter::FilterExec;
+    use datafusion::physical_plan::joins::HashJoinExec;
 
     use super::*;
 
@@ -422,5 +474,72 @@ mod tests {
             }
             _ => panic!("Expected Stable column map entry"),
         }
+    }
+
+    #[test]
+    fn test_visit_filter_on_hash_join() -> Result<()> {
+        use datafusion::common::NullEquality;
+        use datafusion::physical_plan::joins::PartitionMode;
+
+        let mut builder = GraphBuilder::new();
+
+        // Create two base relations
+        let schema1 = Arc::new(Schema::new(vec![
+            Field::new("id", DataType::Int32, false),
+            Field::new("name", DataType::Utf8, false),
+        ]));
+        let schema2 = Arc::new(Schema::new(vec![
+            Field::new("id", DataType::Int32, false),
+            Field::new("value", DataType::Int32, false),
+        ]));
+
+        let left_plan = Arc::new(EmptyExec::new(schema1.clone()));
+        let right_plan = Arc::new(EmptyExec::new(schema2.clone()));
+
+        // Create join conditions (id = id)
+        let left_col = Arc::new(Column::new("id", 0)) as Arc<dyn PhysicalExpr>;
+        let right_col = Arc::new(Column::new("id", 0)) as Arc<dyn PhysicalExpr>;
+        let on_conditions = vec![(left_col.clone(), right_col.clone())];
+
+        // Create HashJoinExec
+        let join_plan = Arc::new(HashJoinExec::try_new(
+            left_plan,
+            right_plan,
+            on_conditions,
+            None, // No filter initially
+            &JoinType::Inner,
+            None, // projection
+            PartitionMode::Auto,
+            NullEquality::NullEqualsNothing,
+        )?);
+
+        // Create a filter predicate (e.g., name != 'test')
+        let name_col = Arc::new(Column::new("name", 1)) as Arc<dyn PhysicalExpr>;
+        let literal_expr = Arc::new(datafusion::physical_expr::expressions::Literal::new(
+            datafusion::common::ScalarValue::Utf8(Some("test".to_string())),
+        )) as Arc<dyn PhysicalExpr>;
+        let filter_predicate = Arc::new(BinaryExpr::new(name_col, Operator::NotEq, literal_expr))
+            as Arc<dyn PhysicalExpr>;
+
+        // Create FilterExec wrapping the HashJoinExec
+        let filter_plan = Arc::new(FilterExec::try_new(filter_predicate, join_plan)?);
+
+        // Test that visit_filter correctly handles FilterExec on HashJoinExec
+        let result = builder.visit_filter(&filter_plan);
+        assert!(result.is_ok());
+
+        // Check that an edge was created and it contains the combined filter
+        assert_eq!(builder.graph.edges.len(), 1);
+        let edge = &builder.graph.edges[0];
+
+        // The edge should have both the original join condition and the filter condition
+        // We can't easily inspect the exact structure, but we can verify it's a BinaryExpr with AND
+        if let Some(binary_expr) = edge.filter.as_any().downcast_ref::<BinaryExpr>() {
+            assert_eq!(binary_expr.op(), &Operator::And);
+        } else {
+            panic!("Expected combined filter to be a BinaryExpr with AND operator");
+        }
+
+        Ok(())
     }
 }

@@ -122,6 +122,16 @@ impl QueryGraph {
     pub fn get_relation(&self, relation_id: usize) -> Option<&RelationNode> {
         self.relations.get(relation_id)
     }
+
+    /// Checks if the query graph is empty (no relations and no edges).
+    pub fn is_empty(&self) -> bool {
+        self.relations.is_empty() && self.edges.is_empty()
+    }
+
+    /// Gets the number of edges.
+    pub fn edge_count(&self) -> usize {
+        self.edges.len()
+    }
 }
 
 #[cfg(test)]
