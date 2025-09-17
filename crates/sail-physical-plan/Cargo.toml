@@ -1,0 +1,14 @@
+[package]
+name = "sail-physical-plan"
+version = { workspace = true }
+edition = { workspace = true }
+
+[lints]
+workspace = true
+
+[dependencies]
+sail-common-datafusion = { path = "../sail-common-datafusion" }
+
+datafusion = { workspace = true }
+datafusion-common = { workspace = true }
+futures = { workspace = true }

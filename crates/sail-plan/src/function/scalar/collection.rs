@@ -7,7 +7,7 @@ use datafusion_functions_nested::expr_fn;
 use crate::error::{PlanError, PlanResult};
 use crate::extension::function::collection::spark_concat::SparkConcat;
 use crate::extension::function::collection::spark_reverse::SparkReverse;
-use crate::extension::function::raise_error::RaiseError;
+use crate::extension::function::misc::raise_error::RaiseError;
 use crate::function::common::{ScalarFunction, ScalarFunctionInput};
 use crate::utils::ItemTaker;
 
