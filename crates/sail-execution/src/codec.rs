@@ -1506,6 +1506,7 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
                 input_names,
                 input_types,
                 output_type,
+                is_pandas,
                 config,
             })) => {
                 let input_types = input_types
@@ -1524,6 +1525,7 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
                     input_names,
                     input_types,
                     output_type,
+                    is_pandas,
                     Arc::new(config),
                 );
                 Ok(Arc::new(AggregateUDF::from(udaf)))
@@ -1587,6 +1589,7 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
                 input_names: func.input_names().to_vec(),
                 input_types,
                 output_type,
+                is_pandas: func.is_pandas(),
                 config: Some(config),
             })
         } else if let Some(func) = node

@@ -246,10 +246,7 @@ impl QueryGraph {
         // Navigate to the correct position in the trie
         let mut current = &mut self.root_edge;
         for &relation_id in &sorted_subset {
-            current = current
-                .children
-                .entry(relation_id)
-                .or_default();
+            current = current.children.entry(relation_id).or_default();
         }
 
         // Add or update neighbor information

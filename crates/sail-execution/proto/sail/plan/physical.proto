@@ -144,7 +144,8 @@ message PySparkGroupMapUdaf {
   repeated string input_names = 4;
   repeated bytes input_types = 5;
   bytes output_type = 6;
-  PySparkUdfConfig config = 7;
+  bool is_pandas = 7;
+  PySparkUdfConfig config = 8;
 }
 
 message PySparkBatchCollectorUdaf {
