@@ -80,7 +80,16 @@ impl JoinReorder {
                 );
 
                 let mut enumerator = PlanEnumerator::new(query_graph);
-                let best_plan = enumerator.solve()?;
+                let best_plan = match enumerator.solve()? {
+                    Some(plan) => {
+                        info!("JoinReorder: DP optimization completed successfully");
+                        plan
+                    }
+                    None => {
+                        info!("JoinReorder: DP optimization exceeded threshold, falling back to greedy algorithm");
+                        enumerator.solve_greedy()?
+                    }
+                };
                 info!(
                     "JoinReorder: Optimal plan found with cost {:.2} and estimated cardinality {:.2}. Reconstructing plan.",
                     best_plan.cost, best_plan.cardinality
