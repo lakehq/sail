@@ -119,13 +119,9 @@ impl GraphBuilder {
             return self.visit_projection(proj_plan);
         }
 
-        // NEW LOGIC: If it's not a reorderable join or a projection we can see through,
-        // it's either a boundary (leaf of our graph) or not part of a reorderable region at all.
-
-        // For AggregateExec and other transformation nodes, we should NOT try to build
-        // a query graph that includes them. Instead, we should return an error to indicate
-        // that this node is not part of a reorderable region.
-        // The recursive optimizer will handle these nodes by optimizing their children separately.
+        // If it's not a reorderable join or a projection we can see through,
+        // it's either a boundary (leaf of our graph) or not part of a reorderable region.
+        // AggregateExec and other transformation nodes are not part of reorderable regions.
 
         if any_plan.is::<AggregateExec>() {
             info!("AggregateExec encountered - not part of reorderable region");
@@ -143,14 +139,13 @@ impl GraphBuilder {
     /// This function is called when a node is a boundary of the reorderable region.
     /// It creates a `RelationNode` for this plan and stops further recursion.
     fn visit_boundary_or_leaf(&mut self, plan: Arc<dyn ExecutionPlan>) -> Result<ColumnMap> {
-        // A boundary node is treated as a single "relation" in our query graph.
+        // Boundary nodes are treated as single relations in the query graph.
         self.create_relation_node(plan)
     }
 
     fn visit_inner_join(&mut self, join_plan: &HashJoinExec) -> Result<ColumnMap> {
-        // THIS IS THE CORE CHANGE: Recursively call visit_plan on children to build a single, large graph.
         // Recursively build the graph from both children.
-        // This will either continue building the join chain or hit a boundary and create a RelationNode.
+        // This continues building the join chain or hits a boundary to create a RelationNode.
         let left_map = self.visit_plan(join_plan.left().clone())?;
         let right_map = self.visit_plan(join_plan.right().clone())?;
 
@@ -181,10 +176,10 @@ impl GraphBuilder {
         // Create an expression representing the entire ON condition
         let mut filter_expr = self.build_conjunction_from_on(join_plan.on())?;
 
-        // If the original join had an additional non-equi filter, incorporate it
+        // Incorporate additional non-equi filters from the original join
         if let Some(join_filter) = join_plan.filter() {
-            // Rewrite the filter expression to use stable column names (R{relation}.C{index})
-            // rather than ephemeral projection names like "#37" and join-local indices.
+            // Rewrite filter expressions to use stable column names (R{relation}.C{index})
+            // instead of ephemeral projection names and join-local indices.
             let extra = self.rewrite_join_filter_to_stable(
                 join_plan,
                 join_filter.expression(),
@@ -254,7 +249,7 @@ impl GraphBuilder {
                 {
                     // Build a stable name like R{relation_id}.C{column_index}
                     let stable_name = format!("R{}.C{}", relation_id, column_index);
-                    // Keep index 0 for now; reconstructor will retarget indices to its compact schema
+                    // TODO: Reconstructor will retarget indices to its compact schema
                     let new_col = Column::new(&stable_name, 0);
                     return Ok(Transformed::yes(Arc::new(new_col) as Arc<dyn PhysicalExpr>));
                 }
@@ -321,8 +316,7 @@ impl GraphBuilder {
             };
             output_map.push(entry);
 
-            // Update expr_to_stable_id mapping so subsequent Join conditions can resolve
-            // Note: name might not be unique, but usually is within a local region
+            // Update expr_to_stable_id mapping for subsequent join condition resolution
             let col_expr = Column::new(plan.schema().field(i).name(), i);
             self.expr_to_stable_id.insert(col_expr, (relation_id, i));
         }
@@ -358,9 +352,7 @@ impl GraphBuilder {
                 }
             }
         } else {
-            // For complex expressions, we would need to recursively traverse
-            // the expression tree to find all Column references
-            // TODO: implement a proper expression visitor
+            // TODO: Implement recursive traversal of expression tree for complex expressions
             return Err(DataFusionError::Internal(
                 "Complex expression resolution not yet implemented".to_string(),
             ));
@@ -472,7 +464,7 @@ mod tests {
         let plan = Arc::new(EmptyExec::new(schema));
 
         let result = builder.build(plan)?;
-        // Since simple plan contains no joins, should return None
+        // Simple plan contains no joins, returns None
         // With the new top-down approach, single relations are still built but not returned as reorderable
         assert!(result.is_none());
 
@@ -489,7 +481,7 @@ mod tests {
         let plan = Arc::new(EmptyExec::new(schema));
 
         let result = builder.build(plan)?;
-        // Single relation should return None (no joins to reorder)
+        // Single relation returns None (no joins to reorder)
         assert!(result.is_none());
 
         Ok(())
@@ -584,7 +576,7 @@ mod tests {
 
         let mut builder = GraphBuilder::new();
 
-        // Create three base relations for a more complex join
+        // Create three base relations for complex join testing
         let schema1 = Arc::new(Schema::new(vec![
             Field::new("id", DataType::Int32, false),
             Field::new("name", DataType::Utf8, false),

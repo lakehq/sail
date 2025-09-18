@@ -66,12 +66,11 @@ impl JoinReorder {
     ) -> Result<Arc<dyn ExecutionPlan>> {
         info!("find_and_optimize_regions: Processing {}", plan.name());
 
-        // 1. Attempt to build a query graph starting from the CURRENT node.
+        // Attempt to build a query graph starting from the current node.
         // The GraphBuilder will traverse downwards to find a complete reorderable region.
         let mut graph_builder = GraphBuilder::new();
         if let Some((query_graph, target_column_map)) = graph_builder.build(plan.clone())? {
-            // A reorderable region was found. Now, optimize it.
-            // Only reorder if there's something to reorder (more than 2 relations).
+            // A reorderable region was found. Optimize it if it has more than 2 relations.
             if query_graph.relation_count() > 2 {
                 info!(
                     "JoinReorder: Found reorderable region. Graph has {} relations and {} edges.",
@@ -128,14 +127,13 @@ impl JoinReorder {
             }
         }
 
-        // 2. If no significant reorderable region was found starting at the current node,
-        //    recursively optimize the children of the current node.
+        // If no significant reorderable region was found starting at the current node,
+        // recursively optimize the children of the current node.
         info!("find_and_optimize_regions: No reorderable region found at {}, recursing to {} children", 
               plan.name(), plan.children().len());
 
         // Allow recursion through Left Joins to find Inner Join regions below.
-        // Left Joins themselves won't be included in reorderable regions (handled by GraphBuilder),
-        // but we recursively optimize their children to find Inner Join regions below.
+        // Left Joins won't be included in reorderable regions but we optimize their children.
 
         let optimized_children = plan
             .children()
@@ -143,7 +141,7 @@ impl JoinReorder {
             .map(|child| self.find_and_optimize_regions(child.clone()))
             .collect::<Result<Vec<_>>>()?;
 
-        // 3. Rebuild the current node with its (potentially) optimized children.
+        // Rebuild the current node with its optimized children.
         if optimized_children.is_empty() {
             Ok(plan)
         } else {
@@ -221,18 +219,12 @@ impl JoinReorder {
                     ));
                 }
                 ColumnMapEntry::Expression { expr, input_map } => {
-                    // This is the complex case. We use an expression rewriter (TreeNode::transform)
-                    // to replace old column references with new physical plan column references.
-
-                    // The rewriter closure captures the necessary context:
-                    // - `input_map`: Describes the input to the original expression.
-                    // - `final_map`: Describes the output of our new reordered join plan.
-                    // - `input_plan`: The new reordered join plan itself (for schema info).
+                    // Complex case: use expression rewriter to replace old column references
+                    // with new physical plan column references.
                     let transformed = expr.clone().transform(|node| {
-                        // Check if the current node in the expression tree is a Column.
+                        // Check if current node in expression tree is a Column
                         if let Some(col) = node.as_any().downcast_ref::<Column>() {
-                            // `col.index()` refers to a column in the original projection's input.
-                            // We use `input_map` to find its stable identity.
+                            // Use input_map to find column's stable identity
                             let original_entry = input_map.get(col.index()).ok_or_else(|| {
                                 DataFusionError::Internal(format!(
                                     "Expression column index {} out of bounds for its input_map (len {})",
@@ -264,14 +256,13 @@ impl JoinReorder {
                                 // Return the transformed node.
                                 return Ok(datafusion::common::tree_node::Transformed::yes(Arc::new(new_col)));
                             } else {
-                                // This indicates a nested complex expression, which is a very
-                                // complex scenario. For now, we don't support it.
+                                // TODO: Support nested complex expressions
                                 return Err(DataFusionError::NotImplemented(
                                     "Rewriting nested complex expressions is not supported".to_string(),
                                 ));
                             }
                         }
-                        // If not a column, continue traversing the expression tree without changes.
+                        // Continue traversing expression tree without changes
                         Ok(datafusion::common::tree_node::Transformed::no(node))
                     })?;
 
@@ -452,7 +443,7 @@ mod tests {
         let optimized_plan = join_reorder.find_and_optimize_regions(root_plan.clone())?;
 
         // The optimized plan should have the same structure at the top level
-        // (ProjectionExec -> AggregateExec), but the joins underneath should be optimized
+        // (ProjectionExec -> AggregateExec), with joins underneath optimized
         assert_eq!(optimized_plan.name(), "ProjectionExec");
         assert_eq!(optimized_plan.children().len(), 1);
 
@@ -460,7 +451,7 @@ mod tests {
         assert_eq!(aggregate_child.name(), "AggregateExec");
 
         // The key test: the joins under the aggregate should have been processed
-        // Even though we can't easily verify the exact join order without more complex setup,
+        // The optimization process completes without errors
         // we can verify that the optimization process completed without errors
         // and that the plan structure is preserved
         assert!(!aggregate_child.children().is_empty());

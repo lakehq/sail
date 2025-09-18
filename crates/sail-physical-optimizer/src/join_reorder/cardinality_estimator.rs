@@ -37,7 +37,6 @@ impl EquivalenceSet {
     }
 
     /// Check if the specified relation participates in this equivalence set.
-    /// TODO: Will be used in more complex cardinality estimation models
     #[allow(dead_code)]
     pub fn involves_relation(&self, relation_id: usize) -> bool {
         self.columns
@@ -46,7 +45,6 @@ impl EquivalenceSet {
     }
 
     /// Get the set of relations participating in this equivalence set.
-    /// TODO: Will be used in more complex cardinality estimation models
     #[allow(dead_code)]
     pub fn get_relation_set(&self) -> JoinSet {
         let mut result = JoinSet::default();
@@ -131,15 +129,15 @@ impl CardinalityEstimator {
     fn init_equivalence_sets(&mut self) {
         let mut sets: Vec<EquivalenceSet> = vec![];
 
-        // 1. Traverse all edges in the QueryGraph
+        // Traverse all edges in the QueryGraph
         for edge in &self.graph.edges {
-            // 2. For each equi-join pair, merge columns into sets
+            // For each equi-join pair, merge columns into sets
             for (left_col, right_col) in &edge.equi_pairs {
                 self.merge_columns_into_sets(&mut sets, left_col.clone(), right_col.clone());
             }
         }
 
-        // 3. After merging, estimate TDom for each set
+        // After merging, estimate TDom for each set
         for set in &mut sets {
             self.estimate_tdom_for_set(set);
         }
@@ -228,13 +226,13 @@ impl CardinalityEstimator {
 
     /// Estimate cardinality after joining a set of relations.
     pub fn estimate_cardinality(&mut self, join_set: JoinSet) -> Result<f64> {
-        // a. Cache: Check cardinality_cache first
+        // Check cardinality cache first
         if let Some(card) = self.cardinality_cache.get(&join_set) {
             return Ok(*card);
         }
 
         let estimated_card = if join_set.cardinality() == 1 {
-            // b. Single relation: Get initial cardinality from query graph
+            // Single relation: Get initial cardinality from query graph
             let relation_id = join_set.iter().next().ok_or_else(|| {
                 DataFusionError::Internal(
                     "Single relation join_set should have one element".to_string(),
@@ -246,7 +244,7 @@ impl CardinalityEstimator {
                 1.0
             }
         } else {
-            // c. Multi-relation: Use numerator/denominator formula
+            // Multi-relation: Use numerator/denominator formula
             self.estimate_multi_relation_cardinality(join_set)
         };
 
@@ -256,7 +254,7 @@ impl CardinalityEstimator {
 
     /// Estimate cardinality for multi-relation joins using numerator/denominator formula.
     fn estimate_multi_relation_cardinality(&self, join_set: JoinSet) -> f64 {
-        // i. Numerator: Product of all relation initial cardinalities
+        // Numerator: Product of all relation initial cardinalities
         let numerator = join_set
             .iter()
             .map(|id| {
@@ -267,7 +265,7 @@ impl CardinalityEstimator {
             })
             .product::<f64>();
 
-        // ii. Denominator: Find all JoinEdges completely contained in join_set
+        // Denominator: Find all JoinEdges completely contained in join_set
         let mut denominator = 1.0;
         let contained_edges = self.get_edges_contained_in_set(join_set);
 
@@ -345,9 +343,7 @@ impl CardinalityEstimator {
 
     /// Helper function to determine if an edge contains non-equi filter conditions.
     fn has_non_equi_filter(&self, edge: &JoinEdge) -> bool {
-        // A simple heuristic: if `equi_pairs` is empty but filter exists, or if
-        // filter is more complex than equi_pairs, then assume there are non-equi filters.
-        // More precise method would require recursively checking the expression tree.
+        // Simple heuristic: assume non-equi filters if filter complexity exceeds equi_pairs.
 
         // Recursively count the number of base conditions in the expression
         fn count_conditions(expr: &Arc<dyn datafusion::physical_expr::PhysicalExpr>) -> usize {
@@ -401,7 +397,7 @@ mod tests {
     fn test_cardinality_estimator_creation() {
         let graph = create_test_graph();
         let estimator = CardinalityEstimator::new(graph);
-        assert_eq!(estimator.equivalence_sets.len(), 0); // Placeholder implementation is temporarily empty
+        assert_eq!(estimator.equivalence_sets.len(), 0); // No edges means no equivalence sets
     }
 
     #[test]

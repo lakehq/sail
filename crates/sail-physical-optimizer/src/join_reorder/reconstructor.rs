@@ -88,7 +88,7 @@ impl<'a> PlanReconstructor<'a> {
         right_set: JoinSet,
         edge_indices: &[usize],
     ) -> Result<(Arc<dyn ExecutionPlan>, ColumnMap)> {
-        // 1. Find left and right subplans from DP table
+        // Find left and right subplans from DP table
         let left_dp_plan = self.dp_table.get(&left_set).ok_or_else(|| {
             DataFusionError::Internal("Left subplan not found in DP table".to_string())
         })?;
@@ -96,11 +96,11 @@ impl<'a> PlanReconstructor<'a> {
             DataFusionError::Internal("Right subplan not found in DP table".to_string())
         })?;
 
-        // 2. Recursively reconstruct left and right subplans
+        // Recursively reconstruct left and right subplans
         let (left_plan, left_map) = self.reconstruct(left_dp_plan)?;
         let (right_plan, right_map) = self.reconstruct(right_dp_plan)?;
 
-        // 3. Build physical join conditions
+        // Build physical join conditions
         let on_conditions = self.build_join_conditions(
             edge_indices,
             &left_map,
@@ -109,14 +109,14 @@ impl<'a> PlanReconstructor<'a> {
             &right_plan,
         )?;
 
-        // 4. Determine join type from edge information
+        // Determine join type from edge information
         let join_type = self.determine_join_type(edge_indices)?;
 
-        // 5. Build join filter for non-equi conditions
+        // Build join filter for non-equi conditions
         let join_filter =
             self.build_join_filter(edge_indices, &left_map, &right_map, &left_plan, &right_plan)?;
 
-        // 6. Create HashJoinExec
+        // Create HashJoinExec
         let join_plan = Arc::new(HashJoinExec::try_new(
             left_plan,
             right_plan,
@@ -128,7 +128,7 @@ impl<'a> PlanReconstructor<'a> {
             NullEquality::NullEqualsNothing, // null_equality
         )?);
 
-        // 5. Merge left and right ColumnMap to create output ColumnMap for new Join plan
+        // Merge left and right ColumnMap to create output ColumnMap for new Join plan
         let mut join_output_map = left_map;
         join_output_map.extend(right_map);
 
@@ -180,9 +180,7 @@ impl<'a> PlanReconstructor<'a> {
                         Arc::new(Column::new(&right_name, right_idx)) as Arc<dyn PhysicalExpr>,
                     )
                 } else {
-                    // If an equi-pair doesn't span across left/right plans, it doesn't belong
-                    // to this join's on conditions. This shouldn't happen since the PlanEnumerator
-                    // guarantees these edges are connecting edges, but we skip for robustness.
+                    // Skip equi-pairs that don't span across left/right plans
                     continue;
                 };
 
@@ -190,8 +188,7 @@ impl<'a> PlanReconstructor<'a> {
             }
         }
 
-        // Sanity check: if DP told us there are connecting edges but we generated no conditions,
-        // something is seriously wrong with our logic
+        // Verify that connecting edges produce join conditions
         if on_conditions.is_empty() && !edge_indices.is_empty() {
             return Err(DataFusionError::Internal(
                 "Failed to reconstruct any 'on' conditions for a join that should have them"
@@ -497,7 +494,7 @@ impl<'a> PlanReconstructor<'a> {
         let mut column_indices = Vec::new();
         let mut column_mapping = HashMap::new();
 
-        // First pass: collect all columns and build mapping
+        // Collect all columns and build mapping
         let columns = collect_columns(&filter);
         for column in &columns {
             let column_key = (column.name().to_string(), column.index());
@@ -509,7 +506,7 @@ impl<'a> PlanReconstructor<'a> {
                     side: JoinSide::Left,
                 };
                 column_indices.push(column_index);
-                // Map to intermediate schema position (left columns come first)
+                // Map to intermediate schema position (left columns first)
                 column_mapping.insert(column_key, left_idx);
             }
             // Try to find this column in the right map
@@ -519,13 +516,13 @@ impl<'a> PlanReconstructor<'a> {
                     side: JoinSide::Right,
                 };
                 column_indices.push(column_index);
-                // Map to intermediate schema position (right columns come after left)
+                // Map to intermediate schema position (right columns after left)
                 let intermediate_idx = left_map.len() + right_idx;
                 column_mapping.insert(column_key, intermediate_idx);
             }
         }
 
-        // Second pass: rewrite the expression to use intermediate schema column indices
+        // Rewrite expression to use intermediate schema column indices
         let transform_result = filter.transform(|expr| {
             if let Some(column) = expr.as_any().downcast_ref::<Column>() {
                 let column_key = (column.name().to_string(), column.index());
@@ -545,10 +542,9 @@ impl<'a> PlanReconstructor<'a> {
     /// Only matches ColumnMapEntry::Stable entries.
     fn find_column_in_map(&self, column: &Column, map: &ColumnMap) -> Option<usize> {
         // Only consider Stable entries for column matching
-        // The column.index() refers to the index in the schema represented by this map
         if column.index() < map.len() {
             if let ColumnMapEntry::Stable { .. } = &map[column.index()] {
-                // If the entry at the column's index is a Stable entry, it's a match
+                // Entry at column's index is a Stable entry match
                 return Some(column.index());
             }
         }

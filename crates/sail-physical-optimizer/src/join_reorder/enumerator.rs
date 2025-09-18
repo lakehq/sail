@@ -36,9 +36,9 @@ impl PlanEnumerator {
         let total = 1usize << n;
         for mask in 1..total {
             let mut subset = Vec::new();
-            for i in 0..n {
+            for (i, &elem) in elems.iter().enumerate().take(n) {
                 if (mask & (1usize << i)) != 0 {
-                    subset.push(elems[i]);
+                    subset.push(elem);
                 }
             }
             subsets.push(subset);
@@ -97,7 +97,7 @@ impl PlanEnumerator {
         // Initialize leaf plans for all single relations
         self.init_leaf_plans()?;
 
-        // Run DPhyp join enumeration. If it returns false, threshold exceeded.
+        // Run DPhyp join enumeration
         if !self.join_reorder_by_dphyp()? {
             return Ok(None);
         }
@@ -187,7 +187,7 @@ impl PlanEnumerator {
             return Ok(true);
         }
 
-        // Build initial forbidden: all ids < min(nodes) plus nodes
+        // Build initial forbidden set
         let min_idx = nodes.iter().min().unwrap_or(0);
         let mut forbidden_bits: u64 = nodes.bits();
         for i in 0..min_idx {
@@ -201,7 +201,7 @@ impl PlanEnumerator {
             return Ok(true);
         }
 
-        // Build a new forbidden set that initially includes all neighbors to avoid duplicates
+        // Build forbidden set including all neighbors to avoid duplicates
         let mut new_forbidden_bits = forbidden.bits();
         for &n in &neighbors {
             new_forbidden_bits |= 1u64 << n;
@@ -218,13 +218,13 @@ impl PlanEnumerator {
                 return Ok(false);
             }
 
-            // Use the enriched forbidden set to reduce duplicates
+            // Use enriched forbidden set to reduce duplicates
             let cmp_forbidden = JoinSet::from_bits(new_forbidden_bits);
             if !self.enumerate_cmp_rec(nodes, nbr_set, cmp_forbidden)? {
                 return Ok(false);
             }
 
-            // Allow this neighbor to participate in subsequent CMP expansions
+            // Allow neighbor to participate in subsequent CMP expansions
             new_forbidden_bits &= !(1u64 << nbr);
         }
 
@@ -261,14 +261,14 @@ impl PlanEnumerator {
             union_sets.push(new_set);
         }
 
-        // New forbidden includes all current neighbors to avoid duplicates
+        // Forbidden set includes current neighbors to avoid duplicates
         let mut new_forbidden_bits = forbidden.bits();
         for &n in &neighbors {
             new_forbidden_bits |= 1u64 << n;
         }
         let new_forbidden = JoinSet::from_bits(new_forbidden_bits);
 
-        // Recurse on each union set under the updated forbidden
+        // Recurse on each union set under updated forbidden set
         for set in union_sets {
             if !self.enumerate_csg_rec(set, new_forbidden)? {
                 return Ok(false);
@@ -316,14 +316,14 @@ impl PlanEnumerator {
             union_sets.push(combined);
         }
 
-        // New forbidden includes all current neighbors to avoid duplicates
+        // Forbidden set includes current neighbors to avoid duplicates
         let mut new_forbidden_bits = forbidden.bits();
         for &n in &neighbor_ids {
             new_forbidden_bits |= 1u64 << n;
         }
         let new_forbidden = JoinSet::from_bits(new_forbidden_bits);
 
-        // Recurse on each combined set under the updated forbidden
+        // Recurse on each combined set under updated forbidden set
         for set in union_sets {
             if !self.enumerate_cmp_rec(left, set, new_forbidden)? {
                 return Ok(false);
@@ -357,7 +357,7 @@ impl PlanEnumerator {
     ) -> Result<f64> {
         let parent = JoinSet::from_bits(left.bits() | right.bits());
 
-        // Both sides must already exist in the DP table
+        // Both subplans must exist in the DP table
         let left_plan = match self.dp_table.get(&left) {
             Some(p) => p.clone(),
             None => return Ok(f64::INFINITY),
@@ -367,7 +367,7 @@ impl PlanEnumerator {
             None => return Ok(f64::INFINITY),
         };
 
-        // Build connecting edge refs locally from indices
+        // Build connecting edge references from indices
         let connecting_edges: Vec<&JoinEdge> = edge_indices
             .iter()
             .map(|&i| &self.query_graph.edges[i])
@@ -391,7 +391,7 @@ impl PlanEnumerator {
             new_cardinality,
         ));
 
-        // Update DP table only if better
+        // Update DP table if cost is better
         let should_update = match self.dp_table.get(&parent) {
             Some(existing) => new_plan.cost < existing.cost,
             None => true,
@@ -527,13 +527,13 @@ impl PlanEnumerator {
                 }
             }
 
-            // If no connected pair was found, create a cartesian product with minimum cardinality product
+            // Create cartesian product with minimum cardinality if no connected pairs found
             if best_plan.is_none() && current_plans.len() >= 2 {
                 let mut min_cardinality_product = f64::INFINITY;
                 let mut selected_left_idx = 0;
                 let mut selected_right_idx = 1;
 
-                // Find the pair with minimum cardinality product (like Databend's approach)
+                // Find pair with minimum cardinality product
                 for i in 0..current_plans.len() {
                     for j in (i + 1)..current_plans.len() {
                         let left_set = current_plans[i];
@@ -585,7 +585,7 @@ impl PlanEnumerator {
                 best_right_idx = selected_right_idx;
             }
 
-            // If we still don't have a plan, something is wrong
+            // Verify we have a valid plan
             let plan = best_plan.ok_or_else(|| {
                 DataFusionError::Internal(
                     "Failed to find any joinable pair in greedy algorithm".to_string(),
@@ -595,8 +595,7 @@ impl PlanEnumerator {
             // Add the new plan to DP table
             self.dp_table.insert(plan.join_set, plan.clone());
 
-            // Remove the two merged plans from current_plans and add the new one
-            // Remove in reverse order to maintain indices
+            // Remove merged plans and add new one (reverse order to maintain indices)
             if best_left_idx < best_right_idx {
                 current_plans.remove(best_right_idx);
                 current_plans.remove(best_left_idx);

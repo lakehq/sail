@@ -51,9 +51,9 @@ pub struct JoinEdge {
     /// Set of all relations participating in this join condition.
     pub join_set: JoinSet,
     /// Join filter expression (e.g., a.col1 = b.col1 AND a.col2 > 10).
-    /// For non-equi joins, this expression will be more complex.
+    /// Non-equi joins use complex expressions.
     pub filter: Arc<dyn PhysicalExpr>,
-    /// Join type, typically Inner in our scenario.
+    /// Join type (Inner for reorderable joins).
     pub join_type: JoinType,
 
     // pub selectivity: f64,
@@ -105,11 +105,7 @@ pub struct QueryEdge {
     pub children: HashMap<usize, QueryEdge>,
 }
 
-impl QueryEdge {
-    pub fn new() -> Self {
-        Self::default()
-    }
-}
+impl QueryEdge {}
 
 /// Query graph containing all relations and join conditions.
 /// Uses an optimized trie-like structure for fast neighbor lookup.
@@ -253,7 +249,7 @@ impl QueryGraph {
             current = current
                 .children
                 .entry(relation_id)
-                .or_insert_with(QueryEdge::new);
+                .or_default();
         }
 
         // Add or update neighbor information
@@ -556,11 +552,12 @@ mod tests {
 
     #[test]
     fn test_optimized_neighbor_lookup() {
+        use std::sync::Arc;
+
         use datafusion::arrow::datatypes::{DataType, Field, Schema};
         use datafusion::logical_expr::JoinType;
         use datafusion::physical_expr::expressions::Column;
         use datafusion::physical_plan::empty::EmptyExec;
-        use std::sync::Arc;
 
         let mut graph = QueryGraph::new();
         let schema = Arc::new(Schema::new(vec![Field::new(
@@ -598,29 +595,30 @@ mod tests {
         // Test neighbor lookup for relation 0
         let set_0 = JoinSet::new_singleton(0);
         let neighbors = graph.get_neighbors(set_0);
-        assert_eq!(neighbors, vec![1]); // Relation 0 should be connected to relation 1
+        assert_eq!(neighbors, vec![1]); // Relation 0 connected to relation 1
 
         // Test neighbor lookup for relation 1
         let set_1 = JoinSet::new_singleton(1);
         let neighbors = graph.get_neighbors(set_1);
         let mut expected = vec![0, 2];
         expected.sort();
-        assert_eq!(neighbors, expected); // Relation 1 should be connected to relations 0 and 2
+        assert_eq!(neighbors, expected); // Relation 1 connected to relations 0 and 2
 
         // Test connecting edges lookup
         let set_0 = JoinSet::new_singleton(0);
         let set_1 = JoinSet::new_singleton(1);
         let connecting_edges = graph.get_connecting_edges(set_0, set_1);
-        assert_eq!(connecting_edges.len(), 1); // Should find one connecting edge
+        assert_eq!(connecting_edges.len(), 1); // One connecting edge expected
     }
 
     #[test]
     fn test_trie_structure_with_complex_edges() {
+        use std::sync::Arc;
+
         use datafusion::arrow::datatypes::{DataType, Field, Schema};
         use datafusion::logical_expr::JoinType;
         use datafusion::physical_expr::expressions::Column;
         use datafusion::physical_plan::empty::EmptyExec;
-        use std::sync::Arc;
 
         let mut graph = QueryGraph::new();
         let schema = Arc::new(Schema::new(vec![Field::new(
