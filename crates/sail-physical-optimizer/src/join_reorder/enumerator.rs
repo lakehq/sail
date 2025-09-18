@@ -256,14 +256,13 @@ impl PlanEnumerator {
         let mut subsets = Vec::new();
 
         // Generate all combinations of `size` relations from `relation_count` relations
-        self.generate_combinations(0, size, 0, relation_count, &mut subsets);
+        Self::generate_combinations(0, size, 0, relation_count, &mut subsets);
 
         subsets
     }
 
     /// Recursive helper to generate combinations.
     fn generate_combinations(
-        &self,
         current_bits: u64,
         remaining_size: usize,
         start_relation: usize,
@@ -281,7 +280,7 @@ impl PlanEnumerator {
 
         // Try including current relation
         let new_bits = current_bits | (1 << start_relation);
-        self.generate_combinations(
+        Self::generate_combinations(
             new_bits,
             remaining_size - 1,
             start_relation + 1,
@@ -290,7 +289,7 @@ impl PlanEnumerator {
         );
 
         // Try not including current relation
-        self.generate_combinations(
+        Self::generate_combinations(
             current_bits,
             remaining_size,
             start_relation + 1,

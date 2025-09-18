@@ -49,11 +49,6 @@ impl DPPlan {
     pub fn is_leaf(&self) -> bool {
         matches!(self.plan_type, PlanType::Leaf { .. })
     }
-
-    /// Returns the number of relations in this plan.
-    pub fn relation_count(&self) -> usize {
-        self.join_set.cardinality() as usize
-    }
 }
 
 #[derive(Debug, Clone)]
@@ -117,7 +112,7 @@ mod tests {
     fn test_leaf_plan() {
         let plan = DPPlan::new_leaf(0, 1000.0);
         assert!(plan.is_leaf());
-        assert_eq!(plan.relation_count(), 1);
+        assert_eq!(plan.join_set.cardinality(), 1);
         assert_eq!(plan.cardinality, 1000.0);
         assert_eq!(plan.cost, 0.0); // Leaf nodes have zero join cost
 
@@ -137,7 +132,7 @@ mod tests {
         let plan = DPPlan::new_join(left_set, right_set, edge_indices.clone(), 2000.0, 500.0);
 
         assert!(!plan.is_leaf());
-        assert_eq!(plan.relation_count(), 2);
+        assert_eq!(plan.join_set.cardinality(), 2);
         assert_eq!(plan.cardinality, 500.0);
         assert_eq!(plan.cost, 2000.0);
 

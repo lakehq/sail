@@ -15,6 +15,9 @@ use log::info;
 use crate::join_reorder::graph::{JoinEdge, QueryGraph, RelationNode, StableColumn};
 use crate::join_reorder::join_set::JoinSet;
 
+/// Type alias for join condition pairs to reduce complexity
+type JoinConditionPairs = [(Arc<dyn PhysicalExpr>, Arc<dyn PhysicalExpr>)];
+
 /// Maps an output column from an ExecutionPlan back to a stable identifier.
 /// The vector is indexed by the column index in the plan's output schema.
 pub type ColumnMap = Vec<ColumnMapEntry>;
@@ -222,7 +225,9 @@ impl GraphBuilder {
         }
 
         let filter = join_plan.filter().ok_or_else(|| {
-            DataFusionError::Internal("Filter should exist when join_plan.filter() is not None".to_string())
+            DataFusionError::Internal(
+                "Filter should exist when join_plan.filter() is not None".to_string(),
+            )
         })?;
         let indices = filter.column_indices();
 
@@ -400,7 +405,7 @@ impl GraphBuilder {
     /// Converts (left_expr, right_expr) pairs into a single AND expression.
     fn build_conjunction_from_on(
         &self,
-        on_conditions: &[(Arc<dyn PhysicalExpr>, Arc<dyn PhysicalExpr>)],
+        on_conditions: &JoinConditionPairs,
     ) -> Result<Arc<dyn PhysicalExpr>> {
         use datafusion::logical_expr::Operator;
         use datafusion::physical_expr::expressions::BinaryExpr;
@@ -453,7 +458,7 @@ mod tests {
     fn test_graph_builder_creation() {
         let builder = GraphBuilder::new();
         assert_eq!(builder.relation_counter, 0);
-        assert!(builder.graph.is_empty());
+        assert!(builder.graph.relations.is_empty() && builder.graph.edges.is_empty());
     }
 
     #[test]

@@ -16,6 +16,11 @@ use crate::join_reorder::dp_plan::{DPPlan, PlanType};
 use crate::join_reorder::graph::{QueryGraph, StableColumn};
 use crate::join_reorder::join_set::JoinSet;
 
+/// Type alias for join condition pairs
+type JoinConditionPairs = Vec<(Arc<dyn PhysicalExpr>, Arc<dyn PhysicalExpr>)>;
+
+/// Type alias for filter expression with column indices
+type FilterWithColumns = Option<(Arc<dyn PhysicalExpr>, Vec<ColumnIndex>)>;
 /// Plan reconstructor, converting the optimal DPPlan back to ExecutionPlan.
 pub struct PlanReconstructor<'a> {
     /// Reference to the complete DP table for looking up subproblems
@@ -138,7 +143,7 @@ impl<'a> PlanReconstructor<'a> {
         right_map: &ColumnMap,
         left_plan: &Arc<dyn ExecutionPlan>,
         right_plan: &Arc<dyn ExecutionPlan>,
-    ) -> Result<Vec<(Arc<dyn PhysicalExpr>, Arc<dyn PhysicalExpr>)>> {
+    ) -> Result<JoinConditionPairs> {
         let mut on_conditions = vec![];
 
         // Directly iterate over the edges that the DP solver told us connect these subplans
@@ -360,7 +365,7 @@ impl<'a> PlanReconstructor<'a> {
         edge: &crate::join_reorder::graph::JoinEdge,
         left_map: &ColumnMap,
         right_map: &ColumnMap,
-    ) -> Result<Option<(Arc<dyn PhysicalExpr>, Vec<ColumnIndex>)>> {
+    ) -> Result<FilterWithColumns> {
         // Extract non-equi conditions by removing known equi-join conditions from the filter
         let non_equi_expr =
             self.remove_equi_conditions_from_filter(&edge.filter, &edge.equi_pairs)?;
@@ -464,12 +469,12 @@ impl<'a> PlanReconstructor<'a> {
 
     /// Count the number of AND conditions in an expression tree.
     #[allow(dead_code)]
-    fn count_and_conditions(&self, expr: &Arc<dyn PhysicalExpr>) -> usize {
+    fn count_and_conditions(expr: &Arc<dyn PhysicalExpr>) -> usize {
         if let Some(binary_expr) = expr.as_any().downcast_ref::<BinaryExpr>() {
             match binary_expr.op() {
                 Operator::And => {
-                    1 + self.count_and_conditions(binary_expr.left())
-                        + self.count_and_conditions(binary_expr.right())
+                    1 + Self::count_and_conditions(binary_expr.left())
+                        + Self::count_and_conditions(binary_expr.right())
                 }
                 Operator::Eq => 1, // This is a single condition
                 _ => 1,            // Other operators count as single conditions

@@ -121,11 +121,6 @@ impl QueryGraph {
         self.relations.get(relation_id)
     }
 
-    /// Checks if the query graph is empty (no relations and no edges).
-    pub fn is_empty(&self) -> bool {
-        self.relations.is_empty() && self.edges.is_empty()
-    }
-
     /// Gets the number of edges.
     #[cfg(test)]
     pub fn edge_count(&self) -> usize {
@@ -153,7 +148,7 @@ mod tests {
     #[test]
     fn test_query_graph_creation() {
         let graph = QueryGraph::new();
-        assert!(graph.is_empty());
+        assert!(graph.relations.is_empty() && graph.edges.is_empty());
         assert_eq!(graph.relation_count(), 0);
         assert_eq!(graph.edge_count(), 0);
     }
@@ -165,7 +160,7 @@ mod tests {
 
         graph.add_relation(relation);
         assert_eq!(graph.relation_count(), 1);
-        assert!(!graph.is_empty());
+        assert!(!(graph.relations.is_empty() && graph.edges.is_empty()));
     }
 
     #[test]
