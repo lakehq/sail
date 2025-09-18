@@ -26,6 +26,25 @@ const EMIT_THRESHOLD: usize = 10000;
 const RELATION_THRESHOLD: usize = 10;
 
 impl PlanEnumerator {
+    /// Generate all non-empty subsets of the given neighbor list.
+    fn generate_all_nonempty_subsets(&self, elems: &[usize]) -> Vec<Vec<usize>> {
+        let n = elems.len();
+        if n == 0 {
+            return vec![];
+        }
+        let mut subsets = Vec::new();
+        let total = 1usize << n;
+        for mask in 1..total {
+            let mut subset = Vec::new();
+            for i in 0..n {
+                if (mask & (1usize << i)) != 0 {
+                    subset.push(elems[i]);
+                }
+            }
+            subsets.push(subset);
+        }
+        subsets
+    }
     /// Creates a new plan enumerator.
     pub fn new(query_graph: QueryGraph) -> Self {
         let cardinality_estimator = CardinalityEstimator::new(query_graph.clone());
@@ -83,18 +102,14 @@ impl PlanEnumerator {
             return Ok(None);
         }
 
-        // Return the plan containing all relations if found
+        // Return the plan containing all relations if found; otherwise fallback to greedy
         let all_relations_set = self.create_all_relations_set();
-        let result = self
-            .dp_table
-            .get(&all_relations_set)
-            .cloned()
-            .ok_or_else(|| {
-                datafusion::error::DataFusionError::Internal(
-                    "No optimal plan found for all relations".to_string(),
-                )
-            })?;
-        Ok(Some(result))
+        if let Some(result) = self.dp_table.get(&all_relations_set).cloned() {
+            Ok(Some(result))
+        } else {
+            let greedy_plan = self.solve_greedy()?;
+            Ok(Some(greedy_plan))
+        }
     }
 
     /// Initialize leaf plans for all single relations.
@@ -186,6 +201,12 @@ impl PlanEnumerator {
             return Ok(true);
         }
 
+        // Build a new forbidden set that initially includes all neighbors to avoid duplicates
+        let mut new_forbidden_bits = forbidden.bits();
+        for &n in &neighbors {
+            new_forbidden_bits |= 1u64 << n;
+        }
+
         // Traverse neighbors in desc order
         for &nbr in neighbors.iter().rev() {
             let nbr_set = JoinSet::new_singleton(nbr);
@@ -197,9 +218,14 @@ impl PlanEnumerator {
                 return Ok(false);
             }
 
-            if !self.enumerate_cmp_rec(nodes, nbr_set, forbidden)? {
+            // Use the enriched forbidden set to reduce duplicates
+            let cmp_forbidden = JoinSet::from_bits(new_forbidden_bits);
+            if !self.enumerate_cmp_rec(nodes, nbr_set, cmp_forbidden)? {
                 return Ok(false);
             }
+
+            // Allow this neighbor to participate in subsequent CMP expansions
+            new_forbidden_bits &= !(1u64 << nbr);
         }
 
         Ok(true)
@@ -220,25 +246,31 @@ impl PlanEnumerator {
             }
         }
 
-        let mut merged_sets: Vec<JoinSet> = Vec::with_capacity(neighbors.len());
-        for &nbr in &neighbors {
-            let nbr_set = JoinSet::new_singleton(nbr);
-            let merged = JoinSet::from_bits(nodes.bits() | nbr_set.bits());
-
-            if self.dp_table.contains_key(&merged)
-                && merged.cardinality() > nodes.cardinality()
-                && !self.emit_csg(merged)?
+        // Generate all non-empty neighbor subsets and union with current nodes
+        let all_subsets = self.generate_all_nonempty_subsets(&neighbors);
+        let mut union_sets: Vec<JoinSet> = Vec::with_capacity(all_subsets.len());
+        for subset in all_subsets {
+            let subset_bits = subset.iter().fold(0u64, |acc, &id| acc | (1u64 << id));
+            let new_set = JoinSet::from_bits(nodes.bits() | subset_bits);
+            if self.dp_table.contains_key(&new_set)
+                && new_set.cardinality() > nodes.cardinality()
+                && !self.emit_csg(new_set)?
             {
                 return Ok(false);
             }
-
-            merged_sets.push(merged);
+            union_sets.push(new_set);
         }
 
-        // Continue recursion with updated forbidden sets
-        for (idx, &nbr) in neighbors.iter().enumerate() {
-            let new_forbidden = JoinSet::from_bits(forbidden.bits() | (1u64 << nbr));
-            if !self.enumerate_csg_rec(merged_sets[idx], new_forbidden)? {
+        // New forbidden includes all current neighbors to avoid duplicates
+        let mut new_forbidden_bits = forbidden.bits();
+        for &n in &neighbors {
+            new_forbidden_bits |= 1u64 << n;
+        }
+        let new_forbidden = JoinSet::from_bits(new_forbidden_bits);
+
+        // Recurse on each union set under the updated forbidden
+        for set in union_sets {
+            if !self.enumerate_csg_rec(set, new_forbidden)? {
                 return Ok(false);
             }
         }
@@ -253,32 +285,47 @@ impl PlanEnumerator {
         right: JoinSet,
         forbidden: JoinSet,
     ) -> Result<bool> {
-        let neighbor_ids = self.neighbors(right, forbidden);
+        let mut neighbor_ids = self.neighbors(right, forbidden);
         if neighbor_ids.is_empty() {
             return Ok(true);
         }
 
-        let mut merged_sets: Vec<JoinSet> = Vec::with_capacity(neighbor_ids.len());
-        for &nbr in &neighbor_ids {
-            let nbr_set = JoinSet::new_singleton(nbr);
-            let merged = JoinSet::from_bits(right.bits() | nbr_set.bits());
-            let edge_indices = self.get_connecting_edge_indices(left, merged);
-
-            if merged.cardinality() > right.cardinality()
-                && self.dp_table.contains_key(&merged)
-                && !edge_indices.is_empty()
-                && !self.try_emit_csg_cmp(left, merged, edge_indices.clone())?
-            {
-                return Ok(false);
+        // Heuristic pruning for large relation counts
+        if self.query_graph.relation_count() >= RELATION_THRESHOLD {
+            let limit = right.cardinality() as usize;
+            if neighbor_ids.len() > limit {
+                neighbor_ids.truncate(limit);
             }
-
-            merged_sets.push(merged);
         }
 
-        // Continue enumeration
-        for (idx, &nbr) in neighbor_ids.iter().enumerate() {
-            let new_forbidden = JoinSet::from_bits(forbidden.bits() | (1u64 << nbr));
-            if !self.enumerate_cmp_rec(left, merged_sets[idx], new_forbidden)? {
+        // Generate all non-empty neighbor subsets and union with current right set
+        let all_subsets = self.generate_all_nonempty_subsets(&neighbor_ids);
+        let mut union_sets: Vec<JoinSet> = Vec::with_capacity(all_subsets.len());
+        for subset in all_subsets {
+            let subset_bits = subset.iter().fold(0u64, |acc, &id| acc | (1u64 << id));
+            let combined = JoinSet::from_bits(right.bits() | subset_bits);
+            if combined.cardinality() > right.cardinality() && self.dp_table.contains_key(&combined)
+            {
+                let edge_indices = self.get_connecting_edge_indices(left, combined);
+                if !edge_indices.is_empty()
+                    && !self.try_emit_csg_cmp(left, combined, edge_indices.clone())?
+                {
+                    return Ok(false);
+                }
+            }
+            union_sets.push(combined);
+        }
+
+        // New forbidden includes all current neighbors to avoid duplicates
+        let mut new_forbidden_bits = forbidden.bits();
+        for &n in &neighbor_ids {
+            new_forbidden_bits |= 1u64 << n;
+        }
+        let new_forbidden = JoinSet::from_bits(new_forbidden_bits);
+
+        // Recurse on each combined set under the updated forbidden
+        for set in union_sets {
+            if !self.enumerate_cmp_rec(left, set, new_forbidden)? {
                 return Ok(false);
             }
         }
