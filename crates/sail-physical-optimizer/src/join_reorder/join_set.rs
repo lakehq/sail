@@ -42,11 +42,6 @@ impl JoinSet {
         self.0.count_ones()
     }
 
-    /// Checks if the set is empty.
-    pub fn is_empty(&self) -> bool {
-        self.0 == 0
-    }
-
     /// Gets all relation indices in the set.
     pub fn iter(self) -> impl Iterator<Item = usize> {
         (0..64).filter(move |&i| (self.0 & (1 << i)) != 0)
