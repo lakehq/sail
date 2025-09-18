@@ -6,6 +6,7 @@ use datafusion::error::{DataFusionError, Result};
 use crate::join_reorder::cardinality_estimator::CardinalityEstimator;
 use crate::join_reorder::cost_model::CostModel;
 use crate::join_reorder::dp_plan::DPPlan;
+use crate::join_reorder::graph::JoinEdge;
 use crate::join_reorder::graph::QueryGraph;
 use crate::join_reorder::join_set::JoinSet;
 
@@ -40,8 +41,27 @@ impl PlanEnumerator {
         }
     }
 
-    /// Main method that solves for the optimal join order using dynamic programming.
-    /// Returns Ok(Some(plan)) if DP completed successfully, Ok(None) if threshold exceeded.
+    /// Helper to get indices of connecting edges for two disjoint sets using only an immutable borrow.
+    fn get_connecting_edge_indices(&self, left: JoinSet, right: JoinSet) -> Vec<usize> {
+        self.query_graph
+            .edges
+            .iter()
+            .enumerate()
+            .filter_map(|(idx, edge)| {
+                if !edge.join_set.is_disjoint(&left)
+                    && !edge.join_set.is_disjoint(&right)
+                    && left.is_disjoint(&right)
+                {
+                    Some(idx)
+                } else {
+                    None
+                }
+            })
+            .collect()
+    }
+
+    /// Main method that solves for the optimal join order using DPhyp-style enumeration.
+    /// Returns Ok(Some(plan)) if successful, Ok(None) if threshold exceeded.
     pub fn solve(&mut self) -> Result<Option<Arc<DPPlan>>> {
         let relation_count = self.query_graph.relation_count();
 
@@ -54,22 +74,12 @@ impl PlanEnumerator {
         // Initialize leaf plans for all single relations
         self.init_leaf_plans()?;
 
-        // Iterate through subset sizes from 2 to relation_count
-        for subset_size in 2..=relation_count {
-            // Generate all subsets of the given size
-            let subsets = self.generate_subsets_of_size(subset_size);
-
-            // Find the best plan for each subset
-            for subset in subsets {
-                // Check if we've exceeded the threshold
-                if self.emit_count >= EMIT_THRESHOLD {
-                    return Ok(None); // Indicate timeout/threshold exceeded
-                }
-                self.find_best_plan_for_subset(subset)?;
-            }
+        // Run DPhyp join enumeration. If it returns false, threshold exceeded.
+        if !self.join_reorder_by_dphyp()? {
+            return Ok(None);
         }
 
-        // Find and return the plan containing all relations
+        // Return the plan containing all relations if found
         let all_relations_set = self.create_all_relations_set();
         let result = self
             .dp_table
@@ -100,6 +110,259 @@ impl PlanEnumerator {
         }
 
         Ok(())
+    }
+
+    /// Compute neighbor relations of a given connected subgraph `nodes`, excluding `forbidden`.
+    fn neighbors(&self, nodes: JoinSet, forbidden: JoinSet) -> Vec<usize> {
+        let mut mark: [bool; 64] = [false; 64];
+
+        for edge in &self.query_graph.edges {
+            // If edge touches current nodes
+            if !edge.join_set.is_disjoint(&nodes) {
+                // Any relation on this edge that is not in nodes and not forbidden is a neighbor
+                for rel in edge.join_set.iter() {
+                    if (nodes.bits() & (1u64 << rel)) == 0
+                        && (forbidden.bits() & (1u64 << rel)) == 0
+                    {
+                        mark[rel] = true;
+                    }
+                }
+            }
+        }
+
+        let mut result: Vec<usize> = (0..self.query_graph.relation_count())
+            .filter(|&i| mark[i])
+            .collect();
+        result.sort_unstable();
+        result
+    }
+
+    /// Start enumeration from a single relation index.
+    fn process_node_as_start(&mut self, idx: usize) -> Result<bool> {
+        let nodes = JoinSet::new_singleton(idx);
+
+        // Emit CSG for the starting node
+        if !self.emit_csg(nodes)? {
+            return Ok(false);
+        }
+
+        // Create forbidden set: all ids < min(nodes) plus nodes itself
+        let min_idx = idx;
+        let mut forbidden_bits: u64 = 0;
+        for i in 0..min_idx {
+            forbidden_bits |= 1u64 << i;
+        }
+        let forbidden = JoinSet::from_bits(forbidden_bits | nodes.bits());
+
+        // Enlarge recursively
+        if !self.enumerate_csg_rec(nodes, forbidden)? {
+            return Ok(false);
+        }
+
+        Ok(true)
+    }
+
+    /// DPhyp join enumeration over connected subgraphs.
+    fn join_reorder_by_dphyp(&mut self) -> Result<bool> {
+        // Start from all single relations in descending order
+        for idx in (0..self.query_graph.relation_count()).rev() {
+            if !self.process_node_as_start(idx)? {
+                return Ok(false);
+            }
+        }
+        Ok(true)
+    }
+
+    /// Emit CSG for a connected subgraph `nodes`, and enumerate its CMPs.
+    fn emit_csg(&mut self, nodes: JoinSet) -> Result<bool> {
+        // If nodes already include all relations, nothing to do
+        if nodes.cardinality() as usize == self.query_graph.relation_count() {
+            return Ok(true);
+        }
+
+        // Build initial forbidden: all ids < min(nodes) plus nodes
+        let min_idx = nodes.iter().min().unwrap_or(0);
+        let mut forbidden_bits: u64 = nodes.bits();
+        for i in 0..min_idx {
+            forbidden_bits |= 1u64 << i;
+        }
+        let forbidden = JoinSet::from_bits(forbidden_bits);
+
+        // Get neighbors
+        let neighbors = self.neighbors(nodes, forbidden);
+        if neighbors.is_empty() {
+            return Ok(true);
+        }
+
+        // Traverse neighbors in desc order
+        for &nbr in neighbors.iter().rev() {
+            let nbr_set = JoinSet::new_singleton(nbr);
+            let edge_indices = self.get_connecting_edge_indices(nodes, nbr_set);
+
+            if !edge_indices.is_empty()
+                && !self.try_emit_csg_cmp(nodes, nbr_set, edge_indices.clone())?
+            {
+                return Ok(false);
+            }
+
+            if !self.enumerate_cmp_rec(nodes, nbr_set, forbidden)? {
+                return Ok(false);
+            }
+        }
+
+        Ok(true)
+    }
+
+    /// Enumerate CSG recursively by extending `nodes` with neighbors not in `forbidden`.
+    fn enumerate_csg_rec(&mut self, nodes: JoinSet, forbidden: JoinSet) -> Result<bool> {
+        let mut neighbors = self.neighbors(nodes, forbidden);
+        if neighbors.is_empty() {
+            return Ok(true);
+        }
+
+        // Heuristic pruning for large relation counts
+        if self.query_graph.relation_count() >= RELATION_THRESHOLD {
+            let limit = nodes.cardinality() as usize;
+            if neighbors.len() > limit {
+                neighbors.truncate(limit);
+            }
+        }
+
+        let mut merged_sets: Vec<JoinSet> = Vec::with_capacity(neighbors.len());
+        for &nbr in &neighbors {
+            let nbr_set = JoinSet::new_singleton(nbr);
+            let merged = JoinSet::from_bits(nodes.bits() | nbr_set.bits());
+
+            if self.dp_table.contains_key(&merged)
+                && merged.cardinality() > nodes.cardinality()
+                && !self.emit_csg(merged)?
+            {
+                return Ok(false);
+            }
+
+            merged_sets.push(merged);
+        }
+
+        // Continue recursion with updated forbidden sets
+        for (idx, &nbr) in neighbors.iter().enumerate() {
+            let new_forbidden = JoinSet::from_bits(forbidden.bits() | (1u64 << nbr));
+            if !self.enumerate_csg_rec(merged_sets[idx], new_forbidden)? {
+                return Ok(false);
+            }
+        }
+
+        Ok(true)
+    }
+
+    /// Enumerate CMP recursively: extend `right` until valid CSG-CMP pairs are reached.
+    fn enumerate_cmp_rec(
+        &mut self,
+        left: JoinSet,
+        right: JoinSet,
+        forbidden: JoinSet,
+    ) -> Result<bool> {
+        let neighbor_ids = self.neighbors(right, forbidden);
+        if neighbor_ids.is_empty() {
+            return Ok(true);
+        }
+
+        let mut merged_sets: Vec<JoinSet> = Vec::with_capacity(neighbor_ids.len());
+        for &nbr in &neighbor_ids {
+            let nbr_set = JoinSet::new_singleton(nbr);
+            let merged = JoinSet::from_bits(right.bits() | nbr_set.bits());
+            let edge_indices = self.get_connecting_edge_indices(left, merged);
+
+            if merged.cardinality() > right.cardinality()
+                && self.dp_table.contains_key(&merged)
+                && !edge_indices.is_empty()
+                && !self.try_emit_csg_cmp(left, merged, edge_indices.clone())?
+            {
+                return Ok(false);
+            }
+
+            merged_sets.push(merged);
+        }
+
+        // Continue enumeration
+        for (idx, &nbr) in neighbor_ids.iter().enumerate() {
+            let new_forbidden = JoinSet::from_bits(forbidden.bits() | (1u64 << nbr));
+            if !self.enumerate_cmp_rec(left, merged_sets[idx], new_forbidden)? {
+                return Ok(false);
+            }
+        }
+
+        Ok(true)
+    }
+
+    /// Attempt to emit a CSG-CMP pair, respecting the emit threshold.
+    fn try_emit_csg_cmp(
+        &mut self,
+        left: JoinSet,
+        right: JoinSet,
+        edge_indices: Vec<usize>,
+    ) -> Result<bool> {
+        self.emit_count += 1;
+        if self.emit_count >= EMIT_THRESHOLD {
+            return Ok(false);
+        }
+        let _ = self.emit_csg_cmp(left, right, &edge_indices)?;
+        Ok(true)
+    }
+
+    /// Join two subplans and record the best plan for their union in the DP table.
+    fn emit_csg_cmp(
+        &mut self,
+        left: JoinSet,
+        right: JoinSet,
+        edge_indices: &[usize],
+    ) -> Result<f64> {
+        let parent = JoinSet::from_bits(left.bits() | right.bits());
+
+        // Both sides must already exist in the DP table
+        let left_plan = match self.dp_table.get(&left) {
+            Some(p) => p.clone(),
+            None => return Ok(f64::INFINITY),
+        };
+        let right_plan = match self.dp_table.get(&right) {
+            Some(p) => p.clone(),
+            None => return Ok(f64::INFINITY),
+        };
+
+        // Build connecting edge refs locally from indices
+        let connecting_edges: Vec<&JoinEdge> = edge_indices
+            .iter()
+            .map(|&i| &self.query_graph.edges[i])
+            .collect();
+
+        // Estimate join cardinality and cost
+        let new_cardinality = self.cardinality_estimator.estimate_join_cardinality(
+            left_plan.cardinality,
+            right_plan.cardinality,
+            &connecting_edges,
+        );
+        let new_cost = self
+            .cost_model
+            .compute_cost(&left_plan, &right_plan, new_cardinality);
+
+        let new_plan = Arc::new(DPPlan::new_join(
+            left,
+            right,
+            edge_indices.to_vec(),
+            new_cost,
+            new_cardinality,
+        ));
+
+        // Update DP table only if better
+        let should_update = match self.dp_table.get(&parent) {
+            Some(existing) => new_plan.cost < existing.cost,
+            None => true,
+        };
+
+        if should_update {
+            self.dp_table.insert(parent, new_plan);
+        }
+
+        Ok(new_cost)
     }
 
     /// Find the best plan for a given subset of relations.
