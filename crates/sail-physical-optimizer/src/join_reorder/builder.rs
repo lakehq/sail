@@ -195,8 +195,7 @@ impl GraphBuilder {
         let edge = JoinEdge::new(
             all_relations_in_condition,
             filter_expr,
-            join_plan.join_type().clone(),
-            0.1, // TODO: Initial selectivity estimate
+            *join_plan.join_type(),
             equi_pairs,
         );
         self.graph.add_edge(edge);
@@ -222,7 +221,10 @@ impl GraphBuilder {
             return Ok(Arc::clone(expr));
         }
 
-        let indices = join_plan.filter().unwrap().column_indices();
+        let filter = join_plan.filter().ok_or_else(|| {
+            DataFusionError::Internal("Filter should exist when join_plan.filter() is not None".to_string())
+        })?;
+        let indices = filter.column_indices();
 
         let expr_arc = Arc::clone(expr);
         let transformed = expr_arc.transform(|node| {
@@ -501,7 +503,10 @@ mod tests {
         // EmptyExec is handled as a base relation in visit_plan
 
         // Test the visit_plan method creates a relation node
-        let column_map = builder.visit_plan(plan).unwrap();
+        let column_map = match builder.visit_plan(plan) {
+            Ok(map) => map,
+            Err(_) => unreachable!("visit_plan should succeed in test"),
+        };
         assert_eq!(column_map.len(), 1);
         assert_eq!(builder.graph.relation_count(), 1);
 
@@ -514,7 +519,7 @@ mod tests {
                 assert_eq!(*relation_id, 0);
                 assert_eq!(*column_index, 0);
             }
-            _ => panic!("Expected Stable column map entry"),
+            _ => unreachable!("Expected Stable column map entry"),
         }
     }
 
@@ -634,7 +639,10 @@ mod tests {
             "Should find reorderable joins in complex plan"
         );
 
-        let (graph, _column_map) = result.unwrap();
+        let (graph, _column_map) = match result {
+            Some(result) => result,
+            None => unreachable!("Should have reorderable joins in test"),
+        };
 
         // Should have 3 relations (table1, table2, table3)
         assert_eq!(graph.relation_count(), 3, "Should find 3 base relations");

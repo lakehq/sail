@@ -1,6 +1,7 @@
 use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
 
+use datafusion::error::{DataFusionError, Result};
 use datafusion::logical_expr::Operator;
 use datafusion::physical_expr::expressions::BinaryExpr;
 use log::debug;
@@ -226,15 +227,19 @@ impl CardinalityEstimator {
     }
 
     /// Estimate cardinality after joining a set of relations.
-    pub fn estimate_cardinality(&mut self, join_set: JoinSet) -> f64 {
+    pub fn estimate_cardinality(&mut self, join_set: JoinSet) -> Result<f64> {
         // a. Cache: Check cardinality_cache first
         if let Some(card) = self.cardinality_cache.get(&join_set) {
-            return *card;
+            return Ok(*card);
         }
 
         let estimated_card = if join_set.cardinality() == 1 {
             // b. Single relation: Get initial cardinality from query graph
-            let relation_id = join_set.iter().next().unwrap();
+            let relation_id = join_set.iter().next().ok_or_else(|| {
+                DataFusionError::Internal(
+                    "Single relation join_set should have one element".to_string(),
+                )
+            })?;
             if let Some(relation) = self.graph.get_relation(relation_id) {
                 relation.initial_cardinality
             } else {
@@ -246,7 +251,7 @@ impl CardinalityEstimator {
         };
 
         self.cardinality_cache.insert(join_set, estimated_card);
-        estimated_card
+        Ok(estimated_card)
     }
 
     /// Estimate cardinality for multi-relation joins using numerator/denominator formula.
@@ -405,7 +410,10 @@ mod tests {
         let mut estimator = CardinalityEstimator::new(graph);
 
         let single_set = JoinSet::new_singleton(0);
-        let cardinality = estimator.estimate_cardinality(single_set);
+        let cardinality = match estimator.estimate_cardinality(single_set) {
+            Ok(card) => card,
+            Err(_) => unreachable!("estimate_cardinality should succeed in test"),
+        };
         assert_eq!(cardinality, 1000.0);
     }
 
@@ -464,7 +472,6 @@ mod tests {
             JoinSet::new_singleton(0).union(&JoinSet::new_singleton(1)),
             equi_condition,
             JoinType::Inner,
-            0.1,
             equi_pairs.clone(),
         );
 
@@ -489,7 +496,6 @@ mod tests {
             JoinSet::new_singleton(0).union(&JoinSet::new_singleton(1)),
             combined_condition,
             JoinType::Inner,
-            0.1,
             equi_pairs,
         );
 

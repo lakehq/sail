@@ -54,8 +54,8 @@ pub struct JoinEdge {
     pub filter: Arc<dyn PhysicalExpr>,
     /// Join type, typically Inner in our scenario.
     pub join_type: JoinType,
-    /// Selectivity estimate (between 0.0 and 1.0)
-    pub selectivity: f64,
+
+    // pub selectivity: f64,
     /// Parsed equi-join pairs from the join condition
     pub equi_pairs: Vec<(StableColumn, StableColumn)>,
 }
@@ -65,14 +65,12 @@ impl JoinEdge {
         join_set: JoinSet,
         filter: Arc<dyn PhysicalExpr>,
         join_type: JoinType,
-        selectivity: f64,
         equi_pairs: Vec<(StableColumn, StableColumn)>,
     ) -> Self {
         Self {
             join_set,
             filter,
             join_type,
-            selectivity,
             equi_pairs,
         }
     }
@@ -129,6 +127,7 @@ impl QueryGraph {
     }
 
     /// Gets the number of edges.
+    #[cfg(test)]
     pub fn edge_count(&self) -> usize {
         self.edges.len()
     }
@@ -177,6 +176,10 @@ mod tests {
         graph.add_relation(relation);
         let retrieved = graph.get_relation(0);
         assert!(retrieved.is_some());
-        assert_eq!(retrieved.unwrap().relation_id, 0);
+        let relation = match retrieved {
+            Some(rel) => rel,
+            None => unreachable!("Relation should exist in test"),
+        };
+        assert_eq!(relation.relation_id, 0);
     }
 }

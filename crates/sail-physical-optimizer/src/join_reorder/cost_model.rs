@@ -35,7 +35,7 @@ mod tests {
     #[test]
     fn test_cost_model_creation() {
         let _model = CostModel::new();
-        let _default_model = CostModel::default();
+        let _default_model = CostModel;
     }
 
     #[test]

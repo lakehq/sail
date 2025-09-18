@@ -199,7 +199,7 @@ impl<'a> PlanReconstructor<'a> {
     /// Determines join type from edge information.
     fn determine_join_type(&self, edge_indices: &[usize]) -> Result<JoinType> {
         // Use the join type from the first edge, or default to Inner
-        for &edge_index in edge_indices {
+        if let Some(&edge_index) = edge_indices.iter().next() {
             let edge = self.query_graph.edges.get(edge_index).ok_or_else(|| {
                 DataFusionError::Internal(format!("Edge with index {} not found", edge_index))
             })?;
@@ -248,7 +248,11 @@ impl<'a> PlanReconstructor<'a> {
 
         // Combine multiple filters with AND logic
         let combined_filter = if non_equi_filters.len() == 1 {
-            non_equi_filters.into_iter().next().unwrap()
+            non_equi_filters.into_iter().next().ok_or_else(|| {
+                DataFusionError::Internal(
+                    "non_equi_filters should have exactly one element".to_string(),
+                )
+            })?
         } else {
             self.combine_filters_with_and(non_equi_filters)?
         };
@@ -448,8 +452,8 @@ impl<'a> PlanReconstructor<'a> {
         if let (Some(left), Some(right)) = (left_col, right_col) {
             // Check if this column pair matches any equi-join pair
             for (col1, col2) in equi_pairs {
-                if (left.name() == &col1.name && right.name() == &col2.name)
-                    || (left.name() == &col2.name && right.name() == &col1.name)
+                if (left.name() == col1.name && right.name() == col2.name)
+                    || (left.name() == col2.name && right.name() == col1.name)
                 {
                     return true;
                 }
@@ -561,71 +565,6 @@ impl<'a> PlanReconstructor<'a> {
         Ok(result)
     }
 
-    /// Get the schema for a plan based on its ColumnMap.
-    fn get_plan_schema_for_map(
-        &self,
-        map: &ColumnMap,
-    ) -> Result<Arc<datafusion::arrow::datatypes::Schema>> {
-        use datafusion::arrow::datatypes::{DataType, Field, Schema};
-
-        let mut fields = Vec::new();
-        for (idx, entry) in map.iter().enumerate() {
-            match entry {
-                ColumnMapEntry::Stable {
-                    relation_id,
-                    column_index,
-                } => {
-                    let relation =
-                        self.query_graph.get_relation(*relation_id).ok_or_else(|| {
-                            DataFusionError::Internal(format!("Relation {} not found", relation_id))
-                        })?;
-                    let relation_schema = relation.plan.schema();
-                    let field = relation_schema.field(*column_index);
-                    fields.push(field.clone());
-                }
-                ColumnMapEntry::Expression { .. } => {
-                    // For expression entries, use a generic type
-                    // TODO: In a complete implementation, we should evaluate the expression type
-                    fields.push(Field::new(&format!("expr_{}", idx), DataType::Utf8, true));
-                }
-            }
-        }
-        Ok(Arc::new(Schema::new(fields)))
-    }
-
-    /// Build intermediate schema for join filter by combining left and right schemas.
-    fn build_intermediate_schema(
-        &self,
-        left_schema: &Arc<datafusion::arrow::datatypes::Schema>,
-        right_schema: &Arc<datafusion::arrow::datatypes::Schema>,
-    ) -> Result<Arc<datafusion::arrow::datatypes::Schema>> {
-        use datafusion::arrow::datatypes::{Field, Schema};
-
-        let mut fields = Vec::new();
-
-        // Add left schema fields with "left_" prefix
-        for field in left_schema.fields() {
-            let new_field = Field::new(
-                &format!("left_{}", field.name()),
-                field.data_type().clone(),
-                field.is_nullable(),
-            );
-            fields.push(new_field);
-        }
-
-        // Add right schema fields with "right_" prefix
-        for field in right_schema.fields() {
-            let new_field = Field::new(
-                &format!("right_{}", field.name()),
-                field.data_type().clone(),
-                field.is_nullable(),
-            );
-            fields.push(new_field);
-        }
-
-        Ok(Arc::new(Schema::new(fields)))
-    }
-
     /// Clear plan cache.
     #[cfg(test)]
     pub fn clear_cache(&mut self) {
@@ -714,7 +653,7 @@ mod tests {
         if let Err(DataFusionError::Internal(_)) = result {
             // Expected error type
         } else {
-            panic!("Expected Internal error about missing subplan");
+            unreachable!("Expected Internal error about missing subplan");
         }
     }
 

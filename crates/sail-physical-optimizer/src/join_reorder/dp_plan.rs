@@ -45,6 +45,7 @@ impl DPPlan {
     }
 
     /// Returns true if this is a leaf plan (single relation).
+    #[cfg(test)]
     pub fn is_leaf(&self) -> bool {
         matches!(self.plan_type, PlanType::Leaf { .. })
     }
@@ -72,6 +73,7 @@ pub enum PlanType {
 
 impl PlanType {
     /// Returns the left set if this is a Join, None otherwise.
+    #[cfg(test)]
     pub fn left_set(&self) -> Option<JoinSet> {
         match self {
             PlanType::Join { left_set, .. } => Some(*left_set),
@@ -80,6 +82,7 @@ impl PlanType {
     }
 
     /// Returns the right set if this is a Join, None otherwise.
+    #[cfg(test)]
     pub fn right_set(&self) -> Option<JoinSet> {
         match self {
             PlanType::Join { right_set, .. } => Some(*right_set),
@@ -88,6 +91,7 @@ impl PlanType {
     }
 
     /// Returns the edge indices if this is a Join, None otherwise.
+    #[cfg(test)]
     pub fn edge_indices(&self) -> Option<&[usize]> {
         match self {
             PlanType::Join { edge_indices, .. } => Some(edge_indices),
@@ -96,6 +100,7 @@ impl PlanType {
     }
 
     /// Returns the relation ID if this is a Leaf, None otherwise.
+    #[cfg(test)]
     pub fn relation_id(&self) -> Option<usize> {
         match self {
             PlanType::Leaf { relation_id } => Some(*relation_id),
@@ -119,7 +124,7 @@ mod tests {
         if let PlanType::Leaf { relation_id } = plan.plan_type {
             assert_eq!(relation_id, 0);
         } else {
-            panic!("Expected leaf plan type");
+            unreachable!("Expected leaf plan type");
         }
     }
 
@@ -146,7 +151,7 @@ mod tests {
             assert_eq!(r, right_set);
             assert_eq!(e, edge_indices);
         } else {
-            panic!("Expected join plan type");
+            unreachable!("Expected join plan type");
         }
     }
 

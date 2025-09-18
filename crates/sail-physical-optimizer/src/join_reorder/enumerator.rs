@@ -1,7 +1,7 @@
 use std::collections::HashMap;
 use std::sync::Arc;
 
-use datafusion::error::Result;
+use datafusion::error::{DataFusionError, Result};
 
 use crate::join_reorder::cardinality_estimator::CardinalityEstimator;
 use crate::join_reorder::cost_model::CostModel;
@@ -74,7 +74,7 @@ impl PlanEnumerator {
             let join_set = JoinSet::new_singleton(relation_id);
 
             // Estimate cardinality for single relation
-            let cardinality = self.cardinality_estimator.estimate_cardinality(join_set);
+            let cardinality = self.cardinality_estimator.estimate_cardinality(join_set)?;
 
             // Create leaf plan (cost is set to cardinality in DPPlan::new_leaf)
             let plan = Arc::new(DPPlan::new_leaf(relation_id, cardinality));
@@ -135,17 +135,18 @@ impl PlanEnumerator {
                 .compute_cost(&left_plan, &right_plan, new_cardinality);
 
             // Get the actual indices of connecting edges in the query graph
-            let edge_indices: Vec<usize> = connecting_edges
-                .iter()
-                .map(|edge| {
-                    // Find the index of this edge in the query graph's edges vector
-                    self.query_graph
-                        .edges
-                        .iter()
-                        .position(|graph_edge| std::ptr::eq(*edge, graph_edge))
-                        .expect("Edge should exist in query graph")
-                })
-                .collect();
+            let mut edge_indices = Vec::new();
+            for edge in &connecting_edges {
+                let index = self
+                    .query_graph
+                    .edges
+                    .iter()
+                    .position(|graph_edge| std::ptr::eq(*edge, graph_edge))
+                    .ok_or_else(|| {
+                        DataFusionError::Internal("Edge should exist in query graph".to_string())
+                    })?;
+                edge_indices.push(index);
+            }
 
             // Create new join plan
             let new_plan = Arc::new(DPPlan::new_join(
@@ -369,7 +370,10 @@ mod tests {
         let graph = create_test_graph_with_relations(2);
         let mut enumerator = PlanEnumerator::new(graph);
 
-        enumerator.init_leaf_plans().unwrap();
+        match enumerator.init_leaf_plans() {
+            Ok(()) => (),
+            Err(_) => unreachable!("init_leaf_plans should succeed in test"),
+        }
 
         assert_eq!(enumerator.dp_table.len(), 2);
 

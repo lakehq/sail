@@ -454,7 +454,7 @@ mod tests {
         // Even though we can't easily verify the exact join order without more complex setup,
         // we can verify that the optimization process completed without errors
         // and that the plan structure is preserved
-        assert!(aggregate_child.children().len() > 0);
+        assert!(!aggregate_child.children().is_empty());
 
         Ok(())
     }
@@ -547,7 +547,7 @@ mod tests {
 
         // Should complete without errors and preserve the aggregate boundaries
         assert_eq!(optimized_plan.name(), "AggregateExec");
-        assert!(optimized_plan.children().len() > 0);
+        assert!(!optimized_plan.children().is_empty());
 
         Ok(())
     }
