@@ -16,12 +16,7 @@ Sail supports the following URI formats for Azure storage services:
     Azure protocol
     <ul>
       <li>
-        <code
-          >azure://<span class="placeholder">container</span>/<span
-            class="placeholder"
-            >path</span
-          ></code
-        >
+        <code><SyntaxText raw="'azure://'<container>'/'<path>" /></code>
       </li>
     </ul>
   </li>
@@ -29,12 +24,7 @@ Sail supports the following URI formats for Azure storage services:
     AZ protocol
     <ul>
       <li>
-        <code
-          >az://<span class="placeholder">container</span>/<span
-            class="placeholder"
-            >path</span
-          ></code
-        >
+        <code><SyntaxText raw="'az://'<container>'/'<path>" /></code>
       </li>
     </ul>
   </li>
@@ -42,29 +32,21 @@ Sail supports the following URI formats for Azure storage services:
     Azure Blob File System (ABFS) and secure ABFS (ABFSS) protocols
     <ul>
       <li>
-        <code
-          >abfs&lbrack;s&rbrack;<span>:</span>//<span class="placeholder"
-            >container</span
-          >/<span class="placeholder">path</span></code
-        >
+        <code><SyntaxText raw="'abfs'['s']'://'<container>'/'<path>" /></code>
         (fsspec convention)
       </li>
       <li>
         <code
-          >abfs&lbrack;s&rbrack;<span>:</span>//<span class="placeholder"
-            >container</span
-          >@<span class="placeholder">account</span
-          >.dfs.core.windows.net/<span class="placeholder">path</span></code
-        >
+          ><SyntaxText
+            raw="'abfs'['s']'://'<container>'@'<account>'.dfs.core.windows.net/'<path>"
+        /></code>
         (Hadoop driver convention)
       </li>
       <li>
         <code
-          >abfs&lbrack;s&rbrack;<span>:</span>//<span class="placeholder"
-            >container</span
-          >@<span class="placeholder">account</span
-          >.dfs.fabric.windows.net/<span class="placeholder">path</span></code
-        >
+          ><SyntaxText
+            raw="'abfs'['s']'://'<container>'@'<account>'.dfs.fabric.windows.net/'<path>"
+        /></code>
         (Hadoop driver convention with Microsoft Fabric)
       </li>
     </ul>
@@ -73,12 +55,7 @@ Sail supports the following URI formats for Azure storage services:
     ADL protocol
     <ul>
       <li>
-        <code
-          >adl://<span class="placeholder">container</span>/<span
-            class="placeholder"
-            >path</span
-          ></code
-        >
+        <code><SyntaxText raw="'adl://'<container>'/'<path>" /></code>
       </li>
     </ul>
   </li>
@@ -87,55 +64,41 @@ Sail supports the following URI formats for Azure storage services:
     <ul>
       <li>
         <code
-          >https://<span class="placeholder">account</span
-          >.dfs.core.windows.net/<span class="placeholder">container</span
-          >/<span class="placeholder">path</span></code
-        >
+          ><SyntaxText
+            raw="'https://'<account>'.dfs.core.windows.net/'<container>'/'<path>"
+        /></code>
         (Azure Data Lake Storage Gen2)
       </li>
       <li>
         <code
-          >https://<span class="placeholder">account</span
-          >.blob.core.windows.net/<span class="placeholder">container</span
-          >/<span class="placeholder">path</span></code
-        >
+          ><SyntaxText
+            raw="'https://'<account>'.blob.core.windows.net/'<container>'/'<path>"
+        /></code>
         (Azure Blob Storage)
       </li>
       <li>
         <code
-          >https://<span class="placeholder">account</span
-          >.dfs.fabric.microsoft.com/<span class="placeholder">workspace</span
-          >/<span class="placeholder">path</span></code
-        >
+          ><SyntaxText
+            raw="'https://'<account>'.dfs.fabric.microsoft.com/'<workspace>'/'<path>"
+        /></code>
       </li>
       <li>
         <code
-          >https://<span class="placeholder">account</span
-          >.blob.fabric.microsoft.com/<span class="placeholder"
-            >workspace</span
-          >/<span class="placeholder">path</span></code
-        >
+          ><SyntaxText
+            raw="'https://'<account>'.blob.fabric.microsoft.com/'<workspace>'/'<path>"
+        /></code>
       </li>
       <li>
         <code
-          >https://<span>onelake.dfs.fabric.microsoft.com</span>/<span
-            class="placeholder"
-            >workspace</span
-          >/<span class="placeholder">item</span>.<span class="placeholder"
-            >item-type</span
-          >/<span class="placeholder">path</span></code
-        >
+          ><SyntaxText
+            raw="'https://onelake.dfs.fabric.microsoft.com/'<workspace>'/'<item>'.'<item-type>'/'<path>"
+        /></code>
       </li>
       <li>
         <code
-          >https://<span>onelake.dfs.fabric.microsoft.com</span>/<span
-            class="placeholder"
-            >workspace-guid</span
-          >/<span class="placeholder">item-guid</span>/<span
-            class="placeholder"
-            >path</span
-          ></code
-        >
+          ><SyntaxText
+            raw="'https://onelake.dfs.fabric.microsoft.com/'<workspace-guid>'/'<item-guid>'/'<path>"
+        /></code>
       </li>
     </ul>
   </li>
@@ -287,3 +250,7 @@ spark.sql("SELECT * FROM my_table").show()
 spark.sql("INSERT INTO my_table VALUES (3, 'Charlie'), (4, 'David')")
 spark.sql("SELECT * FROM my_table").show()
 ```
+
+<script setup>
+import SyntaxText from "@theme/components/SyntaxText.vue";
+</script>
