@@ -90,6 +90,7 @@ impl PlanResolver<'_> {
         match function.eval_type {
             PySparkUdfType::None
             | PySparkUdfType::GroupedMapPandas
+            | PySparkUdfType::GroupedMapArrow
             | PySparkUdfType::WindowAggPandas
             | PySparkUdfType::MapPandasIter
             | PySparkUdfType::CogroupedMapPandas
