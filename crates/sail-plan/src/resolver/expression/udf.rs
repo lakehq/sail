@@ -94,6 +94,7 @@ impl PlanResolver<'_> {
             | PySparkUdfType::WindowAggPandas
             | PySparkUdfType::MapPandasIter
             | PySparkUdfType::CogroupedMapPandas
+            | PySparkUdfType::CogroupedMapArrow
             | PySparkUdfType::MapArrowIter
             | PySparkUdfType::GroupedMapPandasWithState
             | PySparkUdfType::Table

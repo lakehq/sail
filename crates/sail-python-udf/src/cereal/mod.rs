@@ -51,6 +51,7 @@ fn supports_kwargs(eval_type: spec::PySparkUdfType) -> bool {
         | PySparkUdfType::WindowAggPandas
         | PySparkUdfType::MapPandasIter
         | PySparkUdfType::CogroupedMapPandas
+        | PySparkUdfType::CogroupedMapArrow
         | PySparkUdfType::MapArrowIter
         | PySparkUdfType::GroupedMapPandasWithState
         | PySparkUdfType::Table
@@ -77,6 +78,7 @@ fn should_write_config(eval_type: spec::PySparkUdfType) -> bool {
         | PySparkUdfType::ScalarPandasIter
         | PySparkUdfType::MapPandasIter
         | PySparkUdfType::CogroupedMapPandas
+        | PySparkUdfType::CogroupedMapArrow
         | PySparkUdfType::MapArrowIter
         | PySparkUdfType::GroupedMapPandasWithState
         | PySparkUdfType::ArrowTable => true,

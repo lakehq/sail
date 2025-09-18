@@ -318,11 +318,15 @@ impl PlanResolver<'_> {
             DataType::Struct(output_fields.clone()),
             false,
         )));
-        if !matches!(function.eval_type, spec::PySparkUdfType::CogroupedMapPandas) {
+        if !matches!(
+            function.eval_type,
+            spec::PySparkUdfType::CogroupedMapPandas | spec::PySparkUdfType::CogroupedMapArrow
+        ) {
             return Err(PlanError::invalid(
-                "only CoGroupedMapPandas UDF is supported in co-group map",
+                "only CoGroupedMapPandas/CoGroupedMapArrow UDF is supported in co-group map",
             ));
         }
+        let is_pandas = matches!(function.eval_type, spec::PySparkUdfType::CogroupedMapPandas);
         let payload = PySparkUdfPayload::build(
             &function.python_version,
             &function.command,
@@ -339,6 +343,7 @@ impl PlanResolver<'_> {
             right.mapper_input_types,
             right.mapper_input_names,
             mapper_output_type,
+            is_pandas,
             self.config.pyspark_udf_config.clone(),
         )?;
         let mapping = Expr::ScalarFunction(ScalarFunction {
