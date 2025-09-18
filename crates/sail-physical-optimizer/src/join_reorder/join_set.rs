@@ -17,6 +17,19 @@ impl JoinSet {
         Self(bits)
     }
 
+    /// Creates a JoinSet from an iterator of relation indices.
+    pub fn from_iter<I>(iter: I) -> Self
+    where
+        I: IntoIterator<Item = usize>,
+    {
+        let mut bits = 0u64;
+        for relation_idx in iter {
+            assert!(relation_idx < 64, "Relation index must be less than 64");
+            bits |= 1 << relation_idx;
+        }
+        Self(bits)
+    }
+
     /// Gets the internal bitset.
     pub fn bits(&self) -> u64 {
         self.0

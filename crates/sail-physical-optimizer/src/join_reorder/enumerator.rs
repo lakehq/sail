@@ -40,23 +40,28 @@ impl PlanEnumerator {
         }
     }
 
-    /// Helper to get indices of connecting edges for two disjoint sets using only an immutable borrow.
+    /// Helper to get indices of connecting edges for two disjoint sets using the optimized structure.
     fn get_connecting_edge_indices(&self, left: JoinSet, right: JoinSet) -> Vec<usize> {
-        self.query_graph
-            .edges
-            .iter()
-            .enumerate()
-            .filter_map(|(idx, edge)| {
-                if !edge.join_set.is_disjoint(&left)
-                    && !edge.join_set.is_disjoint(&right)
-                    && left.is_disjoint(&right)
-                {
-                    Some(idx)
-                } else {
-                    None
-                }
-            })
-            .collect()
+        if !left.is_disjoint(&right) {
+            return vec![];
+        }
+
+        let connecting_edges = self.query_graph.get_connecting_edges(left, right);
+        let mut edge_indices = Vec::new();
+
+        for edge in connecting_edges {
+            // Find the index of this edge in the original edges vector
+            if let Some(index) = self
+                .query_graph
+                .edges
+                .iter()
+                .position(|graph_edge| std::ptr::eq(edge, graph_edge))
+            {
+                edge_indices.push(index);
+            }
+        }
+
+        edge_indices
     }
 
     /// Main method that solves for the optimal join order using DPhyp-style enumeration.
@@ -112,28 +117,16 @@ impl PlanEnumerator {
     }
 
     /// Compute neighbor relations of a given connected subgraph `nodes`, excluding `forbidden`.
-    fn neighbors(&self, nodes: JoinSet, forbidden: JoinSet) -> Vec<usize> {
-        let mut mark: [bool; 64] = [false; 64];
+    /// Uses the trie structure for fast neighbor lookup.
+    fn neighbors(&mut self, nodes: JoinSet, forbidden: JoinSet) -> Vec<usize> {
+        // Get all neighbors
+        let all_neighbors = self.query_graph.get_neighbors(nodes);
 
-        for edge in &self.query_graph.edges {
-            // If edge touches current nodes
-            if !edge.join_set.is_disjoint(&nodes) {
-                // Any relation on this edge that is not in nodes and not forbidden is a neighbor
-                for rel in edge.join_set.iter() {
-                    if (nodes.bits() & (1u64 << rel)) == 0
-                        && (forbidden.bits() & (1u64 << rel)) == 0
-                    {
-                        mark[rel] = true;
-                    }
-                }
-            }
-        }
-
-        let mut result: Vec<usize> = (0..self.query_graph.relation_count())
-            .filter(|&i| mark[i])
-            .collect();
-        result.sort_unstable();
-        result
+        // Filter out forbidden relations
+        all_neighbors
+            .into_iter()
+            .filter(|&rel| (forbidden.bits() & (1u64 << rel)) == 0)
+            .collect()
     }
 
     /// Start enumeration from a single relation index.
