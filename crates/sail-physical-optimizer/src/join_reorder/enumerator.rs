@@ -22,6 +22,9 @@ pub struct PlanEnumerator {
 /// Threshold for maximum number of plans to generate before falling back to greedy algorithm
 const EMIT_THRESHOLD: usize = 10000;
 
+/// Threshold for relation count above which heuristic pruning is applied
+const RELATION_THRESHOLD: usize = 10;
+
 impl PlanEnumerator {
     /// Creates a new plan enumerator.
     pub fn new(query_graph: QueryGraph) -> Self {
@@ -104,7 +107,12 @@ impl PlanEnumerator {
         let mut best_plan: Option<Arc<DPPlan>> = None;
 
         // Generate all non-empty proper subsets of the given subset
-        let left_subsets = self.generate_proper_subsets(subset);
+        // Apply heuristic pruning for large subsets to reduce search space
+        let left_subsets = if subset.cardinality() > RELATION_THRESHOLD as u32 {
+            self.generate_pruned_subsets(subset)
+        } else {
+            self.generate_proper_subsets(subset)
+        };
 
         for left_subset in left_subsets {
             let right_subset = self.compute_complement(subset, left_subset);
@@ -208,10 +216,17 @@ impl PlanEnumerator {
     }
 
     /// Create a cartesian product plan for disconnected subgraphs.
+    /// Uses cardinality-based selection to minimize intermediate result size.
     fn create_cartesian_product_plan(&mut self, subset: JoinSet) -> Result<Option<Arc<DPPlan>>> {
-        // Generate all non-empty proper subsets again, but this time without connectivity check
-        let left_subsets = self.generate_proper_subsets(subset);
+        // Generate subsets with pruning for large sets
+        let left_subsets = if subset.cardinality() > RELATION_THRESHOLD as u32 {
+            self.generate_pruned_subsets(subset)
+        } else {
+            self.generate_proper_subsets(subset)
+        };
+
         let mut best_plan: Option<Arc<DPPlan>> = None;
+        let mut min_cardinality_product = f64::INFINITY;
 
         for left_subset in left_subsets {
             let right_subset = self.compute_complement(subset, left_subset);
@@ -234,35 +249,30 @@ impl PlanEnumerator {
             // For cartesian product, cardinality is the product of both sides
             let new_cardinality = left_plan.cardinality * right_plan.cardinality;
 
-            // Cartesian product has very high cost
-            let cartesian_penalty = 1000000.0; // Large penalty for cartesian products
-            let new_cost = self
-                .cost_model
-                .compute_cost(&left_plan, &right_plan, new_cardinality)
-                + cartesian_penalty;
+            // Prioritize combinations with smaller cardinality products (like Databend)
+            if new_cardinality < min_cardinality_product {
+                min_cardinality_product = new_cardinality;
 
-            // Create cartesian product plan (no connecting edges)
-            let new_plan = Arc::new(DPPlan::new_join(
-                left_subset,
-                right_subset,
-                vec![], // No connecting edges for cartesian product
-                new_cost,
-                new_cardinality,
-            ));
+                // Cartesian product has very high cost
+                let cartesian_penalty = 1000000.0; // Large penalty for cartesian products
+                let new_cost =
+                    self.cost_model
+                        .compute_cost(&left_plan, &right_plan, new_cardinality)
+                        + cartesian_penalty;
 
-            // Increment counter for each plan generated
-            self.emit_count += 1;
+                // Create cartesian product plan (no connecting edges)
+                let new_plan = Arc::new(DPPlan::new_join(
+                    left_subset,
+                    right_subset,
+                    vec![], // No connecting edges for cartesian product
+                    new_cost,
+                    new_cardinality,
+                ));
 
-            // Update best plan
-            match &best_plan {
-                Some(current_best) => {
-                    if new_plan.cost < current_best.cost {
-                        best_plan = Some(new_plan);
-                    }
-                }
-                None => {
-                    best_plan = Some(new_plan);
-                }
+                // Increment counter for each plan generated
+                self.emit_count += 1;
+
+                best_plan = Some(new_plan);
             }
         }
 
@@ -327,6 +337,36 @@ impl PlanEnumerator {
             // Check if this is actually a subset
             if (subset_bits & bits) == subset_bits {
                 subsets.push(JoinSet::from_bits(subset_bits));
+            }
+        }
+
+        subsets
+    }
+
+    /// Generate pruned subsets for large join sets using heuristic rules.
+    /// This reduces the search space by only considering:
+    /// 1. Single-relation subsets (left-deep joins)
+    /// 2. Small subsets up to a certain size limit
+    fn generate_pruned_subsets(&self, set: JoinSet) -> Vec<JoinSet> {
+        let mut subsets = Vec::new();
+        let bits = set.bits();
+        let max_subset_size = (RELATION_THRESHOLD / 2).max(2); // Limit subset size
+
+        // Always include single-relation subsets (left-deep joins)
+        for relation_idx in set.iter() {
+            subsets.push(JoinSet::new_singleton(relation_idx));
+        }
+
+        // Include small subsets up to max_subset_size
+        for subset_bits in 1..bits {
+            if (subset_bits & bits) == subset_bits {
+                let subset = JoinSet::from_bits(subset_bits);
+                let subset_size = subset.cardinality() as usize;
+
+                // Skip single relations (already added) and large subsets
+                if subset_size > 1 && subset_size <= max_subset_size {
+                    subsets.push(subset);
+                }
             }
         }
 
@@ -454,10 +494,34 @@ impl PlanEnumerator {
                 }
             }
 
-            // If no connected pair was found, create a cartesian product with the first two plans
+            // If no connected pair was found, create a cartesian product with minimum cardinality product
             if best_plan.is_none() && current_plans.len() >= 2 {
-                let left_set = current_plans[0];
-                let right_set = current_plans[1];
+                let mut min_cardinality_product = f64::INFINITY;
+                let mut selected_left_idx = 0;
+                let mut selected_right_idx = 1;
+
+                // Find the pair with minimum cardinality product (like Databend's approach)
+                for i in 0..current_plans.len() {
+                    for j in (i + 1)..current_plans.len() {
+                        let left_set = current_plans[i];
+                        let right_set = current_plans[j];
+
+                        if let (Some(left_plan), Some(right_plan)) =
+                            (self.dp_table.get(&left_set), self.dp_table.get(&right_set))
+                        {
+                            let cardinality_product =
+                                left_plan.cardinality * right_plan.cardinality;
+                            if cardinality_product < min_cardinality_product {
+                                min_cardinality_product = cardinality_product;
+                                selected_left_idx = i;
+                                selected_right_idx = j;
+                            }
+                        }
+                    }
+                }
+
+                let left_set = current_plans[selected_left_idx];
+                let right_set = current_plans[selected_right_idx];
 
                 let left_plan = self.dp_table.get(&left_set).cloned().ok_or_else(|| {
                     DataFusionError::Internal(
@@ -484,8 +548,8 @@ impl PlanEnumerator {
                     new_cost,
                     new_cardinality,
                 )));
-                best_left_idx = 0;
-                best_right_idx = 1;
+                best_left_idx = selected_left_idx;
+                best_right_idx = selected_right_idx;
             }
 
             // If we still don't have a plan, something is wrong
