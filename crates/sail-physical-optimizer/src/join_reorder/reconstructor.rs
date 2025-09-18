@@ -583,7 +583,7 @@ impl<'a> PlanReconstructor<'a> {
                     let field = relation_schema.field(*column_index);
                     fields.push(field.clone());
                 }
-                ColumnMapEntry::Expression(_) => {
+                ColumnMapEntry::Expression { .. } => {
                     // For expression entries, use a generic type
                     // TODO: In a complete implementation, we should evaluate the expression type
                     fields.push(Field::new(&format!("expr_{}", idx), DataType::Utf8, true));

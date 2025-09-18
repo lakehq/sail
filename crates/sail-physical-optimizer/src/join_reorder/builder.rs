@@ -1,18 +1,16 @@
-use log::info;
 use std::collections::HashMap;
 use std::sync::Arc;
 
 use datafusion::common::tree_node::{Transformed, TreeNode};
 use datafusion::error::{DataFusionError, Result};
-use datafusion::logical_expr::JoinType;
-use datafusion::logical_expr::Operator;
-use datafusion::physical_expr::expressions::BinaryExpr;
-use datafusion::physical_expr::expressions::Column;
+use datafusion::logical_expr::{JoinType, Operator};
+use datafusion::physical_expr::expressions::{BinaryExpr, Column};
 use datafusion::physical_expr::PhysicalExpr;
 use datafusion::physical_plan::aggregates::AggregateExec;
 use datafusion::physical_plan::joins::HashJoinExec;
 use datafusion::physical_plan::projection::ProjectionExec;
 use datafusion::physical_plan::ExecutionPlan;
+use log::info;
 
 use crate::join_reorder::graph::{JoinEdge, QueryGraph, RelationNode, StableColumn};
 use crate::join_reorder::join_set::JoinSet;
@@ -30,8 +28,12 @@ pub enum ColumnMapEntry {
         column_index: usize,
     },
     /// The column is a derived expression (e.g., a + b, or a literal).
-    /// We need to store the expression itself to reconstruct it later.
-    Expression(Arc<dyn PhysicalExpr>),
+    /// We need to store the expression itself and its input context to reconstruct it later.
+    Expression {
+        expr: Arc<dyn PhysicalExpr>,
+        /// This map describes the input schema for the expression `expr`.
+        input_map: ColumnMap,
+    },
 }
 
 impl ColumnMapEntry {
@@ -274,7 +276,11 @@ impl GraphBuilder {
             } else {
                 // This is a complex expression, like `SELECT a + 1 FROM ...`
                 // We cannot map it back to a single stable column, so save the entire expression
-                output_map.push(ColumnMapEntry::Expression(expr.clone()));
+                // and its input context (input_map).
+                output_map.push(ColumnMapEntry::Expression {
+                    expr: expr.clone(),
+                    input_map: input_map.clone(),
+                });
             }
         }
 
@@ -333,7 +339,7 @@ impl GraphBuilder {
                     ColumnMapEntry::Stable { relation_id, .. } => {
                         relation_ids.push(*relation_id);
                     }
-                    ColumnMapEntry::Expression(_) => {
+                    ColumnMapEntry::Expression { .. } => {
                         // This column comes from a complex expression (e.g., aggregate output)
                         // We cannot resolve it to a *specific base relation* for join condition purposes.
                         // If a join condition relies on a column that is an aggregate output,
@@ -377,7 +383,7 @@ impl GraphBuilder {
                             name: col.name().to_string(),
                         }));
                     }
-                    ColumnMapEntry::Expression(_) => {
+                    ColumnMapEntry::Expression { .. } => {
                         // This column comes from a complex expression
                         return Ok(None);
                     }

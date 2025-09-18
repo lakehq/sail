@@ -34,7 +34,7 @@ pub fn get_physical_optimizers() -> Vec<Arc<dyn PhysicalOptimizerRule + Send + S
         Arc::new(EnforceDistribution::new()),
         Arc::new(CombinePartialFinalAggregate::new()),
         Arc::new(EnforceSorting::new()),
-        Arc::new(OptimizeAggregateOrder::new()), // re-enable CoalesceBatches and ProjectionPushdown
+        Arc::new(OptimizeAggregateOrder::new()),
         Arc::new(ProjectionPushdown::new()),
         Arc::new(CoalesceBatches::new()),
         Arc::new(CoalesceAsyncExecInput::new()),

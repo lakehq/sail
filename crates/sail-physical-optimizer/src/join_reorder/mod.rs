@@ -1,6 +1,7 @@
 use std::fmt::{Debug, Formatter};
 use std::sync::Arc;
 
+use datafusion::common::tree_node::TreeNode;
 use datafusion::config::ConfigOptions;
 use datafusion::error::{DataFusionError, Result};
 use datafusion::physical_expr::expressions::Column;
@@ -186,7 +187,7 @@ impl JoinReorder {
                                     ColumnMapEntry::Stable { relation_id: r, column_index: c } => {
                                         debug!("  final_map[{}] = R{}.C{}", i, r, c);
                                     }
-                                    ColumnMapEntry::Expression(_) => {
+                                    ColumnMapEntry::Expression { .. } => {
                                         debug!("  final_map[{}] = Expression", i);
                                     }
                                 }
@@ -210,14 +211,68 @@ impl JoinReorder {
                         output_name,
                     ));
                 }
-                ColumnMapEntry::Expression(_expr) => {
-                    // TODO: This is a complex case. We need an expression rewriter
-                    // to replace old column references with new plan column references.
-                    // For now, return error or only support Stable columns.
-                    return Err(DataFusionError::NotImplemented(
-                        "Reconstructing projections with complex expressions is not yet supported"
-                            .to_string(),
-                    ));
+                ColumnMapEntry::Expression { expr, input_map } => {
+                    // This is the complex case. We use an expression rewriter (TreeNode::transform)
+                    // to replace old column references with new physical plan column references.
+
+                    // The rewriter closure captures the necessary context:
+                    // - `input_map`: Describes the input to the original expression.
+                    // - `final_map`: Describes the output of our new reordered join plan.
+                    // - `input_plan`: The new reordered join plan itself (for schema info).
+                    let transformed = expr.clone().transform(|node| {
+                        // Check if the current node in the expression tree is a Column.
+                        if let Some(col) = node.as_any().downcast_ref::<Column>() {
+                            // `col.index()` refers to a column in the original projection's input.
+                            // We use `input_map` to find its stable identity.
+                            let original_entry = input_map.get(col.index()).ok_or_else(|| {
+                                DataFusionError::Internal(format!(
+                                    "Expression column index {} out of bounds for its input_map (len {})",
+                                    col.index(),
+                                    input_map.len()
+                                ))
+                            })?;
+
+                            if let ColumnMapEntry::Stable { relation_id, column_index } = original_entry {
+                                let stable_target = StableColumn {
+                                    relation_id: *relation_id,
+                                    column_index: *column_index,
+                                    name: col.name().to_string(),
+                                };
+
+                                // Now, find the new physical index of this stable column in the
+                                // output of the reordered join plan (`final_map`).
+                                let new_physical_idx = find_physical_index(&stable_target, final_map)
+                                    .ok_or_else(|| DataFusionError::Internal(format!(
+                                        "Failed to find rewritten physical index for stable column R{}.C{}",
+                                        relation_id, column_index
+                                    )))?;
+
+                                // Get the column name from the new plan's schema.
+                                let new_name = input_plan.schema().field(new_physical_idx).name().to_string();
+
+                                // Create a new Column expression pointing to the correct new location.
+                                let new_col = Column::new(&new_name, new_physical_idx);
+                                // Return the transformed node.
+                                return Ok(datafusion::common::tree_node::Transformed::yes(Arc::new(new_col)));
+                            } else {
+                                // This indicates a nested complex expression, which is a very
+                                // complex scenario. For now, we don't support it.
+                                return Err(DataFusionError::NotImplemented(
+                                    "Rewriting nested complex expressions is not supported".to_string(),
+                                ));
+                            }
+                        }
+                        // If not a column, continue traversing the expression tree without changes.
+                        Ok(datafusion::common::tree_node::Transformed::no(node))
+                    })?;
+
+                    let rewritten_expr = transformed.data;
+                    let output_name = target_names
+                        .get(output_idx)
+                        .cloned()
+                        .unwrap_or_else(|| format!("expr_{}", output_idx));
+
+                    projection_exprs.push((rewritten_expr, output_name));
                 }
             }
         }
@@ -248,16 +303,19 @@ impl Debug for JoinReorder {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
+    use std::sync::Arc;
+
     use datafusion::arrow::datatypes::{DataType, Field, Schema};
     use datafusion::common::NullEquality;
-    use datafusion::logical_expr::JoinType;
-    use datafusion::physical_expr::expressions::Column;
+    use datafusion::logical_expr::{JoinType, Operator};
+    use datafusion::physical_expr::expressions::{BinaryExpr, Column};
+    use datafusion::physical_expr::PhysicalExpr;
     use datafusion::physical_plan::aggregates::{AggregateExec, AggregateMode, PhysicalGroupBy};
     use datafusion::physical_plan::empty::EmptyExec;
     use datafusion::physical_plan::joins::{HashJoinExec, PartitionMode};
     use datafusion::physical_plan::projection::ProjectionExec;
-    use std::sync::Arc;
+
+    use super::*;
 
     /// Test that the recursive optimizer correctly processes plans with boundary nodes
     /// This test verifies that the optimizer doesn't crash and preserves plan structure
@@ -491,6 +549,101 @@ mod tests {
         assert_eq!(optimized_plan.name(), "AggregateExec");
         assert!(optimized_plan.children().len() > 0);
 
+        Ok(())
+    }
+
+    /// Test that the join reorder optimizer correctly handles complex expressions in projections
+    /// This test verifies that expressions referencing columns from different tables are properly
+    /// rewritten when the join order changes.
+    #[test]
+    fn test_reorder_with_complex_projection() -> Result<()> {
+        // 1. Setup: Create three tables with different schemas
+        let schema_a = Arc::new(Schema::new(vec![
+            Field::new("a_id", DataType::Int32, false),
+            Field::new("a_value", DataType::Int32, false),
+        ]));
+        let schema_b = Arc::new(Schema::new(vec![
+            Field::new("b_id", DataType::Int32, false),
+            Field::new("b_value", DataType::Int32, false),
+        ]));
+        let schema_c = Arc::new(Schema::new(vec![
+            Field::new("c_id", DataType::Int32, false),
+            Field::new("c_name", DataType::Utf8, false),
+        ]));
+
+        let table_a = Arc::new(EmptyExec::new(schema_a.clone()));
+        let table_b = Arc::new(EmptyExec::new(schema_b.clone()));
+        let table_c = Arc::new(EmptyExec::new(schema_c.clone()));
+
+        // 2. Build initial join plan: (A JOIN B) JOIN C
+        let join_ab_on = vec![(
+            Arc::new(Column::new("a_id", 0)) as Arc<dyn PhysicalExpr>,
+            Arc::new(Column::new("b_id", 0)) as Arc<dyn PhysicalExpr>,
+        )];
+
+        let join_ab = Arc::new(HashJoinExec::try_new(
+            table_a,
+            table_b,
+            join_ab_on,
+            None,
+            &JoinType::Inner,
+            None,
+            PartitionMode::Auto,
+            NullEquality::NullEqualsNothing,
+        )?);
+
+        let join_abc_on = vec![(
+            Arc::new(Column::new("a_id", 0)) as Arc<dyn PhysicalExpr>,
+            Arc::new(Column::new("c_id", 0)) as Arc<dyn PhysicalExpr>,
+        )];
+
+        let join_abc = Arc::new(HashJoinExec::try_new(
+            join_ab,
+            table_c,
+            join_abc_on,
+            None,
+            &JoinType::Inner,
+            None,
+            PartitionMode::Auto,
+            NullEquality::NullEqualsNothing,
+        )?);
+
+        // 3. Create a ProjectionExec on top with a complex expression
+        // The expression should reference columns from different original tables
+        // E.g., SELECT a.a_value + b.b_value, c.c_name FROM ...
+        // In the join output schema: [a_id, a_value, b_id, b_value, c_id, c_name]
+        // So a_value is at index 1, b_value is at index 3, c_name is at index 5
+        let expr_a_value = Arc::new(Column::new("a_value", 1)) as Arc<dyn PhysicalExpr>;
+        let expr_b_value = Arc::new(Column::new("b_value", 3)) as Arc<dyn PhysicalExpr>;
+        let complex_expr = Arc::new(BinaryExpr::new(expr_a_value, Operator::Plus, expr_b_value))
+            as Arc<dyn PhysicalExpr>;
+
+        let proj_exprs = vec![
+            (complex_expr, "sum_val".to_string()),
+            (
+                Arc::new(Column::new("c_name", 5)) as Arc<dyn PhysicalExpr>,
+                "c_name".to_string(),
+            ),
+        ];
+        let original_plan = Arc::new(ProjectionExec::try_new(proj_exprs, join_abc)?);
+
+        // 4. Run the optimizer
+        let optimizer = JoinReorder::new();
+        let optimized_plan = optimizer.find_and_optimize_regions(original_plan.clone())?;
+
+        // 5. Assertions
+        // The plan should have been processed without errors
+        assert_eq!(optimized_plan.name(), "ProjectionExec");
+
+        // The schema of the final ProjectionExec must match the original plan's schema exactly
+        assert_eq!(original_plan.schema(), optimized_plan.schema());
+
+        // Verify that we have the expected number of columns in the output
+        assert_eq!(optimized_plan.schema().fields().len(), 2);
+        assert_eq!(optimized_plan.schema().field(0).name(), "sum_val");
+        assert_eq!(optimized_plan.schema().field(1).name(), "c_name");
+
+        // The test passes if we reach here without panicking or returning an error
         Ok(())
     }
 }
