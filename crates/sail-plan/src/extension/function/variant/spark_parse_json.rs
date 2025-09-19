@@ -59,7 +59,7 @@ fn parse_json_kernel(args: &[ArrayRef]) -> Result<ArrayRef> {
     };
 
     let input = as_string_array(arr)?;
-    let len = input.len();
+    let len: usize = input.len();
     let mut builder = StringBuilder::with_capacity(len, 0);
 
     for i in 0..len {
