@@ -136,6 +136,7 @@ use sail_plan::extension::function::url::parse_url::ParseUrl;
 use sail_plan::extension::function::url::spark_try_parse_url::SparkTryParseUrl;
 use sail_plan::extension::function::url::url_decode::UrlDecode;
 use sail_plan::extension::function::url::url_encode::UrlEncode;
+use sail_plan::extension::function::variant::spark_parse_json::SparkParseJson;
 use sail_plan::extension::logical::{Range, ShowStringFormat, ShowStringStyle};
 use sail_plan::extension::physical::{
     MapPartitionsExec, RangeExec, SchemaPivotExec, ShowStringExec,
@@ -1266,6 +1267,9 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
             "spark_pmod" | "pmod" => Ok(Arc::new(ScalarUDF::from(SparkPmod::new()))),
             "spark_ceil" | "ceil" => Ok(Arc::new(ScalarUDF::from(SparkCeil::new()))),
             "spark_floor" | "floor" => Ok(Arc::new(ScalarUDF::from(SparkFloor::new()))),
+            "spark_parse_json" | "parse_json" => {
+                Ok(Arc::new(ScalarUDF::from(SparkParseJson::new())))
+            }
             "spark_to_utf8" => Ok(Arc::new(ScalarUDF::from(SparkToUtf8::new()))),
             "spark_to_large_utf8" => Ok(Arc::new(ScalarUDF::from(SparkToLargeUtf8::new()))),
             "spark_to_utf8_view" => Ok(Arc::new(ScalarUDF::from(SparkToUtf8View::new()))),
@@ -1344,6 +1348,7 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
             || node_inner.is::<SparkMask>()
             || node_inner.is::<SparkMurmur3Hash>()
             || node_inner.is::<SparkNextDay>()
+            || node_inner.is::<SparkParseJson>()
             || node_inner.is::<SparkPmod>()
             || node_inner.is::<SparkReverse>()
             || node_inner.is::<SparkSequence>()

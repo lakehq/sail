@@ -1,3 +1,4 @@
+use crate::extension::function::variant::spark_parse_json::SparkParseJson;
 use crate::function::common::ScalarFunction;
 
 pub(super) fn list_built_in_variant_functions() -> Vec<(&'static str, ScalarFunction)> {
@@ -5,7 +6,7 @@ pub(super) fn list_built_in_variant_functions() -> Vec<(&'static str, ScalarFunc
 
     vec![
         ("is_variant_null", F::unknown("is_variant_null")),
-        ("parse_json", F::unknown("parse_json")),
+        ("parse_json", F::udf(SparkParseJson::new())),
         ("schema_of_variant", F::unknown("schema_of_variant")),
         ("schema_of_variant_agg", F::unknown("schema_of_variant_agg")),
         ("to_variant_object", F::unknown("to_variant_object")),

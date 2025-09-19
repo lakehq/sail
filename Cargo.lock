@@ -5791,6 +5791,7 @@ dependencies = [
  "sail-python-udf",
  "sail-sql-analyzer",
  "serde",
+ "serde_json",
  "sha1",
  "thiserror 2.0.16",
  "tokio",
