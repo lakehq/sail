@@ -1102,6 +1102,7 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
                 right_types,
                 right_names,
                 output_type,
+                is_pandas,
                 config,
             }) => {
                 let left_types = left_types
@@ -1126,6 +1127,7 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
                     right_types,
                     right_names,
                     output_type,
+                    is_pandas,
                     Arc::new(config),
                 )?;
                 return Ok(Arc::new(ScalarUDF::from(udf)));
@@ -1419,6 +1421,7 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
                 right_types,
                 right_names: func.right_names().to_vec(),
                 output_type,
+                is_pandas: func.is_pandas(),
                 config: Some(config),
             })
         } else if let Some(func) = node.inner().as_any().downcast_ref::<DropStructField>() {

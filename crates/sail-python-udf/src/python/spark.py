@@ -556,11 +556,13 @@ class PySparkCoGroupMapUdf:
         udf: Callable[..., Any],
         left_names: Sequence[str],
         right_names: Sequence[str],
+        is_pandas: bool,  # noqa: FBT001
         config,
     ):
         self._udf = udf
         self._left_names = left_names
         self._right_names = right_names
+        self.is_pandas = is_pandas
         self._serializer = ArrowStreamPandasUDFSerializer(
             timezone=config.session_timezone,
             safecheck=config.arrow_convert_safely,
@@ -572,12 +574,20 @@ class PySparkCoGroupMapUdf:
         )
 
     def __call__(self, left: list[pa.Array], right: list[pa.Array]) -> pa.Array:
-        args = [
-            _named_arrays_to_pandas(left, self._left_names, self._serializer),
-            _named_arrays_to_pandas(right, self._right_names, self._serializer),
+        if self.is_pandas:
+            inputs = [
+                _named_arrays_to_pandas(left, self._left_names, self._serializer),
+                _named_arrays_to_pandas(right, self._right_names, self._serializer),
+            ]
+            [[(output, output_type)]] = list(self._udf(None, (inputs,)))
+            return _pandas_to_arrow_array(output, output_type, self._serializer)
+
+        inputs = [
+            [pa.RecordBatch.from_arrays(left, self._left_names)],
+            [pa.RecordBatch.from_arrays(right, self._right_names)],
         ]
-        [[(output, output_type)]] = list(self._udf(None, (args,)))
-        return _pandas_to_arrow_array(output, output_type, self._serializer)
+        [(output, output_type)] = list(self._udf(None, (inputs,)))
+        return _arrow_array_to_output_type(output, output_type)
 
 
 class PySparkMapPandasIterUdf:

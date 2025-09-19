@@ -93,7 +93,8 @@ message PySparkCoGroupMapUdf {
   repeated bytes right_types = 6;
   repeated string right_names = 7;
   bytes output_type = 8;
-  PySparkUdfConfig config = 9;
+  bool is_pandas = 9;
+  PySparkUdfConfig config = 10;
 }
 
 message DropStructFieldUdf {
