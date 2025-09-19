@@ -7,7 +7,7 @@ prev:
 
 # Introduction
 
-**Sail** :sailboat: is an open-source compute engine designed for both single-host and distributed settings. Our mission is to **unify batch processing, stream processing, and compute-intensive (AI) workloads**.
+**Sail** :sailboat: is an open-source multimodal compute engine designed for both single-host and distributed settings. Our mission is to **unify batch processing, stream processing, and compute-intensive (AI) workloads**.
 
 If you are already using [Apache Spark](https://spark.apache.org/), you can switch to Sail without making changes to your Spark code, and enjoy the benefits delivered by a modern system programming language (Rust) and design principles tailored to the modern compute world.
 
