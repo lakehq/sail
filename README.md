@@ -3,7 +3,6 @@
 [![Build Status](https://github.com/lakehq/sail/actions/workflows/build.yml/badge.svg?branch=main&event=push)](https://github.com/lakehq/sail/actions)
 [![Codecov](https://codecov.io/gh/lakehq/sail/graph/badge.svg)](https://app.codecov.io/gh/lakehq/sail)
 [![PyPI Release](https://img.shields.io/pypi/v/pysail)](https://pypi.org/project/pysail/)
-[![PyPI Downloads](https://img.shields.io/pepy/dt/pysail.svg?label=PyPI%20Downloads)](https://pypi.org/project/pysail/)
 [![Static Slack Badge](https://img.shields.io/badge/slack-LakeSail_Community-3762E0?logo=slack)](https://www.launchpass.com/lakesail-community/free)
 
 The mission of Sail is to unify stream processing, batch processing, and compute-intensive AI workloads.
