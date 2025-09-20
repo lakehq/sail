@@ -613,15 +613,19 @@ Sail supports all Spark SQL data types except the `VARIANT` type introduced in S
 **Interval types**
 
 - `YearMonthIntervalType(startField, endField)`: Represents a year-month interval made of a contiguous subset of:
+
   - `MONTH`, months within years `[0..11]`,
   - `YEAR`, years in the range `[0..178956970]`.
+
     Individual fields are non-negative, but an interval can be positive or negative.
+
     `startField` is the leftmost field and `endField` is the rightmost field. Valid values for `startField` and `endField` are 0 (`MONTH`) and 1 (`YEAR`). Supported year-month interval types are:
     | Year-Month Interval Type | SQL type | An instance of the type |
     | ----------------------------------------------------------------------- | ---------------------- | ---------------------------------- |
     | `YearMonthIntervalType(YEAR, YEAR)` or `YearMonthIntervalType(YEAR)` | INTERVAL YEAR | `INTERVAL '2025' YEAR` |
     | `YearMonthIntervalType(YEAR, MONTH)` | INTERVAL YEAR TO MONTH | `INTERVAL '2025-09' YEAR TO MONTH` |
     | `YearMonthIntervalType(MONTH, MONTH)` or `YearMonthIntervalType(MONTH)` | INTERVAL MONTH | `INTERVAL '09' MONTH` |
+
 - `DayTimeIntervalType(startField, endField)`: Represents a day-time interval made of a contiguous subset of:
   - `SECOND`, seconds within minutes and possibly fractional seconds `[0..59.999999]`,
   - `MINUTE`, minutes within hours `[0..59]`,
