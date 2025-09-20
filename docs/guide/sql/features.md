@@ -587,20 +587,31 @@ Sail supports all Spark SQL data types except the `VARIANT` type introduced in S
 - `FloatType`: Represents 4-byte single-precision floating-point numbers.
 - `DoubleType`: Represents 8-byte double-precision floating-point numbers.
 - `DecimalType`: Represents arbitrary-precision signed decimal numbers. Backed internally by `java.math.BigDecimal`. A `BigDecimal` has an arbitrary-precision integer unscaled value and a 32-bit integer scale.
-  **String type**
+
+**String type**
+
 - `StringType`: Represents character string values.
 - `VarcharType(length)`: A variant of `StringType` with a length limit. Writes fail if the input exceeds the limit. Note: this type is only valid in table schemas, not in functions or operators.
 - `CharType(length)`: A fixed-length variant of `VarcharType(length)`. Reading a column of type `CharType(n)` always returns strings of length `n`. Comparisons on `CharType` columns pad the shorter value to the longer length.
-  **Binary type**
+
+**Binary type**
+
 - `BinaryType`: Represents byte sequence values.
-  **Boolean type**
+
+**Boolean type**
+
 - `BooleanType`: Represents boolean values.
-  **Datetime type**
+
+**Datetime type**
+
 - `DateType`: Represents calendar dates with year, month, and day fields, without a time zone.
 - `TimestampType`: Timestamp with local time zone (`TIMESTAMP_LTZ`). Represents year, month, day, hour, minute, and second, interpreted with the session’s local time zone. The value denotes an absolute point in time.
 - `TimestampNTZType`: Timestamp without time zone (`TIMESTAMP_NTZ`). Represents year, month, day, hour, minute, and second. Operations do not consider time zones.
+
   - Note: `TIMESTAMP` in Spark is a user-configurable alias for either `TIMESTAMP_LTZ` (default) or `TIMESTAMP_NTZ`, controlled by `spark.sql.timestampType`.
-    **Interval types**
+
+**Interval types**
+
 - `YearMonthIntervalType(startField, endField)`: Represents a year-month interval made of a contiguous subset of:
   - `MONTH`, months within years `[0..11]`,
   - `YEAR`, years in the range `[0..178956970]`.
@@ -630,12 +641,15 @@ Sail supports all Spark SQL data types except the `VARIANT` type introduced in S
     | `DayTimeIntervalType(MINUTE, MINUTE)` or `DayTimeIntervalType(MINUTE)` | INTERVAL MINUTE | `INTERVAL '1000' MINUTE` |
     | `DayTimeIntervalType(MINUTE, SECOND)` | INTERVAL MINUTE TO SECOND | `INTERVAL '1000:01.001' MINUTE TO SECOND` |
     | `DayTimeIntervalType(SECOND, SECOND)` or `DayTimeIntervalType(SECOND)` | INTERVAL SECOND | `INTERVAL '1000.000001' SECOND` |
-    **Complex types**
+
+**Complex types**
+
 - `ArrayType(elementType, containsNull)`: Represents sequences of elements of type `elementType`. `containsNull` indicates whether elements may be `null`.
 - `MapType(keyType, valueType, valueContainsNull)`: Represents key-value mappings. Keys have type `keyType` and cannot be `null`. Values have type `valueType`. `valueContainsNull` indicates whether values may be `null`.
 - `StructType(fields)`: Represents values with a structure described by a sequence of `StructField`s (`fields`).
   - `StructField(name, dataType, nullable)`: A field in a `StructType`. `name` gives the field name. `dataType` gives the field’s type. `nullable` indicates whether field values may be `null`.
-    All data types of Spark SQL are located in the package of `pyspark.sql.types`. You can access them by doing
+
+All data types of Spark SQL are located in the package of `pyspark.sql.types`. You can access them by doing:
 
 ```sql
 from pyspark.sql.types import *
@@ -644,15 +658,11 @@ from pyspark.sql.types import *
 **Python**
 | Data type | Value type in Python | API to access or create a data type |
 | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------- |
-| **ByteType** | int |
-| **Note:** Numbers will be converted to 1-byte signed integer numbers at runtime. Please ensure that numbers are within the range of -128 to 127. | ByteType() |
-| **ShortType** | int |
-| **Note:** Numbers will be converted to 2-byte signed integer numbers at runtime. Please ensure that numbers are within the range of -32768 to 32767. | ShortType() |
+| **ByteType** | int<br>**Note:** Numbers will be converted to 1-byte signed integer numbers at runtime. Please make sure that numbers are within the range of -128 to 127. | ByteType() |
+| **ShortType** | int<br>**Note:** Numbers will be converted to 2-byte signed integer numbers at runtime. Please make sure that numbers are within the range of -32768 to 32767. | ShortType() |
 | **IntegerType** | int | IntegerType() |
-| **LongType** | int |
-| **Note:** Numbers will be converted to 8-byte signed integer numbers at runtime. Please ensure that numbers are within the range of -9223372036854775808 to 9223372036854775807. Otherwise, please convert data to decimal.Decimal and use DecimalType. | LongType() |
-| **FloatType** | float |
-| **Note:** Numbers will be converted to 4-byte single-precision floating point numbers at runtime. | FloatType() |
+| **LongType** | int<br>**Note:** Numbers will be converted to 8-byte signed integer numbers at runtime. Please make sure that numbers are within the range of -9223372036854775808 to 9223372036854775807. Otherwise, please convert data to `decimal.Decimal` and use `DecimalType`. | LongType() |
+| **FloatType** | float<br>**Note:** Numbers will be converted to 4-byte single-precision floating-point numbers at runtime. | FloatType() |
 | **DoubleType** | float | DoubleType() |
 | **DecimalType** | decimal.Decimal | DecimalType() |
 | **StringType** | str | StringType() |
@@ -664,10 +674,10 @@ from pyspark.sql.types import *
 | **TimestampNTZType** | datetime.datetime | TimestampNTZType() |
 | **DateType** | datetime.date | DateType() |
 | **DayTimeIntervalType** | datetime.timedelta | DayTimeIntervalType() |
-| **ArrayType** | list, tuple, or array | ArrayType(_elementType_, [*containsNull*])**Note:**The default value of _containsNull_ is True. |
-| **MapType** | dict | MapType(_keyType_, _valueType_, [*valueContainsNull]*)**Note:**The default value of *valueContainsNull\* is True. |
-| **StructType** | list or tuple | StructType(_fields_)**Note:** _fields_ is a Seq of StructFields. Also, two fields with the same name are not allowed. |
-| **StructField** | The value type in Python of the data type of this field(For example, Int for a StructField with the data type IntegerType) | StructField(_name_, _dataType_, [*nullable*])**Note:** The default value of _nullable_ is True. |
+| **ArrayType** | list, tuple, or array | ArrayType(elementType, [*containsNull*])<br>**Note:** The default value of _containsNull_ is True. |
+| **MapType** | dict | MapType(keyType, valueType, [*valueContainsNull*])<br>**Note:** The default value of _valueContainsNull_ is True. |
+| **StructType**| list or tuple | StructType(_fields_)<br>**Note:** _fields_ is a Seq of StructFields. Also, two fields with the same name are not allowed. |
+| **StructField** | The value type in Python of the data type of this field (for example, int for a StructField with the data type IntegerType) | StructField(_name_, _dataType_, [*nullable*])<br>**Note:** The default value of _nullable_ is True. |
 
 **SQL**
 | Data type | SQL name |
@@ -690,8 +700,35 @@ from pyspark.sql.types import *
 | **YearMonthIntervalType** | INTERVAL YEAR, INTERVAL YEAR TO MONTH, INTERVAL MONTH |
 | **DayTimeIntervalType** | INTERVAL DAY, INTERVAL DAY TO HOUR, INTERVAL DAY TO MINUTE, INTERVAL DAY TO SECOND, INTERVAL HOUR, INTERVAL HOUR TO MINUTE, INTERVAL HOUR TO SECOND, INTERVAL MINUTE, INTERVAL MINUTE TO SECOND, INTERVAL SECOND |
 | **ArrayType** | ARRAY<element_type> |
-| **StructType** | STRUCT<field1_name: field1_type, field2_name: field2_type, …>**Note:** ‘:’ is optional. |
+| **StructType** | STRUCT<field1_name: field1_type, field2_name: field2_type, …><br>**Note:** ‘:’ is optional. |
 | **MapType** | MAP<key_type, value_type> |
+
+### Sail SQL Parser Extensions and Aliases
+
+Sail’s SQL parser accepts several additional type names and unsigned variants that do not exist in Spark’s parser. These parse successfully in Sail and are mapped to Arrow-backed internal types. When interoperating with Spark (e.g., writing to a Spark-managed catalog), Sail will serialize to the nearest compatible Spark type where possible.
+
+| Data type (parsed name)     | Canonical Sail type                                  | Spark equivalent when serialized              | Notes                                                                                  |
+| --------------------------- | ---------------------------------------------------- | --------------------------------------------- | -------------------------------------------------------------------------------------- |
+| **BOOL**                    | **BooleanType**                                      | **BOOLEAN**                                   | Alias; Spark parser does not accept **BOOL** as a keyword.                             |
+| **INT8**                    | **ByteType**                                         | **TINYINT**                                   | Alias.                                                                                 |
+| **INT16**                   | **ShortType**                                        | **SMALLINT**                                  | Alias.                                                                                 |
+| **INT32**                   | **IntegerType**                                      | **INT**                                       | Alias.                                                                                 |
+| **INT64**                   | **LongType**                                         | **BIGINT**                                    | Alias.                                                                                 |
+| **UINT8**                   | Arrow **UInt8**                                      | _none_ → may widen to **SMALLINT**            | Unsigned integer; no native Spark type. May down-map or be rejected depending on sink. |
+| **UINT16**                  | Arrow **UInt16**                                     | _none_ → may widen to **INT**                 | Unsigned integer; same caveat.                                                         |
+| **UINT32**                  | Arrow **UInt32**                                     | _none_ → may widen to **BIGINT**              | Unsigned integer; same caveat.                                                         |
+| **UINT64**                  | Arrow **UInt64**                                     | _none_                                        | Unsigned integer; usually requires explicit cast.                                      |
+| **FLOAT32**                 | **FloatType**                                        | **FLOAT**                                     | Alias.                                                                                 |
+| **FLOAT64**                 | **DoubleType**                                       | **DOUBLE**                                    | Alias.                                                                                 |
+| **BYTEA**                   | **BinaryType**                                       | **BINARY**                                    | PostgreSQL-style alias.                                                                |
+| **TEXT**                    | Large UTF-8 string                                   | **STRING**                                    | No length cap; surfaced as **STRING** to Spark.                                        |
+| **DATE64**                  | Arrow **Date64**                                     | **DATE**                                      | Millisecond resolution internally.                                                     |
+| **TIMESTAMP(p)**            | **TimestampType** (precision p)                      | **TIMESTAMP**                                 | Precision preserved by Sail; Spark ignores precision in syntax.                        |
+| **TIMESTAMP_NTZ(p)**        | **TimestampNTZType** (precision p)                   | **TIMESTAMP_NTZ**                             | Precision accepted.                                                                    |
+| **TIMESTAMP_LTZ(p)**        | **TimestampType** with local time zone (precision p) | **TIMESTAMP**, **TIMESTAMP_LTZ**              | Precision accepted.                                                                    |
+| **INTERVAL MONTH_DAY_NANO** | Arrow **Month-Day-Nano**                             | nearest Spark Year-Month or Day-Time interval | Serialized to the closest supported Spark interval or requires explicit cast.          |
+
+**Tip:** If a table must be readable by Spark without changes, prefer the standard Spark types above or cast Sail-only inputs to their Spark equivalents.
 
 ### Floating Point Special Values
 
