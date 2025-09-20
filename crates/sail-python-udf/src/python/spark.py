@@ -10,6 +10,7 @@ if TYPE_CHECKING:
 
 import pandas as pd
 import pyarrow as pa
+import pyspark
 from pyspark.sql.pandas.serializers import ArrowStreamPandasUDFSerializer, ArrowStreamPandasUDTFSerializer
 from pyspark.sql.pandas.types import from_arrow_type
 from pyspark.sql.types import Row
@@ -441,8 +442,11 @@ class PySparkArrowBatchUdf:
             arrow_cast=True,
         )
 
-    def __call__(self, args: list[pa.Array], _num_rows: int) -> pa.Array:
-        inputs = tuple(self._serializer.arrow_to_pandas(a) for a in args)
+    def __call__(self, args: list[pa.Array], num_rows: int) -> pa.Array:
+        if len(args) == 0:
+            inputs = tuple(pd.Series([pyspark._NoValue]).repeat(num_rows) for _ in range(1))  # noqa: SLF001
+        else:
+            inputs = tuple(self._serializer.arrow_to_pandas(a) for a in args)
         [(output, output_type)] = list(self._udf(None, (inputs,)))
         return _pandas_to_arrow_array(output, output_type, self._serializer)
 
