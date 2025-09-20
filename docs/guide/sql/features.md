@@ -587,20 +587,25 @@ Sail supports all Spark SQL data types except the `VARIANT` type introduced in S
 - `FloatType`: Represents 4-byte single-precision floating-point numbers.
 - `DoubleType`: Represents 8-byte double-precision floating-point numbers.
 - `DecimalType`: Represents arbitrary-precision signed decimal numbers. Backed internally by `java.math.BigDecimal`. A `BigDecimal` has an arbitrary-precision integer unscaled value and a 32-bit integer scale.
-  **String type**
+
+**String type**
 - `StringType`: Represents character string values.
 - `VarcharType(length)`: A variant of `StringType` with a length limit. Writes fail if the input exceeds the limit. Note: this type is only valid in table schemas, not in functions or operators.
 - `CharType(length)`: A fixed-length variant of `VarcharType(length)`. Reading a column of type `CharType(n)` always returns strings of length `n`. Comparisons on `CharType` columns pad the shorter value to the longer length.
-  **Binary type**
+
+**Binary type**
 - `BinaryType`: Represents byte sequence values.
-  **Boolean type**
+
+**Boolean type**
 - `BooleanType`: Represents boolean values.
-  **Datetime type**
+
+**Datetime type**
 - `DateType`: Represents calendar dates with year, month, and day fields, without a time zone.
 - `TimestampType`: Timestamp with local time zone (`TIMESTAMP_LTZ`). Represents year, month, day, hour, minute, and second, interpreted with the session’s local time zone. The value denotes an absolute point in time.
 - `TimestampNTZType`: Timestamp without time zone (`TIMESTAMP_NTZ`). Represents year, month, day, hour, minute, and second. Operations do not consider time zones.
   - Note: `TIMESTAMP` in Spark is a user-configurable alias for either `TIMESTAMP_LTZ` (default) or `TIMESTAMP_NTZ`, controlled by `spark.sql.timestampType`.
-    **Interval types**
+
+**Interval types**
 - `YearMonthIntervalType(startField, endField)`: Represents a year-month interval made of a contiguous subset of:
   - `MONTH`, months within years `[0..11]`,
   - `YEAR`, years in the range `[0..178956970]`.
@@ -630,7 +635,8 @@ Sail supports all Spark SQL data types except the `VARIANT` type introduced in S
     | `DayTimeIntervalType(MINUTE, MINUTE)` or `DayTimeIntervalType(MINUTE)` | INTERVAL MINUTE | `INTERVAL '1000' MINUTE` |
     | `DayTimeIntervalType(MINUTE, SECOND)` | INTERVAL MINUTE TO SECOND | `INTERVAL '1000:01.001' MINUTE TO SECOND` |
     | `DayTimeIntervalType(SECOND, SECOND)` or `DayTimeIntervalType(SECOND)` | INTERVAL SECOND | `INTERVAL '1000.000001' SECOND` |
-    **Complex types**
+
+**Complex types**
 - `ArrayType(elementType, containsNull)`: Represents sequences of elements of type `elementType`. `containsNull` indicates whether elements may be `null`.
 - `MapType(keyType, valueType, valueContainsNull)`: Represents key-value mappings. Keys have type `keyType` and cannot be `null`. Values have type `valueType`. `valueContainsNull` indicates whether values may be `null`.
 - `StructType(fields)`: Represents values with a structure described by a sequence of `StructField`s (`fields`).
