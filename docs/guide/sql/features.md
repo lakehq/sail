@@ -579,7 +579,6 @@ Sail supports all Spark SQL data types except the `VARIANT` type introduced in S
 ### Supported Data Types
 
 **Numeric types**
-
 - `ByteType`: Represents 1-byte signed integer numbers. The range is `-128` to `127`.
 - `ShortType`: Represents 2-byte signed integer numbers. The range is `-32768` to `32767`.
 - `IntegerType`: Represents 4-byte signed integer numbers. The range is `-2147483648` to `2147483647`.
