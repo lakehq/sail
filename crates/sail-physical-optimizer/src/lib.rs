@@ -19,15 +19,17 @@ use datafusion::physical_optimizer::update_aggr_exprs::OptimizeAggregateOrder;
 use datafusion::physical_optimizer::PhysicalOptimizerRule;
 
 use crate::explicit_repartition::RewriteExplicitRepartition;
+use crate::join_reorder::JoinReorder;
 
 mod explicit_repartition;
 mod join_reorder;
 
 pub fn get_physical_optimizers() -> Vec<Arc<dyn PhysicalOptimizerRule + Send + Sync>> {
     vec![
+        // Note: The order of rules is important
         Arc::new(OutputRequirements::new_add_mode()),
         Arc::new(AggregateStatistics::new()),
-        // Arc::new(JoinReorder::new()),
+        Arc::new(JoinReorder::new()),
         Arc::new(JoinSelection::new()),
         Arc::new(LimitedDistinctAggregation::new()),
         Arc::new(FilterPushdown::new()),
@@ -47,6 +49,11 @@ pub fn get_physical_optimizers() -> Vec<Arc<dyn PhysicalOptimizerRule + Send + S
         Arc::new(RewriteExplicitRepartition::new()),
         Arc::new(SanityCheckPlan::new()),
     ]
+}
+
+// This function is only needed for the tests to verify the count of optimizers.
+pub fn get_custom_sail_optimizers() -> Vec<Arc<dyn PhysicalOptimizerRule + Send + Sync>> {
+    vec![Arc::new(JoinReorder::new())]
 }
 
 #[cfg(test)]
