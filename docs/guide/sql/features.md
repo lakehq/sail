@@ -627,11 +627,14 @@ Sail supports all Spark SQL data types except the `VARIANT` type introduced in S
     | `YearMonthIntervalType(MONTH, MONTH)` or `YearMonthIntervalType(MONTH)` | INTERVAL MONTH | `INTERVAL '09' MONTH` |
 
 - `DayTimeIntervalType(startField, endField)`: Represents a day-time interval made of a contiguous subset of:
+
   - `SECOND`, seconds within minutes and possibly fractional seconds `[0..59.999999]`,
   - `MINUTE`, minutes within hours `[0..59]`,
   - `HOUR`, hours within days `[0..23]`,
   - `DAY`, days in the range `[0..106751991]`.
+
     Individual fields are non-negative, but an interval can be positive or negative.
+
     `startField` is the leftmost field and `endField` is the rightmost field. Valid values are 0 (`DAY`), 1 (`HOUR`), 2 (`MINUTE`), 3 (`SECOND`). Supported day-time interval types are:
     | Day-Time Interval Type | SQL type | An instance of the type |
     | ---------------------------------------------------------------------- | ------------------------- | ---------------------------------------------- |
@@ -649,9 +652,11 @@ Sail supports all Spark SQL data types except the `VARIANT` type introduced in S
 **Complex types**
 
 - `ArrayType(elementType, containsNull)`: Represents sequences of elements of type `elementType`. `containsNull` indicates whether elements may be `null`.
-- `MapType(keyType, valueType, valueContainsNull)`: Represents key-value mappings. Keys have type `keyType` and cannot be `null`. Values have type `valueType`. `valueContainsNull` indicates whether values may be `null`.
+- `MapType(keyType, valueType, valueContainsNull)`: Represents values comprising a set of key-value pairs. The data type of keys is described by keyType and the data type of values is described by valueType. For a MapType value, keys are not allowed to have null values. valueContainsNull is used to indicate if values of a MapType value can have null values.
 - `StructType(fields)`: Represents values with a structure described by a sequence of `StructField`s (`fields`).
   - `StructField(name, dataType, nullable)`: A field in a `StructType`. `name` gives the field name. `dataType` gives the field’s type. `nullable` indicates whether field values may be `null`.
+
+**Python**
 
 All data types of Spark SQL are located in the package of `pyspark.sql.types`. You can access them by doing:
 
@@ -659,55 +664,57 @@ All data types of Spark SQL are located in the package of `pyspark.sql.types`. Y
 from pyspark.sql.types import *
 ```
 
-**Python**
-| Data type | Value type in Python | API to access or create a data type |
-| ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------- |
-| **ByteType** | int<br>**Note:** Numbers will be converted to 1-byte signed integer numbers at runtime. Please make sure that numbers are within the range of -128 to 127. | ByteType() |
-| **ShortType** | int<br>**Note:** Numbers will be converted to 2-byte signed integer numbers at runtime. Please make sure that numbers are within the range of -32768 to 32767. | ShortType() |
-| **IntegerType** | int | IntegerType() |
-| **LongType** | int<br>**Note:** Numbers will be converted to 8-byte signed integer numbers at runtime. Please make sure that numbers are within the range of -9223372036854775808 to 9223372036854775807. Otherwise, please convert data to `decimal.Decimal` and use `DecimalType`. | LongType() |
-| **FloatType** | float<br>**Note:** Numbers will be converted to 4-byte single-precision floating-point numbers at runtime. | FloatType() |
-| **DoubleType** | float | DoubleType() |
-| **DecimalType** | decimal.Decimal | DecimalType() |
-| **StringType** | str | StringType() |
-| **CharType(length)** | str | CharType(length) |
-| **VarcharType(length)** | str | VarcharType(length) |
-| **BinaryType** | bytearray | BinaryType() |
-| **BooleanType** | bool | BooleanType() |
-| **TimestampType** | datetime.datetime | TimestampType() |
-| **TimestampNTZType** | datetime.datetime | TimestampNTZType() |
-| **DateType** | datetime.date | DateType() |
-| **DayTimeIntervalType** | datetime.timedelta | DayTimeIntervalType() |
-| **ArrayType** | list, tuple, or array | ArrayType(elementType, [*containsNull*])<br>**Note:** The default value of _containsNull_ is True. |
-| **MapType** | dict | MapType(keyType, valueType, [*valueContainsNull*])<br>**Note:** The default value of _valueContainsNull_ is True. |
-| **StructType**| list or tuple | StructType(_fields_)<br>**Note:** _fields_ is a Seq of StructFields. Also, two fields with the same name are not allowed. |
-| **StructField** | The value type in Python of the data type of this field (for example, int for a StructField with the data type IntegerType) | StructField(_name_, _dataType_, [*nullable*])<br>**Note:** The default value of _nullable_ is True. |
+| Data type               | Value type in Python                                                                                                                                                                                                                                                  | API to access or create a data type                                                                                       |
+| ----------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------- |
+| **ByteType**            | int<br>**Note:** Numbers will be converted to 1-byte signed integer numbers at runtime. Please make sure that numbers are within the range of -128 to 127.                                                                                                            | ByteType()                                                                                                                |
+| **ShortType**           | int<br>**Note:** Numbers will be converted to 2-byte signed integer numbers at runtime. Please make sure that numbers are within the range of -32768 to 32767.                                                                                                        | ShortType()                                                                                                               |
+| **IntegerType**         | int                                                                                                                                                                                                                                                                   | IntegerType()                                                                                                             |
+| **LongType**            | int<br>**Note:** Numbers will be converted to 8-byte signed integer numbers at runtime. Please make sure that numbers are within the range of -9223372036854775808 to 9223372036854775807. Otherwise, please convert data to `decimal.Decimal` and use `DecimalType`. | LongType()                                                                                                                |
+| **FloatType**           | float<br>**Note:** Numbers will be converted to 4-byte single-precision floating-point numbers at runtime.                                                                                                                                                            | FloatType()                                                                                                               |
+| **DoubleType**          | float                                                                                                                                                                                                                                                                 | DoubleType()                                                                                                              |
+| **DecimalType**         | decimal.Decimal                                                                                                                                                                                                                                                       | DecimalType()                                                                                                             |
+| **StringType**          | str                                                                                                                                                                                                                                                                   | StringType()                                                                                                              |
+| **CharType(length)**    | str                                                                                                                                                                                                                                                                   | CharType(length)                                                                                                          |
+| **VarcharType(length)** | str                                                                                                                                                                                                                                                                   | VarcharType(length)                                                                                                       |
+| **BinaryType**          | bytearray                                                                                                                                                                                                                                                             | BinaryType()                                                                                                              |
+| **BooleanType**         | bool                                                                                                                                                                                                                                                                  | BooleanType()                                                                                                             |
+| **TimestampType**       | datetime.datetime                                                                                                                                                                                                                                                     | TimestampType()                                                                                                           |
+| **TimestampNTZType**    | datetime.datetime                                                                                                                                                                                                                                                     | TimestampNTZType()                                                                                                        |
+| **DateType**            | datetime.date                                                                                                                                                                                                                                                         | DateType()                                                                                                                |
+| **DayTimeIntervalType** | datetime.timedelta                                                                                                                                                                                                                                                    | DayTimeIntervalType()                                                                                                     |
+| **ArrayType**           | list, tuple, or array                                                                                                                                                                                                                                                 | ArrayType(elementType, [*containsNull*])<br>**Note:** The default value of _containsNull_ is True.                        |
+| **MapType**             | dict                                                                                                                                                                                                                                                                  | MapType(keyType, valueType, [*valueContainsNull*])<br>**Note:** The default value of _valueContainsNull_ is True.         |
+| **StructType**          | list or tuple                                                                                                                                                                                                                                                         | StructType(_fields_)<br>**Note:** _fields_ is a Seq of StructFields. Also, two fields with the same name are not allowed. |
+| **StructField**         | The value type in Python of the data type of this field (for example, int for a StructField with the data type IntegerType)                                                                                                                                           | StructField(_name_, _dataType_, [*nullable*])<br>**Note:** The default value of _nullable_ is True.                       |
 
 **SQL**
-| Data type | SQL name |
-| --- | --- |
-| **BooleanType** | BOOLEAN |
-| **ByteType** | BYTE, TINYINT |
-| **ShortType** | SHORT, SMALLINT |
-| **IntegerType** | INT, INTEGER |
-| **LongType** | LONG, BIGINT |
-| **FloatType** | FLOAT, REAL |
-| **DoubleType** | DOUBLE |
-| **DateType** | DATE |
-| **TimestampType** | TIMESTAMP, TIMESTAMP_LTZ |
-| **TimestampNTZType** | TIMESTAMP_NTZ |
-| **StringType** | STRING |
-| **CharType(length)** | CHAR(length) |
-| **VarcharType(length)** | VARCHAR(length) |
-| **BinaryType** | BINARY |
-| **DecimalType** | DECIMAL, DEC, NUMERIC |
-| **YearMonthIntervalType** | INTERVAL YEAR, INTERVAL YEAR TO MONTH, INTERVAL MONTH |
-| **DayTimeIntervalType** | INTERVAL DAY, INTERVAL DAY TO HOUR, INTERVAL DAY TO MINUTE, INTERVAL DAY TO SECOND, INTERVAL HOUR, INTERVAL HOUR TO MINUTE, INTERVAL HOUR TO SECOND, INTERVAL MINUTE, INTERVAL MINUTE TO SECOND, INTERVAL SECOND |
-| **ArrayType** | ARRAY<element_type> |
-| **StructType** | STRUCT<field1_name: field1_type, field2_name: field2_type, …><br>**Note:** ‘:’ is optional. |
-| **MapType** | MAP<key_type, value_type> |
 
-### Sail SQL Parser Extensions and Aliases
+The following table shows the type names as well as aliases used in Spark SQL parser for each data type.
+
+| Data type                 | SQL name                                                                                                                                                                                                         |
+| ------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| **BooleanType**           | BOOLEAN                                                                                                                                                                                                          |
+| **ByteType**              | BYTE, TINYINT                                                                                                                                                                                                    |
+| **ShortType**             | SHORT, SMALLINT                                                                                                                                                                                                  |
+| **IntegerType**           | INT, INTEGER                                                                                                                                                                                                     |
+| **LongType**              | LONG, BIGINT                                                                                                                                                                                                     |
+| **FloatType**             | FLOAT, REAL                                                                                                                                                                                                      |
+| **DoubleType**            | DOUBLE                                                                                                                                                                                                           |
+| **DateType**              | DATE                                                                                                                                                                                                             |
+| **TimestampType**         | TIMESTAMP, TIMESTAMP_LTZ                                                                                                                                                                                         |
+| **TimestampNTZType**      | TIMESTAMP_NTZ                                                                                                                                                                                                    |
+| **StringType**            | STRING                                                                                                                                                                                                           |
+| **CharType(length)**      | CHAR(length)                                                                                                                                                                                                     |
+| **VarcharType(length)**   | VARCHAR(length)                                                                                                                                                                                                  |
+| **BinaryType**            | BINARY                                                                                                                                                                                                           |
+| **DecimalType**           | DECIMAL, DEC, NUMERIC                                                                                                                                                                                            |
+| **YearMonthIntervalType** | INTERVAL YEAR, INTERVAL YEAR TO MONTH, INTERVAL MONTH                                                                                                                                                            |
+| **DayTimeIntervalType**   | INTERVAL DAY, INTERVAL DAY TO HOUR, INTERVAL DAY TO MINUTE, INTERVAL DAY TO SECOND, INTERVAL HOUR, INTERVAL HOUR TO MINUTE, INTERVAL HOUR TO SECOND, INTERVAL MINUTE, INTERVAL MINUTE TO SECOND, INTERVAL SECOND |
+| **ArrayType**             | ARRAY<element_type>                                                                                                                                                                                              |
+| **StructType**            | STRUCT<field1_name: field1_type, field2_name: field2_type, …><br>**Note:** ‘:’ is optional.                                                                                                                      |
+| **MapType**               | MAP<key_type, value_type>                                                                                                                                                                                        |
+
+**Sail SQL Parser Extensions and Aliases**
 
 Sail’s SQL parser accepts several additional type names and unsigned variants that do not exist in Spark’s parser. These parse successfully in Sail and are mapped to Arrow-backed internal types. When interoperating with Spark (e.g., writing to a Spark-managed catalog), Sail will serialize to the nearest compatible Spark type where possible.
 
@@ -731,8 +738,6 @@ Sail’s SQL parser accepts several additional type names and unsigned variants 
 | **TIMESTAMP_NTZ(p)**        | **TimestampNTZType** (precision p)                   | **TIMESTAMP_NTZ**                             | Precision accepted.                                                                    |
 | **TIMESTAMP_LTZ(p)**        | **TimestampType** with local time zone (precision p) | **TIMESTAMP**, **TIMESTAMP_LTZ**              | Precision accepted.                                                                    |
 | **INTERVAL MONTH_DAY_NANO** | Arrow **Month-Day-Nano**                             | nearest Spark Year-Month or Day-Time interval | Serialized to the closest supported Spark interval or requires explicit cast.          |
-
-**Tip:** If a table must be readable by Spark without changes, prefer the standard Spark types above or cast Sail-only inputs to their Spark equivalents.
 
 ### Floating Point Special Values
 
