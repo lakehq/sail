@@ -640,7 +640,8 @@ Sail supports all Spark SQL data types except the `VARIANT` type introduced in S
 - `MapType(keyType, valueType, valueContainsNull)`: Represents key-value mappings. Keys have type `keyType` and cannot be `null`. Values have type `valueType`. `valueContainsNull` indicates whether values may be `null`.
 - `StructType(fields)`: Represents values with a structure described by a sequence of `StructField`s (`fields`).
   - `StructField(name, dataType, nullable)`: A field in a `StructType`. `name` gives the field name. `dataType` gives the field’s type. `nullable` indicates whether field values may be `null`.
-    All data types of Spark SQL are located in the package of `pyspark.sql.types`. You can access them by doing
+
+All data types of Spark SQL are located in the package of `pyspark.sql.types`. You can access them by doing
 
 ```sql
 from pyspark.sql.types import *
