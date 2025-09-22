@@ -9,6 +9,7 @@ use datafusion::physical_expr::utils::collect_columns;
 use datafusion::physical_expr::PhysicalExpr;
 use datafusion::physical_plan::joins::utils::{ColumnIndex, JoinFilter};
 use datafusion::physical_plan::joins::{HashJoinExec, PartitionMode};
+use datafusion::physical_plan::filter::FilterExec;
 use datafusion::physical_plan::ExecutionPlan;
 
 use crate::join_reorder::builder::{ColumnMap, ColumnMapEntry};
@@ -27,6 +28,19 @@ pub struct PlanReconstructor<'a> {
     query_graph: &'a QueryGraph,
     /// Cache for reconstructed plans to avoid duplicate construction
     plan_cache: HashMap<JoinSet, (Arc<dyn ExecutionPlan>, ColumnMap)>,
+    /// Pending filters that couldn't be applied yet due to missing dependencies
+    pending_filters: Vec<PendingFilter>,
+}
+
+/// Represents a filter that couldn't be applied yet due to missing table dependencies
+#[derive(Debug, Clone)]
+struct PendingFilter {
+    /// The filter expression
+    expr: Arc<dyn PhysicalExpr>,
+    /// Set of relations this filter depends on
+    required_relations: JoinSet,
+    /// Original edge index this filter came from
+    edge_index: usize,
 }
 
 impl<'a> PlanReconstructor<'a> {
@@ -35,6 +49,7 @@ impl<'a> PlanReconstructor<'a> {
             dp_table,
             query_graph,
             plan_cache: HashMap::new(),
+            pending_filters: Vec::new(),
         }
     }
 
@@ -46,7 +61,7 @@ impl<'a> PlanReconstructor<'a> {
             return Ok(cached.clone());
         }
 
-        let result = match &dp_plan.plan_type {
+        let mut result = match &dp_plan.plan_type {
             PlanType::Leaf { relation_id } => self.reconstruct_leaf(*relation_id)?,
             PlanType::Join {
                 left_set,
@@ -55,8 +70,36 @@ impl<'a> PlanReconstructor<'a> {
             } => self.reconstruct_join(*left_set, *right_set, edge_indices)?,
         };
 
+        // If we just reconstructed the root join set (entire reorderable region),
+        // attach any remaining pending filters as a top-level FilterExec to ensure correctness.
+        if dp_plan.join_set.cardinality() as usize == self.query_graph.relation_count() {
+            if !self.pending_filters.is_empty() {
+                let (plan, col_map) = &result;
+                match self.apply_remaining_pending_filters(plan.clone(), col_map)? {
+                    Some(new_plan) => {
+                        result = (new_plan, col_map.clone());
+                        // All remaining were applied; clear them
+                        self.pending_filters.clear();
+                    }
+                    None => {
+                        // Could not apply any; warn below
+                    }
+                }
+            }
+
+            // Final sanity check: warn if there are still pending filters after reconstruction
+            if !self.pending_filters.is_empty() && dp_plan.join_set.cardinality() > 1u32 {
+                log::warn!(
+                    "JoinReorder: {} pending filters remain after reconstructing join set {:?}. These filters may not be applied.",
+                    self.pending_filters.len(),
+                    dp_plan.join_set.iter().collect::<Vec<_>>()
+                );
+            }
+        }
+
         // Store in cache and return
         self.plan_cache.insert(dp_plan.join_set, result.clone());
+
         Ok(result)
     }
 
@@ -220,7 +263,7 @@ impl<'a> PlanReconstructor<'a> {
 
     /// Builds join filter for non-equi conditions from edge information.
     fn build_join_filter(
-        &self,
+        &mut self,
         edge_indices: &[usize],
         left_map: &ColumnMap,
         right_map: &ColumnMap,
@@ -236,6 +279,7 @@ impl<'a> PlanReconstructor<'a> {
         let mut non_equi_filters: Vec<Arc<dyn PhysicalExpr>> = Vec::new();
         let current_join_set = JoinSet::from_bits(left_set.bits() | right_set.bits());
 
+        // First, process filters from current edges
         for &edge_index in edge_indices {
             let edge = self.query_graph.edges.get(edge_index).ok_or_else(|| {
                 DataFusionError::Internal(format!("Edge with index {} not found", edge_index))
@@ -249,12 +293,59 @@ impl<'a> PlanReconstructor<'a> {
                     let required = self.analyze_predicate_dependencies(
                         &pred, left_map, right_map, left_plan, right_plan,
                     )?;
-                    if current_join_set.is_subset(&required) {
+                    // Check if all required relations are available in current join set
+                    if required.is_subset(&current_join_set) {
                         non_equi_filters.push(pred);
+                    } else {
+                        // Store filters that can't be applied yet
+                        log::debug!(
+                            "JoinReorder: Deferring filter application - required relations: {:?}, current join set: {:?}",
+                            required.iter().collect::<Vec<_>>(),
+                            current_join_set.iter().collect::<Vec<_>>()
+                        );
+                        self.pending_filters.push(PendingFilter {
+                            expr: pred,
+                            required_relations: required,
+                            edge_index,
+                        });
                     }
                 }
             }
         }
+
+        // Second, check if any pending filters can now be applied
+        let mut applicable_pending = Vec::new();
+        let mut remaining_pending = Vec::new();
+
+        for pending in std::mem::take(&mut self.pending_filters) {
+            if pending.required_relations.is_subset(&current_join_set) {
+                // This pending filter can now be applied
+                log::debug!(
+                    "JoinReorder: Applying previously deferred filter - required relations: {:?}",
+                    pending.required_relations.iter().collect::<Vec<_>>()
+                );
+                if let Ok(rewritten_pred) = self.rewrite_pending_filter_for_current_join(
+                    &pending.expr,
+                    left_map,
+                    right_map,
+                    left_plan,
+                    right_plan,
+                ) {
+                    applicable_pending.push(rewritten_pred);
+                } else {
+                    log::warn!("JoinReorder: Failed to rewrite pending filter, skipping");
+                }
+            } else {
+                // Keep in pending list
+                remaining_pending.push(pending);
+            }
+        }
+
+        // Restore the remaining pending filters
+        self.pending_filters = remaining_pending;
+
+        // Add applicable pending filters
+        non_equi_filters.extend(applicable_pending);
 
         if non_equi_filters.is_empty() {
             return Ok(None);
@@ -365,6 +456,91 @@ impl<'a> PlanReconstructor<'a> {
             compact_indices,
             intermediate_schema,
         )))
+    }
+
+    /// Attempt to apply any remaining pending filters as a top-level FilterExec
+    /// on the provided plan. Returns Some(new_plan) if at least one filter has
+    /// been applied, or None if none could be rewritten.
+    fn apply_remaining_pending_filters(
+        &self,
+        plan: Arc<dyn ExecutionPlan>,
+        output_map: &ColumnMap,
+    ) -> Result<Option<Arc<dyn ExecutionPlan>>> {
+        if self.pending_filters.is_empty() {
+            return Ok(None);
+        }
+
+        // Try rewriting each pending filter to reference the final plan's schema
+        let mut rewritten: Vec<Arc<dyn PhysicalExpr>> = Vec::new();
+        for pending in &self.pending_filters {
+            if let Ok(expr) = self.rewrite_expr_to_output_schema(&pending.expr, &plan, output_map)
+            {
+                rewritten.push(expr);
+            }
+        }
+
+        if rewritten.is_empty() {
+            return Ok(None);
+        }
+
+        // Combine with AND and attach FilterExec
+        let combined = if rewritten.len() == 1 {
+            rewritten[0].clone()
+        } else {
+            self.combine_filters_with_and(rewritten)?
+        };
+
+        let new_plan = Arc::new(FilterExec::try_new(combined, plan)?);
+        Ok(Some(new_plan))
+    }
+
+    /// Rewrite an expression that uses stable column names (e.g. "R{rel}.C{col}")
+    /// to use actual output column indices and names of the final plan schema.
+    fn rewrite_expr_to_output_schema(
+        &self,
+        expr: &Arc<dyn PhysicalExpr>,
+        plan: &Arc<dyn ExecutionPlan>,
+        output_map: &ColumnMap,
+    ) -> Result<Arc<dyn PhysicalExpr>> {
+        use datafusion::common::tree_node::{Transformed, TreeNode};
+        use datafusion::physical_expr::expressions::Column;
+
+        let expr_arc = Arc::clone(expr);
+        let transformed = expr_arc.transform(|node| {
+            if let Some(col) = node.as_any().downcast_ref::<Column>() {
+                // Prefer stable name mapping first
+                if let Some((rel, cidx)) = self.parse_stable_column_name(col.name()) {
+                    if let Some(pos) = output_map.iter().position(|e| {
+                        matches!(
+                            e,
+                            ColumnMapEntry::Stable {
+                                relation_id,
+                                column_index
+                            } if *relation_id == rel && *column_index == cidx
+                        )
+                    }) {
+                        // Use the final plan's schema field name and index
+                        let field_name = plan.schema().field(pos).name().to_string();
+                        let new_col = Column::new(&field_name, pos);
+                        return Ok(Transformed::yes(Arc::new(new_col)));
+                    }
+                }
+
+                // Fallback: try to match by current schema field name
+                if let Some(pos) = plan
+                    .schema()
+                    .fields()
+                    .iter()
+                    .position(|f| f.name() == col.name())
+                {
+                    let new_col = Column::new(col.name(), pos);
+                    return Ok(Transformed::yes(Arc::new(new_col)));
+                }
+            }
+            Ok(Transformed::no(node))
+        })?;
+
+        Ok(transformed.data)
     }
 
     fn decompose_conjuncts(expr: &Arc<dyn PhysicalExpr>) -> Vec<Arc<dyn PhysicalExpr>> {
@@ -528,6 +704,70 @@ impl<'a> PlanReconstructor<'a> {
         false
     }
 
+    /// Rewrite a pending filter expression to work with the current join's column mapping
+    fn rewrite_pending_filter_for_current_join(
+        &self,
+        pending_expr: &Arc<dyn PhysicalExpr>,
+        left_map: &ColumnMap,
+        right_map: &ColumnMap,
+        left_plan: &Arc<dyn ExecutionPlan>,
+        right_plan: &Arc<dyn ExecutionPlan>,
+    ) -> Result<Arc<dyn PhysicalExpr>> {
+        // Verify that all columns in the pending expression can be resolved
+        // in the current join context before applying the filter
+        let cols_in_expr = collect_columns(pending_expr);
+        for col in &cols_in_expr {
+            let found_in_left = self.find_column_in_plan_schema(col, left_plan, left_map);
+            let found_in_right = self.find_column_in_plan_schema(col, right_plan, right_map);
+            
+            if !found_in_left && !found_in_right {
+                return Err(DataFusionError::Internal(format!(
+                    "Column '{}' in pending filter cannot be resolved in current join context",
+                    col.name()
+                )));
+            }
+        }
+        
+        // Return the expression as-is since the column mapping logic
+        // in build_join_filter already handles the rewriting correctly
+        Ok(pending_expr.clone())
+    }
+
+    /// Helper to check if a column can be found in a plan's schema or column map
+    fn find_column_in_plan_schema(
+        &self,
+        col: &Column,
+        plan: &Arc<dyn ExecutionPlan>,
+        column_map: &ColumnMap,
+    ) -> bool {
+        // Check by stable column name format (R{rel}.C{col})
+        if let Some((rel, cidx)) = self.parse_stable_column_name(col.name()) {
+            return column_map.iter().any(|entry| {
+                matches!(entry, ColumnMapEntry::Stable { relation_id, column_index } 
+                    if *relation_id == rel && *column_index == cidx)
+            });
+        }
+        
+        // Check by schema field name
+        plan.schema().fields().iter().any(|f| f.name() == col.name())
+    }
+
+    /// Parse stable column name format "R{rel}.C{col}" -> (rel, col)
+    fn parse_stable_column_name(&self, name: &str) -> Option<(usize, usize)> {
+        if !name.starts_with('R') {
+            return None;
+        }
+        let dot = name.find('.')?;
+        let rel_str = &name[1..dot];
+        if !name[dot + 1..].starts_with('C') {
+            return None;
+        }
+        let col_str = &name[dot + 2..];
+        let rel = rel_str.parse::<usize>().ok()?;
+        let col = col_str.parse::<usize>().ok()?;
+        Some((rel, col))
+    }
+
     /// Combine multiple filter expressions with AND logic.
     fn combine_filters_with_and(
         &self,
@@ -547,6 +787,7 @@ impl<'a> PlanReconstructor<'a> {
     #[cfg(test)]
     pub fn clear_cache(&mut self) {
         self.plan_cache.clear();
+        self.pending_filters.clear();
     }
 }
 
