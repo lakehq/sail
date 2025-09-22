@@ -19,8 +19,6 @@ use crate::join_reorder::join_set::JoinSet;
 /// Type alias for join condition pairs
 type JoinConditionPairs = Vec<(Arc<dyn PhysicalExpr>, Arc<dyn PhysicalExpr>)>;
 
-/// Type alias for filter expression with column indices
-type FilterWithColumns = Option<(Arc<dyn PhysicalExpr>, Vec<ColumnIndex>)>;
 /// Plan reconstructor, converting the optimal DPPlan back to ExecutionPlan.
 pub struct PlanReconstructor<'a> {
     /// Reference to the complete DP table for looking up subproblems
@@ -113,8 +111,15 @@ impl<'a> PlanReconstructor<'a> {
         let join_type = self.determine_join_type(edge_indices)?;
 
         // Build join filter for non-equi conditions
-        let join_filter =
-            self.build_join_filter(edge_indices, &left_map, &right_map, &left_plan, &right_plan)?;
+        let join_filter = self.build_join_filter(
+            edge_indices,
+            &left_map,
+            &right_map,
+            &left_plan,
+            &right_plan,
+            left_set,
+            right_set,
+        )?;
 
         // Create HashJoinExec
         let join_plan = Arc::new(HashJoinExec::try_new(
@@ -221,26 +226,33 @@ impl<'a> PlanReconstructor<'a> {
         right_map: &ColumnMap,
         left_plan: &Arc<dyn ExecutionPlan>,
         right_plan: &Arc<dyn ExecutionPlan>,
+        left_set: JoinSet,
+        right_set: JoinSet,
     ) -> Result<Option<JoinFilter>> {
         if edge_indices.is_empty() {
             return Ok(None);
         }
 
-        // Collect all non-equi filter expressions from edges
-        let mut non_equi_filters = Vec::new();
-        let mut all_column_indices = Vec::new();
+        let mut non_equi_filters: Vec<Arc<dyn PhysicalExpr>> = Vec::new();
+        let current_join_set = JoinSet::from_bits(left_set.bits() | right_set.bits());
 
         for &edge_index in edge_indices {
             let edge = self.query_graph.edges.get(edge_index).ok_or_else(|| {
                 DataFusionError::Internal(format!("Edge with index {} not found", edge_index))
             })?;
 
-            // Extract non-equi conditions from the edge filter
-            if let Some((non_equi_expr, column_indices)) =
-                self.extract_non_equi_conditions(edge, left_map, right_map)?
+            if let Some(non_equi_expr) =
+                self.remove_equi_conditions_from_filter(&edge.filter, &edge.equi_pairs)?
             {
-                non_equi_filters.push(non_equi_expr);
-                all_column_indices.extend(column_indices);
+                let sub_preds = Self::decompose_conjuncts(&non_equi_expr);
+                for pred in sub_preds {
+                    let required = self.analyze_predicate_dependencies(
+                        &pred, left_map, right_map, left_plan, right_plan,
+                    )?;
+                    if current_join_set.is_subset(&required) {
+                        non_equi_filters.push(pred);
+                    }
+                }
             }
         }
 
@@ -355,26 +367,89 @@ impl<'a> PlanReconstructor<'a> {
         )))
     }
 
-    /// Extract non-equi conditions from a join edge filter.
-    /// Returns (rewritten_expression, required_column_indices) if non-equi conditions exist.
-    fn extract_non_equi_conditions(
+    fn decompose_conjuncts(expr: &Arc<dyn PhysicalExpr>) -> Vec<Arc<dyn PhysicalExpr>> {
+        let mut result = Vec::new();
+        if let Some(binary) = expr.as_any().downcast_ref::<BinaryExpr>() {
+            match binary.op() {
+                Operator::And => {
+                    result.extend(Self::decompose_conjuncts(binary.left()));
+                    result.extend(Self::decompose_conjuncts(binary.right()));
+                }
+                _ => result.push(Arc::clone(expr)),
+            }
+        } else {
+            result.push(Arc::clone(expr));
+        }
+        result
+    }
+
+    fn analyze_predicate_dependencies(
         &self,
-        edge: &crate::join_reorder::graph::JoinEdge,
+        predicate: &Arc<dyn PhysicalExpr>,
         left_map: &ColumnMap,
         right_map: &ColumnMap,
-    ) -> Result<FilterWithColumns> {
-        // Extract non-equi conditions by removing known equi-join conditions from the filter
-        let non_equi_expr =
-            self.remove_equi_conditions_from_filter(&edge.filter, &edge.equi_pairs)?;
+        left_plan: &Arc<dyn ExecutionPlan>,
+        right_plan: &Arc<dyn ExecutionPlan>,
+    ) -> Result<JoinSet> {
+        let parse_stable = |name: &str| -> Option<(usize, usize)> {
+            if !name.starts_with('R') {
+                return None;
+            }
+            let dot = name.find('.')?;
+            let rel_str = &name[1..dot];
+            if !name[dot + 1..].starts_with('C') {
+                return None;
+            }
+            let col_str = &name[dot + 2..];
+            let rel = rel_str.parse::<usize>().ok()?;
+            let col = col_str.parse::<usize>().ok()?;
+            Some((rel, col))
+        };
 
-        if let Some(expr) = non_equi_expr {
-            // Rewrite column references to match the join's intermediate schema
-            let (rewritten_expr, column_indices) =
-                self.rewrite_filter_for_join(expr, left_map, right_map)?;
-            Ok(Some((rewritten_expr, column_indices)))
-        } else {
-            Ok(None)
+        let mut bits: u64 = 0;
+        let cols = collect_columns(predicate);
+        for c in &cols {
+            if let Some((rel, _)) = parse_stable(c.name()) {
+                bits |= 1u64 << rel;
+                continue;
+            }
+            let mut matched = false;
+            for (i, f) in left_plan.schema().fields().iter().enumerate() {
+                if f.name() == c.name() {
+                    if let Some(ColumnMapEntry::Stable { relation_id, .. }) = left_map.get(i) {
+                        bits |= 1u64 << *relation_id;
+                        matched = true;
+                        break;
+                    }
+                }
+            }
+            if matched {
+                continue;
+            }
+            for (i, f) in right_plan.schema().fields().iter().enumerate() {
+                if f.name() == c.name() {
+                    if let Some(ColumnMapEntry::Stable { relation_id, .. }) = right_map.get(i) {
+                        bits |= 1u64 << *relation_id;
+                        matched = true;
+                        break;
+                    }
+                }
+            }
+            let _ = matched;
         }
+
+        Ok(JoinSet::from_bits(bits))
+    }
+
+    // FIXME: legacy unused function retained for reference during refactor
+    #[allow(dead_code)]
+    fn extract_non_equi_conditions(
+        &self,
+        _edge: &crate::join_reorder::graph::JoinEdge,
+        _left_map: &ColumnMap,
+        _right_map: &ColumnMap,
+    ) -> Result<Option<(Arc<dyn PhysicalExpr>, Vec<ColumnIndex>)>> {
+        Ok(None)
     }
 
     /// Remove equi-join conditions from the filter expression, returning only non-equi parts.
@@ -481,7 +556,8 @@ impl<'a> PlanReconstructor<'a> {
         }
     }
 
-    /// Rewrite filter expression for join execution and collect required column indices.
+    // FIXME: legacy unused function retained for reference during refactor
+    #[allow(dead_code)]
     fn rewrite_filter_for_join(
         &self,
         filter: Arc<dyn PhysicalExpr>,
@@ -538,8 +614,8 @@ impl<'a> PlanReconstructor<'a> {
         Ok((rewritten_expr, column_indices))
     }
 
-    /// Find a column in a ColumnMap and return its physical index.
-    /// Only matches ColumnMapEntry::Stable entries.
+    // FIXME: legacy unused function retained for reference during refactor
+    #[allow(dead_code)]
     fn find_column_in_map(&self, column: &Column, map: &ColumnMap) -> Option<usize> {
         // Only consider Stable entries for column matching
         if column.index() < map.len() {
