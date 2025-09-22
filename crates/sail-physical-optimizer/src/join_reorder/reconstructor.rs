@@ -441,17 +441,6 @@ impl<'a> PlanReconstructor<'a> {
         Ok(JoinSet::from_bits(bits))
     }
 
-    // FIXME: legacy unused function retained for reference during refactor
-    #[allow(dead_code)]
-    fn extract_non_equi_conditions(
-        &self,
-        _edge: &crate::join_reorder::graph::JoinEdge,
-        _left_map: &ColumnMap,
-        _right_map: &ColumnMap,
-    ) -> Result<Option<(Arc<dyn PhysicalExpr>, Vec<ColumnIndex>)>> {
-        Ok(None)
-    }
-
     /// Remove equi-join conditions from the filter expression, returning only non-equi parts.
     fn remove_equi_conditions_from_filter(
         &self,
@@ -537,94 +526,6 @@ impl<'a> PlanReconstructor<'a> {
             }
         }
         false
-    }
-
-    /// Count the number of AND conditions in an expression tree.
-    #[allow(dead_code)]
-    fn count_and_conditions(expr: &Arc<dyn PhysicalExpr>) -> usize {
-        if let Some(binary_expr) = expr.as_any().downcast_ref::<BinaryExpr>() {
-            match binary_expr.op() {
-                Operator::And => {
-                    1 + Self::count_and_conditions(binary_expr.left())
-                        + Self::count_and_conditions(binary_expr.right())
-                }
-                Operator::Eq => 1, // This is a single condition
-                _ => 1,            // Other operators count as single conditions
-            }
-        } else {
-            1 // Non-binary expressions count as single conditions
-        }
-    }
-
-    // FIXME: legacy unused function retained for reference during refactor
-    #[allow(dead_code)]
-    fn rewrite_filter_for_join(
-        &self,
-        filter: Arc<dyn PhysicalExpr>,
-        left_map: &ColumnMap,
-        right_map: &ColumnMap,
-    ) -> Result<(Arc<dyn PhysicalExpr>, Vec<ColumnIndex>)> {
-        use datafusion::common::tree_node::{Transformed, TreeNode};
-        use datafusion::physical_expr::expressions::Column;
-
-        let mut column_indices = Vec::new();
-        let mut column_mapping = HashMap::new();
-
-        // Collect all columns and build mapping
-        let columns = collect_columns(&filter);
-        for column in &columns {
-            let column_key = (column.name().to_string(), column.index());
-
-            // Try to find this column in the left map first
-            if let Some(left_idx) = self.find_column_in_map(column, left_map) {
-                let column_index = ColumnIndex {
-                    index: left_idx,
-                    side: JoinSide::Left,
-                };
-                column_indices.push(column_index);
-                // Map to intermediate schema position (left columns first)
-                column_mapping.insert(column_key, left_idx);
-            }
-            // Try to find this column in the right map
-            else if let Some(right_idx) = self.find_column_in_map(column, right_map) {
-                let column_index = ColumnIndex {
-                    index: right_idx,
-                    side: JoinSide::Right,
-                };
-                column_indices.push(column_index);
-                // Map to intermediate schema position (right columns after left)
-                let intermediate_idx = left_map.len() + right_idx;
-                column_mapping.insert(column_key, intermediate_idx);
-            }
-        }
-
-        // Rewrite expression to use intermediate schema column indices
-        let transform_result = filter.transform(|expr| {
-            if let Some(column) = expr.as_any().downcast_ref::<Column>() {
-                let column_key = (column.name().to_string(), column.index());
-                if let Some(&new_index) = column_mapping.get(&column_key) {
-                    let new_column = Column::new(column.name(), new_index);
-                    return Ok(Transformed::yes(Arc::new(new_column)));
-                }
-            }
-            Ok(Transformed::no(expr))
-        })?;
-        let rewritten_expr = transform_result.data;
-
-        Ok((rewritten_expr, column_indices))
-    }
-
-    // FIXME: legacy unused function retained for reference during refactor
-    #[allow(dead_code)]
-    fn find_column_in_map(&self, column: &Column, map: &ColumnMap) -> Option<usize> {
-        // Only consider Stable entries for column matching
-        if column.index() < map.len() {
-            if let ColumnMapEntry::Stable { .. } = &map[column.index()] {
-                // Entry at column's index is a Stable entry match
-                return Some(column.index());
-            }
-        }
-        None
     }
 
     /// Combine multiple filter expressions with AND logic.

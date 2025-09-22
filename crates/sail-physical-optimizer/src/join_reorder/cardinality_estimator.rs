@@ -36,24 +36,6 @@ impl EquivalenceSet {
         self.t_dom_count = count;
     }
 
-    /// Check if the specified relation participates in this equivalence set.
-    #[allow(dead_code)]
-    pub fn involves_relation(&self, relation_id: usize) -> bool {
-        self.columns
-            .iter()
-            .any(|col| col.relation_id == relation_id)
-    }
-
-    /// Get the set of relations participating in this equivalence set.
-    #[allow(dead_code)]
-    pub fn get_relation_set(&self) -> JoinSet {
-        let mut result = JoinSet::default();
-        for stable_col in &self.columns {
-            result = result.union(&JoinSet::new_singleton(stable_col.relation_id));
-        }
-        result
-    }
-
     /// Check if the equivalence set contains a specific column.
     pub fn contains(&self, stable_column: &StableColumn) -> bool {
         self.columns.contains(stable_column)
@@ -428,9 +410,17 @@ mod tests {
         });
         equiv_set.set_t_dom_count(500.0);
 
-        assert!(equiv_set.involves_relation(0));
-        assert!(equiv_set.involves_relation(1));
-        assert!(!equiv_set.involves_relation(2));
+        // Test that the equivalence set contains the expected columns
+        assert!(equiv_set.contains(&StableColumn {
+            relation_id: 0,
+            column_index: 1,
+            name: "col1".to_string(),
+        }));
+        assert!(equiv_set.contains(&StableColumn {
+            relation_id: 1,
+            column_index: 2,
+            name: "col2".to_string(),
+        }));
         assert_eq!(equiv_set.t_dom_count, 500.0);
     }
 

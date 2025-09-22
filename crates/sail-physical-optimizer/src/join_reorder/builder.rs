@@ -39,14 +39,6 @@ pub enum ColumnMapEntry {
     },
 }
 
-impl ColumnMapEntry {
-    /// Returns true if this entry represents a stable column from a base relation.
-    #[allow(dead_code)]
-    pub fn is_stable(&self) -> bool {
-        matches!(self, ColumnMapEntry::Stable { .. })
-    }
-}
-
 /// Builder for constructing query graph from ExecutionPlan.
 pub struct GraphBuilder {
     /// The query graph being built.
