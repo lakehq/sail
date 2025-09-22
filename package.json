@@ -9,7 +9,7 @@
     "docs:preview": "vitepress preview docs"
   },
   "devDependencies": {
-    "@eslint/js": "^9.35.0",
+    "@eslint/js": "^9.36.0",
     "@ianvs/prettier-plugin-sort-imports": "^4.7.0",
     "@tailwindcss/vite": "^4.1.13",
     "@types/js-yaml": "^4.0.9",
