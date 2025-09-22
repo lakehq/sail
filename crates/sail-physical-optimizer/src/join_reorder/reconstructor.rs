@@ -7,9 +7,9 @@ use datafusion::logical_expr::{JoinType, Operator};
 use datafusion::physical_expr::expressions::{BinaryExpr, Column};
 use datafusion::physical_expr::utils::collect_columns;
 use datafusion::physical_expr::PhysicalExpr;
+use datafusion::physical_plan::filter::FilterExec;
 use datafusion::physical_plan::joins::utils::{ColumnIndex, JoinFilter};
 use datafusion::physical_plan::joins::{HashJoinExec, PartitionMode};
-use datafusion::physical_plan::filter::FilterExec;
 use datafusion::physical_plan::ExecutionPlan;
 
 use crate::join_reorder::builder::{ColumnMap, ColumnMapEntry};
@@ -39,8 +39,6 @@ struct PendingFilter {
     expr: Arc<dyn PhysicalExpr>,
     /// Set of relations this filter depends on
     required_relations: JoinSet,
-    /// Original edge index this filter came from
-    edge_index: usize,
 }
 
 impl<'a> PlanReconstructor<'a> {
@@ -306,7 +304,6 @@ impl<'a> PlanReconstructor<'a> {
                         self.pending_filters.push(PendingFilter {
                             expr: pred,
                             required_relations: required,
-                            edge_index,
                         });
                     }
                 }
@@ -473,8 +470,7 @@ impl<'a> PlanReconstructor<'a> {
         // Try rewriting each pending filter to reference the final plan's schema
         let mut rewritten: Vec<Arc<dyn PhysicalExpr>> = Vec::new();
         for pending in &self.pending_filters {
-            if let Ok(expr) = self.rewrite_expr_to_output_schema(&pending.expr, &plan, output_map)
-            {
+            if let Ok(expr) = self.rewrite_expr_to_output_schema(&pending.expr, &plan, output_map) {
                 rewritten.push(expr);
             }
         }
@@ -719,7 +715,7 @@ impl<'a> PlanReconstructor<'a> {
         for col in &cols_in_expr {
             let found_in_left = self.find_column_in_plan_schema(col, left_plan, left_map);
             let found_in_right = self.find_column_in_plan_schema(col, right_plan, right_map);
-            
+
             if !found_in_left && !found_in_right {
                 return Err(DataFusionError::Internal(format!(
                     "Column '{}' in pending filter cannot be resolved in current join context",
@@ -727,7 +723,7 @@ impl<'a> PlanReconstructor<'a> {
                 )));
             }
         }
-        
+
         // Return the expression as-is since the column mapping logic
         // in build_join_filter already handles the rewriting correctly
         Ok(pending_expr.clone())
@@ -743,13 +739,16 @@ impl<'a> PlanReconstructor<'a> {
         // Check by stable column name format (R{rel}.C{col})
         if let Some((rel, cidx)) = self.parse_stable_column_name(col.name()) {
             return column_map.iter().any(|entry| {
-                matches!(entry, ColumnMapEntry::Stable { relation_id, column_index } 
+                matches!(entry, ColumnMapEntry::Stable { relation_id, column_index }
                     if *relation_id == rel && *column_index == cidx)
             });
         }
-        
+
         // Check by schema field name
-        plan.schema().fields().iter().any(|f| f.name() == col.name())
+        plan.schema()
+            .fields()
+            .iter()
+            .any(|f| f.name() == col.name())
     }
 
     /// Parse stable column name format "R{rel}.C{col}" -> (rel, col)
