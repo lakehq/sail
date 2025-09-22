@@ -37,7 +37,3 @@ dl dd {
   /* The prompt is not selectable so that it is easier to copy code. */
   @apply select-none;
 }
-
-code span.placeholder {
-  @apply text-red-700 italic dark:text-red-200;
-}
