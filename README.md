@@ -155,43 +155,18 @@ Sail solves these problems with a modern, Rust-native design.
 
 Sail offers a drop-in replacement for Spark SQL and the Spark DataFrame API. Existing PySpark code works out of the box once you connect the Spark session to Sail over the Spark Connect protocol.
 
-- **Spark SQL Dialect Support**
-
-  A custom Rust parser (built with parser combinators and Rust procedural macros) covers Spark SQL syntax with production-grade accuracy.
-
-- **DataFrame API Support**
-
-  Spark DataFrame operations run on Sail with identical semantics.
-
-- **Python UDF, UDAF, UDWF, and UDTF Support**
-
-  Python, Pandas, and Arrow UDFs all follow the same conventions as Spark.
+- **Spark SQL Dialect Support.** A custom Rust parser (built with parser combinators and Rust procedural macros) covers Spark SQL syntax with production-grade accuracy.
+- **DataFrame API Support.** Spark DataFrame operations run on Sail with identical semantics.
+- **Python UDF, UDAF, UDWF, and UDTF Support.** Python, Pandas, and Arrow UDFs all follow the same conventions as Spark.
 
 ### Sail’s Advantages over Spark
 
-- **Rust-Native Engine**
-
-  No garbage collection pauses, no JVM memory tuning, and low memory footprint.
-
-- **Columnar Format and Vectorized Execution**
-
-  Built on top of [Apache Arrow](https://github.com/apache/arrow) and [Apache DataFusion](https://github.com/apache/datafusion), the columnar in-memory format and SIMD instructions unlock blazing-fast query execution.
-
-- **Lightning-Fast Python UDFs**
-
-  Python code runs inside Sail with zero serialization overhead as Arrow array pointers enable zero-copy data sharing.
-
-- **Performant Data Shuffling**
-
-  Workers exchange Arrow columnar data directly, minimizing shuffle costs for joins and aggregations.
-
-- **Lightweight, Stateless Workers**
-
-  Workers start in seconds, consume only a few megabytes of memory at idle, and scale elastically to cut cloud costs and simplify operations.
-
-- **Concurrency and Memory Safety You Can Trust**
-
-  Rust’s ownership model prevents null pointers, race conditions, and unsafe memory access for unmatched reliability.
+- **Rust-Native Engine.** No garbage collection pauses, no JVM memory tuning, and low memory footprint.
+- **Columnar Format and Vectorized Execution.** Built on top of [Apache Arrow](https://github.com/apache/arrow) and [Apache DataFusion](https://github.com/apache/datafusion), the columnar in-memory format and SIMD instructions unlock blazing-fast query execution.
+- **Lightning-Fast Python UDFs.** Python code runs inside Sail with zero serialization overhead as Arrow array pointers enable zero-copy data sharing.
+- **Performant Data Shuffling.** Workers exchange Arrow columnar data directly, minimizing shuffle costs for joins and aggregations.
+- **Lightweight, Stateless Workers.** Workers start in seconds, consume only a few megabytes of memory at idle, and scale elastically to cut cloud costs and simplify operations.
+- **Concurrency and Memory Safety You Can Trust.** Rust’s ownership model prevents null pointers, race conditions, and unsafe memory access for unmatched reliability.
 
 Curious about how Sail stacks up against Spark? Explore our [Why Sail?](https://lakesail.com/why-sail/) page. Ready to bring your existing workloads over? Our [Migration Guide](https://docs.lakesail.com/sail/latest/introduction/migrating-from-spark/) shows you how.
 
@@ -199,5 +174,5 @@ Curious about how Sail stacks up against Spark? Explore our [Why Sail?](https://
 
 - [Architecture](https://docs.lakesail.com/sail/latest/concepts/architecture/) – Overview of Sail’s design for both local and cluster modes, and how it transitions seamlessly between them.
 - [Query Planning](https://docs.lakesail.com/sail/latest/concepts/query-planning/) – Detailed explanation of how Sail parses SQL and Spark relations, builds logical and physical plans, and handles execution for local and cluster modes.
-- [SQL](https://docs.lakesail.com/sail/latest/guide/sql/) and [DataFrame](https://docs.lakesail.com/sail/latest/guide/dataframe/features.html) Features – Complete reference for Spark SQL and DataFrame API compatibility.
+- [SQL](https://docs.lakesail.com/sail/latest/guide/sql/) and [DataFrame](https://docs.lakesail.com/sail/latest/guide/dataframe/) Features – Complete reference for Spark SQL and DataFrame API compatibility.
 - [LakeSail Blog](https://lakesail.com/blog/) – Updates on Sail releases, benchmarks, and technical insights.
