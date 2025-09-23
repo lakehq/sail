@@ -553,13 +553,13 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
                 condition,
                 table_schema,
             }) => {
-                let input = self.try_decode_plan(&input, registry)?;
+                let input = self.try_decode_plan(&input)?;
                 let table_url = Url::parse(&table_url)
                     .map_err(|e| plan_datafusion_err!("failed to parse table URL: {e}"))?;
                 let table_schema = Arc::new(self.try_decode_schema(&table_schema)?);
                 let condition = parse_physical_expr(
                     &self.try_decode_message(&condition)?,
-                    registry,
+                    &self.context,
                     &table_schema,
                     self,
                 )?;
@@ -590,7 +590,7 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
                     let schema = table_schema.as_ref().unwrap_or(&empty_schema);
                     Some(parse_physical_expr(
                         &self.try_decode_message(&pred_bytes)?,
-                        registry,
+                        &self.context,
                         schema,
                         self,
                     )?)
@@ -607,7 +607,7 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
                 ))
             }
             NodeKind::DeltaRemoveActions(gen::DeltaRemoveActionsExecNode { input }) => {
-                let input = self.try_decode_plan(&input, registry)?;
+                let input = self.try_decode_plan(&input)?;
                 Ok(Arc::new(DeltaRemoveActionsExec::new(input)))
             }
             NodeKind::ConsoleSink(gen::ConsoleSinkExecNode { input }) => {

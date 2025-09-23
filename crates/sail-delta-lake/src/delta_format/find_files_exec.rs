@@ -12,6 +12,7 @@ use datafusion::datasource::source::DataSourceExec;
 use datafusion::datasource::TableProvider;
 use datafusion::execution::context::{SessionState, TaskContext};
 use datafusion::execution::SessionStateBuilder;
+use datafusion::physical_expr_adapter::PhysicalExprAdapterFactory;
 use datafusion::physical_plan::common::collect;
 use datafusion::physical_plan::execution_plan::{Boundedness, EmissionType};
 use datafusion::physical_plan::filter::FilterExec;
@@ -434,10 +435,8 @@ pub async fn find_files_physical(
     snapshot: &DeltaTableState,
     log_store: LogStoreRef,
     state: &SessionState,
-    predicate: Option<Arc<dyn datafusion::physical_expr::PhysicalExpr>>,
-    adapter_factory: Arc<
-        dyn datafusion::physical_expr::schema_rewriter::PhysicalExprAdapterFactory,
-    >,
+    predicate: Option<Arc<dyn PhysicalExpr>>,
+    adapter_factory: Arc<dyn PhysicalExprAdapterFactory>,
 ) -> DeltaResult<FindFiles> {
     let current_metadata = snapshot.metadata();
 

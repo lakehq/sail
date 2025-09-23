@@ -5,6 +5,7 @@ use datafusion::execution::context::SessionState;
 use datafusion::logical_expr::{LogicalPlanBuilder, Operator};
 use datafusion::physical_expr::expressions::{BinaryExpr, Literal, NotExpr};
 use datafusion::physical_expr::PhysicalExpr;
+use datafusion::physical_expr_adapter::PhysicalExprAdapterFactory;
 use datafusion::physical_plan::filter::FilterExec;
 use datafusion::physical_plan::{ExecutionPlan, ExecutionPlanProperties};
 use datafusion::prelude::DataFrame;
@@ -54,9 +55,7 @@ pub(crate) async fn execute_non_empty_expr_physical(
     writer_stats_config: WriterStatsConfig,
     partition_scan: bool,
     operation_id: Uuid,
-    adapter_factory: Arc<
-        dyn datafusion::physical_expr::schema_rewriter::PhysicalExprAdapterFactory,
-    >,
+    adapter_factory: Arc<dyn PhysicalExprAdapterFactory>,
 ) -> DeltaResult<(Vec<Action>, Option<DataFrame>)> {
     let mut actions: Vec<Action> = Vec::new();
 
@@ -195,9 +194,7 @@ pub async fn prepare_predicate_actions_physical(
     operation_id: Uuid,
     candidates: &[Add],
     partition_scan: bool,
-    adapter_factory: Arc<
-        dyn datafusion::physical_expr::schema_rewriter::PhysicalExprAdapterFactory,
-    >,
+    adapter_factory: Arc<dyn PhysicalExprAdapterFactory>,
 ) -> DeltaResult<(Vec<Action>, Option<DataFrame>)> {
     let (mut actions, cdf_df) = execute_non_empty_expr_physical(
         snapshot,
