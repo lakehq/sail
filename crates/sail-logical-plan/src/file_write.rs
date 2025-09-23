@@ -5,8 +5,7 @@ use datafusion_common::{DFSchema, DFSchemaRef};
 use datafusion_expr::expr::Sort;
 use datafusion_expr::{Expr, LogicalPlan, UserDefinedLogicalNodeCore};
 use sail_common_datafusion::datasource::{BucketBy, SinkMode};
-
-use crate::utils::ItemTaker;
+use sail_common_datafusion::utils::items::ItemTaker;
 
 #[derive(Clone, Debug, Eq, PartialEq, Hash, PartialOrd)]
 pub struct FileWriteOptions {

@@ -16,12 +16,12 @@ use datafusion_expr::{
     and, col, expr, lit, or, Expr, ExprSchemable, LogicalPlan, LogicalPlanBuilder, ScalarUDF,
 };
 use sail_common::spec;
+use sail_common_datafusion::utils::items::ItemTaker;
 use sail_function::scalar::math::random::Random;
 
 use crate::error::{PlanError, PlanResult};
 use crate::resolver::state::PlanResolverState;
 use crate::resolver::PlanResolver;
-use crate::utils::ItemTaker;
 
 impl PlanResolver<'_> {
     pub(super) async fn resolve_query_stat_summary(

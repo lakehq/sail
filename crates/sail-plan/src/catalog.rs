@@ -15,24 +15,21 @@ use sail_catalog::manager::CatalogManager;
 use sail_catalog::provider::{DatabaseStatus, TableColumnStatus, TableKind, TableStatus};
 use sail_catalog::utils::quote_names_if_needed;
 use sail_common_datafusion::extension::SessionExtensionAccessor;
+use sail_common_datafusion::utils::items::ItemTaker;
 
-use crate::config::PlanConfig;
 use crate::formatter::{PlanFormatter, SparkPlanFormatter};
-use crate::utils::ItemTaker;
 
 #[derive(Clone, Debug, Eq, PartialEq, Hash)]
 pub(crate) struct CatalogCommandNode {
     name: String,
     schema: DFSchemaRef,
     command: CatalogCommand,
-    config: Arc<PlanConfig>,
 }
 
 #[derive(PartialEq, PartialOrd)]
 struct CatalogCommandNodeOrd<'a> {
     name: &'a String,
     command: &'a CatalogCommand,
-    config: &'a Arc<PlanConfig>,
 }
 
 impl<'a> From<&'a CatalogCommandNode> for CatalogCommandNodeOrd<'a> {
@@ -40,7 +37,6 @@ impl<'a> From<&'a CatalogCommandNode> for CatalogCommandNodeOrd<'a> {
         Self {
             name: &node.name,
             command: &node.command,
-            config: &node.config,
         }
     }
 }
@@ -52,7 +48,7 @@ impl PartialOrd for CatalogCommandNode {
 }
 
 impl CatalogCommandNode {
-    pub(crate) fn try_new(command: CatalogCommand, config: Arc<PlanConfig>) -> Result<Self> {
+    pub(crate) fn try_new(command: CatalogCommand) -> Result<Self> {
         let schema = command
             .schema::<SparkCatalogDisplay>()
             .map_err(|e| internal_datafusion_err!("{e}"))?;
@@ -60,7 +56,6 @@ impl CatalogCommandNode {
             name: format!("CatalogCommand: {}", command.name()),
             schema: DFSchemaRef::new(DFSchema::try_from(schema)?),
             command,
-            config,
         })
     }
 }

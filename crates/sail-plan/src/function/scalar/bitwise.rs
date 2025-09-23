@@ -1,10 +1,10 @@
 use datafusion::arrow::datatypes::DataType;
 use datafusion::functions::expr_fn::abs;
 use datafusion_expr::{cast, expr, lit, when, ExprSchemable, Operator};
+use sail_common_datafusion::utils::items::ItemTaker;
 
 use crate::error::{PlanError, PlanResult};
 use crate::function::common::{ScalarFunction, ScalarFunctionInput};
-use crate::utils::ItemTaker;
 
 fn bit_count(input: expr::Expr) -> expr::Expr {
     let mut count = cast(input, DataType::UInt64);

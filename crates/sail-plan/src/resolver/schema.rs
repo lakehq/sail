@@ -2,11 +2,11 @@ use std::sync::Arc;
 
 use datafusion_common::{Column, DFSchemaRef, TableReference};
 use sail_common::spec;
+use sail_common_datafusion::utils::items::ItemTaker;
 
 use crate::error::{PlanError, PlanResult};
 use crate::resolver::state::PlanResolverState;
 use crate::resolver::PlanResolver;
-use crate::utils::ItemTaker;
 
 impl PlanResolver<'_> {
     pub(super) fn resolve_table_reference(

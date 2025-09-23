@@ -3,6 +3,7 @@ use datafusion_common::ScalarValue;
 use datafusion_expr::utils::{expr_as_column_expr, find_aggregate_exprs};
 use datafusion_expr::{Expr, LogicalPlan, LogicalPlanBuilder};
 use sail_common::spec;
+use sail_common_datafusion::utils::items::ItemTaker;
 
 use crate::error::{PlanError, PlanResult};
 use crate::resolver::expression::NamedExpr;
@@ -10,7 +11,6 @@ use crate::resolver::state::{AggregateState, PlanResolverState};
 use crate::resolver::tree::explode::ExplodeRewriter;
 use crate::resolver::tree::window::WindowRewriter;
 use crate::resolver::PlanResolver;
-use crate::utils::ItemTaker;
 
 impl PlanResolver<'_> {
     pub(super) async fn resolve_query_aggregate(

@@ -4,18 +4,18 @@ use datafusion_common::TableReference;
 use datafusion_expr::{Expr, ExprSchemable, Extension, LogicalPlan, Projection};
 use sail_common::spec;
 use sail_common_datafusion::udf::StreamUDF;
+use sail_common_datafusion::utils::items::ItemTaker;
+use sail_logical_plan::map_partitions::MapPartitionsNode;
 use sail_python_udf::cereal::pyspark_udtf::PySparkUdtfPayload;
 use sail_python_udf::get_udf_name;
 use sail_python_udf::udf::pyspark_udtf::{PySparkUDTF, PySparkUdtfKind};
 
 use crate::error::{PlanError, PlanResult};
-use crate::extension::logical::MapPartitionsNode;
 use crate::resolver::expression::NamedExpr;
 use crate::resolver::function::PythonUdtf;
 use crate::resolver::state::PlanResolverState;
 use crate::resolver::tree::table_input::TableInputRewriter;
 use crate::resolver::PlanResolver;
-use crate::utils::ItemTaker;
 
 impl PlanResolver<'_> {
     pub(super) async fn resolve_query_common_inline_udtf(

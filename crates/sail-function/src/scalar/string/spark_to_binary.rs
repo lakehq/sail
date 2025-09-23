@@ -9,10 +9,10 @@ use datafusion_expr::simplify::{ExprSimplifyResult, SimplifyInfo};
 use datafusion_expr::{expr, Expr, ScalarFunctionArgs, ScalarUDF, ScalarUDFImpl};
 use datafusion_expr_common::columnar_value::ColumnarValue;
 use datafusion_expr_common::signature::{Signature, TypeSignature, Volatility};
+use sail_common_datafusion::utils::items::ItemTaker;
 
 use crate::scalar::math::spark_hex_unhex::SparkUnHex;
 use crate::scalar::string::spark_base64::SparkUnbase64;
-use crate::utils::ItemTaker;
 
 #[derive(Debug, PartialEq, Eq, Hash)]
 pub struct SparkToBinary {

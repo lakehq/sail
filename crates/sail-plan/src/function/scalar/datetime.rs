@@ -6,6 +6,7 @@ use datafusion_common::ScalarValue;
 use datafusion_expr::expr::{self, Expr};
 use datafusion_expr::{cast, lit, try_cast, when, BinaryExpr, ExprSchemable, Operator, ScalarUDF};
 use sail_common::datetime::time_unit_to_multiplier;
+use sail_common_datafusion::utils::items::ItemTaker;
 use sail_function::scalar::datetime::convert_tz::ConvertTz;
 use sail_function::scalar::datetime::spark_date_part::SparkDatePart;
 use sail_function::scalar::datetime::spark_last_day::SparkLastDay;
@@ -21,7 +22,6 @@ use sail_function::scalar::datetime::timestamp_now::TimestampNow;
 
 use crate::error::{PlanError, PlanResult};
 use crate::function::common::{ScalarFunction, ScalarFunctionInput};
-use crate::utils::ItemTaker;
 
 fn integer_part(expr: Expr, part: &str) -> Expr {
     cast(

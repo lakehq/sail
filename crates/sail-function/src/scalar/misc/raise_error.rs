@@ -5,8 +5,7 @@ use datafusion::common::{DataFusionError, Result};
 use datafusion::logical_expr::{ColumnarValue, ScalarUDFImpl, Signature, Volatility};
 use datafusion_common::{internal_err, ScalarValue};
 use datafusion_expr::ScalarFunctionArgs;
-
-use crate::utils::ItemTaker;
+use sail_common_datafusion::utils::items::ItemTaker;
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct RaiseError {

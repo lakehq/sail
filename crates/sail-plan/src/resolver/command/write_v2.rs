@@ -1,5 +1,6 @@
 use datafusion_expr::LogicalPlan;
 use sail_common::spec;
+use sail_common_datafusion::utils::items::ItemTaker;
 
 use crate::error::{PlanError, PlanResult};
 use crate::resolver::command::write::{
@@ -7,7 +8,6 @@ use crate::resolver::command::write::{
 };
 use crate::resolver::state::PlanResolverState;
 use crate::resolver::PlanResolver;
-use crate::utils::ItemTaker;
 
 impl PlanResolver<'_> {
     /// Resolves the write operation for the Spark DataFrameWriter v2 API.

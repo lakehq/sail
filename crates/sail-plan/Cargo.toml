@@ -28,13 +28,9 @@ datafusion-spark = { workspace = true }
 datafusion-functions-json = { workspace = true }
 thiserror = { workspace = true }
 tonic = { workspace = true }
-tokio-stream = { workspace = true }
 async-trait = { workspace = true }
 async-recursion = { workspace = true }
 lazy_static = { workspace = true }
-futures = { workspace = true }
-comfy-table = { workspace = true }
-html-escape = { workspace = true }
 ryu = { workspace = true }
 either = { workspace = true }
 tokio = { workspace = true }

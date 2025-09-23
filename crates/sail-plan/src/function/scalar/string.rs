@@ -5,6 +5,7 @@ use datafusion::functions::regex::regexpcount::RegexpCountFunc;
 use datafusion::functions::regex::regexpinstr::RegexpInstrFunc;
 use datafusion_common::{DFSchema, ScalarValue};
 use datafusion_expr::{cast, expr, lit, try_cast, when, ExprSchemable};
+use sail_common_datafusion::utils::items::ItemTaker;
 use datafusion_spark::function::string::luhn_check::SparkLuhnCheck;
 use sail_function::scalar::string::levenshtein::Levenshtein;
 use sail_function::scalar::string::make_valid_utf8::MakeValidUtf8;
@@ -19,7 +20,6 @@ use sail_function::scalar::string::spark_try_to_number::SparkTryToNumber;
 
 use crate::error::{PlanError, PlanResult};
 use crate::function::common::{ScalarFunction, ScalarFunctionInput};
-use crate::utils::ItemTaker;
 
 fn regexp_replace(string: expr::Expr, pattern: expr::Expr, replacement: expr::Expr) -> expr::Expr {
     regex_fn::regexp_replace(string, pattern, replacement, Some(lit("g")))
@@ -234,7 +234,7 @@ pub(super) fn list_built_in_string_functions() -> Vec<(&'static str, ScalarFunct
         ("lower", F::custom(lower)),
         ("lpad", F::var_arg(expr_fn::lpad)),
         ("ltrim", F::var_arg(rev_args(expr_fn::ltrim))),
-        ("luhn_check", F::udf(SparkLuhnCheck::new())),
+        ("luhn_check", F::unknown("luhn_check")),
         ("make_valid_utf8", F::udf(MakeValidUtf8::new())),
         ("mask", F::udf(SparkMask::new())),
         ("octet_length", F::custom(octet_length)),

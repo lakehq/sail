@@ -5,7 +5,7 @@ use datafusion_common::{plan_datafusion_err, plan_err, Result};
 use either::Either;
 
 /// A trait for taking items from a container of expected size.
-pub(crate) trait ItemTaker {
+pub trait ItemTaker {
     type Item;
 
     fn zero(self) -> Result<()>;

@@ -6,8 +6,7 @@ use std::sync::Arc;
 use datafusion::arrow::datatypes::{DataType, Field};
 use datafusion_common::{plan_err, DFSchema, DFSchemaRef, Result};
 use datafusion_expr::{Expr, LogicalPlan, UserDefinedLogicalNodeCore};
-
-use crate::utils::ItemTaker;
+use sail_common_datafusion::utils::items::ItemTaker;
 
 #[derive(Clone, Debug, Eq, PartialEq, Hash)]
 pub struct SchemaPivotNode {

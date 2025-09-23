@@ -8,6 +8,7 @@ use datafusion_expr::{cast, expr, lit, Expr, ExprSchemable, Operator, ScalarUDF}
 use datafusion_spark::function::math::expm1::SparkExpm1;
 use datafusion_spark::function::math::width_bucket::SparkWidthBucket;
 use half::f16;
+use sail_common_datafusion::utils::items::ItemTaker;
 use sail_function::error::generic_exec_err;
 use sail_function::scalar::math::least_greatest;
 use sail_function::scalar::math::rand_poisson::RandPoisson;
@@ -29,7 +30,6 @@ use sail_function::scalar::math::spark_try_subtract::SparkTrySubtract;
 
 use crate::error::{PlanError, PlanResult};
 use crate::function::common::{ScalarFunction, ScalarFunctionInput};
-use crate::utils::ItemTaker;
 
 /// Arguments:
 ///   - left: A numeric, DATE, TIMESTAMP, or INTERVAL expression.

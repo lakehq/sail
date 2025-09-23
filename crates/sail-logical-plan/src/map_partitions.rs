@@ -4,14 +4,13 @@ use std::sync::Arc;
 
 use datafusion_common::{DFSchema, DFSchemaRef, Result, TableReference};
 use datafusion_expr::{Expr, LogicalPlan, UserDefinedLogicalNodeCore};
+use sail_common_datafusion::rename::schema::rename_schema;
 use sail_common_datafusion::udf::StreamUDF;
-use sail_common_datafusion::utils::rename_schema;
-
-use crate::utils::ItemTaker;
+use sail_common_datafusion::utils::items::ItemTaker;
 
 #[allow(clippy::derived_hash_with_manual_eq)]
 #[derive(Clone, Debug, Eq, Hash)]
-pub(crate) struct MapPartitionsNode {
+pub struct MapPartitionsNode {
     input: Arc<LogicalPlan>,
     udf: Arc<dyn StreamUDF>,
     schema: DFSchemaRef,

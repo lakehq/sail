@@ -4,11 +4,10 @@ use std::sync::Arc;
 use datafusion_common::{DFSchemaRef, Result};
 use datafusion_expr::expr::{Expr, Sort};
 use datafusion_expr::{LogicalPlan, UserDefinedLogicalNodeCore};
-
-use crate::utils::ItemTaker;
+use sail_common_datafusion::utils::items::ItemTaker;
 
 #[derive(Clone, Debug, Eq, PartialEq, Hash, PartialOrd)]
-pub(crate) struct SortWithinPartitionsNode {
+pub struct SortWithinPartitionsNode {
     input: Arc<LogicalPlan>,
     sort_expr: Vec<Sort>,
     fetch: Option<usize>,

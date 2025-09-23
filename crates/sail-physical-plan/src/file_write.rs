@@ -7,8 +7,7 @@ use datafusion_common::Result;
 use datafusion_expr::LogicalPlan;
 use sail_common_datafusion::datasource::{create_sort_order, PhysicalSinkMode, SinkInfo, SinkMode};
 use sail_data_source::default_registry;
-
-use crate::extension::logical::FileWriteOptions;
+use sail_logical_plan::file_write::FileWriteOptions;
 
 pub async fn create_file_write_physical_plan(
     ctx: &SessionState,
