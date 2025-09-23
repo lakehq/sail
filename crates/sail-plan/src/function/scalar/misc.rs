@@ -6,14 +6,14 @@ use datafusion_expr::{expr, lit, when, ExprSchemable, Operator, ScalarUDF};
 use sail_catalog::manager::CatalogManager;
 use sail_catalog::utils::quote_namespace_if_needed;
 use sail_common_datafusion::extension::SessionExtensionAccessor;
-
-use crate::error::{PlanError, PlanResult};
-use crate::extension::function::misc::bitmap_count::BitmapCount;
-use crate::extension::function::misc::raise_error::RaiseError;
-use crate::extension::function::misc::spark_aes::{
+use sail_function::scalar::misc::bitmap_count::BitmapCount;
+use sail_function::scalar::misc::raise_error::RaiseError;
+use sail_function::scalar::misc::spark_aes::{
     SparkAESDecrypt, SparkAESEncrypt, SparkTryAESDecrypt, SparkTryAESEncrypt,
 };
-use crate::extension::function::misc::version::SparkVersion;
+use sail_function::scalar::misc::version::SparkVersion;
+
+use crate::error::{PlanError, PlanResult};
 use crate::function::common::{ScalarFunction, ScalarFunctionInput};
 use crate::utils::ItemTaker;
 

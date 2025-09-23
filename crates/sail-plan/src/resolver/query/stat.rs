@@ -16,9 +16,9 @@ use datafusion_expr::{
     and, col, expr, lit, or, Expr, ExprSchemable, LogicalPlan, LogicalPlanBuilder, ScalarUDF,
 };
 use sail_common::spec;
+use sail_function::scalar::math::random::Random;
 
 use crate::error::{PlanError, PlanResult};
-use crate::extension::function::math::random::Random;
 use crate::resolver::state::PlanResolverState;
 use crate::resolver::PlanResolver;
 use crate::utils::ItemTaker;

@@ -4,9 +4,9 @@ use datafusion_common::tree_node::{Transformed, TreeNodeRewriter};
 use datafusion_common::{plan_datafusion_err, Result};
 use datafusion_expr::expr::ScalarFunction;
 use datafusion_expr::{Expr, LogicalPlan, LogicalPlanBuilder, ScalarUDF};
+use sail_function::scalar::struct_function::StructFunction;
+use sail_function::scalar::table_input::TableInput;
 
-use crate::extension::function::struct_function::StructFunction;
-use crate::extension::function::table_input::TableInput;
 use crate::resolver::state::PlanResolverState;
 use crate::resolver::tree::{empty_logical_plan, PlanRewriter};
 use crate::resolver::PlanResolver;

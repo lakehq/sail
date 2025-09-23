@@ -10,11 +10,11 @@ use datafusion_expr_common::operator::Operator;
 use datafusion_functions::core::expr_ext::FieldAccessor;
 use datafusion_functions_nested::expr_fn::array_element;
 use sail_common::spec;
+use sail_function::scalar::drop_struct_field::DropStructField;
+use sail_function::scalar::table_input::TableInput;
+use sail_function::scalar::update_struct_field::UpdateStructField;
 
 use crate::error::{PlanError, PlanResult};
-use crate::extension::function::drop_struct_field::DropStructField;
-use crate::extension::function::table_input::TableInput;
-use crate::extension::function::update_struct_field::UpdateStructField;
 use crate::resolver::expression::NamedExpr;
 use crate::resolver::state::PlanResolverState;
 use crate::resolver::PlanResolver;

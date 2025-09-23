@@ -12,12 +12,12 @@ use datafusion_common::ScalarValue;
 use datafusion_expr::expr::{AggregateFunction, AggregateFunctionParams};
 use datafusion_expr::{cast, expr, lit, when, AggregateUDF, ExprSchemable};
 use lazy_static::lazy_static;
+use sail_function::aggregate::kurtosis::KurtosisFunction;
+use sail_function::aggregate::max_min_by::{MaxByFunction, MinByFunction};
+use sail_function::aggregate::mode::ModeFunction;
+use sail_function::aggregate::skewness::SkewnessFunc;
 
 use crate::error::{PlanError, PlanResult};
-use crate::extension::function::kurtosis::KurtosisFunction;
-use crate::extension::function::max_min_by::{MaxByFunction, MinByFunction};
-use crate::extension::function::mode::ModeFunction;
-use crate::extension::function::skewness::SkewnessFunc;
 use crate::function::common::{
     get_arguments_and_null_treatment, get_null_treatment, AggFunction, AggFunctionInput,
 };
