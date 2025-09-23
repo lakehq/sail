@@ -16,21 +16,20 @@ impl Debug for LazyPyObject {
     }
 }
 
-// CHECK HERE: CLAUDE GENERATED THIS AND THIS LOOKS WRONG. JUST NEEDED TO UNBLOCK MYSELF...
 impl PartialEq for LazyPyObject {
     fn eq(&self, other: &Self) -> bool {
-        // Use identity comparison: two LazyPyObjects are equal
-        // if they are the same instance (pointer equality)
+        // Here we use pointer equality as a conservative implementation.
+        // It does not take into account the case where two different
+        // Python objects are "semantically" equal.
         std::ptr::eq(&self.0, &other.0)
     }
 }
 
 impl Eq for LazyPyObject {}
 
-// CHECK HERE: CLAUDE GENERATED THIS AND THIS LOOKS WRONG. JUST NEEDED TO UNBLOCK MYSELF...
 impl Hash for LazyPyObject {
     fn hash<H: Hasher>(&self, state: &mut H) {
-        // Hash the address of the GILOnceCell itself
+        // Hash the address of the GILOnceCell itself.
         std::ptr::addr_of!(self.0).hash(state)
     }
 }

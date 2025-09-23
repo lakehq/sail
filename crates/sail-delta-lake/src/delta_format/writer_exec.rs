@@ -14,7 +14,7 @@ use datafusion::physical_plan::{
     DisplayAs, DisplayFormatType, ExecutionPlan, ExecutionPlanProperties, Partitioning,
     PlanProperties, SendableRecordBatchStream,
 };
-use datafusion_common::{DataFusionError, Result};
+use datafusion_common::{internal_err, DataFusionError, Result};
 use datafusion_physical_expr::{Distribution, EquivalenceProperties};
 use deltalake::kernel::engine::arrow_conversion::{TryIntoArrow, TryIntoKernel};
 use deltalake::kernel::schema::StructType;
@@ -144,9 +144,7 @@ impl ExecutionPlan for DeltaWriterExec {
         children: Vec<Arc<dyn ExecutionPlan>>,
     ) -> Result<Arc<dyn ExecutionPlan>> {
         if children.len() != 1 {
-            return Err(DataFusionError::Internal(
-                "DeltaWriterExec requires exactly one child".to_string(),
-            ));
+            return internal_err!("DeltaWriterExec requires exactly one child");
         }
 
         Ok(Arc::new(Self::new(
@@ -166,16 +164,14 @@ impl ExecutionPlan for DeltaWriterExec {
         context: Arc<TaskContext>,
     ) -> Result<SendableRecordBatchStream> {
         if partition != 0 {
-            return Err(DataFusionError::Internal(
-                "DeltaWriterExec can only be executed in a single partition".to_string(),
-            ));
+            return internal_err!("DeltaWriterExec can only be executed in a single partition");
         }
 
         let input_partitions = self.input.output_partitioning().partition_count();
         if input_partitions != 1 {
-            return Err(DataFusionError::Internal(format!(
+            return internal_err!(
                 "DeltaWriterExec requires exactly one input partition, got {input_partitions}"
-            )));
+            );
         }
 
         let stream = self.input.execute(0, Arc::clone(&context))?;

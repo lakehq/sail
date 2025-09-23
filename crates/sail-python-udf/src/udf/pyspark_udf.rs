@@ -16,7 +16,7 @@ use crate::error::PyUdfResult;
 use crate::lazy::LazyPyObject;
 use crate::python::spark::PySpark;
 
-#[derive(Debug, PartialEq, Eq, Hash, Clone, Copy)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum PySparkUdfKind {
     Batch,
     ArrowBatch,
