@@ -5,6 +5,7 @@ use datafusion::execution::SendableRecordBatchStream;
 use datafusion::logical_expr::{PlanType, StringifiedPlan};
 use futures::StreamExt;
 use sail_common_datafusion::error::CommonErrorCause;
+use sail_python_udf::error::PyErrExtractor;
 use tokio::sync::{oneshot, watch};
 
 use crate::error::{SparkError, SparkResult, SparkThrowable};
@@ -71,7 +72,7 @@ impl StreamingQuery {
                 match x {
                     Ok(_) => {}
                     Err(e) => {
-                        let cause = CommonErrorCause::new(&e);
+                        let cause = CommonErrorCause::new::<PyErrExtractor>(&e);
                         let _ = error.send(Some(cause.into()));
                     }
                 }
