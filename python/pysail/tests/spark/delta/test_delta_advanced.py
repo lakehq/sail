@@ -56,14 +56,14 @@ class TestDeltaAdvancedFeatures:
         df0.write.format("delta").mode("overwrite").save(delta_table_path)
         # Capture the timestamp right after the commit
         ts0 = datetime.now(timezone.utc).isoformat()
-        time.sleep(1)
+        time.sleep(0.1)
 
         # Version 1: Add data
         v1_data = [Row(id=2, value="v1")]
         df1 = spark.createDataFrame(v1_data)
         df1.write.format("delta").mode("append").save(delta_table_path)
         ts1 = datetime.now(timezone.utc).isoformat()
-        time.sleep(1)
+        time.sleep(0.1)
 
         # Version 2: Overwrite data
         v2_data = [Row(id=3, value="v2")]
