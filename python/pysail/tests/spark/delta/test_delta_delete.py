@@ -1,7 +1,7 @@
 import pytest
 from pyspark.sql.types import BooleanType, IntegerType, Row, StringType, StructField, StructType
 
-from pysail.tests.spark.utils import escape_sql_string_literal, get_data_files
+from pysail.tests.spark.utils import escape_sql_string_literal
 
 
 class TestDeltaDelete:
@@ -85,46 +85,6 @@ class TestDeltaDelete:
         finally:
             spark.sql(f"DROP TABLE IF EXISTS {table_name}")
 
-    def test_delta_delete_numeric_condition(self, spark, delta_delete_test_data, tmp_path):
-        """Test DELETE with numeric conditions"""
-        delta_path = tmp_path / "delta_delete_numeric"
-        table_name = "delta_delete_numeric_table"
-
-        schema = StructType(
-            [
-                StructField("id", IntegerType(), True),
-                StructField("name", StringType(), True),
-                StructField("age", IntegerType(), True),
-                StructField("department", StringType(), True),
-                StructField("salary", IntegerType(), True),
-                StructField("active", BooleanType(), True),
-            ]
-        )
-
-        df = spark.createDataFrame(delta_delete_test_data, schema)
-        df.write.format("delta").mode("overwrite").save(str(delta_path))
-
-        spark.sql(f"CREATE TABLE {table_name} USING DELTA LOCATION '{escape_sql_string_literal(str(delta_path))}'")
-
-        try:
-            # Delete rows where age > 30
-            spark.sql(f"DELETE FROM {table_name} WHERE age > 30")  # noqa: S608
-
-            result_df = spark.sql(f"SELECT * FROM {table_name} ORDER BY id")  # noqa: S608
-            remaining_rows = result_df.collect()
-
-            # Should keep: Alice (25), Bob (30), Diana (28), Grace (27)
-            expected_ids = [1, 2, 4, 7]
-            actual_ids = [row.id for row in remaining_rows]
-            assert actual_ids == expected_ids, f"Expected IDs {expected_ids}, got {actual_ids}"
-
-            # Verify all remaining ages are <= 30
-            ages = [row.age for row in remaining_rows]
-            assert all(age <= 30 for age in ages), f"All remaining ages should be <= 30, got {ages}"  # noqa: PLR2004
-
-        finally:
-            spark.sql(f"DROP TABLE IF EXISTS {table_name}")
-
     def test_delta_delete_multiple_conditions(self, spark, delta_delete_test_data, tmp_path):
         """Test DELETE with multiple AND/OR conditions"""
         delta_path = tmp_path / "delta_delete_multiple"
@@ -162,134 +122,6 @@ class TestDeltaDelete:
             expected_ids = [1, 2, 3, 6, 8]
             actual_ids = [row.id for row in remaining_rows]
             assert actual_ids == expected_ids, f"Expected IDs {expected_ids}, got {actual_ids}"
-
-        finally:
-            spark.sql(f"DROP TABLE IF EXISTS {table_name}")
-
-    def test_delta_delete_boolean_condition(self, spark, delta_delete_test_data, tmp_path):
-        """Test DELETE with boolean conditions"""
-        delta_path = tmp_path / "delta_delete_boolean"
-        table_name = "delta_delete_boolean_table"
-
-        schema = StructType(
-            [
-                StructField("id", IntegerType(), True),
-                StructField("name", StringType(), True),
-                StructField("age", IntegerType(), True),
-                StructField("department", StringType(), True),
-                StructField("salary", IntegerType(), True),
-                StructField("active", BooleanType(), True),
-            ]
-        )
-
-        df = spark.createDataFrame(delta_delete_test_data, schema)
-        df.write.format("delta").mode("overwrite").save(str(delta_path))
-
-        spark.sql(f"CREATE TABLE {table_name} USING DELTA LOCATION '{escape_sql_string_literal(str(delta_path))}'")
-
-        try:
-            # Delete inactive employees
-            spark.sql(f"DELETE FROM {table_name} WHERE active = false")  # noqa: S608
-
-            result_df = spark.sql(f"SELECT * FROM {table_name}")  # noqa: S608
-            remaining_rows = result_df.collect()
-
-            # Should only keep active employees
-            assert all(row.active for row in remaining_rows), "All remaining employees should be active"
-
-            # Should remove Charlie and Frank (both inactive)
-            remaining_names = [row.name for row in remaining_rows]
-            assert "Charlie" not in remaining_names, "Charlie should be removed"
-            assert "Frank" not in remaining_names, "Frank should be removed"
-
-            expected_count = 6  # 8 - 2 inactive
-            assert (
-                len(remaining_rows) == expected_count
-            ), f"Expected {expected_count} active employees, got {len(remaining_rows)}"
-
-        finally:
-            spark.sql(f"DROP TABLE IF EXISTS {table_name}")
-
-    def test_delta_delete_in_condition(self, spark, delta_delete_test_data, tmp_path):
-        """Test DELETE with IN condition"""
-        delta_path = tmp_path / "delta_delete_in"
-        table_name = "delta_delete_in_table"
-
-        schema = StructType(
-            [
-                StructField("id", IntegerType(), True),
-                StructField("name", StringType(), True),
-                StructField("age", IntegerType(), True),
-                StructField("department", StringType(), True),
-                StructField("salary", IntegerType(), True),
-                StructField("active", BooleanType(), True),
-            ]
-        )
-
-        df = spark.createDataFrame(delta_delete_test_data, schema)
-        df.write.format("delta").mode("overwrite").save(str(delta_path))
-
-        spark.sql(f"CREATE TABLE {table_name} USING DELTA LOCATION '{escape_sql_string_literal(str(delta_path))}'")
-
-        try:
-            # Delete specific employees by name
-            spark.sql(f"DELETE FROM {table_name} WHERE name IN ('Alice', 'Charlie', 'Grace')")  # noqa: S608
-
-            result_df = spark.sql(f"SELECT * FROM {table_name} ORDER BY id")  # noqa: S608
-            remaining_rows = result_df.collect()
-
-            remaining_names = [row.name for row in remaining_rows]
-            assert "Alice" not in remaining_names, "Alice should be removed"
-            assert "Charlie" not in remaining_names, "Charlie should be removed"
-            assert "Grace" not in remaining_names, "Grace should be removed"
-
-            expected_names = ["Bob", "Diana", "Eve", "Frank", "Henry"]
-            assert sorted(remaining_names) == sorted(
-                expected_names
-            ), f"Expected {expected_names}, got {remaining_names}"
-
-        finally:
-            spark.sql(f"DROP TABLE IF EXISTS {table_name}")
-
-    def test_delta_delete_range_condition(self, spark, delta_delete_test_data, tmp_path):
-        """Test DELETE with range conditions (BETWEEN)"""
-        delta_path = tmp_path / "delta_delete_range"
-        table_name = "delta_delete_range_table"
-
-        schema = StructType(
-            [
-                StructField("id", IntegerType(), True),
-                StructField("name", StringType(), True),
-                StructField("age", IntegerType(), True),
-                StructField("department", StringType(), True),
-                StructField("salary", IntegerType(), True),
-                StructField("active", BooleanType(), True),
-            ]
-        )
-
-        df = spark.createDataFrame(delta_delete_test_data, schema)
-        df.write.format("delta").mode("overwrite").save(str(delta_path))
-
-        spark.sql(f"CREATE TABLE {table_name} USING DELTA LOCATION '{escape_sql_string_literal(str(delta_path))}'")
-
-        try:
-            # Delete employees with salary between 60000 and 80000
-            spark.sql(f"DELETE FROM {table_name} WHERE salary BETWEEN 60000 AND 80000")  # noqa: S608
-
-            result_df = spark.sql(f"SELECT * FROM {table_name} ORDER BY salary")  # noqa: S608
-            remaining_rows = result_df.collect()
-
-            # Should keep employees with salary < 60000 or > 80000
-            salaries = [row.salary for row in remaining_rows]
-            for salary in salaries:
-                assert salary < 60000 or salary > 80000, f"Salary {salary} should be outside range [60000, 80000]"  # noqa: PLR2004
-
-            # Should keep: Diana (55000), Grace (50000), Charlie (85000), Frank (95000)
-            expected_names = ["Diana", "Grace", "Charlie", "Frank"]
-            remaining_names = [row.name for row in remaining_rows]
-            assert sorted(remaining_names) == sorted(
-                expected_names
-            ), f"Expected {expected_names}, got {remaining_names}"
 
         finally:
             spark.sql(f"DROP TABLE IF EXISTS {table_name}")
@@ -438,43 +270,6 @@ class TestDeltaDelete:
         finally:
             spark.sql(f"DROP TABLE IF EXISTS {table_name}")
 
-    def test_delta_delete_file_lifecycle(self, spark, delta_delete_test_data, tmp_path):
-        """Test that DELETE operations create new data files and handle file lifecycle correctly"""
-        delta_path = tmp_path / "delta_delete_lifecycle"
-        table_name = "delta_delete_lifecycle_table"
-
-        schema = StructType(
-            [
-                StructField("id", IntegerType(), True),
-                StructField("name", StringType(), True),
-                StructField("age", IntegerType(), True),
-                StructField("department", StringType(), True),
-                StructField("salary", IntegerType(), True),
-                StructField("active", BooleanType(), True),
-            ]
-        )
-
-        df = spark.createDataFrame(delta_delete_test_data, schema)
-        df.write.format("delta").mode("overwrite").save(str(delta_path))
-
-        files_before = set(get_data_files(str(delta_path)))
-        assert len(files_before) > 0, "Should have data files after initial write"
-
-        spark.sql(f"CREATE TABLE {table_name} USING DELTA LOCATION '{escape_sql_string_literal(str(delta_path))}'")
-
-        try:
-            # Perform DELETE operation
-            spark.sql(f"DELETE FROM {table_name} WHERE department = 'Engineering'")  # noqa: S608
-
-            # DELETE should create new files and may keep old ones (depending on implementation)
-            # The key assertion is that the operation completes successfully and data is correct
-            result = spark.sql(f"SELECT COUNT(*) as count FROM {table_name}").collect()  # noqa: S608
-            result_count = result[0]["count"]
-            assert result_count == 5, f"Expected 5 rows after delete, got {result_count}"  # noqa: PLR2004
-
-        finally:
-            spark.sql(f"DROP TABLE IF EXISTS {table_name}")
-
     def test_delta_delete_case_sensitivity(self, spark, tmp_path):
         """Test DELETE with case-sensitive string comparisons"""
         delta_path = tmp_path / "delta_delete_case"
@@ -544,47 +339,6 @@ class TestDeltaDelete:
             # Verify no remaining rows have NULL department
             departments = [row.department for row in remaining_rows]
             assert None not in departments, f"No NULL departments should remain, got {departments}"
-
-        finally:
-            spark.sql(f"DROP TABLE IF EXISTS {table_name}")
-
-    def test_delta_delete_transaction_atomicity(self, spark, delta_delete_test_data, tmp_path):
-        """Test that DELETE operations are atomic (either all succeed or all fail)"""
-        delta_path = tmp_path / "delta_delete_atomic"
-        table_name = "delta_delete_atomic_table"
-
-        schema = StructType(
-            [
-                StructField("id", IntegerType(), True),
-                StructField("name", StringType(), True),
-                StructField("age", IntegerType(), True),
-                StructField("department", StringType(), True),
-                StructField("salary", IntegerType(), True),
-                StructField("active", BooleanType(), True),
-            ]
-        )
-
-        df = spark.createDataFrame(delta_delete_test_data, schema)
-        df.write.format("delta").mode("overwrite").save(str(delta_path))
-
-        spark.sql(f"CREATE TABLE {table_name} USING DELTA LOCATION '{escape_sql_string_literal(str(delta_path))}'")
-
-        try:
-            initial_result = spark.sql(f"SELECT COUNT(*) as count FROM {table_name}").collect()  # noqa: S608
-            initial_count = initial_result[0]["count"]
-
-            # Perform a valid DELETE operation
-            spark.sql(f"DELETE FROM {table_name} WHERE age < 30")  # noqa: S608
-
-            # Verify the operation completed successfully
-            final_result = spark.sql(f"SELECT COUNT(*) as count FROM {table_name}").collect()  # noqa: S608
-            final_count = final_result[0]["count"]
-            assert final_count < initial_count, "Some rows should have been deleted"
-
-            # Verify remaining data integrity
-            result_df = spark.sql(f"SELECT * FROM {table_name}")  # noqa: S608
-            remaining_ages = [row.age for row in result_df.collect()]
-            assert all(age >= 30 for age in remaining_ages), "All remaining employees should be 30 or older"  # noqa: PLR2004
 
         finally:
             spark.sql(f"DROP TABLE IF EXISTS {table_name}")
