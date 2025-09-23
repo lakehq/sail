@@ -2,7 +2,6 @@ use std::sync::Arc;
 
 use async_recursion::async_recursion;
 use datafusion::dataframe::DataFrame;
-use datafusion::execution::context::QueryPlanner;
 use datafusion::physical_plan::{displayable, ExecutionPlan};
 use datafusion::prelude::SessionContext;
 use datafusion_common::display::{PlanType, StringifiedPlan, ToStringifiedPlan};
@@ -25,7 +24,7 @@ pub mod error;
 pub mod formatter;
 pub mod function;
 pub mod literal;
-mod planner;
+pub mod planner;
 pub mod resolver;
 mod streaming;
 
@@ -85,10 +84,4 @@ pub async fn resolve_and_execute_plan(
         displayable(plan.as_ref()).indent(true).to_string(),
     ));
     Ok((plan, info))
-}
-
-pub fn new_query_planner() -> Arc<dyn QueryPlanner + Send + Sync> {
-    use planner::ExtensionQueryPlanner;
-
-    Arc::new(ExtensionQueryPlanner {})
 }

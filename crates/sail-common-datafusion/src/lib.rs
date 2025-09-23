@@ -1,6 +1,5 @@
 pub mod array;
 pub mod datasource;
-pub mod datetime;
 pub mod display;
 pub mod error;
 pub mod extension;

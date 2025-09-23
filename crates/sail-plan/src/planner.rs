@@ -220,3 +220,7 @@ fn plan_explicit_partitioning(
         }
     }
 }
+
+pub fn new_query_planner() -> Arc<dyn QueryPlanner + Send + Sync> {
+    Arc::new(ExtensionQueryPlanner {})
+}
