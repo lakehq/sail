@@ -487,6 +487,33 @@ fn median(input: WinFunctionInput) -> PlanResult<expr::Expr> {
     ))
 }
 
+fn approx_count_distinct(input: WinFunctionInput) -> PlanResult<expr::Expr> {
+    let WinFunctionInput {
+        arguments,
+        partition_by,
+        order_by,
+        window_frame,
+        ignore_nulls,
+        distinct,
+        function_context: _,
+    } = input;
+    Ok(cast(
+        expr::Expr::WindowFunction(Box::new(expr::WindowFunction {
+            fun: WindowFunctionDefinition::AggregateUDF(approx_distinct::approx_distinct_udaf()),
+            params: WindowFunctionParams {
+                args: arguments,
+                partition_by,
+                order_by,
+                window_frame,
+                filter: None,
+                null_treatment: get_null_treatment(ignore_nulls),
+                distinct,
+            },
+        })),
+        DataType::Int64,
+    ))
+}
+
 fn list_built_in_window_functions() -> Vec<(&'static str, WinFunction)> {
     use crate::function::common::WinFunctionBuilder as F;
     vec![
@@ -507,10 +534,7 @@ fn list_built_in_window_functions() -> Vec<(&'static str, WinFunction)> {
         // Aggregate
         ("any", F::aggregate(bool_and_or::bool_or_udaf)),
         ("any_value", F::custom(first_value)),
-        (
-            "approx_count_distinct",
-            F::aggregate(approx_distinct::approx_distinct_udaf),
-        ),
+        ("approx_count_distinct", F::custom(approx_count_distinct)),
         (
             "approx_percentile",
             F::aggregate(approx_percentile_cont::approx_percentile_cont_udaf),
