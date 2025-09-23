@@ -12,7 +12,7 @@ use sail_sql_analyzer::parser::parse_date;
 
 use crate::utils::ItemTaker;
 
-#[derive(Debug)]
+#[derive(Debug, PartialEq, Eq, Hash)]
 pub struct SparkDate {
     signature: Signature,
 }

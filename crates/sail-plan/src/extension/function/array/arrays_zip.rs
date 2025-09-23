@@ -14,7 +14,7 @@ use datafusion_functions::utils::make_scalar_function;
 
 use crate::extension::function::struct_function::to_struct_array;
 
-#[derive(Debug)]
+#[derive(Debug, PartialEq, Eq, Hash)]
 pub struct ArraysZip {
     signature: Signature,
 }

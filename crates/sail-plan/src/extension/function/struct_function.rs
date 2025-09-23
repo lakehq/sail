@@ -29,7 +29,7 @@ pub fn to_struct_array(args: &[ArrayRef], field_names: &[String]) -> Result<Arra
     Ok(Arc::new(StructArray::from(vec)))
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct StructFunction {
     signature: Signature,
     field_names: Vec<String>,

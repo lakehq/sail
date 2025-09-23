@@ -15,7 +15,7 @@ use crate::extension::function::map::utils::{
 
 /// Spark-compatible `map_from_arrays` expression
 /// <https://spark.apache.org/docs/latest/api/sql/index.html#map_from_arrays>
-#[derive(Debug)]
+#[derive(Debug, PartialEq, Eq, Hash)]
 pub struct MapFromArrays {
     signature: Signature,
 }

@@ -14,7 +14,7 @@ use crate::extension::function::map::utils::{
 
 /// Spark-compatible `map_from_entries` expression
 /// <https://spark.apache.org/docs/latest/api/sql/index.html#map_from_entries>
-#[derive(Debug)]
+#[derive(Debug, PartialEq, Eq, Hash)]
 pub struct MapFromEntries {
     signature: Signature,
 }

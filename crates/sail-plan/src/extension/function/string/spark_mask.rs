@@ -17,7 +17,7 @@ const MASKED_LOWERCASE: char = 'x';
 // Default character to replace digits
 const MASKED_DIGIT: char = 'n';
 
-#[derive(Debug)]
+#[derive(Debug, PartialEq, Eq, Hash)]
 pub struct SparkMask {
     signature: Signature,
 }

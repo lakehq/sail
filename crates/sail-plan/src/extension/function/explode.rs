@@ -20,13 +20,13 @@ pub fn explode_name_to_kind(name: &str) -> Result<ExplodeKind> {
     }
 }
 
-#[derive(Debug)]
+#[derive(Debug, PartialEq, Eq, Hash)]
 pub struct Explode {
     signature: Signature,
     kind: ExplodeKind,
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub enum ExplodeKind {
     Explode,
     ExplodeOuter,

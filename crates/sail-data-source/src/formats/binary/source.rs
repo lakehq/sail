@@ -184,6 +184,7 @@ impl FileOpener for BinaryOpener {
                                 proj.iter().map(|&i| schema.field(i).clone()).collect();
                             let projected_schema = Arc::new(Schema::new(projected_fields));
                             RecordBatch::try_new(projected_schema, projected_columns)
+                                .map_err(DataFusionError::from)
                         } else {
                             // Empty projection - return empty batch with row count preserved
                             let empty_schema = Arc::new(Schema::empty());
@@ -192,6 +193,7 @@ impl FileOpener for BinaryOpener {
                                 vec![],
                                 &RecordBatchOptions::new().with_row_count(Some(batch.num_rows())),
                             )
+                            .map_err(DataFusionError::from)
                         }
                     }
                     None => Ok(batch),

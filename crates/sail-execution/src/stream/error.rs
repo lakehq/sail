@@ -99,6 +99,7 @@ impl From<CommonErrorCause> for TaskStreamError {
             | CommonErrorCause::ArrowArithmeticOverflow(x)
             | CommonErrorCause::ArrowDictionaryKeyOverflow(x)
             | CommonErrorCause::ArrowRunEndIndexOverflow(x)
+            | CommonErrorCause::ArrowOffsetOverflow(x)
             | CommonErrorCause::FormatCsv(x)
             | CommonErrorCause::FormatJson(x)
             | CommonErrorCause::FormatParquet(x)

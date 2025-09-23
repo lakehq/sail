@@ -21,7 +21,7 @@ use datafusion_expr::{
 
 use crate::utils::ItemTaker;
 
-#[derive(Debug)]
+#[derive(Debug, PartialEq, Eq, Hash)]
 pub struct SparkAbs {
     signature: Signature,
 }

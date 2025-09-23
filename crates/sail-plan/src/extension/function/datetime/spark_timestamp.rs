@@ -7,7 +7,7 @@ use datafusion::arrow::datatypes::{DataType, TimeUnit, TimestampMicrosecondType}
 use datafusion_common::arrow::array::PrimitiveArray;
 use datafusion_common::cast::{as_large_string_array, as_string_array, as_string_view_array};
 use datafusion_common::types::logical_string;
-use datafusion_common::{exec_datafusion_err, exec_err, plan_datafusion_err, Result, ScalarValue};
+use datafusion_common::{exec_datafusion_err, exec_err, Result, ScalarValue};
 use datafusion_expr::{ColumnarValue, ScalarFunctionArgs, ScalarUDFImpl, Signature, Volatility};
 use datafusion_expr_common::signature::{Coercion, TypeSignatureClass};
 use sail_common_datafusion::datetime::localize_with_fallback;
@@ -15,59 +15,52 @@ use sail_sql_analyzer::parser::parse_timestamp;
 
 use crate::utils::ItemTaker;
 
-trait TimestampParser: Debug + Send + Sync {
-    fn string_to_microseconds(&self, value: &str) -> Result<i64>;
+#[derive(Debug, PartialEq, Eq, Hash)]
+enum TimestampParser {
+    Ltz { default_timezone: String },
+    Ntz,
 }
 
-#[derive(Debug)]
-struct TimestampLtzParser {
-    timezone: Tz,
-}
-
-impl TimestampParser for TimestampLtzParser {
+impl TimestampParser {
     fn string_to_microseconds(&self, value: &str) -> Result<i64> {
-        let (datetime, timezone) = parse_timestamp(value)
-            .and_then(|x| x.into_naive())
-            .map_err(|e| exec_datafusion_err!("{e}"))?;
-        let timezone = if timezone.is_empty() {
-            self.timezone
-        } else {
-            timezone.parse()?
-        };
-        let datetime = localize_with_fallback(&timezone, &datetime)?;
-        Ok(datetime.timestamp_micros())
+        match self {
+            TimestampParser::Ltz { default_timezone } => {
+                let (datetime, timezone) = parse_timestamp(value)
+                    .and_then(|x| x.into_naive())
+                    .map_err(|e| exec_datafusion_err!("{e}"))?;
+                let timezone: Tz = if timezone.is_empty() {
+                    default_timezone.parse()?
+                } else {
+                    timezone.parse()?
+                };
+                let datetime = localize_with_fallback(&timezone, &datetime)?;
+                Ok(datetime.timestamp_micros())
+            }
+            TimestampParser::Ntz => {
+                let (datetime, _timezone) = parse_timestamp(value)
+                    .and_then(|x| x.into_naive())
+                    .map_err(|e| exec_datafusion_err!("{e}"))?;
+                Ok(datetime.and_utc().timestamp_micros())
+            }
+        }
     }
 }
 
-#[derive(Debug)]
-struct TimestampNtzParser {}
-
-impl TimestampParser for TimestampNtzParser {
-    fn string_to_microseconds(&self, value: &str) -> Result<i64> {
-        let (datetime, _timezone) = parse_timestamp(value)
-            .and_then(|x| x.into_naive())
-            .map_err(|e| exec_datafusion_err!("{e}"))?;
-        Ok(datetime.and_utc().timestamp_micros())
-    }
-}
-
-#[derive(Debug)]
+#[derive(Debug, PartialEq, Eq, Hash)]
 pub struct SparkTimestamp {
     timezone: Option<Arc<str>>,
-    parser: Box<dyn TimestampParser>,
+    parser: TimestampParser,
     signature: Signature,
 }
 
 impl SparkTimestamp {
     pub fn try_new(timezone: Option<Arc<str>>) -> Result<Self> {
-        let parser: Box<dyn TimestampParser> = if let Some(ref timezone) = timezone {
-            let timezone = timezone
-                .as_ref()
-                .parse()
-                .map_err(|e| plan_datafusion_err!("{e}"))?;
-            Box::new(TimestampLtzParser { timezone })
+        let parser = if let Some(ref timezone) = timezone {
+            TimestampParser::Ltz {
+                default_timezone: timezone.as_ref().to_string(),
+            }
         } else {
-            Box::new(TimestampNtzParser {})
+            TimestampParser::Ntz
         };
         Ok(Self {
             timezone,

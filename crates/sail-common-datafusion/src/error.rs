@@ -38,6 +38,7 @@ pub enum CommonErrorCause {
     ArrowArithmeticOverflow(String),
     ArrowDictionaryKeyOverflow(String),
     ArrowRunEndIndexOverflow(String),
+    ArrowOffsetOverflow(String),
     FormatCsv(String),
     FormatJson(String),
     FormatParquet(String),
@@ -82,6 +83,9 @@ impl CommonErrorCause {
                 }
                 ArrowError::RunEndIndexOverflowError => {
                     Self::ArrowRunEndIndexOverflow("run-end index overflow".to_string())
+                }
+                ArrowError::OffsetOverflowError(x) => {
+                    Self::ArrowOffsetOverflow(format!("offset overflow: {x}"))
                 }
             };
         }

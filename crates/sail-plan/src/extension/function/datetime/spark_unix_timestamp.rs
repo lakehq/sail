@@ -8,7 +8,7 @@ use datafusion_expr::{ColumnarValue, ScalarFunctionArgs, ScalarUDFImpl, Signatur
 
 use crate::extension::function::datetime::datetime_utils::validate_data_types;
 
-#[derive(Debug)]
+#[derive(Debug, PartialEq, Eq, Hash)]
 pub struct SparkUnixTimestamp {
     signature: Signature,
     timezone: Arc<str>,

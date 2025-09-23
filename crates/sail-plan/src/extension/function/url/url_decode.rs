@@ -11,7 +11,7 @@ use percent_encoding::percent_decode;
 
 use crate::extension::function::functions_utils::make_scalar_function;
 
-#[derive(Debug)]
+#[derive(Debug, PartialEq, Eq, Hash)]
 pub struct UrlDecode {
     signature: Signature,
 }

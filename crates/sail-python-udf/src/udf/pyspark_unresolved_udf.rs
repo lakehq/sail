@@ -6,7 +6,7 @@ use datafusion_common::internal_err;
 use datafusion_expr::{ColumnarValue, ScalarFunctionArgs, ScalarUDFImpl, Signature, Volatility};
 use sail_common::spec;
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct PySparkUnresolvedUDF {
     signature: Signature,
     name: String,

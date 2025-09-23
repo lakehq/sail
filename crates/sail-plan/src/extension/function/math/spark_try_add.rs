@@ -20,7 +20,7 @@ use crate::extension::function::math::common_try::{
     try_op_interval_yearmonth, try_op_timestamp_duration,
 };
 
-#[derive(Debug)]
+#[derive(Debug, PartialEq, Eq, Hash)]
 pub struct SparkTryAdd {
     signature: Signature,
 }
