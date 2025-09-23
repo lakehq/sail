@@ -18,6 +18,7 @@ use sail_common_datafusion::streaming::event::schema::{
     to_flow_event_field_names, to_flow_event_projection,
 };
 use sail_data_source::default_registry;
+use sail_logical_plan::file_delete::FileDeleteNode;
 use sail_logical_plan::file_write::FileWriteNode;
 use sail_logical_plan::map_partitions::MapPartitionsNode;
 use sail_logical_plan::range::RangeNode;
@@ -39,8 +40,6 @@ use sail_physical_plan::show_string::ShowStringExec;
 use sail_physical_plan::streaming::collector::StreamCollectorExec;
 use sail_physical_plan::streaming::limit::StreamLimitExec;
 use sail_physical_plan::streaming::source_adapter::StreamSourceAdapterExec;
-
-use sail_logical_plan::file_delete::FileDeleteNode;
 
 #[derive(Debug)]
 pub(crate) struct ExtensionQueryPlanner {}

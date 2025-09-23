@@ -7,7 +7,6 @@ use datafusion_common::Result;
 use datafusion_expr::LogicalPlan;
 use sail_common_datafusion::datasource::DeleteInfo;
 use sail_data_source::default_registry;
-
 use sail_logical_plan::file_delete::FileDeleteOptions;
 
 pub async fn create_file_delete_physical_plan(

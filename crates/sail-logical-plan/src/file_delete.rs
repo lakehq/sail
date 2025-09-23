@@ -3,7 +3,6 @@ use std::sync::Arc;
 
 use datafusion_common::{DFSchema, DFSchemaRef};
 use datafusion_expr::{Expr, LogicalPlan, UserDefinedLogicalNodeCore};
-
 use sail_common_datafusion::utils::items::ItemTaker;
 
 #[derive(Clone, Debug, Eq, PartialEq, Hash, PartialOrd)]

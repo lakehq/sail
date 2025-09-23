@@ -10,11 +10,11 @@ use sail_common::spec;
 use sail_common_datafusion::datasource::SourceInfo;
 use sail_common_datafusion::extension::SessionExtensionAccessor;
 use sail_data_source::default_registry;
+use sail_logical_plan::file_delete::{FileDeleteNode, FileDeleteOptions};
 
 use crate::error::{PlanError, PlanResult};
 use crate::resolver::state::PlanResolverState;
 use crate::resolver::PlanResolver;
-use sail_logical_plan::file_delete::{FileDeleteNode, FileDeleteOptions};
 
 impl PlanResolver<'_> {
     /// Resolves the DELETE command.
