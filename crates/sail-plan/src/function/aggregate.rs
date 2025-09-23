@@ -296,16 +296,29 @@ fn median(input: AggFunctionInput) -> PlanResult<expr::Expr> {
     ))
 }
 
+fn approx_count_distinct(input: AggFunctionInput) -> PlanResult<expr::Expr> {
+    Ok(cast(
+        expr::Expr::AggregateFunction(AggregateFunction {
+            func: approx_distinct::approx_distinct_udaf(),
+            params: AggregateFunctionParams {
+                args: input.arguments.clone(),
+                distinct: input.distinct,
+                order_by: input.order_by,
+                filter: input.filter,
+                null_treatment: get_null_treatment(input.ignore_nulls),
+            },
+        }),
+        DataType::Int64,
+    ))
+}
+
 fn list_built_in_aggregate_functions() -> Vec<(&'static str, AggFunction)> {
     use crate::function::common::AggFunctionBuilder as F;
 
     vec![
         ("any", F::default(bool_and_or::bool_or_udaf)),
         ("any_value", F::custom(first_value)),
-        (
-            "approx_count_distinct",
-            F::default(approx_distinct::approx_distinct_udaf),
-        ),
+        ("approx_count_distinct", F::custom(approx_count_distinct)),
         (
             "approx_percentile",
             F::default(approx_percentile_cont::approx_percentile_cont_udaf),
