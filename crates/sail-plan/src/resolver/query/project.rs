@@ -8,9 +8,9 @@ use datafusion_expr::expr_rewriter::normalize_col;
 use datafusion_expr::utils::{columnize_expr, expand_qualified_wildcard, expand_wildcard};
 use datafusion_expr::{Expr, LogicalPlan, Projection};
 use sail_common::spec;
+use sail_function::scalar::multi_expr::MultiExpr;
 
 use crate::error::{PlanError, PlanResult};
-use crate::extension::function::multi_expr::MultiExpr;
 use crate::resolver::expression::NamedExpr;
 use crate::resolver::state::PlanResolverState;
 use crate::resolver::tree::explode::ExplodeRewriter;

@@ -1,10 +1,10 @@
 use datafusion::functions_nested::expr_fn;
 use datafusion_expr::{expr, lit};
+use sail_function::scalar::map::map_from_arrays::MapFromArrays;
+use sail_function::scalar::map::map_from_entries::MapFromEntries;
+use sail_function::scalar::map::str_to_map::StrToMap;
 
 use crate::error::{PlanError, PlanResult};
-use crate::extension::function::map::map_from_arrays::MapFromArrays;
-use crate::extension::function::map::map_from_entries::MapFromEntries;
-use crate::extension::function::map::str_to_map::StrToMap;
 use crate::function::common::{ScalarFunction, ScalarFunctionInput};
 use crate::utils::ItemTaker;
 

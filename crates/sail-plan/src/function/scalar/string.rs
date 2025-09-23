@@ -5,18 +5,18 @@ use datafusion::functions::regex::regexpcount::RegexpCountFunc;
 use datafusion::functions::regex::regexpinstr::RegexpInstrFunc;
 use datafusion_common::{DFSchema, ScalarValue};
 use datafusion_expr::{cast, expr, lit, try_cast, when, ExprSchemable};
+use sail_function::scalar::string::levenshtein::Levenshtein;
+use sail_function::scalar::string::make_valid_utf8::MakeValidUtf8;
+use sail_function::scalar::string::spark_base64::{SparkBase64, SparkUnbase64};
+use sail_function::scalar::string::spark_elt::SparkElt;
+use sail_function::scalar::string::spark_encode_decode::{SparkDecode, SparkEncode};
+use sail_function::scalar::string::spark_mask::SparkMask;
+use sail_function::scalar::string::spark_split::SparkSplit;
+use sail_function::scalar::string::spark_to_binary::{SparkToBinary, SparkTryToBinary};
+use sail_function::scalar::string::spark_to_number::SparkToNumber;
+use sail_function::scalar::string::spark_try_to_number::SparkTryToNumber;
 
 use crate::error::{PlanError, PlanResult};
-use crate::extension::function::string::levenshtein::Levenshtein;
-use crate::extension::function::string::make_valid_utf8::MakeValidUtf8;
-use crate::extension::function::string::spark_base64::{SparkBase64, SparkUnbase64};
-use crate::extension::function::string::spark_elt::SparkElt;
-use crate::extension::function::string::spark_encode_decode::{SparkDecode, SparkEncode};
-use crate::extension::function::string::spark_mask::SparkMask;
-use crate::extension::function::string::spark_split::SparkSplit;
-use crate::extension::function::string::spark_to_binary::{SparkToBinary, SparkTryToBinary};
-use crate::extension::function::string::spark_to_number::SparkToNumber;
-use crate::extension::function::string::spark_try_to_number::SparkTryToNumber;
 use crate::function::common::{ScalarFunction, ScalarFunctionInput};
 use crate::utils::ItemTaker;
 
