@@ -13,8 +13,7 @@ use datafusion::physical_plan::{
 };
 use datafusion_common::{exec_err, internal_datafusion_err, DataFusionError, Result};
 use futures::{Stream, StreamExt};
-
-use crate::utils::ItemTaker;
+use sail_common_datafusion::utils::items::ItemTaker;
 
 #[derive(Debug, Clone)]
 pub struct SchemaPivotExec {

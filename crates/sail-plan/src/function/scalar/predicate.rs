@@ -1,9 +1,9 @@
 use datafusion::functions::expr_fn;
 use datafusion_expr::{expr, not, Operator};
+use sail_common_datafusion::utils::items::ItemTaker;
 
 use crate::error::PlanResult;
 use crate::function::common::{ScalarFunction, ScalarFunctionInput};
-use crate::utils::ItemTaker;
 
 fn like(expr: expr::Expr, pattern: expr::Expr) -> expr::Expr {
     expr::Expr::Like(expr::Like {

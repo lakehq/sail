@@ -11,8 +11,7 @@ use datafusion_common::{DFSchema, DFSchemaRef, Result};
 use datafusion_expr::{Expr, LogicalPlan, UserDefinedLogicalNodeCore};
 use sail_common::string::escape_meta_characters;
 use sail_common_datafusion::display::{ArrayFormatter, FormatOptions};
-
-use crate::utils::ItemTaker;
+use sail_common_datafusion::utils::items::ItemTaker;
 
 fn truncate_string(s: &str, n: usize) -> String {
     if n == 0 || s.len() <= n {
@@ -209,7 +208,7 @@ impl ShowStringFormat {
 }
 
 #[derive(Clone, Debug, Eq, PartialEq, Hash)]
-pub(crate) struct ShowStringNode {
+pub struct ShowStringNode {
     input: Arc<LogicalPlan>,
     names: Vec<String>,
     schema: DFSchemaRef,

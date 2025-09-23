@@ -12,7 +12,7 @@ use futures::{Stream, StreamExt};
 use pyo3::exceptions::{PyRuntimeError, PyStopIteration};
 use pyo3::prelude::PyAnyMethods;
 use pyo3::{pyclass, pymethods, IntoPyObject, PyObject, PyRef, PyRefMut, PyResult, Python};
-use sail_common_datafusion::utils::record_batch_with_schema;
+use sail_common_datafusion::array::record_batch::record_batch_with_schema;
 use tokio::runtime::Handle;
 use tokio::select;
 use tokio::sync::{mpsc, oneshot};

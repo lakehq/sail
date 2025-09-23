@@ -1,36 +1,58 @@
 use std::sync::Arc;
 
 use async_trait::async_trait;
-use datafusion::execution::context::SessionState;
+use datafusion::execution::context::QueryPlanner;
+use datafusion::execution::SessionState;
+use datafusion::physical_expr::LexOrdering;
 use datafusion::physical_plan::sorts::sort::SortExec;
 use datafusion::physical_plan::ExecutionPlan;
-use datafusion::physical_planner::{ExtensionPlanner, PhysicalPlanner};
-use datafusion_common::{internal_err, DFSchema, Result};
+use datafusion::physical_planner::{DefaultPhysicalPlanner, ExtensionPlanner, PhysicalPlanner};
+use datafusion_common::{internal_err, DFSchema};
 use datafusion_expr::{Expr, LogicalPlan, UserDefinedLogicalNode};
-use datafusion_physical_expr::{create_physical_sort_exprs, LexOrdering, Partitioning};
+use datafusion_physical_expr::{create_physical_sort_exprs, Partitioning};
+use sail_common_datafusion::rename::physical_plan::rename_projected_physical_plan;
 use sail_common_datafusion::streaming::event::schema::{
     to_flow_event_field_names, to_flow_event_projection,
 };
-use sail_common_datafusion::utils::rename_projected_physical_plan;
+use sail_logical_plan::file_write::FileWriteNode;
+use sail_logical_plan::map_partitions::MapPartitionsNode;
+use sail_logical_plan::range::RangeNode;
 use sail_logical_plan::repartition::ExplicitRepartitionNode;
+use sail_logical_plan::schema_pivot::SchemaPivotNode;
+use sail_logical_plan::show_string::ShowStringNode;
+use sail_logical_plan::sort::SortWithinPartitionsNode;
 use sail_logical_plan::streaming::collector::StreamCollectorNode;
 use sail_logical_plan::streaming::limit::StreamLimitNode;
 use sail_logical_plan::streaming::source_adapter::StreamSourceAdapterNode;
 use sail_logical_plan::streaming::source_wrapper::StreamSourceWrapperNode;
+use sail_physical_plan::file_write::create_file_write_physical_plan;
+use sail_physical_plan::map_partitions::MapPartitionsExec;
+use sail_physical_plan::range::RangeExec;
 use sail_physical_plan::repartition::ExplicitRepartitionExec;
+use sail_physical_plan::schema_pivot::SchemaPivotExec;
+use sail_physical_plan::show_string::ShowStringExec;
 use sail_physical_plan::streaming::collector::StreamCollectorExec;
 use sail_physical_plan::streaming::limit::StreamLimitExec;
 use sail_physical_plan::streaming::source_adapter::StreamSourceAdapterExec;
 
-use crate::extension::logical::{
-    FileWriteNode, MapPartitionsNode, RangeNode, SchemaPivotNode, ShowStringNode,
-    SortWithinPartitionsNode,
-};
-use crate::extension::physical::create_file_write_physical_plan;
-use crate::extension::physical::map_partitions::MapPartitionsExec;
-use crate::extension::physical::range::RangeExec;
-use crate::extension::physical::schema_pivot::SchemaPivotExec;
-use crate::extension::physical::show_string::ShowStringExec;
+#[derive(Debug)]
+pub(crate) struct ExtensionQueryPlanner {}
+
+#[async_trait]
+impl QueryPlanner for ExtensionQueryPlanner {
+    async fn create_physical_plan(
+        &self,
+        logical_plan: &LogicalPlan,
+        session_state: &SessionState,
+    ) -> datafusion::common::Result<Arc<dyn ExecutionPlan>> {
+        let planner = DefaultPhysicalPlanner::with_extension_planners(vec![Arc::new(
+            ExtensionPhysicalPlanner {},
+        )]);
+        planner
+            .create_physical_plan(logical_plan, session_state)
+            .await
+    }
+}
 
 pub(crate) struct ExtensionPhysicalPlanner {}
 
@@ -43,7 +65,7 @@ impl ExtensionPlanner for ExtensionPhysicalPlanner {
         logical_inputs: &[&LogicalPlan],
         physical_inputs: &[Arc<dyn ExecutionPlan>],
         session_state: &SessionState,
-    ) -> Result<Option<Arc<dyn ExecutionPlan>>> {
+    ) -> datafusion_common::Result<Option<Arc<dyn ExecutionPlan>>> {
         let plan: Arc<dyn ExecutionPlan> = if let Some(node) =
             node.as_any().downcast_ref::<RangeNode>()
         {
@@ -178,7 +200,7 @@ fn plan_explicit_partitioning(
     num_partitions: Option<usize>,
     expressions: &[Expr],
     session_state: &SessionState,
-) -> Result<Partitioning> {
+) -> datafusion_common::Result<Partitioning> {
     match (num_partitions, expressions) {
         (Some(0), _) => internal_err!("number of explicit partitions cannot be zero"),
         (Some(1), _) => Ok(Partitioning::UnknownPartitioning(1)),
@@ -193,7 +215,7 @@ fn plan_explicit_partitioning(
             let expressions = expressions
                 .iter()
                 .map(|e| planner.create_physical_expr(e, schema, session_state))
-                .collect::<Result<Vec<_>>>()?;
+                .collect::<datafusion_common::Result<Vec<_>>>()?;
             Ok(Partitioning::Hash(expressions, num_partitions))
         }
     }

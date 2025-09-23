@@ -3,8 +3,7 @@ use std::sync::Arc;
 
 use datafusion_common::{plan_err, DFSchemaRef};
 use datafusion_expr::{Expr, LogicalPlan, UserDefinedLogicalNodeCore};
-
-use crate::utils::ItemTaker;
+use sail_common_datafusion::utils::items::ItemTaker;
 
 /// A logical plan node that represents a plan with "logical preconditions".
 /// The preconditions are logical plans that will be executed before physical planning

@@ -9,10 +9,10 @@ use datafusion_expr::{
     cast, expr, AggregateUDF, BinaryExpr, ExprSchemable, Operator, ScalarUDF, ScalarUDFImpl,
     WindowFrame, WindowFunctionDefinition, WindowUDF,
 };
+use sail_common_datafusion::utils::items::ItemTaker;
 
 use crate::config::PlanConfig;
 use crate::error::{IntoPlanResult, PlanError, PlanResult};
-use crate::utils::ItemTaker;
 
 pub struct FunctionContextInput<'a> {
     /// The names of function arguments.

@@ -3,6 +3,7 @@ use std::sync::Arc;
 use datafusion_expr::registry::FunctionRegistry;
 use datafusion_expr::{Expr, LogicalPlan, Projection};
 use sail_common::spec;
+use sail_common_datafusion::utils::items::ItemTaker;
 use sail_python_udf::udf::pyspark_unresolved_udf::PySparkUnresolvedUDF;
 
 use crate::error::{PlanError, PlanResult};
@@ -11,7 +12,6 @@ use crate::resolver::function::PythonUdtf;
 use crate::resolver::state::PlanResolverState;
 use crate::resolver::tree::explode::ExplodeRewriter;
 use crate::resolver::PlanResolver;
-use crate::utils::ItemTaker;
 
 impl PlanResolver<'_> {
     #[allow(clippy::too_many_arguments)]

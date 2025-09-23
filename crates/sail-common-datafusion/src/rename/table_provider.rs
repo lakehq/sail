@@ -11,12 +11,13 @@ use datafusion::physical_plan::ExecutionPlan;
 use datafusion_common::{internal_err, Constraints, Result, Statistics};
 use datafusion_expr::dml::InsertOp;
 use datafusion_expr::{Expr, LogicalPlan, TableProviderFilterPushDown, TableType};
-use sail_common_datafusion::utils::{
-    expression_before_rename, rename_projected_physical_plan, rename_schema,
-};
+
+use crate::rename::expression::expression_before_rename;
+use crate::rename::physical_plan::rename_projected_physical_plan;
+use crate::rename::schema::rename_schema;
 
 #[derive(Clone)]
-pub(crate) struct RenameTableProvider {
+pub struct RenameTableProvider {
     inner: Arc<dyn TableProvider>,
     /// The list of new column names for the table.
     names: Vec<String>,

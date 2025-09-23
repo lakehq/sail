@@ -40,9 +40,9 @@ use datafusion_proto::protobuf::{
 use datafusion_spark::function::math::expm1::SparkExpm1;
 use prost::bytes::BytesMut;
 use prost::Message;
+use sail_common_datafusion::array::record_batch::{read_record_batches, write_record_batches};
 use sail_common_datafusion::datasource::PhysicalSinkMode;
 use sail_common_datafusion::udf::StreamUDF;
-use sail_common_datafusion::utils::{read_record_batches, write_record_batches};
 use sail_data_source::formats::binary::source::BinarySource;
 use sail_data_source::formats::console::ConsoleSinkExec;
 use sail_data_source::formats::rate::{RateSourceExec, TableRateOptions};
@@ -129,13 +129,15 @@ use sail_function::scalar::url::parse_url::ParseUrl;
 use sail_function::scalar::url::spark_try_parse_url::SparkTryParseUrl;
 use sail_function::scalar::url::url_decode::UrlDecode;
 use sail_function::scalar::url::url_encode::UrlEncode;
+use sail_logical_plan::range::Range;
+use sail_logical_plan::show_string::{ShowStringFormat, ShowStringStyle};
+use sail_physical_plan::map_partitions::MapPartitionsExec;
+use sail_physical_plan::range::RangeExec;
+use sail_physical_plan::schema_pivot::SchemaPivotExec;
+use sail_physical_plan::show_string::ShowStringExec;
 use sail_physical_plan::streaming::collector::StreamCollectorExec;
 use sail_physical_plan::streaming::limit::StreamLimitExec;
 use sail_physical_plan::streaming::source_adapter::StreamSourceAdapterExec;
-use sail_plan::extension::logical::{Range, ShowStringFormat, ShowStringStyle};
-use sail_plan::extension::physical::{
-    MapPartitionsExec, RangeExec, SchemaPivotExec, ShowStringExec,
-};
 use sail_python_udf::config::PySparkUdfConfig;
 use sail_python_udf::udf::pyspark_batch_collector::PySparkBatchCollectorUDF;
 use sail_python_udf::udf::pyspark_cogroup_map_udf::PySparkCoGroupMapUDF;
