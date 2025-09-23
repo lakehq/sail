@@ -38,7 +38,6 @@ use datafusion_proto::protobuf::{
     JoinType as ProtoJoinType, PhysicalPlanNode, PhysicalSortExprNode,
 };
 use datafusion_spark::function::math::expm1::SparkExpm1;
-use datafusion_spark::function::math::width_bucket::SparkWidthBucket;
 use prost::bytes::BytesMut;
 use prost::Message;
 use sail_common_datafusion::datasource::PhysicalSinkMode;
@@ -1269,9 +1268,6 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
             "spark_try_subtract" | "try_subtract" => {
                 Ok(Arc::new(ScalarUDF::from(SparkTrySubtract::new())))
             }
-            "spark_width_bucket" | "width_bucket" => {
-                Ok(Arc::new(ScalarUDF::from(SparkWidthBucket::new())))
-            }
             "str_to_map" => Ok(Arc::new(ScalarUDF::from(StrToMap::new()))),
             "parse_url" => Ok(Arc::new(ScalarUDF::from(ParseUrl::new()))),
             "try_parse_url" | "spark_try_parse_url" => {
@@ -1360,7 +1356,6 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
             || node_inner.is::<SparkUnbase64>()
             || node_inner.is::<SparkUnHex>()
             || node_inner.is::<SparkVersion>()
-            || node_inner.is::<SparkWidthBucket>()
             || node_inner.is::<SparkXxhash64>()
             || node_inner.is::<SparkYearMonthInterval>()
             || node_inner.is::<StrToMap>()
