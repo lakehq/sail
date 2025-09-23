@@ -509,6 +509,12 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
                 let options =
                     serde_json::from_str(&options).map_err(|e| plan_datafusion_err!("{e}"))?;
 
+                // Extract condition from sink_mode for DeltaWriterExec
+                let condition = match &sink_mode {
+                    PhysicalSinkMode::OverwriteIf { condition } => Some(condition.clone()),
+                    _ => None,
+                };
+
                 Ok(Arc::new(DeltaWriterExec::new(
                     input,
                     table_url,
@@ -517,6 +523,7 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
                     sink_mode,
                     table_exists,
                     Arc::new(sink_schema),
+                    condition,
                 )))
             }
             NodeKind::DeltaCommit(gen::DeltaCommitExecNode {

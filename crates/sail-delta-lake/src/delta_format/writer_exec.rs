@@ -8,6 +8,7 @@ use datafusion::arrow::array::StringArray;
 use datafusion::arrow::datatypes::{DataType, Field, Schema, SchemaRef};
 use datafusion::arrow::record_batch::RecordBatch;
 use datafusion::execution::context::TaskContext;
+use datafusion::physical_expr_common::physical_expr::fmt_sql;
 use datafusion::physical_plan::execution_plan::{Boundedness, EmissionType};
 use datafusion::physical_plan::stream::RecordBatchStreamAdapter;
 use datafusion::physical_plan::{
@@ -15,7 +16,7 @@ use datafusion::physical_plan::{
     PlanProperties, SendableRecordBatchStream,
 };
 use datafusion_common::{internal_err, DataFusionError, Result};
-use datafusion_physical_expr::{Distribution, EquivalenceProperties};
+use datafusion_physical_expr::{Distribution, EquivalenceProperties, PhysicalExpr};
 use deltalake::kernel::engine::arrow_conversion::{TryIntoArrow, TryIntoKernel};
 use deltalake::kernel::schema::StructType;
 #[allow(deprecated)]
@@ -52,6 +53,7 @@ pub struct DeltaWriterExec {
     sink_mode: PhysicalSinkMode,
     table_exists: bool,
     sink_schema: SchemaRef,
+    condition: Option<Arc<dyn PhysicalExpr>>,
     cache: PlanProperties,
 }
 
@@ -64,6 +66,7 @@ impl DeltaWriterExec {
         sink_mode: PhysicalSinkMode,
         table_exists: bool,
         sink_schema: SchemaRef,
+        condition: Option<Arc<dyn PhysicalExpr>>,
     ) -> Self {
         let schema = Arc::new(Schema::new(vec![Field::new("data", DataType::Utf8, true)]));
         let cache = Self::compute_properties(schema);
@@ -75,6 +78,7 @@ impl DeltaWriterExec {
             sink_mode,
             table_exists,
             sink_schema,
+            condition,
             cache,
         }
     }
@@ -114,6 +118,10 @@ impl DeltaWriterExec {
 
     pub fn table_exists(&self) -> bool {
         self.table_exists
+    }
+
+    pub fn condition(&self) -> &Option<Arc<dyn PhysicalExpr>> {
+        &self.condition
     }
 }
 
@@ -155,6 +163,7 @@ impl ExecutionPlan for DeltaWriterExec {
             self.sink_mode.clone(),
             self.table_exists,
             self.sink_schema.clone(),
+            self.condition.clone(),
         )))
     }
 
@@ -182,6 +191,7 @@ impl ExecutionPlan for DeltaWriterExec {
         let sink_mode = self.sink_mode.clone();
         let table_exists = self.table_exists;
         let input_schema = self.input.schema();
+        let condition = self.condition.clone();
         // let sink_schema = self.sink_schema.clone();
 
         let schema = self.schema();
@@ -226,6 +236,7 @@ impl ExecutionPlan for DeltaWriterExec {
                     });
                 }
                 PhysicalSinkMode::Overwrite => {
+                    let predicate_str = condition.map(|c| format!("{}", fmt_sql(c.as_ref())));
                     operation = Some(DeltaOperation::Write {
                         mode: SaveMode::Overwrite,
                         partition_by: if partition_columns.is_empty() {
@@ -233,10 +244,11 @@ impl ExecutionPlan for DeltaWriterExec {
                         } else {
                             Some(partition_columns.clone())
                         },
-                        predicate: None,
+                        predicate: predicate_str,
                     });
                 }
                 PhysicalSinkMode::OverwriteIf { .. } => {
+                    let predicate_str = condition.map(|c| format!("{}", fmt_sql(c.as_ref())));
                     operation = Some(DeltaOperation::Write {
                         mode: SaveMode::Overwrite,
                         partition_by: if partition_columns.is_empty() {
@@ -244,7 +256,7 @@ impl ExecutionPlan for DeltaWriterExec {
                         } else {
                             Some(partition_columns.clone())
                         },
-                        predicate: None,
+                        predicate: predicate_str,
                     });
                 }
                 PhysicalSinkMode::ErrorIfExists => {

@@ -286,6 +286,13 @@ impl<'a> DeltaPlanBuilder<'a> {
 
     fn add_writer_node(&self, input: Arc<dyn ExecutionPlan>) -> Result<Arc<dyn ExecutionPlan>> {
         let schema = input.schema();
+
+        // Extract condition from sink_mode
+        let condition = match &self.sink_mode {
+            PhysicalSinkMode::OverwriteIf { condition } => Some(condition.clone()),
+            _ => None,
+        };
+
         Ok(Arc::new(DeltaWriterExec::new(
             input,
             self.table_config.table_url.clone(),
@@ -294,6 +301,7 @@ impl<'a> DeltaPlanBuilder<'a> {
             self.sink_mode.clone(),
             self.table_config.table_exists,
             schema,
+            condition,
         )))
     }
 
