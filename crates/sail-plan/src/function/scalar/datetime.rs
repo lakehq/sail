@@ -5,6 +5,7 @@ use datafusion::functions::expr_fn;
 use datafusion_common::ScalarValue;
 use datafusion_expr::expr::{self, Expr};
 use datafusion_expr::{cast, lit, try_cast, when, BinaryExpr, ExprSchemable, Operator, ScalarUDF};
+use datafusion_spark::function::datetime::date_add::SparkDateAdd;
 use sail_common::datetime::time_unit_to_multiplier;
 use sail_common_datafusion::utils::items::ItemTaker;
 use sail_function::scalar::datetime::convert_tz::ConvertTz;
@@ -462,10 +463,7 @@ pub(super) fn list_built_in_datetime_functions() -> Vec<(&'static str, ScalarFun
             F::custom(current_timestamp_microseconds),
         ),
         ("current_timezone", F::custom(current_timezone)),
-        (
-            "date_add",
-            F::custom(|input| interval_arithmetic(input, "days", Operator::Plus)),
-        ),
+        ("date_add", F::udf(SparkDateAdd::new())),
         (
             "date_diff",
             F::binary(|start, end| date_days_arithmetic(start, end, Operator::Minus)),
