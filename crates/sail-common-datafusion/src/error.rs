@@ -3,8 +3,6 @@ use std::collections::HashSet;
 use datafusion::arrow::error::ArrowError;
 use datafusion_common::DataFusionError;
 use deltalake::DeltaTableError;
-use pyo3::prelude::{PyAnyMethods, PyModule};
-use pyo3::{intern, PyErr, PyResult, Python};
 use serde::{Deserialize, Serialize};
 use thiserror::Error;
 
@@ -17,6 +15,42 @@ pub struct RemotePythonError {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct PythonErrorCause {
+    pub summary: String,
+    pub traceback: Option<Vec<String>>,
+}
+
+impl From<RemotePythonError> for PythonErrorCause {
+    fn from(error: RemotePythonError) -> Self {
+        Self {
+            summary: error.summary,
+            traceback: error.traceback,
+        }
+    }
+}
+
+impl From<PythonErrorCause> for RemotePythonError {
+    fn from(cause: PythonErrorCause) -> Self {
+        Self {
+            summary: cause.summary,
+            traceback: cause.traceback,
+        }
+    }
+}
+
+/// A trait to extract Python error cause from a generic error.
+///
+/// The implementation should inspect the provided error without
+/// recursively inspecting its inner errors.
+///
+/// This trait avoids direct dependency on `PyO3` for this crate.
+/// Since this crate is used by many other crates, we can therefore
+/// avoid unnecessary recompilation when switching Python environments.
+pub trait PythonErrorCauseExtractor {
+    fn extract(error: &(dyn std::error::Error + 'static)) -> Option<PythonErrorCause>;
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub enum CommonErrorCause {
     Unknown(String),
@@ -24,10 +58,7 @@ pub enum CommonErrorCause {
     NotImplemented(String),
     InvalidArgument(String),
     Io(String),
-    Python {
-        summary: String,
-        traceback: Option<Vec<String>>,
-    },
+    Python(PythonErrorCause),
     ArrowCast(String),
     ArrowMemory(String),
     ArrowParse(String),
@@ -51,7 +82,7 @@ pub enum CommonErrorCause {
 }
 
 impl CommonErrorCause {
-    fn build(
+    fn build<Py: PythonErrorCauseExtractor>(
         error: &(dyn std::error::Error + 'static),
         seen: &mut HashSet<*const dyn std::error::Error>,
     ) -> Self {
@@ -63,7 +94,7 @@ impl CommonErrorCause {
         if let Some(e) = error.downcast_ref::<ArrowError>() {
             return match e {
                 ArrowError::NotYetImplemented(x) => Self::NotImplemented(x.clone()),
-                ArrowError::ExternalError(e) => Self::build(e.as_ref(), seen),
+                ArrowError::ExternalError(e) => Self::build::<Py>(e.as_ref(), seen),
                 ArrowError::CastError(x) => Self::ArrowCast(x.clone()),
                 ArrowError::MemoryError(x) => Self::ArrowMemory(x.clone()),
                 ArrowError::ParseError(x) => Self::ArrowParse(x.clone()),
@@ -92,7 +123,7 @@ impl CommonErrorCause {
 
         if let Some(e) = error.downcast_ref::<DataFusionError>() {
             return match e {
-                DataFusionError::ArrowError(e, _) => Self::build(e, seen),
+                DataFusionError::ArrowError(e, _) => Self::build::<Py>(e, seen),
                 DataFusionError::ParquetError(e) => Self::FormatParquet(e.to_string()),
                 DataFusionError::AvroError(e) => Self::FormatAvro(e.to_string()),
                 DataFusionError::ObjectStore(e) => Self::Io(e.to_string()),
@@ -106,35 +137,24 @@ impl CommonErrorCause {
                 DataFusionError::Execution(x) => Self::Execution(x.clone()),
                 DataFusionError::ExecutionJoin(e) => Self::Execution(e.to_string()),
                 DataFusionError::ResourcesExhausted(x) => Self::Execution(x.clone()),
-                DataFusionError::External(e) => Self::build(e.as_ref(), seen),
-                DataFusionError::Context(_, e) => Self::build(e, seen),
+                DataFusionError::External(e) => Self::build::<Py>(e.as_ref(), seen),
+                DataFusionError::Context(_, e) => Self::build::<Py>(e, seen),
                 DataFusionError::Substrait(x) => Self::Unknown(x.clone()),
-                DataFusionError::Diagnostic(_, e) => Self::build(e.as_ref(), seen),
+                DataFusionError::Diagnostic(_, e) => Self::build::<Py>(e.as_ref(), seen),
                 DataFusionError::Collection(errors) => match errors.first() {
                     None => Self::Unknown("empty error collection".to_string()),
-                    Some(e) => Self::build(e, seen),
+                    Some(e) => Self::build::<Py>(e, seen),
                 },
-                DataFusionError::Shared(e) => Self::build(e.as_ref(), seen),
+                DataFusionError::Shared(e) => Self::build::<Py>(e.as_ref(), seen),
             };
         }
 
-        if let Some(e) = error.downcast_ref::<PyErr>() {
-            let traceback = Python::with_gil(|py| -> PyResult<Vec<String>> {
-                let traceback = PyModule::import(py, intern!(py, "traceback"))?;
-                let format_exception = traceback.getattr(intern!(py, "format_exception"))?;
-                format_exception.call1((e,))?.extract()
-            });
-            return Self::Python {
-                summary: e.to_string(),
-                traceback: traceback.ok(),
-            };
+        if let Some(cause) = Py::extract(error) {
+            return Self::Python(cause);
         }
 
         if let Some(e) = error.downcast_ref::<RemotePythonError>() {
-            return Self::Python {
-                summary: e.summary.clone(),
-                traceback: e.traceback.clone(),
-            };
+            return Self::Python(e.clone().into());
         }
 
         if let Some(e) = error.downcast_ref::<DeltaTableError>() {
@@ -142,7 +162,7 @@ impl CommonErrorCause {
         }
 
         if let Some(e) = error.source() {
-            Self::build(e, seen)
+            Self::build::<Py>(e, seen)
         } else {
             Self::Unknown(error.to_string())
         }
@@ -150,7 +170,7 @@ impl CommonErrorCause {
 
     /// Recursively traverse the error source and determine the best error cause
     /// from the innermost error.
-    pub fn new(error: &(dyn std::error::Error + 'static)) -> Self {
-        Self::build(error, &mut HashSet::new())
+    pub fn new<Py: PythonErrorCauseExtractor>(error: &(dyn std::error::Error + 'static)) -> Self {
+        Self::build::<Py>(error, &mut HashSet::new())
     }
 }

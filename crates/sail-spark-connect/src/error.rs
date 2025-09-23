@@ -9,9 +9,10 @@ use log::error;
 use prost::{DecodeError, UnknownEnumValue};
 use sail_cache::error::CacheError;
 use sail_common::error::CommonError;
-use sail_common_datafusion::error::CommonErrorCause;
+use sail_common_datafusion::error::{CommonErrorCause, PythonErrorCause};
 use sail_execution::error::ExecutionError;
 use sail_plan::error::PlanError;
+use sail_python_udf::error::PyErrExtractor;
 use sail_sql_analyzer::error::SqlError;
 use thiserror::Error;
 use tokio::sync::mpsc::error::SendError;
@@ -314,7 +315,7 @@ impl From<CommonErrorCause> for SparkThrowable {
                 SparkThrowable::ArithmeticException(x)
             }
             CommonErrorCause::ArrowParse(x) => SparkThrowable::ParseException(x),
-            CommonErrorCause::Python { summary, traceback } => {
+            CommonErrorCause::Python(PythonErrorCause { summary, traceback }) => {
                 // The message must end with a newline character
                 // since the PySpark unit tests expect it.
                 let message = if let Some(traceback) = traceback {
@@ -341,9 +342,11 @@ impl From<CommonErrorCause> for SparkThrowable {
 impl From<SparkError> for Status {
     fn from(error: SparkError) -> Self {
         match error {
-            SparkError::ArrowError(e) => SparkThrowable::from(CommonErrorCause::new(&e)).into(),
+            SparkError::ArrowError(e) => {
+                SparkThrowable::from(CommonErrorCause::new::<PyErrExtractor>(&e)).into()
+            }
             SparkError::DataFusionError(e) => {
-                SparkThrowable::from(CommonErrorCause::new(&e)).into()
+                SparkThrowable::from(CommonErrorCause::new::<PyErrExtractor>(&e)).into()
             }
             e @ SparkError::MissingArgument(_) | e @ SparkError::InvalidArgument(_) => {
                 SparkThrowable::IllegalArgumentException(e.to_string()).into()

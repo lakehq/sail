@@ -5585,7 +5585,6 @@ dependencies = [
  "lexical-core",
  "pin-project-lite",
  "prost",
- "pyo3",
  "ryu",
  "sail-common",
  "serde",

@@ -16,6 +16,7 @@ use log::{debug, error, info, warn};
 use prost::bytes::BytesMut;
 use prost::Message;
 use sail_common_datafusion::error::CommonErrorCause;
+use sail_python_udf::error::PyErrExtractor;
 use sail_server::actor::{ActorAction, ActorContext};
 use tokio::sync::{mpsc, oneshot};
 use tokio::time::Instant;
@@ -616,7 +617,7 @@ impl DriverActor {
             Ok(x) => x,
             Err(e) => {
                 let message = format!("failed to rewrite shuffle: {e}");
-                let cause = CommonErrorCause::new(&e);
+                let cause = CommonErrorCause::new::<PyErrExtractor>(&e);
                 self.update_task(
                     ctx,
                     task_id,
@@ -647,7 +648,7 @@ impl DriverActor {
             Ok(client) => client.clone(),
             Err(e) => {
                 let message = format!("failed to get worker {worker_id} client: {e}");
-                let cause = CommonErrorCause::new(&e);
+                let cause = CommonErrorCause::new::<PyErrExtractor>(&e);
                 self.update_task(
                     ctx,
                     task_id,
@@ -780,7 +781,7 @@ impl DriverActor {
                     let stream = match stream {
                         Ok(x) => x,
                         Err(e) => {
-                            let cause = CommonErrorCause::new(&e);
+                            let cause = CommonErrorCause::new::<PyErrExtractor>(&e);
                             let _ = result.send(Err(e));
                             self.cancel_job(ctx, job_id, cause);
                             return;
