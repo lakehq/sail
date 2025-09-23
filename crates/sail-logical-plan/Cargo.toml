@@ -9,7 +9,10 @@ workspace = true
 [dependencies]
 sail-common = { path = "../sail-common" }
 sail-common-datafusion = { path = "../sail-common-datafusion" }
+sail-catalog = { path = "../sail-catalog" }
 
 datafusion = { workspace = true }
 datafusion-common = { workspace = true }
 datafusion-expr = { workspace = true }
+comfy-table = { workspace = true }
+html-escape = { workspace = true }

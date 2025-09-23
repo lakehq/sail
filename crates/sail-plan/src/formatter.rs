@@ -17,9 +17,9 @@ use sail_common_datafusion::formatter::{
     TimestampMicrosecondFormatter, TimestampMillisecondFormatter, TimestampNanosecondFormatter,
     TimestampSecondFormatter,
 };
+use sail_common_datafusion::utils::items::ItemTaker;
 
 use crate::config::PlanConfig;
-use crate::utils::ItemTaker;
 
 /// Utilities to format various data structures in the plan specification.
 pub trait PlanFormatter: DynObject + Debug + Send + Sync {

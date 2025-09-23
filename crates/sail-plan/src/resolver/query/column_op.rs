@@ -5,6 +5,7 @@ use datafusion_common::Column;
 use datafusion_expr::{cast, col, lit, Expr, ExprSchemable, LogicalPlan, Projection};
 use indexmap::IndexMap;
 use sail_common::spec;
+use sail_common_datafusion::utils::items::ItemTaker;
 
 use crate::error::{PlanError, PlanResult};
 use crate::resolver::expression::NamedExpr;
@@ -12,7 +13,6 @@ use crate::resolver::state::PlanResolverState;
 use crate::resolver::tree::explode::ExplodeRewriter;
 use crate::resolver::tree::window::WindowRewriter;
 use crate::resolver::PlanResolver;
-use crate::utils::ItemTaker;
 
 impl PlanResolver<'_> {
     pub(super) async fn resolve_query_to_df(

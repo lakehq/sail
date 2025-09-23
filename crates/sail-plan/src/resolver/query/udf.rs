@@ -9,6 +9,8 @@ use datafusion_expr::{
 };
 use datafusion_functions::core::expr_ext::FieldAccessor;
 use sail_common::spec;
+use sail_common_datafusion::utils::items::ItemTaker;
+use sail_logical_plan::map_partitions::MapPartitionsNode;
 use sail_python_udf::cereal::pyspark_udf::PySparkUdfPayload;
 use sail_python_udf::get_udf_name;
 use sail_python_udf::udf::pyspark_batch_collector::PySparkBatchCollectorUDF;
@@ -17,11 +19,9 @@ use sail_python_udf::udf::pyspark_group_map_udf::PySparkGroupMapUDF;
 use sail_python_udf::udf::pyspark_map_iter_udf::{PySparkMapIterKind, PySparkMapIterUDF};
 
 use crate::error::{PlanError, PlanResult};
-use crate::extension::logical::MapPartitionsNode;
 use crate::resolver::expression::NamedExpr;
 use crate::resolver::state::PlanResolverState;
 use crate::resolver::PlanResolver;
-use crate::utils::ItemTaker;
 
 impl PlanResolver<'_> {
     pub(super) async fn resolve_query_map_partitions(

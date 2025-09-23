@@ -5581,6 +5581,7 @@ dependencies = [
  "datafusion-common",
  "datafusion-expr",
  "deltalake",
+ "either",
  "futures",
  "lexical-core",
  "pin-project-lite",
@@ -5675,9 +5676,9 @@ dependencies = [
  "sail-data-source",
  "sail-delta-lake",
  "sail-function",
+ "sail-logical-plan",
  "sail-object-store",
  "sail-physical-plan",
- "sail-plan",
  "sail-python-udf",
  "sail-server",
  "serde_json",
@@ -5736,12 +5737,22 @@ dependencies = [
 ]
 
 [[package]]
-name = "sail-logical-plan"
+name = "sail-logical-optimizer"
 version = "0.3.5"
 dependencies = [
  "datafusion",
+]
+
+[[package]]
+name = "sail-logical-plan"
+version = "0.3.5"
+dependencies = [
+ "comfy-table",
+ "datafusion",
  "datafusion-common",
  "datafusion-expr",
+ "html-escape",
+ "sail-catalog",
  "sail-common",
  "sail-common-datafusion",
 ]
@@ -5792,8 +5803,12 @@ version = "0.3.5"
 dependencies = [
  "datafusion",
  "datafusion-common",
+ "datafusion-expr",
  "futures",
  "sail-common-datafusion",
+ "sail-data-source",
+ "sail-logical-plan",
+ "tokio-stream",
 ]
 
 [[package]]
@@ -5803,7 +5818,6 @@ dependencies = [
  "arrow",
  "async-recursion",
  "async-trait",
- "comfy-table",
  "datafusion",
  "datafusion-common",
  "datafusion-expr",
@@ -5814,9 +5828,7 @@ dependencies = [
  "datafusion-physical-expr",
  "datafusion-spark",
  "either",
- "futures",
  "half",
- "html-escape",
  "indexmap",
  "lazy_static",
  "object_store",
@@ -5834,7 +5846,6 @@ dependencies = [
  "serde",
  "thiserror 2.0.16",
  "tokio",
- "tokio-stream",
  "tonic",
  "uuid",
 ]
@@ -5920,6 +5931,7 @@ dependencies = [
  "sail-common",
  "sail-common-datafusion",
  "sail-execution",
+ "sail-logical-optimizer",
  "sail-object-store",
  "sail-physical-optimizer",
  "sail-plan",

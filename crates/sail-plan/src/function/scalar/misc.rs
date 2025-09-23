@@ -6,6 +6,7 @@ use datafusion_expr::{expr, lit, when, ExprSchemable, Operator, ScalarUDF};
 use sail_catalog::manager::CatalogManager;
 use sail_catalog::utils::quote_namespace_if_needed;
 use sail_common_datafusion::extension::SessionExtensionAccessor;
+use sail_common_datafusion::utils::items::ItemTaker;
 use sail_function::scalar::misc::bitmap_count::BitmapCount;
 use sail_function::scalar::misc::raise_error::RaiseError;
 use sail_function::scalar::misc::spark_aes::{
@@ -15,7 +16,6 @@ use sail_function::scalar::misc::version::SparkVersion;
 
 use crate::error::{PlanError, PlanResult};
 use crate::function::common::{ScalarFunction, ScalarFunctionInput};
-use crate::utils::ItemTaker;
 
 fn assert_true(input: ScalarFunctionInput) -> PlanResult<expr::Expr> {
     let ScalarFunctionInput { arguments, .. } = input;

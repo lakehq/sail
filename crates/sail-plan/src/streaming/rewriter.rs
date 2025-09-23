@@ -9,17 +9,18 @@ use datafusion_expr::{
     col, or, Explain, FetchType, Filter, Projection, SkipType, SubqueryAlias, TableScan, Union,
     UserDefinedLogicalNode,
 };
+use sail_common_datafusion::rename::table_provider::RenameTableProvider;
 use sail_common_datafusion::streaming::event::schema::{
     is_flow_event_schema, MARKER_FIELD_NAME, RETRACTED_FIELD_NAME,
 };
 use sail_common_datafusion::streaming::source::{StreamSource, StreamSourceTableProvider};
+use sail_logical_plan::file_write::FileWriteNode;
+use sail_logical_plan::range::RangeNode;
+use sail_logical_plan::show_string::ShowStringNode;
 use sail_logical_plan::streaming::collector::StreamCollectorNode;
 use sail_logical_plan::streaming::limit::StreamLimitNode;
 use sail_logical_plan::streaming::source_adapter::StreamSourceAdapterNode;
 use sail_logical_plan::streaming::source_wrapper::StreamSourceWrapperNode;
-
-use crate::extension::logical::{FileWriteNode, RangeNode, ShowStringNode};
-use crate::extension::source::rename::RenameTableProvider;
 
 /// A logical plan rewriter that rewrites a batch logical plan
 /// into a streaming logical plan. All the nodes (except the sink) in the plan

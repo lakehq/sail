@@ -4,12 +4,12 @@ use async_recursion::async_recursion;
 use datafusion_expr::expr::Sort;
 use datafusion_expr::{Aggregate, Extension, LogicalPlan, LogicalPlanBuilder, Projection};
 use sail_common::spec;
+use sail_common_datafusion::utils::items::ItemTaker;
+use sail_logical_plan::sort::SortWithinPartitionsNode;
 
 use crate::error::{PlanError, PlanResult};
-use crate::extension::logical::SortWithinPartitionsNode;
 use crate::resolver::state::PlanResolverState;
 use crate::resolver::PlanResolver;
-use crate::utils::ItemTaker;
 
 impl PlanResolver<'_> {
     pub(super) async fn resolve_query_sort(

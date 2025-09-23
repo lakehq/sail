@@ -2,9 +2,9 @@ use std::sync::Arc;
 
 use datafusion_expr::{lit, Extension, Limit, LogicalPlan};
 use sail_common::spec;
+use sail_logical_plan::show_string::{ShowStringFormat, ShowStringNode, ShowStringStyle};
 
 use crate::error::PlanResult;
-use crate::extension::logical::{ShowStringFormat, ShowStringNode, ShowStringStyle};
 use crate::resolver::state::PlanResolverState;
 use crate::resolver::PlanResolver;
 

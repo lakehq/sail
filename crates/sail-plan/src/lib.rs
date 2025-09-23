@@ -2,39 +2,37 @@ use std::sync::Arc;
 
 use async_recursion::async_recursion;
 use datafusion::dataframe::DataFrame;
-use datafusion::execution::context::QueryPlanner;
 use datafusion::physical_plan::{displayable, ExecutionPlan};
 use datafusion::prelude::SessionContext;
 use datafusion_common::display::{PlanType, StringifiedPlan, ToStringifiedPlan};
 use datafusion_common::Result;
 use datafusion_expr::{Extension, LogicalPlan};
 use sail_common::spec;
-use sail_common_datafusion::utils::rename_physical_plan;
+use sail_common_datafusion::rename::physical_plan::rename_physical_plan;
+use sail_logical_plan::precondition::WithPreconditionsNode;
 
+use crate::catalog::CatalogCommandNode;
 use crate::config::PlanConfig;
 use crate::error::PlanResult;
-use crate::extension::logical::WithPreconditionsNode;
 use crate::resolver::plan::NamedPlan;
 use crate::resolver::PlanResolver;
 use crate::streaming::rewriter::{is_streaming_plan, rewrite_streaming_plan};
 
+mod catalog;
 pub mod config;
 pub mod error;
-pub mod extension;
 pub mod formatter;
 pub mod function;
 pub mod literal;
+pub mod planner;
 pub mod resolver;
 mod streaming;
-mod utils;
 
 /// Executes a logical plan.
 /// This replaces DDL statements and catalog operations with the execution results.
 /// Logical plan nodes with corresponding physical plan nodes remain unchanged.
 #[async_recursion]
 pub async fn execute_logical_plan(ctx: &SessionContext, plan: LogicalPlan) -> Result<DataFrame> {
-    use crate::extension::logical::CatalogCommandNode;
-
     let plan = match plan {
         LogicalPlan::Extension(Extension { node }) => {
             if let Some(n) = node.as_any().downcast_ref::<CatalogCommandNode>() {
@@ -86,10 +84,4 @@ pub async fn resolve_and_execute_plan(
         displayable(plan.as_ref()).indent(true).to_string(),
     ));
     Ok((plan, info))
-}
-
-pub fn new_query_planner() -> Arc<dyn QueryPlanner + Send + Sync> {
-    use crate::extension::ExtensionQueryPlanner;
-
-    Arc::new(ExtensionQueryPlanner {})
 }
