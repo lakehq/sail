@@ -16,28 +16,27 @@ use sail_sql_analyzer::parser::parse_timestamp;
 use crate::utils::ItemTaker;
 
 #[derive(Debug, PartialEq, Eq, Hash)]
-enum TimestampParserType {
-    Ltz { timezone: String },
+enum TimestampParser {
+    Ltz { default_timezone: String },
     Ntz,
 }
 
-impl TimestampParserType {
+impl TimestampParser {
     fn string_to_microseconds(&self, value: &str) -> Result<i64> {
         match self {
-            TimestampParserType::Ltz { timezone } => {
-                let tz: Tz = timezone.parse()?;
+            TimestampParser::Ltz { default_timezone } => {
                 let (datetime, timezone) = parse_timestamp(value)
                     .and_then(|x| x.into_naive())
                     .map_err(|e| exec_datafusion_err!("{e}"))?;
-                let timezone = if timezone.is_empty() {
-                    tz
+                let timezone: Tz = if timezone.is_empty() {
+                    default_timezone.parse()?
                 } else {
                     timezone.parse()?
                 };
                 let datetime = localize_with_fallback(&timezone, &datetime)?;
                 Ok(datetime.timestamp_micros())
             }
-            TimestampParserType::Ntz => {
+            TimestampParser::Ntz => {
                 let (datetime, _timezone) = parse_timestamp(value)
                     .and_then(|x| x.into_naive())
                     .map_err(|e| exec_datafusion_err!("{e}"))?;
@@ -50,18 +49,18 @@ impl TimestampParserType {
 #[derive(Debug, PartialEq, Eq, Hash)]
 pub struct SparkTimestamp {
     timezone: Option<Arc<str>>,
-    parser: TimestampParserType,
+    parser: TimestampParser,
     signature: Signature,
 }
 
 impl SparkTimestamp {
     pub fn try_new(timezone: Option<Arc<str>>) -> Result<Self> {
         let parser = if let Some(ref timezone) = timezone {
-            TimestampParserType::Ltz {
-                timezone: timezone.as_ref().to_string(),
+            TimestampParser::Ltz {
+                default_timezone: timezone.as_ref().to_string(),
             }
         } else {
-            TimestampParserType::Ntz
+            TimestampParser::Ntz
         };
         Ok(Self {
             timezone,
