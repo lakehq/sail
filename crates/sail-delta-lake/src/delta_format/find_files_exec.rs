@@ -7,10 +7,14 @@ use async_trait::async_trait;
 use datafusion::arrow::array::{Array, StringArray};
 use datafusion::arrow::datatypes::{DataType, Field, Schema, SchemaRef};
 use datafusion::arrow::record_batch::RecordBatch;
+use datafusion::datasource::memory::MemorySourceConfig;
+use datafusion::datasource::source::DataSourceExec;
 use datafusion::datasource::TableProvider;
 use datafusion::execution::context::{SessionState, TaskContext};
 use datafusion::execution::SessionStateBuilder;
+use datafusion::physical_plan::common::collect;
 use datafusion::physical_plan::execution_plan::{Boundedness, EmissionType};
+use datafusion::physical_plan::filter::FilterExec;
 use datafusion::physical_plan::stream::RecordBatchStreamAdapter;
 use datafusion::physical_plan::{
     DisplayAs, DisplayFormatType, ExecutionPlan, Partitioning, PlanProperties,
@@ -21,7 +25,7 @@ use datafusion_physical_expr::{Distribution, EquivalenceProperties, PhysicalExpr
 use deltalake::kernel::Add;
 use deltalake::logstore::{LogStore, LogStoreRef, StorageConfig};
 use deltalake::{DeltaResult, DeltaTableError};
-use futures::stream;
+use futures::{stream, TryStreamExt};
 use url::Url;
 
 use crate::delta_datafusion::schema_rewriter::DeltaPhysicalExprAdapterFactory;
@@ -284,15 +288,6 @@ pub async fn scan_memory_table_physical(
     state: &SessionState,
     physical_predicate: Arc<dyn PhysicalExpr>,
 ) -> DeltaResult<Vec<Add>> {
-    use datafusion::arrow::datatypes::{DataType, Field, Schema};
-    use datafusion::arrow::record_batch::RecordBatch;
-    use datafusion::datasource::memory::MemorySourceConfig;
-    use datafusion::datasource::source::DataSourceExec;
-    use datafusion::execution::context::TaskContext;
-    use datafusion::physical_plan::common::collect;
-    use datafusion::physical_plan::filter::FilterExec;
-    use datafusion::physical_plan::ExecutionPlan;
-
     let actions = snapshot.file_actions(log_store).await?;
     let batch = snapshot.add_actions_table(true)?;
     let mut arrays = Vec::new();
@@ -370,11 +365,6 @@ pub async fn find_files_scan_physical(
     state: &SessionState,
     physical_predicate: Arc<dyn PhysicalExpr>,
 ) -> DeltaResult<Vec<Add>> {
-    use datafusion::execution::context::TaskContext;
-    use datafusion::physical_plan::common::collect;
-    use datafusion::physical_plan::ExecutionPlan;
-    use futures::TryStreamExt;
-
     let candidate_map: HashMap<String, Add> = snapshot
         .file_actions_iter(&log_store)
         .map_ok(|add| (add.path.clone(), add.to_owned()))

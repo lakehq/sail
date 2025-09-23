@@ -3,7 +3,7 @@ use std::sync::Arc;
 
 use datafusion::arrow::compute::SortOptions;
 use datafusion::arrow::datatypes::Schema as ArrowSchema;
-use datafusion::common::Result;
+use datafusion::common::{Result, ScalarValue};
 use datafusion::error::DataFusionError;
 use datafusion::physical_expr::expressions::Column;
 use datafusion::physical_expr::{LexOrdering, LexRequirement, PhysicalExpr, PhysicalSortExpr};
@@ -11,7 +11,7 @@ use datafusion::physical_plan::projection::ProjectionExec;
 use datafusion::physical_plan::repartition::RepartitionExec;
 use datafusion::physical_plan::sorts::sort::SortExec;
 use datafusion::physical_plan::{ExecutionPlan, Partitioning};
-use datafusion_physical_expr::expressions::Column as PhysicalColumn;
+use datafusion_physical_expr::expressions::{lit, Column as PhysicalColumn};
 use deltalake::kernel::Action;
 use deltalake::protocol::DeltaOperation;
 use serde::{Deserialize, Serialize};
@@ -109,9 +109,6 @@ pub fn create_sort(
         Arc::new(SortExec::new(lex_ordering, input).with_preserve_partitioning(true))
     } else {
         // No sorting needed, create a minimal SortExec with empty ordering
-        use datafusion::common::ScalarValue;
-        use datafusion_physical_expr::expressions::lit;
-
         let dummy_expr = PhysicalSortExpr {
             expr: lit(ScalarValue::Int32(Some(1))),
             options: SortOptions::default(),

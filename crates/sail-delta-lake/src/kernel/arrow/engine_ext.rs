@@ -305,8 +305,6 @@ impl<'a> SchemaTransform<'a> for NullCountStatsTransform {
         Some(Cow::Owned(PrimitiveType::Long))
     }
     fn transform_struct_field(&mut self, field: &'a StructField) -> Option<Cow<'a, StructField>> {
-        use Cow::*;
-
         if matches!(
             &field.data_type,
             DataType::Array(_) | DataType::Map(_) | DataType::Variant(_)
@@ -320,8 +318,8 @@ impl<'a> SchemaTransform<'a> for NullCountStatsTransform {
         }
 
         match self.transform(&field.data_type)? {
-            Borrowed(_) => Some(Borrowed(field)),
-            dt => Some(Owned(StructField {
+            Cow::Borrowed(_) => Some(Cow::Borrowed(field)),
+            dt => Some(Cow::Owned(StructField {
                 name: field.name.clone(),
                 data_type: dt.into_owned(),
                 nullable: true,
@@ -379,8 +377,6 @@ impl BaseStatsTransform {
 
 impl<'a> SchemaTransform<'a> for BaseStatsTransform {
     fn transform_struct_field(&mut self, field: &'a StructField) -> Option<Cow<'a, StructField>> {
-        use Cow::*;
-
         // Check if the number of columns is set and if the added columns exceed the limit
         // In the constructor we assert this will always be None if column_names are specified
         if let Some(DataSkippingNumIndexedCols::NumColumns(n_cols)) = self.n_columns {
@@ -414,8 +410,8 @@ impl<'a> SchemaTransform<'a> for BaseStatsTransform {
         }
 
         let field = match self.transform(&field.data_type)? {
-            Borrowed(_) if field.is_nullable() => Borrowed(field),
-            data_type => Owned(StructField {
+            Cow::Borrowed(_) if field.is_nullable() => Cow::Borrowed(field),
+            data_type => Cow::Owned(StructField {
                 name: field.name.clone(),
                 data_type: data_type.into_owned(),
                 nullable: true,

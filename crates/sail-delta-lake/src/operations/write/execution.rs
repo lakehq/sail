@@ -2,10 +2,13 @@ use std::sync::Arc;
 
 use datafusion::datasource::provider_as_source;
 use datafusion::execution::context::SessionState;
-use datafusion::logical_expr::LogicalPlanBuilder;
+use datafusion::logical_expr::{LogicalPlanBuilder, Operator};
+use datafusion::physical_expr::expressions::{BinaryExpr, Literal, NotExpr};
 use datafusion::physical_expr::PhysicalExpr;
+use datafusion::physical_plan::filter::FilterExec;
 use datafusion::physical_plan::{ExecutionPlan, ExecutionPlanProperties};
 use datafusion::prelude::DataFrame;
+use datafusion_common::ScalarValue;
 use deltalake::errors::DeltaResult;
 use deltalake::kernel::{Action, Add, Remove};
 use deltalake::logstore::LogStoreRef;
@@ -55,11 +58,6 @@ pub(crate) async fn execute_non_empty_expr_physical(
         dyn datafusion::physical_expr::schema_rewriter::PhysicalExprAdapterFactory,
     >,
 ) -> DeltaResult<(Vec<Action>, Option<DataFrame>)> {
-    use datafusion::logical_expr::Operator;
-    use datafusion::physical_expr::expressions::{BinaryExpr, Literal, NotExpr};
-    use datafusion::physical_plan::filter::FilterExec;
-    use datafusion_common::ScalarValue;
-
     let mut actions: Vec<Action> = Vec::new();
 
     // Take the insert plan schema since it might have been schema evolved, if its not

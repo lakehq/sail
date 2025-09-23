@@ -4,8 +4,10 @@ use datafusion::arrow::datatypes::SchemaRef;
 use datafusion::catalog::Session;
 use datafusion::datasource::provider_as_source;
 use datafusion::logical_expr::LogicalPlanBuilder;
+use datafusion::physical_expr::expressions::Column;
 use datafusion::physical_expr::{LexRequirement, PhysicalExpr};
 use datafusion::physical_plan::filter::FilterExec;
+use datafusion::physical_plan::projection::ProjectionExec;
 use datafusion::physical_plan::union::UnionExec;
 use datafusion::physical_plan::ExecutionPlan;
 use datafusion_common::Result;
@@ -205,9 +207,6 @@ impl<'a> DeltaPlanBuilder<'a> {
         new_data_plan: Arc<dyn ExecutionPlan>,
         old_data_plan: Arc<dyn ExecutionPlan>,
     ) -> Result<(Arc<dyn ExecutionPlan>, Arc<dyn ExecutionPlan>)> {
-        use datafusion::physical_expr::expressions::Column;
-        use datafusion::physical_plan::projection::ProjectionExec;
-
         let new_schema = new_data_plan.schema();
         let old_schema = old_data_plan.schema();
 

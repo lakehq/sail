@@ -23,6 +23,7 @@ use datafusion::logical_expr::{
     AggregateUDF, BinaryExpr, Expr, Operator, ScalarUDF, TableProviderFilterPushDown, TableSource,
 };
 use datafusion::physical_expr::PhysicalExpr;
+use datafusion::physical_plan::expressions::Column as PhysicalColumn;
 use datafusion::sql::planner::{ContextProvider, SqlToRel};
 use datafusion::sql::sqlparser::dialect::GenericDialect;
 use datafusion::sql::sqlparser::parser::Parser;
@@ -692,11 +693,9 @@ pub(crate) fn get_path_column<'a>(
 
 /// Extract column names referenced by a PhysicalExpr
 pub(crate) fn collect_physical_columns(expr: &Arc<dyn PhysicalExpr>) -> HashSet<String> {
-    use datafusion::physical_plan::expressions::Column;
-
     let mut columns = HashSet::<String>::new();
     let _ = expr.apply(|expr| {
-        if let Some(column) = expr.as_any().downcast_ref::<Column>() {
+        if let Some(column) = expr.as_any().downcast_ref::<PhysicalColumn>() {
             columns.insert(column.name().to_string());
         }
         Ok(TreeNodeRecursion::Continue)
