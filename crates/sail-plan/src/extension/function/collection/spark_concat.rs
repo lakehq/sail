@@ -13,7 +13,7 @@ use datafusion_expr::{
 };
 use datafusion_functions_nested::concat::ArrayConcat;
 
-#[derive(Debug)]
+#[derive(Debug, PartialEq, Eq, Hash)]
 pub struct SparkConcat {
     signature: Signature,
 }
@@ -159,6 +159,7 @@ impl ScalarUDFImpl for SparkConcat {
                 arg_fields: args.arg_fields,
                 number_rows: args.number_rows,
                 return_field: args.return_field,
+                config_options: args.config_options,
             };
 
             ConcatFunc::new().invoke_with_args(casted_args)

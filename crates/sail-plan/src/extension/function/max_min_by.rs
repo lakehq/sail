@@ -13,6 +13,7 @@ use datafusion::logical_expr::simplify::SimplifyInfo;
 use datafusion::logical_expr::{function, Accumulator, AggregateUDFImpl, Signature, Volatility};
 use datafusion::prelude::Expr;
 
+#[derive(PartialEq, Eq, Hash)]
 pub struct MaxByFunction {
     signature: Signature,
 }
@@ -100,6 +101,7 @@ impl AggregateUDFImpl for MaxByFunction {
     }
 }
 
+#[derive(PartialEq, Eq, Hash)]
 pub struct MinByFunction {
     signature: Signature,
 }

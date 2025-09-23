@@ -11,7 +11,7 @@ use datafusion_expr::{ColumnarValue, ScalarFunctionArgs, ScalarUDFImpl, Signatur
 use crate::extension::function::error_utils::invalid_arg_count_exec_err;
 use crate::extension::function::functions_nested_utils::make_scalar_function;
 
-#[derive(Debug)]
+#[derive(Debug, PartialEq, Eq, Hash)]
 pub struct SparkMakeDtInterval {
     signature: Signature,
 }
@@ -336,6 +336,7 @@ mod tests {
             arg_fields,
             number_rows,
             return_field: Field::new("f", Duration(Microsecond), true).into(),
+            config_options: Arc::new(Default::default()),
         };
         SparkMakeDtInterval::new().invoke_with_args(args)
     }

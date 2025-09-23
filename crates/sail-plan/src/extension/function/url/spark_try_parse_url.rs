@@ -10,7 +10,7 @@ use datafusion_expr_common::signature::{Signature, Volatility};
 use crate::extension::function::functions_utils::make_scalar_function;
 use crate::extension::function::url::parse_url::{spark_handled_parse_url, ParseUrl};
 
-#[derive(Debug)]
+#[derive(Debug, PartialEq, Eq, Hash)]
 pub struct SparkTryParseUrl {
     signature: Signature,
 }

@@ -126,7 +126,7 @@ pub fn rename_physical_plan(
                 name.to_string(),
             )
         })
-        .collect();
+        .collect::<Vec<_>>();
     Ok(Arc::new(ProjectionExec::try_new(expr, plan)?))
 }
 

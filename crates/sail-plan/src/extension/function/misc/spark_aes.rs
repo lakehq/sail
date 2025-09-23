@@ -88,7 +88,7 @@ impl fmt::Display for EncryptionMode {
 ///   - `aad`: An optional STRING expression providing authenticated additional data (AAD) in GCM mode.
 ///     Optional additional authenticated data (AAD) is only supported for GCM.
 ///     If provided for encryption, the identical AAD value must be provided for decryption.
-#[derive(Debug)]
+#[derive(Debug, PartialEq, Eq, Hash)]
 pub struct SparkAESEncrypt {
     signature: Signature,
 }
@@ -539,7 +539,7 @@ impl ScalarUDFImpl for SparkAESEncrypt {
     }
 }
 
-#[derive(Debug)]
+#[derive(Debug, PartialEq, Eq, Hash)]
 pub struct SparkAESDecrypt {
     signature: Signature,
 }
@@ -926,7 +926,7 @@ impl ScalarUDFImpl for SparkAESDecrypt {
     }
 }
 
-#[derive(Debug)]
+#[derive(Debug, PartialEq, Eq, Hash)]
 pub struct SparkTryAESEncrypt {
     signature: Signature,
 }
@@ -971,7 +971,7 @@ impl ScalarUDFImpl for SparkTryAESEncrypt {
     }
 }
 
-#[derive(Debug)]
+#[derive(Debug, PartialEq, Eq, Hash)]
 pub struct SparkTryAESDecrypt {
     signature: Signature,
 }

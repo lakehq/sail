@@ -12,6 +12,7 @@ delta_kernel = { workspace = true }
 # DataFusion dependencies
 datafusion = { workspace = true }
 datafusion-common = { workspace = true }
+datafusion-physical-expr-adapter = { workspace = true }
 datafusion-physical-expr = { workspace = true }
 
 # Arrow dependencies

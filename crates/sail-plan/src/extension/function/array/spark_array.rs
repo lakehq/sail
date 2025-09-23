@@ -19,7 +19,7 @@ use datafusion_expr::{
 
 use crate::extension::function::functions_nested_utils::make_scalar_function;
 
-#[derive(Debug)]
+#[derive(Debug, PartialEq, Eq, Hash)]
 pub struct SparkArray {
     signature: Signature,
     aliases: Vec<String>,

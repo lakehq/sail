@@ -10,7 +10,7 @@ use datafusion_expr::{ColumnarValue, ScalarFunctionArgs, ScalarUDFImpl, Signatur
 
 use crate::extension::function::error_utils::invalid_arg_count_exec_err;
 
-#[derive(Debug)]
+#[derive(Debug, PartialEq, Eq, Hash)]
 pub struct SparkMakeInterval {
     signature: Signature,
 }

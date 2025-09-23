@@ -19,7 +19,7 @@ use crate::extension::function::string::spark_split::{parse_regex, split_to_arra
 
 /// Spark-compatible `str_to_map` expression
 /// <https://spark.apache.org/docs/latest/api/sql/index.html#str_to_map>
-#[derive(Debug)]
+#[derive(Debug, PartialEq, Eq, Hash)]
 pub struct StrToMap {
     signature: Signature,
 }
@@ -88,6 +88,7 @@ impl ScalarUDFImpl for StrToMap {
             arg_fields: fields_for_split,
             number_rows: args.number_rows,
             return_field: split_return_field,
+            config_options: args.config_options,
         })?;
 
         make_scalar_function(str_to_map_inner, vec![Hint::Pad, Hint::AcceptsSingular])(&[

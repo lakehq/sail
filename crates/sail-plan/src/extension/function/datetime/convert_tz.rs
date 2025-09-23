@@ -17,7 +17,7 @@ use datafusion_expr_common::signature::Signature;
 use datafusion_functions::utils::make_scalar_function;
 use sail_common::datetime::time_unit_to_multiplier;
 
-#[derive(Debug)]
+#[derive(Debug, PartialEq, Eq, Hash)]
 pub struct ConvertTz {
     signature: Signature,
 }

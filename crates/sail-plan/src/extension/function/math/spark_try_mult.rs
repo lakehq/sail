@@ -18,7 +18,7 @@ use crate::extension::function::math::common_try::{
     try_op_interval_yearmonth_i32,
 };
 
-#[derive(Debug)]
+#[derive(Debug, PartialEq, Eq, Hash)]
 pub struct SparkTryMult {
     signature: Signature,
 }

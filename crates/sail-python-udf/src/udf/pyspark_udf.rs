@@ -16,7 +16,7 @@ use crate::error::PyUdfResult;
 use crate::lazy::LazyPyObject;
 use crate::python::spark::PySpark;
 
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum PySparkUdfKind {
     Batch,
     ArrowBatch,
@@ -24,7 +24,7 @@ pub enum PySparkUdfKind {
     ScalarPandasIter,
 }
 
-#[derive(Debug)]
+#[derive(Debug, PartialEq, Eq, Hash)]
 pub struct PySparkUDF {
     signature: Signature,
     kind: PySparkUdfKind,

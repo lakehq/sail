@@ -17,7 +17,7 @@ enum ArrayOp {
     Max,
 }
 
-#[derive(Debug)]
+#[derive(Debug, PartialEq, Eq, Hash)]
 pub struct ArrayMin {
     signature: Signature,
 }
@@ -64,7 +64,7 @@ impl ScalarUDFImpl for ArrayMin {
     }
 }
 
-#[derive(Debug)]
+#[derive(Debug, PartialEq, Eq, Hash)]
 pub struct ArrayMax {
     signature: Signature,
 }
