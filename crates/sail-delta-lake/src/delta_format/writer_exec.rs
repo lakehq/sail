@@ -260,8 +260,7 @@ impl ExecutionPlan for DeltaWriterExec {
                         // Table exists, ignore the write operation and return empty commit info
                         let commit_info = CommitInfo {
                             row_count: 0,
-                            add_actions: Vec::new(),
-                            schema_actions: Vec::new(),
+                            actions: Vec::new(),
                             initial_actions: Vec::new(),
                             operation: None,
                         };
@@ -330,10 +329,13 @@ impl ExecutionPlan for DeltaWriterExec {
                 .await
                 .map_err(|e| DataFusionError::External(Box::new(e)))?;
 
+            // Combine add_actions and schema_actions into a single actions vector
+            let mut actions: Vec<Action> = schema_actions;
+            actions.extend(add_actions.into_iter().map(Action::Add));
+
             let commit_info = CommitInfo {
                 row_count: total_rows,
-                add_actions,
-                schema_actions,
+                actions,
                 initial_actions,
                 operation,
             };

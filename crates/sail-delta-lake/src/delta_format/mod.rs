@@ -20,12 +20,14 @@ mod commit_exec;
 mod delete_exec;
 pub mod find_files_exec;
 pub mod plan_builder;
+mod remove_actions_exec;
 mod writer_exec;
 
 pub use commit_exec::DeltaCommitExec;
 pub use delete_exec::DeltaDeleteExec;
 pub use find_files_exec::DeltaFindFilesExec;
 pub use plan_builder::DeltaPlanBuilder;
+pub use remove_actions_exec::DeltaRemoveActionsExec;
 pub use writer_exec::DeltaWriterExec;
 
 /// Create a `ProjectionExec` instance that reorders columns so that partition columns
@@ -165,11 +167,10 @@ pub fn create_repartition(
 }
 
 /// Helper struct for serializing commit information into a single JSON field
-#[derive(Serialize, Deserialize)]
+#[derive(Serialize, Deserialize, Default)]
 pub struct CommitInfo {
     pub row_count: u64,
-    pub add_actions: Vec<deltalake::kernel::Add>,
-    pub schema_actions: Vec<Action>,
+    pub actions: Vec<Action>,
     pub initial_actions: Vec<Action>,
     pub operation: Option<DeltaOperation>,
 }
