@@ -494,6 +494,7 @@ fn approx_count_distinct(input: WinFunctionInput) -> PlanResult<expr::Expr> {
         order_by,
         window_frame,
         ignore_nulls,
+        distinct,
         function_context: _,
     } = input;
     Ok(cast(
@@ -504,7 +505,9 @@ fn approx_count_distinct(input: WinFunctionInput) -> PlanResult<expr::Expr> {
                 partition_by,
                 order_by,
                 window_frame,
+                filter: None,
                 null_treatment: get_null_treatment(ignore_nulls),
+                distinct,
             },
         })),
         DataType::Int64,
