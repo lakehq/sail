@@ -12,13 +12,13 @@ use datafusion_expr::expr::ScalarFunction;
 use datafusion_expr::{ident, when};
 use datafusion_functions_nested::expr_fn as nested_fn;
 use either::Either;
+use sail_common_datafusion::utils::items::ItemTaker;
+use sail_function::scalar::array::spark_array_item_with_position::ArrayItemWithPosition;
+use sail_function::scalar::explode::{Explode, ExplodeKind};
+use sail_function::scalar::multi_expr::MultiExpr;
 
-use crate::extension::function::array::spark_array_item_with_position::ArrayItemWithPosition;
-use crate::extension::function::explode::{Explode, ExplodeKind};
-use crate::extension::function::multi_expr::MultiExpr;
 use crate::resolver::state::PlanResolverState;
 use crate::resolver::tree::{empty_logical_plan, PlanRewriter};
-use crate::utils::ItemTaker;
 
 enum ExplodeDataType {
     List,

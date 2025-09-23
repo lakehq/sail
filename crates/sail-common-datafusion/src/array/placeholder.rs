@@ -10,12 +10,13 @@ use datafusion::arrow::array::{
 use datafusion::arrow::buffer::{Buffer, ScalarBuffer};
 use datafusion::arrow::datatypes::{
     ArrowTimestampType, DataType, Date32Type, Date64Type, Decimal128Type, Decimal256Type,
-    DurationMicrosecondType, DurationMillisecondType, DurationNanosecondType, DurationSecondType,
-    Float16Type, Float32Type, Float64Type, Int16Type, Int32Type, Int64Type, Int8Type,
-    IntervalDayTimeType, IntervalMonthDayNanoType, IntervalUnit, IntervalYearMonthType,
-    Time32MillisecondType, Time32SecondType, Time64MicrosecondType, Time64NanosecondType, TimeUnit,
-    TimestampMicrosecondType, TimestampMillisecondType, TimestampNanosecondType,
-    TimestampSecondType, UInt16Type, UInt32Type, UInt64Type, UInt8Type, UnionMode,
+    Decimal32Type, Decimal64Type, DurationMicrosecondType, DurationMillisecondType,
+    DurationNanosecondType, DurationSecondType, Float16Type, Float32Type, Float64Type, Int16Type,
+    Int32Type, Int64Type, Int8Type, IntervalDayTimeType, IntervalMonthDayNanoType, IntervalUnit,
+    IntervalYearMonthType, Time32MillisecondType, Time32SecondType, Time64MicrosecondType,
+    Time64NanosecondType, TimeUnit, TimestampMicrosecondType, TimestampMillisecondType,
+    TimestampNanosecondType, TimestampSecondType, UInt16Type, UInt32Type, UInt64Type, UInt8Type,
+    UnionMode,
 };
 use datafusion_common::internal_err;
 
@@ -334,6 +335,8 @@ pub fn placeholder_array(
                 _ => internal_err!("invalid dictionary key type: {key_type:?}"),
             }
         }
+        DataType::Decimal32(_, _) => Ok(placeholder_primitive_array::<Decimal32Type>(length)),
+        DataType::Decimal64(_, _) => Ok(placeholder_primitive_array::<Decimal64Type>(length)),
         DataType::Decimal128(_, _) => Ok(placeholder_primitive_array::<Decimal128Type>(length)),
         DataType::Decimal256(_, _) => Ok(placeholder_primitive_array::<Decimal256Type>(length)),
         DataType::Map(field, _) => {

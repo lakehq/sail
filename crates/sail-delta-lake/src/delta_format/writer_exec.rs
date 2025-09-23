@@ -170,8 +170,7 @@ impl ExecutionPlan for DeltaWriterExec {
         let input_partitions = self.input.output_partitioning().partition_count();
         if input_partitions != 1 {
             return internal_err!(
-                "DeltaWriterExec requires exactly one input partition, got {}",
-                input_partitions
+                "DeltaWriterExec requires exactly one input partition, got {input_partitions}"
             );
         }
 

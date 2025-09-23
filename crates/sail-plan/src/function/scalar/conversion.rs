@@ -3,12 +3,12 @@ use std::sync::Arc;
 use datafusion::arrow::datatypes::DataType;
 use datafusion::functions::expr_fn;
 use datafusion_expr::{expr, ExprSchemable, ScalarUDF};
+use sail_common_datafusion::utils::items::ItemTaker;
+use sail_function::scalar::datetime::spark_date::SparkDate;
+use sail_function::scalar::datetime::spark_timestamp::SparkTimestamp;
 
 use crate::error::PlanResult;
-use crate::extension::function::datetime::spark_date::SparkDate;
-use crate::extension::function::datetime::spark_timestamp::SparkTimestamp;
 use crate::function::common::{ScalarFunction, ScalarFunctionInput};
-use crate::utils::ItemTaker;
 
 fn date(input: ScalarFunctionInput) -> PlanResult<expr::Expr> {
     let arg = input.arguments.one()?;

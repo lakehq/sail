@@ -13,7 +13,7 @@ use crate::array::{build_singleton_list_array, get_fields, get_struct_array_type
 
 /// An aggregation function that collects batches into a list of structs.
 /// This function is for internal use.
-#[derive(Debug)]
+#[derive(Debug, PartialEq, Eq, Hash)]
 pub struct PySparkBatchCollectorUDF {
     signature: Signature,
     input_types: Vec<DataType>,

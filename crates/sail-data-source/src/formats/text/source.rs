@@ -247,7 +247,9 @@ impl FileOpener for TextOpener {
                             .convert_read(file.take(result.range.end - result.range.start))?
                     };
 
-                    Ok(futures::stream::iter(config.open(decoder)?).boxed())
+                    Ok(futures::stream::iter(config.open(decoder)?)
+                        .map_err(DataFusionError::from)
+                        .boxed())
                 }
                 GetResultPayload::Stream(s) => {
                     let decoder = config.builder()?.build_decoder();
@@ -257,7 +259,9 @@ impl FileOpener for TextOpener {
                     Ok(deserialize_stream(
                         input,
                         DecoderDeserializer::new(TextDecoder::new(decoder)),
-                    ))
+                    )
+                    .map_err(DataFusionError::from)
+                    .boxed())
                 }
             }
         }))

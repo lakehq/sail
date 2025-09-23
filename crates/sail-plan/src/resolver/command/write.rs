@@ -14,13 +14,15 @@ use sail_catalog::provider::{
 use sail_common::spec;
 use sail_common_datafusion::datasource::{BucketBy, SinkMode};
 use sail_common_datafusion::extension::SessionExtensionAccessor;
-use sail_common_datafusion::utils::{rename_logical_plan, rename_schema};
+use sail_common_datafusion::rename::logical_plan::rename_logical_plan;
+use sail_common_datafusion::rename::schema::rename_schema;
+use sail_common_datafusion::utils::items::ItemTaker;
+use sail_logical_plan::file_write::{FileWriteNode, FileWriteOptions};
+use sail_logical_plan::precondition::WithPreconditionsNode;
 
 use crate::error::{PlanError, PlanResult};
-use crate::extension::logical::{FileWriteNode, FileWriteOptions, WithPreconditionsNode};
 use crate::resolver::state::PlanResolverState;
 use crate::resolver::PlanResolver;
-use crate::utils::ItemTaker;
 
 pub(super) enum WriteMode {
     ErrorIfExists,

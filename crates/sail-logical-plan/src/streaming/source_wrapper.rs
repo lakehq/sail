@@ -6,9 +6,10 @@ use std::sync::Arc;
 use datafusion::logical_expr::LogicalPlan;
 use datafusion_common::{plan_err, DFSchema, DFSchemaRef, Result, TableReference};
 use datafusion_expr::{Expr, UserDefinedLogicalNodeCore};
+use sail_common_datafusion::rename::expression::expression_before_rename;
+use sail_common_datafusion::rename::schema::rename_schema;
 use sail_common_datafusion::streaming::event::schema::to_flow_event_schema;
 use sail_common_datafusion::streaming::source::StreamSource;
-use sail_common_datafusion::utils::{expression_before_rename, rename_schema};
 
 /// A logical plan node that wraps a streaming source after streaming query rewrite.
 #[derive(Clone, Debug)]

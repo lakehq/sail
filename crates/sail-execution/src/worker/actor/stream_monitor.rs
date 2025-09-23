@@ -3,6 +3,7 @@ use std::sync::Arc;
 use datafusion::execution::SendableRecordBatchStream;
 use futures::StreamExt;
 use sail_common_datafusion::error::CommonErrorCause;
+use sail_python_udf::error::PyErrExtractor;
 use sail_server::actor::ActorHandle;
 use tokio::sync::oneshot;
 
@@ -99,7 +100,7 @@ impl TaskStreamMonitor {
                 Ok(_) => None,
                 Err(e) => Some((
                     format!("failed to read batch: {e}"),
-                    CommonErrorCause::new(e),
+                    CommonErrorCause::new::<PyErrExtractor>(e),
                 )),
             };
             if let Some(ref mut sink) = sink {
