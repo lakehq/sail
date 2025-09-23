@@ -38,6 +38,7 @@ use datafusion_proto::protobuf::{
     JoinType as ProtoJoinType, PhysicalPlanNode, PhysicalSortExprNode,
 };
 use datafusion_spark::function::math::expm1::SparkExpm1;
+use datafusion_spark::function::math::width_bucket::SparkWidthBucket;
 use prost::bytes::BytesMut;
 use prost::Message;
 use sail_common_datafusion::datasource::PhysicalSinkMode;
@@ -104,7 +105,6 @@ use sail_function::scalar::math::spark_try_div::SparkTryDiv;
 use sail_function::scalar::math::spark_try_mod::SparkTryMod;
 use sail_function::scalar::math::spark_try_mult::SparkTryMult;
 use sail_function::scalar::math::spark_try_subtract::SparkTrySubtract;
-use sail_function::scalar::math::spark_width_bucket::SparkWidthBucket;
 use sail_function::scalar::misc::bitmap_count::BitmapCount;
 use sail_function::scalar::misc::raise_error::RaiseError;
 use sail_function::scalar::misc::spark_aes::{

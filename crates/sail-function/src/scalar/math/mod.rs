@@ -15,5 +15,4 @@ pub mod spark_try_div;
 pub mod spark_try_mod;
 pub mod spark_try_mult;
 pub mod spark_try_subtract;
-pub mod spark_width_bucket;
 mod utils;

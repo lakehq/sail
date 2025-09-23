@@ -6,6 +6,7 @@ use datafusion::functions::expr_fn;
 use datafusion_common::ScalarValue;
 use datafusion_expr::{cast, expr, lit, Expr, ExprSchemable, Operator, ScalarUDF};
 use datafusion_spark::function::math::expm1::SparkExpm1;
+use datafusion_spark::function::math::width_bucket::SparkWidthBucket;
 use half::f16;
 use sail_function::error::generic_exec_err;
 use sail_function::scalar::math::least_greatest;
@@ -25,7 +26,6 @@ use sail_function::scalar::math::spark_try_div::SparkTryDiv;
 use sail_function::scalar::math::spark_try_mod::SparkTryMod;
 use sail_function::scalar::math::spark_try_mult::SparkTryMult;
 use sail_function::scalar::math::spark_try_subtract::SparkTrySubtract;
-use sail_function::scalar::math::spark_width_bucket::SparkWidthBucket;
 
 use crate::error::{PlanError, PlanResult};
 use crate::function::common::{ScalarFunction, ScalarFunctionInput};
