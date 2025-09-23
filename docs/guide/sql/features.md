@@ -9,17 +9,19 @@ This page presents a high-level overview of supported Spark SQL features.
 
 ## Literals
 
-Sail supports all the Spark SQL literal syntax.
+Sail supports all the Spark SQL literal syntax. Please refer to the [SQL literal guide](./literals/) for more details.
 
 ## Data Types
 
-Sail supports all Spark SQL data types except the `VARIANT` type introduced in Spark 4.0. Support for the `VARIANT` type is tracked in the [GitHub issue](https://github.com/lakehq/sail/issues/511).
+Sail supports all Spark SQL data types except the `VARIANT` type introduced in Spark 4.0. Support for the `VARIANT` type
+is tracked in the [GitHub issue](https://github.com/lakehq/sail/issues/511).
 
 ## Expressions
 
 Sail supports most Spark SQL expression syntax, including unary and binary operators, predicates, `CASE` clause etc.
 
-Sail supports most common Spark SQL functions. The effort to reach full function parity with Spark is tracked in the [GitHub issue](https://github.com/lakehq/sail/issues/398).
+Sail supports most common Spark SQL functions. The effort to reach full function parity with Spark is tracked in
+the [GitHub issue](https://github.com/lakehq/sail/issues/398).
 
 ## Statements
 
@@ -111,7 +113,8 @@ But some extensions support these statements for lakehouse tables (e.g., Delta L
 | `TRUNCATE TABLE`        | :construction:               |
 | `USE DATABASE`          | :white_check_mark:           |
 
-Currently, Sail only supports in-memory catalog, which means the databases and tables are available only within the session.
+Currently, Sail only supports in-memory catalog, which means the databases and tables are available only within the
+session.
 Remote catalog support is in our roadmap.
 
 For the `CREATE TABLE` statement, the `CREATE TABLE ... AS ...` syntax is not supported yet.

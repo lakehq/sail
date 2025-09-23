@@ -60,7 +60,7 @@ impl SparkConnectService for SparkConnectServer {
         let request = request.into_inner();
         debug!("{request:?}");
         let session_key = SessionKey {
-            user_id: request.user_context.map(|u| u.user_id),
+            user_id: request.user_context.map(|u| u.user_id).unwrap_or_default(),
             session_id: request.session_id,
         };
         let metadata = ExecutorMetadata {
@@ -169,7 +169,7 @@ impl SparkConnectService for SparkConnectServer {
         let request = request.into_inner();
         debug!("{request:?}");
         let session_key = SessionKey {
-            user_id: request.user_context.map(|u| u.user_id),
+            user_id: request.user_context.map(|u| u.user_id).unwrap_or_default(),
             session_id: request.session_id.clone(),
         };
         let ctx = self
@@ -253,7 +253,7 @@ impl SparkConnectService for SparkConnectServer {
         let request = request.into_inner();
         debug!("{request:?}");
         let session_key = SessionKey {
-            user_id: request.user_context.map(|u| u.user_id),
+            user_id: request.user_context.map(|u| u.user_id).unwrap_or_default(),
             session_id: request.session_id.clone(),
         };
         let ctx = self
@@ -303,7 +303,7 @@ impl SparkConnectService for SparkConnectServer {
         };
         debug!("{first:?}");
         let session_key = SessionKey {
-            user_id: first.user_context.map(|u| u.user_id),
+            user_id: first.user_context.map(|u| u.user_id).unwrap_or_default(),
             session_id: first.session_id.clone(),
         };
         let ctx = self
@@ -344,7 +344,7 @@ impl SparkConnectService for SparkConnectServer {
         let request = request.into_inner();
         debug!("{request:?}");
         let session_key = SessionKey {
-            user_id: request.user_context.map(|u| u.user_id),
+            user_id: request.user_context.map(|u| u.user_id).unwrap_or_default(),
             session_id: request.session_id.clone(),
         };
         let ctx = self
@@ -368,7 +368,7 @@ impl SparkConnectService for SparkConnectServer {
         let request = request.into_inner();
         debug!("{request:?}");
         let session_key = SessionKey {
-            user_id: request.user_context.map(|u| u.user_id),
+            user_id: request.user_context.map(|u| u.user_id).unwrap_or_default(),
             session_id: request.session_id.clone(),
         };
         let ctx = self
@@ -413,7 +413,7 @@ impl SparkConnectService for SparkConnectServer {
         let request = request.into_inner();
         debug!("{request:?}");
         let session_key = SessionKey {
-            user_id: request.user_context.map(|u| u.user_id),
+            user_id: request.user_context.map(|u| u.user_id).unwrap_or_default(),
             session_id: request.session_id,
         };
         let ctx = self
@@ -433,7 +433,7 @@ impl SparkConnectService for SparkConnectServer {
         let request = request.into_inner();
         debug!("{request:?}");
         let session_key = SessionKey {
-            user_id: request.user_context.map(|u| u.user_id),
+            user_id: request.user_context.map(|u| u.user_id).unwrap_or_default(),
             session_id: request.session_id.clone(),
         };
         let ctx = self

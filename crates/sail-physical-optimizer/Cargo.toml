@@ -1,0 +1,13 @@
+[package]
+name = "sail-physical-optimizer"
+version = { workspace = true }
+edition = { workspace = true }
+
+[lints]
+workspace = true
+
+[dependencies]
+sail-physical-plan = { path = "../sail-physical-plan" }
+
+datafusion = { workspace = true }
+datafusion-physical-expr = { workspace = true }

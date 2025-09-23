@@ -1,3 +1,5 @@
+import contextlib
+import platform
 import socket
 import threading
 import time
@@ -38,7 +40,8 @@ class SocketServer:
         if self._socket is not None:
             # We need to explicitly shut down the socket to unblock `accept()`,
             # otherwise the thread may hang, and we will wait indefinitely in `join()`.
-            self._socket.shutdown(socket.SHUT_RDWR)
+            with contextlib.suppress(OSError):
+                self._socket.shutdown(socket.SHUT_RDWR)
             self._socket.close()
             self._socket = None
         if self._thread is not None:
@@ -134,6 +137,7 @@ def test_socket_invalid_port(spark):
         spark.sql("SELECT * FROM t2_invalid_port LIMIT 1").collect()
 
 
+@pytest.mark.skipif(platform.system() == "Windows", reason="not working on Windows")
 def test_socket_connection_failure(spark):
     with pytest.raises(Exception, match="refused"):
         spark.sql("SELECT * FROM t3_connection_failure LIMIT 1").collect()

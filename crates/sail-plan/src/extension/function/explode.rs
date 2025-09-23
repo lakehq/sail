@@ -12,6 +12,8 @@ pub fn explode_name_to_kind(name: &str) -> Result<ExplodeKind> {
         "explode_outer" => Ok(ExplodeKind::ExplodeOuter),
         "posexplode" => Ok(ExplodeKind::PosExplode),
         "posexplode_outer" => Ok(ExplodeKind::PosExplodeOuter),
+        "inline" => Ok(ExplodeKind::Inline),
+        "inline_outer" => Ok(ExplodeKind::InlineOuter),
         _ => Err(datafusion::error::DataFusionError::Plan(
             "Invalid explode function name".to_string(),
         )),
@@ -30,6 +32,8 @@ pub enum ExplodeKind {
     ExplodeOuter,
     PosExplode,
     PosExplodeOuter,
+    Inline,
+    InlineOuter,
 }
 
 impl Explode {
@@ -56,6 +60,8 @@ impl ScalarUDFImpl for Explode {
             ExplodeKind::ExplodeOuter => "explode_outer",
             ExplodeKind::PosExplode => "posexplode",
             ExplodeKind::PosExplodeOuter => "posexplode_outer",
+            ExplodeKind::Inline => "inline",
+            ExplodeKind::InlineOuter => "inline_outer",
         }
     }
 

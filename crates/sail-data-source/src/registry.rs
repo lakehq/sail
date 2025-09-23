@@ -7,6 +7,7 @@ use sail_common_datafusion::datasource::TableFormat;
 
 use crate::formats::arrow::ArrowTableFormat;
 use crate::formats::avro::AvroTableFormat;
+use crate::formats::binary::BinaryTableFormat;
 use crate::formats::console::ConsoleTableFormat;
 use crate::formats::csv::CsvTableFormat;
 use crate::formats::delta::DeltaTableFormat;
@@ -38,6 +39,7 @@ impl TableFormatRegistry {
         let mut registry = Self::default();
         registry.register_format(Arc::new(ArrowTableFormat::default()));
         registry.register_format(Arc::new(AvroTableFormat::default()));
+        registry.register_format(Arc::new(BinaryTableFormat::default()));
         registry.register_format(Arc::new(CsvTableFormat::default()));
         registry.register_format(Arc::new(DeltaTableFormat));
         registry.register_format(Arc::new(JsonTableFormat::default()));

@@ -7,6 +7,7 @@ edition = { workspace = true }
 workspace = true
 
 [dependencies]
+sail-common = { path = "../sail-common" }
 sail-common-datafusion = { path = "../sail-common-datafusion" }
 sail-delta-lake = { path = "../sail-delta-lake" }
 
@@ -23,9 +24,7 @@ url = { workspace = true }
 regex = { workspace = true }
 percent-encoding = { workspace = true }
 once_cell = { workspace = true }
-deltalake = { workspace = true }
 log = { workspace = true }
-uuid = { workspace = true }
 bytes = { workspace = true }
 tokio = { workspace = true }
 tokio-stream = { workspace = true }

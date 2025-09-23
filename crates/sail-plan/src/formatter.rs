@@ -590,6 +590,7 @@ impl PlanFormatter for SparkPlanFormatter {
             "regexp_replace" => Ok(append_start_pos_if_arglen_eq(3, 1, name, arguments)),
             // When the data type being exploded is `ExplodeDataType::List`, use "col" as the column name.
             "explode" | "explode_outer" => Ok("col".to_string()),
+            "stack" => Ok("col0".to_string()),
             "current_database" => Ok("current_schema()".to_string()),
             "acos" | "acosh" | "asin" | "asinh" | "atan" | "atan2" | "atanh" | "cbrt" | "exp"
             | "log" | "log10" | "log1p" | "log2" | "regexp" | "regexp_like" | "signum" | "sqrt"

@@ -2,6 +2,7 @@
 /// Spark defaults to DataType::Int32 while DataFusion defaults to DataType::Int64.
 use std::{any::Any, sync::Arc};
 
+use arrow::array::new_empty_array;
 use datafusion::arrow::array::{
     make_array, new_null_array, Array, ArrayData, ArrayRef, Capacities, GenericListArray,
     MutableArrayData, NullArray, OffsetSizeTrait,
@@ -59,17 +60,11 @@ impl ScalarUDFImpl for SparkArray {
         match arg_types.len() {
             0 => Ok(empty_array_type()),
             _ => {
-                let mut expr_type = DataType::Null;
-                for arg_type in arg_types {
-                    if !arg_type.equals_datatype(&DataType::Null) {
-                        expr_type = arg_type.clone();
-                        break;
-                    }
-                }
-
-                if expr_type.is_null() {
-                    expr_type = DataType::Int32;
-                }
+                let expr_type = arg_types
+                    .iter()
+                    .find(|f| !f.is_null())
+                    .cloned()
+                    .unwrap_or(DataType::Null);
 
                 Ok(DataType::List(Arc::new(Field::new_list_field(
                     expr_type, true,
@@ -123,28 +118,34 @@ impl ScalarUDFImpl for SparkArray {
 
 // Empty array is a special case that is useful for many other array functions
 pub(super) fn empty_array_type() -> DataType {
-    DataType::List(Arc::new(Field::new_list_field(DataType::Int32, true)))
+    DataType::List(Arc::new(Field::new_list_field(DataType::Null, false)))
 }
 
 /// `make_array_inner` is the implementation of the `make_array` function.
 /// Constructs an array using the input `data` as `ArrayRef`.
 /// Returns a reference-counted `Array` instance result.
 pub fn make_array_inner(arrays: &[ArrayRef]) -> Result<ArrayRef> {
-    let mut data_type = DataType::Null;
-    for arg in arrays {
-        let arg_data_type = arg.data_type();
-        if !arg_data_type.equals_datatype(&DataType::Null) {
-            data_type = arg_data_type.clone();
-            break;
-        }
+    if arrays.is_empty() {
+        let array = new_empty_array(&DataType::Null);
+        return Ok(Arc::new(
+            SingleRowListArrayBuilder::new(array)
+                .with_nullable(false)
+                .build_list_array(),
+        ));
     }
 
+    let data_type = arrays
+        .iter()
+        .map(|arr| arr.data_type())
+        .find(|arr_type| !arr_type.is_null())
+        .unwrap_or(&DataType::Null)
+        .clone();
+
     match data_type {
-        // Either an empty array or all nulls:
+        // Array or all nulls:
         DataType::Null => {
             let length = arrays.iter().map(|a| a.len()).sum();
-            // By default Int32
-            let array = new_null_array(&DataType::Int32, length);
+            let array = new_null_array(&DataType::Null, length);
             Ok(Arc::new(
                 SingleRowListArrayBuilder::new(array)
                     .with_nullable(true)

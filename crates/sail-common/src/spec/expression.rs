@@ -358,6 +358,8 @@ pub enum PySparkUdfType {
     CogroupedMapPandas = 206,
     MapArrowIter = 207,
     GroupedMapPandasWithState = 208,
+    GroupedMapArrow = 209,
+    CogroupedMapArrow = 210,
     Table = 300,
     ArrowTable = 301,
 }

@@ -23,7 +23,8 @@ impl PlanResolver<'_> {
                 let value = self.resolve_expressions(value, &schema, state).await?;
                 results.push(value);
             }
-            let _changed_column_indices = Self::resolve_values_nan_types(&mut results, &schema)?;
+            let _nan_column_indices = Self::resolve_values_nan_types(&mut results, &schema)?;
+            let _map_column_indices = Self::resolve_values_map_types(&mut results, &schema)?;
             Ok(results) as PlanResult<_>
         }
         .await?;
@@ -33,7 +34,9 @@ impl PlanResolver<'_> {
             .columns()
             .into_iter()
             .enumerate()
-            .map(|(i, col)| Expr::Column(col).alias(state.register_field_name(format!("col{i}"))))
+            .map(|(i, col)| {
+                Expr::Column(col).alias(state.register_field_name(format!("col{}", i + 1)))
+            })
             .collect::<Vec<_>>();
         Ok(LogicalPlan::Projection(Projection::try_new(
             expr,
@@ -101,5 +104,46 @@ impl PlanResolver<'_> {
         }
 
         Ok(nan_positions)
+    }
+
+    fn resolve_values_map_types(
+        values: &mut Vec<Vec<Expr>>,
+        schema: &DFSchemaRef,
+    ) -> PlanResult<HashSet<usize>> {
+        let mut map_positions = HashSet::new();
+        for value in values.iter() {
+            value.iter().enumerate().for_each(|(idx, expr)| {
+                if matches!(expr.get_type(schema), Ok(DataType::Map(..))) {
+                    map_positions.insert(idx);
+                }
+            });
+        }
+
+        for idx in map_positions.clone() {
+            let override_types = values
+                .iter()
+                .map(|result| {
+                    let cur_map_type = result[idx].get_type(&schema)?;
+                    Ok(
+                        if matches!(cur_map_type.clone(), DataType::Map(inner_type, _)
+                        if matches!(inner_type.data_type(), DataType::Struct(fields)
+                            if matches!(fields.first().map(|f| f.data_type()), Some(DataType::Null))
+                        )) {
+                            None
+                        } else {
+                            Some(cur_map_type)
+                        },
+                    )
+                })
+                .collect::<Result<Vec<_>, PlanError>>()?;
+
+            if let Some(target_type) = override_types.into_iter().find_map(|data_type| data_type) {
+                for value in &mut *values {
+                    value[idx] = cast(value[idx].clone(), target_type.clone());
+                }
+            }
+        }
+
+        Ok(map_positions)
     }
 }

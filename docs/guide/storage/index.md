@@ -1,6 +1,6 @@
 ---
 title: Data Storage
-rank: 5
+rank: 6
 ---
 
 # Data Storage

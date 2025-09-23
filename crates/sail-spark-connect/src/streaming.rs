@@ -144,11 +144,11 @@ impl StreamingQueryManager {
         };
         let mut result = String::new();
         let mut write = |kind: &'static str, t: &PlanType| {
-            result.push_str("== ");
-            result.push_str(kind);
-            result.push_str(" ==\n");
             for item in query.info.iter() {
                 if &item.plan_type == t {
+                    result.push_str("== ");
+                    result.push_str(kind);
+                    result.push_str(" ==\n");
                     result.push_str(item.plan.trim_end_matches('\n'));
                     result.push_str("\n\n");
                 }
@@ -156,6 +156,7 @@ impl StreamingQueryManager {
         };
         if extended {
             write("Initial Logical Plan", &PlanType::InitialLogicalPlan);
+            write("Final Logical Plan", &PlanType::FinalLogicalPlan);
         }
         write("Final Physical Plan", &PlanType::FinalPhysicalPlan);
         Ok(result)

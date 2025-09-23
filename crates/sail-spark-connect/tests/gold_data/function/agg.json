@@ -2027,7 +2027,7 @@
         }
       },
       "output": {
-        "failure": "not supported: unknown function: percentile_cont"
+        "failure": "not implemented: unknown aggregate function: percentile_cont"
       }
     },
     {
@@ -2049,7 +2049,7 @@
         }
       },
       "output": {
-        "failure": "not supported: unknown function: percentile_cont"
+        "failure": "not implemented: unknown aggregate function: percentile_cont"
       }
     },
     {
@@ -2071,7 +2071,7 @@
         }
       },
       "output": {
-        "failure": "not supported: unknown function: percentile_disc"
+        "failure": "not implemented: unknown aggregate function: percentile_disc"
       }
     },
     {
@@ -2093,7 +2093,7 @@
         }
       },
       "output": {
-        "failure": "not supported: unknown function: percentile_disc"
+        "failure": "not implemented: unknown aggregate function: percentile_disc"
       }
     },
     {

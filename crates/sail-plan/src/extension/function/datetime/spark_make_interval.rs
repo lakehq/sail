@@ -214,7 +214,7 @@ impl ScalarUDFImpl for SparkMakeInterval {
     }
 }
 
-fn make_interval_month_day_nano(
+pub fn make_interval_month_day_nano(
     year: i32,
     month: i32,
     week: i32,

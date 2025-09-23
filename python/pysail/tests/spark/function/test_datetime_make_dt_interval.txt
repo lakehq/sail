@@ -1,0 +1,124 @@
+# null
+>>> spark.sql("SELECT (make_dt_interval(null, 0, 0, 0))").show(truncate=False)
++-------------------------------+
+|make_dt_interval(NULL, 0, 0, 0)|
++-------------------------------+
+|NULL                           |
++-------------------------------+
+>>> spark.sql("SELECT (make_dt_interval(0, null, 0, 0))").show(truncate=False)
++-------------------------------+
+|make_dt_interval(0, NULL, 0, 0)|
++-------------------------------+
+|NULL                           |
++-------------------------------+
+>>> spark.sql("SELECT (make_dt_interval(0, 0, null, 0))").show(truncate=False)
++-------------------------------+
+|make_dt_interval(0, 0, NULL, 0)|
++-------------------------------+
+|NULL                           |
++-------------------------------+
+>>> spark.sql("SELECT (make_dt_interval(0, 0, 0, null))").show(truncate=False)
++-------------------------------+
+|make_dt_interval(0, 0, 0, NULL)|
++-------------------------------+
+|NULL                           |
++-------------------------------+
+
+# missing params
+>>> spark.sql("SELECT (make_dt_interval()) AS make_dt_interval").show(truncate=False)
++-----------------------------------+
+|make_dt_interval                   |
++-----------------------------------+
+|INTERVAL '0 00:00:00' DAY TO SECOND|
++-----------------------------------+
+>>> spark.sql("SELECT (make_dt_interval(1)) AS make_dt_interval").show(truncate=False)
++-----------------------------------+
+|make_dt_interval                   |
++-----------------------------------+
+|INTERVAL '1 00:00:00' DAY TO SECOND|
++-----------------------------------+
+>>> spark.sql("SELECT (make_dt_interval(1, 1)) AS make_dt_interval").show(truncate=False)
++-----------------------------------+
+|make_dt_interval                   |
++-----------------------------------+
+|INTERVAL '1 01:00:00' DAY TO SECOND|
++-----------------------------------+
+>>> spark.sql("SELECT (make_dt_interval(1, 1, 1)) AS make_dt_interval").show(truncate=False)
++-----------------------------------+
+|make_dt_interval                   |
++-----------------------------------+
+|INTERVAL '1 01:01:00' DAY TO SECOND|
++-----------------------------------+
+>>> spark.sql("SELECT (make_dt_interval(1, 1, 1, 1)) AS make_dt_interval").show(truncate=False)
++-----------------------------------+
+|make_dt_interval                   |
++-----------------------------------+
+|INTERVAL '1 01:01:01' DAY TO SECOND|
++-----------------------------------+
+
+# all 0 values
+>>> spark.sql("SELECT (make_dt_interval(0, 0, 0, 0))").show(truncate=False)
++-----------------------------------+
+|make_dt_interval(0, 0, 0, 0)       |
++-----------------------------------+
+|INTERVAL '0 00:00:00' DAY TO SECOND|
++-----------------------------------+
+
+>>> spark.sql("SELECT (make_dt_interval(-1, 24, 0, 0)) df").show(truncate=False)
++-----------------------------------+
+|df                                 |
++-----------------------------------+
+|INTERVAL '0 00:00:00' DAY TO SECOND|
++-----------------------------------+
+>>> spark.sql("SELECT (make_dt_interval(1, -24, 0, 0)) dt").show(truncate=False)
++-----------------------------------+
+|dt                                 |
++-----------------------------------+
+|INTERVAL '0 00:00:00' DAY TO SECOND|
++-----------------------------------+
+
+>>> spark.sql("SELECT (make_dt_interval(0, 0, 0, 0.1))").show(truncate=False)
++-------------------------------------+
+|make_dt_interval(0, 0, 0, 0.1)       |
++-------------------------------------+
+|INTERVAL '0 00:00:00.1' DAY TO SECOND|
++-------------------------------------+
+
+# overflow
+# >>> spark.sql("SELECT (make_dt_interval(214748364, 0, 0, 0))").show(truncate=False)
+# pyspark.errors.exceptions.captured.ArithmeticException: long overflow
+
+
+# doctest https://spark.apache.org/docs/latest/api/python/reference/pyspark.sql/api/pyspark.sql.functions.make_dt_interval.html
+>>> import pyspark.sql.functions as sf
+>>> df = spark.createDataFrame([[1, 12, 30, 01.001001]], ['day', 'hour', 'min', 'sec'])
+>>> df.select('*', sf.make_dt_interval('day')).show(truncate=False)
++---+----+---+--------+-----------------------------------+
+|day|hour|min|sec     |make_dt_interval(day, 0, 0, 0)     |
++---+----+---+--------+-----------------------------------+
+|1  |12  |30 |1.001001|INTERVAL '1 00:00:00' DAY TO SECOND|
++---+----+---+--------+-----------------------------------+
+
+>>> df = spark.createDataFrame([[1, 12, 30, 01.001001]], ['day', 'hour', 'min', 'sec'])
+>>> df.select('*', sf.make_dt_interval(df.day, df.hour)).show(truncate=False)
++---+----+---+--------+-----------------------------------+
+|day|hour|min|sec     |make_dt_interval(day, hour, 0, 0)  |
++---+----+---+--------+-----------------------------------+
+|1  |12  |30 |1.001001|INTERVAL '1 12:00:00' DAY TO SECOND|
++---+----+---+--------+-----------------------------------+
+
+>>> df = spark.createDataFrame([[1, 12, 30, 01.001001]], ['day', 'hour', 'min', 'sec'])
+>>> df.select('*', sf.make_dt_interval(df.day, 'hour', df.min)).show(truncate=False)
++---+----+---+--------+-----------------------------------+
+|day|hour|min|sec     |make_dt_interval(day, hour, min, 0)|
++---+----+---+--------+-----------------------------------+
+|1  |12  |30 |1.001001|INTERVAL '1 12:30:00' DAY TO SECOND|
++---+----+---+--------+-----------------------------------+
+
+>>> df = spark.createDataFrame([[1, 12, 30, 01.001001]], ['day', 'hour', 'min', 'sec'])
+>>> df.select('*', sf.make_dt_interval(df.day, df.hour, df.min, df.sec)).show(truncate=False)
++---+----+---+--------+------------------------------------------+
+|day|hour|min|sec     |make_dt_interval(day, hour, min, sec)     |
++---+----+---+--------+------------------------------------------+
+|1  |12  |30 |1.001001|INTERVAL '1 12:30:01.001001' DAY TO SECOND|
++---+----+---+--------+------------------------------------------+
