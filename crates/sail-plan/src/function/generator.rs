@@ -3,11 +3,11 @@ use std::sync::Arc;
 use datafusion::arrow::datatypes::{DataType, Field};
 use datafusion_common::ScalarValue;
 use datafusion_expr::{cast, lit, Expr, ExprSchemable, ScalarUDF};
+use sail_function::scalar::array::arrays_zip::ArraysZip;
+use sail_function::scalar::array::spark_array::SparkArray;
+use sail_function::scalar::explode::{Explode, ExplodeKind};
 
 use crate::error::PlanError;
-use crate::extension::function::array::arrays_zip::ArraysZip;
-use crate::extension::function::array::spark_array::SparkArray;
-use crate::extension::function::explode::{Explode, ExplodeKind};
 use crate::function::common::{ScalarFunction, ScalarFunctionInput};
 use crate::utils::ItemTaker;
 use crate::PlanResult;

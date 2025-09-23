@@ -7,7 +7,6 @@ use datafusion::physical_plan::ExecutionPlan;
 use datafusion::physical_planner::{DefaultPhysicalPlanner, PhysicalPlanner};
 
 pub mod analyzer;
-pub mod function;
 pub mod logical;
 pub mod optimizer;
 pub mod physical;

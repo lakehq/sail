@@ -6,11 +6,11 @@ use datafusion_expr::select_expr::SelectExpr;
 use datafusion_expr::{col, lit, Expr, LogicalPlan, LogicalPlanBuilder, ScalarUDF};
 use rand::{rng, Rng};
 use sail_common::spec;
+use sail_function::scalar::array::spark_sequence::SparkSequence;
+use sail_function::scalar::math::rand_poisson::RandPoisson;
+use sail_function::scalar::math::random::Random;
 
 use crate::error::{PlanError, PlanResult};
-use crate::extension::function::array::spark_sequence::SparkSequence;
-use crate::extension::function::math::rand_poisson::RandPoisson;
-use crate::extension::function::math::random::Random;
 use crate::resolver::state::PlanResolverState;
 use crate::resolver::PlanResolver;
 
