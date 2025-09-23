@@ -979,7 +979,7 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
                 sink_mode: Some(sink_mode),
             })
         } else if let Some(delta_commit_exec) = node.as_any().downcast_ref::<DeltaCommitExec>() {
-            let input = self.try_encode_plan(delta_commit_exec.input_plan().clone())?;
+            let input = self.try_encode_plan(delta_commit_exec.input().clone())?;
             let sink_mode = self.try_encode_physical_sink_mode(delta_commit_exec.sink_mode())?;
             NodeKind::DeltaCommit(gen::DeltaCommitExecNode {
                 input,

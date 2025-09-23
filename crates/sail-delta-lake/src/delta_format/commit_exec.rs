@@ -34,7 +34,7 @@ use crate::table::{create_delta_table_with_object_store, open_table_with_object_
 #[derive(Debug)]
 pub struct DeltaCommitExec {
     /// The plan that produces action metadata (Add and Remove actions).
-    input_plan: Arc<dyn ExecutionPlan>,
+    input: Arc<dyn ExecutionPlan>,
     table_url: Url,
     partition_columns: Vec<String>,
     table_exists: bool,
@@ -45,7 +45,7 @@ pub struct DeltaCommitExec {
 
 impl DeltaCommitExec {
     pub fn new(
-        input_plan: Arc<dyn ExecutionPlan>,
+        input: Arc<dyn ExecutionPlan>,
         table_url: Url,
         partition_columns: Vec<String>,
         table_exists: bool,
@@ -59,7 +59,7 @@ impl DeltaCommitExec {
         )]));
         let cache = Self::compute_properties(schema);
         Self {
-            input_plan,
+            input,
             table_url,
             partition_columns,
             table_exists,
@@ -117,8 +117,8 @@ impl DeltaCommitExec {
         self.table_exists
     }
 
-    pub fn input_plan(&self) -> &Arc<dyn ExecutionPlan> {
-        &self.input_plan
+    pub fn input(&self) -> &Arc<dyn ExecutionPlan> {
+        &self.input
     }
 
     pub fn sink_schema(&self) -> &SchemaRef {
@@ -153,7 +153,7 @@ impl ExecutionPlan for DeltaCommitExec {
     }
 
     fn children(&self) -> Vec<&Arc<dyn ExecutionPlan>> {
-        vec![&self.input_plan]
+        vec![&self.input]
     }
 
     fn with_new_children(
@@ -183,7 +183,7 @@ impl ExecutionPlan for DeltaCommitExec {
             return internal_err!("DeltaCommitExec can only be executed in a single partition");
         }
 
-        let input_partitions = self.input_plan.output_partitioning().partition_count();
+        let input_partitions = self.input.output_partitioning().partition_count();
         if input_partitions != 1 {
             return internal_err!(
                 "DeltaCommitExec requires exactly one input partition, got {}",
@@ -191,7 +191,7 @@ impl ExecutionPlan for DeltaCommitExec {
             );
         }
 
-        let input_stream = self.input_plan.execute(0, Arc::clone(&context))?;
+        let input_stream = self.input.execute(0, Arc::clone(&context))?;
 
         let table_url = self.table_url.clone();
         let partition_columns = self.partition_columns.clone();

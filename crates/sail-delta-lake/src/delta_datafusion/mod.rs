@@ -35,17 +35,16 @@ use object_store::ObjectMeta;
 use serde::{Deserialize, Serialize};
 use url::Url;
 
+pub use crate::delta_format::find_files_exec::{
+    find_files_physical, scan_memory_table_physical, FindFiles, FindFilesPhysicalExprProperties,
+};
 use crate::kernel::snapshot::{EagerSnapshot, LogDataHandler, Snapshot};
 use crate::table::DeltaTableState;
 /// [Credit]: <https://github.com/delta-io/delta-rs/blob/3607c314cbdd2ad06c6ee0677b92a29f695c71f3/crates/core/src/delta_datafusion/mod.rs>
 pub(crate) const PATH_COLUMN: &str = "__delta_rs_path";
-
-pub(crate) mod schema_rewriter;
-
-pub mod type_converter;
-
 pub mod provider;
-
+pub(crate) mod schema_rewriter;
+pub mod type_converter;
 pub use provider::DeltaTableProvider;
 
 /// Convert DeltaTableError to DataFusionError
@@ -827,7 +826,3 @@ pub fn parse_predicate_expression(
             DeltaTableError::Generic(format!("Failed to convert SQL to expression: {err}"))
         })
 }
-
-pub use crate::delta_format::find_files_exec::{
-    find_files_physical, scan_memory_table_physical, FindFiles, FindFilesPhysicalExprProperties,
-};

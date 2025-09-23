@@ -9,6 +9,7 @@ use datafusion::arrow::datatypes::{DataType, Field, Schema, SchemaRef};
 use datafusion::arrow::record_batch::RecordBatch;
 use datafusion::execution::context::TaskContext;
 use datafusion::execution::SessionStateBuilder;
+use datafusion::physical_expr_common::physical_expr::fmt_sql;
 use datafusion::physical_plan::execution_plan::{Boundedness, EmissionType};
 use datafusion::physical_plan::stream::RecordBatchStreamAdapter;
 use datafusion::physical_plan::{
@@ -31,7 +32,6 @@ use crate::operations::write::execution::{prepare_predicate_actions_physical, Wr
 use crate::table::open_table_with_object_store;
 
 /// Physical execution node for Delta Lake delete operations
-/// Now generates delete actions instead of executing commits
 #[derive(Debug)]
 pub struct DeltaDeleteExec {
     input: Arc<dyn ExecutionPlan>,
@@ -280,7 +280,7 @@ impl ExecutionPlan for DeltaDeleteExec {
 
             // Package actions into CommitInfo
             let operation = DeltaOperation::Delete {
-                predicate: Some(format!("{:?}", self_clone.condition)),
+                predicate: Some(format!("{}", fmt_sql(self_clone.condition.as_ref()))),
             };
 
             let commit_info = CommitInfo {
