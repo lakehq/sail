@@ -2,6 +2,7 @@ use std::sync::Arc;
 
 use datafusion::arrow::datatypes::SchemaRef;
 use datafusion::catalog::Session;
+use datafusion::common::DataFusionError;
 use datafusion::datasource::provider_as_source;
 use datafusion::logical_expr::LogicalPlanBuilder;
 use datafusion::physical_expr::expressions::Column;
@@ -15,13 +16,14 @@ use sail_common_datafusion::datasource::PhysicalSinkMode;
 use url::Url;
 
 use super::{
-    create_projection, create_repartition, create_sort, DeltaCommitExec, DeltaFindFilesExec,
-    DeltaRemoveActionsExec, DeltaWriterExec,
+    create_projection, create_repartition, create_sort, DeltaCommitExec, DeltaDeleteExec,
+    DeltaFindFilesExec, DeltaRemoveActionsExec, DeltaWriterExec,
 };
 use crate::delta_datafusion::{
     delta_to_datafusion_error, DataFusionMixins, DeltaScanConfigBuilder, DeltaTableProvider,
 };
 use crate::options::TableDeltaOptions;
+use crate::table::open_table_with_object_store;
 
 /// Configuration for Delta table operations
 pub struct DeltaTableConfig {
@@ -304,5 +306,84 @@ impl<'a> DeltaPlanBuilder<'a> {
             self.input.schema(), // Use original input schema for metadata
             self.sink_mode.clone(),
         )))
+    }
+}
+
+/// Builder for creating a Delta Lake DELETE execution plan.
+/// DeltaFindFilesExec -> DeltaDeleteExec -> DeltaCommitExec
+pub struct DeltaDeletePlanBuilder<'a> {
+    table_url: Url,
+    condition: Arc<dyn PhysicalExpr>,
+    session: &'a dyn Session,
+}
+
+impl<'a> DeltaDeletePlanBuilder<'a> {
+    pub fn new(table_url: Url, condition: Arc<dyn PhysicalExpr>, session: &'a dyn Session) -> Self {
+        Self {
+            table_url,
+            condition,
+            session,
+        }
+    }
+
+    /// Build the complete execution plan chain for the DELETE operation.
+    pub async fn build(self) -> Result<Arc<dyn ExecutionPlan>> {
+        // Open table and get metadata
+        let object_store = self
+            .session
+            .runtime_env()
+            .object_store_registry
+            .get_store(&self.table_url)
+            .map_err(|e| DataFusionError::External(Box::new(e)))?;
+
+        let table =
+            open_table_with_object_store(self.table_url.clone(), object_store, Default::default())
+                .await
+                .map_err(|e| {
+                    DataFusionError::Plan(format!(
+                        "Cannot delete from non-existent Delta table at path: {}. Error: {}",
+                        self.table_url, e
+                    ))
+                })?;
+
+        let snapshot_state = table
+            .snapshot()
+            .map_err(|e| DataFusionError::External(Box::new(e)))?;
+        let version = snapshot_state.version();
+
+        let table_schema = snapshot_state
+            .snapshot()
+            .arrow_schema()
+            .map_err(|e| DataFusionError::External(Box::new(e)))?;
+
+        // Build the physical plan chain
+        let find_files_exec = Arc::new(DeltaFindFilesExec::new(
+            self.table_url.clone(),
+            Some(self.condition.clone()),
+            Some(table_schema.clone()),
+            version,
+        ));
+
+        let delete_actions_exec = Arc::new(DeltaDeleteExec::new(
+            find_files_exec,
+            self.table_url.clone(),
+            self.condition,
+            table_schema.clone(),
+        ));
+
+        let partition_columns = snapshot_state.metadata().partition_columns().clone();
+
+        let commit_exec = Arc::new(DeltaCommitExec::new(
+            delete_actions_exec,
+            self.table_url,
+            partition_columns,
+            true, // table_exists is true, checked above
+            table_schema,
+            // For DELETE, this mode doesn't affect behavior as it's handled by the actions.
+            // Using Append as a neutral default.
+            PhysicalSinkMode::Append,
+        ));
+
+        Ok(commit_exec)
     }
 }

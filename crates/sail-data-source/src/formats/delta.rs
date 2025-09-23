@@ -13,9 +13,7 @@ use sail_common_datafusion::datasource::{
 use sail_common_datafusion::streaming::event::schema::is_flow_event_schema;
 use sail_delta_lake::create_delta_provider;
 use sail_delta_lake::delta_datafusion::{parse_predicate_expression, DataFusionMixins};
-use sail_delta_lake::delta_format::{
-    DeltaCommitExec, DeltaDeleteExec, DeltaFindFilesExec, DeltaPlanBuilder,
-};
+use sail_delta_lake::delta_format::{DeltaDeletePlanBuilder, DeltaPlanBuilder};
 use sail_delta_lake::options::TableDeltaOptions;
 use sail_delta_lake::table::open_table_with_object_store;
 use url::Url;
@@ -153,64 +151,14 @@ impl TableFormat for DeltaTableFormat {
 
         let table_url = Self::parse_table_url(ctx, vec![path]).await?;
 
-        // Check for table existence and get schema
-        let object_store = ctx
-            .runtime_env()
-            .object_store_registry
-            .get_store(&table_url)
-            .map_err(|e| DataFusionError::External(Box::new(e)))?;
-        let table =
-            open_table_with_object_store(table_url.clone(), object_store, Default::default())
-                .await
-                .map_err(|e| {
-                    DataFusionError::Plan(format!(
-                "Cannot delete from non-existent Delta table at path: {table_url}. Error: {e}"
-            ))
-                })?;
-
-        // Get table snapshot and version
-        let snapshot_state = table
-            .snapshot()
-            .map_err(|e| DataFusionError::External(Box::new(e)))?;
-        let version = snapshot_state.version();
-
-        let table_schema = snapshot_state
-            .snapshot()
-            .arrow_schema()
-            .map_err(|e| DataFusionError::External(Box::new(e)))?;
-
         let condition = condition.ok_or_else(|| {
             DataFusionError::Plan("DELETE operation requires a WHERE condition".to_string())
         })?;
 
-        let find_files_exec = Arc::new(DeltaFindFilesExec::new(
-            table_url.clone(),
-            Some(condition.clone()),
-            Some(table_schema.clone()),
-            version,
-        ));
+        let plan_builder = DeltaDeletePlanBuilder::new(table_url, condition, ctx);
+        let delete_exec = plan_builder.build().await?;
 
-        // DeltaFindFilesExec -> DeltaDeleteExec -> DeltaCommitExec
-        let delete_actions_exec = Arc::new(DeltaDeleteExec::new(
-            find_files_exec,
-            table_url.clone(),
-            condition,
-            table_schema.clone(),
-        ));
-
-        // Get partition columns from snapshot
-        let partition_columns = snapshot_state.metadata().partition_columns().clone();
-
-        let commit_exec = Arc::new(DeltaCommitExec::new(
-            delete_actions_exec,
-            table_url,
-            partition_columns,
-            true, // table_exists = true (checked above)
-            table_schema,
-            PhysicalSinkMode::Append, // For DELETE, this mode doesn't affect behavior
-        ));
-
-        Ok(commit_exec)
+        Ok(delete_exec)
     }
 }
 

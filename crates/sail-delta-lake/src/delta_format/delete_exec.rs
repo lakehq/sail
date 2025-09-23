@@ -223,7 +223,7 @@ impl ExecutionPlan for DeltaDeleteExec {
         let self_clone = self.clone();
 
         let future = async move {
-            // 1. Collect candidate files from input (DeltaFindFilesExec)
+            // Collect candidate files from input (DeltaFindFilesExec)
             let mut candidate_adds = vec![];
             let mut partition_scan = true; // Default to true if no rows
 
@@ -269,7 +269,7 @@ impl ExecutionPlan for DeltaDeleteExec {
                 }
             }
 
-            // 2. Generate Actions
+            // Generate Actions
             let actions = if candidate_adds.is_empty() {
                 vec![]
             } else {
@@ -278,7 +278,7 @@ impl ExecutionPlan for DeltaDeleteExec {
                     .await?
             };
 
-            // 3. Package actions into CommitInfo
+            // Package actions into CommitInfo
             let operation = DeltaOperation::Delete {
                 predicate: Some(format!("{:?}", self_clone.condition)),
             };
@@ -290,7 +290,6 @@ impl ExecutionPlan for DeltaDeleteExec {
                 operation: Some(operation),
             };
 
-            // 4. Serialize and create output RecordBatch
             let json = serde_json::to_string(&commit_info)
                 .map_err(|e| DataFusionError::External(Box::new(e)))?;
             let data_array = Arc::new(StringArray::from(vec![json]));
