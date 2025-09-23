@@ -360,7 +360,6 @@ message DeltaDeleteExecNode {
   string table_url = 2;
   bytes condition = 3;
   bytes table_schema = 4;
-  int64 version = 5;
 }
 
 message DeltaFindFilesExecNode {

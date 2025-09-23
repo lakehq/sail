@@ -41,7 +41,7 @@ impl DeltaRemoveActionsExec {
         Self { input, cache }
     }
 
-    async fn create_remove_actions(adds: Vec<Add>) -> Result<Vec<Action>> {
+    pub(crate) async fn create_remove_actions(adds: Vec<Add>) -> Result<Vec<Action>> {
         let deletion_timestamp = SystemTime::now()
             .duration_since(UNIX_EPOCH)
             .map_err(|e| DataFusionError::External(Box::new(e)))?

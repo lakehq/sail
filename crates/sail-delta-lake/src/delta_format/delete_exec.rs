@@ -4,7 +4,7 @@ use std::sync::Arc;
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use async_trait::async_trait;
-use datafusion::arrow::array::{Array, UInt64Array};
+use datafusion::arrow::array::{Array, StringArray};
 use datafusion::arrow::datatypes::{DataType, Field, Schema, SchemaRef};
 use datafusion::arrow::record_batch::RecordBatch;
 use datafusion::execution::context::TaskContext;
@@ -17,7 +17,7 @@ use datafusion::physical_plan::{
 };
 use datafusion_common::{internal_err, DataFusionError, Result};
 use datafusion_physical_expr::{Distribution, EquivalenceProperties, PhysicalExpr};
-use deltalake::kernel::{Action, Remove};
+use deltalake::kernel::Action;
 use deltalake::logstore::StorageConfig;
 use deltalake::protocol::DeltaOperation;
 use futures::{stream, StreamExt};
@@ -25,18 +25,19 @@ use url::Url;
 use uuid::Uuid;
 
 use crate::delta_datafusion::schema_rewriter::DeltaPhysicalExprAdapterFactory;
-use crate::kernel::transaction::{CommitBuilder, CommitProperties, PROTOCOL};
+use crate::delta_format::{CommitInfo, DeltaRemoveActionsExec};
+use crate::kernel::transaction::PROTOCOL;
 use crate::operations::write::execution::{prepare_predicate_actions_physical, WriterStatsConfig};
 use crate::table::open_table_with_object_store;
 
 /// Physical execution node for Delta Lake delete operations
+/// Now generates delete actions instead of executing commits
 #[derive(Debug)]
 pub struct DeltaDeleteExec {
     input: Arc<dyn ExecutionPlan>,
     condition: Arc<dyn PhysicalExpr>,
     table_url: Url,          // Keep for opening table
     table_schema: SchemaRef, // Schema of the table for condition evaluation
-    version: i64,
     cache: PlanProperties,
 }
 
@@ -47,20 +48,15 @@ impl DeltaDeleteExec {
         table_url: Url,
         condition: Arc<dyn PhysicalExpr>,
         table_schema: SchemaRef,
-        version: i64,
     ) -> Self {
-        let schema = Arc::new(Schema::new(vec![
-            Field::new("num_deleted_rows", DataType::UInt64, false),
-            Field::new("num_added_files", DataType::UInt64, false),
-            Field::new("num_removed_files", DataType::UInt64, false),
-        ]));
+        // Output schema matches DeltaWriterExec: single column "data" containing CommitInfo JSON
+        let schema = Arc::new(Schema::new(vec![Field::new("data", DataType::Utf8, true)]));
         let cache = Self::compute_properties(schema);
         Self {
             input,
             table_url,
             condition,
             table_schema,
-            version,
             cache,
         }
     }
@@ -94,30 +90,42 @@ impl DeltaDeleteExec {
         &self.table_schema
     }
 
-    /// Get the table version
-    pub fn version(&self) -> i64 {
-        self.version
+    /// Generate delete actions from candidate files
+    async fn generate_delete_actions(
+        &self,
+        context: Arc<TaskContext>,
+        candidate_adds: Vec<deltalake::kernel::Add>,
+        partition_scan: bool,
+    ) -> Result<Vec<Action>> {
+        if partition_scan {
+            // Partition scan: only need to generate Remove actions
+            DeltaRemoveActionsExec::create_remove_actions(candidate_adds).await
+        } else {
+            // File scan: need to rewrite files, generate Add and Remove actions
+            self.generate_file_rewrite_actions(context, candidate_adds)
+                .await
+        }
     }
 
-    /// Core execution logic for delete operation
-    async fn execute_delete(&self, context: Arc<TaskContext>) -> Result<RecordBatch> {
+    /// Generate actions for file rewrite (non-partition scan)
+    async fn generate_file_rewrite_actions(
+        &self,
+        context: Arc<TaskContext>,
+        candidate_adds: Vec<deltalake::kernel::Add>,
+    ) -> Result<Vec<Action>> {
         let object_store = context
             .runtime_env()
             .object_store_registry
             .get_store(&self.table_url)
             .map_err(|e| DataFusionError::External(Box::new(e)))?;
 
-        let mut table = open_table_with_object_store(
+        let table = open_table_with_object_store(
             self.table_url.clone(),
             object_store,
             StorageConfig::default(),
         )
         .await
         .map_err(|e| DataFusionError::External(Box::new(e)))?;
-        table
-            .load_version(self.version)
-            .await
-            .map_err(|e| DataFusionError::External(Box::new(e)))?;
 
         let snapshot = table
             .snapshot()
@@ -129,188 +137,38 @@ impl DeltaDeleteExec {
             .check_append_only(&snapshot.snapshot)
             .map_err(|e| DataFusionError::External(Box::new(e)))?;
 
-        // Execute find files plan
-        let mut stream = self.input.execute(0, context.clone())?;
-        let mut candidate_adds = vec![];
-        let mut partition_scan = None;
-
-        while let Some(batch_result) = stream.next().await {
-            let batch = batch_result?;
-
-            if batch.num_rows() == 0 {
-                continue;
-            }
-
-            if partition_scan.is_none() {
-                let scan_col = batch
-                    .column_by_name("partition_scan")
-                    .ok_or_else(|| {
-                        DataFusionError::Internal("partition_scan column not found".to_string())
-                    })?
-                    .as_any()
-                    .downcast_ref::<datafusion::arrow::array::BooleanArray>()
-                    .ok_or_else(|| {
-                        DataFusionError::Internal(
-                            "Failed to downcast partition_scan column to BooleanArray".to_string(),
-                        )
-                    })?;
-                partition_scan = Some(scan_col.value(0));
-            }
-
-            let adds_col = batch
-                .column_by_name("add")
-                .ok_or_else(|| DataFusionError::Internal("add column not found".to_string()))?
-                .as_any()
-                .downcast_ref::<datafusion::arrow::array::StringArray>()
-                .ok_or_else(|| {
-                    DataFusionError::Internal(
-                        "Failed to downcast add column to StringArray".to_string(),
-                    )
-                })?;
-
-            for i in 0..adds_col.len() {
-                let add_json = adds_col.value(i);
-                let add: deltalake::kernel::Add = serde_json::from_str(add_json)
-                    .map_err(|e| DataFusionError::External(Box::new(e)))?;
-                candidate_adds.push(add);
-            }
-        }
-
-        let partition_scan = partition_scan.unwrap_or(true); // Default to true if no rows
-
-        if candidate_adds.is_empty() {
-            // No files match the condition, return zeros
-            let result_batch = RecordBatch::try_new(
-                self.schema(),
-                vec![
-                    Arc::new(UInt64Array::from(vec![0u64])), // num_deleted_rows
-                    Arc::new(UInt64Array::from(vec![0u64])), // num_added_files
-                    Arc::new(UInt64Array::from(vec![0u64])), // num_removed_files
-                ],
-            )?;
-            return Ok(result_batch);
-        }
-
         let operation_id = Uuid::new_v4();
         let deletion_timestamp = SystemTime::now()
             .duration_since(UNIX_EPOCH)
             .map_err(|e| DataFusionError::External(Box::new(e)))?
             .as_millis() as i64;
 
-        let num_deleted_rows = 0u64; // TODO: Calculate actual deleted rows
-        let mut actions: Vec<Action> = Vec::new();
+        // File-level scan: need to rewrite files with filtered data
+        let writer_stats_config = WriterStatsConfig::new(32, None);
+        let partition_columns = snapshot.metadata().partition_columns().clone();
+        let session_state = SessionStateBuilder::new()
+            .with_runtime_env(context.runtime_env().clone())
+            .build();
+        let adapter_factory = Arc::new(DeltaPhysicalExprAdapterFactory {});
 
-        if partition_scan {
-            // Partition-only scan: we can only remove entire files
-            // TODO: We cannot calculate exact deleted rows in this case
-            let num_removed_files = candidate_adds.len();
+        let (predicate_actions, _cdf_df) = prepare_predicate_actions_physical(
+            self.condition.clone(),
+            table.log_store(),
+            &snapshot,
+            session_state,
+            partition_columns,
+            None, // writer_properties
+            deletion_timestamp,
+            writer_stats_config,
+            operation_id,
+            &candidate_adds,
+            false, // partition_scan = false for file rewrite
+            adapter_factory.clone(),
+        )
+        .await
+        .map_err(|e| DataFusionError::External(Box::new(e)))?;
 
-            // Create Remove actions for all candidate files
-            for file_to_remove in candidate_adds {
-                actions.push(Action::Remove(Remove {
-                    path: file_to_remove.path,
-                    deletion_timestamp: Some(deletion_timestamp),
-                    data_change: true,
-                    extended_file_metadata: Some(true),
-                    partition_values: Some(file_to_remove.partition_values),
-                    size: Some(file_to_remove.size),
-                    deletion_vector: file_to_remove.deletion_vector,
-                    tags: None,
-                    base_row_id: file_to_remove.base_row_id,
-                    default_row_commit_version: file_to_remove.default_row_commit_version,
-                }));
-            }
-
-            // TODO: For partition-only scans, we estimate deleted rows as 0
-            // since we can't easily calculate without scanning the files
-
-            let result_batch = RecordBatch::try_new(
-                self.schema(),
-                vec![
-                    Arc::new(UInt64Array::from(vec![num_deleted_rows])),
-                    Arc::new(UInt64Array::from(vec![0u64])), // num_added_files (no rewrite)
-                    Arc::new(UInt64Array::from(vec![num_removed_files as u64])),
-                ],
-            )?;
-
-            // Commit the transaction
-            if !actions.is_empty() {
-                let operation = DeltaOperation::Delete {
-                    predicate: Some(format!("{:?}", self.condition)),
-                };
-
-                CommitBuilder::from(CommitProperties::default())
-                    .with_actions(actions)
-                    .build(Some(&snapshot), table.log_store(), operation)
-                    .await
-                    .map_err(|e| DataFusionError::External(Box::new(e)))?;
-            }
-
-            Ok(result_batch)
-        } else {
-            // File-level scan: need to rewrite files with filtered data
-            let writer_stats_config = WriterStatsConfig::new(32, None);
-            let partition_columns = snapshot.metadata().partition_columns().clone();
-            let session_state = SessionStateBuilder::new()
-                .with_runtime_env(context.runtime_env().clone())
-                .build();
-            let adapter_factory = Arc::new(DeltaPhysicalExprAdapterFactory {});
-
-            let (predicate_actions, _cdf_df) = prepare_predicate_actions_physical(
-                self.condition.clone(),
-                table.log_store(),
-                &snapshot,
-                session_state,
-                partition_columns,
-                None, // writer_properties
-                deletion_timestamp,
-                writer_stats_config,
-                operation_id,
-                &candidate_adds,
-                partition_scan,
-                adapter_factory.clone(),
-            )
-            .await
-            .map_err(|e| DataFusionError::External(Box::new(e)))?;
-
-            // Count Add and Remove actions
-            let mut num_added_files = 0u64;
-            let mut num_removed_files = 0u64;
-
-            for action in &predicate_actions {
-                match action {
-                    Action::Add(_) => num_added_files += 1,
-                    Action::Remove(_) => num_removed_files += 1,
-                    _ => {}
-                }
-            }
-
-            let num_deleted_rows = 0u64; // TODO: Calculate from execution metrics
-
-            let result_batch = RecordBatch::try_new(
-                self.schema(),
-                vec![
-                    Arc::new(UInt64Array::from(vec![num_deleted_rows])),
-                    Arc::new(UInt64Array::from(vec![num_added_files])),
-                    Arc::new(UInt64Array::from(vec![num_removed_files])),
-                ],
-            )?;
-
-            // Commit the transaction
-            if !predicate_actions.is_empty() {
-                let operation = DeltaOperation::Delete {
-                    predicate: Some(format!("{:?}", self.condition)),
-                };
-
-                CommitBuilder::from(CommitProperties::default())
-                    .with_actions(predicate_actions)
-                    .build(Some(&snapshot), table.log_store(), operation)
-                    .await
-                    .map_err(|e| DataFusionError::External(Box::new(e)))?;
-            }
-
-            Ok(result_batch)
-        }
+        Ok(predicate_actions)
     }
 }
 
@@ -348,7 +206,6 @@ impl ExecutionPlan for DeltaDeleteExec {
             self.table_url.clone(),
             self.condition.clone(),
             self.table_schema.clone(),
-            self.version,
         )))
     }
 
@@ -361,12 +218,92 @@ impl ExecutionPlan for DeltaDeleteExec {
             return internal_err!("DeltaDeleteExec can only be executed in a single partition");
         }
 
+        let mut stream = self.input.execute(0, context.clone())?;
         let schema = self.schema();
-        let delete_exec = self.clone();
-        let future = async move { delete_exec.execute_delete(context).await };
+        let self_clone = self.clone();
+
+        let future = async move {
+            // 1. Collect candidate files from input (DeltaFindFilesExec)
+            let mut candidate_adds = vec![];
+            let mut partition_scan = true; // Default to true if no rows
+
+            while let Some(batch_result) = stream.next().await {
+                let batch = batch_result?;
+
+                if batch.num_rows() == 0 {
+                    continue;
+                }
+
+                // Extract partition_scan flag
+                let scan_col = batch
+                    .column_by_name("partition_scan")
+                    .ok_or_else(|| {
+                        DataFusionError::Internal("partition_scan column not found".to_string())
+                    })?
+                    .as_any()
+                    .downcast_ref::<datafusion::arrow::array::BooleanArray>()
+                    .ok_or_else(|| {
+                        DataFusionError::Internal(
+                            "Failed to downcast partition_scan column to BooleanArray".to_string(),
+                        )
+                    })?;
+                partition_scan = scan_col.value(0);
+
+                // Extract Add actions
+                let adds_col = batch
+                    .column_by_name("add")
+                    .ok_or_else(|| DataFusionError::Internal("add column not found".to_string()))?
+                    .as_any()
+                    .downcast_ref::<datafusion::arrow::array::StringArray>()
+                    .ok_or_else(|| {
+                        DataFusionError::Internal(
+                            "Failed to downcast add column to StringArray".to_string(),
+                        )
+                    })?;
+
+                for i in 0..adds_col.len() {
+                    let add_json = adds_col.value(i);
+                    let add: deltalake::kernel::Add = serde_json::from_str(add_json)
+                        .map_err(|e| DataFusionError::External(Box::new(e)))?;
+                    candidate_adds.push(add);
+                }
+            }
+
+            // 2. Generate Actions
+            let actions = if candidate_adds.is_empty() {
+                vec![]
+            } else {
+                self_clone
+                    .generate_delete_actions(context, candidate_adds, partition_scan)
+                    .await?
+            };
+
+            // 3. Package actions into CommitInfo
+            let operation = DeltaOperation::Delete {
+                predicate: Some(format!("{:?}", self_clone.condition)),
+            };
+
+            let commit_info = CommitInfo {
+                row_count: 0, // TODO: Calculate actual deleted rows
+                actions,
+                initial_actions: Vec::new(),
+                operation: Some(operation),
+            };
+
+            // 4. Serialize and create output RecordBatch
+            let json = serde_json::to_string(&commit_info)
+                .map_err(|e| DataFusionError::External(Box::new(e)))?;
+            let data_array = Arc::new(StringArray::from(vec![json]));
+
+            RecordBatch::try_new(schema, vec![data_array])
+                .map_err(|e| DataFusionError::ArrowError(Box::new(e), None))
+        };
 
         let stream = stream::once(future);
-        Ok(Box::pin(RecordBatchStreamAdapter::new(schema, stream)))
+        Ok(Box::pin(RecordBatchStreamAdapter::new(
+            self.schema(),
+            stream,
+        )))
     }
 }
 
@@ -377,7 +314,6 @@ impl Clone for DeltaDeleteExec {
             self.table_url.clone(),
             self.condition.clone(),
             self.table_schema.clone(),
-            self.version,
         )
     }
 }

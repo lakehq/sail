@@ -13,7 +13,9 @@ use sail_common_datafusion::datasource::{
 use sail_common_datafusion::streaming::event::schema::is_flow_event_schema;
 use sail_delta_lake::create_delta_provider;
 use sail_delta_lake::delta_datafusion::{parse_predicate_expression, DataFusionMixins};
-use sail_delta_lake::delta_format::{DeltaDeleteExec, DeltaFindFilesExec, DeltaPlanBuilder};
+use sail_delta_lake::delta_format::{
+    DeltaCommitExec, DeltaDeleteExec, DeltaFindFilesExec, DeltaPlanBuilder,
+};
 use sail_delta_lake::options::TableDeltaOptions;
 use sail_delta_lake::table::open_table_with_object_store;
 use url::Url;
@@ -188,13 +190,27 @@ impl TableFormat for DeltaTableFormat {
             version,
         ));
 
-        Ok(Arc::new(DeltaDeleteExec::new(
+        // DeltaFindFilesExec -> DeltaDeleteExec -> DeltaCommitExec
+        let delete_actions_exec = Arc::new(DeltaDeleteExec::new(
             find_files_exec,
-            table_url,
+            table_url.clone(),
             condition,
+            table_schema.clone(),
+        ));
+
+        // Get partition columns from snapshot
+        let partition_columns = snapshot_state.metadata().partition_columns().clone();
+
+        let commit_exec = Arc::new(DeltaCommitExec::new(
+            delete_actions_exec,
+            table_url,
+            partition_columns,
+            true, // table_exists = true (checked above)
             table_schema,
-            version,
-        )))
+            PhysicalSinkMode::Append, // For DELETE, this mode doesn't affect behavior
+        ));
+
+        Ok(commit_exec)
     }
 }
 

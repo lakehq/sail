@@ -561,7 +561,6 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
                 table_url,
                 condition,
                 table_schema,
-                version,
             }) => {
                 let input = self.try_decode_plan(&input, registry)?;
                 let table_url = Url::parse(&table_url)
@@ -579,7 +578,6 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
                         table_url,
                         condition,
                         table_schema,
-                        version,
                     ),
                 ))
             }
@@ -1010,7 +1008,6 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
                 table_url: delta_delete_exec.table_url().to_string(),
                 condition,
                 table_schema,
-                version: delta_delete_exec.version(),
             })
         } else if let Some(delta_find_files_exec) =
             node.as_any()
