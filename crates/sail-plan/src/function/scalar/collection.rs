@@ -3,13 +3,13 @@ use datafusion_common::ScalarValue;
 use datafusion_expr::{cast, expr, lit, when, ExprSchemable, ScalarUDF};
 use datafusion_functions::math::expr_fn::abs;
 use datafusion_functions_nested::expr_fn;
+use sail_common_datafusion::utils::items::ItemTaker;
 use sail_function::scalar::collection::spark_concat::SparkConcat;
 use sail_function::scalar::collection::spark_reverse::SparkReverse;
 use sail_function::scalar::misc::raise_error::RaiseError;
 
 use crate::error::{PlanError, PlanResult};
 use crate::function::common::{ScalarFunction, ScalarFunctionInput};
-use crate::utils::ItemTaker;
 
 fn size(input: ScalarFunctionInput) -> PlanResult<expr::Expr> {
     let value = input.arguments.one()?;

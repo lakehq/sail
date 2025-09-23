@@ -7,8 +7,7 @@ use datafusion::common::Result;
 use datafusion::logical_expr::{ColumnarValue, ScalarUDFImpl, Signature, Volatility};
 use datafusion_common::exec_err;
 use datafusion_expr::ScalarFunctionArgs;
-
-use crate::utils::ItemTaker;
+use sail_common_datafusion::utils::items::ItemTaker;
 
 #[derive(Debug, PartialEq, Eq, Hash)]
 pub struct Greatest {

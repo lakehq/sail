@@ -10,10 +10,9 @@ use datafusion_common::types::logical_string;
 use datafusion_common::{exec_datafusion_err, exec_err, Result, ScalarValue};
 use datafusion_expr::{ColumnarValue, ScalarFunctionArgs, ScalarUDFImpl, Signature, Volatility};
 use datafusion_expr_common::signature::{Coercion, TypeSignatureClass};
-use sail_common_datafusion::datetime::localize_with_fallback;
+use sail_common_datafusion::utils::datetime::localize_with_fallback;
+use sail_common_datafusion::utils::items::ItemTaker;
 use sail_sql_analyzer::parser::parse_timestamp;
-
-use crate::utils::ItemTaker;
 
 #[derive(Debug, PartialEq, Eq, Hash)]
 enum TimestampParser {

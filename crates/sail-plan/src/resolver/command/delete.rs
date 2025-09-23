@@ -12,9 +12,9 @@ use sail_common_datafusion::extension::SessionExtensionAccessor;
 use sail_data_source::default_registry;
 
 use crate::error::{PlanError, PlanResult};
-use crate::extension::logical::{FileDeleteNode, FileDeleteOptions};
 use crate::resolver::state::PlanResolverState;
 use crate::resolver::PlanResolver;
+use sail_logical_plan::file_delete::{FileDeleteNode, FileDeleteOptions};
 
 impl PlanResolver<'_> {
     /// Resolves the DELETE command.

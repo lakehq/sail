@@ -9,8 +9,7 @@ use datafusion::common::Result;
 use datafusion::logical_expr::{ColumnarValue, ScalarUDFImpl, Signature, Volatility};
 use datafusion_expr::ScalarFunctionArgs;
 use sail_common_datafusion::display::{ArrayFormatter, FormatOptions};
-
-use crate::utils::ItemTaker;
+use sail_common_datafusion::utils::items::ItemTaker;
 
 macro_rules! define_to_string_udf {
     ($udf:ident, $name:expr, $return_type:expr, $func:expr $(,)?) => {

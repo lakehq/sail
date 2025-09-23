@@ -10,17 +10,17 @@ use sail_catalog::provider::TableKind;
 use sail_common::spec;
 use sail_common_datafusion::datasource::SourceInfo;
 use sail_common_datafusion::extension::SessionExtensionAccessor;
-use sail_common_datafusion::utils::rename_logical_plan;
+use sail_common_datafusion::rename::logical_plan::rename_logical_plan;
+use sail_common_datafusion::rename::table_provider::RenameTableProvider;
+use sail_common_datafusion::utils::items::ItemTaker;
 use sail_data_source::default_registry;
 use sail_python_udf::udf::pyspark_unresolved_udf::PySparkUnresolvedUDF;
 
 use crate::error::{PlanError, PlanResult};
-use crate::extension::source::rename::RenameTableProvider;
 use crate::function::{get_built_in_table_function, is_built_in_generator_function};
 use crate::resolver::function::PythonUdtf;
 use crate::resolver::state::PlanResolverState;
 use crate::resolver::PlanResolver;
-use crate::utils::ItemTaker;
 
 impl PlanResolver<'_> {
     pub(super) async fn resolve_query_read_named_table(

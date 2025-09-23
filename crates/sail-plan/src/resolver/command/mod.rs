@@ -5,8 +5,8 @@ use sail_catalog::command::CatalogCommand;
 use sail_catalog::provider::{DropDatabaseOptions, DropTableOptions};
 use sail_common::spec;
 
+use crate::catalog::CatalogCommandNode;
 use crate::error::{PlanError, PlanResult};
-use crate::extension::logical::CatalogCommandNode;
 use crate::resolver::state::PlanResolverState;
 use crate::resolver::PlanResolver;
 
@@ -288,7 +288,7 @@ impl PlanResolver<'_> {
 
     fn resolve_catalog_command(&self, command: CatalogCommand) -> PlanResult<LogicalPlan> {
         Ok(LogicalPlan::Extension(Extension {
-            node: Arc::new(CatalogCommandNode::try_new(command, self.config.clone())?),
+            node: Arc::new(CatalogCommandNode::try_new(command)?),
         }))
     }
 }

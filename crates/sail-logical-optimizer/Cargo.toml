@@ -1,0 +1,10 @@
+[package]
+name = "sail-logical-optimizer"
+version = { workspace = true }
+edition = { workspace = true }
+
+[lints]
+workspace = true
+
+[dependencies]
+datafusion = { workspace = true }

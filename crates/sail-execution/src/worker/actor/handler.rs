@@ -11,6 +11,7 @@ use datafusion_proto::protobuf::PhysicalPlanNode;
 use log::{debug, error, info, warn};
 use prost::Message;
 use sail_common_datafusion::error::CommonErrorCause;
+use sail_python_udf::error::PyErrExtractor;
 use sail_server::actor::{ActorAction, ActorContext};
 use tokio::sync::oneshot;
 
@@ -104,7 +105,7 @@ impl WorkerActor {
                     attempt,
                     status: TaskStatus::Failed,
                     message: Some(format!("failed to execute plan: {e}")),
-                    cause: Some(CommonErrorCause::new(&e)),
+                    cause: Some(CommonErrorCause::new::<PyErrExtractor>(&e)),
                 };
                 ctx.send(event);
                 return ActorAction::Continue;

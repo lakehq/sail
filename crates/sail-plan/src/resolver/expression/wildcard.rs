@@ -7,6 +7,7 @@ use datafusion_expr::expr::ScalarFunction;
 use datafusion_expr::{col, expr, lit, ScalarUDF};
 use datafusion_functions::core::get_field;
 use sail_common::spec;
+use sail_common_datafusion::utils::items::ItemTaker;
 use sail_function::scalar::multi_expr::MultiExpr;
 
 use crate::error::{PlanError, PlanResult};
@@ -14,7 +15,6 @@ use crate::resolver::expression::attribute::qualifier_matches;
 use crate::resolver::expression::NamedExpr;
 use crate::resolver::state::PlanResolverState;
 use crate::resolver::PlanResolver;
-use crate::utils::ItemTaker;
 
 impl PlanResolver<'_> {
     pub(super) async fn resolve_expression_wildcard(

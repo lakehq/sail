@@ -8,9 +8,9 @@ use datafusion_common::types::logical_string;
 use datafusion_common::{exec_err, Result, ScalarValue};
 use datafusion_expr::{ColumnarValue, ScalarFunctionArgs, ScalarUDFImpl, Signature, Volatility};
 use datafusion_expr_common::signature::{Coercion, TypeSignatureClass};
+use sail_common_datafusion::utils::items::ItemTaker;
 
 use crate::scalar::datetime::utils::spark_datetime_format_to_chrono_strftime;
-use crate::utils::ItemTaker;
 
 #[derive(Debug, PartialEq, Eq, Hash)]
 pub struct SparkToChronoFmt {
