@@ -1,0 +1,35 @@
+>>> sql = """
+... SELECT
+... -2147483648 AS cola,
+... 9223372036854775807l AS colb,
+... -32Y AS colc,
+... 482S AS cold
+... """
+>>> spark.sql(sql).collect()
+[Row(cola=-2147483648, colb=9223372036854775807, colc=-32, cold=482)]
+
+>>> sql = """
+... SELECT
+... 76.543 AS cola, TYPEOF(76.543) AS typea,
+... 8.21E1 AS colb, TYPEOF(8.21E1) AS typeb,
+... -0.4321 AS colc,
+... 250.BD AS cold,
+... 6.9D AS cole,
+... -18BD AS colf,
+... .789E3F AS colg,
+... 12.578 AS colh, TYPEOF(12.578) AS typeh,
+... 12.578E0 AS coli, TYPEOF(12.578E0) AS typei,
+... -0.1234567 AS colj,
+... -.1234567 AS colk,
+... 123. AS coll,
+... 123.BD AS colm,
+... 5E2 AS coln,
+... 5D AS colo,
+... -5BD AS colp,
+... 12.578e-2d AS colq,
+... -.1234567E+2BD AS colr,
+... +3.e+3 AS cols,
+... -3.E-3D AS colt
+... """
+>>> spark.sql(sql).collect()
+[Row(cola=Decimal('76.543'), typea='decimal(5,3)', colb=82.1, typeb='double', colc=Decimal('-0.4321'), cold=Decimal('250'), cole=6.9, colf=Decimal('-18'), colg=789.0, colh=Decimal('12.578'), typeh='decimal(5,3)', coli=12.578, typei='double', colj=Decimal('-0.1234567'), colk=Decimal('-0.1234567'), coll=Decimal('123'), colm=Decimal('123'), coln=500.0, colo=5.0, colp=Decimal('-5'), colq=0.12578, colr=Decimal('-12.34567'), cols=3000.0, colt=-0.003)]

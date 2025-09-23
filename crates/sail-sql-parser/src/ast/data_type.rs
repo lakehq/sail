@@ -4,9 +4,9 @@ use crate::ast::identifier::Ident;
 use crate::ast::keywords::{
     Array, Bigint, Binary, Bool, Boolean, Byte, Bytea, Char, Character, Comment, Date, Date32,
     Date64, Day, Dec, Decimal, Double, Float, Float32, Float64, Hour, Int, Int16, Int32, Int64,
-    Int8, Integer, Interval, Local, Long, Map, Minute, Month, Not, Null, Numeric, Second, Short,
-    Smallint, Struct, Text, Time, Timestamp, TimestampLtz, TimestampNtz, Tinyint, To, Uint16,
-    Uint32, Uint64, Uint8, Unsigned, Varchar, Void, With, Without, Year, Zone,
+    Int8, Integer, Interval, Local, Long, Map, Minute, Month, Not, Null, Numeric, Real, Second,
+    Short, Smallint, Struct, Text, Time, Timestamp, TimestampLtz, TimestampNtz, Tinyint, To,
+    Uint16, Uint32, Uint64, Uint8, Unsigned, Varchar, Void, With, Without, Year, Zone,
 };
 use crate::ast::literal::{IntegerLiteral, StringLiteral};
 use crate::ast::operator::{
@@ -42,6 +42,7 @@ pub enum DataType {
     Binary(Binary),
     Bytea(Bytea),
     Float(Float),
+    Real(Real),
     Double(Double),
     Float32(Float32),
     Float64(Float64),

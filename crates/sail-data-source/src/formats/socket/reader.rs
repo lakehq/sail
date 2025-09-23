@@ -5,16 +5,19 @@ use std::time::Duration;
 use async_trait::async_trait;
 use datafusion::arrow::array::{RecordBatch, StringArray};
 use datafusion::arrow::datatypes::{DataType, Schema, SchemaRef};
-use datafusion::catalog::{Session, TableProvider};
-use datafusion::datasource::TableType;
+use datafusion::catalog::Session;
 use datafusion::execution::{SendableRecordBatchStream, TaskContext};
 use datafusion::logical_expr::Expr;
 use datafusion::physical_expr::{EquivalenceProperties, Partitioning};
 use datafusion::physical_plan::execution_plan::{Boundedness, EmissionType};
-use datafusion::physical_plan::stream::RecordBatchStreamAdapter;
 use datafusion::physical_plan::{DisplayAs, ExecutionPlan, PlanProperties};
 use datafusion_common::{exec_datafusion_err, plan_err, DataFusionError, Result};
 use futures::TryStreamExt;
+use sail_common_datafusion::streaming::event::encoding::EncodedFlowEventStream;
+use sail_common_datafusion::streaming::event::schema::to_flow_event_schema;
+use sail_common_datafusion::streaming::event::stream::FlowEventStreamAdapter;
+use sail_common_datafusion::streaming::event::FlowEvent;
+use sail_common_datafusion::streaming::source::StreamSource;
 use tokio::io::{AsyncBufReadExt, BufReader};
 use tokio_stream::wrappers::LinesStream;
 use tokio_stream::StreamExt;
@@ -22,12 +25,12 @@ use tokio_stream::StreamExt;
 use crate::formats::socket::options::TableSocketOptions;
 
 #[derive(Debug, Clone)]
-pub struct SocketTableProvider {
+pub struct SocketStreamSource {
     options: TableSocketOptions,
     schema: SchemaRef,
 }
 
-impl SocketTableProvider {
+impl SocketStreamSource {
     pub fn try_new(options: TableSocketOptions, schema: SchemaRef) -> Result<Self> {
         Self::validate_schema(&schema)?;
         Ok(Self { options, schema })
@@ -50,17 +53,9 @@ impl SocketTableProvider {
 }
 
 #[async_trait]
-impl TableProvider for SocketTableProvider {
-    fn as_any(&self) -> &dyn Any {
-        self
-    }
-
-    fn schema(&self) -> SchemaRef {
+impl StreamSource for SocketStreamSource {
+    fn data_schema(&self) -> SchemaRef {
         Arc::clone(&self.schema)
-    }
-
-    fn table_type(&self) -> TableType {
-        TableType::Base
     }
 
     async fn scan(
@@ -85,6 +80,7 @@ impl TableProvider for SocketTableProvider {
 pub struct SocketSourceExec {
     options: TableSocketOptions,
     original_schema: SchemaRef,
+    projected_schema: SchemaRef,
     projection: Vec<usize>,
     properties: PlanProperties,
 }
@@ -98,8 +94,9 @@ impl SocketSourceExec {
         projection: Vec<usize>,
     ) -> Result<Self> {
         let projected_schema = Arc::new(schema.project(&projection)?);
+        let output_schema = Arc::new(to_flow_event_schema(&projected_schema));
         let properties = PlanProperties::new(
-            EquivalenceProperties::new(projected_schema),
+            EquivalenceProperties::new(output_schema),
             Partitioning::UnknownPartitioning(1),
             EmissionType::Both,
             Boundedness::Unbounded {
@@ -109,6 +106,7 @@ impl SocketSourceExec {
         Ok(Self {
             options,
             original_schema: schema,
+            projected_schema,
             projection,
             properties,
         })
@@ -192,7 +190,7 @@ impl ExecutionPlan for SocketSourceExec {
             return plan_err!("timeout must be greater than 0 for reading from socket");
         }
         let options = self.options.clone();
-        let schema = self.schema();
+        let projected_schema = self.projected_schema.clone();
         let output = futures::stream::once(async move {
             // We do not perform retries or reconnections here
             // since the socket source is for testing purposes only.
@@ -217,17 +215,19 @@ impl ExecutionPlan for SocketSourceExec {
                         .map(|x| Ok(Some(x?)))
                         .collect::<Result<Vec<Option<String>>>>()?;
                     let array = Arc::new(StringArray::from(values));
-                    Ok(RecordBatch::try_new(
-                        schema.clone(),
-                        vec![array; schema.fields.len()],
+                    Ok::<_, DataFusionError>(RecordBatch::try_new(
+                        projected_schema.clone(),
+                        vec![array; projected_schema.fields.len()],
                     )?)
                 });
             Ok::<_, DataFusionError>(Box::pin(output))
         })
         .try_flatten();
-        Ok(Box::pin(RecordBatchStreamAdapter::new(
-            self.schema(),
+        let output = output.map(|x| Ok(FlowEvent::append_only_data(x?)));
+        let stream = Box::pin(FlowEventStreamAdapter::new(
+            self.projected_schema.clone(),
             output,
-        )))
+        ));
+        Ok(Box::pin(EncodedFlowEventStream::new(stream)))
     }
 }

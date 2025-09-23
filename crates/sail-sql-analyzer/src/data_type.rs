@@ -84,7 +84,9 @@ pub fn from_ast_data_type(sql_type: DataType) -> SqlResult<spec::DataType> {
             Ok(spec::DataType::UInt64)
         }
         DataType::Binary(_) | DataType::Bytea(_) => Ok(spec::DataType::ConfiguredBinary),
-        DataType::Float(_) | DataType::Float32(_) => Ok(spec::DataType::Float32),
+        DataType::Float(_) | DataType::Real(_) | DataType::Float32(_) => {
+            Ok(spec::DataType::Float32)
+        }
         DataType::Double(_) | DataType::Float64(_) => Ok(spec::DataType::Float64),
         DataType::Decimal(_, info) => {
             let (precision, scale) = match info {

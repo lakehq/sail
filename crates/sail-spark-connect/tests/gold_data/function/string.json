@@ -459,7 +459,7 @@
         }
       },
       "output": {
-        "failure": "not supported: unknown function: collation"
+        "failure": "not implemented: function: collation"
       }
     },
     {
@@ -2349,7 +2349,7 @@
         }
       },
       "output": {
-        "failure": "not supported: unknown function: randstr"
+        "failure": "not implemented: function: randstr"
       }
     },
     {

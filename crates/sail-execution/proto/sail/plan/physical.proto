@@ -31,12 +31,15 @@ message ExtendedPhysicalPlanNode {
     DeltaCommitExecNode delta_commit = 17;
     DeltaDeleteExecNode delta_delete = 18;
     DeltaFindFilesExecNode delta_find_files = 19;
-    AvroExecNode avro = 29;
+    AvroExecNode avro = 20;
     ConsoleSinkExecNode console_sink = 21;
     SocketSourceExecNode socket_source = 22;
     RateSourceExecNode rate_source = 23;
     TextSinkExecNode text_sink = 24;
     BinarySourceExecNode binary_source = 25;
+    StreamCollectorExecNode stream_collector = 26;
+    StreamLimitExecNode stream_limit = 27;
+    StreamSourceAdapterExecNode stream_source_adapter = 28;
   }
 }
 
@@ -92,7 +95,8 @@ message PySparkCoGroupMapUdf {
   repeated bytes right_types = 6;
   repeated string right_names = 7;
   bytes output_type = 8;
-  PySparkUdfConfig config = 9;
+  bool is_pandas = 9;
+  PySparkUdfConfig config = 10;
 }
 
 message DropStructFieldUdf {
@@ -143,7 +147,8 @@ message PySparkGroupMapUdaf {
   repeated string input_names = 4;
   repeated bytes input_types = 5;
   bytes output_type = 6;
-  PySparkUdfConfig config = 7;
+  bool is_pandas = 7;
+  PySparkUdfConfig config = 8;
 }
 
 message PySparkBatchCollectorUdaf {
@@ -392,6 +397,20 @@ message TextSinkExecNode {
   bytes line_sep = 4;
   CompressionTypeVariant compression_type_variant = 5;
   optional PhysicalSortExprNodeCollection sort_order = 6;
+}
+
+message StreamCollectorExecNode {
+  bytes input = 1;
+}
+
+message StreamLimitExecNode {
+  bytes input = 1;
+  uint64 skip = 2;
+  optional uint64 fetch = 3;
+}
+
+message StreamSourceAdapterExecNode {
+  bytes input = 1;
 }
 
 message JoinOn {

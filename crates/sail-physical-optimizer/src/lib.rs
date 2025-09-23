@@ -17,13 +17,16 @@ use datafusion::physical_optimizer::sanity_checker::SanityCheckPlan;
 use datafusion::physical_optimizer::topk_aggregation::TopKAggregation;
 use datafusion::physical_optimizer::update_aggr_exprs::OptimizeAggregateOrder;
 use datafusion::physical_optimizer::PhysicalOptimizerRule;
+
+use crate::explicit_repartition::RewriteExplicitRepartition;
+
+mod explicit_repartition;
 mod join_reorder;
 
 pub fn get_physical_optimizers() -> Vec<Arc<dyn PhysicalOptimizerRule + Send + Sync>> {
     vec![
         Arc::new(OutputRequirements::new_add_mode()),
         Arc::new(AggregateStatistics::new()),
-        // Custom optimizer
         // Arc::new(JoinReorder::new()),
         Arc::new(JoinSelection::new()),
         Arc::new(LimitedDistinctAggregation::new()),
@@ -41,14 +44,9 @@ pub fn get_physical_optimizers() -> Vec<Arc<dyn PhysicalOptimizerRule + Send + S
         Arc::new(ProjectionPushdown::new()),
         Arc::new(EnsureCooperative::new()),
         Arc::new(FilterPushdown::new_post_optimization()),
+        Arc::new(RewriteExplicitRepartition::new()),
         Arc::new(SanityCheckPlan::new()),
     ]
-}
-
-// This function is only needed for the tests to verify the count of optimizers.
-pub fn get_custom_sail_optimizers() -> Vec<Arc<dyn PhysicalOptimizerRule + Send + Sync>> {
-    // vec![Arc::new(JoinReorder::new())]
-    vec![]
 }
 
 #[cfg(test)]
@@ -58,40 +56,21 @@ mod tests {
     use super::*;
 
     #[test]
-    fn test_optimizer_count() -> datafusion::common::Result<()> {
-        let sail_optimizers = get_custom_sail_optimizers();
-        let datafusion_optimizers = PhysicalOptimizer::default().rules;
-        let all_optimizers = get_physical_optimizers();
-        assert_eq!(
-            sail_optimizers.len() + datafusion_optimizers.len(),
-            all_optimizers.len(),
-            "The total number of optimizers should be the sum of sail and datafusion optimizers"
-        );
-
-        Ok(())
-    }
-
-    #[test]
-    fn test_optimizer_order() -> datafusion::common::Result<()> {
+    fn test_optimizer_rules() -> datafusion::common::Result<()> {
         let optimizers = get_physical_optimizers();
-        let custom_optimizers = get_custom_sail_optimizers();
         let datafusion_optimizers = PhysicalOptimizer::default().rules;
 
-        let custom_names: std::collections::HashSet<&str> =
-            custom_optimizers.iter().map(|opt| opt.name()).collect();
-
-        let datafusion_names: Vec<&str> =
+        let datafusion_optimizer_names: Vec<&str> =
             datafusion_optimizers.iter().map(|opt| opt.name()).collect();
-
-        let non_custom_names: Vec<&str> = optimizers
+        let actual_datafusion_optimizer_names: Vec<&str> = optimizers
             .iter()
             .map(|opt| opt.name())
-            .filter(|name| !custom_names.contains(name))
+            .filter(|name| datafusion_optimizer_names.contains(name))
             .collect();
-
         assert_eq!(
-            datafusion_names, non_custom_names,
-            "DataFusion optimizers order should be preserved in the complete optimizer list"
+            datafusion_optimizer_names,
+            actual_datafusion_optimizer_names,
+            "the custom physical optimizer rules should include all the default DataFusion optimizer rules in the same order"
         );
 
         Ok(())

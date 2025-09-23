@@ -16,11 +16,13 @@ pub fn init_telemetry() -> TelemetryResult<()> {
         Ok(val) => !val.is_empty(),
         Err(_) => false,
     };
-    init_tracer(use_collector)?;
+    // Not getting any value out of this right now. Can re-enable when we revisit telemetry.
+    // init_tracer(use_collector)?;
     init_logger(use_collector)?;
     Ok(())
 }
 
+#[allow(unused)]
 pub fn init_tracer(use_collector: bool) -> TelemetryResult<()> {
     let reporter_config = Config::default();
     if use_collector {

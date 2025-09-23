@@ -30,6 +30,7 @@ pub struct PySparkCoGroupMapUDF {
     right_types: Vec<DataType>,
     right_names: Vec<String>,
     output_type: DataType,
+    is_pandas: bool,
     config: Arc<PySparkUdfConfig>,
     udf: LazyPyObject,
 }
@@ -45,6 +46,7 @@ impl PySparkCoGroupMapUDF {
         right_types: Vec<DataType>,
         right_names: Vec<String>,
         output_type: DataType,
+        is_pandas: bool,
         config: Arc<PySparkUdfConfig>,
     ) -> Result<Self> {
         let input_types = vec![
@@ -68,6 +70,7 @@ impl PySparkCoGroupMapUDF {
             right_names,
             output_type,
             config,
+            is_pandas,
             udf: LazyPyObject::new(),
         })
     }
@@ -100,6 +103,10 @@ impl PySparkCoGroupMapUDF {
         &self.output_type
     }
 
+    pub fn is_pandas(&self) -> bool {
+        self.is_pandas
+    }
+
     pub fn config(&self) -> &Arc<PySparkUdfConfig> {
         &self.config
     }
@@ -112,6 +119,7 @@ impl PySparkCoGroupMapUDF {
                 udf,
                 self.left_names.clone(),
                 self.right_names.clone(),
+                self.is_pandas,
                 &self.config,
             )?
             .unbind())

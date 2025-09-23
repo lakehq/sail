@@ -100,12 +100,13 @@ impl PySpark {
         py: Python<'py>,
         udf: Bound<'py, PyAny>,
         input_names: Vec<String>,
+        is_pandas: bool,
         config: &PySparkUdfConfig,
     ) -> PyResult<Bound<'py, PyAny>> {
         py_init_object(
             Self::module(py)?,
             intern!(py, "PySparkGroupMapUdf"),
-            (udf, input_names, config.clone()),
+            (udf, input_names, is_pandas, config.clone()),
         )
     }
 
@@ -114,12 +115,13 @@ impl PySpark {
         udf: Bound<'py, PyAny>,
         left_names: Vec<String>,
         right_names: Vec<String>,
+        is_pandas: bool,
         config: &PySparkUdfConfig,
     ) -> PyResult<Bound<'py, PyAny>> {
         py_init_object(
             Self::module(py)?,
             intern!(py, "PySparkCoGroupMapUdf"),
-            (udf, left_names, right_names, config.clone()),
+            (udf, left_names, right_names, is_pandas, config.clone()),
         )
     }
 

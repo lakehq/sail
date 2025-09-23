@@ -483,6 +483,7 @@ pub(super) fn list_built_in_math_functions() -> Vec<(&'static str, ScalarFunctio
         ("try_mod", F::udf(SparkTryMod::new())),
         ("try_subtract", F::udf(SparkTrySubtract::new())),
         ("unhex", F::udf(SparkUnHex::new())),
+        ("uniform", F::unknown("uniform")),
         ("width_bucket", F::udf(SparkWidthBucket::new())),
     ]
 }

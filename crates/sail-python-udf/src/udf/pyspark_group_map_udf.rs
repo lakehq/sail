@@ -28,6 +28,7 @@ pub struct PySparkGroupMapUDF {
     input_names: Vec<String>,
     input_types: Vec<DataType>,
     output_type: DataType,
+    is_pandas: bool,
     config: Arc<PySparkUdfConfig>,
     udf: LazyPyObject,
 }
@@ -40,6 +41,7 @@ impl PySparkGroupMapUDF {
         input_names: Vec<String>,
         input_types: Vec<DataType>,
         output_type: DataType,
+        is_pandas: bool,
         config: Arc<PySparkUdfConfig>,
     ) -> Self {
         let signature = Signature::exact(
@@ -58,6 +60,7 @@ impl PySparkGroupMapUDF {
             input_types,
             output_type,
             config,
+            is_pandas,
             udf: LazyPyObject::new(),
         }
     }
@@ -82,6 +85,10 @@ impl PySparkGroupMapUDF {
         &self.output_type
     }
 
+    pub fn is_pandas(&self) -> bool {
+        self.is_pandas
+    }
+
     pub fn config(&self) -> &Arc<PySparkUdfConfig> {
         &self.config
     }
@@ -89,7 +96,14 @@ impl PySparkGroupMapUDF {
     fn udf(&self, py: Python) -> Result<PyObject> {
         let udf = self.udf.get_or_try_init(py, || {
             let udf = PySparkUdfPayload::load(py, &self.payload)?;
-            Ok(PySpark::group_map_udf(py, udf, self.input_names.clone(), &self.config)?.unbind())
+            Ok(PySpark::group_map_udf(
+                py,
+                udf,
+                self.input_names.clone(),
+                self.is_pandas(),
+                &self.config,
+            )?
+            .unbind())
         })?;
         Ok(udf.clone_ref(py))
     }
