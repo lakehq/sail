@@ -1332,9 +1332,9 @@ checksum = "b05b61dc5112cbb17e4b6cd61790d9845d13888356391624cbe7e41efeac1e75"
 
 [[package]]
 name = "comfy-table"
-version = "7.2.1"
+version = "7.1.4"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "b03b7db8e0b4b2fdad6c551e634134e99ec000e5c8c3b6856c65e8bbaded7a3b"
+checksum = "4a65ebfec4fb190b6f90e944a817d60499ee0744e582530e2c9900a22e591d9a"
 dependencies = [
  "crossterm",
  "unicode-segmentation",
@@ -1483,15 +1483,14 @@ checksum = "d0a5c400df2834b80a4c3327b3aad3a4c4cd4de0629063962b03235697506a28"
 
 [[package]]
 name = "crossterm"
-version = "0.29.0"
+version = "0.28.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "d8b9f2e4c67f833b660cdb0a3523065869fb35570177239812ed4c905aeff87b"
+checksum = "829d955a0bb380ef178a640b91779e3987da38c9aea133b20614cfed8cdea9c6"
 dependencies = [
  "bitflags",
  "crossterm_winapi",
- "document-features",
  "parking_lot",
- "rustix",
+ "rustix 0.38.44",
  "winapi",
 ]
 
@@ -2315,13 +2314,14 @@ dependencies = [
 
 [[package]]
 name = "delta_kernel"
-version = "0.14.0"
+version = "0.15.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "cac0f0eae6345b0cfb67c4304da961e590370860aa51e88315e808c5d496629f"
+checksum = "a889d7dae18cc716c0ea061e8d199e9c60b8b8fd9c15a52be6aee0eff1e7c6fe"
 dependencies = [
  "arrow",
  "bytes",
  "chrono",
+ "comfy-table",
  "delta_kernel_derive",
  "futures",
  "indexmap 2.11.1",
@@ -2344,9 +2344,9 @@ dependencies = [
 
 [[package]]
 name = "delta_kernel_derive"
-version = "0.14.0"
+version = "0.15.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "064456b054cf26b607f4cbcef6d2ca102f64ed8e4fa702d2e307ce67b5b93569"
+checksum = "52d6f7437b6725b3fb184ce0cbe89c9d1fad8782235bf5ea1e8a13fc69bc5cca"
 dependencies = [
  "proc-macro2",
  "quote",
@@ -2355,8 +2355,8 @@ dependencies = [
 
 [[package]]
 name = "deltalake"
-version = "0.28.0"
-source = "git+https://github.com/delta-io/delta-rs.git?rev=f3a2712#f3a271225f30cb4b53ed3058ffb974e0e2ced571"
+version = "0.29.0"
+source = "git+https://github.com/delta-io/delta-rs.git?rev=0ca1a3b#0ca1a3be93f71e37428c4be495e8ba0dba5add89"
 dependencies = [
  "delta_kernel",
  "deltalake-core",
@@ -2364,8 +2364,8 @@ dependencies = [
 
 [[package]]
 name = "deltalake-core"
-version = "0.28.0"
-source = "git+https://github.com/delta-io/delta-rs.git?rev=f3a2712#f3a271225f30cb4b53ed3058ffb974e0e2ced571"
+version = "0.29.0"
+source = "git+https://github.com/delta-io/delta-rs.git?rev=0ca1a3b#0ca1a3be93f71e37428c4be495e8ba0dba5add89"
 dependencies = [
  "arrow",
  "arrow-arith",
@@ -2385,6 +2385,7 @@ dependencies = [
  "dashmap",
  "delta_kernel",
  "deltalake-derive",
+ "dirs",
  "either",
  "futures",
  "humantime",
@@ -2413,8 +2414,8 @@ dependencies = [
 
 [[package]]
 name = "deltalake-derive"
-version = "0.28.0"
-source = "git+https://github.com/delta-io/delta-rs.git?rev=f3a2712#f3a271225f30cb4b53ed3058ffb974e0e2ced571"
+version = "0.29.0"
+source = "git+https://github.com/delta-io/delta-rs.git?rev=0ca1a3b#0ca1a3be93f71e37428c4be495e8ba0dba5add89"
 dependencies = [
  "convert_case",
  "itertools 0.14.0",
@@ -2514,15 +2515,6 @@ dependencies = [
  "libc",
  "socket2 0.6.0",
  "windows-sys 0.60.2",
-]
-
-[[package]]
-name = "document-features"
-version = "0.2.11"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "95249b50c6c185bee49034bcb378a49dc2b5dff0be90ff6616d31d64febab05d"
-dependencies = [
- "litrs",
 ]
 
 [[package]]
@@ -3896,6 +3888,12 @@ dependencies = [
 
 [[package]]
 name = "linux-raw-sys"
+version = "0.4.15"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "d26c52dbd32dccf2d10cac7725f8eae5296885fb5703b261f7d0a0739ec807ab"
+
+[[package]]
+name = "linux-raw-sys"
 version = "0.11.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "df1d3c3b53da64cf5760482273a98e575c651a67eec7f77df96b5b642de8f039"
@@ -3905,12 +3903,6 @@ name = "litemap"
 version = "0.8.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "241eaef5fd12c88705a01fc1066c48c4b36e0dd4377dcdc7ec3942cea7a69956"
-
-[[package]]
-name = "litrs"
-version = "0.4.2"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "f5e54036fe321fd421e10d732f155734c4e4afd610dd556d9a82833ab3ee0bed"
 
 [[package]]
 name = "lock_api"
@@ -5340,9 +5332,9 @@ checksum = "3582f63211428f83597b51b2ddb88e2a91a9d52d12831f9d08f5e624e8977422"
 
 [[package]]
 name = "roaring"
-version = "0.10.12"
+version = "0.11.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "19e8d2cfa184d94d0726d650a9f4a1be7f9b76ac9fdb954219878dc00c1c1e7b"
+checksum = "f08d6a905edb32d74a5d5737a0c9d7e950c312f3c46cb0ca0a2ca09ea11878a0"
 dependencies = [
  "bytemuck",
  "byteorder",
@@ -5383,6 +5375,19 @@ dependencies = [
 
 [[package]]
 name = "rustix"
+version = "0.38.44"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "fdb5bc1ae2baa591800df16c9ca78619bf65c0488b41b96ccec5d11220d8c154"
+dependencies = [
+ "bitflags",
+ "errno",
+ "libc",
+ "linux-raw-sys 0.4.15",
+ "windows-sys 0.59.0",
+]
+
+[[package]]
+name = "rustix"
 version = "1.1.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "cd15f8a2c5551a84d56efdc1cd049089e409ac19a3072d5037a17fd70719ff3e"
@@ -5390,7 +5395,7 @@ dependencies = [
  "bitflags",
  "errno",
  "libc",
- "linux-raw-sys",
+ "linux-raw-sys 0.11.0",
  "windows-sys 0.61.0",
 ]
 
@@ -6440,7 +6445,7 @@ dependencies = [
  "fastrand",
  "getrandom 0.3.3",
  "once_cell",
- "rustix",
+ "rustix 1.1.2",
  "windows-sys 0.61.0",
 ]
 
