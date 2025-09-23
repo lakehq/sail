@@ -21,7 +21,7 @@
     "autoprefixer": "^10.4.21",
     "eslint": "^9.36.0",
     "eslint-config-prettier": "^10.1.8",
-    "eslint-plugin-vue": "^10.4.0",
+    "eslint-plugin-vue": "^10.5.0",
     "fast-glob": "^3.3.3",
     "gray-matter": "^4.0.3",
     "js-yaml": "^4.1.0",
