@@ -3,7 +3,7 @@ use std::sync::Arc;
 use datafusion::functions::expr_fn;
 use datafusion_common::ScalarValue;
 use datafusion_expr::{expr, lit, when, ExprSchemable, Operator, ScalarUDF};
-use datafusion_spark::function::bitmap::bitmap_count::BitmapCount;
+use datafusion_spark::function::bitmap::expr_fn as bitmap_fn;
 use sail_catalog::manager::CatalogManager;
 use sail_catalog::utils::quote_namespace_if_needed;
 use sail_common_datafusion::extension::SessionExtensionAccessor;
@@ -127,7 +127,7 @@ pub(super) fn list_built_in_misc_functions() -> Vec<(&'static str, ScalarFunctio
         ("assert_true", F::custom(assert_true)),
         ("bitmap_bit_position", F::custom(bitmap_bit_position)),
         ("bitmap_bucket_number", F::custom(bitmap_bucket_number)),
-        ("bitmap_count", F::udf(BitmapCount::new())),
+        ("bitmap_count", F::unary(bitmap_fn::bitmap_count)),
         ("current_catalog", F::custom(current_catalog)),
         ("current_database", F::custom(current_database)),
         ("current_schema", F::custom(current_database)),

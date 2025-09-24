@@ -1,8 +1,7 @@
 use datafusion::arrow::datatypes::DataType;
 use datafusion::functions::expr_fn::abs;
 use datafusion_expr::{cast, expr, lit, when, ExprSchemable, Operator};
-use datafusion_spark::function::bitwise::bit_count::SparkBitCount;
-use datafusion_spark::function::bitwise::bit_get::SparkBitGet;
+use datafusion_spark::function::bitwise::expr_fn as bitwise_expr_fn;
 use sail_common_datafusion::utils::items::ItemTaker;
 
 use crate::error::{PlanError, PlanResult};
@@ -45,8 +44,8 @@ pub(super) fn list_built_in_bitwise_functions() -> Vec<(&'static str, ScalarFunc
     vec![
         ("&", F::binary_op(Operator::BitwiseAnd)),
         ("^", F::binary_op(Operator::BitwiseXor)),
-        ("bit_count", F::udf(SparkBitCount::new())),
-        ("bit_get", F::udf(SparkBitGet::new())),
+        ("bit_count", F::unary(bitwise_expr_fn::bit_count)),
+        ("bit_get", F::binary(bitwise_expr_fn::bit_get)),
         ("getbit", F::binary(bit_get)),
         ("shiftleft", F::binary_op(Operator::BitwiseShiftLeft)),
         ("<<", F::binary_op(Operator::BitwiseShiftLeft)),
