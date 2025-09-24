@@ -1,11 +1,11 @@
 ---
-title: Literals
-rank: 3
+title: Data Types
+rank: 2
 ---
 
-# Literals
+# Data Types
 
-<PageList :data="data" :prefix="['guide', 'sql', 'literals']" />
+<PageList :data="data" :prefix="['guide', 'dataframe', 'data-types']" />
 
 <script setup>
 import PageList from "@theme/components/PageList.vue";
