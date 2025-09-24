@@ -7,7 +7,7 @@ use datafusion::error::{DataFusionError, Result};
 use datafusion::physical_expr::expressions::Column;
 use datafusion::physical_plan::projection::ProjectionExec;
 use datafusion::physical_plan::{displayable, ExecutionPlan};
-use log::{debug, info};
+use log::trace;
 
 use crate::join_reorder::builder::{ColumnMap, ColumnMapEntry, GraphBuilder};
 use crate::join_reorder::enumerator::PlanEnumerator;
@@ -39,8 +39,8 @@ impl PhysicalOptimizerRule for JoinReorder {
         plan: Arc<dyn ExecutionPlan>,
         _config: &ConfigOptions,
     ) -> Result<Arc<dyn ExecutionPlan>> {
-        info!("JoinReorder: Entering optimization rule.");
-        debug!(
+        trace!("JoinReorder: Entering optimization rule.");
+        trace!(
             "JoinReorder: Input plan:\n{}",
             displayable(plan.as_ref()).indent(true)
         );
@@ -64,7 +64,7 @@ impl JoinReorder {
         &self,
         plan: Arc<dyn ExecutionPlan>,
     ) -> Result<Arc<dyn ExecutionPlan>> {
-        info!("find_and_optimize_regions: Processing {}", plan.name());
+        trace!("find_and_optimize_regions: Processing {}", plan.name());
 
         // Attempt to build a query graph starting from the current node.
         // The GraphBuilder will traverse downwards to find a complete reorderable region.
@@ -72,7 +72,7 @@ impl JoinReorder {
         if let Some((query_graph, target_column_map)) = graph_builder.build(plan.clone())? {
             // A reorderable region was found. Optimize it if it has more than 2 relations.
             if query_graph.relation_count() > 2 {
-                info!(
+                trace!(
                     "JoinReorder: Found reorderable region. Graph has {} relations and {} edges.",
                     query_graph.relation_count(),
                     query_graph.edges.len()
@@ -81,25 +81,25 @@ impl JoinReorder {
                 let mut enumerator = PlanEnumerator::new(query_graph);
                 let best_plan = match enumerator.solve()? {
                     Some(plan) => {
-                        info!("JoinReorder: DP optimization completed successfully");
+                        trace!("JoinReorder: DP optimization completed successfully");
                         plan
                     }
                     None => {
-                        info!("JoinReorder: DP optimization exceeded threshold, falling back to greedy algorithm");
+                        trace!("JoinReorder: DP optimization exceeded threshold, falling back to greedy algorithm");
                         enumerator.solve_greedy()?
                     }
                 };
-                info!(
+                trace!(
                     "JoinReorder: Optimal plan found with cost {:.2} and estimated cardinality {:.2}. Reconstructing plan.",
                     best_plan.cost, best_plan.cardinality
                 );
-                debug!("JoinReorder: Optimal DPPlan structure:\n{:#?}", best_plan);
+                trace!("JoinReorder: Optimal DPPlan structure:\n{:#?}", best_plan);
 
                 let mut reconstructor =
                     PlanReconstructor::new(&enumerator.dp_table, &enumerator.query_graph);
                 let (join_tree, final_map) = reconstructor.reconstruct(&best_plan)?;
 
-                debug!(
+                trace!(
                     "JoinReorder: Reconstructed join tree (before final projection):\n{}",
                     displayable(join_tree.as_ref()).indent(true)
                 );
@@ -116,8 +116,10 @@ impl JoinReorder {
                     &target_names,
                 )?;
 
-                info!("JoinReorder: Optimization successful at current level. Returning new plan.");
-                debug!(
+                trace!(
+                    "JoinReorder: Optimization successful at current level. Returning new plan."
+                );
+                trace!(
                     "JoinReorder: Optimized plan:\n{}",
                     displayable(final_plan.as_ref()).indent(true)
                 );
@@ -129,7 +131,7 @@ impl JoinReorder {
 
         // If no significant reorderable region was found starting at the current node,
         // recursively optimize the children of the current node.
-        info!("find_and_optimize_regions: No reorderable region found at {}, recursing to {} children", 
+        trace!("find_and_optimize_regions: No reorderable region found at {}, recursing to {} children", 
               plan.name(), plan.children().len());
 
         // Allow recursion through Left Joins to find Inner Join regions below.
@@ -156,12 +158,12 @@ impl JoinReorder {
         target_map: &ColumnMap,
         target_names: &[String],
     ) -> Result<Arc<dyn ExecutionPlan>> {
-        debug!(
+        trace!(
             "build_final_projection: target_map has {} entries, final_map has {} entries",
             target_map.len(),
             final_map.len()
         );
-        debug!(
+        trace!(
             "build_final_projection: input_plan schema has {} fields",
             input_plan.schema().fields().len()
         );
@@ -180,22 +182,24 @@ impl JoinReorder {
                         name: "".to_string(), // name will be retrieved from schema
                     };
 
-                    debug!(
+                    trace!(
                         "build_final_projection: Looking for stable column R{}.C{} (output_idx={})",
-                        relation_id, column_index, output_idx
+                        relation_id,
+                        column_index,
+                        output_idx
                     );
 
                     // Find this stable column's position in the final join tree output
                     let physical_idx =
                         find_physical_index(&stable_target, final_map).ok_or_else(|| {
-                            debug!("build_final_projection: Failed to find R{}.C{} in final_map", relation_id, column_index);
+                            trace!("build_final_projection: Failed to find R{}.C{} in final_map", relation_id, column_index);
                             for (i, entry) in final_map.iter().enumerate() {
                                 match entry {
                                     ColumnMapEntry::Stable { relation_id: r, column_index: c } => {
-                                        debug!("  final_map[{}] = R{}.C{}", i, r, c);
+                                        trace!("  final_map[{}] = R{}.C{}", i, r, c);
                                     }
                                     ColumnMapEntry::Expression { .. } => {
-                                        debug!("  final_map[{}] = Expression", i);
+                                        trace!("  final_map[{}] = Expression", i);
                                     }
                                 }
                             }

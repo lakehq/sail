@@ -296,7 +296,7 @@ impl<'a> PlanReconstructor<'a> {
                         non_equi_filters.push(pred);
                     } else {
                         // Store filters that can't be applied yet
-                        log::debug!(
+                        log::trace!(
                             "JoinReorder: Deferring filter application - required relations: {:?}, current join set: {:?}",
                             required.iter().collect::<Vec<_>>(),
                             current_join_set.iter().collect::<Vec<_>>()
@@ -317,7 +317,7 @@ impl<'a> PlanReconstructor<'a> {
         for pending in std::mem::take(&mut self.pending_filters) {
             if pending.required_relations.is_subset(&current_join_set) {
                 // This pending filter can now be applied
-                log::debug!(
+                log::trace!(
                     "JoinReorder: Applying previously deferred filter - required relations: {:?}",
                     pending.required_relations.iter().collect::<Vec<_>>()
                 );

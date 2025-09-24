@@ -4,7 +4,7 @@ use std::sync::Arc;
 use datafusion::error::{DataFusionError, Result};
 use datafusion::logical_expr::Operator;
 use datafusion::physical_expr::expressions::BinaryExpr;
-use log::debug;
+use log::trace;
 
 use crate::join_reorder::graph::{JoinEdge, QueryGraph, StableColumn};
 use crate::join_reorder::join_set::JoinSet;
@@ -65,12 +65,12 @@ impl CardinalityEstimator {
         estimator.populate_initial_distinct_counts();
         estimator.init_equivalence_sets();
 
-        debug!(
+        trace!(
             "CardinalityEstimator: Initialized with {} equivalence sets.",
             estimator.equivalence_sets.len()
         );
         for (i, set) in estimator.equivalence_sets.iter().enumerate() {
-            debug!(
+            trace!(
                 "  - Set {}: TDom = {:.2}, Columns = {:?}",
                 i,
                 set.t_dom_count,

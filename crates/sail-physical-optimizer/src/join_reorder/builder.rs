@@ -10,7 +10,7 @@ use datafusion::physical_plan::aggregates::AggregateExec;
 use datafusion::physical_plan::joins::HashJoinExec;
 use datafusion::physical_plan::projection::ProjectionExec;
 use datafusion::physical_plan::ExecutionPlan;
-use log::info;
+use log::trace;
 
 use crate::join_reorder::graph::{JoinEdge, QueryGraph, RelationNode, StableColumn};
 use crate::join_reorder::join_set::JoinSet;
@@ -67,7 +67,7 @@ impl GraphBuilder {
         &mut self,
         plan: Arc<dyn ExecutionPlan>,
     ) -> Result<Option<(QueryGraph, ColumnMap)>> {
-        info!("Building query graph from execution plan");
+        trace!("Building query graph from execution plan");
         // Attempt to build a graph starting from this node.
         // visit_plan will return an error if the node is not part of a reorderable region.
         let result = self.visit_plan(plan);
@@ -90,15 +90,15 @@ impl GraphBuilder {
     /// Recursively traverses the execution plan, building the query graph.
     /// Returns a map of the plan's output columns to our stable IDs.
     fn visit_plan(&mut self, plan: Arc<dyn ExecutionPlan>) -> Result<ColumnMap> {
-        info!("Visiting plan: {}", plan.name());
+        trace!("Visiting plan: {}", plan.name());
         let any_plan = plan.as_any();
 
         if let Some(join_plan) = any_plan.downcast_ref::<HashJoinExec>() {
             if join_plan.join_type() == &JoinType::Inner {
-                info!("Visiting inner join: {}", join_plan.name());
+                trace!("Visiting inner join: {}", join_plan.name());
                 return self.visit_inner_join(join_plan);
             } else {
-                info!(
+                trace!(
                     "Skipping non-inner join ({:?}): {}",
                     join_plan.join_type(),
                     join_plan.name()
@@ -107,7 +107,7 @@ impl GraphBuilder {
         }
 
         if let Some(proj_plan) = any_plan.downcast_ref::<ProjectionExec>() {
-            info!("Visiting projection: {}", proj_plan.name());
+            trace!("Visiting projection: {}", proj_plan.name());
             return self.visit_projection(proj_plan);
         }
 
@@ -116,7 +116,7 @@ impl GraphBuilder {
         // AggregateExec and other transformation nodes are not part of reorderable regions.
 
         if any_plan.is::<AggregateExec>() {
-            info!("AggregateExec encountered - not part of reorderable region");
+            trace!("AggregateExec encountered - not part of reorderable region");
             return Err(DataFusionError::Internal(
                 "AggregateExec is not part of a reorderable join region".to_string(),
             ));
