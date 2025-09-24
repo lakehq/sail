@@ -1,0 +1,65 @@
+>>> df = spark.createDataFrame([
+...     ("BMW", "X5"),
+...     ("BMW", "3 Series"),
+...     ("BMW", "5 Series"),
+...     ("Audi", "A4"),
+...     ("Audi", "Q5"),
+... ], schema="brand STRING, model STRING")
+>>>
+>>> df.createOrReplaceTempView("cars")
+>>>
+>>> spark.sql("""
+... SELECT brand, COUNT(*), GROUPING(brand) AS g
+... FROM cars
+... GROUP BY ROLLUP (brand)
+... ORDER BY g, brand ASC
+... """).show()
++-----+--------+---+
+|brand|count(1)|  g|
++-----+--------+---+
+| Audi|       2|  0|
+|  BMW|       3|  0|
+| NULL|       5|  1|
++-----+--------+---+
+
+>>> spark.sql("""
+... SELECT brand, COUNT(*), GROUPING(brand) AS g
+... FROM cars
+... GROUP BY ROLLUP (brand)
+... ORDER BY GROUPING(brand), brand
+... """).show()
++-----+--------+---+
+|brand|count(1)|  g|
++-----+--------+---+
+| Audi|       2|  0|
+|  BMW|       3|  0|
+| NULL|       5|  1|
++-----+--------+---+
+
+>>> spark.sql("""
+... SELECT brand, COUNT(*), GROUPING(brand)
+... FROM cars
+... GROUP BY ROLLUP (brand)
+... ORDER BY GROUPING(brand), brand DESC
+... """).show()
++-----+--------+---------------+
+|brand|count(1)|grouping(brand)|
++-----+--------+---------------+
+|  BMW|       3|              0|
+| Audi|       2|              0|
+| NULL|       5|              1|
++-----+--------+---------------+
+
+>>> spark.sql("""
+... SELECT brand, COUNT(*), GROUPING(brand) + GROUPING(brand) AS g
+... FROM cars
+... GROUP BY ROLLUP (brand)
+... ORDER BY g DESC, GROUPING(brand) + GROUPING(brand), brand DESC
+... """).show()
++-----+--------+---+
+|brand|count(1)|  g|
++-----+--------+---+
+| NULL|       5|  2|
+|  BMW|       3|  0|
+| Audi|       2|  0|
++-----+--------+---+
