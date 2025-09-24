@@ -344,6 +344,7 @@ impl CardinalityEstimator {
 }
 
 #[cfg(test)]
+#[allow(clippy::unwrap_used)]
 mod tests {
     use std::sync::Arc;
 
@@ -387,7 +388,7 @@ mod tests {
         let graph = create_test_graph();
         let mut estimator = CardinalityEstimator::new(graph);
 
-        let single_set = JoinSet::new_singleton(0);
+        let single_set = JoinSet::new_singleton(0).unwrap();
         let cardinality = match estimator.estimate_cardinality(single_set) {
             Ok(card) => card,
             Err(_) => unreachable!("estimate_cardinality should succeed in test"),
@@ -455,7 +456,9 @@ mod tests {
         )];
 
         let equi_edge = JoinEdge::new(
-            JoinSet::new_singleton(0).union(&JoinSet::new_singleton(1)),
+            JoinSet::new_singleton(0)
+                .unwrap()
+                .union(&JoinSet::new_singleton(1).unwrap()),
             equi_condition,
             JoinType::Inner,
             equi_pairs.clone(),
@@ -479,7 +482,9 @@ mod tests {
         )) as Arc<dyn PhysicalExpr>;
 
         let combined_edge = JoinEdge::new(
-            JoinSet::new_singleton(0).union(&JoinSet::new_singleton(1)),
+            JoinSet::new_singleton(0)
+                .unwrap()
+                .union(&JoinSet::new_singleton(1).unwrap()),
             combined_condition,
             JoinType::Inner,
             equi_pairs,

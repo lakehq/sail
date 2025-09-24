@@ -2,6 +2,7 @@ use std::collections::HashMap;
 use std::sync::Arc;
 
 use datafusion::common::Statistics;
+use datafusion::error::{DataFusionError, Result};
 use datafusion::logical_expr::JoinType;
 use datafusion::physical_expr::PhysicalExpr;
 use datafusion::physical_plan::ExecutionPlan;
@@ -131,7 +132,7 @@ impl QueryGraph {
     }
 
     /// Adds a join edge to the query graph and updates the trie structure.
-    pub fn add_edge(&mut self, edge: JoinEdge) {
+    pub fn add_edge(&mut self, edge: JoinEdge) -> Result<(), DataFusionError> {
         let edge_index = self.edges.len();
         self.edges.push(edge);
 
@@ -139,11 +140,14 @@ impl QueryGraph {
         self.neighbor_cache.clear();
 
         // Update trie structure for this edge
-        self.update_trie_for_edge(edge_index);
+        self.update_trie_for_edge(edge_index).map_err(|e| {
+            DataFusionError::Internal(format!("Failed to update trie for edge: {}", e))
+        })?;
+        Ok(())
     }
 
     /// Updates the trie structure for a newly added edge.
-    fn update_trie_for_edge(&mut self, edge_index: usize) {
+    fn update_trie_for_edge(&mut self, edge_index: usize) -> Result<(), DataFusionError> {
         let edge = &self.edges[edge_index];
         let relations: Vec<usize> = edge.join_set.iter().collect();
 
@@ -152,9 +156,10 @@ impl QueryGraph {
         for i in 0..relations.len() {
             for subset_size in 1..=relations.len() {
                 // Generate all subsets of the given size that include relations[i]
-                self.generate_subsets_and_update_trie(&relations, subset_size, i, edge_index);
+                self.generate_subsets_and_update_trie(&relations, subset_size, i, edge_index)?;
             }
         }
+        Ok(())
     }
 
     /// Generates subsets and updates trie structure.
@@ -164,7 +169,7 @@ impl QueryGraph {
         subset_size: usize,
         must_include: usize,
         edge_index: usize,
-    ) {
+    ) -> Result<(), DataFusionError> {
         if subset_size == 1 {
             let subset = vec![relations[must_include]];
             let remaining: Vec<usize> = relations
@@ -174,10 +179,10 @@ impl QueryGraph {
                 .collect();
 
             if !remaining.is_empty() {
-                let neighbor_set = JoinSet::from_iter(remaining.iter().copied());
+                let neighbor_set = JoinSet::from_iter(remaining.iter().copied())?;
                 self.create_trie_path_and_add_neighbor(&subset, neighbor_set, edge_index);
             }
-            return;
+            return Ok(());
         }
 
         // Generate all combinations of subset_size that include must_include
@@ -191,7 +196,8 @@ impl QueryGraph {
             must_include + 1,
             subset_size,
             edge_index,
-        );
+        )?;
+        Ok(())
     }
 
     /// Recursively generates combinations and updates trie.
@@ -203,7 +209,7 @@ impl QueryGraph {
         start: usize,
         subset_size: usize,
         edge_index: usize,
-    ) {
+    ) -> Result<(), DataFusionError> {
         if pos == subset_size {
             let subset: Vec<usize> = indices.iter().map(|&i| relations[i]).collect();
             let remaining: Vec<usize> = relations
@@ -214,10 +220,10 @@ impl QueryGraph {
                 .collect();
 
             if !remaining.is_empty() {
-                let neighbor_set = JoinSet::from_iter(remaining.iter().copied());
+                let neighbor_set = JoinSet::from_iter(remaining.iter().copied())?;
                 self.create_trie_path_and_add_neighbor(&subset, neighbor_set, edge_index);
             }
-            return;
+            return Ok(());
         }
 
         for i in start..relations.len() {
@@ -229,8 +235,9 @@ impl QueryGraph {
                 i + 1,
                 subset_size,
                 edge_index,
-            );
+            )?;
         }
+        Ok(())
     }
 
     /// Creates a trie path for the given subset and adds a neighbor.
@@ -498,6 +505,7 @@ impl QueryGraph {
 }
 
 #[cfg(test)]
+#[allow(clippy::unwrap_used)]
 mod tests {
     use datafusion::arrow::datatypes::{DataType, Field, Schema};
     use datafusion::physical_plan::empty::EmptyExec;
@@ -576,34 +584,34 @@ mod tests {
         }
 
         // Create a join edge between relations 0 and 1
-        let join_set_01 = JoinSet::from_iter([0, 1]);
+        let join_set_01 = JoinSet::from_iter([0, 1]).unwrap();
         let filter =
             Arc::new(Column::new("col1", 0)) as Arc<dyn datafusion::physical_expr::PhysicalExpr>;
         let edge = JoinEdge::new(join_set_01, filter, JoinType::Inner, vec![]);
-        graph.add_edge(edge);
+        graph.add_edge(edge).unwrap();
 
         // Create a join edge between relations 1 and 2
-        let join_set_12 = JoinSet::from_iter([1, 2]);
+        let join_set_12 = JoinSet::from_iter([1, 2]).unwrap();
         let filter =
             Arc::new(Column::new("col1", 0)) as Arc<dyn datafusion::physical_expr::PhysicalExpr>;
         let edge = JoinEdge::new(join_set_12, filter, JoinType::Inner, vec![]);
-        graph.add_edge(edge);
+        graph.add_edge(edge).unwrap();
 
         // Test neighbor lookup for relation 0
-        let set_0 = JoinSet::new_singleton(0);
+        let set_0 = JoinSet::new_singleton(0).unwrap();
         let neighbors = graph.get_neighbors(set_0);
         assert_eq!(neighbors, vec![1]); // Relation 0 connected to relation 1
 
         // Test neighbor lookup for relation 1
-        let set_1 = JoinSet::new_singleton(1);
+        let set_1 = JoinSet::new_singleton(1).unwrap();
         let neighbors = graph.get_neighbors(set_1);
         let mut expected = vec![0, 2];
         expected.sort();
         assert_eq!(neighbors, expected); // Relation 1 connected to relations 0 and 2
 
         // Test connecting edges lookup
-        let set_0 = JoinSet::new_singleton(0);
-        let set_1 = JoinSet::new_singleton(1);
+        let set_0 = JoinSet::new_singleton(0).unwrap();
+        let set_1 = JoinSet::new_singleton(1).unwrap();
         let connecting_edges = graph.get_connecting_edges(set_0, set_1);
         assert_eq!(connecting_edges.len(), 1); // One connecting edge expected
     }
@@ -637,18 +645,18 @@ mod tests {
         }
 
         // Create a complex join edge involving relations 0, 1, and 2
-        let join_set_012 = JoinSet::from_iter([0, 1, 2]);
+        let join_set_012 = JoinSet::from_iter([0, 1, 2]).unwrap();
         let filter =
             Arc::new(Column::new("col1", 0)) as Arc<dyn datafusion::physical_expr::PhysicalExpr>;
         let edge = JoinEdge::new(join_set_012, filter, JoinType::Inner, vec![]);
-        graph.add_edge(edge);
+        graph.add_edge(edge).unwrap();
 
         // Test that all relations in the edge can find each other as neighbors
-        let set_0 = JoinSet::new_singleton(0);
+        let set_0 = JoinSet::new_singleton(0).unwrap();
         let neighbors_0 = graph.get_neighbors(set_0);
         assert!(neighbors_0.contains(&1) && neighbors_0.contains(&2));
 
-        let set_01 = JoinSet::from_iter([0, 1]);
+        let set_01 = JoinSet::from_iter([0, 1]).unwrap();
         let neighbors_01 = graph.get_neighbors(set_01);
         assert!(neighbors_01.contains(&2));
     }

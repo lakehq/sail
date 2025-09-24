@@ -29,6 +29,7 @@ impl Default for CostModel {
 }
 
 #[cfg(test)]
+#[allow(clippy::unwrap_used)]
 mod tests {
     use super::*;
 
@@ -42,8 +43,8 @@ mod tests {
     fn test_compute_cost() {
         let model = CostModel::new();
 
-        let left_plan = DPPlan::new_leaf(0, 1000.0);
-        let right_plan = DPPlan::new_leaf(1, 2000.0);
+        let left_plan = DPPlan::new_leaf(0, 1000.0).unwrap();
+        let right_plan = DPPlan::new_leaf(1, 2000.0).unwrap();
 
         let cost = model.compute_cost(&left_plan, &right_plan, 500.0);
 
@@ -55,10 +56,10 @@ mod tests {
     fn test_compute_cost_with_existing_costs() {
         let model = CostModel::new();
 
-        let mut left_plan = DPPlan::new_leaf(0, 1000.0);
+        let mut left_plan = DPPlan::new_leaf(0, 1000.0).unwrap();
         left_plan.cost = 100.0;
 
-        let mut right_plan = DPPlan::new_leaf(1, 2000.0);
+        let mut right_plan = DPPlan::new_leaf(1, 2000.0).unwrap();
         right_plan.cost = 200.0;
 
         let cost = model.compute_cost(&left_plan, &right_plan, 500.0);

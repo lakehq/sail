@@ -39,7 +39,6 @@ fn limit_push_past_windows() -> Arc<dyn PhysicalOptimizerRule + Send + Sync> {
 
 pub fn get_physical_optimizers() -> Vec<Arc<dyn PhysicalOptimizerRule + Send + Sync>> {
     vec![
-        // Note: The order of rules is important
         Arc::new(OutputRequirements::new_add_mode()),
         Arc::new(AggregateStatistics::new()),
         Arc::new(JoinReorder::new()),
@@ -63,11 +62,6 @@ pub fn get_physical_optimizers() -> Vec<Arc<dyn PhysicalOptimizerRule + Send + S
         Arc::new(RewriteExplicitRepartition::new()),
         Arc::new(SanityCheckPlan::new()),
     ]
-}
-
-// This function is only needed for the tests to verify the count of optimizers.
-pub fn get_custom_sail_optimizers() -> Vec<Arc<dyn PhysicalOptimizerRule + Send + Sync>> {
-    vec![Arc::new(JoinReorder::new())]
 }
 
 #[cfg(test)]

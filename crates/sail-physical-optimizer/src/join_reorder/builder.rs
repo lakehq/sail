@@ -153,7 +153,7 @@ impl GraphBuilder {
             // Merge relations involved in all_relations_in_condition
             for rel_id in left_stable_ids.iter().chain(right_stable_ids.iter()) {
                 all_relations_in_condition =
-                    all_relations_in_condition.union(&JoinSet::new_singleton(*rel_id));
+                    all_relations_in_condition.union(&JoinSet::new_singleton(*rel_id)?);
             }
 
             // Try to resolve expressions to single stable columns for equi-join pairs
@@ -188,7 +188,7 @@ impl GraphBuilder {
             *join_plan.join_type(),
             equi_pairs,
         );
-        self.graph.add_edge(edge);
+        self.graph.add_edge(edge)?;
 
         // Build and return the output ColumnMap for current Join node
         // Inner Join output is concatenation of left and right child outputs

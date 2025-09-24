@@ -116,13 +116,13 @@ impl PlanEnumerator {
     fn init_leaf_plans(&mut self) -> Result<()> {
         for relation in &self.query_graph.relations {
             let relation_id = relation.relation_id;
-            let join_set = JoinSet::new_singleton(relation_id);
+            let join_set = JoinSet::new_singleton(relation_id)?;
 
             // Estimate cardinality for single relation
             let cardinality = self.cardinality_estimator.estimate_cardinality(join_set)?;
 
             // Create leaf plan (cost is set to cardinality in DPPlan::new_leaf)
-            let plan = Arc::new(DPPlan::new_leaf(relation_id, cardinality));
+            let plan = Arc::new(DPPlan::new_leaf(relation_id, cardinality)?);
 
             // Insert into DP table
             self.dp_table.insert(join_set, plan);
@@ -146,7 +146,7 @@ impl PlanEnumerator {
 
     /// Start enumeration from a single relation index.
     fn process_node_as_start(&mut self, idx: usize) -> Result<bool> {
-        let nodes = JoinSet::new_singleton(idx);
+        let nodes = JoinSet::new_singleton(idx)?;
 
         // Emit CSG for the starting node
         if !self.emit_csg(nodes)? {
@@ -154,12 +154,7 @@ impl PlanEnumerator {
         }
 
         // Create forbidden set: all ids < min(nodes) plus nodes itself
-        let min_idx = idx;
-        let mut forbidden_bits: u64 = 0;
-        for i in 0..min_idx {
-            forbidden_bits |= 1u64 << i;
-        }
-        let forbidden = JoinSet::from_bits(forbidden_bits | nodes.bits());
+        let forbidden = JoinSet::from_iter(0..idx)? | nodes;
 
         // Enlarge recursively
         if !self.enumerate_csg_rec(nodes, forbidden)? {
@@ -189,11 +184,7 @@ impl PlanEnumerator {
 
         // Build initial forbidden set
         let min_idx = nodes.iter().min().unwrap_or(0);
-        let mut forbidden_bits: u64 = nodes.bits();
-        for i in 0..min_idx {
-            forbidden_bits |= 1u64 << i;
-        }
-        let forbidden = JoinSet::from_bits(forbidden_bits);
+        let forbidden = nodes | JoinSet::from_iter(0..min_idx)?;
 
         // Get neighbors
         let neighbors = self.neighbors(nodes, forbidden);
@@ -202,14 +193,11 @@ impl PlanEnumerator {
         }
 
         // Build forbidden set including all neighbors to avoid duplicates
-        let mut new_forbidden_bits = forbidden.bits();
-        for &n in &neighbors {
-            new_forbidden_bits |= 1u64 << n;
-        }
+        let neighbors_set = JoinSet::from_iter(neighbors.iter().copied())?;
+        let mut enriched_forbidden = forbidden | neighbors_set;
 
-        // Traverse neighbors in desc order
         for &nbr in neighbors.iter().rev() {
-            let nbr_set = JoinSet::new_singleton(nbr);
+            let nbr_set = JoinSet::new_singleton(nbr)?;
             let edge_indices = self.get_connecting_edge_indices(nodes, nbr_set);
 
             if !edge_indices.is_empty()
@@ -219,13 +207,12 @@ impl PlanEnumerator {
             }
 
             // Use enriched forbidden set to reduce duplicates
-            let cmp_forbidden = JoinSet::from_bits(new_forbidden_bits);
-            if !self.enumerate_cmp_rec(nodes, nbr_set, cmp_forbidden)? {
+            if !self.enumerate_cmp_rec(nodes, nbr_set, enriched_forbidden)? {
                 return Ok(false);
             }
 
             // Allow neighbor to participate in subsequent CMP expansions
-            new_forbidden_bits &= !(1u64 << nbr);
+            enriched_forbidden -= nbr_set;
         }
 
         Ok(true)
@@ -250,8 +237,8 @@ impl PlanEnumerator {
         let all_subsets = self.generate_all_nonempty_subsets(&neighbors);
         let mut union_sets: Vec<JoinSet> = Vec::with_capacity(all_subsets.len());
         for subset in all_subsets {
-            let subset_bits = subset.iter().fold(0u64, |acc, &id| acc | (1u64 << id));
-            let new_set = JoinSet::from_bits(nodes.bits() | subset_bits);
+            let subset_join_set = JoinSet::from_iter(subset.iter().copied())?;
+            let new_set = nodes | subset_join_set;
             if self.dp_table.contains_key(&new_set)
                 && new_set.cardinality() > nodes.cardinality()
                 && !self.emit_csg(new_set)?
@@ -262,11 +249,8 @@ impl PlanEnumerator {
         }
 
         // Forbidden set includes current neighbors to avoid duplicates
-        let mut new_forbidden_bits = forbidden.bits();
-        for &n in &neighbors {
-            new_forbidden_bits |= 1u64 << n;
-        }
-        let new_forbidden = JoinSet::from_bits(new_forbidden_bits);
+        let neighbors_set = JoinSet::from_iter(neighbors.iter().copied())?;
+        let new_forbidden = forbidden | neighbors_set;
 
         // Recurse on each union set under updated forbidden set
         for set in union_sets {
@@ -302,8 +286,8 @@ impl PlanEnumerator {
         let all_subsets = self.generate_all_nonempty_subsets(&neighbor_ids);
         let mut union_sets: Vec<JoinSet> = Vec::with_capacity(all_subsets.len());
         for subset in all_subsets {
-            let subset_bits = subset.iter().fold(0u64, |acc, &id| acc | (1u64 << id));
-            let combined = JoinSet::from_bits(right.bits() | subset_bits);
+            let subset_join_set = JoinSet::from_iter(subset.iter().copied())?;
+            let combined = right | subset_join_set;
             if combined.cardinality() > right.cardinality() && self.dp_table.contains_key(&combined)
             {
                 let edge_indices = self.get_connecting_edge_indices(left, combined);
@@ -317,11 +301,8 @@ impl PlanEnumerator {
         }
 
         // Forbidden set includes current neighbors to avoid duplicates
-        let mut new_forbidden_bits = forbidden.bits();
-        for &n in &neighbor_ids {
-            new_forbidden_bits |= 1u64 << n;
-        }
-        let new_forbidden = JoinSet::from_bits(new_forbidden_bits);
+        let neighbors_set = JoinSet::from_iter(neighbor_ids.iter().copied())?;
+        let new_forbidden = forbidden | neighbors_set;
 
         // Recurse on each combined set under updated forbidden set
         for set in union_sets {
@@ -355,7 +336,7 @@ impl PlanEnumerator {
         right: JoinSet,
         edge_indices: &[usize],
     ) -> Result<f64> {
-        let parent = JoinSet::from_bits(left.bits() | right.bits());
+        let parent = left | right;
 
         // Both subplans must exist in the DP table
         let left_plan = match self.dp_table.get(&left) {
@@ -433,7 +414,7 @@ impl PlanEnumerator {
         if relation_count == 1 {
             // Initialize leaf plans and return the single relation
             self.init_leaf_plans()?;
-            let single_relation_set = JoinSet::new_singleton(0);
+            let single_relation_set = JoinSet::new_singleton(0)?;
             return self
                 .dp_table
                 .get(&single_relation_set)
@@ -445,8 +426,9 @@ impl PlanEnumerator {
         self.init_leaf_plans()?;
 
         // Create a list of current subplans (initially all single relations)
-        let mut current_plans: Vec<JoinSet> =
-            (0..relation_count).map(JoinSet::new_singleton).collect();
+        let mut current_plans: Vec<JoinSet> = (0..relation_count)
+            .map(JoinSet::new_singleton)
+            .collect::<Result<Vec<_>, _>>()?;
 
         // Repeatedly find and merge the best pair until only one plan remains
         while current_plans.len() > 1 {
@@ -615,6 +597,7 @@ impl PlanEnumerator {
 }
 
 #[cfg(test)]
+#[allow(clippy::unwrap_used)]
 mod tests {
     use std::sync::Arc;
 
@@ -662,8 +645,8 @@ mod tests {
 
         assert_eq!(enumerator.dp_table.len(), 2);
 
-        let set0 = JoinSet::new_singleton(0);
-        let set1 = JoinSet::new_singleton(1);
+        let set0 = JoinSet::new_singleton(0).unwrap();
+        let set1 = JoinSet::new_singleton(1).unwrap();
 
         assert!(enumerator.dp_table.contains_key(&set0));
         assert!(enumerator.dp_table.contains_key(&set1));

@@ -275,7 +275,7 @@ impl<'a> PlanReconstructor<'a> {
         }
 
         let mut non_equi_filters: Vec<Arc<dyn PhysicalExpr>> = Vec::new();
-        let current_join_set = JoinSet::from_bits(left_set.bits() | right_set.bits());
+        let current_join_set = left_set | right_set;
 
         // First, process filters from current edges
         for &edge_index in edge_indices {
@@ -802,6 +802,7 @@ fn find_physical_index(stable_col: &StableColumn, map: &ColumnMap) -> Option<usi
 }
 
 #[cfg(test)]
+#[allow(clippy::unwrap_used)]
 mod tests {
     use datafusion::arrow::datatypes::{DataType, Field, Schema};
     use datafusion::common::Statistics;
@@ -838,7 +839,7 @@ mod tests {
     fn test_reconstruct_leaf() -> Result<()> {
         let mut dp_table = HashMap::new();
         let graph = create_test_graph();
-        let leaf_plan = Arc::new(DPPlan::new_leaf(0, 1000.0));
+        let leaf_plan = Arc::new(DPPlan::new_leaf(0, 1000.0).unwrap());
         dp_table.insert(leaf_plan.join_set, leaf_plan.clone());
 
         let mut reconstructor = PlanReconstructor::new(&dp_table, &graph);
@@ -853,8 +854,8 @@ mod tests {
         let dp_table = HashMap::new(); // Empty table
         let graph = create_test_graph();
 
-        let left_set = JoinSet::new_singleton(0);
-        let right_set = JoinSet::new_singleton(1);
+        let left_set = JoinSet::new_singleton(0).unwrap();
+        let right_set = JoinSet::new_singleton(1).unwrap();
         let join_plan = Arc::new(DPPlan::new_join(
             left_set,
             right_set,
@@ -889,7 +890,7 @@ mod tests {
         )]));
         let plan = Arc::new(EmptyExec::new(schema));
         let column_map = vec![];
-        let join_set = JoinSet::new_singleton(0);
+        let join_set = JoinSet::new_singleton(0).unwrap();
         reconstructor
             .plan_cache
             .insert(join_set, (plan, column_map));

@@ -1,3 +1,5 @@
+use datafusion::error::Result;
+
 use crate::join_reorder::join_set::JoinSet;
 
 /// An entry in the DP table representing a join subplan.
@@ -15,13 +17,13 @@ pub struct DPPlan {
 
 impl DPPlan {
     /// Creates a leaf node plan (single relation).
-    pub fn new_leaf(relation_id: usize, cardinality: f64) -> Self {
-        Self {
-            join_set: JoinSet::new_singleton(relation_id),
+    pub fn new_leaf(relation_id: usize, cardinality: f64) -> Result<Self> {
+        Ok(Self {
+            join_set: JoinSet::new_singleton(relation_id)?,
             cost: 0.0, // Leaf nodes have zero join cost
             cardinality,
             plan_type: PlanType::Leaf { relation_id },
-        }
+        })
     }
 
     /// Creates a join node plan.
@@ -105,12 +107,13 @@ impl PlanType {
 }
 
 #[cfg(test)]
+#[allow(clippy::unwrap_used)]
 mod tests {
     use super::*;
 
     #[test]
     fn test_leaf_plan() {
-        let plan = DPPlan::new_leaf(0, 1000.0);
+        let plan = DPPlan::new_leaf(0, 1000.0).unwrap();
         assert!(plan.is_leaf());
         assert_eq!(plan.join_set.cardinality(), 1);
         assert_eq!(plan.cardinality, 1000.0);
@@ -125,8 +128,8 @@ mod tests {
 
     #[test]
     fn test_join_plan() {
-        let left_set = JoinSet::new_singleton(0);
-        let right_set = JoinSet::new_singleton(1);
+        let left_set = JoinSet::new_singleton(0).unwrap();
+        let right_set = JoinSet::new_singleton(1).unwrap();
         let edge_indices = vec![0];
 
         let plan = DPPlan::new_join(left_set, right_set, edge_indices.clone(), 2000.0, 500.0);
@@ -152,8 +155,8 @@ mod tests {
 
     #[test]
     fn test_plan_type_methods() {
-        let left_set = JoinSet::new_singleton(0);
-        let right_set = JoinSet::new_singleton(1);
+        let left_set = JoinSet::new_singleton(0).unwrap();
+        let right_set = JoinSet::new_singleton(1).unwrap();
         let join_type = PlanType::Join {
             left_set,
             right_set,
