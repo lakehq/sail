@@ -436,7 +436,7 @@
         }
       },
       "output": {
-        "success": "ok"
+        "failure": "error in DataFusion: Error during planning: Failed to coerce arguments to satisfy a call to 'date_add' function: coercion from [Utf8, Int32] to the signature OneOf([Exact([Date32, Int8]), Exact([Date32, Int16]), Exact([Date32, Int32])]) failed No function matches the given name and argument types 'date_add(Utf8, Int32)'. You might need to add explicit type casts.\n\tCandidate functions:\n\tdate_add(Date32, Int8)\n\tdate_add(Date32, Int16)\n\tdate_add(Date32, Int32)"
       }
     },
     {
