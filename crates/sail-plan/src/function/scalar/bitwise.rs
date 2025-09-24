@@ -1,32 +1,12 @@
 use datafusion::arrow::datatypes::DataType;
 use datafusion::functions::expr_fn::abs;
 use datafusion_expr::{cast, expr, lit, when, ExprSchemable, Operator};
+use datafusion_spark::function::bitwise::bit_count::SparkBitCount;
+use datafusion_spark::function::bitwise::bit_get::SparkBitGet;
 use sail_common_datafusion::utils::items::ItemTaker;
 
 use crate::error::{PlanError, PlanResult};
 use crate::function::common::{ScalarFunction, ScalarFunctionInput};
-
-fn bit_count(input: expr::Expr) -> expr::Expr {
-    let mut count = cast(input, DataType::UInt64);
-
-    let masks = [
-        0x5555555555555555u64, // 0101...
-        0x3333333333333333u64, // 0011...
-        0x0F0F0F0F0F0F0F0Fu64, // 00001111...
-        0x0101010101010101u64, // for sum
-    ];
-
-    // parallel reduction
-    count = (count.clone() & lit(masks[0])) + ((count.clone() >> lit(1)) & lit(masks[0]));
-    count = (count.clone() & lit(masks[1])) + ((count.clone() >> lit(2)) & lit(masks[1]));
-    count = (count.clone() & lit(masks[2])) + ((count.clone() >> lit(4)) & lit(masks[2]));
-    count = (count.clone() * lit(masks[3])) >> lit(56);
-
-    expr::Expr::Cast(expr::Cast {
-        expr: Box::new(count),
-        data_type: DataType::Int32,
-    })
-}
 
 fn bit_get(value: expr::Expr, position: expr::Expr) -> expr::Expr {
     cast((value >> position) & lit(1), DataType::Int8)
@@ -65,8 +45,8 @@ pub(super) fn list_built_in_bitwise_functions() -> Vec<(&'static str, ScalarFunc
     vec![
         ("&", F::binary_op(Operator::BitwiseAnd)),
         ("^", F::binary_op(Operator::BitwiseXor)),
-        ("bit_count", F::unary(bit_count)),
-        ("bit_get", F::binary(bit_get)),
+        ("bit_count", F::udf(SparkBitCount::new())),
+        ("bit_get", F::udf(SparkBitGet::new())),
         ("getbit", F::binary(bit_get)),
         ("shiftleft", F::binary_op(Operator::BitwiseShiftLeft)),
         ("<<", F::binary_op(Operator::BitwiseShiftLeft)),

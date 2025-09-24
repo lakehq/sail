@@ -3,10 +3,10 @@ use std::sync::Arc;
 use datafusion::functions::expr_fn;
 use datafusion_common::ScalarValue;
 use datafusion_expr::{expr, ScalarUDF};
+use datafusion_spark::function::hash::crc32::SparkCrc32;
+use datafusion_spark::function::hash::sha1::SparkSha1;
 use sail_common_datafusion::utils::items::ItemTaker;
-use sail_function::scalar::hash::spark_crc32::SparkCrc32;
 use sail_function::scalar::hash::spark_murmur3_hash::SparkMurmur3Hash;
-use sail_function::scalar::hash::spark_sha1::SparkSha1;
 use sail_function::scalar::hash::spark_xxhash64::SparkXxhash64;
 use sail_function::scalar::math::spark_hex_unhex::SparkHex;
 
