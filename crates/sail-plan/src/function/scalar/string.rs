@@ -5,7 +5,7 @@ use datafusion::functions::regex::regexpcount::RegexpCountFunc;
 use datafusion::functions::regex::regexpinstr::RegexpInstrFunc;
 use datafusion_common::{DFSchema, ScalarValue};
 use datafusion_expr::{cast, expr, lit, try_cast, when, ExprSchemable};
-use datafusion_spark::function::string::expr_fn as luhn_check_fn;
+use datafusion_spark::function::string::expr_fn as string_fn;
 use sail_common_datafusion::utils::items::ItemTaker;
 use sail_function::scalar::string::levenshtein::Levenshtein;
 use sail_function::scalar::string::make_valid_utf8::MakeValidUtf8;
@@ -234,7 +234,7 @@ pub(super) fn list_built_in_string_functions() -> Vec<(&'static str, ScalarFunct
         ("lower", F::custom(lower)),
         ("lpad", F::var_arg(expr_fn::lpad)),
         ("ltrim", F::var_arg(rev_args(expr_fn::ltrim))),
-        ("luhn_check", F::unary(luhn_check_fn::luhn_check)),
+        ("luhn_check", F::unary(string_fn::luhn_check)),
         ("make_valid_utf8", F::udf(MakeValidUtf8::new())),
         ("mask", F::udf(SparkMask::new())),
         ("octet_length", F::custom(octet_length)),
