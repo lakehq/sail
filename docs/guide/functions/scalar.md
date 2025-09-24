@@ -38,21 +38,21 @@ rank: 1
 
 ## Bitwise
 
-| Function                                      | Supported          |
-| --------------------------------------------- | ------------------ |
-| `&` (ampersand sign) operator                 | :white_check_mark: |
-| `^` (caret sign) operator                     | :white_check_mark: |
-| `bit_count`                                   | :white_check_mark: |
-| `bit_get`                                     | :white_check_mark: |
-| `getbit`                                      | :white_check_mark: |
-| `shiftleft`                                   | :white_check_mark: |
-| `<<` (bitwise left shift) operator            | :white_check_mark: |
-| `shiftright`                                  | :white_check_mark: |
-| `>>` (bitwise right shift) operator           | :white_check_mark: |
-| `shiftrightunsigned`                          | :white_check_mark: |
-| `>>>` (bitwise unsigned right shift) operator | :white_check_mark: |
-| `\|` (pipe sign) operator                     | :white_check_mark: |
-| `~` (tilde sign) operator                     | :white_check_mark: |
+| Function                             | Supported          |
+| ------------------------------------ | ------------------ |
+| `&` (bitwise and)                    | :white_check_mark: |
+| `^` (bitwise exclusive or)           | :white_check_mark: |
+| `bit_count`                          | :white_check_mark: |
+| `bit_get`                            | :white_check_mark: |
+| `getbit`                             | :white_check_mark: |
+| `shiftleft`                          | :white_check_mark: |
+| `<<` (bitwise left shift)            | :white_check_mark: |
+| `shiftright`                         | :white_check_mark: |
+| `>>` (bitwise right shift)           | :white_check_mark: |
+| `shiftrightunsigned`                 | :white_check_mark: |
+| `>>>` (bitwise unsigned right shift) | :white_check_mark: |
+| `\|` (bitwise or)                    | :white_check_mark: |
+| `~` (bitwise not)                    | :white_check_mark: |
 
 ## Collection
 
@@ -240,77 +240,77 @@ rank: 1
 
 ## Math
 
-| Function                     | Supported          |
-| ---------------------------- | ------------------ |
-| `%` (percent sign) operator  | :white_check_mark: |
-| `*` (asterisk sign) operator | :white_check_mark: |
-| `+` (plus sign) operator     | :white_check_mark: |
-| `-` (minus sign) operator    | :white_check_mark: |
-| `/` (slash sign) operator    | :white_check_mark: |
-| `abs`                        | :white_check_mark: |
-| `acos`                       | :white_check_mark: |
-| `acosh`                      | :white_check_mark: |
-| `asin`                       | :white_check_mark: |
-| `asinh`                      | :white_check_mark: |
-| `atan`                       | :white_check_mark: |
-| `atan2`                      | :white_check_mark: |
-| `atanh`                      | :white_check_mark: |
-| `bin`                        | :white_check_mark: |
-| `bround`                     | :white_check_mark: |
-| `cbrt`                       | :white_check_mark: |
-| `ceil`                       | :white_check_mark: |
-| `ceiling`                    | :white_check_mark: |
-| `conv`                       | :white_check_mark: |
-| `cos`                        | :white_check_mark: |
-| `cosh`                       | :white_check_mark: |
-| `cot`                        | :white_check_mark: |
-| `csc`                        | :white_check_mark: |
-| `degrees`                    | :white_check_mark: |
-| `div`                        | :white_check_mark: |
-| `e`                          | :white_check_mark: |
-| `exp`                        | :white_check_mark: |
-| `expm1`                      | :white_check_mark: |
-| `factorial`                  | :white_check_mark: |
-| `floor`                      | :white_check_mark: |
-| `greatest`                   | :white_check_mark: |
-| `hex`                        | :white_check_mark: |
-| `hypot`                      | :white_check_mark: |
-| `least`                      | :white_check_mark: |
-| `ln`                         | :white_check_mark: |
-| `log`                        | :white_check_mark: |
-| `log10`                      | :white_check_mark: |
-| `log1p`                      | :white_check_mark: |
-| `log2`                       | :white_check_mark: |
-| `mod`                        | :white_check_mark: |
-| `negative`                   | :white_check_mark: |
-| `pi`                         | :white_check_mark: |
-| `pmod`                       | :white_check_mark: |
-| `positive`                   | :white_check_mark: |
-| `pow`                        | :white_check_mark: |
-| `power`                      | :white_check_mark: |
-| `radians`                    | :white_check_mark: |
-| `rand`                       | :white_check_mark: |
-| `random_poisson`             | :white_check_mark: |
-| `randn`                      | :white_check_mark: |
-| `random`                     | :white_check_mark: |
-| `rint`                       | :white_check_mark: |
-| `round`                      | :white_check_mark: |
-| `sec`                        | :white_check_mark: |
-| `sign`                       | :white_check_mark: |
-| `signum`                     | :white_check_mark: |
-| `sin`                        | :white_check_mark: |
-| `sinh`                       | :white_check_mark: |
-| `sqrt`                       | :white_check_mark: |
-| `tan`                        | :white_check_mark: |
-| `tanh`                       | :white_check_mark: |
-| `try_add`                    | :white_check_mark: |
-| `try_divide`                 | :white_check_mark: |
-| `try_multiply`               | :white_check_mark: |
-| `try_mod`                    | :white_check_mark: |
-| `try_subtract`               | :white_check_mark: |
-| `unhex`                      | :white_check_mark: |
-| `width_bucket`               | :white_check_mark: |
-| `uniform`                    | :construction:     |
+| Function             | Supported          |
+| -------------------- | ------------------ |
+| `%` (remainder)      | :white_check_mark: |
+| `*` (multiplication) | :white_check_mark: |
+| `+` (addition)       | :white_check_mark: |
+| `-` (subtraction)    | :white_check_mark: |
+| `/` (division)       | :white_check_mark: |
+| `abs`                | :white_check_mark: |
+| `acos`               | :white_check_mark: |
+| `acosh`              | :white_check_mark: |
+| `asin`               | :white_check_mark: |
+| `asinh`              | :white_check_mark: |
+| `atan`               | :white_check_mark: |
+| `atan2`              | :white_check_mark: |
+| `atanh`              | :white_check_mark: |
+| `bin`                | :white_check_mark: |
+| `bround`             | :white_check_mark: |
+| `cbrt`               | :white_check_mark: |
+| `ceil`               | :white_check_mark: |
+| `ceiling`            | :white_check_mark: |
+| `conv`               | :white_check_mark: |
+| `cos`                | :white_check_mark: |
+| `cosh`               | :white_check_mark: |
+| `cot`                | :white_check_mark: |
+| `csc`                | :white_check_mark: |
+| `degrees`            | :white_check_mark: |
+| `div`                | :white_check_mark: |
+| `e`                  | :white_check_mark: |
+| `exp`                | :white_check_mark: |
+| `expm1`              | :white_check_mark: |
+| `factorial`          | :white_check_mark: |
+| `floor`              | :white_check_mark: |
+| `greatest`           | :white_check_mark: |
+| `hex`                | :white_check_mark: |
+| `hypot`              | :white_check_mark: |
+| `least`              | :white_check_mark: |
+| `ln`                 | :white_check_mark: |
+| `log`                | :white_check_mark: |
+| `log10`              | :white_check_mark: |
+| `log1p`              | :white_check_mark: |
+| `log2`               | :white_check_mark: |
+| `mod`                | :white_check_mark: |
+| `negative`           | :white_check_mark: |
+| `pi`                 | :white_check_mark: |
+| `pmod`               | :white_check_mark: |
+| `positive`           | :white_check_mark: |
+| `pow`                | :white_check_mark: |
+| `power`              | :white_check_mark: |
+| `radians`            | :white_check_mark: |
+| `rand`               | :white_check_mark: |
+| `random_poisson`     | :white_check_mark: |
+| `randn`              | :white_check_mark: |
+| `random`             | :white_check_mark: |
+| `rint`               | :white_check_mark: |
+| `round`              | :white_check_mark: |
+| `sec`                | :white_check_mark: |
+| `sign`               | :white_check_mark: |
+| `signum`             | :white_check_mark: |
+| `sin`                | :white_check_mark: |
+| `sinh`               | :white_check_mark: |
+| `sqrt`               | :white_check_mark: |
+| `tan`                | :white_check_mark: |
+| `tanh`               | :white_check_mark: |
+| `try_add`            | :white_check_mark: |
+| `try_divide`         | :white_check_mark: |
+| `try_multiply`       | :white_check_mark: |
+| `try_mod`            | :white_check_mark: |
+| `try_subtract`       | :white_check_mark: |
+| `unhex`              | :white_check_mark: |
+| `width_bucket`       | :white_check_mark: |
+| `uniform`            | :construction:     |
 
 ## Misc
 
@@ -353,29 +353,29 @@ rank: 1
 
 ## Predicate
 
-| Function                       | Supported          |
-| ------------------------------ | ------------------ |
-| `!` (bang sign) operator       | :white_check_mark: |
-| `!=` (bang eq sign) operator   | :white_check_mark: |
-| `<` (lt sign) operator         | :white_check_mark: |
-| `<=` (lt eq sign) operator     | :white_check_mark: |
-| `<=>` (lt eq gt sign) operator | :white_check_mark: |
-| `=` (eq sign) operator         | :white_check_mark: |
-| `==` (eq eq sign) operator     | :white_check_mark: |
-| `>` (gt sign) operator         | :white_check_mark: |
-| `>=` (gt eq sign) operator     | :white_check_mark: |
-| `and`                          | :white_check_mark: |
-| `ilike`                        | :white_check_mark: |
-| `in`                           | :white_check_mark: |
-| `isnan`                        | :white_check_mark: |
-| `isnotnull`                    | :white_check_mark: |
-| `isnull`                       | :white_check_mark: |
-| `like`                         | :white_check_mark: |
-| `not`                          | :white_check_mark: |
-| `or`                           | :white_check_mark: |
-| `regexp`                       | :white_check_mark: |
-| `regexp_like`                  | :white_check_mark: |
-| `rlike`                        | :white_check_mark: |
+| Function                     | Supported          |
+| ---------------------------- | ------------------ |
+| `!` (logical not)            | :white_check_mark: |
+| `!=` (not equal)             | :white_check_mark: |
+| `<` (less than)              | :white_check_mark: |
+| `<=` (less than or equal)    | :white_check_mark: |
+| `<=>` (not distinct from)    | :white_check_mark: |
+| `=` (equal)                  | :white_check_mark: |
+| `==` (equal)                 | :white_check_mark: |
+| `>` (greater than)           | :white_check_mark: |
+| `>=` (greater than or equal) | :white_check_mark: |
+| `and`                        | :white_check_mark: |
+| `ilike`                      | :white_check_mark: |
+| `in`                         | :white_check_mark: |
+| `isnan`                      | :white_check_mark: |
+| `isnotnull`                  | :white_check_mark: |
+| `isnull`                     | :white_check_mark: |
+| `like`                       | :white_check_mark: |
+| `not`                        | :white_check_mark: |
+| `or`                         | :white_check_mark: |
+| `regexp`                     | :white_check_mark: |
+| `regexp_like`                | :white_check_mark: |
+| `rlike`                      | :white_check_mark: |
 
 ## String
 

@@ -6,15 +6,15 @@ use datafusion_common::ScalarValue;
 use datafusion_expr::{cast, expr, is_null, lit, not, or, when, ExprSchemable, ScalarUDF};
 use datafusion_functions_nested::make_array::make_array;
 use datafusion_functions_nested::string::ArrayToString;
+use sail_common_datafusion::utils::items::ItemTaker;
+use sail_function::scalar::array::arrays_zip::ArraysZip;
+use sail_function::scalar::array::spark_array::SparkArray;
+use sail_function::scalar::array::spark_array_min_max::{ArrayMax, ArrayMin};
+use sail_function::scalar::array::spark_sequence::SparkSequence;
+use sail_function::scalar::misc::raise_error::RaiseError;
 
 use crate::error::{PlanError, PlanResult};
-use crate::extension::function::array::arrays_zip::ArraysZip;
-use crate::extension::function::array::spark_array::SparkArray;
-use crate::extension::function::array::spark_array_min_max::{ArrayMax, ArrayMin};
-use crate::extension::function::array::spark_sequence::SparkSequence;
-use crate::extension::function::misc::raise_error::RaiseError;
 use crate::function::common::{ScalarFunction, ScalarFunctionInput};
-use crate::utils::ItemTaker;
 
 fn array_repeat(element: expr::Expr, count: expr::Expr) -> expr::Expr {
     expr_fn::array_repeat(element, cast(count, DataType::Int64))

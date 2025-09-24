@@ -4,7 +4,7 @@ use std::sync::Arc;
 
 use chrono::Utc;
 use delta_kernel::engine::arrow_conversion::TryIntoKernel;
-use delta_kernel::expressions::column_expr;
+use delta_kernel::expressions::column_expr_ref;
 use delta_kernel::schema::StructField;
 use delta_kernel::table_properties::TableProperties;
 use delta_kernel::{EvaluationHandler, Expression};
@@ -213,9 +213,9 @@ impl DeltaTableState {
         flatten: bool,
     ) -> Result<datafusion::arrow::record_batch::RecordBatch, DeltaTableError> {
         let mut expressions = vec![
-            column_expr!("path"),
-            column_expr!("size"),
-            column_expr!("modificationTime"),
+            column_expr_ref!("path"),
+            column_expr_ref!("size"),
+            column_expr_ref!("modificationTime"),
         ];
         let mut fields = vec![
             StructField::not_null("path", DataType::STRING),
@@ -231,24 +231,24 @@ impl DeltaTableState {
             })?
             .with_name("num_records");
 
-        expressions.push(column_expr!("stats_parsed.numRecords"));
+        expressions.push(column_expr_ref!("stats_parsed.numRecords"));
         fields.push(num_records_field);
 
         if let Some(null_count_field) = stats_schema.field("nullCount") {
             let null_count_field = null_count_field.with_name("null_count");
-            expressions.push(column_expr!("stats_parsed.nullCount"));
+            expressions.push(column_expr_ref!("stats_parsed.nullCount"));
             fields.push(null_count_field);
         }
 
         if let Some(min_values_field) = stats_schema.field("minValues") {
             let min_values_field = min_values_field.with_name("min");
-            expressions.push(column_expr!("stats_parsed.minValues"));
+            expressions.push(column_expr_ref!("stats_parsed.minValues"));
             fields.push(min_values_field);
         }
 
         if let Some(max_values_field) = stats_schema.field("maxValues") {
             let max_values_field = max_values_field.with_name("max");
-            expressions.push(column_expr!("stats_parsed.maxValues"));
+            expressions.push(column_expr_ref!("stats_parsed.maxValues"));
             fields.push(max_values_field);
         }
 
@@ -257,7 +257,7 @@ impl DeltaTableState {
                 "partition",
                 DataType::struct_type(partition_schema.fields().cloned()),
             ));
-            expressions.push(column_expr!("partitionValues_parsed"));
+            expressions.push(column_expr_ref!("partitionValues_parsed"));
         }
 
         let expression = Expression::Struct(expressions);
@@ -267,8 +267,11 @@ impl DeltaTableState {
         let input_schema = Arc::new(input_schema.as_ref().try_into_kernel()?);
         let actions = self.snapshot.files.clone();
 
-        let evaluator =
-            ARROW_HANDLER.new_expression_evaluator(input_schema, expression, table_schema);
+        let evaluator = ARROW_HANDLER.new_expression_evaluator(
+            input_schema,
+            Arc::new(expression),
+            table_schema,
+        );
         let result = evaluator.evaluate_arrow(actions)?;
 
         if flatten {

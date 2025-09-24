@@ -20,17 +20,17 @@ use datafusion_expr::{
     cast, expr, lit, when, AggregateUDF, ExprSchemable, WindowFunctionDefinition,
 };
 use lazy_static::lazy_static;
+use sail_common_datafusion::utils::items::ItemTaker;
+use sail_function::aggregate::kurtosis::KurtosisFunction;
+use sail_function::aggregate::max_min_by::{MaxByFunction, MinByFunction};
+use sail_function::aggregate::mode::ModeFunction;
+use sail_function::aggregate::skewness::SkewnessFunc;
 
 use crate::error::{PlanError, PlanResult};
-use crate::extension::function::kurtosis::KurtosisFunction;
-use crate::extension::function::max_min_by::{MaxByFunction, MinByFunction};
-use crate::extension::function::mode::ModeFunction;
-use crate::extension::function::skewness::SkewnessFunc;
 use crate::function::common::{
     get_arguments_and_null_treatment, get_null_treatment, WinFunction, WinFunctionInput,
 };
 use crate::function::transform_count_star_wildcard_expr;
-use crate::utils::ItemTaker;
 
 lazy_static! {
     static ref BUILT_IN_WINDOW_FUNCTIONS: HashMap<&'static str, WinFunction> =
@@ -44,6 +44,7 @@ fn nth_value(input: WinFunctionInput) -> PlanResult<expr::Expr> {
         order_by,
         window_frame,
         ignore_nulls,
+        distinct,
         function_context: _,
     } = input;
     let mut args = arguments;
@@ -67,7 +68,9 @@ fn nth_value(input: WinFunctionInput) -> PlanResult<expr::Expr> {
             partition_by,
             order_by,
             window_frame,
+            filter: None,
             null_treatment,
+            distinct,
         },
     })))
 }
@@ -79,6 +82,7 @@ fn avg(input: WinFunctionInput) -> PlanResult<expr::Expr> {
         order_by,
         window_frame,
         ignore_nulls,
+        distinct,
         function_context: _,
     } = input;
     let (args, null_treatment) = get_arguments_and_null_treatment(arguments, ignore_nulls)?;
@@ -97,7 +101,9 @@ fn avg(input: WinFunctionInput) -> PlanResult<expr::Expr> {
             partition_by,
             order_by,
             window_frame,
+            filter: None,
             null_treatment,
+            distinct,
         },
     })))
 }
@@ -109,6 +115,7 @@ fn first_value(input: WinFunctionInput) -> PlanResult<expr::Expr> {
         order_by,
         window_frame,
         ignore_nulls,
+        distinct,
         function_context: _,
     } = input;
     let (args, null_treatment) = get_arguments_and_null_treatment(arguments, ignore_nulls)?;
@@ -119,7 +126,9 @@ fn first_value(input: WinFunctionInput) -> PlanResult<expr::Expr> {
             partition_by,
             order_by,
             window_frame,
+            filter: None,
             null_treatment,
+            distinct,
         },
     })))
 }
@@ -131,6 +140,7 @@ fn last_value(input: WinFunctionInput) -> PlanResult<expr::Expr> {
         order_by,
         window_frame,
         ignore_nulls,
+        distinct,
         function_context: _,
     } = input;
     let (args, null_treatment) = get_arguments_and_null_treatment(arguments, ignore_nulls)?;
@@ -141,7 +151,9 @@ fn last_value(input: WinFunctionInput) -> PlanResult<expr::Expr> {
             partition_by,
             order_by,
             window_frame,
+            filter: None,
             null_treatment,
+            distinct,
         },
     })))
 }
@@ -153,6 +165,7 @@ fn kurtosis(input: WinFunctionInput) -> PlanResult<expr::Expr> {
         order_by,
         window_frame,
         ignore_nulls,
+        distinct,
         function_context: _,
     } = input;
     let args = arguments
@@ -173,7 +186,9 @@ fn kurtosis(input: WinFunctionInput) -> PlanResult<expr::Expr> {
             partition_by,
             order_by,
             window_frame,
+            filter: None,
             null_treatment: get_null_treatment(ignore_nulls),
+            distinct,
         },
     })))
 }
@@ -185,6 +200,7 @@ fn max_by(input: WinFunctionInput) -> PlanResult<expr::Expr> {
         order_by,
         window_frame,
         ignore_nulls,
+        distinct,
         function_context: _,
     } = input;
     Ok(expr::Expr::WindowFunction(Box::new(expr::WindowFunction {
@@ -196,7 +212,9 @@ fn max_by(input: WinFunctionInput) -> PlanResult<expr::Expr> {
             partition_by,
             order_by,
             window_frame,
+            filter: None,
             null_treatment: get_null_treatment(ignore_nulls),
+            distinct,
         },
     })))
 }
@@ -208,6 +226,7 @@ fn min_by(input: WinFunctionInput) -> PlanResult<expr::Expr> {
         order_by,
         window_frame,
         ignore_nulls,
+        distinct,
         function_context: _,
     } = input;
     Ok(expr::Expr::WindowFunction(Box::new(expr::WindowFunction {
@@ -219,7 +238,9 @@ fn min_by(input: WinFunctionInput) -> PlanResult<expr::Expr> {
             partition_by,
             order_by,
             window_frame,
+            filter: None,
             null_treatment: get_null_treatment(ignore_nulls),
+            distinct,
         },
     })))
 }
@@ -231,6 +252,7 @@ fn mode(input: WinFunctionInput) -> PlanResult<expr::Expr> {
         order_by,
         window_frame,
         ignore_nulls,
+        distinct,
         function_context: _,
     } = input;
     Ok(expr::Expr::WindowFunction(Box::new(expr::WindowFunction {
@@ -242,7 +264,9 @@ fn mode(input: WinFunctionInput) -> PlanResult<expr::Expr> {
             partition_by,
             order_by,
             window_frame,
+            filter: None,
             null_treatment: get_null_treatment(ignore_nulls),
+            distinct,
         },
     })))
 }
@@ -254,6 +278,7 @@ fn skewness(input: WinFunctionInput) -> PlanResult<expr::Expr> {
         order_by,
         window_frame,
         ignore_nulls,
+        distinct,
         function_context: _,
     } = input;
     let args = arguments
@@ -274,7 +299,9 @@ fn skewness(input: WinFunctionInput) -> PlanResult<expr::Expr> {
             partition_by,
             order_by,
             window_frame,
+            filter: None,
             null_treatment: get_null_treatment(ignore_nulls),
+            distinct,
         },
     })))
 }
@@ -286,6 +313,7 @@ fn count(input: WinFunctionInput) -> PlanResult<expr::Expr> {
         order_by,
         window_frame,
         ignore_nulls,
+        distinct,
         function_context: _,
     } = input;
     let args = transform_count_star_wildcard_expr(arguments);
@@ -296,7 +324,9 @@ fn count(input: WinFunctionInput) -> PlanResult<expr::Expr> {
             partition_by,
             order_by,
             window_frame,
+            filter: None,
             null_treatment: get_null_treatment(ignore_nulls),
+            distinct,
         },
     })))
 }
@@ -308,6 +338,7 @@ fn count_if(input: WinFunctionInput) -> PlanResult<expr::Expr> {
         order_by,
         window_frame,
         ignore_nulls,
+        distinct,
         function_context: _,
     } = input;
     match arguments.len() {
@@ -318,7 +349,9 @@ fn count_if(input: WinFunctionInput) -> PlanResult<expr::Expr> {
                 partition_by,
                 order_by,
                 window_frame,
+                filter: None,
                 null_treatment: get_null_treatment(ignore_nulls),
+                distinct,
             },
         }))),
         _ => Err(PlanError::invalid("`count_if` requires 1 argument")),
@@ -332,6 +365,7 @@ fn collect_set(input: WinFunctionInput) -> PlanResult<expr::Expr> {
         order_by,
         window_frame,
         ignore_nulls: _,
+        distinct,
         function_context: _,
     } = input;
     Ok(expr::Expr::WindowFunction(Box::new(expr::WindowFunction {
@@ -341,9 +375,9 @@ fn collect_set(input: WinFunctionInput) -> PlanResult<expr::Expr> {
             partition_by,
             order_by,
             window_frame,
+            filter: None,
             null_treatment: get_null_treatment(Some(true)),
-            // TODO: DataFusion 50 introduces distinct parameter
-            // distinct: true,
+            distinct,
         },
     })))
 }
@@ -355,6 +389,7 @@ fn array_agg_compacted(input: WinFunctionInput) -> PlanResult<expr::Expr> {
         order_by,
         window_frame,
         ignore_nulls: _,
+        distinct,
         function_context: _,
     } = input;
     Ok(expr::Expr::WindowFunction(Box::new(expr::WindowFunction {
@@ -364,7 +399,9 @@ fn array_agg_compacted(input: WinFunctionInput) -> PlanResult<expr::Expr> {
             partition_by,
             order_by,
             window_frame,
+            filter: None,
             null_treatment: get_null_treatment(Some(true)),
+            distinct,
         },
     })))
 }
@@ -376,6 +413,7 @@ fn listagg(input: WinFunctionInput) -> PlanResult<expr::Expr> {
         order_by,
         window_frame,
         ignore_nulls: _,
+        distinct,
         function_context,
     } = input;
     let schema = function_context.schema;
@@ -391,14 +429,15 @@ fn listagg(input: WinFunctionInput) -> PlanResult<expr::Expr> {
             args: vec![agg_col.clone()],
             partition_by,
             order_by,
-            // TODO: DataFusion 50 introduces distinct parameter
             // order_by: if input.distinct {
             //     vec![agg_col.clone().sort(true, true)]
             // } else {
             //     input.order_by
             // },
             window_frame,
+            filter: None,
             null_treatment: get_null_treatment(Some(true)),
+            distinct,
         },
     }));
 
@@ -428,6 +467,7 @@ fn median(input: WinFunctionInput) -> PlanResult<expr::Expr> {
         order_by,
         window_frame,
         ignore_nulls,
+        distinct,
         function_context: _,
     } = input;
     Ok(cast(
@@ -438,10 +478,39 @@ fn median(input: WinFunctionInput) -> PlanResult<expr::Expr> {
                 partition_by,
                 order_by,
                 window_frame,
+                filter: None,
                 null_treatment: get_null_treatment(ignore_nulls),
+                distinct,
             },
         })),
         DataType::Float64,
+    ))
+}
+
+fn approx_count_distinct(input: WinFunctionInput) -> PlanResult<expr::Expr> {
+    let WinFunctionInput {
+        arguments,
+        partition_by,
+        order_by,
+        window_frame,
+        ignore_nulls,
+        distinct,
+        function_context: _,
+    } = input;
+    Ok(cast(
+        expr::Expr::WindowFunction(Box::new(expr::WindowFunction {
+            fun: WindowFunctionDefinition::AggregateUDF(approx_distinct::approx_distinct_udaf()),
+            params: WindowFunctionParams {
+                args: arguments,
+                partition_by,
+                order_by,
+                window_frame,
+                filter: None,
+                null_treatment: get_null_treatment(ignore_nulls),
+                distinct,
+            },
+        })),
+        DataType::Int64,
     ))
 }
 
@@ -465,10 +534,7 @@ fn list_built_in_window_functions() -> Vec<(&'static str, WinFunction)> {
         // Aggregate
         ("any", F::aggregate(bool_and_or::bool_or_udaf)),
         ("any_value", F::custom(first_value)),
-        (
-            "approx_count_distinct",
-            F::aggregate(approx_distinct::approx_distinct_udaf),
-        ),
+        ("approx_count_distinct", F::custom(approx_count_distinct)),
         (
             "approx_percentile",
             F::aggregate(approx_percentile_cont::approx_percentile_cont_udaf),

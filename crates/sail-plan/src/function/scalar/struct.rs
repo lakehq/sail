@@ -2,9 +2,9 @@ use std::sync::Arc;
 
 use datafusion::functions::expr_fn;
 use datafusion_expr::{expr, Expr, ScalarUDF};
+use sail_function::scalar::struct_function::StructFunction;
 
 use crate::error::{PlanError, PlanResult};
-use crate::extension::function::struct_function::StructFunction;
 use crate::function::common::{ScalarFunction, ScalarFunctionInput};
 
 fn r#struct(input: ScalarFunctionInput) -> PlanResult<Expr> {

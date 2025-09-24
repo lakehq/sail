@@ -4,7 +4,7 @@ use arrow::array::timezone::Tz;
 use arrow::datatypes::Date32Type;
 use datafusion_expr::expr;
 use sail_common::spec;
-use sail_common_datafusion::datetime::localize_with_fallback;
+use sail_common_datafusion::utils::datetime::localize_with_fallback;
 use sail_sql_analyzer::parser::{parse_date, parse_timestamp};
 
 use crate::config::DefaultTimestampType;

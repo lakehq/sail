@@ -11,6 +11,7 @@ use datafusion::physical_optimizer::filter_pushdown::FilterPushdown;
 use datafusion::physical_optimizer::join_selection::JoinSelection;
 use datafusion::physical_optimizer::limit_pushdown::LimitPushdown;
 use datafusion::physical_optimizer::limited_distinct_aggregation::LimitedDistinctAggregation;
+use datafusion::physical_optimizer::optimizer::PhysicalOptimizer;
 use datafusion::physical_optimizer::output_requirements::OutputRequirements;
 use datafusion::physical_optimizer::projection_pushdown::ProjectionPushdown;
 use datafusion::physical_optimizer::sanity_checker::SanityCheckPlan;
@@ -23,6 +24,18 @@ use crate::join_reorder::JoinReorder;
 
 mod explicit_repartition;
 mod join_reorder;
+
+#[expect(clippy::unwrap_used)]
+fn limit_push_past_windows() -> Arc<dyn PhysicalOptimizerRule + Send + Sync> {
+    // TODO: remove this workaround after the rule is made public in DataFusion
+    //   https://github.com/apache/datafusion/pull/17736
+    PhysicalOptimizer::default()
+        .rules
+        .iter()
+        .find(|rule| rule.name() == "LimitPushPastWindows")
+        .cloned()
+        .unwrap()
+}
 
 pub fn get_physical_optimizers() -> Vec<Arc<dyn PhysicalOptimizerRule + Send + Sync>> {
     vec![
@@ -42,6 +55,7 @@ pub fn get_physical_optimizers() -> Vec<Arc<dyn PhysicalOptimizerRule + Send + S
         Arc::new(CoalesceAsyncExecInput::new()),
         Arc::new(OutputRequirements::new_remove_mode()),
         Arc::new(TopKAggregation::new()),
+        limit_push_past_windows(),
         Arc::new(LimitPushdown::new()),
         Arc::new(ProjectionPushdown::new()),
         Arc::new(EnsureCooperative::new()),

@@ -12,17 +12,17 @@ use datafusion_common::ScalarValue;
 use datafusion_expr::expr::{AggregateFunction, AggregateFunctionParams};
 use datafusion_expr::{cast, expr, lit, when, AggregateUDF, ExprSchemable};
 use lazy_static::lazy_static;
+use sail_common_datafusion::utils::items::ItemTaker;
+use sail_function::aggregate::kurtosis::KurtosisFunction;
+use sail_function::aggregate::max_min_by::{MaxByFunction, MinByFunction};
+use sail_function::aggregate::mode::ModeFunction;
+use sail_function::aggregate::skewness::SkewnessFunc;
 
 use crate::error::{PlanError, PlanResult};
-use crate::extension::function::kurtosis::KurtosisFunction;
-use crate::extension::function::max_min_by::{MaxByFunction, MinByFunction};
-use crate::extension::function::mode::ModeFunction;
-use crate::extension::function::skewness::SkewnessFunc;
 use crate::function::common::{
     get_arguments_and_null_treatment, get_null_treatment, AggFunction, AggFunctionInput,
 };
 use crate::function::transform_count_star_wildcard_expr;
-use crate::utils::ItemTaker;
 
 lazy_static! {
     static ref BUILT_IN_AGGREGATE_FUNCTIONS: HashMap<&'static str, AggFunction> =
@@ -296,16 +296,29 @@ fn median(input: AggFunctionInput) -> PlanResult<expr::Expr> {
     ))
 }
 
+fn approx_count_distinct(input: AggFunctionInput) -> PlanResult<expr::Expr> {
+    Ok(cast(
+        expr::Expr::AggregateFunction(AggregateFunction {
+            func: approx_distinct::approx_distinct_udaf(),
+            params: AggregateFunctionParams {
+                args: input.arguments.clone(),
+                distinct: input.distinct,
+                order_by: input.order_by,
+                filter: input.filter,
+                null_treatment: get_null_treatment(input.ignore_nulls),
+            },
+        }),
+        DataType::Int64,
+    ))
+}
+
 fn list_built_in_aggregate_functions() -> Vec<(&'static str, AggFunction)> {
     use crate::function::common::AggFunctionBuilder as F;
 
     vec![
         ("any", F::default(bool_and_or::bool_or_udaf)),
         ("any_value", F::custom(first_value)),
-        (
-            "approx_count_distinct",
-            F::default(approx_distinct::approx_distinct_udaf),
-        ),
+        ("approx_count_distinct", F::custom(approx_count_distinct)),
         (
             "approx_percentile",
             F::default(approx_percentile_cont::approx_percentile_cont_udaf),

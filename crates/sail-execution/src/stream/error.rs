@@ -5,6 +5,7 @@ use std::sync::Arc;
 
 use arrow_flight::error::FlightError;
 use sail_common_datafusion::error::{CommonErrorCause, RemotePythonError};
+use sail_python_udf::error::PyErrExtractor;
 use tonic::{Code, Status};
 use tonic_types::{ErrorDetails, StatusExt};
 
@@ -99,6 +100,7 @@ impl From<CommonErrorCause> for TaskStreamError {
             | CommonErrorCause::ArrowArithmeticOverflow(x)
             | CommonErrorCause::ArrowDictionaryKeyOverflow(x)
             | CommonErrorCause::ArrowRunEndIndexOverflow(x)
+            | CommonErrorCause::ArrowOffsetOverflow(x)
             | CommonErrorCause::FormatCsv(x)
             | CommonErrorCause::FormatJson(x)
             | CommonErrorCause::FormatParquet(x)
@@ -108,8 +110,8 @@ impl From<CommonErrorCause> for TaskStreamError {
             | CommonErrorCause::Configuration(x)
             | CommonErrorCause::Execution(x)
             | CommonErrorCause::DeltaTable(x) => Self::Unknown(x),
-            CommonErrorCause::Python { summary, traceback } => {
-                Self::External(Arc::new(RemotePythonError { summary, traceback }))
+            CommonErrorCause::Python(cause) => {
+                Self::External(Arc::new(RemotePythonError::from(cause)))
             }
         }
     }
@@ -119,7 +121,7 @@ impl From<TaskStreamError> for CommonErrorCause {
     fn from(value: TaskStreamError) -> Self {
         match value {
             TaskStreamError::Unknown(x) => CommonErrorCause::Unknown(x),
-            TaskStreamError::External(e) => CommonErrorCause::new(&e),
+            TaskStreamError::External(e) => CommonErrorCause::new::<PyErrExtractor>(&e),
         }
     }
 }

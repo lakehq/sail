@@ -1092,10 +1092,8 @@ pub async fn find_files_physical(
     snapshot: &DeltaTableState,
     log_store: LogStoreRef,
     state: &SessionState,
-    predicate: Option<Arc<dyn datafusion::physical_expr::PhysicalExpr>>,
-    adapter_factory: Arc<
-        dyn datafusion::physical_expr::schema_rewriter::PhysicalExprAdapterFactory,
-    >,
+    predicate: Option<Arc<dyn PhysicalExpr>>,
+    adapter_factory: Arc<dyn datafusion_physical_expr_adapter::PhysicalExprAdapterFactory>,
 ) -> DeltaResult<FindFiles> {
     let current_metadata = snapshot.metadata();
 

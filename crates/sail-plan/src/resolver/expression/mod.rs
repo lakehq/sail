@@ -4,11 +4,11 @@ use async_recursion::async_recursion;
 use datafusion_common::DFSchemaRef;
 use datafusion_expr::expr;
 use sail_common::spec;
+use sail_common_datafusion::utils::items::ItemTaker;
 
 use crate::error::{PlanError, PlanResult};
 use crate::resolver::state::PlanResolverState;
 use crate::resolver::PlanResolver;
-use crate::utils::ItemTaker;
 
 mod attribute;
 mod cast;

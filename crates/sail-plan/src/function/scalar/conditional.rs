@@ -2,10 +2,10 @@ use arrow::datatypes::DataType;
 use datafusion::functions::expr_fn;
 use datafusion_common::ScalarValue;
 use datafusion_expr::{expr, lit, ExprSchemable};
+use sail_common_datafusion::utils::items::ItemTaker;
 
 use crate::error::PlanResult;
 use crate::function::common::{ScalarFunction, ScalarFunctionInput};
-use crate::utils::ItemTaker;
 
 fn case(input: ScalarFunctionInput) -> PlanResult<expr::Expr> {
     let ScalarFunctionInput { arguments, .. } = input;

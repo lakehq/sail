@@ -8,6 +8,7 @@ use datafusion_expr::{
     expr, AggregateUDF, ExprSchemable, WindowFrame, WindowFrameBound, WindowFrameUnits,
 };
 use sail_common::spec;
+use sail_common_datafusion::utils::items::ItemTaker;
 use sail_python_udf::cereal::pyspark_udf::PySparkUdfPayload;
 use sail_python_udf::get_udf_name;
 use sail_python_udf::udf::pyspark_udaf::PySparkGroupAggregateUDF;
@@ -18,7 +19,6 @@ use crate::function::get_built_in_window_function;
 use crate::resolver::expression::NamedExpr;
 use crate::resolver::state::PlanResolverState;
 use crate::resolver::PlanResolver;
-use crate::utils::ItemTaker;
 
 impl PlanResolver<'_> {
     pub(super) async fn resolve_expression_window(
@@ -90,6 +90,7 @@ impl PlanResolver<'_> {
                     order_by: sorts,
                     window_frame,
                     ignore_nulls,
+                    distinct: is_distinct,
                     function_context: FunctionContextInput {
                         argument_display_names: &argument_display_names,
                         plan_config: &self.config,
@@ -115,9 +116,6 @@ impl PlanResolver<'_> {
                     arguments,
                     function,
                 } = function;
-                if is_distinct {
-                    return Err(PlanError::todo("distinct window function"));
-                }
                 let function_name: String = function_name.into();
                 let (argument_display_names, arguments) = self
                     .resolve_expressions_and_names(arguments, schema, state)
@@ -162,7 +160,9 @@ impl PlanResolver<'_> {
                         partition_by,
                         order_by: sorts,
                         window_frame,
+                        filter: None,
                         null_treatment: get_null_treatment(None),
+                        distinct: is_distinct,
                     },
                 }));
                 (window, function_name, argument_display_names, false)

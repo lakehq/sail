@@ -9,7 +9,7 @@ use sail_catalog::provider::{
     CreateViewOptions, DropTemporaryViewOptions, DropViewOptions,
 };
 use sail_common::spec;
-use sail_common_datafusion::utils::rename_logical_plan;
+use sail_common_datafusion::rename::logical_plan::rename_logical_plan;
 
 use crate::error::PlanResult;
 use crate::resolver::state::PlanResolverState;

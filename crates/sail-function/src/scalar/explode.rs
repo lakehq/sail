@@ -1,0 +1,88 @@
+use std::any::Any;
+
+use datafusion::arrow::datatypes::DataType;
+use datafusion::common::Result;
+use datafusion::logical_expr::{ColumnarValue, ScalarUDFImpl, Signature, Volatility};
+use datafusion_common::plan_err;
+use datafusion_expr::ScalarFunctionArgs;
+
+pub fn explode_name_to_kind(name: &str) -> Result<ExplodeKind> {
+    match name {
+        "explode" => Ok(ExplodeKind::Explode),
+        "explode_outer" => Ok(ExplodeKind::ExplodeOuter),
+        "posexplode" => Ok(ExplodeKind::PosExplode),
+        "posexplode_outer" => Ok(ExplodeKind::PosExplodeOuter),
+        "inline" => Ok(ExplodeKind::Inline),
+        "inline_outer" => Ok(ExplodeKind::InlineOuter),
+        _ => Err(datafusion::error::DataFusionError::Plan(
+            "Invalid explode function name".to_string(),
+        )),
+    }
+}
+
+#[derive(Debug, PartialEq, Eq, Hash)]
+pub struct Explode {
+    signature: Signature,
+    kind: ExplodeKind,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub enum ExplodeKind {
+    Explode,
+    ExplodeOuter,
+    PosExplode,
+    PosExplodeOuter,
+    Inline,
+    InlineOuter,
+}
+
+impl Explode {
+    pub fn new(kind: ExplodeKind) -> Self {
+        Self {
+            signature: Signature::any(1, Volatility::Immutable),
+            kind,
+        }
+    }
+
+    pub fn kind(&self) -> &ExplodeKind {
+        &self.kind
+    }
+}
+
+impl ScalarUDFImpl for Explode {
+    fn as_any(&self) -> &dyn Any {
+        self
+    }
+
+    fn name(&self) -> &str {
+        match self.kind {
+            ExplodeKind::Explode => "explode",
+            ExplodeKind::ExplodeOuter => "explode_outer",
+            ExplodeKind::PosExplode => "posexplode",
+            ExplodeKind::PosExplodeOuter => "posexplode_outer",
+            ExplodeKind::Inline => "inline",
+            ExplodeKind::InlineOuter => "inline_outer",
+        }
+    }
+
+    fn signature(&self) -> &Signature {
+        &self.signature
+    }
+
+    fn return_type(&self, arg_types: &[DataType]) -> Result<DataType> {
+        match &arg_types {
+            &[DataType::List(f)]
+            | &[DataType::LargeList(f)]
+            | &[DataType::FixedSizeList(f, _)]
+            | &[DataType::Map(f, _)] => Ok(f.data_type().clone()),
+            _ => plan_err!("{} should only be called with a list or map", self.name()),
+        }
+    }
+
+    fn invoke_with_args(&self, _: ScalarFunctionArgs) -> Result<ColumnarValue> {
+        plan_err!(
+            "{} should be rewritten during logical plan analysis",
+            self.name()
+        )
+    }
+}

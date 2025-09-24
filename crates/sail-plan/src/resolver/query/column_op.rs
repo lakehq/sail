@@ -2,9 +2,10 @@ use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
 
 use datafusion_common::Column;
-use datafusion_expr::{col, lit, Expr, ExprSchemable, LogicalPlan, Projection, TryCast};
+use datafusion_expr::{cast, col, lit, Expr, ExprSchemable, LogicalPlan, Projection};
 use indexmap::IndexMap;
 use sail_common::spec;
+use sail_common_datafusion::utils::items::ItemTaker;
 
 use crate::error::{PlanError, PlanResult};
 use crate::resolver::expression::NamedExpr;
@@ -12,7 +13,6 @@ use crate::resolver::state::PlanResolverState;
 use crate::resolver::tree::explode::ExplodeRewriter;
 use crate::resolver::tree::window::WindowRewriter;
 use crate::resolver::PlanResolver;
-use crate::utils::ItemTaker;
 
 impl PlanResolver<'_> {
     pub(super) async fn resolve_query_to_df(
@@ -252,7 +252,10 @@ impl PlanResolver<'_> {
     ) -> PlanResult<LogicalPlan> {
         let input = self.resolve_query_plan(input, state).await?;
         let schema = input.schema();
-        let columns: Vec<String> = columns.into_iter().map(|x| x.into()).collect();
+        let cols_to_change: Vec<String> = columns
+            .into_iter()
+            .map(|ident| ident.as_ref().to_ascii_lowercase())
+            .collect();
         let replacements: Vec<(Expr, Expr)> = replacements
             .into_iter()
             .map(|r| {
@@ -263,32 +266,73 @@ impl PlanResolver<'_> {
             })
             .collect::<PlanResult<_>>()?;
 
-        let replace_exprs = schema
+        let existing_cols_info = schema
             .iter()
             .map(|(qualifier, field)| {
-                let info = state.get_field_info(field.name())?;
-                let column_expr = col((qualifier, field));
-                let expr =
-                    if columns.is_empty() || columns.iter().any(|col| info.matches(col, None)) {
-                        let when_then_expr = replacements
-                            .iter()
-                            .map(|(old, new)| {
-                                let new = Expr::TryCast(TryCast {
-                                    expr: Box::new(new.clone()),
-                                    data_type: field.data_type().clone(),
-                                });
-                                (Box::new(column_expr.clone().eq(old.clone())), Box::new(new))
+                let field_info = state.get_field_info(field.name())?;
+                Ok::<_, PlanError>((
+                    col((qualifier, field)),
+                    field.data_type(),
+                    field_info.name().to_ascii_lowercase(),
+                ))
+            })
+            .collect::<Result<Vec<_>, _>>()?;
+
+        let existing_cols_set: HashSet<_> =
+            existing_cols_info.iter().map(|(_, _, name)| name).collect();
+
+        if let Some(missing_colname) = cols_to_change
+            .iter()
+            .find(|col| !existing_cols_set.contains(*col))
+        {
+            let existing_cols = existing_cols_info
+                .iter()
+                .map(|(_, _, name)| name.as_str())
+                .collect::<Vec<_>>()
+                .join(", ");
+
+            return Err(PlanError::AnalysisError(format!(
+                "Cannot resolve column name \"{}\" among ({})",
+                missing_colname, existing_cols
+            )));
+        }
+
+        let cols_to_change_set: HashSet<_> = cols_to_change.iter().collect();
+
+        let replace_exprs = existing_cols_info
+            .into_iter()
+            .map(|(column_expr, column_type, column_name)| {
+                let expr = if cols_to_change.is_empty() || cols_to_change_set.contains(&column_name)
+                {
+                    let when_then_expr = replacements
+                        .iter()
+                        .filter(|(old, _new)| {
+                            old.get_type(schema).is_ok_and(|old_type| {
+                                old_type.is_null()
+                                    || (old_type.is_numeric() && column_type.is_numeric())
+                                    || (old_type == *column_type)
                             })
-                            .collect();
+                        })
+                        .map(|(old, new)| {
+                            let old = cast(old.clone(), column_type.clone());
+                            let new = cast(new.clone(), column_type.clone());
+                            (Box::new(column_expr.clone().eq(old)), Box::new(new))
+                        })
+                        .collect::<Vec<_>>();
+
+                    if when_then_expr.is_empty() {
+                        column_expr
+                    } else {
                         Expr::Case(datafusion_expr::Case {
                             expr: None,
                             when_then_expr,
                             else_expr: Some(Box::new(column_expr)),
                         })
-                    } else {
-                        column_expr
-                    };
-                Ok(NamedExpr::new(vec![info.name().to_string()], expr))
+                    }
+                } else {
+                    column_expr
+                };
+                Ok(NamedExpr::new(vec![column_name], expr))
             })
             .collect::<PlanResult<Vec<_>>>()?;
 

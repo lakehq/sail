@@ -1,7 +1,8 @@
-use crate::extension::function::url::parse_url::ParseUrl;
-use crate::extension::function::url::spark_try_parse_url::SparkTryParseUrl;
-use crate::extension::function::url::url_decode::UrlDecode;
-use crate::extension::function::url::url_encode::UrlEncode;
+use sail_function::scalar::url::parse_url::ParseUrl;
+use sail_function::scalar::url::spark_try_parse_url::SparkTryParseUrl;
+use sail_function::scalar::url::url_decode::UrlDecode;
+use sail_function::scalar::url::url_encode::UrlEncode;
+
 use crate::function::common::ScalarFunction;
 
 pub(super) fn list_built_in_url_functions() -> Vec<(&'static str, ScalarFunction)> {
