@@ -8,7 +8,7 @@ use datafusion::physical_plan::sorts::sort::SortExec;
 use datafusion::physical_plan::ExecutionPlan;
 use datafusion::physical_planner::{DefaultPhysicalPlanner, ExtensionPlanner, PhysicalPlanner};
 use datafusion_common::{internal_datafusion_err, internal_err, DFSchema, ToDFSchema};
-use datafusion_expr::{EmptyRelation, Expr, LogicalPlan, UserDefinedLogicalNode};
+use datafusion_expr::{Expr, LogicalPlan, UserDefinedLogicalNode};
 use datafusion_physical_expr::{create_physical_sort_exprs, Partitioning};
 use sail_catalog::manager::CatalogManager;
 use sail_catalog::provider::TableKind;
@@ -187,17 +187,8 @@ impl ExtensionPlanner for ExtensionPhysicalPlanner {
                 }
                 _ => internal_err!("Expected a table for DELETE"),
             }?;
-            let dummy_logical_plan = LogicalPlan::EmptyRelation(EmptyRelation {
-                produce_one_row: false,
-                schema,
-            });
-            create_file_delete_physical_plan(
-                session_state,
-                planner,
-                &dummy_logical_plan,
-                node.options().clone(),
-            )
-            .await?
+            create_file_delete_physical_plan(session_state, planner, schema, node.options().clone())
+                .await?
         } else if let Some(node) = node.as_any().downcast_ref::<ExplicitRepartitionNode>() {
             let [input] = physical_inputs else {
                 return internal_err!(

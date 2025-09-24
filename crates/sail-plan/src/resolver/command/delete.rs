@@ -1,14 +1,14 @@
-use std::collections::HashMap;
 use std::sync::Arc;
 
-use datafusion_common::tree_node::{Transformed, TreeNode};
-use datafusion_common::{Column, DFSchemaRef, ToDFSchema};
-use datafusion_expr::{Expr, Extension, LogicalPlan};
+use datafusion_common::{DFSchemaRef, ToDFSchema};
+use datafusion_expr::{Extension, LogicalPlan};
 use sail_catalog::manager::CatalogManager;
 use sail_catalog::provider::{TableKind, TableStatus};
 use sail_common::spec;
 use sail_common_datafusion::datasource::SourceInfo;
 use sail_common_datafusion::extension::SessionExtensionAccessor;
+use sail_common_datafusion::rename::expression::expression_before_rename;
+use sail_common_datafusion::rename::schema::rename_schema;
 use sail_data_source::default_registry;
 use sail_logical_plan::file_delete::{FileDeleteNode, FileDeleteOptions};
 
@@ -38,20 +38,8 @@ impl PlanResolver<'_> {
 
         let field_ids = state.register_fields(table_schema.fields());
 
-        let fields_with_ids: Vec<_> = table_schema
-            .fields()
-            .iter()
-            .zip(field_ids.iter())
-            .map(|(field, field_id)| {
-                datafusion_common::arrow::datatypes::Field::new(
-                    field_id,
-                    field.data_type().clone(),
-                    field.is_nullable(),
-                )
-            })
-            .collect();
-        let schema_for_resolution =
-            datafusion_common::arrow::datatypes::Schema::new(fields_with_ids);
+        let original_arrow_schema = Arc::new(table_schema.as_arrow().clone());
+        let schema_for_resolution = rename_schema(&original_arrow_schema, &field_ids)?;
         let df_schema_for_resolution = schema_for_resolution.to_dfschema_ref()?;
 
         // Convert the condition expression if present
@@ -60,14 +48,12 @@ impl PlanResolver<'_> {
                 .resolve_expression(condition, &df_schema_for_resolution, state)
                 .await?;
 
-            let field_id_to_name: HashMap<String, String> = field_ids
-                .iter()
-                .zip(table_schema.fields().iter())
-                .map(|(field_id, field)| (field_id.clone(), field.name().to_string()))
-                .collect();
-
-            let rewritten_condition =
-                rewrite_field_ids_to_names(resolved_condition, &field_id_to_name)?;
+            let rewritten_condition = expression_before_rename(
+                &resolved_condition,
+                &field_ids,
+                &original_arrow_schema,
+                true,
+            )?;
 
             Some(rewritten_condition)
         } else {
@@ -133,25 +119,4 @@ impl PlanResolver<'_> {
 
         Ok((location, format, schema))
     }
-}
-
-/// Rewrite an expression to replace field IDs with actual field names
-fn rewrite_field_ids_to_names(
-    expr: Expr,
-    field_id_to_name: &HashMap<String, String>,
-) -> PlanResult<Expr> {
-    expr.transform(&|expr| match &expr {
-        Expr::Column(Column { name, .. }) => {
-            if let Some(actual_name) = field_id_to_name.get(name) {
-                Ok(Transformed::yes(Expr::Column(Column::from_name(
-                    actual_name,
-                ))))
-            } else {
-                Ok(Transformed::no(expr))
-            }
-        }
-        _ => Ok(Transformed::no(expr)),
-    })
-    .map(|t| t.data)
-    .map_err(|e| PlanError::internal(format!("Failed to rewrite expression: {e}")))
 }

@@ -151,6 +151,7 @@ impl DeltaDeleteExec {
             .build();
         let adapter_factory = Arc::new(DeltaPhysicalExprAdapterFactory {});
 
+        // TODO: Turn `prepare_predicate_actions_physical` into an `ExecutionPlan` node.
         let (predicate_actions, _cdf_df) = prepare_predicate_actions_physical(
             self.condition.clone(),
             table.log_store(),
