@@ -3,11 +3,11 @@ use std::sync::Arc;
 use datafusion::functions::expr_fn;
 use datafusion_common::ScalarValue;
 use datafusion_expr::{expr, lit, when, ExprSchemable, Operator, ScalarUDF};
+use datafusion_spark::function::bitmap::bitmap_count::BitmapCount;
 use sail_catalog::manager::CatalogManager;
 use sail_catalog::utils::quote_namespace_if_needed;
 use sail_common_datafusion::extension::SessionExtensionAccessor;
 use sail_common_datafusion::utils::items::ItemTaker;
-use sail_function::scalar::misc::bitmap_count::BitmapCount;
 use sail_function::scalar::misc::raise_error::RaiseError;
 use sail_function::scalar::misc::spark_aes::{
     SparkAESDecrypt, SparkAESEncrypt, SparkTryAESDecrypt, SparkTryAESEncrypt,
