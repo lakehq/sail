@@ -258,7 +258,8 @@ impl GraphBuilder {
 
         // Build output ColumnMap for current projection node
         let mut output_map = Vec::with_capacity(proj_plan.expr().len());
-        for (expr, _name) in proj_plan.expr() {
+        for proj_expr in proj_plan.expr() {
+            let expr = &proj_expr.expr;
             // Try to parse expression directly as a single stable column
             if let Some(col) = expr.as_any().downcast_ref::<Column>() {
                 // This is a simple column reference, like `SELECT a FROM ...`
