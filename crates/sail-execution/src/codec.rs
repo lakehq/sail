@@ -38,6 +38,8 @@ use datafusion_proto::protobuf::{
     JoinType as ProtoJoinType, PhysicalPlanNode, PhysicalSortExprNode,
 };
 use datafusion_spark::function::math::expm1::SparkExpm1;
+use datafusion_spark::function::math::width_bucket::SparkWidthBucket;
+use datafusion_spark::function::string::luhn_check::SparkLuhnCheck;
 use prost::bytes::BytesMut;
 use prost::Message;
 use sail_common_datafusion::array::record_batch::{read_record_batches, write_record_batches};
@@ -1222,6 +1224,9 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
             "spark_conv" | "conv" => Ok(Arc::new(ScalarUDF::from(SparkConv::new()))),
             "spark_signum" | "signum" => Ok(Arc::new(ScalarUDF::from(SparkSignum::new()))),
             "spark_last_day" | "last_day" => Ok(Arc::new(ScalarUDF::from(SparkLastDay::new()))),
+            "spark_luhn_check" | "luhn_check" => {
+                Ok(Arc::new(ScalarUDF::from(SparkLuhnCheck::new())))
+            }
             "spark_next_day" | "next_day" => Ok(Arc::new(ScalarUDF::from(SparkNextDay::new()))),
             "spark_make_dt_interval" | "make_dt_interval" => {
                 Ok(Arc::new(ScalarUDF::from(SparkMakeDtInterval::new())))
@@ -1269,6 +1274,9 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
             "spark_version" | "version" => Ok(Arc::new(ScalarUDF::from(SparkVersion::new()))),
             "spark_try_subtract" | "try_subtract" => {
                 Ok(Arc::new(ScalarUDF::from(SparkTrySubtract::new())))
+            }
+            "spark_width_bucket" | "width_bucket" => {
+                Ok(Arc::new(ScalarUDF::from(SparkWidthBucket::new())))
             }
             "str_to_map" => Ok(Arc::new(ScalarUDF::from(StrToMap::new()))),
             "parse_url" => Ok(Arc::new(ScalarUDF::from(ParseUrl::new()))),
@@ -1325,6 +1333,7 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
             || node_inner.is::<SparkFromCSV>()
             || node_inner.is::<SparkHex>()
             || node_inner.is::<SparkLastDay>()
+            || node_inner.is::<SparkLuhnCheck>()
             || node_inner.is::<SparkMakeDtInterval>()
             || node_inner.is::<SparkMakeInterval>()
             || node_inner.is::<SparkMakeTimestampNtz>()
@@ -1358,6 +1367,7 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
             || node_inner.is::<SparkUnbase64>()
             || node_inner.is::<SparkUnHex>()
             || node_inner.is::<SparkVersion>()
+            || node_inner.is::<SparkWidthBucket>()
             || node_inner.is::<SparkXxhash64>()
             || node_inner.is::<SparkYearMonthInterval>()
             || node_inner.is::<StrToMap>()
