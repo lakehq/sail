@@ -35,9 +35,6 @@ use object_store::ObjectMeta;
 use serde::{Deserialize, Serialize};
 use url::Url;
 
-pub use crate::delta_format::find_files_exec::{
-    find_files_physical, scan_memory_table_physical, FindFiles, FindFilesPhysicalExprProperties,
-};
 use crate::kernel::snapshot::{EagerSnapshot, LogDataHandler, Snapshot};
 use crate::table::DeltaTableState;
 /// [Credit]: <https://github.com/delta-io/delta-rs/blob/3607c314cbdd2ad06c6ee0677b92a29f695c71f3/crates/core/src/delta_datafusion/mod.rs>
@@ -460,18 +457,6 @@ pub struct DeltaScanConfig {
     pub enable_parquet_pushdown: bool,
     /// Schema to read as
     pub schema: Option<SchemaRef>,
-}
-
-#[allow(dead_code)]
-fn prune_file_statistics(
-    record_batches: &[RecordBatch],
-    pruning_mask: Vec<bool>,
-) -> Vec<RecordBatch> {
-    record_batches
-        .iter()
-        .zip(pruning_mask.iter())
-        .filter_map(|(batch, keep)| if *keep { Some(batch.clone()) } else { None })
-        .collect()
 }
 
 fn partitioned_file_from_action(
