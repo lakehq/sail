@@ -6,23 +6,15 @@ use datafusion::error::Result;
 use datafusion::physical_optimizer::PhysicalOptimizerRule;
 use datafusion::physical_plan::ExecutionPlan;
 
+#[derive(Default)]
 pub struct JoinReorder {}
 
-/// The [`JoinReorder`] optimizer rule implement.
-#[allow(dead_code)]
 impl JoinReorder {
     pub fn new() -> Self {
-        Self {}
+        Self::default()
     }
 }
 
-impl Default for JoinReorder {
-    fn default() -> Self {
-        Self::new()
-    }
-}
-
-#[allow(dead_code)]
 impl PhysicalOptimizerRule for JoinReorder {
     fn optimize(
         &self,
@@ -42,7 +34,7 @@ impl PhysicalOptimizerRule for JoinReorder {
 }
 
 impl Debug for JoinReorder {
-    fn fmt(&self, _f: &mut Formatter<'_>) -> std::fmt::Result {
-        todo!()
+    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
+        write!(f, "JoinReorder")
     }
 }

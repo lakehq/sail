@@ -590,6 +590,13 @@
     so setting the Spark configuration `spark.sql.globalTempDatabase` has no effect.
   experimental: true
 
+- key: optimizer.enable_join_reorder
+  type: boolean
+  default: "false"
+  description: |
+    Whether to enable cost-based join reorder in the query optimizer.
+  experimental: true
+
 - key: spark.session_timeout_secs
   type: number
   default: "900"
