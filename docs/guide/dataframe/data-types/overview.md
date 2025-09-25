@@ -39,7 +39,7 @@ However, since Sail is powered by Arrow, you may consider this page more of a di
 
 - **BooleanType** represents boolean values.
 
-## Datetime Type
+## Datetime Types
 
 - **DateType** represents calendar dates without a time zone.
 - **TimestampType** represents timestamps with local time zone. The time zone is controlled by the `spark.sql.session.timeZone` configuration option. The timestamp has microsecond precision.
