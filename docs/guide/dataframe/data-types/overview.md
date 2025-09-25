@@ -47,8 +47,8 @@ However, since Sail is powered by Arrow, you may consider this page more of a di
 
 In Spark SQL, timestamp types follow a slightly different convention.
 
-- `TIMESTAMP_LTZ` correspond to `TimestampType`.
-- `TIMESTAMP_NTZ` correspond to `TimestampNTZType`.
+- `TIMESTAMP_LTZ` correspond to **TimestampType**.
+- `TIMESTAMP_NTZ` correspond to **TimestampNTZType**.
 - `TIMESTAMP` is an alias for either `TIMESTAMP_LTZ` (the default) or `TIMESTAMP_NTZ`, depending on the `spark.sql.timestampType` configuration option.
 
 ## Interval Types
@@ -76,18 +76,19 @@ In Spark SQL, timestamp types follow a slightly different convention.
 
   Valid values are 0 (**DAY**), 1 (**HOUR**), 2 (**MINUTE**), 3 (**SECOND**).
   Here are the supported day-time interval types:
-  | Day-Time Interval Type | SQL Type |
-  | ---------------------------------------------------------------------- | ------------------------- |
-  | **DayTimeIntervalType(DAY, DAY)**<br />**DayTimeIntervalType(DAY)** | `INTERVAL DAY` |
-  | **DayTimeIntervalType(DAY, HOUR)** | `INTERVAL DAY TO HOUR` |
-  | **DayTimeIntervalType(DAY, MINUTE)** | `INTERVAL DAY TO MINUTE` |
-  | **DayTimeIntervalType(DAY, SECOND)** | `INTERVAL DAY TO SECOND` |
-  | **DayTimeIntervalType(HOUR, HOUR)**<br />**DayTimeIntervalType(HOUR)** | `INTERVAL HOUR` |
-  | **DayTimeIntervalType(HOUR, MINUTE)** | `INTERVAL HOUR TO MINUTE` |
-  | **DayTimeIntervalType(HOUR, SECOND)** | `INTERVAL HOUR TO SECOND` |
-  | **DayTimeIntervalType(MINUTE, MINUTE)**<br />**DayTimeIntervalType(MINUTE)** | `INTERVAL MINUTE` |
-  | **DayTimeIntervalType(MINUTE, SECOND)** | `INTERVAL MINUTE TO SECOND` |
-  | **DayTimeIntervalType(SECOND, SECOND)**<br />**DayTimeIntervalType(SECOND)** | `INTERVAL SECOND` |
+
+  | Day-Time Interval Type                                                       | SQL Type                    |
+  | ---------------------------------------------------------------------------- | --------------------------- |
+  | **DayTimeIntervalType(DAY, DAY)**<br />**DayTimeIntervalType(DAY)**          | `INTERVAL DAY`              |
+  | **DayTimeIntervalType(DAY, HOUR)**                                           | `INTERVAL DAY TO HOUR`      |
+  | **DayTimeIntervalType(DAY, MINUTE)**                                         | `INTERVAL DAY TO MINUTE`    |
+  | **DayTimeIntervalType(DAY, SECOND)**                                         | `INTERVAL DAY TO SECOND`    |
+  | **DayTimeIntervalType(HOUR, HOUR)**<br />**DayTimeIntervalType(HOUR)**       | `INTERVAL HOUR`             |
+  | **DayTimeIntervalType(HOUR, MINUTE)**                                        | `INTERVAL HOUR TO MINUTE`   |
+  | **DayTimeIntervalType(HOUR, SECOND)**                                        | `INTERVAL HOUR TO SECOND`   |
+  | **DayTimeIntervalType(MINUTE, MINUTE)**<br />**DayTimeIntervalType(MINUTE)** | `INTERVAL MINUTE`           |
+  | **DayTimeIntervalType(MINUTE, SECOND)**                                      | `INTERVAL MINUTE TO SECOND` |
+  | **DayTimeIntervalType(SECOND, SECOND)**<br />**DayTimeIntervalType(SECOND)** | `INTERVAL SECOND`           |
 
 Each field in the interval must have a non-negative value, but an interval can be positive or negative.
 
