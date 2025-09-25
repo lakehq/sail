@@ -16,8 +16,6 @@ impl CostModel {
         right_plan: &DPPlan,
         new_cardinality: f64,
     ) -> f64 {
-        // The cost of a join plan is the sum of its children's costs plus the
-        // cardinality of its own output. This penalizes plans with large intermediate results.
         left_plan.cost + right_plan.cost + new_cardinality
     }
 }

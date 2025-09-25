@@ -28,6 +28,7 @@ pub struct RelationNode {
     pub initial_cardinality: f64,
     /// Statistics provided by DataFusion.
     pub statistics: Statistics,
+    // TODO: Enhance statistics and its usage.
 }
 
 impl RelationNode {

@@ -225,7 +225,8 @@ impl PlanEnumerator {
             return Ok(true);
         }
 
-        // Heuristic pruning for large relation counts
+        // TODO: Implement heuristic pruning for neighbor selection to accelerate DP.
+        // Instead of simple truncation, sort neighbors based on a heuristic.
         if self.query_graph.relation_count() >= RELATION_THRESHOLD {
             let limit = nodes.cardinality() as usize;
             if neighbors.len() > limit {
@@ -274,7 +275,7 @@ impl PlanEnumerator {
             return Ok(true);
         }
 
-        // Heuristic pruning for large relation counts
+        // TODO: Apply better pruning here as well, similar to `enumerate_csg_rec`.
         if self.query_graph.relation_count() >= RELATION_THRESHOLD {
             let limit = right.cardinality() as usize;
             if neighbor_ids.len() > limit {

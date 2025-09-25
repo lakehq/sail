@@ -289,13 +289,14 @@ impl GraphBuilder {
 
         // Estimate initial cardinality
         let stats = plan.partition_statistics(None)?;
+
+        // FIXME: Initial cardinality estimation does not account for table-level filters.
         let initial_cardinality = match stats.num_rows {
             datafusion::common::stats::Precision::Exact(count) => count as f64,
             datafusion::common::stats::Precision::Inexact(count) => count as f64,
             datafusion::common::stats::Precision::Absent => 1000.0, // Default estimation
         };
 
-        // Create RelationNode and add to graph
         let relation_node =
             RelationNode::new(plan.clone(), relation_id, initial_cardinality, stats);
         self.graph.add_relation(relation_node);

@@ -19,6 +19,7 @@ pub struct EquivalenceSet {
     pub columns: HashSet<StableColumn>,
     /// Estimated unique value count for this domain (Total Domain).
     pub t_dom_count: f64,
+    // TODO: Different statistic quality levels?
 }
 
 impl EquivalenceSet {
@@ -306,6 +307,7 @@ impl CardinalityEstimator {
         let mut selectivity = 1.0;
 
         for edge in connecting_edges {
+            // TODO: Implement more granular join selectivity estimation.
             // TDom-based estimation for equi-joins
             let tdom = self.get_tdom_for_edge(edge);
             if tdom > 1.0 {
@@ -316,6 +318,8 @@ impl CardinalityEstimator {
 
             // Apply additional selectivity for non-equi filters
             if self.has_non_equi_filter(edge) {
+                // FIXME: This is too coarse. Non-equi selectivity should be calculated
+                // directly from the predicate instead of applying another generic factor.
                 selectivity *= HEURISTIC_FILTER_SELECTIVITY;
             }
         }
