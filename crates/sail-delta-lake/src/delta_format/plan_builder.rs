@@ -3,9 +3,7 @@ use std::sync::Arc;
 use datafusion::arrow::datatypes::SchemaRef;
 use datafusion::catalog::Session;
 use datafusion::common::DataFusionError;
-use datafusion::datasource::provider_as_source;
-use datafusion::logical_expr::LogicalPlanBuilder;
-use datafusion::physical_expr::expressions::Column;
+use datafusion::physical_expr::expressions::{Column, NotExpr};
 use datafusion::physical_expr::{LexRequirement, PhysicalExpr};
 use datafusion::physical_plan::filter::FilterExec;
 use datafusion::physical_plan::projection::ProjectionExec;
@@ -16,12 +14,10 @@ use sail_common_datafusion::datasource::PhysicalSinkMode;
 use url::Url;
 
 use super::{
-    create_projection, create_repartition, create_sort, DeltaCommitExec, DeltaDeleteExec,
-    DeltaFindFilesExec, DeltaRemoveActionsExec, DeltaWriterExec,
+    create_projection, create_repartition, create_sort, DeltaCommitExec, DeltaFindFilesExec,
+    DeltaRemoveActionsExec, DeltaScanByAddsExec, DeltaWriterExec,
 };
-use crate::delta_datafusion::{
-    delta_to_datafusion_error, DataFusionMixins, DeltaScanConfigBuilder, DeltaTableProvider,
-};
+use crate::delta_datafusion::{delta_to_datafusion_error, DataFusionMixins};
 use crate::options::TableDeltaOptions;
 use crate::table::open_table_with_object_store;
 
@@ -111,9 +107,15 @@ impl<'a> DeltaPlanBuilder<'a> {
 
         let snapshot_state = table.snapshot().map_err(delta_to_datafusion_error)?;
         let version = snapshot_state.version();
+        let table_schema = snapshot_state
+            .snapshot()
+            .arrow_schema()
+            .map_err(|e| datafusion_common::DataFusionError::External(Box::new(e)))?;
 
         // Branch 1: Generate Add Actions (new data + preserved old data)
-        let old_data_plan = self.build_old_data_plan(condition.clone()).await?;
+        let old_data_plan = self
+            .build_old_data_plan(condition.clone(), version, table_schema.clone())
+            .await?;
         let new_data_plan = self
             .add_projection_node(self.input.clone())
             .and_then(|plan| self.add_repartition_node(plan))
@@ -144,63 +146,29 @@ impl<'a> DeltaPlanBuilder<'a> {
     async fn build_old_data_plan(
         &self,
         condition: Arc<dyn PhysicalExpr>,
+        version: i64,
+        table_schema: SchemaRef,
     ) -> Result<Arc<dyn ExecutionPlan>> {
-        // Create object store and load table using the session context
-        let object_store = self
-            .session_state
-            .runtime_env()
-            .object_store_registry
-            .get_store(&self.table_config.table_url)
-            .map_err(|e| datafusion_common::DataFusionError::External(Box::new(e)))?;
-
-        let log_store = deltalake::logstore::default_logstore(
-            object_store.clone(),
-            object_store,
-            &self.table_config.table_url,
-            &Default::default(),
-        );
-
-        let mut table = crate::table::DeltaTable::new(log_store, Default::default());
-        table
-            .load()
-            .await
-            .map_err(|e| datafusion_common::DataFusionError::External(Box::new(e)))?;
-
-        // Create table provider for scanning existing data
-        let snapshot_state = table.snapshot().map_err(delta_to_datafusion_error)?;
-
-        let scan_config = DeltaScanConfigBuilder::new()
-            .with_schema(
-                snapshot_state
-                    .arrow_schema()
-                    .map_err(|e| datafusion_common::DataFusionError::External(Box::new(e)))?,
-            )
-            .build(snapshot_state)
-            .map_err(|e| datafusion_common::DataFusionError::External(Box::new(e)))?;
-
-        let table_provider = Arc::new(
-            DeltaTableProvider::try_new(snapshot_state.clone(), table.log_store(), scan_config)
-                .map_err(|e| datafusion_common::DataFusionError::External(Box::new(e)))?,
-        );
-
-        // Create logical plan for scanning
-        let logical_plan =
-            LogicalPlanBuilder::scan("old_data", provider_as_source(table_provider), None)?
-                .build()?;
-
-        // Convert to physical plan
-        let scan_plan = self
-            .session_state
-            .create_physical_plan(&logical_plan)
-            .await?;
-
-        // Apply NOT condition filter to keep data that doesn't match the condition
-        let negated_condition = Arc::new(datafusion::physical_expr::expressions::NotExpr::new(
-            condition,
+        // Find files that might contain data matching the condition
+        let find_files_exec = Arc::new(DeltaFindFilesExec::new(
+            self.table_config.table_url.clone(),
+            Some(condition.clone()),
+            Some(table_schema.clone()),
+            version,
         ));
-        let filter_plan = Arc::new(FilterExec::try_new(negated_condition, scan_plan)?);
 
-        Ok(filter_plan)
+        // Scan the candidate files
+        let scan_exec = Arc::new(DeltaScanByAddsExec::new(
+            find_files_exec,
+            self.table_config.table_url.clone(),
+            table_schema,
+        ));
+
+        // Filter to keep only data that does NOT match the condition (data to preserve)
+        let negated_condition = Arc::new(NotExpr::new(condition));
+        let filter_exec = Arc::new(FilterExec::try_new(negated_condition, scan_exec)?);
+
+        Ok(filter_exec)
     }
 
     /// Align schemas between new data and old data for UnionExec
@@ -318,25 +286,33 @@ impl<'a> DeltaPlanBuilder<'a> {
 }
 
 /// Builder for creating a Delta Lake DELETE execution plan.
-/// DeltaFindFilesExec -> DeltaDeleteExec -> DeltaCommitExec
+/// DeltaFindFilesExec -> (Branch A: Rewrite + Branch B: Remove) -> UnionExec -> DeltaCommitExec
+/// Branch A: DeltaScanByAddsExec -> FilterExec -> DeltaWriterExec
+/// Branch B: DeltaRemoveActionsExec
 pub struct DeltaDeletePlanBuilder<'a> {
     table_url: Url,
     condition: Arc<dyn PhysicalExpr>,
     session: &'a dyn Session,
+    options: TableDeltaOptions,
 }
 
 impl<'a> DeltaDeletePlanBuilder<'a> {
-    pub fn new(table_url: Url, condition: Arc<dyn PhysicalExpr>, session: &'a dyn Session) -> Self {
+    pub fn new(
+        table_url: Url,
+        condition: Arc<dyn PhysicalExpr>,
+        session: &'a dyn Session,
+        options: TableDeltaOptions,
+    ) -> Self {
         Self {
             table_url,
             condition,
             session,
+            options,
         }
     }
 
-    /// Build the complete execution plan chain for the DELETE operation.
+    /// Build the execution plan chain for the DELETE operation.
     pub async fn build(self) -> Result<Arc<dyn ExecutionPlan>> {
-        // Open table and get metadata
         let object_store = self
             .session
             .runtime_env()
@@ -363,8 +339,9 @@ impl<'a> DeltaDeletePlanBuilder<'a> {
             .snapshot()
             .arrow_schema()
             .map_err(|e| DataFusionError::External(Box::new(e)))?;
+        let partition_columns = snapshot_state.metadata().partition_columns().clone();
 
-        // Build the physical plan chain
+        // Find candidate files
         let find_files_exec = Arc::new(DeltaFindFilesExec::new(
             self.table_url.clone(),
             Some(self.condition.clone()),
@@ -372,24 +349,49 @@ impl<'a> DeltaDeletePlanBuilder<'a> {
             version,
         ));
 
-        let delete_actions_exec = Arc::new(DeltaDeleteExec::new(
-            find_files_exec,
+        // --- Branch A: File Rewrite ---
+
+        // Scan the data from candidate files
+        let scan_exec = Arc::new(DeltaScanByAddsExec::new(
+            find_files_exec.clone(),
             self.table_url.clone(),
-            self.condition,
             table_schema.clone(),
         ));
 
-        let partition_columns = snapshot_state.metadata().partition_columns().clone();
+        // Filter out rows to be deleted (keep the ones that DON'T match)
+        let negated_condition = Arc::new(NotExpr::new(self.condition.clone()));
+        let filter_exec = Arc::new(FilterExec::try_new(negated_condition, scan_exec)?);
 
-        let commit_exec = Arc::new(DeltaCommitExec::new(
-            delete_actions_exec,
-            self.table_url,
-            partition_columns,
-            true, // table_exists is true, checked above
-            table_schema,
-            // For DELETE, this mode doesn't affect behavior as it's handled by the actions.
-            // Using Append as a neutral default.
+        // Write the kept rows to new files
+        let writer_exec = Arc::new(DeltaWriterExec::new(
+            filter_exec,
+            self.table_url.clone(),
+            self.options.clone(),
+            partition_columns.clone(),
             PhysicalSinkMode::Append,
+            true, // Table exists
+            table_schema.clone(),
+            None,
+        ));
+
+        // --- Branch B: Generate Remove Actions ---
+
+        // Convert Add actions for old files to Remove actions
+        let remove_exec = Arc::new(DeltaRemoveActionsExec::new(find_files_exec));
+
+        // --- Merge and Commit ---
+
+        // Merge the new Add actions and the old Remove actions
+        let union_exec = Arc::new(UnionExec::new(vec![writer_exec, remove_exec]));
+
+        // Commit the transaction
+        let commit_exec = Arc::new(DeltaCommitExec::new(
+            union_exec,
+            self.table_url.clone(),
+            partition_columns,
+            true, // table_exists is true
+            table_schema,
+            PhysicalSinkMode::Append, // Mode for commit operation is not critical here
         ));
 
         Ok(commit_exec)

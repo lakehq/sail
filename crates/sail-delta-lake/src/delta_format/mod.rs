@@ -17,17 +17,17 @@ use deltalake::protocol::DeltaOperation;
 use serde::{Deserialize, Serialize};
 
 mod commit_exec;
-mod delete_exec;
 pub mod find_files_exec;
 pub mod plan_builder;
 mod remove_actions_exec;
+mod scan_by_adds_exec;
 mod writer_exec;
 
 pub use commit_exec::DeltaCommitExec;
-pub use delete_exec::DeltaDeleteExec;
 pub use find_files_exec::DeltaFindFilesExec;
 pub use plan_builder::{DeltaDeletePlanBuilder, DeltaPlanBuilder};
 pub use remove_actions_exec::DeltaRemoveActionsExec;
+pub use scan_by_adds_exec::DeltaScanByAddsExec;
 pub use writer_exec::DeltaWriterExec;
 
 /// Create a `ProjectionExec` instance that reorders columns so that partition columns
