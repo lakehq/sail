@@ -5,7 +5,7 @@ rank: 3
 
 # Arrow Semantics
 
-Sail supports Arrow data types that are not compatible with Spark.
+Sail supports all Arrow data types, including those not supported by JVM Spark.
 This enhances interoperability with other libraries that use Arrow.
 However, since the Spark Connect client is still used,
 you need to consider a few limitations when using these data types.
@@ -41,7 +41,7 @@ if it turns out to be important to match the JVM Spark behavior for compatibilit
 
 Sail uses Arrow internally, so all Arrow data types work naturally in the entire query execution process.
 For PySpark applications, however, the Spark Connect client library controls how to interpret Arrow data received from the server.
-So you need to be aware of the complications when "previewing" query results in Python.
+So you need to be aware of the complications when the data is moved across the boundary between Sail and the PySpark client. Such data move happens when "previewing" query results in Python.
 
 For example, the following operations do not fully work even if query execution is successful within Sail. The query results are either cast to a different type implicitly, or an error is raised due to unsupported Arrow types in Spark.
 
