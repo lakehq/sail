@@ -11,6 +11,9 @@ For more background information, you can refer to the [Data Types](/guide/datafr
 The following table shows the SQL type syntax along with the corresponding Spark data types and Arrow data types.
 Many data types have aliases not supported in JVM Spark. These are extensions in Sail.
 
+Many Arrow data types do not have a corresponding SQL type syntax,
+but they are still supported in Sail. You can work with these types in Python UDFs or data sources.
+
 <table tabindex="0">
   <thead>
     <tr>
@@ -303,6 +306,7 @@ Many data types have aliases not supported in JVM Spark. These are extensions in
 3. The SQL `TIMESTAMP` type can either represent timestamps with local time zone (`TIMESTAMP_LTZ`, the default) or timestamps without time zone (`TIMESTAMP_NTZ`), depending on the `spark.sql.timestampType` configuration option.
 4. For the SQL timestamp types, the optional <code><SyntaxText raw="<p>" /></code> parameter specifies the precision of the timestamp. A number of `0`, `3`, `6`, or `9` represents second, millisecond, microsecond, or nanosecond precision respectively. The default value is `6` (microsecond precision). Note that only the microsecond precision timestamp is compatible with Spark.
 5. For the SQL decimal types, the optional <code><SyntaxText raw="<p>" /></code> and <code><SyntaxText raw="<s>" /></code> parameters specify the precision and scale of the decimal number respectively. The default precision is `10` and the default scale is `0`. The decimal type maps to either Decimal128 or Decimal256 type in Arrow depending on the specified precision.
+6. The SQL `INTERVAL` type is mapped to the Interval(MonthDayNano) Arrow type which has nanosecond precision. **CalendarIntervalType** in Spark has microsecond precision so the supported data range is different.
 
 <script setup>
 import SyntaxText from "@theme/components/SyntaxText.vue";

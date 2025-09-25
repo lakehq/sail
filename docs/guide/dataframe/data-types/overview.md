@@ -90,6 +90,8 @@ In Spark SQL, timestamp types follow a slightly different convention.
   | **DayTimeIntervalType(MINUTE, SECOND)**                                      | `INTERVAL MINUTE TO SECOND` |
   | **DayTimeIntervalType(SECOND, SECOND)**<br />**DayTimeIntervalType(SECOND)** | `INTERVAL SECOND`           |
 
+- **CalendarIntervalType** represents interval values that include months, days, and microseconds.
+
 Each field in the interval must have a non-negative value, but an interval can be positive or negative.
 
 ## Complex Types

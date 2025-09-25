@@ -258,6 +258,7 @@ The table below shows how Spark data types are mapped to Python types and Arrow 
 ## Notes
 
 1. **DayTimeIntervalType** in Spark has microsecond precision, and it is mapped to the Duration(Microsecond) Arrow type. It is not mapped to the Interval(DayTime) Arrow type which only has millisecond precision.
-2. **YearMonthIntervalType** in Spark is not supported in Python, so calling the `.collect()` method will raise an error for a DataFrame that contains this type.
+2. **YearMonthIntervalType** and **CalendarIntervalType** in Spark are not supported in Python, so calling the `.collect()` method will raise an error for a DataFrame that contains these types.
 3. **StringType**, **CharType(_n_)**, and **VarcharType(_n_)** in Spark are mapped to either the Utf8 or LargeUtf8 type in Arrow, depending on the `spark.sql.execution.arrow.useLargeVarTypes` configuration option.
 4. **BinaryType** in Spark is mapped to either the Binary or LargeBinary type in Arrow, depending on the `spark.sql.execution.arrow.useLargeVarTypes` configuration option.
+5. **CalendarIntervalType** in Spark has microsecond precision while the Interval(MonthDayNano) Arrow type has nanosecond precision. So the supported data range for calendar intervals is different between JVM Spark and Arrow.
