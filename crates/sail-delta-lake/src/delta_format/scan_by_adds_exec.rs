@@ -178,18 +178,26 @@ impl ExecutionPlan for DeltaScanByAddsExec {
 
                 let scan_col = batch
                     .column_by_name("partition_scan")
-                    .unwrap()
+                    .ok_or_else(|| {
+                        DataFusionError::Internal("Missing partition_scan column".to_string())
+                    })?
                     .as_any()
                     .downcast_ref::<datafusion::arrow::array::BooleanArray>()
-                    .unwrap();
+                    .ok_or_else(|| {
+                        DataFusionError::Internal(
+                            "partition_scan column is not a BooleanArray".to_string(),
+                        )
+                    })?;
                 partition_scan = scan_col.value(0);
 
                 let adds_col = batch
                     .column_by_name("add")
-                    .unwrap()
+                    .ok_or_else(|| DataFusionError::Internal("Missing add column".to_string()))?
                     .as_any()
                     .downcast_ref::<datafusion::arrow::array::StringArray>()
-                    .unwrap();
+                    .ok_or_else(|| {
+                        DataFusionError::Internal("add column is not a StringArray".to_string())
+                    })?;
                 for i in 0..adds_col.len() {
                     let add_json = adds_col.value(i);
                     let add: deltalake::kernel::Add = serde_json::from_str(add_json)

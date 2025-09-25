@@ -990,7 +990,7 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
             node.as_any().downcast_ref::<DeltaScanByAddsExec>()
         {
             let input = self.try_encode_plan(delta_scan_by_adds_exec.input().clone())?;
-            let table_schema = self.try_encode_schema(&delta_scan_by_adds_exec.table_schema())?;
+            let table_schema = self.try_encode_schema(delta_scan_by_adds_exec.table_schema())?;
             NodeKind::DeltaScanByAdds(gen::DeltaScanByAddsExecNode {
                 input,
                 table_url: delta_scan_by_adds_exec.table_url().to_string(),
