@@ -29,7 +29,7 @@ message ExtendedPhysicalPlanNode {
     TextExecNode text = 15;
     DeltaWriterExecNode delta_writer = 16;
     DeltaCommitExecNode delta_commit = 17;
-    DeltaDeleteExecNode delta_delete = 18;
+    DeltaScanByAddsExecNode delta_scan_by_adds = 18;
     DeltaFindFilesExecNode delta_find_files = 19;
     DeltaRemoveActionsExecNode delta_remove_actions = 20;
     AvroExecNode avro = 21;
@@ -355,11 +355,10 @@ message DeltaCommitExecNode {
   PhysicalSinkMode sink_mode = 6;
 }
 
-message DeltaDeleteExecNode {
+message DeltaScanByAddsExecNode {
   bytes input = 1;
   string table_url = 2;
-  bytes condition = 3;
-  bytes table_schema = 4;
+  bytes table_schema = 3;
 }
 
 message DeltaFindFilesExecNode {

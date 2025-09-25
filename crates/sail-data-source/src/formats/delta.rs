@@ -146,7 +146,7 @@ impl TableFormat for DeltaTableFormat {
         let DeleteInfo {
             path,
             condition,
-            options: _,
+            options,
         } = info;
 
         let table_url = Self::parse_table_url(ctx, vec![path]).await?;
@@ -155,7 +155,9 @@ impl TableFormat for DeltaTableFormat {
             DataFusionError::Plan("DELETE operation requires a WHERE condition".to_string())
         })?;
 
-        let plan_builder = DeltaDeletePlanBuilder::new(table_url, condition, ctx);
+        let delta_options = resolve_delta_write_options(options)?;
+
+        let plan_builder = DeltaDeletePlanBuilder::new(table_url, condition, ctx, delta_options);
         let delete_exec = plan_builder.build().await?;
 
         Ok(delete_exec)

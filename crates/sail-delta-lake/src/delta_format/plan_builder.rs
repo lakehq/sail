@@ -5,7 +5,7 @@ use datafusion::catalog::Session;
 use datafusion::common::DataFusionError;
 use datafusion::datasource::provider_as_source;
 use datafusion::logical_expr::LogicalPlanBuilder;
-use datafusion::physical_expr::expressions::Column;
+use datafusion::physical_expr::expressions::{Column, NotExpr};
 use datafusion::physical_expr::{LexRequirement, PhysicalExpr};
 use datafusion::physical_plan::filter::FilterExec;
 use datafusion::physical_plan::projection::ProjectionExec;
@@ -16,8 +16,8 @@ use sail_common_datafusion::datasource::PhysicalSinkMode;
 use url::Url;
 
 use super::{
-    create_projection, create_repartition, create_sort, DeltaCommitExec, DeltaDeleteExec,
-    DeltaFindFilesExec, DeltaRemoveActionsExec, DeltaWriterExec,
+    create_projection, create_repartition, create_sort, DeltaCommitExec, DeltaFindFilesExec,
+    DeltaRemoveActionsExec, DeltaScanByAddsExec, DeltaWriterExec,
 };
 use crate::delta_datafusion::{
     delta_to_datafusion_error, DataFusionMixins, DeltaScanConfigBuilder, DeltaTableProvider,
@@ -318,25 +318,33 @@ impl<'a> DeltaPlanBuilder<'a> {
 }
 
 /// Builder for creating a Delta Lake DELETE execution plan.
-/// DeltaFindFilesExec -> DeltaDeleteExec -> DeltaCommitExec
+/// DeltaFindFilesExec -> (Branch A: Rewrite + Branch B: Remove) -> UnionExec -> DeltaCommitExec
+/// Branch A: DeltaScanByAddsExec -> FilterExec -> DeltaWriterExec
+/// Branch B: DeltaRemoveActionsExec
 pub struct DeltaDeletePlanBuilder<'a> {
     table_url: Url,
     condition: Arc<dyn PhysicalExpr>,
     session: &'a dyn Session,
+    options: TableDeltaOptions,
 }
 
 impl<'a> DeltaDeletePlanBuilder<'a> {
-    pub fn new(table_url: Url, condition: Arc<dyn PhysicalExpr>, session: &'a dyn Session) -> Self {
+    pub fn new(
+        table_url: Url,
+        condition: Arc<dyn PhysicalExpr>,
+        session: &'a dyn Session,
+        options: TableDeltaOptions,
+    ) -> Self {
         Self {
             table_url,
             condition,
             session,
+            options,
         }
     }
 
-    /// Build the complete execution plan chain for the DELETE operation.
+    /// Build the execution plan chain for the DELETE operation.
     pub async fn build(self) -> Result<Arc<dyn ExecutionPlan>> {
-        // Open table and get metadata
         let object_store = self
             .session
             .runtime_env()
@@ -363,8 +371,9 @@ impl<'a> DeltaDeletePlanBuilder<'a> {
             .snapshot()
             .arrow_schema()
             .map_err(|e| DataFusionError::External(Box::new(e)))?;
+        let partition_columns = snapshot_state.metadata().partition_columns().clone();
 
-        // Build the physical plan chain
+        // Find candidate files
         let find_files_exec = Arc::new(DeltaFindFilesExec::new(
             self.table_url.clone(),
             Some(self.condition.clone()),
@@ -372,24 +381,49 @@ impl<'a> DeltaDeletePlanBuilder<'a> {
             version,
         ));
 
-        let delete_actions_exec = Arc::new(DeltaDeleteExec::new(
-            find_files_exec,
+        // --- Branch A: File Rewrite ---
+
+        // Scan the data from candidate files
+        let scan_exec = Arc::new(DeltaScanByAddsExec::new(
+            find_files_exec.clone(),
             self.table_url.clone(),
-            self.condition,
             table_schema.clone(),
         ));
 
-        let partition_columns = snapshot_state.metadata().partition_columns().clone();
+        // Filter out rows to be deleted (keep the ones that DON'T match)
+        let negated_condition = Arc::new(NotExpr::new(self.condition.clone()));
+        let filter_exec = Arc::new(FilterExec::try_new(negated_condition, scan_exec)?);
 
-        let commit_exec = Arc::new(DeltaCommitExec::new(
-            delete_actions_exec,
-            self.table_url,
-            partition_columns,
-            true, // table_exists is true, checked above
-            table_schema,
-            // For DELETE, this mode doesn't affect behavior as it's handled by the actions.
-            // Using Append as a neutral default.
+        // Write the kept rows to new files
+        let writer_exec = Arc::new(DeltaWriterExec::new(
+            filter_exec,
+            self.table_url.clone(),
+            self.options.clone(),
+            partition_columns.clone(),
             PhysicalSinkMode::Append,
+            true, // Table exists
+            table_schema.clone(),
+            None,
+        ));
+
+        // --- Branch B: Generate Remove Actions ---
+
+        // Convert Add actions for old files to Remove actions
+        let remove_exec = Arc::new(DeltaRemoveActionsExec::new(find_files_exec));
+
+        // --- Merge and Commit ---
+
+        // Merge the new Add actions and the old Remove actions
+        let union_exec = Arc::new(UnionExec::new(vec![writer_exec, remove_exec]));
+
+        // Commit the transaction
+        let commit_exec = Arc::new(DeltaCommitExec::new(
+            union_exec,
+            self.table_url.clone(),
+            partition_columns,
+            true, // table_exists is true
+            table_schema,
+            PhysicalSinkMode::Append, // Mode for commit operation is not critical here
         ));
 
         Ok(commit_exec)

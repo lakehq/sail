@@ -50,7 +50,7 @@ use sail_data_source::formats::socket::{SocketSourceExec, TableSocketOptions};
 use sail_data_source::formats::text::source::TextSource;
 use sail_data_source::formats::text::writer::{TextSink, TextWriterOptions};
 use sail_delta_lake::delta_format::{
-    DeltaCommitExec, DeltaDeleteExec, DeltaRemoveActionsExec, DeltaWriterExec,
+    DeltaCommitExec, DeltaRemoveActionsExec, DeltaScanByAddsExec, DeltaWriterExec,
 };
 use sail_function::aggregate::kurtosis::KurtosisFunction;
 use sail_function::aggregate::max_min_by::{MaxByFunction, MinByFunction};
@@ -554,30 +554,20 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
                     sink_mode,
                 )))
             }
-            NodeKind::DeltaDelete(gen::DeltaDeleteExecNode {
+            NodeKind::DeltaScanByAdds(gen::DeltaScanByAddsExecNode {
                 input,
                 table_url,
-                condition,
                 table_schema,
             }) => {
                 let input = self.try_decode_plan(&input)?;
                 let table_url = Url::parse(&table_url)
                     .map_err(|e| plan_datafusion_err!("failed to parse table URL: {e}"))?;
                 let table_schema = Arc::new(self.try_decode_schema(&table_schema)?);
-                let condition = parse_physical_expr(
-                    &self.try_decode_message(&condition)?,
-                    &self.context,
-                    &table_schema,
-                    self,
-                )?;
-                Ok(Arc::new(
-                    sail_delta_lake::delta_format::DeltaDeleteExec::new(
-                        input,
-                        table_url,
-                        condition,
-                        table_schema,
-                    ),
-                ))
+                Ok(Arc::new(DeltaScanByAddsExec::new(
+                    input,
+                    table_url,
+                    table_schema,
+                )))
             }
             NodeKind::DeltaFindFiles(gen::DeltaFindFilesExecNode {
                 table_url,
@@ -996,16 +986,14 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
                 sink_schema: self.try_encode_schema(delta_commit_exec.sink_schema())?,
                 sink_mode: Some(sink_mode),
             })
-        } else if let Some(delta_delete_exec) = node.as_any().downcast_ref::<DeltaDeleteExec>() {
-            let input = self.try_encode_plan(delta_delete_exec.input().clone())?;
-            let condition_node =
-                serialize_physical_expr(&delta_delete_exec.condition().clone(), self)?;
-            let condition = self.try_encode_message(condition_node)?;
-            let table_schema = self.try_encode_schema(delta_delete_exec.table_schema())?;
-            NodeKind::DeltaDelete(gen::DeltaDeleteExecNode {
+        } else if let Some(delta_scan_by_adds_exec) =
+            node.as_any().downcast_ref::<DeltaScanByAddsExec>()
+        {
+            let input = self.try_encode_plan(delta_scan_by_adds_exec.input().clone())?;
+            let table_schema = self.try_encode_schema(&delta_scan_by_adds_exec.table_schema())?;
+            NodeKind::DeltaScanByAdds(gen::DeltaScanByAddsExecNode {
                 input,
-                table_url: delta_delete_exec.table_url().to_string(),
-                condition,
+                table_url: delta_scan_by_adds_exec.table_url().to_string(),
                 table_schema,
             })
         } else if let Some(delta_find_files_exec) =
