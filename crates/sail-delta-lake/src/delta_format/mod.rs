@@ -3,7 +3,7 @@ use std::sync::Arc;
 
 use datafusion::arrow::compute::SortOptions;
 use datafusion::arrow::datatypes::Schema as ArrowSchema;
-use datafusion::common::Result;
+use datafusion::common::{Result, ScalarValue};
 use datafusion::error::DataFusionError;
 use datafusion::physical_expr::expressions::Column;
 use datafusion::physical_expr::{LexOrdering, LexRequirement, PhysicalExpr, PhysicalSortExpr};
@@ -11,17 +11,23 @@ use datafusion::physical_plan::projection::ProjectionExec;
 use datafusion::physical_plan::repartition::RepartitionExec;
 use datafusion::physical_plan::sorts::sort::SortExec;
 use datafusion::physical_plan::{ExecutionPlan, Partitioning};
-use datafusion_physical_expr::expressions::Column as PhysicalColumn;
+use datafusion_physical_expr::expressions::{lit, Column as PhysicalColumn};
 use deltalake::kernel::Action;
 use deltalake::protocol::DeltaOperation;
 use serde::{Deserialize, Serialize};
 
 mod commit_exec;
-mod plan_builder;
+mod delete_exec;
+pub mod find_files_exec;
+pub mod plan_builder;
+mod remove_actions_exec;
 mod writer_exec;
 
 pub use commit_exec::DeltaCommitExec;
-pub use plan_builder::DeltaPlanBuilder;
+pub use delete_exec::DeltaDeleteExec;
+pub use find_files_exec::DeltaFindFilesExec;
+pub use plan_builder::{DeltaDeletePlanBuilder, DeltaPlanBuilder};
+pub use remove_actions_exec::DeltaRemoveActionsExec;
 pub use writer_exec::DeltaWriterExec;
 
 /// Create a `ProjectionExec` instance that reorders columns so that partition columns
@@ -103,9 +109,6 @@ pub fn create_sort(
         Arc::new(SortExec::new(lex_ordering, input).with_preserve_partitioning(true))
     } else {
         // No sorting needed, create a minimal SortExec with empty ordering
-        use datafusion::common::ScalarValue;
-        use datafusion_physical_expr::expressions::lit;
-
         let dummy_expr = PhysicalSortExpr {
             expr: lit(ScalarValue::Int32(Some(1))),
             options: SortOptions::default(),
@@ -161,11 +164,10 @@ pub fn create_repartition(
 }
 
 /// Helper struct for serializing commit information into a single JSON field
-#[derive(Serialize, Deserialize)]
+#[derive(Serialize, Deserialize, Default)]
 pub struct CommitInfo {
     pub row_count: u64,
-    pub add_actions: Vec<deltalake::kernel::Add>,
-    pub schema_actions: Vec<Action>,
+    pub actions: Vec<Action>,
     pub initial_actions: Vec<Action>,
     pub operation: Option<DeltaOperation>,
 }

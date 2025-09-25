@@ -2,10 +2,14 @@ use std::sync::Arc;
 
 use datafusion::datasource::provider_as_source;
 use datafusion::execution::context::SessionState;
-use datafusion::logical_expr::LogicalPlanBuilder;
+use datafusion::logical_expr::{LogicalPlanBuilder, Operator};
+use datafusion::physical_expr::expressions::{BinaryExpr, Literal, NotExpr};
 use datafusion::physical_expr::PhysicalExpr;
+use datafusion::physical_expr_adapter::PhysicalExprAdapterFactory;
+use datafusion::physical_plan::filter::FilterExec;
 use datafusion::physical_plan::{ExecutionPlan, ExecutionPlanProperties};
 use datafusion::prelude::DataFrame;
+use datafusion_common::ScalarValue;
 use deltalake::errors::DeltaResult;
 use deltalake::kernel::{Action, Add, Remove};
 use deltalake::logstore::LogStoreRef;
@@ -51,12 +55,8 @@ pub(crate) async fn execute_non_empty_expr_physical(
     writer_stats_config: WriterStatsConfig,
     partition_scan: bool,
     operation_id: Uuid,
+    adapter_factory: Arc<dyn PhysicalExprAdapterFactory>,
 ) -> DeltaResult<(Vec<Action>, Option<DataFrame>)> {
-    use datafusion::logical_expr::Operator;
-    use datafusion::physical_expr::expressions::{BinaryExpr, Literal, NotExpr};
-    use datafusion::physical_plan::filter::FilterExec;
-    use datafusion_common::ScalarValue;
-
     let mut actions: Vec<Action> = Vec::new();
 
     // Take the insert plan schema since it might have been schema evolved, if its not
@@ -83,10 +83,19 @@ pub(crate) async fn execute_non_empty_expr_physical(
         .map_err(datafusion_to_delta_error)?;
 
     let cdf_df = if !partition_scan {
+        // Create an adapter for the schema of the plan that will actually provide the data
+        let logical_schema = snapshot.arrow_schema()?;
+        let adapter = adapter_factory.create(logical_schema, base_physical_plan.schema());
+
+        // Rewrite the expression to align indices with the new plan's schema
+        let adapted_physical_expression = adapter
+            .rewrite(physical_expression)
+            .map_err(datafusion_to_delta_error)?;
+
         // Create IsTrue(expression) as IsNotDistinctFrom(expression, true)
         let true_literal = Arc::new(Literal::new(ScalarValue::Boolean(Some(true))));
         let is_true_expr = Arc::new(BinaryExpr::new(
-            physical_expression,
+            adapted_physical_expression,
             Operator::IsNotDistinctFrom,
             true_literal,
         ));
@@ -183,34 +192,27 @@ pub async fn prepare_predicate_actions_physical(
     deletion_timestamp: i64,
     writer_stats_config: WriterStatsConfig,
     operation_id: Uuid,
+    candidates: &[Add],
+    partition_scan: bool,
+    adapter_factory: Arc<dyn PhysicalExprAdapterFactory>,
 ) -> DeltaResult<(Vec<Action>, Option<DataFrame>)> {
-    let adapter_factory =
-        Arc::new(crate::delta_datafusion::schema_rewriter::DeltaPhysicalExprAdapterFactory {});
-    let candidates = crate::delta_datafusion::find_files_physical(
-        snapshot,
-        log_store.clone(),
-        &state,
-        Some(predicate.clone()),
-        adapter_factory,
-    )
-    .await?;
-
     let (mut actions, cdf_df) = execute_non_empty_expr_physical(
         snapshot,
         log_store,
         state,
         partition_columns,
         predicate,
-        &candidates.candidates,
+        candidates,
         writer_properties,
         writer_stats_config,
-        candidates.partition_scan,
+        partition_scan,
         operation_id,
+        adapter_factory,
     )
     .await?;
 
     // Remove actions for files that match the predicate
-    for action in &candidates.candidates {
+    for action in candidates {
         actions.push(Action::Remove(Remove {
             path: action.path.clone(),
             deletion_timestamp: Some(deletion_timestamp),

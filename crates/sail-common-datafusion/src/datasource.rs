@@ -8,7 +8,7 @@ use datafusion::physical_expr::{
     create_physical_sort_exprs, LexOrdering, LexRequirement, PhysicalExpr, PhysicalSortRequirement,
 };
 use datafusion::physical_plan::ExecutionPlan;
-use datafusion_common::{plan_err, Constraints, DFSchema, Result};
+use datafusion_common::{not_impl_err, plan_err, Constraints, DFSchema, Result};
 use datafusion_expr::expr::Sort;
 use datafusion_expr::Expr;
 
@@ -67,6 +67,16 @@ pub struct SinkInfo {
     pub options: Vec<HashMap<String, String>>,
 }
 
+/// Information required to create a data deleter.
+#[derive(Debug, Clone)]
+pub struct DeleteInfo {
+    pub path: String,
+    pub condition: Option<Arc<dyn PhysicalExpr>>,
+    /// The sets of options for the data deletion.
+    /// A later set of options can override earlier ones.
+    pub options: Vec<HashMap<String, String>>,
+}
+
 /// A trait for preparing physical execution for a specific format.
 #[async_trait]
 pub trait TableFormat: Send + Sync {
@@ -86,6 +96,19 @@ pub trait TableFormat: Send + Sync {
         ctx: &dyn Session,
         info: SinkInfo,
     ) -> Result<Arc<dyn ExecutionPlan>>;
+
+    /// Creates a `ExecutionPlan` for delete.
+    async fn create_deleter(
+        &self,
+        ctx: &dyn Session,
+        info: DeleteInfo,
+    ) -> Result<Arc<dyn ExecutionPlan>> {
+        let _ = (ctx, info);
+        not_impl_err!(
+            "DELETE operation is not yet implemented for {} format",
+            self.name()
+        )
+    }
 }
 
 pub fn create_sort_order(

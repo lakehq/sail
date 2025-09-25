@@ -5,6 +5,7 @@
 use std::collections::HashSet;
 
 use datafusion::logical_expr::Expr;
+use datafusion::prelude::SessionContext;
 use delta_kernel::table_properties::IsolationLevel;
 use deltalake::kernel::transaction::CommitConflictError;
 use deltalake::kernel::{Action, Add, CommitInfo, Metadata, Protocol, Remove, Transaction};
@@ -39,8 +40,6 @@ impl<'a> TransactionInfo<'a> {
         actions: &'a [Action],
         read_whole_table: bool,
     ) -> DeltaResult<Self> {
-        use datafusion::prelude::SessionContext;
-
         let session = SessionContext::new();
         let read_predicates = read_predicates
             .map(|pred| read_snapshot.parse_predicate_expression(pred, &session.state()))
