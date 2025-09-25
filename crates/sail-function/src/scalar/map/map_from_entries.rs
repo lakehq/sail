@@ -84,7 +84,7 @@ fn map_from_entries_inner(args: &[ArrayRef]) -> Result<ArrayRef> {
         flat_values,
         &entries_offsets,
         &entries_offsets,
-        entries_values.nulls(),
-        entries_values.nulls(),
+        entries.nulls(),
+        entries.nulls(),
     )
 }
