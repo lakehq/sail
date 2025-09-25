@@ -19,6 +19,7 @@ pub struct AppConfig {
     pub kubernetes: KubernetesConfig,
     pub parquet: ParquetConfig,
     pub catalog: CatalogConfig,
+    pub optimizer: OptimizerConfig,
     pub spark: SparkConfig,
     /// Reserved for internal use.
     /// This field ensures that environment variables with prefix `SAIL_INTERNAL_`
@@ -253,6 +254,12 @@ pub struct CatalogConfig {
     pub default_database: Vec<String>,
     pub global_temporary_database: Vec<String>,
     pub list: Vec<CatalogType>,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct OptimizerConfig {
+    pub enable_join_reorder: bool,
 }
 
 #[derive(Debug, Clone, Deserialize)]

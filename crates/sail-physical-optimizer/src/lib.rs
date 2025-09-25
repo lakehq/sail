@@ -25,6 +25,11 @@ use crate::join_reorder::JoinReorder;
 mod explicit_repartition;
 mod join_reorder;
 
+#[derive(Debug, Clone, Default)]
+pub struct PhysicalOptimizerOptions {
+    pub enable_join_reorder: bool,
+}
+
 #[expect(clippy::unwrap_used)]
 fn limit_push_past_windows() -> Arc<dyn PhysicalOptimizerRule + Send + Sync> {
     // TODO: remove this workaround after the rule is made public in DataFusion
@@ -37,31 +42,37 @@ fn limit_push_past_windows() -> Arc<dyn PhysicalOptimizerRule + Send + Sync> {
         .unwrap()
 }
 
-pub fn get_physical_optimizers() -> Vec<Arc<dyn PhysicalOptimizerRule + Send + Sync>> {
-    vec![
-        Arc::new(OutputRequirements::new_add_mode()),
-        Arc::new(AggregateStatistics::new()),
-        Arc::new(JoinReorder::new()),
-        Arc::new(JoinSelection::new()),
-        Arc::new(LimitedDistinctAggregation::new()),
-        Arc::new(FilterPushdown::new()),
-        Arc::new(EnforceDistribution::new()),
-        Arc::new(CombinePartialFinalAggregate::new()),
-        Arc::new(EnforceSorting::new()),
-        Arc::new(OptimizeAggregateOrder::new()),
-        Arc::new(ProjectionPushdown::new()),
-        Arc::new(CoalesceBatches::new()),
-        Arc::new(CoalesceAsyncExecInput::new()),
-        Arc::new(OutputRequirements::new_remove_mode()),
-        Arc::new(TopKAggregation::new()),
-        limit_push_past_windows(),
-        Arc::new(LimitPushdown::new()),
-        Arc::new(ProjectionPushdown::new()),
-        Arc::new(EnsureCooperative::new()),
-        Arc::new(FilterPushdown::new_post_optimization()),
-        Arc::new(RewriteExplicitRepartition::new()),
-        Arc::new(SanityCheckPlan::new()),
-    ]
+pub fn get_physical_optimizers(
+    options: PhysicalOptimizerOptions,
+) -> Vec<Arc<dyn PhysicalOptimizerRule + Send + Sync>> {
+    let mut rules: Vec<Arc<dyn PhysicalOptimizerRule + Send + Sync>> = vec![];
+
+    rules.push(Arc::new(OutputRequirements::new_add_mode()));
+    rules.push(Arc::new(AggregateStatistics::new()));
+    if options.enable_join_reorder {
+        rules.push(Arc::new(JoinReorder::new()));
+    }
+    rules.push(Arc::new(JoinSelection::new()));
+    rules.push(Arc::new(LimitedDistinctAggregation::new()));
+    rules.push(Arc::new(FilterPushdown::new()));
+    rules.push(Arc::new(EnforceDistribution::new()));
+    rules.push(Arc::new(CombinePartialFinalAggregate::new()));
+    rules.push(Arc::new(EnforceSorting::new()));
+    rules.push(Arc::new(OptimizeAggregateOrder::new()));
+    rules.push(Arc::new(ProjectionPushdown::new()));
+    rules.push(Arc::new(CoalesceBatches::new()));
+    rules.push(Arc::new(CoalesceAsyncExecInput::new()));
+    rules.push(Arc::new(OutputRequirements::new_remove_mode()));
+    rules.push(Arc::new(TopKAggregation::new()));
+    rules.push(limit_push_past_windows());
+    rules.push(Arc::new(LimitPushdown::new()));
+    rules.push(Arc::new(ProjectionPushdown::new()));
+    rules.push(Arc::new(EnsureCooperative::new()));
+    rules.push(Arc::new(FilterPushdown::new_post_optimization()));
+    rules.push(Arc::new(RewriteExplicitRepartition::new()));
+    rules.push(Arc::new(SanityCheckPlan::new()));
+
+    rules
 }
 
 #[cfg(test)]
@@ -72,7 +83,7 @@ mod tests {
 
     #[test]
     fn test_optimizer_rules() -> datafusion::common::Result<()> {
-        let optimizers = get_physical_optimizers();
+        let optimizers = get_physical_optimizers(Default::default());
         let datafusion_optimizers = PhysicalOptimizer::default().rules;
 
         let datafusion_optimizer_names: Vec<&str> =

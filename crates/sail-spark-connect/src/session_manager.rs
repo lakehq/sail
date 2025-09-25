@@ -20,7 +20,7 @@ use sail_execution::driver::DriverOptions;
 use sail_execution::job::{ClusterJobRunner, JobRunner, LocalJobRunner};
 use sail_logical_optimizer::{default_analyzer_rules, default_optimizer_rules};
 use sail_object_store::DynamicObjectStoreRegistry;
-use sail_physical_optimizer::get_physical_optimizers;
+use sail_physical_optimizer::{get_physical_optimizers, PhysicalOptimizerOptions};
 use sail_plan::function::{
     BUILT_IN_GENERATOR_FUNCTIONS, BUILT_IN_SCALAR_FUNCTIONS, BUILT_IN_TABLE_FUNCTIONS,
 };
@@ -233,7 +233,9 @@ impl SessionManagerActor {
             .with_default_features()
             .with_analyzer_rules(default_analyzer_rules())
             .with_optimizer_rules(default_optimizer_rules())
-            .with_physical_optimizer_rules(get_physical_optimizers())
+            .with_physical_optimizer_rules(get_physical_optimizers(PhysicalOptimizerOptions {
+                enable_join_reorder: options.config.optimizer.enable_join_reorder,
+            }))
             .with_query_planner(new_query_planner())
             .build();
         let context = SessionContext::new_with_state(state);
