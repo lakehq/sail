@@ -5,9 +5,10 @@ rank: 7
 
 # Interval Literals
 
-Interval literals denote fixed spans of time.
+Interval literals denote fixed spans of time and can be written in the **ANSI** or **multi-unit** syntax.
 
-Interval literals can be written in the **ANSI** or **multi-unit** syntax.
+Interval literals are only supported for the year-month and day-time interval types.
+For calendar intervals of the `LITERAL` SQL type (which corresponds to Spark **CalendarIntervalType** or the Arrow Interval(MonthDayNano) type), you can use the `make_interval` function to construct its values.
 
 ## ANSI Interval Syntax
 
