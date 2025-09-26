@@ -81,9 +81,10 @@ jobs:
       # Generate coverage report after tests
       - name: Generate coverage report
         run: |
-          LLVM_PROFDATA=$(rustup which --toolchain stable llvm-profdata || true)
-          if [ -z "$LLVM_PROFDATA" ] || [ ! -f "$LLVM_PROFDATA" ]; then
-            SYSROOT=$(rustc +stable --print sysroot)
+          SYSROOT=$(rustc +stable --print sysroot)
+          HOST_TRIPLE=$(rustc +stable -vV | sed -n 's/^host: //p')
+          LLVM_PROFDATA="$SYSROOT/lib/rustlib/$HOST_TRIPLE/bin/llvm-profdata"
+          if [ ! -f "$LLVM_PROFDATA" ]; then
             LLVM_PROFDATA=$(find "$SYSROOT/lib/rustlib" -name llvm-profdata -print -quit || true)
           fi
           if [ -z "$LLVM_PROFDATA" ] || [ ! -f "$LLVM_PROFDATA" ]; then
