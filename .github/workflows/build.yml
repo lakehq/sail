@@ -80,9 +80,21 @@ jobs:
 
       # Generate coverage report after tests
       - name: Generate coverage report
-        run: grcov target --binary-path target/debug/ -s .
-          -t lcov --branch --ignore-not-existing
-          -o coverage-build.info
+        run: |
+          LLVM_PROFDATA=$(rustup which --toolchain stable llvm-profdata || true)
+          if [ -z "$LLVM_PROFDATA" ] || [ ! -f "$LLVM_PROFDATA" ]; then
+            SYSROOT=$(rustc +stable --print sysroot)
+            LLVM_PROFDATA=$(find "$SYSROOT/lib/rustlib" -name llvm-profdata -print -quit || true)
+          fi
+          if [ -z "$LLVM_PROFDATA" ] || [ ! -f "$LLVM_PROFDATA" ]; then
+            echo "llvm-profdata not found"
+            exit 1
+          fi
+          LLVM_PATH=$(dirname "$LLVM_PROFDATA")
+          grcov target --binary-path target/debug/ -s . \
+            --llvm-path "$LLVM_PATH" \
+            -t lcov --branch --ignore-not-existing \
+            -o coverage-build.info
 
       - name: Upload cargo coverage artifact
         uses: actions/upload-artifact@v4
