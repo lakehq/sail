@@ -9,8 +9,8 @@ use datafusion::logical_expr::Expr;
 use delta_kernel::engine::arrow_conversion::TryIntoArrow;
 use deltalake::errors::{DeltaResult, DeltaTableError};
 
-use crate::delta_datafusion::error::datafusion_to_delta_error;
-use crate::delta_datafusion::expressions::parse_predicate_expression;
+use crate::datasource::error::datafusion_to_delta_error;
+use crate::datasource::expressions::parse_predicate_expression;
 use crate::kernel::snapshot::{EagerSnapshot, LogDataHandler, Snapshot};
 use crate::table::DeltaTableState;
 

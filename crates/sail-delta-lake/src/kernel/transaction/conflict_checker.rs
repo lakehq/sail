@@ -14,7 +14,7 @@ use deltalake::protocol::DeltaOperation;
 use deltalake::table::config::TablePropertiesExt as _;
 use deltalake::{DeltaResult, DeltaTableError};
 
-use crate::delta_datafusion::DataFusionMixins;
+use crate::datasource::DataFusionMixins;
 use crate::kernel::snapshot::LogDataHandler;
 
 /// A struct representing different attributes of current transaction needed for conflict detection.
@@ -91,7 +91,7 @@ impl<'a> TransactionInfo<'a> {
 
     // TODO: properly handle predicates in the PhysicalPlan
     // pub fn read_files(&self) -> Result<impl Iterator<Item = Add> + '_, CommitConflictError> {
-    //     use crate::delta_datafusion::files_matching_predicate;
+    //     use crate::datasource::files_matching_predicate;
 
     //     if let Some(predicate) = &self.read_predicates {
     //         Ok(Either::Left(

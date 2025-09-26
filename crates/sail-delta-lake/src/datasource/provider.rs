@@ -16,8 +16,8 @@ use deltalake::errors::DeltaResult;
 use deltalake::kernel::Add;
 use deltalake::logstore::LogStoreRef;
 
-use crate::delta_datafusion::scan::FileScanParams;
-use crate::delta_datafusion::{
+use crate::datasource::scan::FileScanParams;
+use crate::datasource::{
     build_file_scan_config, delta_to_datafusion_error, df_logical_schema, get_pushdown_filters,
     prune_files, simplify_expr, DataFusionMixins, DeltaScanConfig, DeltaTableStateExt,
 };
@@ -165,7 +165,7 @@ impl TableProvider for DeltaTableProvider {
 
         // Use the new pruning module
         let pruning_result = match &self.files {
-            Some(files) => crate::delta_datafusion::pruning::PruningResult {
+            Some(files) => crate::datasource::pruning::PruningResult {
                 files: files.clone(),
                 pruning_mask: None,
             },

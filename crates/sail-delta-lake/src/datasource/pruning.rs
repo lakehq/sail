@@ -9,7 +9,7 @@ use deltalake::kernel::Add;
 use deltalake::logstore::LogStoreRef;
 use futures::TryStreamExt;
 
-use crate::delta_datafusion::delta_to_datafusion_error;
+use crate::datasource::delta_to_datafusion_error;
 use crate::table::DeltaTableState;
 
 /// Result of file pruning operation

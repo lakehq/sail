@@ -15,8 +15,8 @@ use deltalake::kernel::Add;
 use deltalake::logstore::LogStoreRef;
 use object_store::path::Path;
 
-use crate::delta_datafusion::schema_rewriter::DeltaPhysicalExprAdapterFactory;
-use crate::delta_datafusion::{
+use crate::datasource::schema_rewriter::DeltaPhysicalExprAdapterFactory;
+use crate::datasource::{
     create_object_store_url, delta_to_datafusion_error, partitioned_file_from_action,
     DataFusionMixins, DeltaScanConfig, DeltaTableStateExt,
 };

@@ -29,8 +29,8 @@ use deltalake::{DeltaResult, DeltaTableError};
 use futures::{stream, TryStreamExt};
 use url::Url;
 
-use crate::delta_datafusion::schema_rewriter::DeltaPhysicalExprAdapterFactory;
-use crate::delta_datafusion::{
+use crate::datasource::schema_rewriter::DeltaPhysicalExprAdapterFactory;
+use crate::datasource::{
     collect_physical_columns, datafusion_to_delta_error, join_batches_with_add_actions,
     DataFusionMixins, DeltaScanConfigBuilder, DeltaTableProvider, PredicateProperties, PATH_COLUMN,
 };
@@ -342,7 +342,7 @@ pub async fn find_files_scan_physical(
         .build(snapshot)?;
 
     let logical_schema =
-        crate::delta_datafusion::df_logical_schema(snapshot, &scan_config.file_column_name, None)?;
+        crate::datasource::df_logical_schema(snapshot, &scan_config.file_column_name, None)?;
 
     let mut used_columns = Vec::new();
 

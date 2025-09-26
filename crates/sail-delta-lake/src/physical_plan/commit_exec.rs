@@ -26,8 +26,8 @@ use futures::stream::{self, StreamExt};
 use sail_common_datafusion::datasource::PhysicalSinkMode;
 use url::Url;
 
-use crate::delta_format::CommitInfo;
 use crate::kernel::transaction::{CommitBuilder, CommitProperties, TableReference};
+use crate::physical_plan::CommitInfo;
 use crate::table::{create_delta_table_with_object_store, open_table_with_object_store};
 
 /// Physical execution node for Delta Lake commit operations
