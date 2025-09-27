@@ -9,7 +9,7 @@ use datafusion::physical_expr::expressions::{Column, Literal};
 use datafusion::physical_expr::PhysicalExpr;
 use datafusion_physical_expr_adapter::{PhysicalExprAdapter, PhysicalExprAdapterFactory};
 
-use crate::delta_datafusion::type_converter::DeltaTypeConverter;
+use crate::datasource::type_converter::DeltaTypeConverter;
 
 /// A Physical Expression Adapter Factory which provides casting and rewriting of physical expressions
 /// for Delta Lake conventions.

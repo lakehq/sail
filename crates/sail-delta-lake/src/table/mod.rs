@@ -14,7 +14,7 @@ pub use state::DeltaTableState;
 use url::Url;
 
 // [Credit]: https://github.com/delta-io/delta-rs/blob/1f0b4d0965a85400c1effc6e9b4c7ebbb6795978/crates/core/src/table/mod.rs
-use crate::delta_datafusion::{delta_to_datafusion_error, DeltaScanConfig, DeltaTableProvider};
+use crate::datasource::{delta_to_datafusion_error, DeltaScanConfig, DeltaTableProvider};
 use crate::options::TableDeltaOptions;
 mod state;
 
