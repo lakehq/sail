@@ -1,17 +1,6 @@
 use std::cmp::{max, min};
 
-use datafusion::arrow::datatypes::{DataType, DECIMAL128_MAX_PRECISION, DECIMAL256_MAX_PRECISION};
-
-#[inline]
-pub(crate) fn both_are_decimal(left: &DataType, right: &DataType) -> bool {
-    matches!(
-        (left, right),
-        (DataType::Decimal128(_, _), DataType::Decimal128(_, _))
-            | (DataType::Decimal128(_, _), DataType::Decimal256(_, _))
-            | (DataType::Decimal256(_, _), DataType::Decimal128(_, _))
-            | (DataType::Decimal256(_, _), DataType::Decimal256(_, _))
-    )
-}
+use datafusion::arrow::datatypes::{DECIMAL128_MAX_PRECISION, DECIMAL256_MAX_PRECISION};
 
 // https://github.com/apache/spark/blob/50a328ba98577ea12bbae50f2cbf406438b01a2f/sql/catalyst/src/main/scala/org/apache/spark/sql/catalyst/expressions/mathExpressions.scala#L1491-L1508
 #[inline]
