@@ -227,6 +227,7 @@ pub struct ParquetConfig {
     pub maximum_parallel_row_group_writers: usize,
     pub maximum_buffered_record_batches_per_stream: usize,
     pub file_statistics_cache: FileStatisticsCacheConfig,
+    pub file_metadata_cache: FileMetadataCacheConfig,
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -237,6 +238,14 @@ pub struct FileStatisticsCacheConfig {
     pub ttl: Option<u64>,
     #[serde(deserialize_with = "deserialize_non_zero")]
     pub max_entries: Option<u64>,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct FileMetadataCacheConfig {
+    pub r#type: CacheType,
+    #[serde(deserialize_with = "deserialize_non_zero")]
+    pub size_limit: Option<u64>,
 }
 
 #[derive(Debug, Clone, Deserialize)]

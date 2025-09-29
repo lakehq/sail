@@ -5,13 +5,14 @@ use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
 use datafusion::execution::cache::cache_manager::{
-    CacheManagerConfig, FileStatisticsCache, ListFilesCache,
+    CacheManagerConfig, FileMetadataCache, FileStatisticsCache, ListFilesCache,
 };
 use datafusion::execution::runtime_env::RuntimeEnvBuilder;
 use datafusion::execution::SessionStateBuilder;
 use datafusion::prelude::{SessionConfig, SessionContext};
 use log::{debug, info};
 use sail_cache::file_listing_cache::MokaFileListingCache;
+use sail_cache::file_metadata_cache::MokaFileMetadataCache;
 use sail_cache::file_statistics_cache::MokaFileStatisticsCache;
 use sail_common::config::{AppConfig, CacheType, ExecutionMode};
 use sail_common::runtime::RuntimeHandle;
@@ -217,10 +218,30 @@ impl SessionManagerActor {
                     }
                 }
             };
+            let file_metadata_cache: Arc<dyn FileMetadataCache> = {
+                let size_limit = options.config.parquet.file_metadata_cache.size_limit;
+                match options.config.parquet.file_metadata_cache.r#type {
+                    CacheType::None => {
+                        debug!("Not using file metadata cache");
+                        Arc::new(MokaFileMetadataCache::new(Some(0)))
+                    }
+                    CacheType::Global => {
+                        debug!("Using global file metadata cache");
+                        self.global_file_metadata_cache
+                            .get_or_insert_with(|| Arc::new(MokaFileMetadataCache::new(size_limit)))
+                            .clone()
+                    }
+                    CacheType::Session => {
+                        debug!("Using session file metadata cache");
+                        Arc::new(MokaFileMetadataCache::new(size_limit))
+                    }
+                }
+            };
 
             let cache_config = CacheManagerConfig::default()
                 .with_files_statistics_cache(file_statistics_cache)
-                .with_list_files_cache(file_listing_cache);
+                .with_list_files_cache(file_listing_cache)
+                .with_file_metadata_cache(Some(file_metadata_cache));
             let builder = RuntimeEnvBuilder::default()
                 .with_object_store_registry(Arc::new(registry))
                 .with_cache_manager(cache_config);
@@ -281,6 +302,7 @@ struct SessionManagerActor {
     sessions: HashMap<SessionKey, SessionContext>,
     global_file_listing_cache: Option<Arc<MokaFileListingCache>>,
     global_file_statistics_cache: Option<Arc<MokaFileStatisticsCache>>,
+    global_file_metadata_cache: Option<Arc<MokaFileMetadataCache>>,
 }
 
 #[tonic::async_trait]
@@ -294,6 +316,7 @@ impl Actor for SessionManagerActor {
             sessions: HashMap::new(),
             global_file_listing_cache: None,
             global_file_statistics_cache: None,
+            global_file_metadata_cache: None,
         }
     }
 
