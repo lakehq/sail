@@ -9,8 +9,8 @@
 ...     ), 
 ...     (array()),
 ...     (cast(NULL as array<struct<a: int, b: string>>)) 
-... as tab(data)
-""").show(truncate=False)
+... as tab(data);
+... """).show(truncate=False)
 +---------------------------+---------------+
 |result                     |type           |
 +---------------------------+---------------+
