@@ -27,4 +27,3 @@ log = { workspace = true }
 fastrace = { workspace = true }
 pyo3 = { workspace = true }
 rustls = { workspace = true }
-aws-lc-rs = { workspace = true }

@@ -11,6 +11,7 @@ _September 30, 2025_
 
 - Added support for the binary file format ([#853](https://github.com/lakehq/sail/pull/853)).
 - Implemented an experimental join reorder physical optimizer using the DPhyp algorithm ([#810](https://github.com/lakehq/sail/pull/810) and [#917](https://github.com/lakehq/sail/pull/917)). This optimizer is not enabled by default but can be enabled via configuration options.
+- Added support for file metadata caching to improve read performance for the Parquet data source ([#928](https://github.com/lakehq/sail/pull/928)).
 - Added support for the PySpark UDF `applyInArrow()` method in the Spark DataFrame API for grouped and cogrouped data ([#886](https://github.com/lakehq/sail/pull/886) and [#887](https://github.com/lakehq/sail/pull/887)).
 - Added support for the following SQL functions ([#820](https://github.com/lakehq/sail/pull/820), [#841](https://github.com/lakehq/sail/pull/841), [#824](https://github.com/lakehq/sail/pull/824), [#843](https://github.com/lakehq/sail/pull/843), [#835](https://github.com/lakehq/sail/pull/835), [#855](https://github.com/lakehq/sail/pull/855), [#859](https://github.com/lakehq/sail/pull/859), and [#860](https://github.com/lakehq/sail/pull/860)):
   - `elt`
