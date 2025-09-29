@@ -94,6 +94,7 @@ hf-hub = { version = "0.4.3", default-features = false, features = ["tokio"] }
 reqwest = "0.12.23"
 percent-encoding = "2.3.2"
 rustls = "0.23.31"
+aws-lc-rs = "~1.13.3"
 dashmap = "6.1.0"
 itertools = "0.14.0"
 moka = { version = "0.12.10", features = ["sync"] }
