@@ -605,9 +605,9 @@ mod tests {
 
         // Test neighbor lookup for relation 1
         let set_1 = JoinSet::new_singleton(1).unwrap();
-        let neighbors = graph.get_neighbors(set_1);
-        let mut expected = vec![0, 2];
-        expected.sort();
+        let mut neighbors = graph.get_neighbors(set_1);
+        neighbors.sort();
+        let expected = vec![0, 2];
         assert_eq!(neighbors, expected); // Relation 1 connected to relations 0 and 2
 
         // Test connecting edges lookup
