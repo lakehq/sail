@@ -93,6 +93,7 @@ impl GraphBuilder {
         trace!("Visiting plan: {}", plan.name());
         let any_plan = plan.as_any();
 
+        // TODO: Extend to support `SortMergeJoinExec`.
         if let Some(join_plan) = any_plan.downcast_ref::<HashJoinExec>() {
             if join_plan.join_type() == &JoinType::Inner {
                 trace!("Visiting inner join: {}", join_plan.name());
@@ -178,6 +179,7 @@ impl GraphBuilder {
                 &left_map,
                 &right_map,
             )?;
+            // TODO: Separating the equi-join conditions from the non-equi filter expression at the source
             filter_expr = Arc::new(BinaryExpr::new(filter_expr, Operator::And, extra))
                 as Arc<dyn PhysicalExpr>;
         }
@@ -222,9 +224,11 @@ impl GraphBuilder {
         let transformed = expr_arc.transform(|node| {
             if let Some(col) = node.as_any().downcast_ref::<Column>() {
                 let i = col.index();
-                // Safeguard: if index out of bounds, leave as-is
+                // Safeguard: if index out of bounds, return error
                 if i >= indices.len() {
-                    return Ok(Transformed::no(node));
+                    return Err(DataFusionError::Internal(
+                        "Column index out of bounds in join filter rewrite".to_string(),
+                    ));
                 }
                 let ci = &indices[i];
                 // Determine which stable column this refers to
@@ -240,6 +244,7 @@ impl GraphBuilder {
                 }) = stable_entry_opt.cloned()
                 {
                     // Build a stable name like R{relation_id}.C{column_index}
+                    // TODO: Consider implement PhysicalExpr trait for StableColumn.
                     let stable_name = format!("R{}.C{}", relation_id, column_index);
                     // TODO: Reconstructor will retarget indices to its compact schema
                     let new_col = Column::new(&stable_name, 0);
@@ -393,35 +398,21 @@ impl GraphBuilder {
         &self,
         on_conditions: &JoinConditionPairs,
     ) -> Result<Arc<dyn PhysicalExpr>> {
-        use datafusion::logical_expr::Operator;
-        use datafusion::physical_expr::expressions::BinaryExpr;
-
-        if on_conditions.is_empty() {
-            return Err(DataFusionError::Internal(
-                "Join must have at least one ON condition".to_string(),
-            ));
-        }
-
-        // Start with the first equality condition
-        let mut result_expr = Arc::new(BinaryExpr::new(
-            on_conditions[0].0.clone(),
-            Operator::Eq,
-            on_conditions[0].1.clone(),
-        )) as Arc<dyn PhysicalExpr>;
-
-        // Chain additional conditions with AND
-        for (left_expr, right_expr) in on_conditions.iter().skip(1) {
-            let eq_expr = Arc::new(BinaryExpr::new(
-                left_expr.clone(),
-                Operator::Eq,
-                right_expr.clone(),
-            )) as Arc<dyn PhysicalExpr>;
-
-            result_expr = Arc::new(BinaryExpr::new(result_expr, Operator::And, eq_expr))
-                as Arc<dyn PhysicalExpr>;
-        }
-
-        Ok(result_expr)
+        on_conditions
+            .iter()
+            .map(|(a, b)| -> Arc<dyn PhysicalExpr> {
+                Arc::new(BinaryExpr::new(a.clone(), Operator::Eq, b.clone()))
+            })
+            .fold(None, |acc, expr| -> Option<Arc<dyn PhysicalExpr>> {
+                if let Some(acc_expr) = acc {
+                    Some(Arc::new(BinaryExpr::new(acc_expr, Operator::And, expr)))
+                } else {
+                    Some(expr)
+                }
+            })
+            .ok_or_else(|| {
+                DataFusionError::Internal("Join must have at least one ON condition".to_string())
+            })
     }
 }
 

@@ -125,6 +125,7 @@ impl JoinReorder {
                 );
 
                 // The entire region has been optimized and replaced. Return the new plan.
+                // TODO: Recursively optimizing descendant regions.
                 return Ok(final_plan);
             }
         }

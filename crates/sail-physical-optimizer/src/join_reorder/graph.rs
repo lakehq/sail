@@ -377,7 +377,7 @@ impl QueryGraph {
     }
 
     /// Gets all edges connecting two disjoint subsets `left` and `right` using the optimized structure.
-    pub fn get_connecting_edges(&self, left: JoinSet, right: JoinSet) -> Vec<&JoinEdge> {
+    pub fn get_connecting_edge_indices(&self, left: JoinSet, right: JoinSet) -> Vec<usize> {
         if !left.is_disjoint(&right) {
             return vec![];
         }
@@ -395,10 +395,7 @@ impl QueryGraph {
             );
         }
 
-        edge_indices
-            .into_iter()
-            .map(|idx| &self.edges[idx])
-            .collect()
+        edge_indices.into_iter().collect()
     }
 
     /// Finds connecting edges for all subsets of given size.
@@ -613,8 +610,8 @@ mod tests {
         // Test connecting edges lookup
         let set_0 = JoinSet::new_singleton(0).unwrap();
         let set_1 = JoinSet::new_singleton(1).unwrap();
-        let connecting_edges = graph.get_connecting_edges(set_0, set_1);
-        assert_eq!(connecting_edges.len(), 1); // One connecting edge expected
+        let connecting_edge_indices = graph.get_connecting_edge_indices(set_0, set_1);
+        assert_eq!(connecting_edge_indices.len(), 1); // One connecting edge expected
     }
 
     #[test]

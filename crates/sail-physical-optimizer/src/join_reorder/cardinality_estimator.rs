@@ -302,11 +302,12 @@ impl CardinalityEstimator {
         &self,
         left_card: f64,
         right_card: f64,
-        connecting_edges: &[&JoinEdge],
+        connecting_edge_indices: &[usize],
     ) -> f64 {
         let mut selectivity = 1.0;
 
-        for edge in connecting_edges {
+        for &index in connecting_edge_indices {
+            let edge = &self.graph.edges[index];
             // TODO: Implement more granular join selectivity estimation.
             // TDom-based estimation for equi-joins
             let tdom = self.get_tdom_for_edge(edge);

@@ -14,6 +14,7 @@ use datafusion::physical_plan::ExecutionPlan;
 
 use crate::join_reorder::builder::{ColumnMap, ColumnMapEntry};
 use crate::join_reorder::dp_plan::{DPPlan, PlanType};
+use crate::join_reorder::find_physical_index;
 use crate::join_reorder::graph::{QueryGraph, StableColumn};
 use crate::join_reorder::join_set::JoinSet;
 
@@ -51,6 +52,22 @@ impl<'a> PlanReconstructor<'a> {
         }
     }
 
+    /// Parse stable column name like "R{rel}.C{col}" -> (rel, col)
+    fn parse_stable_name(name: &str) -> Option<(usize, usize)> {
+        if !name.starts_with('R') {
+            return None;
+        }
+        let dot = name.find('.')?;
+        let rel_str = &name[1..dot];
+        if !name[dot + 1..].starts_with('C') {
+            return None;
+        }
+        let col_str = &name[dot + 2..];
+        let rel = rel_str.parse::<usize>().ok()?;
+        let col = col_str.parse::<usize>().ok()?;
+        Some((rel, col))
+    }
+
     /// Main entry point: recursively reconstruct ExecutionPlan from DPPlan
     /// Returns tuple: (reconstructed plan, column mapping for that plan's output)
     pub fn reconstruct(&mut self, dp_plan: &DPPlan) -> Result<(Arc<dyn ExecutionPlan>, ColumnMap)> {
@@ -85,13 +102,12 @@ impl<'a> PlanReconstructor<'a> {
                 }
             }
 
-            // Final sanity check: warn if there are still pending filters after reconstruction
+            // Final sanity check if there are still pending filters after reconstruction
             if !self.pending_filters.is_empty() && dp_plan.join_set.cardinality() > 1u32 {
-                log::warn!(
-                    "JoinReorder: {} pending filters remain after reconstructing join set {:?}. These filters may not be applied.",
-                    self.pending_filters.len(),
-                    dp_plan.join_set.iter().collect::<Vec<_>>()
-                );
+                Err(DataFusionError::Internal(
+                    "Some pending filters could not be applied after full reconstruction"
+                        .to_string(),
+                ))?;
             }
         }
 
@@ -171,7 +187,8 @@ impl<'a> PlanReconstructor<'a> {
             &join_type,          // Use determined join type
             None,                // projection
             PartitionMode::Auto, // partition_mode
-            NullEquality::NullEqualsNothing, // null_equality
+            NullEquality::NullEqualsNothing, // TODO: Skip the optimizer completely
+                                 // if NullEquality is something else in the input region.
         )?);
 
         // Merge left and right ColumnMap to create output ColumnMap for new Join plan
@@ -362,25 +379,9 @@ impl<'a> PlanReconstructor<'a> {
         use datafusion::common::tree_node::{Transformed, TreeNode};
         use datafusion::physical_expr::expressions::Column;
 
-        // Helper: parse stable name like "R{rel}.C{col}" -> (rel, col)
-        let parse_stable = |name: &str| -> Option<(usize, usize)> {
-            if !name.starts_with('R') {
-                return None;
-            }
-            let dot = name.find('.')?;
-            let rel_str = &name[1..dot];
-            if !name[dot + 1..].starts_with('C') {
-                return None;
-            }
-            let col_str = &name[dot + 2..];
-            let rel = rel_str.parse::<usize>().ok()?;
-            let col = col_str.parse::<usize>().ok()?;
-            Some((rel, col))
-        };
-
         // Find side and base index for a column, supporting stable names and schema field names
         let find_side_and_index = |col: &Column| -> Option<(JoinSide, usize)> {
-            if let Some((rel, cidx)) = parse_stable(col.name()) {
+            if let Some((rel, cidx)) = Self::parse_stable_name(col.name()) {
                 // Look up in left_map by stable, else right_map
                 if let Some(pos) = left_map.iter().position(|e| matches!(e, ColumnMapEntry::Stable{ relation_id, column_index } if *relation_id==rel && *column_index==cidx)) {
                     return Some((JoinSide::Left, pos));
@@ -563,25 +564,10 @@ impl<'a> PlanReconstructor<'a> {
         left_plan: &Arc<dyn ExecutionPlan>,
         right_plan: &Arc<dyn ExecutionPlan>,
     ) -> Result<JoinSet> {
-        let parse_stable = |name: &str| -> Option<(usize, usize)> {
-            if !name.starts_with('R') {
-                return None;
-            }
-            let dot = name.find('.')?;
-            let rel_str = &name[1..dot];
-            if !name[dot + 1..].starts_with('C') {
-                return None;
-            }
-            let col_str = &name[dot + 2..];
-            let rel = rel_str.parse::<usize>().ok()?;
-            let col = col_str.parse::<usize>().ok()?;
-            Some((rel, col))
-        };
-
         let mut bits: u64 = 0;
         let cols = collect_columns(predicate);
         for c in &cols {
-            if let Some((rel, _)) = parse_stable(c.name()) {
+            if let Some((rel, _)) = Self::parse_stable_name(c.name()) {
                 bits |= 1u64 << rel;
                 continue;
             }
@@ -788,17 +774,6 @@ impl<'a> PlanReconstructor<'a> {
         self.plan_cache.clear();
         self.pending_filters.clear();
     }
-}
-
-/// Helper to find the physical index of a stable column in a ColumnMap.
-fn find_physical_index(stable_col: &StableColumn, map: &ColumnMap) -> Option<usize> {
-    map.iter().position(|entry| match entry {
-        ColumnMapEntry::Stable {
-            relation_id,
-            column_index,
-        } => relation_id == &stable_col.relation_id && column_index == &stable_col.column_index,
-        _ => false,
-    })
 }
 
 #[cfg(test)]

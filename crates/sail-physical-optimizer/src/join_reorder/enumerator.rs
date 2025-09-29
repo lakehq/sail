@@ -6,7 +6,7 @@ use datafusion::error::{DataFusionError, Result};
 use crate::join_reorder::cardinality_estimator::CardinalityEstimator;
 use crate::join_reorder::cost_model::CostModel;
 use crate::join_reorder::dp_plan::DPPlan;
-use crate::join_reorder::graph::{JoinEdge, QueryGraph};
+use crate::join_reorder::graph::QueryGraph;
 use crate::join_reorder::join_set::JoinSet;
 
 /// Plan enumerator that implements dynamic programming algorithm to find optimal join order.
@@ -33,10 +33,10 @@ impl PlanEnumerator {
             return vec![];
         }
         let mut subsets = Vec::new();
-        let total = 1usize << n;
-        for mask in 1..total {
+        let last = 1usize.unbounded_shl(n as u32).wrapping_sub(1);
+        for mask in 1..=last {
             let mut subset = Vec::new();
-            for (i, &elem) in elems.iter().enumerate().take(n) {
+            for (i, &elem) in elems.iter().enumerate() {
                 if (mask & (1usize << i)) != 0 {
                     subset.push(elem);
                 }
@@ -57,30 +57,6 @@ impl PlanEnumerator {
             cost_model,
             emit_count: 0,
         }
-    }
-
-    /// Helper to get indices of connecting edges for two disjoint sets using the optimized structure.
-    fn get_connecting_edge_indices(&self, left: JoinSet, right: JoinSet) -> Vec<usize> {
-        if !left.is_disjoint(&right) {
-            return vec![];
-        }
-
-        let connecting_edges = self.query_graph.get_connecting_edges(left, right);
-        let mut edge_indices = Vec::new();
-
-        for edge in connecting_edges {
-            // Find the index of this edge in the original edges vector
-            if let Some(index) = self
-                .query_graph
-                .edges
-                .iter()
-                .position(|graph_edge| std::ptr::eq(edge, graph_edge))
-            {
-                edge_indices.push(index);
-            }
-        }
-
-        edge_indices
     }
 
     /// Main method that solves for the optimal join order using DPhyp-style enumeration.
@@ -198,7 +174,7 @@ impl PlanEnumerator {
 
         for &nbr in neighbors.iter().rev() {
             let nbr_set = JoinSet::new_singleton(nbr)?;
-            let edge_indices = self.get_connecting_edge_indices(nodes, nbr_set);
+            let edge_indices = self.query_graph.get_connecting_edge_indices(nodes, nbr_set);
 
             if !edge_indices.is_empty()
                 && !self.try_emit_csg_cmp(nodes, nbr_set, edge_indices.clone())?
@@ -291,7 +267,7 @@ impl PlanEnumerator {
             let combined = right | subset_join_set;
             if combined.cardinality() > right.cardinality() && self.dp_table.contains_key(&combined)
             {
-                let edge_indices = self.get_connecting_edge_indices(left, combined);
+                let edge_indices = self.query_graph.get_connecting_edge_indices(left, combined);
                 if !edge_indices.is_empty()
                     && !self.try_emit_csg_cmp(left, combined, edge_indices.clone())?
                 {
@@ -349,17 +325,11 @@ impl PlanEnumerator {
             None => return Ok(f64::INFINITY),
         };
 
-        // Build connecting edge references from indices
-        let connecting_edges: Vec<&JoinEdge> = edge_indices
-            .iter()
-            .map(|&i| &self.query_graph.edges[i])
-            .collect();
-
         // Estimate join cardinality and cost
         let new_cardinality = self.cardinality_estimator.estimate_join_cardinality(
             left_plan.cardinality,
             right_plan.cardinality,
-            &connecting_edges,
+            edge_indices,
         );
         let new_cost = self
             .cost_model
@@ -390,7 +360,7 @@ impl PlanEnumerator {
     fn are_subsets_connected(&self, left_subset: JoinSet, right_subset: JoinSet) -> bool {
         !self
             .query_graph
-            .get_connecting_edges(left_subset, right_subset)
+            .get_connecting_edge_indices(left_subset, right_subset)
             .is_empty()
     }
 
@@ -460,15 +430,16 @@ impl PlanEnumerator {
                         None => continue,
                     };
 
-                    // Get connecting edges
-                    let connecting_edges =
-                        self.query_graph.get_connecting_edges(left_set, right_set);
+                    // Get connecting edge indices
+                    let edge_indices = self
+                        .query_graph
+                        .get_connecting_edge_indices(left_set, right_set);
 
                     // Estimate join cardinality
                     let new_cardinality = self.cardinality_estimator.estimate_join_cardinality(
                         left_plan.cardinality,
                         right_plan.cardinality,
-                        &connecting_edges,
+                        &edge_indices,
                     );
 
                     // Compute cost
@@ -481,22 +452,6 @@ impl PlanEnumerator {
                         best_cost = new_cost;
                         best_left_idx = i;
                         best_right_idx = j;
-
-                        // Get edge indices
-                        let mut edge_indices = Vec::new();
-                        for edge in &connecting_edges {
-                            let index = self
-                                .query_graph
-                                .edges
-                                .iter()
-                                .position(|graph_edge| std::ptr::eq(*edge, graph_edge))
-                                .ok_or_else(|| {
-                                    DataFusionError::Internal(
-                                        "Edge should exist in query graph".to_string(),
-                                    )
-                                })?;
-                            edge_indices.push(index);
-                        }
 
                         // Create the join plan
                         best_plan = Some(Arc::new(DPPlan::new_join(
