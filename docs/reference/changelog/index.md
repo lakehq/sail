@@ -9,6 +9,45 @@ next: false
 
 _September 30, 2025_
 
+- Added support for the binary file format ([#853](https://github.com/lakehq/sail/pull/853)).
+- Implemented an experimental join reorder physical optimizer using the DPhyp algorithm ([#810](https://github.com/lakehq/sail/pull/810) and [#917](https://github.com/lakehq/sail/pull/917)). This optimizer is not enabled by default but can be enabled via configuration options.
+- Added support for the PySpark UDF `applyInArrow()` method in the Spark DataFrame API for grouped and cogrouped data ([#886](https://github.com/lakehq/sail/pull/886) and [#887](https://github.com/lakehq/sail/pull/887)).
+- Added support for the following SQL functions ([#820](https://github.com/lakehq/sail/pull/820), [#841](https://github.com/lakehq/sail/pull/841), [#824](https://github.com/lakehq/sail/pull/824), [#843](https://github.com/lakehq/sail/pull/843), [#835](https://github.com/lakehq/sail/pull/835), [#855](https://github.com/lakehq/sail/pull/855), [#859](https://github.com/lakehq/sail/pull/859), and [#860](https://github.com/lakehq/sail/pull/860)):
+  - `elt`
+  - `inline`
+  - `inline_outer`
+  - `try_parse_url`
+  - `stack`
+  - `make_dt_interval`
+  - `version`
+  - `months_between`
+  - `user`
+  - `session_user`
+- Improved the following SQL functions ([#841](https://github.com/lakehq/sail/pull/841), [#847](https://github.com/lakehq/sail/pull/847), [#878](https://github.com/lakehq/sail/pull/878), [#920](https://github.com/lakehq/sail/pull/920), [#926](https://github.com/lakehq/sail/pull/926), and [#914](https://github.com/lakehq/sail/pull/914)):
+  - `array`
+  - `try_multiply`
+  - `map_from_arrays`
+  - `map_from_entries`
+  - `approx_count_distinct`
+- Added support for using all aggregate functions in window expressions ([#861](https://github.com/lakehq/sail/pull/861)).
+- Fixed issues with sorting by aggregate expressions ([#915](https://github.com/lakehq/sail/pull/915)).
+- Added an example of using Kustomize with pod templates for Sail workers ([#833](https://github.com/lakehq/sail/pull/833)).
+- Fixed issues with session key generation when the user ID is missing on the Windows platform ([#849](https://github.com/lakehq/sail/pull/849)).
+- Supported time travel for Delta Lake ([#854](https://github.com/lakehq/sail/pull/854)).
+- Supported the delete operation for Delta Lake ([#856](https://github.com/lakehq/sail/pull/856)).
+- Improved Delta Lake integration ([#848](https://github.com/lakehq/sail/pull/848) and [#916](https://github.com/lakehq/sail/pull/916)).
+- Continued the work for data streaming support ([#832](https://github.com/lakehq/sail/pull/832)).
+- Added batch view creation endpoints in the MCP server ([#875](https://github.com/lakehq/sail/pull/875)).
+- Fixed input repartitioning issues for PySpark UDTFs ([#662](https://github.com/lakehq/sail/pull/662)).
+- Fixed issues with the `DataFrame.replace()` method in the Spark DataFrame API ([#891](https://github.com/lakehq/sail/pull/891)).
+- Supported the `REAL` data type in the SQL parser ([#892](https://github.com/lakehq/sail/pull/892)).
+- Fixed various literal parsing issues in the SQL parser ([#868](https://github.com/lakehq/sail/pull/868), [#872](https://github.com/lakehq/sail/pull/872), and [#873](https://github.com/lakehq/sail/pull/873)).
+- Fixed issues with PySpark UDFs with no arguments ([#895](https://github.com/lakehq/sail/pull/895)).
+
+### Contributors
+
+Huge thanks to [@SparkApplicationMaster](https://github.com/SparkApplicationMaster), [@davidlghellin](https://github.com/davidlghellin), and [@rafafrdz](https://github.com/rafafrdz) for the continued contributions!
+
 ## 0.3.5
 
 _September 5, 2025_
