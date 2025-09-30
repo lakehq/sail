@@ -13,6 +13,11 @@ chumsky = { workspace = true }
 phf = { workspace = true }
 either = { workspace = true }
 paste = { workspace = true }
+serde = { workspace = true }
+itertools = { workspace = true }
+
+[dev-dependencies]
+sail-common = { path = "../sail-common" }
 
 [build-dependencies]
 prettyplease = { workspace = true }

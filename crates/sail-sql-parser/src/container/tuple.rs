@@ -1,10 +1,12 @@
+use std::any::TypeId;
+
 use chumsky::extra::ParserExtra;
 use chumsky::prelude::Input;
 use chumsky::Parser;
 use paste::paste;
 
 use crate::options::ParserOptions;
-use crate::tree::TreeParser;
+use crate::tree::{SyntaxDescriptor, SyntaxNode, TreeParser, TreeSyntax};
 
 macro_rules! nested {
     (@fold $acc:tt) => { $acc };
@@ -27,6 +29,30 @@ macro_rules! impl_tree_parser_for_tuple {
                     $(.then($Ts::parser(args.clone(), options)))*;
                 paste! {
                     parser.map(|nested!([<$T:lower>] $([<$Ts:lower>])*)| ([<$T:lower>], $([<$Ts:lower>],)*))
+                }
+            }
+        }
+
+        impl<$T $(,$Ts)*> TreeSyntax for ($T, $($Ts,)*)
+        where
+            $T: TreeSyntax + 'static
+            $(,$Ts: TreeSyntax + 'static)*
+        {
+            fn syntax() -> SyntaxDescriptor {
+                let name = format!(
+                    "Tuple({})",
+                    vec![$T::syntax().name $(, $Ts::syntax().name)*].join(", ")
+                );
+                SyntaxDescriptor {
+                    name,
+                    node: SyntaxNode::Sequence(vec![
+                        SyntaxNode::NonTerminal(TypeId::of::<$T>())
+                        $(,SyntaxNode::NonTerminal(TypeId::of::<$Ts>()))*
+                    ]),
+                    children: vec![
+                        (TypeId::of::<$T>(), Box::new($T::syntax))
+                        $(,(TypeId::of::<$Ts>(), Box::new($Ts::syntax)))*
+                    ],
                 }
             }
         }

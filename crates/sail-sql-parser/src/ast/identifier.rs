@@ -3,7 +3,7 @@ use chumsky::input::{Input, InputRef, ValueInput};
 use chumsky::label::LabelError;
 use chumsky::prelude::custom;
 use chumsky::Parser;
-use sail_sql_macro::TreeParser;
+use sail_sql_macro::{TreeParser, TreeSyntax};
 
 use crate::ast::operator::{Asterisk, Period};
 use crate::combinator::sequence;
@@ -12,7 +12,7 @@ use crate::options::ParserOptions;
 use crate::span::TokenSpan;
 use crate::string::StringValue;
 use crate::token::{Keyword, Punctuation, StringStyle, Token, TokenLabel};
-use crate::tree::TreeParser;
+use crate::tree::{SyntaxDescriptor, SyntaxNode, TerminalKind, TreeParser, TreeSyntax};
 use crate::utils::skip_whitespace;
 
 fn parse_identifier<'a, F, I, E>(
@@ -79,6 +79,16 @@ where
     }
 }
 
+impl TreeSyntax for Ident {
+    fn syntax() -> SyntaxDescriptor {
+        SyntaxDescriptor {
+            name: "Identifier".to_string(),
+            node: SyntaxNode::Terminal(TerminalKind::Identifier),
+            children: vec![],
+        }
+    }
+}
+
 /// A restricted identifier parser for column names.
 pub(crate) fn column_ident<'a, I, E>(
     options: &'a ParserOptions,
@@ -113,7 +123,7 @@ where
     custom(move |input| parse_identifier(input, matcher, options))
 }
 
-#[derive(Debug, Clone, TreeParser)]
+#[derive(Debug, Clone, TreeParser, TreeSyntax)]
 pub struct ObjectName(pub Sequence<Ident, Period>);
 
 /// A restricted object name parser.
@@ -131,7 +141,7 @@ where
     sequence(ident, Period::parser((), options)).map(ObjectName)
 }
 
-#[derive(Debug, Clone, TreeParser)]
+#[derive(Debug, Clone, TreeParser, TreeSyntax)]
 pub struct QualifiedWildcard(pub Sequence<Ident, Period>, pub Period, pub Asterisk);
 
 /// A named variable `$name` or `:name`, or an unnamed variable `?`.
@@ -215,6 +225,16 @@ where
                 input.span_since(&before),
             ))
         })
+    }
+}
+
+impl TreeSyntax for Variable {
+    fn syntax() -> SyntaxDescriptor {
+        SyntaxDescriptor {
+            name: "Variable".to_string(),
+            node: SyntaxNode::Terminal(TerminalKind::Variable),
+            children: vec![],
+        }
     }
 }
 
