@@ -18,6 +18,8 @@ rust-version = "1.87.0"
 unwrap_used = "deny"
 expect_used = "deny"
 panic = "deny"
+dbg_macro = "deny"
+todo = "deny"
 
 [workspace.dependencies]
 thiserror = { version = "2.0.16" }
