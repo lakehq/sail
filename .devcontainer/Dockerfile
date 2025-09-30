@@ -1,25 +1,21 @@
-# Base image: Python 3.11 with devcontainer support
 FROM mcr.microsoft.com/devcontainers/python:3.11
 
-ARG ZIG_VERSION=0.14.0
+RUN --mount=type=bind,source=scripts/local,target=/tmp/local \
+    if [ -f /tmp/local/bootstrap.sh ]; then \
+        /tmp/local/bootstrap.sh; \
+    fi
 
-RUN apt-get update && \
-    apt-get install -y --no-install-recommends \
-    curl \
-    gcc \
-    git \
-    libc6-dev \
-    libprotobuf-dev \
-    libssl-dev \
-    pkg-config \
-    protobuf-compiler && \
-    rm -rf /var/lib/apt/lists/*
+RUN --mount=type=bind,source=scripts/install-java.sh,target=/tmp/install-java.sh \
+    bash -i -c "/tmp/install-java.sh"
 
-# Install Zig (required for Rust build tooling or other native extensions)
-RUN curl -fsSL https://ziglang.org/download/${ZIG_VERSION}/zig-${ZIG_VERSION}.tar.xz | \
-    tar -xJf - -C /opt/ && \
-    ln -s /opt/zig-${ZIG_VERSION}/zig /usr/local/bin/zig
+RUN --mount=type=bind,source=scripts/install-node.sh,target=/tmp/install-node.sh \
+    bash -i -c "/tmp/install-node.sh"
 
-# Install Python tools
-RUN pip install --upgrade pip && \
-    pip install hatch maturin
+RUN --mount=type=bind,source=scripts/install-zig.sh,target=/tmp/install-zig.sh \
+    bash -i -c "/tmp/install-zig.sh"
+
+RUN --mount=type=bind,source=scripts/install-tools.sh,target=/tmp/install-tools.sh \
+    bash -i -c "/tmp/install-tools.sh"
+
+RUN --mount=type=bind,source=scripts/install-rust.sh,target=/tmp/install-rust.sh \
+    bash -i -c "/tmp/install-rust.sh"

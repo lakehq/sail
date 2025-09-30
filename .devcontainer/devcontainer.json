@@ -4,19 +4,8 @@
     "dockerfile": "Dockerfile"
   },
   "features": {
-    "ghcr.io/devcontainers/features/node:1": {
-      "version": "22"
-    },
-    "ghcr.io/devcontainers/features/java:1": {
-      "version": "17",
-      "distribution": "corretto"
-    },
-    "ghcr.io/devcontainers/features/rust:1": {
-      "version": "1.87.0",
-      "profile": "default"
-    }
   },
-  "postCreateCommand": "hatch env create default && . ${containerWorkspaceFolder}/.venvs/default/bin/activate && pip install --upgrade pip && echo 'source ${containerWorkspaceFolder}/.venvs/default/bin/activate' >> ~/.bashrc",
+  "postCreateCommand": "hatch env create default",
   "customizations": {
     "vscode": {
       "extensions": [
@@ -24,7 +13,8 @@
         "ms-python.python"
       ],
       "settings": {
-        "terminal.integrated.defaultProfile.linux": "bash"
+        "terminal.integrated.defaultProfile.linux": "bash",
+        "python.defaultInterpreterPath": "/usr/bin/python3"
       }
     }
   },
