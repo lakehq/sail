@@ -219,21 +219,24 @@ impl SessionManagerActor {
                 }
             };
             let file_metadata_cache: Arc<dyn FileMetadataCache> = {
+                let ttl = options.config.parquet.file_metadata_cache.ttl;
                 let size_limit = options.config.parquet.file_metadata_cache.size_limit;
                 match options.config.parquet.file_metadata_cache.r#type {
                     CacheType::None => {
                         debug!("Not using file metadata cache");
-                        Arc::new(MokaFileMetadataCache::new(Some(0)))
+                        Arc::new(MokaFileMetadataCache::new(ttl, Some(0)))
                     }
                     CacheType::Global => {
                         debug!("Using global file metadata cache");
                         self.global_file_metadata_cache
-                            .get_or_insert_with(|| Arc::new(MokaFileMetadataCache::new(size_limit)))
+                            .get_or_insert_with(|| {
+                                Arc::new(MokaFileMetadataCache::new(ttl, size_limit))
+                            })
                             .clone()
                     }
                     CacheType::Session => {
                         debug!("Using session file metadata cache");
-                        Arc::new(MokaFileMetadataCache::new(size_limit))
+                        Arc::new(MokaFileMetadataCache::new(ttl, size_limit))
                     }
                 }
             };

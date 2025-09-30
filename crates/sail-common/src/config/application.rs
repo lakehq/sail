@@ -245,6 +245,8 @@ pub struct FileStatisticsCacheConfig {
 pub struct FileMetadataCacheConfig {
     pub r#type: CacheType,
     #[serde(deserialize_with = "deserialize_non_zero")]
+    pub ttl: Option<u64>,
+    #[serde(deserialize_with = "deserialize_non_zero")]
     pub size_limit: Option<u64>,
 }
 

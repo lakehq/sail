@@ -1,5 +1,6 @@
 use std::collections::HashMap;
 use std::sync::Arc;
+use std::time::Duration;
 
 use datafusion::execution::cache::cache_manager::{
     FileMetadata, FileMetadataCache, FileMetadataCacheEntry,
@@ -19,12 +20,16 @@ pub struct MokaFileMetadataCache {
 impl MokaFileMetadataCache {
     const NAME: &'static str = "MokaFileMetadataCache";
 
-    pub fn new(size_limit: Option<u64>) -> Self {
+    pub fn new(ttl: Option<u64>, size_limit: Option<u64>) -> Self {
         let mut builder = Cache::builder().eviction_policy(EvictionPolicy::lru());
 
-        if let Some(max_capacity) = size_limit {
+        if let Some(ttl) = ttl {
+            debug!("Setting TTL for {} to {ttl} second(s)", Self::NAME);
+            builder = builder.time_to_live(Duration::from_secs(ttl));
+        }
+        if let Some(size_limit) = size_limit {
             debug!(
-                "Setting memory limit for {} to {max_capacity} byte(s)",
+                "Setting size limit for {} to {size_limit} byte(s)",
                 Self::NAME
             );
             builder = builder
@@ -33,9 +38,9 @@ impl MokaFileMetadataCache {
                         meta.memory_size() as u32
                     },
                 )
-                .max_capacity(max_capacity);
+                .max_capacity(size_limit);
         } else {
-            debug!("No memory limit set for {}", Self::NAME);
+            debug!("No size limit set for {}", Self::NAME);
         }
 
         Self {
@@ -182,7 +187,7 @@ mod tests {
             metadata: "retrieved_metadata".to_owned(),
         });
 
-        let mut cache = MokaFileMetadataCache::new(None);
+        let mut cache = MokaFileMetadataCache::new(None, None);
         assert!(cache.get(&object_meta).is_none());
 
         // put
