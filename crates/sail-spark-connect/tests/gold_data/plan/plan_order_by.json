@@ -420,81 +420,81 @@
       "input": "select * from my_tvf(arg1 => table(1) order by col1)",
       "exception": "\n[PARSE_SYNTAX_ERROR] Syntax error at or near 'order'. SQLSTATE: 42601 (line 1, pos 38)\n\n== SQL ==\nselect * from my_tvf(arg1 => table(1) order by col1)\n--------------------------------------^^^\n",
       "output": {
-        "failure": "invalid argument: found order at 38:43 expected ',', or ')'"
+        "failure": "invalid argument: found order at 38:43 expected '.', '[', '::', 'ESCAPE', 'IS', 'NOT', 'IN', '*', '/', '%', 'DIV', '+', '-', '||', '>>>', '>>', '<<', '&', '^', '|', '!=', '!>', '!<', '==', '=', '>=', '>', '<=>', '<=', '<>', '<', 'BETWEEN', 'LIKE', 'ILIKE', 'RLIKE', 'REGEXP', 'SIMILAR', 'AND', 'OR', ',', or ')'"
       }
     },
     {
       "input": "select * from my_tvf(arg1 => table(select col1, col2, col3 from v2) distribute by (col1, col2) order by (col2 asc, col3 desc))",
       "output": {
-        "failure": "invalid argument: found distribute at 68:78 expected ',', or ')'"
+        "failure": "invalid argument: found distribute at 68:78 expected '.', '[', '::', 'ESCAPE', 'IS', 'NOT', 'IN', '*', '/', '%', 'DIV', '+', '-', '||', '>>>', '>>', '<<', '&', '^', '|', '!=', '!>', '!<', '==', '=', '>=', '>', '<=>', '<=', '<>', '<', 'BETWEEN', 'LIKE', 'ILIKE', 'RLIKE', 'REGEXP', 'SIMILAR', 'AND', 'OR', ',', or ')'"
       }
     },
     {
       "input": "select * from my_tvf(arg1 => table(select col1, col2, col3 from v2) distribute by col1, col2 order by col2 asc, col3 desc)",
       "exception": "\nThe table function call includes a table argument with an invalid partitioning/ordering specification: the PARTITION BY clause included multiple expressions without parentheses surrounding them; please add parentheses around these expressions and then retry the query again.\n== SQL (line 1, position 30) ==\nselect * from my_tvf(arg1 => table(select col1, col2, col3 from v2) distribute by col1, col2 order by col2 asc, col3 desc)\n                             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\n",
       "output": {
-        "failure": "invalid argument: found distribute at 68:78 expected ',', or ')'"
+        "failure": "invalid argument: found distribute at 68:78 expected '.', '[', '::', 'ESCAPE', 'IS', 'NOT', 'IN', '*', '/', '%', 'DIV', '+', '-', '||', '>>>', '>>', '<<', '&', '^', '|', '!=', '!>', '!<', '==', '=', '>=', '>', '<=>', '<=', '<>', '<', 'BETWEEN', 'LIKE', 'ILIKE', 'RLIKE', 'REGEXP', 'SIMILAR', 'AND', 'OR', ',', or ')'"
       }
     },
     {
       "input": "select * from my_tvf(arg1 => table(select col1, col2, col3 from v2) partition by (col1, col2) order by (col2 asc, col3 desc))",
       "output": {
-        "failure": "invalid argument: found partition at 68:77 expected ',', or ')'"
+        "failure": "invalid argument: found partition at 68:77 expected '.', '[', '::', 'ESCAPE', 'IS', 'NOT', 'IN', '*', '/', '%', 'DIV', '+', '-', '||', '>>>', '>>', '<<', '&', '^', '|', '!=', '!>', '!<', '==', '=', '>=', '>', '<=>', '<=', '<>', '<', 'BETWEEN', 'LIKE', 'ILIKE', 'RLIKE', 'REGEXP', 'SIMILAR', 'AND', 'OR', ',', or ')'"
       }
     },
     {
       "input": "select * from my_tvf(arg1 => table(select col1, col2, col3 from v2) partition by col1, col2 order by col2 asc, col3 desc)",
       "exception": "\nThe table function call includes a table argument with an invalid partitioning/ordering specification: the PARTITION BY clause included multiple expressions without parentheses surrounding them; please add parentheses around these expressions and then retry the query again.\n== SQL (line 1, position 30) ==\nselect * from my_tvf(arg1 => table(select col1, col2, col3 from v2) partition by col1, col2 order by col2 asc, col3 desc)\n                             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\n",
       "output": {
-        "failure": "invalid argument: found partition at 68:77 expected ',', or ')'"
+        "failure": "invalid argument: found partition at 68:77 expected '.', '[', '::', 'ESCAPE', 'IS', 'NOT', 'IN', '*', '/', '%', 'DIV', '+', '-', '||', '>>>', '>>', '<<', '&', '^', '|', '!=', '!>', '!<', '==', '=', '>=', '>', '<=>', '<=', '<>', '<', 'BETWEEN', 'LIKE', 'ILIKE', 'RLIKE', 'REGEXP', 'SIMILAR', 'AND', 'OR', ',', or ')'"
       }
     },
     {
       "input": "select * from my_tvf(arg1 => table(v1) distribute by (col1, col2) order by (col2 asc, col3 desc))",
       "output": {
-        "failure": "invalid argument: found distribute at 39:49 expected ',', or ')'"
+        "failure": "invalid argument: found distribute at 39:49 expected '.', '[', '::', 'ESCAPE', 'IS', 'NOT', 'IN', '*', '/', '%', 'DIV', '+', '-', '||', '>>>', '>>', '<<', '&', '^', '|', '!=', '!>', '!<', '==', '=', '>=', '>', '<=>', '<=', '<>', '<', 'BETWEEN', 'LIKE', 'ILIKE', 'RLIKE', 'REGEXP', 'SIMILAR', 'AND', 'OR', ',', or ')'"
       }
     },
     {
       "input": "select * from my_tvf(arg1 => table(v1) distribute by (col1, col2) sort by (col2 asc, col3 desc))",
       "output": {
-        "failure": "invalid argument: found distribute at 39:49 expected ',', or ')'"
+        "failure": "invalid argument: found distribute at 39:49 expected '.', '[', '::', 'ESCAPE', 'IS', 'NOT', 'IN', '*', '/', '%', 'DIV', '+', '-', '||', '>>>', '>>', '<<', '&', '^', '|', '!=', '!>', '!<', '==', '=', '>=', '>', '<=>', '<=', '<>', '<', 'BETWEEN', 'LIKE', 'ILIKE', 'RLIKE', 'REGEXP', 'SIMILAR', 'AND', 'OR', ',', or ')'"
       }
     },
     {
       "input": "select * from my_tvf(arg1 => table(v1) distribute by col1 order by col2 asc)",
       "output": {
-        "failure": "invalid argument: found distribute at 39:49 expected ',', or ')'"
+        "failure": "invalid argument: found distribute at 39:49 expected '.', '[', '::', 'ESCAPE', 'IS', 'NOT', 'IN', '*', '/', '%', 'DIV', '+', '-', '||', '>>>', '>>', '<<', '&', '^', '|', '!=', '!>', '!<', '==', '=', '>=', '>', '<=>', '<=', '<>', '<', 'BETWEEN', 'LIKE', 'ILIKE', 'RLIKE', 'REGEXP', 'SIMILAR', 'AND', 'OR', ',', or ')'"
       }
     },
     {
       "input": "select * from my_tvf(arg1 => table(v1) distribute by col1 sort by col2 asc)",
       "output": {
-        "failure": "invalid argument: found distribute at 39:49 expected ',', or ')'"
+        "failure": "invalid argument: found distribute at 39:49 expected '.', '[', '::', 'ESCAPE', 'IS', 'NOT', 'IN', '*', '/', '%', 'DIV', '+', '-', '||', '>>>', '>>', '<<', '&', '^', '|', '!=', '!>', '!<', '==', '=', '>=', '>', '<=>', '<=', '<>', '<', 'BETWEEN', 'LIKE', 'ILIKE', 'RLIKE', 'REGEXP', 'SIMILAR', 'AND', 'OR', ',', or ')'"
       }
     },
     {
       "input": "select * from my_tvf(arg1 => table(v1) partition by (col1, col2) order by (col2 asc, col3 desc))",
       "output": {
-        "failure": "invalid argument: found partition at 39:48 expected ',', or ')'"
+        "failure": "invalid argument: found partition at 39:48 expected '.', '[', '::', 'ESCAPE', 'IS', 'NOT', 'IN', '*', '/', '%', 'DIV', '+', '-', '||', '>>>', '>>', '<<', '&', '^', '|', '!=', '!>', '!<', '==', '=', '>=', '>', '<=>', '<=', '<>', '<', 'BETWEEN', 'LIKE', 'ILIKE', 'RLIKE', 'REGEXP', 'SIMILAR', 'AND', 'OR', ',', or ')'"
       }
     },
     {
       "input": "select * from my_tvf(arg1 => table(v1) partition by (col1, col2) sort by (col2 asc, col3 desc))",
       "output": {
-        "failure": "invalid argument: found partition at 39:48 expected ',', or ')'"
+        "failure": "invalid argument: found partition at 39:48 expected '.', '[', '::', 'ESCAPE', 'IS', 'NOT', 'IN', '*', '/', '%', 'DIV', '+', '-', '||', '>>>', '>>', '<<', '&', '^', '|', '!=', '!>', '!<', '==', '=', '>=', '>', '<=>', '<=', '<>', '<', 'BETWEEN', 'LIKE', 'ILIKE', 'RLIKE', 'REGEXP', 'SIMILAR', 'AND', 'OR', ',', or ')'"
       }
     },
     {
       "input": "select * from my_tvf(arg1 => table(v1) partition by col1 order by col2 asc)",
       "output": {
-        "failure": "invalid argument: found partition at 39:48 expected ',', or ')'"
+        "failure": "invalid argument: found partition at 39:48 expected '.', '[', '::', 'ESCAPE', 'IS', 'NOT', 'IN', '*', '/', '%', 'DIV', '+', '-', '||', '>>>', '>>', '<<', '&', '^', '|', '!=', '!>', '!<', '==', '=', '>=', '>', '<=>', '<=', '<>', '<', 'BETWEEN', 'LIKE', 'ILIKE', 'RLIKE', 'REGEXP', 'SIMILAR', 'AND', 'OR', ',', or ')'"
       }
     },
     {
       "input": "select * from my_tvf(arg1 => table(v1) partition by col1 sort by col2 asc)",
       "output": {
-        "failure": "invalid argument: found partition at 39:48 expected ',', or ')'"
+        "failure": "invalid argument: found partition at 39:48 expected '.', '[', '::', 'ESCAPE', 'IS', 'NOT', 'IN', '*', '/', '%', 'DIV', '+', '-', '||', '>>>', '>>', '<<', '&', '^', '|', '!=', '!>', '!<', '==', '=', '>=', '>', '<=>', '<=', '<>', '<', 'BETWEEN', 'LIKE', 'ILIKE', 'RLIKE', 'REGEXP', 'SIMILAR', 'AND', 'OR', ',', or ')'"
       }
     },
     {

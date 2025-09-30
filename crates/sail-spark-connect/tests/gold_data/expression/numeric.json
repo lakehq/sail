@@ -141,7 +141,7 @@
       "input": ".e3",
       "exception": "\n[PARSE_SYNTAX_ERROR] Syntax error at or near '.'. SQLSTATE: 42601 (line 1, pos 0)\n\n== SQL ==\n.e3\n^^^\n",
       "output": {
-        "failure": "invalid argument: found something at 0:1 expected something else"
+        "failure": "invalid argument: found . at 0:1 expected something else, or expression"
       }
     },
     {

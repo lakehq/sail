@@ -17,7 +17,7 @@ fn parse_operator<'a, I, E>(
 where
     I: Input<'a, Token = Token<'a>> + ValueInput<'a>,
     I::Span: Into<TokenSpan>,
-    E: ParserExtra<'a, I>,
+    E: ParserExtra<'a, I> + 'a,
     E::Error: LabelError<'a, I, TokenLabel>,
 {
     let before = input.cursor();
@@ -61,7 +61,7 @@ macro_rules! define_operator {
         where
             I: Input<'a, Token = Token<'a>> + ValueInput<'a>,
             I::Span: Into<TokenSpan>,
-            E: ParserExtra<'a, I>,
+            E: ParserExtra<'a, I> + 'a,
             E::Error: LabelError<'a, I, TokenLabel>,
         {
             fn parser(
