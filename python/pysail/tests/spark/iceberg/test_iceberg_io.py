@@ -5,9 +5,6 @@ from pandas.testing import assert_frame_equal
 from pyiceberg.catalog import load_catalog
 from pyiceberg.schema import Schema
 from pyiceberg.types import DoubleType, LongType, NestedField, StringType
-from pyspark.sql.types import Row
-
-from ..utils import get_data_files
 
 
 class TestIcebergIO:
@@ -32,11 +29,9 @@ class TestIcebergIO:
 
         catalog = load_catalog(
             "test_catalog",
-            **{
-                "type": "sql",
-                "uri": f"sqlite:///{tmp_path}/pyiceberg_catalog.db",
-                "warehouse": f"file://{warehouse_path}",
-            },
+            type="sql",
+            uri=f"sqlite:///{tmp_path}/pyiceberg_catalog.db",
+            warehouse=f"file://{warehouse_path}",
         )
 
         catalog.create_namespace("default")
@@ -76,11 +71,9 @@ class TestIcebergIO:
 
         catalog = load_catalog(
             "test_catalog",
-            **{
-                "type": "sql",
-                "uri": f"sqlite:///{tmp_path}/pyiceberg_catalog.db",
-                "warehouse": f"file://{warehouse_path}",
-            },
+            type="sql",
+            uri=f"sqlite:///{tmp_path}/pyiceberg_catalog.db",
+            warehouse=f"file://{warehouse_path}",
         )
 
         catalog.create_namespace("default")
@@ -125,11 +118,9 @@ class TestIcebergIO:
 
         catalog = load_catalog(
             "test_catalog",
-            **{
-                "type": "sql",
-                "uri": f"sqlite:///{tmp_path}/pyiceberg_catalog.db",
-                "warehouse": f"file://{warehouse_path}",
-            },
+            type="sql",
+            uri=f"sqlite:///{tmp_path}/pyiceberg_catalog.db",
+            warehouse=f"file://{warehouse_path}",
         )
 
         catalog.create_namespace("default")
@@ -167,6 +158,6 @@ class TestIcebergIO:
                 result_df.toPandas(), expected_data.sort_values("id").reset_index(drop=True), check_dtype=False
             )
 
-            assert result_df.count() == 4
+            assert result_df.count() == 4  # noqa: PLR2004
         finally:
             catalog.drop_table(f"default.{table_name}")
