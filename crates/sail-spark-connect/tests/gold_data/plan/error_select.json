@@ -18,7 +18,7 @@
       "input": "SELECT 'a' ! LIKE 'b'",
       "exception": "\n[SYNTAX_DISCONTINUED.BANG_EQUALS_NOT] Support of the clause or keyword: ! has been discontinued in this context. The '!' keyword is only supported as an alias for the prefix operator 'NOT'.\nUse the 'NOT' keyword instead for infix clauses such as `NOT LIKE`, `NOT IN`, `NOT BETWEEN`, etc.\nTo re-enable the '!' keyword, set \"spark.sql.legacy.bangEqualsNot\" to \"true\". SQLSTATE: 42601\n== SQL (line 1, position 12) ==\nSELECT 'a' ! LIKE 'b'\n           ^\n",
       "output": {
-        "failure": "invalid argument: found ! at 11:12 expected 'AS', identifier, '(', ',', 'FROM', 'LATERAL', 'WHERE', 'GROUP', 'HAVING', 'INTERSECT', 'UNION', 'EXCEPT', 'MINUS', 'WINDOW', 'ORDER', 'SORT', 'CLUSTER', 'DISTRIBUTE', 'LIMIT', 'OFFSET', ';', or end of input"
+        "failure": "invalid argument: found ! at 11:12 expected string, '.', '[', '::', 'ESCAPE', 'IS', 'NOT', 'IN', '*', '/', '%', 'DIV', '+', '-', '||', '>>>', '>>', '<<', '&', '^', '|', '!=', '!>', '!<', '==', '=', '>=', '>', '<=>', '<=', '<>', '<', 'BETWEEN', 'LIKE', 'ILIKE', 'RLIKE', 'REGEXP', 'SIMILAR', 'AND', 'OR', 'AS', identifier, '(', ',', 'FROM', 'LATERAL', 'WHERE', 'GROUP', 'HAVING', 'INTERSECT', 'UNION', 'EXCEPT', 'MINUS', 'WINDOW', 'ORDER', 'SORT', 'CLUSTER', 'DISTRIBUTE', 'LIMIT', 'OFFSET', ';', or end of input"
       }
     },
     {
@@ -39,21 +39,21 @@
       "input": "SELECT 1 ! BETWEEN 1 AND 2",
       "exception": "\n[SYNTAX_DISCONTINUED.BANG_EQUALS_NOT] Support of the clause or keyword: ! has been discontinued in this context. The '!' keyword is only supported as an alias for the prefix operator 'NOT'.\nUse the 'NOT' keyword instead for infix clauses such as `NOT LIKE`, `NOT IN`, `NOT BETWEEN`, etc.\nTo re-enable the '!' keyword, set \"spark.sql.legacy.bangEqualsNot\" to \"true\". SQLSTATE: 42601\n== SQL (line 1, position 10) ==\nSELECT 1 ! BETWEEN 1 AND 2\n         ^\n",
       "output": {
-        "failure": "invalid argument: found ! at 9:10 expected 'AS', identifier, '(', ',', 'FROM', 'LATERAL', 'WHERE', 'GROUP', 'HAVING', 'INTERSECT', 'UNION', 'EXCEPT', 'MINUS', 'WINDOW', 'ORDER', 'SORT', 'CLUSTER', 'DISTRIBUTE', 'LIMIT', 'OFFSET', ';', or end of input"
+        "failure": "invalid argument: found ! at 9:10 expected '->', '.', '(', '[', '::', 'ESCAPE', 'IS', 'NOT', 'IN', '*', '/', '%', 'DIV', '+', '-', '||', '>>>', '>>', '<<', '&', '^', '|', '!=', '!>', '!<', '==', '=', '>=', '>', '<=>', '<=', '<>', '<', 'BETWEEN', 'LIKE', 'ILIKE', 'RLIKE', 'REGEXP', 'SIMILAR', 'AND', 'OR', 'AS', identifier, ',', 'FROM', 'LATERAL', 'WHERE', 'GROUP', 'HAVING', 'INTERSECT', 'UNION', 'EXCEPT', 'MINUS', 'WINDOW', 'ORDER', 'SORT', 'CLUSTER', 'DISTRIBUTE', 'LIMIT', 'OFFSET', ';', or end of input"
       }
     },
     {
       "input": "SELECT 1 ! IN (2)",
       "exception": "\n[SYNTAX_DISCONTINUED.BANG_EQUALS_NOT] Support of the clause or keyword: ! has been discontinued in this context. The '!' keyword is only supported as an alias for the prefix operator 'NOT'.\nUse the 'NOT' keyword instead for infix clauses such as `NOT LIKE`, `NOT IN`, `NOT BETWEEN`, etc.\nTo re-enable the '!' keyword, set \"spark.sql.legacy.bangEqualsNot\" to \"true\". SQLSTATE: 42601\n== SQL (line 1, position 10) ==\nSELECT 1 ! IN (2)\n         ^\n",
       "output": {
-        "failure": "invalid argument: found ! at 9:10 expected 'AS', identifier, '(', ',', 'FROM', 'LATERAL', 'WHERE', 'GROUP', 'HAVING', 'INTERSECT', 'UNION', 'EXCEPT', 'MINUS', 'WINDOW', 'ORDER', 'SORT', 'CLUSTER', 'DISTRIBUTE', 'LIMIT', 'OFFSET', ';', or end of input"
+        "failure": "invalid argument: found ! at 9:10 expected '->', '.', '(', '[', '::', 'ESCAPE', 'IS', 'NOT', 'IN', '*', '/', '%', 'DIV', '+', '-', '||', '>>>', '>>', '<<', '&', '^', '|', '!=', '!>', '!<', '==', '=', '>=', '>', '<=>', '<=', '<>', '<', 'BETWEEN', 'LIKE', 'ILIKE', 'RLIKE', 'REGEXP', 'SIMILAR', 'AND', 'OR', 'AS', identifier, ',', 'FROM', 'LATERAL', 'WHERE', 'GROUP', 'HAVING', 'INTERSECT', 'UNION', 'EXCEPT', 'MINUS', 'WINDOW', 'ORDER', 'SORT', 'CLUSTER', 'DISTRIBUTE', 'LIMIT', 'OFFSET', ';', or end of input"
       }
     },
     {
       "input": "SELECT 1 IS ! NULL",
       "exception": "\n[SYNTAX_DISCONTINUED.BANG_EQUALS_NOT] Support of the clause or keyword: ! has been discontinued in this context. The '!' keyword is only supported as an alias for the prefix operator 'NOT'.\nUse the 'NOT' keyword instead for infix clauses such as `NOT LIKE`, `NOT IN`, `NOT BETWEEN`, etc.\nTo re-enable the '!' keyword, set \"spark.sql.legacy.bangEqualsNot\" to \"true\". SQLSTATE: 42601\n== SQL (line 1, position 13) ==\nSELECT 1 IS ! NULL\n            ^\n",
       "output": {
-        "failure": "invalid argument: found IS at 9:11 expected 'AS', identifier, '(', ',', 'FROM', 'LATERAL', 'WHERE', 'GROUP', 'HAVING', 'INTERSECT', 'UNION', 'EXCEPT', 'MINUS', 'WINDOW', 'ORDER', 'SORT', 'CLUSTER', 'DISTRIBUTE', 'LIMIT', 'OFFSET', ';', or end of input"
+        "failure": "invalid argument: found ! at 12:13 expected 'NOT', 'FALSE', 'TRUE', 'UNKNOWN', 'NULL', or 'DISTINCT'"
       }
     },
     {
@@ -95,14 +95,14 @@
       "input": "SELECT cast('a' as Varchar)",
       "exception": "\n[DATATYPE_MISSING_SIZE] DataType \"VARCHAR\" requires a length parameter, for example \"VARCHAR\"(10). Please specify the length. SQLSTATE: 42K01\n== SQL (line 1, position 20) ==\nSELECT cast('a' as Varchar)\n                   ^^^^^^^\n",
       "output": {
-        "failure": "invalid argument: found 'a' at 12:15 expected identifier"
+        "failure": "invalid argument: found ) at 26:27 expected '('"
       }
     },
     {
       "input": "SELECT cast(1 as badtype)",
       "exception": "\n[UNSUPPORTED_DATATYPE] Unsupported data type \"BADTYPE\". SQLSTATE: 0A000\n== SQL (line 1, position 18) ==\nSELECT cast(1 as badtype)\n                 ^^^^^^^\n",
       "output": {
-        "failure": "invalid argument: found as at 14:16 expected ',', or ')'"
+        "failure": "invalid argument: found badtype at 17:24 expected data type"
       }
     }
   ]
