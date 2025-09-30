@@ -585,9 +585,9 @@ dependencies = [
 
 [[package]]
 name = "aws-lc-rs"
-version = "1.14.0"
+version = "1.14.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "94b8ff6c09cd57b16da53641caa860168b88c172a5ee163b0288d3d6eea12786"
+checksum = "879b6c89592deb404ba4dc0ae6b58ffd1795c78991cbb5b8bc441c48a070440d"
 dependencies = [
  "aws-lc-sys",
  "zeroize",
@@ -595,15 +595,16 @@ dependencies = [
 
 [[package]]
 name = "aws-lc-sys"
-version = "0.31.0"
+version = "0.32.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "0e44d16778acaf6a9ec9899b92cebd65580b83f685446bf2e1f5d3d732f99dcd"
+checksum = "1ba2e2516bdf37af57fc6ff047855f54abad0066e5c4fdaaeb76dabb2e05bcf5"
 dependencies = [
  "bindgen",
  "cc",
  "cmake",
  "dunce",
  "fs_extra",
+ "libloading",
 ]
 
 [[package]]
@@ -2551,7 +2552,7 @@ dependencies = [
  "libc",
  "option-ext",
  "redox_users",
- "windows-sys 0.61.0",
+ "windows-sys 0.60.2",
 ]
 
 [[package]]
@@ -2640,7 +2641,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "39cab71617ae0d63f51a36d69f866391735b51691dbda63cf6f96d042b63efeb"
 dependencies = [
  "libc",
- "windows-sys 0.61.0",
+ "windows-sys 0.59.0",
 ]
 
 [[package]]
@@ -3861,12 +3862,12 @@ checksum = "6a82ae493e598baaea5209805c49bbf2ea7de956d50d7da0da1164f9c6d28543"
 
 [[package]]
 name = "libloading"
-version = "0.8.9"
+version = "0.8.8"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "d7c4b02199fee7c5d21a5ae7d8cfa79a6ef5bb2fc834d6e9058e89c825efdc55"
+checksum = "07033963ba89ebaf1584d767badaa2e8fcec21aedea6b8c0346d487d49c28667"
 dependencies = [
  "cfg-if",
- "windows-link 0.2.0",
+ "windows-targets 0.53.3",
 ]
 
 [[package]]
@@ -5408,7 +5409,7 @@ dependencies = [
  "errno",
  "libc",
  "linux-raw-sys 0.11.0",
- "windows-sys 0.61.0",
+ "windows-sys 0.59.0",
 ]
 
 [[package]]
@@ -5497,7 +5498,7 @@ checksum = "28d3b2b1366ec20994f1fd18c3c594f05c5dd4bc44d8bb0c1c632c8d6829481f"
 
 [[package]]
 name = "sail-cache"
-version = "0.3.5"
+version = "0.3.6"
 dependencies = [
  "chrono",
  "datafusion",
@@ -5510,7 +5511,7 @@ dependencies = [
 
 [[package]]
 name = "sail-catalog"
-version = "0.3.5"
+version = "0.3.6"
 dependencies = [
  "async-trait",
  "datafusion",
@@ -5527,7 +5528,7 @@ dependencies = [
 
 [[package]]
 name = "sail-catalog-memory"
-version = "0.3.5"
+version = "0.3.6"
 dependencies = [
  "async-trait",
  "dashmap",
@@ -5536,7 +5537,7 @@ dependencies = [
 
 [[package]]
 name = "sail-cli"
-version = "0.3.5"
+version = "0.3.6"
 dependencies = [
  "clap",
  "fastrace",
@@ -5553,7 +5554,7 @@ dependencies = [
 
 [[package]]
 name = "sail-common"
-version = "0.3.5"
+version = "0.3.6"
 dependencies = [
  "arrow",
  "arrow-buffer",
@@ -5573,7 +5574,7 @@ dependencies = [
 
 [[package]]
 name = "sail-common-datafusion"
-version = "0.3.5"
+version = "0.3.6"
 dependencies = [
  "async-trait",
  "chrono",
@@ -5596,7 +5597,7 @@ dependencies = [
 
 [[package]]
 name = "sail-data-source"
-version = "0.3.5"
+version = "0.3.6"
 dependencies = [
  "async-trait",
  "bytes",
@@ -5628,7 +5629,7 @@ dependencies = [
 
 [[package]]
 name = "sail-delta-lake"
-version = "0.3.5"
+version = "0.3.6"
 dependencies = [
  "arrow-schema",
  "async-trait",
@@ -5657,7 +5658,7 @@ dependencies = [
 
 [[package]]
 name = "sail-execution"
-version = "0.3.5"
+version = "0.3.6"
 dependencies = [
  "arrow-flight",
  "datafusion",
@@ -5692,7 +5693,7 @@ dependencies = [
 
 [[package]]
 name = "sail-function"
-version = "0.3.5"
+version = "0.3.6"
 dependencies = [
  "aes",
  "aes-gcm",
@@ -5726,7 +5727,7 @@ dependencies = [
 
 [[package]]
 name = "sail-gold-test"
-version = "0.3.5"
+version = "0.3.6"
 dependencies = [
  "clap",
  "lazy_static",
@@ -5738,14 +5739,14 @@ dependencies = [
 
 [[package]]
 name = "sail-logical-optimizer"
-version = "0.3.5"
+version = "0.3.6"
 dependencies = [
  "datafusion",
 ]
 
 [[package]]
 name = "sail-logical-plan"
-version = "0.3.5"
+version = "0.3.6"
 dependencies = [
  "comfy-table",
  "datafusion",
@@ -5759,7 +5760,7 @@ dependencies = [
 
 [[package]]
 name = "sail-object-store"
-version = "0.3.5"
+version = "0.3.6"
 dependencies = [
  "async-stream",
  "async-trait",
@@ -5790,7 +5791,7 @@ dependencies = [
 
 [[package]]
 name = "sail-physical-optimizer"
-version = "0.3.5"
+version = "0.3.6"
 dependencies = [
  "datafusion",
  "datafusion-physical-expr",
@@ -5801,7 +5802,7 @@ dependencies = [
 
 [[package]]
 name = "sail-physical-plan"
-version = "0.3.5"
+version = "0.3.6"
 dependencies = [
  "datafusion",
  "datafusion-common",
@@ -5815,7 +5816,7 @@ dependencies = [
 
 [[package]]
 name = "sail-plan"
-version = "0.3.5"
+version = "0.3.6"
 dependencies = [
  "arrow",
  "async-recursion",
@@ -5854,7 +5855,7 @@ dependencies = [
 
 [[package]]
 name = "sail-python"
-version = "0.3.5"
+version = "0.3.6"
 dependencies = [
  "fastrace",
  "log",
@@ -5868,7 +5869,7 @@ dependencies = [
 
 [[package]]
 name = "sail-python-udf"
-version = "0.3.5"
+version = "0.3.6"
 dependencies = [
  "arrow-pyarrow",
  "datafusion",
@@ -5887,7 +5888,7 @@ dependencies = [
 
 [[package]]
 name = "sail-server"
-version = "0.3.5"
+version = "0.3.6"
 dependencies = [
  "axum",
  "log",
@@ -5902,7 +5903,7 @@ dependencies = [
 
 [[package]]
 name = "sail-session"
-version = "0.3.5"
+version = "0.3.6"
 dependencies = [
  "datafusion",
  "sail-catalog",
@@ -5912,7 +5913,7 @@ dependencies = [
 
 [[package]]
 name = "sail-spark-connect"
-version = "0.3.5"
+version = "0.3.6"
 dependencies = [
  "async-stream",
  "datafusion",
@@ -5954,7 +5955,7 @@ dependencies = [
 
 [[package]]
 name = "sail-sql-analyzer"
-version = "0.3.5"
+version = "0.3.6"
 dependencies = [
  "chrono",
  "chumsky",
@@ -5968,7 +5969,7 @@ dependencies = [
 
 [[package]]
 name = "sail-sql-macro"
-version = "0.3.5"
+version = "0.3.6"
 dependencies = [
  "proc-macro2",
  "quote",
@@ -5977,7 +5978,7 @@ dependencies = [
 
 [[package]]
 name = "sail-sql-parser"
-version = "0.3.5"
+version = "0.3.6"
 dependencies = [
  "chumsky",
  "either",
@@ -5991,7 +5992,7 @@ dependencies = [
 
 [[package]]
 name = "sail-telemetry"
-version = "0.3.5"
+version = "0.3.6"
 dependencies = [
  "env_logger",
  "fastrace",
@@ -6481,7 +6482,7 @@ dependencies = [
  "getrandom 0.3.3",
  "once_cell",
  "rustix 1.1.2",
- "windows-sys 0.61.0",
+ "windows-sys 0.59.0",
 ]
 
 [[package]]
@@ -7325,7 +7326,7 @@ version = "0.1.11"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "c2a7b1c03c876122aa43f3020e6c3c3ee5c05081c9a00739faf7503aeba10d22"
 dependencies = [
- "windows-sys 0.61.0",
+ "windows-sys 0.59.0",
 ]
 
 [[package]]
