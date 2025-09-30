@@ -4481,6 +4481,17 @@ dependencies = [
 ]
 
 [[package]]
+name = "ordered-float"
+version = "4.6.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "7bb71e1b3fa6ca1c61f383464aaf2bb0e2f8e772a1f01d486832464de363b951"
+dependencies = [
+ "num-traits",
+ "rand 0.8.5",
+ "serde",
+]
+
+[[package]]
 name = "outref"
 version = "0.5.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -5145,6 +5156,7 @@ dependencies = [
  "libc",
  "rand_chacha 0.3.1",
  "rand_core 0.6.4",
+ "serde",
 ]
 
 [[package]]
@@ -5184,6 +5196,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "ec0be4795e2f6a28069bec0b5ff3e2ac9bafc99e6a9a7dc3547996c5c816922c"
 dependencies = [
  "getrandom 0.2.16",
+ "serde",
 ]
 
 [[package]]
@@ -5618,6 +5631,7 @@ dependencies = [
  "sail-common",
  "sail-common-datafusion",
  "sail-delta-lake",
+ "sail-iceberg",
  "serde",
  "serde_yaml",
  "syn",
@@ -5734,6 +5748,39 @@ dependencies = [
  "sail-spark-connect",
  "serde",
  "serde_json",
+]
+
+[[package]]
+name = "sail-iceberg"
+version = "0.3.5"
+dependencies = [
+ "apache-avro",
+ "arrow-schema",
+ "async-trait",
+ "base64 0.22.1",
+ "bytes",
+ "chrono",
+ "datafusion",
+ "datafusion-common",
+ "datafusion-physical-expr",
+ "datafusion-physical-expr-adapter",
+ "futures",
+ "indexmap",
+ "itertools 0.14.0",
+ "log",
+ "num-bigint",
+ "num-traits",
+ "object_store",
+ "once_cell",
+ "ordered-float 4.6.0",
+ "parquet",
+ "percent-encoding",
+ "sail-common-datafusion",
+ "serde",
+ "serde_json",
+ "tokio",
+ "url",
+ "uuid",
 ]
 
 [[package]]
@@ -6108,7 +6155,7 @@ version = "0.7.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "f3a1a3341211875ef120e117ea7fd5228530ae7e7036a779fdc9117be6b3282c"
 dependencies = [
- "ordered-float",
+ "ordered-float 2.10.1",
  "serde",
 ]
 
@@ -6541,7 +6588,7 @@ checksum = "7e54bc85fc7faa8bc175c4bab5b92ba8d9a3ce893d0e9f42cc455c8ab16a9e09"
 dependencies = [
  "byteorder",
  "integer-encoding",
- "ordered-float",
+ "ordered-float 2.10.1",
 ]
 
 [[package]]

@@ -100,6 +100,8 @@ moka = { version = "0.12.10", features = ["sync"] }
 bytes = "1.10.1"
 indexmap = "2.11.0"
 pin-project-lite = "0.2.16"
+ordered-float = { version = "4.5.0", features = ["serde"] }
+apache-avro = { version = "0.20.0" }
 
 ######
 # The versions of the following dependencies are managed manually.
