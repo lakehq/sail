@@ -5,7 +5,7 @@ use chumsky::pratt::{infix, left, postfix, prefix, Operator};
 use chumsky::prelude::{any, choice};
 use chumsky::Parser;
 use either::Either;
-use sail_sql_macro::TreeParser;
+use sail_sql_macro::{TreeParser, TreeSyntax};
 
 use crate::ast::data_type::{DataType, IntervalDayTimeUnit, IntervalYearMonthUnit};
 use crate::ast::identifier::{Ident, ObjectName, Variable};
@@ -36,7 +36,8 @@ use crate::span::TokenSpan;
 use crate::token::{Token, TokenLabel};
 use crate::tree::TreeParser;
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, TreeSyntax)]
+#[syntax(name = "Expression")]
 pub enum Expr {
     Atom(AtomExpr),
     UnaryOperator(UnaryOperator, Box<Expr>),
@@ -95,8 +96,9 @@ pub enum Expr {
     ),
 }
 
-#[derive(Debug, Clone, TreeParser)]
+#[derive(Debug, Clone, TreeParser, TreeSyntax)]
 #[parser(dependency = "(Expr, Query, DataType)")]
+#[syntax(name = "AtomExpression")]
 pub enum AtomExpr {
     Subquery(
         LeftParenthesis,
@@ -225,7 +227,7 @@ pub enum AtomExpr {
     Identifier(Ident),
 }
 
-#[derive(Debug, Clone, TreeParser)]
+#[derive(Debug, Clone, TreeParser, TreeSyntax)]
 #[parser(dependency = "Query")]
 pub enum TableExpr {
     Name(ObjectName),
@@ -237,13 +239,13 @@ pub enum TableExpr {
     ),
 }
 
-#[derive(Debug, Clone, TreeParser)]
+#[derive(Debug, Clone, TreeParser, TreeSyntax)]
 pub enum BooleanLiteral {
     True(True),
     False(False),
 }
 
-#[derive(Debug, Clone, TreeParser)]
+#[derive(Debug, Clone, TreeParser, TreeSyntax)]
 #[parser(dependency = "Expr")]
 pub struct IntervalLiteral {
     pub interval: Option<Interval>,
@@ -251,7 +253,7 @@ pub struct IntervalLiteral {
     pub value: IntervalExpr,
 }
 
-#[derive(Debug, Clone, TreeParser)]
+#[derive(Debug, Clone, TreeParser, TreeSyntax)]
 #[parser(dependency = "Expr")]
 pub enum IntervalExpr {
     // The multi-unit pattern must be defined before the standard pattern,
@@ -276,7 +278,7 @@ pub enum IntervalExpr {
     Literal(StringLiteral),
 }
 
-#[derive(Debug, Clone, TreeParser)]
+#[derive(Debug, Clone, TreeParser, TreeSyntax)]
 #[parser(dependency = "Expr")]
 pub struct IntervalValueWithUnit {
     #[parser(function = |e, _| e)]
@@ -284,7 +286,7 @@ pub struct IntervalValueWithUnit {
     pub unit: IntervalUnit,
 }
 
-#[derive(Debug, Clone, TreeParser)]
+#[derive(Debug, Clone, TreeParser, TreeSyntax)]
 pub enum IntervalUnit {
     Year(Year),
     Years(Years),
@@ -306,13 +308,13 @@ pub enum IntervalUnit {
     Microseconds(Microseconds),
 }
 
-#[derive(Debug, Clone, TreeParser)]
+#[derive(Debug, Clone, TreeParser, TreeSyntax)]
 pub enum IntervalQualifier {
     YearMonth(IntervalYearMonthUnit, Option<(To, IntervalYearMonthUnit)>),
     DayTime(IntervalDayTimeUnit, Option<(To, IntervalDayTimeUnit)>),
 }
 
-#[derive(Debug, Clone, TreeParser)]
+#[derive(Debug, Clone, TreeParser, TreeSyntax)]
 #[parser(dependency = "Expr")]
 pub enum TrimExpr {
     LeadingSpace(Leading, From, #[parser(function = |e, _| e)] Expr),
@@ -338,7 +340,7 @@ pub enum TrimExpr {
     ),
 }
 
-#[derive(Debug, Clone, TreeParser)]
+#[derive(Debug, Clone, TreeParser, TreeSyntax)]
 #[parser(dependency = "Expr")]
 pub struct FunctionExpr {
     pub name: ObjectName,
@@ -355,7 +357,7 @@ pub struct FunctionExpr {
     pub over_clause: Option<OverClause>,
 }
 
-#[derive(Debug, Clone, TreeParser)]
+#[derive(Debug, Clone, TreeParser, TreeSyntax)]
 #[parser(dependency = "Expr")]
 pub struct FunctionArgumentList {
     pub left: LeftParenthesis,
@@ -366,7 +368,7 @@ pub struct FunctionArgumentList {
     pub right: RightParenthesis,
 }
 
-#[derive(Debug, Clone, TreeParser)]
+#[derive(Debug, Clone, TreeParser, TreeSyntax)]
 #[parser(dependency = "Expr")]
 pub enum FunctionArgument {
     Named(
@@ -377,19 +379,19 @@ pub enum FunctionArgument {
     Unnamed(#[parser(function = |e, _| e)] Expr),
 }
 
-#[derive(Debug, Clone, TreeParser)]
+#[derive(Debug, Clone, TreeParser, TreeSyntax)]
 pub enum DuplicateTreatment {
     All(All),
     Distinct(Distinct),
 }
 
-#[derive(Debug, Clone, TreeParser)]
+#[derive(Debug, Clone, TreeParser, TreeSyntax)]
 pub enum NullTreatment {
     RespectNulls(Respect, Nulls),
     IgnoreNulls(Ignore, Nulls),
 }
 
-#[derive(Debug, Clone, TreeParser)]
+#[derive(Debug, Clone, TreeParser, TreeSyntax)]
 #[parser(dependency = "Expr")]
 pub struct WithinGroupClause {
     pub within_group: (Within, Group),
@@ -400,7 +402,7 @@ pub struct WithinGroupClause {
     pub right: RightParenthesis,
 }
 
-#[derive(Debug, Clone, TreeParser)]
+#[derive(Debug, Clone, TreeParser, TreeSyntax)]
 #[parser(dependency = "Expr")]
 pub struct FilterClause {
     pub filter: Filter,
@@ -411,7 +413,7 @@ pub struct FilterClause {
     pub right: RightParenthesis,
 }
 
-#[derive(Debug, Clone, TreeParser)]
+#[derive(Debug, Clone, TreeParser, TreeSyntax)]
 #[parser(dependency = "Expr")]
 pub struct OverClause {
     pub over: Over,
@@ -419,7 +421,7 @@ pub struct OverClause {
     pub window: WindowSpec,
 }
 
-#[derive(Debug, Clone, TreeParser)]
+#[derive(Debug, Clone, TreeParser, TreeSyntax)]
 #[parser(dependency = "Expr")]
 #[allow(clippy::large_enum_variant)]
 pub enum WindowSpec {
@@ -436,7 +438,7 @@ pub enum WindowSpec {
 }
 
 #[allow(clippy::enum_variant_names)]
-#[derive(Debug, Clone, TreeParser)]
+#[derive(Debug, Clone, TreeParser, TreeSyntax)]
 #[parser(dependency = "Expr")]
 pub enum WindowModifier {
     ClusterBy(#[parser(function = |e, o| compose(e, o))] ClusterByClause),
@@ -446,7 +448,7 @@ pub enum WindowModifier {
     SortBy(#[parser(function = |e, o| compose(e, o))] SortByClause),
 }
 
-#[derive(Debug, Clone, TreeParser)]
+#[derive(Debug, Clone, TreeParser, TreeSyntax)]
 #[parser(dependency = "Expr")]
 pub struct OrderByExpr {
     #[parser(function = |e, _| e)]
@@ -455,19 +457,19 @@ pub struct OrderByExpr {
     pub nulls: Option<OrderNulls>,
 }
 
-#[derive(Debug, Clone, TreeParser)]
+#[derive(Debug, Clone, TreeParser, TreeSyntax)]
 pub enum OrderDirection {
     Asc(Asc),
     Desc(Desc),
 }
 
-#[derive(Debug, Clone, TreeParser)]
+#[derive(Debug, Clone, TreeParser, TreeSyntax)]
 pub enum OrderNulls {
     First(Nulls, First),
     Last(Nulls, Last),
 }
 
-#[derive(Debug, Clone, TreeParser)]
+#[derive(Debug, Clone, TreeParser, TreeSyntax)]
 #[parser(dependency = "Expr")]
 pub enum WindowFrame {
     RangeBetween(
@@ -494,7 +496,7 @@ pub enum WindowFrame {
     ),
 }
 
-#[derive(Debug, Clone, TreeParser)]
+#[derive(Debug, Clone, TreeParser, TreeSyntax)]
 #[parser(dependency = "Expr")]
 pub enum WindowFrameBound {
     UnboundedPreceding(Unbounded, Preceding),
@@ -504,7 +506,7 @@ pub enum WindowFrameBound {
     Following(#[parser(function = |e, _| e)] Expr, Following),
 }
 
-#[derive(Debug, Clone, TreeParser)]
+#[derive(Debug, Clone, TreeParser, TreeSyntax)]
 pub enum UnaryOperator {
     Plus(operator::Plus),
     Minus(operator::Minus),
@@ -513,7 +515,7 @@ pub enum UnaryOperator {
     LogicalNot(operator::ExclamationMark),
 }
 
-#[derive(Debug, Clone, TreeParser)]
+#[derive(Debug, Clone, TreeParser, TreeSyntax)]
 pub enum BinaryOperator {
     Plus(operator::Plus),
     Minus(operator::Minus),
@@ -543,7 +545,7 @@ pub enum BinaryOperator {
     BitwiseOr(operator::VerticalBar),
 }
 
-#[derive(Debug, Clone, TreeParser)]
+#[derive(Debug, Clone, TreeParser, TreeSyntax)]
 #[parser(dependency = "Expr")]
 pub struct CaseWhen {
     pub when: When,
@@ -554,7 +556,7 @@ pub struct CaseWhen {
     pub result: Expr,
 }
 
-#[derive(Debug, Clone, TreeParser)]
+#[derive(Debug, Clone, TreeParser, TreeSyntax)]
 #[parser(dependency = "Expr")]
 pub struct CaseElse {
     pub r#else: Else,
@@ -562,26 +564,26 @@ pub struct CaseElse {
     pub result: Expr,
 }
 
-#[derive(Debug, Clone, TreeParser)]
+#[derive(Debug, Clone, TreeParser, TreeSyntax)]
 pub enum LambdaFunctionParameters {
     Single(Ident),
     Multiple(LeftParenthesis, Sequence<Ident, Comma>, RightParenthesis),
 }
 
-#[derive(Debug, Clone, TreeParser)]
+#[derive(Debug, Clone, TreeParser, TreeSyntax)]
 pub enum PatternQuantifier {
     All(All),
     Any(Any),
     Some(crate::ast::keywords::Some),
 }
 
-#[derive(Debug, Clone, TreeParser)]
+#[derive(Debug, Clone, TreeParser, TreeSyntax)]
 pub struct PatternEscape {
     pub escape: Escape,
     pub value: StringLiteral,
 }
 
-#[derive(Debug, Clone, TreeParser)]
+#[derive(Debug, Clone, TreeParser, TreeSyntax)]
 #[parser(dependency = "Expr")]
 pub enum GroupingExpr {
     GroupingSets(
@@ -600,7 +602,7 @@ pub enum GroupingExpr {
 }
 
 // TODO: support nested grouping sets
-#[derive(Debug, Clone, TreeParser)]
+#[derive(Debug, Clone, TreeParser, TreeSyntax)]
 #[parser(dependency = "Expr")]
 pub struct GroupingSet {
     pub left: LeftParenthesis,
@@ -612,7 +614,7 @@ pub struct GroupingSet {
 // All private `struct`s or `enum`s are "internal" AST nodes used to parse expressions.
 // They are not part of the final AST.
 
-#[derive(Debug, Clone, TreeParser)]
+#[derive(Debug, Clone, TreeParser, TreeSyntax)]
 #[parser(dependency = "(Expr, DataType)")]
 enum ExprModifier {
     Wildcard(Period, operator::Asterisk),
@@ -625,7 +627,7 @@ enum ExprModifier {
     Cast(DoubleColon, #[parser(function = |(_, d), _| d)] DataType),
 }
 
-#[derive(Debug, Clone, TreeParser)]
+#[derive(Debug, Clone, TreeParser, TreeSyntax)]
 #[parser(dependency = "(Expr, Query)")]
 enum ExprPostfixPredicate {
     IsFalse(Is, Option<Not>, False),
@@ -648,7 +650,7 @@ enum ExprPostfixPredicate {
     ),
 }
 
-#[derive(Debug, Clone, TreeParser)]
+#[derive(Debug, Clone, TreeParser, TreeSyntax)]
 enum ExprInfixPredicate {
     IsDistinctFrom(Is, Option<Not>, Distinct, From),
     Between(Option<Not>, Between),

@@ -66,3 +66,26 @@ pub fn derive_tree_parser(input: TokenStream) -> TokenStream {
         .unwrap_or_else(syn::Error::into_compile_error)
         .into()
 }
+
+/// Derives the `TreeSyntax` trait by generating a syntax descriptor for the type.
+///
+/// The type can be an enum with struct or tuple variants, or a struct with named or unnamed fields.
+/// For enums, the variants represent a choice of syntax nodes.
+/// For structs, the fields represent a sequence of syntax nodes.
+///
+/// The syntax cannot be derived for enums with unit variants, or structs with no fields.
+///
+/// The `syntax` attribute can be used to control how the syntax descriptors are derived.
+///
+/// * `syntax(name = expr)`
+///
+///   This can be specified at the top level for the enum or the struct.
+///   The name is used as the name in the syntax descriptor.
+///   By default, the name is the type name as a string.
+#[proc_macro_derive(TreeSyntax, attributes(syntax))]
+pub fn derive_tree_syntax(input: TokenStream) -> TokenStream {
+    let input = parse_macro_input!(input as DeriveInput);
+    tree::syntax::derive_tree_syntax(input)
+        .unwrap_or_else(syn::Error::into_compile_error)
+        .into()
+}

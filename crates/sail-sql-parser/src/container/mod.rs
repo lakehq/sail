@@ -1,3 +1,4 @@
+mod r#box;
 mod either;
 mod option;
 mod sequence;

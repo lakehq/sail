@@ -7,7 +7,7 @@ use chumsky::Parser;
 use crate::options::ParserOptions;
 use crate::span::TokenSpan;
 use crate::token::{Keyword, Token, TokenLabel};
-use crate::tree::TreeParser;
+use crate::tree::{SyntaxDescriptor, SyntaxNode, TerminalKind, TreeParser, TreeSyntax};
 use crate::utils::skip_whitespace;
 
 fn parse_keyword<'a, I, E>(
@@ -78,6 +78,17 @@ macro_rules! keyword_types {
                     _options: &'a ParserOptions
                 ) -> impl Parser<'a, I, Self, E> + Clone {
                     custom(move |input| parse_keyword(input, Self::keyword()).map(Self::new))
+                }
+            }
+
+            impl TreeSyntax for $name {
+                fn syntax() -> SyntaxDescriptor {
+                    let keyword = Self::keyword().as_str().to_string();
+                    SyntaxDescriptor {
+                        name: format!("Keyword({})", stringify!($name)),
+                        node: SyntaxNode::Terminal(TerminalKind::Keyword(keyword)),
+                        children: vec![],
+                    }
                 }
             }
         )*
