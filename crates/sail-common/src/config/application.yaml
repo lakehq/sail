@@ -226,7 +226,7 @@
   description: |
     The time-to-live (TTL) in seconds for cached directory listings.
     Entries expire after this duration from when they were cached,
-    ensuring eventual consistency with the file system.
+    ensuring eventual consistency with the storage system.
     This setting is only effective when the cache is enabled.
     Setting the value to `0` disables the TTL.
     This setting can only be configured at startup and cannot be changed at runtime.
@@ -496,9 +496,9 @@
   type: number
   default: "1800"
   description: |
-    The time-to-live (TTL) in seconds for cached Parquet files statistics.
+    (Reading) The time-to-live (TTL) in seconds for cached Parquet files statistics.
     Entries expire after this duration from when they were cached,
-    ensuring eventual consistency with the file system.
+    ensuring eventual consistency with the storage system.
     This setting is only effective when the cache is enabled.
     Setting the value to `0` disables the TTL.
     This setting can only be configured at startup and cannot be changed at runtime.
@@ -508,9 +508,41 @@
   type: number
   default: "10000"
   description: |
-    Maximum number of Parquet files statistics to cache.
+    (Reading) Maximum number of Parquet files statistics to cache.
     This setting is only effective when the cache is enabled.
     When the limit is reached, least recently used entries are evicted.
+    Setting the value to `0` disables the limit.
+    This setting can only be configured at startup and cannot be changed at runtime.
+  experimental: true
+
+- key: parquet.file_metadata_cache.type
+  type: string
+  default: "global"
+  description: |
+    (Reading) The type of cache for embedded metadata of Parquet files (footer and page metadata).
+    This setting avoids repeatedly reading metadata,
+    which can offer substantial performance improvements for repeated queries over large number of files.
+    The cache is automatically invalidated when the underlying file is modified.
+    Valid values are `none`, `global` (for a global cache), and `session` (for a per-session cache).
+  experimental: true
+
+- key: parquet.file_metadata_cache.ttl
+  type: number
+  default: "1800"
+  description: |
+    (Reading) The time-to-live (TTL) in seconds for cached Parquet files metadata.
+    Entries expire after this duration from when they were cached,
+    ensuring eventual consistency with the storage system.
+    This setting is only effective when the cache is enabled.
+    Setting the value to `0` disables the TTL.
+    This setting can only be configured at startup and cannot be changed at runtime.
+  experimental: true
+
+- key: parquet.file_metadata_cache.size_limit
+  type: number
+  default: "0"
+  description: |
+    (Reading) Maximum size in bytes for the Parquet metadata cache.
     Setting the value to `0` disables the limit.
     This setting can only be configured at startup and cannot be changed at runtime.
   experimental: true
