@@ -10,7 +10,7 @@ use crate::token::{Keyword, Punctuation, StringStyle, Token};
 fn word<'a, I, E>() -> impl Parser<'a, I, (Token<'a>, I::Span), E>
 where
     I: Input<'a, Token = char> + ValueInput<'a> + SliceInput<'a, Slice = &'a str>,
-    E: ParserExtra<'a, I>,
+    E: ParserExtra<'a, I> + 'a,
 {
     // We allow all Unicode alphanumeric characters and the underscore character to be part of a
     // word. This implies that Unicode letters or digits are allowed in an unquoted identifier.
@@ -33,7 +33,7 @@ where
 fn single_line_comment<'a, I, E>() -> impl Parser<'a, I, (Token<'a>, I::Span), E>
 where
     I: Input<'a, Token = char> + ValueInput<'a> + SliceInput<'a, Slice = &'a str>,
-    E: ParserExtra<'a, I>,
+    E: ParserExtra<'a, I> + 'a,
 {
     just("--")
         .ignore_then(none_of("\n\r").repeated())
@@ -43,7 +43,7 @@ where
 fn multi_line_comment<'a, I, E>() -> impl Parser<'a, I, (Token<'a>, I::Span), E>
 where
     I: Input<'a, Token = char> + ValueInput<'a> + SliceInput<'a, Slice = &'a str>,
-    E: ParserExtra<'a, I>,
+    E: ParserExtra<'a, I> + 'a,
 {
     recursive(|comment| {
         any()
@@ -59,7 +59,7 @@ where
 fn none_escape_text<'a, I, E, D>(delimiter: D) -> impl Parser<'a, I, (), E>
 where
     I: Input<'a, Token = char> + ValueInput<'a> + SliceInput<'a, Slice = &'a str>,
-    E: ParserExtra<'a, I>,
+    E: ParserExtra<'a, I> + 'a,
     D: OrderedSeq<'a, char> + Clone,
 {
     any()
@@ -71,7 +71,7 @@ where
 fn dual_quote_escape_text<'a, I, E, D>(delimiter: D) -> impl Parser<'a, I, (), E>
 where
     I: Input<'a, Token = char> + ValueInput<'a> + SliceInput<'a, Slice = &'a str>,
-    E: ParserExtra<'a, I>,
+    E: ParserExtra<'a, I> + 'a,
     D: OrderedSeq<'a, char> + Clone,
 {
     any()
@@ -87,7 +87,7 @@ where
 fn backslash_escape_text<'a, I, E, D>(delimiter: D) -> impl Parser<'a, I, (), E>
 where
     I: Input<'a, Token = char> + ValueInput<'a> + SliceInput<'a, Slice = &'a str>,
-    E: ParserExtra<'a, I>,
+    E: ParserExtra<'a, I> + 'a,
     D: OrderedSeq<'a, char> + Clone,
 {
     any()
@@ -102,7 +102,7 @@ where
 fn string_prefix<'a, I, E, F>(predicate: F) -> impl Parser<'a, I, char, E>
 where
     I: Input<'a, Token = char> + ValueInput<'a> + SliceInput<'a, Slice = &'a str>,
-    E: ParserExtra<'a, I>,
+    E: ParserExtra<'a, I> + 'a,
     F: Fn(char) -> bool + 'static,
 {
     any()
@@ -113,7 +113,7 @@ where
 fn raw_string<'a, I, E, D, S>(delimiter: D, style: S) -> impl Parser<'a, I, (Token<'a>, I::Span), E>
 where
     I: Input<'a, Token = char> + ValueInput<'a> + SliceInput<'a, Slice = &'a str>,
-    E: ParserExtra<'a, I>,
+    E: ParserExtra<'a, I> + 'a,
     D: OrderedSeq<'a, char> + Clone,
     S: Fn(Option<char>) -> StringStyle + 'static,
 {
@@ -133,7 +133,7 @@ where
 fn escape_string<'a, I, E, P, S>(text: P, style: S) -> impl Parser<'a, I, (Token<'a>, I::Span), E>
 where
     I: Input<'a, Token = char> + ValueInput<'a> + SliceInput<'a, Slice = &'a str>,
-    E: ParserExtra<'a, I>,
+    E: ParserExtra<'a, I> + 'a,
     P: Parser<'a, I, (), E>,
     S: Fn(Option<char>) -> StringStyle + 'static,
 {
@@ -154,7 +154,7 @@ where
 fn backtick_quoted_string<'a, I, E>() -> impl Parser<'a, I, (Token<'a>, I::Span), E>
 where
     I: Input<'a, Token = char> + ValueInput<'a> + SliceInput<'a, Slice = &'a str>,
-    E: ParserExtra<'a, I>,
+    E: ParserExtra<'a, I> + 'a,
 {
     // The backtick character can be escaped by repeating it twice,
     // regardless of the parser options.
@@ -180,7 +180,7 @@ fn unicode_escape_string<'a, I, E, D>(
 ) -> impl Parser<'a, I, (Token<'a>, I::Span), E>
 where
     I: Input<'a, Token = char> + ValueInput<'a> + SliceInput<'a, Slice = &'a str>,
-    E: ParserExtra<'a, I>,
+    E: ParserExtra<'a, I> + 'a,
     D: OrderedSeq<'a, char> + Clone,
 {
     just("U&")
@@ -199,7 +199,7 @@ where
 fn dollar_quoted_string<'a, I, E>() -> impl Parser<'a, I, (Token<'a>, I::Span), E>
 where
     I: Input<'a, Token = char> + ValueInput<'a> + SliceInput<'a, Slice = &'a str>,
-    E: ParserExtra<'a, I>,
+    E: ParserExtra<'a, I> + 'a,
 {
     // TODO: Should we restrict the characters allowed in the tag?
     let start = none_of('$').repeated().padded_by(just('$')).to_slice();
@@ -223,7 +223,7 @@ where
 fn whitespace<'a, I, E, T>(c: char, token: T) -> impl Parser<'a, I, (Token<'a>, I::Span), E>
 where
     I: Input<'a, Token = char> + ValueInput<'a> + SliceInput<'a, Slice = &'a str>,
-    E: ParserExtra<'a, I>,
+    E: ParserExtra<'a, I> + 'a,
     T: Fn(usize) -> Token<'a> + 'static,
 {
     just(c)
@@ -236,7 +236,7 @@ where
 fn punctuation<'a, I, E>() -> impl Parser<'a, I, (Token<'a>, I::Span), E>
 where
     I: Input<'a, Token = char> + ValueInput<'a> + SliceInput<'a, Slice = &'a str>,
-    E: ParserExtra<'a, I>,
+    E: ParserExtra<'a, I> + 'a,
 {
     any().try_map_with(|c: char, e| match Punctuation::from_char(c) {
         Some(p) => Ok((Token::Punctuation(p), e.span())),
@@ -251,7 +251,7 @@ where
 fn string<'a, I, E>(options: &ParserOptions) -> impl Parser<'a, I, (Token<'a>, I::Span), E>
 where
     I: Input<'a, Token = char> + ValueInput<'a> + SliceInput<'a, Slice = &'a str>,
-    E: ParserExtra<'a, I>,
+    E: ParserExtra<'a, I> + 'a,
 {
     let text = if options.allow_dual_quote_escape {
         |d: char| dual_quote_escape_text(d).boxed()
@@ -298,7 +298,7 @@ pub fn create_lexer<'a, I, E>(
 ) -> impl Parser<'a, I, Vec<(Token<'a>, I::Span)>, E>
 where
     I: Input<'a, Token = char> + ValueInput<'a> + SliceInput<'a, Slice = &'a str>,
-    E: ParserExtra<'a, I>,
+    E: ParserExtra<'a, I> + 'a,
 {
     choice((
         // When the parsers can parse the same prefix, more specific parsers must come before

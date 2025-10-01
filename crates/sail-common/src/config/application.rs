@@ -19,6 +19,7 @@ pub struct AppConfig {
     pub kubernetes: KubernetesConfig,
     pub parquet: ParquetConfig,
     pub catalog: CatalogConfig,
+    pub optimizer: OptimizerConfig,
     pub spark: SparkConfig,
     /// Reserved for internal use.
     /// This field ensures that environment variables with prefix `SAIL_INTERNAL_`
@@ -226,6 +227,7 @@ pub struct ParquetConfig {
     pub maximum_parallel_row_group_writers: usize,
     pub maximum_buffered_record_batches_per_stream: usize,
     pub file_statistics_cache: FileStatisticsCacheConfig,
+    pub file_metadata_cache: FileMetadataCacheConfig,
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -236,6 +238,16 @@ pub struct FileStatisticsCacheConfig {
     pub ttl: Option<u64>,
     #[serde(deserialize_with = "deserialize_non_zero")]
     pub max_entries: Option<u64>,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct FileMetadataCacheConfig {
+    pub r#type: CacheType,
+    #[serde(deserialize_with = "deserialize_non_zero")]
+    pub ttl: Option<u64>,
+    #[serde(deserialize_with = "deserialize_non_zero")]
+    pub size_limit: Option<u64>,
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -253,6 +265,12 @@ pub struct CatalogConfig {
     pub default_database: Vec<String>,
     pub global_temporary_database: Vec<String>,
     pub list: Vec<CatalogType>,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct OptimizerConfig {
+    pub enable_join_reorder: bool,
 }
 
 #[derive(Debug, Clone, Deserialize)]

@@ -253,7 +253,7 @@ pub(crate) fn derive_tree_parser(input: DeriveInput) -> syn::Result<TokenStream>
             I: chumsky::input::Input<'a, Token = crate::token::Token<'a>>
                 + chumsky::input::ValueInput<'a>,
             I::Span: std::convert::Into<crate::span::TokenSpan> + Clone,
-            E: chumsky::extra::ParserExtra<'a, I>,
+            E: chumsky::extra::ParserExtra<'a, I> + 'a,
             E::Error: chumsky::label::LabelError<'a, I, crate::token::TokenLabel>,
             #args_bounds
         {

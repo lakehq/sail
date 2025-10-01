@@ -16,7 +16,7 @@ use datafusion::physical_plan::{
     PlanProperties, SendableRecordBatchStream,
 };
 use datafusion_common::{internal_err, DataFusionError, Result};
-use datafusion_physical_expr::{Distribution, EquivalenceProperties, PhysicalExpr};
+use datafusion_physical_expr::{Distribution, EquivalenceProperties};
 use delta_kernel::engine::arrow_conversion::TryIntoKernel;
 use delta_kernel::schema::StructType;
 use deltalake::kernel::{Action, Add, Protocol, Remove};
@@ -33,6 +33,7 @@ use crate::table::{create_delta_table_with_object_store, open_table_with_object_
 /// Physical execution node for Delta Lake commit operations
 #[derive(Debug)]
 pub struct DeltaCommitExec {
+    /// The plan that produces action metadata (Add and Remove actions).
     input: Arc<dyn ExecutionPlan>,
     table_url: Url,
     partition_columns: Vec<String>,
@@ -68,63 +69,13 @@ impl DeltaCommitExec {
         }
     }
 
-    async fn generate_remove_actions(
-        table: &crate::table::DeltaTable,
-        predicate: Option<Arc<dyn PhysicalExpr>>,
-        context: Option<&TaskContext>,
-    ) -> Result<Vec<Action>> {
-        // Get the current snapshot
-        let snapshot = table
-            .snapshot()
-            .map_err(|e| DataFusionError::External(Box::new(e)))?;
-
-        // Get files based on whether we have a predicate or not
-        let files = match predicate {
-            Some(pred) => {
-                // Filtered removal - find files matching the predicate
-                let context = context.ok_or_else(|| {
-                    DataFusionError::Internal(
-                        "TaskContext required for predicate-based removal".to_string(),
-                    )
-                })?;
-
-                let session_state =
-                    datafusion::execution::session_state::SessionStateBuilder::new()
-                        .with_runtime_env(context.runtime_env().clone())
-                        .build();
-
-                let adapter_factory = Arc::new(
-                    crate::delta_datafusion::schema_rewriter::DeltaPhysicalExprAdapterFactory {},
-                );
-
-                let candidates = crate::delta_datafusion::find_files_physical(
-                    snapshot,
-                    table.log_store(),
-                    &session_state,
-                    Some(pred),
-                    adapter_factory,
-                )
-                .await
-                .map_err(|e| DataFusionError::External(Box::new(e)))?;
-
-                candidates.candidates
-            }
-            None => {
-                // Full overwrite - get all existing files
-                snapshot
-                    .file_actions(&*table.log_store())
-                    .await
-                    .map_err(|e| DataFusionError::External(Box::new(e)))?
-            }
-        };
-
-        // Convert Add actions to Remove actions
+    async fn adds_to_remove_actions(adds: Vec<Add>) -> Result<Vec<Action>> {
         let deletion_timestamp = SystemTime::now()
             .duration_since(UNIX_EPOCH)
             .map_err(|e| DataFusionError::External(Box::new(e)))?
             .as_millis() as i64;
 
-        let remove_actions: Vec<Action> = files
+        let remove_actions: Vec<Action> = adds
             .into_iter()
             .map(|add| {
                 Action::Remove(Remove {
@@ -214,7 +165,7 @@ impl ExecutionPlan for DeltaCommitExec {
         }
 
         Ok(Arc::new(Self::new(
-            Arc::clone(&children[0]),
+            children[0].clone(),
             self.table_url.clone(),
             self.partition_columns.clone(),
             self.table_exists,
@@ -240,7 +191,7 @@ impl ExecutionPlan for DeltaCommitExec {
             );
         }
 
-        let stream = self.input.execute(0, Arc::clone(&context))?;
+        let input_stream = self.input.execute(0, Arc::clone(&context))?;
 
         let table_url = self.table_url.clone();
         let partition_columns = self.partition_columns.clone();
@@ -273,11 +224,10 @@ impl ExecutionPlan for DeltaCommitExec {
 
             let mut total_rows = 0u64;
             let mut has_data = false;
-            let mut writer_add_actions: Vec<Add> = Vec::new();
-            let mut schema_actions: Vec<Action> = Vec::new();
+            let mut actions: Vec<Action> = Vec::new();
             let mut initial_actions: Vec<Action> = Vec::new();
             let mut operation: Option<DeltaOperation> = None;
-            let mut data = stream;
+            let mut data = input_stream;
 
             while let Some(batch_result) = data.next().await {
                 let batch = batch_result?;
@@ -290,8 +240,7 @@ impl ExecutionPlan for DeltaCommitExec {
                             .map_err(|e| DataFusionError::External(Box::new(e)))?;
 
                         total_rows += commit_info.row_count;
-                        writer_add_actions.extend(commit_info.add_actions);
-                        schema_actions.extend(commit_info.schema_actions);
+                        actions.extend(commit_info.actions);
 
                         if initial_actions.is_empty() {
                             initial_actions = commit_info.initial_actions;
@@ -310,44 +259,29 @@ impl ExecutionPlan for DeltaCommitExec {
                 return Ok(batch);
             }
 
-            // Generate Remove actions based on sink_mode
-            let mut actions: Vec<Action> = initial_actions;
-
-            match &sink_mode {
-                PhysicalSinkMode::OverwriteIf { condition } => {
-                    // Add Remove actions if this is a replaceWhere operation
-                    if table_exists {
-                        let remove_actions = Self::generate_remove_actions(
-                            &table,
-                            Some(condition.clone()),
-                            Some(&context),
-                        )
-                        .await?;
-                        actions.extend(remove_actions);
-                    }
-                }
-                PhysicalSinkMode::Overwrite => {
-                    // For full overwrite, remove all existing files
-                    if table_exists {
-                        let remove_actions =
-                            Self::generate_remove_actions(&table, None, None).await?;
-                        actions.extend(remove_actions);
-                    }
-                }
-                _ => {
-                    // Append, ErrorIfExists, IgnoreIfExists don't generate remove actions
-                }
+            // Handle full table overwrite
+            if matches!(sink_mode, PhysicalSinkMode::Overwrite) && table_exists {
+                let snapshot = table
+                    .snapshot()
+                    .map_err(|e| DataFusionError::External(Box::new(e)))?;
+                let all_files = snapshot
+                    .file_actions(&*table.log_store())
+                    .await
+                    .map_err(|e| DataFusionError::External(Box::new(e)))?;
+                let remove_actions = Self::adds_to_remove_actions(all_files).await?;
+                actions.extend(remove_actions);
             }
 
-            actions.extend(schema_actions); // Add schema actions
-            actions.extend(writer_add_actions.into_iter().map(Action::Add)); // Then add actions
+            // Prepend initial actions
+            let mut final_actions = initial_actions;
+            final_actions.extend(actions);
 
-            if actions.is_empty() && !table_exists {
+            if final_actions.is_empty() && !table_exists {
                 // For new tables, add protocol and metadata even if no data
                 let array = Arc::new(UInt64Array::from(vec![0]));
                 let batch = RecordBatch::try_new(schema, vec![array])?;
                 return Ok(batch);
-            } else if actions.is_empty() {
+            } else if final_actions.is_empty() {
                 // For existing tables, no actions means no changes
                 let array = Arc::new(UInt64Array::from(vec![0]));
                 let batch = RecordBatch::try_new(schema, vec![array])?;
@@ -374,8 +308,8 @@ impl ExecutionPlan for DeltaCommitExec {
                 )
                 .map_err(|e| DataFusionError::External(Box::new(e)))?;
 
-                actions.insert(0, Action::Protocol(protocol.clone()));
-                actions.insert(1, Action::Metadata(metadata.clone()));
+                final_actions.insert(0, Action::Protocol(protocol.clone()));
+                final_actions.insert(1, Action::Metadata(metadata.clone()));
 
                 DeltaOperation::Create {
                     mode: SaveMode::ErrorIfExists,
@@ -407,7 +341,7 @@ impl ExecutionPlan for DeltaCommitExec {
             let reference = snapshot.as_ref().map(|s| *s as &dyn TableReference);
 
             CommitBuilder::from(CommitProperties::default())
-                .with_actions(actions)
+                .with_actions(final_actions)
                 .build(reference, table.log_store(), operation)
                 .await
                 .map_err(|e| DataFusionError::External(Box::new(e)))?;

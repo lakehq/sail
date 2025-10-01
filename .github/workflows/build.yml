@@ -80,9 +80,12 @@ jobs:
 
       # Generate coverage report after tests
       - name: Generate coverage report
-        run: grcov target --binary-path target/debug/ -s .
-          -t lcov --branch --ignore-not-existing
-          -o coverage-build.info
+        run: |
+          LLVM_PATH=$(.github/scripts/find-llvm-profdata.sh)
+          grcov target --binary-path target/debug/ -s . \
+            --llvm-path "$LLVM_PATH" \
+            -t lcov --branch --ignore-not-existing \
+            -o coverage-build.info
 
       - name: Upload cargo coverage artifact
         uses: actions/upload-artifact@v4

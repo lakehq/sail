@@ -72,7 +72,7 @@ const tokens = computed<Token[]>(() => {
 @reference "../app.css";
 
 .syntax-text {
-  @apply font-mono text-sm leading-relaxed;
+  @apply font-mono leading-relaxed;
 
   .alternative,
   .optional,

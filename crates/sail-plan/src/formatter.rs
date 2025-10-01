@@ -494,11 +494,16 @@ impl PlanFormatter for SparkPlanFormatter {
             }
             "first" | "last" => {
                 let name = name.to_lowercase();
-                let arg = arguments[0];
+                let (arg, _) = arguments.at_least_one()?;
                 Ok(format!("{name}({arg})"))
             }
             "any_value" | "first_value" | "last_value" => {
-                let arg = arguments[0];
+                let (arg, _) = arguments.at_least_one()?;
+                Ok(format!("{name}({arg})"))
+            }
+            "grouping" => {
+                let name = name.to_lowercase();
+                let arg = arguments.one()?;
                 Ok(format!("{name}({arg})"))
             }
             "substr" | "substring" => {

@@ -71,7 +71,7 @@ fn signed<'a, T, E>(min_digits: usize, max_digits: usize) -> impl Parser<'a, &'a
 where
     T: FromStr,
     <T as FromStr>::Err: std::fmt::Debug,
-    E: ParserExtra<'a, &'a str>,
+    E: ParserExtra<'a, &'a str> + 'a,
 {
     just('-')
         .or_not()
@@ -90,7 +90,7 @@ fn unsigned<'a, T, E>(min_digits: usize, max_digits: usize) -> impl Parser<'a, &
 where
     T: FromStr,
     <T as FromStr>::Err: std::fmt::Debug,
-    E: ParserExtra<'a, &'a str>,
+    E: ParserExtra<'a, &'a str> + 'a,
 {
     one_of('0'..='9')
         .repeated()
@@ -105,7 +105,7 @@ fn fraction<'a, T, E>(min_digits: usize, max_digits: usize) -> impl Parser<'a, &
 where
     T: FromStr,
     <T as FromStr>::Err: std::fmt::Debug,
-    E: ParserExtra<'a, &'a str>,
+    E: ParserExtra<'a, &'a str> + 'a,
 {
     one_of('0'..='9')
         .repeated()
@@ -124,7 +124,7 @@ where
 
 fn date<'a, E>() -> impl Parser<'a, &'a str, DateValue, E>
 where
-    E: ParserExtra<'a, &'a str>,
+    E: ParserExtra<'a, &'a str> + 'a,
 {
     let year = signed(4, 7);
     let month = unsigned(1, 2);
@@ -141,7 +141,7 @@ where
 
 fn time<'a, E>() -> impl Parser<'a, &'a str, TimeValue, E>
 where
-    E: ParserExtra<'a, &'a str>,
+    E: ParserExtra<'a, &'a str> + 'a,
 {
     let hour = unsigned(1, 2);
     let minute = unsigned(1, 2);
@@ -161,7 +161,7 @@ where
 
 fn timezone<'a, E>() -> impl Parser<'a, &'a str, &'a str, E>
 where
-    E: ParserExtra<'a, &'a str>,
+    E: ParserExtra<'a, &'a str> + 'a,
 {
     any().repeated().to_slice().map(|s: &str| {
         let s = s.trim_matches(' ');
@@ -178,7 +178,7 @@ where
 
 fn timestamp<'a, E>() -> impl Parser<'a, &'a str, TimestampValue<'a>, E>
 where
-    E: ParserExtra<'a, &'a str>,
+    E: ParserExtra<'a, &'a str> + 'a,
 {
     date()
         .then(choice((
@@ -205,7 +205,7 @@ where
 
 pub fn create_date_parser<'a, E>() -> impl Parser<'a, &'a str, DateValue, E>
 where
-    E: ParserExtra<'a, &'a str>,
+    E: ParserExtra<'a, &'a str> + 'a,
 {
     // A date value is allowed to be followed by an arbitrary string which is ignored.
     date()
@@ -220,7 +220,7 @@ where
 
 pub fn create_timestamp_parser<'a, E>() -> impl Parser<'a, &'a str, TimestampValue<'a>, E>
 where
-    E: ParserExtra<'a, &'a str>,
+    E: ParserExtra<'a, &'a str> + 'a,
 {
     timestamp().then_ignore(end())
 }

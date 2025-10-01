@@ -63,7 +63,7 @@
         }
       },
       "output": {
-        "failure": "invalid argument: found 'Spark SQL' at 17:28 expected identifier"
+        "failure": "invalid argument: found collate at 29:36 expected string, '.', '[', '::', 'ESCAPE', 'IS', 'NOT', 'IN', '*', '/', '%', 'DIV', '+', '-', '||', '>>>', '>>', '<<', '&', '^', '|', '!=', '!>', '!<', '==', '=', '>=', '>', '<=>', '<=', '<>', '<', 'BETWEEN', 'LIKE', 'ILIKE', 'RLIKE', 'REGEXP', 'SIMILAR', 'AND', 'OR', ',', 'RESPECT', 'IGNORE', or ')'"
       }
     },
     {

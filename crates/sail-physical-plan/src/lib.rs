@@ -1,3 +1,4 @@
+pub mod file_delete;
 pub mod file_write;
 pub mod map_partitions;
 pub mod range;

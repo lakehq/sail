@@ -5,7 +5,7 @@ members = [
 resolver = "2"
 
 [workspace.package]
-version = "0.3.5"
+version = "0.3.6"
 authors = ["LakeSail <hello@lakesail.com>"]
 edition = "2021"
 homepage = "https://lakesail.com"
@@ -37,7 +37,7 @@ serde = { version = "1.0.219", features = ["derive"] }
 serde_json = "1.0.145"
 # TODO: `serde_yaml` is deprecated. No satisfactory alternative exists yet, we may need to build our own in the future.
 serde_yaml = "0.9.34"
-monostate = "0.1.16"
+monostate = "1.0.0"
 regex = "1.11.2"
 glob = "0.3.3"
 chrono = "0.4.42"
@@ -46,7 +46,7 @@ futures = "0.3.31"
 comfy-table = "7.1.4"
 html-escape = "0.2.13"
 syn = "2.0.106"
-quote = "1.0.40"
+quote = "1.0.41"
 paste = "1.0.15"
 proc-macro2 = "1.0.101"
 prettyplease = "0.2.37"
@@ -88,7 +88,7 @@ crc32fast = "1.5.0"
 sha1 = "0.10.6"
 half = { version = "2.6.0", features = ["serde", "num-traits", "zerocopy"] }
 iana-time-zone = "0.1.63"
-chumsky = { version = "0.10.1", default-features = false, features = ["pratt"] }
+chumsky = { version = "0.11.1", default-features = false, features = ["pratt"] }
 num = "0.4.3"
 hf-hub = { version = "0.4.3", default-features = false, features = ["tokio"] }
 reqwest = "0.12.23"
@@ -96,7 +96,7 @@ percent-encoding = "2.3.2"
 rustls = "0.23.31"
 dashmap = "6.1.0"
 itertools = "0.14.0"
-moka = { version = "0.12.10", features = ["sync"] }
+moka = { version = "0.12.11", features = ["sync"] }
 bytes = "1.10.1"
 indexmap = "2.11.0"
 pin-project-lite = "0.2.16"
