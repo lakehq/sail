@@ -5,17 +5,34 @@
   },
   "features": {
   },
-  "postCreateCommand": "hatch env create default",
+  "mounts": [
+    "source=sail-venvs-${devcontainerId},target=${containerWorkspaceFolder}/.venvs,type=volume",
+    "source=sail-node-modules-${devcontainerId},target=${containerWorkspaceFolder}/node_modules,type=volume",
+    "source=sail-pnpm-store-${devcontainerId},target=${containerWorkspaceFolder}/.pnpm-store,type=volume",
+    "source=sail-target-${devcontainerId},target=${containerWorkspaceFolder}/target,type=volume"
+  ],
+  "postCreateCommand": "sudo chown $(id -u):$(id -g) .venvs node_modules .pnpm-store target && hatch env create && pnpm install",
   "customizations": {
     "vscode": {
       "extensions": [
         "rust-lang.rust-analyzer",
-        "ms-python.python"
+        "ms-python.python",
+        "bradlc.vscode-tailwindcss",
+        "dbaeumer.vscode-eslint",
+        "esbenp.prettier-vscode",
+        "editorconfig.editorconfig",
+        "vue.volar",
+        "wayou.vscode-todo-highlight"
       ],
       "settings": {
         "terminal.integrated.defaultProfile.linux": "bash",
-        "python.defaultInterpreterPath": "/usr/bin/python3"
+        "python.defaultInterpreterPath": "${containerWorkspaceFolder}/.venvs/default/bin/python"
       }
+    },
+    "jetbrains": {
+      "plugins": [
+        "PythonCore"
+      ]
     }
   },
   "remoteUser": "vscode"

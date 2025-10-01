@@ -2,10 +2,13 @@
 
 set -euo pipefail
 
+curl -s https://packagecloud.io/install/repositories/github/git-lfs/script.deb.sh | bash
+
 apt-get update
-apt-get install -y --no-install-recommends
+apt-get install -y --no-install-recommends \
     gcc \
     git \
+    git-lfs \
     libc6-dev \
     libprotobuf-dev \
     libssl-dev \
