@@ -20,18 +20,19 @@ use datafusion_physical_expr::{Distribution, EquivalenceProperties, PhysicalExpr
 use deltalake::kernel::engine::arrow_conversion::{TryIntoArrow, TryIntoKernel};
 use deltalake::kernel::schema::StructType;
 #[allow(deprecated)]
-use deltalake::kernel::{Action, MetadataExt}; // TODO: Follow upstream for `MetadataExt`.
+use deltalake::kernel::{Action, MetadataExt};
+// TODO: Follow upstream for `MetadataExt`.
 use deltalake::logstore::StorageConfig;
 use deltalake::protocol::{DeltaOperation, SaveMode};
 use futures::stream::{once, StreamExt};
 use sail_common_datafusion::datasource::PhysicalSinkMode;
 use url::Url;
 
-use crate::delta_datafusion::delta_to_datafusion_error;
-use crate::delta_datafusion::type_converter::DeltaTypeConverter;
-use crate::delta_format::CommitInfo;
+use crate::datasource::delta_to_datafusion_error;
+use crate::datasource::type_converter::DeltaTypeConverter;
 use crate::operations::write::writer::{DeltaWriter, WriterConfig};
 use crate::options::TableDeltaOptions;
+use crate::physical_plan::CommitInfo;
 use crate::table::open_table_with_object_store;
 
 /// Schema handling mode for Delta Lake writes

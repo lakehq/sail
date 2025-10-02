@@ -17,7 +17,7 @@ use super::{
     create_projection, create_repartition, create_sort, DeltaCommitExec, DeltaFindFilesExec,
     DeltaRemoveActionsExec, DeltaScanByAddsExec, DeltaWriterExec,
 };
-use crate::delta_datafusion::{delta_to_datafusion_error, DataFusionMixins};
+use crate::datasource::{delta_to_datafusion_error, DataFusionMixins};
 use crate::options::TableDeltaOptions;
 use crate::table::open_table_with_object_store;
 
