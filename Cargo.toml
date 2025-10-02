@@ -74,9 +74,9 @@ log = "0.4.28"
 env_logger = "0.11.8"
 fastrace = { version = "0.7.14", features = ["enable"] }
 fastrace-opentelemetry = "0.13.0"
-opentelemetry = "0.31.0"
-opentelemetry_sdk = "0.31.0"
-opentelemetry-otlp = { version = "0.31.0", features = ["tls", "tls-roots", "grpc-tonic"] }
+opentelemetry = "0.30.0"
+opentelemetry_sdk = "0.30.0"
+opentelemetry-otlp = { version = "0.30.0", features = ["tls", "tls-roots", "grpc-tonic"] }
 figment = { version = "0.10.19", features = ["toml", "env"] }
 kube = "2.0.1"
 k8s-openapi = { version = "0.26.0", features = ["latest"] }
