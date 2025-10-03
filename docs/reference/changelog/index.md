@@ -5,6 +5,20 @@ next: false
 
 # Changelog
 
+## 0.3.7
+
+_October 3, 2025_
+
+- Updated various Cargo dependencies ([#949](https://github.com/lakehq/sail/pull/949)) and ([#937](https://github.com/lakehq/sail/pull/937)).
+- Updated various npm dependencies ([#939](https://github.com/lakehq/sail/pull/939).
+- Updated Chumsky to 0.11, which brings improved error reporting for the SQL parser ([#938](https://github.com/lakehq/sail/pull/938)).
+- Supported the `df.unpivot()` method in the Spark DataFrame API ([#948](https://github.com/lakehq/sail/pull/948)).
+- Added guide in docs for SQL operators ([#947](https://github.com/lakehq/sail/pull/947)).
+
+### Contributors
+
+Huge thanks to [@SparkApplicationMaster](https://github.com/SparkApplicationMaster) for the continued contributions!
+
 ## 0.3.6
 
 _September 30, 2025_

@@ -543,9 +543,9 @@ checksum = "c08606f8c3cbf4ce6ec8e28fb0014a2c086708fe954eaa885384a6165172e7e8"
 
 [[package]]
 name = "aws-config"
-version = "1.8.6"
+version = "1.8.7"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "8bc1b40fb26027769f16960d2f4a6bc20c4bb755d403e552c8c1a73af433c246"
+checksum = "04b37ddf8d2e9744a0b9c19ce0b78efe4795339a90b66b7bae77987092cd2e69"
 dependencies = [
  "aws-credential-types",
  "aws-runtime",
@@ -573,9 +573,9 @@ dependencies = [
 
 [[package]]
 name = "aws-credential-types"
-version = "1.2.6"
+version = "1.2.7"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "d025db5d9f52cbc413b167136afb3d8aeea708c0d8884783cf6253be5e22f6f2"
+checksum = "799a1290207254984cb7c05245111bc77958b92a3c9bb449598044b36341cce6"
 dependencies = [
  "aws-smithy-async",
  "aws-smithy-runtime-api",
@@ -609,9 +609,9 @@ dependencies = [
 
 [[package]]
 name = "aws-runtime"
-version = "1.5.10"
+version = "1.5.11"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "c034a1bc1d70e16e7f4e4caf7e9f7693e4c9c24cd91cf17c2a0b21abaebc7c8b"
+checksum = "2e1ed337dabcf765ad5f2fb426f13af22d576328aaf09eac8f70953530798ec0"
 dependencies = [
  "aws-credential-types",
  "aws-sigv4",
@@ -633,9 +633,9 @@ dependencies = [
 
 [[package]]
 name = "aws-sdk-sso"
-version = "1.84.0"
+version = "1.85.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "357a841807f6b52cb26123878b3326921e2a25faca412fabdd32bd35b7edd5d3"
+checksum = "2f2c741e2e439f07b5d1b33155e246742353d82167c785a2ff547275b7e32483"
 dependencies = [
  "aws-credential-types",
  "aws-runtime",
@@ -655,9 +655,9 @@ dependencies = [
 
 [[package]]
 name = "aws-sdk-ssooidc"
-version = "1.86.0"
+version = "1.87.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "9d1cc7fb324aa12eb4404210e6381195c5b5e9d52c2682384f295f38716dd3c7"
+checksum = "6428ae5686b18c0ee99f6f3c39d94ae3f8b42894cdc35c35d8fb2470e9db2d4c"
 dependencies = [
  "aws-credential-types",
  "aws-runtime",
@@ -677,9 +677,9 @@ dependencies = [
 
 [[package]]
 name = "aws-sdk-sts"
-version = "1.86.0"
+version = "1.87.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "e7d835f123f307cafffca7b9027c14979f1d403b417d8541d67cf252e8a21e35"
+checksum = "5871bec9a79a3e8d928c7788d654f135dde0e71d2dd98089388bab36b37ef607"
 dependencies = [
  "aws-credential-types",
  "aws-runtime",
@@ -5405,7 +5405,7 @@ checksum = "28d3b2b1366ec20994f1fd18c3c594f05c5dd4bc44d8bb0c1c632c8d6829481f"
 
 [[package]]
 name = "sail-cache"
-version = "0.3.6"
+version = "0.3.7"
 dependencies = [
  "chrono",
  "datafusion",
@@ -5418,7 +5418,7 @@ dependencies = [
 
 [[package]]
 name = "sail-catalog"
-version = "0.3.6"
+version = "0.3.7"
 dependencies = [
  "async-trait",
  "datafusion",
@@ -5435,7 +5435,7 @@ dependencies = [
 
 [[package]]
 name = "sail-catalog-memory"
-version = "0.3.6"
+version = "0.3.7"
 dependencies = [
  "async-trait",
  "dashmap",
@@ -5444,7 +5444,7 @@ dependencies = [
 
 [[package]]
 name = "sail-cli"
-version = "0.3.6"
+version = "0.3.7"
 dependencies = [
  "clap",
  "fastrace",
@@ -5461,7 +5461,7 @@ dependencies = [
 
 [[package]]
 name = "sail-common"
-version = "0.3.6"
+version = "0.3.7"
 dependencies = [
  "arrow",
  "arrow-buffer",
@@ -5481,7 +5481,7 @@ dependencies = [
 
 [[package]]
 name = "sail-common-datafusion"
-version = "0.3.6"
+version = "0.3.7"
 dependencies = [
  "async-trait",
  "chrono",
@@ -5504,7 +5504,7 @@ dependencies = [
 
 [[package]]
 name = "sail-data-source"
-version = "0.3.6"
+version = "0.3.7"
 dependencies = [
  "async-trait",
  "bytes",
@@ -5536,7 +5536,7 @@ dependencies = [
 
 [[package]]
 name = "sail-delta-lake"
-version = "0.3.6"
+version = "0.3.7"
 dependencies = [
  "arrow-schema",
  "async-trait",
@@ -5564,7 +5564,7 @@ dependencies = [
 
 [[package]]
 name = "sail-execution"
-version = "0.3.6"
+version = "0.3.7"
 dependencies = [
  "arrow-flight",
  "datafusion",
@@ -5599,7 +5599,7 @@ dependencies = [
 
 [[package]]
 name = "sail-function"
-version = "0.3.6"
+version = "0.3.7"
 dependencies = [
  "aes",
  "aes-gcm",
@@ -5633,7 +5633,7 @@ dependencies = [
 
 [[package]]
 name = "sail-gold-test"
-version = "0.3.6"
+version = "0.3.7"
 dependencies = [
  "clap",
  "lazy_static",
@@ -5645,14 +5645,14 @@ dependencies = [
 
 [[package]]
 name = "sail-logical-optimizer"
-version = "0.3.6"
+version = "0.3.7"
 dependencies = [
  "datafusion",
 ]
 
 [[package]]
 name = "sail-logical-plan"
-version = "0.3.6"
+version = "0.3.7"
 dependencies = [
  "comfy-table",
  "datafusion",
@@ -5666,7 +5666,7 @@ dependencies = [
 
 [[package]]
 name = "sail-object-store"
-version = "0.3.6"
+version = "0.3.7"
 dependencies = [
  "async-stream",
  "async-trait",
@@ -5697,7 +5697,7 @@ dependencies = [
 
 [[package]]
 name = "sail-physical-optimizer"
-version = "0.3.6"
+version = "0.3.7"
 dependencies = [
  "datafusion",
  "datafusion-physical-expr",
@@ -5708,7 +5708,7 @@ dependencies = [
 
 [[package]]
 name = "sail-physical-plan"
-version = "0.3.6"
+version = "0.3.7"
 dependencies = [
  "datafusion",
  "datafusion-common",
@@ -5722,7 +5722,7 @@ dependencies = [
 
 [[package]]
 name = "sail-plan"
-version = "0.3.6"
+version = "0.3.7"
 dependencies = [
  "arrow",
  "async-recursion",
@@ -5761,7 +5761,7 @@ dependencies = [
 
 [[package]]
 name = "sail-python"
-version = "0.3.6"
+version = "0.3.7"
 dependencies = [
  "fastrace",
  "log",
@@ -5775,7 +5775,7 @@ dependencies = [
 
 [[package]]
 name = "sail-python-udf"
-version = "0.3.6"
+version = "0.3.7"
 dependencies = [
  "arrow-pyarrow",
  "datafusion",
@@ -5794,7 +5794,7 @@ dependencies = [
 
 [[package]]
 name = "sail-server"
-version = "0.3.6"
+version = "0.3.7"
 dependencies = [
  "axum",
  "log",
@@ -5809,7 +5809,7 @@ dependencies = [
 
 [[package]]
 name = "sail-session"
-version = "0.3.6"
+version = "0.3.7"
 dependencies = [
  "datafusion",
  "sail-catalog",
@@ -5819,7 +5819,7 @@ dependencies = [
 
 [[package]]
 name = "sail-spark-connect"
-version = "0.3.6"
+version = "0.3.7"
 dependencies = [
  "async-stream",
  "datafusion",
@@ -5861,7 +5861,7 @@ dependencies = [
 
 [[package]]
 name = "sail-sql-analyzer"
-version = "0.3.6"
+version = "0.3.7"
 dependencies = [
  "chrono",
  "chumsky",
@@ -5875,7 +5875,7 @@ dependencies = [
 
 [[package]]
 name = "sail-sql-macro"
-version = "0.3.6"
+version = "0.3.7"
 dependencies = [
  "proc-macro2",
  "quote",
@@ -5884,7 +5884,7 @@ dependencies = [
 
 [[package]]
 name = "sail-sql-parser"
-version = "0.3.6"
+version = "0.3.7"
 dependencies = [
  "chumsky",
  "either",
@@ -5898,7 +5898,7 @@ dependencies = [
 
 [[package]]
 name = "sail-telemetry"
-version = "0.3.6"
+version = "0.3.7"
 dependencies = [
  "env_logger",
  "fastrace",
