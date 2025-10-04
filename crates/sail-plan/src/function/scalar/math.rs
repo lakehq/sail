@@ -6,7 +6,6 @@ use datafusion::functions::expr_fn;
 use datafusion_common::ScalarValue;
 use datafusion_expr::{cast, expr, lit, Expr, ExprSchemable, Operator, ScalarUDF};
 use datafusion_spark::function::math::expr_fn as math_fn;
-use datafusion_spark::function::math::width_bucket::SparkWidthBucket;
 use half::f16;
 use sail_common_datafusion::utils::items::ItemTaker;
 use sail_function::error::generic_exec_err;
@@ -483,6 +482,6 @@ pub(super) fn list_built_in_math_functions() -> Vec<(&'static str, ScalarFunctio
         ("try_subtract", F::udf(SparkTrySubtract::new())),
         ("unhex", F::udf(SparkUnHex::new())),
         ("uniform", F::unknown("uniform")),
-        ("width_bucket", F::udf(SparkWidthBucket::new())),
+        ("width_bucket", F::quaternary(math_fn::width_bucket)),
     ]
 }
