@@ -14,10 +14,8 @@ runs:
     # The Rust nightly toolchain is needed for features used in e.g. code formatting.
     - name: Install Rust toolchains
       run: |
-        rustup toolchain install stable
-        rustup toolchain install nightly
-        rustup component add --toolchain stable rustfmt clippy llvm-tools-preview
-        rustup component add --toolchain nightly rustfmt
+        rustup toolchain install stable --profile default --component llvm-tools-preview
+        rustup toolchain install nightly --profile default
       shell: bash
 
     # Install grcov for code coverage
