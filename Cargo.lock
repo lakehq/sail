@@ -5659,33 +5659,24 @@ dependencies = [
 
 [[package]]
 name = "sail-iceberg"
-version = "0.3.6"
+version = "0.3.7"
 dependencies = [
  "apache-avro",
  "arrow-schema",
  "async-trait",
- "base64 0.22.1",
- "bytes",
  "chrono",
  "datafusion",
  "datafusion-common",
- "datafusion-physical-expr",
- "datafusion-physical-expr-adapter",
  "futures",
- "indexmap",
- "itertools 0.14.0",
  "log",
  "num-bigint",
  "num-traits",
  "object_store",
  "once_cell",
  "ordered-float 4.6.0",
- "parquet",
- "percent-encoding",
  "sail-common-datafusion",
  "serde",
  "serde_json",
- "tokio",
  "url",
  "uuid",
 ]

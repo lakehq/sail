@@ -5,13 +5,10 @@ edition = { workspace = true }
 
 [dependencies]
 sail-common-datafusion = { path = "../sail-common-datafusion" }
-# Delta Lake
 
 # DataFusion dependencies
 datafusion = { workspace = true }
 datafusion-common = { workspace = true }
-datafusion-physical-expr-adapter = { workspace = true }
-datafusion-physical-expr = { workspace = true }
 
 # Arrow dependencies
 arrow-schema = { workspace = true }
@@ -24,20 +21,19 @@ serde_json = { workspace = true }
 url = { workspace = true }
 futures = { workspace = true }
 serde = { workspace = true, features = ["derive"] }
-tokio = { workspace = true }
 uuid = { workspace = true }
-parquet = { workspace = true }
-bytes = { workspace = true }
-indexmap = { workspace = true }
+# parquet = { workspace = true }
+# bytes = { workspace = true }
+# indexmap = { workspace = true }
 log = { workspace = true }
-itertools = { workspace = true }
-percent-encoding = { workspace = true }
+# itertools = { workspace = true }
+# percent-encoding = { workspace = true }
 once_cell = { workspace = true }
 ordered-float = { workspace = true }
 apache-avro = { workspace = true }
 num-bigint = { workspace = true }
 num-traits = { workspace = true }
-base64 = { workspace = true }
+# base64 = { workspace = true }
 
 [lints]
 workspace = true
