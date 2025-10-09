@@ -97,7 +97,7 @@ Here are the storage options supported:
 - HDFS
 - File systems
 - HTTP/HTTPS
-- In‐memory storage
+- In-memory storage
 
 ### Lakehouse Formats
 

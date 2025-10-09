@@ -26,7 +26,8 @@
       ],
       "settings": {
         "terminal.integrated.defaultProfile.linux": "bash",
-        "python.defaultInterpreterPath": "${containerWorkspaceFolder}/.venvs/default/bin/python"
+        "python.defaultInterpreterPath": "${containerWorkspaceFolder}/.venvs/default/bin/python",
+        "python.terminal.activateEnvironment": false
       }
     },
     "jetbrains": {
