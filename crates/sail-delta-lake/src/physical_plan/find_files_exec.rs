@@ -7,10 +7,11 @@ use async_trait::async_trait;
 use datafusion::arrow::array::{Array, StringArray};
 use datafusion::arrow::datatypes::{DataType, Field, Schema, SchemaRef};
 use datafusion::arrow::record_batch::RecordBatch;
+use datafusion::catalog::Session;
 use datafusion::datasource::memory::MemorySourceConfig;
 use datafusion::datasource::source::DataSourceExec;
 use datafusion::datasource::TableProvider;
-use datafusion::execution::context::{SessionState, TaskContext};
+use datafusion::execution::context::TaskContext;
 use datafusion::execution::SessionStateBuilder;
 use datafusion::physical_expr_adapter::PhysicalExprAdapterFactory;
 use datafusion::physical_plan::common::collect;
@@ -128,6 +129,7 @@ impl DeltaFindFilesExec {
 
         let session_state = SessionStateBuilder::new()
             .with_runtime_env(context.runtime_env().clone())
+            .with_config(context.session_config().clone())
             .build();
         let adapter_factory = Arc::new(DeltaPhysicalExprAdapterFactory {});
 
@@ -251,7 +253,7 @@ pub struct FindFiles {
 pub async fn scan_memory_table_physical(
     snapshot: &DeltaTableState,
     log_store: &dyn LogStore,
-    state: &SessionState,
+    state: &dyn Session,
     physical_predicate: Arc<dyn PhysicalExpr>,
 ) -> DeltaResult<Vec<Add>> {
     let actions = snapshot.file_actions(log_store).await?;
@@ -328,7 +330,7 @@ pub async fn scan_memory_table_physical(
 pub async fn find_files_scan_physical(
     snapshot: &DeltaTableState,
     log_store: LogStoreRef,
-    state: &SessionState,
+    state: &dyn Session,
     physical_predicate: Arc<dyn PhysicalExpr>,
 ) -> DeltaResult<Vec<Add>> {
     let candidate_map: HashMap<String, Add> = snapshot
@@ -399,7 +401,7 @@ pub async fn find_files_scan_physical(
 pub async fn find_files_physical(
     snapshot: &DeltaTableState,
     log_store: LogStoreRef,
-    state: &SessionState,
+    state: &dyn Session,
     predicate: Option<Arc<dyn PhysicalExpr>>,
     adapter_factory: Arc<dyn PhysicalExprAdapterFactory>,
 ) -> DeltaResult<FindFiles> {

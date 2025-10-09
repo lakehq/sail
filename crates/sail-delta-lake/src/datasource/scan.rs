@@ -34,7 +34,7 @@ pub struct FileScanParams<'a> {
 pub fn build_file_scan_config(
     snapshot: &DeltaTableState,
     log_store: &LogStoreRef,
-    files: Vec<Add>,
+    files: &[Add],
     scan_config: &DeltaScanConfig,
     params: FileScanParams<'_>,
     session: &dyn Session,

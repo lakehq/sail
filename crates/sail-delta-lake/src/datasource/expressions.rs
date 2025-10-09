@@ -2,11 +2,10 @@ use std::collections::HashSet;
 use std::sync::Arc;
 
 use datafusion::arrow::datatypes::DataType as ArrowDataType;
+use datafusion::catalog::Session;
 use datafusion::common::config::ConfigOptions;
 use datafusion::common::tree_node::{TreeNode, TreeNodeRecursion};
 use datafusion::common::{Column, DFSchema, Result};
-use datafusion::execution::runtime_env::RuntimeEnv;
-use datafusion::execution::{SessionState, SessionStateBuilder};
 use datafusion::logical_expr::execution_props::ExecutionProps;
 use datafusion::logical_expr::planner::ExprPlanner;
 use datafusion::logical_expr::simplify::SimplifyContext;
@@ -24,7 +23,7 @@ use deltalake::errors::{DeltaResult, DeltaTableError};
 
 /// Simplify a logical expression and convert it to a physical expression
 pub fn simplify_expr(
-    runtime_env: Arc<RuntimeEnv>,
+    session: &dyn Session,
     df_schema: &DFSchema,
     expr: Expr,
 ) -> Arc<dyn PhysicalExpr> {
@@ -36,12 +35,8 @@ pub fn simplify_expr(
         .simplify(expr)
         .expect("Failed to simplify expression");
 
-    let session_state = SessionStateBuilder::new()
-        .with_runtime_env(runtime_env)
-        .build();
-
     #[allow(clippy::expect_used)]
-    session_state
+    session
         .create_physical_expr(simplified, df_schema)
         .expect("Failed to create physical expression")
 }
@@ -126,12 +121,12 @@ pub fn collect_physical_columns(expr: &Arc<dyn PhysicalExpr>) -> HashSet<String>
 
 /// Simple context provider for Delta Lake expression parsing
 pub struct DeltaContextProvider<'a> {
-    state: &'a SessionState,
+    session: &'a dyn Session,
 }
 
 impl<'a> DeltaContextProvider<'a> {
-    pub fn new(state: &'a SessionState) -> Self {
-        DeltaContextProvider { state }
+    pub fn new(session: &'a dyn Session) -> Self {
+        DeltaContextProvider { session }
     }
 }
 
@@ -144,20 +139,19 @@ impl ContextProvider for DeltaContextProvider<'_> {
     }
 
     fn get_expr_planners(&self) -> &[Arc<dyn ExprPlanner>] {
-        #[allow(clippy::disallowed_methods)]
-        self.state.expr_planners()
+        &[]
     }
 
     fn get_function_meta(&self, name: &str) -> Option<Arc<ScalarUDF>> {
-        self.state.scalar_functions().get(name).cloned()
+        self.session.scalar_functions().get(name).cloned()
     }
 
     fn get_aggregate_meta(&self, name: &str) -> Option<Arc<AggregateUDF>> {
-        self.state.aggregate_functions().get(name).cloned()
+        self.session.aggregate_functions().get(name).cloned()
     }
 
     fn get_window_meta(&self, name: &str) -> Option<Arc<datafusion::logical_expr::WindowUDF>> {
-        self.state.window_functions().get(name).cloned()
+        self.session.window_functions().get(name).cloned()
     }
 
     fn get_variable_type(&self, _var: &[String]) -> Option<ArrowDataType> {
@@ -165,19 +159,19 @@ impl ContextProvider for DeltaContextProvider<'_> {
     }
 
     fn options(&self) -> &ConfigOptions {
-        self.state.config_options()
+        self.session.config_options()
     }
 
     fn udf_names(&self) -> Vec<String> {
-        self.state.scalar_functions().keys().cloned().collect()
+        Vec::new()
     }
 
     fn udaf_names(&self) -> Vec<String> {
-        self.state.aggregate_functions().keys().cloned().collect()
+        Vec::new()
     }
 
     fn udwf_names(&self) -> Vec<String> {
-        self.state.window_functions().keys().cloned().collect()
+        Vec::new()
     }
 }
 
@@ -185,7 +179,7 @@ impl ContextProvider for DeltaContextProvider<'_> {
 pub fn parse_predicate_expression(
     schema: &DFSchema,
     expr: impl AsRef<str>,
-    state: &SessionState,
+    session: &dyn Session,
 ) -> DeltaResult<Expr> {
     let dialect = &GenericDialect {};
     let mut tokenizer = Tokenizer::new(dialect, expr.as_ref());
@@ -198,7 +192,7 @@ pub fn parse_predicate_expression(
         .parse_expr()
         .map_err(|err| DeltaTableError::Generic(format!("Failed to parse expression: {err}")))?;
 
-    let context_provider = DeltaContextProvider::new(state);
+    let context_provider = DeltaContextProvider::new(session);
     let sql_to_rel = SqlToRel::new(&context_provider);
 
     sql_to_rel

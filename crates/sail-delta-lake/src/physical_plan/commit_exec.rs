@@ -9,6 +9,7 @@ use datafusion::arrow::array::{Array, StringArray, UInt64Array};
 use datafusion::arrow::datatypes::{DataType, Field, Schema, SchemaRef};
 use datafusion::arrow::record_batch::RecordBatch;
 use datafusion::execution::context::TaskContext;
+use datafusion::execution::SessionStateBuilder;
 use datafusion::physical_plan::execution_plan::{Boundedness, EmissionType};
 use datafusion::physical_plan::stream::RecordBatchStreamAdapter;
 use datafusion::physical_plan::{
@@ -340,9 +341,14 @@ impl ExecutionPlan for DeltaCommitExec {
             };
             let reference = snapshot.as_ref().map(|s| *s as &dyn TableReference);
 
+            let session_state = SessionStateBuilder::new()
+                .with_runtime_env(context.runtime_env().clone())
+                .with_config(context.session_config().clone())
+                .build();
+
             CommitBuilder::from(CommitProperties::default())
                 .with_actions(final_actions)
-                .build(reference, table.log_store(), operation)
+                .build(reference, table.log_store(), operation, &session_state)
                 .await
                 .map_err(|e| DataFusionError::External(Box::new(e)))?;
 

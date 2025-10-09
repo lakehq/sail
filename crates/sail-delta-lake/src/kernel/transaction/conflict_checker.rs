@@ -4,8 +4,9 @@
 
 use std::collections::HashSet;
 
+use datafusion::catalog::Session;
 use datafusion::logical_expr::Expr;
-use datafusion::prelude::SessionContext;
+use datafusion_common::DFSchema;
 use delta_kernel::table_properties::IsolationLevel;
 use deltalake::kernel::transaction::CommitConflictError;
 use deltalake::kernel::{Action, Add, CommitInfo, Metadata, Protocol, Remove, Transaction};
@@ -14,7 +15,7 @@ use deltalake::protocol::DeltaOperation;
 use deltalake::table::config::TablePropertiesExt as _;
 use deltalake::{DeltaResult, DeltaTableError};
 
-use crate::datasource::DataFusionMixins;
+use crate::datasource::{datafusion_to_delta_error, parse_predicate_expression, DataFusionMixins};
 use crate::kernel::snapshot::LogDataHandler;
 
 /// A struct representing different attributes of current transaction needed for conflict detection.
@@ -39,11 +40,17 @@ impl<'a> TransactionInfo<'a> {
         read_predicates: Option<String>,
         actions: &'a [Action],
         read_whole_table: bool,
+        session: Option<&dyn Session>,
     ) -> DeltaResult<Self> {
-        let session = SessionContext::new();
-        let read_predicates = read_predicates
-            .map(|pred| read_snapshot.parse_predicate_expression(pred, &session.state()))
-            .transpose()?;
+        let read_predicates = match (read_predicates, session) {
+            (Some(pred), Some(s)) => {
+                let schema = read_snapshot.input_schema()?;
+                let schema = DFSchema::try_from(schema.as_ref().to_owned())
+                    .map_err(datafusion_to_delta_error)?;
+                Some(parse_predicate_expression(&schema, pred, s)?)
+            }
+            _ => None,
+        };
 
         let mut read_app_ids = HashSet::<String>::new();
         for action in actions.iter() {

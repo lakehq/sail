@@ -3,14 +3,10 @@ use std::sync::Arc;
 use datafusion::arrow::datatypes::{
     DataType as ArrowDataType, Field, Schema as ArrowSchema, SchemaRef, SchemaRef as ArrowSchemaRef,
 };
-use datafusion::common::DFSchema;
-use datafusion::execution::SessionState;
-use datafusion::logical_expr::Expr;
 use delta_kernel::engine::arrow_conversion::TryIntoArrow;
 use deltalake::errors::{DeltaResult, DeltaTableError};
 
-use crate::datasource::error::datafusion_to_delta_error;
-use crate::datasource::expressions::parse_predicate_expression;
+
 use crate::kernel::snapshot::{EagerSnapshot, LogDataHandler, Snapshot};
 use crate::table::DeltaTableState;
 
@@ -21,12 +17,6 @@ pub trait DataFusionMixins {
 
     /// Get the table schema as an [`ArrowSchemaRef`]
     fn input_schema(&self) -> DeltaResult<ArrowSchemaRef>;
-
-    fn parse_predicate_expression(
-        &self,
-        expr: impl AsRef<str>,
-        df_state: &SessionState,
-    ) -> DeltaResult<Expr>;
 }
 
 impl DataFusionMixins for Snapshot {
@@ -36,16 +26,6 @@ impl DataFusionMixins for Snapshot {
 
     fn input_schema(&self) -> DeltaResult<ArrowSchemaRef> {
         arrow_schema_impl(self, false)
-    }
-
-    fn parse_predicate_expression(
-        &self,
-        expr: impl AsRef<str>,
-        df_state: &SessionState,
-    ) -> DeltaResult<Expr> {
-        let schema = DFSchema::try_from(self.arrow_schema()?.as_ref().to_owned())
-            .map_err(datafusion_to_delta_error)?;
-        parse_predicate_expression(&schema, expr, df_state)
     }
 }
 
@@ -57,16 +37,6 @@ impl DataFusionMixins for EagerSnapshot {
     fn input_schema(&self) -> DeltaResult<ArrowSchemaRef> {
         arrow_schema_from_struct_type(self.schema(), self.metadata().partition_columns(), false)
     }
-
-    fn parse_predicate_expression(
-        &self,
-        expr: impl AsRef<str>,
-        df_state: &SessionState,
-    ) -> DeltaResult<Expr> {
-        let schema = DFSchema::try_from(self.arrow_schema()?.as_ref().to_owned())
-            .map_err(datafusion_to_delta_error)?;
-        parse_predicate_expression(&schema, expr, df_state)
-    }
 }
 
 impl DataFusionMixins for DeltaTableState {
@@ -77,16 +47,6 @@ impl DataFusionMixins for DeltaTableState {
     fn input_schema(&self) -> DeltaResult<ArrowSchemaRef> {
         self.arrow_schema()
     }
-
-    fn parse_predicate_expression(
-        &self,
-        expr: impl AsRef<str>,
-        df_state: &SessionState,
-    ) -> DeltaResult<Expr> {
-        let schema = DFSchema::try_from(self.arrow_schema()?.as_ref().to_owned())
-            .map_err(datafusion_to_delta_error)?;
-        parse_predicate_expression(&schema, expr, df_state)
-    }
 }
 
 impl DataFusionMixins for LogDataHandler<'_> {
@@ -96,16 +56,6 @@ impl DataFusionMixins for LogDataHandler<'_> {
 
     fn input_schema(&self) -> DeltaResult<ArrowSchemaRef> {
         unimplemented!("input_schema for LogDataHandler");
-    }
-
-    fn parse_predicate_expression(
-        &self,
-        expr: impl AsRef<str>,
-        df_state: &SessionState,
-    ) -> DeltaResult<Expr> {
-        let schema = DFSchema::try_from(self.arrow_schema()?.as_ref().to_owned())
-            .map_err(datafusion_to_delta_error)?;
-        parse_predicate_expression(&schema, expr, df_state)
     }
 }
 

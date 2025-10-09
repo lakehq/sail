@@ -113,7 +113,7 @@ impl DeltaScanByAddsExec {
         let file_scan_config = build_file_scan_config(
             &snapshot,
             &table.log_store(),
-            candidate_adds,
+            &candidate_adds,
             &scan_config,
             FileScanParams {
                 pruning_mask: None,

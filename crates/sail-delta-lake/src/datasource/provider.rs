@@ -32,7 +32,7 @@ pub struct DeltaTableProvider {
     log_store: LogStoreRef,
     config: DeltaScanConfig,
     schema: Arc<ArrowSchema>,
-    files: Option<Vec<Add>>,
+    files: Option<Arc<Vec<Add>>>,
 }
 
 impl DeltaTableProvider {
@@ -51,7 +51,7 @@ impl DeltaTableProvider {
     }
 
     pub fn with_files(mut self, files: Vec<Add>) -> DeltaTableProvider {
-        self.files = Some(files);
+        self.files = Some(Arc::new(files));
         self
     }
 
@@ -164,13 +164,10 @@ impl TableProvider for DeltaTableProvider {
         let (pruning_filters, pushdown_filters) = self.separate_filters(filters);
 
         // Use the new pruning module
-        let pruning_result = match &self.files {
-            Some(files) => crate::datasource::pruning::PruningResult {
-                files: files.clone(),
-                pruning_mask: None,
-            },
+        let (files, pruning_mask) = match &self.files {
+            Some(files) => (files.clone(), None),
             None => {
-                prune_files(
+                let result = prune_files(
                     &self.snapshot,
                     &self.log_store,
                     session,
@@ -178,7 +175,8 @@ impl TableProvider for DeltaTableProvider {
                     limit,
                     logical_schema.clone(),
                 )
-                .await?
+                .await?;
+                (Arc::new(result.files), result.pruning_mask)
             }
         };
 
@@ -186,7 +184,7 @@ impl TableProvider for DeltaTableProvider {
         let pushdown_filter = if !pushdown_filters.is_empty() {
             let df_schema = logical_schema.clone().to_dfschema()?;
             let pushdown_expr = conjunction(pushdown_filters);
-            pushdown_expr.map(|expr| simplify_expr(session.runtime_env().clone(), &df_schema, expr))
+            pushdown_expr.map(|expr| simplify_expr(session, &df_schema, expr))
         } else {
             None
         };
@@ -205,10 +203,10 @@ impl TableProvider for DeltaTableProvider {
         let file_scan_config = build_file_scan_config(
             &self.snapshot,
             &self.log_store,
-            pruning_result.files,
+            &files,
             &config,
             FileScanParams {
-                pruning_mask: pruning_result.pruning_mask.as_deref(),
+                pruning_mask: pruning_mask.as_deref(),
                 projection,
                 limit,
                 pushdown_filter,

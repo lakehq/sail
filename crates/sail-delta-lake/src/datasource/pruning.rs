@@ -72,7 +72,7 @@ pub async fn prune_files(
     let mut rows_collected = 0;
     let mut files = vec![];
 
-    for (action, keep) in all_files.iter().zip(files_to_prune.iter()) {
+    for (action, keep) in all_files.into_iter().zip(files_to_prune.iter()) {
         if *keep {
             if let Some(limit) = limit {
                 if let Some(stats) = action
@@ -81,16 +81,15 @@ pub async fn prune_files(
                 {
                     if rows_collected <= limit as i64 {
                         rows_collected += stats.num_records;
-                        files.push(action.to_owned());
+                        files.push(action);
                     } else {
                         break;
                     }
                 } else {
-                    // Files missing stats are stored separately
-                    pruned_without_stats.push(action.to_owned());
+                    pruned_without_stats.push(action);
                 }
             } else {
-                files.push(action.to_owned());
+                files.push(action);
             }
         }
     }
