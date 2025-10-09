@@ -8,7 +8,7 @@ use crate::options::ParserOptions;
 pub trait TreeParser<'a, I, E, A = ()>: Sized
 where
     I: Input<'a>,
-    E: ParserExtra<'a, I>,
+    E: ParserExtra<'a, I> + 'a,
 {
     /// Returns a parser for the type.
     /// This method receives opaque arguments `args` of generic type `A`.

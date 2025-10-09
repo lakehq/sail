@@ -163,7 +163,7 @@ impl<'a, I, E> TreeParser<'a, I, E> for NumberLiteral
 where
     I: Input<'a, Token = Token<'a>> + ValueInput<'a>,
     I::Span: Into<TokenSpan>,
-    E: ParserExtra<'a, I>,
+    E: ParserExtra<'a, I> + 'a,
     E::Error: LabelError<'a, I, TokenLabel>,
 {
     fn parser(_args: (), _options: &'a ParserOptions) -> impl Parser<'a, I, Self, E> + Clone {
@@ -220,7 +220,7 @@ impl<'a, I, E> TreeParser<'a, I, E> for IntegerLiteral
 where
     I: Input<'a, Token = Token<'a>> + ValueInput<'a>,
     I::Span: Into<TokenSpan>,
-    E: ParserExtra<'a, I>,
+    E: ParserExtra<'a, I> + 'a,
     E::Error: LabelError<'a, I, TokenLabel>,
 {
     fn parser(_args: (), _options: &'a ParserOptions) -> impl Parser<'a, I, Self, E> + Clone {
@@ -272,7 +272,7 @@ fn parse_unicode_escape<'a, I, E>(
 ) -> Option<StringValue>
 where
     I: Input<'a, Token = Token<'a>> + ValueInput<'a>,
-    E: ParserExtra<'a, I>,
+    E: ParserExtra<'a, I> + 'a,
 {
     let marker = input.save();
     // Skip the whitespace following the string literal.
@@ -309,7 +309,7 @@ impl<'a, I, E> TreeParser<'a, I, E> for StringLiteral
 where
     I: Input<'a, Token = Token<'a>> + ValueInput<'a>,
     I::Span: Into<TokenSpan> + Clone,
-    E: ParserExtra<'a, I>,
+    E: ParserExtra<'a, I> + 'a,
     E::Error: LabelError<'a, I, TokenLabel>,
 {
     fn parser(_args: (), options: &'a ParserOptions) -> impl Parser<'a, I, Self, E> + Clone {

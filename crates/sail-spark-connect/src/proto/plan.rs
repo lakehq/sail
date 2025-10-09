@@ -747,8 +747,7 @@ impl TryFrom<RelType> for RelationNode {
                             })
                             .collect::<SparkResult<Vec<_>>>()
                     })
-                    .transpose()?
-                    .unwrap_or_else(Vec::new);
+                    .transpose()?;
                 Ok(RelationNode::Query(spec::QueryNode::Unpivot(
                     spec::Unpivot {
                         input: Box::new((*input).try_into()?),
