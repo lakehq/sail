@@ -6,7 +6,6 @@ use datafusion::arrow::datatypes::{
 use delta_kernel::engine::arrow_conversion::TryIntoArrow;
 use deltalake::errors::{DeltaResult, DeltaTableError};
 
-
 use crate::kernel::snapshot::{EagerSnapshot, LogDataHandler, Snapshot};
 use crate::table::DeltaTableState;
 
