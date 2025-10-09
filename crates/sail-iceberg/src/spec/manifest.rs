@@ -1,11 +1,15 @@
 use std::collections::HashMap;
 use std::sync::Arc;
 
+use apache_avro::types::Value as AvroValue;
+use apache_avro::{from_value as avro_from_value, Reader as AvroReader};
 use serde::{Deserialize, Serialize};
 
+use super::datatypes::PrimitiveType;
+use super::manifest_list::ManifestContentType;
 use super::partition::PartitionSpec;
-use super::schema::SchemaRef;
-use super::values::Literal;
+use super::schema::{SchemaId, SchemaRef};
+use super::values::{Datum, Literal, PrimitiveLiteral};
 
 /// Reference to [`ManifestEntry`].
 pub type ManifestEntryRef = Arc<ManifestEntry>;
@@ -43,6 +47,493 @@ impl Manifest {
         let Self { entries, metadata } = self;
         (entries, metadata)
     }
+
+    /// Parse manifest metadata and entries from bytes of avro file.
+    ///
+    /// TODO: Implement Avro decoding and projection for V1/V2.
+    pub(crate) fn try_from_avro_bytes(
+        bs: &[u8],
+    ) -> Result<(ManifestMetadata, Vec<ManifestEntry>), String> {
+        let reader = AvroReader::new(bs).map_err(|e| format!("Avro read error: {e}"))?;
+
+        // Parse manifest metadata from avro user metadata
+        let meta = reader.user_metadata();
+        let metadata = ManifestMetadata::parse_from_avro_meta(meta)?;
+
+        // Determine partition type to guide value decoding when needed
+        let partition_type = metadata
+            .partition_spec
+            .partition_type(&metadata.schema)
+            .map_err(|e| format!("Partition type error: {e}"))?;
+
+        // For entries, reuse the embedded schema in the Avro file and deserialize per record
+        let reader = AvroReader::new(bs).map_err(|e| format!("Avro read error: {e}"))?;
+        let mut entries = Vec::new();
+        for value in reader {
+            let value = value.map_err(|e| format!("Avro read value error: {e}"))?;
+            let entry_avro: ManifestEntryAvro =
+                avro_from_value(&value).map_err(|e| format!("Avro decode entry error: {e}"))?;
+            let data_file = entry_avro.data_file.into_data_file(
+                &metadata.schema,
+                partition_type.fields().len() as i32,
+                metadata.partition_spec.spec_id(),
+            );
+            let status = match entry_avro.status {
+                1 => ManifestStatus::Added,
+                2 => ManifestStatus::Deleted,
+                _ => ManifestStatus::Existing,
+            };
+            let entry = ManifestEntry::new(
+                status,
+                entry_avro.snapshot_id,
+                entry_avro.sequence_number,
+                entry_avro.file_sequence_number,
+                data_file,
+            );
+            entries.push(entry);
+        }
+
+        Ok((metadata, entries))
+    }
+
+    /// Parse a manifest from bytes of avro file.
+    ///
+    /// TODO: Implement Avro decoding and projection for V1/V2.
+    pub fn parse_avro(bs: &[u8]) -> Result<Self, String> {
+        let (metadata, entries) = Self::try_from_avro_bytes(bs)?;
+        Ok(Manifest::new(metadata, entries))
+    }
+}
+
+impl ManifestMetadata {
+    pub(crate) fn parse_from_avro_meta(
+        meta: &std::collections::HashMap<String, Vec<u8>>,
+    ) -> Result<Self, String> {
+        // schema
+        let schema_bs = meta
+            .get("schema")
+            .ok_or_else(|| "schema is required in manifest metadata but not found".to_string())?;
+        let schema: super::Schema = serde_json::from_slice(schema_bs)
+            .map_err(|e| format!("Fail to parse schema in manifest metadata: {e}"))?;
+        let schema_ref = std::sync::Arc::new(schema);
+
+        // schema-id (optional)
+        let schema_id: i32 = meta
+            .get("schema-id")
+            .and_then(|bs| String::from_utf8(bs.clone()).ok())
+            .and_then(|s| s.parse::<i32>().ok())
+            .unwrap_or(0);
+
+        // partition-spec and id
+        let part_fields_bs = meta.get("partition-spec").ok_or_else(|| {
+            "partition-spec is required in manifest metadata but not found".to_string()
+        })?;
+        let part_fields: Vec<super::partition::PartitionField> =
+            serde_json::from_slice(part_fields_bs)
+                .map_err(|e| format!("Fail to parse partition spec in manifest metadata: {e}"))?;
+        let spec_id: i32 = meta
+            .get("partition-spec-id")
+            .and_then(|bs| String::from_utf8(bs.clone()).ok())
+            .and_then(|s| s.parse::<i32>().ok())
+            .unwrap_or(0);
+        let mut builder = super::partition::PartitionSpec::builder().with_spec_id(spec_id);
+        for f in part_fields {
+            builder = builder.add_field_with_id(f.source_id, f.field_id, f.name, f.transform);
+        }
+        let partition_spec = builder.build();
+
+        // format-version
+        let format_version = meta
+            .get("format-version")
+            .and_then(|bs| serde_json::from_slice::<super::FormatVersion>(bs).ok())
+            .unwrap_or(super::FormatVersion::V1);
+
+        // content
+        let content = meta
+            .get("content")
+            .and_then(|bs| String::from_utf8(bs.clone()).ok())
+            .map(|s| match s.to_ascii_lowercase().as_str() {
+                "deletes" => super::manifest_list::ManifestContentType::Deletes,
+                _ => super::manifest_list::ManifestContentType::Data,
+            })
+            .unwrap_or(super::manifest_list::ManifestContentType::Data);
+
+        Ok(ManifestMetadata::new(
+            schema_ref,
+            schema_id,
+            partition_spec,
+            format_version,
+            content,
+        ))
+    }
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+struct ManifestEntryAvro {
+    #[serde(rename = "status")]
+    status: i32,
+    #[serde(rename = "snapshot_id")]
+    snapshot_id: Option<i64>,
+    #[serde(rename = "sequence_number")]
+    sequence_number: Option<i64>,
+    #[serde(rename = "file_sequence_number")]
+    file_sequence_number: Option<i64>,
+    #[serde(rename = "data_file")]
+    data_file: DataFileAvro,
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+struct DataFileAvro {
+    #[serde(rename = "content", default)]
+    content: i32,
+    #[serde(rename = "file_path")]
+    file_path: String,
+    #[serde(rename = "file_format")]
+    file_format: String,
+    #[serde(rename = "partition")]
+    partition: serde_json::Value,
+    #[serde(rename = "record_count")]
+    record_count: i64,
+    #[serde(rename = "file_size_in_bytes")]
+    file_size_in_bytes: i64,
+    #[serde(skip)]
+    column_sizes: Option<AvroValue>,
+    #[serde(skip)]
+    value_counts: Option<AvroValue>,
+    #[serde(skip)]
+    null_value_counts: Option<AvroValue>,
+    #[serde(skip)]
+    nan_value_counts: Option<AvroValue>,
+    #[serde(skip)]
+    lower_bounds: Option<AvroValue>,
+    #[serde(skip)]
+    upper_bounds: Option<AvroValue>,
+    #[serde(rename = "key_metadata")]
+    key_metadata: Option<Vec<u8>>,
+    #[serde(rename = "split_offsets")]
+    split_offsets: Option<Vec<i64>>,
+    #[serde(rename = "equality_ids")]
+    equality_ids: Option<Vec<i64>>,
+    #[serde(rename = "sort_order_id")]
+    sort_order_id: Option<i32>,
+}
+
+impl DataFileAvro {
+    #[allow(dead_code)]
+    fn extract_map_fields_from_avro(&mut self, fields: &[(String, AvroValue)]) {
+        for (field_name, field_value) in fields {
+            match field_name.as_str() {
+                "column_sizes" => self.column_sizes = Some(field_value.clone()),
+                "value_counts" => self.value_counts = Some(field_value.clone()),
+                "null_value_counts" => self.null_value_counts = Some(field_value.clone()),
+                "nan_value_counts" => self.nan_value_counts = Some(field_value.clone()),
+                "lower_bounds" => self.lower_bounds = Some(field_value.clone()),
+                "upper_bounds" => self.upper_bounds = Some(field_value.clone()),
+                _ => {}
+            }
+        }
+    }
+
+    fn into_data_file(
+        self,
+        schema: &super::Schema,
+        _partition_type_len: i32,
+        partition_spec_id: i32,
+    ) -> DataFile {
+        let content = match self.content {
+            0 => DataContentType::Data,
+            1 => DataContentType::PositionDeletes,
+            2 => DataContentType::EqualityDeletes,
+            _ => DataContentType::Data,
+        };
+
+        let file_format = match self.file_format.to_uppercase().as_str() {
+            "PARQUET" => super::DataFileFormat::Parquet,
+            "AVRO" => super::DataFileFormat::Avro,
+            "ORC" => super::DataFileFormat::Orc,
+            _ => super::DataFileFormat::Parquet,
+        };
+
+        let partition = parse_partition_values(Some(&self.partition));
+
+        let column_sizes = parse_i64_map_from_avro(&self.column_sizes)
+            .into_iter()
+            .map(|(k, v)| (k, v as u64))
+            .collect();
+        let value_counts = parse_i64_map_from_avro(&self.value_counts)
+            .into_iter()
+            .map(|(k, v)| (k, v as u64))
+            .collect();
+        let null_value_counts = parse_i64_map_from_avro(&self.null_value_counts)
+            .into_iter()
+            .map(|(k, v)| (k, v as u64))
+            .collect();
+        let nan_value_counts = parse_i64_map_from_avro(&self.nan_value_counts)
+            .into_iter()
+            .map(|(k, v)| (k, v as u64))
+            .collect();
+
+        let lower_bounds_raw = parse_bytes_map_from_avro(&self.lower_bounds);
+        let upper_bounds_raw = parse_bytes_map_from_avro(&self.upper_bounds);
+        let lower_bounds = parse_bounds_from_binary(lower_bounds_raw.as_ref(), schema);
+        let upper_bounds = parse_bounds_from_binary(upper_bounds_raw.as_ref(), schema);
+
+        DataFile {
+            content,
+            file_path: self.file_path,
+            file_format,
+            partition,
+            record_count: self.record_count as u64,
+            file_size_in_bytes: self.file_size_in_bytes as u64,
+            column_sizes,
+            value_counts,
+            null_value_counts,
+            nan_value_counts,
+            lower_bounds,
+            upper_bounds,
+            block_size_in_bytes: None,
+            key_metadata: self.key_metadata,
+            split_offsets: self.split_offsets.unwrap_or_default(),
+            equality_ids: self
+                .equality_ids
+                .unwrap_or_default()
+                .into_iter()
+                .map(|v| v as i32)
+                .collect(),
+            sort_order_id: self.sort_order_id,
+            first_row_id: None,
+            partition_spec_id,
+            referenced_data_file: None,
+            content_offset: None,
+            content_size_in_bytes: None,
+        }
+    }
+}
+
+fn parse_i64_map_from_avro(values: &Option<AvroValue>) -> std::collections::HashMap<i32, i64> {
+    use apache_avro::types::Value;
+    let mut map = std::collections::HashMap::new();
+    if let Some(Value::Map(obj)) = values {
+        for (k, v) in obj {
+            if let Value::Long(i) = v {
+                map.insert(k.parse::<i32>().unwrap_or(0), *i);
+            }
+        }
+        return map;
+    }
+    if let Some(Value::Array(vec)) = values {
+        for item in vec {
+            if let Value::Record(fields) = item {
+                let mut key_opt = None;
+                let mut value_opt = None;
+                for (name, val) in fields {
+                    match name.as_str() {
+                        "key" => {
+                            if let Value::Int(k) = val {
+                                key_opt = Some(*k);
+                            }
+                        }
+                        "value" => {
+                            if let Value::Long(vl) = val {
+                                value_opt = Some(*vl);
+                            }
+                        }
+                        _ => {}
+                    }
+                }
+                if let (Some(k), Some(v)) = (key_opt, value_opt) {
+                    map.insert(k, v);
+                }
+            }
+        }
+    }
+    map
+}
+
+fn parse_bytes_map_from_avro(
+    values: &Option<AvroValue>,
+) -> Option<std::collections::HashMap<i32, Vec<u8>>> {
+    use apache_avro::types::Value;
+    if let Some(Value::Map(obj)) = values {
+        let mut map = std::collections::HashMap::new();
+        for (k, v) in obj {
+            if let Value::Bytes(b) = v {
+                map.insert(k.parse::<i32>().unwrap_or(0), b.clone());
+            }
+        }
+        return Some(map);
+    }
+    if let Some(Value::Array(vec)) = values {
+        let mut map = std::collections::HashMap::new();
+        for item in vec {
+            if let Value::Record(fields) = item {
+                let mut key_opt = None;
+                let mut value_opt = None;
+                for (name, val) in fields {
+                    match name.as_str() {
+                        "key" => {
+                            if let Value::Int(k) = val {
+                                key_opt = Some(*k);
+                            }
+                        }
+                        "value" => {
+                            if let Value::Bytes(b) = val {
+                                value_opt = Some(b.clone());
+                            }
+                        }
+                        _ => {}
+                    }
+                }
+                if let (Some(k), Some(v)) = (key_opt, value_opt) {
+                    map.insert(k, v);
+                }
+            }
+        }
+        return Some(map);
+    }
+    None
+}
+
+// NOTE: These helpers mirror provider.rs logic, kept local to avoid cross-module deps.
+fn parse_partition_values(json: Option<&serde_json::Value>) -> Vec<Option<Literal>> {
+    match json {
+        Some(serde_json::Value::Array(arr)) => arr
+            .iter()
+            .map(|v| match v {
+                serde_json::Value::Null => None,
+                serde_json::Value::Bool(b) => {
+                    Some(Literal::Primitive(PrimitiveLiteral::Boolean(*b)))
+                }
+                serde_json::Value::Number(n) => {
+                    if let Some(i) = n.as_i64() {
+                        if i >= i32::MIN as i64 && i <= i32::MAX as i64 {
+                            Some(Literal::Primitive(PrimitiveLiteral::Int(i as i32)))
+                        } else {
+                            Some(Literal::Primitive(PrimitiveLiteral::Long(i)))
+                        }
+                    } else {
+                        n.as_f64().map(|f| {
+                            Literal::Primitive(PrimitiveLiteral::Double(
+                                ordered_float::OrderedFloat(f),
+                            ))
+                        })
+                    }
+                }
+                serde_json::Value::String(s) => {
+                    Some(Literal::Primitive(PrimitiveLiteral::String(s.clone())))
+                }
+                _ => None,
+            })
+            .collect(),
+        _ => Vec::new(),
+    }
+}
+
+fn parse_bounds_from_binary(
+    bounds_data: Option<&std::collections::HashMap<i32, Vec<u8>>>,
+    schema: &super::Schema,
+) -> std::collections::HashMap<i32, Datum> {
+    use crate::spec::Type;
+    let mut bounds = std::collections::HashMap::new();
+    if let Some(data) = bounds_data {
+        for (field_id, binary_data) in data {
+            if let Some(field) = schema.field_by_id(*field_id) {
+                let field_type = field.field_type.as_ref();
+                let datum = match field_type {
+                    Type::Primitive(prim_type) => {
+                        parse_primitive_bound(binary_data, prim_type).ok()
+                    }
+                    _ => None,
+                };
+                if let Some(d) = datum {
+                    bounds.insert(*field_id, d);
+                }
+            } else if let Ok(string_value) = String::from_utf8(binary_data.clone()) {
+                bounds.insert(
+                    *field_id,
+                    Datum::new(
+                        PrimitiveType::String,
+                        PrimitiveLiteral::String(string_value),
+                    ),
+                );
+            } else {
+                bounds.insert(
+                    *field_id,
+                    Datum::new(
+                        PrimitiveType::Binary,
+                        PrimitiveLiteral::Binary(binary_data.clone()),
+                    ),
+                );
+            }
+        }
+    }
+    bounds
+}
+
+fn parse_primitive_bound(
+    bytes: &[u8],
+    prim_type: &crate::spec::PrimitiveType,
+) -> Result<Datum, String> {
+    use num_bigint::BigInt;
+    use num_traits::ToPrimitive;
+
+    use crate::spec::PrimitiveType;
+    let literal = match prim_type {
+        PrimitiveType::Boolean => {
+            let val = !(bytes.len() == 1 && bytes[0] == 0u8);
+            PrimitiveLiteral::Boolean(val)
+        }
+        PrimitiveType::Int | PrimitiveType::Date => {
+            let val = i32::from_le_bytes(bytes.try_into().map_err(|_| "Invalid i32 bytes")?);
+            PrimitiveLiteral::Int(val)
+        }
+        PrimitiveType::Long
+        | PrimitiveType::Time
+        | PrimitiveType::Timestamp
+        | PrimitiveType::Timestamptz
+        | PrimitiveType::TimestampNs
+        | PrimitiveType::TimestamptzNs => {
+            let val = if bytes.len() == 4 {
+                i32::from_le_bytes(bytes.try_into().map_err(|_| "Invalid i32 bytes")?) as i64
+            } else {
+                i64::from_le_bytes(bytes.try_into().map_err(|_| "Invalid i64 bytes")?)
+            };
+            PrimitiveLiteral::Long(val)
+        }
+        PrimitiveType::Float => {
+            let val = f32::from_le_bytes(bytes.try_into().map_err(|_| "Invalid f32 bytes")?);
+            PrimitiveLiteral::Float(ordered_float::OrderedFloat(val))
+        }
+        PrimitiveType::Double => {
+            let val = if bytes.len() == 4 {
+                f32::from_le_bytes(bytes.try_into().map_err(|_| "Invalid f32 bytes")?) as f64
+            } else {
+                f64::from_le_bytes(bytes.try_into().map_err(|_| "Invalid f64 bytes")?)
+            };
+            PrimitiveLiteral::Double(ordered_float::OrderedFloat(val))
+        }
+        PrimitiveType::String => {
+            let val = std::str::from_utf8(bytes)
+                .map_err(|_| "Invalid UTF-8")?
+                .to_string();
+            PrimitiveLiteral::String(val)
+        }
+        PrimitiveType::Uuid => {
+            let val = u128::from_be_bytes(bytes.try_into().map_err(|_| "Invalid UUID bytes")?);
+            PrimitiveLiteral::UInt128(val)
+        }
+        PrimitiveType::Fixed(_) | PrimitiveType::Binary => {
+            PrimitiveLiteral::Binary(Vec::from(bytes))
+        }
+        PrimitiveType::Decimal { .. } => {
+            let unscaled_value = BigInt::from_signed_bytes_be(bytes);
+            let val = unscaled_value
+                .to_i128()
+                .ok_or_else(|| format!("Can't convert bytes to i128: {:?}", bytes))?;
+            PrimitiveLiteral::Int128(val)
+        }
+    };
+    Ok(Datum::new(prim_type.clone(), literal))
 }
 
 /// Metadata about a manifest file.
@@ -50,23 +541,31 @@ impl Manifest {
 pub struct ManifestMetadata {
     /// The schema of the table when the manifest was written.
     pub schema: SchemaRef,
+    /// ID of the schema used to write the manifest
+    pub schema_id: SchemaId,
     /// The partition spec used to write the manifest.
     pub partition_spec: PartitionSpec,
     /// The format version of the manifest.
     pub format_version: FormatVersion,
+    /// Type of content files tracked by the manifest: data or deletes
+    pub content: ManifestContentType,
 }
 
 impl ManifestMetadata {
     /// Create new manifest metadata.
     pub fn new(
         schema: SchemaRef,
+        schema_id: SchemaId,
         partition_spec: PartitionSpec,
         format_version: FormatVersion,
+        content: ManifestContentType,
     ) -> Self {
         Self {
             schema,
+            schema_id,
             partition_spec,
             format_version,
+            content,
         }
     }
 }
@@ -216,10 +715,10 @@ pub struct DataFile {
     pub nan_value_counts: HashMap<i32, u64>,
     /// Map from column id to lower bound in the column.
     #[serde(skip_serializing_if = "HashMap::is_empty")]
-    pub lower_bounds: HashMap<i32, Literal>,
+    pub lower_bounds: HashMap<i32, Datum>,
     /// Map from column id to upper bound in the column.
     #[serde(skip_serializing_if = "HashMap::is_empty")]
-    pub upper_bounds: HashMap<i32, Literal>,
+    pub upper_bounds: HashMap<i32, Datum>,
     /// Block size in bytes.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub block_size_in_bytes: Option<i64>,
@@ -308,12 +807,12 @@ impl DataFile {
     }
 
     /// Get lower bounds.
-    pub fn lower_bounds(&self) -> &HashMap<i32, Literal> {
+    pub fn lower_bounds(&self) -> &HashMap<i32, Datum> {
         &self.lower_bounds
     }
 
     /// Get upper bounds.
-    pub fn upper_bounds(&self) -> &HashMap<i32, Literal> {
+    pub fn upper_bounds(&self) -> &HashMap<i32, Datum> {
         &self.upper_bounds
     }
 }
@@ -331,8 +830,8 @@ pub struct DataFileBuilder {
     value_counts: HashMap<i32, u64>,
     null_value_counts: HashMap<i32, u64>,
     nan_value_counts: HashMap<i32, u64>,
-    lower_bounds: HashMap<i32, Literal>,
-    upper_bounds: HashMap<i32, Literal>,
+    lower_bounds: HashMap<i32, Datum>,
+    upper_bounds: HashMap<i32, Datum>,
     block_size_in_bytes: Option<i64>,
     key_metadata: Option<Vec<u8>>,
     split_offsets: Vec<i64>,
@@ -435,13 +934,13 @@ impl DataFileBuilder {
     }
 
     /// Add lower bound.
-    pub fn with_lower_bound(mut self, column_id: i32, bound: Literal) -> Self {
+    pub fn with_lower_bound(mut self, column_id: i32, bound: Datum) -> Self {
         self.lower_bounds.insert(column_id, bound);
         self
     }
 
     /// Add upper bound.
-    pub fn with_upper_bound(mut self, column_id: i32, bound: Literal) -> Self {
+    pub fn with_upper_bound(mut self, column_id: i32, bound: Datum) -> Self {
         self.upper_bounds.insert(column_id, bound);
         self
     }

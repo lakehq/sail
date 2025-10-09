@@ -3,7 +3,6 @@ use std::borrow::Cow;
 use std::collections::HashMap;
 use std::sync::Arc;
 
-use apache_avro::{from_value, Reader as AvroReader};
 use arrow_schema::Schema as ArrowSchema;
 use async_trait::async_trait;
 use datafusion::catalog::memory::DataSourceExec;
@@ -20,13 +19,12 @@ use datafusion::logical_expr::{Expr, LogicalPlan};
 use datafusion::physical_plan::ExecutionPlan;
 use object_store::path::Path as ObjectPath;
 use object_store::ObjectMeta;
-use serde::{Deserialize, Serialize};
 use url::Url;
 
 use crate::arrow_conversion::iceberg_schema_to_arrow;
 use crate::spec::{
-    DataContentType, DataFile, FieldSummary, Literal, ManifestContentType, ManifestFile,
-    ManifestList, ManifestStatus, PrimitiveLiteral, Schema, Snapshot,
+    DataFile, FormatVersion, Literal, Manifest, ManifestContentType, ManifestList, ManifestStatus,
+    PrimitiveLiteral, Schema, Snapshot,
 };
 
 /// Iceberg table provider for DataFusion
@@ -134,28 +132,8 @@ impl IcebergTableProvider {
             manifest_list_data.len()
         );
 
-        self.parse_manifest_list(&manifest_list_data)
-    }
-
-    /// Parse manifest list from Avro bytes
-    fn parse_manifest_list(&self, data: &[u8]) -> DataFusionResult<ManifestList> {
-        log::debug!("[ICEBERG] Parsing manifest list Avro data");
-        let reader = AvroReader::new(data)
-            .map_err(|e| datafusion::common::DataFusionError::External(Box::new(e)))?;
-
-        let mut manifest_files = Vec::new();
-        for value in reader {
-            let value =
-                value.map_err(|e| datafusion::common::DataFusionError::External(Box::new(e)))?;
-            log::trace!("[ICEBERG] Deserializing manifest file entry");
-            let manifest_file: ManifestFileAvro = from_value(&value).map_err(|e| {
-                log::error!("[ICEBERG] Failed to deserialize manifest file: {:?}", e);
-                datafusion::common::DataFusionError::External(Box::new(e))
-            })?;
-            manifest_files.push(manifest_file.into());
-        }
-
-        Ok(ManifestList::new(manifest_files))
+        ManifestList::parse_with_version(&manifest_list_data, FormatVersion::V2)
+            .map_err(datafusion::common::DataFusionError::Execution)
     }
 
     /// Load data files from manifests
@@ -195,67 +173,27 @@ impl IcebergTableProvider {
 
             log::debug!("[ICEBERG] Read {} bytes from manifest", manifest_data.len());
 
-            let manifest_entries = self.parse_manifest(&manifest_data)?;
+            let manifest = Manifest::parse_avro(&manifest_data)
+                .map_err(datafusion::common::DataFusionError::Execution)?;
 
             // Get partition_spec_id from manifest file
             let partition_spec_id = manifest_file.partition_spec_id;
 
-            for entry in manifest_entries {
-                // Only include added and existing files, skip deleted files
-                let status = match entry.status {
-                    0 => ManifestStatus::Existing,
-                    1 => ManifestStatus::Added,
-                    2 => ManifestStatus::Deleted,
-                    _ => ManifestStatus::Existing,
-                };
-
-                if matches!(status, ManifestStatus::Added | ManifestStatus::Existing) {
-                    // Convert DataFileAvro to DataFile with schema and partition_spec_id
-                    let data_file = entry
-                        .data_file
-                        .into_data_file(&self.schema, partition_spec_id);
-                    data_files.push(data_file);
+            for entry_ref in manifest.entries() {
+                let entry = entry_ref.as_ref();
+                if matches!(
+                    entry.status,
+                    ManifestStatus::Added | ManifestStatus::Existing
+                ) {
+                    let mut df = entry.data_file.clone();
+                    // overwrite partition_spec_id from manifest list file
+                    df.partition_spec_id = partition_spec_id;
+                    data_files.push(df);
                 }
             }
         }
 
         Ok(data_files)
-    }
-
-    /// Parse manifest from Avro bytes
-    fn parse_manifest(&self, data: &[u8]) -> DataFusionResult<Vec<ManifestEntryAvro>> {
-        log::debug!("[ICEBERG] Parsing manifest Avro data");
-        let reader = AvroReader::new(data)
-            .map_err(|e| datafusion::common::DataFusionError::External(Box::new(e)))?;
-
-        let mut entries = Vec::new();
-        for value in reader {
-            let value =
-                value.map_err(|e| datafusion::common::DataFusionError::External(Box::new(e)))?;
-            log::trace!("[ICEBERG] Deserializing data file entry");
-            let mut entry: ManifestEntryAvro = from_value(&value).map_err(|e| {
-                log::error!("[ICEBERG] Failed to deserialize data file entry: {:?}", e);
-                datafusion::common::DataFusionError::External(Box::new(e))
-            })?;
-
-            // Extract map fields from raw Avro value
-            if let apache_avro::types::Value::Record(fields) = &value {
-                for (field_name, field_value) in fields {
-                    if field_name == "data_file" {
-                        if let apache_avro::types::Value::Record(data_file_fields) = field_value {
-                            entry
-                                .data_file
-                                .extract_map_fields_from_avro(data_file_fields);
-                        }
-                    }
-                }
-            }
-
-            entries.push(entry);
-        }
-
-        log::debug!("[ICEBERG] Parsed {} entries from manifest", entries.len());
-        Ok(entries)
     }
 
     /// Create partitioned files for DataFusion from Iceberg data files
@@ -399,14 +337,21 @@ impl IcebergTableProvider {
                 let min_value = data_file
                     .lower_bounds()
                     .get(&field_id)
-                    .map(|literal| self.literal_to_scalar_value(literal))
+                    .map(|datum| {
+                        // convert Datum -> Literal for existing scalar conversion
+                        let lit = Literal::Primitive(datum.literal.clone());
+                        self.literal_to_scalar_value(&lit)
+                    })
                     .map(Precision::Exact)
                     .unwrap_or(Precision::Absent);
 
                 let max_value = data_file
                     .upper_bounds()
                     .get(&field_id)
-                    .map(|literal| self.literal_to_scalar_value(literal))
+                    .map(|datum| {
+                        let lit = Literal::Primitive(datum.literal.clone());
+                        self.literal_to_scalar_value(&lit)
+                    })
                     .map(Precision::Exact)
                     .unwrap_or(Precision::Absent);
 
@@ -424,376 +369,6 @@ impl IcebergTableProvider {
             num_rows,
             total_byte_size,
             column_statistics,
-        }
-    }
-}
-
-/// Avro representation of ManifestFile for deserialization
-#[derive(Debug, Serialize, Deserialize)]
-struct ManifestFileAvro {
-    #[serde(rename = "manifest_path")]
-    manifest_path: String,
-    #[serde(rename = "manifest_length")]
-    manifest_length: i64,
-    #[serde(rename = "partition_spec_id")]
-    partition_spec_id: i32,
-    #[serde(rename = "content")]
-    content: i32,
-    #[serde(rename = "sequence_number")]
-    sequence_number: i64,
-    #[serde(rename = "min_sequence_number")]
-    min_sequence_number: i64,
-    #[serde(rename = "added_snapshot_id")]
-    added_snapshot_id: i64,
-    #[serde(rename = "added_files_count")]
-    added_files_count: i32,
-    #[serde(rename = "existing_files_count")]
-    existing_files_count: i32,
-    #[serde(rename = "deleted_files_count")]
-    deleted_files_count: i32,
-    #[serde(rename = "added_rows_count")]
-    added_rows_count: i64,
-    #[serde(rename = "existing_rows_count")]
-    existing_rows_count: i64,
-    #[serde(rename = "deleted_rows_count")]
-    deleted_rows_count: i64,
-    #[serde(rename = "partitions")]
-    partitions: Option<Vec<FieldSummaryAvro>>,
-    #[serde(rename = "key_metadata")]
-    key_metadata: Option<Vec<u8>>,
-}
-
-#[derive(Debug, Serialize, Deserialize)]
-struct FieldSummaryAvro {
-    #[serde(rename = "contains_null")]
-    contains_null: bool,
-    #[serde(rename = "contains_nan")]
-    contains_nan: Option<bool>,
-    #[serde(rename = "lower_bound")]
-    lower_bound: Option<Vec<u8>>,
-    #[serde(rename = "upper_bound")]
-    upper_bound: Option<Vec<u8>>,
-}
-
-impl From<ManifestFileAvro> for ManifestFile {
-    fn from(avro: ManifestFileAvro) -> Self {
-        let content = match avro.content {
-            0 => ManifestContentType::Data,
-            1 => ManifestContentType::Deletes,
-            _ => ManifestContentType::Data,
-        };
-
-        let partitions = avro.partitions.map(|summaries| {
-            summaries
-                .into_iter()
-                .map(|summary| {
-                    let lower_bound = summary
-                        .lower_bound
-                        .and_then(|bytes| String::from_utf8(bytes).ok())
-                        .map(|s| Literal::Primitive(PrimitiveLiteral::String(s)));
-
-                    let upper_bound = summary
-                        .upper_bound
-                        .and_then(|bytes| String::from_utf8(bytes).ok())
-                        .map(|s| Literal::Primitive(PrimitiveLiteral::String(s)));
-
-                    let mut field_summary = FieldSummary::new(summary.contains_null);
-                    if let Some(contains_nan) = summary.contains_nan {
-                        field_summary = field_summary.with_contains_nan(contains_nan);
-                    }
-                    if let Some(lower) = lower_bound {
-                        field_summary = field_summary.with_lower_bound(lower);
-                    }
-                    if let Some(upper) = upper_bound {
-                        field_summary = field_summary.with_upper_bound(upper);
-                    }
-                    field_summary
-                })
-                .collect()
-        });
-
-        ManifestFile {
-            manifest_path: avro.manifest_path,
-            manifest_length: avro.manifest_length,
-            partition_spec_id: avro.partition_spec_id,
-            content,
-            sequence_number: avro.sequence_number,
-            min_sequence_number: avro.min_sequence_number,
-            added_snapshot_id: avro.added_snapshot_id,
-            added_files_count: Some(avro.added_files_count),
-            existing_files_count: Some(avro.existing_files_count),
-            deleted_files_count: Some(avro.deleted_files_count),
-            added_rows_count: Some(avro.added_rows_count),
-            existing_rows_count: Some(avro.existing_rows_count),
-            deleted_rows_count: Some(avro.deleted_rows_count),
-            partitions,
-            key_metadata: avro.key_metadata,
-        }
-    }
-}
-
-/// Parse Avro map format (array of {key, value} objects) to HashMap for i64 values
-fn parse_i64_map_from_avro(values: &Option<apache_avro::types::Value>) -> HashMap<i32, i64> {
-    use apache_avro::types::Value;
-
-    let mut map = HashMap::new();
-
-    let vec_opt = if let Some(Value::Union(_, boxed)) = values {
-        if let Value::Array(vec) = boxed.as_ref() {
-            Some(vec)
-        } else {
-            None
-        }
-    } else if let Some(Value::Array(vec)) = values {
-        Some(vec)
-    } else {
-        None
-    };
-
-    if let Some(vec) = vec_opt {
-        for item in vec {
-            if let Value::Record(fields) = item {
-                let mut key_opt = None;
-                let mut value_opt = None;
-
-                for (field_name, field_value) in fields {
-                    match field_name.as_str() {
-                        "key" => {
-                            if let Value::Int(k) = field_value {
-                                key_opt = Some(*k);
-                            }
-                        }
-                        "value" => {
-                            if let Value::Long(v) = field_value {
-                                value_opt = Some(*v);
-                            }
-                        }
-                        _ => {}
-                    }
-                }
-
-                if let (Some(key), Some(value)) = (key_opt, value_opt) {
-                    map.insert(key, value);
-                }
-            }
-        }
-    }
-
-    map
-}
-
-/// Parse Avro map format for byte arrays from Avro Values
-fn parse_bytes_map_from_avro(
-    values: &Option<apache_avro::types::Value>,
-) -> Option<HashMap<i32, Vec<u8>>> {
-    use apache_avro::types::Value;
-
-    if let Some(Value::Union(_, boxed)) = values {
-        if let Value::Array(vec) = boxed.as_ref() {
-            let mut map = HashMap::new();
-            for item in vec {
-                if let Value::Record(fields) = item {
-                    let mut key_opt = None;
-                    let mut value_opt = None;
-
-                    for (field_name, field_value) in fields {
-                        match field_name.as_str() {
-                            "key" => {
-                                if let Value::Int(k) = field_value {
-                                    key_opt = Some(*k);
-                                }
-                            }
-                            "value" => {
-                                if let Value::Bytes(b) = field_value {
-                                    value_opt = Some(b.clone());
-                                }
-                            }
-                            _ => {}
-                        }
-                    }
-
-                    if let (Some(key), Some(value)) = (key_opt, value_opt) {
-                        map.insert(key, value);
-                    }
-                }
-            }
-            return Some(map);
-        }
-    } else if let Some(Value::Array(vec)) = values {
-        let mut map = HashMap::new();
-        for item in vec {
-            if let Value::Record(fields) = item {
-                let mut key_opt = None;
-                let mut value_opt = None;
-
-                for (field_name, field_value) in fields {
-                    match field_name.as_str() {
-                        "key" => {
-                            if let Value::Int(k) = field_value {
-                                key_opt = Some(*k);
-                            }
-                        }
-                        "value" => {
-                            if let Value::Bytes(b) = field_value {
-                                value_opt = Some(b.clone());
-                            }
-                        }
-                        _ => {}
-                    }
-                }
-
-                if let (Some(key), Some(value)) = (key_opt, value_opt) {
-                    map.insert(key, value);
-                }
-            }
-        }
-        return Some(map);
-    }
-
-    None
-}
-
-/// Avro representation of ManifestEntry for deserialization
-#[derive(Debug, Serialize, Deserialize)]
-struct ManifestEntryAvro {
-    #[serde(rename = "status")]
-    status: i32,
-    #[serde(rename = "snapshot_id")]
-    snapshot_id: Option<i64>,
-    #[serde(rename = "sequence_number")]
-    sequence_number: Option<i64>,
-    #[serde(rename = "file_sequence_number")]
-    file_sequence_number: Option<i64>,
-    #[serde(rename = "data_file")]
-    data_file: DataFileAvro,
-}
-
-#[derive(Debug, Serialize, Deserialize)]
-struct DataFileAvro {
-    #[serde(rename = "content", default)]
-    content: i32,
-    #[serde(rename = "file_path")]
-    file_path: String,
-    #[serde(rename = "file_format")]
-    file_format: String,
-    #[serde(rename = "partition")]
-    partition: serde_json::Value,
-    #[serde(rename = "record_count")]
-    record_count: i64,
-    #[serde(rename = "file_size_in_bytes")]
-    file_size_in_bytes: i64,
-    #[serde(skip)]
-    column_sizes: Option<apache_avro::types::Value>,
-    #[serde(skip)]
-    value_counts: Option<apache_avro::types::Value>,
-    #[serde(skip)]
-    null_value_counts: Option<apache_avro::types::Value>,
-    #[serde(skip)]
-    nan_value_counts: Option<apache_avro::types::Value>,
-    #[serde(skip)]
-    lower_bounds: Option<apache_avro::types::Value>,
-    #[serde(skip)]
-    upper_bounds: Option<apache_avro::types::Value>,
-    #[serde(rename = "key_metadata")]
-    key_metadata: Option<Vec<u8>>,
-    #[serde(rename = "split_offsets")]
-    split_offsets: Option<Vec<i64>>,
-    #[serde(rename = "equality_ids")]
-    equality_ids: Option<Vec<i64>>,
-    #[serde(rename = "sort_order_id")]
-    sort_order_id: Option<i32>,
-}
-
-impl DataFileAvro {
-    /// Extract map fields from raw Avro record fields
-    fn extract_map_fields_from_avro(&mut self, fields: &[(String, apache_avro::types::Value)]) {
-        for (field_name, field_value) in fields {
-            match field_name.as_str() {
-                "column_sizes" => self.column_sizes = Some(field_value.clone()),
-                "value_counts" => self.value_counts = Some(field_value.clone()),
-                "null_value_counts" => self.null_value_counts = Some(field_value.clone()),
-                "nan_value_counts" => self.nan_value_counts = Some(field_value.clone()),
-                "lower_bounds" => self.lower_bounds = Some(field_value.clone()),
-                "upper_bounds" => self.upper_bounds = Some(field_value.clone()),
-                _ => {}
-            }
-        }
-    }
-
-    /// Convert DataFileAvro to DataFile with schema context for proper bound parsing
-    fn into_data_file(self, schema: &Schema, partition_spec_id: i32) -> DataFile {
-        let content = match self.content {
-            0 => DataContentType::Data,
-            1 => DataContentType::PositionDeletes,
-            2 => DataContentType::EqualityDeletes,
-            _ => DataContentType::Data,
-        };
-
-        let file_format = match self.file_format.to_uppercase().as_str() {
-            "PARQUET" => crate::spec::DataFileFormat::Parquet,
-            "AVRO" => crate::spec::DataFileFormat::Avro,
-            "ORC" => crate::spec::DataFileFormat::Orc,
-            _ => crate::spec::DataFileFormat::Parquet, // Default
-        };
-
-        // Parse partition values from JSON
-        let partition = parse_partition_values(Some(&self.partition));
-
-        // Parse Avro map arrays (array of {key, value} records)
-        let column_sizes = parse_i64_map_from_avro(&self.column_sizes)
-            .into_iter()
-            .map(|(k, v)| (k, v as u64))
-            .collect();
-
-        let value_counts = parse_i64_map_from_avro(&self.value_counts)
-            .into_iter()
-            .map(|(k, v)| (k, v as u64))
-            .collect();
-
-        let null_value_counts = parse_i64_map_from_avro(&self.null_value_counts)
-            .into_iter()
-            .map(|(k, v)| (k, v as u64))
-            .collect();
-
-        let nan_value_counts = parse_i64_map_from_avro(&self.nan_value_counts)
-            .into_iter()
-            .map(|(k, v)| (k, v as u64))
-            .collect();
-
-        // Parse bounds from binary data using schema for proper type conversion
-        let lower_bounds_raw = parse_bytes_map_from_avro(&self.lower_bounds);
-        let upper_bounds_raw = parse_bytes_map_from_avro(&self.upper_bounds);
-        let lower_bounds = parse_bounds_from_binary(lower_bounds_raw.as_ref(), schema);
-        let upper_bounds = parse_bounds_from_binary(upper_bounds_raw.as_ref(), schema);
-
-        DataFile {
-            content,
-            file_path: self.file_path,
-            file_format,
-            partition,
-            record_count: self.record_count as u64,
-            file_size_in_bytes: self.file_size_in_bytes as u64,
-            column_sizes,
-            value_counts,
-            null_value_counts,
-            nan_value_counts,
-            lower_bounds,
-            upper_bounds,
-            block_size_in_bytes: None,
-            key_metadata: self.key_metadata,
-            split_offsets: self.split_offsets.unwrap_or_default(),
-            equality_ids: self
-                .equality_ids
-                .unwrap_or_default()
-                .into_iter()
-                .map(|v| v as i32)
-                .collect(),
-            sort_order_id: self.sort_order_id,
-            first_row_id: None,
-            partition_spec_id,
-            referenced_data_file: None,
-            content_offset: None,
-            content_size_in_bytes: None,
         }
     }
 }
@@ -888,160 +463,4 @@ impl TableProvider for IcebergTableProvider {
 
         Ok(DataSourceExec::from_data_source(file_scan_config))
     }
-}
-
-/// Parse partition values from JSON
-fn parse_partition_values(partition_json: Option<&serde_json::Value>) -> Vec<Option<Literal>> {
-    match partition_json {
-        Some(serde_json::Value::Array(values)) => values
-            .iter()
-            .map(|value| match value {
-                serde_json::Value::Null => None,
-                serde_json::Value::Bool(b) => {
-                    Some(Literal::Primitive(PrimitiveLiteral::Boolean(*b)))
-                }
-                serde_json::Value::Number(n) => {
-                    if let Some(i) = n.as_i64() {
-                        if i >= i32::MIN as i64 && i <= i32::MAX as i64 {
-                            Some(Literal::Primitive(PrimitiveLiteral::Int(i as i32)))
-                        } else {
-                            Some(Literal::Primitive(PrimitiveLiteral::Long(i)))
-                        }
-                    } else {
-                        n.as_f64().map(|f| {
-                            Literal::Primitive(PrimitiveLiteral::Double(
-                                ordered_float::OrderedFloat(f),
-                            ))
-                        })
-                    }
-                }
-                serde_json::Value::String(s) => {
-                    Some(Literal::Primitive(PrimitiveLiteral::String(s.clone())))
-                }
-                _ => None,
-            })
-            .collect(),
-        Some(serde_json::Value::Object(_)) => {
-            vec![None]
-        }
-        _ => Vec::new(),
-    }
-}
-
-/// Parse bounds from binary data using schema field types
-fn parse_bounds_from_binary(
-    bounds_data: Option<&HashMap<i32, Vec<u8>>>,
-    schema: &Schema,
-) -> HashMap<i32, Literal> {
-    use crate::spec::Type;
-
-    let mut bounds = HashMap::new();
-
-    if let Some(data) = bounds_data {
-        for (field_id, binary_data) in data {
-            // Find the field in schema to get its type
-            if let Some(field) = schema.field_by_id(*field_id) {
-                let field_type = field.field_type.as_ref();
-
-                // Parse based on primitive type
-                let literal = match field_type {
-                    Type::Primitive(prim_type) => {
-                        parse_primitive_bound(binary_data, prim_type).ok()
-                    }
-                    _ => None,
-                };
-
-                if let Some(lit) = literal {
-                    bounds.insert(*field_id, lit);
-                }
-            } else {
-                // Fallback: if field not found, try to parse as string or binary
-                if let Ok(string_value) = String::from_utf8(binary_data.clone()) {
-                    bounds.insert(
-                        *field_id,
-                        Literal::Primitive(PrimitiveLiteral::String(string_value)),
-                    );
-                } else {
-                    bounds.insert(
-                        *field_id,
-                        Literal::Primitive(PrimitiveLiteral::Binary(binary_data.clone())),
-                    );
-                }
-            }
-        }
-    }
-
-    bounds
-}
-
-/// Parse a primitive bound value from binary data based on its type
-/// Reference: https://iceberg.apache.org/spec/#binary-single-value-serialization
-fn parse_primitive_bound(
-    bytes: &[u8],
-    prim_type: &crate::spec::PrimitiveType,
-) -> Result<Literal, String> {
-    use num_bigint::BigInt;
-    use num_traits::ToPrimitive;
-
-    use crate::spec::PrimitiveType;
-
-    let literal = match prim_type {
-        PrimitiveType::Boolean => {
-            let val = !(bytes.len() == 1 && bytes[0] == 0u8);
-            PrimitiveLiteral::Boolean(val)
-        }
-        PrimitiveType::Int | PrimitiveType::Date => {
-            let val = i32::from_le_bytes(bytes.try_into().map_err(|_| "Invalid i32 bytes")?);
-            PrimitiveLiteral::Int(val)
-        }
-        PrimitiveType::Long
-        | PrimitiveType::Time
-        | PrimitiveType::Timestamp
-        | PrimitiveType::Timestamptz
-        | PrimitiveType::TimestampNs
-        | PrimitiveType::TimestamptzNs => {
-            let val = if bytes.len() == 4 {
-                // Handle schema evolution case
-                i32::from_le_bytes(bytes.try_into().map_err(|_| "Invalid i32 bytes")?) as i64
-            } else {
-                i64::from_le_bytes(bytes.try_into().map_err(|_| "Invalid i64 bytes")?)
-            };
-            PrimitiveLiteral::Long(val)
-        }
-        PrimitiveType::Float => {
-            let val = f32::from_le_bytes(bytes.try_into().map_err(|_| "Invalid f32 bytes")?);
-            PrimitiveLiteral::Float(ordered_float::OrderedFloat(val))
-        }
-        PrimitiveType::Double => {
-            let val = if bytes.len() == 4 {
-                // Handle schema evolution case
-                f32::from_le_bytes(bytes.try_into().map_err(|_| "Invalid f32 bytes")?) as f64
-            } else {
-                f64::from_le_bytes(bytes.try_into().map_err(|_| "Invalid f64 bytes")?)
-            };
-            PrimitiveLiteral::Double(ordered_float::OrderedFloat(val))
-        }
-        PrimitiveType::String => {
-            let val = std::str::from_utf8(bytes)
-                .map_err(|_| "Invalid UTF-8")?
-                .to_string();
-            PrimitiveLiteral::String(val)
-        }
-        PrimitiveType::Uuid => {
-            let val = u128::from_be_bytes(bytes.try_into().map_err(|_| "Invalid UUID bytes")?);
-            PrimitiveLiteral::UInt128(val)
-        }
-        PrimitiveType::Fixed(_) | PrimitiveType::Binary => {
-            PrimitiveLiteral::Binary(Vec::from(bytes))
-        }
-        PrimitiveType::Decimal { .. } => {
-            let unscaled_value = BigInt::from_signed_bytes_be(bytes);
-            let val = unscaled_value
-                .to_i128()
-                .ok_or_else(|| format!("Can't convert bytes to i128: {:?}", bytes))?;
-            PrimitiveLiteral::Int128(val)
-        }
-    };
-
-    Ok(Literal::Primitive(literal))
 }
