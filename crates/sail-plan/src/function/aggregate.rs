@@ -10,13 +10,14 @@ use datafusion::functions_aggregate::{
 use datafusion::functions_nested::string::array_to_string;
 use datafusion_common::ScalarValue;
 use datafusion_expr::expr::{AggregateFunction, AggregateFunctionParams};
-use datafusion_expr::{cast, expr, lit, when, AggregateUDF, ExprSchemable};
+use datafusion_expr::{cast, expr, lit, when, AggregateUDF, ExprSchemable, ScalarUDF};
 use lazy_static::lazy_static;
 use sail_common_datafusion::utils::items::ItemTaker;
 use sail_function::aggregate::kurtosis::KurtosisFunction;
 use sail_function::aggregate::max_min_by::{MaxByFunction, MinByFunction};
 use sail_function::aggregate::mode::ModeFunction;
 use sail_function::aggregate::skewness::SkewnessFunc;
+use sail_function::scalar::struct_function::StructFunction;
 
 use crate::error::{PlanError, PlanResult};
 use crate::function::common::{
@@ -178,6 +179,16 @@ fn count(input: AggFunctionInput) -> PlanResult<expr::Expr> {
     } = input;
     let null_treatment = get_null_treatment(ignore_nulls);
     let args = transform_count_star_wildcard_expr(arguments);
+    // TODO: remove StructFunction call when count distinct from multiple arguments is implemented
+    // https://github.com/apache/datafusion/blob/58ddf0d4390c770bc571f3ac2727c7de77aa25ab/datafusion/functions-aggregate/src/count.rs#L333
+    let args = if distinct && (args.len() > 1) {
+        vec![ScalarUDF::from(StructFunction::new(
+            (0..args.len()).map(|i| format!("col{i}")).collect(),
+        ))
+        .call(args)]
+    } else {
+        args
+    };
     Ok(expr::Expr::AggregateFunction(AggregateFunction {
         func: count::count_udaf(),
         params: AggregateFunctionParams {

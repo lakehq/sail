@@ -146,7 +146,7 @@ jobs:
           - runner: ubuntu-24.04-x64-8-core
             target: aarch64
             os: linux
-          - runner: macos-13
+          - runner: macos-15-intel
             target: x86_64
             os: macos
           - runner: macos-14
@@ -243,7 +243,7 @@ jobs:
         platform:
           - runner: ubuntu-24.04-x64-8-core
           - runner: ubuntu-24.04-arm-8-core
-          - runner: macos-13
+          - runner: macos-15-intel
           - runner: macos-14
           - runner: windows-2022
     needs:
@@ -303,7 +303,7 @@ jobs:
         platform:
           - runner: ubuntu-24.04
           - runner: ubuntu-24.04-arm
-          - runner: macos-13
+          - runner: macos-15-intel
           - runner: macos-14
           - runner: windows-2022
     needs:

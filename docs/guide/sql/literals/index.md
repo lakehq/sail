@@ -1,6 +1,6 @@
 ---
 title: Literals
-rank: 3
+rank: 4
 ---
 
 # Literals

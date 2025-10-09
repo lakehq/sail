@@ -1,13 +1,12 @@
 ---
 title: Getting Started
-rank: 3
+rank: 1
 ---
 
 # Getting Started
 
-In this guide, you will see how to use Sail as the compute engine for PySpark.
-The Spark session communicates with the Sail server using the Spark Connect protocol.
-You can refer to the [Spark documentation](https://spark.apache.org/docs/latest/spark-connect-overview.html) for more information about Spark Connect.
+Sail can serve as a drop-in replacement for the compute engine behind PySpark applications.
+The Spark session communicates with the Sail server using the [Spark Connect](https://spark.apache.org/docs/latest/spark-connect-overview.html) protocol.
 
 ## Package Installation
 

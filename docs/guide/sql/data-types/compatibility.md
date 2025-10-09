@@ -1,9 +1,9 @@
 ---
-title: Data Types
-rank: 2
+title: Compatibility
+rank: 1
 ---
 
-# Data Types
+# Compatibility
 
 Sail supports Arrow data types that is a superset of data types available in Spark SQL.
 For more background information, you can refer to the [Data Types](/guide/dataframe/data-types/) guide for the Spark DataFrame API.

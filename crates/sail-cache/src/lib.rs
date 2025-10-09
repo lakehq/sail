@@ -2,6 +2,7 @@ use log::error;
 
 pub mod error;
 pub mod file_listing_cache;
+pub mod file_metadata_cache;
 pub mod file_statistics_cache;
 
 #[allow(dead_code)]
