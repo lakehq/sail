@@ -520,12 +520,12 @@ impl From<ManifestFileAvro> for ManifestFile {
             sequence_number: avro.sequence_number,
             min_sequence_number: avro.min_sequence_number,
             added_snapshot_id: avro.added_snapshot_id,
-            added_files_count: avro.added_files_count,
-            existing_files_count: avro.existing_files_count,
-            deleted_files_count: avro.deleted_files_count,
-            added_rows_count: avro.added_rows_count,
-            existing_rows_count: avro.existing_rows_count,
-            deleted_rows_count: avro.deleted_rows_count,
+            added_files_count: Some(avro.added_files_count),
+            existing_files_count: Some(avro.existing_files_count),
+            deleted_files_count: Some(avro.deleted_files_count),
+            added_rows_count: Some(avro.added_rows_count),
+            existing_rows_count: Some(avro.existing_rows_count),
+            deleted_rows_count: Some(avro.deleted_rows_count),
             partitions,
             key_metadata: avro.key_metadata,
         }
@@ -779,6 +779,7 @@ impl DataFileAvro {
             nan_value_counts,
             lower_bounds,
             upper_bounds,
+            block_size_in_bytes: None,
             key_metadata: self.key_metadata,
             split_offsets: self.split_offsets.unwrap_or_default(),
             equality_ids: self
@@ -788,7 +789,11 @@ impl DataFileAvro {
                 .map(|v| v as i32)
                 .collect(),
             sort_order_id: self.sort_order_id,
+            first_row_id: None,
             partition_spec_id,
+            referenced_data_file: None,
+            content_offset: None,
+            content_size_in_bytes: None,
         }
     }
 }

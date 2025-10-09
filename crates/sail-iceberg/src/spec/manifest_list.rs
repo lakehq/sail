@@ -81,17 +81,23 @@ pub struct ManifestFile {
     /// The snapshot ID when the manifest was added to the table.
     pub added_snapshot_id: i64,
     /// The number of files added in this manifest.
-    pub added_files_count: i32,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub added_files_count: Option<i32>,
     /// The number of existing files in this manifest.
-    pub existing_files_count: i32,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub existing_files_count: Option<i32>,
     /// The number of deleted files in this manifest.
-    pub deleted_files_count: i32,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub deleted_files_count: Option<i32>,
     /// The number of rows added in this manifest.
-    pub added_rows_count: i64,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub added_rows_count: Option<i64>,
     /// The number of existing rows in this manifest.
-    pub existing_rows_count: i64,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub existing_rows_count: Option<i64>,
     /// The number of deleted rows in this manifest.
-    pub deleted_rows_count: i64,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub deleted_rows_count: Option<i64>,
     /// A list of field summaries for each partition field in the spec.
     /// Each field in the list corresponds to a field in the manifest file's partition spec.
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -109,12 +115,16 @@ impl ManifestFile {
 
     /// Get the total number of files in this manifest.
     pub fn total_files_count(&self) -> i32 {
-        self.added_files_count + self.existing_files_count + self.deleted_files_count
+        self.added_files_count.unwrap_or(0)
+            + self.existing_files_count.unwrap_or(0)
+            + self.deleted_files_count.unwrap_or(0)
     }
 
     /// Get the total number of rows in this manifest.
     pub fn total_rows_count(&self) -> i64 {
-        self.added_rows_count + self.existing_rows_count + self.deleted_rows_count
+        self.added_rows_count.unwrap_or(0)
+            + self.existing_rows_count.unwrap_or(0)
+            + self.deleted_rows_count.unwrap_or(0)
     }
 }
 
@@ -175,12 +185,12 @@ pub struct ManifestFileBuilder {
     sequence_number: i64,
     min_sequence_number: i64,
     added_snapshot_id: i64,
-    added_files_count: i32,
-    existing_files_count: i32,
-    deleted_files_count: i32,
-    added_rows_count: i64,
-    existing_rows_count: i64,
-    deleted_rows_count: i64,
+    added_files_count: Option<i32>,
+    existing_files_count: Option<i32>,
+    deleted_files_count: Option<i32>,
+    added_rows_count: Option<i64>,
+    existing_rows_count: Option<i64>,
+    deleted_rows_count: Option<i64>,
     partitions: Option<Vec<FieldSummary>>,
     key_metadata: Option<Vec<u8>>,
 }
@@ -196,12 +206,12 @@ impl ManifestFileBuilder {
             sequence_number: UNASSIGNED_SEQUENCE_NUMBER,
             min_sequence_number: UNASSIGNED_SEQUENCE_NUMBER,
             added_snapshot_id: 0,
-            added_files_count: 0,
-            existing_files_count: 0,
-            deleted_files_count: 0,
-            added_rows_count: 0,
-            existing_rows_count: 0,
-            deleted_rows_count: 0,
+            added_files_count: None,
+            existing_files_count: None,
+            deleted_files_count: None,
+            added_rows_count: None,
+            existing_rows_count: None,
+            deleted_rows_count: None,
             partitions: None,
             key_metadata: None,
         }
@@ -251,17 +261,17 @@ impl ManifestFileBuilder {
 
     /// Set the file counts.
     pub fn with_file_counts(mut self, added: i32, existing: i32, deleted: i32) -> Self {
-        self.added_files_count = added;
-        self.existing_files_count = existing;
-        self.deleted_files_count = deleted;
+        self.added_files_count = Some(added);
+        self.existing_files_count = Some(existing);
+        self.deleted_files_count = Some(deleted);
         self
     }
 
     /// Set the row counts.
     pub fn with_row_counts(mut self, added: i64, existing: i64, deleted: i64) -> Self {
-        self.added_rows_count = added;
-        self.existing_rows_count = existing;
-        self.deleted_rows_count = deleted;
+        self.added_rows_count = Some(added);
+        self.existing_rows_count = Some(existing);
+        self.deleted_rows_count = Some(deleted);
         self
     }
 

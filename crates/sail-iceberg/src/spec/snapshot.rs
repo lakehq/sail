@@ -91,12 +91,58 @@ pub struct Snapshot {
     pub timestamp_ms: i64,
     /// The location of a manifest list for this snapshot that
     /// tracks manifest files with additional metadata.
+    #[serde(default)]
     pub manifest_list: String,
+    /// V1 snapshots list manifests directly instead of a manifest list file.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub manifests: Option<Vec<String>>,
     /// A string map that summarizes the snapshot changes, including operation.
     pub summary: Summary,
     /// ID of the table's current schema when the snapshot was created.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub schema_id: Option<SchemaId>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "kebab-case")]
+/// A reference’s snapshot and retention policy
+pub struct SnapshotReference {
+    /// A reference’s snapshot ID. The tagged snapshot or latest snapshot of a branch.
+    pub snapshot_id: i64,
+    #[serde(flatten)]
+    /// Snapshot retention policy
+    pub retention: SnapshotRetention,
+}
+
+impl SnapshotReference {
+    /// Returns true if the snapshot reference is a branch.
+    pub fn is_branch(&self) -> bool {
+        matches!(self.retention, SnapshotRetention::Branch { .. })
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "kebab-case", tag = "type")]
+/// Snapshot retention policy
+pub enum SnapshotRetention {
+    /// Branches are mutable named references that can be updated by committing a new snapshot
+    Branch {
+        /// Minimum number of snapshots to keep in a branch while expiring snapshots.
+        #[serde(skip_serializing_if = "Option::is_none")]
+        min_snapshots_to_keep: Option<i32>,
+        /// Max age of snapshots to keep when expiring, including the latest snapshot.
+        #[serde(skip_serializing_if = "Option::is_none")]
+        max_snapshot_age_ms: Option<i64>,
+        /// Max age of the snapshot reference to keep while expiring snapshots.
+        #[serde(skip_serializing_if = "Option::is_none")]
+        max_ref_age_ms: Option<i64>,
+    },
+    /// Tags are labels for individual snapshots.
+    Tag {
+        /// Max age of the snapshot reference to keep while expiring snapshots.
+        #[serde(skip_serializing_if = "Option::is_none")]
+        max_ref_age_ms: Option<i64>,
+    },
 }
 
 impl Snapshot {
@@ -127,6 +173,12 @@ impl Snapshot {
     #[inline]
     pub fn manifest_list(&self) -> &str {
         &self.manifest_list
+    }
+
+    /// Get V1 manifests list if present
+    #[inline]
+    pub fn manifests(&self) -> Option<&[String]> {
+        self.manifests.as_deref()
     }
 
     /// Get summary of the snapshot
@@ -225,7 +277,8 @@ impl SnapshotBuilder {
 
     /// Build the snapshot.
     pub fn build(self) -> Result<Snapshot, String> {
-        let manifest_list = self.manifest_list.ok_or("manifest_list is required")?;
+        // For V1 compatibility allow manifest_list to be missing when manifests provided
+        let manifest_list = self.manifest_list.unwrap_or_default();
         let summary = self
             .summary
             .unwrap_or_else(|| Summary::new(Operation::Append));
@@ -236,6 +289,7 @@ impl SnapshotBuilder {
             sequence_number: self.sequence_number,
             timestamp_ms: self.timestamp_ms,
             manifest_list,
+            manifests: None,
             summary,
             schema_id: self.schema_id,
         })

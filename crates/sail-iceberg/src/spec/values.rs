@@ -27,6 +27,22 @@ pub enum PrimitiveLiteral {
     Binary(Vec<u8>),
 }
 
+#[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[serde(rename_all = "kebab-case")]
+/// Typed single-value used for lower/upper bounds
+pub struct Datum {
+    /// Primitive data type of the datum
+    pub r#type: crate::spec::PrimitiveType,
+    /// Primitive literal value
+    pub literal: PrimitiveLiteral,
+}
+
+impl Datum {
+    pub fn new(r#type: crate::spec::PrimitiveType, literal: PrimitiveLiteral) -> Self {
+        Self { r#type, literal }
+    }
+}
+
 impl Literal {
     // TODO: Type-aware JSON conversion
     pub fn try_from_json(

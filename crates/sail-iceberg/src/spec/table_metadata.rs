@@ -1,10 +1,12 @@
 use std::collections::HashMap;
 
 use serde::{Deserialize, Serialize};
-use serde_json::Value as JsonValue;
 use uuid::Uuid;
 
-use super::{FormatVersion, PartitionSpec, Schema, Snapshot};
+use super::{
+    FormatVersion, PartitionSpec, PartitionStatisticsFile, Schema, Snapshot, SnapshotReference,
+    SortOrder, StatisticsFile,
+};
 
 /// Iceberg table metadata
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -52,19 +54,19 @@ pub struct TableMetadata {
     pub metadata_log: Vec<MetadataLog>,
     /// Sort orders for the table
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
-    pub sort_orders: Vec<JsonValue>,
+    pub sort_orders: Vec<SortOrder>,
     /// Default sort order ID
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub default_sort_order_id: Option<i32>,
     /// Named references to snapshots
     #[serde(default, skip_serializing_if = "HashMap::is_empty")]
-    pub refs: HashMap<String, JsonValue>,
+    pub refs: HashMap<String, SnapshotReference>,
     /// Statistics files
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
-    pub statistics: Vec<JsonValue>,
+    pub statistics: Vec<StatisticsFile>,
     /// Partition statistics files
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
-    pub partition_statistics: Vec<JsonValue>,
+    pub partition_statistics: Vec<PartitionStatisticsFile>,
 }
 
 /// Snapshot log entry

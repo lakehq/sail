@@ -156,9 +156,14 @@ pub struct ManifestEntry {
     /// The status of the data file.
     pub status: ManifestStatus,
     /// The snapshot ID when the data file was added to the table.
-    pub snapshot_id: i64,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub snapshot_id: Option<i64>,
     /// The sequence number when the data file was added to the table.
-    pub sequence_number: i64,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub sequence_number: Option<i64>,
+    /// The file sequence number indicating when the file was added.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub file_sequence_number: Option<i64>,
     /// The data file.
     pub data_file: DataFile,
 }
@@ -167,14 +172,16 @@ impl ManifestEntry {
     /// Create a new manifest entry.
     pub fn new(
         status: ManifestStatus,
-        snapshot_id: i64,
-        sequence_number: i64,
+        snapshot_id: Option<i64>,
+        sequence_number: Option<i64>,
+        file_sequence_number: Option<i64>,
         data_file: DataFile,
     ) -> Self {
         Self {
             status,
             snapshot_id,
             sequence_number,
+            file_sequence_number,
             data_file,
         }
     }
@@ -213,6 +220,9 @@ pub struct DataFile {
     /// Map from column id to upper bound in the column.
     #[serde(skip_serializing_if = "HashMap::is_empty")]
     pub upper_bounds: HashMap<i32, Literal>,
+    /// Block size in bytes.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub block_size_in_bytes: Option<i64>,
     /// Implementation-specific key metadata for encryption.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub key_metadata: Option<Vec<u8>>,
@@ -225,8 +235,20 @@ pub struct DataFile {
     /// ID representing sort order for this file.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub sort_order_id: Option<i32>,
+    /// The _row_id for the first row in the data file.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub first_row_id: Option<i64>,
     /// The partition spec id used when writing this data file.
     pub partition_spec_id: i32,
+    /// Fully qualified location of a data file that all deletes reference.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub referenced_data_file: Option<String>,
+    /// The offset in the file where the content starts (for deletion vectors).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub content_offset: Option<i64>,
+    /// The size of the referenced content in bytes (for deletion vectors).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub content_size_in_bytes: Option<i64>,
 }
 
 impl DataFile {
@@ -311,11 +333,16 @@ pub struct DataFileBuilder {
     nan_value_counts: HashMap<i32, u64>,
     lower_bounds: HashMap<i32, Literal>,
     upper_bounds: HashMap<i32, Literal>,
+    block_size_in_bytes: Option<i64>,
     key_metadata: Option<Vec<u8>>,
     split_offsets: Vec<i64>,
     equality_ids: Vec<i32>,
     sort_order_id: Option<i32>,
+    first_row_id: Option<i64>,
     partition_spec_id: i32,
+    referenced_data_file: Option<String>,
+    content_offset: Option<i64>,
+    content_size_in_bytes: Option<i64>,
 }
 
 impl DataFileBuilder {
@@ -334,11 +361,16 @@ impl DataFileBuilder {
             nan_value_counts: HashMap::new(),
             lower_bounds: HashMap::new(),
             upper_bounds: HashMap::new(),
+            block_size_in_bytes: None,
             key_metadata: None,
             split_offsets: Vec::new(),
             equality_ids: Vec::new(),
             sort_order_id: None,
+            first_row_id: None,
             partition_spec_id: 0,
+            referenced_data_file: None,
+            content_offset: None,
+            content_size_in_bytes: None,
         }
     }
 
@@ -414,6 +446,31 @@ impl DataFileBuilder {
         self
     }
 
+    /// Set the block size in bytes.
+    pub fn with_block_size_in_bytes(mut self, block_size_in_bytes: i64) -> Self {
+        self.block_size_in_bytes = Some(block_size_in_bytes);
+        self
+    }
+
+    /// Set the first row id.
+    pub fn with_first_row_id(mut self, first_row_id: i64) -> Self {
+        self.first_row_id = Some(first_row_id);
+        self
+    }
+
+    /// Set the referenced data file path.
+    pub fn with_referenced_data_file(mut self, path: impl ToString) -> Self {
+        self.referenced_data_file = Some(path.to_string());
+        self
+    }
+
+    /// Set the content offset and size in bytes.
+    pub fn with_content_offset_and_size(mut self, offset: i64, size_in_bytes: i64) -> Self {
+        self.content_offset = Some(offset);
+        self.content_size_in_bytes = Some(size_in_bytes);
+        self
+    }
+
     /// Build the data file.
     pub fn build(self) -> Result<DataFile, String> {
         let file_path = self.file_path.ok_or("file_path is required")?;
@@ -431,11 +488,16 @@ impl DataFileBuilder {
             nan_value_counts: self.nan_value_counts,
             lower_bounds: self.lower_bounds,
             upper_bounds: self.upper_bounds,
+            block_size_in_bytes: self.block_size_in_bytes,
             key_metadata: self.key_metadata,
             split_offsets: self.split_offsets,
             equality_ids: self.equality_ids,
             sort_order_id: self.sort_order_id,
+            first_row_id: self.first_row_id,
             partition_spec_id: self.partition_spec_id,
+            referenced_data_file: self.referenced_data_file,
+            content_offset: self.content_offset,
+            content_size_in_bytes: self.content_size_in_bytes,
         })
     }
 }
