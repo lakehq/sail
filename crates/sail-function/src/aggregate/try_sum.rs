@@ -107,6 +107,26 @@ impl TrySumAccumulator {
     }
 }
 
+macro_rules! sum_scalar_match {
+    ($self:ident, {
+            $(
+                $pat:pat => ($field:ident, $some_ctor:expr, $null_sv:expr)
+            ),+ $(,)?
+        }) => {{
+            match &$self.dtype {
+                $(
+                    &$pat => {
+                        match $self.$field {
+                            Some(v) => $some_ctor(v),
+                            None    => $null_sv,
+                        }
+                    }
+                ),+,
+                _ => ScalarValue::Null,
+            }
+        }};
+}
+
 impl Accumulator for TrySumAccumulator {
     fn update_batch(&mut self, values: &[ArrayRef]) -> DFResult<()> {
         if values.is_empty() || self.failed {
@@ -142,21 +162,10 @@ impl Accumulator for TrySumAccumulator {
         if self.failed {
             return Ok(self.null_of_dtype());
         }
-
-        let out = match self.dtype {
-            DataType::Int64 => self
-                .sum_i64
-                .map(|x| ScalarValue::Int64(Some(x)))
-                .unwrap_or(ScalarValue::Int64(None)),
-
-            DataType::Float64 => self
-                .sum_f64
-                .map(|x| ScalarValue::Float64(Some(x)))
-                .unwrap_or(ScalarValue::Float64(None)),
-
-            _ => ScalarValue::Null,
-        };
-
+        let out = sum_scalar_match!(self, {
+            DataType::Int64   => (sum_i64, |x| ScalarValue::Int64(Some(x)),   ScalarValue::Int64(None)),
+            DataType::Float64 => (sum_f64, |x| ScalarValue::Float64(Some(x)), ScalarValue::Float64(None)),
+        });
         Ok(out)
     }
 
@@ -165,17 +174,10 @@ impl Accumulator for TrySumAccumulator {
     }
 
     fn state(&mut self) -> DFResult<Vec<ScalarValue>> {
-        let sum_scalar = match self.dtype {
-            DataType::Int64 => self
-                .sum_i64
-                .map(|x| ScalarValue::Int64(Some(x)))
-                .unwrap_or(ScalarValue::Int64(None)),
-            DataType::Float64 => self
-                .sum_f64
-                .map(|x| ScalarValue::Float64(Some(x)))
-                .unwrap_or(ScalarValue::Float64(None)),
-            _ => ScalarValue::Null,
-        };
+        let sum_scalar = sum_scalar_match!(self, {
+            DataType::Int64   => (sum_i64, |x| ScalarValue::Int64(Some(x)),   ScalarValue::Int64(None)),
+            DataType::Float64 => (sum_f64, |x| ScalarValue::Float64(Some(x)), ScalarValue::Float64(None)),
+        });
 
         Ok(vec![
             if self.failed {
@@ -309,24 +311,23 @@ impl AggregateUDFImpl for TrySumFunction {
         use DataType::*;
         if arg_types.len() != 1 {
             return Err(DataFusionError::Plan(format!(
-                "try_sum: exactly 1 argument expected, got {}", arg_types.len()
+                "try_sum: exactly 1 argument expected, got {}",
+                arg_types.len()
             )));
         }
         let coerced = match arg_types[0] {
-            // cualquier entero firmado/unsigned → Int64 (como Spark)
-            Int8 | Int16 | Int32 | Int64
-            | UInt8 | UInt16 | UInt32 | UInt64 => Int64,
+            Int8 | Int16 | Int32 | Int64 | UInt8 | UInt16 | UInt32 | UInt64 => Int64,
 
-            // floats → Float64
             Float16 | Float32 | Float64 => Float64,
 
-            ref dt => return Err(DataFusionError::Plan(format!(
-                "try_sum: unsupported type: {dt:?}"
-            ))),
+            ref dt => {
+                return Err(DataFusionError::Plan(format!(
+                    "try_sum: unsupported type: {dt:?}"
+                )))
+            }
         };
         Ok(vec![coerced])
     }
-
 
     fn default_value(&self, _data_type: &DataType) -> DFResult<ScalarValue> {
         Ok(ScalarValue::Null)
