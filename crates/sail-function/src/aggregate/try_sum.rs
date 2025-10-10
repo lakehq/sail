@@ -294,6 +294,7 @@ impl AggregateUDFImpl for TrySumFunction {
             ))),
         }
     }
+
     fn state_fields(&self, args: StateFieldsArgs) -> DFResult<Vec<FieldRef>> {
         let sum_dt = args.return_field.data_type().clone();
         Ok(vec![
@@ -305,28 +306,6 @@ impl AggregateUDFImpl for TrySumFunction {
             )
             .into(),
         ])
-    }
-
-    fn coerce_types(&self, arg_types: &[DataType]) -> DFResult<Vec<DataType>> {
-        use DataType::*;
-        if arg_types.len() != 1 {
-            return Err(DataFusionError::Plan(format!(
-                "try_sum: exactly 1 argument expected, got {}",
-                arg_types.len()
-            )));
-        }
-        let coerced = match arg_types[0] {
-            Int8 | Int16 | Int32 | Int64 | UInt8 | UInt16 | UInt32 | UInt64 => Int64,
-
-            Float16 | Float32 | Float64 => Float64,
-
-            ref dt => {
-                return Err(DataFusionError::Plan(format!(
-                    "try_sum: unsupported type: {dt:?}"
-                )))
-            }
-        };
-        Ok(vec![coerced])
     }
 
     fn default_value(&self, _data_type: &DataType) -> DFResult<ScalarValue> {
@@ -460,40 +439,7 @@ mod tests {
         Ok(())
     }
 
-    // -------- coerce_types & signature --------
-
-    #[test]
-    fn try_sum_coerce_integers_to_i64() -> DFResult<()> {
-        let f = TrySumFunction::new();
-
-        for dt in [
-            DataType::Int8,
-            DataType::Int16,
-            DataType::Int32,
-            DataType::Int64,
-            DataType::UInt8,
-            DataType::UInt16,
-            DataType::UInt32,
-            DataType::UInt64,
-        ] {
-            let out = f.coerce_types(std::slice::from_ref(&dt))?;
-            assert_eq!(out, vec![DataType::Int64], "coerce {:?} -> {:?}", dt, out);
-        }
-
-        Ok(())
-    }
-
-    #[test]
-    fn try_sum_coerce_floats_to_f64() -> DFResult<()> {
-        let f = TrySumFunction::new();
-
-        for dt in [DataType::Float16, DataType::Float32, DataType::Float64] {
-            let out = f.coerce_types(std::slice::from_ref(&dt))?;
-            assert_eq!(out, vec![DataType::Float64], "coerce {:?} -> {:?}", dt, out);
-        }
-
-        Ok(())
-    }
+    // -------- signature --------
 
     #[test]
     fn try_sum_return_type_matches_input() -> DFResult<()> {
