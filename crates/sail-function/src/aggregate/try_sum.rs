@@ -333,3 +333,184 @@ impl AggregateUDFImpl for TrySumFunction {
         Ok(ScalarValue::Null)
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use std::sync::Arc;
+
+    use datafusion::arrow::array::Int64Array;
+    use datafusion_common::arrow::array::Float64Array;
+    use datafusion_common::{Result as DFResult, ScalarValue};
+
+    use super::*;
+    // -------- Helpers --------
+
+    fn int64(values: Vec<Option<i64>>) -> ArrayRef {
+        Arc::new(Int64Array::from(values)) as ArrayRef
+    }
+
+    fn f64(values: Vec<Option<f64>>) -> ArrayRef {
+        Arc::new(Float64Array::from(values)) as ArrayRef
+    }
+
+    // -------- update_batch + evaluate --------
+
+    #[test]
+    fn try_sum_int_basic() -> DFResult<()> {
+        let mut acc = TrySumAccumulator::new(DataType::Int64);
+        acc.update_batch(&[int64((0..10).map(Some).collect())])?;
+        let out = acc.evaluate()?;
+        assert_eq!(out, ScalarValue::Int64(Some(45)));
+        Ok(())
+    }
+
+    #[test]
+    fn try_sum_int_with_nulls() -> DFResult<()> {
+        let mut acc = TrySumAccumulator::new(DataType::Int64);
+        acc.update_batch(&[int64(vec![None, Some(2), Some(3), None, Some(5)])])?;
+        let out = acc.evaluate()?;
+        assert_eq!(out, ScalarValue::Int64(Some(10)));
+        Ok(())
+    }
+
+    #[test]
+    fn try_sum_float_basic() -> DFResult<()> {
+        let mut acc = TrySumAccumulator::new(DataType::Float64);
+        acc.update_batch(&[f64(vec![Some(1.5), Some(2.5), None, Some(3.0)])])?;
+        let out = acc.evaluate()?;
+        assert_eq!(out, ScalarValue::Float64(Some(7.0)));
+        Ok(())
+    }
+
+    #[test]
+    fn try_sum_int_overflow_sets_failed() -> DFResult<()> {
+        let mut acc = TrySumAccumulator::new(DataType::Int64);
+        // i64::MAX + 1 => overflow => failed => result NULL
+        acc.update_batch(&[int64(vec![Some(i64::MAX), Some(1)])])?;
+        let out = acc.evaluate()?;
+        assert_eq!(out, ScalarValue::Int64(None));
+        assert!(acc.failed);
+        Ok(())
+    }
+
+    // -------- state + merge_batch --------
+
+    #[test]
+    fn try_sum_state_two_fields_and_merge_ok() -> DFResult<()> {
+        // acumulador 1 ve [10, 5] -> sum=15
+        let mut acc1 = TrySumAccumulator::new(DataType::Int64);
+        acc1.update_batch(&[int64(vec![Some(10), Some(5)])])?;
+        let state1 = acc1.state()?; // [sum, failed]
+        assert_eq!(state1.len(), 2);
+
+        // acumulador 2 ve [20, NULL] -> sum=20
+        let mut acc2 = TrySumAccumulator::new(DataType::Int64);
+        acc2.update_batch(&[int64(vec![Some(20), None])])?;
+        let state2 = acc2.state()?; // [sum, failed]
+
+        let state1_arrays: Vec<ArrayRef> = state1
+            .into_iter()
+            .map(|sv| sv.to_array())
+            .collect::<DFResult<_>>()?;
+
+        let state2_arrays: Vec<ArrayRef> = state2
+            .into_iter()
+            .map(|sv| sv.to_array())
+            .collect::<DFResult<_>>()?;
+
+        // final accumulator
+        let mut final_acc = TrySumAccumulator::new(DataType::Int64);
+
+        final_acc.merge_batch(&state1_arrays)?;
+        final_acc.merge_batch(&state2_arrays)?;
+
+        // sum total = 15 + 20 = 35
+        assert!(!final_acc.failed);
+        assert_eq!(final_acc.evaluate()?, ScalarValue::Int64(Some(35)));
+        Ok(())
+    }
+
+    #[test]
+    fn try_sum_merge_propagates_failure() -> DFResult<()> {
+        // sum=NULL, failed=true
+        let failed_sum = Arc::new(Int64Array::from(vec![None])) as ArrayRef;
+        let failed_flag = Arc::new(BooleanArray::from(vec![Some(true)])) as ArrayRef;
+
+        let mut acc = TrySumAccumulator::new(DataType::Int64);
+        acc.merge_batch(&[failed_sum, failed_flag])?;
+
+        assert!(acc.failed);
+        assert_eq!(acc.evaluate()?, ScalarValue::Int64(None));
+        Ok(())
+    }
+
+    #[test]
+    fn try_sum_merge_empty_partition_is_not_failure() -> DFResult<()> {
+        // sum=NULL, failed=false
+        let empty_sum = Arc::new(Int64Array::from(vec![None])) as ArrayRef;
+        let ok_flag = Arc::new(BooleanArray::from(vec![Some(false)])) as ArrayRef;
+
+        let mut acc = TrySumAccumulator::new(DataType::Int64);
+        acc.update_batch(&[int64(vec![Some(7), Some(8)])])?; // 15
+
+        acc.merge_batch(&[empty_sum, ok_flag])?;
+
+        assert!(!acc.failed);
+        assert_eq!(acc.evaluate()?, ScalarValue::Int64(Some(15)));
+        Ok(())
+    }
+
+    // -------- coerce_types & signature --------
+
+    #[test]
+    fn try_sum_coerce_integers_to_i64() -> DFResult<()> {
+        let f = TrySumFunction::new();
+
+        for dt in [
+            DataType::Int8,
+            DataType::Int16,
+            DataType::Int32,
+            DataType::Int64,
+            DataType::UInt8,
+            DataType::UInt16,
+            DataType::UInt32,
+            DataType::UInt64,
+        ] {
+            let out = f.coerce_types(std::slice::from_ref(&dt))?;
+            assert_eq!(out, vec![DataType::Int64], "coerce {:?} -> {:?}", dt, out);
+        }
+
+        Ok(())
+    }
+
+    #[test]
+    fn try_sum_coerce_floats_to_f64() -> DFResult<()> {
+        let f = TrySumFunction::new();
+
+        for dt in [DataType::Float16, DataType::Float32, DataType::Float64] {
+            let out = f.coerce_types(std::slice::from_ref(&dt))?;
+            assert_eq!(out, vec![DataType::Float64], "coerce {:?} -> {:?}", dt, out);
+        }
+
+        Ok(())
+    }
+
+    #[test]
+    fn try_sum_return_type_matches_input() -> DFResult<()> {
+        let f = TrySumFunction::new();
+        assert_eq!(f.return_type(&[DataType::Int64])?, DataType::Int64);
+        assert_eq!(f.return_type(&[DataType::Float64])?, DataType::Float64);
+        Ok(())
+    }
+
+    #[test]
+    fn try_sum_state_and_evaluate_consistency() -> DFResult<()> {
+        let mut acc = TrySumAccumulator::new(DataType::Float64);
+        acc.update_batch(&[f64(vec![Some(1.0), Some(2.0)])])?;
+        let eval = acc.evaluate()?;
+        let state = acc.state()?;
+        assert_eq!(state[0], eval);
+        assert_eq!(state[1], ScalarValue::Boolean(Some(false)));
+        Ok(())
+    }
+}
