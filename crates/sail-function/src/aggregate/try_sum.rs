@@ -51,7 +51,7 @@ struct TrySumAccumulator {
     dtype: DataType,
     sum_i64: Option<i64>,
     sum_f64: Option<f64>,
-    sum_dec128: Option<i128>, // <-- NUEVO
+    sum_dec128: Option<i128>,
     failed: bool,
 }
 
@@ -66,12 +66,11 @@ impl TrySumAccumulator {
         }
     }
 
-    #[inline]
     fn null_of_dtype(&self) -> ScalarValue {
         match self.dtype {
             DataType::Int64 => ScalarValue::Int64(None),
             DataType::Float64 => ScalarValue::Float64(None),
-            DataType::Decimal128(p, s) => ScalarValue::Decimal128(None, p, s), // <-- NUEVO
+            DataType::Decimal128(p, s) => ScalarValue::Decimal128(None, p, s),
             _ => ScalarValue::Null,
         }
     }
@@ -107,7 +106,20 @@ impl TrySumAccumulator {
                 continue;
             }
             let v = arr.value(i);
-            self.sum_f64 = Some(self.sum_f64.unwrap_or(0.0) + v);
+
+            if !v.is_finite() {
+                self.failed = true;
+                return;
+            }
+
+            let next = self.sum_f64.unwrap_or(0.0) + v;
+
+            if !next.is_finite() {
+                self.failed = true;
+                return;
+            }
+
+            self.sum_f64 = Some(next);
         }
     }
 
@@ -205,9 +217,9 @@ impl Accumulator for TrySumAccumulator {
             return Ok(self.null_of_dtype());
         }
         let out = sum_scalar_match!(self, {
-            DataType::Int64   => (sum_i64, |x| ScalarValue::Int64(Some(x)),   ScalarValue::Int64(None)),
+            DataType::Int64   => (sum_i64, |x| ScalarValue::Int64(Some(x)), ScalarValue::Int64(None)),
             DataType::Float64 => (sum_f64, |x| ScalarValue::Float64(Some(x)), ScalarValue::Float64(None)),
-                DataType::Decimal128(p, s) => (sum_dec128,|x| ScalarValue::Decimal128(Some(x), p, s),    ScalarValue::Decimal128(None, p, s)),
+                DataType::Decimal128(p, s) => (sum_dec128,|x| ScalarValue::Decimal128(Some(x), p, s), ScalarValue::Decimal128(None, p, s)),
         });
         Ok(out)
     }
@@ -218,9 +230,9 @@ impl Accumulator for TrySumAccumulator {
 
     fn state(&mut self) -> DFResult<Vec<ScalarValue>> {
         let sum_scalar = sum_scalar_match!(self, {
-            DataType::Int64   => (sum_i64, |x| ScalarValue::Int64(Some(x)),   ScalarValue::Int64(None)),
+            DataType::Int64   => (sum_i64, |x| ScalarValue::Int64(Some(x)), ScalarValue::Int64(None)),
             DataType::Float64 => (sum_f64, |x| ScalarValue::Float64(Some(x)), ScalarValue::Float64(None)),
-            DataType::Decimal128(p, s) => (sum_dec128,|x| ScalarValue::Decimal128(Some(x), p, s),    ScalarValue::Decimal128(None, p, s)),
+            DataType::Decimal128(p, s) => (sum_dec128,|x| ScalarValue::Decimal128(Some(x), p, s), ScalarValue::Decimal128(None, p, s)),
         });
 
         Ok(vec![
@@ -279,7 +291,16 @@ impl Accumulator for TrySumAccumulator {
                         continue;
                     }
                     let v = a.value(i);
-                    self.sum_f64 = Some(self.sum_f64.unwrap_or(0.0) + v);
+                    if !v.is_finite() {
+                        self.failed = true;
+                        return Ok(());
+                    }
+                    let next = self.sum_f64.unwrap_or(0.0) + v;
+                    if !next.is_finite() {
+                        self.failed = true;
+                        return Ok(());
+                    }
+                    self.sum_f64 = Some(next);
                 }
             }
             DataType::Decimal128(p, _s) => {
@@ -438,6 +459,18 @@ mod tests {
         acc.update_batch(&[f64(vec![Some(1.5), Some(2.5), None, Some(3.0)])])?;
         let out = acc.evaluate()?;
         assert_eq!(out, ScalarValue::Float64(Some(7.0)));
+        Ok(())
+    }
+
+    #[test]
+    fn try_sum_float_overflow_sets_failed() -> DFResult<()> {
+        let mut acc = TrySumAccumulator::new(DataType::Float64);
+        acc.update_batch(&[
+            Arc::new(Float64Array::from(vec![Some(f64::MAX), Some(f64::MAX)])) as ArrayRef,
+        ])?;
+        // MAX + MAX -> +inf -> failed => NULL
+        assert!(acc.failed);
+        assert_eq!(acc.evaluate()?, ScalarValue::Float64(None));
         Ok(())
     }
 
