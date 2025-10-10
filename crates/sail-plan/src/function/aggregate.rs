@@ -17,6 +17,7 @@ use sail_function::aggregate::kurtosis::KurtosisFunction;
 use sail_function::aggregate::max_min_by::{MaxByFunction, MinByFunction};
 use sail_function::aggregate::mode::ModeFunction;
 use sail_function::aggregate::skewness::SkewnessFunc;
+use sail_function::aggregate::try_sum::TrySumFunction;
 use sail_function::scalar::struct_function::StructFunction;
 
 use crate::error::{PlanError, PlanResult};
@@ -168,6 +169,34 @@ fn skewness(input: AggFunctionInput) -> PlanResult<expr::Expr> {
     }))
 }
 
+fn try_sum(input: AggFunctionInput) -> PlanResult<expr::Expr> {
+    // (opcional) valida número de args
+    // if input.arguments.len() != 1 {
+    //     return Err(plan_err("try_sum espera 1 argumento"));
+    // }
+
+    let args = input
+        .arguments
+        .into_iter()
+        .map(|arg| {
+            expr::Expr::Cast(expr::Cast {
+                expr: Box::new(arg),
+                data_type: DataType::Float64, // igual que kurtosis: trabajamos en f64
+            })
+        })
+        .collect();
+
+    Ok(expr::Expr::AggregateFunction(AggregateFunction {
+        func: Arc::new(AggregateUDF::from(TrySumFunction::new())),
+        params: AggregateFunctionParams {
+            args,
+            distinct: input.distinct,
+            filter: input.filter,
+            order_by: input.order_by,
+            null_treatment: get_null_treatment(input.ignore_nulls),
+        },
+    }))
+}
 fn count(input: AggFunctionInput) -> PlanResult<expr::Expr> {
     let AggFunctionInput {
         arguments,
@@ -395,7 +424,7 @@ fn list_built_in_aggregate_functions() -> Vec<(&'static str, AggFunction)> {
         ("string_agg", F::custom(listagg)),
         ("sum", F::default(sum::sum_udaf)),
         ("try_avg", F::unknown("try_avg")),
-        ("try_sum", F::unknown("try_sum")),
+        ("try_sum", F::custom(try_sum)),
         ("var_pop", F::default(variance::var_pop_udaf)),
         ("var_samp", F::default(variance::var_samp_udaf)),
         ("variance", F::default(variance::var_samp_udaf)),
