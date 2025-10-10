@@ -2,10 +2,11 @@ use std::any::Any;
 use std::fmt::{Debug, Formatter};
 
 use datafusion::arrow::array::{Array, ArrayRef, BooleanArray, PrimitiveArray};
-use datafusion::arrow::datatypes::{DataType, Int64Type};
+use datafusion::arrow::datatypes::{DataType, Field, FieldRef, Int64Type};
 use datafusion_common::arrow::datatypes::Float64Type;
 use datafusion_common::{DataFusionError, Result as DFResult, ScalarValue};
-use datafusion_expr::function::AccumulatorArgs;
+use datafusion_expr::function::{AccumulatorArgs, StateFieldsArgs};
+use datafusion_expr::utils::format_state_name;
 use datafusion_expr::AggregateUDFImpl;
 use datafusion_expr_common::accumulator::Accumulator;
 use datafusion_expr_common::signature::{Signature, Volatility};
@@ -101,7 +102,6 @@ impl TrySumAccumulator {
 }
 
 impl Accumulator for TrySumAccumulator {
-
     fn update_batch(&mut self, values: &[ArrayRef]) -> DFResult<()> {
         if values.is_empty() || self.failed {
             return Ok(());
@@ -286,6 +286,19 @@ impl AggregateUDFImpl for TrySumFunction {
             ))),
         }
     }
+    fn state_fields(&self, args: StateFieldsArgs) -> DFResult<Vec<FieldRef>> {
+        let sum_dt = args.return_field.data_type().clone();
+        Ok(vec![
+            Field::new(format_state_name(args.name, "sum"), sum_dt, true).into(),
+            Field::new(
+                format_state_name(args.name, "failed"),
+                DataType::Boolean,
+                false,
+            )
+            .into(),
+        ])
+    }
+
     fn coerce_types(&self, arg_types: &[DataType]) -> datafusion_common::Result<Vec<DataType>> {
         if arg_types.len() != 1 {
             return Err(DataFusionError::Plan(format!(
@@ -300,5 +313,9 @@ impl AggregateUDFImpl for TrySumFunction {
                 "try_sum: type not suported yet: {dt:?}"
             ))),
         }
+    }
+
+    fn default_value(&self, _data_type: &DataType) -> DFResult<ScalarValue> {
+        Ok(ScalarValue::Null)
     }
 }
