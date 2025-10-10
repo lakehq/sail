@@ -170,21 +170,7 @@ fn skewness(input: AggFunctionInput) -> PlanResult<expr::Expr> {
 }
 
 fn try_sum(input: AggFunctionInput) -> PlanResult<expr::Expr> {
-    // (opcional) valida número de args
-    // if input.arguments.len() != 1 {
-    //     return Err(plan_err("try_sum espera 1 argumento"));
-    // }
-
-    let args = input
-        .arguments
-        .into_iter()
-        .map(|arg| {
-            expr::Expr::Cast(expr::Cast {
-                expr: Box::new(arg),
-                data_type: DataType::Float64, // igual que kurtosis: trabajamos en f64
-            })
-        })
-        .collect();
+    let args = input.arguments;
 
     Ok(expr::Expr::AggregateFunction(AggregateFunction {
         func: Arc::new(AggregateUDF::from(TrySumFunction::new())),
@@ -197,6 +183,7 @@ fn try_sum(input: AggFunctionInput) -> PlanResult<expr::Expr> {
         },
     }))
 }
+
 fn count(input: AggFunctionInput) -> PlanResult<expr::Expr> {
     let AggFunctionInput {
         arguments,

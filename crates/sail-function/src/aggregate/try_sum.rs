@@ -9,7 +9,7 @@ use datafusion_expr::function::{AccumulatorArgs, StateFieldsArgs};
 use datafusion_expr::utils::format_state_name;
 use datafusion_expr::AggregateUDFImpl;
 use datafusion_expr_common::accumulator::Accumulator;
-use datafusion_expr_common::signature::{Signature, Volatility};
+use datafusion_expr_common::signature::{Signature, TypeSignature, Volatility};
 
 #[derive(PartialEq, Eq, Hash)]
 pub struct TrySumFunction {
@@ -25,7 +25,13 @@ impl Default for TrySumFunction {
 impl TrySumFunction {
     pub fn new() -> Self {
         Self {
-            signature: Signature::user_defined(Volatility::Immutable),
+            signature: Signature::one_of(
+                vec![
+                    TypeSignature::Exact(vec![DataType::Int64]),
+                    TypeSignature::Exact(vec![DataType::Float64]),
+                ],
+                Volatility::Immutable,
+            ),
         }
     }
 }
@@ -299,21 +305,28 @@ impl AggregateUDFImpl for TrySumFunction {
         ])
     }
 
-    fn coerce_types(&self, arg_types: &[DataType]) -> datafusion_common::Result<Vec<DataType>> {
+    fn coerce_types(&self, arg_types: &[DataType]) -> DFResult<Vec<DataType>> {
+        use DataType::*;
         if arg_types.len() != 1 {
             return Err(DataFusionError::Plan(format!(
-                "try_sum: only 1 expected{}",
-                arg_types.len()
+                "try_sum: exactly 1 argument expected, got {}", arg_types.len()
             )));
         }
+        let coerced = match arg_types[0] {
+            // cualquier entero firmado/unsigned → Int64 (como Spark)
+            Int8 | Int16 | Int32 | Int64
+            | UInt8 | UInt16 | UInt32 | UInt64 => Int64,
 
-        match &arg_types[0] {
-            DataType::Int64 | DataType::Float64 => Ok(vec![arg_types[0].clone()]),
-            dt => Err(DataFusionError::Plan(format!(
-                "try_sum: type not suported yet: {dt:?}"
+            // floats → Float64
+            Float16 | Float32 | Float64 => Float64,
+
+            ref dt => return Err(DataFusionError::Plan(format!(
+                "try_sum: unsupported type: {dt:?}"
             ))),
-        }
+        };
+        Ok(vec![coerced])
     }
+
 
     fn default_value(&self, _data_type: &DataType) -> DFResult<ScalarValue> {
         Ok(ScalarValue::Null)
