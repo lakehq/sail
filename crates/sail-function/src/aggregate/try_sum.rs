@@ -1,7 +1,7 @@
 use std::any::Any;
 use std::fmt::{Debug, Formatter};
 
-use datafusion::arrow::array::{Array, ArrayRef, BooleanArray, PrimitiveArray};
+use datafusion::arrow::array::{Array, ArrayRef, BooleanArray, Decimal128Array, PrimitiveArray};
 use datafusion::arrow::datatypes::{DataType, Field, FieldRef, Int64Type};
 use datafusion_common::arrow::datatypes::Float64Type;
 use datafusion_common::{DataFusionError, Result as DFResult, ScalarValue};
@@ -49,6 +49,7 @@ struct TrySumAccumulator {
     dtype: DataType,
     sum_i64: Option<i64>,
     sum_f64: Option<f64>,
+    sum_dec128: Option<i128>, // <-- NUEVO
     failed: bool,
 }
 
@@ -58,6 +59,7 @@ impl TrySumAccumulator {
             dtype,
             sum_i64: None,
             sum_f64: None,
+            sum_dec128: None,
             failed: false,
         }
     }
@@ -67,6 +69,7 @@ impl TrySumAccumulator {
         match self.dtype {
             DataType::Int64 => ScalarValue::Int64(None),
             DataType::Float64 => ScalarValue::Float64(None),
+            DataType::Decimal128(p, s) => ScalarValue::Decimal128(None, p, s), // <-- NUEVO
             _ => ScalarValue::Null,
         }
     }
@@ -103,6 +106,34 @@ impl TrySumAccumulator {
             }
             let v = arr.value(i);
             self.sum_f64 = Some(self.sum_f64.unwrap_or(0.0) + v);
+        }
+    }
+
+    fn update_dec128(&mut self, arr: &Decimal128Array, p: u8, _s: i8) {
+        if self.failed {
+            return;
+        }
+        for i in 0..arr.len() {
+            if arr.is_null(i) {
+                continue;
+            }
+            let v = arr.value(i);
+            self.sum_dec128 = match self.sum_dec128 {
+                None => Some(v),
+                Some(acc) => match acc.checked_add(v) {
+                    Some(sum) => Some(sum),
+                    None => {
+                        self.failed = true;
+                        return;
+                    }
+                },
+            };
+            if let Some(sum) = self.sum_dec128 {
+                if exceeds_decimal128_precision(sum, p) {
+                    self.failed = true;
+                    return;
+                }
+            }
         }
     }
 }
@@ -149,6 +180,15 @@ impl Accumulator for TrySumAccumulator {
                         DataFusionError::Execution("try_sum: expected Float64".to_string())
                     })?,
             ),
+            DataType::Decimal128(p, s) => {
+                let a = arr
+                    .as_any()
+                    .downcast_ref::<Decimal128Array>()
+                    .ok_or_else(|| {
+                        DataFusionError::Execution("try_sum: expected Decimal128".to_string())
+                    })?;
+                self.update_dec128(a, p, s);
+            }
             ref dt => {
                 return Err(DataFusionError::Execution(format!(
                     "try_sum: type not supported update_batch: {dt:?}"
@@ -165,6 +205,7 @@ impl Accumulator for TrySumAccumulator {
         let out = sum_scalar_match!(self, {
             DataType::Int64   => (sum_i64, |x| ScalarValue::Int64(Some(x)),   ScalarValue::Int64(None)),
             DataType::Float64 => (sum_f64, |x| ScalarValue::Float64(Some(x)), ScalarValue::Float64(None)),
+                DataType::Decimal128(p, s) => (sum_dec128,|x| ScalarValue::Decimal128(Some(x), p, s),    ScalarValue::Decimal128(None, p, s)),
         });
         Ok(out)
     }
@@ -177,6 +218,7 @@ impl Accumulator for TrySumAccumulator {
         let sum_scalar = sum_scalar_match!(self, {
             DataType::Int64   => (sum_i64, |x| ScalarValue::Int64(Some(x)),   ScalarValue::Int64(None)),
             DataType::Float64 => (sum_f64, |x| ScalarValue::Float64(Some(x)), ScalarValue::Float64(None)),
+            DataType::Decimal128(p, s) => (sum_dec128,|x| ScalarValue::Decimal128(Some(x), p, s),    ScalarValue::Decimal128(None, p, s)),
         });
 
         Ok(vec![
@@ -255,6 +297,38 @@ impl Accumulator for TrySumAccumulator {
                     self.sum_f64 = Some(self.sum_f64.unwrap_or(0.0) + v);
                 }
             }
+            DataType::Decimal128(p, _s) => {
+                let a = states[0]
+                    .as_any()
+                    .downcast_ref::<Decimal128Array>()
+                    .ok_or_else(|| {
+                        DataFusionError::Execution(
+                            "try_sum: state[0] need be Decimal128".to_string(),
+                        )
+                    })?;
+                for i in 0..a.len() {
+                    if a.is_null(i) {
+                        continue;
+                    }
+                    let v = a.value(i);
+                    self.sum_dec128 = match self.sum_dec128 {
+                        None => Some(v),
+                        Some(acc) => match acc.checked_add(v) {
+                            Some(sum) => Some(sum),
+                            None => {
+                                self.failed = true;
+                                return Ok(());
+                            }
+                        },
+                    };
+                    if let Some(sum) = self.sum_dec128 {
+                        if exceeds_decimal128_precision(sum, p) {
+                            self.failed = true;
+                            return Ok(());
+                        }
+                    }
+                }
+            }
             ref dt => {
                 return Err(DataFusionError::Execution(format!(
                     "try_sum: type not suported in merge_batch: {dt:?}"
@@ -263,6 +337,24 @@ impl Accumulator for TrySumAccumulator {
         }
 
         Ok(())
+    }
+}
+
+// Helpers to determine is exceeds decimal
+fn pow10_i128(p: u8) -> Option<i128> {
+    let mut v: i128 = 1;
+    for _ in 0..p {
+        v = v.checked_mul(10)?;
+    }
+    Some(v)
+}
+
+fn exceeds_decimal128_precision(sum: i128, p: u8) -> bool {
+    if let Some(max_plus_one) = pow10_i128(p) {
+        let max = max_plus_one - 1;
+        sum > max || sum < -max
+    } else {
+        true
     }
 }
 
@@ -288,7 +380,9 @@ impl AggregateUDFImpl for TrySumFunction {
 
         // Basic, need mor types
         match dtype {
-            DataType::Int64 | DataType::Float64 => Ok(Box::new(TrySumAccumulator::new(dtype))),
+            DataType::Int64 | DataType::Float64 | DataType::Decimal128(_, _) => {
+                Ok(Box::new(TrySumAccumulator::new(dtype)))
+            }
             dt => Err(DataFusionError::Execution(format!(
                 "try_sum: type not suported yet: {dt:?}"
             ))),
@@ -332,6 +426,14 @@ mod tests {
         Arc::new(Float64Array::from(values)) as ArrayRef
     }
 
+    fn dec128(p: u8, s: i8, vals: Vec<Option<i128>>) -> DFResult<ArrayRef> {
+        let base = Decimal128Array::from(vals);
+        let arr = base.with_precision_and_scale(p, s).map_err(|e| {
+            DataFusionError::Execution(format!("invalid precision/scale ({p},{s}): {e}"))
+        })?;
+        Ok(Arc::new(arr) as ArrayRef)
+    }
+
     // -------- update_batch + evaluate --------
 
     #[test]
@@ -362,12 +464,86 @@ mod tests {
     }
 
     #[test]
+    fn try_sum_decimal_basic() -> DFResult<()> {
+        let p = 10u8;
+        let s = 2i8;
+        let mut acc = TrySumAccumulator::new(DataType::Decimal128(p, s));
+        acc.update_batch(&[dec128(p, s, vec![Some(123), Some(477)])?])?;
+        let out = acc.evaluate()?;
+        assert_eq!(out, ScalarValue::Decimal128(Some(600), p, s));
+        Ok(())
+    }
+
+    #[test]
+    fn try_sum_decimal_with_nulls() -> DFResult<()> {
+        let p = 10u8;
+        let s = 2i8;
+        let mut acc = TrySumAccumulator::new(DataType::Decimal128(p, s));
+        acc.update_batch(&[dec128(p, s, vec![Some(150), None, Some(200)])?])?;
+        let out = acc.evaluate()?;
+        assert_eq!(out, ScalarValue::Decimal128(Some(350), p, s));
+        Ok(())
+    }
+
+    #[test]
+    fn try_sum_decimal_overflow_sets_failed() -> DFResult<()> {
+        let p = 5u8;
+        let s = 0i8;
+        let mut acc = TrySumAccumulator::new(DataType::Decimal128(p, s));
+        acc.update_batch(&[dec128(p, s, vec![Some(90_000), Some(20_000)])?])?;
+        let out = acc.evaluate()?;
+        assert_eq!(out, ScalarValue::Decimal128(None, p, s));
+        assert!(acc.failed);
+        Ok(())
+    }
+
+    #[test]
+    fn try_sum_decimal_merge_ok_and_failure_propagation() -> DFResult<()> {
+        let p = 10u8;
+        let s = 2i8;
+
+        let mut p_ok = TrySumAccumulator::new(DataType::Decimal128(p, s));
+        p_ok.update_batch(&[dec128(p, s, vec![Some(100), Some(200)])?])?;
+        let s_ok = p_ok
+            .state()?
+            .into_iter()
+            .map(|sv| sv.to_array())
+            .collect::<DFResult<Vec<_>>>()?;
+
+        let mut p_fail = TrySumAccumulator::new(DataType::Decimal128(p, s));
+        p_fail.update_batch(&[dec128(p, s, vec![Some(i128::MAX), Some(1)])?])?;
+        let s_fail = p_fail
+            .state()?
+            .into_iter()
+            .map(|sv| sv.to_array())
+            .collect::<DFResult<Vec<_>>>()?;
+
+        let mut final_acc = TrySumAccumulator::new(DataType::Decimal128(p, s));
+        final_acc.merge_batch(&s_ok)?;
+        final_acc.merge_batch(&s_fail)?;
+
+        assert!(final_acc.failed);
+        assert_eq!(final_acc.evaluate()?, ScalarValue::Decimal128(None, p, s));
+        Ok(())
+    }
+
+    #[test]
     fn try_sum_int_overflow_sets_failed() -> DFResult<()> {
         let mut acc = TrySumAccumulator::new(DataType::Int64);
         // i64::MAX + 1 => overflow => failed => result NULL
         acc.update_batch(&[int64(vec![Some(i64::MAX), Some(1)])])?;
         let out = acc.evaluate()?;
         assert_eq!(out, ScalarValue::Int64(None));
+        assert!(acc.failed);
+        Ok(())
+    }
+
+    #[test]
+    fn try_sum_int_negative_overflow_sets_failed() -> DFResult<()> {
+        let mut acc = TrySumAccumulator::new(DataType::Int64);
+        // i64::MIN - 1 → overflow negative
+        acc.update_batch(&[int64(vec![Some(i64::MIN), Some(-1)])])?;
+        assert_eq!(acc.evaluate()?, ScalarValue::Int64(None));
         assert!(acc.failed);
         Ok(())
     }
