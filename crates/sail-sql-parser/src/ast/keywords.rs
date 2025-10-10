@@ -17,7 +17,7 @@ fn parse_keyword<'a, I, E>(
 where
     I: Input<'a, Token = Token<'a>> + ValueInput<'a>,
     I::Span: std::convert::Into<TokenSpan>,
-    E: ParserExtra<'a, I>,
+    E: ParserExtra<'a, I> + 'a,
     E::Error: LabelError<'a, I, TokenLabel>,
 {
     let before = input.cursor();
@@ -70,7 +70,7 @@ macro_rules! keyword_types {
             where
                 I: Input<'a, Token = Token<'a>> + ValueInput<'a>,
                 I::Span: std::convert::Into<TokenSpan>,
-                E: ParserExtra<'a, I>,
+                E: ParserExtra<'a, I> + 'a,
                 E::Error: LabelError<'a, I, TokenLabel>,
             {
                 fn parser(

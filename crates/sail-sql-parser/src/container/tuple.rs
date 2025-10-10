@@ -21,7 +21,7 @@ macro_rules! impl_tree_parser_for_tuple {
             $T: TreeParser<'a, I, E, A>
             $(,$Ts: TreeParser<'a, I, E, A>)*
             , I: Input<'a>
-            , E: ParserExtra<'a, I>
+            , E: ParserExtra<'a, I> + 'a
             , A: Clone
         {
             fn parser(args: A, options: &'a ParserOptions) -> impl Parser<'a, I, Self, E> + Clone {

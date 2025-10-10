@@ -679,7 +679,7 @@ pub struct Unpivot {
     /// When `ids` is [None] (for SQL statements), all remaining columns are included.
     /// When `ids` is [Some] (for the DataFrame API), only the specified columns are included.
     pub ids: Option<Vec<Expr>>,
-    pub values: Vec<UnpivotValue>,
+    pub values: Option<Vec<UnpivotValue>>,
     pub variable_column_name: Identifier,
     pub value_column_names: Vec<Identifier>,
     pub include_nulls: bool,

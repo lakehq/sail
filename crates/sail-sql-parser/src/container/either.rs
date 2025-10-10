@@ -14,7 +14,7 @@ where
     L: TreeParser<'a, I, E, A>,
     R: TreeParser<'a, I, E, A>,
     I: Input<'a>,
-    E: ParserExtra<'a, I>,
+    E: ParserExtra<'a, I> + 'a,
     A: Clone,
 {
     fn parser(args: A, options: &'a ParserOptions) -> impl Parser<'a, I, Self, E> + Clone {

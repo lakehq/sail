@@ -95,7 +95,7 @@ impl<'a, I, E, P1, P2, P3> TreeParser<'a, I, E, (P1, P2, P3)> for QueryBody
 where
     I: Input<'a, Token = Token<'a>> + ValueInput<'a>,
     I::Span: Into<TokenSpan> + Clone,
-    E: ParserExtra<'a, I>,
+    E: ParserExtra<'a, I> + 'a,
     E::Error: LabelError<'a, I, TokenLabel>,
     P1: Parser<'a, I, Query, E> + Clone + 'a,
     P2: Parser<'a, I, Expr, E> + Clone + 'a,
