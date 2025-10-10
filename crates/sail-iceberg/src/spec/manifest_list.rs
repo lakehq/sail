@@ -2,6 +2,7 @@ use apache_avro::{from_value as avro_from_value, Reader as AvroReader};
 use serde::{Deserialize, Serialize};
 
 use super::values::{Literal, PrimitiveLiteral};
+use crate::spec::FormatVersion;
 
 pub const UNASSIGNED_SEQUENCE_NUMBER: i64 = -1;
 
@@ -41,61 +42,39 @@ impl ManifestList {
     }
 
     /// Parse manifest list from bytes with a specified version.
-    pub fn parse_with_version(
-        bs: &[u8],
-        _version: super::FormatVersion,
-    ) -> Result<ManifestList, String> {
-        // Decode per-record to avoid array-level serde issues; field aliases/defaults cover V1/V2
-        let reader = AvroReader::new(bs).map_err(|e| format!("Avro read error: {e}"))?;
-        let mut manifest_files = Vec::new();
-        for value in reader {
-            let value = value.map_err(|e| format!("Avro read value error: {e}"))?;
-            let mf_avro: ManifestFileAvro =
-                avro_from_value(&value).map_err(|e| format!("Avro decode error: {e}"))?;
-            manifest_files.push(mf_avro.into());
+    pub fn parse_with_version(bs: &[u8], version: FormatVersion) -> Result<ManifestList, String> {
+        match version {
+            FormatVersion::V1 => {
+                let reader = AvroReader::new(bs).map_err(|e| format!("Avro read error: {e}"))?;
+                let mut entries = Vec::new();
+                for value in reader {
+                    let value = value.map_err(|e| format!("Avro read value error: {e}"))?;
+                    let v1: _serde::ManifestFileV1 =
+                        avro_from_value(&value).map_err(|e| format!("Avro decode error: {e}"))?;
+                    entries.push(ManifestFile::from(v1));
+                }
+                Ok(ManifestList::new(entries))
+            }
+            FormatVersion::V2 => {
+                let reader = AvroReader::new(bs).map_err(|e| format!("Avro read error: {e}"))?;
+                let mut entries = Vec::new();
+                for value in reader {
+                    let value = value.map_err(|e| format!("Avro read value error: {e}"))?;
+                    let v2: _serde::ManifestFileV2 =
+                        avro_from_value(&value).map_err(|e| format!("Avro decode error: {e}"))?;
+                    entries.push(ManifestFile::from(v2));
+                }
+                Ok(ManifestList::new(entries))
+            }
         }
-        Ok(ManifestList::new(manifest_files))
     }
 }
 
-#[derive(Debug, Serialize, Deserialize)]
-#[serde(rename_all = "kebab-case")]
-struct ManifestFileAvro {
-    #[serde(rename = "manifest_path")]
-    manifest_path: String,
-    #[serde(rename = "manifest_length")]
-    manifest_length: i64,
-    #[serde(rename = "partition_spec_id")]
-    partition_spec_id: i32,
-    #[serde(rename = "content")]
-    content: i32,
-    #[serde(rename = "sequence_number")]
-    sequence_number: i64,
-    #[serde(rename = "min_sequence_number")]
-    min_sequence_number: i64,
-    #[serde(rename = "added_snapshot_id")]
-    added_snapshot_id: i64,
-    #[serde(alias = "added_data_files_count", rename = "added_files_count")]
-    added_files_count: i32,
-    #[serde(alias = "existing_data_files_count", rename = "existing_files_count")]
-    existing_files_count: i32,
-    #[serde(alias = "deleted_data_files_count", rename = "deleted_files_count")]
-    deleted_files_count: i32,
-    #[serde(rename = "added_rows_count")]
-    added_rows_count: i64,
-    #[serde(rename = "existing_rows_count")]
-    existing_rows_count: i64,
-    #[serde(rename = "deleted_rows_count")]
-    deleted_rows_count: i64,
-    #[serde(rename = "partitions")]
-    partitions: Option<Vec<FieldSummaryAvro>>,
-    #[serde(rename = "key_metadata")]
-    key_metadata: Option<Vec<u8>>,
-}
+// removed duplicate early _serde block; see single _serde module below
 
-#[derive(Debug, Serialize, Deserialize)]
+#[derive(Debug, Serialize, Deserialize, Clone)]
 #[serde(rename_all = "kebab-case")]
-struct FieldSummaryAvro {
+pub struct FieldSummaryAvro {
     #[serde(rename = "contains_null")]
     contains_null: bool,
     #[serde(rename = "contains_nan")]
@@ -106,42 +85,43 @@ struct FieldSummaryAvro {
     upper_bound: Option<Vec<u8>>,
 }
 
-impl From<ManifestFileAvro> for ManifestFile {
-    fn from(avro: ManifestFileAvro) -> Self {
+impl From<FieldSummaryAvro> for FieldSummary {
+    fn from(summary: FieldSummaryAvro) -> Self {
+        let lower_bound = summary
+            .lower_bound
+            .and_then(|bytes| String::from_utf8(bytes).ok())
+            .map(|s| Literal::Primitive(PrimitiveLiteral::String(s)));
+
+        let upper_bound = summary
+            .upper_bound
+            .and_then(|bytes| String::from_utf8(bytes).ok())
+            .map(|s| Literal::Primitive(PrimitiveLiteral::String(s)));
+
+        let mut field_summary = FieldSummary::new(summary.contains_null);
+        if let Some(contains_nan) = summary.contains_nan {
+            field_summary = field_summary.with_contains_nan(contains_nan);
+        }
+        if let Some(lower) = lower_bound {
+            field_summary = field_summary.with_lower_bound(lower);
+        }
+        if let Some(upper) = upper_bound {
+            field_summary = field_summary.with_upper_bound(upper);
+        }
+        field_summary
+    }
+}
+
+impl From<_serde::ManifestFileV2> for ManifestFile {
+    fn from(avro: _serde::ManifestFileV2) -> Self {
         let content = match avro.content {
             0 => ManifestContentType::Data,
             1 => ManifestContentType::Deletes,
             _ => ManifestContentType::Data,
         };
 
-        let partitions = avro.partitions.map(|summaries| {
-            summaries
-                .into_iter()
-                .map(|summary| {
-                    let lower_bound = summary
-                        .lower_bound
-                        .and_then(|bytes| String::from_utf8(bytes).ok())
-                        .map(|s| Literal::Primitive(PrimitiveLiteral::String(s)));
-
-                    let upper_bound = summary
-                        .upper_bound
-                        .and_then(|bytes| String::from_utf8(bytes).ok())
-                        .map(|s| Literal::Primitive(PrimitiveLiteral::String(s)));
-
-                    let mut field_summary = FieldSummary::new(summary.contains_null);
-                    if let Some(contains_nan) = summary.contains_nan {
-                        field_summary = field_summary.with_contains_nan(contains_nan);
-                    }
-                    if let Some(lower) = lower_bound {
-                        field_summary = field_summary.with_lower_bound(lower);
-                    }
-                    if let Some(upper) = upper_bound {
-                        field_summary = field_summary.with_upper_bound(upper);
-                    }
-                    field_summary
-                })
-                .collect()
-        });
+        let partitions = avro
+            .partitions
+            .map(|summaries| summaries.into_iter().map(FieldSummary::from).collect());
 
         ManifestFile {
             manifest_path: avro.manifest_path,
@@ -446,123 +426,90 @@ pub(super) mod _serde {
     use super::*;
 
     #[derive(Debug, Serialize, Deserialize)]
-    #[serde(transparent)]
-    pub(crate) struct ManifestListV1 {
-        entries: Vec<ManifestFileV1>,
-    }
-
-    #[derive(Debug, Serialize, Deserialize)]
-    pub(crate) struct ManifestListV2 {
-        entries: Vec<ManifestFileV2>,
-    }
-
-    #[derive(Debug, Serialize, Deserialize)]
-    pub(super) struct ManifestFileV1 {
+    #[serde(rename_all = "kebab-case")]
+    pub struct ManifestFileV1 {
+        #[serde(rename = "manifest_path")]
         pub manifest_path: String,
+        #[serde(rename = "manifest_length")]
         pub manifest_length: i64,
+        #[serde(rename = "partition_spec_id")]
         pub partition_spec_id: i32,
+        #[serde(rename = "added_snapshot_id")]
         pub added_snapshot_id: i64,
+        #[serde(rename = "added_data_files_count")]
         pub added_data_files_count: Option<i32>,
+        #[serde(rename = "existing_data_files_count")]
         pub existing_data_files_count: Option<i32>,
+        #[serde(rename = "deleted_data_files_count")]
         pub deleted_data_files_count: Option<i32>,
+        #[serde(rename = "added_rows_count")]
         pub added_rows_count: Option<i64>,
+        #[serde(rename = "existing_rows_count")]
         pub existing_rows_count: Option<i64>,
+        #[serde(rename = "deleted_rows_count")]
         pub deleted_rows_count: Option<i64>,
-        pub partitions: Option<Vec<FieldSummary>>,
+        #[serde(rename = "partitions")]
+        pub partitions: Option<Vec<FieldSummaryAvro>>, // V1 uses same summary encoding
+        #[serde(rename = "key_metadata")]
         pub key_metadata: Option<Vec<u8>>,
     }
 
     #[derive(Debug, Serialize, Deserialize)]
-    pub(super) struct ManifestFileV2 {
+    #[serde(rename_all = "kebab-case")]
+    pub struct ManifestFileV2 {
+        #[serde(rename = "manifest_path")]
         pub manifest_path: String,
+        #[serde(rename = "manifest_length")]
         pub manifest_length: i64,
+        #[serde(rename = "partition_spec_id")]
         pub partition_spec_id: i32,
-        #[serde(default = "v2_default_content_for_v1")]
+        #[serde(rename = "content")]
         pub content: i32,
-        #[serde(default = "v2_default_sequence_number_for_v1")]
+        #[serde(rename = "sequence_number")]
         pub sequence_number: i64,
-        #[serde(default = "v2_default_min_sequence_number_for_v1")]
+        #[serde(rename = "min_sequence_number")]
         pub min_sequence_number: i64,
-        #[serde(alias = "added_data_files_count", alias = "added_files_count")]
-        pub added_files_count: i32,
-        #[serde(alias = "existing_data_files_count", alias = "existing_files_count")]
-        pub existing_files_count: i32,
-        #[serde(alias = "deleted_data_files_count", alias = "deleted_files_count")]
-        pub deleted_files_count: i32,
+        #[serde(rename = "added_snapshot_id")]
         pub added_snapshot_id: i64,
+        #[serde(rename = "added_files_count")]
+        pub added_files_count: i32,
+        #[serde(rename = "existing_files_count")]
+        pub existing_files_count: i32,
+        #[serde(rename = "deleted_files_count")]
+        pub deleted_files_count: i32,
+        #[serde(rename = "added_rows_count")]
         pub added_rows_count: i64,
+        #[serde(rename = "existing_rows_count")]
         pub existing_rows_count: i64,
+        #[serde(rename = "deleted_rows_count")]
         pub deleted_rows_count: i64,
-        pub partitions: Option<Vec<FieldSummary>>,
+        #[serde(rename = "partitions")]
+        pub partitions: Option<Vec<FieldSummaryAvro>>,
+        #[serde(rename = "key_metadata")]
         pub key_metadata: Option<Vec<u8>>,
     }
+}
 
-    const fn v2_default_content_for_v1() -> i32 {
-        super::ManifestContentType::Data as i32
-    }
-    const fn v2_default_sequence_number_for_v1() -> i64 {
-        0
-    }
-    const fn v2_default_min_sequence_number_for_v1() -> i64 {
-        0
-    }
-
-    impl TryFrom<ManifestListV1> for super::ManifestList {
-        type Error = String;
-        fn try_from(v1: ManifestListV1) -> Result<Self, Self::Error> {
-            let entries = v1
-                .entries
-                .into_iter()
-                .map(|e| ManifestFile {
-                    manifest_path: e.manifest_path,
-                    manifest_length: e.manifest_length,
-                    partition_spec_id: e.partition_spec_id,
-                    content: ManifestContentType::Data,
-                    sequence_number: 0,
-                    min_sequence_number: 0,
-                    added_snapshot_id: e.added_snapshot_id,
-                    added_files_count: e.added_data_files_count,
-                    existing_files_count: e.existing_data_files_count,
-                    deleted_files_count: e.deleted_data_files_count,
-                    added_rows_count: e.added_rows_count,
-                    existing_rows_count: e.existing_rows_count,
-                    deleted_rows_count: e.deleted_rows_count,
-                    partitions: e.partitions,
-                    key_metadata: e.key_metadata,
-                })
-                .collect();
-            Ok(super::ManifestList::new(entries))
-        }
-    }
-
-    impl TryFrom<ManifestListV2> for super::ManifestList {
-        type Error = String;
-        fn try_from(v2: ManifestListV2) -> Result<Self, Self::Error> {
-            let entries = v2
-                .entries
-                .into_iter()
-                .map(|e| ManifestFile {
-                    manifest_path: e.manifest_path,
-                    manifest_length: e.manifest_length,
-                    partition_spec_id: e.partition_spec_id,
-                    content: match e.content {
-                        1 => ManifestContentType::Deletes,
-                        _ => ManifestContentType::Data,
-                    },
-                    sequence_number: e.sequence_number,
-                    min_sequence_number: e.min_sequence_number,
-                    added_snapshot_id: e.added_snapshot_id,
-                    added_files_count: Some(e.added_files_count),
-                    existing_files_count: Some(e.existing_files_count),
-                    deleted_files_count: Some(e.deleted_files_count),
-                    added_rows_count: Some(e.added_rows_count),
-                    existing_rows_count: Some(e.existing_rows_count),
-                    deleted_rows_count: Some(e.deleted_rows_count),
-                    partitions: e.partitions,
-                    key_metadata: e.key_metadata,
-                })
-                .collect();
-            Ok(super::ManifestList::new(entries))
+impl From<_serde::ManifestFileV1> for ManifestFile {
+    fn from(v1: _serde::ManifestFileV1) -> Self {
+        ManifestFile {
+            manifest_path: v1.manifest_path,
+            manifest_length: v1.manifest_length,
+            partition_spec_id: v1.partition_spec_id,
+            content: ManifestContentType::Data,
+            sequence_number: 0,
+            min_sequence_number: 0,
+            added_snapshot_id: v1.added_snapshot_id,
+            added_files_count: v1.added_data_files_count,
+            existing_files_count: v1.existing_data_files_count,
+            deleted_files_count: v1.deleted_data_files_count,
+            added_rows_count: v1.added_rows_count,
+            existing_rows_count: v1.existing_rows_count,
+            deleted_rows_count: v1.deleted_rows_count,
+            partitions: v1
+                .partitions
+                .map(|v| v.into_iter().map(FieldSummary::from).collect()),
+            key_metadata: v1.key_metadata,
         }
     }
 }

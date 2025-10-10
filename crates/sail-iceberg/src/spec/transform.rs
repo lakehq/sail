@@ -139,6 +139,38 @@ impl Transform {
             }
         }
     }
+
+    /// Whether the transform preserves the order of values.
+    pub fn preserves_order(&self) -> bool {
+        !matches!(
+            self,
+            Transform::Void | Transform::Bucket(_) | Transform::Unknown
+        )
+    }
+
+    /// Unique transform name to deduplicate equivalent transforms in a builder.
+    pub fn dedup_name(&self) -> String {
+        match self {
+            Transform::Year | Transform::Month | Transform::Day | Transform::Hour => {
+                "time".to_string()
+            }
+            _ => format!("{self}"),
+        }
+    }
+
+    /// Whether ordering by this transform satisfies the ordering of another transform.
+    pub fn satisfies_order_of(&self, other: &Self) -> bool {
+        match self {
+            Transform::Identity => other.preserves_order(),
+            Transform::Hour => matches!(
+                other,
+                Transform::Hour | Transform::Day | Transform::Month | Transform::Year
+            ),
+            Transform::Day => matches!(other, Transform::Day | Transform::Month | Transform::Year),
+            Transform::Month => matches!(other, Transform::Month | Transform::Year),
+            _ => self == other,
+        }
+    }
 }
 
 impl Display for Transform {

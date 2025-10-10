@@ -122,6 +122,19 @@ impl PartitionSpec {
         self.fields.iter().map(|f| f.field_id).max()
     }
 
+    /// Check if the partition spec has sequential field ids starting from 1000.
+    /// Required for spec version 1 in the reference implementation.
+    pub fn has_sequential_ids(&self) -> bool {
+        let mut expected = 1000;
+        for field in &self.fields {
+            if field.field_id != expected {
+                return false;
+            }
+            expected += 1;
+        }
+        true
+    }
+
     /// Check if this partition spec is compatible with another partition spec.
     ///
     /// Returns true if the partition spec is equal to the other spec with partition field ids ignored and

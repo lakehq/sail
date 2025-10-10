@@ -49,12 +49,10 @@ impl MappedField {
     pub fn field_id(&self) -> Option<i32> {
         self.field_id
     }
-
     /// All names for this field
     pub fn names(&self) -> &[String] {
         &self.names
     }
-
     /// Child mapped fields
     pub fn fields(&self) -> &[Arc<MappedField>] {
         &self.fields
