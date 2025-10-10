@@ -4031,9 +4031,9 @@ dependencies = [
 
 [[package]]
 name = "monostate"
-version = "1.0.0"
+version = "1.0.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "0fadfbe4df7799b10105910e2ba58b230e4ad156c6d44a9b110a78ddd8df9976"
+checksum = "a7b12ad0340d0817ba9e577eea7649bae0032ae985f197707f05e2610d4d173a"
 dependencies = [
  "monostate-impl",
  "serde",
@@ -4042,9 +4042,9 @@ dependencies = [
 
 [[package]]
 name = "monostate-impl"
-version = "1.0.0"
+version = "1.0.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "5e4b97790881cda9005b00b9b0f11d46317861b7f476bfb26d5121ca46fb33a9"
+checksum = "16f00d5ea8bf717366e20bbdc17f3fe611b833ff9aa554fb614913b0dac54d77"
 dependencies = [
  "proc-macro2",
  "quote",
@@ -5888,11 +5888,14 @@ version = "0.3.7"
 dependencies = [
  "chumsky",
  "either",
+ "itertools 0.14.0",
  "paste",
  "phf 0.13.1",
  "prettyplease",
  "quote",
+ "sail-common",
  "sail-sql-macro",
+ "serde",
  "syn",
 ]
 

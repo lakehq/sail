@@ -9,7 +9,7 @@ use crate::options::ParserOptions;
 use crate::span::TokenSpan;
 use crate::string::StringValue;
 use crate::token::{Keyword, Punctuation, StringStyle, Token, TokenLabel};
-use crate::tree::TreeParser;
+use crate::tree::{SyntaxDescriptor, SyntaxNode, TerminalKind, TreeParser, TreeSyntax};
 use crate::utils::skip_whitespace;
 
 #[derive(Debug, Clone)]
@@ -210,6 +210,16 @@ where
     }
 }
 
+impl TreeSyntax for NumberLiteral {
+    fn syntax() -> SyntaxDescriptor {
+        SyntaxDescriptor {
+            name: "NumberLiteral".to_string(),
+            node: SyntaxNode::Terminal(TerminalKind::NumberLiteral),
+            children: vec![],
+        }
+    }
+}
+
 #[derive(Debug, Clone)]
 pub struct IntegerLiteral {
     pub span: TokenSpan,
@@ -254,6 +264,16 @@ where
                 input.span_since(marker.cursor()),
             ))
         })
+    }
+}
+
+impl TreeSyntax for IntegerLiteral {
+    fn syntax() -> SyntaxDescriptor {
+        SyntaxDescriptor {
+            name: "IntegerLiteral".to_string(),
+            node: SyntaxNode::Terminal(TerminalKind::IntegerLiteral),
+            children: vec![],
+        }
     }
 }
 
@@ -338,6 +358,16 @@ where
                 input.span_since(&before),
             ))
         })
+    }
+}
+
+impl TreeSyntax for StringLiteral {
+    fn syntax() -> SyntaxDescriptor {
+        SyntaxDescriptor {
+            name: "StringLiteral".to_string(),
+            node: SyntaxNode::Terminal(TerminalKind::StringLiteral),
+            children: vec![],
+        }
     }
 }
 
