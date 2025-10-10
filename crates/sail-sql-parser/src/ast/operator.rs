@@ -7,7 +7,7 @@ use chumsky::Parser;
 use crate::options::ParserOptions;
 use crate::span::TokenSpan;
 use crate::token::{Punctuation, Token, TokenLabel};
-use crate::tree::TreeParser;
+use crate::tree::{SyntaxDescriptor, SyntaxNode, TerminalKind, TreeParser, TreeSyntax};
 use crate::utils::skip_whitespace;
 
 fn parse_operator<'a, I, E>(
@@ -69,6 +69,17 @@ macro_rules! define_operator {
                 _options: &'a ParserOptions
             ) -> impl Parser<'a, I, Self, E> + Clone {
                 custom(move |input| parse_operator(input, Self::punctuations()).map(Self::new))
+            }
+        }
+
+        impl TreeSyntax for $name {
+            fn syntax() -> SyntaxDescriptor {
+                let operator = Self::punctuations().iter().map(|p| p.to_char()).collect();
+                SyntaxDescriptor {
+                    name: format!("Operator({})", stringify!($name)),
+                    node: SyntaxNode::Terminal(TerminalKind::Operator(operator)),
+                    children: vec![],
+                }
             }
         }
     };
