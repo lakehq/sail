@@ -1,10 +1,12 @@
 use std::any::Any;
 use std::fmt::{Debug, Formatter};
 
-use datafusion::arrow::array::{Array, ArrayRef, BooleanArray, Decimal128Array, PrimitiveArray};
+use datafusion::arrow::array::{
+    Array, ArrayRef, BooleanArray, Decimal128Array, Float64Array, Int64Array, PrimitiveArray,
+};
 use datafusion::arrow::datatypes::{DataType, Field, FieldRef, Int64Type};
 use datafusion_common::arrow::datatypes::Float64Type;
-use datafusion_common::{DataFusionError, Result as DFResult, ScalarValue};
+use datafusion_common::{downcast_value, DataFusionError, Result as DFResult, ScalarValue};
 use datafusion_expr::function::{AccumulatorArgs, StateFieldsArgs};
 use datafusion_expr::utils::format_state_name;
 use datafusion_expr::AggregateUDFImpl;
@@ -232,13 +234,6 @@ impl Accumulator for TrySumAccumulator {
     }
 
     fn merge_batch(&mut self, states: &[ArrayRef]) -> DFResult<()> {
-        if states.len() != 2 {
-            return Err(DataFusionError::Execution(format!(
-                "try_sum: number invalid: {} (esperado 2)",
-                states.len()
-            )));
-        }
-
         // 1) merge flag failed
         let failed_arr = states[1]
             .as_any()
@@ -259,12 +254,7 @@ impl Accumulator for TrySumAccumulator {
 
         match self.dtype {
             DataType::Int64 => {
-                let a = states[0]
-                    .as_any()
-                    .downcast_ref::<PrimitiveArray<Int64Type>>()
-                    .ok_or_else(|| {
-                        DataFusionError::Execution("try_sum: state[0] need be Int64".to_string())
-                    })?;
+                let a = downcast_value!(states[0], Int64Array);
                 for i in 0..a.len() {
                     if a.is_null(i) {
                         continue;
@@ -283,12 +273,7 @@ impl Accumulator for TrySumAccumulator {
                 }
             }
             DataType::Float64 => {
-                let a = states[0]
-                    .as_any()
-                    .downcast_ref::<PrimitiveArray<Float64Type>>()
-                    .ok_or_else(|| {
-                        DataFusionError::Execution("try_sum: stadte[0] need be Float64".to_string())
-                    })?;
+                let a = downcast_value!(states[0], Float64Array);
                 for i in 0..a.len() {
                     if a.is_null(i) {
                         continue;
@@ -298,14 +283,7 @@ impl Accumulator for TrySumAccumulator {
                 }
             }
             DataType::Decimal128(p, _s) => {
-                let a = states[0]
-                    .as_any()
-                    .downcast_ref::<Decimal128Array>()
-                    .ok_or_else(|| {
-                        DataFusionError::Execution(
-                            "try_sum: state[0] need be Decimal128".to_string(),
-                        )
-                    })?;
+                let a = downcast_value!(states[0], Decimal128Array);
                 for i in 0..a.len() {
                     if a.is_null(i) {
                         continue;
