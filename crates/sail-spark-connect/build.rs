@@ -13,6 +13,7 @@ fn build_proto() -> Result<(), Box<dyn std::error::Error>> {
         "spark.connect.ExecutePlanResponse.ArrowBatch",
     ]);
     tonic_build::configure()
+        .protoc_arg("--experimental_allow_proto3_optional")
         .file_descriptor_set_path(&descriptor_path)
         .compile_well_known_types(true)
         .extern_path(".google.protobuf", "::pbjson_types")

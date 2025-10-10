@@ -55,6 +55,7 @@ impl<'a> ProtoBuilder<'a> {
         }
 
         builder
+            .protoc_arg("--experimental_allow_proto3_optional")
             .compile_well_known_types(true)
             .compile_protos_with_config(config, &protos, &["proto"])?;
 
