@@ -101,28 +101,6 @@ impl TrySumAccumulator {
 }
 
 impl Accumulator for TrySumAccumulator {
-    fn state(&mut self) -> DFResult<Vec<ScalarValue>> {
-        let sum_scalar = match self.dtype {
-            DataType::Int64 => self
-                .sum_i64
-                .map(|x| ScalarValue::Int64(Some(x)))
-                .unwrap_or(ScalarValue::Int64(None)),
-            DataType::Float64 => self
-                .sum_f64
-                .map(|x| ScalarValue::Float64(Some(x)))
-                .unwrap_or(ScalarValue::Float64(None)),
-            _ => ScalarValue::Null,
-        };
-
-        Ok(vec![
-            if self.failed {
-                self.null_of_dtype()
-            } else {
-                sum_scalar
-            },
-            ScalarValue::Boolean(Some(self.failed)),
-        ])
-    }
 
     fn update_batch(&mut self, values: &[ArrayRef]) -> DFResult<()> {
         if values.is_empty() || self.failed {
@@ -152,6 +130,55 @@ impl Accumulator for TrySumAccumulator {
             }
         }
         Ok(())
+    }
+
+    fn evaluate(&mut self) -> DFResult<ScalarValue> {
+        if self.failed {
+            return Ok(self.null_of_dtype());
+        }
+
+        let out = match self.dtype {
+            DataType::Int64 => self
+                .sum_i64
+                .map(|x| ScalarValue::Int64(Some(x)))
+                .unwrap_or(ScalarValue::Int64(None)),
+
+            DataType::Float64 => self
+                .sum_f64
+                .map(|x| ScalarValue::Float64(Some(x)))
+                .unwrap_or(ScalarValue::Float64(None)),
+
+            _ => ScalarValue::Null,
+        };
+
+        Ok(out)
+    }
+
+    fn size(&self) -> usize {
+        std::mem::size_of::<Self>()
+    }
+
+    fn state(&mut self) -> DFResult<Vec<ScalarValue>> {
+        let sum_scalar = match self.dtype {
+            DataType::Int64 => self
+                .sum_i64
+                .map(|x| ScalarValue::Int64(Some(x)))
+                .unwrap_or(ScalarValue::Int64(None)),
+            DataType::Float64 => self
+                .sum_f64
+                .map(|x| ScalarValue::Float64(Some(x)))
+                .unwrap_or(ScalarValue::Float64(None)),
+            _ => ScalarValue::Null,
+        };
+
+        Ok(vec![
+            if self.failed {
+                self.null_of_dtype()
+            } else {
+                sum_scalar
+            },
+            ScalarValue::Boolean(Some(self.failed)),
+        ])
     }
 
     fn merge_batch(&mut self, states: &[ArrayRef]) -> DFResult<()> {
@@ -228,32 +255,6 @@ impl Accumulator for TrySumAccumulator {
         }
 
         Ok(())
-    }
-
-    fn size(&self) -> usize {
-        std::mem::size_of::<Self>()
-    }
-
-    fn evaluate(&mut self) -> DFResult<ScalarValue> {
-        if self.failed {
-            return Ok(self.null_of_dtype());
-        }
-
-        let out = match self.dtype {
-            DataType::Int64 => self
-                .sum_i64
-                .map(|x| ScalarValue::Int64(Some(x)))
-                .unwrap_or(ScalarValue::Int64(None)),
-
-            DataType::Float64 => self
-                .sum_f64
-                .map(|x| ScalarValue::Float64(Some(x)))
-                .unwrap_or(ScalarValue::Float64(None)),
-
-            _ => ScalarValue::Null,
-        };
-
-        Ok(out)
     }
 }
 
