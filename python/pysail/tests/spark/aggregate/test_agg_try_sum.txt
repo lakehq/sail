@@ -89,7 +89,18 @@ root
 | 3.50|
 +-----+
 
-
+# check precision and scale in spark
+# >>> df = spark.createDataFrame([(Decimal("90000"),), (Decimal("20000"),)], "x DECIMAL(5,0)")
+# >>> df.select(sf.try_sum("x").alias("sum_x")).show()
+# +------+
+# | sum_x|
+# +------+
+# |110000|
+# +------+
+#
+# >>> df.select(sf.try_sum("x").alias("sum_x")).printSchema()
+# root
+#  |-- sum_x: decimal(15,0) (nullable = true)
 
 # like test builtin
 # spark.conf.set("spark.sql.ansi.enabled", "true")
