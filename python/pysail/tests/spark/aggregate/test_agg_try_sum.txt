@@ -1,0 +1,129 @@
+# Int
+>>> from pyspark.sql import functions as sf
+>>> from pyspark.sql.types import LongType
+>>> df = spark.createDataFrame([(1,), (2,), (3,)], ["x"])
+>>> df.select(sf.try_sum("x").alias("sum_x")).show()
++-----+
+|sum_x|
++-----+
+|    6|
++-----+
+
+>>> df = spark.createDataFrame([(None,), (2,), (None,)], ["x"])
+>>> df.select(sf.try_sum("x").alias("sum_x")).show()
++-----+
+|sum_x|
++-----+
+|    2|
++-----+
+
+>>> LONG_MAX = pow(2,63) -1
+>>> df = spark.createDataFrame([(LONG_MAX,), (1,)], ["x"]).withColumn("x", sf.col("x").cast(LongType()))
+>>> df.select(sf.try_sum("x").alias("sum_x")).show()
++-----+
+|sum_x|
++-----+
+| NULL|
++-----+
+
+# Float
+>>> from pyspark.sql import functions as sf
+>>> df = spark.createDataFrame([(1.5,), (2.5,), (3.0,)], ["x"])
+>>> df.select(sf.try_sum("x").alias("sum_x")).show()
++-----+
+|sum_x|
++-----+
+|  7.0|
++-----+
+
+>>> df = spark.createDataFrame([(1e308,), (1e308,)], ["x"])
+>>> df.select(sf.try_sum("x").alias("sum_x")).show()
++-----+
+|sum_x|
++-----+
+| NULL|
++-----+
+#spark
+#+--------+
+#|   sum_x|
+#+--------+
+#|Infinity|
+#+--------+
+
+>>> df = spark.createDataFrame([(float('nan'),), (1.0,)], ["x"])
+>>> df.select(sf.try_sum("x").alias("sum_x")).show()  # NULL
++-----+
+|sum_x|
++-----+
+| NULL|
++-----+
+#spark
+#+-----+
+#|sum_x|
+#+-----+
+#|  NaN|
+#+-----+
+
+>>> df = spark.createDataFrame([(float('inf'),), (1.0,)], ["x"])
+>>> df.select(sf.try_sum("x").alias("sum_x")).show()  # NULL
++-----+
+|sum_x|
++-----+
+| NULL|
+#spark
+#+--------+
+#|   sum_x|
+#+--------+
+#|Infinity|
+#+--------+
+
+# Decimal
+>>> from decimal import Decimal
+>>> from pyspark.sql import functions as sf
+>>> df = spark.createDataFrame([(Decimal("1.23"),), (Decimal("4.77"),)], "x DECIMAL(10,2)")
+>>> df.select(sf.try_sum("x").alias("sum_x")).show()
++-----+
+|sum_x|
++-----+
+|  6.0|
++-----+
+#spark
+#| 6.00|
+
+
+>>> df = spark.createDataFrame([(Decimal("1.00"),), (None,), (Decimal("2.50"),)], "x DECIMAL(10,2)")
+>>> df.select(sf.try_sum("x").alias("sum_x")).show()
++-----+
+|sum_x|
++-----+
+|  3.5|
++-----+
+#spark
+#| 3.50|
+
+>>> df = spark.createDataFrame([(Decimal("90000"),), (Decimal("20000"),)], "x DECIMAL(5,0)")
+>>> df.select(sf.try_sum("x").alias("sum_x")).show()
++--------+
+|   sum_x|
++--------+
+|110000.0|
++--------+
+#spark
+#|110000|
+
+
+>>> origin = spark.conf.get("spark.sql.ansi.enabled")
+>>> spark.conf.set("spark.sql.ansi.enabled", "true")
+>>> df = spark.createDataFrame([(Decimal("1" * 38),)] * 10, "x DECIMAL(38,0)")
+>>> df.select(sf.try_sum("x").alias("sum_x")).show()
++--------------------+
+|               sum_x|
++--------------------+
+|1.111111111111111e38|
++--------------------+
+#spark
+#+-----+
+#|sum_x|
+#+-----+
+#| NULL|
+#+-----+
