@@ -2,11 +2,12 @@ use std::any::Any;
 use std::fmt::{Debug, Formatter};
 
 use datafusion::arrow::array::{
-    Array, ArrayRef, BooleanArray, Decimal128Array, Float64Array, Int64Array, PrimitiveArray,
+    Array, ArrayRef, AsArray, BooleanArray, Decimal128Array, Float64Array, Int64Array,
+    PrimitiveArray,
 };
-use datafusion::arrow::datatypes::{DataType, Field, FieldRef, Int64Type};
+use datafusion::arrow::datatypes::{DataType, Decimal128Type, Field, FieldRef, Int64Type};
 use datafusion_common::arrow::datatypes::Float64Type;
-use datafusion_common::{downcast_value, DataFusionError, Result as DFResult, ScalarValue};
+use datafusion_common::{downcast_value, DataFusionError, ScalarValue};
 use datafusion_expr::function::{AccumulatorArgs, StateFieldsArgs};
 use datafusion_expr::utils::format_state_name;
 use datafusion_expr::AggregateUDFImpl;
@@ -173,35 +174,23 @@ macro_rules! sum_scalar_match {
 }
 
 impl Accumulator for TrySumAccumulator {
-    fn update_batch(&mut self, values: &[ArrayRef]) -> DFResult<()> {
+    fn update_batch(&mut self, values: &[ArrayRef]) -> datafusion::common::Result<()> {
         if values.is_empty() || self.failed {
             return Ok(());
         }
-        let arr = &values[0];
 
         match self.dtype {
-            DataType::Int64 => self.update_i64(
-                arr.as_any()
-                    .downcast_ref::<PrimitiveArray<Int64Type>>()
-                    .ok_or_else(|| {
-                        DataFusionError::Execution("try_sum: expected Int64".to_string())
-                    })?,
-            ),
-            DataType::Float64 => self.update_f64(
-                arr.as_any()
-                    .downcast_ref::<PrimitiveArray<Float64Type>>()
-                    .ok_or_else(|| {
-                        DataFusionError::Execution("try_sum: expected Float64".to_string())
-                    })?,
-            ),
+            DataType::Int64 => {
+                let array = values[0].as_primitive::<Int64Type>();
+                self.update_i64(array)
+            }
+            DataType::Float64 => {
+                let array = values[0].as_primitive::<Float64Type>();
+                self.update_f64(array)
+            }
             DataType::Decimal128(p, s) => {
-                let a = arr
-                    .as_any()
-                    .downcast_ref::<Decimal128Array>()
-                    .ok_or_else(|| {
-                        DataFusionError::Execution("try_sum: expected Decimal128".to_string())
-                    })?;
-                self.update_dec128(a, p, s);
+                let array = values[0].as_primitive::<Decimal128Type>();
+                self.update_dec128(array, p, s);
             }
             ref dt => {
                 return Err(DataFusionError::Execution(format!(
@@ -212,7 +201,7 @@ impl Accumulator for TrySumAccumulator {
         Ok(())
     }
 
-    fn evaluate(&mut self) -> DFResult<ScalarValue> {
+    fn evaluate(&mut self) -> datafusion::common::Result<ScalarValue> {
         if self.failed {
             return Ok(self.null_of_dtype());
         }
@@ -228,7 +217,7 @@ impl Accumulator for TrySumAccumulator {
         std::mem::size_of::<Self>()
     }
 
-    fn state(&mut self) -> DFResult<Vec<ScalarValue>> {
+    fn state(&mut self) -> datafusion::common::Result<Vec<ScalarValue>> {
         let sum_scalar = sum_scalar_match!(self, {
             DataType::Int64   => (sum_i64, |x| ScalarValue::Int64(Some(x)), ScalarValue::Int64(None)),
             DataType::Float64 => (sum_f64, |x| ScalarValue::Float64(Some(x)), ScalarValue::Float64(None)),
@@ -245,36 +234,23 @@ impl Accumulator for TrySumAccumulator {
         ])
     }
 
-    fn merge_batch(&mut self, states: &[ArrayRef]) -> DFResult<()> {
+    fn merge_batch(&mut self, states: &[ArrayRef]) -> datafusion::common::Result<()> {
         // 1) merge flag failed
-        let failed_arr = states[1]
-            .as_any()
-            .downcast_ref::<BooleanArray>()
-            .ok_or_else(|| {
-                DataFusionError::Execution("try_sum: state[1] need be Boolean".to_string())
-            })?;
-
+        let failed_arr = downcast_value!(states[1], BooleanArray);
         for i in 0..failed_arr.len() {
             if failed_arr.is_valid(i) && failed_arr.value(i) {
                 self.failed = true;
-                break;
+                return Ok(());
             }
-        }
-        if self.failed {
-            return Ok(());
         }
 
         match self.dtype {
             DataType::Int64 => {
-                let a = downcast_value!(states[0], Int64Array);
-                for i in 0..a.len() {
-                    if a.is_null(i) {
-                        continue;
-                    }
-                    let v = a.value(i);
+                let array = downcast_value!(states[0], Int64Array);
+                for value in array.iter().flatten() {
                     self.sum_i64 = match self.sum_i64 {
-                        None => Some(v),
-                        Some(acc) => match acc.checked_add(v) {
+                        None => Some(value),
+                        Some(acc) => match acc.checked_add(value) {
                             Some(s) => Some(s),
                             None => {
                                 self.failed = true;
@@ -285,17 +261,13 @@ impl Accumulator for TrySumAccumulator {
                 }
             }
             DataType::Float64 => {
-                let a = downcast_value!(states[0], Float64Array);
-                for i in 0..a.len() {
-                    if a.is_null(i) {
-                        continue;
-                    }
-                    let v = a.value(i);
-                    if !v.is_finite() {
+                let array = downcast_value!(states[0], Float64Array);
+                for value in array.iter().flatten() {
+                    if !value.is_finite() {
                         self.failed = true;
                         return Ok(());
                     }
-                    let next = self.sum_f64.unwrap_or(0.0) + v;
+                    let next = self.sum_f64.unwrap_or(0.0) + value;
                     if !next.is_finite() {
                         self.failed = true;
                         return Ok(());
@@ -304,28 +276,25 @@ impl Accumulator for TrySumAccumulator {
                 }
             }
             DataType::Decimal128(p, _s) => {
-                let a = downcast_value!(states[0], Decimal128Array);
-                for i in 0..a.len() {
-                    if a.is_null(i) {
-                        continue;
-                    }
-                    let v = a.value(i);
-                    self.sum_dec128 = match self.sum_dec128 {
-                        None => Some(v),
-                        Some(acc) => match acc.checked_add(v) {
-                            Some(sum) => Some(sum),
+                let array = downcast_value!(states[0], Decimal128Array);
+                for value in array.iter().flatten() {
+                    let next = match self.sum_dec128 {
+                        None => value,
+                        Some(acc) => match acc.checked_add(value) {
+                            Some(sum) => sum,
                             None => {
                                 self.failed = true;
                                 return Ok(());
                             }
                         },
                     };
-                    if let Some(sum) = self.sum_dec128 {
-                        if exceeds_decimal128_precision(sum, p) {
-                            self.failed = true;
-                            return Ok(());
-                        }
+
+                    if exceeds_decimal128_precision(next, p) {
+                        self.failed = true;
+                        return Ok(());
                     }
+
+                    self.sum_dec128 = Some(next);
                 }
             }
             ref dt => {
@@ -374,21 +343,15 @@ impl AggregateUDFImpl for TrySumFunction {
         Ok(arg_types[0].clone())
     }
 
-    fn accumulator(&self, acc_args: AccumulatorArgs) -> DFResult<Box<dyn Accumulator>> {
+    fn accumulator(
+        &self,
+        acc_args: AccumulatorArgs,
+    ) -> datafusion::common::Result<Box<dyn Accumulator>> {
         let dtype = acc_args.return_field.data_type().clone();
-
-        // Basic, need mor types
-        match dtype {
-            DataType::Int64 | DataType::Float64 | DataType::Decimal128(_, _) => {
-                Ok(Box::new(TrySumAccumulator::new(dtype)))
-            }
-            dt => Err(DataFusionError::Execution(format!(
-                "try_sum: type not suported yet: {dt:?}"
-            ))),
-        }
+        Ok(Box::new(TrySumAccumulator::new(dtype)))
     }
 
-    fn state_fields(&self, args: StateFieldsArgs) -> DFResult<Vec<FieldRef>> {
+    fn state_fields(&self, args: StateFieldsArgs) -> datafusion::common::Result<Vec<FieldRef>> {
         let sum_dt = args.return_field.data_type().clone();
         Ok(vec![
             Field::new(format_state_name(args.name, "sum"), sum_dt, true).into(),
@@ -401,7 +364,7 @@ impl AggregateUDFImpl for TrySumFunction {
         ])
     }
 
-    fn default_value(&self, _data_type: &DataType) -> DFResult<ScalarValue> {
+    fn default_value(&self, _data_type: &DataType) -> datafusion::common::Result<ScalarValue> {
         Ok(ScalarValue::Null)
     }
 }
@@ -412,7 +375,7 @@ mod tests {
 
     use datafusion::arrow::array::Int64Array;
     use datafusion_common::arrow::array::Float64Array;
-    use datafusion_common::{Result as DFResult, ScalarValue};
+    use datafusion_common::ScalarValue;
 
     use super::*;
     // -------- Helpers --------
@@ -425,7 +388,7 @@ mod tests {
         Arc::new(Float64Array::from(values)) as ArrayRef
     }
 
-    fn dec128(p: u8, s: i8, vals: Vec<Option<i128>>) -> DFResult<ArrayRef> {
+    fn dec128(p: u8, s: i8, vals: Vec<Option<i128>>) -> datafusion::common::Result<ArrayRef> {
         let base = Decimal128Array::from(vals);
         let arr = base.with_precision_and_scale(p, s).map_err(|e| {
             DataFusionError::Execution(format!("invalid precision/scale ({p},{s}): {e}"))
@@ -436,7 +399,7 @@ mod tests {
     // -------- update_batch + evaluate --------
 
     #[test]
-    fn try_sum_int_basic() -> DFResult<()> {
+    fn try_sum_int_basic() -> datafusion::common::Result<()> {
         let mut acc = TrySumAccumulator::new(DataType::Int64);
         acc.update_batch(&[int64((0..10).map(Some).collect())])?;
         let out = acc.evaluate()?;
@@ -445,7 +408,7 @@ mod tests {
     }
 
     #[test]
-    fn try_sum_int_with_nulls() -> DFResult<()> {
+    fn try_sum_int_with_nulls() -> datafusion::common::Result<()> {
         let mut acc = TrySumAccumulator::new(DataType::Int64);
         acc.update_batch(&[int64(vec![None, Some(2), Some(3), None, Some(5)])])?;
         let out = acc.evaluate()?;
@@ -454,7 +417,7 @@ mod tests {
     }
 
     #[test]
-    fn try_sum_float_basic() -> DFResult<()> {
+    fn try_sum_float_basic() -> datafusion::common::Result<()> {
         let mut acc = TrySumAccumulator::new(DataType::Float64);
         acc.update_batch(&[f64(vec![Some(1.5), Some(2.5), None, Some(3.0)])])?;
         let out = acc.evaluate()?;
@@ -463,7 +426,7 @@ mod tests {
     }
 
     #[test]
-    fn try_sum_float_overflow_sets_failed() -> DFResult<()> {
+    fn try_sum_float_overflow_sets_failed() -> datafusion::common::Result<()> {
         let mut acc = TrySumAccumulator::new(DataType::Float64);
         acc.update_batch(&[
             Arc::new(Float64Array::from(vec![Some(f64::MAX), Some(f64::MAX)])) as ArrayRef,
@@ -475,7 +438,7 @@ mod tests {
     }
 
     #[test]
-    fn try_sum_decimal_basic() -> DFResult<()> {
+    fn try_sum_decimal_basic() -> datafusion::common::Result<()> {
         let p = 10u8;
         let s = 2i8;
         let mut acc = TrySumAccumulator::new(DataType::Decimal128(p, s));
@@ -486,7 +449,7 @@ mod tests {
     }
 
     #[test]
-    fn try_sum_decimal_with_nulls() -> DFResult<()> {
+    fn try_sum_decimal_with_nulls() -> datafusion::common::Result<()> {
         let p = 10u8;
         let s = 2i8;
         let mut acc = TrySumAccumulator::new(DataType::Decimal128(p, s));
@@ -497,7 +460,7 @@ mod tests {
     }
 
     #[test]
-    fn try_sum_decimal_overflow_sets_failed() -> DFResult<()> {
+    fn try_sum_decimal_overflow_sets_failed() -> datafusion::common::Result<()> {
         let p = 5u8;
         let s = 0i8;
         let mut acc = TrySumAccumulator::new(DataType::Decimal128(p, s));
@@ -509,7 +472,7 @@ mod tests {
     }
 
     #[test]
-    fn try_sum_decimal_merge_ok_and_failure_propagation() -> DFResult<()> {
+    fn try_sum_decimal_merge_ok_and_failure_propagation() -> datafusion::common::Result<()> {
         let p = 10u8;
         let s = 2i8;
 
@@ -519,7 +482,7 @@ mod tests {
             .state()?
             .into_iter()
             .map(|sv| sv.to_array())
-            .collect::<DFResult<Vec<_>>>()?;
+            .collect::<datafusion::common::Result<Vec<_>>>()?;
 
         let mut p_fail = TrySumAccumulator::new(DataType::Decimal128(p, s));
         p_fail.update_batch(&[dec128(p, s, vec![Some(i128::MAX), Some(1)])?])?;
@@ -527,7 +490,7 @@ mod tests {
             .state()?
             .into_iter()
             .map(|sv| sv.to_array())
-            .collect::<DFResult<Vec<_>>>()?;
+            .collect::<datafusion::common::Result<Vec<_>>>()?;
 
         let mut final_acc = TrySumAccumulator::new(DataType::Decimal128(p, s));
         final_acc.merge_batch(&s_ok)?;
@@ -539,7 +502,7 @@ mod tests {
     }
 
     #[test]
-    fn try_sum_int_overflow_sets_failed() -> DFResult<()> {
+    fn try_sum_int_overflow_sets_failed() -> datafusion::common::Result<()> {
         let mut acc = TrySumAccumulator::new(DataType::Int64);
         // i64::MAX + 1 => overflow => failed => result NULL
         acc.update_batch(&[int64(vec![Some(i64::MAX), Some(1)])])?;
@@ -550,7 +513,7 @@ mod tests {
     }
 
     #[test]
-    fn try_sum_int_negative_overflow_sets_failed() -> DFResult<()> {
+    fn try_sum_int_negative_overflow_sets_failed() -> datafusion::common::Result<()> {
         let mut acc = TrySumAccumulator::new(DataType::Int64);
         // i64::MIN - 1 → overflow negative
         acc.update_batch(&[int64(vec![Some(i64::MIN), Some(-1)])])?;
@@ -562,7 +525,7 @@ mod tests {
     // -------- state + merge_batch --------
 
     #[test]
-    fn try_sum_state_two_fields_and_merge_ok() -> DFResult<()> {
+    fn try_sum_state_two_fields_and_merge_ok() -> datafusion::common::Result<()> {
         // acumulador 1 ve [10, 5] -> sum=15
         let mut acc1 = TrySumAccumulator::new(DataType::Int64);
         acc1.update_batch(&[int64(vec![Some(10), Some(5)])])?;
@@ -577,12 +540,12 @@ mod tests {
         let state1_arrays: Vec<ArrayRef> = state1
             .into_iter()
             .map(|sv| sv.to_array())
-            .collect::<DFResult<_>>()?;
+            .collect::<datafusion::common::Result<_>>()?;
 
         let state2_arrays: Vec<ArrayRef> = state2
             .into_iter()
             .map(|sv| sv.to_array())
-            .collect::<DFResult<_>>()?;
+            .collect::<datafusion::common::Result<_>>()?;
 
         // final accumulator
         let mut final_acc = TrySumAccumulator::new(DataType::Int64);
@@ -597,7 +560,7 @@ mod tests {
     }
 
     #[test]
-    fn try_sum_merge_propagates_failure() -> DFResult<()> {
+    fn try_sum_merge_propagates_failure() -> datafusion::common::Result<()> {
         // sum=NULL, failed=true
         let failed_sum = Arc::new(Int64Array::from(vec![None])) as ArrayRef;
         let failed_flag = Arc::new(BooleanArray::from(vec![Some(true)])) as ArrayRef;
@@ -611,7 +574,7 @@ mod tests {
     }
 
     #[test]
-    fn try_sum_merge_empty_partition_is_not_failure() -> DFResult<()> {
+    fn try_sum_merge_empty_partition_is_not_failure() -> datafusion::common::Result<()> {
         // sum=NULL, failed=false
         let empty_sum = Arc::new(Int64Array::from(vec![None])) as ArrayRef;
         let ok_flag = Arc::new(BooleanArray::from(vec![Some(false)])) as ArrayRef;
@@ -629,7 +592,7 @@ mod tests {
     // -------- signature --------
 
     #[test]
-    fn try_sum_return_type_matches_input() -> DFResult<()> {
+    fn try_sum_return_type_matches_input() -> datafusion::common::Result<()> {
         let f = TrySumFunction::new();
         assert_eq!(f.return_type(&[DataType::Int64])?, DataType::Int64);
         assert_eq!(f.return_type(&[DataType::Float64])?, DataType::Float64);
@@ -637,7 +600,7 @@ mod tests {
     }
 
     #[test]
-    fn try_sum_state_and_evaluate_consistency() -> DFResult<()> {
+    fn try_sum_state_and_evaluate_consistency() -> datafusion::common::Result<()> {
         let mut acc = TrySumAccumulator::new(DataType::Float64);
         acc.update_batch(&[f64(vec![Some(1.0), Some(2.0)])])?;
         let eval = acc.evaluate()?;
