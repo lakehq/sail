@@ -38,44 +38,27 @@
 
 >>> df = spark.createDataFrame([(1e308,), (1e308,)], ["x"])
 >>> df.select(sf.try_sum("x").alias("sum_x")).show()
-+-----+
-|sum_x|
-+-----+
-| NULL|
-+-----+
-#spark
-#+--------+
-#|   sum_x|
-#+--------+
-#|Infinity|
-#+--------+
++--------+
+|   sum_x|
++--------+
+|Infinity|
++--------+
 
 >>> df = spark.createDataFrame([(float('nan'),), (1.0,)], ["x"])
->>> df.select(sf.try_sum("x").alias("sum_x")).show()  # NULL
+>>> df.select(sf.try_sum("x").alias("sum_x")).show()
 +-----+
 |sum_x|
 +-----+
-| NULL|
+|  NaN|
 +-----+
-#spark
-#+-----+
-#|sum_x|
-#+-----+
-#|  NaN|
-#+-----+
 
 >>> df = spark.createDataFrame([(float('inf'),), (1.0,)], ["x"])
->>> df.select(sf.try_sum("x").alias("sum_x")).show()  # NULL
-+-----+
-|sum_x|
-+-----+
-| NULL|
-#spark
-#+--------+
-#|   sum_x|
-#+--------+
-#|Infinity|
-#+--------+
+>>> df.select(sf.try_sum("x").alias("sum_x")).show()
++--------+
+|   sum_x|
++--------+
+|Infinity|
++--------+
 
 # Decimal
 >>> from decimal import Decimal

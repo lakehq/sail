@@ -107,20 +107,7 @@ impl TrySumAccumulator {
                 continue;
             }
             let v = arr.value(i);
-
-            if !v.is_finite() {
-                self.failed = true;
-                return;
-            }
-
-            let next = self.sum_f64.unwrap_or(0.0) + v;
-
-            if !next.is_finite() {
-                self.failed = true;
-                return;
-            }
-
-            self.sum_f64 = Some(next);
+            self.sum_f64 = Some(self.sum_f64.unwrap_or(0.0) + v);
         }
     }
 
@@ -263,16 +250,7 @@ impl Accumulator for TrySumAccumulator {
             DataType::Float64 => {
                 let array = downcast_value!(states[0], Float64Array);
                 for value in array.iter().flatten() {
-                    if !value.is_finite() {
-                        self.failed = true;
-                        return Ok(());
-                    }
-                    let next = self.sum_f64.unwrap_or(0.0) + value;
-                    if !next.is_finite() {
-                        self.failed = true;
-                        return Ok(());
-                    }
-                    self.sum_f64 = Some(next);
+                    self.sum_f64 = Some(self.sum_f64.unwrap_or(0.0) + value);
                 }
             }
             DataType::Decimal128(p, _s) => {
@@ -426,14 +404,15 @@ mod tests {
     }
 
     #[test]
-    fn try_sum_float_overflow_sets_failed() -> datafusion::common::Result<()> {
+    fn float_overflow_behaves_like_spark_sum_infinite() -> datafusion::common::Result<()> {
         let mut acc = TrySumAccumulator::new(DataType::Float64);
-        acc.update_batch(&[
-            Arc::new(Float64Array::from(vec![Some(f64::MAX), Some(f64::MAX)])) as ArrayRef,
-        ])?;
-        // MAX + MAX -> +inf -> failed => NULL
-        assert!(acc.failed);
-        assert_eq!(acc.evaluate()?, ScalarValue::Float64(None));
+        acc.update_batch(&[f64(vec![Some(1e308), Some(1e308)])])?;
+
+        let out = acc.evaluate()?;
+        assert!(
+            matches!(out, ScalarValue::Float64(Some(v)) if v.is_infinite() && v.is_sign_positive()),
+            "waiting +Infinity, got: {out:?}"
+        );
         Ok(())
     }
 
