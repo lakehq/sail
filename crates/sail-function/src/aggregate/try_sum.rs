@@ -12,7 +12,7 @@ use datafusion_expr::function::{AccumulatorArgs, StateFieldsArgs};
 use datafusion_expr::utils::format_state_name;
 use datafusion_expr::AggregateUDFImpl;
 use datafusion_expr_common::accumulator::Accumulator;
-use datafusion_expr_common::signature::{Signature, TypeSignature, Volatility};
+use datafusion_expr_common::signature::{Signature, Volatility};
 
 #[derive(PartialEq, Eq, Hash)]
 pub struct TrySumFunction {
@@ -28,13 +28,7 @@ impl Default for TrySumFunction {
 impl TrySumFunction {
     pub fn new() -> Self {
         Self {
-            signature: Signature::one_of(
-                vec![
-                    TypeSignature::Exact(vec![DataType::Int64]),
-                    TypeSignature::Exact(vec![DataType::Float64]),
-                ],
-                Volatility::Immutable,
-            ),
+            signature: Signature::user_defined(Volatility::Immutable),
         }
     }
 }
@@ -319,6 +313,30 @@ impl AggregateUDFImpl for TrySumFunction {
 
     fn return_type(&self, arg_types: &[DataType]) -> Result<DataType, DataFusionError> {
         Ok(arg_types[0].clone())
+    }
+
+    fn coerce_types(&self, arg_types: &[DataType]) -> datafusion::common::Result<Vec<DataType>> {
+        use DataType::*;
+        if arg_types.len() != 1 {
+            return Err(DataFusionError::Plan(format!(
+                "try_sum: exactly 1 argument expected, got {}",
+                arg_types.len()
+            )));
+        }
+
+        let dt = &arg_types[0];
+        let coerced = match dt {
+            Null => Float64,
+            Decimal128(p, s) => Decimal128(*p, *s),
+            Int8 | Int16 | Int32 | Int64 | UInt8 | UInt16 | UInt32 | UInt64 => Int64,
+            Float16 | Float32 | Float64 => Float64,
+            other => {
+                return Err(DataFusionError::Plan(format!(
+                    "try_sum: unsupported type: {other:?}"
+                )))
+            }
+        };
+        Ok(vec![coerced])
     }
 
     fn accumulator(
