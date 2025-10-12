@@ -1,3 +1,4 @@
+pub mod catalog;
 pub mod datatypes;
 pub mod encrypted_key;
 pub mod format;
@@ -5,6 +6,7 @@ pub mod manifest;
 pub mod manifest_list;
 pub mod name_mapping;
 pub mod partition;
+pub mod partition_unbound;
 pub mod schema;
 pub mod snapshot;
 pub mod snapshot_summary;
@@ -16,8 +18,8 @@ pub mod transform;
 pub mod values;
 pub mod view_metadata;
 pub mod view_metadata_builder;
-pub mod view_version;
 
+pub use catalog::*;
 pub use datatypes::*;
 pub use encrypted_key::*;
 pub use format::*;
@@ -25,6 +27,7 @@ pub use manifest::*;
 pub use manifest_list::*;
 pub use name_mapping::*;
 pub use partition::*;
+pub use partition_unbound::*;
 pub use schema::*;
 pub use snapshot::*;
 pub use snapshot_summary::*;
@@ -36,6 +39,5 @@ pub use transform::*;
 pub use values::*;
 pub use view_metadata::*;
 pub use view_metadata_builder::*;
-pub use view_version::*;
 
 pub mod schema_utils;
