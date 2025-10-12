@@ -89,6 +89,13 @@ pub struct MetadataLog {
     pub metadata_file: String,
 }
 
+#[derive(Deserialize)]
+#[serde(untagged)]
+enum TableMetadataEnum {
+    V1(TableMetadata),
+    V2(TableMetadata),
+}
+
 impl TableMetadata {
     /// Get the current schema
     pub fn current_schema(&self) -> Option<&Schema> {
@@ -144,10 +151,14 @@ impl TableMetadata {
                 }
 
                 log::debug!("[ICEBERG] Deserializing to TableMetadata struct");
-                serde_json::from_value::<TableMetadata>(json_value).map_err(|e| {
-                    log::error!("[ICEBERG] Failed to deserialize TableMetadata: {:?}", e);
-                    e
-                })
+                serde_json::from_value::<TableMetadataEnum>(json_value)
+                    .map_err(|e| {
+                        log::error!("[ICEBERG] Failed to deserialize TableMetadata: {:?}", e);
+                        e
+                    })
+                    .map(|tm| match tm {
+                        TableMetadataEnum::V1(t) | TableMetadataEnum::V2(t) => t,
+                    })
             }
             Err(e) => {
                 log::error!("[ICEBERG] Failed to parse as JSON: {:?}", e);

@@ -71,7 +71,7 @@ impl Display for SortField {
 pub struct SortOrder {
     /// Identifier for SortOrder, order_id `0` is no sort order.
     #[serde(default)]
-    pub order_id: i32,
+    pub order_id: i64,
     /// Details of the sort
     #[serde(default)]
     pub fields: Vec<SortField>,

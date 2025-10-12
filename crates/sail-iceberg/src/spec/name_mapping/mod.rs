@@ -6,21 +6,18 @@ use serde::{Deserialize, Serialize};
 pub const DEFAULT_SCHEMA_NAME_MAPPING: &str = "schema.name-mapping.default";
 
 #[derive(Debug, Serialize, Deserialize, PartialEq, Eq, Clone)]
-#[serde(rename_all = "kebab-case")]
-pub struct NameMapping {
-    #[serde(rename = "fields")]
-    root: Vec<MappedField>,
-}
+#[serde(transparent)]
+pub struct NameMapping(Vec<MappedField>);
 
 impl NameMapping {
     /// Create a new `NameMapping` given mapped fields.
     pub fn new(fields: Vec<MappedField>) -> Self {
-        Self { root: fields }
+        Self(fields)
     }
 
     /// Returns mapped fields
     pub fn fields(&self) -> &[MappedField] {
-        &self.root
+        &self.0
     }
 }
 

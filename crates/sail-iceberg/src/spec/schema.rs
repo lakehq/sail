@@ -63,12 +63,21 @@ struct SchemaData {
     identifier_field_ids: Option<Vec<i32>>,
 }
 
+#[derive(Deserialize)]
+#[serde(untagged)]
+enum SchemaEnum {
+    V1(SchemaData),
+    V2(SchemaData),
+}
+
 impl<'de> Deserialize<'de> for Schema {
     fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
     where
         D: serde::Deserializer<'de>,
     {
-        let data = SchemaData::deserialize(deserializer)?;
+        let data = match SchemaEnum::deserialize(deserializer)? {
+            SchemaEnum::V1(d) | SchemaEnum::V2(d) => d,
+        };
 
         let struct_type = StructType::new(data.fields.clone());
         let mut id_to_field = HashMap::new();

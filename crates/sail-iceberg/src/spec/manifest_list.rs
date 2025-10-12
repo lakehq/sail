@@ -1,7 +1,6 @@
 use apache_avro::{from_value as avro_from_value, Reader as AvroReader};
 use serde::{Deserialize, Serialize};
 
-use super::values::{Literal, PrimitiveLiteral};
 use crate::spec::FormatVersion;
 
 pub const UNASSIGNED_SEQUENCE_NUMBER: i64 = -1;
@@ -87,26 +86,12 @@ pub struct FieldSummaryAvro {
 
 impl From<FieldSummaryAvro> for FieldSummary {
     fn from(summary: FieldSummaryAvro) -> Self {
-        let lower_bound = summary
-            .lower_bound
-            .and_then(|bytes| String::from_utf8(bytes).ok())
-            .map(|s| Literal::Primitive(PrimitiveLiteral::String(s)));
-
-        let upper_bound = summary
-            .upper_bound
-            .and_then(|bytes| String::from_utf8(bytes).ok())
-            .map(|s| Literal::Primitive(PrimitiveLiteral::String(s)));
-
         let mut field_summary = FieldSummary::new(summary.contains_null);
         if let Some(contains_nan) = summary.contains_nan {
             field_summary = field_summary.with_contains_nan(contains_nan);
         }
-        if let Some(lower) = lower_bound {
-            field_summary = field_summary.with_lower_bound(lower);
-        }
-        if let Some(upper) = upper_bound {
-            field_summary = field_summary.with_upper_bound(upper);
-        }
+        field_summary.lower_bound_bytes = summary.lower_bound;
+        field_summary.upper_bound_bytes = summary.upper_bound;
         field_summary
     }
 }
@@ -229,6 +214,16 @@ impl ManifestFile {
             + self.existing_rows_count.unwrap_or(0)
             + self.deleted_rows_count.unwrap_or(0)
     }
+
+    /// Whether the manifest contains any added files
+    pub fn has_added_files(&self) -> bool {
+        self.added_files_count.unwrap_or(0) > 0
+    }
+
+    /// Whether the manifest contains any deleted files
+    pub fn has_deleted_files(&self) -> bool {
+        self.deleted_files_count.unwrap_or(0) > 0
+    }
 }
 
 /// Field summary for partition fields in a manifest file.
@@ -240,12 +235,12 @@ pub struct FieldSummary {
     /// Whether the partition field contains NaN values (only for float and double).
     #[serde(skip_serializing_if = "Option::is_none")]
     pub contains_nan: Option<bool>,
-    /// The minimum value of the partition field.
+    /// The minimum value of the partition field (binary encoded per spec).
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub lower_bound: Option<Literal>,
-    /// The maximum value of the partition field.
+    pub lower_bound_bytes: Option<Vec<u8>>,
+    /// The maximum value of the partition field (binary encoded per spec).
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub upper_bound: Option<Literal>,
+    pub upper_bound_bytes: Option<Vec<u8>>,
 }
 
 impl FieldSummary {
@@ -254,8 +249,8 @@ impl FieldSummary {
         Self {
             contains_null,
             contains_nan: None,
-            lower_bound: None,
-            upper_bound: None,
+            lower_bound_bytes: None,
+            upper_bound_bytes: None,
         }
     }
 
@@ -266,14 +261,14 @@ impl FieldSummary {
     }
 
     /// Set the lower bound of the field.
-    pub fn with_lower_bound(mut self, lower_bound: Literal) -> Self {
-        self.lower_bound = Some(lower_bound);
+    pub fn with_lower_bound_bytes(mut self, lower: Vec<u8>) -> Self {
+        self.lower_bound_bytes = Some(lower);
         self
     }
 
     /// Set the upper bound of the field.
-    pub fn with_upper_bound(mut self, upper_bound: Literal) -> Self {
-        self.upper_bound = Some(upper_bound);
+    pub fn with_upper_bound_bytes(mut self, upper: Vec<u8>) -> Self {
+        self.upper_bound_bytes = Some(upper);
         self
     }
 }
@@ -471,11 +466,11 @@ pub(super) mod _serde {
         pub min_sequence_number: i64,
         #[serde(rename = "added_snapshot_id")]
         pub added_snapshot_id: i64,
-        #[serde(rename = "added_files_count")]
+        #[serde(rename = "added_files_count", alias = "added_data_files_count")]
         pub added_files_count: i32,
-        #[serde(rename = "existing_files_count")]
+        #[serde(rename = "existing_files_count", alias = "existing_data_files_count")]
         pub existing_files_count: i32,
-        #[serde(rename = "deleted_files_count")]
+        #[serde(rename = "deleted_files_count", alias = "deleted_data_files_count")]
         pub deleted_files_count: i32,
         #[serde(rename = "added_rows_count")]
         pub added_rows_count: i64,

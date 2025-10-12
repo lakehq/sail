@@ -49,7 +49,7 @@ pub(super) struct DataFileAvro {
     #[serde(rename = "split_offsets")]
     pub split_offsets: Option<Vec<i64>>,
     #[serde(rename = "equality_ids")]
-    pub equality_ids: Option<Vec<i64>>,
+    pub equality_ids: Option<Vec<i32>>,
     #[serde(rename = "sort_order_id")]
     pub sort_order_id: Option<i32>,
 }
@@ -121,12 +121,7 @@ impl DataFileAvro {
             block_size_in_bytes: None,
             key_metadata: self.key_metadata,
             split_offsets: self.split_offsets.unwrap_or_default(),
-            equality_ids: self
-                .equality_ids
-                .unwrap_or_default()
-                .into_iter()
-                .map(|v| v as i32)
-                .collect(),
+            equality_ids: self.equality_ids.unwrap_or_default().into_iter().collect(),
             sort_order_id: self.sort_order_id,
             first_row_id: None,
             partition_spec_id,

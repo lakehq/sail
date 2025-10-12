@@ -37,3 +37,5 @@ pub use values::*;
 pub use view_metadata::*;
 pub use view_metadata_builder::*;
 pub use view_version::*;
+
+pub mod schema_utils;
