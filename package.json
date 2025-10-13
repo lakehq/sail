@@ -35,7 +35,7 @@
     "svgo": "^4.0.0",
     "tailwindcss": "^4.1.13",
     "typescript": "^5.9.2",
-    "typescript-eslint": "^8.45.0",
+    "typescript-eslint": "^8.46.0",
     "vega": "^6.1.2",
     "vite": "^5.4.20",
     "vitepress": "^1.6.4",
