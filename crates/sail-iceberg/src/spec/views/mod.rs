@@ -15,36 +15,10 @@
 // specific language governing permissions and limitations
 // under the License.
 
-// [CREDIT]: https://raw.githubusercontent.com/apache/iceberg-rust/dc349284a4204c1a56af47fb3177ace6f9e899a0/crates/iceberg/src/spec/mod.rs
+pub mod view_metadata;
+pub mod view_metadata_builder;
+pub mod view_version;
 
-pub mod catalog;
-pub mod encrypted_key;
-pub mod manifest;
-pub mod manifest_list;
-pub mod metadata;
-pub mod name_mapping;
-pub mod partition;
-pub mod partition_unbound;
-pub mod schema;
-pub mod snapshots;
-pub mod sort;
-pub mod transform;
-pub mod types;
-pub mod views;
-
-pub use catalog::*;
-pub use encrypted_key::*;
-pub use manifest::*;
-pub use manifest_list::*;
-pub use metadata::*;
-pub use name_mapping::*;
-pub use partition::*;
-pub use partition_unbound::*;
-pub use schema::*;
-pub use snapshots::*;
-pub use sort::*;
-pub use transform::*;
-pub use types::*;
-pub use views::*;
-
-pub mod schema_utils;
+pub use view_metadata::*;
+pub use view_metadata_builder::*;
+pub use view_version::*;

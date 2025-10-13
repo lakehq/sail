@@ -22,10 +22,12 @@ use std::collections::HashMap;
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
-use super::{
-    FormatVersion, PartitionSpec, PartitionStatisticsFile, Schema, Snapshot, SnapshotReference,
-    SortOrder, StatisticsFile,
-};
+use crate::spec::metadata::format::FormatVersion;
+use crate::spec::metadata::statistic_file::{PartitionStatisticsFile, StatisticsFile};
+use crate::spec::partition::PartitionSpec;
+use crate::spec::schema::Schema;
+use crate::spec::snapshots::{Snapshot, SnapshotReference};
+use crate::spec::sort::SortOrder;
 
 /// Iceberg table metadata
 #[derive(Debug, Clone, Serialize, Deserialize)]

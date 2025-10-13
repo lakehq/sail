@@ -22,9 +22,10 @@ use object_store::ObjectMeta;
 use url::Url;
 
 use crate::arrow_conversion::iceberg_schema_to_arrow;
+use crate::spec::types::values::{Literal, PrimitiveLiteral};
 use crate::spec::{
-    DataFile, FormatVersion, Literal, Manifest, ManifestContentType, ManifestList, ManifestStatus,
-    PrimitiveLiteral, Schema, Snapshot,
+    DataFile, FormatVersion, Manifest, ManifestContentType, ManifestList, ManifestStatus, Schema,
+    Snapshot,
 };
 
 /// Iceberg table provider for DataFusion

@@ -51,13 +51,13 @@ pub enum PrimitiveLiteral {
 /// Typed single-value used for lower/upper bounds
 pub struct Datum {
     /// Primitive data type of the datum
-    pub r#type: crate::spec::PrimitiveType,
+    pub r#type: crate::spec::types::PrimitiveType,
     /// Primitive literal value
     pub literal: PrimitiveLiteral,
 }
 
 impl Datum {
-    pub fn new(r#type: crate::spec::PrimitiveType, literal: PrimitiveLiteral) -> Self {
+    pub fn new(r#type: crate::spec::types::PrimitiveType, literal: PrimitiveLiteral) -> Self {
         Self { r#type, literal }
     }
 }
@@ -66,7 +66,7 @@ impl Literal {
     // TODO: Type-aware JSON conversion
     pub fn try_from_json(
         value: JsonValue,
-        _data_type: &crate::spec::Type,
+        _data_type: &crate::spec::types::Type,
     ) -> Result<Option<Self>, String> {
         match value {
             JsonValue::Null => Ok(None),
@@ -77,7 +77,10 @@ impl Literal {
     }
 
     // TODO: Type-aware JSON conversion
-    pub fn try_into_json(&self, _data_type: &crate::spec::Type) -> Result<JsonValue, String> {
+    pub fn try_into_json(
+        &self,
+        _data_type: &crate::spec::types::Type,
+    ) -> Result<JsonValue, String> {
         match self {
             Literal::Primitive(p) => match p {
                 PrimitiveLiteral::Boolean(v) => Ok(JsonValue::Bool(*v)),

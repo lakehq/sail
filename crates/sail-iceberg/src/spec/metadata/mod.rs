@@ -15,8 +15,12 @@
 // specific language governing permissions and limitations
 // under the License.
 
-// [CREDIT]: https://raw.githubusercontent.com/apache/iceberg-rust/dc349284a4204c1a56af47fb3177ace6f9e899a0/crates/iceberg/src/spec/view_version.rs
+pub mod format;
+pub mod statistic_file;
+pub mod table_metadata;
+pub mod table_metadata_builder;
 
-#[allow(dead_code)]
-#[derive(Debug, Clone)]
-pub struct ViewVersion;
+pub use format::*;
+pub use statistic_file::*;
+pub use table_metadata::*;
+pub use table_metadata_builder::*;

@@ -22,8 +22,8 @@ use std::str::FromStr;
 
 use serde::{Deserialize, Deserializer, Serialize, Serializer};
 
-use super::datatypes::{PrimitiveType, Type};
-use super::values::Literal;
+use super::types::values::Literal;
+use super::types::{PrimitiveType, Type};
 
 /// Transform is used to transform predicates to partition predicates,
 /// in addition to transforming data values.

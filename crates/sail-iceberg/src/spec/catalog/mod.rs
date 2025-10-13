@@ -24,6 +24,7 @@ use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
 use crate::spec::partition_unbound::UnboundPartitionSpec;
+use crate::spec::views::ViewVersion;
 use crate::spec::{
     FormatVersion, PartitionStatisticsFile, Schema, SchemaId, Snapshot, SnapshotReference,
     SortOrder, StatisticsFile,
@@ -294,38 +295,6 @@ pub(super) mod _serde {
 pub enum ViewFormatVersion {
     #[serde(rename = "1")]
     V1 = 1,
-}
-
-#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
-#[serde(tag = "type", rename_all = "kebab-case")]
-pub enum ViewRepresentation {
-    #[serde(rename_all = "kebab-case")]
-    Sql {
-        sql: String,
-        #[serde(default)]
-        dialect: String,
-    },
-}
-
-#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
-pub struct ViewRepresentations(pub Vec<ViewRepresentation>);
-
-#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
-#[serde(rename_all = "kebab-case")]
-pub struct ViewVersion {
-    #[serde(rename = "version-id")]
-    pub version_id: i32,
-    #[serde(rename = "timestamp-ms")]
-    pub timestamp_ms: i64,
-    #[serde(rename = "schema-id")]
-    pub schema_id: SchemaId,
-    #[serde(default, rename = "default-catalog")]
-    pub default_catalog: Option<String>,
-    #[serde(rename = "default-namespace")]
-    pub default_namespace: NamespaceIdent,
-    #[serde(default)]
-    pub summary: HashMap<String, String>,
-    pub representations: ViewRepresentations,
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]

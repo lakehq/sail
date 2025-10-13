@@ -123,9 +123,9 @@ impl Manifest {
 }
 
 // Helper functions used by Avro serde to parse partition values and bounds
-use crate::spec::datatypes::Type;
-use crate::spec::values::Literal;
-use crate::spec::{Datum, PrimitiveLiteral, PrimitiveType};
+use crate::spec::types::values::{Literal, PrimitiveLiteral};
+use crate::spec::types::Type;
+use crate::spec::{Datum, PrimitiveType};
 
 pub(super) fn parse_partition_values(json: Option<&serde_json::Value>) -> Vec<Option<Literal>> {
     match json {

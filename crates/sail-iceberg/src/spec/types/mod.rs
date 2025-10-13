@@ -17,6 +17,8 @@
 
 // [CREDIT]: https://raw.githubusercontent.com/apache/iceberg-rust/dc349284a4204c1a56af47fb3177ace6f9e899a0/crates/iceberg/src/spec/datatypes.rs
 
+pub mod values;
+
 use std::collections::HashMap;
 use std::fmt;
 use std::ops::Index;
@@ -25,9 +27,7 @@ use std::sync::{Arc, OnceLock};
 use serde::de::{Error, IntoDeserializer, MapAccess, Visitor};
 use serde::{de, Deserialize, Deserializer, Serialize, Serializer};
 use serde_json::Value as JsonValue;
-
-use super::values::Literal;
-use crate::spec::PrimitiveLiteral;
+pub use values::*;
 
 /// Field name for list type.
 pub const LIST_FIELD_NAME: &str = "element";
@@ -42,7 +42,7 @@ pub(crate) const MAX_DECIMAL_PRECISION: u32 = 38;
 mod _decimal {
     use once_cell::sync::Lazy;
 
-    use crate::spec::{MAX_DECIMAL_BYTES, MAX_DECIMAL_PRECISION};
+    use super::{MAX_DECIMAL_BYTES, MAX_DECIMAL_PRECISION};
 
     // Max precision of bytes, starts from 1
     pub(super) static MAX_PRECISION: Lazy<[u32; MAX_DECIMAL_BYTES as usize]> = Lazy::new(|| {
@@ -720,10 +720,8 @@ pub(super) mod _serde {
 
     use serde::{Deserialize, Serialize};
 
-    use crate::spec::datatypes::Type::Map;
-    use crate::spec::datatypes::{
-        ListType, MapType, NestedField, NestedFieldRef, PrimitiveType, StructType, Type,
-    };
+    use super::Type::Map;
+    use super::{ListType, MapType, NestedField, NestedFieldRef, PrimitiveType, StructType, Type};
 
     /// List type for serialization and deserialization
     #[derive(Serialize, Deserialize)]
@@ -787,7 +785,7 @@ pub(super) mod _serde {
                 SerdeType::Struct { r#type: _, fields } => {
                     Self::Struct(StructType::new(fields.into_owned()))
                 }
-                SerdeType::Primitive(p) => Self::Primitive(p),
+                SerdeType::Primitive(p) => Self::Primitive(p.clone()),
             }
         }
     }

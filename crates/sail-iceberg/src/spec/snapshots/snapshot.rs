@@ -23,7 +23,7 @@ use std::sync::Arc;
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 
-use super::schema::SchemaId;
+use crate::spec::schema::SchemaId;
 
 /// The ref name of the main branch of the table.
 pub const MAIN_BRANCH: &str = "main";
@@ -66,33 +66,6 @@ impl Default for Operation {
 }
 
 #[derive(Debug, Serialize, Deserialize, PartialEq, Eq, Clone)]
-/// Summarises the changes in the snapshot.
-pub struct Summary {
-    /// The type of operation in the snapshot
-    pub operation: Operation,
-    /// Other summary data.
-    #[serde(flatten)]
-    pub additional_properties: HashMap<String, String>,
-}
-
-impl Summary {
-    /// Create a new summary with the given operation.
-    pub fn new(operation: Operation) -> Self {
-        Self {
-            operation,
-            additional_properties: HashMap::new(),
-        }
-    }
-
-    /// Add additional property to the summary.
-    pub fn with_property(mut self, key: impl ToString, value: impl ToString) -> Self {
-        self.additional_properties
-            .insert(key.to_string(), value.to_string());
-        self
-    }
-}
-
-#[derive(Debug, PartialEq, Eq, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "kebab-case")]
 /// A snapshot represents the state of a table at some time and is used to access the complete set of data files in the table.
 pub struct Snapshot {
@@ -162,6 +135,33 @@ pub enum SnapshotRetention {
         #[serde(skip_serializing_if = "Option::is_none")]
         max_ref_age_ms: Option<i64>,
     },
+}
+
+#[derive(Debug, Serialize, Deserialize, PartialEq, Eq, Clone)]
+/// Summarises the changes in the snapshot.
+pub struct Summary {
+    /// The type of operation in the snapshot
+    pub operation: Operation,
+    /// Other summary data.
+    #[serde(flatten)]
+    pub additional_properties: HashMap<String, String>,
+}
+
+impl Summary {
+    /// Create a new summary with the given operation.
+    pub fn new(operation: Operation) -> Self {
+        Self {
+            operation,
+            additional_properties: HashMap::new(),
+        }
+    }
+
+    /// Add additional property to the summary.
+    pub fn with_property(mut self, key: impl ToString, value: impl ToString) -> Self {
+        self.additional_properties
+            .insert(key.to_string(), value.to_string());
+        self
+    }
 }
 
 impl Snapshot {

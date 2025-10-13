@@ -21,9 +21,9 @@ use std::sync::Arc;
 
 use serde::{Deserialize, Serialize};
 
-use super::datatypes::{NestedField, StructType};
 use super::schema::Schema;
 use super::transform::Transform;
+use super::types::{NestedField, StructType};
 
 #[allow(unused)]
 pub(crate) const UNPARTITIONED_LAST_ASSIGNED_ID: i32 = 999;
