@@ -23,7 +23,11 @@ use std::sync::Arc;
 
 use serde::{Deserialize, Serialize};
 
-use super::types::{NestedFieldRef, PrimitiveType, StructType, Type};
+use crate::spec::types::{NestedFieldRef, PrimitiveType, StructType, Type};
+
+pub mod utils;
+
+pub use utils::*;
 
 /// Type alias for schema id.
 pub type SchemaId = i32;

@@ -19,7 +19,8 @@
 
 use std::collections::{HashMap, HashSet, VecDeque};
 
-use crate::spec::{NestedFieldRef, Schema, Type};
+use super::Schema;
+use crate::spec::types::{NestedFieldRef, Type};
 
 /// Visit all fields in a schema in breadth-first order, calling the callback for each field id.
 pub fn visit_fields_bfs<F: FnMut(i32, &NestedFieldRef)>(schema: &Schema, mut f: F) {

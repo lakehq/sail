@@ -23,7 +23,7 @@ use std::fmt::Display;
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
-use crate::spec::partition_unbound::UnboundPartitionSpec;
+use crate::spec::partition::UnboundPartitionSpec;
 use crate::spec::views::ViewVersion;
 use crate::spec::{
     FormatVersion, PartitionStatisticsFile, Schema, SchemaId, Snapshot, SnapshotReference,
