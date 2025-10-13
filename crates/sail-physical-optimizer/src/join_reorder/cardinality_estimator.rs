@@ -510,13 +510,13 @@ mod tests {
         use datafusion::physical_expr::PhysicalExpr;
         use datafusion::physical_plan::empty::EmptyExec;
 
-        let mut graph = QueryGraph::new();
-        let schema = Arc::new(Schema::new(vec![Field::new("id", DataType::Int32, false)]));
+        let mut graph: QueryGraph = QueryGraph::new();
+        let schema: Arc<Schema> = Arc::new(Schema::new(vec![Field::new("id", DataType::Int32, false)]));
 
         // 3 relations: R0, R1, R2
         for (id, rows) in [(0, 1000.0), (1, 2000.0), (2, 3000.0)] {
-            let plan = Arc::new(EmptyExec::new(schema.clone()));
-            let rel = RelationNode::new(plan, id, rows, Statistics::new_unknown(&schema));
+            let plan: Arc<EmptyExec> = Arc::new(EmptyExec::new(schema.clone()));
+            let rel: RelationNode = RelationNode::new(plan, id, rows, Statistics::new_unknown(&schema));
             graph.add_relation(rel);
         }
 
@@ -550,10 +550,10 @@ mod tests {
         let _ = graph.add_edge(edge01);
 
         // Edge R1 and R2
-        let js12 = JoinSet::new_singleton(1)
+        let js12: JoinSet = JoinSet::new_singleton(1)
             .unwrap()
             .union(&JoinSet::new_singleton(2).unwrap());
-        let edge12 = JoinEdge::new(
+        let edge12: JoinEdge = JoinEdge::new(
             js12,
             equi_join(),
             JoinType::Inner,
@@ -581,11 +581,11 @@ mod tests {
         assert_eq!(estimator.get_edges_contained_in_set(s01).len(), 1);
 
         // {0,1,2} → both edges
-        let s012 = JoinSet::from_iter([0, 1, 2]).unwrap();
+        let s012: JoinSet = JoinSet::from_iter([0, 1, 2]).unwrap();
         assert_eq!(estimator.get_edges_contained_in_set(s012).len(), 2);
 
-        // {0,2} → any
-        let s02 = JoinSet::new_singleton(0)
+        // {0,2} → none
+        let s02: JoinSet = JoinSet::new_singleton(0)
             .unwrap()
             .union(&JoinSet::new_singleton(2).unwrap());
         assert_eq!(estimator.get_edges_contained_in_set(s02).len(), 0);
