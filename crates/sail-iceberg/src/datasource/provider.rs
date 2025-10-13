@@ -144,6 +144,8 @@ impl IcebergTableProvider {
     /// Load data files from manifests
     async fn load_data_files(
         &self,
+        session: &dyn Session,
+        filters: &[Expr],
         object_store: &Arc<dyn object_store::ObjectStore>,
         manifest_list: &ManifestList,
     ) -> DataFusionResult<Vec<DataFile>> {
@@ -184,17 +186,38 @@ impl IcebergTableProvider {
             // Get partition_spec_id from manifest file
             let partition_spec_id = manifest_file.partition_spec_id;
 
-            for entry_ref in manifest.entries() {
-                let entry = entry_ref.as_ref();
-                if matches!(
-                    entry.status,
-                    ManifestStatus::Added | ManifestStatus::Existing
-                ) {
-                    let mut df = entry.data_file.clone();
-                    // overwrite partition_spec_id from manifest list file
-                    df.partition_spec_id = partition_spec_id;
-                    data_files.push(df);
-                }
+            // Collect data files for this manifest
+            let manifest_data_files: Vec<DataFile> = manifest
+                .entries()
+                .iter()
+                .filter_map(|entry_ref| {
+                    let entry = entry_ref.as_ref();
+                    if matches!(
+                        entry.status,
+                        ManifestStatus::Added | ManifestStatus::Existing
+                    ) {
+                        let mut df = entry.data_file.clone();
+                        df.partition_spec_id = partition_spec_id;
+                        Some(df)
+                    } else {
+                        None
+                    }
+                })
+                .collect();
+
+            // Early prune at manifest entry level using DataFusion predicate over metrics
+            if !filters.is_empty() {
+                let (kept, _mask) = crate::datasource::pruning::prune_files(
+                    session,
+                    filters,
+                    None,
+                    self.arrow_schema.clone(),
+                    manifest_data_files,
+                    &self.schema,
+                )?;
+                data_files.extend(kept);
+            } else {
+                data_files.extend(manifest_data_files);
             }
         }
 
@@ -511,7 +534,9 @@ impl TableProvider for IcebergTableProvider {
         );
 
         log::info!("[ICEBERG] Loading data files from manifests...");
-        let mut data_files = self.load_data_files(&object_store, &manifest_list).await?;
+        let mut data_files = self
+            .load_data_files(session, _filters, &object_store, &manifest_list)
+            .await?;
         log::info!("[ICEBERG] Loaded {} data files", data_files.len());
 
         // TODO: Manifest-level pruning using partition summaries to avoid loading all files

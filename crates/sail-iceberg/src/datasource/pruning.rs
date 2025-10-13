@@ -11,9 +11,11 @@ use datafusion::logical_expr::Expr;
 use datafusion::physical_optimizer::pruning::PruningPredicate;
 
 use crate::spec::types::values::{Datum, Literal};
-use crate::spec::{DataFile, Schema};
+use crate::spec::{DataFile, Manifest, ManifestContentType, ManifestList, Schema};
 
-fn literal_to_scalar_value_local(literal: &Literal) -> datafusion::common::scalar::ScalarValue {
+pub(crate) fn literal_to_scalar_value_local(
+    literal: &Literal,
+) -> datafusion::common::scalar::ScalarValue {
     match literal {
         Literal::Primitive(p) => match p {
             crate::spec::types::values::PrimitiveLiteral::Boolean(v) => {
@@ -201,4 +203,39 @@ pub fn prune_files(
     }
 
     Ok((kept, Some(files_to_keep)))
+}
+
+/// Manifest-level pruning using partition summaries from ManifestList
+pub fn prune_manifests_by_partition_summaries<'a>(
+    manifest_list: &'a ManifestList,
+    _schema: &Schema,
+    _filters: &[Expr],
+) -> Vec<&'a crate::spec::manifest_list::ManifestFile> {
+    // TODO: Evaluate filters against `ManifestFile.partitions` FieldSummary to drop manifests early
+    manifest_list
+        .entries()
+        .iter()
+        .filter(|mf| mf.content == ManifestContentType::Data)
+        .collect()
+}
+
+/// Load a manifest and prune entries by partition+metrics
+pub fn prune_manifest_entries(
+    manifest: &Manifest,
+    _schema: &Schema,
+    _filters: &[Expr],
+) -> Vec<DataFile> {
+    // TODO: Partition-transform awareness and metrics-only prune at manifest entry granularity
+    manifest
+        .entries()
+        .iter()
+        .filter(|e| {
+            matches!(
+                e.status,
+                crate::spec::manifest::ManifestStatus::Added
+                    | crate::spec::manifest::ManifestStatus::Existing
+            )
+        })
+        .map(|e| e.data_file.clone())
+        .collect()
 }
