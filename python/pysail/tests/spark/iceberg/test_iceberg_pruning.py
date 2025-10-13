@@ -1,0 +1,168 @@
+# ruff: noqa
+import pandas as pd
+import pyarrow as pa
+from pyiceberg.catalog import load_catalog
+from pyiceberg.schema import Schema
+from pyiceberg.types import BooleanType, DoubleType, IntegerType, LongType, NestedField, StringType
+
+
+def _create_catalog(tmp_path):
+    warehouse_path = tmp_path / "warehouse"
+    warehouse_path.mkdir()
+    catalog = load_catalog(
+        "test_catalog",
+        type="sql",
+        uri=f"sqlite:///{tmp_path}/pyiceberg_catalog.db",
+        warehouse=f"file://{warehouse_path}",
+    )
+    catalog.create_namespace("default")
+    return catalog
+
+
+def _extract_files_scanned(explain_output):
+    for line in explain_output.split("\n"):
+        if "files scanned" in line.lower() or "file" in line.lower():
+            parts = line.split()
+            for i, part in enumerate(parts):
+                if part.isdigit() and i + 2 < len(parts) and parts[i + 2].lower() in ["files", "file"]:
+                    return int(part)
+    return None
+
+
+def test_equality_and_in(spark, tmp_path):
+    catalog = _create_catalog(tmp_path)
+    table = catalog.create_table(
+        identifier="default.prune_eq_in",
+        schema=Schema(
+            NestedField(field_id=1, name="id", field_type=LongType(), required=False),
+            NestedField(field_id=2, name="year", field_type=IntegerType(), required=False),
+            NestedField(field_id=3, name="month", field_type=IntegerType(), required=False),
+            NestedField(field_id=4, name="value", field_type=StringType(), required=False),
+        ),
+    )
+    try:
+        batches = [
+            pd.DataFrame({"id": [1, 2], "year": [2023, 2023], "month": [1, 1], "value": ["a", "b"]}),
+            pd.DataFrame({"id": [3, 4], "year": [2023, 2023], "month": [2, 2], "value": ["c", "d"]}),
+            pd.DataFrame({"id": [5, 6], "year": [2024, 2024], "month": [1, 1], "value": ["e", "f"]}),
+            pd.DataFrame({"id": [7, 8], "year": [2024, 2024], "month": [2, 2], "value": ["g", "h"]}),
+        ]
+        for df in batches:
+            df = df.astype({"id": "int64", "year": "int32", "month": "int32"})
+            table.append(pa.Table.from_pandas(df))
+
+        tp = table.location()
+
+        df = spark.read.format("iceberg").load(tp).filter("year = 2023")
+        assert df.count() == 4
+
+        df = spark.read.format("iceberg").load(tp).filter("year = 2023 AND month = 1")
+        assert df.count() == 2
+
+        df = spark.read.format("iceberg").load(tp).filter("month IN (2)")
+        assert df.count() == 4
+    finally:
+        catalog.drop_table("default.prune_eq_in")
+
+
+def test_comparison_and_between(spark, tmp_path):
+    catalog = _create_catalog(tmp_path)
+    table = catalog.create_table(
+        identifier="default.prune_cmp",
+        schema=Schema(
+            NestedField(field_id=1, name="id", field_type=LongType(), required=False),
+            NestedField(field_id=2, name="year", field_type=IntegerType(), required=False),
+            NestedField(field_id=3, name="month", field_type=IntegerType(), required=False),
+        ),
+    )
+    try:
+        data = []
+        for year in [2021, 2022, 2023, 2024]:
+            for month in [1, 6, 12]:
+                data.append({"id": len(data) + 1, "year": year, "month": month})
+        for i in range(0, len(data), 6):
+            batch = pd.DataFrame(data[i : i + 6]).astype({"id": "int64", "year": "int32", "month": "int32"})
+            table.append(pa.Table.from_pandas(batch))
+
+        tp = table.location()
+
+        df = spark.read.format("iceberg").load(tp).filter("year > 2022")
+        assert df.count() == 6
+
+        df = spark.read.format("iceberg").load(tp).filter("year BETWEEN 2022 AND 2023")
+        assert df.count() == 6
+
+        df = spark.read.format("iceberg").load(tp).filter("year >= 2023 AND month >= 6")
+        assert df.count() == 4
+    finally:
+        catalog.drop_table("default.prune_cmp")
+
+
+def test_null_and_boolean(spark, tmp_path):
+    catalog = _create_catalog(tmp_path)
+    table = catalog.create_table(
+        identifier="default.prune_null_bool",
+        schema=Schema(
+            NestedField(field_id=1, name="id", field_type=LongType(), required=False),
+            NestedField(field_id=2, name="region", field_type=StringType(), required=False),
+            NestedField(field_id=3, name="active", field_type=BooleanType(), required=False),
+        ),
+    )
+    try:
+        table.append(
+            pa.Table.from_pandas(
+                pd.DataFrame([{"id": 1, "region": None, "active": True}, {"id": 2, "region": None, "active": True}])
+            )
+        )
+        table.append(
+            pa.Table.from_pandas(
+                pd.DataFrame([{"id": 3, "region": "US", "active": False}, {"id": 4, "region": "EU", "active": False}])
+            )
+        )
+
+        tp = table.location()
+
+        df = spark.read.format("iceberg").load(tp).filter("region IS NULL")
+        assert df.count() == 2
+
+        df = spark.read.format("iceberg").load(tp).filter("active = true")
+        assert df.count() == 2
+    finally:
+        catalog.drop_table("default.prune_null_bool")
+
+
+def test_correctness_small(spark, tmp_path):
+    catalog = _create_catalog(tmp_path)
+    table = catalog.create_table(
+        identifier="default.prune_correct",
+        schema=Schema(
+            NestedField(field_id=1, name="id", field_type=LongType(), required=False),
+            NestedField(field_id=2, name="year", field_type=IntegerType(), required=False),
+            NestedField(field_id=3, name="month", field_type=IntegerType(), required=False),
+            NestedField(field_id=4, name="val", field_type=DoubleType(), required=False),
+        ),
+    )
+    try:
+        records = []
+        for year in [2022, 2023]:
+            for month in [1, 2, 3]:
+                for i in range(5):
+                    records.append({"id": len(records) + 1, "year": year, "month": month, "val": float(i)})
+        for i in range(0, len(records), 10):
+            batch = pd.DataFrame(records[i : i + 10]).astype(
+                {"id": "int64", "year": "int32", "month": "int32", "val": "float64"}
+            )
+            table.append(pa.Table.from_pandas(batch))
+
+        tp = table.location()
+
+        df = spark.read.format("iceberg").load(tp).filter("year = 2023")
+        assert df.count() == 15
+
+        df = spark.read.format("iceberg").load(tp).filter("year = 2022 AND month = 2")
+        assert df.count() == 5
+
+        df = spark.read.format("iceberg").load(tp).filter("(year = 2022 AND month = 1) OR (year = 2023 AND month = 3)")
+        assert df.count() == 10
+    finally:
+        catalog.drop_table("default.prune_correct")
