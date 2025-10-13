@@ -19,7 +19,7 @@ use datafusion_physical_expr::{Distribution, EquivalenceProperties};
 use deltalake::kernel::{Action, Add, Remove};
 use futures::stream::{self, StreamExt};
 
-use crate::delta_format::CommitInfo;
+use crate::physical_plan::CommitInfo;
 
 /// Physical execution node to convert Add actions (from FindFiles) into Remove actions
 #[derive(Debug)]
