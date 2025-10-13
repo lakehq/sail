@@ -102,10 +102,9 @@ moka = { version = "0.12.11", features = ["sync"] }
 bytes = "1.10.1"
 indexmap = "2.11.4"
 pin-project-lite = "0.2.16"
-http = "1.3.1"
-typed-builder = "0.22.0"
-mockito = "1.7.0"
-mockall = "0.13.1"
+regress = "0.10.4"
+progenitor = "0.11.2"
+progenitor-client = "0.11.2"
 
 ######
 # The versions of the following dependencies are managed manually.
