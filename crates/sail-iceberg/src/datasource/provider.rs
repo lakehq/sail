@@ -25,11 +25,11 @@ use url::Url;
 
 use crate::arrow_conversion::iceberg_schema_to_arrow;
 use crate::datasource::expressions::simplify_expr;
-use crate::datasource::pruning::prune_files;
+use crate::datasource::pruning::{prune_files, prune_manifests_by_partition_summaries};
 use crate::spec::types::values::{Literal, PrimitiveLiteral};
 use crate::spec::{
-    DataFile, FormatVersion, Manifest, ManifestContentType, ManifestList, ManifestStatus, Schema,
-    Snapshot,
+    DataFile, FormatVersion, Manifest, ManifestContentType, ManifestList, ManifestStatus,
+    PartitionSpec, Schema, Snapshot,
 };
 
 /// Iceberg table provider for DataFusion
@@ -41,6 +41,9 @@ pub struct IcebergTableProvider {
     schema: Schema,
     /// The current snapshot of the table
     snapshot: Snapshot,
+    /// All partition specs referenced by the table
+    #[allow(unused)]
+    partition_specs: Vec<PartitionSpec>,
     /// Arrow schema for DataFusion
     arrow_schema: Arc<ArrowSchema>,
 }
@@ -51,6 +54,7 @@ impl IcebergTableProvider {
         table_uri: impl ToString,
         schema: Schema,
         snapshot: Snapshot,
+        partition_specs: Vec<PartitionSpec>,
     ) -> DataFusionResult<Self> {
         let table_uri_str = table_uri.to_string();
         log::info!("[ICEBERG] Creating table provider for: {}", table_uri_str);
@@ -69,6 +73,7 @@ impl IcebergTableProvider {
             table_uri: table_uri_str,
             schema,
             snapshot,
+            partition_specs,
             arrow_schema,
         })
     }
@@ -151,7 +156,16 @@ impl IcebergTableProvider {
     ) -> DataFusionResult<Vec<DataFile>> {
         let mut data_files = Vec::new();
 
-        for manifest_file in manifest_list.entries() {
+        // Build partition spec map for summary pruning
+        let spec_map: HashMap<i32, PartitionSpec> = self
+            .partition_specs
+            .iter()
+            .map(|s| (s.spec_id(), s.clone()))
+            .collect();
+        let manifest_files =
+            prune_manifests_by_partition_summaries(manifest_list, &self.schema, &spec_map, filters);
+
+        for manifest_file in manifest_files {
             // TODO: Support delete manifests
             if manifest_file.content != ManifestContentType::Data {
                 continue;
@@ -310,13 +324,7 @@ impl IcebergTableProvider {
         let mut total_bytes: usize = 0;
 
         // Pre-compute field id per column index
-        let field_ids: Vec<i32> = self
-            .schema
-            .fields()
-            .iter()
-            .enumerate()
-            .map(|(_, f)| f.id)
-            .collect();
+        let field_ids: Vec<i32> = self.schema.fields().iter().map(|f| f.id).collect();
 
         // Initialize accumulators per column
         let mut min_scalars: Vec<Option<ScalarValue>> =
@@ -604,6 +612,7 @@ impl TableProvider for IcebergTableProvider {
         let parquet_source = Arc::new(parquet_source);
 
         // Build table statistics from pruned files
+        // TODO: Include partition-level stats and handle unknowns conservatively
         let table_stats = self.aggregate_statistics(&data_files);
 
         let file_scan_config =

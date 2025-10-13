@@ -8,7 +8,7 @@ use sail_common_datafusion::datasource::{SinkInfo, SourceInfo, TableFormat};
 use url::Url;
 
 use crate::datasource::provider::IcebergTableProvider;
-use crate::spec::{Schema, Snapshot, TableMetadata};
+use crate::spec::{PartitionSpec, Schema, Snapshot, TableMetadata};
 
 #[derive(Debug)]
 pub struct IcebergTableFormat;
@@ -38,13 +38,19 @@ impl TableFormat for IcebergTableFormat {
         let table_url = Self::parse_table_url(ctx, paths).await?;
         log::info!("[ICEBERG] Parsed table URL: {}", table_url);
 
-        let (iceberg_schema, snapshot) = load_table_metadata(ctx, &table_url).await?;
+        let (iceberg_schema, snapshot, partition_specs) =
+            load_table_metadata(ctx, &table_url).await?;
         log::info!(
             "[ICEBERG] Loaded metadata, snapshot_id: {}",
             snapshot.snapshot_id()
         );
 
-        let provider = IcebergTableProvider::new(table_url.to_string(), iceberg_schema, snapshot)?;
+        let provider = IcebergTableProvider::new(
+            table_url.to_string(),
+            iceberg_schema,
+            snapshot,
+            partition_specs,
+        )?;
         Ok(Arc::new(provider))
     }
 
@@ -85,7 +91,10 @@ impl IcebergTableFormat {
 }
 
 /// Load Iceberg table metadata from the table location
-async fn load_table_metadata(ctx: &dyn Session, table_url: &Url) -> Result<(Schema, Snapshot)> {
+async fn load_table_metadata(
+    ctx: &dyn Session,
+    table_url: &Url,
+) -> Result<(Schema, Snapshot, Vec<PartitionSpec>)> {
     log::debug!("[ICEBERG] Loading table metadata from: {}", table_url);
     let object_store = ctx
         .runtime_env()
@@ -131,7 +140,8 @@ async fn load_table_metadata(ctx: &dyn Session, table_url: &Url) -> Result<(Sche
         })?
         .clone();
 
-    Ok((schema, snapshot))
+    let partition_specs = table_metadata.partition_specs.clone();
+    Ok((schema, snapshot, partition_specs))
 }
 
 /// Find the latest metadata file in the table location
