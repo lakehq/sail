@@ -9,19 +9,23 @@ use datafusion::catalog::memory::DataSourceExec;
 use datafusion::catalog::Session;
 use datafusion::common::scalar::ScalarValue;
 use datafusion::common::stats::{ColumnStatistics, Precision, Statistics};
-use datafusion::common::Result as DataFusionResult;
+use datafusion::common::{Result as DataFusionResult, ToDFSchema};
 use datafusion::config::TableParquetOptions;
 use datafusion::datasource::listing::PartitionedFile;
 use datafusion::datasource::physical_plan::{FileGroup, FileScanConfigBuilder, ParquetSource};
 use datafusion::datasource::{TableProvider, TableType};
 use datafusion::execution::object_store::ObjectStoreUrl;
+use datafusion::logical_expr::utils::conjunction;
 use datafusion::logical_expr::{Expr, LogicalPlan};
+use datafusion::physical_expr::PhysicalExpr;
 use datafusion::physical_plan::ExecutionPlan;
 use object_store::path::Path as ObjectPath;
 use object_store::ObjectMeta;
 use url::Url;
 
 use crate::arrow_conversion::iceberg_schema_to_arrow;
+use crate::datasource::expressions::simplify_expr;
+use crate::datasource::pruning::prune_files;
 use crate::spec::types::values::{Literal, PrimitiveLiteral};
 use crate::spec::{
     DataFile, FormatVersion, Manifest, ManifestContentType, ManifestList, ManifestStatus, Schema,
@@ -419,8 +423,31 @@ impl TableProvider for IcebergTableProvider {
         );
 
         log::info!("[ICEBERG] Loading data files from manifests...");
-        let data_files = self.load_data_files(&object_store, &manifest_list).await?;
+        let mut data_files = self.load_data_files(&object_store, &manifest_list).await?;
         log::info!("[ICEBERG] Loaded {} data files", data_files.len());
+
+        // TODO: Manifest-level pruning using partition summaries to avoid loading all files
+        // TODO: Partition-transform aware filtering before file-level metrics pruning
+
+        // Build filter conjunction and run DataFusion-based pruning on Iceberg metrics
+        let filter_expr = conjunction(_filters.iter().cloned());
+        let mut _pruning_mask: Option<Vec<bool>> = None;
+        if filter_expr.is_some() || limit.is_some() {
+            let (kept, mask) = prune_files(
+                session,
+                _filters,
+                limit,
+                self.arrow_schema.clone(),
+                data_files,
+                &self.schema,
+            )?;
+            _pruning_mask = mask;
+            data_files = kept;
+            log::info!(
+                "[ICEBERG] Pruned data files, remaining: {}",
+                data_files.len()
+            );
+        }
 
         log::info!("[ICEBERG] Creating partitioned files...");
         let partitioned_files = self.create_partitioned_files(data_files)?;
@@ -448,7 +475,20 @@ impl TableProvider for IcebergTableProvider {
             ..Default::default()
         };
 
-        let parquet_source = Arc::new(ParquetSource::new(parquet_options));
+        let mut parquet_source = ParquetSource::new(parquet_options);
+        // Prepare pushdown filter for Parquet
+        let pushdown_filter: Option<Arc<dyn PhysicalExpr>> = if !_filters.is_empty() {
+            let df_schema = self.arrow_schema.clone().to_dfschema()?;
+            let pushdown_expr = conjunction(_filters.iter().cloned());
+            pushdown_expr.map(|expr| simplify_expr(session, &df_schema, expr))
+        } else {
+            None
+        };
+        if let Some(pred) = pushdown_filter {
+            // TODO: Consider expression adapter for Parquet pushdown
+            parquet_source = parquet_source.with_predicate(pred);
+        }
+        let parquet_source = Arc::new(parquet_source);
 
         let file_scan_config =
             FileScanConfigBuilder::new(object_store_url, file_schema, parquet_source)
