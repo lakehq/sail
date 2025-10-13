@@ -277,6 +277,94 @@ impl IcebergTableProvider {
         file_groups.into_values().map(FileGroup::from).collect()
     }
 
+    /// Aggregate table-level statistics from a list of Iceberg data files
+    fn aggregate_statistics(&self, data_files: &[DataFile]) -> Statistics {
+        if data_files.is_empty() {
+            return Statistics::new_unknown(&self.arrow_schema);
+        }
+
+        let mut total_rows: usize = 0;
+        let mut total_bytes: usize = 0;
+
+        // Pre-compute field id per column index
+        let field_ids: Vec<i32> = self
+            .schema
+            .fields()
+            .iter()
+            .enumerate()
+            .map(|(_, f)| f.id)
+            .collect();
+
+        // Initialize accumulators per column
+        let mut min_scalars: Vec<Option<ScalarValue>> =
+            vec![None; self.arrow_schema.fields().len()];
+        let mut max_scalars: Vec<Option<ScalarValue>> =
+            vec![None; self.arrow_schema.fields().len()];
+        let mut null_counts: Vec<usize> = vec![0; self.arrow_schema.fields().len()];
+
+        for df in data_files {
+            total_rows = total_rows.saturating_add(df.record_count() as usize);
+            total_bytes = total_bytes.saturating_add(df.file_size_in_bytes() as usize);
+
+            for (col_idx, field_id) in field_ids.iter().enumerate() {
+                // null counts
+                if let Some(c) = df.null_value_counts().get(field_id) {
+                    null_counts[col_idx] = null_counts[col_idx].saturating_add(*c as usize);
+                }
+
+                // min
+                if let Some(d) = df.lower_bounds().get(field_id) {
+                    let v = Literal::Primitive(d.literal.clone());
+                    let sv = self.literal_to_scalar_value(&v);
+                    min_scalars[col_idx] = match (&min_scalars[col_idx], &sv) {
+                        (None, s) => Some(s.clone()),
+                        (Some(existing), s) => Some(if s < existing {
+                            s.clone()
+                        } else {
+                            existing.clone()
+                        }),
+                    };
+                }
+
+                // max
+                if let Some(d) = df.upper_bounds().get(field_id) {
+                    let v = Literal::Primitive(d.literal.clone());
+                    let sv = self.literal_to_scalar_value(&v);
+                    max_scalars[col_idx] = match (&max_scalars[col_idx], &sv) {
+                        (None, s) => Some(s.clone()),
+                        (Some(existing), s) => Some(if s > existing {
+                            s.clone()
+                        } else {
+                            existing.clone()
+                        }),
+                    };
+                }
+            }
+        }
+
+        let column_statistics = (0..self.arrow_schema.fields().len())
+            .map(|i| ColumnStatistics {
+                null_count: Precision::Exact(null_counts[i]),
+                max_value: max_scalars[i]
+                    .clone()
+                    .map(Precision::Exact)
+                    .unwrap_or(Precision::Absent),
+                min_value: min_scalars[i]
+                    .clone()
+                    .map(Precision::Exact)
+                    .unwrap_or(Precision::Absent),
+                distinct_count: Precision::Absent,
+                sum_value: Precision::Absent,
+            })
+            .collect();
+
+        Statistics {
+            num_rows: Precision::Exact(total_rows),
+            total_byte_size: Precision::Exact(total_bytes),
+            column_statistics,
+        }
+    }
+
     /// Convert Iceberg Literal to DataFusion ScalarValue
     fn literal_to_scalar_value(&self, literal: &Literal) -> ScalarValue {
         match literal {
@@ -450,7 +538,7 @@ impl TableProvider for IcebergTableProvider {
         }
 
         log::info!("[ICEBERG] Creating partitioned files...");
-        let partitioned_files = self.create_partitioned_files(data_files)?;
+        let partitioned_files = self.create_partitioned_files(data_files.clone())?;
         log::info!(
             "[ICEBERG] Created {} partitioned files",
             partitioned_files.len()
@@ -490,6 +578,9 @@ impl TableProvider for IcebergTableProvider {
         }
         let parquet_source = Arc::new(parquet_source);
 
+        // Build table statistics from pruned files
+        let table_stats = self.aggregate_statistics(&data_files);
+
         let file_scan_config =
             FileScanConfigBuilder::new(object_store_url, file_schema, parquet_source)
                 .with_file_groups(if file_groups.is_empty() {
@@ -497,7 +588,7 @@ impl TableProvider for IcebergTableProvider {
                 } else {
                     file_groups
                 })
-                .with_statistics(Statistics::new_unknown(&self.arrow_schema))
+                .with_statistics(table_stats)
                 .with_projection(projection.cloned())
                 .with_limit(limit)
                 .build();
