@@ -1,5 +1,5 @@
 use std::any::Any;
-use std::collections::{HashMap, HashSet};
+use std::collections::HashMap;
 use std::fmt;
 use std::sync::Arc;
 
@@ -7,10 +7,11 @@ use async_trait::async_trait;
 use datafusion::arrow::array::{Array, StringArray};
 use datafusion::arrow::datatypes::{DataType, Field, Schema, SchemaRef};
 use datafusion::arrow::record_batch::RecordBatch;
+use datafusion::catalog::Session;
 use datafusion::datasource::memory::MemorySourceConfig;
 use datafusion::datasource::source::DataSourceExec;
 use datafusion::datasource::TableProvider;
-use datafusion::execution::context::{SessionState, TaskContext};
+use datafusion::execution::context::TaskContext;
 use datafusion::execution::SessionStateBuilder;
 use datafusion::physical_expr_adapter::PhysicalExprAdapterFactory;
 use datafusion::physical_plan::common::collect;
@@ -29,10 +30,10 @@ use deltalake::{DeltaResult, DeltaTableError};
 use futures::{stream, TryStreamExt};
 use url::Url;
 
-use crate::delta_datafusion::schema_rewriter::DeltaPhysicalExprAdapterFactory;
-use crate::delta_datafusion::{
+use crate::datasource::schema_rewriter::DeltaPhysicalExprAdapterFactory;
+use crate::datasource::{
     collect_physical_columns, datafusion_to_delta_error, join_batches_with_add_actions,
-    DataFusionMixins, DeltaScanConfigBuilder, DeltaTableProvider, PATH_COLUMN,
+    DataFusionMixins, DeltaScanConfigBuilder, DeltaTableProvider, PredicateProperties, PATH_COLUMN,
 };
 use crate::table::{open_table_with_object_store, DeltaTableState};
 
@@ -128,6 +129,7 @@ impl DeltaFindFilesExec {
 
         let session_state = SessionStateBuilder::new()
             .with_runtime_env(context.runtime_env().clone())
+            .with_config(context.session_config().clone())
             .build();
         let adapter_factory = Arc::new(DeltaPhysicalExprAdapterFactory {});
 
@@ -247,46 +249,11 @@ pub struct FindFiles {
     pub partition_scan: bool,
 }
 
-pub struct FindFilesPhysicalExprProperties {
-    pub partition_columns: Vec<String>,
-    pub partition_only: bool,
-    pub schema: SchemaRef,
-    pub result: DeltaResult<()>,
-    pub referenced_columns: HashSet<String>,
-}
-
-impl FindFilesPhysicalExprProperties {
-    pub fn new(partition_columns: Vec<String>, schema: SchemaRef) -> Self {
-        Self {
-            partition_columns,
-            partition_only: true,
-            schema,
-            result: Ok(()),
-            referenced_columns: HashSet::new(),
-        }
-    }
-
-    pub fn analyze_physical_expr(&mut self, expr: &Arc<dyn PhysicalExpr>) -> DeltaResult<()> {
-        // Extract all column references from the physical expression
-        self.referenced_columns = collect_physical_columns(expr);
-
-        self.partition_only = self
-            .referenced_columns
-            .iter()
-            .all(|col| self.partition_columns.contains(col));
-
-        match &self.result {
-            Ok(()) => Ok(()),
-            Err(e) => Err(DeltaTableError::Generic(e.to_string())),
-        }
-    }
-}
-
 /// Scan memory table (for partition-only predicates)
 pub async fn scan_memory_table_physical(
     snapshot: &DeltaTableState,
     log_store: &dyn LogStore,
-    state: &SessionState,
+    state: &dyn Session,
     physical_predicate: Arc<dyn PhysicalExpr>,
 ) -> DeltaResult<Vec<Add>> {
     let actions = snapshot.file_actions(log_store).await?;
@@ -363,7 +330,7 @@ pub async fn scan_memory_table_physical(
 pub async fn find_files_scan_physical(
     snapshot: &DeltaTableState,
     log_store: LogStoreRef,
-    state: &SessionState,
+    state: &dyn Session,
     physical_predicate: Arc<dyn PhysicalExpr>,
 ) -> DeltaResult<Vec<Add>> {
     let candidate_map: HashMap<String, Add> = snapshot
@@ -377,7 +344,7 @@ pub async fn find_files_scan_physical(
         .build(snapshot)?;
 
     let logical_schema =
-        crate::delta_datafusion::df_logical_schema(snapshot, &scan_config.file_column_name, None)?;
+        crate::datasource::df_logical_schema(snapshot, &scan_config.file_column_name, None)?;
 
     let mut used_columns = Vec::new();
 
@@ -434,7 +401,7 @@ pub async fn find_files_scan_physical(
 pub async fn find_files_physical(
     snapshot: &DeltaTableState,
     log_store: LogStoreRef,
-    state: &SessionState,
+    state: &dyn Session,
     predicate: Option<Arc<dyn PhysicalExpr>>,
     adapter_factory: Arc<dyn PhysicalExprAdapterFactory>,
 ) -> DeltaResult<FindFiles> {
@@ -445,11 +412,9 @@ pub async fn find_files_physical(
             let logical_schema = snapshot.arrow_schema()?;
 
             // Check if the predicate only references partition columns
-            let mut expr_properties = FindFilesPhysicalExprProperties::new(
-                current_metadata.partition_columns().clone(),
-                snapshot.arrow_schema()?,
-            );
-            expr_properties.analyze_physical_expr(&physical_predicate)?;
+            let mut expr_properties =
+                PredicateProperties::new(current_metadata.partition_columns().clone());
+            expr_properties.analyze_predicate(&physical_predicate)?;
 
             if expr_properties.partition_only {
                 // For partition-only predicates, create a schema with just path and partition columns

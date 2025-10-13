@@ -6,10 +6,8 @@ use async_trait::async_trait;
 use datafusion::arrow::array::Array;
 use datafusion::arrow::datatypes::SchemaRef;
 use datafusion::arrow::record_batch::RecordBatch;
-use datafusion::datasource::provider_as_source;
 use datafusion::execution::context::TaskContext;
 use datafusion::execution::SessionStateBuilder;
-use datafusion::logical_expr::LogicalPlanBuilder;
 use datafusion::physical_plan::execution_plan::{Boundedness, EmissionType};
 use datafusion::physical_plan::stream::RecordBatchStreamAdapter;
 use datafusion::physical_plan::{
@@ -22,7 +20,8 @@ use deltalake::logstore::StorageConfig;
 use futures::stream::{self, StreamExt, TryStreamExt};
 use url::Url;
 
-use crate::delta_datafusion::{DeltaScanConfigBuilder, DeltaTableProvider};
+use crate::datasource::scan::FileScanParams;
+use crate::datasource::{build_file_scan_config, DeltaScanConfigBuilder};
 use crate::table::open_table_with_object_store;
 
 /// An ExecutionPlan that scans Delta files based on a stream of Add actions from its input.
@@ -96,23 +95,40 @@ impl DeltaScanByAddsExec {
             .build(&snapshot)
             .map_err(|e| DataFusionError::External(Box::new(e)))?;
 
-        let table_provider = Arc::new(
-            DeltaTableProvider::try_new(snapshot, table.log_store(), scan_config)
-                .map_err(|e| DataFusionError::External(Box::new(e)))?
-                .with_files(candidate_adds),
-        );
-
         let session_state = SessionStateBuilder::new()
             .with_runtime_env(context.runtime_env().clone())
             .build();
 
-        let logical_plan =
-            LogicalPlanBuilder::scan("scan_by_adds", provider_as_source(table_provider), None)?
-                .build()?;
+        // Build file schema (non-partition columns)
+        let table_partition_cols = snapshot.metadata().partition_columns();
+        let file_schema = Arc::new(datafusion::arrow::datatypes::Schema::new(
+            self.table_schema
+                .fields()
+                .iter()
+                .filter(|f| !table_partition_cols.contains(f.name()))
+                .cloned()
+                .collect::<Vec<_>>(),
+        ));
 
-        let scan_plan = session_state.create_physical_plan(&logical_plan).await?;
+        let file_scan_config = build_file_scan_config(
+            &snapshot,
+            &table.log_store(),
+            &candidate_adds,
+            &scan_config,
+            FileScanParams {
+                pruning_mask: None,
+                projection: None,
+                limit: None,
+                pushdown_filter: None,
+            },
+            &session_state,
+            file_schema,
+        )
+        .map_err(|e| DataFusionError::External(Box::new(e)))?;
 
-        scan_plan.execute(0, context)
+        let scan_exec =
+            datafusion::catalog::memory::DataSourceExec::from_data_source(file_scan_config);
+        scan_exec.execute(0, context)
     }
 }
 
