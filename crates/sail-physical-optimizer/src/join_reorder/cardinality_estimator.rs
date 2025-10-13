@@ -511,12 +511,14 @@ mod tests {
         use datafusion::physical_plan::empty::EmptyExec;
 
         let mut graph: QueryGraph = QueryGraph::new();
-        let schema: Arc<Schema> = Arc::new(Schema::new(vec![Field::new("id", DataType::Int32, false)]));
+        let schema: Arc<Schema> =
+            Arc::new(Schema::new(vec![Field::new("id", DataType::Int32, false)]));
 
         // 3 relations: R0, R1, R2
         for (id, rows) in [(0, 1000.0), (1, 2000.0), (2, 3000.0)] {
             let plan: Arc<EmptyExec> = Arc::new(EmptyExec::new(schema.clone()));
-            let rel: RelationNode = RelationNode::new(plan, id, rows, Statistics::new_unknown(&schema));
+            let rel: RelationNode =
+                RelationNode::new(plan, id, rows, Statistics::new_unknown(&schema));
             graph.add_relation(rel);
         }
 
