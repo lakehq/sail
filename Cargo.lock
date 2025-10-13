@@ -5926,11 +5926,14 @@ version = "0.3.7"
 dependencies = [
  "chumsky",
  "either",
+ "itertools 0.14.0",
  "paste",
  "phf 0.13.1",
  "prettyplease",
  "quote",
+ "sail-common",
  "sail-sql-macro",
+ "serde",
  "syn",
 ]
 
