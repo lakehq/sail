@@ -30,10 +30,21 @@ pub fn get_pushdown_filters(
     filter: &[&Expr],
     _partition_cols: &[String],
 ) -> Vec<TableProviderFilterPushDown> {
-    // Conservatively mark filters as Inexact for now; refine with partition-aware analysis later.
-    // TODO: Partition-aware
     filter
         .iter()
-        .map(|_| TableProviderFilterPushDown::Inexact)
+        .map(|expr| match expr {
+            Expr::BinaryExpr(be) => match be.op {
+                datafusion::logical_expr::Operator::Eq
+                | datafusion::logical_expr::Operator::Lt
+                | datafusion::logical_expr::Operator::LtEq
+                | datafusion::logical_expr::Operator::Gt
+                | datafusion::logical_expr::Operator::GtEq
+                | datafusion::logical_expr::Operator::And
+                | datafusion::logical_expr::Operator::Or => TableProviderFilterPushDown::Inexact,
+                _ => TableProviderFilterPushDown::Unsupported,
+            },
+            Expr::InList(_) => TableProviderFilterPushDown::Inexact,
+            _ => TableProviderFilterPushDown::Unsupported,
+        })
         .collect()
 }

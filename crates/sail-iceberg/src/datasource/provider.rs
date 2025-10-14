@@ -13,6 +13,7 @@ use datafusion::common::{Result as DataFusionResult, ToDFSchema};
 use datafusion::config::TableParquetOptions;
 use datafusion::datasource::listing::PartitionedFile;
 use datafusion::datasource::physical_plan::{FileGroup, FileScanConfigBuilder, ParquetSource};
+use datafusion::physical_expr_adapter::PhysicalExprAdapterFactory;
 use datafusion::datasource::{TableProvider, TableType};
 use datafusion::execution::object_store::ObjectStoreUrl;
 use datafusion::logical_expr::utils::conjunction;
@@ -25,6 +26,7 @@ use url::Url;
 
 use crate::arrow_conversion::iceberg_schema_to_arrow;
 use crate::datasource::expressions::simplify_expr;
+use crate::datasource::expr_adapter::IcebergPhysicalExprAdapterFactory;
 use crate::datasource::pruning::{prune_files, prune_manifests_by_partition_summaries};
 use crate::spec::types::values::{Literal, PrimitiveLiteral};
 use crate::spec::{
@@ -610,6 +612,7 @@ impl TableProvider for IcebergTableProvider {
                 .with_statistics(table_stats)
                 .with_projection(projection.cloned())
                 .with_limit(limit)
+                .with_expr_adapter(Some(Arc::new(IcebergPhysicalExprAdapterFactory {}) as Arc<dyn PhysicalExprAdapterFactory>))
                 .build();
 
         Ok(DataSourceExec::from_data_source(file_scan_config))

@@ -157,8 +157,29 @@ impl PruningStatistics for IcebergPruningStats {
         _column: &Column,
         _value: &std::collections::HashSet<datafusion::common::scalar::ScalarValue>,
     ) -> Option<BooleanArray> {
-        // TODO: Partition-aware contained pruning
-        None
+        // Basic contained() for equality/IN pruning using lower/upper bounds equality for strings and integers
+        // When both bounds are equal to the value, we can mark "contained" true; otherwise, unknown
+        let field_id = self.field_id_for(_column)?;
+        let mut result = Vec::with_capacity(self.files.len());
+        for f in &self.files {
+            let lower = f.lower_bounds().get(&field_id);
+            let upper = f.upper_bounds().get(&field_id);
+            if let (Some(lb), Some(ub)) = (lower, upper) {
+                let lb_sv = self.datum_to_scalar(lb);
+                let ub_sv = self.datum_to_scalar(ub);
+                let mut any_match = false;
+                for v in _value.iter() {
+                    if &lb_sv == v && &ub_sv == v {
+                        any_match = true;
+                        break;
+                    }
+                }
+                result.push(any_match);
+            } else {
+                result.push(false);
+            }
+        }
+        Some(BooleanArray::from(result))
     }
 }
 
