@@ -289,8 +289,16 @@ pub fn prune_manifests_by_partition_summaries<'a>(
                                 if lt_prim(lit, lb) || gt_prim(lit, ub) {
                                     return false;
                                 }
-                            } else {
-                                // TODO: If only one bound is present, use it for pruning when safe
+                            } else if let Some(lb) = lower.as_ref() {
+                                // if we have only a lower bound, drop manifest if lit < lb
+                                if lt_prim(lit, lb) {
+                                    return false;
+                                }
+                            } else if let Some(ub) = upper.as_ref() {
+                                // if we have only an upper bound, drop manifest if lit > ub
+                                if gt_prim(lit, ub) {
+                                    return false;
+                                }
                             }
                         }
                     }
@@ -322,6 +330,18 @@ pub fn prune_manifests_by_partition_summaries<'a>(
                                         break;
                                     }
                                 }
+                                if !any_in {
+                                    return false;
+                                }
+                            } else if let Some(lb) = lower.as_ref() {
+                                // with only lower bound, require any value >= lb
+                                let any_in = lits.iter().any(|v| !lt_prim(v, lb));
+                                if !any_in {
+                                    return false;
+                                }
+                            } else if let Some(ub) = upper.as_ref() {
+                                // with only upper bound, require any value <= ub
+                                let any_in = lits.iter().any(|v| !gt_prim(v, ub));
                                 if !any_in {
                                     return false;
                                 }

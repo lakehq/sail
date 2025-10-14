@@ -50,16 +50,69 @@ pub enum Transform {
 }
 
 impl Transform {
-    // TODO: Full value transformation support
-    pub fn to_human_string(self, _field_type: &Type, value: Option<&Literal>) -> String {
-        if let Some(_value) = value {
-            match self {
-                Self::Identity => "identity_value".to_string(),
-                Self::Void => "null".to_string(),
-                _ => "transformed_value".to_string(),
+    pub fn to_human_string(self, field_type: &Type, value: Option<&Literal>) -> String {
+        fn bytes_to_hex(bytes: &[u8]) -> String {
+            let mut s = String::with_capacity(bytes.len() * 2);
+            for b in bytes {
+                use std::fmt::Write as _;
+                let _ = write!(&mut s, "{:02x}", b);
             }
-        } else {
-            "null".to_string()
+            s
+        }
+
+        fn lit_str(l: &Literal) -> String {
+            match l {
+                Literal::Primitive(p) => match p {
+                    super::types::values::PrimitiveLiteral::Boolean(v) => v.to_string(),
+                    super::types::values::PrimitiveLiteral::Int(v) => v.to_string(),
+                    super::types::values::PrimitiveLiteral::Long(v) => v.to_string(),
+                    super::types::values::PrimitiveLiteral::Float(v) => v.0.to_string(),
+                    super::types::values::PrimitiveLiteral::Double(v) => v.0.to_string(),
+                    super::types::values::PrimitiveLiteral::Int128(v) => v.to_string(),
+                    super::types::values::PrimitiveLiteral::String(v) => v.clone(),
+                    super::types::values::PrimitiveLiteral::UInt128(v) => v.to_string(),
+                    super::types::values::PrimitiveLiteral::Binary(b) => {
+                        format!("0x{}", bytes_to_hex(b))
+                    }
+                },
+                Literal::Struct(_) | Literal::List(_) | Literal::Map(_) => format!("{:?}", l),
+            }
+        }
+
+        match value {
+            None => "null".to_string(),
+            Some(val) => match self {
+                Transform::Identity => lit_str(val),
+                Transform::Void => "null".to_string(),
+                Transform::Truncate(w) => match (field_type, val) {
+                    (
+                        Type::Primitive(PrimitiveType::String),
+                        Literal::Primitive(super::types::values::PrimitiveLiteral::String(s)),
+                    ) => s.chars().take(w as usize).collect::<String>(),
+                    (
+                        Type::Primitive(PrimitiveType::Int),
+                        Literal::Primitive(super::types::values::PrimitiveLiteral::Int(v)),
+                    ) => {
+                        let w = w as i32;
+                        let rem = v.rem_euclid(w);
+                        (v - rem).to_string()
+                    }
+                    (
+                        Type::Primitive(PrimitiveType::Long),
+                        Literal::Primitive(super::types::values::PrimitiveLiteral::Long(v)),
+                    ) => {
+                        let w = w as i64;
+                        let rem = v.rem_euclid(w);
+                        (v - rem).to_string()
+                    }
+                    _ => lit_str(val),
+                },
+                Transform::Bucket(n) => format!("bucket[{n}]({})", lit_str(val)),
+                Transform::Year | Transform::Month | Transform::Day | Transform::Hour => {
+                    lit_str(val)
+                }
+                Transform::Unknown => lit_str(val),
+            },
         }
     }
 

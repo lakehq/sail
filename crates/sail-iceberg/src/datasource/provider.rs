@@ -545,9 +545,6 @@ impl TableProvider for IcebergTableProvider {
             .await?;
         log::trace!("Loaded {} data files", data_files.len());
 
-        // TODO: Manifest-level pruning using partition summaries to avoid loading all files
-        // TODO: Partition-transform aware filtering before file-level metrics pruning
-
         // Build filter conjunction and run DataFusion-based pruning on Iceberg metrics
         let filter_expr = conjunction(pruning_filters.iter().cloned());
         let mut _pruning_mask: Option<Vec<bool>> = None;
@@ -606,7 +603,6 @@ impl TableProvider for IcebergTableProvider {
         let parquet_source = Arc::new(parquet_source);
 
         // Build table statistics from pruned files
-        // TODO: Include partition-level stats and handle unknowns conservatively
         let table_stats = self.aggregate_statistics(&data_files);
 
         let file_scan_config =
