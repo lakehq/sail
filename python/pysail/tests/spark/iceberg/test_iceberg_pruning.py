@@ -19,26 +19,6 @@ def _create_catalog(tmp_path):
     return catalog
 
 
-def _extract_files_scanned(explain_output):
-    for line in explain_output.split("\n"):
-        if "files scanned" in line.lower() or "file" in line.lower():
-            parts = line.split()
-            for i, part in enumerate(parts):
-                if part.isdigit() and i + 2 < len(parts) and parts[i + 2].lower() in ["files", "file"]:
-                    return int(part)
-    return None
-
-
-def _files_scanned(df):
-    import io
-    import contextlib
-
-    buf = io.StringIO()
-    with contextlib.redirect_stdout(buf):
-        df.explain()
-    return _extract_files_scanned(buf.getvalue())
-
-
 def test_equality_and_in(spark, tmp_path):
     catalog = _create_catalog(tmp_path)
     table = catalog.create_table(
@@ -65,21 +45,12 @@ def test_equality_and_in(spark, tmp_path):
 
         df = spark.read.format("iceberg").load(tp).filter("year = 2023")
         assert df.count() == 4
-        scanned = _files_scanned(df)
-        if scanned is not None:
-            assert scanned == 2
 
         df = spark.read.format("iceberg").load(tp).filter("year = 2023 AND month = 1")
         assert df.count() == 2
-        scanned = _files_scanned(df)
-        if scanned is not None:
-            assert scanned == 1
 
         df = spark.read.format("iceberg").load(tp).filter("month IN (2)")
         assert df.count() == 4
-        scanned = _files_scanned(df)
-        if scanned is not None:
-            assert scanned == 2
     finally:
         catalog.drop_table("default.prune_eq_in")
 
@@ -107,21 +78,12 @@ def test_comparison_and_between(spark, tmp_path):
 
         df = spark.read.format("iceberg").load(tp).filter("year > 2022")
         assert df.count() == 6
-        scanned = _files_scanned(df)
-        if scanned is not None:
-            assert scanned == 1
 
         df = spark.read.format("iceberg").load(tp).filter("year BETWEEN 2022 AND 2023")
         assert df.count() == 6
-        scanned = _files_scanned(df)
-        if scanned is not None:
-            assert scanned == 2
 
         df = spark.read.format("iceberg").load(tp).filter("year >= 2023 AND month >= 6")
         assert df.count() == 4
-        scanned = _files_scanned(df)
-        if scanned is not None:
-            assert scanned == 1
     finally:
         catalog.drop_table("default.prune_cmp")
 

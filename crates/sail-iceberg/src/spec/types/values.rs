@@ -67,10 +67,10 @@ impl Literal {
         value: JsonValue,
         data_type: &crate::spec::types::Type,
     ) -> Result<Option<Self>, String> {
-        use crate::spec::types::PrimitiveType;
-        use crate::spec::types::Type;
         use chrono::{NaiveDate, NaiveTime, Timelike};
         use serde_json::Number;
+
+        use crate::spec::types::{PrimitiveType, Type};
 
         fn number_to_i32(n: &Number) -> Result<i32, String> {
             n.as_i64()
@@ -305,12 +305,13 @@ impl Literal {
     }
 
     pub fn try_into_json(&self, data_type: &crate::spec::types::Type) -> Result<JsonValue, String> {
-        use crate::spec::types::PrimitiveType;
-        use crate::spec::types::Type;
         use chrono::{NaiveDate, NaiveTime};
         use serde_json::Number;
 
+        use crate::spec::types::{PrimitiveType, Type};
+
         fn days_to_date_str(days: i32) -> String {
+            #[allow(clippy::unwrap_used)]
             let epoch = NaiveDate::from_ymd_opt(1970, 1, 1).unwrap();
             let d = epoch + chrono::Days::new(days as u64);
             d.to_string()
@@ -318,6 +319,7 @@ impl Literal {
         fn micros_to_time_str(us: i64) -> String {
             let secs = us.div_euclid(1_000_000);
             let rem = (us.rem_euclid(1_000_000)) as u32;
+            #[allow(clippy::unwrap_used)]
             let t = NaiveTime::from_num_seconds_from_midnight_opt(secs as u32, rem * 1000)
                 .unwrap_or(NaiveTime::from_hms_opt(0, 0, 0).unwrap());
             t.format("%H:%M:%S%.f").to_string()
@@ -325,6 +327,7 @@ impl Literal {
         fn micros_to_datetime_str(us: i64) -> String {
             let secs = us.div_euclid(1_000_000);
             let rem = (us.rem_euclid(1_000_000)) as u32;
+            #[allow(clippy::unwrap_used)]
             let base = NaiveDate::from_ymd_opt(1970, 1, 1)
                 .unwrap()
                 .and_hms_nano_opt(0, 0, 0, 0)

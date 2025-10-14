@@ -30,11 +30,18 @@ use crate::arrow_conversion::iceberg_schema_to_arrow;
 use crate::datasource::expr_adapter::IcebergPhysicalExprAdapterFactory;
 use crate::datasource::expressions::simplify_expr;
 use crate::datasource::pruning::{prune_files, prune_manifests_by_partition_summaries};
+use crate::spec::manifest::DataContentType;
 use crate::spec::types::values::{Literal, PrimitiveLiteral};
 use crate::spec::{
     DataFile, FormatVersion, Manifest, ManifestContentType, ManifestList, ManifestStatus,
     PartitionSpec, Schema, Snapshot,
 };
+
+#[derive(Debug, Clone)]
+struct IcebergDeleteAttachment {
+    eq_delete_count: usize,
+    pos_delete_count: usize,
+}
 
 /// Iceberg table provider for DataFusion
 #[derive(Debug)]
@@ -236,10 +243,75 @@ impl IcebergTableProvider {
         Ok(data_files)
     }
 
+    fn partition_key_for(&self, partition: &[Option<Literal>]) -> String {
+        serde_json::to_string(partition).unwrap_or_default()
+    }
+
+    async fn load_delete_index(
+        &self,
+        object_store: &Arc<dyn object_store::ObjectStore>,
+        manifest_list: &ManifestList,
+    ) -> DataFusionResult<std::collections::HashMap<String, IcebergDeleteAttachment>> {
+        let mut index: std::collections::HashMap<String, IcebergDeleteAttachment> =
+            std::collections::HashMap::new();
+
+        for manifest_file in manifest_list
+            .entries()
+            .iter()
+            .filter(|mf| mf.content == ManifestContentType::Deletes)
+        {
+            let manifest_path_str = manifest_file.manifest_path.as_str();
+            let manifest_path = if let Ok(url) = Url::parse(manifest_path_str) {
+                ObjectPath::from(url.path())
+            } else {
+                ObjectPath::from(manifest_path_str)
+            };
+
+            let manifest_data = object_store
+                .get(&manifest_path)
+                .await
+                .map_err(|e| datafusion::common::DataFusionError::External(Box::new(e)))?
+                .bytes()
+                .await
+                .map_err(|e| datafusion::common::DataFusionError::External(Box::new(e)))?;
+
+            let manifest = Manifest::parse_avro(&manifest_data)
+                .map_err(datafusion::common::DataFusionError::Execution)?;
+
+            for entry_ref in manifest.entries().iter() {
+                let entry = entry_ref.as_ref();
+                if !matches!(
+                    entry.status,
+                    ManifestStatus::Added | ManifestStatus::Existing
+                ) {
+                    continue;
+                }
+                let df = &entry.data_file;
+                let key = self.partition_key_for(df.partition());
+                let att = index.entry(key).or_insert(IcebergDeleteAttachment {
+                    eq_delete_count: 0,
+                    pos_delete_count: 0,
+                });
+                match df.content_type() {
+                    DataContentType::EqualityDeletes => {
+                        att.eq_delete_count = att.eq_delete_count.saturating_add(1);
+                    }
+                    DataContentType::PositionDeletes => {
+                        att.pos_delete_count = att.pos_delete_count.saturating_add(1);
+                    }
+                    _ => {}
+                }
+            }
+        }
+
+        Ok(index)
+    }
+
     /// Create partitioned files for DataFusion from Iceberg data files
     fn create_partitioned_files(
         &self,
         data_files: Vec<DataFile>,
+        delete_index: &std::collections::HashMap<String, IcebergDeleteAttachment>,
     ) -> DataFusionResult<Vec<PartitionedFile>> {
         let mut partitioned_files = Vec::new();
 
@@ -282,12 +354,17 @@ impl IcebergTableProvider {
                 })
                 .collect();
 
+            let key = self.partition_key_for(data_file.partition());
+            let extensions: Option<Arc<dyn Any + Send + Sync>> = delete_index
+                .get(&key)
+                .map(|att| Arc::new(att.clone()) as Arc<dyn Any + Send + Sync>);
+
             let partitioned_file = PartitionedFile {
                 object_meta,
                 partition_values,
                 range: None,
                 statistics: Some(Arc::new(self.create_file_statistics(&data_file))),
-                extensions: None,
+                extensions,
                 metadata_size_hint: None,
             };
 
@@ -562,8 +639,13 @@ impl TableProvider for IcebergTableProvider {
             log::trace!("Pruned data files, remaining: {}", data_files.len());
         }
 
+        log::trace!("Loading delete manifests...");
+        let delete_index = self
+            .load_delete_index(&object_store, &manifest_list)
+            .await?;
+
         log::trace!("Creating partitioned files...");
-        let partitioned_files = self.create_partitioned_files(data_files.clone())?;
+        let partitioned_files = self.create_partitioned_files(data_files.clone(), &delete_index)?;
         log::trace!("Created {} partitioned files", partitioned_files.len());
 
         // Step 4: Create file groups

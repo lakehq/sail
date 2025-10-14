@@ -1,3 +1,4 @@
+use std::cell::RefCell;
 use std::collections::HashMap;
 use std::sync::Arc;
 
@@ -76,6 +77,10 @@ pub struct IcebergPruningStats {
     arrow_schema: Arc<ArrowSchema>,
     /// Arrow field name -> Iceberg field id
     name_to_field_id: HashMap<String, i32>,
+    min_cache: RefCell<HashMap<i32, ArrayRef>>,
+    max_cache: RefCell<HashMap<i32, ArrayRef>>,
+    nulls_cache: RefCell<HashMap<i32, ArrayRef>>,
+    rows_cache: RefCell<Option<ArrayRef>>,
 }
 
 impl IcebergPruningStats {
@@ -92,6 +97,10 @@ impl IcebergPruningStats {
             files,
             arrow_schema,
             name_to_field_id,
+            min_cache: RefCell::new(HashMap::new()),
+            max_cache: RefCell::new(HashMap::new()),
+            nulls_cache: RefCell::new(HashMap::new()),
+            rows_cache: RefCell::new(None),
         }
     }
 
@@ -110,19 +119,26 @@ impl PruningStatistics for IcebergPruningStats {
     fn min_values(&self, column: &Column) -> Option<ArrayRef> {
         // TODO: Materialize arrays only for columns referenced by the predicate
         let field_id = self.field_id_for(column)?;
+        if let Some(arr) = self.min_cache.borrow().get(&field_id) {
+            return Some(arr.clone());
+        }
         let scalars = self.files.iter().map(|f| {
             f.lower_bounds()
                 .get(&field_id)
                 .map(|d| self.datum_to_scalar(d))
         });
-        // Build an Arrow array from Option<ScalarValue>
         let values =
             scalars.map(|opt| opt.unwrap_or(datafusion::common::scalar::ScalarValue::Null));
-        datafusion::common::scalar::ScalarValue::iter_to_array(values).ok()
+        let arr = datafusion::common::scalar::ScalarValue::iter_to_array(values).ok()?;
+        self.min_cache.borrow_mut().insert(field_id, arr.clone());
+        Some(arr)
     }
 
     fn max_values(&self, column: &Column) -> Option<ArrayRef> {
         let field_id = self.field_id_for(column)?;
+        if let Some(arr) = self.max_cache.borrow().get(&field_id) {
+            return Some(arr.clone());
+        }
         let scalars = self.files.iter().map(|f| {
             f.upper_bounds()
                 .get(&field_id)
@@ -130,7 +146,9 @@ impl PruningStatistics for IcebergPruningStats {
         });
         let values =
             scalars.map(|opt| opt.unwrap_or(datafusion::common::scalar::ScalarValue::Null));
-        datafusion::common::scalar::ScalarValue::iter_to_array(values).ok()
+        let arr = datafusion::common::scalar::ScalarValue::iter_to_array(values).ok()?;
+        self.max_cache.borrow_mut().insert(field_id, arr.clone());
+        Some(arr)
     }
 
     fn num_containers(&self) -> usize {
@@ -139,17 +157,27 @@ impl PruningStatistics for IcebergPruningStats {
 
     fn null_counts(&self, column: &Column) -> Option<ArrayRef> {
         let field_id = self.field_id_for(column)?;
+        if let Some(arr) = self.nulls_cache.borrow().get(&field_id) {
+            return Some(arr.clone());
+        }
         let counts: Vec<u64> = self
             .files
             .iter()
             .map(|f| f.null_value_counts().get(&field_id).copied().unwrap_or(0))
             .collect();
-        Some(Arc::new(UInt64Array::from(counts)) as ArrayRef)
+        let arr: ArrayRef = Arc::new(UInt64Array::from(counts));
+        self.nulls_cache.borrow_mut().insert(field_id, arr.clone());
+        Some(arr)
     }
 
     fn row_counts(&self, _column: &Column) -> Option<ArrayRef> {
+        if let Some(arr) = self.rows_cache.borrow().as_ref() {
+            return Some(arr.clone());
+        }
         let rows: Vec<u64> = self.files.iter().map(|f| f.record_count()).collect();
-        Some(Arc::new(UInt64Array::from(rows)) as ArrayRef)
+        let arr: ArrayRef = Arc::new(UInt64Array::from(rows));
+        *self.rows_cache.borrow_mut() = Some(arr.clone());
+        Some(arr)
     }
 
     fn contained(
