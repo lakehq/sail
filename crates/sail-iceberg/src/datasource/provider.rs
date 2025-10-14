@@ -57,15 +57,15 @@ impl IcebergTableProvider {
         partition_specs: Vec<PartitionSpec>,
     ) -> DataFusionResult<Self> {
         let table_uri_str = table_uri.to_string();
-        log::info!("[ICEBERG] Creating table provider for: {}", table_uri_str);
+        log::trace!("Creating table provider for: {}", table_uri_str);
 
         let arrow_schema = Arc::new(iceberg_schema_to_arrow(&schema).map_err(|e| {
-            log::error!("[ICEBERG] Failed to convert schema to Arrow: {:?}", e);
+            log::trace!("Failed to convert schema to Arrow: {:?}", e);
             e
         })?);
 
-        log::debug!(
-            "[ICEBERG] Converted schema to Arrow with {} fields",
+        log::trace!(
+            "Converted schema to Arrow with {} fields",
             arrow_schema.fields().len()
         );
 
@@ -114,13 +114,10 @@ impl IcebergTableProvider {
         object_store: &Arc<dyn object_store::ObjectStore>,
     ) -> DataFusionResult<ManifestList> {
         let manifest_list_str = self.snapshot.manifest_list();
-        log::debug!("[ICEBERG] Manifest list path: {}", manifest_list_str);
+        log::trace!("Manifest list path: {}", manifest_list_str);
 
         let manifest_list_path = if let Ok(url) = Url::parse(manifest_list_str) {
-            log::debug!(
-                "[ICEBERG] Parsed manifest list as URL, path: {}",
-                url.path()
-            );
+            log::trace!("Parsed manifest list as URL, path: {}", url.path());
             ObjectPath::from(url.path())
         } else {
             ObjectPath::from(manifest_list_str)
@@ -130,17 +127,14 @@ impl IcebergTableProvider {
             .get(&manifest_list_path)
             .await
             .map_err(|e| {
-                log::error!("[ICEBERG] Failed to get manifest list: {:?}", e);
+                log::trace!("Failed to get manifest list: {:?}", e);
                 datafusion::common::DataFusionError::External(Box::new(e))
             })?
             .bytes()
             .await
             .map_err(|e| datafusion::common::DataFusionError::External(Box::new(e)))?;
 
-        log::debug!(
-            "[ICEBERG] Read {} bytes from manifest list",
-            manifest_list_data.len()
-        );
+        log::trace!("Read {} bytes from manifest list", manifest_list_data.len());
 
         ManifestList::parse_with_version(&manifest_list_data, FormatVersion::V2)
             .map_err(datafusion::common::DataFusionError::Execution)
@@ -172,10 +166,10 @@ impl IcebergTableProvider {
             }
 
             let manifest_path_str = manifest_file.manifest_path.as_str();
-            log::debug!("[ICEBERG] Loading manifest: {}", manifest_path_str);
+            log::trace!("Loading manifest: {}", manifest_path_str);
 
             let manifest_path = if let Ok(url) = Url::parse(manifest_path_str) {
-                log::debug!("[ICEBERG] Parsed manifest as URL, path: {}", url.path());
+                log::trace!("Parsed manifest as URL, path: {}", url.path());
                 ObjectPath::from(url.path())
             } else {
                 ObjectPath::from(manifest_path_str)
@@ -185,14 +179,14 @@ impl IcebergTableProvider {
                 .get(&manifest_path)
                 .await
                 .map_err(|e| {
-                    log::error!("[ICEBERG] Failed to get manifest: {:?}", e);
+                    log::trace!("Failed to get manifest: {:?}", e);
                     datafusion::common::DataFusionError::External(Box::new(e))
                 })?
                 .bytes()
                 .await
                 .map_err(|e| datafusion::common::DataFusionError::External(Box::new(e)))?;
 
-            log::debug!("[ICEBERG] Read {} bytes from manifest", manifest_data.len());
+            log::trace!("Read {} bytes from manifest", manifest_data.len());
 
             let manifest = Manifest::parse_avro(&manifest_data)
                 .map_err(datafusion::common::DataFusionError::Execution)?;
@@ -251,7 +245,7 @@ impl IcebergTableProvider {
 
         for data_file in data_files {
             let file_path_str = data_file.file_path();
-            log::debug!("[ICEBERG] Processing data file: {}", file_path_str);
+            log::trace!("Processing data file: {}", file_path_str);
 
             let file_path = if let Ok(url) = Url::parse(file_path_str) {
                 ObjectPath::from(url.path())
@@ -264,7 +258,7 @@ impl IcebergTableProvider {
                 ))
             };
 
-            log::debug!("[ICEBERG] Final ObjectPath: {}", file_path);
+            log::trace!("Final ObjectPath: {}", file_path);
 
             let object_meta = ObjectMeta {
                 location: file_path,
@@ -526,26 +520,23 @@ impl TableProvider for IcebergTableProvider {
         _filters: &[Expr],
         limit: Option<usize>,
     ) -> DataFusionResult<Arc<dyn ExecutionPlan>> {
-        log::info!("[ICEBERG] Starting scan for table: {}", self.table_uri);
+        log::trace!("Starting scan for table: {}", self.table_uri);
 
         let object_store = self.get_object_store(session)?;
-        log::debug!("[ICEBERG] Got object store");
+        log::trace!("Got object store");
 
-        log::info!(
-            "[ICEBERG] Loading manifest list from: {}",
+        log::trace!(
+            "Loading manifest list from: {}",
             self.snapshot.manifest_list()
         );
         let manifest_list = self.load_manifest_list(&object_store).await?;
-        log::info!(
-            "[ICEBERG] Loaded {} manifest files",
-            manifest_list.entries().len()
-        );
+        log::trace!("Loaded {} manifest files", manifest_list.entries().len());
 
-        log::info!("[ICEBERG] Loading data files from manifests...");
+        log::trace!("Loading data files from manifests...");
         let mut data_files = self
             .load_data_files(session, _filters, &object_store, &manifest_list)
             .await?;
-        log::info!("[ICEBERG] Loaded {} data files", data_files.len());
+        log::trace!("Loaded {} data files", data_files.len());
 
         // TODO: Manifest-level pruning using partition summaries to avoid loading all files
         // TODO: Partition-transform aware filtering before file-level metrics pruning
@@ -564,18 +555,12 @@ impl TableProvider for IcebergTableProvider {
             )?;
             _pruning_mask = mask;
             data_files = kept;
-            log::info!(
-                "[ICEBERG] Pruned data files, remaining: {}",
-                data_files.len()
-            );
+            log::trace!("Pruned data files, remaining: {}", data_files.len());
         }
 
-        log::info!("[ICEBERG] Creating partitioned files...");
+        log::trace!("Creating partitioned files...");
         let partitioned_files = self.create_partitioned_files(data_files.clone())?;
-        log::info!(
-            "[ICEBERG] Created {} partitioned files",
-            partitioned_files.len()
-        );
+        log::trace!("Created {} partitioned files", partitioned_files.len());
 
         // Step 4: Create file groups
         let file_groups = self.create_file_groups(partitioned_files);

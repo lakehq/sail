@@ -34,16 +34,13 @@ impl TableFormat for IcebergTableFormat {
             options: _options,
         } = info;
 
-        log::info!("[ICEBERG] Creating table provider for paths: {:?}", paths);
+        log::trace!("Creating table provider for paths: {:?}", paths);
         let table_url = Self::parse_table_url(ctx, paths).await?;
-        log::info!("[ICEBERG] Parsed table URL: {}", table_url);
+        log::trace!("Parsed table URL: {}", table_url);
 
         let (iceberg_schema, snapshot, partition_specs) =
             load_table_metadata(ctx, &table_url).await?;
-        log::info!(
-            "[ICEBERG] Loaded metadata, snapshot_id: {}",
-            snapshot.snapshot_id()
-        );
+        log::trace!("Loaded metadata, snapshot_id: {}", snapshot.snapshot_id());
 
         let provider = IcebergTableProvider::new(
             table_url.to_string(),
@@ -95,7 +92,7 @@ async fn load_table_metadata(
     ctx: &dyn Session,
     table_url: &Url,
 ) -> Result<(Schema, Snapshot, Vec<PartitionSpec>)> {
-    log::debug!("[ICEBERG] Loading table metadata from: {}", table_url);
+    log::trace!("Loading table metadata from: {}", table_url);
     let object_store = ctx
         .runtime_env()
         .object_store_registry
@@ -103,7 +100,7 @@ async fn load_table_metadata(
         .map_err(|e| DataFusionError::External(Box::new(e)))?;
 
     let metadata_location = find_latest_metadata_file(&object_store, table_url).await?;
-    log::info!("[ICEBERG] Found metadata file: {}", metadata_location);
+    log::trace!("Found metadata file: {}", metadata_location);
 
     let metadata_path = object_store::path::Path::from(metadata_location.as_str());
     let metadata_data = object_store
@@ -114,13 +111,10 @@ async fn load_table_metadata(
         .await
         .map_err(|e| DataFusionError::External(Box::new(e)))?;
 
-    log::debug!(
-        "[ICEBERG] Read {} bytes from metadata file",
-        metadata_data.len()
-    );
+    log::trace!("Read {} bytes from metadata file", metadata_data.len());
 
     let table_metadata = TableMetadata::from_json(&metadata_data).map_err(|e| {
-        log::error!("[ICEBERG] Failed to parse table metadata: {:?}", e);
+        log::trace!("Failed to parse table metadata: {:?}", e);
         DataFusionError::External(Box::new(e))
     })?;
 
@@ -152,7 +146,7 @@ async fn find_latest_metadata_file(
     use futures::TryStreamExt;
     use object_store::path::Path as ObjectPath;
 
-    log::debug!("[ICEBERG] Finding latest metadata file");
+    log::trace!("Finding latest metadata file");
     let version_hint_path =
         ObjectPath::from(format!("{}metadata/version-hint.text", table_url.path()).as_str());
 
@@ -162,13 +156,13 @@ async fn find_latest_metadata_file(
                 let version = version_hint.trim().parse::<i32>().unwrap_or(0);
                 let metadata_file =
                     format!("{}/metadata/v{}.metadata.json", table_url.path(), version);
-                log::debug!("[ICEBERG] Using version hint: {}", version);
+                log::trace!("Using version hint: {}", version);
                 return Ok(metadata_file);
             }
         }
     }
 
-    log::debug!("[ICEBERG] No version hint, listing metadata directory");
+    log::trace!("No version hint, listing metadata directory");
     let metadata_prefix = ObjectPath::from(format!("{}metadata/", table_url.path()).as_str());
     let objects = object_store.list(Some(&metadata_prefix));
 

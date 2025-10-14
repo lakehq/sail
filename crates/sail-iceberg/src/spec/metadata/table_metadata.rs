@@ -144,37 +144,31 @@ impl TableMetadata {
     }
 
     pub fn from_json(data: &[u8]) -> Result<Self, serde_json::Error> {
-        log::debug!("[ICEBERG] Attempting to parse table metadata JSON");
+        log::trace!("Attempting to parse table metadata JSON");
 
         match serde_json::from_slice::<serde_json::Value>(data) {
             Ok(json_value) => {
                 if let Some(obj) = json_value.as_object() {
-                    log::debug!(
-                        "[ICEBERG] JSON fields present: {:?}",
-                        obj.keys().collect::<Vec<_>>()
-                    );
+                    log::trace!("JSON fields present: {:?}", obj.keys().collect::<Vec<_>>());
 
                     if let Some(refs) = obj.get("refs") {
-                        log::debug!("[ICEBERG] refs field: {:?}", refs);
+                        log::trace!("refs field: {:?}", refs);
                     }
                     if let Some(sort_orders) = obj.get("sort-orders") {
-                        log::debug!("[ICEBERG] sort-orders field: {:?}", sort_orders);
+                        log::trace!("sort-orders field: {:?}", sort_orders);
                     }
                     if let Some(stats) = obj.get("statistics") {
-                        log::debug!("[ICEBERG] statistics field: {:?}", stats);
+                        log::trace!("statistics field: {:?}", stats);
                     }
                     if let Some(partition_stats) = obj.get("partition-statistics") {
-                        log::debug!(
-                            "[ICEBERG] partition-statistics field: {:?}",
-                            partition_stats
-                        );
+                        log::trace!("partition-statistics field: {:?}", partition_stats);
                     }
                 }
 
-                log::debug!("[ICEBERG] Deserializing to TableMetadata struct");
+                log::trace!("Deserializing to TableMetadata struct");
                 serde_json::from_value::<TableMetadataEnum>(json_value)
                     .map_err(|e| {
-                        log::error!("[ICEBERG] Failed to deserialize TableMetadata: {:?}", e);
+                        log::trace!("Failed to deserialize TableMetadata: {:?}", e);
                         e
                     })
                     .map(|tm| match tm {
@@ -182,7 +176,7 @@ impl TableMetadata {
                     })
             }
             Err(e) => {
-                log::error!("[ICEBERG] Failed to parse as JSON: {:?}", e);
+                log::trace!("Failed to parse as JSON: {:?}", e);
                 Err(e)
             }
         }
