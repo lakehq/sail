@@ -10,8 +10,6 @@ updates:
     target-branch: main
     groups:
       all:
-        patterns:
-          - "*"
         update-types:
           - "minor"
           - "patch"
@@ -36,8 +34,6 @@ updates:
     target-branch: main
     groups:
       all:
-        patterns:
-          - "*"
         update-types:
           - "minor"
           - "patch"
