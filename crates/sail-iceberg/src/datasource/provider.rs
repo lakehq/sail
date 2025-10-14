@@ -13,20 +13,22 @@ use datafusion::common::{Result as DataFusionResult, ToDFSchema};
 use datafusion::config::TableParquetOptions;
 use datafusion::datasource::listing::PartitionedFile;
 use datafusion::datasource::physical_plan::{FileGroup, FileScanConfigBuilder, ParquetSource};
-use datafusion::physical_expr_adapter::PhysicalExprAdapterFactory;
 use datafusion::datasource::{TableProvider, TableType};
 use datafusion::execution::object_store::ObjectStoreUrl;
 use datafusion::logical_expr::utils::conjunction;
-use datafusion::logical_expr::{Expr, LogicalPlan};
+use datafusion::logical_expr::{
+    BinaryExpr, Expr, LogicalPlan, Operator, TableProviderFilterPushDown,
+};
 use datafusion::physical_expr::PhysicalExpr;
+use datafusion::physical_expr_adapter::PhysicalExprAdapterFactory;
 use datafusion::physical_plan::ExecutionPlan;
 use object_store::path::Path as ObjectPath;
 use object_store::ObjectMeta;
 use url::Url;
 
 use crate::arrow_conversion::iceberg_schema_to_arrow;
-use crate::datasource::expressions::simplify_expr;
 use crate::datasource::expr_adapter::IcebergPhysicalExprAdapterFactory;
+use crate::datasource::expressions::simplify_expr;
 use crate::datasource::pruning::{prune_files, prune_manifests_by_partition_summaries};
 use crate::spec::types::values::{Literal, PrimitiveLiteral};
 use crate::spec::{
@@ -519,7 +521,7 @@ impl TableProvider for IcebergTableProvider {
         &self,
         session: &dyn Session,
         projection: Option<&Vec<usize>>,
-        _filters: &[Expr],
+        filters: &[Expr],
         limit: Option<usize>,
     ) -> DataFusionResult<Arc<dyn ExecutionPlan>> {
         log::trace!("Starting scan for table: {}", self.table_uri);
@@ -534,9 +536,12 @@ impl TableProvider for IcebergTableProvider {
         let manifest_list = self.load_manifest_list(&object_store).await?;
         log::trace!("Loaded {} manifest files", manifest_list.entries().len());
 
+        // Classify & split filters for pruning vs parquet pushdown
+        let (pruning_filters, parquet_pushdown_filters) = self.separate_filters(filters);
+
         log::trace!("Loading data files from manifests...");
         let mut data_files = self
-            .load_data_files(session, _filters, &object_store, &manifest_list)
+            .load_data_files(session, &pruning_filters, &object_store, &manifest_list)
             .await?;
         log::trace!("Loaded {} data files", data_files.len());
 
@@ -544,14 +549,14 @@ impl TableProvider for IcebergTableProvider {
         // TODO: Partition-transform aware filtering before file-level metrics pruning
 
         // Build filter conjunction and run DataFusion-based pruning on Iceberg metrics
-        let filter_expr = conjunction(_filters.iter().cloned());
+        let filter_expr = conjunction(pruning_filters.iter().cloned());
         let mut _pruning_mask: Option<Vec<bool>> = None;
         if filter_expr.is_some() || limit.is_some() {
             let (kept, mask) = prune_files(
                 session,
-                _filters,
+                &pruning_filters,
                 limit,
-                self.arrow_schema.clone(),
+                self.rebuild_logical_schema_for_filters(projection, filters),
                 data_files,
                 &self.schema,
             )?;
@@ -585,9 +590,11 @@ impl TableProvider for IcebergTableProvider {
 
         let mut parquet_source = ParquetSource::new(parquet_options);
         // Prepare pushdown filter for Parquet
-        let pushdown_filter: Option<Arc<dyn PhysicalExpr>> = if !_filters.is_empty() {
-            let df_schema = self.arrow_schema.clone().to_dfschema()?;
-            let pushdown_expr = conjunction(_filters.iter().cloned());
+        let pushdown_filter: Option<Arc<dyn PhysicalExpr>> = if !parquet_pushdown_filters.is_empty()
+        {
+            let logical_schema = self.rebuild_logical_schema_for_filters(projection, filters);
+            let df_schema = logical_schema.to_dfschema()?;
+            let pushdown_expr = conjunction(parquet_pushdown_filters);
             pushdown_expr.map(|expr| simplify_expr(session, &df_schema, expr))
         } else {
             None
@@ -612,9 +619,153 @@ impl TableProvider for IcebergTableProvider {
                 .with_statistics(table_stats)
                 .with_projection(projection.cloned())
                 .with_limit(limit)
-                .with_expr_adapter(Some(Arc::new(IcebergPhysicalExprAdapterFactory {}) as Arc<dyn PhysicalExprAdapterFactory>))
+                .with_expr_adapter(Some(Arc::new(IcebergPhysicalExprAdapterFactory {})
+                    as Arc<dyn PhysicalExprAdapterFactory>))
                 .build();
 
         Ok(DataSourceExec::from_data_source(file_scan_config))
+    }
+
+    fn supports_filters_pushdown(
+        &self,
+        filter: &[&Expr],
+    ) -> DataFusionResult<Vec<TableProviderFilterPushDown>> {
+        Ok(filter
+            .iter()
+            .map(|e| self.classify_pushdown_for_expr(e))
+            .collect())
+    }
+}
+
+impl IcebergTableProvider {
+    fn classify_pushdown_for_expr(&self, expr: &Expr) -> TableProviderFilterPushDown {
+        use TableProviderFilterPushDown as FP;
+        // Identity partition columns get Exact (Eq/IN) or Inexact (ranges)
+        match expr {
+            Expr::BinaryExpr(BinaryExpr { left, op, right }) => {
+                let (l, r) = (Self::strip_expr(left), Self::strip_expr(right));
+                match op {
+                    Operator::Eq => {
+                        if let (Some(col), true) =
+                            (self.expr_as_column_name(l), self.expr_is_literal(r))
+                        {
+                            if self.is_identity_partition_col(&col) {
+                                return FP::Exact;
+                            }
+                        }
+                        if let (Some(col), true) =
+                            (self.expr_as_column_name(r), self.expr_is_literal(l))
+                        {
+                            if self.is_identity_partition_col(&col) {
+                                return FP::Exact;
+                            }
+                        }
+                        FP::Unsupported
+                    }
+                    Operator::Gt | Operator::GtEq | Operator::Lt | Operator::LtEq => {
+                        if let Some(col) = self.expr_as_column_name(l) {
+                            if self.expr_is_literal(r) && self.is_identity_partition_col(&col) {
+                                return FP::Inexact;
+                            }
+                        }
+                        FP::Unsupported
+                    }
+                    _ => FP::Unsupported,
+                }
+            }
+            Expr::InList(in_list) if !in_list.negated => {
+                let e = Self::strip_expr(&in_list.expr);
+                if let Some(col) = self.expr_as_column_name(e) {
+                    let all_literals = in_list.list.iter().all(|it| self.expr_is_literal(it));
+                    if all_literals && self.is_identity_partition_col(&col) {
+                        TableProviderFilterPushDown::Exact
+                    } else {
+                        TableProviderFilterPushDown::Unsupported
+                    }
+                } else {
+                    TableProviderFilterPushDown::Unsupported
+                }
+            }
+            _ => TableProviderFilterPushDown::Unsupported,
+        }
+    }
+
+    fn separate_filters(&self, filters: &[Expr]) -> (Vec<Expr>, Vec<Expr>) {
+        let mut pruning_filters = Vec::new();
+        let mut parquet_pushdown_filters = Vec::new();
+        for f in filters.iter() {
+            match self.classify_pushdown_for_expr(f) {
+                TableProviderFilterPushDown::Exact => {
+                    pruning_filters.push(f.clone());
+                }
+                TableProviderFilterPushDown::Inexact => {
+                    pruning_filters.push(f.clone());
+                    parquet_pushdown_filters.push(f.clone());
+                }
+                TableProviderFilterPushDown::Unsupported => {}
+            }
+        }
+        (pruning_filters, parquet_pushdown_filters)
+    }
+
+    fn strip_expr(expr: &Expr) -> &Expr {
+        match expr {
+            Expr::Cast(c) => Self::strip_expr(&c.expr),
+            Expr::Alias(a) => Self::strip_expr(&a.expr),
+            _ => expr,
+        }
+    }
+
+    fn expr_as_column_name(&self, expr: &Expr) -> Option<String> {
+        if let Expr::Column(c) = expr {
+            return Some(c.name.clone());
+        }
+        None
+    }
+
+    fn expr_is_literal(&self, expr: &Expr) -> bool {
+        matches!(expr, Expr::Literal(_, _))
+    }
+
+    fn is_identity_partition_col(&self, col_name: &str) -> bool {
+        // Map identity partition source_id to schema field names
+        let mut names = std::collections::HashSet::new();
+        for spec in &self.partition_specs {
+            for pf in spec.fields().iter() {
+                if matches!(pf.transform, crate::spec::transform::Transform::Identity) {
+                    if let Some(field) = self.schema.field_by_id(pf.source_id) {
+                        names.insert(field.name.clone());
+                    }
+                }
+            }
+        }
+        names.contains(col_name)
+    }
+
+    fn rebuild_logical_schema_for_filters(
+        &self,
+        projection: Option<&Vec<usize>>,
+        filters: &[Expr],
+    ) -> Arc<ArrowSchema> {
+        if let Some(used) = projection {
+            let mut fields: Vec<arrow_schema::FieldRef> = Vec::new();
+            for idx in used {
+                fields.push(Arc::new(self.arrow_schema.field(*idx).clone()));
+            }
+            if let Some(expr) = conjunction(filters.iter().cloned()) {
+                for c in expr.column_refs() {
+                    if let Ok(idx) = self.arrow_schema.index_of(c.name.as_str()) {
+                        if !used.contains(&idx)
+                            && !fields.iter().any(|f| f.name() == c.name.as_str())
+                        {
+                            fields.push(Arc::new(self.arrow_schema.field(idx).clone()));
+                        }
+                    }
+                }
+            }
+            Arc::new(ArrowSchema::new(fields))
+        } else {
+            self.arrow_schema.clone()
+        }
     }
 }
