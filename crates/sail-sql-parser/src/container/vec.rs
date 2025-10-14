@@ -5,7 +5,7 @@ use chumsky::prelude::Input;
 use chumsky::{IterParser, Parser};
 
 use crate::options::ParserOptions;
-use crate::tree::{SyntaxDescriptor, SyntaxNode, TreeParser, TreeSyntax};
+use crate::tree::{SyntaxDescriptor, SyntaxNode, TreeParser, TreeSyntax, TreeText};
 
 impl<'a, T, I, E, A> TreeParser<'a, I, E, A> for Vec<T>
 where
@@ -29,5 +29,18 @@ where
             node: SyntaxNode::ZeroOrMore(Box::new(SyntaxNode::NonTerminal(TypeId::of::<T>()))),
             children: vec![(TypeId::of::<T>(), Box::new(T::syntax))],
         }
+    }
+}
+
+impl<T> TreeText for Vec<T>
+where
+    T: TreeText,
+{
+    fn text(&self) -> String {
+        let mut result = String::new();
+        for item in self {
+            result.push_str(&item.text());
+        }
+        result
     }
 }
