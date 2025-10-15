@@ -37,8 +37,7 @@ cd crates/sail-catalog-iceberg
 
 The script will:
 1. Generate Rust client code from the OpenAPI spec
-2. Flatten the directory structure
-3. Create a proper `mod.rs` file
-4. Format the generated code with `cargo fmt`
+2. Extract `apis/` and `models/` directories to `src/`
+3. Format the generated code with `cargo fmt`
 
-The generated code will be placed in `src/generated_rest/`
+The generated code will be placed in `src/apis/` and `src/models/`
