@@ -39,6 +39,8 @@ serde = { version = "1.0.228", features = ["derive"] }
 serde_json = "1.0.145"
 # TODO: `serde_yaml` is deprecated. No satisfactory alternative exists yet, we may need to build our own in the future.
 serde_yaml = "0.9.34"
+serde_with = { version = "3.15.0", default-features = false, features = ["base64", "std", "macros"] }
+serde_repr = "0.1.20"
 monostate = "1.0.1"
 regex = "1.11.3"
 glob = "0.3.3"
@@ -93,7 +95,7 @@ iana-time-zone = "0.1.64"
 chumsky = { version = "0.11.1", default-features = false, features = ["pratt"] }
 num = "0.4.3"
 hf-hub = { version = "0.4.3", default-features = false, features = ["tokio"] }
-reqwest = "0.12.23"
+reqwest = { version = "0.12.23", features = ["json", "multipart"] }
 percent-encoding = "2.3.2"
 rustls = "0.23.32"
 dashmap = "6.1.0"
