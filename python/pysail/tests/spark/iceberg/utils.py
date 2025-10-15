@@ -12,10 +12,8 @@ def create_sql_catalog(tmp_path: Path):
         uri=f"sqlite:///{tmp_path}/pyiceberg_catalog.db",
         warehouse=f"file://{warehouse_path}",
     )
-    try:
+    try:  # noqa: SIM105
         catalog.create_namespace("default")
-    except Exception:
+    except Exception:  # noqa: S110, BLE001
         pass
     return catalog
-
-

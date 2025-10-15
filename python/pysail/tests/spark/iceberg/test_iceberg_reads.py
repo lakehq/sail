@@ -5,7 +5,7 @@ import pytest
 from pyiceberg.schema import Schema
 from pyiceberg.types import BooleanType, DoubleType, NestedField, StringType, TimestampType
 
-from .utils import create_sql_catalog
+from .utils import create_sql_catalog  # noqa: TID252
 
 
 @pytest.mark.parametrize("use_rewritten", [False, True])
@@ -45,7 +45,7 @@ def test_datetime_filter_reads(spark, tmp_path):
         ),
     )
     try:
-        yesterday = datetime.now() - timedelta(days=1)
+        yesterday = datetime.now() - timedelta(days=1)  # noqa: DTZ005
         tbl = pa.table({"str": ["foo"], "datetime": [yesterday]})
         table.append(tbl)
         path = table.location()
@@ -71,7 +71,7 @@ def test_struct_null_filters(spark, tmp_path):
         table.append(t2)
         path = table.location()
         df_all = spark.read.format("iceberg").load(path)
-        assert df_all.count() == 2
+        assert df_all.count() == 2  # noqa: PLR2004
         df_not_null = df_all.filter("col_struct.test is not null")
         assert df_not_null.count() == 1
         df_null = df_all.filter("col_struct.test is null")
@@ -96,10 +96,9 @@ def test_limit_with_multiple_files(spark, tmp_path):
         table.append(tbl2)
         path = table.location()
         df = spark.read.format("iceberg").load(path).limit(3)
-        assert df.count() == 3
+        assert df.count() == 3  # noqa: PLR2004
     finally:
         catalog.drop_table(identifier)
-
 
 
 def test_limit_with_filter(spark, tmp_path):
@@ -119,7 +118,6 @@ def test_limit_with_filter(spark, tmp_path):
         table.append(tbl2)
         path = table.location()
         df = spark.read.format("iceberg").load(path).filter("flag = true").limit(3)
-        assert df.count() == 3
+        assert df.count() == 3  # noqa: PLR2004
     finally:
         catalog.drop_table(identifier)
-

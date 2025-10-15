@@ -7,16 +7,16 @@ from pyiceberg.partitioning import (
     DayTransform,
     HourTransform,
     IdentityTransform,
+    MonthTransform,
     PartitionField,
     PartitionSpec,
     TruncateTransform,
     YearTransform,
-    MonthTransform,
 )
 from pyiceberg.schema import Schema
 from pyiceberg.types import DateType, IntegerType, NestedField, StringType, TimestampType
 
-from .utils import create_sql_catalog
+from .utils import create_sql_catalog  # noqa: TID252
 
 
 def _make_common_schema():
@@ -70,7 +70,7 @@ def _append_sample_data(table):
 
 
 @pytest.mark.parametrize(
-    "table_name, spec, predicate",
+    "table_name, spec, predicate",  # noqa: PT006
     [
         (
             "default.test_partitioned_by_identity",
@@ -118,9 +118,7 @@ def test_partition_transform_pruning(spark, tmp_path, table_name, spec, predicat
         path = table.location()
 
         df = spark.read.format("iceberg").load(path).filter(predicate).select("number")
-        result = set(r[0] for r in df.collect())
+        result = set(r[0] for r in df.collect())  # noqa: C401
         assert result == {5, 6, 7, 8, 9, 10, 11, 12}
     finally:
         catalog.drop_table(table_name)
-
-
