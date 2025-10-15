@@ -17,7 +17,7 @@ openapi-generator generate \
   --config crates/sail-catalog-iceberg/spec/openapi-generator-config.yaml \
   --input-spec crates/sail-catalog-iceberg/spec/iceberg-rest-catalog.yaml \
   --output crates/sail-catalog-iceberg/src/generated_rest_temp \
-  --openapi-generator-ignore-list "src/models/model_type.rs"
+  --schema-mappings Type=crate::types::Type,StructType=crate::types::StructType,ListType=crate::types::ListType,MapType=crate::types::MapType,StructField=crate::types::NestedFieldRef
 
 echo "==> Flattening generated code to src/..."
 
@@ -26,9 +26,6 @@ rm -rf crates/sail-catalog-iceberg/src/apis
 rm -rf crates/sail-catalog-iceberg/src/models
 cp -r crates/sail-catalog-iceberg/src/generated_rest_temp/src/apis crates/sail-catalog-iceberg/src/
 cp -r crates/sail-catalog-iceberg/src/generated_rest_temp/src/models crates/sail-catalog-iceberg/src/
-
-# Create empty files to satisfy mod declarations
-touch crates/sail-catalog-iceberg/src/models/model_type.rs
 
 rm -rf crates/sail-catalog-iceberg/src/generated_rest_temp
 

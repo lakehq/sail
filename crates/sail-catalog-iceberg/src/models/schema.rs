@@ -11,13 +11,14 @@
 use serde::{Deserialize, Serialize};
 
 use crate::models;
+use crate::types::NestedFieldRef;
 
 #[derive(Clone, Default, Debug, PartialEq, Serialize, Deserialize)]
 pub struct Schema {
     #[serde(rename = "type")]
     pub r#type: Type,
     #[serde(rename = "fields")]
-    pub fields: Vec<models::StructField>,
+    pub fields: Vec<NestedFieldRef>,
     #[serde(rename = "schema-id", skip_serializing_if = "Option::is_none")]
     pub schema_id: Option<i32>,
     #[serde(
@@ -28,7 +29,7 @@ pub struct Schema {
 }
 
 impl Schema {
-    pub fn new(r#type: Type, fields: Vec<models::StructField>) -> Schema {
+    pub fn new(r#type: Type, fields: Vec<NestedFieldRef>) -> Schema {
         Schema {
             r#type,
             fields,

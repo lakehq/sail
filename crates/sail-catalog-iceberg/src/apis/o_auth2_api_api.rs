@@ -40,11 +40,11 @@ pub trait OAuth2ApiApi: Send + Sync {
         scope: Option<&'scope str>,
         client_id: Option<&'client_id str>,
         client_secret: Option<&'client_secret str>,
-        requested_token_type: Option<models::models::TokenType>,
+        requested_token_type: Option<models::TokenType>,
         subject_token: Option<&'subject_token str>,
-        subject_token_type: Option<models::models::TokenType>,
+        subject_token_type: Option<models::TokenType>,
         actor_token: Option<&'actor_token str>,
-        actor_token_type: Option<models::models::TokenType>,
+        actor_token_type: Option<models::TokenType>,
     ) -> Result<models::OAuthTokenResponse, Error<GetTokenError>>;
 }
 
@@ -77,11 +77,11 @@ impl OAuth2ApiApi for OAuth2ApiApiClient {
         scope: Option<&'scope str>,
         client_id: Option<&'client_id str>,
         client_secret: Option<&'client_secret str>,
-        requested_token_type: Option<models::models::TokenType>,
+        requested_token_type: Option<models::TokenType>,
         subject_token: Option<&'subject_token str>,
-        subject_token_type: Option<models::models::TokenType>,
+        subject_token_type: Option<models::TokenType>,
         actor_token: Option<&'actor_token str>,
-        actor_token_type: Option<models::models::TokenType>,
+        actor_token_type: Option<models::TokenType>,
     ) -> Result<models::OAuthTokenResponse, Error<GetTokenError>> {
         let local_var_configuration = &self.configuration;
 
