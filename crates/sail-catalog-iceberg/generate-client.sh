@@ -18,20 +18,15 @@ openapi-generator generate \
   --input-spec crates/sail-catalog-iceberg/spec/iceberg-rest-catalog.yaml \
   --output crates/sail-catalog-iceberg/src/generated_rest_temp
 
-rm -rf crates/sail-catalog-iceberg/src/generated_rest
-cp -r crates/sail-catalog-iceberg/src/generated_rest_temp/src crates/sail-catalog-iceberg/src/generated_rest
+echo "==> Flattening generated code to src/..."
+
+# Remove old generated directories and apis/ and models/ directly to src/
+rm -rf crates/sail-catalog-iceberg/src/apis
+rm -rf crates/sail-catalog-iceberg/src/models
+cp -r crates/sail-catalog-iceberg/src/generated_rest_temp/src/apis crates/sail-catalog-iceberg/src/
+cp -r crates/sail-catalog-iceberg/src/generated_rest_temp/src/models crates/sail-catalog-iceberg/src/
 
 rm -rf crates/sail-catalog-iceberg/src/generated_rest_temp
-
-# Remove the generated lib.rs and create a proper mod.rs for the module
-rm crates/sail-catalog-iceberg/src/generated_rest/lib.rs
-cat > crates/sail-catalog-iceberg/src/generated_rest/mod.rs << 'EOF'
-#![allow(unused_imports)]
-#![allow(clippy::too_many_arguments)]
-
-pub mod apis;
-pub mod models;
-EOF
 
 echo "==> Running cargo fmt..."
 cargo +nightly fmt
