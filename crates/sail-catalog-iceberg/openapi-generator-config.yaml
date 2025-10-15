@@ -1,0 +1,9 @@
+additionalProperties:
+  packageName: iceberg_rest_client
+  library: reqwest-trait
+  supportAsync: true
+  topLevelApiClient: true
+
+globalProperties:
+  apiDocs: false
+  modelDocs: false
