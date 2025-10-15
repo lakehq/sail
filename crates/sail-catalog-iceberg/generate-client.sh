@@ -6,8 +6,6 @@ set -euo pipefail
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO_ROOT="$(cd "$SCRIPT_DIR/../.." && pwd)"
 
-echo "Script directory: $SCRIPT_DIR | Repository root: $REPO_ROOT"
-
 cd "$REPO_ROOT"
 
 echo "==> Generating Iceberg REST Catalog client..."
@@ -36,4 +34,4 @@ pub mod models;
 EOF
 
 echo "==> Running cargo fmt..."
-cargo +nightly fmt --manifest-path crates/sail-catalog-iceberg/Cargo.toml
+cargo +nightly fmt
