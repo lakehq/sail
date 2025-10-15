@@ -36,11 +36,11 @@ cd crates/sail-catalog-iceberg/spec
 ```
 
 The script will:
-1. Generate Rust client code from the OpenAPI spec
+1. Generate Rust client code from the OpenAPI spec (excluding problematic files via `--openapi-generator-ignore-list`)
 2. Extract `apis/` and `models/` directories to `src/`
-3. Remove problematic `model_type.rs` file (see note below)
+3. Create empty `model_type.rs` placeholder file
 4. Format the generated code with `cargo fmt`
 
 The generated code will be placed in `src/apis/` and `src/models/`.
 
-**Known Issue:** The OpenAPI generator creates a problematic `model_type.rs` file with duplicate `Type` enum definitions. The generation script automatically removes this file to prevent compilation errors.
+**Known Issue:** The OpenAPI generator creates a problematic `model_type.rs` file with duplicate `Type` enum definitions. This file is excluded from generation using the `--openapi-generator-ignore-list` parameter, and an empty placeholder is created instead.
