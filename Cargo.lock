@@ -5503,6 +5503,7 @@ dependencies = [
  "serde_repr",
  "serde_with",
  "url",
+ "uuid",
 ]
 
 [[package]]
