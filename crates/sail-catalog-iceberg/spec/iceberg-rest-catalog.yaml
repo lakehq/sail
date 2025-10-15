@@ -17,7 +17,7 @@
 # under the License.
 #
 
-# SOURCE: https://github.com/apache/iceberg/blob/58940f3cace188f0f90c47749f187e00f65ec546/open-api/rest-catalog-open-api.yaml
+# SOURCE: https://github.com/apache/iceberg/blob/533a75c8a50a4c9ade7f22e03b61f2828e91e742/open-api/rest-catalog-open-api.yaml
 
 ---
 openapi: 3.1.1
