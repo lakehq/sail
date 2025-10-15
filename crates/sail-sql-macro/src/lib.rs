@@ -89,3 +89,18 @@ pub fn derive_tree_syntax(input: TokenStream) -> TokenStream {
         .unwrap_or_else(syn::Error::into_compile_error)
         .into()
 }
+
+/// Derives the `TreeText` trait.
+///
+/// The type can be an enum with struct or tuple variants, or a struct with named or unnamed fields.
+/// For enums, the variants represent a choice of texts.
+/// For structs, the fields represent a sequence of texts.
+///
+/// The text cannot be derived for enums with unit variants, or structs with no fields.
+#[proc_macro_derive(TreeText)]
+pub fn derive_tree_text(input: TokenStream) -> TokenStream {
+    let input = parse_macro_input!(input as DeriveInput);
+    tree::text::derive_tree_text(input)
+        .unwrap_or_else(syn::Error::into_compile_error)
+        .into()
+}

@@ -39,6 +39,7 @@ cd crates/sail-catalog-iceberg/spec
 ```
 
 The script will:
+
 1. Generate Rust client code from the OpenAPI spec using `--schema-mappings` to use custom types from `src/types/`
 2. Extract `apis/` and `models/` directories to `src/`
 3. Format the generated code with `cargo fmt`
@@ -48,6 +49,7 @@ The generated code will be placed in `src/apis/` and `src/models/`.
 ## Schema Mappings
 
 The generator uses custom type mappings to avoid problematic generated code:
+
 - `Type`, `StructType`, `ListType`, `MapType`, `StructField` → `crate::types::{Type,StructType,ListType,MapType, NestedFieldRef}`
 
 ## Post-Generation Manual Steps
@@ -55,6 +57,7 @@ The generator uses custom type mappings to avoid problematic generated code:
 After running the generation script, you must manually fix the following:
 
 1. In `src/apis/o_auth2_api_api.rs`:
+
    - Replace `models::models::TokenType` with `models::TokenType`
 
 2. In `src/models/schema.rs`:
