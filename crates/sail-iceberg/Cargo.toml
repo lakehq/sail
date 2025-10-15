@@ -27,7 +27,7 @@ uuid = { workspace = true }
 # indexmap = { workspace = true }
 log = { workspace = true }
 # itertools = { workspace = true }
-# percent-encoding = { workspace = true }
+percent-encoding = { workspace = true }
 once_cell = { workspace = true }
 ordered-float = { workspace = true }
 apache-avro = { workspace = true }

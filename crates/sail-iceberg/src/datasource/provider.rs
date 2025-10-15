@@ -307,6 +307,38 @@ impl IcebergTableProvider {
         Ok(index)
     }
 
+    // Attention: take care of percent-encoding when resolving the data file object path
+    fn resolve_data_file_object_path(&self, table_base_path: &str, raw_path: &str) -> ObjectPath {
+        // If the data file path is a full URL, strip scheme/authority and use its path
+        if let Ok(url) = Url::parse(raw_path) {
+            let encoded_path = url.path();
+            let path_no_leading = encoded_path.strip_prefix('/').unwrap_or(encoded_path);
+            if let Ok(p) = ObjectPath::parse(path_no_leading) {
+                return p;
+            }
+            return ObjectPath::from(path_no_leading);
+        }
+
+        // If the data file path already starts with the table base path, use it as-is
+        if raw_path.starts_with(table_base_path) {
+            return ObjectPath::from(raw_path);
+        }
+
+        // If it is an absolute filesystem path, use it directly
+        if raw_path.starts_with(object_store::path::DELIMITER) {
+            return ObjectPath::from(raw_path);
+        }
+
+        // Otherwise, treat as a path relative to the table base path (preserve encoding)
+        let joined = format!(
+            "{}{}{}",
+            table_base_path,
+            object_store::path::DELIMITER,
+            raw_path
+        );
+        ObjectPath::from(joined)
+    }
+
     /// Create partitioned files for DataFusion from Iceberg data files
     fn create_partitioned_files(
         &self,
@@ -320,19 +352,9 @@ impl IcebergTableProvider {
         let table_base_path = table_url.path();
 
         for data_file in data_files {
-            let file_path_str = data_file.file_path();
-            log::trace!("Processing data file: {}", file_path_str);
-
-            let file_path = if let Ok(url) = Url::parse(file_path_str) {
-                ObjectPath::from(url.path())
-            } else {
-                ObjectPath::from(format!(
-                    "{}{}{}",
-                    table_base_path,
-                    object_store::path::DELIMITER,
-                    file_path_str
-                ))
-            };
+            let raw_path = data_file.file_path();
+            let file_path = self.resolve_data_file_object_path(table_base_path, raw_path);
+            log::trace!("Processing data file: {}", file_path);
 
             log::trace!("Final ObjectPath: {}", file_path);
 
@@ -687,6 +709,22 @@ impl TableProvider for IcebergTableProvider {
         // Build table statistics from pruned files
         let table_stats = self.aggregate_statistics(&data_files);
 
+        let expanded_projection: Option<Vec<usize>> = if let Some(used) = projection {
+            let mut cols: Vec<usize> = used.clone();
+            if let Some(expr) = conjunction(filters.iter().cloned()) {
+                for c in expr.column_refs() {
+                    if let Ok(idx) = self.arrow_schema.index_of(c.name.as_str()) {
+                        if !cols.contains(&idx) {
+                            cols.push(idx);
+                        }
+                    }
+                }
+            }
+            Some(cols)
+        } else {
+            None
+        };
+
         let file_scan_config =
             FileScanConfigBuilder::new(object_store_url, file_schema, parquet_source)
                 .with_file_groups(if file_groups.is_empty() {
@@ -695,7 +733,7 @@ impl TableProvider for IcebergTableProvider {
                     file_groups
                 })
                 .with_statistics(table_stats)
-                .with_projection(projection.cloned())
+                .with_projection(expanded_projection)
                 .with_limit(limit)
                 .with_expr_adapter(Some(Arc::new(IcebergPhysicalExprAdapterFactory {})
                     as Arc<dyn PhysicalExprAdapterFactory>))

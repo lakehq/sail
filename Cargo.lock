@@ -5674,6 +5674,7 @@ dependencies = [
  "object_store",
  "once_cell",
  "ordered-float 5.1.0",
+ "percent-encoding",
  "sail-common-datafusion",
  "serde",
  "serde_json",

@@ -17,6 +17,7 @@
 
 // [CREDIT]: https://raw.githubusercontent.com/apache/iceberg-rust/dc349284a4204c1a56af47fb3177ace6f9e899a0/crates/iceberg/src/spec/manifest_list.rs
 
+use apache_avro::types::Value as AvroValue;
 use apache_avro::{from_value as avro_from_value, Reader as AvroReader};
 use serde::{Deserialize, Serialize};
 
@@ -78,9 +79,17 @@ impl ManifestList {
                 let mut entries = Vec::new();
                 for value in reader {
                     let value = value.map_err(|e| format!("Avro read value error: {e}"))?;
-                    let v2: _serde::ManifestFileV2 =
-                        avro_from_value(&value).map_err(|e| format!("Avro decode error: {e}"))?;
-                    entries.push(ManifestFile::from(v2));
+                    match avro_from_value::<_serde::ManifestFileV2>(&value) {
+                        Ok(v2) => entries.push(ManifestFile::from(v2)),
+                        Err(_) => {
+                            if let Ok(mf) = Self::parse_manifest_v2_fallback(&value) {
+                                entries.push(mf);
+                            } else {
+                                let err = format!("Avro decode error: Failed to deserialize Avro value into value: {value:?}");
+                                return Err(err);
+                            }
+                        }
+                    }
                 }
                 Ok(ManifestList::new(entries))
             }
@@ -112,6 +121,158 @@ impl From<FieldSummaryAvro> for FieldSummary {
         field_summary.lower_bound_bytes = summary.lower_bound;
         field_summary.upper_bound_bytes = summary.upper_bound;
         field_summary
+    }
+}
+
+impl ManifestList {
+    fn parse_manifest_v2_fallback(value: &AvroValue) -> Result<ManifestFile, String> {
+        match value {
+            AvroValue::Record(fields) => {
+                let get = |name: &str| -> Option<&AvroValue> {
+                    fields.iter().find(|(k, _)| k == name).map(|(_, v)| v)
+                };
+
+                let string = |v: &AvroValue| -> Result<String, String> {
+                    if let AvroValue::String(s) = v {
+                        Ok(s.clone())
+                    } else {
+                        Err("string".into())
+                    }
+                };
+                let long = |v: &AvroValue| -> Result<i64, String> {
+                    if let AvroValue::Long(x) = v {
+                        Ok(*x)
+                    } else {
+                        Err("long".into())
+                    }
+                };
+                let int = |v: &AvroValue| -> Result<i32, String> {
+                    if let AvroValue::Int(x) = v {
+                        Ok(*x)
+                    } else {
+                        Err("int".into())
+                    }
+                };
+
+                let manifest_path = string(get("manifest_path").ok_or("manifest_path")?)?;
+                let manifest_length = long(get("manifest_length").ok_or("manifest_length")?)?;
+                let partition_spec_id = int(get("partition_spec_id").ok_or("partition_spec_id")?)?;
+                let content = int(get("content").unwrap_or(&AvroValue::Int(0)))?;
+                let sequence_number = long(get("sequence_number").ok_or("sequence_number")?)?;
+                let min_sequence_number =
+                    long(get("min_sequence_number").ok_or("min_sequence_number")?)?;
+                let added_snapshot_id = long(get("added_snapshot_id").ok_or("added_snapshot_id")?)?;
+                let added_files_count = get("added_files_count")
+                    .or_else(|| get("added_data_files_count"))
+                    .and_then(|v| {
+                        if let AvroValue::Int(x) = v {
+                            Some(*x)
+                        } else {
+                            None
+                        }
+                    })
+                    .unwrap_or(0);
+                let existing_files_count = get("existing_files_count")
+                    .or_else(|| get("existing_data_files_count"))
+                    .and_then(|v| {
+                        if let AvroValue::Int(x) = v {
+                            Some(*x)
+                        } else {
+                            None
+                        }
+                    })
+                    .unwrap_or(0);
+                let deleted_files_count = get("deleted_files_count")
+                    .or_else(|| get("deleted_data_files_count"))
+                    .and_then(|v| {
+                        if let AvroValue::Int(x) = v {
+                            Some(*x)
+                        } else {
+                            None
+                        }
+                    })
+                    .unwrap_or(0);
+                let added_rows_count = long(get("added_rows_count").ok_or("added_rows_count")?)?;
+                let existing_rows_count =
+                    long(get("existing_rows_count").ok_or("existing_rows_count")?)?;
+                let deleted_rows_count =
+                    long(get("deleted_rows_count").ok_or("deleted_rows_count")?)?;
+
+                let partitions = match get("partitions") {
+                    Some(AvroValue::Union(_, inner)) => match inner.as_ref() {
+                        AvroValue::Array(items) => {
+                            let mut out = Vec::new();
+                            for it in items {
+                                if let AvroValue::Record(fs) = it {
+                                    let getf =
+                                        |n: &str| fs.iter().find(|(k, _)| k == n).map(|(_, v)| v);
+                                    let contains_null = matches!(getf("contains_null"), Some(AvroValue::Boolean(b)) if *b);
+                                    let contains_nan = match getf("contains_nan") {
+                                        Some(AvroValue::Boolean(b)) => Some(*b),
+                                        _ => None,
+                                    };
+                                    let lower_bound_bytes = match getf("lower_bound") {
+                                        Some(AvroValue::Bytes(b)) => Some(b.clone()),
+                                        _ => None,
+                                    };
+                                    let upper_bound_bytes = match getf("upper_bound") {
+                                        Some(AvroValue::Bytes(b)) => Some(b.clone()),
+                                        _ => None,
+                                    };
+                                    let mut fs = FieldSummary::new(contains_null);
+                                    if let Some(b) = contains_nan {
+                                        fs = fs.with_contains_nan(b);
+                                    }
+                                    fs.lower_bound_bytes = lower_bound_bytes;
+                                    fs.upper_bound_bytes = upper_bound_bytes;
+                                    out.push(fs);
+                                }
+                            }
+                            Some(out)
+                        }
+                        AvroValue::Null => None,
+                        _ => None,
+                    },
+                    // Some writers may encode unexpected types; ignore invalid values
+                    _ => None,
+                };
+
+                let key_metadata = match get("key_metadata") {
+                    Some(AvroValue::Union(_, inner)) => match inner.as_ref() {
+                        AvroValue::Bytes(b) => Some(b.clone()),
+                        AvroValue::Null => None,
+                        _ => None,
+                    },
+                    Some(AvroValue::Bytes(b)) => Some(b.clone()),
+                    _ => None,
+                };
+
+                let content = match content {
+                    0 => ManifestContentType::Data,
+                    1 => ManifestContentType::Deletes,
+                    _ => ManifestContentType::Data,
+                };
+
+                Ok(ManifestFile {
+                    manifest_path,
+                    manifest_length,
+                    partition_spec_id,
+                    content,
+                    sequence_number,
+                    min_sequence_number,
+                    added_snapshot_id,
+                    added_files_count: Some(added_files_count),
+                    existing_files_count: Some(existing_files_count),
+                    deleted_files_count: Some(deleted_files_count),
+                    added_rows_count: Some(added_rows_count),
+                    existing_rows_count: Some(existing_rows_count),
+                    deleted_rows_count: Some(deleted_rows_count),
+                    partitions,
+                    key_metadata,
+                })
+            }
+            _ => Err("not a record".into()),
+        }
     }
 }
 

@@ -77,6 +77,8 @@ pub struct IcebergPruningStats {
     arrow_schema: Arc<ArrowSchema>,
     /// Arrow field name -> Iceberg field id
     name_to_field_id: HashMap<String, i32>,
+    /// Iceberg field id -> Iceberg primitive type (for proper ScalarValue typing)
+    field_id_to_type: HashMap<i32, PrimitiveType>,
     min_cache: RefCell<HashMap<i32, ArrayRef>>,
     max_cache: RefCell<HashMap<i32, ArrayRef>>,
     nulls_cache: RefCell<HashMap<i32, ArrayRef>>,
@@ -90,13 +92,18 @@ impl IcebergPruningStats {
         iceberg_schema: &Schema,
     ) -> Self {
         let mut name_to_field_id = HashMap::new();
+        let mut field_id_to_type = HashMap::new();
         for f in iceberg_schema.fields().iter() {
             name_to_field_id.insert(f.name.clone(), f.id);
+            if let crate::spec::types::Type::Primitive(p) = f.field_type.as_ref() {
+                field_id_to_type.insert(f.id, p.clone());
+            }
         }
         Self {
             files,
             arrow_schema,
             name_to_field_id,
+            field_id_to_type,
             min_cache: RefCell::new(HashMap::new()),
             max_cache: RefCell::new(HashMap::new()),
             nulls_cache: RefCell::new(HashMap::new()),
@@ -108,10 +115,48 @@ impl IcebergPruningStats {
         self.name_to_field_id.get(&column.name).copied()
     }
 
-    fn datum_to_scalar(&self, datum: &Datum) -> datafusion::common::scalar::ScalarValue {
-        // Reuse existing literal conversion via Datum.literal
-        // TODO: Avoid allocations by caching conversions per field id
-        literal_to_scalar_value_local(&Literal::Primitive(datum.literal.clone()))
+    fn datum_to_scalar_for_field(
+        &self,
+        field_id: i32,
+        datum: &Datum,
+    ) -> datafusion::common::scalar::ScalarValue {
+        use datafusion::common::scalar::ScalarValue as SV;
+        // Convert according to the Iceberg field primitive type to match Arrow schema
+        match self.field_id_to_type.get(&field_id) {
+            Some(PrimitiveType::Date) => {
+                // Iceberg encodes date as days (i32)
+                if let crate::spec::types::values::PrimitiveLiteral::Int(v) = datum.literal {
+                    SV::Date32(Some(v))
+                } else {
+                    literal_to_scalar_value_local(&Literal::Primitive(datum.literal.clone()))
+                }
+            }
+            Some(PrimitiveType::Timestamp | PrimitiveType::TimestampNs) => {
+                // Iceberg encodes timestamp without tz as microseconds (long)
+                if let crate::spec::types::values::PrimitiveLiteral::Long(v) = datum.literal {
+                    SV::TimestampMicrosecond(Some(v), None)
+                } else {
+                    literal_to_scalar_value_local(&Literal::Primitive(datum.literal.clone()))
+                }
+            }
+            Some(PrimitiveType::Timestamptz | PrimitiveType::TimestamptzNs) => {
+                if let crate::spec::types::values::PrimitiveLiteral::Long(v) = datum.literal {
+                    // Use UTC; Arrow keeps tz as string label
+                    SV::TimestampMicrosecond(Some(v), Some(std::sync::Arc::from("UTC")))
+                } else {
+                    literal_to_scalar_value_local(&Literal::Primitive(datum.literal.clone()))
+                }
+            }
+            Some(PrimitiveType::Time) => {
+                if let crate::spec::types::values::PrimitiveLiteral::Long(v) = datum.literal {
+                    // Iceberg time is microseconds from midnight
+                    SV::Time64Microsecond(Some(v))
+                } else {
+                    literal_to_scalar_value_local(&Literal::Primitive(datum.literal.clone()))
+                }
+            }
+            _ => literal_to_scalar_value_local(&Literal::Primitive(datum.literal.clone())),
+        }
     }
 }
 
@@ -125,7 +170,7 @@ impl PruningStatistics for IcebergPruningStats {
         let scalars = self.files.iter().map(|f| {
             f.lower_bounds()
                 .get(&field_id)
-                .map(|d| self.datum_to_scalar(d))
+                .map(|d| self.datum_to_scalar_for_field(field_id, d))
         });
         let values =
             scalars.map(|opt| opt.unwrap_or(datafusion::common::scalar::ScalarValue::Null));
@@ -142,7 +187,7 @@ impl PruningStatistics for IcebergPruningStats {
         let scalars = self.files.iter().map(|f| {
             f.upper_bounds()
                 .get(&field_id)
-                .map(|d| self.datum_to_scalar(d))
+                .map(|d| self.datum_to_scalar_for_field(field_id, d))
         });
         let values =
             scalars.map(|opt| opt.unwrap_or(datafusion::common::scalar::ScalarValue::Null));
@@ -193,8 +238,8 @@ impl PruningStatistics for IcebergPruningStats {
             let lower = f.lower_bounds().get(&field_id);
             let upper = f.upper_bounds().get(&field_id);
             if let (Some(lb), Some(ub)) = (lower, upper) {
-                let lb_sv = self.datum_to_scalar(lb);
-                let ub_sv = self.datum_to_scalar(ub);
+                let lb_sv = self.datum_to_scalar_for_field(field_id, lb);
+                let ub_sv = self.datum_to_scalar_for_field(field_id, ub);
                 let mut any_match = false;
                 for v in _value.iter() {
                     if &lb_sv == v && &ub_sv == v {
