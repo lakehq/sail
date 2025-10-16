@@ -5,6 +5,9 @@
 #![allow(clippy::needless_return)]
 #![allow(clippy::empty_docs)]
 
-mod apis;
+pub mod apis;
 mod models;
+mod provider;
 pub mod types;
+
+pub use provider::IcebergRestCatalogProvider;

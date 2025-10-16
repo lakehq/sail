@@ -5510,10 +5510,12 @@ dependencies = [
  "async-trait",
  "chrono",
  "dashmap",
+ "datafusion",
  "once_cell",
  "ordered-float 5.1.0",
  "reqwest",
  "sail-catalog",
+ "sail-common",
  "serde",
  "serde_json",
  "serde_with",
@@ -5901,6 +5903,7 @@ version = "0.3.7"
 dependencies = [
  "datafusion",
  "sail-catalog",
+ "sail-catalog-iceberg",
  "sail-catalog-memory",
  "sail-common",
 ]

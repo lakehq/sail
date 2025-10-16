@@ -5,10 +5,15 @@ use datafusion::common::{plan_datafusion_err, Result};
 use sail_catalog::error::CatalogResult;
 use sail_catalog::manager::{CatalogManager, CatalogManagerOptions};
 use sail_catalog::provider::CatalogProvider;
+use sail_catalog_iceberg::IcebergRestCatalogProvider;
 use sail_catalog_memory::MemoryCatalogProvider;
 use sail_common::config::{AppConfig, CatalogType};
+use sail_common::runtime::RuntimeHandle;
 
-pub fn create_catalog_manager(config: &AppConfig) -> Result<CatalogManager> {
+pub fn create_catalog_manager(
+    config: &AppConfig,
+    runtime: RuntimeHandle,
+) -> Result<CatalogManager> {
     let catalogs = config
         .catalog
         .list
@@ -24,6 +29,15 @@ pub fn create_catalog_manager(config: &AppConfig) -> Result<CatalogManager> {
                         name.clone(),
                         initial_database.clone().try_into()?,
                         initial_database_comment.clone(),
+                    );
+                    Ok((name.clone(), Arc::new(provider)))
+                }
+                CatalogType::IcebergRest { name, prefix } => {
+                    let provider = IcebergRestCatalogProvider::new(
+                        name.clone(),
+                        prefix.clone(),
+                        Arc::new(sail_catalog_iceberg::apis::configuration::Configuration::new()), // CHECK HERE: DO NOT MERGE UNTIL REAL CONFIG ADDED
+                        runtime,
                     );
                     Ok((name.clone(), Arc::new(provider)))
                 }
