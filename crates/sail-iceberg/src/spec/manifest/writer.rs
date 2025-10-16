@@ -17,8 +17,7 @@
 
 // [CREDIT]: https://raw.githubusercontent.com/apache/iceberg-rust/dc349284a4204c1a56af47fb3177ace6f9e899a0/crates/iceberg/src/spec/manifest/writer.rs
 
-// Awareness stub for non-read path
-// TODO: Implement writer support if/when write path is added.
+// TODO: Implement manifest writer
 #[allow(dead_code)]
 #[derive(Debug, Clone)]
 pub struct ManifestWriter;

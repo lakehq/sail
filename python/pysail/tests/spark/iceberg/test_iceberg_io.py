@@ -2,7 +2,6 @@ import pandas as pd
 import pyarrow as pa
 import pytest
 from pandas.testing import assert_frame_equal
-from pyiceberg.catalog import load_catalog
 from pyiceberg.schema import Schema
 from pyiceberg.types import DoubleType, LongType, NestedField, StringType
 
@@ -18,24 +17,15 @@ def iceberg_test_data():
 
 @pytest.fixture
 def expected_pandas_df():
-    return pd.DataFrame({"id": [10, 11, 12], "event": ["A", "B", "A"], "score": [0.98, 0.54, 0.76]}).astype(
-        {"id": "int64", "event": "string", "score": "float64"}
+    return (
+        pd.DataFrame({"id": [10, 11, 12], "event": ["A", "B", "A"], "score": [0.98, 0.54, 0.76]})
+        .astype({"id": "int64", "score": "float64"})
+        .assign(event=lambda df: df["event"].astype("object"))
     )
 
 
-def test_iceberg_io_basic_read(spark, iceberg_test_data, expected_pandas_df, tmp_path):
-    warehouse_path = tmp_path / "warehouse"
-    warehouse_path.mkdir()
+def test_iceberg_io_basic_read(spark, iceberg_test_data, expected_pandas_df, sql_catalog):
     table_name = "test_table"
-
-    catalog = load_catalog(
-        "test_catalog",
-        type="sql",
-        uri=f"sqlite:///{tmp_path}/pyiceberg_catalog.db",
-        warehouse=f"file://{warehouse_path}",
-    )
-
-    catalog.create_namespace("default")
 
     schema = Schema(
         NestedField(field_id=1, name="id", field_type=LongType(), required=False),
@@ -43,7 +33,7 @@ def test_iceberg_io_basic_read(spark, iceberg_test_data, expected_pandas_df, tmp
         NestedField(field_id=3, name="score", field_type=DoubleType(), required=False),
     )
 
-    table = catalog.create_table(
+    table = sql_catalog.create_table(
         identifier=f"default.{table_name}",
         schema=schema,
     )
@@ -58,25 +48,14 @@ def test_iceberg_io_basic_read(spark, iceberg_test_data, expected_pandas_df, tmp
         result_df = spark.read.format("iceberg").load(table_path).sort("id")
 
         assert_frame_equal(
-            result_df.toPandas(), expected_pandas_df.sort_values("id").reset_index(drop=True), check_dtype=False
+            result_df.toPandas(), expected_pandas_df.sort_values("id").reset_index(drop=True), check_dtype=True
         )
     finally:
-        catalog.drop_table(f"default.{table_name}")
+        sql_catalog.drop_table(f"default.{table_name}")
 
 
-def test_iceberg_io_read_with_sql(spark, iceberg_test_data, expected_pandas_df, tmp_path):
-    warehouse_path = tmp_path / "warehouse"
-    warehouse_path.mkdir()
+def test_iceberg_io_read_with_sql(spark, iceberg_test_data, expected_pandas_df, sql_catalog):
     table_name = "test_table_sql"
-
-    catalog = load_catalog(
-        "test_catalog",
-        type="sql",
-        uri=f"sqlite:///{tmp_path}/pyiceberg_catalog.db",
-        warehouse=f"file://{warehouse_path}",
-    )
-
-    catalog.create_namespace("default")
 
     schema = Schema(
         NestedField(field_id=1, name="id", field_type=LongType(), required=False),
@@ -84,7 +63,7 @@ def test_iceberg_io_read_with_sql(spark, iceberg_test_data, expected_pandas_df, 
         NestedField(field_id=3, name="score", field_type=DoubleType(), required=False),
     )
 
-    table = catalog.create_table(
+    table = sql_catalog.create_table(
         identifier=f"default.{table_name}",
         schema=schema,
     )
@@ -102,34 +81,23 @@ def test_iceberg_io_read_with_sql(spark, iceberg_test_data, expected_pandas_df, 
             result_df = spark.sql("SELECT * FROM my_iceberg").sort("id")
 
             assert_frame_equal(
-                result_df.toPandas(), expected_pandas_df.sort_values("id").reset_index(drop=True), check_dtype=False
+                result_df.toPandas(), expected_pandas_df.sort_values("id").reset_index(drop=True), check_dtype=True
             )
         finally:
             spark.sql("DROP TABLE IF EXISTS my_iceberg")
     finally:
-        catalog.drop_table(f"default.{table_name}")
+        sql_catalog.drop_table(f"default.{table_name}")
 
 
-def test_iceberg_io_multiple_files(spark, tmp_path):
-    warehouse_path = tmp_path / "warehouse"
-    warehouse_path.mkdir()
+def test_iceberg_io_multiple_files(spark, sql_catalog):
     table_name = "test_table_multiple"
-
-    catalog = load_catalog(
-        "test_catalog",
-        type="sql",
-        uri=f"sqlite:///{tmp_path}/pyiceberg_catalog.db",
-        warehouse=f"file://{warehouse_path}",
-    )
-
-    catalog.create_namespace("default")
 
     schema = Schema(
         NestedField(field_id=1, name="id", field_type=LongType(), required=False),
         NestedField(field_id=2, name="value", field_type=StringType(), required=False),
     )
 
-    table = catalog.create_table(
+    table = sql_catalog.create_table(
         identifier=f"default.{table_name}",
         schema=schema,
     )
@@ -147,14 +115,16 @@ def test_iceberg_io_multiple_files(spark, tmp_path):
 
         result_df = spark.read.format("iceberg").load(table_path).sort("id")
 
-        expected_data = pd.DataFrame({"id": [1, 2, 3, 4], "value": ["a", "b", "c", "d"]}).astype(
-            {"id": "int64", "value": "string"}
+        expected_data = (
+            pd.DataFrame({"id": [1, 2, 3, 4], "value": ["a", "b", "c", "d"]})
+            .astype({"id": "int64"})
+            .assign(value=lambda df: df["value"].astype("object"))
         )
 
         assert_frame_equal(
-            result_df.toPandas(), expected_data.sort_values("id").reset_index(drop=True), check_dtype=False
+            result_df.toPandas(), expected_data.sort_values("id").reset_index(drop=True), check_dtype=True
         )
 
         assert result_df.count() == 4  # noqa: PLR2004
     finally:
-        catalog.drop_table(f"default.{table_name}")
+        sql_catalog.drop_table(f"default.{table_name}")

@@ -161,7 +161,6 @@ impl IcebergTableProvider {
     ) -> DataFusionResult<Vec<DataFile>> {
         let mut data_files = Vec::new();
 
-        // Build partition spec map for summary pruning
         let spec_map: HashMap<i32, PartitionSpec> = self
             .partition_specs
             .iter()
@@ -171,7 +170,7 @@ impl IcebergTableProvider {
             prune_manifests_by_partition_summaries(manifest_list, &self.schema, &spec_map, filters);
 
         for manifest_file in manifest_files {
-            // TODO: Support delete manifests
+            // TODO: Add support for delete manifests
             if manifest_file.content != ManifestContentType::Data {
                 continue;
             }

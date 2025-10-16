@@ -15,12 +15,12 @@ use crate::spec::partition::PartitionSpec;
 use crate::spec::types::values::{Datum, Literal};
 use crate::spec::types::{PrimitiveType, Type};
 use crate::spec::{DataFile, Manifest, ManifestContentType, ManifestList, Schema};
-// TODO: Consider parsing logical expressions more robustly for summary pruning
+// TODO: Implement robust logical expression parsing for summary pruning
 
 pub(crate) fn literal_to_scalar_value_local(
     literal: &Literal,
 ) -> datafusion::common::scalar::ScalarValue {
-    // TODO: Extend conversion to cover Decimal/UUID/Fixed with precise semantics and timezones
+    // TODO: Add Decimal/UUID/Fixed conversion with precise semantics and timezones
     match literal {
         Literal::Primitive(p) => match p {
             crate::spec::types::values::PrimitiveLiteral::Boolean(v) => {
@@ -121,10 +121,8 @@ impl IcebergPruningStats {
         datum: &Datum,
     ) -> datafusion::common::scalar::ScalarValue {
         use datafusion::common::scalar::ScalarValue as SV;
-        // Convert according to the Iceberg field primitive type to match Arrow schema
         match self.field_id_to_type.get(&field_id) {
             Some(PrimitiveType::Date) => {
-                // Iceberg encodes date as days (i32)
                 if let crate::spec::types::values::PrimitiveLiteral::Int(v) = datum.literal {
                     SV::Date32(Some(v))
                 } else {
@@ -132,7 +130,6 @@ impl IcebergPruningStats {
                 }
             }
             Some(PrimitiveType::Timestamp | PrimitiveType::TimestampNs) => {
-                // Iceberg encodes timestamp without tz as microseconds (long)
                 if let crate::spec::types::values::PrimitiveLiteral::Long(v) = datum.literal {
                     SV::TimestampMicrosecond(Some(v), None)
                 } else {
@@ -141,7 +138,6 @@ impl IcebergPruningStats {
             }
             Some(PrimitiveType::Timestamptz | PrimitiveType::TimestamptzNs) => {
                 if let crate::spec::types::values::PrimitiveLiteral::Long(v) = datum.literal {
-                    // Use UTC; Arrow keeps tz as string label
                     SV::TimestampMicrosecond(Some(v), Some(std::sync::Arc::from("UTC")))
                 } else {
                     literal_to_scalar_value_local(&Literal::Primitive(datum.literal.clone()))
@@ -149,7 +145,6 @@ impl IcebergPruningStats {
             }
             Some(PrimitiveType::Time) => {
                 if let crate::spec::types::values::PrimitiveLiteral::Long(v) = datum.literal {
-                    // Iceberg time is microseconds from midnight
                     SV::Time64Microsecond(Some(v))
                 } else {
                     literal_to_scalar_value_local(&Literal::Primitive(datum.literal.clone()))
@@ -230,8 +225,6 @@ impl PruningStatistics for IcebergPruningStats {
         _column: &Column,
         _value: &std::collections::HashSet<datafusion::common::scalar::ScalarValue>,
     ) -> Option<BooleanArray> {
-        // Basic contained() for equality/IN pruning using lower/upper bounds equality for strings and integers
-        // When both bounds are equal to the value, we can mark "contained" true; otherwise, unknown
         let field_id = self.field_id_for(_column)?;
         let mut result = Vec::with_capacity(self.files.len());
         for f in &self.files {
@@ -312,7 +305,7 @@ pub fn prune_manifests_by_partition_summaries<'a>(
     partition_specs: &std::collections::HashMap<i32, PartitionSpec>,
     filters: &[Expr],
 ) -> Vec<&'a crate::spec::manifest_list::ManifestFile> {
-    // TODO: Support non-identity transforms (day/month/hour/bucket/truncate)
+    // TODO: Add support for non-identity transforms (day/month/hour/bucket/truncate)
     let eq_filters = collect_identity_eq_filters(table_schema, filters);
     let in_filters = collect_identity_in_filters(table_schema, filters);
     let range_filters = collect_identity_range_filters(table_schema, filters);
@@ -321,7 +314,6 @@ pub fn prune_manifests_by_partition_summaries<'a>(
         .iter()
         .filter(|mf| mf.content == ManifestContentType::Data)
         .filter(|mf| {
-            // If no simple identity eq filters, keep manifest
             if eq_filters.is_empty() {
                 return true;
             }
@@ -331,20 +323,16 @@ pub fn prune_manifests_by_partition_summaries<'a>(
             let Some(part_summaries) = mf.partitions.as_ref() else {
                 return true;
             };
-            // Build partition field result types
             let part_type = match spec.partition_type(table_schema) {
                 Ok(t) => t,
                 Err(_) => return true,
             };
-            // Evaluate equality filters; if any contradicts summaries, drop manifest
             for (source_id, lit) in &eq_filters {
-                // find partition field with identity transform sourcing this column
                 if let Some((idx, _pf)) = spec.fields().iter().enumerate().find(|(_, pf)| {
                     pf.source_id == *source_id
                         && matches!(pf.transform, crate::spec::transform::Transform::Identity)
                 }) {
                     if let Some(summary) = part_summaries.get(idx) {
-                        // decode bounds according to partition field type
                         let field_ty = part_type.fields().get(idx).map(|nf| nf.field_type.as_ref());
                         if let Some(Type::Primitive(prim_ty)) = field_ty {
                             // TODO: Handle contains_null/contains_nan from FieldSummary
@@ -358,17 +346,14 @@ pub fn prune_manifests_by_partition_summaries<'a>(
                                 .and_then(|b| decode_bound_bytes(prim_ty, b).ok());
 
                             if let (Some(lb), Some(ub)) = (lower.as_ref(), upper.as_ref()) {
-                                // if lit < lb or lit > ub, cannot match
                                 if lt_prim(lit, lb) || gt_prim(lit, ub) {
                                     return false;
                                 }
                             } else if let Some(lb) = lower.as_ref() {
-                                // if we have only a lower bound, drop manifest if lit < lb
                                 if lt_prim(lit, lb) {
                                     return false;
                                 }
                             } else if let Some(ub) = upper.as_ref() {
-                                // if we have only an upper bound, drop manifest if lit > ub
                                 if gt_prim(lit, ub) {
                                     return false;
                                 }
@@ -378,7 +363,6 @@ pub fn prune_manifests_by_partition_summaries<'a>(
                 }
             }
 
-            // Evaluate IN-list filters: require intersection with [lb, ub]
             for (source_id, lits) in &in_filters {
                 if let Some((idx, _pf)) = spec.fields().iter().enumerate().find(|(_, pf)| {
                     pf.source_id == *source_id
@@ -407,13 +391,11 @@ pub fn prune_manifests_by_partition_summaries<'a>(
                                     return false;
                                 }
                             } else if let Some(lb) = lower.as_ref() {
-                                // with only lower bound, require any value >= lb
                                 let any_in = lits.iter().any(|v| !lt_prim(v, lb));
                                 if !any_in {
                                     return false;
                                 }
                             } else if let Some(ub) = upper.as_ref() {
-                                // with only upper bound, require any value <= ub
                                 let any_in = lits.iter().any(|v| !gt_prim(v, ub));
                                 if !any_in {
                                     return false;
@@ -424,7 +406,6 @@ pub fn prune_manifests_by_partition_summaries<'a>(
                 }
             }
 
-            // Evaluate simple range filters: require overlap with [lb, ub]
             for (source_id, range) in &range_filters {
                 if let Some((idx, _pf)) = spec.fields().iter().enumerate().find(|(_, pf)| {
                     pf.source_id == *source_id
@@ -442,8 +423,6 @@ pub fn prune_manifests_by_partition_summaries<'a>(
                                 .as_ref()
                                 .and_then(|b| decode_bound_bytes(prim_ty, b).ok());
                             if let (Some(lb), Some(ub)) = (lower.as_ref(), upper.as_ref()) {
-                                // manifest range [lb, ub]
-                                // query range [min, max]
                                 if let Some((ref qmin, _incl_min)) = range.min {
                                     if gt_prim(qmin, ub) {
                                         return false;
@@ -470,7 +449,7 @@ pub fn prune_manifest_entries(
     _schema: &Schema,
     _filters: &[Expr],
 ) -> Vec<DataFile> {
-    // TODO: Partition-transform awareness and metrics-only prune at manifest entry granularity
+    // TODO: Add partition-transform awareness and metrics-only pruning at manifest entry granularity
     manifest
         .entries()
         .iter()
@@ -489,7 +468,6 @@ fn collect_identity_eq_filters(
     schema: &Schema,
     filters: &[Expr],
 ) -> Vec<(i32, crate::spec::types::values::PrimitiveLiteral)> {
-    // returns Vec of (source_id, literal) for Exprs of form col = literal
     fn strip(expr: &Expr) -> &Expr {
         match expr {
             Expr::Cast(c) => strip(&c.expr),
@@ -764,10 +742,7 @@ fn decode_bound_bytes(
         PrimitiveType::Uuid => {
             return Err("uuid bound decoding not supported".to_string());
         }
-        PrimitiveType::Fixed(_) | PrimitiveType::Binary => {
-            // Treat bounds as raw bytes for conservative comparisons (equality filters only)
-            PL::Binary(bytes.to_vec())
-        }
+        PrimitiveType::Fixed(_) | PrimitiveType::Binary => PL::Binary(bytes.to_vec()),
         PrimitiveType::Decimal { .. } => {
             return Err("decimal bound decoding not supported".to_string());
         }

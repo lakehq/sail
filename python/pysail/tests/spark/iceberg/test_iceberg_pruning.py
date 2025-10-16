@@ -1,28 +1,14 @@
 # ruff: noqa
 import pandas as pd
 import pyarrow as pa
-from pyiceberg.catalog import load_catalog
 from pyiceberg.schema import Schema
 from pyiceberg.types import BooleanType, DoubleType, IntegerType, LongType, NestedField, StringType
+from .utils import create_sql_catalog
 
 
-def _create_catalog(tmp_path):
-    warehouse_path = tmp_path / "warehouse"
-    warehouse_path.mkdir()
-    catalog = load_catalog(
-        "test_catalog",
-        type="sql",
-        uri=f"sqlite:///{tmp_path}/pyiceberg_catalog.db",
-        warehouse=f"file://{warehouse_path}",
-    )
-    catalog.create_namespace("default")
-    return catalog
-
-
-def test_equality_and_in(spark, tmp_path):
-    catalog = _create_catalog(tmp_path)
+def _make_eq_in_table(catalog, ident):
     table = catalog.create_table(
-        identifier="default.prune_eq_in",
+        identifier=ident,
         schema=Schema(
             NestedField(field_id=1, name="id", field_type=LongType(), required=False),
             NestedField(field_id=2, name="year", field_type=IntegerType(), required=False),
@@ -30,33 +16,46 @@ def test_equality_and_in(spark, tmp_path):
             NestedField(field_id=4, name="value", field_type=StringType(), required=False),
         ),
     )
+    batches = [
+        pd.DataFrame({"id": [1, 2], "year": [2023, 2023], "month": [1, 1], "value": ["a", "b"]}),
+        pd.DataFrame({"id": [3, 4], "year": [2023, 2023], "month": [2, 2], "value": ["c", "d"]}),
+        pd.DataFrame({"id": [5, 6], "year": [2024, 2024], "month": [1, 1], "value": ["e", "f"]}),
+        pd.DataFrame({"id": [7, 8], "year": [2024, 2024], "month": [2, 2], "value": ["g", "h"]}),
+    ]
+    for df in batches:
+        df = df.astype({"id": "int64", "year": "int32", "month": "int32"})
+        table.append(pa.Table.from_pandas(df))
+    return table
+
+
+def test_pruning_equality_filters(spark, tmp_path):
+    catalog = create_sql_catalog(tmp_path)
+    ident = "default.prune_eq_only"
+    table = _make_eq_in_table(catalog, ident)
     try:
-        batches = [
-            pd.DataFrame({"id": [1, 2], "year": [2023, 2023], "month": [1, 1], "value": ["a", "b"]}),
-            pd.DataFrame({"id": [3, 4], "year": [2023, 2023], "month": [2, 2], "value": ["c", "d"]}),
-            pd.DataFrame({"id": [5, 6], "year": [2024, 2024], "month": [1, 1], "value": ["e", "f"]}),
-            pd.DataFrame({"id": [7, 8], "year": [2024, 2024], "month": [2, 2], "value": ["g", "h"]}),
-        ]
-        for df in batches:
-            df = df.astype({"id": "int64", "year": "int32", "month": "int32"})
-            table.append(pa.Table.from_pandas(df))
-
         tp = table.location()
-
         df = spark.read.format("iceberg").load(tp).filter("year = 2023")
         assert df.count() == 4
-
         df = spark.read.format("iceberg").load(tp).filter("year = 2023 AND month = 1")
         assert df.count() == 2
+    finally:
+        catalog.drop_table(ident)
 
+
+def test_pruning_in_clause(spark, tmp_path):
+    catalog = create_sql_catalog(tmp_path)
+    ident = "default.prune_in_only"
+    table = _make_eq_in_table(catalog, ident)
+    try:
+        tp = table.location()
         df = spark.read.format("iceberg").load(tp).filter("month IN (2)")
         assert df.count() == 4
     finally:
-        catalog.drop_table("default.prune_eq_in")
+        catalog.drop_table(ident)
 
 
 def test_comparison_and_between(spark, tmp_path):
-    catalog = _create_catalog(tmp_path)
+    catalog = create_sql_catalog(tmp_path)
     table = catalog.create_table(
         identifier="default.prune_cmp",
         schema=Schema(
@@ -89,7 +88,7 @@ def test_comparison_and_between(spark, tmp_path):
 
 
 def test_null_and_boolean(spark, tmp_path):
-    catalog = _create_catalog(tmp_path)
+    catalog = create_sql_catalog(tmp_path)
     table = catalog.create_table(
         identifier="default.prune_null_bool",
         schema=Schema(
@@ -122,7 +121,7 @@ def test_null_and_boolean(spark, tmp_path):
 
 
 def test_correctness_small(spark, tmp_path):
-    catalog = _create_catalog(tmp_path)
+    catalog = create_sql_catalog(tmp_path)
     table = catalog.create_table(
         identifier="default.prune_correct",
         schema=Schema(
@@ -159,7 +158,7 @@ def test_correctness_small(spark, tmp_path):
 
 
 def test_or_and_not_pruning(spark, tmp_path):
-    catalog = _create_catalog(tmp_path)
+    catalog = create_sql_catalog(tmp_path)
     table = catalog.create_table(
         identifier="default.prune_or_and_not",
         schema=Schema(
@@ -193,7 +192,7 @@ def test_or_and_not_pruning(spark, tmp_path):
 
 
 def test_string_in_and_range_pruning(spark, tmp_path):
-    catalog = _create_catalog(tmp_path)
+    catalog = create_sql_catalog(tmp_path)
     table = catalog.create_table(
         identifier="default.prune_string_in_range",
         schema=Schema(
@@ -223,7 +222,7 @@ def test_string_in_and_range_pruning(spark, tmp_path):
 
 
 def test_metrics_based_pruning_numeric(spark, tmp_path):
-    catalog = _create_catalog(tmp_path)
+    catalog = create_sql_catalog(tmp_path)
     table = catalog.create_table(
         identifier="default.prune_metrics_numeric",
         schema=Schema(
@@ -251,7 +250,7 @@ def test_metrics_based_pruning_numeric(spark, tmp_path):
 
 
 def test_limit_pushdown_behavior(spark, tmp_path):
-    catalog = _create_catalog(tmp_path)
+    catalog = create_sql_catalog(tmp_path)
     table = catalog.create_table(
         identifier="default.prune_limit",
         schema=Schema(

@@ -70,46 +70,69 @@ def _append_sample_data(table):
 
 
 @pytest.mark.parametrize(
-    "table_name, spec, predicate",  # noqa: PT006
+    ("table_name", "spec", "predicate_column", "predicate_value", "expected_numbers"),
     [
-        (
+        pytest.param(
             "default.test_partitioned_by_identity",
             PartitionSpec(PartitionField(3, 1001, IdentityTransform(), "ts")),
-            "ts >= '2023-03-05T00:00:00+00:00'",
+            "ts",
+            "'2023-03-05T00:00:00+00:00'",
+            {5, 6, 7, 8, 9, 10, 11, 12},
+            id="partition-by-identity",
         ),
-        (
+        pytest.param(
             "default.test_partitioned_by_years",
             PartitionSpec(PartitionField(4, 1002, YearTransform(), "dt_year")),
-            "dt >= '2023-03-05'",
+            "dt",
+            "'2023-03-05'",
+            {5, 6, 7, 8, 9, 10, 11, 12},
+            id="partition-by-years",
         ),
-        (
+        pytest.param(
             "default.test_partitioned_by_months",
             PartitionSpec(PartitionField(4, 1003, MonthTransform(), "dt_month")),
-            "dt >= '2023-03-05'",
+            "dt",
+            "'2023-03-05'",
+            {5, 6, 7, 8, 9, 10, 11, 12},
+            id="partition-by-months",
         ),
-        (
+        pytest.param(
             "default.test_partitioned_by_days",
             PartitionSpec(PartitionField(3, 1004, DayTransform(), "ts_day")),
-            "ts >= '2023-03-05T00:00:00+00:00'",
+            "ts",
+            "'2023-03-05T00:00:00+00:00'",
+            {5, 6, 7, 8, 9, 10, 11, 12},
+            id="partition-by-days",
         ),
-        (
+        pytest.param(
             "default.test_partitioned_by_hours",
             PartitionSpec(PartitionField(3, 1005, HourTransform(), "ts_hour")),
-            "ts >= '2023-03-05T00:00:00+00:00'",
+            "ts",
+            "'2023-03-05T00:00:00+00:00'",
+            {5, 6, 7, 8, 9, 10, 11, 12},
+            id="partition-by-hours",
         ),
-        (
+        pytest.param(
             "default.test_partitioned_by_truncate",
             PartitionSpec(PartitionField(2, 1006, TruncateTransform(1), "letter_trunc")),
-            "letter >= 'e'",
+            "letter",
+            "'e'",
+            {5, 6, 7, 8, 9, 10, 11, 12},
+            id="partition-by-truncate",
         ),
-        (
+        pytest.param(
             "default.test_partitioned_by_bucket",
             PartitionSpec(PartitionField(1, 1007, BucketTransform(8), "number_bucket")),
-            "number >= 5",
+            "number",
+            "5",
+            {5, 6, 7, 8, 9, 10, 11, 12},
+            id="partition-by-bucket",
         ),
     ],
 )
-def test_partition_transform_pruning(spark, tmp_path, table_name, spec, predicate):
+def test_partition_transform_pruning(
+    spark, tmp_path, table_name, spec, predicate_column, predicate_value, expected_numbers
+):
     catalog = create_sql_catalog(tmp_path)
     schema = _make_common_schema()
     table = catalog.create_table(identifier=table_name, schema=schema, partition_spec=spec)
@@ -117,8 +140,9 @@ def test_partition_transform_pruning(spark, tmp_path, table_name, spec, predicat
         _append_sample_data(table)
         path = table.location()
 
+        predicate = f"{predicate_column} >= {predicate_value}"
         df = spark.read.format("iceberg").load(path).filter(predicate).select("number")
-        result = set(r[0] for r in df.collect())  # noqa: C401
-        assert result == {5, 6, 7, 8, 9, 10, 11, 12}
+        result = {r[0] for r in df.collect()}
+        assert result == expected_numbers
     finally:
         catalog.drop_table(table_name)
