@@ -29,9 +29,10 @@ use url::Url;
 use crate::arrow_conversion::iceberg_schema_to_arrow;
 use crate::datasource::expr_adapter::IcebergPhysicalExprAdapterFactory;
 use crate::datasource::expressions::simplify_expr;
+use crate::datasource::literal_to_scalar_value;
 use crate::datasource::pruning::{prune_files, prune_manifests_by_partition_summaries};
 use crate::spec::manifest::DataContentType;
-use crate::spec::types::values::{Literal, PrimitiveLiteral};
+use crate::spec::types::values::Literal;
 use crate::spec::{
     DataFile, FormatVersion, Manifest, ManifestContentType, ManifestList, ManifestStatus,
     PartitionSpec, Schema, Snapshot,
@@ -370,7 +371,7 @@ impl IcebergTableProvider {
                 .partition()
                 .iter()
                 .map(|literal_opt| match literal_opt {
-                    Some(literal) => self.literal_to_scalar_value(literal),
+                    Some(literal) => literal_to_scalar_value(literal),
                     None => ScalarValue::Null,
                 })
                 .collect();
@@ -442,7 +443,7 @@ impl IcebergTableProvider {
                 // min
                 if let Some(d) = df.lower_bounds().get(field_id) {
                     let v = Literal::Primitive(d.literal.clone());
-                    let sv = self.literal_to_scalar_value(&v);
+                    let sv = literal_to_scalar_value(&v);
                     min_scalars[col_idx] = match (&min_scalars[col_idx], &sv) {
                         (None, s) => Some(s.clone()),
                         (Some(existing), s) => Some(if s < existing {
@@ -456,7 +457,7 @@ impl IcebergTableProvider {
                 // max
                 if let Some(d) = df.upper_bounds().get(field_id) {
                     let v = Literal::Primitive(d.literal.clone());
-                    let sv = self.literal_to_scalar_value(&v);
+                    let sv = literal_to_scalar_value(&v);
                     max_scalars[col_idx] = match (&max_scalars[col_idx], &sv) {
                         (None, s) => Some(s.clone()),
                         (Some(existing), s) => Some(if s > existing {
@@ -489,41 +490,6 @@ impl IcebergTableProvider {
             num_rows: Precision::Exact(total_rows),
             total_byte_size: Precision::Exact(total_bytes),
             column_statistics,
-        }
-    }
-
-    /// Convert Iceberg Literal to DataFusion ScalarValue
-    fn literal_to_scalar_value(&self, literal: &Literal) -> ScalarValue {
-        match literal {
-            Literal::Primitive(primitive) => match primitive {
-                PrimitiveLiteral::Boolean(v) => ScalarValue::Boolean(Some(*v)),
-                PrimitiveLiteral::Int(v) => ScalarValue::Int32(Some(*v)),
-                PrimitiveLiteral::Long(v) => ScalarValue::Int64(Some(*v)),
-                PrimitiveLiteral::Float(v) => ScalarValue::Float32(Some(v.into_inner())),
-                PrimitiveLiteral::Double(v) => ScalarValue::Float64(Some(v.into_inner())),
-                PrimitiveLiteral::String(v) => ScalarValue::Utf8(Some(v.clone())),
-                PrimitiveLiteral::Binary(v) => ScalarValue::Binary(Some(v.clone())),
-                PrimitiveLiteral::Int128(v) => ScalarValue::Decimal128(Some(*v), 38, 0),
-                PrimitiveLiteral::UInt128(v) => {
-                    if *v <= i128::MAX as u128 {
-                        ScalarValue::Decimal128(Some(*v as i128), 38, 0)
-                    } else {
-                        ScalarValue::Utf8(Some(v.to_string()))
-                    }
-                }
-            },
-            Literal::Struct(fields) => {
-                let json_repr = serde_json::to_string(fields).unwrap_or_default();
-                ScalarValue::Utf8(Some(json_repr))
-            }
-            Literal::List(items) => {
-                let json_repr = serde_json::to_string(items).unwrap_or_default();
-                ScalarValue::Utf8(Some(json_repr))
-            }
-            Literal::Map(pairs) => {
-                let json_repr = serde_json::to_string(pairs).unwrap_or_default();
-                ScalarValue::Utf8(Some(json_repr))
-            }
         }
     }
 
@@ -560,7 +526,7 @@ impl IcebergTableProvider {
                     .map(|datum| {
                         // convert Datum -> Literal for existing scalar conversion
                         let lit = Literal::Primitive(datum.literal.clone());
-                        self.literal_to_scalar_value(&lit)
+                        literal_to_scalar_value(&lit)
                     })
                     .map(Precision::Exact)
                     .unwrap_or(Precision::Absent);
@@ -570,7 +536,7 @@ impl IcebergTableProvider {
                     .get(&field_id)
                     .map(|datum| {
                         let lit = Literal::Primitive(datum.literal.clone());
-                        self.literal_to_scalar_value(&lit)
+                        literal_to_scalar_value(&lit)
                     })
                     .map(Precision::Exact)
                     .unwrap_or(Precision::Absent);

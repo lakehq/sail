@@ -1,17 +1,15 @@
 import math
 
 import pyarrow as pa
-import pytest
 from pyiceberg.schema import Schema
 from pyiceberg.types import BooleanType, DoubleType, NestedField, StringType, TimestampType
 
 from .utils import create_sql_catalog  # noqa: TID252
 
 
-@pytest.mark.parametrize("use_rewritten", [False, True])
-def test_nan_reads(spark, tmp_path, use_rewritten):
+def test_nan_reads(spark, tmp_path):
     catalog = create_sql_catalog(tmp_path)
-    identifier = f"default.test_nan_reads_{'rewritten' if use_rewritten else 'orig'}"
+    identifier = "default.test_nan_reads"
     table = catalog.create_table(
         identifier=identifier,
         schema=Schema(

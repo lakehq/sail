@@ -11,64 +11,12 @@ use datafusion::logical_expr::utils::conjunction;
 use datafusion::logical_expr::{BinaryExpr, Expr, Operator};
 use datafusion::physical_optimizer::pruning::PruningPredicate;
 
+use crate::datasource::literal_to_scalar_value;
 use crate::spec::partition::PartitionSpec;
 use crate::spec::types::values::{Datum, Literal};
 use crate::spec::types::{PrimitiveType, Type};
 use crate::spec::{DataFile, Manifest, ManifestContentType, ManifestList, Schema};
 // TODO: Implement robust logical expression parsing for summary pruning
-
-pub(crate) fn literal_to_scalar_value_local(
-    literal: &Literal,
-) -> datafusion::common::scalar::ScalarValue {
-    // TODO: Add Decimal/UUID/Fixed conversion with precise semantics and timezones
-    match literal {
-        Literal::Primitive(p) => match p {
-            crate::spec::types::values::PrimitiveLiteral::Boolean(v) => {
-                datafusion::common::scalar::ScalarValue::Boolean(Some(*v))
-            }
-            crate::spec::types::values::PrimitiveLiteral::Int(v) => {
-                datafusion::common::scalar::ScalarValue::Int32(Some(*v))
-            }
-            crate::spec::types::values::PrimitiveLiteral::Long(v) => {
-                datafusion::common::scalar::ScalarValue::Int64(Some(*v))
-            }
-            crate::spec::types::values::PrimitiveLiteral::Float(v) => {
-                datafusion::common::scalar::ScalarValue::Float32(Some(v.into_inner()))
-            }
-            crate::spec::types::values::PrimitiveLiteral::Double(v) => {
-                datafusion::common::scalar::ScalarValue::Float64(Some(v.into_inner()))
-            }
-            crate::spec::types::values::PrimitiveLiteral::String(v) => {
-                datafusion::common::scalar::ScalarValue::Utf8(Some(v.clone()))
-            }
-            crate::spec::types::values::PrimitiveLiteral::Binary(v) => {
-                datafusion::common::scalar::ScalarValue::Binary(Some(v.clone()))
-            }
-            crate::spec::types::values::PrimitiveLiteral::Int128(v) => {
-                datafusion::common::scalar::ScalarValue::Decimal128(Some(*v), 38, 0)
-            }
-            crate::spec::types::values::PrimitiveLiteral::UInt128(v) => {
-                if *v <= i128::MAX as u128 {
-                    datafusion::common::scalar::ScalarValue::Decimal128(Some(*v as i128), 38, 0)
-                } else {
-                    datafusion::common::scalar::ScalarValue::Utf8(Some(v.to_string()))
-                }
-            }
-        },
-        Literal::Struct(fields) => {
-            let json_repr = serde_json::to_string(fields).unwrap_or_default();
-            datafusion::common::scalar::ScalarValue::Utf8(Some(json_repr))
-        }
-        Literal::List(items) => {
-            let json_repr = serde_json::to_string(items).unwrap_or_default();
-            datafusion::common::scalar::ScalarValue::Utf8(Some(json_repr))
-        }
-        Literal::Map(pairs) => {
-            let json_repr = serde_json::to_string(pairs).unwrap_or_default();
-            datafusion::common::scalar::ScalarValue::Utf8(Some(json_repr))
-        }
-    }
-}
 
 /// Pruning statistics over Iceberg DataFiles
 pub struct IcebergPruningStats {
@@ -126,31 +74,31 @@ impl IcebergPruningStats {
                 if let crate::spec::types::values::PrimitiveLiteral::Int(v) = datum.literal {
                     SV::Date32(Some(v))
                 } else {
-                    literal_to_scalar_value_local(&Literal::Primitive(datum.literal.clone()))
+                    literal_to_scalar_value(&Literal::Primitive(datum.literal.clone()))
                 }
             }
             Some(PrimitiveType::Timestamp | PrimitiveType::TimestampNs) => {
                 if let crate::spec::types::values::PrimitiveLiteral::Long(v) = datum.literal {
                     SV::TimestampMicrosecond(Some(v), None)
                 } else {
-                    literal_to_scalar_value_local(&Literal::Primitive(datum.literal.clone()))
+                    literal_to_scalar_value(&Literal::Primitive(datum.literal.clone()))
                 }
             }
             Some(PrimitiveType::Timestamptz | PrimitiveType::TimestamptzNs) => {
                 if let crate::spec::types::values::PrimitiveLiteral::Long(v) = datum.literal {
                     SV::TimestampMicrosecond(Some(v), Some(std::sync::Arc::from("UTC")))
                 } else {
-                    literal_to_scalar_value_local(&Literal::Primitive(datum.literal.clone()))
+                    literal_to_scalar_value(&Literal::Primitive(datum.literal.clone()))
                 }
             }
             Some(PrimitiveType::Time) => {
                 if let crate::spec::types::values::PrimitiveLiteral::Long(v) = datum.literal {
                     SV::Time64Microsecond(Some(v))
                 } else {
-                    literal_to_scalar_value_local(&Literal::Primitive(datum.literal.clone()))
+                    literal_to_scalar_value(&Literal::Primitive(datum.literal.clone()))
                 }
             }
-            _ => literal_to_scalar_value_local(&Literal::Primitive(datum.literal.clone())),
+            _ => literal_to_scalar_value(&Literal::Primitive(datum.literal.clone())),
         }
     }
 }

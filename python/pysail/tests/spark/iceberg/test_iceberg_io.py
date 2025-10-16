@@ -5,6 +5,8 @@ from pandas.testing import assert_frame_equal
 from pyiceberg.schema import Schema
 from pyiceberg.types import DoubleType, LongType, NestedField, StringType
 
+from pysail.tests.spark.utils import escape_sql_string_literal
+
 
 @pytest.fixture
 def iceberg_test_data():
@@ -75,7 +77,7 @@ def test_iceberg_io_read_with_sql(spark, iceberg_test_data, expected_pandas_df, 
 
         table_path = table.location()
 
-        spark.sql(f"CREATE TABLE my_iceberg USING iceberg LOCATION '{table_path}'")
+        spark.sql(f"CREATE TABLE my_iceberg USING iceberg LOCATION '{escape_sql_string_literal(table_path)}'")
 
         try:
             result_df = spark.sql("SELECT * FROM my_iceberg").sort("id")
