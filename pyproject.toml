@@ -37,7 +37,7 @@ test = [
     "pytest>=8.4,<9",
     "pillow>=10.3.0",
     "pyiceberg[sql-sqlite]==0.10.0",
-    "pydantic>=2.7,<2.8",
+    "pydantic>=2.11,<2.12",
 ]
 mcp = [
     "mcp>=1.0.0,<2",
@@ -79,7 +79,7 @@ dependencies = [
     "boto3>=1.38,<2",
     "pillow>=10.3.0",
     "pyiceberg[sql-sqlite]==0.10.0",
-    "pydantic>=2.7,<2.8",
+    "pydantic>=2.11,<2.12",
 ]
 path = ".venvs/default"
 
@@ -119,7 +119,7 @@ dependencies = [
     "duckdb>=1.1,<2",
     "pillow>=10.3.0",
     "pyiceberg[sql-sqlite]==0.10.0",
-    "pydantic>=2.7,<2.8",
+    "pydantic>=2.11,<2.12",
 ]
 
 [[tool.hatch.envs.test.matrix]]
@@ -147,7 +147,7 @@ dependencies = [
     "pytest-timeout>=2.4,<3",
     "pytest-reportlog>=0.4,<0.5",
     "pyiceberg[sql-sqlite]==0.10.0",
-    "pydantic>=2.7,<2.8",
+    "pydantic>=2.11,<2.12",
 ]
 
 [[tool.hatch.envs.test-spark.matrix]]
