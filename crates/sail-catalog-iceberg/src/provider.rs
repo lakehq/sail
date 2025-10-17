@@ -1,8 +1,6 @@
 use std::collections::HashMap;
 use std::sync::Arc;
 
-use crate::apis::configuration::Configuration;
-use crate::apis::{self, Api, ApiClient};
 use sail_catalog::error::{CatalogError, CatalogResult};
 use sail_catalog::provider::{
     CatalogProvider, CreateDatabaseOptions, CreateTableColumnOptions, CreateTableOptions,
@@ -11,6 +9,9 @@ use sail_catalog::provider::{
 };
 use sail_common::runtime::RuntimeHandle;
 use sail_iceberg::{arrow_type_to_iceberg, iceberg_type_to_arrow, NestedField};
+
+use crate::apis::configuration::Configuration;
+use crate::apis::{self, Api, ApiClient};
 
 /// Provider for Apache Iceberg REST Catalog.
 pub struct IcebergRestCatalogProvider {

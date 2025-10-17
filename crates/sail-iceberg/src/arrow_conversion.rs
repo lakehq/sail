@@ -214,7 +214,7 @@ pub fn iceberg_struct_to_arrow(struct_type: &StructType) -> Result<ArrowDataType
     let fields = struct_type
         .fields()
         .iter()
-        .map(|field| Ok(iceberg_field_to_arrow(field)?))
+        .map(|field| iceberg_field_to_arrow(field))
         .collect::<Result<Vec<_>>>()?;
 
     Ok(ArrowDataType::Struct(fields.into()))
@@ -242,13 +242,20 @@ mod tests {
     use crate::spec::{NestedField, PrimitiveType, Schema, Type};
 
     #[test]
-    fn test_primitive_type_conversion() {
+    fn test_iceberg_primitive_type_to_arrow_type_conversion() {
         let test_cases = vec![
             (PrimitiveType::Boolean, ArrowDataType::Boolean),
             (PrimitiveType::Int, ArrowDataType::Int32),
             (PrimitiveType::Long, ArrowDataType::Int64),
             (PrimitiveType::Float, ArrowDataType::Float32),
             (PrimitiveType::Double, ArrowDataType::Float64),
+            (
+                PrimitiveType::Decimal {
+                    precision: 10,
+                    scale: 2,
+                },
+                ArrowDataType::Decimal128(10, 2),
+            ),
             (PrimitiveType::String, ArrowDataType::Utf8),
             (PrimitiveType::Binary, ArrowDataType::Binary),
             (PrimitiveType::Date, ArrowDataType::Date32),
@@ -264,6 +271,14 @@ mod tests {
                 PrimitiveType::Timestamptz,
                 ArrowDataType::Timestamp(TimeUnit::Microsecond, Some("UTC".into())),
             ),
+            (
+                PrimitiveType::TimestampNs,
+                ArrowDataType::Timestamp(TimeUnit::Nanosecond, None),
+            ),
+            (
+                PrimitiveType::TimestamptzNs,
+                ArrowDataType::Timestamp(TimeUnit::Nanosecond, Some("UTC".into())),
+            ),
             (PrimitiveType::Uuid, ArrowDataType::FixedSizeBinary(16)),
             (PrimitiveType::Fixed(10), ArrowDataType::FixedSizeBinary(10)),
         ];
@@ -272,6 +287,71 @@ mod tests {
             let result = iceberg_primitive_to_arrow(&iceberg_type)
                 .expect("Failed to convert iceberg type to arrow");
             assert_eq!(result, expected_arrow_type);
+        }
+    }
+
+    #[test]
+    fn test_arrow_type_to_iceberg_primitive_type_conversion() {
+        let test_cases = vec![
+            (ArrowDataType::Boolean, PrimitiveType::Boolean),
+            (ArrowDataType::Int8, PrimitiveType::Int),
+            (ArrowDataType::Int16, PrimitiveType::Int),
+            (ArrowDataType::Int32, PrimitiveType::Int),
+            (ArrowDataType::UInt8, PrimitiveType::Int),
+            (ArrowDataType::UInt16, PrimitiveType::Int),
+            (ArrowDataType::UInt32, PrimitiveType::Long),
+            (ArrowDataType::Int64, PrimitiveType::Long),
+            (ArrowDataType::Float32, PrimitiveType::Float),
+            (ArrowDataType::Float64, PrimitiveType::Double),
+            (
+                ArrowDataType::Decimal128(10, 2),
+                PrimitiveType::Decimal {
+                    precision: 10,
+                    scale: 2,
+                },
+            ),
+            (
+                ArrowDataType::Decimal256(15, 5),
+                PrimitiveType::Decimal {
+                    precision: 15,
+                    scale: 5,
+                },
+            ),
+            (ArrowDataType::Utf8, PrimitiveType::String),
+            (ArrowDataType::LargeUtf8, PrimitiveType::String),
+            (ArrowDataType::Utf8View, PrimitiveType::String),
+            (ArrowDataType::Binary, PrimitiveType::Binary),
+            (ArrowDataType::LargeBinary, PrimitiveType::Binary),
+            (ArrowDataType::BinaryView, PrimitiveType::Binary),
+            (ArrowDataType::Date32, PrimitiveType::Date),
+            (
+                ArrowDataType::Time64(TimeUnit::Microsecond),
+                PrimitiveType::Time,
+            ),
+            (
+                ArrowDataType::Timestamp(TimeUnit::Microsecond, None),
+                PrimitiveType::Timestamp,
+            ),
+            (
+                ArrowDataType::Timestamp(TimeUnit::Microsecond, Some("UTC".into())),
+                PrimitiveType::Timestamptz,
+            ),
+            (
+                ArrowDataType::Timestamp(TimeUnit::Nanosecond, None),
+                PrimitiveType::TimestampNs,
+            ),
+            (
+                ArrowDataType::Timestamp(TimeUnit::Nanosecond, Some("UTC".into())),
+                PrimitiveType::TimestamptzNs,
+            ),
+            (ArrowDataType::FixedSizeBinary(16), PrimitiveType::Uuid),
+            (ArrowDataType::FixedSizeBinary(10), PrimitiveType::Fixed(10)),
+        ];
+
+        for (arrow_type, expected_iceberg_type) in test_cases {
+            let result = arrow_primitive_to_iceberg(&arrow_type)
+                .expect("Failed to convert arrow type to iceberg");
+            assert_eq!(result, expected_iceberg_type);
         }
     }
 
@@ -335,40 +415,6 @@ mod tests {
     }
 
     #[test]
-    fn test_arrow_primitive_to_iceberg_conversion() {
-        let test_cases = vec![
-            (ArrowDataType::Boolean, PrimitiveType::Boolean),
-            (ArrowDataType::Int32, PrimitiveType::Long),
-            (ArrowDataType::Int64, PrimitiveType::Long),
-            (ArrowDataType::Float32, PrimitiveType::Float),
-            (ArrowDataType::Float64, PrimitiveType::Double),
-            (ArrowDataType::Utf8, PrimitiveType::String),
-            (ArrowDataType::Binary, PrimitiveType::Binary),
-            (ArrowDataType::Date32, PrimitiveType::Date),
-            (
-                ArrowDataType::Time64(TimeUnit::Microsecond),
-                PrimitiveType::Time,
-            ),
-            (
-                ArrowDataType::Timestamp(TimeUnit::Microsecond, None),
-                PrimitiveType::Timestamp,
-            ),
-            (
-                ArrowDataType::Timestamp(TimeUnit::Microsecond, Some("UTC".into())),
-                PrimitiveType::Timestamptz,
-            ),
-            (ArrowDataType::FixedSizeBinary(16), PrimitiveType::Uuid),
-            (ArrowDataType::FixedSizeBinary(10), PrimitiveType::Fixed(10)),
-        ];
-
-        for (arrow_type, expected_iceberg_type) in test_cases {
-            let result = arrow_primitive_to_iceberg(&arrow_type)
-                .expect("Failed to convert arrow type to iceberg");
-            assert_eq!(result, expected_iceberg_type);
-        }
-    }
-
-    #[test]
     fn test_arrow_decimal_to_iceberg_conversion() {
         let arrow_type = ArrowDataType::Decimal128(10, 2);
         let result = arrow_primitive_to_iceberg(&arrow_type)
@@ -384,11 +430,18 @@ mod tests {
 
     #[test]
     fn test_arrow_schema_to_iceberg_conversion() {
-        let arrow_schema = ArrowSchema::new(vec![
-            ArrowField::new("id", ArrowDataType::Int64, false),
-            ArrowField::new("name", ArrowDataType::Utf8, true),
-            ArrowField::new("price", ArrowDataType::Decimal128(10, 2), false),
-        ]);
+        let arrow_schema =
+            ArrowSchema::new(vec![
+                ArrowField::new("id", ArrowDataType::Int64, false).with_metadata(HashMap::from([
+                    (PARQUET_FIELD_ID_META_KEY.to_string(), "1".to_string()),
+                ])),
+                ArrowField::new("name", ArrowDataType::Utf8, true).with_metadata(HashMap::from([
+                    (PARQUET_FIELD_ID_META_KEY.to_string(), "2".to_string()),
+                ])),
+                ArrowField::new("price", ArrowDataType::Decimal128(10, 2), false).with_metadata(
+                    HashMap::from([(PARQUET_FIELD_ID_META_KEY.to_string(), "3".to_string())]),
+                ),
+            ]);
 
         let iceberg_schema = arrow_schema_to_iceberg(&arrow_schema)
             .expect("Failed to convert arrow schema to iceberg");
@@ -397,22 +450,25 @@ mod tests {
         assert_eq!(fields.len(), 3);
 
         let id_field = &fields[0];
+        assert_eq!(id_field.id, 1);
         assert_eq!(id_field.name, "id");
-        assert_eq!(id_field.field_type, Type::Primitive(PrimitiveType::Long));
+        assert_eq!(*id_field.field_type, Type::Primitive(PrimitiveType::Long));
         assert!(id_field.required);
 
         let name_field = &fields[1];
+        assert_eq!(name_field.id, 2);
         assert_eq!(name_field.name, "name");
         assert_eq!(
-            name_field.field_type,
+            *name_field.field_type,
             Type::Primitive(PrimitiveType::String)
         );
         assert!(!name_field.required);
 
         let price_field = &fields[2];
+        assert_eq!(price_field.id, 3);
         assert_eq!(price_field.name, "price");
         assert_eq!(
-            price_field.field_type,
+            *price_field.field_type,
             Type::Primitive(PrimitiveType::Decimal {
                 precision: 10,
                 scale: 2
@@ -421,9 +477,13 @@ mod tests {
         assert!(price_field.required);
     }
 
+    #[allow(clippy::panic)]
     #[test]
     fn test_arrow_list_to_iceberg_conversion() {
-        let element_field = ArrowField::new("element", ArrowDataType::Int64, true);
+        let element_field =
+            ArrowField::new("element", ArrowDataType::Int64, true).with_metadata(HashMap::from([
+                (PARQUET_FIELD_ID_META_KEY.to_string(), "1".to_string()),
+            ]));
         let arrow_list = ArrowDataType::List(Arc::new(element_field));
 
         let iceberg_type =
@@ -431,8 +491,9 @@ mod tests {
 
         match iceberg_type {
             Type::List(list_type) => {
+                assert_eq!(list_type.element_field.id, 1);
                 assert_eq!(
-                    list_type.element_field.field_type,
+                    *list_type.element_field.field_type,
                     Type::Primitive(PrimitiveType::Long)
                 );
                 assert!(!list_type.element_field.required);
@@ -441,10 +502,15 @@ mod tests {
         }
     }
 
+    #[allow(clippy::panic)]
     #[test]
     fn test_arrow_map_to_iceberg_conversion() {
-        let key_field = ArrowField::new("key", ArrowDataType::Utf8, false);
-        let value_field = ArrowField::new("value", ArrowDataType::Int64, true);
+        let key_field = ArrowField::new("key", ArrowDataType::Utf8, false).with_metadata(
+            HashMap::from([(PARQUET_FIELD_ID_META_KEY.to_string(), "1".to_string())]),
+        );
+        let value_field = ArrowField::new("value", ArrowDataType::Int64, true).with_metadata(
+            HashMap::from([(PARQUET_FIELD_ID_META_KEY.to_string(), "2".to_string())]),
+        );
         let entries_struct = ArrowDataType::Struct(vec![key_field, value_field].into());
         let entries_field = ArrowField::new("entries", entries_struct, false);
         let arrow_map = ArrowDataType::Map(Arc::new(entries_field), false);
@@ -454,13 +520,15 @@ mod tests {
 
         match iceberg_type {
             Type::Map(map_type) => {
+                assert_eq!(map_type.key_field.id, 1);
                 assert_eq!(
-                    map_type.key_field.field_type,
+                    *map_type.key_field.field_type,
                     Type::Primitive(PrimitiveType::String)
                 );
                 assert!(map_type.key_field.required);
+                assert_eq!(map_type.value_field.id, 2);
                 assert_eq!(
-                    map_type.value_field.field_type,
+                    *map_type.value_field.field_type,
                     Type::Primitive(PrimitiveType::Long)
                 );
                 assert!(!map_type.value_field.required);
@@ -471,10 +539,15 @@ mod tests {
 
     #[test]
     fn test_arrow_struct_to_iceberg_conversion() {
-        let struct_fields = vec![
-            ArrowField::new("id", ArrowDataType::Int64, false),
-            ArrowField::new("name", ArrowDataType::Utf8, true),
-        ];
+        let struct_fields =
+            vec![
+                ArrowField::new("id", ArrowDataType::Int64, false).with_metadata(HashMap::from([
+                    (PARQUET_FIELD_ID_META_KEY.to_string(), "1".to_string()),
+                ])),
+                ArrowField::new("name", ArrowDataType::Utf8, true).with_metadata(HashMap::from([
+                    (PARQUET_FIELD_ID_META_KEY.to_string(), "2".to_string()),
+                ])),
+            ];
         let arrow_struct = ArrowDataType::Struct(struct_fields.into());
 
         let struct_type = arrow_struct_to_iceberg(&arrow_struct)
@@ -483,12 +556,17 @@ mod tests {
         let fields = struct_type.fields();
         assert_eq!(fields.len(), 2);
 
+        assert_eq!(fields[0].id, 1);
         assert_eq!(fields[0].name, "id");
-        assert_eq!(fields[0].field_type, Type::Primitive(PrimitiveType::Long));
+        assert_eq!(*fields[0].field_type, Type::Primitive(PrimitiveType::Long));
         assert!(fields[0].required);
 
+        assert_eq!(fields[1].id, 2);
         assert_eq!(fields[1].name, "name");
-        assert_eq!(fields[1].field_type, Type::Primitive(PrimitiveType::String));
+        assert_eq!(
+            *fields[1].field_type,
+            Type::Primitive(PrimitiveType::String)
+        );
         assert!(!fields[1].required);
     }
 
@@ -512,6 +590,23 @@ mod tests {
 
         let arrow_schema =
             iceberg_schema_to_arrow(&original_schema).expect("Failed to convert to Arrow");
+
+        // Verify Arrow schema has metadata with field IDs
+        assert_eq!(
+            arrow_schema
+                .field(0)
+                .metadata()
+                .get(PARQUET_FIELD_ID_META_KEY),
+            Some(&"1".to_string())
+        );
+        assert_eq!(
+            arrow_schema
+                .field(1)
+                .metadata()
+                .get(PARQUET_FIELD_ID_META_KEY),
+            Some(&"2".to_string())
+        );
+
         let roundtrip_schema =
             arrow_schema_to_iceberg(&arrow_schema).expect("Failed to convert back to Iceberg");
 
@@ -520,6 +615,7 @@ mod tests {
 
         assert_eq!(original_fields.len(), roundtrip_fields.len());
         for i in 0..original_fields.len() {
+            assert_eq!(original_fields[i].id, roundtrip_fields[i].id);
             assert_eq!(original_fields[i].name, roundtrip_fields[i].name);
             assert_eq!(
                 original_fields[i].field_type,
