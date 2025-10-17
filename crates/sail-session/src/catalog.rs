@@ -37,7 +37,7 @@ pub fn create_catalog_manager(
                         name.clone(),
                         prefix.clone(),
                         Arc::new(sail_catalog_iceberg::apis::configuration::Configuration::new()), // CHECK HERE: DO NOT MERGE UNTIL REAL CONFIG ADDED
-                        runtime,
+                        runtime.clone(),
                     );
                     Ok((name.clone(), Arc::new(provider)))
                 }
