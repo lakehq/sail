@@ -5616,6 +5616,7 @@ dependencies = [
  "sail-common",
  "sail-common-datafusion",
  "sail-delta-lake",
+ "sail-iceberg",
  "serde",
  "serde_yaml",
  "syn",
@@ -5731,6 +5732,31 @@ dependencies = [
  "sail-spark-connect",
  "serde",
  "serde_json",
+]
+
+[[package]]
+name = "sail-iceberg"
+version = "0.3.7"
+dependencies = [
+ "apache-avro",
+ "arrow-schema",
+ "async-trait",
+ "chrono",
+ "datafusion",
+ "datafusion-common",
+ "futures",
+ "log",
+ "num-bigint",
+ "num-traits",
+ "object_store",
+ "once_cell",
+ "ordered-float 5.1.0",
+ "percent-encoding",
+ "sail-common-datafusion",
+ "serde",
+ "serde_json",
+ "url",
+ "uuid",
 ]
 
 [[package]]
