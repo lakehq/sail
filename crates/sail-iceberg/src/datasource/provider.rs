@@ -128,11 +128,14 @@ impl IcebergTableProvider {
         let manifest_list_str = self.snapshot.manifest_list();
         log::trace!("Manifest list path: {}", manifest_list_str);
 
+        let table_url_parsed = Url::parse(&self.table_uri)
+            .map_err(|e| datafusion::common::DataFusionError::External(Box::new(e)))?;
+
         let manifest_list_path = if let Ok(url) = Url::parse(manifest_list_str) {
             log::trace!("Parsed manifest list as URL, path: {}", url.path());
-            ObjectPath::from(url.path())
+            ObjectPath::from(url.path().strip_prefix('/').unwrap_or(url.path()))
         } else {
-            ObjectPath::from(manifest_list_str)
+            ObjectPath::from(table_url_parsed.path()).child(manifest_list_str)
         };
 
         let manifest_list_data = object_store
@@ -160,6 +163,10 @@ impl IcebergTableProvider {
         object_store: &Arc<dyn object_store::ObjectStore>,
         manifest_list: &ManifestList,
     ) -> DataFusionResult<Vec<DataFile>> {
+        let table_url_parsed = Url::parse(self.table_uri())
+            .map_err(|e| datafusion::common::DataFusionError::External(Box::new(e)))?;
+        let table_path_base = ObjectPath::from(table_url_parsed.path());
+
         let mut data_files = Vec::new();
 
         let spec_map: HashMap<i32, PartitionSpec> = self
@@ -181,9 +188,9 @@ impl IcebergTableProvider {
 
             let manifest_path = if let Ok(url) = Url::parse(manifest_path_str) {
                 log::trace!("Parsed manifest as URL, path: {}", url.path());
-                ObjectPath::from(url.path())
+                ObjectPath::from(url.path().strip_prefix('/').unwrap_or(url.path()))
             } else {
-                ObjectPath::from(manifest_path_str)
+                table_path_base.child(manifest_path_str)
             };
 
             let manifest_data = object_store
@@ -255,6 +262,10 @@ impl IcebergTableProvider {
         let mut index: std::collections::HashMap<String, IcebergDeleteAttachment> =
             std::collections::HashMap::new();
 
+        let table_url_parsed = Url::parse(self.table_uri())
+            .map_err(|e| datafusion::common::DataFusionError::External(Box::new(e)))?;
+        let table_path_base = ObjectPath::from(table_url_parsed.path());
+
         for manifest_file in manifest_list
             .entries()
             .iter()
@@ -262,9 +273,9 @@ impl IcebergTableProvider {
         {
             let manifest_path_str = manifest_file.manifest_path.as_str();
             let manifest_path = if let Ok(url) = Url::parse(manifest_path_str) {
-                ObjectPath::from(url.path())
+                ObjectPath::from(url.path().strip_prefix('/').unwrap_or(url.path()))
             } else {
-                ObjectPath::from(manifest_path_str)
+                table_path_base.child(manifest_path_str)
             };
 
             let manifest_data = object_store
@@ -599,6 +610,10 @@ impl TableProvider for IcebergTableProvider {
         );
         let manifest_list = self.load_manifest_list(&object_store).await?;
         log::trace!("Loaded {} manifest files", manifest_list.entries().len());
+        dbg!(
+            "scan: loaded manifest list with file count",
+            manifest_list.entries().len()
+        );
 
         // Classify & split filters for pruning vs parquet pushdown
         let (pruning_filters, parquet_pushdown_filters) = self.separate_filters(filters);

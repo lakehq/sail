@@ -75,7 +75,16 @@ impl TableFormat for IcebergTableFormat {
 
         // Parse URL and detect table existence (file-based tables only)
         let table_url = Self::parse_table_url(ctx, vec![path]).await?;
-        let table_exists = load_table_metadata(ctx, &table_url).await.is_ok();
+        let exists_res = load_table_metadata(ctx, &table_url).await;
+        dbg!("iceberg.create_writer.table_url", &table_url);
+        dbg!(
+            "iceberg.create_writer.table_exists_result",
+            &exists_res
+                .as_ref()
+                .map(|_| ())
+                .map_err(|e| format!("{}", e))
+        );
+        let table_exists = exists_res.is_ok();
 
         // Early mode handling (no-op or error)
         match mode {
@@ -185,6 +194,14 @@ pub(crate) async fn load_table_metadata(
         DataFusionError::External(Box::new(e))
     })?;
 
+    dbg!("Loaded metadata file: {}", &metadata_location);
+    dbg!(
+        "  current_snapshot_id: {:?}",
+        &table_metadata.current_snapshot_id
+    );
+    dbg!("  refs: {:?}", &table_metadata.refs);
+    dbg!("  snapshots count: {}", &table_metadata.snapshots.len());
+
     // Get the current schema
     let schema = table_metadata
         .current_schema()
@@ -200,6 +217,12 @@ pub(crate) async fn load_table_metadata(
             DataFusionError::Plan("No current snapshot found in table metadata".to_string())
         })?
         .clone();
+
+    dbg!(
+        "load_table_metadata: loaded snapshot",
+        snapshot.snapshot_id(),
+        snapshot.manifest_list()
+    );
 
     let partition_specs = table_metadata.partition_specs.clone();
     Ok((schema, snapshot, partition_specs))
@@ -231,6 +254,7 @@ pub(crate) async fn find_latest_metadata_file(
 
     log::trace!("No version hint, listing metadata directory");
     let metadata_prefix = ObjectPath::from(format!("{}metadata/", table_url.path()).as_str());
+
     let objects = object_store.list(Some(&metadata_prefix));
 
     let metadata_files: Result<Vec<_>, _> = objects
@@ -262,9 +286,15 @@ pub(crate) async fn find_latest_metadata_file(
 
     match metadata_files {
         Ok(mut files) => {
+            dbg!("find_latest_metadata_file: found files", &files);
             files.sort_by_key(|(version, _, _)| *version);
 
-            if let Some((_, latest_file, _)) = files.last() {
+            if let Some((version, latest_file, _)) = files.last() {
+                dbg!(
+                    "find_latest_metadata_file: selected version",
+                    version,
+                    &latest_file
+                );
                 Ok(latest_file.clone())
             } else {
                 plan_err!("No metadata files found in table location: {}", table_url)

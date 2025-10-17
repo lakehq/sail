@@ -122,9 +122,13 @@ impl ExecutionPlan for IcebergCommitExec {
         let schema = self.schema();
         let future = async move {
             let object_store = Self::get_object_store(&context, &table_url)?;
+            let table_path = table_url
+                .path()
+                .strip_prefix('/')
+                .unwrap_or(table_url.path());
             let store = IcebergObjectStore::new(
                 object_store.clone(),
-                object_store::path::Path::from(table_url.path()),
+                object_store::path::Path::from(table_path),
             );
 
             // Read writer result (first row, string JSON)
@@ -205,9 +209,14 @@ impl ExecutionPlan for IcebergCommitExec {
                 .map_err(|e| DataFusionError::External(Box::new(e)))?;
             let mut table_meta: TableMetadata = TableMetadata::from_json(&bytes)
                 .map_err(|e| DataFusionError::External(Box::new(e)))?;
+            dbg!(
+                "commit_exec: loaded table metadata with snapshot id",
+                table_meta.current_snapshot_id
+            );
 
             // 2) Apply updates (only handle the ones we emit: AddSnapshot, SetSnapshotRef)
             let updates = commit.into_updates();
+            dbg!("commit_exec: applying updates", &updates);
             let mut newest_snapshot_seq: Option<i64> = None;
             let timestamp_ms = chrono::Utc::now().timestamp_millis();
             for upd in updates {
@@ -266,18 +275,31 @@ impl ExecutionPlan for IcebergCommitExec {
             let new_meta_bytes = table_meta
                 .to_json()
                 .map_err(|e| DataFusionError::External(Box::new(e)))?;
-            let new_meta_rel = format!("metadata/v{}.metadata.json", next_version);
-            let _ = IcebergObjectStore::new(
+            let new_meta_rel = format!(
+                "metadata/{:05}-{}.metadata.json",
+                next_version,
+                uuid::Uuid::new_v4()
+            );
+
+            dbg!(
+                "Writing metadata",
+                &new_meta_rel,
+                table_meta.current_snapshot_id,
+                &table_url
+            );
+
+            let full_path = IcebergObjectStore::new(
                 object_store.clone(),
-                object_store::path::Path::from(table_url.path()),
+                object_store::path::Path::from(table_path),
             )
             .put_rel(&new_meta_rel, Bytes::from(new_meta_bytes))
             .await
             .map_err(DataFusionError::Execution)?;
+            dbg!("Metadata written successfully");
 
             // 4) Update version-hint
             let hint_bytes = Bytes::from(next_version.to_string().into_bytes());
-            let _ = IcebergObjectStore::new(
+            IcebergObjectStore::new(
                 object_store.clone(),
                 object_store::path::Path::from(table_url.path()),
             )

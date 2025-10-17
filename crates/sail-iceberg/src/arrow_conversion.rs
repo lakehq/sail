@@ -1,9 +1,11 @@
+use std::collections::HashMap;
 use std::sync::Arc;
 
 use datafusion::arrow::datatypes::{
     DataType as ArrowDataType, Field as ArrowField, Schema as ArrowSchema, TimeUnit,
 };
 use datafusion_common::Result;
+use parquet::arrow::PARQUET_FIELD_ID_META_KEY;
 
 use crate::spec::{NestedField, PrimitiveType, Schema, StructType, Type};
 
@@ -23,7 +25,12 @@ pub fn iceberg_field_to_arrow(field: &NestedField) -> Result<ArrowField> {
     let arrow_type = iceberg_type_to_arrow(&field.field_type)?;
     let nullable = !field.required;
 
-    Ok(ArrowField::new(&field.name, arrow_type, nullable))
+    let mut metadata = HashMap::new();
+    metadata.insert(PARQUET_FIELD_ID_META_KEY.to_string(), field.id.to_string());
+
+    let arrow_field = ArrowField::new(&field.name, arrow_type, nullable);
+
+    Ok(arrow_field.with_metadata(metadata))
 }
 
 /// Convert Iceberg type to Arrow data type

@@ -9,6 +9,7 @@ use super::{
 };
 use crate::io::IcebergObjectStore;
 use crate::spec::manifest::ManifestMetadata;
+use crate::spec::manifest_list::ManifestList;
 use crate::spec::DataFile;
 
 pub struct FastAppendAction {
@@ -17,6 +18,7 @@ pub struct FastAppendAction {
     key_metadata: Option<Vec<u8>>,
     snapshot_properties: HashMap<String, String>,
     added_data_files: Vec<DataFile>,
+    parent_manifest_list: Option<ManifestList>,
     store: Option<IcebergObjectStore>,
     manifest_metadata: Option<ManifestMetadata>,
 }
@@ -35,6 +37,7 @@ impl FastAppendAction {
             key_metadata: None,
             snapshot_properties: HashMap::new(),
             added_data_files: Vec::new(),
+            parent_manifest_list: None,
             store: None,
             manifest_metadata: None,
         }
@@ -61,6 +64,11 @@ impl FastAppendAction {
 
     pub fn set_snapshot_properties(mut self, snapshot_properties: HashMap<String, String>) -> Self {
         self.snapshot_properties = snapshot_properties;
+        self
+    }
+
+    pub fn with_parent_manifest_list(mut self, list: Option<ManifestList>) -> Self {
+        self.parent_manifest_list = list;
         self
     }
 

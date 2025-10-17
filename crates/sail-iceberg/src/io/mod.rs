@@ -15,7 +15,11 @@ impl IcebergObjectStore {
     }
 
     pub fn child(&self, rel: &str) -> ObjectPath {
-        self.root.child(rel)
+        let mut path = self.root.clone();
+        for component in rel.split('/').filter(|s| !s.is_empty()) {
+            path = path.child(component);
+        }
+        path
     }
 
     pub async fn put(&self, path: &ObjectPath, data: Bytes) -> Result<(), String> {
