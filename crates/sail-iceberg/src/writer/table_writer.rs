@@ -40,10 +40,11 @@ impl IcebergTableWriter {
     }
 
     pub async fn write(&mut self, batch: &RecordBatch) -> Result<(), String> {
-        // TODO: real partitioning based on spec
         let (_partition_values, partition_dir) = compute_partition_values(
             batch,
-            &crate::spec::partition::UnboundPartitionSpec { fields: vec![] },
+            &self.config.partition_spec,
+            &self.config.iceberg_schema,
+            &self.config.partition_columns,
         )?;
         #[allow(clippy::expect_used)]
         let writer = self

@@ -3,10 +3,12 @@ use std::sync::Arc;
 use bytes::Bytes;
 use parquet::arrow::async_writer::AsyncArrowWriter;
 use parquet::file::properties::WriterProperties;
+use parquet::format::FileMetaData as ThriftFileMetaData;
 
 pub struct ParquetFileMeta {
     pub num_rows: u64,
     pub file_size: u64,
+    pub parquet_metadata: ThriftFileMetaData,
 }
 
 pub struct ArrowParquetWriter {
@@ -39,19 +41,20 @@ impl ArrowParquetWriter {
 
     pub async fn close(mut self) -> Result<(Bytes, ParquetFileMeta), String> {
         let mut writer = self.writer.take().ok_or("writer already closed")?;
-        let metadata = writer
+        let finish = writer
             .finish()
             .await
             .map_err(|e| format!("parquet finish: {e}"))?;
         let buf = writer.into_inner();
         let file_size = buf.len() as u64;
         let bytes = Bytes::from(buf);
-        let num_rows = metadata.num_rows as u64;
+        let num_rows = finish.num_rows as u64;
         Ok((
             bytes,
             ParquetFileMeta {
                 num_rows,
                 file_size,
+                parquet_metadata: finish,
             },
         ))
     }

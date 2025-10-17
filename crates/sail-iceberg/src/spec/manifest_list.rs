@@ -123,8 +123,82 @@ impl ManifestListWriter {
     }
 
     pub fn to_bytes(&self, _version: FormatVersion) -> Result<Vec<u8>, String> {
-        // Placeholder: physical plan will pick correct Avro encoding later
-        Ok(Vec::new())
+        use apache_avro::{Schema, Writer};
+
+        // Only implement V2 encoding for now
+        let schema_json = r#"
+        {
+          "type": "record",
+          "name": "manifest_file",
+          "fields": [
+            {"name": "manifest_path", "type": "string"},
+            {"name": "manifest_length", "type": "long"},
+            {"name": "partition_spec_id", "type": "int"},
+            {"name": "content", "type": "int"},
+            {"name": "sequence_number", "type": "long"},
+            {"name": "min_sequence_number", "type": "long"},
+            {"name": "added_snapshot_id", "type": "long"},
+            {"name": "added_files_count", "type": ["null","int"], "default": null},
+            {"name": "existing_files_count", "type": ["null","int"], "default": null},
+            {"name": "deleted_files_count", "type": ["null","int"], "default": null},
+            {"name": "added_rows_count", "type": ["null","long"], "default": null},
+            {"name": "existing_rows_count", "type": ["null","long"], "default": null},
+            {"name": "deleted_rows_count", "type": ["null","long"], "default": null},
+            {"name": "partitions", "type": ["null", {"type":"array", "items": {"name":"field_summary","type":"record","fields":[
+              {"name":"contains_null","type":"boolean"},
+              {"name":"contains_nan","type":["null","boolean"],"default":null},
+              {"name":"lower_bound","type":["null","bytes"],"default":null},
+              {"name":"upper_bound","type":["null","bytes"],"default":null}
+            ]}}], "default": null},
+            {"name": "key_metadata", "type": ["null","bytes"], "default": null}
+          ]
+        }
+        "#;
+
+        let schema =
+            Schema::parse_str(schema_json).map_err(|e| format!("Avro schema parse error: {e}"))?;
+        let mut writer = Writer::new(&schema, Vec::new());
+
+        for mf in &self.entries {
+            let v2 = _serde::ManifestFileV2 {
+                manifest_path: mf.manifest_path.clone(),
+                manifest_length: mf.manifest_length,
+                partition_spec_id: mf.partition_spec_id,
+                content: match mf.content {
+                    ManifestContentType::Data => 0,
+                    ManifestContentType::Deletes => 1,
+                },
+                sequence_number: mf.sequence_number,
+                min_sequence_number: mf.min_sequence_number,
+                added_snapshot_id: mf.added_snapshot_id,
+                added_files_count: mf.added_files_count.unwrap_or(0),
+                existing_files_count: mf.existing_files_count.unwrap_or(0),
+                deleted_files_count: mf.deleted_files_count.unwrap_or(0),
+                added_rows_count: mf.added_rows_count.unwrap_or(0),
+                existing_rows_count: mf.existing_rows_count.unwrap_or(0),
+                deleted_rows_count: mf.deleted_rows_count.unwrap_or(0),
+                partitions: mf.partitions.clone().map(|ps| {
+                    ps.into_iter()
+                        .map(|p| FieldSummaryAvro {
+                            contains_null: p.contains_null,
+                            contains_nan: p.contains_nan,
+                            lower_bound: p.lower_bound_bytes,
+                            upper_bound: p.upper_bound_bytes,
+                        })
+                        .collect()
+                }),
+                key_metadata: mf.key_metadata.clone(),
+            };
+            let value =
+                apache_avro::to_value(v2).map_err(|e| format!("Avro to_value error: {e}"))?;
+            writer
+                .append(value)
+                .map_err(|e| format!("Avro append error: {e}"))?;
+        }
+
+        writer
+            .into_inner()
+            .map_err(|e| format!("Avro writer finalize error: {e}"))
     }
 }
 

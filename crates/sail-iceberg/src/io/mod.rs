@@ -25,6 +25,12 @@ impl IcebergObjectStore {
             .map_err(|e| format!("object_store put error: {e}"))
     }
 
+    pub async fn put_rel(&self, rel: &str, data: Bytes) -> Result<ObjectPath, String> {
+        let full = self.child(rel);
+        self.put(&full, data).await?;
+        Ok(full)
+    }
+
     pub async fn exists(&self, path: &ObjectPath) -> Result<bool, String> {
         self.object_store
             .head(path)
