@@ -37,11 +37,6 @@ impl IcebergRestCatalogProvider {
         }
     }
 
-    fn namespace_to_iceberg(&self, namespace: &Namespace) -> Vec<String> {
-        let parts: Vec<Arc<str>> = namespace.clone().into();
-        parts.iter().map(|s| s.to_string()).collect()
-    }
-
     // Convert an Iceberg namespace to a URL-encoded string
     fn namespace_to_url_param(&self, namespace: &[String]) -> String {
         // CHECK HERE: validate this is true
@@ -49,13 +44,22 @@ impl IcebergRestCatalogProvider {
     }
 
     // Convert Arrow DataType to Iceberg Type
-    fn datatype_to_iceberg(&self, data_type: &datafusion::arrow::datatypes::DataType) -> CatalogResult<crate::types::Type> {
+    fn datatype_to_iceberg(
+        &self,
+        data_type: &datafusion::arrow::datatypes::DataType,
+    ) -> CatalogResult<crate::types::Type> {
         use datafusion::arrow::datatypes::DataType;
-        use crate::types::{Type, PrimitiveType, StructType, ListType, MapType, NestedField};
+
+        use crate::types::{ListType, MapType, NestedField, PrimitiveType, StructType, Type};
 
         match data_type {
             DataType::Boolean => Ok(Type::Primitive(PrimitiveType::Boolean)),
-            DataType::Int8 | DataType::Int16 | DataType::Int32 | DataType::UInt8 | DataType::UInt16 | DataType::UInt32 => Ok(Type::Primitive(PrimitiveType::Int)),
+            DataType::Int8
+            | DataType::Int16
+            | DataType::Int32
+            | DataType::UInt8
+            | DataType::UInt16
+            | DataType::UInt32 => Ok(Type::Primitive(PrimitiveType::Int)),
             DataType::Int64 | DataType::UInt64 => Ok(Type::Primitive(PrimitiveType::Long)),
             DataType::Float32 => Ok(Type::Primitive(PrimitiveType::Float)),
             DataType::Float64 => Ok(Type::Primitive(PrimitiveType::Double)),
@@ -66,18 +70,34 @@ impl IcebergRestCatalogProvider {
             DataType::Date32 | DataType::Date64 => Ok(Type::Primitive(PrimitiveType::Date)),
             DataType::Time64(_) => Ok(Type::Primitive(PrimitiveType::Time)),
             DataType::Timestamp(unit, None) => match unit {
-                datafusion::arrow::datatypes::TimeUnit::Microsecond => Ok(Type::Primitive(PrimitiveType::Timestamp)),
-                datafusion::arrow::datatypes::TimeUnit::Nanosecond => Ok(Type::Primitive(PrimitiveType::TimestampNs)),
-                _ => Err(CatalogError::External(format!("Unsupported timestamp unit: {:?}", unit))),
+                datafusion::arrow::datatypes::TimeUnit::Microsecond => {
+                    Ok(Type::Primitive(PrimitiveType::Timestamp))
+                }
+                datafusion::arrow::datatypes::TimeUnit::Nanosecond => {
+                    Ok(Type::Primitive(PrimitiveType::TimestampNs))
+                }
+                _ => Err(CatalogError::External(format!(
+                    "Unsupported timestamp unit: {:?}",
+                    unit
+                ))),
             },
             DataType::Timestamp(unit, Some(_)) => match unit {
-                datafusion::arrow::datatypes::TimeUnit::Microsecond => Ok(Type::Primitive(PrimitiveType::Timestamptz)),
-                datafusion::arrow::datatypes::TimeUnit::Nanosecond => Ok(Type::Primitive(PrimitiveType::TimestamptzNs)),
-                _ => Err(CatalogError::External(format!("Unsupported timestamp unit: {:?}", unit))),
+                datafusion::arrow::datatypes::TimeUnit::Microsecond => {
+                    Ok(Type::Primitive(PrimitiveType::Timestamptz))
+                }
+                datafusion::arrow::datatypes::TimeUnit::Nanosecond => {
+                    Ok(Type::Primitive(PrimitiveType::TimestamptzNs))
+                }
+                _ => Err(CatalogError::External(format!(
+                    "Unsupported timestamp unit: {:?}",
+                    unit
+                ))),
             },
             DataType::Utf8 | DataType::LargeUtf8 => Ok(Type::Primitive(PrimitiveType::String)),
             DataType::Binary | DataType::LargeBinary => Ok(Type::Primitive(PrimitiveType::Binary)),
-            DataType::FixedSizeBinary(size) => Ok(Type::Primitive(PrimitiveType::Fixed(*size as u64))),
+            DataType::FixedSizeBinary(size) => {
+                Ok(Type::Primitive(PrimitiveType::Fixed(*size as u64)))
+            }
             DataType::List(field) | DataType::LargeList(field) => {
                 let element_type = self.datatype_to_iceberg(field.data_type())?;
                 let element_field = Arc::new(NestedField::list_element(
@@ -86,19 +106,25 @@ impl IcebergRestCatalogProvider {
                     field.is_nullable(),
                 ));
                 Ok(Type::List(ListType::new(element_field)))
-            },
+            }
             DataType::Map(field, _sorted) => {
                 if let DataType::Struct(fields) = field.data_type() {
                     if fields.len() == 2 {
                         let key_type = self.datatype_to_iceberg(fields[0].data_type())?;
                         let value_type = self.datatype_to_iceberg(fields[1].data_type())?;
                         let key_field = Arc::new(NestedField::map_key_element(0, key_type));
-                        let value_field = Arc::new(NestedField::map_value_element(0, value_type, fields[1].is_nullable()));
+                        let value_field = Arc::new(NestedField::map_value_element(
+                            0,
+                            value_type,
+                            fields[1].is_nullable(),
+                        ));
                         return Ok(Type::Map(MapType::new(key_field, value_field)));
                     }
                 }
-                Err(CatalogError::External("Invalid map type structure".to_string()))
-            },
+                Err(CatalogError::External(
+                    "Invalid map type structure".to_string(),
+                ))
+            }
             DataType::Struct(fields) => {
                 let mut nested_fields = Vec::new();
                 for (idx, field) in fields.iter().enumerate() {
@@ -111,15 +137,22 @@ impl IcebergRestCatalogProvider {
                     )));
                 }
                 Ok(Type::Struct(StructType::new(nested_fields)))
-            },
-            _ => Err(CatalogError::External(format!("Unsupported Arrow type: {:?}", data_type))),
+            }
+            _ => Err(CatalogError::External(format!(
+                "Unsupported Arrow type: {:?}",
+                data_type
+            ))),
         }
     }
 
     // Convert Iceberg Type to Arrow DataType
-    fn iceberg_to_datatype(&self, iceberg_type: &crate::types::Type) -> CatalogResult<datafusion::arrow::datatypes::DataType> {
+    fn iceberg_to_datatype(
+        &self,
+        iceberg_type: &crate::types::Type,
+    ) -> CatalogResult<datafusion::arrow::datatypes::DataType> {
         use datafusion::arrow::datatypes::{DataType, Field, TimeUnit};
-        use crate::types::{Type, PrimitiveType};
+
+        use crate::types::{PrimitiveType, Type};
 
         match iceberg_type {
             Type::Primitive(prim) => match prim {
@@ -128,13 +161,21 @@ impl IcebergRestCatalogProvider {
                 PrimitiveType::Long => Ok(DataType::Int64),
                 PrimitiveType::Float => Ok(DataType::Float32),
                 PrimitiveType::Double => Ok(DataType::Float64),
-                PrimitiveType::Decimal { precision, scale } => Ok(DataType::Decimal128(*precision as u8, *scale as i8)),
+                PrimitiveType::Decimal { precision, scale } => {
+                    Ok(DataType::Decimal128(*precision as u8, *scale as i8))
+                }
                 PrimitiveType::Date => Ok(DataType::Date32),
                 PrimitiveType::Time => Ok(DataType::Time64(TimeUnit::Microsecond)),
                 PrimitiveType::Timestamp => Ok(DataType::Timestamp(TimeUnit::Microsecond, None)),
-                PrimitiveType::Timestamptz => Ok(DataType::Timestamp(TimeUnit::Microsecond, Some("UTC".into()))),
+                PrimitiveType::Timestamptz => Ok(DataType::Timestamp(
+                    TimeUnit::Microsecond,
+                    Some("UTC".into()),
+                )),
                 PrimitiveType::TimestampNs => Ok(DataType::Timestamp(TimeUnit::Nanosecond, None)),
-                PrimitiveType::TimestamptzNs => Ok(DataType::Timestamp(TimeUnit::Nanosecond, Some("UTC".into()))),
+                PrimitiveType::TimestamptzNs => Ok(DataType::Timestamp(
+                    TimeUnit::Nanosecond,
+                    Some("UTC".into()),
+                )),
                 PrimitiveType::String => Ok(DataType::Utf8),
                 PrimitiveType::Uuid => Ok(DataType::FixedSizeBinary(16)),
                 PrimitiveType::Fixed(size) => Ok(DataType::FixedSizeBinary(*size as i32)),
@@ -144,23 +185,37 @@ impl IcebergRestCatalogProvider {
                 let mut fields = Vec::new();
                 for nested_field in struct_type.fields() {
                     let data_type = self.iceberg_to_datatype(&nested_field.field_type)?;
-                    fields.push(Field::new(nested_field.name.clone(), data_type, !nested_field.required));
+                    fields.push(Field::new(
+                        nested_field.name.clone(),
+                        data_type,
+                        !nested_field.required,
+                    ));
                 }
                 Ok(DataType::Struct(fields.into()))
-            },
+            }
             Type::List(list_type) => {
                 let element_type = self.iceberg_to_datatype(&list_type.element_field.field_type)?;
-                Ok(DataType::List(Arc::new(Field::new("element", element_type, !list_type.element_field.required))))
-            },
+                Ok(DataType::List(Arc::new(Field::new(
+                    "element",
+                    element_type,
+                    !list_type.element_field.required,
+                ))))
+            }
             Type::Map(map_type) => {
                 let key_type = self.iceberg_to_datatype(&map_type.key_field.field_type)?;
                 let value_type = self.iceberg_to_datatype(&map_type.value_field.field_type)?;
-                let entries = DataType::Struct(vec![
-                    Field::new("key", key_type, false),
-                    Field::new("value", value_type, !map_type.value_field.required),
-                ].into());
-                Ok(DataType::Map(Arc::new(Field::new("entries", entries, false)), false))
-            },
+                let entries = DataType::Struct(
+                    vec![
+                        Field::new("key", key_type, false),
+                        Field::new("value", value_type, !map_type.value_field.required),
+                    ]
+                    .into(),
+                );
+                Ok(DataType::Map(
+                    Arc::new(Field::new("entries", entries, false)),
+                    false,
+                ))
+            }
         }
     }
 
@@ -176,7 +231,9 @@ impl IcebergRestCatalogProvider {
         // Get the current schema
         let current_schema = if let Some(schemas) = &metadata.schemas {
             let schema_id = metadata.current_schema_id.unwrap_or(0);
-            schemas.iter().find(|s| s.schema_id == Some(schema_id))
+            schemas
+                .iter()
+                .find(|s| s.schema_id == Some(schema_id))
                 .or_else(|| schemas.first())
         } else {
             None
@@ -203,11 +260,15 @@ impl IcebergRestCatalogProvider {
             Vec::new()
         };
 
-        let comment = metadata.properties.as_ref()
+        let comment = metadata
+            .properties
+            .as_ref()
             .and_then(|p| p.get("comment"))
             .cloned();
 
-        let properties: Vec<_> = metadata.properties.clone()
+        let properties: Vec<_> = metadata
+            .properties
+            .clone()
             .unwrap_or_default()
             .into_iter()
             .filter(|(k, _)| k != "comment")
@@ -242,12 +303,16 @@ impl IcebergRestCatalogProvider {
         let metadata = &result.metadata;
 
         // Get the current version
-        let current_version = metadata.versions.iter()
+        let current_version = metadata
+            .versions
+            .iter()
             .find(|v| v.version_id == metadata.current_version_id);
 
         // Get the current schema
         let current_schema = if let Some(version) = current_version {
-            metadata.schemas.iter()
+            metadata
+                .schemas
+                .iter()
                 .find(|s| s.schema_id == Some(version.schema_id))
         } else {
             metadata.schemas.first()
@@ -280,11 +345,15 @@ impl IcebergRestCatalogProvider {
             .map(|r| r.sql.clone())
             .unwrap_or_default();
 
-        let comment = metadata.properties.as_ref()
+        let comment = metadata
+            .properties
+            .as_ref()
             .and_then(|p| p.get("comment"))
             .cloned();
 
-        let properties: Vec<_> = metadata.properties.clone()
+        let properties: Vec<_> = metadata
+            .properties
+            .clone()
             .unwrap_or_default()
             .into_iter()
             .filter(|(k, _)| k != "comment")
@@ -322,7 +391,7 @@ impl CatalogProvider for IcebergRestCatalogProvider {
             properties,
         } = options;
 
-        let namespace = self.namespace_to_iceberg(database);
+        let namespace: Vec<String> = database.clone().into();
 
         if if_not_exists {
             let api = self.client.catalog_api_api();
@@ -394,7 +463,7 @@ impl CatalogProvider for IcebergRestCatalogProvider {
             cascade: _,
         } = options;
 
-        let namespace = self.namespace_to_iceberg(database);
+        let namespace: Vec<String> = database.clone().into();
         let namespace_param = self.namespace_to_url_param(&namespace);
 
         let api = self.client.catalog_api_api();
@@ -414,7 +483,7 @@ impl CatalogProvider for IcebergRestCatalogProvider {
     }
 
     async fn get_database(&self, database: &Namespace) -> CatalogResult<DatabaseStatus> {
-        let namespace = self.namespace_to_iceberg(database);
+        let namespace: Vec<String> = database.clone().into();
         let namespace_param = self.namespace_to_url_param(&namespace);
 
         let api = self.client.catalog_api_api();
@@ -524,7 +593,7 @@ impl CatalogProvider for IcebergRestCatalogProvider {
             properties,
         } = options;
 
-        let namespace = self.namespace_to_iceberg(database);
+        let namespace: Vec<String> = database.clone().into();
         let namespace_param = self.namespace_to_url_param(&namespace);
 
         // Check if table exists when if_not_exists is set
@@ -587,7 +656,7 @@ impl CatalogProvider for IcebergRestCatalogProvider {
     }
 
     async fn get_table(&self, database: &Namespace, table: &str) -> CatalogResult<TableStatus> {
-        let namespace = self.namespace_to_iceberg(database);
+        let namespace: Vec<String> = database.clone().into();
         let namespace_param = self.namespace_to_url_param(&namespace);
 
         let api = self.client.catalog_api_api();
@@ -600,7 +669,7 @@ impl CatalogProvider for IcebergRestCatalogProvider {
     }
 
     async fn list_tables(&self, database: &Namespace) -> CatalogResult<Vec<TableStatus>> {
-        let namespace = self.namespace_to_iceberg(database);
+        let namespace: Vec<String> = database.clone().into();
         let namespace_param = self.namespace_to_url_param(&namespace);
 
         let api = self.client.catalog_api_api();
@@ -632,7 +701,7 @@ impl CatalogProvider for IcebergRestCatalogProvider {
         // In Sail, all tables are external, so we ignore the `purge` option.
         let DropTableOptions { if_exists, purge } = options;
 
-        let namespace = self.namespace_to_iceberg(database);
+        let namespace: Vec<String> = database.clone().into();
         let namespace_param = self.namespace_to_url_param(&namespace);
 
         let api = self.client.catalog_api_api();
@@ -669,7 +738,7 @@ impl CatalogProvider for IcebergRestCatalogProvider {
             properties,
         } = options;
 
-        let namespace = self.namespace_to_iceberg(database);
+        let namespace: Vec<String> = database.clone().into();
         let namespace_param = self.namespace_to_url_param(&namespace);
 
         // Check if view exists when if_not_exists is set
@@ -751,7 +820,7 @@ impl CatalogProvider for IcebergRestCatalogProvider {
     }
 
     async fn get_view(&self, database: &Namespace, view: &str) -> CatalogResult<TableStatus> {
-        let namespace = self.namespace_to_iceberg(database);
+        let namespace: Vec<String> = database.clone().into();
         let namespace_param = self.namespace_to_url_param(&namespace);
 
         let api = self.client.catalog_api_api();
@@ -764,7 +833,7 @@ impl CatalogProvider for IcebergRestCatalogProvider {
     }
 
     async fn list_views(&self, database: &Namespace) -> CatalogResult<Vec<TableStatus>> {
-        let namespace = self.namespace_to_iceberg(database);
+        let namespace: Vec<String> = database.clone().into();
         let namespace_param = self.namespace_to_url_param(&namespace);
 
         let api = self.client.catalog_api_api();
@@ -792,21 +861,17 @@ impl CatalogProvider for IcebergRestCatalogProvider {
         options: DropViewOptions,
     ) -> CatalogResult<()> {
         let DropViewOptions { if_exists } = options;
-
-        let namespace = self.namespace_to_iceberg(database);
-        let namespace_param = self.namespace_to_url_param(&namespace);
-
         let api = self.client.catalog_api_api();
-        match api.drop_view(&self.prefix, &namespace_param, view).await {
+        match api
+            .drop_view(&self.prefix, &database.to_string(), view)
+            .await
+        {
             Ok(_) => Ok(()),
             Err(e) => {
                 if if_exists {
                     Ok(())
                 } else {
-                    Err(CatalogError::External(format!(
-                        "Failed to drop view: {}",
-                        e
-                    )))
+                    Err(CatalogError::External(format!("Failed to drop view: {e}",)))
                 }
             }
         }
