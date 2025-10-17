@@ -190,9 +190,15 @@ impl IcebergTableProvider {
                 log::trace!("Parsed manifest as URL, path: {}", url.path());
                 ObjectPath::from(url.path().strip_prefix('/').unwrap_or(url.path()))
             } else {
-                table_path_base.child(manifest_path_str)
+                // Join relative path segments under the table base path
+                let mut p = table_path_base.clone();
+                for comp in manifest_path_str.split('/').filter(|s| !s.is_empty()) {
+                    p = p.child(comp);
+                }
+                p
             };
 
+            dbg!("Loading manifest", &manifest_path);
             let manifest_data = object_store
                 .get(&manifest_path)
                 .await
@@ -275,7 +281,11 @@ impl IcebergTableProvider {
             let manifest_path = if let Ok(url) = Url::parse(manifest_path_str) {
                 ObjectPath::from(url.path().strip_prefix('/').unwrap_or(url.path()))
             } else {
-                table_path_base.child(manifest_path_str)
+                let mut p = table_path_base.clone();
+                for comp in manifest_path_str.split('/').filter(|s| !s.is_empty()) {
+                    p = p.child(comp);
+                }
+                p
             };
 
             let manifest_data = object_store
@@ -330,24 +340,26 @@ impl IcebergTableProvider {
             return ObjectPath::from(path_no_leading);
         }
 
-        // If the data file path already starts with the table base path, use it as-is
-        if raw_path.starts_with(table_base_path) {
-            return ObjectPath::from(raw_path);
-        }
+        // Normalize base path (ObjectStore Path should not start with leading slash)
+        let base_no_leading = table_base_path.strip_prefix('/').unwrap_or(table_base_path);
+        let mut base = ObjectPath::from(base_no_leading);
 
-        // If it is an absolute filesystem path, use it directly
+        // If it is an absolute filesystem path, drop the leading slash to conform to ObjectPath
         if raw_path.starts_with(object_store::path::DELIMITER) {
+            let no_leading = raw_path.strip_prefix('/').unwrap_or(raw_path);
+            return ObjectPath::from(no_leading);
+        }
+
+        // If raw_path already starts with the normalized base, return as ObjectPath
+        if raw_path.starts_with(base_no_leading) {
             return ObjectPath::from(raw_path);
         }
 
-        // Otherwise, treat as a path relative to the table base path (preserve encoding)
-        let joined = format!(
-            "{}{}{}",
-            table_base_path,
-            object_store::path::DELIMITER,
-            raw_path
-        );
-        ObjectPath::from(joined)
+        // Otherwise, treat as a path relative to the table base path and join components
+        for comp in raw_path.split('/').filter(|s| !s.is_empty()) {
+            base = base.child(comp);
+        }
+        base
     }
 
     /// Create partitioned files for DataFusion from Iceberg data files

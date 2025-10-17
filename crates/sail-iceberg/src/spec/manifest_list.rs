@@ -191,6 +191,9 @@ impl ManifestListWriter {
             };
             let value =
                 apache_avro::to_value(v2).map_err(|e| format!("Avro to_value error: {e}"))?;
+            let value = value
+                .resolve(&schema)
+                .map_err(|e| format!("Avro resolve error: {e}"))?;
             writer
                 .append(value)
                 .map_err(|e| format!("Avro append error: {e}"))?;

@@ -36,7 +36,11 @@ impl LocationGenerator for DefaultLocationGenerator {
             }
             _ => format!("data/{}", file),
         };
-        let full = self.base.child(rel.as_str());
+        // Join each component to avoid encoding '/' into '%2F'
+        let mut full = self.base.clone();
+        for comp in rel.split('/').filter(|s| !s.is_empty()) {
+            full = full.child(comp);
+        }
         (rel, full)
     }
 }
