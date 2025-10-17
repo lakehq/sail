@@ -239,20 +239,18 @@ pub(crate) async fn find_latest_metadata_file(
     log::trace!("Finding latest metadata file");
     let version_hint_path =
         ObjectPath::from(format!("{}metadata/version-hint.text", table_url.path()).as_str());
-
+    let mut hinted_version: Option<i32> = None;
     if let Ok(version_hint_data) = object_store.get(&version_hint_path).await {
         if let Ok(version_hint_bytes) = version_hint_data.bytes().await {
             if let Ok(version_hint) = String::from_utf8(version_hint_bytes.to_vec()) {
                 let version = version_hint.trim().parse::<i32>().unwrap_or(0);
-                let metadata_file =
-                    format!("{}/metadata/v{}.metadata.json", table_url.path(), version);
                 log::trace!("Using version hint: {}", version);
-                return Ok(metadata_file);
+                hinted_version = Some(version);
             }
         }
     }
 
-    log::trace!("No version hint, listing metadata directory");
+    log::trace!("Listing metadata directory");
     let metadata_prefix = ObjectPath::from(format!("{}metadata/", table_url.path()).as_str());
 
     let objects = object_store.list(Some(&metadata_prefix));
@@ -288,6 +286,17 @@ pub(crate) async fn find_latest_metadata_file(
         Ok(mut files) => {
             dbg!("find_latest_metadata_file: found files", &files);
             files.sort_by_key(|(version, _, _)| *version);
+
+            if let Some(hint) = hinted_version {
+                if let Some((version, path, _)) = files.iter().rev().find(|(v, _, _)| *v == hint) {
+                    dbg!(
+                        "find_latest_metadata_file: selected version",
+                        version,
+                        &path
+                    );
+                    return Ok(path.clone());
+                }
+            }
 
             if let Some((version, latest_file, _)) = files.last() {
                 dbg!(
