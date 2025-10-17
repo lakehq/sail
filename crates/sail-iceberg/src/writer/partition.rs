@@ -2,9 +2,9 @@ use datafusion::arrow::array::{
     Array, ArrayRef, BooleanArray, Float32Array, Float64Array, Int32Array, Int64Array, StringArray,
     UInt32Array,
 };
-use datafusion::arrow::datatypes::DataType as ArrowDataType;
+use datafusion::arrow::compute;
+use datafusion::arrow::datatypes::{DataType as ArrowDataType, SchemaRef as ArrowSchemaRef};
 use datafusion::arrow::record_batch::RecordBatch;
-use datafusion::arrow::{compute, datatypes::SchemaRef as ArrowSchemaRef};
 
 use crate::spec::partition::UnboundPartitionSpec as PartitionSpec;
 use crate::spec::schema::Schema as IcebergSchema;
@@ -111,7 +111,7 @@ fn apply_transform(
 fn field_name_from_id(schema: &IcebergSchema, field_id: i32) -> Option<String> {
     schema
         .name_by_field_id(field_id)
-        .map(|s| s.split('.').last().unwrap_or(s).to_string())
+        .map(|s| s.split('.').next_back().unwrap_or(s).to_string())
 }
 
 fn build_partition_dir(
@@ -182,7 +182,6 @@ pub fn group_by_partition(
         col_index: usize,
         field_type: &'a Type,
         transform: Transform,
-        name: String,
     }
 
     let mut fctx: Vec<FieldCtx> = Vec::with_capacity(spec.fields.len());
@@ -198,7 +197,6 @@ pub fn group_by_partition(
             col_index,
             field_type,
             transform: f.transform,
-            name: f.name.clone(),
         });
     }
 

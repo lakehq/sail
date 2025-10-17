@@ -65,19 +65,18 @@ impl DataFileWriter {
     }
 }
 
+type AggregatedMetadata = (
+    HashMap<i32, u64>,
+    HashMap<i32, u64>,
+    HashMap<i32, u64>,
+    HashMap<i32, Datum>,
+    HashMap<i32, Datum>,
+    Vec<i64>,
+);
+
 fn aggregate_from_parquet_metadata(
     thrift_meta: &parquet::format::FileMetaData,
-) -> Result<
-    (
-        HashMap<i32, u64>,
-        HashMap<i32, u64>,
-        HashMap<i32, u64>,
-        HashMap<i32, Datum>,
-        HashMap<i32, Datum>,
-        Vec<i64>,
-    ),
-    String,
-> {
+) -> Result<AggregatedMetadata, String> {
     let schema_ptr = parquet::schema::types::from_thrift(thrift_meta.schema.as_slice())
         .map_err(|e| format!("Failed to parse schema from thrift: {e}"))?;
     let schema_desc = std::sync::Arc::new(SchemaDescriptor::new(schema_ptr));
@@ -92,18 +91,18 @@ fn aggregate_from_parquet_metadata(
     let mut col_sizes: HashMap<i32, u64> = HashMap::new();
     let mut val_counts: HashMap<i32, u64> = HashMap::new();
     let mut null_counts: HashMap<i32, u64> = HashMap::new();
-    let mut lower_bounds: HashMap<i32, Datum> = HashMap::new();
-    let mut upper_bounds: HashMap<i32, Datum> = HashMap::new();
+    let lower_bounds: HashMap<i32, Datum> = HashMap::new();
+    let upper_bounds: HashMap<i32, Datum> = HashMap::new();
     let mut split_offsets: Vec<i64> = Vec::new();
 
     for rg in &row_groups {
         if let Some(off) = rg.file_offset() {
-            split_offsets.push(off as i64);
+            split_offsets.push(off);
         }
         for c in rg.columns() {
             let _path = c.column_descr().path().string();
             // Heuristic: use leaf id if present; otherwise fall back to column index as field id
-            let field_id = c.column_descr().self_type().get_basic_info().id() as i32;
+            let field_id = c.column_descr().self_type().get_basic_info().id();
             *col_sizes.entry(field_id).or_insert(0) += c.compressed_size() as u64;
             *val_counts.entry(field_id).or_insert(0) += c.num_values() as u64;
             if let Some(stats) = c.statistics() {

@@ -20,6 +20,7 @@ pub struct WriterConfig {
 }
 
 impl WriterConfig {
+    #[allow(clippy::too_many_arguments)]
     pub fn new(
         table_schema: ArrowSchemaRef,
         partition_columns: Vec<String>,

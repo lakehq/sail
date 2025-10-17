@@ -19,14 +19,14 @@
 
 use std::sync::Arc;
 
+use apache_avro::{Schema as AvroSchema, Writer as AvroWriter};
+use serde::Serialize;
+
 use super::{
     DataFile, Manifest, ManifestEntry, ManifestEntryRef, ManifestMetadata, ManifestStatus,
 };
 use crate::spec::manifest_list::{ManifestContentType, ManifestFile};
 use crate::spec::DataFileFormat;
-
-use apache_avro::{Schema as AvroSchema, Writer as AvroWriter};
-use serde::Serialize;
 
 #[derive(Debug, Clone)]
 pub struct ManifestWriterBuilder {
@@ -227,7 +227,7 @@ impl ManifestWriter {
                 ManifestContentType::Deletes => "deletes",
             };
             writer
-                .add_user_metadata("content".to_string(), content_str.to_string())
+                .add_user_metadata("content".to_string(), content_str)
                 .map_err(|e| format!("Avro add_user_metadata error: {e}"))?;
         }
 

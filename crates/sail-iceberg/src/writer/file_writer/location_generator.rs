@@ -31,7 +31,9 @@ impl LocationGenerator for DefaultLocationGenerator {
         let id = self.counter.fetch_add(1, Ordering::Relaxed);
         let file = format!("part-{}-{:020}.parquet", Uuid::new_v4(), id);
         let rel = match partition_dir {
-            Some(dir) if !dir.is_empty() => format!("{}/{}", dir.trim_matches('/'), file),
+            Some(dir) if !dir.is_empty() => {
+                format!("data/{}/{}", dir.trim_matches('/'), file)
+            }
             _ => format!("data/{}", file),
         };
         let full = self.base.child(rel.as_str());

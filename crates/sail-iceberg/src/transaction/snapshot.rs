@@ -1,13 +1,14 @@
+use bytes::Bytes;
+
 use super::{ActionCommit, Transaction};
 use crate::io::IcebergObjectStore;
 use crate::spec::manifest::ManifestWriterBuilder;
 use crate::spec::manifest_list::{ManifestListWriter, UNASSIGNED_SEQUENCE_NUMBER};
 use crate::spec::{
-    DataFile, Operation, SnapshotBuilder, SnapshotReference, SnapshotRetention, TableRequirement,
-    TableUpdate, MAIN_BRANCH,
+    DataFile, FormatVersion, ManifestContentType, Operation, PartitionSpec, Schema,
+    SnapshotBuilder, SnapshotReference, SnapshotRetention, TableRequirement, TableUpdate,
+    MAIN_BRANCH,
 };
-use crate::spec::{FormatVersion, ManifestContentType, PartitionSpec, Schema};
-use bytes::Bytes;
 
 pub trait SnapshotProduceOperation: Send + Sync {
     fn operation(&self) -> &'static str;

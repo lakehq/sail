@@ -92,7 +92,7 @@ impl IcebergTableWriter {
             let vals = self
                 .partition_values_map
                 .remove(&k)
-                .unwrap_or_else(|| Vec::new())
+                .unwrap_or_default()
                 .into_iter()
                 .collect();
             self.flush_partition(&k, vals).await?;
