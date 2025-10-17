@@ -17,7 +17,7 @@ openapi-generator generate \
   --config crates/sail-catalog-iceberg/spec/openapi-generator-config.yaml \
   --input-spec crates/sail-catalog-iceberg/spec/iceberg-rest-catalog.yaml \
   --output crates/sail-catalog-iceberg/src/generated_rest_temp \
-  --schema-mappings Type=crate::types::Type,StructType=crate::types::StructType,ListType=crate::types::ListType,MapType=crate::types::MapType,StructField=crate::types::NestedFieldRef
+  --schema-mappings Type=sail_iceberg::spec::Type,StructType=sail_iceberg::spec::StructType,ListType=sail_iceberg::spec::ListType,MapType=sail_iceberg::spec::MapType,StructField=sail_iceberg::spec::NestedFieldRef
 
 echo "==> Flattening generated code to src/..."
 

@@ -1,6 +1,8 @@
 use std::collections::HashMap;
 use std::sync::Arc;
 
+use crate::apis::configuration::Configuration;
+use crate::apis::{self, Api, ApiClient};
 use sail_catalog::error::{CatalogError, CatalogResult};
 use sail_catalog::provider::{
     CatalogProvider, CreateDatabaseOptions, CreateTableColumnOptions, CreateTableOptions,
@@ -8,9 +10,7 @@ use sail_catalog::provider::{
     DropTableOptions, DropViewOptions, Namespace, TableColumnStatus, TableKind, TableStatus,
 };
 use sail_common::runtime::RuntimeHandle;
-
-use crate::apis::configuration::Configuration;
-use crate::apis::{self, Api, ApiClient};
+use sail_iceberg::{arrow_type_to_iceberg, iceberg_type_to_arrow, NestedField};
 
 /// Provider for Apache Iceberg REST Catalog.
 pub struct IcebergRestCatalogProvider {
@@ -58,7 +58,12 @@ impl IcebergRestCatalogProvider {
         let columns = if let Some(schema) = current_schema {
             let mut cols = Vec::new();
             for field in &schema.fields {
-                let data_type = iceberg_to_datatype(&field.field_type)?;
+                let data_type = iceberg_type_to_arrow(&field.field_type).map_err(|e| {
+                    CatalogError::External(format!(
+                        "Failed to convert Iceberg type to Arrow type for field '{}': {e}",
+                        field.name
+                    ))
+                })?;
                 cols.push(TableColumnStatus {
                     name: field.name.clone(),
                     data_type,
@@ -134,7 +139,12 @@ impl IcebergRestCatalogProvider {
         let columns = if let Some(schema) = current_schema {
             let mut cols = Vec::new();
             for field in &schema.fields {
-                let data_type = iceberg_to_datatype(&field.field_type)?;
+                let data_type = iceberg_type_to_arrow(&field.field_type).map_err(|e| {
+                    CatalogError::External(format!(
+                        "Failed to convert Iceberg type to Arrow type for field '{}': {e}",
+                        field.name
+                    ))
+                })?;
                 cols.push(TableColumnStatus {
                     name: field.name.clone(),
                     data_type,
@@ -406,13 +416,14 @@ impl CatalogProvider for IcebergRestCatalogProvider {
 
         let mut fields = Vec::new();
         for (idx, col) in columns.iter().enumerate() {
-            let field_type = datatype_to_iceberg(&col.data_type)?;
-            let mut field = crate::types::NestedField::new(
-                idx as i32,
-                col.name.clone(),
-                field_type,
-                !col.nullable,
-            );
+            let field_type = arrow_type_to_iceberg(&col.data_type).map_err(|e| {
+                CatalogError::External(format!(
+                    "Failed to convert Arrow type to Iceberg type for column '{}': {e}",
+                    col.name
+                ))
+            })?;
+            let mut field =
+                NestedField::new(idx as i32, col.name.clone(), field_type, !col.nullable);
             if let Some(comment_text) = &col.comment {
                 field = field.with_doc(comment_text);
             }
@@ -530,13 +541,14 @@ impl CatalogProvider for IcebergRestCatalogProvider {
 
         let mut fields = Vec::new();
         for (idx, col) in columns.iter().enumerate() {
-            let field_type = datatype_to_iceberg(&col.data_type)?;
-            let mut field = crate::types::NestedField::new(
-                idx as i32,
-                col.name.clone(),
-                field_type,
-                !col.nullable,
-            );
+            let field_type = arrow_type_to_iceberg(&col.data_type).map_err(|e| {
+                CatalogError::External(format!(
+                    "Failed to convert Arrow type to Iceberg type for column '{}': {e}",
+                    col.name
+                ))
+            })?;
+            let mut field =
+                NestedField::new(idx as i32, col.name.clone(), field_type, !col.nullable);
             if let Some(comment_text) = &col.comment {
                 field = field.with_doc(comment_text);
             }
@@ -641,176 +653,6 @@ impl CatalogProvider for IcebergRestCatalogProvider {
                     Err(CatalogError::External(format!("Failed to drop view: {e}")))
                 }
             }
-        }
-    }
-}
-
-fn datatype_to_iceberg(
-    data_type: &datafusion::arrow::datatypes::DataType,
-) -> CatalogResult<crate::types::Type> {
-    use datafusion::arrow::datatypes::DataType;
-
-    use crate::types::{ListType, MapType, NestedField, PrimitiveType, StructType, Type};
-
-    match data_type {
-        DataType::Boolean => Ok(Type::Primitive(PrimitiveType::Boolean)),
-        DataType::Int8
-        | DataType::Int16
-        | DataType::Int32
-        | DataType::UInt8
-        | DataType::UInt16
-        | DataType::UInt32 => Ok(Type::Primitive(PrimitiveType::Int)),
-        DataType::Int64 | DataType::UInt64 => Ok(Type::Primitive(PrimitiveType::Long)),
-        DataType::Float32 => Ok(Type::Primitive(PrimitiveType::Float)),
-        DataType::Float64 => Ok(Type::Primitive(PrimitiveType::Double)),
-        DataType::Decimal128(precision, scale) => Ok(Type::Primitive(PrimitiveType::Decimal {
-            precision: *precision as u32,
-            scale: *scale as u32,
-        })),
-        DataType::Date32 | DataType::Date64 => Ok(Type::Primitive(PrimitiveType::Date)),
-        DataType::Time64(_) => Ok(Type::Primitive(PrimitiveType::Time)),
-        DataType::Timestamp(unit, None) => match unit {
-            datafusion::arrow::datatypes::TimeUnit::Microsecond => {
-                Ok(Type::Primitive(PrimitiveType::Timestamp))
-            }
-            datafusion::arrow::datatypes::TimeUnit::Nanosecond => {
-                Ok(Type::Primitive(PrimitiveType::TimestampNs))
-            }
-            _ => Err(CatalogError::External(format!(
-                "Unsupported timestamp unit: {:?}",
-                unit
-            ))),
-        },
-        DataType::Timestamp(unit, Some(_)) => match unit {
-            datafusion::arrow::datatypes::TimeUnit::Microsecond => {
-                Ok(Type::Primitive(PrimitiveType::Timestamptz))
-            }
-            datafusion::arrow::datatypes::TimeUnit::Nanosecond => {
-                Ok(Type::Primitive(PrimitiveType::TimestamptzNs))
-            }
-            _ => Err(CatalogError::External(format!(
-                "Unsupported timestamp unit: {:?}",
-                unit
-            ))),
-        },
-        DataType::Utf8 | DataType::LargeUtf8 => Ok(Type::Primitive(PrimitiveType::String)),
-        DataType::Binary | DataType::LargeBinary => Ok(Type::Primitive(PrimitiveType::Binary)),
-        DataType::FixedSizeBinary(size) => Ok(Type::Primitive(PrimitiveType::Fixed(*size as u64))),
-        DataType::List(field) | DataType::LargeList(field) => {
-            let element_type = datatype_to_iceberg(field.data_type())?;
-            let element_field = Arc::new(NestedField::list_element(
-                0, // Field ID will be assigned by Iceberg catalog
-                element_type,
-                field.is_nullable(),
-            ));
-            Ok(Type::List(ListType::new(element_field)))
-        }
-        DataType::Map(field, _sorted) => {
-            if let DataType::Struct(fields) = field.data_type() {
-                if fields.len() == 2 {
-                    let key_type = datatype_to_iceberg(fields[0].data_type())?;
-                    let value_type = datatype_to_iceberg(fields[1].data_type())?;
-                    let key_field = Arc::new(NestedField::map_key_element(0, key_type));
-                    let value_field = Arc::new(NestedField::map_value_element(
-                        0,
-                        value_type,
-                        fields[1].is_nullable(),
-                    ));
-                    return Ok(Type::Map(MapType::new(key_field, value_field)));
-                }
-            }
-            Err(CatalogError::External(
-                "Invalid map type structure".to_string(),
-            ))
-        }
-        DataType::Struct(fields) => {
-            let mut nested_fields = Vec::new();
-            for (idx, field) in fields.iter().enumerate() {
-                let field_type = datatype_to_iceberg(field.data_type())?;
-                nested_fields.push(Arc::new(NestedField::new(
-                    idx as i32, // Field ID will be assigned by Iceberg catalog
-                    field.name().clone(),
-                    field_type,
-                    !field.is_nullable(),
-                )));
-            }
-            Ok(Type::Struct(StructType::new(nested_fields)))
-        }
-        _ => Err(CatalogError::External(format!(
-            "Unsupported Arrow type: {:?}",
-            data_type
-        ))),
-    }
-}
-
-fn iceberg_to_datatype(
-    iceberg_type: &crate::types::Type,
-) -> CatalogResult<datafusion::arrow::datatypes::DataType> {
-    use datafusion::arrow::datatypes::{DataType, Field, TimeUnit};
-
-    use crate::types::{PrimitiveType, Type};
-
-    match iceberg_type {
-        Type::Primitive(prim) => match prim {
-            PrimitiveType::Boolean => Ok(DataType::Boolean),
-            PrimitiveType::Int => Ok(DataType::Int32),
-            PrimitiveType::Long => Ok(DataType::Int64),
-            PrimitiveType::Float => Ok(DataType::Float32),
-            PrimitiveType::Double => Ok(DataType::Float64),
-            PrimitiveType::Decimal { precision, scale } => {
-                Ok(DataType::Decimal128(*precision as u8, *scale as i8))
-            }
-            PrimitiveType::Date => Ok(DataType::Date32),
-            PrimitiveType::Time => Ok(DataType::Time64(TimeUnit::Microsecond)),
-            PrimitiveType::Timestamp => Ok(DataType::Timestamp(TimeUnit::Microsecond, None)),
-            PrimitiveType::Timestamptz => Ok(DataType::Timestamp(
-                TimeUnit::Microsecond,
-                Some("UTC".into()),
-            )),
-            PrimitiveType::TimestampNs => Ok(DataType::Timestamp(TimeUnit::Nanosecond, None)),
-            PrimitiveType::TimestamptzNs => Ok(DataType::Timestamp(
-                TimeUnit::Nanosecond,
-                Some("UTC".into()),
-            )),
-            PrimitiveType::String => Ok(DataType::Utf8),
-            PrimitiveType::Uuid => Ok(DataType::FixedSizeBinary(16)),
-            PrimitiveType::Fixed(size) => Ok(DataType::FixedSizeBinary(*size as i32)),
-            PrimitiveType::Binary => Ok(DataType::Binary),
-        },
-        Type::Struct(struct_type) => {
-            let mut fields = Vec::new();
-            for nested_field in struct_type.fields() {
-                let data_type = iceberg_to_datatype(&nested_field.field_type)?;
-                fields.push(Field::new(
-                    nested_field.name.clone(),
-                    data_type,
-                    !nested_field.required,
-                ));
-            }
-            Ok(DataType::Struct(fields.into()))
-        }
-        Type::List(list_type) => {
-            let element_type = iceberg_to_datatype(&list_type.element_field.field_type)?;
-            Ok(DataType::List(Arc::new(Field::new(
-                "element",
-                element_type,
-                !list_type.element_field.required,
-            ))))
-        }
-        Type::Map(map_type) => {
-            let key_type = iceberg_to_datatype(&map_type.key_field.field_type)?;
-            let value_type = iceberg_to_datatype(&map_type.value_field.field_type)?;
-            let entries = DataType::Struct(
-                vec![
-                    Field::new("key", key_type, false),
-                    Field::new("value", value_type, !map_type.value_field.required),
-                ]
-                .into(),
-            );
-            Ok(DataType::Map(
-                Arc::new(Field::new("entries", entries, false)),
-                false,
-            ))
         }
     }
 }

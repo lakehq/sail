@@ -12,6 +12,7 @@ datafusion-common = { workspace = true }
 
 # Arrow dependencies
 arrow-schema = { workspace = true }
+parquet = { workspace = true }
 
 # Essential utilities
 async-trait = { workspace = true }

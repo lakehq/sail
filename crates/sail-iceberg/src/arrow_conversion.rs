@@ -1,11 +1,21 @@
+use std::collections::HashMap;
 use std::sync::Arc;
 
 use arrow_schema::{
     DataType as ArrowDataType, Field as ArrowField, Schema as ArrowSchema, TimeUnit,
 };
-use datafusion_common::Result;
+use datafusion_common::{plan_datafusion_err, plan_err, Result};
+use parquet::arrow::PARQUET_FIELD_ID_META_KEY;
 
-use crate::spec::{NestedField, PrimitiveType, Schema, StructType, Type};
+use crate::spec::{ListType, MapType, NestedField, PrimitiveType, Schema, StructType, Type};
+
+fn get_field_id(field: &ArrowField) -> i32 {
+    field
+        .metadata()
+        .get(PARQUET_FIELD_ID_META_KEY)
+        .and_then(|x| x.parse().ok())
+        .unwrap_or(0)
+}
 
 /// Convert Iceberg schema to Arrow schema
 pub fn iceberg_schema_to_arrow(schema: &Schema) -> Result<ArrowSchema> {
@@ -18,12 +28,43 @@ pub fn iceberg_schema_to_arrow(schema: &Schema) -> Result<ArrowSchema> {
     Ok(ArrowSchema::new(fields))
 }
 
+/// Convert Arrow schema to Iceberg schema
+pub fn arrow_schema_to_iceberg(schema: &ArrowSchema) -> Result<Schema> {
+    let fields = schema
+        .fields()
+        .iter()
+        .map(|field| Ok(Arc::new(arrow_field_to_iceberg(field)?)))
+        .collect::<Result<Vec<_>>>()?;
+
+    Schema::builder()
+        .with_fields(fields)
+        .build()
+        .map_err(|e| plan_datafusion_err!("Failed to build Iceberg schema: {e}"))
+}
+
 /// Convert Iceberg field to Arrow field
 pub fn iceberg_field_to_arrow(field: &NestedField) -> Result<ArrowField> {
     let arrow_type = iceberg_type_to_arrow(&field.field_type)?;
     let nullable = !field.required;
 
-    Ok(ArrowField::new(&field.name, arrow_type, nullable))
+    Ok(
+        ArrowField::new(&field.name, arrow_type, nullable).with_metadata(HashMap::from([(
+            PARQUET_FIELD_ID_META_KEY.to_string(),
+            field.id.to_string(),
+        )])),
+    )
+}
+
+/// Convert Arrow field to Iceberg field
+pub fn arrow_field_to_iceberg(field: &ArrowField) -> Result<NestedField> {
+    let iceberg_type = arrow_type_to_iceberg(field.data_type())?;
+    let required = !field.is_nullable();
+    Ok(NestedField::new(
+        get_field_id(field),
+        field.name().clone(),
+        iceberg_type,
+        required,
+    ))
 }
 
 /// Convert Iceberg type to Arrow data type
@@ -47,6 +88,41 @@ pub fn iceberg_type_to_arrow(iceberg_type: &Type) -> Result<ArrowDataType> {
             );
 
             Ok(ArrowDataType::Map(Arc::new(entries_field), false))
+        }
+    }
+}
+
+/// Convert Arrow data type to Iceberg type
+pub fn arrow_type_to_iceberg(arrow_type: &ArrowDataType) -> Result<Type> {
+    match arrow_type {
+        ArrowDataType::Struct(_) => {
+            let struct_type = arrow_struct_to_iceberg(arrow_type)?;
+            Ok(Type::Struct(struct_type))
+        }
+        ArrowDataType::List(field)
+        | ArrowDataType::ListView(field)
+        | ArrowDataType::LargeList(field) => {
+            let element_field = arrow_field_to_iceberg(field)?;
+            Ok(Type::List(ListType::new(Arc::new(element_field))))
+        }
+        ArrowDataType::Map(entries_field, _sorted) => {
+            if let ArrowDataType::Struct(fields) = entries_field.data_type() {
+                if fields.len() != 2 {
+                    return plan_err!(
+                        "Map entries struct must have exactly 2 fields, found: {}",
+                        fields.len()
+                    );
+                }
+                let key_nested = Arc::new(arrow_field_to_iceberg(&fields[0])?);
+                let value_nested = Arc::new(arrow_field_to_iceberg(&fields[1])?);
+                Ok(Type::Map(MapType::new(key_nested, value_nested)))
+            } else {
+                plan_err!("Map entries field must be a Struct")
+            }
+        }
+        _ => {
+            let primitive = arrow_primitive_to_iceberg(arrow_type)?;
+            Ok(Type::Primitive(primitive))
         }
     }
 }
@@ -77,8 +153,60 @@ pub fn iceberg_primitive_to_arrow(primitive: &PrimitiveType) -> Result<ArrowData
         PrimitiveType::Fixed(size) => ArrowDataType::FixedSizeBinary(*size as i32),
         PrimitiveType::Binary => ArrowDataType::Binary,
     };
-
     Ok(arrow_type)
+}
+
+/// Convert Arrow data type to Iceberg primitive type
+pub fn arrow_primitive_to_iceberg(arrow_type: &ArrowDataType) -> Result<PrimitiveType> {
+    let primitive_type = match arrow_type {
+        ArrowDataType::Boolean => PrimitiveType::Boolean,
+        ArrowDataType::Int8
+        | ArrowDataType::Int16
+        | ArrowDataType::Int32
+        | ArrowDataType::UInt8
+        | ArrowDataType::UInt16 => PrimitiveType::Int,
+        ArrowDataType::UInt32 | ArrowDataType::Int64 => PrimitiveType::Long,
+        ArrowDataType::Float32 => PrimitiveType::Float,
+        ArrowDataType::Float64 => PrimitiveType::Double,
+        ArrowDataType::Decimal128(precision, scale)
+        | ArrowDataType::Decimal256(precision, scale) => {
+            if *scale < 0 {
+                return plan_err!("Iceberg doesn't support negative decimal scale: {scale}");
+            }
+            if *precision > 38 {
+                return plan_err!("Iceberg decimal precision must be ≤ 38, got: {precision}");
+            }
+            PrimitiveType::Decimal {
+                precision: *precision as u32,
+                scale: *scale as u32,
+            }
+        }
+        ArrowDataType::Date32 => PrimitiveType::Date,
+        ArrowDataType::Time64(TimeUnit::Microsecond) => PrimitiveType::Time,
+        ArrowDataType::Timestamp(TimeUnit::Microsecond, None) => PrimitiveType::Timestamp,
+        ArrowDataType::Timestamp(TimeUnit::Microsecond, Some(_)) => PrimitiveType::Timestamptz,
+        ArrowDataType::Timestamp(TimeUnit::Nanosecond, None) => PrimitiveType::TimestampNs,
+        ArrowDataType::Timestamp(TimeUnit::Nanosecond, Some(_)) => PrimitiveType::TimestamptzNs,
+        ArrowDataType::Utf8 | ArrowDataType::LargeUtf8 | ArrowDataType::Utf8View => {
+            PrimitiveType::String
+        }
+        ArrowDataType::FixedSizeBinary(16) => PrimitiveType::Uuid,
+        ArrowDataType::FixedSizeBinary(size) => {
+            if *size < 0 {
+                return plan_err!("FixedSizeBinary size cannot be negative: {size}");
+            }
+            PrimitiveType::Fixed(*size as u64)
+        }
+        ArrowDataType::Binary | ArrowDataType::LargeBinary | ArrowDataType::BinaryView => {
+            PrimitiveType::Binary
+        }
+        _ => {
+            return plan_err!(
+                "Unsupported Arrow data type for Iceberg primitive conversion: {arrow_type}"
+            );
+        }
+    };
+    Ok(primitive_type)
 }
 
 /// Convert Iceberg struct type to Arrow struct data type
@@ -86,10 +214,23 @@ pub fn iceberg_struct_to_arrow(struct_type: &StructType) -> Result<ArrowDataType
     let fields = struct_type
         .fields()
         .iter()
-        .map(|field| iceberg_field_to_arrow(field))
+        .map(|field| Ok(iceberg_field_to_arrow(field)?))
         .collect::<Result<Vec<_>>>()?;
 
     Ok(ArrowDataType::Struct(fields.into()))
+}
+
+/// Convert Arrow struct data type to Iceberg struct type
+pub fn arrow_struct_to_iceberg(struct_type: &ArrowDataType) -> Result<StructType> {
+    if let ArrowDataType::Struct(fields) = struct_type {
+        let fields = fields
+            .iter()
+            .map(|field| Ok(Arc::new(arrow_field_to_iceberg(field)?)))
+            .collect::<Result<Vec<_>>>()?;
+        Ok(StructType::new(fields))
+    } else {
+        plan_err!("Expected Struct type, found: {struct_type}")
+    }
 }
 
 #[cfg(test)]
@@ -191,5 +332,200 @@ mod tests {
         assert_eq!(price_field.name(), "price");
         assert_eq!(price_field.data_type(), &ArrowDataType::Decimal128(10, 2));
         assert!(!price_field.is_nullable());
+    }
+
+    #[test]
+    fn test_arrow_primitive_to_iceberg_conversion() {
+        let test_cases = vec![
+            (ArrowDataType::Boolean, PrimitiveType::Boolean),
+            (ArrowDataType::Int32, PrimitiveType::Long),
+            (ArrowDataType::Int64, PrimitiveType::Long),
+            (ArrowDataType::Float32, PrimitiveType::Float),
+            (ArrowDataType::Float64, PrimitiveType::Double),
+            (ArrowDataType::Utf8, PrimitiveType::String),
+            (ArrowDataType::Binary, PrimitiveType::Binary),
+            (ArrowDataType::Date32, PrimitiveType::Date),
+            (
+                ArrowDataType::Time64(TimeUnit::Microsecond),
+                PrimitiveType::Time,
+            ),
+            (
+                ArrowDataType::Timestamp(TimeUnit::Microsecond, None),
+                PrimitiveType::Timestamp,
+            ),
+            (
+                ArrowDataType::Timestamp(TimeUnit::Microsecond, Some("UTC".into())),
+                PrimitiveType::Timestamptz,
+            ),
+            (ArrowDataType::FixedSizeBinary(16), PrimitiveType::Uuid),
+            (ArrowDataType::FixedSizeBinary(10), PrimitiveType::Fixed(10)),
+        ];
+
+        for (arrow_type, expected_iceberg_type) in test_cases {
+            let result = arrow_primitive_to_iceberg(&arrow_type)
+                .expect("Failed to convert arrow type to iceberg");
+            assert_eq!(result, expected_iceberg_type);
+        }
+    }
+
+    #[test]
+    fn test_arrow_decimal_to_iceberg_conversion() {
+        let arrow_type = ArrowDataType::Decimal128(10, 2);
+        let result = arrow_primitive_to_iceberg(&arrow_type)
+            .expect("Failed to convert decimal type to iceberg");
+        assert_eq!(
+            result,
+            PrimitiveType::Decimal {
+                precision: 10,
+                scale: 2
+            }
+        );
+    }
+
+    #[test]
+    fn test_arrow_schema_to_iceberg_conversion() {
+        let arrow_schema = ArrowSchema::new(vec![
+            ArrowField::new("id", ArrowDataType::Int64, false),
+            ArrowField::new("name", ArrowDataType::Utf8, true),
+            ArrowField::new("price", ArrowDataType::Decimal128(10, 2), false),
+        ]);
+
+        let iceberg_schema = arrow_schema_to_iceberg(&arrow_schema)
+            .expect("Failed to convert arrow schema to iceberg");
+
+        let fields = iceberg_schema.fields();
+        assert_eq!(fields.len(), 3);
+
+        let id_field = &fields[0];
+        assert_eq!(id_field.name, "id");
+        assert_eq!(id_field.field_type, Type::Primitive(PrimitiveType::Long));
+        assert!(id_field.required);
+
+        let name_field = &fields[1];
+        assert_eq!(name_field.name, "name");
+        assert_eq!(
+            name_field.field_type,
+            Type::Primitive(PrimitiveType::String)
+        );
+        assert!(!name_field.required);
+
+        let price_field = &fields[2];
+        assert_eq!(price_field.name, "price");
+        assert_eq!(
+            price_field.field_type,
+            Type::Primitive(PrimitiveType::Decimal {
+                precision: 10,
+                scale: 2
+            })
+        );
+        assert!(price_field.required);
+    }
+
+    #[test]
+    fn test_arrow_list_to_iceberg_conversion() {
+        let element_field = ArrowField::new("element", ArrowDataType::Int64, true);
+        let arrow_list = ArrowDataType::List(Arc::new(element_field));
+
+        let iceberg_type =
+            arrow_type_to_iceberg(&arrow_list).expect("Failed to convert Arrow list to Iceberg");
+
+        match iceberg_type {
+            Type::List(list_type) => {
+                assert_eq!(
+                    list_type.element_field.field_type,
+                    Type::Primitive(PrimitiveType::Long)
+                );
+                assert!(!list_type.element_field.required);
+            }
+            _ => panic!("Expected List type"),
+        }
+    }
+
+    #[test]
+    fn test_arrow_map_to_iceberg_conversion() {
+        let key_field = ArrowField::new("key", ArrowDataType::Utf8, false);
+        let value_field = ArrowField::new("value", ArrowDataType::Int64, true);
+        let entries_struct = ArrowDataType::Struct(vec![key_field, value_field].into());
+        let entries_field = ArrowField::new("entries", entries_struct, false);
+        let arrow_map = ArrowDataType::Map(Arc::new(entries_field), false);
+
+        let iceberg_type =
+            arrow_type_to_iceberg(&arrow_map).expect("Failed to convert Arrow map to Iceberg");
+
+        match iceberg_type {
+            Type::Map(map_type) => {
+                assert_eq!(
+                    map_type.key_field.field_type,
+                    Type::Primitive(PrimitiveType::String)
+                );
+                assert!(map_type.key_field.required);
+                assert_eq!(
+                    map_type.value_field.field_type,
+                    Type::Primitive(PrimitiveType::Long)
+                );
+                assert!(!map_type.value_field.required);
+            }
+            _ => panic!("Expected Map type"),
+        }
+    }
+
+    #[test]
+    fn test_arrow_struct_to_iceberg_conversion() {
+        let struct_fields = vec![
+            ArrowField::new("id", ArrowDataType::Int64, false),
+            ArrowField::new("name", ArrowDataType::Utf8, true),
+        ];
+        let arrow_struct = ArrowDataType::Struct(struct_fields.into());
+
+        let struct_type = arrow_struct_to_iceberg(&arrow_struct)
+            .expect("Failed to convert Arrow struct to Iceberg");
+
+        let fields = struct_type.fields();
+        assert_eq!(fields.len(), 2);
+
+        assert_eq!(fields[0].name, "id");
+        assert_eq!(fields[0].field_type, Type::Primitive(PrimitiveType::Long));
+        assert!(fields[0].required);
+
+        assert_eq!(fields[1].name, "name");
+        assert_eq!(fields[1].field_type, Type::Primitive(PrimitiveType::String));
+        assert!(!fields[1].required);
+    }
+
+    #[test]
+    fn test_roundtrip_schema_conversion() {
+        let original_schema = Schema::builder()
+            .with_fields(vec![
+                Arc::new(NestedField::required(
+                    1,
+                    "id",
+                    Type::Primitive(PrimitiveType::Long),
+                )),
+                Arc::new(NestedField::optional(
+                    2,
+                    "data",
+                    Type::Primitive(PrimitiveType::String),
+                )),
+            ])
+            .build()
+            .expect("Failed to build schema");
+
+        let arrow_schema =
+            iceberg_schema_to_arrow(&original_schema).expect("Failed to convert to Arrow");
+        let roundtrip_schema =
+            arrow_schema_to_iceberg(&arrow_schema).expect("Failed to convert back to Iceberg");
+
+        let original_fields = original_schema.fields();
+        let roundtrip_fields = roundtrip_schema.fields();
+
+        assert_eq!(original_fields.len(), roundtrip_fields.len());
+        for i in 0..original_fields.len() {
+            assert_eq!(original_fields[i].name, roundtrip_fields[i].name);
+            assert_eq!(
+                original_fields[i].field_type,
+                roundtrip_fields[i].field_type
+            );
+            assert_eq!(original_fields[i].required, roundtrip_fields[i].required);
+        }
     }
 }
