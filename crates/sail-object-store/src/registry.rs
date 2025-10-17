@@ -4,7 +4,7 @@ use dashmap::DashMap;
 use datafusion::execution::object_store::ObjectStoreRegistry;
 use datafusion_common::{plan_datafusion_err, Result};
 #[cfg(feature = "hdfs")]
-use hdfs_native_object_store::HdfsObjectStore;
+use hdfs_native_object_store::HdfsObjectStoreBuilder;
 use log::debug;
 use object_store::azure::{MicrosoftAzure, MicrosoftAzureBuilder};
 use object_store::gcp::{GoogleCloudStorage, GoogleCloudStorageBuilder};
@@ -95,7 +95,11 @@ fn get_dynamic_object_store(url: &Url) -> object_store::Result<Arc<dyn ObjectSto
     let key = ObjectStoreKey::new(url);
     let store: Arc<dyn ObjectStore> = match key.scheme.as_str() {
         #[cfg(feature = "hdfs")]
-        "hdfs" => Arc::new(HdfsObjectStore::with_url(url.as_str())?),
+        "hdfs" => Arc::new(
+            HdfsObjectStoreBuilder::new()
+                .with_url(url.as_str())
+                .build()?,
+        ),
         "hf" => {
             if key.authority != "datasets" {
                 return Err(object_store::Error::Generic {

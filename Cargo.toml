@@ -147,8 +147,8 @@ arrow-pyarrow = { version = "56.2.0" }
 parquet = { version = "56.2.0" }
 serde_arrow = { version = "0.13.6", features = ["arrow-56"] }
 # The `object_store` version must match the one used in DataFusion.
-object_store = { version = "0.12.3", features = ["aws", "gcp", "azure", "http"] }
-hdfs-native-object-store = "0.14.2"
+object_store = { version = "0.12.4", features = ["aws", "gcp", "azure", "http"] }
+hdfs-native-object-store = "0.15.0"
 rust_decimal = "1.39.0"
 
 # Lakehouse
