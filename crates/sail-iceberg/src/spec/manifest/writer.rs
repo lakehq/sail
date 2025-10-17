@@ -17,7 +17,68 @@
 
 // [CREDIT]: https://raw.githubusercontent.com/apache/iceberg-rust/dc349284a4204c1a56af47fb3177ace6f9e899a0/crates/iceberg/src/spec/manifest/writer.rs
 
-// TODO: Implement manifest writer
-#[allow(dead_code)]
+use std::sync::Arc;
+
+use super::{
+    DataFile, Manifest, ManifestEntry, ManifestEntryRef, ManifestMetadata, ManifestStatus,
+};
+
 #[derive(Debug, Clone)]
-pub struct ManifestWriter;
+pub struct ManifestWriterBuilder {
+    snapshot_id: Option<i64>,
+    key_metadata: Option<Vec<u8>>,
+    metadata: ManifestMetadata,
+}
+
+impl ManifestWriterBuilder {
+    pub fn new(
+        snapshot_id: Option<i64>,
+        key_metadata: Option<Vec<u8>>,
+        metadata: ManifestMetadata,
+    ) -> Self {
+        Self {
+            snapshot_id,
+            key_metadata,
+            metadata,
+        }
+    }
+
+    pub fn build(self) -> ManifestWriter {
+        ManifestWriter::new(self.snapshot_id, self.key_metadata, self.metadata)
+    }
+}
+
+#[derive(Debug, Clone)]
+pub struct ManifestWriter {
+    snapshot_id: Option<i64>,
+    key_metadata: Option<Vec<u8>>,
+    metadata: ManifestMetadata,
+    entries: Vec<ManifestEntryRef>,
+}
+
+impl ManifestWriter {
+    pub fn new(
+        snapshot_id: Option<i64>,
+        key_metadata: Option<Vec<u8>>,
+        metadata: ManifestMetadata,
+    ) -> Self {
+        Self {
+            snapshot_id,
+            key_metadata,
+            metadata,
+            entries: Vec::new(),
+        }
+    }
+
+    pub fn add(&mut self, file: DataFile) {
+        let entry = ManifestEntry::new(ManifestStatus::Added, self.snapshot_id, None, None, file);
+        self.entries.push(Arc::new(entry));
+    }
+
+    pub fn finish(self) -> Manifest {
+        Manifest::new(
+            self.metadata,
+            self.entries.into_iter().map(|e| (*e).clone()).collect(),
+        )
+    }
+}

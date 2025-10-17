@@ -97,6 +97,24 @@ impl ManifestList {
     }
 }
 
+pub struct ManifestListWriter {
+    entries: Vec<ManifestFile>,
+}
+
+impl ManifestListWriter {
+    pub fn new() -> Self {
+        Self { entries: Vec::new() }
+    }
+
+    pub fn append(&mut self, manifest: ManifestFile) {
+        self.entries.push(manifest);
+    }
+
+    pub fn finish(self) -> ManifestList {
+        ManifestList::new(self.entries)
+    }
+}
+
 // removed duplicate early _serde block; see single _serde module below
 
 #[derive(Debug, Serialize, Deserialize, Clone)]
