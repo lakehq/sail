@@ -4,8 +4,12 @@ use std::sync::Arc;
 use arrow_schema::{
     DataType as ArrowDataType, Field as ArrowField, Schema as ArrowSchema, TimeUnit,
 };
+use datafusion::arrow::datatypes::{
+    validate_decimal_precision_and_scale, Decimal128Type as ArrowDecimal128Type,
+};
 use datafusion_common::{plan_datafusion_err, plan_err, Result};
 use parquet::arrow::PARQUET_FIELD_ID_META_KEY;
+use rust_decimal::prelude::ToPrimitive;
 
 use crate::spec::{ListType, MapType, NestedField, PrimitiveType, Schema, StructType, Type};
 
@@ -151,7 +155,18 @@ pub fn iceberg_primitive_to_arrow(primitive: &PrimitiveType) -> Result<ArrowData
         PrimitiveType::Float => ArrowDataType::Float32,
         PrimitiveType::Double => ArrowDataType::Float64,
         PrimitiveType::Decimal { precision, scale } => {
-            ArrowDataType::Decimal128(*precision as u8, *scale as i8)
+            let (precision, scale) = {
+                let precision: u8 = (*precision).try_into().map_err(|_| {
+                    plan_datafusion_err!("Decimal precision overflow: {}", precision)
+                })?;
+                let scale: i8 = (*scale)
+                    .try_into()
+                    .map_err(|_| plan_datafusion_err!("Decimal scale overflow: {}", scale))?;
+                (precision, scale)
+            };
+            validate_decimal_precision_and_scale::<ArrowDecimal128Type>(precision, scale)
+                .map_err(|e| plan_datafusion_err!("Invalid decimal precision/scale: {e}"))?;
+            ArrowDataType::Decimal128(precision, scale)
         }
         PrimitiveType::Date => ArrowDataType::Date32,
         PrimitiveType::Time => ArrowDataType::Time64(TimeUnit::Microsecond),
@@ -165,8 +180,11 @@ pub fn iceberg_primitive_to_arrow(primitive: &PrimitiveType) -> Result<ArrowData
         }
         PrimitiveType::String => ArrowDataType::Utf8,
         PrimitiveType::Uuid => ArrowDataType::FixedSizeBinary(16),
-        PrimitiveType::Fixed(size) => ArrowDataType::FixedSizeBinary(*size as i32),
-        PrimitiveType::Binary => ArrowDataType::Binary,
+        PrimitiveType::Fixed(size) => size
+            .to_i32()
+            .map(ArrowDataType::FixedSizeBinary)
+            .unwrap_or(ArrowDataType::LargeBinary),
+        PrimitiveType::Binary => ArrowDataType::LargeBinary,
     };
     Ok(arrow_type)
 }
@@ -183,17 +201,12 @@ pub fn arrow_primitive_to_iceberg(arrow_type: &ArrowDataType) -> Result<Primitiv
         ArrowDataType::UInt32 | ArrowDataType::Int64 => PrimitiveType::Long,
         ArrowDataType::Float32 => PrimitiveType::Float,
         ArrowDataType::Float64 => PrimitiveType::Double,
-        ArrowDataType::Decimal128(precision, scale)
-        | ArrowDataType::Decimal256(precision, scale) => {
-            if *scale < 0 {
-                return plan_err!("Iceberg doesn't support negative decimal scale: {scale}");
-            }
-            if *precision > 38 {
-                return plan_err!("Iceberg decimal precision must be ≤ 38, got: {precision}");
-            }
-            PrimitiveType::Decimal {
-                precision: *precision as u32,
-                scale: *scale as u32,
+        ArrowDataType::Decimal128(precision, scale) => {
+            let iceberg_type = Type::decimal(*precision as u32, *scale as u32)
+                .map_err(|e| plan_datafusion_err!("Failed to create decimal type: {e}"))?;
+            match iceberg_type {
+                Type::Primitive(p) => p,
+                _ => return plan_err!("Expected decimal to be a primitive type"),
             }
         }
         ArrowDataType::Date32 => PrimitiveType::Date,
@@ -214,12 +227,7 @@ pub fn arrow_primitive_to_iceberg(arrow_type: &ArrowDataType) -> Result<Primitiv
             PrimitiveType::String
         }
         ArrowDataType::FixedSizeBinary(16) => PrimitiveType::Uuid,
-        ArrowDataType::FixedSizeBinary(size) => {
-            if *size < 0 {
-                return plan_err!("FixedSizeBinary size cannot be negative: {size}");
-            }
-            PrimitiveType::Fixed(*size as u64)
-        }
+        ArrowDataType::FixedSizeBinary(size) => PrimitiveType::Fixed(*size as u64),
         ArrowDataType::Binary | ArrowDataType::LargeBinary | ArrowDataType::BinaryView => {
             PrimitiveType::Binary
         }
@@ -279,7 +287,7 @@ mod tests {
                 ArrowDataType::Decimal128(10, 2),
             ),
             (PrimitiveType::String, ArrowDataType::Utf8),
-            (PrimitiveType::Binary, ArrowDataType::Binary),
+            (PrimitiveType::Binary, ArrowDataType::LargeBinary),
             (PrimitiveType::Date, ArrowDataType::Date32),
             (
                 PrimitiveType::Time,
@@ -330,13 +338,6 @@ mod tests {
                 PrimitiveType::Decimal {
                     precision: 10,
                     scale: 2,
-                },
-            ),
-            (
-                ArrowDataType::Decimal256(15, 5),
-                PrimitiveType::Decimal {
-                    precision: 15,
-                    scale: 5,
                 },
             ),
             (ArrowDataType::Utf8, PrimitiveType::String),
