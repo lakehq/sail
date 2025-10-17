@@ -3,6 +3,7 @@ use std::sync::Arc;
 use bytes::Bytes;
 use object_store::path::Path as ObjectPath;
 
+#[derive(Clone)]
 pub struct IcebergObjectStore {
     pub object_store: Arc<dyn object_store::ObjectStore>,
     pub root: ObjectPath,

@@ -27,10 +27,12 @@ mod _serde;
 mod data_file;
 mod entry;
 mod metadata;
+mod writer;
 
 pub use data_file::*;
 pub use entry::*;
 pub use metadata::*;
+pub use writer::*;
 
 /// Reference to [`ManifestEntry`].
 pub type ManifestEntryRef = Arc<ManifestEntry>;
@@ -119,6 +121,19 @@ impl Manifest {
     pub fn parse_avro(bs: &[u8]) -> Result<Self, String> {
         let (metadata, entries) = Self::try_from_avro_bytes(bs)?;
         Ok(Manifest::new(metadata, entries))
+    }
+
+    pub fn to_avro_bytes_v2(&self) -> Result<Vec<u8>, String> {
+        let builder = crate::spec::manifest::writer::ManifestWriterBuilder::new(
+            None,
+            None,
+            self.metadata.clone(),
+        );
+        let mut w = builder.build();
+        for e in &self.entries {
+            w.add(e.data_file.clone());
+        }
+        w.to_avro_bytes_v2()
     }
 }
 

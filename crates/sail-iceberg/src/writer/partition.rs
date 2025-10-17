@@ -1,8 +1,10 @@
 use datafusion::arrow::array::{
     Array, ArrayRef, BooleanArray, Float32Array, Float64Array, Int32Array, Int64Array, StringArray,
+    UInt32Array,
 };
 use datafusion::arrow::datatypes::DataType as ArrowDataType;
 use datafusion::arrow::record_batch::RecordBatch;
+use datafusion::arrow::{compute, datatypes::SchemaRef as ArrowSchemaRef};
 
 use crate::spec::partition::UnboundPartitionSpec as PartitionSpec;
 use crate::spec::schema::Schema as IcebergSchema;
@@ -158,4 +160,91 @@ pub fn compute_partition_values(
     }
     let dir = build_partition_dir(spec, iceberg_schema, &values);
     Ok((values, dir))
+}
+
+/// Group a RecordBatch by partition values according to the given spec and schema.
+pub fn group_by_partition(
+    batch: &RecordBatch,
+    spec: &PartitionSpec,
+    iceberg_schema: &IcebergSchema,
+) -> Result<Vec<PartitionBatchResult>, String> {
+    if spec.fields.is_empty() {
+        return Ok(vec![PartitionBatchResult {
+            record_batch: batch.clone(),
+            partition_values: Vec::new(),
+            partition_dir: String::new(),
+            spec_id: 0,
+        }]);
+    }
+
+    // Pre-compute field mapping: source_id -> (col_index, field_type, transform, name)
+    struct FieldCtx<'a> {
+        col_index: usize,
+        field_type: &'a Type,
+        transform: Transform,
+        name: String,
+    }
+
+    let mut fctx: Vec<FieldCtx> = Vec::with_capacity(spec.fields.len());
+    for f in &spec.fields {
+        let name = field_name_from_id(iceberg_schema, f.source_id)
+            .ok_or_else(|| format!("Unknown field id {}", f.source_id))?;
+        let col_index = batch.schema().index_of(&name).map_err(|e| e.to_string())?;
+        let field_type = iceberg_schema
+            .field_by_id(f.source_id)
+            .map(|nf| nf.field_type.as_ref())
+            .unwrap_or(&Type::Primitive(PrimitiveType::String));
+        fctx.push(FieldCtx {
+            col_index,
+            field_type,
+            transform: f.transform,
+            name: f.name.clone(),
+        });
+    }
+
+    // Build groups keyed by partition dir
+    use std::collections::HashMap;
+    struct Group {
+        indices: Vec<u32>,
+        values: Vec<Option<Literal>>,
+        dir: String,
+    }
+    let mut groups: HashMap<String, Group> = HashMap::new();
+    let num_rows = batch.num_rows();
+    for row in 0..num_rows {
+        let mut values: Vec<Option<Literal>> = Vec::with_capacity(fctx.len());
+        for fc in &fctx {
+            let lit = scalar_to_literal(batch.column(fc.col_index), row);
+            let t = apply_transform(fc.transform, fc.field_type, lit);
+            values.push(t);
+        }
+        let dir = build_partition_dir(spec, iceberg_schema, &values);
+        let entry = groups.entry(dir.clone()).or_insert_with(|| Group {
+            indices: Vec::new(),
+            values: values.clone(),
+            dir: dir.clone(),
+        });
+        entry.indices.push(row as u32);
+    }
+
+    // Build result batches
+    let schema: ArrowSchemaRef = batch.schema();
+    let mut results: Vec<PartitionBatchResult> = Vec::with_capacity(groups.len());
+    for (_k, g) in groups.into_iter() {
+        let idx = UInt32Array::from(g.indices);
+        let mut cols: Vec<ArrayRef> = Vec::with_capacity(batch.num_columns());
+        for col in batch.columns() {
+            let taken = compute::take(col.as_ref(), &idx, None).map_err(|e| e.to_string())?;
+            cols.push(taken);
+        }
+        let rb = RecordBatch::try_new(schema.clone(), cols).map_err(|e| e.to_string())?;
+        results.push(PartitionBatchResult {
+            record_batch: rb,
+            partition_values: g.values,
+            partition_dir: g.dir,
+            spec_id: 0,
+        });
+    }
+
+    Ok(results)
 }

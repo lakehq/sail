@@ -22,6 +22,11 @@ use std::sync::Arc;
 use super::{
     DataFile, Manifest, ManifestEntry, ManifestEntryRef, ManifestMetadata, ManifestStatus,
 };
+use crate::spec::manifest_list::{ManifestContentType, ManifestFile};
+use crate::spec::DataFileFormat;
+
+use apache_avro::{Schema as AvroSchema, Writer as AvroWriter};
+use serde::Serialize;
 
 #[derive(Debug, Clone)]
 pub struct ManifestWriterBuilder {
@@ -87,7 +92,7 @@ impl ManifestWriter {
         manifest_path: String,
         sequence_number: i64,
         snapshot_id: i64,
-    ) -> super::ManifestFile {
+    ) -> ManifestFile {
         let added = self
             .entries
             .iter()
@@ -103,11 +108,11 @@ impl ManifestWriter {
             .iter()
             .filter(|e| matches!(e.status, ManifestStatus::Deleted))
             .count() as i32;
-        super::ManifestFile {
+        ManifestFile {
             manifest_path,
             manifest_length: 0,
             partition_spec_id: self.metadata.partition_spec.spec_id(),
-            content: super::ManifestContentType::Data,
+            content: ManifestContentType::Data,
             sequence_number,
             min_sequence_number: sequence_number,
             added_snapshot_id: snapshot_id,
@@ -120,5 +125,171 @@ impl ManifestWriter {
             partitions: None,
             key_metadata: self.key_metadata,
         }
+    }
+
+    /// Encode this manifest's entries into Avro bytes using a simplified v2 schema.
+    /// This omits metrics maps and encodes partition as an optional string.
+    pub fn to_avro_bytes_v2(&self) -> Result<Vec<u8>, String> {
+        // Simplified v2 manifest entry schema; partition encoded as optional string
+        let schema_json = r#"
+        {
+          "type": "record",
+          "name": "manifest_entry",
+          "fields": [
+            {"name": "status", "type": "int"},
+            {"name": "snapshot_id", "type": ["null","long"], "default": null},
+            {"name": "sequence_number", "type": ["null","long"], "default": null},
+            {"name": "file_sequence_number", "type": ["null","long"], "default": null},
+            {"name": "data_file", "type": {
+              "type": "record",
+              "name": "data_file",
+              "fields": [
+                {"name": "content", "type": "int"},
+                {"name": "file_path", "type": "string"},
+                {"name": "file_format", "type": "string"},
+                {"name": "partition", "type": ["null","string"], "default": null},
+                {"name": "record_count", "type": "long"},
+                {"name": "file_size_in_bytes", "type": "long"},
+                {"name": "key_metadata", "type": ["null","bytes"], "default": null},
+                {"name": "split_offsets", "type": ["null", {"type": "array", "items": "long"}], "default": null},
+                {"name": "equality_ids", "type": ["null", {"type": "array", "items": "int"}], "default": null},
+                {"name": "sort_order_id", "type": ["null","int"], "default": null}
+              ]
+            }}
+          ]
+        }
+        "#;
+
+        #[derive(Serialize)]
+        struct AvroDataFile<'a> {
+            content: i32,
+            file_path: &'a str,
+            file_format: &'a str,
+            #[serde(skip_serializing_if = "Option::is_none")]
+            partition: Option<String>,
+            record_count: i64,
+            file_size_in_bytes: i64,
+            #[serde(skip_serializing_if = "Option::is_none")]
+            key_metadata: Option<&'a Vec<u8>>,
+            #[serde(skip_serializing_if = "Option::is_none")]
+            split_offsets: Option<&'a Vec<i64>>,
+            #[serde(skip_serializing_if = "Option::is_none")]
+            equality_ids: Option<Vec<i32>>,
+            #[serde(skip_serializing_if = "Option::is_none")]
+            sort_order_id: Option<i32>,
+        }
+
+        #[derive(Serialize)]
+        struct AvroEntry<'a> {
+            status: i32,
+            #[serde(skip_serializing_if = "Option::is_none")]
+            snapshot_id: Option<i64>,
+            #[serde(skip_serializing_if = "Option::is_none")]
+            sequence_number: Option<i64>,
+            #[serde(skip_serializing_if = "Option::is_none")]
+            file_sequence_number: Option<i64>,
+            data_file: AvroDataFile<'a>,
+        }
+
+        let avro_schema = AvroSchema::parse_str(schema_json)
+            .map_err(|e| format!("Avro schema parse error: {e}"))?;
+        let mut writer = AvroWriter::new(&avro_schema, Vec::new());
+
+        // Add user metadata per Iceberg spec
+        let schema_json = serde_json::to_vec(&self.metadata.schema)
+            .map_err(|e| format!("Fail to serialize table schema: {e}"))?;
+        writer
+            .add_user_metadata("schema".to_string(), schema_json)
+            .map_err(|e| format!("Avro add_user_metadata error: {e}"))?;
+        writer
+            .add_user_metadata("schema-id".to_string(), self.metadata.schema_id.to_string())
+            .map_err(|e| format!("Avro add_user_metadata error: {e}"))?;
+        let part_fields = serde_json::to_vec(&self.metadata.partition_spec.fields())
+            .map_err(|e| format!("Fail to serialize partition spec: {e}"))?;
+        writer
+            .add_user_metadata("partition-spec".to_string(), part_fields)
+            .map_err(|e| format!("Avro add_user_metadata error: {e}"))?;
+        writer
+            .add_user_metadata(
+                "partition-spec-id".to_string(),
+                self.metadata.partition_spec.spec_id().to_string(),
+            )
+            .map_err(|e| format!("Avro add_user_metadata error: {e}"))?;
+        writer
+            .add_user_metadata(
+                "format-version".to_string(),
+                (self.metadata.format_version as u8).to_string(),
+            )
+            .map_err(|e| format!("Avro add_user_metadata error: {e}"))?;
+        if self.metadata.format_version as u8 == 2 {
+            let content_str = match self.metadata.content {
+                ManifestContentType::Data => "data",
+                ManifestContentType::Deletes => "deletes",
+            };
+            writer
+                .add_user_metadata("content".to_string(), content_str.to_string())
+                .map_err(|e| format!("Avro add_user_metadata error: {e}"))?;
+        }
+
+        for e in &self.entries {
+            let status = match e.status {
+                ManifestStatus::Added => 1,
+                ManifestStatus::Deleted => 2,
+                ManifestStatus::Existing => 0,
+            };
+            let df = &e.data_file;
+            let content = match df.content {
+                super::DataContentType::Data => 0,
+                super::DataContentType::PositionDeletes => 1,
+                super::DataContentType::EqualityDeletes => 2,
+            };
+            let file_format = match df.file_format {
+                DataFileFormat::Parquet => "PARQUET",
+                DataFileFormat::Avro => "AVRO",
+                DataFileFormat::Orc => "ORC",
+                DataFileFormat::Puffin => "PUFFIN",
+            };
+            let partition_str: Option<String> = None; // minimal encoding
+            let equality_ids = if df.equality_ids.is_empty() {
+                None
+            } else {
+                Some(df.equality_ids.clone())
+            };
+            let avro_df = AvroDataFile {
+                content,
+                file_path: &df.file_path,
+                file_format,
+                partition: partition_str,
+                record_count: df.record_count as i64,
+                file_size_in_bytes: df.file_size_in_bytes as i64,
+                key_metadata: df.key_metadata.as_ref(),
+                split_offsets: if df.split_offsets.is_empty() {
+                    None
+                } else {
+                    Some(&df.split_offsets)
+                },
+                equality_ids,
+                sort_order_id: df.sort_order_id,
+            };
+            let entry = AvroEntry {
+                status,
+                snapshot_id: e.snapshot_id,
+                sequence_number: e.sequence_number,
+                file_sequence_number: e.file_sequence_number,
+                data_file: avro_df,
+            };
+            let value =
+                apache_avro::to_value(entry).map_err(|e| format!("Avro to_value error: {e}"))?;
+            let value = value
+                .resolve(&avro_schema)
+                .map_err(|e| format!("Avro resolve error: {e}"))?;
+            writer
+                .append(value)
+                .map_err(|e| format!("Avro append error: {e}"))?;
+        }
+
+        writer
+            .into_inner()
+            .map_err(|e| format!("Avro writer finalize error: {e}"))
     }
 }

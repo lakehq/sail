@@ -7,6 +7,8 @@ use uuid::Uuid;
 use super::{
     ActionCommit, SnapshotProduceOperation, SnapshotProducer, Transaction, TransactionAction,
 };
+use crate::io::IcebergObjectStore;
+use crate::spec::manifest::ManifestMetadata;
 use crate::spec::DataFile;
 
 pub struct FastAppendAction {
@@ -15,6 +17,8 @@ pub struct FastAppendAction {
     key_metadata: Option<Vec<u8>>,
     snapshot_properties: HashMap<String, String>,
     added_data_files: Vec<DataFile>,
+    store: Option<IcebergObjectStore>,
+    manifest_metadata: Option<ManifestMetadata>,
 }
 
 impl Default for FastAppendAction {
@@ -31,6 +35,8 @@ impl FastAppendAction {
             key_metadata: None,
             snapshot_properties: HashMap::new(),
             added_data_files: Vec::new(),
+            store: None,
+            manifest_metadata: None,
         }
     }
 
@@ -57,12 +63,27 @@ impl FastAppendAction {
         self.snapshot_properties = snapshot_properties;
         self
     }
+
+    pub fn with_store(mut self, store: IcebergObjectStore) -> Self {
+        self.store = Some(store);
+        self
+    }
+
+    pub fn with_manifest_metadata(mut self, metadata: ManifestMetadata) -> Self {
+        self.manifest_metadata = Some(metadata);
+        self
+    }
 }
 
 #[async_trait]
 impl TransactionAction for FastAppendAction {
     async fn commit(self: Arc<Self>, tx: &Transaction) -> Result<ActionCommit, String> {
-        let snapshot_producer = SnapshotProducer::new(tx, self.added_data_files.clone());
+        let snapshot_producer = SnapshotProducer::new(
+            tx,
+            self.added_data_files.clone(),
+            self.store.clone(),
+            self.manifest_metadata.clone(),
+        );
         snapshot_producer.validate_added_data_files(&self.added_data_files)?;
 
         if self.check_duplicate {

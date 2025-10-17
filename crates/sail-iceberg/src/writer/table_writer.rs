@@ -10,7 +10,7 @@ use crate::writer::arrow_parquet::ArrowParquetWriter;
 use crate::writer::base_writer::DataFileWriter;
 use crate::writer::config::WriterConfig;
 use crate::writer::file_writer::location_generator::{DefaultLocationGenerator, LocationGenerator};
-use crate::writer::partition::compute_partition_values;
+use crate::writer::partition::group_by_partition;
 
 pub struct IcebergTableWriter {
     pub store: IcebergObjectStore,
@@ -18,6 +18,8 @@ pub struct IcebergTableWriter {
     pub generator: DefaultLocationGenerator,
     // partition_dir -> writer
     writers: HashMap<String, ArrowParquetWriter>,
+    // partition_dir -> partition values aligned with spec
+    partition_values_map: HashMap<String, Vec<Option<Literal>>>,
     written: Vec<DataFile>,
     pub partition_spec_id: i32,
 }
@@ -34,32 +36,36 @@ impl IcebergTableWriter {
             store,
             config,
             writers: HashMap::new(),
+            partition_values_map: HashMap::new(),
             written: Vec::new(),
             partition_spec_id,
         }
     }
 
     pub async fn write(&mut self, batch: &RecordBatch) -> Result<(), String> {
-        let (_partition_values, partition_dir) = compute_partition_values(
+        let groups = group_by_partition(
             batch,
             &self.config.partition_spec,
             &self.config.iceberg_schema,
-            &self.config.partition_columns,
         )?;
-        #[allow(clippy::expect_used)]
-        let writer = self
-            .writers
-            .entry(partition_dir.clone())
-            .or_insert_with(|| {
-                ArrowParquetWriter::try_new(
-                    self.config.table_schema.as_ref(),
-                    self.config.writer_properties.clone(),
-                )
-                .expect("parquet writer")
-            });
-        writer.write_batch(batch).await?;
-
-        // size-triggered flush could be added here
+        for g in groups {
+            #[allow(clippy::expect_used)]
+            let writer = self
+                .writers
+                .entry(g.partition_dir.clone())
+                .or_insert_with(|| {
+                    ArrowParquetWriter::try_new(
+                        self.config.table_schema.as_ref(),
+                        self.config.writer_properties.clone(),
+                    )
+                    .expect("parquet writer")
+                });
+            // cache partition values for this directory (first wins)
+            self.partition_values_map
+                .entry(g.partition_dir.clone())
+                .or_insert(g.partition_values);
+            writer.write_batch(&g.record_batch).await?;
+        }
         Ok(())
     }
 
@@ -83,8 +89,13 @@ impl IcebergTableWriter {
     pub async fn close(mut self) -> Result<Vec<DataFile>, String> {
         let keys: Vec<String> = self.writers.keys().cloned().collect();
         for k in keys {
-            // partition values are unknown in this placeholder; use empty
-            self.flush_partition(&k, Vec::new()).await?;
+            let vals = self
+                .partition_values_map
+                .remove(&k)
+                .unwrap_or_else(|| Vec::new())
+                .into_iter()
+                .collect();
+            self.flush_partition(&k, vals).await?;
         }
         Ok(self.written)
     }
