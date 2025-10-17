@@ -5737,8 +5737,8 @@ name = "sail-iceberg"
 version = "0.3.7"
 dependencies = [
  "apache-avro",
- "arrow-schema",
  "async-trait",
+ "bytes",
  "chrono",
  "datafusion",
  "datafusion-common",
@@ -5749,6 +5749,7 @@ dependencies = [
  "object_store",
  "once_cell",
  "ordered-float 5.1.0",
+ "parquet",
  "percent-encoding",
  "sail-common-datafusion",
  "serde",

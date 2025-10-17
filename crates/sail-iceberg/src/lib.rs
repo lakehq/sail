@@ -1,5 +1,7 @@
 pub mod arrow_conversion;
 pub mod datasource;
+pub mod io;
+pub mod physical_plan;
 pub mod spec;
 pub mod table_format;
 pub mod transaction;

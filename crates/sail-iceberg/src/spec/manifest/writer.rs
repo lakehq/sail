@@ -81,4 +81,44 @@ impl ManifestWriter {
             self.entries.into_iter().map(|e| (*e).clone()).collect(),
         )
     }
+
+    pub fn into_manifest_file(
+        self,
+        manifest_path: String,
+        sequence_number: i64,
+        snapshot_id: i64,
+    ) -> super::ManifestFile {
+        let added = self
+            .entries
+            .iter()
+            .filter(|e| matches!(e.status, ManifestStatus::Added))
+            .count() as i32;
+        let existing = self
+            .entries
+            .iter()
+            .filter(|e| matches!(e.status, ManifestStatus::Existing))
+            .count() as i32;
+        let deleted = self
+            .entries
+            .iter()
+            .filter(|e| matches!(e.status, ManifestStatus::Deleted))
+            .count() as i32;
+        super::ManifestFile {
+            manifest_path,
+            manifest_length: 0,
+            partition_spec_id: self.metadata.partition_spec.spec_id(),
+            content: super::ManifestContentType::Data,
+            sequence_number,
+            min_sequence_number: sequence_number,
+            added_snapshot_id: snapshot_id,
+            added_files_count: Some(added),
+            existing_files_count: Some(existing),
+            deleted_files_count: Some(deleted),
+            added_rows_count: None,
+            existing_rows_count: None,
+            deleted_rows_count: None,
+            partitions: None,
+            key_metadata: self.key_metadata,
+        }
+    }
 }

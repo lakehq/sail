@@ -121,6 +121,11 @@ impl ManifestListWriter {
     pub fn finish(self) -> ManifestList {
         ManifestList::new(self.entries)
     }
+
+    pub fn to_bytes(&self, _version: FormatVersion) -> Result<Vec<u8>, String> {
+        // Placeholder: physical plan will pick correct Avro encoding later
+        Ok(Vec::new())
+    }
 }
 
 // removed duplicate early _serde block; see single _serde module below

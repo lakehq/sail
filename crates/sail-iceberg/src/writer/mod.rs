@@ -1,5 +1,9 @@
 pub mod base_writer;
 pub mod file_writer;
+pub mod config;
+pub mod arrow_parquet;
+pub mod partition;
+pub mod table_writer;
 
 use crate::spec::DataFile;
 

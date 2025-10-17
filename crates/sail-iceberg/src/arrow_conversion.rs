@@ -1,6 +1,6 @@
 use std::sync::Arc;
 
-use arrow_schema::{
+use datafusion::arrow::datatypes::{
     DataType as ArrowDataType, Field as ArrowField, Schema as ArrowSchema, TimeUnit,
 };
 use datafusion_common::Result;
