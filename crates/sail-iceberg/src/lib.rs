@@ -8,6 +8,10 @@ pub mod writer;
 pub use arrow_conversion::*;
 pub use datasource::*;
 pub use table_format::*;
-
-pub use transaction::{action::*, append::*, snapshot::*, Transaction};
-pub use writer::{base_writer::*, file_writer::*, WriteOutcome, IcebergWriter};
+pub use transaction::action::*;
+pub use transaction::append::*;
+pub use transaction::snapshot::*;
+pub use transaction::Transaction;
+pub use writer::base_writer::*;
+pub use writer::file_writer::*;
+pub use writer::{IcebergWriter, WriteOutcome};

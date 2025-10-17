@@ -101,9 +101,17 @@ pub struct ManifestListWriter {
     entries: Vec<ManifestFile>,
 }
 
+impl Default for ManifestListWriter {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl ManifestListWriter {
     pub fn new() -> Self {
-        Self { entries: Vec::new() }
+        Self {
+            entries: Vec::new(),
+        }
     }
 
     pub fn append(&mut self, manifest: ManifestFile) {

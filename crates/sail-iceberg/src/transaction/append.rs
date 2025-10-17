@@ -4,9 +4,10 @@ use std::sync::Arc;
 use async_trait::async_trait;
 use uuid::Uuid;
 
+use super::{
+    ActionCommit, SnapshotProduceOperation, SnapshotProducer, Transaction, TransactionAction,
+};
 use crate::spec::DataFile;
-
-use super::{ActionCommit, SnapshotProduceOperation, SnapshotProducer, Transaction, TransactionAction};
 
 pub struct FastAppendAction {
     check_duplicate: bool,
@@ -16,10 +17,16 @@ pub struct FastAppendAction {
     added_data_files: Vec<DataFile>,
 }
 
+impl Default for FastAppendAction {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl FastAppendAction {
     pub fn new() -> Self {
         Self {
-            check_duplicate: false,
+            check_duplicate: true,
             commit_uuid: None,
             key_metadata: None,
             snapshot_properties: HashMap::new(),
@@ -29,6 +36,26 @@ impl FastAppendAction {
 
     pub fn add_file(&mut self, file: DataFile) {
         self.added_data_files.push(file);
+    }
+
+    pub fn with_check_duplicate(mut self, v: bool) -> Self {
+        self.check_duplicate = v;
+        self
+    }
+
+    pub fn set_commit_uuid(mut self, commit_uuid: Uuid) -> Self {
+        self.commit_uuid = Some(commit_uuid);
+        self
+    }
+
+    pub fn set_key_metadata(mut self, key_metadata: Vec<u8>) -> Self {
+        self.key_metadata = Some(key_metadata);
+        self
+    }
+
+    pub fn set_snapshot_properties(mut self, snapshot_properties: HashMap<String, String>) -> Self {
+        self.snapshot_properties = snapshot_properties;
+        self
     }
 }
 
@@ -52,5 +79,3 @@ impl TransactionAction for FastAppendAction {
         snapshot_producer.commit(FastAppendOperation).await
     }
 }
-
-

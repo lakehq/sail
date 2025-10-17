@@ -11,6 +11,7 @@ use crate::spec::Snapshot;
 pub struct Transaction {
     table_uri: String,
     snapshot: Snapshot,
+    actions: Vec<std::sync::Arc<dyn action::TransactionAction>>,
 }
 
 impl Transaction {
@@ -18,6 +19,7 @@ impl Transaction {
         Self {
             table_uri,
             snapshot,
+            actions: Vec::new(),
         }
     }
 

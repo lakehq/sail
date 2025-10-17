@@ -1,5 +1,5 @@
-pub mod file_writer;
 pub mod base_writer;
+pub mod file_writer;
 
 use crate::spec::DataFile;
 
@@ -11,5 +11,3 @@ pub trait IcebergWriter<T> {
 pub struct WriteOutcome {
     pub data_file: DataFile,
 }
-
-

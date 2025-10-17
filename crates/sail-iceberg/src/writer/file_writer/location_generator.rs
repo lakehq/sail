@@ -21,8 +21,10 @@ impl DefaultLocationGenerator {
 impl LocationGenerator for DefaultLocationGenerator {
     fn next_data_path(&self) -> String {
         let id = self.counter.fetch_add(1, Ordering::Relaxed);
-        format!("{}/data/part-{:020}.parquet", self.base.trim_end_matches('/'), id)
+        format!(
+            "{}/data/part-{:020}.parquet",
+            self.base.trim_end_matches('/'),
+            id
+        )
     }
 }
-
-
