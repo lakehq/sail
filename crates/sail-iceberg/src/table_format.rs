@@ -53,10 +53,77 @@ impl TableFormat for IcebergTableFormat {
 
     async fn create_writer(
         &self,
-        _ctx: &dyn Session,
-        _info: SinkInfo,
+        ctx: &dyn Session,
+        info: SinkInfo,
     ) -> Result<Arc<dyn ExecutionPlan>> {
-        not_impl_err!("Writing to Iceberg tables is not yet implemented")
+        use datafusion::physical_plan::empty::EmptyExec;
+        use sail_common_datafusion::datasource::PhysicalSinkMode;
+
+        let SinkInfo {
+            input,
+            path,
+            mode,
+            partition_by,
+            bucket_by,
+            sort_order,
+            options: _,
+        } = info;
+
+        if bucket_by.is_some() {
+            return not_impl_err!("bucketing for Iceberg format");
+        }
+
+        // Parse URL and detect table existence (file-based tables only)
+        let table_url = Self::parse_table_url(ctx, vec![path]).await?;
+        let table_exists = load_table_metadata(ctx, &table_url).await.is_ok();
+
+        // Early mode handling (no-op or error)
+        match mode {
+            PhysicalSinkMode::ErrorIfExists => {
+                if table_exists {
+                    return plan_err!("Iceberg table already exists at path: {}", table_url);
+                }
+            }
+            PhysicalSinkMode::IgnoreIfExists => {
+                if table_exists {
+                    return Ok(Arc::new(EmptyExec::new(input.schema())));
+                }
+            }
+            PhysicalSinkMode::Overwrite
+            | PhysicalSinkMode::OverwriteIf { .. }
+            | PhysicalSinkMode::OverwritePartitions => {
+                // TODO: support overwrite modes (replace_where / dynamic partition overwrite)
+                return not_impl_err!("overwrite modes for Iceberg format");
+            }
+            _ => {}
+        }
+
+        // Build writer → commit pipeline
+        use crate::physical_plan::plan_builder::{IcebergPlanBuilder, IcebergTableConfig};
+
+        let table_config = IcebergTableConfig {
+            table_url,
+            partition_columns: partition_by,
+            table_exists,
+        };
+
+        // Convert logical sort requirement to physical sort exprs for SortExec
+        let physical_sort = if let Some(req) = sort_order {
+            Some(
+                req.into_iter()
+                    .map(|r| datafusion::physical_expr::PhysicalSortExpr {
+                        expr: r.expr,
+                        options: r.options.unwrap_or_default(),
+                    })
+                    .collect::<Vec<_>>(),
+            )
+        } else {
+            None
+        };
+
+        let builder = IcebergPlanBuilder::new(input, table_config, mode, physical_sort, ctx);
+        let exec = builder.build().await?;
+        Ok(exec)
     }
 }
 
@@ -88,7 +155,7 @@ impl IcebergTableFormat {
 }
 
 /// Load Iceberg table metadata from the table location
-async fn load_table_metadata(
+pub(crate) async fn load_table_metadata(
     ctx: &dyn Session,
     table_url: &Url,
 ) -> Result<(Schema, Snapshot, Vec<PartitionSpec>)> {
@@ -139,7 +206,7 @@ async fn load_table_metadata(
 }
 
 /// Find the latest metadata file in the table location
-async fn find_latest_metadata_file(
+pub(crate) async fn find_latest_metadata_file(
     object_store: &Arc<dyn object_store::ObjectStore>,
     table_url: &Url,
 ) -> Result<String> {

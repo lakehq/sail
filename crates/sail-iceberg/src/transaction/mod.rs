@@ -1,5 +1,6 @@
 pub mod action;
 pub mod append;
+pub mod helpers;
 pub mod snapshot;
 
 pub use action::*;
