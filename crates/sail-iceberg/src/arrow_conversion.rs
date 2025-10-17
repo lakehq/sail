@@ -9,12 +9,21 @@ use parquet::arrow::PARQUET_FIELD_ID_META_KEY;
 
 use crate::spec::{ListType, MapType, NestedField, PrimitiveType, Schema, StructType, Type};
 
+pub const ICEBERG_ARROW_FIELD_DOC_KEY: &str = "doc";
+
 fn get_field_id(field: &ArrowField) -> i32 {
     field
         .metadata()
         .get(PARQUET_FIELD_ID_META_KEY)
         .and_then(|x| x.parse().ok())
         .unwrap_or(0)
+}
+
+fn get_field_doc(field: &ArrowField) -> Option<String> {
+    if let Some(value) = field.metadata().get(ICEBERG_ARROW_FIELD_DOC_KEY) {
+        return Some(value.clone());
+    }
+    None
 }
 
 /// Convert Iceberg schema to Arrow schema
@@ -24,7 +33,6 @@ pub fn iceberg_schema_to_arrow(schema: &Schema) -> Result<ArrowSchema> {
         .iter()
         .map(|field| iceberg_field_to_arrow(field))
         .collect::<Result<Vec<_>>>()?;
-
     Ok(ArrowSchema::new(fields))
 }
 
@@ -35,7 +43,6 @@ pub fn arrow_schema_to_iceberg(schema: &ArrowSchema) -> Result<Schema> {
         .iter()
         .map(|field| Ok(Arc::new(arrow_field_to_iceberg(field)?)))
         .collect::<Result<Vec<_>>>()?;
-
     Schema::builder()
         .with_fields(fields)
         .build()
@@ -46,25 +53,33 @@ pub fn arrow_schema_to_iceberg(schema: &ArrowSchema) -> Result<Schema> {
 pub fn iceberg_field_to_arrow(field: &NestedField) -> Result<ArrowField> {
     let arrow_type = iceberg_type_to_arrow(&field.field_type)?;
     let nullable = !field.required;
-
-    Ok(
-        ArrowField::new(&field.name, arrow_type, nullable).with_metadata(HashMap::from([(
-            PARQUET_FIELD_ID_META_KEY.to_string(),
-            field.id.to_string(),
-        )])),
-    )
+    let metadata = if let Some(doc) = &field.doc {
+        HashMap::from([
+            (PARQUET_FIELD_ID_META_KEY.to_string(), field.id.to_string()),
+            (ICEBERG_ARROW_FIELD_DOC_KEY.to_string(), doc.clone()),
+        ])
+    } else {
+        HashMap::from([(PARQUET_FIELD_ID_META_KEY.to_string(), field.id.to_string())])
+    };
+    Ok(ArrowField::new(&field.name, arrow_type, nullable).with_metadata(metadata))
 }
 
 /// Convert Arrow field to Iceberg field
 pub fn arrow_field_to_iceberg(field: &ArrowField) -> Result<NestedField> {
     let iceberg_type = arrow_type_to_iceberg(field.data_type())?;
     let required = !field.is_nullable();
-    Ok(NestedField::new(
+    let doc = get_field_doc(field);
+    let field = NestedField::new(
         get_field_id(field),
         field.name().clone(),
         iceberg_type,
         required,
-    ))
+    );
+    if let Some(doc) = doc {
+        Ok(field.with_doc(doc))
+    } else {
+        Ok(field)
+    }
 }
 
 /// Convert Iceberg type to Arrow data type
@@ -184,9 +199,17 @@ pub fn arrow_primitive_to_iceberg(arrow_type: &ArrowDataType) -> Result<Primitiv
         ArrowDataType::Date32 => PrimitiveType::Date,
         ArrowDataType::Time64(TimeUnit::Microsecond) => PrimitiveType::Time,
         ArrowDataType::Timestamp(TimeUnit::Microsecond, None) => PrimitiveType::Timestamp,
-        ArrowDataType::Timestamp(TimeUnit::Microsecond, Some(_)) => PrimitiveType::Timestamptz,
+        ArrowDataType::Timestamp(TimeUnit::Microsecond, Some(tz))
+            if tz.as_ref() == "UTC" || tz.as_ref() == "+00:00" =>
+        {
+            PrimitiveType::Timestamptz
+        }
         ArrowDataType::Timestamp(TimeUnit::Nanosecond, None) => PrimitiveType::TimestampNs,
-        ArrowDataType::Timestamp(TimeUnit::Nanosecond, Some(_)) => PrimitiveType::TimestamptzNs,
+        ArrowDataType::Timestamp(TimeUnit::Nanosecond, Some(tz))
+            if tz.as_ref() == "UTC" || tz.as_ref() == "+00:00" =>
+        {
+            PrimitiveType::TimestamptzNs
+        }
         ArrowDataType::Utf8 | ArrowDataType::LargeUtf8 | ArrowDataType::Utf8View => {
             PrimitiveType::String
         }
@@ -216,7 +239,6 @@ pub fn iceberg_struct_to_arrow(struct_type: &StructType) -> Result<ArrowDataType
         .iter()
         .map(|field| iceberg_field_to_arrow(field))
         .collect::<Result<Vec<_>>>()?;
-
     Ok(ArrowDataType::Struct(fields.into()))
 }
 
@@ -337,11 +359,19 @@ mod tests {
                 PrimitiveType::Timestamptz,
             ),
             (
+                ArrowDataType::Timestamp(TimeUnit::Microsecond, Some("+00:00".into())),
+                PrimitiveType::Timestamptz,
+            ),
+            (
                 ArrowDataType::Timestamp(TimeUnit::Nanosecond, None),
                 PrimitiveType::TimestampNs,
             ),
             (
                 ArrowDataType::Timestamp(TimeUnit::Nanosecond, Some("UTC".into())),
+                PrimitiveType::TimestamptzNs,
+            ),
+            (
+                ArrowDataType::Timestamp(TimeUnit::Nanosecond, Some("+00:00".into())),
                 PrimitiveType::TimestamptzNs,
             ),
             (ArrowDataType::FixedSizeBinary(16), PrimitiveType::Uuid),
@@ -430,18 +460,28 @@ mod tests {
 
     #[test]
     fn test_arrow_schema_to_iceberg_conversion() {
-        let arrow_schema =
-            ArrowSchema::new(vec![
-                ArrowField::new("id", ArrowDataType::Int64, false).with_metadata(HashMap::from([
-                    (PARQUET_FIELD_ID_META_KEY.to_string(), "1".to_string()),
-                ])),
-                ArrowField::new("name", ArrowDataType::Utf8, true).with_metadata(HashMap::from([
-                    (PARQUET_FIELD_ID_META_KEY.to_string(), "2".to_string()),
-                ])),
-                ArrowField::new("price", ArrowDataType::Decimal128(10, 2), false).with_metadata(
-                    HashMap::from([(PARQUET_FIELD_ID_META_KEY.to_string(), "3".to_string())]),
+        let arrow_schema = ArrowSchema::new(vec![
+            ArrowField::new("id", ArrowDataType::Int64, false).with_metadata(HashMap::from([
+                (PARQUET_FIELD_ID_META_KEY.to_string(), "1".to_string()),
+                (
+                    ICEBERG_ARROW_FIELD_DOC_KEY.to_string(),
+                    "Unique identifier".to_string(),
                 ),
-            ]);
+            ])),
+            ArrowField::new("name", ArrowDataType::Utf8, true).with_metadata(HashMap::from([(
+                PARQUET_FIELD_ID_META_KEY.to_string(),
+                "2".to_string(),
+            )])),
+            ArrowField::new("price", ArrowDataType::Decimal128(10, 2), false).with_metadata(
+                HashMap::from([
+                    (PARQUET_FIELD_ID_META_KEY.to_string(), "3".to_string()),
+                    (
+                        ICEBERG_ARROW_FIELD_DOC_KEY.to_string(),
+                        "Price in USD".to_string(),
+                    ),
+                ]),
+            ),
+        ]);
 
         let iceberg_schema = arrow_schema_to_iceberg(&arrow_schema)
             .expect("Failed to convert arrow schema to iceberg");
@@ -454,6 +494,7 @@ mod tests {
         assert_eq!(id_field.name, "id");
         assert_eq!(*id_field.field_type, Type::Primitive(PrimitiveType::Long));
         assert!(id_field.required);
+        assert_eq!(id_field.doc, Some("Unique identifier".to_string()));
 
         let name_field = &fields[1];
         assert_eq!(name_field.id, 2);
@@ -463,6 +504,7 @@ mod tests {
             Type::Primitive(PrimitiveType::String)
         );
         assert!(!name_field.required);
+        assert_eq!(name_field.doc, None);
 
         let price_field = &fields[2];
         assert_eq!(price_field.id, 3);
@@ -475,6 +517,7 @@ mod tests {
             })
         );
         assert!(price_field.required);
+        assert_eq!(price_field.doc, Some("Price in USD".to_string()));
     }
 
     #[allow(clippy::panic)]
@@ -483,6 +526,10 @@ mod tests {
         let element_field =
             ArrowField::new("element", ArrowDataType::Int64, true).with_metadata(HashMap::from([
                 (PARQUET_FIELD_ID_META_KEY.to_string(), "1".to_string()),
+                (
+                    ICEBERG_ARROW_FIELD_DOC_KEY.to_string(),
+                    "List element".to_string(),
+                ),
             ]));
         let arrow_list = ArrowDataType::List(Arc::new(element_field));
 
@@ -497,6 +544,10 @@ mod tests {
                     Type::Primitive(PrimitiveType::Long)
                 );
                 assert!(!list_type.element_field.required);
+                assert_eq!(
+                    list_type.element_field.doc,
+                    Some("List element".to_string())
+                );
             }
             _ => panic!("Expected List type"),
         }
@@ -505,9 +556,14 @@ mod tests {
     #[allow(clippy::panic)]
     #[test]
     fn test_arrow_map_to_iceberg_conversion() {
-        let key_field = ArrowField::new("key", ArrowDataType::Utf8, false).with_metadata(
-            HashMap::from([(PARQUET_FIELD_ID_META_KEY.to_string(), "1".to_string())]),
-        );
+        let key_field =
+            ArrowField::new("key", ArrowDataType::Utf8, false).with_metadata(HashMap::from([
+                (PARQUET_FIELD_ID_META_KEY.to_string(), "1".to_string()),
+                (
+                    ICEBERG_ARROW_FIELD_DOC_KEY.to_string(),
+                    "Map key".to_string(),
+                ),
+            ]));
         let value_field = ArrowField::new("value", ArrowDataType::Int64, true).with_metadata(
             HashMap::from([(PARQUET_FIELD_ID_META_KEY.to_string(), "2".to_string())]),
         );
@@ -526,12 +582,14 @@ mod tests {
                     Type::Primitive(PrimitiveType::String)
                 );
                 assert!(map_type.key_field.required);
+                assert_eq!(map_type.key_field.doc, Some("Map key".to_string()));
                 assert_eq!(map_type.value_field.id, 2);
                 assert_eq!(
                     *map_type.value_field.field_type,
                     Type::Primitive(PrimitiveType::Long)
                 );
                 assert!(!map_type.value_field.required);
+                assert_eq!(map_type.value_field.doc, None);
             }
             _ => panic!("Expected Map type"),
         }
@@ -539,15 +597,19 @@ mod tests {
 
     #[test]
     fn test_arrow_struct_to_iceberg_conversion() {
-        let struct_fields =
-            vec![
-                ArrowField::new("id", ArrowDataType::Int64, false).with_metadata(HashMap::from([
-                    (PARQUET_FIELD_ID_META_KEY.to_string(), "1".to_string()),
-                ])),
-                ArrowField::new("name", ArrowDataType::Utf8, true).with_metadata(HashMap::from([
-                    (PARQUET_FIELD_ID_META_KEY.to_string(), "2".to_string()),
-                ])),
-            ];
+        let struct_fields = vec![
+            ArrowField::new("id", ArrowDataType::Int64, false).with_metadata(HashMap::from([
+                (PARQUET_FIELD_ID_META_KEY.to_string(), "1".to_string()),
+                (
+                    ICEBERG_ARROW_FIELD_DOC_KEY.to_string(),
+                    "Struct ID field".to_string(),
+                ),
+            ])),
+            ArrowField::new("name", ArrowDataType::Utf8, true).with_metadata(HashMap::from([(
+                PARQUET_FIELD_ID_META_KEY.to_string(),
+                "2".to_string(),
+            )])),
+        ];
         let arrow_struct = ArrowDataType::Struct(struct_fields.into());
 
         let struct_type = arrow_struct_to_iceberg(&arrow_struct)
@@ -560,6 +622,7 @@ mod tests {
         assert_eq!(fields[0].name, "id");
         assert_eq!(*fields[0].field_type, Type::Primitive(PrimitiveType::Long));
         assert!(fields[0].required);
+        assert_eq!(fields[0].doc, Some("Struct ID field".to_string()));
 
         assert_eq!(fields[1].id, 2);
         assert_eq!(fields[1].name, "name");
@@ -568,17 +631,17 @@ mod tests {
             Type::Primitive(PrimitiveType::String)
         );
         assert!(!fields[1].required);
+        assert_eq!(fields[1].doc, None);
     }
 
     #[test]
     fn test_roundtrip_schema_conversion() {
         let original_schema = Schema::builder()
             .with_fields(vec![
-                Arc::new(NestedField::required(
-                    1,
-                    "id",
-                    Type::Primitive(PrimitiveType::Long),
-                )),
+                Arc::new(
+                    NestedField::required(1, "id", Type::Primitive(PrimitiveType::Long))
+                        .with_doc("Primary key"),
+                ),
                 Arc::new(NestedField::optional(
                     2,
                     "data",
@@ -591,7 +654,7 @@ mod tests {
         let arrow_schema =
             iceberg_schema_to_arrow(&original_schema).expect("Failed to convert to Arrow");
 
-        // Verify Arrow schema has metadata with field IDs
+        // Verify Arrow schema has metadata with field IDs and docs
         assert_eq!(
             arrow_schema
                 .field(0)
@@ -601,10 +664,24 @@ mod tests {
         );
         assert_eq!(
             arrow_schema
+                .field(0)
+                .metadata()
+                .get(ICEBERG_ARROW_FIELD_DOC_KEY),
+            Some(&"Primary key".to_string())
+        );
+        assert_eq!(
+            arrow_schema
                 .field(1)
                 .metadata()
                 .get(PARQUET_FIELD_ID_META_KEY),
             Some(&"2".to_string())
+        );
+        assert_eq!(
+            arrow_schema
+                .field(1)
+                .metadata()
+                .get(ICEBERG_ARROW_FIELD_DOC_KEY),
+            None
         );
 
         let roundtrip_schema =
@@ -622,6 +699,7 @@ mod tests {
                 roundtrip_fields[i].field_type
             );
             assert_eq!(original_fields[i].required, roundtrip_fields[i].required);
+            assert_eq!(original_fields[i].doc, roundtrip_fields[i].doc);
         }
     }
 }

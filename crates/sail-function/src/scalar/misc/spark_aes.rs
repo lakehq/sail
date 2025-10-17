@@ -441,6 +441,7 @@ impl ScalarUDFImpl for SparkAESEncrypt {
                 let iv = iv.as_ref().ok_or_else(|| {
                     exec_datafusion_err!("Spark `aes_encrypt`: IV must be provided for GCM mode")
                 })?;
+                #[allow(deprecated)]
                 let nonce = Nonce::from_slice(iv);
                 let result = match key.len() {
                     16 => {
@@ -802,6 +803,7 @@ impl ScalarUDFImpl for SparkAESDecrypt {
                 // iv is prepended to the ciphertext
                 let iv = &expr[..12];
                 let expr = &expr[12..];
+                #[allow(deprecated)]
                 let nonce = Nonce::from_slice(iv);
                 let decrypted = match key.len() {
                     16 => {
