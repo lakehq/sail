@@ -3677,7 +3677,7 @@
         }
       },
       "output": {
-        "failure": "not implemented: unknown aggregate function: try_sum"
+        "success": "ok"
       }
     },
     {
@@ -3699,7 +3699,7 @@
         }
       },
       "output": {
-        "failure": "not implemented: unknown aggregate function: try_sum"
+        "success": "ok"
       }
     },
     {
@@ -3721,7 +3721,7 @@
         }
       },
       "output": {
-        "failure": "not implemented: unknown aggregate function: try_sum"
+        "success": "ok"
       }
     },
     {
@@ -3743,7 +3743,7 @@
         }
       },
       "output": {
-        "failure": "not implemented: unknown aggregate function: try_sum"
+        "success": "ok"
       }
     },
     {
