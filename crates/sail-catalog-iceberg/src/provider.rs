@@ -685,8 +685,10 @@ mod tests {
     }
 
     fn create_test_catalog(server_uri: String) -> IcebergRestCatalogProvider {
-        let app_config = Arc::new(AppConfig::load().unwrap());
-        let runtime = RuntimeManager::try_new(&app_config.runtime).unwrap();
+        let runtime = RuntimeHandle::new(
+            tokio::runtime::Handle::current(),
+            Some(tokio::runtime::Handle::current()),
+        );
         let config = Arc::new(Configuration {
             base_path: server_uri,
             user_agent: None,
@@ -696,12 +698,7 @@ mod tests {
             bearer_access_token: None,
             api_key: None,
         });
-        IcebergRestCatalogProvider::new(
-            "test_catalog".to_string(),
-            "".to_string(),
-            config,
-            runtime.handle(),
-        )
+        IcebergRestCatalogProvider::new("test_catalog".to_string(), "".to_string(), config, runtime)
     }
 
     #[tokio::test]

@@ -43,6 +43,10 @@ pub struct RuntimeHandle {
 }
 
 impl RuntimeHandle {
+    pub fn new(primary: Handle, secondary: Option<Handle>) -> Self {
+        Self { primary, secondary }
+    }
+
     pub fn primary(&self) -> &Handle {
         &self.primary
     }
