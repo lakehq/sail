@@ -367,10 +367,7 @@ impl AggregateUDFImpl for TrySumFunction {
         let dt = &arg_types[0];
         let coerced = match dt {
             Null => Float64,
-            Decimal128(p, s) => {
-                let p2 = std::cmp::min(p + 10, 38);
-                Decimal128(p2, *s)
-            }
+            Decimal128(p, s) => Decimal128(*p, *s),
             Int8 | Int16 | Int32 | Int64 | UInt8 | UInt16 | UInt32 | UInt64 => Int64,
             Float16 | Float32 | Float64 => Float64,
             other => {
