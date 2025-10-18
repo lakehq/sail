@@ -312,31 +312,26 @@ impl AggregateUDFImpl for TrySumFunction {
     }
 
     fn return_type(&self, arg_types: &[DataType]) -> Result<DataType, DataFusionError> {
-        Ok(arg_types[0].clone())
-    }
-
-    fn coerce_types(&self, arg_types: &[DataType]) -> datafusion::common::Result<Vec<DataType>> {
         use DataType::*;
-        if arg_types.len() != 1 {
-            return Err(DataFusionError::Plan(format!(
-                "try_sum: exactly 1 argument expected, got {}",
-                arg_types.len()
-            )));
-        }
 
         let dt = &arg_types[0];
-        let coerced = match dt {
+        let result_type = match *dt {
             Null => Float64,
-            Decimal128(p, s) => Decimal128(*p, *s),
+            Decimal128(p, s) => {
+                let p2 = std::cmp::min(p + 10, 38);
+                Decimal128(p2, s)
+            }
             Int8 | Int16 | Int32 | Int64 | UInt8 | UInt16 | UInt32 | UInt64 => Int64,
             Float16 | Float32 | Float64 => Float64,
-            other => {
+
+            ref other => {
                 return Err(DataFusionError::Plan(format!(
                     "try_sum: unsupported type: {other:?}"
                 )))
             }
         };
-        Ok(vec![coerced])
+
+        Ok(result_type)
     }
 
     fn accumulator(
@@ -358,6 +353,33 @@ impl AggregateUDFImpl for TrySumFunction {
             )
             .into(),
         ])
+    }
+
+    fn coerce_types(&self, arg_types: &[DataType]) -> datafusion::common::Result<Vec<DataType>> {
+        use DataType::*;
+        if arg_types.len() != 1 {
+            return Err(DataFusionError::Plan(format!(
+                "try_sum: exactly 1 argument expected, got {}",
+                arg_types.len()
+            )));
+        }
+
+        let dt = &arg_types[0];
+        let coerced = match dt {
+            Null => Float64,
+            Decimal128(p, s) => {
+                let p2 = std::cmp::min(p + 10, 38);
+                Decimal128(p2, *s)
+            }
+            Int8 | Int16 | Int32 | Int64 | UInt8 | UInt16 | UInt32 | UInt64 => Int64,
+            Float16 | Float32 | Float64 => Float64,
+            other => {
+                return Err(DataFusionError::Plan(format!(
+                    "try_sum: unsupported type: {other:?}"
+                )))
+            }
+        };
+        Ok(vec![coerced])
     }
 
     fn default_value(&self, _data_type: &DataType) -> datafusion::common::Result<ScalarValue> {
@@ -523,13 +545,13 @@ mod tests {
 
     #[test]
     fn try_sum_state_two_fields_and_merge_ok() -> datafusion::common::Result<()> {
-        // acumulador 1 ve [10, 5] -> sum=15
+        // acumulador 1 [10, 5] -> sum=15
         let mut acc1 = TrySumAccumulator::new(DataType::Int64);
         acc1.update_batch(&[int64(vec![Some(10), Some(5)])])?;
         let state1 = acc1.state()?; // [sum, failed]
         assert_eq!(state1.len(), 2);
 
-        // acumulador 2 ve [20, NULL] -> sum=20
+        // acumulador 2 [20, NULL] -> sum=20
         let mut acc2 = TrySumAccumulator::new(DataType::Int64);
         acc2.update_batch(&[int64(vec![Some(20), None])])?;
         let state2 = acc2.state()?; // [sum, failed]
@@ -606,4 +628,63 @@ mod tests {
         assert_eq!(state[1], ScalarValue::Boolean(Some(false)));
         Ok(())
     }
+
+    // -------------------------
+    // DECIMAL
+    // -------------------------
+
+    #[test]
+    fn decimal_10_2_sum_and_schema_widened() -> datafusion::common::Result<()> {
+        // input: DECIMAL(10,2)  -> result: DECIMAL(20,2)
+        let f = TrySumFunction::new();
+        assert_eq!(
+            f.return_type(&[DataType::Decimal128(10, 2)])?,
+            DataType::Decimal128(20, 2),
+            "Spark need more precision in +10"
+        );
+
+        let mut acc = TrySumAccumulator::new(DataType::Decimal128(20, 2));
+        acc.update_batch(&[dec128(10, 2, vec![Some(123), Some(477)])?])?;
+        assert_eq!(acc.evaluate()?, ScalarValue::Decimal128(Some(600), 20, 2));
+        Ok(())
+    }
+
+    #[test]
+    fn decimal_5_0_fits_after_widening() -> datafusion::common::Result<()> {
+        // input: DECIMAL(5,0) -> result: DECIMAL(15,0)
+        let f = TrySumFunction::new();
+        assert_eq!(
+            f.return_type(&[DataType::Decimal128(5, 0)])?,
+            DataType::Decimal128(15, 0)
+        );
+
+        let mut acc = TrySumAccumulator::new(DataType::Decimal128(15, 0));
+        acc.update_batch(&[dec128(5, 0, vec![Some(90_000), Some(20_000)])?])?;
+        assert_eq!(
+            acc.evaluate()?,
+            ScalarValue::Decimal128(Some(110_000), 15, 0)
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn decimal_38_0_max_precision_overflows_to_null() -> datafusion::common::Result<()> {
+        let f = TrySumFunction::new();
+        assert_eq!(
+            f.return_type(&[DataType::Decimal128(38, 0)])?,
+            DataType::Decimal128(38, 0)
+        );
+        let ten_pow_38_minus_1 = {
+            let p10 = super::pow10_i128(38)
+                .ok_or_else(|| DataFusionError::Internal("10^38 overflow".into()))?;
+            p10 - 1
+        };
+        let mut acc = TrySumAccumulator::new(DataType::Decimal128(38, 0));
+        acc.update_batch(&[dec128(38, 0, vec![Some(ten_pow_38_minus_1), Some(1)])?])?;
+
+        assert!(acc.failed, "need fail in overflow p=38");
+        assert_eq!(acc.evaluate()?, ScalarValue::Decimal128(None, 38, 0));
+        Ok(())
+    }
+
 }

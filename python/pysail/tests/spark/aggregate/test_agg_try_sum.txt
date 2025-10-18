@@ -70,16 +70,9 @@
 +-----+
 | 6.00|
 +-----+
-
 >>> df.select(sf.try_sum("x").alias("sum_x")).printSchema()
 root
- |-- sum_x: decimal(10,2) (nullable = true)
-
-# check precision and scale in spark
-#>>> df.select(sf.try_sum("x").alias("sum_x")).printSchema()
-#root
-# |-- sum_x: decimal(20,2) (nullable = true)
-
+ |-- sum_x: decimal(20,2) (nullable = true)
 
 >>> df = spark.createDataFrame([(Decimal("1.00"),), (None,), (Decimal("2.50"),)], "x DECIMAL(10,2)")
 >>> df.select(sf.try_sum("x").alias("sum_x")).show()
@@ -88,6 +81,10 @@ root
 +-----+
 | 3.50|
 +-----+
+
+>>> df.select(sf.try_sum("x").alias("sum_x")).printSchema()
+root
+ |-- sum_x: decimal(20,2) (nullable = true)
 
 # check precision and scale in spark
 # >>> df = spark.createDataFrame([(Decimal("90000"),), (Decimal("20000"),)], "x DECIMAL(5,0)")
