@@ -125,6 +125,10 @@ impl SessionManagerActor {
 
             execution.batch_size = options.config.execution.batch_size;
             execution.collect_statistics = options.config.execution.collect_statistics;
+            execution.use_row_number_estimates_to_optimize_partitioning = options
+                .config
+                .execution
+                .use_row_number_estimates_to_optimize_partitioning;
             execution.listing_table_ignore_subdirectory = false;
         }
 
