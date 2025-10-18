@@ -686,5 +686,4 @@ mod tests {
         assert_eq!(acc.evaluate()?, ScalarValue::Decimal128(None, 38, 0));
         Ok(())
     }
-
 }
