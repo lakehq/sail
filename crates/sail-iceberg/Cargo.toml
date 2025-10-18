@@ -1,0 +1,39 @@
+[package]
+name = "sail-iceberg"
+version = { workspace = true }
+edition = { workspace = true }
+
+[dependencies]
+sail-common-datafusion = { path = "../sail-common-datafusion" }
+
+# DataFusion dependencies
+datafusion = { workspace = true }
+datafusion-common = { workspace = true }
+
+# Arrow dependencies
+arrow-schema = { workspace = true }
+
+# Essential utilities
+async-trait = { workspace = true }
+object_store = { workspace = true }
+chrono = { workspace = true }
+serde_json = { workspace = true }
+url = { workspace = true }
+futures = { workspace = true }
+serde = { workspace = true, features = ["derive"] }
+uuid = { workspace = true }
+# parquet = { workspace = true }
+# bytes = { workspace = true }
+# indexmap = { workspace = true }
+log = { workspace = true }
+# itertools = { workspace = true }
+percent-encoding = { workspace = true }
+once_cell = { workspace = true }
+ordered-float = { workspace = true }
+apache-avro = { workspace = true }
+num-bigint = { workspace = true }
+num-traits = { workspace = true }
+# base64 = { workspace = true }
+
+[lints]
+workspace = true

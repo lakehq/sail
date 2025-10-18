@@ -49,8 +49,9 @@ use sail_data_source::formats::rate::{RateSourceExec, TableRateOptions};
 use sail_data_source::formats::socket::{SocketSourceExec, TableSocketOptions};
 use sail_data_source::formats::text::source::TextSource;
 use sail_data_source::formats::text::writer::{TextSink, TextWriterOptions};
-use sail_delta_lake::delta_format::{
-    DeltaCommitExec, DeltaRemoveActionsExec, DeltaScanByAddsExec, DeltaWriterExec,
+use sail_delta_lake::physical_plan::{
+    DeltaCommitExec, DeltaFindFilesExec, DeltaRemoveActionsExec, DeltaScanByAddsExec,
+    DeltaWriterExec,
 };
 use sail_function::aggregate::kurtosis::KurtosisFunction;
 use sail_function::aggregate::max_min_by::{MaxByFunction, MinByFunction};
@@ -595,14 +596,12 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
                 } else {
                     None
                 };
-                Ok(Arc::new(
-                    sail_delta_lake::delta_format::DeltaFindFilesExec::new(
-                        table_url,
-                        predicate,
-                        table_schema,
-                        version,
-                    ),
-                ))
+                Ok(Arc::new(DeltaFindFilesExec::new(
+                    table_url,
+                    predicate,
+                    table_schema,
+                    version,
+                )))
             }
             NodeKind::DeltaRemoveActions(gen::DeltaRemoveActionsExecNode { input }) => {
                 let input = self.try_decode_plan(&input)?;
@@ -998,8 +997,7 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
                 table_schema,
             })
         } else if let Some(delta_find_files_exec) =
-            node.as_any()
-                .downcast_ref::<sail_delta_lake::delta_format::DeltaFindFilesExec>()
+            node.as_any().downcast_ref::<DeltaFindFilesExec>()
         {
             let predicate = if let Some(pred) = delta_find_files_exec.predicate() {
                 let predicate_node = serialize_physical_expr(&pred.clone(), self)?;

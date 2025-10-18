@@ -1,0 +1,32 @@
+# Options for reading from an Apache Iceberg table.
+
+- key: use_ref
+  aliases:
+    - ref
+    - branch
+    - tag
+    - iceberg.ref
+  description: |
+    Select a snapshot reference (tag or branch) to time-travel when reading.
+    If unset, the current snapshot is used.
+  supported: true
+  rust_type: String
+
+- key: snapshot_id
+  aliases:
+    - snapshot-id
+    - snapshotId
+  description: |
+    Select a specific snapshot id to time-travel when reading.
+  supported: true
+  rust_type: i64
+  rust_deserialize_with: crate::options::serde::deserialize_i64
+
+- key: timestamp_as_of
+  aliases:
+    - timestampAsOf
+  description: |
+    Select snapshot as of the given timestamp. Accepts RFC3339 or 'yyyy-MM-dd HH:mm:ss.SSS'.
+  supported: true
+  rust_type: String
+
