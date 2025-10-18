@@ -672,19 +672,17 @@ mod tests {
     async fn create_config_mock(server: &MockServer) {
         Mock::given(method("GET"))
             .and(path("/v1/config"))
-            .respond_with(ResponseTemplate::new(200).set_body_string(
-                r#"{
-                    "overrides": {
-                        "warehouse": "s3://iceberg-catalog"
-                    },
-                    "defaults": {}
-                }"#,
-            ))
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+                "overrides": {
+                    "warehouse": "s3://iceberg-catalog"
+                },
+                "defaults": {}
+            })))
             .mount(server)
             .await;
     }
 
-    fn create_test_catalog(server_uri: String) -> IcebergRestCatalogProvider {
+    fn create_test_catalog(server_uri: String, prefix: Option<&str>) -> IcebergRestCatalogProvider {
         let runtime = RuntimeHandle::new(
             tokio::runtime::Handle::current(),
             Some(tokio::runtime::Handle::current()),
@@ -698,28 +696,27 @@ mod tests {
             bearer_access_token: None,
             api_key: None,
         });
-        IcebergRestCatalogProvider::new("test_catalog".to_string(), "".to_string(), config, runtime)
+        let prefix_str = prefix.unwrap_or("").to_string();
+        IcebergRestCatalogProvider::new("test_catalog".to_string(), prefix_str, config, runtime)
     }
 
     #[tokio::test]
-    async fn test_list_namespace() {
+    async fn test_list_namespace_no_prefix() {
         let server = MockServer::start().await;
         create_config_mock(&server).await;
 
         Mock::given(method("GET"))
-            .and(path("/v1/namespaces"))
-            .respond_with(ResponseTemplate::new(200).set_body_string(
-                r#"{
-                    "namespaces": [
-                        ["ns1", "ns11"],
-                        ["ns2"]
-                    ]
-                }"#,
-            ))
+            .and(path("/v1//namespaces"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+                "namespaces": [
+                    ["ns1", "ns11"],
+                    ["ns2"]
+                ]
+            })))
             .mount(&server)
             .await;
 
-        let catalog = create_test_catalog(server.uri());
+        let catalog = create_test_catalog(server.uri(), None);
         let databases = catalog.list_databases(None).await.unwrap();
 
         assert_eq!(databases.len(), 2);
@@ -736,48 +733,69 @@ mod tests {
         create_config_mock(&server).await;
 
         Mock::given(method("GET"))
-            .and(path("/v1/namespaces"))
+            .and(path("/v1/test/namespaces"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+                "namespaces": [
+                    ["ns1", "ns11"],
+                    ["ns2"]
+                ]
+            })))
+            .mount(&server)
+            .await;
+
+        let catalog = create_test_catalog(server.uri(), Some("test"));
+        let databases = catalog.list_databases(None).await.unwrap();
+
+        assert_eq!(databases.len(), 2);
+        assert_eq!(
+            databases[0].database,
+            vec!["ns1".to_string(), "ns11".to_string()]
+        );
+        assert_eq!(databases[1].database, vec!["ns2".to_string()]);
+    }
+
+    #[tokio::test]
+    async fn test_list_namespace_parent_no_prefix() {
+        let server = MockServer::start().await;
+        create_config_mock(&server).await;
+
+        Mock::given(method("GET"))
+            .and(path("/v1//namespaces"))
             .and(wiremock::matchers::query_param_is_missing("parent"))
-            .respond_with(ResponseTemplate::new(200).set_body_string(
-                r#"{
-                  "namespaces": [
-                      ["accounting"],
-                      ["engineering"]
-                  ]
-              }"#,
-            ))
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+                "namespaces": [
+                    ["accounting"],
+                    ["engineering"]
+                ]
+            })))
             .mount(&server)
             .await;
 
         Mock::given(method("GET"))
-            .and(path("/v1/namespaces"))
+            .and(path("/v1//namespaces"))
             .and(wiremock::matchers::query_param("parent", "accounting"))
-            .respond_with(ResponseTemplate::new(200).set_body_string(
-                r#"{
-                  "namespaces": [
-                      ["accounting", "tax"],
-                      ["accounting", "payroll"]
-                  ]
-              }"#,
-            ))
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+                "namespaces": [
+                    ["accounting", "tax"],
+                    ["accounting", "payroll"]
+                ]
+            })))
             .mount(&server)
             .await;
 
         Mock::given(method("GET"))
-            .and(path("/v1/namespaces"))
+            .and(path("/v1//namespaces"))
             .and(wiremock::matchers::query_param("parent", "engineering"))
-            .respond_with(ResponseTemplate::new(200).set_body_string(
-                r#"{
-                  "namespaces": [
-                      ["engineering", "backend"],
-                      ["engineering", "frontend"]
-                  ]
-              }"#,
-            ))
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+                "namespaces": [
+                    ["engineering", "backend"],
+                    ["engineering", "frontend"]
+                ]
+            })))
             .mount(&server)
             .await;
 
-        let catalog = create_test_catalog(server.uri());
+        let catalog = create_test_catalog(server.uri(), None);
 
         let top_level = catalog.list_databases(None).await.unwrap();
         assert_eq!(top_level.len(), 2);
@@ -816,30 +834,107 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn test_list_tables() {
+    async fn test_list_namespace_parent_with_prefix() {
         let server = MockServer::start().await;
         create_config_mock(&server).await;
 
         Mock::given(method("GET"))
-            .and(path("/v1/namespaces/ns1/tables"))
-            .respond_with(ResponseTemplate::new(200).set_body_string(
-                r#"{
-                    "identifiers": [
-                        {
-                            "namespace": ["ns1"],
-                            "name": "table1"
-                        },
-                        {
-                            "namespace": ["ns1"],
-                            "name": "table2"
-                        }
-                    ]
-                }"#,
-            ))
+            .and(path("/v1/test/namespaces"))
+            .and(wiremock::matchers::query_param_is_missing("parent"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+                "namespaces": [
+                    ["accounting"],
+                    ["engineering"]
+                ]
+            })))
             .mount(&server)
             .await;
 
-        let catalog = create_test_catalog(server.uri());
+        Mock::given(method("GET"))
+            .and(path("/v1/test/namespaces"))
+            .and(wiremock::matchers::query_param("parent", "accounting"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+                "namespaces": [
+                    ["accounting", "tax"],
+                    ["accounting", "payroll"]
+                ]
+            })))
+            .mount(&server)
+            .await;
+
+        Mock::given(method("GET"))
+            .and(path("/v1/test/namespaces"))
+            .and(wiremock::matchers::query_param("parent", "engineering"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+                "namespaces": [
+                    ["engineering", "backend"],
+                    ["engineering", "frontend"]
+                ]
+            })))
+            .mount(&server)
+            .await;
+
+        let catalog = create_test_catalog(server.uri(), Some("test"));
+
+        let top_level = catalog.list_databases(None).await.unwrap();
+        assert_eq!(top_level.len(), 2);
+        assert_eq!(top_level[0].database, vec!["accounting".to_string()]);
+        assert_eq!(top_level[1].database, vec!["engineering".to_string()]);
+
+        let accounting_prefix = Namespace::try_from(vec!["accounting".to_string()]).unwrap();
+        let accounting_children = catalog
+            .list_databases(Some(&accounting_prefix))
+            .await
+            .unwrap();
+        assert_eq!(accounting_children.len(), 2);
+        assert_eq!(
+            accounting_children[0].database,
+            vec!["accounting".to_string(), "tax".to_string()]
+        );
+        assert_eq!(
+            accounting_children[1].database,
+            vec!["accounting".to_string(), "payroll".to_string()]
+        );
+
+        let engineering_prefix = Namespace::try_from(vec!["engineering".to_string()]).unwrap();
+        let engineering_children = catalog
+            .list_databases(Some(&engineering_prefix))
+            .await
+            .unwrap();
+        assert_eq!(engineering_children.len(), 2);
+        assert_eq!(
+            engineering_children[0].database,
+            vec!["engineering".to_string(), "backend".to_string()]
+        );
+        assert_eq!(
+            engineering_children[1].database,
+            vec!["engineering".to_string(), "frontend".to_string()]
+        );
+    }
+
+    #[tokio::test]
+    async fn test_list_tables_no_prefix() {
+        let server = MockServer::start().await;
+        create_config_mock(&server).await;
+
+        Mock::given(method("GET"))
+            .and(path("/v1//namespaces/ns1/tables"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+                "identifiers": [
+                    {
+                        "namespace": ["ns1"],
+                        "name": "table1"
+                    },
+                    {
+                        "namespace": ["ns1"],
+                        "name": "table2"
+                    }
+                ]
+            })))
+            .mount(&server)
+            .await;
+
+        let catalog = create_test_catalog(server.uri(), None);
         let namespace = Namespace::try_from(vec!["ns1".to_string()]).unwrap();
         let tables = catalog.list_tables(&namespace).await.unwrap();
 
@@ -852,30 +947,96 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn test_list_views() {
+    async fn test_list_tables_with_prefix() {
         let server = MockServer::start().await;
         create_config_mock(&server).await;
 
         Mock::given(method("GET"))
-            .and(path("/v1/namespaces/ns1/views"))
-            .respond_with(ResponseTemplate::new(200).set_body_string(
-                r#"{
-                    "identifiers": [
-                        {
-                            "namespace": ["ns1"],
-                            "name": "view1"
-                        },
-                        {
-                            "namespace": ["ns1"],
-                            "name": "view2"
-                        }
-                    ]
-                }"#,
-            ))
+            .and(path("/v1/test/namespaces/ns1/tables"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+                "identifiers": [
+                    {
+                        "namespace": ["ns1"],
+                        "name": "table1"
+                    },
+                    {
+                        "namespace": ["ns1"],
+                        "name": "table2"
+                    }
+                ]
+            })))
             .mount(&server)
             .await;
 
-        let catalog = create_test_catalog(server.uri());
+        let catalog = create_test_catalog(server.uri(), Some("test"));
+        let namespace = Namespace::try_from(vec!["ns1".to_string()]).unwrap();
+        let tables = catalog.list_tables(&namespace).await.unwrap();
+
+        assert_eq!(tables.len(), 2);
+        assert_eq!(tables[0].name, "table1");
+        assert_eq!(tables[1].name, "table2");
+
+        assert!(matches!(tables[0].kind, TableKind::Table { .. }));
+        assert!(matches!(tables[1].kind, TableKind::Table { .. }));
+    }
+
+    #[tokio::test]
+    async fn test_list_views_no_prefix() {
+        let server = MockServer::start().await;
+        create_config_mock(&server).await;
+
+        Mock::given(method("GET"))
+            .and(path("/v1//namespaces/ns1/views"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+                "identifiers": [
+                    {
+                        "namespace": ["ns1"],
+                        "name": "view1"
+                    },
+                    {
+                        "namespace": ["ns1"],
+                        "name": "view2"
+                    }
+                ]
+            })))
+            .mount(&server)
+            .await;
+
+        let catalog = create_test_catalog(server.uri(), None);
+        let namespace = Namespace::try_from(vec!["ns1".to_string()]).unwrap();
+        let views = catalog.list_views(&namespace).await.unwrap();
+
+        assert_eq!(views.len(), 2);
+        assert_eq!(views[0].name, "view1");
+        assert_eq!(views[1].name, "view2");
+
+        assert!(matches!(views[0].kind, TableKind::View { .. }));
+        assert!(matches!(views[1].kind, TableKind::View { .. }));
+    }
+
+    #[tokio::test]
+    async fn test_list_views_with_prefix() {
+        let server = MockServer::start().await;
+        create_config_mock(&server).await;
+
+        Mock::given(method("GET"))
+            .and(path("/v1/test/namespaces/ns1/views"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+                "identifiers": [
+                    {
+                        "namespace": ["ns1"],
+                        "name": "view1"
+                    },
+                    {
+                        "namespace": ["ns1"],
+                        "name": "view2"
+                    }
+                ]
+            })))
+            .mount(&server)
+            .await;
+
+        let catalog = create_test_catalog(server.uri(), Some("test"));
         let namespace = Namespace::try_from(vec!["ns1".to_string()]).unwrap();
         let views = catalog.list_views(&namespace).await.unwrap();
 
