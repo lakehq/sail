@@ -38,6 +38,7 @@ impl IcebergRestCatalogProvider {
         }
     }
 
+    // CHECK HERE
     fn load_table_result_to_status(
         &self,
         table_name: &str,
@@ -115,6 +116,7 @@ impl IcebergRestCatalogProvider {
         })
     }
 
+    // CHECK HERE
     fn load_view_result_to_status(
         &self,
         view_name: &str,
@@ -202,6 +204,7 @@ impl CatalogProvider for IcebergRestCatalogProvider {
         &self.name
     }
 
+    // CHECK HERE
     async fn create_database(
         &self,
         database: &Namespace,
@@ -289,18 +292,17 @@ impl CatalogProvider for IcebergRestCatalogProvider {
             .await
         {
             Ok(_) => Ok(()),
-            Err(e) => {
-                if if_exists {
-                    Ok(())
-                } else {
-                    Err(CatalogError::External(format!(
-                        "Failed to drop namespace: {e}"
-                    )))
-                }
-            }
+            Err(apis::Error::ResponseError(apis::ResponseContent {
+                entity: Some(apis::catalog_api_api::DropNamespaceError::Status404(_)),
+                ..
+            })) if if_exists => Ok(()),
+            Err(e) => Err(CatalogError::External(format!(
+                "Failed to drop namespace: {e}"
+            ))),
         }
     }
 
+    // CHECK HERE
     async fn get_database(&self, database: &Namespace) -> CatalogResult<DatabaseStatus> {
         let api = self.client.catalog_api_api();
         let result = api
@@ -340,54 +342,28 @@ impl CatalogProvider for IcebergRestCatalogProvider {
     ) -> CatalogResult<Vec<DatabaseStatus>> {
         let parent = prefix.map(|namespace| namespace.to_string());
 
-        let api = self.client.catalog_api_api();
-        let result = api
+        let result = self
+            .client
+            .catalog_api_api()
             .list_namespaces(&self.prefix, None, None, parent.as_deref())
             .await
             .map_err(|e| CatalogError::External(format!("Failed to list namespaces: {}", e)))?;
-
-        let namespaces = result.namespaces.unwrap_or_default();
-        let mut statuses = Vec::new();
-
-        for namespace in namespaces {
-            let ns: Namespace = namespace.try_into().map_err(|e| {
-                CatalogError::External(format!("Invalid namespace from catalog: {e}"))
-            })?;
-            let namespace_str = ns.to_string();
-            if let Ok(meta) = api
-                .load_namespace_metadata(&self.prefix, &namespace_str)
-                .await
-            {
-                let comment = meta
-                    .properties
-                    .as_ref()
-                    .and_then(|p| p.get("comment"))
-                    .cloned();
-                let location = meta
-                    .properties
-                    .as_ref()
-                    .and_then(|p| p.get("location"))
-                    .cloned();
-                let properties: Vec<_> = meta
-                    .properties
-                    .unwrap_or_default()
-                    .into_iter()
-                    .filter(|(k, _)| k != "comment" && k != "location")
-                    .collect();
-
-                statuses.push(DatabaseStatus {
-                    catalog: self.name.clone(),
-                    database: ns.into(),
-                    comment,
-                    location,
-                    properties,
-                });
-            }
-        }
-
-        Ok(statuses)
+        let catalog = &self.name;
+        Ok(result
+            .namespaces
+            .unwrap_or_default()
+            .into_iter()
+            .map(|namespace| DatabaseStatus {
+                catalog: catalog.clone(),
+                database: namespace,
+                comment: None,
+                location: None,
+                properties: Vec::new(),
+            })
+            .collect())
     }
 
+    // CHECK HERE
     async fn create_table(
         &self,
         database: &Namespace,
@@ -465,34 +441,49 @@ impl CatalogProvider for IcebergRestCatalogProvider {
         self.load_table_result_to_status(table, database, &result)
     }
 
+    // CHECK HERE
     async fn get_table(&self, database: &Namespace, table: &str) -> CatalogResult<TableStatus> {
         let api = self.client.catalog_api_api();
         let result = api
             .load_table(&self.prefix, &database.to_string(), table, None, None, None)
             .await
-            .map_err(|_e| CatalogError::NotFound("table", format!("{}.{}", database, table)))?;
+            .map_err(|_e| CatalogError::NotFound("table", format!("{database}.{table}")))?;
         self.load_table_result_to_status(table, database, &result)
     }
 
     async fn list_tables(&self, database: &Namespace) -> CatalogResult<Vec<TableStatus>> {
-        let api = self.client.catalog_api_api();
-        let result = api
+        let result = self
+            .client
+            .catalog_api_api()
             .list_tables(&self.prefix, &database.to_string(), None, None)
             .await
-            .map_err(|e| CatalogError::External(format!("Failed to list tables: {}", e)))?;
-
-        let identifiers = result.identifiers.unwrap_or_default();
-        let mut tables = Vec::new();
-
-        for identifier in identifiers {
-            if let Ok(table_status) = self.get_table(database, &identifier.name).await {
-                tables.push(table_status);
-            }
-        }
-
-        Ok(tables)
+            .map_err(|e| CatalogError::External(format!("Failed to list tables: {e}")))?;
+        let catalog = &self.name;
+        Ok(result
+            .identifiers
+            .unwrap_or_default()
+            .into_iter()
+            .map(|identifier| TableStatus {
+                name: identifier.name,
+                kind: TableKind::Table {
+                    catalog: catalog.clone(),
+                    database: identifier.namespace,
+                    columns: Vec::new(),
+                    comment: None,
+                    constraints: Vec::new(),
+                    location: None,
+                    format: "iceberg".to_string(),
+                    partition_by: Vec::new(),
+                    sort_by: Vec::new(),
+                    bucket_by: None,
+                    options: Vec::new(),
+                    properties: Vec::new(),
+                },
+            })
+            .collect())
     }
 
+    // CHECK HERE, IS THE COMMENT IN DROP TABLE ABOUT PURGE CORRECT FOR ICEBERG?
     async fn drop_table(
         &self,
         database: &Namespace,
@@ -509,16 +500,15 @@ impl CatalogProvider for IcebergRestCatalogProvider {
             .await
         {
             Ok(_) => Ok(()),
-            Err(e) => {
-                if if_exists {
-                    Ok(())
-                } else {
-                    Err(CatalogError::External(format!("Failed to drop table: {e}")))
-                }
-            }
+            Err(apis::Error::ResponseError(apis::ResponseContent {
+                entity: Some(apis::catalog_api_api::DropTableError::Status404(_)),
+                ..
+            })) if if_exists => Ok(()),
+            Err(e) => Err(CatalogError::External(format!("Failed to drop table: {e}"))),
         }
     }
 
+    // CHECK HERE
     async fn create_view(
         &self,
         database: &Namespace,
@@ -609,6 +599,7 @@ impl CatalogProvider for IcebergRestCatalogProvider {
         self.load_view_result_to_status(view, database, &result)
     }
 
+    // CHECK HERE
     async fn get_view(&self, database: &Namespace, view: &str) -> CatalogResult<TableStatus> {
         let api = self.client.catalog_api_api();
         let result = api
@@ -619,19 +610,29 @@ impl CatalogProvider for IcebergRestCatalogProvider {
     }
 
     async fn list_views(&self, database: &Namespace) -> CatalogResult<Vec<TableStatus>> {
-        let api = self.client.catalog_api_api();
-        let result = api
+        let result = self
+            .client
+            .catalog_api_api()
             .list_views(&self.prefix, &database.to_string(), None, None)
             .await
             .map_err(|e| CatalogError::External(format!("Failed to list views: {}", e)))?;
-        let identifiers = result.identifiers.unwrap_or_default();
-        let mut views = Vec::new();
-        for identifier in identifiers {
-            if let Ok(view_status) = self.get_view(database, &identifier.name).await {
-                views.push(view_status);
-            }
-        }
-        Ok(views)
+        let catalog = &self.name;
+        Ok(result
+            .identifiers
+            .unwrap_or_default()
+            .into_iter()
+            .map(|identifier| TableStatus {
+                name: identifier.name,
+                kind: TableKind::View {
+                    catalog: catalog.clone(),
+                    database: identifier.namespace,
+                    definition: String::new(),
+                    columns: Vec::new(),
+                    comment: None,
+                    properties: Vec::new(),
+                },
+            })
+            .collect())
     }
 
     async fn drop_view(
@@ -647,13 +648,245 @@ impl CatalogProvider for IcebergRestCatalogProvider {
             .await
         {
             Ok(_) => Ok(()),
-            Err(e) => {
-                if if_exists {
-                    Ok(())
-                } else {
-                    Err(CatalogError::External(format!("Failed to drop view: {e}")))
-                }
-            }
+            Err(apis::Error::ResponseError(apis::ResponseContent {
+                entity: Some(apis::catalog_api_api::DropViewError::Status404(_)),
+                ..
+            })) if if_exists => Ok(()),
+            Err(e) => Err(CatalogError::External(format!("Failed to drop view: {e}"))),
         }
+    }
+}
+
+#[allow(clippy::unwrap_used)]
+#[cfg(test)]
+mod tests {
+    use std::sync::Arc;
+
+    use sail_common::config::AppConfig;
+    use sail_common::runtime::RuntimeManager;
+    use wiremock::matchers::{method, path};
+    use wiremock::{Mock, MockServer, ResponseTemplate};
+
+    use super::*;
+
+    async fn create_config_mock(server: &MockServer) {
+        Mock::given(method("GET"))
+            .and(path("/v1/config"))
+            .respond_with(ResponseTemplate::new(200).set_body_string(
+                r#"{
+                    "overrides": {
+                        "warehouse": "s3://iceberg-catalog"
+                    },
+                    "defaults": {}
+                }"#,
+            ))
+            .mount(server)
+            .await;
+    }
+
+    fn create_test_catalog(server_uri: String) -> IcebergRestCatalogProvider {
+        let app_config = Arc::new(AppConfig::load().unwrap());
+        let runtime = RuntimeManager::try_new(&app_config.runtime).unwrap();
+        let config = Arc::new(Configuration {
+            base_path: server_uri,
+            user_agent: None,
+            client: reqwest::Client::new(),
+            basic_auth: None,
+            oauth_access_token: None,
+            bearer_access_token: None,
+            api_key: None,
+        });
+        IcebergRestCatalogProvider::new(
+            "test_catalog".to_string(),
+            "".to_string(),
+            config,
+            runtime.handle(),
+        )
+    }
+
+    #[tokio::test]
+    async fn test_list_namespace() {
+        let server = MockServer::start().await;
+        create_config_mock(&server).await;
+
+        Mock::given(method("GET"))
+            .and(path("/v1/namespaces"))
+            .respond_with(ResponseTemplate::new(200).set_body_string(
+                r#"{
+                    "namespaces": [
+                        ["ns1", "ns11"],
+                        ["ns2"]
+                    ]
+                }"#,
+            ))
+            .mount(&server)
+            .await;
+
+        let catalog = create_test_catalog(server.uri());
+        let databases = catalog.list_databases(None).await.unwrap();
+
+        assert_eq!(databases.len(), 2);
+        assert_eq!(
+            databases[0].database,
+            vec!["ns1".to_string(), "ns11".to_string()]
+        );
+        assert_eq!(databases[1].database, vec!["ns2".to_string()]);
+    }
+
+    #[tokio::test]
+    async fn test_list_namespace_with_prefix() {
+        let server = MockServer::start().await;
+        create_config_mock(&server).await;
+
+        Mock::given(method("GET"))
+            .and(path("/v1/namespaces"))
+            .and(wiremock::matchers::query_param_is_missing("parent"))
+            .respond_with(ResponseTemplate::new(200).set_body_string(
+                r#"{
+                  "namespaces": [
+                      ["accounting"],
+                      ["engineering"]
+                  ]
+              }"#,
+            ))
+            .mount(&server)
+            .await;
+
+        Mock::given(method("GET"))
+            .and(path("/v1/namespaces"))
+            .and(wiremock::matchers::query_param("parent", "accounting"))
+            .respond_with(ResponseTemplate::new(200).set_body_string(
+                r#"{
+                  "namespaces": [
+                      ["accounting", "tax"],
+                      ["accounting", "payroll"]
+                  ]
+              }"#,
+            ))
+            .mount(&server)
+            .await;
+
+        Mock::given(method("GET"))
+            .and(path("/v1/namespaces"))
+            .and(wiremock::matchers::query_param("parent", "engineering"))
+            .respond_with(ResponseTemplate::new(200).set_body_string(
+                r#"{
+                  "namespaces": [
+                      ["engineering", "backend"],
+                      ["engineering", "frontend"]
+                  ]
+              }"#,
+            ))
+            .mount(&server)
+            .await;
+
+        let catalog = create_test_catalog(server.uri());
+
+        let top_level = catalog.list_databases(None).await.unwrap();
+        assert_eq!(top_level.len(), 2);
+        assert_eq!(top_level[0].database, vec!["accounting".to_string()]);
+        assert_eq!(top_level[1].database, vec!["engineering".to_string()]);
+
+        let accounting_prefix = Namespace::try_from(vec!["accounting".to_string()]).unwrap();
+        let accounting_children = catalog
+            .list_databases(Some(&accounting_prefix))
+            .await
+            .unwrap();
+        assert_eq!(accounting_children.len(), 2);
+        assert_eq!(
+            accounting_children[0].database,
+            vec!["accounting".to_string(), "tax".to_string()]
+        );
+        assert_eq!(
+            accounting_children[1].database,
+            vec!["accounting".to_string(), "payroll".to_string()]
+        );
+
+        let engineering_prefix = Namespace::try_from(vec!["engineering".to_string()]).unwrap();
+        let engineering_children = catalog
+            .list_databases(Some(&engineering_prefix))
+            .await
+            .unwrap();
+        assert_eq!(engineering_children.len(), 2);
+        assert_eq!(
+            engineering_children[0].database,
+            vec!["engineering".to_string(), "backend".to_string()]
+        );
+        assert_eq!(
+            engineering_children[1].database,
+            vec!["engineering".to_string(), "frontend".to_string()]
+        );
+    }
+
+    #[tokio::test]
+    async fn test_list_tables() {
+        let server = MockServer::start().await;
+        create_config_mock(&server).await;
+
+        Mock::given(method("GET"))
+            .and(path("/v1/namespaces/ns1/tables"))
+            .respond_with(ResponseTemplate::new(200).set_body_string(
+                r#"{
+                    "identifiers": [
+                        {
+                            "namespace": ["ns1"],
+                            "name": "table1"
+                        },
+                        {
+                            "namespace": ["ns1"],
+                            "name": "table2"
+                        }
+                    ]
+                }"#,
+            ))
+            .mount(&server)
+            .await;
+
+        let catalog = create_test_catalog(server.uri());
+        let namespace = Namespace::try_from(vec!["ns1".to_string()]).unwrap();
+        let tables = catalog.list_tables(&namespace).await.unwrap();
+
+        assert_eq!(tables.len(), 2);
+        assert_eq!(tables[0].name, "table1");
+        assert_eq!(tables[1].name, "table2");
+
+        assert!(matches!(tables[0].kind, TableKind::Table { .. }));
+        assert!(matches!(tables[1].kind, TableKind::Table { .. }));
+    }
+
+    #[tokio::test]
+    async fn test_list_views() {
+        let server = MockServer::start().await;
+        create_config_mock(&server).await;
+
+        Mock::given(method("GET"))
+            .and(path("/v1/namespaces/ns1/views"))
+            .respond_with(ResponseTemplate::new(200).set_body_string(
+                r#"{
+                    "identifiers": [
+                        {
+                            "namespace": ["ns1"],
+                            "name": "view1"
+                        },
+                        {
+                            "namespace": ["ns1"],
+                            "name": "view2"
+                        }
+                    ]
+                }"#,
+            ))
+            .mount(&server)
+            .await;
+
+        let catalog = create_test_catalog(server.uri());
+        let namespace = Namespace::try_from(vec!["ns1".to_string()]).unwrap();
+        let views = catalog.list_views(&namespace).await.unwrap();
+
+        assert_eq!(views.len(), 2);
+        assert_eq!(views[0].name, "view1");
+        assert_eq!(views[1].name, "view2");
+
+        assert!(matches!(views[0].kind, TableKind::View { .. }));
+        assert!(matches!(views[1].kind, TableKind::View { .. }));
     }
 }

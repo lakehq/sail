@@ -23,3 +23,7 @@ uuid = { workspace = true }
 once_cell = { workspace = true }
 ordered-float = { workspace = true }
 chrono = { workspace = true }
+
+[dev-dependencies]
+tokio = { workspace = true }
+wiremock = { workspace = true }
