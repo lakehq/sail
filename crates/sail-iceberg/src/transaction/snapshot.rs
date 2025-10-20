@@ -94,7 +94,7 @@ impl<'a> SnapshotProducer<'a> {
             .map(|df| df.record_count as i64)
             .sum();
         let manifest_file = crate::spec::manifest_list::ManifestFile::builder()
-            .with_manifest_path(manifest_rel.clone())
+            .with_manifest_path(format!("{}{}", self.tx.table_uri(), manifest_rel))
             .with_manifest_length(manifest_len)
             .with_partition_spec_id(metadata.partition_spec.spec_id())
             .with_content(ManifestContentType::Data)

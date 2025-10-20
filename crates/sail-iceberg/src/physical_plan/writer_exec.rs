@@ -22,6 +22,8 @@ use url::Url;
 use crate::arrow_conversion::iceberg_schema_to_arrow;
 use crate::io::IcebergObjectStore;
 use crate::spec::partition::{UnboundPartitionField, UnboundPartitionSpec};
+use crate::spec::schema::Schema as IcebergSchema;
+use crate::spec::types::NestedField;
 use crate::utils::get_object_store_from_context;
 use crate::writer::config::WriterConfig;
 use crate::writer::table_writer::IcebergTableWriter;
@@ -163,6 +165,32 @@ impl ExecutionPlan for IcebergWriterExec {
             }
             let object_store = get_object_store_from_context(&context, &table_url)?;
 
+            fn assign_top_level_field_ids(schema: &IcebergSchema) -> IcebergSchema {
+                let mut new_fields: Vec<std::sync::Arc<NestedField>> = Vec::new();
+                for (i, f) in schema.fields().iter().enumerate() {
+                    let mut newf = NestedField::new(
+                        (i as i32) + 1,
+                        f.name.clone(),
+                        (*f.field_type).clone(),
+                        f.required,
+                    );
+                    if let Some(doc) = &f.doc {
+                        newf = newf.with_doc(doc.clone());
+                    }
+                    if let Some(init) = &f.initial_default {
+                        newf = newf.with_initial_default(init.clone());
+                    }
+                    if let Some(wd) = &f.write_default {
+                        newf = newf.with_write_default(wd.clone());
+                    }
+                    new_fields.push(std::sync::Arc::new(newf));
+                }
+                IcebergSchema::builder()
+                    .with_fields(new_fields)
+                    .build()
+                    .unwrap_or_else(|_| schema.clone())
+            }
+
             let (iceberg_schema, default_spec) = if table_exists {
                 // Load table metadata directly from object store
                 let latest_meta = super::super::table_format::find_latest_metadata_file(
@@ -189,8 +217,11 @@ impl ExecutionPlan for IcebergWriterExec {
             } else {
                 // derive schema/spec from input for new-table overwrite
                 let input_arrow_schema = _input_schema.clone().as_ref().clone();
-                let iceberg_schema = crate::arrow_conversion::arrow_schema_to_iceberg(&input_arrow_schema)
-                    .map_err(|e| e)?;
+                let mut iceberg_schema =
+                    crate::arrow_conversion::arrow_schema_to_iceberg(&input_arrow_schema)
+                        .map_err(|e| e)?;
+                // Ensure valid, non-zero, unique field ids for top-level fields
+                iceberg_schema = assign_top_level_field_ids(&iceberg_schema);
                 // build identity partition spec from partition_columns
                 let mut builder = crate::spec::partition::PartitionSpec::builder();
                 use crate::spec::transform::Transform;

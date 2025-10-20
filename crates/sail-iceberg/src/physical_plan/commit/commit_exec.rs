@@ -200,7 +200,7 @@ impl ExecutionPlan for IcebergCommitExec {
                 let mut list_writer = crate::spec::manifest_list::ManifestListWriter::new();
                 list_writer.append(
                     crate::spec::manifest_list::ManifestFile::builder()
-                        .with_manifest_path(manifest_rel.clone())
+                        .with_manifest_path(format!("{}{}", table_url, manifest_rel))
                         .with_manifest_length(manifest_len)
                         .with_partition_spec_id(partition_spec.spec_id())
                         .with_content(crate::spec::ManifestContentType::Data)
@@ -373,7 +373,7 @@ impl ExecutionPlan for IcebergCommitExec {
                 let mut list_writer = crate::spec::manifest_list::ManifestListWriter::new();
                 list_writer.append(
                     crate::spec::manifest_list::ManifestFile::builder()
-                        .with_manifest_path(manifest_rel.clone())
+                        .with_manifest_path(format!("{}{}", table_url, manifest_rel))
                         .with_manifest_length(manifest_len)
                         .with_partition_spec_id(partition_spec.spec_id())
                         .with_content(crate::spec::ManifestContentType::Data)
@@ -422,48 +422,27 @@ impl ExecutionPlan for IcebergCommitExec {
                 }
                 table_meta.last_updated_ms = timestamp_ms;
 
-                // Compute next version number from latest_meta path
-                let current_version = (|| {
-                    if let Some(fname) = latest_meta.rsplit('/').next() {
-                        if let Some(num) = fname
-                            .strip_prefix('v')
-                            .and_then(|s| s.strip_suffix(".metadata.json"))
-                        {
-                            return num.parse::<i32>().ok();
-                        }
-                        if let Some((num, _)) = fname.split_once('-') {
-                            return num.parse::<i32>().ok();
-                        }
-                    }
-                    None
-                })()
-                .unwrap_or(0);
-                let next_version = current_version + 1;
-
-                // Persist new metadata.json and update version-hint
+                // Persist updated metadata IN PLACE at the existing metadata path (keeps SQL catalog in sync)
                 let new_meta_bytes = table_meta
                     .to_json()
                     .map_err(|e| DataFusionError::External(Box::new(e)))?;
-                let new_meta_rel = format!(
-                    "metadata/{:05}-{}.metadata.json",
-                    next_version,
-                    uuid::Uuid::new_v4()
-                );
+                // Derive relative metadata filename (e.g., metadata/00000-<uuid>.metadata.json)
+                let rel_name = if let Some(idx) = latest_meta.rfind("/metadata/") {
+                    let (_, suffix) = latest_meta.split_at(idx + 1); // keep leading 'metadata/...'
+                    suffix.to_string()
+                } else if let Some(pos) = latest_meta.rfind("/metadata/") {
+                    latest_meta[(pos + 1)..].to_string()
+                } else if let Some(fname) = latest_meta.rsplit('/').next() {
+                    format!("metadata/{}", fname)
+                } else {
+                    // Fallback to known path
+                    "metadata/00000.metadata.json".to_string()
+                };
                 IcebergObjectStore::new(
                     object_store.clone(),
                     object_store::path::Path::from(table_path),
                 )
-                .put_rel(&new_meta_rel, Bytes::from(new_meta_bytes))
-                .await
-                .map_err(DataFusionError::Execution)?;
-                IcebergObjectStore::new(
-                    object_store.clone(),
-                    object_store::path::Path::from(table_path),
-                )
-                .put_rel(
-                    "metadata/version-hint.text",
-                    Bytes::from(next_version.to_string().into_bytes()),
-                )
+                .put_rel(&rel_name, Bytes::from(new_meta_bytes))
                 .await
                 .map_err(DataFusionError::Execution)?;
 

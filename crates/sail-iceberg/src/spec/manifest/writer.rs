@@ -136,26 +136,26 @@ impl ManifestWriter {
           "type": "record",
           "name": "manifest_entry",
           "fields": [
-            {"name": "status", "type": "int"},
-            {"name": "snapshot_id", "type": ["null","long"], "default": null},
-            {"name": "sequence_number", "type": ["null","long"], "default": null},
-            {"name": "file_sequence_number", "type": ["null","long"], "default": null},
+            {"name": "status", "type": "int", "field-id": 0},
+            {"name": "snapshot_id", "type": ["null","long"], "default": null, "field-id": 1},
+            {"name": "sequence_number", "type": ["null","long"], "default": null, "field-id": 3},
+            {"name": "file_sequence_number", "type": ["null","long"], "default": null, "field-id": 4},
             {"name": "data_file", "type": {
               "type": "record",
               "name": "data_file",
               "fields": [
-                {"name": "content", "type": "int"},
-                {"name": "file_path", "type": "string"},
-                {"name": "file_format", "type": "string"},
-                {"name": "partition", "type": ["null","string"], "default": null},
-                {"name": "record_count", "type": "long"},
-                {"name": "file_size_in_bytes", "type": "long"},
-                {"name": "key_metadata", "type": ["null","bytes"], "default": null},
-                {"name": "split_offsets", "type": ["null", {"type": "array", "items": "long"}], "default": null},
-                {"name": "equality_ids", "type": ["null", {"type": "array", "items": "int"}], "default": null},
-                {"name": "sort_order_id", "type": ["null","int"], "default": null}
+                {"name": "content", "type": "int", "field-id": 134},
+                {"name": "file_path", "type": "string", "field-id": 100},
+                {"name": "file_format", "type": "string", "field-id": 101},
+                {"name": "partition", "type": ["null", {"type": "record", "name": "r102", "fields": []}], "default": null, "field-id": 102},
+                {"name": "record_count", "type": "long", "field-id": 103},
+                {"name": "file_size_in_bytes", "type": "long", "field-id": 104},
+                {"name": "key_metadata", "type": ["null","bytes"], "default": null, "field-id": 131},
+                {"name": "split_offsets", "type": ["null", {"type": "array", "element-id": 133, "items": "long"}], "default": null, "field-id": 132},
+                {"name": "equality_ids", "type": ["null", {"type": "array", "element-id": 136, "items": "long"}], "default": null, "field-id": 135},
+                {"name": "sort_order_id", "type": ["null","int"], "default": null, "field-id": 140}
               ]
-            }}
+            }, "field-id": 2}
           ]
         }
         "#;

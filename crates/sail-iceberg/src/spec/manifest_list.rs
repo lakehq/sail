@@ -131,26 +131,26 @@ impl ManifestListWriter {
           "type": "record",
           "name": "manifest_file",
           "fields": [
-            {"name": "manifest_path", "type": "string"},
-            {"name": "manifest_length", "type": "long"},
-            {"name": "partition_spec_id", "type": "int"},
-            {"name": "content", "type": "int"},
-            {"name": "sequence_number", "type": "long"},
-            {"name": "min_sequence_number", "type": "long"},
-            {"name": "added_snapshot_id", "type": "long"},
-            {"name": "added_files_count", "type": ["null","int"], "default": null},
-            {"name": "existing_files_count", "type": ["null","int"], "default": null},
-            {"name": "deleted_files_count", "type": ["null","int"], "default": null},
-            {"name": "added_rows_count", "type": ["null","long"], "default": null},
-            {"name": "existing_rows_count", "type": ["null","long"], "default": null},
-            {"name": "deleted_rows_count", "type": ["null","long"], "default": null},
-            {"name": "partitions", "type": ["null", {"type":"array", "items": {"name":"field_summary","type":"record","fields":[
-              {"name":"contains_null","type":"boolean"},
-              {"name":"contains_nan","type":["null","boolean"],"default":null},
-              {"name":"lower_bound","type":["null","bytes"],"default":null},
-              {"name":"upper_bound","type":["null","bytes"],"default":null}
-            ]}}], "default": null},
-            {"name": "key_metadata", "type": ["null","bytes"], "default": null}
+            {"name": "manifest_path", "type": "string", "field-id": 500},
+            {"name": "manifest_length", "type": "long", "field-id": 501},
+            {"name": "partition_spec_id", "type": "int", "field-id": 502},
+            {"name": "content", "type": "int", "field-id": 517},
+            {"name": "sequence_number", "type": "long", "field-id": 515},
+            {"name": "min_sequence_number", "type": "long", "field-id": 516},
+            {"name": "added_snapshot_id", "type": "long", "field-id": 503},
+            {"name": "added_files_count", "type": ["null","int"], "default": null, "field-id": 504},
+            {"name": "existing_files_count", "type": ["null","int"], "default": null, "field-id": 505},
+            {"name": "deleted_files_count", "type": ["null","int"], "default": null, "field-id": 506},
+            {"name": "added_rows_count", "type": ["null","long"], "default": null, "field-id": 512},
+            {"name": "existing_rows_count", "type": ["null","long"], "default": null, "field-id": 513},
+            {"name": "deleted_rows_count", "type": ["null","long"], "default": null, "field-id": 514},
+            {"name": "partitions", "type": ["null", {"type":"array", "element-id": 508, "items": {"name":"field_summary","type":"record","fields":[
+              {"name":"contains_null","type":"boolean", "field-id": 509},
+              {"name":"contains_nan","type":["null","boolean"],"default":null, "field-id": 518},
+              {"name":"lower_bound","type":["null","bytes"],"default":null, "field-id": 510},
+              {"name":"upper_bound","type":["null","bytes"],"default":null, "field-id": 511}
+            ]}}], "default": null, "field-id": 507},
+            {"name": "key_metadata", "type": ["null","bytes"], "default": null, "field-id": 519}
           ]
         }
         "#;

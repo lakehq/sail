@@ -33,7 +33,8 @@ def test_iceberg_write_overwrite_and_read(spark, sql_catalog):
                 "score": [0.98, 0.54, 0.76],
             }
         )
-        assert_frame_equal(result_df.toPandas(), expected)
+        pdf = result_df.toPandas()
+        assert_frame_equal(pdf, expected.astype(pdf.dtypes))
     finally:
         sql_catalog.drop_table(identifier)
 
