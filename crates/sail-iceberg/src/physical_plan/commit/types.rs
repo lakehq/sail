@@ -1,6 +1,6 @@
 use serde::{Deserialize, Serialize};
 
-use crate::spec::{DataFile, Operation, TableRequirement, TableUpdate};
+use crate::spec::{DataFile, Operation, PartitionSpec, Schema, TableRequirement, TableUpdate};
 
 #[derive(Debug, Serialize, Deserialize, Clone)]
 pub struct IcebergCommitInfo {
@@ -12,4 +12,8 @@ pub struct IcebergCommitInfo {
     pub updates: Vec<TableUpdate>,
     pub requirements: Vec<TableRequirement>,
     pub operation: Operation,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub schema: Option<Schema>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub partition_spec: Option<PartitionSpec>,
 }

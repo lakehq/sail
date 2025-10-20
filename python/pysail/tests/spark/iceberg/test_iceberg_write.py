@@ -8,7 +8,6 @@ from pyiceberg.types import DoubleType, LongType, NestedField, StringType
 from pysail.tests.spark.utils import escape_sql_string_literal
 
 
-@pytest.mark.skip(reason="overwrite not supported yet")
 def test_iceberg_write_overwrite_and_read(spark, sql_catalog):
     identifier = "default.write_overwrite"
     table = sql_catalog.create_table(

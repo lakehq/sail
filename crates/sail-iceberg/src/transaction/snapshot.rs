@@ -40,9 +40,14 @@ impl<'a> SnapshotProducer<'a> {
         Ok(())
     }
 
-    pub async fn commit(self, _op: impl SnapshotProduceOperation) -> Result<ActionCommit, String> {
+    pub async fn commit(self, op: impl SnapshotProduceOperation) -> Result<ActionCommit, String> {
         let timestamp_ms = chrono::Utc::now().timestamp_millis();
-        let summary = crate::spec::snapshots::Summary::new(Operation::Append);
+        let is_overwrite = op.operation() == Operation::Overwrite.as_str();
+        let summary = if is_overwrite {
+            crate::spec::snapshots::Summary::new(Operation::Overwrite)
+        } else {
+            crate::spec::snapshots::Summary::new(Operation::Append)
+        };
 
         // Build a simple manifest in-memory using v2 minimal schema
         // For now, derive schema/spec from current snapshot if available; otherwise default empty
@@ -103,11 +108,11 @@ impl<'a> SnapshotProducer<'a> {
         let mut list_writer = ManifestListWriter::new();
         let mut total_manifest_count = 0;
 
-        // Load the parent manifest list and append its entries.
+        // Load the parent manifest list and append its entries for append only.
         let parent_snapshot = self.tx.snapshot();
         let parent_manifest_list_path_str = parent_snapshot.manifest_list();
 
-        if !parent_manifest_list_path_str.is_empty() {
+        if !is_overwrite && !parent_manifest_list_path_str.is_empty() {
             use object_store::path::Path as ObjectPath;
             use url::Url;
 

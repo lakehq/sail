@@ -1,10 +1,12 @@
 pub mod action;
 pub mod append;
 pub mod helpers;
+pub mod overwrite;
 pub mod snapshot;
 
 pub use action::*;
 pub use append::*;
+pub use overwrite::*;
 pub use snapshot::*;
 
 use crate::spec::Snapshot;
@@ -34,5 +36,9 @@ impl Transaction {
 
     pub async fn commit(self, _summary_op: &str) -> Result<Snapshot, String> {
         Err("commit is not implemented yet".to_string())
+    }
+
+    pub fn overwrite(&self) -> OverwriteAction {
+        OverwriteAction::new()
     }
 }

@@ -98,11 +98,9 @@ impl TableFormat for IcebergTableFormat {
                     return Ok(Arc::new(EmptyExec::new(input.schema())));
                 }
             }
-            PhysicalSinkMode::Overwrite
-            | PhysicalSinkMode::OverwriteIf { .. }
-            | PhysicalSinkMode::OverwritePartitions => {
-                // TODO: support overwrite modes (replace_where / dynamic partition overwrite)
-                return not_impl_err!("overwrite modes for Iceberg format");
+            // Allow full-table overwrite here; predicate-based overwrite still not supported
+            PhysicalSinkMode::OverwriteIf { .. } | PhysicalSinkMode::OverwritePartitions => {
+                return not_impl_err!("predicate or partition overwrite for Iceberg");
             }
             _ => {}
         }

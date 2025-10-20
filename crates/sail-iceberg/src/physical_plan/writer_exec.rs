@@ -145,42 +145,63 @@ impl ExecutionPlan for IcebergWriterExec {
                     }
                 }
                 PhysicalSinkMode::Append => {}
-                PhysicalSinkMode::Overwrite
-                | PhysicalSinkMode::OverwriteIf { .. }
-                | PhysicalSinkMode::OverwritePartitions => {
+                PhysicalSinkMode::Overwrite => {}
+                PhysicalSinkMode::OverwriteIf { .. } | PhysicalSinkMode::OverwritePartitions => {
                     return Err(DataFusionError::NotImplemented(
-                        "overwrite modes not implemented for Iceberg".to_string(),
+                        "predicate or partition overwrite not implemented for Iceberg".to_string(),
                     ));
                 }
             }
 
-            // Load current table metadata (required for append)
-            if !table_exists {
+            // Load current table metadata for append or overwrite on existing table
+            if table_exists {
+                // existing table path
+            } else if !matches!(sink_mode, PhysicalSinkMode::Overwrite) {
                 return Err(DataFusionError::Plan(
                     "append to non-existent Iceberg table is not supported yet".to_string(),
                 ));
             }
             let object_store = get_object_store_from_context(&context, &table_url)?;
 
-            // Load table metadata directly from object store
-            let latest_meta =
-                super::super::table_format::find_latest_metadata_file(&object_store, &table_url)
+            let (iceberg_schema, default_spec) = if table_exists {
+                // Load table metadata directly from object store
+                let latest_meta = super::super::table_format::find_latest_metadata_file(
+                    &object_store,
+                    &table_url,
+                )
+                .await
+                .map_err(|e| DataFusionError::External(Box::new(e)))?;
+                let meta_path = object_store::path::Path::from(latest_meta.as_str());
+                let bytes = object_store
+                    .get(&meta_path)
+                    .await
+                    .map_err(|e| DataFusionError::External(Box::new(e)))?
+                    .bytes()
                     .await
                     .map_err(|e| DataFusionError::External(Box::new(e)))?;
-            let meta_path = object_store::path::Path::from(latest_meta.as_str());
-            let bytes = object_store
-                .get(&meta_path)
-                .await
-                .map_err(|e| DataFusionError::External(Box::new(e)))?
-                .bytes()
-                .await
-                .map_err(|e| DataFusionError::External(Box::new(e)))?;
-            let table_meta = crate::spec::TableMetadata::from_json(&bytes)
-                .map_err(|e| DataFusionError::External(Box::new(e)))?;
-            let iceberg_schema = table_meta.current_schema().cloned().ok_or_else(|| {
-                DataFusionError::Plan("No current schema in table metadata".to_string())
-            })?;
-            let default_spec = table_meta.default_partition_spec().cloned();
+                let table_meta = crate::spec::TableMetadata::from_json(&bytes)
+                    .map_err(|e| DataFusionError::External(Box::new(e)))?;
+                let iceberg_schema = table_meta.current_schema().cloned().ok_or_else(|| {
+                    DataFusionError::Plan("No current schema in table metadata".to_string())
+                })?;
+                let default_spec = table_meta.default_partition_spec().cloned();
+                (iceberg_schema, default_spec)
+            } else {
+                // derive schema/spec from input for new-table overwrite
+                let input_arrow_schema = _input_schema.clone().as_ref().clone();
+                let iceberg_schema = crate::arrow_conversion::arrow_schema_to_iceberg(&input_arrow_schema)
+                    .map_err(|e| e)?;
+                // build identity partition spec from partition_columns
+                let mut builder = crate::spec::partition::PartitionSpec::builder();
+                use crate::spec::transform::Transform;
+                for name in &partition_columns {
+                    if let Some(fid) = iceberg_schema.field_id_by_name(name) {
+                        builder = builder.add_field(fid, name.clone(), Transform::Identity);
+                    }
+                }
+                let spec = builder.build();
+                (iceberg_schema, Some(spec))
+            };
             let store = IcebergObjectStore::new(
                 object_store.clone(),
                 object_store::path::Path::from(table_url.path()),
@@ -235,7 +256,7 @@ impl ExecutionPlan for IcebergWriterExec {
 
             let data_files = writer.close().await.map_err(DataFusionError::Execution)?;
 
-            let info = crate::physical_plan::commit::types::IcebergCommitInfo {
+            let mut info = crate::physical_plan::commit::types::IcebergCommitInfo {
                 table_uri: table_url.to_string(),
                 row_count: total_rows,
                 data_files,
@@ -243,8 +264,19 @@ impl ExecutionPlan for IcebergWriterExec {
                 manifest_list_path: String::new(),
                 updates: vec![],
                 requirements: vec![],
-                operation: crate::spec::Operation::Append,
+                operation: if matches!(sink_mode, PhysicalSinkMode::Overwrite) {
+                    crate::spec::Operation::Overwrite
+                } else {
+                    crate::spec::Operation::Append
+                },
+                schema: None,
+                partition_spec: None,
             };
+            if !table_exists {
+                // include schema/spec for bootstrap overwrite
+                info.schema = Some(iceberg_schema.clone());
+                info.partition_spec = default_spec.clone();
+            }
             let json =
                 serde_json::to_string(&info).map_err(|e| DataFusionError::External(Box::new(e)))?;
             let array = Arc::new(StringArray::from(vec![json]));
