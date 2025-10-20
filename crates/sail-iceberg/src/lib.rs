@@ -5,6 +5,7 @@ pub mod physical_plan;
 pub mod spec;
 pub mod table_format;
 pub mod transaction;
+pub mod utils;
 pub mod writer;
 
 pub use arrow_conversion::*;

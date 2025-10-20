@@ -25,6 +25,7 @@ use crate::spec::catalog::TableUpdate;
 use crate::spec::metadata::table_metadata::{MetadataLog, SnapshotLog};
 use crate::spec::TableMetadata;
 use crate::transaction::{Transaction, TransactionAction};
+use crate::utils::get_object_store_from_context;
 
 #[derive(Debug)]
 pub struct IcebergCommitExec {
@@ -51,17 +52,6 @@ impl IcebergCommitExec {
             table_url,
             cache,
         }
-    }
-
-    fn get_object_store(
-        context: &Arc<TaskContext>,
-        table_url: &Url,
-    ) -> Result<Arc<dyn object_store::ObjectStore>> {
-        context
-            .runtime_env()
-            .object_store_registry
-            .get_store(table_url)
-            .map_err(|e| DataFusionError::External(Box::new(e)))
     }
 }
 
@@ -121,7 +111,7 @@ impl ExecutionPlan for IcebergCommitExec {
         let table_url = self.table_url.clone();
         let schema = self.schema();
         let future = async move {
-            let object_store = Self::get_object_store(&context, &table_url)?;
+            let object_store = get_object_store_from_context(&context, &table_url)?;
             let table_path = table_url
                 .path()
                 .strip_prefix('/')

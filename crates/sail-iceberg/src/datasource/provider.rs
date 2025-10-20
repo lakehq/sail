@@ -37,6 +37,7 @@ use crate::spec::{
     DataFile, FormatVersion, Manifest, ManifestContentType, ManifestList, ManifestStatus,
     PartitionSpec, Schema, Snapshot,
 };
+use crate::utils::get_object_store_from_session;
 
 #[derive(Debug, Clone)]
 struct IcebergDeleteAttachment {
@@ -103,21 +104,6 @@ impl IcebergTableProvider {
     /// Get the current snapshot
     pub fn current_snapshot(&self) -> &Snapshot {
         &self.snapshot
-    }
-
-    /// Get object store from DataFusion session
-    fn get_object_store(
-        &self,
-        session: &dyn Session,
-    ) -> DataFusionResult<Arc<dyn object_store::ObjectStore>> {
-        let table_url = Url::parse(&self.table_uri)
-            .map_err(|e| datafusion::common::DataFusionError::External(Box::new(e)))?;
-
-        session
-            .runtime_env()
-            .object_store_registry
-            .get_store(&table_url)
-            .map_err(|e| datafusion::common::DataFusionError::External(Box::new(e)))
     }
 
     /// Load manifest list from snapshot
@@ -613,7 +599,9 @@ impl TableProvider for IcebergTableProvider {
     ) -> DataFusionResult<Arc<dyn ExecutionPlan>> {
         log::trace!("Starting scan for table: {}", self.table_uri);
 
-        let object_store = self.get_object_store(session)?;
+        let table_url = Url::parse(&self.table_uri)
+            .map_err(|e| datafusion::common::DataFusionError::External(Box::new(e)))?;
+        let object_store = get_object_store_from_session(session, &table_url)?;
         log::trace!("Got object store");
 
         log::trace!(

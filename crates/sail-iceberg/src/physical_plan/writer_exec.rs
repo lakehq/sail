@@ -22,6 +22,7 @@ use url::Url;
 use crate::arrow_conversion::iceberg_schema_to_arrow;
 use crate::io::IcebergObjectStore;
 use crate::spec::partition::{UnboundPartitionField, UnboundPartitionSpec};
+use crate::utils::get_object_store_from_context;
 use crate::writer::config::WriterConfig;
 use crate::writer::table_writer::IcebergTableWriter;
 
@@ -58,17 +59,6 @@ impl IcebergWriterExec {
             table_exists,
             cache,
         }
-    }
-
-    fn get_object_store(
-        context: &Arc<TaskContext>,
-        table_url: &Url,
-    ) -> Result<Arc<dyn object_store::ObjectStore>> {
-        context
-            .runtime_env()
-            .object_store_registry
-            .get_store(table_url)
-            .map_err(|e| DataFusionError::External(Box::new(e)))
     }
 }
 
@@ -170,7 +160,7 @@ impl ExecutionPlan for IcebergWriterExec {
                     "append to non-existent Iceberg table is not supported yet".to_string(),
                 ));
             }
-            let object_store = Self::get_object_store(&context, &table_url)?;
+            let object_store = get_object_store_from_context(&context, &table_url)?;
 
             // Load table metadata directly from object store
             let latest_meta =
