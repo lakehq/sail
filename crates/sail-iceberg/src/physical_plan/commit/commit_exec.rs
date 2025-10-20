@@ -2,6 +2,7 @@ use std::any::Any;
 use std::sync::Arc;
 
 use async_trait::async_trait;
+use bytes::Bytes;
 use datafusion::arrow::array::{Array, StringArray, UInt64Array};
 use datafusion::arrow::datatypes::{DataType, Field, Schema};
 use datafusion::arrow::record_batch::RecordBatch;
@@ -24,7 +25,6 @@ use crate::spec::catalog::TableUpdate;
 use crate::spec::metadata::table_metadata::{MetadataLog, SnapshotLog};
 use crate::spec::TableMetadata;
 use crate::transaction::{Transaction, TransactionAction};
-use bytes::Bytes;
 
 #[derive(Debug)]
 pub struct IcebergCommitExec {

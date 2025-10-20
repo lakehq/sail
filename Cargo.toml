@@ -149,6 +149,7 @@ serde_arrow = { version = "0.13.6", features = ["arrow-56"] }
 # The `object_store` version must match the one used in DataFusion.
 object_store = { version = "0.12.3", features = ["aws", "gcp", "azure", "http"] }
 hdfs-native-object-store = "0.14.2"
+rust_decimal = "1.39.0"
 
 # Lakehouse
 deltalake = { git = "https://github.com/delta-io/delta-rs.git", rev = "0864b21", default-features = false, features = ["rustls"] }

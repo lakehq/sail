@@ -304,7 +304,7 @@ pub(super) fn parse_bounds_from_binary(
 
 fn parse_primitive_bound(bytes: &[u8], prim_type: &PrimitiveType) -> Result<Datum, String> {
     use num_bigint::BigInt;
-    use num_traits::ToPrimitive;
+    use rust_decimal::prelude::ToPrimitive;
 
     let literal = match prim_type {
         PrimitiveType::Boolean => {

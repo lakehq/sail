@@ -1,11 +1,12 @@
 use std::sync::Arc;
 
+use object_store::path::Path as ObjectPath;
+use url::Url;
+
 use super::{ActionCommit, FastAppendAction, Transaction, TransactionAction};
 use crate::io::IcebergObjectStore;
 use crate::spec::manifest::ManifestMetadata;
 use crate::spec::{FormatVersion, ManifestContentType, PartitionSpec, Schema};
-use object_store::path::Path as ObjectPath;
-use url::Url;
 
 impl Transaction {
     pub fn fast_append(&self) -> FastAppendAction {

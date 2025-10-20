@@ -46,12 +46,12 @@ impl<'a> IcebergPlanBuilder<'a> {
         let mut current: Arc<dyn ExecutionPlan> = self.input;
 
         // Reuse Delta helper pipeline semantics
+        use datafusion::physical_expr::expressions::Column;
+        use datafusion::physical_expr::PhysicalExpr;
         use datafusion::physical_plan::projection::ProjectionExec;
         use datafusion::physical_plan::repartition::RepartitionExec;
         use datafusion::physical_plan::sorts::sort::SortExec;
         use datafusion::physical_plan::Partitioning;
-        use datafusion::physical_expr::expressions::Column;
-        use datafusion::physical_expr::PhysicalExpr;
 
         // Projection: move partition columns to the end (same behavior as Delta)
         let input_schema = current.schema();
@@ -94,8 +94,9 @@ impl<'a> IcebergPlanBuilder<'a> {
 
         // Sort: by provided sort order (already includes partition columns if needed)
         if let Some(sort_exprs) = self.sort_order.clone() {
-            let lex = datafusion::physical_expr::LexOrdering::new(sort_exprs)
-                .ok_or_else(|| datafusion::common::DataFusionError::Internal("Invalid sort order".to_string()))?;
+            let lex = datafusion::physical_expr::LexOrdering::new(sort_exprs).ok_or_else(|| {
+                datafusion::common::DataFusionError::Internal("Invalid sort order".to_string())
+            })?;
             let sort_exec = SortExec::new(lex, current);
             current = Arc::new(sort_exec);
         }
@@ -111,13 +112,13 @@ impl<'a> IcebergPlanBuilder<'a> {
         ));
 
         // Commit
-        current = Arc::new(crate::physical_plan::commit::commit_exec::IcebergCommitExec::new(
-            current,
-            table_url_clone,
-        ));
+        current = Arc::new(
+            crate::physical_plan::commit::commit_exec::IcebergCommitExec::new(
+                current,
+                table_url_clone,
+            ),
+        );
 
         Ok(current)
     }
 }
-
-
