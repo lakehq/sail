@@ -90,9 +90,7 @@ def test_pyiceberg_read_after_sail_multiple_files(spark, tmp_path):
 
         py_tbl = catalog.load_table(identifier)
         actual_py = pyiceberg_to_pandas(py_tbl, sort_by="id")
-        expected_py = (
-            pd.DataFrame({"id": [1, 2], "value": ["a", "b"]}).astype({"id": "int64"})
-        )
+        expected_py = pd.DataFrame({"id": [1, 2], "value": ["a", "b"]}).astype({"id": "int64"})
         assert_frame_equal(actual_py, expected_py)
 
         spark_df = spark.read.format("iceberg").load(table.location()).sort("id").toPandas()
@@ -104,5 +102,3 @@ def test_pyiceberg_read_after_sail_multiple_files(spark, tmp_path):
         assert_frame_equal(spark_df, expected_spark)
     finally:
         catalog.drop_table(identifier)
-
-
