@@ -2,25 +2,28 @@ use std::sync::Arc;
 
 use datafusion::catalog::Session;
 use datafusion::common::Result;
-use datafusion::physical_plan::ExecutionPlan;
+use datafusion::physical_expr::expressions::Column;
+use datafusion::physical_expr::{LexOrdering, PhysicalExpr, PhysicalSortExpr};
+use datafusion::physical_plan::projection::ProjectionExec;
+use datafusion::physical_plan::repartition::RepartitionExec;
+use datafusion::physical_plan::sorts::sort::SortExec;
+use datafusion::physical_plan::{ExecutionPlan, Partitioning};
 use sail_common_datafusion::datasource::PhysicalSinkMode;
 use url::Url;
 
 use crate::physical_plan::writer_exec::IcebergWriterExec;
 
-/// Table configuration required for building the Iceberg write pipeline
 pub struct IcebergTableConfig {
     pub table_url: Url,
     pub partition_columns: Vec<String>,
     pub table_exists: bool,
 }
 
-/// Builder for Iceberg write plan: Input -> Projection -> Repartition -> Sort -> Writer -> Commit
 pub struct IcebergPlanBuilder<'a> {
     input: Arc<dyn ExecutionPlan>,
     table_config: IcebergTableConfig,
     sink_mode: PhysicalSinkMode,
-    sort_order: Option<Vec<datafusion::physical_expr::PhysicalSortExpr>>,
+    sort_order: Option<Vec<PhysicalSortExpr>>,
     #[allow(unused)]
     session: &'a dyn Session,
 }
@@ -30,7 +33,7 @@ impl<'a> IcebergPlanBuilder<'a> {
         input: Arc<dyn ExecutionPlan>,
         table_config: IcebergTableConfig,
         sink_mode: PhysicalSinkMode,
-        sort_order: Option<Vec<datafusion::physical_expr::PhysicalSortExpr>>,
+        sort_order: Option<Vec<PhysicalSortExpr>>,
         session: &'a dyn Session,
     ) -> Self {
         Self {
@@ -43,23 +46,20 @@ impl<'a> IcebergPlanBuilder<'a> {
     }
 
     pub async fn build(self) -> Result<Arc<dyn ExecutionPlan>> {
-        // For v1: only Append is supported; other modes validated earlier
-        let mut current: Arc<dyn ExecutionPlan> = self.input;
+        self.add_projection_node(self.input.clone())
+            .and_then(|plan| self.add_repartition_node(plan))
+            .and_then(|plan| self.add_sort_node(plan))
+            .and_then(|plan| self.add_writer_node(plan))
+            .and_then(|plan| self.add_commit_node(plan))
+    }
 
-        // Reuse Delta helper pipeline semantics
-        use datafusion::physical_expr::expressions::Column;
-        use datafusion::physical_expr::PhysicalExpr;
-        use datafusion::physical_plan::projection::ProjectionExec;
-        use datafusion::physical_plan::repartition::RepartitionExec;
-        use datafusion::physical_plan::sorts::sort::SortExec;
-        use datafusion::physical_plan::Partitioning;
-
-        // Projection: move partition columns to the end (same behavior as Delta)
-        let input_schema = current.schema();
+    fn add_projection_node(&self, input: Arc<dyn ExecutionPlan>) -> Result<Arc<dyn ExecutionPlan>> {
+        let input_schema = input.schema();
         let mut projection_exprs: Vec<(Arc<dyn PhysicalExpr>, String)> = Vec::new();
         let mut part_idx = std::collections::HashMap::new();
         let part_set: std::collections::HashSet<&String> =
             self.table_config.partition_columns.iter().collect();
+
         for (i, f) in input_schema.fields().iter().enumerate() {
             if part_set.contains(f.name()) {
                 part_idx.insert(f.name().clone(), i);
@@ -67,6 +67,7 @@ impl<'a> IcebergPlanBuilder<'a> {
                 projection_exprs.push((Arc::new(Column::new(f.name(), i)), f.name().clone()));
             }
         }
+
         for name in &self.table_config.partition_columns {
             let idx = *part_idx.get(name).ok_or_else(|| {
                 datafusion::common::DataFusionError::Plan(format!(
@@ -76,13 +77,18 @@ impl<'a> IcebergPlanBuilder<'a> {
             })?;
             projection_exprs.push((Arc::new(Column::new(name, idx)), name.clone()));
         }
-        current = Arc::new(ProjectionExec::try_new(projection_exprs, current)?);
 
-        // Repartition: hash by partition columns when present; else round-robin
+        Ok(Arc::new(ProjectionExec::try_new(projection_exprs, input)?))
+    }
+
+    fn add_repartition_node(
+        &self,
+        input: Arc<dyn ExecutionPlan>,
+    ) -> Result<Arc<dyn ExecutionPlan>> {
         let repartitioning = if self.table_config.partition_columns.is_empty() {
             Partitioning::RoundRobinBatch(4)
         } else {
-            let schema = current.schema();
+            let schema = input.schema();
             let n = schema.fields().len();
             let k = self.table_config.partition_columns.len();
             let exprs: Vec<Arc<dyn PhysicalExpr>> = (n - k..n)
@@ -91,35 +97,37 @@ impl<'a> IcebergPlanBuilder<'a> {
                 .collect();
             Partitioning::Hash(exprs, 4)
         };
-        current = Arc::new(RepartitionExec::try_new(current, repartitioning)?);
 
-        // Sort: by provided sort order (already includes partition columns if needed)
+        Ok(Arc::new(RepartitionExec::try_new(input, repartitioning)?))
+    }
+
+    fn add_sort_node(&self, input: Arc<dyn ExecutionPlan>) -> Result<Arc<dyn ExecutionPlan>> {
         if let Some(sort_exprs) = self.sort_order.clone() {
-            let lex = datafusion::physical_expr::LexOrdering::new(sort_exprs).ok_or_else(|| {
+            let lex = LexOrdering::new(sort_exprs).ok_or_else(|| {
                 datafusion::common::DataFusionError::Internal("Invalid sort order".to_string())
             })?;
-            let sort_exec = SortExec::new(lex, current);
-            current = Arc::new(sort_exec);
+            Ok(Arc::new(SortExec::new(lex, input)))
+        } else {
+            Ok(input)
         }
+    }
 
-        // Writer
-        let table_url_clone = self.table_config.table_url.clone();
-        current = Arc::new(IcebergWriterExec::new(
-            current,
-            table_url_clone.clone(),
-            self.table_config.partition_columns,
-            self.sink_mode,
+    fn add_writer_node(&self, input: Arc<dyn ExecutionPlan>) -> Result<Arc<dyn ExecutionPlan>> {
+        Ok(Arc::new(IcebergWriterExec::new(
+            input,
+            self.table_config.table_url.clone(),
+            self.table_config.partition_columns.clone(),
+            self.sink_mode.clone(),
             self.table_config.table_exists,
-        ));
+        )))
+    }
 
-        // Commit
-        current = Arc::new(
+    fn add_commit_node(&self, input: Arc<dyn ExecutionPlan>) -> Result<Arc<dyn ExecutionPlan>> {
+        Ok(Arc::new(
             crate::physical_plan::commit::commit_exec::IcebergCommitExec::new(
-                current,
-                table_url_clone,
+                input,
+                self.table_config.table_url.clone(),
             ),
-        );
-
-        Ok(current)
+        ))
     }
 }
