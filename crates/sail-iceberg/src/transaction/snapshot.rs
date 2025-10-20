@@ -118,8 +118,8 @@ impl<'a> SnapshotProducer<'a> {
                 store.root.child(parent_manifest_list_path_str)
             };
 
-            dbg!(
-                "snapshot producer: loading parent manifest list",
+            log::trace!(
+                "snapshot producer: loading parent manifest list: {}",
                 &manifest_list_path
             );
             let manifest_list_data = store
@@ -134,8 +134,8 @@ impl<'a> SnapshotProducer<'a> {
                 &manifest_list_data,
                 FormatVersion::V2,
             )?;
-            dbg!(
-                "snapshot producer: found parent manifest files",
+            log::trace!(
+                "snapshot producer: found parent manifest files: {}",
                 parent_manifest_list.entries().len()
             );
             for entry in parent_manifest_list.entries() {
@@ -144,8 +144,8 @@ impl<'a> SnapshotProducer<'a> {
             }
         }
 
-        dbg!(
-            "Creating new snapshot",
+        log::trace!(
+            "Creating new snapshot: id={} seq={} parent_id={}",
             new_snapshot_id,
             new_sequence_number,
             self.tx.snapshot().snapshot_id()
@@ -153,8 +153,8 @@ impl<'a> SnapshotProducer<'a> {
 
         list_writer.append(manifest_file);
         total_manifest_count += 1;
-        dbg!(
-            "snapshot producer: new manifest list will have files",
+        log::trace!(
+            "snapshot producer: new manifest list will have files: {}",
             total_manifest_count
         );
         let list_bytes = list_writer.to_bytes(FormatVersion::V2)?;

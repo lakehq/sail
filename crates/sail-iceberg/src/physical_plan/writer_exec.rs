@@ -3,7 +3,7 @@ use std::sync::Arc;
 
 use async_trait::async_trait;
 use datafusion::arrow::array::StringArray;
-use datafusion::arrow::datatypes::{DataType, Field, Schema, SchemaRef};
+use datafusion::arrow::datatypes::{DataType, Field, Schema};
 use datafusion::arrow::record_batch::RecordBatch;
 use datafusion::execution::context::TaskContext;
 use datafusion::physical_expr::{Distribution, EquivalenceProperties};
@@ -58,15 +58,6 @@ impl IcebergWriterExec {
             table_exists,
             cache,
         }
-    }
-
-    fn compute_properties(schema: SchemaRef) -> PlanProperties {
-        PlanProperties::new(
-            EquivalenceProperties::new(schema),
-            Partitioning::UnknownPartitioning(1),
-            EmissionType::Final,
-            Boundedness::Bounded,
-        )
     }
 
     fn get_object_store(
@@ -243,17 +234,16 @@ impl ExecutionPlan for IcebergWriterExec {
             while let Some(batch_result) = data.next().await {
                 let batch = batch_result?;
                 let batch_row_count = batch.num_rows();
-                total_rows += u64::try_from(batch_row_count).unwrap();
+                total_rows += u64::try_from(batch_row_count).map_err(|e| {
+                    DataFusionError::Execution(format!("Row count overflow: {}", e))
+                })?;
                 writer
                     .write(&batch)
                     .await
-                    .map_err(|e| DataFusionError::Execution(e))?;
+                    .map_err(DataFusionError::Execution)?;
             }
 
-            let data_files = writer
-                .close()
-                .await
-                .map_err(|e| DataFusionError::Execution(e))?;
+            let data_files = writer.close().await.map_err(DataFusionError::Execution)?;
 
             let info = crate::physical_plan::commit::types::IcebergCommitInfo {
                 table_uri: table_url.to_string(),

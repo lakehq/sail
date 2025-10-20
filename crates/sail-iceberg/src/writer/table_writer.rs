@@ -77,9 +77,13 @@ impl IcebergTableWriter {
         if let Some(writer) = self.writers.remove(partition_dir) {
             let (bytes, meta) = writer.close().await?;
             let (rel, full) = self.generator.with_partition_dir(Some(partition_dir));
-            dbg!("iceberg.table_writer.flush_partition.writing", &full);
+            log::trace!("iceberg.table_writer.flush_partition.writing: {}", &full);
             self.store.put(&full, bytes).await?;
-            dbg!("iceberg.table_writer.flush_partition.written", &rel, &full);
+            log::trace!(
+                "iceberg.table_writer.flush_partition.written: rel={} full={}",
+                &rel,
+                &full
+            );
             let df = DataFileWriter::new(self.partition_spec_id, rel, partition_values)
                 .finish(meta)?
                 .data_file;

@@ -198,7 +198,7 @@ impl IcebergTableProvider {
                 p
             };
 
-            dbg!("Loading manifest", &manifest_path);
+            log::trace!("Loading manifest: {}", &manifest_path);
             let manifest_data = object_store
                 .get(&manifest_path)
                 .await
@@ -622,8 +622,8 @@ impl TableProvider for IcebergTableProvider {
         );
         let manifest_list = self.load_manifest_list(&object_store).await?;
         log::trace!("Loaded {} manifest files", manifest_list.entries().len());
-        dbg!(
-            "scan: loaded manifest list with file count",
+        log::trace!(
+            "scan: loaded manifest list with file count: {}",
             manifest_list.entries().len()
         );
 

@@ -21,6 +21,7 @@ pub struct IcebergPlanBuilder<'a> {
     table_config: IcebergTableConfig,
     sink_mode: PhysicalSinkMode,
     sort_order: Option<Vec<datafusion::physical_expr::PhysicalSortExpr>>,
+    #[allow(unused)]
     session: &'a dyn Session,
 }
 

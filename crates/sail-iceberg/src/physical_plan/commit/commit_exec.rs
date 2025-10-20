@@ -191,7 +191,7 @@ impl ExecutionPlan for IcebergCommitExec {
             let commit = Arc::new(action)
                 .commit(&tx)
                 .await
-                .map_err(|e| DataFusionError::Execution(e))?;
+                .map_err(DataFusionError::Execution)?;
 
             // Apply ActionCommit to table metadata and persist a new metadata.json and version-hint
             // 1) Load current table metadata again to ensure we update the freshest state
@@ -209,14 +209,14 @@ impl ExecutionPlan for IcebergCommitExec {
                 .map_err(|e| DataFusionError::External(Box::new(e)))?;
             let mut table_meta: TableMetadata = TableMetadata::from_json(&bytes)
                 .map_err(|e| DataFusionError::External(Box::new(e)))?;
-            dbg!(
-                "commit_exec: loaded table metadata with snapshot id",
+            log::trace!(
+                "commit_exec: loaded table metadata with snapshot id: {:?}",
                 table_meta.current_snapshot_id
             );
 
             // 2) Apply updates (only handle the ones we emit: AddSnapshot, SetSnapshotRef)
             let updates = commit.into_updates();
-            dbg!("commit_exec: applying updates", &updates);
+            log::trace!("commit_exec: applying updates: {:?}", &updates);
             let mut newest_snapshot_seq: Option<i64> = None;
             let timestamp_ms = chrono::Utc::now().timestamp_millis();
             for upd in updates {
@@ -281,21 +281,21 @@ impl ExecutionPlan for IcebergCommitExec {
                 uuid::Uuid::new_v4()
             );
 
-            dbg!(
-                "Writing metadata",
+            log::trace!(
+                "Writing metadata: {} snapshot_id={:?} table_url={}",
                 &new_meta_rel,
                 table_meta.current_snapshot_id,
                 &table_url
             );
 
-            let full_path = IcebergObjectStore::new(
+            let _full_path = IcebergObjectStore::new(
                 object_store.clone(),
                 object_store::path::Path::from(table_path),
             )
             .put_rel(&new_meta_rel, Bytes::from(new_meta_bytes))
             .await
             .map_err(DataFusionError::Execution)?;
-            dbg!("Metadata written successfully");
+            log::trace!("Metadata written successfully");
 
             // 4) Update version-hint
             let hint_bytes = Bytes::from(next_version.to_string().into_bytes());

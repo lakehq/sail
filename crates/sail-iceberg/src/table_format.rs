@@ -76,9 +76,9 @@ impl TableFormat for IcebergTableFormat {
         // Parse URL and detect table existence (file-based tables only)
         let table_url = Self::parse_table_url(ctx, vec![path]).await?;
         let exists_res = load_table_metadata(ctx, &table_url).await;
-        dbg!("iceberg.create_writer.table_url", &table_url);
-        dbg!(
-            "iceberg.create_writer.table_exists_result",
+        log::trace!("iceberg.create_writer.table_url: {}", &table_url);
+        log::trace!(
+            "iceberg.create_writer.table_exists_result: {:?}",
             &exists_res
                 .as_ref()
                 .map(|_| ())
@@ -117,18 +117,14 @@ impl TableFormat for IcebergTableFormat {
         };
 
         // Convert logical sort requirement to physical sort exprs for SortExec
-        let physical_sort = if let Some(req) = sort_order {
-            Some(
-                req.into_iter()
-                    .map(|r| datafusion::physical_expr::PhysicalSortExpr {
-                        expr: r.expr,
-                        options: r.options.unwrap_or_default(),
-                    })
-                    .collect::<Vec<_>>(),
-            )
-        } else {
-            None
-        };
+        let physical_sort = sort_order.map(|req| {
+            req.into_iter()
+                .map(|r| datafusion::physical_expr::PhysicalSortExpr {
+                    expr: r.expr,
+                    options: r.options.unwrap_or_default(),
+                })
+                .collect::<Vec<_>>()
+        });
 
         let builder = IcebergPlanBuilder::new(input, table_config, mode, physical_sort, ctx);
         let exec = builder.build().await?;
@@ -194,13 +190,13 @@ pub(crate) async fn load_table_metadata(
         DataFusionError::External(Box::new(e))
     })?;
 
-    dbg!("Loaded metadata file: {}", &metadata_location);
-    dbg!(
+    log::trace!("Loaded metadata file: {}", &metadata_location);
+    log::trace!(
         "  current_snapshot_id: {:?}",
         &table_metadata.current_snapshot_id
     );
-    dbg!("  refs: {:?}", &table_metadata.refs);
-    dbg!("  snapshots count: {}", &table_metadata.snapshots.len());
+    log::trace!("  refs: {:?}", &table_metadata.refs);
+    log::trace!("  snapshots count: {}", &table_metadata.snapshots.len());
 
     // Get the current schema
     let schema = table_metadata
@@ -218,8 +214,8 @@ pub(crate) async fn load_table_metadata(
         })?
         .clone();
 
-    dbg!(
-        "load_table_metadata: loaded snapshot",
+    log::trace!(
+        "load_table_metadata: loaded snapshot id={} manifest_list={}",
         snapshot.snapshot_id(),
         snapshot.manifest_list()
     );
@@ -284,13 +280,13 @@ pub(crate) async fn find_latest_metadata_file(
 
     match metadata_files {
         Ok(mut files) => {
-            dbg!("find_latest_metadata_file: found files", &files);
+            log::trace!("find_latest_metadata_file: found files: {:?}", &files);
             files.sort_by_key(|(version, _, _)| *version);
 
             if let Some(hint) = hinted_version {
                 if let Some((version, path, _)) = files.iter().rev().find(|(v, _, _)| *v == hint) {
-                    dbg!(
-                        "find_latest_metadata_file: selected version",
+                    log::trace!(
+                        "find_latest_metadata_file: selected version {} path={}",
                         version,
                         &path
                     );
@@ -299,8 +295,8 @@ pub(crate) async fn find_latest_metadata_file(
             }
 
             if let Some((version, latest_file, _)) = files.last() {
-                dbg!(
-                    "find_latest_metadata_file: selected version",
+                log::trace!(
+                    "find_latest_metadata_file: selected version {} path={}",
                     version,
                     &latest_file
                 );
