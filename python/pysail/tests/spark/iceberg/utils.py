@@ -1,7 +1,13 @@
-from pathlib import Path
-import pandas as pd
+from __future__ import annotations
+
+from typing import TYPE_CHECKING
 
 from pyiceberg.catalog import load_catalog
+
+if TYPE_CHECKING:
+    from pathlib import Path
+
+    import pandas as pd
 
 
 def create_sql_catalog(tmp_path: Path):

@@ -163,7 +163,7 @@ impl IcebergTableWriter {
                 &full
             );
             // Use absolute filesystem path for cross-compat (PyIceberg expects an absolute file path)
-            let abs_path = format!("/{}", full.to_string());
+            let abs_path = format!("/{}", full);
             let df = DataFileWriter::new(self.partition_spec_id, abs_path, partition_values)
                 .finish(meta)?
                 .data_file;

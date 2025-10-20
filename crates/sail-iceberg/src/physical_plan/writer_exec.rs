@@ -218,8 +218,7 @@ impl ExecutionPlan for IcebergWriterExec {
                 // derive schema/spec from input for new-table overwrite
                 let input_arrow_schema = _input_schema.clone().as_ref().clone();
                 let mut iceberg_schema =
-                    crate::arrow_conversion::arrow_schema_to_iceberg(&input_arrow_schema)
-                        .map_err(|e| e)?;
+                    crate::arrow_conversion::arrow_schema_to_iceberg(&input_arrow_schema)?;
                 // Ensure valid, non-zero, unique field ids for top-level fields
                 iceberg_schema = assign_top_level_field_ids(&iceberg_schema);
                 // build identity partition spec from partition_columns

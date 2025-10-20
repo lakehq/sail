@@ -214,7 +214,7 @@ impl ExecutionPlan for IcebergCommitExec {
                         .with_file_counts(commit_info.data_files.len() as i32, 0, 0)
                         .with_row_counts(commit_info.row_count as i64, 0, 0)
                         .build()
-                        .map_err(|e| DataFusionError::Execution(e))?,
+                        .map_err(DataFusionError::Execution)?,
                 );
                 let list_bytes = list_writer
                     .to_bytes(FormatVersion::V2)
@@ -239,7 +239,7 @@ impl ExecutionPlan for IcebergCommitExec {
                     ))
                     .with_schema_id(iceberg_schema.schema_id())
                     .build()
-                    .map_err(|e| DataFusionError::Execution(e))?;
+                    .map_err(DataFusionError::Execution)?;
 
                 // Build minimal TableMetadata V2
                 let table_meta = TableMetadata {
@@ -383,7 +383,7 @@ impl ExecutionPlan for IcebergCommitExec {
                         .with_file_counts(commit_info.data_files.len() as i32, 0, 0)
                         .with_row_counts(commit_info.row_count as i64, 0, 0)
                         .build()
-                        .map_err(|e| DataFusionError::Execution(e))?,
+                        .map_err(DataFusionError::Execution)?,
                 );
                 let list_bytes = list_writer
                     .to_bytes(FormatVersion::V2)
@@ -408,7 +408,7 @@ impl ExecutionPlan for IcebergCommitExec {
                     ))
                     .with_schema_id(schema_iceberg.schema_id())
                     .build()
-                    .map_err(|e| DataFusionError::Execution(e))?;
+                    .map_err(DataFusionError::Execution)?;
 
                 table_meta.snapshots.push(snapshot.clone());
                 table_meta.current_snapshot_id = Some(new_snapshot_id);

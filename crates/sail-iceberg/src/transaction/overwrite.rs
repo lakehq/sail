@@ -8,6 +8,12 @@ use super::{
 
 pub struct OverwriteAction;
 
+impl Default for OverwriteAction {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl OverwriteAction {
     pub fn new() -> Self {
         Self

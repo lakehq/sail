@@ -1,6 +1,5 @@
 import pandas as pd
 import pyarrow as pa
-import pytest
 from pandas.testing import assert_frame_equal
 from pyiceberg.schema import Schema
 from pyiceberg.types import DoubleType, LongType, NestedField, StringType
