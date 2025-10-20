@@ -2,13 +2,14 @@ import pandas as pd
 import pyarrow as pa
 import pytest
 from pandas.testing import assert_frame_equal
-from pysail.tests.spark.utils import escape_sql_string_literal
 from pyiceberg.schema import Schema
 from pyiceberg.types import DoubleType, LongType, NestedField, StringType
 
+from pysail.tests.spark.utils import escape_sql_string_literal
+
 
 @pytest.mark.skip(reason="overwrite not supported yet")
-def test_iceberg_write_overwrite_and_read(spark, sql_catalog, tmp_path):
+def test_iceberg_write_overwrite_and_read(spark, sql_catalog):
     identifier = "default.write_overwrite"
     table = sql_catalog.create_table(
         identifier=identifier,
@@ -26,11 +27,13 @@ def test_iceberg_write_overwrite_and_read(spark, sql_catalog, tmp_path):
         df.write.format("iceberg").mode("overwrite").save(table.location())
 
         result_df = spark.read.format("iceberg").load(table.location()).sort("id")
-        expected = pd.DataFrame({
-            "id": [10, 11, 12],
-            "event": ["A", "B", "A"],
-            "score": [0.98, 0.54, 0.76],
-        })
+        expected = pd.DataFrame(
+            {
+                "id": [10, 11, 12],
+                "event": ["A", "B", "A"],
+                "score": [0.98, 0.54, 0.76],
+            }
+        )
         assert_frame_equal(result_df.toPandas(), expected)
     finally:
         sql_catalog.drop_table(identifier)
@@ -76,9 +79,7 @@ def test_iceberg_sql_read_after_write(spark, sql_catalog):
         df.write.format("iceberg").mode("append").save(table.location())
 
         table_path = table.location()
-        spark.sql(
-            f"CREATE TABLE tmp_ice USING iceberg LOCATION '{escape_sql_string_literal(table_path)}'"
-        )
+        spark.sql(f"CREATE TABLE tmp_ice USING iceberg LOCATION '{escape_sql_string_literal(table_path)}'")
         try:
             result_df = spark.sql("SELECT * FROM tmp_ice").sort("id")
             expected = pd.DataFrame({"id": [1, 2], "name": ["alice", "bob"]})
@@ -87,4 +88,3 @@ def test_iceberg_sql_read_after_write(spark, sql_catalog):
             spark.sql("DROP TABLE IF EXISTS tmp_ice")
     finally:
         sql_catalog.drop_table(identifier)
-
