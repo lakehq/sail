@@ -669,55 +669,100 @@ mod tests {
 
     use super::*;
 
-    async fn create_config_mock(server: &MockServer) {
-        Mock::given(method("GET"))
-            .and(path("/v1/config"))
-            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
-                "overrides": {
-                    "warehouse": "s3://iceberg-catalog"
-                },
-                "defaults": {}
-            })))
-            .mount(server)
-            .await;
+    struct TestContext {
+        server: MockServer,
+        catalog: IcebergRestCatalogProvider,
+        prefix: String,
     }
 
-    fn create_test_catalog(server_uri: String, prefix: Option<&str>) -> IcebergRestCatalogProvider {
-        let runtime = RuntimeHandle::new(
-            tokio::runtime::Handle::current(),
-            Some(tokio::runtime::Handle::current()),
-        );
-        let config = Arc::new(Configuration {
-            base_path: server_uri,
-            user_agent: None,
-            client: reqwest::Client::new(),
-            basic_auth: None,
-            oauth_access_token: None,
-            bearer_access_token: None,
-            api_key: None,
-        });
-        let prefix_str = prefix.unwrap_or("").to_string();
-        IcebergRestCatalogProvider::new("test_catalog".to_string(), prefix_str, config, runtime)
+    impl TestContext {
+        async fn new(prefix: Option<&str>) -> Self {
+            let server = MockServer::start().await;
+
+            Mock::given(method("GET"))
+                .and(path("/v1/config"))
+                .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+                    "overrides": {
+                        "warehouse": "s3://iceberg-catalog"
+                    },
+                    "defaults": {}
+                })))
+                .mount(&server)
+                .await;
+
+            let prefix_str = prefix.unwrap_or("");
+            let runtime = RuntimeHandle::new(tokio::runtime::Handle::current(), None);
+            let config = Arc::new(Configuration {
+                base_path: server.uri(),
+                user_agent: None,
+                client: reqwest::Client::new(),
+                basic_auth: None,
+                oauth_access_token: None,
+                bearer_access_token: None,
+                api_key: None,
+            });
+            let catalog = IcebergRestCatalogProvider::new(
+                "test_catalog".to_string(),
+                prefix_str.to_string(),
+                config,
+                runtime,
+            );
+
+            Self {
+                server,
+                catalog,
+                prefix: prefix_str.to_string(),
+            }
+        }
+
+        fn path(&self, suffix: &str) -> String {
+            if self.prefix.is_empty() {
+                format!("/v1/{}", suffix)
+            } else {
+                format!("/v1/{}{}", self.prefix, suffix)
+            }
+        }
+
+        async fn mock_get_json(&self, path_str: &str, response: serde_json::Value) {
+            Mock::given(method("GET"))
+                .and(path(path_str))
+                .respond_with(ResponseTemplate::new(200).set_body_json(response))
+                .mount(&self.server)
+                .await;
+        }
+
+        async fn mock_post_json(&self, path_str: &str, response: serde_json::Value) {
+            Mock::given(method("POST"))
+                .and(path(path_str))
+                .respond_with(ResponseTemplate::new(200).set_body_json(response))
+                .mount(&self.server)
+                .await;
+        }
+
+        async fn mock_delete(&self, path_str: &str) {
+            Mock::given(method("DELETE"))
+                .and(path(path_str))
+                .respond_with(ResponseTemplate::new(204))
+                .mount(&self.server)
+                .await;
+        }
     }
 
-    #[tokio::test]
-    async fn test_list_namespace_no_prefix() {
-        let server = MockServer::start().await;
-        create_config_mock(&server).await;
+    async fn test_list_namespace_impl(prefix: Option<&str>) {
+        let ctx = TestContext::new(prefix).await;
 
-        Mock::given(method("GET"))
-            .and(path("/v1//namespaces"))
-            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+        ctx.mock_get_json(
+            &ctx.path("/namespaces"),
+            serde_json::json!({
                 "namespaces": [
                     ["ns1", "ns11"],
                     ["ns2"]
                 ]
-            })))
-            .mount(&server)
-            .await;
+            }),
+        )
+        .await;
 
-        let catalog = create_test_catalog(server.uri(), None);
-        let databases = catalog.list_databases(None).await.unwrap();
+        let databases = ctx.catalog.list_databases(None).await.unwrap();
 
         assert_eq!(databases.len(), 2);
         assert_eq!(
@@ -728,39 +773,17 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn test_list_namespace_with_prefix() {
-        let server = MockServer::start().await;
-        create_config_mock(&server).await;
-
-        Mock::given(method("GET"))
-            .and(path("/v1/test/namespaces"))
-            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
-                "namespaces": [
-                    ["ns1", "ns11"],
-                    ["ns2"]
-                ]
-            })))
-            .mount(&server)
-            .await;
-
-        let catalog = create_test_catalog(server.uri(), Some("test"));
-        let databases = catalog.list_databases(None).await.unwrap();
-
-        assert_eq!(databases.len(), 2);
-        assert_eq!(
-            databases[0].database,
-            vec!["ns1".to_string(), "ns11".to_string()]
-        );
-        assert_eq!(databases[1].database, vec!["ns2".to_string()]);
+    async fn test_list_namespace() {
+        test_list_namespace_impl(None).await;
+        test_list_namespace_impl(Some("test")).await;
     }
 
-    #[tokio::test]
-    async fn test_list_namespace_parent_no_prefix() {
-        let server = MockServer::start().await;
-        create_config_mock(&server).await;
+    async fn test_list_namespace_parent_impl(prefix: Option<&str>) {
+        let ctx = TestContext::new(prefix).await;
+        let ns_path = ctx.path("/namespaces");
 
         Mock::given(method("GET"))
-            .and(path("/v1//namespaces"))
+            .and(path(ns_path.as_str()))
             .and(wiremock::matchers::query_param_is_missing("parent"))
             .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
                 "namespaces": [
@@ -768,11 +791,11 @@ mod tests {
                     ["engineering"]
                 ]
             })))
-            .mount(&server)
+            .mount(&ctx.server)
             .await;
 
         Mock::given(method("GET"))
-            .and(path("/v1//namespaces"))
+            .and(path(ns_path.as_str()))
             .and(wiremock::matchers::query_param("parent", "accounting"))
             .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
                 "namespaces": [
@@ -780,11 +803,11 @@ mod tests {
                     ["accounting", "payroll"]
                 ]
             })))
-            .mount(&server)
+            .mount(&ctx.server)
             .await;
 
         Mock::given(method("GET"))
-            .and(path("/v1//namespaces"))
+            .and(path(ns_path.as_str()))
             .and(wiremock::matchers::query_param("parent", "engineering"))
             .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
                 "namespaces": [
@@ -792,18 +815,17 @@ mod tests {
                     ["engineering", "frontend"]
                 ]
             })))
-            .mount(&server)
+            .mount(&ctx.server)
             .await;
 
-        let catalog = create_test_catalog(server.uri(), None);
-
-        let top_level = catalog.list_databases(None).await.unwrap();
+        let top_level = ctx.catalog.list_databases(None).await.unwrap();
         assert_eq!(top_level.len(), 2);
         assert_eq!(top_level[0].database, vec!["accounting".to_string()]);
         assert_eq!(top_level[1].database, vec!["engineering".to_string()]);
 
         let accounting_prefix = Namespace::try_from(vec!["accounting".to_string()]).unwrap();
-        let accounting_children = catalog
+        let accounting_children = ctx
+            .catalog
             .list_databases(Some(&accounting_prefix))
             .await
             .unwrap();
@@ -818,7 +840,8 @@ mod tests {
         );
 
         let engineering_prefix = Namespace::try_from(vec!["engineering".to_string()]).unwrap();
-        let engineering_children = catalog
+        let engineering_children = ctx
+            .catalog
             .list_databases(Some(&engineering_prefix))
             .await
             .unwrap();
@@ -834,92 +857,17 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn test_list_namespace_parent_with_prefix() {
-        let server = MockServer::start().await;
-        create_config_mock(&server).await;
-
-        Mock::given(method("GET"))
-            .and(path("/v1/test/namespaces"))
-            .and(wiremock::matchers::query_param_is_missing("parent"))
-            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
-                "namespaces": [
-                    ["accounting"],
-                    ["engineering"]
-                ]
-            })))
-            .mount(&server)
-            .await;
-
-        Mock::given(method("GET"))
-            .and(path("/v1/test/namespaces"))
-            .and(wiremock::matchers::query_param("parent", "accounting"))
-            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
-                "namespaces": [
-                    ["accounting", "tax"],
-                    ["accounting", "payroll"]
-                ]
-            })))
-            .mount(&server)
-            .await;
-
-        Mock::given(method("GET"))
-            .and(path("/v1/test/namespaces"))
-            .and(wiremock::matchers::query_param("parent", "engineering"))
-            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
-                "namespaces": [
-                    ["engineering", "backend"],
-                    ["engineering", "frontend"]
-                ]
-            })))
-            .mount(&server)
-            .await;
-
-        let catalog = create_test_catalog(server.uri(), Some("test"));
-
-        let top_level = catalog.list_databases(None).await.unwrap();
-        assert_eq!(top_level.len(), 2);
-        assert_eq!(top_level[0].database, vec!["accounting".to_string()]);
-        assert_eq!(top_level[1].database, vec!["engineering".to_string()]);
-
-        let accounting_prefix = Namespace::try_from(vec!["accounting".to_string()]).unwrap();
-        let accounting_children = catalog
-            .list_databases(Some(&accounting_prefix))
-            .await
-            .unwrap();
-        assert_eq!(accounting_children.len(), 2);
-        assert_eq!(
-            accounting_children[0].database,
-            vec!["accounting".to_string(), "tax".to_string()]
-        );
-        assert_eq!(
-            accounting_children[1].database,
-            vec!["accounting".to_string(), "payroll".to_string()]
-        );
-
-        let engineering_prefix = Namespace::try_from(vec!["engineering".to_string()]).unwrap();
-        let engineering_children = catalog
-            .list_databases(Some(&engineering_prefix))
-            .await
-            .unwrap();
-        assert_eq!(engineering_children.len(), 2);
-        assert_eq!(
-            engineering_children[0].database,
-            vec!["engineering".to_string(), "backend".to_string()]
-        );
-        assert_eq!(
-            engineering_children[1].database,
-            vec!["engineering".to_string(), "frontend".to_string()]
-        );
+    async fn test_list_namespace_parent() {
+        test_list_namespace_parent_impl(None).await;
+        test_list_namespace_parent_impl(Some("test")).await;
     }
 
-    #[tokio::test]
-    async fn test_list_tables_no_prefix() {
-        let server = MockServer::start().await;
-        create_config_mock(&server).await;
+    async fn test_list_tables_impl(prefix: Option<&str>) {
+        let ctx = TestContext::new(prefix).await;
 
-        Mock::given(method("GET"))
-            .and(path("/v1//namespaces/ns1/tables"))
-            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+        ctx.mock_get_json(
+            &ctx.path("/namespaces/ns1/tables"),
+            serde_json::json!({
                 "identifiers": [
                     {
                         "namespace": ["ns1"],
@@ -930,13 +878,12 @@ mod tests {
                         "name": "table2"
                     }
                 ]
-            })))
-            .mount(&server)
-            .await;
+            }),
+        )
+        .await;
 
-        let catalog = create_test_catalog(server.uri(), None);
         let namespace = Namespace::try_from(vec!["ns1".to_string()]).unwrap();
-        let tables = catalog.list_tables(&namespace).await.unwrap();
+        let tables = ctx.catalog.list_tables(&namespace).await.unwrap();
 
         assert_eq!(tables.len(), 2);
         assert_eq!(tables[0].name, "table1");
@@ -947,47 +894,17 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn test_list_tables_with_prefix() {
-        let server = MockServer::start().await;
-        create_config_mock(&server).await;
-
-        Mock::given(method("GET"))
-            .and(path("/v1/test/namespaces/ns1/tables"))
-            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
-                "identifiers": [
-                    {
-                        "namespace": ["ns1"],
-                        "name": "table1"
-                    },
-                    {
-                        "namespace": ["ns1"],
-                        "name": "table2"
-                    }
-                ]
-            })))
-            .mount(&server)
-            .await;
-
-        let catalog = create_test_catalog(server.uri(), Some("test"));
-        let namespace = Namespace::try_from(vec!["ns1".to_string()]).unwrap();
-        let tables = catalog.list_tables(&namespace).await.unwrap();
-
-        assert_eq!(tables.len(), 2);
-        assert_eq!(tables[0].name, "table1");
-        assert_eq!(tables[1].name, "table2");
-
-        assert!(matches!(tables[0].kind, TableKind::Table { .. }));
-        assert!(matches!(tables[1].kind, TableKind::Table { .. }));
+    async fn test_list_tables() {
+        test_list_tables_impl(None).await;
+        test_list_tables_impl(Some("test")).await;
     }
 
-    #[tokio::test]
-    async fn test_list_views_no_prefix() {
-        let server = MockServer::start().await;
-        create_config_mock(&server).await;
+    async fn test_list_views_impl(prefix: Option<&str>) {
+        let ctx = TestContext::new(prefix).await;
 
-        Mock::given(method("GET"))
-            .and(path("/v1//namespaces/ns1/views"))
-            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+        ctx.mock_get_json(
+            &ctx.path("/namespaces/ns1/views"),
+            serde_json::json!({
                 "identifiers": [
                     {
                         "namespace": ["ns1"],
@@ -998,13 +915,12 @@ mod tests {
                         "name": "view2"
                     }
                 ]
-            })))
-            .mount(&server)
-            .await;
+            }),
+        )
+        .await;
 
-        let catalog = create_test_catalog(server.uri(), None);
         let namespace = Namespace::try_from(vec!["ns1".to_string()]).unwrap();
-        let views = catalog.list_views(&namespace).await.unwrap();
+        let views = ctx.catalog.list_views(&namespace).await.unwrap();
 
         assert_eq!(views.len(), 2);
         assert_eq!(views[0].name, "view1");
@@ -1015,36 +931,8 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn test_list_views_with_prefix() {
-        let server = MockServer::start().await;
-        create_config_mock(&server).await;
-
-        Mock::given(method("GET"))
-            .and(path("/v1/test/namespaces/ns1/views"))
-            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
-                "identifiers": [
-                    {
-                        "namespace": ["ns1"],
-                        "name": "view1"
-                    },
-                    {
-                        "namespace": ["ns1"],
-                        "name": "view2"
-                    }
-                ]
-            })))
-            .mount(&server)
-            .await;
-
-        let catalog = create_test_catalog(server.uri(), Some("test"));
-        let namespace = Namespace::try_from(vec!["ns1".to_string()]).unwrap();
-        let views = catalog.list_views(&namespace).await.unwrap();
-
-        assert_eq!(views.len(), 2);
-        assert_eq!(views[0].name, "view1");
-        assert_eq!(views[1].name, "view2");
-
-        assert!(matches!(views[0].kind, TableKind::View { .. }));
-        assert!(matches!(views[1].kind, TableKind::View { .. }));
+    async fn test_list_views() {
+        test_list_views_impl(None).await;
+        test_list_views_impl(Some("test")).await;
     }
 }
