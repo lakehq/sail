@@ -352,7 +352,7 @@ impl CatalogProvider for IcebergRestCatalogProvider {
         let result = api
             .create_namespace(&self.prefix, request)
             .await
-            .map_err(|e| CatalogError::External(format!("Failed to create namespace: {}", e)))?;
+            .map_err(|e| CatalogError::External(format!("Failed to create namespace: {e}")))?;
 
         let comment = result
             .properties
@@ -451,7 +451,7 @@ impl CatalogProvider for IcebergRestCatalogProvider {
             .catalog_api_api()
             .list_namespaces(&self.prefix, None, None, parent.as_deref())
             .await
-            .map_err(|e| CatalogError::External(format!("Failed to list namespaces: {}", e)))?;
+            .map_err(|e| CatalogError::External(format!("Failed to list namespaces: {e}")))?;
         let catalog = &self.name;
         Ok(result
             .namespaces
@@ -540,7 +540,7 @@ impl CatalogProvider for IcebergRestCatalogProvider {
         let result = api
             .create_table(&self.prefix, &database.to_string(), request, None)
             .await
-            .map_err(|e| CatalogError::External(format!("Failed to create table: {}", e)))?;
+            .map_err(|e| CatalogError::External(format!("Failed to create table: {e}")))?;
 
         self.load_table_result_to_status(table, database, result)
     }
@@ -550,7 +550,9 @@ impl CatalogProvider for IcebergRestCatalogProvider {
         let result = api
             .load_table(&self.prefix, &database.to_string(), table, None, None, None)
             .await
-            .map_err(|_e| CatalogError::NotFound("table", format!("{database}.{table}")))?;
+            .map_err(|e| {
+                CatalogError::External(format!("Failed to load table {database}.{table}: {e}"))
+            })?;
         self.load_table_result_to_status(table, database, result)
     }
 
@@ -694,7 +696,7 @@ impl CatalogProvider for IcebergRestCatalogProvider {
         let result = api
             .create_view(&self.prefix, &database.to_string(), request)
             .await
-            .map_err(|e| CatalogError::External(format!("Failed to create view: {}", e)))?;
+            .map_err(|e| CatalogError::External(format!("Failed to create view: {e}")))?;
 
         self.load_view_result_to_status(view, database, result)
     }
@@ -704,7 +706,9 @@ impl CatalogProvider for IcebergRestCatalogProvider {
         let result = api
             .load_view(&self.prefix, &database.to_string(), view)
             .await
-            .map_err(|_e| CatalogError::NotFound("view", format!("{database}.{view}")))?;
+            .map_err(|e| {
+                CatalogError::External(format!("Failed to load view {database}.{view}: {e}"))
+            })?;
         self.load_view_result_to_status(view, database, result)
     }
 
@@ -714,7 +718,7 @@ impl CatalogProvider for IcebergRestCatalogProvider {
             .catalog_api_api()
             .list_views(&self.prefix, &database.to_string(), None, None)
             .await
-            .map_err(|e| CatalogError::External(format!("Failed to list views: {}", e)))?;
+            .map_err(|e| CatalogError::External(format!("Failed to list views: {e}")))?;
         let catalog = &self.name;
         Ok(result
             .identifiers
@@ -757,7 +761,7 @@ impl CatalogProvider for IcebergRestCatalogProvider {
     }
 }
 
-#[allow(clippy::unwrap_used)]
+#[allow(clippy::unwrap_used, clippy::panic)]
 #[cfg(test)]
 mod tests {
     use std::sync::Arc;
@@ -817,9 +821,9 @@ mod tests {
 
         fn path(&self, suffix: &str) -> String {
             if self.prefix.is_empty() {
-                format!("/v1/{}", suffix)
+                format!("/v1/{suffix}")
             } else {
-                format!("/v1/{}{}", self.prefix, suffix)
+                format!("/v1/{}{suffix}", self.prefix)
             }
         }
 
@@ -1259,5 +1263,262 @@ mod tests {
     async fn test_drop_view() {
         test_drop_view_impl(None).await;
         test_drop_view_impl(Some("test")).await;
+    }
+
+    async fn test_get_table_impl(prefix: Option<&str>) {
+        let ctx = TestContext::new(prefix).await;
+        let namespace = Namespace::try_from(vec!["db1".to_string()]).unwrap();
+
+        ctx.mock_get_json(
+            &ctx.path("/namespaces/db1/tables/table1"),
+            serde_json::json!({
+                "metadata-location": "s3://bucket/table/metadata/v1.metadata.json",
+                "metadata": {
+                    "format-version": 2,
+                    "table-uuid": "12345678-1234-1234-1234-123456789012",
+                    "location": "s3://bucket/table",
+                    "current-schema-id": 0,
+                    "schemas": [
+                        {
+                            "type": "struct",
+                            "schema-id": 0,
+                            "fields": [
+                                {
+                                    "id": 1,
+                                    "name": "id",
+                                    "required": true,
+                                    "type": "long"
+                                },
+                                {
+                                    "id": 2,
+                                    "name": "data",
+                                    "required": false,
+                                    "type": "string",
+                                    "doc": "data column"
+                                },
+                                {
+                                    "id": 3,
+                                    "name": "category",
+                                    "required": true,
+                                    "type": "string"
+                                }
+                            ],
+                            "identifier-field-ids": [1]
+                        }
+                    ],
+                    "default-spec-id": 0,
+                    "partition-specs": [
+                        {
+                            "spec-id": 0,
+                            "fields": [
+                                {
+                                    "source-id": 3,
+                                    "field-id": 1000,
+                                    "name": "category",
+                                    "transform": "identity"
+                                }
+                            ]
+                        }
+                    ],
+                    "default-sort-order-id": 1,
+                    "sort-orders": [
+                        {
+                            "order-id": 1,
+                            "fields": [
+                                {
+                                    "source-id": 1,
+                                    "transform": "identity",
+                                    "direction": "asc",
+                                    "null-order": "nulls-first"
+                                }
+                            ]
+                        }
+                    ],
+                    "properties": {
+                        "comment": "test table",
+                        "owner": "test_user"
+                    }
+                }
+            }),
+        )
+        .await;
+
+        let result = ctx.catalog.get_table(&namespace, "table1").await.unwrap();
+
+        assert_eq!(result.name, "table1");
+        match result.kind {
+            TableKind::Table {
+                catalog,
+                database,
+                columns,
+                comment,
+                constraints,
+                location,
+                format,
+                partition_by,
+                sort_by,
+                properties,
+                ..
+            } => {
+                assert_eq!(catalog, "test_catalog");
+                assert_eq!(database, vec!["db1".to_string()]);
+                assert_eq!(columns.len(), 3);
+
+                assert_eq!(columns[0].name, "id");
+                assert!(!columns[0].nullable);
+                assert!(!columns[0].is_partition);
+                assert_eq!(columns[0].comment, None);
+
+                assert_eq!(columns[1].name, "data");
+                assert!(columns[1].nullable);
+                assert_eq!(columns[1].comment, Some("data column".to_string()));
+
+                assert_eq!(columns[2].name, "category");
+                assert!(!columns[2].nullable);
+                assert!(columns[2].is_partition);
+
+                assert_eq!(comment, Some("test table".to_string()));
+                assert_eq!(location, Some("s3://bucket/table".to_string()));
+                assert_eq!(format, "iceberg");
+
+                assert_eq!(partition_by, vec!["category".to_string()]);
+
+                assert_eq!(sort_by.len(), 1);
+                assert_eq!(sort_by[0].column, "id");
+                assert!(sort_by[0].ascending);
+
+                assert_eq!(constraints.len(), 1);
+                match &constraints[0] {
+                    CatalogTableConstraint::PrimaryKey { name, columns } => {
+                        assert_eq!(name, &None);
+                        assert_eq!(columns, &vec!["id".to_string()]);
+                    }
+                    _ => panic!("Expected PrimaryKey constraint"),
+                }
+
+                assert!(properties
+                    .iter()
+                    .any(|(k, v)| k == "comment" && v == "test table"));
+                assert!(properties
+                    .iter()
+                    .any(|(k, v)| k == "owner" && v == "test_user"));
+            }
+            _ => panic!("Expected Table kind"),
+        }
+    }
+
+    #[tokio::test]
+    async fn test_get_table() {
+        test_get_table_impl(None).await;
+        test_get_table_impl(Some("test")).await;
+    }
+
+    async fn test_get_view_impl(prefix: Option<&str>) {
+        let ctx = TestContext::new(prefix).await;
+        let namespace = Namespace::try_from(vec!["db1".to_string()]).unwrap();
+
+        ctx.mock_get_json(
+            &ctx.path("/namespaces/db1/views/view1"),
+            serde_json::json!({
+                "metadata-location": "s3://bucket/view/metadata/v1.metadata.json",
+                "metadata": {
+                    "view-uuid": "87654321-4321-4321-4321-210987654321",
+                    "format-version": 1,
+                    "location": "s3://bucket/view",
+                    "current-version-id": 1,
+                    "versions": [
+                        {
+                            "version-id": 1,
+                            "timestamp-ms": 1234567890000_i64,
+                            "schema-id": 0,
+                            "summary": {
+                                "operation": "create"
+                            },
+                            "representations": [
+                                {
+                                    "type": "sql",
+                                    "sql": "SELECT id, data FROM table1 WHERE id > 100",
+                                    "dialect": "spark"
+                                }
+                            ],
+                            "default-namespace": ["db1"]
+                        }
+                    ],
+                    "schemas": [
+                        {
+                            "type": "struct",
+                            "schema-id": 0,
+                            "fields": [
+                                {
+                                    "id": 1,
+                                    "name": "id",
+                                    "required": true,
+                                    "type": "long"
+                                },
+                                {
+                                    "id": 2,
+                                    "name": "data",
+                                    "required": false,
+                                    "type": "string",
+                                    "doc": "filtered data"
+                                }
+                            ]
+                        }
+                    ],
+                    "properties": {
+                        "comment": "test view",
+                        "created_by": "test_user"
+                    },
+                    "version-log": [
+                        {
+                            "version-id": 1,
+                            "timestamp-ms": 1234567890000_i64
+                        }
+                    ]
+                }
+            }),
+        )
+        .await;
+
+        let result = ctx.catalog.get_view(&namespace, "view1").await.unwrap();
+
+        assert_eq!(result.name, "view1");
+        match result.kind {
+            TableKind::View {
+                catalog,
+                database,
+                definition,
+                columns,
+                comment,
+                properties,
+            } => {
+                assert_eq!(catalog, "test_catalog");
+                assert_eq!(database, vec!["db1".to_string()]);
+                assert_eq!(definition, "SELECT id, data FROM table1 WHERE id > 100");
+
+                assert_eq!(columns.len(), 2);
+                assert_eq!(columns[0].name, "id");
+                assert!(!columns[0].nullable);
+
+                assert_eq!(columns[1].name, "data");
+                assert!(columns[1].nullable);
+                assert_eq!(columns[1].comment, Some("filtered data".to_string()));
+
+                assert_eq!(comment, Some("test view".to_string()));
+                assert!(properties
+                    .iter()
+                    .any(|(k, v)| k == "comment" && v == "test view"));
+                assert!(properties
+                    .iter()
+                    .any(|(k, v)| k == "created_by" && v == "test_user"));
+            }
+            _ => panic!("Expected View kind"),
+        }
+    }
+
+    #[tokio::test]
+    async fn test_get_view() {
+        test_get_view_impl(None).await;
+        test_get_view_impl(Some("test")).await;
     }
 }
