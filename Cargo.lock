@@ -5805,6 +5805,7 @@ dependencies = [
  "sail-data-source",
  "sail-delta-lake",
  "sail-function",
+ "sail-iceberg",
  "sail-logical-plan",
  "sail-object-store",
  "sail-physical-plan",

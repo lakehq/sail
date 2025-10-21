@@ -53,6 +53,14 @@ impl IcebergCommitExec {
             cache,
         }
     }
+
+    pub fn table_url(&self) -> &Url {
+        &self.table_url
+    }
+
+    pub fn input(&self) -> &Arc<dyn ExecutionPlan> {
+        &self.input
+    }
 }
 
 #[async_trait]

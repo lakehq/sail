@@ -41,6 +41,8 @@ message ExtendedPhysicalPlanNode {
     StreamCollectorExecNode stream_collector = 27;
     StreamLimitExecNode stream_limit = 28;
     StreamSourceAdapterExecNode stream_source_adapter = 29;
+    IcebergWriterExecNode iceberg_writer = 30;
+    IcebergCommitExecNode iceberg_commit = 31;
   }
 }
 
@@ -514,4 +516,17 @@ enum CompressionTypeVariant {
   COMPRESSION_TYPE_VARIANT_XZ = 2;
   COMPRESSION_TYPE_VARIANT_ZSTD = 3;
   COMPRESSION_TYPE_VARIANT_UNCOMPRESSED = 4;
+}
+
+message IcebergWriterExecNode {
+  bytes input = 1;
+  string table_url = 2;
+  repeated string partition_columns = 3;
+  PhysicalSinkMode sink_mode = 4;
+  bool table_exists = 5;
+}
+
+message IcebergCommitExecNode {
+  bytes input = 1;
+  string table_url = 2;
 }

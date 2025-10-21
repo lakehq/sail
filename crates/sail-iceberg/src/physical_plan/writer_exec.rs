@@ -62,6 +62,26 @@ impl IcebergWriterExec {
             cache,
         }
     }
+
+    pub fn table_url(&self) -> &Url {
+        &self.table_url
+    }
+
+    pub fn partition_columns(&self) -> &[String] {
+        &self.partition_columns
+    }
+
+    pub fn sink_mode(&self) -> &PhysicalSinkMode {
+        &self.sink_mode
+    }
+
+    pub fn table_exists(&self) -> bool {
+        self.table_exists
+    }
+
+    pub fn input(&self) -> &Arc<dyn ExecutionPlan> {
+        &self.input
+    }
 }
 
 #[async_trait]
