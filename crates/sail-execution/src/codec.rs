@@ -53,7 +53,6 @@ use sail_delta_lake::physical_plan::{
     DeltaCommitExec, DeltaFindFilesExec, DeltaRemoveActionsExec, DeltaScanByAddsExec,
     DeltaWriterExec,
 };
-use sail_iceberg::physical_plan::{IcebergCommitExec, IcebergWriterExec};
 use sail_function::aggregate::kurtosis::KurtosisFunction;
 use sail_function::aggregate::max_min_by::{MaxByFunction, MinByFunction};
 use sail_function::aggregate::mode::ModeFunction;
@@ -133,6 +132,7 @@ use sail_function::scalar::url::parse_url::ParseUrl;
 use sail_function::scalar::url::spark_try_parse_url::SparkTryParseUrl;
 use sail_function::scalar::url::url_decode::UrlDecode;
 use sail_function::scalar::url::url_encode::UrlEncode;
+use sail_iceberg::physical_plan::{IcebergCommitExec, IcebergWriterExec};
 use sail_logical_plan::range::Range;
 use sail_logical_plan::show_string::{ShowStringFormat, ShowStringStyle};
 use sail_physical_plan::map_partitions::MapPartitionsExec;
