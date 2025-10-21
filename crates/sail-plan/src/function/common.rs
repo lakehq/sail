@@ -99,6 +99,22 @@ impl ScalarFunctionBuilder {
         )
     }
 
+    pub fn quaternary<F, R>(f: F) -> ScalarFunction
+    where
+        F: Fn(expr::Expr, expr::Expr, expr::Expr, expr::Expr) -> R + Send + Sync + 'static,
+        R: IntoPlanResult<expr::Expr>,
+    {
+        Arc::new(
+            move |ScalarFunctionInput {
+                      arguments,
+                      function_context: _,
+                  }| {
+                let (first, second, third, fourth) = arguments.four()?;
+                f(first, second, third, fourth).into_plan_result()
+            },
+        )
+    }
+
     pub fn var_arg<F, R>(f: F) -> ScalarFunction
     where
         F: Fn(Vec<expr::Expr>) -> R + Send + Sync + 'static,

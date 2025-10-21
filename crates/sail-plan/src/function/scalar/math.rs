@@ -5,7 +5,7 @@ use datafusion::arrow::error::ArrowError;
 use datafusion::functions::expr_fn;
 use datafusion_common::ScalarValue;
 use datafusion_expr::{cast, expr, lit, Expr, ExprSchemable, Operator, ScalarUDF};
-use datafusion_spark::function::math::expm1::SparkExpm1;
+use datafusion_spark::function::math::expr_fn as math_fn;
 use half::f16;
 use sail_common_datafusion::utils::items::ItemTaker;
 use sail_function::error::generic_exec_err;
@@ -19,14 +19,12 @@ use sail_function::scalar::math::spark_bround::SparkBRound;
 use sail_function::scalar::math::spark_ceil_floor::{SparkCeil, SparkFloor};
 use sail_function::scalar::math::spark_conv::SparkConv;
 use sail_function::scalar::math::spark_hex_unhex::{SparkHex, SparkUnHex};
-use sail_function::scalar::math::spark_pmod::SparkPmod;
 use sail_function::scalar::math::spark_signum::SparkSignum;
 use sail_function::scalar::math::spark_try_add::SparkTryAdd;
 use sail_function::scalar::math::spark_try_div::SparkTryDiv;
 use sail_function::scalar::math::spark_try_mod::SparkTryMod;
 use sail_function::scalar::math::spark_try_mult::SparkTryMult;
 use sail_function::scalar::math::spark_try_subtract::SparkTrySubtract;
-use sail_function::scalar::math::spark_width_bucket::SparkWidthBucket;
 
 use crate::error::{PlanError, PlanResult};
 use crate::function::common::{ScalarFunction, ScalarFunctionInput};
@@ -443,7 +441,7 @@ pub(super) fn list_built_in_math_functions() -> Vec<(&'static str, ScalarFunctio
         ("div", F::custom(spark_div)),
         ("e", F::nullary(eulers_constant)),
         ("exp", F::unary(double(expr_fn::exp))),
-        ("expm1", F::udf(SparkExpm1::new())),
+        ("expm1", F::unary(math_fn::expm1)),
         ("factorial", F::unary(expr_fn::factorial)),
         ("floor", F::custom(|arg| ceil_floor(arg, "floor"))),
         ("greatest", F::udf(least_greatest::Greatest::new())),
@@ -458,7 +456,7 @@ pub(super) fn list_built_in_math_functions() -> Vec<(&'static str, ScalarFunctio
         ("mod", F::binary_op(Operator::Modulo)),
         ("negative", F::unary(|x| Expr::Negative(Box::new(x)))),
         ("pi", F::nullary(expr_fn::pi)),
-        ("pmod", F::udf(SparkPmod::new())),
+        ("pmod", F::binary(math_fn::pmod)),
         ("positive", F::unary(positive)),
         ("pow", F::binary(power)),
         ("power", F::binary(power)),
@@ -484,6 +482,6 @@ pub(super) fn list_built_in_math_functions() -> Vec<(&'static str, ScalarFunctio
         ("try_subtract", F::udf(SparkTrySubtract::new())),
         ("unhex", F::udf(SparkUnHex::new())),
         ("uniform", F::unknown("uniform")),
-        ("width_bucket", F::udf(SparkWidthBucket::new())),
+        ("width_bucket", F::quaternary(math_fn::width_bucket)),
     ]
 }

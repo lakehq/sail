@@ -3,10 +3,9 @@ use std::sync::Arc;
 use datafusion::functions::expr_fn;
 use datafusion_common::ScalarValue;
 use datafusion_expr::{expr, ScalarUDF};
+use datafusion_spark::function::hash::expr_fn as hash_fn;
 use sail_common_datafusion::utils::items::ItemTaker;
-use sail_function::scalar::hash::spark_crc32::SparkCrc32;
 use sail_function::scalar::hash::spark_murmur3_hash::SparkMurmur3Hash;
-use sail_function::scalar::hash::spark_sha1::SparkSha1;
 use sail_function::scalar::hash::spark_xxhash64::SparkXxhash64;
 use sail_function::scalar::math::spark_hex_unhex::SparkHex;
 
@@ -39,11 +38,11 @@ pub(super) fn list_built_in_hash_functions() -> Vec<(&'static str, ScalarFunctio
     use crate::function::common::ScalarFunctionBuilder as F;
 
     vec![
-        ("crc32", F::udf(SparkCrc32::new())),
+        ("crc32", F::unary(hash_fn::crc32)),
         ("hash", F::udf(SparkMurmur3Hash::new())),
         ("md5", F::unary(expr_fn::md5)),
-        ("sha", F::udf(SparkSha1::new())),
-        ("sha1", F::udf(SparkSha1::new())),
+        ("sha", F::unary(hash_fn::sha1)),
+        ("sha1", F::unary(hash_fn::sha1)),
         ("sha2", F::custom(sha2)),
         ("xxhash64", F::udf(SparkXxhash64::new())),
     ]
