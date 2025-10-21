@@ -3,9 +3,10 @@ use std::sync::Arc;
 
 use sail_catalog::error::{CatalogError, CatalogResult};
 use sail_catalog::provider::{
-    CatalogProvider, CreateDatabaseOptions, CreateTableColumnOptions, CreateTableOptions,
-    CreateViewColumnOptions, CreateViewOptions, DatabaseStatus, DropDatabaseOptions,
-    DropTableOptions, DropViewOptions, Namespace, TableColumnStatus, TableKind, TableStatus,
+    CatalogProvider, CatalogTableConstraint, CatalogTableSort, CreateDatabaseOptions,
+    CreateTableColumnOptions, CreateTableOptions, CreateViewColumnOptions, CreateViewOptions,
+    DatabaseStatus, DropDatabaseOptions, DropTableOptions, DropViewOptions, Namespace,
+    TableColumnStatus, TableKind, TableStatus,
 };
 use sail_common::runtime::RuntimeHandle;
 use sail_iceberg::{arrow_type_to_iceberg, iceberg_type_to_arrow, NestedField};
@@ -38,24 +39,55 @@ impl IcebergRestCatalogProvider {
         }
     }
 
-    // CHECK HERE
     fn load_table_result_to_status(
         &self,
         table_name: &str,
         database: &Namespace,
-        result: &crate::models::LoadTableResult,
+        result: crate::models::LoadTableResult,
     ) -> CatalogResult<TableStatus> {
         let metadata = &result.metadata;
 
         let current_schema = if let Some(schemas) = &metadata.schemas {
-            let schema_id = metadata.current_schema_id.unwrap_or(0);
-            schemas
-                .iter()
-                .find(|s| s.schema_id == Some(schema_id))
-                .or_else(|| schemas.first())
+            if let Some(schema_id) = metadata.current_schema_id {
+                schemas
+                    .iter()
+                    .find(|s| s.schema_id == Some(schema_id))
+                    .or_else(|| schemas.last())
+            } else {
+                schemas.last()
+            }
         } else {
             None
         };
+
+        let default_partition_spec = metadata.partition_specs.as_ref().and_then(|specs| {
+            if let Some(spec_id) = metadata.default_spec_id {
+                specs
+                    .iter()
+                    .find(|s| s.spec_id == Some(spec_id))
+                    .or_else(|| specs.last())
+            } else {
+                specs.last()
+            }
+        });
+
+        let partition_field_ids: std::collections::HashSet<i32> = default_partition_spec
+            .map(|spec| spec.fields.iter().map(|f| f.source_id).collect())
+            .unwrap_or_default();
+
+        let bucket_field_ids: std::collections::HashSet<i32> = default_partition_spec
+            .map(|spec| {
+                spec.fields
+                    .iter()
+                    .filter(|f| f.transform.trim().to_lowercase().starts_with("bucket"))
+                    .map(|f| f.source_id)
+                    .collect()
+            })
+            .unwrap_or_default();
+
+        let partition_by: Vec<String> = default_partition_spec
+            .map(|spec| spec.fields.iter().map(|f| f.name.clone()).collect())
+            .unwrap_or_default();
 
         let columns = if let Some(schema) = current_schema {
             let mut cols = Vec::new();
@@ -66,6 +98,7 @@ impl IcebergRestCatalogProvider {
                         field.name
                     ))
                 })?;
+                let field_id = field.id;
                 cols.push(TableColumnStatus {
                     name: field.name.clone(),
                     data_type,
@@ -73,8 +106,8 @@ impl IcebergRestCatalogProvider {
                     comment: field.doc.clone(),
                     default: None,
                     generated_always_as: None,
-                    is_partition: false,
-                    is_bucket: false,
+                    is_partition: partition_field_ids.contains(&field_id),
+                    is_bucket: bucket_field_ids.contains(&field_id),
                     is_cluster: false,
                 });
             }
@@ -83,18 +116,85 @@ impl IcebergRestCatalogProvider {
             Vec::new()
         };
 
-        let comment = metadata
-            .properties
-            .as_ref()
-            .and_then(|p| p.get("comment"))
-            .cloned();
+        let default_sort_order = metadata.sort_orders.as_ref().and_then(|orders| {
+            if let Some(order_id) = metadata.default_sort_order_id {
+                orders
+                    .iter()
+                    .find(|o| o.order_id == order_id)
+                    .or_else(|| orders.last())
+            } else {
+                orders.last()
+            }
+        });
+
+        let sort_by: Vec<CatalogTableSort> = default_sort_order
+            .map(|order| {
+                order
+                    .fields
+                    .iter()
+                    .filter_map(|sort_field| {
+                        let field_id = sort_field.source_id;
+                        current_schema.and_then(|schema| {
+                            schema
+                                .fields
+                                .iter()
+                                .find(|f| f.id == field_id)
+                                .map(|field| {
+                                    let ascending = match sort_field.direction {
+                                        crate::models::SortDirection::Asc => true,
+                                        crate::models::SortDirection::Desc => false,
+                                    };
+                                    CatalogTableSort {
+                                        column: field.name.clone(),
+                                        ascending,
+                                    }
+                                })
+                        })
+                    })
+                    .collect()
+            })
+            .unwrap_or_default();
+
+        let constraints = current_schema
+            .and_then(|schema| {
+                schema.identifier_field_ids.as_ref().and_then(|ids| {
+                    if ids.is_empty() {
+                        None
+                    } else {
+                        let pk_columns: Vec<String> = ids
+                            .iter()
+                            .filter_map(|id| {
+                                schema
+                                    .fields
+                                    .iter()
+                                    .find(|f| f.id == *id)
+                                    .map(|f| f.name.clone())
+                            })
+                            .collect();
+                        if pk_columns.is_empty() {
+                            None
+                        } else {
+                            Some(vec![CatalogTableConstraint::PrimaryKey {
+                                name: None,
+                                columns: pk_columns,
+                            }])
+                        }
+                    }
+                })
+            })
+            .unwrap_or_default();
+
+        let comment = metadata.properties.as_ref().and_then(|p| {
+            p.iter()
+                .find(|(k, _)| k.trim().to_lowercase() == "comment")
+                .map(|(_, v)| v.clone())
+        });
 
         let properties: Vec<_> = metadata
             .properties
             .clone()
             .unwrap_or_default()
             .into_iter()
-            .filter(|(k, _)| k != "comment")
             .collect();
 
         Ok(TableStatus {
@@ -104,11 +204,11 @@ impl IcebergRestCatalogProvider {
                 database: database.clone().into(),
                 columns,
                 comment,
-                constraints: Vec::new(),
+                constraints,
                 location: metadata.location.clone(),
                 format: "iceberg".to_string(),
-                partition_by: Vec::new(),
-                sort_by: Vec::new(),
+                partition_by,
+                sort_by,
                 bucket_by: None,
                 options: Vec::new(),
                 properties,
@@ -116,12 +216,11 @@ impl IcebergRestCatalogProvider {
         })
     }
 
-    // CHECK HERE
     fn load_view_result_to_status(
         &self,
         view_name: &str,
         database: &Namespace,
-        result: &crate::models::LoadViewResult,
+        result: crate::models::LoadViewResult,
     ) -> CatalogResult<TableStatus> {
         let metadata = &result.metadata;
 
@@ -136,7 +235,7 @@ impl IcebergRestCatalogProvider {
                 .iter()
                 .find(|s| s.schema_id == Some(version.schema_id))
         } else {
-            metadata.schemas.first()
+            metadata.schemas.last()
         };
 
         let columns = if let Some(schema) = current_schema {
@@ -166,22 +265,26 @@ impl IcebergRestCatalogProvider {
         };
 
         let definition = current_version
-            .and_then(|v| v.representations.first())
+            .and_then(|v| {
+                v.representations
+                    .iter()
+                    .find(|r| r.dialect.trim().to_lowercase() == "spark")
+                    .or_else(|| v.representations.last())
+            })
             .map(|r| r.sql.clone())
             .unwrap_or_default();
 
-        let comment = metadata
-            .properties
-            .as_ref()
-            .and_then(|p| p.get("comment"))
-            .cloned();
+        let comment = metadata.properties.as_ref().and_then(|p| {
+            p.iter()
+                .find(|(k, _)| k.trim().to_lowercase() == "comment")
+                .map(|(_, v)| v.clone())
+        });
 
         let properties: Vec<_> = metadata
             .properties
             .clone()
             .unwrap_or_default()
             .into_iter()
-            .filter(|(k, _)| k != "comment")
             .collect();
 
         Ok(TableStatus {
@@ -439,17 +542,16 @@ impl CatalogProvider for IcebergRestCatalogProvider {
             .await
             .map_err(|e| CatalogError::External(format!("Failed to create table: {}", e)))?;
 
-        self.load_table_result_to_status(table, database, &result)
+        self.load_table_result_to_status(table, database, result)
     }
 
-    // CHECK HERE
     async fn get_table(&self, database: &Namespace, table: &str) -> CatalogResult<TableStatus> {
         let api = self.client.catalog_api_api();
         let result = api
             .load_table(&self.prefix, &database.to_string(), table, None, None, None)
             .await
             .map_err(|_e| CatalogError::NotFound("table", format!("{database}.{table}")))?;
-        self.load_table_result_to_status(table, database, &result)
+        self.load_table_result_to_status(table, database, result)
     }
 
     async fn list_tables(&self, database: &Namespace) -> CatalogResult<Vec<TableStatus>> {
@@ -484,7 +586,6 @@ impl CatalogProvider for IcebergRestCatalogProvider {
             .collect())
     }
 
-    // CHECK HERE, IS THE COMMENT IN DROP TABLE ABOUT PURGE CORRECT FOR ICEBERG?
     async fn drop_table(
         &self,
         database: &Namespace,
@@ -595,17 +696,16 @@ impl CatalogProvider for IcebergRestCatalogProvider {
             .await
             .map_err(|e| CatalogError::External(format!("Failed to create view: {}", e)))?;
 
-        self.load_view_result_to_status(view, database, &result)
+        self.load_view_result_to_status(view, database, result)
     }
 
-    // CHECK HERE
     async fn get_view(&self, database: &Namespace, view: &str) -> CatalogResult<TableStatus> {
         let api = self.client.catalog_api_api();
         let result = api
             .load_view(&self.prefix, &database.to_string(), view)
             .await
             .map_err(|_e| CatalogError::NotFound("view", format!("{database}.{view}")))?;
-        self.load_view_result_to_status(view, database, &result)
+        self.load_view_result_to_status(view, database, result)
     }
 
     async fn list_views(&self, database: &Namespace) -> CatalogResult<Vec<TableStatus>> {
