@@ -1074,6 +1074,25 @@ mod tests {
         assert!(result.is_ok());
 
         ctx.mock_delete_404(
+            &ctx.path("/namespaces/ns1/tables/table3"),
+            "NoSuchTableException",
+            "The given table does not exist",
+        )
+        .await;
+        let result = ctx
+            .catalog
+            .drop_table(
+                &namespace,
+                "table3",
+                DropTableOptions {
+                    if_exists: true,
+                    purge: true,
+                },
+            )
+            .await;
+        assert!(result.is_ok());
+
+        ctx.mock_delete_404(
             &ctx.path("/namespaces/ns1/tables/table4"),
             "NoSuchTableException",
             "The given table does not exist",
