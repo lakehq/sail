@@ -292,10 +292,11 @@ impl CatalogProvider for IcebergRestCatalogProvider {
             .await
         {
             Ok(_) => Ok(()),
-            Err(apis::Error::ResponseError(apis::ResponseContent {
-                entity: Some(apis::catalog_api_api::DropNamespaceError::Status404(_)),
-                ..
-            })) if if_exists => Ok(()),
+            Err(apis::Error::ResponseError(apis::ResponseContent { status, .. }))
+                if status == 404 && if_exists =>
+            {
+                Ok(())
+            }
             Err(e) => Err(CatalogError::External(format!(
                 "Failed to drop namespace: {e}"
             ))),
@@ -490,9 +491,6 @@ impl CatalogProvider for IcebergRestCatalogProvider {
         table: &str,
         options: DropTableOptions,
     ) -> CatalogResult<()> {
-        // In Spark, the `DROP TABLE ... PURGE` SQL statement deletes data if the table
-        // is managed by the Hive metastore. `PURGE` is ignored if the table is external.
-        // In Sail, all tables are external, so we ignore the `purge` option.
         let DropTableOptions { if_exists, purge } = options;
         let api = self.client.catalog_api_api();
         match api
@@ -500,10 +498,11 @@ impl CatalogProvider for IcebergRestCatalogProvider {
             .await
         {
             Ok(_) => Ok(()),
-            Err(apis::Error::ResponseError(apis::ResponseContent {
-                entity: Some(apis::catalog_api_api::DropTableError::Status404(_)),
-                ..
-            })) if if_exists => Ok(()),
+            Err(apis::Error::ResponseError(apis::ResponseContent { status, .. }))
+                if status == 404 && if_exists =>
+            {
+                Ok(())
+            }
             Err(e) => Err(CatalogError::External(format!("Failed to drop table: {e}"))),
         }
     }
@@ -648,10 +647,11 @@ impl CatalogProvider for IcebergRestCatalogProvider {
             .await
         {
             Ok(_) => Ok(()),
-            Err(apis::Error::ResponseError(apis::ResponseContent {
-                entity: Some(apis::catalog_api_api::DropViewError::Status404(_)),
-                ..
-            })) if if_exists => Ok(()),
+            Err(apis::Error::ResponseError(apis::ResponseContent { status, .. }))
+                if status == 404 && if_exists =>
+            {
+                Ok(())
+            }
             Err(e) => Err(CatalogError::External(format!("Failed to drop view: {e}"))),
         }
     }
@@ -664,7 +664,7 @@ mod tests {
 
     use sail_common::config::AppConfig;
     use sail_common::runtime::RuntimeManager;
-    use wiremock::matchers::{method, path};
+    use wiremock::matchers::{method, path, query_param, query_param_is_missing};
     use wiremock::{Mock, MockServer, ResponseTemplate};
 
     use super::*;
@@ -746,6 +746,20 @@ mod tests {
                 .mount(&self.server)
                 .await;
         }
+
+        async fn mock_delete_404(&self, path_str: &str, error_type: &str, message: &str) {
+            Mock::given(method("DELETE"))
+                .and(path(path_str))
+                .respond_with(ResponseTemplate::new(404).set_body_json(serde_json::json!({
+                    "error": {
+                        "message": message,
+                        "type": error_type,
+                        "code": 404
+                    }
+                })))
+                .mount(&self.server)
+                .await;
+        }
     }
 
     async fn test_list_namespace_impl(prefix: Option<&str>) {
@@ -784,7 +798,7 @@ mod tests {
 
         Mock::given(method("GET"))
             .and(path(ns_path.as_str()))
-            .and(wiremock::matchers::query_param_is_missing("parent"))
+            .and(query_param_is_missing("parent"))
             .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
                 "namespaces": [
                     ["accounting"],
@@ -796,7 +810,7 @@ mod tests {
 
         Mock::given(method("GET"))
             .and(path(ns_path.as_str()))
-            .and(wiremock::matchers::query_param("parent", "accounting"))
+            .and(query_param("parent", "accounting"))
             .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
                 "namespaces": [
                     ["accounting", "tax"],
@@ -808,7 +822,7 @@ mod tests {
 
         Mock::given(method("GET"))
             .and(path(ns_path.as_str()))
-            .and(wiremock::matchers::query_param("parent", "engineering"))
+            .and(query_param("parent", "engineering"))
             .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
                 "namespaces": [
                     ["engineering", "backend"],
@@ -934,5 +948,197 @@ mod tests {
     async fn test_list_views() {
         test_list_views_impl(None).await;
         test_list_views_impl(Some("test")).await;
+    }
+
+    async fn test_drop_database_impl(prefix: Option<&str>) {
+        let ctx = TestContext::new(prefix).await;
+
+        ctx.mock_delete(&ctx.path("/namespaces/db1")).await;
+        let namespace = Namespace::try_from(vec!["db1".to_string()]).unwrap();
+        let result = ctx
+            .catalog
+            .drop_database(
+                &namespace,
+                DropDatabaseOptions {
+                    if_exists: false,
+                    cascade: false,
+                },
+            )
+            .await;
+        assert!(result.is_ok());
+
+        ctx.mock_delete_404(
+            &ctx.path("/namespaces/db2"),
+            "NoSuchNamespaceException",
+            "The given namespace does not exist",
+        )
+        .await;
+        let namespace = Namespace::try_from(vec!["db2".to_string()]).unwrap();
+        let result = ctx
+            .catalog
+            .drop_database(
+                &namespace,
+                DropDatabaseOptions {
+                    if_exists: true,
+                    cascade: false,
+                },
+            )
+            .await;
+        assert!(result.is_ok());
+
+        ctx.mock_delete_404(
+            &ctx.path("/namespaces/db3"),
+            "NoSuchNamespaceException",
+            "The given namespace does not exist",
+        )
+        .await;
+        let namespace = Namespace::try_from(vec!["db3".to_string()]).unwrap();
+        let result = ctx
+            .catalog
+            .drop_database(
+                &namespace,
+                DropDatabaseOptions {
+                    if_exists: false,
+                    cascade: false,
+                },
+            )
+            .await;
+        assert!(result.is_err());
+    }
+
+    #[tokio::test]
+    async fn test_drop_database() {
+        test_drop_database_impl(None).await;
+        test_drop_database_impl(Some("test")).await;
+    }
+
+    async fn test_drop_table_impl(prefix: Option<&str>) {
+        let ctx = TestContext::new(prefix).await;
+        let namespace = Namespace::try_from(vec!["ns1".to_string()]).unwrap();
+
+        Mock::given(method("DELETE"))
+            .and(path(ctx.path("/namespaces/ns1/tables/table1").as_str()))
+            .and(query_param("purgeRequested", "true"))
+            .respond_with(ResponseTemplate::new(204))
+            .mount(&ctx.server)
+            .await;
+        let result = ctx
+            .catalog
+            .drop_table(
+                &namespace,
+                "table1",
+                DropTableOptions {
+                    if_exists: false,
+                    purge: true,
+                },
+            )
+            .await;
+        assert!(result.is_ok());
+
+        Mock::given(method("DELETE"))
+            .and(path(ctx.path("/namespaces/ns1/tables/table2").as_str()))
+            .and(query_param("purgeRequested", "false"))
+            .respond_with(ResponseTemplate::new(204))
+            .mount(&ctx.server)
+            .await;
+        let result = ctx
+            .catalog
+            .drop_table(
+                &namespace,
+                "table2",
+                DropTableOptions {
+                    if_exists: false,
+                    purge: false,
+                },
+            )
+            .await;
+        assert!(result.is_ok());
+
+        ctx.mock_delete_404(
+            &ctx.path("/namespaces/ns1/tables/table3"),
+            "NoSuchTableException",
+            "The given table does not exist",
+        )
+        .await;
+        let result = ctx
+            .catalog
+            .drop_table(
+                &namespace,
+                "table3",
+                DropTableOptions {
+                    if_exists: true,
+                    purge: false,
+                },
+            )
+            .await;
+        assert!(result.is_ok());
+
+        ctx.mock_delete_404(
+            &ctx.path("/namespaces/ns1/tables/table4"),
+            "NoSuchTableException",
+            "The given table does not exist",
+        )
+        .await;
+        let result = ctx
+            .catalog
+            .drop_table(
+                &namespace,
+                "table4",
+                DropTableOptions {
+                    if_exists: false,
+                    purge: false,
+                },
+            )
+            .await;
+        assert!(result.is_err());
+    }
+
+    #[tokio::test]
+    async fn test_drop_table() {
+        test_drop_table_impl(None).await;
+        test_drop_table_impl(Some("test")).await;
+    }
+
+    async fn test_drop_view_impl(prefix: Option<&str>) {
+        let ctx = TestContext::new(prefix).await;
+        let namespace = Namespace::try_from(vec!["ns1".to_string()]).unwrap();
+
+        ctx.mock_delete(&ctx.path("/namespaces/ns1/views/view1"))
+            .await;
+        let result = ctx
+            .catalog
+            .drop_view(&namespace, "view1", DropViewOptions { if_exists: false })
+            .await;
+        assert!(result.is_ok());
+
+        ctx.mock_delete_404(
+            &ctx.path("/namespaces/ns1/views/view2"),
+            "NoSuchViewException",
+            "The given view does not exist",
+        )
+        .await;
+        let result = ctx
+            .catalog
+            .drop_view(&namespace, "view2", DropViewOptions { if_exists: true })
+            .await;
+        assert!(result.is_ok());
+
+        ctx.mock_delete_404(
+            &ctx.path("/namespaces/ns1/views/view3"),
+            "NoSuchViewException",
+            "The given view does not exist",
+        )
+        .await;
+        let result = ctx
+            .catalog
+            .drop_view(&namespace, "view3", DropViewOptions { if_exists: false })
+            .await;
+        assert!(result.is_err());
+    }
+
+    #[tokio::test]
+    async fn test_drop_view() {
+        test_drop_view_impl(None).await;
+        test_drop_view_impl(Some("test")).await;
     }
 }
