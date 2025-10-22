@@ -23,6 +23,9 @@ use serde::{Deserialize, Serialize};
 use super::{DataContentType, DataFile, DataFileFormat};
 use crate::spec::Schema;
 
+// These structs are kept for potential future use with Avro-based manifest reading
+// that includes full metrics. Currently unused but may be needed for V1 manifest support.
+#[allow(dead_code)]
 #[derive(Debug, Serialize, Deserialize)]
 pub(super) struct ManifestEntryAvro {
     #[serde(rename = "status")]
@@ -37,6 +40,7 @@ pub(super) struct ManifestEntryAvro {
     pub data_file: DataFileAvro,
 }
 
+#[allow(dead_code)]
 #[derive(Debug, Serialize, Deserialize)]
 pub(super) struct DataFileAvro {
     #[serde(rename = "content", default)]
@@ -73,6 +77,7 @@ pub(super) struct DataFileAvro {
     pub sort_order_id: Option<i32>,
 }
 
+#[allow(dead_code)]
 impl DataFileAvro {
     pub fn into_data_file(
         self,
@@ -94,35 +99,29 @@ impl DataFileAvro {
             _ => DataFileFormat::Parquet,
         };
 
-        let partition = super::super::manifest::parse_partition_values(Some(&self.partition));
+        let partition = super::parse_partition_values(Some(&self.partition));
 
-        let column_sizes = super::super::manifest::parse_i64_map_from_avro(&self.column_sizes)
+        let column_sizes = super::parse_i64_map_from_avro(&self.column_sizes)
             .into_iter()
             .map(|(k, v)| (k, v as u64))
             .collect();
-        let value_counts = super::super::manifest::parse_i64_map_from_avro(&self.value_counts)
+        let value_counts = super::parse_i64_map_from_avro(&self.value_counts)
             .into_iter()
             .map(|(k, v)| (k, v as u64))
             .collect();
-        let null_value_counts =
-            super::super::manifest::parse_i64_map_from_avro(&self.null_value_counts)
-                .into_iter()
-                .map(|(k, v)| (k, v as u64))
-                .collect();
-        let nan_value_counts =
-            super::super::manifest::parse_i64_map_from_avro(&self.nan_value_counts)
-                .into_iter()
-                .map(|(k, v)| (k, v as u64))
-                .collect();
+        let null_value_counts = super::parse_i64_map_from_avro(&self.null_value_counts)
+            .into_iter()
+            .map(|(k, v)| (k, v as u64))
+            .collect();
+        let nan_value_counts = super::parse_i64_map_from_avro(&self.nan_value_counts)
+            .into_iter()
+            .map(|(k, v)| (k, v as u64))
+            .collect();
 
-        let lower_bounds_raw =
-            super::super::manifest::parse_bytes_map_from_avro(&self.lower_bounds);
-        let upper_bounds_raw =
-            super::super::manifest::parse_bytes_map_from_avro(&self.upper_bounds);
-        let lower_bounds =
-            super::super::manifest::parse_bounds_from_binary(lower_bounds_raw.as_ref(), schema);
-        let upper_bounds =
-            super::super::manifest::parse_bounds_from_binary(upper_bounds_raw.as_ref(), schema);
+        let lower_bounds_raw = super::parse_bytes_map_from_avro(&self.lower_bounds);
+        let upper_bounds_raw = super::parse_bytes_map_from_avro(&self.upper_bounds);
+        let lower_bounds = super::parse_bounds_from_binary(lower_bounds_raw.as_ref(), schema);
+        let upper_bounds = super::parse_bounds_from_binary(upper_bounds_raw.as_ref(), schema);
 
         DataFile {
             content,
@@ -165,6 +164,7 @@ pub(super) struct ManifestEntryV2 {
     pub data_file: DataFileSerde,
 }
 
+#[allow(dead_code)]
 #[derive(Serialize, Deserialize)]
 pub(super) struct ManifestEntryV1 {
     pub status: i32,
@@ -179,6 +179,7 @@ pub(super) struct DataFileSerde {
     pub file_path: String,
     pub file_format: String,
     // Placeholder for partition struct; currently serialized as null
+    #[allow(dead_code)]
     #[serde(skip)]
     pub partition: Option<AvroValue>,
     pub record_count: i64,
@@ -232,6 +233,7 @@ impl ManifestEntryV2 {
     }
 }
 
+#[allow(dead_code)]
 impl ManifestEntryV1 {
     pub fn from_entry(entry: super::ManifestEntry) -> Self {
         Self {

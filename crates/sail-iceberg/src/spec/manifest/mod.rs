@@ -209,6 +209,7 @@ use crate::spec::types::values::{Literal, PrimitiveLiteral};
 use crate::spec::types::Type;
 use crate::spec::{Datum, PrimitiveType};
 
+#[allow(dead_code)]
 pub(super) fn parse_partition_values(json: Option<&serde_json::Value>) -> Vec<Option<Literal>> {
     match json {
         Some(serde_json::Value::Array(arr)) => arr
@@ -243,6 +244,7 @@ pub(super) fn parse_partition_values(json: Option<&serde_json::Value>) -> Vec<Op
     }
 }
 
+#[allow(dead_code)]
 pub(super) fn parse_i64_map_from_avro(
     values: &Option<apache_avro::types::Value>,
 ) -> std::collections::HashMap<i32, i64> {
@@ -285,6 +287,7 @@ pub(super) fn parse_i64_map_from_avro(
     map
 }
 
+#[allow(dead_code)]
 pub(super) fn parse_bytes_map_from_avro(
     values: &Option<apache_avro::types::Value>,
 ) -> Option<std::collections::HashMap<i32, Vec<u8>>> {
@@ -329,6 +332,7 @@ pub(super) fn parse_bytes_map_from_avro(
     None
 }
 
+#[allow(dead_code)]
 pub(super) fn parse_bounds_from_binary(
     bounds_data: Option<&std::collections::HashMap<i32, Vec<u8>>>,
     schema: &Schema,
@@ -369,6 +373,7 @@ pub(super) fn parse_bounds_from_binary(
     bounds
 }
 
+#[allow(dead_code)]
 fn parse_primitive_bound(bytes: &[u8], prim_type: &PrimitiveType) -> Result<Datum, String> {
     use num_bigint::BigInt;
     use rust_decimal::prelude::ToPrimitive;

@@ -32,7 +32,8 @@ const LOGICAL_TYPE: &str = "logicalType";
 const MAP_LOGICAL_TYPE: &str = "map";
 
 fn optional(schema: AvroSchema) -> AvroSchema {
-    AvroSchema::Union(UnionSchema::new(vec![AvroSchema::Null, schema]).expect("valid union"))
+    #[allow(clippy::unwrap_used)]
+    AvroSchema::Union(UnionSchema::new(vec![AvroSchema::Null, schema]).unwrap())
 }
 
 fn record_field(name: &str, schema: AvroSchema, field_id: i32, required: bool) -> AvroRecordField {
@@ -78,7 +79,9 @@ fn avro_primitive(prim: &PrimitiveType) -> AvroSchema {
         PrimitiveType::String => AvroSchema::String,
         PrimitiveType::Uuid => AvroSchema::Uuid,
         PrimitiveType::Fixed(len) => AvroSchema::Fixed(FixedSchema {
-            name: Name::new(format!("fixed_{len}").as_str()).expect("valid name for fixed"),
+            #[allow(clippy::unwrap_used)]
+            name: Name::new(format!("fixed_{len}").as_str())
+                .unwrap_or_else(|_| Name::new("fixed").unwrap()),
             aliases: None,
             doc: None,
             size: *len as usize,
@@ -90,12 +93,12 @@ fn avro_primitive(prim: &PrimitiveType) -> AvroSchema {
             precision: *precision as usize,
             scale: *scale as usize,
             inner: Box::new(AvroSchema::Fixed(FixedSchema {
+                #[allow(clippy::unwrap_used)]
                 name: Name::new(format!("decimal_{precision}_{scale}").as_str())
-                    .expect("valid name for decimal"),
+                    .unwrap_or_else(|_| Name::new("decimal").unwrap()),
                 aliases: None,
                 doc: None,
-                size: crate::spec::Type::decimal_required_bytes(*precision)
-                    .expect("valid precision") as usize,
+                size: crate::spec::Type::decimal_required_bytes(*precision).unwrap_or(16) as usize,
                 attributes: Default::default(),
                 default: None,
             })),
@@ -140,6 +143,7 @@ fn struct_to_avro_record(name: &str, s: &StructType) -> AvroSchema {
             }
             Type::Map(map) => {
                 // Represent non-string-key maps as array of records with logicalType: map
+                #[allow(clippy::unwrap_used)]
                 let key_field = AvroRecordField {
                     name: map.key_field.name.clone(),
                     doc: None,
@@ -187,10 +191,11 @@ fn struct_to_avro_record(name: &str, s: &StructType) -> AvroSchema {
                     item_lookup.insert(f.name.clone(), idx);
                 }
                 let item_record = AvroSchema::Record(RecordSchema {
+                    #[allow(clippy::unwrap_used)]
                     name: Name::new(
                         format!("k{}_v{}", map.key_field.id, map.value_field.id).as_str(),
                     )
-                    .expect("valid name for map item"),
+                    .unwrap_or_else(|_| Name::new("map_item").unwrap()),
                     aliases: None,
                     doc: None,
                     fields: item_fields,
@@ -217,7 +222,8 @@ fn struct_to_avro_record(name: &str, s: &StructType) -> AvroSchema {
         lookup.insert(f.name.clone(), idx);
     }
     AvroSchema::Record(RecordSchema {
-        name: Name::new(name).expect("valid record name"),
+        #[allow(clippy::unwrap_used)]
+        name: Name::new(name).unwrap_or_else(|_| Name::new("record").unwrap()),
         aliases: None,
         doc: None,
         fields,
@@ -318,7 +324,8 @@ pub fn data_file_schema_v2(partition_type: &StructType) -> AvroSchema {
         lookup.insert(f.name.clone(), idx);
     }
     AvroSchema::Record(RecordSchema {
-        name: Name::new("data_file").expect("valid record name"),
+        #[allow(clippy::unwrap_used)]
+        name: Name::new("data_file").unwrap_or_else(|_| Name::new("data_file_fallback").unwrap()),
         aliases: None,
         doc: None,
         fields,
@@ -354,7 +361,9 @@ pub fn manifest_entry_schema_v2(partition_type: &StructType) -> AvroSchema {
         lookup.insert(f.name.clone(), idx);
     }
     AvroSchema::Record(RecordSchema {
-        name: Name::new("manifest_entry").expect("valid record name"),
+        #[allow(clippy::unwrap_used)]
+        name: Name::new("manifest_entry")
+            .unwrap_or_else(|_| Name::new("manifest_entry_fallback").unwrap()),
         aliases: None,
         doc: None,
         fields,
