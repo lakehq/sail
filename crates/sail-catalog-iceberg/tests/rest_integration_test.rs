@@ -83,7 +83,7 @@ async fn setup_catalog() -> (
         api_key: None,
     });
 
-    let catalog = IcebergRestCatalogProvider::new("test_catalog".to_string(), config, runtime);
+    let catalog = IcebergRestCatalogProvider::new("test".to_string(), config, runtime);
 
     // CHECK HERE
     let _config_result = catalog.load_config(Some("s3://icebergdata/demo")).await;
