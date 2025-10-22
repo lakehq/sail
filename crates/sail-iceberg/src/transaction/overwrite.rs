@@ -30,9 +30,9 @@ impl SnapshotProduceOperation for OverwriteOperation {
 #[async_trait]
 impl TransactionAction for OverwriteAction {
     async fn commit(self: Arc<Self>, tx: &Transaction) -> Result<ActionCommit, String> {
-        // In this simplified overwrite action, we rely on SnapshotProducer to generate
-        // a new snapshot that references only the newly added data files.
-        // The caller must have configured `added_data_files`, `store`, and `manifest_metadata`.
+        // TODO: Implement full overwrite semantics (predicate/partition replaces, conflict checks,
+        // delete manifests) instead of relying solely on SnapshotProducer for added data files.
+        // The caller must configure `added_data_files`, `store`, and `manifest_metadata`.
         let snapshot_producer = SnapshotProducer::new(tx, vec![], None, None);
         snapshot_producer.commit(OverwriteOperation).await
     }

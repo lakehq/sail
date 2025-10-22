@@ -127,10 +127,11 @@ impl ManifestWriter {
         }
     }
 
-    /// Encode this manifest's entries into Avro bytes using a simplified v2 schema.
-    /// This omits metrics maps and encodes partition as an optional string.
+    /// Encode this manifest's entries into Avro bytes using a v2 schema subset.
+    /// TODO: Support full v2 features (metrics maps, structured partition encoding) instead of omitting them.
     pub fn to_avro_bytes_v2(&self) -> Result<Vec<u8>, String> {
-        // Simplified v2 manifest entry schema; partition encoded as optional string
+        // TODO: Replace this reduced v2 entry schema with the full specification, including metrics maps
+        // and proper partition struct encoding.
         let schema_json = r#"
         {
           "type": "record",
