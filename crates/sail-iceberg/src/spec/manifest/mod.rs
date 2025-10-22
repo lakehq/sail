@@ -53,7 +53,8 @@ pub fn write_data_files_to_avro<W: std::io::Write>(
     let mut writer = AvroWriter::new(&avro_schema, writer);
 
     for data_file in data_files {
-        let serde_df = super::manifest::_serde::DataFileSerde::from_data_file(data_file);
+        let serde_df =
+            super::manifest::_serde::DataFileSerde::from_data_file(data_file, partition_type);
         let value = to_value(serde_df)
             .map_err(|e| format!("Avro to_value error: {e}"))?
             .resolve(&avro_schema)
@@ -83,41 +84,7 @@ pub fn read_data_files_from_avro<R: std::io::Read>(
             let value = value.map_err(|e| format!("Avro read error: {e}"))?;
             let serde_df: super::manifest::_serde::DataFileSerde =
                 avro_from_value(&value).map_err(|e| format!("Avro decode DataFile error: {e}"))?;
-            let df = DataFile {
-                content: match serde_df.content {
-                    0 => DataContentType::Data,
-                    1 => DataContentType::PositionDeletes,
-                    2 => DataContentType::EqualityDeletes,
-                    _ => DataContentType::Data,
-                },
-                file_path: serde_df.file_path,
-                file_format: match serde_df.file_format.as_str() {
-                    "PARQUET" => DataFileFormat::Parquet,
-                    "AVRO" => DataFileFormat::Avro,
-                    "ORC" => DataFileFormat::Orc,
-                    _ => DataFileFormat::Parquet,
-                },
-                partition: Vec::new(),
-                record_count: serde_df.record_count as u64,
-                file_size_in_bytes: serde_df.file_size_in_bytes as u64,
-                column_sizes: Default::default(),
-                value_counts: Default::default(),
-                null_value_counts: Default::default(),
-                nan_value_counts: Default::default(),
-                lower_bounds: Default::default(),
-                upper_bounds: Default::default(),
-                block_size_in_bytes: None,
-                key_metadata: serde_df.key_metadata,
-                split_offsets: serde_df.split_offsets.unwrap_or_default(),
-                equality_ids: serde_df.equality_ids.unwrap_or_default(),
-                sort_order_id: serde_df.sort_order_id,
-                first_row_id: serde_df.first_row_id,
-                partition_spec_id,
-                referenced_data_file: serde_df.referenced_data_file,
-                content_offset: serde_df.content_offset,
-                content_size_in_bytes: serde_df.content_size_in_bytes,
-            };
-            Ok(df)
+            Ok(serde_df.into_data_file(partition_spec_id, partition_type))
         })
         .collect::<Result<Vec<_>, String>>()
 }
@@ -171,12 +138,20 @@ impl Manifest {
 
         // For entries, use typed serde model
         let mut entries = Vec::new();
-        let reader = AvroReader::new(bs).map_err(|e| format!("Avro read error: {e}"))?;
+        // Build partition type and schema for deterministic resolution of unions
+        let partition_type = metadata
+            .partition_spec
+            .partition_type(&metadata.schema)
+            .map_err(|e| format!("Partition type error: {e}"))?;
+        let avro_schema = schema::manifest_entry_schema_v2(&partition_type);
+        let mut cursor = std::io::Cursor::new(bs);
+        let reader = AvroReader::with_schema(&avro_schema, &mut cursor)
+            .map_err(|e| format!("Avro read error: {e}"))?;
         for value in reader {
             let value = value.map_err(|e| format!("Avro read value error: {e}"))?;
             let entry: _serde::ManifestEntryV2 =
                 avro_from_value(&value).map_err(|e| format!("Avro decode entry error: {e}"))?;
-            entries.push(entry.into_entry(metadata.partition_spec.spec_id()));
+            entries.push(entry.into_entry(metadata.partition_spec.spec_id(), &partition_type));
         }
 
         Ok((metadata, entries))

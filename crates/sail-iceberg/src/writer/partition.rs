@@ -104,7 +104,23 @@ fn apply_transform(
             other => other,
         },
         Transform::Bucket(_n) => value,
-        Transform::Year | Transform::Month | Transform::Day | Transform::Hour => value,
+        // For time-based transforms, convert to integer offsets per Iceberg spec
+        Transform::Day => match value {
+            // If already days since epoch
+            Some(Literal::Primitive(PrimitiveLiteral::Int(v))) => {
+                Some(Literal::Primitive(PrimitiveLiteral::Int(v)))
+            }
+            // If timestamp in microseconds since epoch
+            Some(Literal::Primitive(PrimitiveLiteral::Long(us))) => {
+                let days = (us).div_euclid(86_400_000_000);
+                // Safe to downcast within reasonable date ranges used in tests
+                let days_i32 = i32::try_from(days).unwrap_or(i32::MAX);
+                Some(Literal::Primitive(PrimitiveLiteral::Int(days_i32)))
+            }
+            other => other,
+        },
+        // Keep existing behavior for others for now
+        Transform::Year | Transform::Month | Transform::Hour => value,
     }
 }
 
