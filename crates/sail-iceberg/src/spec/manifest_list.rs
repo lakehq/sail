@@ -124,8 +124,9 @@ impl ManifestListWriter {
     }
 
     pub fn to_bytes(&self, _version: FormatVersion) -> Result<Vec<u8>, String> {
-        use crate::spec::manifest_list::schema::MANIFEST_LIST_AVRO_SCHEMA_V2;
         use apache_avro::Writer;
+
+        use crate::spec::manifest_list::schema::MANIFEST_LIST_AVRO_SCHEMA_V2;
 
         // TODO: Implement typed V1 writer; currently only V2 is supported.
         let mut writer = Writer::new(&MANIFEST_LIST_AVRO_SCHEMA_V2, Vec::new());
