@@ -357,6 +357,17 @@ impl CatalogApiApi for CatalogApiApiClient {
         let mut local_var_req_builder =
             local_var_client.request(reqwest::Method::DELETE, local_var_uri_str.as_str());
 
+        if let Some(ref local_var_aws_v4_key) = local_var_configuration.aws_v4_key {
+            let local_var_new_headers =
+                match local_var_aws_v4_key.sign(&local_var_uri_str, "DELETE", "") {
+                    Ok(new_headers) => new_headers,
+                    Err(err) => return Err(Error::AWSV4SignatureError(err)),
+                };
+            for (local_var_name, local_var_value) in local_var_new_headers.iter() {
+                local_var_req_builder =
+                    local_var_req_builder.header(local_var_name.as_str(), local_var_value.as_str());
+            }
+        }
         if let Some(ref local_var_user_agent) = local_var_configuration.user_agent {
             local_var_req_builder = local_var_req_builder
                 .header(reqwest::header::USER_AGENT, local_var_user_agent.clone());
@@ -405,6 +416,21 @@ impl CatalogApiApi for CatalogApiApiClient {
         let mut local_var_req_builder =
             local_var_client.request(reqwest::Method::POST, local_var_uri_str.as_str());
 
+        if let Some(ref local_var_aws_v4_key) = local_var_configuration.aws_v4_key {
+            let local_var_new_headers = match local_var_aws_v4_key.sign(
+                &local_var_uri_str,
+                "POST",
+                &serde_json::to_string(&commit_transaction_request)
+                    .expect("param should serialize to string"),
+            ) {
+                Ok(new_headers) => new_headers,
+                Err(err) => return Err(Error::AWSV4SignatureError(err)),
+            };
+            for (local_var_name, local_var_value) in local_var_new_headers.iter() {
+                local_var_req_builder =
+                    local_var_req_builder.header(local_var_name.as_str(), local_var_value.as_str());
+            }
+        }
         if let Some(ref local_var_user_agent) = local_var_configuration.user_agent {
             local_var_req_builder = local_var_req_builder
                 .header(reqwest::header::USER_AGENT, local_var_user_agent.clone());
@@ -455,6 +481,21 @@ impl CatalogApiApi for CatalogApiApiClient {
         let mut local_var_req_builder =
             local_var_client.request(reqwest::Method::POST, local_var_uri_str.as_str());
 
+        if let Some(ref local_var_aws_v4_key) = local_var_configuration.aws_v4_key {
+            let local_var_new_headers = match local_var_aws_v4_key.sign(
+                &local_var_uri_str,
+                "POST",
+                &serde_json::to_string(&create_namespace_request)
+                    .expect("param should serialize to string"),
+            ) {
+                Ok(new_headers) => new_headers,
+                Err(err) => return Err(Error::AWSV4SignatureError(err)),
+            };
+            for (local_var_name, local_var_value) in local_var_new_headers.iter() {
+                local_var_req_builder =
+                    local_var_req_builder.header(local_var_name.as_str(), local_var_value.as_str());
+            }
+        }
         if let Some(ref local_var_user_agent) = local_var_configuration.user_agent {
             local_var_req_builder = local_var_req_builder
                 .header(reqwest::header::USER_AGENT, local_var_user_agent.clone());
@@ -523,6 +564,21 @@ impl CatalogApiApi for CatalogApiApiClient {
         let mut local_var_req_builder =
             local_var_client.request(reqwest::Method::POST, local_var_uri_str.as_str());
 
+        if let Some(ref local_var_aws_v4_key) = local_var_configuration.aws_v4_key {
+            let local_var_new_headers = match local_var_aws_v4_key.sign(
+                &local_var_uri_str,
+                "POST",
+                &serde_json::to_string(&create_table_request)
+                    .expect("param should serialize to string"),
+            ) {
+                Ok(new_headers) => new_headers,
+                Err(err) => return Err(Error::AWSV4SignatureError(err)),
+            };
+            for (local_var_name, local_var_value) in local_var_new_headers.iter() {
+                local_var_req_builder =
+                    local_var_req_builder.header(local_var_name.as_str(), local_var_value.as_str());
+            }
+        }
         if let Some(ref local_var_user_agent) = local_var_configuration.user_agent {
             local_var_req_builder = local_var_req_builder
                 .header(reqwest::header::USER_AGENT, local_var_user_agent.clone());
@@ -591,6 +647,21 @@ impl CatalogApiApi for CatalogApiApiClient {
         let mut local_var_req_builder =
             local_var_client.request(reqwest::Method::POST, local_var_uri_str.as_str());
 
+        if let Some(ref local_var_aws_v4_key) = local_var_configuration.aws_v4_key {
+            let local_var_new_headers = match local_var_aws_v4_key.sign(
+                &local_var_uri_str,
+                "POST",
+                &serde_json::to_string(&create_view_request)
+                    .expect("param should serialize to string"),
+            ) {
+                Ok(new_headers) => new_headers,
+                Err(err) => return Err(Error::AWSV4SignatureError(err)),
+            };
+            for (local_var_name, local_var_value) in local_var_new_headers.iter() {
+                local_var_req_builder =
+                    local_var_req_builder.header(local_var_name.as_str(), local_var_value.as_str());
+            }
+        }
         if let Some(ref local_var_user_agent) = local_var_configuration.user_agent {
             local_var_req_builder = local_var_req_builder
                 .header(reqwest::header::USER_AGENT, local_var_user_agent.clone());
@@ -651,6 +722,17 @@ impl CatalogApiApi for CatalogApiApiClient {
         let mut local_var_req_builder =
             local_var_client.request(reqwest::Method::DELETE, local_var_uri_str.as_str());
 
+        if let Some(ref local_var_aws_v4_key) = local_var_configuration.aws_v4_key {
+            let local_var_new_headers =
+                match local_var_aws_v4_key.sign(&local_var_uri_str, "DELETE", "") {
+                    Ok(new_headers) => new_headers,
+                    Err(err) => return Err(Error::AWSV4SignatureError(err)),
+                };
+            for (local_var_name, local_var_value) in local_var_new_headers.iter() {
+                local_var_req_builder =
+                    local_var_req_builder.header(local_var_name.as_str(), local_var_value.as_str());
+            }
+        }
         if let Some(ref local_var_user_agent) = local_var_configuration.user_agent {
             local_var_req_builder = local_var_req_builder
                 .header(reqwest::header::USER_AGENT, local_var_user_agent.clone());
@@ -708,6 +790,17 @@ impl CatalogApiApi for CatalogApiApiClient {
             local_var_req_builder =
                 local_var_req_builder.query(&[("purgeRequested", &param_value.to_string())]);
         }
+        if let Some(ref local_var_aws_v4_key) = local_var_configuration.aws_v4_key {
+            let local_var_new_headers =
+                match local_var_aws_v4_key.sign(&local_var_uri_str, "DELETE", "") {
+                    Ok(new_headers) => new_headers,
+                    Err(err) => return Err(Error::AWSV4SignatureError(err)),
+                };
+            for (local_var_name, local_var_value) in local_var_new_headers.iter() {
+                local_var_req_builder =
+                    local_var_req_builder.header(local_var_name.as_str(), local_var_value.as_str());
+            }
+        }
         if let Some(ref local_var_user_agent) = local_var_configuration.user_agent {
             local_var_req_builder = local_var_req_builder
                 .header(reqwest::header::USER_AGENT, local_var_user_agent.clone());
@@ -760,6 +853,17 @@ impl CatalogApiApi for CatalogApiApiClient {
         let mut local_var_req_builder =
             local_var_client.request(reqwest::Method::DELETE, local_var_uri_str.as_str());
 
+        if let Some(ref local_var_aws_v4_key) = local_var_configuration.aws_v4_key {
+            let local_var_new_headers =
+                match local_var_aws_v4_key.sign(&local_var_uri_str, "DELETE", "") {
+                    Ok(new_headers) => new_headers,
+                    Err(err) => return Err(Error::AWSV4SignatureError(err)),
+                };
+            for (local_var_name, local_var_value) in local_var_new_headers.iter() {
+                local_var_req_builder =
+                    local_var_req_builder.header(local_var_name.as_str(), local_var_value.as_str());
+            }
+        }
         if let Some(ref local_var_user_agent) = local_var_configuration.user_agent {
             local_var_req_builder = local_var_req_builder
                 .header(reqwest::header::USER_AGENT, local_var_user_agent.clone());
@@ -814,6 +918,17 @@ impl CatalogApiApi for CatalogApiApiClient {
         let mut local_var_req_builder =
             local_var_client.request(reqwest::Method::GET, local_var_uri_str.as_str());
 
+        if let Some(ref local_var_aws_v4_key) = local_var_configuration.aws_v4_key {
+            let local_var_new_headers =
+                match local_var_aws_v4_key.sign(&local_var_uri_str, "GET", "") {
+                    Ok(new_headers) => new_headers,
+                    Err(err) => return Err(Error::AWSV4SignatureError(err)),
+                };
+            for (local_var_name, local_var_value) in local_var_new_headers.iter() {
+                local_var_req_builder =
+                    local_var_req_builder.header(local_var_name.as_str(), local_var_value.as_str());
+            }
+        }
         if let Some(ref local_var_user_agent) = local_var_configuration.user_agent {
             local_var_req_builder = local_var_req_builder
                 .header(reqwest::header::USER_AGENT, local_var_user_agent.clone());
@@ -877,6 +992,21 @@ impl CatalogApiApi for CatalogApiApiClient {
         let mut local_var_req_builder =
             local_var_client.request(reqwest::Method::POST, local_var_uri_str.as_str());
 
+        if let Some(ref local_var_aws_v4_key) = local_var_configuration.aws_v4_key {
+            let local_var_new_headers = match local_var_aws_v4_key.sign(
+                &local_var_uri_str,
+                "POST",
+                &serde_json::to_string(&fetch_scan_tasks_request)
+                    .expect("param should serialize to string"),
+            ) {
+                Ok(new_headers) => new_headers,
+                Err(err) => return Err(Error::AWSV4SignatureError(err)),
+            };
+            for (local_var_name, local_var_value) in local_var_new_headers.iter() {
+                local_var_req_builder =
+                    local_var_req_builder.header(local_var_name.as_str(), local_var_value.as_str());
+            }
+        }
         if let Some(ref local_var_user_agent) = local_var_configuration.user_agent {
             local_var_req_builder = local_var_req_builder
                 .header(reqwest::header::USER_AGENT, local_var_user_agent.clone());
@@ -951,6 +1081,17 @@ impl CatalogApiApi for CatalogApiApiClient {
             local_var_req_builder =
                 local_var_req_builder.query(&[("parent", &param_value.to_string())]);
         }
+        if let Some(ref local_var_aws_v4_key) = local_var_configuration.aws_v4_key {
+            let local_var_new_headers =
+                match local_var_aws_v4_key.sign(&local_var_uri_str, "GET", "") {
+                    Ok(new_headers) => new_headers,
+                    Err(err) => return Err(Error::AWSV4SignatureError(err)),
+                };
+            for (local_var_name, local_var_value) in local_var_new_headers.iter() {
+                local_var_req_builder =
+                    local_var_req_builder.header(local_var_name.as_str(), local_var_value.as_str());
+            }
+        }
         if let Some(ref local_var_user_agent) = local_var_configuration.user_agent {
             local_var_req_builder = local_var_req_builder
                 .header(reqwest::header::USER_AGENT, local_var_user_agent.clone());
@@ -1020,6 +1161,17 @@ impl CatalogApiApi for CatalogApiApiClient {
         if let Some(ref param_value) = page_size {
             local_var_req_builder =
                 local_var_req_builder.query(&[("pageSize", &param_value.to_string())]);
+        }
+        if let Some(ref local_var_aws_v4_key) = local_var_configuration.aws_v4_key {
+            let local_var_new_headers =
+                match local_var_aws_v4_key.sign(&local_var_uri_str, "GET", "") {
+                    Ok(new_headers) => new_headers,
+                    Err(err) => return Err(Error::AWSV4SignatureError(err)),
+                };
+            for (local_var_name, local_var_value) in local_var_new_headers.iter() {
+                local_var_req_builder =
+                    local_var_req_builder.header(local_var_name.as_str(), local_var_value.as_str());
+            }
         }
         if let Some(ref local_var_user_agent) = local_var_configuration.user_agent {
             local_var_req_builder = local_var_req_builder
@@ -1091,6 +1243,17 @@ impl CatalogApiApi for CatalogApiApiClient {
             local_var_req_builder =
                 local_var_req_builder.query(&[("pageSize", &param_value.to_string())]);
         }
+        if let Some(ref local_var_aws_v4_key) = local_var_configuration.aws_v4_key {
+            let local_var_new_headers =
+                match local_var_aws_v4_key.sign(&local_var_uri_str, "GET", "") {
+                    Ok(new_headers) => new_headers,
+                    Err(err) => return Err(Error::AWSV4SignatureError(err)),
+                };
+            for (local_var_name, local_var_value) in local_var_new_headers.iter() {
+                local_var_req_builder =
+                    local_var_req_builder.header(local_var_name.as_str(), local_var_value.as_str());
+            }
+        }
         if let Some(ref local_var_user_agent) = local_var_configuration.user_agent {
             local_var_req_builder = local_var_req_builder
                 .header(reqwest::header::USER_AGENT, local_var_user_agent.clone());
@@ -1153,6 +1316,17 @@ impl CatalogApiApi for CatalogApiApiClient {
         let mut local_var_req_builder =
             local_var_client.request(reqwest::Method::GET, local_var_uri_str.as_str());
 
+        if let Some(ref local_var_aws_v4_key) = local_var_configuration.aws_v4_key {
+            let local_var_new_headers =
+                match local_var_aws_v4_key.sign(&local_var_uri_str, "GET", "") {
+                    Ok(new_headers) => new_headers,
+                    Err(err) => return Err(Error::AWSV4SignatureError(err)),
+                };
+            for (local_var_name, local_var_value) in local_var_new_headers.iter() {
+                local_var_req_builder =
+                    local_var_req_builder.header(local_var_name.as_str(), local_var_value.as_str());
+            }
+        }
         if let Some(ref local_var_user_agent) = local_var_configuration.user_agent {
             local_var_req_builder = local_var_req_builder
                 .header(reqwest::header::USER_AGENT, local_var_user_agent.clone());
@@ -1210,10 +1384,20 @@ impl CatalogApiApi for CatalogApiApiClient {
             prefix = crate::apis::urlencode(prefix),
             namespace = crate::apis::urlencode(namespace)
         );
-
         let mut local_var_req_builder =
             local_var_client.request(reqwest::Method::GET, local_var_uri_str.as_str());
 
+        if let Some(ref local_var_aws_v4_key) = local_var_configuration.aws_v4_key {
+            let local_var_new_headers =
+                match local_var_aws_v4_key.sign(&local_var_uri_str, "GET", "") {
+                    Ok(new_headers) => new_headers,
+                    Err(err) => return Err(Error::AWSV4SignatureError(err)),
+                };
+            for (local_var_name, local_var_value) in local_var_new_headers.iter() {
+                local_var_req_builder =
+                    local_var_req_builder.header(local_var_name.as_str(), local_var_value.as_str());
+            }
+        }
         if let Some(ref local_var_user_agent) = local_var_configuration.user_agent {
             local_var_req_builder = local_var_req_builder
                 .header(reqwest::header::USER_AGENT, local_var_user_agent.clone());
@@ -1290,6 +1474,17 @@ impl CatalogApiApi for CatalogApiApiClient {
             local_var_req_builder =
                 local_var_req_builder.query(&[("snapshots", &param_value.to_string())]);
         }
+        if let Some(ref local_var_aws_v4_key) = local_var_configuration.aws_v4_key {
+            let local_var_new_headers =
+                match local_var_aws_v4_key.sign(&local_var_uri_str, "GET", "") {
+                    Ok(new_headers) => new_headers,
+                    Err(err) => return Err(Error::AWSV4SignatureError(err)),
+                };
+            for (local_var_name, local_var_value) in local_var_new_headers.iter() {
+                local_var_req_builder =
+                    local_var_req_builder.header(local_var_name.as_str(), local_var_value.as_str());
+            }
+        }
         if let Some(ref local_var_user_agent) = local_var_configuration.user_agent {
             local_var_req_builder = local_var_req_builder
                 .header(reqwest::header::USER_AGENT, local_var_user_agent.clone());
@@ -1362,6 +1557,17 @@ impl CatalogApiApi for CatalogApiApiClient {
         let mut local_var_req_builder =
             local_var_client.request(reqwest::Method::GET, local_var_uri_str.as_str());
 
+        if let Some(ref local_var_aws_v4_key) = local_var_configuration.aws_v4_key {
+            let local_var_new_headers =
+                match local_var_aws_v4_key.sign(&local_var_uri_str, "GET", "") {
+                    Ok(new_headers) => new_headers,
+                    Err(err) => return Err(Error::AWSV4SignatureError(err)),
+                };
+            for (local_var_name, local_var_value) in local_var_new_headers.iter() {
+                local_var_req_builder =
+                    local_var_req_builder.header(local_var_name.as_str(), local_var_value.as_str());
+            }
+        }
         if let Some(ref local_var_user_agent) = local_var_configuration.user_agent {
             local_var_req_builder = local_var_req_builder
                 .header(reqwest::header::USER_AGENT, local_var_user_agent.clone());
@@ -1422,6 +1628,17 @@ impl CatalogApiApi for CatalogApiApiClient {
         let mut local_var_req_builder =
             local_var_client.request(reqwest::Method::HEAD, local_var_uri_str.as_str());
 
+        if let Some(ref local_var_aws_v4_key) = local_var_configuration.aws_v4_key {
+            let local_var_new_headers =
+                match local_var_aws_v4_key.sign(&local_var_uri_str, "HEAD", "") {
+                    Ok(new_headers) => new_headers,
+                    Err(err) => return Err(Error::AWSV4SignatureError(err)),
+                };
+            for (local_var_name, local_var_value) in local_var_new_headers.iter() {
+                local_var_req_builder =
+                    local_var_req_builder.header(local_var_name.as_str(), local_var_value.as_str());
+            }
+        }
         if let Some(ref local_var_user_agent) = local_var_configuration.user_agent {
             local_var_req_builder = local_var_req_builder
                 .header(reqwest::header::USER_AGENT, local_var_user_agent.clone());
@@ -1475,6 +1692,21 @@ impl CatalogApiApi for CatalogApiApiClient {
         let mut local_var_req_builder =
             local_var_client.request(reqwest::Method::POST, local_var_uri_str.as_str());
 
+        if let Some(ref local_var_aws_v4_key) = local_var_configuration.aws_v4_key {
+            let local_var_new_headers = match local_var_aws_v4_key.sign(
+                &local_var_uri_str,
+                "POST",
+                &serde_json::to_string(&plan_table_scan_request)
+                    .expect("param should serialize to string"),
+            ) {
+                Ok(new_headers) => new_headers,
+                Err(err) => return Err(Error::AWSV4SignatureError(err)),
+            };
+            for (local_var_name, local_var_value) in local_var_new_headers.iter() {
+                local_var_req_builder =
+                    local_var_req_builder.header(local_var_name.as_str(), local_var_value.as_str());
+            }
+        }
         if let Some(ref local_var_user_agent) = local_var_configuration.user_agent {
             local_var_req_builder = local_var_req_builder
                 .header(reqwest::header::USER_AGENT, local_var_user_agent.clone());
@@ -1537,6 +1769,21 @@ impl CatalogApiApi for CatalogApiApiClient {
         let mut local_var_req_builder =
             local_var_client.request(reqwest::Method::POST, local_var_uri_str.as_str());
 
+        if let Some(ref local_var_aws_v4_key) = local_var_configuration.aws_v4_key {
+            let local_var_new_headers = match local_var_aws_v4_key.sign(
+                &local_var_uri_str,
+                "POST",
+                &serde_json::to_string(&register_table_request)
+                    .expect("param should serialize to string"),
+            ) {
+                Ok(new_headers) => new_headers,
+                Err(err) => return Err(Error::AWSV4SignatureError(err)),
+            };
+            for (local_var_name, local_var_value) in local_var_new_headers.iter() {
+                local_var_req_builder =
+                    local_var_req_builder.header(local_var_name.as_str(), local_var_value.as_str());
+            }
+        }
         if let Some(ref local_var_user_agent) = local_var_configuration.user_agent {
             local_var_req_builder = local_var_req_builder
                 .header(reqwest::header::USER_AGENT, local_var_user_agent.clone());
@@ -1597,6 +1844,21 @@ impl CatalogApiApi for CatalogApiApiClient {
         let mut local_var_req_builder =
             local_var_client.request(reqwest::Method::POST, local_var_uri_str.as_str());
 
+        if let Some(ref local_var_aws_v4_key) = local_var_configuration.aws_v4_key {
+            let local_var_new_headers = match local_var_aws_v4_key.sign(
+                &local_var_uri_str,
+                "POST",
+                &serde_json::to_string(&rename_table_request)
+                    .expect("param should serialize to string"),
+            ) {
+                Ok(new_headers) => new_headers,
+                Err(err) => return Err(Error::AWSV4SignatureError(err)),
+            };
+            for (local_var_name, local_var_value) in local_var_new_headers.iter() {
+                local_var_req_builder =
+                    local_var_req_builder.header(local_var_name.as_str(), local_var_value.as_str());
+            }
+        }
         if let Some(ref local_var_user_agent) = local_var_configuration.user_agent {
             local_var_req_builder = local_var_req_builder
                 .header(reqwest::header::USER_AGENT, local_var_user_agent.clone());
@@ -1647,6 +1909,21 @@ impl CatalogApiApi for CatalogApiApiClient {
         let mut local_var_req_builder =
             local_var_client.request(reqwest::Method::POST, local_var_uri_str.as_str());
 
+        if let Some(ref local_var_aws_v4_key) = local_var_configuration.aws_v4_key {
+            let local_var_new_headers = match local_var_aws_v4_key.sign(
+                &local_var_uri_str,
+                "POST",
+                &serde_json::to_string(&rename_table_request)
+                    .expect("param should serialize to string"),
+            ) {
+                Ok(new_headers) => new_headers,
+                Err(err) => return Err(Error::AWSV4SignatureError(err)),
+            };
+            for (local_var_name, local_var_value) in local_var_new_headers.iter() {
+                local_var_req_builder =
+                    local_var_req_builder.header(local_var_name.as_str(), local_var_value.as_str());
+            }
+        }
         if let Some(ref local_var_user_agent) = local_var_configuration.user_agent {
             local_var_req_builder = local_var_req_builder
                 .header(reqwest::header::USER_AGENT, local_var_user_agent.clone());
@@ -1701,6 +1978,21 @@ impl CatalogApiApi for CatalogApiApiClient {
         let mut local_var_req_builder =
             local_var_client.request(reqwest::Method::POST, local_var_uri_str.as_str());
 
+        if let Some(ref local_var_aws_v4_key) = local_var_configuration.aws_v4_key {
+            let local_var_new_headers = match local_var_aws_v4_key.sign(
+                &local_var_uri_str,
+                "POST",
+                &serde_json::to_string(&commit_view_request)
+                    .expect("param should serialize to string"),
+            ) {
+                Ok(new_headers) => new_headers,
+                Err(err) => return Err(Error::AWSV4SignatureError(err)),
+            };
+            for (local_var_name, local_var_value) in local_var_new_headers.iter() {
+                local_var_req_builder =
+                    local_var_req_builder.header(local_var_name.as_str(), local_var_value.as_str());
+            }
+        }
         if let Some(ref local_var_user_agent) = local_var_configuration.user_agent {
             local_var_req_builder = local_var_req_builder
                 .header(reqwest::header::USER_AGENT, local_var_user_agent.clone());
@@ -1764,6 +2056,21 @@ impl CatalogApiApi for CatalogApiApiClient {
         let mut local_var_req_builder =
             local_var_client.request(reqwest::Method::POST, local_var_uri_str.as_str());
 
+        if let Some(ref local_var_aws_v4_key) = local_var_configuration.aws_v4_key {
+            let local_var_new_headers = match local_var_aws_v4_key.sign(
+                &local_var_uri_str,
+                "POST",
+                &serde_json::to_string(&report_metrics_request)
+                    .expect("param should serialize to string"),
+            ) {
+                Ok(new_headers) => new_headers,
+                Err(err) => return Err(Error::AWSV4SignatureError(err)),
+            };
+            for (local_var_name, local_var_value) in local_var_new_headers.iter() {
+                local_var_req_builder =
+                    local_var_req_builder.header(local_var_name.as_str(), local_var_value.as_str());
+            }
+        }
         if let Some(ref local_var_user_agent) = local_var_configuration.user_agent {
             local_var_req_builder = local_var_req_builder
                 .header(reqwest::header::USER_AGENT, local_var_user_agent.clone());
@@ -1817,6 +2124,17 @@ impl CatalogApiApi for CatalogApiApiClient {
         let mut local_var_req_builder =
             local_var_client.request(reqwest::Method::HEAD, local_var_uri_str.as_str());
 
+        if let Some(ref local_var_aws_v4_key) = local_var_configuration.aws_v4_key {
+            let local_var_new_headers =
+                match local_var_aws_v4_key.sign(&local_var_uri_str, "HEAD", "") {
+                    Ok(new_headers) => new_headers,
+                    Err(err) => return Err(Error::AWSV4SignatureError(err)),
+                };
+            for (local_var_name, local_var_value) in local_var_new_headers.iter() {
+                local_var_req_builder =
+                    local_var_req_builder.header(local_var_name.as_str(), local_var_value.as_str());
+            }
+        }
         if let Some(ref local_var_user_agent) = local_var_configuration.user_agent {
             local_var_req_builder = local_var_req_builder
                 .header(reqwest::header::USER_AGENT, local_var_user_agent.clone());
@@ -1868,6 +2186,21 @@ impl CatalogApiApi for CatalogApiApiClient {
         let mut local_var_req_builder =
             local_var_client.request(reqwest::Method::POST, local_var_uri_str.as_str());
 
+        if let Some(ref local_var_aws_v4_key) = local_var_configuration.aws_v4_key {
+            let local_var_new_headers = match local_var_aws_v4_key.sign(
+                &local_var_uri_str,
+                "POST",
+                &serde_json::to_string(&update_namespace_properties_request)
+                    .expect("param should serialize to string"),
+            ) {
+                Ok(new_headers) => new_headers,
+                Err(err) => return Err(Error::AWSV4SignatureError(err)),
+            };
+            for (local_var_name, local_var_value) in local_var_new_headers.iter() {
+                local_var_req_builder =
+                    local_var_req_builder.header(local_var_name.as_str(), local_var_value.as_str());
+            }
+        }
         if let Some(ref local_var_user_agent) = local_var_configuration.user_agent {
             local_var_req_builder = local_var_req_builder
                 .header(reqwest::header::USER_AGENT, local_var_user_agent.clone());
@@ -1932,6 +2265,21 @@ impl CatalogApiApi for CatalogApiApiClient {
         let mut local_var_req_builder =
             local_var_client.request(reqwest::Method::POST, local_var_uri_str.as_str());
 
+        if let Some(ref local_var_aws_v4_key) = local_var_configuration.aws_v4_key {
+            let local_var_new_headers = match local_var_aws_v4_key.sign(
+                &local_var_uri_str,
+                "POST",
+                &serde_json::to_string(&commit_table_request)
+                    .expect("param should serialize to string"),
+            ) {
+                Ok(new_headers) => new_headers,
+                Err(err) => return Err(Error::AWSV4SignatureError(err)),
+            };
+            for (local_var_name, local_var_value) in local_var_new_headers.iter() {
+                local_var_req_builder =
+                    local_var_req_builder.header(local_var_name.as_str(), local_var_value.as_str());
+            }
+        }
         if let Some(ref local_var_user_agent) = local_var_configuration.user_agent {
             local_var_req_builder = local_var_req_builder
                 .header(reqwest::header::USER_AGENT, local_var_user_agent.clone());
@@ -1995,6 +2343,17 @@ impl CatalogApiApi for CatalogApiApiClient {
         let mut local_var_req_builder =
             local_var_client.request(reqwest::Method::HEAD, local_var_uri_str.as_str());
 
+        if let Some(ref local_var_aws_v4_key) = local_var_configuration.aws_v4_key {
+            let local_var_new_headers =
+                match local_var_aws_v4_key.sign(&local_var_uri_str, "HEAD", "") {
+                    Ok(new_headers) => new_headers,
+                    Err(err) => return Err(Error::AWSV4SignatureError(err)),
+                };
+            for (local_var_name, local_var_value) in local_var_new_headers.iter() {
+                local_var_req_builder =
+                    local_var_req_builder.header(local_var_name.as_str(), local_var_value.as_str());
+            }
+        }
         if let Some(ref local_var_user_agent) = local_var_configuration.user_agent {
             local_var_req_builder = local_var_req_builder
                 .header(reqwest::header::USER_AGENT, local_var_user_agent.clone());
