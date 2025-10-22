@@ -22,6 +22,7 @@ use apache_avro::{from_value as avro_from_value, Reader as AvroReader};
 use serde::{Deserialize, Serialize};
 
 use crate::spec::FormatVersion;
+mod schema;
 
 pub const UNASSIGNED_SEQUENCE_NUMBER: i64 = -1;
 
@@ -123,41 +124,11 @@ impl ManifestListWriter {
     }
 
     pub fn to_bytes(&self, _version: FormatVersion) -> Result<Vec<u8>, String> {
-        use apache_avro::{Schema, Writer};
+        use crate::spec::manifest_list::schema::MANIFEST_LIST_AVRO_SCHEMA_V2;
+        use apache_avro::Writer;
 
-        // Only implement V2 encoding for now
-        let schema_json = r#"
-        {
-          "type": "record",
-          "name": "manifest_file",
-          "fields": [
-            {"name": "manifest_path", "type": "string", "field-id": 500},
-            {"name": "manifest_length", "type": "long", "field-id": 501},
-            {"name": "partition_spec_id", "type": "int", "field-id": 502},
-            {"name": "content", "type": "int", "field-id": 517},
-            {"name": "sequence_number", "type": "long", "field-id": 515},
-            {"name": "min_sequence_number", "type": "long", "field-id": 516},
-            {"name": "added_snapshot_id", "type": "long", "field-id": 503},
-            {"name": "added_files_count", "type": ["null","int"], "default": null, "field-id": 504},
-            {"name": "existing_files_count", "type": ["null","int"], "default": null, "field-id": 505},
-            {"name": "deleted_files_count", "type": ["null","int"], "default": null, "field-id": 506},
-            {"name": "added_rows_count", "type": ["null","long"], "default": null, "field-id": 512},
-            {"name": "existing_rows_count", "type": ["null","long"], "default": null, "field-id": 513},
-            {"name": "deleted_rows_count", "type": ["null","long"], "default": null, "field-id": 514},
-            {"name": "partitions", "type": ["null", {"type":"array", "element-id": 508, "items": {"name":"field_summary","type":"record","fields":[
-              {"name":"contains_null","type":"boolean", "field-id": 509},
-              {"name":"contains_nan","type":["null","boolean"],"default":null, "field-id": 518},
-              {"name":"lower_bound","type":["null","bytes"],"default":null, "field-id": 510},
-              {"name":"upper_bound","type":["null","bytes"],"default":null, "field-id": 511}
-            ]}}], "default": null, "field-id": 507},
-            {"name": "key_metadata", "type": ["null","bytes"], "default": null, "field-id": 519}
-          ]
-        }
-        "#;
-
-        let schema =
-            Schema::parse_str(schema_json).map_err(|e| format!("Avro schema parse error: {e}"))?;
-        let mut writer = Writer::new(&schema, Vec::new());
+        // TODO: Implement typed V1 writer; currently only V2 is supported.
+        let mut writer = Writer::new(&MANIFEST_LIST_AVRO_SCHEMA_V2, Vec::new());
 
         for mf in &self.entries {
             let v2 = _serde::ManifestFileV2 {
@@ -189,13 +160,18 @@ impl ManifestListWriter {
                 }),
                 key_metadata: mf.key_metadata.clone(),
             };
-            let value =
-                apache_avro::to_value(v2).map_err(|e| format!("Avro to_value error: {e}"))?;
-            let value = value
-                .resolve(&schema)
-                .map_err(|e| format!("Avro resolve error: {e}"))?;
+            // Enforce required fields for V2
+            if mf.added_files_count.is_none()
+                || mf.existing_files_count.is_none()
+                || mf.deleted_files_count.is_none()
+                || mf.added_rows_count.is_none()
+                || mf.existing_rows_count.is_none()
+                || mf.deleted_rows_count.is_none()
+            {
+                return Err("Missing required V2 counts/rows fields".to_string());
+            }
             writer
-                .append(value)
+                .append_ser(v2)
                 .map_err(|e| format!("Avro append error: {e}"))?;
         }
 
