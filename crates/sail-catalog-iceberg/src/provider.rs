@@ -39,6 +39,13 @@ impl IcebergRestCatalogProvider {
         }
     }
 
+    fn get_property(properties: &HashMap<String, String>, key: &str) -> Option<String> {
+        properties
+            .iter()
+            .find(|(k, _)| k.trim().to_lowercase() == key.trim().to_lowercase())
+            .map(|(_, v)| v.clone())
+    }
+
     fn load_table_result_to_status(
         &self,
         table_name: &str,
@@ -184,11 +191,10 @@ impl IcebergRestCatalogProvider {
             })
             .unwrap_or_default();
 
-        let comment = metadata.properties.as_ref().and_then(|p| {
-            p.iter()
-                .find(|(k, _)| k.trim().to_lowercase() == "comment")
-                .map(|(_, v)| v.clone())
-        });
+        let comment = metadata
+            .properties
+            .as_ref()
+            .and_then(|p| Self::get_property(p, "comment"));
 
         let properties: Vec<_> = metadata
             .properties
@@ -274,11 +280,10 @@ impl IcebergRestCatalogProvider {
             .map(|r| r.sql.clone())
             .unwrap_or_default();
 
-        let comment = metadata.properties.as_ref().and_then(|p| {
-            p.iter()
-                .find(|(k, _)| k.trim().to_lowercase() == "comment")
-                .map(|(_, v)| v.clone())
-        });
+        let comment = metadata
+            .properties
+            .as_ref()
+            .and_then(|p| Self::get_property(p, "comment"));
 
         let properties: Vec<_> = metadata
             .properties
@@ -321,10 +326,22 @@ impl CatalogProvider for IcebergRestCatalogProvider {
 
         let api = self.client.catalog_api_api();
 
-        let exists = api
+        let exists = match api
             .namespace_exists(&self.prefix, &database.to_string())
             .await
-            .is_ok();
+        {
+            Ok(()) => true,
+            Err(apis::Error::ResponseError(apis::ResponseContent { status, .. }))
+                if status == 404 =>
+            {
+                false
+            }
+            Err(e) => {
+                return Err(CatalogError::External(format!(
+                    "Failed to check namespace existence: {e}"
+                )))
+            }
+        };
 
         if !exists {
             let mut props: HashMap<String, String> = properties.into_iter().collect();
@@ -347,13 +364,11 @@ impl CatalogProvider for IcebergRestCatalogProvider {
                     let comment = result
                         .properties
                         .as_ref()
-                        .and_then(|p| p.get("comment"))
-                        .cloned();
+                        .and_then(|p| Self::get_property(p, "comment"));
                     let location = result
                         .properties
                         .as_ref()
-                        .and_then(|p| p.get("location"))
-                        .cloned();
+                        .and_then(|p| Self::get_property(p, "location"));
                     let properties: Vec<_> =
                         result.properties.unwrap_or_default().into_iter().collect();
 
@@ -409,7 +424,6 @@ impl CatalogProvider for IcebergRestCatalogProvider {
         }
     }
 
-    // CHECK HERE
     async fn get_database(&self, database: &Namespace) -> CatalogResult<DatabaseStatus> {
         let api = self.client.catalog_api_api();
         let result = api
@@ -420,23 +434,16 @@ impl CatalogProvider for IcebergRestCatalogProvider {
         let comment = result
             .properties
             .as_ref()
-            .and_then(|p| p.get("comment"))
-            .cloned();
+            .and_then(|p| Self::get_property(p, "comment"));
         let location = result
             .properties
             .as_ref()
-            .and_then(|p| p.get("location"))
-            .cloned();
-        let properties: Vec<_> = result
-            .properties
-            .unwrap_or_default()
-            .into_iter()
-            .filter(|(k, _)| k != "comment" && k != "location")
-            .collect();
+            .and_then(|p| Self::get_property(p, "location"));
+        let properties: Vec<_> = result.properties.unwrap_or_default().into_iter().collect();
 
         Ok(DatabaseStatus {
             catalog: self.name.clone(),
-            database: database.clone().into(),
+            database: result.namespace,
             comment,
             location,
             properties,
@@ -1726,5 +1733,88 @@ mod tests {
     async fn test_create_database() {
         test_create_database_impl(None).await;
         test_create_database_impl(Some("test")).await;
+    }
+
+    async fn test_get_database_impl(prefix: Option<&str>) {
+        let ctx = TestContext::new(prefix).await;
+        let namespace = Namespace::try_from(vec!["db1".to_string()]).unwrap();
+
+        ctx.mock_get_json(
+            &ctx.path("/namespaces/db1"),
+            serde_json::json!({
+                "namespace": ["db1"],
+                "properties": {
+                    "comment": "test database",
+                    "location": "s3://bucket/db1",
+                    "owner": "alice",
+                    "custom_prop": "custom_value"
+                }
+            }),
+        )
+        .await;
+
+        let result = ctx.catalog.get_database(&namespace).await.unwrap();
+
+        assert_eq!(result.database, vec!["db1".to_string()]);
+        assert_eq!(result.comment, Some("test database".to_string()));
+        assert_eq!(result.location, Some("s3://bucket/db1".to_string()));
+        assert!(result
+            .properties
+            .iter()
+            .any(|(k, v)| k == "comment" && v == "test database"));
+        assert!(result
+            .properties
+            .iter()
+            .any(|(k, v)| k == "location" && v == "s3://bucket/db1"));
+        assert!(result
+            .properties
+            .iter()
+            .any(|(k, v)| k == "owner" && v == "alice"));
+        assert!(result
+            .properties
+            .iter()
+            .any(|(k, v)| k == "custom_prop" && v == "custom_value"));
+
+        ctx.mock_get_json(
+            &ctx.path("/namespaces/db2"),
+            serde_json::json!({
+                "namespace": ["db2"],
+                "properties": {}
+            }),
+        )
+        .await;
+
+        let namespace = Namespace::try_from(vec!["db2".to_string()]).unwrap();
+        let result = ctx.catalog.get_database(&namespace).await.unwrap();
+
+        assert_eq!(result.database, vec!["db2".to_string()]);
+        assert_eq!(result.comment, None);
+        assert_eq!(result.location, None);
+        assert_eq!(result.properties.len(), 0);
+
+        ctx.mock_get_json(
+            &ctx.path("/namespaces/db3"),
+            serde_json::json!({
+                "namespace": ["db3"],
+                "properties": {
+                    "COMMENT": "case insensitive",
+                    "LOCATION": "s3://bucket/db3"
+                }
+            }),
+        )
+        .await;
+
+        let namespace = Namespace::try_from(vec!["db3".to_string()]).unwrap();
+        let result = ctx.catalog.get_database(&namespace).await.unwrap();
+
+        assert_eq!(result.database, vec!["db3".to_string()]);
+        assert_eq!(result.comment, Some("case insensitive".to_string()));
+        assert_eq!(result.location, Some("s3://bucket/db3".to_string()));
+    }
+
+    #[tokio::test]
+    async fn test_get_database() {
+        test_get_database_impl(None).await;
+        test_get_database_impl(Some("test")).await;
     }
 }
