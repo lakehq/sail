@@ -20,7 +20,7 @@ use futures::StreamExt;
 use url::Url;
 
 use crate::io::IcebergObjectStore;
-use crate::physical_plan::commit::types::IcebergCommitInfo;
+use crate::physical_plan::commit::IcebergCommitInfo;
 use crate::spec::catalog::TableUpdate;
 use crate::spec::metadata::table_metadata::SnapshotLog;
 use crate::spec::TableMetadata;

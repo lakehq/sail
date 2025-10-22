@@ -352,7 +352,7 @@ impl ExecutionPlan for IcebergWriterExec {
 
             let data_files = writer.close().await.map_err(DataFusionError::Execution)?;
 
-            let mut info = crate::physical_plan::commit::types::IcebergCommitInfo {
+            let mut info = crate::physical_plan::commit::IcebergCommitInfo {
                 table_uri: table_url.to_string(),
                 row_count: total_rows,
                 data_files,
