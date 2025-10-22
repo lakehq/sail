@@ -34,9 +34,10 @@ impl IcebergTableWriter {
         root: ObjectPath,
         config: WriterConfig,
         partition_spec_id: i32,
+        data_dir: String,
     ) -> Self {
         Self {
-            generator: DefaultLocationGenerator::new(root),
+            generator: DefaultLocationGenerator::new_with_data_dir(root, data_dir),
             store,
             config,
             writers: HashMap::new(),

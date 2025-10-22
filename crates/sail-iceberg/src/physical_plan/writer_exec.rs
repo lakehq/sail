@@ -211,7 +211,7 @@ impl ExecutionPlan for IcebergWriterExec {
                     .unwrap_or_else(|_| schema.clone())
             }
 
-            let (iceberg_schema, default_spec) = if table_exists {
+            let (iceberg_schema, default_spec, data_dir) = if table_exists {
                 // Load table metadata directly from object store
                 let latest_meta = super::super::table_format::find_latest_metadata_file(
                     &object_store,
@@ -233,7 +233,53 @@ impl ExecutionPlan for IcebergWriterExec {
                     DataFusionError::Plan("No current schema in table metadata".to_string())
                 })?;
                 let default_spec = table_meta.default_partition_spec().cloned();
-                (iceberg_schema, default_spec)
+                // Derive data dir from properties when possible, else default to "data"
+                let mut data_dir = "data".to_string();
+                if let Some(val) = table_meta
+                    .properties
+                    .get("write.data.path")
+                    .or_else(|| table_meta.properties.get("write.folder-storage.path"))
+                {
+                    let raw = val.trim();
+                    if !raw.is_empty() {
+                        // Try parse as URL first
+                        if let Ok(prop_url) = url::Url::parse(raw) {
+                            if prop_url.scheme() == table_url.scheme()
+                                && prop_url.host_str() == table_url.host_str()
+                            {
+                                let base_path = table_url.path().trim_end_matches('/');
+                                let prop_path = prop_url.path().trim_start_matches('/');
+                                let base_no_leading = base_path.trim_start_matches('/');
+                                if let Some(stripped) = prop_path.strip_prefix(base_no_leading) {
+                                    let rel = stripped.trim_start_matches('/').trim_matches('/');
+                                    if !rel.is_empty() {
+                                        data_dir = rel.to_string();
+                                    }
+                                }
+                            }
+                        } else {
+                            // If absolute filesystem path or relative
+                            let prop_path = raw;
+                            let base_path = table_url.path();
+                            if prop_path.starts_with('/') {
+                                if let Some(stripped) =
+                                    prop_path.strip_prefix(base_path).or_else(|| {
+                                        prop_path.strip_prefix(base_path.trim_start_matches('/'))
+                                    })
+                                {
+                                    let rel = stripped.trim_start_matches('/').trim_matches('/');
+                                    if !rel.is_empty() {
+                                        data_dir = rel.to_string();
+                                    }
+                                }
+                            } else {
+                                // treat as relative to table root
+                                data_dir = prop_path.trim_matches('/').to_string();
+                            }
+                        }
+                    }
+                }
+                (iceberg_schema, default_spec, data_dir)
             } else {
                 // derive schema/spec from input for new-table overwrite
                 let input_arrow_schema = _input_schema.clone().as_ref().clone();
@@ -250,7 +296,7 @@ impl ExecutionPlan for IcebergWriterExec {
                     }
                 }
                 let spec = builder.build();
-                (iceberg_schema, Some(spec))
+                (iceberg_schema, Some(spec), "data".to_string())
             };
             let store = IcebergObjectStore::new(
                 object_store.clone(),
@@ -288,7 +334,7 @@ impl ExecutionPlan for IcebergWriterExec {
             );
 
             let root = object_store::path::Path::from(table_url.path());
-            let mut writer = IcebergTableWriter::new(store, root, writer_config, 0);
+            let mut writer = IcebergTableWriter::new(store, root, writer_config, 0, data_dir);
 
             let mut total_rows = 0u64;
             let mut data = stream;
