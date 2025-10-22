@@ -151,6 +151,7 @@ object_store = { version = "0.12.4", features = ["aws", "gcp", "azure", "http"] 
 hdfs-native-object-store = "0.15.0"
 rust_decimal = "1.39.0"
 wiremock = "0.6.5"
+testcontainers = "0.25.0"
 
 # Lakehouse
 deltalake = { git = "https://github.com/delta-io/delta-rs.git", rev = "0864b21", default-features = false, features = ["rustls"] }

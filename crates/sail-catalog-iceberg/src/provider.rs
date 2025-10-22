@@ -39,11 +39,117 @@ impl IcebergRestCatalogProvider {
         }
     }
 
+    // CHECK HERE
+    pub async fn load_config(
+        &self,
+        warehouse: Option<&str>,
+    ) -> CatalogResult<crate::models::CatalogConfig> {
+        let api = self.client.configuration_api_api();
+        let config = api
+            .get_config(warehouse)
+            .await
+            .map_err(|e| CatalogError::External(format!("Failed to load config: {e}")))?;
+
+        // eprintln!("CHECK HERE DEBUG load_config response: {config:?}");
+
+        Ok(config)
+    }
+
     fn get_property(properties: &HashMap<String, String>, key: &str) -> Option<String> {
         properties
             .iter()
             .find(|(k, _)| k.trim().to_lowercase() == key.trim().to_lowercase())
             .map(|(_, v)| v.clone())
+    }
+
+    // CHECK HERE
+    async fn replace_view_impl(
+        &self,
+        database: &Namespace,
+        view: &str,
+        columns: Vec<CreateViewColumnOptions>,
+        definition: String,
+        comment: Option<String>,
+        properties: Vec<(String, String)>,
+    ) -> CatalogResult<TableStatus> {
+        let mut fields = Vec::new();
+        for (idx, col) in columns.iter().enumerate() {
+            let field_type = arrow_type_to_iceberg(&col.data_type).map_err(|e| {
+                CatalogError::External(format!(
+                    "Failed to convert Arrow type to Iceberg type for column '{}': {e}",
+                    col.name
+                ))
+            })?;
+            let mut field =
+                NestedField::new(idx as i32, col.name.clone(), field_type, !col.nullable);
+            if let Some(comment_text) = &col.comment {
+                field = field.with_doc(comment_text);
+            }
+            fields.push(Arc::new(field));
+        }
+
+        let schema = crate::models::Schema {
+            r#type: crate::models::schema::Type::Struct,
+            fields,
+            schema_id: None,
+            identifier_field_ids: None,
+        };
+
+        let sql_representation = crate::models::SqlViewRepresentation {
+            r#type: "sql".to_string(),
+            sql: definition,
+            dialect: "spark".to_string(),
+        };
+
+        let timestamp_ms = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|d| d.as_millis() as i64)
+            .unwrap_or(0);
+
+        let view_version = crate::models::ViewVersion {
+            version_id: 1,
+            timestamp_ms,
+            schema_id: 0,
+            summary: HashMap::new(),
+            representations: vec![sql_representation],
+            default_catalog: None,
+            default_namespace: database.clone().into(),
+        };
+
+        let mut updates = HashMap::new();
+        for (k, v) in properties {
+            updates.insert(k, v);
+        }
+        if let Some(c) = comment {
+            updates.insert("comment".to_string(), c);
+        }
+
+        let view_update = crate::models::ViewUpdate {
+            action: "upgrade-format-version".to_string(),
+            uuid: String::new(),
+            format_version: 1,
+            schema: Box::new(schema),
+            last_column_id: None,
+            location: String::new(),
+            updates,
+            removals: vec![],
+            view_version: Box::new(view_version),
+            view_version_id: -1,
+        };
+
+        let commit_request = crate::models::CommitViewRequest {
+            identifier: None,
+            requirements: None,
+            updates: vec![view_update],
+        };
+
+        let api = self.client.catalog_api_api();
+        let result = api
+            .replace_view(&self.prefix, &database.to_string(), view, commit_request)
+            .await
+            .map_err(|e| CatalogError::External(format!("Failed to replace view: {e}")))?;
+
+        self.load_view_result_to_status(view, database, result)
     }
 
     fn load_table_result_to_status(
@@ -425,11 +531,24 @@ impl CatalogProvider for IcebergRestCatalogProvider {
     }
 
     async fn get_database(&self, database: &Namespace) -> CatalogResult<DatabaseStatus> {
+        // CHECK HERE
+        let _config = self.load_config(Some("s3://icebergdata/demo")).await?;
+
         let api = self.client.catalog_api_api();
+        let namespace_str = database.to_string();
         let result = api
-            .load_namespace_metadata(&self.prefix, &database.to_string())
+            .load_namespace_metadata(&self.prefix, &namespace_str)
             .await
-            .map_err(|e| CatalogError::NotFound("database", format!("{database}: {e}")))?;
+            .map_err(|e| match e {
+                apis::Error::ResponseError(apis::ResponseContent { status, .. }) => {
+                    if status == 404 {
+                        CatalogError::NotFound("namespace", database.to_string())
+                    } else {
+                        CatalogError::External(format!("Failed to load namespace {database}: {e}"))
+                    }
+                }
+                _ => CatalogError::External(format!("Failed to load namespace {database}: {e}")),
+            })?;
 
         let comment = result
             .properties
@@ -710,14 +829,21 @@ impl CatalogProvider for IcebergRestCatalogProvider {
             columns,
             definition,
             if_not_exists,
-            replace: _,
+            replace,
             comment,
             properties,
         } = options;
 
-        if if_not_exists {
+        if if_not_exists || replace {
             if let Ok(existing) = self.get_view(database, view).await {
-                return Ok(existing);
+                if if_not_exists {
+                    return Ok(existing);
+                }
+                if replace {
+                    return self
+                        .replace_view_impl(database, view, columns, definition, comment, properties)
+                        .await;
+                }
             }
         }
 
