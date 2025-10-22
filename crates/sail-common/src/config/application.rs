@@ -285,7 +285,6 @@ pub enum CatalogType {
     },
     IcebergRest {
         name: String,
-        prefix: String,
     },
 }
 

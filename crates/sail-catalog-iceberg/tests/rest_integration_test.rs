@@ -83,12 +83,7 @@ async fn setup_catalog() -> (
         api_key: None,
     });
 
-    let catalog = IcebergRestCatalogProvider::new(
-        "test_catalog".to_string(),
-        "".to_string(),
-        config,
-        runtime,
-    );
+    let catalog = IcebergRestCatalogProvider::new("test_catalog".to_string(), config, runtime);
 
     // CHECK HERE
     let _config_result = catalog.load_config(Some("s3://icebergdata/demo")).await;
@@ -102,6 +97,7 @@ async fn test_get_non_exist_namespace() {
 
     let namespace = Namespace::try_from(vec!["test_get_non_exist_namespace".to_string()]).unwrap();
     let result = catalog.get_database(&namespace).await;
+    eprintln!("CHECK HERE test_get_non_exist_namespace: {result:?}");
 
     assert!(result.is_err());
     assert!(matches!(

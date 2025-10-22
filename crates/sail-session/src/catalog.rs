@@ -32,10 +32,9 @@ pub fn create_catalog_manager(
                     );
                     Ok((name.clone(), Arc::new(provider)))
                 }
-                CatalogType::IcebergRest { name, prefix } => {
+                CatalogType::IcebergRest { name } => {
                     let provider = IcebergRestCatalogProvider::new(
                         name.clone(),
-                        prefix.clone(),
                         Arc::new(sail_catalog_iceberg::apis::configuration::Configuration::new()), // CHECK HERE: DO NOT MERGE UNTIL REAL CONFIG ADDED
                         runtime.clone(),
                     );

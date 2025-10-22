@@ -1194,29 +1194,23 @@ impl CatalogApiApi for CatalogApiApiClient {
         }
     }
 
-    // CHECK HERE
     /// Return all stored metadata properties for a given namespace
     async fn load_namespace_metadata<'prefix, 'namespace>(
         &self,
-        _prefix: &'prefix str,
+        prefix: &'prefix str,
         namespace: &'namespace str,
     ) -> Result<models::GetNamespaceResponse, Error<LoadNamespaceMetadataError>> {
         let local_var_configuration = &self.configuration;
 
         let local_var_client = &local_var_configuration.client;
 
-        // let local_var_uri_str = format!(
-        //     "{}/v1/{prefix}/namespaces/{namespace}",
-        //     local_var_configuration.base_path,
-        //     prefix = crate::apis::urlencode(prefix),
-        //     namespace = crate::apis::urlencode(namespace)
-        // );
-        // CHECK HERE
         let local_var_uri_str = format!(
-            "{}/v1/namespaces/{namespace}",
+            "{}/v1/{prefix}/namespaces/{namespace}",
             local_var_configuration.base_path,
+            prefix = crate::apis::urlencode(prefix),
             namespace = crate::apis::urlencode(namespace)
         );
+
         let mut local_var_req_builder =
             local_var_client.request(reqwest::Method::GET, local_var_uri_str.as_str());
 

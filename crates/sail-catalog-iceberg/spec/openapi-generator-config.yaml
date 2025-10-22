@@ -2,6 +2,7 @@ additionalProperties:
   library: reqwest-trait
   supportAsync: true
   topLevelApiClient: true
+  withAWSV4Signature: true
 
 globalProperties:
   apiDocs: false

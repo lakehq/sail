@@ -18,23 +18,16 @@ use crate::apis::{self, Api, ApiClient};
 pub struct IcebergRestCatalogProvider {
     name: String,
     client: ApiClient,
-    prefix: String,
     runtime: RuntimeHandle, // CHECK HERE: ADD SECONDARY RUNTIME LOGIC BEFORE MERGING
 }
 
 impl IcebergRestCatalogProvider {
-    pub fn new(
-        name: String,
-        prefix: String,
-        configuration: Arc<Configuration>,
-        runtime: RuntimeHandle,
-    ) -> Self {
+    pub fn new(name: String, configuration: Arc<Configuration>, runtime: RuntimeHandle) -> Self {
         let client = ApiClient::new(configuration);
 
         Self {
             name,
             client,
-            prefix,
             runtime,
         }
     }
@@ -145,7 +138,7 @@ impl IcebergRestCatalogProvider {
 
         let api = self.client.catalog_api_api();
         let result = api
-            .replace_view(&self.prefix, &database.to_string(), view, commit_request)
+            .replace_view(self.get_name(), &database.to_string(), view, commit_request)
             .await
             .map_err(|e| CatalogError::External(format!("Failed to replace view: {e}")))?;
 
@@ -433,7 +426,7 @@ impl CatalogProvider for IcebergRestCatalogProvider {
         let api = self.client.catalog_api_api();
 
         let exists = match api
-            .namespace_exists(&self.prefix, &database.to_string())
+            .namespace_exists(self.get_name(), &database.to_string())
             .await
         {
             Ok(()) => true,
@@ -463,7 +456,7 @@ impl CatalogProvider for IcebergRestCatalogProvider {
                 properties: if props.is_empty() { None } else { Some(props) },
             };
 
-            let result = api.create_namespace(&self.prefix, request).await;
+            let result = api.create_namespace(self.get_name(), request).await;
 
             match result {
                 Ok(result) => {
@@ -515,7 +508,7 @@ impl CatalogProvider for IcebergRestCatalogProvider {
         } = options;
         let api = self.client.catalog_api_api();
         match api
-            .drop_namespace(&self.prefix, &database.to_string())
+            .drop_namespace(self.get_name(), &database.to_string())
             .await
         {
             Ok(_) => Ok(()),
@@ -537,7 +530,7 @@ impl CatalogProvider for IcebergRestCatalogProvider {
         let api = self.client.catalog_api_api();
         let namespace_str = database.to_string();
         let result = api
-            .load_namespace_metadata(&self.prefix, &namespace_str)
+            .load_namespace_metadata(self.get_name(), &namespace_str)
             .await
             .map_err(|e| match e {
                 apis::Error::ResponseError(apis::ResponseContent { status, .. }) => {
@@ -547,7 +540,9 @@ impl CatalogProvider for IcebergRestCatalogProvider {
                         CatalogError::External(format!("Failed to load namespace {database}: {e}"))
                     }
                 }
-                _ => CatalogError::External(format!("Failed to load namespace {database}: {e}")),
+                _ => {
+                    CatalogError::External(format!("MEOW Failed to load namespace {database}: {e}"))
+                }
             })?;
 
         let comment = result
@@ -578,7 +573,7 @@ impl CatalogProvider for IcebergRestCatalogProvider {
         let result = self
             .client
             .catalog_api_api()
-            .list_namespaces(&self.prefix, None, None, parent.as_deref())
+            .list_namespaces(self.get_name(), None, None, parent.as_deref())
             .await
             .map_err(|e| CatalogError::External(format!("Failed to list namespaces: {e}")))?;
         let catalog = &self.name;
@@ -746,7 +741,7 @@ impl CatalogProvider for IcebergRestCatalogProvider {
 
         let api = self.client.catalog_api_api();
         let result = api
-            .create_table(&self.prefix, &database.to_string(), request, None)
+            .create_table(self.get_name(), &database.to_string(), request, None)
             .await
             .map_err(|e| CatalogError::External(format!("Failed to create table: {e}")))?;
 
@@ -756,7 +751,14 @@ impl CatalogProvider for IcebergRestCatalogProvider {
     async fn get_table(&self, database: &Namespace, table: &str) -> CatalogResult<TableStatus> {
         let api = self.client.catalog_api_api();
         let result = api
-            .load_table(&self.prefix, &database.to_string(), table, None, None, None)
+            .load_table(
+                self.get_name(),
+                &database.to_string(),
+                table,
+                None,
+                None,
+                None,
+            )
             .await
             .map_err(|e| {
                 CatalogError::External(format!("Failed to load table {database}.{table}: {e}"))
@@ -768,7 +770,7 @@ impl CatalogProvider for IcebergRestCatalogProvider {
         let result = self
             .client
             .catalog_api_api()
-            .list_tables(&self.prefix, &database.to_string(), None, None)
+            .list_tables(self.get_name(), &database.to_string(), None, None)
             .await
             .map_err(|e| CatalogError::External(format!("Failed to list tables: {e}")))?;
         let catalog = &self.name;
@@ -805,7 +807,7 @@ impl CatalogProvider for IcebergRestCatalogProvider {
         let DropTableOptions { if_exists, purge } = options;
         let api = self.client.catalog_api_api();
         match api
-            .drop_table(&self.prefix, &database.to_string(), table, Some(purge))
+            .drop_table(self.get_name(), &database.to_string(), table, Some(purge))
             .await
         {
             Ok(_) => Ok(()),
@@ -909,7 +911,7 @@ impl CatalogProvider for IcebergRestCatalogProvider {
 
         let api = self.client.catalog_api_api();
         let result = api
-            .create_view(&self.prefix, &database.to_string(), request)
+            .create_view(self.get_name(), &database.to_string(), request)
             .await
             .map_err(|e| CatalogError::External(format!("Failed to create view: {e}")))?;
 
@@ -919,7 +921,7 @@ impl CatalogProvider for IcebergRestCatalogProvider {
     async fn get_view(&self, database: &Namespace, view: &str) -> CatalogResult<TableStatus> {
         let api = self.client.catalog_api_api();
         let result = api
-            .load_view(&self.prefix, &database.to_string(), view)
+            .load_view(self.get_name(), &database.to_string(), view)
             .await
             .map_err(|e| {
                 CatalogError::External(format!("Failed to load view {database}.{view}: {e}"))
@@ -931,7 +933,7 @@ impl CatalogProvider for IcebergRestCatalogProvider {
         let result = self
             .client
             .catalog_api_api()
-            .list_views(&self.prefix, &database.to_string(), None, None)
+            .list_views(self.get_name(), &database.to_string(), None, None)
             .await
             .map_err(|e| CatalogError::External(format!("Failed to list views: {e}")))?;
         let catalog = &self.name;
@@ -962,7 +964,7 @@ impl CatalogProvider for IcebergRestCatalogProvider {
         let DropViewOptions { if_exists } = options;
         let api = self.client.catalog_api_api();
         match api
-            .drop_view(&self.prefix, &database.to_string(), view)
+            .drop_view(self.get_name(), &database.to_string(), view)
             .await
         {
             Ok(_) => Ok(()),
@@ -989,13 +991,13 @@ mod tests {
     use super::*;
 
     struct TestContext {
+        name: String,
         server: MockServer,
         catalog: IcebergRestCatalogProvider,
-        prefix: String,
     }
 
     impl TestContext {
-        async fn new(prefix: Option<&str>) -> Self {
+        async fn new(name: Option<&str>) -> Self {
             let server = MockServer::start().await;
 
             Mock::given(method("GET"))
@@ -1009,7 +1011,7 @@ mod tests {
                 .mount(&server)
                 .await;
 
-            let prefix_str = prefix.unwrap_or("");
+            let name_str = name.unwrap_or("");
             let runtime = RuntimeHandle::new(tokio::runtime::Handle::current(), None);
             let config = Arc::new(Configuration {
                 base_path: server.uri(),
@@ -1020,25 +1022,20 @@ mod tests {
                 bearer_access_token: None,
                 api_key: None,
             });
-            let catalog = IcebergRestCatalogProvider::new(
-                "test_catalog".to_string(),
-                prefix_str.to_string(),
-                config,
-                runtime,
-            );
+            let catalog = IcebergRestCatalogProvider::new(name_str.to_string(), config, runtime);
 
             Self {
+                name: name_str.to_string(),
                 server,
                 catalog,
-                prefix: prefix_str.to_string(),
             }
         }
 
         fn path(&self, suffix: &str) -> String {
-            if self.prefix.is_empty() {
+            if self.name.is_empty() {
                 format!("/v1/{suffix}")
             } else {
-                format!("/v1/{}{suffix}", self.prefix)
+                format!("/v1/{}{suffix}", self.name)
             }
         }
 
@@ -1081,8 +1078,8 @@ mod tests {
         }
     }
 
-    async fn test_list_namespace_impl(prefix: Option<&str>) {
-        let ctx = TestContext::new(prefix).await;
+    async fn test_list_databases_impl(name: Option<&str>) {
+        let ctx = TestContext::new(name).await;
 
         ctx.mock_get_json(
             &ctx.path("/namespaces"),
@@ -1106,13 +1103,13 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn test_list_namespace() {
-        test_list_namespace_impl(None).await;
-        test_list_namespace_impl(Some("test")).await;
+    async fn test_list_databases() {
+        test_list_databases_impl(None).await;
+        test_list_databases_impl(Some("test")).await;
     }
 
-    async fn test_list_namespace_parent_impl(prefix: Option<&str>) {
-        let ctx = TestContext::new(prefix).await;
+    async fn test_list_databases_parent_impl(name: Option<&str>) {
+        let ctx = TestContext::new(name).await;
         let ns_path = ctx.path("/namespaces");
 
         Mock::given(method("GET"))
@@ -1190,13 +1187,13 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn test_list_namespace_parent() {
-        test_list_namespace_parent_impl(None).await;
-        test_list_namespace_parent_impl(Some("test")).await;
+    async fn test_list_databases_parent() {
+        test_list_databases_parent_impl(None).await;
+        test_list_databases_parent_impl(Some("test")).await;
     }
 
-    async fn test_list_tables_impl(prefix: Option<&str>) {
-        let ctx = TestContext::new(prefix).await;
+    async fn test_list_tables_impl(name: Option<&str>) {
+        let ctx = TestContext::new(name).await;
 
         ctx.mock_get_json(
             &ctx.path("/namespaces/ns1/tables"),
@@ -1232,8 +1229,8 @@ mod tests {
         test_list_tables_impl(Some("test")).await;
     }
 
-    async fn test_list_views_impl(prefix: Option<&str>) {
-        let ctx = TestContext::new(prefix).await;
+    async fn test_list_views_impl(name: Option<&str>) {
+        let ctx = TestContext::new(name).await;
 
         ctx.mock_get_json(
             &ctx.path("/namespaces/ns1/views"),
@@ -1269,8 +1266,8 @@ mod tests {
         test_list_views_impl(Some("test")).await;
     }
 
-    async fn test_drop_database_impl(prefix: Option<&str>) {
-        let ctx = TestContext::new(prefix).await;
+    async fn test_drop_database_impl(name: Option<&str>) {
+        let ctx = TestContext::new(name).await;
 
         ctx.mock_delete(&ctx.path("/namespaces/db1")).await;
         let namespace = Namespace::try_from(vec!["db1".to_string()]).unwrap();
@@ -1331,8 +1328,8 @@ mod tests {
         test_drop_database_impl(Some("test")).await;
     }
 
-    async fn test_drop_table_impl(prefix: Option<&str>) {
-        let ctx = TestContext::new(prefix).await;
+    async fn test_drop_table_impl(name: Option<&str>) {
+        let ctx = TestContext::new(name).await;
         let namespace = Namespace::try_from(vec!["ns1".to_string()]).unwrap();
 
         Mock::given(method("DELETE"))
@@ -1437,8 +1434,8 @@ mod tests {
         test_drop_table_impl(Some("test")).await;
     }
 
-    async fn test_drop_view_impl(prefix: Option<&str>) {
-        let ctx = TestContext::new(prefix).await;
+    async fn test_drop_view_impl(name: Option<&str>) {
+        let ctx = TestContext::new(name).await;
         let namespace = Namespace::try_from(vec!["ns1".to_string()]).unwrap();
 
         ctx.mock_delete(&ctx.path("/namespaces/ns1/views/view1"))
@@ -1480,8 +1477,8 @@ mod tests {
         test_drop_view_impl(Some("test")).await;
     }
 
-    async fn test_get_table_impl(prefix: Option<&str>) {
-        let ctx = TestContext::new(prefix).await;
+    async fn test_get_table_impl(name: Option<&str>) {
+        let ctx = TestContext::new(name).await;
         let namespace = Namespace::try_from(vec!["db1".to_string()]).unwrap();
 
         ctx.mock_get_json(
@@ -1628,8 +1625,8 @@ mod tests {
         test_get_table_impl(Some("test")).await;
     }
 
-    async fn test_get_view_impl(prefix: Option<&str>) {
-        let ctx = TestContext::new(prefix).await;
+    async fn test_get_view_impl(name: Option<&str>) {
+        let ctx = TestContext::new(name).await;
         let namespace = Namespace::try_from(vec!["db1".to_string()]).unwrap();
 
         ctx.mock_get_json(
@@ -1737,8 +1734,8 @@ mod tests {
         test_get_view_impl(Some("test")).await;
     }
 
-    async fn test_create_database_impl(prefix: Option<&str>) {
-        let ctx = TestContext::new(prefix).await;
+    async fn test_create_database_impl(name: Option<&str>) {
+        let ctx = TestContext::new(name).await;
 
         Mock::given(method("HEAD"))
             .and(path(ctx.path("/namespaces/db1").as_str()))
@@ -1861,8 +1858,8 @@ mod tests {
         test_create_database_impl(Some("test")).await;
     }
 
-    async fn test_get_database_impl(prefix: Option<&str>) {
-        let ctx = TestContext::new(prefix).await;
+    async fn test_get_database_impl(name: Option<&str>) {
+        let ctx = TestContext::new(name).await;
         let namespace = Namespace::try_from(vec!["db1".to_string()]).unwrap();
 
         ctx.mock_get_json(
