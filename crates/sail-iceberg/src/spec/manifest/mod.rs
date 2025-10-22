@@ -27,12 +27,102 @@ mod _serde;
 mod data_file;
 mod entry;
 mod metadata;
+mod schema;
 mod writer;
 
+// Provide data file avro helpers API surface
+use apache_avro::{to_value, Writer as AvroWriter};
 pub use data_file::*;
 pub use entry::*;
 pub use metadata::*;
 pub use writer::*;
+
+use crate::spec::metadata::format::FormatVersion;
+use crate::spec::types::StructType;
+use crate::spec::Schema as IcebergSchema;
+
+/// Convert data files to avro bytes and write to writer. Return the bytes written.
+pub fn write_data_files_to_avro<W: std::io::Write>(
+    writer: &mut W,
+    data_files: impl IntoIterator<Item = DataFile>,
+    partition_type: &StructType,
+    version: FormatVersion,
+) -> Result<usize, String> {
+    let avro_schema = match version {
+        FormatVersion::V1 => super::manifest::schema::data_file_schema_v2(partition_type),
+        FormatVersion::V2 => super::manifest::schema::data_file_schema_v2(partition_type),
+    };
+    let mut writer = AvroWriter::new(&avro_schema, writer);
+
+    for data_file in data_files {
+        let serde_df = super::manifest::_serde::DataFileSerde::from_data_file(data_file);
+        let value = to_value(serde_df)
+            .map_err(|e| format!("Avro to_value error: {e}"))?
+            .resolve(&avro_schema)
+            .map_err(|e| format!("Avro resolve error: {e}"))?;
+        writer
+            .append(value)
+            .map_err(|e| format!("Avro append error: {e}"))?;
+    }
+
+    writer.flush().map_err(|e| format!("Avro flush error: {e}"))
+}
+
+/// Parse data files from avro bytes.
+pub fn read_data_files_from_avro<R: std::io::Read>(
+    reader: &mut R,
+    _schema: &IcebergSchema,
+    partition_spec_id: i32,
+    partition_type: &StructType,
+    _version: FormatVersion,
+) -> Result<Vec<DataFile>, String> {
+    let avro_schema = super::manifest::schema::data_file_schema_v2(partition_type);
+    let reader = AvroReader::with_schema(&avro_schema, reader)
+        .map_err(|e| format!("Avro reader error: {e}"))?;
+    reader
+        .into_iter()
+        .map(|value| {
+            let value = value.map_err(|e| format!("Avro read error: {e}"))?;
+            let serde_df: super::manifest::_serde::DataFileSerde =
+                avro_from_value(&value).map_err(|e| format!("Avro decode DataFile error: {e}"))?;
+            let df = DataFile {
+                content: match serde_df.content {
+                    0 => DataContentType::Data,
+                    1 => DataContentType::PositionDeletes,
+                    2 => DataContentType::EqualityDeletes,
+                    _ => DataContentType::Data,
+                },
+                file_path: serde_df.file_path,
+                file_format: match serde_df.file_format.as_str() {
+                    "PARQUET" => DataFileFormat::Parquet,
+                    "AVRO" => DataFileFormat::Avro,
+                    "ORC" => DataFileFormat::Orc,
+                    _ => DataFileFormat::Parquet,
+                },
+                partition: Vec::new(),
+                record_count: serde_df.record_count as u64,
+                file_size_in_bytes: serde_df.file_size_in_bytes as u64,
+                column_sizes: Default::default(),
+                value_counts: Default::default(),
+                null_value_counts: Default::default(),
+                nan_value_counts: Default::default(),
+                lower_bounds: Default::default(),
+                upper_bounds: Default::default(),
+                block_size_in_bytes: None,
+                key_metadata: serde_df.key_metadata,
+                split_offsets: serde_df.split_offsets.unwrap_or_default(),
+                equality_ids: serde_df.equality_ids.unwrap_or_default(),
+                sort_order_id: serde_df.sort_order_id,
+                first_row_id: serde_df.first_row_id,
+                partition_spec_id,
+                referenced_data_file: serde_df.referenced_data_file,
+                content_offset: serde_df.content_offset,
+                content_size_in_bytes: serde_df.content_size_in_bytes,
+            };
+            Ok(df)
+        })
+        .collect::<Result<Vec<_>, String>>()
+}
 
 /// Reference to [`ManifestEntry`].
 pub type ManifestEntryRef = Arc<ManifestEntry>;
@@ -81,37 +171,14 @@ impl Manifest {
         let meta = reader.user_metadata();
         let metadata = ManifestMetadata::parse_from_avro_meta(meta)?;
 
-        // Determine partition type to guide value decoding when needed
-        let partition_type = metadata
-            .partition_spec
-            .partition_type(&metadata.schema)
-            .map_err(|e| format!("Partition type error: {e}"))?;
-
-        // For entries, reuse the embedded schema in the Avro file and deserialize per record
-        let reader = AvroReader::new(bs).map_err(|e| format!("Avro read error: {e}"))?;
+        // For entries, use typed serde model
         let mut entries = Vec::new();
+        let reader = AvroReader::new(bs).map_err(|e| format!("Avro read error: {e}"))?;
         for value in reader {
             let value = value.map_err(|e| format!("Avro read value error: {e}"))?;
-            let entry_avro: _serde::ManifestEntryAvro =
+            let entry: _serde::ManifestEntryV2 =
                 avro_from_value(&value).map_err(|e| format!("Avro decode entry error: {e}"))?;
-            let data_file = entry_avro.data_file.into_data_file(
-                &metadata.schema,
-                partition_type.fields().len() as i32,
-                metadata.partition_spec.spec_id(),
-            );
-            let status = match entry_avro.status {
-                1 => ManifestStatus::Added,
-                2 => ManifestStatus::Deleted,
-                _ => ManifestStatus::Existing,
-            };
-            let entry = ManifestEntry::new(
-                status,
-                entry_avro.snapshot_id,
-                entry_avro.sequence_number,
-                entry_avro.file_sequence_number,
-                data_file,
-            );
-            entries.push(entry);
+            entries.push(entry.into_entry(metadata.partition_spec.spec_id()));
         }
 
         Ok((metadata, entries))
