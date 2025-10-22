@@ -307,7 +307,6 @@ impl CatalogProvider for IcebergRestCatalogProvider {
         &self.name
     }
 
-    // CHECK HERE
     async fn create_database(
         &self,
         database: &Namespace,
@@ -320,64 +319,68 @@ impl CatalogProvider for IcebergRestCatalogProvider {
             properties,
         } = options;
 
-        if if_not_exists {
-            let api = self.client.catalog_api_api();
-
-            if api
-                .namespace_exists(&self.prefix, &database.to_string())
-                .await
-                .is_ok()
-            {
-                return self.get_database(database).await;
-            }
-        }
-
-        let mut props = HashMap::new();
-        for (k, v) in properties {
-            props.insert(k, v);
-        }
-        if let Some(c) = &comment {
-            props.insert("comment".to_string(), c.clone());
-        }
-        if let Some(l) = location {
-            props.insert("location".to_string(), l);
-        }
-
-        let request = crate::models::CreateNamespaceRequest {
-            namespace: database.clone().into(),
-            properties: if props.is_empty() { None } else { Some(props) },
-        };
-
         let api = self.client.catalog_api_api();
-        let result = api
-            .create_namespace(&self.prefix, request)
+
+        let exists = api
+            .namespace_exists(&self.prefix, &database.to_string())
             .await
-            .map_err(|e| CatalogError::External(format!("Failed to create namespace: {e}")))?;
+            .is_ok();
 
-        let comment = result
-            .properties
-            .as_ref()
-            .and_then(|p| p.get("comment"))
-            .cloned();
-        let location = result
-            .properties
-            .as_ref()
-            .and_then(|p| p.get("location"))
-            .cloned();
-        let properties: Vec<_> = result
-            .properties
-            .unwrap_or_default()
-            .into_iter()
-            .filter(|(k, _)| k != "comment" && k != "location")
-            .collect();
+        if !exists {
+            let mut props: HashMap<String, String> = properties.into_iter().collect();
+            if let Some(c) = comment {
+                props.insert("comment".to_string(), c);
+            }
+            if let Some(l) = location {
+                props.insert("location".to_string(), l);
+            }
 
-        Ok(DatabaseStatus {
-            catalog: self.name.clone(),
-            database: database.clone().into(),
-            comment,
-            location,
-            properties,
-        })
+            let request = crate::models::CreateNamespaceRequest {
+                namespace: database.clone().into(),
+                properties: if props.is_empty() { None } else { Some(props) },
+            };
+
+            let result = api.create_namespace(&self.prefix, request).await;
+
+            match result {
+                Ok(result) => {
+                    let comment = result
+                        .properties
+                        .as_ref()
+                        .and_then(|p| p.get("comment"))
+                        .cloned();
+                    let location = result
+                        .properties
+                        .as_ref()
+                        .and_then(|p| p.get("location"))
+                        .cloned();
+                    let properties: Vec<_> =
+                        result.properties.unwrap_or_default().into_iter().collect();
+
+                    Ok(DatabaseStatus {
+                        catalog: self.name.clone(),
+                        database: result.namespace,
+                        comment,
+                        location,
+                        properties,
+                    })
+                }
+                Err(apis::Error::ResponseError(apis::ResponseContent { status, .. }))
+                    if status == 409 && if_not_exists =>
+                {
+                    self.get_database(database).await
+                }
+                Err(e) => Err(CatalogError::External(format!(
+                    "Failed to create namespace: {e}"
+                ))),
+            }
+        } else if !if_not_exists {
+            Err(CatalogError::External(format!(
+                "Namespace {database} already exists",
+            )))
+        } else {
+            self.get_database(database).await
+        }
     }
 
     async fn drop_database(
@@ -477,15 +480,15 @@ impl CatalogProvider for IcebergRestCatalogProvider {
         let CreateTableOptions {
             columns,
             comment,
-            constraints: _,
+            constraints,
             location,
             format: _,
-            partition_by: _,
-            sort_by: _,
+            partition_by,
+            sort_by,
             bucket_by: _,
             if_not_exists,
             replace: _,
-            options: _,
+            options,
             properties,
         } = options;
 
@@ -496,6 +499,7 @@ impl CatalogProvider for IcebergRestCatalogProvider {
         }
 
         let mut fields = Vec::new();
+        let mut column_name_to_id = HashMap::new();
         for (idx, col) in columns.iter().enumerate() {
             let field_type = arrow_type_to_iceberg(&col.data_type).map_err(|e| {
                 CatalogError::External(format!(
@@ -503,23 +507,101 @@ impl CatalogProvider for IcebergRestCatalogProvider {
                     col.name
                 ))
             })?;
-            let mut field =
-                NestedField::new(idx as i32, col.name.clone(), field_type, !col.nullable);
+            let field_id = idx as i32 + 1;
+            let mut field = NestedField::new(field_id, col.name.clone(), field_type, !col.nullable);
             if let Some(comment_text) = &col.comment {
                 field = field.with_doc(comment_text);
             }
+            column_name_to_id.insert(col.name.clone(), field_id);
             fields.push(Arc::new(field));
         }
+
+        let identifier_field_ids = constraints
+            .iter()
+            .filter_map(|c| match c {
+                CatalogTableConstraint::PrimaryKey { columns, .. } => Some(
+                    columns
+                        .iter()
+                        .filter_map(|col_name| column_name_to_id.get(col_name).copied())
+                        .collect::<Vec<_>>(),
+                ),
+                CatalogTableConstraint::Unique { .. } => None,
+            })
+            .flatten()
+            .collect::<Vec<_>>();
 
         let schema = crate::models::Schema {
             r#type: crate::models::schema::Type::Struct,
             fields,
             schema_id: None,
-            identifier_field_ids: None,
+            identifier_field_ids: if identifier_field_ids.is_empty() {
+                None
+            } else {
+                Some(identifier_field_ids)
+            },
+        };
+
+        let partition_spec = if !partition_by.is_empty() {
+            let partition_fields: Vec<crate::models::PartitionField> = partition_by
+                .iter()
+                .filter_map(|col_name| {
+                    column_name_to_id.get(col_name).map(|&source_id| {
+                        crate::models::PartitionField {
+                            field_id: None,
+                            source_id,
+                            name: col_name.clone(),
+                            transform: "identity".to_string(),
+                        }
+                    })
+                })
+                .collect();
+            if partition_fields.is_empty() {
+                None
+            } else {
+                Some(Box::new(crate::models::PartitionSpec {
+                    spec_id: None,
+                    fields: partition_fields,
+                }))
+            }
+        } else {
+            None
+        };
+
+        let write_order = if !sort_by.is_empty() {
+            let sort_fields: Vec<crate::models::SortField> = sort_by
+                .iter()
+                .filter_map(|sort| {
+                    column_name_to_id
+                        .get(&sort.column)
+                        .map(|&source_id| crate::models::SortField {
+                            source_id,
+                            transform: "identity".to_string(),
+                            direction: if sort.ascending {
+                                crate::models::SortDirection::Asc
+                            } else {
+                                crate::models::SortDirection::Desc
+                            },
+                            null_order: crate::models::NullOrder::NullsFirst,
+                        })
+                })
+                .collect();
+            if sort_fields.is_empty() {
+                None
+            } else {
+                Some(Box::new(crate::models::SortOrder {
+                    order_id: 1,
+                    fields: sort_fields,
+                }))
+            }
+        } else {
+            None
         };
 
         let mut props = HashMap::new();
         for (k, v) in properties {
+            props.insert(k, v);
+        }
+        for (k, v) in options {
             props.insert(k, v);
         }
         if let Some(c) = comment {
@@ -530,8 +612,8 @@ impl CatalogProvider for IcebergRestCatalogProvider {
             name: table.to_string(),
             location,
             schema: Box::new(schema),
-            partition_spec: None,
-            write_order: None,
+            partition_spec,
+            write_order,
             stage_create: None,
             properties: if props.is_empty() { None } else { Some(props) },
         };
@@ -1520,5 +1602,129 @@ mod tests {
     async fn test_get_view() {
         test_get_view_impl(None).await;
         test_get_view_impl(Some("test")).await;
+    }
+
+    async fn test_create_database_impl(prefix: Option<&str>) {
+        let ctx = TestContext::new(prefix).await;
+
+        Mock::given(method("HEAD"))
+            .and(path(ctx.path("/namespaces/db1").as_str()))
+            .respond_with(ResponseTemplate::new(404))
+            .expect(1)
+            .mount(&ctx.server)
+            .await;
+
+        Mock::given(method("POST"))
+            .and(path(ctx.path("/namespaces").as_str()))
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+                "namespace": ["db1"],
+                "properties": {
+                    "comment": "test database",
+                    "location": "s3://bucket/db1",
+                    "custom_prop": "custom_value"
+                }
+            })))
+            .expect(1)
+            .mount(&ctx.server)
+            .await;
+
+        let namespace = Namespace::try_from(vec!["db1".to_string()]).unwrap();
+        let result = ctx
+            .catalog
+            .create_database(
+                &namespace,
+                CreateDatabaseOptions {
+                    if_not_exists: false,
+                    comment: Some("test database".to_string()),
+                    location: Some("s3://bucket/db1".to_string()),
+                    properties: vec![("custom_prop".to_string(), "custom_value".to_string())],
+                },
+            )
+            .await;
+
+        assert!(result.is_ok());
+        let db = result.unwrap();
+        assert_eq!(db.database, vec!["db1".to_string()]);
+        assert_eq!(db.comment, Some("test database".to_string()));
+        assert_eq!(db.location, Some("s3://bucket/db1".to_string()));
+        assert!(db
+            .properties
+            .iter()
+            .any(|(k, v)| k == "custom_prop" && v == "custom_value"));
+
+        Mock::given(method("HEAD"))
+            .and(path(ctx.path("/namespaces/db2").as_str()))
+            .respond_with(ResponseTemplate::new(204))
+            .expect(1)
+            .mount(&ctx.server)
+            .await;
+
+        let namespace = Namespace::try_from(vec!["db2".to_string()]).unwrap();
+        let result = ctx
+            .catalog
+            .create_database(
+                &namespace,
+                CreateDatabaseOptions {
+                    if_not_exists: false,
+                    comment: None,
+                    location: None,
+                    properties: vec![],
+                },
+            )
+            .await;
+
+        assert!(result.is_err());
+        let err = result.unwrap_err().to_string();
+        assert!(err.contains("already exists") || err.contains("db2"));
+
+        Mock::given(method("HEAD"))
+            .and(path(ctx.path("/namespaces/db3").as_str()))
+            .respond_with(ResponseTemplate::new(204))
+            .expect(1)
+            .mount(&ctx.server)
+            .await;
+
+        Mock::given(method("GET"))
+            .and(path(ctx.path("/namespaces/db3").as_str()))
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+                "namespace": ["db3"],
+                "properties": {
+                    "comment": "existing database",
+                    "owner": "alice"
+                }
+            })))
+            .expect(1)
+            .mount(&ctx.server)
+            .await;
+
+        let namespace = Namespace::try_from(vec!["db3".to_string()]).unwrap();
+        let result = ctx
+            .catalog
+            .create_database(
+                &namespace,
+                CreateDatabaseOptions {
+                    if_not_exists: true,
+                    comment: Some("should be ignored".to_string()),
+                    location: Some("should be ignored".to_string()),
+                    properties: vec![],
+                },
+            )
+            .await;
+
+        assert!(result.is_ok());
+        let db = result.unwrap();
+        assert_eq!(db.database, vec!["db3".to_string()]);
+        assert_eq!(db.comment, Some("existing database".to_string()));
+        assert_eq!(db.location, None);
+        assert!(db
+            .properties
+            .iter()
+            .any(|(k, v)| k == "owner" && v == "alice"));
+    }
+
+    #[tokio::test]
+    async fn test_create_database() {
+        test_create_database_impl(None).await;
+        test_create_database_impl(Some("test")).await;
     }
 }
