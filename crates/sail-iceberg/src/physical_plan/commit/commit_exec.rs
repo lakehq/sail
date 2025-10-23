@@ -507,28 +507,8 @@ impl ExecutionPlan for IcebergCommitExec {
                 }
             };
 
-            // Apply ActionCommit to table metadata and persist a new metadata.json and version-hint
-            // 1) Load current table metadata again to ensure we update the freshest state
-            let latest_meta =
-                crate::table_format::find_latest_metadata_file(&object_store, &table_url)
-                    .await
-                    .map_err(|e| DataFusionError::External(Box::new(e)))?;
-            let meta_path = object_store::path::Path::from(latest_meta.as_str());
-            let bytes = object_store
-                .get(&meta_path)
-                .await
-                .map_err(|e| DataFusionError::External(Box::new(e)))?
-                .bytes()
-                .await
-                .map_err(|e| DataFusionError::External(Box::new(e)))?;
-            let mut table_meta: TableMetadata = TableMetadata::from_json(&bytes)
-                .map_err(|e| DataFusionError::External(Box::new(e)))?;
-            log::trace!(
-                "commit_exec: loaded table metadata with snapshot id: {:?}",
-                table_meta.current_snapshot_id
-            );
 
-            // 2) Apply updates (only handle the ones we emit: AddSnapshot, SetSnapshotRef)
+            // Apply updates (only handle the ones we emit: AddSnapshot, SetSnapshotRef)
             let updates = commit.into_updates();
             log::trace!("commit_exec: applying updates: {:?}", &updates);
             let mut newest_snapshot_seq: Option<i64> = None;
@@ -560,7 +540,7 @@ impl ExecutionPlan for IcebergCommitExec {
             }
             table_meta.last_updated_ms = timestamp_ms;
 
-            // 3) Persist updated metadata.json with incremented version
+            // Persist updated metadata.json with incremented version
             // Derive next version number from latest metadata file path
             fn parse_version_from_path(p: &str) -> Option<i32> {
                 // support both v123.metadata.json and 00001-uuid.metadata.json
@@ -613,7 +593,7 @@ impl ExecutionPlan for IcebergCommitExec {
             .map_err(DataFusionError::Execution)?;
             log::trace!("Metadata written successfully");
 
-            // 4) Update version-hint
+            // Update version-hint
             let hint_bytes = Bytes::from(next_version.to_string().into_bytes());
             IcebergObjectStore::new(
                 object_store.clone(),

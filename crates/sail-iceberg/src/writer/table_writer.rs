@@ -9,12 +9,15 @@ use parquet::arrow::PARQUET_FIELD_ID_META_KEY;
 
 use crate::io::IcebergObjectStore;
 use crate::spec::types::values::Literal;
+use crate::spec::types::{PrimitiveType, Type};
 use crate::spec::DataFile;
 use crate::writer::arrow_parquet::ArrowParquetWriter;
 use crate::writer::base_writer::DataFileWriter;
 use crate::writer::config::WriterConfig;
 use crate::writer::file_writer::location_generator::{DefaultLocationGenerator, LocationGenerator};
-use crate::writer::partition::group_by_partition;
+use crate::writer::partition::{
+    apply_transform, build_partition_dir, field_name_from_id, scalar_to_literal,
+};
 
 pub struct IcebergTableWriter {
     pub store: IcebergObjectStore,
@@ -91,60 +94,92 @@ impl IcebergTableWriter {
     }
 
     pub async fn write(&mut self, batch: &RecordBatch) -> Result<(), String> {
-        let groups = group_by_partition(
-            batch,
-            &self.config.partition_spec,
-            &self.config.iceberg_schema,
-        )?;
-        for g in groups {
-            #[allow(clippy::expect_used)]
-            let writer = self
-                .writers
-                .entry(g.partition_dir.clone())
-                .or_insert_with(|| {
-                    for (i, f) in self.config.table_schema.fields().iter().enumerate() {
-                        log::trace!(
-                            "iceberg.table_writer.writer_schema: field[{}]='{}' type={:?} field_id_meta={:?}",
-                            i,
-                            f.name(),
-                            f.data_type(),
-                            f.metadata().get(PARQUET_FIELD_ID_META_KEY)
-                        );
-                    }
-                    ArrowParquetWriter::try_new(
-                        self.config.table_schema.as_ref(),
-                        self.config.writer_properties.clone(),
-                    )
-                    .expect("parquet writer")
-                });
-            // cache partition values for this directory (first wins)
-            self.partition_values_map
-                .entry(g.partition_dir.clone())
-                .or_insert(g.partition_values);
-            log::trace!(
-                "iceberg.table_writer.write: partition='{}' in_rows={} in_cols={}",
-                g.partition_dir,
-                g.record_batch.num_rows(),
-                g.record_batch.num_columns()
-            );
-            let aligned =
-                Self::cast_batch_to_schema(&g.record_batch, self.config.table_schema.as_ref())?;
-            log::trace!(
-                "iceberg.table_writer.write: aligned_rows={} aligned_cols={}",
-                aligned.num_rows(),
-                aligned.num_columns()
-            );
-            for (i, f) in aligned.schema().fields().iter().enumerate() {
-                log::trace!(
-                    "iceberg.table_writer.aligned_schema: field[{}]='{}' type={:?} field_id_meta={:?}",
-                    i,
-                    f.name(),
-                    f.data_type(),
-                    f.metadata().get(PARQUET_FIELD_ID_META_KEY)
-                );
-            }
-            writer.write_batch(&aligned).await?;
+        // Assumption: input batch is already partitioned (single partition per batch)
+        // Extract partition values from the first row only
+
+        if batch.num_rows() == 0 {
+            return Ok(());
         }
+
+        let spec = &self.config.partition_spec;
+        let iceberg_schema = &self.config.iceberg_schema;
+
+        // Compute partition values and directory from first row
+        let (partition_values, partition_dir) = if spec.fields.is_empty() {
+            (Vec::new(), String::new())
+        } else {
+            let mut values = Vec::with_capacity(spec.fields.len());
+            for f in &spec.fields {
+                let col_name = field_name_from_id(iceberg_schema, f.source_id)
+                    .ok_or_else(|| format!("Unknown field id {}", f.source_id))?;
+                let col_index = batch
+                    .schema()
+                    .index_of(&col_name)
+                    .map_err(|e| e.to_string())?;
+                let lit = scalar_to_literal(batch.column(col_index), 0);
+                let field_type = iceberg_schema
+                    .field_by_id(f.source_id)
+                    .map(|nf| nf.field_type.as_ref())
+                    .unwrap_or(&Type::Primitive(PrimitiveType::String));
+                values.push(apply_transform(f.transform, field_type, lit));
+            }
+            let dir = build_partition_dir(spec, iceberg_schema, &values);
+            (values, dir)
+        };
+
+        #[allow(clippy::expect_used)]
+        let writer = self
+            .writers
+            .entry(partition_dir.clone())
+            .or_insert_with(|| {
+                for (i, f) in self.config.table_schema.fields().iter().enumerate() {
+                    log::trace!(
+                        "iceberg.table_writer.writer_schema: field[{}]='{}' type={:?} field_id_meta={:?}",
+                        i,
+                        f.name(),
+                        f.data_type(),
+                        f.metadata().get(PARQUET_FIELD_ID_META_KEY)
+                    );
+                }
+                ArrowParquetWriter::try_new(
+                    self.config.table_schema.as_ref(),
+                    self.config.writer_properties.clone(),
+                )
+                .expect("parquet writer")
+            });
+
+        // Cache partition values for this directory (first wins)
+        self.partition_values_map
+            .entry(partition_dir.clone())
+            .or_insert(partition_values);
+
+        log::trace!(
+            "iceberg.table_writer.write: partition='{}' in_rows={} in_cols={}",
+            partition_dir,
+            batch.num_rows(),
+            batch.num_columns()
+        );
+
+        let aligned = Self::cast_batch_to_schema(batch, self.config.table_schema.as_ref())?;
+
+        log::trace!(
+            "iceberg.table_writer.write: aligned_rows={} aligned_cols={}",
+            aligned.num_rows(),
+            aligned.num_columns()
+        );
+
+        for (i, f) in aligned.schema().fields().iter().enumerate() {
+            log::trace!(
+                "iceberg.table_writer.aligned_schema: field[{}]='{}' type={:?} field_id_meta={:?}",
+                i,
+                f.name(),
+                f.data_type(),
+                f.metadata().get(PARQUET_FIELD_ID_META_KEY)
+            );
+        }
+
+        writer.write_batch(&aligned).await?;
+
         Ok(())
     }
 
