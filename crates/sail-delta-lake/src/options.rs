@@ -23,4 +23,5 @@ pub enum ColumnMappingModeOption {
     #[default]
     None,
     Name,
+    Id,
 }

@@ -17,8 +17,8 @@ use datafusion::physical_plan::{
 };
 use datafusion_common::{internal_err, DataFusionError, Result};
 use datafusion_physical_expr::{Distribution, EquivalenceProperties, PhysicalExpr};
-use deltalake::kernel::engine::arrow_conversion::{TryIntoArrow, TryIntoKernel};
-use deltalake::kernel::schema::StructType;
+use delta_kernel::engine::arrow_conversion::{TryIntoArrow, TryIntoKernel};
+use delta_kernel::schema::StructType;
 #[allow(deprecated)]
 use deltalake::kernel::{Action, MetadataExt};
 // TODO: Follow upstream for `MetadataExt`.
@@ -28,7 +28,7 @@ use futures::stream::{once, StreamExt};
 use sail_common_datafusion::datasource::PhysicalSinkMode;
 use url::Url;
 
-use crate::column_mapping::annotate_schema_for_column_mapping;
+use crate::column_mapping::{annotate_schema_for_column_mapping, make_physical_schema_for_writes};
 use crate::datasource::delta_to_datafusion_error;
 use crate::datasource::type_converter::DeltaTypeConverter;
 use crate::operations::write::writer::{DeltaWriter, WriterConfig};
@@ -309,8 +309,35 @@ impl ExecutionPlan for DeltaWriterExec {
                 (input_schema.clone(), Vec::new())
             };
 
-            // If creating a new table and column mapping name mode is requested, prepare initial protocol+metadata
-            if !table_exists && matches!(options.column_mapping_mode, ColumnMappingModeOption::Name)
+            // Determine effective column mapping mode
+            let effective_mode = if let Some(table) = &table {
+                // Read from existing table configuration via our snapshot wrapper
+                // Use kernel snapshot via our wrapper
+                match table
+                    .snapshot()
+                    .map_err(|e| DataFusionError::External(Box::new(e)))?
+                    .snapshot()
+                    .table_configuration()
+                    .column_mapping_mode()
+                {
+                    delta_kernel::table_features::ColumnMappingMode::Name => {
+                        ColumnMappingModeOption::Name
+                    }
+                    delta_kernel::table_features::ColumnMappingMode::Id => {
+                        ColumnMappingModeOption::Id
+                    }
+                    _ => ColumnMappingModeOption::None,
+                }
+            } else {
+                options.column_mapping_mode
+            };
+
+            // If creating a new table and column mapping mode is requested, prepare initial protocol+metadata
+            if !table_exists
+                && matches!(
+                    effective_mode,
+                    ColumnMappingModeOption::Name | ColumnMappingModeOption::Id
+                )
             {
                 // Build annotated kernel schema
                 let kernel_schema: StructType = final_schema
@@ -329,7 +356,12 @@ impl ExecutionPlan for DeltaWriterExec {
                     .unwrap();
 
                 let mut configuration = HashMap::new();
-                configuration.insert("delta.columnMapping.mode".to_string(), "name".to_string());
+                let mode_str = match effective_mode {
+                    ColumnMappingModeOption::Name => "name",
+                    ColumnMappingModeOption::Id => "id",
+                    ColumnMappingModeOption::None => "none",
+                };
+                configuration.insert("delta.columnMapping.mode".to_string(), mode_str.to_string());
 
                 #[allow(deprecated)]
                 let metadata = deltalake::kernel::new_metadata(
@@ -351,8 +383,25 @@ impl ExecutionPlan for DeltaWriterExec {
                 });
             }
 
-            // Apply column mapping name mode for new table writes by adjusting the logical schema
-            let writer_schema = final_schema.clone();
+            // Apply column mapping mode for file write schema
+            let writer_schema = if matches!(
+                effective_mode,
+                ColumnMappingModeOption::Name | ColumnMappingModeOption::Id
+            ) {
+                // Build physical schema using kernel make_physical
+                let logical_kernel: StructType = final_schema
+                    .as_ref()
+                    .try_into_kernel()
+                    .map_err(|e| DataFusionError::External(Box::new(e)))?;
+                let physical_kernel =
+                    make_physical_schema_for_writes(&logical_kernel, effective_mode);
+                let physical_arrow: arrow_schema::Schema = (&physical_kernel)
+                    .try_into_arrow()
+                    .map_err(|e| DataFusionError::External(Box::new(e)))?;
+                Arc::new(physical_arrow)
+            } else {
+                final_schema.clone()
+            };
 
             let writer_config = WriterConfig::new(
                 writer_schema.clone(),
@@ -378,7 +427,7 @@ impl ExecutionPlan for DeltaWriterExec {
                 };
                 total_rows += rows;
 
-                let validated_batch = Self::validate_and_adapt_batch(batch, &final_schema)?;
+                let validated_batch = Self::validate_and_adapt_batch(batch, &writer_schema)?;
 
                 writer
                     .write(&validated_batch)

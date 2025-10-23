@@ -1,6 +1,8 @@
 use std::sync::atomic::{AtomicI64, Ordering};
 
+use crate::options::ColumnMappingModeOption;
 use delta_kernel::schema::{ArrayType, DataType, MapType, MetadataValue, StructField, StructType};
+use delta_kernel::table_features::ColumnMappingMode;
 
 /// Annotate a logical kernel schema with column mapping metadata (id + physicalName)
 /// using a sequential id assignment. Intended only for new table creation (name mode).
@@ -98,4 +100,20 @@ fn annotate_struct(struct_type: &StructType, counter: &AtomicI64) -> StructType 
         .fields()
         .map(|f| -> Result<StructField, delta_kernel::Error> { Ok(annotate_field(f, counter)) });
     StructType::try_new(fields).expect("failed to build nested annotated struct")
+}
+
+/// Build the physical schema used for file writes according to the column mapping mode.
+/// - None: return unchanged.
+/// - Name: rename fields to physicalName, remove id/parquet id metadata.
+/// - Id: rename fields to physicalName, set parquet.field.id from delta.columnMapping.id.
+pub fn make_physical_schema_for_writes(
+    logical_schema: &StructType,
+    mode: ColumnMappingModeOption,
+) -> StructType {
+    let kernel_mode = match mode {
+        ColumnMappingModeOption::None => ColumnMappingMode::None,
+        ColumnMappingModeOption::Name => ColumnMappingMode::Name,
+        ColumnMappingModeOption::Id => ColumnMappingMode::Id,
+    };
+    logical_schema.make_physical(kernel_mode)
 }
