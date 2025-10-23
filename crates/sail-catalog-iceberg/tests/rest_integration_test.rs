@@ -2,7 +2,9 @@
 
 use std::sync::Arc;
 
-use sail_catalog::provider::{CatalogProvider, CreateDatabaseOptions, Namespace};
+use sail_catalog::provider::{
+    CatalogProvider, CreateDatabaseOptions, DropDatabaseOptions, Namespace,
+};
 use sail_catalog_iceberg::apis::configuration::Configuration;
 use sail_catalog_iceberg::IcebergRestCatalogProvider;
 use sail_common::runtime::RuntimeHandle;
@@ -84,10 +86,6 @@ async fn setup_catalog() -> (
     });
 
     let catalog = IcebergRestCatalogProvider::new("test".to_string(), config, runtime);
-
-    // CHECK HERE
-    let _config_result = catalog.load_config(Some("s3://icebergdata/demo")).await;
-
     (catalog, minio, _mc, rest)
 }
 
@@ -139,7 +137,7 @@ async fn test_get_namespace() {
     }
 
     let get_db = catalog.get_database(&namespace).await.unwrap();
-    assert_eq!(get_db.database, vec![namespace.to_string()]); // CHECK HERE FIX UNIT TESTS
+    assert_eq!(get_db.database, vec![namespace.to_string()]);
     for (key, value) in &properties {
         assert!(get_db
             .properties
@@ -422,3 +420,142 @@ async fn test_create_namespace() {
         Some("s3://icebergdata/demo/test_create_namespace_2".to_string())
     );
 }
+
+#[tokio::test]
+async fn test_drop_namespace() {
+    let (catalog, _minio, _mc, _rest) = setup_catalog().await;
+
+    let namespace = Namespace::try_from(vec!["test_drop_namespace".to_string()]).unwrap();
+
+    catalog
+        .create_database(
+            &namespace,
+            CreateDatabaseOptions {
+                if_not_exists: false,
+                comment: None,
+                location: None,
+                properties: vec![],
+            },
+        )
+        .await
+        .unwrap();
+
+    let result = catalog.get_database(&namespace).await;
+    assert!(result.is_ok());
+
+    catalog
+        .drop_database(
+            &namespace,
+            DropDatabaseOptions {
+                if_exists: false,
+                cascade: false,
+            },
+        )
+        .await
+        .unwrap();
+
+    let result = catalog.get_database(&namespace).await;
+    assert!(result.is_err());
+
+    let result = catalog
+        .drop_database(
+            &namespace,
+            DropDatabaseOptions {
+                if_exists: false,
+                cascade: false,
+            },
+        )
+        .await;
+    assert!(result.is_err());
+
+    let result = catalog
+        .drop_database(
+            &namespace,
+            DropDatabaseOptions {
+                if_exists: true,
+                cascade: false,
+            },
+        )
+        .await;
+    assert!(result.is_ok());
+}
+
+// #[tokio::test]
+// async fn test_create_table() {
+//     let (catalog, _minio, _mc, _rest) = setup_catalog().await;
+//
+//     let ns = Namespace::try_from(vec![
+//         "test_create_table".to_string(),
+//         "apple".to_string(),
+//         "ios".to_string(),
+//     ])
+//     .unwrap();
+//     let properties = vec![
+//         ("owner".to_string(), "Lake".to_string()),
+//         ("community".to_string(), "Sail".to_string()),
+//     ];
+//
+//     catalog
+//         .create_database(
+//             &ns,
+//             CreateDatabaseOptions {
+//                 if_not_exists: false,
+//                 comment: None,
+//                 location: None,
+//                 properties,
+//             },
+//         )
+//         .await
+//         .unwrap();
+//
+//     let columns = vec![
+//         CreateTableColumnOptions {
+//             name: "foo".to_string(),
+//             data_type: DataType::Utf8,
+//             nullable: true,
+//             comment: None,
+//             default: None,
+//             generated_always_as: None,
+//         },
+//         CreateTableColumnOptions {
+//             name: "bar".to_string(),
+//             data_type: DataType::Int32,
+//             nullable: false,
+//             comment: None,
+//             default: None,
+//             generated_always_as: None,
+//         },
+//         CreateTableColumnOptions {
+//             name: "baz".to_string(),
+//             data_type: DataType::Boolean,
+//             nullable: true,
+//             comment: None,
+//             default: None,
+//             generated_always_as: None,
+//         },
+//     ];
+//
+//     let table = catalog
+//         .create_table(
+//             &ns,
+//             "t1",
+//             CreateTableOptions {
+//                 columns,
+//                 comment: None,
+//                 constraints: vec![],
+//                 location: None,
+//                 format: "iceberg".to_string(),
+//                 partition_by: vec![],
+//                 sort_by: vec![],
+//                 bucket_by: None,
+//                 if_not_exists: false,
+//                 replace: false,
+//                 options: vec![],
+//                 properties: vec![],
+//             },
+//         )
+//         .await
+//         .unwrap();
+//
+//     assert_eq!(table.name, "t1");
+// }

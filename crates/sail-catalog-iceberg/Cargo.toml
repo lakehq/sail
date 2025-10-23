@@ -24,3 +24,4 @@ once_cell = { workspace = true }
 tokio = { workspace = true }
 wiremock = { workspace = true }
 testcontainers = { workspace = true }
+arrow = { workspace = true }

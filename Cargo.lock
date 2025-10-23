@@ -5826,6 +5826,7 @@ dependencies = [
 name = "sail-catalog-iceberg"
 version = "0.3.7"
 dependencies = [
+ "arrow",
  "async-trait",
  "once_cell",
  "reqwest",
