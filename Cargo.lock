@@ -5827,11 +5827,7 @@ name = "sail-catalog-iceberg"
 version = "0.3.7"
 dependencies = [
  "async-trait",
- "chrono",
- "dashmap",
- "datafusion",
  "once_cell",
- "ordered-float 5.1.0",
  "reqwest",
  "sail-catalog",
  "sail-common",

@@ -24,301 +24,301 @@ pub trait CatalogApiApi: Send + Sync {
     /// DELETE /v1/{prefix}/namespaces/{namespace}/tables/{table}/plan/{plan_id}
     ///
     /// Cancels scan planning for a plan-id.  This notifies the service that it can release resources held for the scan. Clients should cancel scans that are no longer needed, either while the plan-id returns a \"submitted\" status or while there are remaining plan tasks that have not been fetched.  Cancellation is not necessary when - Scan tasks for each plan task have been fetched using fetchScanTasks - A plan-id has produced a \"failed\" or \"cancelled\" status from   planTableScan or fetchPlanningResult
-    async fn cancel_planning<'prefix, 'namespace, 'table, 'plan_id>(
+    async fn cancel_planning<'namespace, 'table, 'plan_id, 'prefix>(
         &self,
-        prefix: &'prefix str,
         namespace: &'namespace str,
         table: &'table str,
         plan_id: &'plan_id str,
+        prefix: Option<&'prefix str>,
     ) -> Result<(), Error<CancelPlanningError>>;
 
     /// POST /v1/{prefix}/transactions/commit
     ///
     ///
-    async fn commit_transaction<'prefix, 'commit_transaction_request>(
+    async fn commit_transaction<'commit_transaction_request, 'prefix>(
         &self,
-        prefix: &'prefix str,
         commit_transaction_request: models::CommitTransactionRequest,
+        prefix: Option<&'prefix str>,
     ) -> Result<(), Error<CommitTransactionError>>;
 
     /// POST /v1/{prefix}/namespaces
     ///
     /// Create a namespace, with an optional set of properties. The server might also add properties, such as `last_modified_time` etc.
-    async fn create_namespace<'prefix, 'create_namespace_request>(
+    async fn create_namespace<'create_namespace_request, 'prefix>(
         &self,
-        prefix: &'prefix str,
         create_namespace_request: models::CreateNamespaceRequest,
+        prefix: Option<&'prefix str>,
     ) -> Result<models::CreateNamespaceResponse, Error<CreateNamespaceError>>;
 
     /// POST /v1/{prefix}/namespaces/{namespace}/tables
     ///
     /// Create a table or start a create transaction, like atomic CTAS.  If `stage-create` is false, the table is created immediately.  If `stage-create` is true, the table is not created, but table metadata is initialized and returned. The service should prepare as needed for a commit to the table commit endpoint to complete the create transaction. The client uses the returned metadata to begin a transaction. To commit the transaction, the client sends all create and subsequent changes to the table commit route. Changes from the table create operation include changes like AddSchemaUpdate and SetCurrentSchemaUpdate that set the initial table state.
     async fn create_table<
-        'prefix,
         'namespace,
         'create_table_request,
         'x_iceberg_access_delegation,
+        'prefix,
     >(
         &self,
-        prefix: &'prefix str,
         namespace: &'namespace str,
         create_table_request: models::CreateTableRequest,
         x_iceberg_access_delegation: Option<&'x_iceberg_access_delegation str>,
+        prefix: Option<&'prefix str>,
     ) -> Result<models::LoadTableResult, Error<CreateTableError>>;
 
     /// POST /v1/{prefix}/namespaces/{namespace}/views
     ///
     /// Create a view in the given namespace.
-    async fn create_view<'prefix, 'namespace, 'create_view_request>(
+    async fn create_view<'namespace, 'create_view_request, 'prefix>(
         &self,
-        prefix: &'prefix str,
         namespace: &'namespace str,
         create_view_request: models::CreateViewRequest,
+        prefix: Option<&'prefix str>,
     ) -> Result<models::LoadViewResult, Error<CreateViewError>>;
 
     /// DELETE /v1/{prefix}/namespaces/{namespace}
     ///
     ///
-    async fn drop_namespace<'prefix, 'namespace>(
+    async fn drop_namespace<'namespace, 'prefix>(
         &self,
-        prefix: &'prefix str,
         namespace: &'namespace str,
+        prefix: Option<&'prefix str>,
     ) -> Result<(), Error<DropNamespaceError>>;
 
     /// DELETE /v1/{prefix}/namespaces/{namespace}/tables/{table}
     ///
     /// Remove a table from the catalog
-    async fn drop_table<'prefix, 'namespace, 'table, 'purge_requested>(
+    async fn drop_table<'namespace, 'table, 'purge_requested, 'prefix>(
         &self,
-        prefix: &'prefix str,
         namespace: &'namespace str,
         table: &'table str,
         purge_requested: Option<bool>,
+        prefix: Option<&'prefix str>,
     ) -> Result<(), Error<DropTableError>>;
 
     /// DELETE /v1/{prefix}/namespaces/{namespace}/views/{view}
     ///
     /// Remove a view from the catalog
-    async fn drop_view<'prefix, 'namespace, 'view>(
+    async fn drop_view<'namespace, 'view, 'prefix>(
         &self,
-        prefix: &'prefix str,
         namespace: &'namespace str,
         view: &'view str,
+        prefix: Option<&'prefix str>,
     ) -> Result<(), Error<DropViewError>>;
 
     /// GET /v1/{prefix}/namespaces/{namespace}/tables/{table}/plan/{plan_id}
     ///
     /// Fetches the result of scan planning for a plan-id.  Responses must include a valid status - When \"completed\" the planning operation has produced plan-tasks and   file-scan-tasks that must be returned in the response  - When \"submitted\" the planning operation has not completed; the client   should wait to call this endpoint again to fetch a completed response  - When \"failed\" the response must be a valid error response - When \"cancelled\" the plan-id is invalid and should be discarded  The response for a \"completed\" planning operation includes two types of tasks (file scan tasks and plan tasks) and both may be included in the response. Tasks must not be included for any other response status.
-    async fn fetch_planning_result<'prefix, 'namespace, 'table, 'plan_id>(
+    async fn fetch_planning_result<'namespace, 'table, 'plan_id, 'prefix>(
         &self,
-        prefix: &'prefix str,
         namespace: &'namespace str,
         table: &'table str,
         plan_id: &'plan_id str,
+        prefix: Option<&'prefix str>,
     ) -> Result<models::FetchPlanningResult, Error<FetchPlanningResultError>>;
 
     /// POST /v1/{prefix}/namespaces/{namespace}/tables/{table}/tasks
     ///
     /// Fetches result tasks for a plan task.
-    async fn fetch_scan_tasks<'prefix, 'namespace, 'table, 'fetch_scan_tasks_request>(
+    async fn fetch_scan_tasks<'namespace, 'table, 'prefix, 'fetch_scan_tasks_request>(
         &self,
-        prefix: &'prefix str,
         namespace: &'namespace str,
         table: &'table str,
+        prefix: Option<&'prefix str>,
         fetch_scan_tasks_request: Option<models::FetchScanTasksRequest>,
     ) -> Result<models::FetchScanTasksResult, Error<FetchScanTasksError>>;
 
     /// GET /v1/{prefix}/namespaces
     ///
     /// List all namespaces at a certain level, optionally starting from a given parent namespace. If table accounting.tax.paid.info exists, using 'SELECT NAMESPACE IN accounting' would translate into `GET /namespaces?parent=accounting` and must return a namespace, [\"accounting\", \"tax\"] only. Using 'SELECT NAMESPACE IN accounting.tax' would translate into `GET /namespaces?parent=accounting%1Ftax` and must return a namespace, [\"accounting\", \"tax\", \"paid\"]. If `parent` is not provided, all top-level namespaces should be listed.
-    async fn list_namespaces<'prefix, 'page_token, 'page_size, 'parent>(
+    async fn list_namespaces<'page_token, 'page_size, 'parent, 'prefix>(
         &self,
-        prefix: &'prefix str,
         page_token: Option<&'page_token str>,
         page_size: Option<i32>,
         parent: Option<&'parent str>,
+        prefix: Option<&'prefix str>,
     ) -> Result<models::ListNamespacesResponse, Error<ListNamespacesError>>;
 
     /// GET /v1/{prefix}/namespaces/{namespace}/tables
     ///
     /// Return all table identifiers under this namespace
-    async fn list_tables<'prefix, 'namespace, 'page_token, 'page_size>(
+    async fn list_tables<'namespace, 'page_token, 'page_size, 'prefix>(
         &self,
-        prefix: &'prefix str,
         namespace: &'namespace str,
         page_token: Option<&'page_token str>,
         page_size: Option<i32>,
+        prefix: Option<&'prefix str>,
     ) -> Result<models::ListTablesResponse, Error<ListTablesError>>;
 
     /// GET /v1/{prefix}/namespaces/{namespace}/views
     ///
     /// Return all view identifiers under this namespace
-    async fn list_views<'prefix, 'namespace, 'page_token, 'page_size>(
+    async fn list_views<'namespace, 'page_token, 'page_size, 'prefix>(
         &self,
-        prefix: &'prefix str,
         namespace: &'namespace str,
         page_token: Option<&'page_token str>,
         page_size: Option<i32>,
+        prefix: Option<&'prefix str>,
     ) -> Result<models::ListTablesResponse, Error<ListViewsError>>;
 
     /// GET /v1/{prefix}/namespaces/{namespace}/tables/{table}/credentials
     ///
     /// Load vended credentials for a table from the catalog.
-    async fn load_credentials<'prefix, 'namespace, 'table>(
+    async fn load_credentials<'namespace, 'table, 'prefix>(
         &self,
-        prefix: &'prefix str,
         namespace: &'namespace str,
         table: &'table str,
+        prefix: Option<&'prefix str>,
     ) -> Result<models::LoadCredentialsResponse, Error<LoadCredentialsError>>;
 
     /// GET /v1/{prefix}/namespaces/{namespace}
     ///
     /// Return all stored metadata properties for a given namespace
-    async fn load_namespace_metadata<'prefix, 'namespace>(
+    async fn load_namespace_metadata<'namespace, 'prefix>(
         &self,
-        prefix: &'prefix str,
         namespace: &'namespace str,
+        prefix: Option<&'prefix str>,
     ) -> Result<models::GetNamespaceResponse, Error<LoadNamespaceMetadataError>>;
 
     /// GET /v1/{prefix}/namespaces/{namespace}/tables/{table}
     ///
     /// Load a table from the catalog.  The response contains both configuration and table metadata. The configuration, if non-empty is used as additional configuration for the table that overrides catalog configuration. For example, this configuration may change the FileIO implementation to be used for the table.  The response also contains the table's full metadata, matching the table metadata JSON file.  The catalog configuration may contain credentials that should be used for subsequent requests for the table. The configuration key \"token\" is used to pass an access token to be used as a bearer token for table requests. Otherwise, a token may be passed using a RFC 8693 token type as a configuration key. For example, \"urn:ietf:params:oauth:token-type:jwt=<JWT-token>\".
     async fn load_table<
-        'prefix,
         'namespace,
         'table,
         'x_iceberg_access_delegation,
         'if_none_match,
         'snapshots,
+        'prefix,
     >(
         &self,
-        prefix: &'prefix str,
         namespace: &'namespace str,
         table: &'table str,
         x_iceberg_access_delegation: Option<&'x_iceberg_access_delegation str>,
         if_none_match: Option<&'if_none_match str>,
         snapshots: Option<&'snapshots str>,
+        prefix: Option<&'prefix str>,
     ) -> Result<models::LoadTableResult, Error<LoadTableError>>;
 
     /// GET /v1/{prefix}/namespaces/{namespace}/views/{view}
     ///
     /// Load a view from the catalog.  The response contains both configuration and view metadata. The configuration, if non-empty is used as additional configuration for the view that overrides catalog configuration.  The response also contains the view's full metadata, matching the view metadata JSON file.  The catalog configuration may contain credentials that should be used for subsequent requests for the view. The configuration key \"token\" is used to pass an access token to be used as a bearer token for view requests. Otherwise, a token may be passed using a RFC 8693 token type as a configuration key. For example, \"urn:ietf:params:oauth:token-type:jwt=<JWT-token>\".
-    async fn load_view<'prefix, 'namespace, 'view>(
+    async fn load_view<'namespace, 'view, 'prefix>(
         &self,
-        prefix: &'prefix str,
         namespace: &'namespace str,
         view: &'view str,
+        prefix: Option<&'prefix str>,
     ) -> Result<models::LoadViewResult, Error<LoadViewError>>;
 
     /// HEAD /v1/{prefix}/namespaces/{namespace}
     ///
     /// Check if a namespace exists. The response does not contain a body.
-    async fn namespace_exists<'prefix, 'namespace>(
+    async fn namespace_exists<'namespace, 'prefix>(
         &self,
-        prefix: &'prefix str,
         namespace: &'namespace str,
+        prefix: Option<&'prefix str>,
     ) -> Result<(), Error<NamespaceExistsError>>;
 
     /// POST /v1/{prefix}/namespaces/{namespace}/tables/{table}/plan
     ///
     /// Submits a scan for server-side planning.  Point-in-time scans are planned by passing snapshot-id to identify the table snapshot to scan. Incremental scans are planned by passing both start-snapshot-id and end-snapshot-id. Requests that include both point in time config properties and incremental config properties are invalid. If the request does not include either incremental or point-in-time config properties, scan planning should produce a point-in-time scan of the latest snapshot in the table's main branch.  Responses must include a valid status listed below. A \"cancelled\" status is considered invalid for this endpoint.   - When \"completed\" the planning operation has produced plan tasks and   file scan tasks that must be returned in the response (not fetched   later by calling fetchPlanningResult)  - When \"submitted\" the response must include a plan-id used to poll   fetchPlanningResult to fetch the planning result when it is ready  - When \"failed\" the response must be a valid error response The response for a \"completed\" planning operation includes two types of tasks (file scan tasks and plan tasks) and both may be included in the response. Tasks must not be included for any other response status.  Responses that include a plan-id indicate that the service is holding state or performing work for the client.  - Clients should use the plan-id to fetch results from   fetchPlanningResult when the response status is \"submitted\"  - Clients should inform the service if planning results are no longer   needed by calling cancelPlanning. Cancellation is not necessary after   fetchScanTasks has been used to fetch scan tasks for each plan task.
-    async fn plan_table_scan<'prefix, 'namespace, 'table, 'plan_table_scan_request>(
+    async fn plan_table_scan<'namespace, 'table, 'prefix, 'plan_table_scan_request>(
         &self,
-        prefix: &'prefix str,
         namespace: &'namespace str,
         table: &'table str,
+        prefix: Option<&'prefix str>,
         plan_table_scan_request: Option<models::PlanTableScanRequest>,
     ) -> Result<models::PlanTableScanResult, Error<PlanTableScanError>>;
 
     /// POST /v1/{prefix}/namespaces/{namespace}/register
     ///
     /// Register a table using given metadata file location.
-    async fn register_table<'prefix, 'namespace, 'register_table_request>(
+    async fn register_table<'namespace, 'register_table_request, 'prefix>(
         &self,
-        prefix: &'prefix str,
         namespace: &'namespace str,
         register_table_request: models::RegisterTableRequest,
+        prefix: Option<&'prefix str>,
     ) -> Result<models::LoadTableResult, Error<RegisterTableError>>;
 
     /// POST /v1/{prefix}/tables/rename
     ///
     /// Rename a table from one identifier to another. It's valid to move a table across namespaces, but the server implementation is not required to support it.
-    async fn rename_table<'prefix, 'rename_table_request>(
+    async fn rename_table<'rename_table_request, 'prefix>(
         &self,
-        prefix: &'prefix str,
         rename_table_request: models::RenameTableRequest,
+        prefix: Option<&'prefix str>,
     ) -> Result<(), Error<RenameTableError>>;
 
     /// POST /v1/{prefix}/views/rename
     ///
     /// Rename a view from one identifier to another. It's valid to move a view across namespaces, but the server implementation is not required to support it.
-    async fn rename_view<'prefix, 'rename_table_request>(
+    async fn rename_view<'rename_table_request, 'prefix>(
         &self,
-        prefix: &'prefix str,
         rename_table_request: models::RenameTableRequest,
+        prefix: Option<&'prefix str>,
     ) -> Result<(), Error<RenameViewError>>;
 
     /// POST /v1/{prefix}/namespaces/{namespace}/views/{view}
     ///
     /// Commit updates to a view.
-    async fn replace_view<'prefix, 'namespace, 'view, 'commit_view_request>(
+    async fn replace_view<'namespace, 'view, 'commit_view_request, 'prefix>(
         &self,
-        prefix: &'prefix str,
         namespace: &'namespace str,
         view: &'view str,
         commit_view_request: models::CommitViewRequest,
+        prefix: Option<&'prefix str>,
     ) -> Result<models::LoadViewResult, Error<ReplaceViewError>>;
 
     /// POST /v1/{prefix}/namespaces/{namespace}/tables/{table}/metrics
     ///
     ///
-    async fn report_metrics<'prefix, 'namespace, 'table, 'report_metrics_request>(
+    async fn report_metrics<'namespace, 'table, 'report_metrics_request, 'prefix>(
         &self,
-        prefix: &'prefix str,
         namespace: &'namespace str,
         table: &'table str,
         report_metrics_request: models::ReportMetricsRequest,
+        prefix: Option<&'prefix str>,
     ) -> Result<(), Error<ReportMetricsError>>;
 
     /// HEAD /v1/{prefix}/namespaces/{namespace}/tables/{table}
     ///
     /// Check if a table exists within a given namespace. The response does not contain a body.
-    async fn table_exists<'prefix, 'namespace, 'table>(
+    async fn table_exists<'namespace, 'table, 'prefix>(
         &self,
-        prefix: &'prefix str,
         namespace: &'namespace str,
         table: &'table str,
+        prefix: Option<&'prefix str>,
     ) -> Result<(), Error<TableExistsError>>;
 
     /// POST /v1/{prefix}/namespaces/{namespace}/properties
     ///
     /// Set and/or remove properties on a namespace. The request body specifies a list of properties to remove and a map of key value pairs to update. Properties that are not in the request are not modified or removed by this call. Server implementations are not required to support namespace properties.
-    async fn update_properties<'prefix, 'namespace, 'update_namespace_properties_request>(
+    async fn update_properties<'namespace, 'update_namespace_properties_request, 'prefix>(
         &self,
-        prefix: &'prefix str,
         namespace: &'namespace str,
         update_namespace_properties_request: models::UpdateNamespacePropertiesRequest,
+        prefix: Option<&'prefix str>,
     ) -> Result<models::UpdateNamespacePropertiesResponse, Error<UpdatePropertiesError>>;
 
     /// POST /v1/{prefix}/namespaces/{namespace}/tables/{table}
     ///
     /// Commit updates to a table.  Commits have two parts, requirements and updates. Requirements are assertions that will be validated before attempting to make and commit changes. For example, `assert-ref-snapshot-id` will check that a named ref's snapshot ID has a certain value. Server implementations are required to fail with a 400 status code if any unknown updates or requirements are received.  Updates are changes to make to table metadata. For example, after asserting that the current main ref is at the expected snapshot, a commit may add a new child snapshot and set the ref to the new snapshot id.  Create table transactions that are started by createTable with `stage-create` set to true are committed using this route. Transactions should include all changes to the table, including table initialization, like AddSchemaUpdate and SetCurrentSchemaUpdate. The `assert-create` requirement is used to ensure that the table was not created concurrently.
-    async fn update_table<'prefix, 'namespace, 'table, 'commit_table_request>(
+    async fn update_table<'namespace, 'table, 'commit_table_request, 'prefix>(
         &self,
-        prefix: &'prefix str,
         namespace: &'namespace str,
         table: &'table str,
         commit_table_request: models::CommitTableRequest,
+        prefix: Option<&'prefix str>,
     ) -> Result<models::CommitTableResponse, Error<UpdateTableError>>;
 
     /// HEAD /v1/{prefix}/namespaces/{namespace}/views/{view}
     ///
     /// Check if a view exists within a given namespace. This request does not return a response body.
-    async fn view_exists<'prefix, 'namespace, 'view>(
+    async fn view_exists<'namespace, 'view, 'prefix>(
         &self,
-        prefix: &'prefix str,
         namespace: &'namespace str,
         view: &'view str,
+        prefix: Option<&'prefix str>,
     ) -> Result<(), Error<ViewExistsError>>;
 }
 
@@ -335,21 +335,23 @@ impl CatalogApiApiClient {
 #[async_trait]
 impl CatalogApiApi for CatalogApiApiClient {
     /// Cancels scan planning for a plan-id.  This notifies the service that it can release resources held for the scan. Clients should cancel scans that are no longer needed, either while the plan-id returns a \"submitted\" status or while there are remaining plan tasks that have not been fetched.  Cancellation is not necessary when - Scan tasks for each plan task have been fetched using fetchScanTasks - A plan-id has produced a \"failed\" or \"cancelled\" status from   planTableScan or fetchPlanningResult
-    async fn cancel_planning<'prefix, 'namespace, 'table, 'plan_id>(
+    async fn cancel_planning<'namespace, 'table, 'plan_id, 'prefix>(
         &self,
-        prefix: &'prefix str,
         namespace: &'namespace str,
         table: &'table str,
         plan_id: &'plan_id str,
+        prefix: Option<&'prefix str>,
     ) -> Result<(), Error<CancelPlanningError>> {
         let local_var_configuration = &self.configuration;
 
         let local_var_client = &local_var_configuration.client;
 
         let local_var_uri_str = format!(
-            "{}/v1/{prefix}/namespaces/{namespace}/tables/{table}/plan/{plan_id}",
+            "{}/v1{prefix}/namespaces/{namespace}/tables/{table}/plan/{plan_id}",
             local_var_configuration.base_path,
-            prefix = crate::apis::urlencode(prefix),
+            prefix = prefix
+                .map(|p| format!("/{}", crate::apis::urlencode(p)))
+                .unwrap_or_default(),
             namespace = crate::apis::urlencode(namespace),
             table = crate::apis::urlencode(table),
             plan_id = crate::apis::urlencode(plan_id)
@@ -357,17 +359,6 @@ impl CatalogApiApi for CatalogApiApiClient {
         let mut local_var_req_builder =
             local_var_client.request(reqwest::Method::DELETE, local_var_uri_str.as_str());
 
-        if let Some(ref local_var_aws_v4_key) = local_var_configuration.aws_v4_key {
-            let local_var_new_headers =
-                match local_var_aws_v4_key.sign(&local_var_uri_str, "DELETE", "") {
-                    Ok(new_headers) => new_headers,
-                    Err(err) => return Err(Error::AWSV4SignatureError(err)),
-                };
-            for (local_var_name, local_var_value) in local_var_new_headers.iter() {
-                local_var_req_builder =
-                    local_var_req_builder.header(local_var_name.as_str(), local_var_value.as_str());
-            }
-        }
         if let Some(ref local_var_user_agent) = local_var_configuration.user_agent {
             local_var_req_builder = local_var_req_builder
                 .header(reqwest::header::USER_AGENT, local_var_user_agent.clone());
@@ -399,38 +390,25 @@ impl CatalogApiApi for CatalogApiApiClient {
         }
     }
 
-    async fn commit_transaction<'prefix, 'commit_transaction_request>(
+    async fn commit_transaction<'commit_transaction_request, 'prefix>(
         &self,
-        prefix: &'prefix str,
         commit_transaction_request: models::CommitTransactionRequest,
+        prefix: Option<&'prefix str>,
     ) -> Result<(), Error<CommitTransactionError>> {
         let local_var_configuration = &self.configuration;
 
         let local_var_client = &local_var_configuration.client;
 
         let local_var_uri_str = format!(
-            "{}/v1/{prefix}/transactions/commit",
+            "{}/v1{prefix}/transactions/commit",
             local_var_configuration.base_path,
-            prefix = crate::apis::urlencode(prefix)
+            prefix = prefix
+                .map(|p| format!("/{}", crate::apis::urlencode(p)))
+                .unwrap_or_default()
         );
         let mut local_var_req_builder =
             local_var_client.request(reqwest::Method::POST, local_var_uri_str.as_str());
 
-        if let Some(ref local_var_aws_v4_key) = local_var_configuration.aws_v4_key {
-            let local_var_new_headers = match local_var_aws_v4_key.sign(
-                &local_var_uri_str,
-                "POST",
-                &serde_json::to_string(&commit_transaction_request)
-                    .expect("param should serialize to string"),
-            ) {
-                Ok(new_headers) => new_headers,
-                Err(err) => return Err(Error::AWSV4SignatureError(err)),
-            };
-            for (local_var_name, local_var_value) in local_var_new_headers.iter() {
-                local_var_req_builder =
-                    local_var_req_builder.header(local_var_name.as_str(), local_var_value.as_str());
-            }
-        }
         if let Some(ref local_var_user_agent) = local_var_configuration.user_agent {
             local_var_req_builder = local_var_req_builder
                 .header(reqwest::header::USER_AGENT, local_var_user_agent.clone());
@@ -464,38 +442,25 @@ impl CatalogApiApi for CatalogApiApiClient {
     }
 
     /// Create a namespace, with an optional set of properties. The server might also add properties, such as `last_modified_time` etc.
-    async fn create_namespace<'prefix, 'create_namespace_request>(
+    async fn create_namespace<'create_namespace_request, 'prefix>(
         &self,
-        prefix: &'prefix str,
         create_namespace_request: models::CreateNamespaceRequest,
+        prefix: Option<&'prefix str>,
     ) -> Result<models::CreateNamespaceResponse, Error<CreateNamespaceError>> {
         let local_var_configuration = &self.configuration;
 
         let local_var_client = &local_var_configuration.client;
 
         let local_var_uri_str = format!(
-            "{}/v1/{prefix}/namespaces",
+            "{}/v1{prefix}/namespaces",
             local_var_configuration.base_path,
-            prefix = crate::apis::urlencode(prefix)
+            prefix = prefix
+                .map(|p| format!("/{}", crate::apis::urlencode(p)))
+                .unwrap_or_default()
         );
         let mut local_var_req_builder =
             local_var_client.request(reqwest::Method::POST, local_var_uri_str.as_str());
 
-        if let Some(ref local_var_aws_v4_key) = local_var_configuration.aws_v4_key {
-            let local_var_new_headers = match local_var_aws_v4_key.sign(
-                &local_var_uri_str,
-                "POST",
-                &serde_json::to_string(&create_namespace_request)
-                    .expect("param should serialize to string"),
-            ) {
-                Ok(new_headers) => new_headers,
-                Err(err) => return Err(Error::AWSV4SignatureError(err)),
-            };
-            for (local_var_name, local_var_value) in local_var_new_headers.iter() {
-                local_var_req_builder =
-                    local_var_req_builder.header(local_var_name.as_str(), local_var_value.as_str());
-            }
-        }
         if let Some(ref local_var_user_agent) = local_var_configuration.user_agent {
             local_var_req_builder = local_var_req_builder
                 .header(reqwest::header::USER_AGENT, local_var_user_agent.clone());
@@ -540,45 +505,32 @@ impl CatalogApiApi for CatalogApiApiClient {
 
     /// Create a table or start a create transaction, like atomic CTAS.  If `stage-create` is false, the table is created immediately.  If `stage-create` is true, the table is not created, but table metadata is initialized and returned. The service should prepare as needed for a commit to the table commit endpoint to complete the create transaction. The client uses the returned metadata to begin a transaction. To commit the transaction, the client sends all create and subsequent changes to the table commit route. Changes from the table create operation include changes like AddSchemaUpdate and SetCurrentSchemaUpdate that set the initial table state.
     async fn create_table<
-        'prefix,
         'namespace,
         'create_table_request,
         'x_iceberg_access_delegation,
+        'prefix,
     >(
         &self,
-        prefix: &'prefix str,
         namespace: &'namespace str,
         create_table_request: models::CreateTableRequest,
         x_iceberg_access_delegation: Option<&'x_iceberg_access_delegation str>,
+        prefix: Option<&'prefix str>,
     ) -> Result<models::LoadTableResult, Error<CreateTableError>> {
         let local_var_configuration = &self.configuration;
 
         let local_var_client = &local_var_configuration.client;
 
         let local_var_uri_str = format!(
-            "{}/v1/{prefix}/namespaces/{namespace}/tables",
+            "{}/v1{prefix}/namespaces/{namespace}/tables",
             local_var_configuration.base_path,
-            prefix = crate::apis::urlencode(prefix),
+            prefix = prefix
+                .map(|p| format!("/{}", crate::apis::urlencode(p)))
+                .unwrap_or_default(),
             namespace = crate::apis::urlencode(namespace)
         );
         let mut local_var_req_builder =
             local_var_client.request(reqwest::Method::POST, local_var_uri_str.as_str());
 
-        if let Some(ref local_var_aws_v4_key) = local_var_configuration.aws_v4_key {
-            let local_var_new_headers = match local_var_aws_v4_key.sign(
-                &local_var_uri_str,
-                "POST",
-                &serde_json::to_string(&create_table_request)
-                    .expect("param should serialize to string"),
-            ) {
-                Ok(new_headers) => new_headers,
-                Err(err) => return Err(Error::AWSV4SignatureError(err)),
-            };
-            for (local_var_name, local_var_value) in local_var_new_headers.iter() {
-                local_var_req_builder =
-                    local_var_req_builder.header(local_var_name.as_str(), local_var_value.as_str());
-            }
-        }
         if let Some(ref local_var_user_agent) = local_var_configuration.user_agent {
             local_var_req_builder = local_var_req_builder
                 .header(reqwest::header::USER_AGENT, local_var_user_agent.clone());
@@ -628,40 +580,27 @@ impl CatalogApiApi for CatalogApiApiClient {
     }
 
     /// Create a view in the given namespace.
-    async fn create_view<'prefix, 'namespace, 'create_view_request>(
+    async fn create_view<'namespace, 'create_view_request, 'prefix>(
         &self,
-        prefix: &'prefix str,
         namespace: &'namespace str,
         create_view_request: models::CreateViewRequest,
+        prefix: Option<&'prefix str>,
     ) -> Result<models::LoadViewResult, Error<CreateViewError>> {
         let local_var_configuration = &self.configuration;
 
         let local_var_client = &local_var_configuration.client;
 
         let local_var_uri_str = format!(
-            "{}/v1/{prefix}/namespaces/{namespace}/views",
+            "{}/v1{prefix}/namespaces/{namespace}/views",
             local_var_configuration.base_path,
-            prefix = crate::apis::urlencode(prefix),
+            prefix = prefix
+                .map(|p| format!("/{}", crate::apis::urlencode(p)))
+                .unwrap_or_default(),
             namespace = crate::apis::urlencode(namespace)
         );
         let mut local_var_req_builder =
             local_var_client.request(reqwest::Method::POST, local_var_uri_str.as_str());
 
-        if let Some(ref local_var_aws_v4_key) = local_var_configuration.aws_v4_key {
-            let local_var_new_headers = match local_var_aws_v4_key.sign(
-                &local_var_uri_str,
-                "POST",
-                &serde_json::to_string(&create_view_request)
-                    .expect("param should serialize to string"),
-            ) {
-                Ok(new_headers) => new_headers,
-                Err(err) => return Err(Error::AWSV4SignatureError(err)),
-            };
-            for (local_var_name, local_var_value) in local_var_new_headers.iter() {
-                local_var_req_builder =
-                    local_var_req_builder.header(local_var_name.as_str(), local_var_value.as_str());
-            }
-        }
         if let Some(ref local_var_user_agent) = local_var_configuration.user_agent {
             local_var_req_builder = local_var_req_builder
                 .header(reqwest::header::USER_AGENT, local_var_user_agent.clone());
@@ -704,35 +643,26 @@ impl CatalogApiApi for CatalogApiApiClient {
         }
     }
 
-    async fn drop_namespace<'prefix, 'namespace>(
+    async fn drop_namespace<'namespace, 'prefix>(
         &self,
-        prefix: &'prefix str,
         namespace: &'namespace str,
+        prefix: Option<&'prefix str>,
     ) -> Result<(), Error<DropNamespaceError>> {
         let local_var_configuration = &self.configuration;
 
         let local_var_client = &local_var_configuration.client;
 
         let local_var_uri_str = format!(
-            "{}/v1/{prefix}/namespaces/{namespace}",
+            "{}/v1{prefix}/namespaces/{namespace}",
             local_var_configuration.base_path,
-            prefix = crate::apis::urlencode(prefix),
+            prefix = prefix
+                .map(|p| format!("/{}", crate::apis::urlencode(p)))
+                .unwrap_or_default(),
             namespace = crate::apis::urlencode(namespace)
         );
         let mut local_var_req_builder =
             local_var_client.request(reqwest::Method::DELETE, local_var_uri_str.as_str());
 
-        if let Some(ref local_var_aws_v4_key) = local_var_configuration.aws_v4_key {
-            let local_var_new_headers =
-                match local_var_aws_v4_key.sign(&local_var_uri_str, "DELETE", "") {
-                    Ok(new_headers) => new_headers,
-                    Err(err) => return Err(Error::AWSV4SignatureError(err)),
-                };
-            for (local_var_name, local_var_value) in local_var_new_headers.iter() {
-                local_var_req_builder =
-                    local_var_req_builder.header(local_var_name.as_str(), local_var_value.as_str());
-            }
-        }
         if let Some(ref local_var_user_agent) = local_var_configuration.user_agent {
             local_var_req_builder = local_var_req_builder
                 .header(reqwest::header::USER_AGENT, local_var_user_agent.clone());
@@ -765,21 +695,23 @@ impl CatalogApiApi for CatalogApiApiClient {
     }
 
     /// Remove a table from the catalog
-    async fn drop_table<'prefix, 'namespace, 'table, 'purge_requested>(
+    async fn drop_table<'namespace, 'table, 'purge_requested, 'prefix>(
         &self,
-        prefix: &'prefix str,
         namespace: &'namespace str,
         table: &'table str,
         purge_requested: Option<bool>,
+        prefix: Option<&'prefix str>,
     ) -> Result<(), Error<DropTableError>> {
         let local_var_configuration = &self.configuration;
 
         let local_var_client = &local_var_configuration.client;
 
         let local_var_uri_str = format!(
-            "{}/v1/{prefix}/namespaces/{namespace}/tables/{table}",
+            "{}/v1{prefix}/namespaces/{namespace}/tables/{table}",
             local_var_configuration.base_path,
-            prefix = crate::apis::urlencode(prefix),
+            prefix = prefix
+                .map(|p| format!("/{}", crate::apis::urlencode(p)))
+                .unwrap_or_default(),
             namespace = crate::apis::urlencode(namespace),
             table = crate::apis::urlencode(table)
         );
@@ -789,17 +721,6 @@ impl CatalogApiApi for CatalogApiApiClient {
         if let Some(ref param_value) = purge_requested {
             local_var_req_builder =
                 local_var_req_builder.query(&[("purgeRequested", &param_value.to_string())]);
-        }
-        if let Some(ref local_var_aws_v4_key) = local_var_configuration.aws_v4_key {
-            let local_var_new_headers =
-                match local_var_aws_v4_key.sign(&local_var_uri_str, "DELETE", "") {
-                    Ok(new_headers) => new_headers,
-                    Err(err) => return Err(Error::AWSV4SignatureError(err)),
-                };
-            for (local_var_name, local_var_value) in local_var_new_headers.iter() {
-                local_var_req_builder =
-                    local_var_req_builder.header(local_var_name.as_str(), local_var_value.as_str());
-            }
         }
         if let Some(ref local_var_user_agent) = local_var_configuration.user_agent {
             local_var_req_builder = local_var_req_builder
@@ -833,37 +754,28 @@ impl CatalogApiApi for CatalogApiApiClient {
     }
 
     /// Remove a view from the catalog
-    async fn drop_view<'prefix, 'namespace, 'view>(
+    async fn drop_view<'namespace, 'view, 'prefix>(
         &self,
-        prefix: &'prefix str,
         namespace: &'namespace str,
         view: &'view str,
+        prefix: Option<&'prefix str>,
     ) -> Result<(), Error<DropViewError>> {
         let local_var_configuration = &self.configuration;
 
         let local_var_client = &local_var_configuration.client;
 
         let local_var_uri_str = format!(
-            "{}/v1/{prefix}/namespaces/{namespace}/views/{view}",
+            "{}/v1{prefix}/namespaces/{namespace}/views/{view}",
             local_var_configuration.base_path,
-            prefix = crate::apis::urlencode(prefix),
+            prefix = prefix
+                .map(|p| format!("/{}", crate::apis::urlencode(p)))
+                .unwrap_or_default(),
             namespace = crate::apis::urlencode(namespace),
             view = crate::apis::urlencode(view)
         );
         let mut local_var_req_builder =
             local_var_client.request(reqwest::Method::DELETE, local_var_uri_str.as_str());
 
-        if let Some(ref local_var_aws_v4_key) = local_var_configuration.aws_v4_key {
-            let local_var_new_headers =
-                match local_var_aws_v4_key.sign(&local_var_uri_str, "DELETE", "") {
-                    Ok(new_headers) => new_headers,
-                    Err(err) => return Err(Error::AWSV4SignatureError(err)),
-                };
-            for (local_var_name, local_var_value) in local_var_new_headers.iter() {
-                local_var_req_builder =
-                    local_var_req_builder.header(local_var_name.as_str(), local_var_value.as_str());
-            }
-        }
         if let Some(ref local_var_user_agent) = local_var_configuration.user_agent {
             local_var_req_builder = local_var_req_builder
                 .header(reqwest::header::USER_AGENT, local_var_user_agent.clone());
@@ -896,21 +808,23 @@ impl CatalogApiApi for CatalogApiApiClient {
     }
 
     /// Fetches the result of scan planning for a plan-id.  Responses must include a valid status - When \"completed\" the planning operation has produced plan-tasks and   file-scan-tasks that must be returned in the response  - When \"submitted\" the planning operation has not completed; the client   should wait to call this endpoint again to fetch a completed response  - When \"failed\" the response must be a valid error response - When \"cancelled\" the plan-id is invalid and should be discarded  The response for a \"completed\" planning operation includes two types of tasks (file scan tasks and plan tasks) and both may be included in the response. Tasks must not be included for any other response status.
-    async fn fetch_planning_result<'prefix, 'namespace, 'table, 'plan_id>(
+    async fn fetch_planning_result<'namespace, 'table, 'plan_id, 'prefix>(
         &self,
-        prefix: &'prefix str,
         namespace: &'namespace str,
         table: &'table str,
         plan_id: &'plan_id str,
+        prefix: Option<&'prefix str>,
     ) -> Result<models::FetchPlanningResult, Error<FetchPlanningResultError>> {
         let local_var_configuration = &self.configuration;
 
         let local_var_client = &local_var_configuration.client;
 
         let local_var_uri_str = format!(
-            "{}/v1/{prefix}/namespaces/{namespace}/tables/{table}/plan/{plan_id}",
+            "{}/v1{prefix}/namespaces/{namespace}/tables/{table}/plan/{plan_id}",
             local_var_configuration.base_path,
-            prefix = crate::apis::urlencode(prefix),
+            prefix = prefix
+                .map(|p| format!("/{}", crate::apis::urlencode(p)))
+                .unwrap_or_default(),
             namespace = crate::apis::urlencode(namespace),
             table = crate::apis::urlencode(table),
             plan_id = crate::apis::urlencode(plan_id)
@@ -918,17 +832,6 @@ impl CatalogApiApi for CatalogApiApiClient {
         let mut local_var_req_builder =
             local_var_client.request(reqwest::Method::GET, local_var_uri_str.as_str());
 
-        if let Some(ref local_var_aws_v4_key) = local_var_configuration.aws_v4_key {
-            let local_var_new_headers =
-                match local_var_aws_v4_key.sign(&local_var_uri_str, "GET", "") {
-                    Ok(new_headers) => new_headers,
-                    Err(err) => return Err(Error::AWSV4SignatureError(err)),
-                };
-            for (local_var_name, local_var_value) in local_var_new_headers.iter() {
-                local_var_req_builder =
-                    local_var_req_builder.header(local_var_name.as_str(), local_var_value.as_str());
-            }
-        }
         if let Some(ref local_var_user_agent) = local_var_configuration.user_agent {
             local_var_req_builder = local_var_req_builder
                 .header(reqwest::header::USER_AGENT, local_var_user_agent.clone());
@@ -971,11 +874,11 @@ impl CatalogApiApi for CatalogApiApiClient {
     }
 
     /// Fetches result tasks for a plan task.
-    async fn fetch_scan_tasks<'prefix, 'namespace, 'table, 'fetch_scan_tasks_request>(
+    async fn fetch_scan_tasks<'namespace, 'table, 'prefix, 'fetch_scan_tasks_request>(
         &self,
-        prefix: &'prefix str,
         namespace: &'namespace str,
         table: &'table str,
+        prefix: Option<&'prefix str>,
         fetch_scan_tasks_request: Option<models::FetchScanTasksRequest>,
     ) -> Result<models::FetchScanTasksResult, Error<FetchScanTasksError>> {
         let local_var_configuration = &self.configuration;
@@ -983,30 +886,17 @@ impl CatalogApiApi for CatalogApiApiClient {
         let local_var_client = &local_var_configuration.client;
 
         let local_var_uri_str = format!(
-            "{}/v1/{prefix}/namespaces/{namespace}/tables/{table}/tasks",
+            "{}/v1{prefix}/namespaces/{namespace}/tables/{table}/tasks",
             local_var_configuration.base_path,
-            prefix = crate::apis::urlencode(prefix),
+            prefix = prefix
+                .map(|p| format!("/{}", crate::apis::urlencode(p)))
+                .unwrap_or_default(),
             namespace = crate::apis::urlencode(namespace),
             table = crate::apis::urlencode(table)
         );
         let mut local_var_req_builder =
             local_var_client.request(reqwest::Method::POST, local_var_uri_str.as_str());
 
-        if let Some(ref local_var_aws_v4_key) = local_var_configuration.aws_v4_key {
-            let local_var_new_headers = match local_var_aws_v4_key.sign(
-                &local_var_uri_str,
-                "POST",
-                &serde_json::to_string(&fetch_scan_tasks_request)
-                    .expect("param should serialize to string"),
-            ) {
-                Ok(new_headers) => new_headers,
-                Err(err) => return Err(Error::AWSV4SignatureError(err)),
-            };
-            for (local_var_name, local_var_value) in local_var_new_headers.iter() {
-                local_var_req_builder =
-                    local_var_req_builder.header(local_var_name.as_str(), local_var_value.as_str());
-            }
-        }
         if let Some(ref local_var_user_agent) = local_var_configuration.user_agent {
             local_var_req_builder = local_var_req_builder
                 .header(reqwest::header::USER_AGENT, local_var_user_agent.clone());
@@ -1050,21 +940,23 @@ impl CatalogApiApi for CatalogApiApiClient {
     }
 
     /// List all namespaces at a certain level, optionally starting from a given parent namespace. If table accounting.tax.paid.info exists, using 'SELECT NAMESPACE IN accounting' would translate into `GET /namespaces?parent=accounting` and must return a namespace, [\"accounting\", \"tax\"] only. Using 'SELECT NAMESPACE IN accounting.tax' would translate into `GET /namespaces?parent=accounting%1Ftax` and must return a namespace, [\"accounting\", \"tax\", \"paid\"]. If `parent` is not provided, all top-level namespaces should be listed.
-    async fn list_namespaces<'prefix, 'page_token, 'page_size, 'parent>(
+    async fn list_namespaces<'page_token, 'page_size, 'parent, 'prefix>(
         &self,
-        prefix: &'prefix str,
         page_token: Option<&'page_token str>,
         page_size: Option<i32>,
         parent: Option<&'parent str>,
+        prefix: Option<&'prefix str>,
     ) -> Result<models::ListNamespacesResponse, Error<ListNamespacesError>> {
         let local_var_configuration = &self.configuration;
 
         let local_var_client = &local_var_configuration.client;
 
         let local_var_uri_str = format!(
-            "{}/v1/{prefix}/namespaces",
+            "{}/v1{prefix}/namespaces",
             local_var_configuration.base_path,
-            prefix = crate::apis::urlencode(prefix)
+            prefix = prefix
+                .map(|p| format!("/{}", crate::apis::urlencode(p)))
+                .unwrap_or_default()
         );
         let mut local_var_req_builder =
             local_var_client.request(reqwest::Method::GET, local_var_uri_str.as_str());
@@ -1080,17 +972,6 @@ impl CatalogApiApi for CatalogApiApiClient {
         if let Some(ref param_value) = parent {
             local_var_req_builder =
                 local_var_req_builder.query(&[("parent", &param_value.to_string())]);
-        }
-        if let Some(ref local_var_aws_v4_key) = local_var_configuration.aws_v4_key {
-            let local_var_new_headers =
-                match local_var_aws_v4_key.sign(&local_var_uri_str, "GET", "") {
-                    Ok(new_headers) => new_headers,
-                    Err(err) => return Err(Error::AWSV4SignatureError(err)),
-                };
-            for (local_var_name, local_var_value) in local_var_new_headers.iter() {
-                local_var_req_builder =
-                    local_var_req_builder.header(local_var_name.as_str(), local_var_value.as_str());
-            }
         }
         if let Some(ref local_var_user_agent) = local_var_configuration.user_agent {
             local_var_req_builder = local_var_req_builder
@@ -1134,21 +1015,23 @@ impl CatalogApiApi for CatalogApiApiClient {
     }
 
     /// Return all table identifiers under this namespace
-    async fn list_tables<'prefix, 'namespace, 'page_token, 'page_size>(
+    async fn list_tables<'namespace, 'page_token, 'page_size, 'prefix>(
         &self,
-        prefix: &'prefix str,
         namespace: &'namespace str,
         page_token: Option<&'page_token str>,
         page_size: Option<i32>,
+        prefix: Option<&'prefix str>,
     ) -> Result<models::ListTablesResponse, Error<ListTablesError>> {
         let local_var_configuration = &self.configuration;
 
         let local_var_client = &local_var_configuration.client;
 
         let local_var_uri_str = format!(
-            "{}/v1/{prefix}/namespaces/{namespace}/tables",
+            "{}/v1{prefix}/namespaces/{namespace}/tables",
             local_var_configuration.base_path,
-            prefix = crate::apis::urlencode(prefix),
+            prefix = prefix
+                .map(|p| format!("/{}", crate::apis::urlencode(p)))
+                .unwrap_or_default(),
             namespace = crate::apis::urlencode(namespace)
         );
         let mut local_var_req_builder =
@@ -1161,17 +1044,6 @@ impl CatalogApiApi for CatalogApiApiClient {
         if let Some(ref param_value) = page_size {
             local_var_req_builder =
                 local_var_req_builder.query(&[("pageSize", &param_value.to_string())]);
-        }
-        if let Some(ref local_var_aws_v4_key) = local_var_configuration.aws_v4_key {
-            let local_var_new_headers =
-                match local_var_aws_v4_key.sign(&local_var_uri_str, "GET", "") {
-                    Ok(new_headers) => new_headers,
-                    Err(err) => return Err(Error::AWSV4SignatureError(err)),
-                };
-            for (local_var_name, local_var_value) in local_var_new_headers.iter() {
-                local_var_req_builder =
-                    local_var_req_builder.header(local_var_name.as_str(), local_var_value.as_str());
-            }
         }
         if let Some(ref local_var_user_agent) = local_var_configuration.user_agent {
             local_var_req_builder = local_var_req_builder
@@ -1215,21 +1087,23 @@ impl CatalogApiApi for CatalogApiApiClient {
     }
 
     /// Return all view identifiers under this namespace
-    async fn list_views<'prefix, 'namespace, 'page_token, 'page_size>(
+    async fn list_views<'namespace, 'page_token, 'page_size, 'prefix>(
         &self,
-        prefix: &'prefix str,
         namespace: &'namespace str,
         page_token: Option<&'page_token str>,
         page_size: Option<i32>,
+        prefix: Option<&'prefix str>,
     ) -> Result<models::ListTablesResponse, Error<ListViewsError>> {
         let local_var_configuration = &self.configuration;
 
         let local_var_client = &local_var_configuration.client;
 
         let local_var_uri_str = format!(
-            "{}/v1/{prefix}/namespaces/{namespace}/views",
+            "{}/v1{prefix}/namespaces/{namespace}/views",
             local_var_configuration.base_path,
-            prefix = crate::apis::urlencode(prefix),
+            prefix = prefix
+                .map(|p| format!("/{}", crate::apis::urlencode(p)))
+                .unwrap_or_default(),
             namespace = crate::apis::urlencode(namespace)
         );
         let mut local_var_req_builder =
@@ -1242,17 +1116,6 @@ impl CatalogApiApi for CatalogApiApiClient {
         if let Some(ref param_value) = page_size {
             local_var_req_builder =
                 local_var_req_builder.query(&[("pageSize", &param_value.to_string())]);
-        }
-        if let Some(ref local_var_aws_v4_key) = local_var_configuration.aws_v4_key {
-            let local_var_new_headers =
-                match local_var_aws_v4_key.sign(&local_var_uri_str, "GET", "") {
-                    Ok(new_headers) => new_headers,
-                    Err(err) => return Err(Error::AWSV4SignatureError(err)),
-                };
-            for (local_var_name, local_var_value) in local_var_new_headers.iter() {
-                local_var_req_builder =
-                    local_var_req_builder.header(local_var_name.as_str(), local_var_value.as_str());
-            }
         }
         if let Some(ref local_var_user_agent) = local_var_configuration.user_agent {
             local_var_req_builder = local_var_req_builder
@@ -1296,37 +1159,28 @@ impl CatalogApiApi for CatalogApiApiClient {
     }
 
     /// Load vended credentials for a table from the catalog.
-    async fn load_credentials<'prefix, 'namespace, 'table>(
+    async fn load_credentials<'namespace, 'table, 'prefix>(
         &self,
-        prefix: &'prefix str,
         namespace: &'namespace str,
         table: &'table str,
+        prefix: Option<&'prefix str>,
     ) -> Result<models::LoadCredentialsResponse, Error<LoadCredentialsError>> {
         let local_var_configuration = &self.configuration;
 
         let local_var_client = &local_var_configuration.client;
 
         let local_var_uri_str = format!(
-            "{}/v1/{prefix}/namespaces/{namespace}/tables/{table}/credentials",
+            "{}/v1{prefix}/namespaces/{namespace}/tables/{table}/credentials",
             local_var_configuration.base_path,
-            prefix = crate::apis::urlencode(prefix),
+            prefix = prefix
+                .map(|p| format!("/{}", crate::apis::urlencode(p)))
+                .unwrap_or_default(),
             namespace = crate::apis::urlencode(namespace),
             table = crate::apis::urlencode(table)
         );
         let mut local_var_req_builder =
             local_var_client.request(reqwest::Method::GET, local_var_uri_str.as_str());
 
-        if let Some(ref local_var_aws_v4_key) = local_var_configuration.aws_v4_key {
-            let local_var_new_headers =
-                match local_var_aws_v4_key.sign(&local_var_uri_str, "GET", "") {
-                    Ok(new_headers) => new_headers,
-                    Err(err) => return Err(Error::AWSV4SignatureError(err)),
-                };
-            for (local_var_name, local_var_value) in local_var_new_headers.iter() {
-                local_var_req_builder =
-                    local_var_req_builder.header(local_var_name.as_str(), local_var_value.as_str());
-            }
-        }
         if let Some(ref local_var_user_agent) = local_var_configuration.user_agent {
             local_var_req_builder = local_var_req_builder
                 .header(reqwest::header::USER_AGENT, local_var_user_agent.clone());
@@ -1369,35 +1223,26 @@ impl CatalogApiApi for CatalogApiApiClient {
     }
 
     /// Return all stored metadata properties for a given namespace
-    async fn load_namespace_metadata<'prefix, 'namespace>(
+    async fn load_namespace_metadata<'namespace, 'prefix>(
         &self,
-        prefix: &'prefix str,
         namespace: &'namespace str,
+        prefix: Option<&'prefix str>,
     ) -> Result<models::GetNamespaceResponse, Error<LoadNamespaceMetadataError>> {
         let local_var_configuration = &self.configuration;
 
         let local_var_client = &local_var_configuration.client;
 
         let local_var_uri_str = format!(
-            "{}/v1/{prefix}/namespaces/{namespace}",
+            "{}/v1{prefix}/namespaces/{namespace}",
             local_var_configuration.base_path,
-            prefix = crate::apis::urlencode(prefix),
+            prefix = prefix
+                .map(|p| format!("/{}", crate::apis::urlencode(p)))
+                .unwrap_or_default(),
             namespace = crate::apis::urlencode(namespace)
         );
         let mut local_var_req_builder =
             local_var_client.request(reqwest::Method::GET, local_var_uri_str.as_str());
 
-        if let Some(ref local_var_aws_v4_key) = local_var_configuration.aws_v4_key {
-            let local_var_new_headers =
-                match local_var_aws_v4_key.sign(&local_var_uri_str, "GET", "") {
-                    Ok(new_headers) => new_headers,
-                    Err(err) => return Err(Error::AWSV4SignatureError(err)),
-                };
-            for (local_var_name, local_var_value) in local_var_new_headers.iter() {
-                local_var_req_builder =
-                    local_var_req_builder.header(local_var_name.as_str(), local_var_value.as_str());
-            }
-        }
         if let Some(ref local_var_user_agent) = local_var_configuration.user_agent {
             local_var_req_builder = local_var_req_builder
                 .header(reqwest::header::USER_AGENT, local_var_user_agent.clone());
@@ -1441,29 +1286,31 @@ impl CatalogApiApi for CatalogApiApiClient {
 
     /// Load a table from the catalog.  The response contains both configuration and table metadata. The configuration, if non-empty is used as additional configuration for the table that overrides catalog configuration. For example, this configuration may change the FileIO implementation to be used for the table.  The response also contains the table's full metadata, matching the table metadata JSON file.  The catalog configuration may contain credentials that should be used for subsequent requests for the table. The configuration key \"token\" is used to pass an access token to be used as a bearer token for table requests. Otherwise, a token may be passed using a RFC 8693 token type as a configuration key. For example, \"urn:ietf:params:oauth:token-type:jwt=<JWT-token>\".
     async fn load_table<
-        'prefix,
         'namespace,
         'table,
         'x_iceberg_access_delegation,
         'if_none_match,
         'snapshots,
+        'prefix,
     >(
         &self,
-        prefix: &'prefix str,
         namespace: &'namespace str,
         table: &'table str,
         x_iceberg_access_delegation: Option<&'x_iceberg_access_delegation str>,
         if_none_match: Option<&'if_none_match str>,
         snapshots: Option<&'snapshots str>,
+        prefix: Option<&'prefix str>,
     ) -> Result<models::LoadTableResult, Error<LoadTableError>> {
         let local_var_configuration = &self.configuration;
 
         let local_var_client = &local_var_configuration.client;
 
         let local_var_uri_str = format!(
-            "{}/v1/{prefix}/namespaces/{namespace}/tables/{table}",
+            "{}/v1{prefix}/namespaces/{namespace}/tables/{table}",
             local_var_configuration.base_path,
-            prefix = crate::apis::urlencode(prefix),
+            prefix = prefix
+                .map(|p| format!("/{}", crate::apis::urlencode(p)))
+                .unwrap_or_default(),
             namespace = crate::apis::urlencode(namespace),
             table = crate::apis::urlencode(table)
         );
@@ -1473,17 +1320,6 @@ impl CatalogApiApi for CatalogApiApiClient {
         if let Some(ref param_value) = snapshots {
             local_var_req_builder =
                 local_var_req_builder.query(&[("snapshots", &param_value.to_string())]);
-        }
-        if let Some(ref local_var_aws_v4_key) = local_var_configuration.aws_v4_key {
-            let local_var_new_headers =
-                match local_var_aws_v4_key.sign(&local_var_uri_str, "GET", "") {
-                    Ok(new_headers) => new_headers,
-                    Err(err) => return Err(Error::AWSV4SignatureError(err)),
-                };
-            for (local_var_name, local_var_value) in local_var_new_headers.iter() {
-                local_var_req_builder =
-                    local_var_req_builder.header(local_var_name.as_str(), local_var_value.as_str());
-            }
         }
         if let Some(ref local_var_user_agent) = local_var_configuration.user_agent {
             local_var_req_builder = local_var_req_builder
@@ -1537,37 +1373,28 @@ impl CatalogApiApi for CatalogApiApiClient {
     }
 
     /// Load a view from the catalog.  The response contains both configuration and view metadata. The configuration, if non-empty is used as additional configuration for the view that overrides catalog configuration.  The response also contains the view's full metadata, matching the view metadata JSON file.  The catalog configuration may contain credentials that should be used for subsequent requests for the view. The configuration key \"token\" is used to pass an access token to be used as a bearer token for view requests. Otherwise, a token may be passed using a RFC 8693 token type as a configuration key. For example, \"urn:ietf:params:oauth:token-type:jwt=<JWT-token>\".
-    async fn load_view<'prefix, 'namespace, 'view>(
+    async fn load_view<'namespace, 'view, 'prefix>(
         &self,
-        prefix: &'prefix str,
         namespace: &'namespace str,
         view: &'view str,
+        prefix: Option<&'prefix str>,
     ) -> Result<models::LoadViewResult, Error<LoadViewError>> {
         let local_var_configuration = &self.configuration;
 
         let local_var_client = &local_var_configuration.client;
 
         let local_var_uri_str = format!(
-            "{}/v1/{prefix}/namespaces/{namespace}/views/{view}",
+            "{}/v1{prefix}/namespaces/{namespace}/views/{view}",
             local_var_configuration.base_path,
-            prefix = crate::apis::urlencode(prefix),
+            prefix = prefix
+                .map(|p| format!("/{}", crate::apis::urlencode(p)))
+                .unwrap_or_default(),
             namespace = crate::apis::urlencode(namespace),
             view = crate::apis::urlencode(view)
         );
         let mut local_var_req_builder =
             local_var_client.request(reqwest::Method::GET, local_var_uri_str.as_str());
 
-        if let Some(ref local_var_aws_v4_key) = local_var_configuration.aws_v4_key {
-            let local_var_new_headers =
-                match local_var_aws_v4_key.sign(&local_var_uri_str, "GET", "") {
-                    Ok(new_headers) => new_headers,
-                    Err(err) => return Err(Error::AWSV4SignatureError(err)),
-                };
-            for (local_var_name, local_var_value) in local_var_new_headers.iter() {
-                local_var_req_builder =
-                    local_var_req_builder.header(local_var_name.as_str(), local_var_value.as_str());
-            }
-        }
         if let Some(ref local_var_user_agent) = local_var_configuration.user_agent {
             local_var_req_builder = local_var_req_builder
                 .header(reqwest::header::USER_AGENT, local_var_user_agent.clone());
@@ -1610,35 +1437,26 @@ impl CatalogApiApi for CatalogApiApiClient {
     }
 
     /// Check if a namespace exists. The response does not contain a body.
-    async fn namespace_exists<'prefix, 'namespace>(
+    async fn namespace_exists<'namespace, 'prefix>(
         &self,
-        prefix: &'prefix str,
         namespace: &'namespace str,
+        prefix: Option<&'prefix str>,
     ) -> Result<(), Error<NamespaceExistsError>> {
         let local_var_configuration = &self.configuration;
 
         let local_var_client = &local_var_configuration.client;
 
         let local_var_uri_str = format!(
-            "{}/v1/{prefix}/namespaces/{namespace}",
+            "{}/v1{prefix}/namespaces/{namespace}",
             local_var_configuration.base_path,
-            prefix = crate::apis::urlencode(prefix),
+            prefix = prefix
+                .map(|p| format!("/{}", crate::apis::urlencode(p)))
+                .unwrap_or_default(),
             namespace = crate::apis::urlencode(namespace)
         );
         let mut local_var_req_builder =
             local_var_client.request(reqwest::Method::HEAD, local_var_uri_str.as_str());
 
-        if let Some(ref local_var_aws_v4_key) = local_var_configuration.aws_v4_key {
-            let local_var_new_headers =
-                match local_var_aws_v4_key.sign(&local_var_uri_str, "HEAD", "") {
-                    Ok(new_headers) => new_headers,
-                    Err(err) => return Err(Error::AWSV4SignatureError(err)),
-                };
-            for (local_var_name, local_var_value) in local_var_new_headers.iter() {
-                local_var_req_builder =
-                    local_var_req_builder.header(local_var_name.as_str(), local_var_value.as_str());
-            }
-        }
         if let Some(ref local_var_user_agent) = local_var_configuration.user_agent {
             local_var_req_builder = local_var_req_builder
                 .header(reqwest::header::USER_AGENT, local_var_user_agent.clone());
@@ -1671,11 +1489,11 @@ impl CatalogApiApi for CatalogApiApiClient {
     }
 
     /// Submits a scan for server-side planning.  Point-in-time scans are planned by passing snapshot-id to identify the table snapshot to scan. Incremental scans are planned by passing both start-snapshot-id and end-snapshot-id. Requests that include both point in time config properties and incremental config properties are invalid. If the request does not include either incremental or point-in-time config properties, scan planning should produce a point-in-time scan of the latest snapshot in the table's main branch.  Responses must include a valid status listed below. A \"cancelled\" status is considered invalid for this endpoint.   - When \"completed\" the planning operation has produced plan tasks and   file scan tasks that must be returned in the response (not fetched   later by calling fetchPlanningResult)  - When \"submitted\" the response must include a plan-id used to poll   fetchPlanningResult to fetch the planning result when it is ready  - When \"failed\" the response must be a valid error response The response for a \"completed\" planning operation includes two types of tasks (file scan tasks and plan tasks) and both may be included in the response. Tasks must not be included for any other response status.  Responses that include a plan-id indicate that the service is holding state or performing work for the client.  - Clients should use the plan-id to fetch results from   fetchPlanningResult when the response status is \"submitted\"  - Clients should inform the service if planning results are no longer   needed by calling cancelPlanning. Cancellation is not necessary after   fetchScanTasks has been used to fetch scan tasks for each plan task.
-    async fn plan_table_scan<'prefix, 'namespace, 'table, 'plan_table_scan_request>(
+    async fn plan_table_scan<'namespace, 'table, 'prefix, 'plan_table_scan_request>(
         &self,
-        prefix: &'prefix str,
         namespace: &'namespace str,
         table: &'table str,
+        prefix: Option<&'prefix str>,
         plan_table_scan_request: Option<models::PlanTableScanRequest>,
     ) -> Result<models::PlanTableScanResult, Error<PlanTableScanError>> {
         let local_var_configuration = &self.configuration;
@@ -1683,30 +1501,17 @@ impl CatalogApiApi for CatalogApiApiClient {
         let local_var_client = &local_var_configuration.client;
 
         let local_var_uri_str = format!(
-            "{}/v1/{prefix}/namespaces/{namespace}/tables/{table}/plan",
+            "{}/v1{prefix}/namespaces/{namespace}/tables/{table}/plan",
             local_var_configuration.base_path,
-            prefix = crate::apis::urlencode(prefix),
+            prefix = prefix
+                .map(|p| format!("/{}", crate::apis::urlencode(p)))
+                .unwrap_or_default(),
             namespace = crate::apis::urlencode(namespace),
             table = crate::apis::urlencode(table)
         );
         let mut local_var_req_builder =
             local_var_client.request(reqwest::Method::POST, local_var_uri_str.as_str());
 
-        if let Some(ref local_var_aws_v4_key) = local_var_configuration.aws_v4_key {
-            let local_var_new_headers = match local_var_aws_v4_key.sign(
-                &local_var_uri_str,
-                "POST",
-                &serde_json::to_string(&plan_table_scan_request)
-                    .expect("param should serialize to string"),
-            ) {
-                Ok(new_headers) => new_headers,
-                Err(err) => return Err(Error::AWSV4SignatureError(err)),
-            };
-            for (local_var_name, local_var_value) in local_var_new_headers.iter() {
-                local_var_req_builder =
-                    local_var_req_builder.header(local_var_name.as_str(), local_var_value.as_str());
-            }
-        }
         if let Some(ref local_var_user_agent) = local_var_configuration.user_agent {
             local_var_req_builder = local_var_req_builder
                 .header(reqwest::header::USER_AGENT, local_var_user_agent.clone());
@@ -1750,40 +1555,27 @@ impl CatalogApiApi for CatalogApiApiClient {
     }
 
     /// Register a table using given metadata file location.
-    async fn register_table<'prefix, 'namespace, 'register_table_request>(
+    async fn register_table<'namespace, 'register_table_request, 'prefix>(
         &self,
-        prefix: &'prefix str,
         namespace: &'namespace str,
         register_table_request: models::RegisterTableRequest,
+        prefix: Option<&'prefix str>,
     ) -> Result<models::LoadTableResult, Error<RegisterTableError>> {
         let local_var_configuration = &self.configuration;
 
         let local_var_client = &local_var_configuration.client;
 
         let local_var_uri_str = format!(
-            "{}/v1/{prefix}/namespaces/{namespace}/register",
+            "{}/v1{prefix}/namespaces/{namespace}/register",
             local_var_configuration.base_path,
-            prefix = crate::apis::urlencode(prefix),
+            prefix = prefix
+                .map(|p| format!("/{}", crate::apis::urlencode(p)))
+                .unwrap_or_default(),
             namespace = crate::apis::urlencode(namespace)
         );
         let mut local_var_req_builder =
             local_var_client.request(reqwest::Method::POST, local_var_uri_str.as_str());
 
-        if let Some(ref local_var_aws_v4_key) = local_var_configuration.aws_v4_key {
-            let local_var_new_headers = match local_var_aws_v4_key.sign(
-                &local_var_uri_str,
-                "POST",
-                &serde_json::to_string(&register_table_request)
-                    .expect("param should serialize to string"),
-            ) {
-                Ok(new_headers) => new_headers,
-                Err(err) => return Err(Error::AWSV4SignatureError(err)),
-            };
-            for (local_var_name, local_var_value) in local_var_new_headers.iter() {
-                local_var_req_builder =
-                    local_var_req_builder.header(local_var_name.as_str(), local_var_value.as_str());
-            }
-        }
         if let Some(ref local_var_user_agent) = local_var_configuration.user_agent {
             local_var_req_builder = local_var_req_builder
                 .header(reqwest::header::USER_AGENT, local_var_user_agent.clone());
@@ -1827,38 +1619,25 @@ impl CatalogApiApi for CatalogApiApiClient {
     }
 
     /// Rename a table from one identifier to another. It's valid to move a table across namespaces, but the server implementation is not required to support it.
-    async fn rename_table<'prefix, 'rename_table_request>(
+    async fn rename_table<'rename_table_request, 'prefix>(
         &self,
-        prefix: &'prefix str,
         rename_table_request: models::RenameTableRequest,
+        prefix: Option<&'prefix str>,
     ) -> Result<(), Error<RenameTableError>> {
         let local_var_configuration = &self.configuration;
 
         let local_var_client = &local_var_configuration.client;
 
         let local_var_uri_str = format!(
-            "{}/v1/{prefix}/tables/rename",
+            "{}/v1{prefix}/tables/rename",
             local_var_configuration.base_path,
-            prefix = crate::apis::urlencode(prefix)
+            prefix = prefix
+                .map(|p| format!("/{}", crate::apis::urlencode(p)))
+                .unwrap_or_default()
         );
         let mut local_var_req_builder =
             local_var_client.request(reqwest::Method::POST, local_var_uri_str.as_str());
 
-        if let Some(ref local_var_aws_v4_key) = local_var_configuration.aws_v4_key {
-            let local_var_new_headers = match local_var_aws_v4_key.sign(
-                &local_var_uri_str,
-                "POST",
-                &serde_json::to_string(&rename_table_request)
-                    .expect("param should serialize to string"),
-            ) {
-                Ok(new_headers) => new_headers,
-                Err(err) => return Err(Error::AWSV4SignatureError(err)),
-            };
-            for (local_var_name, local_var_value) in local_var_new_headers.iter() {
-                local_var_req_builder =
-                    local_var_req_builder.header(local_var_name.as_str(), local_var_value.as_str());
-            }
-        }
         if let Some(ref local_var_user_agent) = local_var_configuration.user_agent {
             local_var_req_builder = local_var_req_builder
                 .header(reqwest::header::USER_AGENT, local_var_user_agent.clone());
@@ -1892,38 +1671,25 @@ impl CatalogApiApi for CatalogApiApiClient {
     }
 
     /// Rename a view from one identifier to another. It's valid to move a view across namespaces, but the server implementation is not required to support it.
-    async fn rename_view<'prefix, 'rename_table_request>(
+    async fn rename_view<'rename_table_request, 'prefix>(
         &self,
-        prefix: &'prefix str,
         rename_table_request: models::RenameTableRequest,
+        prefix: Option<&'prefix str>,
     ) -> Result<(), Error<RenameViewError>> {
         let local_var_configuration = &self.configuration;
 
         let local_var_client = &local_var_configuration.client;
 
         let local_var_uri_str = format!(
-            "{}/v1/{prefix}/views/rename",
+            "{}/v1{prefix}/views/rename",
             local_var_configuration.base_path,
-            prefix = crate::apis::urlencode(prefix)
+            prefix = prefix
+                .map(|p| format!("/{}", crate::apis::urlencode(p)))
+                .unwrap_or_default()
         );
         let mut local_var_req_builder =
             local_var_client.request(reqwest::Method::POST, local_var_uri_str.as_str());
 
-        if let Some(ref local_var_aws_v4_key) = local_var_configuration.aws_v4_key {
-            let local_var_new_headers = match local_var_aws_v4_key.sign(
-                &local_var_uri_str,
-                "POST",
-                &serde_json::to_string(&rename_table_request)
-                    .expect("param should serialize to string"),
-            ) {
-                Ok(new_headers) => new_headers,
-                Err(err) => return Err(Error::AWSV4SignatureError(err)),
-            };
-            for (local_var_name, local_var_value) in local_var_new_headers.iter() {
-                local_var_req_builder =
-                    local_var_req_builder.header(local_var_name.as_str(), local_var_value.as_str());
-            }
-        }
         if let Some(ref local_var_user_agent) = local_var_configuration.user_agent {
             local_var_req_builder = local_var_req_builder
                 .header(reqwest::header::USER_AGENT, local_var_user_agent.clone());
@@ -1957,42 +1723,29 @@ impl CatalogApiApi for CatalogApiApiClient {
     }
 
     /// Commit updates to a view.
-    async fn replace_view<'prefix, 'namespace, 'view, 'commit_view_request>(
+    async fn replace_view<'namespace, 'view, 'commit_view_request, 'prefix>(
         &self,
-        prefix: &'prefix str,
         namespace: &'namespace str,
         view: &'view str,
         commit_view_request: models::CommitViewRequest,
+        prefix: Option<&'prefix str>,
     ) -> Result<models::LoadViewResult, Error<ReplaceViewError>> {
         let local_var_configuration = &self.configuration;
 
         let local_var_client = &local_var_configuration.client;
 
         let local_var_uri_str = format!(
-            "{}/v1/{prefix}/namespaces/{namespace}/views/{view}",
+            "{}/v1{prefix}/namespaces/{namespace}/views/{view}",
             local_var_configuration.base_path,
-            prefix = crate::apis::urlencode(prefix),
+            prefix = prefix
+                .map(|p| format!("/{}", crate::apis::urlencode(p)))
+                .unwrap_or_default(),
             namespace = crate::apis::urlencode(namespace),
             view = crate::apis::urlencode(view)
         );
         let mut local_var_req_builder =
             local_var_client.request(reqwest::Method::POST, local_var_uri_str.as_str());
 
-        if let Some(ref local_var_aws_v4_key) = local_var_configuration.aws_v4_key {
-            let local_var_new_headers = match local_var_aws_v4_key.sign(
-                &local_var_uri_str,
-                "POST",
-                &serde_json::to_string(&commit_view_request)
-                    .expect("param should serialize to string"),
-            ) {
-                Ok(new_headers) => new_headers,
-                Err(err) => return Err(Error::AWSV4SignatureError(err)),
-            };
-            for (local_var_name, local_var_value) in local_var_new_headers.iter() {
-                local_var_req_builder =
-                    local_var_req_builder.header(local_var_name.as_str(), local_var_value.as_str());
-            }
-        }
         if let Some(ref local_var_user_agent) = local_var_configuration.user_agent {
             local_var_req_builder = local_var_req_builder
                 .header(reqwest::header::USER_AGENT, local_var_user_agent.clone());
@@ -2035,42 +1788,29 @@ impl CatalogApiApi for CatalogApiApiClient {
         }
     }
 
-    async fn report_metrics<'prefix, 'namespace, 'table, 'report_metrics_request>(
+    async fn report_metrics<'namespace, 'table, 'report_metrics_request, 'prefix>(
         &self,
-        prefix: &'prefix str,
         namespace: &'namespace str,
         table: &'table str,
         report_metrics_request: models::ReportMetricsRequest,
+        prefix: Option<&'prefix str>,
     ) -> Result<(), Error<ReportMetricsError>> {
         let local_var_configuration = &self.configuration;
 
         let local_var_client = &local_var_configuration.client;
 
         let local_var_uri_str = format!(
-            "{}/v1/{prefix}/namespaces/{namespace}/tables/{table}/metrics",
+            "{}/v1{prefix}/namespaces/{namespace}/tables/{table}/metrics",
             local_var_configuration.base_path,
-            prefix = crate::apis::urlencode(prefix),
+            prefix = prefix
+                .map(|p| format!("/{}", crate::apis::urlencode(p)))
+                .unwrap_or_default(),
             namespace = crate::apis::urlencode(namespace),
             table = crate::apis::urlencode(table)
         );
         let mut local_var_req_builder =
             local_var_client.request(reqwest::Method::POST, local_var_uri_str.as_str());
 
-        if let Some(ref local_var_aws_v4_key) = local_var_configuration.aws_v4_key {
-            let local_var_new_headers = match local_var_aws_v4_key.sign(
-                &local_var_uri_str,
-                "POST",
-                &serde_json::to_string(&report_metrics_request)
-                    .expect("param should serialize to string"),
-            ) {
-                Ok(new_headers) => new_headers,
-                Err(err) => return Err(Error::AWSV4SignatureError(err)),
-            };
-            for (local_var_name, local_var_value) in local_var_new_headers.iter() {
-                local_var_req_builder =
-                    local_var_req_builder.header(local_var_name.as_str(), local_var_value.as_str());
-            }
-        }
         if let Some(ref local_var_user_agent) = local_var_configuration.user_agent {
             local_var_req_builder = local_var_req_builder
                 .header(reqwest::header::USER_AGENT, local_var_user_agent.clone());
@@ -2104,37 +1844,28 @@ impl CatalogApiApi for CatalogApiApiClient {
     }
 
     /// Check if a table exists within a given namespace. The response does not contain a body.
-    async fn table_exists<'prefix, 'namespace, 'table>(
+    async fn table_exists<'namespace, 'table, 'prefix>(
         &self,
-        prefix: &'prefix str,
         namespace: &'namespace str,
         table: &'table str,
+        prefix: Option<&'prefix str>,
     ) -> Result<(), Error<TableExistsError>> {
         let local_var_configuration = &self.configuration;
 
         let local_var_client = &local_var_configuration.client;
 
         let local_var_uri_str = format!(
-            "{}/v1/{prefix}/namespaces/{namespace}/tables/{table}",
+            "{}/v1{prefix}/namespaces/{namespace}/tables/{table}",
             local_var_configuration.base_path,
-            prefix = crate::apis::urlencode(prefix),
+            prefix = prefix
+                .map(|p| format!("/{}", crate::apis::urlencode(p)))
+                .unwrap_or_default(),
             namespace = crate::apis::urlencode(namespace),
             table = crate::apis::urlencode(table)
         );
         let mut local_var_req_builder =
             local_var_client.request(reqwest::Method::HEAD, local_var_uri_str.as_str());
 
-        if let Some(ref local_var_aws_v4_key) = local_var_configuration.aws_v4_key {
-            let local_var_new_headers =
-                match local_var_aws_v4_key.sign(&local_var_uri_str, "HEAD", "") {
-                    Ok(new_headers) => new_headers,
-                    Err(err) => return Err(Error::AWSV4SignatureError(err)),
-                };
-            for (local_var_name, local_var_value) in local_var_new_headers.iter() {
-                local_var_req_builder =
-                    local_var_req_builder.header(local_var_name.as_str(), local_var_value.as_str());
-            }
-        }
         if let Some(ref local_var_user_agent) = local_var_configuration.user_agent {
             local_var_req_builder = local_var_req_builder
                 .header(reqwest::header::USER_AGENT, local_var_user_agent.clone());
@@ -2167,40 +1898,27 @@ impl CatalogApiApi for CatalogApiApiClient {
     }
 
     /// Set and/or remove properties on a namespace. The request body specifies a list of properties to remove and a map of key value pairs to update. Properties that are not in the request are not modified or removed by this call. Server implementations are not required to support namespace properties.
-    async fn update_properties<'prefix, 'namespace, 'update_namespace_properties_request>(
+    async fn update_properties<'namespace, 'update_namespace_properties_request, 'prefix>(
         &self,
-        prefix: &'prefix str,
         namespace: &'namespace str,
         update_namespace_properties_request: models::UpdateNamespacePropertiesRequest,
+        prefix: Option<&'prefix str>,
     ) -> Result<models::UpdateNamespacePropertiesResponse, Error<UpdatePropertiesError>> {
         let local_var_configuration = &self.configuration;
 
         let local_var_client = &local_var_configuration.client;
 
         let local_var_uri_str = format!(
-            "{}/v1/{prefix}/namespaces/{namespace}/properties",
+            "{}/v1{prefix}/namespaces/{namespace}/properties",
             local_var_configuration.base_path,
-            prefix = crate::apis::urlencode(prefix),
+            prefix = prefix
+                .map(|p| format!("/{}", crate::apis::urlencode(p)))
+                .unwrap_or_default(),
             namespace = crate::apis::urlencode(namespace)
         );
         let mut local_var_req_builder =
             local_var_client.request(reqwest::Method::POST, local_var_uri_str.as_str());
 
-        if let Some(ref local_var_aws_v4_key) = local_var_configuration.aws_v4_key {
-            let local_var_new_headers = match local_var_aws_v4_key.sign(
-                &local_var_uri_str,
-                "POST",
-                &serde_json::to_string(&update_namespace_properties_request)
-                    .expect("param should serialize to string"),
-            ) {
-                Ok(new_headers) => new_headers,
-                Err(err) => return Err(Error::AWSV4SignatureError(err)),
-            };
-            for (local_var_name, local_var_value) in local_var_new_headers.iter() {
-                local_var_req_builder =
-                    local_var_req_builder.header(local_var_name.as_str(), local_var_value.as_str());
-            }
-        }
         if let Some(ref local_var_user_agent) = local_var_configuration.user_agent {
             local_var_req_builder = local_var_req_builder
                 .header(reqwest::header::USER_AGENT, local_var_user_agent.clone());
@@ -2244,42 +1962,29 @@ impl CatalogApiApi for CatalogApiApiClient {
     }
 
     /// Commit updates to a table.  Commits have two parts, requirements and updates. Requirements are assertions that will be validated before attempting to make and commit changes. For example, `assert-ref-snapshot-id` will check that a named ref's snapshot ID has a certain value. Server implementations are required to fail with a 400 status code if any unknown updates or requirements are received.  Updates are changes to make to table metadata. For example, after asserting that the current main ref is at the expected snapshot, a commit may add a new child snapshot and set the ref to the new snapshot id.  Create table transactions that are started by createTable with `stage-create` set to true are committed using this route. Transactions should include all changes to the table, including table initialization, like AddSchemaUpdate and SetCurrentSchemaUpdate. The `assert-create` requirement is used to ensure that the table was not created concurrently.
-    async fn update_table<'prefix, 'namespace, 'table, 'commit_table_request>(
+    async fn update_table<'namespace, 'table, 'commit_table_request, 'prefix>(
         &self,
-        prefix: &'prefix str,
         namespace: &'namespace str,
         table: &'table str,
         commit_table_request: models::CommitTableRequest,
+        prefix: Option<&'prefix str>,
     ) -> Result<models::CommitTableResponse, Error<UpdateTableError>> {
         let local_var_configuration = &self.configuration;
 
         let local_var_client = &local_var_configuration.client;
 
         let local_var_uri_str = format!(
-            "{}/v1/{prefix}/namespaces/{namespace}/tables/{table}",
+            "{}/v1{prefix}/namespaces/{namespace}/tables/{table}",
             local_var_configuration.base_path,
-            prefix = crate::apis::urlencode(prefix),
+            prefix = prefix
+                .map(|p| format!("/{}", crate::apis::urlencode(p)))
+                .unwrap_or_default(),
             namespace = crate::apis::urlencode(namespace),
             table = crate::apis::urlencode(table)
         );
         let mut local_var_req_builder =
             local_var_client.request(reqwest::Method::POST, local_var_uri_str.as_str());
 
-        if let Some(ref local_var_aws_v4_key) = local_var_configuration.aws_v4_key {
-            let local_var_new_headers = match local_var_aws_v4_key.sign(
-                &local_var_uri_str,
-                "POST",
-                &serde_json::to_string(&commit_table_request)
-                    .expect("param should serialize to string"),
-            ) {
-                Ok(new_headers) => new_headers,
-                Err(err) => return Err(Error::AWSV4SignatureError(err)),
-            };
-            for (local_var_name, local_var_value) in local_var_new_headers.iter() {
-                local_var_req_builder =
-                    local_var_req_builder.header(local_var_name.as_str(), local_var_value.as_str());
-            }
-        }
         if let Some(ref local_var_user_agent) = local_var_configuration.user_agent {
             local_var_req_builder = local_var_req_builder
                 .header(reqwest::header::USER_AGENT, local_var_user_agent.clone());
@@ -2323,37 +2028,28 @@ impl CatalogApiApi for CatalogApiApiClient {
     }
 
     /// Check if a view exists within a given namespace. This request does not return a response body.
-    async fn view_exists<'prefix, 'namespace, 'view>(
+    async fn view_exists<'namespace, 'view, 'prefix>(
         &self,
-        prefix: &'prefix str,
         namespace: &'namespace str,
         view: &'view str,
+        prefix: Option<&'prefix str>,
     ) -> Result<(), Error<ViewExistsError>> {
         let local_var_configuration = &self.configuration;
 
         let local_var_client = &local_var_configuration.client;
 
         let local_var_uri_str = format!(
-            "{}/v1/{prefix}/namespaces/{namespace}/views/{view}",
+            "{}/v1{prefix}/namespaces/{namespace}/views/{view}",
             local_var_configuration.base_path,
-            prefix = crate::apis::urlencode(prefix),
+            prefix = prefix
+                .map(|p| format!("/{}", crate::apis::urlencode(p)))
+                .unwrap_or_default(),
             namespace = crate::apis::urlencode(namespace),
             view = crate::apis::urlencode(view)
         );
         let mut local_var_req_builder =
             local_var_client.request(reqwest::Method::HEAD, local_var_uri_str.as_str());
 
-        if let Some(ref local_var_aws_v4_key) = local_var_configuration.aws_v4_key {
-            let local_var_new_headers =
-                match local_var_aws_v4_key.sign(&local_var_uri_str, "HEAD", "") {
-                    Ok(new_headers) => new_headers,
-                    Err(err) => return Err(Error::AWSV4SignatureError(err)),
-                };
-            for (local_var_name, local_var_value) in local_var_new_headers.iter() {
-                local_var_req_builder =
-                    local_var_req_builder.header(local_var_name.as_str(), local_var_value.as_str());
-            }
-        }
         if let Some(ref local_var_user_agent) = local_var_configuration.user_agent {
             local_var_req_builder = local_var_req_builder
                 .header(reqwest::header::USER_AGENT, local_var_user_agent.clone());

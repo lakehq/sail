@@ -97,7 +97,6 @@ async fn test_get_non_exist_namespace() {
 
     let namespace = Namespace::try_from(vec!["test_get_non_exist_namespace".to_string()]).unwrap();
     let result = catalog.get_database(&namespace).await;
-    eprintln!("CHECK HERE test_get_non_exist_namespace: {result:?}");
 
     assert!(result.is_err());
     assert!(matches!(

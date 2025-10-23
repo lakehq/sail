@@ -138,7 +138,7 @@ impl IcebergRestCatalogProvider {
 
         let api = self.client.catalog_api_api();
         let result = api
-            .replace_view(self.get_name(), &database.to_string(), view, commit_request)
+            .replace_view(&database.to_string(), view, commit_request, None) // CHECK HERE
             .await
             .map_err(|e| CatalogError::External(format!("Failed to replace view: {e}")))?;
 
@@ -426,7 +426,7 @@ impl CatalogProvider for IcebergRestCatalogProvider {
         let api = self.client.catalog_api_api();
 
         let exists = match api
-            .namespace_exists(self.get_name(), &database.to_string())
+            .namespace_exists(&database.to_string(), None) // CHECK HERE
             .await
         {
             Ok(()) => true,
@@ -456,7 +456,8 @@ impl CatalogProvider for IcebergRestCatalogProvider {
                 properties: if props.is_empty() { None } else { Some(props) },
             };
 
-            let result = api.create_namespace(self.get_name(), request).await;
+            // CHECK HERE
+            let result = api.create_namespace(request, None).await;
 
             match result {
                 Ok(result) => {
@@ -508,7 +509,7 @@ impl CatalogProvider for IcebergRestCatalogProvider {
         } = options;
         let api = self.client.catalog_api_api();
         match api
-            .drop_namespace(self.get_name(), &database.to_string())
+            .drop_namespace(&database.to_string(), None) // CHECK HERE
             .await
         {
             Ok(_) => Ok(()),
@@ -530,7 +531,7 @@ impl CatalogProvider for IcebergRestCatalogProvider {
         let api = self.client.catalog_api_api();
         let namespace_str = database.to_string();
         let result = api
-            .load_namespace_metadata(self.get_name(), &namespace_str)
+            .load_namespace_metadata(&namespace_str, None) // CHECK HERE
             .await
             .map_err(|e| match e {
                 apis::Error::ResponseError(apis::ResponseContent { status, .. }) => {
@@ -540,9 +541,7 @@ impl CatalogProvider for IcebergRestCatalogProvider {
                         CatalogError::External(format!("Failed to load namespace {database}: {e}"))
                     }
                 }
-                _ => {
-                    CatalogError::External(format!("MEOW Failed to load namespace {database}: {e}"))
-                }
+                _ => CatalogError::External(format!("Failed to load namespace {database}: {e}")),
             })?;
 
         let comment = result
@@ -573,7 +572,7 @@ impl CatalogProvider for IcebergRestCatalogProvider {
         let result = self
             .client
             .catalog_api_api()
-            .list_namespaces(self.get_name(), None, None, parent.as_deref())
+            .list_namespaces(None, None, parent.as_deref(), None) // CHECK HERE
             .await
             .map_err(|e| CatalogError::External(format!("Failed to list namespaces: {e}")))?;
         let catalog = &self.name;
@@ -741,7 +740,7 @@ impl CatalogProvider for IcebergRestCatalogProvider {
 
         let api = self.client.catalog_api_api();
         let result = api
-            .create_table(self.get_name(), &database.to_string(), request, None)
+            .create_table(&database.to_string(), request, None, None) // CHECK HERE
             .await
             .map_err(|e| CatalogError::External(format!("Failed to create table: {e}")))?;
 
@@ -752,12 +751,12 @@ impl CatalogProvider for IcebergRestCatalogProvider {
         let api = self.client.catalog_api_api();
         let result = api
             .load_table(
-                self.get_name(),
                 &database.to_string(),
                 table,
                 None,
                 None,
                 None,
+                None, // CHECK HERE
             )
             .await
             .map_err(|e| {
@@ -770,7 +769,7 @@ impl CatalogProvider for IcebergRestCatalogProvider {
         let result = self
             .client
             .catalog_api_api()
-            .list_tables(self.get_name(), &database.to_string(), None, None)
+            .list_tables(&database.to_string(), None, None, None) // CHECK HERE
             .await
             .map_err(|e| CatalogError::External(format!("Failed to list tables: {e}")))?;
         let catalog = &self.name;
@@ -807,7 +806,7 @@ impl CatalogProvider for IcebergRestCatalogProvider {
         let DropTableOptions { if_exists, purge } = options;
         let api = self.client.catalog_api_api();
         match api
-            .drop_table(self.get_name(), &database.to_string(), table, Some(purge))
+            .drop_table(&database.to_string(), table, Some(purge), None) // CHECK HERE
             .await
         {
             Ok(_) => Ok(()),
@@ -911,7 +910,7 @@ impl CatalogProvider for IcebergRestCatalogProvider {
 
         let api = self.client.catalog_api_api();
         let result = api
-            .create_view(self.get_name(), &database.to_string(), request)
+            .create_view(&database.to_string(), request, None) // CHECK HERE
             .await
             .map_err(|e| CatalogError::External(format!("Failed to create view: {e}")))?;
 
@@ -921,7 +920,7 @@ impl CatalogProvider for IcebergRestCatalogProvider {
     async fn get_view(&self, database: &Namespace, view: &str) -> CatalogResult<TableStatus> {
         let api = self.client.catalog_api_api();
         let result = api
-            .load_view(self.get_name(), &database.to_string(), view)
+            .load_view(&database.to_string(), view, None) // CHECK HERE
             .await
             .map_err(|e| {
                 CatalogError::External(format!("Failed to load view {database}.{view}: {e}"))
@@ -933,7 +932,7 @@ impl CatalogProvider for IcebergRestCatalogProvider {
         let result = self
             .client
             .catalog_api_api()
-            .list_views(self.get_name(), &database.to_string(), None, None)
+            .list_views(&database.to_string(), None, None, None) // CHECK HERE
             .await
             .map_err(|e| CatalogError::External(format!("Failed to list views: {e}")))?;
         let catalog = &self.name;
@@ -964,7 +963,7 @@ impl CatalogProvider for IcebergRestCatalogProvider {
         let DropViewOptions { if_exists } = options;
         let api = self.client.catalog_api_api();
         match api
-            .drop_view(self.get_name(), &database.to_string(), view)
+            .drop_view(&database.to_string(), view, None) // CHECK HERE
             .await
         {
             Ok(_) => Ok(()),
@@ -1032,11 +1031,14 @@ mod tests {
         }
 
         fn path(&self, suffix: &str) -> String {
-            if self.name.is_empty() {
-                format!("/v1/{suffix}")
-            } else {
-                format!("/v1/{}{suffix}", self.name)
-            }
+            // CHECK HERE
+            format!("/v1{suffix}")
+            //
+            // if self.name.is_empty() {
+            //     format!("/v1{suffix}")
+            // } else {
+            //     format!("/v1/{}{suffix}", self.name)
+            // }
         }
 
         async fn mock_get_json(&self, path_str: &str, response: serde_json::Value) {
@@ -1572,7 +1574,7 @@ mod tests {
                 properties,
                 ..
             } => {
-                assert_eq!(catalog, "test_catalog");
+                assert_eq!(catalog, ctx.name);
                 assert_eq!(database, vec!["db1".to_string()]);
                 assert_eq!(columns.len(), 3);
 
@@ -1704,7 +1706,7 @@ mod tests {
                 comment,
                 properties,
             } => {
-                assert_eq!(catalog, "test_catalog");
+                assert_eq!(catalog, ctx.name);
                 assert_eq!(database, vec!["db1".to_string()]);
                 assert_eq!(definition, "SELECT id, data FROM table1 WHERE id > 100");
 
