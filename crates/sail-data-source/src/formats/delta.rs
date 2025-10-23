@@ -13,7 +13,7 @@ use sail_common_datafusion::datasource::{
 use sail_common_datafusion::streaming::event::schema::is_flow_event_schema;
 use sail_delta_lake::create_delta_provider;
 use sail_delta_lake::datasource::{parse_predicate_expression, DataFusionMixins};
-use sail_delta_lake::options::TableDeltaOptions;
+use sail_delta_lake::options::{ColumnMappingModeOption, TableDeltaOptions};
 use sail_delta_lake::physical_plan::plan_builder::DeltaTableConfig;
 use sail_delta_lake::physical_plan::{DeltaDeletePlanBuilder, DeltaPlanBuilder};
 use sail_delta_lake::table::open_table_with_object_store;
@@ -249,6 +249,12 @@ fn apply_delta_write_options(from: DeltaWriteOptions, to: &mut TableDeltaOptions
     }
     if let Some(write_batch_size) = from.write_batch_size {
         to.write_batch_size = write_batch_size;
+    }
+    if let Some(column_mapping_mode) = from.column_mapping_mode {
+        match column_mapping_mode.to_ascii_lowercase().as_str() {
+            "name" => to.column_mapping_mode = ColumnMappingModeOption::Name,
+            _ => to.column_mapping_mode = ColumnMappingModeOption::None,
+        }
     }
     Ok(())
 }

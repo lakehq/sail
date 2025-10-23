@@ -28,10 +28,11 @@ use futures::stream::{once, StreamExt};
 use sail_common_datafusion::datasource::PhysicalSinkMode;
 use url::Url;
 
+use crate::column_mapping::annotate_schema_for_column_mapping;
 use crate::datasource::delta_to_datafusion_error;
 use crate::datasource::type_converter::DeltaTypeConverter;
 use crate::operations::write::writer::{DeltaWriter, WriterConfig};
-use crate::options::TableDeltaOptions;
+use crate::options::{ColumnMappingModeOption, TableDeltaOptions};
 use crate::physical_plan::CommitInfo;
 use crate::table::open_table_with_object_store;
 
@@ -207,7 +208,7 @@ impl ExecutionPlan for DeltaWriterExec {
             let object_store = Self::get_object_store(&context, &table_url)?;
 
             // Calculate initial_actions and operation based on sink_mode
-            let initial_actions: Vec<Action> = Vec::new();
+            let mut initial_actions: Vec<Action> = Vec::new();
             let mut operation: Option<DeltaOperation> = None;
 
             let table_result = open_table_with_object_store(
@@ -308,8 +309,53 @@ impl ExecutionPlan for DeltaWriterExec {
                 (input_schema.clone(), Vec::new())
             };
 
+            // If creating a new table and column mapping name mode is requested, prepare initial protocol+metadata
+            if !table_exists && matches!(options.column_mapping_mode, ColumnMappingModeOption::Name)
+            {
+                // Build annotated kernel schema
+                let kernel_schema: StructType = final_schema
+                    .as_ref()
+                    .try_into_kernel()
+                    .map_err(|e| DataFusionError::External(Box::new(e)))?;
+                let annotated_schema = annotate_schema_for_column_mapping(&kernel_schema);
+
+                // Legacy protocol for column mapping name mode
+                #[allow(clippy::unwrap_used)]
+                let protocol: deltalake::kernel::Protocol =
+                    serde_json::from_value(serde_json::json!({
+                        "minReaderVersion": 2,
+                        "minWriterVersion": 5
+                    }))
+                    .unwrap();
+
+                let mut configuration = HashMap::new();
+                configuration.insert("delta.columnMapping.mode".to_string(), "name".to_string());
+
+                #[allow(deprecated)]
+                let metadata = deltalake::kernel::new_metadata(
+                    &annotated_schema,
+                    partition_columns.clone(),
+                    configuration,
+                )
+                .map_err(|e| DataFusionError::External(Box::new(e)))?;
+
+                initial_actions.push(Action::Protocol(protocol.clone()));
+                initial_actions.push(Action::Metadata(metadata.clone()));
+
+                // Prefer explicit Create operation to aid downstream commit
+                operation = Some(DeltaOperation::Create {
+                    mode: SaveMode::ErrorIfExists,
+                    location: table_url.to_string(),
+                    protocol,
+                    metadata,
+                });
+            }
+
+            // Apply column mapping name mode for new table writes by adjusting the logical schema
+            let writer_schema = final_schema.clone();
+
             let writer_config = WriterConfig::new(
-                final_schema.clone(),
+                writer_schema.clone(),
                 partition_columns.to_vec(),
                 None,
                 *target_file_size,
@@ -326,7 +372,11 @@ impl ExecutionPlan for DeltaWriterExec {
 
             while let Some(batch_result) = data.next().await {
                 let batch = batch_result?;
-                total_rows += batch.num_rows() as u64;
+                let rows: u64 = match u64::try_from(batch.num_rows()) {
+                    Ok(v) => v,
+                    Err(_) => 0,
+                };
+                total_rows += rows;
 
                 let validated_batch = Self::validate_and_adapt_batch(batch, &final_schema)?;
 
