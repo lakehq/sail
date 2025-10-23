@@ -333,6 +333,7 @@ impl ExecutionPlan for DeltaWriterExec {
             };
 
             // If creating a new table and column mapping mode is requested, prepare initial protocol+metadata
+            let mut annotated_schema_opt: Option<StructType> = None;
             if !table_exists
                 && matches!(
                     effective_mode,
@@ -345,6 +346,7 @@ impl ExecutionPlan for DeltaWriterExec {
                     .try_into_kernel()
                     .map_err(|e| DataFusionError::External(Box::new(e)))?;
                 let annotated_schema = annotate_schema_for_column_mapping(&kernel_schema);
+                annotated_schema_opt = Some(annotated_schema.clone());
 
                 // Legacy protocol for column mapping name mode
                 #[allow(clippy::unwrap_used)]
@@ -365,7 +367,7 @@ impl ExecutionPlan for DeltaWriterExec {
 
                 #[allow(deprecated)]
                 let metadata = deltalake::kernel::new_metadata(
-                    &annotated_schema,
+                    annotated_schema_opt.as_ref().unwrap(),
                     partition_columns.clone(),
                     configuration,
                 )
@@ -388,11 +390,19 @@ impl ExecutionPlan for DeltaWriterExec {
                 effective_mode,
                 ColumnMappingModeOption::Name | ColumnMappingModeOption::Id
             ) {
-                // Build physical schema using kernel make_physical
-                let logical_kernel: StructType = final_schema
-                    .as_ref()
-                    .try_into_kernel()
-                    .map_err(|e| DataFusionError::External(Box::new(e)))?;
+                // Use annotated (new) or snapshot (existing) logical schema to derive physical schema
+                let logical_kernel: StructType = if let Some(table) = &table {
+                    table
+                        .snapshot()
+                        .map_err(|e| DataFusionError::External(Box::new(e)))?
+                        .snapshot()
+                        .schema()
+                        .clone()
+                } else {
+                    annotated_schema_opt
+                        .clone()
+                        .expect("annotated schema should exist for new table with column mapping")
+                };
                 let physical_kernel =
                     make_physical_schema_for_writes(&logical_kernel, effective_mode);
                 let physical_arrow: arrow_schema::Schema = (&physical_kernel)
@@ -427,7 +437,15 @@ impl ExecutionPlan for DeltaWriterExec {
                 };
                 total_rows += rows;
 
-                let validated_batch = Self::validate_and_adapt_batch(batch, &writer_schema)?;
+                // First adapt to logical final schema, then rewrap with writer schema if needed
+                let logical_batch = Self::validate_and_adapt_batch(batch, &final_schema)?;
+                let validated_batch = if writer_schema.as_ref() != final_schema.as_ref() {
+                    let cols = logical_batch.columns().iter().cloned().collect::<Vec<_>>();
+                    RecordBatch::try_new(writer_schema.clone(), cols)
+                        .map_err(|e| DataFusionError::ArrowError(Box::new(e), None))?
+                } else {
+                    logical_batch
+                };
 
                 writer
                     .write(&validated_batch)
