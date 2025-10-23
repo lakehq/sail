@@ -37,7 +37,7 @@ impl Default for Configuration {
     fn default() -> Self {
         Configuration {
             base_path: "https://localhost".to_owned(),
-            user_agent: Some("OpenAPI-Generator/0.0.1/rust".to_owned()),
+            user_agent: Some("Sail".to_owned()),
             client: reqwest::Client::new(),
             basic_auth: None,
             oauth_access_token: None,

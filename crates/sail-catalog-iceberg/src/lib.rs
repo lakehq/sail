@@ -9,4 +9,7 @@ pub mod apis;
 mod models;
 mod provider;
 
-pub use provider::IcebergRestCatalogProvider;
+pub use provider::{
+    IcebergRestCatalogProvider, REST_CATALOG_PROP_PREFIX, REST_CATALOG_PROP_URI,
+    REST_CATALOG_PROP_WAREHOUSE,
+};

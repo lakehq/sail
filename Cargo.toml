@@ -105,6 +105,8 @@ indexmap = "2.11.4"
 pin-project-lite = "0.2.16"
 ordered-float = { version = "5.1.0", features = ["serde"] }
 apache-avro = { version = "0.20.0" }
+wiremock = "0.6.5"
+testcontainers = "0.25.0"
 
 ######
 # The versions of the following dependencies are managed manually.
@@ -150,8 +152,6 @@ serde_arrow = { version = "0.13.6", features = ["arrow-56"] }
 object_store = { version = "0.12.4", features = ["aws", "gcp", "azure", "http"] }
 hdfs-native-object-store = "0.15.0"
 rust_decimal = "1.39.0"
-wiremock = "0.6.5"
-testcontainers = "0.25.0"
 
 # Lakehouse
 deltalake = { git = "https://github.com/delta-io/delta-rs.git", rev = "0864b21", default-features = false, features = ["rustls"] }

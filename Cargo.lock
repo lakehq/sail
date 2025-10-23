@@ -5828,7 +5828,6 @@ version = "0.3.7"
 dependencies = [
  "arrow",
  "async-trait",
- "once_cell",
  "reqwest",
  "sail-catalog",
  "sail-common",

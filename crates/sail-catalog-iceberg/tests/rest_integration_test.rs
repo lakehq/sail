@@ -1,12 +1,11 @@
 #![allow(clippy::unwrap_used, clippy::expect_used, clippy::panic)]
 
-use std::sync::Arc;
+use std::collections::HashMap;
 
 use sail_catalog::provider::{
     CatalogProvider, CreateDatabaseOptions, DropDatabaseOptions, Namespace,
 };
-use sail_catalog_iceberg::apis::configuration::Configuration;
-use sail_catalog_iceberg::IcebergRestCatalogProvider;
+use sail_catalog_iceberg::{IcebergRestCatalogProvider, REST_CATALOG_PROP_URI};
 use sail_common::runtime::RuntimeHandle;
 use testcontainers::core::{ContainerPort, WaitFor};
 use testcontainers::runners::AsyncRunner;
@@ -74,18 +73,12 @@ async fn setup_catalog() -> (
     let rest_port = rest.get_host_port_ipv4(8181).await.expect("get port");
     let rest_url = format!("http://{rest_host}:{rest_port}");
 
-    let runtime = RuntimeHandle::new(tokio::runtime::Handle::current(), None);
-    let config = Arc::new(Configuration {
-        base_path: rest_url,
-        user_agent: None,
-        client: reqwest::Client::new(),
-        basic_auth: None,
-        oauth_access_token: None,
-        bearer_access_token: None,
-        api_key: None,
-    });
-
-    let catalog = IcebergRestCatalogProvider::new("test".to_string(), config, runtime);
+    let runtime = RuntimeHandle::new(
+        tokio::runtime::Handle::current(),
+        Some(tokio::runtime::Handle::current()),
+    );
+    let props = HashMap::from([(REST_CATALOG_PROP_URI.to_string(), rest_url)]);
+    let catalog = IcebergRestCatalogProvider::new(runtime, "test".to_string(), props);
     (catalog, minio, _mc, rest)
 }
 
