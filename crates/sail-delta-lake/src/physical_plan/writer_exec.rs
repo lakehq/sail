@@ -28,7 +28,7 @@ use futures::stream::{once, StreamExt};
 use sail_common_datafusion::datasource::PhysicalSinkMode;
 use url::Url;
 
-use crate::column_mapping::{annotate_schema_for_column_mapping, make_physical_schema_for_writes};
+use crate::column_mapping::annotate_schema_for_column_mapping;
 use crate::datasource::delta_to_datafusion_error;
 use crate::datasource::type_converter::DeltaTypeConverter;
 use crate::operations::write::writer::{DeltaWriter, WriterConfig};
@@ -385,33 +385,8 @@ impl ExecutionPlan for DeltaWriterExec {
                 });
             }
 
-            // Apply column mapping mode for file write schema
-            let writer_schema = if matches!(
-                effective_mode,
-                ColumnMappingModeOption::Name | ColumnMappingModeOption::Id
-            ) {
-                // Use annotated (new) or snapshot (existing) logical schema to derive physical schema
-                let logical_kernel: StructType = if let Some(table) = &table {
-                    table
-                        .snapshot()
-                        .map_err(|e| DataFusionError::External(Box::new(e)))?
-                        .snapshot()
-                        .schema()
-                        .clone()
-                } else {
-                    annotated_schema_opt
-                        .clone()
-                        .expect("annotated schema should exist for new table with column mapping")
-                };
-                let physical_kernel =
-                    make_physical_schema_for_writes(&logical_kernel, effective_mode);
-                let physical_arrow: arrow_schema::Schema = (&physical_kernel)
-                    .try_into_arrow()
-                    .map_err(|e| DataFusionError::External(Box::new(e)))?;
-                Arc::new(physical_arrow)
-            } else {
-                final_schema.clone()
-            };
+            // FIXME: write Parquet with logical column names (DataFrame API compatibility)
+            let writer_schema = final_schema.clone();
 
             let writer_config = WriterConfig::new(
                 writer_schema.clone(),
@@ -437,15 +412,8 @@ impl ExecutionPlan for DeltaWriterExec {
                 };
                 total_rows += rows;
 
-                // First adapt to logical final schema, then rewrap with writer schema if needed
-                let logical_batch = Self::validate_and_adapt_batch(batch, &final_schema)?;
-                let validated_batch = if writer_schema.as_ref() != final_schema.as_ref() {
-                    let cols = logical_batch.columns().iter().cloned().collect::<Vec<_>>();
-                    RecordBatch::try_new(writer_schema.clone(), cols)
-                        .map_err(|e| DataFusionError::ArrowError(Box::new(e), None))?
-                } else {
-                    logical_batch
-                };
+                // Adapt to logical final schema
+                let validated_batch = Self::validate_and_adapt_batch(batch, &final_schema)?;
 
                 writer
                     .write(&validated_batch)

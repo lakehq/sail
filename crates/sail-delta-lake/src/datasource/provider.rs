@@ -21,7 +21,13 @@ use crate::datasource::{
     build_file_scan_config, delta_to_datafusion_error, df_logical_schema, get_pushdown_filters,
     prune_files, simplify_expr, DataFusionMixins, DeltaScanConfig, DeltaTableStateExt,
 };
+// use crate::kernel::arrow::engine_ext::SnapshotExt as KernelSnapshotExt;
+// use delta_kernel::snapshot::Snapshot as KernelSnapshot;
+use delta_kernel::table_features::ColumnMappingMode;
+// use deltalake::errors::DeltaTableError;
+// use delta_kernel::engine::arrow_conversion::TryIntoArrow;
 use crate::table::DeltaTableState;
+use sail_common_datafusion::rename::physical_plan::rename_projected_physical_plan;
 
 // [Credit]: <https://github.com/delta-io/delta-rs/blob/3607c314cbdd2ad06c6ee0677b92a29f695c71f3/crates/core/src/delta_datafusion/mod.rs>
 
@@ -189,16 +195,26 @@ impl TableProvider for DeltaTableProvider {
             None
         };
 
-        // Build file schema (non-partition columns)
+        // Build physical file schema (non-partition columns) using kernel make_physical
         let table_partition_cols = self.snapshot.metadata().partition_columns();
-        let file_schema = Arc::new(ArrowSchema::new(
-            schema
-                .fields()
-                .iter()
-                .filter(|f| !table_partition_cols.contains(f.name()))
-                .cloned()
-                .collect::<Vec<_>>(),
-        ));
+        let kmode: ColumnMappingMode = self
+            .snapshot
+            .snapshot()
+            .table_configuration()
+            .column_mapping_mode();
+        let kschema_arc = self.snapshot.snapshot().table_configuration().schema();
+        let physical_kernel = kschema_arc.make_physical(kmode);
+        let physical_arrow: ArrowSchema =
+            deltalake::kernel::engine::arrow_conversion::TryIntoArrow::try_into_arrow(
+                &physical_kernel,
+            )?;
+        let file_fields = physical_arrow
+            .fields()
+            .iter()
+            .filter(|f| !table_partition_cols.contains(f.name()))
+            .cloned()
+            .collect::<Vec<_>>();
+        let file_schema = Arc::new(ArrowSchema::new(file_fields));
 
         let file_scan_config = build_file_scan_config(
             &self.snapshot,
@@ -219,7 +235,21 @@ impl TableProvider for DeltaTableProvider {
         // MetricBuilder::new(&metrics).global_counter("files_pruned").add(files_pruned);
 
         // TODO: Properly expose these metrics
-        Ok(DataSourceExec::from_data_source(file_scan_config))
+        let scan_exec = DataSourceExec::from_data_source(file_scan_config);
+        // Rename columns from physical back to logical names expected by `schema`
+        let mut logical_names = schema
+            .fields()
+            .iter()
+            .filter(|f| !table_partition_cols.contains(f.name()))
+            .map(|f| f.name().clone())
+            .collect::<Vec<_>>();
+        // append partition column names in order
+        logical_names.extend(table_partition_cols.iter().cloned());
+        if let Some(file_col) = &config.file_column_name {
+            logical_names.push(file_col.clone());
+        }
+        let renamed = rename_projected_physical_plan(scan_exec, &logical_names, projection)?;
+        Ok(renamed)
     }
 
     fn supports_filters_pushdown(
