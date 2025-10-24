@@ -522,7 +522,7 @@ async fn test_create_table() {
             name: "bar".to_string(),
             data_type: DataType::Int32,
             nullable: false,
-            comment: None,
+            comment: Some("meow".to_string()),
             default: None,
             generated_always_as: None,
         },
@@ -531,7 +531,7 @@ async fn test_create_table() {
             data_type: DataType::Boolean,
             nullable: true,
             comment: None,
-            default: None,
+            default: Some(0.to_string()),
             generated_always_as: None,
         },
     ];

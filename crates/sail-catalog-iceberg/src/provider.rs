@@ -9,7 +9,7 @@ use sail_catalog::provider::{
     TableColumnStatus, TableKind, TableStatus,
 };
 use sail_common::runtime::RuntimeHandle;
-use sail_iceberg::{arrow_type_to_iceberg, iceberg_type_to_arrow, NestedField};
+use sail_iceberg::{arrow_type_to_iceberg, iceberg_type_to_arrow, Literal, NestedField};
 use tokio::sync::OnceCell;
 
 use crate::apis::configuration::Configuration;
@@ -647,18 +647,37 @@ impl CatalogProvider for IcebergRestCatalogProvider {
         let mut fields = Vec::new();
         let mut column_name_to_id = HashMap::new();
         for (idx, col) in columns.iter().enumerate() {
-            let field_type = arrow_type_to_iceberg(&col.data_type).map_err(|e| {
+            let CreateTableColumnOptions {
+                name,
+                data_type,
+                nullable,
+                comment,
+                default,
+                generated_always_as: _, // TODO: Support generated_always_as
+            } = col;
+            let field_id = idx as i32 + 1;
+            let field_type = arrow_type_to_iceberg(data_type).map_err(|e| {
                 CatalogError::External(format!(
-                    "Failed to convert Arrow type to Iceberg type for column '{}': {e}",
-                    col.name
+                    "Failed to convert Arrow type to Iceberg type for column '{name}': {e}"
                 ))
             })?;
-            let field_id = idx as i32 + 1;
-            let mut field = NestedField::new(field_id, col.name.clone(), field_type, !col.nullable);
-            if let Some(comment_text) = &col.comment {
-                field = field.with_doc(comment_text);
+            let default_literal = if let Some(default) = default {
+                Literal::try_from_json(serde_json::Value::from(default.to_string()), &field_type).map_err(|e| {
+                    CatalogError::External(format!(
+                        "Failed to convert default value to Iceberg literal for column '{name}': {e}"
+                    ))
+                })?
+            } else {
+                None
+            };
+            let mut field = NestedField::new(field_id, name.clone(), field_type, *nullable);
+            if let Some(comment) = comment {
+                field = field.with_doc(comment);
             }
-            column_name_to_id.insert(col.name.clone(), field_id);
+            if let Some(default_literal) = default_literal {
+                field = field.with_initial_default(default_literal);
+            }
+            column_name_to_id.insert(name.clone(), field_id);
             fields.push(Arc::new(field));
         }
 
