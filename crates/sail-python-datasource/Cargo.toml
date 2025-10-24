@@ -1,0 +1,32 @@
+[package]
+name = "sail-python-datasource"
+version = { workspace = true }
+edition = { workspace = true }
+
+[dependencies]
+sail-common-datafusion = { path = "../sail-common-datafusion" }
+
+# DataFusion dependencies
+datafusion = { workspace = true }
+datafusion-common = { workspace = true }
+datafusion-physical-expr = { workspace = true }
+
+# Arrow dependencies
+arrow = { workspace = true }
+arrow-schema = { workspace = true }
+arrow-pyarrow = { workspace = true }
+
+# Python bridge
+pyo3 = { workspace = true, features = ["auto-initialize"] }
+pythonize = { workspace = true }
+
+# Essential utilities
+async-trait = { workspace = true }
+futures = { workspace = true }
+tokio = { workspace = true }
+log = { workspace = true }
+serde = { workspace = true, features = ["derive"] }
+serde_json = { workspace = true }
+
+[lints]
+workspace = true

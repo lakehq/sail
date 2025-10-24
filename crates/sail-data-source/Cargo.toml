@@ -11,6 +11,7 @@ sail-common = { path = "../sail-common" }
 sail-common-datafusion = { path = "../sail-common-datafusion" }
 sail-delta-lake = { path = "../sail-delta-lake" }
 sail-iceberg = { path = "../sail-iceberg" }
+sail-python-datasource = { path = "../sail-python-datasource" }
 
 async-trait = { workspace = true }
 serde = { workspace = true }

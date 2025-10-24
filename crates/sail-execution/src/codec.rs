@@ -141,6 +141,7 @@ use sail_physical_plan::show_string::ShowStringExec;
 use sail_physical_plan::streaming::collector::StreamCollectorExec;
 use sail_physical_plan::streaming::limit::StreamLimitExec;
 use sail_physical_plan::streaming::source_adapter::StreamSourceAdapterExec;
+use sail_python_datasource::exec::PythonExec;
 use sail_python_udf::config::PySparkUdfConfig;
 use sail_python_udf::udf::pyspark_batch_collector::PySparkBatchCollectorUDF;
 use sail_python_udf::udf::pyspark_cogroup_map_udf::PySparkCoGroupMapUDF;
@@ -730,6 +731,32 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
                 let input = self.try_decode_plan(&input)?;
                 Ok(Arc::new(StreamSourceAdapterExec::new(input)))
             }
+            NodeKind::Python(gen::PythonExecNode {
+                module,
+                class,
+                schema,
+                partitions,
+                options,
+            }) => {
+                let schema = Arc::new(self.try_decode_schema(&schema)?);
+                let partitions = partitions
+                    .into_iter()
+                    .map(|p| {
+                        serde_json::from_slice(&p)
+                            .map_err(|e| plan_datafusion_err!("invalid python partition: {e}"))
+                    })
+                    .collect::<Result<Vec<_>>>()?;
+                let options = if options.is_empty() {
+                    serde_json::Value::Null
+                } else {
+                    serde_json::from_slice(&options)
+                        .map_err(|e| plan_datafusion_err!("invalid python options: {e}"))?
+                };
+
+                Ok(Arc::new(PythonExec::new(
+                    module, class, schema, partitions, options,
+                )))
+            }
             _ => plan_err!("unsupported physical plan node: {node_kind:?}"),
         }
     }
@@ -769,6 +796,26 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
                 input: self.try_encode_plan(map_partitions.input().clone())?,
                 udf: Some(udf),
                 schema,
+            })
+        } else if let Some(python) = node.as_any().downcast_ref::<PythonExec>() {
+            let schema = self.try_encode_schema(python.schema().as_ref())?;
+            let partitions = python
+                .partitions()
+                .iter()
+                .map(|p| {
+                    serde_json::to_vec(p).map_err(|e| {
+                        plan_datafusion_err!("failed to serialize python partition: {e}")
+                    })
+                })
+                .collect::<Result<Vec<_>>>()?;
+            let options = serde_json::to_vec(python.options())
+                .map_err(|e| plan_datafusion_err!("failed to serialize python options: {e}"))?;
+            NodeKind::Python(gen::PythonExecNode {
+                module: python.module().to_string(),
+                class: python.class().to_string(),
+                schema,
+                partitions,
+                options,
             })
         } else if let Some(shuffle_read) = node.as_any().downcast_ref::<ShuffleReadExec>() {
             let schema = self.try_encode_schema(shuffle_read.schema().as_ref())?;

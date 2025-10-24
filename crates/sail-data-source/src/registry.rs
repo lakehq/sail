@@ -1,5 +1,5 @@
 use std::collections::HashMap;
-use std::sync::Arc;
+use std::sync::{Arc, RwLock};
 
 use datafusion_common::{DataFusionError, Result};
 use once_cell::sync::Lazy;
@@ -14,6 +14,7 @@ use crate::formats::delta::DeltaTableFormat;
 use crate::formats::iceberg::IcebergDataSourceFormat;
 use crate::formats::json::JsonTableFormat;
 use crate::formats::parquet::ParquetTableFormat;
+use crate::formats::python::PythonDataSourceFormat;
 use crate::formats::rate::RateTableFormat;
 use crate::formats::socket::SocketTableFormat;
 use crate::formats::text::TextTableFormat;
@@ -26,9 +27,14 @@ pub fn default_registry() -> Arc<TableFormatRegistry> {
     DEFAULT_REGISTRY.clone()
 }
 
-#[derive(Default)]
 pub struct TableFormatRegistry {
-    formats: HashMap<String, Arc<dyn TableFormat>>,
+    formats: RwLock<HashMap<String, Arc<dyn TableFormat>>>,
+}
+
+impl Default for TableFormatRegistry {
+    fn default() -> Self {
+        Self::new()
+    }
 }
 
 impl TableFormatRegistry {
@@ -37,7 +43,9 @@ impl TableFormatRegistry {
     /// Note: In most cases, `default_registry()` should be used to get a shared
     /// instance.
     pub fn new() -> Self {
-        let mut registry = Self::default();
+        let registry = Self {
+            formats: RwLock::new(HashMap::new()),
+        };
         registry.register_format(Arc::new(ArrowTableFormat::default()));
         registry.register_format(Arc::new(AvroTableFormat::default()));
         registry.register_format(Arc::new(BinaryTableFormat::default()));
@@ -46,20 +54,36 @@ impl TableFormatRegistry {
         registry.register_format(Arc::new(IcebergDataSourceFormat::default()));
         registry.register_format(Arc::new(JsonTableFormat::default()));
         registry.register_format(Arc::new(ParquetTableFormat::default()));
+        registry.register_format(Arc::new(PythonDataSourceFormat::default()));
         registry.register_format(Arc::new(TextTableFormat::default()));
         registry.register_format(Arc::new(SocketTableFormat));
         registry.register_format(Arc::new(RateTableFormat));
         registry.register_format(Arc::new(ConsoleTableFormat));
 
+        // Register JDBC as a pre-configured Python data source
+        registry.register_format(Arc::new(PythonDataSourceFormat::with_name_and_defaults(
+            "jdbc",
+            "pysail.jdbc.datasource",
+            "JDBCArrowDataSource",
+        )));
+
         registry
     }
 
-    pub fn register_format(&mut self, format: Arc<dyn TableFormat>) {
-        self.formats.insert(format.name().to_lowercase(), format);
+    pub fn register_format(&self, format: Arc<dyn TableFormat>) {
+        let mut guard = match self.formats.write() {
+            Ok(lock) => lock,
+            Err(poisoned) => poisoned.into_inner(),
+        };
+        guard.insert(format.name().to_lowercase(), format);
     }
 
     pub fn get_format(&self, name: &str) -> Result<Arc<dyn TableFormat>> {
-        self.formats
+        let guard = match self.formats.read() {
+            Ok(lock) => lock,
+            Err(poisoned) => poisoned.into_inner(),
+        };
+        guard
             .get(&name.to_lowercase())
             .cloned()
             .ok_or_else(|| DataFusionError::Plan(format!("No table format found for: {name}")))

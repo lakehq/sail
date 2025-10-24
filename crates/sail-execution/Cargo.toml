@@ -17,6 +17,7 @@ sail-delta-lake = { path = "../sail-delta-lake" }
 sail-function = { path = "../sail-function" }
 sail-logical-plan = { path = "../sail-logical-plan" }
 sail-physical-plan = { path = "../sail-physical-plan" }
+sail-python-datasource = { path = "../sail-python-datasource" }
 
 thiserror = { workspace = true }
 tokio = { workspace = true }

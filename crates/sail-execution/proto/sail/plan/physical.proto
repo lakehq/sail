@@ -41,7 +41,16 @@ message ExtendedPhysicalPlanNode {
     StreamCollectorExecNode stream_collector = 27;
     StreamLimitExecNode stream_limit = 28;
     StreamSourceAdapterExecNode stream_source_adapter = 29;
+    PythonExecNode python = 30;
   }
+}
+
+message PythonExecNode {
+  string module = 1;
+  string class = 2;
+  bytes schema = 3;
+  repeated bytes partitions = 4;
+  bytes options = 5;
 }
 
 message ExtendedScalarUdf {

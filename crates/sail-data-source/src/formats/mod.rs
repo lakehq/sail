@@ -8,6 +8,7 @@ pub mod iceberg;
 pub mod json;
 pub mod listing;
 pub mod parquet;
+pub mod python;
 pub mod rate;
 pub mod socket;
 pub mod text;

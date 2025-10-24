@@ -5013,6 +5013,16 @@ dependencies = [
 ]
 
 [[package]]
+name = "pythonize"
+version = "0.25.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "597907139a488b22573158793aa7539df36ae863eba300c75f3a0d65fc475e27"
+dependencies = [
+ "pyo3",
+ "serde",
+]
+
+[[package]]
 name = "quad-rand"
 version = "0.2.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -5615,6 +5625,7 @@ dependencies = [
  "sail-common-datafusion",
  "sail-delta-lake",
  "sail-iceberg",
+ "sail-python-datasource",
  "serde",
  "serde_yaml",
  "syn",
@@ -5675,6 +5686,7 @@ dependencies = [
  "sail-logical-plan",
  "sail-object-store",
  "sail-physical-plan",
+ "sail-python-datasource",
  "sail-python-udf",
  "sail-server",
  "serde_json",
@@ -5882,8 +5894,31 @@ dependencies = [
  "pyo3",
  "sail-cli",
  "sail-common",
+ "sail-data-source",
+ "sail-python-datasource",
  "sail-spark-connect",
  "sail-telemetry",
+ "tokio",
+]
+
+[[package]]
+name = "sail-python-datasource"
+version = "0.3.7"
+dependencies = [
+ "arrow",
+ "arrow-pyarrow",
+ "arrow-schema",
+ "async-trait",
+ "datafusion",
+ "datafusion-common",
+ "datafusion-physical-expr",
+ "futures",
+ "log",
+ "pyo3",
+ "pythonize",
+ "sail-common-datafusion",
+ "serde",
+ "serde_json",
  "tokio",
 ]
 
