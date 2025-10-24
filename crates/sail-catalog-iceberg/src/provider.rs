@@ -21,6 +21,13 @@ pub const REST_CATALOG_PROP_WAREHOUSE: &str = "warehouse";
 
 pub const REST_CATALOG_PROP_PREFIX: &str = "prefix";
 
+fn get_property(properties: &HashMap<String, String>, key: &str) -> Option<String> {
+    properties
+        .iter()
+        .find(|(k, _)| k.trim().to_lowercase() == key.trim().to_lowercase())
+        .map(|(_, v)| v.clone())
+}
+
 #[derive(Clone, Debug)]
 pub struct RestCatalogConfig {
     uri: String,
@@ -30,63 +37,55 @@ pub struct RestCatalogConfig {
 
 /// Provider for Apache Iceberg REST Catalog.
 pub struct IcebergRestCatalogProvider {
-    name: String,
-    client: ApiClient,
     runtime: RuntimeHandle, // CHECK HERE: ADD SECONDARY RUNTIME LOGIC BEFORE MERGING
+    name: String,
     catalog_config: RestCatalogConfig,
-    merged_config: OnceCell<RestCatalogConfig>, // TODO: `uri` doesn't actually get used once updated in `merged_config`
+    merged_catalog_config: OnceCell<RestCatalogConfig>,
+    client: OnceCell<ApiClient>,
 }
 
 impl IcebergRestCatalogProvider {
     pub fn new(runtime: RuntimeHandle, name: String, props: HashMap<String, String>) -> Self {
-        let mut configuration = Configuration::new();
-        configuration.user_agent = Some("Sail".to_string());
-        // CHECK HERE
-        //             basic_auth: None,
-        //             oauth_access_token: None,
-        //             bearer_access_token: None,
-        //             api_key: None,
-
-        if props.contains_key(REST_CATALOG_PROP_URI) {
-            configuration.base_path = props
+        let catalog_config = RestCatalogConfig {
+            uri: props
                 .get(REST_CATALOG_PROP_URI)
                 .cloned()
-                .unwrap_or_default();
-        }
-
-        let configuration = Arc::new(configuration);
-        let catalog_config = RestCatalogConfig {
-            uri: configuration.base_path.clone(),
+                .unwrap_or(Configuration::new().base_path),
             warehouse: props.get(REST_CATALOG_PROP_WAREHOUSE).cloned(),
             props: props
                 .into_iter()
                 .filter(|(k, _)| k != REST_CATALOG_PROP_URI && k != REST_CATALOG_PROP_WAREHOUSE)
                 .collect(),
         };
-        let client = ApiClient::new(configuration);
 
         Self {
-            name,
-            client,
             runtime,
+            name,
             catalog_config,
-            merged_config: OnceCell::new(),
+            merged_catalog_config: OnceCell::new(),
+            client: OnceCell::new(),
         }
     }
 
-    fn get_property(properties: &HashMap<String, String>, key: &str) -> Option<String> {
-        properties
-            .iter()
-            .find(|(k, _)| k.trim().to_lowercase() == key.trim().to_lowercase())
-            .map(|(_, v)| v.clone())
+    fn init_client(&self, catalog_config: &RestCatalogConfig) -> CatalogResult<ApiClient> {
+        // CHECK HERE
+        //  basic_auth: None,
+        //  oauth_access_token: None,
+        //  bearer_access_token: None,
+        //  api_key: None,
+        let mut client_config = Configuration::new();
+        client_config.user_agent = Some("Sail".to_string());
+        client_config.base_path = catalog_config.uri.to_string();
+        Ok(ApiClient::new(Arc::new(client_config)))
     }
 
     async fn load_catalog_config(
         &self,
+        client: &ApiClient,
         warehouse: Option<&str>,
     ) -> CatalogResult<crate::models::CatalogConfig> {
-        let api = self.client.configuration_api_api();
-        let config = api
+        let config = client
+            .configuration_api_api()
             .get_config(warehouse)
             .await
             .map_err(|e| CatalogError::External(format!("Failed to load config: {e}")))?;
@@ -94,15 +93,19 @@ impl IcebergRestCatalogProvider {
     }
 
     // Merge the `RestCatalogConfig` with the a [`CatalogConfig`] (fetched from the REST server).
+    // Then initialize the `ApiClient` with the merged config.
     // This only happens once, then the result is cached.
-    async fn load_merged_catalog_config(&self) -> CatalogResult<&RestCatalogConfig> {
-        self.merged_config
+    async fn load_client_and_merged_config(
+        &self,
+    ) -> CatalogResult<(&ApiClient, &RestCatalogConfig)> {
+        let merged_catalog_config = self
+            .merged_catalog_config
             .get_or_try_init(|| async {
+                let temp_client = self.init_client(&self.catalog_config)?;
                 let mut config = self
-                    .load_catalog_config(self.catalog_config.warehouse.as_deref())
+                    .load_catalog_config(&temp_client, self.catalog_config.warehouse.as_deref())
                     .await?;
 
-                // TODO: `uri` doesn't actually get used once updated in `merged_config`
                 let uri = if let Some(uri) = config.overrides.remove(REST_CATALOG_PROP_URI) {
                     uri
                 } else {
@@ -119,107 +122,14 @@ impl IcebergRestCatalogProvider {
                     props,
                 })
             })
-            .await
-    }
+            .await?;
 
-    // CHECK HERE
-    async fn replace_view_impl(
-        &self,
-        database: &Namespace,
-        view: &str,
-        columns: Vec<CreateViewColumnOptions>,
-        definition: String,
-        comment: Option<String>,
-        properties: Vec<(String, String)>,
-    ) -> CatalogResult<TableStatus> {
-        let catalog_config = self.load_merged_catalog_config().await?;
+        let client = self
+            .client
+            .get_or_try_init(|| async { self.init_client(merged_catalog_config) })
+            .await?;
 
-        let mut fields = Vec::new();
-        for (idx, col) in columns.iter().enumerate() {
-            let field_type = arrow_type_to_iceberg(&col.data_type).map_err(|e| {
-                CatalogError::External(format!(
-                    "Failed to convert Arrow type to Iceberg type for column '{}': {e}",
-                    col.name
-                ))
-            })?;
-            let mut field =
-                NestedField::new(idx as i32, col.name.clone(), field_type, !col.nullable);
-            if let Some(comment_text) = &col.comment {
-                field = field.with_doc(comment_text);
-            }
-            fields.push(Arc::new(field));
-        }
-
-        let schema = crate::models::Schema {
-            r#type: crate::models::schema::Type::Struct,
-            fields,
-            schema_id: None,
-            identifier_field_ids: None,
-        };
-
-        let sql_representation = crate::models::SqlViewRepresentation {
-            r#type: "sql".to_string(),
-            sql: definition,
-            dialect: "spark".to_string(),
-        };
-
-        let timestamp_ms = std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
-            .map(|d| d.as_millis() as i64)
-            .unwrap_or(0);
-
-        let view_version = crate::models::ViewVersion {
-            version_id: 1,
-            timestamp_ms,
-            schema_id: 0,
-            summary: HashMap::new(),
-            representations: vec![sql_representation],
-            default_catalog: None,
-            default_namespace: database.clone().into(),
-        };
-
-        let mut updates = HashMap::new();
-        for (k, v) in properties {
-            updates.insert(k, v);
-        }
-        if let Some(c) = comment {
-            updates.insert("comment".to_string(), c);
-        }
-
-        let view_update = crate::models::ViewUpdate {
-            action: "upgrade-format-version".to_string(),
-            uuid: String::new(),
-            format_version: 1,
-            schema: Box::new(schema),
-            last_column_id: None,
-            location: String::new(),
-            updates,
-            removals: vec![],
-            view_version: Box::new(view_version),
-            view_version_id: -1,
-        };
-
-        let commit_request = crate::models::CommitViewRequest {
-            identifier: None,
-            requirements: None,
-            updates: vec![view_update],
-        };
-
-        let api = self.client.catalog_api_api();
-        let result = api
-            .replace_view(
-                &database.to_string(),
-                view,
-                commit_request,
-                catalog_config
-                    .props
-                    .get(REST_CATALOG_PROP_PREFIX)
-                    .map(|s| s.as_str()),
-            )
-            .await
-            .map_err(|e| CatalogError::External(format!("Failed to replace view: {e}")))?;
-
-        self.load_view_result_to_status(view, database, result)
+        Ok((client, merged_catalog_config))
     }
 
     fn load_table_result_to_status(
@@ -370,7 +280,7 @@ impl IcebergRestCatalogProvider {
         let comment = metadata
             .properties
             .as_ref()
-            .and_then(|p| Self::get_property(p, "comment"));
+            .and_then(|p| get_property(p, "comment"));
 
         let properties: Vec<_> = metadata
             .properties
@@ -459,7 +369,7 @@ impl IcebergRestCatalogProvider {
         let comment = metadata
             .properties
             .as_ref()
-            .and_then(|p| Self::get_property(p, "comment"));
+            .and_then(|p| get_property(p, "comment"));
 
         let properties: Vec<_> = metadata
             .properties
@@ -493,7 +403,7 @@ impl CatalogProvider for IcebergRestCatalogProvider {
         database: &Namespace,
         options: CreateDatabaseOptions,
     ) -> CatalogResult<DatabaseStatus> {
-        let catalog_config = self.load_merged_catalog_config().await?;
+        let (client, catalog_config) = self.load_client_and_merged_config().await?;
 
         let CreateDatabaseOptions {
             if_not_exists,
@@ -502,9 +412,8 @@ impl CatalogProvider for IcebergRestCatalogProvider {
             properties,
         } = options;
 
-        let api = self.client.catalog_api_api();
-
-        let exists = match api
+        let exists = match client
+            .catalog_api_api()
             .namespace_exists(
                 &database.to_string(),
                 catalog_config
@@ -541,7 +450,8 @@ impl CatalogProvider for IcebergRestCatalogProvider {
                 properties: if props.is_empty() { None } else { Some(props) },
             };
 
-            let result = api
+            let result = client
+                .catalog_api_api()
                 .create_namespace(
                     request,
                     catalog_config
@@ -556,11 +466,11 @@ impl CatalogProvider for IcebergRestCatalogProvider {
                     let comment = result
                         .properties
                         .as_ref()
-                        .and_then(|p| Self::get_property(p, "comment"));
+                        .and_then(|p| get_property(p, "comment"));
                     let location = result
                         .properties
                         .as_ref()
-                        .and_then(|p| Self::get_property(p, "location"));
+                        .and_then(|p| get_property(p, "location"));
                     let properties: Vec<_> =
                         result.properties.unwrap_or_default().into_iter().collect();
 
@@ -595,14 +505,15 @@ impl CatalogProvider for IcebergRestCatalogProvider {
         database: &Namespace,
         options: DropDatabaseOptions,
     ) -> CatalogResult<()> {
-        let catalog_config = self.load_merged_catalog_config().await?;
+        let (client, catalog_config) = self.load_client_and_merged_config().await?;
 
         let DropDatabaseOptions {
             if_exists,
             cascade: _,
         } = options;
-        let api = self.client.catalog_api_api();
-        match api
+
+        match client
+            .catalog_api_api()
             .drop_namespace(
                 &database.to_string(),
                 catalog_config
@@ -625,11 +536,11 @@ impl CatalogProvider for IcebergRestCatalogProvider {
     }
 
     async fn get_database(&self, database: &Namespace) -> CatalogResult<DatabaseStatus> {
-        let catalog_config = self.load_merged_catalog_config().await?;
-
-        let api = self.client.catalog_api_api();
+        let (client, catalog_config) = self.load_client_and_merged_config().await?;
         let namespace_str = database.to_string();
-        let result = api
+
+        let result = client
+            .catalog_api_api()
             .load_namespace_metadata(
                 &namespace_str,
                 catalog_config
@@ -652,11 +563,11 @@ impl CatalogProvider for IcebergRestCatalogProvider {
         let comment = result
             .properties
             .as_ref()
-            .and_then(|p| Self::get_property(p, "comment"));
+            .and_then(|p| get_property(p, "comment"));
         let location = result
             .properties
             .as_ref()
-            .and_then(|p| Self::get_property(p, "location"));
+            .and_then(|p| get_property(p, "location"));
         let properties: Vec<_> = result.properties.unwrap_or_default().into_iter().collect();
 
         Ok(DatabaseStatus {
@@ -672,11 +583,10 @@ impl CatalogProvider for IcebergRestCatalogProvider {
         &self,
         prefix: Option<&Namespace>,
     ) -> CatalogResult<Vec<DatabaseStatus>> {
-        let catalog_config = self.load_merged_catalog_config().await?;
+        let (client, catalog_config) = self.load_client_and_merged_config().await?;
         let parent = prefix.map(|namespace| namespace.to_string());
 
-        let result = self
-            .client
+        let result = client
             .catalog_api_api()
             .list_namespaces(
                 None,
@@ -711,7 +621,7 @@ impl CatalogProvider for IcebergRestCatalogProvider {
         table: &str,
         options: CreateTableOptions,
     ) -> CatalogResult<TableStatus> {
-        let catalog_config = self.load_merged_catalog_config().await?;
+        let (client, catalog_config) = self.load_client_and_merged_config().await?;
 
         let CreateTableOptions {
             columns,
@@ -854,8 +764,8 @@ impl CatalogProvider for IcebergRestCatalogProvider {
             properties: if props.is_empty() { None } else { Some(props) },
         };
 
-        let api = self.client.catalog_api_api();
-        let result = api
+        let result = client
+            .catalog_api_api()
             .create_table(
                 &database.to_string(),
                 request,
@@ -872,10 +782,9 @@ impl CatalogProvider for IcebergRestCatalogProvider {
     }
 
     async fn get_table(&self, database: &Namespace, table: &str) -> CatalogResult<TableStatus> {
-        let catalog_config = self.load_merged_catalog_config().await?;
-
-        let api = self.client.catalog_api_api();
-        let result = api
+        let (client, catalog_config) = self.load_client_and_merged_config().await?;
+        let result = client
+            .catalog_api_api()
             .load_table(
                 &database.to_string(),
                 table,
@@ -895,10 +804,9 @@ impl CatalogProvider for IcebergRestCatalogProvider {
     }
 
     async fn list_tables(&self, database: &Namespace) -> CatalogResult<Vec<TableStatus>> {
-        let catalog_config = self.load_merged_catalog_config().await?;
+        let (client, catalog_config) = self.load_client_and_merged_config().await?;
 
-        let result = self
-            .client
+        let result = client
             .catalog_api_api()
             .list_tables(
                 &database.to_string(),
@@ -911,7 +819,7 @@ impl CatalogProvider for IcebergRestCatalogProvider {
             )
             .await
             .map_err(|e| CatalogError::External(format!("Failed to list tables: {e}")))?;
-        let catalog = &self.name;
+
         Ok(result
             .identifiers
             .unwrap_or_default()
@@ -919,7 +827,7 @@ impl CatalogProvider for IcebergRestCatalogProvider {
             .map(|identifier| TableStatus {
                 name: identifier.name,
                 kind: TableKind::Table {
-                    catalog: catalog.clone(),
+                    catalog: self.name.clone(),
                     database: identifier.namespace,
                     columns: Vec::new(),
                     comment: None,
@@ -942,11 +850,10 @@ impl CatalogProvider for IcebergRestCatalogProvider {
         table: &str,
         options: DropTableOptions,
     ) -> CatalogResult<()> {
-        let catalog_config = self.load_merged_catalog_config().await?;
-
+        let (client, catalog_config) = self.load_client_and_merged_config().await?;
         let DropTableOptions { if_exists, purge } = options;
-        let api = self.client.catalog_api_api();
-        match api
+        match client
+            .catalog_api_api()
             .drop_table(
                 &database.to_string(),
                 table,
@@ -975,7 +882,7 @@ impl CatalogProvider for IcebergRestCatalogProvider {
         view: &str,
         options: CreateViewOptions,
     ) -> CatalogResult<TableStatus> {
-        let catalog_config = self.load_merged_catalog_config().await?;
+        let (client, catalog_config) = self.load_client_and_merged_config().await?;
 
         let CreateViewOptions {
             columns,
@@ -992,9 +899,9 @@ impl CatalogProvider for IcebergRestCatalogProvider {
                     return Ok(existing);
                 }
                 if replace {
-                    return self
-                        .replace_view_impl(database, view, columns, definition, comment, properties)
-                        .await;
+                    return Err(CatalogError::NotSupported(
+                        "Replace view is not supported yet".to_string(),
+                    ));
                 }
             }
         }
@@ -1059,8 +966,8 @@ impl CatalogProvider for IcebergRestCatalogProvider {
             properties: props,
         };
 
-        let api = self.client.catalog_api_api();
-        let result = api
+        let result = client
+            .catalog_api_api()
             .create_view(
                 &database.to_string(),
                 request,
@@ -1076,10 +983,9 @@ impl CatalogProvider for IcebergRestCatalogProvider {
     }
 
     async fn get_view(&self, database: &Namespace, view: &str) -> CatalogResult<TableStatus> {
-        let catalog_config = self.load_merged_catalog_config().await?;
-
-        let api = self.client.catalog_api_api();
-        let result = api
+        let (client, catalog_config) = self.load_client_and_merged_config().await?;
+        let result = client
+            .catalog_api_api()
             .load_view(
                 &database.to_string(),
                 view,
@@ -1096,10 +1002,9 @@ impl CatalogProvider for IcebergRestCatalogProvider {
     }
 
     async fn list_views(&self, database: &Namespace) -> CatalogResult<Vec<TableStatus>> {
-        let catalog_config = self.load_merged_catalog_config().await?;
+        let (client, catalog_config) = self.load_client_and_merged_config().await?;
 
-        let result = self
-            .client
+        let result = client
             .catalog_api_api()
             .list_views(
                 &database.to_string(),
@@ -1137,11 +1042,10 @@ impl CatalogProvider for IcebergRestCatalogProvider {
         view: &str,
         options: DropViewOptions,
     ) -> CatalogResult<()> {
-        let catalog_config = self.load_merged_catalog_config().await?;
-
+        let (client, catalog_config) = self.load_client_and_merged_config().await?;
         let DropViewOptions { if_exists } = options;
-        let api = self.client.catalog_api_api();
-        match api
+        match client
+            .catalog_api_api()
             .drop_view(
                 &database.to_string(),
                 view,
