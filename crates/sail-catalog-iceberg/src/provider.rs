@@ -9,7 +9,9 @@ use sail_catalog::provider::{
     TableColumnStatus, TableKind, TableStatus,
 };
 use sail_common::runtime::RuntimeHandle;
-use sail_iceberg::{arrow_type_to_iceberg, iceberg_type_to_arrow, Literal, NestedField};
+use sail_iceberg::{
+    arrow_type_to_iceberg, iceberg_type_to_arrow, Literal, NestedField, DEFAULT_SCHEMA_ID,
+};
 use tokio::sync::OnceCell;
 
 use crate::apis::configuration::Configuration;
@@ -645,7 +647,7 @@ impl CatalogProvider for IcebergRestCatalogProvider {
         }
 
         let mut fields = Vec::new();
-        let mut column_name_to_id = HashMap::new();
+        let mut column_name_to_id = HashMap::new(); // CHECK HERE
         for (idx, col) in columns.iter().enumerate() {
             let CreateTableColumnOptions {
                 name,
@@ -655,22 +657,33 @@ impl CatalogProvider for IcebergRestCatalogProvider {
                 default,
                 generated_always_as: _, // TODO: Support generated_always_as
             } = col;
-            let field_id = idx as i32 + 1;
+            let field_id = idx as i32 + 1; // CHECK HERE THIS IS WRONG
             let field_type = arrow_type_to_iceberg(data_type).map_err(|e| {
                 CatalogError::External(format!(
                     "Failed to convert Arrow type to Iceberg type for column '{name}': {e}"
                 ))
             })?;
             let default_literal = if let Some(default) = default {
-                Literal::try_from_json(serde_json::Value::from(default.to_string()), &field_type).map_err(|e| {
+                let json_default: serde_json::Value =
+                    serde_json::from_str(default).map_err(|e| {
+                        CatalogError::External(format!(
+                            "Failed to parse default value as JSON for column '{name}': {e}"
+                        ))
+                    })?;
+                // CHECK HERE clone after removing eprintln down below
+                let lit = Literal::try_from_json(json_default.clone(), &field_type).map_err(|e| {
                     CatalogError::External(format!(
                         "Failed to convert default value to Iceberg literal for column '{name}': {e}"
                     ))
-                })?
+                })?;
+                eprintln!(
+                    "CHECK HERE: default json value: {json_default} and lit {lit:?} AND field_type: {field_type:?}"
+                );
+                lit
             } else {
                 None
             };
-            let mut field = NestedField::new(field_id, name.clone(), field_type, *nullable);
+            let mut field = NestedField::new(field_id, name.clone(), field_type, !nullable);
             if let Some(comment) = comment {
                 field = field.with_doc(comment);
             }
@@ -681,6 +694,7 @@ impl CatalogProvider for IcebergRestCatalogProvider {
             fields.push(Arc::new(field));
         }
 
+        // CHECK HERE
         let identifier_field_ids = constraints
             .iter()
             .filter_map(|c| match c {
@@ -695,17 +709,19 @@ impl CatalogProvider for IcebergRestCatalogProvider {
             .flatten()
             .collect::<Vec<_>>();
 
+        let schema = sail_iceberg::spec::Schema::builder()
+            .with_fields(fields)
+            .with_identifier_field_ids(identifier_field_ids.clone())
+            .build()
+            .map_err(|e| CatalogError::External(format!("Failed to build schema: {e}")))?;
         let schema = crate::models::Schema {
             r#type: crate::models::schema::Type::Struct,
-            fields,
-            schema_id: None,
-            identifier_field_ids: if identifier_field_ids.is_empty() {
-                None
-            } else {
-                Some(identifier_field_ids)
-            },
+            fields: schema.fields().to_vec(),
+            schema_id: Some(schema.schema_id()),
+            identifier_field_ids: Some(schema.identifier_field_ids().collect()),
         };
 
+        // CHECK HERE
         let partition_spec = if !partition_by.is_empty() {
             let partition_fields: Vec<crate::models::PartitionField> = partition_by
                 .iter()
@@ -732,6 +748,7 @@ impl CatalogProvider for IcebergRestCatalogProvider {
             None
         };
 
+        // CHECK HERE
         let write_order = if !sort_by.is_empty() {
             let sort_fields: Vec<crate::models::SortField> = sort_by
                 .iter()
@@ -762,6 +779,7 @@ impl CatalogProvider for IcebergRestCatalogProvider {
             None
         };
 
+        // CHECK HERE
         let mut props = HashMap::new();
         for (k, v) in properties {
             props.insert(k, v);
@@ -773,6 +791,7 @@ impl CatalogProvider for IcebergRestCatalogProvider {
             props.insert("comment".to_string(), c);
         }
 
+        // CHECK HERE
         let request = crate::models::CreateTableRequest {
             name: table.to_string(),
             location,

@@ -15,12 +15,14 @@ use crate::spec::{ListType, MapType, NestedField, PrimitiveType, Schema, StructT
 
 pub const ICEBERG_ARROW_FIELD_DOC_KEY: &str = "doc";
 
-fn get_field_id(field: &ArrowField) -> i32 {
-    field
-        .metadata()
-        .get(PARQUET_FIELD_ID_META_KEY)
-        .and_then(|x| x.parse().ok())
-        .unwrap_or(0)
+fn get_field_id(field: &ArrowField) -> Result<i32> {
+    if let Some(value) = field.metadata().get(PARQUET_FIELD_ID_META_KEY) {
+        value
+            .parse::<i32>()
+            .map_err(|e| plan_datafusion_err!("Iceberg: Failed to parse field id: {e}"))
+    } else {
+        plan_err!("Iceberg: Field id not found in metadata")
+    }
 }
 
 fn get_field_doc(field: &ArrowField) -> Option<String> {
@@ -74,7 +76,7 @@ pub fn arrow_field_to_iceberg(field: &ArrowField) -> Result<NestedField> {
     let required = !field.is_nullable();
     let doc = get_field_doc(field);
     let field = NestedField::new(
-        get_field_id(field),
+        get_field_id(field)?,
         field.name().clone(),
         iceberg_type,
         required,

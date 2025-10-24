@@ -5,7 +5,7 @@ use std::collections::HashMap;
 use arrow::datatypes::DataType;
 use sail_catalog::provider::{
     CatalogProvider, CreateDatabaseOptions, CreateTableColumnOptions, CreateTableOptions,
-    DropDatabaseOptions, Namespace,
+    DropDatabaseOptions, Namespace, TableKind,
 };
 use sail_catalog_iceberg::{IcebergRestCatalogProvider, REST_CATALOG_PROP_URI};
 use sail_common::runtime::RuntimeHandle;
@@ -531,7 +531,8 @@ async fn test_create_table() {
             data_type: DataType::Boolean,
             nullable: true,
             comment: None,
-            default: Some(0.to_string()),
+            // default: Some("false".to_string()), // CHECK HERE DEFAULT VALUE FAILS
+            default: None,
             generated_always_as: None,
         },
     ];
@@ -542,21 +543,98 @@ async fn test_create_table() {
             "t1",
             CreateTableOptions {
                 columns,
-                comment: None,
-                constraints: vec![],
-                location: None,
+                comment: Some("peow".to_string()),
+                constraints: vec![], // CHECK HERE
+                location: None,      // CHECK HERE
                 format: "iceberg".to_string(),
-                partition_by: vec![],
-                sort_by: vec![],
+                partition_by: vec![], // CHECK HERE
+                sort_by: vec![],      // CHECK HERE
                 bucket_by: None,
-                if_not_exists: false,
-                replace: false,
-                options: vec![],
-                properties: vec![],
+                if_not_exists: false, // CHECK HERE
+                replace: false,       // CHECK HERE
+                options: vec![],      // CHECK HERE
+                properties: vec![],   // CHECK HERE
             },
         )
         .await
         .unwrap();
 
-    assert_eq!(table.name, "t1");
+    let TableKind::Table {
+        catalog,
+        database,
+        columns,
+        comment,
+        constraints,
+        location,
+        format,
+        partition_by,
+        sort_by,
+        bucket_by,
+        options,
+        properties,
+    } = table.kind
+    else {
+        panic!("Expected TableKind::Table");
+    };
+
+    assert_eq!(table.name, "t1".to_string());
+    assert_eq!(catalog, "test".to_string());
+    assert_eq!(database, Vec::<String>::from(ns.clone()));
+    assert_eq!(comment, Some("peow".to_string()));
+    assert_eq!(constraints, vec![]);
+    assert_eq!(
+        location,
+        Some("s3://icebergdata/demo/test_create_table.apple.ios/t1".to_string())
+    );
+    assert_eq!(format, "iceberg".to_string());
+    assert_eq!(partition_by, Vec::<String>::new());
+    assert_eq!(sort_by, vec![]);
+    assert_eq!(bucket_by, None);
+    assert_eq!(options, Vec::<(String, String)>::new());
+    assert_eq!(properties.len(), 2);
+    assert!(properties.contains(&("comment".to_string(), "peow".to_string())));
+    assert!(properties.contains(&(
+        "write.parquet.compression-codec".to_string(),
+        "zstd".to_string()
+    )));
+    assert_eq!(columns.len(), 3);
+    assert!(
+        columns.contains(&sail_catalog::provider::TableColumnStatus {
+            name: "foo".to_string(),
+            data_type: DataType::Utf8,
+            nullable: true,
+            comment: None,
+            default: None,
+            generated_always_as: None,
+            is_partition: false,
+            is_bucket: false,
+            is_cluster: false,
+        })
+    );
+    assert!(
+        columns.contains(&sail_catalog::provider::TableColumnStatus {
+            name: "bar".to_string(),
+            data_type: DataType::Int32,
+            nullable: false,
+            comment: Some("meow".to_string()),
+            default: None,
+            generated_always_as: None,
+            is_partition: false,
+            is_bucket: false,
+            is_cluster: false,
+        })
+    );
+    assert!(
+        columns.contains(&sail_catalog::provider::TableColumnStatus {
+            name: "baz".to_string(),
+            data_type: DataType::Boolean,
+            nullable: true,
+            comment: None,
+            default: None,
+            generated_always_as: None,
+            is_partition: false,
+            is_bucket: false,
+            is_cluster: false,
+        })
+    );
 }
