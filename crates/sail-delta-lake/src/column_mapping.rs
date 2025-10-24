@@ -1,9 +1,10 @@
 use std::sync::atomic::{AtomicI64, Ordering};
 
-use crate::options::ColumnMappingModeOption;
 use datafusion::arrow::datatypes::{Field as ArrowField, Schema as ArrowSchema};
 use delta_kernel::schema::{ArrayType, DataType, MapType, MetadataValue, StructField, StructType};
 use delta_kernel::table_features::ColumnMappingMode;
+
+use crate::options::ColumnMappingModeOption;
 
 /// Annotate a logical kernel schema with column mapping metadata (id + physicalName)
 /// using a sequential id assignment. Intended only for new table creation (name mode).

@@ -18,8 +18,7 @@ use datafusion::physical_plan::{
 use datafusion_common::{internal_err, DataFusionError, Result};
 use datafusion_physical_expr::{Distribution, EquivalenceProperties, PhysicalExpr};
 use delta_kernel::engine::arrow_conversion::{TryIntoArrow, TryIntoKernel};
-use delta_kernel::schema::ColumnMetadataKey;
-use delta_kernel::schema::StructType;
+use delta_kernel::schema::{ColumnMetadataKey, StructType};
 #[allow(deprecated)]
 use deltalake::kernel::{Action, MetadataExt};
 // TODO: Follow upstream for `MetadataExt`.
