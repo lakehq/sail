@@ -27,9 +27,7 @@ use futures::stream::{self, StreamExt};
 use sail_common_datafusion::datasource::PhysicalSinkMode;
 use url::Url;
 
-use crate::column_mapping::annotate_schema_for_column_mapping;
 use crate::kernel::transaction::{CommitBuilder, CommitProperties, TableReference};
-use crate::options::{ColumnMappingModeOption, TableDeltaOptions};
 use crate::physical_plan::CommitInfo;
 use crate::table::{create_delta_table_with_object_store, open_table_with_object_store};
 
@@ -235,16 +233,23 @@ impl ExecutionPlan for DeltaCommitExec {
             while let Some(batch_result) = data.next().await {
                 let batch = batch_result?;
 
-                // Extract commit info from the single data column
+                // Extract commit info from the single data column (skip empty/invalid rows)
                 if let Some(array) = batch.column(0).as_any().downcast_ref::<StringArray>() {
-                    if array.len() > 0 {
-                        let commit_info_json = array.value(0);
-                        let commit_info: CommitInfo = serde_json::from_str(commit_info_json)
-                            .map_err(|e| DataFusionError::External(Box::new(e)))?;
+                    for i in 0..array.len() {
+                        let s = array.value(i);
+                        if s.trim().is_empty() {
+                            continue;
+                        }
+                        let parsed: Result<CommitInfo, _> = serde_json::from_str(s);
+                        let commit_info = match parsed {
+                            Ok(ci) => ci,
+                            Err(e) => {
+                                return Err(DataFusionError::External(Box::new(e)));
+                            }
+                        };
 
                         total_rows += commit_info.row_count;
                         actions.extend(commit_info.actions);
-
                         if initial_actions.is_empty() {
                             initial_actions = commit_info.initial_actions;
                         }
@@ -252,6 +257,7 @@ impl ExecutionPlan for DeltaCommitExec {
                             operation = commit_info.operation;
                         }
                         has_data = true;
+                        break;
                     }
                 }
             }
@@ -278,6 +284,20 @@ impl ExecutionPlan for DeltaCommitExec {
             // Prepend initial actions
             let mut final_actions = initial_actions;
             final_actions.extend(actions);
+            let kinds: Vec<&'static str> = final_actions
+                .iter()
+                .map(|a| match a {
+                    Action::Protocol(_) => "Protocol",
+                    Action::Metadata(_) => "Metadata",
+                    Action::Add(_) => "Add",
+                    Action::Remove(_) => "Remove",
+                    _ => "Other",
+                })
+                .collect();
+            let _ = dbg!(
+                ("final_actions_len", final_actions.len()),
+                ("final_action_kinds", &kinds)
+            );
 
             if final_actions.is_empty() && !table_exists {
                 // For new tables, add protocol and metadata even if no data
@@ -291,56 +311,81 @@ impl ExecutionPlan for DeltaCommitExec {
                 return Ok(batch);
             }
 
-            let operation = if !table_exists {
-                let mut delta_schema: StructType = sink_schema
-                    .as_ref()
-                    .try_into_kernel()
-                    .map_err(|e| DataFusionError::External(Box::new(e)))?;
-                // Determine protocol and metadata based on column mapping mode
-                let mut protocol_json = serde_json::json!({
-                    "minReaderVersion": 1,
-                    "minWriterVersion": 2,
+            // For new tables, always ensure Protocol + Metadata are present and use Create.
+            // Even if the writer supplied an operation (e.g., Overwrite), the first commit
+            // must initialize the table with protocol and metadata.
+            let (operation, final_actions) = if !table_exists {
+                let protocol_in_actions = final_actions.iter().find_map(|a| match a {
+                    Action::Protocol(p) => Some(p.clone()),
+                    _ => None,
+                });
+                let metadata_in_actions = final_actions.iter().find_map(|a| match a {
+                    Action::Metadata(m) => Some(m.clone()),
+                    _ => None,
                 });
 
-                let mut configuration: HashMap<String, String> = HashMap::new();
+                if let (Some(protocol), Some(metadata)) = (protocol_in_actions, metadata_in_actions)
+                {
+                    (
+                        DeltaOperation::Create {
+                            mode: SaveMode::ErrorIfExists,
+                            location: table_url.to_string(),
+                            protocol,
+                            metadata,
+                        },
+                        final_actions,
+                    )
+                } else {
+                    // Construct minimal protocol/metadata and insert them
+                    let delta_schema: StructType = sink_schema
+                        .as_ref()
+                        .try_into_kernel()
+                        .map_err(|e| DataFusionError::External(Box::new(e)))?;
 
-                // If writer requested column mapping name mode, annotate schema and set protocol accordingly
-                if let Some(ColumnMappingModeOption::Name) = None::<ColumnMappingModeOption> {
-                    // placeholder to satisfy type checker; replaced below
-                }
+                    let protocol_json = serde_json::json!({
+                        "minReaderVersion": 1,
+                        "minWriterVersion": 2,
+                    });
+                    #[allow(clippy::unwrap_used)]
+                    let protocol: Protocol = serde_json::from_value(protocol_json).unwrap();
 
-                // We don't have options in this scope; infer via sink_schema metadata is not available at creation.
-                // For now, keep default protocol. Column mapping will be handled in writer stage where options exist.
-                #[allow(clippy::unwrap_used)]
-                let protocol: Protocol = serde_json::from_value(protocol_json).unwrap();
+                    let configuration: HashMap<String, String> = HashMap::new();
+                    #[allow(deprecated)]
+                    let metadata = deltalake::kernel::new_metadata(
+                        &delta_schema,
+                        partition_columns.to_vec(),
+                        configuration,
+                    )
+                    .map_err(|e| DataFusionError::External(Box::new(e)))?;
 
-                #[allow(deprecated)]
-                let metadata = deltalake::kernel::new_metadata(
-                    &delta_schema,
-                    partition_columns.to_vec(),
-                    configuration,
-                )
-                .map_err(|e| DataFusionError::External(Box::new(e)))?;
+                    let mut updated_actions = final_actions;
+                    // Insert in order: Protocol, then Metadata
+                    updated_actions.insert(0, Action::Metadata(metadata.clone()));
+                    updated_actions.insert(0, Action::Protocol(protocol.clone()));
 
-                final_actions.insert(0, Action::Protocol(protocol.clone()));
-                final_actions.insert(1, Action::Metadata(metadata.clone()));
-
-                DeltaOperation::Create {
-                    mode: SaveMode::ErrorIfExists,
-                    location: table_url.to_string(),
-                    protocol,
-                    metadata,
+                    (
+                        DeltaOperation::Create {
+                            mode: SaveMode::ErrorIfExists,
+                            location: table_url.to_string(),
+                            protocol,
+                            metadata,
+                        },
+                        updated_actions,
+                    )
                 }
             } else {
-                operation.clone().unwrap_or(DeltaOperation::Write {
-                    mode: SaveMode::Append,
-                    partition_by: if partition_columns.is_empty() {
-                        None
-                    } else {
-                        Some(partition_columns.to_vec())
-                    },
-                    predicate: None,
-                })
+                (
+                    operation.clone().unwrap_or(DeltaOperation::Write {
+                        mode: SaveMode::Append,
+                        partition_by: if partition_columns.is_empty() {
+                            None
+                        } else {
+                            Some(partition_columns.to_vec())
+                        },
+                        predicate: None,
+                    }),
+                    final_actions,
+                )
             };
 
             let snapshot = if table_exists {

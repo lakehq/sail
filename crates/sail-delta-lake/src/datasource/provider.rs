@@ -26,6 +26,7 @@ use crate::datasource::{
 use delta_kernel::table_features::ColumnMappingMode;
 // use deltalake::errors::DeltaTableError;
 // use delta_kernel::engine::arrow_conversion::TryIntoArrow;
+use crate::column_mapping::enrich_arrow_with_parquet_field_ids;
 use crate::table::DeltaTableState;
 use sail_common_datafusion::rename::physical_plan::rename_projected_physical_plan;
 
@@ -197,17 +198,44 @@ impl TableProvider for DeltaTableProvider {
 
         // Build physical file schema (non-partition columns) using kernel make_physical
         let table_partition_cols = self.snapshot.metadata().partition_columns();
-        let kmode: ColumnMappingMode = self
+        let kmode_explicit: ColumnMappingMode = self
             .snapshot
             .snapshot()
             .table_configuration()
             .column_mapping_mode();
         let kschema_arc = self.snapshot.snapshot().table_configuration().schema();
+        // Fallback: if mode is None but schema contains column mapping annotations, treat as Name
+        let has_annotations = kschema_arc.fields().any(|f| {
+            f.metadata().contains_key(
+                delta_kernel::schema::ColumnMetadataKey::ColumnMappingPhysicalName.as_ref(),
+            ) && f
+                .metadata()
+                .contains_key(delta_kernel::schema::ColumnMetadataKey::ColumnMappingId.as_ref())
+        });
+        let kmode = if matches!(kmode_explicit, ColumnMappingMode::None) && has_annotations {
+            ColumnMappingMode::Name
+        } else {
+            kmode_explicit
+        };
         let physical_kernel = kschema_arc.make_physical(kmode);
         let physical_arrow: ArrowSchema =
             deltalake::kernel::engine::arrow_conversion::TryIntoArrow::try_into_arrow(
                 &physical_kernel,
             )?;
+        // If column mapping is enabled, ensure PARQUET:field_id is present in Arrow fields
+        let physical_arrow = match kmode {
+            ColumnMappingMode::Name | ColumnMappingMode::Id => {
+                enrich_arrow_with_parquet_field_ids(&physical_arrow, &kschema_arc)
+            }
+            ColumnMappingMode::None => physical_arrow,
+        };
+        let _ = dbg!(("read_kmode", kmode));
+        let phys_field_names: Vec<String> = physical_arrow
+            .fields()
+            .iter()
+            .map(|f| f.name().clone())
+            .collect();
+        let _ = dbg!(("read_file_schema_fields", &phys_field_names));
         let file_fields = physical_arrow
             .fields()
             .iter()

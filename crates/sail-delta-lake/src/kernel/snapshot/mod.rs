@@ -226,7 +226,11 @@ impl Snapshot {
             let scan_iter = scan.scan_metadata_arrow(engine.as_ref())?;
             for res in scan_iter {
                 let batch = res?.scan_files;
-                let batch = inner.parse_stats_column(&batch)?;
+                // Be tolerant of malformed or empty stats JSON
+                let batch = match inner.parse_stats_column(&batch) {
+                    Ok(parsed) => parsed,
+                    Err(_) => batch,
+                };
                 if tx.blocking_send(Ok(batch)).is_err() {
                     break;
                 }
@@ -434,7 +438,10 @@ impl EagerSnapshot {
         .map_err(|e| DeltaTableError::Generic(e.to_string()))??;
 
         let files = concat_batches(&SCAN_ROW_ARROW_SCHEMA, &files)?;
-        let files = self.snapshot.inner.parse_stats_column(&files)?;
+        let files = match self.snapshot.inner.parse_stats_column(&files) {
+            Ok(parsed) => parsed,
+            Err(_) => files,
+        };
 
         self.files = files;
 
