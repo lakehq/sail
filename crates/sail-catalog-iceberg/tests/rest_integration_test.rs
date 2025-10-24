@@ -18,7 +18,7 @@ async fn setup_catalog() -> (
     ContainerAsync<GenericImage>,
     ContainerAsync<GenericImage>,
 ) {
-    let minio = GenericImage::new("minio/minio", "RELEASE.2025-09-07T16-13-09Z")
+    let minio = GenericImage::new("minio/minio", "RELEASE.2025-05-24T17-08-30Z")
         .with_wait_for(WaitFor::message_on_stderr("MinIO Object Storage Server"))
         .with_exposed_port(ContainerPort::Tcp(9000))
         .with_exposed_port(ContainerPort::Tcp(9001))
@@ -38,7 +38,7 @@ async fn setup_catalog() -> (
         "until (/usr/bin/mc alias set minio {minio_endpoint} admin password) do echo '...waiting...' && sleep 1; done; /usr/bin/mc rm -r --force minio/icebergdata; /usr/bin/mc mb minio/icebergdata; /usr/bin/mc policy set public minio/icebergdata; tail -f /dev/null",
     );
 
-    let _mc = GenericImage::new("minio/mc", "RELEASE.2025-08-13T08-35-41Z")
+    let _mc = GenericImage::new("minio/mc", "RELEASE.2025-05-21T01-59-54Z")
         .with_env_var("AWS_ACCESS_KEY_ID", "admin")
         .with_env_var("AWS_SECRET_ACCESS_KEY", "password")
         .with_env_var("AWS_REGION", "us-east-1")
