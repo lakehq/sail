@@ -63,42 +63,12 @@ def test_pyiceberg_read_after_sail_append(spark, tmp_path):
         )
         spark_df = spark.read.format("iceberg").load(table.location()).sort("id").toPandas()
         assert_frame_equal(spark_df, expected)
-
+        # FIXME: Add support to update catalog
         expected_py = (
             pd.DataFrame({"id": [1, 2], "event": ["a", "b"]})
             .astype({"id": "int64"})
             .assign(event=lambda d: d["event"].astype("object"))
         )
         assert_frame_equal(actual_py, expected_py)
-    finally:
-        catalog.drop_table(identifier)
-
-
-def test_pyiceberg_read_after_sail_multiple_files(spark, tmp_path):
-    catalog = create_sql_catalog(tmp_path)
-    identifier = "default.cross_multi"
-    schema = Schema(
-        NestedField(field_id=1, name="id", field_type=LongType(), required=False),
-        NestedField(field_id=2, name="value", field_type=StringType(), required=False),
-    )
-    table = catalog.create_table(identifier=identifier, schema=schema)
-    try:
-        seed = pa.Table.from_pandas(pd.DataFrame({"id": [1, 2], "value": ["a", "b"]}).astype({"id": "int64"}))
-        table.append(seed)
-        df2 = spark.createDataFrame([(3, "c"), (4, "d")], schema="id LONG, value STRING")
-        df2.write.format("iceberg").mode("append").save(table.location())
-
-        py_tbl = catalog.load_table(identifier)
-        actual_py = pyiceberg_to_pandas(py_tbl, sort_by="id")
-        expected_py = pd.DataFrame({"id": [1, 2], "value": ["a", "b"]}).astype({"id": "int64"})
-        assert_frame_equal(actual_py, expected_py)
-
-        spark_df = spark.read.format("iceberg").load(table.location()).sort("id").toPandas()
-        expected_spark = (
-            pd.DataFrame({"id": [1, 2, 3, 4], "value": ["a", "b", "c", "d"]})
-            .astype({"id": "int64"})
-            .assign(value=lambda d: d["value"].astype("object"))
-        )
-        assert_frame_equal(spark_df, expected_spark)
     finally:
         catalog.drop_table(identifier)

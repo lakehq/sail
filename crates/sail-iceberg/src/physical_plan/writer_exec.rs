@@ -16,6 +16,7 @@ use datafusion::physical_plan::{
 use datafusion_common::{internal_err, DataFusionError, Result};
 use futures::stream::once;
 use futures::StreamExt;
+use parquet::file::properties::WriterProperties;
 use sail_common_datafusion::datasource::PhysicalSinkMode;
 use url::Url;
 
@@ -321,17 +322,17 @@ impl ExecutionPlan for IcebergWriterExec {
                 UnboundPartitionSpec { fields: vec![] }
             };
 
-            let writer_config = WriterConfig::new(
-                table_schema.clone(),
-                partition_columns.clone(),
-                None,
-                134_217_728,
-                32 * 1024,
-                32,
-                None,
-                Arc::new(iceberg_schema.clone()),
-                unbound_spec,
-            );
+            let writer_config = WriterConfig {
+                table_schema: table_schema.clone(),
+                partition_columns: partition_columns.clone(),
+                writer_properties: WriterProperties::default(),
+                target_file_size: 134_217_728,
+                write_batch_size: 32 * 1024,
+                num_indexed_cols: 32,
+                stats_columns: None,
+                iceberg_schema: Arc::new(iceberg_schema.clone()),
+                partition_spec: unbound_spec,
+            };
 
             let root = object_store::path::Path::from(table_url.path());
             let mut writer = IcebergTableWriter::new(store, root, writer_config, 0, data_dir);

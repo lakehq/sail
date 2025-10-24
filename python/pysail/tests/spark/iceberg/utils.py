@@ -1,13 +1,8 @@
-from __future__ import annotations
+from pathlib import Path
+from typing import Optional
 
-from typing import TYPE_CHECKING
-
+import pandas as pd
 from pyiceberg.catalog import load_catalog
-
-if TYPE_CHECKING:
-    from pathlib import Path
-
-    import pandas as pd
 
 
 def create_sql_catalog(tmp_path: Path):
@@ -26,7 +21,7 @@ def create_sql_catalog(tmp_path: Path):
     return catalog
 
 
-def pyiceberg_to_pandas(table, sort_by=None, dtypes_like: pd.Series | None = None):
+def pyiceberg_to_pandas(table, sort_by=None, dtypes_like: Optional[pd.Series] = None):  # noqa: FA100
     df = table.scan().to_arrow().to_pandas()
     if sort_by is not None:
         if isinstance(sort_by, (list, tuple)):

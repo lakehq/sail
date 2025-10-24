@@ -38,6 +38,40 @@ def test_iceberg_write_overwrite_and_read(spark, sql_catalog):
         sql_catalog.drop_table(identifier)
 
 
+def test_iceberg_write_overwrite_existing_data(spark, sql_catalog):
+    identifier = "default.write_overwrite_existing"
+    table = sql_catalog.create_table(
+        identifier=identifier,
+        schema=Schema(
+            NestedField(field_id=1, name="id", field_type=LongType(), required=False),
+            NestedField(field_id=2, name="event", field_type=StringType(), required=False),
+            NestedField(field_id=3, name="score", field_type=DoubleType(), required=False),
+        ),
+    )
+    try:
+        seed_df = pd.DataFrame({"id": [1, 2, 3], "event": ["X", "Y", "Z"], "score": [0.1, 0.2, 0.3]})
+        table.append(pa.Table.from_pandas(seed_df))
+
+        df = spark.createDataFrame(
+            [(10, "A", 0.98), (11, "B", 0.54), (12, "A", 0.76)],
+            schema="id LONG, event STRING, score DOUBLE",
+        )
+        df.write.format("iceberg").mode("overwrite").save(table.location())
+
+        result_df = spark.read.format("iceberg").load(table.location()).sort("id")
+        expected = pd.DataFrame(
+            {
+                "id": [10, 11, 12],
+                "event": ["A", "B", "A"],
+                "score": [0.98, 0.54, 0.76],
+            }
+        )
+        pdf = result_df.toPandas()
+        assert_frame_equal(pdf, expected.astype(pdf.dtypes))
+    finally:
+        sql_catalog.drop_table(identifier)
+
+
 def test_iceberg_write_append_mode(spark, sql_catalog):
     identifier = "default.write_append"
     table = sql_catalog.create_table(
