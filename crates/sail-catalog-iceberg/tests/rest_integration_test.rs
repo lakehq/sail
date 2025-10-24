@@ -1,5 +1,7 @@
 #![allow(clippy::unwrap_used, clippy::expect_used, clippy::panic)]
 
+use std::collections::HashMap;
+
 use arrow::datatypes::DataType;
 use sail_catalog::provider::{
     CatalogProvider, CreateDatabaseOptions, CreateTableColumnOptions, CreateTableOptions,
@@ -7,7 +9,6 @@ use sail_catalog::provider::{
 };
 use sail_catalog_iceberg::{IcebergRestCatalogProvider, REST_CATALOG_PROP_URI};
 use sail_common::runtime::RuntimeHandle;
-use std::collections::HashMap;
 use testcontainers::core::{ContainerPort, WaitFor};
 use testcontainers::runners::AsyncRunner;
 use testcontainers::{ContainerAsync, GenericImage, ImageExt};
@@ -18,31 +19,36 @@ async fn setup_catalog() -> (
     ContainerAsync<GenericImage>,
     ContainerAsync<GenericImage>,
 ) {
+    let network = "rest_bridge";
+
     let minio = GenericImage::new("minio/minio", "RELEASE.2025-05-24T17-08-30Z")
         .with_wait_for(WaitFor::message_on_stderr("MinIO Object Storage Server"))
         .with_exposed_port(ContainerPort::Tcp(9000))
         .with_exposed_port(ContainerPort::Tcp(9001))
         .with_env_var("MINIO_ROOT_USER", "admin")
         .with_env_var("MINIO_ROOT_PASSWORD", "password")
-        .with_env_var("MINIO_DOMAIN", "minio")
+        .with_network(network)
         .with_cmd(vec!["server", "/data", "--console-address", ":9001"])
         .start()
         .await
         .expect("Failed to start MinIO");
 
-    let minio_host = minio.get_host().await.expect("get host");
-    let minio_port = minio.get_host_port_ipv4(9000).await.expect("get port");
-    let minio_endpoint = format!("http://{minio_host}:{minio_port}");
+    let minio_ip = minio.get_bridge_ip_address().await.expect("get bridge ip");
+    let minio_internal_endpoint = format!("http://{minio_ip}:9000");
 
-    let mc_cmd = format!(
-        "until (/usr/bin/mc alias set minio {minio_endpoint} admin password) do echo '...waiting...' && sleep 1; done; /usr/bin/mc rm -r --force minio/icebergdata; /usr/bin/mc mb minio/icebergdata; /usr/bin/mc policy set public minio/icebergdata; tail -f /dev/null",
-    );
-
-    let _mc = GenericImage::new("minio/mc", "RELEASE.2025-05-21T01-59-54Z")
+    let mc = GenericImage::new("minio/mc", "RELEASE.2025-05-21T01-59-54Z")
+        .with_wait_for(WaitFor::message_on_stdout(
+            "Bucket created successfully `minio/icebergdata`",
+        ))
+        .with_entrypoint("/bin/sh")
+        .with_cmd(vec![
+            "-c",
+            format!("until (/usr/bin/mc alias set minio {minio_internal_endpoint} admin password) do echo '...waiting...' && sleep 1; done; /usr/bin/mc rm -r --force minio/icebergdata; /usr/bin/mc mb minio/icebergdata; /usr/bin/mc policy set public minio/icebergdata; tail -f /dev/null").as_str(),
+        ])
         .with_env_var("AWS_ACCESS_KEY_ID", "admin")
         .with_env_var("AWS_SECRET_ACCESS_KEY", "password")
         .with_env_var("AWS_REGION", "us-east-1")
-        .with_cmd(vec!["/bin/sh", "-c", &mc_cmd])
+        .with_network(network)
         .start()
         .await
         .expect("Failed to start MC");
@@ -65,7 +71,8 @@ async fn setup_catalog() -> (
         )
         .with_env_var("CATALOG_WAREHOUSE", "s3://icebergdata/demo")
         .with_env_var("CATALOG_IO__IMPL", "org.apache.iceberg.aws.s3.S3FileIO")
-        .with_env_var("CATALOG_S3_ENDPOINT", &minio_endpoint)
+        .with_env_var("CATALOG_S3_ENDPOINT", minio_internal_endpoint)
+        .with_network(network)
         .start()
         .await
         .expect("Failed to start REST catalog");
@@ -80,7 +87,7 @@ async fn setup_catalog() -> (
     );
     let props = HashMap::from([(REST_CATALOG_PROP_URI.to_string(), rest_url)]);
     let catalog = IcebergRestCatalogProvider::new(runtime, "test".to_string(), props);
-    (catalog, minio, _mc, rest)
+    (catalog, minio, mc, rest)
 }
 
 #[tokio::test]
