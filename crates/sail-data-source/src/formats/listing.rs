@@ -7,6 +7,7 @@ use async_trait::async_trait;
 use datafusion::arrow::datatypes::DataType;
 use datafusion::catalog::{Session, TableProvider};
 use datafusion::datasource::file_format::FileFormat;
+use datafusion::datasource::listing::helpers::pruned_partition_list;
 use datafusion::datasource::listing::{ListingOptions, ListingTable, ListingTableConfig};
 use datafusion::datasource::physical_plan::FileSinkConfig;
 use datafusion::logical_expr::dml::InsertOp;
@@ -14,6 +15,7 @@ use datafusion::physical_plan::ExecutionPlan;
 use datafusion_common::parsers::CompressionTypeVariant;
 use datafusion_common::{internal_err, not_impl_err, plan_err, GetExt, Result};
 use datafusion_datasource::file_compression_type::FileCompressionType;
+use futures::TryStreamExt;
 use sail_common_datafusion::datasource::{
     get_partition_columns_and_file_schema, SinkInfo, SourceInfo, TableFormat,
 };
@@ -172,11 +174,12 @@ impl<T: ListingFormat> TableFormat for ListingTableFormat<T> {
             format!("{path}{}", object_store::path::DELIMITER)
         };
         let table_paths = crate::url::resolve_listing_urls(ctx, vec![path.clone()]).await?;
-        let object_store_url = if let Some(path) = table_paths.first() {
-            path.object_store()
+        let table_path = if let Some(path) = table_paths.first() {
+            path
         } else {
             return internal_err!("empty listing table path: {path}");
         };
+        let object_store_url = table_path.object_store();
         // We do not need to specify the exact data type for partition columns,
         // since the type is inferred from the record batch during writing.
         // This is how DataFusion handles physical planning for `LogicalPlan::Copy`.
@@ -214,10 +217,23 @@ impl<T: ListingFormat> TableFormat for ListingTableFormat<T> {
                 ext
             }
         };
+
+        let store = ctx.runtime_env().object_store(table_path)?;
+        let file_list_stream = pruned_partition_list(
+            ctx,
+            store.as_ref(),
+            table_path,
+            &[],
+            &file_extension,
+            &table_partition_cols,
+        )
+        .await?;
+        let file_group = file_list_stream.try_collect::<Vec<_>>().await?.into();
+
         let conf = FileSinkConfig {
             original_url: path,
             object_store_url,
-            file_group: Default::default(),
+            file_group,
             table_paths,
             output_schema: input.schema(),
             table_partition_cols,
