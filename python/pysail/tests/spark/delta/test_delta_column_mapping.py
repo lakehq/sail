@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 import json
-from pathlib import Path
+from pathlib import Path  # noqa: TCH003
 
 from pyspark.sql import Row
 
@@ -17,9 +17,7 @@ class TestDeltaColumnMapping:
         )
 
         # Write new table with column mapping name mode
-        df.write.format("delta").mode("overwrite").option(
-            "column_mapping_mode", "name"
-        ).save(str(base))
+        df.write.format("delta").mode("overwrite").option("column_mapping_mode", "name").save(str(base))
 
         # Basic read should succeed
         out = spark.read.format("delta").load(str(base)).orderBy("id").collect()
@@ -44,11 +42,10 @@ class TestDeltaColumnMapping:
         assert protocol is not None, "protocol action not found in first commit"
         assert metadata is not None, "metadata action not found in first commit"
 
-        assert protocol.get("minReaderVersion", 0) >= 2
-        assert protocol.get("minWriterVersion", 0) >= 5
+        assert protocol.get("minReaderVersion", 0) >= 2  # noqa: PLR2004
+        assert protocol.get("minWriterVersion", 0) >= 5  # noqa: PLR2004
         config = metadata.get("configuration", {})
         assert config.get("delta.columnMapping.mode") == "name"
-
 
     def test_create_and_append_with_column_mapping_id(self, spark, tmp_path: Path):
         base = tmp_path / "delta_cm_id"
@@ -60,9 +57,7 @@ class TestDeltaColumnMapping:
         )
 
         # Create table with id mode
-        df.write.format("delta").mode("overwrite").option("column_mapping_mode", "id").save(
-            str(base)
-        )
+        df.write.format("delta").mode("overwrite").option("column_mapping_mode", "id").save(str(base))
 
         # Append without option
         df2 = spark.createDataFrame([Row(i=3, s="z")])
@@ -90,8 +85,7 @@ class TestDeltaColumnMapping:
 
         assert protocol is not None, "protocol action not found in first commit"
         assert metadata is not None, "metadata action not found in first commit"
-        assert protocol.get("minReaderVersion", 0) >= 2
-        assert protocol.get("minWriterVersion", 0) >= 5
+        assert protocol.get("minReaderVersion", 0) >= 2  # noqa: PLR2004
+        assert protocol.get("minWriterVersion", 0) >= 5  # noqa: PLR2004
         config = metadata.get("configuration", {})
         assert config.get("delta.columnMapping.mode") == "id"
-
