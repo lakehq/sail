@@ -473,82 +473,82 @@ async fn test_drop_namespace() {
     assert!(result.is_ok());
 }
 
-// #[tokio::test]
-// async fn test_create_table() {
-//     let (catalog, _minio, _mc, _rest) = setup_catalog().await;
-//
-//     let ns = Namespace::try_from(vec![
-//         "test_create_table".to_string(),
-//         "apple".to_string(),
-//         "ios".to_string(),
-//     ])
-//     .unwrap();
-//     let properties = vec![
-//         ("owner".to_string(), "Lake".to_string()),
-//         ("community".to_string(), "Sail".to_string()),
-//     ];
-//
-//     catalog
-//         .create_database(
-//             &ns,
-//             CreateDatabaseOptions {
-//                 if_not_exists: false,
-//                 comment: None,
-//                 location: None,
-//                 properties,
-//             },
-//         )
-//         .await
-//         .unwrap();
-//
-//     let columns = vec![
-//         CreateTableColumnOptions {
-//             name: "foo".to_string(),
-//             data_type: DataType::Utf8,
-//             nullable: true,
-//             comment: None,
-//             default: None,
-//             generated_always_as: None,
-//         },
-//         CreateTableColumnOptions {
-//             name: "bar".to_string(),
-//             data_type: DataType::Int32,
-//             nullable: false,
-//             comment: None,
-//             default: None,
-//             generated_always_as: None,
-//         },
-//         CreateTableColumnOptions {
-//             name: "baz".to_string(),
-//             data_type: DataType::Boolean,
-//             nullable: true,
-//             comment: None,
-//             default: None,
-//             generated_always_as: None,
-//         },
-//     ];
-//
-//     let table = catalog
-//         .create_table(
-//             &ns,
-//             "t1",
-//             CreateTableOptions {
-//                 columns,
-//                 comment: None,
-//                 constraints: vec![],
-//                 location: None,
-//                 format: "iceberg".to_string(),
-//                 partition_by: vec![],
-//                 sort_by: vec![],
-//                 bucket_by: None,
-//                 if_not_exists: false,
-//                 replace: false,
-//                 options: vec![],
-//                 properties: vec![],
-//             },
-//         )
-//         .await
-//         .unwrap();
-//
-//     assert_eq!(table.name, "t1");
-// }
+#[tokio::test]
+async fn test_create_table() {
+    let (catalog, _minio, _mc, _rest) = setup_catalog().await;
+
+    let ns = Namespace::try_from(vec![
+        "test_create_table".to_string(),
+        "apple".to_string(),
+        "ios".to_string(),
+    ])
+    .unwrap();
+    let properties = vec![
+        ("owner".to_string(), "Lake".to_string()),
+        ("community".to_string(), "Sail".to_string()),
+    ];
+
+    catalog
+        .create_database(
+            &ns,
+            CreateDatabaseOptions {
+                if_not_exists: false,
+                comment: None,
+                location: None,
+                properties,
+            },
+        )
+        .await
+        .unwrap();
+
+    let columns = vec![
+        CreateTableColumnOptions {
+            name: "foo".to_string(),
+            data_type: DataType::Utf8,
+            nullable: true,
+            comment: None,
+            default: None,
+            generated_always_as: None,
+        },
+        CreateTableColumnOptions {
+            name: "bar".to_string(),
+            data_type: DataType::Int32,
+            nullable: false,
+            comment: None,
+            default: None,
+            generated_always_as: None,
+        },
+        CreateTableColumnOptions {
+            name: "baz".to_string(),
+            data_type: DataType::Boolean,
+            nullable: true,
+            comment: None,
+            default: None,
+            generated_always_as: None,
+        },
+    ];
+
+    let table = catalog
+        .create_table(
+            &ns,
+            "t1",
+            CreateTableOptions {
+                columns,
+                comment: None,
+                constraints: vec![],
+                location: None,
+                format: "iceberg".to_string(),
+                partition_by: vec![],
+                sort_by: vec![],
+                bucket_by: None,
+                if_not_exists: false,
+                replace: false,
+                options: vec![],
+                properties: vec![],
+            },
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(table.name, "t1");
+}
