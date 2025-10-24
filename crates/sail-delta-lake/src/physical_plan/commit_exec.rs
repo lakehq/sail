@@ -294,9 +294,10 @@ impl ExecutionPlan for DeltaCommitExec {
                     _ => "Other",
                 })
                 .collect();
-            let _ = dbg!(
-                ("final_actions_len", final_actions.len()),
-                ("final_action_kinds", &kinds)
+            log::trace!(
+                "final_actions_len: {}, final_action_kinds: {:?}",
+                final_actions.len(),
+                &kinds
             );
 
             if final_actions.is_empty() && !table_exists {

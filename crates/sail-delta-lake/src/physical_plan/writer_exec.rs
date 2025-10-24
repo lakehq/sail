@@ -401,6 +401,7 @@ impl ExecutionPlan for DeltaWriterExec {
                 configuration.insert("delta.columnMapping.mode".to_string(), mode_str.to_string());
 
                 #[allow(deprecated)]
+                #[allow(clippy::unwrap_used)]
                 let metadata = deltalake::kernel::new_metadata(
                     annotated_schema_opt.as_ref().unwrap(),
                     partition_columns.clone(),
@@ -410,12 +411,10 @@ impl ExecutionPlan for DeltaWriterExec {
 
                 initial_actions.push(Action::Protocol(protocol.clone()));
                 initial_actions.push(Action::Metadata(metadata.clone()));
-                let _ = dbg!(
-                    ("init_protocol", &protocol),
-                    (
-                        "init_metadata_has_mode",
-                        metadata.configuration().get("delta.columnMapping.mode")
-                    )
+                log::trace!(
+                    "init_protocol: {:?}, init_metadata_has_mode: {:?}",
+                    &protocol,
+                    metadata.configuration().get("delta.columnMapping.mode")
                 );
 
                 // Prefer explicit Create operation to aid downstream commit
@@ -433,6 +432,8 @@ impl ExecutionPlan for DeltaWriterExec {
                 ColumnMappingModeOption::Name | ColumnMappingModeOption::Id
             ) {
                 // Determine logical kernel schema (annotated for new tables; from snapshot for existing tables)
+                #[allow(clippy::unwrap_used)]
+                #[allow(clippy::expect_used)]
                 let logical_kernel: StructType = if table_exists {
                     table
                         .as_ref()
@@ -468,9 +469,10 @@ impl ExecutionPlan for DeltaWriterExec {
                     .iter()
                     .map(|f| f.name().clone())
                     .collect();
-                let _ = dbg!(
-                    ("effective_mode", effective_mode),
-                    ("writer_schema_fields", &writer_field_names)
+                log::trace!(
+                    "effective_mode: {:?}, writer_schema_fields: {:?}",
+                    effective_mode,
+                    &writer_field_names
                 );
                 arc_schema
             } else {
@@ -495,13 +497,12 @@ impl ExecutionPlan for DeltaWriterExec {
 
             while let Some(batch_result) = data.next().await {
                 let batch = batch_result?;
-                let rows: u64 = match u64::try_from(batch.num_rows()) {
-                    Ok(v) => v,
-                    Err(_) => 0,
-                };
+                let rows: u64 = u64::try_from(batch.num_rows()).unwrap_or_default();
                 total_rows += rows;
 
                 // Adapt input batch (logical names) to writer schema (physical names)
+                #[allow(clippy::unwrap_used)]
+                #[allow(clippy::expect_used)]
                 let phys_to_logical = if matches!(
                     effective_mode,
                     ColumnMappingModeOption::Name | ColumnMappingModeOption::Id
@@ -522,7 +523,7 @@ impl ExecutionPlan for DeltaWriterExec {
                         )
                     };
                     let map = Self::build_physical_to_logical_map(&logical_kernel);
-                    let _ = dbg!(("phys_to_logical", &map));
+                    log::trace!("phys_to_logical: {:?}", &map);
                     Some(map)
                 } else {
                     None
@@ -540,9 +541,10 @@ impl ExecutionPlan for DeltaWriterExec {
                     .iter()
                     .map(|f| f.name().clone())
                     .collect();
-                let _ = dbg!(
-                    ("input_batch_fields", &input_names),
-                    ("target_fields", &target_names)
+                log::trace!(
+                    "input_batch_fields: {:?}, target_fields: {:?}",
+                    &input_names,
+                    &target_names
                 );
 
                 let validated_batch = Self::validate_and_adapt_batch(

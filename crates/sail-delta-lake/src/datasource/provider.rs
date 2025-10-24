@@ -229,13 +229,13 @@ impl TableProvider for DeltaTableProvider {
             }
             ColumnMappingMode::None => physical_arrow,
         };
-        let _ = dbg!(("read_kmode", kmode));
+        log::trace!("read_kmode: {:?}", kmode);
         let phys_field_names: Vec<String> = physical_arrow
             .fields()
             .iter()
             .map(|f| f.name().clone())
             .collect();
-        let _ = dbg!(("read_file_schema_fields", &phys_field_names));
+        log::trace!("read_file_schema_fields: {:?}", &phys_field_names);
         let file_fields = physical_arrow
             .fields()
             .iter()

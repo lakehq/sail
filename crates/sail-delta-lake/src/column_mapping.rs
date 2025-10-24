@@ -14,7 +14,9 @@ pub fn annotate_schema_for_column_mapping(schema: &StructType) -> StructType {
         .fields()
         .map(|f| -> Result<StructField, delta_kernel::Error> { Ok(annotate_field(f, &counter)) });
     // Safe: we preserve existing names and structure
-    StructType::try_new(annotated_fields).expect("failed to build annotated schema")
+    #[allow(clippy::expect_used)]
+    let result = StructType::try_new(annotated_fields).expect("failed to build annotated schema");
+    result
 }
 
 fn annotate_field(field: &StructField, counter: &AtomicI64) -> StructField {
@@ -101,7 +103,9 @@ fn annotate_struct(struct_type: &StructType, counter: &AtomicI64) -> StructType 
     let fields = struct_type
         .fields()
         .map(|f| -> Result<StructField, delta_kernel::Error> { Ok(annotate_field(f, counter)) });
-    StructType::try_new(fields).expect("failed to build nested annotated struct")
+    #[allow(clippy::expect_used)]
+    let result = StructType::try_new(fields).expect("failed to build nested annotated struct");
+    result
 }
 
 /// Build the physical schema used for file writes according to the column mapping mode.
