@@ -25,7 +25,7 @@ use crate::spec::catalog::TableUpdate;
 use crate::spec::metadata::table_metadata::SnapshotLog;
 use crate::spec::TableMetadata;
 use crate::transaction::{SnapshotProduceOperation, Transaction, TransactionAction};
-use crate::utils::get_object_store_from_context;
+use crate::utils::{get_object_store_from_context, join_table_uri, WritePathMode};
 
 #[derive(Debug)]
 pub struct IcebergCommitExec {
@@ -238,10 +238,11 @@ impl ExecutionPlan for IcebergCommitExec {
                 .map_err(DataFusionError::Execution)?;
 
                 // Build initial snapshot
+                let write_mode = WritePathMode::Absolute;
                 let snapshot = SnapshotBuilder::new()
                     .with_snapshot_id(new_snapshot_id)
                     .with_sequence_number(1)
-                    .with_manifest_list(format!("{}{}", table_url, list_rel))
+                    .with_manifest_list(join_table_uri(table_url.as_ref(), &list_rel, &write_mode))
                     .with_summary(crate::spec::snapshots::Summary::new(
                         crate::spec::Operation::Append,
                     ))
@@ -407,10 +408,11 @@ impl ExecutionPlan for IcebergCommitExec {
                 .map_err(DataFusionError::Execution)?;
 
                 // Build initial snapshot and update metadata
+                let write_mode = WritePathMode::Absolute;
                 let snapshot = crate::spec::snapshots::SnapshotBuilder::new()
                     .with_snapshot_id(new_snapshot_id)
                     .with_sequence_number(1)
-                    .with_manifest_list(format!("{}{}", table_url, list_rel))
+                    .with_manifest_list(join_table_uri(table_url.as_ref(), &list_rel, &write_mode))
                     .with_summary(crate::spec::snapshots::Summary::new(
                         crate::spec::Operation::Append,
                     ))
@@ -506,7 +508,6 @@ impl ExecutionPlan for IcebergCommitExec {
                     ));
                 }
             };
-
 
             // Apply updates (only handle the ones we emit: AddSnapshot, SetSnapshotRef)
             let updates = commit.into_updates();

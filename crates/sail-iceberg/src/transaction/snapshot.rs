@@ -9,6 +9,7 @@ use crate::spec::{
     SnapshotBuilder, SnapshotReference, SnapshotRetention, TableRequirement, TableUpdate,
     MAIN_BRANCH,
 };
+use crate::utils::join_table_uri;
 
 pub trait SnapshotProduceOperation: Send + Sync {
     fn operation(&self) -> &'static str;
@@ -19,6 +20,7 @@ pub struct SnapshotProducer<'a> {
     pub added_data_files: Vec<DataFile>,
     pub store: Option<IcebergObjectStore>,
     pub manifest_metadata: Option<crate::spec::manifest::ManifestMetadata>,
+    pub write_path_mode: crate::utils::WritePathMode,
 }
 
 impl<'a> SnapshotProducer<'a> {
@@ -33,7 +35,13 @@ impl<'a> SnapshotProducer<'a> {
             added_data_files,
             store,
             manifest_metadata,
+            write_path_mode: crate::utils::WritePathMode::Absolute,
         }
+    }
+
+    pub fn with_write_path_mode(mut self, mode: crate::utils::WritePathMode) -> Self {
+        self.write_path_mode = mode;
+        self
     }
 
     pub fn validate_added_data_files(&self, _files: &[DataFile]) -> Result<(), String> {
@@ -94,7 +102,11 @@ impl<'a> SnapshotProducer<'a> {
             .map(|df| df.record_count as i64)
             .sum();
         let manifest_file = crate::spec::manifest_list::ManifestFile::builder()
-            .with_manifest_path(format!("{}{}", self.tx.table_uri(), manifest_rel))
+            .with_manifest_path(join_table_uri(
+                self.tx.table_uri(),
+                &manifest_rel,
+                &self.write_path_mode,
+            ))
             .with_manifest_length(manifest_len)
             .with_partition_spec_id(metadata.partition_spec.spec_id())
             .with_content(ManifestContentType::Data)
@@ -116,9 +128,14 @@ impl<'a> SnapshotProducer<'a> {
             use object_store::path::Path as ObjectPath;
             use url::Url;
 
-            // Parse the manifest list path - it might be a full URL or a relative path
+            // Parse the manifest list path - it might be a full URL, absolute file path, or a relative path
             let manifest_list_path = if let Ok(url) = Url::parse(parent_manifest_list_path_str) {
                 ObjectPath::from(url.path().strip_prefix('/').unwrap_or(url.path()))
+            } else if parent_manifest_list_path_str.starts_with(object_store::path::DELIMITER) {
+                let no_leading = parent_manifest_list_path_str
+                    .strip_prefix('/')
+                    .unwrap_or(parent_manifest_list_path_str);
+                ObjectPath::from(no_leading)
             } else {
                 store.root.child(parent_manifest_list_path_str)
             };
@@ -166,7 +183,8 @@ impl<'a> SnapshotProducer<'a> {
         let list_rel = format!("metadata/snap-{}.avro", new_snapshot_id);
         let _list_path = store.put_rel(&list_rel, Bytes::from(list_bytes)).await?;
 
-        let manifest_list_uri = format!("{}{}", self.tx.table_uri(), list_rel);
+        let manifest_list_uri =
+            join_table_uri(self.tx.table_uri(), &list_rel, &self.write_path_mode);
 
         let new_snapshot = SnapshotBuilder::new()
             .with_snapshot_id(new_snapshot_id)

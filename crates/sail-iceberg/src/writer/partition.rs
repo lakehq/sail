@@ -1,9 +1,7 @@
 use datafusion::arrow::array::{
     Array, ArrayRef, BooleanArray, Float32Array, Float64Array, Int32Array, Int64Array, StringArray,
-    UInt32Array,
 };
-use datafusion::arrow::compute;
-use datafusion::arrow::datatypes::{DataType as ArrowDataType, SchemaRef as ArrowSchemaRef};
+use datafusion::arrow::datatypes::DataType as ArrowDataType;
 use datafusion::arrow::record_batch::RecordBatch;
 
 use crate::spec::partition::UnboundPartitionSpec as PartitionSpec;
