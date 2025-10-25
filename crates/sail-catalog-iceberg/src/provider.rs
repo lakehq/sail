@@ -10,7 +10,7 @@ use sail_catalog::provider::{
 };
 use sail_common::runtime::RuntimeHandle;
 use sail_iceberg::{
-    arrow_type_to_iceberg, iceberg_type_to_arrow, Literal, NestedField, PartitionSpec, StructType,
+    arrow_type_to_iceberg, iceberg_type_to_arrow, Literal, NestedField, StructType,
     DEFAULT_SCHEMA_ID,
 };
 use tokio::sync::OnceCell;
@@ -617,7 +617,6 @@ impl CatalogProvider for IcebergRestCatalogProvider {
             .collect())
     }
 
-    // CHECK HERE
     async fn create_table(
         &self,
         database: &Namespace,
@@ -663,7 +662,7 @@ impl CatalogProvider for IcebergRestCatalogProvider {
                 default: _,
                 generated_always_as: _, // TODO: Support generated_always_as
             } = col;
-            let field_id = idx as i32 + 1; // CHECK HERE THIS IS WRONG
+            let field_id = idx as i32 + 1; // FIXME: Is this wrong?
             let field_type = arrow_type_to_iceberg(data_type).map_err(|e| {
                 CatalogError::External(format!(
                     "Failed to convert Arrow type to Iceberg type for column '{name}': {e}"
@@ -723,58 +722,14 @@ impl CatalogProvider for IcebergRestCatalogProvider {
             identifier_field_ids: Some(schema.identifier_field_ids().collect()),
         };
 
-        let partition_spec = if !partition_by.is_empty() {
-            let mut partition_spec_builder = PartitionSpec::builder();
-            for partition_by_col in &partition_by {
-                if let Some(&source_id) = name_to_id.get(partition_by_col) {
-                    partition_spec_builder = partition_spec_builder.add_field(
-                        source_id,
-                        partition_by_col,
-                        sail_iceberg::Transform::Identity, // CHECK HERE: THIS IS WRONG. `partition_by_col` needs to be parsed.
-                    );
-                }
-            }
-            Some(partition_spec_builder.build())
-        } else {
-            None
-        };
+        let partition_spec = build_partition_spec(&partition_by, &name_to_id);
+        let write_order = build_sort_order(&sort_by, &name_to_id)?;
 
-        // CHECK HERE
-        let write_order = if !sort_by.is_empty() {
-            let sort_fields: Vec<crate::models::SortField> = sort_by
-                .iter()
-                .filter_map(|sort| {
-                    name_to_id
-                        .get(&sort.column)
-                        .map(|&source_id| crate::models::SortField {
-                            source_id,
-                            transform: "identity".to_string(),
-                            direction: if sort.ascending {
-                                crate::models::SortDirection::Asc
-                            } else {
-                                crate::models::SortDirection::Desc
-                            },
-                            null_order: crate::models::NullOrder::NullsFirst,
-                        })
-                })
-                .collect();
-            if sort_fields.is_empty() {
-                None
-            } else {
-                Some(Box::new(crate::models::SortOrder {
-                    order_id: 1,
-                    fields: sort_fields,
-                }))
-            }
-        } else {
-            None
-        };
-
-        // CHECK HERE
         let mut props = HashMap::new();
         for (k, v) in properties {
             props.insert(k, v);
         }
+        // TODO: Is this correct for options?
         for (k, v) in options {
             props.insert(k, v);
         }
@@ -782,7 +737,6 @@ impl CatalogProvider for IcebergRestCatalogProvider {
             props.insert("comment".to_string(), c);
         }
 
-        // CHECK HERE
         let request = crate::models::CreateTableRequest {
             name: table.to_string(),
             location,
@@ -1096,6 +1050,97 @@ impl CatalogProvider for IcebergRestCatalogProvider {
     }
 }
 
+fn build_partition_spec(
+    partition_by: &[String],
+    name_to_id: &HashMap<String, i32>,
+) -> Option<Box<crate::models::PartitionSpec>> {
+    if partition_by.is_empty() {
+        return None;
+    }
+    let mut partition_spec_builder = sail_iceberg::PartitionSpec::builder();
+    for partition_by_col in partition_by {
+        if let Some(&source_id) = name_to_id.get(partition_by_col) {
+            partition_spec_builder = partition_spec_builder.add_field(
+                source_id,
+                partition_by_col,
+                sail_iceberg::Transform::Identity, // FIXME: This is wrong, col needs to be parsed.
+            );
+        }
+    }
+    let spec = partition_spec_builder.build();
+    Some(Box::new(crate::models::PartitionSpec {
+        spec_id: Some(spec.spec_id()),
+        fields: spec
+            .fields()
+            .iter()
+            .map(|f| crate::models::PartitionField {
+                field_id: Some(f.field_id),
+                source_id: f.source_id,
+                name: f.name.to_string(),
+                transform: f.transform.to_string(),
+            })
+            .collect(),
+    }))
+}
+
+fn build_sort_order(
+    sort_by: &[CatalogTableSort],
+    name_to_id: &HashMap<String, i32>,
+) -> CatalogResult<Option<Box<crate::models::SortOrder>>> {
+    if sort_by.is_empty() {
+        return Ok(None);
+    }
+
+    let mut sort_fields = Vec::new();
+    for sort in sort_by {
+        if let Some(&source_id) = name_to_id.get(&sort.column) {
+            sort_fields.push(sail_iceberg::spec::sort::SortField {
+                source_id,
+                transform: sail_iceberg::Transform::Identity, // FIXME: This is wrong, col needs to be parsed.
+                direction: if sort.ascending {
+                    sail_iceberg::spec::sort::SortDirection::Ascending
+                } else {
+                    sail_iceberg::spec::sort::SortDirection::Descending
+                },
+                null_order: sail_iceberg::spec::sort::NullOrder::Last, // TODO: Should this be configurable?
+            });
+        }
+    }
+
+    if sort_fields.is_empty() {
+        return Ok(None);
+    }
+
+    let order = sail_iceberg::spec::sort::SortOrder {
+        order_id: 1,
+        fields: sort_fields,
+    };
+
+    Ok(Some(Box::new(crate::models::SortOrder {
+        order_id: i32::try_from(order.order_id).map_err(|e| {
+            CatalogError::External(format!("Failed to convert sort order ID to i32: {e}"))
+        })?,
+        fields: order
+            .fields
+            .iter()
+            .map(|f| crate::models::SortField {
+                source_id: f.source_id,
+                transform: f.transform.to_string(),
+                direction: if f.direction == sail_iceberg::spec::sort::SortDirection::Ascending {
+                    crate::models::SortDirection::Asc
+                } else {
+                    crate::models::SortDirection::Desc
+                },
+                null_order: if f.null_order == sail_iceberg::spec::sort::NullOrder::First {
+                    crate::models::NullOrder::NullsFirst
+                } else {
+                    crate::models::NullOrder::NullsLast
+                },
+            })
+            .collect(),
+    })))
+}
+
 #[allow(clippy::unwrap_used, clippy::panic)]
 #[cfg(test)]
 mod tests {
@@ -1145,14 +1190,7 @@ mod tests {
         }
 
         fn path(&self, suffix: &str) -> String {
-            // CHECK HERE
             format!("/v1{suffix}")
-            //
-            // if self.name.is_empty() {
-            //     format!("/v1{suffix}")
-            // } else {
-            //     format!("/v1/{}{suffix}", self.name)
-            // }
         }
 
         async fn mock_get_json(&self, path_str: &str, response: serde_json::Value) {
