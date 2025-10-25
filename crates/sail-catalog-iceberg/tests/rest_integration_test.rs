@@ -4,8 +4,9 @@ use std::collections::HashMap;
 
 use arrow::datatypes::DataType;
 use sail_catalog::provider::{
-    CatalogProvider, CreateDatabaseOptions, CreateTableColumnOptions, CreateTableOptions,
-    DropDatabaseOptions, Namespace, TableKind,
+    CatalogProvider, CatalogTableConstraint, CatalogTableSort, CreateDatabaseOptions,
+    CreateTableColumnOptions, CreateTableOptions, DropDatabaseOptions, DropTableOptions, Namespace,
+    TableKind,
 };
 use sail_catalog_iceberg::{IcebergRestCatalogProvider, REST_CATALOG_PROP_URI};
 use sail_common::runtime::RuntimeHandle;
@@ -91,11 +92,155 @@ async fn setup_catalog() -> (
 }
 
 #[tokio::test]
+async fn test_create_namespace() {
+    let (rest_catalog, _minio, _mc, _rest) = setup_catalog().await;
+
+    let namespace = Namespace::try_from(vec!["test_create_namespace".to_string()]).unwrap();
+
+    let created_db = rest_catalog
+        .create_database(
+            &namespace,
+            CreateDatabaseOptions {
+                if_not_exists: false,
+                comment: Some("test comment".to_string()),
+                location: Some("s3://bucket/path".to_string()),
+                properties: vec![("key1".to_string(), "value1".to_string())],
+            },
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(created_db.database, Vec::<String>::from(namespace.clone()));
+    assert_eq!(created_db.comment, Some("test comment".to_string()));
+    assert_eq!(created_db.location, Some("s3://bucket/path".to_string()));
+    assert!(created_db
+        .properties
+        .iter()
+        .any(|(k, v)| k == "key1" && v == "value1"));
+
+    let result = rest_catalog
+        .create_database(
+            &namespace,
+            CreateDatabaseOptions {
+                if_not_exists: false,
+                comment: None,
+                location: None,
+                properties: vec![],
+            },
+        )
+        .await;
+    assert!(result.is_err());
+
+    let namespace2 = Namespace::try_from(vec!["test_create_namespace_2".to_string()]).unwrap();
+    let created_db2 = rest_catalog
+        .create_database(
+            &namespace2,
+            CreateDatabaseOptions {
+                if_not_exists: true,
+                comment: None,
+                location: None,
+                properties: vec![],
+            },
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(
+        created_db2.database,
+        Vec::<String>::from(namespace2.clone())
+    );
+    assert_eq!(created_db2.comment, None);
+    assert_eq!(
+        created_db2.location,
+        Some("s3://icebergdata/demo/test_create_namespace_2".to_string())
+    );
+
+    let created_again = rest_catalog
+        .create_database(
+            &namespace2,
+            CreateDatabaseOptions {
+                if_not_exists: true,
+                comment: Some("should be ignored".to_string()),
+                location: Some("should be ignored".to_string()),
+                properties: vec![("ignored".to_string(), "ignored".to_string())],
+            },
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(created_again.database, Vec::<String>::from(namespace2));
+    assert_eq!(created_again.comment, None);
+    assert_eq!(
+        created_again.location,
+        Some("s3://icebergdata/demo/test_create_namespace_2".to_string())
+    );
+}
+
+#[tokio::test]
+async fn test_drop_namespace() {
+    let (rest_catalog, _minio, _mc, _rest) = setup_catalog().await;
+
+    let namespace = Namespace::try_from(vec!["test_drop_namespace".to_string()]).unwrap();
+
+    rest_catalog
+        .create_database(
+            &namespace,
+            CreateDatabaseOptions {
+                if_not_exists: false,
+                comment: None,
+                location: None,
+                properties: vec![],
+            },
+        )
+        .await
+        .unwrap();
+
+    let result = rest_catalog.get_database(&namespace).await;
+    assert!(result.is_ok());
+
+    rest_catalog
+        .drop_database(
+            &namespace,
+            DropDatabaseOptions {
+                if_exists: false,
+                cascade: false,
+            },
+        )
+        .await
+        .unwrap();
+
+    let result = rest_catalog.get_database(&namespace).await;
+    assert!(result.is_err());
+
+    let result = rest_catalog
+        .drop_database(
+            &namespace,
+            DropDatabaseOptions {
+                if_exists: false,
+                cascade: false,
+            },
+        )
+        .await;
+    assert!(result.is_err());
+
+    let result = rest_catalog
+        .drop_database(
+            &namespace,
+            DropDatabaseOptions {
+                if_exists: true,
+                cascade: false,
+            },
+        )
+        .await;
+    assert!(result.is_ok());
+}
+
+#[tokio::test]
 async fn test_get_non_exist_namespace() {
-    let (catalog, _minio, _mc, _rest) = setup_catalog().await;
+    let (rest_catalog, _minio, _mc, _rest) = setup_catalog().await;
 
     let namespace = Namespace::try_from(vec!["test_get_non_exist_namespace".to_string()]).unwrap();
-    let result = catalog.get_database(&namespace).await;
+    let result = rest_catalog.get_database(&namespace).await;
 
     assert!(result.is_err());
     assert!(matches!(
@@ -106,7 +251,7 @@ async fn test_get_non_exist_namespace() {
 
 #[tokio::test]
 async fn test_get_namespace() {
-    let (catalog, _minio, _mc, _rest) = setup_catalog().await;
+    let (rest_catalog, _minio, _mc, _rest) = setup_catalog().await;
 
     let namespace = Namespace::try_from(vec!["apple".to_string(), "ios".to_string()]).unwrap();
     let properties = vec![
@@ -114,9 +259,9 @@ async fn test_get_namespace() {
         ("community".to_string(), "Sail".to_string()),
     ];
 
-    assert!(catalog.get_database(&namespace).await.is_err());
+    assert!(rest_catalog.get_database(&namespace).await.is_err());
 
-    let created_db = catalog
+    let created_db = rest_catalog
         .create_database(
             &namespace,
             CreateDatabaseOptions {
@@ -137,7 +282,7 @@ async fn test_get_namespace() {
             .any(|(k, v)| k == key && v == value));
     }
 
-    let get_db = catalog.get_database(&namespace).await.unwrap();
+    let get_db = rest_catalog.get_database(&namespace).await.unwrap();
     assert_eq!(get_db.database, vec![namespace.to_string()]);
     for (key, value) in &properties {
         assert!(get_db
@@ -148,8 +293,8 @@ async fn test_get_namespace() {
 }
 
 #[tokio::test]
-async fn test_list_namespace() {
-    let (catalog, _minio, _mc, _rest) = setup_catalog().await;
+async fn test_list_namespaces() {
+    let (rest_catalog, _minio, _mc, _rest) = setup_catalog().await;
 
     let ns1 =
         Namespace::try_from(vec!["test_list_namespace".to_string(), "ios".to_string()]).unwrap();
@@ -167,9 +312,9 @@ async fn test_list_namespace() {
 
     let parent = Namespace::try_from(vec!["test_list_namespace".to_string()]).unwrap();
 
-    assert!(catalog.list_databases(Some(&parent)).await.is_err());
+    assert!(rest_catalog.list_databases(Some(&parent)).await.is_err());
 
-    catalog
+    rest_catalog
         .create_database(
             &ns1,
             CreateDatabaseOptions {
@@ -182,7 +327,7 @@ async fn test_list_namespace() {
         .await
         .unwrap();
 
-    catalog
+    rest_catalog
         .create_database(
             &ns2,
             CreateDatabaseOptions {
@@ -195,7 +340,7 @@ async fn test_list_namespace() {
         .await
         .unwrap();
 
-    let dbs = catalog.list_databases(Some(&parent)).await.unwrap();
+    let dbs = rest_catalog.list_databases(Some(&parent)).await.unwrap();
 
     assert_eq!(dbs.len(), 2);
     assert!(dbs
@@ -207,8 +352,8 @@ async fn test_list_namespace() {
 }
 
 #[tokio::test]
-async fn test_list_empty_namespace() {
-    let (catalog, _minio, _mc, _rest) = setup_catalog().await;
+async fn test_list_empty_namespaces() {
+    let (rest_catalog, _minio, _mc, _rest) = setup_catalog().await;
 
     let ns_apple = Namespace::try_from(vec![
         "test_list_empty_namespace".to_string(),
@@ -220,9 +365,9 @@ async fn test_list_empty_namespace() {
         ("community".to_string(), "Sail".to_string()),
     ];
 
-    assert!(catalog.list_databases(Some(&ns_apple)).await.is_err());
+    assert!(rest_catalog.list_databases(Some(&ns_apple)).await.is_err());
 
-    catalog
+    rest_catalog
         .create_database(
             &ns_apple,
             CreateDatabaseOptions {
@@ -235,13 +380,13 @@ async fn test_list_empty_namespace() {
         .await
         .unwrap();
 
-    let dbs = catalog.list_databases(Some(&ns_apple)).await.unwrap();
+    let dbs = rest_catalog.list_databases(Some(&ns_apple)).await.unwrap();
     assert!(dbs.is_empty());
 }
 
 #[tokio::test]
-async fn test_list_root_namespace() {
-    let (catalog, _minio, _mc, _rest) = setup_catalog().await;
+async fn test_list_root_namespaces() {
+    let (rest_catalog, _minio, _mc, _rest) = setup_catalog().await;
 
     let ns1 = Namespace::try_from(vec![
         "test_list_root_namespace".to_string(),
@@ -267,9 +412,9 @@ async fn test_list_root_namespace() {
 
     let parent = Namespace::try_from(vec!["test_list_root_namespace".to_string()]).unwrap();
 
-    assert!(catalog.list_databases(Some(&parent)).await.is_err());
+    assert!(rest_catalog.list_databases(Some(&parent)).await.is_err());
 
-    catalog
+    rest_catalog
         .create_database(
             &ns1,
             CreateDatabaseOptions {
@@ -282,7 +427,7 @@ async fn test_list_root_namespace() {
         .await
         .unwrap();
 
-    catalog
+    rest_catalog
         .create_database(
             &ns2,
             CreateDatabaseOptions {
@@ -295,7 +440,7 @@ async fn test_list_root_namespace() {
         .await
         .unwrap();
 
-    let dbs = catalog.list_databases(None).await.unwrap();
+    let dbs = rest_catalog.list_databases(None).await.unwrap();
     assert_eq!(dbs.len(), 1);
     assert_eq!(
         dbs[0].database,
@@ -304,8 +449,8 @@ async fn test_list_root_namespace() {
 }
 
 #[tokio::test]
-async fn test_list_empty_multi_level_namespace() {
-    let (catalog, _minio, _mc, _rest) = setup_catalog().await;
+async fn test_list_empty_multi_level_namespaces() {
+    let (rest_catalog, _minio, _mc, _rest) = setup_catalog().await;
 
     let ns_apple = Namespace::try_from(vec![
         "test_list_empty_multi_level_namespace".to_string(),
@@ -318,9 +463,9 @@ async fn test_list_empty_multi_level_namespace() {
         ("community".to_string(), "Sail".to_string()),
     ];
 
-    assert!(catalog.list_databases(Some(&ns_apple)).await.is_err());
+    assert!(rest_catalog.list_databases(Some(&ns_apple)).await.is_err());
 
-    catalog
+    rest_catalog
         .create_database(
             &ns_apple,
             CreateDatabaseOptions {
@@ -333,152 +478,8 @@ async fn test_list_empty_multi_level_namespace() {
         .await
         .unwrap();
 
-    let dbs = catalog.list_databases(Some(&ns_apple)).await.unwrap();
+    let dbs = rest_catalog.list_databases(Some(&ns_apple)).await.unwrap();
     assert!(dbs.is_empty());
-}
-
-#[tokio::test]
-async fn test_create_namespace() {
-    let (catalog, _minio, _mc, _rest) = setup_catalog().await;
-
-    let namespace = Namespace::try_from(vec!["test_create_namespace".to_string()]).unwrap();
-
-    let created_db = catalog
-        .create_database(
-            &namespace,
-            CreateDatabaseOptions {
-                if_not_exists: false,
-                comment: Some("test comment".to_string()),
-                location: Some("s3://bucket/path".to_string()),
-                properties: vec![("key1".to_string(), "value1".to_string())],
-            },
-        )
-        .await
-        .unwrap();
-
-    assert_eq!(created_db.database, Vec::<String>::from(namespace.clone()));
-    assert_eq!(created_db.comment, Some("test comment".to_string()));
-    assert_eq!(created_db.location, Some("s3://bucket/path".to_string()));
-    assert!(created_db
-        .properties
-        .iter()
-        .any(|(k, v)| k == "key1" && v == "value1"));
-
-    let result = catalog
-        .create_database(
-            &namespace,
-            CreateDatabaseOptions {
-                if_not_exists: false,
-                comment: None,
-                location: None,
-                properties: vec![],
-            },
-        )
-        .await;
-    assert!(result.is_err());
-
-    let namespace2 = Namespace::try_from(vec!["test_create_namespace_2".to_string()]).unwrap();
-    let created_db2 = catalog
-        .create_database(
-            &namespace2,
-            CreateDatabaseOptions {
-                if_not_exists: true,
-                comment: None,
-                location: None,
-                properties: vec![],
-            },
-        )
-        .await
-        .unwrap();
-
-    assert_eq!(
-        created_db2.database,
-        Vec::<String>::from(namespace2.clone())
-    );
-    assert_eq!(created_db2.comment, None);
-    assert_eq!(
-        created_db2.location,
-        Some("s3://icebergdata/demo/test_create_namespace_2".to_string())
-    );
-
-    let created_again = catalog
-        .create_database(
-            &namespace2,
-            CreateDatabaseOptions {
-                if_not_exists: true,
-                comment: Some("should be ignored".to_string()),
-                location: Some("should be ignored".to_string()),
-                properties: vec![("ignored".to_string(), "ignored".to_string())],
-            },
-        )
-        .await
-        .unwrap();
-
-    assert_eq!(created_again.database, Vec::<String>::from(namespace2));
-    assert_eq!(created_again.comment, None);
-    assert_eq!(
-        created_again.location,
-        Some("s3://icebergdata/demo/test_create_namespace_2".to_string())
-    );
-}
-
-#[tokio::test]
-async fn test_drop_namespace() {
-    let (catalog, _minio, _mc, _rest) = setup_catalog().await;
-
-    let namespace = Namespace::try_from(vec!["test_drop_namespace".to_string()]).unwrap();
-
-    catalog
-        .create_database(
-            &namespace,
-            CreateDatabaseOptions {
-                if_not_exists: false,
-                comment: None,
-                location: None,
-                properties: vec![],
-            },
-        )
-        .await
-        .unwrap();
-
-    let result = catalog.get_database(&namespace).await;
-    assert!(result.is_ok());
-
-    catalog
-        .drop_database(
-            &namespace,
-            DropDatabaseOptions {
-                if_exists: false,
-                cascade: false,
-            },
-        )
-        .await
-        .unwrap();
-
-    let result = catalog.get_database(&namespace).await;
-    assert!(result.is_err());
-
-    let result = catalog
-        .drop_database(
-            &namespace,
-            DropDatabaseOptions {
-                if_exists: false,
-                cascade: false,
-            },
-        )
-        .await;
-    assert!(result.is_err());
-
-    let result = catalog
-        .drop_database(
-            &namespace,
-            DropDatabaseOptions {
-                if_exists: true,
-                cascade: false,
-            },
-        )
-        .await;
-    assert!(result.is_ok());
 }
 
 #[tokio::test]
@@ -681,25 +682,552 @@ async fn test_create_table() {
         .await;
     assert!(result.is_ok());
 
-    //     let table = rest_catalog
-    //         .create_table(
-    //             &ns,
-    //             "t1",
-    //             CreateTableOptions {
-    //                 columns: column_options.clone(),
-    //                 comment: Some("peow".to_string()),
-    //                 constraints: vec![], // CHECK HERE
-    //                 location: None,      // CHECK HERE
-    //                 format: "iceberg".to_string(),
-    //                 partition_by: vec![], // CHECK HERE
-    //                 sort_by: vec![],      // CHECK HERE
-    //                 bucket_by: None,
-    //                 if_not_exists: false,
-    //                 replace: false,     // CHECK HERE
-    //                 options: vec![],    // CHECK HERE
-    //                 properties: vec![], // CHECK HERE
-    //             },
-    //         )
-    //         .await
-    //         .unwrap();
+    let table = rest_catalog
+        .create_table(
+            &ns,
+            "t2",
+            CreateTableOptions {
+                columns: column_options.clone(),
+                comment: Some("test table".to_string()),
+                constraints: vec![CatalogTableConstraint::PrimaryKey {
+                    name: Some("pk_bar".to_string()),
+                    columns: vec!["bar".to_string()],
+                }],
+                location: Some("s3://icebergdata/custom/path/meow".to_string()),
+                format: "iceberg".to_string(),
+                partition_by: vec!["baz".to_string()],
+                sort_by: vec![
+                    CatalogTableSort {
+                        column: "bar".to_string(),
+                        ascending: false,
+                    },
+                    CatalogTableSort {
+                        column: "foo".to_string(),
+                        ascending: true,
+                    },
+                ],
+                bucket_by: None,
+                if_not_exists: false,
+                replace: false,
+                options: vec![("key1".to_string(), "value1".to_string())],
+                properties: vec![
+                    ("owner".to_string(), "mr. meow".to_string()),
+                    ("team".to_string(), "data-eng".to_string()),
+                ],
+            },
+        )
+        .await
+        .unwrap();
+
+    let TableKind::Table {
+        catalog,
+        database,
+        columns,
+        comment,
+        constraints,
+        location,
+        format,
+        partition_by,
+        sort_by,
+        bucket_by,
+        options,
+        properties,
+    } = table.kind
+    else {
+        panic!("Expected TableKind::Table");
+    };
+
+    assert_eq!(table.name, "t2".to_string());
+    assert_eq!(catalog, "test".to_string());
+    assert_eq!(database, Vec::<String>::from(ns.clone()));
+    assert_eq!(comment, Some("test table".to_string()));
+    assert_eq!(constraints.len(), 1);
+    assert!(matches!(
+        &constraints[0],
+        CatalogTableConstraint::PrimaryKey { columns, .. } if columns == &vec!["bar".to_string()]
+    ));
+    assert_eq!(
+        location,
+        Some("s3://icebergdata/custom/path/meow".to_string())
+    );
+    assert_eq!(format, "iceberg".to_string());
+    assert_eq!(partition_by, vec!["baz".to_string()]);
+    assert_eq!(sort_by.len(), 2);
+    assert!(sort_by.contains(&CatalogTableSort {
+        column: "bar".to_string(),
+        ascending: false,
+    }));
+    assert!(sort_by.contains(&CatalogTableSort {
+        column: "foo".to_string(),
+        ascending: true,
+    }));
+    assert_eq!(bucket_by, None);
+    assert_eq!(options, Vec::<(String, String)>::new());
+    assert_eq!(properties.len(), 5);
+    assert!(properties.contains(&("owner".to_string(), "mr. meow".to_string())));
+    assert!(properties.contains(&("team".to_string(), "data-eng".to_string())));
+    assert!(properties.contains(&("key1".to_string(), "value1".to_string())));
+    assert!(properties.contains(&("comment".to_string(), "test table".to_string())));
+    assert!(properties.contains(&(
+        "write.parquet.compression-codec".to_string(),
+        "zstd".to_string()
+    )));
+    assert_eq!(columns.len(), 3);
+    eprintln!("CHECK HERE: {columns:?}");
+    assert!(
+        columns.contains(&sail_catalog::provider::TableColumnStatus {
+            name: "foo".to_string(),
+            data_type: DataType::Utf8,
+            nullable: true,
+            comment: None,
+            default: None,
+            generated_always_as: None,
+            is_partition: false,
+            is_bucket: false,
+            is_cluster: false,
+        })
+    );
+    assert!(
+        columns.contains(&sail_catalog::provider::TableColumnStatus {
+            name: "bar".to_string(),
+            data_type: DataType::Int32,
+            nullable: false,
+            comment: Some("meow".to_string()),
+            default: None,
+            generated_always_as: None,
+            is_partition: false,
+            is_bucket: false,
+            is_cluster: false,
+        })
+    );
+    assert!(
+        columns.contains(&sail_catalog::provider::TableColumnStatus {
+            name: "baz".to_string(),
+            data_type: DataType::Boolean,
+            nullable: true,
+            comment: None,
+            default: None,
+            generated_always_as: None,
+            is_partition: true,
+            is_bucket: false,
+            is_cluster: false,
+        })
+    );
+}
+
+#[tokio::test]
+async fn test_drop_table() {
+    let (rest_catalog, _minio, _mc, _rest) = setup_catalog().await;
+
+    let namespace = Namespace::try_from(vec!["test_drop_table".to_string()]).unwrap();
+
+    rest_catalog
+        .create_database(
+            &namespace,
+            CreateDatabaseOptions {
+                if_not_exists: false,
+                comment: None,
+                location: None,
+                properties: vec![],
+            },
+        )
+        .await
+        .unwrap();
+
+    let column_options = vec![CreateTableColumnOptions {
+        name: "id".to_string(),
+        data_type: DataType::Int32,
+        nullable: false,
+        comment: None,
+        default: None,
+        generated_always_as: None,
+    }];
+
+    rest_catalog
+        .create_table(
+            &namespace,
+            "t1",
+            CreateTableOptions {
+                columns: column_options.clone(),
+                comment: None,
+                constraints: vec![],
+                location: None,
+                format: "iceberg".to_string(),
+                partition_by: vec![],
+                sort_by: vec![],
+                bucket_by: None,
+                if_not_exists: false,
+                replace: false,
+                options: vec![],
+                properties: vec![],
+            },
+        )
+        .await
+        .unwrap();
+
+    let result = rest_catalog.get_table(&namespace, "t1").await;
+    assert!(result.is_ok());
+
+    rest_catalog
+        .drop_table(
+            &namespace,
+            "t1",
+            DropTableOptions {
+                if_exists: false,
+                purge: false,
+            },
+        )
+        .await
+        .unwrap();
+
+    let result = rest_catalog.get_table(&namespace, "t1").await;
+    assert!(result.is_err());
+
+    let result = rest_catalog
+        .drop_table(
+            &namespace,
+            "t1",
+            DropTableOptions {
+                if_exists: false,
+                purge: false,
+            },
+        )
+        .await;
+    assert!(result.is_err());
+
+    let result = rest_catalog
+        .drop_table(
+            &namespace,
+            "t1",
+            DropTableOptions {
+                if_exists: true,
+                purge: false,
+            },
+        )
+        .await;
+    assert!(result.is_ok());
+
+    rest_catalog
+        .create_table(
+            &namespace,
+            "t2",
+            CreateTableOptions {
+                columns: column_options.clone(),
+                comment: None,
+                constraints: vec![],
+                location: None,
+                format: "iceberg".to_string(),
+                partition_by: vec![],
+                sort_by: vec![],
+                bucket_by: None,
+                if_not_exists: false,
+                replace: false,
+                options: vec![],
+                properties: vec![],
+            },
+        )
+        .await
+        .unwrap();
+
+    let result = rest_catalog.get_table(&namespace, "t2").await;
+    assert!(result.is_ok());
+
+    rest_catalog
+        .drop_table(
+            &namespace,
+            "t2",
+            DropTableOptions {
+                if_exists: false,
+                purge: true,
+            },
+        )
+        .await
+        .unwrap();
+
+    let result = rest_catalog.get_table(&namespace, "t2").await;
+    assert!(result.is_err());
+}
+
+#[tokio::test]
+async fn test_get_table() {
+    let (rest_catalog, _minio, _mc, _rest) = setup_catalog().await;
+
+    let ns = Namespace::try_from(vec![
+        "test_create_table".to_string(),
+        "apple".to_string(),
+        "ios".to_string(),
+    ])
+    .unwrap();
+    let properties = vec![
+        ("owner".to_string(), "Lake".to_string()),
+        ("community".to_string(), "Sail".to_string()),
+    ];
+
+    rest_catalog
+        .create_database(
+            &ns,
+            CreateDatabaseOptions {
+                if_not_exists: false,
+                comment: None,
+                location: None,
+                properties,
+            },
+        )
+        .await
+        .unwrap();
+
+    let column_options = vec![
+        CreateTableColumnOptions {
+            name: "foo".to_string(),
+            data_type: DataType::Utf8,
+            nullable: true,
+            comment: None,
+            default: None,
+            generated_always_as: None,
+        },
+        CreateTableColumnOptions {
+            name: "bar".to_string(),
+            data_type: DataType::Int32,
+            nullable: false,
+            comment: Some("meow".to_string()),
+            default: None,
+            generated_always_as: None,
+        },
+        CreateTableColumnOptions {
+            name: "baz".to_string(),
+            data_type: DataType::Boolean,
+            nullable: true,
+            comment: None,
+            default: None,
+            generated_always_as: None,
+        },
+    ];
+
+    rest_catalog
+        .create_table(
+            &ns,
+            "t2",
+            CreateTableOptions {
+                columns: column_options.clone(),
+                comment: Some("test table".to_string()),
+                constraints: vec![CatalogTableConstraint::PrimaryKey {
+                    name: Some("pk_bar".to_string()),
+                    columns: vec!["bar".to_string()],
+                }],
+                location: Some("s3://icebergdata/custom/path/meow".to_string()),
+                format: "iceberg".to_string(),
+                partition_by: vec!["baz".to_string()],
+                sort_by: vec![
+                    CatalogTableSort {
+                        column: "bar".to_string(),
+                        ascending: false,
+                    },
+                    CatalogTableSort {
+                        column: "foo".to_string(),
+                        ascending: true,
+                    },
+                ],
+                bucket_by: None,
+                if_not_exists: false,
+                replace: false,
+                options: vec![("key1".to_string(), "value1".to_string())],
+                properties: vec![
+                    ("owner".to_string(), "mr. meow".to_string()),
+                    ("team".to_string(), "data-eng".to_string()),
+                ],
+            },
+        )
+        .await
+        .unwrap();
+
+    let table = rest_catalog.get_table(&ns, "t2").await.unwrap();
+    let TableKind::Table {
+        catalog,
+        database,
+        columns,
+        comment,
+        constraints,
+        location,
+        format,
+        partition_by,
+        sort_by,
+        bucket_by,
+        options,
+        properties,
+    } = table.kind
+    else {
+        panic!("Expected TableKind::Table");
+    };
+
+    assert_eq!(table.name, "t2".to_string());
+    assert_eq!(catalog, "test".to_string());
+    assert_eq!(database, Vec::<String>::from(ns.clone()));
+    assert_eq!(comment, Some("test table".to_string()));
+    assert_eq!(constraints.len(), 1);
+    assert!(matches!(
+        &constraints[0],
+        CatalogTableConstraint::PrimaryKey { columns, .. } if columns == &vec!["bar".to_string()]
+    ));
+    assert_eq!(
+        location,
+        Some("s3://icebergdata/custom/path/meow".to_string())
+    );
+    assert_eq!(format, "iceberg".to_string());
+    assert_eq!(partition_by, vec!["baz".to_string()]);
+    assert_eq!(sort_by.len(), 2);
+    assert!(sort_by.contains(&CatalogTableSort {
+        column: "bar".to_string(),
+        ascending: false,
+    }));
+    assert!(sort_by.contains(&CatalogTableSort {
+        column: "foo".to_string(),
+        ascending: true,
+    }));
+    assert_eq!(bucket_by, None);
+    assert_eq!(options, Vec::<(String, String)>::new());
+    assert_eq!(properties.len(), 5);
+    assert!(properties.contains(&("owner".to_string(), "mr. meow".to_string())));
+    assert!(properties.contains(&("team".to_string(), "data-eng".to_string())));
+    assert!(properties.contains(&("key1".to_string(), "value1".to_string())));
+    assert!(properties.contains(&("comment".to_string(), "test table".to_string())));
+    assert!(properties.contains(&(
+        "write.parquet.compression-codec".to_string(),
+        "zstd".to_string()
+    )));
+    assert_eq!(columns.len(), 3);
+    eprintln!("CHECK HERE: {columns:?}");
+    assert!(
+        columns.contains(&sail_catalog::provider::TableColumnStatus {
+            name: "foo".to_string(),
+            data_type: DataType::Utf8,
+            nullable: true,
+            comment: None,
+            default: None,
+            generated_always_as: None,
+            is_partition: false,
+            is_bucket: false,
+            is_cluster: false,
+        })
+    );
+    assert!(
+        columns.contains(&sail_catalog::provider::TableColumnStatus {
+            name: "bar".to_string(),
+            data_type: DataType::Int32,
+            nullable: false,
+            comment: Some("meow".to_string()),
+            default: None,
+            generated_always_as: None,
+            is_partition: false,
+            is_bucket: false,
+            is_cluster: false,
+        })
+    );
+    assert!(
+        columns.contains(&sail_catalog::provider::TableColumnStatus {
+            name: "baz".to_string(),
+            data_type: DataType::Boolean,
+            nullable: true,
+            comment: None,
+            default: None,
+            generated_always_as: None,
+            is_partition: true,
+            is_bucket: false,
+            is_cluster: false,
+        })
+    );
+}
+
+#[tokio::test]
+async fn test_list_tables() {
+    let (rest_catalog, _minio, _mc, _rest) = setup_catalog().await;
+
+    let ns = Namespace::try_from(vec!["test_list_tables".to_string()]).unwrap();
+
+    rest_catalog
+        .create_database(
+            &ns,
+            CreateDatabaseOptions {
+                if_not_exists: false,
+                comment: None,
+                location: None,
+                properties: vec![],
+            },
+        )
+        .await
+        .unwrap();
+
+    let column_options = vec![CreateTableColumnOptions {
+        name: "id".to_string(),
+        data_type: DataType::Int32,
+        nullable: false,
+        comment: None,
+        default: None,
+        generated_always_as: None,
+    }];
+
+    let tables = rest_catalog.list_tables(&ns).await.unwrap();
+    assert!(tables.is_empty());
+
+    rest_catalog
+        .create_table(
+            &ns,
+            "table1",
+            CreateTableOptions {
+                columns: column_options.clone(),
+                comment: None,
+                constraints: vec![],
+                location: None,
+                format: "iceberg".to_string(),
+                partition_by: vec![],
+                sort_by: vec![],
+                bucket_by: None,
+                if_not_exists: false,
+                replace: false,
+                options: vec![],
+                properties: vec![],
+            },
+        )
+        .await
+        .unwrap();
+
+    rest_catalog
+        .create_table(
+            &ns,
+            "table2",
+            CreateTableOptions {
+                columns: column_options.clone(),
+                comment: None,
+                constraints: vec![],
+                location: None,
+                format: "iceberg".to_string(),
+                partition_by: vec![],
+                sort_by: vec![],
+                bucket_by: None,
+                if_not_exists: false,
+                replace: false,
+                options: vec![],
+                properties: vec![],
+            },
+        )
+        .await
+        .unwrap();
+
+    let tables = rest_catalog.list_tables(&ns).await.unwrap();
+    assert_eq!(tables.len(), 2);
+    assert!(tables.iter().any(|t| t.name == "table1"));
+    assert!(tables.iter().any(|t| t.name == "table2"));
+    for table in &tables {
+        let TableKind::Table {
+            catalog,
+            database,
+            format,
+            ..
+        } = &table.kind
+        else {
+            panic!("Expected TableKind::Table");
+        };
+        assert_eq!(catalog, "test");
+        assert_eq!(database, &vec!["test_list_tables".to_string()]);
+        assert_eq!(format, "iceberg");
+    }
 }

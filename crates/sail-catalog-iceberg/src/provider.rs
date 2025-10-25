@@ -630,10 +630,10 @@ impl CatalogProvider for IcebergRestCatalogProvider {
             comment,
             constraints,
             location,
-            format: _,
+            format: _, // TODO: What to do with format?
             partition_by,
             sort_by,
-            bucket_by: _,
+            bucket_by,
             if_not_exists,
             replace,
             options,
@@ -649,6 +649,12 @@ impl CatalogProvider for IcebergRestCatalogProvider {
         if replace {
             return Err(CatalogError::NotSupported(
                 "Replace table is not supported yet".to_string(),
+            ));
+        }
+
+        if bucket_by.is_some() {
+            return Err(CatalogError::NotSupported(
+                "Bucketed table is not supported yet".to_string(),
             ));
         }
 
