@@ -483,7 +483,7 @@ async fn test_drop_namespace() {
 
 #[tokio::test]
 async fn test_create_table() {
-    let (catalog, _minio, _mc, _rest) = setup_catalog().await;
+    let (rest_catalog, _minio, _mc, _rest) = setup_catalog().await;
 
     let ns = Namespace::try_from(vec![
         "test_create_table".to_string(),
@@ -496,7 +496,7 @@ async fn test_create_table() {
         ("community".to_string(), "Sail".to_string()),
     ];
 
-    catalog
+    rest_catalog
         .create_database(
             &ns,
             CreateDatabaseOptions {
@@ -509,7 +509,7 @@ async fn test_create_table() {
         .await
         .unwrap();
 
-    let columns = vec![
+    let column_options = vec![
         CreateTableColumnOptions {
             name: "foo".to_string(),
             data_type: DataType::Utf8,
@@ -531,29 +531,28 @@ async fn test_create_table() {
             data_type: DataType::Boolean,
             nullable: true,
             comment: None,
-            // default: Some("false".to_string()), // CHECK HERE DEFAULT VALUE FAILS
             default: None,
             generated_always_as: None,
         },
     ];
 
-    let table = catalog
+    let table = rest_catalog
         .create_table(
             &ns,
             "t1",
             CreateTableOptions {
-                columns,
+                columns: column_options.clone(),
                 comment: Some("peow".to_string()),
-                constraints: vec![], // CHECK HERE
-                location: None,      // CHECK HERE
+                constraints: vec![],
+                location: None,
                 format: "iceberg".to_string(),
-                partition_by: vec![], // CHECK HERE
-                sort_by: vec![],      // CHECK HERE
+                partition_by: vec![],
+                sort_by: vec![],
                 bucket_by: None,
-                if_not_exists: false, // CHECK HERE
-                replace: false,       // CHECK HERE
-                options: vec![],      // CHECK HERE
-                properties: vec![],   // CHECK HERE
+                if_not_exists: false,
+                replace: false,
+                options: vec![],
+                properties: vec![],
             },
         )
         .await
@@ -637,4 +636,70 @@ async fn test_create_table() {
             is_cluster: false,
         })
     );
+
+    let result = rest_catalog
+        .create_table(
+            &ns,
+            "t1",
+            CreateTableOptions {
+                columns: column_options.clone(),
+                comment: Some("peow".to_string()),
+                constraints: vec![],
+                location: None,
+                format: "iceberg".to_string(),
+                partition_by: vec![],
+                sort_by: vec![],
+                bucket_by: None,
+                if_not_exists: false,
+                replace: false,
+                options: vec![],
+                properties: vec![],
+            },
+        )
+        .await;
+    assert!(result.is_err());
+
+    let result = rest_catalog
+        .create_table(
+            &ns,
+            "t1",
+            CreateTableOptions {
+                columns: column_options.clone(),
+                comment: Some("peow".to_string()),
+                constraints: vec![],
+                location: None,
+                format: "iceberg".to_string(),
+                partition_by: vec![],
+                sort_by: vec![],
+                bucket_by: None,
+                if_not_exists: true,
+                replace: false,
+                options: vec![],
+                properties: vec![],
+            },
+        )
+        .await;
+    assert!(result.is_ok());
+
+    let table = rest_catalog
+        .create_table(
+            &ns,
+            "t1",
+            CreateTableOptions {
+                columns: column_options.clone(),
+                comment: Some("peow".to_string()),
+                constraints: vec![], // CHECK HERE
+                location: None,      // CHECK HERE
+                format: "iceberg".to_string(),
+                partition_by: vec![], // CHECK HERE
+                sort_by: vec![],      // CHECK HERE
+                bucket_by: None,
+                if_not_exists: false,
+                replace: false,     // CHECK HERE
+                options: vec![],    // CHECK HERE
+                properties: vec![], // CHECK HERE
+            },
+        )
+        .await
+        .unwrap();
 }

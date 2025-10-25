@@ -654,7 +654,7 @@ impl CatalogProvider for IcebergRestCatalogProvider {
                 data_type,
                 nullable,
                 comment,
-                default,
+                default: _,
                 generated_always_as: _, // TODO: Support generated_always_as
             } = col;
             let field_id = idx as i32 + 1; // CHECK HERE THIS IS WRONG
@@ -663,32 +663,26 @@ impl CatalogProvider for IcebergRestCatalogProvider {
                     "Failed to convert Arrow type to Iceberg type for column '{name}': {e}"
                 ))
             })?;
-            let default_literal = if let Some(default) = default {
-                let json_default: serde_json::Value =
-                    serde_json::from_str(default).map_err(|e| {
-                        CatalogError::External(format!(
-                            "Failed to parse default value as JSON for column '{name}': {e}"
-                        ))
-                    })?;
-                // CHECK HERE clone after removing eprintln down below
-                let lit = Literal::try_from_json(json_default.clone(), &field_type).map_err(|e| {
-                    CatalogError::External(format!(
-                        "Failed to convert default value to Iceberg literal for column '{name}': {e}"
-                    ))
-                })?;
-                eprintln!(
-                    "CHECK HERE: default json value: {json_default} and lit {lit:?} AND field_type: {field_type:?}"
-                );
-                lit
-            } else {
-                None
-            };
+
+            // TODO: `default` is not supported until Iceberg V3
+            // let default_literal = if let Some(default) = default {
+            //     let json_default: serde_json::Value =
+            //         serde_json::from_str(default).map_err(|e| {
+            //             CatalogError::External(format!(
+            //                 "Failed to parse default value as JSON for column '{name}': {e}"
+            //             ))
+            //         })?;
+            //     Literal::try_from_json(json_default.clone(), &field_type).map_err(|e| {
+            //         CatalogError::External(format!(
+            //             "Failed to convert default value to Iceberg literal for column '{name}': {e}"
+            //         ))
+            //     })?
+            // } else {
+            //     None
+            // };
             let mut field = NestedField::new(field_id, name.clone(), field_type, !nullable);
             if let Some(comment) = comment {
                 field = field.with_doc(comment);
-            }
-            if let Some(default_literal) = default_literal {
-                field = field.with_initial_default(default_literal);
             }
             column_name_to_id.insert(name.clone(), field_id);
             fields.push(Arc::new(field));
