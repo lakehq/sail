@@ -165,11 +165,11 @@ impl SchemaBuilder {
     /// Builds the schema.
     pub fn build(self) -> Result<Schema, String> {
         let struct_type = StructType::new(self.fields.clone());
-        let id_to_field = self.build_id_to_field_index(&struct_type);
+        let id_to_field = Self::build_id_to_field_index(&struct_type);
 
         self.validate_identifier_ids(&struct_type, &id_to_field)?;
 
-        let (name_to_id, id_to_name) = self.build_name_indexes(&struct_type);
+        let (name_to_id, id_to_name) = Self::build_name_indexes(&struct_type);
         let highest_field_id = id_to_field.keys().max().cloned().unwrap_or(0);
 
         let identifier_field_ids = if self.identifier_field_ids.is_empty() {
@@ -191,7 +191,7 @@ impl SchemaBuilder {
         })
     }
 
-    fn build_id_to_field_index(&self, struct_type: &StructType) -> HashMap<i32, NestedFieldRef> {
+    pub fn build_id_to_field_index(struct_type: &StructType) -> HashMap<i32, NestedFieldRef> {
         let mut id_to_field = HashMap::new();
         Self::index_fields_recursive(struct_type.fields(), &mut id_to_field);
         id_to_field
@@ -229,8 +229,7 @@ impl SchemaBuilder {
         }
     }
 
-    fn build_name_indexes(
-        &self,
+    pub fn build_name_indexes(
         struct_type: &StructType,
     ) -> (HashMap<String, i32>, HashMap<i32, String>) {
         let mut name_to_id = HashMap::new();

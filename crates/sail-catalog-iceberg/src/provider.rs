@@ -10,7 +10,8 @@ use sail_catalog::provider::{
 };
 use sail_common::runtime::RuntimeHandle;
 use sail_iceberg::{
-    arrow_type_to_iceberg, iceberg_type_to_arrow, Literal, NestedField, DEFAULT_SCHEMA_ID,
+    arrow_type_to_iceberg, iceberg_type_to_arrow, Literal, NestedField, PartitionSpec, StructType,
+    DEFAULT_SCHEMA_ID,
 };
 use tokio::sync::OnceCell;
 
@@ -635,7 +636,7 @@ impl CatalogProvider for IcebergRestCatalogProvider {
             sort_by,
             bucket_by: _,
             if_not_exists,
-            replace: _,
+            replace,
             options,
             properties,
         } = options;
@@ -646,8 +647,13 @@ impl CatalogProvider for IcebergRestCatalogProvider {
             }
         }
 
+        if replace {
+            return Err(CatalogError::NotSupported(
+                "Replace table is not supported yet".to_string(),
+            ));
+        }
+
         let mut fields = Vec::new();
-        let mut column_name_to_id = HashMap::new(); // CHECK HERE
         for (idx, col) in columns.iter().enumerate() {
             let CreateTableColumnOptions {
                 name,
@@ -684,9 +690,12 @@ impl CatalogProvider for IcebergRestCatalogProvider {
             if let Some(comment) = comment {
                 field = field.with_doc(comment);
             }
-            column_name_to_id.insert(name.clone(), field_id); // CHECK HERE
             fields.push(Arc::new(field));
         }
+
+        let struct_type = StructType::new(fields.clone());
+        let (name_to_id, _id_to_name) =
+            sail_iceberg::spec::SchemaBuilder::build_name_indexes(&struct_type);
 
         let identifier_field_ids = constraints
             .iter()
@@ -694,7 +703,7 @@ impl CatalogProvider for IcebergRestCatalogProvider {
                 CatalogTableConstraint::PrimaryKey { columns, .. } => Some(
                     columns
                         .iter()
-                        .filter_map(|col_name| column_name_to_id.get(col_name).copied())
+                        .filter_map(|col_name| name_to_id.get(col_name).copied())
                         .collect::<Vec<_>>(),
                 ),
                 CatalogTableConstraint::Unique { .. } => None,
@@ -714,29 +723,18 @@ impl CatalogProvider for IcebergRestCatalogProvider {
             identifier_field_ids: Some(schema.identifier_field_ids().collect()),
         };
 
-        // CHECK HERE
         let partition_spec = if !partition_by.is_empty() {
-            let partition_fields: Vec<crate::models::PartitionField> = partition_by
-                .iter()
-                .filter_map(|col_name| {
-                    column_name_to_id.get(col_name).map(|&source_id| {
-                        crate::models::PartitionField {
-                            field_id: None,
-                            source_id,
-                            name: col_name.clone(),
-                            transform: "identity".to_string(),
-                        }
-                    })
-                })
-                .collect();
-            if partition_fields.is_empty() {
-                None
-            } else {
-                Some(Box::new(crate::models::PartitionSpec {
-                    spec_id: None,
-                    fields: partition_fields,
-                }))
+            let mut partition_spec_builder = PartitionSpec::builder();
+            for partition_by_col in &partition_by {
+                if let Some(&source_id) = name_to_id.get(partition_by_col) {
+                    partition_spec_builder = partition_spec_builder.add_field(
+                        source_id,
+                        partition_by_col,
+                        sail_iceberg::Transform::Identity, // CHECK HERE: THIS IS WRONG. `partition_by_col` needs to be parsed.
+                    );
+                }
             }
+            Some(partition_spec_builder.build())
         } else {
             None
         };
@@ -746,7 +744,7 @@ impl CatalogProvider for IcebergRestCatalogProvider {
             let sort_fields: Vec<crate::models::SortField> = sort_by
                 .iter()
                 .filter_map(|sort| {
-                    column_name_to_id
+                    name_to_id
                         .get(&sort.column)
                         .map(|&source_id| crate::models::SortField {
                             source_id,
