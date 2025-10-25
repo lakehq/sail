@@ -176,7 +176,7 @@ fn read_partition_from_python(
     class: &str,
     partition_spec: &JsonValue,
     options: &JsonValue,
-    _schema: &SchemaRef,
+    schema: &SchemaRef,
 ) -> Result<Vec<RecordBatch>> {
     Python::with_gil(|py| {
         // Import Python module
@@ -220,12 +220,58 @@ fn read_partition_from_python(
             let arrow_batch: PyArrowType<RecordBatch> = py_batch.extract().map_err(|e| {
                 PythonDataSourceError::ArrowError(format!("Failed to convert RecordBatch: {}", e))
             })?;
-            let batch = arrow_batch.0;
+            let batch = align_batch_to_schema(arrow_batch.0, schema)?;
 
             batches.push(batch);
         }
 
         Ok(batches)
+    })
+}
+
+fn align_batch_to_schema(batch: RecordBatch, schema: &SchemaRef) -> Result<RecordBatch> {
+    let expected = schema.as_ref();
+    let actual = batch.schema();
+
+    if actual.fields().len() == expected.fields().len()
+        && actual
+            .fields()
+            .iter()
+            .zip(expected.fields().iter())
+            .all(|(left, right)| left.name() == right.name() && left.data_type() == right.data_type())
+    {
+        return Ok(batch);
+    }
+
+    let mut columns = Vec::with_capacity(expected.fields().len());
+    for field in expected.fields() {
+        let (index, actual_field) = actual.column_with_name(field.name()).ok_or_else(|| {
+            PythonDataSourceError::SchemaError(format!(
+                "Column '{}' not found in RecordBatch. Available columns: [{}]",
+                field.name(),
+                actual
+                    .fields()
+                    .iter()
+                    .map(|f| f.name().as_str())
+                    .collect::<Vec<_>>()
+                    .join(", ")
+            ))
+        })?;
+
+        if actual_field.data_type() != field.data_type() {
+            return Err(PythonDataSourceError::SchemaError(format!(
+                "Column '{}' has type {:?}, expected {:?}",
+                field.name(),
+                actual_field.data_type(),
+                field.data_type()
+            )));
+        }
+
+        columns.push(batch.column(index).clone());
+    }
+
+    RecordBatch::try_new(schema.clone(), columns).map_err(|e| {
+        PythonDataSourceError::ArrowError(format!("Failed to align RecordBatch to schema: {e}"))
     })
 }
 
