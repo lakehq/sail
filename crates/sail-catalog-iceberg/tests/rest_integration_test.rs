@@ -177,65 +177,6 @@ async fn test_create_namespace() {
 }
 
 #[tokio::test]
-async fn test_drop_namespace() {
-    let (rest_catalog, _minio, _mc, _rest) = setup_catalog().await;
-
-    let namespace = Namespace::try_from(vec!["test_drop_namespace".to_string()]).unwrap();
-
-    rest_catalog
-        .create_database(
-            &namespace,
-            CreateDatabaseOptions {
-                if_not_exists: false,
-                comment: None,
-                location: None,
-                properties: vec![],
-            },
-        )
-        .await
-        .unwrap();
-
-    let result = rest_catalog.get_database(&namespace).await;
-    assert!(result.is_ok());
-
-    rest_catalog
-        .drop_database(
-            &namespace,
-            DropDatabaseOptions {
-                if_exists: false,
-                cascade: false,
-            },
-        )
-        .await
-        .unwrap();
-
-    let result = rest_catalog.get_database(&namespace).await;
-    assert!(result.is_err());
-
-    let result = rest_catalog
-        .drop_database(
-            &namespace,
-            DropDatabaseOptions {
-                if_exists: false,
-                cascade: false,
-            },
-        )
-        .await;
-    assert!(result.is_err());
-
-    let result = rest_catalog
-        .drop_database(
-            &namespace,
-            DropDatabaseOptions {
-                if_exists: true,
-                cascade: false,
-            },
-        )
-        .await;
-    assert!(result.is_ok());
-}
-
-#[tokio::test]
 async fn test_get_non_exist_namespace() {
     let (rest_catalog, _minio, _mc, _rest) = setup_catalog().await;
 
@@ -480,6 +421,65 @@ async fn test_list_empty_multi_level_namespaces() {
 
     let dbs = rest_catalog.list_databases(Some(&ns_apple)).await.unwrap();
     assert!(dbs.is_empty());
+}
+
+#[tokio::test]
+async fn test_drop_namespace() {
+    let (rest_catalog, _minio, _mc, _rest) = setup_catalog().await;
+
+    let namespace = Namespace::try_from(vec!["test_drop_namespace".to_string()]).unwrap();
+
+    rest_catalog
+        .create_database(
+            &namespace,
+            CreateDatabaseOptions {
+                if_not_exists: false,
+                comment: None,
+                location: None,
+                properties: vec![],
+            },
+        )
+        .await
+        .unwrap();
+
+    let result = rest_catalog.get_database(&namespace).await;
+    assert!(result.is_ok());
+
+    rest_catalog
+        .drop_database(
+            &namespace,
+            DropDatabaseOptions {
+                if_exists: false,
+                cascade: false,
+            },
+        )
+        .await
+        .unwrap();
+
+    let result = rest_catalog.get_database(&namespace).await;
+    assert!(result.is_err());
+
+    let result = rest_catalog
+        .drop_database(
+            &namespace,
+            DropDatabaseOptions {
+                if_exists: false,
+                cascade: false,
+            },
+        )
+        .await;
+    assert!(result.is_err());
+
+    let result = rest_catalog
+        .drop_database(
+            &namespace,
+            DropDatabaseOptions {
+                if_exists: true,
+                cascade: false,
+            },
+        )
+        .await;
+    assert!(result.is_ok());
 }
 
 #[tokio::test]
@@ -816,139 +816,6 @@ async fn test_create_table() {
 }
 
 #[tokio::test]
-async fn test_drop_table() {
-    let (rest_catalog, _minio, _mc, _rest) = setup_catalog().await;
-
-    let namespace = Namespace::try_from(vec!["test_drop_table".to_string()]).unwrap();
-
-    rest_catalog
-        .create_database(
-            &namespace,
-            CreateDatabaseOptions {
-                if_not_exists: false,
-                comment: None,
-                location: None,
-                properties: vec![],
-            },
-        )
-        .await
-        .unwrap();
-
-    let column_options = vec![CreateTableColumnOptions {
-        name: "id".to_string(),
-        data_type: DataType::Int32,
-        nullable: false,
-        comment: None,
-        default: None,
-        generated_always_as: None,
-    }];
-
-    rest_catalog
-        .create_table(
-            &namespace,
-            "t1",
-            CreateTableOptions {
-                columns: column_options.clone(),
-                comment: None,
-                constraints: vec![],
-                location: None,
-                format: "iceberg".to_string(),
-                partition_by: vec![],
-                sort_by: vec![],
-                bucket_by: None,
-                if_not_exists: false,
-                replace: false,
-                options: vec![],
-                properties: vec![],
-            },
-        )
-        .await
-        .unwrap();
-
-    let result = rest_catalog.get_table(&namespace, "t1").await;
-    assert!(result.is_ok());
-
-    rest_catalog
-        .drop_table(
-            &namespace,
-            "t1",
-            DropTableOptions {
-                if_exists: false,
-                purge: false,
-            },
-        )
-        .await
-        .unwrap();
-
-    let result = rest_catalog.get_table(&namespace, "t1").await;
-    assert!(result.is_err());
-
-    let result = rest_catalog
-        .drop_table(
-            &namespace,
-            "t1",
-            DropTableOptions {
-                if_exists: false,
-                purge: false,
-            },
-        )
-        .await;
-    assert!(result.is_err());
-
-    let result = rest_catalog
-        .drop_table(
-            &namespace,
-            "t1",
-            DropTableOptions {
-                if_exists: true,
-                purge: false,
-            },
-        )
-        .await;
-    assert!(result.is_ok());
-
-    rest_catalog
-        .create_table(
-            &namespace,
-            "t2",
-            CreateTableOptions {
-                columns: column_options.clone(),
-                comment: None,
-                constraints: vec![],
-                location: None,
-                format: "iceberg".to_string(),
-                partition_by: vec![],
-                sort_by: vec![],
-                bucket_by: None,
-                if_not_exists: false,
-                replace: false,
-                options: vec![],
-                properties: vec![],
-            },
-        )
-        .await
-        .unwrap();
-
-    let result = rest_catalog.get_table(&namespace, "t2").await;
-    assert!(result.is_ok());
-
-    rest_catalog
-        .drop_table(
-            &namespace,
-            "t2",
-            DropTableOptions {
-                if_exists: false,
-                purge: true,
-            },
-        )
-        .await
-        .unwrap();
-
-    let result = rest_catalog.get_table(&namespace, "t2").await;
-    assert!(result.is_err());
-}
-
-#[tokio::test]
 async fn test_get_table() {
     let (rest_catalog, _minio, _mc, _rest) = setup_catalog().await;
 
@@ -1230,4 +1097,137 @@ async fn test_list_tables() {
         assert_eq!(database, &vec!["test_list_tables".to_string()]);
         assert_eq!(format, "iceberg");
     }
+}
+
+#[tokio::test]
+async fn test_drop_table() {
+    let (rest_catalog, _minio, _mc, _rest) = setup_catalog().await;
+
+    let namespace = Namespace::try_from(vec!["test_drop_table".to_string()]).unwrap();
+
+    rest_catalog
+        .create_database(
+            &namespace,
+            CreateDatabaseOptions {
+                if_not_exists: false,
+                comment: None,
+                location: None,
+                properties: vec![],
+            },
+        )
+        .await
+        .unwrap();
+
+    let column_options = vec![CreateTableColumnOptions {
+        name: "id".to_string(),
+        data_type: DataType::Int32,
+        nullable: false,
+        comment: None,
+        default: None,
+        generated_always_as: None,
+    }];
+
+    rest_catalog
+        .create_table(
+            &namespace,
+            "t1",
+            CreateTableOptions {
+                columns: column_options.clone(),
+                comment: None,
+                constraints: vec![],
+                location: None,
+                format: "iceberg".to_string(),
+                partition_by: vec![],
+                sort_by: vec![],
+                bucket_by: None,
+                if_not_exists: false,
+                replace: false,
+                options: vec![],
+                properties: vec![],
+            },
+        )
+        .await
+        .unwrap();
+
+    let result = rest_catalog.get_table(&namespace, "t1").await;
+    assert!(result.is_ok());
+
+    rest_catalog
+        .drop_table(
+            &namespace,
+            "t1",
+            DropTableOptions {
+                if_exists: false,
+                purge: false,
+            },
+        )
+        .await
+        .unwrap();
+
+    let result = rest_catalog.get_table(&namespace, "t1").await;
+    assert!(result.is_err());
+
+    let result = rest_catalog
+        .drop_table(
+            &namespace,
+            "t1",
+            DropTableOptions {
+                if_exists: false,
+                purge: false,
+            },
+        )
+        .await;
+    assert!(result.is_err());
+
+    let result = rest_catalog
+        .drop_table(
+            &namespace,
+            "t1",
+            DropTableOptions {
+                if_exists: true,
+                purge: false,
+            },
+        )
+        .await;
+    assert!(result.is_ok());
+
+    rest_catalog
+        .create_table(
+            &namespace,
+            "t2",
+            CreateTableOptions {
+                columns: column_options.clone(),
+                comment: None,
+                constraints: vec![],
+                location: None,
+                format: "iceberg".to_string(),
+                partition_by: vec![],
+                sort_by: vec![],
+                bucket_by: None,
+                if_not_exists: false,
+                replace: false,
+                options: vec![],
+                properties: vec![],
+            },
+        )
+        .await
+        .unwrap();
+
+    let result = rest_catalog.get_table(&namespace, "t2").await;
+    assert!(result.is_ok());
+
+    rest_catalog
+        .drop_table(
+            &namespace,
+            "t2",
+            DropTableOptions {
+                if_exists: false,
+                purge: true,
+            },
+        )
+        .await
+        .unwrap();
+
+    let result = rest_catalog.get_table(&namespace, "t2").await;
+    assert!(result.is_err());
 }

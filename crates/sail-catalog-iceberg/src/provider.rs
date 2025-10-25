@@ -503,41 +503,6 @@ impl CatalogProvider for IcebergRestCatalogProvider {
         }
     }
 
-    async fn drop_database(
-        &self,
-        database: &Namespace,
-        options: DropDatabaseOptions,
-    ) -> CatalogResult<()> {
-        let (client, catalog_config) = self.load_client_and_merged_config().await?;
-
-        let DropDatabaseOptions {
-            if_exists,
-            cascade: _,
-        } = options;
-
-        match client
-            .catalog_api_api()
-            .drop_namespace(
-                &database.to_string(),
-                catalog_config
-                    .props
-                    .get(REST_CATALOG_PROP_PREFIX)
-                    .map(|s| s.as_str()),
-            )
-            .await
-        {
-            Ok(_) => Ok(()),
-            Err(apis::Error::ResponseError(apis::ResponseContent { status, .. }))
-                if status == 404 && if_exists =>
-            {
-                Ok(())
-            }
-            Err(e) => Err(CatalogError::External(format!(
-                "Failed to drop namespace: {e}"
-            ))),
-        }
-    }
-
     async fn get_database(&self, database: &Namespace) -> CatalogResult<DatabaseStatus> {
         let (client, catalog_config) = self.load_client_and_merged_config().await?;
         let namespace_str = database.to_string();
@@ -615,6 +580,41 @@ impl CatalogProvider for IcebergRestCatalogProvider {
                 properties: Vec::new(),
             })
             .collect())
+    }
+
+    async fn drop_database(
+        &self,
+        database: &Namespace,
+        options: DropDatabaseOptions,
+    ) -> CatalogResult<()> {
+        let (client, catalog_config) = self.load_client_and_merged_config().await?;
+
+        let DropDatabaseOptions {
+            if_exists,
+            cascade: _,
+        } = options;
+
+        match client
+            .catalog_api_api()
+            .drop_namespace(
+                &database.to_string(),
+                catalog_config
+                    .props
+                    .get(REST_CATALOG_PROP_PREFIX)
+                    .map(|s| s.as_str()),
+            )
+            .await
+        {
+            Ok(_) => Ok(()),
+            Err(apis::Error::ResponseError(apis::ResponseContent { status, .. }))
+                if status == 404 && if_exists =>
+            {
+                Ok(())
+            }
+            Err(e) => Err(CatalogError::External(format!(
+                "Failed to drop namespace: {e}"
+            ))),
+        }
     }
 
     async fn create_table(
