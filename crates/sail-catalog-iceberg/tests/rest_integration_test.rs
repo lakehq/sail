@@ -5,7 +5,8 @@ use std::collections::HashMap;
 use arrow::datatypes::DataType;
 use sail_catalog::provider::{
     CatalogProvider, CatalogTableConstraint, CatalogTableSort, CreateDatabaseOptions,
-    CreateTableColumnOptions, CreateTableOptions, DropDatabaseOptions, DropTableOptions, Namespace,
+    CreateTableColumnOptions, CreateTableOptions, CreateViewColumnOptions, CreateViewOptions,
+    DropDatabaseOptions, DropTableOptions, DropViewOptions, Namespace, TableColumnStatus,
     TableKind,
 };
 use sail_catalog_iceberg::{IcebergRestCatalogProvider, REST_CATALOG_PROP_URI};
@@ -1230,4 +1231,441 @@ async fn test_drop_table() {
 
     let result = rest_catalog.get_table(&namespace, "t2").await;
     assert!(result.is_err());
+}
+
+#[tokio::test]
+async fn test_create_view() {
+    let (rest_catalog, _minio, _mc, _rest) = setup_catalog().await;
+
+    let ns = Namespace::try_from(vec!["test_create_view".to_string()]).unwrap();
+
+    rest_catalog
+        .create_database(
+            &ns,
+            CreateDatabaseOptions {
+                if_not_exists: false,
+                comment: None,
+                location: None,
+                properties: vec![],
+            },
+        )
+        .await
+        .unwrap();
+
+    let column_options = vec![
+        CreateViewColumnOptions {
+            name: "col1".to_string(),
+            data_type: DataType::Utf8,
+            nullable: true,
+            comment: None,
+        },
+        CreateViewColumnOptions {
+            name: "col2".to_string(),
+            data_type: DataType::Int32,
+            nullable: false,
+            comment: Some("important column".to_string()),
+        },
+    ];
+
+    let view = rest_catalog
+        .create_view(
+            &ns,
+            "view1",
+            CreateViewOptions {
+                columns: column_options.clone(),
+                comment: Some("test view".to_string()),
+                properties: vec![],
+                definition: "SELECT * FROM table1".to_string(),
+                if_not_exists: false,
+                replace: false,
+            },
+        )
+        .await
+        .unwrap();
+
+    let TableKind::View {
+        catalog,
+        database,
+        columns,
+        comment,
+        properties,
+        definition,
+    } = view.kind
+    else {
+        panic!("Expected TableKind::View");
+    };
+
+    assert_eq!(view.name, "view1".to_string());
+    assert_eq!(catalog, "test".to_string());
+    assert_eq!(database, Vec::<String>::from(ns.clone()));
+    assert_eq!(comment, Some("test view".to_string()));
+    assert_eq!(
+        properties,
+        vec![("comment".to_string(), "test view".to_string())]
+    );
+    assert_eq!(definition, "SELECT * FROM table1".to_string());
+    assert_eq!(columns.len(), 2);
+    assert!(columns.contains(&TableColumnStatus {
+        name: "col1".to_string(),
+        data_type: DataType::Utf8,
+        nullable: true,
+        comment: None,
+        default: None,
+        generated_always_as: None,
+        is_partition: false,
+        is_bucket: false,
+        is_cluster: false,
+    }));
+    assert!(columns.contains(&TableColumnStatus {
+        name: "col2".to_string(),
+        data_type: DataType::Int32,
+        nullable: false,
+        comment: Some("important column".to_string()),
+        default: None,
+        generated_always_as: None,
+        is_partition: false,
+        is_bucket: false,
+        is_cluster: false,
+    }));
+
+    let result = rest_catalog
+        .create_view(
+            &ns,
+            "view1",
+            CreateViewOptions {
+                columns: column_options.clone(),
+                comment: Some("test view".to_string()),
+                properties: vec![],
+                definition: "SELECT * FROM table1".to_string(),
+                if_not_exists: false,
+                replace: false,
+            },
+        )
+        .await;
+    assert!(result.is_err());
+
+    let result = rest_catalog
+        .create_view(
+            &ns,
+            "view1",
+            CreateViewOptions {
+                columns: column_options.clone(),
+                comment: Some("test view".to_string()),
+                properties: vec![],
+                definition: "SELECT * FROM table1".to_string(),
+                if_not_exists: true,
+                replace: false,
+            },
+        )
+        .await;
+    assert!(result.is_ok());
+
+    let view = rest_catalog
+        .create_view(
+            &ns,
+            "view2",
+            CreateViewOptions {
+                columns: column_options.clone(),
+                comment: Some("another view".to_string()),
+                properties: vec![
+                    ("owner".to_string(), "alice".to_string()),
+                    ("team".to_string(), "analytics".to_string()),
+                ],
+                definition: "SELECT col1, col2 FROM table2 WHERE col2 > 10".to_string(),
+                if_not_exists: false,
+                replace: false,
+            },
+        )
+        .await
+        .unwrap();
+
+    let TableKind::View {
+        catalog,
+        database,
+        columns,
+        comment,
+        properties,
+        definition,
+    } = view.kind
+    else {
+        panic!("Expected TableKind::View");
+    };
+
+    assert_eq!(view.name, "view2".to_string());
+    assert_eq!(catalog, "test".to_string());
+    assert_eq!(database, Vec::<String>::from(ns.clone()));
+    assert_eq!(columns.len(), 2);
+    assert!(columns.contains(&TableColumnStatus {
+        name: "col1".to_string(),
+        data_type: DataType::Utf8,
+        nullable: true,
+        comment: None,
+        default: None,
+        generated_always_as: None,
+        is_partition: false,
+        is_bucket: false,
+        is_cluster: false,
+    }));
+    assert!(columns.contains(&TableColumnStatus {
+        name: "col2".to_string(),
+        data_type: DataType::Int32,
+        nullable: false,
+        comment: Some("important column".to_string()),
+        default: None,
+        generated_always_as: None,
+        is_partition: false,
+        is_bucket: false,
+        is_cluster: false,
+    }));
+    assert_eq!(comment, Some("another view".to_string()));
+    assert_eq!(
+        definition,
+        "SELECT col1, col2 FROM table2 WHERE col2 > 10".to_string()
+    );
+    assert!(properties.contains(&("owner".to_string(), "alice".to_string())));
+    assert!(properties.contains(&("team".to_string(), "analytics".to_string())));
+}
+
+#[tokio::test]
+async fn test_get_view() {
+    let (rest_catalog, _minio, _mc, _rest) = setup_catalog().await;
+
+    let ns = Namespace::try_from(vec!["test_get_view".to_string()]).unwrap();
+
+    rest_catalog
+        .create_database(
+            &ns,
+            CreateDatabaseOptions {
+                if_not_exists: false,
+                comment: None,
+                location: None,
+                properties: vec![],
+            },
+        )
+        .await
+        .unwrap();
+
+    let column_options = vec![
+        CreateViewColumnOptions {
+            name: "foo".to_string(),
+            data_type: DataType::Utf8,
+            nullable: true,
+            comment: None,
+        },
+        CreateViewColumnOptions {
+            name: "bar".to_string(),
+            data_type: DataType::Int32,
+            nullable: false,
+            comment: Some("meow".to_string()),
+        },
+    ];
+
+    rest_catalog
+        .create_view(
+            &ns,
+            "view1",
+            CreateViewOptions {
+                columns: column_options.clone(),
+                comment: Some("test view".to_string()),
+                properties: vec![
+                    ("owner".to_string(), "bob".to_string()),
+                    ("version".to_string(), "1.0".to_string()),
+                ],
+                definition: "SELECT foo, bar FROM source_table".to_string(),
+                if_not_exists: false,
+                replace: false,
+            },
+        )
+        .await
+        .unwrap();
+
+    let view = rest_catalog.get_view(&ns, "view1").await.unwrap();
+
+    let TableKind::View {
+        catalog,
+        database,
+        columns,
+        comment,
+        properties,
+        definition,
+    } = view.kind
+    else {
+        panic!("Expected TableKind::View");
+    };
+
+    assert_eq!(view.name, "view1".to_string());
+    assert_eq!(catalog, "test".to_string());
+    assert_eq!(database, Vec::<String>::from(ns.clone()));
+    assert_eq!(comment, Some("test view".to_string()));
+    assert_eq!(definition, "SELECT foo, bar FROM source_table".to_string());
+    assert_eq!(columns.len(), 2);
+    assert!(columns.contains(&TableColumnStatus {
+        name: "foo".to_string(),
+        data_type: DataType::Utf8,
+        nullable: true,
+        comment: None,
+        default: None,
+        generated_always_as: None,
+        is_partition: false,
+        is_bucket: false,
+        is_cluster: false,
+    }));
+    assert!(columns.contains(&TableColumnStatus {
+        name: "bar".to_string(),
+        data_type: DataType::Int32,
+        nullable: false,
+        comment: Some("meow".to_string()),
+        default: None,
+        generated_always_as: None,
+        is_partition: false,
+        is_bucket: false,
+        is_cluster: false,
+    }));
+    assert!(properties.contains(&("owner".to_string(), "bob".to_string())));
+    assert!(properties.contains(&("version".to_string(), "1.0".to_string())));
+
+    let result = rest_catalog.get_view(&ns, "nonexistent").await;
+    assert!(result.is_err());
+}
+
+#[tokio::test]
+async fn test_list_views() {
+    let (rest_catalog, _minio, _mc, _rest) = setup_catalog().await;
+
+    let ns = Namespace::try_from(vec!["test_list_views".to_string()]).unwrap();
+
+    rest_catalog
+        .create_database(
+            &ns,
+            CreateDatabaseOptions {
+                if_not_exists: false,
+                comment: None,
+                location: None,
+                properties: vec![],
+            },
+        )
+        .await
+        .unwrap();
+
+    let column_options = vec![CreateViewColumnOptions {
+        name: "id".to_string(),
+        data_type: DataType::Int32,
+        nullable: false,
+        comment: None,
+    }];
+
+    let views = rest_catalog.list_views(&ns).await.unwrap();
+    assert!(views.is_empty());
+
+    rest_catalog
+        .create_view(
+            &ns,
+            "view1",
+            CreateViewOptions {
+                columns: column_options.clone(),
+                comment: None,
+                properties: vec![],
+                definition: "SELECT * FROM t1".to_string(),
+                if_not_exists: false,
+                replace: false,
+            },
+        )
+        .await
+        .unwrap();
+
+    rest_catalog
+        .create_view(
+            &ns,
+            "view2",
+            CreateViewOptions {
+                columns: column_options.clone(),
+                comment: None,
+                properties: vec![],
+                definition: "SELECT * FROM t2".to_string(),
+                if_not_exists: false,
+                replace: false,
+            },
+        )
+        .await
+        .unwrap();
+
+    let views = rest_catalog.list_views(&ns).await.unwrap();
+    assert_eq!(views.len(), 2);
+    assert!(views.iter().any(|v| v.name == "view1"));
+    assert!(views.iter().any(|v| v.name == "view2"));
+
+    for view in &views {
+        let TableKind::View {
+            catalog, database, ..
+        } = &view.kind
+        else {
+            panic!("Expected TableKind::View");
+        };
+        assert_eq!(catalog, "test");
+        assert_eq!(database, &vec!["test_list_views".to_string()]);
+    }
+}
+
+#[tokio::test]
+async fn test_drop_view() {
+    let (rest_catalog, _minio, _mc, _rest) = setup_catalog().await;
+
+    let namespace = Namespace::try_from(vec!["test_drop_view".to_string()]).unwrap();
+
+    rest_catalog
+        .create_database(
+            &namespace,
+            CreateDatabaseOptions {
+                if_not_exists: false,
+                comment: None,
+                location: None,
+                properties: vec![],
+            },
+        )
+        .await
+        .unwrap();
+
+    let column_options = vec![CreateViewColumnOptions {
+        name: "id".to_string(),
+        data_type: DataType::Int32,
+        nullable: false,
+        comment: None,
+    }];
+
+    rest_catalog
+        .create_view(
+            &namespace,
+            "view1",
+            CreateViewOptions {
+                columns: column_options.clone(),
+                comment: None,
+                properties: vec![],
+                definition: "SELECT * FROM t1".to_string(),
+                if_not_exists: false,
+                replace: false,
+            },
+        )
+        .await
+        .unwrap();
+
+    let result = rest_catalog.get_view(&namespace, "view1").await;
+    assert!(result.is_ok());
+
+    rest_catalog
+        .drop_view(&namespace, "view1", DropViewOptions { if_exists: false })
+        .await
+        .unwrap();
+
+    let result = rest_catalog.get_view(&namespace, "view1").await;
+    assert!(result.is_err());
+
+    let result = rest_catalog
+        .drop_view(&namespace, "view1", DropViewOptions { if_exists: false })
+        .await;
+    assert!(result.is_err());
+
+    let result = rest_catalog
+        .drop_view(&namespace, "view1", DropViewOptions { if_exists: true })
+        .await;
+    assert!(result.is_ok());
 }

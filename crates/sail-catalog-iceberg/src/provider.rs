@@ -864,7 +864,6 @@ impl CatalogProvider for IcebergRestCatalogProvider {
         }
     }
 
-    // CHECK HERE
     async fn create_view(
         &self,
         database: &Namespace,
@@ -897,25 +896,34 @@ impl CatalogProvider for IcebergRestCatalogProvider {
 
         let mut fields = Vec::new();
         for (idx, col) in columns.iter().enumerate() {
-            let field_type = arrow_type_to_iceberg(&col.data_type).map_err(|e| {
+            let CreateViewColumnOptions {
+                name,
+                data_type,
+                nullable,
+                comment,
+            } = col;
+            let field_id = idx as i32 + 1; // FIXME: Is this wrong?
+            let field_type = arrow_type_to_iceberg(data_type).map_err(|e| {
                 CatalogError::External(format!(
-                    "Failed to convert Arrow type to Iceberg type for column '{}': {e}",
-                    col.name
+                    "Failed to convert Arrow type to Iceberg type for column '{name}': {e}"
                 ))
             })?;
-            let mut field =
-                NestedField::new(idx as i32, col.name.clone(), field_type, !col.nullable);
-            if let Some(comment_text) = &col.comment {
-                field = field.with_doc(comment_text);
+            let mut field = NestedField::new(field_id, name.clone(), field_type, !nullable);
+            if let Some(comment) = comment {
+                field = field.with_doc(comment);
             }
             fields.push(Arc::new(field));
         }
 
+        let schema = sail_iceberg::spec::Schema::builder()
+            .with_fields(fields)
+            .build()
+            .map_err(|e| CatalogError::External(format!("Failed to build schema: {e}")))?;
         let schema = crate::models::Schema {
             r#type: crate::models::schema::Type::Struct,
-            fields,
-            schema_id: None,
-            identifier_field_ids: None,
+            fields: schema.fields().to_vec(),
+            schema_id: Some(schema.schema_id()),
+            identifier_field_ids: Some(schema.identifier_field_ids().collect()),
         };
 
         let sql_representation = crate::models::SqlViewRepresentation {
@@ -929,10 +937,13 @@ impl CatalogProvider for IcebergRestCatalogProvider {
             .map(|d| d.as_millis() as i64)
             .unwrap_or(0);
 
+        // TODO: Is this correct?
         let view_version = crate::models::ViewVersion {
             version_id: 1,
             timestamp_ms,
-            schema_id: 0,
+            schema_id: schema
+                .schema_id
+                .ok_or_else(|| CatalogError::External("Schema ID is missing".to_string()))?,
             summary: HashMap::new(),
             representations: vec![sql_representation],
             default_catalog: None,
@@ -949,7 +960,7 @@ impl CatalogProvider for IcebergRestCatalogProvider {
 
         let request = crate::models::CreateViewRequest {
             name: view.to_string(),
-            location: None,
+            location: None, // TODO: Is this correct?
             schema: Box::new(schema),
             view_version: Box::new(view_version),
             properties: props,
