@@ -26,8 +26,12 @@ use serde::{Deserialize, Serialize};
 use crate::spec::types::{NestedFieldRef, PrimitiveType, StructType, Type};
 
 pub mod utils;
+mod visitor;
 
 pub use utils::*;
+
+use crate::schema::visitor::{visit_struct, SchemaVisitor};
+use crate::{ListType, MapType};
 
 /// Type alias for schema id.
 pub type SchemaId = i32;
@@ -163,7 +167,7 @@ impl SchemaBuilder {
         let struct_type = StructType::new(self.fields.clone());
         let id_to_field = self.build_id_to_field_index(&struct_type);
 
-        self.validate_identifier_ids(&id_to_field)?;
+        self.validate_identifier_ids(&struct_type, &id_to_field)?;
 
         let (name_to_id, id_to_name) = self.build_name_indexes(&struct_type);
         let highest_field_id = id_to_field.keys().max().cloned().unwrap_or(0);
@@ -298,10 +302,18 @@ impl SchemaBuilder {
         }
     }
 
+    /// According to [the spec](https://iceberg.apache.org/spec/#identifier-fields),
+    /// the identifier fields must meet the following requirements:
+    /// - Optional, Float, and Double fields can't be used as identifier fields.
+    /// - Identifier fields may be nested in structs but can't be nested within maps or lists.
+    /// - A nested field can't be used as an identifier field if it is nested in an optional struct,
+    ///   to avoid null values in identifiers.
     fn validate_identifier_ids(
         &self,
+        struct_type: &StructType,
         id_to_field: &HashMap<i32, NestedFieldRef>,
     ) -> Result<(), String> {
+        let id_to_parent = index_parents(struct_type)?;
         for identifier_field_id in &self.identifier_field_ids {
             let field = id_to_field.get(identifier_field_id).ok_or_else(|| {
                 format!("Cannot add identifier field {identifier_field_id}: field does not exist")
@@ -326,6 +338,29 @@ impl SchemaBuilder {
                     "Cannot add field {} as an identifier field: not a primitive type field",
                     field.name
                 ));
+            }
+
+            let mut cur_field_id = *identifier_field_id;
+            while let Some(parent) = id_to_parent.get(&cur_field_id) {
+                let parent_field = id_to_field.get(parent).ok_or_else(|| {
+                    format!(
+                        "Cannot validate identifier field {}: parent field with id {parent} not found",
+                        field.name
+                    )
+                })?;
+                if !parent_field.field_type.is_struct() {
+                    return Err(format!(
+                        "Cannot add field {} as an identifier field: must not be nested in {parent_field:?}",
+                        field.name,
+                    ));
+                }
+                if !parent_field.required {
+                    return Err(format!(
+                        "Cannot add field {} as an identifier field: must not be nested in an optional field {parent_field}",
+                        field.name
+                    ));
+                }
+                cur_field_id = *parent;
             }
         }
 
@@ -406,4 +441,108 @@ impl Display for Schema {
         }
         writeln!(f, "}}")
     }
+}
+
+/// Creates a field id to parent field id map.
+pub fn index_parents(r#struct: &StructType) -> Result<HashMap<i32, i32>, String> {
+    struct IndexByParent {
+        parents: Vec<i32>,
+        result: HashMap<i32, i32>,
+    }
+
+    impl SchemaVisitor for IndexByParent {
+        type T = ();
+
+        fn before_struct_field(&mut self, field: &NestedFieldRef) -> Result<(), String> {
+            if let Some(parent) = self.parents.last().copied() {
+                self.result.insert(field.id, parent);
+            }
+            self.parents.push(field.id);
+            Ok(())
+        }
+
+        fn after_struct_field(&mut self, _field: &NestedFieldRef) -> Result<(), String> {
+            self.parents.pop();
+            Ok(())
+        }
+
+        fn before_list_element(&mut self, field: &NestedFieldRef) -> Result<(), String> {
+            if let Some(parent) = self.parents.last().copied() {
+                self.result.insert(field.id, parent);
+            }
+            self.parents.push(field.id);
+            Ok(())
+        }
+
+        fn after_list_element(&mut self, _field: &NestedFieldRef) -> Result<(), String> {
+            self.parents.pop();
+            Ok(())
+        }
+
+        fn before_map_key(&mut self, field: &NestedFieldRef) -> Result<(), String> {
+            if let Some(parent) = self.parents.last().copied() {
+                self.result.insert(field.id, parent);
+            }
+            self.parents.push(field.id);
+            Ok(())
+        }
+
+        fn after_map_key(&mut self, _field: &NestedFieldRef) -> Result<(), String> {
+            self.parents.pop();
+            Ok(())
+        }
+
+        fn before_map_value(&mut self, field: &NestedFieldRef) -> Result<(), String> {
+            if let Some(parent) = self.parents.last().copied() {
+                self.result.insert(field.id, parent);
+            }
+            self.parents.push(field.id);
+            Ok(())
+        }
+
+        fn after_map_value(&mut self, _field: &NestedFieldRef) -> Result<(), String> {
+            self.parents.pop();
+            Ok(())
+        }
+
+        fn schema(&mut self, _schema: &Schema, _value: Self::T) -> Result<Self::T, String> {
+            Ok(())
+        }
+
+        fn field(&mut self, _field: &NestedFieldRef, _value: Self::T) -> Result<Self::T, String> {
+            Ok(())
+        }
+
+        fn r#struct(
+            &mut self,
+            _struct: &StructType,
+            _results: Vec<Self::T>,
+        ) -> Result<Self::T, String> {
+            Ok(())
+        }
+
+        fn list(&mut self, _list: &ListType, _value: Self::T) -> Result<Self::T, String> {
+            Ok(())
+        }
+
+        fn map(
+            &mut self,
+            _map: &MapType,
+            _key_value: Self::T,
+            _value: Self::T,
+        ) -> Result<Self::T, String> {
+            Ok(())
+        }
+
+        fn primitive(&mut self, _p: &PrimitiveType) -> Result<Self::T, String> {
+            Ok(())
+        }
+    }
+
+    let mut index = IndexByParent {
+        parents: vec![],
+        result: HashMap::new(),
+    };
+    visit_struct(r#struct, &mut index)?;
+    Ok(index.result)
 }

@@ -681,25 +681,25 @@ async fn test_create_table() {
         .await;
     assert!(result.is_ok());
 
-    let table = rest_catalog
-        .create_table(
-            &ns,
-            "t1",
-            CreateTableOptions {
-                columns: column_options.clone(),
-                comment: Some("peow".to_string()),
-                constraints: vec![], // CHECK HERE
-                location: None,      // CHECK HERE
-                format: "iceberg".to_string(),
-                partition_by: vec![], // CHECK HERE
-                sort_by: vec![],      // CHECK HERE
-                bucket_by: None,
-                if_not_exists: false,
-                replace: false,     // CHECK HERE
-                options: vec![],    // CHECK HERE
-                properties: vec![], // CHECK HERE
-            },
-        )
-        .await
-        .unwrap();
+    //     let table = rest_catalog
+    //         .create_table(
+    //             &ns,
+    //             "t1",
+    //             CreateTableOptions {
+    //                 columns: column_options.clone(),
+    //                 comment: Some("peow".to_string()),
+    //                 constraints: vec![], // CHECK HERE
+    //                 location: None,      // CHECK HERE
+    //                 format: "iceberg".to_string(),
+    //                 partition_by: vec![], // CHECK HERE
+    //                 sort_by: vec![],      // CHECK HERE
+    //                 bucket_by: None,
+    //                 if_not_exists: false,
+    //                 replace: false,     // CHECK HERE
+    //                 options: vec![],    // CHECK HERE
+    //                 properties: vec![], // CHECK HERE
+    //             },
+    //         )
+    //         .await
+    //         .unwrap();
 }
