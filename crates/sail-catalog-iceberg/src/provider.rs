@@ -684,11 +684,10 @@ impl CatalogProvider for IcebergRestCatalogProvider {
             if let Some(comment) = comment {
                 field = field.with_doc(comment);
             }
-            column_name_to_id.insert(name.clone(), field_id);
+            column_name_to_id.insert(name.clone(), field_id); // CHECK HERE
             fields.push(Arc::new(field));
         }
 
-        // CHECK HERE
         let identifier_field_ids = constraints
             .iter()
             .filter_map(|c| match c {
