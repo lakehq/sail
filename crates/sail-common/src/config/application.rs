@@ -51,7 +51,7 @@ impl Provider for InternalConfigPlaceholder {
 impl AppConfig {
     pub fn load() -> CommonResult<Self> {
         // FIXME: Serde aliases conflict when defaults and env vars use different field names.
-        //  This causes: `Error: invalid argument: duplicate field...
+        //  This causes: `Error: invalid argument: duplicate field...`
         Figment::from(ConfigDefinition::new(APP_CONFIG))
             .merge(InternalConfigPlaceholder)
             .merge(Env::prefixed("SAIL_").map(|p| p.as_str().replace("__", ".").into()))
