@@ -49,6 +49,11 @@ export default {
           title: "Parquet Options",
           pattern: /^parquet\./,
         },
+        {
+          id: "catalog",
+          title: "Catalog Options",
+          pattern: /^catalog\./,
+        },
       ],
       fallbackGroup: {
         id: "other",
