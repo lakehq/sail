@@ -32,6 +32,9 @@ fn get_property(properties: &HashMap<String, String>, key: &str) -> Option<Strin
         .map(|(_, v)| v.clone())
 }
 
+// TODO: Further properties and configurations may be needed from:
+//  - https://iceberg.apache.org/docs/nightly/configuration/#catalog-properties
+//  - https://iceberg.apache.org/docs/nightly/spark-configuration/
 #[derive(Clone, Debug)]
 pub struct RestCatalogConfig {
     uri: String,
@@ -83,16 +86,13 @@ impl IcebergRestCatalogProvider {
                 client_config.user_agent = Some("Sail".to_string());
                 client_config.base_path = uri;
                 for (key, value) in &props {
+                    // TODO: `basic_auth` and `api_key` are not used anything in the API yet.
+                    //  We may need to support them in the future.
                     match key.as_str() {
-                        // CHECK HERE
-                        // "basic_auth" => {
-                        // }
-                        // "api_key" => {
-                        // }
-                        "oauth_access_token" => {
+                        "oauth-access-token" => {
                             client_config.oauth_access_token = Some(value.clone());
                         }
-                        "bearer_access_token" => {
+                        "bearer-access-token" => {
                             client_config.bearer_access_token = Some(value.clone());
                         }
                         _ => {}

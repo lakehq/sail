@@ -605,6 +605,42 @@
   description: |
     The list of catalogs to use. Each catalog is defined by a name and a type, along with optional parameters.
     `name` is used to refer to the catalog name, and `type` defines the catalog implementation.
+
+    Supported catalog types:
+    * `memory`: In-memory catalog for temporary tables and testing.
+      - `name` (required): Name of the catalog
+      - `type` (required): "memory"
+      - `initial_database` (required): The initial database namespace as an array of strings
+      - `initial_database_comment` (optional): Comment for the initial database
+
+    * `iceberg_rest`: Apache Iceberg REST catalog.
+      - `name` (required): Name of the catalog
+      - `type` (required): "iceberg_rest"
+      - `uri` (required): Base URI of the Iceberg REST catalog server
+      - `warehouse` (optional): Warehouse location for the catalog
+      - `prefix` (optional): Prefix for all catalog API endpoints
+      - `oauth_access_token` (optional): OAuth 2.0 access token
+      - `bearer_access_token` (optional): Bearer token for authentication
+
+    Examples:
+
+    Memory catalog with all fields:
+    [{name="sail_memory", type="memory", initial_database=["dev", "analytics"], initial_database_comment="Development analytics database"}]
+
+    Iceberg REST minimal:
+    [{name="sail_iceberg", type="iceberg_rest", uri="https://catalog.example.com"}]
+
+    Iceberg REST with OAuth:
+    [{name="sail_iceberg", type="iceberg_rest", uri="https://catalog.example.com", warehouse="s3://data/warehouse", oauth_access_token="eyJhbGc..."}]
+
+    Iceberg REST with Bearer token:
+    [{name="sail_iceberg", type="iceberg_rest", uri="https://catalog.example.com", warehouse="s3://data/warehouse", bearer_access_token="token123"}]
+
+    Multiple catalogs:
+    [
+      {name="sail_memory", type="memory", initial_database=["default"]},
+      {name="sail_iceberg", type="iceberg_rest", uri="https://catalog.example.com", warehouse="s3://warehouse", bearer_access_token="token123"}
+    ]
   experimental: true
 
 - key: catalog.default_catalog

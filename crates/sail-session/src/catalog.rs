@@ -32,13 +32,40 @@ pub fn create_catalog_manager(
                     );
                     Ok((name.clone(), Arc::new(provider)))
                 }
-                CatalogType::IcebergRest { name } => {
+                CatalogType::IcebergRest {
+                    name,
+                    uri,
+                    warehouse,
+                    prefix,
+                    oauth_access_token,
+                    bearer_access_token,
+                } => {
+                    let mut properties = HashMap::new();
+                    properties.insert("uri".to_string(), uri.to_string());
+                    if let Some(warehouse) = warehouse {
+                        properties.insert("warehouse".to_string(), warehouse.to_string());
+                    }
+                    if let Some(prefix) = prefix {
+                        properties.insert("prefix".to_string(), prefix.to_string());
+                    }
+                    if let Some(oauth_access_token) = oauth_access_token {
+                        properties.insert(
+                            "oauth-access-token".to_string(), // Iceberg uses kebab-case
+                            oauth_access_token.to_string(),
+                        );
+                    }
+                    if let Some(bearer_access_token) = bearer_access_token {
+                        properties.insert(
+                            "bearer-access-token".to_string(), // Iceberg uses kebab-case
+                            bearer_access_token.to_string(),
+                        );
+                    }
                     let provider = IcebergRestCatalogProvider::new(
                         runtime.clone(),
-                        name.clone(),
-                        HashMap::new(), // CHECK HERE: DO NOT MERGE UNTIL REAL CONFIG ADDED
+                        name.to_string(),
+                        properties,
                     );
-                    Ok((name.clone(), Arc::new(provider)))
+                    Ok((name.to_string(), Arc::new(provider)))
                 }
             }
         })

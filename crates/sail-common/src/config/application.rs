@@ -287,6 +287,11 @@ pub enum CatalogType {
     },
     IcebergRest {
         name: String,
+        uri: String,
+        warehouse: Option<String>,
+        prefix: Option<String>,
+        oauth_access_token: Option<String>,
+        bearer_access_token: Option<String>,
     },
 }
 
