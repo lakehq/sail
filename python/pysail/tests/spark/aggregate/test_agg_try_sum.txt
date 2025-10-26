@@ -117,3 +117,22 @@ root
 >>> df.select(sf.try_sum("x").alias("sum_x")).printSchema()
 root
  |-- sum_x: decimal(38,0) (nullable = true)
+
+# GroupBy
+>>> from pyspark.sql import functions as sf, types as T
+>>> LONG_MAX = 2**63 - 1
+>>> data = [("bad",  LONG_MAX),("bad",  1),("ok",   10),("ok",   None),("ok",   5),]
+>>> df = spark.createDataFrame(data, schema=T.StructType([T.StructField("g", T.StringType(), True),T.StructField("x", T.LongType(),   True),]))
+>>> out = df.groupBy("g").agg(sf.try_sum("x").alias("sum_x")).orderBy("g")
+>>> out.show()
++---+-----+
+|  g|sum_x|
++---+-----+
+|bad| NULL|
+| ok|   15|
++---+-----+
+
+>>> out.printSchema()
+root
+ |-- g: string (nullable = true)
+ |-- sum_x: long (nullable = true)
