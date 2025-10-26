@@ -622,21 +622,28 @@
       - `oauth_access_token` (optional): OAuth 2.0 access token
       - `bearer_access_token` (optional): Bearer token for authentication
 
-    Examples:
+    **Examples:**
 
-    Memory catalog with all fields:
+    **Memory:**
+
     [{name="sail_memory", type="memory", initial_database=["dev", "analytics"], initial_database_comment="Development analytics database"}]
 
-    Iceberg REST minimal:
+
+    **Iceberg REST:**
+
     [{name="sail_iceberg", type="iceberg_rest", uri="https://catalog.example.com"}]
 
-    Iceberg REST with OAuth:
+
+    **Iceberg REST with OAuth:**
+
     [{name="sail_iceberg", type="iceberg_rest", uri="https://catalog.example.com", warehouse="s3://data/warehouse", oauth_access_token="eyJhbGc..."}]
 
-    Iceberg REST with Bearer token:
+    **Iceberg REST with Bearer Token:**
+
     [{name="sail_iceberg", type="iceberg_rest", uri="https://catalog.example.com", warehouse="s3://data/warehouse", bearer_access_token="token123"}]
 
-    Multiple catalogs:
+    **Multiple:**
+
     [
       {name="sail_memory", type="memory", initial_database=["default"]},
       {name="sail_iceberg", type="iceberg_rest", uri="https://catalog.example.com", warehouse="s3://warehouse", bearer_access_token="token123"}
