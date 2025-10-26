@@ -6,8 +6,15 @@ import logging
 from dataclasses import dataclass
 
 from pysail.jdbc.exceptions import InvalidOptionsError
+from pysail.jdbc.query_builder import validate_identifier
 
 logger = logging.getLogger("lakesail.jdbc")
+
+# Maximum lengths to prevent DoS via huge strings
+MAX_URL_LENGTH = 2048
+MAX_QUERY_LENGTH = 1_000_000  # 1MB for complex queries
+MAX_TABLE_NAME_LENGTH = 256
+MAX_OPTION_LENGTH = 4096
 
 
 def normalize_session_init(session_init_statement: str | None) -> str | None:
@@ -83,6 +90,9 @@ class NormalizedJDBCOptions:
         if not url:
             msg = "'url' option is required"
             raise InvalidOptionsError(msg)
+        if len(url) > MAX_URL_LENGTH:
+            msg = f"URL exceeds maximum length of {MAX_URL_LENGTH} characters"
+            raise InvalidOptionsError(msg)
 
         # Extract dbtable/query (exactly one required)
         dbtable = norm_opts.get("dbtable")
@@ -93,6 +103,14 @@ class NormalizedJDBCOptions:
             raise InvalidOptionsError(msg)
         if dbtable and query:
             msg = "Cannot specify both 'dbtable' and 'query'"
+            raise InvalidOptionsError(msg)
+
+        # Validate lengths
+        if dbtable and len(dbtable) > MAX_TABLE_NAME_LENGTH:
+            msg = f"dbtable exceeds maximum length of {MAX_TABLE_NAME_LENGTH} characters"
+            raise InvalidOptionsError(msg)
+        if query and len(query) > MAX_QUERY_LENGTH:
+            msg = f"query exceeds maximum length of {MAX_QUERY_LENGTH} characters"
             raise InvalidOptionsError(msg)
 
         # Extract user/password (may be in URL or as options)
@@ -178,6 +196,14 @@ class NormalizedJDBCOptions:
         Raises:
             InvalidOptionsError: If options are inconsistent
         """
+        # Validate partition column identifier to prevent SQL injection
+        if self.partition_column:
+            try:
+                validate_identifier(self.partition_column)
+            except InvalidOptionsError as err:
+                message = f"Invalid partitionColumn: {err}"
+                raise InvalidOptionsError(message) from err
+
         # Partitioning validation
         if self.partition_column:
             if self.lower_bound is None or self.upper_bound is None:

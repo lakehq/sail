@@ -210,8 +210,35 @@ The JDBC module implements Lakesail's generic Python data source interface and i
 
 ## Security
 
-- Credentials are automatically masked in logs
-- Use connection parameters instead of embedding in URL when possible
+### Credential Protection
+- Credentials are automatically masked in logs using `mask_credentials()` utility
+- Passwords in connection strings are replaced with `***` in all log output
+- Use connection parameters instead of embedding credentials in URL when possible
+
+### SQL Injection Protection
+- **Column identifiers** are validated against a safe pattern (alphanumeric + underscore)
+- **Reserved SQL keywords** are rejected as column names
+- **User-provided predicates**: If using custom predicates via the `predicates` option, ensure they come from trusted sources only
+- **Table names**: Validated for length and safe characters
+
+### Input Validation
+- URL length limited to 2048 characters
+- Query length limited to 1MB
+- Table name length limited to 256 characters
+- All inputs are validated before use
+
+### Best Practices
+1. **Never use untrusted user input** directly in `dbtable`, `query`, or `predicates` options
+2. **Use parameterized queries** where supported by backend (ADBC)
+3. **Validate and sanitize** any user input before passing to JDBC options
+4. **Use least privilege** database accounts (read-only for read operations)
+5. **Enable TLS/SSL** in JDBC connection strings for production databases
+6. **Rotate credentials** regularly and use secrets management systems
+
+### Session Initialization Safety
+The `sessionInitStatement` option only allows read-only configuration statements:
+- ✅ Allowed: `SET`, `CREATE TEMPORARY TABLE`
+- ❌ Rejected: `INSERT`, `UPDATE`, `DELETE`, `DROP`, `ALTER`, `TRUNCATE`
 
 ## Performance Tips
 

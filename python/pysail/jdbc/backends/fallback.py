@@ -146,7 +146,11 @@ class FallbackBackend(DatabaseBackend):
                 arrow_array = pa.array(col_data)
                 arrays.append(arrow_array)
                 fields.append(pa.field(col_name, arrow_array.type))
-            except (pa.ArrowInvalid, TypeError, ValueError) as err:  # pragma: no cover - type inference fallback
+            except (
+                pa.ArrowInvalid,
+                TypeError,
+                ValueError,
+            ) as err:  # pragma: no cover - type inference fallback
                 logger.warning(
                     "Could not infer type for column '%s', falling back to string: %s",
                     col_name,

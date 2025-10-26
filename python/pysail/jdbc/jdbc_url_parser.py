@@ -106,7 +106,12 @@ def parse_jdbc_url(jdbc_url: str, user: str | None = None, password: str | None 
     final_user = user or url_user
     final_password = password or url_password
 
-    return ParsedJDBCUrl(driver=driver, connection_string=connection_string, user=final_user, password=final_password)
+    return ParsedJDBCUrl(
+        driver=driver,
+        connection_string=connection_string,
+        user=final_user,
+        password=final_password,
+    )
 
 
 def validate_driver_supported(driver: str) -> None:

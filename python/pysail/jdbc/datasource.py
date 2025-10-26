@@ -16,7 +16,10 @@ from pysail.jdbc.backends import get_backend
 from pysail.jdbc.jdbc_options import NormalizedJDBCOptions
 from pysail.jdbc.jdbc_url_parser import parse_jdbc_url, validate_driver_supported
 from pysail.jdbc.partition_planner import PartitionPlanner
-from pysail.jdbc.query_builder import build_query_for_partition, build_schema_inference_query
+from pysail.jdbc.query_builder import (
+    build_query_for_partition,
+    build_schema_inference_query,
+)
 from pysail.jdbc.utils import mask_credentials
 
 if TYPE_CHECKING:
@@ -229,7 +232,9 @@ class JDBCArrowDataSource:
 
         # Read batches from backend
         batches = backend.read_batches(
-            connection_string=parsed.connection_string, query=query, fetch_size=norm_opts.fetch_size
+            connection_string=parsed.connection_string,
+            query=query,
+            fetch_size=norm_opts.fetch_size,
         )
 
         # Yield each batch

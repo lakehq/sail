@@ -1,5 +1,6 @@
 """Utility functions for JDBC reader."""
 
+
 def mask_credentials(connection_string: str) -> str:
     """
     Mask username:password in connection strings for safe logging.

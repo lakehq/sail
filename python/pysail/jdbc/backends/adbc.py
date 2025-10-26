@@ -62,7 +62,10 @@ class ADBCBackend(DatabaseBackend):
         method_used: str | None = None
 
         try:
-            with driver_module.connect(connection_string) as conn, conn.cursor() as cursor:
+            with (
+                driver_module.connect(connection_string) as conn,
+                conn.cursor() as cursor,
+            ):
                 if hasattr(cursor, "arraysize"):
                     cursor.arraysize = fetch_size
                 cursor.execute(query)

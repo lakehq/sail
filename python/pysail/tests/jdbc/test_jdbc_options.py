@@ -59,7 +59,10 @@ class TestNormalizedJDBCOptions:
             "url": "jdbc:postgresql://localhost:5432/mydb",
         }
 
-        with pytest.raises(InvalidOptionsError, match="Either 'dbtable' or 'query' option must be specified"):
+        with pytest.raises(
+            InvalidOptionsError,
+            match="Either 'dbtable' or 'query' option must be specified",
+        ):
             NormalizedJDBCOptions.from_spark_options(options)
 
     def test_both_dbtable_and_query_raises_error(self):
@@ -105,7 +108,10 @@ class TestNormalizedJDBCOptions:
 
         opts = NormalizedJDBCOptions.from_spark_options(options)
 
-        with pytest.raises(InvalidOptionsError, match="partitionColumn requires lowerBound and upperBound"):
+        with pytest.raises(
+            InvalidOptionsError,
+            match="partitionColumn requires lowerBound and upperBound",
+        ):
             opts.validate()
 
     def test_invalid_bounds_fails_validation(self):
@@ -135,7 +141,11 @@ class TestNormalizedJDBCOptions:
         opts = NormalizedJDBCOptions.from_spark_options(options)
         opts.validate()
 
-        assert opts.predicates == ["status='active'", "status='pending'", "status='completed'"]
+        assert opts.predicates == [
+            "status='active'",
+            "status='pending'",
+            "status='completed'",
+        ]
 
     def test_predicates_with_partition_column_fails_validation(self):
         """Test that predicates with partitionColumn fails validation."""
@@ -150,7 +160,10 @@ class TestNormalizedJDBCOptions:
 
         opts = NormalizedJDBCOptions.from_spark_options(options)
 
-        with pytest.raises(InvalidOptionsError, match="Cannot specify both predicates list and partitionColumn"):
+        with pytest.raises(
+            InvalidOptionsError,
+            match="Cannot specify both predicates list and partitionColumn",
+        ):
             opts.validate()
 
     def test_invalid_engine_raises_error(self):

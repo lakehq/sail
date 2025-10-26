@@ -26,16 +26,36 @@ pub enum PythonDataSourceError {
 impl fmt::Display for PythonDataSourceError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
-            PythonDataSourceError::ImportError(msg) => write!(f, "Python import error: {}", msg),
+            PythonDataSourceError::ImportError(msg) => {
+                writeln!(f, "Python import error: {}", msg)?;
+                write!(
+                    f,
+                    "Hint: Ensure the Python module is installed and available in PYTHONPATH"
+                )
+            }
             PythonDataSourceError::ExecutionError(msg) => {
                 write!(f, "Python execution error: {}", msg)
             }
-            PythonDataSourceError::ArrowError(msg) => write!(f, "Arrow conversion error: {}", msg),
+            PythonDataSourceError::ArrowError(msg) => {
+                writeln!(f, "Arrow conversion error: {}", msg)?;
+                write!(
+                    f,
+                    "Hint: Ensure Python code returns valid PyArrow RecordBatch objects"
+                )
+            }
             PythonDataSourceError::MissingOption(msg) => {
                 write!(f, "Missing required option: {}", msg)
             }
-            PythonDataSourceError::SchemaError(msg) => write!(f, "Schema error: {}", msg),
-            PythonDataSourceError::PartitionError(msg) => write!(f, "Partition error: {}", msg),
+            PythonDataSourceError::SchemaError(msg) => {
+                writeln!(f, "Schema error: {}", msg)?;
+                write!(
+                    f,
+                    "Hint: Verify that the schema returned by infer_schema() matches the data"
+                )
+            }
+            PythonDataSourceError::PartitionError(msg) => {
+                write!(f, "Partition error: {}", msg)
+            }
             PythonDataSourceError::General(msg) => write!(f, "Python datasource error: {}", msg),
         }
     }

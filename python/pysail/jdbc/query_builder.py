@@ -2,6 +2,63 @@
 
 from __future__ import annotations
 
+import re
+
+from pysail.jdbc.exceptions import InvalidOptionsError
+
+
+def validate_identifier(name: str) -> str:
+    """
+    Validate SQL identifier to prevent SQL injection.
+
+    Ensures identifier contains only alphanumeric characters, underscores,
+    and doesn't start with a digit. This prevents SQL injection through
+    column names or table names.
+
+    Args:
+        name: Identifier to validate (column name, table name, etc.)
+
+    Returns:
+        The validated identifier
+
+    Raises:
+        InvalidOptionsError: If identifier contains invalid characters
+    """
+    if not name:
+        message = "Identifier cannot be empty"
+        raise InvalidOptionsError(message)
+
+    # Allow alphanumeric, underscore, and period (for schema.table)
+    # Must start with letter or underscore
+    if not re.match(r"^[a-zA-Z_][a-zA-Z0-9_\.]*$", name):
+        message = (
+            f"Invalid SQL identifier '{name}'. "
+            "Identifiers must start with a letter or underscore and contain only "
+            "alphanumeric characters, underscores, or periods."
+        )
+        raise InvalidOptionsError(message)
+
+    # Reject common SQL keywords that could be abused
+    dangerous_keywords = {
+        "select",
+        "insert",
+        "update",
+        "delete",
+        "drop",
+        "alter",
+        "create",
+        "truncate",
+        "exec",
+        "execute",
+        "union",
+        "declare",
+    }
+    if name.lower() in dangerous_keywords:
+        message = f"Identifier '{name}' is a reserved SQL keyword and cannot be used"
+        raise InvalidOptionsError(message)
+
+    return name
+
 
 def build_partition_predicate(
     column: str,
@@ -15,15 +72,21 @@ def build_partition_predicate(
     GOOD: f'WHERE "{column}" >= {value_lower}'  # Quoted identifier
 
     Args:
-        column: Column name for partitioning
+        column: Column name for partitioning (validated for SQL injection)
         value_lower: Lower bound (inclusive)
         value_upper: Upper bound (exclusive)
 
     Returns:
         Safe WHERE clause predicate
+
+    Raises:
+        InvalidOptionsError: If column name is invalid
     """
+    # Validate column identifier to prevent SQL injection
+    validated_col = validate_identifier(column)
+
     # Quote column identifier (double quotes for most DBs, backticks for MySQL handled by backend)
-    quoted_col = f'"{column}"'
+    quoted_col = f'"{validated_col}"'
 
     # Values are integers; no injection risk, but use literals
     return f"{quoted_col} >= {value_lower} AND {quoted_col} < {value_upper}"
