@@ -579,6 +579,56 @@ async fn test_create_table() {
         panic!("Expected TableKind::Table");
     };
 
+    let mut static_properties: Vec<_> = properties
+        .iter()
+        .filter(|(k, _)| {
+            ![
+                "metadata-location",
+                "metadata.last-updated-ms",
+                "metadata.table-uuid",
+            ]
+            .contains(&k.as_str())
+        })
+        .cloned()
+        .collect();
+    static_properties.sort();
+
+    let mut expected_properties: Vec<(String, String)> = vec![
+        ("comment".to_string(), "peow".to_string()),
+        ("metadata.current-schema-id".to_string(), "0".to_string()),
+        ("metadata.current-snapshot-id".to_string(), "-1".to_string()),
+        (
+            "metadata.default-sort-order-id".to_string(),
+            "0".to_string(),
+        ),
+        ("metadata.default-spec-id".to_string(), "0".to_string()),
+        ("metadata.format-version".to_string(), "2".to_string()),
+        ("metadata.last-column-id".to_string(), "3".to_string()),
+        ("metadata.last-partition-id".to_string(), "999".to_string()),
+        ("metadata.last-sequence-number".to_string(), "0".to_string()),
+        (
+            "metadata.partition-statistics".to_string(),
+            "[]".to_string(),
+        ),
+        ("metadata.statistics".to_string(), "[]".to_string()),
+        (
+            "write.parquet.compression-codec".to_string(),
+            "zstd".to_string(),
+        ),
+    ];
+    expected_properties.sort();
+
+    assert_eq!(properties.len(), 15);
+    assert_eq!(static_properties, expected_properties);
+    assert!(properties.iter().any(|(k, v)| k == "metadata-location"
+        && v.starts_with("s3://icebergdata/demo/test_create_table.apple.ios/t1/metadata/")));
+    assert!(properties
+        .iter()
+        .any(|(k, v)| k == "metadata.last-updated-ms" && !v.is_empty()));
+    assert!(properties
+        .iter()
+        .any(|(k, v)| k == "metadata.table-uuid" && !v.is_empty()));
+
     assert_eq!(table.name, "t1".to_string());
     assert_eq!(catalog, "test".to_string());
     assert_eq!(database, Vec::<String>::from(ns.clone()));
@@ -593,12 +643,6 @@ async fn test_create_table() {
     assert_eq!(sort_by, vec![]);
     assert_eq!(bucket_by, None);
     assert_eq!(options, Vec::<(String, String)>::new());
-    assert_eq!(properties.len(), 2);
-    assert!(properties.contains(&("comment".to_string(), "peow".to_string())));
-    assert!(properties.contains(&(
-        "write.parquet.compression-codec".to_string(),
-        "zstd".to_string()
-    )));
     assert_eq!(columns.len(), 3);
     assert!(
         columns.contains(&sail_catalog::provider::TableColumnStatus {
@@ -764,16 +808,10 @@ async fn test_create_table() {
         ascending: true,
     }));
     assert_eq!(bucket_by, None);
-    assert_eq!(options, Vec::<(String, String)>::new());
-    assert_eq!(properties.len(), 5);
+    assert_eq!(options, vec![("key1".to_string(), "value1".to_string())]);
+    assert_eq!(properties.len(), 17);
     assert!(properties.contains(&("owner".to_string(), "mr. meow".to_string())));
     assert!(properties.contains(&("team".to_string(), "data-eng".to_string())));
-    assert!(properties.contains(&("key1".to_string(), "value1".to_string())));
-    assert!(properties.contains(&("comment".to_string(), "test table".to_string())));
-    assert!(properties.contains(&(
-        "write.parquet.compression-codec".to_string(),
-        "zstd".to_string()
-    )));
     assert_eq!(columns.len(), 3);
     assert!(
         columns.contains(&sail_catalog::provider::TableColumnStatus {
@@ -927,6 +965,58 @@ async fn test_get_table() {
         panic!("Expected TableKind::Table");
     };
 
+    let mut static_properties: Vec<_> = properties
+        .iter()
+        .filter(|(k, _)| {
+            ![
+                "metadata-location",
+                "metadata.last-updated-ms",
+                "metadata.table-uuid",
+            ]
+            .contains(&k.as_str())
+        })
+        .cloned()
+        .collect();
+    static_properties.sort();
+
+    let mut expected_properties: Vec<(String, String)> = vec![
+        ("comment".to_string(), "test table".to_string()),
+        ("metadata.current-schema-id".to_string(), "0".to_string()),
+        ("metadata.current-snapshot-id".to_string(), "-1".to_string()),
+        (
+            "metadata.default-sort-order-id".to_string(),
+            "1".to_string(),
+        ),
+        ("metadata.default-spec-id".to_string(), "0".to_string()),
+        ("metadata.format-version".to_string(), "2".to_string()),
+        ("metadata.last-column-id".to_string(), "3".to_string()),
+        ("metadata.last-partition-id".to_string(), "1000".to_string()),
+        ("metadata.last-sequence-number".to_string(), "0".to_string()),
+        (
+            "metadata.partition-statistics".to_string(),
+            "[]".to_string(),
+        ),
+        ("metadata.statistics".to_string(), "[]".to_string()),
+        (
+            "write.parquet.compression-codec".to_string(),
+            "zstd".to_string(),
+        ),
+        ("owner".to_string(), "mr. meow".to_string()),
+        ("team".to_string(), "data-eng".to_string()),
+    ];
+    expected_properties.sort();
+
+    assert_eq!(properties.len(), 17);
+    assert_eq!(static_properties, expected_properties);
+    assert!(properties.iter().any(|(k, v)| k == "metadata-location"
+        && v.starts_with("s3://icebergdata/custom/path/meow/metadata/")));
+    assert!(properties
+        .iter()
+        .any(|(k, v)| k == "metadata.last-updated-ms" && !v.is_empty()));
+    assert!(properties
+        .iter()
+        .any(|(k, v)| k == "metadata.table-uuid" && !v.is_empty()));
+
     assert_eq!(table.name, "t2".to_string());
     assert_eq!(catalog, "test".to_string());
     assert_eq!(database, Vec::<String>::from(ns.clone()));
@@ -952,16 +1042,7 @@ async fn test_get_table() {
         ascending: true,
     }));
     assert_eq!(bucket_by, None);
-    assert_eq!(options, Vec::<(String, String)>::new());
-    assert_eq!(properties.len(), 5);
-    assert!(properties.contains(&("owner".to_string(), "mr. meow".to_string())));
-    assert!(properties.contains(&("team".to_string(), "data-eng".to_string())));
-    assert!(properties.contains(&("key1".to_string(), "value1".to_string())));
-    assert!(properties.contains(&("comment".to_string(), "test table".to_string())));
-    assert!(properties.contains(&(
-        "write.parquet.compression-codec".to_string(),
-        "zstd".to_string()
-    )));
+    assert_eq!(options, vec![("key1".to_string(), "value1".to_string())]);
     assert_eq!(columns.len(), 3);
     assert!(
         columns.contains(&sail_catalog::provider::TableColumnStatus {
@@ -1294,14 +1375,36 @@ async fn test_create_view() {
         panic!("Expected TableKind::View");
     };
 
+    let mut static_properties: Vec<_> = properties
+        .iter()
+        .filter(|(k, _)| k != "metadata-location" && k != "metadata.view-uuid")
+        .cloned()
+        .collect();
+    static_properties.sort();
+
+    let mut expected_properties: Vec<(String, String)> = vec![
+        ("comment".to_string(), "test view".to_string()),
+        ("metadata.format-version".to_string(), "1".to_string()),
+        (
+            "metadata.location".to_string(),
+            "s3://icebergdata/demo/test_create_view/view1".to_string(),
+        ),
+        ("metadata.current-version-id".to_string(), "1".to_string()),
+    ];
+    expected_properties.sort();
+
+    assert_eq!(properties.len(), 6);
+    assert!(properties.iter().any(|(k, v)| k == "metadata-location"
+        && v.starts_with("s3://icebergdata/demo/test_create_view/view1/metadata/")));
+    assert!(properties
+        .iter()
+        .any(|(k, v)| k == "metadata.view-uuid" && !v.is_empty()));
+    assert_eq!(static_properties, expected_properties);
+
     assert_eq!(view.name, "view1".to_string());
     assert_eq!(catalog, "test".to_string());
     assert_eq!(database, Vec::<String>::from(ns.clone()));
     assert_eq!(comment, Some("test view".to_string()));
-    assert_eq!(
-        properties,
-        vec![("comment".to_string(), "test view".to_string())]
-    );
     assert_eq!(definition, "SELECT * FROM table1".to_string());
     assert_eq!(columns.len(), 2);
     assert!(columns.contains(&TableColumnStatus {

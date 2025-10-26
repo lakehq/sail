@@ -880,7 +880,7 @@ impl CatalogProvider for IcebergRestCatalogProvider {
         }
         // TODO: Is this correct for options?
         for (k, v) in options {
-            props.insert(k, v);
+            props.insert(format!("options.{k}"), v);
         }
         if let Some(c) = comment {
             props.insert("comment".to_string(), c);
