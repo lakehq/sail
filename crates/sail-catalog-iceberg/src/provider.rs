@@ -164,10 +164,38 @@ impl IcebergRestCatalogProvider {
         database: &Namespace,
         result: crate::models::LoadTableResult,
     ) -> CatalogResult<TableStatus> {
-        let metadata = &result.metadata;
+        // TODO: Do we want to do anything with:
+        //  - `result.config``
+        //  - `result.storage_credentials`
+        //  - Unused fields in `TableMetadata`?
+        let crate::models::TableMetadata {
+            format_version,
+            table_uuid,
+            location,
+            last_updated_ms,
+            next_row_id,
+            properties,
+            schemas,
+            current_schema_id,
+            last_column_id,
+            partition_specs,
+            default_spec_id,
+            last_partition_id,
+            sort_orders,
+            default_sort_order_id,
+            encryption_keys: _,
+            snapshots: _,
+            refs: _,
+            current_snapshot_id,
+            last_sequence_number,
+            snapshot_log: _,
+            metadata_log: _,
+            statistics,
+            partition_statistics,
+        } = *result.metadata;
 
-        let current_schema = if let Some(schemas) = &metadata.schemas {
-            if let Some(schema_id) = metadata.current_schema_id {
+        let current_schema = if let Some(schemas) = &schemas {
+            if let Some(schema_id) = current_schema_id {
                 schemas
                     .iter()
                     .find(|s| s.schema_id == Some(schema_id))
@@ -179,8 +207,8 @@ impl IcebergRestCatalogProvider {
             None
         };
 
-        let default_partition_spec = metadata.partition_specs.as_ref().and_then(|specs| {
-            if let Some(spec_id) = metadata.default_spec_id {
+        let default_partition_spec = partition_specs.as_ref().and_then(|specs| {
+            if let Some(spec_id) = default_spec_id {
                 specs
                     .iter()
                     .find(|s| s.spec_id == Some(spec_id))
@@ -235,8 +263,8 @@ impl IcebergRestCatalogProvider {
             Vec::new()
         };
 
-        let default_sort_order = metadata.sort_orders.as_ref().and_then(|orders| {
-            if let Some(order_id) = metadata.default_sort_order_id {
+        let default_sort_order = sort_orders.as_ref().and_then(|orders| {
+            if let Some(order_id) = default_sort_order_id {
                 orders
                     .iter()
                     .find(|o| o.order_id == order_id)
@@ -303,17 +331,96 @@ impl IcebergRestCatalogProvider {
             })
             .unwrap_or_default();
 
-        let comment = metadata
-            .properties
-            .as_ref()
-            .and_then(|p| get_property(p, "comment"));
+        let mut properties: HashMap<String, String> = properties.unwrap_or_default();
 
-        let properties: Vec<_> = metadata
-            .properties
-            .clone()
-            .unwrap_or_default()
-            .into_iter()
+        let comment = get_property(&properties, "comment");
+
+        let options: Vec<_> = properties
+            .extract_if(|k, _| k.trim().to_lowercase().starts_with("options."))
+            .map(|(k, v)| {
+                let trimmed = k.trim().to_string();
+                let stripped =
+                    if trimmed.len() >= 8 && trimmed[..8].eq_ignore_ascii_case("options.") {
+                        trimmed[8..].to_string()
+                    } else {
+                        trimmed
+                    };
+                (stripped, v)
+            })
             .collect();
+
+        let mut properties: Vec<_> = properties.into_iter().collect();
+        if let Some(metadata_location) = result.metadata_location {
+            properties.push(("metadata-location".to_string(), metadata_location));
+        }
+        properties.push((
+            "metadata.format-version".to_string(),
+            format_version.to_string(),
+        ));
+        properties.push(("metadata.table-uuid".to_string(), table_uuid));
+        if let Some(last_updated_ms) = last_updated_ms {
+            properties.push((
+                "metadata.last-updated-ms".to_string(),
+                last_updated_ms.to_string(),
+            ));
+        }
+        if let Some(next_row_id) = next_row_id {
+            properties.push(("metadata.next-row-id".to_string(), next_row_id.to_string()));
+        }
+        if let Some(current_schema_id) = current_schema_id {
+            properties.push((
+                "metadata.current-schema-id".to_string(),
+                current_schema_id.to_string(),
+            ));
+        }
+        if let Some(last_column_id) = last_column_id {
+            properties.push((
+                "metadata.last-column-id".to_string(),
+                last_column_id.to_string(),
+            ));
+        }
+        if let Some(default_spec_id) = default_spec_id {
+            properties.push((
+                "metadata.default-spec-id".to_string(),
+                default_spec_id.to_string(),
+            ));
+        }
+        if let Some(last_partition_id) = last_partition_id {
+            properties.push((
+                "metadata.last-partition-id".to_string(),
+                last_partition_id.to_string(),
+            ));
+        }
+        if let Some(default_sort_order_id) = default_sort_order_id {
+            properties.push((
+                "metadata.default-sort-order-id".to_string(),
+                default_sort_order_id.to_string(),
+            ));
+        }
+        if let Some(current_snapshot_id) = current_snapshot_id {
+            properties.push((
+                "metadata.current-snapshot-id".to_string(),
+                current_snapshot_id.to_string(),
+            ));
+        }
+        if let Some(last_sequence_number) = last_sequence_number {
+            properties.push((
+                "metadata.last-sequence-number".to_string(),
+                last_sequence_number.to_string(),
+            ));
+        }
+        if let Some(statistics) = statistics {
+            properties.push((
+                "metadata.statistics".to_string(),
+                serde_json::to_string(&statistics).unwrap_or_default(),
+            ));
+        }
+        if let Some(partition_statistics) = partition_statistics {
+            properties.push((
+                "metadata.partition-statistics".to_string(),
+                serde_json::to_string(&partition_statistics).unwrap_or_default(),
+            ));
+        }
 
         Ok(TableStatus {
             name: table_name.to_string(),
@@ -323,12 +430,12 @@ impl IcebergRestCatalogProvider {
                 columns,
                 comment,
                 constraints,
-                location: metadata.location.clone(),
+                location,
                 format: "iceberg".to_string(),
                 partition_by,
                 sort_by,
                 bucket_by: None,
-                options: Vec::new(),
+                options,
                 properties,
             },
         })
@@ -340,20 +447,28 @@ impl IcebergRestCatalogProvider {
         database: &Namespace,
         result: crate::models::LoadViewResult,
     ) -> CatalogResult<TableStatus> {
-        let metadata = &result.metadata;
+        // TODO: Do we want to do anything with:
+        //  - `result.config``
+        //  - Unused fields in `ViewMetadata`?
+        let crate::models::ViewMetadata {
+            view_uuid,
+            format_version,
+            location,
+            current_version_id,
+            versions,
+            version_log: _,
+            schemas,
+            properties,
+        } = *result.metadata;
 
-        let current_version = metadata
-            .versions
-            .iter()
-            .find(|v| v.version_id == metadata.current_version_id);
+        let current_version = versions.iter().find(|v| v.version_id == current_version_id);
 
         let current_schema = if let Some(version) = current_version {
-            metadata
-                .schemas
+            schemas
                 .iter()
                 .find(|s| s.schema_id == Some(version.schema_id))
         } else {
-            metadata.schemas.last()
+            schemas.last()
         };
 
         let columns = if let Some(schema) = current_schema {
@@ -392,17 +507,22 @@ impl IcebergRestCatalogProvider {
             .map(|r| r.sql.clone())
             .unwrap_or_default();
 
-        let comment = metadata
-            .properties
-            .as_ref()
-            .and_then(|p| get_property(p, "comment"));
+        let properties: HashMap<String, String> = properties.unwrap_or_default();
 
-        let properties: Vec<_> = metadata
-            .properties
-            .clone()
-            .unwrap_or_default()
-            .into_iter()
-            .collect();
+        let comment = get_property(&properties, "comment");
+
+        let mut properties: Vec<_> = properties.into_iter().collect();
+        properties.push(("metadata-location".to_string(), result.metadata_location));
+        properties.push(("metadata.view-uuid".to_string(), view_uuid));
+        properties.push((
+            "metadata.format-version".to_string(),
+            format_version.to_string(),
+        ));
+        properties.push(("metadata.location".to_string(), location));
+        properties.push((
+            "metadata.current-version-id".to_string(),
+            current_version_id.to_string(),
+        ));
 
         Ok(TableStatus {
             name: view_name.to_string(),
