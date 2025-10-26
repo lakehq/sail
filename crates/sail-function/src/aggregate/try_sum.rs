@@ -189,7 +189,7 @@ impl Accumulator for TrySumAccumulator {
         let out = sum_scalar_match!(self, {
             DataType::Int64   => (sum_i64, |x| ScalarValue::Int64(Some(x)), ScalarValue::Int64(None)),
             DataType::Float64 => (sum_f64, |x| ScalarValue::Float64(Some(x)), ScalarValue::Float64(None)),
-                DataType::Decimal128(p, s) => (sum_dec128,|x| ScalarValue::Decimal128(Some(x), p, s), ScalarValue::Decimal128(None, p, s)),
+            DataType::Decimal128(p, s) => (sum_dec128,|x| ScalarValue::Decimal128(Some(x), p, s), ScalarValue::Decimal128(None, p, s)),
         });
         Ok(out)
     }
