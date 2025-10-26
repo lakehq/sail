@@ -85,7 +85,8 @@ async fn setup_catalog() -> (
 
     let runtime = RuntimeHandle::new(
         tokio::runtime::Handle::current(),
-        Some(tokio::runtime::Handle::current()),
+        tokio::runtime::Handle::current(),
+        true,
     );
     let props = HashMap::from([(REST_CATALOG_PROP_URI.to_string(), rest_url)]);
     let catalog = IcebergRestCatalogProvider::new(runtime, "test".to_string(), props);

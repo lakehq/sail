@@ -15,10 +15,12 @@
   default: "8388608"
   description: The stack size in bytes for each thread.
 
-- key: runtime.enable_secondary
+- key: runtime.io_runtime_for_object_store
   type: boolean
   default: "false"
-  description: Whether to enable a secondary Tokio runtime for separating I/O and compute tasks.
+  description: |
+    Use a secondary Tokio runtime to separate object storage I/O tasks from other operations.
+    Previously named 'enable_secondary'.
   experimental: true
 
 - key: cluster.enable_tls

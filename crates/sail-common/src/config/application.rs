@@ -78,7 +78,9 @@ pub enum ExecutionMode {
 #[serde(deny_unknown_fields)]
 pub struct RuntimeConfig {
     pub stack_size: usize,
-    pub enable_secondary: bool,
+    // Keep alias for backwards compatibility with existing repos (e.g., ClickBench, LakeBench)
+    #[serde(alias = "enable_secondary")]
+    pub io_runtime_for_object_store: bool,
 }
 
 #[derive(Debug, Clone, Deserialize)]

@@ -100,7 +100,7 @@ impl IcebergRestCatalogProvider {
                 }
                 Ok(apis::ApiClient::new(Arc::new(client_config)))
             },
-            self.runtime.primary().clone(), // CHECK HERE
+            self.runtime.io().clone(),
         )
         .map_err(|e| CatalogError::External(format!("Failed to initialize API client: {e}")))
     }
@@ -1217,7 +1217,8 @@ mod tests {
             let name_str = name.unwrap_or("");
             let runtime = RuntimeHandle::new(
                 tokio::runtime::Handle::current(),
-                Some(tokio::runtime::Handle::current()),
+                tokio::runtime::Handle::current(),
+                true,
             );
             let props = HashMap::from([(REST_CATALOG_PROP_URI.to_string(), server.uri())]);
             let catalog = IcebergRestCatalogProvider::new(runtime, name_str.to_string(), props);
