@@ -50,6 +50,8 @@ impl Provider for InternalConfigPlaceholder {
 
 impl AppConfig {
     pub fn load() -> CommonResult<Self> {
+        // FIXME: Serde aliases conflict when defaults and env vars use different field names.
+        //  This causes: `Error: invalid argument: duplicate field...
         Figment::from(ConfigDefinition::new(APP_CONFIG))
             .merge(InternalConfigPlaceholder)
             .merge(Env::prefixed("SAIL_").map(|p| p.as_str().replace("__", ".").into()))
@@ -78,8 +80,6 @@ pub enum ExecutionMode {
 #[serde(deny_unknown_fields)]
 pub struct RuntimeConfig {
     pub stack_size: usize,
-    // Keep alias for backwards compatibility with existing repos (e.g., ClickBench, LakeBench)
-    #[serde(alias = "enable_secondary")]
     pub io_runtime_for_object_store: bool,
 }
 

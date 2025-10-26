@@ -17,7 +17,7 @@
 
 - key: runtime.io_runtime_for_object_store
   type: boolean
-  default: "false"
+  default: "true"
   description: |
     Use a secondary Tokio runtime to separate object storage I/O tasks from other operations.
     Previously named 'enable_secondary'.
