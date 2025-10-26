@@ -774,7 +774,6 @@ async fn test_create_table() {
         "zstd".to_string()
     )));
     assert_eq!(columns.len(), 3);
-    eprintln!("CHECK HERE: {columns:?}");
     assert!(
         columns.contains(&sail_catalog::provider::TableColumnStatus {
             name: "foo".to_string(),
@@ -963,7 +962,6 @@ async fn test_get_table() {
         "zstd".to_string()
     )));
     assert_eq!(columns.len(), 3);
-    eprintln!("CHECK HERE: {columns:?}");
     assert!(
         columns.contains(&sail_catalog::provider::TableColumnStatus {
             name: "foo".to_string(),

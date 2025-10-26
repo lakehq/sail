@@ -8,6 +8,7 @@
 pub mod apis;
 mod models;
 mod provider;
+mod runtime;
 
 pub use provider::{
     IcebergRestCatalogProvider, REST_CATALOG_PROP_PREFIX, REST_CATALOG_PROP_URI,

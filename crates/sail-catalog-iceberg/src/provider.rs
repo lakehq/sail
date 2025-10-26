@@ -16,7 +16,8 @@ use sail_iceberg::{
 use tokio::sync::OnceCell;
 
 use crate::apis::configuration::Configuration;
-use crate::apis::{self, Api, ApiClient};
+use crate::apis::{self, Api};
+use crate::runtime::RuntimeAwareApiClient;
 
 pub const REST_CATALOG_PROP_URI: &str = "uri";
 
@@ -40,11 +41,11 @@ pub struct RestCatalogConfig {
 
 /// Provider for Apache Iceberg REST Catalog.
 pub struct IcebergRestCatalogProvider {
-    runtime: RuntimeHandle, // CHECK HERE: ADD SECONDARY RUNTIME LOGIC BEFORE MERGING
+    runtime: RuntimeHandle,
     name: String,
     catalog_config: RestCatalogConfig,
     merged_catalog_config: OnceCell<RestCatalogConfig>,
-    client: OnceCell<ApiClient>,
+    client: OnceCell<RuntimeAwareApiClient>,
 }
 
 impl IcebergRestCatalogProvider {
@@ -70,21 +71,43 @@ impl IcebergRestCatalogProvider {
         }
     }
 
-    fn init_client(&self, catalog_config: &RestCatalogConfig) -> CatalogResult<ApiClient> {
-        // CHECK HERE
-        //  basic_auth: None,
-        //  oauth_access_token: None,
-        //  bearer_access_token: None,
-        //  api_key: None,
-        let mut client_config = Configuration::new();
-        client_config.user_agent = Some("Sail".to_string());
-        client_config.base_path = catalog_config.uri.to_string();
-        Ok(ApiClient::new(Arc::new(client_config)))
+    fn init_client(
+        &self,
+        catalog_config: &RestCatalogConfig,
+    ) -> CatalogResult<RuntimeAwareApiClient> {
+        let uri = catalog_config.uri.clone();
+        let props = catalog_config.props.clone();
+        RuntimeAwareApiClient::try_new(
+            move || {
+                let mut client_config = Configuration::new();
+                client_config.user_agent = Some("Sail".to_string());
+                client_config.base_path = uri;
+                for (key, value) in &props {
+                    match key.as_str() {
+                        // CHECK HERE
+                        // "basic_auth" => {
+                        // }
+                        // "api_key" => {
+                        // }
+                        "oauth_access_token" => {
+                            client_config.oauth_access_token = Some(value.clone());
+                        }
+                        "bearer_access_token" => {
+                            client_config.bearer_access_token = Some(value.clone());
+                        }
+                        _ => {}
+                    }
+                }
+                Ok(apis::ApiClient::new(Arc::new(client_config)))
+            },
+            self.runtime.primary().clone(), // CHECK HERE
+        )
+        .map_err(|e| CatalogError::External(format!("Failed to initialize API client: {e}")))
     }
 
     async fn load_catalog_config(
         &self,
-        client: &ApiClient,
+        client: &RuntimeAwareApiClient,
         warehouse: Option<&str>,
     ) -> CatalogResult<crate::models::CatalogConfig> {
         let config = client
@@ -100,7 +123,7 @@ impl IcebergRestCatalogProvider {
     // This only happens once, then the result is cached.
     async fn load_client_and_merged_config(
         &self,
-    ) -> CatalogResult<(&ApiClient, &RestCatalogConfig)> {
+    ) -> CatalogResult<(&RuntimeAwareApiClient, &RestCatalogConfig)> {
         let merged_catalog_config = self
             .merged_catalog_config
             .get_or_try_init(|| async {
