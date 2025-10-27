@@ -11,8 +11,6 @@ use rust_decimal::prelude::ToPrimitive;
 
 use crate::spec::{ListType, MapType, NestedField, PrimitiveType, Schema, StructType, Type};
 
-// Reference: https://github.com/lakehq/sail/pull/974
-
 pub const ICEBERG_ARROW_FIELD_DOC_KEY: &str = "doc";
 
 fn get_field_id(field: &ArrowField) -> i32 {
