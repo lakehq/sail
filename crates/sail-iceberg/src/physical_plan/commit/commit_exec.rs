@@ -614,7 +614,6 @@ impl ExecutionPlan for IcebergCommitExec {
             log::trace!("Metadata written successfully");
 
             // Update version-hint with the metadata filename (not version number)
-            // PyIceberg expects the filename when it doesn't follow v{N}.metadata.json pattern
             let metadata_filename = if let Some(fname) = new_meta_rel.rsplit('/').next() {
                 fname.to_string()
             } else {

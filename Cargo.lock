@@ -5871,6 +5871,7 @@ name = "sail-iceberg"
 version = "0.3.7"
 dependencies = [
  "apache-avro",
+ "arrow-schema",
  "async-trait",
  "bytes",
  "chrono",
