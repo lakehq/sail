@@ -25,9 +25,9 @@ todo = "deny"
 thiserror = { version = "2.0.17" }
 tokio = { version = "1.47.1", features = ["full"] }
 tokio-stream = { version = "0.1.17", features = ["time", "io-util"] }
-pbjson = "0.7.0"
-pbjson-types = "0.7.0"
-pbjson-build = "0.7.0"
+pbjson = "0.8.0"
+pbjson-types = "0.8.0"
+pbjson-build = "0.8.0"
 tower = { version = "0.5.2", features = ["full"] }
 uuid = { version = "1.18.1", features = ["serde", "v4"] }
 async-trait = "0.1.89"
@@ -74,10 +74,10 @@ num-traits = "0.2.19"
 log = "0.4.28"
 env_logger = "0.11.8"
 fastrace = { version = "0.7.14", features = ["enable"] }
-fastrace-opentelemetry = "0.13.0"
-opentelemetry = "0.30.0"
-opentelemetry_sdk = "0.30.0"
-opentelemetry-otlp = { version = "0.30.0", features = ["tls", "tls-roots", "grpc-tonic"] }
+fastrace-opentelemetry = "0.14.0"
+opentelemetry = "0.31.0"
+opentelemetry_sdk = "0.31.0"
+opentelemetry-otlp = { version = "0.31.0", features = ["tls", "tls-roots", "grpc-tonic"] }
 figment = { version = "0.10.19", features = ["toml", "env"] }
 kube = "2.0.1"
 k8s-openapi = { version = "0.26.0", features = ["latest"] }
@@ -115,15 +115,15 @@ testcontainers = "0.25.0"
 
 # The `tonic` version must match the one used in `arrow-flight` (replace `RELEASE` with the release we are using):
 #   https://github.com/apache/arrow-rs/blob/RELEASE/arrow-flight/Cargo.toml
-tonic = { version = "0.13.1", features = ["tls-ring", "tls-native-roots", "gzip", "zstd"] }
-tonic-build = "0.13.1"
-tonic-reflection = "0.13.1"
-tonic-health = "0.13.1"
-tonic-types = "0.13.1"
+tonic = { version = "0.14.2", features = ["tls-ring", "tls-native-roots", "gzip", "zstd"] }
+tonic-build = "0.14.2"
+tonic-reflection = "0.14.2"
+tonic-health = "0.14.2"
+tonic-types = "0.14.2"
 # The `prost` version must match the one used in `tonic` (replace `RELEASE` with the release we are using):
 #   https://github.com/hyperium/tonic/blob/vRELEASE/tonic/Cargo.toml
-prost-build = "0.13.5"
-prost = "0.13.5"
+prost-build = "0.14.1"
+prost = "0.14.1"
 # The `axum` version must match the one used in `tonic` (replace `RELEASE` with the release we are using):
 #   https://github.com/hyperium/tonic/blob/vRELEASE/tonic/Cargo.toml
 axum = "0.8.4"
@@ -147,7 +147,7 @@ arrow-buffer = { version = "56.2.0" }
 arrow-schema = { version = "56.2.0", features = ["serde"] }
 arrow-flight = { version = "56.2.0" }
 arrow-pyarrow = { version = "56.2.0" }
-parquet = { version = "56.2.0" }
+parquet = { version = "57.0.0" }
 serde_arrow = { version = "0.13.6", features = ["arrow-56"] }
 # The `object_store` version must match the one used in DataFusion.
 object_store = { version = "0.12.4", features = ["aws", "gcp", "azure", "http"] }
@@ -155,7 +155,7 @@ hdfs-native-object-store = "0.15.0"
 
 # Lakehouse
 deltalake = { git = "https://github.com/delta-io/delta-rs.git", rev = "0864b21", default-features = false, features = ["rustls"] }
-delta_kernel = { version = "0.15.1", features = ["arrow-56", "internal-api", "default-engine-rustls"] }
+delta_kernel = { version = "0.16.0", features = ["arrow-56", "internal-api", "default-engine-rustls"] }
 
 ######
 # This is the end of the manually managed dependencies.
