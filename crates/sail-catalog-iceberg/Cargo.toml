@@ -8,15 +8,20 @@ workspace = true
 
 [dependencies]
 sail-catalog = { path = "../sail-catalog" }
+sail-common = { path = "../sail-common" }
+sail-iceberg = { path = "../sail-iceberg" }
 
 async-trait = { workspace = true }
-dashmap = { workspace = true }
 reqwest = { workspace = true }
 url = { workspace = true }
 serde = { workspace = true }
 serde_json = { workspace = true }
 serde_with = { workspace = true }
 uuid = { workspace = true }
-once_cell = { workspace = true }
-ordered-float = { workspace = true }
-chrono = { workspace = true }
+tokio = { workspace = true }
+
+[dev-dependencies]
+tokio = { workspace = true }
+wiremock = { workspace = true }
+testcontainers = { workspace = true }
+arrow = { workspace = true }

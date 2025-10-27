@@ -1823,7 +1823,7 @@ components:
       in: path
       schema:
         type: string
-      required: true
+      required: false
       description: An optional prefix in the path
 
     table:

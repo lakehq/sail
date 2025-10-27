@@ -5,6 +5,12 @@
 #![allow(clippy::needless_return)]
 #![allow(clippy::empty_docs)]
 
-mod apis;
+pub mod apis;
 mod models;
-pub mod types;
+mod provider;
+mod runtime;
+
+pub use provider::{
+    IcebergRestCatalogProvider, REST_CATALOG_PROP_PREFIX, REST_CATALOG_PROP_URI,
+    REST_CATALOG_PROP_WAREHOUSE,
+};

@@ -26,13 +26,6 @@ pub trait CatalogProvider: Send + Sync {
         options: CreateDatabaseOptions,
     ) -> CatalogResult<DatabaseStatus>;
 
-    /// Drops a database in the catalog.
-    async fn drop_database(
-        &self,
-        database: &Namespace,
-        options: DropDatabaseOptions,
-    ) -> CatalogResult<()>;
-
     /// Gets the status of a database in the catalog.
     async fn get_database(&self, database: &Namespace) -> CatalogResult<DatabaseStatus>;
 
@@ -43,6 +36,13 @@ pub trait CatalogProvider: Send + Sync {
         &self,
         prefix: Option<&Namespace>,
     ) -> CatalogResult<Vec<DatabaseStatus>>;
+
+    /// Drops a database in the catalog.
+    async fn drop_database(
+        &self,
+        database: &Namespace,
+        options: DropDatabaseOptions,
+    ) -> CatalogResult<()>;
 
     /// Creates a table in the catalog.
     async fn create_table(
