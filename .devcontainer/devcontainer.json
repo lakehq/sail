@@ -4,28 +4,36 @@
     "dockerfile": "Dockerfile"
   },
   "features": {
-    "ghcr.io/devcontainers/features/node:1": {
-      "version": "22"
-    },
-    "ghcr.io/devcontainers/features/java:1": {
-      "version": "17",
-      "distribution": "corretto"
-    },
-    "ghcr.io/devcontainers/features/rust:1": {
-      "version": "1.87.0",
-      "profile": "default"
-    }
   },
-  "postCreateCommand": "hatch env create default && . ${containerWorkspaceFolder}/.venvs/default/bin/activate && pip install --upgrade pip && echo 'source ${containerWorkspaceFolder}/.venvs/default/bin/activate' >> ~/.bashrc",
+  "mounts": [
+    "source=sail-venvs-${devcontainerId},target=${containerWorkspaceFolder}/.venvs,type=volume",
+    "source=sail-node-modules-${devcontainerId},target=${containerWorkspaceFolder}/node_modules,type=volume",
+    "source=sail-pnpm-store-${devcontainerId},target=${containerWorkspaceFolder}/.pnpm-store,type=volume",
+    "source=sail-target-${devcontainerId},target=${containerWorkspaceFolder}/target,type=volume"
+  ],
+  "postCreateCommand": "sudo chown $(id -u):$(id -g) .venvs node_modules .pnpm-store target && hatch env create && pnpm install",
   "customizations": {
     "vscode": {
       "extensions": [
         "rust-lang.rust-analyzer",
-        "ms-python.python"
+        "ms-python.python",
+        "bradlc.vscode-tailwindcss",
+        "dbaeumer.vscode-eslint",
+        "esbenp.prettier-vscode",
+        "editorconfig.editorconfig",
+        "vue.volar",
+        "wayou.vscode-todo-highlight"
       ],
       "settings": {
-        "terminal.integrated.defaultProfile.linux": "bash"
+        "terminal.integrated.defaultProfile.linux": "bash",
+        "python.defaultInterpreterPath": "${containerWorkspaceFolder}/.venvs/default/bin/python",
+        "python.terminal.activateEnvironment": false
       }
+    },
+    "jetbrains": {
+      "plugins": [
+        "PythonCore"
+      ]
     }
   },
   "remoteUser": "vscode"
