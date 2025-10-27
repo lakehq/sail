@@ -456,6 +456,25 @@ impl ExecutionPlan for IcebergCommitExec {
                 .await
                 .map_err(DataFusionError::Execution)?;
 
+                // Extract metadata filename (without "metadata/" prefix) for version-hint
+                let metadata_filename = if let Some(fname) = rel_name.rsplit('/').next() {
+                    fname.to_string()
+                } else {
+                    rel_name.clone()
+                };
+
+                // Write version-hint
+                IcebergObjectStore::new(
+                    object_store.clone(),
+                    object_store::path::Path::from(table_path),
+                )
+                .put_rel(
+                    "metadata/version-hint.text",
+                    Bytes::from(metadata_filename.as_bytes().to_vec()),
+                )
+                .await
+                .map_err(DataFusionError::Execution)?;
+
                 let array = Arc::new(UInt64Array::from(vec![commit_info.row_count]));
                 let batch = RecordBatch::try_new(schema, vec![array])?;
                 return Ok(batch);
@@ -594,8 +613,14 @@ impl ExecutionPlan for IcebergCommitExec {
             .map_err(DataFusionError::Execution)?;
             log::trace!("Metadata written successfully");
 
-            // Update version-hint
-            let hint_bytes = Bytes::from(next_version.to_string().into_bytes());
+            // Update version-hint with the metadata filename (not version number)
+            // PyIceberg expects the filename when it doesn't follow v{N}.metadata.json pattern
+            let metadata_filename = if let Some(fname) = new_meta_rel.rsplit('/').next() {
+                fname.to_string()
+            } else {
+                new_meta_rel.clone()
+            };
+            let hint_bytes = Bytes::from(metadata_filename.into_bytes());
             IcebergObjectStore::new(
                 object_store.clone(),
                 object_store::path::Path::from(table_url.path()),
