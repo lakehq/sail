@@ -288,6 +288,14 @@ impl ExecutionPlan for IcebergWriterExec {
                     crate::arrow_conversion::arrow_schema_to_iceberg(&input_arrow_schema)?;
                 // Ensure valid, non-zero, unique field ids for top-level fields
                 iceberg_schema = assign_top_level_field_ids(&iceberg_schema);
+                // Validate that no field ids remain zero after assignment
+                // Although this should never happen since ``assign_top_level_field_ids`` assigns IDs to all fields.
+                // TODO: Consider removing this check.
+                if iceberg_schema.fields().iter().any(|f| f.id == 0) {
+                    return Err(DataFusionError::Plan(
+                        "Invalid Iceberg schema: field id 0 detected after assignment".to_string(),
+                    ));
+                }
                 // build identity partition spec from partition_columns
                 let mut builder = crate::spec::partition::PartitionSpec::builder();
                 use crate::spec::transform::Transform;
