@@ -73,7 +73,7 @@ def _append_sample_data(table):
     ("table_name", "spec", "predicate_column", "predicate_value", "expected_numbers"),
     [
         pytest.param(
-            # FIXME: this test is failing in `local-cluster` mode because of 
+            # FIXME: this test is failing in `local-cluster` mode because of
             # the proto issue related to `PartitionedFile`.
             "default.test_partitioned_by_identity",
             PartitionSpec(PartitionField(3, 1001, IdentityTransform(), "ts")),
