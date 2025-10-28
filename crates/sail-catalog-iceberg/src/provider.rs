@@ -2019,15 +2019,16 @@ mod tests {
     async fn test_create_database_impl(name: Option<&str>) {
         let ctx = TestContext::new(name).await;
 
-        Mock::given(method("HEAD"))
-            .and(path(ctx.path("/namespaces/db1").as_str()))
-            .respond_with(ResponseTemplate::new(404))
-            .expect(1)
-            .mount(&ctx.server)
-            .await;
-
         Mock::given(method("POST"))
             .and(path(ctx.path("/namespaces").as_str()))
+            .and(wiremock::matchers::body_json(serde_json::json!({
+                "namespace": ["db1"],
+                "properties": {
+                    "comment": "test database",
+                    "location": "s3://bucket/db1",
+                    "custom_prop": "custom_value"
+                }
+            })))
             .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
                 "namespace": ["db1"],
                 "properties": {
@@ -2064,14 +2065,23 @@ mod tests {
             .iter()
             .any(|(k, v)| k == "custom_prop" && v == "custom_value"));
 
-        Mock::given(method("HEAD"))
-            .and(path(ctx.path("/namespaces/db2").as_str()))
-            .respond_with(ResponseTemplate::new(204))
+        Mock::given(method("POST"))
+            .and(path(ctx.path("/namespaces").as_str()))
+            .and(wiremock::matchers::body_json(serde_json::json!({
+                "namespace": ["db1"],
+            })))
+            .respond_with(ResponseTemplate::new(409).set_body_json(serde_json::json!({
+                "error": {
+                    "message": "Failed to create namespace: error in response: status code 409 Conflict",
+                    "type": "NamespaceAlreadyExistsException",
+                    "code": 409
+                }
+            })))
             .expect(1)
             .mount(&ctx.server)
             .await;
 
-        let namespace = Namespace::try_from(vec!["db2".to_string()]).unwrap();
+        let namespace = Namespace::try_from(vec!["db1".to_string()]).unwrap();
         let result = ctx
             .catalog
             .create_database(
@@ -2087,29 +2097,43 @@ mod tests {
 
         assert!(result.is_err());
         let err = result.unwrap_err().to_string();
-        assert!(err.contains("already exists") || err.contains("db2"));
+        assert!(err.contains("status code 409 Conflict"));
 
-        Mock::given(method("HEAD"))
-            .and(path(ctx.path("/namespaces/db3").as_str()))
-            .respond_with(ResponseTemplate::new(204))
-            .expect(1)
-            .mount(&ctx.server)
-            .await;
-
-        Mock::given(method("GET"))
-            .and(path(ctx.path("/namespaces/db3").as_str()))
-            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
-                "namespace": ["db3"],
+        Mock::given(method("POST"))
+            .and(path(ctx.path("/namespaces").as_str()))
+            .and(wiremock::matchers::body_json(serde_json::json!({
+                "namespace": ["db1"],
                 "properties": {
-                    "comment": "existing database",
-                    "owner": "alice"
+                    "comment": "should be ignored",
+                    "location": "should be ignored"
+                }
+            })))
+            .respond_with(ResponseTemplate::new(409).set_body_json(serde_json::json!({
+                "error": {
+                    "message": "error in response: status code 409 Conflict",
+                    "type": "NamespaceAlreadyExistsException",
+                    "code": 409
                 }
             })))
             .expect(1)
             .mount(&ctx.server)
             .await;
 
-        let namespace = Namespace::try_from(vec!["db3".to_string()]).unwrap();
+        Mock::given(method("GET"))
+            .and(path(ctx.path("/namespaces/db1").as_str()))
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+               "namespace": ["db1"],
+               "properties": {
+                   "comment": "test database",
+                   "location": "s3://bucket/db1",
+                   "custom_prop": "custom_value"
+               }
+            })))
+            .expect(1)
+            .mount(&ctx.server)
+            .await;
+
+        let namespace = Namespace::try_from(vec!["db1".to_string()]).unwrap();
         let result = ctx
             .catalog
             .create_database(
@@ -2125,13 +2149,13 @@ mod tests {
 
         assert!(result.is_ok());
         let db = result.unwrap();
-        assert_eq!(db.database, vec!["db3".to_string()]);
-        assert_eq!(db.comment, Some("existing database".to_string()));
-        assert_eq!(db.location, None);
+        assert_eq!(db.database, vec!["db1".to_string()]);
+        assert_eq!(db.comment, Some("test database".to_string()));
+        assert_eq!(db.location, Some("s3://bucket/db1".to_string()));
         assert!(db
             .properties
             .iter()
-            .any(|(k, v)| k == "owner" && v == "alice"));
+            .any(|(k, v)| k == "custom_prop" && v == "custom_value"));
     }
 
     #[tokio::test]
