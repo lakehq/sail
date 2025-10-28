@@ -53,10 +53,80 @@ impl TableFormat for IcebergTableFormat {
 
     async fn create_writer(
         &self,
-        _ctx: &dyn Session,
-        _info: SinkInfo,
+        ctx: &dyn Session,
+        info: SinkInfo,
     ) -> Result<Arc<dyn ExecutionPlan>> {
-        not_impl_err!("Writing to Iceberg tables is not yet implemented")
+        use datafusion::physical_plan::empty::EmptyExec;
+        use sail_common_datafusion::datasource::PhysicalSinkMode;
+
+        let SinkInfo {
+            input,
+            path,
+            mode,
+            partition_by,
+            bucket_by,
+            sort_order,
+            options: _,
+        } = info;
+
+        if bucket_by.is_some() {
+            return not_impl_err!("bucketing for Iceberg format");
+        }
+
+        // Parse URL and detect table existence (file-based tables only)
+        let table_url = Self::parse_table_url(ctx, vec![path]).await?;
+        let exists_res = load_table_metadata(ctx, &table_url).await;
+        log::trace!("iceberg.create_writer.table_url: {}", &table_url);
+        log::trace!(
+            "iceberg.create_writer.table_exists_result: {:?}",
+            &exists_res
+                .as_ref()
+                .map(|_| ())
+                .map_err(|e| format!("{}", e))
+        );
+        let table_exists = exists_res.is_ok();
+
+        // Early mode handling (no-op or error)
+        match mode {
+            PhysicalSinkMode::ErrorIfExists => {
+                if table_exists {
+                    return plan_err!("Iceberg table already exists at path: {}", table_url);
+                }
+            }
+            PhysicalSinkMode::IgnoreIfExists => {
+                if table_exists {
+                    return Ok(Arc::new(EmptyExec::new(input.schema())));
+                }
+            }
+            // Allow full-table overwrite here; predicate-based overwrite still not supported
+            PhysicalSinkMode::OverwriteIf { .. } | PhysicalSinkMode::OverwritePartitions => {
+                return not_impl_err!("predicate or partition overwrite for Iceberg");
+            }
+            _ => {}
+        }
+
+        // Build writer → commit pipeline
+        use crate::physical_plan::plan_builder::{IcebergPlanBuilder, IcebergTableConfig};
+
+        let table_config = IcebergTableConfig {
+            table_url,
+            partition_columns: partition_by,
+            table_exists,
+        };
+
+        // Convert logical sort requirement to physical sort exprs for SortExec
+        let physical_sort = sort_order.map(|req| {
+            req.into_iter()
+                .map(|r| datafusion::physical_expr::PhysicalSortExpr {
+                    expr: r.expr,
+                    options: r.options.unwrap_or_default(),
+                })
+                .collect::<Vec<_>>()
+        });
+
+        let builder = IcebergPlanBuilder::new(input, table_config, mode, physical_sort, ctx);
+        let exec = builder.build().await?;
+        Ok(exec)
     }
 }
 
@@ -88,7 +158,7 @@ impl IcebergTableFormat {
 }
 
 /// Load Iceberg table metadata from the table location
-async fn load_table_metadata(
+pub(crate) async fn load_table_metadata(
     ctx: &dyn Session,
     table_url: &Url,
 ) -> Result<(Schema, Snapshot, Vec<PartitionSpec>)> {
@@ -118,6 +188,14 @@ async fn load_table_metadata(
         DataFusionError::External(Box::new(e))
     })?;
 
+    log::trace!("Loaded metadata file: {}", &metadata_location);
+    log::trace!(
+        "  current_snapshot_id: {:?}",
+        &table_metadata.current_snapshot_id
+    );
+    log::trace!("  refs: {:?}", &table_metadata.refs);
+    log::trace!("  snapshots count: {}", &table_metadata.snapshots.len());
+
     // Get the current schema
     let schema = table_metadata
         .current_schema()
@@ -134,12 +212,18 @@ async fn load_table_metadata(
         })?
         .clone();
 
+    log::trace!(
+        "load_table_metadata: loaded snapshot id={} manifest_list={}",
+        snapshot.snapshot_id(),
+        snapshot.manifest_list()
+    );
+
     let partition_specs = table_metadata.partition_specs.clone();
     Ok((schema, snapshot, partition_specs))
 }
 
 /// Find the latest metadata file in the table location
-async fn find_latest_metadata_file(
+pub(crate) async fn find_latest_metadata_file(
     object_store: &Arc<dyn object_store::ObjectStore>,
     table_url: &Url,
 ) -> Result<String> {
@@ -149,21 +233,33 @@ async fn find_latest_metadata_file(
     log::trace!("Finding latest metadata file");
     let version_hint_path =
         ObjectPath::from(format!("{}metadata/version-hint.text", table_url.path()).as_str());
-
+    let mut hinted_version: Option<i32> = None;
+    let mut hinted_filename: Option<String> = None;
     if let Ok(version_hint_data) = object_store.get(&version_hint_path).await {
         if let Ok(version_hint_bytes) = version_hint_data.bytes().await {
             if let Ok(version_hint) = String::from_utf8(version_hint_bytes.to_vec()) {
-                let version = version_hint.trim().parse::<i32>().unwrap_or(0);
-                let metadata_file =
-                    format!("{}/metadata/v{}.metadata.json", table_url.path(), version);
-                log::trace!("Using version hint: {}", version);
-                return Ok(metadata_file);
+                let content = version_hint.trim();
+                if let Ok(version) = content.parse::<i32>() {
+                    log::trace!("Using numeric version hint: {}", version);
+                    hinted_version = Some(version);
+                } else {
+                    // If the hint already contains the full metadata filename, use it as-is,
+                    // otherwise append .metadata.json
+                    let fname = if content.ends_with(".metadata.json") {
+                        content.to_string()
+                    } else {
+                        format!("{}.metadata.json", content)
+                    };
+                    log::trace!("Using filename version hint: {}", fname);
+                    hinted_filename = Some(fname);
+                }
             }
         }
     }
 
-    log::trace!("No version hint, listing metadata directory");
+    log::trace!("Listing metadata directory");
     let metadata_prefix = ObjectPath::from(format!("{}metadata/", table_url.path()).as_str());
+
     let objects = object_store.list(Some(&metadata_prefix));
 
     let metadata_files: Result<Vec<_>, _> = objects
@@ -195,9 +291,37 @@ async fn find_latest_metadata_file(
 
     match metadata_files {
         Ok(mut files) => {
+            log::trace!("find_latest_metadata_file: found files: {:?}", &files);
             files.sort_by_key(|(version, _, _)| *version);
 
-            if let Some((_, latest_file, _)) = files.last() {
+            if let Some(fname) = hinted_filename {
+                if let Some((version, path, _)) =
+                    files.iter().rev().find(|(_, p, _)| p.ends_with(&fname))
+                {
+                    log::trace!(
+                        "find_latest_metadata_file: selected by filename hint version {} path={}",
+                        version,
+                        &path
+                    );
+                    return Ok(path.clone());
+                }
+            } else if let Some(hint) = hinted_version {
+                if let Some((version, path, _)) = files.iter().rev().find(|(v, _, _)| *v == hint) {
+                    log::trace!(
+                        "find_latest_metadata_file: selected by numeric hint version {} path={}",
+                        version,
+                        &path
+                    );
+                    return Ok(path.clone());
+                }
+            }
+
+            if let Some((version, latest_file, _)) = files.last() {
+                log::trace!(
+                    "find_latest_metadata_file: selected version {} path={}",
+                    version,
+                    &latest_file
+                );
                 Ok(latest_file.clone())
             } else {
                 plan_err!("No metadata files found in table location: {}", table_url)

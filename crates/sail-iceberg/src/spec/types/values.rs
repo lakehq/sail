@@ -461,3 +461,90 @@ impl Literal {
         }
     }
 }
+
+/// A lightweight, schema-agnostic representation of a struct literal that
+/// serializes into an Avro record matching a provided `StructType`.
+///
+/// This is used for encoding the `partition` tuple in `DataFile` manifest
+/// entries. It intentionally avoids carrying type information and focuses on
+/// field-name to optional `Literal` mapping; type validation is deferred to
+/// the caller that provides the `StructType`.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct RawLiteral(pub Vec<(String, Option<Literal>)>);
+
+impl RawLiteral {
+    /// Build from a positional vector of values and a struct type; positions
+    /// are matched to the struct fields' order.
+    pub fn from_struct_values(
+        values: &[Option<Literal>],
+        ty: &crate::spec::types::StructType,
+    ) -> Result<Self, String> {
+        let fields = ty.fields();
+        if values.len() != fields.len() {
+            return Err(format!(
+                "Partition values length {} does not match struct fields length {}",
+                values.len(),
+                fields.len()
+            ));
+        }
+        let mut out = Vec::with_capacity(values.len());
+        for (i, f) in fields.iter().enumerate() {
+            out.push((f.name.clone(), values[i].clone()));
+        }
+        Ok(RawLiteral(out))
+    }
+
+    /// Convert back to positional vector based on the struct type's field order.
+    pub fn into_struct_values(self, ty: &crate::spec::types::StructType) -> Vec<Option<Literal>> {
+        let mut by_name = std::collections::HashMap::with_capacity(self.0.len());
+        for (k, v) in self.0.into_iter() {
+            by_name.insert(k, v);
+        }
+        ty.fields()
+            .iter()
+            .map(|f| by_name.remove(&f.name).unwrap_or(None))
+            .collect()
+    }
+}
+
+impl Serialize for RawLiteral {
+    fn serialize<S>(&self, serializer: S) -> std::result::Result<S::Ok, S::Error>
+    where
+        S: serde::Serializer,
+    {
+        use serde::ser::SerializeStruct;
+        let mut ss = serializer.serialize_struct("", self.0.len())?;
+        for (k, v) in &self.0 {
+            // Avro's serde requires &'static str for field names
+            ss.serialize_field(Box::leak(k.clone().into_boxed_str()), v)?;
+        }
+        ss.end()
+    }
+}
+
+impl<'de> Deserialize<'de> for RawLiteral {
+    fn deserialize<D>(deserializer: D) -> std::result::Result<Self, D::Error>
+    where
+        D: serde::Deserializer<'de>,
+    {
+        use serde::de::{MapAccess, Visitor};
+        struct RLVisitor;
+        impl<'de> Visitor<'de> for RLVisitor {
+            type Value = RawLiteral;
+            fn expecting(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
+                f.write_str("Avro record for RawLiteral")
+            }
+            fn visit_map<M>(self, mut map: M) -> std::result::Result<Self::Value, M::Error>
+            where
+                M: MapAccess<'de>,
+            {
+                let mut out: Vec<(String, Option<Literal>)> = Vec::new();
+                while let Some((k, v)) = map.next_entry::<String, Option<Literal>>()? {
+                    out.push((k, v));
+                }
+                Ok(RawLiteral(out))
+            }
+        }
+        deserializer.deserialize_map(RLVisitor)
+    }
+}

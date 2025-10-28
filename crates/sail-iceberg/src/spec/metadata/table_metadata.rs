@@ -26,7 +26,7 @@ use crate::spec::metadata::format::FormatVersion;
 use crate::spec::metadata::statistic_file::{PartitionStatisticsFile, StatisticsFile};
 use crate::spec::partition::PartitionSpec;
 use crate::spec::schema::Schema;
-use crate::spec::snapshots::{Snapshot, SnapshotReference};
+use crate::spec::snapshots::{Snapshot, SnapshotReference, MAIN_BRANCH};
 use crate::spec::sort::SortOrder;
 
 /// Iceberg table metadata
@@ -127,10 +127,24 @@ impl TableMetadata {
 
     /// Get the current snapshot
     pub fn current_snapshot(&self) -> Option<&Snapshot> {
-        if let Some(snapshot_id) = self.current_snapshot_id {
+        let snapshot_id = self
+            .refs
+            .get(MAIN_BRANCH)
+            .map(|r| {
+                log::trace!("Using snapshot ID from refs[main]: {}", r.snapshot_id);
+                r.snapshot_id
+            })
+            .or_else(|| {
+                if let Some(id) = self.current_snapshot_id {
+                    log::trace!("Fallback to current_snapshot_id: {}", id);
+                }
+                self.current_snapshot_id
+            });
+
+        if let Some(sid) = snapshot_id {
             self.snapshots
                 .iter()
-                .find(|snapshot| snapshot.snapshot_id() == snapshot_id)
+                .find(|snapshot| snapshot.snapshot_id() == sid)
         } else {
             None
         }

@@ -114,9 +114,14 @@ impl PartitionSpec {
                     )
                 })?;
 
-            let result_type = partition_field
-                .transform
-                .result_type(&source_field.field_type)?;
+            // Prefer logical date type for Day transform to align with Iceberg writers
+            let result_type = if matches!(partition_field.transform, Transform::Day) {
+                crate::spec::types::Type::Primitive(crate::spec::types::PrimitiveType::Date)
+            } else {
+                partition_field
+                    .transform
+                    .result_type(&source_field.field_type)?
+            };
 
             let nested_field = NestedField::new(
                 partition_field.field_id,

@@ -12,7 +12,6 @@ datafusion-common = { workspace = true }
 
 # Arrow dependencies
 arrow-schema = { workspace = true }
-parquet = { workspace = true }
 
 # Essential utilities
 async-trait = { workspace = true }
@@ -23,8 +22,8 @@ url = { workspace = true }
 futures = { workspace = true }
 serde = { workspace = true, features = ["derive"] }
 uuid = { workspace = true }
-# parquet = { workspace = true }
-# bytes = { workspace = true }
+parquet = { workspace = true }
+bytes = { workspace = true }
 # indexmap = { workspace = true }
 log = { workspace = true }
 # itertools = { workspace = true }

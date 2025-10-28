@@ -3,8 +3,8 @@ use std::borrow::Cow;
 use std::collections::HashMap;
 use std::sync::Arc;
 
-use arrow_schema::Schema as ArrowSchema;
 use async_trait::async_trait;
+use datafusion::arrow::datatypes::Schema as ArrowSchema;
 use datafusion::catalog::memory::DataSourceExec;
 use datafusion::catalog::Session;
 use datafusion::common::scalar::ScalarValue;
@@ -22,7 +22,6 @@ use datafusion::logical_expr::{
 use datafusion::physical_expr::PhysicalExpr;
 use datafusion::physical_expr_adapter::PhysicalExprAdapterFactory;
 use datafusion::physical_plan::ExecutionPlan;
-use object_store::path::Path as ObjectPath;
 use object_store::ObjectMeta;
 use url::Url;
 
@@ -31,18 +30,24 @@ use crate::datasource::expr_adapter::IcebergPhysicalExprAdapterFactory;
 use crate::datasource::expressions::simplify_expr;
 use crate::datasource::literal_to_scalar_value;
 use crate::datasource::pruning::{prune_files, prune_manifests_by_partition_summaries};
+use crate::io::{
+    load_manifest as io_load_manifest, load_manifest_list as io_load_manifest_list,
+    resolve_data_object_path, StoreContext,
+};
 use crate::spec::manifest::DataContentType;
 use crate::spec::types::values::Literal;
 use crate::spec::{
-    DataFile, FormatVersion, Manifest, ManifestContentType, ManifestList, ManifestStatus,
-    PartitionSpec, Schema, Snapshot,
+    DataFile, ManifestContentType, ManifestList, ManifestStatus, PartitionSpec, Schema, Snapshot,
 };
+use crate::utils::get_object_store_from_session;
 
 #[derive(Debug, Clone)]
 struct IcebergDeleteAttachment {
     eq_delete_count: usize,
     pos_delete_count: usize,
 }
+
+// removed StoreCtx in favor of shared io::StoreContext
 
 /// Iceberg table provider for DataFusion
 #[derive(Debug)]
@@ -105,51 +110,12 @@ impl IcebergTableProvider {
         &self.snapshot
     }
 
-    /// Get object store from DataFusion session
-    fn get_object_store(
-        &self,
-        session: &dyn Session,
-    ) -> DataFusionResult<Arc<dyn object_store::ObjectStore>> {
-        let table_url = Url::parse(&self.table_uri)
-            .map_err(|e| datafusion::common::DataFusionError::External(Box::new(e)))?;
-
-        session
-            .runtime_env()
-            .object_store_registry
-            .get_store(&table_url)
-            .map_err(|e| datafusion::common::DataFusionError::External(Box::new(e)))
-    }
-
     /// Load manifest list from snapshot
-    async fn load_manifest_list(
-        &self,
-        object_store: &Arc<dyn object_store::ObjectStore>,
-    ) -> DataFusionResult<ManifestList> {
+    async fn load_manifest_list(&self, store_ctx: &StoreContext) -> DataFusionResult<ManifestList> {
         let manifest_list_str = self.snapshot.manifest_list();
         log::trace!("Manifest list path: {}", manifest_list_str);
-
-        let manifest_list_path = if let Ok(url) = Url::parse(manifest_list_str) {
-            log::trace!("Parsed manifest list as URL, path: {}", url.path());
-            ObjectPath::from(url.path())
-        } else {
-            ObjectPath::from(manifest_list_str)
-        };
-
-        let manifest_list_data = object_store
-            .get(&manifest_list_path)
-            .await
-            .map_err(|e| {
-                log::trace!("Failed to get manifest list: {:?}", e);
-                datafusion::common::DataFusionError::External(Box::new(e))
-            })?
-            .bytes()
-            .await
-            .map_err(|e| datafusion::common::DataFusionError::External(Box::new(e)))?;
-
-        log::trace!("Read {} bytes from manifest list", manifest_list_data.len());
-
-        ManifestList::parse_with_version(&manifest_list_data, FormatVersion::V2)
-            .map_err(datafusion::common::DataFusionError::Execution)
+        let ml = io_load_manifest_list(store_ctx, manifest_list_str).await?;
+        Ok(ml)
     }
 
     /// Load data files from manifests
@@ -157,7 +123,7 @@ impl IcebergTableProvider {
         &self,
         session: &dyn Session,
         filters: &[Expr],
-        object_store: &Arc<dyn object_store::ObjectStore>,
+        store_ctx: &StoreContext,
         manifest_list: &ManifestList,
     ) -> DataFusionResult<Vec<DataFile>> {
         let mut data_files = Vec::new();
@@ -178,29 +144,7 @@ impl IcebergTableProvider {
 
             let manifest_path_str = manifest_file.manifest_path.as_str();
             log::trace!("Loading manifest: {}", manifest_path_str);
-
-            let manifest_path = if let Ok(url) = Url::parse(manifest_path_str) {
-                log::trace!("Parsed manifest as URL, path: {}", url.path());
-                ObjectPath::from(url.path())
-            } else {
-                ObjectPath::from(manifest_path_str)
-            };
-
-            let manifest_data = object_store
-                .get(&manifest_path)
-                .await
-                .map_err(|e| {
-                    log::trace!("Failed to get manifest: {:?}", e);
-                    datafusion::common::DataFusionError::External(Box::new(e))
-                })?
-                .bytes()
-                .await
-                .map_err(|e| datafusion::common::DataFusionError::External(Box::new(e)))?;
-
-            log::trace!("Read {} bytes from manifest", manifest_data.len());
-
-            let manifest = Manifest::parse_avro(&manifest_data)
-                .map_err(datafusion::common::DataFusionError::Execution)?;
+            let manifest = io_load_manifest(store_ctx, manifest_path_str).await?;
 
             // Get partition_spec_id from manifest file
             let partition_spec_id = manifest_file.partition_spec_id;
@@ -249,7 +193,7 @@ impl IcebergTableProvider {
 
     async fn load_delete_index(
         &self,
-        object_store: &Arc<dyn object_store::ObjectStore>,
+        store_ctx: &StoreContext,
         manifest_list: &ManifestList,
     ) -> DataFusionResult<std::collections::HashMap<String, IcebergDeleteAttachment>> {
         let mut index: std::collections::HashMap<String, IcebergDeleteAttachment> =
@@ -261,22 +205,7 @@ impl IcebergTableProvider {
             .filter(|mf| mf.content == ManifestContentType::Deletes)
         {
             let manifest_path_str = manifest_file.manifest_path.as_str();
-            let manifest_path = if let Ok(url) = Url::parse(manifest_path_str) {
-                ObjectPath::from(url.path())
-            } else {
-                ObjectPath::from(manifest_path_str)
-            };
-
-            let manifest_data = object_store
-                .get(&manifest_path)
-                .await
-                .map_err(|e| datafusion::common::DataFusionError::External(Box::new(e)))?
-                .bytes()
-                .await
-                .map_err(|e| datafusion::common::DataFusionError::External(Box::new(e)))?;
-
-            let manifest = Manifest::parse_avro(&manifest_data)
-                .map_err(datafusion::common::DataFusionError::Execution)?;
+            let manifest = io_load_manifest(store_ctx, manifest_path_str).await?;
 
             for entry_ref in manifest.entries().iter() {
                 let entry = entry_ref.as_ref();
@@ -307,37 +236,7 @@ impl IcebergTableProvider {
         Ok(index)
     }
 
-    // Attention: take care of percent-encoding when resolving the data file object path
-    fn resolve_data_file_object_path(&self, table_base_path: &str, raw_path: &str) -> ObjectPath {
-        // If the data file path is a full URL, strip scheme/authority and use its path
-        if let Ok(url) = Url::parse(raw_path) {
-            let encoded_path = url.path();
-            let path_no_leading = encoded_path.strip_prefix('/').unwrap_or(encoded_path);
-            if let Ok(p) = ObjectPath::parse(path_no_leading) {
-                return p;
-            }
-            return ObjectPath::from(path_no_leading);
-        }
-
-        // If the data file path already starts with the table base path, use it as-is
-        if raw_path.starts_with(table_base_path) {
-            return ObjectPath::from(raw_path);
-        }
-
-        // If it is an absolute filesystem path, use it directly
-        if raw_path.starts_with(object_store::path::DELIMITER) {
-            return ObjectPath::from(raw_path);
-        }
-
-        // Otherwise, treat as a path relative to the table base path (preserve encoding)
-        let joined = format!(
-            "{}{}{}",
-            table_base_path,
-            object_store::path::DELIMITER,
-            raw_path
-        );
-        ObjectPath::from(joined)
-    }
+    // replaced by io::resolve_data_object_path
 
     /// Create partitioned files for DataFusion from Iceberg data files
     fn create_partitioned_files(
@@ -353,7 +252,7 @@ impl IcebergTableProvider {
 
         for data_file in data_files {
             let raw_path = data_file.file_path();
-            let file_path = self.resolve_data_file_object_path(table_base_path, raw_path);
+            let file_path = resolve_data_object_path(table_base_path, raw_path);
             log::trace!("Processing data file: {}", file_path);
 
             log::trace!("Final ObjectPath: {}", file_path);
@@ -590,22 +489,29 @@ impl TableProvider for IcebergTableProvider {
     ) -> DataFusionResult<Arc<dyn ExecutionPlan>> {
         log::trace!("Starting scan for table: {}", self.table_uri);
 
-        let object_store = self.get_object_store(session)?;
+        let table_url = Url::parse(&self.table_uri)
+            .map_err(|e| datafusion::common::DataFusionError::External(Box::new(e)))?;
+        let base_store = get_object_store_from_session(session, &table_url)?;
+        let store_ctx = StoreContext::new(base_store.clone(), &table_url);
         log::trace!("Got object store");
 
         log::trace!(
             "Loading manifest list from: {}",
             self.snapshot.manifest_list()
         );
-        let manifest_list = self.load_manifest_list(&object_store).await?;
+        let manifest_list = self.load_manifest_list(&store_ctx).await?;
         log::trace!("Loaded {} manifest files", manifest_list.entries().len());
+        log::trace!(
+            "scan: loaded manifest list with file count: {}",
+            manifest_list.entries().len()
+        );
 
         // Classify & split filters for pruning vs parquet pushdown
         let (pruning_filters, parquet_pushdown_filters) = self.separate_filters(filters);
 
         log::trace!("Loading data files from manifests...");
         let mut data_files = self
-            .load_data_files(session, &pruning_filters, &object_store, &manifest_list)
+            .load_data_files(session, &pruning_filters, &store_ctx, &manifest_list)
             .await?;
         log::trace!("Loaded {} data files", data_files.len());
 
@@ -627,9 +533,7 @@ impl TableProvider for IcebergTableProvider {
         }
 
         log::trace!("Loading delete manifests...");
-        let delete_index = self
-            .load_delete_index(&object_store, &manifest_list)
-            .await?;
+        let delete_index = self.load_delete_index(&store_ctx, &manifest_list).await?;
 
         log::trace!("Creating partitioned files...");
         let partitioned_files = self.create_partitioned_files(data_files.clone(), &delete_index)?;
@@ -829,7 +733,7 @@ impl IcebergTableProvider {
         filters: &[Expr],
     ) -> Arc<ArrowSchema> {
         if let Some(used) = projection {
-            let mut fields: Vec<arrow_schema::FieldRef> = Vec::new();
+            let mut fields: Vec<datafusion::arrow::datatypes::FieldRef> = Vec::new();
             for idx in used {
                 fields.push(Arc::new(self.arrow_schema.field(*idx).clone()));
             }

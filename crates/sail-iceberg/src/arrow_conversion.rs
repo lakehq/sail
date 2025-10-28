@@ -1,11 +1,9 @@
 use std::collections::HashMap;
 use std::sync::Arc;
 
-use arrow_schema::{
-    DataType as ArrowDataType, Field as ArrowField, Schema as ArrowSchema, TimeUnit,
-};
 use datafusion::arrow::datatypes::{
-    validate_decimal_precision_and_scale, Decimal128Type as ArrowDecimal128Type,
+    validate_decimal_precision_and_scale, DataType as ArrowDataType,
+    Decimal128Type as ArrowDecimal128Type, Field as ArrowField, Schema as ArrowSchema, TimeUnit,
 };
 use datafusion_common::{plan_datafusion_err, plan_err, Result};
 use parquet::arrow::PARQUET_FIELD_ID_META_KEY;
@@ -21,7 +19,8 @@ fn get_field_id(field: &ArrowField) -> Result<i32> {
             .parse::<i32>()
             .map_err(|e| plan_datafusion_err!("Iceberg: Failed to parse field id: {e}"))
     } else {
-        plan_err!("Iceberg: Field id not found in metadata")
+        // Default to 0 when metadata is missing; callers may reassign stable IDs later.
+        Ok(0)
     }
 }
 
