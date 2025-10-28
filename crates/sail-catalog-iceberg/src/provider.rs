@@ -557,92 +557,59 @@ impl CatalogProvider for IcebergRestCatalogProvider {
             location,
             properties,
         } = options;
+        let mut props: HashMap<String, String> = properties.into_iter().collect();
+        if let Some(c) = comment {
+            props.insert("comment".to_string(), c);
+        }
+        if let Some(l) = location {
+            props.insert("location".to_string(), l);
+        }
 
-        let exists = match client
+        let request = crate::models::CreateNamespaceRequest {
+            namespace: database.clone().into(),
+            properties: if props.is_empty() { None } else { Some(props) },
+        };
+
+        let result = client
             .catalog_api_api()
-            .namespace_exists(
-                &database.to_string(),
+            .create_namespace(
+                request,
                 catalog_config
                     .props
                     .get(REST_CATALOG_PROP_PREFIX)
                     .map(|s| s.as_str()),
             )
-            .await
-        {
-            Ok(()) => true,
+            .await;
+
+        match result {
+            Ok(result) => {
+                let comment = result
+                    .properties
+                    .as_ref()
+                    .and_then(|p| get_property(p, "comment"));
+                let location = result
+                    .properties
+                    .as_ref()
+                    .and_then(|p| get_property(p, "location"));
+                let properties: Vec<_> =
+                    result.properties.unwrap_or_default().into_iter().collect();
+
+                Ok(DatabaseStatus {
+                    catalog: self.name.clone(),
+                    database: result.namespace,
+                    comment,
+                    location,
+                    properties,
+                })
+            }
             Err(apis::Error::ResponseError(apis::ResponseContent { status, .. }))
-                if status == 404 =>
+                if status == 409 && if_not_exists =>
             {
-                false
+                self.get_database(database).await
             }
-            Err(e) => {
-                return Err(CatalogError::External(format!(
-                    "Failed to check namespace existence: {e}"
-                )))
-            }
-        };
-
-        if !exists {
-            let mut props: HashMap<String, String> = properties.into_iter().collect();
-            if let Some(c) = comment {
-                props.insert("comment".to_string(), c);
-            }
-            if let Some(l) = location {
-                props.insert("location".to_string(), l);
-            }
-
-            let request = crate::models::CreateNamespaceRequest {
-                namespace: database.clone().into(),
-                properties: if props.is_empty() { None } else { Some(props) },
-            };
-
-            let result = client
-                .catalog_api_api()
-                .create_namespace(
-                    request,
-                    catalog_config
-                        .props
-                        .get(REST_CATALOG_PROP_PREFIX)
-                        .map(|s| s.as_str()),
-                )
-                .await;
-
-            match result {
-                Ok(result) => {
-                    let comment = result
-                        .properties
-                        .as_ref()
-                        .and_then(|p| get_property(p, "comment"));
-                    let location = result
-                        .properties
-                        .as_ref()
-                        .and_then(|p| get_property(p, "location"));
-                    let properties: Vec<_> =
-                        result.properties.unwrap_or_default().into_iter().collect();
-
-                    Ok(DatabaseStatus {
-                        catalog: self.name.clone(),
-                        database: result.namespace,
-                        comment,
-                        location,
-                        properties,
-                    })
-                }
-                Err(apis::Error::ResponseError(apis::ResponseContent { status, .. }))
-                    if status == 409 && if_not_exists =>
-                {
-                    self.get_database(database).await
-                }
-                Err(e) => Err(CatalogError::External(format!(
-                    "Failed to create namespace: {e}"
-                ))),
-            }
-        } else if !if_not_exists {
-            Err(CatalogError::External(format!(
-                "Namespace {database} already exists",
-            )))
-        } else {
-            self.get_database(database).await
+            Err(e) => Err(CatalogError::External(format!(
+                "Failed to create namespace: {e}"
+            ))),
         }
     }
 
