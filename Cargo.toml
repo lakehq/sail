@@ -106,6 +106,8 @@ pin-project-lite = "0.2.16"
 ordered-float = { version = "5.1.0", features = ["serde"] }
 apache-avro = { version = "0.20.0" }
 rust_decimal = "1.39.0"
+wiremock = "0.6.5"
+testcontainers = "0.25.1"
 
 ######
 # The versions of the following dependencies are managed manually.
@@ -125,16 +127,16 @@ prost = "0.13.5"
 # The `axum` version must match the one used in `tonic` (replace `RELEASE` with the release we are using):
 #   https://github.com/hyperium/tonic/blob/vRELEASE/tonic/Cargo.toml
 axum = "0.8.4"
-datafusion = { version = "50.1.0", features = ["serde", "avro"] }
-datafusion-common = { version = "50.1.0", features = ["object_store", "avro"] }
-datafusion-datasource = { version = "50.1.0", features = ["compression", "parquet"] }
-datafusion-expr = { version = "50.1.0" }
-datafusion-expr-common = { version = "50.1.0" }
-datafusion-proto = { version = "50.1.0" }
-datafusion-functions = { version = "50.1.0" }
-datafusion-functions-nested = { version = "50.1.0" }
-datafusion-physical-expr = { version = "50.1.0" }
-datafusion-spark = { version = "50.1.0" }
+datafusion = { version = "50.3.0", features = ["serde", "avro"] }
+datafusion-common = { version = "50.3.0", features = ["object_store", "avro"] }
+datafusion-datasource = { version = "50.3.0", features = ["compression", "parquet"] }
+datafusion-expr = { version = "50.3.0" }
+datafusion-expr-common = { version = "50.3.0" }
+datafusion-proto = { version = "50.3.0" }
+datafusion-functions = { version = "50.3.0" }
+datafusion-functions-nested = { version = "50.3.0" }
+datafusion-physical-expr = { version = "50.3.0" }
+datafusion-spark = { version = "50.3.0" }
 datafusion-functions-json = { git = "https://github.com/lakehq/datafusion-functions-json.git", rev = "db8e357" }
 # The `pyo3` version must match the one used in `arrow-pyarrow` (replace `RELEASE` with the release we are using):
 #   https://github.com/apache/arrow-rs/blob/RELEASE/arrow-pyarrow/Cargo.toml
@@ -148,8 +150,8 @@ arrow-pyarrow = { version = "56.2.0" }
 parquet = { version = "56.2.0" }
 serde_arrow = { version = "0.13.6", features = ["arrow-56"] }
 # The `object_store` version must match the one used in DataFusion.
-object_store = { version = "0.12.3", features = ["aws", "gcp", "azure", "http"] }
-hdfs-native-object-store = "0.14.2"
+object_store = { version = "0.12.4", features = ["aws", "gcp", "azure", "http"] }
+hdfs-native-object-store = "0.15.0"
 
 # Lakehouse
 deltalake = { git = "https://github.com/delta-io/delta-rs.git", rev = "0864b21", default-features = false, features = ["rustls"] }

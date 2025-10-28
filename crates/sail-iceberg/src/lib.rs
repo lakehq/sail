@@ -10,6 +10,7 @@ pub mod writer;
 
 pub use arrow_conversion::*;
 pub use datasource::*;
+pub use spec::*;
 pub use table_format::*;
 pub use transaction::action::*;
 pub use transaction::append::*;
