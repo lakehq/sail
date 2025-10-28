@@ -1,7 +1,9 @@
 use datafusion::arrow::array::{
     Array, ArrayRef, BooleanArray, Float32Array, Float64Array, Int32Array, Int64Array, StringArray,
+    TimestampMicrosecondArray, TimestampMillisecondArray, TimestampNanosecondArray,
+    TimestampSecondArray,
 };
-use datafusion::arrow::datatypes::DataType as ArrowDataType;
+use datafusion::arrow::datatypes::{DataType as ArrowDataType, TimeUnit};
 use datafusion::arrow::record_batch::RecordBatch;
 
 use crate::spec::partition::UnboundPartitionSpec as PartitionSpec;
@@ -72,6 +74,30 @@ pub fn scalar_to_literal(array: &ArrayRef, row: usize) -> Option<Literal> {
                     ordered_float::OrderedFloat(a.value(row)),
                 )))
             }
+        }
+        ArrowDataType::Timestamp(unit, _tz) => {
+            if array.is_null(row) {
+                return None;
+            }
+            let value_in_micros = match unit {
+                TimeUnit::Second => {
+                    let a = array.as_any().downcast_ref::<TimestampSecondArray>()?;
+                    a.value(row).checked_mul(1_000_000)
+                }
+                TimeUnit::Millisecond => {
+                    let a = array.as_any().downcast_ref::<TimestampMillisecondArray>()?;
+                    a.value(row).checked_mul(1_000)
+                }
+                TimeUnit::Microsecond => {
+                    let a = array.as_any().downcast_ref::<TimestampMicrosecondArray>()?;
+                    Some(a.value(row))
+                }
+                TimeUnit::Nanosecond => {
+                    let a = array.as_any().downcast_ref::<TimestampNanosecondArray>()?;
+                    Some(a.value(row) / 1_000)
+                }
+            };
+            value_in_micros.map(|v| Literal::Primitive(PrimitiveLiteral::Long(v)))
         }
         _ => None,
     }
