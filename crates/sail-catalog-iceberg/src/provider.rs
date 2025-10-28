@@ -557,92 +557,59 @@ impl CatalogProvider for IcebergRestCatalogProvider {
             location,
             properties,
         } = options;
+        let mut props: HashMap<String, String> = properties.into_iter().collect();
+        if let Some(c) = comment {
+            props.insert("comment".to_string(), c);
+        }
+        if let Some(l) = location {
+            props.insert("location".to_string(), l);
+        }
 
-        let exists = match client
+        let request = crate::models::CreateNamespaceRequest {
+            namespace: database.clone().into(),
+            properties: if props.is_empty() { None } else { Some(props) },
+        };
+
+        let result = client
             .catalog_api_api()
-            .namespace_exists(
-                &database.to_string(),
+            .create_namespace(
+                request,
                 catalog_config
                     .props
                     .get(REST_CATALOG_PROP_PREFIX)
                     .map(|s| s.as_str()),
             )
-            .await
-        {
-            Ok(()) => true,
+            .await;
+
+        match result {
+            Ok(result) => {
+                let comment = result
+                    .properties
+                    .as_ref()
+                    .and_then(|p| get_property(p, "comment"));
+                let location = result
+                    .properties
+                    .as_ref()
+                    .and_then(|p| get_property(p, "location"));
+                let properties: Vec<_> =
+                    result.properties.unwrap_or_default().into_iter().collect();
+
+                Ok(DatabaseStatus {
+                    catalog: self.name.clone(),
+                    database: result.namespace,
+                    comment,
+                    location,
+                    properties,
+                })
+            }
             Err(apis::Error::ResponseError(apis::ResponseContent { status, .. }))
-                if status == 404 =>
+                if status == 409 && if_not_exists =>
             {
-                false
+                self.get_database(database).await
             }
-            Err(e) => {
-                return Err(CatalogError::External(format!(
-                    "Failed to check namespace existence: {e}"
-                )))
-            }
-        };
-
-        if !exists {
-            let mut props: HashMap<String, String> = properties.into_iter().collect();
-            if let Some(c) = comment {
-                props.insert("comment".to_string(), c);
-            }
-            if let Some(l) = location {
-                props.insert("location".to_string(), l);
-            }
-
-            let request = crate::models::CreateNamespaceRequest {
-                namespace: database.clone().into(),
-                properties: if props.is_empty() { None } else { Some(props) },
-            };
-
-            let result = client
-                .catalog_api_api()
-                .create_namespace(
-                    request,
-                    catalog_config
-                        .props
-                        .get(REST_CATALOG_PROP_PREFIX)
-                        .map(|s| s.as_str()),
-                )
-                .await;
-
-            match result {
-                Ok(result) => {
-                    let comment = result
-                        .properties
-                        .as_ref()
-                        .and_then(|p| get_property(p, "comment"));
-                    let location = result
-                        .properties
-                        .as_ref()
-                        .and_then(|p| get_property(p, "location"));
-                    let properties: Vec<_> =
-                        result.properties.unwrap_or_default().into_iter().collect();
-
-                    Ok(DatabaseStatus {
-                        catalog: self.name.clone(),
-                        database: result.namespace,
-                        comment,
-                        location,
-                        properties,
-                    })
-                }
-                Err(apis::Error::ResponseError(apis::ResponseContent { status, .. }))
-                    if status == 409 && if_not_exists =>
-                {
-                    self.get_database(database).await
-                }
-                Err(e) => Err(CatalogError::External(format!(
-                    "Failed to create namespace: {e}"
-                ))),
-            }
-        } else if !if_not_exists {
-            Err(CatalogError::External(format!(
-                "Namespace {database} already exists",
-            )))
-        } else {
-            self.get_database(database).await
+            Err(e) => Err(CatalogError::External(format!(
+                "Failed to create namespace: {e}"
+            ))),
         }
     }
 
@@ -2052,15 +2019,16 @@ mod tests {
     async fn test_create_database_impl(name: Option<&str>) {
         let ctx = TestContext::new(name).await;
 
-        Mock::given(method("HEAD"))
-            .and(path(ctx.path("/namespaces/db1").as_str()))
-            .respond_with(ResponseTemplate::new(404))
-            .expect(1)
-            .mount(&ctx.server)
-            .await;
-
         Mock::given(method("POST"))
             .and(path(ctx.path("/namespaces").as_str()))
+            .and(wiremock::matchers::body_json(serde_json::json!({
+                "namespace": ["db1"],
+                "properties": {
+                    "comment": "test database",
+                    "location": "s3://bucket/db1",
+                    "custom_prop": "custom_value"
+                }
+            })))
             .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
                 "namespace": ["db1"],
                 "properties": {
@@ -2097,14 +2065,23 @@ mod tests {
             .iter()
             .any(|(k, v)| k == "custom_prop" && v == "custom_value"));
 
-        Mock::given(method("HEAD"))
-            .and(path(ctx.path("/namespaces/db2").as_str()))
-            .respond_with(ResponseTemplate::new(204))
+        Mock::given(method("POST"))
+            .and(path(ctx.path("/namespaces").as_str()))
+            .and(wiremock::matchers::body_json(serde_json::json!({
+                "namespace": ["db1"],
+            })))
+            .respond_with(ResponseTemplate::new(409).set_body_json(serde_json::json!({
+                "error": {
+                    "message": "Failed to create namespace: error in response: status code 409 Conflict",
+                    "type": "NamespaceAlreadyExistsException",
+                    "code": 409
+                }
+            })))
             .expect(1)
             .mount(&ctx.server)
             .await;
 
-        let namespace = Namespace::try_from(vec!["db2".to_string()]).unwrap();
+        let namespace = Namespace::try_from(vec!["db1".to_string()]).unwrap();
         let result = ctx
             .catalog
             .create_database(
@@ -2120,29 +2097,43 @@ mod tests {
 
         assert!(result.is_err());
         let err = result.unwrap_err().to_string();
-        assert!(err.contains("already exists") || err.contains("db2"));
+        assert!(err.contains("status code 409 Conflict"));
 
-        Mock::given(method("HEAD"))
-            .and(path(ctx.path("/namespaces/db3").as_str()))
-            .respond_with(ResponseTemplate::new(204))
-            .expect(1)
-            .mount(&ctx.server)
-            .await;
-
-        Mock::given(method("GET"))
-            .and(path(ctx.path("/namespaces/db3").as_str()))
-            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
-                "namespace": ["db3"],
+        Mock::given(method("POST"))
+            .and(path(ctx.path("/namespaces").as_str()))
+            .and(wiremock::matchers::body_json(serde_json::json!({
+                "namespace": ["db1"],
                 "properties": {
-                    "comment": "existing database",
-                    "owner": "alice"
+                    "comment": "should be ignored",
+                    "location": "should be ignored"
+                }
+            })))
+            .respond_with(ResponseTemplate::new(409).set_body_json(serde_json::json!({
+                "error": {
+                    "message": "error in response: status code 409 Conflict",
+                    "type": "NamespaceAlreadyExistsException",
+                    "code": 409
                 }
             })))
             .expect(1)
             .mount(&ctx.server)
             .await;
 
-        let namespace = Namespace::try_from(vec!["db3".to_string()]).unwrap();
+        Mock::given(method("GET"))
+            .and(path(ctx.path("/namespaces/db1").as_str()))
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+               "namespace": ["db1"],
+               "properties": {
+                   "comment": "test database",
+                   "location": "s3://bucket/db1",
+                   "custom_prop": "custom_value"
+               }
+            })))
+            .expect(1)
+            .mount(&ctx.server)
+            .await;
+
+        let namespace = Namespace::try_from(vec!["db1".to_string()]).unwrap();
         let result = ctx
             .catalog
             .create_database(
@@ -2158,13 +2149,13 @@ mod tests {
 
         assert!(result.is_ok());
         let db = result.unwrap();
-        assert_eq!(db.database, vec!["db3".to_string()]);
-        assert_eq!(db.comment, Some("existing database".to_string()));
-        assert_eq!(db.location, None);
+        assert_eq!(db.database, vec!["db1".to_string()]);
+        assert_eq!(db.comment, Some("test database".to_string()));
+        assert_eq!(db.location, Some("s3://bucket/db1".to_string()));
         assert!(db
             .properties
             .iter()
-            .any(|(k, v)| k == "owner" && v == "alice"));
+            .any(|(k, v)| k == "custom_prop" && v == "custom_value"));
     }
 
     #[tokio::test]
