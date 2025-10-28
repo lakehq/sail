@@ -1,11 +1,11 @@
 use std::collections::HashMap;
 
 use datafusion::arrow::array::ArrayRef;
-use datafusion::arrow::compute;
 use datafusion::arrow::datatypes::Schema as ArrowSchema;
 use datafusion::arrow::record_batch::RecordBatch;
 use object_store::path::Path as ObjectPath;
 use parquet::arrow::PARQUET_FIELD_ID_META_KEY;
+use sail_common_datafusion::array::record_batch::cast_record_batch;
 
 use crate::io::IcebergObjectStore;
 use crate::spec::types::values::Literal;
@@ -49,47 +49,26 @@ impl IcebergTableWriter {
             partition_spec_id,
         }
     }
-
+    // TODO: consider totally using cast_record_batch instead
     fn cast_batch_to_schema(
         batch: &RecordBatch,
         target: &ArrowSchema,
     ) -> Result<RecordBatch, String> {
-        log::trace!(
-            "iceberg.table_writer.cast: src_fields={} target_fields={}",
-            batch.schema().fields().len(),
-            target.fields().len()
-        );
         let mut cols: Vec<ArrayRef> = Vec::with_capacity(target.fields().len());
         for f in target.fields() {
             let idx = batch
                 .schema()
                 .index_of(f.name())
                 .map_err(|e| e.to_string())?;
-            let col = batch.column(idx);
-            log::trace!(
-                "iceberg.table_writer.cast: field='{}' src_type={:?} -> target_type={:?}",
-                f.name(),
-                col.data_type(),
-                f.data_type()
-            );
-            let out = if col.data_type() == f.data_type() {
-                col.clone()
-            } else {
-                compute::cast(col, f.data_type()).map_err(|e| e.to_string())?
-            };
-            cols.push(out);
+            cols.push(batch.column(idx).clone());
         }
-        let out = RecordBatch::try_new(std::sync::Arc::new(target.clone()), cols)
+
+        let reordered = RecordBatch::try_new(std::sync::Arc::new(target.clone()), cols)
             .map_err(|e| e.to_string())?;
-        for (i, f) in out.schema().fields().iter().enumerate() {
-            log::trace!(
-                "iceberg.table_writer.cast: out_field[{}]='{}' type={:?} field_id_meta={:?}",
-                i,
-                f.name(),
-                f.data_type(),
-                f.metadata().get(PARQUET_FIELD_ID_META_KEY)
-            );
-        }
+
+        let out = cast_record_batch(reordered, std::sync::Arc::new(target.clone()))
+            .map_err(|e| e.to_string())?;
+
         Ok(out)
     }
 
