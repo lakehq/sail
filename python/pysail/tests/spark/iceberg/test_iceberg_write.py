@@ -121,3 +121,26 @@ def test_iceberg_sql_read_after_write(spark, sql_catalog):
             spark.sql("DROP TABLE IF EXISTS tmp_ice")
     finally:
         sql_catalog.drop_table(identifier)
+
+
+def test_iceberg_append_bootstrap_first_snapshot(spark, sql_catalog):
+    identifier = "default.append_bootstrap"
+    table = sql_catalog.create_table(
+        identifier=identifier,
+        schema=Schema(
+            NestedField(field_id=1, name="id", field_type=LongType(), required=False),
+            NestedField(field_id=2, name="value", field_type=StringType(), required=False),
+        ),
+    )
+    try:
+        df = spark.createDataFrame([(10, "x"), (20, "y")], schema="id LONG, value STRING")
+        df.write.format("iceberg").mode("append").save(table.location())
+
+        result_df = spark.read.format("iceberg").load(table.location()).sort("id")
+        expected = pd.DataFrame({"id": [10, 20], "value": ["x", "y"]})
+        assert_frame_equal(result_df.toPandas(), expected.astype(result_df.toPandas().dtypes))
+
+        table.refresh()
+        assert table.current_snapshot() is not None
+    finally:
+        sql_catalog.drop_table(identifier)
