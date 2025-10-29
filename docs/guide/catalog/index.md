@@ -10,7 +10,7 @@ Sail supports various catalog providers to manage your datasets as external tabl
 By default, Sail uses a memory catalog provider that stores table metadata in memory for the duration of your Spark session.
 You can configure remote catalog providers to persist your table metadata across sessions. This is done using the Sail configuration options.
 
-For example, you can configure memory catalogs using the `catalog.list` option and set the default catalog using the `catalog.catalog.default_catalog` option. The configuration can be done via environment variables before starting the Sail server.
+For example, you can configure memory catalogs using the `catalog.list` option and set the default catalog using the `catalog.default_catalog` option. The configuration can be done via environment variables before starting the Sail server.
 
 ```bash
 export SAIL_CATALOG__LIST='[{name="c1", type="memory", initial_database=["default"]}, {name="c2", type="iceberg-rest", uri="https://catalog.example.com"}]'
