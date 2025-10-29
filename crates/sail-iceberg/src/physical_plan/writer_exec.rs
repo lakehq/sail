@@ -175,14 +175,6 @@ impl ExecutionPlan for IcebergWriterExec {
                 }
             }
 
-            // Load current table metadata for append or overwrite on existing table
-            if table_exists {
-                // existing table path
-            } else if !matches!(sink_mode, PhysicalSinkMode::Overwrite) {
-                return Err(DataFusionError::Plan(
-                    "append to non-existent Iceberg table is not supported yet".to_string(),
-                ));
-            }
             let object_store = get_object_store_from_context(&context, &table_url)?;
 
             fn assign_top_level_field_ids(schema: &IcebergSchema) -> IcebergSchema {

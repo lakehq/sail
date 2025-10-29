@@ -78,6 +78,10 @@ jobs:
       - name: Run Cargo Test
         run: cargo test
 
+      - name: Run Cargo Test (Ignored)
+        if: ${{ github.event_name == 'push' }}
+        run: cargo test -- --ignored
+
       # Generate coverage report after tests
       - name: Generate coverage report
         run: |
