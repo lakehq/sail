@@ -285,6 +285,7 @@ pub enum CatalogType {
         initial_database: Vec<String>,
         initial_database_comment: Option<String>,
     },
+    #[serde(alias = "iceberg-rest")]
     IcebergRest {
         name: String,
         uri: String,
