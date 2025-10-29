@@ -245,7 +245,7 @@ impl IcebergTableProvider {
 
         for data_file in data_files {
             let raw_path = data_file.file_path();
-            let file_path = store_ctx.resolve_to_absolute_path(raw_path);
+            let file_path = store_ctx.resolve_to_absolute_path(raw_path)?;
             log::trace!("Processing data file: {}", file_path);
 
             log::trace!("Final ObjectPath: {}", file_path);
@@ -485,7 +485,7 @@ impl TableProvider for IcebergTableProvider {
         let table_url = Url::parse(&self.table_uri)
             .map_err(|e| datafusion::common::DataFusionError::External(Box::new(e)))?;
         let base_store = get_object_store_from_session(session, &table_url)?;
-        let store_ctx = StoreContext::new(base_store.clone(), &table_url);
+        let store_ctx = StoreContext::new(base_store.clone(), &table_url)?;
         log::trace!("Got object store");
 
         log::trace!(

@@ -131,7 +131,9 @@ impl<'a> SnapshotProducer<'a> {
         let parent_manifest_list_path_str = parent_snapshot.manifest_list();
 
         if !is_overwrite && !parent_manifest_list_path_str.is_empty() {
-            let (store_ref, manifest_list_path) = store_ctx.resolve(parent_manifest_list_path_str);
+            let (store_ref, manifest_list_path) = store_ctx
+                .resolve(parent_manifest_list_path_str)
+                .map_err(|e| format!("{}", e))?;
 
             log::trace!(
                 "snapshot producer: loading parent manifest list: {}",

@@ -120,7 +120,7 @@ impl ExecutionPlan for IcebergCommitExec {
         let schema = self.schema();
         let future = async move {
             let object_store = get_object_store_from_context(&context, &table_url)?;
-            let store_ctx = StoreContext::new(object_store.clone(), &table_url);
+            let store_ctx = StoreContext::new(object_store.clone(), &table_url)?;
 
             // Read writer result (first row, string JSON)
             let mut data = input_stream;
