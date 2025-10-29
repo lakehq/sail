@@ -5,6 +5,10 @@ next: false
 
 # Changelog
 
+## 0.4.0
+
+_October 30, 2025_
+
 ## 0.3.7
 
 _October 3, 2025_
