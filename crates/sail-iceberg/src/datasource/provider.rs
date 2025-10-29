@@ -31,8 +31,7 @@ use crate::datasource::expressions::simplify_expr;
 use crate::datasource::literal_to_scalar_value;
 use crate::datasource::pruning::{prune_files, prune_manifests_by_partition_summaries};
 use crate::io::{
-    load_manifest as io_load_manifest, load_manifest_list as io_load_manifest_list,
-    resolve_data_object_path, StoreContext,
+    load_manifest as io_load_manifest, load_manifest_list as io_load_manifest_list, StoreContext,
 };
 use crate::spec::manifest::DataContentType;
 use crate::spec::types::values::Literal;
@@ -236,23 +235,17 @@ impl IcebergTableProvider {
         Ok(index)
     }
 
-    // replaced by io::resolve_data_object_path
-
-    /// Create partitioned files for DataFusion from Iceberg data files
     fn create_partitioned_files(
         &self,
+        store_ctx: &StoreContext,
         data_files: Vec<DataFile>,
         delete_index: &std::collections::HashMap<String, IcebergDeleteAttachment>,
     ) -> DataFusionResult<Vec<PartitionedFile>> {
         let mut partitioned_files = Vec::new();
 
-        let table_url = Url::parse(&self.table_uri)
-            .map_err(|e| datafusion::common::DataFusionError::External(Box::new(e)))?;
-        let table_base_path = table_url.path();
-
         for data_file in data_files {
             let raw_path = data_file.file_path();
-            let file_path = resolve_data_object_path(table_base_path, raw_path);
+            let file_path = store_ctx.resolve_to_absolute_path(raw_path);
             log::trace!("Processing data file: {}", file_path);
 
             log::trace!("Final ObjectPath: {}", file_path);
@@ -536,7 +529,8 @@ impl TableProvider for IcebergTableProvider {
         let delete_index = self.load_delete_index(&store_ctx, &manifest_list).await?;
 
         log::trace!("Creating partitioned files...");
-        let partitioned_files = self.create_partitioned_files(data_files.clone(), &delete_index)?;
+        let partitioned_files =
+            self.create_partitioned_files(&store_ctx, data_files.clone(), &delete_index)?;
         log::trace!("Created {} partitioned files", partitioned_files.len());
 
         // Step 4: Create file groups

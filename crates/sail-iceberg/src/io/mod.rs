@@ -10,15 +10,20 @@ use crate::spec::{FormatVersion, Manifest, ManifestList};
 pub struct StoreContext {
     pub base: Arc<dyn object_store::ObjectStore>,
     pub prefixed: Arc<dyn object_store::ObjectStore>,
+    prefix_path: ObjectPath,
 }
 
 impl StoreContext {
     pub fn new(base: Arc<dyn object_store::ObjectStore>, table_url: &Url) -> Self {
         let base_path = ObjectPath::from(table_url.path());
         let prefixed: Arc<dyn object_store::ObjectStore> = Arc::new(
-            object_store::prefix::PrefixStore::new(base.clone(), base_path),
+            object_store::prefix::PrefixStore::new(base.clone(), base_path.clone()),
         );
-        Self { base, prefixed }
+        Self {
+            base,
+            prefixed,
+            prefix_path: base_path,
+        }
     }
 
     pub fn resolve<'a>(
@@ -35,6 +40,25 @@ impl StoreContext {
             return (&self.base, ObjectPath::from(no_leading));
         }
         (&self.prefixed, ObjectPath::from(raw))
+    }
+
+    pub fn resolve_to_absolute_path(&self, raw_path: &str) -> ObjectPath {
+        if let Ok(url) = Url::parse(raw_path) {
+            let encoded_path = url.path();
+            let path_no_leading = encoded_path.strip_prefix('/').unwrap_or(encoded_path);
+            return ObjectPath::from(path_no_leading);
+        }
+
+        if raw_path.starts_with(object_store::path::DELIMITER) {
+            let no_leading = raw_path.strip_prefix('/').unwrap_or(raw_path);
+            return ObjectPath::from(no_leading);
+        }
+
+        let mut full = self.prefix_path.clone();
+        for comp in raw_path.split('/').filter(|s| !s.is_empty()) {
+            full = full.child(comp);
+        }
+        full
     }
 }
 
@@ -66,35 +90,4 @@ pub async fn load_manifest(
         .await
         .map_err(|e| DataFusionError::External(Box::new(e)))?;
     Manifest::parse_avro(&bytes).map_err(DataFusionError::Execution)
-}
-
-pub fn resolve_data_object_path(table_base_path: &str, raw_path: &str) -> ObjectPath {
-    if let Ok(url) = Url::parse(raw_path) {
-        let encoded_path = url.path();
-        let path_no_leading = encoded_path.strip_prefix('/').unwrap_or(encoded_path);
-        if let Ok(p) = ObjectPath::parse(path_no_leading) {
-            return p;
-        }
-        return ObjectPath::from(path_no_leading);
-    }
-
-    if raw_path.starts_with(object_store::path::DELIMITER) {
-        let no_leading = raw_path.strip_prefix('/').unwrap_or(raw_path);
-        return ObjectPath::from(no_leading);
-    }
-
-    let base_no_leading = table_base_path.strip_prefix('/').unwrap_or(table_base_path);
-    let mut base = ObjectPath::from(base_no_leading);
-    for comp in raw_path.split('/').filter(|s| !s.is_empty()) {
-        base = base.child(comp);
-    }
-    base
-}
-
-pub fn join_rel_path(base: &ObjectPath, rel: &str) -> ObjectPath {
-    let mut full = base.clone();
-    for comp in rel.split('/').filter(|s| !s.is_empty()) {
-        full = full.child(comp);
-    }
-    full
 }

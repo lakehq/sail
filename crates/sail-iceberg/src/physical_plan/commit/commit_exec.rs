@@ -19,6 +19,7 @@ use futures::stream::once;
 use futures::StreamExt;
 use url::Url;
 
+use crate::io::StoreContext;
 use crate::physical_plan::commit::IcebergCommitInfo;
 use crate::spec::catalog::TableUpdate;
 use crate::spec::metadata::table_metadata::SnapshotLog;
@@ -119,11 +120,7 @@ impl ExecutionPlan for IcebergCommitExec {
         let schema = self.schema();
         let future = async move {
             let object_store = get_object_store_from_context(&context, &table_url)?;
-            let table_path = table_url
-                .path()
-                .strip_prefix('/')
-                .unwrap_or(table_url.path());
-            let root = object_store::path::Path::from(table_path);
+            let store_ctx = StoreContext::new(object_store.clone(), &table_url);
 
             // Read writer result (first row, string JSON)
             let mut data = input_stream;
@@ -192,8 +189,9 @@ impl ExecutionPlan for IcebergCommitExec {
                     .map_err(DataFusionError::Execution)?;
                 let manifest_len = manifest_bytes.len() as i64;
                 let manifest_rel = format!("metadata/manifest-{}.avro", uuid::Uuid::new_v4());
-                let manifest_path = crate::io::join_rel_path(&root, &manifest_rel);
-                object_store
+                let manifest_path = object_store::path::Path::from(manifest_rel.as_str());
+                store_ctx
+                    .prefixed
                     .put(
                         &manifest_path,
                         object_store::PutPayload::from(Bytes::from(manifest_bytes)),
@@ -226,8 +224,9 @@ impl ExecutionPlan for IcebergCommitExec {
                     .map_err(DataFusionError::Execution)?;
                 let new_snapshot_id = chrono::Utc::now().timestamp_millis();
                 let list_rel = format!("metadata/snap-{}.avro", new_snapshot_id);
-                let list_path = crate::io::join_rel_path(&root, &list_rel);
-                object_store
+                let list_path = object_store::path::Path::from(list_rel.as_str());
+                store_ctx
+                    .prefixed
                     .put(
                         &list_path,
                         object_store::PutPayload::from(Bytes::from(list_bytes)),
@@ -293,8 +292,9 @@ impl ExecutionPlan for IcebergCommitExec {
                     .map_err(|e| DataFusionError::External(Box::new(e)))?;
                 let new_meta_rel =
                     format!("metadata/{:05}-{}.metadata.json", 1, uuid::Uuid::new_v4());
-                let meta_path = crate::io::join_rel_path(&root, &new_meta_rel);
-                object_store
+                let meta_path = object_store::path::Path::from(new_meta_rel.as_str());
+                store_ctx
+                    .prefixed
                     .put(
                         &meta_path,
                         object_store::PutPayload::from(Bytes::from(new_meta_bytes)),
@@ -303,8 +303,9 @@ impl ExecutionPlan for IcebergCommitExec {
                     .map_err(|e| DataFusionError::External(Box::new(e)))?;
 
                 // Write version-hint
-                let hint_path = crate::io::join_rel_path(&root, "metadata/version-hint.text");
-                object_store
+                let hint_path = object_store::path::Path::from("metadata/version-hint.text");
+                store_ctx
+                    .prefixed
                     .put(
                         &hint_path,
                         object_store::PutPayload::from(Bytes::from("1".as_bytes().to_vec())),
@@ -320,7 +321,8 @@ impl ExecutionPlan for IcebergCommitExec {
             let latest_meta =
                 latest_meta_res.map_err(|e| DataFusionError::External(Box::new(e)))?;
             let meta_path = object_store::path::Path::from(latest_meta.as_str());
-            let bytes = object_store
+            let bytes = store_ctx
+                .base
                 .get(&meta_path)
                 .await
                 .map_err(|e| DataFusionError::External(Box::new(e)))?
@@ -367,8 +369,9 @@ impl ExecutionPlan for IcebergCommitExec {
                     .map_err(DataFusionError::Execution)?;
                 let manifest_len = manifest_bytes.len() as i64;
                 let manifest_rel = format!("metadata/manifest-{}.avro", uuid::Uuid::new_v4());
-                let manifest_path = crate::io::join_rel_path(&root, &manifest_rel);
-                object_store
+                let manifest_path = object_store::path::Path::from(manifest_rel.as_str());
+                store_ctx
+                    .prefixed
                     .put(
                         &manifest_path,
                         object_store::PutPayload::from(Bytes::from(manifest_bytes)),
@@ -397,8 +400,9 @@ impl ExecutionPlan for IcebergCommitExec {
                     .map_err(DataFusionError::Execution)?;
                 let new_snapshot_id = chrono::Utc::now().timestamp_millis();
                 let list_rel = format!("metadata/snap-{}.avro", new_snapshot_id);
-                let list_path = crate::io::join_rel_path(&root, &list_rel);
-                object_store
+                let list_path = object_store::path::Path::from(list_rel.as_str());
+                store_ctx
+                    .prefixed
                     .put(
                         &list_path,
                         object_store::PutPayload::from(Bytes::from(list_bytes)),
@@ -437,18 +441,18 @@ impl ExecutionPlan for IcebergCommitExec {
                     .map_err(|e| DataFusionError::External(Box::new(e)))?;
                 // Derive relative metadata filename (e.g., metadata/00000-<uuid>.metadata.json)
                 let rel_name = if let Some(idx) = latest_meta.rfind("/metadata/") {
-                    let (_, suffix) = latest_meta.split_at(idx + 1); // keep leading 'metadata/...'
+                    let (_, suffix) = latest_meta.split_at(idx + 1);
                     suffix.to_string()
                 } else if let Some(pos) = latest_meta.rfind("/metadata/") {
                     latest_meta[(pos + 1)..].to_string()
                 } else if let Some(fname) = latest_meta.rsplit('/').next() {
                     format!("metadata/{}", fname)
                 } else {
-                    // Fallback to known path
                     "metadata/00000.metadata.json".to_string()
                 };
-                let rel_path = crate::io::join_rel_path(&root, &rel_name);
-                object_store
+                let rel_path = object_store::path::Path::from(rel_name.as_str());
+                store_ctx
+                    .prefixed
                     .put(
                         &rel_path,
                         object_store::PutPayload::from(Bytes::from(new_meta_bytes)),
@@ -464,8 +468,9 @@ impl ExecutionPlan for IcebergCommitExec {
                 };
 
                 // Write version-hint
-                let hint_path = crate::io::join_rel_path(&root, "metadata/version-hint.text");
-                object_store
+                let hint_path = object_store::path::Path::from("metadata/version-hint.text");
+                store_ctx
+                    .prefixed
                     .put(
                         &hint_path,
                         object_store::PutPayload::from(Bytes::from(
@@ -491,7 +496,7 @@ impl ExecutionPlan for IcebergCommitExec {
                 crate::spec::Operation::Append => {
                     let mut action = tx
                         .fast_append()
-                        .with_store(object_store.clone(), root.clone())
+                        .with_store_context(store_ctx.clone())
                         .with_manifest_metadata(manifest_meta);
                     for df in commit_info.data_files.into_iter() {
                         action.add_file(df);
@@ -502,15 +507,12 @@ impl ExecutionPlan for IcebergCommitExec {
                         .map_err(DataFusionError::Execution)?
                 }
                 crate::spec::Operation::Overwrite => {
-                    // Overwrite: new snapshot with only new data
                     let producer = super::super::super::transaction::SnapshotProducer::new(
                         &tx,
                         commit_info.data_files.clone(),
-                        Some(object_store.clone()),
-                        Some(root.clone()),
+                        Some(store_ctx.clone()),
                         Some(manifest_meta),
                     );
-                    // local overwrite op for snapshot producer
                     struct LocalOverwriteOperation;
                     impl SnapshotProduceOperation for LocalOverwriteOperation {
                         fn operation(&self) -> &'static str {
@@ -605,8 +607,9 @@ impl ExecutionPlan for IcebergCommitExec {
                 &table_url
             );
 
-            let new_meta_path = crate::io::join_rel_path(&root, &new_meta_rel);
-            object_store
+            let new_meta_path = object_store::path::Path::from(new_meta_rel.as_str());
+            store_ctx
+                .prefixed
                 .put(
                     &new_meta_path,
                     object_store::PutPayload::from(Bytes::from(new_meta_bytes)),
@@ -622,8 +625,9 @@ impl ExecutionPlan for IcebergCommitExec {
                 new_meta_rel.clone()
             };
             let hint_bytes = Bytes::from(metadata_filename.into_bytes());
-            let hint_path = crate::io::join_rel_path(&root, "metadata/version-hint.text");
-            object_store
+            let hint_path = object_store::path::Path::from("metadata/version-hint.text");
+            store_ctx
+                .prefixed
                 .put(&hint_path, object_store::PutPayload::from(hint_bytes))
                 .await
                 .map_err(|e| DataFusionError::External(Box::new(e)))?;
