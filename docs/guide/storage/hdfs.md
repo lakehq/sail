@@ -27,8 +27,8 @@ Kerberos authentication for HDFS is supported and tested with Sail.
 ### Prerequisites
 
 - A **Kerberos-enabled HDFS cluster** configured with Kerberos authentication. See [Apache Hadoop Secure Mode](https://hadoop.apache.org/docs/stable/hadoop-project-dist/hadoop-common/SecureMode.html) for details.
-- A **valid keytab file** for the principal that will access HDFS.
-- A **`krb5.conf`** file on the Sail server host. See [MIT Kerberos Documentation](https://web.mit.edu/kerberos/krb5-latest/doc/admin/conf_files/krb5_conf.html) for details.
+- A valid **keytab file** for the principal that will access HDFS.
+- A **`krb5.conf` file** on the Sail server host. See [MIT Kerberos Documentation](https://web.mit.edu/kerberos/krb5-latest/doc/admin/conf_files/krb5_conf.html) for details.
 
 ### Starting the Sail Server
 
