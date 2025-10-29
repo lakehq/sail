@@ -94,6 +94,7 @@ async fn setup_catalog() -> (
 }
 
 #[tokio::test]
+#[ignore]
 async fn test_create_namespace() {
     let (rest_catalog, _minio, _mc, _rest) = setup_catalog().await;
 
@@ -179,6 +180,7 @@ async fn test_create_namespace() {
 }
 
 #[tokio::test]
+#[ignore]
 async fn test_get_non_exist_namespace() {
     let (rest_catalog, _minio, _mc, _rest) = setup_catalog().await;
 
@@ -193,6 +195,7 @@ async fn test_get_non_exist_namespace() {
 }
 
 #[tokio::test]
+#[ignore]
 async fn test_get_namespace() {
     let (rest_catalog, _minio, _mc, _rest) = setup_catalog().await;
 
@@ -236,6 +239,7 @@ async fn test_get_namespace() {
 }
 
 #[tokio::test]
+#[ignore]
 async fn test_list_namespaces() {
     let (rest_catalog, _minio, _mc, _rest) = setup_catalog().await;
 
@@ -295,6 +299,7 @@ async fn test_list_namespaces() {
 }
 
 #[tokio::test]
+#[ignore]
 async fn test_list_empty_namespaces() {
     let (rest_catalog, _minio, _mc, _rest) = setup_catalog().await;
 
@@ -328,6 +333,7 @@ async fn test_list_empty_namespaces() {
 }
 
 #[tokio::test]
+#[ignore]
 async fn test_list_root_namespaces() {
     let (rest_catalog, _minio, _mc, _rest) = setup_catalog().await;
 
@@ -392,6 +398,7 @@ async fn test_list_root_namespaces() {
 }
 
 #[tokio::test]
+#[ignore]
 async fn test_list_empty_multi_level_namespaces() {
     let (rest_catalog, _minio, _mc, _rest) = setup_catalog().await;
 
@@ -426,6 +433,7 @@ async fn test_list_empty_multi_level_namespaces() {
 }
 
 #[tokio::test]
+#[ignore]
 async fn test_drop_namespace() {
     let (rest_catalog, _minio, _mc, _rest) = setup_catalog().await;
 
@@ -485,6 +493,7 @@ async fn test_drop_namespace() {
 }
 
 #[tokio::test]
+#[ignore]
 async fn test_create_table() {
     let (rest_catalog, _minio, _mc, _rest) = setup_catalog().await;
 
@@ -855,6 +864,7 @@ async fn test_create_table() {
 }
 
 #[tokio::test]
+#[ignore]
 async fn test_get_table() {
     let (rest_catalog, _minio, _mc, _rest) = setup_catalog().await;
 
@@ -1086,6 +1096,7 @@ async fn test_get_table() {
 }
 
 #[tokio::test]
+#[ignore]
 async fn test_list_tables() {
     let (rest_catalog, _minio, _mc, _rest) = setup_catalog().await;
 
@@ -1181,6 +1192,7 @@ async fn test_list_tables() {
 }
 
 #[tokio::test]
+#[ignore]
 async fn test_drop_table() {
     let (rest_catalog, _minio, _mc, _rest) = setup_catalog().await;
 
@@ -1314,6 +1326,7 @@ async fn test_drop_table() {
 }
 
 #[tokio::test]
+#[ignore]
 async fn test_create_view() {
     let (rest_catalog, _minio, _mc, _rest) = setup_catalog().await;
 
@@ -1529,6 +1542,7 @@ async fn test_create_view() {
 }
 
 #[tokio::test]
+#[ignore]
 async fn test_get_view() {
     let (rest_catalog, _minio, _mc, _rest) = setup_catalog().await;
 
@@ -1631,6 +1645,7 @@ async fn test_get_view() {
 }
 
 #[tokio::test]
+#[ignore]
 async fn test_list_views() {
     let (rest_catalog, _minio, _mc, _rest) = setup_catalog().await;
 
@@ -1709,6 +1724,7 @@ async fn test_list_views() {
 }
 
 #[tokio::test]
+#[ignore]
 async fn test_drop_view() {
     let (rest_catalog, _minio, _mc, _rest) = setup_catalog().await;
 

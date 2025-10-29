@@ -13,6 +13,7 @@ use object_store::{
 };
 use tokio::runtime::Handle;
 use tokio::sync::{mpsc, Mutex};
+use tokio_stream::once;
 use tokio_stream::wrappers::ReceiverStream;
 use tonic::codegen::Bytes;
 
@@ -176,16 +177,12 @@ impl ObjectStore for RuntimeAwareObjectStore {
 
     fn delete_stream<'a>(
         &'a self,
-        locations: BoxStream<'a, Result<Path>>,
+        _locations: BoxStream<'a, Result<Path>>,
     ) -> BoxStream<'a, Result<Path>> {
         // FIXME: We cannot run `delete_stream` in a runtime-aware manner because
         //  the input and output streams are expected to have the lifetime `'a`,
         //  while tasks spawned by the runtime handle must be `'static`.
-        //  NOTE:
-        //  DataFusion doesn't use `delete_stream`, so we bypass runtime isolation (no spawn).
-        //  This means stream polling occurs on the caller's runtime while the inner store's
-        //  I/O still uses the secondary runtime.
-        self.inner.delete_stream(locations)
+        once(Err(object_store::Error::NotImplemented)).boxed()
     }
 
     fn list(&self, prefix: Option<&Path>) -> BoxStream<'static, Result<ObjectMeta>> {
