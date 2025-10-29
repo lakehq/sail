@@ -152,9 +152,10 @@ impl ExecutionPlan for IcebergCommitExec {
                 crate::table_format::find_latest_metadata_file(&object_store, &table_url).await;
 
             if latest_meta_res.is_err()
-                && matches!(commit_info.operation, crate::spec::Operation::Overwrite)
+                && (matches!(commit_info.operation, crate::spec::Operation::Overwrite)
+                    || matches!(commit_info.operation, crate::spec::Operation::Append))
             {
-                // Bootstrap a new table metadata for overwrite when no table exists
+                // Bootstrap a new table metadata for overwrite or append when no table exists
                 use crate::spec::metadata::format::FormatVersion;
                 use crate::spec::snapshots::{
                     SnapshotBuilder, SnapshotReference, SnapshotRetention,
@@ -336,10 +337,11 @@ impl ExecutionPlan for IcebergCommitExec {
                 DataFusionError::Plan("No current schema in table metadata".to_string())
             })?;
 
-            // If metadata exists but there is no current snapshot and this is an overwrite,
-            // bootstrap the first snapshot into the existing metadata and persist a new version.
+            // If metadata exists but there is no current snapshot (e.g. from a CREATE TABLE),
+            // bootstrap the first snapshot into the existing metadata.
             if maybe_snapshot.is_none()
-                && matches!(commit_info.operation, crate::spec::Operation::Overwrite)
+                && (matches!(commit_info.operation, crate::spec::Operation::Overwrite)
+                    || matches!(commit_info.operation, crate::spec::Operation::Append))
             {
                 use crate::spec::manifest_list::UNASSIGNED_SEQUENCE_NUMBER;
                 use crate::spec::metadata::format::FormatVersion;
