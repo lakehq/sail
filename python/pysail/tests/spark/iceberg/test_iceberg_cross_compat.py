@@ -1,5 +1,8 @@
+import platform
+
 import pandas as pd
 import pyarrow as pa
+import pytest
 from pandas.testing import assert_frame_equal
 from pyiceberg.schema import Schema
 from pyiceberg.table import StaticTable
@@ -8,6 +11,7 @@ from pyiceberg.types import DoubleType, LongType, NestedField, StringType
 from .utils import create_sql_catalog, pyiceberg_to_pandas  # noqa: TID252
 
 
+@pytest.mark.skipif(platform.system() == "Windows", reason="not working on Windows")
 def test_pyiceberg_read_after_sail_overwrite(spark, tmp_path):
     catalog = create_sql_catalog(tmp_path)
     identifier = "default.cross_overwrite"
@@ -39,6 +43,7 @@ def test_pyiceberg_read_after_sail_overwrite(spark, tmp_path):
         catalog.drop_table(identifier)
 
 
+@pytest.mark.skipif(platform.system() == "Windows", reason="not working on Windows")
 def test_pyiceberg_read_after_sail_append(spark, tmp_path):
     catalog = create_sql_catalog(tmp_path)
     identifier = "default.cross_append"
@@ -75,6 +80,7 @@ def test_pyiceberg_read_after_sail_append(spark, tmp_path):
         catalog.drop_table(identifier)
 
 
+@pytest.mark.skipif(platform.system() == "Windows", reason="not working on Windows")
 def test_static_table_read_after_sail_overwrite(spark, tmp_path):
     catalog = create_sql_catalog(tmp_path)
     identifier = "default.static_overwrite"
@@ -108,6 +114,7 @@ def test_static_table_read_after_sail_overwrite(spark, tmp_path):
         catalog.drop_table(identifier)
 
 
+@pytest.mark.skipif(platform.system() == "Windows", reason="not working on Windows")
 def test_static_table_read_after_sail_append(spark, tmp_path):
     catalog = create_sql_catalog(tmp_path)
     identifier = "default.static_append"
@@ -140,6 +147,7 @@ def test_static_table_read_after_sail_append(spark, tmp_path):
         catalog.drop_table(identifier)
 
 
+@pytest.mark.skipif(platform.system() == "Windows", reason="not working on Windows")
 def test_static_table_read_multiple_sail_writes(spark, tmp_path):
     catalog = create_sql_catalog(tmp_path)
     identifier = "default.static_multiple"

@@ -5,15 +5,28 @@ next: false
 
 # Changelog
 
+## 0.4.0
+
+_October 29, 2025_
+
+- Added basic support for reading and writing Iceberg tables ([#944](https://github.com/lakehq/sail/pull/944), [#987](https://github.com/lakehq/sail/pull/987), [#976](https://github.com/lakehq/sail/pull/976), [#994](https://github.com/lakehq/sail/pull/994), and [#997](https://github.com/lakehq/sail/pull/997)).
+- Supported Iceberg REST catalog ([#961](https://github.com/lakehq/sail/pull/961), [#974](https://github.com/lakehq/sail/pull/974), [#993](https://github.com/lakehq/sail/pull/993), and [#995](https://github.com/lakehq/sail/pull/995)).
+- Improved Delta Lake integration ([#921](https://github.com/lakehq/sail/pull/921)).
+- Supported multiple arguments for the `count_distinct` SQL function ([#957](https://github.com/lakehq/sail/pull/957)).
+- Added guide for HDFS Kerberos authentication ([#992](https://github.com/lakehq/sail/pull/992)).
+- Updated a few execution configuration options ([#975](https://github.com/lakehq/sail/pull/975)).
+- Fixed a cost estimation issue with the join reorder optimizer ([#969](https://github.com/lakehq/sail/pull/969)).
+
+### Contributors
+
+Huge thanks to [@SparkApplicationMaster](https://github.com/SparkApplicationMaster), [@davidlghellin](https://github.com/davidlghellin), and [@zemin-piao](https://github.com/zemin-piao) (_first-time contributor_) for the contributions!
+
 ## 0.3.7
 
 _October 3, 2025_
 
-- Updated various Cargo dependencies ([#949](https://github.com/lakehq/sail/pull/949)) and ([#937](https://github.com/lakehq/sail/pull/937)).
-- Updated various npm dependencies ([#939](https://github.com/lakehq/sail/pull/939).
-- Updated Chumsky to 0.11, which brings improved error reporting for the SQL parser ([#938](https://github.com/lakehq/sail/pull/938)).
+- Improved error reporting for the SQL parser ([#938](https://github.com/lakehq/sail/pull/938)).
 - Supported the `df.unpivot()` method in the Spark DataFrame API ([#948](https://github.com/lakehq/sail/pull/948)).
-- Added guide in docs for SQL operators ([#947](https://github.com/lakehq/sail/pull/947)).
 
 ### Contributors
 
