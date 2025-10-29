@@ -80,7 +80,7 @@ pub enum ExecutionMode {
 #[serde(deny_unknown_fields)]
 pub struct RuntimeConfig {
     pub stack_size: usize,
-    pub io_runtime_for_object_store: bool,
+    pub enable_secondary: bool,
 }
 
 #[derive(Debug, Clone, Deserialize)]

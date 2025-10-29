@@ -20,7 +20,7 @@ impl RuntimeManager {
         Ok(Self {
             primary,
             io,
-            io_runtime_for_object_store: config.io_runtime_for_object_store,
+            io_runtime_for_object_store: config.enable_secondary,
         })
     }
 
