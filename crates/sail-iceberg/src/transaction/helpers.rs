@@ -1,30 +1,10 @@
-use object_store::path::Path as ObjectPath;
-use url::Url;
-
 use super::{FastAppendAction, Transaction};
-use crate::io::IcebergObjectStore;
 use crate::spec::manifest::ManifestMetadata;
 use crate::spec::{FormatVersion, ManifestContentType, PartitionSpec, Schema};
 
 impl Transaction {
     pub fn fast_append(&self) -> FastAppendAction {
         FastAppendAction::new()
-    }
-
-    pub fn build_object_store(
-        &self,
-        session: &dyn datafusion::catalog::Session,
-    ) -> Result<IcebergObjectStore, String> {
-        let table_url = Url::parse(self.table_uri()).map_err(|e| e.to_string())?;
-        let store = session
-            .runtime_env()
-            .object_store_registry
-            .get_store(&table_url)
-            .map_err(|e| e.to_string())?;
-        Ok(IcebergObjectStore::new(
-            store,
-            ObjectPath::from(table_url.path()),
-        ))
     }
 
     pub fn default_manifest_metadata(&self, schema: &Schema) -> ManifestMetadata {

@@ -33,7 +33,7 @@ impl TransactionAction for OverwriteAction {
         // TODO: Implement full overwrite semantics (predicate/partition replaces, conflict checks,
         // delete manifests) instead of relying solely on SnapshotProducer for added data files.
         // The caller must configure `added_data_files`, `store`, and `manifest_metadata`.
-        let snapshot_producer = SnapshotProducer::new(tx, vec![], None, None);
+        let snapshot_producer = SnapshotProducer::new(tx, vec![], None, None, None);
         snapshot_producer.commit(OverwriteOperation).await
     }
 }

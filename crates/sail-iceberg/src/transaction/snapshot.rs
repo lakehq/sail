@@ -1,7 +1,6 @@
 use bytes::Bytes;
 
 use super::{ActionCommit, Transaction};
-use crate::io::IcebergObjectStore;
 use crate::spec::manifest::ManifestWriterBuilder;
 use crate::spec::manifest_list::{ManifestListWriter, UNASSIGNED_SEQUENCE_NUMBER};
 use crate::spec::{
@@ -18,7 +17,8 @@ pub trait SnapshotProduceOperation: Send + Sync {
 pub struct SnapshotProducer<'a> {
     pub tx: &'a Transaction,
     pub added_data_files: Vec<DataFile>,
-    pub store: Option<IcebergObjectStore>,
+    pub store: Option<std::sync::Arc<dyn object_store::ObjectStore>>,
+    pub root: Option<object_store::path::Path>,
     pub manifest_metadata: Option<crate::spec::manifest::ManifestMetadata>,
     pub write_path_mode: crate::utils::WritePathMode,
 }
@@ -27,13 +27,15 @@ impl<'a> SnapshotProducer<'a> {
     pub fn new(
         tx: &'a Transaction,
         added_data_files: Vec<DataFile>,
-        store: Option<IcebergObjectStore>,
+        store: Option<std::sync::Arc<dyn object_store::ObjectStore>>,
+        root: Option<object_store::path::Path>,
         manifest_metadata: Option<crate::spec::manifest::ManifestMetadata>,
     ) -> Self {
         Self {
             tx,
             added_data_files,
             store,
+            root,
             manifest_metadata,
             write_path_mode: crate::utils::WritePathMode::Absolute,
         }
@@ -88,12 +90,21 @@ impl<'a> SnapshotProducer<'a> {
             .store
             .as_ref()
             .ok_or_else(|| "object store not available".to_string())?;
+        let root = self
+            .root
+            .as_ref()
+            .ok_or_else(|| "object store root not available".to_string())?;
 
         let manifest_len = manifest_bytes.len() as i64;
         let manifest_rel = format!("metadata/manifest-{}.avro", uuid::Uuid::new_v4());
-        let _manifest_path = store
-            .put_rel(&manifest_rel, Bytes::from(manifest_bytes))
-            .await?;
+        let manifest_path = crate::io::join_rel_path(root, &manifest_rel);
+        store
+            .put(
+                &manifest_path,
+                object_store::PutPayload::from(Bytes::from(manifest_bytes)),
+            )
+            .await
+            .map_err(|e| format!("{}", e))?;
 
         // Build a manifest file entry for manifest list
         let added_rows: i64 = self
@@ -137,7 +148,7 @@ impl<'a> SnapshotProducer<'a> {
                     .unwrap_or(parent_manifest_list_path_str);
                 ObjectPath::from(no_leading)
             } else {
-                store.root.child(parent_manifest_list_path_str)
+                crate::io::join_rel_path(root, parent_manifest_list_path_str)
             };
 
             log::trace!(
@@ -145,7 +156,6 @@ impl<'a> SnapshotProducer<'a> {
                 &manifest_list_path
             );
             let manifest_list_data = store
-                .object_store
                 .get(&manifest_list_path)
                 .await
                 .map_err(|e| format!("Failed to get parent manifest list: {}", e))?
@@ -181,7 +191,14 @@ impl<'a> SnapshotProducer<'a> {
         );
         let list_bytes = list_writer.to_bytes(FormatVersion::V2)?;
         let list_rel = format!("metadata/snap-{}.avro", new_snapshot_id);
-        let _list_path = store.put_rel(&list_rel, Bytes::from(list_bytes)).await?;
+        let list_path = crate::io::join_rel_path(root, &list_rel);
+        store
+            .put(
+                &list_path,
+                object_store::PutPayload::from(Bytes::from(list_bytes)),
+            )
+            .await
+            .map_err(|e| format!("{}", e))?;
 
         let manifest_list_uri =
             join_table_uri(self.tx.table_uri(), &list_rel, &self.write_path_mode);
