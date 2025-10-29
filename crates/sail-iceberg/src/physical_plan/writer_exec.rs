@@ -21,7 +21,6 @@ use sail_common_datafusion::datasource::PhysicalSinkMode;
 use url::Url;
 
 use crate::arrow_conversion::iceberg_schema_to_arrow;
-use crate::io::IcebergObjectStore;
 use crate::spec::partition::{UnboundPartitionField, UnboundPartitionSpec};
 use crate::spec::schema::Schema as IcebergSchema;
 use crate::spec::types::NestedField;
@@ -307,11 +306,6 @@ impl ExecutionPlan for IcebergWriterExec {
                 let spec = builder.build();
                 (iceberg_schema, Some(spec), "data".to_string())
             };
-            let store = IcebergObjectStore::new(
-                object_store.clone(),
-                object_store::path::Path::from(table_url.path()),
-            );
-
             let table_schema = Arc::new(iceberg_schema_to_arrow(&iceberg_schema)?);
 
             // Build unbound partition spec from bound spec if present
@@ -343,7 +337,8 @@ impl ExecutionPlan for IcebergWriterExec {
             };
 
             let root = object_store::path::Path::from(table_url.path());
-            let mut writer = IcebergTableWriter::new(store, root, writer_config, 0, data_dir);
+            let mut writer =
+                IcebergTableWriter::new(object_store.clone(), root, writer_config, 0, data_dir);
 
             let mut total_rows = 0u64;
             let mut data = stream;

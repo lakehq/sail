@@ -1,7 +1,7 @@
 use bytes::Bytes;
 
 use super::{ActionCommit, Transaction};
-use crate::io::IcebergObjectStore;
+use crate::io::StoreContext;
 use crate::spec::manifest::ManifestWriterBuilder;
 use crate::spec::manifest_list::{ManifestListWriter, UNASSIGNED_SEQUENCE_NUMBER};
 use crate::spec::{
@@ -18,7 +18,7 @@ pub trait SnapshotProduceOperation: Send + Sync {
 pub struct SnapshotProducer<'a> {
     pub tx: &'a Transaction,
     pub added_data_files: Vec<DataFile>,
-    pub store: Option<IcebergObjectStore>,
+    pub store_ctx: Option<StoreContext>,
     pub manifest_metadata: Option<crate::spec::manifest::ManifestMetadata>,
     pub write_path_mode: crate::utils::WritePathMode,
 }
@@ -27,13 +27,13 @@ impl<'a> SnapshotProducer<'a> {
     pub fn new(
         tx: &'a Transaction,
         added_data_files: Vec<DataFile>,
-        store: Option<IcebergObjectStore>,
+        store_ctx: Option<StoreContext>,
         manifest_metadata: Option<crate::spec::manifest::ManifestMetadata>,
     ) -> Self {
         Self {
             tx,
             added_data_files,
-            store,
+            store_ctx,
             manifest_metadata,
             write_path_mode: crate::utils::WritePathMode::Absolute,
         }
@@ -84,16 +84,22 @@ impl<'a> SnapshotProducer<'a> {
         let new_snapshot_id = timestamp_ms;
         let new_sequence_number = self.tx.snapshot().sequence_number() + 1;
 
-        let store = self
-            .store
+        let store_ctx = self
+            .store_ctx
             .as_ref()
-            .ok_or_else(|| "object store not available".to_string())?;
+            .ok_or_else(|| "store context not available".to_string())?;
 
         let manifest_len = manifest_bytes.len() as i64;
         let manifest_rel = format!("metadata/manifest-{}.avro", uuid::Uuid::new_v4());
-        let _manifest_path = store
-            .put_rel(&manifest_rel, Bytes::from(manifest_bytes))
-            .await?;
+        let manifest_path = object_store::path::Path::from(manifest_rel.as_str());
+        store_ctx
+            .prefixed
+            .put(
+                &manifest_path,
+                object_store::PutPayload::from(Bytes::from(manifest_bytes)),
+            )
+            .await
+            .map_err(|e| format!("{}", e))?;
 
         // Build a manifest file entry for manifest list
         let added_rows: i64 = self
@@ -125,27 +131,15 @@ impl<'a> SnapshotProducer<'a> {
         let parent_manifest_list_path_str = parent_snapshot.manifest_list();
 
         if !is_overwrite && !parent_manifest_list_path_str.is_empty() {
-            use object_store::path::Path as ObjectPath;
-            use url::Url;
-
-            // Parse the manifest list path - it might be a full URL, absolute file path, or a relative path
-            let manifest_list_path = if let Ok(url) = Url::parse(parent_manifest_list_path_str) {
-                ObjectPath::from(url.path().strip_prefix('/').unwrap_or(url.path()))
-            } else if parent_manifest_list_path_str.starts_with(object_store::path::DELIMITER) {
-                let no_leading = parent_manifest_list_path_str
-                    .strip_prefix('/')
-                    .unwrap_or(parent_manifest_list_path_str);
-                ObjectPath::from(no_leading)
-            } else {
-                store.root.child(parent_manifest_list_path_str)
-            };
+            let (store_ref, manifest_list_path) = store_ctx
+                .resolve(parent_manifest_list_path_str)
+                .map_err(|e| format!("{}", e))?;
 
             log::trace!(
                 "snapshot producer: loading parent manifest list: {}",
                 &manifest_list_path
             );
-            let manifest_list_data = store
-                .object_store
+            let manifest_list_data = store_ref
                 .get(&manifest_list_path)
                 .await
                 .map_err(|e| format!("Failed to get parent manifest list: {}", e))?
@@ -181,7 +175,15 @@ impl<'a> SnapshotProducer<'a> {
         );
         let list_bytes = list_writer.to_bytes(FormatVersion::V2)?;
         let list_rel = format!("metadata/snap-{}.avro", new_snapshot_id);
-        let _list_path = store.put_rel(&list_rel, Bytes::from(list_bytes)).await?;
+        let list_path = object_store::path::Path::from(list_rel.as_str());
+        store_ctx
+            .prefixed
+            .put(
+                &list_path,
+                object_store::PutPayload::from(Bytes::from(list_bytes)),
+            )
+            .await
+            .map_err(|e| format!("{}", e))?;
 
         let manifest_list_uri =
             join_table_uri(self.tx.table_uri(), &list_rel, &self.write_path_mode);

@@ -7,7 +7,7 @@ use uuid::Uuid;
 use super::{
     ActionCommit, SnapshotProduceOperation, SnapshotProducer, Transaction, TransactionAction,
 };
-use crate::io::IcebergObjectStore;
+use crate::io::StoreContext;
 use crate::spec::manifest::ManifestMetadata;
 use crate::spec::manifest_list::ManifestList;
 use crate::spec::DataFile;
@@ -19,7 +19,7 @@ pub struct FastAppendAction {
     snapshot_properties: HashMap<String, String>,
     added_data_files: Vec<DataFile>,
     parent_manifest_list: Option<ManifestList>,
-    store: Option<IcebergObjectStore>,
+    store_ctx: Option<StoreContext>,
     manifest_metadata: Option<ManifestMetadata>,
 }
 
@@ -38,7 +38,7 @@ impl FastAppendAction {
             snapshot_properties: HashMap::new(),
             added_data_files: Vec::new(),
             parent_manifest_list: None,
-            store: None,
+            store_ctx: None,
             manifest_metadata: None,
         }
     }
@@ -72,8 +72,8 @@ impl FastAppendAction {
         self
     }
 
-    pub fn with_store(mut self, store: IcebergObjectStore) -> Self {
-        self.store = Some(store);
+    pub fn with_store_context(mut self, store_ctx: StoreContext) -> Self {
+        self.store_ctx = Some(store_ctx);
         self
     }
 
@@ -89,7 +89,7 @@ impl TransactionAction for FastAppendAction {
         let snapshot_producer = SnapshotProducer::new(
             tx,
             self.added_data_files.clone(),
-            self.store.clone(),
+            self.store_ctx.clone(),
             self.manifest_metadata.clone(),
         );
         snapshot_producer.validate_added_data_files(&self.added_data_files)?;

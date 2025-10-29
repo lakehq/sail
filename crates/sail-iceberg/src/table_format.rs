@@ -232,7 +232,8 @@ pub(crate) async fn find_latest_metadata_file(
 
     log::trace!("Finding latest metadata file");
     let version_hint_path =
-        ObjectPath::from(format!("{}metadata/version-hint.text", table_url.path()).as_str());
+        ObjectPath::parse(format!("{}metadata/version-hint.text", table_url.path()).as_str())
+            .map_err(|e| DataFusionError::External(Box::new(e)))?;
     let mut hinted_version: Option<i32> = None;
     let mut hinted_filename: Option<String> = None;
     if let Ok(version_hint_data) = object_store.get(&version_hint_path).await {
@@ -258,7 +259,8 @@ pub(crate) async fn find_latest_metadata_file(
     }
 
     log::trace!("Listing metadata directory");
-    let metadata_prefix = ObjectPath::from(format!("{}metadata/", table_url.path()).as_str());
+    let metadata_prefix = ObjectPath::parse(format!("{}metadata/", table_url.path()).as_str())
+        .map_err(|e| DataFusionError::External(Box::new(e)))?;
 
     let objects = object_store.list(Some(&metadata_prefix));
 

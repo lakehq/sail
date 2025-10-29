@@ -1,4 +1,5 @@
 use std::collections::HashMap;
+use std::sync::Arc;
 
 use datafusion::arrow::array::ArrayRef;
 use datafusion::arrow::datatypes::Schema as ArrowSchema;
@@ -7,7 +8,6 @@ use object_store::path::Path as ObjectPath;
 use parquet::arrow::PARQUET_FIELD_ID_META_KEY;
 use sail_common_datafusion::array::record_batch::cast_record_batch;
 
-use crate::io::IcebergObjectStore;
 use crate::spec::types::values::Literal;
 use crate::spec::types::{PrimitiveType, Type};
 use crate::spec::DataFile;
@@ -20,7 +20,7 @@ use crate::writer::partition::{
 };
 
 pub struct IcebergTableWriter {
-    pub store: IcebergObjectStore,
+    pub store: Arc<dyn object_store::ObjectStore>,
     pub config: WriterConfig,
     pub generator: DefaultLocationGenerator,
     // partition_dir -> writer
@@ -33,7 +33,7 @@ pub struct IcebergTableWriter {
 
 impl IcebergTableWriter {
     pub fn new(
-        store: IcebergObjectStore,
+        store: Arc<dyn object_store::ObjectStore>,
         root: ObjectPath,
         config: WriterConfig,
         partition_spec_id: i32,
@@ -171,7 +171,10 @@ impl IcebergTableWriter {
             let (bytes, meta) = writer.close().await?;
             let (rel, full) = self.generator.with_partition_dir(Some(partition_dir));
             log::trace!("iceberg.table_writer.flush_partition.writing: {}", &full);
-            self.store.put(&full, bytes).await?;
+            self.store
+                .put(&full, object_store::PutPayload::from(bytes))
+                .await
+                .map_err(|e| e.to_string())?;
             log::trace!(
                 "iceberg.table_writer.flush_partition.written: rel={} full={}",
                 &rel,
