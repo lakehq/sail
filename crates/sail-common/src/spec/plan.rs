@@ -873,17 +873,13 @@ pub struct SaveBucketBy {
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
+#[derive(Default)]
 pub enum SaveMode {
     Append,
     Overwrite,
+    #[default]
     ErrorIfExists,
     IgnoreIfExists,
-}
-
-impl Default for SaveMode {
-    fn default() -> Self {
-        Self::ErrorIfExists
-    }
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]

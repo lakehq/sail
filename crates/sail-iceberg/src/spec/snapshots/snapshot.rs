@@ -35,8 +35,10 @@ pub type SnapshotRef = Arc<Snapshot>;
 #[derive(Debug, Serialize, Deserialize, PartialEq, Eq, Clone)]
 #[serde(rename_all = "lowercase")]
 /// The operation field is used by some operations, like snapshot expiration, to skip processing certain snapshots.
+#[derive(Default)]
 pub enum Operation {
     /// Only data files were added and no files were removed.
+    #[default]
     Append,
     /// Data and delete files were added and removed without changing table data;
     /// i.e., compaction, changing the data file format, or relocating data files.
@@ -56,12 +58,6 @@ impl Operation {
             Operation::Overwrite => "overwrite",
             Operation::Delete => "delete",
         }
-    }
-}
-
-impl Default for Operation {
-    fn default() -> Operation {
-        Self::Append
     }
 }
 
