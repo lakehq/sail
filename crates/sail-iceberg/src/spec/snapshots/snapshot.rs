@@ -32,10 +32,9 @@ pub const UNASSIGNED_SNAPSHOT_ID: i64 = -1;
 /// Reference to [`Snapshot`].
 pub type SnapshotRef = Arc<Snapshot>;
 
-#[derive(Debug, Serialize, Deserialize, PartialEq, Eq, Clone)]
+#[derive(Debug, Default, Serialize, Deserialize, PartialEq, Eq, Clone)]
 #[serde(rename_all = "lowercase")]
 /// The operation field is used by some operations, like snapshot expiration, to skip processing certain snapshots.
-#[derive(Default)]
 pub enum Operation {
     /// Only data files were added and no files were removed.
     #[default]
