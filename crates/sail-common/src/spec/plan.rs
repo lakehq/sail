@@ -871,9 +871,8 @@ pub struct SaveBucketBy {
     pub num_buckets: usize,
 }
 
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[derive(Debug, Default, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
-#[derive(Default)]
 pub enum SaveMode {
     Append,
     Overwrite,
