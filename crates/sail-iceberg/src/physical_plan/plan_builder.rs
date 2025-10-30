@@ -4,7 +4,6 @@ use datafusion::catalog::Session;
 use datafusion::common::Result;
 use datafusion::physical_expr::expressions::Column;
 use datafusion::physical_expr::{LexOrdering, PhysicalExpr, PhysicalSortExpr};
-use datafusion::physical_plan::coalesce_partitions::CoalescePartitionsExec;
 use datafusion::physical_plan::projection::ProjectionExec;
 use datafusion::physical_plan::repartition::RepartitionExec;
 use datafusion::physical_plan::sorts::sort::SortExec;
@@ -49,7 +48,6 @@ impl<'a> IcebergPlanBuilder<'a> {
     pub async fn build(self) -> Result<Arc<dyn ExecutionPlan>> {
         self.add_projection_node(self.input.clone())
             .and_then(|plan| self.add_repartition_node(plan))
-            .and_then(|plan| self.add_coalesce_node(plan))
             .and_then(|plan| self.add_sort_node(plan))
             .and_then(|plan| self.add_writer_node(plan))
             .and_then(|plan| self.add_commit_node(plan))
@@ -101,10 +99,6 @@ impl<'a> IcebergPlanBuilder<'a> {
         };
 
         Ok(Arc::new(RepartitionExec::try_new(input, repartitioning)?))
-    }
-
-    fn add_coalesce_node(&self, input: Arc<dyn ExecutionPlan>) -> Result<Arc<dyn ExecutionPlan>> {
-        Ok(Arc::new(CoalescePartitionsExec::new(input)))
     }
 
     fn add_sort_node(&self, input: Arc<dyn ExecutionPlan>) -> Result<Arc<dyn ExecutionPlan>> {
