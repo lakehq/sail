@@ -82,6 +82,7 @@ figment = { version = "0.10.19", features = ["toml", "env"] }
 kube = "2.0.1"
 k8s-openapi = { version = "0.26.0", features = ["latest"] }
 twox-hash = "2.1.2"
+murmur3 = "0.5.2"
 aes = "0.8.4"
 aes-gcm = "0.10.3"
 cbc = { version = "0.1.2", features = ["std"] }
@@ -152,7 +153,6 @@ serde_arrow = { version = "0.13.6", features = ["arrow-56"] }
 # The `object_store` version must match the one used in DataFusion.
 object_store = { version = "0.12.4", features = ["aws", "gcp", "azure", "http"] }
 hdfs-native-object-store = "0.15.0"
-murmur3 = "0.5.2"
 
 # Lakehouse
 deltalake = { git = "https://github.com/delta-io/delta-rs.git", rev = "0864b21", default-features = false, features = ["rustls"] }
