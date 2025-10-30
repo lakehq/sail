@@ -16,9 +16,9 @@ from pyiceberg.partitioning import (
 from pyiceberg.schema import Schema
 from pyiceberg.types import DateType, IntegerType, NestedField, StringType, TimestampType
 
-from .utils import create_sql_catalog, pyiceberg_to_pandas  # noqa: TID252
+from pysail.tests.spark.utils import escape_sql_string_literal
 
-# pytestmark = pytest.mark.xfail(reason="partitioned writes not supported yet", strict=False)
+from .utils import create_sql_catalog, pyiceberg_to_pandas  # noqa: TID252
 
 
 def _common_schema() -> Schema:
@@ -190,3 +190,54 @@ def test_partitioned_write_then_pyiceberg_read_all(spark, tmp_path, table_name, 
         assert list(actual["letter"]) == expected_letters
     finally:
         catalog.drop_table(table_name)
+
+
+def test_iceberg_partition_writes_sql(spark, tmp_path):
+    warehouse = tmp_path / "warehouse"
+    warehouse.mkdir(parents=True, exist_ok=True)
+    path_single = f"file://{warehouse / 'ice_single'}"
+    spark.sql(
+        f"""
+        CREATE TABLE tmp_ice_single (
+            id INT,
+            event STRING,
+            score INT
+        ) USING iceberg
+        PARTITIONED BY (id)
+        LOCATION '{escape_sql_string_literal(path_single)}'
+        """
+    )
+    try:
+        df_single = spark.createDataFrame(
+            [(10, "A", 1), (11, "B", 2), (12, "A", 3)], schema="id INT, event STRING, score INT"
+        )
+        df_single.write.format("iceberg").mode("append").save(path_single)
+        out_single = spark.read.format("iceberg").load(path_single).sort("id")
+        assert [r[0] for r in out_single.select("id").collect()] == [10, 11, 12]
+    finally:
+        spark.sql("DROP TABLE IF EXISTS tmp_ice_single")
+
+    path_multi = f"file://{warehouse / 'ice_multi'}"
+    spark.sql(
+        f"""
+        CREATE TABLE tmp_ice_multi (
+            id INT,
+            region INT,
+            category INT,
+            value INT
+        ) USING iceberg
+        PARTITIONED BY (region, category)
+        LOCATION '{escape_sql_string_literal(path_multi)}'
+        """
+    )
+    try:
+        df_multi = spark.createDataFrame(
+            [(1, 1, 1, 100), (2, 1, 2, 200), (3, 2, 1, 300), (4, 2, 2, 400)],
+            schema="id INT, region INT, category INT, value INT",
+        )
+        df_multi.write.format("iceberg").mode("append").save(path_multi)
+        parts = spark.read.format("iceberg").load(path_multi).select("region", "category").distinct()
+        actual = {f"region={r[0]}/category={r[1]}" for r in parts.collect()}
+        assert actual == {"region=1/category=1", "region=1/category=2", "region=2/category=1", "region=2/category=2"}
+    finally:
+        spark.sql("DROP TABLE IF EXISTS tmp_ice_multi")
