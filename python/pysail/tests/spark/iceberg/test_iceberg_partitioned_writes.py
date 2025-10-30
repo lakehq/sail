@@ -1,5 +1,5 @@
 import datetime as dt
-from typing import List, Tuple
+from typing import List, Tuple  # noqa: UP035
 
 import pytest
 from pyiceberg.partitioning import (
@@ -18,7 +18,7 @@ from pyiceberg.types import DateType, IntegerType, NestedField, StringType, Time
 
 from .utils import create_sql_catalog, pyiceberg_to_pandas  # noqa: TID252
 
-pytestmark = pytest.mark.xfail(reason="partitioned writes not supported yet", strict=False)
+# pytestmark = pytest.mark.xfail(reason="partitioned writes not supported yet", strict=False)
 
 
 def _common_schema() -> Schema:
@@ -30,7 +30,7 @@ def _common_schema() -> Schema:
     )
 
 
-def _build_sample_rows() -> List[Tuple[int, str, dt.datetime, dt.date]]:
+def _build_sample_rows() -> List[Tuple[int, str, dt.datetime, dt.date]]:  # noqa: UP006
     start_date = dt.date(2023, 3, 1)
     start_ts = dt.datetime(2023, 3, 1, 0, 0, 0, tzinfo=dt.timezone.utc)
     letters = [
@@ -47,9 +47,9 @@ def _build_sample_rows() -> List[Tuple[int, str, dt.datetime, dt.date]]:
         "k",
         "l",
     ]
-    rows: List[Tuple[int, str, dt.datetime, dt.date]] = []
+    rows: List[Tuple[int, str, dt.datetime, dt.date]] = []  # noqa: UP006
     for i in range(12):
-        rows.append((i + 1, letters[i], start_ts + dt.timedelta(days=i), start_date + dt.timedelta(days=i)))
+        rows.append((i + 1, letters[i], start_ts + dt.timedelta(days=i), start_date + dt.timedelta(days=i)))  # noqa: PERF401
     return rows
 
 
@@ -185,7 +185,7 @@ def test_partitioned_write_then_pyiceberg_read_all(spark, tmp_path, table_name, 
             "k",
             "l",
         ]
-        assert len(actual) == 12
+        assert len(actual) == 12  # noqa: PLR2004
         assert list(actual["number"]) == list(range(1, 13))
         assert list(actual["letter"]) == expected_letters
     finally:

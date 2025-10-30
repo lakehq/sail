@@ -75,8 +75,15 @@ impl TableFormat for IcebergTableFormat {
 
         // Parse URL and detect table existence (file-based tables only)
         let table_url = Self::parse_table_url(ctx, vec![path]).await?;
-        let exists_res = load_table_metadata(ctx, &table_url).await;
+        // Determine existence by presence of a metadata file, not by presence of a snapshot.
+        // Tables created via catalogs may have metadata but no current snapshot yet.
         log::trace!("iceberg.create_writer.table_url: {}", &table_url);
+        let store = ctx
+            .runtime_env()
+            .object_store_registry
+            .get_store(&table_url)
+            .map_err(|e| DataFusionError::External(Box::new(e)))?;
+        let exists_res = find_latest_metadata_file(&store, &table_url).await;
         log::trace!(
             "iceberg.create_writer.table_exists_result: {:?}",
             &exists_res

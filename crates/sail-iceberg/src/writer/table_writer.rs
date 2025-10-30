@@ -1,23 +1,23 @@
 use std::collections::HashMap;
 use std::sync::Arc;
 
-use datafusion::arrow::array::ArrayRef;
-use datafusion::arrow::datatypes::Schema as ArrowSchema;
+use datafusion::arrow::array::{
+    ArrayRef, TimestampMicrosecondArray, TimestampMillisecondArray, TimestampNanosecondArray,
+    TimestampSecondArray,
+};
+use datafusion::arrow::datatypes::{DataType as ArrowDataType, Schema as ArrowSchema, TimeUnit};
 use datafusion::arrow::record_batch::RecordBatch;
 use object_store::path::Path as ObjectPath;
 use parquet::arrow::PARQUET_FIELD_ID_META_KEY;
 use sail_common_datafusion::array::record_batch::cast_record_batch;
 
 use crate::spec::types::values::Literal;
-use crate::spec::types::{PrimitiveType, Type};
 use crate::spec::DataFile;
 use crate::writer::arrow_parquet::ArrowParquetWriter;
 use crate::writer::base_writer::DataFileWriter;
 use crate::writer::config::WriterConfig;
 use crate::writer::file_writer::location_generator::{DefaultLocationGenerator, LocationGenerator};
-use crate::writer::partition::{
-    apply_transform, build_partition_dir, field_name_from_id, scalar_to_literal,
-};
+use crate::writer::partition::split_record_batch_by_partition;
 
 pub struct IcebergTableWriter {
     pub store: Arc<dyn object_store::ObjectStore>,
@@ -60,22 +60,125 @@ impl IcebergTableWriter {
                 .schema()
                 .index_of(f.name())
                 .map_err(|e| e.to_string())?;
-            cols.push(batch.column(idx).clone());
+            let src = batch.column(idx).clone();
+            let src_dt = src.data_type().clone();
+            let tgt_dt = f.data_type().clone();
+            // Fast path: exact match
+            if src_dt == tgt_dt {
+                cols.push(src);
+                continue;
+            }
+            // Special-case timezone normalization for timestamps: reinterpret timezone metadata only
+            match (&src_dt, &tgt_dt) {
+                (
+                    ArrowDataType::Timestamp(TimeUnit::Second, Some(_)),
+                    ArrowDataType::Timestamp(TimeUnit::Second, None),
+                ) => {
+                    let arr = src
+                        .as_any()
+                        .downcast_ref::<TimestampSecondArray>()
+                        .ok_or_else(|| "downcast TimestampSecondArray failed".to_string())?;
+                    cols.push(Arc::new(arr.clone().with_timezone_opt(None::<Arc<str>>)));
+                    continue;
+                }
+                (
+                    ArrowDataType::Timestamp(TimeUnit::Millisecond, Some(_)),
+                    ArrowDataType::Timestamp(TimeUnit::Millisecond, None),
+                ) => {
+                    let arr = src
+                        .as_any()
+                        .downcast_ref::<TimestampMillisecondArray>()
+                        .ok_or_else(|| "downcast TimestampMillisecondArray failed".to_string())?;
+                    cols.push(Arc::new(arr.clone().with_timezone_opt(None::<Arc<str>>)));
+                    continue;
+                }
+                (
+                    ArrowDataType::Timestamp(TimeUnit::Microsecond, Some(_)),
+                    ArrowDataType::Timestamp(TimeUnit::Microsecond, None),
+                ) => {
+                    let arr = src
+                        .as_any()
+                        .downcast_ref::<TimestampMicrosecondArray>()
+                        .ok_or_else(|| "downcast TimestampMicrosecondArray failed".to_string())?;
+                    cols.push(Arc::new(arr.clone().with_timezone_opt(None::<Arc<str>>)));
+                    continue;
+                }
+                (
+                    ArrowDataType::Timestamp(TimeUnit::Nanosecond, Some(_)),
+                    ArrowDataType::Timestamp(TimeUnit::Nanosecond, None),
+                ) => {
+                    let arr = src
+                        .as_any()
+                        .downcast_ref::<TimestampNanosecondArray>()
+                        .ok_or_else(|| "downcast TimestampNanosecondArray failed".to_string())?;
+                    cols.push(Arc::new(arr.clone().with_timezone_opt(None::<Arc<str>>)));
+                    continue;
+                }
+                (
+                    ArrowDataType::Timestamp(TimeUnit::Second, None),
+                    ArrowDataType::Timestamp(TimeUnit::Second, Some(tz)),
+                ) => {
+                    let arr = src
+                        .as_any()
+                        .downcast_ref::<TimestampSecondArray>()
+                        .ok_or_else(|| "downcast TimestampSecondArray failed".to_string())?;
+                    cols.push(Arc::new(arr.clone().with_timezone_opt(Some((*tz).clone()))));
+                    continue;
+                }
+                (
+                    ArrowDataType::Timestamp(TimeUnit::Millisecond, None),
+                    ArrowDataType::Timestamp(TimeUnit::Millisecond, Some(tz)),
+                ) => {
+                    let arr = src
+                        .as_any()
+                        .downcast_ref::<TimestampMillisecondArray>()
+                        .ok_or_else(|| "downcast TimestampMillisecondArray failed".to_string())?;
+                    cols.push(Arc::new(arr.clone().with_timezone_opt(Some((*tz).clone()))));
+                    continue;
+                }
+                (
+                    ArrowDataType::Timestamp(TimeUnit::Microsecond, None),
+                    ArrowDataType::Timestamp(TimeUnit::Microsecond, Some(tz)),
+                ) => {
+                    let arr = src
+                        .as_any()
+                        .downcast_ref::<TimestampMicrosecondArray>()
+                        .ok_or_else(|| "downcast TimestampMicrosecondArray failed".to_string())?;
+                    cols.push(Arc::new(arr.clone().with_timezone_opt(Some((*tz).clone()))));
+                    continue;
+                }
+                (
+                    ArrowDataType::Timestamp(TimeUnit::Nanosecond, None),
+                    ArrowDataType::Timestamp(TimeUnit::Nanosecond, Some(tz)),
+                ) => {
+                    let arr = src
+                        .as_any()
+                        .downcast_ref::<TimestampNanosecondArray>()
+                        .ok_or_else(|| "downcast TimestampNanosecondArray failed".to_string())?;
+                    cols.push(Arc::new(arr.clone().with_timezone_opt(Some((*tz).clone()))));
+                    continue;
+                }
+                _ => {}
+            }
+
+            // Fallback to DataFusion cast when types differ otherwise
+            let single_schema = ArrowSchema::new(vec![f.clone()]);
+            let tmp = RecordBatch::try_new(
+                std::sync::Arc::new(single_schema.clone()),
+                vec![src.clone()],
+            )
+            .map_err(|e| e.to_string())?;
+            let casted = cast_record_batch(tmp, std::sync::Arc::new(single_schema))
+                .map_err(|e| e.to_string())?;
+            cols.push(casted.column(0).clone());
         }
 
-        let reordered = RecordBatch::try_new(std::sync::Arc::new(target.clone()), cols)
+        let out = RecordBatch::try_new(std::sync::Arc::new(target.clone()), cols)
             .map_err(|e| e.to_string())?;
-
-        let out = cast_record_batch(reordered, std::sync::Arc::new(target.clone()))
-            .map_err(|e| e.to_string())?;
-
         Ok(out)
     }
 
     pub async fn write(&mut self, batch: &RecordBatch) -> Result<(), String> {
-        // Assumption: input batch is already partitioned (single partition per batch)
-        // Extract partition values from the first row only
-
         if batch.num_rows() == 0 {
             return Ok(());
         }
@@ -83,81 +186,67 @@ impl IcebergTableWriter {
         let spec = &self.config.partition_spec;
         let iceberg_schema = &self.config.iceberg_schema;
 
-        // Compute partition values and directory from first row
-        let (partition_values, partition_dir) = if spec.fields.is_empty() {
-            (Vec::new(), String::new())
-        } else {
-            let mut values = Vec::with_capacity(spec.fields.len());
-            for f in &spec.fields {
-                let col_name = field_name_from_id(iceberg_schema, f.source_id)
-                    .ok_or_else(|| format!("Unknown field id {}", f.source_id))?;
-                let col_index = batch
-                    .schema()
-                    .index_of(&col_name)
-                    .map_err(|e| e.to_string())?;
-                let lit = scalar_to_literal(batch.column(col_index), 0);
-                let field_type = iceberg_schema
-                    .field_by_id(f.source_id)
-                    .map(|nf| nf.field_type.as_ref())
-                    .unwrap_or(&Type::Primitive(PrimitiveType::String));
-                values.push(apply_transform(f.transform, field_type, lit));
-            }
-            let dir = build_partition_dir(spec, iceberg_schema, &values);
-            (values, dir)
-        };
-
-        #[allow(clippy::expect_used)]
-        let writer = self
-            .writers
-            .entry(partition_dir.clone())
-            .or_insert_with(|| {
-                for (i, f) in self.config.table_schema.fields().iter().enumerate() {
-                    log::trace!(
-                        "iceberg.table_writer.writer_schema: field[{}]='{}' type={:?} field_id_meta={:?}",
-                        i,
-                        f.name(),
-                        f.data_type(),
-                        f.metadata().get(PARQUET_FIELD_ID_META_KEY)
-                    );
-                }
-                ArrowParquetWriter::try_new(
-                    self.config.table_schema.as_ref(),
-                    self.config.writer_properties.clone(),
-                )
-                .expect("parquet writer")
-            });
-
-        // Cache partition values for this directory (first wins)
-        self.partition_values_map
-            .entry(partition_dir.clone())
-            .or_insert(partition_values);
-
-        log::trace!(
-            "iceberg.table_writer.write: partition='{}' in_rows={} in_cols={}",
-            partition_dir,
-            batch.num_rows(),
-            batch.num_columns()
-        );
-
-        let aligned = Self::cast_batch_to_schema(batch, self.config.table_schema.as_ref())?;
-
-        log::trace!(
-            "iceberg.table_writer.write: aligned_rows={} aligned_cols={}",
-            aligned.num_rows(),
-            aligned.num_columns()
-        );
-
-        for (i, f) in aligned.schema().fields().iter().enumerate() {
-            log::trace!(
-                "iceberg.table_writer.aligned_schema: field[{}]='{}' type={:?} field_id_meta={:?}",
-                i,
-                f.name(),
-                f.data_type(),
-                f.metadata().get(PARQUET_FIELD_ID_META_KEY)
-            );
+        if spec.fields.is_empty() {
+            // Unpartitioned: write as-is once
+            let partition_dir = String::new();
+            #[allow(clippy::expect_used)]
+            let writer = self
+                .writers
+                .entry(partition_dir.clone())
+                .or_insert_with(|| {
+                    for (i, f) in self.config.table_schema.fields().iter().enumerate() {
+                        log::trace!(
+                            "iceberg.table_writer.writer_schema: field[{}]='{}' type={:?} field_id_meta={:?}",
+                            i,
+                            f.name(),
+                            f.data_type(),
+                            f.metadata().get(PARQUET_FIELD_ID_META_KEY)
+                        );
+                    }
+                    ArrowParquetWriter::try_new(
+                        self.config.table_schema.as_ref(),
+                        self.config.writer_properties.clone(),
+                    )
+                    .expect("parquet writer")
+                });
+            self.partition_values_map
+                .entry(partition_dir.clone())
+                .or_default();
+            let aligned = Self::cast_batch_to_schema(batch, self.config.table_schema.as_ref())?;
+            writer.write_batch(&aligned).await?;
+            return Ok(());
         }
 
-        writer.write_batch(&aligned).await?;
+        let parts = split_record_batch_by_partition(batch, spec, iceberg_schema)?;
+        for p in parts.into_iter() {
+            let partition_dir = p.partition_dir;
+            #[allow(clippy::expect_used)]
+            let writer = self
+                .writers
+                .entry(partition_dir.clone())
+                .or_insert_with(|| {
+                    for (i, f) in self.config.table_schema.fields().iter().enumerate() {
+                        log::trace!(
+                            "iceberg.table_writer.writer_schema: field[{}]='{}' type={:?} field_id_meta={:?}",
+                            i,
+                            f.name(),
+                            f.data_type(),
+                            f.metadata().get(PARQUET_FIELD_ID_META_KEY)
+                        );
+                    }
+                    ArrowParquetWriter::try_new(
+                        self.config.table_schema.as_ref(),
+                        self.config.writer_properties.clone(),
+                    )
+                    .expect("parquet writer")
+                });
+            self.partition_values_map
+                .entry(partition_dir.clone())
+                .or_insert(p.partition_values);
+            let aligned =
+                Self::cast_batch_to_schema(&p.record_batch, self.config.table_schema.as_ref())?;
+            writer.write_batch(&aligned).await?;
+        }
 
         Ok(())
     }

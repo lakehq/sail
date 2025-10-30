@@ -203,7 +203,7 @@ impl ExecutionPlan for IcebergWriterExec {
                     .unwrap_or_else(|_| schema.clone())
             }
 
-            let (iceberg_schema, default_spec, data_dir) = if table_exists {
+            let (iceberg_schema, default_spec, data_dir, spec_id_val) = if table_exists {
                 // Load table metadata directly from object store
                 let latest_meta = super::super::table_format::find_latest_metadata_file(
                     &object_store,
@@ -271,7 +271,8 @@ impl ExecutionPlan for IcebergWriterExec {
                         }
                     }
                 }
-                (iceberg_schema, default_spec, data_dir)
+                let sid = default_spec.as_ref().map(|s| s.spec_id()).unwrap_or(0);
+                (iceberg_schema, default_spec, data_dir, sid)
             } else {
                 // derive schema/spec from input for new-table overwrite
                 let input_arrow_schema = _input_schema.clone().as_ref().clone();
@@ -296,7 +297,8 @@ impl ExecutionPlan for IcebergWriterExec {
                     }
                 }
                 let spec = builder.build();
-                (iceberg_schema, Some(spec), "data".to_string())
+                let sid = spec.spec_id();
+                (iceberg_schema, Some(spec), "data".to_string(), sid)
             };
             let table_schema = Arc::new(iceberg_schema_to_arrow(&iceberg_schema)?);
 
@@ -329,8 +331,13 @@ impl ExecutionPlan for IcebergWriterExec {
             };
 
             let root = object_store::path::Path::from(table_url.path());
-            let mut writer =
-                IcebergTableWriter::new(object_store.clone(), root, writer_config, 0, data_dir);
+            let mut writer = IcebergTableWriter::new(
+                object_store.clone(),
+                root,
+                writer_config,
+                spec_id_val,
+                data_dir,
+            );
 
             let mut total_rows = 0u64;
             let mut data = stream;
