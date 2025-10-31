@@ -1,0 +1,28 @@
+[package]
+name = "sail-catalog-unity"
+version = { workspace = true }
+edition = { workspace = true }
+
+[lints]
+workspace = true
+
+[dependencies]
+sail-catalog = { path = "../sail-catalog" }
+sail-common = { path = "../sail-common" }
+
+async-trait = { workspace = true }
+reqwest = { workspace = true }
+url = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+serde_with = { workspace = true }
+serde_yaml = { workspace = true }
+uuid = { workspace = true }
+tokio = { workspace = true }
+progenitor-client = { workspace = true }
+
+[build-dependencies]
+progenitor = { workspace = true }
+prettyplease = { workspace = true }
+serde_yaml = { workspace = true }
+syn = { workspace = true }
