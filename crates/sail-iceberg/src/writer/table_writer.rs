@@ -273,14 +273,11 @@ impl IcebergTableWriter {
                 &rel,
                 &full
             );
-            // Local FS needs absolute paths for cross-engine reads; object stores use relative paths
-            let scheme = self.table_url.scheme();
-            let file_path = if scheme.is_empty() || scheme == "file" {
-                // Use the fully-resolved object_store path (which preserves any encoding)
-                format!("/{}", full)
-            } else {
-                // For object stores, emit absolute URI to ensure cross-engine reads (e.g., PyIceberg)
-                format!("{}{}", self.table_url.as_str(), rel)
+            let file_path = match self.table_url.join(&rel) {
+                Ok(u) => u.to_string(),
+                Err(_) => {
+                    format!("{}{}", self.table_url.as_str(), rel)
+                }
             };
             let df = DataFileWriter::new(self.partition_spec_id, file_path, partition_values)
                 .finish(meta)?
