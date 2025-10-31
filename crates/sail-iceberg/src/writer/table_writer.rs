@@ -10,6 +10,7 @@ use datafusion::arrow::record_batch::RecordBatch;
 use object_store::path::Path as ObjectPath;
 use parquet::arrow::PARQUET_FIELD_ID_META_KEY;
 use sail_common_datafusion::array::record_batch::cast_record_batch;
+use url::Url;
 
 use crate::spec::types::values::Literal;
 use crate::spec::DataFile;
@@ -18,7 +19,6 @@ use crate::writer::base_writer::DataFileWriter;
 use crate::writer::config::WriterConfig;
 use crate::writer::file_writer::location_generator::{DefaultLocationGenerator, LocationGenerator};
 use crate::writer::partition::split_record_batch_by_partition;
-use url::Url;
 
 pub struct IcebergTableWriter {
     pub store: Arc<dyn object_store::ObjectStore>,
