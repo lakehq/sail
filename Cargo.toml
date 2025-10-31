@@ -43,7 +43,7 @@ serde_with = { version = "3.15.0", default-features = false, features = ["base64
 monostate = "1.0.2"
 regex = "1.12.2"
 glob = "0.3.3"
-chrono = "0.4.42"
+chrono = { version = "0.4.42", features = ["serde"] }
 chrono-tz = "0.10.4"
 futures = "0.3.31"
 comfy-table = "=7.1.2"
@@ -95,7 +95,7 @@ iana-time-zone = "0.1.64"
 chumsky = { version = "0.11.1", default-features = false, features = ["pratt"] }
 num = "0.4.3"
 hf-hub = { version = "0.4.3", default-features = false, features = ["tokio"] }
-reqwest = { version = "0.12.24", features = ["json", "multipart"] }
+reqwest = { version = "0.12.24", features = ["json", "multipart", "stream"] }
 percent-encoding = "2.3.2"
 rustls = "0.23.32"
 dashmap = "6.1.0"
@@ -108,7 +108,9 @@ ordered-float = { version = "5.1.0", features = ["serde"] }
 apache-avro = { version = "0.20.0" }
 rust_decimal = "1.39.0"
 wiremock = "0.6.5"
-testcontainers = "0.25.1"
+testcontainers = "0.25.2"
+progenitor = "0.11.2"
+progenitor-client = "0.11.2"
 
 ######
 # The versions of the following dependencies are managed manually.

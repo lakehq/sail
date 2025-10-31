@@ -1,9 +1,11 @@
 mod namespace;
 mod options;
+mod runtime;
 mod status;
 
 pub use namespace::*;
 pub use options::*;
+pub use runtime::*;
 pub use status::*;
 
 use crate::error::CatalogResult;

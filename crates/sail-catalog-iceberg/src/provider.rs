@@ -8,7 +8,6 @@ use sail_catalog::provider::{
     DatabaseStatus, DropDatabaseOptions, DropTableOptions, DropViewOptions, Namespace,
     TableColumnStatus, TableKind, TableStatus,
 };
-use sail_common::runtime::RuntimeHandle;
 use sail_iceberg::{
     arrow_type_to_iceberg, iceberg_type_to_arrow, Literal, NestedField, StructType,
     DEFAULT_SCHEMA_ID,
@@ -16,8 +15,7 @@ use sail_iceberg::{
 use tokio::sync::OnceCell;
 
 use crate::apis::configuration::Configuration;
-use crate::apis::{self, Api};
-use crate::runtime::RuntimeAwareApiClient;
+use crate::apis::{self, Api, ApiClient};
 
 pub const REST_CATALOG_PROP_URI: &str = "uri";
 
@@ -44,15 +42,14 @@ pub struct RestCatalogConfig {
 
 /// Provider for Apache Iceberg REST Catalog.
 pub struct IcebergRestCatalogProvider {
-    runtime: RuntimeHandle,
     name: String,
     catalog_config: RestCatalogConfig,
     merged_catalog_config: OnceCell<RestCatalogConfig>,
-    client: OnceCell<RuntimeAwareApiClient>,
+    client: OnceCell<ApiClient>,
 }
 
 impl IcebergRestCatalogProvider {
-    pub fn new(runtime: RuntimeHandle, name: String, props: HashMap<String, String>) -> Self {
+    pub fn new(name: String, props: HashMap<String, String>) -> Self {
         let catalog_config = RestCatalogConfig {
             uri: props
                 .get(REST_CATALOG_PROP_URI)
@@ -66,7 +63,6 @@ impl IcebergRestCatalogProvider {
         };
 
         Self {
-            runtime,
             name,
             catalog_config,
             merged_catalog_config: OnceCell::new(),
@@ -74,40 +70,29 @@ impl IcebergRestCatalogProvider {
         }
     }
 
-    fn init_client(
-        &self,
-        catalog_config: &RestCatalogConfig,
-    ) -> CatalogResult<RuntimeAwareApiClient> {
-        let uri = catalog_config.uri.clone();
-        let props = catalog_config.props.clone();
-        RuntimeAwareApiClient::try_new(
-            move || {
-                let mut client_config = Configuration::new();
-                client_config.user_agent = Some("Sail".to_string());
-                client_config.base_path = uri;
-                for (key, value) in &props {
-                    // TODO: `basic_auth` and `api_key` are not used anything in the API yet.
-                    //  We may need to support them in the future.
-                    match key.as_str() {
-                        "oauth-access-token" => {
-                            client_config.oauth_access_token = Some(value.clone());
-                        }
-                        "bearer-access-token" => {
-                            client_config.bearer_access_token = Some(value.clone());
-                        }
-                        _ => {}
-                    }
+    fn init_client(&self, catalog_config: &RestCatalogConfig) -> CatalogResult<ApiClient> {
+        let mut client_config = Configuration::new();
+        client_config.user_agent = Some("Sail".to_string());
+        client_config.base_path = catalog_config.uri.to_string();
+        for (key, value) in &catalog_config.props {
+            // TODO: `basic_auth` and `api_key` are not used anything in the API yet.
+            //  We may need to support them in the future.
+            match key.as_str() {
+                "oauth-access-token" => {
+                    client_config.oauth_access_token = Some(value.to_string());
                 }
-                Ok(apis::ApiClient::new(Arc::new(client_config)))
-            },
-            self.runtime.io().clone(),
-        )
-        .map_err(|e| CatalogError::External(format!("Failed to initialize API client: {e}")))
+                "bearer-access-token" => {
+                    client_config.bearer_access_token = Some(value.to_string());
+                }
+                _ => {}
+            }
+        }
+        Ok(ApiClient::new(Arc::new(client_config)))
     }
 
     async fn load_catalog_config(
         &self,
-        client: &RuntimeAwareApiClient,
+        client: &ApiClient,
         warehouse: Option<&str>,
     ) -> CatalogResult<crate::models::CatalogConfig> {
         let config = client
@@ -123,7 +108,7 @@ impl IcebergRestCatalogProvider {
     // This only happens once, then the result is cached.
     async fn load_client_and_merged_config(
         &self,
-    ) -> CatalogResult<(&RuntimeAwareApiClient, &RestCatalogConfig)> {
+    ) -> CatalogResult<(&ApiClient, &RestCatalogConfig)> {
         let merged_catalog_config = self
             .merged_catalog_config
             .get_or_try_init(|| async {
@@ -1273,8 +1258,6 @@ fn build_sort_order(
 mod tests {
     use std::sync::Arc;
 
-    use sail_common::config::AppConfig;
-    use sail_common::runtime::RuntimeManager;
     use wiremock::matchers::{method, path, query_param, query_param_is_missing};
     use wiremock::{Mock, MockServer, ResponseTemplate};
 
@@ -1302,13 +1285,8 @@ mod tests {
                 .await;
 
             let name_str = name.unwrap_or("");
-            let runtime = RuntimeHandle::new(
-                tokio::runtime::Handle::current(),
-                tokio::runtime::Handle::current(),
-                true,
-            );
             let props = HashMap::from([(REST_CATALOG_PROP_URI.to_string(), server.uri())]);
-            let catalog = IcebergRestCatalogProvider::new(runtime, name_str.to_string(), props);
+            let catalog = IcebergRestCatalogProvider::new(name_str.to_string(), props);
 
             Self {
                 name: name_str.to_string(),
