@@ -3611,7 +3611,7 @@
         }
       },
       "output": {
-        "failure": "not implemented: unknown aggregate function: try_avg"
+        "success": "ok"
       }
     },
     {
@@ -3633,7 +3633,7 @@
         }
       },
       "output": {
-        "failure": "not implemented: unknown aggregate function: try_avg"
+        "success": "ok"
       }
     },
     {
@@ -3655,7 +3655,7 @@
         }
       },
       "output": {
-        "failure": "not implemented: unknown aggregate function: try_avg"
+        "failure": "error in DataFusion: Error during planning: Execution error: Function 'try_avg' user-defined coercion failed with \"Error during planning: try_avg: unsupported type: Interval(YearMonth)\" No function matches the given name and argument types 'try_avg(Interval(YearMonth))'. You might need to add explicit type casts.\n\tCandidate functions:\n\ttry_avg(UserDefined)"
       }
     },
     {
