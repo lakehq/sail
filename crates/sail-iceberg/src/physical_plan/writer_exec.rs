@@ -330,13 +330,14 @@ impl ExecutionPlan for IcebergWriterExec {
                 partition_spec: unbound_spec,
             };
 
-            let root = object_store::path::Path::from(table_url.path());
+            let writer_root = object_store::path::Path::from(table_url.path());
             let mut writer = IcebergTableWriter::new(
                 object_store.clone(),
-                root,
+                writer_root,
                 writer_config,
                 spec_id_val,
                 data_dir,
+                table_url.clone(),
             );
 
             let mut total_rows = 0u64;

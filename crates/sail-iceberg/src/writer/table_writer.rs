@@ -18,11 +18,13 @@ use crate::writer::base_writer::DataFileWriter;
 use crate::writer::config::WriterConfig;
 use crate::writer::file_writer::location_generator::{DefaultLocationGenerator, LocationGenerator};
 use crate::writer::partition::split_record_batch_by_partition;
+use url::Url;
 
 pub struct IcebergTableWriter {
     pub store: Arc<dyn object_store::ObjectStore>,
     pub config: WriterConfig,
     pub generator: DefaultLocationGenerator,
+    pub table_url: Url,
     // partition_dir -> writer
     writers: HashMap<String, ArrowParquetWriter>,
     // partition_dir -> partition values aligned with spec
@@ -38,11 +40,13 @@ impl IcebergTableWriter {
         config: WriterConfig,
         partition_spec_id: i32,
         data_dir: String,
+        table_url: Url,
     ) -> Self {
         Self {
             generator: DefaultLocationGenerator::new_with_data_dir(root, data_dir),
             store,
             config,
+            table_url,
             writers: HashMap::new(),
             partition_values_map: HashMap::new(),
             written: Vec::new(),
@@ -269,9 +273,16 @@ impl IcebergTableWriter {
                 &rel,
                 &full
             );
-            // Use absolute filesystem path for cross-compat (PyIceberg expects an absolute file path)
-            let abs_path = format!("/{}", full);
-            let df = DataFileWriter::new(self.partition_spec_id, abs_path, partition_values)
+            // Local FS needs absolute paths for cross-engine reads; object stores use relative paths
+            let scheme = self.table_url.scheme();
+            let file_path = if scheme.is_empty() || scheme == "file" {
+                // Use the fully-resolved object_store path (which preserves any encoding)
+                format!("/{}", full)
+            } else {
+                // For object stores, emit absolute URI to ensure cross-engine reads (e.g., PyIceberg)
+                format!("{}{}", self.table_url.as_str(), rel)
+            };
+            let df = DataFileWriter::new(self.partition_spec_id, file_path, partition_values)
                 .finish(meta)?
                 .data_file;
             self.written.push(df);
