@@ -370,7 +370,7 @@ pub fn field_name_from_id(schema: &IcebergSchema, field_id: i32) -> Option<Strin
 
 pub fn build_partition_dir(
     spec: &PartitionSpec,
-    iceberg_schema: &IcebergSchema,
+    _iceberg_schema: &IcebergSchema,
     values: &[Option<Literal>],
 ) -> String {
     if spec.fields.is_empty() {
@@ -378,12 +378,38 @@ pub fn build_partition_dir(
     }
     let mut segs = Vec::new();
     for (i, f) in spec.fields.iter().enumerate() {
-        let field_type = iceberg_schema
-            .field_by_id(f.source_id)
-            .map(|nf| nf.field_type.as_ref())
-            .unwrap_or(&Type::Primitive(PrimitiveType::String));
+        // Use already-transformed values to build partition directories.
+        // This ensures bucket paths are simple integers like `number_bucket=4`
+        // instead of verbose strings like `bucket[8](4)`.
         let val = values.get(i).cloned().flatten();
-        let human = f.transform.to_human_string(field_type, val.as_ref());
+        let human = match val {
+            None => "null".to_string(),
+            Some(Literal::Primitive(p)) => match p {
+                PrimitiveLiteral::Boolean(v) => v.to_string(),
+                PrimitiveLiteral::Int(v) => v.to_string(),
+                PrimitiveLiteral::Long(v) => v.to_string(),
+                PrimitiveLiteral::Float(v) => v.0.to_string(),
+                PrimitiveLiteral::Double(v) => v.0.to_string(),
+                PrimitiveLiteral::Int128(v) => v.to_string(),
+                PrimitiveLiteral::String(s) => s,
+                PrimitiveLiteral::UInt128(v) => v.to_string(),
+                PrimitiveLiteral::Binary(b) => {
+                    // hex-encode binary values for stability
+                    let mut s = String::with_capacity(b.len() * 2 + 2);
+                    s.push_str("0x");
+                    for byte in &b {
+                        use std::fmt::Write as _;
+                        let _ = write!(&mut s, "{:02x}", byte);
+                    }
+                    s
+                }
+            },
+            #[allow(clippy::unwrap_used)]
+            Some(Literal::Struct(_)) | Some(Literal::List(_)) | Some(Literal::Map(_)) => {
+                // Fallback debug formatting for complex types
+                format!("{:?}", val.unwrap())
+            }
+        };
         segs.push(format!("{}={}", f.name, human));
     }
     segs.join("/")
