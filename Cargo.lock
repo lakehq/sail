@@ -5944,6 +5944,7 @@ dependencies = [
  "serde",
  "serde_arrow",
  "thiserror",
+ "tokio",
 ]
 
 [[package]]

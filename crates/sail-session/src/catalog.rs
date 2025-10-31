@@ -4,7 +4,7 @@ use std::sync::Arc;
 use datafusion::common::{plan_datafusion_err, Result};
 use sail_catalog::error::CatalogResult;
 use sail_catalog::manager::{CatalogManager, CatalogManagerOptions};
-use sail_catalog::provider::CatalogProvider;
+use sail_catalog::provider::{CatalogProvider, RuntimeAwareCatalogProvider};
 use sail_catalog_iceberg::IcebergRestCatalogProvider;
 use sail_catalog_memory::MemoryCatalogProvider;
 use sail_common::config::{AppConfig, CatalogType};
@@ -60,12 +60,17 @@ pub fn create_catalog_manager(
                             bearer_access_token.to_string(),
                         );
                     }
-                    let provider = IcebergRestCatalogProvider::new(
-                        runtime.clone(),
-                        name.to_string(),
-                        properties,
-                    );
-                    Ok((name.to_string(), Arc::new(provider)))
+
+                    let runtime_aware = RuntimeAwareCatalogProvider::try_new(
+                        || {
+                            let provider =
+                                IcebergRestCatalogProvider::new(name.to_string(), properties);
+                            Ok(provider)
+                        },
+                        runtime.io().clone(),
+                    )?;
+
+                    Ok((name.to_string(), Arc::new(runtime_aware)))
                 }
             }
         })
