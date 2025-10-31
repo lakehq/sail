@@ -12,10 +12,17 @@ use datafusion::datasource::{TableProvider, TableType};
 use datafusion::logical_expr::utils::conjunction;
 use datafusion::logical_expr::{Expr, LogicalPlan, TableProviderFilterPushDown};
 use datafusion::physical_plan::ExecutionPlan;
+// use crate::kernel::arrow::engine_ext::SnapshotExt as KernelSnapshotExt;
+// use delta_kernel::snapshot::Snapshot as KernelSnapshot;
+use delta_kernel::table_features::ColumnMappingMode;
 use deltalake::errors::DeltaResult;
 use deltalake::kernel::Add;
 use deltalake::logstore::LogStoreRef;
+use sail_common_datafusion::rename::physical_plan::rename_projected_physical_plan;
 
+// use deltalake::errors::DeltaTableError;
+// use delta_kernel::engine::arrow_conversion::TryIntoArrow;
+use crate::column_mapping::enrich_arrow_with_parquet_field_ids;
 use crate::datasource::scan::FileScanParams;
 use crate::datasource::{
     build_file_scan_config, delta_to_datafusion_error, df_logical_schema, get_pushdown_filters,
@@ -189,16 +196,53 @@ impl TableProvider for DeltaTableProvider {
             None
         };
 
-        // Build file schema (non-partition columns)
+        // Build physical file schema (non-partition columns) using kernel make_physical
         let table_partition_cols = self.snapshot.metadata().partition_columns();
-        let file_schema = Arc::new(ArrowSchema::new(
-            schema
-                .fields()
-                .iter()
-                .filter(|f| !table_partition_cols.contains(f.name()))
-                .cloned()
-                .collect::<Vec<_>>(),
-        ));
+        let kmode_explicit: ColumnMappingMode = self
+            .snapshot
+            .snapshot()
+            .table_configuration()
+            .column_mapping_mode();
+        let kschema_arc = self.snapshot.snapshot().table_configuration().schema();
+        // Fallback: if mode is None but schema contains column mapping annotations, treat as Name
+        let has_annotations = kschema_arc.fields().any(|f| {
+            f.metadata().contains_key(
+                delta_kernel::schema::ColumnMetadataKey::ColumnMappingPhysicalName.as_ref(),
+            ) && f
+                .metadata()
+                .contains_key(delta_kernel::schema::ColumnMetadataKey::ColumnMappingId.as_ref())
+        });
+        let kmode = if matches!(kmode_explicit, ColumnMappingMode::None) && has_annotations {
+            ColumnMappingMode::Name
+        } else {
+            kmode_explicit
+        };
+        let physical_kernel = kschema_arc.make_physical(kmode);
+        let physical_arrow: ArrowSchema =
+            deltalake::kernel::engine::arrow_conversion::TryIntoArrow::try_into_arrow(
+                &physical_kernel,
+            )?;
+        // If column mapping is enabled, ensure PARQUET:field_id is present in Arrow fields
+        let physical_arrow = match kmode {
+            ColumnMappingMode::Name | ColumnMappingMode::Id => {
+                enrich_arrow_with_parquet_field_ids(&physical_arrow, &kschema_arc)
+            }
+            ColumnMappingMode::None => physical_arrow,
+        };
+        log::trace!("read_kmode: {:?}", kmode);
+        let phys_field_names: Vec<String> = physical_arrow
+            .fields()
+            .iter()
+            .map(|f| f.name().clone())
+            .collect();
+        log::trace!("read_file_schema_fields: {:?}", &phys_field_names);
+        let file_fields = physical_arrow
+            .fields()
+            .iter()
+            .filter(|f| !table_partition_cols.contains(f.name()))
+            .cloned()
+            .collect::<Vec<_>>();
+        let file_schema = Arc::new(ArrowSchema::new(file_fields));
 
         let file_scan_config = build_file_scan_config(
             &self.snapshot,
@@ -219,7 +263,21 @@ impl TableProvider for DeltaTableProvider {
         // MetricBuilder::new(&metrics).global_counter("files_pruned").add(files_pruned);
 
         // TODO: Properly expose these metrics
-        Ok(DataSourceExec::from_data_source(file_scan_config))
+        let scan_exec = DataSourceExec::from_data_source(file_scan_config);
+        // Rename columns from physical back to logical names expected by `schema`
+        let mut logical_names = schema
+            .fields()
+            .iter()
+            .filter(|f| !table_partition_cols.contains(f.name()))
+            .map(|f| f.name().clone())
+            .collect::<Vec<_>>();
+        // append partition column names in order
+        logical_names.extend(table_partition_cols.iter().cloned());
+        if let Some(file_col) = &config.file_column_name {
+            logical_names.push(file_col.clone());
+        }
+        let renamed = rename_projected_physical_plan(scan_exec, &logical_names, projection)?;
+        Ok(renamed)
     }
 
     fn supports_filters_pushdown(

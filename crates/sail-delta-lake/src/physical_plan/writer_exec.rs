@@ -17,8 +17,8 @@ use datafusion::physical_plan::{
 };
 use datafusion_common::{internal_err, DataFusionError, Result};
 use datafusion_physical_expr::{Distribution, EquivalenceProperties, PhysicalExpr};
-use deltalake::kernel::engine::arrow_conversion::{TryIntoArrow, TryIntoKernel};
-use deltalake::kernel::schema::StructType;
+use delta_kernel::engine::arrow_conversion::{TryIntoArrow, TryIntoKernel};
+use delta_kernel::schema::{ColumnMetadataKey, StructType};
 #[allow(deprecated)]
 use deltalake::kernel::{Action, MetadataExt};
 // TODO: Follow upstream for `MetadataExt`.
@@ -28,10 +28,13 @@ use futures::stream::{once, StreamExt};
 use sail_common_datafusion::datasource::PhysicalSinkMode;
 use url::Url;
 
+use crate::column_mapping::{
+    annotate_schema_for_column_mapping, enrich_arrow_with_parquet_field_ids,
+};
 use crate::datasource::delta_to_datafusion_error;
 use crate::datasource::type_converter::DeltaTypeConverter;
 use crate::operations::write::writer::{DeltaWriter, WriterConfig};
-use crate::options::TableDeltaOptions;
+use crate::options::{ColumnMappingModeOption, TableDeltaOptions};
 use crate::physical_plan::CommitInfo;
 use crate::table::open_table_with_object_store;
 
@@ -59,6 +62,16 @@ pub struct DeltaWriterExec {
 }
 
 impl DeltaWriterExec {
+    // Removed: use shared helper in column_mapping.rs
+
+    /// Build a map from physical field name to logical name for top-level columns
+    fn build_physical_to_logical_map(logical_kernel: &StructType) -> HashMap<String, String> {
+        let mut map = HashMap::new();
+        for kf in logical_kernel.fields() {
+            map.insert(kf.physical_name().to_string(), kf.name().clone());
+        }
+        map
+    }
     pub fn new(
         input: Arc<dyn ExecutionPlan>,
         table_url: Url,
@@ -207,7 +220,7 @@ impl ExecutionPlan for DeltaWriterExec {
             let object_store = Self::get_object_store(&context, &table_url)?;
 
             // Calculate initial_actions and operation based on sink_mode
-            let initial_actions: Vec<Action> = Vec::new();
+            let mut initial_actions: Vec<Action> = Vec::new();
             let mut operation: Option<DeltaOperation> = None;
 
             let table_result = open_table_with_object_store(
@@ -308,8 +321,166 @@ impl ExecutionPlan for DeltaWriterExec {
                 (input_schema.clone(), Vec::new())
             };
 
+            // Determine effective column mapping mode
+            let mut effective_mode = if let Some(table) = &table {
+                // Read from existing table configuration via our snapshot wrapper
+                // Use kernel snapshot via our wrapper
+                match table
+                    .snapshot()
+                    .map_err(|e| DataFusionError::External(Box::new(e)))?
+                    .snapshot()
+                    .table_configuration()
+                    .column_mapping_mode()
+                {
+                    delta_kernel::table_features::ColumnMappingMode::Name => {
+                        ColumnMappingModeOption::Name
+                    }
+                    delta_kernel::table_features::ColumnMappingMode::Id => {
+                        ColumnMappingModeOption::Id
+                    }
+                    _ => ColumnMappingModeOption::None,
+                }
+            } else {
+                options.column_mapping_mode
+            };
+
+            // Fallback: if mode is None but snapshot schema carries column mapping annotations, treat as Name
+            if matches!(effective_mode, ColumnMappingModeOption::None) {
+                if let Some(table) = &table {
+                    let kschema = table
+                        .snapshot()
+                        .map_err(|e| DataFusionError::External(Box::new(e)))?
+                        .snapshot()
+                        .schema()
+                        .clone();
+                    let has_annotations = kschema.fields().any(|f| {
+                        f.metadata()
+                            .contains_key(ColumnMetadataKey::ColumnMappingPhysicalName.as_ref())
+                            && f.metadata()
+                                .contains_key(ColumnMetadataKey::ColumnMappingId.as_ref())
+                    });
+                    if has_annotations {
+                        effective_mode = ColumnMappingModeOption::Name;
+                    }
+                }
+            }
+
+            // If creating a new table and column mapping mode is requested, prepare initial protocol+metadata
+            let mut annotated_schema_opt: Option<StructType> = None;
+            if !table_exists
+                && matches!(
+                    effective_mode,
+                    ColumnMappingModeOption::Name | ColumnMappingModeOption::Id
+                )
+            {
+                // Build annotated kernel schema
+                let kernel_schema: StructType = final_schema
+                    .as_ref()
+                    .try_into_kernel()
+                    .map_err(|e| DataFusionError::External(Box::new(e)))?;
+                let annotated_schema = annotate_schema_for_column_mapping(&kernel_schema);
+                annotated_schema_opt = Some(annotated_schema.clone());
+
+                // Protocol and features for column mapping
+                #[allow(clippy::unwrap_used)]
+                let protocol: deltalake::kernel::Protocol =
+                    serde_json::from_value(serde_json::json!({
+                        "minReaderVersion": 3,
+                        "minWriterVersion": 7,
+                        "readerFeatures": ["columnMapping"],
+                        "writerFeatures": ["columnMapping"]
+                    }))
+                    .unwrap();
+
+                let mut configuration = HashMap::new();
+                let mode_str = match effective_mode {
+                    ColumnMappingModeOption::Name => "name",
+                    ColumnMappingModeOption::Id => "id",
+                    ColumnMappingModeOption::None => "none",
+                };
+                configuration.insert("delta.columnMapping.mode".to_string(), mode_str.to_string());
+
+                #[allow(deprecated)]
+                #[allow(clippy::unwrap_used)]
+                let metadata = deltalake::kernel::new_metadata(
+                    annotated_schema_opt.as_ref().unwrap(),
+                    partition_columns.clone(),
+                    configuration,
+                )
+                .map_err(|e| DataFusionError::External(Box::new(e)))?;
+
+                initial_actions.push(Action::Protocol(protocol.clone()));
+                initial_actions.push(Action::Metadata(metadata.clone()));
+                log::trace!(
+                    "init_protocol: {:?}, init_metadata_has_mode: {:?}",
+                    &protocol,
+                    metadata.configuration().get("delta.columnMapping.mode")
+                );
+
+                // Prefer explicit Create operation to aid downstream commit
+                operation = Some(DeltaOperation::Create {
+                    mode: SaveMode::ErrorIfExists,
+                    location: table_url.to_string(),
+                    protocol,
+                    metadata,
+                });
+            }
+
+            // Build physical writer schema (use physical names and set parquet field ids)
+            let writer_schema = if matches!(
+                effective_mode,
+                ColumnMappingModeOption::Name | ColumnMappingModeOption::Id
+            ) {
+                // Determine logical kernel schema (annotated for new tables; from snapshot for existing tables)
+                #[allow(clippy::unwrap_used)]
+                #[allow(clippy::expect_used)]
+                let logical_kernel: StructType = if table_exists {
+                    table
+                        .as_ref()
+                        .unwrap()
+                        .snapshot()
+                        .map_err(|e| DataFusionError::External(Box::new(e)))?
+                        .snapshot()
+                        .schema()
+                        .clone()
+                } else {
+                    annotated_schema_opt
+                        .clone()
+                        .expect("annotated schema should exist for new table with column mapping")
+                };
+
+                // Make physical kernel schema per mode
+                let physical_kernel = crate::column_mapping::make_physical_schema_for_writes(
+                    &logical_kernel,
+                    effective_mode,
+                );
+
+                // Convert to Arrow schema
+                let physical_arrow: Schema = (&physical_kernel)
+                    .try_into_arrow()
+                    .map_err(|e| DataFusionError::External(Box::new(e)))?;
+
+                // Ensure Arrow fields contain PARQUET:field_id for both Name and Id modes
+                let enriched_arrow =
+                    enrich_arrow_with_parquet_field_ids(&physical_arrow, &logical_kernel);
+                let arc_schema = Arc::new(enriched_arrow);
+                let writer_field_names: Vec<String> = arc_schema
+                    .fields()
+                    .iter()
+                    .map(|f| f.name().clone())
+                    .collect();
+                log::trace!(
+                    "effective_mode: {:?}, writer_schema_fields: {:?}",
+                    effective_mode,
+                    &writer_field_names
+                );
+                arc_schema
+            } else {
+                final_schema.clone()
+            };
+
             let writer_config = WriterConfig::new(
-                final_schema.clone(),
+                writer_schema.clone(),
                 partition_columns.to_vec(),
                 None,
                 *target_file_size,
@@ -326,9 +497,61 @@ impl ExecutionPlan for DeltaWriterExec {
 
             while let Some(batch_result) = data.next().await {
                 let batch = batch_result?;
-                total_rows += batch.num_rows() as u64;
+                let rows: u64 = u64::try_from(batch.num_rows()).unwrap_or_default();
+                total_rows += rows;
 
-                let validated_batch = Self::validate_and_adapt_batch(batch, &final_schema)?;
+                // Adapt input batch (logical names) to writer schema (physical names)
+                #[allow(clippy::unwrap_used)]
+                #[allow(clippy::expect_used)]
+                let phys_to_logical = if matches!(
+                    effective_mode,
+                    ColumnMappingModeOption::Name | ColumnMappingModeOption::Id
+                ) {
+                    // Build a physical->logical name map from the logical kernel schema (top-level only)
+                    let logical_kernel: StructType = if table_exists {
+                        table
+                            .as_ref()
+                            .unwrap()
+                            .snapshot()
+                            .map_err(|e| DataFusionError::External(Box::new(e)))?
+                            .snapshot()
+                            .schema()
+                            .clone()
+                    } else {
+                        annotated_schema_opt.clone().expect(
+                            "annotated schema should exist for new table with column mapping",
+                        )
+                    };
+                    let map = Self::build_physical_to_logical_map(&logical_kernel);
+                    log::trace!("phys_to_logical: {:?}", &map);
+                    Some(map)
+                } else {
+                    None
+                };
+
+                // Debug: input vs target schema field names for each batch
+                let input_names: Vec<String> = batch
+                    .schema()
+                    .fields()
+                    .iter()
+                    .map(|f| f.name().clone())
+                    .collect();
+                let target_names: Vec<String> = writer_schema
+                    .fields()
+                    .iter()
+                    .map(|f| f.name().clone())
+                    .collect();
+                log::trace!(
+                    "input_batch_fields: {:?}, target_fields: {:?}",
+                    &input_names,
+                    &target_names
+                );
+
+                let validated_batch = Self::validate_and_adapt_batch(
+                    batch,
+                    &writer_schema,
+                    phys_to_logical.as_ref(),
+                )?;
 
                 writer
                     .write(&validated_batch)
@@ -541,6 +764,7 @@ impl DeltaWriterExec {
     fn validate_and_adapt_batch(
         batch: RecordBatch,
         final_schema: &SchemaRef,
+        phys_to_logical: Option<&HashMap<String, String>>,
     ) -> Result<RecordBatch> {
         let batch_schema = batch.schema();
 
@@ -553,7 +777,16 @@ impl DeltaWriterExec {
         let mut adapted_columns = Vec::with_capacity(final_schema.fields().len());
 
         for final_field in final_schema.fields() {
-            match batch_schema.column_with_name(final_field.name()) {
+            // For physical writer schema, final_field.name() is physical. Map to logical if provided
+            let lookup_name: &str = if let Some(map) = phys_to_logical {
+                map.get(final_field.name().as_str())
+                    .map(|s| s.as_str())
+                    .unwrap_or(final_field.name())
+            } else {
+                final_field.name()
+            };
+
+            match batch_schema.column_with_name(lookup_name) {
                 Some((batch_index, batch_field)) => {
                     let batch_column = batch.column(batch_index);
 
