@@ -62,8 +62,7 @@ fn create_column_mapping(
 }
 
 fn create_default_value(data_type: &DataType) -> ScalarValue {
-    sail_common_datafusion::scalar::defaults::zero_scalar_value(data_type)
-        .unwrap_or(ScalarValue::Null)
+    ScalarValue::new_zero(data_type).unwrap_or(ScalarValue::Null)
 }
 
 #[derive(Debug)]
