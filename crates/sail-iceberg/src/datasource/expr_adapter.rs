@@ -1,7 +1,7 @@
 use std::sync::Arc;
 
 use datafusion::arrow::compute::can_cast_types;
-use datafusion::arrow::datatypes::{DataType, Field, FieldRef, Schema as ArrowSchema, SchemaRef};
+use datafusion::arrow::datatypes::{Field, FieldRef, Schema as ArrowSchema, SchemaRef};
 use datafusion::common::tree_node::{Transformed, TransformedResult, TreeNode};
 use datafusion::common::{exec_err, Result, ScalarValue};
 use datafusion::physical_expr::expressions::{Column, Literal};
@@ -51,7 +51,10 @@ fn create_column_mapping(
                             .unwrap_or(ScalarValue::Null),
                     )
                 } else {
-                    Some(create_default_value(logical_field.data_type()))
+                    Some(
+                        ScalarValue::new_zero(logical_field.data_type())
+                            .unwrap_or(ScalarValue::Null),
+                    )
                 };
                 default_values.push(default_value);
             }
@@ -59,10 +62,6 @@ fn create_column_mapping(
     }
 
     (column_mapping, default_values)
-}
-
-fn create_default_value(data_type: &DataType) -> ScalarValue {
-    ScalarValue::new_zero(data_type).unwrap_or(ScalarValue::Null)
 }
 
 #[derive(Debug)]
