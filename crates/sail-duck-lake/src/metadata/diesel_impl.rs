@@ -155,7 +155,7 @@ impl DuckLakeMetaStore for DieselMetaStore {
                 .load(&mut conn)
                 .map_err(|e| DataFusionError::External(Box::new(e)))?;
 
-            let columns = column_rows
+            let columns: Vec<ColumnInfo> = column_rows
                 .into_iter()
                 .map(|row| ColumnInfo {
                     column_id: FieldIndex(row.0 as u64),
@@ -163,10 +163,10 @@ impl DuckLakeMetaStore for DieselMetaStore {
                     end_snapshot: row.2.map(|v| v as u64),
                     table_id,
                     column_order: row.4 as u64,
-                    column_name: row.5,
-                    column_type: row.6,
-                    initial_default: row.7,
-                    default_value: row.8,
+                    column_name: row.5.clone(),
+                    column_type: row.6.clone(),
+                    initial_default: row.7.clone(),
+                    default_value: row.8.clone(),
                     nulls_allowed: row.9,
                     parent_column: row.10.map(|v| FieldIndex(v as u64)),
                 })
@@ -190,17 +190,7 @@ impl DuckLakeMetaStore for DieselMetaStore {
                 .get()
                 .map_err(|e| DataFusionError::External(Box::new(e)))?;
 
-            let row: (
-                i64,
-                chrono::NaiveDateTime,
-                i64,
-                i64,
-                i64,
-                Option<String>,
-                Option<String>,
-                Option<String>,
-                Option<String>,
-            ) = ducklake_snapshot::table
+            let row: (i64, String, i64, i64, i64) = ducklake_snapshot::table
                 .order(ducklake_snapshot::snapshot_id.desc())
                 .select((
                     ducklake_snapshot::snapshot_id,
@@ -208,27 +198,34 @@ impl DuckLakeMetaStore for DieselMetaStore {
                     ducklake_snapshot::schema_version,
                     ducklake_snapshot::next_catalog_id,
                     ducklake_snapshot::next_file_id,
-                    ducklake_snapshot::changes_made,
-                    ducklake_snapshot::author,
-                    ducklake_snapshot::commit_message,
-                    ducklake_snapshot::commit_extra_info,
                 ))
                 .first(&mut conn)
                 .map_err(|e| {
                     DataFusionError::Plan(format!("No snapshots found in metadata: {}", e))
                 })?;
 
+            // Parse snapshot_time from string (format: "2025-11-02 00:45:31.466224+08")
+            let snapshot_time = chrono::DateTime::parse_from_str(&row.1, "%Y-%m-%d %H:%M:%S%.f%:z")
+                .or_else(|_| chrono::DateTime::parse_from_str(&row.1, "%Y-%m-%d %H:%M:%S%.f%z"))
+                .map_err(|e| {
+                    DataFusionError::Plan(format!(
+                        "Failed to parse snapshot_time: {}: {}",
+                        row.1, e
+                    ))
+                })?
+                .with_timezone(&chrono::Utc);
+
             Ok(DuckLakeSnapshot {
                 snapshot: SnapshotInfo {
                     snapshot_id: row.0 as u64,
-                    snapshot_time: chrono::DateTime::from_naive_utc_and_offset(row.1, chrono::Utc),
+                    snapshot_time,
                     schema_version: row.2 as u64,
                     next_catalog_id: row.3 as u64,
                     next_file_id: row.4 as u64,
-                    changes_made: row.5,
-                    author: row.6,
-                    commit_message: row.7,
-                    commit_extra_info: row.8,
+                    changes_made: None,
+                    author: None,
+                    commit_message: None,
+                    commit_extra_info: None,
                 },
             })
         })
@@ -244,17 +241,7 @@ impl DuckLakeMetaStore for DieselMetaStore {
                 .get()
                 .map_err(|e| DataFusionError::External(Box::new(e)))?;
 
-            let row: (
-                i64,
-                chrono::NaiveDateTime,
-                i64,
-                i64,
-                i64,
-                Option<String>,
-                Option<String>,
-                Option<String>,
-                Option<String>,
-            ) = ducklake_snapshot::table
+            let row: (i64, String, i64, i64, i64) = ducklake_snapshot::table
                 .filter(ducklake_snapshot::snapshot_id.eq(snapshot_id as i64))
                 .select((
                     ducklake_snapshot::snapshot_id,
@@ -262,27 +249,34 @@ impl DuckLakeMetaStore for DieselMetaStore {
                     ducklake_snapshot::schema_version,
                     ducklake_snapshot::next_catalog_id,
                     ducklake_snapshot::next_file_id,
-                    ducklake_snapshot::changes_made,
-                    ducklake_snapshot::author,
-                    ducklake_snapshot::commit_message,
-                    ducklake_snapshot::commit_extra_info,
                 ))
                 .first(&mut conn)
                 .map_err(|e| {
                     DataFusionError::Plan(format!("Snapshot not found: {}: {}", snapshot_id, e))
                 })?;
 
+            // Parse snapshot_time from string (format: "2025-11-02 00:45:31.466224+08")
+            let snapshot_time = chrono::DateTime::parse_from_str(&row.1, "%Y-%m-%d %H:%M:%S%.f%:z")
+                .or_else(|_| chrono::DateTime::parse_from_str(&row.1, "%Y-%m-%d %H:%M:%S%.f%z"))
+                .map_err(|e| {
+                    DataFusionError::Plan(format!(
+                        "Failed to parse snapshot_time: {}: {}",
+                        row.1, e
+                    ))
+                })?
+                .with_timezone(&chrono::Utc);
+
             Ok(DuckLakeSnapshot {
                 snapshot: SnapshotInfo {
                     snapshot_id: row.0 as u64,
-                    snapshot_time: chrono::DateTime::from_naive_utc_and_offset(row.1, chrono::Utc),
+                    snapshot_time,
                     schema_version: row.2 as u64,
                     next_catalog_id: row.3 as u64,
                     next_file_id: row.4 as u64,
-                    changes_made: row.5,
-                    author: row.6,
-                    commit_message: row.7,
-                    commit_extra_info: row.8,
+                    changes_made: None,
+                    author: None,
+                    commit_message: None,
+                    commit_extra_info: None,
                 },
             })
         })
@@ -307,7 +301,7 @@ impl DuckLakeMetaStore for DieselMetaStore {
                 i64,
                 Option<i64>,
                 Option<i64>,
-                i64,
+                Option<i64>,
                 String,
                 bool,
                 String,
@@ -318,7 +312,7 @@ impl DuckLakeMetaStore for DieselMetaStore {
                 Option<i64>,
                 Option<String>,
                 Option<String>,
-                i64,
+                Option<i64>,
             )> = if let Some(snap_id) = snapshot_id {
                 ducklake_data_file::table
                     .filter(ducklake_data_file::table_id.eq(table_id.0 as i64))
@@ -376,25 +370,25 @@ impl DuckLakeMetaStore for DieselMetaStore {
                     .map_err(|e| DataFusionError::External(Box::new(e)))?
             };
 
-            let files = rows
+            let files: Vec<FileInfo> = rows
                 .into_iter()
                 .map(|row| FileInfo {
                     data_file_id: DataFileIndex(row.0 as u64),
                     table_id,
                     begin_snapshot: row.2.map(|v| v as u64),
                     end_snapshot: row.3.map(|v| v as u64),
-                    file_order: row.4 as u64,
-                    path: row.5,
+                    file_order: row.4.map(|v| v as u64).unwrap_or(0),
+                    path: row.5.clone(),
                     path_is_relative: row.6,
-                    file_format: Some(row.7),
+                    file_format: Some(row.7.clone()),
                     record_count: row.8 as u64,
                     file_size_bytes: row.9 as u64,
                     footer_size: row.10.map(|v| v as u64),
                     row_id_start: row.11.map(|v| v as u64),
                     partition_id: row.12.map(|v| PartitionId(v as u64)),
-                    encryption_key: row.13.unwrap_or_default(),
-                    partial_file_info: row.14,
-                    mapping_id: MappingIndex(row.15 as u64),
+                    encryption_key: row.13.clone().unwrap_or_default(),
+                    partial_file_info: row.14.clone(),
+                    mapping_id: MappingIndex(row.15.map(|v| v as u64).unwrap_or(0)),
                     column_stats: vec![],
                     partition_values: vec![],
                 })

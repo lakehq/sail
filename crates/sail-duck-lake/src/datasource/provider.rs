@@ -69,7 +69,14 @@ impl DuckLakeTableProvider {
         if is_relative {
             let base = self.base_path.trim_end_matches('/');
             let file = file_path.trim_start_matches('/');
-            Ok(format!("{}/{}", base, file))
+            // DuckLake stores files in: {base_path}/{schema_name}/{table_name}/{file_name}
+            Ok(format!(
+                "{}/{}/{}/{}",
+                base,
+                &self.table.schema_info.schema_name,
+                &self.table.table_info.table_name,
+                file
+            ))
         } else {
             Ok(file_path.to_string())
         }
@@ -126,7 +133,11 @@ impl TableProvider for DuckLakeTableProvider {
 
         log::trace!("Found {} data files", files.len());
 
-        let object_store_url = ObjectStoreUrl::parse(&self.base_path)?;
+        // Parse base_path URL and extract scheme + authority only
+        let base_url = Url::parse(&self.base_path)
+            .map_err(|e| DataFusionError::External(Box::new(e)))?;
+        let object_store_base = format!("{}://{}", base_url.scheme(), base_url.authority());
+        let object_store_url = ObjectStoreUrl::parse(&object_store_base)?;
 
         let mut partitioned_files = Vec::new();
         for file in files {

@@ -1,14 +1,10 @@
 diesel::table! {
     ducklake_snapshot (snapshot_id) {
         snapshot_id -> BigInt,
-        snapshot_time -> Timestamp,
+        snapshot_time -> Text,
         schema_version -> BigInt,
         next_catalog_id -> BigInt,
         next_file_id -> BigInt,
-        changes_made -> Nullable<Text>,
-        author -> Nullable<Text>,
-        commit_message -> Nullable<Text>,
-        commit_extra_info -> Nullable<Text>,
     }
 }
 
@@ -59,7 +55,7 @@ diesel::table! {
         table_id -> BigInt,
         begin_snapshot -> Nullable<BigInt>,
         end_snapshot -> Nullable<BigInt>,
-        file_order -> BigInt,
+        file_order -> Nullable<BigInt>,
         path -> Text,
         path_is_relative -> Bool,
         file_format -> Text,
@@ -70,7 +66,7 @@ diesel::table! {
         partition_id -> Nullable<BigInt>,
         encryption_key -> Nullable<Text>,
         partial_file_info -> Nullable<Text>,
-        mapping_id -> BigInt,
+        mapping_id -> Nullable<BigInt>,
     }
 }
 
