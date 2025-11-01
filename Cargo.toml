@@ -109,6 +109,7 @@ apache-avro = { version = "0.20.0" }
 rust_decimal = "1.39.0"
 wiremock = "0.6.5"
 testcontainers = "0.25.1"
+sqlx = { version = "0.8.2", default-features = false }
 
 ######
 # The versions of the following dependencies are managed manually.

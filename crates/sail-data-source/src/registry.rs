@@ -11,6 +11,7 @@ use crate::formats::binary::BinaryTableFormat;
 use crate::formats::console::ConsoleTableFormat;
 use crate::formats::csv::CsvTableFormat;
 use crate::formats::delta::DeltaTableFormat;
+use crate::formats::ducklake::DuckLakeDataSourceFormat;
 use crate::formats::iceberg::IcebergDataSourceFormat;
 use crate::formats::json::JsonTableFormat;
 use crate::formats::parquet::ParquetTableFormat;
@@ -43,6 +44,7 @@ impl TableFormatRegistry {
         registry.register_format(Arc::new(BinaryTableFormat::default()));
         registry.register_format(Arc::new(CsvTableFormat::default()));
         registry.register_format(Arc::new(DeltaTableFormat));
+        registry.register_format(Arc::new(DuckLakeDataSourceFormat));
         registry.register_format(Arc::new(IcebergDataSourceFormat::default()));
         registry.register_format(Arc::new(JsonTableFormat::default()));
         registry.register_format(Arc::new(ParquetTableFormat::default()));
