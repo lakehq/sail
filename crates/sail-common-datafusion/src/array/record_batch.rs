@@ -1,12 +1,12 @@
 use std::io::Cursor;
 use std::sync::Arc;
 
-use datafusion::arrow::array::{
-    ArrayRef, RecordBatch, RecordBatchOptions, TimestampMicrosecondArray,
-    TimestampMillisecondArray, TimestampNanosecondArray, TimestampSecondArray,
-};
+use datafusion::arrow::array::{Array, ArrayRef, PrimitiveArray, RecordBatch, RecordBatchOptions};
 use datafusion::arrow::compute::cast;
-use datafusion::arrow::datatypes::{DataType, Schema, SchemaRef, TimeUnit};
+use datafusion::arrow::datatypes::{
+    ArrowTimestampType, DataType, Schema, SchemaRef, TimeUnit, TimestampMicrosecondType,
+    TimestampMillisecondType, TimestampNanosecondType, TimestampSecondType,
+};
 use datafusion::arrow::ipc::reader::StreamReader;
 use datafusion::arrow::ipc::writer::StreamWriter;
 use datafusion_common::Result;
@@ -24,6 +24,26 @@ pub fn cast_record_batch(batch: RecordBatch, schema: SchemaRef) -> Result<Record
         })
         .collect::<Result<Vec<_>>>()?;
     Ok(RecordBatch::try_new(schema, columns)?)
+}
+
+/// Helper function to handle timezone adjustment for timestamp arrays.
+fn adjust_timestamp_timezone<T>(array: &ArrayRef, target_tz: Option<Arc<str>>) -> Result<ArrayRef>
+where
+    T: ArrowTimestampType,
+{
+    let timestamp_array = array
+        .as_any()
+        .downcast_ref::<PrimitiveArray<T>>()
+        .ok_or_else(|| {
+            datafusion_common::DataFusionError::Plan(format!(
+                "Failed to downcast to timestamp array type: {:?}",
+                array.data_type()
+            ))
+        })?;
+
+    Ok(Arc::new(
+        timestamp_array.clone().with_timezone_opt(target_tz),
+    ))
 }
 
 /// Cast a RecordBatch to a target schema with relaxed timezone handling.
@@ -54,127 +74,26 @@ pub fn cast_record_batch_relaxed_tz(
         }
 
         // Special handling for timestamp timezone differences
+        // Only adjust timezone if time units match but timezone differs
         let handled = match (src_dt, tgt_dt) {
-            // Remove timezone
-            (
-                DataType::Timestamp(TimeUnit::Second, Some(_)),
-                DataType::Timestamp(TimeUnit::Second, None),
-            ) => {
-                let arr = src
-                    .as_any()
-                    .downcast_ref::<TimestampSecondArray>()
-                    .ok_or_else(|| {
-                        datafusion_common::DataFusionError::Plan(
-                            "downcast TimestampSecondArray failed".to_string(),
-                        )
-                    })?;
-                cols.push(Arc::new(arr.clone().with_timezone_opt(None::<Arc<str>>)));
-                true
-            }
-            (
-                DataType::Timestamp(TimeUnit::Millisecond, Some(_)),
-                DataType::Timestamp(TimeUnit::Millisecond, None),
-            ) => {
-                let arr = src
-                    .as_any()
-                    .downcast_ref::<TimestampMillisecondArray>()
-                    .ok_or_else(|| {
-                        datafusion_common::DataFusionError::Plan(
-                            "downcast TimestampMillisecondArray failed".to_string(),
-                        )
-                    })?;
-                cols.push(Arc::new(arr.clone().with_timezone_opt(None::<Arc<str>>)));
-                true
-            }
-            (
-                DataType::Timestamp(TimeUnit::Microsecond, Some(_)),
-                DataType::Timestamp(TimeUnit::Microsecond, None),
-            ) => {
-                let arr = src
-                    .as_any()
-                    .downcast_ref::<TimestampMicrosecondArray>()
-                    .ok_or_else(|| {
-                        datafusion_common::DataFusionError::Plan(
-                            "downcast TimestampMicrosecondArray failed".to_string(),
-                        )
-                    })?;
-                cols.push(Arc::new(arr.clone().with_timezone_opt(None::<Arc<str>>)));
-                true
-            }
-            (
-                DataType::Timestamp(TimeUnit::Nanosecond, Some(_)),
-                DataType::Timestamp(TimeUnit::Nanosecond, None),
-            ) => {
-                let arr = src
-                    .as_any()
-                    .downcast_ref::<TimestampNanosecondArray>()
-                    .ok_or_else(|| {
-                        datafusion_common::DataFusionError::Plan(
-                            "downcast TimestampNanosecondArray failed".to_string(),
-                        )
-                    })?;
-                cols.push(Arc::new(arr.clone().with_timezone_opt(None::<Arc<str>>)));
-                true
-            }
-            // Add timezone
-            (
-                DataType::Timestamp(TimeUnit::Second, None),
-                DataType::Timestamp(TimeUnit::Second, Some(tz)),
-            ) => {
-                let arr = src
-                    .as_any()
-                    .downcast_ref::<TimestampSecondArray>()
-                    .ok_or_else(|| {
-                        datafusion_common::DataFusionError::Plan(
-                            "downcast TimestampSecondArray failed".to_string(),
-                        )
-                    })?;
-                cols.push(Arc::new(arr.clone().with_timezone_opt(Some(tz.clone()))));
-                true
-            }
-            (
-                DataType::Timestamp(TimeUnit::Millisecond, None),
-                DataType::Timestamp(TimeUnit::Millisecond, Some(tz)),
-            ) => {
-                let arr = src
-                    .as_any()
-                    .downcast_ref::<TimestampMillisecondArray>()
-                    .ok_or_else(|| {
-                        datafusion_common::DataFusionError::Plan(
-                            "downcast TimestampMillisecondArray failed".to_string(),
-                        )
-                    })?;
-                cols.push(Arc::new(arr.clone().with_timezone_opt(Some(tz.clone()))));
-                true
-            }
-            (
-                DataType::Timestamp(TimeUnit::Microsecond, None),
-                DataType::Timestamp(TimeUnit::Microsecond, Some(tz)),
-            ) => {
-                let arr = src
-                    .as_any()
-                    .downcast_ref::<TimestampMicrosecondArray>()
-                    .ok_or_else(|| {
-                        datafusion_common::DataFusionError::Plan(
-                            "downcast TimestampMicrosecondArray failed".to_string(),
-                        )
-                    })?;
-                cols.push(Arc::new(arr.clone().with_timezone_opt(Some(tz.clone()))));
-                true
-            }
-            (
-                DataType::Timestamp(TimeUnit::Nanosecond, None),
-                DataType::Timestamp(TimeUnit::Nanosecond, Some(tz)),
-            ) => {
-                let arr = src
-                    .as_any()
-                    .downcast_ref::<TimestampNanosecondArray>()
-                    .ok_or_else(|| {
-                        datafusion_common::DataFusionError::Plan(
-                            "downcast TimestampNanosecondArray failed".to_string(),
-                        )
-                    })?;
-                cols.push(Arc::new(arr.clone().with_timezone_opt(Some(tz.clone()))));
+            (DataType::Timestamp(src_unit, _), DataType::Timestamp(tgt_unit, tgt_tz))
+                if src_unit == tgt_unit =>
+            {
+                let adjusted = match src_unit {
+                    TimeUnit::Second => {
+                        adjust_timestamp_timezone::<TimestampSecondType>(src, tgt_tz.clone())?
+                    }
+                    TimeUnit::Millisecond => {
+                        adjust_timestamp_timezone::<TimestampMillisecondType>(src, tgt_tz.clone())?
+                    }
+                    TimeUnit::Microsecond => {
+                        adjust_timestamp_timezone::<TimestampMicrosecondType>(src, tgt_tz.clone())?
+                    }
+                    TimeUnit::Nanosecond => {
+                        adjust_timestamp_timezone::<TimestampNanosecondType>(src, tgt_tz.clone())?
+                    }
+                };
+                cols.push(adjusted);
                 true
             }
             _ => false,
