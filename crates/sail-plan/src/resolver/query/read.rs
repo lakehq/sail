@@ -1,3 +1,4 @@
+use std::collections::HashSet;
 use std::sync::Arc;
 
 use datafusion::arrow::datatypes::Schema;
@@ -86,18 +87,34 @@ impl PlanResolver<'_> {
                     .get_format(&format)?
                     .create_provider(&self.ctx.state(), info)
                     .await?;
-                let names = state.register_fields(table_provider.schema().fields());
-                let table_provider = Arc::new(RenameTableProvider::try_new(table_provider, names)?);
-                let table_scan = LogicalPlan::TableScan(TableScan::try_new(
-                    table_reference,
-                    provider_as_source(table_provider),
-                    None,
-                    vec![],
-                    None,
-                )?);
-                table_scan
-                // let names = state.register_fields(table_scan.schema().fields());
-                // rename_logical_plan(table_scan, &names)?
+
+                let schema = table_provider.schema();
+                let has_duplicates = {
+                    let mut seen = HashSet::new();
+                    schema.fields().iter().any(|f| !seen.insert(f.name()))
+                };
+                if has_duplicates {
+                    let names = state.register_fields(schema.fields());
+                    let table_provider =
+                        Arc::new(RenameTableProvider::try_new(table_provider, names)?);
+                    LogicalPlan::TableScan(TableScan::try_new(
+                        table_reference,
+                        provider_as_source(table_provider),
+                        None,
+                        vec![],
+                        None,
+                    )?)
+                } else {
+                    let table_scan = LogicalPlan::TableScan(TableScan::try_new(
+                        table_reference,
+                        provider_as_source(table_provider),
+                        None,
+                        vec![],
+                        None,
+                    )?);
+                    let names = state.register_fields(table_scan.schema().fields());
+                    rename_logical_plan(table_scan, &names)?
+                }
             }
             TableKind::View { .. } => return Err(PlanError::todo("read view")),
             TableKind::TemporaryView { plan, .. } | TableKind::GlobalTemporaryView { plan, .. } => {
@@ -188,18 +205,33 @@ impl PlanResolver<'_> {
                         )));
                     };
                 let table_provider = table_function.create_table_provider(&arguments)?;
-                let names = state.register_fields(table_provider.schema().fields());
-                let table_provider = Arc::new(RenameTableProvider::try_new(table_provider, names)?);
-                let table_scan = LogicalPlan::TableScan(TableScan::try_new(
-                    function_name,
-                    provider_as_source(table_provider),
-                    None,
-                    vec![],
-                    None,
-                )?);
-                Ok(table_scan)
-                // let names = state.register_fields(table_scan.schema().fields());
-                // Ok(rename_logical_plan(table_scan, &names)?)
+                let schema = table_provider.schema();
+                let has_duplicates = {
+                    let mut seen = HashSet::new();
+                    schema.fields().iter().any(|f| !seen.insert(f.name()))
+                };
+                if has_duplicates {
+                    let names = state.register_fields(schema.fields());
+                    let table_provider =
+                        Arc::new(RenameTableProvider::try_new(table_provider, names)?);
+                    Ok(LogicalPlan::TableScan(TableScan::try_new(
+                        function_name,
+                        provider_as_source(table_provider),
+                        None,
+                        vec![],
+                        None,
+                    )?))
+                } else {
+                    let table_scan = LogicalPlan::TableScan(TableScan::try_new(
+                        function_name,
+                        provider_as_source(table_provider),
+                        None,
+                        vec![],
+                        None,
+                    )?);
+                    let names = state.register_fields(table_scan.schema().fields());
+                    Ok(rename_logical_plan(table_scan, &names)?)
+                }
             }
         }
     }
@@ -240,17 +272,31 @@ impl PlanResolver<'_> {
             .get_format(&format)?
             .create_provider(&self.ctx.state(), info)
             .await?;
-        let names = state.register_fields(table_provider.schema().fields());
-        let table_provider = Arc::new(RenameTableProvider::try_new(table_provider, names)?);
-        let table_scan = LogicalPlan::TableScan(TableScan::try_new(
-            UNNAMED_TABLE,
-            provider_as_source(table_provider),
-            None,
-            vec![],
-            None,
-        )?);
-        Ok(table_scan)
-        // let names = state.register_fields(table_scan.schema().fields());
-        // Ok(rename_logical_plan(table_scan, &names)?)
+        let schema = table_provider.schema();
+        let has_duplicates = {
+            let mut seen = HashSet::new();
+            schema.fields().iter().any(|f| !seen.insert(f.name()))
+        };
+        if has_duplicates {
+            let names = state.register_fields(schema.fields());
+            let table_provider = Arc::new(RenameTableProvider::try_new(table_provider, names)?);
+            Ok(LogicalPlan::TableScan(TableScan::try_new(
+                UNNAMED_TABLE,
+                provider_as_source(table_provider),
+                None,
+                vec![],
+                None,
+            )?))
+        } else {
+            let table_scan = LogicalPlan::TableScan(TableScan::try_new(
+                UNNAMED_TABLE,
+                provider_as_source(table_provider),
+                None,
+                vec![],
+                None,
+            )?);
+            let names = state.register_fields(table_scan.schema().fields());
+            Ok(rename_logical_plan(table_scan, &names)?)
+        }
     }
 }
