@@ -6661,6 +6661,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "sail-duck-lake"
+version = "0.4.0"
+dependencies = [
+ "chrono",
+ "serde",
+ "uuid",
+]
+
+[[package]]
 name = "sail-execution"
 version = "0.4.0"
 dependencies = [

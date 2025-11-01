@@ -1,0 +1,13 @@
+[package]
+name = "sail-duck-lake"
+version = { workspace = true }
+edition = { workspace = true }
+
+[dependencies]
+serde = { workspace = true, features = ["derive"] }
+uuid = { workspace = true }
+chrono = { workspace = true, features = ["serde"] }
+
+[lints]
+workspace = true
+
