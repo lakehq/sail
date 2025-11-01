@@ -16,8 +16,8 @@ datafusion-datasource = { workspace = true }
 object_store = { workspace = true }
 url = { workspace = true }
 log = { workspace = true }
-diesel = { version = "2.3.3", features = ["sqlite", "chrono", "uuid", "returning_clauses_for_sqlite_3_35", "r2d2"] }
-r2d2 = "0.8"
+diesel = { workspace = true }
+r2d2 = { workspace = true }
 tokio = { workspace = true }
 
 [lints]

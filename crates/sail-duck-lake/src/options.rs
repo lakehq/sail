@@ -1,7 +1,6 @@
 use datafusion::common::{DataFusionError, Result};
 
-#[derive(Debug, Clone)]
-#[derive(Default)]
+#[derive(Debug, Clone, Default)]
 pub struct DuckLakeOptions {
     pub url: String,
     pub table: String,
@@ -10,7 +9,6 @@ pub struct DuckLakeOptions {
     pub schema: Option<String>,
     pub case_sensitive: bool,
 }
-
 
 impl DuckLakeOptions {
     pub fn validate(&self) -> Result<()> {

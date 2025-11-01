@@ -109,7 +109,6 @@ apache-avro = { version = "0.20.0" }
 rust_decimal = "1.39.0"
 wiremock = "0.6.5"
 testcontainers = "0.25.1"
-sqlx = { version = "0.8.2", default-features = false }
 
 ######
 # The versions of the following dependencies are managed manually.
@@ -154,6 +153,9 @@ serde_arrow = { version = "0.13.6", features = ["arrow-56"] }
 # The `object_store` version must match the one used in DataFusion.
 object_store = { version = "0.12.4", features = ["aws", "gcp", "azure", "http"] }
 hdfs-native-object-store = "0.15.0"
+
+diesel = { version = "2.3.3", features = ["sqlite", "chrono", "uuid", "returning_clauses_for_sqlite_3_35", "r2d2"] }
+r2d2 = "0.8"
 
 # Lakehouse
 deltalake = { git = "https://github.com/delta-io/delta-rs.git", rev = "0864b21", default-features = false, features = ["rustls"] }
