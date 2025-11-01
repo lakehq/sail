@@ -7,7 +7,7 @@ use datafusion_common::{DFSchema, DFSchemaRef, ParamValues};
 use datafusion_expr::{EmptyRelation, Extension, LogicalPlan, TableScan, UNNAMED_TABLE};
 use sail_common::spec;
 use sail_common_datafusion::array::record_batch::{cast_record_batch, read_record_batches};
-use sail_common_datafusion::rename::logical_plan::rename_logical_plan;
+use sail_common_datafusion::rename::table_provider::RenameTableProvider;
 use sail_logical_plan::range::RangeNode;
 
 use crate::error::{PlanError, PlanResult};
@@ -119,15 +119,22 @@ impl PlanResolver<'_> {
         } else {
             return Err(PlanError::invalid("missing schema for local relation"));
         };
+        let names = state.register_fields(schema.fields());
+        let provider = RenameTableProvider::try_new(
+            Arc::new(MemTable::try_new(schema, vec![batches])?),
+            names,
+        )?;
         let table_scan = LogicalPlan::TableScan(TableScan::try_new(
             UNNAMED_TABLE,
-            provider_as_source(Arc::new(MemTable::try_new(schema, vec![batches])?)),
+            provider_as_source(Arc::new(provider)),
+            // provider_as_source(Arc::new(MemTable::try_new(schema, vec![batches])?)),
             None,
             vec![],
             None,
         )?);
-        let names = state.register_fields(table_scan.schema().fields());
-        Ok(rename_logical_plan(table_scan, &names)?)
+        Ok(table_scan)
+        // let names = state.register_fields(table_scan.schema().fields());
+        // Ok(rename_logical_plan(table_scan, &names)?)
     }
 
     pub(super) async fn resolve_query_hint(

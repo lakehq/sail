@@ -11,6 +11,7 @@ use sail_common::spec;
 use sail_common_datafusion::datasource::SourceInfo;
 use sail_common_datafusion::extension::SessionExtensionAccessor;
 use sail_common_datafusion::rename::logical_plan::rename_logical_plan;
+use sail_common_datafusion::rename::table_provider::RenameTableProvider;
 use sail_common_datafusion::utils::items::ItemTaker;
 use sail_data_source::default_registry;
 use sail_python_udf::udf::pyspark_unresolved_udf::PySparkUnresolvedUDF;
@@ -85,6 +86,8 @@ impl PlanResolver<'_> {
                     .get_format(&format)?
                     .create_provider(&self.ctx.state(), info)
                     .await?;
+                let names = state.register_fields(table_provider.schema().fields());
+                let table_provider = Arc::new(RenameTableProvider::try_new(table_provider, names)?);
                 let table_scan = LogicalPlan::TableScan(TableScan::try_new(
                     table_reference,
                     provider_as_source(table_provider),
@@ -92,8 +95,9 @@ impl PlanResolver<'_> {
                     vec![],
                     None,
                 )?);
-                let names = state.register_fields(table_scan.schema().fields());
-                rename_logical_plan(table_scan, &names)?
+                table_scan
+                // let names = state.register_fields(table_scan.schema().fields());
+                // rename_logical_plan(table_scan, &names)?
             }
             TableKind::View { .. } => return Err(PlanError::todo("read view")),
             TableKind::TemporaryView { plan, .. } | TableKind::GlobalTemporaryView { plan, .. } => {
@@ -184,6 +188,8 @@ impl PlanResolver<'_> {
                         )));
                     };
                 let table_provider = table_function.create_table_provider(&arguments)?;
+                let names = state.register_fields(table_provider.schema().fields());
+                let table_provider = Arc::new(RenameTableProvider::try_new(table_provider, names)?);
                 let table_scan = LogicalPlan::TableScan(TableScan::try_new(
                     function_name,
                     provider_as_source(table_provider),
@@ -191,8 +197,9 @@ impl PlanResolver<'_> {
                     vec![],
                     None,
                 )?);
-                let names = state.register_fields(table_scan.schema().fields());
-                Ok(rename_logical_plan(table_scan, &names)?)
+                Ok(table_scan)
+                // let names = state.register_fields(table_scan.schema().fields());
+                // Ok(rename_logical_plan(table_scan, &names)?)
             }
         }
     }
@@ -233,6 +240,8 @@ impl PlanResolver<'_> {
             .get_format(&format)?
             .create_provider(&self.ctx.state(), info)
             .await?;
+        let names = state.register_fields(table_provider.schema().fields());
+        let table_provider = Arc::new(RenameTableProvider::try_new(table_provider, names)?);
         let table_scan = LogicalPlan::TableScan(TableScan::try_new(
             UNNAMED_TABLE,
             provider_as_source(table_provider),
@@ -240,7 +249,8 @@ impl PlanResolver<'_> {
             vec![],
             None,
         )?);
-        let names = state.register_fields(table_scan.schema().fields());
-        Ok(rename_logical_plan(table_scan, &names)?)
+        Ok(table_scan)
+        // let names = state.register_fields(table_scan.schema().fields());
+        // Ok(rename_logical_plan(table_scan, &names)?)
     }
 }
