@@ -1,3 +1,6 @@
+pub mod conversions;
+pub mod transform;
+
 use std::sync::Arc;
 
 use datafusion::catalog::Session;

@@ -5,6 +5,7 @@ pub mod error;
 pub mod extension;
 pub mod formatter;
 pub mod rename;
+pub mod scalar;
 pub mod streaming;
 pub mod udf;
 pub mod utils;

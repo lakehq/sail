@@ -11,11 +11,11 @@ use datafusion::logical_expr::utils::conjunction;
 use datafusion::logical_expr::{BinaryExpr, Expr, Operator};
 use datafusion::physical_optimizer::pruning::PruningPredicate;
 
-use crate::datasource::literal_to_scalar_value;
 use crate::spec::partition::PartitionSpec;
-use crate::spec::types::values::{Datum, Literal};
+use crate::spec::types::values::{Datum, Literal, PrimitiveLiteral};
 use crate::spec::types::{PrimitiveType, Type};
 use crate::spec::{DataFile, Manifest, ManifestContentType, ManifestList, Schema};
+use crate::utils::conversions::{iceberg_literal_to_scalar, scalar_to_iceberg_literal};
 // TODO: Implement robust logical expression parsing for summary pruning
 
 /// Pruning statistics over Iceberg DataFiles
@@ -68,38 +68,14 @@ impl IcebergPruningStats {
         field_id: i32,
         datum: &Datum,
     ) -> datafusion::common::scalar::ScalarValue {
-        use datafusion::common::scalar::ScalarValue as SV;
-        match self.field_id_to_type.get(&field_id) {
-            Some(PrimitiveType::Date) => {
-                if let crate::spec::types::values::PrimitiveLiteral::Int(v) = datum.literal {
-                    SV::Date32(Some(v))
-                } else {
-                    literal_to_scalar_value(&Literal::Primitive(datum.literal.clone()))
-                }
-            }
-            Some(PrimitiveType::Timestamp | PrimitiveType::TimestampNs) => {
-                if let crate::spec::types::values::PrimitiveLiteral::Long(v) = datum.literal {
-                    SV::TimestampMicrosecond(Some(v), None)
-                } else {
-                    literal_to_scalar_value(&Literal::Primitive(datum.literal.clone()))
-                }
-            }
-            Some(PrimitiveType::Timestamptz | PrimitiveType::TimestamptzNs) => {
-                if let crate::spec::types::values::PrimitiveLiteral::Long(v) = datum.literal {
-                    SV::TimestampMicrosecond(Some(v), Some(std::sync::Arc::from("UTC")))
-                } else {
-                    literal_to_scalar_value(&Literal::Primitive(datum.literal.clone()))
-                }
-            }
-            Some(PrimitiveType::Time) => {
-                if let crate::spec::types::values::PrimitiveLiteral::Long(v) = datum.literal {
-                    SV::Time64Microsecond(Some(v))
-                } else {
-                    literal_to_scalar_value(&Literal::Primitive(datum.literal.clone()))
-                }
-            }
-            _ => literal_to_scalar_value(&Literal::Primitive(datum.literal.clone())),
-        }
+        // Use the unified conversion with type context
+        let iceberg_type = self
+            .field_id_to_type
+            .get(&field_id)
+            .map(|p| Type::Primitive(p.clone()))
+            .unwrap_or_else(|| Type::Primitive(datum.r#type.clone()));
+
+        iceberg_literal_to_scalar(&Literal::Primitive(datum.literal.clone()), &iceberg_type)
     }
 }
 
@@ -294,15 +270,15 @@ pub fn prune_manifests_by_partition_summaries<'a>(
                                 .and_then(|b| decode_bound_bytes(prim_ty, b).ok());
 
                             if let (Some(lb), Some(ub)) = (lower.as_ref(), upper.as_ref()) {
-                                if lt_prim(lit, lb) || gt_prim(lit, ub) {
+                                if lit < lb || lit > ub {
                                     return false;
                                 }
                             } else if let Some(lb) = lower.as_ref() {
-                                if lt_prim(lit, lb) {
+                                if lit < lb {
                                     return false;
                                 }
                             } else if let Some(ub) = upper.as_ref() {
-                                if gt_prim(lit, ub) {
+                                if lit > ub {
                                     return false;
                                 }
                             }
@@ -330,7 +306,7 @@ pub fn prune_manifests_by_partition_summaries<'a>(
                             if let (Some(lb), Some(ub)) = (lower.as_ref(), upper.as_ref()) {
                                 let mut any_in = false;
                                 for lit in lits {
-                                    if !(lt_prim(lit, lb) || gt_prim(lit, ub)) {
+                                    if !(lit < lb || lit > ub) {
                                         any_in = true;
                                         break;
                                     }
@@ -339,12 +315,12 @@ pub fn prune_manifests_by_partition_summaries<'a>(
                                     return false;
                                 }
                             } else if let Some(lb) = lower.as_ref() {
-                                let any_in = lits.iter().any(|v| !lt_prim(v, lb));
+                                let any_in = lits.iter().any(|v| v >= lb);
                                 if !any_in {
                                     return false;
                                 }
                             } else if let Some(ub) = upper.as_ref() {
-                                let any_in = lits.iter().any(|v| !gt_prim(v, ub));
+                                let any_in = lits.iter().any(|v| v <= ub);
                                 if !any_in {
                                     return false;
                                 }
@@ -372,12 +348,12 @@ pub fn prune_manifests_by_partition_summaries<'a>(
                                 .and_then(|b| decode_bound_bytes(prim_ty, b).ok());
                             if let (Some(lb), Some(ub)) = (lower.as_ref(), upper.as_ref()) {
                                 if let Some((ref qmin, _incl_min)) = range.min {
-                                    if gt_prim(qmin, ub) {
+                                    if qmin > ub {
                                         return false;
                                     }
                                 }
                                 if let Some((ref qmax, _incl_max)) = range.max {
-                                    if lt_prim(qmax, lb) {
+                                    if qmax < lb {
                                         return false;
                                     }
                                 }
@@ -552,7 +528,7 @@ fn collect_identity_range_filters(
         match cur {
             None => *cur = Some(cand),
             Some((ref mut v, ref mut incl)) => {
-                if gt_prim(&cand.0, v) || (eq_prim(&cand.0, v) && cand.1 && !*incl) {
+                if cand.0 > *v || (cand.0 == *v && cand.1 && !*incl) {
                     *v = cand.0;
                     *incl = cand.1;
                 }
@@ -566,7 +542,7 @@ fn collect_identity_range_filters(
         match cur {
             None => *cur = Some(cand),
             Some((ref mut v, ref mut incl)) => {
-                if lt_prim(&cand.0, v) || (eq_prim(&cand.0, v) && cand.1 && !*incl) {
+                if cand.0 < *v || (cand.0 == *v && cand.1 && !*incl) {
                     *v = cand.0;
                     *incl = cand.1;
                 }
@@ -623,23 +599,14 @@ fn collect_identity_range_filters(
 
 fn scalar_to_primitive_literal(
     sv: &datafusion::common::scalar::ScalarValue,
-) -> Option<crate::spec::types::values::PrimitiveLiteral> {
-    use crate::spec::types::values::PrimitiveLiteral::*;
-    match sv {
-        datafusion::common::scalar::ScalarValue::Boolean(Some(v)) => Some(Boolean(*v)),
-        datafusion::common::scalar::ScalarValue::Int32(Some(v)) => Some(Int(*v)),
-        datafusion::common::scalar::ScalarValue::Int64(Some(v)) => Some(Long(*v)),
-        datafusion::common::scalar::ScalarValue::Float32(Some(v)) => {
-            Some(Float(ordered_float::OrderedFloat(*v)))
-        }
-        datafusion::common::scalar::ScalarValue::Float64(Some(v)) => {
-            Some(Double(ordered_float::OrderedFloat(*v)))
-        }
-        datafusion::common::scalar::ScalarValue::Utf8(Some(s)) => Some(String(s.clone())),
-        datafusion::common::scalar::ScalarValue::LargeUtf8(Some(s)) => Some(String(s.clone())),
-        datafusion::common::scalar::ScalarValue::Binary(Some(b)) => Some(Binary(b.clone())),
-        _ => None,
-    }
+) -> Option<PrimitiveLiteral> {
+    // Use the unified conversion function
+    scalar_to_iceberg_literal(sv, &sv.data_type())
+        .ok()
+        .and_then(|lit| match lit {
+            Literal::Primitive(p) => Some(p),
+            _ => None,
+        })
 }
 
 fn decode_bound_bytes(
@@ -696,51 +663,4 @@ fn decode_bound_bytes(
         }
     };
     Ok(pl)
-}
-
-fn lt_prim(
-    a: &crate::spec::types::values::PrimitiveLiteral,
-    b: &crate::spec::types::values::PrimitiveLiteral,
-) -> bool {
-    use crate::spec::types::values::PrimitiveLiteral as PL;
-    match (a, b) {
-        (PL::Int(x), PL::Int(y)) => x < y,
-        (PL::Long(x), PL::Long(y)) => x < y,
-        (PL::Float(x), PL::Float(y)) => x < y,
-        (PL::Double(x), PL::Double(y)) => x < y,
-        (PL::String(x), PL::String(y)) => x < y,
-        _ => false,
-    }
-}
-
-fn gt_prim(
-    a: &crate::spec::types::values::PrimitiveLiteral,
-    b: &crate::spec::types::values::PrimitiveLiteral,
-) -> bool {
-    use crate::spec::types::values::PrimitiveLiteral as PL;
-    match (a, b) {
-        (PL::Int(x), PL::Int(y)) => x > y,
-        (PL::Long(x), PL::Long(y)) => x > y,
-        (PL::Float(x), PL::Float(y)) => x > y,
-        (PL::Double(x), PL::Double(y)) => x > y,
-        (PL::String(x), PL::String(y)) => x > y,
-        _ => false,
-    }
-}
-
-fn eq_prim(
-    a: &crate::spec::types::values::PrimitiveLiteral,
-    b: &crate::spec::types::values::PrimitiveLiteral,
-) -> bool {
-    use crate::spec::types::values::PrimitiveLiteral as PL;
-    match (a, b) {
-        (PL::Int(x), PL::Int(y)) => x == y,
-        (PL::Long(x), PL::Long(y)) => x == y,
-        (PL::Float(x), PL::Float(y)) => x == y,
-        (PL::Double(x), PL::Double(y)) => x == y,
-        (PL::String(x), PL::String(y)) => x == y,
-        (PL::Binary(x), PL::Binary(y)) => x == y,
-        (PL::Boolean(x), PL::Boolean(y)) => x == y,
-        _ => false,
-    }
 }

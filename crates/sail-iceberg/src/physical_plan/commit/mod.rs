@@ -1,3 +1,4 @@
+pub mod bootstrap;
 pub mod commit_exec;
 
 use serde::{Deserialize, Serialize};
