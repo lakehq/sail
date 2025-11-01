@@ -1,7 +1,7 @@
 use std::sync::Arc;
 
 use datafusion::arrow::compute::can_cast_types;
-use datafusion::arrow::datatypes::{DataType, Field, FieldRef, Schema as ArrowSchema, SchemaRef};
+use datafusion::arrow::datatypes::{Field, FieldRef, Schema as ArrowSchema, SchemaRef};
 use datafusion::common::tree_node::{Transformed, TransformedResult, TreeNode};
 use datafusion::common::{exec_err, Result, ScalarValue};
 use datafusion::physical_expr::expressions::{Column, Literal};
@@ -51,7 +51,10 @@ fn create_column_mapping(
                             .unwrap_or(ScalarValue::Null),
                     )
                 } else {
-                    Some(create_default_value(logical_field.data_type()))
+                    Some(
+                        ScalarValue::new_zero(logical_field.data_type())
+                            .unwrap_or(ScalarValue::Null),
+                    )
                 };
                 default_values.push(default_value);
             }
@@ -59,46 +62,6 @@ fn create_column_mapping(
     }
 
     (column_mapping, default_values)
-}
-
-fn create_default_value(data_type: &DataType) -> ScalarValue {
-    match data_type {
-        DataType::Boolean => ScalarValue::Boolean(Some(false)),
-        DataType::Int8 => ScalarValue::Int8(Some(0)),
-        DataType::Int16 => ScalarValue::Int16(Some(0)),
-        DataType::Int32 => ScalarValue::Int32(Some(0)),
-        DataType::Int64 => ScalarValue::Int64(Some(0)),
-        DataType::UInt8 => ScalarValue::UInt8(Some(0)),
-        DataType::UInt16 => ScalarValue::UInt16(Some(0)),
-        DataType::UInt32 => ScalarValue::UInt32(Some(0)),
-        DataType::UInt64 => ScalarValue::UInt64(Some(0)),
-        DataType::Float16 => ScalarValue::Float32(Some(0.0)),
-        DataType::Float32 => ScalarValue::Float32(Some(0.0)),
-        DataType::Float64 => ScalarValue::Float64(Some(0.0)),
-        DataType::Utf8 => ScalarValue::Utf8(Some(String::new())),
-        DataType::LargeUtf8 => ScalarValue::LargeUtf8(Some(String::new())),
-        DataType::Binary => ScalarValue::Binary(Some(Vec::new())),
-        DataType::LargeBinary => ScalarValue::LargeBinary(Some(Vec::new())),
-        DataType::Date32 => ScalarValue::Date32(Some(0)),
-        DataType::Date64 => ScalarValue::Date64(Some(0)),
-        DataType::Time32(_) => ScalarValue::Time32Second(Some(0)),
-        DataType::Time64(_) => ScalarValue::Time64Nanosecond(Some(0)),
-        DataType::Timestamp(unit, tz) => match unit {
-            datafusion::arrow::datatypes::TimeUnit::Second => {
-                ScalarValue::TimestampSecond(Some(0), tz.clone())
-            }
-            datafusion::arrow::datatypes::TimeUnit::Millisecond => {
-                ScalarValue::TimestampMillisecond(Some(0), tz.clone())
-            }
-            datafusion::arrow::datatypes::TimeUnit::Microsecond => {
-                ScalarValue::TimestampMicrosecond(Some(0), tz.clone())
-            }
-            datafusion::arrow::datatypes::TimeUnit::Nanosecond => {
-                ScalarValue::TimestampNanosecond(Some(0), tz.clone())
-            }
-        },
-        _ => ScalarValue::Null,
-    }
 }
 
 #[derive(Debug)]

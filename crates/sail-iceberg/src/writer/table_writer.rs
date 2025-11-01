@@ -1,15 +1,11 @@
 use std::collections::HashMap;
 use std::sync::Arc;
 
-use datafusion::arrow::array::{
-    ArrayRef, TimestampMicrosecondArray, TimestampMillisecondArray, TimestampNanosecondArray,
-    TimestampSecondArray,
-};
-use datafusion::arrow::datatypes::{DataType as ArrowDataType, Schema as ArrowSchema, TimeUnit};
 use datafusion::arrow::record_batch::RecordBatch;
 use object_store::path::Path as ObjectPath;
 use parquet::arrow::PARQUET_FIELD_ID_META_KEY;
-use sail_common_datafusion::array::record_batch::cast_record_batch;
+use sail_common_datafusion::array::record_batch::cast_record_batch_relaxed_tz;
+use url::Url;
 
 use crate::spec::types::values::Literal;
 use crate::spec::DataFile;
@@ -23,6 +19,7 @@ pub struct IcebergTableWriter {
     pub store: Arc<dyn object_store::ObjectStore>,
     pub config: WriterConfig,
     pub generator: DefaultLocationGenerator,
+    pub table_url: Url,
     // partition_dir -> writer
     writers: HashMap<String, ArrowParquetWriter>,
     // partition_dir -> partition values aligned with spec
@@ -38,144 +35,18 @@ impl IcebergTableWriter {
         config: WriterConfig,
         partition_spec_id: i32,
         data_dir: String,
+        table_url: Url,
     ) -> Self {
         Self {
             generator: DefaultLocationGenerator::new_with_data_dir(root, data_dir),
             store,
             config,
+            table_url,
             writers: HashMap::new(),
             partition_values_map: HashMap::new(),
             written: Vec::new(),
             partition_spec_id,
         }
-    }
-    // TODO: consider totally using cast_record_batch instead
-    fn cast_batch_to_schema(
-        batch: &RecordBatch,
-        target: &ArrowSchema,
-    ) -> Result<RecordBatch, String> {
-        let mut cols: Vec<ArrayRef> = Vec::with_capacity(target.fields().len());
-        for f in target.fields() {
-            let idx = batch
-                .schema()
-                .index_of(f.name())
-                .map_err(|e| e.to_string())?;
-            let src = batch.column(idx).clone();
-            let src_dt = src.data_type().clone();
-            let tgt_dt = f.data_type().clone();
-            // Fast path: exact match
-            if src_dt == tgt_dt {
-                cols.push(src);
-                continue;
-            }
-            // Special-case timezone normalization for timestamps: reinterpret timezone metadata only
-            match (&src_dt, &tgt_dt) {
-                (
-                    ArrowDataType::Timestamp(TimeUnit::Second, Some(_)),
-                    ArrowDataType::Timestamp(TimeUnit::Second, None),
-                ) => {
-                    let arr = src
-                        .as_any()
-                        .downcast_ref::<TimestampSecondArray>()
-                        .ok_or_else(|| "downcast TimestampSecondArray failed".to_string())?;
-                    cols.push(Arc::new(arr.clone().with_timezone_opt(None::<Arc<str>>)));
-                    continue;
-                }
-                (
-                    ArrowDataType::Timestamp(TimeUnit::Millisecond, Some(_)),
-                    ArrowDataType::Timestamp(TimeUnit::Millisecond, None),
-                ) => {
-                    let arr = src
-                        .as_any()
-                        .downcast_ref::<TimestampMillisecondArray>()
-                        .ok_or_else(|| "downcast TimestampMillisecondArray failed".to_string())?;
-                    cols.push(Arc::new(arr.clone().with_timezone_opt(None::<Arc<str>>)));
-                    continue;
-                }
-                (
-                    ArrowDataType::Timestamp(TimeUnit::Microsecond, Some(_)),
-                    ArrowDataType::Timestamp(TimeUnit::Microsecond, None),
-                ) => {
-                    let arr = src
-                        .as_any()
-                        .downcast_ref::<TimestampMicrosecondArray>()
-                        .ok_or_else(|| "downcast TimestampMicrosecondArray failed".to_string())?;
-                    cols.push(Arc::new(arr.clone().with_timezone_opt(None::<Arc<str>>)));
-                    continue;
-                }
-                (
-                    ArrowDataType::Timestamp(TimeUnit::Nanosecond, Some(_)),
-                    ArrowDataType::Timestamp(TimeUnit::Nanosecond, None),
-                ) => {
-                    let arr = src
-                        .as_any()
-                        .downcast_ref::<TimestampNanosecondArray>()
-                        .ok_or_else(|| "downcast TimestampNanosecondArray failed".to_string())?;
-                    cols.push(Arc::new(arr.clone().with_timezone_opt(None::<Arc<str>>)));
-                    continue;
-                }
-                (
-                    ArrowDataType::Timestamp(TimeUnit::Second, None),
-                    ArrowDataType::Timestamp(TimeUnit::Second, Some(tz)),
-                ) => {
-                    let arr = src
-                        .as_any()
-                        .downcast_ref::<TimestampSecondArray>()
-                        .ok_or_else(|| "downcast TimestampSecondArray failed".to_string())?;
-                    cols.push(Arc::new(arr.clone().with_timezone_opt(Some((*tz).clone()))));
-                    continue;
-                }
-                (
-                    ArrowDataType::Timestamp(TimeUnit::Millisecond, None),
-                    ArrowDataType::Timestamp(TimeUnit::Millisecond, Some(tz)),
-                ) => {
-                    let arr = src
-                        .as_any()
-                        .downcast_ref::<TimestampMillisecondArray>()
-                        .ok_or_else(|| "downcast TimestampMillisecondArray failed".to_string())?;
-                    cols.push(Arc::new(arr.clone().with_timezone_opt(Some((*tz).clone()))));
-                    continue;
-                }
-                (
-                    ArrowDataType::Timestamp(TimeUnit::Microsecond, None),
-                    ArrowDataType::Timestamp(TimeUnit::Microsecond, Some(tz)),
-                ) => {
-                    let arr = src
-                        .as_any()
-                        .downcast_ref::<TimestampMicrosecondArray>()
-                        .ok_or_else(|| "downcast TimestampMicrosecondArray failed".to_string())?;
-                    cols.push(Arc::new(arr.clone().with_timezone_opt(Some((*tz).clone()))));
-                    continue;
-                }
-                (
-                    ArrowDataType::Timestamp(TimeUnit::Nanosecond, None),
-                    ArrowDataType::Timestamp(TimeUnit::Nanosecond, Some(tz)),
-                ) => {
-                    let arr = src
-                        .as_any()
-                        .downcast_ref::<TimestampNanosecondArray>()
-                        .ok_or_else(|| "downcast TimestampNanosecondArray failed".to_string())?;
-                    cols.push(Arc::new(arr.clone().with_timezone_opt(Some((*tz).clone()))));
-                    continue;
-                }
-                _ => {}
-            }
-
-            // Fallback to DataFusion cast when types differ otherwise
-            let single_schema = ArrowSchema::new(vec![f.clone()]);
-            let tmp = RecordBatch::try_new(
-                std::sync::Arc::new(single_schema.clone()),
-                vec![src.clone()],
-            )
-            .map_err(|e| e.to_string())?;
-            let casted = cast_record_batch(tmp, std::sync::Arc::new(single_schema))
-                .map_err(|e| e.to_string())?;
-            cols.push(casted.column(0).clone());
-        }
-
-        let out = RecordBatch::try_new(std::sync::Arc::new(target.clone()), cols)
-            .map_err(|e| e.to_string())?;
-        Ok(out)
     }
 
     pub async fn write(&mut self, batch: &RecordBatch) -> Result<(), String> {
@@ -212,7 +83,8 @@ impl IcebergTableWriter {
             self.partition_values_map
                 .entry(partition_dir.clone())
                 .or_default();
-            let aligned = Self::cast_batch_to_schema(batch, self.config.table_schema.as_ref())?;
+            let aligned = cast_record_batch_relaxed_tz(batch, &self.config.table_schema)
+                .map_err(|e| e.to_string())?;
             writer.write_batch(&aligned).await?;
             return Ok(());
         }
@@ -243,8 +115,8 @@ impl IcebergTableWriter {
             self.partition_values_map
                 .entry(partition_dir.clone())
                 .or_insert(p.partition_values);
-            let aligned =
-                Self::cast_batch_to_schema(&p.record_batch, self.config.table_schema.as_ref())?;
+            let aligned = cast_record_batch_relaxed_tz(&p.record_batch, &self.config.table_schema)
+                .map_err(|e| e.to_string())?;
             writer.write_batch(&aligned).await?;
         }
 
@@ -269,9 +141,13 @@ impl IcebergTableWriter {
                 &rel,
                 &full
             );
-            // Use absolute filesystem path for cross-compat (PyIceberg expects an absolute file path)
-            let abs_path = format!("/{}", full);
-            let df = DataFileWriter::new(self.partition_spec_id, abs_path, partition_values)
+            let file_path = match self.table_url.join(&rel) {
+                Ok(u) => u.to_string(),
+                Err(_) => {
+                    format!("{}{}", self.table_url.as_str(), rel)
+                }
+            };
+            let df = DataFileWriter::new(self.partition_spec_id, file_path, partition_values)
                 .finish(meta)?
                 .data_file;
             self.written.push(df);

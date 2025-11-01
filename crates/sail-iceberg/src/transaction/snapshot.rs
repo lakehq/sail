@@ -21,6 +21,8 @@ pub struct SnapshotProducer<'a> {
     pub store_ctx: Option<StoreContext>,
     pub manifest_metadata: Option<crate::spec::manifest::ManifestMetadata>,
     pub write_path_mode: crate::utils::WritePathMode,
+    /// If true, create a snapshot with no parent (for bootstrap scenarios)
+    pub is_bootstrap: bool,
 }
 
 impl<'a> SnapshotProducer<'a> {
@@ -36,11 +38,19 @@ impl<'a> SnapshotProducer<'a> {
             store_ctx,
             manifest_metadata,
             write_path_mode: crate::utils::WritePathMode::Absolute,
+            is_bootstrap: false,
         }
     }
 
     pub fn with_write_path_mode(mut self, mode: crate::utils::WritePathMode) -> Self {
         self.write_path_mode = mode;
+        self
+    }
+
+    /// Enable bootstrap mode: create a snapshot with no parent.
+    /// This is used when creating the first snapshot for a table.
+    pub fn with_bootstrap(mut self, is_bootstrap: bool) -> Self {
+        self.is_bootstrap = is_bootstrap;
         self
     }
 
@@ -57,22 +67,26 @@ impl<'a> SnapshotProducer<'a> {
             crate::spec::snapshots::Summary::new(Operation::Append)
         };
 
-        // Build a simple manifest in-memory using v2 minimal schema
-        // For now, derive schema/spec from current snapshot if available; otherwise default empty
-        let schema_id = self.tx.snapshot().schema_id().unwrap_or_default();
-        let schema = Schema::builder()
-            .with_schema_id(schema_id)
-            .with_fields(vec![])
-            .build()
-            .map_err(|e| format!("schema build error: {e}"))?;
-        let partition_spec = PartitionSpec::builder().with_spec_id(0).build();
-        let metadata = crate::spec::manifest::ManifestMetadata::new(
-            std::sync::Arc::new(schema.clone()),
-            schema_id,
-            partition_spec,
-            FormatVersion::V2,
-            ManifestContentType::Data,
-        );
+        // Build manifest metadata: prefer caller-provided metadata derived from table schema/spec
+        // Fall back to deriving from the current transaction snapshot if not provided
+        let metadata = if let Some(meta) = self.manifest_metadata.clone() {
+            meta
+        } else {
+            let schema_id = self.tx.snapshot().schema_id().unwrap_or_default();
+            let schema = Schema::builder()
+                .with_schema_id(schema_id)
+                .with_fields(vec![])
+                .build()
+                .map_err(|e| format!("schema build error: {e}"))?;
+            let partition_spec = PartitionSpec::builder().with_spec_id(0).build();
+            crate::spec::manifest::ManifestMetadata::new(
+                std::sync::Arc::new(schema.clone()),
+                schema_id,
+                partition_spec,
+                FormatVersion::V2,
+                ManifestContentType::Data,
+            )
+        };
         let mut writer = ManifestWriterBuilder::new(None, None, metadata.clone()).build();
         for df in &self.added_data_files {
             writer.add(df.clone());
@@ -80,9 +94,13 @@ impl<'a> SnapshotProducer<'a> {
         let manifest = writer.finish();
         let manifest_bytes = manifest.to_avro_bytes_v2()?;
 
-        // Generate new snapshot ID and increment sequence number
+        // Generate new snapshot ID and sequence number
         let new_snapshot_id = timestamp_ms;
-        let new_sequence_number = self.tx.snapshot().sequence_number() + 1;
+        let new_sequence_number = if self.is_bootstrap {
+            1 // First snapshot starts at sequence 1
+        } else {
+            self.tx.snapshot().sequence_number() + 1
+        };
 
         let store_ctx = self
             .store_ctx
@@ -127,10 +145,11 @@ impl<'a> SnapshotProducer<'a> {
         let mut total_manifest_count = 0;
 
         // Load the parent manifest list and append its entries for append only.
+        // Skip this for bootstrap mode (no parent snapshot exists)
         let parent_snapshot = self.tx.snapshot();
         let parent_manifest_list_path_str = parent_snapshot.manifest_list();
 
-        if !is_overwrite && !parent_manifest_list_path_str.is_empty() {
+        if !self.is_bootstrap && !is_overwrite && !parent_manifest_list_path_str.is_empty() {
             let (store_ref, manifest_list_path) = store_ctx
                 .resolve(parent_manifest_list_path_str)
                 .map_err(|e| format!("{}", e))?;
@@ -188,15 +207,21 @@ impl<'a> SnapshotProducer<'a> {
         let manifest_list_uri =
             join_table_uri(self.tx.table_uri(), &list_rel, &self.write_path_mode);
 
-        let new_snapshot = SnapshotBuilder::new()
+        let mut snapshot_builder = SnapshotBuilder::new()
             .with_snapshot_id(new_snapshot_id)
-            .with_parent_snapshot_id(self.tx.snapshot().snapshot_id())
             .with_sequence_number(new_sequence_number)
             .with_timestamp_ms(timestamp_ms)
             .with_manifest_list(manifest_list_uri)
             .with_summary(summary)
-            .with_schema_id(self.tx.snapshot().schema_id().unwrap_or_default())
-            .build()?;
+            .with_schema_id(self.tx.snapshot().schema_id().unwrap_or_default());
+
+        // Only set parent snapshot ID if not in bootstrap mode
+        if !self.is_bootstrap {
+            snapshot_builder =
+                snapshot_builder.with_parent_snapshot_id(self.tx.snapshot().snapshot_id());
+        }
+
+        let new_snapshot = snapshot_builder.build()?;
 
         let updates = vec![
             TableUpdate::AddSnapshot {
@@ -215,9 +240,17 @@ impl<'a> SnapshotProducer<'a> {
             },
         ];
 
+        // For bootstrap mode, expect no existing snapshot (None)
+        // For normal mode, expect the current snapshot ID
+        let expected_snapshot_id = if self.is_bootstrap {
+            None
+        } else {
+            Some(self.tx.snapshot().snapshot_id())
+        };
+
         let requirements = vec![TableRequirement::RefSnapshotIdMatch {
             r#ref: MAIN_BRANCH.to_string(),
-            snapshot_id: Some(self.tx.snapshot().snapshot_id()),
+            snapshot_id: expected_snapshot_id,
         }];
 
         Ok(ActionCommit::new(updates, requirements))

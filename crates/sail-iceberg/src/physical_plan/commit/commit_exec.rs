@@ -20,12 +20,15 @@ use futures::StreamExt;
 use url::Url;
 
 use crate::io::StoreContext;
+use crate::physical_plan::commit::bootstrap::{
+    bootstrap_first_snapshot, bootstrap_new_table, PersistStrategy,
+};
 use crate::physical_plan::commit::IcebergCommitInfo;
 use crate::spec::catalog::TableUpdate;
 use crate::spec::metadata::table_metadata::SnapshotLog;
 use crate::spec::TableMetadata;
 use crate::transaction::{SnapshotProduceOperation, Transaction, TransactionAction};
-use crate::utils::{get_object_store_from_context, join_table_uri, WritePathMode};
+use crate::utils::get_object_store_from_context;
 
 #[derive(Debug)]
 pub struct IcebergCommitExec {
@@ -155,164 +158,8 @@ impl ExecutionPlan for IcebergCommitExec {
                 && (matches!(commit_info.operation, crate::spec::Operation::Overwrite)
                     || matches!(commit_info.operation, crate::spec::Operation::Append))
             {
-                // Bootstrap a new table metadata for overwrite or append when no table exists
-                use crate::spec::metadata::format::FormatVersion;
-                use crate::spec::snapshots::{
-                    SnapshotBuilder, SnapshotReference, SnapshotRetention,
-                };
-                use crate::spec::{ManifestContentType, PartitionSpec, Schema};
-
-                let iceberg_schema: Schema = commit_info.schema.clone().ok_or_else(|| {
-                    DataFusionError::Plan("Missing schema for bootstrap overwrite".to_string())
-                })?;
-                let partition_spec: PartitionSpec = commit_info
-                    .partition_spec
-                    .clone()
-                    .unwrap_or_else(PartitionSpec::unpartitioned_spec);
-
-                // Build a manifest for the new data files
-                let metadata = crate::spec::manifest::ManifestMetadata::new(
-                    std::sync::Arc::new(iceberg_schema.clone()),
-                    iceberg_schema.schema_id(),
-                    partition_spec.clone(),
-                    FormatVersion::V2,
-                    ManifestContentType::Data,
-                );
-                let mut writer =
-                    crate::spec::manifest::ManifestWriterBuilder::new(None, None, metadata.clone())
-                        .build();
-                for df in &commit_info.data_files {
-                    writer.add(df.clone());
-                }
-                let manifest = writer.finish();
-                let manifest_bytes = manifest
-                    .to_avro_bytes_v2()
-                    .map_err(DataFusionError::Execution)?;
-                let manifest_len = manifest_bytes.len() as i64;
-                let manifest_rel = format!("metadata/manifest-{}.avro", uuid::Uuid::new_v4());
-                let manifest_path = object_store::path::Path::from(manifest_rel.as_str());
-                store_ctx
-                    .prefixed
-                    .put(
-                        &manifest_path,
-                        object_store::PutPayload::from(Bytes::from(manifest_bytes)),
-                    )
-                    .await
-                    .map_err(|e| DataFusionError::External(Box::new(e)))?;
-
-                // Create manifest list referencing the manifest
-                let mut list_writer = crate::spec::manifest_list::ManifestListWriter::new();
-                list_writer.append(
-                    crate::spec::manifest_list::ManifestFile::builder()
-                        .with_manifest_path(format!("{}{}", table_url, manifest_rel))
-                        .with_manifest_length(manifest_len)
-                        .with_partition_spec_id(partition_spec.spec_id())
-                        .with_content(crate::spec::ManifestContentType::Data)
-                        .with_sequence_number(
-                            crate::spec::manifest_list::UNASSIGNED_SEQUENCE_NUMBER,
-                        )
-                        .with_min_sequence_number(
-                            crate::spec::manifest_list::UNASSIGNED_SEQUENCE_NUMBER,
-                        )
-                        .with_added_snapshot_id(0)
-                        .with_file_counts(commit_info.data_files.len() as i32, 0, 0)
-                        .with_row_counts(commit_info.row_count as i64, 0, 0)
-                        .build()
-                        .map_err(DataFusionError::Execution)?,
-                );
-                let list_bytes = list_writer
-                    .to_bytes(FormatVersion::V2)
-                    .map_err(DataFusionError::Execution)?;
-                let new_snapshot_id = chrono::Utc::now().timestamp_millis();
-                let list_rel = format!("metadata/snap-{}.avro", new_snapshot_id);
-                let list_path = object_store::path::Path::from(list_rel.as_str());
-                store_ctx
-                    .prefixed
-                    .put(
-                        &list_path,
-                        object_store::PutPayload::from(Bytes::from(list_bytes)),
-                    )
-                    .await
-                    .map_err(|e| DataFusionError::External(Box::new(e)))?;
-
-                // Build initial snapshot
-                let write_mode = WritePathMode::Absolute;
-                let snapshot = SnapshotBuilder::new()
-                    .with_snapshot_id(new_snapshot_id)
-                    .with_sequence_number(1)
-                    .with_manifest_list(join_table_uri(table_url.as_ref(), &list_rel, &write_mode))
-                    .with_summary(crate::spec::snapshots::Summary::new(
-                        crate::spec::Operation::Append,
-                    ))
-                    .with_schema_id(iceberg_schema.schema_id())
-                    .build()
-                    .map_err(DataFusionError::Execution)?;
-
-                // Build minimal TableMetadata V2
-                let table_meta = TableMetadata {
-                    format_version: crate::spec::metadata::format::FormatVersion::V2,
-                    table_uuid: None,
-                    location: table_url.to_string(),
-                    last_sequence_number: 1,
-                    last_updated_ms: chrono::Utc::now().timestamp_millis(),
-                    last_column_id: iceberg_schema.highest_field_id(),
-                    schemas: vec![iceberg_schema.clone()],
-                    current_schema_id: iceberg_schema.schema_id(),
-                    partition_specs: vec![partition_spec.clone()],
-                    default_spec_id: partition_spec.spec_id(),
-                    last_partition_id: partition_spec.highest_field_id().unwrap_or(0),
-                    properties: std::collections::HashMap::new(),
-                    current_snapshot_id: Some(new_snapshot_id),
-                    snapshots: vec![snapshot.clone()],
-                    snapshot_log: vec![SnapshotLog {
-                        timestamp_ms: snapshot.timestamp_ms,
-                        snapshot_id: new_snapshot_id,
-                    }],
-                    metadata_log: vec![],
-                    sort_orders: vec![],
-                    default_sort_order_id: None,
-                    refs: std::iter::once((
-                        crate::spec::snapshots::MAIN_BRANCH.to_string(),
-                        SnapshotReference {
-                            snapshot_id: new_snapshot_id,
-                            retention: SnapshotRetention::Branch {
-                                min_snapshots_to_keep: None,
-                                max_snapshot_age_ms: None,
-                                max_ref_age_ms: None,
-                            },
-                        },
-                    ))
-                    .collect(),
-                    statistics: vec![],
-                    partition_statistics: vec![],
-                };
-
-                // Write metadata v00001
-                let new_meta_bytes = table_meta
-                    .to_json()
-                    .map_err(|e| DataFusionError::External(Box::new(e)))?;
-                let new_meta_rel =
-                    format!("metadata/{:05}-{}.metadata.json", 1, uuid::Uuid::new_v4());
-                let meta_path = object_store::path::Path::from(new_meta_rel.as_str());
-                store_ctx
-                    .prefixed
-                    .put(
-                        &meta_path,
-                        object_store::PutPayload::from(Bytes::from(new_meta_bytes)),
-                    )
-                    .await
-                    .map_err(|e| DataFusionError::External(Box::new(e)))?;
-
-                // Write version-hint
-                let hint_path = object_store::path::Path::from("metadata/version-hint.text");
-                store_ctx
-                    .prefixed
-                    .put(
-                        &hint_path,
-                        object_store::PutPayload::from(Bytes::from("1".as_bytes().to_vec())),
-                    )
-                    .await
-                    .map_err(|e| DataFusionError::External(Box::new(e)))?;
+                // Bootstrap a new table using the unified bootstrap helper
+                bootstrap_new_table(&table_url, &store_ctx, &commit_info).await?;
 
                 let array = Arc::new(UInt64Array::from(vec![commit_info.row_count]));
                 let batch = RecordBatch::try_new(schema, vec![array])?;
@@ -330,7 +177,7 @@ impl ExecutionPlan for IcebergCommitExec {
                 .bytes()
                 .await
                 .map_err(|e| DataFusionError::External(Box::new(e)))?;
-            let mut table_meta = crate::spec::TableMetadata::from_json(&bytes)
+            let mut table_meta = TableMetadata::from_json(&bytes)
                 .map_err(|e| DataFusionError::External(Box::new(e)))?;
             let maybe_snapshot = table_meta.current_snapshot().cloned();
             let schema_iceberg = table_meta.current_schema().cloned().ok_or_else(|| {
@@ -338,149 +185,21 @@ impl ExecutionPlan for IcebergCommitExec {
             })?;
 
             // If metadata exists but there is no current snapshot (e.g. from a CREATE TABLE),
-            // bootstrap the first snapshot into the existing metadata.
+            // bootstrap the first snapshot into the existing metadata using InPlace strategy
+            // (per user preference to keep external SQL catalogs in sync).
             if maybe_snapshot.is_none()
                 && (matches!(commit_info.operation, crate::spec::Operation::Overwrite)
                     || matches!(commit_info.operation, crate::spec::Operation::Append))
             {
-                use crate::spec::manifest_list::UNASSIGNED_SEQUENCE_NUMBER;
-                use crate::spec::metadata::format::FormatVersion;
-
-                let partition_spec = table_meta
-                    .default_partition_spec()
-                    .cloned()
-                    .unwrap_or_else(crate::spec::partition::PartitionSpec::unpartitioned_spec);
-
-                // Build manifest containing new data files
-                let metadata = crate::spec::manifest::ManifestMetadata::new(
-                    std::sync::Arc::new(schema_iceberg.clone()),
-                    schema_iceberg.schema_id(),
-                    partition_spec.clone(),
-                    FormatVersion::V2,
-                    crate::spec::ManifestContentType::Data,
-                );
-                let mut writer =
-                    crate::spec::manifest::ManifestWriterBuilder::new(None, None, metadata.clone())
-                        .build();
-                for df in &commit_info.data_files {
-                    writer.add(df.clone());
-                }
-                let manifest = writer.finish();
-                let manifest_bytes = manifest
-                    .to_avro_bytes_v2()
-                    .map_err(DataFusionError::Execution)?;
-                let manifest_len = manifest_bytes.len() as i64;
-                let manifest_rel = format!("metadata/manifest-{}.avro", uuid::Uuid::new_v4());
-                let manifest_path = object_store::path::Path::from(manifest_rel.as_str());
-                store_ctx
-                    .prefixed
-                    .put(
-                        &manifest_path,
-                        object_store::PutPayload::from(Bytes::from(manifest_bytes)),
-                    )
-                    .await
-                    .map_err(|e| DataFusionError::External(Box::new(e)))?;
-
-                // Create manifest list
-                let mut list_writer = crate::spec::manifest_list::ManifestListWriter::new();
-                list_writer.append(
-                    crate::spec::manifest_list::ManifestFile::builder()
-                        .with_manifest_path(format!("{}{}", table_url, manifest_rel))
-                        .with_manifest_length(manifest_len)
-                        .with_partition_spec_id(partition_spec.spec_id())
-                        .with_content(crate::spec::ManifestContentType::Data)
-                        .with_sequence_number(UNASSIGNED_SEQUENCE_NUMBER)
-                        .with_min_sequence_number(UNASSIGNED_SEQUENCE_NUMBER)
-                        .with_added_snapshot_id(0)
-                        .with_file_counts(commit_info.data_files.len() as i32, 0, 0)
-                        .with_row_counts(commit_info.row_count as i64, 0, 0)
-                        .build()
-                        .map_err(DataFusionError::Execution)?,
-                );
-                let list_bytes = list_writer
-                    .to_bytes(FormatVersion::V2)
-                    .map_err(DataFusionError::Execution)?;
-                let new_snapshot_id = chrono::Utc::now().timestamp_millis();
-                let list_rel = format!("metadata/snap-{}.avro", new_snapshot_id);
-                let list_path = object_store::path::Path::from(list_rel.as_str());
-                store_ctx
-                    .prefixed
-                    .put(
-                        &list_path,
-                        object_store::PutPayload::from(Bytes::from(list_bytes)),
-                    )
-                    .await
-                    .map_err(|e| DataFusionError::External(Box::new(e)))?;
-
-                // Build initial snapshot and update metadata
-                let write_mode = WritePathMode::Absolute;
-                let snapshot = crate::spec::snapshots::SnapshotBuilder::new()
-                    .with_snapshot_id(new_snapshot_id)
-                    .with_sequence_number(1)
-                    .with_manifest_list(join_table_uri(table_url.as_ref(), &list_rel, &write_mode))
-                    .with_summary(crate::spec::snapshots::Summary::new(
-                        crate::spec::Operation::Append,
-                    ))
-                    .with_schema_id(schema_iceberg.schema_id())
-                    .build()
-                    .map_err(DataFusionError::Execution)?;
-
-                table_meta.snapshots.push(snapshot.clone());
-                table_meta.current_snapshot_id = Some(new_snapshot_id);
-                let timestamp_ms = chrono::Utc::now().timestamp_millis();
-                table_meta.snapshot_log.push(SnapshotLog {
-                    timestamp_ms,
-                    snapshot_id: new_snapshot_id,
-                });
-                if table_meta.last_sequence_number < 1 {
-                    table_meta.last_sequence_number = 1;
-                }
-                table_meta.last_updated_ms = timestamp_ms;
-
-                // Persist updated metadata IN PLACE at the existing metadata path (keeps SQL catalog in sync)
-                let new_meta_bytes = table_meta
-                    .to_json()
-                    .map_err(|e| DataFusionError::External(Box::new(e)))?;
-                // Derive relative metadata filename (e.g., metadata/00000-<uuid>.metadata.json)
-                let rel_name = if let Some(idx) = latest_meta.rfind("/metadata/") {
-                    let (_, suffix) = latest_meta.split_at(idx + 1);
-                    suffix.to_string()
-                } else if let Some(pos) = latest_meta.rfind("/metadata/") {
-                    latest_meta[(pos + 1)..].to_string()
-                } else if let Some(fname) = latest_meta.rsplit('/').next() {
-                    format!("metadata/{}", fname)
-                } else {
-                    "metadata/00000.metadata.json".to_string()
-                };
-                let rel_path = object_store::path::Path::from(rel_name.as_str());
-                store_ctx
-                    .prefixed
-                    .put(
-                        &rel_path,
-                        object_store::PutPayload::from(Bytes::from(new_meta_bytes)),
-                    )
-                    .await
-                    .map_err(|e| DataFusionError::External(Box::new(e)))?;
-
-                // Extract metadata filename (without "metadata/" prefix) for version-hint
-                let metadata_filename = if let Some(fname) = rel_name.rsplit('/').next() {
-                    fname.to_string()
-                } else {
-                    rel_name.clone()
-                };
-
-                // Write version-hint
-                let hint_path = object_store::path::Path::from("metadata/version-hint.text");
-                store_ctx
-                    .prefixed
-                    .put(
-                        &hint_path,
-                        object_store::PutPayload::from(Bytes::from(
-                            metadata_filename.as_bytes().to_vec(),
-                        )),
-                    )
-                    .await
-                    .map_err(|e| DataFusionError::External(Box::new(e)))?;
+                bootstrap_first_snapshot(
+                    &table_url,
+                    &store_ctx,
+                    &commit_info,
+                    table_meta,
+                    &latest_meta,
+                    PersistStrategy::InPlace,
+                )
+                .await?;
 
                 let array = Arc::new(UInt64Array::from(vec![commit_info.row_count]));
                 let batch = RecordBatch::try_new(schema, vec![array])?;
