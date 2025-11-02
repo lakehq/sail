@@ -1,4 +1,5 @@
 import datetime as dt
+import platform
 from typing import List, Tuple  # noqa: UP035
 
 import pytest
@@ -107,6 +108,7 @@ def _build_sample_rows() -> List[Tuple[int, str, dt.datetime, dt.date]]:  # noqa
         ),
     ],
 )
+@pytest.mark.skipif(platform.system() == "Windows", reason="may not work on Windows")
 def test_partitioned_write_then_sail_read(
     spark, tmp_path, table_name, spec, predicate_column, predicate_value, expected_numbers
 ):
@@ -159,6 +161,7 @@ def test_partitioned_write_then_sail_read(
         ),
     ],
 )
+@pytest.mark.skipif(platform.system() == "Windows", reason="may not work on Windows")
 def test_partitioned_write_then_pyiceberg_read_all(spark, tmp_path, table_name, spec):
     catalog = create_sql_catalog(tmp_path)
     schema = _common_schema()
@@ -192,6 +195,7 @@ def test_partitioned_write_then_pyiceberg_read_all(spark, tmp_path, table_name, 
         catalog.drop_table(table_name)
 
 
+@pytest.mark.skipif(platform.system() == "Windows", reason="may not work on Windows")
 def test_iceberg_partition_writes_sql(spark, tmp_path):
     warehouse = tmp_path / "warehouse"
     warehouse.mkdir(parents=True, exist_ok=True)

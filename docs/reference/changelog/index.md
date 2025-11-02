@@ -5,6 +5,18 @@ next: false
 
 # Changelog
 
+## 0.4.1
+
+_November 2, 2025_
+
+- Supported writing partitioned Iceberg tables ([#1003](https://github.com/lakehq/sail/pull/1003)).
+- Added the `try_sum` SQL aggregate function ([#960](https://github.com/lakehq/sail/pull/960)).
+- Fixed a filter pushdown performance issue ([#1008](https://github.com/lakehq/sail/pull/1008)).
+
+### Contributors
+
+Huge thanks to [@davidlghellin](https://github.com/davidlghellin) for the contribution!
+
 ## 0.4.0
 
 _October 29, 2025_
