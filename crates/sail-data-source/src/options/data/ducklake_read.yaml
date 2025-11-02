@@ -1,0 +1,52 @@
+# Options for reading from a DuckLake table.
+
+- key: url
+  description: |
+    Metadata database connection string.
+    Supported formats:
+    - SQLite: sqlite:///path/to/metadata.db
+    - PostgreSQL: postgres://user:password@host:port/database (not yet implemented)
+  supported: true
+  rust_type: String
+
+- key: table
+  description: |
+    Table name to read. Format: 'table_name' or 'schema.table_name'.
+    If schema is omitted, defaults to 'main'.
+  supported: true
+  rust_type: String
+
+- key: base_path
+  description: |
+    Base URL for resolving relative data file paths.
+    Must be a valid URL (e.g., s3://bucket/prefix/, file:///data/, gs://bucket/).
+  supported: true
+  rust_type: String
+
+- key: snapshot_id
+  aliases:
+    - snapshotId
+  description: |
+    Specific snapshot ID to read (integer).
+    If omitted, reads the current (latest) snapshot.
+  supported: true
+  rust_type: u64
+  rust_deserialize_with: crate::options::serde::deserialize_u64
+
+- key: schema
+  description: |
+    Schema name override (string).
+    Rarely needed; use qualified table name instead.
+  supported: true
+  rust_type: String
+
+- key: case_sensitive
+  aliases:
+    - caseSensitive
+  description: |
+    Case-sensitive column matching.
+  default: "false"
+  supported: true
+  rust_type: bool
+  rust_deserialize_with: crate::options::serde::deserialize_bool
+

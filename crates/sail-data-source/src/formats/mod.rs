@@ -4,6 +4,7 @@ pub mod binary;
 pub mod console;
 pub mod csv;
 pub mod delta;
+pub mod ducklake;
 pub mod iceberg;
 pub mod json;
 pub mod listing;
