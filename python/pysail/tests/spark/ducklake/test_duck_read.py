@@ -10,6 +10,7 @@ import duckdb
 import pandas as pd
 import pytest
 from pandas.testing import assert_frame_equal
+from pyspark.errors.exceptions.connect import AnalysisException
 
 
 @pytest.fixture(scope="module")
@@ -336,22 +337,22 @@ class TestDuckLakeRead:
 
         duckdb_conn.execute("DETACH missing_db")
 
-        with pytest.raises((RuntimeError, ValueError)):
+        with pytest.raises(AnalysisException):
             spark.read.format("ducklake").options(
                 url=f"sqlite:///{metadata_path}", table="nonexistent_table", base_path=f"file://{data_path}/"
             ).load().collect()
 
     def test_ducklake_read_missing_options_error(self, spark):
         """Test error handling when required options are missing."""
-        with pytest.raises((RuntimeError, ValueError)):
+        with pytest.raises(AnalysisException):
             spark.read.format("ducklake").options(table="test_table", base_path="file:///tmp/data/").load().collect()
 
-        with pytest.raises((RuntimeError, ValueError)):
+        with pytest.raises(AnalysisException):
             spark.read.format("ducklake").options(
                 url="sqlite:///tmp/metadata.db", base_path="file:///tmp/data/"
             ).load().collect()
 
-        with pytest.raises((RuntimeError, ValueError)):
+        with pytest.raises(AnalysisException):
             spark.read.format("ducklake").options(url="sqlite:///tmp/metadata.db", table="test_table").load().collect()
 
 
