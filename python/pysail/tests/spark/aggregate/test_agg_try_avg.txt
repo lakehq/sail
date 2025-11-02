@@ -162,7 +162,7 @@ root
 ... )
 >>> out.show(truncate=False)
 +---+--------------------+
-|  g|               avg_x|
+|g  |avg_x               |
 +---+--------------------+
 |bad|4.611686018427388e18|
 |ok |7.5                 |
@@ -195,7 +195,7 @@ root
 ...       .agg(sf.try_avg("x").alias("avg_x"))
 ...       .orderBy("g")
 ... )
->>> out.show(truncate=False)
+>>> out.show()
 +---+--------------------+
 |  g|               avg_x|
 +---+--------------------+
