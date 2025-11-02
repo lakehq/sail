@@ -1,8 +1,9 @@
+use std::collections::HashSet;
 use std::sync::Arc;
 
 use datafusion::arrow::datatypes::Schema;
-use datafusion::datasource::provider_as_source;
-use datafusion_common::DFSchema;
+use datafusion::datasource::{provider_as_source, TableProvider};
+use datafusion_common::{DFSchema, TableReference};
 use datafusion_expr::registry::FunctionRegistry;
 use datafusion_expr::{LogicalPlan, TableScan, UNNAMED_TABLE};
 use sail_catalog::manager::CatalogManager;
@@ -86,15 +87,14 @@ impl PlanResolver<'_> {
                     .get_format(&format)?
                     .create_provider(&self.ctx.state(), info)
                     .await?;
-                let names = state.register_fields(table_provider.schema().fields());
-                let table_provider = RenameTableProvider::try_new(table_provider, names)?;
-                LogicalPlan::TableScan(TableScan::try_new(
+                self.resolve_table_provider_with_rename(
+                    table_provider,
                     table_reference,
-                    provider_as_source(Arc::new(table_provider)),
                     None,
                     vec![],
                     None,
-                )?)
+                    state,
+                )?
             }
             TableKind::View { .. } => return Err(PlanError::todo("read view")),
             TableKind::TemporaryView { plan, .. } | TableKind::GlobalTemporaryView { plan, .. } => {
@@ -185,15 +185,14 @@ impl PlanResolver<'_> {
                         )));
                     };
                 let table_provider = table_function.create_table_provider(&arguments)?;
-                let names = state.register_fields(table_provider.schema().fields());
-                let table_provider = RenameTableProvider::try_new(table_provider, names)?;
-                Ok(LogicalPlan::TableScan(TableScan::try_new(
+                self.resolve_table_provider_with_rename(
+                    table_provider,
                     function_name,
-                    provider_as_source(Arc::new(table_provider)),
                     None,
                     vec![],
                     None,
-                )?))
+                    state,
+                )
             }
         }
     }
@@ -234,14 +233,52 @@ impl PlanResolver<'_> {
             .get_format(&format)?
             .create_provider(&self.ctx.state(), info)
             .await?;
-        let names = state.register_fields(table_provider.schema().fields());
-        let table_provider = RenameTableProvider::try_new(table_provider, names)?;
-        Ok(LogicalPlan::TableScan(TableScan::try_new(
+        self.resolve_table_provider_with_rename(
+            table_provider,
             UNNAMED_TABLE,
-            provider_as_source(Arc::new(table_provider)),
             None,
             vec![],
             None,
-        )?))
+            state,
+        )
+    }
+
+    pub(super) fn resolve_table_provider_with_rename(
+        &self,
+        table_provider: Arc<dyn TableProvider>,
+        table_reference: impl Into<TableReference>,
+        projection: Option<Vec<usize>>,
+        filters: Vec<datafusion_expr::expr::Expr>,
+        fetch: Option<usize>,
+        state: &mut PlanResolverState,
+    ) -> PlanResult<LogicalPlan> {
+        let schema = table_provider.schema();
+
+        let has_duplicates = {
+            let mut seen = HashSet::new();
+            schema.fields().iter().any(|f| !seen.insert(f.name()))
+        };
+
+        let table_provider = if has_duplicates {
+            let names = state.register_fields(schema.fields());
+            Arc::new(RenameTableProvider::try_new(table_provider, names)?)
+        } else {
+            table_provider
+        };
+
+        let table_scan = LogicalPlan::TableScan(TableScan::try_new(
+            table_reference,
+            provider_as_source(table_provider),
+            projection,
+            filters,
+            fetch,
+        )?);
+
+        if !has_duplicates {
+            let names = state.register_fields(table_scan.schema().fields());
+            Ok(rename_logical_plan(table_scan, &names)?)
+        } else {
+            Ok(table_scan)
+        }
     }
 }
