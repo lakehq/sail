@@ -134,7 +134,7 @@ fn parse_ducklake_location(path: &str) -> Result<Option<DuckLakeOptions>> {
     let segments: Vec<String> = url
         .path_segments()
         .map(|s| s.map(|p| p.to_string()).collect())
-        .unwrap_or_else(|| Vec::new());
+        .unwrap_or_else(Vec::new);
 
     let split_idx = segments
         .iter()
@@ -194,7 +194,7 @@ fn parse_ducklake_location(path: &str) -> Result<Option<DuckLakeOptions>> {
     let case_sensitive = url
         .query_pairs()
         .find(|(k, _)| k == "case_sensitive")
-        .map_or(false, |(_, v)| v == "true");
+        .is_some_and(|(_, v)| v == "true");
 
     Ok(Some(DuckLakeOptions {
         url: url_str,

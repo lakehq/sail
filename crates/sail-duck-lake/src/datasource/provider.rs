@@ -64,20 +64,6 @@ impl DuckLakeTableProvider {
             meta_store,
         })
     }
-
-    fn resolve_file_path(&self, file_path: &str, is_relative: bool) -> DataFusionResult<String> {
-        if is_relative {
-            let base = self.base_path.trim_end_matches('/');
-            let file = file_path.trim_start_matches('/');
-            // DuckLake stores files in: {base_path}/{schema_name}/{table_name}/{file_name}
-            Ok(format!(
-                "{}/{}/{}/{}",
-                base, &self.table.schema_info.schema_name, &self.table.table_info.table_name, file
-            ))
-        } else {
-            Ok(file_path.to_string())
-        }
-    }
 }
 
 impl std::fmt::Debug for DuckLakeTableProvider {
@@ -159,17 +145,15 @@ impl TableProvider for DuckLakeTableProvider {
                     }
                 }
                 p
+            } else if let Ok(path_url) = Url::parse(&file.path) {
+                let encoded_path = path_url.path();
+                let no_leading = encoded_path.strip_prefix('/').unwrap_or(encoded_path);
+                object_store::path::Path::parse(no_leading)
+                    .map_err(|e| DataFusionError::External(Box::new(e)))?
             } else {
-                if let Ok(path_url) = Url::parse(&file.path) {
-                    let encoded_path = path_url.path();
-                    let no_leading = encoded_path.strip_prefix('/').unwrap_or(encoded_path);
-                    object_store::path::Path::parse(no_leading)
-                        .map_err(|e| DataFusionError::External(Box::new(e)))?
-                } else {
-                    let no_leading = file.path.strip_prefix('/').unwrap_or(&file.path);
-                    object_store::path::Path::parse(no_leading)
-                        .map_err(|e| DataFusionError::External(Box::new(e)))?
-                }
+                let no_leading = file.path.strip_prefix('/').unwrap_or(&file.path);
+                object_store::path::Path::parse(no_leading)
+                    .map_err(|e| DataFusionError::External(Box::new(e)))?
             };
 
             let object_meta = ObjectMeta {
