@@ -93,16 +93,11 @@ impl TryAvgAccumulator {
                 continue;
             }
             let v = arr.value(i);
-            self.sum_i64 = match self.sum_i64 {
-                None => Some(v),
-                Some(acc) => match acc.checked_add(v) {
-                    Some(s) => Some(s),
-                    None => {
-                        self.failed = true;
-                        return;
-                    }
-                },
-            };
+            // 🔴 Antes: sumabas en i64 con checked_add y podías fallar
+            // self.sum_i64 = match self.sum_i64 { ... };
+
+            // ✅ Después: acumula como f64 (como hace Spark en AVG)
+            self.sum_f64 = Some(self.sum_f64.unwrap_or(0.0) + (v as f64));
             self.inc_count();
             if self.failed {
                 return;
@@ -245,27 +240,19 @@ impl Accumulator for TryAvgAccumulator {
         std::mem::size_of::<Self>()
     }
 
-    fn state(&mut self) -> datafusion::common::Result<Vec<ScalarValue>> {
-        let sum_scalar = if self.failed {
-            self.null_of_dtype()
-        } else if let Some(v) = self.sum_i64 {
-            ScalarValue::Int64(Some(v))
-        } else if let Some(v) = self.sum_f64 {
-            ScalarValue::Float64(Some(v))
-        } else if let Some(v) = self.sum_dec128 {
-            match &self.dtype {
-                DataType::Decimal128(p, s) => ScalarValue::Decimal128(Some(v), *p, *s),
-                _ => ScalarValue::Null,
-            }
-        } else {
-            match &self.dtype {
-                DataType::Decimal128(p, s) => ScalarValue::Decimal128(None, *p, *s),
-                DataType::Float64 => ScalarValue::Float64(None),
-                _ => ScalarValue::Null,
-            }
+    fn state(&mut self) -> Result<Vec<ScalarValue>, DataFusionError> {
+        let sum_scalar = match &self.dtype {
+            DataType::Float64 => ScalarValue::Float64(self.sum_f64), // <-- siempre Float64
+            DataType::Decimal128(p, s) => ScalarValue::Decimal128(self.sum_dec128, *p, *s),
+            _ => ScalarValue::Null,
         };
+
         Ok(vec![
-            sum_scalar,
+            if self.failed {
+                self.null_of_dtype()
+            } else {
+                sum_scalar
+            },
             if self.failed {
                 ScalarValue::Int64(None)
             } else {
@@ -333,16 +320,7 @@ impl Accumulator for TryAvgAccumulator {
             DataType::Float64 => {
                 if let Some(int_arr) = states[0].as_any().downcast_ref::<Int64Array>() {
                     for value in int_arr.iter().flatten() {
-                        self.sum_i64 = match self.sum_i64 {
-                            None => Some(value),
-                            Some(acc) => match acc.checked_add(value) {
-                                Some(s) => Some(s),
-                                None => {
-                                    self.failed = true;
-                                    return Ok(());
-                                }
-                            },
-                        };
+                        self.sum_f64 = Some(self.sum_f64.unwrap_or(0.0) + (value as f64));
                     }
                 } else if let Some(f_arr) = states[0].as_any().downcast_ref::<Float64Array>() {
                     for value in f_arr.iter().flatten() {
