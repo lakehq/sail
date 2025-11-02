@@ -130,23 +130,47 @@ impl TableProvider for DuckLakeTableProvider {
 
         log::trace!("Found {} data files", files.len());
 
-        // Parse base_path URL and extract scheme + authority only
+        // Parse base_path URL and construct ObjectStoreUrl with only scheme + authority
         let base_url =
             Url::parse(&self.base_path).map_err(|e| DataFusionError::External(Box::new(e)))?;
         let object_store_base = format!("{}://{}", base_url.scheme(), base_url.authority());
-        let object_store_url = ObjectStoreUrl::parse(&object_store_base)?;
+        let object_store_base_parsed =
+            Url::parse(&object_store_base).map_err(|e| DataFusionError::External(Box::new(e)))?;
+        let object_store_url = ObjectStoreUrl::parse(object_store_base_parsed)
+            .map_err(|e| DataFusionError::External(Box::new(e)))?;
+
+        // Build table-level prefix: {base_path}/{schema}/{table}
+        let base_path_str = base_url.path();
+        let mut table_prefix =
+            object_store::path::Path::parse(base_path_str.trim_start_matches('/'))
+                .map_err(|e| DataFusionError::External(Box::new(e)))?;
+        table_prefix = table_prefix
+            .child(self.table.schema_info.schema_name.as_str())
+            .child(self.table.table_info.table_name.as_str());
 
         let mut partitioned_files = Vec::new();
         for file in files {
-            let full_path = self.resolve_file_path(&file.path, file.path_is_relative)?;
-            let path_url = Url::parse(&full_path)
-                .or_else(|_| {
-                    let base = self.base_path.trim_end_matches('/');
-                    Url::parse(&format!("{}/{}", base, full_path.trim_start_matches('/')))
-                })
-                .map_err(|e| DataFusionError::External(Box::new(e)))?;
-
-            let object_path = object_store::path::Path::from(path_url.path());
+            // Resolve to absolute object path relative to table prefix when relative
+            let object_path = if file.path_is_relative {
+                let mut p = table_prefix.clone();
+                for comp in file.path.split('/') {
+                    if !comp.is_empty() {
+                        p = p.child(comp);
+                    }
+                }
+                p
+            } else {
+                if let Ok(path_url) = Url::parse(&file.path) {
+                    let encoded_path = path_url.path();
+                    let no_leading = encoded_path.strip_prefix('/').unwrap_or(encoded_path);
+                    object_store::path::Path::parse(no_leading)
+                        .map_err(|e| DataFusionError::External(Box::new(e)))?
+                } else {
+                    let no_leading = file.path.strip_prefix('/').unwrap_or(&file.path);
+                    object_store::path::Path::parse(no_leading)
+                        .map_err(|e| DataFusionError::External(Box::new(e)))?
+                }
+            };
 
             let object_meta = ObjectMeta {
                 location: object_path,

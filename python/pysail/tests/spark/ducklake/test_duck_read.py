@@ -12,6 +12,8 @@ import pytest
 from pandas.testing import assert_frame_equal
 from pyspark.errors.exceptions.connect import AnalysisException
 
+from pysail.tests.spark.utils import escape_sql_string_literal
+
 
 @pytest.fixture(scope="module")
 def duckdb_conn():
@@ -175,7 +177,8 @@ class TestDuckLakeRead:
         """Test DuckLake read using SQL CREATE TABLE."""
         metadata_path, data_path, table_name = ducklake_setup
 
-        spark.sql(f"""
+        spark.sql(
+            f"""
             CREATE TABLE ducklake_test
             USING ducklake
             OPTIONS (
@@ -183,7 +186,8 @@ class TestDuckLakeRead:
                 `table` 'test_table',
                 base_path 'file://{data_path}/'
             )
-        """)
+        """
+        )
 
         try:
             result_df = spark.sql("SELECT * FROM ducklake_test").sort("id")
@@ -196,6 +200,35 @@ class TestDuckLakeRead:
             assert result[2].name == "Charlie"
         finally:
             spark.sql("DROP TABLE IF EXISTS ducklake_test")
+
+    def test_ducklake_read_with_sql_location(self, spark, ducklake_setup):
+        """Test DuckLake read using SQL LOCATION (location-first)."""
+        metadata_path, data_path, table_name = ducklake_setup
+
+        # Use table-only path for location; metadata often stores default schema as 'main'
+        tbl_only = table_name.split(".")[-1]
+
+        loc = f"ducklake+sqlite:///{metadata_path}/{tbl_only}?base_path=file://{data_path}/"
+
+        spark.sql(
+            f"""
+            CREATE TABLE ducklake_test_loc
+            USING ducklake
+            LOCATION '{escape_sql_string_literal(loc)}'
+        """
+        )
+
+        try:
+            result_df = spark.sql("SELECT * FROM ducklake_test_loc").sort("id")
+            result = result_df.collect()
+
+            expected_count = 3
+            assert len(result) == expected_count
+            assert result[0].name == "Alice"
+            assert result[1].name == "Bob"
+            assert result[2].name == "Charlie"
+        finally:
+            spark.sql("DROP TABLE IF EXISTS ducklake_test_loc")
 
     def test_ducklake_read_with_schema_prefix(self, spark, tmp_path, duckdb_conn):
         """Test DuckLake read with schema.table format."""
@@ -226,7 +259,11 @@ class TestDuckLakeRead:
 
         df = (
             spark.read.format("ducklake")
-            .options(url=f"sqlite:///{metadata_path}", table="analytics.metrics", base_path=f"file://{data_path}/")
+            .options(
+                url=f"sqlite:///{metadata_path}",
+                table="analytics.metrics",
+                base_path=f"file://{data_path}/",
+            )
             .load()
         )
 
