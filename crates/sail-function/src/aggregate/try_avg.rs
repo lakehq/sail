@@ -5,7 +5,9 @@ use datafusion::arrow::array::{
     Array, ArrayRef, AsArray, BooleanArray, Decimal128Array, Float64Array, Int64Array,
     PrimitiveArray,
 };
-use datafusion::arrow::datatypes::{DataType, Decimal128Type, Field, FieldRef, Int64Type};
+use datafusion::arrow::datatypes::{
+    DataType, Decimal128Type, Field, FieldRef, Int64Type, IntervalUnit, IntervalYearMonthType,
+};
 use datafusion_common::arrow::datatypes::Float64Type;
 use datafusion_common::{downcast_value, DataFusionError, ScalarValue};
 use datafusion_expr::function::{AccumulatorArgs, StateFieldsArgs};
@@ -47,6 +49,7 @@ struct TryAvgAccumulator {
     sum_i64: Option<i64>,
     sum_f64: Option<f64>,
     sum_dec128: Option<i128>,
+    sum_ym_i64: Option<i64>,
     count: i64,
     failed: bool,
 }
@@ -58,6 +61,7 @@ impl TryAvgAccumulator {
             sum_i64: None,
             sum_f64: None,
             sum_dec128: None,
+            sum_ym_i64: None,
             count: 0,
             failed: false,
         }
@@ -67,6 +71,7 @@ impl TryAvgAccumulator {
         match self.dtype {
             DataType::Float64 => ScalarValue::Float64(None),
             DataType::Decimal128(p, s) => ScalarValue::Decimal128(None, p, s),
+            DataType::Interval(IntervalUnit::YearMonth) => ScalarValue::IntervalYearMonth(None),
             _ => ScalarValue::Null,
         }
     }
@@ -93,10 +98,6 @@ impl TryAvgAccumulator {
                 continue;
             }
             let v = arr.value(i);
-            // 🔴 Antes: sumabas en i64 con checked_add y podías fallar
-            // self.sum_i64 = match self.sum_i64 { ... };
-
-            // ✅ Después: acumula como f64 (como hace Spark en AVG)
             self.sum_f64 = Some(self.sum_f64.unwrap_or(0.0) + (v as f64));
             self.inc_count();
             if self.failed {
@@ -154,6 +155,34 @@ impl TryAvgAccumulator {
         }
     }
 
+    fn update_yearmonth(&mut self, arr: &PrimitiveArray<IntervalYearMonthType>) {
+        if self.failed {
+            return;
+        }
+        for v_i in arr.iter().flatten() {
+            let v = v_i as i64;
+            let next: i64 = match self.sum_ym_i64 {
+                None => v,
+                Some(acc) => match acc.checked_add(v) {
+                    Some(s) => s,
+                    None => {
+                        self.failed = true;
+                        return;
+                    }
+                },
+            };
+            if !fits_i32(next) {
+                self.failed = true;
+                return;
+            }
+            self.sum_ym_i64 = Some(next);
+            self.inc_count();
+            if self.failed {
+                return;
+            }
+        }
+    }
+
     fn avg_scalar(&self) -> ScalarValue {
         if self.failed || self.count == 0 {
             return self.null_of_dtype();
@@ -196,9 +225,29 @@ impl TryAvgAccumulator {
                     ScalarValue::Decimal128(None, *p, *s)
                 }
             }
+            DataType::Interval(IntervalUnit::YearMonth) => {
+                if let Some(total) = self.sum_ym_i64 {
+                    let denom = self.count;
+                    if denom == 0 {
+                        return ScalarValue::IntervalYearMonth(None);
+                    }
+                    let avg = total.checked_div(denom).unwrap_or(0);
+                    if !fits_i32(avg) {
+                        ScalarValue::IntervalYearMonth(None)
+                    } else {
+                        ScalarValue::IntervalYearMonth(Some(avg as i32))
+                    }
+                } else {
+                    ScalarValue::IntervalYearMonth(None)
+                }
+            }
             _ => ScalarValue::Null,
         }
     }
+}
+
+fn fits_i32(v: i64) -> bool {
+    v >= i32::MIN as i64 && v <= i32::MAX as i64
 }
 
 impl Accumulator for TryAvgAccumulator {
@@ -223,6 +272,11 @@ impl Accumulator for TryAvgAccumulator {
                 let array = values[0].as_primitive::<Decimal128Type>();
                 self.update_dec128(array, p, s);
             }
+            DataType::Interval(IntervalUnit::YearMonth) => {
+                let array = values[0].as_primitive::<IntervalYearMonthType>();
+                self.update_yearmonth(array);
+            }
+
             ref dt => {
                 return Err(DataFusionError::Execution(format!(
                     "try_avg: type not supported update_batch: {dt:?}"
@@ -242,8 +296,12 @@ impl Accumulator for TryAvgAccumulator {
 
     fn state(&mut self) -> Result<Vec<ScalarValue>, DataFusionError> {
         let sum_scalar = match &self.dtype {
-            DataType::Float64 => ScalarValue::Float64(self.sum_f64), // <-- siempre Float64
+            DataType::Float64 => ScalarValue::Float64(self.sum_f64),
             DataType::Decimal128(p, s) => ScalarValue::Decimal128(self.sum_dec128, *p, *s),
+            DataType::Interval(IntervalUnit::YearMonth) => match self.sum_ym_i64 {
+                Some(v) => ScalarValue::IntervalYearMonth(Some(v as i32)),
+                None => ScalarValue::IntervalYearMonth(None),
+            },
             _ => ScalarValue::Null,
         };
 
@@ -263,8 +321,8 @@ impl Accumulator for TryAvgAccumulator {
     }
 
     fn merge_batch(&mut self, states: &[ArrayRef]) -> datafusion::common::Result<()> {
-        // states layout:
-        // 0 -> sum parcial (Int64Array o Float64Array o Decimal128Array)
+        // states:
+        // 0 -> sum parcial (dtype)
         // 1 -> count (Int64Array)
         // 2 -> failed (BooleanArray)
 
@@ -293,7 +351,7 @@ impl Accumulator for TryAvgAccumulator {
             }
         }
 
-        // 3) merge sums con checks de overflow/precision
+        // 3) merge sums
         match self.dtype {
             DataType::Decimal128(p, _s) => {
                 let array = downcast_value!(states[0], Decimal128Array);
@@ -331,6 +389,27 @@ impl Accumulator for TryAvgAccumulator {
                         "try_avg: merge_batch unsupported partial sum type for Float64 output"
                             .to_string(),
                     ));
+                }
+            }
+            DataType::Interval(IntervalUnit::YearMonth) => {
+                let sum_arr = states[0].as_primitive::<IntervalYearMonthType>();
+                for v_i in sum_arr.iter().flatten() {
+                    let v = v_i as i64;
+                    let next = match self.sum_ym_i64 {
+                        None => v,
+                        Some(acc) => match acc.checked_add(v) {
+                            Some(s) => s,
+                            None => {
+                                self.failed = true;
+                                return Ok(());
+                            }
+                        },
+                    };
+                    if !fits_i32(next) {
+                        self.failed = true;
+                        return Ok(());
+                    }
+                    self.sum_ym_i64 = Some(next);
                 }
             }
 
@@ -385,6 +464,7 @@ impl AggregateUDFImpl for TryAvgFunction {
                 let p2 = std::cmp::min(p + 10, 38);
                 Decimal128(p2, s)
             }
+            Interval(IntervalUnit::YearMonth) => Interval(IntervalUnit::YearMonth),
             Int8 | Int16 | Int32 | Int64 | UInt8 | UInt16 | UInt32 | UInt64 => Float64,
             Float16 | Float32 | Float64 => Float64,
             ref other => {
@@ -437,6 +517,7 @@ impl AggregateUDFImpl for TryAvgFunction {
         let coerced = match dt {
             Null => Float64,
             Decimal128(p, s) => Decimal128(*p, *s),
+            Interval(IntervalUnit::YearMonth) => Interval(IntervalUnit::YearMonth),
             Int8 | Int16 | Int32 | Int64 | UInt8 | UInt16 | UInt32 | UInt64 => Int64,
             Float16 | Float32 | Float64 => Float64,
             other => {
@@ -552,7 +633,7 @@ mod tests {
         // p=10,s=2 ; vals [123,477] => sum=600,count=2 => avg=300
         let p = 20u8;
         let s = 2i8;
-        // salida decimal widened DECIMAL(20,2)
+        // decimal widened DECIMAL(20,2)
         let mut acc = TryAvgAccumulator::new(DataType::Decimal128(p, s));
         // input DECIMAL(10,2) -> valores sin null
         acc.update_batch(&[dec128(10, s, vec![Some(123), Some(477)])?])?;
