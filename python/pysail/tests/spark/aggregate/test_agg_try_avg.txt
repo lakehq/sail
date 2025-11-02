@@ -35,7 +35,7 @@ root
 
 >>> df.select(sf.try_avg("x").alias("avg_x")).show(truncate=False)
 +--------------------+
-|avg_x               |
+|               avg_x|
 +--------------------+
 |4.611686018427388e18|
 +--------------------+
@@ -162,7 +162,7 @@ root
 ... )
 >>> out.show(truncate=False)
 +---+--------------------+
-|g  |avg_x               |
+|  g|               avg_x|
 +---+--------------------+
 |bad|4.611686018427388e18|
 |ok |7.5                 |
@@ -196,14 +196,14 @@ root
 ...       .orderBy("g")
 ... )
 >>> out.show(truncate=False)
- +---+--------------------+
- |  g|               avg_x|
- +---+--------------------+
- |bad|4.611686018427387...|
- | ok|                 7.5|
- +---+--------------------+
++---+--------------------+
+|  g|               avg_x|
++---+--------------------+
+|bad|4.611686018427387...|
+| ok|                 7.5|
++---+--------------------+
 
 >>> out.printSchema()
- root
-  |-- g: string (nullable = true)
-  |-- avg_x: double (nullable = true)
+root
+ |-- g: string (nullable = true)
+ |-- avg_x: double (nullable = true)
