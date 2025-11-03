@@ -47,7 +47,7 @@ class TestDeltaColumnMapping:
         config = metadata.get("configuration", {})
         assert config.get("delta.columnMapping.mode") == "name"
         assert "delta.columnMapping.maxColumnId" in config
-        assert int(config["delta.columnMapping.maxColumnId"]) >= 2
+        assert int(config["delta.columnMapping.maxColumnId"]) >= 2  # noqa: PLR2004
 
     def test_create_and_append_with_column_mapping_id(self, spark, tmp_path: Path):
         base = tmp_path / "delta_cm_id"
@@ -92,7 +92,7 @@ class TestDeltaColumnMapping:
         config = metadata.get("configuration", {})
         assert config.get("delta.columnMapping.mode") == "id"
         assert "delta.columnMapping.maxColumnId" in config
-        assert int(config["delta.columnMapping.maxColumnId"]) >= 2
+        assert int(config["delta.columnMapping.maxColumnId"]) >= 2  # noqa: PLR2004
 
     def test_merge_schema_with_column_mapping_name(self, spark, tmp_path: Path):
         base = tmp_path / "delta_cm_merge_name"
@@ -104,15 +104,15 @@ class TestDeltaColumnMapping:
                 Row(id=2, name="b"),
             ]
         )
-        df.write.format("delta").mode("overwrite").option("column_mapping_mode", "name").save(
-            str(base)
-        )
+        df.write.format("delta").mode("overwrite").option("column_mapping_mode", "name").save(str(base))
 
         # Append with a new column using mergeSchema
-        df2 = spark.createDataFrame([
-            Row(id=3, name="c", age=10),
-            Row(id=4, name="d", age=20),
-        ])
+        df2 = spark.createDataFrame(
+            [
+                Row(id=3, name="c", age=10),
+                Row(id=4, name="d", age=20),
+            ]
+        )
         df2.write.format("delta").mode("append").option("mergeSchema", "true").save(str(base))
 
         # Read should include new column, with nulls for old rows
@@ -143,4 +143,6 @@ class TestDeltaColumnMapping:
         assert "delta.columnMapping.maxColumnId" in cfgs[0]
         # If there is a later metadata action, ensure maxColumnId is non-decreasing
         if len(cfgs) > 1:
-            assert int(cfgs[-1]["delta.columnMapping.maxColumnId"]) >= int(cfgs[0]["delta.columnMapping.maxColumnId"]) + 1
+            assert (
+                int(cfgs[-1]["delta.columnMapping.maxColumnId"]) >= int(cfgs[0]["delta.columnMapping.maxColumnId"]) + 1
+            )

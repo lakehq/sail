@@ -111,14 +111,14 @@ fn annotate_struct(struct_type: &StructType, counter: &AtomicI64) -> StructType 
 /// Compute the maximum `delta.columnMapping.id` present in a logical kernel schema.
 pub fn compute_max_column_id(schema: &StructType) -> i64 {
     fn max_in_field(field: &StructField) -> i64 {
-        let mut max_id =
-            field
-                .metadata()
-                .get("delta.columnMapping.id")
-                .and_then(|v| match v {
-                    MetadataValue::Number(n) => Some(*n),
-                    _ => None,
-                }).unwrap_or_default();
+        let mut max_id = field
+            .metadata()
+            .get("delta.columnMapping.id")
+            .and_then(|v| match v {
+                MetadataValue::Number(n) => Some(*n),
+                _ => None,
+            })
+            .unwrap_or_default();
 
         match field.data_type() {
             DataType::Struct(st) => {
@@ -126,11 +126,13 @@ pub fn compute_max_column_id(schema: &StructType) -> i64 {
                     max_id = max_id.max(max_in_field(f));
                 }
             }
-            DataType::Array(at) => if let DataType::Struct(st) = at.element_type() {
-                for f in st.fields() {
-                    max_id = max_id.max(max_in_field(f));
+            DataType::Array(at) => {
+                if let DataType::Struct(st) = at.element_type() {
+                    for f in st.fields() {
+                        max_id = max_id.max(max_in_field(f));
+                    }
                 }
-            },
+            }
             DataType::Map(mt) => {
                 if let DataType::Struct(st) = mt.key_type() {
                     for f in st.fields() {
