@@ -112,16 +112,13 @@ fn annotate_struct(struct_type: &StructType, counter: &AtomicI64) -> StructType 
 pub fn compute_max_column_id(schema: &StructType) -> i64 {
     fn max_in_field(field: &StructField) -> i64 {
         let mut max_id =
-            match field
+            field
                 .metadata()
                 .get("delta.columnMapping.id")
                 .and_then(|v| match v {
                     MetadataValue::Number(n) => Some(*n),
                     _ => None,
-                }) {
-                Some(id) => id,
-                None => 0,
-            };
+                }).unwrap_or_default();
 
         match field.data_type() {
             DataType::Struct(st) => {
@@ -129,30 +126,21 @@ pub fn compute_max_column_id(schema: &StructType) -> i64 {
                     max_id = max_id.max(max_in_field(f));
                 }
             }
-            DataType::Array(at) => match at.element_type() {
-                DataType::Struct(st) => {
+            DataType::Array(at) => if let DataType::Struct(st) = at.element_type() {
+                for f in st.fields() {
+                    max_id = max_id.max(max_in_field(f));
+                }
+            },
+            DataType::Map(mt) => {
+                if let DataType::Struct(st) = mt.key_type() {
                     for f in st.fields() {
                         max_id = max_id.max(max_in_field(f));
                     }
                 }
-                _ => {}
-            },
-            DataType::Map(mt) => {
-                match mt.key_type() {
-                    DataType::Struct(st) => {
-                        for f in st.fields() {
-                            max_id = max_id.max(max_in_field(f));
-                        }
+                if let DataType::Struct(st) = mt.value_type() {
+                    for f in st.fields() {
+                        max_id = max_id.max(max_in_field(f));
                     }
-                    _ => {}
-                }
-                match mt.value_type() {
-                    DataType::Struct(st) => {
-                        for f in st.fields() {
-                            max_id = max_id.max(max_in_field(f));
-                        }
-                    }
-                    _ => {}
                 }
             }
             _ => {}

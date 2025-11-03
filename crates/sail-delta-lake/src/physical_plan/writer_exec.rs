@@ -402,6 +402,7 @@ impl ExecutionPlan for DeltaWriterExec {
                 };
                 configuration.insert("delta.columnMapping.mode".to_string(), mode_str.to_string());
                 // Set maxColumnId for new tables
+                #[allow(clippy::unwrap_used)]
                 let max_id = compute_max_column_id(annotated_schema_opt.as_ref().unwrap());
                 configuration.insert(
                     "delta.columnMapping.maxColumnId".to_string(),
