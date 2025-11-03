@@ -2,12 +2,10 @@ use std::collections::HashMap;
 use std::sync::Arc;
 
 use datafusion::catalog::MemTable;
-use datafusion::datasource::provider_as_source;
 use datafusion_common::{DFSchema, DFSchemaRef, ParamValues};
-use datafusion_expr::{EmptyRelation, Extension, LogicalPlan, TableScan, UNNAMED_TABLE};
+use datafusion_expr::{EmptyRelation, Extension, LogicalPlan, UNNAMED_TABLE};
 use sail_common::spec;
 use sail_common_datafusion::array::record_batch::{cast_record_batch, read_record_batches};
-use sail_common_datafusion::rename::table_provider::RenameTableProvider;
 use sail_logical_plan::range::RangeNode;
 
 use crate::error::{PlanError, PlanResult};
@@ -119,18 +117,15 @@ impl PlanResolver<'_> {
         } else {
             return Err(PlanError::invalid("missing schema for local relation"));
         };
-        let names = state.register_fields(schema.fields());
-        let provider = RenameTableProvider::try_new(
-            Arc::new(MemTable::try_new(schema, vec![batches])?),
-            names,
-        )?;
-        Ok(LogicalPlan::TableScan(TableScan::try_new(
+        let table_provider = Arc::new(MemTable::try_new(schema, vec![batches])?);
+        self.resolve_table_provider_with_rename(
+            table_provider,
             UNNAMED_TABLE,
-            provider_as_source(Arc::new(provider)),
             None,
             vec![],
             None,
-        )?))
+            state,
+        )
     }
 
     pub(super) async fn resolve_query_hint(

@@ -51,11 +51,37 @@ SELECT * FROM users;
 
 :::
 
-::: warning
+### Data Partitioning
 
-Reading and writing partitioned Iceberg tables is not yet supported.
-We are actively working on this feature and plan to release it soon.
-Stay tuned!
+You can work with partitioned Iceberg tables using the Spark DataFrame API.
+Partitioned Iceberg tables organize data into directories based on the values of one or more columns.
+This improves query performance by skipping data files that do not match the filter conditions.
+
+::: code-group
+
+```python [Python]
+path = "file:///tmp/sail/metrics"
+df = spark.createDataFrame(
+    [(2024, 1.0), (2025, 2.0)],
+    schema="year INT, value FLOAT",
+)
+
+df.write.format("iceberg").mode("overwrite").partitionBy("year").save(path)
+
+df = spark.read.format("iceberg").load(path).filter("year > 2024")
+df.show()
+```
+
+```sql [SQL]
+CREATE TABLE metrics (year INT, value FLOAT)
+USING iceberg
+LOCATION 'file:///tmp/sail/metrics'
+PARTITIONED BY (year);
+
+INSERT INTO metrics VALUES (2024, 1.0), (2025, 2.0);
+
+SELECT * FROM metrics WHERE year > 2024;
+```
 
 :::
 
