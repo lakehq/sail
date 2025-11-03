@@ -207,3 +207,25 @@ root
 root
  |-- g: string (nullable = true)
  |-- avg_x: double (nullable = true)
+
+# Interval
+>>> spark.sql("SELECT try_avg(col) FROM VALUES (interval '2147483647 months'), (interval '1 months') AS tab(col)").show()
++------------+
+|try_avg(col)|
++------------+
+|        NULL|
++------------+
+
+>>> spark.sql("SELECT try_avg(col) FROM VALUES (interval '7 months'), (interval '1 months') AS tab(col)").show(truncate=False)
++----------------------------+
+|try_avg(col)                |
++----------------------------+
+|INTERVAL '0-4' YEAR TO MONTH|
++----------------------------+
+
+>>> spark.sql("SELECT try_avg(col) FROM VALUES (interval '10 months'), null, (interval '5 months') AS tab(col)").show(truncate=False)
++----------------------------+
+|try_avg(col)                |
++----------------------------+
+|INTERVAL '0-8' YEAR TO MONTH|
++----------------------------+

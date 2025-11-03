@@ -3,7 +3,7 @@ use std::fmt::{Debug, Formatter};
 
 use datafusion::arrow::array::{
     Array, ArrayRef, AsArray, BooleanArray, Decimal128Array, Float64Array, Int64Array,
-    PrimitiveArray,
+    IntervalYearMonthArray, PrimitiveArray,
 };
 use datafusion::arrow::datatypes::{
     DataType, Decimal128Type, Field, FieldRef, Int64Type, IntervalUnit, IntervalYearMonthType,
@@ -155,7 +155,7 @@ impl TryAvgAccumulator {
         }
     }
 
-    fn update_yearmonth(&mut self, arr: &PrimitiveArray<IntervalYearMonthType>) {
+    fn update_yearmonth(&mut self, arr: &IntervalYearMonthArray) {
         if self.failed {
             return;
         }
@@ -231,12 +231,22 @@ impl TryAvgAccumulator {
                     if denom == 0 {
                         return ScalarValue::IntervalYearMonth(None);
                     }
-                    let avg = total.checked_div(denom).unwrap_or(0);
-                    if !fits_i32(avg) {
-                        ScalarValue::IntervalYearMonth(None)
+
+                    let half = denom / 2;
+                    let adjusted = if total >= 0 {
+                        total.checked_add(half)
                     } else {
-                        ScalarValue::IntervalYearMonth(Some(avg as i32))
+                        total.checked_sub(half)
+                    };
+
+                    if let Some(adj) = adjusted {
+                        if let Some(avg) = adj.checked_div(denom) {
+                            if fits_i32(avg) {
+                                return ScalarValue::IntervalYearMonth(Some(avg as i32));
+                            }
+                        }
                     }
+                    ScalarValue::IntervalYearMonth(None)
                 } else {
                     ScalarValue::IntervalYearMonth(None)
                 }
@@ -538,7 +548,8 @@ impl AggregateUDFImpl for TryAvgFunction {
 mod tests {
     use std::sync::Arc;
 
-    use datafusion::arrow::array::Int64Array;
+    use datafusion::arrow::array::{Int32Array, Int64Array};
+    use datafusion::arrow::datatypes::IntervalUnit;
     use datafusion_common::arrow::array::Float64Array;
     use datafusion_common::ScalarValue;
 
@@ -560,6 +571,16 @@ mod tests {
             DataFusionError::Execution(format!("invalid precision/scale ({p},{s}): {e}"))
         })?;
         Ok(Arc::new(arr) as ArrayRef)
+    }
+
+    fn ym(values: Vec<Option<i32>>) -> datafusion::common::Result<ArrayRef> {
+        let base = Int32Array::from(values);
+        let data = base
+            .to_data()
+            .into_builder()
+            .data_type(DataType::Interval(IntervalUnit::YearMonth))
+            .build()?;
+        Ok(Arc::new(IntervalYearMonthArray::from(data)) as ArrayRef)
     }
 
     // -------- update_batch + evaluate (avg semantics) --------
@@ -779,6 +800,16 @@ mod tests {
         Ok(())
     }
 
+    #[test]
+    fn try_avg_interval_yearmonth_return_type() -> datafusion::common::Result<()> {
+        let f = TryAvgFunction::new();
+        assert_eq!(
+            f.return_type(&[DataType::Interval(IntervalUnit::YearMonth)])?,
+            DataType::Interval(IntervalUnit::YearMonth)
+        );
+        Ok(())
+    }
+
     // -------------------------
     // DECIMAL widening tests
     // -------------------------
@@ -838,6 +869,36 @@ mod tests {
 
         assert!(acc.failed, "need fail in overflow p=38");
         assert_eq!(acc.evaluate()?, ScalarValue::Decimal128(None, 38, 0));
+        Ok(())
+    }
+
+    #[test]
+    fn try_avg_interval_yearmonth_basic() -> datafusion::common::Result<()> {
+        // 10 months + 2 months, count=2 => avg = 6 months
+        let mut acc = TryAvgAccumulator::new(DataType::Interval(IntervalUnit::YearMonth));
+        acc.update_batch(&[ym(vec![Some(10), Some(2)])?])?;
+        let out = acc.evaluate()?;
+
+        assert_eq!(out, ScalarValue::IntervalYearMonth(Some(6)));
+        Ok(())
+    }
+
+    #[test]
+    fn try_avg_interval_yearmonth_with_nulls() -> datafusion::common::Result<()> {
+        // 10 months + NULL + 5 months, count=2 => avg = 8 months
+        let mut acc = TryAvgAccumulator::new(DataType::Interval(IntervalUnit::YearMonth));
+        acc.update_batch(&[ym(vec![Some(10), None, Some(5)])?])?;
+        let out = acc.evaluate()?;
+        assert_eq!(out, ScalarValue::IntervalYearMonth(Some(8)));
+        Ok(())
+    }
+
+    #[test]
+    fn try_avg_interval_yearmonth_overflow_sets_failed() -> datafusion::common::Result<()> {
+        // i32::MAX + 1 => overflow
+        let mut acc = TryAvgAccumulator::new(DataType::Interval(IntervalUnit::YearMonth));
+        acc.update_batch(&[ym(vec![Some(i32::MAX), Some(1)])?])?;
+        assert_eq!(acc.evaluate()?, ScalarValue::IntervalYearMonth(None));
         Ok(())
     }
 }
