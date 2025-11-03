@@ -10,6 +10,7 @@ use datafusion::arrow::record_batch::RecordBatch;
 use object_store::path::Path as ObjectPath;
 use parquet::arrow::PARQUET_FIELD_ID_META_KEY;
 use sail_common_datafusion::array::record_batch::cast_record_batch;
+use url::Url;
 
 use crate::spec::types::values::Literal;
 use crate::spec::DataFile;
@@ -23,6 +24,7 @@ pub struct IcebergTableWriter {
     pub store: Arc<dyn object_store::ObjectStore>,
     pub config: WriterConfig,
     pub generator: DefaultLocationGenerator,
+    pub table_url: Url,
     // partition_dir -> writer
     writers: HashMap<String, ArrowParquetWriter>,
     // partition_dir -> partition values aligned with spec
@@ -38,11 +40,13 @@ impl IcebergTableWriter {
         config: WriterConfig,
         partition_spec_id: i32,
         data_dir: String,
+        table_url: Url,
     ) -> Self {
         Self {
             generator: DefaultLocationGenerator::new_with_data_dir(root, data_dir),
             store,
             config,
+            table_url,
             writers: HashMap::new(),
             partition_values_map: HashMap::new(),
             written: Vec::new(),
@@ -269,9 +273,13 @@ impl IcebergTableWriter {
                 &rel,
                 &full
             );
-            // Use absolute filesystem path for cross-compat (PyIceberg expects an absolute file path)
-            let abs_path = format!("/{}", full);
-            let df = DataFileWriter::new(self.partition_spec_id, abs_path, partition_values)
+            let file_path = match self.table_url.join(&rel) {
+                Ok(u) => u.to_string(),
+                Err(_) => {
+                    format!("{}{}", self.table_url.as_str(), rel)
+                }
+            };
+            let df = DataFileWriter::new(self.partition_spec_id, file_path, partition_values)
                 .finish(meta)?
                 .data_file;
             self.written.push(df);
