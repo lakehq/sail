@@ -46,6 +46,8 @@ class TestDeltaColumnMapping:
         assert protocol.get("minWriterVersion", 0) >= 5  # noqa: PLR2004
         config = metadata.get("configuration", {})
         assert config.get("delta.columnMapping.mode") == "name"
+        assert "delta.columnMapping.maxColumnId" in config
+        assert int(config["delta.columnMapping.maxColumnId"]) >= 2
 
     def test_create_and_append_with_column_mapping_id(self, spark, tmp_path: Path):
         base = tmp_path / "delta_cm_id"
@@ -89,3 +91,56 @@ class TestDeltaColumnMapping:
         assert protocol.get("minWriterVersion", 0) >= 5  # noqa: PLR2004
         config = metadata.get("configuration", {})
         assert config.get("delta.columnMapping.mode") == "id"
+        assert "delta.columnMapping.maxColumnId" in config
+        assert int(config["delta.columnMapping.maxColumnId"]) >= 2
+
+    def test_merge_schema_with_column_mapping_name(self, spark, tmp_path: Path):
+        base = tmp_path / "delta_cm_merge_name"
+
+        # Create initial table with name mode
+        df = spark.createDataFrame(
+            [
+                Row(id=1, name="a"),
+                Row(id=2, name="b"),
+            ]
+        )
+        df.write.format("delta").mode("overwrite").option("column_mapping_mode", "name").save(
+            str(base)
+        )
+
+        # Append with a new column using mergeSchema
+        df2 = spark.createDataFrame([
+            Row(id=3, name="c", age=10),
+            Row(id=4, name="d", age=20),
+        ])
+        df2.write.format("delta").mode("append").option("mergeSchema", "true").save(str(base))
+
+        # Read should include new column, with nulls for old rows
+        out = spark.read.format("delta").load(str(base)).orderBy("id").collect()
+        assert [r.asDict() for r in out] == [
+            {"id": 1, "name": "a", "age": None},
+            {"id": 2, "name": "b", "age": None},
+            {"id": 3, "name": "c", "age": 10},
+            {"id": 4, "name": "d", "age": 20},
+        ]
+
+        # Validate that maxColumnId exists and is non-decreasing across commits with metadata
+        log_dir = base / "_delta_log"
+        logs = sorted(log_dir.glob("*.json"))
+        assert logs, f"no delta logs in {log_dir}"
+
+        def extract_metadata_config(p: Path) -> dict | None:
+            with p.open("r", encoding="utf-8") as f:
+                for line in f:
+                    obj = json.loads(line)
+                    if "metaData" in obj:
+                        return obj["metaData"].get("configuration", {})
+            return None
+
+        cfgs = [c for c in (extract_metadata_config(p) for p in logs) if c is not None]
+        assert cfgs, "no metadata actions found in commit logs"
+        assert cfgs[0].get("delta.columnMapping.mode") == "name"
+        assert "delta.columnMapping.maxColumnId" in cfgs[0]
+        # If there is a later metadata action, ensure maxColumnId is non-decreasing
+        if len(cfgs) > 1:
+            assert int(cfgs[-1]["delta.columnMapping.maxColumnId"]) >= int(cfgs[0]["delta.columnMapping.maxColumnId"]) + 1

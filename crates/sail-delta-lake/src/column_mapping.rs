@@ -108,6 +108,232 @@ fn annotate_struct(struct_type: &StructType, counter: &AtomicI64) -> StructType 
     result
 }
 
+/// Compute the maximum `delta.columnMapping.id` present in a logical kernel schema.
+pub fn compute_max_column_id(schema: &StructType) -> i64 {
+    fn max_in_field(field: &StructField) -> i64 {
+        let mut max_id =
+            match field
+                .metadata()
+                .get("delta.columnMapping.id")
+                .and_then(|v| match v {
+                    MetadataValue::Number(n) => Some(*n),
+                    _ => None,
+                }) {
+                Some(id) => id,
+                None => 0,
+            };
+
+        match field.data_type() {
+            DataType::Struct(st) => {
+                for f in st.fields() {
+                    max_id = max_id.max(max_in_field(f));
+                }
+            }
+            DataType::Array(at) => match at.element_type() {
+                DataType::Struct(st) => {
+                    for f in st.fields() {
+                        max_id = max_id.max(max_in_field(f));
+                    }
+                }
+                _ => {}
+            },
+            DataType::Map(mt) => {
+                match mt.key_type() {
+                    DataType::Struct(st) => {
+                        for f in st.fields() {
+                            max_id = max_id.max(max_in_field(f));
+                        }
+                    }
+                    _ => {}
+                }
+                match mt.value_type() {
+                    DataType::Struct(st) => {
+                        for f in st.fields() {
+                            max_id = max_id.max(max_in_field(f));
+                        }
+                    }
+                    _ => {}
+                }
+            }
+            _ => {}
+        }
+
+        max_id
+    }
+
+    let mut max_id = 0i64;
+    for f in schema.fields() {
+        max_id = max_id.max(max_in_field(f));
+    }
+    max_id
+}
+
+/// Annotate only new fields (compared to `existing`) within `candidate` with
+/// column mapping metadata, starting from `start_id` (inclusive).
+/// Returns the updated schema and the last used id.
+pub fn annotate_new_fields_for_column_mapping(
+    existing: &StructType,
+    candidate: &StructType,
+    start_id: i64,
+) -> (StructType, i64) {
+    let counter = AtomicI64::new(start_id);
+
+    fn find_child<'a>(st: &'a StructType, name: &str) -> Option<&'a StructField> {
+        st.fields().find(|f| f.name() == name)
+    }
+
+    fn merge_datatype(
+        existing_field: Option<&StructField>,
+        new_field: &StructField,
+        counter: &AtomicI64,
+    ) -> (StructField, ()) {
+        match (existing_field, new_field.data_type()) {
+            (Some(prev), DataType::Struct(new_st)) => {
+                // Merge nested struct: keep existing field metadata, adopt new nullability, and annotate only new nested columns
+                let prev_st = match prev.data_type() {
+                    DataType::Struct(s) => Some(s),
+                    _ => None,
+                };
+                let merged_struct = if let Some(prev_st) = prev_st {
+                    merge_struct(prev_st.as_ref(), new_st.as_ref(), counter)
+                } else {
+                    // Structure type changed to Struct: treat all nested fields as new
+                    annotate_struct(new_st.as_ref(), counter)
+                };
+                (
+                    StructField {
+                        name: prev.name().clone(),
+                        data_type: DataType::Struct(Box::new(merged_struct)),
+                        nullable: new_field.is_nullable(),
+                        metadata: prev.metadata().clone(),
+                    },
+                    (),
+                )
+            }
+            (Some(prev), DataType::Array(new_arr)) => {
+                // If element is struct, merge nested; else keep as-is
+                let new_elem = match new_arr.element_type() {
+                    DataType::Struct(st) => {
+                        let prev_elem_struct = match prev.data_type() {
+                            DataType::Array(prev_arr) => match prev_arr.element_type() {
+                                DataType::Struct(pst) => Some(pst),
+                                _ => None,
+                            },
+                            _ => None,
+                        };
+                        let merged = if let Some(pst) = prev_elem_struct {
+                            merge_struct(pst.as_ref(), st.as_ref(), counter)
+                        } else {
+                            annotate_struct(st.as_ref(), counter)
+                        };
+                        DataType::Struct(Box::new(merged))
+                    }
+                    other => other.clone(),
+                };
+                (
+                    StructField {
+                        name: prev.name().clone(),
+                        data_type: ArrayType::new(new_elem, new_arr.contains_null()).into(),
+                        nullable: new_field.is_nullable(),
+                        metadata: prev.metadata().clone(),
+                    },
+                    (),
+                )
+            }
+            (Some(prev), DataType::Map(new_map)) => {
+                // Merge nested key/value if struct
+                let new_key = match new_map.key_type() {
+                    DataType::Struct(st) => {
+                        let prev_key_struct = match prev.data_type() {
+                            DataType::Map(pm) => match pm.key_type() {
+                                DataType::Struct(pst) => Some(pst),
+                                _ => None,
+                            },
+                            _ => None,
+                        };
+                        let merged = if let Some(pst) = prev_key_struct {
+                            merge_struct(pst.as_ref(), st.as_ref(), counter)
+                        } else {
+                            annotate_struct(st.as_ref(), counter)
+                        };
+                        DataType::Struct(Box::new(merged))
+                    }
+                    other => other.clone(),
+                };
+                let new_val = match new_map.value_type() {
+                    DataType::Struct(st) => {
+                        let prev_val_struct = match prev.data_type() {
+                            DataType::Map(pm) => match pm.value_type() {
+                                DataType::Struct(pst) => Some(pst),
+                                _ => None,
+                            },
+                            _ => None,
+                        };
+                        let merged = if let Some(pst) = prev_val_struct {
+                            merge_struct(pst.as_ref(), st.as_ref(), counter)
+                        } else {
+                            annotate_struct(st.as_ref(), counter)
+                        };
+                        DataType::Struct(Box::new(merged))
+                    }
+                    other => other.clone(),
+                };
+                (
+                    StructField {
+                        name: prev.name().clone(),
+                        data_type: MapType::new(new_key, new_val, new_map.value_contains_null())
+                            .into(),
+                        nullable: new_field.is_nullable(),
+                        metadata: prev.metadata().clone(),
+                    },
+                    (),
+                )
+            }
+            (Some(prev), _) => {
+                // Primitive or non-struct element: keep existing metadata, adopt new nullability and data_type
+                (
+                    StructField {
+                        name: prev.name().clone(),
+                        data_type: new_field.data_type().clone(),
+                        nullable: new_field.is_nullable(),
+                        metadata: prev.metadata().clone(),
+                    },
+                    (),
+                )
+            }
+            (None, _) => {
+                // Brand new field: annotate fully
+                (annotate_field(new_field, counter), ())
+            }
+        }
+    }
+
+    fn merge_struct(
+        existing: &StructType,
+        candidate: &StructType,
+        counter: &AtomicI64,
+    ) -> StructType {
+        let merged_fields = candidate.fields().map(|nf| {
+            let prev = find_child(existing, nf.name());
+            let (f, _) = merge_datatype(prev, nf, counter);
+            Ok::<StructField, delta_kernel::Error>(f)
+        });
+        #[allow(clippy::expect_used)]
+        StructType::try_new(merged_fields).expect("failed to build merged annotated struct")
+    }
+
+    let merged = merge_struct(existing, candidate, &counter);
+    let last = counter.load(Ordering::Relaxed);
+    // If we started at N and annotated K fields, counter now is N+K.
+    // We return last_used = max(last-1, start_id-1) to represent the last assigned id.
+    let last_used = if last > start_id {
+        last - 1
+    } else {
+        start_id - 1
+    };
+    (merged, last_used)
+}
+
 /// Build the physical schema used for file writes according to the column mapping mode.
 /// - None: return unchanged.
 /// - Name: rename fields to physicalName, remove id/parquet id metadata.
