@@ -93,26 +93,6 @@ impl CatalogProvider for MemoryCatalogProvider {
         }
     }
 
-    async fn drop_database(
-        &self,
-        database: &Namespace,
-        options: DropDatabaseOptions,
-    ) -> CatalogResult<()> {
-        let DropDatabaseOptions {
-            if_exists,
-            cascade: _,
-        } = options;
-        if self.databases.remove(database).is_none() {
-            if if_exists {
-                Ok(())
-            } else {
-                Err(CatalogError::NotFound("database", database.to_string()))
-            }
-        } else {
-            Ok(())
-        }
-    }
-
     async fn get_database(&self, database: &Namespace) -> CatalogResult<DatabaseStatus> {
         if let Some(db) = self.databases.get(database) {
             Ok(db.status.clone())
@@ -137,6 +117,26 @@ impl CatalogProvider for MemoryCatalogProvider {
             })
             .map(|item| item.value().status.clone())
             .collect())
+    }
+
+    async fn drop_database(
+        &self,
+        database: &Namespace,
+        options: DropDatabaseOptions,
+    ) -> CatalogResult<()> {
+        let DropDatabaseOptions {
+            if_exists,
+            cascade: _,
+        } = options;
+        if self.databases.remove(database).is_none() {
+            if if_exists {
+                Ok(())
+            } else {
+                Err(CatalogError::NotFound("database", database.to_string()))
+            }
+        } else {
+            Ok(())
+        }
     }
 
     async fn create_table(

@@ -5,7 +5,7 @@ rank: 1
 
 # Delta Lake
 
-You can use the `delta` format in Sail to work with Delta Lake.
+You can use the `delta` format in Sail to work with [Delta Lake](https://delta.io/).
 You can use the Spark DataFrame API or Spark SQL to read and write Delta tables.
 
 ::: warning
@@ -32,7 +32,7 @@ df = spark.createDataFrame(
 
 # This creates a new table or overwrites an existing one.
 df.write.format("delta").mode("overwrite").save(path)
-# This appends data to an existing Delta table.
+# This appends data to an existing table.
 df.write.format("delta").mode("append").save(path)
 
 df = spark.read.format("delta").load(path)

@@ -104,7 +104,10 @@ impl SessionManagerActor {
             // We do not use the DataFusion catalog and schema since we manage catalogs ourselves.
             .with_create_default_catalog_and_schema(false)
             .with_information_schema(false)
-            .with_extension(Arc::new(create_catalog_manager(&options.config)?))
+            .with_extension(Arc::new(create_catalog_manager(
+                &options.config,
+                options.runtime.clone(),
+            )?))
             .with_extension(Arc::new(SparkSession::try_new(
                 key.user_id,
                 key.session_id,

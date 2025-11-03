@@ -54,11 +54,17 @@ The generator uses custom type mappings to avoid problematic generated code:
 
 ## Post-Generation Manual Steps
 
+OpenAPI 3.1 support is still in beta when generating Rust clients with the OpenAPI Generator.
 After running the generation script, you must manually fix the following:
 
-1. In `src/apis/o_auth2_api_api.rs`:
+1. In `src/apis/catalog_api_api.rs`:
+
+   - Replace `"{}/v1/{prefix}/` with `"{}/v1{prefix}/`
+   - Replace `crate::apis::urlencode(prefix.unwrap())` with `prefix.map(|p| format!("/{}", crate::apis::urlencode(p))).unwrap_or_default()`
+
+2. In `src/apis/o_auth2_api_api.rs`:
 
    - Replace `models::models::TokenType` with `models::TokenType`
 
-2. In `src/models/schema.rs`:
+3. In `src/models/schema.rs`:
    - Replace `models::StructField` with `NestedFieldRef`

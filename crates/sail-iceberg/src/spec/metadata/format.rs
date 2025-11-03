@@ -18,11 +18,12 @@
 // [CREDIT]: https://raw.githubusercontent.com/apache/iceberg-rust/dc349284a4204c1a56af47fb3177ace6f9e899a0/crates/iceberg/src/spec/table_metadata.rs
 
 /// Format version of Iceberg.
-#[derive(Debug, PartialEq, Eq, Clone, Copy)]
+#[derive(Debug, PartialEq, Eq, Clone, Copy, Default)]
 pub enum FormatVersion {
     /// Version 1
     V1 = 1,
     /// Version 2
+    #[default]
     V2 = 2,
 }
 
@@ -49,11 +50,5 @@ impl<'de> serde::Deserialize<'de> for FormatVersion {
                 value
             ))),
         }
-    }
-}
-
-impl Default for FormatVersion {
-    fn default() -> Self {
-        Self::V2
     }
 }

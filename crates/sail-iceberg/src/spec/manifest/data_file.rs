@@ -52,25 +52,25 @@ pub struct DataFile {
     pub partition: Vec<Option<Literal>>,
     pub record_count: u64,
     pub file_size_in_bytes: u64,
-    #[serde(skip_serializing_if = "HashMap::is_empty")]
+    #[serde(skip_serializing_if = "HashMap::is_empty", default)]
     pub column_sizes: HashMap<i32, u64>,
-    #[serde(skip_serializing_if = "HashMap::is_empty")]
+    #[serde(skip_serializing_if = "HashMap::is_empty", default)]
     pub value_counts: HashMap<i32, u64>,
-    #[serde(skip_serializing_if = "HashMap::is_empty")]
+    #[serde(skip_serializing_if = "HashMap::is_empty", default)]
     pub null_value_counts: HashMap<i32, u64>,
-    #[serde(skip_serializing_if = "HashMap::is_empty")]
+    #[serde(skip_serializing_if = "HashMap::is_empty", default)]
     pub nan_value_counts: HashMap<i32, u64>,
-    #[serde(skip_serializing_if = "HashMap::is_empty")]
+    #[serde(skip_serializing_if = "HashMap::is_empty", default)]
     pub lower_bounds: HashMap<i32, Datum>,
-    #[serde(skip_serializing_if = "HashMap::is_empty")]
+    #[serde(skip_serializing_if = "HashMap::is_empty", default)]
     pub upper_bounds: HashMap<i32, Datum>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub block_size_in_bytes: Option<i64>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub key_metadata: Option<Vec<u8>>,
-    #[serde(skip_serializing_if = "Vec::is_empty")]
+    #[serde(skip_serializing_if = "Vec::is_empty", default)]
     pub split_offsets: Vec<i64>,
-    #[serde(skip_serializing_if = "Vec::is_empty")]
+    #[serde(skip_serializing_if = "Vec::is_empty", default)]
     pub equality_ids: Vec<i32>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub sort_order_id: Option<i32>,

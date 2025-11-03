@@ -57,6 +57,7 @@ use sail_function::aggregate::kurtosis::KurtosisFunction;
 use sail_function::aggregate::max_min_by::{MaxByFunction, MinByFunction};
 use sail_function::aggregate::mode::ModeFunction;
 use sail_function::aggregate::skewness::SkewnessFunc;
+use sail_function::aggregate::try_sum::TrySumFunction;
 use sail_function::scalar::array::arrays_zip::ArraysZip;
 use sail_function::scalar::array::spark_array::SparkArray;
 use sail_function::scalar::array::spark_array_item_with_position::ArrayItemWithPosition;
@@ -132,6 +133,7 @@ use sail_function::scalar::url::parse_url::ParseUrl;
 use sail_function::scalar::url::spark_try_parse_url::SparkTryParseUrl;
 use sail_function::scalar::url::url_decode::UrlDecode;
 use sail_function::scalar::url::url_encode::UrlEncode;
+use sail_iceberg::physical_plan::{IcebergCommitExec, IcebergWriterExec};
 use sail_logical_plan::range::Range;
 use sail_logical_plan::show_string::{ShowStringFormat, ShowStringStyle};
 use sail_physical_plan::map_partitions::MapPartitionsExec;
@@ -730,6 +732,37 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
                 let input = self.try_decode_plan(&input)?;
                 Ok(Arc::new(StreamSourceAdapterExec::new(input)))
             }
+            NodeKind::IcebergWriter(gen::IcebergWriterExecNode {
+                input,
+                table_url,
+                partition_columns,
+                sink_mode,
+                table_exists,
+            }) => {
+                let input = self.try_decode_plan(&input)?;
+                let sink_mode = match sink_mode {
+                    Some(mode) => mode,
+                    None => return plan_err!("Missing sink_mode for IcebergWriterExec"),
+                };
+                let sink_mode = self.try_decode_physical_sink_mode(sink_mode, &input.schema())?;
+                let table_url = Url::parse(&table_url)
+                    .map_err(|e| plan_datafusion_err!("failed to parse table URL: {e}"))?;
+
+                Ok(Arc::new(IcebergWriterExec::new(
+                    input,
+                    table_url,
+                    partition_columns,
+                    sink_mode,
+                    table_exists,
+                )))
+            }
+            NodeKind::IcebergCommit(gen::IcebergCommitExecNode { input, table_url }) => {
+                let input = self.try_decode_plan(&input)?;
+                let table_url = Url::parse(&table_url)
+                    .map_err(|e| plan_datafusion_err!("failed to parse table URL: {e}"))?;
+
+                Ok(Arc::new(IcebergCommitExec::new(input, table_url)))
+            }
             _ => plan_err!("unsupported physical plan node: {node_kind:?}"),
         }
     }
@@ -1130,6 +1163,24 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
         {
             let input = self.try_encode_plan(stream_source_adapter.input().clone())?;
             NodeKind::StreamSourceAdapter(gen::StreamSourceAdapterExecNode { input })
+        } else if let Some(iceberg_writer_exec) = node.as_any().downcast_ref::<IcebergWriterExec>()
+        {
+            let input = self.try_encode_plan(iceberg_writer_exec.input().clone())?;
+            let sink_mode = self.try_encode_physical_sink_mode(iceberg_writer_exec.sink_mode())?;
+            NodeKind::IcebergWriter(gen::IcebergWriterExecNode {
+                input,
+                table_url: iceberg_writer_exec.table_url().to_string(),
+                partition_columns: iceberg_writer_exec.partition_columns().to_vec(),
+                sink_mode: Some(sink_mode),
+                table_exists: iceberg_writer_exec.table_exists(),
+            })
+        } else if let Some(iceberg_commit_exec) = node.as_any().downcast_ref::<IcebergCommitExec>()
+        {
+            let input = self.try_encode_plan(iceberg_commit_exec.input().clone())?;
+            NodeKind::IcebergCommit(gen::IcebergCommitExecNode {
+                input,
+                table_url: iceberg_commit_exec.table_url().to_string(),
+            })
         } else {
             return plan_err!("unsupported physical plan node: {node:?}");
         };
@@ -1559,6 +1610,7 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
                 "min_by" => Ok(Arc::new(AggregateUDF::from(MinByFunction::new()))),
                 "mode" => Ok(Arc::new(AggregateUDF::from(ModeFunction::new()))),
                 "skewness" => Ok(Arc::new(AggregateUDF::from(SkewnessFunc::new()))),
+                "try_sum" => Ok(Arc::new(AggregateUDF::from(TrySumFunction::new()))),
                 _ => plan_err!("Could not find Aggregate Function: {name}"),
             },
             Some(UdafKind::PySparkGroupAgg(gen::PySparkGroupAggUdaf {
@@ -1642,6 +1694,7 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
             || node.inner().as_any().is::<MinByFunction>()
             || node.inner().as_any().is::<ModeFunction>()
             || node.inner().as_any().is::<SkewnessFunc>()
+            || node.inner().as_any().is::<TrySumFunction>()
         {
             UdafKind::Standard(gen::StandardUdaf {})
         } else if let Some(func) = node

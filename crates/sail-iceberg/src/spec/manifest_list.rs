@@ -22,6 +22,7 @@ use apache_avro::{from_value as avro_from_value, Reader as AvroReader};
 use serde::{Deserialize, Serialize};
 
 use crate::spec::FormatVersion;
+mod schema;
 
 pub const UNASSIGNED_SEQUENCE_NUMBER: i64 = -1;
 
@@ -94,6 +95,90 @@ impl ManifestList {
                 Ok(ManifestList::new(entries))
             }
         }
+    }
+}
+
+pub struct ManifestListWriter {
+    entries: Vec<ManifestFile>,
+}
+
+impl Default for ManifestListWriter {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+impl ManifestListWriter {
+    pub fn new() -> Self {
+        Self {
+            entries: Vec::new(),
+        }
+    }
+
+    pub fn append(&mut self, manifest: ManifestFile) {
+        self.entries.push(manifest);
+    }
+
+    pub fn finish(self) -> ManifestList {
+        ManifestList::new(self.entries)
+    }
+
+    pub fn to_bytes(&self, _version: FormatVersion) -> Result<Vec<u8>, String> {
+        use apache_avro::Writer;
+
+        use crate::spec::manifest_list::schema::MANIFEST_LIST_AVRO_SCHEMA_V2;
+
+        // TODO: Implement typed V1 writer; currently only V2 is supported.
+        let mut writer = Writer::new(&MANIFEST_LIST_AVRO_SCHEMA_V2, Vec::new());
+
+        for mf in &self.entries {
+            let v2 = _serde::ManifestFileV2 {
+                manifest_path: mf.manifest_path.clone(),
+                manifest_length: mf.manifest_length,
+                partition_spec_id: mf.partition_spec_id,
+                content: match mf.content {
+                    ManifestContentType::Data => 0,
+                    ManifestContentType::Deletes => 1,
+                },
+                sequence_number: mf.sequence_number,
+                min_sequence_number: mf.min_sequence_number,
+                added_snapshot_id: mf.added_snapshot_id,
+                added_files_count: mf.added_files_count.unwrap_or(0),
+                existing_files_count: mf.existing_files_count.unwrap_or(0),
+                deleted_files_count: mf.deleted_files_count.unwrap_or(0),
+                added_rows_count: mf.added_rows_count.unwrap_or(0),
+                existing_rows_count: mf.existing_rows_count.unwrap_or(0),
+                deleted_rows_count: mf.deleted_rows_count.unwrap_or(0),
+                partitions: mf.partitions.clone().map(|ps| {
+                    ps.into_iter()
+                        .map(|p| FieldSummaryAvro {
+                            contains_null: p.contains_null,
+                            contains_nan: p.contains_nan,
+                            lower_bound: p.lower_bound_bytes,
+                            upper_bound: p.upper_bound_bytes,
+                        })
+                        .collect()
+                }),
+                key_metadata: mf.key_metadata.clone(),
+            };
+            // Enforce required fields for V2
+            if mf.added_files_count.is_none()
+                || mf.existing_files_count.is_none()
+                || mf.deleted_files_count.is_none()
+                || mf.added_rows_count.is_none()
+                || mf.existing_rows_count.is_none()
+                || mf.deleted_rows_count.is_none()
+            {
+                return Err("Missing required V2 counts/rows fields".to_string());
+            }
+            writer
+                .append_ser(v2)
+                .map_err(|e| format!("Avro append error: {e}"))?;
+        }
+
+        writer
+            .into_inner()
+            .map_err(|e| format!("Avro writer finalize error: {e}"))
     }
 }
 

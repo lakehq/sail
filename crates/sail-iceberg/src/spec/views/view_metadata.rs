@@ -15,7 +15,7 @@
 // specific language governing permissions and limitations
 // under the License.
 
-// Awareness stub
+// TODO: Implement ViewMetadata according to the Iceberg view specification.
 #[allow(dead_code)]
 #[derive(Debug, Clone)]
 pub struct ViewMetadata;
