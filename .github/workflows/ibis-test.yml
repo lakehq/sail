@@ -28,6 +28,9 @@ jobs:
             rustup toolchain install stable
           } &
 
+      - name: Build Python Package
+        uses: PyO3/maturin-action@v1
+
       - name: Build and install
         run: |
           hatch run maturin develop
