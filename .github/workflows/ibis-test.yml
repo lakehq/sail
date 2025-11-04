@@ -22,10 +22,22 @@ jobs:
       - name: Install Hatch
         uses: pypa/hatch@install
 
-      - name: Setup Python deps
+      - name: Install Rust toolchain and coverage tools
         run: |
-          hatch run install-pyspark || true
-          hatch run install-pysail || true
+          {
+            rustup toolchain install stable
+          } &
+
+      - name: Download Python Package
+        uses: actions/download-artifact@v4
+        with:
+          name: python-package
+          path: target/wheels
+
+      - name: Build and install
+        run: |
+          hatch run maturin develop
+          hatch run maturin build
 
       - name: Install grpc_health_probe
         run: |
@@ -37,17 +49,9 @@ jobs:
         run: |
           nohup hatch run test-ibis:scripts/spark-tests/run-server.sh > /dev/null 2>&1 < /dev/null &
 
-      - name: Wait for server
+      - name: Wait for Spark Connect Server to Start
         run: |
-          for i in $(seq 1 60); do
-            if grpc_health_probe -addr=127.0.0.1:50051 -tls=false >/dev/null 2>&1; then
-              echo "Spark Connect server is up"
-              exit 0
-            fi
-            sleep 2
-          done
-          echo "Server did not become healthy in time"
-          exit 1
+          scripts/spark-tests/wait-for-server.sh
 
       - name: Run ibis tests
         timeout-minutes: 15
