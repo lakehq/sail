@@ -31,57 +31,113 @@ fn annotate_field(field: &StructField, counter: &AtomicI64) -> StructField {
         ),
     ]);
 
-    match annotated.data_type() {
-        DataType::Struct(struct_type) => {
-            let nested = annotate_struct(struct_type.as_ref(), counter);
-            StructField {
-                name: annotated.name().clone(),
-                data_type: nested.into(),
-                nullable: annotated.is_nullable(),
-                metadata: annotated.metadata().clone(),
-            }
-        }
-        DataType::Array(array_type) => {
-            let new_element = match array_type.element_type() {
-                DataType::Struct(st) => annotate_struct(st.as_ref(), counter).into(),
-                other => other.clone(),
-            };
-            StructField {
-                name: annotated.name().clone(),
-                data_type: ArrayType::new(new_element, array_type.contains_null()).into(),
-                nullable: annotated.is_nullable(),
-                metadata: annotated.metadata().clone(),
-            }
-        }
-        DataType::Map(map_type) => {
-            let new_key = match map_type.key_type() {
-                DataType::Struct(st) => annotate_struct(st.as_ref(), counter).into(),
-                other => other.clone(),
-            };
-            let new_value = match map_type.value_type() {
-                DataType::Struct(st) => annotate_struct(st.as_ref(), counter).into(),
-                other => other.clone(),
-            };
-            StructField {
-                name: annotated.name().clone(),
-                data_type: MapType::new(new_key, new_value, map_type.value_contains_null()).into(),
-                nullable: annotated.is_nullable(),
-                metadata: annotated.metadata().clone(),
-            }
-        }
-        _ => annotated,
+    let new_data_type = merge_types(None, annotated.data_type(), counter);
+    StructField {
+        name: annotated.name().clone(),
+        data_type: new_data_type,
+        nullable: annotated.is_nullable(),
+        metadata: annotated.metadata().clone(),
     }
 }
 
-// TODO: Consider inlining the struct-field iteration into the DataType::Struct branch
-// of annotate_field and removing this helper to reduce indirection.
-fn annotate_struct(struct_type: &StructType, counter: &AtomicI64) -> StructType {
-    let fields = struct_type
-        .fields()
-        .map(|f| -> Result<StructField, delta_kernel::Error> { Ok(annotate_field(f, counter)) });
-    #[allow(clippy::expect_used)]
-    let result = StructType::try_new(fields).expect("failed to build nested annotated struct");
-    result
+/// Merge `new_type` into `existing_type` while preserving metadata on existing fields
+/// and annotating only newly introduced nested fields. When `existing_type` is None,
+/// annotate nested struct parts as needed. Used both for full-field annotation and
+/// for schema evolution of nested types.
+fn merge_types(
+    existing_type: Option<&DataType>,
+    new_type: &DataType,
+    counter: &AtomicI64,
+) -> DataType {
+    match (existing_type, new_type) {
+        (Some(DataType::Struct(prev_st)), DataType::Struct(new_st)) => DataType::Struct(Box::new(
+            merge_struct(prev_st.as_ref(), new_st.as_ref(), counter),
+        )),
+        (None, DataType::Struct(new_st)) => {
+            let fields = new_st
+                .fields()
+                .map(|f| -> Result<StructField, delta_kernel::Error> {
+                    Ok(annotate_field(f, counter))
+                });
+            #[allow(clippy::expect_used)]
+            let result =
+                StructType::try_new(fields).expect("failed to build nested annotated struct");
+            DataType::Struct(Box::new(result))
+        }
+        (Some(DataType::Array(prev_arr)), DataType::Array(new_arr)) => {
+            let merged_elem = merge_types(
+                Some(prev_arr.element_type()),
+                new_arr.element_type(),
+                counter,
+            );
+            DataType::Array(Box::new(ArrayType::new(
+                merged_elem,
+                new_arr.contains_null(),
+            )))
+        }
+        (None, DataType::Array(new_arr)) => {
+            let new_elem = match new_arr.element_type() {
+                DataType::Struct(st) => {
+                    let fields = st
+                        .fields()
+                        .map(|f| -> Result<StructField, delta_kernel::Error> {
+                            Ok(annotate_field(f, counter))
+                        });
+                    #[allow(clippy::expect_used)]
+                    let result = StructType::try_new(fields)
+                        .expect("failed to build nested annotated struct");
+                    DataType::Struct(Box::new(result))
+                }
+                other => other.clone(),
+            };
+            DataType::Array(Box::new(ArrayType::new(new_elem, new_arr.contains_null())))
+        }
+        (Some(DataType::Map(prev_map)), DataType::Map(new_map)) => {
+            let new_key = merge_types(Some(prev_map.key_type()), new_map.key_type(), counter);
+            let new_value = merge_types(Some(prev_map.value_type()), new_map.value_type(), counter);
+            DataType::Map(Box::new(MapType::new(
+                new_key,
+                new_value,
+                new_map.value_contains_null(),
+            )))
+        }
+        (None, DataType::Map(new_map)) => {
+            let new_key = match new_map.key_type() {
+                DataType::Struct(st) => {
+                    let fields = st
+                        .fields()
+                        .map(|f| -> Result<StructField, delta_kernel::Error> {
+                            Ok(annotate_field(f, counter))
+                        });
+                    #[allow(clippy::expect_used)]
+                    let result = StructType::try_new(fields)
+                        .expect("failed to build nested annotated struct");
+                    DataType::Struct(Box::new(result))
+                }
+                other => other.clone(),
+            };
+            let new_value = match new_map.value_type() {
+                DataType::Struct(st) => {
+                    let fields = st
+                        .fields()
+                        .map(|f| -> Result<StructField, delta_kernel::Error> {
+                            Ok(annotate_field(f, counter))
+                        });
+                    #[allow(clippy::expect_used)]
+                    let result = StructType::try_new(fields)
+                        .expect("failed to build nested annotated struct");
+                    DataType::Struct(Box::new(result))
+                }
+                other => other.clone(),
+            };
+            DataType::Map(Box::new(MapType::new(
+                new_key,
+                new_value,
+                new_map.value_contains_null(),
+            )))
+        }
+        (_, _) => new_type.clone(),
+    }
 }
 
 /// Compute the maximum `delta.columnMapping.id` present in a logical kernel schema.
@@ -134,6 +190,26 @@ pub fn compute_max_column_id(schema: &StructType) -> i64 {
     max_id
 }
 
+fn merge_struct(existing: &StructType, candidate: &StructType, counter: &AtomicI64) -> StructType {
+    let merged_fields = candidate.fields().map(|nf| {
+        let prev = existing.fields().find(|f| f.name() == nf.name());
+        let field = if let Some(prev_field) = prev {
+            let merged_dtype = merge_types(Some(prev_field.data_type()), nf.data_type(), counter);
+            StructField {
+                name: prev_field.name().clone(),
+                data_type: merged_dtype,
+                nullable: nf.is_nullable(),
+                metadata: prev_field.metadata().clone(),
+            }
+        } else {
+            annotate_field(nf, counter)
+        };
+        Ok::<StructField, delta_kernel::Error>(field)
+    });
+    #[allow(clippy::expect_used)]
+    StructType::try_new(merged_fields).expect("failed to build merged annotated struct")
+}
+
 /// Annotate only new fields (compared to `existing`) within `candidate` with
 /// column mapping metadata, starting from `start_id` (inclusive).
 /// Returns the updated schema and the last used id.
@@ -143,153 +219,6 @@ pub fn annotate_new_fields_for_column_mapping(
     start_id: i64,
 ) -> (StructType, i64) {
     let counter = AtomicI64::new(start_id);
-
-    fn find_child<'a>(st: &'a StructType, name: &str) -> Option<&'a StructField> {
-        st.fields().find(|f| f.name() == name)
-    }
-
-    // TODO: Consider extracting a generic recursive type merger (e.g.,
-    // merge_types(existing: Option<&DataType>, new: &DataType, ...)) to reduce
-    // nested matches for Array/Map/Struct while preserving field-level metadata.
-    fn merge_datatype(
-        existing_field: Option<&StructField>,
-        new_field: &StructField,
-        counter: &AtomicI64,
-    ) -> (StructField, ()) {
-        match (existing_field, new_field.data_type()) {
-            (Some(prev), DataType::Struct(new_st)) => {
-                // Merge nested struct: keep existing field metadata, adopt new nullability, and annotate only new nested columns
-                let prev_st = match prev.data_type() {
-                    DataType::Struct(s) => Some(s),
-                    _ => None,
-                };
-                let merged_struct = if let Some(prev_st) = prev_st {
-                    merge_struct(prev_st.as_ref(), new_st.as_ref(), counter)
-                } else {
-                    // Structure type changed to Struct: treat all nested fields as new
-                    annotate_struct(new_st.as_ref(), counter)
-                };
-                (
-                    StructField {
-                        name: prev.name().clone(),
-                        data_type: DataType::Struct(Box::new(merged_struct)),
-                        nullable: new_field.is_nullable(),
-                        metadata: prev.metadata().clone(),
-                    },
-                    (),
-                )
-            }
-            (Some(prev), DataType::Array(new_arr)) => {
-                // If element is struct, merge nested; else keep as-is
-                let new_elem = match new_arr.element_type() {
-                    DataType::Struct(st) => {
-                        let prev_elem_struct = match prev.data_type() {
-                            DataType::Array(prev_arr) => match prev_arr.element_type() {
-                                DataType::Struct(pst) => Some(pst),
-                                _ => None,
-                            },
-                            _ => None,
-                        };
-                        let merged = if let Some(pst) = prev_elem_struct {
-                            merge_struct(pst.as_ref(), st.as_ref(), counter)
-                        } else {
-                            annotate_struct(st.as_ref(), counter)
-                        };
-                        DataType::Struct(Box::new(merged))
-                    }
-                    other => other.clone(),
-                };
-                (
-                    StructField {
-                        name: prev.name().clone(),
-                        data_type: ArrayType::new(new_elem, new_arr.contains_null()).into(),
-                        nullable: new_field.is_nullable(),
-                        metadata: prev.metadata().clone(),
-                    },
-                    (),
-                )
-            }
-            (Some(prev), DataType::Map(new_map)) => {
-                // Merge nested key/value if struct
-                let new_key = match new_map.key_type() {
-                    DataType::Struct(st) => {
-                        let prev_key_struct = match prev.data_type() {
-                            DataType::Map(pm) => match pm.key_type() {
-                                DataType::Struct(pst) => Some(pst),
-                                _ => None,
-                            },
-                            _ => None,
-                        };
-                        let merged = if let Some(pst) = prev_key_struct {
-                            merge_struct(pst.as_ref(), st.as_ref(), counter)
-                        } else {
-                            annotate_struct(st.as_ref(), counter)
-                        };
-                        DataType::Struct(Box::new(merged))
-                    }
-                    other => other.clone(),
-                };
-                let new_val = match new_map.value_type() {
-                    DataType::Struct(st) => {
-                        let prev_val_struct = match prev.data_type() {
-                            DataType::Map(pm) => match pm.value_type() {
-                                DataType::Struct(pst) => Some(pst),
-                                _ => None,
-                            },
-                            _ => None,
-                        };
-                        let merged = if let Some(pst) = prev_val_struct {
-                            merge_struct(pst.as_ref(), st.as_ref(), counter)
-                        } else {
-                            annotate_struct(st.as_ref(), counter)
-                        };
-                        DataType::Struct(Box::new(merged))
-                    }
-                    other => other.clone(),
-                };
-                (
-                    StructField {
-                        name: prev.name().clone(),
-                        data_type: MapType::new(new_key, new_val, new_map.value_contains_null())
-                            .into(),
-                        nullable: new_field.is_nullable(),
-                        metadata: prev.metadata().clone(),
-                    },
-                    (),
-                )
-            }
-            (Some(prev), _) => {
-                // Primitive or non-struct element: keep existing metadata, adopt new nullability and data_type
-                (
-                    StructField {
-                        name: prev.name().clone(),
-                        data_type: new_field.data_type().clone(),
-                        nullable: new_field.is_nullable(),
-                        metadata: prev.metadata().clone(),
-                    },
-                    (),
-                )
-            }
-            (None, _) => {
-                // Brand new field: annotate fully
-                (annotate_field(new_field, counter), ())
-            }
-        }
-    }
-
-    fn merge_struct(
-        existing: &StructType,
-        candidate: &StructType,
-        counter: &AtomicI64,
-    ) -> StructType {
-        let merged_fields = candidate.fields().map(|nf| {
-            let prev = find_child(existing, nf.name());
-            let (f, _) = merge_datatype(prev, nf, counter);
-            Ok::<StructField, delta_kernel::Error>(f)
-        });
-        #[allow(clippy::expect_used)]
-        StructType::try_new(merged_fields).expect("failed to build merged annotated struct")
-    }
 
     let merged = merge_struct(existing, candidate, &counter);
     let last = counter.load(Ordering::Relaxed);
