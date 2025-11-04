@@ -259,30 +259,151 @@ pub fn enrich_arrow_with_parquet_field_ids(
 ) -> ArrowSchema {
     use delta_kernel::schema::ColumnMetadataKey;
 
-    // Build map: physical_name -> Option<id>
-    let mut physical_to_id: std::collections::HashMap<String, Option<i64>> =
-        std::collections::HashMap::new();
-    for kf in logical_kernel.fields() {
-        let id = match kf.get_config_value(&ColumnMetadataKey::ColumnMappingId) {
-            Some(MetadataValue::Number(fid)) => Some(*fid),
-            _ => None,
-        };
-        let phys = match kf.get_config_value(&ColumnMetadataKey::ColumnMappingPhysicalName) {
-            Some(MetadataValue::String(s)) => s.clone(),
-            _ => kf.name().clone(),
-        };
-        physical_to_id.insert(phys, id);
+    use std::collections::HashMap;
+
+    // Build recursive mapping: physical path -> (Option<id>, logical_name)
+    fn build_path_map(
+        st: &StructType,
+        path: &mut Vec<String>,
+        out: &mut HashMap<Vec<String>, (Option<i64>, String)>,
+    ) {
+        for f in st.fields() {
+            let phys = match f.get_config_value(&ColumnMetadataKey::ColumnMappingPhysicalName) {
+                Some(MetadataValue::String(s)) => s.clone(),
+                _ => f.name().clone(),
+            };
+            path.push(phys);
+            let id = match f.get_config_value(&ColumnMetadataKey::ColumnMappingId) {
+                Some(MetadataValue::Number(fid)) => Some(*fid),
+                _ => None,
+            };
+            out.insert(path.clone(), (id, f.name().clone()));
+
+            match f.data_type() {
+                DataType::Struct(nst) => build_path_map(nst.as_ref(), path, out),
+                DataType::Array(at) => {
+                    if let DataType::Struct(nst) = at.element_type() {
+                        build_path_map(nst.as_ref(), path, out)
+                    }
+                }
+                DataType::Map(mt) => {
+                    if let DataType::Struct(nst) = mt.value_type() {
+                        build_path_map(nst.as_ref(), path, out)
+                    }
+                }
+                _ => {}
+            }
+            path.pop();
+        }
     }
 
+    let mut path_to_info: HashMap<Vec<String>, (Option<i64>, String)> = HashMap::new();
+    build_path_map(logical_kernel, &mut Vec::new(), &mut path_to_info);
+
+    // Recursively enrich Arrow fields with PARQUET:field_id
+    fn enrich_field(
+        af: &ArrowField,
+        path: &mut Vec<String>,
+        map: &HashMap<Vec<String>, (Option<i64>, String)>,
+        rename_current: bool,
+    ) -> ArrowField {
+        // Apply id for this field path if present
+        let mut meta = af.metadata().clone();
+        let mut new_name = af.name().clone();
+        if let Some((maybe_id, logical_name)) = map.get(path) {
+            if rename_current {
+                if let Some(fid) = maybe_id {
+                    meta.insert("PARQUET:field_id".to_string(), fid.to_string());
+                }
+                // Rename physical names to logical names so downstream expressions (e.g., GetField)
+                // can reference nested fields by logical name.
+                new_name = logical_name.clone();
+            }
+        }
+
+        let new_dt = match af.data_type() {
+            datafusion::arrow::datatypes::DataType::Struct(children) => {
+                let new_children: Vec<ArrowField> = children
+                    .iter()
+                    .map(|child| {
+                        path.push(child.name().clone());
+                        let updated = enrich_field(child, path, map, true);
+                        path.pop();
+                        updated
+                    })
+                    .collect();
+                datafusion::arrow::datatypes::DataType::Struct(new_children.into())
+            }
+            datafusion::arrow::datatypes::DataType::List(elem) => {
+                // Do not include wrapper (element/item) in path; preserve wrapper name
+                let updated_elem = enrich_field(elem.as_ref(), path, map, false);
+                datafusion::arrow::datatypes::DataType::List(Arc::new(updated_elem))
+            }
+            datafusion::arrow::datatypes::DataType::LargeList(elem) => {
+                let updated_elem = enrich_field(elem.as_ref(), path, map, false);
+                datafusion::arrow::datatypes::DataType::LargeList(Arc::new(updated_elem))
+            }
+            datafusion::arrow::datatypes::DataType::FixedSizeList(elem, len) => {
+                let updated_elem = enrich_field(elem.as_ref(), path, map, false);
+                datafusion::arrow::datatypes::DataType::FixedSizeList(Arc::new(updated_elem), *len)
+            }
+            datafusion::arrow::datatypes::DataType::Map(kv, is_sorted) => {
+                // Descend into value field only; key is never a struct in Spark scenarios
+                let kv_struct = match kv.data_type() {
+                    datafusion::arrow::datatypes::DataType::Struct(children) => children,
+                    _ => {
+                        return ArrowField::new(af.name(), af.data_type().clone(), af.is_nullable())
+                            .with_metadata(meta)
+                    }
+                };
+                let mut new_kv_children: Vec<ArrowField> = Vec::with_capacity(2);
+                for child in kv_struct.iter() {
+                    if child.name() == "value" {
+                        // Do not include "value" in path; preserve wrapper name and enrich its children
+                        let value_dt = match child.data_type() {
+                            datafusion::arrow::datatypes::DataType::Struct(value_children) => {
+                                let new_value_children: Vec<ArrowField> = value_children
+                                    .iter()
+                                    .map(|grandchild| {
+                                        path.push(grandchild.name().clone());
+                                        let updated = enrich_field(grandchild, path, map, true);
+                                        path.pop();
+                                        updated
+                                    })
+                                    .collect();
+                                datafusion::arrow::datatypes::DataType::Struct(
+                                    new_value_children.into(),
+                                )
+                            }
+                            _ => child.data_type().clone(),
+                        };
+                        let updated = ArrowField::new("value", value_dt, child.is_nullable())
+                            .with_metadata(child.metadata().clone());
+                        new_kv_children.push(updated);
+                    } else {
+                        new_kv_children.push(child.as_ref().clone());
+                    }
+                }
+                let new_kv = ArrowField::new(
+                    kv.name(),
+                    datafusion::arrow::datatypes::DataType::Struct(new_kv_children.into()),
+                    kv.is_nullable(),
+                );
+                datafusion::arrow::datatypes::DataType::Map(Arc::new(new_kv), *is_sorted)
+            }
+            _ => af.data_type().clone(),
+        };
+
+        ArrowField::new(&new_name, new_dt, af.is_nullable()).with_metadata(meta)
+    }
+
+    use std::sync::Arc;
     let new_fields: Vec<ArrowField> = physical_arrow
         .fields()
         .iter()
         .map(|af| {
-            let mut meta = af.metadata().clone();
-            if let Some(Some(fid)) = physical_to_id.get(af.name()) {
-                meta.insert("PARQUET:field_id".to_string(), fid.to_string());
-            }
-            ArrowField::new(af.name(), af.data_type().clone(), af.is_nullable()).with_metadata(meta)
+            let mut path = vec![af.name().clone()];
+            enrich_field(af, &mut path, &path_to_info, true)
         })
         .collect();
 

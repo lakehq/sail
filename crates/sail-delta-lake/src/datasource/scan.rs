@@ -15,12 +15,15 @@ use deltalake::kernel::Add;
 use deltalake::logstore::LogStoreRef;
 use object_store::path::Path;
 
+use crate::datasource::delta_schema_adapter::DeltaSchemaAdapterFactory;
 use crate::datasource::schema_rewriter::DeltaPhysicalExprAdapterFactory;
+// Bring the FileSource trait providing with_schema_adapter_factory into scope
 use crate::datasource::{
     create_object_store_url, delta_to_datafusion_error, partitioned_file_from_action,
     DataFusionMixins, DeltaScanConfig, DeltaTableStateExt,
 };
 use crate::table::DeltaTableState;
+use datafusion::datasource::physical_plan::FileSource as _;
 
 /// Parameters for building file scan configuration
 pub struct FileScanParams<'a> {
@@ -145,29 +148,43 @@ pub fn build_file_scan_config(
         }
     }
 
-    let file_source = Arc::new(parquet_source);
+    let file_source: Arc<dyn datafusion::datasource::physical_plan::FileSource> =
+        parquet_source.with_schema_adapter_factory(Arc::new(DeltaSchemaAdapterFactory))?;
 
     // Build the final FileScanConfig
     let object_store_url =
         create_object_store_url(&log_store.config().location).map_err(delta_to_datafusion_error)?;
 
-    let file_scan_config = FileScanConfigBuilder::new(object_store_url, file_schema, file_source)
-        .with_file_groups(
-            // If all files were filtered out, we still need to emit at least one partition
-            // to pass datafusion sanity checks.
-            // See https://github.com/apache/datafusion/issues/11322
-            if file_groups.is_empty() {
-                vec![FileGroup::from(vec![])]
-            } else {
-                file_groups.into_values().map(FileGroup::from).collect()
-            },
-        )
-        .with_statistics(stats)
-        .with_projection(params.projection.cloned())
-        .with_limit(params.limit)
-        .with_table_partition_cols(table_partition_cols_schema)
-        .with_expr_adapter(Some(Arc::new(DeltaPhysicalExprAdapterFactory {})))
-        .build();
+    // Use logical schema (excluding partition columns) for file_schema to enable name-based matching;
+    // partition columns are supplied separately below.
+    let logical_file_fields: Vec<_> = complete_schema
+        .fields()
+        .iter()
+        .filter(|f| !table_partition_cols.contains(f.name()))
+        .cloned()
+        .collect();
+    let logical_file_schema = Arc::new(datafusion::arrow::datatypes::Schema::new(
+        logical_file_fields,
+    ));
+
+    let file_scan_config =
+        FileScanConfigBuilder::new(object_store_url, logical_file_schema, file_source)
+            .with_file_groups(
+                // If all files were filtered out, we still need to emit at least one partition
+                // to pass datafusion sanity checks.
+                // See https://github.com/apache/datafusion/issues/11322
+                if file_groups.is_empty() {
+                    vec![FileGroup::from(vec![])]
+                } else {
+                    file_groups.into_values().map(FileGroup::from).collect()
+                },
+            )
+            .with_statistics(stats)
+            .with_projection(params.projection.cloned())
+            .with_limit(params.limit)
+            .with_table_partition_cols(table_partition_cols_schema)
+            .with_expr_adapter(Some(Arc::new(DeltaPhysicalExprAdapterFactory {})))
+            .build();
 
     Ok(file_scan_config)
 }

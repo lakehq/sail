@@ -64,8 +64,6 @@ pub struct DeltaWriterExec {
 }
 
 impl DeltaWriterExec {
-    // Removed: use shared helper in column_mapping.rs
-
     /// Build a map from physical field name to logical name for top-level columns
     fn build_physical_to_logical_map(logical_kernel: &StructType) -> HashMap<String, String> {
         let mut map = HashMap::new();

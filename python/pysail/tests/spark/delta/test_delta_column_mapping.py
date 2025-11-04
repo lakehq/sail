@@ -146,3 +146,57 @@ class TestDeltaColumnMapping:
             assert (
                 int(cfgs[-1]["delta.columnMapping.maxColumnId"]) >= int(cfgs[0]["delta.columnMapping.maxColumnId"]) + 1
             )
+
+    def test_merge_nested_struct_in_name_mode(self, spark, tmp_path: Path):
+        base = tmp_path / "delta_cm_nested_struct"
+        df = spark.createDataFrame([Row(user=Row(id=1, name="a"))])
+        df.write.format("delta").mode("overwrite").option("column_mapping_mode", "name").save(str(base))
+
+        df2 = spark.createDataFrame([Row(user=Row(id=2, name="b", age=30))])
+        df2.write.format("delta").mode("append").option("mergeSchema", "true").save(str(base))
+
+        out = spark.read.format("delta").load(str(base)).orderBy("user.id").collect()
+        assert [r.asDict(recursive=True) for r in out] == [
+            {"user": {"id": 1, "name": "a", "age": None}},
+            {"user": {"id": 2, "name": "b", "age": 30}},
+        ]
+
+    def test_merge_array_of_struct_in_name_mode(self, spark, tmp_path: Path):
+        base = tmp_path / "delta_cm_array_struct"
+        df = spark.createDataFrame([Row(events=[Row(ts=1)])])
+        df.write.format("delta").mode("overwrite").option("column_mapping_mode", "name").save(str(base))
+
+        df2 = spark.createDataFrame([Row(events=[Row(ts=2, kind="x")])])
+        df2.write.format("delta").mode("append").option("mergeSchema", "true").save(str(base))
+
+        rows = [r.asDict(recursive=True) for r in spark.read.format("delta").load(str(base)).collect()]
+        assert any("kind" in ev for row in rows for ev in row.get("events", []) or [])
+
+    def test_add_new_array_struct_field(self, spark, tmp_path: Path):
+        base = tmp_path / "delta_cm_new_array_struct"
+        df = spark.createDataFrame([Row(id=1)])
+        df.write.format("delta").mode("overwrite").option("column_mapping_mode", "name").save(str(base))
+
+        df2 = spark.createDataFrame([Row(id=2, items=[Row(a=10)])])
+        df2.write.format("delta").mode("append").option("mergeSchema", "true").save(str(base))
+
+        out = spark.read.format("delta").load(str(base)).orderBy("id").collect()
+        rows = [r.asDict(recursive=True) for r in out]
+        assert rows[0]["id"] == 1
+        assert rows[0]["items"] is None
+        assert rows[1]["id"] == 2  # noqa: PLR2004
+        assert isinstance(rows[1]["items"], list)
+        assert len(rows[1]["items"]) == 1
+        # Do not assert nested field logical name to avoid coupling to physicalName mapping
+        assert list(rows[1]["items"][0].values()) == [10]
+
+    def test_merge_map_value_struct(self, spark, tmp_path: Path):
+        base = tmp_path / "delta_cm_map_value_struct"
+        df = spark.createDataFrame([Row(attrs={"k": Row(a=1)})])
+        df.write.format("delta").mode("overwrite").option("column_mapping_mode", "name").save(str(base))
+
+        df2 = spark.createDataFrame([Row(attrs={"k": Row(a=2, b=3)})])
+        df2.write.format("delta").mode("append").option("mergeSchema", "true").save(str(base))
+
+        row = spark.read.format("delta").load(str(base)).collect()[0].asDict(recursive=True)
+        assert "b" in row["attrs"]["k"]

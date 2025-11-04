@@ -5,8 +5,10 @@ use datafusion::arrow::compute::can_cast_types;
 use datafusion::arrow::datatypes::{DataType, Field, FieldRef, Schema, SchemaRef};
 use datafusion::common::tree_node::{Transformed, TransformedResult, TreeNode};
 use datafusion::common::{exec_err, Result, ScalarValue};
-use datafusion::physical_expr::expressions::{Column, Literal};
+use datafusion::functions::core::getfield::GetFieldFunc;
+use datafusion::physical_expr::expressions::{self, Column, Literal};
 use datafusion::physical_expr::PhysicalExpr;
+use datafusion::physical_expr::ScalarFunctionExpr;
 use datafusion::physical_expr_adapter::{PhysicalExprAdapter, PhysicalExprAdapterFactory};
 
 use crate::datasource::type_converter::DeltaTypeConverter;
@@ -174,6 +176,11 @@ impl<'a> DeltaPhysicalExprRewriter<'a> {
         &self,
         expr: Arc<dyn PhysicalExpr>,
     ) -> Result<Transformed<Arc<dyn PhysicalExpr>>> {
+        // Handle struct field access: if the field is missing in physical schema,
+        // rewrite to a typed NULL literal matching the logical field type.
+        if let Some(transformed) = self.try_rewrite_struct_field_access(&expr)? {
+            return Ok(Transformed::yes(transformed));
+        }
         // Handle column references with schema evolution
         if let Some(column) = expr.as_any().downcast_ref::<Column>() {
             return self.rewrite_column(Arc::clone(&expr), column);
@@ -181,6 +188,79 @@ impl<'a> DeltaPhysicalExprRewriter<'a> {
 
         // For non-column expressions, continue with default behavior
         Ok(Transformed::no(expr))
+    }
+
+    /// Rewrite GetField(struct_col, "field") to NULL when the field is not present
+    /// in the physical schema, casting the NULL to the logical field type.
+    /// This mirrors DataFusion's default adapter behavior.
+    fn try_rewrite_struct_field_access(
+        &self,
+        expr: &Arc<dyn PhysicalExpr>,
+    ) -> Result<Option<Arc<dyn PhysicalExpr>>> {
+        let get_field_expr =
+            match ScalarFunctionExpr::try_downcast_func::<GetFieldFunc>(expr.as_ref()) {
+                Some(expr) => expr,
+                None => return Ok(None),
+            };
+
+        let source_expr = match get_field_expr.args().first() {
+            Some(expr) => expr,
+            None => return Ok(None),
+        };
+        let field_name_expr = match get_field_expr.args().get(1) {
+            Some(expr) => expr,
+            None => return Ok(None),
+        };
+
+        let lit = match field_name_expr
+            .as_any()
+            .downcast_ref::<expressions::Literal>()
+        {
+            Some(lit) => lit,
+            None => return Ok(None),
+        };
+        let field_name = match lit.value().try_as_str().flatten() {
+            Some(name) => name,
+            None => return Ok(None),
+        };
+
+        let column = match source_expr.as_any().downcast_ref::<Column>() {
+            Some(column) => column,
+            None => return Ok(None),
+        };
+
+        let physical_field = match self.physical_file_schema.field_with_name(column.name()) {
+            Ok(field) => field,
+            Err(_) => return Ok(None),
+        };
+        let physical_struct_fields = match physical_field.data_type() {
+            DataType::Struct(fields) => fields,
+            _ => return Ok(None),
+        };
+        if physical_struct_fields
+            .iter()
+            .any(|f| f.name() == field_name)
+        {
+            return Ok(None);
+        }
+
+        let logical_field = match self.logical_file_schema.field_with_name(column.name()) {
+            Ok(field) => field,
+            Err(_) => return Ok(None),
+        };
+        let logical_struct_fields = match logical_field.data_type() {
+            DataType::Struct(fields) => fields,
+            _ => return Ok(None),
+        };
+        let logical_struct_field = match logical_struct_fields
+            .iter()
+            .find(|f| f.name() == field_name)
+        {
+            Some(field) => field,
+            None => return Ok(None),
+        };
+        let null_value = ScalarValue::Null.cast_to(logical_struct_field.data_type())?;
+        Ok(Some(Arc::new(Literal::new(null_value))))
     }
 
     fn rewrite_column(
