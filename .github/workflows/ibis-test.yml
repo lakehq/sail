@@ -53,7 +53,26 @@ jobs:
 
       - name: Wait for Spark Connect Server to Start
         run: |
-          scripts/spark-tests/wait-for-server.sh
+          set -e
+          addr="127.0.0.1:50051"
+          max_secs=240
+          elapsed=0
+          interval=3
+          echo "Waiting for Spark Connect at $addr (timeout ${max_secs}s)..."
+          while [ $elapsed -lt $max_secs ]; do
+            if grpc_health_probe -addr="$addr" -tls=false >/dev/null 2>&1; then
+              echo "Spark Connect server is up after ${elapsed}s"
+              exit 0
+            fi
+            sleep $interval
+            elapsed=$((elapsed+interval))
+          done
+          echo "Server did not become healthy within ${max_secs}s"
+          echo "==== server.log (last 200 lines) ===="
+          tail -n 200 tmp/spark-tests/latest/server.log || true
+          echo "==== listening sockets ===="
+          (command -v ss >/dev/null && ss -lntp) || (command -v lsof >/dev/null && lsof -iTCP -sTCP:LISTEN -nP) || true
+          exit 1
 
       - name: Run ibis tests
         timeout-minutes: 15
