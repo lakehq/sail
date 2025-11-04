@@ -38,9 +38,6 @@ test = [
     "pillow>=10.3.0",
     "pyiceberg[sql-sqlite,pyiceberg-core]==0.10.0",
     "pydantic>=2.11,<2.12",
-    "pandas>=2.2,<3",
-    "pyarrow>=14,<18",
-    "numpy>=1.24,<3",
 ]
 mcp = [
     "mcp>=1.0.0,<2",
@@ -173,10 +170,6 @@ skip-install = true
 dependencies = [
     "pyspark[connect]==3.5.5",
     "ibis-framework[pyspark]>=9.5,<10",
-    # Necesarios para toPandas():
-    "pandas>=2.2,<3",
-    "pyarrow>=14,<18",
-    "numpy>=1.24,<3",
     # The test dependencies are borrowed from `pyproject.toml` of the Ibis project.
     # They need to be updated accordingly when we update the Ibis version.
     "cloudpickle",
