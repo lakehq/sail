@@ -18,7 +18,7 @@ use datafusion::physical_plan::{
 use datafusion_common::{internal_err, DataFusionError, Result};
 use datafusion_physical_expr::{Distribution, EquivalenceProperties, PhysicalExpr};
 use delta_kernel::engine::arrow_conversion::{TryIntoArrow, TryIntoKernel};
-use delta_kernel::schema::{ColumnMetadataKey, StructType};
+use delta_kernel::schema::StructType;
 use delta_kernel::table_features::ColumnMappingMode;
 #[allow(deprecated)]
 use deltalake::kernel::{Action, MetadataExt};
@@ -324,16 +324,12 @@ impl ExecutionPlan for DeltaWriterExec {
             };
 
             // Determine effective column mapping mode
-            let mut effective_mode = if let Some(table) = &table {
-                // Read from existing table configuration via our snapshot wrapper
-                // Use kernel snapshot via our wrapper
-                match table
+            let effective_mode = if let Some(table) = &table {
+                let mode = table
                     .snapshot()
                     .map_err(|e| DataFusionError::External(Box::new(e)))?
-                    .snapshot()
-                    .table_configuration()
-                    .column_mapping_mode()
-                {
+                    .effective_column_mapping_mode();
+                match mode {
                     delta_kernel::table_features::ColumnMappingMode::Name => {
                         ColumnMappingModeOption::Name
                     }
@@ -345,27 +341,6 @@ impl ExecutionPlan for DeltaWriterExec {
             } else {
                 options.column_mapping_mode
             };
-
-            // Fallback: if mode is None but snapshot schema carries column mapping annotations, treat as Name
-            if matches!(effective_mode, ColumnMappingModeOption::None) {
-                if let Some(table) = &table {
-                    let kschema = table
-                        .snapshot()
-                        .map_err(|e| DataFusionError::External(Box::new(e)))?
-                        .snapshot()
-                        .schema()
-                        .clone();
-                    let has_annotations = kschema.fields().any(|f| {
-                        f.metadata()
-                            .contains_key(ColumnMetadataKey::ColumnMappingPhysicalName.as_ref())
-                            && f.metadata()
-                                .contains_key(ColumnMetadataKey::ColumnMappingId.as_ref())
-                    });
-                    if has_annotations {
-                        effective_mode = ColumnMappingModeOption::Name;
-                    }
-                }
-            }
 
             // If creating a new table and column mapping mode is requested, prepare initial protocol+metadata
             let mut annotated_schema_opt: Option<StructType> = None;
@@ -690,24 +665,7 @@ impl DeltaWriterExec {
                     let snapshot = table.snapshot().map_err(delta_to_datafusion_error)?;
                     let current_metadata = snapshot.metadata();
                     let current_kernel = snapshot.snapshot().schema().clone();
-                    let kmode_explicit = snapshot
-                        .snapshot()
-                        .table_configuration()
-                        .column_mapping_mode();
-                    let has_annotations = current_kernel.fields().any(|f| {
-                        f.metadata().contains_key(
-                            delta_kernel::schema::ColumnMetadataKey::ColumnMappingPhysicalName
-                                .as_ref(),
-                        ) && f.metadata().contains_key(
-                            delta_kernel::schema::ColumnMetadataKey::ColumnMappingId.as_ref(),
-                        )
-                    });
-                    let kmode =
-                        if matches!(kmode_explicit, ColumnMappingMode::None) && has_annotations {
-                            ColumnMappingMode::Name
-                        } else {
-                            kmode_explicit
-                        };
+                    let kmode = snapshot.effective_column_mapping_mode();
 
                     // If column mapping is enabled, annotate any newly added fields and update maxColumnId
                     let (_final_kernel, updated_metadata) =
@@ -763,23 +721,7 @@ impl DeltaWriterExec {
                 let snapshot = table.snapshot().map_err(delta_to_datafusion_error)?;
                 let current_metadata = snapshot.metadata();
                 let current_kernel = snapshot.snapshot().schema().clone();
-                let kmode_explicit = snapshot
-                    .snapshot()
-                    .table_configuration()
-                    .column_mapping_mode();
-                let has_annotations = current_kernel.fields().any(|f| {
-                    f.metadata().contains_key(
-                        delta_kernel::schema::ColumnMetadataKey::ColumnMappingPhysicalName.as_ref(),
-                    ) && f.metadata().contains_key(
-                        delta_kernel::schema::ColumnMetadataKey::ColumnMappingId.as_ref(),
-                    )
-                });
-                let kmode = if matches!(kmode_explicit, ColumnMappingMode::None) && has_annotations
-                {
-                    ColumnMappingMode::Name
-                } else {
-                    kmode_explicit
-                };
+                let kmode = snapshot.effective_column_mapping_mode();
 
                 // If mapping is enabled, preserve existing ids for retained fields and annotate new ones; update maxColumnId
                 let updated_metadata =

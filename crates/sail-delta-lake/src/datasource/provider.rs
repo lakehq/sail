@@ -198,25 +198,8 @@ impl TableProvider for DeltaTableProvider {
 
         // Build physical file schema (non-partition columns) using kernel make_physical
         let table_partition_cols = self.snapshot.metadata().partition_columns();
-        let kmode_explicit: ColumnMappingMode = self
-            .snapshot
-            .snapshot()
-            .table_configuration()
-            .column_mapping_mode();
+        let kmode: ColumnMappingMode = self.snapshot.effective_column_mapping_mode();
         let kschema_arc = self.snapshot.snapshot().table_configuration().schema();
-        // Fallback: if mode is None but schema contains column mapping annotations, treat as Name
-        let has_annotations = kschema_arc.fields().any(|f| {
-            f.metadata().contains_key(
-                delta_kernel::schema::ColumnMetadataKey::ColumnMappingPhysicalName.as_ref(),
-            ) && f
-                .metadata()
-                .contains_key(delta_kernel::schema::ColumnMetadataKey::ColumnMappingId.as_ref())
-        });
-        let kmode = if matches!(kmode_explicit, ColumnMappingMode::None) && has_annotations {
-            ColumnMappingMode::Name
-        } else {
-            kmode_explicit
-        };
         let physical_kernel = kschema_arc.make_physical(kmode);
         let physical_arrow: ArrowSchema =
             deltalake::kernel::engine::arrow_conversion::TryIntoArrow::try_into_arrow(

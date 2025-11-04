@@ -20,17 +20,19 @@ pub fn annotate_schema_for_column_mapping(schema: &StructType) -> StructType {
 }
 
 fn annotate_field(field: &StructField, counter: &AtomicI64) -> StructField {
-    match field.data_type() {
+    // Assign column mapping metadata once per field
+    let next_id = counter.fetch_add(1, Ordering::Relaxed);
+    let physical_name = format!("col-{}", uuid::Uuid::new_v4());
+    let annotated = field.clone().add_metadata([
+        ("delta.columnMapping.id", MetadataValue::Number(next_id)),
+        (
+            "delta.columnMapping.physicalName",
+            MetadataValue::String(physical_name),
+        ),
+    ]);
+
+    match annotated.data_type() {
         DataType::Struct(struct_type) => {
-            let next_id = counter.fetch_add(1, Ordering::Relaxed);
-            let physical_name = format!("col-{}", uuid::Uuid::new_v4());
-            let annotated = field.clone().add_metadata([
-                ("delta.columnMapping.id", MetadataValue::Number(next_id)),
-                (
-                    "delta.columnMapping.physicalName",
-                    MetadataValue::String(physical_name),
-                ),
-            ]);
             let nested = annotate_struct(struct_type.as_ref(), counter);
             StructField {
                 name: annotated.name().clone(),
@@ -40,15 +42,6 @@ fn annotate_field(field: &StructField, counter: &AtomicI64) -> StructField {
             }
         }
         DataType::Array(array_type) => {
-            let next_id = counter.fetch_add(1, Ordering::Relaxed);
-            let physical_name = format!("col-{}", uuid::Uuid::new_v4());
-            let annotated = field.clone().add_metadata([
-                ("delta.columnMapping.id", MetadataValue::Number(next_id)),
-                (
-                    "delta.columnMapping.physicalName",
-                    MetadataValue::String(physical_name),
-                ),
-            ]);
             let new_element = match array_type.element_type() {
                 DataType::Struct(st) => annotate_struct(st.as_ref(), counter).into(),
                 other => other.clone(),
@@ -61,15 +54,6 @@ fn annotate_field(field: &StructField, counter: &AtomicI64) -> StructField {
             }
         }
         DataType::Map(map_type) => {
-            let next_id = counter.fetch_add(1, Ordering::Relaxed);
-            let physical_name = format!("col-{}", uuid::Uuid::new_v4());
-            let annotated = field.clone().add_metadata([
-                ("delta.columnMapping.id", MetadataValue::Number(next_id)),
-                (
-                    "delta.columnMapping.physicalName",
-                    MetadataValue::String(physical_name),
-                ),
-            ]);
             let new_key = match map_type.key_type() {
                 DataType::Struct(st) => annotate_struct(st.as_ref(), counter).into(),
                 other => other.clone(),
@@ -85,20 +69,12 @@ fn annotate_field(field: &StructField, counter: &AtomicI64) -> StructField {
                 metadata: annotated.metadata().clone(),
             }
         }
-        _ => {
-            let next_id = counter.fetch_add(1, Ordering::Relaxed);
-            let physical_name = format!("col-{}", uuid::Uuid::new_v4());
-            field.clone().add_metadata([
-                ("delta.columnMapping.id", MetadataValue::Number(next_id)),
-                (
-                    "delta.columnMapping.physicalName",
-                    MetadataValue::String(physical_name),
-                ),
-            ])
-        }
+        _ => annotated,
     }
 }
 
+// TODO: Consider inlining the struct-field iteration into the DataType::Struct branch
+// of annotate_field and removing this helper to reduce indirection.
 fn annotate_struct(struct_type: &StructType, counter: &AtomicI64) -> StructType {
     let fields = struct_type
         .fields()
@@ -172,6 +148,9 @@ pub fn annotate_new_fields_for_column_mapping(
         st.fields().find(|f| f.name() == name)
     }
 
+    // TODO: Consider extracting a generic recursive type merger (e.g.,
+    // merge_types(existing: Option<&DataType>, new: &DataType, ...)) to reduce
+    // nested matches for Array/Map/Struct while preserving field-level metadata.
     fn merge_datatype(
         existing_field: Option<&StructField>,
         new_field: &StructField,
