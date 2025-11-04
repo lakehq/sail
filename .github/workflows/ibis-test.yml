@@ -47,9 +47,22 @@ jobs:
           chmod +x /usr/local/bin/grpc_health_probe
           grpc_health_probe -version
 
-      - name: Start Spark Connect server
+#      - name: Start Spark Connect server
+#        run: |
+#          nohup hatch run test-ibis:scripts/spark-tests/run-server.sh > /dev/null 2>&1 < /dev/null &
+      - name: Start Spark Connect server (live log)
         run: |
-          nohup hatch run test-ibis:scripts/spark-tests/run-server.sh > /dev/null 2>&1 < /dev/null &
+          set -e
+          mkdir -p tmp/spark-tests/latest
+          ( stdbuf -oL -eL hatch run test-ibis:scripts/spark-tests/run-server.sh \
+              2>&1 | tee tmp/spark-tests/latest/server.log ) &
+          
+          sleep 3
+          if ! pgrep -f "sail spark server" >/dev/null; then
+            echo "❌ Server process not found right after launch."
+            exit 1
+          fi
+
 
       - name: Wait for Spark Connect Server to Start
         run: |
@@ -73,6 +86,14 @@ jobs:
           echo "==== listening sockets ===="
           (command -v ss >/dev/null && ss -lntp) || (command -v lsof >/dev/null && lsof -iTCP -sTCP:LISTEN -nP) || true
           exit 1
+
+      - name: Tail recent server log (optional)
+        if: failure()
+        run: |
+          echo "::group::server.log (last 200 lines)"
+          tail -n 200 tmp/spark-tests/latest/server.log || true
+          echo "::endgroup::"
+
 
       - name: Run ibis tests
         timeout-minutes: 15
