@@ -28,12 +28,6 @@ jobs:
             rustup toolchain install stable
           } &
 
-      - name: Download Python Package
-        uses: actions/download-artifact@v4
-        with:
-          name: python-package
-          path: target/wheels
-
       - name: Build and install
         run: |
           hatch run maturin develop
