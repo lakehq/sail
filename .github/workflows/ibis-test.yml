@@ -28,6 +28,11 @@ jobs:
             rustup toolchain install stable
           } &
 
+      - name: Install protoc
+        uses: arduino/setup-protoc@v3
+        with:
+          version: "latest"
+
       - name: Build Python Package
         uses: PyO3/maturin-action@v1
 
