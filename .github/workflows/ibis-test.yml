@@ -31,7 +31,7 @@ jobs:
       - name: Install protoc
         uses: arduino/setup-protoc@v3
         with:
-          version: "latest"
+          version: "23.x"
 
       - name: Build Python Package
         uses: PyO3/maturin-action@v1
