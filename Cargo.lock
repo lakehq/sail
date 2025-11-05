@@ -5978,7 +5978,7 @@ dependencies = [
 
 [[package]]
 name = "sail-catalog-unity"
-version = "0.4.0"
+version = "0.4.1"
 dependencies = [
  "async-trait",
  "prettyplease",
@@ -5992,6 +5992,7 @@ dependencies = [
  "serde_with",
  "serde_yaml",
  "syn 2.0.108",
+ "testcontainers",
  "tokio",
  "url",
  "uuid",
@@ -6400,6 +6401,7 @@ dependencies = [
  "sail-catalog",
  "sail-catalog-iceberg",
  "sail-catalog-memory",
+ "sail-catalog-unity",
  "sail-common",
 ]
 

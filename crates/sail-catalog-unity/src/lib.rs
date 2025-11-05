@@ -7,4 +7,4 @@ pub mod unity {
     include!(concat!(env!("OUT_DIR"), "/unity_catalog.rs"));
 }
 
-pub use provider::UnityCatalogProvider;
+pub use provider::{UnityCatalogProvider, UNITY_CATALOG_PROP_URI};

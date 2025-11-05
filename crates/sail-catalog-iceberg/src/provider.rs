@@ -8,6 +8,7 @@ use sail_catalog::provider::{
     DatabaseStatus, DropDatabaseOptions, DropTableOptions, DropViewOptions, Namespace,
     TableColumnStatus, TableKind, TableStatus,
 };
+use sail_catalog::utils::get_property;
 use sail_iceberg::{
     arrow_type_to_iceberg, iceberg_type_to_arrow, Literal, NestedField, StructType,
     DEFAULT_SCHEMA_ID,
@@ -22,13 +23,6 @@ pub const REST_CATALOG_PROP_URI: &str = "uri";
 pub const REST_CATALOG_PROP_WAREHOUSE: &str = "warehouse";
 
 pub const REST_CATALOG_PROP_PREFIX: &str = "prefix";
-
-fn get_property(properties: &HashMap<String, String>, key: &str) -> Option<String> {
-    properties
-        .iter()
-        .find(|(k, _)| k.trim().to_lowercase() == key.trim().to_lowercase())
-        .map(|(_, v)| v.clone())
-}
 
 // TODO: Further properties and configurations may be needed from:
 //  - https://iceberg.apache.org/docs/nightly/configuration/#catalog-properties
@@ -50,6 +44,7 @@ pub struct IcebergRestCatalogProvider {
 
 impl IcebergRestCatalogProvider {
     pub fn new(name: String, props: HashMap<String, String>) -> Self {
+        // CHECK HERE: format: "iceberg" not hard coded
         let catalog_config = RestCatalogConfig {
             uri: props
                 .get(REST_CATALOG_PROP_URI)
@@ -542,6 +537,7 @@ impl CatalogProvider for IcebergRestCatalogProvider {
             location,
             properties,
         } = options;
+
         let mut props: HashMap<String, String> = properties.into_iter().collect();
         if let Some(c) = comment {
             props.insert("comment".to_string(), c);

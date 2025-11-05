@@ -21,6 +21,10 @@ uuid = { workspace = true }
 tokio = { workspace = true }
 progenitor-client = { workspace = true }
 
+[dev-dependencies]
+tokio = { workspace = true }
+testcontainers = { workspace = true }
+
 [build-dependencies]
 progenitor = { workspace = true }
 prettyplease = { workspace = true }

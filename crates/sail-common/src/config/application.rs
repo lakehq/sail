@@ -294,6 +294,11 @@ pub enum CatalogType {
         oauth_access_token: Option<String>,
         bearer_access_token: Option<String>,
     },
+    Unity {
+        name: String,
+        uri: String,
+        default_catalog: String,
+    },
 }
 
 #[derive(Debug, Clone, Deserialize)]

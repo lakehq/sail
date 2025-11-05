@@ -7,6 +7,7 @@ use sail_catalog::manager::{CatalogManager, CatalogManagerOptions};
 use sail_catalog::provider::{CatalogProvider, RuntimeAwareCatalogProvider};
 use sail_catalog_iceberg::IcebergRestCatalogProvider;
 use sail_catalog_memory::MemoryCatalogProvider;
+use sail_catalog_unity::UnityCatalogProvider;
 use sail_common::config::{AppConfig, CatalogType};
 use sail_common::runtime::RuntimeHandle;
 
@@ -65,6 +66,28 @@ pub fn create_catalog_manager(
                         || {
                             let provider =
                                 IcebergRestCatalogProvider::new(name.to_string(), properties);
+                            Ok(provider)
+                        },
+                        runtime.io().clone(),
+                    )?;
+
+                    Ok((name.to_string(), Arc::new(runtime_aware)))
+                }
+                CatalogType::Unity {
+                    name,
+                    uri,
+                    default_catalog,
+                } => {
+                    // CHECK HERE
+                    let mut properties = HashMap::new();
+                    properties.insert("uri".to_string(), uri.to_string());
+                    let runtime_aware = RuntimeAwareCatalogProvider::try_new(
+                        || {
+                            let provider = UnityCatalogProvider::new(
+                                name.to_string(),
+                                default_catalog.to_string(),
+                                properties,
+                            );
                             Ok(provider)
                         },
                         runtime.io().clone(),
