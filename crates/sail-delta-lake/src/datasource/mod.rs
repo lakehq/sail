@@ -21,8 +21,8 @@ pub mod provider;
 pub mod pruning;
 pub mod scan;
 pub mod schema;
+pub mod schema_adapter;
 pub(crate) mod schema_rewriter;
-pub mod delta_schema_adapter;
 pub mod type_converter;
 
 // Re-exports

@@ -1,8 +1,7 @@
 use std::sync::Arc;
 
-use datafusion::arrow::array::{
-    cast::AsArray, Array, ArrayRef, GenericListArray, MapArray, StructArray,
-};
+use datafusion::arrow::array::cast::AsArray;
+use datafusion::arrow::array::{Array, ArrayRef, GenericListArray, MapArray, StructArray};
 use datafusion::arrow::compute::CastOptions;
 use datafusion::arrow::datatypes::{DataType, Field, Schema, SchemaRef};
 use datafusion::arrow::record_batch::{RecordBatch, RecordBatchOptions};
@@ -169,7 +168,7 @@ fn cast_nested_column(
         DataType::LargeList(elem_field) => cast_large_list(array, elem_field.as_ref(), opts),
         DataType::Map(kv_field, ordered) => cast_map(array, kv_field.as_ref(), *ordered, opts),
         DataType::FixedSizeList(elem_field, len) => {
-            cast_fixed_size_list(array, elem_field.as_ref(), *len as i32)
+            cast_fixed_size_list(array, elem_field.as_ref(), *len)
         }
         _ => Ok(datafusion::arrow::compute::cast(
             array,
@@ -178,7 +177,7 @@ fn cast_nested_column(
     }
 }
 
-fn cast_list(array: &ArrayRef, target_elem: &Field, opts: &CastOptions) -> DFResult<ArrayRef> {
+fn cast_list(array: &ArrayRef, target_elem: &Field, _opts: &CastOptions) -> DFResult<ArrayRef> {
     let list = array.as_list::<i32>().clone();
     let (_list_field, offsets, values, nulls) = list.into_parts();
     let casted_values = match (values.data_type(), target_elem.data_type()) {
@@ -193,7 +192,7 @@ fn cast_list(array: &ArrayRef, target_elem: &Field, opts: &CastOptions) -> DFRes
 fn cast_large_list(
     array: &ArrayRef,
     target_elem: &Field,
-    opts: &CastOptions,
+    _opts: &CastOptions,
 ) -> DFResult<ArrayRef> {
     let list = array.as_list::<i64>().clone();
     let (_list_field, offsets, values, nulls) = list.into_parts();
@@ -217,7 +216,7 @@ fn cast_map(
     array: &ArrayRef,
     target_kv: &Field,
     ordered: bool,
-    opts: &CastOptions,
+    _opts: &CastOptions,
 ) -> DFResult<ArrayRef> {
     let map = array.as_map().clone();
     let (_map_field, offsets, entries, nulls, _ord) = map.into_parts();
@@ -228,6 +227,7 @@ fn cast_map(
         }
         _ => datafusion::arrow::compute::cast(&entries, target_kv.data_type())?,
     };
+    #[allow(clippy::expect_used)]
     let entries_sa = casted_entries
         .as_any()
         .downcast_ref::<StructArray>()

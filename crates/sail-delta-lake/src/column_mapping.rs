@@ -257,9 +257,9 @@ pub fn enrich_arrow_with_parquet_field_ids(
     physical_arrow: &ArrowSchema,
     logical_kernel: &StructType,
 ) -> ArrowSchema {
-    use delta_kernel::schema::ColumnMetadataKey;
-
     use std::collections::HashMap;
+
+    use delta_kernel::schema::ColumnMetadataKey;
 
     // Build recursive mapping: physical path -> (Option<id>, logical_name)
     fn build_path_map(

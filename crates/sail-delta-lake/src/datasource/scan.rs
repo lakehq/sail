@@ -8,14 +8,14 @@ use datafusion::config::TableParquetOptions;
 use datafusion::datasource::listing::PartitionedFile;
 use datafusion::datasource::physical_plan::{
     wrap_partition_type_in_dict, wrap_partition_value_in_dict, FileGroup, FileScanConfig,
-    FileScanConfigBuilder, ParquetSource,
+    FileScanConfigBuilder, FileSource as _, ParquetSource,
 };
 use datafusion::physical_expr::PhysicalExpr;
 use deltalake::kernel::Add;
 use deltalake::logstore::LogStoreRef;
 use object_store::path::Path;
 
-use crate::datasource::delta_schema_adapter::DeltaSchemaAdapterFactory;
+use crate::datasource::schema_adapter::DeltaSchemaAdapterFactory;
 use crate::datasource::schema_rewriter::DeltaPhysicalExprAdapterFactory;
 // Bring the FileSource trait providing with_schema_adapter_factory into scope
 use crate::datasource::{
@@ -23,7 +23,6 @@ use crate::datasource::{
     DataFusionMixins, DeltaScanConfig, DeltaTableStateExt,
 };
 use crate::table::DeltaTableState;
-use datafusion::datasource::physical_plan::FileSource as _;
 
 /// Parameters for building file scan configuration
 pub struct FileScanParams<'a> {
