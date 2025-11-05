@@ -247,3 +247,18 @@ async fn test_create_schema() {
     assert_eq!(created_again.comment, None);
     assert_eq!(created_again.location, None,);
 }
+
+#[tokio::test]
+#[ignore]
+async fn test_get_non_exist_schema() {
+    let (unity_catalog, _unity_container, _postgres_container) = setup_catalog().await;
+
+    let namespace = Namespace::try_from(vec!["test_get_non_exist_schema".to_string()]).unwrap();
+    let result = unity_catalog.get_database(&namespace).await;
+
+    assert!(result.is_err());
+    assert!(matches!(
+        result.unwrap_err(),
+        sail_catalog::error::CatalogError::NotFound(_, _)
+    ));
+}
