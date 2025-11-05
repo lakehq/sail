@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import os
+import importlib
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
@@ -11,6 +12,8 @@ if TYPE_CHECKING:
 
 # pytest markers defined in `pyproject.toml` of the Ibis project
 IBIS_MARKERS = [
+"athena",
+"databricks",
     "backend: tests specific to a backend",
     "benchmark: benchmarks",
     "core: tests that do not required a backend",
@@ -46,7 +49,7 @@ IBIS_MARKERS = [
 ]
 
 
-@pytest.fixture(scope="session", autouse=True)
+@pytest.fixture(scope="session")
 def patch_ibis_spark_session():
     from ibis.backends.pyspark.tests.conftest import TestConf, TestConfForStreaming
 
@@ -61,27 +64,22 @@ def patch_ibis_spark_session():
     TestConfForStreaming.connect = staticmethod(connect)
 
 
+def _resolve_data_volume() -> str:
+    dv = os.environ.get("IBIS_DATA_VOLUME")
+    if dv:
+        return dv
+    root = os.environ.get("IBIS_TESTING_DATA_DIR")
+    if root:
+        return str(Path(root) / "parquet")
+    return "/data"
+
 def pytest_configure(config):
+    import importlib
+    data_volume = _resolve_data_volume()
+    mod = importlib.import_module("ibis.backends.pyspark.tests.conftest")
+    TestConf = getattr(mod, "TestConf")
+    TestConf.data_volume = data_volume
+    TestConf.parquet_dir = property(lambda self: data_volume)
     for marker in IBIS_MARKERS:
         config.addinivalue_line("markers", marker)
 
-
-def pytest_fixture_setup(
-    fixturedef: FixtureDef[Any],
-    request: SubRequest,  # noqa: ARG001
-) -> object | None:
-    from _pytest.nodes import SEP
-
-    env_var = "IBIS_TESTING_DATA_DIR"
-    data_dir = os.environ.get(env_var)
-    if not data_dir:
-        msg = f"missing environment variable '{env_var}'"
-        raise RuntimeError(msg)
-
-    data_dir = Path(data_dir)
-    if fixturedef.argname == "data_dir" and fixturedef.baseid.endswith(f"{SEP}ibis{SEP}backends"):
-        # override the result of the `data_dir` fixture
-        fixturedef.cached_result = (data_dir, None, None)
-        return data_dir
-
-    return None

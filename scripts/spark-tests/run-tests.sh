@@ -64,7 +64,6 @@ function run_pytest() {
   # We ignore the pytext exit code so that the command can complete successfully.
   pytest \
     "${plugin_args[@]}" \
-    -p no:randomly \
     -o "doctest_optionflags=ELLIPSIS NORMALIZE_WHITESPACE IGNORE_EXCEPTION_DETAIL NUMBER" \
     -o "faulthandler_timeout=30" \
     -vv \
@@ -73,24 +72,8 @@ function run_pytest() {
     --disable-warnings \
     --strict-markers \
     --report-log="${logs_dir}/${name}.jsonl" \
-    -k "not test_array and not test_aggregation and not test_join and not test_client and not test_generic" \
     "${args[@]}" \
     | tee "${logs_dir}/${name}.log" || true
-
-
-#    -k "(test_array and not (test_array_flatten or test_unnest_simple or test_array_position \
-#    or test_range_start_stop_step or test_array_unique or test_array_agg_numeric \
-#    or test_array_concat_variadic or test_array_column or test_array_map or test_array_filter or test_timestamp_range_zero_step)) \
-#    or (test_aggregation and not (test_group_concat or test_approx_quantile or test_group_by_expr)) \
-#    or (test_client and not (test_create_table_in_memory or test_insert_no_overwrite_from_expr)) \
-#    or (test_generic and not (test_sample_with_seed or test_simple_memtable_construct or test_select_mutate_with_dict))" \
-
-#    -k "not test_array and not test_aggregation and not test_join and not test_client and not test_generic" \
-#    -k "test_array and not test_array_flatten and not test_unnest_simple and not test_array_position and not test_range_start_stop_step and not test_array_unique and not test_array_agg_numeric and not test_array_concat_variadic and not test_array_column and not test_array_map and not test_array_filter" \
-#    -k "test_aggregation and not test_group_concat and not test_approx_quantile" \
-#    -k "test_join" \ # funciona solo
-#    -k "test_client and not test_create_table_in_memory" \
-#    -k "test_generic and not test_sample_with_seed and not test_simple_memtable_construct and not test_select_mutate_with_dict" \
 
   # Failed tests are acceptable, but we return a non-zero exit code when there are errors,
   # which indicate issues with the test setup.
