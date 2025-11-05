@@ -1,19 +1,15 @@
 from __future__ import annotations
 
-import os
 import importlib
+import os
 from pathlib import Path
-from typing import TYPE_CHECKING, Any
 
 import pytest
 
-if TYPE_CHECKING:
-    from _pytest.fixtures import FixtureDef, SubRequest
-
 # pytest markers defined in `pyproject.toml` of the Ibis project
 IBIS_MARKERS = [
-"athena",
-"databricks",
+    "athena",
+    "databricks",
     "backend: tests specific to a backend",
     "benchmark: benchmarks",
     "core: tests that do not required a backend",
@@ -73,13 +69,12 @@ def _resolve_data_volume() -> str:
         return str(Path(root) / "parquet")
     return "/data"
 
+
 def pytest_configure(config):
-    import importlib
     data_volume = _resolve_data_volume()
     mod = importlib.import_module("ibis.backends.pyspark.tests.conftest")
-    TestConf = getattr(mod, "TestConf")
+    TestConf = getattr(mod, "TestConf")  # noqa: N806 B009
     TestConf.data_volume = data_volume
-    TestConf.parquet_dir = property(lambda self: data_volume)
+    TestConf.parquet_dir = property(lambda _: data_volume)
     for marker in IBIS_MARKERS:
         config.addinivalue_line("markers", marker)
-
