@@ -21,7 +21,7 @@ use delta_kernel::engine::arrow_conversion::{TryIntoArrow, TryIntoKernel};
 use delta_kernel::schema::StructType;
 use delta_kernel::table_features::ColumnMappingMode;
 #[allow(deprecated)]
-use deltalake::kernel::{Action, MetadataExt};
+use deltalake::kernel::Action;
 // TODO: Follow upstream for `MetadataExt`.
 use deltalake::logstore::StorageConfig;
 use deltalake::protocol::{DeltaOperation, SaveMode};
@@ -29,15 +29,15 @@ use futures::stream::{once, StreamExt};
 use sail_common_datafusion::datasource::PhysicalSinkMode;
 use url::Url;
 
-use crate::column_mapping::{
-    annotate_new_fields_for_column_mapping, annotate_schema_for_column_mapping,
-    compute_max_column_id, enrich_arrow_with_parquet_field_ids,
-};
+use crate::column_mapping::compute_max_column_id;
 use crate::datasource::delta_to_datafusion_error;
 use crate::datasource::type_converter::DeltaTypeConverter;
 use crate::operations::write::writer::{DeltaWriter, WriterConfig};
 use crate::options::{ColumnMappingModeOption, TableDeltaOptions};
 use crate::physical_plan::CommitInfo;
+use crate::schema_manager::{
+    annotate_for_column_mapping, evolve_schema, get_physical_write_schema,
+};
 use crate::table::open_table_with_object_store;
 
 /// Schema handling mode for Delta Lake writes
@@ -353,7 +353,7 @@ impl ExecutionPlan for DeltaWriterExec {
                     .as_ref()
                     .try_into_kernel()
                     .map_err(|e| DataFusionError::External(Box::new(e)))?;
-                let annotated_schema = annotate_schema_for_column_mapping(&kernel_schema);
+                let annotated_schema = annotate_for_column_mapping(&kernel_schema);
                 annotated_schema_opt = Some(annotated_schema.clone());
 
                 // Protocol and features for column mapping
@@ -444,20 +444,13 @@ impl ExecutionPlan for DeltaWriterExec {
                         .expect("annotated schema should exist for new table with column mapping")
                 };
 
-                // Make physical kernel schema per mode
-                let physical_kernel = crate::column_mapping::make_physical_schema_for_writes(
-                    &logical_kernel,
-                    effective_mode,
-                );
-
-                // Convert to Arrow schema
-                let physical_arrow: Schema = (&physical_kernel)
-                    .try_into_arrow()
-                    .map_err(|e| DataFusionError::External(Box::new(e)))?;
-
-                // Ensure Arrow fields contain PARQUET:field_id for both Name and Id modes
-                let enriched_arrow =
-                    enrich_arrow_with_parquet_field_ids(&physical_arrow, &logical_kernel);
+                // Build physical Arrow schema enriched with PARQUET:field_id
+                let kernel_mode = match effective_mode {
+                    ColumnMappingModeOption::Name => ColumnMappingMode::Name,
+                    ColumnMappingModeOption::Id => ColumnMappingMode::Id,
+                    ColumnMappingModeOption::None => ColumnMappingMode::None,
+                };
+                let enriched_arrow = get_physical_write_schema(&logical_kernel, kernel_mode);
                 let arc_schema = Arc::new(enriched_arrow);
                 let writer_field_names: Vec<String> = arc_schema
                     .fields()
@@ -665,43 +658,10 @@ impl DeltaWriterExec {
                     let current_kernel = snapshot.snapshot().schema().clone();
                     let kmode = snapshot.effective_column_mapping_mode();
 
-                    // If column mapping is enabled, annotate any newly added fields and update maxColumnId
+                    // Delegate schema evolution to SchemaManager
                     let (_final_kernel, updated_metadata) =
-                        if matches!(kmode, ColumnMappingMode::Name | ColumnMappingMode::Id) {
-                            let next_id = current_metadata
-                                .configuration()
-                                .get("delta.columnMapping.maxColumnId")
-                                .and_then(|s| s.parse::<i64>().ok())
-                                .unwrap_or_else(|| compute_max_column_id(&current_kernel));
-                            let (annotated, last_id) = annotate_new_fields_for_column_mapping(
-                                &current_kernel,
-                                &candidate_kernel,
-                                next_id + 1,
-                            );
-
-                            // Update metadata with new schema and maxColumnId
-                            #[allow(deprecated)]
-                            let meta_with_schema = current_metadata
-                                .clone()
-                                .with_schema(&annotated)
-                                .map_err(|e| DataFusionError::External(Box::new(e)))?;
-                            #[allow(deprecated)]
-                            let meta_with_max = meta_with_schema
-                                .add_config_key(
-                                    "delta.columnMapping.maxColumnId".to_string(),
-                                    last_id.to_string(),
-                                )
-                                .map_err(|e| DataFusionError::External(Box::new(e)))?;
-                            (annotated, meta_with_max)
-                        } else {
-                            // No column mapping: just update schema
-                            #[allow(deprecated)]
-                            let meta = current_metadata
-                                .clone()
-                                .with_schema(&candidate_kernel)
-                                .map_err(|e| DataFusionError::External(Box::new(e)))?;
-                            (candidate_kernel, meta)
-                        };
+                        evolve_schema(&current_kernel, &candidate_kernel, current_metadata, kmode)
+                            .map_err(|e| DataFusionError::External(Box::new(e)))?;
 
                     // Use merged_schema (Arrow) for downstream planning; metadata carries final kernel schema
                     Ok((merged_schema, vec![Action::Metadata(updated_metadata)]))
@@ -721,39 +681,10 @@ impl DeltaWriterExec {
                 let current_kernel = snapshot.snapshot().schema().clone();
                 let kmode = snapshot.effective_column_mapping_mode();
 
-                // If mapping is enabled, preserve existing ids for retained fields and annotate new ones; update maxColumnId
-                let updated_metadata =
-                    if matches!(kmode, ColumnMappingMode::Name | ColumnMappingMode::Id) {
-                        let next_id = current_metadata
-                            .configuration()
-                            .get("delta.columnMapping.maxColumnId")
-                            .and_then(|s| s.parse::<i64>().ok())
-                            .unwrap_or_else(|| compute_max_column_id(&current_kernel));
-                        let (annotated, last_id) = annotate_new_fields_for_column_mapping(
-                            &current_kernel,
-                            &candidate_kernel,
-                            next_id + 1,
-                        );
-
-                        #[allow(deprecated)]
-                        let meta_with_schema = current_metadata
-                            .clone()
-                            .with_schema(&annotated)
-                            .map_err(|e| DataFusionError::External(Box::new(e)))?;
-                        #[allow(deprecated)]
-                        meta_with_schema
-                            .add_config_key(
-                                "delta.columnMapping.maxColumnId".to_string(),
-                                last_id.to_string(),
-                            )
-                            .map_err(|e| DataFusionError::External(Box::new(e)))?
-                    } else {
-                        #[allow(deprecated)]
-                        current_metadata
-                            .clone()
-                            .with_schema(&candidate_kernel)
-                            .map_err(|e| DataFusionError::External(Box::new(e)))?
-                    };
+                // Delegate schema overwrite to SchemaManager
+                let (_final_kernel, updated_metadata) =
+                    evolve_schema(&current_kernel, &candidate_kernel, current_metadata, kmode)
+                        .map_err(|e| DataFusionError::External(Box::new(e)))?;
 
                 Ok((
                     input_schema.clone(),

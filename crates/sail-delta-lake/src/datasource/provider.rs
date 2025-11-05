@@ -22,12 +22,12 @@ use sail_common_datafusion::rename::physical_plan::rename_projected_physical_pla
 
 // use deltalake::errors::DeltaTableError;
 // use delta_kernel::engine::arrow_conversion::TryIntoArrow;
-use crate::column_mapping::enrich_arrow_with_parquet_field_ids;
 use crate::datasource::scan::FileScanParams;
 use crate::datasource::{
     build_file_scan_config, delta_to_datafusion_error, df_logical_schema, get_pushdown_filters,
     prune_files, simplify_expr, DataFusionMixins, DeltaScanConfig, DeltaTableStateExt,
 };
+use crate::schema_manager::get_physical_write_schema;
 use crate::table::DeltaTableState;
 
 // [Credit]: <https://github.com/delta-io/delta-rs/blob/3607c314cbdd2ad06c6ee0677b92a29f695c71f3/crates/core/src/delta_datafusion/mod.rs>
@@ -196,22 +196,11 @@ impl TableProvider for DeltaTableProvider {
             None
         };
 
-        // Build physical file schema (non-partition columns) using kernel make_physical
+        // Build physical file schema (non-partition columns)
         let table_partition_cols = self.snapshot.metadata().partition_columns();
         let kmode: ColumnMappingMode = self.snapshot.effective_column_mapping_mode();
         let kschema_arc = self.snapshot.snapshot().table_configuration().schema();
-        let physical_kernel = kschema_arc.make_physical(kmode);
-        let physical_arrow: ArrowSchema =
-            deltalake::kernel::engine::arrow_conversion::TryIntoArrow::try_into_arrow(
-                &physical_kernel,
-            )?;
-        // If column mapping is enabled, ensure PARQUET:field_id is present in Arrow fields
-        let physical_arrow = match kmode {
-            ColumnMappingMode::Name | ColumnMappingMode::Id => {
-                enrich_arrow_with_parquet_field_ids(&physical_arrow, &kschema_arc)
-            }
-            ColumnMappingMode::None => physical_arrow,
-        };
+        let physical_arrow: ArrowSchema = get_physical_write_schema(&kschema_arc, kmode);
         log::trace!("read_kmode: {:?}", kmode);
         let phys_field_names: Vec<String> = physical_arrow
             .fields()
