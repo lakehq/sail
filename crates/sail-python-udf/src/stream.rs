@@ -67,17 +67,17 @@ impl PyInputStream {
         let handle = self_.handle.clone();
         let py = self_.py();
         py.detach(|| {
-                handle.block_on(async {
-                    state
-                        .lock()
-                        .await
-                        .next()
-                        .await
-                        .map(|x| x.map_err(|e| PyRuntimeError::new_err(e.to_string())))
-                })
+            handle.block_on(async {
+                state
+                    .lock()
+                    .await
+                    .next()
+                    .await
+                    .map(|x| x.map_err(|e| PyRuntimeError::new_err(e.to_string())))
             })
-            .map(|x| x.and_then(|x| x.to_pyarrow(py).map(|b| b.unbind())))
-            .unwrap_or(Err(PyStopIteration::new_err("")))
+        })
+        .map(|x| x.and_then(|x| x.to_pyarrow(py).map(|b| b.unbind())))
+        .unwrap_or(Err(PyStopIteration::new_err("")))
     }
 }
 

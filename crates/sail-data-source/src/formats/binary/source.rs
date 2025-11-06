@@ -9,8 +9,7 @@ use datafusion_datasource::file::FileSource;
 use datafusion_datasource::file_scan_config::FileScanConfig;
 use datafusion_datasource::file_stream::{FileOpenFuture, FileOpener};
 use datafusion_datasource::schema_adapter::SchemaAdapterFactory;
-use datafusion_datasource::PartitionedFile;
-use datafusion_datasource::TableSchema;
+use datafusion_datasource::{PartitionedFile, TableSchema};
 use futures::StreamExt;
 use object_store::ObjectStore;
 

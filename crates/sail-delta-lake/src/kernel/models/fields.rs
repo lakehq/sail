@@ -6,6 +6,7 @@ use delta_kernel::schema::{ArrayType, DataType, MapType, StructField, StructType
 // TODO: ActionType mapping removed; use direct field statics and schema accessors instead
 
 // https://github.com/delta-io/delta/blob/master/PROTOCOL.md#change-metadata
+#[allow(clippy::expect_used)]
 static METADATA_FIELD: LazyLock<StructField> = LazyLock::new(|| {
     StructField::new(
         "metaData",
@@ -44,6 +45,7 @@ static METADATA_FIELD: LazyLock<StructField> = LazyLock::new(|| {
     )
 });
 // https://github.com/delta-io/delta/blob/master/PROTOCOL.md#protocol-evolution
+#[allow(clippy::expect_used)]
 static PROTOCOL_FIELD: LazyLock<StructField> = LazyLock::new(|| {
     StructField::new(
         "protocol",
@@ -66,6 +68,7 @@ static PROTOCOL_FIELD: LazyLock<StructField> = LazyLock::new(|| {
     )
 });
 // https://github.com/delta-io/delta/blob/master/PROTOCOL.md#commit-provenance-information
+#[allow(clippy::expect_used)]
 static COMMIT_INFO_FIELD: LazyLock<StructField> = LazyLock::new(|| {
     StructField::new(
         "commitInfo",
@@ -92,6 +95,7 @@ static COMMIT_INFO_FIELD: LazyLock<StructField> = LazyLock::new(|| {
     )
 });
 // https://github.com/delta-io/delta/blob/master/PROTOCOL.md#add-file-and-remove-file
+#[allow(clippy::expect_used)]
 static ADD_FIELD: LazyLock<StructField> = LazyLock::new(|| {
     StructField::new(
         "add",
@@ -113,6 +117,7 @@ static ADD_FIELD: LazyLock<StructField> = LazyLock::new(|| {
     )
 });
 // https://github.com/delta-io/delta/blob/master/PROTOCOL.md#add-file-and-remove-file
+#[allow(clippy::expect_used)]
 static REMOVE_FIELD: LazyLock<StructField> = LazyLock::new(|| {
     StructField::new(
         "remove",
@@ -134,7 +139,8 @@ static REMOVE_FIELD: LazyLock<StructField> = LazyLock::new(|| {
     )
 });
 // TODO implement support for this checkpoint
-#[expect(dead_code)]
+#[allow(dead_code)]
+#[allow(clippy::expect_used)]
 static REMOVE_FIELD_CHECKPOINT: LazyLock<StructField> = LazyLock::new(|| {
     StructField::new(
         "remove",
@@ -148,6 +154,7 @@ static REMOVE_FIELD_CHECKPOINT: LazyLock<StructField> = LazyLock::new(|| {
     )
 });
 // https://github.com/delta-io/delta/blob/master/PROTOCOL.md#add-cdc-file
+#[allow(clippy::expect_used)]
 static CDC_FIELD: LazyLock<StructField> = LazyLock::new(|| {
     StructField::new(
         "cdc",
@@ -163,6 +170,7 @@ static CDC_FIELD: LazyLock<StructField> = LazyLock::new(|| {
     )
 });
 // https://github.com/delta-io/delta/blob/master/PROTOCOL.md#transaction-identifiers
+#[allow(clippy::expect_used)]
 static TXN_FIELD: LazyLock<StructField> = LazyLock::new(|| {
     StructField::new(
         "txn",
@@ -176,6 +184,7 @@ static TXN_FIELD: LazyLock<StructField> = LazyLock::new(|| {
     )
 });
 // https://github.com/delta-io/delta/blob/master/PROTOCOL.md#domain-metadata
+#[allow(clippy::expect_used)]
 static DOMAIN_METADATA_FIELD: LazyLock<StructField> = LazyLock::new(|| {
     StructField::new(
         "domainMetadata",
@@ -194,6 +203,7 @@ static DOMAIN_METADATA_FIELD: LazyLock<StructField> = LazyLock::new(|| {
 });
 // https://github.com/delta-io/delta/blob/master/PROTOCOL.md#checkpoint-metadata
 #[allow(dead_code)]
+#[allow(clippy::expect_used)]
 static CHECKPOINT_METADATA_FIELD: LazyLock<StructField> = LazyLock::new(|| {
     StructField::new(
         "checkpointMetadata",
@@ -207,6 +217,7 @@ static CHECKPOINT_METADATA_FIELD: LazyLock<StructField> = LazyLock::new(|| {
 });
 // https://github.com/delta-io/delta/blob/master/PROTOCOL.md#sidecar-file-information
 #[allow(dead_code)]
+#[allow(clippy::expect_used)]
 static SIDECAR_FIELD: LazyLock<StructField> = LazyLock::new(|| {
     StructField::new(
         "sidecar",
@@ -222,6 +233,7 @@ static SIDECAR_FIELD: LazyLock<StructField> = LazyLock::new(|| {
     )
 });
 
+#[allow(clippy::expect_used)]
 static LOG_SCHEMA: LazyLock<StructType> = LazyLock::new(|| {
     StructType::try_new(vec![
         ADD_FIELD.clone(),
@@ -252,6 +264,7 @@ fn partition_values_field() -> StructField {
     )
 }
 
+#[allow(clippy::expect_used)]
 fn deletion_vector_field() -> StructField {
     StructField::new(
         "deletionVector",

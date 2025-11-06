@@ -14,9 +14,8 @@ use crate::table::DeltaTableState;
 
 static READER_V2: LazyLock<HashSet<TableFeature>> =
     LazyLock::new(|| HashSet::from_iter([TableFeature::ColumnMapping]));
-static WRITER_V2: LazyLock<HashSet<TableFeature>> = LazyLock::new(|| {
-    HashSet::from_iter([TableFeature::AppendOnly, TableFeature::Invariants])
-});
+static WRITER_V2: LazyLock<HashSet<TableFeature>> =
+    LazyLock::new(|| HashSet::from_iter([TableFeature::AppendOnly, TableFeature::Invariants]));
 static WRITER_V3: LazyLock<HashSet<TableFeature>> = LazyLock::new(|| {
     HashSet::from_iter([
         TableFeature::AppendOnly,
@@ -62,7 +61,10 @@ pub struct ProtocolChecker {
 
 impl ProtocolChecker {
     /// Create a new protocol checker.
-    pub fn new(reader_features: HashSet<TableFeature>, writer_features: HashSet<TableFeature>) -> Self {
+    pub fn new(
+        reader_features: HashSet<TableFeature>,
+        writer_features: HashSet<TableFeature>,
+    ) -> Self {
         Self {
             reader_features,
             writer_features,
@@ -122,8 +124,7 @@ impl ProtocolChecker {
     }
 
     pub fn can_read_from_protocol(&self, protocol: &Protocol) -> Result<(), TransactionError> {
-        let required_features: Option<HashSet<TableFeature>> = match protocol.min_reader_version()
-        {
+        let required_features: Option<HashSet<TableFeature>> = match protocol.min_reader_version() {
             0 | 1 => None,
             2 => Some(READER_V2.clone()),
             // _ => protocol.reader_features_set(),

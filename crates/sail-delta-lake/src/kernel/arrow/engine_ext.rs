@@ -295,7 +295,7 @@ pub(crate) fn stats_schema(
             fields.push(StructField::nullable("maxValues", min_max_schema));
         }
     }
-
+    #[allow(clippy::expect_used)]
     StructType::try_new(fields).expect("Failed to construct stats schema")
 }
 

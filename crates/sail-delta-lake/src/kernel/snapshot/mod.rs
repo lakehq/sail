@@ -10,7 +10,8 @@ use delta_kernel::engine::arrow_conversion::TryIntoArrow;
 use delta_kernel::engine::arrow_data::ArrowEngineData;
 use delta_kernel::path::{LogPathFileType, ParsedLogPath};
 use delta_kernel::scan::scan_row_schema;
-use delta_kernel::schema::{derive_macro_utils::ToDataType, SchemaRef, StructField};
+use delta_kernel::schema::derive_macro_utils::ToDataType;
+use delta_kernel::schema::{SchemaRef, StructField};
 use delta_kernel::snapshot::Snapshot as KernelSnapshot;
 use delta_kernel::table_configuration::TableConfiguration;
 use delta_kernel::table_properties::TableProperties;
@@ -313,6 +314,7 @@ impl Snapshot {
             .boxed())
     }
 
+    #[allow(clippy::expect_used)]
     pub(crate) fn tombstones(
         &self,
         log_store: &dyn LogStore,

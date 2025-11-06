@@ -15,8 +15,8 @@ use object_store::path::Path;
 use object_store::ObjectStore;
 use parquet::arrow::AsyncArrowWriter;
 use parquet::basic::Compression;
-use parquet::file::properties::WriterProperties;
 use parquet::file::metadata::ParquetMetaData;
+use parquet::file::properties::WriterProperties;
 use parquet::schema::types::ColumnPath;
 use uuid::Uuid;
 
