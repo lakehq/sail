@@ -224,7 +224,7 @@ impl CatalogProvider for UnityCatalogProvider {
                     Some(&schema_name),
                 ))
             }
-            Err(progenitor_client::Error::ErrorResponse(response))
+            Err(progenitor_client::Error::UnexpectedResponse(response))
                 if response.status().as_u16() == 404 =>
             {
                 Err(CatalogError::NotFound("schema", full_name))
@@ -291,7 +291,7 @@ impl CatalogProvider for UnityCatalogProvider {
 
         match result {
             Ok(_) => Ok(()),
-            Err(progenitor_client::Error::ErrorResponse(response))
+            Err(progenitor_client::Error::UnexpectedResponse(response))
                 if response.status().as_u16() == 404 && if_exists =>
             {
                 Ok(())
