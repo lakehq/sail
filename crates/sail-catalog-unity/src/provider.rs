@@ -2,6 +2,7 @@
 #![allow(clippy::todo, dead_code, unused_imports, unused_variables)]
 
 use std::collections::HashMap;
+use std::str::FromStr;
 
 use sail_catalog::error::{CatalogError, CatalogResult};
 use sail_catalog::provider::{
@@ -11,6 +12,7 @@ use sail_catalog::provider::{
 use sail_catalog::utils::{get_property, quote_name_if_needed};
 use tokio::sync::OnceCell;
 
+use crate::config::UnityCatalogConfigKey;
 use crate::unity::{types, Client};
 
 pub const UNITY_CATALOG_PROP_URI: &str = "uri";
@@ -291,6 +293,11 @@ impl CatalogProvider for UnityCatalogProvider {
 
         match result {
             Ok(_) => Ok(()),
+            Err(progenitor_client::Error::InvalidResponsePayload(bytes, _))
+                if bytes.as_ref() == b"200 OK" =>
+            {
+                Ok(())
+            }
             Err(progenitor_client::Error::UnexpectedResponse(response))
                 if response.status().as_u16() == 404 && if_exists =>
             {

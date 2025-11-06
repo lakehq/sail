@@ -387,7 +387,6 @@ async fn test_list_schemas() {
         .unwrap();
 
     let dbs = unity_catalog.list_databases(Some(&parent)).await.unwrap();
-
     assert_eq!(dbs.len(), 2);
     assert!(dbs
         .iter()
@@ -395,4 +394,123 @@ async fn test_list_schemas() {
     assert!(dbs
         .iter()
         .any(|db| db.database == Vec::<String>::from(ns2_full.clone())));
+
+    let dbs = unity_catalog.list_databases(None).await.unwrap();
+    assert_eq!(dbs.len(), 2);
+    assert!(dbs
+        .iter()
+        .any(|db| db.database == Vec::<String>::from(ns1_full.clone())));
+    assert!(dbs
+        .iter()
+        .any(|db| db.database == Vec::<String>::from(ns2_full.clone())));
+}
+
+#[tokio::test]
+// #[ignore]
+async fn test_drop_schema() {
+    let (unity_catalog, _unity_container, _postgres_container, _client) = setup_catalog().await;
+
+    let namespace = Namespace::try_from(vec!["test_drop_schema".to_string()]).unwrap();
+    let full_namespace = Namespace::try_from(vec![
+        DEFAULT_CATALOG.to_string(),
+        "test_drop_schema".to_string(),
+    ])
+    .unwrap();
+
+    unity_catalog
+        .create_database(
+            &namespace,
+            CreateDatabaseOptions {
+                if_not_exists: false,
+                comment: None,
+                location: None,
+                properties: vec![],
+            },
+        )
+        .await
+        .unwrap();
+
+    let result = unity_catalog.get_database(&namespace).await;
+    assert!(result.is_ok());
+    let result = unity_catalog.get_database(&full_namespace).await;
+    assert!(result.is_ok());
+
+    unity_catalog
+        .drop_database(
+            &namespace,
+            DropDatabaseOptions {
+                if_exists: false,
+                cascade: false,
+            },
+        )
+        .await
+        .unwrap();
+
+    let result = unity_catalog.get_database(&namespace).await;
+    assert!(result.is_err());
+    let result = unity_catalog.get_database(&full_namespace).await;
+    assert!(result.is_err());
+
+    let result = unity_catalog
+        .drop_database(
+            &full_namespace,
+            DropDatabaseOptions {
+                if_exists: false,
+                cascade: false,
+            },
+        )
+        .await;
+    assert!(result.is_err());
+
+    let result = unity_catalog
+        .drop_database(
+            &namespace,
+            DropDatabaseOptions {
+                if_exists: true,
+                cascade: false,
+            },
+        )
+        .await;
+    assert!(result.is_ok());
+
+    let namespace = Namespace::try_from(vec!["test_drop_schema_2".to_string()]).unwrap();
+    let full_namespace = Namespace::try_from(vec![
+        DEFAULT_CATALOG.to_string(),
+        "test_drop_schema_2".to_string(),
+    ])
+    .unwrap();
+
+    unity_catalog
+        .create_database(
+            &namespace,
+            CreateDatabaseOptions {
+                if_not_exists: false,
+                comment: None,
+                location: None,
+                properties: vec![],
+            },
+        )
+        .await
+        .unwrap();
+
+    let result = unity_catalog.get_database(&namespace).await;
+    assert!(result.is_ok());
+    let result = unity_catalog.get_database(&full_namespace).await;
+    assert!(result.is_ok());
+
+    unity_catalog
+        .drop_database(
+            &namespace,
+            DropDatabaseOptions {
+                if_exists: false,
+                cascade: true,
+            },
+        )
+        .await
+        .unwrap();
+
+    let result = unity_catalog.get_database(&namespace).await;
+    assert!(result.is_err());
+    let result = unity_catalog.get_database(&full_namespace).await;
+    assert!(result.is_err());
 }
