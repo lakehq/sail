@@ -61,13 +61,7 @@ def patch_ibis_spark_session():
 
 
 def _resolve_data_volume() -> str:
-    dv = os.environ.get("IBIS_DATA_VOLUME")
-    if dv:
-        return dv
-    root = os.environ.get("IBIS_TESTING_DATA_DIR")
-    if root:
-        return str(Path(root) / "parquet")
-    return "/data"
+    return str(Path(os.environ.get("IBIS_TESTING_DATA_DIR")) / "parquet")
 
 
 def pytest_configure(config):
