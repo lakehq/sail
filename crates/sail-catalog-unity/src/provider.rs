@@ -4,10 +4,12 @@
 use std::collections::HashMap;
 use std::str::FromStr;
 
+use datafusion::arrow::datatypes::DataType;
 use sail_catalog::error::{CatalogError, CatalogResult};
 use sail_catalog::provider::{
     CatalogProvider, CreateDatabaseOptions, CreateTableOptions, CreateViewOptions, DatabaseStatus,
-    DropDatabaseOptions, DropTableOptions, DropViewOptions, Namespace, TableStatus,
+    DropDatabaseOptions, DropTableOptions, DropViewOptions, Namespace, TableColumnStatus,
+    TableKind, TableStatus,
 };
 use sail_catalog::utils::{get_property, quote_name_if_needed};
 use tokio::sync::OnceCell;
@@ -139,6 +141,232 @@ impl UnityCatalogProvider {
             location: get_property(&properties, "location"),
             properties: properties.into_iter().collect(),
         }
+    }
+
+    fn datatype_to_type_text(data_type: &DataType) -> String {
+        match data_type {
+            DataType::Boolean => "BOOLEAN".to_string(),
+            DataType::Int8 => "BYTE".to_string(),
+            DataType::Int16 => "SHORT".to_string(),
+            DataType::Int32 => "INT".to_string(),
+            DataType::Int64 => "LONG".to_string(),
+            DataType::Float32 => "FLOAT".to_string(),
+            DataType::Float64 => "DOUBLE".to_string(),
+            DataType::Date32 | DataType::Date64 => "DATE".to_string(),
+            DataType::Timestamp(_, Some(_)) => "TIMESTAMP".to_string(),
+            DataType::Timestamp(_, None) => "TIMESTAMP_NTZ".to_string(),
+            DataType::Utf8 | DataType::LargeUtf8 => "STRING".to_string(),
+            DataType::Binary | DataType::LargeBinary | DataType::FixedSizeBinary(_) => {
+                "BINARY".to_string()
+            }
+            DataType::Decimal128(precision, scale) | DataType::Decimal256(precision, scale) => {
+                format!("DECIMAL({},{})", precision, scale)
+            }
+            DataType::List(field)
+            | DataType::LargeList(field)
+            | DataType::FixedSizeList(field, _) => {
+                format!("ARRAY<{}>", Self::datatype_to_type_text(field.data_type()))
+            }
+            DataType::Struct(fields) => {
+                let field_strs: Vec<String> = fields
+                    .iter()
+                    .map(|f| {
+                        format!(
+                            "{}: {}",
+                            f.name(),
+                            Self::datatype_to_type_text(f.data_type())
+                        )
+                    })
+                    .collect();
+                format!("STRUCT<{}>", field_strs.join(", "))
+            }
+            DataType::Map(field, _) => {
+                if let DataType::Struct(fields) = field.data_type() {
+                    if fields.len() == 2 {
+                        let key_type = Self::datatype_to_type_text(fields[0].data_type());
+                        let value_type = Self::datatype_to_type_text(fields[1].data_type());
+                        return format!("MAP<{}, {}>", key_type, value_type);
+                    }
+                }
+                "MAP<STRING, STRING>".to_string()
+            }
+            DataType::Null => "NULL".to_string(),
+            _ => "STRING".to_string(),
+        }
+    }
+
+    fn datatype_to_column_type_name(data_type: &DataType) -> types::ColumnTypeName {
+        match data_type {
+            DataType::Boolean => types::ColumnTypeName::Boolean,
+            DataType::Int8 => types::ColumnTypeName::Byte,
+            DataType::Int16 => types::ColumnTypeName::Short,
+            DataType::Int32 => types::ColumnTypeName::Int,
+            DataType::Int64 => types::ColumnTypeName::Long,
+            DataType::Float32 => types::ColumnTypeName::Float,
+            DataType::Float64 => types::ColumnTypeName::Double,
+            DataType::Date32 | DataType::Date64 => types::ColumnTypeName::Date,
+            DataType::Timestamp(_, _) => types::ColumnTypeName::Timestamp,
+            DataType::Utf8 | DataType::LargeUtf8 => types::ColumnTypeName::String,
+            DataType::Binary | DataType::LargeBinary | DataType::FixedSizeBinary(_) => {
+                types::ColumnTypeName::Binary
+            }
+            DataType::Decimal128(_, _) | DataType::Decimal256(_, _) => {
+                types::ColumnTypeName::Decimal
+            }
+            DataType::List(_) | DataType::LargeList(_) | DataType::FixedSizeList(_, _) => {
+                types::ColumnTypeName::Array
+            }
+            DataType::Struct(_) => types::ColumnTypeName::Struct,
+            DataType::Map(_, _) => types::ColumnTypeName::Map,
+            DataType::Null => types::ColumnTypeName::Null,
+            _ => types::ColumnTypeName::String,
+        }
+    }
+
+    fn column_info_to_column_status(
+        column: types::ColumnInfo,
+        partition_columns: &[String],
+    ) -> CatalogResult<TableColumnStatus> {
+        let name = column.name.unwrap_or_default();
+        let type_text = column.type_text.unwrap_or_else(|| "STRING".to_string());
+        let data_type = Self::parse_unity_type_text(&type_text)?;
+        let nullable = column.nullable;
+        let comment = column.comment;
+
+        Ok(TableColumnStatus {
+            name: name.clone(),
+            data_type,
+            nullable,
+            comment,
+            default: None,
+            generated_always_as: None,
+            is_partition: partition_columns.contains(&name),
+            is_bucket: false,
+            is_cluster: false,
+        })
+    }
+
+    fn parse_unity_type_text(type_text: &str) -> CatalogResult<DataType> {
+        let type_upper = type_text.to_uppercase();
+        match type_upper.as_str() {
+            "BOOLEAN" => Ok(DataType::Boolean),
+            "BYTE" | "TINYINT" => Ok(DataType::Int8),
+            "SHORT" | "SMALLINT" => Ok(DataType::Int16),
+            "INT" | "INTEGER" => Ok(DataType::Int32),
+            "LONG" | "BIGINT" => Ok(DataType::Int64),
+            "FLOAT" | "REAL" => Ok(DataType::Float32),
+            "DOUBLE" => Ok(DataType::Float64),
+            "DATE" => Ok(DataType::Date32),
+            "TIMESTAMP" => Ok(DataType::Timestamp(
+                datafusion::arrow::datatypes::TimeUnit::Microsecond,
+                Some("UTC".into()),
+            )),
+            "TIMESTAMP_NTZ" => Ok(DataType::Timestamp(
+                datafusion::arrow::datatypes::TimeUnit::Microsecond,
+                None,
+            )),
+            "STRING" | "VARCHAR" | "CHAR" => Ok(DataType::Utf8),
+            "BINARY" => Ok(DataType::Binary),
+            "NULL" => Ok(DataType::Null),
+            s if s.starts_with("DECIMAL(") => {
+                let inner = s.strip_prefix("DECIMAL(").and_then(|s| s.strip_suffix(")"));
+                if let Some(inner) = inner {
+                    let parts: Vec<&str> = inner.split(',').map(|s| s.trim()).collect();
+                    if parts.len() == 2 {
+                        let precision: u8 = parts[0].parse().map_err(|_| {
+                            CatalogError::External(format!(
+                                "Invalid DECIMAL precision: {}",
+                                parts[0]
+                            ))
+                        })?;
+                        let scale: i8 = parts[1].parse().map_err(|_| {
+                            CatalogError::External(format!("Invalid DECIMAL scale: {}", parts[1]))
+                        })?;
+                        return Ok(DataType::Decimal128(precision, scale));
+                    }
+                }
+                Err(CatalogError::External(format!(
+                    "Invalid DECIMAL type: {}",
+                    type_text
+                )))
+            }
+            s if s.starts_with("ARRAY<") => {
+                let inner = s.strip_prefix("ARRAY<").and_then(|s| s.strip_suffix(">"));
+                if let Some(inner) = inner {
+                    let element_type = Self::parse_unity_type_text(inner)?;
+                    return Ok(DataType::List(std::sync::Arc::new(
+                        datafusion::arrow::datatypes::Field::new("element", element_type, true),
+                    )));
+                }
+                Ok(DataType::List(std::sync::Arc::new(
+                    datafusion::arrow::datatypes::Field::new("element", DataType::Utf8, true),
+                )))
+            }
+            _ => Ok(DataType::Utf8),
+        }
+    }
+
+    fn table_info_to_table_status(
+        &self,
+        table_info: types::TableInfo,
+        catalog_name: &str,
+        schema_name: &str,
+    ) -> CatalogResult<TableStatus> {
+        let name = table_info.name.unwrap_or_default();
+        let catalog = table_info.catalog_name.unwrap_or(catalog_name.to_string());
+        let schema = table_info.schema_name.unwrap_or(schema_name.to_string());
+        let database = vec![catalog.clone(), schema];
+
+        let columns = table_info
+            .columns
+            .into_iter()
+            .map(|col| Self::column_info_to_column_status(col, &[]))
+            .collect::<CatalogResult<Vec<_>>>()?;
+
+        let format = table_info
+            .data_source_format
+            .map(|f| f.to_string().to_lowercase())
+            .unwrap_or_else(|| "delta".to_string());
+
+        let mut properties: HashMap<String, String> =
+            table_info.properties.map(|p| p.0).unwrap_or_default();
+
+        if let Some(created_at) = table_info.created_at {
+            properties.insert("created_at".to_string(), created_at.to_string());
+        }
+        if let Some(created_by) = table_info.created_by {
+            properties.insert("created_by".to_string(), created_by);
+        }
+        if let Some(owner) = table_info.owner {
+            properties.insert("owner".to_string(), owner);
+        }
+        if let Some(table_id) = table_info.table_id {
+            properties.insert("table_id".to_string(), table_id);
+        }
+        if let Some(updated_at) = table_info.updated_at {
+            properties.insert("updated_at".to_string(), updated_at.to_string());
+        }
+        if let Some(updated_by) = table_info.updated_by {
+            properties.insert("updated_by".to_string(), updated_by);
+        }
+
+        Ok(TableStatus {
+            name,
+            kind: TableKind::Table {
+                catalog,
+                database,
+                columns,
+                comment: table_info.comment,
+                constraints: vec![],
+                location: table_info.storage_location,
+                format,
+                partition_by: vec![],
+                sort_by: vec![],
+                bucket_by: None,
+                options: vec![],
+                properties: properties.into_iter().collect(),
+            },
+        })
     }
 }
 
@@ -315,15 +543,194 @@ impl CatalogProvider for UnityCatalogProvider {
         table: &str,
         options: CreateTableOptions,
     ) -> CatalogResult<TableStatus> {
-        todo!()
+        let CreateTableOptions {
+            columns,
+            comment,
+            constraints,
+            location,
+            format,
+            partition_by,
+            sort_by,
+            bucket_by,
+            if_not_exists,
+            replace,
+            options: table_options,
+            properties,
+        } = options;
+
+        if replace {
+            return Err(CatalogError::NotSupported(
+                "Replace table is not supported".to_string(),
+            ));
+        }
+
+        if !sort_by.is_empty() {
+            return Err(CatalogError::NotSupported(
+                "Sort by is not supported".to_string(),
+            ));
+        }
+
+        if bucket_by.is_some() {
+            return Err(CatalogError::NotSupported(
+                "Bucket by is not supported".to_string(),
+            ));
+        }
+
+        if !constraints.is_empty() {
+            return Err(CatalogError::NotSupported(
+                "Constraints are not supported".to_string(),
+            ));
+        }
+
+        let client = self
+            .get_client()
+            .await
+            .map_err(|e| CatalogError::External(format!("Failed to load config: {e}")))?;
+
+        let (catalog_name, schema_name) = self.get_catalog_and_schema_name(database);
+
+        let data_source_format = match format.to_uppercase().as_str() {
+            "DELTA" => types::DataSourceFormat::Delta,
+            "PARQUET" => types::DataSourceFormat::Parquet,
+            "CSV" => types::DataSourceFormat::Csv,
+            "JSON" => types::DataSourceFormat::Json,
+            "AVRO" => types::DataSourceFormat::Avro,
+            "ORC" => types::DataSourceFormat::Orc,
+            "TEXT" => types::DataSourceFormat::Text,
+            _ => {
+                return Err(CatalogError::External(format!(
+                    "Unsupported data source format: {}",
+                    format
+                )))
+            }
+        };
+
+        let unity_columns: Vec<types::ColumnInfo> = columns
+            .iter()
+            .enumerate()
+            .map(|(idx, col)| {
+                let type_text = Self::datatype_to_type_text(&col.data_type);
+                let type_name = Self::datatype_to_column_type_name(&col.data_type);
+                let (type_precision, type_scale) = match &col.data_type {
+                    DataType::Decimal128(p, s) | DataType::Decimal256(p, s) => {
+                        (Some(*p as i32), Some(*s as i32))
+                    }
+                    _ => (None, None),
+                };
+
+                types::ColumnInfo {
+                    comment: col.comment.clone(),
+                    name: Some(col.name.clone()),
+                    nullable: col.nullable,
+                    partition_index: None,
+                    position: Some(idx as i32),
+                    type_interval_type: None,
+                    type_json: Some(serde_json::json!({"type": type_text}).to_string()),
+                    type_name: Some(type_name),
+                    type_precision,
+                    type_scale,
+                    type_text: Some(type_text),
+                }
+            })
+            .collect();
+
+        let mut props: HashMap<String, String> = properties.into_iter().collect();
+        for (k, v) in table_options {
+            props.insert(k, v);
+        }
+
+        let request = types::CreateTable::builder()
+            .name(table)
+            .catalog_name(&catalog_name)
+            .schema_name(&schema_name)
+            .table_type(types::TableType::External)
+            .data_source_format(data_source_format)
+            .columns(unity_columns)
+            .storage_location(location.ok_or_else(|| {
+                CatalogError::External(
+                    "Storage location is required for Unity Catalog tables".to_string(),
+                )
+            })?)
+            .comment(comment)
+            .properties(if props.is_empty() {
+                None
+            } else {
+                Some(types::SecurablePropertiesMap::from(props))
+            });
+
+        let result = client.create_table().body(request).send().await;
+
+        match result {
+            Ok(response) => {
+                let table_info = response.into_inner();
+                self.table_info_to_table_status(table_info, &catalog_name, &schema_name)
+            }
+            Err(progenitor_client::Error::UnexpectedResponse(response))
+                if response.status().as_u16() == 409 && if_not_exists =>
+            {
+                self.get_table(database, table).await
+            }
+            Err(e) => Err(CatalogError::External(format!(
+                "Failed to create table: {e}"
+            ))),
+        }
     }
 
     async fn get_table(&self, database: &Namespace, table: &str) -> CatalogResult<TableStatus> {
-        todo!()
+        let client = self
+            .get_client()
+            .await
+            .map_err(|e| CatalogError::External(format!("Failed to load config: {e}")))?;
+
+        let (catalog_name, schema_name) = self.get_catalog_and_schema_name(database);
+        let full_name = format!("{}.{}.{}", catalog_name, schema_name, table);
+
+        let result = client.get_table().full_name(&full_name).send().await;
+
+        match result {
+            Ok(response) => {
+                let table_info = response.into_inner();
+                self.table_info_to_table_status(table_info, &catalog_name, &schema_name)
+            }
+            Err(progenitor_client::Error::UnexpectedResponse(response))
+                if response.status().as_u16() == 404 =>
+            {
+                Err(CatalogError::NotFound("table", full_name))
+            }
+            Err(e) => Err(CatalogError::External(format!("Failed to get table: {e}"))),
+        }
     }
 
     async fn list_tables(&self, database: &Namespace) -> CatalogResult<Vec<TableStatus>> {
-        todo!()
+        let client = self
+            .get_client()
+            .await
+            .map_err(|e| CatalogError::External(format!("Failed to load config: {e}")))?;
+
+        let (catalog_name, schema_name) = self.get_catalog_and_schema_name(database);
+
+        let result = client
+            .list_tables()
+            .catalog_name(&catalog_name)
+            .schema_name(&schema_name)
+            .send()
+            .await;
+
+        match result {
+            Ok(response) => {
+                let list_response = response.into_inner();
+                list_response
+                    .tables
+                    .into_iter()
+                    .map(|table_info| {
+                        self.table_info_to_table_status(table_info, &catalog_name, &schema_name)
+                    })
+                    .collect::<CatalogResult<Vec<_>>>()
+            }
+            Err(e) => Err(CatalogError::External(format!(
+                "Failed to list tables: {e}"
+            ))),
+        }
     }
 
     async fn drop_table(
@@ -332,7 +739,35 @@ impl CatalogProvider for UnityCatalogProvider {
         table: &str,
         options: DropTableOptions,
     ) -> CatalogResult<()> {
-        todo!()
+        let DropTableOptions {
+            if_exists,
+            purge: _,
+        } = options;
+
+        let client = self
+            .get_client()
+            .await
+            .map_err(|e| CatalogError::External(format!("Failed to load config: {e}")))?;
+
+        let (catalog_name, schema_name) = self.get_catalog_and_schema_name(database);
+        let full_name = format!("{}.{}.{}", catalog_name, schema_name, table);
+
+        let result = client.delete_table().full_name(&full_name).send().await;
+
+        match result {
+            Ok(_) => Ok(()),
+            Err(progenitor_client::Error::InvalidResponsePayload(bytes, _))
+                if bytes.as_ref() == b"200 OK" =>
+            {
+                Ok(())
+            }
+            Err(progenitor_client::Error::UnexpectedResponse(response))
+                if response.status().as_u16() == 404 && if_exists =>
+            {
+                Ok(())
+            }
+            Err(e) => Err(CatalogError::External(format!("Failed to drop table: {e}"))),
+        }
     }
 
     async fn create_view(
