@@ -1,8 +1,5 @@
 use std::collections::HashMap;
 
-use parquet::file::metadata::RowGroupMetaData;
-use parquet::schema::types::SchemaDescriptor;
-
 use crate::spec::types::values::Literal;
 use crate::spec::{DataContentType, DataFile, DataFileFormat, Datum};
 use crate::writer::arrow_parquet::ParquetFileMeta;
@@ -75,18 +72,9 @@ type AggregatedMetadata = (
 );
 
 fn aggregate_from_parquet_metadata(
-    thrift_meta: &parquet::format::FileMetaData,
+    parquet_meta: &parquet::file::metadata::ParquetMetaData,
 ) -> Result<AggregatedMetadata, String> {
-    let schema_ptr = parquet::schema::types::from_thrift(thrift_meta.schema.as_slice())
-        .map_err(|e| format!("Failed to parse schema from thrift: {e}"))?;
-    let schema_desc = std::sync::Arc::new(SchemaDescriptor::new(schema_ptr));
-
-    let row_groups: Vec<RowGroupMetaData> = thrift_meta
-        .row_groups
-        .iter()
-        .map(|rg| RowGroupMetaData::from_thrift(schema_desc.clone(), rg.clone()))
-        .collect::<Result<Vec<_>, _>>()
-        .map_err(|e| format!("Failed to parse row group metadata: {e}"))?;
+    let row_groups = parquet_meta.row_groups();
 
     let mut col_sizes: HashMap<i32, u64> = HashMap::new();
     let mut val_counts: HashMap<i32, u64> = HashMap::new();
@@ -95,7 +83,7 @@ fn aggregate_from_parquet_metadata(
     let upper_bounds: HashMap<i32, Datum> = HashMap::new();
     let mut split_offsets: Vec<i64> = Vec::new();
 
-    for rg in &row_groups {
+    for rg in row_groups {
         if let Some(off) = rg.file_offset() {
             split_offsets.push(off);
         }

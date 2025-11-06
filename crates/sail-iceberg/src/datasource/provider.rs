@@ -596,7 +596,7 @@ impl TableProvider for IcebergTableProvider {
                     file_groups
                 })
                 .with_statistics(table_stats)
-                .with_projection(expanded_projection)
+                .with_projection_indices(expanded_projection)
                 .with_limit(limit)
                 .with_expr_adapter(Some(Arc::new(IcebergPhysicalExprAdapterFactory {})
                     as Arc<dyn PhysicalExprAdapterFactory>))
