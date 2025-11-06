@@ -144,7 +144,7 @@ impl WinningCommitSummary {
         let commit_log_bytes = log_store.read_commit_entry(winning_commit_version).await?;
         match commit_log_bytes {
             Some(bytes) => {
-                let actions = get_actions(winning_commit_version, bytes).await?;
+                let actions = get_actions(winning_commit_version, &bytes)?;
                 let commit_info = actions
                     .iter()
                     .find(|action| matches!(action, Action::CommitInfo(_)))

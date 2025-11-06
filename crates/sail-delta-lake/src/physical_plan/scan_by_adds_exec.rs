@@ -127,7 +127,7 @@ impl DeltaScanByAddsExec {
         .map_err(|e| DataFusionError::External(Box::new(e)))?;
 
         let scan_exec =
-            datafusion::catalog::memory::DataSourceExec::from_data_source(file_scan_config);
+            datafusion::datasource::source::DataSourceExec::from_data_source(file_scan_config);
         scan_exec.execute(0, context)
     }
 }

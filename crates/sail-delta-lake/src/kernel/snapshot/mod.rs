@@ -5,16 +5,17 @@ use std::sync::{Arc, LazyLock};
 
 use datafusion::arrow::array::RecordBatch;
 use datafusion::arrow::compute::concat_batches;
+use delta_kernel::actions::{Remove as KernelRemove, Sidecar};
 use delta_kernel::engine::arrow_conversion::TryIntoArrow;
 use delta_kernel::engine::arrow_data::ArrowEngineData;
 use delta_kernel::path::{LogPathFileType, ParsedLogPath};
 use delta_kernel::scan::scan_row_schema;
-use delta_kernel::schema::SchemaRef;
+use delta_kernel::schema::{derive_macro_utils::ToDataType, SchemaRef, StructField};
 use delta_kernel::snapshot::Snapshot as KernelSnapshot;
 use delta_kernel::table_configuration::TableConfiguration;
 use delta_kernel::table_properties::TableProperties;
 use delta_kernel::{PredicateRef, Version};
-use deltalake::kernel::{Action, ActionType, CommitInfo, Metadata, Protocol, Remove, StructType};
+use deltalake::kernel::{Action, CommitInfo, Metadata, Protocol, Remove, StructType};
 use deltalake::logstore::LogStore;
 use deltalake::{DeltaResult, DeltaTableConfig, DeltaTableError};
 use futures::stream::BoxStream;
@@ -26,7 +27,6 @@ use tokio::task::spawn_blocking;
 use url::Url;
 
 use crate::kernel::arrow::engine_ext::{ScanExt, SnapshotExt};
-use crate::kernel::models::fields::ActionTypeExt;
 use crate::kernel::snapshot::iterators::LogicalFileView;
 pub use crate::kernel::snapshot::log_data::LogDataHandler;
 use crate::kernel::snapshot::parse::read_removes;
@@ -82,7 +82,11 @@ impl Snapshot {
             table_root.set_path(&format!("{}/", table_root.path()));
         }
         let snapshot = match spawn_blocking(move || {
-            KernelSnapshot::try_new(table_root, engine.as_ref(), version)
+            let mut builder = KernelSnapshot::builder_for(table_root);
+            if let Some(v) = version {
+                builder = builder.at_version(v);
+            }
+            builder.build(engine.as_ref())
         })
         .await
         .map_err(|e| DeltaTableError::Generic(e.to_string()))?
@@ -101,7 +105,7 @@ impl Snapshot {
         let schema = snapshot.table_configuration().schema();
 
         Ok(Self {
-            inner: Arc::new(snapshot),
+            inner: snapshot,
             config,
             schema,
             table_url: log_store.config().location.clone(),
@@ -127,7 +131,11 @@ impl Snapshot {
         let engine = log_store.engine(None);
         let current = self.inner.clone();
         let snapshot = spawn_blocking(move || {
-            KernelSnapshot::try_new_from(current, engine.as_ref(), target_version)
+            let mut builder = KernelSnapshot::builder_from(current);
+            if let Some(v) = target_version {
+                builder = builder.at_version(v);
+            }
+            builder.build(engine.as_ref())
         })
         .await
         .map_err(|e| DeltaTableError::Generic(e.to_string()))??;
@@ -150,12 +158,12 @@ impl Snapshot {
 
     /// Get the table metadata of the snapshot
     pub fn metadata(&self) -> &Metadata {
-        self.inner.metadata()
+        self.inner.table_configuration().metadata()
     }
 
     /// Get the table protocol of the snapshot
     pub fn protocol(&self) -> &Protocol {
-        self.inner.protocol()
+        self.inner.table_configuration().protocol()
     }
 
     /// Get the table config which is loaded with of the snapshot
@@ -310,10 +318,13 @@ impl Snapshot {
         log_store: &dyn LogStore,
     ) -> BoxStream<'_, DeltaResult<Remove>> {
         static TOMBSTONE_SCHEMA: LazyLock<Arc<StructType>> = LazyLock::new(|| {
-            Arc::new(StructType::new(vec![
-                ActionType::Remove.schema_field().clone(),
-                ActionType::Sidecar.schema_field().clone(),
-            ]))
+            Arc::new(
+                StructType::try_new(vec![
+                    StructField::nullable("remove", KernelRemove::to_data_type()),
+                    StructField::nullable("sidecar", Sidecar::to_data_type()),
+                ])
+                .expect("Failed to construct TOMBSTONE_SCHEMA"),
+            )
         });
 
         // TODO: which capacity to choose?
@@ -325,7 +336,6 @@ impl Snapshot {
 
         let remove_data = match self.inner.log_segment().read_actions(
             engine.as_ref(),
-            TOMBSTONE_SCHEMA.clone(),
             TOMBSTONE_SCHEMA.clone(),
             None,
         ) {

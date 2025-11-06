@@ -4,7 +4,7 @@ use std::sync::Arc;
 
 use async_trait::async_trait;
 use datafusion::arrow::datatypes::Schema as ArrowSchema;
-use datafusion::catalog::memory::DataSourceExec;
+use datafusion::datasource::source::DataSourceExec;
 use datafusion::catalog::Session;
 use datafusion::common::stats::Statistics;
 use datafusion::common::{Result, ToDFSchema};

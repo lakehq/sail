@@ -127,14 +127,14 @@ pub(crate) trait SnapshotExt {
 
 impl SnapshotExt for Snapshot {
     fn stats_schema(&self) -> DeltaResult<SchemaRef> {
-        let partition_columns = self.metadata().partition_columns();
+        let partition_columns = self.table_configuration().metadata().partition_columns();
         let column_mapping_mode = self.table_configuration().column_mapping_mode();
-        let physical_schema = StructType::new(
+        let physical_schema = StructType::try_new(
             self.schema()
                 .fields()
                 .filter(|field| !partition_columns.contains(field.name()))
                 .map(|field| field.make_physical(column_mapping_mode)),
-        );
+        )?;
         Ok(Arc::new(stats_schema(
             &physical_schema,
             self.table_properties(),
@@ -142,10 +142,11 @@ impl SnapshotExt for Snapshot {
     }
 
     fn partitions_schema(&self) -> DeltaResultLocal<Option<SchemaRef>> {
-        Ok(
-            partitions_schema(self.schema().as_ref(), self.metadata().partition_columns())?
-                .map(Arc::new),
-        )
+        Ok(partitions_schema(
+            self.schema().as_ref(),
+            self.table_configuration().metadata().partition_columns(),
+        )?
+        .map(Arc::new))
     }
 
     /// Arrow schema for a parsed (including stats_parsed and partitionValues_parsed)
@@ -227,7 +228,7 @@ fn partitions_schema(
     if partition_columns.is_empty() {
         return Ok(None);
     }
-    Ok(Some(StructType::new(
+    Ok(Some(StructType::try_new(
         partition_columns
             .iter()
             .map(|col| {
@@ -236,7 +237,7 @@ fn partitions_schema(
                 })
             })
             .collect::<Result<Vec<_>, _>>()?,
-    )))
+    )?))
 }
 
 /// Generates the expected schema for file statistics.
@@ -295,7 +296,7 @@ pub(crate) fn stats_schema(
         }
     }
 
-    StructType::new(fields)
+    StructType::try_new(fields).expect("Failed to construct stats schema")
 }
 
 // Convert a min/max stats schema into a nullcount schema (all leaf fields are LONG)
@@ -422,7 +423,10 @@ impl<'a> SchemaTransform<'a> for BaseStatsTransform {
         self.path.pop();
 
         // exclude struct fields with no children
-        if matches!(field.data_type(), DataType::Struct(dt) if dt.fields.is_empty()) {
+        if matches!(
+            field.data_type(),
+            DataType::Struct(dt) if dt.fields().count() == 0
+        ) {
             None
         } else {
             Some(field)
@@ -492,13 +496,11 @@ fn kernel_to_arrow(metadata: ScanMetadata) -> DeltaResult<ScanMetadataArrow> {
         .scan_file_transforms
         .into_iter()
         .enumerate()
-        .filter_map(|(i, v)| metadata.scan_files.selection_vector[i].then_some(v))
+        .filter_map(|(i, v)| metadata.scan_files.selection_vector()[i].then_some(v))
         .collect();
-    let batch = ArrowEngineData::try_from_engine_data(metadata.scan_files.data)?.into();
-    let scan_files = filter_record_batch(
-        &batch,
-        &BooleanArray::from(metadata.scan_files.selection_vector),
-    )?;
+    let (data, selection) = metadata.scan_files.into_parts();
+    let batch = ArrowEngineData::try_from_engine_data(data)?.into();
+    let scan_files = filter_record_batch(&batch, &BooleanArray::from(selection))?;
     Ok(ScanMetadataArrow {
         scan_files,
         scan_file_transforms,

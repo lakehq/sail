@@ -11,10 +11,9 @@ use deltalake::kernel::scalars::ScalarExt;
 use deltalake::kernel::Add;
 use indexmap::IndexMap;
 use log::warn;
-use parquet::basic::{LogicalType, Type};
+use parquet::basic::{LogicalType, TimeUnit, Type};
 use parquet::file::metadata::{ParquetMetaData, RowGroupMetaData};
 use parquet::file::statistics::Statistics;
-use parquet::format::{FileMetaData, TimeUnit};
 use parquet::schema::types::{ColumnDescriptor, SchemaDescriptor};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
@@ -89,7 +88,7 @@ pub fn create_add(
     partition_values: &IndexMap<String, Scalar>,
     path: String,
     size: i64,
-    file_metadata: &FileMetaData,
+    file_metadata: &ParquetMetaData,
     num_indexed_cols: i32,
     stats_columns: &Option<Vec<String>>,
 ) -> Result<Add, DeltaTableError> {
@@ -159,30 +158,19 @@ pub fn stats_from_parquet_metadata(
 
 fn stats_from_file_metadata(
     partition_values: &IndexMap<String, Scalar>,
-    file_metadata: &FileMetaData,
+    file_metadata: &ParquetMetaData,
     num_indexed_cols: i32,
     stats_columns: &Option<Vec<String>>,
 ) -> Result<Stats, DeltaTableError> {
-    let type_ptr =
-        parquet::schema::types::from_thrift(file_metadata.schema.as_slice()).map_err(|e| {
-            DeltaTableError::generic(format!("Failed to parse schema from thrift: {e}"))
-        })?;
-    let schema_descriptor = Arc::new(SchemaDescriptor::new(type_ptr));
-
-    let row_group_metadata: Vec<RowGroupMetaData> = file_metadata
-        .row_groups
-        .iter()
-        .map(|rg| RowGroupMetaData::from_thrift(schema_descriptor.clone(), rg.clone()))
-        .collect::<Result<Vec<RowGroupMetaData>, _>>()
-        .map_err(|e| {
-            DeltaTableError::generic(format!("Failed to parse row group metadata: {e}"))
-        })?;
+    let schema_descriptor = file_metadata.file_metadata().schema_descr();
+    let row_group_metadata: Vec<RowGroupMetaData> =
+        file_metadata.row_groups().iter().cloned().collect();
 
     stats_from_metadata(
         partition_values,
-        schema_descriptor,
+        Arc::new(schema_descriptor.clone()),
         row_group_metadata,
-        file_metadata.num_rows,
+        file_metadata.file_metadata().num_rows(),
         num_indexed_cols,
         stats_columns,
     )
@@ -324,9 +312,9 @@ impl StatsScalar {
             (Statistics::Int64(v), Some(LogicalType::Timestamp { unit, .. })) => {
                 let v = get_stat!(v);
                 let timestamp = match unit {
-                    TimeUnit::MILLIS(_) => chrono::DateTime::from_timestamp_millis(v),
-                    TimeUnit::MICROS(_) => chrono::DateTime::from_timestamp_micros(v),
-                    TimeUnit::NANOS(_) => {
+                    TimeUnit::MILLIS => chrono::DateTime::from_timestamp_millis(v),
+                    TimeUnit::MICROS => chrono::DateTime::from_timestamp_micros(v),
+                    TimeUnit::NANOS => {
                         let secs = v / 1_000_000_000;
                         let nanosecs = (v % 1_000_000_000) as u32;
                         chrono::DateTime::from_timestamp(secs, nanosecs)

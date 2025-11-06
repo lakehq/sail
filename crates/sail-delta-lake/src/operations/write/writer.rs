@@ -16,6 +16,7 @@ use object_store::ObjectStore;
 use parquet::arrow::AsyncArrowWriter;
 use parquet::basic::Compression;
 use parquet::file::properties::WriterProperties;
+use parquet::file::metadata::ParquetMetaData;
 use parquet::schema::types::ColumnPath;
 use uuid::Uuid;
 
@@ -351,7 +352,7 @@ impl PartitionWriter {
             .map_err(|e| DeltaTableError::generic(format!("Failed to close arrow writer: {e}")))?;
 
         // Skip empty files
-        if metadata.num_rows == 0 {
+        if metadata.file_metadata().num_rows() == 0 {
             self.reset_writer()?;
             return Ok(());
         }
@@ -421,7 +422,7 @@ impl PartitionWriter {
         &self,
         path: &str,
         file_size: i64,
-        metadata: &parquet::format::FileMetaData,
+        metadata: &ParquetMetaData,
     ) -> Result<Add, DeltaTableError> {
         create_add(
             &self.config.partition_values,
