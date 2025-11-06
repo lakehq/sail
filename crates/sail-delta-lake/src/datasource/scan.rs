@@ -163,7 +163,7 @@ pub fn build_file_scan_config(
             },
         )
         .with_statistics(stats)
-        .with_projection(params.projection.cloned())
+        .with_projection_indices(params.projection.cloned())
         .with_limit(params.limit)
         .with_table_partition_cols(table_partition_cols_schema)
         .with_expr_adapter(Some(Arc::new(DeltaPhysicalExprAdapterFactory {})))
