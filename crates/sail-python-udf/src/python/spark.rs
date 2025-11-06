@@ -2,7 +2,7 @@ use std::ffi::CString;
 
 use datafusion::arrow::datatypes::{DataType, SchemaRef};
 use pyo3::prelude::PyModule;
-use pyo3::sync::GILOnceCell;
+use pyo3::sync::PyOnceLock;
 use pyo3::{intern, Bound, Py, PyAny, PyResult, Python};
 
 use crate::config::PySparkUdfConfig;
@@ -17,7 +17,7 @@ pub struct PySpark;
 
 impl PySpark {
     fn module(py: Python) -> PyResult<Bound<PyModule>> {
-        static MODULE: GILOnceCell<Py<PyModule>> = GILOnceCell::new();
+        static MODULE: PyOnceLock<Py<PyModule>> = PyOnceLock::new();
 
         Ok(MODULE
             .get_or_try_init(py, || -> PyResult<_> {
