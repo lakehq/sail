@@ -37,7 +37,7 @@ pub fn run_pyspark_shell() -> Result<(), Box<dyn std::error::Error>> {
         <Result<_, Box<dyn std::error::Error>>>::Ok((port, task))
     })?;
     handle.spawn(server_task);
-    Python::with_gil(|py| -> PyResult<_> {
+    Python::attach(|py| -> PyResult<_> {
         let shell = Modules::SPARK_SHELL.load(py)?;
         shell
             .getattr("run_pyspark_shell")?

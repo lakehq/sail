@@ -50,7 +50,7 @@ impl PlanResolver<'_> {
         placeholder: String,
     ) -> PlanResult<NamedExpr> {
         let name = placeholder.clone();
-        let expr = expr::Expr::Placeholder(expr::Placeholder::new(placeholder, None));
+        let expr = expr::Expr::Placeholder(expr::Placeholder::new_with_field(placeholder, None));
         Ok(NamedExpr::new(vec![name], expr))
     }
 
