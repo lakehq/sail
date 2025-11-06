@@ -699,7 +699,7 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
                     .map(|physical_sort_expr_nodes| {
                         parse_physical_sort_exprs(
                             physical_sort_expr_nodes,
-                            &self.context,
+                            &self.context.task_ctx(),
                             &schema,
                             self,
                         )
