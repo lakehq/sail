@@ -116,15 +116,17 @@ testcontainers = "0.25.2"
 
 # The `tonic` version must match the one used in `arrow-flight` (replace `RELEASE` with the release we are using):
 #   https://github.com/apache/arrow-rs/blob/RELEASE/arrow-flight/Cargo.toml
-tonic = { version = "0.13.1", features = ["tls-ring", "tls-native-roots", "gzip", "zstd"] }
-tonic-build = "0.13.1"
-tonic-reflection = "0.13.1"
-tonic-health = "0.13.1"
-tonic-types = "0.13.1"
+tonic = { version = "0.14.1", features = ["tls-ring", "tls-native-roots", "gzip", "zstd"] }
+tonic-build = "0.14.1"
+tonic-prost-build = "0.14.1"
+tonic-prost = "0.14.1"
+tonic-reflection = "0.14.1"
+tonic-health = "0.14.1"
+tonic-types = "0.14.1"
 # The `prost` version must match the one used in `tonic` (replace `RELEASE` with the release we are using):
 #   https://github.com/hyperium/tonic/blob/vRELEASE/tonic/Cargo.toml
-prost-build = "0.13.5"
-prost = "0.13.5"
+prost-build = "0.14"
+prost = "0.14"
 # The `axum` version must match the one used in `tonic` (replace `RELEASE` with the release we are using):
 #   https://github.com/hyperium/tonic/blob/vRELEASE/tonic/Cargo.toml
 axum = "0.8.4"
@@ -156,7 +158,7 @@ hdfs-native-object-store = "0.15.0"
 
 # Lakehouse
 deltalake = { git = "https://github.com/lakehq/delta-rs.git", rev = "79812bd", default-features = false, features = ["rustls"] }
-delta_kernel = { git = "https://github.com/delta-io/delta-kernel-rs.git", rev = "eff31d26e14c1c1e29589991e045079d6620e255", features = ["arrow-56", "internal-api", "default-engine-rustls"] }
+delta_kernel = { git = "https://github.com/delta-io/delta-kernel-rs.git", rev = "eff31d26e14c1c1e29589991e045079d6620e255", features = ["arrow-57", "internal-api", "default-engine-rustls"] }
 
 ######
 # This is the end of the manually managed dependencies.

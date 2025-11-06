@@ -15,9 +15,11 @@ impl<'a> ProtoBuilder<'a> {
             .map(|file| format!("proto/sail/{}/{}", self.package, file))
             .collect::<Vec<_>>();
 
-        tonic_build::configure()
+        let proto_paths = protos.iter().map(|s| s.as_str()).collect::<Vec<_>>();
+
+        tonic_prost_build::configure()
             .compile_well_known_types(true)
-            .compile_protos(&protos, &["proto"])?;
+            .compile_protos(&proto_paths, &["proto"])?;
 
         Ok(())
     }
