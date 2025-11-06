@@ -108,6 +108,7 @@ impl CommonErrorCause {
                 ArrowError::IpcError(x) => Self::ArrowIpc(x.clone()),
                 ArrowError::InvalidArgumentError(x) => Self::InvalidArgument(x.clone()),
                 ArrowError::ParquetError(x) => Self::FormatParquet(x.clone()),
+                ArrowError::AvroError(x) => Self::FormatAvro(x.clone()),
                 ArrowError::CDataInterface(x) => Self::ArrowCDataInterface(x.clone()),
                 ArrowError::DictionaryKeyOverflowError => {
                     Self::ArrowDictionaryKeyOverflow("dictionary key overflow".to_string())
