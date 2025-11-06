@@ -26,6 +26,7 @@ tonic = { workspace = true }
 tonic-types = { workspace = true }
 tonic-prost = { workspace = true }
 prost = { workspace = true }
+prost-types = { workspace = true }
 pbjson = { workspace = true }
 pbjson-types = { workspace = true }
 uuid = { workspace = true }
