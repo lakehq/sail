@@ -21,6 +21,8 @@ use std::str::FromStr;
 
 use sail_catalog::error::CatalogError;
 
+// CHECK HERE
+#[allow(dead_code)]
 pub enum UnityCatalogConfigKey {
     /// Url of a Databricks workspace
     ///

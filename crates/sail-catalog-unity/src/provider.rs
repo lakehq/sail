@@ -29,6 +29,8 @@ struct UnityColumnType {
     type_name: types::ColumnTypeName,
 }
 
+// CHECK HERE
+#[allow(dead_code)]
 #[derive(Clone, Debug)]
 pub struct UnityCatalogConfig {
     default_catalog: String,
@@ -302,7 +304,11 @@ impl UnityCatalogProvider {
                 }
                 let type_json = serde_json::json!({
                     "name": field.name(),
-                    "type": field_type.type_json,
+                    "type":  serde_json::json!({
+                        "type": "array",
+                        "elementType": field_type.type_json,
+                        "containsNull": field.is_nullable()
+                    }),
                     "nullable": field.is_nullable(),
                     "metadata": metadata_map
                 });
@@ -311,6 +317,46 @@ impl UnityCatalogProvider {
                     type_json,
                     type_name: types::ColumnTypeName::Array,
                 })
+            }
+            DataType::Map(field, _) => {
+                // CHECK HERE
+                // https://github.com/unitycatalog/unitycatalog/blob/fc76ab52aa03550d6577eca7be90004a5d2913b8/ai/core/tests/core/test_utils.py#L287
+                if let DataType::Struct(fields) = field.data_type() {
+                    if fields.len() == 2 {
+                        let key_type = Self::datatype_to_unity_type(fields[0].data_type())?;
+                        let value_type = Self::datatype_to_unity_type(fields[1].data_type())?;
+                        let type_text =
+                            format!("map<{},{}>", key_type.type_text, value_type.type_text);
+                        let mut metadata_map = serde_json::Map::new();
+                        for (k, v) in field.metadata() {
+                            metadata_map.insert(k.clone(), serde_json::Value::String(v.clone()));
+                        }
+                        let type_json = serde_json::json!({
+                            "name": field.name(),
+                            "type":  serde_json::json!({
+                                "type": "map",
+                                "keyType": key_type.type_json,
+                                "valueType": value_type.type_json,
+                                "valueContainsNull": fields[1].is_nullable()
+                            }),
+                            "nullable": field.is_nullable(),
+                            "metadata": metadata_map
+                        });
+                        Ok(UnityColumnType {
+                            type_text,
+                            type_json,
+                            type_name: types::ColumnTypeName::Map,
+                        })
+                    } else {
+                        Err(CatalogError::External(format!(
+                            "Map type struct must have exactly two fields, found {fields:?}"
+                        )))
+                    }
+                } else {
+                    Err(CatalogError::External(format!(
+                        "Map type must be a struct with key and value fields, found {field:?}"
+                    )))
+                }
             }
             DataType::Struct(fields) => {
                 // CHECK HERE
@@ -333,45 +379,19 @@ impl UnityCatalogProvider {
                 }
                 let type_text = format!("struct<{}>", type_text_parts.join(","));
                 let type_json = serde_json::json!({
-                    "type": "struct",
-                    "fields": json_fields
+                    // "name": field.name(), // CHECK HERE
+                    "type": serde_json::json!({
+                        "type": "struct",
+                        "fields": json_fields
+                    }),
+                    "nullable": true,
+                    "metadata": serde_json::Map::new()
                 });
                 Ok(UnityColumnType {
                     type_text,
                     type_json,
                     type_name: types::ColumnTypeName::Struct,
                 })
-            }
-            DataType::Map(field, _) => {
-                // CHECK HERE
-                // https://github.com/unitycatalog/unitycatalog/blob/fc76ab52aa03550d6577eca7be90004a5d2913b8/ai/core/tests/core/test_utils.py#L287
-                if let DataType::Struct(fields) = field.data_type() {
-                    if fields.len() == 2 {
-                        let key_type = Self::datatype_to_unity_type(fields[0].data_type())?;
-                        let value_type = Self::datatype_to_unity_type(fields[1].data_type())?;
-                        let type_text =
-                            format!("map<{},{}>", key_type.type_text, value_type.type_text);
-                        let type_json = serde_json::json!({
-                            "type": "map",
-                            "keyType": key_type.type_json,
-                            "valueType": value_type.type_json,
-                            "valueContainsNull": fields[1].is_nullable()
-                        });
-                        Ok(UnityColumnType {
-                            type_text,
-                            type_json,
-                            type_name: types::ColumnTypeName::Map,
-                        })
-                    } else {
-                        Err(CatalogError::External(format!(
-                            "Map type struct must have exactly two fields, found {fields:?}"
-                        )))
-                    }
-                } else {
-                    Err(CatalogError::External(format!(
-                        "Map type must be a struct with key and value fields, found {field:?}"
-                    )))
-                }
             }
             DataType::UInt64
             | DataType::Float16
@@ -720,9 +740,11 @@ impl CatalogProvider for UnityCatalogProvider {
             bucket_by,
             if_not_exists,
             replace,
-            options: table_options,
+            options,
             properties,
         } = options;
+
+        println!("CHECK HERE {partition_by:?}");
 
         if replace {
             return Err(CatalogError::NotSupported(
@@ -824,8 +846,15 @@ impl CatalogProvider for UnityCatalogProvider {
             })
             .collect::<CatalogResult<Vec<_>>>()?;
 
-        let mut props: HashMap<String, String> = properties.into_iter().collect();
-        for (k, v) in table_options {
+        let mut props = HashMap::new();
+        // TODO: Is this correct for options?
+        for (k, v) in options {
+            props.insert(format!("options.{k}"), v);
+        }
+        if let Some(c) = &comment {
+            props.insert("comment".to_string(), c.to_string());
+        }
+        for (k, v) in properties {
             props.insert(k, v);
         }
 

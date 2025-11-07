@@ -823,15 +823,15 @@ impl CatalogProvider for IcebergRestCatalogProvider {
         let write_order = build_sort_order(&sort_by, &name_to_id)?;
 
         let mut props = HashMap::new();
-        for (k, v) in properties {
-            props.insert(k, v);
-        }
         // TODO: Is this correct for options?
         for (k, v) in options {
             props.insert(format!("options.{k}"), v);
         }
         if let Some(c) = comment {
             props.insert("comment".to_string(), c);
+        }
+        for (k, v) in properties {
+            props.insert(k, v);
         }
 
         let request = crate::models::CreateTableRequest {
