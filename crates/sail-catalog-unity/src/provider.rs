@@ -4,7 +4,9 @@
 use std::collections::HashMap;
 use std::str::FromStr;
 
-use datafusion::arrow::datatypes::DataType;
+use datafusion::arrow::datatypes::{
+    DataType, TimeUnit, DECIMAL128_MAX_PRECISION, DECIMAL128_MAX_SCALE,
+};
 use sail_catalog::error::{CatalogError, CatalogResult};
 use sail_catalog::provider::{
     CatalogProvider, CreateDatabaseOptions, CreateTableOptions, CreateViewOptions, DatabaseStatus,
@@ -151,83 +153,177 @@ impl UnityCatalogProvider {
         }
     }
 
-    fn datatype_to_type_text(data_type: &DataType) -> String {
+    // CHECK HERE
+    fn datatype_to_type_text(data_type: &DataType) -> CatalogResult<String> {
+        // Docs additionally list the following types which we do not handle:
+        //  CHAR | VARIANT | GEOMETRY | GEOGRAPHY | TABLE_TYPE
+        //  https://docs.databricks.com/api/workspace/tables/create#columns-type_name
+
+        // DataType::List(field)
+        //     | DataType::LargeList(field)
+        //     | DataType::FixedSizeList(field, _) => {
+        //     format!("ARRAY<{}>", Self::datatype_to_type_text(field.data_type()))
+        // }
+        // DataType::Struct(fields) => {
+        //     let field_strs: Vec<String> = fields
+        //         .iter()
+        //         .map(|f| {
+        //             format!(
+        //                 "{}: {}",
+        //                 f.name(),
+        //                 Self::datatype_to_type_text(f.data_type())
+        //             )
+        //         })
+        //         .collect();
+        //     format!("STRUCT<{}>", field_strs.join(", "))
+        // }
+
         match data_type {
-            DataType::Boolean => "BOOLEAN".to_string(),
-            DataType::Int8 => "BYTE".to_string(),
-            DataType::Int16 => "SHORT".to_string(),
-            DataType::Int32 => "INT".to_string(),
-            DataType::Int64 => "LONG".to_string(),
-            DataType::Float32 => "FLOAT".to_string(),
-            DataType::Float64 => "DOUBLE".to_string(),
-            DataType::Date32 | DataType::Date64 => "DATE".to_string(),
-            DataType::Timestamp(_, Some(_)) => "TIMESTAMP".to_string(),
-            DataType::Timestamp(_, None) => "TIMESTAMP_NTZ".to_string(),
-            DataType::Utf8 | DataType::LargeUtf8 => "STRING".to_string(),
-            DataType::Binary | DataType::LargeBinary | DataType::FixedSizeBinary(_) => {
-                "BINARY".to_string()
-            }
-            DataType::Decimal128(precision, scale) | DataType::Decimal256(precision, scale) => {
-                format!("DECIMAL({},{})", precision, scale)
-            }
+            DataType::Null => Ok("NULL".to_string()),
+            DataType::Boolean => Ok("BOOLEAN".to_string()),
+            DataType::Int8 => Ok("BYTE".to_string()),
+            DataType::Int16 | DataType::UInt8 => Ok("SHORT".to_string()),
+            DataType::Int32 | DataType::UInt16 => Ok("INT".to_string()),
+            DataType::Int64 | DataType::UInt32 => Ok("LONG".to_string()),
+            DataType::Float32 => Ok("FLOAT".to_string()),
+            DataType::Float64 => Ok("DOUBLE".to_string()),
+            DataType::Timestamp(_, Some(_)) => Ok("TIMESTAMP".to_string()),
+            DataType::Timestamp(_, None) => Ok("TIMESTAMP_NTZ".to_string()),
+            DataType::Date32 => Ok("DATE".to_string()),
+            DataType::Binary
+            | DataType::FixedSizeBinary(_)
+            | DataType::LargeBinary
+            | DataType::BinaryView => Ok("BINARY".to_string()),
+            DataType::Utf8 | DataType::LargeUtf8 | DataType::Utf8View => Ok("STRING".to_string()),
             DataType::List(field)
+            | DataType::ListView(field)
             | DataType::LargeList(field)
-            | DataType::FixedSizeList(field, _) => {
-                format!("ARRAY<{}>", Self::datatype_to_type_text(field.data_type()))
+            | DataType::LargeListView(field) => {
+                // CHECK HERE
+                Ok(format!(
+                    "ARRAY<{}>",
+                    Self::datatype_to_type_text(field.data_type())?
+                ))
             }
             DataType::Struct(fields) => {
+                // CHECK HERE
                 let field_strs: Vec<String> = fields
                     .iter()
                     .map(|f| {
-                        format!(
+                        Ok(format!(
                             "{}: {}",
                             f.name(),
-                            Self::datatype_to_type_text(f.data_type())
-                        )
+                            Self::datatype_to_type_text(f.data_type())?
+                        ))
                     })
-                    .collect();
-                format!("STRUCT<{}>", field_strs.join(", "))
+                    .collect::<CatalogResult<Vec<_>>>()?;
+                Ok(format!("STRUCT<{}>", field_strs.join(", ")))
+            }
+            DataType::Decimal32(precision, scale)
+            | DataType::Decimal64(precision, scale)
+            | DataType::Decimal128(precision, scale) => {
+                Ok(format!("DECIMAL({precision}, {scale})"))
+            }
+            DataType::Decimal256(precision, scale) => {
+                if *precision <= DECIMAL128_MAX_PRECISION && *scale <= DECIMAL128_MAX_SCALE {
+                    Ok(format!("DECIMAL({precision}, {scale})"))
+                } else {
+                    Err(CatalogError::External(format!(
+                        "Decimal with precision > {DECIMAL128_MAX_PRECISION} and scale > {DECIMAL128_MAX_SCALE} is not supported in Unity Catalog"
+                    )))
+                }
             }
             DataType::Map(field, _) => {
+                // CHECK HERE
                 if let DataType::Struct(fields) = field.data_type() {
                     if fields.len() == 2 {
-                        let key_type = Self::datatype_to_type_text(fields[0].data_type());
-                        let value_type = Self::datatype_to_type_text(fields[1].data_type());
-                        return format!("MAP<{}, {}>", key_type, value_type);
+                        let key_type = Self::datatype_to_type_text(fields[0].data_type())?;
+                        let value_type = Self::datatype_to_type_text(fields[1].data_type())?;
+                        return Ok(format!("MAP<{key_type}, {value_type}>"));
                     }
                 }
-                "MAP<STRING, STRING>".to_string()
+                Ok("MAP<STRING, STRING>".to_string())
             }
-            DataType::Null => "NULL".to_string(),
-            _ => "STRING".to_string(),
+            DataType::UInt64
+            | DataType::Float16
+            | DataType::Timestamp(TimeUnit::Second, _)
+            | DataType::Timestamp(TimeUnit::Millisecond, _)
+            | DataType::Timestamp(TimeUnit::Nanosecond, _)
+            | DataType::Date64
+            | DataType::Time32(_)
+            | DataType::Time64(_)
+            | DataType::Duration(_)
+            | DataType::Interval(_)
+            | DataType::FixedSizeList(_, _)
+            | DataType::Union(_, _)
+            | DataType::Dictionary(_, _)
+            | DataType::RunEndEncoded(_, _) => Err(CatalogError::External(format!(
+                "{data_type:?} type is not supported in Unity Catalog"
+            ))),
         }
     }
 
-    fn datatype_to_column_type_name(data_type: &DataType) -> types::ColumnTypeName {
+    fn datatype_to_column_type_name(data_type: &DataType) -> CatalogResult<types::ColumnTypeName> {
+        // Docs additionally list the following types which we do not handle:
+        //  CHAR | VARIANT | GEOMETRY | GEOGRAPHY | TABLE_TYPE
+        //  https://docs.databricks.com/api/workspace/tables/create#columns-type_name
         match data_type {
-            DataType::Boolean => types::ColumnTypeName::Boolean,
-            DataType::Int8 => types::ColumnTypeName::Byte,
-            DataType::Int16 => types::ColumnTypeName::Short,
-            DataType::Int32 => types::ColumnTypeName::Int,
-            DataType::Int64 => types::ColumnTypeName::Long,
-            DataType::Float32 => types::ColumnTypeName::Float,
-            DataType::Float64 => types::ColumnTypeName::Double,
-            DataType::Date32 | DataType::Date64 => types::ColumnTypeName::Date,
-            DataType::Timestamp(_, _) => types::ColumnTypeName::Timestamp,
-            DataType::Utf8 | DataType::LargeUtf8 => types::ColumnTypeName::String,
-            DataType::Binary | DataType::LargeBinary | DataType::FixedSizeBinary(_) => {
-                types::ColumnTypeName::Binary
+            DataType::Null => Ok(types::ColumnTypeName::Null),
+            DataType::Boolean => Ok(types::ColumnTypeName::Boolean),
+            DataType::Int8 => Ok(types::ColumnTypeName::Byte),
+            DataType::Int16 | DataType::UInt8 => Ok(types::ColumnTypeName::Short),
+            DataType::Int32 | DataType::UInt16 => Ok(types::ColumnTypeName::Int),
+            DataType::Int64 | DataType::UInt32 => Ok(types::ColumnTypeName::Long),
+            DataType::Float32 => Ok(types::ColumnTypeName::Float),
+            DataType::Float64 => Ok(types::ColumnTypeName::Double),
+            DataType::Timestamp(TimeUnit::Microsecond, Some(_)) => {
+                Ok(types::ColumnTypeName::Timestamp)
             }
-            DataType::Decimal128(_, _) | DataType::Decimal256(_, _) => {
-                types::ColumnTypeName::Decimal
+            DataType::Timestamp(TimeUnit::Microsecond, None) => {
+                Ok(types::ColumnTypeName::TimestampNtz)
             }
-            DataType::List(_) | DataType::LargeList(_) | DataType::FixedSizeList(_, _) => {
-                types::ColumnTypeName::Array
+            DataType::Date32 => Ok(types::ColumnTypeName::Date),
+            DataType::Binary
+            | DataType::FixedSizeBinary(_)
+            | DataType::LargeBinary
+            | DataType::BinaryView => Ok(types::ColumnTypeName::Binary),
+            DataType::Utf8 | DataType::LargeUtf8 | DataType::Utf8View => {
+                Ok(types::ColumnTypeName::String)
             }
-            DataType::Struct(_) => types::ColumnTypeName::Struct,
-            DataType::Map(_, _) => types::ColumnTypeName::Map,
-            DataType::Null => types::ColumnTypeName::Null,
-            _ => types::ColumnTypeName::String,
+            DataType::List(_)
+            | DataType::ListView(_)
+            | DataType::LargeList(_)
+            | DataType::LargeListView(_) => Ok(types::ColumnTypeName::Array),
+            DataType::Struct(_) => Ok(types::ColumnTypeName::Struct),
+            DataType::Decimal32(_, _) | DataType::Decimal64(_, _) | DataType::Decimal128(_, _) => {
+                Ok(types::ColumnTypeName::Decimal)
+            }
+            DataType::Decimal256(precision, scale) => {
+                if *precision <= DECIMAL128_MAX_PRECISION && *scale <= DECIMAL128_MAX_SCALE {
+                    Ok(types::ColumnTypeName::Decimal)
+                } else {
+                    Err(CatalogError::External(format!(
+                        "Decimal with precision > {DECIMAL128_MAX_PRECISION} and scale > {DECIMAL128_MAX_SCALE} is not supported in Unity Catalog"
+                    )))
+                }
+            }
+            DataType::Map(_, _) => Ok(types::ColumnTypeName::Map),
+            DataType::UInt64
+            | DataType::Float16
+            | DataType::Timestamp(TimeUnit::Second, _)
+            | DataType::Timestamp(TimeUnit::Millisecond, _)
+            | DataType::Timestamp(TimeUnit::Nanosecond, _)
+            | DataType::Date64
+            | DataType::Time32(_)
+            | DataType::Time64(_)
+            | DataType::Duration(_)
+            | DataType::Interval(_)
+            | DataType::FixedSizeList(_, _)
+            | DataType::Union(_, _)
+            | DataType::Dictionary(_, _)
+            | DataType::RunEndEncoded(_, _) => Err(CatalogError::External(format!(
+                "{data_type:?} type is not supported in Unity Catalog"
+            ))),
         }
     }
 
@@ -640,8 +736,8 @@ impl CatalogProvider for UnityCatalogProvider {
             .iter()
             .enumerate()
             .map(|(idx, col)| {
-                let type_text = Self::datatype_to_type_text(&col.data_type);
-                let type_name = Self::datatype_to_column_type_name(&col.data_type);
+                let type_text = Self::datatype_to_type_text(&col.data_type)?;
+                let type_name = Self::datatype_to_column_type_name(&col.data_type)?;
                 let (type_precision, type_scale) = match &col.data_type {
                     DataType::Decimal128(p, s) | DataType::Decimal256(p, s) => {
                         (Some(*p as i32), Some(*s as i32))
@@ -649,7 +745,7 @@ impl CatalogProvider for UnityCatalogProvider {
                     _ => (None, None),
                 };
 
-                types::ColumnInfo {
+                Ok(types::ColumnInfo {
                     comment: col.comment.clone(),
                     name: Some(col.name.clone()),
                     nullable: col.nullable,
@@ -661,9 +757,9 @@ impl CatalogProvider for UnityCatalogProvider {
                     type_precision,
                     type_scale,
                     type_text: Some(type_text),
-                }
+                })
             })
-            .collect();
+            .collect::<CatalogResult<Vec<_>>>()?;
 
         let mut props: HashMap<String, String> = properties.into_iter().collect();
         for (k, v) in table_options {

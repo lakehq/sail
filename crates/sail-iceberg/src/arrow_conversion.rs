@@ -121,7 +121,8 @@ pub fn arrow_type_to_iceberg(arrow_type: &ArrowDataType) -> Result<Type> {
         }
         ArrowDataType::List(field)
         | ArrowDataType::ListView(field)
-        | ArrowDataType::LargeList(field) => {
+        | ArrowDataType::LargeList(field)
+        | ArrowDataType::LargeListView(field) => {
             let element_field = arrow_field_to_iceberg(field)?;
             Ok(Type::List(ListType::new(Arc::new(element_field))))
         }
@@ -202,7 +203,10 @@ pub fn arrow_primitive_to_iceberg(arrow_type: &ArrowDataType) -> Result<Primitiv
         ArrowDataType::UInt32 | ArrowDataType::Int64 => PrimitiveType::Long,
         ArrowDataType::Float32 => PrimitiveType::Float,
         ArrowDataType::Float64 => PrimitiveType::Double,
-        ArrowDataType::Decimal128(precision, scale) => {
+        ArrowDataType::Decimal32(precision, scale)
+        | ArrowDataType::Decimal64(precision, scale)
+        | ArrowDataType::Decimal128(precision, scale)
+        | ArrowDataType::Decimal256(precision, scale) => {
             let iceberg_type = Type::decimal(*precision as u32, *scale as u32)
                 .map_err(|e| plan_datafusion_err!("Failed to create decimal type: {e}"))?;
             match iceberg_type {
@@ -211,18 +215,27 @@ pub fn arrow_primitive_to_iceberg(arrow_type: &ArrowDataType) -> Result<Primitiv
             }
         }
         ArrowDataType::Date32 => PrimitiveType::Date,
-        ArrowDataType::Time64(TimeUnit::Microsecond) => PrimitiveType::Time,
+        ArrowDataType::Time32(TimeUnit::Microsecond)
+        | ArrowDataType::Time64(TimeUnit::Microsecond) => PrimitiveType::Time,
         ArrowDataType::Timestamp(TimeUnit::Microsecond, None) => PrimitiveType::Timestamp,
-        ArrowDataType::Timestamp(TimeUnit::Microsecond, Some(tz))
-            if tz.as_ref() == "UTC" || tz.as_ref() == "+00:00" =>
-        {
-            PrimitiveType::Timestamptz
+        ArrowDataType::Timestamp(TimeUnit::Microsecond, Some(tz)) => {
+            if tz.as_ref() == "UTC" || tz.as_ref() == "+00:00" {
+                PrimitiveType::Timestamptz
+            } else {
+                return plan_err!(
+                    "Unsupported timezone for Iceberg Timestamptz conversion: {tz}. Timezone must be UTC or +00:00"
+                );
+            }
         }
         ArrowDataType::Timestamp(TimeUnit::Nanosecond, None) => PrimitiveType::TimestampNs,
-        ArrowDataType::Timestamp(TimeUnit::Nanosecond, Some(tz))
-            if tz.as_ref() == "UTC" || tz.as_ref() == "+00:00" =>
-        {
-            PrimitiveType::TimestamptzNs
+        ArrowDataType::Timestamp(TimeUnit::Nanosecond, Some(tz)) => {
+            if tz.as_ref() == "UTC" || tz.as_ref() == "+00:00" {
+                PrimitiveType::TimestamptzNs
+            } else {
+                return plan_err!(
+                    "Unsupported timezone for Iceberg TimestamptzNs conversion: {tz}. Timezone must be UTC or +00:00"
+                );
+            }
         }
         ArrowDataType::Utf8 | ArrowDataType::LargeUtf8 | ArrowDataType::Utf8View => {
             PrimitiveType::String
@@ -232,7 +245,31 @@ pub fn arrow_primitive_to_iceberg(arrow_type: &ArrowDataType) -> Result<Primitiv
         ArrowDataType::Binary | ArrowDataType::LargeBinary | ArrowDataType::BinaryView => {
             PrimitiveType::Binary
         }
-        _ => {
+        // Manually list types so we can keep track of them
+        ArrowDataType::Null
+        | ArrowDataType::UInt64
+        | ArrowDataType::Float16
+        | ArrowDataType::Date64
+        | ArrowDataType::Time32(TimeUnit::Second)
+        | ArrowDataType::Time32(TimeUnit::Millisecond)
+        | ArrowDataType::Time32(TimeUnit::Nanosecond)
+        | ArrowDataType::Time64(TimeUnit::Second)
+        | ArrowDataType::Time64(TimeUnit::Millisecond)
+        | ArrowDataType::Time64(TimeUnit::Nanosecond)
+        | ArrowDataType::Timestamp(TimeUnit::Second, _)
+        | ArrowDataType::Timestamp(TimeUnit::Millisecond, _)
+        | ArrowDataType::Duration(_)
+        | ArrowDataType::Interval(_)
+        | ArrowDataType::List(_)
+        | ArrowDataType::ListView(_)
+        | ArrowDataType::FixedSizeList(_, _)
+        | ArrowDataType::LargeList(_)
+        | ArrowDataType::LargeListView(_)
+        | ArrowDataType::Struct(_)
+        | ArrowDataType::Union(_, _)
+        | ArrowDataType::Dictionary(_, _)
+        | ArrowDataType::Map(_, _)
+        | ArrowDataType::RunEndEncoded(_, _) => {
             return plan_err!(
                 "Unsupported Arrow data type for Iceberg primitive conversion: {arrow_type}"
             );
