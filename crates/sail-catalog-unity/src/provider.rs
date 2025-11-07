@@ -23,6 +23,12 @@ pub const UNITY_CATALOG_PROP_URI: &str = "uri";
 
 const DEFAULT_URI: &str = "http://localhost:8080/api/2.1/unity-catalog";
 
+struct UnityColumnType {
+    type_text: String,
+    type_json: serde_json::Value,
+    type_name: types::ColumnTypeName,
+}
+
 #[derive(Clone, Debug)]
 pub struct UnityCatalogConfig {
     default_catalog: String,
@@ -153,161 +159,220 @@ impl UnityCatalogProvider {
         }
     }
 
-    // CHECK HERE
-    fn datatype_to_type_text(data_type: &DataType) -> CatalogResult<String> {
+    // https://docs.databricks.com/aws/en/sql/language-manual/sql-ref-syntax-aux-describe-table
+    fn datatype_to_unity_type(data_type: &DataType) -> CatalogResult<UnityColumnType> {
         // Docs additionally list the following types which we do not handle:
         //  CHAR | VARIANT | GEOMETRY | GEOGRAPHY | TABLE_TYPE
         //  https://docs.databricks.com/api/workspace/tables/create#columns-type_name
-
-        // DataType::List(field)
-        //     | DataType::LargeList(field)
-        //     | DataType::FixedSizeList(field, _) => {
-        //     format!("ARRAY<{}>", Self::datatype_to_type_text(field.data_type()))
-        // }
-        // DataType::Struct(fields) => {
-        //     let field_strs: Vec<String> = fields
-        //         .iter()
-        //         .map(|f| {
-        //             format!(
-        //                 "{}: {}",
-        //                 f.name(),
-        //                 Self::datatype_to_type_text(f.data_type())
-        //             )
-        //         })
-        //         .collect();
-        //     format!("STRUCT<{}>", field_strs.join(", "))
-        // }
-
         match data_type {
-            DataType::Null => Ok("NULL".to_string()),
-            DataType::Boolean => Ok("BOOLEAN".to_string()),
-            DataType::Int8 => Ok("BYTE".to_string()),
-            DataType::Int16 | DataType::UInt8 => Ok("SHORT".to_string()),
-            DataType::Int32 | DataType::UInt16 => Ok("INT".to_string()),
-            DataType::Int64 | DataType::UInt32 => Ok("LONG".to_string()),
-            DataType::Float32 => Ok("FLOAT".to_string()),
-            DataType::Float64 => Ok("DOUBLE".to_string()),
-            DataType::Timestamp(_, Some(_)) => Ok("TIMESTAMP".to_string()),
-            DataType::Timestamp(_, None) => Ok("TIMESTAMP_NTZ".to_string()),
-            DataType::Date32 => Ok("DATE".to_string()),
+            DataType::Null => Ok(UnityColumnType {
+                type_text: types::ColumnTypeName::Null.to_string().to_lowercase(),
+                type_json: serde_json::Value::String(
+                    types::ColumnTypeName::Null.to_string().to_lowercase(),
+                ),
+                type_name: types::ColumnTypeName::Null,
+            }),
+            DataType::Boolean => Ok(UnityColumnType {
+                type_text: types::ColumnTypeName::Boolean.to_string().to_lowercase(),
+                type_json: serde_json::Value::String(
+                    types::ColumnTypeName::Boolean.to_string().to_lowercase(),
+                ),
+                type_name: types::ColumnTypeName::Boolean,
+            }),
+            DataType::Int8 => Ok(UnityColumnType {
+                type_text: types::ColumnTypeName::Byte.to_string().to_lowercase(),
+                type_json: serde_json::Value::String(
+                    types::ColumnTypeName::Byte.to_string().to_lowercase(),
+                ),
+                type_name: types::ColumnTypeName::Byte,
+            }),
+            DataType::Int16 | DataType::UInt8 => Ok(UnityColumnType {
+                type_text: types::ColumnTypeName::Short.to_string().to_lowercase(),
+                type_json: serde_json::Value::String(
+                    types::ColumnTypeName::Short.to_string().to_lowercase(),
+                ),
+                type_name: types::ColumnTypeName::Short,
+            }),
+            DataType::Int32 | DataType::UInt16 => Ok(UnityColumnType {
+                type_text: types::ColumnTypeName::Int.to_string().to_lowercase(),
+                type_json: serde_json::Value::String(
+                    types::ColumnTypeName::Int.to_string().to_lowercase(),
+                ),
+                type_name: types::ColumnTypeName::Int,
+            }),
+            DataType::Int64 | DataType::UInt32 => Ok(UnityColumnType {
+                type_text: types::ColumnTypeName::Long.to_string().to_lowercase(),
+                type_json: serde_json::Value::String(
+                    types::ColumnTypeName::Long.to_string().to_lowercase(),
+                ),
+                type_name: types::ColumnTypeName::Long,
+            }),
+            DataType::Float32 => Ok(UnityColumnType {
+                type_text: types::ColumnTypeName::Float.to_string().to_lowercase(),
+                type_json: serde_json::Value::String(
+                    types::ColumnTypeName::Float.to_string().to_lowercase(),
+                ),
+                type_name: types::ColumnTypeName::Float,
+            }),
+            DataType::Float64 => Ok(UnityColumnType {
+                type_text: types::ColumnTypeName::Double.to_string().to_lowercase(),
+                type_json: serde_json::Value::String(
+                    types::ColumnTypeName::Double.to_string().to_lowercase(),
+                ),
+                type_name: types::ColumnTypeName::Double,
+            }),
+            DataType::Timestamp(TimeUnit::Microsecond, Some(_)) => Ok(UnityColumnType {
+                type_text: types::ColumnTypeName::Timestamp.to_string().to_lowercase(),
+                type_json: serde_json::Value::String(
+                    types::ColumnTypeName::Timestamp.to_string().to_lowercase(),
+                ),
+                type_name: types::ColumnTypeName::Timestamp,
+            }),
+            DataType::Timestamp(TimeUnit::Microsecond, None) => Ok(UnityColumnType {
+                type_text: types::ColumnTypeName::TimestampNtz
+                    .to_string()
+                    .to_lowercase(),
+                type_json: serde_json::Value::String(
+                    types::ColumnTypeName::TimestampNtz
+                        .to_string()
+                        .to_lowercase(),
+                ),
+                type_name: types::ColumnTypeName::TimestampNtz,
+            }),
+            DataType::Date32 => Ok(UnityColumnType {
+                type_text: types::ColumnTypeName::Date.to_string().to_lowercase(),
+                type_json: serde_json::Value::String(
+                    types::ColumnTypeName::Date.to_string().to_lowercase(),
+                ),
+                type_name: types::ColumnTypeName::Date,
+            }),
             DataType::Binary
             | DataType::FixedSizeBinary(_)
             | DataType::LargeBinary
-            | DataType::BinaryView => Ok("BINARY".to_string()),
-            DataType::Utf8 | DataType::LargeUtf8 | DataType::Utf8View => Ok("STRING".to_string()),
+            | DataType::BinaryView => Ok(UnityColumnType {
+                type_text: types::ColumnTypeName::Binary.to_string().to_lowercase(),
+                type_json: serde_json::Value::String(
+                    types::ColumnTypeName::Binary.to_string().to_lowercase(),
+                ),
+                type_name: types::ColumnTypeName::Binary,
+            }),
+            DataType::Utf8 | DataType::LargeUtf8 | DataType::Utf8View => Ok(UnityColumnType {
+                type_text: types::ColumnTypeName::String.to_string().to_lowercase(),
+                type_json: serde_json::Value::String(
+                    types::ColumnTypeName::String.to_string().to_lowercase(),
+                ),
+                type_name: types::ColumnTypeName::String,
+            }),
+            DataType::Decimal32(precision, scale)
+            | DataType::Decimal64(precision, scale)
+            | DataType::Decimal128(precision, scale) => {
+                let type_str = format!("decimal({},{})", precision, scale);
+                Ok(UnityColumnType {
+                    type_text: type_str.clone(),
+                    type_json: serde_json::Value::String(type_str),
+                    type_name: types::ColumnTypeName::Decimal,
+                })
+            }
+            DataType::Decimal256(precision, scale) => {
+                if *precision <= DECIMAL128_MAX_PRECISION && *scale <= DECIMAL128_MAX_SCALE {
+                    let type_str = format!("decimal({},{})", precision, scale);
+                    Ok(UnityColumnType {
+                        type_text: type_str.clone(),
+                        type_json: serde_json::Value::String(type_str),
+                        type_name: types::ColumnTypeName::Decimal,
+                    })
+                } else {
+                    Err(CatalogError::External(format!(
+                        "Decimal with precision > {} and scale > {} is not supported in Unity Catalog",
+                        DECIMAL128_MAX_PRECISION, DECIMAL128_MAX_SCALE
+                    )))
+                }
+            }
             DataType::List(field)
             | DataType::ListView(field)
             | DataType::LargeList(field)
             | DataType::LargeListView(field) => {
                 // CHECK HERE
-                Ok(format!(
-                    "ARRAY<{}>",
-                    Self::datatype_to_type_text(field.data_type())?
-                ))
+                // https://github.com/unitycatalog/unitycatalog/blob/fc76ab52aa03550d6577eca7be90004a5d2913b8/ai/core/tests/core/test_utils.py#L184
+                let field_type = Self::datatype_to_unity_type(field.data_type())?;
+                let type_text = format!("array<{}>", field_type.type_text);
+                let mut metadata_map = serde_json::Map::new();
+                for (k, v) in field.metadata() {
+                    metadata_map.insert(k.clone(), serde_json::Value::String(v.clone()));
+                }
+                let type_json = serde_json::json!({
+                    "name": field.name(),
+                    "type": field_type.type_json,
+                    "nullable": field.is_nullable(),
+                    "metadata": metadata_map
+                });
+                Ok(UnityColumnType {
+                    type_text,
+                    type_json,
+                    type_name: types::ColumnTypeName::Array,
+                })
             }
             DataType::Struct(fields) => {
                 // CHECK HERE
-                let field_strs: Vec<String> = fields
-                    .iter()
-                    .map(|f| {
-                        Ok(format!(
-                            "{}: {}",
-                            f.name(),
-                            Self::datatype_to_type_text(f.data_type())?
-                        ))
-                    })
-                    .collect::<CatalogResult<Vec<_>>>()?;
-                Ok(format!("STRUCT<{}>", field_strs.join(", ")))
-            }
-            DataType::Decimal32(precision, scale)
-            | DataType::Decimal64(precision, scale)
-            | DataType::Decimal128(precision, scale) => {
-                Ok(format!("DECIMAL({precision}, {scale})"))
-            }
-            DataType::Decimal256(precision, scale) => {
-                if *precision <= DECIMAL128_MAX_PRECISION && *scale <= DECIMAL128_MAX_SCALE {
-                    Ok(format!("DECIMAL({precision}, {scale})"))
-                } else {
-                    Err(CatalogError::External(format!(
-                        "Decimal with precision > {DECIMAL128_MAX_PRECISION} and scale > {DECIMAL128_MAX_SCALE} is not supported in Unity Catalog"
-                    )))
+                // https://github.com/unitycatalog/unitycatalog/blob/fc76ab52aa03550d6577eca7be90004a5d2913b8/ai/core/tests/core/test_utils.py#L162
+                let mut type_text_parts = Vec::new();
+                let mut json_fields = Vec::new();
+                for field in fields.iter() {
+                    let field_type = Self::datatype_to_unity_type(field.data_type())?;
+                    type_text_parts.push(format!("{}:{}", field.name(), field_type.type_text));
+                    let mut metadata_map = serde_json::Map::new();
+                    for (k, v) in field.metadata() {
+                        metadata_map.insert(k.clone(), serde_json::Value::String(v.clone()));
+                    }
+                    json_fields.push(serde_json::json!({
+                        "name": field.name(),
+                        "type": field_type.type_json,
+                        "nullable": field.is_nullable(),
+                        "metadata": metadata_map,
+                    }));
                 }
+                let type_text = format!("struct<{}>", type_text_parts.join(","));
+                let type_json = serde_json::json!({
+                    "type": "struct",
+                    "fields": json_fields
+                });
+                Ok(UnityColumnType {
+                    type_text,
+                    type_json,
+                    type_name: types::ColumnTypeName::Struct,
+                })
             }
             DataType::Map(field, _) => {
                 // CHECK HERE
+                // https://github.com/unitycatalog/unitycatalog/blob/fc76ab52aa03550d6577eca7be90004a5d2913b8/ai/core/tests/core/test_utils.py#L287
                 if let DataType::Struct(fields) = field.data_type() {
                     if fields.len() == 2 {
-                        let key_type = Self::datatype_to_type_text(fields[0].data_type())?;
-                        let value_type = Self::datatype_to_type_text(fields[1].data_type())?;
-                        return Ok(format!("MAP<{key_type}, {value_type}>"));
+                        let key_type = Self::datatype_to_unity_type(fields[0].data_type())?;
+                        let value_type = Self::datatype_to_unity_type(fields[1].data_type())?;
+                        let type_text =
+                            format!("map<{},{}>", key_type.type_text, value_type.type_text);
+                        let type_json = serde_json::json!({
+                            "type": "map",
+                            "keyType": key_type.type_json,
+                            "valueType": value_type.type_json,
+                            "valueContainsNull": fields[1].is_nullable()
+                        });
+                        Ok(UnityColumnType {
+                            type_text,
+                            type_json,
+                            type_name: types::ColumnTypeName::Map,
+                        })
+                    } else {
+                        Err(CatalogError::External(format!(
+                            "Map type struct must have exactly two fields, found {fields:?}"
+                        )))
                     }
-                }
-                Ok("MAP<STRING, STRING>".to_string())
-            }
-            DataType::UInt64
-            | DataType::Float16
-            | DataType::Timestamp(TimeUnit::Second, _)
-            | DataType::Timestamp(TimeUnit::Millisecond, _)
-            | DataType::Timestamp(TimeUnit::Nanosecond, _)
-            | DataType::Date64
-            | DataType::Time32(_)
-            | DataType::Time64(_)
-            | DataType::Duration(_)
-            | DataType::Interval(_)
-            | DataType::FixedSizeList(_, _)
-            | DataType::Union(_, _)
-            | DataType::Dictionary(_, _)
-            | DataType::RunEndEncoded(_, _) => Err(CatalogError::External(format!(
-                "{data_type:?} type is not supported in Unity Catalog"
-            ))),
-        }
-    }
-
-    fn datatype_to_column_type_name(data_type: &DataType) -> CatalogResult<types::ColumnTypeName> {
-        // Docs additionally list the following types which we do not handle:
-        //  CHAR | VARIANT | GEOMETRY | GEOGRAPHY | TABLE_TYPE
-        //  https://docs.databricks.com/api/workspace/tables/create#columns-type_name
-        match data_type {
-            DataType::Null => Ok(types::ColumnTypeName::Null),
-            DataType::Boolean => Ok(types::ColumnTypeName::Boolean),
-            DataType::Int8 => Ok(types::ColumnTypeName::Byte),
-            DataType::Int16 | DataType::UInt8 => Ok(types::ColumnTypeName::Short),
-            DataType::Int32 | DataType::UInt16 => Ok(types::ColumnTypeName::Int),
-            DataType::Int64 | DataType::UInt32 => Ok(types::ColumnTypeName::Long),
-            DataType::Float32 => Ok(types::ColumnTypeName::Float),
-            DataType::Float64 => Ok(types::ColumnTypeName::Double),
-            DataType::Timestamp(TimeUnit::Microsecond, Some(_)) => {
-                Ok(types::ColumnTypeName::Timestamp)
-            }
-            DataType::Timestamp(TimeUnit::Microsecond, None) => {
-                Ok(types::ColumnTypeName::TimestampNtz)
-            }
-            DataType::Date32 => Ok(types::ColumnTypeName::Date),
-            DataType::Binary
-            | DataType::FixedSizeBinary(_)
-            | DataType::LargeBinary
-            | DataType::BinaryView => Ok(types::ColumnTypeName::Binary),
-            DataType::Utf8 | DataType::LargeUtf8 | DataType::Utf8View => {
-                Ok(types::ColumnTypeName::String)
-            }
-            DataType::List(_)
-            | DataType::ListView(_)
-            | DataType::LargeList(_)
-            | DataType::LargeListView(_) => Ok(types::ColumnTypeName::Array),
-            DataType::Struct(_) => Ok(types::ColumnTypeName::Struct),
-            DataType::Decimal32(_, _) | DataType::Decimal64(_, _) | DataType::Decimal128(_, _) => {
-                Ok(types::ColumnTypeName::Decimal)
-            }
-            DataType::Decimal256(precision, scale) => {
-                if *precision <= DECIMAL128_MAX_PRECISION && *scale <= DECIMAL128_MAX_SCALE {
-                    Ok(types::ColumnTypeName::Decimal)
                 } else {
                     Err(CatalogError::External(format!(
-                        "Decimal with precision > {DECIMAL128_MAX_PRECISION} and scale > {DECIMAL128_MAX_SCALE} is not supported in Unity Catalog"
+                        "Map type must be a struct with key and value fields, found {field:?}"
                     )))
                 }
             }
-            DataType::Map(_, _) => Ok(types::ColumnTypeName::Map),
             DataType::UInt64
             | DataType::Float16
             | DataType::Timestamp(TimeUnit::Second, _)
@@ -322,7 +387,7 @@ impl UnityCatalogProvider {
             | DataType::Union(_, _)
             | DataType::Dictionary(_, _)
             | DataType::RunEndEncoded(_, _) => Err(CatalogError::External(format!(
-                "{data_type:?} type is not supported in Unity Catalog"
+                "{data_type:?} type is not supported in Unity Catalog",
             ))),
         }
     }
@@ -362,13 +427,10 @@ impl UnityCatalogProvider {
             "DOUBLE" => Ok(DataType::Float64),
             "DATE" => Ok(DataType::Date32),
             "TIMESTAMP" => Ok(DataType::Timestamp(
-                datafusion::arrow::datatypes::TimeUnit::Microsecond,
+                TimeUnit::Microsecond,
                 Some("UTC".into()),
             )),
-            "TIMESTAMP_NTZ" => Ok(DataType::Timestamp(
-                datafusion::arrow::datatypes::TimeUnit::Microsecond,
-                None,
-            )),
+            "TIMESTAMP_NTZ" => Ok(DataType::Timestamp(TimeUnit::Microsecond, None)),
             "STRING" | "VARCHAR" | "CHAR" => Ok(DataType::Utf8),
             "BINARY" => Ok(DataType::Binary),
             "NULL" => Ok(DataType::Null),
@@ -390,8 +452,7 @@ impl UnityCatalogProvider {
                     }
                 }
                 Err(CatalogError::External(format!(
-                    "Invalid DECIMAL type: {}",
-                    type_text
+                    "Invalid DECIMAL type: {type_text}",
                 )))
             }
             s if s.starts_with("ARRAY<") => {
@@ -736,11 +797,13 @@ impl CatalogProvider for UnityCatalogProvider {
             .iter()
             .enumerate()
             .map(|(idx, col)| {
-                let type_text = Self::datatype_to_type_text(&col.data_type)?;
-                let type_name = Self::datatype_to_column_type_name(&col.data_type)?;
+                let unity_type = Self::datatype_to_unity_type(&col.data_type)?;
                 let (type_precision, type_scale) = match &col.data_type {
-                    DataType::Decimal128(p, s) | DataType::Decimal256(p, s) => {
-                        (Some(*p as i32), Some(*s as i32))
+                    DataType::Decimal32(precision, scale)
+                    | DataType::Decimal64(precision, scale)
+                    | DataType::Decimal128(precision, scale)
+                    | DataType::Decimal256(precision, scale) => {
+                        (Some(*precision as i32), Some(*scale as i32))
                     }
                     _ => (None, None),
                 };
@@ -751,12 +814,12 @@ impl CatalogProvider for UnityCatalogProvider {
                     nullable: col.nullable,
                     partition_index: None,
                     position: Some(idx as i32),
-                    type_interval_type: None,
-                    type_json: Some(serde_json::json!({"type": type_text}).to_string()),
-                    type_name: Some(type_name),
+                    type_interval_type: None, // CHECK HERE
+                    type_json: Some(unity_type.type_json.to_string()),
+                    type_name: Some(unity_type.type_name),
                     type_precision,
                     type_scale,
-                    type_text: Some(type_text),
+                    type_text: Some(unity_type.type_text),
                 })
             })
             .collect::<CatalogResult<Vec<_>>>()?;
