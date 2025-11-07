@@ -8,12 +8,14 @@
 )]
 
 use std::collections::HashMap;
+use std::sync::Arc;
 use std::time::Duration;
 
-use arrow::datatypes::DataType;
+use arrow::datatypes::{DataType, Field, Fields};
 use sail_catalog::provider::{
-    CatalogProvider, CreateDatabaseOptions, CreateTableColumnOptions, CreateTableOptions,
-    DatabaseStatus, DropDatabaseOptions, DropTableOptions, Namespace, RuntimeAwareCatalogProvider,
+    CatalogProvider, CatalogTableConstraint, CatalogTableSort, CreateDatabaseOptions,
+    CreateTableColumnOptions, CreateTableOptions, DatabaseStatus, DropDatabaseOptions,
+    DropTableOptions, Namespace, RuntimeAwareCatalogProvider, TableKind,
 };
 use sail_catalog_unity::unity::{types, Client};
 use sail_catalog_unity::{UnityCatalogProvider, UNITY_CATALOG_PROP_URI};
@@ -518,6 +520,377 @@ async fn test_drop_schema() {
 
 #[tokio::test]
 // #[ignore]
+async fn test_create_table() {
+    let (unity_catalog, _unity_container, _postgres_container, _client) = setup_catalog().await;
+
+    let ns = Namespace::try_from(vec!["test_create_table".to_string()]).unwrap();
+    let properties = vec![
+        ("owner".to_string(), "Lake".to_string()),
+        ("community".to_string(), "Sail".to_string()),
+    ];
+
+    unity_catalog
+        .create_database(
+            &ns,
+            CreateDatabaseOptions {
+                if_not_exists: false,
+                comment: None,
+                location: None,
+                properties,
+            },
+        )
+        .await
+        .unwrap();
+
+    let column_options = vec![
+        CreateTableColumnOptions {
+            name: "foo".to_string(),
+            data_type: DataType::Utf8,
+            nullable: true,
+            comment: None,
+            default: None,
+            generated_always_as: None,
+        },
+        CreateTableColumnOptions {
+            name: "bar".to_string(),
+            data_type: DataType::List(Arc::new(Field::new(
+                "element",
+                DataType::Struct(Fields::from(vec![
+                    Field::new("a", DataType::Utf8, true),
+                    Field::new("b", DataType::Int32, false),
+                ])),
+                true,
+            ))),
+            nullable: false,
+            comment: Some("meow".to_string()),
+            default: None,
+            generated_always_as: None,
+        },
+        CreateTableColumnOptions {
+            name: "baz".to_string(),
+            data_type: DataType::Map(
+                Arc::new(Field::new(
+                    "entries",
+                    DataType::Struct(Fields::from(vec![
+                        Field::new("key", DataType::Utf8, false),
+                        Field::new("value", DataType::Int32, true),
+                    ])),
+                    false,
+                )),
+                false,
+            ),
+            nullable: true,
+            comment: None,
+            default: None,
+            generated_always_as: None,
+        },
+        CreateTableColumnOptions {
+            name: "mew".to_string(),
+            data_type: DataType::Struct(Fields::from(vec![
+                Field::new("a", DataType::Utf8, true),
+                Field::new("b", DataType::Int32, false),
+            ])),
+            nullable: true,
+            comment: None,
+            default: None,
+            generated_always_as: None,
+        },
+    ];
+
+    let table = unity_catalog
+        .create_table(
+            &ns,
+            "t1",
+            CreateTableOptions {
+                columns: column_options.clone(),
+                comment: Some("peow".to_string()),
+                constraints: vec![],
+                location: Some("s3://deltadata/custom/path/meow".to_string()),
+                format: "delta".to_string(),
+                partition_by: vec![],
+                sort_by: vec![],
+                bucket_by: None,
+                if_not_exists: false,
+                replace: false,
+                options: vec![],
+                properties: vec![],
+            },
+        )
+        .await
+        .unwrap();
+    eprintln!("CHECK HERE CREATE TABLE RESULT: {table:?}");
+
+    let TableKind::Table {
+        catalog,
+        database,
+        columns,
+        comment,
+        constraints,
+        location,
+        format,
+        partition_by,
+        sort_by,
+        bucket_by,
+        options,
+        properties,
+    } = table.kind
+    else {
+        panic!("Expected TableKind::Table");
+    };
+
+    let mut static_properties: Vec<_> = properties
+        .iter()
+        .filter(|(k, _)| {
+            ![
+                "metadata-location",
+                "metadata.last-updated-ms",
+                "metadata.table-uuid",
+            ]
+            .contains(&k.as_str())
+        })
+        .cloned()
+        .collect();
+    static_properties.sort();
+
+    let mut expected_properties: Vec<(String, String)> = vec![
+        ("comment".to_string(), "peow".to_string()),
+        ("metadata.current-schema-id".to_string(), "0".to_string()),
+        ("metadata.current-snapshot-id".to_string(), "-1".to_string()),
+        (
+            "metadata.default-sort-order-id".to_string(),
+            "0".to_string(),
+        ),
+        ("metadata.default-spec-id".to_string(), "0".to_string()),
+        ("metadata.format-version".to_string(), "2".to_string()),
+        ("metadata.last-column-id".to_string(), "3".to_string()),
+        ("metadata.last-partition-id".to_string(), "999".to_string()),
+        ("metadata.last-sequence-number".to_string(), "0".to_string()),
+        (
+            "metadata.partition-statistics".to_string(),
+            "[]".to_string(),
+        ),
+        ("metadata.statistics".to_string(), "[]".to_string()),
+        (
+            "write.parquet.compression-codec".to_string(),
+            "zstd".to_string(),
+        ),
+    ];
+    expected_properties.sort();
+
+    assert_eq!(properties.len(), 15);
+    assert_eq!(static_properties, expected_properties);
+    assert!(properties.iter().any(|(k, v)| k == "metadata-location"
+        && v.starts_with("s3://deltadata/demo/test_create_table.apple.ios/t1/metadata/")));
+    assert!(properties
+        .iter()
+        .any(|(k, v)| k == "metadata.last-updated-ms" && !v.is_empty()));
+    assert!(properties
+        .iter()
+        .any(|(k, v)| k == "metadata.table-uuid" && !v.is_empty()));
+
+    assert_eq!(table.name, "t1".to_string());
+    assert_eq!(catalog, "test".to_string());
+    assert_eq!(database, Vec::<String>::from(ns.clone()));
+    assert_eq!(comment, Some("peow".to_string()));
+    assert_eq!(constraints, vec![]);
+    assert_eq!(
+        location,
+        Some("s3://deltadata/demo/test_create_table.apple.ios/t1".to_string())
+    );
+    assert_eq!(format, "delta".to_string());
+    assert_eq!(partition_by, Vec::<String>::new());
+    assert_eq!(sort_by, vec![]);
+    assert_eq!(bucket_by, None);
+    assert_eq!(options, Vec::<(String, String)>::new());
+    assert_eq!(columns.len(), 3);
+    assert!(
+        columns.contains(&sail_catalog::provider::TableColumnStatus {
+            name: "foo".to_string(),
+            data_type: DataType::Utf8,
+            nullable: true,
+            comment: None,
+            default: None,
+            generated_always_as: None,
+            is_partition: false,
+            is_bucket: false,
+            is_cluster: false,
+        })
+    );
+    assert!(
+        columns.contains(&sail_catalog::provider::TableColumnStatus {
+            name: "bar".to_string(),
+            data_type: DataType::Int32,
+            nullable: false,
+            comment: Some("meow".to_string()),
+            default: None,
+            generated_always_as: None,
+            is_partition: false,
+            is_bucket: false,
+            is_cluster: false,
+        })
+    );
+    assert!(
+        columns.contains(&sail_catalog::provider::TableColumnStatus {
+            name: "baz".to_string(),
+            data_type: DataType::Boolean,
+            nullable: true,
+            comment: None,
+            default: None,
+            generated_always_as: None,
+            is_partition: false,
+            is_bucket: false,
+            is_cluster: false,
+        })
+    );
+
+    let result = unity_catalog
+        .create_table(
+            &ns,
+            "t1",
+            CreateTableOptions {
+                columns: column_options.clone(),
+                comment: Some("peow".to_string()),
+                constraints: vec![],
+                location: Some("s3://deltadata/custom/path/meow".to_string()),
+                format: "delta".to_string(),
+                partition_by: vec![],
+                sort_by: vec![],
+                bucket_by: None,
+                if_not_exists: false,
+                replace: false,
+                options: vec![],
+                properties: vec![],
+            },
+        )
+        .await;
+    assert!(result.is_err());
+
+    let result = unity_catalog
+        .create_table(
+            &ns,
+            "t1",
+            CreateTableOptions {
+                columns: column_options.clone(),
+                comment: Some("peow".to_string()),
+                constraints: vec![],
+                location: Some("s3://deltadata/custom/path/meow".to_string()),
+                format: "delta".to_string(),
+                partition_by: vec![],
+                sort_by: vec![],
+                bucket_by: None,
+                if_not_exists: true,
+                replace: false,
+                options: vec![],
+                properties: vec![],
+            },
+        )
+        .await;
+    assert!(result.is_ok());
+
+    let table = unity_catalog
+        .create_table(
+            &ns,
+            "t2",
+            CreateTableOptions {
+                columns: column_options.clone(),
+                comment: Some("test table".to_string()),
+                constraints: vec![],
+                location: Some("s3://deltadata/custom/path/meow2".to_string()),
+                format: "delta".to_string(),
+                partition_by: vec!["baz".to_string()],
+                sort_by: vec![],
+                bucket_by: None,
+                if_not_exists: false,
+                replace: false,
+                options: vec![("key1".to_string(), "value1".to_string())],
+                properties: vec![
+                    ("owner".to_string(), "mr. meow".to_string()),
+                    ("team".to_string(), "data-eng".to_string()),
+                ],
+            },
+        )
+        .await
+        .unwrap();
+
+    let TableKind::Table {
+        catalog,
+        database,
+        columns,
+        comment,
+        constraints,
+        location,
+        format,
+        partition_by,
+        sort_by,
+        bucket_by,
+        options,
+        properties,
+    } = table.kind
+    else {
+        panic!("Expected TableKind::Table");
+    };
+
+    assert_eq!(table.name, "t2".to_string());
+    assert_eq!(catalog, "test".to_string());
+    assert_eq!(database, Vec::<String>::from(ns.clone()));
+    assert_eq!(comment, Some("test table".to_string()));
+    assert!(constraints.is_empty());
+    assert_eq!(
+        location,
+        Some("s3://deltadata/custom/path/meow".to_string())
+    );
+    assert_eq!(format, "delta".to_string());
+    assert_eq!(partition_by, vec!["baz".to_string()]);
+    assert!(sort_by.is_empty());
+    assert_eq!(bucket_by, None);
+    assert_eq!(options, vec![("key1".to_string(), "value1".to_string())]);
+    assert_eq!(properties.len(), 17);
+    assert!(properties.contains(&("owner".to_string(), "mr. meow".to_string())));
+    assert!(properties.contains(&("team".to_string(), "data-eng".to_string())));
+    assert_eq!(columns.len(), 3);
+    assert!(
+        columns.contains(&sail_catalog::provider::TableColumnStatus {
+            name: "foo".to_string(),
+            data_type: DataType::Utf8,
+            nullable: true,
+            comment: None,
+            default: None,
+            generated_always_as: None,
+            is_partition: false,
+            is_bucket: false,
+            is_cluster: false,
+        })
+    );
+    assert!(
+        columns.contains(&sail_catalog::provider::TableColumnStatus {
+            name: "bar".to_string(),
+            data_type: DataType::Int32,
+            nullable: false,
+            comment: Some("meow".to_string()),
+            default: None,
+            generated_always_as: None,
+            is_partition: false,
+            is_bucket: false,
+            is_cluster: false,
+        })
+    );
+    assert!(
+        columns.contains(&sail_catalog::provider::TableColumnStatus {
+            name: "baz".to_string(),
+            data_type: DataType::Boolean,
+            nullable: true,
+            comment: None,
+            default: None,
+            generated_always_as: None,
+            is_partition: true,
+            is_bucket: false,
+            is_cluster: false,
+        })
+    );
+}
+
+#[tokio::test]
+// #[ignore]
 async fn test_drop_table() {
     let (unity_catalog, _unity_container, _postgres_container, _client) = setup_catalog().await;
 
@@ -553,7 +926,7 @@ async fn test_drop_table() {
                 columns: column_options.clone(),
                 comment: None,
                 constraints: vec![],
-                location: None,
+                location: Some("s3://deltadata/custom/path/meow".to_string()),
                 format: "delta".to_string(),
                 partition_by: vec![],
                 sort_by: vec![],
