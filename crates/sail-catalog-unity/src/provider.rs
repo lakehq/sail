@@ -403,66 +403,6 @@ impl UnityCatalogProvider {
         }
     }
 
-    // fn parse_unity_type_text(type_text: &str) -> CatalogResult<DataType> {
-    //     let type_upper = type_text.to_uppercase();
-    //     match type_upper.as_str() {
-    //         "BOOLEAN" => Ok(DataType::Boolean),
-    //         "BYTE" | "TINYINT" => Ok(DataType::Int8),
-    //         "SHORT" | "SMALLINT" => Ok(DataType::Int16),
-    //         "INT" | "INTEGER" => Ok(DataType::Int32),
-    //         "LONG" | "BIGINT" => Ok(DataType::Int64),
-    //         "FLOAT" | "REAL" => Ok(DataType::Float32),
-    //         "DOUBLE" => Ok(DataType::Float64),
-    //         "DATE" => Ok(DataType::Date32),
-    //         "TIMESTAMP" => Ok(DataType::Timestamp(
-    //             TimeUnit::Microsecond,
-    //             Some("UTC".into()),
-    //         )),
-    //         "TIMESTAMP_NTZ" => Ok(DataType::Timestamp(TimeUnit::Microsecond, None)),
-    //         "STRING" | "VARCHAR" | "CHAR" => Ok(DataType::Utf8),
-    //         "BINARY" => Ok(DataType::Binary),
-    //         "NULL" => Ok(DataType::Null),
-    //         s if s.starts_with("DECIMAL(") => {
-    //             let inner = s.strip_prefix("DECIMAL(").and_then(|s| s.strip_suffix(")"));
-    //             if let Some(inner) = inner {
-    //                 let parts: Vec<&str> = inner.split(',').map(|s| s.trim()).collect();
-    //                 if parts.len() == 2 {
-    //                     let precision: u8 = parts[0].parse().map_err(|_| {
-    //                         CatalogError::External(format!(
-    //                             "Invalid DECIMAL precision: {}",
-    //                             parts[0]
-    //                         ))
-    //                     })?;
-    //                     let scale: i8 = parts[1].parse().map_err(|_| {
-    //                         CatalogError::External(format!("Invalid DECIMAL scale: {}", parts[1]))
-    //                     })?;
-    //                     return Ok(DataType::Decimal128(precision, scale));
-    //                 }
-    //             }
-    //             Err(CatalogError::External(format!(
-    //                 "Invalid DECIMAL type: {type_text}",
-    //             )))
-    //         }
-    //         s if s.starts_with("ARRAY<") => {
-    //             let inner = s.strip_prefix("ARRAY<").and_then(|s| s.strip_suffix(">"));
-    //             if let Some(inner) = inner {
-    //                 let element_type = Self::parse_unity_type_text(inner)?;
-    //                 return Ok(DataType::List(std::sync::Arc::new(Field::new(
-    //                     "element",
-    //                     element_type,
-    //                     true,
-    //                 ))));
-    //             }
-    //             Ok(DataType::List(std::sync::Arc::new(Field::new(
-    //                 "element",
-    //                 DataType::Utf8,
-    //                 true,
-    //             ))))
-    //         }
-    //         _ => Ok(DataType::Utf8),
-    //     }
-    // }
-
     fn table_info_to_table_status(
         &self,
         table_info: types::TableInfo,
