@@ -4,9 +4,7 @@
 use std::collections::HashMap;
 use std::str::FromStr;
 
-use datafusion::arrow::datatypes::{
-    DataType, TimeUnit, DECIMAL128_MAX_PRECISION, DECIMAL128_MAX_SCALE,
-};
+use arrow::datatypes::{DataType, Field, TimeUnit, DECIMAL128_MAX_PRECISION, DECIMAL128_MAX_SCALE};
 use sail_catalog::error::{CatalogError, CatalogResult};
 use sail_catalog::provider::{
     CatalogProvider, CreateDatabaseOptions, CreateTableOptions, CreateViewOptions, DatabaseStatus,
@@ -405,84 +403,65 @@ impl UnityCatalogProvider {
         }
     }
 
-    fn column_info_to_column_status(
-        column: types::ColumnInfo,
-        partition_columns: &[String],
-    ) -> CatalogResult<TableColumnStatus> {
-        let name = column.name.unwrap_or_default();
-        let type_text = column.type_text.unwrap_or_else(|| "STRING".to_string());
-        let data_type = Self::parse_unity_type_text(&type_text)?;
-        let nullable = column.nullable;
-        let comment = column.comment;
-
-        Ok(TableColumnStatus {
-            name: name.clone(),
-            data_type,
-            nullable,
-            comment,
-            default: None,
-            generated_always_as: None,
-            is_partition: partition_columns.contains(&name),
-            is_bucket: false,
-            is_cluster: false,
-        })
-    }
-
-    fn parse_unity_type_text(type_text: &str) -> CatalogResult<DataType> {
-        let type_upper = type_text.to_uppercase();
-        match type_upper.as_str() {
-            "BOOLEAN" => Ok(DataType::Boolean),
-            "BYTE" | "TINYINT" => Ok(DataType::Int8),
-            "SHORT" | "SMALLINT" => Ok(DataType::Int16),
-            "INT" | "INTEGER" => Ok(DataType::Int32),
-            "LONG" | "BIGINT" => Ok(DataType::Int64),
-            "FLOAT" | "REAL" => Ok(DataType::Float32),
-            "DOUBLE" => Ok(DataType::Float64),
-            "DATE" => Ok(DataType::Date32),
-            "TIMESTAMP" => Ok(DataType::Timestamp(
-                TimeUnit::Microsecond,
-                Some("UTC".into()),
-            )),
-            "TIMESTAMP_NTZ" => Ok(DataType::Timestamp(TimeUnit::Microsecond, None)),
-            "STRING" | "VARCHAR" | "CHAR" => Ok(DataType::Utf8),
-            "BINARY" => Ok(DataType::Binary),
-            "NULL" => Ok(DataType::Null),
-            s if s.starts_with("DECIMAL(") => {
-                let inner = s.strip_prefix("DECIMAL(").and_then(|s| s.strip_suffix(")"));
-                if let Some(inner) = inner {
-                    let parts: Vec<&str> = inner.split(',').map(|s| s.trim()).collect();
-                    if parts.len() == 2 {
-                        let precision: u8 = parts[0].parse().map_err(|_| {
-                            CatalogError::External(format!(
-                                "Invalid DECIMAL precision: {}",
-                                parts[0]
-                            ))
-                        })?;
-                        let scale: i8 = parts[1].parse().map_err(|_| {
-                            CatalogError::External(format!("Invalid DECIMAL scale: {}", parts[1]))
-                        })?;
-                        return Ok(DataType::Decimal128(precision, scale));
-                    }
-                }
-                Err(CatalogError::External(format!(
-                    "Invalid DECIMAL type: {type_text}",
-                )))
-            }
-            s if s.starts_with("ARRAY<") => {
-                let inner = s.strip_prefix("ARRAY<").and_then(|s| s.strip_suffix(">"));
-                if let Some(inner) = inner {
-                    let element_type = Self::parse_unity_type_text(inner)?;
-                    return Ok(DataType::List(std::sync::Arc::new(
-                        datafusion::arrow::datatypes::Field::new("element", element_type, true),
-                    )));
-                }
-                Ok(DataType::List(std::sync::Arc::new(
-                    datafusion::arrow::datatypes::Field::new("element", DataType::Utf8, true),
-                )))
-            }
-            _ => Ok(DataType::Utf8),
-        }
-    }
+    // fn parse_unity_type_text(type_text: &str) -> CatalogResult<DataType> {
+    //     let type_upper = type_text.to_uppercase();
+    //     match type_upper.as_str() {
+    //         "BOOLEAN" => Ok(DataType::Boolean),
+    //         "BYTE" | "TINYINT" => Ok(DataType::Int8),
+    //         "SHORT" | "SMALLINT" => Ok(DataType::Int16),
+    //         "INT" | "INTEGER" => Ok(DataType::Int32),
+    //         "LONG" | "BIGINT" => Ok(DataType::Int64),
+    //         "FLOAT" | "REAL" => Ok(DataType::Float32),
+    //         "DOUBLE" => Ok(DataType::Float64),
+    //         "DATE" => Ok(DataType::Date32),
+    //         "TIMESTAMP" => Ok(DataType::Timestamp(
+    //             TimeUnit::Microsecond,
+    //             Some("UTC".into()),
+    //         )),
+    //         "TIMESTAMP_NTZ" => Ok(DataType::Timestamp(TimeUnit::Microsecond, None)),
+    //         "STRING" | "VARCHAR" | "CHAR" => Ok(DataType::Utf8),
+    //         "BINARY" => Ok(DataType::Binary),
+    //         "NULL" => Ok(DataType::Null),
+    //         s if s.starts_with("DECIMAL(") => {
+    //             let inner = s.strip_prefix("DECIMAL(").and_then(|s| s.strip_suffix(")"));
+    //             if let Some(inner) = inner {
+    //                 let parts: Vec<&str> = inner.split(',').map(|s| s.trim()).collect();
+    //                 if parts.len() == 2 {
+    //                     let precision: u8 = parts[0].parse().map_err(|_| {
+    //                         CatalogError::External(format!(
+    //                             "Invalid DECIMAL precision: {}",
+    //                             parts[0]
+    //                         ))
+    //                     })?;
+    //                     let scale: i8 = parts[1].parse().map_err(|_| {
+    //                         CatalogError::External(format!("Invalid DECIMAL scale: {}", parts[1]))
+    //                     })?;
+    //                     return Ok(DataType::Decimal128(precision, scale));
+    //                 }
+    //             }
+    //             Err(CatalogError::External(format!(
+    //                 "Invalid DECIMAL type: {type_text}",
+    //             )))
+    //         }
+    //         s if s.starts_with("ARRAY<") => {
+    //             let inner = s.strip_prefix("ARRAY<").and_then(|s| s.strip_suffix(">"));
+    //             if let Some(inner) = inner {
+    //                 let element_type = Self::parse_unity_type_text(inner)?;
+    //                 return Ok(DataType::List(std::sync::Arc::new(Field::new(
+    //                     "element",
+    //                     element_type,
+    //                     true,
+    //                 ))));
+    //             }
+    //             Ok(DataType::List(std::sync::Arc::new(Field::new(
+    //                 "element",
+    //                 DataType::Utf8,
+    //                 true,
+    //             ))))
+    //         }
+    //         _ => Ok(DataType::Utf8),
+    //     }
+    // }
 
     fn table_info_to_table_status(
         &self,
@@ -490,43 +469,110 @@ impl UnityCatalogProvider {
         catalog_name: &str,
         schema_name: &str,
     ) -> CatalogResult<TableStatus> {
-        let name = table_info.name.unwrap_or_default();
-        let catalog = table_info.catalog_name.unwrap_or(catalog_name.to_string());
-        let schema = table_info.schema_name.unwrap_or(schema_name.to_string());
+        let types::TableInfo {
+            catalog_name: table_catalog_name,
+            columns,
+            comment,
+            created_at,
+            created_by,
+            data_source_format,
+            name,
+            owner,
+            properties,
+            schema_name: table_schema_name,
+            storage_location,
+            table_id,
+            table_type,
+            updated_at,
+            updated_by,
+        } = table_info;
+
+        let name = name.unwrap_or_default();
+        let catalog = table_catalog_name.unwrap_or(catalog_name.to_string());
+        let schema = table_schema_name.unwrap_or(schema_name.to_string());
         let database = vec![catalog.clone(), schema];
 
-        let columns = table_info
-            .columns
+        let mut partition_by: Vec<String> = vec![];
+        let columns = columns
             .into_iter()
-            .map(|col| Self::column_info_to_column_status(col, &[]))
+            .map(|col| {
+                let types::ColumnInfo {
+                    comment,
+                    name,
+                    nullable,
+                    partition_index,
+                    position: _,
+                    type_interval_type: _,
+                    type_json: _,
+                    type_name: _,
+                    type_precision: _,
+                    type_scale: _,
+                    type_text: _,
+                } = col;
+                if partition_index.is_some() {
+                    if let Some(col_name) = &name {
+                        partition_by.push(col_name.to_string());
+                    }
+                }
+                Ok(TableColumnStatus {
+                    name: name.unwrap_or_default(),
+                    data_type: DataType::Null, // CHECK HERE THIS IS PLACEHOLDER
+                    nullable,
+                    comment,
+                    default: None,
+                    generated_always_as: None,
+                    is_partition: partition_index.is_some(),
+                    is_bucket: false,
+                    is_cluster: false,
+                })
+            })
             .collect::<CatalogResult<Vec<_>>>()?;
 
-        let format = table_info
-            .data_source_format
+        let format = data_source_format
             .map(|f| f.to_string().to_lowercase())
             .unwrap_or_else(|| "delta".to_string());
 
-        let mut properties: HashMap<String, String> =
-            table_info.properties.map(|p| p.0).unwrap_or_default();
+        let mut properties: HashMap<String, String> = properties.map(|p| p.0).unwrap_or_default();
 
-        if let Some(created_at) = table_info.created_at {
+        let comment = comment.or(get_property(&properties, "comment"));
+
+        let options: Vec<_> = properties
+            .extract_if(|k, _| k.trim().to_lowercase().starts_with("options."))
+            .map(|(k, v)| {
+                let trimmed = k.trim().to_string();
+                let stripped =
+                    if trimmed.len() >= 8 && trimmed[..8].eq_ignore_ascii_case("options.") {
+                        trimmed[8..].to_string()
+                    } else {
+                        trimmed
+                    };
+                (stripped, v)
+            })
+            .collect();
+
+        if let Some(created_at) = created_at {
             properties.insert("created_at".to_string(), created_at.to_string());
         }
-        if let Some(created_by) = table_info.created_by {
+        if let Some(created_by) = created_by {
             properties.insert("created_by".to_string(), created_by);
         }
-        if let Some(owner) = table_info.owner {
+        if let Some(owner) = owner {
             properties.insert("owner".to_string(), owner);
         }
-        if let Some(table_id) = table_info.table_id {
+        if let Some(table_id) = table_id {
             properties.insert("table_id".to_string(), table_id);
         }
-        if let Some(updated_at) = table_info.updated_at {
+        if let Some(updated_at) = updated_at {
             properties.insert("updated_at".to_string(), updated_at.to_string());
         }
-        if let Some(updated_by) = table_info.updated_by {
+        if let Some(updated_by) = updated_by {
             properties.insert("updated_by".to_string(), updated_by);
         }
+        if let Some(table_type) = table_type {
+            properties.insert("table_type".to_string(), table_type.to_string());
+        }
+
+        let properties: Vec<_> = properties.into_iter().collect();
 
         Ok(TableStatus {
             name,
@@ -534,15 +580,15 @@ impl UnityCatalogProvider {
                 catalog,
                 database,
                 columns,
-                comment: table_info.comment,
+                comment,
                 constraints: vec![],
-                location: table_info.storage_location,
+                location: storage_location,
                 format,
-                partition_by: vec![],
+                partition_by,
                 sort_by: vec![],
                 bucket_by: None,
-                options: vec![],
-                properties: properties.into_iter().collect(),
+                options,
+                properties,
             },
         })
     }
@@ -737,8 +783,6 @@ impl CatalogProvider for UnityCatalogProvider {
             properties,
         } = options;
 
-        println!("CHECK HERE {partition_by:?}");
-
         if replace {
             return Err(CatalogError::NotSupported(
                 "Open source Unity Catalog does not support REPLACE option".to_string(),
@@ -789,14 +833,17 @@ impl CatalogProvider for UnityCatalogProvider {
                     }
                     _ => (None, None),
                 };
-
+                let partition_index = partition_by
+                    .iter()
+                    .position(|p| p.trim().to_lowercase() == col.name.trim().to_lowercase())
+                    .map(|i| i as i32);
                 Ok(types::ColumnInfo {
                     comment: col.comment.clone(),
                     name: Some(col.name.clone()),
                     nullable: col.nullable,
-                    partition_index: None, // CHECK HERE
+                    partition_index,
                     position: Some(idx as i32),
-                    type_interval_type: None, // TODO: Handle interval types
+                    type_interval_type: None, // FIXME: Handle interval types
                     type_json: Some(unity_type.type_json.to_string()),
                     type_name: Some(unity_type.type_name),
                     type_precision,

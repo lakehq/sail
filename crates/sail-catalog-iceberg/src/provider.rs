@@ -44,7 +44,6 @@ pub struct IcebergRestCatalogProvider {
 
 impl IcebergRestCatalogProvider {
     pub fn new(name: String, props: HashMap<String, String>) -> Self {
-        // CHECK HERE: format: "iceberg" not hard coded
         let catalog_config = RestCatalogConfig {
             uri: props
                 .get(REST_CATALOG_PROP_URI)
@@ -329,78 +328,79 @@ impl IcebergRestCatalogProvider {
             })
             .collect();
 
-        let mut properties: Vec<_> = properties.into_iter().collect();
         if let Some(metadata_location) = result.metadata_location {
-            properties.push(("metadata-location".to_string(), metadata_location));
+            properties.insert("metadata-location".to_string(), metadata_location);
         }
-        properties.push((
+        properties.insert(
             "metadata.format-version".to_string(),
             format_version.to_string(),
-        ));
-        properties.push(("metadata.table-uuid".to_string(), table_uuid));
+        );
+        properties.insert("metadata.table-uuid".to_string(), table_uuid);
         if let Some(last_updated_ms) = last_updated_ms {
-            properties.push((
+            properties.insert(
                 "metadata.last-updated-ms".to_string(),
                 last_updated_ms.to_string(),
-            ));
+            );
         }
         if let Some(next_row_id) = next_row_id {
-            properties.push(("metadata.next-row-id".to_string(), next_row_id.to_string()));
+            properties.insert("metadata.next-row-id".to_string(), next_row_id.to_string());
         }
         if let Some(current_schema_id) = current_schema_id {
-            properties.push((
+            properties.insert(
                 "metadata.current-schema-id".to_string(),
                 current_schema_id.to_string(),
-            ));
+            );
         }
         if let Some(last_column_id) = last_column_id {
-            properties.push((
+            properties.insert(
                 "metadata.last-column-id".to_string(),
                 last_column_id.to_string(),
-            ));
+            );
         }
         if let Some(default_spec_id) = default_spec_id {
-            properties.push((
+            properties.insert(
                 "metadata.default-spec-id".to_string(),
                 default_spec_id.to_string(),
-            ));
+            );
         }
         if let Some(last_partition_id) = last_partition_id {
-            properties.push((
+            properties.insert(
                 "metadata.last-partition-id".to_string(),
                 last_partition_id.to_string(),
-            ));
+            );
         }
         if let Some(default_sort_order_id) = default_sort_order_id {
-            properties.push((
+            properties.insert(
                 "metadata.default-sort-order-id".to_string(),
                 default_sort_order_id.to_string(),
-            ));
+            );
         }
         if let Some(current_snapshot_id) = current_snapshot_id {
-            properties.push((
+            properties.insert(
                 "metadata.current-snapshot-id".to_string(),
                 current_snapshot_id.to_string(),
-            ));
+            );
         }
         if let Some(last_sequence_number) = last_sequence_number {
-            properties.push((
+            properties.insert(
                 "metadata.last-sequence-number".to_string(),
                 last_sequence_number.to_string(),
-            ));
+            );
         }
         if let Some(statistics) = statistics {
-            properties.push((
+            properties.insert(
                 "metadata.statistics".to_string(),
                 serde_json::to_string(&statistics).unwrap_or_default(),
-            ));
+            );
         }
         if let Some(partition_statistics) = partition_statistics {
-            properties.push((
+            properties.insert(
                 "metadata.partition-statistics".to_string(),
                 serde_json::to_string(&partition_statistics).unwrap_or_default(),
-            ));
+            );
         }
+
+        let properties: Vec<_> = properties.into_iter().collect();
 
         Ok(TableStatus {
             name: table_name.to_string(),
@@ -487,22 +487,23 @@ impl IcebergRestCatalogProvider {
             .map(|r| r.sql.clone())
             .unwrap_or_default();
 
-        let properties: HashMap<String, String> = properties.unwrap_or_default();
+        let mut properties: HashMap<String, String> = properties.unwrap_or_default();
 
         let comment = get_property(&properties, "comment");
 
-        let mut properties: Vec<_> = properties.into_iter().collect();
-        properties.push(("metadata-location".to_string(), result.metadata_location));
-        properties.push(("metadata.view-uuid".to_string(), view_uuid));
-        properties.push((
+        properties.insert("metadata-location".to_string(), result.metadata_location);
+        properties.insert("metadata.view-uuid".to_string(), view_uuid);
+        properties.insert(
             "metadata.format-version".to_string(),
             format_version.to_string(),
-        ));
-        properties.push(("metadata.location".to_string(), location));
-        properties.push((
+        );
+        properties.insert("metadata.location".to_string(), location);
+        properties.insert(
             "metadata.current-version-id".to_string(),
             current_version_id.to_string(),
-        ));
+        );
+
+        let properties: Vec<_> = properties.into_iter().collect();
 
         Ok(TableStatus {
             name: view_name.to_string(),

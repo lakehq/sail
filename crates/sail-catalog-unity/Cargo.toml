@@ -11,7 +11,7 @@ sail-catalog = { path = "../sail-catalog" }
 sail-common = { path = "../sail-common" }
 
 async-trait = { workspace = true }
-datafusion = { workspace = true }
+arrow = { workspace = true }
 reqwest = { workspace = true }
 url = { workspace = true }
 serde = { workspace = true }

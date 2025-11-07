@@ -5980,8 +5980,8 @@ dependencies = [
 name = "sail-catalog-unity"
 version = "0.4.1"
 dependencies = [
+ "arrow",
  "async-trait",
- "datafusion",
  "prettyplease",
  "progenitor",
  "progenitor-client",

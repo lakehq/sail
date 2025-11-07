@@ -10,9 +10,10 @@
 use std::collections::HashMap;
 use std::time::Duration;
 
+use arrow::datatypes::DataType;
 use sail_catalog::provider::{
-    CatalogProvider, CreateDatabaseOptions, DatabaseStatus, DropDatabaseOptions, Namespace,
-    RuntimeAwareCatalogProvider,
+    CatalogProvider, CreateDatabaseOptions, CreateTableColumnOptions, CreateTableOptions,
+    DatabaseStatus, DropDatabaseOptions, DropTableOptions, Namespace, RuntimeAwareCatalogProvider,
 };
 use sail_catalog_unity::unity::{types, Client};
 use sail_catalog_unity::{UnityCatalogProvider, UNITY_CATALOG_PROP_URI};
@@ -513,4 +514,98 @@ async fn test_drop_schema() {
     assert!(result.is_err());
     let result = unity_catalog.get_database(&full_namespace).await;
     assert!(result.is_err());
+}
+
+#[tokio::test]
+// #[ignore]
+async fn test_drop_table() {
+    let (unity_catalog, _unity_container, _postgres_container, _client) = setup_catalog().await;
+
+    let namespace = Namespace::try_from(vec!["test_drop_table".to_string()]).unwrap();
+
+    unity_catalog
+        .create_database(
+            &namespace,
+            CreateDatabaseOptions {
+                if_not_exists: false,
+                comment: None,
+                location: None,
+                properties: vec![],
+            },
+        )
+        .await
+        .unwrap();
+
+    let column_options = vec![CreateTableColumnOptions {
+        name: "id".to_string(),
+        data_type: DataType::Int32,
+        nullable: false,
+        comment: None,
+        default: None,
+        generated_always_as: None,
+    }];
+
+    unity_catalog
+        .create_table(
+            &namespace,
+            "t1",
+            CreateTableOptions {
+                columns: column_options.clone(),
+                comment: None,
+                constraints: vec![],
+                location: None,
+                format: "delta".to_string(),
+                partition_by: vec![],
+                sort_by: vec![],
+                bucket_by: None,
+                if_not_exists: false,
+                replace: false,
+                options: vec![],
+                properties: vec![],
+            },
+        )
+        .await
+        .unwrap();
+
+    let result = unity_catalog.get_table(&namespace, "t1").await;
+    assert!(result.is_ok());
+
+    unity_catalog
+        .drop_table(
+            &namespace,
+            "t1",
+            DropTableOptions {
+                if_exists: false,
+                purge: false,
+            },
+        )
+        .await
+        .unwrap();
+
+    let result = unity_catalog.get_table(&namespace, "t1").await;
+    assert!(result.is_err());
+
+    let result = unity_catalog
+        .drop_table(
+            &namespace,
+            "t1",
+            DropTableOptions {
+                if_exists: false,
+                purge: false,
+            },
+        )
+        .await;
+    assert!(result.is_err());
+
+    let result = unity_catalog
+        .drop_table(
+            &namespace,
+            "t1",
+            DropTableOptions {
+                if_exists: true,
+                purge: false,
+            },
+        )
+        .await;
+    assert!(result.is_ok());
 }
