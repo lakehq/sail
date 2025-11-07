@@ -303,13 +303,11 @@ impl UnityCatalogProvider {
                     metadata_map.insert(k.clone(), serde_json::Value::String(v.clone()));
                 }
                 let type_json = serde_json::json!({
-                    "name": field.name(),
-                    "type":  serde_json::json!({
+                    "type": serde_json::json!({
                         "type": "array",
                         "elementType": field_type.type_json,
                         "containsNull": field.is_nullable()
                     }),
-                    "nullable": field.is_nullable(),
                     "metadata": metadata_map
                 });
                 Ok(UnityColumnType {
@@ -332,14 +330,12 @@ impl UnityCatalogProvider {
                             metadata_map.insert(k.clone(), serde_json::Value::String(v.clone()));
                         }
                         let type_json = serde_json::json!({
-                            "name": field.name(),
-                            "type":  serde_json::json!({
+                            "type": serde_json::json!({
                                 "type": "map",
                                 "keyType": key_type.type_json,
                                 "valueType": value_type.type_json,
                                 "valueContainsNull": fields[1].is_nullable()
                             }),
-                            "nullable": field.is_nullable(),
                             "metadata": metadata_map
                         });
                         Ok(UnityColumnType {
@@ -379,13 +375,10 @@ impl UnityCatalogProvider {
                 }
                 let type_text = format!("struct<{}>", type_text_parts.join(","));
                 let type_json = serde_json::json!({
-                    // "name": field.name(), // CHECK HERE
                     "type": serde_json::json!({
                         "type": "struct",
                         "fields": json_fields
                     }),
-                    "nullable": true,
-                    "metadata": serde_json::Map::new()
                 });
                 Ok(UnityColumnType {
                     type_text,
@@ -834,9 +827,9 @@ impl CatalogProvider for UnityCatalogProvider {
                     comment: col.comment.clone(),
                     name: Some(col.name.clone()),
                     nullable: col.nullable,
-                    partition_index: None,
+                    partition_index: None, // CHECK HERE
                     position: Some(idx as i32),
-                    type_interval_type: None, // CHECK HERE
+                    type_interval_type: None, // TODO: Handle interval types
                     type_json: Some(unity_type.type_json.to_string()),
                     type_name: Some(unity_type.type_name),
                     type_precision,
