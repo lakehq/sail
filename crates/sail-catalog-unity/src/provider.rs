@@ -1,5 +1,5 @@
 // CHECK HERE
-#![allow(clippy::todo, dead_code, unused_imports, unused_variables)]
+#![allow(unused_imports)]
 
 use std::collections::HashMap;
 use std::str::FromStr;
@@ -74,7 +74,7 @@ impl UnityCatalogProvider {
         }
     }
 
-    fn namespace_to_full_name(&self, namespace: &Namespace) -> String {
+    fn get_full_schema_name(&self, namespace: &Namespace) -> String {
         match namespace.tail.len() {
             0 => {
                 format!(
@@ -85,6 +85,14 @@ impl UnityCatalogProvider {
             }
             _ => namespace.to_string(),
         }
+    }
+
+    fn get_full_table_name(&self, database: &Namespace, table: &str) -> String {
+        format!(
+            "{}.{}",
+            self.get_full_schema_name(database),
+            quote_name_if_needed(table)
+        )
     }
 
     fn schema_info_to_database_status(
@@ -442,7 +450,7 @@ impl CatalogProvider for UnityCatalogProvider {
             .map_err(|e| CatalogError::External(format!("Failed to load config: {e}")))?;
 
         let (catalog_name, schema_name) = self.get_catalog_and_schema_name(database);
-        let full_name = self.namespace_to_full_name(database);
+        let full_name = self.get_full_schema_name(database);
         let result = client.get_schema().full_name(&full_name).send().await;
 
         match result {
@@ -510,7 +518,7 @@ impl CatalogProvider for UnityCatalogProvider {
             .await
             .map_err(|e| CatalogError::External(format!("Failed to load config: {e}")))?;
 
-        let full_name = self.namespace_to_full_name(database);
+        let full_name = self.get_full_schema_name(database);
 
         let result = client
             .delete_schema()
@@ -543,6 +551,7 @@ impl CatalogProvider for UnityCatalogProvider {
         table: &str,
         options: CreateTableOptions,
     ) -> CatalogResult<TableStatus> {
+        // Only external table creation is supported according to the Unity Catalog OpenAPI spec.
         let CreateTableOptions {
             columns,
             comment,
@@ -560,25 +569,25 @@ impl CatalogProvider for UnityCatalogProvider {
 
         if replace {
             return Err(CatalogError::NotSupported(
-                "Replace table is not supported".to_string(),
+                "Open source Unity Catalog does not support REPLACE option".to_string(),
             ));
         }
 
         if !sort_by.is_empty() {
             return Err(CatalogError::NotSupported(
-                "Sort by is not supported".to_string(),
+                "Open source Unity Catalog does not support SORT BY option".to_string(),
             ));
         }
 
         if bucket_by.is_some() {
             return Err(CatalogError::NotSupported(
-                "Bucket by is not supported".to_string(),
+                "Open source Unity Catalog does not support BUCKET BY option".to_string(),
             ));
         }
 
         if !constraints.is_empty() {
             return Err(CatalogError::NotSupported(
-                "Constraints are not supported".to_string(),
+                "Open source Unity Catalog does not support CONSTRAINT option".to_string(),
             ));
         }
 
@@ -589,18 +598,40 @@ impl CatalogProvider for UnityCatalogProvider {
 
         let (catalog_name, schema_name) = self.get_catalog_and_schema_name(database);
 
-        let data_source_format = match format.to_uppercase().as_str() {
+        let data_source_format = match format.trim().to_uppercase().as_str() {
             "DELTA" => types::DataSourceFormat::Delta,
-            "PARQUET" => types::DataSourceFormat::Parquet,
             "CSV" => types::DataSourceFormat::Csv,
             "JSON" => types::DataSourceFormat::Json,
             "AVRO" => types::DataSourceFormat::Avro,
+            "PARQUET" => types::DataSourceFormat::Parquet,
             "ORC" => types::DataSourceFormat::Orc,
             "TEXT" => types::DataSourceFormat::Text,
+            "UNITY_CATALOG" => types::DataSourceFormat::UnityCatalog,
+            "DELTASHARING" => types::DataSourceFormat::Deltasharing,
+            "DATABRICKS_FORMAT" => types::DataSourceFormat::DatabricksFormat,
+            "MYSQL_FORMAT" => types::DataSourceFormat::MysqlFormat,
+            "ORACLE_FORMAT" => types::DataSourceFormat::OracleFormat,
+            "POSTGRESQL_FORMAT" => types::DataSourceFormat::PostgresqlFormat,
+            "REDSHIFT_FORMAT" => types::DataSourceFormat::RedshiftFormat,
+            "SNOWFLAKE_FORMAT" => types::DataSourceFormat::SnowflakeFormat,
+            "SQLDW_FORMAT" => types::DataSourceFormat::SqldwFormat,
+            "SQLSERVER_FORMAT" => types::DataSourceFormat::SqlserverFormat,
+            "SALESFORCE_FORMAT" => types::DataSourceFormat::SalesforceFormat,
+            "SALESFORCE_DATA_CLOUD_FORMAT" => types::DataSourceFormat::SalesforceDataCloudFormat,
+            "TERADATA_FORMAT" => types::DataSourceFormat::TeradataFormat,
+            "BIGQUERY_FORMAT" => types::DataSourceFormat::BigqueryFormat,
+            "NETSUITE_FORMAT" => types::DataSourceFormat::NetsuiteFormat,
+            "WORKDAY_RAAS_FORMAT" => types::DataSourceFormat::WorkdayRaasFormat,
+            "MONGODB_FORMAT" => types::DataSourceFormat::MongodbFormat,
+            "HIVE" => types::DataSourceFormat::Hive,
+            "VECTOR_INDEX_FORMAT" => types::DataSourceFormat::VectorIndexFormat,
+            "DATABRICKS_ROW_STORE_FORMAT" => types::DataSourceFormat::DatabricksRowStoreFormat,
+            "DELTA_UNIFORM_HUDI" => types::DataSourceFormat::DeltaUniformHudi,
+            "DELTA_UNIFORM_ICEBERG" => types::DataSourceFormat::DeltaUniformIceberg,
+            "ICEBERG" => types::DataSourceFormat::Iceberg,
             _ => {
                 return Err(CatalogError::External(format!(
-                    "Unsupported data source format: {}",
-                    format
+                    "Unsupported data source format: {format}",
                 )))
             }
         };
@@ -739,18 +770,20 @@ impl CatalogProvider for UnityCatalogProvider {
         table: &str,
         options: DropTableOptions,
     ) -> CatalogResult<()> {
-        let DropTableOptions {
-            if_exists,
-            purge: _,
-        } = options;
+        let DropTableOptions { if_exists, purge } = options;
+
+        if purge {
+            return Err(CatalogError::NotSupported(
+                "Open source Unity Catalog does not support PURGE option".to_string(),
+            ));
+        }
 
         let client = self
             .get_client()
             .await
             .map_err(|e| CatalogError::External(format!("Failed to load config: {e}")))?;
 
-        let (catalog_name, schema_name) = self.get_catalog_and_schema_name(database);
-        let full_name = format!("{}.{}.{}", catalog_name, schema_name, table);
+        let full_name = self.get_full_table_name(database, table);
 
         let result = client.delete_table().full_name(&full_name).send().await;
 
@@ -772,27 +805,35 @@ impl CatalogProvider for UnityCatalogProvider {
 
     async fn create_view(
         &self,
-        database: &Namespace,
-        view: &str,
-        options: CreateViewOptions,
+        _database: &Namespace,
+        _view: &str,
+        _options: CreateViewOptions,
     ) -> CatalogResult<TableStatus> {
-        todo!()
+        Err(CatalogError::NotSupported(
+            "Open source Unity Catalog does not support creating views".to_string(),
+        ))
     }
 
-    async fn get_view(&self, database: &Namespace, view: &str) -> CatalogResult<TableStatus> {
-        todo!()
+    async fn get_view(&self, _database: &Namespace, _view: &str) -> CatalogResult<TableStatus> {
+        Err(CatalogError::NotSupported(
+            "Open source Unity Catalog does not support getting views".to_string(),
+        ))
     }
 
-    async fn list_views(&self, database: &Namespace) -> CatalogResult<Vec<TableStatus>> {
-        todo!()
+    async fn list_views(&self, _database: &Namespace) -> CatalogResult<Vec<TableStatus>> {
+        Err(CatalogError::NotSupported(
+            "Open source Unity Catalog does not support listing views".to_string(),
+        ))
     }
 
     async fn drop_view(
         &self,
-        database: &Namespace,
-        view: &str,
-        options: DropViewOptions,
+        _database: &Namespace,
+        _view: &str,
+        _options: DropViewOptions,
     ) -> CatalogResult<()> {
-        todo!()
+        Err(CatalogError::NotSupported(
+            "Open source Unity Catalog does not support dropping views".to_string(),
+        ))
     }
 }

@@ -1596,12 +1596,23 @@ components:
           format: int32
     TableType:
       type: string
+      # Spec only has `MANAGED` and `EXTERNAL` in the enum, so we manually add the remaining according to the docs:
+      # https://docs.databricks.com/api/workspace/tables/create#table_type
       enum:
         - MANAGED
         - EXTERNAL
+        - VIEW
+        - MATERIALIZED_VIEW
+        - STREAMING_TABLE
+        - MANAGED_SHALLOW_CLONE
+        - FOREIGN
+        - EXTERNAL_SHALLOW_CLONE
+        - METRIC_VIEW
     DataSourceFormat:
       description: Data source format
       type: string
+      # Spec stops at `TEXT` in the enum, so we manually add the remaining according to the docs:
+      # https://docs.databricks.com/api/workspace/tables/create#data_source_format
       enum:
         - DELTA
         - CSV
@@ -1610,6 +1621,29 @@ components:
         - PARQUET
         - ORC
         - TEXT
+        - UNITY_CATALOG
+        - DELTASHARING
+        - DATABRICKS_FORMAT
+        - MYSQL_FORMAT
+        - ORACLE_FORMAT
+        - POSTGRESQL_FORMAT
+        - REDSHIFT_FORMAT
+        - SNOWFLAKE_FORMAT
+        - SQLDW_FORMAT
+        - SQLSERVER_FORMAT
+        - SALESFORCE_FORMAT
+        - SALESFORCE_DATA_CLOUD_FORMAT
+        - TERADATA_FORMAT
+        - BIGQUERY_FORMAT
+        - NETSUITE_FORMAT
+        - WORKDAY_RAAS_FORMAT
+        - MONGODB_FORMAT
+        - HIVE
+        - VECTOR_INDEX_FORMAT
+        - DATABRICKS_ROW_STORE_FORMAT
+        - DELTA_UNIFORM_HUDI
+        - DELTA_UNIFORM_ICEBERG
+        - ICEBERG
     TableInfo:
       type: object
       properties:
