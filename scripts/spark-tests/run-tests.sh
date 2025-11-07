@@ -66,8 +66,6 @@ function run_pytest() {
     "${plugin_args[@]}" \
     -o "doctest_optionflags=ELLIPSIS NORMALIZE_WHITESPACE IGNORE_EXCEPTION_DETAIL NUMBER" \
     -o "faulthandler_timeout=30" \
-    -vv \
-    --durations=20 -s \
     --basetemp="${pytest_tmp_dir}" \
     --disable-warnings \
     --strict-markers \
