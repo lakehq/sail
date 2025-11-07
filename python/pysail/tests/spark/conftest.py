@@ -229,4 +229,4 @@ def query_error(error, query, spark):
     that will be used to partially match the actual error message.
     """
     with pytest.raises(Exception, match=error):
-        spark.sql(query)
+        _ = spark.sql(query).collect()
