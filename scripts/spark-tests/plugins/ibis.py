@@ -4,8 +4,6 @@ import importlib
 import os
 from pathlib import Path
 
-import pytest
-
 # pytest markers defined in `pyproject.toml` of the Ibis project
 IBIS_MARKERS = [
     "athena",
@@ -45,7 +43,6 @@ IBIS_MARKERS = [
 ]
 
 
-@pytest.fixture(scope="session")
 def patch_ibis_spark_session():
     from ibis.backends.pyspark.tests.conftest import TestConf, TestConfForStreaming
 
@@ -61,7 +58,12 @@ def patch_ibis_spark_session():
 
 
 def _resolve_data_volume() -> str:
-    return str(Path(os.environ.get("IBIS_TESTING_DATA_DIR")) / "parquet")
+    env_var = "IBIS_TESTING_DATA_DIR"
+    data_dir = os.environ.get(env_var)
+    if not data_dir:
+        msg = f"missing environment variable '{env_var}'"
+        raise RuntimeError(msg)
+    return str(Path(data_dir) / "parquet")
 
 
 def pytest_configure(config):
