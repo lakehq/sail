@@ -1,9 +1,10 @@
+use std::collections::HashMap;
+use std::sync::Arc;
+
 use arrow::datatypes::{
     DataType, Field, Fields, TimeUnit, DECIMAL128_MAX_PRECISION, DECIMAL128_MAX_SCALE,
 };
 use sail_catalog::error::{CatalogError, CatalogResult};
-use std::collections::HashMap;
-use std::sync::Arc;
 
 use crate::unity::types;
 
@@ -560,14 +561,10 @@ pub(crate) fn parse_complex_type_from_json_object(
 fn get_field_metadata(
     field_obj: &serde_json::map::Map<String, serde_json::value::Value>,
 ) -> HashMap<String, String> {
-    if let Some(metadata_json) = field_obj.get("metadata") {
-        if let serde_json::Value::Object(map) = metadata_json {
-            map.into_iter()
-                .filter_map(|(k, v)| v.as_str().map(|s| (k.to_string(), s.to_string())))
-                .collect()
-        } else {
-            HashMap::new()
-        }
+    if let Some(serde_json::Value::Object(map)) = field_obj.get("metadata") {
+        map.into_iter()
+            .filter_map(|(k, v)| v.as_str().map(|s| (k.to_string(), s.to_string())))
+            .collect()
     } else {
         HashMap::new()
     }

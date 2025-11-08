@@ -1,9 +1,7 @@
-// CHECK HERE
-#![allow(unused_imports)]
+use std::collections::HashMap;
+use std::str::FromStr;
 
-use arrow::datatypes::{
-    DataType, Field, FieldRef, TimeUnit, DECIMAL128_MAX_PRECISION, DECIMAL128_MAX_SCALE,
-};
+use arrow::datatypes::DataType;
 use sail_catalog::error::{CatalogError, CatalogResult};
 use sail_catalog::provider::{
     CatalogProvider, CreateDatabaseOptions, CreateTableOptions, CreateViewOptions, DatabaseStatus,
@@ -11,12 +9,8 @@ use sail_catalog::provider::{
     TableKind, TableStatus,
 };
 use sail_catalog::utils::{get_property, quote_name_if_needed};
-use std::collections::HashMap;
-use std::str::FromStr;
-use std::sync::Arc;
 use tokio::sync::OnceCell;
 
-use crate::config::UnityCatalogConfigKey;
 use crate::data_type::{data_type_to_unity_type, unity_type_to_data_type};
 use crate::unity::{types, Client};
 
@@ -30,7 +24,7 @@ const DEFAULT_URI: &str = "http://localhost:8080/api/2.1/unity-catalog";
 pub struct UnityCatalogConfig {
     default_catalog: String,
     uri: String,
-    props: HashMap<String, String>, // CHECK HERE
+    props: HashMap<String, String>,
 }
 
 /// Provider for Unity Catalog

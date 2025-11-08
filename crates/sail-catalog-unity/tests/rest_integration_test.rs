@@ -1,28 +1,20 @@
-// CHECK HERE
-#![allow(
-    clippy::unwrap_used,
-    clippy::expect_used,
-    clippy::panic,
-    clippy::todo,
-    unused_imports
-)]
+#![allow(clippy::unwrap_used, clippy::expect_used, clippy::panic)]
 
 use std::collections::HashMap;
 use std::sync::Arc;
-use std::time::Duration;
 
 use arrow::datatypes::{DataType, Field, Fields};
 use sail_catalog::provider::{
-    CatalogProvider, CatalogTableConstraint, CatalogTableSort, CreateDatabaseOptions,
-    CreateTableColumnOptions, CreateTableOptions, DatabaseStatus, DropDatabaseOptions,
-    DropTableOptions, Namespace, RuntimeAwareCatalogProvider, TableKind,
+    CatalogProvider, CreateDatabaseOptions, CreateTableColumnOptions, CreateTableOptions,
+    DatabaseStatus, DropDatabaseOptions, DropTableOptions, Namespace, RuntimeAwareCatalogProvider,
+    TableKind,
 };
 use sail_catalog_unity::unity::{types, Client};
 use sail_catalog_unity::{UnityCatalogProvider, UNITY_CATALOG_PROP_URI};
 use sail_common::runtime::RuntimeHandle;
 use testcontainers::core::{ContainerPort, Mount, WaitFor};
 use testcontainers::runners::AsyncRunner;
-use testcontainers::{ContainerAsync, GenericImage, Healthcheck, ImageExt};
+use testcontainers::{ContainerAsync, GenericImage, ImageExt};
 
 const DEFAULT_CATALOG: &str = "sail_test_catalog";
 
@@ -126,7 +118,7 @@ async fn setup_catalog() -> (
 }
 
 #[tokio::test]
-// #[ignore]
+#[ignore]
 async fn test_create_schema() {
     let (unity_catalog, _unity_container, _postgres_container, _client) = setup_catalog().await;
 
@@ -260,7 +252,7 @@ async fn test_create_schema() {
 }
 
 #[tokio::test]
-// #[ignore]
+#[ignore]
 async fn test_get_non_exist_schema() {
     let (unity_catalog, _unity_container, _postgres_container, _client) = setup_catalog().await;
 
@@ -275,7 +267,7 @@ async fn test_get_non_exist_schema() {
 }
 
 #[tokio::test]
-// #[ignore]
+#[ignore]
 async fn test_get_schema() {
     let (unity_catalog, _unity_container, _postgres_container, _client) = setup_catalog().await;
 
@@ -334,7 +326,7 @@ async fn test_get_schema() {
 }
 
 #[tokio::test]
-// #[ignore]
+#[ignore]
 async fn test_list_schemas() {
     let (unity_catalog, _unity_container, _postgres_container, _client) = setup_catalog().await;
 
@@ -409,7 +401,7 @@ async fn test_list_schemas() {
 }
 
 #[tokio::test]
-// #[ignore]
+#[ignore]
 async fn test_drop_schema() {
     let (unity_catalog, _unity_container, _postgres_container, _client) = setup_catalog().await;
 
@@ -519,7 +511,7 @@ async fn test_drop_schema() {
 }
 
 #[tokio::test]
-// #[ignore]
+#[ignore]
 async fn test_create_table() {
     let (unity_catalog, _unity_container, _postgres_container, _client) = setup_catalog().await;
 
@@ -911,7 +903,7 @@ async fn test_create_table() {
 }
 
 #[tokio::test]
-// #[ignore]
+#[ignore]
 async fn test_get_table() {
     let (unity_catalog, _unity_container, _postgres_container, _client) = setup_catalog().await;
 
@@ -1079,7 +1071,7 @@ async fn test_get_table() {
 }
 
 #[tokio::test]
-// #[ignore]
+#[ignore]
 async fn test_list_tables() {
     let (unity_catalog, _unity_container, _postgres_container, _client) = setup_catalog().await;
 
@@ -1185,7 +1177,7 @@ async fn test_list_tables() {
 }
 
 #[tokio::test]
-// #[ignore]
+#[ignore]
 async fn test_drop_table() {
     let (unity_catalog, _unity_container, _postgres_container, _client) = setup_catalog().await;
 
