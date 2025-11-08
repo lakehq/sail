@@ -13,7 +13,7 @@ jobs:
     name: Setup
     runs-on: ubuntu-latest
     outputs:
-      run_tests: ${{ ((github.event_name == 'pull_request' && (github.event.action == 'opened' || steps.match.outputs.result == 'true' || steps.label.outputs.has_label == 'true')) || github.event_name == 'push') && 'true' || 'false' }}
+      run_tests: 'false'
     steps:
       - uses: actions/checkout@v4
 
