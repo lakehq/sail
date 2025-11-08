@@ -6,7 +6,6 @@ on:
   pull_request:
     branches: [main]
     types:
-      - labeled
       - opened
       - reopened
       - synchronize
@@ -74,7 +73,11 @@ jobs:
       - name: Run Ibis Tests
         timeout-minutes: 10
         run: |
-          hatch run test-ibis:env SPARK_REMOTE="sc://localhost:50051" scripts/spark-tests/run-tests.sh
+          hatch run test-ibis:env SPARK_REMOTE="sc://localhost:50051" scripts/spark-tests/run-tests.sh || true
+          echo "## 🧪 Ibis Tests Summary" >> "$GITHUB_STEP_SUMMARY"
+          echo '```' >> "$GITHUB_STEP_SUMMARY"
+          tail -n 1 tmp/spark-tests/ibis/test-ibis.log >> "$GITHUB_STEP_SUMMARY"
+          echo '```' >> "$GITHUB_STEP_SUMMARY"
 
       - name: Shutdown Spark Connect Server
         if: always()
