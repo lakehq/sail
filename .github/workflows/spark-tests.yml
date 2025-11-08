@@ -1,12 +1,7 @@
 name: Spark Tests
 
 on:
-  workflow_call:
-    inputs:
-      spark_version:
-        description: The Spark version to test
-        type: string
-        default: "4.0.0"
+  {}
 
 jobs:
   setup:
