@@ -1,17 +1,15 @@
 name: Ibis Tests
 
-on:
-  workflow_call:
-    inputs:
-      spark_version:
-        description: Spark version to use
-        type: string
-        default: "4.0.0"
+on: [push]
 
 jobs:
   setup:
     name: Setup
     runs-on: ubuntu-latest
+
+    env:
+      # Set the Hatch environment for `hatch run` commands.
+      HATCH_ENV: "test-ibis"
 
     steps:
       - uses: actions/checkout@v4
@@ -25,14 +23,22 @@ jobs:
         with:
           python-version: "3.11"
 
-      - name: Install Hatch
-        uses: pypa/hatch@install
+      - name: Setup Protobuf Compiler
+        uses: arduino/setup-protoc@v3
+
+      - name: Clone IBIS
+        run: |
+          git clone https://github.com/ibis-project/testing-data.git opt/ibis-testing-data
+
+      - name: Install Hatch and Maturin
+        run: |
+          pip install hatch maturin
 
       - name: Install Rust toolchain
         run: |
           rustup toolchain install stable
 
-      - name: Build native extension (editable)
+      - name: Build native extension
         run: |
           hatch run maturin develop
           hatch run maturin build
@@ -45,18 +51,21 @@ jobs:
 
       - name: Run Spark Connect Server
         run: |
-          nohup hatch run test-ibis:scripts/spark-tests/run-server.sh > /dev/null 2>&1 &
+          mkdir -p tmp/spark-tests/server-log
+          nohup hatch run test-ibis:scripts/spark-tests/run-server.sh \
+            > tmp/spark-tests/server-log/server.log 2>&1 &
+          echo "Server starting... logs at tmp/spark-tests/server-log/server.log"
+          sleep 2
+          tail -n 20 tmp/spark-tests/server-log/server.log || true
 
       - name: Wait for Spark Connect Server to Start
         run: |
           scripts/spark-tests/wait-for-server.sh
 
       - name: Run Ibis Tests
-        timeout-minutes: 5
-        env:
-          SPARK_REMOTE: "sc://localhost:50051"
+        timeout-minutes: 10
         run: |
-          hatch run -e test-ibis scripts/spark-tests/run-tests.sh
+          hatch run test-ibis:env SPARK_REMOTE="sc://localhost:50051" scripts/spark-tests/run-tests.sh
 
       - name: Shutdown Spark Connect Server
         if: always()
