@@ -1,14 +1,19 @@
 name: Spark Tests
 
 on:
-  {}
+  workflow_call:
+    inputs:
+      spark_version:
+        description: The Spark version to test
+        type: string
+        default: "4.0.0"
 
 jobs:
   setup:
     name: Setup
     runs-on: ubuntu-latest
     outputs:
-      run_tests: 'false'
+      run_tests: ${{ ((github.event_name == 'pull_request' && (github.event.action == 'opened' || steps.match.outputs.result == 'true' || steps.label.outputs.has_label == 'true')) || github.event_name == 'push') && 'true' || 'false' }}
     steps:
       - uses: actions/checkout@v4
 
