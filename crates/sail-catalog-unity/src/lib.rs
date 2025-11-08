@@ -1,4 +1,3 @@
-// CHECK HERE: I don't like having to allow unwrap.
 #![allow(clippy::unwrap_used)]
 
 mod config;

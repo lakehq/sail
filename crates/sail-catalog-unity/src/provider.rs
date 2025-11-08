@@ -589,7 +589,6 @@ impl CatalogProvider for UnityCatalogProvider {
         match result {
             Ok(response) => {
                 let table_info = response.into_inner();
-                eprintln!("CHECK HERE CREATE TABLE table_info: {table_info:?}");
                 self.table_info_to_table_status(table_info, &catalog_name, &schema_name)
             }
             Err(progenitor_client::Error::UnexpectedResponse(response))

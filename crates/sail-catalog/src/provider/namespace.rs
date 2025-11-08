@@ -73,12 +73,10 @@ impl fmt::Display for Namespace {
 }
 
 impl Namespace {
-    // CHECK HERE
     pub fn head_to_string(&self) -> String {
         quote_name_if_needed(&self.head)
     }
 
-    // CHECK HERE
     pub fn tail_to_string(&self) -> String {
         self.tail
             .iter()
