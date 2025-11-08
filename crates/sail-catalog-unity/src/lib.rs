@@ -2,6 +2,7 @@
 #![allow(clippy::unwrap_used)]
 
 mod config;
+mod data_type;
 mod provider;
 
 pub mod unity {
