@@ -57,6 +57,15 @@ jobs:
           chmod +x /usr/local/bin/grpc_health_probe
           grpc_health_probe -version
 
+  test:
+    name: Test
+    runs-on: ubuntu-latest
+    needs:
+      - setup
+    env:
+      HATCH_ENV: "test-ibis"
+
+    steps:
       - name: Run Spark Connect Server
         run: |
           mkdir -p tmp/spark-tests/server-log
