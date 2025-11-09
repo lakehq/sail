@@ -43,6 +43,6 @@ The following table lists the supported configuration keys and their correspondi
 ## Example
 
 ```bash
-export UNITY_CLIENT_SECRET='...'
+export UNITY_ALLOW_HTTP_URL='false'
 export SAIL_CATALOG__LIST='[{type="unity", name="sail", uri="https://catalog.example.com", default_catalog="meow", token="..."}]'
 ```
