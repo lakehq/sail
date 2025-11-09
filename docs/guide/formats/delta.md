@@ -8,13 +8,6 @@ rank: 1
 You can use the `delta` format in Sail to work with [Delta Lake](https://delta.io/).
 You can use the Spark DataFrame API or Spark SQL to read and write Delta tables.
 
-::: warning
-The Delta Lake integration in Sail is under active development.
-You can use Sail to read Delta tables and write new Delta tables.
-But it is not recommended to use Sail to overwrite or modify existing Delta tables created by other engines.
-If you encounter any issues or would like to request advanced Delta Lake features, feel free to reach out to us on [GitHub Issues](https://github.com/lakehq/sail/issues)!
-:::
-
 ## Examples
 
 <!--@include: ../_common/spark-session.md-->
