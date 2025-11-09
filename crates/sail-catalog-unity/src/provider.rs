@@ -527,6 +527,20 @@ impl CatalogProvider for UnityCatalogProvider {
                     }
                     _ => (None, None),
                 };
+                let type_interval_type = match &col.data_type {
+                    // TODO: Don't know if this is correct
+                    DataType::Interval(arrow::datatypes::IntervalUnit::YearMonth) => {
+                        Some("YearMonth".to_string())
+                    }
+                    DataType::Interval(arrow::datatypes::IntervalUnit::DayTime)
+                    | DataType::Duration(arrow::datatypes::TimeUnit::Microsecond) => {
+                        Some("DayTime".to_string())
+                    }
+                    DataType::Interval(arrow::datatypes::IntervalUnit::MonthDayNano) => {
+                        Some("MonthDayNano".to_string())
+                    }
+                    _ => None,
+                };
                 let partition_index = partition_by
                     .iter()
                     .position(|p| p.trim().to_lowercase() == col.name.trim().to_lowercase())
@@ -537,7 +551,7 @@ impl CatalogProvider for UnityCatalogProvider {
                     nullable: col.nullable,
                     partition_index,
                     position: Some(idx as i32),
-                    type_interval_type: None, // FIXME: Handle interval types
+                    type_interval_type,
                     type_json: Some(unity_type.type_json.to_string()),
                     type_name: Some(unity_type.type_name),
                     type_precision,

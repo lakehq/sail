@@ -2,11 +2,18 @@ use std::collections::HashMap;
 use std::sync::Arc;
 
 use arrow::datatypes::{
-    DataType, Field, Fields, TimeUnit, DECIMAL128_MAX_PRECISION, DECIMAL128_MAX_SCALE,
+    DataType, Field, Fields, IntervalUnit, TimeUnit, DECIMAL128_MAX_PRECISION, DECIMAL128_MAX_SCALE,
 };
 use sail_catalog::error::{CatalogError, CatalogResult};
+use sail_common::spec::{
+    SAIL_LIST_FIELD_NAME, SAIL_MAP_FIELD_NAME, SAIL_MAP_KEY_FIELD_NAME, SAIL_MAP_VALUE_FIELD_NAME,
+};
 
 use crate::unity::types;
+
+// There is no clarity on the expected format for `type_json` and `type_text`.
+// Open source code and docs have various inconsistencies and contradictions.
+// So, we parse with flexibility throughout this file.
 
 pub(crate) struct UnityColumnType {
     pub type_text: String,
@@ -15,8 +22,6 @@ pub(crate) struct UnityColumnType {
 }
 
 pub(crate) fn data_type_to_unity_type(data_type: &DataType) -> CatalogResult<UnityColumnType> {
-    // There is no clarity on the expected format for `type_json` and `type_text`.
-    // Open source code has various and docs seem to contradict each other.
     // TODO: UserDefinedType
     match data_type {
         DataType::Null => Ok(UnityColumnType {
@@ -117,28 +122,78 @@ pub(crate) fn data_type_to_unity_type(data_type: &DataType) -> CatalogResult<Uni
             ),
             type_name: types::ColumnTypeName::String,
         }),
+        DataType::Duration(TimeUnit::Microsecond) => {
+            let type_json = serde_json::json!({
+                // FIXME: I don't think this is correct.
+                "type": serde_json::json!({
+                    "type": "interval",
+                    "startUnit": "day",
+                    "endUnit": "time"
+                })
+            });
+            Ok(UnityColumnType {
+                type_text: types::ColumnTypeName::Interval.to_string().to_lowercase(),
+                type_json,
+                type_name: types::ColumnTypeName::Interval,
+            })
+        }
+        DataType::Interval(interval_unit) => {
+            let (start_unit, end_unit) = match interval_unit {
+                // FIXME: I don't think this is correct.
+                IntervalUnit::YearMonth => Ok(("year", "month")),
+                IntervalUnit::DayTime => Ok(("day", "time")),
+                IntervalUnit::MonthDayNano => Err(CatalogError::InvalidArgument(
+                    "MonthDayNano interval is not supported in Unity Catalog".to_string(),
+                )),
+            }?;
+            let type_json = serde_json::json!({
+                "type": serde_json::json!({
+                    "type": "interval",
+                    "startUnit": start_unit,
+                    "endUnit": end_unit
+                })
+            });
+            Ok(UnityColumnType {
+                type_text: types::ColumnTypeName::Interval.to_string().to_lowercase(),
+                type_json,
+                type_name: types::ColumnTypeName::Interval,
+            })
+        }
         DataType::Decimal32(precision, scale)
         | DataType::Decimal64(precision, scale)
         | DataType::Decimal128(precision, scale) => {
-            let type_str = format!("decimal({},{})", precision, scale);
+            let type_text = format!("decimal({precision},{scale})");
+            let type_json = serde_json::json!({
+                "type": serde_json::json!({
+                    "type": "decimal",
+                    "precision": precision,
+                    "scale": scale,
+                })
+            });
             Ok(UnityColumnType {
-                type_text: type_str.clone(),
-                type_json: serde_json::Value::String(type_str),
+                type_text,
+                type_json,
                 type_name: types::ColumnTypeName::Decimal,
             })
         }
         DataType::Decimal256(precision, scale) => {
             if *precision <= DECIMAL128_MAX_PRECISION && *scale <= DECIMAL128_MAX_SCALE {
-                let type_str = format!("decimal({},{})", precision, scale);
+                let type_text = format!("decimal({precision},{scale})");
+                let type_json = serde_json::json!({
+                    "type": serde_json::json!({
+                        "type": "decimal",
+                        "precision": precision,
+                        "scale": scale,
+                    })
+                });
                 Ok(UnityColumnType {
-                    type_text: type_str.clone(),
-                    type_json: serde_json::Value::String(type_str),
+                    type_text,
+                    type_json,
                     type_name: types::ColumnTypeName::Decimal,
                 })
             } else {
-                Err(CatalogError::External(format!(
-                    "Decimal with precision > {} and scale > {} is not supported in Unity Catalog",
-                    DECIMAL128_MAX_PRECISION, DECIMAL128_MAX_SCALE
+                Err(CatalogError::InvalidArgument(format!(
+                    "Decimal with precision > {DECIMAL128_MAX_PRECISION} and scale > {DECIMAL128_MAX_SCALE} is not supported in Unity Catalog"
                 )))
             }
         }
@@ -191,12 +246,12 @@ pub(crate) fn data_type_to_unity_type(data_type: &DataType) -> CatalogResult<Uni
                         type_name: types::ColumnTypeName::Map,
                     })
                 } else {
-                    Err(CatalogError::External(format!(
+                    Err(CatalogError::InvalidArgument(format!(
                         "Map type struct must have exactly two fields, found {fields:?}"
                     )))
                 }
             } else {
-                Err(CatalogError::External(format!(
+                Err(CatalogError::InvalidArgument(format!(
                     "Map type must be a struct with key and value fields, found {field:?}"
                 )))
             }
@@ -239,12 +294,11 @@ pub(crate) fn data_type_to_unity_type(data_type: &DataType) -> CatalogResult<Uni
         | DataType::Date64
         | DataType::Time32(_)
         | DataType::Time64(_)
-        | DataType::Duration(_)
-        | DataType::Interval(_)
+        | DataType::Duration(TimeUnit::Second | TimeUnit::Millisecond | TimeUnit::Nanosecond)
         | DataType::FixedSizeList(_, _)
         | DataType::Union(_, _)
         | DataType::Dictionary(_, _)
-        | DataType::RunEndEncoded(_, _) => Err(CatalogError::External(format!(
+        | DataType::RunEndEncoded(_, _) => Err(CatalogError::NotSupported(format!(
             "{data_type:?} type is not supported in Unity Catalog",
         ))),
     }
@@ -256,14 +310,12 @@ pub(crate) fn unity_type_to_data_type(
     type_text: Option<String>,
     type_precision: Option<i32>,
     type_scale: Option<i32>,
-    _type_interval_type: Option<String>,
+    type_interval_type: Option<String>,
 ) -> CatalogResult<DataType> {
-    // There is no clarity on the expected format for `type_json` and `type_text`.
-    // Open source code has various and docs seem to contradict each other.
-    // So, we parse with flexibility here.
     // TODO:
-    //  1. Handle `Interval`, `UserDefinedType` and `TableType`.
+    //  1. Handle `UserDefinedType` and `TableType`.
     //  2. Parse precision and scale for `Decimal` if type_precision and type_scale aren't provided.
+    //  3. Parse interval type for `Interval` if type_interval_type and type_scale aren't provided.
     if let Some(type_name) = type_name {
         match type_name {
             types::ColumnTypeName::Boolean => Ok(DataType::Boolean),
@@ -283,29 +335,57 @@ pub(crate) fn unity_type_to_data_type(
             }
             types::ColumnTypeName::String | types::ColumnTypeName::Char => Ok(DataType::Utf8),
             types::ColumnTypeName::Binary => Ok(DataType::Binary),
+            types::ColumnTypeName::Null => Ok(DataType::Null),
             types::ColumnTypeName::Decimal => {
                 if let (Some(precision), Some(scale)) = (type_precision, type_scale) {
                     Ok(DataType::Decimal128(precision as u8, scale as i8))
+                } else if let Some(type_json) = type_json {
+                    parse_unity_type_json(&type_json)
                 } else {
-                    // TODO: Parse from type_text or type_json if precision and scale are not provided
-                    Err(CatalogError::External(
-                        "Decimal type requires precision and scale".to_string(),
+                    Err(CatalogError::NotSupported(
+                        "Unable to parse precision and scale for Decimal type".to_string(),
                     ))
                 }
             }
-            types::ColumnTypeName::Null => Ok(DataType::Null),
+            types::ColumnTypeName::Interval => {
+                if let Some(type_interval_type) = &type_interval_type {
+                    match type_interval_type.trim().to_uppercase().as_str() {
+                        "INTERVAL_YEAR_MONTH"
+                        | "INTERVAL_YEARMONTH"
+                        | "INTERVALYEARMONTH"
+                        | "YEAR_MONTH"
+                        | "YEARMONTH" => Ok(DataType::Interval(IntervalUnit::YearMonth)),
+                        "INTERVAL_DAY_TIME" | "INTERVAL_DAYTIME" | "INTERVALDAYTIME"
+                        | "DAY_TIME" | "DAYTIME" => Ok(DataType::Interval(IntervalUnit::DayTime)),
+                        "INTERVAL_MONTH_DAY_NANO"
+                        | "INTERVAL_MONTHDAYNANO"
+                        | "INTERVALMONTHDAYNANO"
+                        | "MONTH_DAY_NANO"
+                        | "MONTHDAYNANO" => Ok(DataType::Interval(IntervalUnit::MonthDayNano)),
+                        other => Err(CatalogError::NotSupported(format!(
+                            "Unable to parse interval type: {other}"
+                        ))),
+                    }
+                } else if let Some(type_json) = type_json {
+                    parse_unity_type_json(&type_json)
+                } else {
+                    Err(CatalogError::NotSupported(
+                        "Unable to parse interval type for Interval".to_string(),
+                    ))
+                }
+            }
             types::ColumnTypeName::Array
             | types::ColumnTypeName::Struct
             | types::ColumnTypeName::Map => {
                 parse_unity_type_json(type_json.as_deref().ok_or_else(|| {
-                    CatalogError::External("type_json is required for complex types".to_string())
+                    CatalogError::InvalidArgument(
+                        "type_json is required for complex types".to_string(),
+                    )
                 })?)
             }
-            types::ColumnTypeName::Interval
-            | types::ColumnTypeName::UserDefinedType
-            | types::ColumnTypeName::TableType => Err(CatalogError::External(format!(
-                "{type_name:?} type is not supported yet",
-            ))),
+            types::ColumnTypeName::UserDefinedType | types::ColumnTypeName::TableType => Err(
+                CatalogError::InvalidArgument(format!("{type_name:?} type is not supported yet",)),
+            ),
         }
     } else {
         parse_from_text_or_json(type_text, type_json)
@@ -324,7 +404,7 @@ pub(crate) fn parse_from_text_or_json(
                 if let Some(json) = type_json {
                     parse_unity_type_json(&json)
                 } else {
-                    Err(CatalogError::External(format!(
+                    Err(CatalogError::InvalidArgument(format!(
                         "Unable to parse type from type_text: {text}"
                     )))
                 }
@@ -333,7 +413,7 @@ pub(crate) fn parse_from_text_or_json(
     } else if let Some(json) = type_json {
         parse_unity_type_json(&json)
     } else {
-        Err(CatalogError::External(
+        Err(CatalogError::InvalidArgument(
             "Type information missing: no `type_text` or `type_json` provided".to_string(),
         ))
     }
@@ -358,7 +438,7 @@ pub(crate) fn parse_simple_type_from_string(type_str: &str) -> CatalogResult<Dat
         "TEXT" => Ok(DataType::LargeUtf8),
         "BINARY" | "BYTEA" => Ok(DataType::Binary),
         "NULL" | "VOID" => Ok(DataType::Null),
-        _ => Err(CatalogError::External(format!(
+        _ => Err(CatalogError::InvalidArgument(format!(
             "Unable to parse simple type from string: {type_str}"
         ))),
     }
@@ -366,12 +446,12 @@ pub(crate) fn parse_simple_type_from_string(type_str: &str) -> CatalogResult<Dat
 
 pub(crate) fn parse_unity_type_json(json_str: &str) -> CatalogResult<DataType> {
     let value: serde_json::Value = serde_json::from_str(json_str)
-        .map_err(|e| CatalogError::External(format!("Failed to parse type_json: {e}")))?;
+        .map_err(|e| CatalogError::InvalidArgument(format!("Failed to parse type_json: {e}")))?;
 
     match value {
         serde_json::Value::String(s) => parse_simple_type_from_string(&s),
         serde_json::Value::Object(obj) => parse_complex_type_from_json_object(&obj),
-        _ => Err(CatalogError::External(format!(
+        _ => Err(CatalogError::InvalidArgument(format!(
             "Invalid type_json format: expected string or object, got {value:?}"
         ))),
     }
@@ -381,7 +461,7 @@ pub(crate) fn parse_complex_type_from_json_object(
     serde_object: &serde_json::Map<String, serde_json::Value>,
 ) -> CatalogResult<DataType> {
     let type_field = serde_object.get("type").ok_or_else(|| {
-        CatalogError::External("Complex type_json missing 'type' field".to_string())
+        CatalogError::InvalidArgument("Complex type_json missing 'type' field".to_string())
     })?;
     let metadata = get_field_metadata(serde_object);
 
@@ -390,9 +470,12 @@ pub(crate) fn parse_complex_type_from_json_object(
         serde_json::Value::Object(inner_obj) => {
             let type_field = inner_obj
                 .get("type")
+                .or(inner_obj.get("name"))
                 .and_then(|v| v.as_str())
                 .ok_or_else(|| {
-                    CatalogError::External("Complex type_json missing 'type' field".to_string())
+                    CatalogError::InvalidArgument(
+                        "Complex type_json missing 'type' field".to_string(),
+                    )
                 })?
                 .trim()
                 .to_lowercase();
@@ -406,12 +489,63 @@ pub(crate) fn parse_complex_type_from_json_object(
             };
             Ok((inner_obj, type_field, metadata))
         }
-        other => Err(CatalogError::External(format!(
+        other => Err(CatalogError::InvalidArgument(format!(
             "Invalid type_json format: expected string or object, got {other:?}"
         ))),
     }?;
 
     match type_field.as_str() {
+        "interval" => {
+            let start_unit = type_info
+                .get("startUnit")
+                .or(type_info.get("start_unit"))
+                .and_then(|v| v.as_str())
+                .ok_or_else(|| {
+                    CatalogError::NotSupported(
+                        "Interval type missing 'startUnit' field".to_string(),
+                    )
+                })?
+                .trim()
+                .to_uppercase();
+            let end_unit = type_info
+                .get("endUnit")
+                .or(type_info.get("end_unit"))
+                .and_then(|v| v.as_str())
+                .ok_or_else(|| {
+                    CatalogError::NotSupported("Interval type missing 'endUnit' field".to_string())
+                })?
+                .trim()
+                .to_uppercase();
+            match (start_unit.as_str(), end_unit.as_str()) {
+                ("YEAR", "MONTH") => Ok(DataType::Interval(IntervalUnit::YearMonth)),
+                ("DAY", "TIME") => Ok(DataType::Interval(IntervalUnit::DayTime)),
+                _ => Err(CatalogError::NotSupported(format!(
+                    "Unsupported interval units: startUnit={start_unit}, endUnit={end_unit}"
+                ))),
+            }
+        }
+        "decimal" => {
+            let precision = type_info
+                .get("precision")
+                .and_then(|v| v.as_i64())
+                .ok_or_else(|| {
+                    CatalogError::NotSupported("Decimal type missing 'precision' field".to_string())
+                })? as u8;
+            let scale = type_info
+                .get("scale")
+                .and_then(|v| v.as_i64())
+                .ok_or_else(|| {
+                    CatalogError::NotSupported("Decimal type missing 'scale' field".to_string())
+                })? as i8;
+
+            if precision <= DECIMAL128_MAX_PRECISION && scale <= DECIMAL128_MAX_SCALE {
+                Ok(DataType::Decimal128(precision, scale))
+            } else {
+                Err(CatalogError::InvalidArgument(format!(
+                    "Decimal with precision > {DECIMAL128_MAX_PRECISION} and scale > {DECIMAL128_MAX_SCALE} is not supported in Unity Catalog"
+                )))
+            }
+        }
         "array" => {
             let element_type_json = type_info
                 .get("elementType")
@@ -419,7 +553,7 @@ pub(crate) fn parse_complex_type_from_json_object(
                 .or(type_info.get("itemType"))
                 .or(type_info.get("item_type"))
                 .ok_or_else(|| {
-                    CatalogError::External(
+                    CatalogError::InvalidArgument(
                         "Array type missing 'elementType', 'element_type', 'itemType', or 'item_type' field".to_string(),
                     )
                 })?;
@@ -436,13 +570,14 @@ pub(crate) fn parse_complex_type_from_json_object(
                 serde_json::Value::String(s) => parse_simple_type_from_string(s)?,
                 serde_json::Value::Object(o) => parse_complex_type_from_json_object(o)?,
                 _ => {
-                    return Err(CatalogError::External(
+                    return Err(CatalogError::InvalidArgument(
                         "Invalid elementType format".to_string(),
                     ))
                 }
             };
             Ok(DataType::List(Arc::new(
-                Field::new("item", element_type, contains_null).with_metadata(metadata),
+                Field::new(SAIL_LIST_FIELD_NAME, element_type, contains_null)
+                    .with_metadata(metadata),
             )))
         }
         "map" => {
@@ -450,7 +585,7 @@ pub(crate) fn parse_complex_type_from_json_object(
                 .get("keyType")
                 .or(type_info.get("key_type"))
                 .ok_or_else(|| {
-                    CatalogError::External(
+                    CatalogError::InvalidArgument(
                         "Map type missing 'keyType' or 'key_type' field".to_string(),
                     )
                 })?;
@@ -458,7 +593,7 @@ pub(crate) fn parse_complex_type_from_json_object(
                 .get("valueType")
                 .or(type_info.get("value_type"))
                 .ok_or_else(|| {
-                    CatalogError::External(
+                    CatalogError::InvalidArgument(
                         "Map type missing 'valueType' or 'value_type' field".to_string(),
                     )
                 })?;
@@ -475,13 +610,17 @@ pub(crate) fn parse_complex_type_from_json_object(
             let key_type = match key_type_json {
                 serde_json::Value::String(s) => parse_simple_type_from_string(s)?,
                 serde_json::Value::Object(o) => parse_complex_type_from_json_object(o)?,
-                _ => return Err(CatalogError::External("Invalid keyType format".to_string())),
+                _ => {
+                    return Err(CatalogError::InvalidArgument(
+                        "Invalid keyType format".to_string(),
+                    ))
+                }
             };
             let value_type = match value_type_json {
                 serde_json::Value::String(s) => parse_simple_type_from_string(s)?,
                 serde_json::Value::Object(o) => parse_complex_type_from_json_object(o)?,
                 _ => {
-                    return Err(CatalogError::External(
+                    return Err(CatalogError::InvalidArgument(
                         "Invalid valueType format".to_string(),
                     ))
                 }
@@ -490,10 +629,10 @@ pub(crate) fn parse_complex_type_from_json_object(
             Ok(DataType::Map(
                 Arc::new(
                     Field::new(
-                        "entries",
+                        SAIL_MAP_FIELD_NAME,
                         DataType::Struct(Fields::from(vec![
-                            Field::new("key", key_type, false),
-                            Field::new("value", value_type, value_contains_null),
+                            Field::new(SAIL_MAP_KEY_FIELD_NAME, key_type, false),
+                            Field::new(SAIL_MAP_VALUE_FIELD_NAME, value_type, value_contains_null),
                         ])),
                         false,
                     )
@@ -507,13 +646,13 @@ pub(crate) fn parse_complex_type_from_json_object(
                 .get("fields")
                 .and_then(|v| v.as_array())
                 .ok_or_else(|| {
-                    CatalogError::External("Struct type missing 'fields' array".to_string())
+                    CatalogError::InvalidArgument("Struct type missing 'fields' array".to_string())
                 })?;
 
             let mut fields = Vec::new();
             for field_json in fields_json {
                 let field_obj = field_json.as_object().ok_or_else(|| {
-                    CatalogError::External("Struct field must be an object".to_string())
+                    CatalogError::InvalidArgument("Struct field must be an object".to_string())
                 })?;
 
                 let field_name =
@@ -521,11 +660,11 @@ pub(crate) fn parse_complex_type_from_json_object(
                         .get("name")
                         .and_then(|v| v.as_str())
                         .ok_or_else(|| {
-                            CatalogError::External("Struct field missing 'name'".to_string())
+                            CatalogError::InvalidArgument("Struct field missing 'name'".to_string())
                         })?;
 
                 let field_type_json = field_obj.get("type").ok_or_else(|| {
-                    CatalogError::External("Struct field missing 'type'".to_string())
+                    CatalogError::InvalidArgument("Struct field missing 'type'".to_string())
                 })?;
 
                 let nullable = field_obj
@@ -539,7 +678,7 @@ pub(crate) fn parse_complex_type_from_json_object(
                     serde_json::Value::String(s) => parse_simple_type_from_string(s)?,
                     serde_json::Value::Object(o) => parse_complex_type_from_json_object(o)?,
                     _ => {
-                        return Err(CatalogError::External(
+                        return Err(CatalogError::InvalidArgument(
                             "Invalid field type format".to_string(),
                         ))
                     }
@@ -552,7 +691,7 @@ pub(crate) fn parse_complex_type_from_json_object(
 
             Ok(DataType::Struct(Fields::from(fields)))
         }
-        _ => Err(CatalogError::External(format!(
+        _ => Err(CatalogError::InvalidArgument(format!(
             "Unsupported complex type: {type_field}"
         ))),
     }

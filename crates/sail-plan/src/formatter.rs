@@ -687,6 +687,7 @@ mod tests {
         i256, DataType, Field, Int32Type, IntervalDayTime, IntervalMonthDayNano,
     };
     use datafusion_common::arrow::array::ArrayRef;
+    use sail_common::spec::SAIL_MAP_FIELD_NAME;
 
     use super::*;
     use crate::error::PlanResult;
@@ -862,7 +863,7 @@ mod tests {
         assert_eq!(
             to_string(ScalarValue::Map(Arc::new(MapArray::new(
                 Arc::new(Field::new(
-                    "entries",
+                    SAIL_MAP_FIELD_NAME,
                     DataType::Struct(
                         vec![
                             Arc::new(Field::new("keys", DataType::Utf8, false)),

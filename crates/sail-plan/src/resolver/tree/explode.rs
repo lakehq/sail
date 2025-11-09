@@ -12,6 +12,7 @@ use datafusion_expr::expr::ScalarFunction;
 use datafusion_expr::{ident, when};
 use datafusion_functions_nested::expr_fn as nested_fn;
 use either::Either;
+use sail_common::spec::{SAIL_MAP_KEY_FIELD_NAME, SAIL_MAP_VALUE_FIELD_NAME};
 use sail_common_datafusion::utils::items::ItemTaker;
 use sail_function::scalar::array::spark_array_item_with_position::ArrayItemWithPosition;
 use sail_function::scalar::explode::{Explode, ExplodeKind};
@@ -116,14 +117,24 @@ impl TreeNodeRewriter for ExplodeRewriter<'_> {
             }?,
             (ExplodeDataType::Map, false, _) => {
                 vec![
-                    ident(&name).field("key").alias("key"),
-                    ident(&name).field("value").alias("value"),
+                    ident(&name)
+                        .field(SAIL_MAP_KEY_FIELD_NAME)
+                        .alias(SAIL_MAP_KEY_FIELD_NAME),
+                    ident(&name)
+                        .field(SAIL_MAP_VALUE_FIELD_NAME)
+                        .alias(SAIL_MAP_VALUE_FIELD_NAME),
                 ]
             }
             (ExplodeDataType::Map, true, _) => vec![
                 ident(&name).field("pos").alias("pos"),
-                ident(&name).field("col").field("key").alias("key"),
-                ident(&name).field("col").field("value").alias("value"),
+                ident(&name)
+                    .field("col")
+                    .field(SAIL_MAP_KEY_FIELD_NAME)
+                    .alias(SAIL_MAP_KEY_FIELD_NAME),
+                ident(&name)
+                    .field("col")
+                    .field(SAIL_MAP_VALUE_FIELD_NAME)
+                    .alias(SAIL_MAP_VALUE_FIELD_NAME),
             ],
         };
 

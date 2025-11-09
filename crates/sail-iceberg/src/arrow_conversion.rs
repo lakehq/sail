@@ -8,8 +8,10 @@ use datafusion::arrow::datatypes::{
 use datafusion_common::{plan_datafusion_err, plan_err, Result};
 use parquet::arrow::PARQUET_FIELD_ID_META_KEY;
 use rust_decimal::prelude::ToPrimitive;
+use sail_common::spec::{SAIL_LIST_FIELD_NAME, SAIL_MAP_FIELD_NAME};
 
 use crate::spec::{ListType, MapType, NestedField, PrimitiveType, Schema, StructType, Type};
+use crate::ICEBERG_LIST_FIELD_NAME;
 
 pub const ICEBERG_ARROW_FIELD_DOC_KEY: &str = "doc";
 
@@ -94,6 +96,12 @@ pub fn iceberg_type_to_arrow(iceberg_type: &Type) -> Result<ArrowDataType> {
         Type::Struct(struct_type) => iceberg_struct_to_arrow(struct_type),
         Type::List(list_type) => {
             let element_field = iceberg_field_to_arrow(&list_type.element_field)?;
+            let element_field =
+                if element_field.name().trim().to_lowercase() == ICEBERG_LIST_FIELD_NAME {
+                    element_field.with_name(SAIL_LIST_FIELD_NAME.to_string())
+                } else {
+                    element_field
+                };
             Ok(ArrowDataType::List(Arc::new(element_field)))
         }
         Type::Map(map_type) => {
@@ -102,7 +110,7 @@ pub fn iceberg_type_to_arrow(iceberg_type: &Type) -> Result<ArrowDataType> {
 
             // Arrow Map type expects a struct with key and value fields
             let entries_field = ArrowField::new(
-                "entries",
+                SAIL_MAP_FIELD_NAME,
                 ArrowDataType::Struct(vec![key_field, value_field].into()),
                 false, // entries field itself is not nullable
             );
@@ -123,7 +131,10 @@ pub fn arrow_type_to_iceberg(arrow_type: &ArrowDataType) -> Result<Type> {
         | ArrowDataType::ListView(field)
         | ArrowDataType::LargeList(field)
         | ArrowDataType::LargeListView(field) => {
-            let element_field = arrow_field_to_iceberg(field)?;
+            let mut element_field = arrow_field_to_iceberg(field)?;
+            if element_field.name.trim().to_lowercase() == SAIL_LIST_FIELD_NAME {
+                element_field.name = ICEBERG_LIST_FIELD_NAME.to_string();
+            }
             Ok(Type::List(ListType::new(Arc::new(element_field))))
         }
         ArrowDataType::Map(entries_field, _sorted) => {
@@ -305,6 +316,8 @@ pub fn arrow_struct_to_iceberg(struct_type: &ArrowDataType) -> Result<StructType
 #[allow(clippy::unwrap_used, clippy::expect_used)]
 mod tests {
     use std::sync::Arc;
+
+    use sail_common::spec::{SAIL_MAP_KEY_FIELD_NAME, SAIL_MAP_VALUE_FIELD_NAME};
 
     use super::*;
     use crate::spec::{NestedField, PrimitiveType, Schema, Type};
@@ -562,8 +575,8 @@ mod tests {
     #[allow(clippy::panic)]
     #[test]
     fn test_arrow_list_to_iceberg_conversion() {
-        let element_field =
-            ArrowField::new("element", ArrowDataType::Int64, true).with_metadata(HashMap::from([
+        let element_field = ArrowField::new(SAIL_LIST_FIELD_NAME, ArrowDataType::Int64, true)
+            .with_metadata(HashMap::from([
                 (PARQUET_FIELD_ID_META_KEY.to_string(), "1".to_string()),
                 (
                     ICEBERG_ARROW_FIELD_DOC_KEY.to_string(),
@@ -577,6 +590,7 @@ mod tests {
 
         match iceberg_type {
             Type::List(list_type) => {
+                assert_eq!(list_type.element_field.name, ICEBERG_LIST_FIELD_NAME);
                 assert_eq!(list_type.element_field.id, 1);
                 assert_eq!(
                     *list_type.element_field.field_type,
@@ -594,20 +608,52 @@ mod tests {
 
     #[allow(clippy::panic)]
     #[test]
+    fn test_iceberg_list_to_arrow_conversion() {
+        let element_field = NestedField::new(
+            1,
+            ICEBERG_LIST_FIELD_NAME,
+            Type::Primitive(PrimitiveType::Long),
+            false,
+        )
+        .with_doc("List element".to_string());
+        let iceberg_list = Type::List(ListType::new(Arc::new(element_field)));
+        let arrow_type =
+            iceberg_type_to_arrow(&iceberg_list).expect("Failed to convert Iceberg list to Arrow");
+        match arrow_type {
+            ArrowDataType::List(field) => {
+                assert_eq!(field.name(), SAIL_LIST_FIELD_NAME);
+                assert_eq!(field.data_type(), &ArrowDataType::Int64);
+                assert!(field.is_nullable());
+                assert_eq!(
+                    field.metadata().get(PARQUET_FIELD_ID_META_KEY),
+                    Some(&"1".to_string())
+                );
+                assert_eq!(
+                    field.metadata().get(ICEBERG_ARROW_FIELD_DOC_KEY),
+                    Some(&"List element".to_string())
+                );
+            }
+            _ => panic!("Expected List type"),
+        }
+    }
+
+    #[allow(clippy::panic)]
+    #[test]
     fn test_arrow_map_to_iceberg_conversion() {
-        let key_field =
-            ArrowField::new("key", ArrowDataType::Utf8, false).with_metadata(HashMap::from([
+        let key_field = ArrowField::new(SAIL_MAP_KEY_FIELD_NAME, ArrowDataType::Utf8, false)
+            .with_metadata(HashMap::from([
                 (PARQUET_FIELD_ID_META_KEY.to_string(), "1".to_string()),
                 (
                     ICEBERG_ARROW_FIELD_DOC_KEY.to_string(),
                     "Map key".to_string(),
                 ),
             ]));
-        let value_field = ArrowField::new("value", ArrowDataType::Int64, true).with_metadata(
-            HashMap::from([(PARQUET_FIELD_ID_META_KEY.to_string(), "2".to_string())]),
-        );
+        let value_field =
+            ArrowField::new(SAIL_MAP_VALUE_FIELD_NAME, ArrowDataType::Int64, true).with_metadata(
+                HashMap::from([(PARQUET_FIELD_ID_META_KEY.to_string(), "2".to_string())]),
+            );
         let entries_struct = ArrowDataType::Struct(vec![key_field, value_field].into());
-        let entries_field = ArrowField::new("entries", entries_struct, false);
+        let entries_field = ArrowField::new(SAIL_MAP_FIELD_NAME, entries_struct, false);
         let arrow_map = ArrowDataType::Map(Arc::new(entries_field), false);
 
         let iceberg_type =

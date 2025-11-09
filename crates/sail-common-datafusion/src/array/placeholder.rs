@@ -416,6 +416,10 @@ mod tests {
     use datafusion::arrow::array::Array;
     use datafusion::arrow::datatypes::Field;
     use datafusion_common::Result;
+    use sail_common::spec::{
+        SAIL_LIST_FIELD_NAME, SAIL_MAP_FIELD_NAME, SAIL_MAP_KEY_FIELD_NAME,
+        SAIL_MAP_VALUE_FIELD_NAME,
+    };
 
     use super::*;
 
@@ -478,23 +482,42 @@ mod tests {
             (DataType::LargeUtf8, 10),
             (DataType::Utf8View, 10),
             (
-                DataType::List(Arc::new(Field::new("item", DataType::Int32, false))),
+                DataType::List(Arc::new(Field::new(
+                    SAIL_LIST_FIELD_NAME,
+                    DataType::Int32,
+                    false,
+                ))),
                 10,
             ),
             (
-                DataType::ListView(Arc::new(Field::new("item", DataType::Int32, false))),
+                DataType::ListView(Arc::new(Field::new(
+                    SAIL_LIST_FIELD_NAME,
+                    DataType::Int32,
+                    false,
+                ))),
                 10,
             ),
             (
-                DataType::FixedSizeList(Arc::new(Field::new("item", DataType::Int32, false)), 3),
+                DataType::FixedSizeList(
+                    Arc::new(Field::new(SAIL_LIST_FIELD_NAME, DataType::Int32, false)),
+                    3,
+                ),
                 10,
             ),
             (
-                DataType::LargeList(Arc::new(Field::new("item", DataType::Int32, false))),
+                DataType::LargeList(Arc::new(Field::new(
+                    SAIL_LIST_FIELD_NAME,
+                    DataType::Int32,
+                    false,
+                ))),
                 10,
             ),
             (
-                DataType::LargeListView(Arc::new(Field::new("item", DataType::Int32, false))),
+                DataType::LargeListView(Arc::new(Field::new(
+                    SAIL_LIST_FIELD_NAME,
+                    DataType::Int32,
+                    false,
+                ))),
                 10,
             ),
             (
@@ -565,11 +588,11 @@ mod tests {
             (
                 DataType::Map(
                     Arc::new(Field::new(
-                        "entries",
+                        SAIL_MAP_FIELD_NAME,
                         DataType::Struct(
                             vec![
-                                Field::new("key", DataType::Utf8, false),
-                                Field::new("value", DataType::Int32, true),
+                                Field::new(SAIL_MAP_KEY_FIELD_NAME, DataType::Utf8, false),
+                                Field::new(SAIL_MAP_VALUE_FIELD_NAME, DataType::Int32, true),
                             ]
                             .into(),
                         ),

@@ -12,6 +12,9 @@ use sail_catalog::provider::{
 use sail_catalog_unity::unity::{types, Client};
 use sail_catalog_unity::{UnityCatalogProvider, UNITY_CATALOG_PROP_URI};
 use sail_common::runtime::RuntimeHandle;
+use sail_common::spec::{
+    SAIL_LIST_FIELD_NAME, SAIL_MAP_FIELD_NAME, SAIL_MAP_KEY_FIELD_NAME, SAIL_MAP_VALUE_FIELD_NAME,
+};
 use testcontainers::core::{ContainerPort, Mount, WaitFor};
 use testcontainers::runners::AsyncRunner;
 use testcontainers::{ContainerAsync, GenericImage, ImageExt};
@@ -551,7 +554,7 @@ async fn test_create_table() {
         CreateTableColumnOptions {
             name: "bar".to_string(),
             data_type: DataType::List(Arc::new(Field::new(
-                "item",
+                SAIL_LIST_FIELD_NAME,
                 DataType::Struct(Fields::from(vec![
                     Field::new("a", DataType::Utf8, true),
                     Field::new("b", DataType::Int32, false),
@@ -567,10 +570,10 @@ async fn test_create_table() {
             name: "baz".to_string(),
             data_type: DataType::Map(
                 Arc::new(Field::new(
-                    "entries",
+                    SAIL_MAP_FIELD_NAME,
                     DataType::Struct(Fields::from(vec![
-                        Field::new("key", DataType::Utf8, false),
-                        Field::new("value", DataType::Int32, true),
+                        Field::new(SAIL_MAP_KEY_FIELD_NAME, DataType::Utf8, false),
+                        Field::new(SAIL_MAP_VALUE_FIELD_NAME, DataType::Int32, true),
                     ])),
                     false,
                 )),
@@ -674,7 +677,7 @@ async fn test_create_table() {
         columns.contains(&sail_catalog::provider::TableColumnStatus {
             name: "bar".to_string(),
             data_type: DataType::List(Arc::new(Field::new(
-                "item",
+                SAIL_LIST_FIELD_NAME,
                 DataType::Struct(Fields::from(vec![
                     Field::new("a", DataType::Utf8, true),
                     Field::new("b", DataType::Int32, false),
@@ -695,10 +698,10 @@ async fn test_create_table() {
             name: "baz".to_string(),
             data_type: DataType::Map(
                 Arc::new(Field::new(
-                    "entries",
+                    SAIL_MAP_FIELD_NAME,
                     DataType::Struct(Fields::from(vec![
-                        Field::new("key", DataType::Utf8, false),
-                        Field::new("value", DataType::Int32, true),
+                        Field::new(SAIL_MAP_KEY_FIELD_NAME, DataType::Utf8, false),
+                        Field::new(SAIL_MAP_VALUE_FIELD_NAME, DataType::Int32, true),
                     ])),
                     false,
                 )),
