@@ -57,6 +57,7 @@ use sail_function::aggregate::kurtosis::KurtosisFunction;
 use sail_function::aggregate::max_min_by::{MaxByFunction, MinByFunction};
 use sail_function::aggregate::mode::ModeFunction;
 use sail_function::aggregate::skewness::SkewnessFunc;
+use sail_function::aggregate::try_avg::TryAvgFunction;
 use sail_function::aggregate::try_sum::TrySumFunction;
 use sail_function::scalar::array::arrays_zip::ArraysZip;
 use sail_function::scalar::array::spark_array::SparkArray;
@@ -1610,6 +1611,7 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
                 "min_by" => Ok(Arc::new(AggregateUDF::from(MinByFunction::new()))),
                 "mode" => Ok(Arc::new(AggregateUDF::from(ModeFunction::new()))),
                 "skewness" => Ok(Arc::new(AggregateUDF::from(SkewnessFunc::new()))),
+                "try_avg" => Ok(Arc::new(AggregateUDF::from(TryAvgFunction::new()))),
                 "try_sum" => Ok(Arc::new(AggregateUDF::from(TrySumFunction::new()))),
                 _ => plan_err!("Could not find Aggregate Function: {name}"),
             },
@@ -1694,6 +1696,7 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
             || node.inner().as_any().is::<MinByFunction>()
             || node.inner().as_any().is::<ModeFunction>()
             || node.inner().as_any().is::<SkewnessFunc>()
+            || node.inner().as_any().is::<TryAvgFunction>()
             || node.inner().as_any().is::<TrySumFunction>()
         {
             UdafKind::Standard(gen::StandardUdaf {})
