@@ -14,3 +14,4 @@ sail-catalog-iceberg = { path = "../sail-catalog-iceberg" }
 sail-catalog-unity = { path = "../sail-catalog-unity" }
 
 datafusion = { workspace = true }
+secrecy = { workspace = true }

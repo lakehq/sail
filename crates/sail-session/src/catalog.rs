@@ -10,6 +10,7 @@ use sail_catalog_memory::MemoryCatalogProvider;
 use sail_catalog_unity::UnityCatalogProvider;
 use sail_common::config::{AppConfig, CatalogType};
 use sail_common::runtime::RuntimeHandle;
+use secrecy::ExposeSecret;
 
 pub fn create_catalog_manager(
     config: &AppConfig,
@@ -52,13 +53,13 @@ pub fn create_catalog_manager(
                     if let Some(oauth_access_token) = oauth_access_token {
                         properties.insert(
                             "oauth-access-token".to_string(), // Iceberg uses kebab-case
-                            oauth_access_token.to_string(),
+                            oauth_access_token.expose_secret().to_string(), // FIXME: Only expose when necessary
                         );
                     }
                     if let Some(bearer_access_token) = bearer_access_token {
                         properties.insert(
                             "bearer-access-token".to_string(), // Iceberg uses kebab-case
-                            bearer_access_token.to_string(),
+                            bearer_access_token.expose_secret().to_string(), // FIXME: Only expose when necessary
                         );
                     }
 
@@ -77,16 +78,15 @@ pub fn create_catalog_manager(
                     name,
                     uri,
                     default_catalog,
+                    token,
                 } => {
-                    // CHECK HERE
-                    let mut properties = HashMap::new();
-                    properties.insert("uri".to_string(), uri.to_string());
                     let runtime_aware = RuntimeAwareCatalogProvider::try_new(
                         || {
                             let provider = UnityCatalogProvider::new(
                                 name.to_string(),
-                                default_catalog.to_string(),
-                                properties,
+                                default_catalog,
+                                uri,
+                                token.clone(), // CHECK HERE
                             );
                             Ok(provider)
                         },

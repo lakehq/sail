@@ -9,12 +9,11 @@ use sail_catalog::provider::{
     TableKind, TableStatus,
 };
 use sail_catalog::utils::{get_property, quote_name_if_needed};
+use secrecy::SecretString;
 use tokio::sync::OnceCell;
 
 use crate::data_type::{data_type_to_unity_type, unity_type_to_data_type};
 use crate::unity::{types, Client};
-
-pub const UNITY_CATALOG_PROP_URI: &str = "uri";
 
 const DEFAULT_URI: &str = "http://localhost:8080/api/2.1/unity-catalog";
 
@@ -24,7 +23,7 @@ const DEFAULT_URI: &str = "http://localhost:8080/api/2.1/unity-catalog";
 pub struct UnityCatalogConfig {
     default_catalog: String,
     uri: String,
-    props: HashMap<String, String>,
+    token: Option<SecretString>,
 }
 
 /// Provider for Unity Catalog
@@ -35,17 +34,18 @@ pub struct UnityCatalogProvider {
 }
 
 impl UnityCatalogProvider {
-    pub fn new(name: String, default_catalog: String, props: HashMap<String, String>) -> Self {
+    pub fn new(
+        name: String,
+        default_catalog: &Option<String>,
+        uri: &Option<String>,
+        token: Option<SecretString>,
+    ) -> Self {
+        let default_catalog = default_catalog.as_deref().unwrap_or("unity").to_string();
+        let uri = uri.as_deref().unwrap_or(DEFAULT_URI).to_string();
         let catalog_config = UnityCatalogConfig {
             default_catalog: quote_name_if_needed(&default_catalog),
-            uri: props
-                .get(UNITY_CATALOG_PROP_URI)
-                .cloned()
-                .unwrap_or(DEFAULT_URI.to_string()),
-            props: props
-                .into_iter()
-                .filter(|(k, _)| k != UNITY_CATALOG_PROP_URI)
-                .collect(),
+            uri,
+            token,
         };
 
         Self {
@@ -58,8 +58,11 @@ impl UnityCatalogProvider {
     async fn get_client(&self) -> CatalogResult<&Client> {
         let client = self
             .client
-            .get_or_try_init(|| async { Ok(Client::new(&self.catalog_config.uri)) })
-            .await?;
+            .get_or_try_init(|| async { Client::new(&self.catalog_config.uri) })
+            .await
+            .map_err(|e| {
+                CatalogError::External(format!("Failed to create Unity Catalog client: {e}"))
+            })?;
         Ok(client)
     }
 

@@ -5988,15 +5988,13 @@ dependencies = [
  "reqwest",
  "sail-catalog",
  "sail-common",
+ "secrecy",
  "serde",
  "serde_json",
- "serde_with",
  "serde_yaml",
  "syn 2.0.108",
  "testcontainers",
  "tokio",
- "url",
- "uuid",
 ]
 
 [[package]]
@@ -6029,6 +6027,7 @@ dependencies = [
  "iana-time-zone",
  "num-traits",
  "num_enum",
+ "secrecy",
  "serde",
  "serde_json",
  "serde_yaml",
@@ -6406,6 +6405,7 @@ dependencies = [
  "sail-catalog-memory",
  "sail-catalog-unity",
  "sail-common",
+ "secrecy",
 ]
 
 [[package]]
@@ -6592,6 +6592,7 @@ version = "0.10.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "e891af845473308773346dc847b2c23ee78fe442e0472ac50e22a18a93d3ae5a"
 dependencies = [
+ "serde",
  "zeroize",
 ]
 

@@ -15,6 +15,16 @@ fn build_unity_catalog() -> Result<(), Box<dyn std::error::Error>> {
     let mut out_file = std::path::Path::new(&std::env::var("OUT_DIR")?).to_path_buf();
     out_file.push("unity_catalog.rs");
 
+    let content = content
+        .replace(
+            "pub fn new(baseurl: &str) -> Self {",
+            "pub fn new(baseurl: &str) -> Result<Self, reqwest::Error> {",
+        )
+        .replace(
+            "Self::new_with_client(baseurl, client.build().unwrap())",
+            "Ok(Self::new_with_client(baseurl, client.build()?))",
+        );
+
     std::fs::write(out_file, content)?;
 
     Ok(())

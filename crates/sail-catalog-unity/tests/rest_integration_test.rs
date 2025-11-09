@@ -10,7 +10,7 @@ use sail_catalog::provider::{
     TableKind,
 };
 use sail_catalog_unity::unity::{types, Client};
-use sail_catalog_unity::{UnityCatalogProvider, UNITY_CATALOG_PROP_URI};
+use sail_catalog_unity::UnityCatalogProvider;
 use sail_common::runtime::RuntimeHandle;
 use sail_common::spec::{
     SAIL_LIST_FIELD_NAME, SAIL_MAP_FIELD_NAME, SAIL_MAP_KEY_FIELD_NAME, SAIL_MAP_VALUE_FIELD_NAME,
@@ -90,16 +90,19 @@ async fn setup_catalog() -> (
 
     let catalog = RuntimeAwareCatalogProvider::try_new(
         || {
-            let props = HashMap::from([(UNITY_CATALOG_PROP_URI.to_string(), rest_url.clone())]);
-            let provider =
-                UnityCatalogProvider::new("sail".to_string(), DEFAULT_CATALOG.to_string(), props);
+            let provider = UnityCatalogProvider::new(
+                "sail".to_string(),
+                &Some(DEFAULT_CATALOG.to_string()),
+                &Some(rest_url.clone()),
+                None,
+            );
             Ok(provider)
         },
         runtime.io().clone(),
     )
     .expect("Failed to create runtime-aware catalog");
 
-    let client = Client::new(&rest_url);
+    let client = Client::new(&rest_url).unwrap();
     for attempt in 1..=5 {
         match client
             .create_catalog()
