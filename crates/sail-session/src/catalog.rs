@@ -81,15 +81,7 @@ pub fn create_catalog_manager(
                     token,
                 } => {
                     let runtime_aware = RuntimeAwareCatalogProvider::try_new(
-                        || {
-                            let provider = UnityCatalogProvider::new(
-                                name.to_string(),
-                                default_catalog,
-                                uri,
-                                token.clone(), // CHECK HERE
-                            );
-                            Ok(provider)
-                        },
+                        || UnityCatalogProvider::new(name.to_string(), default_catalog, uri, token),
                         runtime.io().clone(),
                     )?;
 

@@ -19,10 +19,13 @@ serde_yaml = { workspace = true }
 tokio = { workspace = true }
 progenitor-client = { workspace = true }
 secrecy = { workspace = true }
+chrono = { workspace = true }
 
 [dev-dependencies]
 tokio = { workspace = true }
 testcontainers = { workspace = true }
+wiremock = { workspace = true }
+tempfile = { workspace = true }
 
 [build-dependencies]
 progenitor = { workspace = true }

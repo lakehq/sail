@@ -90,13 +90,12 @@ async fn setup_catalog() -> (
 
     let catalog = RuntimeAwareCatalogProvider::try_new(
         || {
-            let provider = UnityCatalogProvider::new(
+            UnityCatalogProvider::new(
                 "sail".to_string(),
                 &Some(DEFAULT_CATALOG.to_string()),
                 &Some(rest_url.clone()),
-                None,
-            );
-            Ok(provider)
+                &None,
+            )
         },
         runtime.io().clone(),
     )

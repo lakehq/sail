@@ -2,6 +2,7 @@ use std::collections::HashMap;
 use std::str::FromStr;
 
 use arrow::datatypes::DataType;
+use reqwest::header::HeaderValue;
 use sail_catalog::error::{CatalogError, CatalogResult};
 use sail_catalog::provider::{
     CatalogProvider, CreateDatabaseOptions, CreateTableOptions, CreateViewOptions, DatabaseStatus,
@@ -12,19 +13,12 @@ use sail_catalog::utils::{get_property, quote_name_if_needed};
 use secrecy::SecretString;
 use tokio::sync::OnceCell;
 
+use crate::config::UnityCatalogConfig;
+use crate::credential::CredentialProvider;
 use crate::data_type::{data_type_to_unity_type, unity_type_to_data_type};
 use crate::unity::{types, Client};
 
-const DEFAULT_URI: &str = "http://localhost:8080/api/2.1/unity-catalog";
-
-// CHECK HERE
-#[allow(dead_code)]
-#[derive(Clone, Debug)]
-pub struct UnityCatalogConfig {
-    default_catalog: String,
-    uri: String,
-    token: Option<SecretString>,
-}
+pub(crate) const DEFAULT_URI: &str = "http://localhost:8080/api/2.1/unity-catalog";
 
 /// Provider for Unity Catalog
 pub struct UnityCatalogProvider {
@@ -38,31 +32,72 @@ impl UnityCatalogProvider {
         name: String,
         default_catalog: &Option<String>,
         uri: &Option<String>,
-        token: Option<SecretString>,
-    ) -> Self {
-        let default_catalog = default_catalog.as_deref().unwrap_or("unity").to_string();
-        let uri = uri.as_deref().unwrap_or(DEFAULT_URI).to_string();
-        let catalog_config = UnityCatalogConfig {
-            default_catalog: quote_name_if_needed(&default_catalog),
-            uri,
-            token,
-        };
+        token: &Option<SecretString>,
+    ) -> CatalogResult<Self> {
+        Self::with_options(name, default_catalog.clone(), uri.clone(), token, None)
+    }
 
-        Self {
+    pub fn with_options(
+        name: String,
+        default_catalog: Option<String>,
+        uri: Option<String>,
+        token: &Option<SecretString>,
+        options: Option<HashMap<String, String>>,
+    ) -> CatalogResult<Self> {
+        let catalog_config = UnityCatalogConfig::new(default_catalog, uri, token, options)?;
+        Ok(Self {
             name,
             catalog_config,
             client: OnceCell::new(),
-        }
+        })
     }
 
     async fn get_client(&self) -> CatalogResult<&Client> {
+        let config = &self.catalog_config;
         let client = self
             .client
-            .get_or_try_init(|| async { Client::new(&self.catalog_config.uri) })
-            .await
-            .map_err(|e| {
-                CatalogError::External(format!("Failed to create Unity Catalog client: {e}"))
-            })?;
+            .get_or_try_init(|| async move {
+                let mut client_builder = reqwest::Client::builder();
+
+                if let Some(credential_provider) = &config.credential_provider {
+                    let header = match credential_provider {
+                        CredentialProvider::BearerToken(token) => {
+                            HeaderValue::from_str(&format!("Bearer {token}")).map_err(|e| {
+                                CatalogError::External(format!(
+                                    "Failed to create header value from token: {e}"
+                                ))
+                            })
+                        }
+                        CredentialProvider::TokenCredential(cache, cred) => {
+                            let oauth_client = reqwest::Client::builder().build().map_err(|e| {
+                                CatalogError::External(format!("Failed to build OAuth client: {e}"))
+                            })?;
+                            let token = cache
+                                .get_or_insert_with(|| cred.fetch_token(&oauth_client))
+                                .await?;
+                            HeaderValue::from_str(&format!("Bearer {token}")).map_err(|e| {
+                                CatalogError::External(format!(
+                                    "Failed to create header value from token: {e}"
+                                ))
+                            })
+                        }
+                    }?;
+                    let mut headers = reqwest::header::HeaderMap::new();
+                    headers.insert(reqwest::header::AUTHORIZATION, header);
+                    client_builder = client_builder.default_headers(headers);
+                }
+
+                if config.allow_http_url {
+                    client_builder = client_builder.https_only(false);
+                }
+
+                let reqwest_client = client_builder.build().map_err(|e| {
+                    CatalogError::External(format!("Failed to build HTTP client: {e}"))
+                })?;
+
+                Ok(Client::new_with_client(&config.uri, reqwest_client))
+            })
+            .await?;
         Ok(client)
     }
 
@@ -620,7 +655,7 @@ impl CatalogProvider for UnityCatalogProvider {
             .map_err(|e| CatalogError::External(format!("Failed to load config: {e}")))?;
 
         let (catalog_name, schema_name) = self.get_catalog_and_schema_name(database);
-        let full_name = format!("{}.{}.{}", catalog_name, schema_name, table);
+        let full_name = format!("{catalog_name}.{schema_name}.{table}");
 
         let result = client.get_table().full_name(&full_name).send().await;
 
@@ -741,5 +776,132 @@ impl CatalogProvider for UnityCatalogProvider {
         Err(CatalogError::NotSupported(
             "Open source Unity Catalog does not support dropping views".to_string(),
         ))
+    }
+}
+
+#[allow(clippy::unwrap_used)]
+#[cfg(test)]
+mod tests {
+    use secrecy::ExposeSecret;
+
+    use super::*;
+
+    #[test]
+    fn test_config_with_token() {
+        let mut options = HashMap::new();
+        options.insert("databricks_token".to_string(), "test_token".to_string());
+        options.insert(
+            "databricks_host".to_string(),
+            "https://test.databricks.com".to_string(),
+        );
+
+        let config = UnityCatalogConfig::new(None, None, &None, Some(options)).unwrap();
+        assert!(config.bearer_token.is_some());
+        assert_eq!(config.bearer_token.unwrap().expose_secret(), "test_token");
+        assert_eq!(config.uri, "https://test.databricks.com");
+    }
+
+    #[test]
+    fn test_config_with_client_credentials() {
+        let mut options = HashMap::new();
+        options.insert(
+            "databricks_host".to_string(),
+            "https://test.databricks.com".to_string(),
+        );
+        options.insert(
+            "databricks_client_id".to_string(),
+            "test_client_id".to_string(),
+        );
+        options.insert(
+            "databricks_client_secret".to_string(),
+            "test_secret".to_string(),
+        );
+        options.insert(
+            "databricks_authority_id".to_string(),
+            "test_tenant".to_string(),
+        );
+
+        let config = UnityCatalogConfig::new(None, None, &None, Some(options)).unwrap();
+        assert_eq!(config.uri, "https://test.databricks.com");
+        assert_eq!(config.client_id, Some("test_client_id".to_string()));
+        assert!(config.client_secret.is_some());
+        assert_eq!(config.authority_id, Some("test_tenant".to_string()));
+    }
+
+    #[test]
+    fn test_config_boolean_options() {
+        let test_cases = vec![
+            ("true", true),
+            ("false", false),
+            ("1", true),
+            ("0", false),
+            ("yes", true),
+            ("no", false),
+        ];
+
+        for (value, expected) in test_cases {
+            let mut options = HashMap::new();
+            options.insert("unity_allow_http_url".to_string(), value.to_string());
+            options.insert("unity_use_azure_cli".to_string(), value.to_string());
+
+            let config = UnityCatalogConfig::new(None, None, &None, Some(options)).unwrap();
+            assert_eq!(config.allow_http_url, expected, "Failed for value: {value}");
+            assert_eq!(config.use_azure_cli, expected, "Failed for value: {value}");
+        }
+    }
+
+    #[test]
+    fn test_config_key_variations() {
+        let test_cases = vec![
+            ("databricks_host", "uri"),
+            ("unity_workspace_url", "uri"),
+            ("databricks_workspace_url", "uri"),
+            ("databricks_token", "token"),
+            ("token", "token"),
+            ("unity_client_id", "client_id"),
+            ("databricks_client_id", "client_id"),
+            ("client_id", "client_id"),
+        ];
+
+        for (key, field) in test_cases {
+            let mut options = HashMap::new();
+            let test_value = format!("test_value_for_{key}");
+            options.insert(key.to_string(), test_value.clone());
+
+            let result = UnityCatalogConfig::new(None, None, &None, Some(options));
+            assert!(result.is_ok(), "Failed to parse key: {key}");
+
+            let config = result.unwrap();
+            match field {
+                "uri" => assert_eq!(config.uri, test_value),
+                "token" => assert_eq!(config.bearer_token.unwrap().expose_secret(), &test_value),
+                "client_id" => assert_eq!(config.client_id, Some(test_value)),
+                _ => {}
+            }
+        }
+    }
+
+    #[test]
+    fn test_provider_with_options() {
+        let mut options = HashMap::new();
+        options.insert("databricks_token".to_string(), "test_token".to_string());
+        options.insert(
+            "databricks_host".to_string(),
+            "https://test.databricks.com".to_string(),
+        );
+
+        let provider = UnityCatalogProvider::with_options(
+            "test".to_string(),
+            Some("test_catalog".to_string()),
+            None,
+            &None,
+            Some(options),
+        )
+        .unwrap();
+
+        assert_eq!(provider.name, "test");
+        assert_eq!(provider.catalog_config.default_catalog, "test_catalog");
+        assert_eq!(provider.catalog_config.uri, "https://test.databricks.com");
+        assert!(provider.catalog_config.bearer_token.is_some());
     }
 }

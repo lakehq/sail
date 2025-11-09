@@ -5982,6 +5982,7 @@ version = "0.4.1"
 dependencies = [
  "arrow",
  "async-trait",
+ "chrono",
  "prettyplease",
  "progenitor",
  "progenitor-client",
@@ -5993,8 +5994,10 @@ dependencies = [
  "serde_json",
  "serde_yaml",
  "syn 2.0.108",
+ "tempfile",
  "testcontainers",
  "tokio",
+ "wiremock",
 ]
 
 [[package]]
