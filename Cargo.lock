@@ -6070,7 +6070,6 @@ name = "sail-iceberg"
 version = "0.4.1"
 dependencies = [
  "apache-avro",
- "arrow-schema",
  "async-trait",
  "bytes",
  "chrono",
@@ -6079,12 +6078,10 @@ dependencies = [
  "futures",
  "log",
  "murmur3",
- "num-bigint",
  "object_store",
  "once_cell",
  "ordered-float 5.1.0",
  "parquet",
- "percent-encoding",
  "rust_decimal",
  "sail-common-datafusion",
  "serde",
