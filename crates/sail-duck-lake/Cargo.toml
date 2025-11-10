@@ -7,6 +7,7 @@ edition = { workspace = true }
 sail-common-datafusion = { path = "../sail-common-datafusion" }
 
 serde = { workspace = true, features = ["derive"] }
+serde_json = { workspace = true }
 uuid = { workspace = true }
 chrono = { workspace = true, features = ["serde"] }
 async-trait = { workspace = true }
@@ -16,9 +17,8 @@ datafusion-datasource = { workspace = true }
 object_store = { workspace = true }
 url = { workspace = true }
 log = { workspace = true }
-diesel = { workspace = true }
-r2d2 = { workspace = true }
 tokio = { workspace = true }
+pyo3 = { workspace = true }
 
 [lints]
 workspace = true

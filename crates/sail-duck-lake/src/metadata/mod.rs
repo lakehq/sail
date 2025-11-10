@@ -1,8 +1,8 @@
-mod diesel_impl;
+mod py_impl;
 
 use async_trait::async_trait;
 use datafusion::common::Result as DataFusionResult;
-pub use diesel_impl::DieselMetaStore;
+pub use py_impl::PythonMetaStore;
 
 use crate::spec::{ColumnInfo, FileInfo, SchemaInfo, SnapshotInfo, TableInfo};
 
