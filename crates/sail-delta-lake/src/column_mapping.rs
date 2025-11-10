@@ -259,16 +259,13 @@ pub fn enrich_arrow_with_parquet_field_ids(
         map: &HashMap<Vec<String>, (Option<i64>, String)>,
         rename_current: bool,
     ) -> ArrowField {
-        // Apply id for this field path if present
         let mut meta = af.metadata().clone();
         let mut new_name = af.name().clone();
         if let Some((maybe_id, logical_name)) = map.get(path) {
+            if let Some(fid) = maybe_id {
+                meta.insert("PARQUET:field_id".to_string(), fid.to_string());
+            }
             if rename_current {
-                if let Some(fid) = maybe_id {
-                    meta.insert("PARQUET:field_id".to_string(), fid.to_string());
-                }
-                // Rename physical names to logical names so downstream expressions (e.g., GetField)
-                // can reference nested fields by logical name.
                 new_name = logical_name.clone();
             }
         }
@@ -354,7 +351,7 @@ pub fn enrich_arrow_with_parquet_field_ids(
         .iter()
         .map(|af| {
             let mut path = vec![af.name().clone()];
-            enrich_field(af, &mut path, &path_to_info, true)
+            enrich_field(af, &mut path, &path_to_info, false)
         })
         .collect();
 

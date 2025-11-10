@@ -154,36 +154,23 @@ pub fn build_file_scan_config(
     let object_store_url =
         create_object_store_url(&log_store.config().location).map_err(delta_to_datafusion_error)?;
 
-    // Use logical schema (excluding partition columns) for file_schema to enable name-based matching;
-    // partition columns are supplied separately below.
-    let logical_file_fields: Vec<_> = complete_schema
-        .fields()
-        .iter()
-        .filter(|f| !table_partition_cols.contains(f.name()))
-        .cloned()
-        .collect();
-    let logical_file_schema = Arc::new(datafusion::arrow::datatypes::Schema::new(
-        logical_file_fields,
-    ));
-
-    let file_scan_config =
-        FileScanConfigBuilder::new(object_store_url, logical_file_schema, file_source)
-            .with_file_groups(
-                // If all files were filtered out, we still need to emit at least one partition
-                // to pass datafusion sanity checks.
-                // See https://github.com/apache/datafusion/issues/11322
-                if file_groups.is_empty() {
-                    vec![FileGroup::from(vec![])]
-                } else {
-                    file_groups.into_values().map(FileGroup::from).collect()
-                },
-            )
-            .with_statistics(stats)
-            .with_projection(params.projection.cloned())
-            .with_limit(params.limit)
-            .with_table_partition_cols(table_partition_cols_schema)
-            .with_expr_adapter(Some(Arc::new(DeltaPhysicalExprAdapterFactory {})))
-            .build();
+    let file_scan_config = FileScanConfigBuilder::new(object_store_url, file_schema, file_source)
+        .with_file_groups(
+            // If all files were filtered out, we still need to emit at least one partition
+            // to pass datafusion sanity checks.
+            // See https://github.com/apache/datafusion/issues/11322
+            if file_groups.is_empty() {
+                vec![FileGroup::from(vec![])]
+            } else {
+                file_groups.into_values().map(FileGroup::from).collect()
+            },
+        )
+        .with_statistics(stats)
+        .with_projection(params.projection.cloned())
+        .with_limit(params.limit)
+        .with_table_partition_cols(table_partition_cols_schema)
+        .with_expr_adapter(Some(Arc::new(DeltaPhysicalExprAdapterFactory {})))
+        .build();
 
     Ok(file_scan_config)
 }
