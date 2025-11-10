@@ -46,6 +46,49 @@ pub enum PrimitiveLiteral {
     Binary(Vec<u8>),
 }
 
+impl PartialOrd for PrimitiveLiteral {
+    fn partial_cmp(&self, other: &Self) -> Option<std::cmp::Ordering> {
+        Some(self.cmp(other))
+    }
+}
+
+impl Ord for PrimitiveLiteral {
+    fn cmp(&self, other: &Self) -> std::cmp::Ordering {
+        use std::cmp::Ordering;
+
+        use PrimitiveLiteral::*;
+
+        match (self, other) {
+            (Boolean(a), Boolean(b)) => a.cmp(b),
+            (Int(a), Int(b)) => a.cmp(b),
+            (Long(a), Long(b)) => a.cmp(b),
+            (Float(a), Float(b)) => a.cmp(b),
+            (Double(a), Double(b)) => a.cmp(b),
+            (Int128(a), Int128(b)) => a.cmp(b),
+            (UInt128(a), UInt128(b)) => a.cmp(b),
+            (String(a), String(b)) => a.cmp(b),
+            (Binary(a), Binary(b)) => a.cmp(b),
+            // For different types, use a consistent ordering based on variant index
+            (Boolean(_), _) => Ordering::Less,
+            (_, Boolean(_)) => Ordering::Greater,
+            (Int(_), _) => Ordering::Less,
+            (_, Int(_)) => Ordering::Greater,
+            (Long(_), _) => Ordering::Less,
+            (_, Long(_)) => Ordering::Greater,
+            (Float(_), _) => Ordering::Less,
+            (_, Float(_)) => Ordering::Greater,
+            (Double(_), _) => Ordering::Less,
+            (_, Double(_)) => Ordering::Greater,
+            (Int128(_), _) => Ordering::Less,
+            (_, Int128(_)) => Ordering::Greater,
+            (String(_), _) => Ordering::Less,
+            (_, String(_)) => Ordering::Greater,
+            (UInt128(_), Binary(_)) => Ordering::Less,
+            (Binary(_), UInt128(_)) => Ordering::Greater,
+        }
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[serde(rename_all = "kebab-case")]
 /// Typed single-value used for lower/upper bounds
@@ -546,5 +589,96 @@ impl<'de> Deserialize<'de> for RawLiteral {
             }
         }
         deserializer.deserialize_map(RLVisitor)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_primitive_literal_ordering_same_type() {
+        // Test Int ordering
+        let a = PrimitiveLiteral::Int(10);
+        let b = PrimitiveLiteral::Int(20);
+        assert!(a < b);
+        assert!(b > a);
+        assert_eq!(a, a);
+
+        // Test Long ordering
+        let a = PrimitiveLiteral::Long(100);
+        let b = PrimitiveLiteral::Long(200);
+        assert!(a < b);
+
+        // Test String ordering
+        let a = PrimitiveLiteral::String("apple".to_string());
+        let b = PrimitiveLiteral::String("banana".to_string());
+        assert!(a < b);
+
+        // Test Boolean ordering
+        let a = PrimitiveLiteral::Boolean(false);
+        let b = PrimitiveLiteral::Boolean(true);
+        assert!(a < b);
+
+        // Test Float ordering
+        let a = PrimitiveLiteral::Float(OrderedFloat(1.5));
+        let b = PrimitiveLiteral::Float(OrderedFloat(2.5));
+        assert!(a < b);
+
+        // Test Double ordering
+        let a = PrimitiveLiteral::Double(OrderedFloat(1.5));
+        let b = PrimitiveLiteral::Double(OrderedFloat(2.5));
+        assert!(a < b);
+    }
+
+    #[test]
+    fn test_primitive_literal_ordering_different_types() {
+        // Different types should have consistent ordering based on variant index
+        let int_val = PrimitiveLiteral::Int(42);
+        let long_val = PrimitiveLiteral::Long(42);
+        let string_val = PrimitiveLiteral::String("42".to_string());
+
+        // The ordering should be consistent (based on discriminant/variant order)
+        // Boolean < Int < Long < Float < Double < Int128 < String < UInt128 < Binary
+        assert!(int_val < long_val);
+        assert!(long_val < string_val);
+        assert!(int_val < string_val);
+    }
+
+    #[test]
+    fn test_primitive_literal_equality() {
+        let a = PrimitiveLiteral::Int(42);
+        let b = PrimitiveLiteral::Int(42);
+        let c = PrimitiveLiteral::Int(43);
+
+        assert_eq!(a, b);
+        assert_ne!(a, c);
+        assert!(a >= b);
+        assert!(a <= b);
+    }
+
+    #[test]
+    fn test_primitive_literal_can_use_comparison_operators() {
+        // This test verifies that we can use standard comparison operators
+        // instead of custom lt_prim, gt_prim, eq_prim functions
+        let a = PrimitiveLiteral::Int(10);
+        let b = PrimitiveLiteral::Int(20);
+
+        assert!(a < b);
+        assert!(b > a);
+        assert!(a <= b);
+        assert!(b >= a);
+        assert!(a == a);
+        assert!(a != b);
+    }
+
+    #[test]
+    fn test_primitive_literal_ordering_with_binary() {
+        let a = PrimitiveLiteral::Binary(vec![1, 2, 3]);
+        let b = PrimitiveLiteral::Binary(vec![1, 2, 4]);
+        assert!(a < b);
+
+        let c = PrimitiveLiteral::Binary(vec![1, 2, 3]);
+        assert_eq!(a, c);
     }
 }

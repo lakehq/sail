@@ -1,6 +1,6 @@
 [project]
 name = "pysail"
-version = "0.4.0"
+version = "0.4.1"
 description = "Sail Python library"
 authors = [
     { name = "LakeSail", email = "hello@lakesail.com" },
@@ -35,6 +35,8 @@ test = [
     "pyspark-client>=4.0,<5",
     "duckdb>=1.0,<2",
     "pytest>=8.4,<9",
+    "pytest-bdd>=8.1,<9",
+    "jinja2>=3.1,<4",
     "pillow>=10.3.0",
     "pyiceberg[sql-sqlite,pyiceberg-core]==0.10.0",
     "pydantic>=2.11,<2.12",
@@ -72,8 +74,10 @@ installer = "pip"
 skip-install = true
 dependencies = [
     "pyspark[connect]==4.0.0",
-    "ibis-framework>=9.5,<10",
+    "ibis-framework>=11,<12",
     "pytest>=8.4,<9",
+    "pytest-bdd>=8.1,<9",
+    "jinja2>=3.1,<4",
     "duckdb>=1.1,<2",
     "mcp>=1.0,<2",
     "boto3>=1.38,<2",
@@ -117,6 +121,8 @@ installer = "pip"
 skip-install = true
 dependencies = [
     "pytest>=8.4,<9",
+    "pytest-bdd>=8.1,<9",
+    "jinja2>=3.1,<4",
     "duckdb>=1.1,<2",
     "pillow>=10.3.0",
     "pyiceberg[sql-sqlite,pyiceberg-core]==0.10.0",
@@ -148,8 +154,6 @@ dependencies = [
     "pytest-xdist>=3.7,<4",
     "pytest-timeout>=2.4,<3",
     "pytest-reportlog>=0.4,<0.5",
-    "pyiceberg[sql-sqlite,pyiceberg-core]==0.10.0",
-    "pydantic>=2.11,<2.12",
     "SQLAlchemy>=2,<3",
 ]
 
@@ -172,22 +176,23 @@ installer = "pip"
 skip-install = true
 dependencies = [
     "pyspark[connect]==3.5.5",
-    "ibis-framework[pyspark]>=9.5,<10",
+    "ibis-framework[pyspark]>=11,<12",
     # The test dependencies are borrowed from `pyproject.toml` of the Ibis project.
     # They need to be updated accordingly when we update the Ibis version.
     "cloudpickle",
     "filelock>=3.7.0,<4",
-    "fsspec<2024.9.1",
+    "fsspec[s3]",
     "hypothesis>=6.58.0,<7",
-    "packaging>=21.3,<25",
-    "pytest>=8.2.0,<9",
-    "pytest-benchmark>=3.4.1,<5",
+    "packaging>=21.3",
+    # without this constraint, pyspark starts to fail some memtable cleanup tests
+    # with pytest 8.4.0
+    "pytest>=8.2.0,<8.4.0",
+    "pytest-benchmark>=3.4.1,<6",
     "pytest-deadfixtures>=2.2.1,<3",
     "pytest-clarity>=1.0.1,<2",
-    "pytest-cov>=3.0.0,<6",
-    "pytest-httpserver>=1.0.5,<2",
+    "pytest-cov>=5,<8",
     "pytest-mock>=3.6.1,<4",
-    "pytest-randomly>=3.10.1,<4",
+    "pytest-randomly>=3.10.1,<5",
     "pytest-repeat>=0.9.1,<0.10",
     "pytest-snapshot>=0.9.0,<1",
     "pytest-timeout>=2.3.1,<3",
