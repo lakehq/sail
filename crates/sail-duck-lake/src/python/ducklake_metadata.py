@@ -1,16 +1,16 @@
 from __future__ import annotations
 
-from typing import Any, Dict, List, Optional
+from typing import Any
 
 from sqlalchemy import create_engine, text
 
-_ENGINES: Dict[str, Any] = {}
+_ENGINES: dict[str, Any] = {}
 
 
 def _normalize_sqlalchemy_url(url: str) -> str:
     # Support legacy "sqlite://<path>" by converting to SQLAlchemy format.
     if url.startswith("sqlite://"):
-        if url.startswith("sqlite:////") or url.startswith("sqlite:///"):
+        if url.startswith(("sqlite:////", "sqlite:///")):
             return url
         rest = url[len("sqlite://") :]
         if not rest:
@@ -32,7 +32,7 @@ def _get_engine(url: str):
     return eng
 
 
-def current_snapshot(url: str) -> Dict[str, Any]:
+def current_snapshot(url: str) -> dict[str, Any]:
     with _get_engine(url).connect() as conn:
         row = conn.execute(
             text(
@@ -45,7 +45,8 @@ def current_snapshot(url: str) -> Dict[str, Any]:
             )
         ).first()
         if row is None:
-            raise ValueError("No snapshots found in metadata")
+            msg = "No snapshots found in metadata"
+            raise ValueError(msg)
         return {
             "snapshot_id": int(row[0]),
             "snapshot_time": str(row[1]),
@@ -59,7 +60,7 @@ def current_snapshot(url: str) -> Dict[str, Any]:
         }
 
 
-def snapshot_by_id(url: str, snapshot_id: int) -> Dict[str, Any]:
+def snapshot_by_id(url: str, snapshot_id: int) -> dict[str, Any]:
     with _get_engine(url).connect() as conn:
         row = conn.execute(
             text(
@@ -72,7 +73,8 @@ def snapshot_by_id(url: str, snapshot_id: int) -> Dict[str, Any]:
             {"sid": int(snapshot_id)},
         ).first()
         if row is None:
-            raise ValueError(f"Snapshot not found: {snapshot_id}")
+            msg = f"Snapshot not found: {snapshot_id}"
+            raise ValueError(msg)
         return {
             "snapshot_id": int(row[0]),
             "snapshot_time": str(row[1]),
@@ -86,7 +88,7 @@ def snapshot_by_id(url: str, snapshot_id: int) -> Dict[str, Any]:
         }
 
 
-def load_table(url: str, table_name: str, schema_name: Optional[str]) -> Dict[str, Any]:
+def load_table(url: str, table_name: str, schema_name: str | None) -> dict[str, Any]:
     schema_name = schema_name or "main"
     with _get_engine(url).connect() as conn:
         srow = conn.execute(
@@ -101,7 +103,8 @@ def load_table(url: str, table_name: str, schema_name: Optional[str]) -> Dict[st
             {"sname": schema_name},
         ).first()
         if srow is None:
-            raise ValueError(f"Schema not found: {schema_name}")
+            msg = f"Schema not found: {schema_name}"
+            raise ValueError(msg)
         schema_id = int(srow[0])
         schema_info = {
             "schema_id": schema_id,
@@ -125,7 +128,8 @@ def load_table(url: str, table_name: str, schema_name: Optional[str]) -> Dict[st
             {"tname": table_name, "sid": schema_id},
         ).first()
         if trow is None:
-            raise ValueError(f"Table not found: {schema_name}.{table_name}")
+            msg = f"Table not found: {schema_name}.{table_name}"
+            raise ValueError(msg)
         table_id = int(trow[0])
         table_info = {
             "table_id": table_id,
@@ -152,30 +156,27 @@ def load_table(url: str, table_name: str, schema_name: Optional[str]) -> Dict[st
             ),
             {"tid": table_id},
         ).all()
-        columns: List[Dict[str, Any]] = []
-        for row in cols:
-            columns.append(
-                {
-                    "column_id": int(row[0]),
-                    "begin_snapshot": int(row[1]) if row[1] is not None else None,
-                    "end_snapshot": int(row[2]) if row[2] is not None else None,
-                    "table_id": int(row[3]),
-                    "column_order": int(row[4]),
-                    "column_name": str(row[5]),
-                    "column_type": str(row[6]),
-                    "initial_default": str(row[7]) if row[7] is not None else None,
-                    "default_value": str(row[8]) if row[8] is not None else None,
-                    "nulls_allowed": bool(row[9]),
-                    "parent_column": int(row[10]) if row[10] is not None else None,
-                }
-            )
+        columns: list[dict[str, Any]] = [
+            {
+                "column_id": int(row[0]),
+                "begin_snapshot": int(row[1]) if row[1] is not None else None,
+                "end_snapshot": int(row[2]) if row[2] is not None else None,
+                "table_id": int(row[3]),
+                "column_order": int(row[4]),
+                "column_name": str(row[5]),
+                "column_type": str(row[6]),
+                "initial_default": str(row[7]) if row[7] is not None else None,
+                "default_value": str(row[8]) if row[8] is not None else None,
+                "nulls_allowed": bool(row[9]),
+                "parent_column": int(row[10]) if row[10] is not None else None,
+            }
+            for row in cols
+        ]
 
         return {"schema_info": schema_info, "table_info": table_info, "columns": columns}
 
 
-def list_data_files(
-    url: str, table_id: int, snapshot_id: Optional[int]
-) -> List[Dict[str, Any]]:
+def list_data_files(url: str, table_id: int, snapshot_id: int | None) -> list[dict[str, Any]]:
     sql_active = text(
         """
         select data_file_id, table_id, begin_snapshot, end_snapshot, file_order,
@@ -202,33 +203,28 @@ def list_data_files(
         if snapshot_id is None:
             rows = conn.execute(sql_active, {"tid": int(table_id)}).all()
         else:
-            rows = conn.execute(
-                sql_asof, {"tid": int(table_id), "sid": int(snapshot_id)}
-            ).all()
-        out: List[Dict[str, Any]] = []
-        for row in rows:
-            out.append(
-                {
-                    "data_file_id": int(row[0]),
-                    "table_id": int(row[1]),
-                    "begin_snapshot": int(row[2]) if row[2] is not None else None,
-                    "end_snapshot": int(row[3]) if row[3] is not None else None,
-                    "file_order": int(row[4]) if row[4] is not None else 0,
-                    "path": str(row[5]),
-                    "path_is_relative": bool(row[6]),
-                    "file_format": str(row[7]) if row[7] is not None else None,
-                    "record_count": int(row[8]),
-                    "file_size_bytes": int(row[9]),
-                    "footer_size": int(row[10]) if row[10] is not None else None,
-                    "row_id_start": int(row[11]) if row[11] is not None else None,
-                    "partition_id": int(row[12]) if row[12] is not None else None,
-                    "encryption_key": str(row[13]) if row[13] is not None else "",
-                    "partial_file_info": str(row[14]) if row[14] is not None else None,
-                    "mapping_id": int(row[15]) if row[15] is not None else 0,
-                    "column_stats": [],
-                    "partition_values": [],
-                }
-            )
+            rows = conn.execute(sql_asof, {"tid": int(table_id), "sid": int(snapshot_id)}).all()
+        out: list[dict[str, Any]] = [
+            {
+                "data_file_id": int(row[0]),
+                "table_id": int(row[1]),
+                "begin_snapshot": int(row[2]) if row[2] is not None else None,
+                "end_snapshot": int(row[3]) if row[3] is not None else None,
+                "file_order": int(row[4]) if row[4] is not None else 0,
+                "path": str(row[5]),
+                "path_is_relative": bool(row[6]),
+                "file_format": str(row[7]) if row[7] is not None else None,
+                "record_count": int(row[8]),
+                "file_size_bytes": int(row[9]),
+                "footer_size": int(row[10]) if row[10] is not None else None,
+                "row_id_start": int(row[11]) if row[11] is not None else None,
+                "partition_id": int(row[12]) if row[12] is not None else None,
+                "encryption_key": str(row[13]) if row[13] is not None else "",
+                "partial_file_info": str(row[14]) if row[14] is not None else None,
+                "mapping_id": int(row[15]) if row[15] is not None else 0,
+                "column_stats": [],
+                "partition_values": [],
+            }
+            for row in rows
+        ]
         return out
-
-
