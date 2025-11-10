@@ -1,7 +1,11 @@
+use std::collections::HashMap;
 use std::sync::atomic::{AtomicI64, Ordering};
+use std::sync::Arc;
 
 use datafusion::arrow::datatypes::{Field as ArrowField, Schema as ArrowSchema};
-use delta_kernel::schema::{ArrayType, DataType, MapType, MetadataValue, StructField, StructType};
+use delta_kernel::schema::{
+    ArrayType, ColumnMetadataKey, DataType, MapType, MetadataValue, StructField, StructType,
+};
 
 /// Annotate a logical kernel schema with column mapping metadata (id + physicalName)
 /// using a sequential id assignment. Intended only for new table creation (name mode).
@@ -209,10 +213,6 @@ pub fn enrich_arrow_with_parquet_field_ids(
     physical_arrow: &ArrowSchema,
     logical_kernel: &StructType,
 ) -> ArrowSchema {
-    use std::collections::HashMap;
-
-    use delta_kernel::schema::ColumnMetadataKey;
-
     // Build recursive mapping: physical path -> (Option<id>, logical_name)
     fn build_path_map(
         st: &StructType,
@@ -349,7 +349,6 @@ pub fn enrich_arrow_with_parquet_field_ids(
         ArrowField::new(&new_name, new_dt, af.is_nullable()).with_metadata(meta)
     }
 
-    use std::sync::Arc;
     let new_fields: Vec<ArrowField> = physical_arrow
         .fields()
         .iter()

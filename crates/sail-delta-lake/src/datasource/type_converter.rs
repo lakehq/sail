@@ -1,3 +1,4 @@
+use std::collections::HashMap;
 use std::sync::Arc;
 
 use datafusion::arrow::compute::can_cast_types;
@@ -61,8 +62,6 @@ impl DeltaTypeConverter {
         let merged_type = match (table_type, input_type) {
             // Struct type promotion: merge fields by name, preserve existing order and append new fields
             (DataType::Struct(table_fields), DataType::Struct(input_fields)) => {
-                use std::collections::HashMap;
-
                 let mut by_name: HashMap<&str, Field> = HashMap::new();
                 let mut order: Vec<&str> = Vec::new();
                 for f in table_fields {
