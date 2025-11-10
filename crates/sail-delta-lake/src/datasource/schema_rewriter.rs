@@ -12,6 +12,8 @@ use datafusion::physical_expr_adapter::{PhysicalExprAdapter, PhysicalExprAdapter
 
 use crate::datasource::type_converter::DeltaTypeConverter;
 
+// TODO: Later rename this file to `expr_adapter.rs`.
+
 /// A Physical Expression Adapter Factory which provides casting and rewriting of physical expressions
 /// for Delta Lake conventions.
 #[derive(Debug)]

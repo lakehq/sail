@@ -10,7 +10,7 @@ use datafusion_common::format::DEFAULT_CAST_OPTIONS;
 use datafusion_common::nested_struct::{
     cast_column as cast_struct_column, validate_struct_compatibility,
 };
-use datafusion_common::Result as DFResult;
+use datafusion_common::Result;
 
 #[derive(Debug, Clone, Default)]
 pub struct DeltaSchemaAdapterFactory;
@@ -38,8 +38,8 @@ impl SchemaAdapter for DeltaSchemaAdapter {
         Some(file_schema.fields.find(field.name())?.0)
     }
 
-    fn map_schema(&self, file_schema: &Schema) -> DFResult<(Arc<dyn SchemaMapper>, Vec<usize>)> {
-        fn can_map_field(file_field: &Field, table_field: &Field) -> DFResult<bool> {
+    fn map_schema(&self, file_schema: &Schema) -> Result<(Arc<dyn SchemaMapper>, Vec<usize>)> {
+        fn can_map_field(file_field: &Field, table_field: &Field) -> Result<bool> {
             match (file_field.data_type(), table_field.data_type()) {
                 (DataType::Struct(src), DataType::Struct(tgt)) => {
                     validate_struct_compatibility(src, tgt)?;
@@ -95,7 +95,7 @@ impl SchemaAdapter for DeltaSchemaAdapter {
         }
 
         impl SchemaMapper for DeltaSchemaMapping {
-            fn map_batch(&self, batch: RecordBatch) -> DFResult<RecordBatch> {
+            fn map_batch(&self, batch: RecordBatch) -> Result<RecordBatch> {
                 let (_old_schema, batch_cols, batch_rows) = batch.into_parts();
 
                 let cols = self
@@ -120,7 +120,7 @@ impl SchemaAdapter for DeltaSchemaAdapter {
                             },
                         )
                     })
-                    .collect::<DFResult<Vec<_>>>()?;
+                    .collect::<Result<Vec<_>>>()?;
 
                 let options = RecordBatchOptions::new().with_row_count(Some(batch_rows));
                 let schema = Arc::clone(&self.projected_table_schema);
@@ -131,7 +131,7 @@ impl SchemaAdapter for DeltaSchemaAdapter {
             fn map_column_statistics(
                 &self,
                 file_col_statistics: &[datafusion_common::ColumnStatistics],
-            ) -> DFResult<Vec<datafusion_common::ColumnStatistics>> {
+            ) -> Result<Vec<datafusion_common::ColumnStatistics>> {
                 let mut out = vec![];
                 for (_field, idx) in self
                     .projected_table_schema
@@ -161,7 +161,7 @@ fn cast_nested_column(
     array: &ArrayRef,
     target_field: &Field,
     opts: &CastOptions,
-) -> DFResult<ArrayRef> {
+) -> Result<ArrayRef> {
     match target_field.data_type() {
         DataType::Struct(_) => cast_struct_column(array, target_field),
         DataType::List(elem_field) => cast_list(array, elem_field.as_ref(), opts),
@@ -177,7 +177,7 @@ fn cast_nested_column(
     }
 }
 
-fn cast_list(array: &ArrayRef, target_elem: &Field, _opts: &CastOptions) -> DFResult<ArrayRef> {
+fn cast_list(array: &ArrayRef, target_elem: &Field, _opts: &CastOptions) -> Result<ArrayRef> {
     let list = array.as_list::<i32>().clone();
     let (_list_field, offsets, values, nulls) = list.into_parts();
     let casted_values = match (values.data_type(), target_elem.data_type()) {
@@ -189,11 +189,7 @@ fn cast_list(array: &ArrayRef, target_elem: &Field, _opts: &CastOptions) -> DFRe
     Ok(Arc::new(new_list))
 }
 
-fn cast_large_list(
-    array: &ArrayRef,
-    target_elem: &Field,
-    _opts: &CastOptions,
-) -> DFResult<ArrayRef> {
+fn cast_large_list(array: &ArrayRef, target_elem: &Field, _opts: &CastOptions) -> Result<ArrayRef> {
     let list = array.as_list::<i64>().clone();
     let (_list_field, offsets, values, nulls) = list.into_parts();
     let casted_values = match (values.data_type(), target_elem.data_type()) {
@@ -205,7 +201,7 @@ fn cast_large_list(
     Ok(Arc::new(new_list))
 }
 
-fn cast_fixed_size_list(array: &ArrayRef, target_elem: &Field, len: i32) -> DFResult<ArrayRef> {
+fn cast_fixed_size_list(array: &ArrayRef, target_elem: &Field, len: i32) -> Result<ArrayRef> {
     Ok(datafusion::arrow::compute::cast(
         array,
         &DataType::FixedSizeList(Arc::new(target_elem.clone()), len),
@@ -217,7 +213,7 @@ fn cast_map(
     target_kv: &Field,
     ordered: bool,
     _opts: &CastOptions,
-) -> DFResult<ArrayRef> {
+) -> Result<ArrayRef> {
     let map = array.as_map().clone();
     let (_map_field, offsets, entries, nulls, _ord) = map.into_parts();
     let casted_entries = match (entries.data_type(), target_kv.data_type()) {
