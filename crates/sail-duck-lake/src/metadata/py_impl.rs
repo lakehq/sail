@@ -47,6 +47,7 @@ struct PyColumnInfo {
     column_id: u64,
     begin_snapshot: Option<u64>,
     end_snapshot: Option<u64>,
+    #[allow(dead_code)]
     table_id: u64,
     column_order: u64,
     column_name: String,
@@ -73,6 +74,7 @@ struct PySnapshotInfo {
 #[derive(Deserialize)]
 struct PyFileInfo {
     data_file_id: u64,
+    #[allow(dead_code)]
     table_id: u64,
     begin_snapshot: Option<u64>,
     end_snapshot: Option<u64>,

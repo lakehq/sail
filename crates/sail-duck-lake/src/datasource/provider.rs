@@ -1,4 +1,5 @@
 use std::any::Any;
+use std::collections::HashMap;
 use std::sync::Arc;
 
 use async_trait::async_trait;
@@ -13,7 +14,6 @@ use datafusion::execution::object_store::ObjectStoreUrl;
 use datafusion::logical_expr::{Expr, TableProviderFilterPushDown};
 use datafusion::physical_plan::ExecutionPlan;
 use datafusion_common::{DataFusionError, Result as DataFusionResult};
-use object_store::ObjectMeta;
 use url::Url;
 
 use crate::datasource::arrow::columns_to_arrow_schema;
@@ -134,9 +134,9 @@ impl TableProvider for DuckLakeTableProvider {
             .child(self.table.schema_info.schema_name.as_str())
             .child(self.table.table_info.table_name.as_str());
 
-        let mut partitioned_files = Vec::new();
+        let mut file_groups: HashMap<Option<u64>, Vec<PartitionedFile>> = HashMap::new();
+
         for file in files {
-            // Resolve to absolute object path relative to table prefix when relative
             let object_path = if file.path_is_relative {
                 let mut p = table_prefix.clone();
                 for comp in file.path.split('/') {
@@ -156,30 +156,27 @@ impl TableProvider for DuckLakeTableProvider {
                     .map_err(|e| DataFusionError::External(Box::new(e)))?
             };
 
-            let object_meta = ObjectMeta {
-                location: object_path,
-                last_modified: chrono::Utc::now(),
-                size: file.file_size_bytes,
-                e_tag: None,
-                version: None,
-            };
+            let partitioned_file = PartitionedFile::new(object_path.clone(), file.file_size_bytes);
 
-            partitioned_files.push(PartitionedFile::new(
-                object_meta.location.clone(),
-                file.file_size_bytes,
-            ));
+            let partition_key = file.partition_id.map(|p| p.0);
+            file_groups
+                .entry(partition_key)
+                .or_default()
+                .push(partitioned_file);
         }
 
-        log::trace!("Created {} partitioned files", partitioned_files.len());
+        log::trace!(
+            "Created {} file groups from {} files",
+            file_groups.len(),
+            file_groups.values().map(|v| v.len()).sum::<usize>()
+        );
 
-        if partitioned_files.is_empty() {
+        let file_groups = if file_groups.is_empty() {
             log::warn!("No data files found for table");
-        }
-
-        let file_groups = partitioned_files
-            .into_iter()
-            .map(|f| FileGroup::new(vec![f]))
-            .collect::<Vec<_>>();
+            vec![FileGroup::from(vec![])]
+        } else {
+            file_groups.into_values().map(FileGroup::from).collect()
+        };
 
         let parquet_options = TableParquetOptions {
             global: session.config().options().execution.parquet.clone(),
