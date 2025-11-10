@@ -323,7 +323,6 @@ impl WorkerActor {
             &session_ctx.runtime_env(),
             self.physical_plan_codec.as_ref(),
         )?;
-        // TODO: Unify the rewrite logic to reduce the loop count.
         let plan = self.rewrite_parquet_adapters(plan)?;
         let plan = self.rewrite_shuffle(ctx, plan)?;
         debug!(

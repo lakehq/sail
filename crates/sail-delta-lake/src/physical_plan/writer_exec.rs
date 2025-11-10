@@ -35,9 +35,7 @@ use crate::datasource::type_converter::DeltaTypeConverter;
 use crate::operations::write::writer::{DeltaWriter, WriterConfig};
 use crate::options::{ColumnMappingModeOption, TableDeltaOptions};
 use crate::physical_plan::CommitInfo;
-use crate::schema_manager::{
-    annotate_for_column_mapping, evolve_schema, get_physical_write_schema,
-};
+use crate::schema_manager::{annotate_for_column_mapping, evolve_schema, get_physical_schema};
 use crate::table::open_table_with_object_store;
 
 /// Schema handling mode for Delta Lake writes
@@ -450,7 +448,7 @@ impl ExecutionPlan for DeltaWriterExec {
                     ColumnMappingModeOption::Id => ColumnMappingMode::Id,
                     ColumnMappingModeOption::None => ColumnMappingMode::None,
                 };
-                let enriched_arrow = get_physical_write_schema(&logical_kernel, kernel_mode);
+                let enriched_arrow = get_physical_schema(&logical_kernel, kernel_mode);
                 let arc_schema = Arc::new(enriched_arrow);
                 let writer_field_names: Vec<String> = arc_schema
                     .fields()
@@ -480,6 +478,47 @@ impl ExecutionPlan for DeltaWriterExec {
             let writer_path = object_store::path::Path::from(table_url.path());
             let mut writer = DeltaWriter::new(object_store.clone(), writer_path, writer_config);
 
+            // Compute physical-to-logical mapping once before the loop
+            #[allow(clippy::unwrap_used)]
+            #[allow(clippy::expect_used)]
+            let phys_to_logical = if matches!(
+                effective_mode,
+                ColumnMappingModeOption::Name | ColumnMappingModeOption::Id
+            ) {
+                // Build a physical->logical name map from the logical kernel schema (top-level only)
+                let logical_kernel: StructType = if let Some(meta_action_schema) = schema_actions
+                    .iter()
+                    .find_map(|a| match a {
+                        Action::Metadata(m) => Some(
+                            m.parse_schema()
+                                .map_err(|e| DataFusionError::External(Box::new(e))),
+                        ),
+                        _ => None,
+                    })
+                    .transpose()?
+                {
+                    meta_action_schema
+                } else if table_exists {
+                    table
+                        .as_ref()
+                        .unwrap()
+                        .snapshot()
+                        .map_err(|e| DataFusionError::External(Box::new(e)))?
+                        .snapshot()
+                        .schema()
+                        .clone()
+                } else {
+                    annotated_schema_opt
+                        .clone()
+                        .expect("annotated schema should exist for new table with column mapping")
+                };
+                let map = Self::build_physical_to_logical_map(&logical_kernel);
+                log::trace!("phys_to_logical: {:?}", &map);
+                Some(map)
+            } else {
+                None
+            };
+
             let mut total_rows = 0u64;
             let mut data = stream;
 
@@ -487,48 +526,6 @@ impl ExecutionPlan for DeltaWriterExec {
                 let batch = batch_result?;
                 let rows: u64 = u64::try_from(batch.num_rows()).unwrap_or_default();
                 total_rows += rows;
-
-                // Adapt input batch (logical names) to writer schema (physical names)
-                #[allow(clippy::unwrap_used)]
-                #[allow(clippy::expect_used)]
-                let phys_to_logical = if matches!(
-                    effective_mode,
-                    ColumnMappingModeOption::Name | ColumnMappingModeOption::Id
-                ) {
-                    // Build a physical->logical name map from the logical kernel schema (top-level only)
-                    let logical_kernel: StructType = if let Some(meta_action_schema) =
-                        schema_actions
-                            .iter()
-                            .find_map(|a| match a {
-                                Action::Metadata(m) => Some(
-                                    m.parse_schema()
-                                        .map_err(|e| DataFusionError::External(Box::new(e))),
-                                ),
-                                _ => None,
-                            })
-                            .transpose()?
-                    {
-                        meta_action_schema
-                    } else if table_exists {
-                        table
-                            .as_ref()
-                            .unwrap()
-                            .snapshot()
-                            .map_err(|e| DataFusionError::External(Box::new(e)))?
-                            .snapshot()
-                            .schema()
-                            .clone()
-                    } else {
-                        annotated_schema_opt.clone().expect(
-                            "annotated schema should exist for new table with column mapping",
-                        )
-                    };
-                    let map = Self::build_physical_to_logical_map(&logical_kernel);
-                    log::trace!("phys_to_logical: {:?}", &map);
-                    Some(map)
-                } else {
-                    None
-                };
 
                 // Debug: input vs target schema field names for each batch
                 let input_names: Vec<String> = batch

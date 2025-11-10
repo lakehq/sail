@@ -27,7 +27,7 @@ use crate::datasource::{
     build_file_scan_config, delta_to_datafusion_error, df_logical_schema, get_pushdown_filters,
     prune_files, simplify_expr, DataFusionMixins, DeltaScanConfig, DeltaTableStateExt,
 };
-use crate::schema_manager::get_physical_write_schema;
+use crate::schema_manager::get_physical_schema;
 use crate::table::DeltaTableState;
 
 // [Credit]: <https://github.com/delta-io/delta-rs/blob/3607c314cbdd2ad06c6ee0677b92a29f695c71f3/crates/core/src/delta_datafusion/mod.rs>
@@ -200,7 +200,7 @@ impl TableProvider for DeltaTableProvider {
         let table_partition_cols = self.snapshot.metadata().partition_columns();
         let kmode: ColumnMappingMode = self.snapshot.effective_column_mapping_mode();
         let kschema_arc = self.snapshot.snapshot().table_configuration().schema();
-        let physical_arrow: ArrowSchema = get_physical_write_schema(&kschema_arc, kmode);
+        let physical_arrow: ArrowSchema = get_physical_schema(&kschema_arc, kmode);
         log::trace!("read_kmode: {:?}", kmode);
         let phys_field_names: Vec<String> = physical_arrow
             .fields()

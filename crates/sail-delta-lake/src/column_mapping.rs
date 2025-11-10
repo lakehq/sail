@@ -37,6 +37,38 @@ fn annotate_field(field: &StructField, counter: &AtomicI64) -> StructField {
     }
 }
 
+/// Recursively annotate all nested struct types within a data type.
+/// Used when there is no existing type to merge with.
+fn annotate_nested_type(data_type: &DataType, counter: &AtomicI64) -> DataType {
+    match data_type {
+        DataType::Struct(st) => {
+            let fields = st
+                .fields()
+                .map(|f| -> Result<StructField, delta_kernel::Error> {
+                    Ok(annotate_field(f, counter))
+                });
+            #[allow(clippy::expect_used)]
+            let result =
+                StructType::try_new(fields).expect("failed to build nested annotated struct");
+            DataType::Struct(Box::new(result))
+        }
+        DataType::Array(at) => {
+            let new_elem = annotate_nested_type(at.element_type(), counter);
+            DataType::Array(Box::new(ArrayType::new(new_elem, at.contains_null())))
+        }
+        DataType::Map(mt) => {
+            let new_key = annotate_nested_type(mt.key_type(), counter);
+            let new_value = annotate_nested_type(mt.value_type(), counter);
+            DataType::Map(Box::new(MapType::new(
+                new_key,
+                new_value,
+                mt.value_contains_null(),
+            )))
+        }
+        other => other.clone(),
+    }
+}
+
 /// Merge `new_type` into `existing_type` while preserving metadata on existing fields
 /// and annotating only newly introduced nested fields. When `existing_type` is None,
 /// annotate nested struct parts as needed. Used both for full-field annotation and
@@ -50,17 +82,6 @@ fn merge_types(
         (Some(DataType::Struct(prev_st)), DataType::Struct(new_st)) => DataType::Struct(Box::new(
             merge_struct(prev_st.as_ref(), new_st.as_ref(), counter),
         )),
-        (None, DataType::Struct(new_st)) => {
-            let fields = new_st
-                .fields()
-                .map(|f| -> Result<StructField, delta_kernel::Error> {
-                    Ok(annotate_field(f, counter))
-                });
-            #[allow(clippy::expect_used)]
-            let result =
-                StructType::try_new(fields).expect("failed to build nested annotated struct");
-            DataType::Struct(Box::new(result))
-        }
         (Some(DataType::Array(prev_arr)), DataType::Array(new_arr)) => {
             let merged_elem = merge_types(
                 Some(prev_arr.element_type()),
@@ -72,23 +93,6 @@ fn merge_types(
                 new_arr.contains_null(),
             )))
         }
-        (None, DataType::Array(new_arr)) => {
-            let new_elem = match new_arr.element_type() {
-                DataType::Struct(st) => {
-                    let fields = st
-                        .fields()
-                        .map(|f| -> Result<StructField, delta_kernel::Error> {
-                            Ok(annotate_field(f, counter))
-                        });
-                    #[allow(clippy::expect_used)]
-                    let result = StructType::try_new(fields)
-                        .expect("failed to build nested annotated struct");
-                    DataType::Struct(Box::new(result))
-                }
-                other => other.clone(),
-            };
-            DataType::Array(Box::new(ArrayType::new(new_elem, new_arr.contains_null())))
-        }
         (Some(DataType::Map(prev_map)), DataType::Map(new_map)) => {
             let new_key = merge_types(Some(prev_map.key_type()), new_map.key_type(), counter);
             let new_value = merge_types(Some(prev_map.value_type()), new_map.value_type(), counter);
@@ -98,41 +102,8 @@ fn merge_types(
                 new_map.value_contains_null(),
             )))
         }
-        (None, DataType::Map(new_map)) => {
-            let new_key = match new_map.key_type() {
-                DataType::Struct(st) => {
-                    let fields = st
-                        .fields()
-                        .map(|f| -> Result<StructField, delta_kernel::Error> {
-                            Ok(annotate_field(f, counter))
-                        });
-                    #[allow(clippy::expect_used)]
-                    let result = StructType::try_new(fields)
-                        .expect("failed to build nested annotated struct");
-                    DataType::Struct(Box::new(result))
-                }
-                other => other.clone(),
-            };
-            let new_value = match new_map.value_type() {
-                DataType::Struct(st) => {
-                    let fields = st
-                        .fields()
-                        .map(|f| -> Result<StructField, delta_kernel::Error> {
-                            Ok(annotate_field(f, counter))
-                        });
-                    #[allow(clippy::expect_used)]
-                    let result = StructType::try_new(fields)
-                        .expect("failed to build nested annotated struct");
-                    DataType::Struct(Box::new(result))
-                }
-                other => other.clone(),
-            };
-            DataType::Map(Box::new(MapType::new(
-                new_key,
-                new_value,
-                new_map.value_contains_null(),
-            )))
-        }
+        // Use helper function for all None cases
+        (None, new_type) => annotate_nested_type(new_type, counter),
         (_, _) => new_type.clone(),
     }
 }

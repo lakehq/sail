@@ -62,9 +62,9 @@ pub fn evolve_schema(
     Ok(updated)
 }
 
-/// Get the Arrow physical schema used for file writes, enriched with PARQUET:field_id
+/// Get the Arrow physical schema for reading/writing files, enriched with PARQUET:field_id
 /// when column mapping Name/Id mode is active.
-pub fn get_physical_write_schema(logical: &StructType, mode: ColumnMappingMode) -> ArrowSchema {
+pub fn get_physical_schema(logical: &StructType, mode: ColumnMappingMode) -> ArrowSchema {
     let physical_kernel = logical.make_physical(mode);
     // FIXME: surface error instead of defaulting to empty schema
     let physical_arrow: ArrowSchema = (&physical_kernel)
