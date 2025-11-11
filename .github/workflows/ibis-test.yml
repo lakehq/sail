@@ -108,13 +108,17 @@ jobs:
         run: |
           mkdir -p tmp/report
           echo "## 🧪 Ibis Tests Summary" > tmp/report/report.md
-          tail -n 50 tmp/spark-tests/ibis/test-ibis.log >> tmp/report/report.md || true
+          tail -n 2 tmp/spark-tests/ibis/test-ibis.log >> tmp/report/report.md || true
 
           if [ "${{ github.event_name }}" = "pull_request" ]; then
             echo "${{ github.event.pull_request.number }}" > tmp/report/pull-request.txt
           else
             echo "" > tmp/report/pull-request.txt
           fi
+
+      - name: List report files
+        if: always()
+        run: ls -la tmp/report || true
 
       - name: Upload report artifact
         if: always()
