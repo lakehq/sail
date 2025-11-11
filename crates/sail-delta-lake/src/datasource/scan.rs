@@ -14,10 +14,9 @@ use datafusion::physical_expr::PhysicalExpr;
 use deltalake::kernel::Add;
 use deltalake::logstore::LogStoreRef;
 use object_store::path::Path;
+use sail_common_datafusion::schema_adapter::DeltaSchemaAdapterFactory;
 
-use crate::datasource::schema_adapter::DeltaSchemaAdapterFactory;
 use crate::datasource::schema_rewriter::DeltaPhysicalExprAdapterFactory;
-// Bring the FileSource trait providing with_schema_adapter_factory into scope
 use crate::datasource::{
     create_object_store_url, delta_to_datafusion_error, partitioned_file_from_action,
     DataFusionMixins, DeltaScanConfig, DeltaTableStateExt,

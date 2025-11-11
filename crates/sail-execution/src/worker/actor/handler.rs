@@ -13,7 +13,7 @@ use datafusion_proto::protobuf::PhysicalPlanNode;
 use log::{debug, error, info, warn};
 use prost::Message;
 use sail_common_datafusion::error::CommonErrorCause;
-use sail_delta_lake::datasource::schema_adapter::DeltaSchemaAdapterFactory;
+use sail_common_datafusion::schema_adapter::DeltaSchemaAdapterFactory;
 use sail_python_udf::error::PyErrExtractor;
 use sail_server::actor::{ActorAction, ActorContext};
 use tokio::sync::oneshot;
