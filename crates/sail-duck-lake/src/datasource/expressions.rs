@@ -48,4 +48,3 @@ pub fn get_pushdown_filters(
         })
         .collect()
 }
-
