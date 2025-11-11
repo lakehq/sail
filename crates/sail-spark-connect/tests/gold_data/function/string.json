@@ -1623,7 +1623,7 @@
         }
       },
       "output": {
-        "failure": "not implemented: function: luhn_check"
+        "success": "ok"
       }
     },
     {
@@ -1645,7 +1645,7 @@
         }
       },
       "output": {
-        "failure": "not implemented: function: luhn_check"
+        "success": "ok"
       }
     },
     {
@@ -1667,7 +1667,7 @@
         }
       },
       "output": {
-        "failure": "not implemented: function: luhn_check"
+        "success": "ok"
       }
     },
     {
