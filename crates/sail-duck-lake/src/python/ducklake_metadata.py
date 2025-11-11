@@ -202,7 +202,12 @@ def load_table(url: str, table_name: str, schema_name: str | None) -> dict[str, 
             for r in pf_rows
         ]
 
-        return {"schema_info": schema_info, "table_info": table_info, "columns": columns, "partition_fields": partition_fields}
+        return {
+            "schema_info": schema_info,
+            "table_info": table_info,
+            "columns": columns,
+            "partition_fields": partition_fields,
+        }
 
 
 def list_data_files(url: str, table_id: int, snapshot_id: int | None) -> list[dict[str, Any]]:
@@ -258,24 +263,26 @@ def list_data_files(url: str, table_id: int, snapshot_id: int | None) -> list[di
         ]
         if not out:
             return out
-        ids_csv = ", ".join(str(int(item["data_file_id"])) for item in out)
+        file_ids = [int(item["data_file_id"]) for item in out]
+        placeholders = ", ".join(f":id{i}" for i in range(len(file_ids)))
         stats_sql = text(
-            f"""
+            f"""  # noqa: S608
             select data_file_id, column_id, column_size_bytes, value_count, null_count,
                    min_value, max_value, contains_nan, extra_stats
             from ducklake_file_column_stats
-            where data_file_id in ({ids_csv})
-            """
+            where data_file_id in ({placeholders})
+            """  # noqa: S608
         )
         pv_sql = text(
-            f"""
+            f"""  # noqa: S608
             select data_file_id, partition_key_index, partition_value
             from ducklake_file_partition_value
-            where data_file_id in ({ids_csv})
-            """
+            where data_file_id in ({placeholders})
+            """  # noqa: S608
         )
-        stats_rows = conn.execute(stats_sql).all()
-        pv_rows = conn.execute(pv_sql).all()
+        params = {f"id{i}": fid for i, fid in enumerate(file_ids)}
+        stats_rows = conn.execute(stats_sql, params).all()
+        pv_rows = conn.execute(pv_sql, params).all()
 
         stats_map: dict[int, list[dict[str, Any]]] = {}
         for r in stats_rows:
