@@ -266,7 +266,7 @@ def list_data_files(url: str, table_id: int, snapshot_id: int | None) -> list[di
         file_ids = [int(item["data_file_id"]) for item in out]
         placeholders = ", ".join(f":id{i}" for i in range(len(file_ids)))
         stats_sql = text(
-            f"""  # noqa: S608
+            f"""
             select data_file_id, column_id, column_size_bytes, value_count, null_count,
                    min_value, max_value, contains_nan, extra_stats
             from ducklake_file_column_stats
@@ -274,7 +274,7 @@ def list_data_files(url: str, table_id: int, snapshot_id: int | None) -> list[di
             """  # noqa: S608
         )
         pv_sql = text(
-            f"""  # noqa: S608
+            f"""
             select data_file_id, partition_key_index, partition_value
             from ducklake_file_partition_value
             where data_file_id in ({placeholders})
