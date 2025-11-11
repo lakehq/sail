@@ -138,7 +138,7 @@ fn parse_ducklake_location(path: &str) -> Result<Option<DuckLakeOptions>> {
 
     // Required base_path
     let base_path = qp
-        .query_pairs()
+        .iter()
         .find(|(k, _)| k == "base_path")
         .map(|(_, v)| v.to_string())
         .ok_or_else(|| {
@@ -199,10 +199,7 @@ fn parse_ducklake_location(path: &str) -> Result<Option<DuckLakeOptions>> {
         meta_url.set_query(None);
         let db_path = format!("/{}", db_parts.join("/"));
         meta_url.set_path(&db_path);
-        let auth = meta_url
-            .authority()
-            .map(|a| a.as_str().to_string())
-            .unwrap_or_default();
+        let auth = meta_url.authority().to_string();
         url_str = if auth.is_empty() {
             format!("{}://{}", meta_scheme, meta_url.path())
         } else {
@@ -251,23 +248,16 @@ fn parse_ducklake_location(path: &str) -> Result<Option<DuckLakeOptions>> {
         if filtered.is_empty() {
             meta_url.set_query(None);
         } else {
-            let mut q = String::new();
-            for (i, (k, v)) in filtered.iter().enumerate() {
-                if i > 0 {
-                    q.push('&');
-                }
-                q.push_str(&urlencoding::encode(k));
-                q.push('=');
-                q.push_str(&urlencoding::encode(v));
+            let mut serializer = url::form_urlencoded::Serializer::new(String::new());
+            for (k, v) in filtered {
+                serializer.append_pair(&k, &v);
             }
+            let q = serializer.finish();
             meta_url.set_query(Some(&q));
         }
         let db_path = format!("/{}", dbname);
         meta_url.set_path(&db_path);
-        let auth = meta_url
-            .authority()
-            .map(|a| a.as_str().to_string())
-            .unwrap_or_default();
+        let auth = meta_url.authority().to_string();
         url_str = if auth.is_empty() {
             format!("{}://{}", meta_scheme, meta_url.path())
         } else {
