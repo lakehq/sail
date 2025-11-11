@@ -1,0 +1,23 @@
+name: Publish Ibis Report
+
+on:
+  workflow_run:
+    workflows: ["Ibis Tests"]
+    types: [completed]
+
+permissions:
+  contents: read
+  actions: read
+  pull-requests: write
+
+jobs:
+  publish:
+    if: ${{ github.event.workflow_run.conclusion != 'skipped' }}
+    runs-on: ubuntu-latest
+    steps:
+      - name: Use composite to comment PR
+        uses: ./.github/actions/pull-request-report
+        with:
+          workflow_run_id: ${{ github.event.workflow_run.id }}
+          artifact_name: ibis-report
+          report_name: "🧪 Ibis Tests"
