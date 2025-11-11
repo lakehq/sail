@@ -4,7 +4,7 @@ on:
   # When this workflow is triggered, the workflow definition comes from the `main` branch.
   # If a pull request modifies this file, it will have an effect only after the pull request is merged.
   workflow_run:
-    workflows: ["Build", "Gold Data"]
+    workflows: ["Build", "Gold Data", "Ibis Tests"]
     types:
       - completed
 
@@ -44,3 +44,10 @@ jobs:
           workflow_run_id: ${{ github.event.workflow_run.id }}
           artifact_name: gold-data-report
           report_name: gold-data
+
+      - uses: ./.github/actions/pull-request-report
+        if: github.event.workflow_run.name == 'Ibis Tests' && github.event.workflow_run.conclusion == 'success'
+        with:
+          workflow_run_id: ${{ github.event.workflow_run.id }}
+          artifact_name: ibis-report
+          report_name: ibis
