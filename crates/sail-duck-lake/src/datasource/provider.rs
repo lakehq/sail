@@ -24,6 +24,7 @@ use crate::datasource::expressions::{get_pushdown_filters, simplify_expr};
 use crate::datasource::pruning::prune_files;
 use crate::metadata::{DuckLakeMetaStore, DuckLakeTable};
 use crate::options::DuckLakeOptions;
+use crate::spec::{FileInfo, FilePartitionInfo, PartitionFieldInfo};
 
 pub struct DuckLakeTableProvider {
     table: DuckLakeTable,
@@ -158,6 +159,9 @@ impl TableProvider for DuckLakeTableProvider {
             kept
         };
 
+        // Partition pruning (identity transform only)
+        files = self.prune_by_identity_partitions(&files, &pruning_filters);
+
         // Parse base_path URL and construct ObjectStoreUrl with only scheme + authority
         let base_url =
             Url::parse(&self.base_path).map_err(|e| DataFusionError::External(Box::new(e)))?;
@@ -288,5 +292,170 @@ impl DuckLakeTableProvider {
             total_byte_size: Precision::Absent,
             column_statistics,
         }
+    }
+
+    fn prune_by_identity_partitions(&self, files: &[FileInfo], filters: &[Expr]) -> Vec<FileInfo> {
+        if self.table.partition_fields.is_empty() {
+            return files.to_vec();
+        }
+        // Build mapping: partition_key_index -> (column_name, datatype), only identity transforms
+        let mut pki_to_col: HashMap<u64, (&str, datafusion::arrow::datatypes::DataType)> =
+            HashMap::new();
+        for pf in &self.table.partition_fields {
+            if pf.transform.to_lowercase() != "identity" {
+                continue;
+            }
+            if let Some(col) = self
+                .table
+                .columns
+                .iter()
+                .find(|c| c.column_id == pf.column_id)
+            {
+                if let Ok(idx) = self.schema.index_of(col.column_name.as_str()) {
+                    let dt = self.schema.field(idx).data_type().clone();
+                    pki_to_col.insert(pf.partition_key_index, (col.column_name.as_str(), dt));
+                }
+            }
+        }
+        if pki_to_col.is_empty() {
+            return files.to_vec();
+        }
+
+        // Helper to parse string to ScalarValue using Arrow type
+        fn parse_scalar(
+            s: &str,
+            dt: &datafusion::arrow::datatypes::DataType,
+        ) -> Option<datafusion::common::scalar::ScalarValue> {
+            datafusion::common::scalar::ScalarValue::try_from_string(s.to_string(), dt).ok()
+        }
+
+        // Build per-file map: col_name -> scalar partition value
+        let mut kept = Vec::with_capacity(files.len());
+        'next_file: for f in files.iter() {
+            let mut part_vals: HashMap<&str, datafusion::common::scalar::ScalarValue> =
+                HashMap::new();
+            for FilePartitionInfo {
+                partition_key_index,
+                partition_value,
+            } in &f.partition_values
+            {
+                if let Some((col_name, dt)) = pki_to_col.get(partition_key_index) {
+                    if let Some(sv) = parse_scalar(partition_value, dt) {
+                        part_vals.insert(col_name, sv);
+                    }
+                }
+            }
+            // Evaluate each filter as top-level AND
+            for expr in filters {
+                if let Some(false) = Self::eval_partition_expr(expr, &part_vals) {
+                    continue 'next_file;
+                }
+            }
+            kept.push(f.clone());
+        }
+        kept
+    }
+
+    fn eval_partition_expr(
+        expr: &Expr,
+        vals: &HashMap<&str, datafusion::common::scalar::ScalarValue>,
+    ) -> Option<bool> {
+        use datafusion::logical_expr::{BinaryExpr, Operator};
+        match expr {
+            Expr::BinaryExpr(BinaryExpr { left, op, right }) => {
+                match **left {
+                    Expr::Column(ref c) => {
+                        if let Expr::Literal(ref lit, _) = **right {
+                            let col_name = c.name.as_str();
+                            let v = vals.get(col_name)?;
+                            return Self::cmp_scalar(v, lit, op);
+                        }
+                        None
+                    }
+                    _ => {
+                        // handle boolean combinators AND/OR
+                        if *op == Operator::And {
+                            let l = Self::eval_partition_expr(left, vals);
+                            let r = Self::eval_partition_expr(right, vals);
+                            return match (l, r) {
+                                (Some(true), Some(true)) => Some(true),
+                                (Some(false), _) | (_, Some(false)) => Some(false),
+                                (Some(true), None) | (None, Some(true)) => Some(true),
+                                _ => None,
+                            };
+                        } else if *op == Operator::Or {
+                            let l = Self::eval_partition_expr(left, vals);
+                            let r = Self::eval_partition_expr(right, vals);
+                            return match (l, r) {
+                                (Some(true), _) | (_, Some(true)) => Some(true),
+                                (Some(false), Some(false)) => Some(false),
+                                _ => None,
+                            };
+                        }
+                        None
+                    }
+                }
+            }
+            Expr::InList(in_list) if !in_list.negated => {
+                if let Expr::Column(ref c) = *in_list.expr {
+                    let col_name = c.name.as_str();
+                    let v = vals.get(col_name)?;
+                    for item in &in_list.list {
+                        if let Expr::Literal(ref lit, _) = item {
+                            if Self::eq_scalar(v, lit)? {
+                                return Some(true);
+                            }
+                        }
+                    }
+                    return Some(false);
+                }
+                None
+            }
+            // Unsupported: treat as indeterminate so it won't filter out
+            _ => None,
+        }
+    }
+
+    fn cmp_scalar(
+        left: &datafusion::common::scalar::ScalarValue,
+        right: &datafusion::common::scalar::ScalarValue,
+        op: &datafusion::logical_expr::Operator,
+    ) -> Option<bool> {
+        use std::cmp::Ordering;
+        if left.is_null() || right.is_null() {
+            return None;
+        }
+        match op {
+            datafusion::logical_expr::Operator::Eq => Self::eq_scalar(left, right),
+            datafusion::logical_expr::Operator::Lt
+            | datafusion::logical_expr::Operator::LtEq
+            | datafusion::logical_expr::Operator::Gt
+            | datafusion::logical_expr::Operator::GtEq => {
+                let ord = left.partial_cmp(right)?;
+                let res = match op {
+                    datafusion::logical_expr::Operator::Lt => ord == Ordering::Less,
+                    datafusion::logical_expr::Operator::LtEq => {
+                        ord == Ordering::Less || ord == Ordering::Equal
+                    }
+                    datafusion::logical_expr::Operator::Gt => ord == Ordering::Greater,
+                    datafusion::logical_expr::Operator::GtEq => {
+                        ord == Ordering::Greater || ord == Ordering::Equal
+                    }
+                    _ => return None,
+                };
+                Some(res)
+            }
+            _ => None,
+        }
+    }
+
+    fn eq_scalar(
+        left: &datafusion::common::scalar::ScalarValue,
+        right: &datafusion::common::scalar::ScalarValue,
+    ) -> Option<bool> {
+        if left.is_null() || right.is_null() {
+            return None;
+        }
+        Some(left == right)
     }
 }

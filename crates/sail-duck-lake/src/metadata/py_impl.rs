@@ -17,6 +17,8 @@ struct LoadTableResult {
     schema_info: PySchemaInfo,
     table_info: PyTableInfo,
     columns: Vec<PyColumnInfo>,
+    #[serde(default)]
+    partition_fields: Vec<PyPartitionField>,
 }
 
 #[derive(Deserialize)]
@@ -56,6 +58,13 @@ struct PyColumnInfo {
     default_value: Option<String>,
     nulls_allowed: bool,
     parent_column: Option<u64>,
+}
+
+#[derive(Deserialize)]
+struct PyPartitionField {
+    partition_key_index: u64,
+    column_id: u64,
+    transform: String,
 }
 
 #[derive(Deserialize)]
@@ -233,6 +242,15 @@ impl DuckLakeMetaStore for PythonMetaStore {
             table_info,
             schema_info,
             columns,
+            partition_fields: parsed
+                .partition_fields
+                .into_iter()
+                .map(|pf| crate::spec::PartitionFieldInfo {
+                    partition_key_index: pf.partition_key_index,
+                    column_id: FieldIndex(pf.column_id),
+                    transform: pf.transform,
+                })
+                .collect(),
         })
     }
 

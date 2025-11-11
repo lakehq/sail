@@ -174,6 +174,14 @@ pub struct FilePartitionInfo {
     pub partition_value: String,
 }
 
+/// Partition field definition for a table (identity or transformed partition)
+#[derive(Debug, Serialize, Deserialize, Clone, PartialEq, Eq)]
+pub struct PartitionFieldInfo {
+    pub partition_key_index: u64,
+    pub column_id: FieldIndex,
+    pub transform: String,
+}
+
 /// Delete file metadata from `ducklake_delete_file` table.
 /// Tracks files containing row-level deletes for a data file.
 #[derive(Debug, Serialize, Deserialize, Clone, PartialEq, Eq)]

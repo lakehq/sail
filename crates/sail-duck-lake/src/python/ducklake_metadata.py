@@ -180,7 +180,29 @@ def load_table(url: str, table_name: str, schema_name: str | None) -> dict[str, 
             for row in cols
         ]
 
-        return {"schema_info": schema_info, "table_info": table_info, "columns": columns}
+        # Load partition fields (if any)
+        pf_rows = conn.execute(
+            text(
+                """
+                SELECT pc.partition_key_index, pc.column_id, pc.transform
+                FROM ducklake_partition_column pc
+                JOIN ducklake_partition_info pi USING (partition_id, table_id)
+                WHERE pc.table_id = :tid AND (pi.end_snapshot IS NULL)
+                ORDER BY pc.partition_key_index
+                """
+            ),
+            {"tid": table_id},
+        ).all()
+        partition_fields = [
+            {
+                "partition_key_index": int(r[0]),
+                "column_id": int(r[1]),
+                "transform": str(r[2]) if r[2] is not None else "identity",
+            }
+            for r in pf_rows
+        ]
+
+        return {"schema_info": schema_info, "table_info": table_info, "columns": columns, "partition_fields": partition_fields}
 
 
 def list_data_files(url: str, table_id: int, snapshot_id: int | None) -> list[dict[str, Any]]:

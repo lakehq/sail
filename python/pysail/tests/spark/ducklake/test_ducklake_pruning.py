@@ -165,6 +165,52 @@ def _mk_table_limit(conn: duckdb.DuckDBPyConnection, meta_path, data_path, ident
 		_detach(conn)
 	return ident.split(".")[-1]
 
+def _add_identity_partition(conn: duckdb.DuckDBPyConnection, meta_path: str, data_path: str, table_name: str, src_col: str):
+	_attach(conn, meta_path, data_path)
+	try:
+		# DuckLake metadata lives under a metadata schema derived from the attach alias ('dl')
+		meta_schema = "__ducklake_metadata_dl"
+		# Fetch table id and column id
+		table_id = conn.execute(
+			f"SELECT table_id FROM {meta_schema}.ducklake_table WHERE table_name = ? AND end_snapshot IS NULL",
+			[table_name],
+		).fetchone()[0]
+		col_row = conn.execute(
+			f"SELECT column_id FROM {meta_schema}.ducklake_column WHERE table_id = ? AND column_name = ? AND end_snapshot IS NULL",
+			[table_id, src_col],
+		).fetchone()
+		assert col_row is not None, "column not found in ducklake_column"
+		column_id = col_row[0]
+
+		# Create a synthetic partition id
+		partition_id = int(table_id) * 1000 + 1
+
+		# Insert partition info (identity transform)
+		conn.execute(
+			f"INSERT INTO {meta_schema}.ducklake_partition_info(partition_id, table_id, begin_snapshot, end_snapshot) VALUES (?, ?, 0, NULL)",
+			[partition_id, table_id],
+		)
+		conn.execute(
+			f"INSERT INTO {meta_schema}.ducklake_partition_column(partition_id, table_id, partition_key_index, column_id, transform) VALUES (?, ?, 0, ?, 'identity')",
+			[partition_id, table_id, column_id],
+		)
+
+		# Map files to partition values using append order (file_order)
+		files = conn.execute(
+			f"SELECT data_file_id, file_order FROM {meta_schema}.ducklake_data_file WHERE table_id = ? AND end_snapshot IS NULL ORDER BY file_order",
+			[table_id],
+		).fetchall()
+		# Heuristic for _mk_table_eq_in: first half year=2023, second half year=2024
+		n = len(files)
+		for i, (fid, _order) in enumerate(files):
+			val = "2023" if i < (n // 2) else "2024"
+			conn.execute(
+				f"INSERT INTO {meta_schema}.ducklake_file_partition_value(data_file_id, table_id, partition_key_index, partition_value) VALUES (?, ?, 0, ?)",
+				[fid, table_id, val],
+			)
+	finally:
+		_detach(conn)
+
 
 @pytest.fixture
 def ducklake_paths(tmp_path):
@@ -243,5 +289,31 @@ def test_limit_pushdown_behavior(spark, duckdb_conn, ducklake_paths):
 		.load()
 	)
 	assert df.filter("flag = true").limit(7).count() == 7
+
+
+def test_identity_partition_eq_in_pruning(spark, duckdb_conn, ducklake_paths):
+	meta_path, data_path = ducklake_paths
+	table = _mk_table_eq_in(duckdb_conn, meta_path, data_path)
+	_add_identity_partition(duckdb_conn, meta_path, data_path, table, "year")
+	df = (
+		spark.read.format("ducklake")
+		.options(url=f"sqlite:///{meta_path}", table=table, base_path=f"file://{data_path}/")
+		.load()
+	)
+	assert df.filter("year = 2023").count() == 4
+	assert df.filter("month IN (2)").count() == 4
+
+
+def test_identity_partition_range_pruning(spark, duckdb_conn, ducklake_paths):
+	meta_path, data_path = ducklake_paths
+	table = _mk_table_eq_in(duckdb_conn, meta_path, data_path)
+	_add_identity_partition(duckdb_conn, meta_path, data_path, table, "year")
+	df = (
+		spark.read.format("ducklake")
+		.options(url=f"sqlite:///{meta_path}", table=table, base_path=f"file://{data_path}/")
+		.load()
+	)
+	assert df.filter("year >= 2024").count() == 4
+	assert df.filter("year BETWEEN 2023 AND 2024").count() == 8
 
 

@@ -11,6 +11,7 @@ pub struct DuckLakeTable {
     pub table_info: TableInfo,
     pub schema_info: SchemaInfo,
     pub columns: Vec<ColumnInfo>,
+    pub partition_fields: Vec<crate::spec::PartitionFieldInfo>,
 }
 
 #[derive(Debug, Clone)]
