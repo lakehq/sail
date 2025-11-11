@@ -1,6 +1,7 @@
 pub mod arrow_conversion;
 pub mod datasource;
 pub mod io;
+pub mod options;
 pub mod physical_plan;
 pub mod spec;
 pub mod table_format;
@@ -10,6 +11,7 @@ pub mod writer;
 
 pub use arrow_conversion::*;
 pub use datasource::*;
+pub use options::*;
 pub use spec::*;
 pub use table_format::*;
 pub use transaction::action::*;

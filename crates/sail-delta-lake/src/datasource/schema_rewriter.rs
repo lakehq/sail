@@ -5,11 +5,14 @@ use datafusion::arrow::compute::can_cast_types;
 use datafusion::arrow::datatypes::{DataType, Field, FieldRef, Schema, SchemaRef};
 use datafusion::common::tree_node::{Transformed, TransformedResult, TreeNode};
 use datafusion::common::{exec_err, Result, ScalarValue};
-use datafusion::physical_expr::expressions::{Column, Literal};
-use datafusion::physical_expr::PhysicalExpr;
+use datafusion::functions::core::getfield::GetFieldFunc;
+use datafusion::physical_expr::expressions::{self, Column, Literal};
+use datafusion::physical_expr::{PhysicalExpr, ScalarFunctionExpr};
 use datafusion::physical_expr_adapter::{PhysicalExprAdapter, PhysicalExprAdapterFactory};
 
 use crate::datasource::type_converter::DeltaTypeConverter;
+
+// TODO: Later rename this file to `expr_adapter.rs`.
 
 /// A Physical Expression Adapter Factory which provides casting and rewriting of physical expressions
 /// for Delta Lake conventions.
@@ -58,7 +61,10 @@ impl DeltaPhysicalExprAdapterFactory {
                                 .unwrap_or(ScalarValue::Null),
                         )
                     } else {
-                        Some(Self::create_default_value(logical_field.data_type()))
+                        Some(
+                            ScalarValue::new_zero(logical_field.data_type())
+                                .unwrap_or(ScalarValue::Null),
+                        )
                     };
                     default_values.push(default_value);
                 }
@@ -66,46 +72,6 @@ impl DeltaPhysicalExprAdapterFactory {
         }
 
         (column_mapping, default_values)
-    }
-
-    fn create_default_value(data_type: &DataType) -> ScalarValue {
-        match data_type {
-            DataType::Boolean => ScalarValue::Boolean(Some(false)),
-            DataType::Int8 => ScalarValue::Int8(Some(0)),
-            DataType::Int16 => ScalarValue::Int16(Some(0)),
-            DataType::Int32 => ScalarValue::Int32(Some(0)),
-            DataType::Int64 => ScalarValue::Int64(Some(0)),
-            DataType::UInt8 => ScalarValue::UInt8(Some(0)),
-            DataType::UInt16 => ScalarValue::UInt16(Some(0)),
-            DataType::UInt32 => ScalarValue::UInt32(Some(0)),
-            DataType::UInt64 => ScalarValue::UInt64(Some(0)),
-            DataType::Float16 => ScalarValue::Float32(Some(0.0)),
-            DataType::Float32 => ScalarValue::Float32(Some(0.0)),
-            DataType::Float64 => ScalarValue::Float64(Some(0.0)),
-            DataType::Utf8 => ScalarValue::Utf8(Some(String::new())),
-            DataType::LargeUtf8 => ScalarValue::LargeUtf8(Some(String::new())),
-            DataType::Binary => ScalarValue::Binary(Some(Vec::new())),
-            DataType::LargeBinary => ScalarValue::LargeBinary(Some(Vec::new())),
-            DataType::Date32 => ScalarValue::Date32(Some(0)),
-            DataType::Date64 => ScalarValue::Date64(Some(0)),
-            DataType::Time32(_) => ScalarValue::Time32Second(Some(0)),
-            DataType::Time64(_) => ScalarValue::Time64Nanosecond(Some(0)),
-            DataType::Timestamp(unit, tz) => match unit {
-                datafusion::arrow::datatypes::TimeUnit::Second => {
-                    ScalarValue::TimestampSecond(Some(0), tz.clone())
-                }
-                datafusion::arrow::datatypes::TimeUnit::Millisecond => {
-                    ScalarValue::TimestampMillisecond(Some(0), tz.clone())
-                }
-                datafusion::arrow::datatypes::TimeUnit::Microsecond => {
-                    ScalarValue::TimestampMicrosecond(Some(0), tz.clone())
-                }
-                datafusion::arrow::datatypes::TimeUnit::Nanosecond => {
-                    ScalarValue::TimestampNanosecond(Some(0), tz.clone())
-                }
-            },
-            _ => ScalarValue::Null,
-        }
     }
 }
 
@@ -174,6 +140,11 @@ impl<'a> DeltaPhysicalExprRewriter<'a> {
         &self,
         expr: Arc<dyn PhysicalExpr>,
     ) -> Result<Transformed<Arc<dyn PhysicalExpr>>> {
+        // Handle struct field access: if the field is missing in physical schema,
+        // rewrite to a typed NULL literal matching the logical field type.
+        if let Some(transformed) = self.try_rewrite_struct_field_access(&expr)? {
+            return Ok(Transformed::yes(transformed));
+        }
         // Handle column references with schema evolution
         if let Some(column) = expr.as_any().downcast_ref::<Column>() {
             return self.rewrite_column(Arc::clone(&expr), column);
@@ -181,6 +152,79 @@ impl<'a> DeltaPhysicalExprRewriter<'a> {
 
         // For non-column expressions, continue with default behavior
         Ok(Transformed::no(expr))
+    }
+
+    /// Rewrite GetField(struct_col, "field") to NULL when the field is not present
+    /// in the physical schema, casting the NULL to the logical field type.
+    /// This mirrors DataFusion's default adapter behavior.
+    fn try_rewrite_struct_field_access(
+        &self,
+        expr: &Arc<dyn PhysicalExpr>,
+    ) -> Result<Option<Arc<dyn PhysicalExpr>>> {
+        let get_field_expr =
+            match ScalarFunctionExpr::try_downcast_func::<GetFieldFunc>(expr.as_ref()) {
+                Some(expr) => expr,
+                None => return Ok(None),
+            };
+
+        let source_expr = match get_field_expr.args().first() {
+            Some(expr) => expr,
+            None => return Ok(None),
+        };
+        let field_name_expr = match get_field_expr.args().get(1) {
+            Some(expr) => expr,
+            None => return Ok(None),
+        };
+
+        let lit = match field_name_expr
+            .as_any()
+            .downcast_ref::<expressions::Literal>()
+        {
+            Some(lit) => lit,
+            None => return Ok(None),
+        };
+        let field_name = match lit.value().try_as_str().flatten() {
+            Some(name) => name,
+            None => return Ok(None),
+        };
+
+        let column = match source_expr.as_any().downcast_ref::<Column>() {
+            Some(column) => column,
+            None => return Ok(None),
+        };
+
+        let physical_field = match self.physical_file_schema.field_with_name(column.name()) {
+            Ok(field) => field,
+            Err(_) => return Ok(None),
+        };
+        let physical_struct_fields = match physical_field.data_type() {
+            DataType::Struct(fields) => fields,
+            _ => return Ok(None),
+        };
+        if physical_struct_fields
+            .iter()
+            .any(|f| f.name() == field_name)
+        {
+            return Ok(None);
+        }
+
+        let logical_field = match self.logical_file_schema.field_with_name(column.name()) {
+            Ok(field) => field,
+            Err(_) => return Ok(None),
+        };
+        let logical_struct_fields = match logical_field.data_type() {
+            DataType::Struct(fields) => fields,
+            _ => return Ok(None),
+        };
+        let logical_struct_field = match logical_struct_fields
+            .iter()
+            .find(|f| f.name() == field_name)
+        {
+            Some(field) => field,
+            None => return Ok(None),
+        };
+        let null_value = ScalarValue::Null.cast_to(logical_struct_field.data_type())?;
+        Ok(Some(Arc::new(Literal::new(null_value))))
     }
 
     fn rewrite_column(

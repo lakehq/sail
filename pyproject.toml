@@ -35,6 +35,8 @@ test = [
     "pyspark-client>=4.0,<5",
     "duckdb>=1.0,<2",
     "pytest>=8.4,<9",
+    "pytest-bdd>=8.1,<9",
+    "jinja2>=3.1,<4",
     "pillow>=10.3.0",
     "pyiceberg[sql-sqlite,pyiceberg-core]==0.10.0",
     "pydantic>=2.11,<2.12",
@@ -74,6 +76,8 @@ dependencies = [
     "pyspark[connect]==4.0.0",
     "ibis-framework>=11,<12",
     "pytest>=8.4,<9",
+    "pytest-bdd>=8.1,<9",
+    "jinja2>=3.1,<4",
     "duckdb>=1.1,<2",
     "mcp>=1.0,<2",
     "boto3>=1.38,<2",
@@ -116,6 +120,8 @@ installer = "pip"
 skip-install = true
 dependencies = [
     "pytest>=8.4,<9",
+    "pytest-bdd>=8.1,<9",
+    "jinja2>=3.1,<4",
     "duckdb>=1.1,<2",
     "pillow>=10.3.0",
     "pyiceberg[sql-sqlite,pyiceberg-core]==0.10.0",
@@ -146,8 +152,6 @@ dependencies = [
     "pytest-xdist>=3.7,<4",
     "pytest-timeout>=2.4,<3",
     "pytest-reportlog>=0.4,<0.5",
-    "pyiceberg[sql-sqlite,pyiceberg-core]==0.10.0",
-    "pydantic>=2.11,<2.12",
 ]
 
 [[tool.hatch.envs.test-spark.matrix]]

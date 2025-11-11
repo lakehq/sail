@@ -147,6 +147,12 @@ jobs:
 
   upload-coverage:
     name: Upload Coverage Reports
+    # Dependabot does not operate from a fork of the repository, so a token
+    # is required to upload coverage reports to Codecov. However, Dependabot
+    # cannot access Actions secrets. Instead of configuring Dependabot secrets
+    # separately, we skip coverage upload for Dependabot to avoid failures,
+    # since coverage reports from Dependabot runs are not useful.
+    if: ${{ github.actor != 'dependabot[bot]' }}
     runs-on: ubuntu-latest
     needs:
       - build
