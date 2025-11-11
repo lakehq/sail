@@ -3,7 +3,7 @@ use chumsky::input::{Input, InputRef, ValueInput};
 use chumsky::label::LabelError;
 use chumsky::prelude::custom;
 use chumsky::Parser;
-use sail_sql_macro::{TreeParser, TreeSyntax};
+use sail_sql_macro::{TreeParser, TreeSyntax, TreeText};
 
 use crate::ast::operator::{Asterisk, Period};
 use crate::combinator::sequence;
@@ -12,7 +12,7 @@ use crate::options::ParserOptions;
 use crate::span::TokenSpan;
 use crate::string::StringValue;
 use crate::token::{Keyword, Punctuation, StringStyle, Token, TokenLabel};
-use crate::tree::{SyntaxDescriptor, SyntaxNode, TerminalKind, TreeParser, TreeSyntax};
+use crate::tree::{SyntaxDescriptor, SyntaxNode, TerminalKind, TreeParser, TreeSyntax, TreeText};
 use crate::utils::skip_whitespace;
 
 fn parse_identifier<'a, F, I, E>(
@@ -89,6 +89,12 @@ impl TreeSyntax for Ident {
     }
 }
 
+impl TreeText for Ident {
+    fn text(&self) -> String {
+        format!("{} ", self.value.clone())
+    }
+}
+
 /// A restricted identifier parser for column names.
 pub(crate) fn column_ident<'a, I, E>(
     options: &'a ParserOptions,
@@ -123,7 +129,7 @@ where
     custom(move |input| parse_identifier(input, matcher, options))
 }
 
-#[derive(Debug, Clone, TreeParser, TreeSyntax)]
+#[derive(Debug, Clone, TreeParser, TreeSyntax, TreeText)]
 pub struct ObjectName(pub Sequence<Ident, Period>);
 
 /// A restricted object name parser.
@@ -141,7 +147,7 @@ where
     sequence(ident, Period::parser((), options)).map(ObjectName)
 }
 
-#[derive(Debug, Clone, TreeParser, TreeSyntax)]
+#[derive(Debug, Clone, TreeParser, TreeSyntax, TreeText)]
 pub struct QualifiedWildcard(pub Sequence<Ident, Period>, pub Period, pub Asterisk);
 
 /// A named variable `$name` or `:name`, or an unnamed variable `?`.
@@ -235,6 +241,12 @@ impl TreeSyntax for Variable {
             node: SyntaxNode::Terminal(TerminalKind::Variable),
             children: vec![],
         }
+    }
+}
+
+impl TreeText for Variable {
+    fn text(&self) -> String {
+        format!("{} ", self.value)
     }
 }
 

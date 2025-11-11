@@ -1,0 +1,8 @@
+additionalProperties:
+  library: reqwest-trait
+  supportAsync: true
+  topLevelApiClient: true
+
+globalProperties:
+  apiDocs: false
+  modelDocs: false

@@ -50,6 +50,8 @@ impl Provider for InternalConfigPlaceholder {
 
 impl AppConfig {
     pub fn load() -> CommonResult<Self> {
+        // FIXME: Serde aliases conflict when defaults and env vars use different field names.
+        //  This causes: `Error: invalid argument: duplicate field...`
         Figment::from(ConfigDefinition::new(APP_CONFIG))
             .merge(InternalConfigPlaceholder)
             .merge(Env::prefixed("SAIL_").map(|p| p.as_str().replace("__", ".").into()))
@@ -166,6 +168,7 @@ mod retry_strategy {
 pub struct ExecutionConfig {
     pub batch_size: usize,
     pub collect_statistics: bool,
+    pub use_row_number_estimates_to_optimize_partitioning: bool,
     pub file_listing_cache: FileListingCacheConfig,
 }
 
@@ -281,6 +284,15 @@ pub enum CatalogType {
         name: String,
         initial_database: Vec<String>,
         initial_database_comment: Option<String>,
+    },
+    #[serde(alias = "iceberg-rest")]
+    IcebergRest {
+        name: String,
+        uri: String,
+        warehouse: Option<String>,
+        prefix: Option<String>,
+        oauth_access_token: Option<String>,
+        bearer_access_token: Option<String>,
     },
 }
 

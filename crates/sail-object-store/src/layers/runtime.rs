@@ -179,9 +179,9 @@ impl ObjectStore for RuntimeAwareObjectStore {
         &'a self,
         _locations: BoxStream<'a, Result<Path>>,
     ) -> BoxStream<'a, Result<Path>> {
-        // We cannot run `delete_stream` in a runtime-aware manner because
-        // the input and output streams are expected to have the lifetime `'a`,
-        // while tasks spawned by the runtime handle must be `'static`.
+        // FIXME: We cannot run `delete_stream` in a runtime-aware manner because
+        //  the input and output streams are expected to have the lifetime `'a`,
+        //  while tasks spawned by the runtime handle must be `'static`.
         once(Err(object_store::Error::NotImplemented)).boxed()
     }
 

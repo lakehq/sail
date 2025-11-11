@@ -17,8 +17,9 @@
 
 - key: runtime.enable_secondary
   type: boolean
-  default: "false"
-  description: Whether to enable a secondary Tokio runtime for separating I/O and compute tasks.
+  default: "true"
+  description: |
+    Use a secondary Tokio runtime to separate object storage I/O tasks from other operations.
   experimental: true
 
 - key: cluster.enable_tls
@@ -195,7 +196,7 @@
 
 - key: execution.batch_size
   type: number
-  default: "16384"
+  default: "8192"
   description: The batch size for physical plan execution.
   experimental: true
 
@@ -206,6 +207,14 @@
     Should statistics be collected when first creating a table.
     This can slow down the initial DataFrame creation while greatly accelerating queries with certain filters.
     Has no effect after the table is created.
+  experimental: true
+
+- key: execution.use_row_number_estimates_to_optimize_partitioning
+  type: boolean
+  default: "false"
+  description: |
+    Should Sail use row number estimates at the input to decide whether increasing parallelism is beneficial or not.
+    By default, only exact row numbers (not estimates) are used for this decision.
   experimental: true
 
 - key: execution.file_listing_cache.type
@@ -474,7 +483,7 @@
 
 - key: parquet.maximum_buffered_record_batches_per_stream
   type: number
-  default: "32"
+  default: "16"
   description: |
     (Writing) The maximum number of buffered record batches per stream for the Parquet writer.
     This may improve performance when writing large Parquet files,

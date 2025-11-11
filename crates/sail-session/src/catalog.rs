@@ -5,10 +5,15 @@ use datafusion::common::{plan_datafusion_err, Result};
 use sail_catalog::error::CatalogResult;
 use sail_catalog::manager::{CatalogManager, CatalogManagerOptions};
 use sail_catalog::provider::CatalogProvider;
+use sail_catalog_iceberg::IcebergRestCatalogProvider;
 use sail_catalog_memory::MemoryCatalogProvider;
 use sail_common::config::{AppConfig, CatalogType};
+use sail_common::runtime::RuntimeHandle;
 
-pub fn create_catalog_manager(config: &AppConfig) -> Result<CatalogManager> {
+pub fn create_catalog_manager(
+    config: &AppConfig,
+    runtime: RuntimeHandle,
+) -> Result<CatalogManager> {
     let catalogs = config
         .catalog
         .list
@@ -26,6 +31,41 @@ pub fn create_catalog_manager(config: &AppConfig) -> Result<CatalogManager> {
                         initial_database_comment.clone(),
                     );
                     Ok((name.clone(), Arc::new(provider)))
+                }
+                CatalogType::IcebergRest {
+                    name,
+                    uri,
+                    warehouse,
+                    prefix,
+                    oauth_access_token,
+                    bearer_access_token,
+                } => {
+                    let mut properties = HashMap::new();
+                    properties.insert("uri".to_string(), uri.to_string());
+                    if let Some(warehouse) = warehouse {
+                        properties.insert("warehouse".to_string(), warehouse.to_string());
+                    }
+                    if let Some(prefix) = prefix {
+                        properties.insert("prefix".to_string(), prefix.to_string());
+                    }
+                    if let Some(oauth_access_token) = oauth_access_token {
+                        properties.insert(
+                            "oauth-access-token".to_string(), // Iceberg uses kebab-case
+                            oauth_access_token.to_string(),
+                        );
+                    }
+                    if let Some(bearer_access_token) = bearer_access_token {
+                        properties.insert(
+                            "bearer-access-token".to_string(), // Iceberg uses kebab-case
+                            bearer_access_token.to_string(),
+                        );
+                    }
+                    let provider = IcebergRestCatalogProvider::new(
+                        runtime.clone(),
+                        name.to_string(),
+                        properties,
+                    );
+                    Ok((name.to_string(), Arc::new(provider)))
                 }
             }
         })

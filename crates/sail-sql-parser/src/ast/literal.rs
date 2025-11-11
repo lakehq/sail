@@ -1,5 +1,6 @@
 use chumsky::extra::ParserExtra;
-use chumsky::input::{InputRef, ValueInput};
+use chumsky::input::{Checkpoint, InputRef, ValueInput};
+use chumsky::inspector::Inspector;
 use chumsky::label::LabelError;
 use chumsky::prelude::{custom, Input};
 use chumsky::Parser;
@@ -9,7 +10,7 @@ use crate::options::ParserOptions;
 use crate::span::TokenSpan;
 use crate::string::StringValue;
 use crate::token::{Keyword, Punctuation, StringStyle, Token, TokenLabel};
-use crate::tree::{SyntaxDescriptor, SyntaxNode, TerminalKind, TreeParser, TreeSyntax};
+use crate::tree::{SyntaxDescriptor, SyntaxNode, TerminalKind, TreeParser, TreeSyntax, TreeText};
 use crate::utils::skip_whitespace;
 
 #[derive(Debug, Clone)]
@@ -220,6 +221,15 @@ impl TreeSyntax for NumberLiteral {
     }
 }
 
+impl TreeText for NumberLiteral {
+    fn text(&self) -> String {
+        match self.suffix {
+            Some(suffix) => format!("{}{} ", self.value, suffix.as_str()),
+            None => format!("{} ", self.value),
+        }
+    }
+}
+
 #[derive(Debug, Clone)]
 pub struct IntegerLiteral {
     pub span: TokenSpan,
@@ -277,10 +287,23 @@ impl TreeSyntax for IntegerLiteral {
     }
 }
 
+impl TreeText for IntegerLiteral {
+    fn text(&self) -> String {
+        format!("{} ", self.value)
+    }
+}
+
 #[derive(Debug, Clone)]
 pub struct StringLiteral {
     pub span: TokenSpan,
+    pub tokens: Vec<StringToken>,
     pub value: StringValue,
+}
+
+#[derive(Debug, Clone)]
+pub enum StringToken {
+    Word { raw: String },
+    String { raw: String },
 }
 
 /// Parse the `UESCAPE 'c'` clause following a Unicode string literal.
@@ -334,7 +357,7 @@ where
 {
     fn parser(_args: (), options: &'a ParserOptions) -> impl Parser<'a, I, Self, E> + Clone {
         custom(move |input: &mut InputRef<'a, '_, I, E>| {
-            let before = input.cursor();
+            let before = input.save();
             let token = input.next();
             match &token {
                 Some(Token::String { raw, style }) if !is_identifier_string(style, options) => {
@@ -344,7 +367,8 @@ where
                         Err(e) => StringValue::Invalid { reason: e },
                     };
                     let literal = StringLiteral {
-                        span: input.span_since(&before).into(),
+                        span: input.span_since(before.cursor()).into(),
+                        tokens: collect_string_tokens(input, before.clone()),
                         value,
                     };
                     skip_whitespace(input);
@@ -355,10 +379,41 @@ where
             Err(E::Error::expected_found(
                 vec![TokenLabel::String],
                 token.map(Into::into),
-                input.span_since(&before),
+                input.span_since(before.cursor()),
             ))
         })
     }
+}
+
+fn collect_string_tokens<'a, 'b, I, E>(
+    input: &mut InputRef<'a, 'b, I, E>,
+    before: Checkpoint<'a, 'b, I, <E::State as Inspector<'a, I>>::Checkpoint>,
+) -> Vec<StringToken>
+where
+    I: Input<'a, Token = Token<'a>> + ValueInput<'a>,
+    E: ParserExtra<'a, I> + 'a,
+{
+    let marker = input.save();
+    input.rewind(before.clone());
+    let mut result = vec![];
+    while let Some(token) = input.next() {
+        match token {
+            Token::Word { raw, .. } => result.push(StringToken::Word {
+                raw: raw.to_string(),
+            }),
+            Token::String { raw, .. } => result.push(StringToken::String {
+                raw: raw.to_string(),
+            }),
+            _ => {}
+        }
+        if input.cursor() >= *marker.cursor() {
+            break;
+        }
+    }
+    // The cursor should have reached the marker at this point,
+    // but to be safe, we perform an explicit rewind to recover the exact state.
+    input.rewind(marker);
+    result
 }
 
 impl TreeSyntax for StringLiteral {
@@ -368,6 +423,17 @@ impl TreeSyntax for StringLiteral {
             node: SyntaxNode::Terminal(TerminalKind::StringLiteral),
             children: vec![],
         }
+    }
+}
+
+impl TreeText for StringLiteral {
+    fn text(&self) -> String {
+        self.tokens
+            .iter()
+            .map(|token| match token {
+                StringToken::Word { raw } | StringToken::String { raw } => format!("{} ", raw),
+            })
+            .collect()
     }
 }
 

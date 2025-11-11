@@ -7,7 +7,7 @@ use either::Either;
 
 use crate::combinator::either_or;
 use crate::options::ParserOptions;
-use crate::tree::{SyntaxDescriptor, SyntaxNode, TreeParser, TreeSyntax};
+use crate::tree::{SyntaxDescriptor, SyntaxNode, TreeParser, TreeSyntax, TreeText};
 
 impl<'a, L, R, I, E, A> TreeParser<'a, I, E, A> for Either<L, R>
 where
@@ -38,6 +38,19 @@ where
                 (TypeId::of::<L>(), Box::new(L::syntax)),
                 (TypeId::of::<R>(), Box::new(R::syntax)),
             ],
+        }
+    }
+}
+
+impl<L, R> TreeText for Either<L, R>
+where
+    L: TreeText,
+    R: TreeText,
+{
+    fn text(&self) -> String {
+        match self {
+            Either::Left(l) => l.text(),
+            Either::Right(r) => r.text(),
         }
     }
 }

@@ -12,9 +12,10 @@ use sail_common_datafusion::datasource::{
 };
 use sail_common_datafusion::streaming::event::schema::is_flow_event_schema;
 use sail_delta_lake::create_delta_provider;
-use sail_delta_lake::delta_datafusion::{parse_predicate_expression, DataFusionMixins};
-use sail_delta_lake::delta_format::{DeltaDeletePlanBuilder, DeltaPlanBuilder};
+use sail_delta_lake::datasource::{parse_predicate_expression, DataFusionMixins};
 use sail_delta_lake::options::TableDeltaOptions;
+use sail_delta_lake::physical_plan::plan_builder::DeltaTableConfig;
+use sail_delta_lake::physical_plan::{DeltaDeletePlanBuilder, DeltaPlanBuilder};
 use sail_delta_lake::table::open_table_with_object_store;
 use url::Url;
 
@@ -124,7 +125,7 @@ impl TableFormat for DeltaTableFormat {
             (mode, None)
         };
 
-        let table_config = sail_delta_lake::delta_format::plan_builder::DeltaTableConfig {
+        let table_config = DeltaTableConfig {
             table_url,
             options: delta_options,
             partition_columns: partition_by,

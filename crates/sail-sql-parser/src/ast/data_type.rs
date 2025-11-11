@@ -1,4 +1,4 @@
-use sail_sql_macro::{TreeParser, TreeSyntax};
+use sail_sql_macro::{TreeParser, TreeSyntax, TreeText};
 
 use crate::ast::identifier::Ident;
 use crate::ast::keywords::{
@@ -16,7 +16,7 @@ use crate::combinator::{boxed, compose, sequence, unit};
 use crate::common::Sequence;
 use crate::token::TokenLabel;
 
-#[derive(Debug, Clone, TreeParser, TreeSyntax)]
+#[derive(Debug, Clone, TreeParser, TreeSyntax, TreeText)]
 #[parser(dependency = "DataType", label = TokenLabel::DataType)]
 pub enum DataType {
     Null(Null),
@@ -107,14 +107,14 @@ pub enum DataType {
     ),
 }
 
-#[derive(Debug, Clone, TreeParser, TreeSyntax)]
+#[derive(Debug, Clone, TreeParser, TreeSyntax, TreeText)]
 pub enum DecimalType {
     Decimal(Decimal),
     Dec(Dec),
     Numeric(Numeric),
 }
 
-#[derive(Debug, Clone, TreeParser, TreeSyntax)]
+#[derive(Debug, Clone, TreeParser, TreeSyntax, TreeText)]
 pub enum IntervalType {
     YearMonth(
         Interval,
@@ -129,13 +129,13 @@ pub enum IntervalType {
     Default(Interval),
 }
 
-#[derive(Debug, Clone, TreeParser, TreeSyntax)]
+#[derive(Debug, Clone, TreeParser, TreeSyntax, TreeText)]
 pub enum IntervalYearMonthUnit {
     Year(Year),
     Month(Month),
 }
 
-#[derive(Debug, Clone, TreeParser, TreeSyntax)]
+#[derive(Debug, Clone, TreeParser, TreeSyntax, TreeText)]
 pub enum IntervalDayTimeUnit {
     Day(Day),
     Hour(Hour),
@@ -144,14 +144,14 @@ pub enum IntervalDayTimeUnit {
 }
 
 #[allow(clippy::enum_variant_names)]
-#[derive(Debug, Clone, TreeParser, TreeSyntax)]
+#[derive(Debug, Clone, TreeParser, TreeSyntax, TreeText)]
 pub enum TimezoneType {
     WithTimeZone(With, Time, Zone),
     WithoutTimeZone(Without, Time, Zone),
     WithLocalTimeZone(With, Local, Time, Zone),
 }
 
-#[derive(Debug, Clone, TreeParser, TreeSyntax)]
+#[derive(Debug, Clone, TreeParser, TreeSyntax, TreeText)]
 #[parser(dependency = "DataType")]
 pub struct StructField {
     pub identifier: Ident,

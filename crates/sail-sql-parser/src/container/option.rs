@@ -5,7 +5,7 @@ use chumsky::prelude::Input;
 use chumsky::Parser;
 
 use crate::options::ParserOptions;
-use crate::tree::{SyntaxDescriptor, SyntaxNode, TreeParser, TreeSyntax};
+use crate::tree::{SyntaxDescriptor, SyntaxNode, TreeParser, TreeSyntax, TreeText};
 
 impl<'a, T, I, E, A> TreeParser<'a, I, E, A> for Option<T>
 where
@@ -28,6 +28,18 @@ where
             name: format!("Option({})", child.name),
             node: SyntaxNode::Optional(Box::new(SyntaxNode::NonTerminal(TypeId::of::<T>()))),
             children: vec![(TypeId::of::<T>(), Box::new(T::syntax))],
+        }
+    }
+}
+
+impl<T> TreeText for Option<T>
+where
+    T: TreeText,
+{
+    fn text(&self) -> String {
+        match self {
+            Some(t) => t.text(),
+            None => String::new(),
         }
     }
 }

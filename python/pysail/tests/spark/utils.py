@@ -88,6 +88,28 @@ def escape_sql_string_literal(s: str) -> str:
     )
 
 
+def parse_show_string(text) -> list[list[str]]:
+    """
+    Parses `DataFrame.show()` text into a list of rows including the header row.
+    The leading and trailing whitespace for each cell is stripped.
+    """
+
+    lines = [line for line in text.splitlines() if line.strip()]
+    border, header, _, *data, _ = lines
+    # determine column width by the positions of the `+` character in the first line
+    positions = [i for i, c in enumerate(border) if c == "+"]
+    columns = []
+    for start, end in zip(positions, positions[1:]):
+        columns.append(header[start + 1 : end].strip())
+    result = [columns]
+    for line in data:
+        row = []
+        for start, end in zip(positions, positions[1:]):
+            row.append(line[start + 1 : end].strip())
+        result.append(row)
+    return result
+
+
 def get_data_files(path: str, extension: str = ".parquet") -> list[str]:
     """Recursively find all data files under the given path."""
     data_files = [

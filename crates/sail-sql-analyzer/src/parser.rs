@@ -103,9 +103,10 @@ pub fn parse_timestamp(s: &str) -> SqlResult<TimestampValue<'_>> {
 mod tests {
     use sail_sql_parser::ast::query::Query;
     use sail_sql_parser::ast::statement::Statement;
+    use sail_sql_parser::tree::TreeText;
 
     use crate::error::SqlResult;
-    use crate::parser::parse_statements;
+    use crate::parser::{parse_one_statement, parse_statements};
 
     #[test]
     fn test_parse() -> SqlResult<()> {
@@ -118,6 +119,27 @@ mod tests {
                 Statement::Query(Query { .. }),
             ]
         ));
+        Ok(())
+    }
+
+    #[test]
+    fn test_unparse() -> SqlResult<()> {
+        assert_eq!(
+            parse_one_statement("/* */ SELECT 1+1")?.text(),
+            "SELECT 1 + 1 "
+        );
+        assert_eq!(
+            parse_one_statement("Select  2*3 +(4*5)AS a, b '\\x01', $1,? -- comment")?.text(),
+            "SELECT 2 * 3 + ( 4 * 5 ) AS a , b '\\x01' , $1 , ? "
+        );
+        assert_eq!(
+            parse_one_statement("SELECT foo(0), cast(1L as decimal(10, -1)) FROM a.b")?.text(),
+            "SELECT foo ( 0 ) , CAST ( 1L AS DECIMAL ( 10 , -1 ) ) FROM a . b "
+        );
+        assert_eq!(
+            parse_one_statement("SELECT U&\"a#2014b#+002014c\"   UESCAPE '#'")?.text(),
+            "SELECT U&\"a#2014b#+002014c\" UESCAPE '#' "
+        );
         Ok(())
     }
 }
