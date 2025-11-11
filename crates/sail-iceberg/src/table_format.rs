@@ -8,6 +8,7 @@ use sail_common_datafusion::datasource::{SinkInfo, SourceInfo, TableFormat};
 use url::Url;
 
 use crate::datasource::provider::IcebergTableProvider;
+use crate::options::TableIcebergOptions;
 use crate::spec::{PartitionSpec, Schema, Snapshot, TableMetadata};
 
 #[derive(Debug)]
@@ -138,6 +139,19 @@ impl TableFormat for IcebergTableFormat {
 }
 
 impl IcebergTableFormat {
+    pub async fn create_iceberg_provider(
+        ctx: &dyn Session,
+        table_url: Url,
+        options: TableIcebergOptions,
+    ) -> Result<Arc<dyn TableProvider>> {
+        let (schema, snapshot, partition_specs) =
+            load_table_metadata_with_options(ctx, &table_url, options).await?;
+
+        let provider =
+            IcebergTableProvider::new(table_url.to_string(), schema, snapshot, partition_specs)?;
+        Ok(Arc::new(provider))
+    }
+
     async fn parse_table_url(ctx: &dyn Session, paths: Vec<String>) -> Result<Url> {
         if paths.len() != 1 {
             return plan_err!(
@@ -227,6 +241,100 @@ pub(crate) async fn load_table_metadata(
 
     let partition_specs = table_metadata.partition_specs.clone();
     Ok((schema, snapshot, partition_specs))
+}
+
+/// Load metadata and pick snapshot per options (precedence: snapshot_id > ref > timestamp > current).
+pub(crate) async fn load_table_metadata_with_options(
+    ctx: &dyn Session,
+    table_url: &Url,
+    options: TableIcebergOptions,
+) -> Result<(Schema, Snapshot, Vec<PartitionSpec>)> {
+    log::trace!(
+        "Loading table metadata (with options) from: {}, options: {:?}",
+        table_url,
+        options
+    );
+    let object_store = ctx
+        .runtime_env()
+        .object_store_registry
+        .get_store(table_url)
+        .map_err(|e| DataFusionError::External(Box::new(e)))?;
+
+    let metadata_location = find_latest_metadata_file(&object_store, table_url).await?;
+    let metadata_path = object_store::path::Path::from(metadata_location.as_str());
+    let metadata_data = object_store
+        .get(&metadata_path)
+        .await
+        .map_err(|e| DataFusionError::External(Box::new(e)))?
+        .bytes()
+        .await
+        .map_err(|e| DataFusionError::External(Box::new(e)))?;
+
+    let table_metadata = TableMetadata::from_json(&metadata_data).map_err(|e| {
+        log::trace!("Failed to parse table metadata: {:?}", e);
+        DataFusionError::External(Box::new(e))
+    })?;
+
+    // Choose snapshot according to precedence
+    let chosen_snapshot = if let Some(id) = options.snapshot_id {
+        table_metadata
+            .snapshots
+            .iter()
+            .find(|s| s.snapshot_id() == id)
+            .cloned()
+            .ok_or_else(|| DataFusionError::Plan(format!("Snapshot with id {} not found", id)))?
+    } else if let Some(ref name) = options.use_ref {
+        let sid = table_metadata
+            .refs
+            .get(name)
+            .map(|r| r.snapshot_id)
+            .ok_or_else(|| DataFusionError::Plan(format!("Unknown Iceberg ref: {}", name)))?;
+        table_metadata
+            .snapshots
+            .iter()
+            .find(|s| s.snapshot_id() == sid)
+            .cloned()
+            .ok_or_else(|| {
+                DataFusionError::Plan(format!("Snapshot for ref {} (id={}) not found", name, sid))
+            })?
+    } else if let Some(ts_str) = options.timestamp_as_of {
+        let ts_ms =
+            parse_timestamp_to_ms(&ts_str).map_err(|e| DataFusionError::Plan(e.to_string()))?;
+        find_snapshot_by_ts(&table_metadata, ts_ms)
+            .cloned()
+            .ok_or_else(|| {
+                DataFusionError::Plan(format!(
+                    "No Iceberg snapshot exists at or before timestamp {}",
+                    ts_str
+                ))
+            })?
+    } else {
+        table_metadata.current_snapshot().cloned().ok_or_else(|| {
+            DataFusionError::Plan("No current snapshot found in table metadata".to_string())
+        })?
+    };
+
+    // Pick schema associated with snapshot, or current schema as fallback
+    let schema = if let Some(schema_id) = chosen_snapshot.schema_id() {
+        table_metadata
+            .schemas
+            .iter()
+            .find(|s| s.schema_id() == schema_id)
+            .cloned()
+            .ok_or_else(|| {
+                DataFusionError::Plan(format!(
+                    "Schema with id {} not found for chosen snapshot",
+                    schema_id
+                ))
+            })?
+    } else {
+        table_metadata.current_schema().cloned().ok_or_else(|| {
+            DataFusionError::Plan("No current schema found in table metadata".to_string())
+        })?
+    };
+
+    let partition_specs = table_metadata.partition_specs.clone();
+    Ok((schema, chosen_snapshot, partition_specs))
 }
 
 /// Find the latest metadata file in the table location
@@ -340,4 +448,37 @@ pub(crate) async fn find_latest_metadata_file(
             plan_err!("Failed to list metadata directory: {}", e)
         }
     }
+}
+
+fn parse_timestamp_to_ms(s: &str) -> std::result::Result<i64, String> {
+    use chrono::{DateTime, NaiveDateTime, TimeZone, Utc};
+
+    // Try RFC3339 first
+    if let Ok(dt) = DateTime::parse_from_rfc3339(s) {
+        return Ok(dt.with_timezone(&Utc).timestamp_millis());
+    }
+
+    // Fallback format "yyyy-MM-dd HH:mm:ss.SSS"
+    let fmt = "%Y-%m-%d %H:%M:%S%.3f";
+    let naive = NaiveDateTime::parse_from_str(s, fmt)
+        .map_err(|e| format!("Invalid timestamp '{}': {}", s, e))?;
+    Ok(Utc.from_utc_datetime(&naive).timestamp_millis())
+}
+
+fn find_snapshot_by_ts<'a>(meta: &'a TableMetadata, ts_ms: i64) -> Option<&'a Snapshot> {
+    // Prefer snapshot_log if present
+    if let Some(sid) = meta
+        .snapshot_log
+        .iter()
+        .filter(|e| e.timestamp_ms <= ts_ms)
+        .max_by_key(|e| e.timestamp_ms)
+        .map(|e| e.snapshot_id)
+    {
+        return meta.snapshots.iter().find(|s| s.snapshot_id() == sid);
+    }
+    // Fallback to scanning snapshots by snapshot timestamp
+    meta.snapshots
+        .iter()
+        .filter(|s| s.timestamp_ms() <= ts_ms)
+        .max_by_key(|s| s.timestamp_ms())
 }
