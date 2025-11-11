@@ -37,7 +37,15 @@ use datafusion_proto::physical_plan::{AsExecutionPlan, PhysicalExtensionCodec};
 use datafusion_proto::protobuf::{
     JoinType as ProtoJoinType, PhysicalPlanNode, PhysicalSortExprNode,
 };
+use datafusion_spark::function::bitmap::bitmap_count::BitmapCount;
+use datafusion_spark::function::bitwise::bit_count::SparkBitCount;
+use datafusion_spark::function::bitwise::bit_get::SparkBitGet;
+use datafusion_spark::function::hash::crc32::SparkCrc32;
+use datafusion_spark::function::hash::sha1::SparkSha1;
 use datafusion_spark::function::math::expm1::SparkExpm1;
+use datafusion_spark::function::math::modulus::SparkPmod;
+use datafusion_spark::function::math::width_bucket::SparkWidthBucket;
+use datafusion_spark::function::string::luhn_check::SparkLuhnCheck;
 use prost::bytes::BytesMut;
 use prost::Message;
 use sail_common_datafusion::array::record_batch::{read_record_batches, write_record_batches};
@@ -85,9 +93,7 @@ use sail_function::scalar::datetime::spark_unix_timestamp::SparkUnixTimestamp;
 use sail_function::scalar::datetime::timestamp_now::TimestampNow;
 use sail_function::scalar::drop_struct_field::DropStructField;
 use sail_function::scalar::explode::{explode_name_to_kind, Explode};
-use sail_function::scalar::hash::spark_crc32::SparkCrc32;
 use sail_function::scalar::hash::spark_murmur3_hash::SparkMurmur3Hash;
-use sail_function::scalar::hash::spark_sha1::SparkSha1;
 use sail_function::scalar::hash::spark_xxhash64::SparkXxhash64;
 use sail_function::scalar::map::map_from_arrays::MapFromArrays;
 use sail_function::scalar::map::map_from_entries::MapFromEntries;
@@ -102,15 +108,12 @@ use sail_function::scalar::math::spark_bround::SparkBRound;
 use sail_function::scalar::math::spark_ceil_floor::{SparkCeil, SparkFloor};
 use sail_function::scalar::math::spark_conv::SparkConv;
 use sail_function::scalar::math::spark_hex_unhex::{SparkHex, SparkUnHex};
-use sail_function::scalar::math::spark_pmod::SparkPmod;
 use sail_function::scalar::math::spark_signum::SparkSignum;
 use sail_function::scalar::math::spark_try_add::SparkTryAdd;
 use sail_function::scalar::math::spark_try_div::SparkTryDiv;
 use sail_function::scalar::math::spark_try_mod::SparkTryMod;
 use sail_function::scalar::math::spark_try_mult::SparkTryMult;
 use sail_function::scalar::math::spark_try_subtract::SparkTrySubtract;
-use sail_function::scalar::math::spark_width_bucket::SparkWidthBucket;
-use sail_function::scalar::misc::bitmap_count::BitmapCount;
 use sail_function::scalar::misc::raise_error::RaiseError;
 use sail_function::scalar::misc::spark_aes::{
     SparkAESDecrypt, SparkAESEncrypt, SparkTryAESDecrypt, SparkTryAESEncrypt,
@@ -1368,9 +1371,16 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
                 Ok(Arc::new(ScalarUDF::from(SparkTryToBinary::new())))
             }
             "spark_abs" | "abs" => Ok(Arc::new(ScalarUDF::from(SparkAbs::new()))),
+            "spark_bit_count" | "bit_count" => Ok(Arc::new(ScalarUDF::from(SparkBitCount::new()))),
+            "spark_bit_get" | "bit_get" | "getbit" => {
+                Ok(Arc::new(ScalarUDF::from(SparkBitGet::new())))
+            }
             "spark_conv" | "conv" => Ok(Arc::new(ScalarUDF::from(SparkConv::new()))),
             "spark_signum" | "signum" => Ok(Arc::new(ScalarUDF::from(SparkSignum::new()))),
             "spark_last_day" | "last_day" => Ok(Arc::new(ScalarUDF::from(SparkLastDay::new()))),
+            "spark_luhn_check" | "luhn_check" => {
+                Ok(Arc::new(ScalarUDF::from(SparkLuhnCheck::new())))
+            }
             "spark_next_day" | "next_day" => Ok(Arc::new(ScalarUDF::from(SparkNextDay::new()))),
             "spark_make_dt_interval" | "make_dt_interval" => {
                 Ok(Arc::new(ScalarUDF::from(SparkMakeDtInterval::new())))
@@ -1461,6 +1471,8 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
             || node_inner.is::<SparkArray>()
             || node_inner.is::<SparkBase64>()
             || node_inner.is::<SparkBin>()
+            || node_inner.is::<SparkBitCount>()
+            || node_inner.is::<SparkBitGet>()
             || node_inner.is::<SparkBRound>()
             || node_inner.is::<SparkCalendarInterval>()
             || node_inner.is::<SparkCeil>()
@@ -1477,6 +1489,7 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
             || node_inner.is::<SparkFromCSV>()
             || node_inner.is::<SparkHex>()
             || node_inner.is::<SparkLastDay>()
+            || node_inner.is::<SparkLuhnCheck>()
             || node_inner.is::<SparkMakeDtInterval>()
             || node_inner.is::<SparkMakeInterval>()
             || node_inner.is::<SparkMakeTimestampNtz>()
