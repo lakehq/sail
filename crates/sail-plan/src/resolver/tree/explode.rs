@@ -117,12 +117,8 @@ impl TreeNodeRewriter for ExplodeRewriter<'_> {
             }?,
             (ExplodeDataType::Map, false, _) => {
                 vec![
-                    ident(&name)
-                        .field(SAIL_MAP_KEY_FIELD_NAME)
-                        .alias(SAIL_MAP_KEY_FIELD_NAME),
-                    ident(&name)
-                        .field(SAIL_MAP_VALUE_FIELD_NAME)
-                        .alias(SAIL_MAP_VALUE_FIELD_NAME),
+                    ident(&name).field(SAIL_MAP_KEY_FIELD_NAME).alias("key"),
+                    ident(&name).field(SAIL_MAP_VALUE_FIELD_NAME).alias("value"),
                 ]
             }
             (ExplodeDataType::Map, true, _) => vec![
@@ -130,11 +126,11 @@ impl TreeNodeRewriter for ExplodeRewriter<'_> {
                 ident(&name)
                     .field("col")
                     .field(SAIL_MAP_KEY_FIELD_NAME)
-                    .alias(SAIL_MAP_KEY_FIELD_NAME),
+                    .alias("key"),
                 ident(&name)
                     .field("col")
                     .field(SAIL_MAP_VALUE_FIELD_NAME)
-                    .alias(SAIL_MAP_VALUE_FIELD_NAME),
+                    .alias("value"),
             ],
         };
 
