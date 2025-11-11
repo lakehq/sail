@@ -12,6 +12,15 @@ pub const ARROW_DECIMAL128_MAX_SCALE: i8 = arrow_schema::DECIMAL128_MAX_SCALE;
 pub const ARROW_DECIMAL256_MAX_PRECISION: u8 = arrow_schema::DECIMAL256_MAX_PRECISION;
 pub const ARROW_DECIMAL256_MAX_SCALE: i8 = arrow_schema::DECIMAL256_MAX_SCALE;
 
+/// Field name for list type.
+pub const SAIL_LIST_FIELD_NAME: &str = "item";
+/// Field name for map type's entries.
+pub const SAIL_MAP_FIELD_NAME: &str = "entries";
+/// Field name for map type's key.
+pub const SAIL_MAP_KEY_FIELD_NAME: &str = "key";
+/// Field name for map type's value.
+pub const SAIL_MAP_VALUE_FIELD_NAME: &str = "value";
+
 /// Native Sail data types that convert to Arrow types.
 /// Types directly match to [`arrow_schema::DataType`] variants when there is a corresponding type.
 /// Additionally, custom data types are supported for cases not covered by Arrow.

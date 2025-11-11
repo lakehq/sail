@@ -20,6 +20,7 @@ use datafusion_expr::{
     cast, expr, lit, when, AggregateUDF, ExprSchemable, WindowFunctionDefinition,
 };
 use lazy_static::lazy_static;
+use sail_common::spec::SAIL_LIST_FIELD_NAME;
 use sail_common_datafusion::utils::items::ItemTaker;
 use sail_function::aggregate::kurtosis::KurtosisFunction;
 use sail_function::aggregate::max_min_by::{MaxByFunction, MinByFunction};
@@ -443,7 +444,11 @@ fn listagg(input: WinFunctionInput) -> PlanResult<expr::Expr> {
 
     let string_agg = array_to_string(
         agg.cast_to(
-            &DataType::List(Arc::new(Field::new("item", DataType::Utf8, true))),
+            &DataType::List(Arc::new(Field::new(
+                SAIL_LIST_FIELD_NAME,
+                DataType::Utf8,
+                true,
+            ))),
             schema,
         )?,
         delim.cast_to(&DataType::Utf8, schema)?,

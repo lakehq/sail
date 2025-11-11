@@ -11,6 +11,7 @@ use datafusion_expr::{
     Volatility,
 };
 use datafusion_functions::utils::make_scalar_function;
+use sail_common::spec::{SAIL_MAP_KEY_FIELD_NAME, SAIL_MAP_VALUE_FIELD_NAME};
 
 use crate::scalar::map::utils::{
     map_from_keys_values_offsets_nulls, map_type_from_key_value_types,
@@ -142,8 +143,8 @@ fn str_to_map_inner(args: &[ArrayRef]) -> Result<ArrayRef> {
                 ))
             };
 
-            let keys = create_list_array(keys, "key", false);
-            let values = create_list_array(values, "value", true);
+            let keys = create_list_array(keys, SAIL_MAP_KEY_FIELD_NAME, false);
+            let values = create_list_array(values, SAIL_MAP_VALUE_FIELD_NAME, true);
 
             map_from_keys_values_offsets_nulls(
                 keys.values(),

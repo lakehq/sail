@@ -9,13 +9,13 @@ The memory catalog provider in Sail stores table metadata in memory for the dura
 
 A memory catalog can be configured using the following options.
 
-- `name` (required): The name of the catalog.
 - `type` (required): The string `memory`.
+- `name` (required): The name of the catalog.
 - `initial_database` (required): The initial database namespace as an array of strings.
 - `initial_database_comment` (optional): The comment for the initial database.
 
 ## Examples
 
 ```bash
-export SAIL_CATALOG__LIST='[{name="sail", type="memory", initial_database=["dev", "analytics"], initial_database_comment="Development analytics database"}]'
+export SAIL_CATALOG__LIST='[{type="memory", name="sail", initial_database=["dev", "analytics"], initial_database_comment="Development analytics database"}]'
 ```
