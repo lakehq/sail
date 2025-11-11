@@ -1,6 +1,7 @@
 use figment::providers::Env;
 use figment::value::{Dict, Empty, Map, Tag, Value};
 use figment::{Error, Figment, Metadata, Profile, Provider};
+use secrecy::SecretString;
 use serde::Deserialize;
 
 use crate::config::loader::{
@@ -287,12 +288,20 @@ pub enum CatalogType {
     },
     #[serde(alias = "iceberg-rest")]
     IcebergRest {
+        // TODO: Update configuration according to:
+        //  https://iceberg.apache.org/docs/nightly/spark-configuration/#catalog-configuration
         name: String,
         uri: String,
         warehouse: Option<String>,
         prefix: Option<String>,
-        oauth_access_token: Option<String>,
-        bearer_access_token: Option<String>,
+        oauth_access_token: Option<SecretString>,
+        bearer_access_token: Option<SecretString>,
+    },
+    Unity {
+        name: String,
+        uri: Option<String>,
+        default_catalog: Option<String>,
+        token: Option<SecretString>,
     },
 }
 

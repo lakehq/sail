@@ -8,7 +8,7 @@ use sail_catalog::provider::{
     DatabaseStatus, DropDatabaseOptions, DropTableOptions, DropViewOptions, Namespace,
     TableColumnStatus, TableKind, TableStatus,
 };
-use sail_common::runtime::RuntimeHandle;
+use sail_catalog::utils::get_property;
 use sail_iceberg::{
     arrow_type_to_iceberg, iceberg_type_to_arrow, Literal, NestedField, StructType,
     DEFAULT_SCHEMA_ID,
@@ -16,21 +16,13 @@ use sail_iceberg::{
 use tokio::sync::OnceCell;
 
 use crate::apis::configuration::Configuration;
-use crate::apis::{self, Api};
-use crate::runtime::RuntimeAwareApiClient;
+use crate::apis::{self, Api, ApiClient};
 
 pub const REST_CATALOG_PROP_URI: &str = "uri";
 
 pub const REST_CATALOG_PROP_WAREHOUSE: &str = "warehouse";
 
 pub const REST_CATALOG_PROP_PREFIX: &str = "prefix";
-
-fn get_property(properties: &HashMap<String, String>, key: &str) -> Option<String> {
-    properties
-        .iter()
-        .find(|(k, _)| k.trim().to_lowercase() == key.trim().to_lowercase())
-        .map(|(_, v)| v.clone())
-}
 
 // TODO: Further properties and configurations may be needed from:
 //  - https://iceberg.apache.org/docs/nightly/configuration/#catalog-properties
@@ -44,15 +36,14 @@ pub struct RestCatalogConfig {
 
 /// Provider for Apache Iceberg REST Catalog.
 pub struct IcebergRestCatalogProvider {
-    runtime: RuntimeHandle,
     name: String,
     catalog_config: RestCatalogConfig,
     merged_catalog_config: OnceCell<RestCatalogConfig>,
-    client: OnceCell<RuntimeAwareApiClient>,
+    client: OnceCell<ApiClient>,
 }
 
 impl IcebergRestCatalogProvider {
-    pub fn new(runtime: RuntimeHandle, name: String, props: HashMap<String, String>) -> Self {
+    pub fn new(name: String, props: HashMap<String, String>) -> Self {
         let catalog_config = RestCatalogConfig {
             uri: props
                 .get(REST_CATALOG_PROP_URI)
@@ -66,7 +57,6 @@ impl IcebergRestCatalogProvider {
         };
 
         Self {
-            runtime,
             name,
             catalog_config,
             merged_catalog_config: OnceCell::new(),
@@ -74,40 +64,29 @@ impl IcebergRestCatalogProvider {
         }
     }
 
-    fn init_client(
-        &self,
-        catalog_config: &RestCatalogConfig,
-    ) -> CatalogResult<RuntimeAwareApiClient> {
-        let uri = catalog_config.uri.clone();
-        let props = catalog_config.props.clone();
-        RuntimeAwareApiClient::try_new(
-            move || {
-                let mut client_config = Configuration::new();
-                client_config.user_agent = Some("Sail".to_string());
-                client_config.base_path = uri;
-                for (key, value) in &props {
-                    // TODO: `basic_auth` and `api_key` are not used anything in the API yet.
-                    //  We may need to support them in the future.
-                    match key.as_str() {
-                        "oauth-access-token" => {
-                            client_config.oauth_access_token = Some(value.clone());
-                        }
-                        "bearer-access-token" => {
-                            client_config.bearer_access_token = Some(value.clone());
-                        }
-                        _ => {}
-                    }
+    fn init_client(&self, catalog_config: &RestCatalogConfig) -> CatalogResult<ApiClient> {
+        let mut client_config = Configuration::new();
+        client_config.user_agent = Some("Sail".to_string());
+        client_config.base_path = catalog_config.uri.to_string();
+        for (key, value) in &catalog_config.props {
+            // TODO: `basic_auth` and `api_key` are not used anything in the API yet.
+            //  We may need to support them in the future.
+            match key.as_str() {
+                "oauth-access-token" => {
+                    client_config.oauth_access_token = Some(value.to_string());
                 }
-                Ok(apis::ApiClient::new(Arc::new(client_config)))
-            },
-            self.runtime.io().clone(),
-        )
-        .map_err(|e| CatalogError::External(format!("Failed to initialize API client: {e}")))
+                "bearer-access-token" => {
+                    client_config.bearer_access_token = Some(value.to_string());
+                }
+                _ => {}
+            }
+        }
+        Ok(ApiClient::new(Arc::new(client_config)))
     }
 
     async fn load_catalog_config(
         &self,
-        client: &RuntimeAwareApiClient,
+        client: &ApiClient,
         warehouse: Option<&str>,
     ) -> CatalogResult<crate::models::CatalogConfig> {
         let config = client
@@ -123,7 +102,7 @@ impl IcebergRestCatalogProvider {
     // This only happens once, then the result is cached.
     async fn load_client_and_merged_config(
         &self,
-    ) -> CatalogResult<(&RuntimeAwareApiClient, &RestCatalogConfig)> {
+    ) -> CatalogResult<(&ApiClient, &RestCatalogConfig)> {
         let merged_catalog_config = self
             .merged_catalog_config
             .get_or_try_init(|| async {
@@ -349,78 +328,79 @@ impl IcebergRestCatalogProvider {
             })
             .collect();
 
-        let mut properties: Vec<_> = properties.into_iter().collect();
         if let Some(metadata_location) = result.metadata_location {
-            properties.push(("metadata-location".to_string(), metadata_location));
+            properties.insert("metadata-location".to_string(), metadata_location);
         }
-        properties.push((
+        properties.insert(
             "metadata.format-version".to_string(),
             format_version.to_string(),
-        ));
-        properties.push(("metadata.table-uuid".to_string(), table_uuid));
+        );
+        properties.insert("metadata.table-uuid".to_string(), table_uuid);
         if let Some(last_updated_ms) = last_updated_ms {
-            properties.push((
+            properties.insert(
                 "metadata.last-updated-ms".to_string(),
                 last_updated_ms.to_string(),
-            ));
+            );
         }
         if let Some(next_row_id) = next_row_id {
-            properties.push(("metadata.next-row-id".to_string(), next_row_id.to_string()));
+            properties.insert("metadata.next-row-id".to_string(), next_row_id.to_string());
         }
         if let Some(current_schema_id) = current_schema_id {
-            properties.push((
+            properties.insert(
                 "metadata.current-schema-id".to_string(),
                 current_schema_id.to_string(),
-            ));
+            );
         }
         if let Some(last_column_id) = last_column_id {
-            properties.push((
+            properties.insert(
                 "metadata.last-column-id".to_string(),
                 last_column_id.to_string(),
-            ));
+            );
         }
         if let Some(default_spec_id) = default_spec_id {
-            properties.push((
+            properties.insert(
                 "metadata.default-spec-id".to_string(),
                 default_spec_id.to_string(),
-            ));
+            );
         }
         if let Some(last_partition_id) = last_partition_id {
-            properties.push((
+            properties.insert(
                 "metadata.last-partition-id".to_string(),
                 last_partition_id.to_string(),
-            ));
+            );
         }
         if let Some(default_sort_order_id) = default_sort_order_id {
-            properties.push((
+            properties.insert(
                 "metadata.default-sort-order-id".to_string(),
                 default_sort_order_id.to_string(),
-            ));
+            );
         }
         if let Some(current_snapshot_id) = current_snapshot_id {
-            properties.push((
+            properties.insert(
                 "metadata.current-snapshot-id".to_string(),
                 current_snapshot_id.to_string(),
-            ));
+            );
         }
         if let Some(last_sequence_number) = last_sequence_number {
-            properties.push((
+            properties.insert(
                 "metadata.last-sequence-number".to_string(),
                 last_sequence_number.to_string(),
-            ));
+            );
         }
         if let Some(statistics) = statistics {
-            properties.push((
+            properties.insert(
                 "metadata.statistics".to_string(),
                 serde_json::to_string(&statistics).unwrap_or_default(),
-            ));
+            );
         }
         if let Some(partition_statistics) = partition_statistics {
-            properties.push((
+            properties.insert(
                 "metadata.partition-statistics".to_string(),
                 serde_json::to_string(&partition_statistics).unwrap_or_default(),
-            ));
+            );
         }
+
+        let properties: Vec<_> = properties.into_iter().collect();
 
         Ok(TableStatus {
             name: table_name.to_string(),
@@ -507,22 +487,23 @@ impl IcebergRestCatalogProvider {
             .map(|r| r.sql.clone())
             .unwrap_or_default();
 
-        let properties: HashMap<String, String> = properties.unwrap_or_default();
+        let mut properties: HashMap<String, String> = properties.unwrap_or_default();
 
         let comment = get_property(&properties, "comment");
 
-        let mut properties: Vec<_> = properties.into_iter().collect();
-        properties.push(("metadata-location".to_string(), result.metadata_location));
-        properties.push(("metadata.view-uuid".to_string(), view_uuid));
-        properties.push((
+        properties.insert("metadata-location".to_string(), result.metadata_location);
+        properties.insert("metadata.view-uuid".to_string(), view_uuid);
+        properties.insert(
             "metadata.format-version".to_string(),
             format_version.to_string(),
-        ));
-        properties.push(("metadata.location".to_string(), location));
-        properties.push((
+        );
+        properties.insert("metadata.location".to_string(), location);
+        properties.insert(
             "metadata.current-version-id".to_string(),
             current_version_id.to_string(),
-        ));
+        );
+
+        let properties: Vec<_> = properties.into_iter().collect();
 
         Ok(TableStatus {
             name: view_name.to_string(),
@@ -557,6 +538,7 @@ impl CatalogProvider for IcebergRestCatalogProvider {
             location,
             properties,
         } = options;
+
         let mut props: HashMap<String, String> = properties.into_iter().collect();
         if let Some(c) = comment {
             props.insert("comment".to_string(), c);
@@ -842,15 +824,15 @@ impl CatalogProvider for IcebergRestCatalogProvider {
         let write_order = build_sort_order(&sort_by, &name_to_id)?;
 
         let mut props = HashMap::new();
-        for (k, v) in properties {
-            props.insert(k, v);
-        }
         // TODO: Is this correct for options?
         for (k, v) in options {
             props.insert(format!("options.{k}"), v);
         }
         if let Some(c) = comment {
             props.insert("comment".to_string(), c);
+        }
+        for (k, v) in properties {
+            props.insert(k, v);
         }
 
         let request = crate::models::CreateTableRequest {
@@ -1273,8 +1255,6 @@ fn build_sort_order(
 mod tests {
     use std::sync::Arc;
 
-    use sail_common::config::AppConfig;
-    use sail_common::runtime::RuntimeManager;
     use wiremock::matchers::{method, path, query_param, query_param_is_missing};
     use wiremock::{Mock, MockServer, ResponseTemplate};
 
@@ -1302,13 +1282,8 @@ mod tests {
                 .await;
 
             let name_str = name.unwrap_or("");
-            let runtime = RuntimeHandle::new(
-                tokio::runtime::Handle::current(),
-                tokio::runtime::Handle::current(),
-                true,
-            );
             let props = HashMap::from([(REST_CATALOG_PROP_URI.to_string(), server.uri())]);
-            let catalog = IcebergRestCatalogProvider::new(runtime, name_str.to_string(), props);
+            let catalog = IcebergRestCatalogProvider::new(name_str.to_string(), props);
 
             Self {
                 name: name_str.to_string(),

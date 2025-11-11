@@ -8,12 +8,13 @@ use datafusion::config::TableParquetOptions;
 use datafusion::datasource::listing::PartitionedFile;
 use datafusion::datasource::physical_plan::{
     wrap_partition_type_in_dict, wrap_partition_value_in_dict, FileGroup, FileScanConfig,
-    FileScanConfigBuilder, ParquetSource,
+    FileScanConfigBuilder, FileSource as _, ParquetSource,
 };
 use datafusion::physical_expr::PhysicalExpr;
 use deltalake::kernel::Add;
 use deltalake::logstore::LogStoreRef;
 use object_store::path::Path;
+use sail_common_datafusion::schema_adapter::DeltaSchemaAdapterFactory;
 
 use crate::datasource::schema_rewriter::DeltaPhysicalExprAdapterFactory;
 use crate::datasource::{
@@ -145,7 +146,8 @@ pub fn build_file_scan_config(
         }
     }
 
-    let file_source = Arc::new(parquet_source);
+    let file_source: Arc<dyn datafusion::datasource::physical_plan::FileSource> =
+        parquet_source.with_schema_adapter_factory(Arc::new(DeltaSchemaAdapterFactory))?;
 
     // Build the final FileScanConfig
     let object_store_url =

@@ -44,14 +44,11 @@ pub fn partitioned_file_from_action(
         })
         .collect::<Vec<_>>();
 
-    let ts_secs = action.modification_time / 1000;
-    let ts_ns = (action.modification_time % 1000) * 1_000_000;
     #[allow(clippy::expect_used)]
-    let last_modified = chrono::Utc.from_utc_datetime(
-        &chrono::DateTime::from_timestamp(ts_secs, ts_ns as u32)
-            .expect("Failed to create timestamp from seconds and nanoseconds")
-            .naive_utc(),
-    );
+    let last_modified = chrono::Utc
+        .timestamp_millis_opt(action.modification_time)
+        .single()
+        .expect("Failed to create timestamp from milliseconds");
     PartitionedFile {
         #[allow(clippy::expect_used)]
         object_meta: ObjectMeta {
@@ -113,29 +110,31 @@ pub fn to_correct_scalar_value(
     field_dt: &ArrowDataType,
 ) -> Result<Option<ScalarValue>> {
     match stat_val {
-        serde_json::Value::Array(_) => Ok(None),
-        serde_json::Value::Object(_) => Ok(None),
+        serde_json::Value::Array(_) | serde_json::Value::Object(_) => Ok(None),
         serde_json::Value::Null => {
             Ok(Some(ScalarValue::try_new_null(field_dt).map_err(|e| {
                 datafusion_common::DataFusionError::External(Box::new(e))
             })?))
         }
-        serde_json::Value::String(string_val) => match field_dt {
-            ArrowDataType::Timestamp(_, _) => Ok(Some(parse_timestamp(stat_val, field_dt)?)),
-            ArrowDataType::Date32 => Ok(Some(parse_date(stat_val, field_dt)?)),
-            _ => Ok(Some(ScalarValue::try_from_string(
-                string_val.to_owned(),
-                field_dt,
-            )?)),
-        },
-        other => match field_dt {
-            ArrowDataType::Timestamp(_, _) => Ok(Some(parse_timestamp(stat_val, field_dt)?)),
-            ArrowDataType::Date32 => Ok(Some(parse_date(stat_val, field_dt)?)),
-            _ => Ok(Some(ScalarValue::try_from_string(
-                other.to_string(),
-                field_dt,
-            )?)),
-        },
+        // Consolidate String and other value handling
+        _ => {
+            let string_val = match stat_val {
+                serde_json::Value::String(s) => s.to_owned(),
+                other => other.to_string(),
+            };
+
+            match field_dt {
+                ArrowDataType::Timestamp(_, _) => Ok(Some(parse_timestamp(
+                    &serde_json::Value::String(string_val),
+                    field_dt,
+                )?)),
+                ArrowDataType::Date32 => Ok(Some(parse_date(
+                    &serde_json::Value::String(string_val),
+                    field_dt,
+                )?)),
+                _ => Ok(Some(ScalarValue::try_from_string(string_val, field_dt)?)),
+            }
+        }
     }
 }
 

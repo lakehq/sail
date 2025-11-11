@@ -5,7 +5,8 @@ use std::sync::Arc;
 use chrono::Utc;
 use delta_kernel::engine::arrow_conversion::TryIntoKernel;
 use delta_kernel::expressions::column_expr_ref;
-use delta_kernel::schema::StructField;
+use delta_kernel::schema::{ColumnMetadataKey, StructField};
+use delta_kernel::table_features::ColumnMappingMode;
 use delta_kernel::table_properties::TableProperties;
 use delta_kernel::{EvaluationHandler, Expression};
 use deltalake::kernel::{Add, DataType, Metadata, Protocol, Remove, StructType};
@@ -152,6 +153,30 @@ impl DeltaTableState {
     /// Obtain the Eager snapshot of the state
     pub fn snapshot(&self) -> &EagerSnapshot {
         &self.snapshot
+    }
+
+    /// Determine effective column mapping mode: when explicit mode is None but
+    /// the schema carries column mapping annotations on any top-level field,
+    /// treat it as Name.
+    pub fn effective_column_mapping_mode(&self) -> ColumnMappingMode {
+        let explicit = self
+            .snapshot()
+            .snapshot()
+            .table_configuration()
+            .column_mapping_mode();
+        if matches!(explicit, ColumnMappingMode::None) {
+            let kschema = self.snapshot().snapshot().schema().clone();
+            let has_annotations = kschema.fields().any(|f| {
+                f.metadata()
+                    .contains_key(ColumnMetadataKey::ColumnMappingPhysicalName.as_ref())
+                    && f.metadata()
+                        .contains_key(ColumnMetadataKey::ColumnMappingId.as_ref())
+            });
+            if has_annotations {
+                return ColumnMappingMode::Name;
+            }
+        }
+        explicit
     }
 
     /// Update the state of the table to the given version.
