@@ -23,7 +23,10 @@ fn build_unity_catalog() -> Result<(), Box<dyn std::error::Error>> {
         .replace(
             "Self::new_with_client(baseurl, client.build().unwrap())",
             "Ok(Self::new_with_client(baseurl, client.build()?))",
-        );
+        )
+        // We need to prevent the code examples from being treated as ignored tests.
+        // These code snippets do not compile when running `cargo test -- --ignored`.
+        .replace("```ignore", "```notrust");
 
     std::fs::write(out_file, content)?;
 
