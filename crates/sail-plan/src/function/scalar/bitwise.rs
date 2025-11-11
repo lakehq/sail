@@ -7,10 +7,6 @@ use sail_common_datafusion::utils::items::ItemTaker;
 use crate::error::{PlanError, PlanResult};
 use crate::function::common::{ScalarFunction, ScalarFunctionInput};
 
-fn bit_get(value: expr::Expr, position: expr::Expr) -> expr::Expr {
-    cast((value >> position) & lit(1), DataType::Int8)
-}
-
 fn shiftrightunsigned(input: ScalarFunctionInput) -> PlanResult<expr::Expr> {
     let ScalarFunctionInput {
         arguments,
@@ -46,7 +42,7 @@ pub(super) fn list_built_in_bitwise_functions() -> Vec<(&'static str, ScalarFunc
         ("^", F::binary_op(Operator::BitwiseXor)),
         ("bit_count", F::unary(bitwise_fn::bit_count)),
         ("bit_get", F::binary(bitwise_fn::bit_get)),
-        ("getbit", F::binary(bit_get)),
+        ("getbit", F::binary(bitwise_fn::bit_get)),
         ("shiftleft", F::binary_op(Operator::BitwiseShiftLeft)),
         ("<<", F::binary_op(Operator::BitwiseShiftLeft)),
         ("shiftright", F::binary_op(Operator::BitwiseShiftRight)),

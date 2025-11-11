@@ -1372,7 +1372,9 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
             }
             "spark_abs" | "abs" => Ok(Arc::new(ScalarUDF::from(SparkAbs::new()))),
             "spark_bit_count" | "bit_count" => Ok(Arc::new(ScalarUDF::from(SparkBitCount::new()))),
-            "spark_bit_get" | "bit_get" => Ok(Arc::new(ScalarUDF::from(SparkBitGet::new()))),
+            "spark_bit_get" | "bit_get" | "getbit" => {
+                Ok(Arc::new(ScalarUDF::from(SparkBitGet::new())))
+            }
             "spark_conv" | "conv" => Ok(Arc::new(ScalarUDF::from(SparkConv::new()))),
             "spark_signum" | "signum" => Ok(Arc::new(ScalarUDF::from(SparkSignum::new()))),
             "spark_last_day" | "last_day" => Ok(Arc::new(ScalarUDF::from(SparkLastDay::new()))),
