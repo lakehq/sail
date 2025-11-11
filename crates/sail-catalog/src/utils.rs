@@ -1,3 +1,5 @@
+use std::collections::HashMap;
+
 use lazy_static::lazy_static;
 use regex::Regex;
 
@@ -69,4 +71,11 @@ pub fn quote_namespace_if_needed(namespace: &Namespace) -> String {
         quoted.push_str(&quote_name_if_needed(part));
     }
     quoted
+}
+
+pub fn get_property(properties: &HashMap<String, String>, key: &str) -> Option<String> {
+    properties
+        .iter()
+        .find(|(k, _)| k.trim().to_lowercase() == key.trim().to_lowercase())
+        .map(|(_, v)| v.clone())
 }

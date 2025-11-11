@@ -147,6 +147,9 @@ impl ExecutionPlan for DeltaRemoveActionsExec {
                     })?;
 
                 for add_json in adds_col.iter().flatten() {
+                    if add_json.trim().is_empty() {
+                        continue;
+                    }
                     let add: Add = serde_json::from_str(add_json)
                         .map_err(|e| DataFusionError::External(Box::new(e)))?;
                     adds_to_remove.push(add);

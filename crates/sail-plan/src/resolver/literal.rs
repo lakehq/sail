@@ -9,7 +9,9 @@ use datafusion::arrow::datatypes as adt;
 use datafusion_common::scalar::ScalarStructBuilder;
 use datafusion_common::utils::SingleRowListArrayBuilder;
 use datafusion_common::ScalarValue;
-use sail_common::spec::{self, Literal};
+use sail_common::spec::{
+    self, Literal, SAIL_MAP_FIELD_NAME, SAIL_MAP_KEY_FIELD_NAME, SAIL_MAP_VALUE_FIELD_NAME,
+};
 
 use crate::error::{PlanError, PlanResult};
 use crate::resolver::state::PlanResolverState;
@@ -271,13 +273,13 @@ impl PlanResolver<'_> {
             } => {
                 let fields = spec::Fields::from(vec![
                     spec::Field {
-                        name: "key".to_string(),
+                        name: SAIL_MAP_KEY_FIELD_NAME.to_string(),
                         data_type: key_type,
                         nullable: false,
                         metadata: vec![],
                     },
                     spec::Field {
-                        name: "value".to_string(),
+                        name: SAIL_MAP_VALUE_FIELD_NAME.to_string(),
                         data_type: value_type,
                         nullable: true,
                         metadata: vec![],
@@ -285,7 +287,7 @@ impl PlanResolver<'_> {
                 ]);
                 let key_value_fields = self.resolve_fields(&fields, state)?;
                 let field = Arc::new(adt::Field::new(
-                    "entries",
+                    SAIL_MAP_FIELD_NAME,
                     adt::DataType::Struct(key_value_fields.clone()),
                     false,
                 ));

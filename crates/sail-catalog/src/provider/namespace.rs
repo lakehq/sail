@@ -2,7 +2,7 @@ use std::fmt;
 use std::sync::Arc;
 
 use crate::error::{CatalogError, CatalogResult};
-use crate::utils::quote_namespace_if_needed;
+use crate::utils::{quote_name_if_needed, quote_namespace_if_needed};
 
 /// A non-empty, multi-level name.
 /// This is used to refer to a database in the catalog.
@@ -73,6 +73,18 @@ impl fmt::Display for Namespace {
 }
 
 impl Namespace {
+    pub fn head_to_string(&self) -> String {
+        quote_name_if_needed(&self.head)
+    }
+
+    pub fn tail_to_string(&self) -> String {
+        self.tail
+            .iter()
+            .map(|s| quote_name_if_needed(s))
+            .collect::<Vec<_>>()
+            .join(".")
+    }
+
     pub fn is_child_of(&self, other: &Self) -> bool {
         self.head == other.head
             && self.tail.len() == other.tail.len() + 1

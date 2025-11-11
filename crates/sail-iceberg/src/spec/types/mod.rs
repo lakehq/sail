@@ -30,11 +30,11 @@ use serde_json::Value as JsonValue;
 pub use values::*;
 
 /// Field name for list type.
-pub const LIST_FIELD_NAME: &str = "element";
+pub const ICEBERG_LIST_FIELD_NAME: &str = "element";
 /// Field name for map type's key.
-pub const MAP_KEY_FIELD_NAME: &str = "key";
+pub const ICEBERG_MAP_KEY_FIELD_NAME: &str = "key";
 /// Field name for map type's value.
-pub const MAP_VALUE_FIELD_NAME: &str = "value";
+pub const ICEBERG_MAP_VALUE_FIELD_NAME: &str = "value";
 
 pub(crate) const MAX_DECIMAL_BYTES: u32 = 24;
 pub(crate) const MAX_DECIMAL_PRECISION: u32 = 38;
@@ -643,17 +643,17 @@ impl NestedField {
 
     /// Construct list type's element field.
     pub fn list_element(id: i32, field_type: Type, required: bool) -> Self {
-        Self::new(id, LIST_FIELD_NAME, field_type, required)
+        Self::new(id, ICEBERG_LIST_FIELD_NAME, field_type, required)
     }
 
     /// Construct map type's key field.
     pub fn map_key_element(id: i32, field_type: Type) -> Self {
-        Self::required(id, MAP_KEY_FIELD_NAME, field_type)
+        Self::required(id, ICEBERG_MAP_KEY_FIELD_NAME, field_type)
     }
 
     /// Construct map type's value field.
     pub fn map_value_element(id: i32, field_type: Type, required: bool) -> Self {
-        Self::new(id, MAP_VALUE_FIELD_NAME, field_type, required)
+        Self::new(id, ICEBERG_MAP_VALUE_FIELD_NAME, field_type, required)
     }
 
     /// Set the field's doc.

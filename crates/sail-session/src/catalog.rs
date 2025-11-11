@@ -4,11 +4,13 @@ use std::sync::Arc;
 use datafusion::common::{plan_datafusion_err, Result};
 use sail_catalog::error::CatalogResult;
 use sail_catalog::manager::{CatalogManager, CatalogManagerOptions};
-use sail_catalog::provider::CatalogProvider;
+use sail_catalog::provider::{CatalogProvider, RuntimeAwareCatalogProvider};
 use sail_catalog_iceberg::IcebergRestCatalogProvider;
 use sail_catalog_memory::MemoryCatalogProvider;
+use sail_catalog_unity::UnityCatalogProvider;
 use sail_common::config::{AppConfig, CatalogType};
 use sail_common::runtime::RuntimeHandle;
+use secrecy::ExposeSecret;
 
 pub fn create_catalog_manager(
     config: &AppConfig,
@@ -51,21 +53,39 @@ pub fn create_catalog_manager(
                     if let Some(oauth_access_token) = oauth_access_token {
                         properties.insert(
                             "oauth-access-token".to_string(), // Iceberg uses kebab-case
-                            oauth_access_token.to_string(),
+                            oauth_access_token.expose_secret().to_string(), // FIXME: Only expose when necessary
                         );
                     }
                     if let Some(bearer_access_token) = bearer_access_token {
                         properties.insert(
                             "bearer-access-token".to_string(), // Iceberg uses kebab-case
-                            bearer_access_token.to_string(),
+                            bearer_access_token.expose_secret().to_string(), // FIXME: Only expose when necessary
                         );
                     }
-                    let provider = IcebergRestCatalogProvider::new(
-                        runtime.clone(),
-                        name.to_string(),
-                        properties,
-                    );
-                    Ok((name.to_string(), Arc::new(provider)))
+
+                    let runtime_aware = RuntimeAwareCatalogProvider::try_new(
+                        || {
+                            let provider =
+                                IcebergRestCatalogProvider::new(name.to_string(), properties);
+                            Ok(provider)
+                        },
+                        runtime.io().clone(),
+                    )?;
+
+                    Ok((name.to_string(), Arc::new(runtime_aware)))
+                }
+                CatalogType::Unity {
+                    name,
+                    uri,
+                    default_catalog,
+                    token,
+                } => {
+                    let runtime_aware = RuntimeAwareCatalogProvider::try_new(
+                        || UnityCatalogProvider::new(name.to_string(), default_catalog, uri, token),
+                        runtime.io().clone(),
+                    )?;
+
+                    Ok((name.to_string(), Arc::new(runtime_aware)))
                 }
             }
         })

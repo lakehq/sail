@@ -18,6 +18,7 @@ use datafusion_expr::{
 };
 use datafusion_expr_common::signature::Volatility;
 use regex::{Error, Regex};
+use sail_common::spec::{SAIL_LIST_FIELD_NAME, SAIL_MAP_KEY_FIELD_NAME, SAIL_MAP_VALUE_FIELD_NAME};
 
 use crate::functions_nested_utils::*;
 use crate::functions_utils::make_scalar_function;
@@ -574,7 +575,9 @@ fn convert_sql_type(sql_type: &SQLType) -> Result<DataType> {
                 }
             };
             Ok(DataType::List(Arc::new(Field::new(
-                "element", inner_type, true,
+                SAIL_LIST_FIELD_NAME,
+                inner_type,
+                true,
             ))))
         }
 
@@ -610,7 +613,7 @@ fn convert_sql_type(sql_type: &SQLType) -> Result<DataType> {
 fn find_key_index(options: &MapArray, search_key: &str) -> Option<usize> {
     options
         .entries()
-        .column_by_name("key")
+        .column_by_name(SAIL_MAP_KEY_FIELD_NAME)
         .and_then(|x| x.as_any().downcast_ref::<StringArray>())
         .and_then(|x| {
             x.iter()
@@ -629,7 +632,7 @@ fn find_key_value(options: &MapArray, search_key: &str) -> Option<String> {
     if let Some(index) = find_key_index(options, search_key) {
         options
             .entries()
-            .column_by_name("value")
+            .column_by_name(SAIL_MAP_VALUE_FIELD_NAME)
             .and_then(|x| x.as_any().downcast_ref::<StringArray>())
             .map(|values| values.value(index).to_string())
     } else {
