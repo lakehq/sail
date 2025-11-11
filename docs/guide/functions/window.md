@@ -78,6 +78,8 @@ rank: 3
 | `stddev_samp`           | :white_check_mark: |
 | `string_agg`            | :white_check_mark: |
 | `sum`                   | :white_check_mark: |
+| `try_avg`               | :white_check_mark: |
+| `try_sum`               | :white_check_mark: |
 | `var_pop`               | :white_check_mark: |
 | `var_samp`              | :white_check_mark: |
 | `variance`              | :white_check_mark: |
@@ -91,5 +93,3 @@ rank: 3
 | `percentile`            | :construction:     |
 | `percentile_cont`       | :construction:     |
 | `percentile_disc`       | :construction:     |
-| `try_avg`               | :construction:     |
-| `try_sum`               | :construction:     |

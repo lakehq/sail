@@ -408,6 +408,7 @@ rank: 1
 | `lower`              | :white_check_mark: |
 | `lpad`               | :white_check_mark: |
 | `ltrim`              | :white_check_mark: |
+| `luhn_check`         | :white_check_mark: |
 | `make_valid_utf8`    | :white_check_mark: |
 | `mask`               | :white_check_mark: |
 | `octet_length`       | :white_check_mark: |
@@ -444,7 +445,6 @@ rank: 1
 | `collation`          | :construction:     |
 | `format_number`      | :construction:     |
 | `format_string`      | :construction:     |
-| `luhn_check`         | :construction:     |
 | `printf`             | :construction:     |
 | `randstr`            | :construction:     |
 | `regexp_extract`     | :construction:     |
