@@ -130,55 +130,14 @@ fn parse_ducklake_location(path: &str) -> Result<Option<DuckLakeOptions>> {
         )));
     }
 
-    // Identify metadata file (*.ducklake) and table path segments after it
-    let segments: Vec<String> = url
-        .path_segments()
-        .map(|s| s.map(|p| p.to_string()).collect())
-        .unwrap_or_else(Vec::new);
-
-    let split_idx = segments
-        .iter()
-        .position(|s| s.ends_with(".ducklake"))
-        .ok_or_else(|| {
-            datafusion::common::DataFusionError::Plan(
-                "Missing metadata .ducklake file in location".into(),
-            )
-        })?;
-
-    let db_parts = &segments[..=split_idx];
-    let table_parts = &segments[split_idx + 1..];
-
-    let table = match table_parts {
-        [t] => t.clone(),
-        [s, t] => format!("{}.{t}", s),
-        [] => url
-            .query_pairs()
-            .find(|(k, _)| k == "table")
-            .map(|(_, v)| v.to_string())
-            .ok_or_else(|| {
-                datafusion::common::DataFusionError::Plan("Missing table in location".into())
-            })?,
-        _ => {
-            return Err(datafusion::common::DataFusionError::Plan(
-                "Invalid table path in location".into(),
-            ));
-        }
-    };
-
-    // Reconstruct metadata URL (strip query, keep path up to .ducklake)
-    let mut meta_url = url.clone();
-    meta_url.set_query(None);
-    let db_path = format!("/{}", db_parts.join("/"));
-    meta_url.set_path(&db_path);
-    let host = meta_url.host_str().unwrap_or("");
-    let url_str = if host.is_empty() {
-        format!("{}://{}", meta_scheme, meta_url.path())
-    } else {
-        format!("{}://{}{}", meta_scheme, host, meta_url.path())
-    };
+    // Common: parse query params
+    let qp: Vec<(String, String)> = url
+        .query_pairs()
+        .map(|(k, v)| (k.to_string(), v.to_string()))
+        .collect();
 
     // Required base_path
-    let base_path = url
+    let base_path = qp
         .query_pairs()
         .find(|(k, _)| k == "base_path")
         .map(|(_, v)| v.to_string())
@@ -187,14 +146,134 @@ fn parse_ducklake_location(path: &str) -> Result<Option<DuckLakeOptions>> {
         })?;
 
     // Optional params
-    let snapshot_id = url
-        .query_pairs()
+    let snapshot_id = qp
+        .iter()
         .find(|(k, _)| k == "snapshot_id")
         .and_then(|(_, v)| v.parse::<u64>().ok());
-    let case_sensitive = url
-        .query_pairs()
+    let case_sensitive = qp
+        .iter()
         .find(|(k, _)| k == "case_sensitive")
         .is_some_and(|(_, v)| v == "true");
+
+    let url_str;
+    let table: String;
+
+    if meta_scheme == "sqlite" {
+        // Identify metadata file (*.ducklake) and table path segments after it
+        let segments: Vec<String> = url
+            .path_segments()
+            .map(|s| s.map(|p| p.to_string()).collect())
+            .unwrap_or_else(Vec::new);
+
+        let split_idx = segments
+            .iter()
+            .position(|s| s.ends_with(".ducklake"))
+            .ok_or_else(|| {
+                datafusion::common::DataFusionError::Plan(
+                    "Missing metadata .ducklake file in location".into(),
+                )
+            })?;
+
+        let db_parts = &segments[..=split_idx];
+        let table_parts = &segments[split_idx + 1..];
+
+        table = match table_parts {
+            [t] => t.clone(),
+            [s, t] => format!("{}.{t}", s),
+            [] => qp
+                .iter()
+                .find(|(k, _)| k == "table")
+                .map(|(_, v)| v.to_string())
+                .ok_or_else(|| {
+                    datafusion::common::DataFusionError::Plan("Missing table in location".into())
+                })?,
+            _ => {
+                return Err(datafusion::common::DataFusionError::Plan(
+                    "Invalid table path in location".into(),
+                ));
+            }
+        };
+
+        // Reconstruct metadata URL (strip query, keep path up to .ducklake)
+        let mut meta_url = url.clone();
+        meta_url.set_query(None);
+        let db_path = format!("/{}", db_parts.join("/"));
+        meta_url.set_path(&db_path);
+        let auth = meta_url
+            .authority()
+            .map(|a| a.as_str().to_string())
+            .unwrap_or_default();
+        url_str = if auth.is_empty() {
+            format!("{}://{}", meta_scheme, meta_url.path())
+        } else {
+            format!("{}://{}{}", meta_scheme, auth, meta_url.path())
+        };
+    } else {
+        // postgres/postgresql: expect path like /dbname[/schema[/table]]
+        let segments: Vec<String> = url
+            .path_segments()
+            .map(|s| s.map(|p| p.to_string()).collect())
+            .unwrap_or_else(Vec::new);
+        if segments.is_empty() {
+            return Err(datafusion::common::DataFusionError::Plan(
+                "Missing database name in location".into(),
+            ));
+        }
+        let dbname = &segments[0];
+        let table_parts = &segments[1..];
+        table = match table_parts {
+            [t] => t.clone(),
+            [s, t] => format!("{}.{t}", s),
+            [] => qp
+                .iter()
+                .find(|(k, _)| k == "table")
+                .map(|(_, v)| v.to_string())
+                .ok_or_else(|| {
+                    datafusion::common::DataFusionError::Plan("Missing table in location".into())
+                })?,
+            _ => {
+                return Err(datafusion::common::DataFusionError::Plan(
+                    "Invalid table path in location".into(),
+                ));
+            }
+        };
+
+        // Reconstruct metadata URL to include scheme, authority, and /dbname, preserving
+        // connection query params but excluding DuckLake-specific params.
+        let mut meta_url = url.clone();
+        // Preserve only non-ducklake query params
+        let filtered: Vec<(String, String)> = qp
+            .into_iter()
+            .filter(|(k, _)| {
+                k != "base_path" && k != "snapshot_id" && k != "case_sensitive" && k != "table"
+            })
+            .collect();
+        if filtered.is_empty() {
+            meta_url.set_query(None);
+        } else {
+            let mut q = String::new();
+            for (i, (k, v)) in filtered.iter().enumerate() {
+                if i > 0 {
+                    q.push('&');
+                }
+                q.push_str(&urlencoding::encode(k));
+                q.push('=');
+                q.push_str(&urlencoding::encode(v));
+            }
+            meta_url.set_query(Some(&q));
+        }
+        let db_path = format!("/{}", dbname);
+        meta_url.set_path(&db_path);
+        let auth = meta_url
+            .authority()
+            .map(|a| a.as_str().to_string())
+            .unwrap_or_default();
+        url_str = if auth.is_empty() {
+            format!("{}://{}", meta_scheme, meta_url.path())
+        } else {
+            format!("{}://{}{}", meta_scheme, auth, meta_url.path())
+        };
+    }
 
     Ok(Some(DuckLakeOptions {
         url: url_str,

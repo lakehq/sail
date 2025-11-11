@@ -85,6 +85,7 @@ dependencies = [
     "pyiceberg[sql-sqlite,pyiceberg-core]==0.10.0",
     "pydantic>=2.11,<2.12",
     "SQLAlchemy>=2,<3",
+    "psycopg[binary]>=3,<4",
 ]
 path = ".venvs/default"
 
@@ -128,6 +129,7 @@ dependencies = [
     "pyiceberg[sql-sqlite,pyiceberg-core]==0.10.0",
     "pydantic>=2.11,<2.12",
     "SQLAlchemy>=2,<3",
+    "psycopg[binary]>=3,<4",
 ]
 
 [[tool.hatch.envs.test.matrix]]

@@ -8,6 +8,13 @@ _ENGINES: dict[str, Any] = {}
 
 
 def _normalize_sqlalchemy_url(url: str) -> str:
+    # Normalize Postgres URLs to use psycopg driver for SQLAlchemy.
+    # Accept postgres:// or postgresql:// and coerce to postgresql+psycopg://
+    if url.startswith(("postgres://", "postgresql://")):
+        # If already has an explicit driver, preserve it
+        if url.startswith("postgresql+"):
+            return url
+        return "postgresql+psycopg://" + url.split("://", 1)[1]
     # Support legacy "sqlite://<path>" by converting to SQLAlchemy format.
     if url.startswith("sqlite://"):
         if url.startswith(("sqlite:////", "sqlite:///")):

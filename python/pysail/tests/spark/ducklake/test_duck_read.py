@@ -7,6 +7,7 @@ metadata in SQLite/PostgreSQL and data files in object storage.
 """
 
 import duckdb
+import os
 import pandas as pd
 import pytest
 from pandas.testing import assert_frame_equal
@@ -469,3 +470,139 @@ class TestDuckLakeReadAdvanced:
         count = df.count()
         expected_count = 3
         assert count == expected_count
+
+
+@pytest.fixture(scope="module")
+def postgres_url():
+    url = os.environ.get("DUCKLAKE_PG_URL")
+    if not url:
+        pytest.skip("DUCKLAKE_PG_URL not set; skipping DuckLake Postgres tests")
+    return url
+
+
+@pytest.fixture
+def ducklake_pg_setup(tmp_path, duckdb_conn, postgres_url):
+    """
+    Set up a DuckLake Postgres database with test data.
+    Returns a tuple of (postgres_url, data_path, table_name).
+    """
+    data_path = tmp_path / "data_pg"
+    data_path.mkdir(exist_ok=True)
+
+    # Attach DuckLake using Postgres metadata
+    pg_url_sql = postgres_url.replace("'", "''")
+    duckdb_conn.execute(
+        f"""
+        ATTACH 'ducklake:postgresql://{pg_url_sql[len('postgresql://'):]}' AS my_ducklake
+        (DATA_PATH '{data_path}/')
+        """
+    )
+
+    try:
+        table_name = "my_ducklake.test_table"
+        duckdb_conn.execute(
+            f"""
+            CREATE TABLE {table_name} (
+                id INTEGER,
+                name VARCHAR,
+                score DOUBLE
+            )
+            """
+        )
+        duckdb_conn.execute(
+            f"""
+            INSERT INTO {table_name}
+            VALUES
+                (1, 'Alice', 95.5),
+                (2, 'Bob', 87.3),
+                (3, 'Charlie', 92.1)
+            """
+        )
+    finally:
+        duckdb_conn.execute("DETACH my_ducklake")
+
+    return postgres_url, str(data_path), "test_table"
+
+
+class TestDuckLakeReadPostgres:
+    """DuckLake Postgres read operation tests."""
+
+    def test_ducklake_pg_basic_read(self, spark, ducklake_pg_setup):
+        postgres_url, data_path, table = ducklake_pg_setup
+        df = (
+            spark.read.format("ducklake")
+            .options(url=postgres_url, table=table, base_path=f"file://{data_path}/")
+            .load()
+        )
+        result = df.sort("id").collect()
+        assert len(result) == 3
+        assert result[0].name == "Alice"
+        assert result[1].name == "Bob"
+        assert result[2].name == "Charlie"
+
+    def test_ducklake_pg_with_filter(self, spark, ducklake_pg_setup):
+        postgres_url, data_path, table = ducklake_pg_setup
+        df = (
+            spark.read.format("ducklake")
+            .options(url=postgres_url, table=table, base_path=f"file://{data_path}/")
+            .load()
+        )
+        result = df.filter("score > 90").sort("id").collect()
+        assert len(result) == 2
+        assert result[0].name == "Alice"
+        assert result[1].name == "Charlie"
+
+    def test_ducklake_pg_with_projection(self, spark, ducklake_pg_setup):
+        postgres_url, data_path, table = ducklake_pg_setup
+        df = (
+            spark.read.format("ducklake")
+            .options(url=postgres_url, table=table, base_path=f"file://{data_path}/")
+            .load()
+        )
+        rows = df.select("id", "name").sort("id").collect()
+        assert len(rows) == 3
+        assert hasattr(rows[0], "id")
+        assert hasattr(rows[0], "name")
+        assert not hasattr(rows[0], "score")
+
+    def test_ducklake_pg_with_limit(self, spark, ducklake_pg_setup):
+        postgres_url, data_path, table = ducklake_pg_setup
+        df = (
+            spark.read.format("ducklake")
+            .options(url=postgres_url, table=table, base_path=f"file://{data_path}/")
+            .load()
+        )
+        assert df.limit(2).count() == 2
+
+    def test_ducklake_pg_read_to_pandas(self, spark, ducklake_pg_setup):
+        postgres_url, data_path, table = ducklake_pg_setup
+        df = (
+            spark.read.format("ducklake")
+            .options(url=postgres_url, table=table, base_path=f"file://{data_path}/")
+            .load()
+        )
+        pdf = df.sort("id").toPandas()
+        assert len(pdf) == 3
+        assert list(pdf["name"]) == ["Alice", "Bob", "Charlie"]
+
+    def test_ducklake_pg_with_sql_location(self, spark, ducklake_pg_setup):
+        postgres_url, data_path, _table = ducklake_pg_setup
+        loc_base = postgres_url.replace("postgresql://", "ducklake+postgresql://", 1)
+        loc = f"{loc_base}/test_table?base_path=file://{data_path}/"
+
+        spark.sql(
+            f"""
+            CREATE TABLE ducklake_pg_test
+            USING ducklake
+            LOCATION '{escape_sql_string_literal(loc)}'
+            """
+        )
+        try:
+            result_df = spark.sql("SELECT * FROM ducklake_pg_test").sort("id")
+            rows = result_df.collect()
+            assert len(rows) == 3
+            assert rows[0].name == "Alice"
+            assert rows[1].name == "Bob"
+            assert rows[2].name == "Charlie"
+        finally:
+            spark.sql("DROP TABLE IF EXISTS ducklake_pg_test")
