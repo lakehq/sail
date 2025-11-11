@@ -11,6 +11,7 @@ use datafusion::arrow::datatypes::{DataType, Field};
 use datafusion_common::{arrow_err, exec_err, plan_err, DataFusionError, Result};
 use datafusion_expr::{ColumnarValue, ScalarFunctionArgs, ScalarUDFImpl, Signature, Volatility};
 use datafusion_functions::utils::make_scalar_function;
+use sail_common::spec::SAIL_LIST_FIELD_NAME;
 
 use crate::scalar::struct_function::to_struct_array;
 
@@ -137,7 +138,7 @@ fn struct_result_field(data_types: &[DataType]) -> Arc<Field> {
         .zip(data_types)
         .map(|(name, data_type)| Field::new(name, data_type.clone(), true))
         .collect::<Vec<_>>();
-    Arc::new(Field::new_struct("item", fields, true))
+    Arc::new(Field::new_struct(SAIL_LIST_FIELD_NAME, fields, true))
 }
 
 fn num_rows_data_types_field_names(

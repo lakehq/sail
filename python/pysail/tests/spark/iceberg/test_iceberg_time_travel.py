@@ -1,0 +1,137 @@
+import time
+from datetime import datetime, timezone
+
+import pandas as pd
+import pytest
+from pandas.testing import assert_frame_equal
+from pyiceberg.schema import Schema
+from pyiceberg.types import LongType, NestedField, StringType
+from pyspark.sql.types import Row
+
+from .utils import create_sql_catalog  # noqa: TID252
+
+
+def test_iceberg_time_travel_by_snapshot_id(spark, tmp_path):
+    catalog = create_sql_catalog(tmp_path)
+    identifier = "default.tt_by_snapshot"
+    table = catalog.create_table(
+        identifier=identifier,
+        schema=Schema(
+            NestedField(field_id=1, name="id", field_type=LongType(), required=False),
+            NestedField(field_id=2, name="value", field_type=StringType(), required=False),
+        ),
+    )
+    try:
+        v0 = [Row(id=1, value="v0")]
+        df0 = spark.createDataFrame(v0)
+        df0.write.format("iceberg").mode("overwrite").save(table.location())
+        table.refresh()
+        sid0 = table.current_snapshot().snapshot_id
+
+        v1 = [Row(id=2, value="v1")]
+        df1 = spark.createDataFrame(v1)
+        df1.write.format("iceberg").mode("append").save(table.location())
+        table.refresh()
+
+        latest = spark.read.format("iceberg").load(table.location()).sort("id").toPandas()
+        assert_frame_equal(latest, pd.DataFrame({"id": [1, 2], "value": ["v0", "v1"]}).astype(latest.dtypes))
+
+        tt_df = (
+            spark.read.format("iceberg").option("snapshotId", str(sid0)).load(table.location()).sort("id").toPandas()
+        )
+        assert_frame_equal(tt_df, pd.DataFrame({"id": [1], "value": ["v0"]}).astype(tt_df.dtypes))
+    finally:
+        catalog.drop_table(identifier)
+
+
+def test_iceberg_time_travel_by_timestamp(spark, tmp_path):
+    catalog = create_sql_catalog(tmp_path)
+    identifier = "default.tt_by_timestamp"
+    table = catalog.create_table(
+        identifier=identifier,
+        schema=Schema(
+            NestedField(field_id=1, name="id", field_type=LongType(), required=False),
+            NestedField(field_id=2, name="value", field_type=StringType(), required=False),
+        ),
+    )
+    try:
+        v0 = [Row(id=1, value="v0")]
+        spark.createDataFrame(v0).write.format("iceberg").mode("overwrite").save(table.location())
+        ts0 = datetime.now(timezone.utc).isoformat()
+        time.sleep(0.1)
+
+        v1 = [Row(id=2, value="v1")]
+        spark.createDataFrame(v1).write.format("iceberg").mode("append").save(table.location())
+        ts1 = datetime.now(timezone.utc).isoformat()
+        time.sleep(0.1)
+
+        v2 = [Row(id=3, value="v2")]
+        spark.createDataFrame(v2).write.format("iceberg").mode("overwrite").save(table.location())
+        ts2 = datetime.now(timezone.utc).isoformat()
+
+        latest = spark.read.format("iceberg").load(table.location())
+        assert latest.collect() == [Row(id=3, value="v2")]
+
+        df0 = spark.read.format("iceberg").option("timestampAsOf", ts0).load(table.location())
+        assert df0.collect() == [Row(id=1, value="v0")]
+
+        df1 = spark.read.format("iceberg").option("timestampAsOf", ts1).load(table.location()).sort("id").collect()
+        assert df1 == [Row(id=1, value="v0"), Row(id=2, value="v1")]
+
+        df2 = spark.read.format("iceberg").option("timestampAsOf", ts2).load(table.location())
+        assert df2.collect() == [Row(id=3, value="v2")]
+    finally:
+        catalog.drop_table(identifier)
+
+
+def test_iceberg_time_travel_precedence_snapshot_over_timestamp(spark, tmp_path):
+    catalog = create_sql_catalog(tmp_path)
+    identifier = "default.tt_precedence"
+    table = catalog.create_table(
+        identifier=identifier,
+        schema=Schema(
+            NestedField(field_id=1, name="id", field_type=LongType(), required=False),
+            NestedField(field_id=2, name="value", field_type=StringType(), required=False),
+        ),
+    )
+    try:
+        spark.createDataFrame([Row(id=1, value="old")]).write.format("iceberg").mode("overwrite").save(table.location())
+        table.refresh()
+        sid_old = table.current_snapshot().snapshot_id
+        time.sleep(0.1)
+
+        spark.createDataFrame([Row(id=2, value="new")]).write.format("iceberg").mode("overwrite").save(table.location())
+        ts_new = datetime.now(timezone.utc).isoformat()
+
+        df_prec = (
+            spark.read.format("iceberg")
+            .option("snapshotId", str(sid_old))
+            .option("timestampAsOf", ts_new)
+            .load(table.location())
+        )
+        assert df_prec.collect() == [Row(id=1, value="old")]
+    finally:
+        catalog.drop_table(identifier)
+
+
+def test_iceberg_time_travel_by_ref_main_if_available(spark, tmp_path):
+    catalog = create_sql_catalog(tmp_path)
+    identifier = "default.tt_ref_main"
+    table = catalog.create_table(
+        identifier=identifier,
+        schema=Schema(
+            NestedField(field_id=1, name="id", field_type=LongType(), required=False),
+            NestedField(field_id=2, name="value", field_type=StringType(), required=False),
+        ),
+    )
+    try:
+        spark.createDataFrame([Row(id=1, value="x")]).write.format("iceberg").mode("overwrite").save(table.location())
+        try:
+            df = spark.read.format("iceberg").option("ref", "main").load(table.location())
+            assert df.collect() == [Row(id=1, value="x")]
+        except Exception as e:
+            if "Unknown Iceberg ref" in str(e):
+                pytest.xfail("Iceberg refs (main) not present in table metadata")
+            raise
+    finally:
+        catalog.drop_table(identifier)

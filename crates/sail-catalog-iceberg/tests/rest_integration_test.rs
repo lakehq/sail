@@ -6,8 +6,8 @@ use arrow::datatypes::DataType;
 use sail_catalog::provider::{
     CatalogProvider, CatalogTableConstraint, CatalogTableSort, CreateDatabaseOptions,
     CreateTableColumnOptions, CreateTableOptions, CreateViewColumnOptions, CreateViewOptions,
-    DropDatabaseOptions, DropTableOptions, DropViewOptions, Namespace, TableColumnStatus,
-    TableKind,
+    DropDatabaseOptions, DropTableOptions, DropViewOptions, Namespace, RuntimeAwareCatalogProvider,
+    TableColumnStatus, TableKind,
 };
 use sail_catalog_iceberg::{IcebergRestCatalogProvider, REST_CATALOG_PROP_URI};
 use sail_common::runtime::RuntimeHandle;
@@ -16,7 +16,7 @@ use testcontainers::runners::AsyncRunner;
 use testcontainers::{ContainerAsync, GenericImage, ImageExt};
 
 async fn setup_catalog() -> (
-    IcebergRestCatalogProvider,
+    RuntimeAwareCatalogProvider<IcebergRestCatalogProvider>,
     ContainerAsync<GenericImage>,
     ContainerAsync<GenericImage>,
     ContainerAsync<GenericImage>,
@@ -88,8 +88,17 @@ async fn setup_catalog() -> (
         tokio::runtime::Handle::current(),
         true,
     );
-    let props = HashMap::from([(REST_CATALOG_PROP_URI.to_string(), rest_url)]);
-    let catalog = IcebergRestCatalogProvider::new(runtime, "test".to_string(), props);
+
+    let catalog = RuntimeAwareCatalogProvider::try_new(
+        || {
+            let props = HashMap::from([(REST_CATALOG_PROP_URI.to_string(), rest_url)]);
+            let provider = IcebergRestCatalogProvider::new("test".to_string(), props);
+            Ok(provider)
+        },
+        runtime.io().clone(),
+    )
+    .expect("Failed to create runtime-aware catalog");
+
     (catalog, minio, mc, rest)
 }
 

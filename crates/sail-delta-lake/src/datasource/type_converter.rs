@@ -1,3 +1,4 @@
+use std::collections::HashMap;
 use std::sync::Arc;
 
 use datafusion::arrow::compute::can_cast_types;
@@ -59,6 +60,98 @@ impl DeltaTypeConverter {
         }
 
         let merged_type = match (table_type, input_type) {
+            // Struct type promotion: merge fields by name, preserve existing order and append new fields
+            (DataType::Struct(table_fields), DataType::Struct(input_fields)) => {
+                let mut by_name: HashMap<&str, Field> = HashMap::new();
+                let mut order: Vec<&str> = Vec::new();
+                for f in table_fields {
+                    by_name.insert(f.name().as_str(), f.as_ref().clone());
+                    order.push(f.name().as_str());
+                }
+                // Append/merge input fields
+                for inf in input_fields {
+                    if let Some(tf) = by_name.get(inf.name().as_str()).cloned() {
+                        let merged_child = Self::promote_field_types(&tf, inf.as_ref())?;
+                        by_name.insert(inf.name().as_str(), merged_child);
+                    } else {
+                        by_name.insert(inf.name().as_str(), inf.as_ref().clone());
+                        order.push(inf.name().as_str());
+                    }
+                }
+                let merged_children: Vec<Field> = order
+                    .into_iter()
+                    .filter_map(|n| by_name.remove(n))
+                    .collect();
+                Some(DataType::Struct(merged_children.into()))
+            }
+
+            // List type promotion: merge element field (List and LargeList)
+            (DataType::List(table_elem), DataType::List(input_elem)) => {
+                let merged_elem =
+                    Self::promote_field_types(table_elem.as_ref(), input_elem.as_ref())?;
+                Some(DataType::List(Arc::new(merged_elem)))
+            }
+            (DataType::LargeList(table_elem), DataType::LargeList(input_elem)) => {
+                let merged_elem =
+                    Self::promote_field_types(table_elem.as_ref(), input_elem.as_ref())?;
+                Some(DataType::LargeList(Arc::new(merged_elem)))
+            }
+            (
+                DataType::FixedSizeList(table_elem, t_len),
+                DataType::FixedSizeList(input_elem, i_len),
+            ) => {
+                if t_len != i_len {
+                    return Err(DataFusionError::Plan(format!(
+                    "Schema evolution failed: incompatible sizes for fixed-size list field '{}': {t_len} vs {i_len}",
+                    table_field.name()
+                )));
+                }
+                let merged_elem =
+                    Self::promote_field_types(table_elem.as_ref(), input_elem.as_ref())?;
+                Some(DataType::FixedSizeList(Arc::new(merged_elem), *t_len))
+            }
+
+            // Map type promotion: require identical key type; merge value type; preserve table child field name and sorted flag
+            (DataType::Map(table_kv, t_sorted), DataType::Map(input_kv, i_sorted)) => {
+                let t_kv_dt = table_kv.data_type();
+                let i_kv_dt = input_kv.data_type();
+                let (t_key, t_val) = match t_kv_dt {
+                    DataType::Struct(children) if children.len() == 2 => {
+                        (&children[0], &children[1])
+                    }
+                    _ => {
+                        return Err(DataFusionError::Plan(format!(
+                            "Unexpected map child layout for field '{}': {:?}",
+                            table_field.name(),
+                            t_kv_dt
+                        )))
+                    }
+                };
+                let (i_key, i_val) = match i_kv_dt {
+                    DataType::Struct(children) if children.len() == 2 => {
+                        (&children[0], &children[1])
+                    }
+                    _ => {
+                        return Err(DataFusionError::Plan(format!(
+                            "Unexpected map child layout for input field '{}': {:?}",
+                            table_field.name(),
+                            i_kv_dt
+                        )))
+                    }
+                };
+                if t_key.data_type() != i_key.data_type() {
+                    return Err(DataFusionError::Plan(format!(
+                        "Schema evolution failed: incompatible map key types for field '{}': {:?} vs {:?}",
+                        table_field.name(), t_key.data_type(), i_key.data_type()
+                    )));
+                }
+                let merged_val = Self::promote_field_types(t_val, i_val)?;
+                let kv_struct = DataType::Struct(vec![t_key.as_ref().clone(), merged_val].into());
+                let kv_field = Field::new(table_kv.name(), kv_struct, false);
+                // Prefer table's sorted flag
+                let _ = i_sorted; // appease lints; we intentionally ignore input sorted flag
+                Some(DataType::Map(Arc::new(kv_field), *t_sorted))
+            }
             // String type promotions
             (
                 DataType::Utf8 | DataType::Utf8View | DataType::LargeUtf8,

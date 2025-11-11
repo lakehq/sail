@@ -99,6 +99,22 @@ impl ScalarFunctionBuilder {
         )
     }
 
+    pub fn quaternary<F, R>(f: F) -> ScalarFunction
+    where
+        F: Fn(expr::Expr, expr::Expr, expr::Expr, expr::Expr) -> R + Send + Sync + 'static,
+        R: IntoPlanResult<expr::Expr>,
+    {
+        Arc::new(
+            move |ScalarFunctionInput {
+                      arguments,
+                      function_context: _,
+                  }| {
+                let (first, second, third, fourth) = arguments.four()?;
+                f(first, second, third, fourth).into_plan_result()
+            },
+        )
+    }
+
     pub fn var_arg<F, R>(f: F) -> ScalarFunction
     where
         F: Fn(Vec<expr::Expr>) -> R + Send + Sync + 'static,
@@ -345,7 +361,7 @@ pub(crate) fn get_arguments_and_null_treatment(
     } else if args.len() == 2 {
         if ignore_nulls.is_some() {
             return Err(PlanError::invalid(
-                "first/last value arguments conflict with IGNORE NULLS clause",
+                "arguments conflict with IGNORE NULLS clause",
             ));
         }
         let (expr, ignore_nulls) = args.two()?;
@@ -359,14 +375,12 @@ pub(crate) fn get_arguments_and_null_treatment(
             }
             _ => {
                 return Err(PlanError::invalid(
-                    "first/last value requires a boolean literal as the second argument",
+                    "requires a boolean literal as the second argument",
                 ))
             }
         };
         Ok((vec![expr], null_treatment))
     } else {
-        Err(PlanError::invalid(
-            "first/last value requires 1 or 2 arguments",
-        ))
+        Err(PlanError::invalid("requires 1 or 2 arguments"))
     }
 }

@@ -216,9 +216,13 @@ impl ExecutionPlan for DeltaScanByAddsExec {
                     })?;
                 for i in 0..adds_col.len() {
                     let add_json = adds_col.value(i);
-                    let add: deltalake::kernel::Add = serde_json::from_str(add_json)
-                        .map_err(|e| DataFusionError::External(Box::new(e)))?;
-                    candidate_adds.push(add);
+                    if add_json.trim().is_empty() {
+                        continue;
+                    }
+                    match serde_json::from_str::<deltalake::kernel::Add>(add_json) {
+                        Ok(add) => candidate_adds.push(add),
+                        Err(e) => return Err(DataFusionError::External(Box::new(e))),
+                    }
                 }
             }
 

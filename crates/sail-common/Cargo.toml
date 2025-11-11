@@ -26,3 +26,4 @@ figment = { workspace = true }
 half = { workspace = true }
 iana-time-zone = { workspace = true }
 tokio = { workspace = true }
+secrecy = { workspace = true }

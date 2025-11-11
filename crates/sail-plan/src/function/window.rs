@@ -20,11 +20,14 @@ use datafusion_expr::{
     cast, expr, lit, when, AggregateUDF, ExprSchemable, WindowFunctionDefinition,
 };
 use lazy_static::lazy_static;
+use sail_common::spec::SAIL_LIST_FIELD_NAME;
 use sail_common_datafusion::utils::items::ItemTaker;
 use sail_function::aggregate::kurtosis::KurtosisFunction;
 use sail_function::aggregate::max_min_by::{MaxByFunction, MinByFunction};
 use sail_function::aggregate::mode::ModeFunction;
 use sail_function::aggregate::skewness::SkewnessFunc;
+use sail_function::aggregate::try_avg::TryAvgFunction;
+use sail_function::aggregate::try_sum::TrySumFunction;
 
 use crate::error::{PlanError, PlanResult};
 use crate::function::common::{
@@ -183,84 +186,6 @@ fn kurtosis(input: WinFunctionInput) -> PlanResult<expr::Expr> {
         ))),
         params: WindowFunctionParams {
             args,
-            partition_by,
-            order_by,
-            window_frame,
-            filter: None,
-            null_treatment: get_null_treatment(ignore_nulls),
-            distinct,
-        },
-    })))
-}
-
-fn max_by(input: WinFunctionInput) -> PlanResult<expr::Expr> {
-    let WinFunctionInput {
-        arguments,
-        partition_by,
-        order_by,
-        window_frame,
-        ignore_nulls,
-        distinct,
-        function_context: _,
-    } = input;
-    Ok(expr::Expr::WindowFunction(Box::new(expr::WindowFunction {
-        fun: WindowFunctionDefinition::AggregateUDF(Arc::new(AggregateUDF::from(
-            MaxByFunction::new(),
-        ))),
-        params: WindowFunctionParams {
-            args: arguments,
-            partition_by,
-            order_by,
-            window_frame,
-            filter: None,
-            null_treatment: get_null_treatment(ignore_nulls),
-            distinct,
-        },
-    })))
-}
-
-fn min_by(input: WinFunctionInput) -> PlanResult<expr::Expr> {
-    let WinFunctionInput {
-        arguments,
-        partition_by,
-        order_by,
-        window_frame,
-        ignore_nulls,
-        distinct,
-        function_context: _,
-    } = input;
-    Ok(expr::Expr::WindowFunction(Box::new(expr::WindowFunction {
-        fun: WindowFunctionDefinition::AggregateUDF(Arc::new(AggregateUDF::from(
-            MinByFunction::new(),
-        ))),
-        params: WindowFunctionParams {
-            args: arguments,
-            partition_by,
-            order_by,
-            window_frame,
-            filter: None,
-            null_treatment: get_null_treatment(ignore_nulls),
-            distinct,
-        },
-    })))
-}
-
-fn mode(input: WinFunctionInput) -> PlanResult<expr::Expr> {
-    let WinFunctionInput {
-        arguments,
-        partition_by,
-        order_by,
-        window_frame,
-        ignore_nulls,
-        distinct,
-        function_context: _,
-    } = input;
-    Ok(expr::Expr::WindowFunction(Box::new(expr::WindowFunction {
-        fun: WindowFunctionDefinition::AggregateUDF(Arc::new(AggregateUDF::from(
-            ModeFunction::new(),
-        ))),
-        params: WindowFunctionParams {
-            args: arguments,
             partition_by,
             order_by,
             window_frame,
@@ -443,7 +368,11 @@ fn listagg(input: WinFunctionInput) -> PlanResult<expr::Expr> {
 
     let string_agg = array_to_string(
         agg.cast_to(
-            &DataType::List(Arc::new(Field::new("item", DataType::Utf8, true))),
+            &DataType::List(Arc::new(Field::new(
+                SAIL_LIST_FIELD_NAME,
+                DataType::Utf8,
+                true,
+            ))),
             schema,
         )?,
         delim.cast_to(&DataType::Utf8, schema)?,
@@ -569,12 +498,21 @@ fn list_built_in_window_functions() -> Vec<(&'static str, WinFunction)> {
         ("last_value", F::custom(last_value)),
         ("listagg", F::custom(listagg)),
         ("max", F::aggregate(min_max::max_udaf)),
-        ("max_by", F::custom(max_by)),
+        (
+            "max_by",
+            F::aggregate(|| Arc::new(AggregateUDF::from(MaxByFunction::new()))),
+        ),
         ("mean", F::aggregate(average::avg_udaf)),
         ("median", F::custom(median)),
         ("min", F::aggregate(min_max::min_udaf)),
-        ("min_by", F::custom(min_by)),
-        ("mode", F::custom(mode)),
+        (
+            "min_by",
+            F::aggregate(|| Arc::new(AggregateUDF::from(MinByFunction::new()))),
+        ),
+        (
+            "mode",
+            F::aggregate(|| Arc::new(AggregateUDF::from(ModeFunction::new()))),
+        ),
         ("percentile", F::unknown("percentile")),
         (
             "percentile_approx",
@@ -599,8 +537,14 @@ fn list_built_in_window_functions() -> Vec<(&'static str, WinFunction)> {
         ("stddev_samp", F::aggregate(stddev::stddev_udaf)),
         ("string_agg", F::custom(listagg)),
         ("sum", F::aggregate(sum::sum_udaf)),
-        ("try_avg", F::unknown("try_avg")),
-        ("try_sum", F::unknown("try_sum")),
+        (
+            "try_avg",
+            F::aggregate(|| Arc::new(AggregateUDF::from(TryAvgFunction::new()))),
+        ),
+        (
+            "try_sum",
+            F::aggregate(|| Arc::new(AggregateUDF::from(TrySumFunction::new()))),
+        ),
         ("var_pop", F::aggregate(variance::var_pop_udaf)),
         ("var_samp", F::aggregate(variance::var_samp_udaf)),
         ("variance", F::aggregate(variance::var_samp_udaf)),

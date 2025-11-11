@@ -15,6 +15,7 @@ use parquet::basic::{LogicalType, TimeUnit, Type};
 use parquet::file::metadata::{ParquetMetaData, RowGroupMetaData};
 use parquet::file::statistics::Statistics;
 use parquet::schema::types::{ColumnDescriptor, SchemaDescriptor};
+use sail_common::spec::SAIL_LIST_FIELD_NAME;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
@@ -518,8 +519,11 @@ fn get_list_field_name(column_descr: &Arc<ColumnDescriptor>) -> Option<String> {
         match (part.as_str(), lists_seen, items_seen) {
             ("list", seen, _) if seen == max_rep_levels => return Some("list".to_string()),
             ("element", _, seen) if seen == max_rep_levels => return Some("element".to_string()),
+            (SAIL_LIST_FIELD_NAME, _, seen) if seen == max_rep_levels => {
+                return Some(SAIL_LIST_FIELD_NAME.to_string())
+            }
             ("list", _, _) => lists_seen += 1,
-            ("element", _, _) => items_seen += 1,
+            ("element", _, _) | (SAIL_LIST_FIELD_NAME, _, _) => items_seen += 1,
             (other, _, _) => return Some(other.to_string()),
         }
     }
