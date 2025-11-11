@@ -15,10 +15,8 @@ use datafusion::physical_optimizer::pruning::PruningPredicate;
 use crate::spec::{ColumnInfo, ColumnStatsInfo, FieldIndex, FileInfo};
 
 /// TODO:Implement contains_nan-aware float/double pruning gates
-
 struct DuckLakePruningStats {
     files: Vec<FileInfo>,
-    arrow_schema: Arc<ArrowSchema>,
     name_to_field_id: HashMap<String, FieldIndex>,
     field_id_to_datatype: HashMap<FieldIndex, ArrowDataType>,
     min_cache: RefCell<HashMap<FieldIndex, ArrayRef>>,
@@ -41,7 +39,6 @@ impl DuckLakePruningStats {
         }
         Self {
             files,
-            arrow_schema,
             name_to_field_id,
             field_id_to_datatype,
             min_cache: RefCell::new(HashMap::new()),

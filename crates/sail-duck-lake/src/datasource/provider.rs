@@ -331,7 +331,7 @@ impl DuckLakeTableProvider {
 
         // Build auxiliary mapping: col_name -> datatype
         let mut col_to_dt: HashMap<&str, datafusion::arrow::datatypes::DataType> = HashMap::new();
-        for (_pki, (name, dt)) in &pki_to_col {
+        for (name, dt) in pki_to_col.values() {
             col_to_dt.insert(name, dt.clone());
         }
 
