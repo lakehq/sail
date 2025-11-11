@@ -24,7 +24,7 @@ use crate::datasource::expressions::{get_pushdown_filters, simplify_expr};
 use crate::datasource::pruning::prune_files;
 use crate::metadata::{DuckLakeMetaStore, DuckLakeTable};
 use crate::options::DuckLakeOptions;
-use crate::spec::{FileInfo, FilePartitionInfo, PartitionFieldInfo};
+use crate::spec::{FileInfo, FilePartitionInfo};
 
 pub struct DuckLakeTableProvider {
     table: DuckLakeTable,
@@ -329,6 +329,12 @@ impl DuckLakeTableProvider {
             datafusion::common::scalar::ScalarValue::try_from_string(s.to_string(), dt).ok()
         }
 
+        // Build auxiliary mapping: col_name -> datatype
+        let mut col_to_dt: HashMap<&str, datafusion::arrow::datatypes::DataType> = HashMap::new();
+        for (_pki, (name, dt)) in &pki_to_col {
+            col_to_dt.insert(name, dt.clone());
+        }
+
         // Build per-file map: col_name -> scalar partition value
         let mut kept = Vec::with_capacity(files.len());
         'next_file: for f in files.iter() {
@@ -347,7 +353,7 @@ impl DuckLakeTableProvider {
             }
             // Evaluate each filter as top-level AND
             for expr in filters {
-                if let Some(false) = Self::eval_partition_expr(expr, &part_vals) {
+                if let Some(false) = Self::eval_partition_expr(expr, &part_vals, &col_to_dt) {
                     continue 'next_file;
                 }
             }
@@ -359,6 +365,7 @@ impl DuckLakeTableProvider {
     fn eval_partition_expr(
         expr: &Expr,
         vals: &HashMap<&str, datafusion::common::scalar::ScalarValue>,
+        dtypes: &HashMap<&str, datafusion::arrow::datatypes::DataType>,
     ) -> Option<bool> {
         use datafusion::logical_expr::{BinaryExpr, Operator};
         match expr {
@@ -368,15 +375,31 @@ impl DuckLakeTableProvider {
                         if let Expr::Literal(ref lit, _) = **right {
                             let col_name = c.name.as_str();
                             let v = vals.get(col_name)?;
-                            return Self::cmp_scalar(v, lit, op);
+                            let dt = dtypes.get(col_name)?;
+                            let lit_cast = lit.cast_to(dt).ok()?;
+                            if *op == Operator::Eq {
+                                return Some(&lit_cast == v);
+                            }
+                            use std::cmp::Ordering;
+                            let ord = v.partial_cmp(&lit_cast)?;
+                            let res = match op {
+                                Operator::Lt => ord == Ordering::Less,
+                                Operator::LtEq => ord == Ordering::Less || ord == Ordering::Equal,
+                                Operator::Gt => ord == Ordering::Greater,
+                                Operator::GtEq => {
+                                    ord == Ordering::Greater || ord == Ordering::Equal
+                                }
+                                _ => return None,
+                            };
+                            return Some(res);
                         }
                         None
                     }
                     _ => {
                         // handle boolean combinators AND/OR
                         if *op == Operator::And {
-                            let l = Self::eval_partition_expr(left, vals);
-                            let r = Self::eval_partition_expr(right, vals);
+                            let l = Self::eval_partition_expr(left, vals, dtypes);
+                            let r = Self::eval_partition_expr(right, vals, dtypes);
                             return match (l, r) {
                                 (Some(true), Some(true)) => Some(true),
                                 (Some(false), _) | (_, Some(false)) => Some(false),
@@ -384,8 +407,8 @@ impl DuckLakeTableProvider {
                                 _ => None,
                             };
                         } else if *op == Operator::Or {
-                            let l = Self::eval_partition_expr(left, vals);
-                            let r = Self::eval_partition_expr(right, vals);
+                            let l = Self::eval_partition_expr(left, vals, dtypes);
+                            let r = Self::eval_partition_expr(right, vals, dtypes);
                             return match (l, r) {
                                 (Some(true), _) | (_, Some(true)) => Some(true),
                                 (Some(false), Some(false)) => Some(false),
@@ -400,9 +423,11 @@ impl DuckLakeTableProvider {
                 if let Expr::Column(ref c) = *in_list.expr {
                     let col_name = c.name.as_str();
                     let v = vals.get(col_name)?;
+                    let dt = dtypes.get(col_name)?;
                     for item in &in_list.list {
                         if let Expr::Literal(ref lit, _) = item {
-                            if Self::eq_scalar(v, lit)? {
+                            let lit_cast = lit.cast_to(dt).ok()?;
+                            if &lit_cast == v {
                                 return Some(true);
                             }
                         }
@@ -414,48 +439,5 @@ impl DuckLakeTableProvider {
             // Unsupported: treat as indeterminate so it won't filter out
             _ => None,
         }
-    }
-
-    fn cmp_scalar(
-        left: &datafusion::common::scalar::ScalarValue,
-        right: &datafusion::common::scalar::ScalarValue,
-        op: &datafusion::logical_expr::Operator,
-    ) -> Option<bool> {
-        use std::cmp::Ordering;
-        if left.is_null() || right.is_null() {
-            return None;
-        }
-        match op {
-            datafusion::logical_expr::Operator::Eq => Self::eq_scalar(left, right),
-            datafusion::logical_expr::Operator::Lt
-            | datafusion::logical_expr::Operator::LtEq
-            | datafusion::logical_expr::Operator::Gt
-            | datafusion::logical_expr::Operator::GtEq => {
-                let ord = left.partial_cmp(right)?;
-                let res = match op {
-                    datafusion::logical_expr::Operator::Lt => ord == Ordering::Less,
-                    datafusion::logical_expr::Operator::LtEq => {
-                        ord == Ordering::Less || ord == Ordering::Equal
-                    }
-                    datafusion::logical_expr::Operator::Gt => ord == Ordering::Greater,
-                    datafusion::logical_expr::Operator::GtEq => {
-                        ord == Ordering::Greater || ord == Ordering::Equal
-                    }
-                    _ => return None,
-                };
-                Some(res)
-            }
-            _ => None,
-        }
-    }
-
-    fn eq_scalar(
-        left: &datafusion::common::scalar::ScalarValue,
-        right: &datafusion::common::scalar::ScalarValue,
-    ) -> Option<bool> {
-        if left.is_null() || right.is_null() {
-            return None;
-        }
-        Some(left == right)
     }
 }
