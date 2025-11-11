@@ -465,7 +465,7 @@ fn parse_timestamp_to_ms(s: &str) -> std::result::Result<i64, String> {
     Ok(Utc.from_utc_datetime(&naive).timestamp_millis())
 }
 
-fn find_snapshot_by_ts<'a>(meta: &'a TableMetadata, ts_ms: i64) -> Option<&'a Snapshot> {
+fn find_snapshot_by_ts(meta: &TableMetadata, ts_ms: i64) -> Option<&Snapshot> {
     // Prefer snapshot_log if present
     if let Some(sid) = meta
         .snapshot_log

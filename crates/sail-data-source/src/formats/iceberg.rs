@@ -6,8 +6,7 @@ use datafusion::common::Result;
 use datafusion::datasource::listing::ListingTableUrl;
 use datafusion::physical_plan::ExecutionPlan;
 use sail_common_datafusion::datasource::{SinkInfo, SourceInfo, TableFormat};
-use sail_iceberg::IcebergTableFormat;
-use sail_iceberg::TableIcebergOptions;
+use sail_iceberg::{IcebergTableFormat, TableIcebergOptions};
 use url::Url;
 
 use crate::options::{load_default_options, load_options, IcebergReadOptions};
