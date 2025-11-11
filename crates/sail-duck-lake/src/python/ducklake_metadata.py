@@ -234,4 +234,57 @@ def list_data_files(url: str, table_id: int, snapshot_id: int | None) -> list[di
             }
             for row in rows
         ]
+        if not out:
+            return out
+        ids_csv = ", ".join(str(int(item["data_file_id"])) for item in out)
+        stats_sql = text(
+            f"""
+            select data_file_id, column_id, column_size_bytes, value_count, null_count,
+                   min_value, max_value, contains_nan, extra_stats
+            from ducklake_file_column_stats
+            where data_file_id in ({ids_csv})
+            """
+        )
+        pv_sql = text(
+            f"""
+            select data_file_id, partition_key_index, partition_value
+            from ducklake_file_partition_value
+            where data_file_id in ({ids_csv})
+            """
+        )
+        stats_rows = conn.execute(stats_sql).all()
+        pv_rows = conn.execute(pv_sql).all()
+
+        stats_map: dict[int, list[dict[str, Any]]] = {}
+        for r in stats_rows:
+            fid = int(r[0])
+            lst = stats_map.setdefault(fid, [])
+            lst.append(
+                {
+                    "column_id": int(r[1]),
+                    "column_size_bytes": int(r[2]) if r[2] is not None else None,
+                    "value_count": int(r[3]) if r[3] is not None else None,
+                    "null_count": int(r[4]) if r[4] is not None else None,
+                    "min_value": str(r[5]) if r[5] is not None else None,
+                    "max_value": str(r[6]) if r[6] is not None else None,
+                    "contains_nan": bool(r[7]) if r[7] is not None else None,
+                    "extra_stats": str(r[8]) if r[8] is not None else None,
+                }
+            )
+
+        pv_map: dict[int, list[dict[str, Any]]] = {}
+        for r in pv_rows:
+            fid = int(r[0])
+            lst = pv_map.setdefault(fid, [])
+            lst.append(
+                {
+                    "partition_key_index": int(r[1]),
+                    "partition_value": str(r[2]),
+                }
+            )
+
+        for item in out:
+            fid = item["data_file_id"]
+            item["column_stats"] = stats_map.get(fid, [])
+            item["partition_values"] = pv_map.get(fid, [])
         return out

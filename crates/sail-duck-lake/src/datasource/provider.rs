@@ -6,17 +6,22 @@ use async_trait::async_trait;
 use datafusion::arrow::datatypes::SchemaRef as ArrowSchemaRef;
 use datafusion::catalog::memory::DataSourceExec;
 use datafusion::catalog::Session;
+use datafusion::common::stats::{ColumnStatistics, Precision, Statistics};
+use datafusion::common::ToDFSchema;
 use datafusion::config::TableParquetOptions;
 use datafusion::datasource::listing::PartitionedFile;
 use datafusion::datasource::physical_plan::{FileGroup, FileScanConfigBuilder, ParquetSource};
 use datafusion::datasource::{TableProvider, TableType};
 use datafusion::execution::object_store::ObjectStoreUrl;
 use datafusion::logical_expr::{Expr, TableProviderFilterPushDown};
+use datafusion::physical_expr::PhysicalExpr;
 use datafusion::physical_plan::ExecutionPlan;
 use datafusion_common::{DataFusionError, Result as DataFusionResult};
 use url::Url;
 
 use crate::datasource::arrow::columns_to_arrow_schema;
+use crate::datasource::expressions::{get_pushdown_filters, simplify_expr};
+use crate::datasource::pruning::prune_files;
 use crate::metadata::{DuckLakeMetaStore, DuckLakeTable};
 use crate::options::DuckLakeOptions;
 
@@ -93,14 +98,14 @@ impl TableProvider for DuckLakeTableProvider {
         &self,
         filters: &[&Expr],
     ) -> DataFusionResult<Vec<TableProviderFilterPushDown>> {
-        Ok(vec![TableProviderFilterPushDown::Inexact; filters.len()])
+        Ok(get_pushdown_filters(filters, &[]))
     }
 
     async fn scan(
         &self,
         session: &dyn Session,
         projection: Option<&Vec<usize>>,
-        _filters: &[Expr],
+        filters: &[Expr],
         limit: Option<usize>,
     ) -> DataFusionResult<Arc<dyn ExecutionPlan>> {
         log::trace!(
@@ -109,12 +114,49 @@ impl TableProvider for DuckLakeTableProvider {
             self.table.table_info.table_name
         );
 
+        let (pruning_filters, pushdown_filters) = self.separate_filters(filters);
+
         let files = self
             .meta_store
             .list_data_files(self.table.table_info.table_id, self.snapshot_id)
             .await?;
 
         log::trace!("Found {} data files", files.len());
+
+        let prune_schema = if let Some(used_columns) = projection {
+            let mut fields = vec![];
+            for idx in used_columns {
+                fields.push(self.schema.field(*idx).to_owned());
+            }
+            if let Some(expr) =
+                datafusion::logical_expr::utils::conjunction(pruning_filters.iter().cloned())
+            {
+                for c in expr.column_refs() {
+                    if let Ok(idx) = self.schema.index_of(c.name.as_str()) {
+                        if !used_columns.contains(&idx)
+                            && !fields.iter().any(|f| f.name() == c.name.as_str())
+                        {
+                            fields.push(self.schema.field(idx).to_owned());
+                        }
+                    }
+                }
+            }
+            Arc::new(datafusion::arrow::datatypes::Schema::new(fields))
+        } else {
+            self.schema.clone()
+        };
+
+        let mut files = {
+            let (kept, _mask) = prune_files(
+                session,
+                &pruning_filters,
+                limit,
+                prune_schema.clone(),
+                files,
+                &self.table.columns,
+            )?;
+            kept
+        };
 
         // Parse base_path URL and construct ObjectStoreUrl with only scheme + authority
         let base_url =
@@ -136,7 +178,7 @@ impl TableProvider for DuckLakeTableProvider {
 
         let mut file_groups: HashMap<Option<u64>, Vec<PartitionedFile>> = HashMap::new();
 
-        for file in files {
+        for file in files.drain(..) {
             let object_path = if file.path_is_relative {
                 let mut p = table_prefix.clone();
                 for comp in file.path.split('/') {
@@ -183,15 +225,68 @@ impl TableProvider for DuckLakeTableProvider {
             ..Default::default()
         };
 
-        let parquet_source = Arc::new(ParquetSource::new(parquet_options));
+        let mut parquet_source = ParquetSource::new(parquet_options);
+        let pushdown_filter: Option<Arc<dyn PhysicalExpr>> = if !pushdown_filters.is_empty() {
+            let df_schema = prune_schema.clone().to_dfschema()?;
+            let pushdown_expr = datafusion::logical_expr::utils::conjunction(pushdown_filters);
+            pushdown_expr.map(|expr| simplify_expr(session, &df_schema, expr))
+        } else {
+            None
+        };
+        if let Some(pred) = pushdown_filter {
+            parquet_source = parquet_source.with_predicate(pred);
+        }
+        let parquet_source = Arc::new(parquet_source);
+
+        let table_stats = self.aggregate_statistics(self.schema.as_ref());
 
         let file_scan_config =
             FileScanConfigBuilder::new(object_store_url, self.schema.clone(), parquet_source)
                 .with_file_groups(file_groups)
+                .with_statistics(table_stats)
                 .with_projection(projection.cloned())
                 .with_limit(limit)
                 .build();
 
         Ok(DataSourceExec::from_data_source(file_scan_config))
+    }
+}
+
+impl DuckLakeTableProvider {
+    fn separate_filters(&self, filters: &[Expr]) -> (Vec<Expr>, Vec<Expr>) {
+        let predicates: Vec<&Expr> = filters.iter().collect();
+        let pushdown_kinds = get_pushdown_filters(&predicates, &[]);
+        let mut pruning_filters = Vec::new();
+        let mut parquet_pushdown_filters = Vec::new();
+        for (filter, kind) in filters.iter().zip(pushdown_kinds) {
+            match kind {
+                TableProviderFilterPushDown::Exact => {
+                    pruning_filters.push(filter.clone());
+                }
+                TableProviderFilterPushDown::Inexact => {
+                    pruning_filters.push(filter.clone());
+                    parquet_pushdown_filters.push(filter.clone());
+                }
+                TableProviderFilterPushDown::Unsupported => {}
+            }
+        }
+        (pruning_filters, parquet_pushdown_filters)
+    }
+
+    fn aggregate_statistics(&self, schema: &datafusion::arrow::datatypes::Schema) -> Statistics {
+        let column_statistics = (0..schema.fields().len())
+            .map(|_| ColumnStatistics {
+                null_count: Precision::Absent,
+                max_value: Precision::Absent,
+                min_value: Precision::Absent,
+                distinct_count: Precision::Absent,
+                sum_value: Precision::Absent,
+            })
+            .collect();
+        Statistics {
+            num_rows: Precision::Absent,
+            total_byte_size: Precision::Absent,
+            column_statistics,
+        }
     }
 }

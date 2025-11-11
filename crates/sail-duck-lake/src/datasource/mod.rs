@@ -1,5 +1,7 @@
 pub mod arrow;
+pub mod expressions;
 pub mod provider;
+pub mod pruning;
 
 use std::sync::Arc;
 

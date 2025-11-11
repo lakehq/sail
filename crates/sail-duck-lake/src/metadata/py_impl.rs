@@ -90,7 +90,28 @@ struct PyFileInfo {
     encryption_key: String,
     partial_file_info: Option<String>,
     mapping_id: u64,
-    // We ignore column_stats and partition_values for now; Python returns empty arrays.
+    #[serde(default)]
+    column_stats: Vec<PyColumnStatsInfo>,
+    #[serde(default)]
+    partition_values: Vec<PyFilePartitionInfo>,
+}
+
+#[derive(Deserialize)]
+struct PyColumnStatsInfo {
+    column_id: u64,
+    column_size_bytes: Option<u64>,
+    value_count: Option<u64>,
+    null_count: Option<u64>,
+    min_value: Option<String>,
+    max_value: Option<String>,
+    contains_nan: Option<bool>,
+    extra_stats: Option<String>,
+}
+
+#[derive(Deserialize)]
+struct PyFilePartitionInfo {
+    partition_key_index: u64,
+    partition_value: String,
 }
 
 pub struct PythonMetaStore {
@@ -362,8 +383,28 @@ impl DuckLakeMetaStore for PythonMetaStore {
                 encryption_key: r.encryption_key,
                 partial_file_info: r.partial_file_info,
                 mapping_id: MappingIndex(r.mapping_id),
-                column_stats: vec![],
-                partition_values: vec![],
+                column_stats: r
+                    .column_stats
+                    .into_iter()
+                    .map(|s| crate::spec::ColumnStatsInfo {
+                        column_id: FieldIndex(s.column_id),
+                        column_size_bytes: s.column_size_bytes,
+                        value_count: s.value_count,
+                        null_count: s.null_count,
+                        min_value: s.min_value,
+                        max_value: s.max_value,
+                        contains_nan: s.contains_nan,
+                        extra_stats: s.extra_stats,
+                    })
+                    .collect(),
+                partition_values: r
+                    .partition_values
+                    .into_iter()
+                    .map(|p| crate::spec::FilePartitionInfo {
+                        partition_key_index: p.partition_key_index,
+                        partition_value: p.partition_value,
+                    })
+                    .collect(),
             })
             .collect();
         Ok(out)
