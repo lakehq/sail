@@ -47,8 +47,8 @@ jobs:
         with:
           python-version: "3.11"
 
-      # - name: Install Hatch
-      #   uses: pypa/hatch@install
+      - name: Install Hatch
+        uses: pypa/hatch@install
 
       - name: Install Rust toolchain
         run: |
@@ -60,10 +60,6 @@ jobs:
       - name: Clone IBIS
         run: |
           git clone https://github.com/ibis-project/testing-data.git opt/ibis-testing-data
-
-      - name: Install Hatch and Maturin
-        run: |
-          pip install hatch maturin
 
       - name: Build native extension
         run: |
