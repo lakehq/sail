@@ -112,7 +112,7 @@ pub async fn bootstrap_new_table(
         table_uuid: None,
         location: table_url.to_string(),
         last_sequence_number: 1,
-        last_updated_ms: chrono::Utc::now().timestamp_millis(),
+        last_updated_ms: crate::utils::timestamp::monotonic_timestamp_ms(),
         last_column_id: iceberg_schema.highest_field_id(),
         schemas: vec![iceberg_schema.clone()],
         current_schema_id: iceberg_schema.schema_id(),
@@ -252,7 +252,7 @@ pub async fn bootstrap_first_snapshot(
         snapshot_id: snapshot.snapshot_id(),
     });
     table_meta.last_sequence_number = 1;
-    table_meta.last_updated_ms = chrono::Utc::now().timestamp_millis();
+    table_meta.last_updated_ms = crate::utils::timestamp::monotonic_timestamp_ms();
 
     // Add main branch reference if not present
     if !table_meta
