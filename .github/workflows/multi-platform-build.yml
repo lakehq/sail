@@ -13,18 +13,18 @@ jobs:
     strategy:
       matrix:
         platform:
-          - runner: ubuntu-24.04
-            target: x86_64
-            os: linux
-          - runner: ubuntu-24.04-arm
-            target: aarch64
-            os: linux
-          - runner: macos-15-intel
-            target: x86_64
-            os: macos
-          - runner: macos-14
-            target: aarch64
-            os: macos
+#          - runner: ubuntu-24.04
+#            target: x86_64
+#            os: linux
+#          - runner: ubuntu-24.04-arm
+#            target: aarch64
+#            os: linux
+#          - runner: macos-15-intel
+#            target: x86_64
+#            os: macos
+#          - runner: macos-14
+#            target: aarch64
+#            os: macos
           - runner: windows-2022
             target: x64
             os: windows
@@ -49,6 +49,7 @@ jobs:
         env:
           CARGO_INCREMENTAL: 0
           CARGO_PROFILE_DEV_DEBUG: 0
+          RUSTFLAGS: '-C link-arg=/DEBUG:FASTLINK -C link-arg=/INCREMENTAL:NO'
 
       - name: Upload Wheels
         uses: actions/upload-artifact@v4
