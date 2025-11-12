@@ -38,19 +38,19 @@ jobs:
         with:
           script: |
             const platforms = [];
-            if (context.payload.workflow_dispatch.inputs.build_linux_x86_64) {
+            if (context.payload.inputs.build_linux_x86_64) {
               platforms.push({ runner: 'ubuntu-24.04', target: 'x86_64', os: 'linux' });
             }
-            if (context.payload.workflow_dispatch.inputs.build_linux_aarch64) {
+            if (context.payload.inputs.build_linux_aarch64) {
               platforms.push({ runner: 'ubuntu-24.04-arm', target: 'aarch64', os: 'linux' });
             }
-            if (context.payload.workflow_dispatch.inputs.build_macos_x86_64) {
+            if (context.payload.inputs.build_macos_x86_64) {
               platforms.push({ runner: 'macos-15-intel', target: 'x86_64', os: 'macos' });
             }
-            if (context.payload.workflow_dispatch.inputs.build_macos_aarch64) {
+            if (context.payload.inputs.build_macos_aarch64) {
               platforms.push({ runner: 'macos-14', target: 'aarch64', os: 'macos' });
             }
-            if (context.payload.workflow_dispatch.inputs.build_windows_x64) {
+            if (context.payload.inputs.build_windows_x64) {
               platforms.push({ runner: 'windows-2022', target: 'x64', os: 'windows' });
             }
             return platforms;
