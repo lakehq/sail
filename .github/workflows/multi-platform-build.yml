@@ -6,23 +6,23 @@ on:
   workflow_dispatch:
     inputs:
       build_linux_x86_64:
-        description: 'Build for Linux (x86_64)'
+        description: "Build for Linux (x86_64)"
         type: boolean
         required: true
       build_linux_aarch64:
-        description: 'Build for Linux (aarch64)'
+        description: "Build for Linux (aarch64)"
         type: boolean
         required: true
       build_macos_x86_64:
-        description: 'Build for macOS (x86_64)'
+        description: "Build for macOS (x86_64)"
         type: boolean
         required: true
       build_macos_aarch64:
-        description: 'Build for macOS (aarch64)'
+        description: "Build for macOS (aarch64)"
         type: boolean
         required: true
       build_windows_x64:
-        description: 'Build for Windows (x64)'
+        description: "Build for Windows (x64)"
         type: boolean
         required: true
 
