@@ -1,0 +1,64 @@
+name: Multi-platform Build
+
+on:
+  pull_request:
+    branches: [main]
+#  workflow_dispatch:
+#    inputs:
+
+jobs:
+  build:
+    name: Build
+    runs-on: ${{ matrix.platform.runner }}
+    strategy:
+      matrix:
+        platform:
+          - runner: ubuntu-24.04
+            target: x86_64
+            os: linux
+          - runner: ubuntu-24.04-arm
+            target: aarch64
+            os: linux
+          - runner: macos-15-intel
+            target: x86_64
+            os: macos
+          - runner: macos-14
+            target: aarch64
+            os: macos
+          - runner: windows-2022
+            target: x64
+            os: windows
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Install Hatch
+        uses: pypa/hatch@install
+
+      - name: Install protoc
+        id: protoc
+        uses: arduino/setup-protoc@v3
+        with:
+          repo-token: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Build Wheels
+        uses: PyO3/maturin-action@v1
+        env:
+          CARGO_INCREMENTAL: 0
+          CARGO_PROFILE_DEV_DEBUG: 0
+
+      - name: Upload Wheels
+        uses: actions/upload-artifact@v4
+        with:
+          name: python-package-${{ matrix.platform.os }}-${{ matrix.platform.target }}
+          path: target/wheels
+          retention-days: 1
+
+      - name: Set Up Hatch Environment
+        run: hatch run install-pysail
+
+      - name: Run Tests
+        run: hatch run pytest --pyargs pysail
