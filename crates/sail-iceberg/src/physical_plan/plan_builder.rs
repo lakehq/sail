@@ -11,12 +11,14 @@ use datafusion::physical_plan::{ExecutionPlan, Partitioning};
 use sail_common_datafusion::datasource::PhysicalSinkMode;
 use url::Url;
 
+use crate::options::TableIcebergOptions;
 use crate::physical_plan::writer_exec::IcebergWriterExec;
 
 pub struct IcebergTableConfig {
     pub table_url: Url,
     pub partition_columns: Vec<String>,
     pub table_exists: bool,
+    pub options: TableIcebergOptions,
 }
 
 pub struct IcebergPlanBuilder<'a> {
