@@ -145,8 +145,7 @@ datafusion-spark = { version = "50.3.0" }
 datafusion-functions-json = { git = "https://github.com/lakehq/datafusion-functions-json.git", rev = "db8e357" }
 # The `pyo3` version must match the one used in `arrow-pyarrow` (replace `RELEASE` with the release we are using):
 #   https://github.com/apache/arrow-rs/blob/RELEASE/arrow-pyarrow/Cargo.toml
-# auto-initialize: Changes [`Python::with_gil`] to automatically initialize the Python interpreter if needed.
-pyo3 = { version = "0.25.1", features = ["auto-initialize", "serde"] }
+pyo3 = { version = "0.25.1", features = ["serde"] }
 arrow = { version = "56.2.0", features = ["chrono-tz"] }
 arrow-buffer = { version = "56.2.0" }
 arrow-schema = { version = "56.2.0", features = ["serde"] }
