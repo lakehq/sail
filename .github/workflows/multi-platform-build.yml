@@ -1,28 +1,28 @@
 name: Multi-platform Build
 
 on:
-  pull_request:
-    branches: [ main ]
+  # This workflow is triggered manually for ad-hoc development purposes.
+  # It builds and tests the Python package for selected platforms.
   workflow_dispatch:
     inputs:
       build_linux_x86_64:
-        description: 'Build for Linux x86_64'
+        description: 'Build for Linux (x86_64)'
         type: boolean
         required: true
       build_linux_aarch64:
-        description: 'Build for Linux aarch64'
+        description: 'Build for Linux (aarch64)'
         type: boolean
         required: true
       build_macos_x86_64:
-        description: 'Build for macOS x86_64'
+        description: 'Build for macOS (x86_64)'
         type: boolean
         required: true
       build_macos_aarch64:
-        description: 'Build for macOS aarch64'
+        description: 'Build for macOS (aarch64)'
         type: boolean
         required: true
       build_windows_x64:
-        description: 'Build for Windows x64'
+        description: 'Build for Windows (x64)'
         type: boolean
         required: true
 
@@ -38,19 +38,19 @@ jobs:
         with:
           script: |
             const platforms = [];
-            if (true || github.event.inputs.build_linux_x86_64) {
+            if (github.event.inputs.build_linux_x86_64) {
               platforms.push({ runner: 'ubuntu-24.04', target: 'x86_64', os: 'linux' });
             }
-            if (false && github.event.inputs.build_linux_aarch64) {
+            if (github.event.inputs.build_linux_aarch64) {
               platforms.push({ runner: 'ubuntu-24.04-arm', target: 'aarch64', os: 'linux' });
             }
-            if (false && github.event.inputs.build_macos_x86_64) {
+            if (github.event.inputs.build_macos_x86_64) {
               platforms.push({ runner: 'macos-15-intel', target: 'x86_64', os: 'macos' });
             }
-            if (false && github.event.inputs.build_macos_aarch64) {
+            if (github.event.inputs.build_macos_aarch64) {
               platforms.push({ runner: 'macos-14', target: 'aarch64', os: 'macos' });
             }
-            if (false && github.event.inputs.build_windows_x64) {
+            if (github.event.inputs.build_windows_x64) {
               platforms.push({ runner: 'windows-2022', target: 'x64', os: 'windows' });
             }
             return platforms;
