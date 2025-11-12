@@ -47,9 +47,6 @@ jobs:
         with:
           python-version: "3.11"
 
-      # - name: Install Hatch
-      #   uses: pypa/hatch@install
-
       - name: Install Rust toolchain
         run: |
           rustup toolchain install stable
