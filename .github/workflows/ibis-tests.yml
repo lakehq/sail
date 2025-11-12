@@ -47,8 +47,8 @@ jobs:
         with:
           python-version: "3.11"
 
-#      - name: Install Hatch
-#        uses: pypa/hatch@install
+      # - name: Install Hatch
+      #   uses: pypa/hatch@install
 
       - name: Install Rust toolchain
         run: |
@@ -85,6 +85,9 @@ jobs:
           scripts/spark-tests/wait-for-server.sh
 
       - name: Run Ibis Tests
+        # We set a timeout to prevent the tests from hanging indefinitely,
+        # which can happen occasionally for unknown reasons.
+        # The timeout value should be adjusted as we add more tests.
         timeout-minutes: 10
         run: |
           hatch run test-ibis:env SPARK_REMOTE="sc://localhost:50051" scripts/spark-tests/run-tests.sh || true
