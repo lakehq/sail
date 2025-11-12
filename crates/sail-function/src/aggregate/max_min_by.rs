@@ -82,7 +82,7 @@ impl AggregateUDFImpl for MaxByFunction {
                 aggr_func.params.args.remove(0),
             );
 
-            order_by.push(Sort::new(second_arg, true, false));
+            order_by.push(Sort::new(second_arg, true, true)); // ASC,  NULLS FIRST
 
             Ok(Expr::AggregateFunction(AggregateFunction::new_udf(
                 last_value_udaf(),
@@ -162,7 +162,7 @@ impl AggregateUDFImpl for MinByFunction {
                 aggr_func.params.args.remove(0),
             );
 
-            order_by.push(Sort::new(second_arg, false, false)); // false for ascending sort
+            order_by.push(Sort::new(second_arg, false, true)); // DESC, NULLS FIRST
 
             Ok(Expr::AggregateFunction(AggregateFunction::new_udf(
                 last_value_udaf(),

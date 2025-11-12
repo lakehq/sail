@@ -40,7 +40,7 @@ DataFrame[value: boolean]
 +------+
 |result|
 +------+
-|    90|
+|    10|
 +------+
 
 # 2) argmin, unfiltered, null_result=True  -> expected: NULL
@@ -52,7 +52,7 @@ DataFrame[value: boolean]
 +------+
 |result|
 +------+
-|    90|
+|  NULL|
 +------+
 
 # 3) argmin, filtered (excluye int_col=1), non-null  -> expected: 20
@@ -64,10 +64,10 @@ DataFrame[value: boolean]
 +------+
 |result|
 +------+
-|    90|
+|    20|
 +------+
 
->>> # 4) argmin, filtered + null_result=True (anula el óptimo 20)  -> expected: NULL
+>>> # 4) argmin, filtered + null_result=True -> expected: NULL
 >>> spark.sql("""
 ... SELECT min_by(val_col, by_col) AS result
 ... FROM (SELECT CASE WHEN val_col = 20 THEN NULL ELSE val_col END AS val_col, by_col, int_col FROM t_base)
@@ -76,7 +76,7 @@ DataFrame[value: boolean]
 +------+
 |result|
 +------+
-|    90|
+|  NULL|
 +------+
 
 # 5) argmax, unfiltered, non-null  -> expected: 80
@@ -84,7 +84,7 @@ DataFrame[value: boolean]
 +------+
 |result|
 +------+
-|    90|
+|    80|
 +------+
 
 >>> # 6) argmax, unfiltered, null_result=True  -> expected: NULL
@@ -95,7 +95,7 @@ DataFrame[value: boolean]
 +------+
 |result|
 +------+
-|    90|
+|  NULL|
 +------+
 
 # 7) argmax, filtered (excluye int_col=8), non-null  -> expected: 70
@@ -107,10 +107,10 @@ DataFrame[value: boolean]
 +------+
 |result|
 +------+
-|    90|
+|    70|
 +------+
 
->>> # 8) argmax, filtered + null_result=True (anula el óptimo 70)  -> expected: NULL
+>>> # 8) argmax, filtered + null_result=True -> expected: NULL
 >>> spark.sql("""
 ... SELECT max_by(val_col, by_col) AS result
 ... FROM (SELECT CASE WHEN val_col = 70 THEN NULL ELSE val_col END AS val_col, by_col, int_col FROM t_base)
@@ -119,5 +119,5 @@ DataFrame[value: boolean]
 +------+
 |result|
 +------+
-|    90|
+|  NULL|
 +------+
