@@ -2,32 +2,58 @@ name: Multi-platform Build
 
 on:
   pull_request:
-    branches: [main]
-#  workflow_dispatch:
-#    inputs:
+    branches: [ main ]
+  workflow_dispatch:
+    inputs:
+      build_linux_x86_64:
+        description: 'Build for Linux x86_64'
+        type: boolean
+        required: true
+      build_linux_aarch64:
+        description: 'Build for Linux aarch64'
+        type: boolean
+        required: true
+      build_macos_x86_64:
+        description: 'Build for macOS x86_64'
+        type: boolean
+        required: true
+      build_macos_aarch64:
+        description: 'Build for macOS aarch64'
+        type: boolean
+        required: true
+      build_windows_x64:
+        description: 'Build for Windows x64'
+        type: boolean
+        required: true
 
 jobs:
   build:
     name: Build
     runs-on: ${{ matrix.platform.runner }}
+    if: ${{ matrix.platform.enabled == 'true' }}
     strategy:
       matrix:
         platform:
-#          - runner: ubuntu-24.04
-#            target: x86_64
-#            os: linux
-#          - runner: ubuntu-24.04-arm
-#            target: aarch64
-#            os: linux
-#          - runner: macos-15-intel
-#            target: x86_64
-#            os: macos
-#          - runner: macos-14
-#            target: aarch64
-#            os: macos
+          - runner: ubuntu-24.04
+            target: x86_64
+            os: linux
+            enabled: ${{ github.event.inputs.build_linux_x86_64 == 'true' }}
+          - runner: ubuntu-24.04-arm
+            target: aarch64
+            os: linux
+            enabled: ${{ github.event.inputs.build_linux_aarch64 == 'true' }}
+          - runner: macos-15-intel
+            target: x86_64
+            os: macos
+            enabled: ${{ github.event.inputs.build_macos_x86_64 == 'true' }}
+          - runner: macos-14
+            target: aarch64
+            os: macos
+            enabled: ${{ github.event.inputs.build_macos_aarch64 == 'true' }}
           - runner: windows-2022
             target: x64
             os: windows
+            enabled: ${{ github.event.inputs.build_windows_x64 == 'true' }}
     steps:
       - uses: actions/checkout@v4
 
@@ -49,7 +75,9 @@ jobs:
         env:
           CARGO_INCREMENTAL: 0
           CARGO_PROFILE_DEV_DEBUG: 0
-          RUSTFLAGS: '-C linker=rust-lld.exe'
+          # Override the linker on Windows since the default MSVC linker has some issues
+          # for the debug build: `LINK : fatal error LNK1318: Unexpected PDB error; LIMIT (12)`.
+          RUSTFLAGS: ${{ matrix.platform.os == 'windows' && '-C linker=rust-lld.exe' || '' }}
 
       - name: Upload Wheels
         uses: actions/upload-artifact@v4
