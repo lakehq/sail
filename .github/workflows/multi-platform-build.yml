@@ -27,33 +27,41 @@ on:
         required: true
 
 jobs:
+  setup:
+    name: Setup
+    runs-on: ubuntu-latest
+    outputs:
+      platforms: ${{ steps.define-platforms.outputs.result }}
+    steps:
+      - id: define-platforms
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const platforms = [];
+            if (github.event.inputs.build_linux_x86_64) {
+              platforms.push({ runner: 'ubuntu-24.04', target: 'x86_64', os: 'linux' });
+            }
+            if (github.event.inputs.build_linux_aarch64) {
+              platforms.push({ runner: 'ubuntu-24.04-arm', target: 'aarch64', os: 'linux' });
+            }
+            if (github.event.inputs.build_macos_x86_64) {
+              platforms.push({ runner: 'macos-15-intel', target: 'x86_64', os: 'macos' });
+            }
+            if (github.event.inputs.build_macos_aarch64) {
+              platforms.push({ runner: 'macos-14', target: 'aarch64', os: 'macos' });
+            }
+            if (github.event.inputs.build_windows_x64) {
+              platforms.push({ runner: 'windows-2022', target: 'x64', os: 'windows' });
+            }
+            return platforms;
+
   build:
     name: Build
     runs-on: ${{ matrix.platform.runner }}
-    if: ${{ matrix.platform.enabled == 'true' }}
+    continue-on-error: true
     strategy:
       matrix:
-        platform:
-          - runner: ubuntu-24.04
-            target: x86_64
-            os: linux
-            enabled: ${{ github.event.inputs.build_linux_x86_64 == 'true' }}
-          - runner: ubuntu-24.04-arm
-            target: aarch64
-            os: linux
-            enabled: ${{ github.event.inputs.build_linux_aarch64 == 'true' }}
-          - runner: macos-15-intel
-            target: x86_64
-            os: macos
-            enabled: ${{ github.event.inputs.build_macos_x86_64 == 'true' }}
-          - runner: macos-14
-            target: aarch64
-            os: macos
-            enabled: ${{ github.event.inputs.build_macos_aarch64 == 'true' }}
-          - runner: windows-2022
-            target: x64
-            os: windows
-            enabled: ${{ github.event.inputs.build_windows_x64 == 'true' }}
+        platform: ${{ fromJSON(needs.setup.outputs.platforms) }}
     steps:
       - uses: actions/checkout@v4
 
