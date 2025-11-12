@@ -31,6 +31,8 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         // the Python interpreter. When the Sail CLI runs as a standalone binary, the
         // Python interpreter is embedded and `sys.executable` points to the Sail binary.
         std::env::set_var(CliConfigEnv::RUN_PYTHON, "true");
+        // Initialize the Python interpreter.
+        pyo3::prepare_freethreaded_python();
         let args = std::env::args().collect();
         match sail_cli::runner::main(args) {
             Ok(()) => {}
