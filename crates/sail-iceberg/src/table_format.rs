@@ -339,18 +339,28 @@ fn parse_timestamp_to_ms(s: &str) -> std::result::Result<i64, String> {
 
 fn find_snapshot_by_ts(meta: &TableMetadata, ts_ms: i64) -> Option<&Snapshot> {
     // Prefer snapshot_log if present
-    if let Some(sid) = meta
+    if let Some(log_entry) = meta
         .snapshot_log
         .iter()
         .filter(|e| e.timestamp_ms <= ts_ms)
-        .max_by_key(|e| e.timestamp_ms)
-        .map(|e| e.snapshot_id)
+        .max_by(|a, b| {
+            a.timestamp_ms
+                .cmp(&b.timestamp_ms)
+                .then_with(|| a.snapshot_id.cmp(&b.snapshot_id))
+        })
     {
-        return meta.snapshots.iter().find(|s| s.snapshot_id() == sid);
+        return meta
+            .snapshots
+            .iter()
+            .find(|s| s.snapshot_id() == log_entry.snapshot_id);
     }
     // Fallback to scanning snapshots by snapshot timestamp
     meta.snapshots
         .iter()
         .filter(|s| s.timestamp_ms() <= ts_ms)
-        .max_by_key(|s| s.timestamp_ms())
+        .max_by(|a, b| {
+            a.timestamp_ms()
+                .cmp(&b.timestamp_ms())
+                .then_with(|| a.snapshot_id().cmp(&b.snapshot_id()))
+        })
 }
