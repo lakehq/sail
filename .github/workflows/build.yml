@@ -121,6 +121,14 @@ jobs:
       - setup
       - build
 
+  ibis-tests:
+    name: Ibis Tests
+    if: ${{ needs.setup.outputs.build_package == 'true' }}
+    uses: ./.github/workflows/ibis-tests.yml
+    needs:
+      - setup
+      - build
+
   python-build:
     name: Python Build
     if: ${{ needs.setup.outputs.build_package == 'true' }}
