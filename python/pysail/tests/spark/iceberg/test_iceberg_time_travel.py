@@ -92,6 +92,32 @@ def test_iceberg_time_travel_by_timestamp(spark, tmp_path):
         pass
 
 
+def test_iceberg_time_travel_by_timestamp_earlier_than_first_should_error(spark, tmp_path):
+    table_path = tmp_path / "tt_by_timestamp_earlier_error"
+    table_path.mkdir(parents=True, exist_ok=True)
+    table_location = f"file://{table_path}"
+
+    # Create first snapshot
+    spark.createDataFrame([Row(id=1, value="v0")]).write.format("iceberg").mode("overwrite").save(table_location)
+
+    # Timestamp before any snapshot should error
+    early_ts = "1970-01-01T00:00:00.000+00:00"
+    with pytest.raises(Exception, match="No Iceberg snapshot exists at or before timestamp"):
+        spark.read.format("iceberg").option("timestampAsOf", early_ts).load(table_location).collect()
+
+
+def test_iceberg_time_travel_by_timestamp_invalid_format_should_error(spark, tmp_path):
+    table_path = tmp_path / "tt_by_timestamp_invalid"
+    table_path.mkdir(parents=True, exist_ok=True)
+    table_location = f"file://{table_path}"
+
+    spark.createDataFrame([Row(id=1, value="v0")]).write.format("iceberg").mode("overwrite").save(table_location)
+
+    invalid_ts = "not-a-timestamp"
+    with pytest.raises(Exception, match="Invalid timestamp"):
+        spark.read.format("iceberg").option("timestampAsOf", invalid_ts).load(table_location).collect()
+
+
 def test_iceberg_time_travel_precedence_snapshot_over_timestamp(spark, tmp_path):
     catalog = create_sql_catalog(tmp_path)
     identifier = "default.tt_precedence"
