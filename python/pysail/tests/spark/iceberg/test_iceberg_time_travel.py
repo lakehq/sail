@@ -45,43 +45,51 @@ def test_iceberg_time_travel_by_snapshot_id(spark, tmp_path):
 
 
 def test_iceberg_time_travel_by_timestamp(spark, tmp_path):
-    catalog = create_sql_catalog(tmp_path)
-    identifier = "default.tt_by_timestamp"
-    table = catalog.create_table(
-        identifier=identifier,
-        schema=Schema(
-            NestedField(field_id=1, name="id", field_type=LongType(), required=False),
-            NestedField(field_id=2, name="value", field_type=StringType(), required=False),
-        ),
-    )
+    table_path = tmp_path / "tt_by_timestamp"
+    table_path.mkdir(parents=True, exist_ok=True)
+    table_location = f"file://{table_path}"
+
     try:
+        # Write snapshot 0: single row
         v0 = [Row(id=1, value="v0")]
-        spark.createDataFrame(v0).write.format("iceberg").mode("overwrite").save(table.location())
-        ts0 = datetime.now(timezone.utc).isoformat()
+        spark.createDataFrame(v0).write.format("iceberg").mode("overwrite").save(table_location)
+
+        # Get timestamp after first write
+        ts0 = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%S.%f")[:-3] + "+00:00"
         time.sleep(0.1)
 
+        # Write snapshot 1: append one more row
         v1 = [Row(id=2, value="v1")]
-        spark.createDataFrame(v1).write.format("iceberg").mode("append").save(table.location())
-        ts1 = datetime.now(timezone.utc).isoformat()
+        spark.createDataFrame(v1).write.format("iceberg").mode("append").save(table_location)
+
+        # Get timestamp after second write
+        ts1 = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%S.%f")[:-3] + "+00:00"
         time.sleep(0.1)
 
+        # Write snapshot 2: append another row
         v2 = [Row(id=3, value="v2")]
-        spark.createDataFrame(v2).write.format("iceberg").mode("overwrite").save(table.location())
-        ts2 = datetime.now(timezone.utc).isoformat()
+        spark.createDataFrame(v2).write.format("iceberg").mode("append").save(table_location)
 
-        latest = spark.read.format("iceberg").load(table.location())
-        assert latest.collect() == [Row(id=3, value="v2")]
+        # Get timestamp after third write
+        ts2 = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%S.%f")[:-3] + "+00:00"
 
-        df0 = spark.read.format("iceberg").option("timestampAsOf", ts0).load(table.location())
+        # Verify current state (all three rows)
+        latest = spark.read.format("iceberg").load(table_location).sort("id").collect()
+        assert latest == [Row(id=1, value="v0"), Row(id=2, value="v1"), Row(id=3, value="v2")]
+
+        # Test time travel to snapshot 0 (only first row)
+        df0 = spark.read.format("iceberg").option("timestampAsOf", ts0).load(table_location)
         assert df0.collect() == [Row(id=1, value="v0")]
 
-        df1 = spark.read.format("iceberg").option("timestampAsOf", ts1).load(table.location()).sort("id").collect()
+        # Test time travel to snapshot 1 (first two rows)
+        df1 = spark.read.format("iceberg").option("timestampAsOf", ts1).load(table_location).sort("id").collect()
         assert df1 == [Row(id=1, value="v0"), Row(id=2, value="v1")]
 
-        df2 = spark.read.format("iceberg").option("timestampAsOf", ts2).load(table.location())
-        assert df2.collect() == [Row(id=3, value="v2")]
+        # Test time travel to snapshot 2 (all three rows)
+        df2 = spark.read.format("iceberg").option("timestampAsOf", ts2).load(table_location).sort("id").collect()
+        assert df2 == [Row(id=1, value="v0"), Row(id=2, value="v1"), Row(id=3, value="v2")]
     finally:
-        catalog.drop_table(identifier)
+        pass
 
 
 def test_iceberg_time_travel_precedence_snapshot_over_timestamp(spark, tmp_path):

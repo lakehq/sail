@@ -256,7 +256,7 @@ impl ExecutionPlan for IcebergCommitExec {
             let updates = commit.into_updates();
             log::trace!("commit_exec: applying updates: {:?}", &updates);
             let mut newest_snapshot_seq: Option<i64> = None;
-            let timestamp_ms = chrono::Utc::now().timestamp_millis();
+            let timestamp_ms = crate::utils::timestamp::monotonic_timestamp_ms();
             for upd in updates {
                 match upd {
                     TableUpdate::AddSnapshot { snapshot } => {
