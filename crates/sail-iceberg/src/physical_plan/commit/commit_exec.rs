@@ -256,15 +256,17 @@ impl ExecutionPlan for IcebergCommitExec {
             let updates = commit.into_updates();
             log::trace!("commit_exec: applying updates: {:?}", &updates);
             let mut newest_snapshot_seq: Option<i64> = None;
-            let timestamp_ms = crate::utils::timestamp::monotonic_timestamp_ms();
+            let mut commit_timestamp_ms: Option<i64> = None;
             for upd in updates {
                 match upd {
                     TableUpdate::AddSnapshot { snapshot } => {
                         newest_snapshot_seq = Some(snapshot.sequence_number());
                         table_meta.snapshots.push(snapshot.clone());
                         table_meta.current_snapshot_id = Some(snapshot.snapshot_id());
+                        let ts = snapshot.timestamp_ms();
+                        commit_timestamp_ms = Some(ts);
                         table_meta.snapshot_log.push(SnapshotLog {
-                            timestamp_ms,
+                            timestamp_ms: ts,
                             snapshot_id: snapshot.snapshot_id(),
                         });
                     }
@@ -282,7 +284,9 @@ impl ExecutionPlan for IcebergCommitExec {
                     table_meta.last_sequence_number = seq;
                 }
             }
-            table_meta.last_updated_ms = timestamp_ms;
+            if let Some(ts) = commit_timestamp_ms {
+                table_meta.last_updated_ms = ts;
+            }
 
             // Persist updated metadata.json with incremented version
             // Derive next version number from latest metadata file path
@@ -308,7 +312,7 @@ impl ExecutionPlan for IcebergCommitExec {
             table_meta
                 .metadata_log
                 .push(crate::spec::metadata::table_metadata::MetadataLog {
-                    timestamp_ms,
+                    timestamp_ms: table_meta.last_updated_ms,
                     metadata_file: latest_meta.clone(),
                 });
 

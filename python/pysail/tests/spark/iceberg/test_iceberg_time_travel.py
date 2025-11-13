@@ -44,7 +44,6 @@ def test_iceberg_time_travel_by_snapshot_id(spark, tmp_path):
         catalog.drop_table(identifier)
 
 
-@pytest.mark.skip(reason="not working")
 def test_iceberg_time_travel_by_timestamp(spark, tmp_path):
     table_path = tmp_path / "tt_by_timestamp"
     table_path.mkdir(parents=True, exist_ok=True)
