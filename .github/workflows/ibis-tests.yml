@@ -51,6 +51,12 @@ jobs:
           repository: ibis-project/testing-data
           path: opt/ibis-testing-data
 
+      - name: Download Python Package
+        uses: actions/download-artifact@v4
+        with:
+          name: python-package
+          path: target/wheels
+
       - name: Build native extension
         run: |
           hatch run install-pysail

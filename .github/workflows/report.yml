@@ -44,10 +44,3 @@ jobs:
           workflow_run_id: ${{ github.event.workflow_run.id }}
           artifact_name: gold-data-report
           report_name: gold-data
-
-      - uses: ./.github/actions/pull-request-report
-        if: github.event.workflow_run.name == 'Ibis Tests' && github.event.workflow_run.conclusion == 'success'
-        with:
-          workflow_run_id: ${{ github.event.workflow_run.id }}
-          artifact_name: ibis-report
-          report_name: ibis
