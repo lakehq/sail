@@ -107,12 +107,13 @@ pub async fn bootstrap_new_table(
         .ok_or_else(|| DataFusionError::Plan("No snapshot in bootstrap commit".to_string()))?;
 
     // Build minimal TableMetadata V2
+    let commit_timestamp_ms = crate::utils::timestamp::monotonic_timestamp_ms();
     let table_meta = TableMetadata {
         format_version: FormatVersion::V2,
         table_uuid: None,
         location: table_url.to_string(),
         last_sequence_number: 1,
-        last_updated_ms: chrono::Utc::now().timestamp_millis(),
+        last_updated_ms: commit_timestamp_ms,
         last_column_id: iceberg_schema.highest_field_id(),
         schemas: vec![iceberg_schema.clone()],
         current_schema_id: iceberg_schema.schema_id(),
@@ -123,7 +124,7 @@ pub async fn bootstrap_new_table(
         current_snapshot_id: Some(snapshot.snapshot_id()),
         snapshots: vec![snapshot.clone()],
         snapshot_log: vec![SnapshotLog {
-            timestamp_ms: snapshot.timestamp_ms,
+            timestamp_ms: commit_timestamp_ms,
             snapshot_id: snapshot.snapshot_id(),
         }],
         metadata_log: vec![],
@@ -245,14 +246,15 @@ pub async fn bootstrap_first_snapshot(
         .ok_or_else(|| DataFusionError::Plan("No snapshot in bootstrap commit".to_string()))?;
 
     // Update table metadata with the new snapshot
+    let commit_timestamp_ms = crate::utils::timestamp::monotonic_timestamp_ms();
     table_meta.current_snapshot_id = Some(snapshot.snapshot_id());
     table_meta.snapshots.push(snapshot.clone());
     table_meta.snapshot_log.push(SnapshotLog {
-        timestamp_ms: snapshot.timestamp_ms,
+        timestamp_ms: commit_timestamp_ms,
         snapshot_id: snapshot.snapshot_id(),
     });
     table_meta.last_sequence_number = 1;
-    table_meta.last_updated_ms = chrono::Utc::now().timestamp_millis();
+    table_meta.last_updated_ms = commit_timestamp_ms;
 
     // Add main branch reference if not present
     if !table_meta
