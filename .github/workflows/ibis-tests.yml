@@ -23,7 +23,7 @@ jobs:
         with:
           script: |
             const labels = context.payload.pull_request?.labels?.map(label => label.name) || [];
-            core.setOutput('has_label', labels.includes('ibis tests') ? 'true' : 'false');
+            core.setOutput('has_label', labels.includes('run ibis tests') ? 'true' : 'false');
 
   test:
     name: Test
@@ -38,34 +38,22 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      - uses: actions/setup-java@v4
-        with:
-          distribution: "corretto"
-          java-version: "17"
-
       - uses: actions/setup-python@v5
         with:
           python-version: "3.11"
 
-      - name: Install Rust toolchain
-        run: |
-          rustup toolchain install stable
+      - name: Install Hatch
+        uses: pypa/hatch@install
 
-      - name: Setup Protobuf Compiler
-        uses: arduino/setup-protoc@v3
-
-      - name: Clone IBIS
-        run: |
-          git clone https://github.com/ibis-project/testing-data.git opt/ibis-testing-data
-
-      - name: Install Hatch and Maturin
-        run: |
-          pip install hatch maturin
+      - name: Checkout ibis testing data
+        uses: actions/checkout@v4
+        with:
+          repository: ibis-project/testing-data
+          path: opt/ibis-testing-data
 
       - name: Build native extension
         run: |
-          hatch run maturin develop
-          hatch run maturin build
+          hatch run install-pysail
 
       - name: Install grpc_health_probe
         run: |
