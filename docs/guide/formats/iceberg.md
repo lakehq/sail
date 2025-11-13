@@ -80,12 +80,12 @@ SELECT * FROM metrics WHERE year > 2024;
 
 ### Time Travel
 
-You can use the time travel feature to query branches or historical versions of an Iceberg table.
+You can use the time travel feature to query tags, branches, or historical versions of an Iceberg table.
 
 ```python
 df = spark.read.format("iceberg").option("snapshotId", "123").load(path)
 df = spark.read.format("iceberg").option("timestampAsOf", "2025-01-02T03:04:05.678").load(path)
-df = spark.read.format("iceberg").option("ref", "main").load(path)
+df = spark.read.format("iceberg").option("branch", "main").load(path)
 ```
 
 Time travel is not available for Spark SQL in Sail yet, but we plan to support it soon.
