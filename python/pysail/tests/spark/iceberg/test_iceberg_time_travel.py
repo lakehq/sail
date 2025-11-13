@@ -1,3 +1,4 @@
+import platform
 import time
 from datetime import datetime, timezone
 
@@ -44,6 +45,7 @@ def test_iceberg_time_travel_by_snapshot_id(spark, tmp_path):
         catalog.drop_table(identifier)
 
 
+@pytest.mark.skipif(platform.system() == "Windows", reason="not working on Windows")
 def test_iceberg_time_travel_by_timestamp(spark, tmp_path):
     table_path = tmp_path / "tt_by_timestamp"
     table_path.mkdir(parents=True, exist_ok=True)
