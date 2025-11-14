@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from typing import Any
 
-from sqlalchemy import create_engine, text
+from sqlalchemy import bindparam, create_engine, text
 
 _ENGINES: dict[str, Any] = {}
 
@@ -264,23 +264,22 @@ def list_data_files(url: str, table_id: int, snapshot_id: int | None) -> list[di
         if not out:
             return out
         file_ids = [int(item["data_file_id"]) for item in out]
-        placeholders = ", ".join(f":id{i}" for i in range(len(file_ids)))
         stats_sql = text(
-            f"""
+            """
             select data_file_id, column_id, column_size_bytes, value_count, null_count,
                    min_value, max_value, contains_nan, extra_stats
             from ducklake_file_column_stats
-            where data_file_id in ({placeholders})
-            """  # noqa: S608
-        )
+            where data_file_id in :file_ids
+            """
+        ).bindparams(bindparam("file_ids", expanding=True))
         pv_sql = text(
-            f"""
+            """
             select data_file_id, partition_key_index, partition_value
             from ducklake_file_partition_value
-            where data_file_id in ({placeholders})
-            """  # noqa: S608
-        )
-        params = {f"id{i}": fid for i, fid in enumerate(file_ids)}
+            where data_file_id in :file_ids
+            """
+        ).bindparams(bindparam("file_ids", expanding=True))
+        params = {"file_ids": file_ids}
         stats_rows = conn.execute(stats_sql, params).all()
         pv_rows = conn.execute(pv_sql, params).all()
 
