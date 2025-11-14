@@ -31,6 +31,7 @@ use super::{
 };
 use crate::datasource::{delta_to_datafusion_error, DataFusionMixins};
 use crate::options::TableDeltaOptions;
+use crate::storage::{default_logstore, StorageConfig};
 use crate::table::open_table_with_object_store;
 
 /// Configuration for Delta table operations
@@ -104,11 +105,12 @@ impl<'a> DeltaPlanBuilder<'a> {
             .get_store(&self.table_config.table_url)
             .map_err(|e| datafusion_common::DataFusionError::External(Box::new(e)))?;
 
-        let log_store = deltalake::logstore::default_logstore(
+        let storage_config = StorageConfig::default();
+        let log_store = default_logstore(
             object_store.clone(),
             object_store,
             &self.table_config.table_url,
-            &Default::default(),
+            &storage_config,
         );
 
         let mut table = crate::table::DeltaTable::new(log_store, Default::default());

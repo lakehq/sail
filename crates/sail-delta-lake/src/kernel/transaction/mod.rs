@@ -29,7 +29,6 @@ use deltalake::checkpoints::cleanup_expired_logs_for;
 use deltalake::kernel::transaction::CommitData;
 // create_checkpoint_for
 use deltalake::kernel::transaction::{CommitMetrics, Metrics, PostCommitMetrics, TransactionError};
-use deltalake::logstore::{CommitOrBytes, LogStoreRef, ObjectStoreRef};
 use deltalake::operations::CustomExecuteHandler;
 use deltalake::protocol::DeltaOperation;
 use deltalake::table::config::TablePropertiesExt as _;
@@ -43,6 +42,7 @@ use uuid::Uuid;
 use crate::kernel::models::{Action, Metadata, Protocol, Transaction};
 use crate::kernel::snapshot::EagerSnapshot;
 use crate::kernel::transaction::conflict_checker::WinningCommitSummary;
+use crate::storage::{CommitOrBytes, LogStoreRef, ObjectStoreRef};
 use crate::table::DeltaTableState;
 
 mod conflict_checker;

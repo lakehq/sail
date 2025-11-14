@@ -15,6 +15,7 @@ mod kernel;
 pub mod operations;
 pub mod options;
 pub mod physical_plan;
+pub mod storage;
 pub mod table;
 
 mod column_mapping;

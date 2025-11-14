@@ -29,7 +29,6 @@ use delta_kernel::schema::{ColumnMetadataKey, StructField};
 use delta_kernel::table_features::ColumnMappingMode;
 use delta_kernel::table_properties::TableProperties;
 use delta_kernel::{EvaluationHandler, Expression};
-use deltalake::logstore::LogStore;
 use deltalake::table::config::TablePropertiesExt;
 use deltalake::{DeltaResult, DeltaTableConfig, DeltaTableError};
 use futures::stream::BoxStream;
@@ -40,6 +39,7 @@ use crate::kernel::models::{Add, DataType, Metadata, Protocol, Remove, StructTyp
 use crate::kernel::snapshot::log_data::LogDataHandler;
 use crate::kernel::snapshot::EagerSnapshot;
 use crate::kernel::ARROW_HANDLER;
+use crate::storage::LogStore;
 
 /// State snapshot currently held by the Delta Table instance.
 #[derive(Debug, Clone)]

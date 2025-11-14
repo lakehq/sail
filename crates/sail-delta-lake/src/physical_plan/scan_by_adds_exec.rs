@@ -28,13 +28,13 @@ use datafusion::physical_plan::{
 };
 use datafusion_common::{internal_err, DataFusionError, Result};
 use datafusion_physical_expr::{Distribution, EquivalenceProperties};
-use deltalake::logstore::StorageConfig;
 use futures::stream::{self, StreamExt, TryStreamExt};
 use url::Url;
 
 use crate::datasource::scan::FileScanParams;
 use crate::datasource::{build_file_scan_config, DeltaScanConfigBuilder};
 use crate::kernel::models::Add;
+use crate::storage::StorageConfig;
 use crate::table::open_table_with_object_store;
 
 /// An ExecutionPlan that scans Delta files based on a stream of Add actions from its input.

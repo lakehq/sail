@@ -26,7 +26,6 @@ use datafusion::arrow::datatypes::Schema;
 use datafusion::catalog::Session;
 use datafusion::datasource::listing::ListingTableUrl;
 use datafusion_common::Result;
-use deltalake::logstore::{default_logstore, LogStoreRef, StorageConfig};
 use deltalake::table::builder::DeltaTableConfig;
 use deltalake::{DeltaResult, DeltaTableError};
 use object_store::ObjectStore;
@@ -35,6 +34,9 @@ use url::Url;
 
 use crate::datasource::{delta_to_datafusion_error, DeltaScanConfig, DeltaTableProvider};
 use crate::options::TableDeltaOptions;
+use crate::storage::{
+    commit_uri_from_version, default_logstore, LogStore, LogStoreRef, StorageConfig,
+};
 mod state;
 
 /// In memory representation of a Delta Table
@@ -91,7 +93,7 @@ impl DeltaTable {
             return Ok(ts);
         }
 
-        let commit_uri = deltalake::logstore::commit_uri_from_version(version);
+        let commit_uri = commit_uri_from_version(version);
         let meta = self.log_store.object_store(None).head(&commit_uri).await?;
         Ok(meta.last_modified.timestamp_millis())
     }

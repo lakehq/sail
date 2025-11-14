@@ -33,7 +33,6 @@ use delta_kernel::engine::arrow_conversion::{TryIntoArrow, TryIntoKernel};
 use delta_kernel::schema::StructType;
 use delta_kernel::table_features::ColumnMappingMode;
 // TODO: Follow upstream for `MetadataExt`.
-use deltalake::logstore::StorageConfig;
 use deltalake::protocol::{DeltaOperation, SaveMode};
 use futures::stream::{once, StreamExt};
 use sail_common_datafusion::datasource::PhysicalSinkMode;
@@ -47,6 +46,7 @@ use crate::operations::write::writer::{DeltaWriter, WriterConfig};
 use crate::options::{ColumnMappingModeOption, TableDeltaOptions};
 use crate::physical_plan::CommitInfo;
 use crate::schema_manager::{annotate_for_column_mapping, evolve_schema, get_physical_schema};
+use crate::storage::StorageConfig;
 use crate::table::open_table_with_object_store;
 
 /// Schema handling mode for Delta Lake writes

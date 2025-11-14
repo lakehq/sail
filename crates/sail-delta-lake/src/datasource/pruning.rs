@@ -17,11 +17,11 @@ use datafusion::logical_expr::utils::conjunction;
 use datafusion::logical_expr::Expr;
 use datafusion::physical_optimizer::pruning::PruningPredicate;
 use datafusion_common::pruning::PruningStatistics;
-use deltalake::logstore::LogStoreRef;
 use futures::TryStreamExt;
 
 use crate::datasource::delta_to_datafusion_error;
 use crate::kernel::models::Add;
+use crate::storage::LogStoreRef;
 use crate::table::DeltaTableState;
 
 /// Result of file pruning operation

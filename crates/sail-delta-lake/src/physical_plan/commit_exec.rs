@@ -32,7 +32,6 @@ use datafusion_common::{internal_err, DataFusionError, Result};
 use datafusion_physical_expr::{Distribution, EquivalenceProperties};
 use delta_kernel::engine::arrow_conversion::TryIntoKernel;
 use delta_kernel::schema::StructType;
-use deltalake::logstore::StorageConfig;
 use deltalake::protocol::{DeltaOperation, SaveMode};
 use futures::stream::{self, StreamExt};
 use sail_common_datafusion::datasource::PhysicalSinkMode;
@@ -41,6 +40,7 @@ use url::Url;
 use crate::kernel::models::{new_metadata, Action, Add, Protocol, Remove};
 use crate::kernel::transaction::{CommitBuilder, CommitProperties, TableReference};
 use crate::physical_plan::CommitInfo;
+use crate::storage::StorageConfig;
 use crate::table::{create_delta_table_with_object_store, open_table_with_object_store};
 
 /// Physical execution node for Delta Lake commit operations

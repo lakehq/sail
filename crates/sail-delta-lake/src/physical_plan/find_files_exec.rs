@@ -36,7 +36,6 @@ use datafusion::physical_plan::{
 };
 use datafusion_common::{internal_err, DataFusionError, Result};
 use datafusion_physical_expr::{Distribution, EquivalenceProperties, PhysicalExpr};
-use deltalake::logstore::{LogStore, LogStoreRef, StorageConfig};
 use deltalake::{DeltaResult, DeltaTableError};
 use futures::{stream, TryStreamExt};
 use url::Url;
@@ -47,6 +46,7 @@ use crate::datasource::{
     DataFusionMixins, DeltaScanConfigBuilder, DeltaTableProvider, PredicateProperties, PATH_COLUMN,
 };
 use crate::kernel::models::Add;
+use crate::storage::{LogStore, LogStoreRef, StorageConfig};
 use crate::table::{open_table_with_object_store, DeltaTableState};
 
 /// Physical execution node for finding files in a Delta table that match a predicate.

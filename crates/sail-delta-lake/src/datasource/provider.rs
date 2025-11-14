@@ -34,7 +34,6 @@ use datafusion::logical_expr::{Expr, LogicalPlan, TableProviderFilterPushDown};
 use datafusion::physical_plan::ExecutionPlan;
 use delta_kernel::table_features::ColumnMappingMode;
 use deltalake::errors::DeltaResult;
-use deltalake::logstore::LogStoreRef;
 use sail_common_datafusion::rename::physical_plan::rename_projected_physical_plan;
 
 // use deltalake::errors::DeltaTableError;
@@ -48,6 +47,7 @@ use crate::datasource::{
 // use delta_kernel::snapshot::Snapshot as KernelSnapshot;
 use crate::kernel::models::Add;
 use crate::schema_manager::get_physical_schema;
+use crate::storage::LogStoreRef;
 use crate::table::DeltaTableState;
 
 /// A Delta table provider that enables additional metadata columns to be included during the scan

@@ -23,7 +23,6 @@ use datafusion::datasource::physical_plan::{
     FileScanConfigBuilder, FileSource as _, ParquetSource,
 };
 use datafusion::physical_expr::PhysicalExpr;
-use deltalake::logstore::LogStoreRef;
 use object_store::path::Path;
 use sail_common_datafusion::schema_adapter::DeltaSchemaAdapterFactory;
 
@@ -33,6 +32,7 @@ use crate::datasource::{
     DataFusionMixins, DeltaScanConfig, DeltaTableStateExt,
 };
 use crate::kernel::models::Add;
+use crate::storage::LogStoreRef;
 use crate::table::DeltaTableState;
 
 /// Parameters for building file scan configuration

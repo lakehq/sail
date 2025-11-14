@@ -27,7 +27,6 @@ use datafusion::logical_expr::Expr;
 use datafusion_common::DFSchema;
 use delta_kernel::table_properties::IsolationLevel;
 use deltalake::kernel::transaction::CommitConflictError;
-use deltalake::logstore::{get_actions, LogStore};
 use deltalake::protocol::DeltaOperation;
 use deltalake::table::config::TablePropertiesExt as _;
 use deltalake::{DeltaResult, DeltaTableError};
@@ -35,6 +34,7 @@ use deltalake::{DeltaResult, DeltaTableError};
 use crate::datasource::{datafusion_to_delta_error, parse_predicate_expression, DataFusionMixins};
 use crate::kernel::models::{Action, Add, CommitInfo, Metadata, Protocol, Remove, Transaction};
 use crate::kernel::snapshot::LogDataHandler;
+use crate::storage::{get_actions, LogStore};
 
 /// A struct representing different attributes of current transaction needed for conflict detection.
 #[allow(unused)]
