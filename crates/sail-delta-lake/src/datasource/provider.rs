@@ -32,11 +32,8 @@ use datafusion::datasource::{TableProvider, TableType};
 use datafusion::logical_expr::utils::conjunction;
 use datafusion::logical_expr::{Expr, LogicalPlan, TableProviderFilterPushDown};
 use datafusion::physical_plan::ExecutionPlan;
-// use crate::kernel::arrow::engine_ext::SnapshotExt as KernelSnapshotExt;
-// use delta_kernel::snapshot::Snapshot as KernelSnapshot;
 use delta_kernel::table_features::ColumnMappingMode;
 use deltalake::errors::DeltaResult;
-use deltalake::kernel::Add;
 use deltalake::logstore::LogStoreRef;
 use sail_common_datafusion::rename::physical_plan::rename_projected_physical_plan;
 
@@ -47,6 +44,9 @@ use crate::datasource::{
     build_file_scan_config, delta_to_datafusion_error, df_logical_schema, get_pushdown_filters,
     prune_files, simplify_expr, DataFusionMixins, DeltaScanConfig, DeltaTableStateExt,
 };
+// use crate::kernel::arrow::engine_ext::SnapshotExt as KernelSnapshotExt;
+// use delta_kernel::snapshot::Snapshot as KernelSnapshot;
+use crate::kernel::models::Add;
 use crate::schema_manager::get_physical_schema;
 use crate::table::DeltaTableState;
 

@@ -28,9 +28,9 @@ use datafusion::physical_plan::{
 };
 use datafusion_common::{internal_err, DataFusionError, Result};
 use datafusion_physical_expr::{Distribution, EquivalenceProperties};
-use deltalake::kernel::{Action, Add, Remove};
 use futures::stream::{self, StreamExt};
 
+use crate::kernel::models::{Action, Add, Remove};
 use crate::physical_plan::CommitInfo;
 
 /// Physical execution node to convert Add actions (from FindFiles) into Remove actions

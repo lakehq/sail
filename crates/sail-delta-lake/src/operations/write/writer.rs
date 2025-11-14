@@ -29,8 +29,6 @@ use datafusion::arrow::datatypes::{Schema as ArrowSchema, SchemaRef as ArrowSche
 use datafusion::arrow::row::{RowConverter, SortField};
 use delta_kernel::expressions::Scalar;
 use deltalake::errors::DeltaTableError;
-use deltalake::kernel::scalars::ScalarExt;
-use deltalake::kernel::Add;
 use indexmap::IndexMap;
 use object_store::path::Path;
 use object_store::ObjectStore;
@@ -43,6 +41,7 @@ use uuid::Uuid;
 
 use super::async_utils::AsyncShareableBuffer;
 use super::stats::create_add;
+use crate::kernel::models::{Add, ScalarExt};
 
 /// Trait for creating hive partition paths from partition values
 pub trait PartitionsExt {

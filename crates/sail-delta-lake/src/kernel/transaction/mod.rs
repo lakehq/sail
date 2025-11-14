@@ -29,7 +29,6 @@ use deltalake::checkpoints::cleanup_expired_logs_for;
 use deltalake::kernel::transaction::CommitData;
 // create_checkpoint_for
 use deltalake::kernel::transaction::{CommitMetrics, Metrics, PostCommitMetrics, TransactionError};
-use deltalake::kernel::{Action, Metadata, Protocol, Transaction};
 use deltalake::logstore::{CommitOrBytes, LogStoreRef, ObjectStoreRef};
 use deltalake::operations::CustomExecuteHandler;
 use deltalake::protocol::DeltaOperation;
@@ -41,6 +40,7 @@ use object_store::path::Path;
 use serde_json::Value;
 use uuid::Uuid;
 
+use crate::kernel::models::{Action, Metadata, Protocol, Transaction};
 use crate::kernel::snapshot::EagerSnapshot;
 use crate::kernel::transaction::conflict_checker::WinningCommitSummary;
 use crate::table::DeltaTableState;
@@ -268,11 +268,21 @@ impl<'a> CommitBuilder {
         operation: DeltaOperation,
         session: &'a dyn Session,
     ) -> PreCommit<'a> {
+        let delta_actions = self
+            .actions
+            .into_iter()
+            .map(deltalake::kernel::Action::from)
+            .collect::<Vec<_>>();
+        let delta_transactions = self
+            .app_transaction
+            .into_iter()
+            .map(deltalake::kernel::Transaction::from)
+            .collect::<Vec<_>>();
         let data = CommitData::new(
-            self.actions,
+            delta_actions,
             operation,
             self.app_metadata,
-            self.app_transaction,
+            delta_transactions,
         );
         PreCommit {
             log_store,
@@ -326,8 +336,9 @@ impl<'a> PreCommit<'a> {
         }
 
         Box::pin(async move {
+            let local_actions: Vec<_> = this.data.actions.iter().map(Action::from).collect();
             if let Some(table_reference) = this.table_data {
-                PROTOCOL.can_commit(table_reference, &this.data.actions, &this.data.operation)?;
+                PROTOCOL.can_commit(table_reference, &local_actions, &this.data.operation)?;
             }
             let log_entry = this.data.get_bytes()?;
 
@@ -389,6 +400,7 @@ impl<'a> std::future::IntoFuture for PreparedCommit<'a> {
 
         Box::pin(async move {
             let commit_or_bytes = this.commit_or_bytes;
+            let local_actions: Vec<_> = this.data.actions.iter().map(Action::from).collect();
 
             if this.table_data.is_none() {
                 this.log_store
@@ -441,7 +453,7 @@ impl<'a> std::future::IntoFuture for PreparedCommit<'a> {
                         let transaction_info = TransactionInfo::try_new(
                             read_snapshot.log_data(),
                             this.data.operation.read_predicate(),
-                            &this.data.actions,
+                            &local_actions,
                             this.data.operation.read_whole_table(),
                             Some(this.session),
                         )?;

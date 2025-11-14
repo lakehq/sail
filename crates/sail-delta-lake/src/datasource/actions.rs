@@ -20,8 +20,9 @@ use datafusion::common::scalar::ScalarValue;
 use datafusion::common::Result;
 use datafusion::datasource::listing::PartitionedFile;
 use deltalake::errors::{DeltaResult, DeltaTableError};
-use deltalake::kernel::Add;
 use object_store::ObjectMeta;
+
+use crate::kernel::models::{Add, Remove};
 
 /// Convert an Add action to a PartitionedFile for DataFusion scanning
 pub fn partitioned_file_from_action(
@@ -218,9 +219,9 @@ pub fn join_batches_with_add_actions(
 }
 
 /// Convert Add actions to Remove actions (used in commit operations)
-pub fn adds_to_remove_actions(adds: Vec<Add>) -> Vec<deltalake::kernel::Remove> {
+pub fn adds_to_remove_actions(adds: Vec<Add>) -> Vec<Remove> {
     adds.into_iter()
-        .map(|add| deltalake::kernel::Remove {
+        .map(|add| Remove {
             path: add.path,
             deletion_timestamp: Some(chrono::Utc::now().timestamp_millis()),
             data_change: true,

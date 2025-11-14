@@ -25,11 +25,11 @@ use delta_kernel::actions::{Metadata, Protocol};
 use delta_kernel::expressions::{Scalar, StructData};
 use delta_kernel::table_configuration::TableConfiguration;
 use delta_kernel::table_properties::TableProperties;
-use deltalake::kernel::scalars::ScalarExt;
 use deltalake::{DeltaResult, DeltaTableError};
 use indexmap::IndexMap;
 
 use crate::kernel::arrow::extract::extract_and_cast;
+use crate::kernel::models::ScalarExt;
 use crate::kernel::snapshot::iterators::LogicalFileView;
 
 const COL_NUM_RECORDS: &str = "numRecords";

@@ -36,7 +36,6 @@ use datafusion::physical_plan::{
 };
 use datafusion_common::{internal_err, DataFusionError, Result};
 use datafusion_physical_expr::{Distribution, EquivalenceProperties, PhysicalExpr};
-use deltalake::kernel::Add;
 use deltalake::logstore::{LogStore, LogStoreRef, StorageConfig};
 use deltalake::{DeltaResult, DeltaTableError};
 use futures::{stream, TryStreamExt};
@@ -47,6 +46,7 @@ use crate::datasource::{
     collect_physical_columns, datafusion_to_delta_error, join_batches_with_add_actions,
     DataFusionMixins, DeltaScanConfigBuilder, DeltaTableProvider, PredicateProperties, PATH_COLUMN,
 };
+use crate::kernel::models::Add;
 use crate::table::{open_table_with_object_store, DeltaTableState};
 
 /// Physical execution node for finding files in a Delta table that match a predicate.
@@ -112,10 +112,7 @@ impl DeltaFindFilesExec {
         self.version
     }
 
-    async fn find_files(
-        &self,
-        context: Arc<TaskContext>,
-    ) -> Result<(Vec<deltalake::kernel::Add>, bool)> {
+    async fn find_files(&self, context: Arc<TaskContext>) -> Result<(Vec<Add>, bool)> {
         let object_store = context
             .runtime_env()
             .object_store_registry

@@ -24,9 +24,10 @@ use datafusion::physical_plan::repartition::RepartitionExec;
 use datafusion::physical_plan::sorts::sort::SortExec;
 use datafusion::physical_plan::{ExecutionPlan, Partitioning};
 use datafusion_physical_expr::expressions::{lit, Column as PhysicalColumn};
-use deltalake::kernel::Action;
 use deltalake::protocol::DeltaOperation;
 use serde::{Deserialize, Serialize};
+
+use crate::kernel::models::Action;
 
 mod commit_exec;
 pub mod find_files_exec;

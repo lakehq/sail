@@ -20,8 +20,10 @@
 
 use std::borrow::Cow;
 use std::collections::HashMap;
+use std::str::FromStr;
 use std::sync::LazyLock;
 
+// TODO: Stop depending on delta-rs StorageType.
 use chrono::{DateTime, Utc};
 use datafusion::arrow::array::cast::AsArray;
 use datafusion::arrow::array::types::Int64Type;
@@ -30,10 +32,12 @@ use datafusion::arrow::datatypes::{DataType as ArrowDataType, Int32Type};
 use delta_kernel::expressions::{Scalar, StructData};
 use delta_kernel::scan::scan_row_schema;
 use delta_kernel::schema::DataType;
-use deltalake::kernel::scalars::ScalarExt;
-use deltalake::kernel::{Add, DeletionVectorDescriptor, Remove};
+// TODO: Replace this storage types.
+use deltalake::kernel::models::StorageType as DvStorageType;
 use deltalake::{DeltaResult, DeltaTableError};
 use percent_encoding::percent_decode_str;
+
+use crate::kernel::models::{Add, DeletionVectorDescriptor, Remove, ScalarExt};
 
 const FIELD_NAME_PATH: &str = "path";
 const FIELD_NAME_SIZE: &str = "size";
@@ -373,8 +377,10 @@ struct DeletionVectorView<'a> {
 impl DeletionVectorView<'_> {
     /// Converts this view into a DeletionVectorDescriptor.
     fn descriptor(&self) -> DeletionVectorDescriptor {
+        let storage_type =
+            DvStorageType::from_str(self.storage_type()).unwrap_or(DvStorageType::UuidRelativePath);
         DeletionVectorDescriptor {
-            storage_type: self.storage_type().parse().unwrap_or_default(),
+            storage_type,
             path_or_inline_dv: self.path_or_inline_dv().to_string(),
             size_in_bytes: self.size_in_bytes(),
             cardinality: self.cardinality(),

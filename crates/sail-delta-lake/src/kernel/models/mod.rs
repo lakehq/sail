@@ -11,3 +11,45 @@
 // limitations under the License.
 
 pub mod fields;
+
+mod actions;
+mod metadata;
+mod protocol;
+mod scalars;
+
+#[allow(unused_imports)]
+pub use actions::{
+    Action, Add, AddCDCFile, CheckpointMetadata, ColumnCountStat, ColumnValueStat, CommitInfo,
+    DeletionVectorDescriptor, DomainMetadata, Remove, Sidecar, Stats, Transaction,
+};
+#[allow(unused_imports)]
+pub use delta_kernel::actions::{Metadata, Protocol};
+#[allow(unused_imports)]
+pub use delta_kernel::expressions::Scalar;
+#[allow(unused_imports)]
+pub use delta_kernel::schema::{
+    ColumnMetadataKey, DataType, MetadataValue, Schema, SchemaRef, StructField, StructType,
+};
+#[allow(unused_imports)]
+pub use metadata::{new_metadata, MetadataExt};
+#[allow(unused_imports)]
+pub use protocol::ProtocolExt;
+#[allow(unused_imports)]
+pub use scalars::{ScalarExt, NULL_PARTITION_VALUE_DATA_PATH};
+
+/// Checks if any field (including nested) in the provided iterator is a `timestampNtz`.
+#[allow(dead_code)]
+pub fn contains_timestampntz<'a>(mut fields: impl Iterator<Item = &'a StructField>) -> bool {
+    fn has_timestamp(dtype: &DataType) -> bool {
+        match dtype {
+            &DataType::TIMESTAMP_NTZ => true,
+            DataType::Array(inner) => has_timestamp(inner.element_type()),
+            DataType::Struct(struct_type) => {
+                struct_type.fields().any(|f| has_timestamp(f.data_type()))
+            }
+            _ => false,
+        }
+    }
+
+    fields.any(|field| has_timestamp(field.data_type()))
+}

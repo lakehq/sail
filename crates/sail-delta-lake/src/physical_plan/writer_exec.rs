@@ -32,8 +32,6 @@ use datafusion_physical_expr::{Distribution, EquivalenceProperties, PhysicalExpr
 use delta_kernel::engine::arrow_conversion::{TryIntoArrow, TryIntoKernel};
 use delta_kernel::schema::StructType;
 use delta_kernel::table_features::ColumnMappingMode;
-#[allow(deprecated)]
-use deltalake::kernel::Action;
 // TODO: Follow upstream for `MetadataExt`.
 use deltalake::logstore::StorageConfig;
 use deltalake::protocol::{DeltaOperation, SaveMode};
@@ -44,6 +42,7 @@ use url::Url;
 use crate::column_mapping::compute_max_column_id;
 use crate::datasource::delta_to_datafusion_error;
 use crate::datasource::type_converter::DeltaTypeConverter;
+use crate::kernel::models::{new_metadata, Action, Protocol};
 use crate::operations::write::writer::{DeltaWriter, WriterConfig};
 use crate::options::{ColumnMappingModeOption, TableDeltaOptions};
 use crate::physical_plan::CommitInfo;
@@ -368,14 +367,13 @@ impl ExecutionPlan for DeltaWriterExec {
 
                 // Protocol and features for column mapping
                 #[allow(clippy::unwrap_used)]
-                let protocol: deltalake::kernel::Protocol =
-                    serde_json::from_value(serde_json::json!({
-                        "minReaderVersion": 3,
-                        "minWriterVersion": 7,
-                        "readerFeatures": ["columnMapping"],
-                        "writerFeatures": ["columnMapping"]
-                    }))
-                    .unwrap();
+                let protocol: Protocol = serde_json::from_value(serde_json::json!({
+                    "minReaderVersion": 3,
+                    "minWriterVersion": 7,
+                    "readerFeatures": ["columnMapping"],
+                    "writerFeatures": ["columnMapping"]
+                }))
+                .unwrap();
 
                 let mut configuration = HashMap::new();
                 let mode_str = match effective_mode {
@@ -394,7 +392,7 @@ impl ExecutionPlan for DeltaWriterExec {
 
                 #[allow(deprecated)]
                 #[allow(clippy::unwrap_used)]
-                let metadata = deltalake::kernel::new_metadata(
+                let metadata = new_metadata(
                     annotated_schema_opt.as_ref().unwrap(),
                     partition_columns.clone(),
                     configuration,

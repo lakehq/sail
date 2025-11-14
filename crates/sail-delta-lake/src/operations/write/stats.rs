@@ -26,8 +26,6 @@ use std::time::{SystemTime, UNIX_EPOCH};
 
 use delta_kernel::expressions::Scalar;
 use deltalake::errors::DeltaTableError;
-use deltalake::kernel::scalars::ScalarExt;
-use deltalake::kernel::Add;
 use indexmap::IndexMap;
 use log::warn;
 use parquet::basic::{LogicalType, TimeUnit, Type};
@@ -35,73 +33,8 @@ use parquet::file::metadata::{ParquetMetaData, RowGroupMetaData};
 use parquet::file::statistics::Statistics;
 use parquet::schema::types::{ColumnDescriptor, SchemaDescriptor};
 use sail_common::spec::SAIL_LIST_FIELD_NAME;
-use serde::{Deserialize, Serialize};
-use serde_json::Value;
 
-/// Represent minValues and maxValues in add action statistics.
-#[derive(Serialize, Deserialize, Debug, PartialEq, Eq)]
-#[serde(untagged)]
-pub enum ColumnValueStat {
-    /// Composite HashMap representation of statistics.
-    Column(HashMap<String, ColumnValueStat>),
-    /// Json representation of statistics.
-    Value(Value),
-}
-#[allow(dead_code)]
-impl ColumnValueStat {
-    pub fn as_column(&self) -> Option<&HashMap<String, ColumnValueStat>> {
-        match self {
-            ColumnValueStat::Column(m) => Some(m),
-            _ => None,
-        }
-    }
-
-    pub fn as_value(&self) -> Option<&Value> {
-        match self {
-            ColumnValueStat::Value(v) => Some(v),
-            _ => None,
-        }
-    }
-}
-
-/// Represent nullCount in add action statistics.
-#[derive(Serialize, Deserialize, Debug, PartialEq, Eq)]
-#[serde(untagged)]
-pub enum ColumnCountStat {
-    /// Composite HashMap representation of statistics.
-    Column(HashMap<String, ColumnCountStat>),
-    /// Json representation of statistics.
-    Value(i64),
-}
-#[allow(dead_code)]
-impl ColumnCountStat {
-    pub fn as_column(&self) -> Option<&HashMap<String, ColumnCountStat>> {
-        match self {
-            ColumnCountStat::Column(m) => Some(m),
-            _ => None,
-        }
-    }
-
-    pub fn as_value(&self) -> Option<i64> {
-        match self {
-            ColumnCountStat::Value(v) => Some(*v),
-            _ => None,
-        }
-    }
-}
-
-#[derive(Serialize, Deserialize, Debug, Default, PartialEq, Eq)]
-#[serde(rename_all = "camelCase")]
-pub struct Stats {
-    /// Number of records in the file associated with the log action.
-    pub num_records: i64,
-    /// Contains a value smaller than all values present in the file for all columns.
-    pub min_values: HashMap<String, ColumnValueStat>,
-    /// Contains a value larger than all values present in the file for all columns.
-    pub max_values: HashMap<String, ColumnValueStat>,
-    /// The number of null values for all columns.
-    pub null_count: HashMap<String, ColumnCountStat>,
-}
+use crate::kernel::models::{Add, ColumnCountStat, ColumnValueStat, ScalarExt, Stats};
 
 /// Creates an [`Add`] log action struct with statistics.
 pub fn create_add(

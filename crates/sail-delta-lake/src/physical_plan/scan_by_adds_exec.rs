@@ -34,6 +34,7 @@ use url::Url;
 
 use crate::datasource::scan::FileScanParams;
 use crate::datasource::{build_file_scan_config, DeltaScanConfigBuilder};
+use crate::kernel::models::Add;
 use crate::table::open_table_with_object_store;
 
 /// An ExecutionPlan that scans Delta files based on a stream of Add actions from its input.
@@ -81,7 +82,7 @@ impl DeltaScanByAddsExec {
     async fn create_scan_stream(
         &self,
         context: Arc<TaskContext>,
-        candidate_adds: Vec<deltalake::kernel::Add>,
+        candidate_adds: Vec<Add>,
     ) -> Result<SendableRecordBatchStream> {
         let object_store = context
             .runtime_env()
@@ -231,7 +232,7 @@ impl ExecutionPlan for DeltaScanByAddsExec {
                     if add_json.trim().is_empty() {
                         continue;
                     }
-                    match serde_json::from_str::<deltalake::kernel::Add>(add_json) {
+                    match serde_json::from_str::<Add>(add_json) {
                         Ok(add) => candidate_adds.push(add),
                         Err(e) => return Err(DataFusionError::External(Box::new(e))),
                     }

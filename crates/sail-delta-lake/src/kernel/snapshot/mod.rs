@@ -34,7 +34,6 @@ use delta_kernel::snapshot::Snapshot as KernelSnapshot;
 use delta_kernel::table_configuration::TableConfiguration;
 use delta_kernel::table_properties::TableProperties;
 use delta_kernel::{PredicateRef, Version};
-use deltalake::kernel::{Action, CommitInfo, Metadata, Protocol, Remove, StructType};
 use deltalake::logstore::LogStore;
 use deltalake::{DeltaResult, DeltaTableConfig, DeltaTableError};
 use futures::stream::BoxStream;
@@ -46,6 +45,7 @@ use tokio::task::spawn_blocking;
 use url::Url;
 
 use crate::kernel::arrow::engine_ext::{ScanExt, SnapshotExt};
+use crate::kernel::models::{Action, CommitInfo, Metadata, Protocol, Remove, StructType};
 use crate::kernel::snapshot::iterators::LogicalFileView;
 pub use crate::kernel::snapshot::log_data::LogDataHandler;
 use crate::kernel::snapshot::parse::read_removes;

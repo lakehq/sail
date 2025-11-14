@@ -26,12 +26,12 @@ use datafusion::arrow::array::{MapArray, *};
 use delta_kernel::engine::arrow_conversion::TryIntoArrow as _;
 use delta_kernel::expressions::Scalar;
 use delta_kernel::schema::{DataType, PrimitiveType};
-use deltalake::kernel::StructType;
 use deltalake::{DeltaResult, DeltaTableError};
 use log::*;
 
 use super::parse::collect_map;
 use crate::kernel::arrow::extract::{self as ex};
+use crate::kernel::models::StructType;
 
 pub(crate) fn parse_partitions(
     batch: &RecordBatch,

@@ -27,13 +27,13 @@ use datafusion::logical_expr::Expr;
 use datafusion_common::DFSchema;
 use delta_kernel::table_properties::IsolationLevel;
 use deltalake::kernel::transaction::CommitConflictError;
-use deltalake::kernel::{Action, Add, CommitInfo, Metadata, Protocol, Remove, Transaction};
 use deltalake::logstore::{get_actions, LogStore};
 use deltalake::protocol::DeltaOperation;
 use deltalake::table::config::TablePropertiesExt as _;
 use deltalake::{DeltaResult, DeltaTableError};
 
 use crate::datasource::{datafusion_to_delta_error, parse_predicate_expression, DataFusionMixins};
+use crate::kernel::models::{Action, Add, CommitInfo, Metadata, Protocol, Remove, Transaction};
 use crate::kernel::snapshot::LogDataHandler;
 
 /// A struct representing different attributes of current transaction needed for conflict detection.
@@ -162,7 +162,10 @@ impl WinningCommitSummary {
         let commit_log_bytes = log_store.read_commit_entry(winning_commit_version).await?;
         match commit_log_bytes {
             Some(bytes) => {
-                let actions = get_actions(winning_commit_version, &bytes)?;
+                let actions = get_actions(winning_commit_version, &bytes)?
+                    .into_iter()
+                    .map(Action::from)
+                    .collect::<Vec<_>>();
                 let commit_info = actions
                     .iter()
                     .find(|action| matches!(action, Action::CommitInfo(_)))

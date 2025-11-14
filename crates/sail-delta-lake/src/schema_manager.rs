@@ -14,14 +14,13 @@ use datafusion::arrow::datatypes::Schema as ArrowSchema;
 use delta_kernel::engine::arrow_conversion::{TryIntoArrow, TryIntoKernel};
 use delta_kernel::schema::StructType;
 use delta_kernel::table_features::ColumnMappingMode;
-#[allow(deprecated)]
-use deltalake::kernel::MetadataExt;
 use deltalake::DeltaResult;
 
 use crate::column_mapping::{
     annotate_new_fields_for_column_mapping, annotate_schema_for_column_mapping,
     compute_max_column_id, enrich_arrow_with_parquet_field_ids,
 };
+use crate::kernel::models::{Metadata, MetadataExt};
 
 /// Convert logical Arrow schema to kernel `StructType`.
 pub fn logical_arrow_to_kernel(arrow: &ArrowSchema) -> DeltaResult<StructType> {
@@ -45,9 +44,9 @@ pub fn annotate_for_column_mapping(schema: &StructType) -> StructType {
 pub fn evolve_schema(
     existing: &StructType,
     candidate: &StructType,
-    metadata: &deltalake::kernel::Metadata,
+    metadata: &Metadata,
     mode: ColumnMappingMode,
-) -> DeltaResult<(StructType, deltalake::kernel::Metadata)> {
+) -> DeltaResult<(StructType, Metadata)> {
     let updated = if matches!(mode, ColumnMappingMode::Name | ColumnMappingMode::Id) {
         let next_id = metadata
             .configuration()
@@ -58,16 +57,13 @@ pub fn evolve_schema(
         let (annotated, last_id) =
             annotate_new_fields_for_column_mapping(existing, candidate, next_id + 1);
 
-        #[allow(deprecated)]
         let meta_with_schema = metadata.clone().with_schema(&annotated)?;
-        #[allow(deprecated)]
         let meta_with_max = meta_with_schema.add_config_key(
             "delta.columnMapping.maxColumnId".to_string(),
             last_id.to_string(),
         )?;
         (annotated, meta_with_max)
     } else {
-        #[allow(deprecated)]
         let meta = metadata.clone().with_schema(candidate)?;
         (candidate.clone(), meta)
     };

@@ -23,11 +23,11 @@
 use datafusion::arrow::array::{
     Array, BooleanArray, Int32Array, Int64Array, MapArray, StringArray, StructArray,
 };
-use deltalake::kernel::{DeletionVectorDescriptor, Remove};
 use deltalake::{DeltaResult, DeltaTableError};
 use percent_encoding::percent_decode_str;
 
 use crate::kernel::arrow::extract::{self as ex, ProvidesColumnByName};
+use crate::kernel::models::{DeletionVectorDescriptor, Remove};
 
 pub(super) fn read_removes(array: &dyn ProvidesColumnByName) -> DeltaResult<Vec<Remove>> {
     let mut result = Vec::new();
