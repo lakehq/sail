@@ -105,7 +105,7 @@ impl<'a> DeltaPlanBuilder<'a> {
             .get_store(&self.table_config.table_url)
             .map_err(|e| datafusion_common::DataFusionError::External(Box::new(e)))?;
 
-        let storage_config = StorageConfig::default();
+        let storage_config = StorageConfig;
         let log_store = default_logstore(
             object_store.clone(),
             object_store,

@@ -214,7 +214,7 @@ impl ExecutionPlan for DeltaCommitExec {
 
         let schema = self.schema();
         let future = async move {
-            let storage_config = StorageConfig::default();
+            let storage_config = StorageConfig;
             let object_store = Self::get_object_store(&context, &table_url)?;
 
             let table = if table_exists {

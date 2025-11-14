@@ -225,7 +225,7 @@ impl ExecutionPlan for DeltaWriterExec {
                 ..
             } = &options;
 
-            let storage_config = StorageConfig::default();
+            let storage_config = StorageConfig;
             let object_store = Self::get_object_store(&context, &table_url)?;
 
             // Calculate initial_actions and operation based on sink_mode

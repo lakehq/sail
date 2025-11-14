@@ -52,8 +52,8 @@ pub type LogStoreRef = Arc<dyn LogStore>;
 
 const DELTA_LOG_FOLDER: &str = "_delta_log";
 static DELTA_LOG_PATH: LazyLock<Path> = LazyLock::new(|| Path::from(DELTA_LOG_FOLDER));
-static DELTA_LOG_REGEX: LazyLock<Regex> =
-    LazyLock::new(|| Regex::new(r"(\d{20})\.(json|checkpoint(\.\d+)?\.parquet)$").unwrap());
+static DELTA_LOG_REGEX: LazyLock<Result<Regex, regex::Error>> =
+    LazyLock::new(|| Regex::new(r"(\d{20})\.(json|checkpoint(\.\d+)?\.parquet)$"));
 
 /// Holder for temporary commit paths or prepared bytes.
 #[derive(Clone)]
@@ -101,9 +101,17 @@ pub fn default_logstore(
 
 /// Extract version from a file name in the delta log.
 fn extract_version_from_filename(name: &str) -> Option<i64> {
-    DELTA_LOG_REGEX
+    let regex = match delta_log_regex() {
+        Ok(regex) => regex,
+        Err(err) => {
+            error!("Failed to obtain delta log regex: {err}");
+            return None;
+        }
+    };
+    regex
         .captures(name)
-        .map(|captures| captures.get(1).unwrap().as_str().parse().unwrap())
+        .and_then(|captures| captures.get(1))
+        .and_then(|capture| capture.as_str().parse::<i64>().ok())
 }
 
 /// Return the `_delta_log` commit URI for the given version.
@@ -321,6 +329,15 @@ async fn latest_version_from_listing(store: Arc<dyn ObjectStore>) -> DeltaResult
     Ok(max_version)
 }
 
+fn delta_log_regex() -> DeltaResult<&'static Regex> {
+    match LazyLock::force(&DELTA_LOG_REGEX) {
+        Ok(regex) => Ok(regex),
+        Err(err) => Err(DeltaTableError::Generic(format!(
+            "Failed to compile delta log regex: {err}"
+        ))),
+    }
+}
+
 fn get_engine(store: Arc<dyn ObjectStore>) -> Arc<dyn Engine> {
     let handle = Handle::current();
     match handle.runtime_flavor() {
@@ -332,7 +349,13 @@ fn get_engine(store: Arc<dyn ObjectStore>) -> Arc<dyn Engine> {
             store,
             Arc::new(TokioBackgroundExecutor::new()),
         )),
-        _ => panic!("unsupported runtime flavor"),
+        _ => {
+            error!("unsupported runtime flavor, using background executor");
+            Arc::new(DefaultEngine::new(
+                store,
+                Arc::new(TokioBackgroundExecutor::new()),
+            ))
+        }
     }
 }
 

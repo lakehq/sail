@@ -201,7 +201,7 @@ pub async fn create_delta_provider(
 ) -> Result<Arc<dyn datafusion::catalog::TableProvider>> {
     let url = ListingTableUrl::try_new(table_url.clone(), None)?;
     let object_store = ctx.runtime_env().object_store(&url)?;
-    let storage_config = StorageConfig::default();
+    let storage_config = StorageConfig;
     let log_store =
         create_logstore_with_object_store(object_store, table_url.clone(), storage_config)
             .map_err(delta_to_datafusion_error)?;

@@ -203,7 +203,6 @@ impl WinningCommitSummary {
             Some(bytes) => {
                 let actions = get_actions(winning_commit_version, &bytes)?
                     .into_iter()
-                    .map(Action::from)
                     .collect::<Vec<_>>();
                 let commit_info = actions
                     .iter()

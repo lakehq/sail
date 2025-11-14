@@ -25,20 +25,15 @@ use serde::{Deserialize, Serialize};
 
 use crate::kernel::{DeltaResult, DeltaTableError};
 
-#[derive(Serialize, Deserialize, Copy, Clone, Debug, PartialEq, Eq)]
+#[derive(Serialize, Deserialize, Copy, Clone, Debug, PartialEq, Eq, Default)]
 pub enum StorageType {
     #[serde(rename = "u")]
+    #[default]
     UuidRelativePath,
     #[serde(rename = "i")]
     Inline,
     #[serde(rename = "p")]
     AbsolutePath,
-}
-
-impl Default for StorageType {
-    fn default() -> Self {
-        Self::UuidRelativePath
-    }
 }
 
 impl FromStr for StorageType {
@@ -325,17 +320,12 @@ pub struct Transaction {
 }
 
 /// The isolation level applied during a transaction.
-#[derive(Serialize, Deserialize, Debug, Copy, Clone, PartialEq, Eq)]
+#[derive(Serialize, Deserialize, Debug, Copy, Clone, PartialEq, Eq, Default)]
 pub enum IsolationLevel {
+    #[default]
     Serializable,
     WriteSerializable,
     SnapshotIsolation,
-}
-
-impl Default for IsolationLevel {
-    fn default() -> Self {
-        Self::Serializable
-    }
 }
 
 impl AsRef<str> for IsolationLevel {

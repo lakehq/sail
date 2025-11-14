@@ -450,7 +450,7 @@ impl<'a> PreCommit<'a> {
         }
 
         Box::pin(async move {
-            let local_actions: Vec<_> = this.data.actions.iter().cloned().collect();
+            let local_actions: Vec<_> = this.data.actions.to_vec();
             if let Some(table_reference) = this.table_data {
                 PROTOCOL.can_commit(table_reference, &local_actions, &this.data.operation)?;
             }
@@ -514,7 +514,7 @@ impl<'a> std::future::IntoFuture for PreparedCommit<'a> {
 
         Box::pin(async move {
             let commit_or_bytes = this.commit_or_bytes;
-            let local_actions: Vec<_> = this.data.actions.iter().cloned().collect();
+            let local_actions: Vec<_> = this.data.actions.to_vec();
 
             if this.table_data.is_none() {
                 this.log_store

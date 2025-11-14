@@ -8,14 +8,34 @@ use object_store::ObjectStore;
 use regex::Regex;
 use uuid::Uuid;
 
-use crate::kernel::DeltaResult;
+use crate::kernel::{DeltaResult, DeltaTableError};
 use crate::storage::LogStore;
 
 const DELTA_LOG_FOLDER: &str = "_delta_log";
-static DELTA_LOG_REGEX: LazyLock<Regex> =
-    LazyLock::new(|| Regex::new(r"(\d{20})\.json$").expect("valid regex"));
-static CHECKPOINT_REGEX: LazyLock<Regex> =
-    LazyLock::new(|| Regex::new(r"(\d{20})\.checkpoint.*\.parquet$").expect("valid regex"));
+static DELTA_LOG_REGEX: LazyLock<Result<Regex, regex::Error>> =
+    LazyLock::new(|| Regex::new(r"(\d{20})\.json$"));
+static CHECKPOINT_REGEX: LazyLock<Result<Regex, regex::Error>> =
+    LazyLock::new(|| Regex::new(r"(\d{20})\.checkpoint.*\.parquet$"));
+
+fn regex_from_lazy(
+    lazy: &'static LazyLock<Result<Regex, regex::Error>>,
+    name: &str,
+) -> DeltaResult<&'static Regex> {
+    match LazyLock::force(lazy) {
+        Ok(regex) => Ok(regex),
+        Err(err) => Err(DeltaTableError::Generic(format!(
+            "Failed to compile {name} regex: {err}"
+        ))),
+    }
+}
+
+fn delta_log_regex() -> DeltaResult<&'static Regex> {
+    regex_from_lazy(&DELTA_LOG_REGEX, "delta log")
+}
+
+fn checkpoint_regex() -> DeltaResult<&'static Regex> {
+    regex_from_lazy(&CHECKPOINT_REGEX, "checkpoint")
+}
 
 /// Delete expired Delta log files up to a safe checkpoint boundary.
 pub async fn cleanup_expired_logs_for(
@@ -25,6 +45,8 @@ pub async fn cleanup_expired_logs_for(
     operation_id: Option<Uuid>,
 ) -> DeltaResult<usize> {
     debug!("called cleanup_expired_logs_for");
+    let delta_log_pattern = delta_log_regex()?;
+    let checkpoint_pattern = checkpoint_regex()?;
     let object_store = log_store.object_store(operation_id);
     let log_path = Path::from(DELTA_LOG_FOLDER);
 
@@ -41,7 +63,7 @@ pub async fn cleanup_expired_logs_for(
         .filter_map(|entry| entry.as_ref().ok())
         .filter_map(|meta| {
             let path = meta.location.as_ref();
-            DELTA_LOG_REGEX
+            delta_log_pattern
                 .captures(path)
                 .and_then(|caps| caps.get(1))
                 .and_then(|v| v.as_str().parse::<i64>().ok())
@@ -59,7 +81,7 @@ pub async fn cleanup_expired_logs_for(
         .filter_map(|entry| entry.as_ref().ok())
         .filter_map(|meta| {
             let path = meta.location.as_ref();
-            CHECKPOINT_REGEX
+            checkpoint_pattern
                 .captures(path)
                 .and_then(|caps| caps.get(1))
                 .and_then(|v| v.as_str().parse::<i64>().ok())
@@ -86,12 +108,11 @@ pub async fn cleanup_expired_logs_for(
                 }
             };
             let path_str = meta.location.as_ref();
-            let captures = DELTA_LOG_REGEX.captures(path_str)?;
+            let captures = delta_log_pattern.captures(path_str)?;
             let ts = meta.last_modified.timestamp_millis();
-            let log_ver_str = captures.get(1).unwrap().as_str();
-            let Ok(log_ver) = log_ver_str.parse::<i64>() else {
-                return None;
-            };
+            let log_ver = captures
+                .get(1)
+                .and_then(|m| m.as_str().parse::<i64>().ok())?;
             if log_ver < safe_checkpoint_version && ts <= cutoff_timestamp {
                 Some(Ok(meta.location))
             } else {

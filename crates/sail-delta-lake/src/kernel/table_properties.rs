@@ -1,5 +1,4 @@
 use std::num::NonZeroU64;
-use std::sync::LazyLock;
 use std::time::Duration;
 
 use delta_kernel::table_properties::{IsolationLevel, TableProperties};
@@ -20,10 +19,9 @@ const SECONDS_PER_DAY: u64 = 24 * SECONDS_PER_HOUR;
 const SECONDS_PER_WEEK: u64 = 7 * SECONDS_PER_DAY;
 
 const DEFAULT_LOG_RETENTION_SECS: u64 = 30 * SECONDS_PER_DAY;
-const DEFAULT_DELETED_FILE_RETENTION_SECS: u64 = 1 * SECONDS_PER_WEEK;
-
-static DEFAULT_CHECKPOINT_INTERVAL: LazyLock<NonZeroU64> =
-    LazyLock::new(|| NonZeroU64::new(100).expect("non zero"));
+const DEFAULT_DELETED_FILE_RETENTION_SECS: u64 = SECONDS_PER_WEEK;
+const DEFAULT_CHECKPOINT_INTERVAL: NonZeroU64 =
+    NonZeroU64::new(100).expect("non-zero checkpoint interval");
 
 impl TablePropertiesExt for TableProperties {
     fn append_only(&self) -> bool {
@@ -41,7 +39,7 @@ impl TablePropertiesExt for TableProperties {
 
     fn checkpoint_interval(&self) -> NonZeroU64 {
         self.checkpoint_interval
-            .unwrap_or_else(|| *DEFAULT_CHECKPOINT_INTERVAL)
+            .unwrap_or(DEFAULT_CHECKPOINT_INTERVAL)
     }
 
     fn deleted_file_retention_duration(&self) -> Duration {

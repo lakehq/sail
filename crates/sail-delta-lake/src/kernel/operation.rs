@@ -81,14 +81,11 @@ impl DeltaOperation {
                 .iter()
                 .filter(|item| !item.1.is_null())
                 .map(|(k, v)| {
-                    (
-                        k.to_owned(),
-                        if v.is_string() {
-                            Value::String(v.as_str().unwrap().to_string())
-                        } else {
-                            v.clone()
-                        },
-                    )
+                    let value = match v.as_str() {
+                        Some(text) => Value::String(text.to_string()),
+                        None => v.clone(),
+                    };
+                    (k.to_owned(), value)
                 })
                 .collect())
         } else {

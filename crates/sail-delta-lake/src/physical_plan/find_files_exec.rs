@@ -119,13 +119,10 @@ impl DeltaFindFilesExec {
             .get_store(&self.table_url)
             .map_err(|e| DataFusionError::External(Box::new(e)))?;
 
-        let mut table = open_table_with_object_store(
-            self.table_url.clone(),
-            object_store,
-            StorageConfig::default(),
-        )
-        .await
-        .map_err(|e| DataFusionError::External(Box::new(e)))?;
+        let mut table =
+            open_table_with_object_store(self.table_url.clone(), object_store, StorageConfig)
+                .await
+                .map_err(|e| DataFusionError::External(Box::new(e)))?;
         table
             .load_version(self.version)
             .await
