@@ -5,7 +5,8 @@
     Metadata database connection string.
     Supported formats:
     - SQLite: sqlite:///path/to/metadata.db
-    - PostgreSQL: postgres://user:password@host:port/database (not yet implemented)
+    - PostgreSQL: postgres://user:password@host:port/database
+    - PostgreSQL: postgresql://user:password@host:port/database
   supported: true
   rust_type: String
 

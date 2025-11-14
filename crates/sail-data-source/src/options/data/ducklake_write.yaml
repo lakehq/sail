@@ -1,0 +1,144 @@
+- key: data_inlining_row_limit
+  aliases:
+    - dataInliningRowLimit
+  description: |
+    Maximum number of rows to inline in a single insert.
+    When set to a positive value and the metadata catalog is DuckDB, small inserts can be stored directly
+    in the DuckLake metadata instead of creating separate Parquet data files.
+  supported: true
+  rust_type: u64
+  rust_deserialize_with: crate::options::serde::deserialize_u64
+
+- key: parquet_compression
+  aliases:
+    - parquetCompression
+  description: |
+    Compression algorithm for Parquet files written by DuckLake.
+    Supported values: uncompressed, snappy, gzip, zstd, brotli, lz4, lz4_raw.
+  supported: true
+  rust_type: String
+
+- key: parquet_version
+  aliases:
+    - parquetVersion
+  description: |
+    Parquet format version used for newly written data files.
+    Supported values are 1 and 2.
+  supported: true
+  rust_type: u64
+  rust_deserialize_with: crate::options::serde::deserialize_u64
+
+- key: parquet_compression_level
+  aliases:
+    - parquetCompressionLevel
+  description: |
+    Compression level for the selected Parquet compression codec.
+  supported: true
+  rust_type: u64
+  rust_deserialize_with: crate::options::serde::deserialize_u64
+
+- key: parquet_row_group_size
+  aliases:
+    - parquetRowGroupSize
+  description: |
+    Number of rows per row group in Parquet files written by DuckLake.
+  supported: true
+  rust_type: u64
+  rust_deserialize_with: crate::options::serde::deserialize_u64
+
+- key: parquet_row_group_size_bytes
+  aliases:
+    - parquetRowGroupSizeBytes
+  description: |
+    Approximate target size in bytes per Parquet row group.
+    Accepts DuckDB-style size strings such as "10KB" or "512MB".
+  supported: true
+  rust_type: String
+
+- key: hive_file_pattern
+  aliases:
+    - hiveFilePattern
+  description: |
+    Whether partitioned data should be written using a hive-style folder layout (one directory per partition value).
+  supported: true
+  rust_type: bool
+  rust_deserialize_with: crate::options::serde::deserialize_bool
+
+- key: target_file_size
+  aliases:
+    - targetFileSize
+  description: |
+    Target data file size for insertion and compaction operations.
+    Accepts DuckDB-style size strings such as "5.4MB".
+  supported: true
+  rust_type: String
+
+- key: require_commit_message
+  aliases:
+    - requireCommitMessage
+  description: |
+    If true, every snapshot commit must have an explicit commit message set (for example via ducklake.set_commit_message).
+  supported: true
+  rust_type: bool
+  rust_deserialize_with: crate::options::serde::deserialize_bool
+
+- key: rewrite_delete_threshold
+  aliases:
+    - rewriteDeleteThreshold
+  description: |
+    Threshold that determines the minimum fraction of data that must be removed from a file before a rewrite is warranted.
+    Valid range is from 0 to 1.
+  supported: true
+  rust_type: f64
+  rust_deserialize_with: crate::options::serde::deserialize_f64
+
+- key: delete_older_than
+  aliases:
+    - deleteOlderThan
+  description: |
+    How old unused files must be in order to be removed by cleanup functions such as
+    ducklake_delete_orphaned_files or ducklake_cleanup_old_files.
+    Accepts interval strings such as "1 week" or "1 millisecond".
+  supported: true
+  rust_type: String
+
+- key: expire_older_than
+  aliases:
+    - expireOlderThan
+  description: |
+    Default age threshold for snapshots to be expired by ducklake_expire_snapshots.
+    Accepts interval strings such as "1 week" or "1 millisecond".
+  supported: true
+  rust_type: String
+
+- key: compaction_schema
+  aliases:
+    - compactionSchema
+  description: |
+    Predefined schema used as the default target for compaction helper functions such as
+    ducklake_flush_inlined_data, ducklake_merge_adjacent_files, ducklake_rewrite_data_files,
+    and ducklake_delete_orphaned_files.
+  supported: true
+  rust_type: String
+
+- key: compaction_table
+  aliases:
+    - compactionTable
+  description: |
+    Predefined table used as the default target for compaction helper functions such as
+    ducklake_flush_inlined_data, ducklake_merge_adjacent_files, ducklake_rewrite_data_files,
+    and ducklake_delete_orphaned_files.
+  supported: true
+  rust_type: String
+
+- key: per_thread_output
+  aliases:
+    - perThreadOutput
+  description: |
+    Whether to create separate output files per thread during parallel insertion.
+    When true, each thread writes its own output files; when false, a single output file is produced.
+  supported: true
+  rust_type: bool
+  rust_deserialize_with: crate::options::serde::deserialize_bool
+
+
