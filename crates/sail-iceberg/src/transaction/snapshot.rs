@@ -1,3 +1,15 @@
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+//     http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
+
 use bytes::Bytes;
 
 use super::{ActionCommit, Transaction};
@@ -59,7 +71,7 @@ impl<'a> SnapshotProducer<'a> {
     }
 
     pub async fn commit(self, op: impl SnapshotProduceOperation) -> Result<ActionCommit, String> {
-        let timestamp_ms = chrono::Utc::now().timestamp_millis();
+        let timestamp_ms = crate::utils::timestamp::monotonic_timestamp_ms();
         let is_overwrite = op.operation() == Operation::Overwrite.as_str();
         let summary = if is_overwrite {
             crate::spec::snapshots::Summary::new(Operation::Overwrite)
@@ -94,8 +106,8 @@ impl<'a> SnapshotProducer<'a> {
         let manifest = writer.finish();
         let manifest_bytes = manifest.to_avro_bytes_v2()?;
 
-        // Generate new snapshot ID and sequence number
-        let new_snapshot_id = timestamp_ms;
+        // Generate new snapshot ID using UUID (not timestamp) and sequence number
+        let new_snapshot_id = crate::utils::snapshot_id::generate_snapshot_id();
         let new_sequence_number = if self.is_bootstrap {
             1 // First snapshot starts at sequence 1
         } else {

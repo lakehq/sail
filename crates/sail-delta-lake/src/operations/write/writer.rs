@@ -1,3 +1,24 @@
+// https://github.com/delta-io/delta-rs/blob/5575ad16bf641420404611d65f4ad7626e9acb16/LICENSE.txt
+//
+// Copyright (2020) QP Hou and a number of other contributors.
+// Portions Copyright (2025) LakeSail, Inc.
+// Modified in 2025 by LakeSail, Inc.
+//
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+//     http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
+
+// [Credit]: <https://github.com/delta-io/delta-rs/blob/3607c314cbdd2ad06c6ee0677b92a29f695c71f3/crates/core/src/operations/write/writer.rs>
+// [Credit]: <https://github.com/delta-io/delta-rs/blob/3607c314cbdd2ad06c6ee0677b92a29f695c71f3/crates/core/src/writer/record_batch.rs>
+
 use std::collections::HashMap;
 use std::sync::Arc;
 
@@ -20,7 +41,6 @@ use parquet::file::properties::WriterProperties;
 use parquet::schema::types::ColumnPath;
 use uuid::Uuid;
 
-/// [Credit]: <https://github.com/delta-io/delta-rs/blob/3607c314cbdd2ad06c6ee0677b92a29f695c71f3/crates/core/src/operations/write/writer.rs>
 use super::async_utils::AsyncShareableBuffer;
 use super::stats::create_add;
 
@@ -488,7 +508,7 @@ fn arrow_schema_without_partitions(
     ))
 }
 
-/// [Credit]: <https://github.com/delta-io/delta-rs/blob/3607c314cbdd2ad06c6ee0677b92a29f695c71f3/crates/core/src/writer/record_batch.rs>
+// [Credit]: <https://github.com/delta-io/delta-rs/blob/3607c314cbdd2ad06c6ee0677b92a29f695c71f3/crates/core/src/writer/record_batch.rs>
 /// Partition a RecordBatch along partition columns
 pub(crate) fn divide_by_partition_values(
     arrow_schema: ArrowSchemaRef,

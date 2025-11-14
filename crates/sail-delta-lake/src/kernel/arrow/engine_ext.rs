@@ -1,3 +1,23 @@
+// https://github.com/delta-io/delta-rs/blob/5575ad16bf641420404611d65f4ad7626e9acb16/LICENSE.txt
+//
+// Copyright (2020) QP Hou and a number of other contributors.
+// Portions Copyright (2025) LakeSail, Inc.
+// Modified in 2025 by LakeSail, Inc.
+//
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+//     http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
+
+// [Credit]: <https://github.com/delta-io/delta-rs/blob/1f0b4d0965a85400c1effc6e9b4c7ebbb6795978/crates/core/src/kernel/arrow/engine_ext.rs>
+
 //! Utilities for interacting with Kernel APIs using Arrow data structures.
 //!
 use std::borrow::Cow;
@@ -27,7 +47,6 @@ use delta_kernel::{
 use deltalake::errors::{DeltaResult as DeltaResultLocal, DeltaTableError};
 use itertools::Itertools;
 
-/// [Credit]: <https://github.com/delta-io/delta-rs/blob/1f0b4d0965a85400c1effc6e9b4c7ebbb6795978/crates/core/src/kernel/arrow/engine_ext.rs>
 use crate::kernel::snapshot::replay::parse_partitions;
 use crate::kernel::snapshot::SCAN_ROW_ARROW_SCHEMA;
 
