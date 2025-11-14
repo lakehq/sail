@@ -135,17 +135,17 @@ prost-types = "0.14"
 # The `axum` version must match the one used in `tonic` (replace `RELEASE` with the release we are using):
 #   https://github.com/hyperium/tonic/blob/vRELEASE/tonic/Cargo.toml
 axum = "0.8.4"
-datafusion = { git = "https://github.com/apache/datafusion.git", rev = "f2437d13c08283cb1dd1241b716c4e3a4e027648", features = ["serde", "avro", "sql"] }
-datafusion-common = { git = "https://github.com/apache/datafusion.git", rev = "f2437d13c08283cb1dd1241b716c4e3a4e027648", features = ["object_store", "avro"] }
-datafusion-datasource = { git = "https://github.com/apache/datafusion.git", rev = "f2437d13c08283cb1dd1241b716c4e3a4e027648" }
-datafusion-expr = { git = "https://github.com/apache/datafusion.git", rev = "f2437d13c08283cb1dd1241b716c4e3a4e027648" }
-datafusion-expr-common = { git = "https://github.com/apache/datafusion.git", rev = "f2437d13c08283cb1dd1241b716c4e3a4e027648" }
-datafusion-proto = { git = "https://github.com/apache/datafusion.git", rev = "f2437d13c08283cb1dd1241b716c4e3a4e027648" }
-datafusion-functions = { git = "https://github.com/apache/datafusion.git", rev = "f2437d13c08283cb1dd1241b716c4e3a4e027648" }
-datafusion-functions-nested = { git = "https://github.com/apache/datafusion.git", rev = "f2437d13c08283cb1dd1241b716c4e3a4e027648" }
-datafusion-physical-expr = { git = "https://github.com/apache/datafusion.git", rev = "f2437d13c08283cb1dd1241b716c4e3a4e027648" }
-datafusion-spark = { git = "https://github.com/apache/datafusion.git", rev = "f2437d13c08283cb1dd1241b716c4e3a4e027648" }
-datafusion-functions-json = { git = "https://github.com/lakehq/datafusion-functions-json.git", rev = "d4643c709fee7903448c92e327972c6ece5c9485" }
+datafusion = { git = "https://github.com/apache/datafusion.git", rev = "187c6b2", features = ["serde", "avro", "sql"] }
+datafusion-common = { git = "https://github.com/apache/datafusion.git", rev = "187c6b2", features = ["object_store", "avro"] }
+datafusion-datasource = { git = "https://github.com/apache/datafusion.git", rev = "187c6b2" }
+datafusion-expr = { git = "https://github.com/apache/datafusion.git", rev = "187c6b2" }
+datafusion-expr-common = { git = "https://github.com/apache/datafusion.git", rev = "187c6b2" }
+datafusion-proto = { git = "https://github.com/apache/datafusion.git", rev = "187c6b2" }
+datafusion-functions = { git = "https://github.com/apache/datafusion.git", rev = "187c6b2" }
+datafusion-functions-nested = { git = "https://github.com/apache/datafusion.git", rev = "187c6b2" }
+datafusion-physical-expr = { git = "https://github.com/apache/datafusion.git", rev = "187c6b2" }
+datafusion-spark = { git = "https://github.com/apache/datafusion.git", rev = "187c6b2" }
+datafusion-functions-json = { git = "https://github.com/lakehq/datafusion-functions-json.git", rev = "e5448982654206025ac15e260a2025fc1cb586c2" }
 # The `pyo3` version must match the one used in `arrow-pyarrow` (replace `RELEASE` with the release we are using):
 #   https://github.com/apache/arrow-rs/blob/RELEASE/arrow-pyarrow/Cargo.toml
 # auto-initialize: Changes [`Python::with_gil`] to automatically initialize the Python interpreter if needed.
@@ -162,9 +162,8 @@ object_store = { version = "0.12.4", features = ["aws", "gcp", "azure", "http"] 
 hdfs-native-object-store = "0.15.0"
 
 # Lakehouse
-deltalake = { git = "https://github.com/lakehq/delta-rs.git", rev = "79812bd", default-features = false, features = ["rustls"] }
-delta_kernel = { git = "https://github.com/delta-io/delta-kernel-rs.git", rev = "eff31d26e14c1c1e29589991e045079d6620e255", features = ["arrow-57", "internal-api", "default-engine-rustls"] }
-
+deltalake = { git = "https://github.com/lakehq/delta-rs.git", rev = "371ea1e", default-features = false, features = ["rustls"] }
+delta_kernel = { version = "0.17.0", features = ["arrow-57", "default-engine-rustls", "internal-api"] }
 ######
 # This is the end of the manually managed dependencies.
 # Do not add more dependencies below.

@@ -292,11 +292,10 @@ impl DeltaTableState {
         let input_schema = Arc::new(input_schema.as_ref().try_into_kernel()?);
         let actions = self.snapshot.files.clone();
 
-        let evaluator = ARROW_HANDLER.new_expression_evaluator(
-            input_schema,
-            Arc::new(expression),
-            table_schema,
-        );
+        #[allow(clippy::expect_used)]
+        let evaluator = ARROW_HANDLER
+            .new_expression_evaluator(input_schema, Arc::new(expression), table_schema)
+            .expect("Failed to create expression evaluator");
         let result = evaluator.evaluate_arrow(actions)?;
 
         if flatten {
