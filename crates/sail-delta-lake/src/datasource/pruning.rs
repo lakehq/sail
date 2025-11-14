@@ -47,7 +47,7 @@ pub async fn prune_files(
     // Early return if no filters and no limit
     if filter_expr.is_none() && limit.is_none() {
         let files: Vec<Add> = snapshot
-            .file_actions_iter(log_store)
+            .file_actions_iter(log_store.as_ref())
             .try_collect()
             .await
             .map_err(delta_to_datafusion_error)?;
@@ -74,7 +74,7 @@ pub async fn prune_files(
 
     // Collect all files and apply pruning logic
     let all_files: Vec<Add> = snapshot
-        .file_actions_iter(log_store)
+        .file_actions_iter(log_store.as_ref())
         .try_collect()
         .await
         .map_err(delta_to_datafusion_error)?;

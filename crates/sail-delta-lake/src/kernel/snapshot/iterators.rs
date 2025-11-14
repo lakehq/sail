@@ -32,12 +32,10 @@ use datafusion::arrow::datatypes::{DataType as ArrowDataType, Int32Type};
 use delta_kernel::expressions::{Scalar, StructData};
 use delta_kernel::scan::scan_row_schema;
 use delta_kernel::schema::DataType;
-// TODO: Replace this storage types.
-use deltalake::kernel::models::StorageType as DvStorageType;
-use deltalake::{DeltaResult, DeltaTableError};
 use percent_encoding::percent_decode_str;
 
-use crate::kernel::models::{Add, DeletionVectorDescriptor, Remove, ScalarExt};
+use crate::kernel::models::{Add, DeletionVectorDescriptor, Remove, ScalarExt, StorageType};
+use crate::kernel::{DeltaResult, DeltaTableError};
 
 const FIELD_NAME_PATH: &str = "path";
 const FIELD_NAME_SIZE: &str = "size";
@@ -378,7 +376,7 @@ impl DeletionVectorView<'_> {
     /// Converts this view into a DeletionVectorDescriptor.
     fn descriptor(&self) -> DeletionVectorDescriptor {
         let storage_type =
-            DvStorageType::from_str(self.storage_type()).unwrap_or(DvStorageType::UuidRelativePath);
+            StorageType::from_str(self.storage_type()).unwrap_or(StorageType::UuidRelativePath);
         DeletionVectorDescriptor {
             storage_type,
             path_or_inline_dv: self.path_or_inline_dv().to_string(),

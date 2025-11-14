@@ -44,11 +44,11 @@ use delta_kernel::table_properties::{DataSkippingNumIndexedCols, TableProperties
 use delta_kernel::{
     DeltaResult, Engine, EngineData, ExpressionEvaluator, ExpressionRef, PredicateRef, Version,
 };
-use deltalake::errors::{DeltaResult as DeltaResultLocal, DeltaTableError};
 use itertools::Itertools;
 
 use crate::kernel::snapshot::replay::parse_partitions;
 use crate::kernel::snapshot::SCAN_ROW_ARROW_SCHEMA;
+use crate::kernel::{DeltaResult as DeltaResultLocal, DeltaTableError};
 
 /// [`ScanMetadata`] contains (1) a [`RecordBatch`] specifying data files to be scanned
 /// and (2) a vector of transforms (one transform per scan file) that must be applied to the data read

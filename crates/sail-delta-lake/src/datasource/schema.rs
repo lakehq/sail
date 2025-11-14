@@ -12,13 +12,13 @@
 
 use std::sync::Arc;
 
-use crate::kernel::{DeltaResult, DeltaTableError};
 use datafusion::arrow::datatypes::{
     DataType as ArrowDataType, Field, Schema as ArrowSchema, SchemaRef, SchemaRef as ArrowSchemaRef,
 };
 use delta_kernel::engine::arrow_conversion::TryIntoArrow;
 
 use crate::kernel::snapshot::{EagerSnapshot, LogDataHandler, Snapshot};
+use crate::kernel::{DeltaResult, DeltaTableError};
 use crate::table::DeltaTableState;
 
 /// Convenience trait for calling common methods on snapshot hierarchies

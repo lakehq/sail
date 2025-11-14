@@ -33,6 +33,7 @@ arrow-schema = { workspace = true }
 # Essential utilities
 async-trait = { workspace = true }
 object_store = { workspace = true }
+thiserror = { workspace = true }
 chrono = { workspace = true }
 serde_json = { workspace = true }
 url = { workspace = true }
@@ -46,6 +47,7 @@ indexmap = { workspace = true }
 log = { workspace = true }
 itertools = { workspace = true }
 percent-encoding = { workspace = true }
+regex = { workspace = true }
 
 [lints]
 workspace = true

@@ -12,22 +12,76 @@
 
 use std::borrow::Borrow;
 use std::collections::HashMap;
+use std::fmt;
 use std::hash::{Hash, Hasher};
 use std::mem::take;
+use std::str::FromStr;
 
 use chrono::DateTime;
 use delta_kernel::actions::{Metadata, Protocol};
-use deltalake::errors::{DeltaResult, DeltaTableError};
-pub use deltalake::kernel::models::DeletionVectorDescriptor;
-use deltalake::kernel::{
-    Action as DeltaRsAction, Add as DeltaRsAdd, AddCDCFile as DeltaRsAddCDCFile,
-    CheckpointMetadata as DeltaRsCheckpointMetadata, CommitInfo as DeltaRsCommitInfo,
-    DomainMetadata as DeltaRsDomainMetadata, IsolationLevel as DeltaRsIsolationLevel,
-    Remove as DeltaRsRemove, Sidecar as DeltaRsSidecar, Transaction as DeltaRsTransaction,
-};
 use object_store::path::Path;
 use object_store::ObjectMeta;
 use serde::{Deserialize, Serialize};
+
+use crate::kernel::{DeltaResult, DeltaTableError};
+
+#[derive(Serialize, Deserialize, Copy, Clone, Debug, PartialEq, Eq)]
+pub enum StorageType {
+    #[serde(rename = "u")]
+    UuidRelativePath,
+    #[serde(rename = "i")]
+    Inline,
+    #[serde(rename = "p")]
+    AbsolutePath,
+}
+
+impl Default for StorageType {
+    fn default() -> Self {
+        Self::UuidRelativePath
+    }
+}
+
+impl FromStr for StorageType {
+    type Err = DeltaTableError;
+
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        match s {
+            "u" => Ok(Self::UuidRelativePath),
+            "i" => Ok(Self::Inline),
+            "p" => Ok(Self::AbsolutePath),
+            _ => Err(DeltaTableError::generic(format!(
+                "Unknown storage format: '{s}'."
+            ))),
+        }
+    }
+}
+
+impl AsRef<str> for StorageType {
+    fn as_ref(&self) -> &str {
+        match self {
+            Self::UuidRelativePath => "u",
+            Self::Inline => "i",
+            Self::AbsolutePath => "p",
+        }
+    }
+}
+
+impl fmt::Display for StorageType {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "{}", self.as_ref())
+    }
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct DeletionVectorDescriptor {
+    pub storage_type: StorageType,
+    pub path_or_inline_dv: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub offset: Option<i32>,
+    pub size_in_bytes: i32,
+    pub cardinality: i64,
+}
 
 /// Delta Lake action envelope.
 #[derive(Debug, PartialEq, Eq, Clone, Deserialize, Serialize)]
@@ -122,361 +176,6 @@ impl Borrow<str> for Remove {
         self.path.as_ref()
     }
 }
-
-impl From<&Add> for DeltaRsAdd {
-    fn from(value: &Add) -> Self {
-        DeltaRsAdd {
-            path: value.path.clone(),
-            partition_values: value.partition_values.clone(),
-            size: value.size,
-            modification_time: value.modification_time,
-            data_change: value.data_change,
-            stats: value.stats.clone(),
-            tags: value.tags.clone(),
-            deletion_vector: value.deletion_vector.clone(),
-            base_row_id: value.base_row_id,
-            default_row_commit_version: value.default_row_commit_version,
-            clustering_provider: value.clustering_provider.clone(),
-        }
-    }
-}
-
-impl From<Add> for DeltaRsAdd {
-    fn from(value: Add) -> Self {
-        DeltaRsAdd {
-            path: value.path,
-            partition_values: value.partition_values,
-            size: value.size,
-            modification_time: value.modification_time,
-            data_change: value.data_change,
-            stats: value.stats,
-            tags: value.tags,
-            deletion_vector: value.deletion_vector,
-            base_row_id: value.base_row_id,
-            default_row_commit_version: value.default_row_commit_version,
-            clustering_provider: value.clustering_provider,
-        }
-    }
-}
-
-impl From<&DeltaRsAdd> for Add {
-    fn from(value: &DeltaRsAdd) -> Self {
-        Add {
-            path: value.path.clone(),
-            partition_values: value.partition_values.clone(),
-            size: value.size,
-            modification_time: value.modification_time,
-            data_change: value.data_change,
-            stats: value.stats.clone(),
-            tags: value.tags.clone(),
-            deletion_vector: value.deletion_vector.clone(),
-            base_row_id: value.base_row_id,
-            default_row_commit_version: value.default_row_commit_version,
-            clustering_provider: value.clustering_provider.clone(),
-        }
-    }
-}
-
-impl From<DeltaRsAdd> for Add {
-    fn from(value: DeltaRsAdd) -> Self {
-        Add {
-            path: value.path,
-            partition_values: value.partition_values,
-            size: value.size,
-            modification_time: value.modification_time,
-            data_change: value.data_change,
-            stats: value.stats,
-            tags: value.tags,
-            deletion_vector: value.deletion_vector,
-            base_row_id: value.base_row_id,
-            default_row_commit_version: value.default_row_commit_version,
-            clustering_provider: value.clustering_provider,
-        }
-    }
-}
-
-impl From<&Remove> for DeltaRsRemove {
-    fn from(value: &Remove) -> Self {
-        DeltaRsRemove {
-            path: value.path.clone(),
-            deletion_timestamp: value.deletion_timestamp,
-            data_change: value.data_change,
-            extended_file_metadata: value.extended_file_metadata,
-            partition_values: value.partition_values.clone(),
-            size: value.size,
-            tags: value.tags.clone(),
-            deletion_vector: value.deletion_vector.clone(),
-            base_row_id: value.base_row_id,
-            default_row_commit_version: value.default_row_commit_version,
-        }
-    }
-}
-
-impl From<Remove> for DeltaRsRemove {
-    fn from(value: Remove) -> Self {
-        DeltaRsRemove {
-            path: value.path,
-            deletion_timestamp: value.deletion_timestamp,
-            data_change: value.data_change,
-            extended_file_metadata: value.extended_file_metadata,
-            partition_values: value.partition_values,
-            size: value.size,
-            tags: value.tags,
-            deletion_vector: value.deletion_vector,
-            base_row_id: value.base_row_id,
-            default_row_commit_version: value.default_row_commit_version,
-        }
-    }
-}
-
-impl From<&DeltaRsRemove> for Remove {
-    fn from(value: &DeltaRsRemove) -> Self {
-        Remove {
-            path: value.path.clone(),
-            data_change: value.data_change,
-            deletion_timestamp: value.deletion_timestamp,
-            extended_file_metadata: value.extended_file_metadata,
-            partition_values: value.partition_values.clone(),
-            size: value.size,
-            tags: value.tags.clone(),
-            deletion_vector: value.deletion_vector.clone(),
-            base_row_id: value.base_row_id,
-            default_row_commit_version: value.default_row_commit_version,
-        }
-    }
-}
-
-impl From<DeltaRsRemove> for Remove {
-    fn from(value: DeltaRsRemove) -> Self {
-        Remove {
-            path: value.path,
-            data_change: value.data_change,
-            deletion_timestamp: value.deletion_timestamp,
-            extended_file_metadata: value.extended_file_metadata,
-            partition_values: value.partition_values,
-            size: value.size,
-            tags: value.tags,
-            deletion_vector: value.deletion_vector,
-            base_row_id: value.base_row_id,
-            default_row_commit_version: value.default_row_commit_version,
-        }
-    }
-}
-
-impl From<AddCDCFile> for DeltaRsAddCDCFile {
-    fn from(value: AddCDCFile) -> Self {
-        DeltaRsAddCDCFile {
-            path: value.path,
-            size: value.size,
-            partition_values: value.partition_values,
-            data_change: value.data_change,
-            tags: value.tags,
-        }
-    }
-}
-
-impl From<DeltaRsAddCDCFile> for AddCDCFile {
-    fn from(value: DeltaRsAddCDCFile) -> Self {
-        AddCDCFile {
-            path: value.path,
-            partition_values: value.partition_values,
-            size: value.size,
-            data_change: value.data_change,
-            tags: value.tags,
-        }
-    }
-}
-
-impl From<Transaction> for DeltaRsTransaction {
-    fn from(value: Transaction) -> Self {
-        DeltaRsTransaction {
-            app_id: value.app_id,
-            version: value.version,
-            last_updated: value.last_updated,
-        }
-    }
-}
-
-impl From<DeltaRsTransaction> for Transaction {
-    fn from(value: DeltaRsTransaction) -> Self {
-        Transaction {
-            app_id: value.app_id,
-            version: value.version,
-            last_updated: value.last_updated,
-        }
-    }
-}
-
-impl From<CommitInfo> for DeltaRsCommitInfo {
-    fn from(value: CommitInfo) -> Self {
-        DeltaRsCommitInfo {
-            timestamp: value.timestamp,
-            user_id: value.user_id,
-            user_name: value.user_name,
-            operation: value.operation,
-            operation_parameters: value.operation_parameters,
-            read_version: value.read_version,
-            isolation_level: value.isolation_level,
-            is_blind_append: value.is_blind_append,
-            engine_info: value.engine_info,
-            info: value.info,
-            user_metadata: value.user_metadata,
-        }
-    }
-}
-
-impl From<DeltaRsCommitInfo> for CommitInfo {
-    fn from(value: DeltaRsCommitInfo) -> Self {
-        CommitInfo {
-            timestamp: value.timestamp,
-            user_id: value.user_id,
-            user_name: value.user_name,
-            operation: value.operation,
-            operation_parameters: value.operation_parameters,
-            read_version: value.read_version,
-            isolation_level: value.isolation_level,
-            is_blind_append: value.is_blind_append,
-            engine_info: value.engine_info,
-            info: value.info,
-            user_metadata: value.user_metadata,
-        }
-    }
-}
-
-impl From<DomainMetadata> for DeltaRsDomainMetadata {
-    fn from(value: DomainMetadata) -> Self {
-        DeltaRsDomainMetadata {
-            domain: value.domain,
-            configuration: value.configuration,
-            removed: value.removed,
-        }
-    }
-}
-
-impl From<DeltaRsDomainMetadata> for DomainMetadata {
-    fn from(value: DeltaRsDomainMetadata) -> Self {
-        DomainMetadata {
-            domain: value.domain,
-            configuration: value.configuration,
-            removed: value.removed,
-        }
-    }
-}
-
-impl From<CheckpointMetadata> for DeltaRsCheckpointMetadata {
-    fn from(value: CheckpointMetadata) -> Self {
-        DeltaRsCheckpointMetadata {
-            flavor: value.flavor,
-            tags: value.tags,
-        }
-    }
-}
-
-impl From<DeltaRsCheckpointMetadata> for CheckpointMetadata {
-    fn from(value: DeltaRsCheckpointMetadata) -> Self {
-        CheckpointMetadata {
-            flavor: value.flavor,
-            tags: value.tags,
-        }
-    }
-}
-
-impl From<Sidecar> for DeltaRsSidecar {
-    fn from(value: Sidecar) -> Self {
-        DeltaRsSidecar {
-            file_name: value.file_name,
-            size_in_bytes: value.size_in_bytes,
-            modification_time: value.modification_time,
-            sidecar_type: value.sidecar_type,
-            tags: value.tags,
-        }
-    }
-}
-
-impl From<DeltaRsSidecar> for Sidecar {
-    fn from(value: DeltaRsSidecar) -> Self {
-        Sidecar {
-            file_name: value.file_name,
-            size_in_bytes: value.size_in_bytes,
-            modification_time: value.modification_time,
-            sidecar_type: value.sidecar_type,
-            tags: value.tags,
-        }
-    }
-}
-
-impl From<Action> for DeltaRsAction {
-    fn from(value: Action) -> Self {
-        match value {
-            Action::Metadata(m) => DeltaRsAction::Metadata(m),
-            Action::Protocol(p) => DeltaRsAction::Protocol(p),
-            Action::Add(a) => DeltaRsAction::Add(a.into()),
-            Action::Remove(r) => DeltaRsAction::Remove(r.into()),
-            Action::Cdc(c) => DeltaRsAction::Cdc(c.into()),
-            Action::Txn(t) => DeltaRsAction::Txn(t.into()),
-            Action::CommitInfo(c) => DeltaRsAction::CommitInfo(c.into()),
-            Action::DomainMetadata(d) => DeltaRsAction::DomainMetadata(d.into()),
-            Action::CheckpointMetadata(_) => {
-                panic!("CheckpointMetadata actions are not supported in delta-rs conversions")
-            }
-            Action::Sidecar(_) => {
-                panic!("Sidecar actions are not supported in delta-rs conversions")
-            }
-        }
-    }
-}
-
-impl From<&Action> for DeltaRsAction {
-    fn from(value: &Action) -> Self {
-        match value {
-            Action::Metadata(m) => DeltaRsAction::Metadata(m.clone()),
-            Action::Protocol(p) => DeltaRsAction::Protocol(p.clone()),
-            Action::Add(a) => DeltaRsAction::Add(a.into()),
-            Action::Remove(r) => DeltaRsAction::Remove(r.into()),
-            Action::Cdc(c) => DeltaRsAction::Cdc(c.clone().into()),
-            Action::Txn(t) => DeltaRsAction::Txn(t.clone().into()),
-            Action::CommitInfo(c) => DeltaRsAction::CommitInfo(c.clone().into()),
-            Action::DomainMetadata(d) => DeltaRsAction::DomainMetadata(d.clone().into()),
-            Action::CheckpointMetadata(_) => {
-                panic!("CheckpointMetadata actions are not supported in delta-rs conversions")
-            }
-            Action::Sidecar(_) => {
-                panic!("Sidecar actions are not supported in delta-rs conversions")
-            }
-        }
-    }
-}
-
-impl From<DeltaRsAction> for Action {
-    fn from(value: DeltaRsAction) -> Self {
-        match value {
-            DeltaRsAction::Metadata(m) => Action::Metadata(m),
-            DeltaRsAction::Protocol(p) => Action::Protocol(p),
-            DeltaRsAction::Add(a) => Action::Add(a.into()),
-            DeltaRsAction::Remove(r) => Action::Remove(r.into()),
-            DeltaRsAction::Cdc(c) => Action::Cdc(c.into()),
-            DeltaRsAction::Txn(t) => Action::Txn(t.into()),
-            DeltaRsAction::CommitInfo(c) => Action::CommitInfo(c.into()),
-            DeltaRsAction::DomainMetadata(d) => Action::DomainMetadata(d.into()),
-        }
-    }
-}
-
-impl From<&DeltaRsAction> for Action {
-    fn from(value: &DeltaRsAction) -> Self {
-        match value {
-            DeltaRsAction::Metadata(m) => Action::Metadata(m.clone()),
-            DeltaRsAction::Protocol(p) => Action::Protocol(p.clone()),
-            DeltaRsAction::Add(a) => Action::Add(a.into()),
-            DeltaRsAction::Remove(r) => Action::Remove(r.into()),
-            DeltaRsAction::Cdc(c) => Action::Cdc(c.clone().into()),
-            DeltaRsAction::Txn(t) => Action::Txn(t.clone().into()),
-            DeltaRsAction::CommitInfo(c) => Action::CommitInfo(c.clone().into()),
-            DeltaRsAction::DomainMetadata(d) => Action::DomainMetadata(d.clone().into()),
-        }
-    }
-}
-
 /// Column statistics stored in `Stats`.
 #[derive(Serialize, Deserialize, Debug, PartialEq, Eq)]
 #[serde(untagged)]
@@ -625,6 +324,45 @@ pub struct Transaction {
     pub last_updated: Option<i64>,
 }
 
+/// The isolation level applied during a transaction.
+#[derive(Serialize, Deserialize, Debug, Copy, Clone, PartialEq, Eq)]
+pub enum IsolationLevel {
+    Serializable,
+    WriteSerializable,
+    SnapshotIsolation,
+}
+
+impl Default for IsolationLevel {
+    fn default() -> Self {
+        Self::Serializable
+    }
+}
+
+impl AsRef<str> for IsolationLevel {
+    fn as_ref(&self) -> &str {
+        match self {
+            Self::Serializable => "Serializable",
+            Self::WriteSerializable => "WriteSerializable",
+            Self::SnapshotIsolation => "SnapshotIsolation",
+        }
+    }
+}
+
+impl FromStr for IsolationLevel {
+    type Err = DeltaTableError;
+
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        match s.to_ascii_lowercase().as_str() {
+            "serializable" => Ok(Self::Serializable),
+            "writeserializable" | "write_serializable" => Ok(Self::WriteSerializable),
+            "snapshotisolation" | "snapshot_isolation" => Ok(Self::SnapshotIsolation),
+            _ => Err(DeltaTableError::generic(format!(
+                "Invalid string for IsolationLevel: {s}"
+            ))),
+        }
+    }
+}
+
 /// Commit metadata action.
 #[derive(Debug, Clone, Default, PartialEq, Eq, Deserialize, Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -642,7 +380,7 @@ pub struct CommitInfo {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub read_version: Option<i64>,
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub isolation_level: Option<DeltaRsIsolationLevel>,
+    pub isolation_level: Option<IsolationLevel>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub is_blind_append: Option<bool>,
     #[serde(skip_serializing_if = "Option::is_none")]

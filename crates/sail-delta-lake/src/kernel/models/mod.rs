@@ -20,7 +20,8 @@ mod scalars;
 #[allow(unused_imports)]
 pub use actions::{
     Action, Add, AddCDCFile, CheckpointMetadata, ColumnCountStat, ColumnValueStat, CommitInfo,
-    DeletionVectorDescriptor, DomainMetadata, Remove, Sidecar, Stats, Transaction,
+    DeletionVectorDescriptor, DomainMetadata, IsolationLevel, Remove, Sidecar, Stats, StorageType,
+    Transaction,
 };
 #[allow(unused_imports)]
 pub use delta_kernel::actions::{Metadata, Protocol};

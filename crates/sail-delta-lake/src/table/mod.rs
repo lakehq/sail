@@ -21,7 +21,6 @@
 use std::fmt;
 use std::sync::Arc;
 
-use crate::kernel::{DeltaResult, DeltaTableConfig, DeltaTableError};
 use chrono::{DateTime, Utc};
 use datafusion::arrow::datatypes::Schema;
 use datafusion::catalog::Session;
@@ -32,10 +31,9 @@ pub use state::DeltaTableState;
 use url::Url;
 
 use crate::datasource::{delta_to_datafusion_error, DeltaScanConfig, DeltaTableProvider};
+use crate::kernel::{DeltaResult, DeltaTableConfig, DeltaTableError};
 use crate::options::TableDeltaOptions;
-use crate::storage::{
-    commit_uri_from_version, default_logstore, LogStore, LogStoreRef, StorageConfig,
-};
+use crate::storage::{commit_uri_from_version, default_logstore, LogStoreRef, StorageConfig};
 mod state;
 
 /// In memory representation of a Delta Table
@@ -104,11 +102,14 @@ impl DeltaTable {
         max_version: Option<i64>,
     ) -> Result<(), DeltaTableError> {
         match self.state.as_mut() {
-            Some(state) => state.update(&self.log_store, max_version).await,
+            Some(state) => state.update(self.log_store.as_ref(), max_version).await,
             _ => {
-                let state =
-                    DeltaTableState::try_new(&self.log_store, self.config.clone(), max_version)
-                        .await?;
+                let state = DeltaTableState::try_new(
+                    self.log_store.as_ref(),
+                    self.config.clone(),
+                    max_version,
+                )
+                .await?;
                 self.state = Some(state);
                 Ok(())
             }

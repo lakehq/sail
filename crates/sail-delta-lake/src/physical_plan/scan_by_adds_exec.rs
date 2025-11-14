@@ -123,9 +123,10 @@ impl DeltaScanByAddsExec {
                 .collect::<Vec<_>>(),
         ));
 
+        let log_store = table.log_store();
         let file_scan_config = build_file_scan_config(
             &snapshot,
-            &table.log_store(),
+            &log_store,
             &candidate_adds,
             &scan_config,
             FileScanParams {

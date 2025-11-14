@@ -4,14 +4,14 @@ use std::collections::{HashMap, HashSet};
 use std::iter;
 
 use delta_kernel::actions::Protocol;
-use delta_kernel::schema::StructType;
 use delta_kernel::table_features::TableFeature;
-use deltalake::errors::{DeltaResult, DeltaTableError};
-use deltalake::kernel::StructTypeExt as _;
-use deltalake::table::config::TableProperty;
 use serde::{Deserialize, Serialize};
+use serde_json::Value;
 
-use super::contains_timestampntz;
+use super::{
+    contains_timestampntz, ColumnMetadataKey, DataType, MetadataValue, StructField, StructType,
+};
+use crate::kernel::{DeltaResult, DeltaTableError};
 
 pub trait ProtocolExt {
     fn reader_features_set(&self) -> Option<HashSet<TableFeature>>;
@@ -28,6 +28,85 @@ pub trait ProtocolExt {
         new_properties: &HashMap<String, String>,
         raise_if_not_exists: bool,
     ) -> DeltaResult<Protocol>;
+}
+
+fn schema_has_generated_columns(schema: &StructType) -> bool {
+    let mut pending: Vec<StructField> = schema.fields().cloned().collect();
+    let key = ColumnMetadataKey::GenerationExpression.as_ref();
+
+    while let Some(field) = pending.pop() {
+        if field.metadata().contains_key(key) {
+            return true;
+        }
+        enqueue_nested_types(field.data_type(), &mut pending);
+    }
+
+    false
+}
+
+fn schema_has_invariants(schema: &StructType) -> DeltaResult<bool> {
+    let mut pending: Vec<StructField> = schema.fields().cloned().collect();
+    let key = ColumnMetadataKey::Invariants.as_ref();
+
+    while let Some(field) = pending.pop() {
+        if let Some(metadata_value) = field.metadata().get(key) {
+            validate_invariant_metadata(field.name(), metadata_value)?;
+            return Ok(true);
+        }
+        enqueue_nested_types(field.data_type(), &mut pending);
+    }
+
+    Ok(false)
+}
+
+fn validate_invariant_metadata(field_name: &str, value: &MetadataValue) -> DeltaResult<()> {
+    let raw = match value {
+        MetadataValue::String(s) => s,
+        _ => {
+            return Err(DeltaTableError::MetadataError(format!(
+                "Invariant metadata for field '{field_name}' must be a string"
+            )));
+        }
+    };
+
+    serde_json::from_str::<Value>(raw).map_err(|err| {
+        DeltaTableError::MetadataError(format!(
+            "Invalid invariant metadata JSON for field '{field_name}': {err}"
+        ))
+    })?;
+    Ok(())
+}
+
+fn enqueue_nested_types(data_type: &DataType, pending: &mut Vec<StructField>) {
+    match data_type {
+        DataType::Struct(inner) => pending.extend(inner.fields().cloned()),
+        DataType::Array(array) => enqueue_nested_types(array.element_type(), pending),
+        DataType::Map(map) => {
+            enqueue_nested_types(map.key_type(), pending);
+            enqueue_nested_types(map.value_type(), pending);
+        }
+        _ => {}
+    }
+}
+
+#[derive(Hash, PartialEq, Eq)]
+enum ParsedTableProperty {
+    MinReaderVersion,
+    MinWriterVersion,
+    EnableChangeDataFeed,
+    EnableDeletionVectors,
+}
+
+impl ParsedTableProperty {
+    fn from_key(key: &str) -> Option<Self> {
+        match key {
+            "delta.minReaderVersion" => Some(Self::MinReaderVersion),
+            "delta.minWriterVersion" => Some(Self::MinWriterVersion),
+            "delta.enableChangeDataFeed" => Some(Self::EnableChangeDataFeed),
+            "delta.enableDeletionVectors" => Some(Self::EnableDeletionVectors),
+            _ => None,
+        }
+    }
 }
 
 impl ProtocolExt for Protocol {
@@ -213,19 +292,19 @@ impl ProtocolInner {
     }
 
     fn apply_column_metadata_to_protocol(mut self, schema: &StructType) -> DeltaResult<Self> {
-        let generated_cols = schema.get_generated_columns()?;
-        let invariants = schema.get_invariants()?;
+        let has_generated_columns = schema_has_generated_columns(schema);
+        let has_invariants = schema_has_invariants(schema)?;
         let has_timestamp_ntz = contains_timestampntz(schema.fields());
 
         if has_timestamp_ntz {
             self = self.enable_timestamp_ntz();
         }
 
-        if !generated_cols.is_empty() {
+        if has_generated_columns {
             self = self.enable_generated_columns();
         }
 
-        if !invariants.is_empty() {
+        if has_invariants {
             self = self.enable_invariants();
         }
 
@@ -237,10 +316,10 @@ impl ProtocolInner {
         new_properties: &HashMap<String, String>,
         raise_if_not_exists: bool,
     ) -> DeltaResult<Self> {
-        let mut parsed_properties: HashMap<TableProperty, String> = HashMap::new();
+        let mut parsed_properties: HashMap<ParsedTableProperty, String> = HashMap::new();
 
         for (key, value) in new_properties {
-            if let Ok(parsed) = key.parse::<TableProperty>() {
+            if let Some(parsed) = ParsedTableProperty::from_key(key) {
                 parsed_properties.insert(parsed, value.to_string());
             } else if raise_if_not_exists {
                 return Err(DeltaTableError::generic(format!(
@@ -249,7 +328,9 @@ impl ProtocolInner {
             }
         }
 
-        if let Some(min_reader_version) = parsed_properties.get(&TableProperty::MinReaderVersion) {
+        if let Some(min_reader_version) =
+            parsed_properties.get(&ParsedTableProperty::MinReaderVersion)
+        {
             match min_reader_version.parse::<i32>() {
                 Ok(version @ 1..=3) => {
                     if version > self.min_reader_version {
@@ -264,7 +345,9 @@ impl ProtocolInner {
             }
         }
 
-        if let Some(min_writer_version) = parsed_properties.get(&TableProperty::MinWriterVersion) {
+        if let Some(min_writer_version) =
+            parsed_properties.get(&ParsedTableProperty::MinWriterVersion)
+        {
             match min_writer_version.parse::<i32>() {
                 Ok(version @ 2..=7) => {
                     if version > self.min_writer_version {
@@ -279,7 +362,8 @@ impl ProtocolInner {
             }
         }
 
-        if let Some(enable_cdf) = parsed_properties.get(&TableProperty::EnableChangeDataFeed) {
+        if let Some(enable_cdf) = parsed_properties.get(&ParsedTableProperty::EnableChangeDataFeed)
+        {
             match enable_cdf.to_ascii_lowercase().parse::<bool>() {
                 Ok(true) => {
                     if self.min_writer_version >= 7 {
@@ -298,7 +382,8 @@ impl ProtocolInner {
             }
         }
 
-        if let Some(enable_dv) = parsed_properties.get(&TableProperty::EnableDeletionVectors) {
+        if let Some(enable_dv) = parsed_properties.get(&ParsedTableProperty::EnableDeletionVectors)
+        {
             match enable_dv.to_ascii_lowercase().parse::<bool>() {
                 Ok(true) => {
                     let writer_features = self.writer_features.get_or_insert_with(HashSet::new);

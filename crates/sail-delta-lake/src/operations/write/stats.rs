@@ -24,7 +24,6 @@ use std::ops::{AddAssign, Not};
 use std::sync::Arc;
 use std::time::{SystemTime, UNIX_EPOCH};
 
-use crate::kernel::DeltaTableError;
 use delta_kernel::expressions::Scalar;
 use indexmap::IndexMap;
 use log::warn;
@@ -35,6 +34,7 @@ use parquet::schema::types::{ColumnDescriptor, SchemaDescriptor};
 use sail_common::spec::SAIL_LIST_FIELD_NAME;
 
 use crate::kernel::models::{Add, ColumnCountStat, ColumnValueStat, ScalarExt, Stats};
+use crate::kernel::DeltaTableError;
 
 /// Creates an [`Add`] log action struct with statistics.
 pub fn create_add(

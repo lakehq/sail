@@ -34,7 +34,6 @@ use delta_kernel::snapshot::Snapshot as KernelSnapshot;
 use delta_kernel::table_configuration::TableConfiguration;
 use delta_kernel::table_properties::TableProperties;
 use delta_kernel::{PredicateRef, Version};
-use deltalake::{DeltaResult, DeltaTableConfig, DeltaTableError};
 use futures::stream::BoxStream;
 use futures::{StreamExt, TryStreamExt};
 use itertools::Itertools;
@@ -49,6 +48,7 @@ use crate::kernel::snapshot::iterators::LogicalFileView;
 pub use crate::kernel::snapshot::log_data::LogDataHandler;
 use crate::kernel::snapshot::parse::read_removes;
 use crate::kernel::snapshot::stream::{RecordBatchReceiverStreamBuilder, SendableRBStream};
+use crate::kernel::{DeltaResult, DeltaTableConfig, DeltaTableError};
 use crate::storage::LogStore;
 
 pub mod iterators;

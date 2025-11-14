@@ -15,7 +15,6 @@ use std::collections::HashMap;
 use std::fmt;
 use std::sync::Arc;
 
-use crate::kernel::{DeltaResult, DeltaTableError};
 use async_trait::async_trait;
 use datafusion::arrow::array::{Array, StringArray};
 use datafusion::arrow::datatypes::{DataType, Field, Schema, SchemaRef};
@@ -46,6 +45,7 @@ use crate::datasource::{
     DataFusionMixins, DeltaScanConfigBuilder, DeltaTableProvider, PredicateProperties, PATH_COLUMN,
 };
 use crate::kernel::models::Add;
+use crate::kernel::{DeltaResult, DeltaTableError};
 use crate::storage::{LogStore, LogStoreRef, StorageConfig};
 use crate::table::{open_table_with_object_store, DeltaTableState};
 
@@ -343,7 +343,7 @@ pub async fn find_files_scan_physical(
     physical_predicate: Arc<dyn PhysicalExpr>,
 ) -> DeltaResult<Vec<Add>> {
     let candidate_map: HashMap<String, Add> = snapshot
-        .file_actions_iter(&log_store)
+        .file_actions_iter(log_store.as_ref())
         .map_ok(|add| (add.path.clone(), add.to_owned()))
         .try_collect()
         .await?;
@@ -441,9 +441,13 @@ pub async fn find_files_physical(
                     .map_err(datafusion_to_delta_error)?;
 
                 // Use partition-only scanning (memory table approach)
-                let candidates =
-                    scan_memory_table_physical(snapshot, &log_store, state, adapted_predicate)
-                        .await?;
+                let candidates = scan_memory_table_physical(
+                    snapshot,
+                    log_store.as_ref(),
+                    state,
+                    adapted_predicate,
+                )
+                .await?;
                 Ok(FindFiles {
                     candidates,
                     partition_scan: true,
@@ -466,7 +470,7 @@ pub async fn find_files_physical(
             }
         }
         None => Ok(FindFiles {
-            candidates: snapshot.file_actions(&log_store).await?,
+            candidates: snapshot.file_actions(log_store.as_ref()).await?,
             partition_scan: true,
         }),
     }

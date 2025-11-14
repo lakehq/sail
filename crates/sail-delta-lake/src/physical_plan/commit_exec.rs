@@ -16,7 +16,6 @@ use std::fmt;
 use std::sync::Arc;
 use std::time::{SystemTime, UNIX_EPOCH};
 
-use crate::kernel::{DeltaOperation, SaveMode};
 use async_trait::async_trait;
 use datafusion::arrow::array::{Array, StringArray, UInt64Array};
 use datafusion::arrow::datatypes::{DataType, Field, Schema, SchemaRef};
@@ -39,6 +38,7 @@ use url::Url;
 
 use crate::kernel::models::{new_metadata, Action, Add, Protocol, Remove};
 use crate::kernel::transaction::{CommitBuilder, CommitProperties, TableReference};
+use crate::kernel::{DeltaOperation, SaveMode};
 use crate::physical_plan::CommitInfo;
 use crate::storage::StorageConfig;
 use crate::table::{create_delta_table_with_object_store, open_table_with_object_store};
@@ -286,7 +286,7 @@ impl ExecutionPlan for DeltaCommitExec {
                     .snapshot()
                     .map_err(|e| DataFusionError::External(Box::new(e)))?;
                 let all_files = snapshot
-                    .file_actions(&*table.log_store())
+                    .file_actions(table.log_store().as_ref())
                     .await
                     .map_err(|e| DataFusionError::External(Box::new(e)))?;
                 let remove_actions = Self::adds_to_remove_actions(all_files).await?;

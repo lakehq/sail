@@ -22,7 +22,6 @@
 
 use std::sync::Arc;
 
-use crate::kernel::{DeltaResult, DeltaTableConfig, DeltaTableError, TablePropertiesExt};
 use chrono::Utc;
 use delta_kernel::engine::arrow_conversion::TryIntoKernel;
 use delta_kernel::expressions::column_expr_ref;
@@ -37,7 +36,9 @@ use crate::kernel::arrow::engine_ext::{ExpressionEvaluatorExt, SnapshotExt};
 use crate::kernel::models::{Add, DataType, Metadata, Protocol, Remove, StructType};
 use crate::kernel::snapshot::log_data::LogDataHandler;
 use crate::kernel::snapshot::EagerSnapshot;
-use crate::kernel::ARROW_HANDLER;
+use crate::kernel::{
+    DeltaResult, DeltaTableConfig, DeltaTableError, TablePropertiesExt, ARROW_HANDLER,
+};
 use crate::storage::LogStore;
 
 /// State snapshot currently held by the Delta Table instance.

@@ -10,7 +10,6 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use crate::kernel::DeltaResult;
 use datafusion::arrow::datatypes::Schema as ArrowSchema;
 use delta_kernel::engine::arrow_conversion::{TryIntoArrow, TryIntoKernel};
 use delta_kernel::schema::StructType;
@@ -21,6 +20,7 @@ use crate::column_mapping::{
     compute_max_column_id, enrich_arrow_with_parquet_field_ids,
 };
 use crate::kernel::models::{Metadata, MetadataExt};
+use crate::kernel::DeltaResult;
 
 /// Convert logical Arrow schema to kernel `StructType`.
 pub fn logical_arrow_to_kernel(arrow: &ArrowSchema) -> DeltaResult<StructType> {

@@ -22,7 +22,6 @@ use std::any::Any;
 use std::borrow::Cow;
 use std::sync::Arc;
 
-use crate::kernel::DeltaResult;
 use async_trait::async_trait;
 use datafusion::arrow::datatypes::Schema as ArrowSchema;
 use datafusion::catalog::Session;
@@ -46,18 +45,32 @@ use crate::datasource::{
 // use crate::kernel::arrow::engine_ext::SnapshotExt as KernelSnapshotExt;
 // use delta_kernel::snapshot::Snapshot as KernelSnapshot;
 use crate::kernel::models::Add;
+use crate::kernel::DeltaResult;
 use crate::schema_manager::get_physical_schema;
 use crate::storage::LogStoreRef;
 use crate::table::DeltaTableState;
 
 /// A Delta table provider that enables additional metadata columns to be included during the scan
-#[derive(Debug)]
 pub struct DeltaTableProvider {
     snapshot: DeltaTableState,
     log_store: LogStoreRef,
     config: DeltaScanConfig,
     schema: Arc<ArrowSchema>,
     files: Option<Arc<Vec<Add>>>,
+}
+
+impl std::fmt::Debug for DeltaTableProvider {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("DeltaTableProvider")
+            .field("snapshot_version", &self.snapshot.version())
+            .field("config", &self.config)
+            .field("schema", &self.schema)
+            .field(
+                "files_len",
+                &self.files.as_ref().map(|files| files.len()).unwrap_or(0),
+            )
+            .finish()
+    }
 }
 
 impl DeltaTableProvider {

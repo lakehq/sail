@@ -13,7 +13,6 @@
 use std::collections::HashSet;
 use std::sync::Arc;
 
-use crate::kernel::DeltaOperation;
 use datafusion::arrow::compute::SortOptions;
 use datafusion::arrow::datatypes::Schema as ArrowSchema;
 use datafusion::common::{Result, ScalarValue};
@@ -28,6 +27,7 @@ use datafusion_physical_expr::expressions::{lit, Column as PhysicalColumn};
 use serde::{Deserialize, Serialize};
 
 use crate::kernel::models::Action;
+use crate::kernel::DeltaOperation;
 
 mod commit_exec;
 pub mod find_files_exec;

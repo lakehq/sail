@@ -4,11 +4,11 @@ use std::collections::HashMap;
 
 use chrono::Utc;
 use delta_kernel::actions::Metadata;
-use deltalake::errors::DeltaResult;
 use serde_json::json;
 use uuid::Uuid;
 
 use super::StructType;
+use crate::kernel::DeltaResult;
 
 /// Temporary helper to create new metadata actions until delta-kernel exposes builders.
 pub fn new_metadata(

@@ -1,0 +1,110 @@
+use std::sync::LazyLock;
+
+use chrono::{TimeZone, Utc};
+use futures::{StreamExt, TryStreamExt};
+use log::{debug, error};
+use object_store::path::Path;
+use object_store::ObjectStore;
+use regex::Regex;
+use uuid::Uuid;
+
+use crate::kernel::DeltaResult;
+use crate::storage::LogStore;
+
+const DELTA_LOG_FOLDER: &str = "_delta_log";
+static DELTA_LOG_REGEX: LazyLock<Regex> =
+    LazyLock::new(|| Regex::new(r"(\d{20})\.json$").expect("valid regex"));
+static CHECKPOINT_REGEX: LazyLock<Regex> =
+    LazyLock::new(|| Regex::new(r"(\d{20})\.checkpoint.*\.parquet$").expect("valid regex"));
+
+/// Delete expired Delta log files up to a safe checkpoint boundary.
+pub async fn cleanup_expired_logs_for(
+    mut keep_version: i64,
+    log_store: &dyn LogStore,
+    cutoff_timestamp: i64,
+    operation_id: Option<Uuid>,
+) -> DeltaResult<usize> {
+    debug!("called cleanup_expired_logs_for");
+    let object_store = log_store.object_store(operation_id);
+    let log_path = Path::from(DELTA_LOG_FOLDER);
+
+    let log_entries = object_store.list(Some(&log_path)).collect::<Vec<_>>().await;
+
+    debug!("starting keep_version: {keep_version}");
+    debug!(
+        "starting cutoff_timestamp: {:?}",
+        Utc.timestamp_millis_opt(cutoff_timestamp).unwrap()
+    );
+
+    let min_retention_version = log_entries
+        .iter()
+        .filter_map(|entry| entry.as_ref().ok())
+        .filter_map(|meta| {
+            let path = meta.location.as_ref();
+            DELTA_LOG_REGEX
+                .captures(path)
+                .and_then(|caps| caps.get(1))
+                .and_then(|v| v.as_str().parse::<i64>().ok())
+                .map(|ver| (ver, meta.last_modified.timestamp_millis()))
+        })
+        .filter(|(_, ts)| *ts >= cutoff_timestamp)
+        .map(|(ver, _)| ver)
+        .min()
+        .unwrap_or(keep_version);
+
+    keep_version = keep_version.min(min_retention_version);
+
+    let safe_checkpoint_version = log_entries
+        .iter()
+        .filter_map(|entry| entry.as_ref().ok())
+        .filter_map(|meta| {
+            let path = meta.location.as_ref();
+            CHECKPOINT_REGEX
+                .captures(path)
+                .and_then(|caps| caps.get(1))
+                .and_then(|v| v.as_str().parse::<i64>().ok())
+        })
+        .filter(|ver| *ver <= keep_version)
+        .max();
+
+    let Some(safe_checkpoint_version) = safe_checkpoint_version else {
+        debug!(
+            "Not cleaning metadata files, could not find a checkpoint with version <= keep_version ({keep_version})"
+        );
+        return Ok(0);
+    };
+
+    debug!("safe_checkpoint_version: {safe_checkpoint_version}");
+
+    let locations = futures::stream::iter(log_entries.into_iter())
+        .filter_map(|meta| async move {
+            let meta = match meta {
+                Ok(m) => m,
+                Err(err) => {
+                    error!("Error received while cleaning up expired logs: {err:?}");
+                    return None;
+                }
+            };
+            let path_str = meta.location.as_ref();
+            let captures = DELTA_LOG_REGEX.captures(path_str)?;
+            let ts = meta.last_modified.timestamp_millis();
+            let log_ver_str = captures.get(1).unwrap().as_str();
+            let Ok(log_ver) = log_ver_str.parse::<i64>() else {
+                return None;
+            };
+            if log_ver < safe_checkpoint_version && ts <= cutoff_timestamp {
+                Some(Ok(meta.location))
+            } else {
+                None
+            }
+        })
+        .boxed();
+
+    let deleted = object_store
+        .delete_stream(locations)
+        .try_collect::<Vec<_>>()
+        .await?;
+
+    debug!("Deleted {} expired logs", deleted.len());
+    Ok(deleted.len())
+}

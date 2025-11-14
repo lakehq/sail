@@ -20,7 +20,6 @@
 
 use std::collections::HashSet;
 
-use crate::kernel::{DeltaResult, DeltaTableError};
 use datafusion::arrow::array::BooleanArray;
 use datafusion::arrow::compute::filter_record_batch;
 use datafusion::arrow::datatypes::SchemaRef;
@@ -30,6 +29,7 @@ use serde::{Deserialize, Serialize};
 use url::Url;
 
 use crate::kernel::snapshot::LogDataHandler;
+use crate::kernel::{DeltaResult, DeltaTableError};
 use crate::table::DeltaTableState;
 pub(crate) const PATH_COLUMN: &str = "__delta_rs_path";
 

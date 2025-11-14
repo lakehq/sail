@@ -12,7 +12,6 @@
 
 use std::collections::HashMap;
 
-use crate::kernel::{DeltaResult, DeltaTableError};
 use chrono::TimeZone;
 use datafusion::arrow::array::{Array, DictionaryArray, RecordBatch, StringArray};
 use datafusion::arrow::compute::{cast_with_options, CastOptions};
@@ -23,6 +22,7 @@ use datafusion::datasource::listing::PartitionedFile;
 use object_store::ObjectMeta;
 
 use crate::kernel::models::{Add, Remove};
+use crate::kernel::{DeltaResult, DeltaTableError};
 
 /// Convert an Add action to a PartitionedFile for DataFusion scanning
 pub fn partitioned_file_from_action(

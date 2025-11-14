@@ -22,7 +22,6 @@
 use std::collections::HashMap;
 use std::sync::Arc;
 
-use crate::kernel::DeltaTableError;
 use bytes::Bytes;
 use datafusion::arrow::array::{ArrayRef, RecordBatch, UInt32Array};
 use datafusion::arrow::compute;
@@ -42,6 +41,7 @@ use uuid::Uuid;
 use super::async_utils::AsyncShareableBuffer;
 use super::stats::create_add;
 use crate::kernel::models::{Add, ScalarExt};
+use crate::kernel::DeltaTableError;
 
 /// Trait for creating hive partition paths from partition values
 pub trait PartitionsExt {

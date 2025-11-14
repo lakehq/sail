@@ -32,8 +32,6 @@ use datafusion_physical_expr::{Distribution, EquivalenceProperties, PhysicalExpr
 use delta_kernel::engine::arrow_conversion::{TryIntoArrow, TryIntoKernel};
 use delta_kernel::schema::StructType;
 use delta_kernel::table_features::ColumnMappingMode;
-// TODO: Follow upstream for `MetadataExt`.
-use crate::kernel::{DeltaOperation, SaveMode};
 use futures::stream::{once, StreamExt};
 use sail_common_datafusion::datasource::PhysicalSinkMode;
 use url::Url;
@@ -42,6 +40,8 @@ use crate::column_mapping::compute_max_column_id;
 use crate::datasource::delta_to_datafusion_error;
 use crate::datasource::type_converter::DeltaTypeConverter;
 use crate::kernel::models::{new_metadata, Action, Protocol};
+// TODO: Follow upstream for `MetadataExt`.
+use crate::kernel::{DeltaOperation, SaveMode};
 use crate::operations::write::writer::{DeltaWriter, WriterConfig};
 use crate::options::{ColumnMappingModeOption, TableDeltaOptions};
 use crate::physical_plan::CommitInfo;

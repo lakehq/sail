@@ -27,7 +27,8 @@ use datafusion::arrow::array::{
     Array, ArrowNativeTypeOp, ArrowNumericType, BooleanArray, ListArray, MapArray, PrimitiveArray,
     RecordBatch, StringArray, StructArray,
 };
-use deltalake::{DeltaResult, DeltaTableError};
+
+use crate::kernel::{DeltaResult, DeltaTableError};
 
 /// Trait to extract a column by name from a record batch or nested / complex array.
 pub(crate) trait ProvidesColumnByName {
