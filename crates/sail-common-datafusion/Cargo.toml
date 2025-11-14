@@ -23,7 +23,6 @@ async-trait = { workspace = true }
 prost = { workspace = true }
 tonic = { workspace = true }
 pin-project-lite = { workspace = true }
-deltalake = { workspace = true }
 
 [build-dependencies]
 tonic-prost-build = { workspace = true }

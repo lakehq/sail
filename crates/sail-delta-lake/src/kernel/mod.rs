@@ -17,7 +17,6 @@ pub mod transaction;
 
 pub(crate) mod checkpoints;
 mod config;
-mod deltalake_compat;
 mod error;
 mod operation;
 mod table_properties;
