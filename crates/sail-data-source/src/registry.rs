@@ -45,7 +45,7 @@ impl TableFormatRegistry {
         registry.register_format(Arc::new(CsvTableFormat::default()));
         registry.register_format(Arc::new(DeltaTableFormat));
         registry.register_format(Arc::new(DuckLakeDataSourceFormat));
-        registry.register_format(Arc::new(IcebergDataSourceFormat::default()));
+        registry.register_format(Arc::new(IcebergDataSourceFormat));
         registry.register_format(Arc::new(JsonTableFormat::default()));
         registry.register_format(Arc::new(ParquetTableFormat::default()));
         registry.register_format(Arc::new(TextTableFormat::default()));

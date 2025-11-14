@@ -3,8 +3,8 @@ mod serde;
 
 pub use internal::{
     BinaryReadOptions, CsvReadOptions, CsvWriteOptions, DeltaReadOptions, DeltaWriteOptions,
-    DuckLakeReadOptions, IcebergReadOptions, JsonReadOptions, JsonWriteOptions, ParquetReadOptions,
-    ParquetWriteOptions, TextReadOptions, TextWriteOptions,
+    DuckLakeReadOptions, IcebergReadOptions, IcebergWriteOptions, JsonReadOptions,
+    JsonWriteOptions, ParquetReadOptions, ParquetWriteOptions, TextReadOptions, TextWriteOptions,
 };
 #[cfg(test)]
 pub use loader::build_options;
@@ -22,6 +22,7 @@ pub(crate) mod internal {
     include!(concat!(env!("OUT_DIR"), "/options/delta_write.rs"));
     include!(concat!(env!("OUT_DIR"), "/options/ducklake_read.rs"));
     include!(concat!(env!("OUT_DIR"), "/options/iceberg_read.rs"));
+    include!(concat!(env!("OUT_DIR"), "/options/iceberg_write.rs"));
     include!(concat!(env!("OUT_DIR"), "/options/text_read.rs"));
     include!(concat!(env!("OUT_DIR"), "/options/text_write.rs"));
     include!(concat!(env!("OUT_DIR"), "/options/socket_read.rs"));

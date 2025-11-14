@@ -3,32 +3,21 @@ use std::sync::Arc;
 use async_trait::async_trait;
 use datafusion::catalog::{Session, TableProvider};
 use datafusion::common::Result;
-use datafusion::datasource::listing::ListingTableUrl;
 use datafusion::physical_plan::ExecutionPlan;
 use sail_common_datafusion::datasource::{SinkInfo, SourceInfo, TableFormat};
-use sail_iceberg::{IcebergTableFormat, TableIcebergOptions};
+use sail_iceberg::TableIcebergOptions;
 use url::Url;
 
-use crate::options::{load_default_options, load_options, IcebergReadOptions};
+use crate::options::{load_default_options, load_options, IcebergReadOptions, IcebergWriteOptions};
 
-/// Iceberg table format implementation that delegates to sail-iceberg
-#[derive(Debug)]
-pub struct IcebergDataSourceFormat {
-    inner: IcebergTableFormat,
-}
-
-impl Default for IcebergDataSourceFormat {
-    fn default() -> Self {
-        Self {
-            inner: IcebergTableFormat,
-        }
-    }
-}
+/// Iceberg table format implementation
+#[derive(Debug, Default)]
+pub struct IcebergDataSourceFormat;
 
 #[async_trait]
 impl TableFormat for IcebergDataSourceFormat {
     fn name(&self) -> &str {
-        self.inner.name()
+        "iceberg"
     }
 
     async fn create_provider(
@@ -49,7 +38,7 @@ impl TableFormat for IcebergDataSourceFormat {
         let table_url = Self::parse_table_url(ctx, paths).await?;
         let iceberg_options = resolve_iceberg_read_options(options)?;
 
-        IcebergTableFormat::create_iceberg_provider(ctx, table_url, iceberg_options).await
+        sail_iceberg::table_format::create_iceberg_provider(ctx, table_url, iceberg_options).await
     }
 
     async fn create_writer(
@@ -57,19 +46,104 @@ impl TableFormat for IcebergDataSourceFormat {
         ctx: &dyn Session,
         info: SinkInfo,
     ) -> Result<Arc<dyn ExecutionPlan>> {
-        self.inner.create_writer(ctx, info).await
+        use datafusion::physical_plan::empty::EmptyExec;
+        use sail_common_datafusion::datasource::PhysicalSinkMode;
+        use sail_iceberg::physical_plan::plan_builder::{IcebergPlanBuilder, IcebergTableConfig};
+
+        let SinkInfo {
+            input,
+            path,
+            mode,
+            partition_by,
+            bucket_by,
+            sort_order,
+            options,
+        } = info;
+
+        if bucket_by.is_some() {
+            return datafusion::common::not_impl_err!("bucketing for Iceberg format");
+        }
+
+        let table_url = Self::parse_table_url(ctx, vec![path]).await?;
+        let iceberg_options = resolve_iceberg_write_options(options)?;
+
+        let store = ctx
+            .runtime_env()
+            .object_store_registry
+            .get_store(&table_url)
+            .map_err(|e| datafusion::common::DataFusionError::External(Box::new(e)))?;
+        let exists_res =
+            sail_iceberg::table_format::find_latest_metadata_file(&store, &table_url).await;
+        let table_exists = exists_res.is_ok();
+
+        match mode {
+            PhysicalSinkMode::ErrorIfExists => {
+                if table_exists {
+                    return datafusion::common::plan_err!(
+                        "Iceberg table already exists at path: {}",
+                        table_url
+                    );
+                }
+            }
+            PhysicalSinkMode::IgnoreIfExists => {
+                if table_exists {
+                    return Ok(Arc::new(EmptyExec::new(input.schema())));
+                }
+            }
+            PhysicalSinkMode::OverwriteIf { .. } | PhysicalSinkMode::OverwritePartitions => {
+                return datafusion::common::not_impl_err!(
+                    "predicate or partition overwrite for Iceberg"
+                );
+            }
+            _ => {}
+        }
+
+        let table_config = IcebergTableConfig {
+            table_url,
+            partition_columns: partition_by,
+            table_exists,
+            options: iceberg_options,
+        };
+
+        let physical_sort = sort_order.map(|req| {
+            req.into_iter()
+                .map(|r| datafusion::physical_expr::PhysicalSortExpr {
+                    expr: r.expr,
+                    options: r.options.unwrap_or_default(),
+                })
+                .collect::<Vec<_>>()
+        });
+
+        let builder = IcebergPlanBuilder::new(input, table_config, mode, physical_sort, ctx);
+        let exec = builder.build().await?;
+        Ok(exec)
     }
 }
 
 impl IcebergDataSourceFormat {
     async fn parse_table_url(ctx: &dyn Session, paths: Vec<String>) -> Result<Url> {
-        let mut urls = crate::url::resolve_listing_urls(ctx, paths.clone()).await?;
-        match (urls.pop(), urls.is_empty()) {
-            (Some(path), true) => Ok(<ListingTableUrl as AsRef<Url>>::as_ref(&path).clone()),
-            _ => {
-                datafusion::common::plan_err!("expected a single path for Iceberg table: {paths:?}")
-            }
+        if paths.len() != 1 {
+            return datafusion::common::plan_err!(
+                "Iceberg table requires exactly one path, got {}",
+                paths.len()
+            );
         }
+
+        let path = &paths[0];
+        let mut table_url = Url::parse(path)
+            .map_err(|e| datafusion::common::DataFusionError::External(Box::new(e)))?;
+
+        if !table_url.path().ends_with('/') {
+            table_url.set_path(&format!("{}/", table_url.path()));
+        }
+
+        let _object_store = ctx
+            .runtime_env()
+            .object_store_registry
+            .get_store(&table_url)
+            .map_err(|e| datafusion::common::DataFusionError::External(Box::new(e)))?;
+
+        Ok(table_url)
     }
 }
 
@@ -96,6 +170,30 @@ fn resolve_iceberg_read_options(
     apply_iceberg_read_options(load_default_options()?, &mut iceberg)?;
     for opt in options {
         apply_iceberg_read_options(load_options(opt)?, &mut iceberg)?;
+    }
+    Ok(iceberg)
+}
+
+fn apply_iceberg_write_options(
+    from: IcebergWriteOptions,
+    to: &mut TableIcebergOptions,
+) -> Result<()> {
+    if let Some(merge_schema) = from.merge_schema {
+        to.merge_schema = merge_schema;
+    }
+    if let Some(overwrite_schema) = from.overwrite_schema {
+        to.overwrite_schema = overwrite_schema;
+    }
+    Ok(())
+}
+
+fn resolve_iceberg_write_options(
+    options: Vec<std::collections::HashMap<String, String>>,
+) -> Result<TableIcebergOptions> {
+    let mut iceberg = TableIcebergOptions::default();
+    apply_iceberg_write_options(load_default_options()?, &mut iceberg)?;
+    for opt in options {
+        apply_iceberg_write_options(load_options(opt)?, &mut iceberg)?;
     }
     Ok(iceberg)
 }
