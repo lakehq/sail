@@ -16,6 +16,7 @@ use std::fmt;
 use std::sync::Arc;
 use std::time::{SystemTime, UNIX_EPOCH};
 
+use crate::kernel::{DeltaOperation, SaveMode};
 use async_trait::async_trait;
 use datafusion::arrow::array::{Array, StringArray, UInt64Array};
 use datafusion::arrow::datatypes::{DataType, Field, Schema, SchemaRef};
@@ -32,7 +33,6 @@ use datafusion_common::{internal_err, DataFusionError, Result};
 use datafusion_physical_expr::{Distribution, EquivalenceProperties};
 use delta_kernel::engine::arrow_conversion::TryIntoKernel;
 use delta_kernel::schema::StructType;
-use deltalake::protocol::{DeltaOperation, SaveMode};
 use futures::stream::{self, StreamExt};
 use sail_common_datafusion::datasource::PhysicalSinkMode;
 use url::Url;

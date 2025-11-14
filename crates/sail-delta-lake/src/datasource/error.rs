@@ -10,8 +10,8 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+use crate::kernel::DeltaTableError;
 use datafusion_common::DataFusionError;
-use deltalake::errors::DeltaTableError;
 
 /// Convert DeltaTableError to DataFusionError
 pub fn delta_to_datafusion_error(err: DeltaTableError) -> DataFusionError {

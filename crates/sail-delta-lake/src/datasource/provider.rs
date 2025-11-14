@@ -22,6 +22,7 @@ use std::any::Any;
 use std::borrow::Cow;
 use std::sync::Arc;
 
+use crate::kernel::DeltaResult;
 use async_trait::async_trait;
 use datafusion::arrow::datatypes::Schema as ArrowSchema;
 use datafusion::catalog::Session;
@@ -33,10 +34,9 @@ use datafusion::logical_expr::utils::conjunction;
 use datafusion::logical_expr::{Expr, LogicalPlan, TableProviderFilterPushDown};
 use datafusion::physical_plan::ExecutionPlan;
 use delta_kernel::table_features::ColumnMappingMode;
-use deltalake::errors::DeltaResult;
 use sail_common_datafusion::rename::physical_plan::rename_projected_physical_plan;
 
-// use deltalake::errors::DeltaTableError;
+// use crate::kernel::DeltaTableError;
 // use delta_kernel::engine::arrow_conversion::TryIntoArrow;
 use crate::datasource::scan::FileScanParams;
 use crate::datasource::{

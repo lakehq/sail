@@ -21,13 +21,12 @@
 use std::fmt;
 use std::sync::Arc;
 
+use crate::kernel::{DeltaResult, DeltaTableConfig, DeltaTableError};
 use chrono::{DateTime, Utc};
 use datafusion::arrow::datatypes::Schema;
 use datafusion::catalog::Session;
 use datafusion::datasource::listing::ListingTableUrl;
 use datafusion_common::Result;
-use deltalake::table::builder::DeltaTableConfig;
-use deltalake::{DeltaResult, DeltaTableError};
 use object_store::ObjectStore;
 pub use state::DeltaTableState;
 use url::Url;

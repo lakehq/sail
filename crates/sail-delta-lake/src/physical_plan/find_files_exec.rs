@@ -15,6 +15,7 @@ use std::collections::HashMap;
 use std::fmt;
 use std::sync::Arc;
 
+use crate::kernel::{DeltaResult, DeltaTableError};
 use async_trait::async_trait;
 use datafusion::arrow::array::{Array, StringArray};
 use datafusion::arrow::datatypes::{DataType, Field, Schema, SchemaRef};
@@ -36,7 +37,6 @@ use datafusion::physical_plan::{
 };
 use datafusion_common::{internal_err, DataFusionError, Result};
 use datafusion_physical_expr::{Distribution, EquivalenceProperties, PhysicalExpr};
-use deltalake::{DeltaResult, DeltaTableError};
 use futures::{stream, TryStreamExt};
 use url::Url;
 

@@ -22,6 +22,7 @@
 
 use std::sync::Arc;
 
+use crate::kernel::{DeltaResult, DeltaTableConfig, DeltaTableError, TablePropertiesExt};
 use chrono::Utc;
 use delta_kernel::engine::arrow_conversion::TryIntoKernel;
 use delta_kernel::expressions::column_expr_ref;
@@ -29,8 +30,6 @@ use delta_kernel::schema::{ColumnMetadataKey, StructField};
 use delta_kernel::table_features::ColumnMappingMode;
 use delta_kernel::table_properties::TableProperties;
 use delta_kernel::{EvaluationHandler, Expression};
-use deltalake::table::config::TablePropertiesExt;
-use deltalake::{DeltaResult, DeltaTableConfig, DeltaTableError};
 use futures::stream::BoxStream;
 use futures::{StreamExt, TryStreamExt};
 

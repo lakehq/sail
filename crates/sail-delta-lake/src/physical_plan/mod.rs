@@ -13,6 +13,7 @@
 use std::collections::HashSet;
 use std::sync::Arc;
 
+use crate::kernel::DeltaOperation;
 use datafusion::arrow::compute::SortOptions;
 use datafusion::arrow::datatypes::Schema as ArrowSchema;
 use datafusion::common::{Result, ScalarValue};
@@ -24,7 +25,6 @@ use datafusion::physical_plan::repartition::RepartitionExec;
 use datafusion::physical_plan::sorts::sort::SortExec;
 use datafusion::physical_plan::{ExecutionPlan, Partitioning};
 use datafusion_physical_expr::expressions::{lit, Column as PhysicalColumn};
-use deltalake::protocol::DeltaOperation;
 use serde::{Deserialize, Serialize};
 
 use crate::kernel::models::Action;

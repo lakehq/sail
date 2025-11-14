@@ -20,12 +20,12 @@
 
 use std::collections::HashSet;
 
+use crate::kernel::{DeltaResult, DeltaTableError};
 use datafusion::arrow::array::BooleanArray;
 use datafusion::arrow::compute::filter_record_batch;
 use datafusion::arrow::datatypes::SchemaRef;
 use datafusion::common::stats::Statistics;
 use datafusion::datasource::object_store::ObjectStoreUrl;
-use deltalake::errors::{DeltaResult, DeltaTableError};
 use serde::{Deserialize, Serialize};
 use url::Url;
 

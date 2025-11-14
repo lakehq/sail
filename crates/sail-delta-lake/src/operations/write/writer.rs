@@ -22,13 +22,13 @@
 use std::collections::HashMap;
 use std::sync::Arc;
 
+use crate::kernel::DeltaTableError;
 use bytes::Bytes;
 use datafusion::arrow::array::{ArrayRef, RecordBatch, UInt32Array};
 use datafusion::arrow::compute;
 use datafusion::arrow::datatypes::{Schema as ArrowSchema, SchemaRef as ArrowSchemaRef};
 use datafusion::arrow::row::{RowConverter, SortField};
 use delta_kernel::expressions::Scalar;
-use deltalake::errors::DeltaTableError;
 use indexmap::IndexMap;
 use object_store::path::Path;
 use object_store::ObjectStore;

@@ -10,11 +10,11 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+use crate::kernel::DeltaResult;
 use datafusion::arrow::datatypes::Schema as ArrowSchema;
 use delta_kernel::engine::arrow_conversion::{TryIntoArrow, TryIntoKernel};
 use delta_kernel::schema::StructType;
 use delta_kernel::table_features::ColumnMappingMode;
-use deltalake::DeltaResult;
 
 use crate::column_mapping::{
     annotate_new_fields_for_column_mapping, annotate_schema_for_column_mapping,

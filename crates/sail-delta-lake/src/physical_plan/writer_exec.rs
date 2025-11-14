@@ -33,7 +33,7 @@ use delta_kernel::engine::arrow_conversion::{TryIntoArrow, TryIntoKernel};
 use delta_kernel::schema::StructType;
 use delta_kernel::table_features::ColumnMappingMode;
 // TODO: Follow upstream for `MetadataExt`.
-use deltalake::protocol::{DeltaOperation, SaveMode};
+use crate::kernel::{DeltaOperation, SaveMode};
 use futures::stream::{once, StreamExt};
 use sail_common_datafusion::datasource::PhysicalSinkMode;
 use url::Url;

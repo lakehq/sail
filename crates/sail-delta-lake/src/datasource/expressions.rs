@@ -13,6 +13,7 @@
 use std::collections::HashSet;
 use std::sync::Arc;
 
+use crate::kernel::{DeltaResult, DeltaTableError};
 use datafusion::arrow::datatypes::DataType as ArrowDataType;
 use datafusion::catalog::Session;
 use datafusion::common::config::ConfigOptions;
@@ -31,7 +32,6 @@ use datafusion::sql::planner::{ContextProvider, SqlToRel};
 use datafusion::sql::sqlparser::dialect::GenericDialect;
 use datafusion::sql::sqlparser::parser::Parser;
 use datafusion::sql::sqlparser::tokenizer::Tokenizer;
-use deltalake::errors::{DeltaResult, DeltaTableError};
 
 /// Simplify a logical expression and convert it to a physical expression
 pub fn simplify_expr(

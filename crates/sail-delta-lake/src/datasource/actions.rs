@@ -12,6 +12,7 @@
 
 use std::collections::HashMap;
 
+use crate::kernel::{DeltaResult, DeltaTableError};
 use chrono::TimeZone;
 use datafusion::arrow::array::{Array, DictionaryArray, RecordBatch, StringArray};
 use datafusion::arrow::compute::{cast_with_options, CastOptions};
@@ -19,7 +20,6 @@ use datafusion::arrow::datatypes::{DataType as ArrowDataType, Schema as ArrowSch
 use datafusion::common::scalar::ScalarValue;
 use datafusion::common::Result;
 use datafusion::datasource::listing::PartitionedFile;
-use deltalake::errors::{DeltaResult, DeltaTableError};
 use object_store::ObjectMeta;
 
 use crate::kernel::models::{Add, Remove};

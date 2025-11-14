@@ -24,8 +24,8 @@ use std::ops::{AddAssign, Not};
 use std::sync::Arc;
 use std::time::{SystemTime, UNIX_EPOCH};
 
+use crate::kernel::DeltaTableError;
 use delta_kernel::expressions::Scalar;
-use deltalake::errors::DeltaTableError;
 use indexmap::IndexMap;
 use log::warn;
 use parquet::basic::{LogicalType, TimeUnit, Type};

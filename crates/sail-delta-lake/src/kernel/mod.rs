@@ -15,6 +15,11 @@ pub mod models;
 pub mod snapshot;
 pub mod transaction;
 
+pub use deltalake::errors::{DeltaResult, DeltaTableError};
+pub use deltalake::protocol::{DeltaOperation, SaveMode};
+pub use deltalake::table::builder::DeltaTableConfig;
+pub use deltalake::table::config::TablePropertiesExt;
+
 use std::sync::LazyLock;
 
 use delta_kernel::engine::arrow_expression::ArrowEvaluationHandler;
