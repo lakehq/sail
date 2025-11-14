@@ -83,8 +83,8 @@ impl PySparkUdtfPayload {
         data.extend((command.len() as i32).to_be_bytes()); // length of the function
         data.extend_from_slice(command);
 
-        let type_string = Python::with_gil(|py| -> PyResult<String> {
-            let return_type = return_type.to_pyarrow(py)?.clone_ref(py).into_bound(py);
+        let type_string = Python::attach(|py| -> PyResult<String> {
+            let return_type = return_type.to_pyarrow(py)?;
             PyModule::import(py, intern!(py, "pyspark.sql.pandas.types"))?
                 .getattr(intern!(py, "from_arrow_type"))?
                 .call1((return_type,))?

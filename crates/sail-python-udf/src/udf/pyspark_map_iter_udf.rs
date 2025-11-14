@@ -103,7 +103,7 @@ impl StreamUDF for PySparkMapIterUDF {
     }
 
     fn invoke(&self, input: SendableRecordBatchStream) -> Result<SendableRecordBatchStream> {
-        let function = Python::with_gil(|py| -> PyUdfResult<_> {
+        let function = Python::attach(|py| -> PyUdfResult<_> {
             let udf = PySparkUdfPayload::load(py, &self.payload)?;
             let udf = match self.kind {
                 PySparkMapIterKind::Pandas => PySpark::map_pandas_iter_udf(py, udf, &self.config)?,

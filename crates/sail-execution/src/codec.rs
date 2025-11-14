@@ -13,7 +13,7 @@ use datafusion::datasource::physical_plan::{
 };
 use datafusion::datasource::sink::DataSinkExec;
 use datafusion::datasource::source::{DataSource, DataSourceExec};
-use datafusion::execution::FunctionRegistry;
+use datafusion::execution::TaskContext;
 use datafusion::functions::string::overlay::OverlayFunc;
 use datafusion::logical_expr::{AggregateUDF, AggregateUDFImpl, ScalarUDF, ScalarUDFImpl};
 use datafusion::physical_expr::{LexOrdering, LexRequirement, PhysicalSortExpr};
@@ -183,7 +183,7 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
         &self,
         buf: &[u8],
         _inputs: &[Arc<dyn ExecutionPlan>],
-        _registry: &dyn FunctionRegistry,
+        _ctx: &TaskContext,
     ) -> Result<Arc<dyn ExecutionPlan>> {
         let node = ExtendedPhysicalPlanNode::decode(buf)
             .map_err(|e| plan_datafusion_err!("failed to decode plan: {e}"))?;
@@ -321,7 +321,7 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
                     self.try_decode_file_compression_type(file_compression_type)?;
                 let source = parse_protobuf_file_scan_config(
                     &self.try_decode_message(&base_config)?,
-                    &self.context,
+                    self.context.task_ctx().as_ref(),
                     self,
                     Arc::new(JsonSource::new()), // TODO: Look into configuring this if needed
                 )?;
@@ -333,7 +333,7 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
             NodeKind::Arrow(gen::ArrowExecNode { base_config }) => {
                 let source = parse_protobuf_file_scan_config(
                     &self.try_decode_message(&base_config)?,
-                    &self.context,
+                    self.context.task_ctx().as_ref(),
                     self,
                     Arc::new(ArrowSource::default()), // TODO: Look into configuring this if needed
                 )?;
@@ -359,7 +359,7 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
                 };
                 let source = parse_protobuf_file_scan_config(
                     &self.try_decode_message(&base_config)?,
-                    &self.context,
+                    self.context.task_ctx().as_ref(),
                     self,
                     Arc::new(TextSource::new(whole_text, line_sep)),
                 )?;
@@ -374,7 +374,7 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
             }) => {
                 let source = parse_protobuf_file_scan_config(
                     &self.try_decode_message(&base_config)?,
-                    &self.context,
+                    self.context.task_ctx().as_ref(),
                     self,
                     Arc::new(BinarySource::new(path_glob_filter)),
                 )?;
@@ -384,7 +384,7 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
             NodeKind::Avro(gen::AvroExecNode { base_config }) => {
                 let source = parse_protobuf_file_scan_config(
                     &self.try_decode_message(&base_config)?,
-                    &self.context,
+                    self.context.task_ctx().as_ref(),
                     self,
                     Arc::new(AvroSource::new()),
                 )?;
@@ -425,13 +425,13 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
                     .map(|join_on| {
                         let left = parse_physical_expr(
                             &self.try_decode_message(&join_on.left)?,
-                            &self.context,
+                            self.context.task_ctx().as_ref(),
                             &left.schema(),
                             self,
                         )?;
                         let right = parse_physical_expr(
                             &self.try_decode_message(&join_on.right)?,
-                            &self.context,
+                            self.context.task_ctx().as_ref(),
                             &right.schema(),
                             self,
                         )?;
@@ -442,7 +442,7 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
                     let schema = self.try_decode_schema(&join_filter.schema)?;
                     let expression = parse_physical_expr(
                         &self.try_decode_message(&join_filter.expression)?,
-                        &self.context,
+                        self.context.task_ctx().as_ref(),
                         &schema,
                         self,
                     )?;
@@ -594,7 +594,7 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
                     let schema = table_schema.as_ref().unwrap_or(&empty_schema);
                     Some(parse_physical_expr(
                         &self.try_decode_message(&pred_bytes)?,
-                        &self.context,
+                        self.context.task_ctx().as_ref(),
                         schema,
                         self,
                     )?)
@@ -702,7 +702,7 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
                     .map(|physical_sort_expr_nodes| {
                         parse_physical_sort_exprs(
                             physical_sort_expr_nodes,
-                            &self.context,
+                            &self.context.task_ctx(),
                             &schema,
                             self,
                         )
@@ -1793,7 +1793,12 @@ impl RemoteExecutionCodec {
             Some(gen::physical_sink_mode::Mode::Overwrite(_)) => Ok(PhysicalSinkMode::Overwrite),
             Some(gen::physical_sink_mode::Mode::OverwriteIf(overwrite_if)) => {
                 let expr_node = self.try_decode_message(&overwrite_if.condition)?;
-                let condition = parse_physical_expr(&expr_node, &self.context, schema, self)?;
+                let condition = parse_physical_expr(
+                    &expr_node,
+                    self.context.task_ctx().as_ref(),
+                    schema,
+                    self,
+                )?;
                 Ok(PhysicalSinkMode::OverwriteIf { condition })
             }
             Some(gen::physical_sink_mode::Mode::ErrorIfExists(_)) => {
@@ -1994,8 +1999,13 @@ impl RemoteExecutionCodec {
             .map(|x| self.try_decode_message(x))
             .collect::<Result<_>>()?;
         let lex_ordering = LexOrdering::new(
-            parse_physical_sort_exprs(&lex_ordering, &self.context, schema, self)
-                .map_err(|e| plan_datafusion_err!("failed to decode lex ordering: {e}"))?,
+            parse_physical_sort_exprs(
+                &lex_ordering,
+                self.context.task_ctx().as_ref(),
+                schema,
+                self,
+            )
+            .map_err(|e| plan_datafusion_err!("failed to decode lex ordering: {e}"))?,
         );
         match lex_ordering {
             Some(lex_ordering) => Ok(lex_ordering),
@@ -2224,7 +2234,7 @@ impl RemoteExecutionCodec {
     fn try_decode_plan(&self, buf: &[u8]) -> Result<Arc<dyn ExecutionPlan>> {
         let plan = PhysicalPlanNode::decode(buf)
             .map_err(|e| plan_datafusion_err!("failed to decode plan: {e}"))?;
-        plan.try_into_physical_plan(&self.context, self.context.runtime_env().as_ref(), self)
+        plan.try_into_physical_plan(self.context.task_ctx().as_ref(), self)
     }
 
     fn try_encode_plan(&self, plan: Arc<dyn ExecutionPlan>) -> Result<Vec<u8>> {
@@ -2237,8 +2247,13 @@ impl RemoteExecutionCodec {
 
     fn try_decode_partitioning(&self, buf: &[u8], schema: &Schema) -> Result<Partitioning> {
         let partitioning = self.try_decode_message(buf)?;
-        parse_protobuf_partitioning(Some(&partitioning), &self.context, schema, self)?
-            .ok_or_else(|| plan_datafusion_err!("no partitioning found"))
+        parse_protobuf_partitioning(
+            Some(&partitioning),
+            self.context.task_ctx().as_ref(),
+            schema,
+            self,
+        )?
+        .ok_or_else(|| plan_datafusion_err!("no partitioning found"))
     }
 
     fn try_encode_partitioning(&self, partitioning: &Partitioning) -> Result<Vec<u8>> {

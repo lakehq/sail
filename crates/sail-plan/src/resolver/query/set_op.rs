@@ -1,5 +1,5 @@
 use datafusion::functions_window::row_number::row_number_udwf;
-use datafusion::logical_expr::sqlparser::ast::NullTreatment;
+use datafusion::logical_expr::expr::NullTreatment;
 use datafusion_common::{Column, JoinType, NullEquality, ScalarValue};
 use datafusion_expr::builder::project;
 use datafusion_expr::expr::WindowFunctionParams;

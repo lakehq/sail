@@ -135,7 +135,7 @@ impl<'a> DeltaPlanBuilder<'a> {
 
         let (aligned_new_data, aligned_old_data) =
             self.align_schemas(new_data_plan, old_data_plan)?;
-        let union_data_plan = Arc::new(UnionExec::new(vec![aligned_new_data, aligned_old_data]));
+        let union_data_plan = UnionExec::try_new(vec![aligned_new_data, aligned_old_data])?;
         let writer_plan = self.add_writer_node(union_data_plan)?;
 
         // Branch 2: Generate Remove Actions (files to be deleted)
@@ -148,7 +148,7 @@ impl<'a> DeltaPlanBuilder<'a> {
         let remove_actions_plan = Arc::new(DeltaRemoveActionsExec::new(find_files_plan));
 
         // Merge Action streams
-        let union_actions_plan = Arc::new(UnionExec::new(vec![writer_plan, remove_actions_plan]));
+        let union_actions_plan = UnionExec::try_new(vec![writer_plan, remove_actions_plan])?;
 
         // Commit
         self.add_commit_node(union_actions_plan)
@@ -394,7 +394,7 @@ impl<'a> DeltaDeletePlanBuilder<'a> {
         // --- Merge and Commit ---
 
         // Merge the new Add actions and the old Remove actions
-        let union_exec = Arc::new(UnionExec::new(vec![writer_exec, remove_exec]));
+        let union_exec = UnionExec::try_new(vec![writer_exec, remove_exec])?;
 
         // Commit the transaction
         let commit_exec = Arc::new(DeltaCommitExec::new(

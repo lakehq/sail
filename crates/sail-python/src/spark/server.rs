@@ -98,14 +98,14 @@ impl SparkConnectServer {
         self.state = Some(self.run(listener)?);
         if !background {
             let state = self.state()?;
-            py.allow_threads(move || state.wait(false))?;
+            py.detach(move || state.wait(false))?;
         }
         Ok(())
     }
 
     fn stop(&mut self, py: Python<'_>) -> PyResult<()> {
         let state = self.state()?;
-        py.allow_threads(move || state.wait(true))?;
+        py.detach(move || state.wait(true))?;
         Ok(())
     }
 

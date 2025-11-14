@@ -44,7 +44,7 @@ pub struct PyErrExtractor;
 impl PythonErrorCauseExtractor for PyErrExtractor {
     fn extract(error: &(dyn std::error::Error + 'static)) -> Option<PythonErrorCause> {
         if let Some(e) = error.downcast_ref::<PyErr>() {
-            let traceback = Python::with_gil(|py| -> PyResult<Vec<String>> {
+            let traceback = Python::attach(|py| -> PyResult<Vec<String>> {
                 let traceback = PyModule::import(py, intern!(py, "traceback"))?;
                 let format_exception = traceback.getattr(intern!(py, "format_exception"))?;
                 format_exception.call1((e,))?.extract()

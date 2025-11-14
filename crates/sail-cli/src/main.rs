@@ -1,6 +1,7 @@
 use std::ffi::NulError;
 
 use pyo3::ffi::{PyUnicode_AsWideCharString, PyUnicode_FromString, Py_Main};
+use pyo3::Python;
 use sail_common::config::{CliConfig, CliConfigEnv};
 use sail_common::error::CommonError;
 
@@ -32,7 +33,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         // Python interpreter is embedded and `sys.executable` points to the Sail binary.
         std::env::set_var(CliConfigEnv::RUN_PYTHON, "true");
         // Initialize the Python interpreter.
-        pyo3::prepare_freethreaded_python();
+        Python::initialize();
         let args = std::env::args().collect();
         match sail_cli::runner::main(args) {
             Ok(()) => {}

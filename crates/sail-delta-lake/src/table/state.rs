@@ -294,23 +294,22 @@ impl DeltaTableState {
         if let Some(partition_schema) = self.snapshot.snapshot().inner.partitions_schema()? {
             fields.push(StructField::nullable(
                 "partition",
-                DataType::struct_type(partition_schema.fields().cloned()),
+                DataType::try_struct_type(partition_schema.fields().cloned())?,
             ));
             expressions.push(column_expr_ref!("partitionValues_parsed"));
         }
 
         let expression = Expression::Struct(expressions);
-        let table_schema = DataType::struct_type(fields);
+        let table_schema = DataType::try_struct_type(fields)?;
 
         let input_schema = self.snapshot.files.schema();
         let input_schema = Arc::new(input_schema.as_ref().try_into_kernel()?);
         let actions = self.snapshot.files.clone();
 
-        let evaluator = ARROW_HANDLER.new_expression_evaluator(
-            input_schema,
-            Arc::new(expression),
-            table_schema,
-        );
+        #[allow(clippy::expect_used)]
+        let evaluator = ARROW_HANDLER
+            .new_expression_evaluator(input_schema, Arc::new(expression), table_schema)
+            .expect("Failed to create expression evaluator");
         let result = evaluator.evaluate_arrow(actions)?;
 
         if flatten {

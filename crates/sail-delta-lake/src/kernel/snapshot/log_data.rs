@@ -406,11 +406,14 @@ mod datafusion {
             } else {
                 Expression::column(["stats_parsed", stats_field, &column.name])
             };
-            let evaluator = ARROW_HANDLER.new_expression_evaluator(
-                crate::kernel::models::fields::log_schema_ref().clone(),
-                Arc::new(expression),
-                field.data_type().clone(),
-            );
+            #[allow(clippy::expect_used)]
+            let evaluator = ARROW_HANDLER
+                .new_expression_evaluator(
+                    crate::kernel::models::fields::log_schema_ref().clone(),
+                    Arc::new(expression),
+                    field.data_type().clone(),
+                )
+                .expect("Failed to create expression evaluator");
 
             let batch = evaluator.evaluate_arrow(self.data.clone()).ok()?;
             batch.column_by_name("output").cloned()
@@ -472,11 +475,14 @@ mod datafusion {
         /// Note: the returned array must contain `num_containers()` rows
         fn row_counts(&self, _column: &Column) -> Option<ArrayRef> {
             static ROW_COUNTS_EVAL: LazyLock<Arc<dyn ExpressionEvaluator>> = LazyLock::new(|| {
-                ARROW_HANDLER.new_expression_evaluator(
-                    crate::kernel::models::fields::log_schema_ref().clone(),
-                    Arc::new(Expression::column(["stats_parsed", "numRecords"])),
-                    DataType::Primitive(PrimitiveType::Long),
-                )
+                #[allow(clippy::expect_used)]
+                ARROW_HANDLER
+                    .new_expression_evaluator(
+                        crate::kernel::models::fields::log_schema_ref().clone(),
+                        Arc::new(Expression::column(["stats_parsed", "numRecords"])),
+                        DataType::Primitive(PrimitiveType::Long),
+                    )
+                    .expect("Failed to create row counts evaluator")
             });
 
             let batch = ROW_COUNTS_EVAL.evaluate_arrow(self.data.clone()).ok()?;

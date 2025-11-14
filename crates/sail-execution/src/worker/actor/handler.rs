@@ -319,8 +319,7 @@ impl WorkerActor {
         let session_ctx = self.session_context()?;
         let plan = PhysicalPlanNode::decode(plan.as_slice())?;
         let plan = plan.try_into_physical_plan(
-            session_ctx.as_ref(),
-            &session_ctx.runtime_env(),
+            session_ctx.task_ctx().as_ref(),
             self.physical_plan_codec.as_ref(),
         )?;
         let plan = self.rewrite_parquet_adapters(plan)?;

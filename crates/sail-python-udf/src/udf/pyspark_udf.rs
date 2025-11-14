@@ -7,7 +7,7 @@ use datafusion::arrow::compute::cast;
 use datafusion::arrow::datatypes::DataType;
 use datafusion::common::Result;
 use datafusion_expr::{ColumnarValue, ScalarFunctionArgs, ScalarUDFImpl, Signature, Volatility};
-use pyo3::{PyObject, Python};
+use pyo3::{Py, PyAny, Python};
 
 use crate::cereal::pyspark_udf::PySparkUdfPayload;
 use crate::config::PySparkUdfConfig;
@@ -90,7 +90,7 @@ impl PySparkUDF {
         &self.config
     }
 
-    fn udf(&self, py: Python) -> Result<PyObject> {
+    fn udf(&self, py: Python) -> Result<Py<PyAny>> {
         let udf = self.udf.get_or_try_init(py, || {
             let udf = PySparkUdfPayload::load(py, &self.payload)?;
             let udf = match self.kind {
@@ -131,8 +131,8 @@ impl ScalarUDFImpl for PySparkUDF {
             args, number_rows, ..
         } = args;
         let args: Vec<ArrayRef> = ColumnarValue::values_to_arrays(&args)?;
-        let udf = Python::with_gil(|py| self.udf(py))?;
-        let data = Python::with_gil(|py| -> PyUdfResult<_> {
+        let udf = Python::attach(|py| self.udf(py))?;
+        let data = Python::attach(|py| -> PyUdfResult<_> {
             let output = udf.call1(py, (args.try_to_py(py)?, number_rows))?;
             Ok(ArrayData::try_from_py(py, &output)?)
         })?;

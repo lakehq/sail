@@ -163,7 +163,7 @@ fn cast_nested_column(
     opts: &CastOptions,
 ) -> Result<ArrayRef> {
     match target_field.data_type() {
-        DataType::Struct(_) => cast_struct_column(array, target_field),
+        DataType::Struct(_) => cast_struct_column(array, target_field, opts),
         DataType::List(elem_field) => cast_list(array, elem_field.as_ref(), opts),
         DataType::LargeList(elem_field) => cast_large_list(array, elem_field.as_ref(), opts),
         DataType::Map(kv_field, ordered) => cast_map(array, kv_field.as_ref(), *ordered, opts),
@@ -177,11 +177,13 @@ fn cast_nested_column(
     }
 }
 
-fn cast_list(array: &ArrayRef, target_elem: &Field, _opts: &CastOptions) -> Result<ArrayRef> {
+fn cast_list(array: &ArrayRef, target_elem: &Field, opts: &CastOptions) -> Result<ArrayRef> {
     let list = array.as_list::<i32>().clone();
     let (_list_field, offsets, values, nulls) = list.into_parts();
     let casted_values = match (values.data_type(), target_elem.data_type()) {
-        (DataType::Struct(_), DataType::Struct(_)) => cast_struct_column(&values, target_elem)?,
+        (DataType::Struct(_), DataType::Struct(_)) => {
+            cast_struct_column(&values, target_elem, opts)?
+        }
         _ => datafusion::arrow::compute::cast(&values, target_elem.data_type())?,
     };
     let new_elem_field = Arc::new(target_elem.clone());
@@ -189,11 +191,13 @@ fn cast_list(array: &ArrayRef, target_elem: &Field, _opts: &CastOptions) -> Resu
     Ok(Arc::new(new_list))
 }
 
-fn cast_large_list(array: &ArrayRef, target_elem: &Field, _opts: &CastOptions) -> Result<ArrayRef> {
+fn cast_large_list(array: &ArrayRef, target_elem: &Field, opts: &CastOptions) -> Result<ArrayRef> {
     let list = array.as_list::<i64>().clone();
     let (_list_field, offsets, values, nulls) = list.into_parts();
     let casted_values = match (values.data_type(), target_elem.data_type()) {
-        (DataType::Struct(_), DataType::Struct(_)) => cast_struct_column(&values, target_elem)?,
+        (DataType::Struct(_), DataType::Struct(_)) => {
+            cast_struct_column(&values, target_elem, opts)?
+        }
         _ => datafusion::arrow::compute::cast(&values, target_elem.data_type())?,
     };
     let new_elem_field = Arc::new(target_elem.clone());
@@ -212,14 +216,14 @@ fn cast_map(
     array: &ArrayRef,
     target_kv: &Field,
     ordered: bool,
-    _opts: &CastOptions,
+    opts: &CastOptions,
 ) -> Result<ArrayRef> {
     let map = array.as_map().clone();
     let (_map_field, offsets, entries, nulls, _ord) = map.into_parts();
     let casted_entries = match (entries.data_type(), target_kv.data_type()) {
         (DataType::Struct(_), DataType::Struct(_)) => {
             let entries_arr: ArrayRef = Arc::new(entries.clone());
-            cast_struct_column(&entries_arr, target_kv)?
+            cast_struct_column(&entries_arr, target_kv, opts)?
         }
         _ => datafusion::arrow::compute::cast(&entries, target_kv.data_type())?,
     };

@@ -69,7 +69,15 @@ impl FileFormat for BinaryFileFormat {
         _store: &Arc<dyn ObjectStore>,
         _objects: &[ObjectMeta],
     ) -> Result<SchemaRef> {
-        let tz = Arc::from(state.config().options().execution.time_zone.clone());
+        let tz = Arc::from(
+            state
+                .config()
+                .options()
+                .execution
+                .time_zone
+                .clone()
+                .unwrap_or_else(|| "UTC".to_string()),
+        );
         Ok(read_schema(tz))
     }
 

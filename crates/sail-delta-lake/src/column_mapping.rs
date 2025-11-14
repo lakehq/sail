@@ -23,9 +23,10 @@ use delta_kernel::schema::{
 /// using a sequential id assignment. Intended only for new table creation (name mode).
 pub fn annotate_schema_for_column_mapping(schema: &StructType) -> StructType {
     let counter = AtomicI64::new(1);
-    let annotated_fields = schema
+    let annotated_fields: Vec<StructField> = schema
         .fields()
-        .map(|f| -> Result<StructField, delta_kernel::Error> { Ok(annotate_field(f, &counter)) });
+        .map(|f| annotate_field(f, &counter))
+        .collect();
     // Safe: we preserve existing names and structure
     #[allow(clippy::expect_used)]
     let result = StructType::try_new(annotated_fields).expect("failed to build annotated schema");
@@ -58,11 +59,8 @@ fn annotate_field(field: &StructField, counter: &AtomicI64) -> StructField {
 fn annotate_nested_type(data_type: &DataType, counter: &AtomicI64) -> DataType {
     match data_type {
         DataType::Struct(st) => {
-            let fields = st
-                .fields()
-                .map(|f| -> Result<StructField, delta_kernel::Error> {
-                    Ok(annotate_field(f, counter))
-                });
+            let fields: Vec<StructField> =
+                st.fields().map(|f| annotate_field(f, counter)).collect();
             #[allow(clippy::expect_used)]
             let result =
                 StructType::try_new(fields).expect("failed to build nested annotated struct");
@@ -175,21 +173,24 @@ pub fn compute_max_column_id(schema: &StructType) -> i64 {
 }
 
 fn merge_struct(existing: &StructType, candidate: &StructType, counter: &AtomicI64) -> StructType {
-    let merged_fields = candidate.fields().map(|nf| {
-        let prev = existing.fields().find(|f| f.name() == nf.name());
-        let field = if let Some(prev_field) = prev {
-            let merged_dtype = merge_types(Some(prev_field.data_type()), nf.data_type(), counter);
-            StructField {
-                name: prev_field.name().clone(),
-                data_type: merged_dtype,
-                nullable: nf.is_nullable(),
-                metadata: prev_field.metadata().clone(),
+    let merged_fields: Vec<StructField> = candidate
+        .fields()
+        .map(|nf| {
+            let prev = existing.fields().find(|f| f.name() == nf.name());
+            if let Some(prev_field) = prev {
+                let merged_dtype =
+                    merge_types(Some(prev_field.data_type()), nf.data_type(), counter);
+                StructField {
+                    name: prev_field.name().clone(),
+                    data_type: merged_dtype,
+                    nullable: nf.is_nullable(),
+                    metadata: prev_field.metadata().clone(),
+                }
+            } else {
+                annotate_field(nf, counter)
             }
-        } else {
-            annotate_field(nf, counter)
-        };
-        Ok::<StructField, delta_kernel::Error>(field)
-    });
+        })
+        .collect();
     #[allow(clippy::expect_used)]
     StructType::try_new(merged_fields).expect("failed to build merged annotated struct")
 }

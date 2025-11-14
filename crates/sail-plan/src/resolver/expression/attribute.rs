@@ -199,7 +199,7 @@ impl PlanResolver<'_> {
                         (
                             name.as_ref().to_string(),
                             expr::Expr::OuterReferenceColumn(
-                                field.data_type().clone(),
+                                field.clone(),
                                 Column::new(qualifier.cloned(), field.name()),
                             ),
                         )

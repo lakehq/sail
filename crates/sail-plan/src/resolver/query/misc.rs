@@ -72,7 +72,7 @@ impl PlanResolver<'_> {
                 }
                 params
             };
-            input.with_param_values(ParamValues::List(params))?
+            input.with_param_values(ParamValues::from(params))?
         } else {
             input
         };
@@ -88,7 +88,7 @@ impl PlanResolver<'_> {
                 }
                 params
             };
-            Ok(input.with_param_values(ParamValues::Map(params))?)
+            Ok(input.with_param_values(ParamValues::from(params))?)
         } else {
             Ok(input)
         }

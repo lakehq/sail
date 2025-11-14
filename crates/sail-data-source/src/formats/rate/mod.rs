@@ -55,7 +55,14 @@ impl TableFormat for RateTableFormat {
         let schema = match schema {
             Some(schema) if !schema.fields.is_empty() => schema,
             _ => {
-                let tz = Arc::from(ctx.config().options().execution.time_zone.clone());
+                let tz = Arc::from(
+                    ctx.config()
+                        .options()
+                        .execution
+                        .time_zone
+                        .clone()
+                        .unwrap_or_else(|| "UTC".to_string()),
+                );
                 Schema::new(vec![
                     Arc::new(Field::new(
                         "timestamp",

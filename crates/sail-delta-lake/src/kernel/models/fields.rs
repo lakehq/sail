@@ -21,48 +21,29 @@
 use std::sync::{Arc, LazyLock};
 
 use delta_kernel::schema::{ArrayType, DataType, MapType, StructField, StructType};
-use deltalake::kernel::ActionType;
 
-pub trait ActionTypeExt {
-    fn schema_field(&self) -> &StructField;
-}
-
-impl ActionTypeExt for ActionType {
-    /// Returns the type of the corresponding field in the delta log schema
-    fn schema_field(&self) -> &StructField {
-        match self {
-            Self::Metadata => &METADATA_FIELD,
-            Self::Protocol => &PROTOCOL_FIELD,
-            Self::CommitInfo => &COMMIT_INFO_FIELD,
-            Self::Add => &ADD_FIELD,
-            Self::Remove => &REMOVE_FIELD,
-            Self::Cdc => &CDC_FIELD,
-            Self::Txn => &TXN_FIELD,
-            Self::DomainMetadata => &DOMAIN_METADATA_FIELD,
-            Self::CheckpointMetadata => &CHECKPOINT_METADATA_FIELD,
-            Self::Sidecar => &SIDECAR_FIELD,
-        }
-    }
-}
+// TODO: ActionType mapping removed; use direct field statics and schema accessors instead
 
 // https://github.com/delta-io/delta/blob/master/PROTOCOL.md#change-metadata
+#[allow(clippy::expect_used)]
 static METADATA_FIELD: LazyLock<StructField> = LazyLock::new(|| {
     StructField::new(
         "metaData",
-        StructType::new(vec![
+        StructType::try_new(vec![
             StructField::new("id", DataType::STRING, true),
             StructField::new("name", DataType::STRING, true),
             StructField::new("description", DataType::STRING, true),
             StructField::new(
                 "format",
-                StructType::new(vec![
+                StructType::try_new(vec![
                     StructField::new("provider", DataType::STRING, true),
                     StructField::new(
                         "options",
                         MapType::new(DataType::STRING, DataType::STRING, true),
                         false,
                     ),
-                ]),
+                ])
+                .expect("Failed to construct format StructType in METADATA_FIELD"),
                 false,
             ),
             StructField::new("schemaString", DataType::STRING, true),
@@ -77,15 +58,17 @@ static METADATA_FIELD: LazyLock<StructField> = LazyLock::new(|| {
                 MapType::new(DataType::STRING, DataType::STRING, true),
                 false,
             ),
-        ]),
+        ])
+        .expect("Failed to construct StructType for METADATA_FIELD"),
         true,
     )
 });
 // https://github.com/delta-io/delta/blob/master/PROTOCOL.md#protocol-evolution
+#[allow(clippy::expect_used)]
 static PROTOCOL_FIELD: LazyLock<StructField> = LazyLock::new(|| {
     StructField::new(
         "protocol",
-        StructType::new(vec![
+        StructType::try_new(vec![
             StructField::new("minReaderVersion", DataType::INTEGER, true),
             StructField::new("minWriterVersion", DataType::INTEGER, true),
             StructField::new(
@@ -98,15 +81,17 @@ static PROTOCOL_FIELD: LazyLock<StructField> = LazyLock::new(|| {
                 ArrayType::new(DataType::STRING, true),
                 true,
             ),
-        ]),
+        ])
+        .expect("Failed to construct StructType for PROTOCOL_FIELD"),
         true,
     )
 });
 // https://github.com/delta-io/delta/blob/master/PROTOCOL.md#commit-provenance-information
+#[allow(clippy::expect_used)]
 static COMMIT_INFO_FIELD: LazyLock<StructField> = LazyLock::new(|| {
     StructField::new(
         "commitInfo",
-        StructType::new(vec![
+        StructType::try_new(vec![
             StructField::new("timestamp", DataType::LONG, false),
             StructField::new("operation", DataType::STRING, false),
             StructField::new("isolationLevel", DataType::STRING, true),
@@ -123,15 +108,17 @@ static COMMIT_INFO_FIELD: LazyLock<StructField> = LazyLock::new(|| {
                 MapType::new(DataType::STRING, DataType::STRING, true),
                 true,
             ),
-        ]),
+        ])
+        .expect("Failed to construct StructType for COMMIT_INFO_FIELD"),
         true,
     )
 });
 // https://github.com/delta-io/delta/blob/master/PROTOCOL.md#add-file-and-remove-file
+#[allow(clippy::expect_used)]
 static ADD_FIELD: LazyLock<StructField> = LazyLock::new(|| {
     StructField::new(
         "add",
-        StructType::new(vec![
+        StructType::try_new(vec![
             StructField::new("path", DataType::STRING, true),
             partition_values_field(),
             StructField::new("size", DataType::LONG, true),
@@ -143,15 +130,17 @@ static ADD_FIELD: LazyLock<StructField> = LazyLock::new(|| {
             StructField::new("baseRowId", DataType::LONG, true),
             StructField::new("defaultRowCommitVersion", DataType::LONG, true),
             StructField::new("clusteringProvider", DataType::STRING, true),
-        ]),
+        ])
+        .expect("Failed to construct StructType for ADD_FIELD"),
         true,
     )
 });
 // https://github.com/delta-io/delta/blob/master/PROTOCOL.md#add-file-and-remove-file
+#[allow(clippy::expect_used)]
 static REMOVE_FIELD: LazyLock<StructField> = LazyLock::new(|| {
     StructField::new(
         "remove",
-        StructType::new(vec![
+        StructType::try_new(vec![
             StructField::new("path", DataType::STRING, true),
             StructField::new("deletionTimestamp", DataType::LONG, true),
             StructField::new("dataChange", DataType::BOOLEAN, true),
@@ -163,54 +152,62 @@ static REMOVE_FIELD: LazyLock<StructField> = LazyLock::new(|| {
             deletion_vector_field(),
             StructField::new("baseRowId", DataType::LONG, true),
             StructField::new("defaultRowCommitVersion", DataType::LONG, true),
-        ]),
+        ])
+        .expect("Failed to construct StructType for REMOVE_FIELD"),
         true,
     )
 });
 // TODO implement support for this checkpoint
-#[expect(dead_code)]
+#[allow(dead_code)]
+#[allow(clippy::expect_used)]
 static REMOVE_FIELD_CHECKPOINT: LazyLock<StructField> = LazyLock::new(|| {
     StructField::new(
         "remove",
-        StructType::new(vec![
+        StructType::try_new(vec![
             StructField::new("path", DataType::STRING, false),
             StructField::new("deletionTimestamp", DataType::LONG, true),
             StructField::new("dataChange", DataType::BOOLEAN, false),
-        ]),
+        ])
+        .expect("Failed to construct StructType for REMOVE_FIELD_CHECKPOINT"),
         true,
     )
 });
 // https://github.com/delta-io/delta/blob/master/PROTOCOL.md#add-cdc-file
+#[allow(clippy::expect_used)]
 static CDC_FIELD: LazyLock<StructField> = LazyLock::new(|| {
     StructField::new(
         "cdc",
-        StructType::new(vec![
+        StructType::try_new(vec![
             StructField::new("path", DataType::STRING, false),
             partition_values_field(),
             StructField::new("size", DataType::LONG, false),
             StructField::new("dataChange", DataType::BOOLEAN, false),
             tags_field(),
-        ]),
+        ])
+        .expect("Failed to construct StructType for CDC_FIELD"),
         true,
     )
 });
 // https://github.com/delta-io/delta/blob/master/PROTOCOL.md#transaction-identifiers
+#[allow(clippy::expect_used)]
 static TXN_FIELD: LazyLock<StructField> = LazyLock::new(|| {
     StructField::new(
         "txn",
-        StructType::new(vec![
+        StructType::try_new(vec![
             StructField::new("appId", DataType::STRING, false),
             StructField::new("version", DataType::LONG, false),
             StructField::new("lastUpdated", DataType::LONG, true),
-        ]),
+        ])
+        .expect("Failed to construct StructType for TXN_FIELD"),
         true,
     )
 });
 // https://github.com/delta-io/delta/blob/master/PROTOCOL.md#domain-metadata
+#[allow(clippy::expect_used)]
 static DOMAIN_METADATA_FIELD: LazyLock<StructField> = LazyLock::new(|| {
     StructField::new(
         "domainMetadata",
-        StructType::new(vec![
+        StructType::try_new(vec![
             StructField::new("domain", DataType::STRING, false),
             StructField::new(
                 "configuration",
@@ -218,40 +215,46 @@ static DOMAIN_METADATA_FIELD: LazyLock<StructField> = LazyLock::new(|| {
                 true,
             ),
             StructField::new("removed", DataType::BOOLEAN, false),
-        ]),
+        ])
+        .expect("Failed to construct StructType for DOMAIN_METADATA_FIELD"),
         true,
     )
 });
 // https://github.com/delta-io/delta/blob/master/PROTOCOL.md#checkpoint-metadata
 #[allow(dead_code)]
+#[allow(clippy::expect_used)]
 static CHECKPOINT_METADATA_FIELD: LazyLock<StructField> = LazyLock::new(|| {
     StructField::new(
         "checkpointMetadata",
-        StructType::new(vec![
+        StructType::try_new(vec![
             StructField::new("flavor", DataType::STRING, false),
             tags_field(),
-        ]),
+        ])
+        .expect("Failed to construct StructType for CHECKPOINT_METADATA_FIELD"),
         true,
     )
 });
 // https://github.com/delta-io/delta/blob/master/PROTOCOL.md#sidecar-file-information
 #[allow(dead_code)]
+#[allow(clippy::expect_used)]
 static SIDECAR_FIELD: LazyLock<StructField> = LazyLock::new(|| {
     StructField::new(
         "sidecar",
-        StructType::new(vec![
+        StructType::try_new(vec![
             StructField::new("path", DataType::STRING, false),
             StructField::new("sizeInBytes", DataType::LONG, true),
             StructField::new("modificationTime", DataType::LONG, false),
             StructField::new("type", DataType::STRING, false),
             tags_field(),
-        ]),
+        ])
+        .expect("Failed to construct StructType for SIDECAR_FIELD"),
         true,
     )
 });
 
+#[allow(clippy::expect_used)]
 static LOG_SCHEMA: LazyLock<StructType> = LazyLock::new(|| {
-    StructType::new(vec![
+    StructType::try_new(vec![
         ADD_FIELD.clone(),
         CDC_FIELD.clone(),
         COMMIT_INFO_FIELD.clone(),
@@ -261,6 +264,7 @@ static LOG_SCHEMA: LazyLock<StructType> = LazyLock::new(|| {
         REMOVE_FIELD.clone(),
         TXN_FIELD.clone(),
     ])
+    .expect("Failed to construct StructType for LOG_SCHEMA")
 });
 
 fn tags_field() -> StructField {
@@ -279,16 +283,20 @@ fn partition_values_field() -> StructField {
     )
 }
 
+#[allow(clippy::expect_used)]
 fn deletion_vector_field() -> StructField {
     StructField::new(
         "deletionVector",
-        DataType::Struct(Box::new(StructType::new(vec![
-            StructField::new("storageType", DataType::STRING, false),
-            StructField::new("pathOrInlineDv", DataType::STRING, false),
-            StructField::new("offset", DataType::INTEGER, true),
-            StructField::new("sizeInBytes", DataType::INTEGER, false),
-            StructField::new("cardinality", DataType::LONG, false),
-        ]))),
+        DataType::Struct(Box::new(
+            StructType::try_new(vec![
+                StructField::new("storageType", DataType::STRING, false),
+                StructField::new("pathOrInlineDv", DataType::STRING, false),
+                StructField::new("offset", DataType::INTEGER, true),
+                StructField::new("sizeInBytes", DataType::INTEGER, false),
+                StructField::new("cardinality", DataType::LONG, false),
+            ])
+            .expect("Failed to construct StructType for deletion_vector_field"),
+        )),
         true,
     )
 }
