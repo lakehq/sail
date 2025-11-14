@@ -98,13 +98,25 @@ df.write.format("delta").mode("overwrite").option("overwriteSchema", "true").sav
 
 ### Time Travel
 
-You can use the time travel feature of Delta Lake to query historical versions of a Delta table.
+You can use the time travel feature to query historical versions of a Delta table.
 
 ```python
 df = spark.read.format("delta").option("versionAsOf", "0").load(path)
+df = spark.read.format("delta").option("timestampAsOf", "2025-01-02T03:04:05.678").load(path)
 ```
 
 Time travel is not available for Spark SQL in Sail yet, but we plan to support it soon.
+
+### Column Mapping
+
+You can write Delta tables with column mapping enabled. The supported column mapping modes are `name` and `id`. You must write to a new Delta table to enable column mapping.
+
+```python
+df.write.format("delta").option("columnMappingMode", "name").save(path)
+df.write.format("delta").option("columnMappingMode", "id").save(path)
+```
+
+Existing Delta tables with column mapping can be read as usual.
 
 ### More Features
 

@@ -1,184 +1,68 @@
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+//     http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
+
 use std::sync::Arc;
 
-use async_trait::async_trait;
-use datafusion::catalog::{Session, TableProvider};
-use datafusion::common::{not_impl_err, plan_err, DataFusionError, Result};
-use datafusion::physical_plan::ExecutionPlan;
-use sail_common_datafusion::datasource::{SinkInfo, SourceInfo, TableFormat};
+use datafusion::catalog::Session;
+use datafusion::common::{plan_err, DataFusionError, Result};
+use datafusion::datasource::TableProvider;
 use url::Url;
 
 use crate::datasource::provider::IcebergTableProvider;
 use crate::options::TableIcebergOptions;
 use crate::spec::{PartitionSpec, Schema, Snapshot, TableMetadata};
 
-#[derive(Debug)]
-pub struct IcebergTableFormat;
+/// Create an Iceberg table provider for reading
+pub async fn create_iceberg_provider(
+    ctx: &dyn Session,
+    table_url: Url,
+    options: TableIcebergOptions,
+) -> Result<Arc<dyn TableProvider>> {
+    let (schema, snapshot, partition_specs) =
+        load_table_metadata_with_options(ctx, &table_url, options).await?;
 
-#[async_trait]
-impl TableFormat for IcebergTableFormat {
-    fn name(&self) -> &str {
-        "iceberg"
-    }
-
-    async fn create_provider(
-        &self,
-        ctx: &dyn Session,
-        info: SourceInfo,
-    ) -> Result<Arc<dyn TableProvider>> {
-        let SourceInfo {
-            paths,
-            schema: _schema,
-            constraints: _,
-            partition_by: _,
-            bucket_by: _,
-            sort_order: _,
-            options: _options,
-        } = info;
-
-        log::trace!("Creating table provider for paths: {:?}", paths);
-        let table_url = Self::parse_table_url(ctx, paths).await?;
-        log::trace!("Parsed table URL: {}", table_url);
-
-        let (iceberg_schema, snapshot, partition_specs) =
-            load_table_metadata(ctx, &table_url).await?;
-        log::trace!("Loaded metadata, snapshot_id: {}", snapshot.snapshot_id());
-
-        let provider = IcebergTableProvider::new(
-            table_url.to_string(),
-            iceberg_schema,
-            snapshot,
-            partition_specs,
-        )?;
-        Ok(Arc::new(provider))
-    }
-
-    async fn create_writer(
-        &self,
-        ctx: &dyn Session,
-        info: SinkInfo,
-    ) -> Result<Arc<dyn ExecutionPlan>> {
-        use datafusion::physical_plan::empty::EmptyExec;
-        use sail_common_datafusion::datasource::PhysicalSinkMode;
-
-        let SinkInfo {
-            input,
-            path,
-            mode,
-            partition_by,
-            bucket_by,
-            sort_order,
-            options: _,
-        } = info;
-
-        if bucket_by.is_some() {
-            return not_impl_err!("bucketing for Iceberg format");
-        }
-
-        // Parse URL and detect table existence (file-based tables only)
-        let table_url = Self::parse_table_url(ctx, vec![path]).await?;
-        // Determine existence by presence of a metadata file, not by presence of a snapshot.
-        // Tables created via catalogs may have metadata but no current snapshot yet.
-        log::trace!("iceberg.create_writer.table_url: {}", &table_url);
-        let store = ctx
-            .runtime_env()
-            .object_store_registry
-            .get_store(&table_url)
-            .map_err(|e| DataFusionError::External(Box::new(e)))?;
-        let exists_res = find_latest_metadata_file(&store, &table_url).await;
-        log::trace!(
-            "iceberg.create_writer.table_exists_result: {:?}",
-            &exists_res
-                .as_ref()
-                .map(|_| ())
-                .map_err(|e| format!("{}", e))
-        );
-        let table_exists = exists_res.is_ok();
-
-        // Early mode handling (no-op or error)
-        match mode {
-            PhysicalSinkMode::ErrorIfExists => {
-                if table_exists {
-                    return plan_err!("Iceberg table already exists at path: {}", table_url);
-                }
-            }
-            PhysicalSinkMode::IgnoreIfExists => {
-                if table_exists {
-                    return Ok(Arc::new(EmptyExec::new(input.schema())));
-                }
-            }
-            // Allow full-table overwrite here; predicate-based overwrite still not supported
-            PhysicalSinkMode::OverwriteIf { .. } | PhysicalSinkMode::OverwritePartitions => {
-                return not_impl_err!("predicate or partition overwrite for Iceberg");
-            }
-            _ => {}
-        }
-
-        // Build writer → commit pipeline
-        use crate::physical_plan::plan_builder::{IcebergPlanBuilder, IcebergTableConfig};
-
-        let table_config = IcebergTableConfig {
-            table_url,
-            partition_columns: partition_by,
-            table_exists,
-        };
-
-        // Convert logical sort requirement to physical sort exprs for SortExec
-        let physical_sort = sort_order.map(|req| {
-            req.into_iter()
-                .map(|r| datafusion::physical_expr::PhysicalSortExpr {
-                    expr: r.expr,
-                    options: r.options.unwrap_or_default(),
-                })
-                .collect::<Vec<_>>()
-        });
-
-        let builder = IcebergPlanBuilder::new(input, table_config, mode, physical_sort, ctx);
-        let exec = builder.build().await?;
-        Ok(exec)
-    }
+    let provider =
+        IcebergTableProvider::new(table_url.to_string(), schema, snapshot, partition_specs)?;
+    Ok(Arc::new(provider))
 }
 
-impl IcebergTableFormat {
-    pub async fn create_iceberg_provider(
-        ctx: &dyn Session,
-        table_url: Url,
-        options: TableIcebergOptions,
-    ) -> Result<Arc<dyn TableProvider>> {
-        let (schema, snapshot, partition_specs) =
-            load_table_metadata_with_options(ctx, &table_url, options).await?;
-
-        let provider =
-            IcebergTableProvider::new(table_url.to_string(), schema, snapshot, partition_specs)?;
-        Ok(Arc::new(provider))
+/// Parse a table URL from a path string
+pub async fn parse_table_url(ctx: &dyn Session, paths: Vec<String>) -> Result<Url> {
+    if paths.len() != 1 {
+        return plan_err!(
+            "Iceberg table requires exactly one path, got {}",
+            paths.len()
+        );
     }
 
-    async fn parse_table_url(ctx: &dyn Session, paths: Vec<String>) -> Result<Url> {
-        if paths.len() != 1 {
-            return plan_err!(
-                "Iceberg table requires exactly one path, got {}",
-                paths.len()
-            );
-        }
+    let path = &paths[0];
+    let mut table_url = Url::parse(path).map_err(|e| DataFusionError::External(Box::new(e)))?;
 
-        let path = &paths[0];
-        let mut table_url = Url::parse(path).map_err(|e| DataFusionError::External(Box::new(e)))?;
-
-        if !table_url.path().ends_with('/') {
-            table_url.set_path(&format!("{}/", table_url.path()));
-        }
-
-        // Validate that we can access the object store
-        let _object_store = ctx
-            .runtime_env()
-            .object_store_registry
-            .get_store(&table_url)
-            .map_err(|e| DataFusionError::External(Box::new(e)))?;
-
-        Ok(table_url)
+    if !table_url.path().ends_with('/') {
+        table_url.set_path(&format!("{}/", table_url.path()));
     }
+
+    // Validate that we can access the object store
+    let _object_store = ctx
+        .runtime_env()
+        .object_store_registry
+        .get_store(&table_url)
+        .map_err(|e| DataFusionError::External(Box::new(e)))?;
+
+    Ok(table_url)
 }
 
 /// Load Iceberg table metadata from the table location
+#[allow(dead_code)]
 pub(crate) async fn load_table_metadata(
     ctx: &dyn Session,
     table_url: &Url,
@@ -338,7 +222,7 @@ pub(crate) async fn load_table_metadata_with_options(
 }
 
 /// Find the latest metadata file in the table location
-pub(crate) async fn find_latest_metadata_file(
+pub async fn find_latest_metadata_file(
     object_store: &Arc<dyn object_store::ObjectStore>,
     table_url: &Url,
 ) -> Result<String> {
@@ -467,18 +351,28 @@ fn parse_timestamp_to_ms(s: &str) -> std::result::Result<i64, String> {
 
 fn find_snapshot_by_ts(meta: &TableMetadata, ts_ms: i64) -> Option<&Snapshot> {
     // Prefer snapshot_log if present
-    if let Some(sid) = meta
+    if let Some(log_entry) = meta
         .snapshot_log
         .iter()
         .filter(|e| e.timestamp_ms <= ts_ms)
-        .max_by_key(|e| e.timestamp_ms)
-        .map(|e| e.snapshot_id)
+        .max_by(|a, b| {
+            a.timestamp_ms
+                .cmp(&b.timestamp_ms)
+                .then_with(|| a.snapshot_id.cmp(&b.snapshot_id))
+        })
     {
-        return meta.snapshots.iter().find(|s| s.snapshot_id() == sid);
+        return meta
+            .snapshots
+            .iter()
+            .find(|s| s.snapshot_id() == log_entry.snapshot_id);
     }
     // Fallback to scanning snapshots by snapshot timestamp
     meta.snapshots
         .iter()
         .filter(|s| s.timestamp_ms() <= ts_ms)
-        .max_by_key(|s| s.timestamp_ms())
+        .max_by(|a, b| {
+            a.timestamp_ms()
+                .cmp(&b.timestamp_ms())
+                .then_with(|| a.snapshot_id().cmp(&b.snapshot_id()))
+        })
 }
