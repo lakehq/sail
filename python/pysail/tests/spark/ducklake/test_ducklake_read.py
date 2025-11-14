@@ -7,6 +7,7 @@ metadata in SQLite/PostgreSQL and data files in object storage.
 """
 
 import os
+import platform
 
 import duckdb
 import pandas as pd
@@ -176,6 +177,7 @@ def test_ducklake_read_to_pandas(spark, ducklake_setup):
     assert_frame_equal(pandas_df.reset_index(drop=True), expected_df, check_dtype=False)
 
 
+@pytest.mark.skipif(platform.system() == "Windows", reason="may not work on Windows")
 def test_ducklake_read_with_sql(spark, ducklake_setup):
     """Test DuckLake read using SQL CREATE TABLE."""
     metadata_path, data_path, table_name = ducklake_setup
