@@ -6085,6 +6085,7 @@ dependencies = [
  "sail-common",
  "sail-common-datafusion",
  "sail-delta-lake",
+ "sail-duck-lake",
  "sail-iceberg",
  "serde",
  "serde_yaml",
@@ -6116,6 +6117,24 @@ dependencies = [
  "percent-encoding",
  "sail-common",
  "sail-common-datafusion",
+ "serde",
+ "serde_json",
+ "tokio",
+ "url",
+ "uuid",
+]
+
+[[package]]
+name = "sail-duck-lake"
+version = "0.4.2"
+dependencies = [
+ "async-trait",
+ "chrono",
+ "datafusion",
+ "datafusion-common",
+ "log",
+ "object_store",
+ "pyo3",
  "serde",
  "serde_json",
  "tokio",
