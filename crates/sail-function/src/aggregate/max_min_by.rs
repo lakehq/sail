@@ -162,7 +162,7 @@ impl AggregateUDFImpl for MinByFunction {
                 aggr_func.params.args.remove(0),
             );
 
-            order_by.push(Sort::new(second_arg, true, true)); // DESC, NULLS FIRST
+            order_by.push(Sort::new(second_arg, false, true)); // DESC, NULLS FIRST
 
             Ok(Expr::AggregateFunction(AggregateFunction::new_udf(
                 last_value_udaf(),
