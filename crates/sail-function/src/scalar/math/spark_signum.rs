@@ -2,7 +2,11 @@ use std::any::Any;
 use std::sync::Arc;
 
 use datafusion::arrow::array::{ArrayRef, AsArray, Float64Array};
-use datafusion::arrow::datatypes::{DataType, Decimal128Type, Float16Type, Float32Type, Float64Type, Int16Type, Int32Type, Int64Type, Int8Type, IntervalUnit, IntervalYearMonthType, UInt16Type, UInt32Type, UInt64Type, UInt8Type};
+use datafusion::arrow::datatypes::{
+    DataType, Decimal128Type, Float16Type, Float32Type, Float64Type, Int16Type, Int32Type,
+    Int64Type, Int8Type, IntervalUnit, IntervalYearMonthType, UInt16Type, UInt32Type, UInt64Type,
+    UInt8Type,
+};
 use datafusion_common::{exec_err, Result, ScalarValue};
 use datafusion_expr::{
     ColumnarValue, ScalarFunctionArgs, ScalarUDFImpl, Signature, TypeSignature, Volatility,
@@ -292,9 +296,8 @@ impl ScalarUDFImpl for SparkSignum {
                         Ok(Arc::new(result) as ArrayRef)
                     }
                     DataType::Decimal128(_p, _s) => {
-                        let result: Float64Array = array
-                            .as_primitive::<Decimal128Type>()
-                            .unary(|x| {
+                        let result: Float64Array =
+                            array.as_primitive::<Decimal128Type>().unary(|x| {
                                 if x == 0 {
                                     0.0
                                 } else if x > 0 {
