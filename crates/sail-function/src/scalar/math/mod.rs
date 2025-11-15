@@ -1,4 +1,3 @@
-pub mod least_greatest;
 pub mod rand_poisson;
 pub mod randn;
 pub mod random;

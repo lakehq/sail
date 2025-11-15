@@ -9,7 +9,6 @@ use datafusion_spark::function::math::expr_fn as math_fn;
 use half::f16;
 use sail_common_datafusion::utils::items::ItemTaker;
 use sail_function::error::generic_exec_err;
-use sail_function::scalar::math::least_greatest;
 use sail_function::scalar::math::rand_poisson::RandPoisson;
 use sail_function::scalar::math::randn::Randn;
 use sail_function::scalar::math::random::Random;
@@ -444,10 +443,10 @@ pub(super) fn list_built_in_math_functions() -> Vec<(&'static str, ScalarFunctio
         ("expm1", F::unary(math_fn::expm1)),
         ("factorial", F::unary(expr_fn::factorial)),
         ("floor", F::custom(|arg| ceil_floor(arg, "floor"))),
-        ("greatest", F::udf(least_greatest::Greatest::new())),
+        ("greatest", F::var_arg(expr_fn::greatest)),
         ("hex", F::udf(SparkHex::new())),
         ("hypot", F::binary(hypot)),
-        ("least", F::udf(least_greatest::Least::new())),
+        ("least", F::var_arg(expr_fn::least)),
         ("ln", F::unary(double(ln))),
         ("log", F::binary(double2(log))),
         ("log10", F::unary(double(log10))),
