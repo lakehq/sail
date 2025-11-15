@@ -5,8 +5,6 @@ use datafusion::arrow::error::ArrowError;
 use datafusion::functions::expr_fn;
 use datafusion_common::ScalarValue;
 use datafusion_expr::{cast, expr, lit, Expr, ExprSchemable, Operator, ScalarUDF};
-use datafusion_functions::core::greatest::GreatestFunc;
-use datafusion_functions::core::least::LeastFunc;
 use datafusion_spark::function::math::expr_fn as math_fn;
 use half::f16;
 use sail_common_datafusion::utils::items::ItemTaker;
@@ -445,10 +443,10 @@ pub(super) fn list_built_in_math_functions() -> Vec<(&'static str, ScalarFunctio
         ("expm1", F::unary(math_fn::expm1)),
         ("factorial", F::unary(expr_fn::factorial)),
         ("floor", F::custom(|arg| ceil_floor(arg, "floor"))),
-        ("greatest", F::udf(GreatestFunc::new())),
+        ("greatest", F::var_arg(expr_fn::greatest)),
         ("hex", F::udf(SparkHex::new())),
         ("hypot", F::binary(hypot)),
-        ("least", F::udf(LeastFunc::new())),
+        ("least", F::var_arg(expr_fn::least)),
         ("ln", F::unary(double(ln))),
         ("log", F::binary(double2(log))),
         ("log10", F::unary(double(log10))),
