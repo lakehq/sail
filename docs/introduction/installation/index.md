@@ -5,16 +5,18 @@ rank: 3
 
 # Installation
 
-Sail is available as a Python package on PyPI. You can install it using `pip`.
+To quickly get started, you can install Sail from PyPI using `pip`.
 
 ```bash-vue
 pip install "pysail=={{ libVersion }}"
 ```
 
+You can refer to the [Deployment Guide](/guide/deployment/) for more information about deploying Sail.
+
 ## Installation from Source
 
-You can install Sail from source when performance is critical for your application.
-Sail can be distributed as a Docker image or a standalone binary, besides being available as a Python package.
+You can install Sail from source when performance is important or when deploying Sail to production.
+Sail can be distributed as a Docker image or a standalone binary, in addition to being available as a Python package.
 
 ### Building the Docker Image
 

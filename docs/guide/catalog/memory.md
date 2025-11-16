@@ -5,7 +5,7 @@ rank: 1
 
 # Memory Catalog
 
-The memory catalog provider in Sail stores table metadata in memory for the duration of your Spark session. This is a useful default choice if you do not need persistent table metadata across sessions.
+The memory catalog provider in Sail stores table metadata in memory for the duration of your session. This is a useful default choice if you do not need persistent table metadata across sessions.
 
 A memory catalog can be configured using the following options.
 
