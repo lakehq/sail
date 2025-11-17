@@ -22,8 +22,6 @@ use std::sync::{Arc, LazyLock};
 
 use delta_kernel::schema::{ArrayType, DataType, MapType, StructField, StructType};
 
-// TODO: ActionType mapping removed; use direct field statics and schema accessors instead
-
 // https://github.com/delta-io/delta/blob/master/PROTOCOL.md#change-metadata
 #[allow(clippy::expect_used)]
 static METADATA_FIELD: LazyLock<StructField> = LazyLock::new(|| {

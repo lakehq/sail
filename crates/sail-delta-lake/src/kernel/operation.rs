@@ -103,6 +103,7 @@ impl DeltaOperation {
         CommitInfo {
             operation: Some(self.name().into()),
             operation_parameters: self.operation_parameters().ok(),
+            // FIXME: use a proper engine name
             engine_info: Some(format!("sail-delta-lake:{}", env!("CARGO_PKG_VERSION"))),
             ..Default::default()
         }

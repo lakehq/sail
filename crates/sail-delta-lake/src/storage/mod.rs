@@ -28,12 +28,12 @@ use delta_kernel::engine::default::executor::tokio::{
     TokioBackgroundExecutor, TokioMultiThreadExecutor,
 };
 use delta_kernel::engine::default::DefaultEngine;
-use delta_kernel::Engine;
+use delta_kernel::path::ParsedLogPath;
+use delta_kernel::{Engine, FileMeta, LogPath};
 use futures::TryStreamExt;
 use log::{debug, error};
 use object_store::path::Path;
-use object_store::{Error as ObjectStoreError, ObjectStore, PutMode, PutOptions};
-use regex::Regex;
+use object_store::{Error as ObjectStoreError, ObjectMeta, ObjectStore, PutMode, PutOptions};
 use serde_json::Deserializer as JsonDeserializer;
 use tokio::runtime::{Handle, RuntimeFlavor};
 use url::Url;
@@ -52,8 +52,8 @@ pub type LogStoreRef = Arc<dyn LogStore>;
 
 const DELTA_LOG_FOLDER: &str = "_delta_log";
 static DELTA_LOG_PATH: LazyLock<Path> = LazyLock::new(|| Path::from(DELTA_LOG_FOLDER));
-static DELTA_LOG_REGEX: LazyLock<Result<Regex, regex::Error>> =
-    LazyLock::new(|| Regex::new(r"(\d{20})\.(json|checkpoint(\.\d+)?\.parquet)$"));
+static DUMMY_TABLE_ROOT: LazyLock<Url> =
+    LazyLock::new(|| Url::parse("memory:///").expect("memory URI must be valid"));
 
 /// Holder for temporary commit paths or prepared bytes.
 #[derive(Clone)]
@@ -99,19 +99,17 @@ pub fn default_logstore(
     ))
 }
 
-/// Extract version from a file name in the delta log.
-fn extract_version_from_filename(name: &str) -> Option<i64> {
-    let regex = match delta_log_regex() {
-        Ok(regex) => regex,
-        Err(err) => {
-            error!("Failed to obtain delta log regex: {err}");
-            return None;
-        }
+/// Extract version from an object store entry in the delta log.
+fn extract_version_from_meta(meta: &ObjectMeta) -> Option<i64> {
+    let location = DUMMY_TABLE_ROOT.join(meta.location.as_ref()).ok()?;
+    let file_meta = FileMeta {
+        location,
+        last_modified: meta.last_modified.timestamp_millis(),
+        size: meta.size,
     };
-    regex
-        .captures(name)
-        .and_then(|captures| captures.get(1))
-        .and_then(|capture| capture.as_str().parse::<i64>().ok())
+    let log_path = LogPath::try_new(file_meta).ok()?;
+    let parsed_path: ParsedLogPath = log_path.into();
+    i64::try_from(parsed_path.version).ok()
 }
 
 /// Return the `_delta_log` commit URI for the given version.
@@ -320,22 +318,11 @@ async fn latest_version_from_listing(store: Arc<dyn ObjectStore>) -> DeltaResult
     let mut stream = store.list(Some(&DELTA_LOG_PATH));
     let mut max_version: Option<i64> = None;
     while let Some(meta) = stream.try_next().await? {
-        if let Some(name) = meta.location.filename() {
-            if let Some(version) = extract_version_from_filename(name) {
-                max_version = Some(max_version.map_or(version, |curr| curr.max(version)));
-            }
+        if let Some(version) = extract_version_from_meta(&meta) {
+            max_version = Some(max_version.map_or(version, |curr| curr.max(version)));
         }
     }
     Ok(max_version)
-}
-
-fn delta_log_regex() -> DeltaResult<&'static Regex> {
-    match LazyLock::force(&DELTA_LOG_REGEX) {
-        Ok(regex) => Ok(regex),
-        Err(err) => Err(DeltaTableError::Generic(format!(
-            "Failed to compile delta log regex: {err}"
-        ))),
-    }
 }
 
 fn get_engine(store: Arc<dyn ObjectStore>) -> Arc<dyn Engine> {
