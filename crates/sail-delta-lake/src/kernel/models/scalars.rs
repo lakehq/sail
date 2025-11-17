@@ -4,10 +4,9 @@ use std::cmp::Ordering;
 
 use chrono::{DateTime, TimeZone, Utc};
 use datafusion::arrow::array::{self, Array};
-use datafusion::arrow::datatypes::{DataType as ArrowDataType, TimeUnit};
+use datafusion::common::scalar::ScalarValue;
 use delta_kernel::engine::arrow_conversion::TryIntoKernel as _;
 use delta_kernel::expressions::{Scalar, StructData};
-use delta_kernel::schema::StructField;
 use percent_encoding::{utf8_percent_encode, AsciiSet, CONTROLS};
 use serde_json::Value;
 
@@ -90,144 +89,9 @@ impl ScalarExt for Scalar {
             return Some(Self::Null(arr.data_type().try_into_kernel().ok()?));
         }
 
-        match arr.data_type() {
-            ArrowDataType::Utf8 => arr
-                .as_any()
-                .downcast_ref::<array::StringArray>()
-                .map(|values| Self::String(values.value(index).to_string())),
-            ArrowDataType::LargeUtf8 => arr
-                .as_any()
-                .downcast_ref::<array::LargeStringArray>()
-                .map(|values| Self::String(values.value(index).to_string())),
-            ArrowDataType::Utf8View => arr
-                .as_any()
-                .downcast_ref::<array::StringViewArray>()
-                .map(|values| Self::String(values.value(index).to_string())),
-            ArrowDataType::Boolean => arr
-                .as_any()
-                .downcast_ref::<array::BooleanArray>()
-                .map(|values| Self::Boolean(values.value(index))),
-            ArrowDataType::Binary => arr
-                .as_any()
-                .downcast_ref::<array::BinaryArray>()
-                .map(|values| Self::Binary(values.value(index).to_vec())),
-            ArrowDataType::LargeBinary => arr
-                .as_any()
-                .downcast_ref::<array::LargeBinaryArray>()
-                .map(|values| Self::Binary(values.value(index).to_vec())),
-            ArrowDataType::FixedSizeBinary(_) => arr
-                .as_any()
-                .downcast_ref::<array::FixedSizeBinaryArray>()
-                .map(|values| Self::Binary(values.value(index).to_vec())),
-            ArrowDataType::BinaryView => arr
-                .as_any()
-                .downcast_ref::<array::BinaryViewArray>()
-                .map(|values| Self::Binary(values.value(index).to_vec())),
-            ArrowDataType::Int8 => arr
-                .as_any()
-                .downcast_ref::<array::Int8Array>()
-                .map(|values| Self::Byte(values.value(index))),
-            ArrowDataType::Int16 => arr
-                .as_any()
-                .downcast_ref::<array::Int16Array>()
-                .map(|values| Self::Short(values.value(index))),
-            ArrowDataType::Int32 => arr
-                .as_any()
-                .downcast_ref::<array::Int32Array>()
-                .map(|values| Self::Integer(values.value(index))),
-            ArrowDataType::Int64 => arr
-                .as_any()
-                .downcast_ref::<array::Int64Array>()
-                .map(|values| Self::Long(values.value(index))),
-            ArrowDataType::UInt8 => arr
-                .as_any()
-                .downcast_ref::<array::UInt8Array>()
-                .map(|values| Self::Byte(values.value(index) as i8)),
-            ArrowDataType::UInt16 => arr
-                .as_any()
-                .downcast_ref::<array::UInt16Array>()
-                .map(|values| Self::Short(values.value(index) as i16)),
-            ArrowDataType::UInt32 => arr
-                .as_any()
-                .downcast_ref::<array::UInt32Array>()
-                .map(|values| Self::Integer(values.value(index) as i32)),
-            ArrowDataType::UInt64 => arr
-                .as_any()
-                .downcast_ref::<array::UInt64Array>()
-                .map(|values| Self::Long(values.value(index) as i64)),
-            ArrowDataType::Float32 => arr
-                .as_any()
-                .downcast_ref::<array::Float32Array>()
-                .map(|values| Self::Float(values.value(index))),
-            ArrowDataType::Float64 => arr
-                .as_any()
-                .downcast_ref::<array::Float64Array>()
-                .map(|values| Self::Double(values.value(index))),
-            ArrowDataType::Decimal128(precision, scale) => arr
-                .as_any()
-                .downcast_ref::<array::Decimal128Array>()
-                .and_then(|values| {
-                    let value = values.value(index);
-                    Self::decimal(value, *precision, *scale as u8).ok()
-                }),
-            ArrowDataType::Date32 => arr
-                .as_any()
-                .downcast_ref::<array::Date32Array>()
-                .map(|values| Self::Date(values.value(index))),
-            ArrowDataType::Timestamp(TimeUnit::Microsecond, None) => arr
-                .as_any()
-                .downcast_ref::<array::TimestampMicrosecondArray>()
-                .map(|values| Self::TimestampNtz(values.value(index))),
-            ArrowDataType::Timestamp(TimeUnit::Microsecond, Some(tz))
-                if tz.eq_ignore_ascii_case("utc") =>
-            {
-                arr.as_any()
-                    .downcast_ref::<array::TimestampMicrosecondArray>()
-                    .map(|values| Self::Timestamp(values.value(index)))
-            }
-            ArrowDataType::Struct(fields) => {
-                let struct_fields = fields
-                    .iter()
-                    .flat_map(|field| field.as_ref().try_into_kernel())
-                    .collect::<Vec<_>>();
-                let values =
-                    arr.as_any()
-                        .downcast_ref::<array::StructArray>()
-                        .and_then(|struct_array| {
-                            struct_fields
-                                .iter()
-                                .map(|field: &StructField| {
-                                    struct_array
-                                        .column_by_name(field.name())
-                                        .and_then(|column| Self::from_array(column.as_ref(), index))
-                                })
-                                .collect::<Option<Vec<_>>>()
-                        })?;
-                Some(Self::Struct(
-                    StructData::try_new(struct_fields, values).ok()?,
-                ))
-            }
-            ArrowDataType::Float16
-            | ArrowDataType::Decimal32(_, _)
-            | ArrowDataType::Decimal64(_, _)
-            | ArrowDataType::Decimal256(_, _)
-            | ArrowDataType::List(_)
-            | ArrowDataType::LargeList(_)
-            | ArrowDataType::FixedSizeList(_, _)
-            | ArrowDataType::Map(_, _)
-            | ArrowDataType::Date64
-            | ArrowDataType::Timestamp(_, _)
-            | ArrowDataType::Time32(_)
-            | ArrowDataType::Time64(_)
-            | ArrowDataType::Duration(_)
-            | ArrowDataType::Interval(_)
-            | ArrowDataType::Dictionary(_, _)
-            | ArrowDataType::RunEndEncoded(_, _)
-            | ArrowDataType::Union(_, _)
-            | ArrowDataType::ListView(_)
-            | ArrowDataType::LargeListView(_)
-            | ArrowDataType::Null => None,
-        }
+        ScalarValue::try_from_array(arr, index)
+            .ok()
+            .and_then(|value| kernel_scalar_from_datafusion(value))
     }
 
     fn to_json(&self) -> Value {
@@ -327,4 +191,63 @@ fn number_from_f64(value: f64) -> Value {
     serde_json::Number::from_f64(value)
         .map(Value::Number)
         .unwrap_or_else(|| Value::String(value.to_string()))
+}
+
+fn kernel_scalar_from_datafusion(value: ScalarValue) -> Option<Scalar> {
+    match value {
+        ScalarValue::Utf8(Some(v))
+        | ScalarValue::LargeUtf8(Some(v))
+        | ScalarValue::Utf8View(Some(v)) => Some(Scalar::String(v)),
+        ScalarValue::Boolean(Some(v)) => Some(Scalar::Boolean(v)),
+        ScalarValue::Binary(Some(bytes))
+        | ScalarValue::LargeBinary(Some(bytes))
+        | ScalarValue::BinaryView(Some(bytes))
+        | ScalarValue::FixedSizeBinary(_, Some(bytes)) => Some(Scalar::Binary(bytes)),
+        ScalarValue::Int8(Some(v)) => Some(Scalar::Byte(v)),
+        ScalarValue::Int16(Some(v)) => Some(Scalar::Short(v)),
+        ScalarValue::Int32(Some(v)) => Some(Scalar::Integer(v)),
+        ScalarValue::Int64(Some(v)) => Some(Scalar::Long(v)),
+        ScalarValue::UInt8(Some(v)) => Some(Scalar::Byte(v as i8)),
+        ScalarValue::UInt16(Some(v)) => Some(Scalar::Short(v as i16)),
+        ScalarValue::UInt32(Some(v)) => Some(Scalar::Integer(v as i32)),
+        ScalarValue::UInt64(Some(v)) => Some(Scalar::Long(v as i64)),
+        ScalarValue::Float32(Some(v)) => Some(Scalar::Float(v)),
+        ScalarValue::Float64(Some(v)) => Some(Scalar::Double(v)),
+        ScalarValue::Decimal128(Some(bits), precision, scale) => {
+            let scale = u8::try_from(scale).ok()?;
+            Scalar::decimal(bits, precision, scale).ok()
+        }
+        ScalarValue::Date32(Some(days)) => Some(Scalar::Date(days)),
+        ScalarValue::TimestampMicrosecond(Some(value), None) => Some(Scalar::TimestampNtz(value)),
+        ScalarValue::TimestampMicrosecond(Some(value), Some(tz))
+            if tz.eq_ignore_ascii_case("utc") =>
+        {
+            Some(Scalar::Timestamp(value))
+        }
+        ScalarValue::Struct(struct_array) => {
+            struct_data_from_array(struct_array.as_ref()).map(Scalar::Struct)
+        }
+        _ => None,
+    }
+}
+
+fn struct_data_from_array(struct_array: &array::StructArray) -> Option<StructData> {
+    let fields = struct_array.fields();
+    let columns = struct_array.columns();
+
+    if fields.len() != columns.len() {
+        return None;
+    }
+
+    let mut struct_fields = Vec::with_capacity(fields.len());
+    let mut values = Vec::with_capacity(columns.len());
+
+    for (field, column) in fields.iter().zip(columns.iter()) {
+        let kernel_field = field.as_ref().try_into_kernel().ok()?;
+        let value = Scalar::from_array(column.as_ref(), 0)?;
+        struct_fields.push(kernel_field);
+        values.push(value);
+    }
+
+    StructData::try_new(struct_fields, values).ok()
 }
