@@ -20,7 +20,7 @@ The physical plan is then executed in different ways depending on the mode.
 <SvgDiagram :svg="data['architecture-local.dot']" />
 
 In local mode, Sail runs as a single process.
-Each Spark session is powered by a **local job runner** responsible for executing the optimized physical plan.
+Each session is powered by a **local job runner** responsible for executing the optimized physical plan.
 The local job runner can use multiple threads to process data partitions in parallel, leveraging the available CPU cores on the host.
 
 ## Cluster Mode
@@ -28,7 +28,7 @@ The local job runner can use multiple threads to process data partitions in para
 <SvgDiagram :svg="data['architecture-cluster.dot']" />
 
 In cluster mode, Sail forms a distributed system involving the Sail server and multiple Sail **workers**.
-The Sail server in cluster mode can support multiple Spark sessions, each powered by a **cluster job runner**. Each cluster job runner owns a **driver** that schedules the distributed physical plan containing multiple **stages**. Each stage can have multiple **tasks**, each processing a partition of data. The tasks are sent to the workers for execution.
+The Sail server in cluster mode can support multiple sessions, each powered by a **cluster job runner**. Each cluster job runner owns a **driver** that schedules the distributed physical plan containing multiple **stages**. Each stage can have multiple **tasks**, each processing a partition of data. The tasks are sent to the workers for execution.
 
 Sail operates with a separation of concerns between the **control plane** and the **data plane**.
 

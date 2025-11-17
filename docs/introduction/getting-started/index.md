@@ -6,12 +6,13 @@ rank: 1
 # Getting Started
 
 Sail can serve as a drop-in replacement for the compute engine behind PySpark applications.
-The Spark session communicates with the Sail server using the [Spark Connect](https://spark.apache.org/docs/latest/spark-connect-overview.html) protocol.
+The Spark client session communicates with the Sail server using the [Spark Connect](https://spark.apache.org/docs/latest/spark-connect-overview.html) protocol.
 
 ## Package Installation
 
-Install the required packages in your Python environment.
-You can choose the Spark version you want.
+To quickly get started, install the required packages in your Python environment. You can choose the Spark version you want.
+
+See the [Installation](/introduction/installation/) page for full installation instructions.
 
 ::: code-group
 
@@ -39,8 +40,6 @@ pip install "pyspark[connect]==3.5.5
 - Since Spark 4.0, there is also a wrapper package `pyspark-connect` that you can use, which is equivalent to `pyspark[connect]`.
 
 :::
-
-You can refer to the [Installation](/introduction/installation/) page for more information about installing Sail.
 
 ::: details Migrating from Earlier Versions of Sail
 

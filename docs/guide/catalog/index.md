@@ -7,7 +7,7 @@ rank: 7
 
 Sail supports various catalog providers to manage your datasets as external tables. Catalogs help organize and maintain metadata about your data, so that you can refer to them by table names in your SQL queries.
 
-By default, Sail uses a memory catalog provider that stores table metadata in memory for the duration of your Spark session.
+By default, Sail uses a memory catalog provider that stores table metadata in memory for the duration of your session.
 You can configure remote catalog providers to persist your table metadata across sessions. This is done using the Sail configuration options.
 
 For example, you can configure memory catalogs using the `catalog.list` option and set the default catalog using the `catalog.default_catalog` option. The configuration can be done via environment variables before starting the Sail server.
