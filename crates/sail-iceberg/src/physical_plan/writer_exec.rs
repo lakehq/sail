@@ -11,12 +11,12 @@
 // limitations under the License.
 
 use std::any::Any;
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
 
 use async_trait::async_trait;
 use datafusion::arrow::array::StringArray;
-use datafusion::arrow::datatypes::{DataType, Field, Schema};
+use datafusion::arrow::datatypes::{DataType, Field, FieldRef, Schema};
 use datafusion::arrow::record_batch::RecordBatch;
 use datafusion::execution::context::TaskContext;
 use datafusion::physical_expr::{Distribution, EquivalenceProperties};
@@ -34,12 +34,13 @@ use sail_common_datafusion::datasource::PhysicalSinkMode;
 use url::Url;
 
 use crate::arrow_conversion::{
-    arrow_schema_to_iceberg, arrow_type_to_iceberg, iceberg_schema_to_arrow,
+    arrow_field_to_iceberg, arrow_schema_to_iceberg, arrow_type_to_iceberg, iceberg_field_to_arrow,
+    iceberg_schema_to_arrow,
 };
 use crate::options::TableIcebergOptions;
 use crate::spec::partition::{UnboundPartitionField, UnboundPartitionSpec};
 use crate::spec::schema::Schema as IcebergSchema;
-use crate::spec::types::NestedField;
+use crate::spec::types::{ListType, MapType, NestedField, StructType, Type};
 use crate::spec::TableMetadata;
 use crate::utils::get_object_store_from_context;
 use crate::writer::config::WriterConfig;
@@ -251,7 +252,7 @@ impl IcebergWriterExec {
             })?;
             if !Self::field_types_compatible(field, candidate) {
                 return Err(DataFusionError::Plan(format!(
-                    "Column '{}' has type {:?} in the table but {:?} in the input data. Use overwriteSchema=true to replace the schema.",
+                    "Column '{}' has type {:?} in the table but {:?} in the input data. Set mergeSchema=true to allow schema evolution or overwriteSchema=true to replace the schema.",
                     field.name(),
                     field.data_type(),
                     candidate.data_type(),
@@ -276,7 +277,65 @@ impl IcebergWriterExec {
                 DataType::Timestamp(input_unit, input_tz)
             ) if table_unit == input_unit
                 && Self::timestamp_timezone_compatible(table_tz, input_tz)
-        )
+        ) || Self::nested_types_equivalent(table_type, input_type)
+    }
+
+    fn nested_types_equivalent(table_type: &DataType, input_type: &DataType) -> bool {
+        if table_type == input_type {
+            return true;
+        }
+        if let (
+            DataType::Timestamp(table_unit, table_tz),
+            DataType::Timestamp(input_unit, input_tz),
+        ) = (table_type, input_type)
+        {
+            if table_unit == input_unit && Self::timestamp_timezone_compatible(table_tz, input_tz) {
+                return true;
+            }
+        }
+        match (table_type, input_type) {
+            (DataType::Struct(table_fields), DataType::Struct(input_fields)) => {
+                if table_fields.len() != input_fields.len() {
+                    return false;
+                }
+                table_fields.iter().zip(input_fields.iter()).all(|(t, i)| {
+                    t.name() == i.name()
+                        && Self::nested_types_equivalent(t.data_type(), i.data_type())
+                })
+            }
+            (
+                DataType::List(table_child)
+                | DataType::ListView(table_child)
+                | DataType::LargeList(table_child)
+                | DataType::LargeListView(table_child),
+                DataType::List(input_child)
+                | DataType::ListView(input_child)
+                | DataType::LargeList(input_child)
+                | DataType::LargeListView(input_child),
+            ) => Self::nested_types_equivalent(table_child.data_type(), input_child.data_type()),
+            (
+                DataType::Map(table_entries, table_sorted),
+                DataType::Map(input_entries, input_sorted),
+            ) => {
+                if table_sorted != input_sorted {
+                    return false;
+                }
+                if let (DataType::Struct(table_fields), DataType::Struct(input_fields)) =
+                    (table_entries.data_type(), input_entries.data_type())
+                {
+                    if table_fields.len() != input_fields.len() {
+                        return false;
+                    }
+                    table_fields.iter().zip(input_fields.iter()).all(|(t, i)| {
+                        t.name() == i.name()
+                            && Self::nested_types_equivalent(t.data_type(), i.data_type())
+                    })
+                } else {
+                    false
+                }
+            }
+            _ => false,
+        }
     }
 
     fn timestamp_timezone_compatible(
@@ -306,31 +365,33 @@ impl IcebergWriterExec {
         input_schema: &Schema,
     ) -> Result<SchemaEvolutionOutcome> {
         let current_arrow = Arc::new(iceberg_schema_to_arrow(current_schema)?);
-        Self::validate_existing_columns(current_arrow.as_ref(), input_schema)?;
-
         let mut next_field_id = table_meta.last_column_id + 1;
-        let mut additional_fields = Vec::new();
-        for field in input_schema.fields() {
-            if current_schema.field_by_name(field.name()).is_some() {
-                continue;
-            }
-            let iceberg_type = arrow_type_to_iceberg(field.data_type()).map_err(|e| {
+        let mut merged_fields: Vec<Arc<NestedField>> =
+            Vec::with_capacity(current_schema.fields().len() + input_schema.fields().len());
+        let mut changed = false;
+
+        for existing in current_schema.fields() {
+            let candidate = input_schema.field_with_name(&existing.name).map_err(|_| {
                 DataFusionError::Plan(format!(
-                    "Failed to convert column '{}' to an Iceberg type: {e}",
-                    field.name()
+                    "Column '{}' missing from input data. Set mergeSchema=true or overwriteSchema=true to evolve the schema.",
+                    existing.name
                 ))
             })?;
-            let nested = NestedField::new(
-                next_field_id,
-                field.name().clone(),
-                iceberg_type,
-                !field.is_nullable(),
-            );
-            additional_fields.push(Arc::new(nested));
-            next_field_id += 1;
+            let (merged_field, field_changed) =
+                Self::merge_field(existing.as_ref(), candidate, &mut next_field_id)?;
+            changed |= field_changed;
+            merged_fields.push(Arc::new(merged_field));
         }
 
-        if additional_fields.is_empty() {
+        for field in input_schema.fields() {
+            if current_schema.field_by_name(field.name()).is_none() {
+                let new_field = Self::build_field_from_arrow(field, &mut next_field_id)?;
+                merged_fields.push(Arc::new(new_field));
+                changed = true;
+            }
+        }
+
+        if !changed {
             return Ok(SchemaEvolutionOutcome {
                 iceberg_schema: current_schema.clone(),
                 arrow_schema: current_arrow,
@@ -338,8 +399,6 @@ impl IcebergWriterExec {
             });
         }
 
-        let mut merged_fields: Vec<_> = current_schema.fields().iter().cloned().collect();
-        merged_fields.extend(additional_fields.into_iter());
         let mut builder = IcebergSchema::builder()
             .with_schema_id(Self::next_schema_id(table_meta))
             .with_fields(merged_fields);
@@ -356,6 +415,252 @@ impl IcebergWriterExec {
             arrow_schema,
             changed: true,
         })
+    }
+
+    fn merge_field(
+        existing: &NestedField,
+        input_field: &Field,
+        next_field_id: &mut i32,
+    ) -> Result<(NestedField, bool)> {
+        match (&*existing.field_type, input_field.data_type()) {
+            (Type::Struct(existing_struct), DataType::Struct(input_fields)) => {
+                let (struct_type, changed) =
+                    Self::merge_struct(existing_struct, input_fields, next_field_id)?;
+                let mut updated = existing.clone();
+                if changed {
+                    updated.field_type = Box::new(Type::Struct(struct_type));
+                }
+                Ok((updated, changed))
+            }
+            (
+                Type::List(existing_list),
+                DataType::List(child)
+                | DataType::ListView(child)
+                | DataType::LargeList(child)
+                | DataType::LargeListView(child),
+            ) => {
+                let (element_field, changed) =
+                    Self::merge_field(existing_list.element_field.as_ref(), child, next_field_id)?;
+                if changed {
+                    let mut updated = existing.clone();
+                    updated.field_type =
+                        Box::new(Type::List(ListType::new(Arc::new(element_field))));
+                    Ok((updated, true))
+                } else {
+                    Ok((existing.clone(), false))
+                }
+            }
+            (Type::Map(existing_map), DataType::Map(entries, _)) => {
+                let DataType::Struct(entry_fields) = entries.data_type() else {
+                    return Err(DataFusionError::Plan(
+                        "Iceberg map entries must be struct types".to_string(),
+                    ));
+                };
+                if entry_fields.len() != 2 {
+                    return Err(DataFusionError::Plan(format!(
+                        "Iceberg map entries must have exactly 2 fields, found {}",
+                        entry_fields.len()
+                    )));
+                }
+                let (merged_key, key_changed) = Self::merge_field(
+                    existing_map.key_field.as_ref(),
+                    &entry_fields[0],
+                    next_field_id,
+                )?;
+                if key_changed {
+                    return Err(DataFusionError::Plan(
+                        "Schema evolution for map keys is not supported; use overwriteSchema=true to replace the schema."
+                            .to_string(),
+                    ));
+                }
+                let (merged_value, value_changed) = Self::merge_field(
+                    existing_map.value_field.as_ref(),
+                    &entry_fields[1],
+                    next_field_id,
+                )?;
+                if value_changed {
+                    let mut updated = existing.clone();
+                    updated.field_type = Box::new(Type::Map(MapType::new(
+                        Arc::new(merged_key),
+                        Arc::new(merged_value),
+                    )));
+                    Ok((updated, true))
+                } else {
+                    Ok((existing.clone(), false))
+                }
+            }
+            _ => {
+                let existing_arrow = iceberg_field_to_arrow(existing)?;
+                if !Self::field_types_compatible(&existing_arrow, input_field) {
+                    return Err(DataFusionError::Plan(format!(
+                        "Column '{}' has type {:?} in the table but {:?} in the input data. Set mergeSchema=true to allow schema evolution or overwriteSchema=true to replace the schema.",
+                        existing.name,
+                        existing_arrow.data_type(),
+                        input_field.data_type(),
+                    )));
+                }
+                Ok((existing.clone(), false))
+            }
+        }
+    }
+
+    fn merge_struct(
+        existing_struct: &StructType,
+        input_fields: &[FieldRef],
+        next_field_id: &mut i32,
+    ) -> Result<(StructType, bool)> {
+        let mut input_lookup: HashMap<&str, &Field> = HashMap::new();
+        for field in input_fields {
+            input_lookup.insert(field.name(), field.as_ref());
+        }
+
+        let mut changed = false;
+        let mut merged_children = Vec::with_capacity(existing_struct.fields().len());
+
+        for child in existing_struct.fields() {
+            let Some(candidate) = input_lookup.get(child.name.as_str()) else {
+                return Err(DataFusionError::Plan(format!(
+                    "Column '{}' missing from input data. Set mergeSchema=true or overwriteSchema=true to evolve the schema.",
+                    child.name
+                )));
+            };
+            let (merged_child, child_changed) =
+                Self::merge_field(child.as_ref(), candidate, next_field_id)?;
+            changed |= child_changed;
+            merged_children.push(Arc::new(merged_child));
+        }
+
+        for field in input_fields {
+            if existing_struct.field_by_name(field.name()).is_none() {
+                let new_child = Self::build_field_from_arrow(field, next_field_id)?;
+                merged_children.push(Arc::new(new_child));
+                changed = true;
+            }
+        }
+
+        Ok((StructType::new(merged_children), changed))
+    }
+
+    fn build_field_from_arrow(field: &Field, next_field_id: &mut i32) -> Result<NestedField> {
+        let mut iceberg_field = arrow_field_to_iceberg(field)?;
+        iceberg_field.id = *next_field_id;
+        *next_field_id += 1;
+        Self::assign_nested_ids(&mut iceberg_field, next_field_id);
+        Ok(iceberg_field)
+    }
+
+    fn assign_nested_ids(field: &mut NestedField, next_field_id: &mut i32) {
+        Self::assign_type_ids(field.field_type.as_mut(), next_field_id);
+    }
+
+    fn assign_type_ids(ty: &mut Type, next_field_id: &mut i32) {
+        match ty {
+            Type::Struct(struct_type) => {
+                let mut updated_fields = Vec::with_capacity(struct_type.fields().len());
+                for child in struct_type.fields() {
+                    let mut nested = child.as_ref().clone();
+                    if nested.id == 0 {
+                        nested.id = *next_field_id;
+                        *next_field_id += 1;
+                    }
+                    Self::assign_nested_ids(&mut nested, next_field_id);
+                    updated_fields.push(Arc::new(nested));
+                }
+                *ty = Type::Struct(StructType::new(updated_fields));
+            }
+            Type::List(list_type) => {
+                let mut element = list_type.element_field.as_ref().clone();
+                if element.id == 0 {
+                    element.id = *next_field_id;
+                    *next_field_id += 1;
+                }
+                Self::assign_nested_ids(&mut element, next_field_id);
+                *ty = Type::List(ListType::new(Arc::new(element)));
+            }
+            Type::Map(map_type) => {
+                let mut key = map_type.key_field.as_ref().clone();
+                if key.id == 0 {
+                    key.id = *next_field_id;
+                    *next_field_id += 1;
+                }
+                Self::assign_nested_ids(&mut key, next_field_id);
+
+                let mut value = map_type.value_field.as_ref().clone();
+                if value.id == 0 {
+                    value.id = *next_field_id;
+                    *next_field_id += 1;
+                }
+                Self::assign_nested_ids(&mut value, next_field_id);
+
+                *ty = Type::Map(MapType::new(Arc::new(key), Arc::new(value)));
+            }
+            Type::Primitive(_) => {}
+        }
+    }
+
+    fn reuse_nested_ids_from_existing(
+        existing: &NestedField,
+        candidate: &mut NestedField,
+        next_field_id: &mut i32,
+    ) -> Result<()> {
+        match (&*existing.field_type, candidate.field_type.as_mut()) {
+            (Type::Struct(existing_struct), Type::Struct(candidate_struct)) => {
+                let mut updated_fields = Vec::with_capacity(candidate_struct.fields().len());
+                for child in candidate_struct.fields() {
+                    let mut new_child = child.as_ref().clone();
+                    if let Some(existing_child) = existing_struct.field_by_name(&new_child.name) {
+                        new_child.id = existing_child.id;
+                        Self::reuse_nested_ids_from_existing(
+                            existing_child.as_ref(),
+                            &mut new_child,
+                            next_field_id,
+                        )?;
+                    } else {
+                        if new_child.id == 0 {
+                            new_child.id = *next_field_id;
+                            *next_field_id += 1;
+                        }
+                        Self::assign_nested_ids(&mut new_child, next_field_id);
+                    }
+                    updated_fields.push(Arc::new(new_child));
+                }
+                candidate.field_type = Box::new(Type::Struct(StructType::new(updated_fields)));
+            }
+            (Type::List(existing_list), Type::List(candidate_list)) => {
+                let mut new_child = candidate_list.element_field.as_ref().clone();
+                new_child.id = existing_list.element_field.id;
+                Self::reuse_nested_ids_from_existing(
+                    existing_list.element_field.as_ref(),
+                    &mut new_child,
+                    next_field_id,
+                )?;
+                candidate.field_type = Box::new(Type::List(ListType::new(Arc::new(new_child))));
+            }
+            (Type::Map(existing_map), Type::Map(candidate_map)) => {
+                let mut new_key = candidate_map.key_field.as_ref().clone();
+                new_key.id = existing_map.key_field.id;
+                Self::reuse_nested_ids_from_existing(
+                    existing_map.key_field.as_ref(),
+                    &mut new_key,
+                    next_field_id,
+                )?;
+
+                let mut new_value = candidate_map.value_field.as_ref().clone();
+                new_value.id = existing_map.value_field.id;
+                Self::reuse_nested_ids_from_existing(
+                    existing_map.value_field.as_ref(),
+                    &mut new_value,
+                    next_field_id,
+                )?;
+
+                candidate.field_type = Box::new(Type::Map(MapType::new(
+                    Arc::new(new_key),
+                    Arc::new(new_value),
+                )));
+            }
+            _ => {}
+        }
+        Ok(())
     }
 
     fn overwrite_schema(
@@ -381,22 +686,29 @@ impl IcebergWriterExec {
                     field.name()
                 ))
             })?;
-            let reused_id = current_schema
-                .field_by_name(field.name())
-                .map(|existing| existing.id);
-            let field_id = if let Some(id) = reused_id {
-                id
+            let existing_field = current_schema.field_by_name(field.name());
+            let field_id = if let Some(existing) = existing_field {
+                existing.id
             } else {
                 let id = next_field_id;
                 next_field_id += 1;
                 id
             };
-            let nested = NestedField::new(
+            let mut nested = NestedField::new(
                 field_id,
                 field.name().clone(),
                 iceberg_type,
                 !field.is_nullable(),
             );
+            if let Some(existing) = existing_field {
+                Self::reuse_nested_ids_from_existing(
+                    existing.as_ref(),
+                    &mut nested,
+                    &mut next_field_id,
+                )?;
+            } else {
+                Self::assign_nested_ids(&mut nested, &mut next_field_id);
+            }
             if identifier_names.contains(field.name()) {
                 identifier_ids.push(field_id);
             }

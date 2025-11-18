@@ -3,7 +3,7 @@ import pyarrow as pa
 import pytest
 from pandas.testing import assert_frame_equal
 from pyiceberg.schema import Schema
-from pyiceberg.types import DoubleType, LongType, NestedField, StringType
+from pyiceberg.types import DoubleType, LongType, NestedField, StringType, StructType
 
 from pysail.tests.spark.utils import escape_sql_string_literal
 
@@ -164,12 +164,7 @@ def test_iceberg_merge_schema_append_adds_new_column(spark, sql_catalog):
             [(3, "carol", 30), (4, "dave", 34)],
             schema="id LONG, name STRING, age INT",
         )
-        (
-            evolved_df.write.format("iceberg")
-            .mode("append")
-            .option("mergeSchema", "true")
-            .save(table.location())
-        )
+        (evolved_df.write.format("iceberg").mode("append").option("mergeSchema", "true").save(table.location()))
 
         result_df = spark.read.format("iceberg").load(table.location()).sort("id")
         expected = pd.DataFrame(
@@ -206,6 +201,76 @@ def test_iceberg_merge_schema_missing_option_errors(spark, sql_catalog):
         sql_catalog.drop_table(identifier)
 
 
+def test_iceberg_merge_schema_nested_struct(spark, sql_catalog):
+    identifier = "default.merge_schema_nested_struct"
+    table = sql_catalog.create_table(
+        identifier=identifier,
+        schema=Schema(
+            NestedField(field_id=1, name="id", field_type=LongType(), required=False),
+            NestedField(
+                field_id=2,
+                name="payload",
+                field_type=StructType(NestedField(field_id=3, name="inner", field_type=LongType(), required=False)),
+                required=False,
+            ),
+        ),
+    )
+    try:
+        base_df = spark.createDataFrame(
+            [(1, (10,))],
+            schema="id LONG, payload STRUCT<inner: LONG>",
+        )
+        base_df.write.format("iceberg").mode("overwrite").save(table.location())
+
+        evolved_df = spark.createDataFrame(
+            [(2, (20, "note"))],
+            schema="id LONG, payload STRUCT<inner: LONG, extra: STRING>",
+        )
+        (evolved_df.write.format("iceberg").mode("append").option("mergeSchema", "true").save(table.location()))
+
+        result = (
+            spark.read.format("iceberg")
+            .load(table.location())
+            .orderBy("id")
+            .selectExpr("id", "payload.inner AS inner", "payload.extra AS extra")
+        )
+        expected = pd.DataFrame({"id": [1, 2], "inner": [10, 20], "extra": [None, "note"]})
+        pdf = result.toPandas()
+        assert_frame_equal(pdf, expected.astype(pdf.dtypes))
+    finally:
+        sql_catalog.drop_table(identifier)
+
+
+def test_iceberg_merge_schema_nested_struct_missing_option_errors(spark, sql_catalog):
+    identifier = "default.merge_schema_nested_struct_error"
+    table = sql_catalog.create_table(
+        identifier=identifier,
+        schema=Schema(
+            NestedField(field_id=1, name="id", field_type=LongType(), required=False),
+            NestedField(
+                field_id=2,
+                name="payload",
+                field_type=StructType(NestedField(field_id=3, name="inner", field_type=LongType(), required=False)),
+                required=False,
+            ),
+        ),
+    )
+    try:
+        spark.createDataFrame(
+            [(1, (10,))],
+            schema="id LONG, payload STRUCT<inner: LONG>",
+        ).write.format("iceberg").mode("overwrite").save(table.location())
+
+        evolved_df = spark.createDataFrame(
+            [(2, (20, "note"))],
+            schema="id LONG, payload STRUCT<inner: LONG, extra: STRING>",
+        )
+        with pytest.raises(Exception, match=r"(?i)mergeSchema"):
+            evolved_df.write.format("iceberg").mode("append").save(table.location())
+    finally:
+        sql_catalog.drop_table(identifier)
+
+
 def test_iceberg_overwrite_schema_replaces_columns(spark, sql_catalog):
     identifier = "default.overwrite_schema"
     table = sql_catalog.create_table(
@@ -216,9 +281,9 @@ def test_iceberg_overwrite_schema_replaces_columns(spark, sql_catalog):
         ),
     )
     try:
-        spark.createDataFrame([(1, "alice"), (2, "bob")], schema="id LONG, name STRING").write.format(
-            "iceberg"
-        ).mode("overwrite").save(table.location())
+        spark.createDataFrame([(1, "alice"), (2, "bob")], schema="id LONG, name STRING").write.format("iceberg").mode(
+            "overwrite"
+        ).save(table.location())
 
         replacement_df = spark.createDataFrame(
             [(10, True), (20, False)],
