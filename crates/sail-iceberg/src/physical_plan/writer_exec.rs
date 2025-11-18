@@ -11,6 +11,7 @@
 // limitations under the License.
 
 use std::any::Any;
+use std::collections::HashSet;
 use std::sync::Arc;
 
 use async_trait::async_trait;
@@ -32,10 +33,14 @@ use parquet::file::properties::WriterProperties;
 use sail_common_datafusion::datasource::PhysicalSinkMode;
 use url::Url;
 
-use crate::arrow_conversion::iceberg_schema_to_arrow;
+use crate::arrow_conversion::{
+    arrow_schema_to_iceberg, arrow_type_to_iceberg, iceberg_schema_to_arrow,
+};
+use crate::options::TableIcebergOptions;
 use crate::spec::partition::{UnboundPartitionField, UnboundPartitionSpec};
 use crate::spec::schema::Schema as IcebergSchema;
 use crate::spec::types::NestedField;
+use crate::spec::TableMetadata;
 use crate::utils::get_object_store_from_context;
 use crate::writer::config::WriterConfig;
 use crate::writer::table_writer::IcebergTableWriter;
@@ -47,8 +52,23 @@ pub struct IcebergWriterExec {
     partition_columns: Vec<String>,
     sink_mode: PhysicalSinkMode,
     table_exists: bool,
+    options: TableIcebergOptions,
     cache: PlanProperties,
 }
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum SchemaMode {
+    Merge,
+    Overwrite,
+}
+
+struct SchemaEvolutionOutcome {
+    iceberg_schema: IcebergSchema,
+    arrow_schema: Arc<Schema>,
+    changed: bool,
+}
+
+const UTC_ALIASES: &[&str] = &["UTC", "+00:00", "Etc/UTC", "Z"];
 
 impl IcebergWriterExec {
     pub fn new(
@@ -57,6 +77,7 @@ impl IcebergWriterExec {
         partition_columns: Vec<String>,
         sink_mode: PhysicalSinkMode,
         table_exists: bool,
+        options: TableIcebergOptions,
     ) -> Self {
         let schema = Arc::new(Schema::new(vec![Field::new("data", DataType::Utf8, true)]));
         let cache = PlanProperties::new(
@@ -71,6 +92,7 @@ impl IcebergWriterExec {
             partition_columns,
             sink_mode,
             table_exists,
+            options,
             cache,
         }
     }
@@ -91,8 +113,311 @@ impl IcebergWriterExec {
         self.table_exists
     }
 
+    pub fn options(&self) -> &TableIcebergOptions {
+        &self.options
+    }
+
     pub fn input(&self) -> &Arc<dyn ExecutionPlan> {
         &self.input
+    }
+
+    fn get_schema_mode(
+        options: &TableIcebergOptions,
+        sink_mode: &PhysicalSinkMode,
+    ) -> Result<Option<SchemaMode>> {
+        match (options.merge_schema, options.overwrite_schema) {
+            (true, true) => Err(DataFusionError::Plan(
+                "Cannot set both mergeSchema=true and overwriteSchema=true for Iceberg writes"
+                    .to_string(),
+            )),
+            (true, false) => Ok(Some(SchemaMode::Merge)),
+            (false, true) => {
+                if matches!(sink_mode, PhysicalSinkMode::Overwrite) {
+                    Ok(Some(SchemaMode::Overwrite))
+                } else {
+                    Err(DataFusionError::Plan(
+                        "overwriteSchema option can only be used with overwrite mode for Iceberg"
+                            .to_string(),
+                    ))
+                }
+            }
+            (false, false) => Ok(None),
+        }
+    }
+
+    fn resolve_data_dir(table_meta: &TableMetadata, table_url: &Url) -> String {
+        let data_dir = "data".to_string();
+        if let Some(val) = table_meta
+            .properties
+            .get("write.data.path")
+            .or_else(|| table_meta.properties.get("write.folder-storage.path"))
+        {
+            let raw = val.trim();
+            if !raw.is_empty() {
+                if let Ok(prop_url) = Url::parse(raw) {
+                    if prop_url.scheme() == table_url.scheme()
+                        && prop_url.host_str() == table_url.host_str()
+                    {
+                        let base_path = table_url.path().trim_end_matches('/');
+                        let prop_path = prop_url.path().trim_start_matches('/');
+                        let base_no_leading = base_path.trim_start_matches('/');
+                        if let Some(stripped) = prop_path.strip_prefix(base_no_leading) {
+                            let rel = stripped.trim_start_matches('/').trim_matches('/');
+                            if !rel.is_empty() {
+                                return rel.to_string();
+                            }
+                        }
+                    }
+                } else {
+                    let prop_path = raw;
+                    let base_path = table_url.path();
+                    if prop_path.starts_with('/') {
+                        if let Some(stripped) = prop_path
+                            .strip_prefix(base_path)
+                            .or_else(|| prop_path.strip_prefix(base_path.trim_start_matches('/')))
+                        {
+                            let rel = stripped.trim_start_matches('/').trim_matches('/');
+                            if !rel.is_empty() {
+                                return rel.to_string();
+                            }
+                        }
+                    } else {
+                        let rel = prop_path.trim_matches('/');
+                        if !rel.is_empty() {
+                            return rel.to_string();
+                        }
+                    }
+                }
+            }
+        }
+        data_dir
+    }
+
+    fn next_schema_id(table_meta: &TableMetadata) -> i32 {
+        table_meta
+            .schemas
+            .iter()
+            .map(|s| s.schema_id())
+            .max()
+            .unwrap_or(0)
+            + 1
+    }
+
+    fn handle_schema_evolution(
+        table_meta: &TableMetadata,
+        input_schema: &Schema,
+        mode: Option<SchemaMode>,
+    ) -> Result<SchemaEvolutionOutcome> {
+        let current_schema = table_meta.current_schema().cloned().ok_or_else(|| {
+            DataFusionError::Plan("No current schema in Iceberg table metadata".to_string())
+        })?;
+
+        match mode {
+            Some(SchemaMode::Merge) => {
+                Self::merge_schema(table_meta, &current_schema, input_schema)
+            }
+            Some(SchemaMode::Overwrite) => {
+                Self::overwrite_schema(table_meta, &current_schema, input_schema)
+            }
+            None => {
+                let arrow_schema = Arc::new(iceberg_schema_to_arrow(&current_schema)?);
+                Self::validate_exact_schema(arrow_schema.as_ref(), input_schema)?;
+                Ok(SchemaEvolutionOutcome {
+                    iceberg_schema: current_schema,
+                    arrow_schema,
+                    changed: false,
+                })
+            }
+        }
+    }
+
+    fn validate_exact_schema(table_schema: &Schema, input_schema: &Schema) -> Result<()> {
+        if table_schema.fields().len() != input_schema.fields().len() {
+            return Err(DataFusionError::Plan(
+                "Input data schema does not match Iceberg table schema. Set mergeSchema=true to add columns or overwriteSchema=true to replace the schema."
+                    .to_string(),
+            ));
+        }
+        Self::validate_existing_columns(table_schema, input_schema)
+    }
+
+    fn validate_existing_columns(table_schema: &Schema, input_schema: &Schema) -> Result<()> {
+        for field in table_schema.fields() {
+            let candidate = input_schema.field_with_name(field.name()).map_err(|_| {
+                DataFusionError::Plan(format!(
+                    "Column '{}' missing from input data. Set mergeSchema=true or overwriteSchema=true to evolve the schema.",
+                    field.name()
+                ))
+            })?;
+            if !Self::field_types_compatible(field, candidate) {
+                return Err(DataFusionError::Plan(format!(
+                    "Column '{}' has type {:?} in the table but {:?} in the input data. Use overwriteSchema=true to replace the schema.",
+                    field.name(),
+                    field.data_type(),
+                    candidate.data_type(),
+                )));
+            }
+        }
+        Ok(())
+    }
+
+    fn field_types_compatible(table_field: &Field, input_field: &Field) -> bool {
+        let table_type = table_field.data_type();
+        let input_type = input_field.data_type();
+
+        if table_type == input_type {
+            return true;
+        }
+
+        matches!(
+            (table_type, input_type),
+            (
+                DataType::Timestamp(table_unit, table_tz),
+                DataType::Timestamp(input_unit, input_tz)
+            ) if table_unit == input_unit
+                && Self::timestamp_timezone_compatible(table_tz, input_tz)
+        )
+    }
+
+    fn timestamp_timezone_compatible(
+        table_tz: &Option<std::sync::Arc<str>>,
+        input_tz: &Option<std::sync::Arc<str>>,
+    ) -> bool {
+        match (table_tz.as_deref(), input_tz.as_deref()) {
+            (None, None) => true,
+            (Some(a), Some(b)) => Self::tz_alias_eq(a, b),
+            (None, Some(tz)) | (Some(tz), None) => Self::is_utc_alias(tz),
+        }
+    }
+
+    fn tz_alias_eq(lhs: &str, rhs: &str) -> bool {
+        lhs == rhs || (Self::is_utc_alias(lhs) && Self::is_utc_alias(rhs))
+    }
+
+    fn is_utc_alias(tz: &str) -> bool {
+        UTC_ALIASES
+            .iter()
+            .any(|alias| alias.eq_ignore_ascii_case(tz.trim()))
+    }
+
+    fn merge_schema(
+        table_meta: &TableMetadata,
+        current_schema: &IcebergSchema,
+        input_schema: &Schema,
+    ) -> Result<SchemaEvolutionOutcome> {
+        let current_arrow = Arc::new(iceberg_schema_to_arrow(current_schema)?);
+        Self::validate_existing_columns(current_arrow.as_ref(), input_schema)?;
+
+        let mut next_field_id = table_meta.last_column_id + 1;
+        let mut additional_fields = Vec::new();
+        for field in input_schema.fields() {
+            if current_schema.field_by_name(field.name()).is_some() {
+                continue;
+            }
+            let iceberg_type = arrow_type_to_iceberg(field.data_type()).map_err(|e| {
+                DataFusionError::Plan(format!(
+                    "Failed to convert column '{}' to an Iceberg type: {e}",
+                    field.name()
+                ))
+            })?;
+            let nested = NestedField::new(
+                next_field_id,
+                field.name().clone(),
+                iceberg_type,
+                !field.is_nullable(),
+            );
+            additional_fields.push(Arc::new(nested));
+            next_field_id += 1;
+        }
+
+        if additional_fields.is_empty() {
+            return Ok(SchemaEvolutionOutcome {
+                iceberg_schema: current_schema.clone(),
+                arrow_schema: current_arrow,
+                changed: false,
+            });
+        }
+
+        let mut merged_fields: Vec<_> = current_schema.fields().iter().cloned().collect();
+        merged_fields.extend(additional_fields.into_iter());
+        let mut builder = IcebergSchema::builder()
+            .with_schema_id(Self::next_schema_id(table_meta))
+            .with_fields(merged_fields);
+        let identifiers: Vec<i32> = current_schema.identifier_field_ids().collect();
+        if !identifiers.is_empty() {
+            builder = builder.with_identifier_field_ids(identifiers);
+        }
+        let new_schema = builder
+            .build()
+            .map_err(|e| DataFusionError::Plan(format!("Failed to build merged schema: {e}")))?;
+        let arrow_schema = Arc::new(iceberg_schema_to_arrow(&new_schema)?);
+        Ok(SchemaEvolutionOutcome {
+            iceberg_schema: new_schema,
+            arrow_schema,
+            changed: true,
+        })
+    }
+
+    fn overwrite_schema(
+        table_meta: &TableMetadata,
+        current_schema: &IcebergSchema,
+        input_schema: &Schema,
+    ) -> Result<SchemaEvolutionOutcome> {
+        let mut identifier_names = HashSet::new();
+        for id in current_schema.identifier_field_ids() {
+            if let Some(name) = current_schema.name_by_field_id(id) {
+                identifier_names.insert(name.to_string());
+            }
+        }
+
+        let mut identifier_ids = Vec::new();
+        let mut next_field_id = table_meta.last_column_id + 1;
+        let mut new_fields = Vec::new();
+
+        for field in input_schema.fields() {
+            let iceberg_type = arrow_type_to_iceberg(field.data_type()).map_err(|e| {
+                DataFusionError::Plan(format!(
+                    "Failed to convert column '{}' to an Iceberg type: {e}",
+                    field.name()
+                ))
+            })?;
+            let reused_id = current_schema
+                .field_by_name(field.name())
+                .map(|existing| existing.id);
+            let field_id = if let Some(id) = reused_id {
+                id
+            } else {
+                let id = next_field_id;
+                next_field_id += 1;
+                id
+            };
+            let nested = NestedField::new(
+                field_id,
+                field.name().clone(),
+                iceberg_type,
+                !field.is_nullable(),
+            );
+            if identifier_names.contains(field.name()) {
+                identifier_ids.push(field_id);
+            }
+            new_fields.push(Arc::new(nested));
+        }
+
+        let mut builder = IcebergSchema::builder()
+            .with_schema_id(Self::next_schema_id(table_meta))
+            .with_fields(new_fields);
+        if !identifier_ids.is_empty() {
+            builder = builder.with_identifier_field_ids(identifier_ids);
+        }
+        let new_schema = builder.build().map_err(|e| {
+            DataFusionError::Plan(format!("Failed to build overwritten schema: {e}"))
+        })?;
+        let arrow_schema = Arc::new(iceberg_schema_to_arrow(&new_schema)?);
+        Ok(SchemaEvolutionOutcome {
+            iceberg_schema: new_schema,
+            arrow_schema,
+            changed: true,
+        })
     }
 }
 
@@ -131,6 +456,7 @@ impl ExecutionPlan for IcebergWriterExec {
             self.partition_columns.clone(),
             self.sink_mode.clone(),
             self.table_exists,
+            self.options.clone(),
         )))
     }
 
@@ -156,7 +482,8 @@ impl ExecutionPlan for IcebergWriterExec {
         let partition_columns = self.partition_columns.clone();
         let sink_mode = self.sink_mode.clone();
         let table_exists = self.table_exists;
-        let _input_schema = self.input.schema();
+        let input_schema = self.input.schema();
+        let schema_mode = Self::get_schema_mode(&self.options, &sink_mode)?;
 
         let schema = self.schema();
         let future = async move {
@@ -188,6 +515,7 @@ impl ExecutionPlan for IcebergWriterExec {
             }
 
             let object_store = get_object_store_from_context(&context, &table_url)?;
+            let input_schema = input_schema.clone();
 
             fn assign_top_level_field_ids(schema: &IcebergSchema) -> IcebergSchema {
                 let mut new_fields: Vec<std::sync::Arc<NestedField>> = Vec::new();
@@ -215,104 +543,72 @@ impl ExecutionPlan for IcebergWriterExec {
                     .unwrap_or_else(|_| schema.clone())
             }
 
-            let (iceberg_schema, default_spec, data_dir, spec_id_val) = if table_exists {
-                // Load table metadata directly from object store
-                let latest_meta = super::super::table_format::find_latest_metadata_file(
-                    &object_store,
-                    &table_url,
-                )
-                .await
-                .map_err(|e| DataFusionError::External(Box::new(e)))?;
-                let meta_path = object_store::path::Path::from(latest_meta.as_str());
-                let bytes = object_store
-                    .get(&meta_path)
-                    .await
-                    .map_err(|e| DataFusionError::External(Box::new(e)))?
-                    .bytes()
+            let (iceberg_schema, table_schema, default_spec, data_dir, spec_id_val, commit_schema) =
+                if table_exists {
+                    let latest_meta = super::super::table_format::find_latest_metadata_file(
+                        &object_store,
+                        &table_url,
+                    )
                     .await
                     .map_err(|e| DataFusionError::External(Box::new(e)))?;
-                let table_meta = crate::spec::TableMetadata::from_json(&bytes)
-                    .map_err(|e| DataFusionError::External(Box::new(e)))?;
-                let iceberg_schema = table_meta.current_schema().cloned().ok_or_else(|| {
-                    DataFusionError::Plan("No current schema in table metadata".to_string())
-                })?;
-                let default_spec = table_meta.default_partition_spec().cloned();
-                // Derive data dir from properties when possible, else default to "data"
-                let mut data_dir = "data".to_string();
-                if let Some(val) = table_meta
-                    .properties
-                    .get("write.data.path")
-                    .or_else(|| table_meta.properties.get("write.folder-storage.path"))
-                {
-                    let raw = val.trim();
-                    if !raw.is_empty() {
-                        // Try parse as URL first
-                        if let Ok(prop_url) = url::Url::parse(raw) {
-                            if prop_url.scheme() == table_url.scheme()
-                                && prop_url.host_str() == table_url.host_str()
-                            {
-                                let base_path = table_url.path().trim_end_matches('/');
-                                let prop_path = prop_url.path().trim_start_matches('/');
-                                let base_no_leading = base_path.trim_start_matches('/');
-                                if let Some(stripped) = prop_path.strip_prefix(base_no_leading) {
-                                    let rel = stripped.trim_start_matches('/').trim_matches('/');
-                                    if !rel.is_empty() {
-                                        data_dir = rel.to_string();
-                                    }
-                                }
-                            }
-                        } else {
-                            // If absolute filesystem path or relative
-                            let prop_path = raw;
-                            let base_path = table_url.path();
-                            if prop_path.starts_with('/') {
-                                if let Some(stripped) =
-                                    prop_path.strip_prefix(base_path).or_else(|| {
-                                        prop_path.strip_prefix(base_path.trim_start_matches('/'))
-                                    })
-                                {
-                                    let rel = stripped.trim_start_matches('/').trim_matches('/');
-                                    if !rel.is_empty() {
-                                        data_dir = rel.to_string();
-                                    }
-                                }
-                            } else {
-                                // treat as relative to table root
-                                data_dir = prop_path.trim_matches('/').to_string();
-                            }
+                    let meta_path = object_store::path::Path::from(latest_meta.as_str());
+                    let bytes = object_store
+                        .get(&meta_path)
+                        .await
+                        .map_err(|e| DataFusionError::External(Box::new(e)))?
+                        .bytes()
+                        .await
+                        .map_err(|e| DataFusionError::External(Box::new(e)))?;
+                    let table_meta = TableMetadata::from_json(&bytes)
+                        .map_err(|e| DataFusionError::External(Box::new(e)))?;
+                    let data_dir = Self::resolve_data_dir(&table_meta, &table_url);
+                    let schema_outcome = Self::handle_schema_evolution(
+                        &table_meta,
+                        input_schema.as_ref(),
+                        schema_mode,
+                    )?;
+                    let default_spec = table_meta.default_partition_spec().cloned();
+                    let spec_id_val = default_spec.as_ref().map(|s| s.spec_id()).unwrap_or(0);
+                    let commit_schema = schema_outcome
+                        .changed
+                        .then(|| schema_outcome.iceberg_schema.clone());
+                    (
+                        schema_outcome.iceberg_schema,
+                        schema_outcome.arrow_schema,
+                        default_spec,
+                        data_dir,
+                        spec_id_val,
+                        commit_schema,
+                    )
+                } else {
+                    // derive schema/spec from input for new-table overwrite
+                    let input_arrow_schema = input_schema.as_ref().clone();
+                    let mut iceberg_schema = arrow_schema_to_iceberg(&input_arrow_schema)?;
+                    iceberg_schema = assign_top_level_field_ids(&iceberg_schema);
+                    if iceberg_schema.fields().iter().any(|f| f.id == 0) {
+                        return Err(DataFusionError::Plan(
+                            "Invalid Iceberg schema: field id 0 detected after assignment"
+                                .to_string(),
+                        ));
+                    }
+                    let mut builder = crate::spec::partition::PartitionSpec::builder();
+                    use crate::spec::transform::Transform;
+                    for name in &partition_columns {
+                        if let Some(fid) = iceberg_schema.field_id_by_name(name) {
+                            builder = builder.add_field(fid, name.clone(), Transform::Identity);
                         }
                     }
-                }
-                let sid = default_spec.as_ref().map(|s| s.spec_id()).unwrap_or(0);
-                (iceberg_schema, default_spec, data_dir, sid)
-            } else {
-                // derive schema/spec from input for new-table overwrite
-                let input_arrow_schema = _input_schema.clone().as_ref().clone();
-                let mut iceberg_schema =
-                    crate::arrow_conversion::arrow_schema_to_iceberg(&input_arrow_schema)?;
-                // Ensure valid, non-zero, unique field ids for top-level fields
-                iceberg_schema = assign_top_level_field_ids(&iceberg_schema);
-                // Validate that no field ids remain zero after assignment
-                // Although this should never happen since ``assign_top_level_field_ids`` assigns IDs to all fields.
-                // TODO: Consider removing this check.
-                if iceberg_schema.fields().iter().any(|f| f.id == 0) {
-                    return Err(DataFusionError::Plan(
-                        "Invalid Iceberg schema: field id 0 detected after assignment".to_string(),
-                    ));
-                }
-                // build identity partition spec from partition_columns
-                let mut builder = crate::spec::partition::PartitionSpec::builder();
-                use crate::spec::transform::Transform;
-                for name in &partition_columns {
-                    if let Some(fid) = iceberg_schema.field_id_by_name(name) {
-                        builder = builder.add_field(fid, name.clone(), Transform::Identity);
-                    }
-                }
-                let spec = builder.build();
-                let sid = spec.spec_id();
-                (iceberg_schema, Some(spec), "data".to_string(), sid)
-            };
-            let table_schema = Arc::new(iceberg_schema_to_arrow(&iceberg_schema)?);
+                    let spec = builder.build();
+                    let sid = spec.spec_id();
+                    (
+                        iceberg_schema.clone(),
+                        Arc::new(iceberg_schema_to_arrow(&iceberg_schema)?),
+                        Some(spec),
+                        "data".to_string(),
+                        sid,
+                        Some(iceberg_schema),
+                    )
+                };
 
             // Build unbound partition spec from bound spec if present
             let unbound_spec = if let Some(spec) = default_spec.as_ref() {
@@ -368,7 +664,7 @@ impl ExecutionPlan for IcebergWriterExec {
 
             let data_files = writer.close().await.map_err(DataFusionError::Execution)?;
 
-            let mut info = crate::physical_plan::commit::IcebergCommitInfo {
+            let info = crate::physical_plan::commit::IcebergCommitInfo {
                 table_uri: table_url.to_string(),
                 row_count: total_rows,
                 data_files,
@@ -381,14 +677,13 @@ impl ExecutionPlan for IcebergWriterExec {
                 } else {
                     crate::spec::Operation::Append
                 },
-                schema: None,
-                partition_spec: None,
+                schema: commit_schema.clone(),
+                partition_spec: if !table_exists {
+                    default_spec.clone()
+                } else {
+                    None
+                },
             };
-            if !table_exists {
-                // include schema/spec for bootstrap overwrite
-                info.schema = Some(iceberg_schema.clone());
-                info.partition_spec = default_spec.clone();
-            }
             let json =
                 serde_json::to_string(&info).map_err(|e| DataFusionError::External(Box::new(e)))?;
             let array = Arc::new(StringArray::from(vec![json]));

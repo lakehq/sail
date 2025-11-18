@@ -38,7 +38,7 @@ use crate::physical_plan::commit::bootstrap::{
 use crate::physical_plan::commit::IcebergCommitInfo;
 use crate::spec::catalog::TableUpdate;
 use crate::spec::metadata::table_metadata::SnapshotLog;
-use crate::spec::TableMetadata;
+use crate::spec::{Schema as IcebergSchema, TableMetadata};
 use crate::transaction::{SnapshotProduceOperation, Transaction, TransactionAction};
 use crate::utils::get_object_store_from_context;
 
@@ -75,6 +75,26 @@ impl IcebergCommitExec {
 
     pub fn input(&self) -> &Arc<dyn ExecutionPlan> {
         &self.input
+    }
+
+    fn apply_schema_update(table_meta: &mut TableMetadata, new_schema: IcebergSchema) {
+        let schema_id = new_schema.schema_id();
+        let highest_field_id = new_schema.highest_field_id();
+
+        let mut replaced = false;
+        for schema in table_meta.schemas.iter_mut() {
+            if schema.schema_id() == schema_id {
+                *schema = new_schema.clone();
+                replaced = true;
+                break;
+            }
+        }
+        if !replaced {
+            table_meta.schemas.push(new_schema.clone());
+        }
+
+        table_meta.current_schema_id = schema_id;
+        table_meta.last_column_id = table_meta.last_column_id.max(highest_field_id);
     }
 }
 
@@ -191,6 +211,9 @@ impl ExecutionPlan for IcebergCommitExec {
                 .map_err(|e| DataFusionError::External(Box::new(e)))?;
             let mut table_meta = TableMetadata::from_json(&bytes)
                 .map_err(|e| DataFusionError::External(Box::new(e)))?;
+            if let Some(new_schema) = commit_info.schema.clone() {
+                Self::apply_schema_update(&mut table_meta, new_schema);
+            }
             let maybe_snapshot = table_meta.current_snapshot().cloned();
             let schema_iceberg = table_meta.current_schema().cloned().ok_or_else(|| {
                 DataFusionError::Plan("No current schema in table metadata".to_string())

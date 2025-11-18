@@ -1,5 +1,6 @@
 import pandas as pd
 import pyarrow as pa
+import pytest
 from pandas.testing import assert_frame_equal
 from pyiceberg.schema import Schema
 from pyiceberg.types import DoubleType, LongType, NestedField, StringType
@@ -142,5 +143,97 @@ def test_iceberg_append_bootstrap_first_snapshot(spark, sql_catalog):
 
         table.refresh()
         assert table.current_snapshot() is not None
+    finally:
+        sql_catalog.drop_table(identifier)
+
+
+def test_iceberg_merge_schema_append_adds_new_column(spark, sql_catalog):
+    identifier = "default.merge_schema_append"
+    table = sql_catalog.create_table(
+        identifier=identifier,
+        schema=Schema(
+            NestedField(field_id=1, name="id", field_type=LongType(), required=False),
+            NestedField(field_id=2, name="name", field_type=StringType(), required=False),
+        ),
+    )
+    try:
+        base_df = spark.createDataFrame([(1, "alice"), (2, "bob")], schema="id LONG, name STRING")
+        base_df.write.format("iceberg").mode("overwrite").save(table.location())
+
+        evolved_df = spark.createDataFrame(
+            [(3, "carol", 30), (4, "dave", 34)],
+            schema="id LONG, name STRING, age INT",
+        )
+        (
+            evolved_df.write.format("iceberg")
+            .mode("append")
+            .option("mergeSchema", "true")
+            .save(table.location())
+        )
+
+        result_df = spark.read.format("iceberg").load(table.location()).sort("id")
+        expected = pd.DataFrame(
+            {
+                "id": [1, 2, 3, 4],
+                "name": ["alice", "bob", "carol", "dave"],
+                "age": [None, None, 30, 34],
+            }
+        )
+        pdf = result_df.toPandas()
+        assert_frame_equal(pdf, expected.astype(pdf.dtypes))
+    finally:
+        sql_catalog.drop_table(identifier)
+
+
+def test_iceberg_merge_schema_missing_option_errors(spark, sql_catalog):
+    identifier = "default.merge_schema_error"
+    table = sql_catalog.create_table(
+        identifier=identifier,
+        schema=Schema(
+            NestedField(field_id=1, name="id", field_type=LongType(), required=False),
+            NestedField(field_id=2, name="name", field_type=StringType(), required=False),
+        ),
+    )
+    try:
+        spark.createDataFrame([(1, "alice")], schema="id LONG, name STRING").write.format("iceberg").mode(
+            "overwrite"
+        ).save(table.location())
+
+        new_df = spark.createDataFrame([(2, "bob", 30)], schema="id LONG, name STRING, age INT")
+        with pytest.raises(Exception, match=r"(?i)mergeSchema"):
+            new_df.write.format("iceberg").mode("append").save(table.location())
+    finally:
+        sql_catalog.drop_table(identifier)
+
+
+def test_iceberg_overwrite_schema_replaces_columns(spark, sql_catalog):
+    identifier = "default.overwrite_schema"
+    table = sql_catalog.create_table(
+        identifier=identifier,
+        schema=Schema(
+            NestedField(field_id=1, name="id", field_type=LongType(), required=False),
+            NestedField(field_id=2, name="name", field_type=StringType(), required=False),
+        ),
+    )
+    try:
+        spark.createDataFrame([(1, "alice"), (2, "bob")], schema="id LONG, name STRING").write.format(
+            "iceberg"
+        ).mode("overwrite").save(table.location())
+
+        replacement_df = spark.createDataFrame(
+            [(10, True), (20, False)],
+            schema="user_id LONG, active BOOLEAN",
+        )
+        (
+            replacement_df.write.format("iceberg")
+            .mode("overwrite")
+            .option("overwriteSchema", "true")
+            .save(table.location())
+        )
+
+        result_df = spark.read.format("iceberg").load(table.location()).sort("user_id")
+        expected = pd.DataFrame({"user_id": [10, 20], "active": [True, False]})
+        pdf = result_df.toPandas()
+        assert_frame_equal(pdf, expected.astype(pdf.dtypes))
     finally:
         sql_catalog.drop_table(identifier)
