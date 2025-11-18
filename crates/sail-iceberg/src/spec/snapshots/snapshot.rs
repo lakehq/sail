@@ -240,7 +240,7 @@ impl SnapshotBuilder {
             snapshot_id: UNASSIGNED_SNAPSHOT_ID,
             parent_snapshot_id: None,
             sequence_number: 0,
-            timestamp_ms: chrono::Utc::now().timestamp_millis(),
+            timestamp_ms: crate::utils::timestamp::monotonic_timestamp_ms(),
             manifest_list: None,
             summary: None,
             schema_id: None,

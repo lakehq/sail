@@ -3,7 +3,6 @@ use std::sync::Arc;
 use async_trait::async_trait;
 use datafusion::catalog::{Session, TableProvider};
 use datafusion::common::Result;
-use datafusion::datasource::listing::ListingTableUrl;
 use datafusion::physical_plan::ExecutionPlan;
 use sail_common_datafusion::datasource::{SinkInfo, SourceInfo, TableFormat};
 use sail_iceberg::TableIcebergOptions;
@@ -123,13 +122,28 @@ impl TableFormat for IcebergDataSourceFormat {
 
 impl IcebergDataSourceFormat {
     async fn parse_table_url(ctx: &dyn Session, paths: Vec<String>) -> Result<Url> {
-        let mut urls = crate::url::resolve_listing_urls(ctx, paths.clone()).await?;
-        match (urls.pop(), urls.is_empty()) {
-            (Some(path), true) => Ok(<ListingTableUrl as AsRef<Url>>::as_ref(&path).clone()),
-            _ => {
-                datafusion::common::plan_err!("expected a single path for Iceberg table: {paths:?}")
-            }
+        if paths.len() != 1 {
+            return datafusion::common::plan_err!(
+                "Iceberg table requires exactly one path, got {}",
+                paths.len()
+            );
         }
+
+        let path = &paths[0];
+        let mut table_url = Url::parse(path)
+            .map_err(|e| datafusion::common::DataFusionError::External(Box::new(e)))?;
+
+        if !table_url.path().ends_with('/') {
+            table_url.set_path(&format!("{}/", table_url.path()));
+        }
+
+        let _object_store = ctx
+            .runtime_env()
+            .object_store_registry
+            .get_store(&table_url)
+            .map_err(|e| datafusion::common::DataFusionError::External(Box::new(e)))?;
+
+        Ok(table_url)
     }
 }
 

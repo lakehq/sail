@@ -43,20 +43,6 @@ IBIS_MARKERS = [
 ]
 
 
-def patch_ibis_spark_session():
-    from ibis.backends.pyspark.tests.conftest import TestConf, TestConfForStreaming
-
-    def connect(*, tmpdir, worker_id, **kw):  # noqa: ARG001
-        import ibis
-        from pyspark.sql import SparkSession
-
-        spark = SparkSession.builder.getOrCreate()
-        return ibis.pyspark.connect(spark, **kw)
-
-    TestConf.connect = staticmethod(connect)
-    TestConfForStreaming.connect = staticmethod(connect)
-
-
 def _resolve_data_volume() -> str:
     env_var = "IBIS_TESTING_DATA_DIR"
     data_dir = os.environ.get(env_var)

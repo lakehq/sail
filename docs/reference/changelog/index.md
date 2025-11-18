@@ -5,6 +5,34 @@ next: false
 
 # Changelog
 
+## 0.4.2
+
+_November 13, 2025_
+
+- Supported column mapping for Delta Lake ([#985](https://github.com/lakehq/sail/pull/985)).
+- Supported time travel for Iceberg ([#1039](https://github.com/lakehq/sail/pull/1039)).
+- Supported Unity Catalog ([#1005](https://github.com/lakehq/sail/pull/1005)).
+- Improved Iceberg integration ([#1006](https://github.com/lakehq/sail/pull/1006), [#1009](https://github.com/lakehq/sail/pull/1009), and [#1042](https://github.com/lakehq/sail/pull/1042)).
+- Added the `luhn_check` SQL function ([#909](https://github.com/lakehq/sail/pull/909)).
+- Improved the following SQL functions ([#909](https://github.com/lakehq/sail/pull/909) and [#1024](https://github.com/lakehq/sail/pull/1024)):
+  - `bit_count`
+  - `bit_get`
+  - `getbit`
+  - `crc32`
+  - `sha`
+  - `sha1`
+  - `expm1`
+  - `pmod`
+  - `width_bucket`
+  - `bitmap_count`
+  - `to_date`
+- Added the `try_avg` SQL aggregate function ([#1012](https://github.com/lakehq/sail/pull/1012)).
+- Supported the `try_sum` and `try_avg` SQL aggregate functions in window expressions ([#1040](https://github.com/lakehq/sail/pull/1040)).
+
+### Contributors
+
+Huge thanks to [@davidlghellin](https://github.com/davidlghellin) for the contribution!
+
 ## 0.4.1
 
 _November 2, 2025_
