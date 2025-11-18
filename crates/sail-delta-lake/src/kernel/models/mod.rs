@@ -17,29 +17,19 @@ mod metadata;
 mod protocol;
 mod scalars;
 
-#[allow(unused_imports)]
 pub use actions::{
-    Action, Add, AddCDCFile, CheckpointMetadata, ColumnCountStat, ColumnValueStat, CommitInfo,
-    DeletionVectorDescriptor, DomainMetadata, IsolationLevel, Remove, Sidecar, Stats, StorageType,
-    Transaction,
+    Action, Add, ColumnCountStat, ColumnValueStat, CommitInfo, DeletionVectorDescriptor, Remove,
+    Stats, StorageType, Transaction,
 };
-#[allow(unused_imports)]
 pub use delta_kernel::actions::{Metadata, Protocol};
-#[allow(unused_imports)]
-pub use delta_kernel::expressions::Scalar;
-#[allow(unused_imports)]
 pub use delta_kernel::schema::{
-    ColumnMetadataKey, DataType, MetadataValue, Schema, SchemaRef, StructField, StructType,
+    ColumnMetadataKey, DataType, MetadataValue, Schema, StructField, StructType,
 };
-#[allow(unused_imports)]
 pub use metadata::{new_metadata, MetadataExt};
-#[allow(unused_imports)]
-pub use protocol::ProtocolExt;
-#[allow(unused_imports)]
-pub use scalars::{ScalarExt, NULL_PARTITION_VALUE_DATA_PATH};
+pub use scalars::ScalarExt;
 
+// [Credit]: <https://github.com/delta-io/delta-rs/blob/5575ad16bf641420404611d65f4ad7626e9acb16/crates/core/src/kernel/models/actions.rs>
 /// Checks if any field (including nested) in the provided iterator is a `timestampNtz`.
-#[allow(dead_code)]
 pub fn contains_timestampntz<'a>(mut fields: impl Iterator<Item = &'a StructField>) -> bool {
     fn has_timestamp(dtype: &DataType) -> bool {
         match dtype {

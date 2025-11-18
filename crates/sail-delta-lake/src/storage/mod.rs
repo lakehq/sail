@@ -16,10 +16,10 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-//! Local log store abstraction backed by `object_store`. This allows the rest of the crate to avoid
-//! depending directly on the upstream delta-rs plumbing while we migrate functionality into
-//! kernel-native abstractions.
+//! Local log store abstraction backed by `object_store`.
 
+// [Credit]: <https://github.com/delta-io/delta-rs/blob/5575ad16bf641420404611d65f4ad7626e9acb16/crates/core/src/logstore/mod.rs>
+// [Credit]: <https://github.com/delta-io/delta-rs/blob/5575ad16bf641420404611d65f4ad7626e9acb16/crates/core/src/logstore/default_logstore.rs>
 use std::sync::{Arc, LazyLock};
 
 use async_trait::async_trait;
@@ -52,6 +52,7 @@ pub type LogStoreRef = Arc<dyn LogStore>;
 
 const DELTA_LOG_FOLDER: &str = "_delta_log";
 static DELTA_LOG_PATH: LazyLock<Path> = LazyLock::new(|| Path::from(DELTA_LOG_FOLDER));
+#[allow(clippy::expect_used)]
 static DUMMY_TABLE_ROOT: LazyLock<Url> =
     LazyLock::new(|| Url::parse("memory:///").expect("memory URI must be valid"));
 
