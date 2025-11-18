@@ -14,6 +14,8 @@ use datafusion::datasource::physical_plan::{
 use datafusion::datasource::sink::DataSinkExec;
 use datafusion::datasource::source::{DataSource, DataSourceExec};
 use datafusion::execution::FunctionRegistry;
+use datafusion::functions::core::greatest::GreatestFunc;
+use datafusion::functions::core::least::LeastFunc;
 use datafusion::functions::string::overlay::OverlayFunc;
 use datafusion::logical_expr::{AggregateUDF, AggregateUDFImpl, ScalarUDF, ScalarUDFImpl};
 use datafusion::physical_expr::{LexOrdering, LexRequirement, PhysicalSortExpr};
@@ -98,7 +100,6 @@ use sail_function::scalar::hash::spark_xxhash64::SparkXxhash64;
 use sail_function::scalar::map::map_from_arrays::MapFromArrays;
 use sail_function::scalar::map::map_from_entries::MapFromEntries;
 use sail_function::scalar::map::str_to_map::StrToMap;
-use sail_function::scalar::math::least_greatest::{Greatest, Least};
 use sail_function::scalar::math::rand_poisson::RandPoisson;
 use sail_function::scalar::math::randn::Randn;
 use sail_function::scalar::math::random::Random;
@@ -1320,8 +1321,8 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
             "arrays_zip" => Ok(Arc::new(ScalarUDF::from(ArraysZip::new()))),
             "bitmap_count" => Ok(Arc::new(ScalarUDF::from(BitmapCount::new()))),
             "convert_tz" => Ok(Arc::new(ScalarUDF::from(ConvertTz::new()))),
-            "greatest" => Ok(Arc::new(ScalarUDF::from(Greatest::new()))),
-            "least" => Ok(Arc::new(ScalarUDF::from(Least::new()))),
+            "greatest" => Ok(Arc::new(ScalarUDF::from(GreatestFunc::new()))),
+            "least" => Ok(Arc::new(ScalarUDF::from(LeastFunc::new()))),
             "levenshtein" => Ok(Arc::new(ScalarUDF::from(Levenshtein::new()))),
             "make_valid_utf8" => Ok(Arc::new(ScalarUDF::from(MakeValidUtf8::new()))),
             "map_from_arrays" => Ok(Arc::new(ScalarUDF::from(MapFromArrays::new()))),
@@ -1452,8 +1453,8 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
             || node_inner.is::<ArraysZip>()
             || node_inner.is::<BitmapCount>()
             || node_inner.is::<ConvertTz>()
-            || node_inner.is::<Greatest>()
-            || node_inner.is::<Least>()
+            || node_inner.is::<GreatestFunc>()
+            || node_inner.is::<LeastFunc>()
             || node_inner.is::<Levenshtein>()
             || node_inner.is::<MakeValidUtf8>()
             || node_inner.is::<MapFromArrays>()
