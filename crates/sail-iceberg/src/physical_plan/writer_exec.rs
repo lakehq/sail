@@ -240,7 +240,9 @@ impl IcebergWriterExec {
                     field.name()
                 ))
             })?;
-            if !Self::field_types_equivalent(table_field.data_type(), field.data_type()) {
+            if !Self::field_types_equivalent(table_field.data_type(), field.data_type())
+                && !Self::is_safe_write_cast(table_field.data_type(), field.data_type())
+            {
                 return Err(DataFusionError::Plan(format!(
                     "Column '{}' has type {:?} in the table but {:?} in the input data. Set mergeSchema=true to allow schema evolution or overwriteSchema=true to replace the schema.",
                     field.name(),
@@ -289,6 +291,13 @@ impl IcebergWriterExec {
         ) || Self::decimal_precision_expands(table_type, input_type)
     }
 
+    fn is_safe_write_cast(table_type: &DataType, input_type: &DataType) -> bool {
+        matches!(
+            (table_type, input_type),
+            (DataType::Int64, DataType::Int32) | (DataType::Float64, DataType::Float32)
+        ) || Self::decimal_precision_contracts(table_type, input_type)
+    }
+
     fn decimal_precision_expands(table_type: &DataType, input_type: &DataType) -> bool {
         match (table_type, input_type) {
             (DataType::Decimal128(old_p, old_s), DataType::Decimal128(new_p, new_s))
@@ -303,6 +312,27 @@ impl IcebergWriterExec {
             }
             (DataType::Decimal256(old_p, old_s), DataType::Decimal256(new_p, new_s))
                 if new_s == old_s && new_p >= old_p =>
+            {
+                true
+            }
+            _ => false,
+        }
+    }
+
+    fn decimal_precision_contracts(table_type: &DataType, input_type: &DataType) -> bool {
+        match (table_type, input_type) {
+            (DataType::Decimal128(table_p, table_s), DataType::Decimal128(input_p, input_s))
+                if table_s == input_s && table_p >= input_p =>
+            {
+                true
+            }
+            (DataType::Decimal256(table_p, table_s), DataType::Decimal256(input_p, input_s))
+                if table_s == input_s && table_p >= input_p =>
+            {
+                true
+            }
+            (DataType::Decimal256(table_p, table_s), DataType::Decimal128(input_p, input_s))
+                if table_s == input_s && table_p >= input_p =>
             {
                 true
             }
@@ -601,6 +631,50 @@ impl IcebergWriterExec {
         Self::assign_type_ids(field.field_type.as_mut(), next_field_id);
     }
 
+    fn assign_schema_field_ids(schema: &IcebergSchema) -> Result<IcebergSchema> {
+        let mut next_field_id = 1;
+        let mut new_fields = Vec::with_capacity(schema.fields().len());
+        for field in schema.fields() {
+            let mut cloned = field.as_ref().clone();
+            Self::reassign_ids_recursive(&mut cloned, &mut next_field_id);
+            new_fields.push(Arc::new(cloned));
+        }
+        IcebergSchema::builder()
+            .with_fields(new_fields)
+            .build()
+            .map_err(|e| DataFusionError::Plan(format!("Failed to assign Iceberg field ids: {e}")))
+    }
+
+    fn reassign_ids_recursive(field: &mut NestedField, next_field_id: &mut i32) {
+        field.id = *next_field_id;
+        *next_field_id += 1;
+        match field.field_type.as_ref() {
+            Type::Struct(struct_type) => {
+                let mut updated = Vec::with_capacity(struct_type.fields().len());
+                for child in struct_type.fields() {
+                    let mut nested = child.as_ref().clone();
+                    Self::reassign_ids_recursive(&mut nested, next_field_id);
+                    updated.push(Arc::new(nested));
+                }
+                field.field_type = Box::new(Type::Struct(StructType::new(updated)));
+            }
+            Type::List(list_type) => {
+                let mut element = list_type.element_field.as_ref().clone();
+                Self::reassign_ids_recursive(&mut element, next_field_id);
+                field.field_type = Box::new(Type::List(ListType::new(Arc::new(element))));
+            }
+            Type::Map(map_type) => {
+                let mut key = map_type.key_field.as_ref().clone();
+                Self::reassign_ids_recursive(&mut key, next_field_id);
+                let mut value = map_type.value_field.as_ref().clone();
+                Self::reassign_ids_recursive(&mut value, next_field_id);
+                field.field_type =
+                    Box::new(Type::Map(MapType::new(Arc::new(key), Arc::new(value))));
+            }
+            _ => {}
+        }
+    }
+
     fn assign_type_ids(ty: &mut Type, next_field_id: &mut i32) {
         match ty {
             Type::Struct(struct_type) => {
@@ -877,32 +951,6 @@ impl ExecutionPlan for IcebergWriterExec {
             let object_store = get_object_store_from_context(&context, &table_url)?;
             let input_schema = input_schema.clone();
 
-            fn assign_top_level_field_ids(schema: &IcebergSchema) -> IcebergSchema {
-                let mut new_fields: Vec<std::sync::Arc<NestedField>> = Vec::new();
-                for (i, f) in schema.fields().iter().enumerate() {
-                    let mut newf = NestedField::new(
-                        (i as i32) + 1,
-                        f.name.clone(),
-                        (*f.field_type).clone(),
-                        f.required,
-                    );
-                    if let Some(doc) = &f.doc {
-                        newf = newf.with_doc(doc.clone());
-                    }
-                    if let Some(init) = &f.initial_default {
-                        newf = newf.with_initial_default(init.clone());
-                    }
-                    if let Some(wd) = &f.write_default {
-                        newf = newf.with_write_default(wd.clone());
-                    }
-                    new_fields.push(std::sync::Arc::new(newf));
-                }
-                IcebergSchema::builder()
-                    .with_fields(new_fields)
-                    .build()
-                    .unwrap_or_else(|_| schema.clone())
-            }
-
             let (iceberg_schema, table_schema, default_spec, data_dir, spec_id_val, commit_schema) =
                 if table_exists {
                     let latest_meta = super::super::table_format::find_latest_metadata_file(
@@ -944,7 +992,7 @@ impl ExecutionPlan for IcebergWriterExec {
                     // derive schema/spec from input for new-table overwrite
                     let input_arrow_schema = input_schema.as_ref().clone();
                     let mut iceberg_schema = arrow_schema_to_iceberg(&input_arrow_schema)?;
-                    iceberg_schema = assign_top_level_field_ids(&iceberg_schema);
+                    iceberg_schema = Self::assign_schema_field_ids(&iceberg_schema)?;
                     if iceberg_schema.fields().iter().any(|f| f.id == 0) {
                         return Err(DataFusionError::Plan(
                             "Invalid Iceberg schema: field id 0 detected after assignment"
@@ -1069,6 +1117,109 @@ impl DisplayAs for IcebergWriterExec {
                 writeln!(f, "format: iceberg")?;
                 write!(f, "table_path={}", self.table_url)
             }
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use datafusion::arrow::datatypes::{Field, Schema};
+
+    use super::*;
+
+    #[test]
+    fn assign_schema_field_ids_assigns_nested_children() {
+        use crate::spec::types::PrimitiveType;
+
+        let nested_struct = StructType::new(vec![
+            Arc::new(NestedField::new(
+                0,
+                "inner_a",
+                Type::Primitive(PrimitiveType::Int),
+                true,
+            )),
+            Arc::new(NestedField::new(
+                0,
+                "inner_b",
+                Type::Primitive(PrimitiveType::String),
+                false,
+            )),
+        ]);
+
+        let fields = vec![
+            Arc::new(NestedField::new(
+                0,
+                "id",
+                Type::Primitive(PrimitiveType::Long),
+                true,
+            )),
+            Arc::new(NestedField::new(
+                0,
+                "payload",
+                Type::Struct(nested_struct),
+                false,
+            )),
+        ];
+
+        let schema = IcebergSchema::builder()
+            .with_fields(fields)
+            .build()
+            .expect("schema");
+
+        let assigned = IcebergWriterExec::assign_schema_field_ids(&schema).expect("assign ids");
+        let id_field = assigned.field_by_name("id").expect("id field");
+        assert_eq!(id_field.id, 1);
+
+        let payload_field = assigned.field_by_name("payload").expect("payload field");
+        assert!(payload_field.id > id_field.id);
+
+        let Type::Struct(payload_struct) = payload_field.field_type.as_ref() else {
+            panic!("payload not struct");
+        };
+        for child in payload_struct.fields() {
+            assert!(
+                child.id != 0,
+                "expected nested field '{}' to have non-zero id",
+                child.name
+            );
+        }
+        assert_ne!(
+            payload_struct.fields()[0].id,
+            payload_struct.fields()[1].id,
+            "nested field ids should be unique"
+        );
+    }
+
+    #[test]
+    fn validate_exact_schema_allows_int_to_long() {
+        let table_schema = Arc::new(Schema::new(vec![Field::new(
+            "value",
+            DataType::Int64,
+            true,
+        )]));
+        let input_schema = Schema::new(vec![Field::new("value", DataType::Int32, true)]);
+
+        IcebergWriterExec::validate_exact_schema(table_schema.as_ref(), &input_schema)
+            .expect("int -> long promotion should be allowed");
+    }
+
+    #[test]
+    fn validate_exact_schema_rejects_missing_required_column() {
+        let table_schema = Arc::new(Schema::new(vec![Field::new(
+            "required_col",
+            DataType::Utf8,
+            false,
+        )]));
+        let input_schema = Schema::new(Vec::<Field>::new());
+
+        let err = IcebergWriterExec::validate_exact_schema(table_schema.as_ref(), &input_schema)
+            .expect_err("missing required column should fail");
+        match err {
+            DataFusionError::Plan(msg) => assert!(
+                msg.contains("required_col"),
+                "unexpected plan error message: {msg}"
+            ),
+            other => panic!("unexpected error: {other}"),
         }
     }
 }
