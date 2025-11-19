@@ -224,20 +224,28 @@ impl DeltaTypeConverter {
         }
 
         match (type1, type2) {
-            (DataType::Int8, DataType::Int16 | DataType::Int32 | DataType::Int64) => {
-                Some(type2.clone())
+            // Integer promotions
+            (DataType::Int8, DataType::Int16 | DataType::Int32 | DataType::Int64)
+            | (DataType::Int16, DataType::Int32 | DataType::Int64)
+            | (DataType::Int32, DataType::Int64) => Some(type2.clone()),
+            (DataType::Int16 | DataType::Int32 | DataType::Int64, DataType::Int8)
+            | (DataType::Int32 | DataType::Int64, DataType::Int16)
+            | (DataType::Int64, DataType::Int32) => Some(type1.clone()),
+
+            // Float promotions
+            (DataType::Float32, DataType::Float64) | (DataType::Float64, DataType::Float32) => {
+                Some(DataType::Float64)
             }
-            (DataType::Int16, DataType::Int32 | DataType::Int64) => Some(type2.clone()),
-            (DataType::Int32, DataType::Int64) => Some(type2.clone()),
-            (DataType::Int16 | DataType::Int32 | DataType::Int64, DataType::Int8) => {
-                Some(type1.clone())
+
+            // String promotions
+            (DataType::Utf8, DataType::LargeUtf8) | (DataType::LargeUtf8, DataType::Utf8) => {
+                Some(DataType::LargeUtf8)
             }
-            (DataType::Int32 | DataType::Int64, DataType::Int16) => Some(type1.clone()),
-            (DataType::Int64, DataType::Int32) => Some(type1.clone()),
-            (DataType::Float32, DataType::Float64) => Some(DataType::Float64),
-            (DataType::Float64, DataType::Float32) => Some(DataType::Float64),
-            (DataType::Utf8, DataType::LargeUtf8) => Some(DataType::LargeUtf8),
-            (DataType::LargeUtf8, DataType::Utf8) => Some(DataType::LargeUtf8),
+
+            // Binary promotions
+            (DataType::Binary, DataType::LargeBinary)
+            | (DataType::LargeBinary, DataType::Binary) => Some(DataType::LargeBinary),
+
             _ => None,
         }
     }

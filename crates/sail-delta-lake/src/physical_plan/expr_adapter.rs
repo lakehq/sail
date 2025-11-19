@@ -39,34 +39,29 @@ impl DeltaPhysicalExprAdapterFactory {
         logical_schema: &Schema,
         physical_schema: &Schema,
     ) -> (Vec<Option<usize>>, Vec<Option<ScalarValue>>) {
-        let mut column_mapping = Vec::with_capacity(logical_schema.fields().len());
-        let mut default_values = Vec::with_capacity(logical_schema.fields().len());
-
-        for logical_field in logical_schema.fields() {
-            match physical_schema.index_of(logical_field.name()) {
-                Ok(physical_index) => {
-                    column_mapping.push(Some(physical_index));
-                    default_values.push(None);
-                }
-                Err(_) => {
-                    column_mapping.push(None);
-                    let default_value = if logical_field.is_nullable() {
-                        Some(
-                            ScalarValue::try_from(logical_field.data_type())
-                                .unwrap_or(ScalarValue::Null),
-                        )
-                    } else {
-                        Some(
-                            ScalarValue::new_zero(logical_field.data_type())
-                                .unwrap_or(ScalarValue::Null),
-                        )
-                    };
-                    default_values.push(default_value);
-                }
-            }
-        }
-
-        (column_mapping, default_values)
+        logical_schema
+            .fields()
+            .iter()
+            .map(
+                |logical_field| match physical_schema.index_of(logical_field.name()) {
+                    Ok(physical_index) => (Some(physical_index), None),
+                    Err(_) => {
+                        let default_value = if logical_field.is_nullable() {
+                            Some(
+                                ScalarValue::try_from(logical_field.data_type())
+                                    .unwrap_or(ScalarValue::Null),
+                            )
+                        } else {
+                            Some(
+                                ScalarValue::new_zero(logical_field.data_type())
+                                    .unwrap_or(ScalarValue::Null),
+                            )
+                        };
+                        (None, default_value)
+                    }
+                },
+            )
+            .unzip()
     }
 }
 

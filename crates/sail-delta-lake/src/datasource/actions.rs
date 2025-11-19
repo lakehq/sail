@@ -29,24 +29,22 @@ pub fn partitioned_file_from_action(
     let partition_values = partition_columns
         .iter()
         .map(|part| {
-            let partition_value = match action.partition_values.get(part) {
-                Some(val) => val,
-                None => return ScalarValue::Null,
-            };
-
             let field = match schema.field_with_name(part) {
                 Ok(field) => field,
                 Err(_) => return ScalarValue::Null,
             };
 
-            // Convert partition value to ScalarValue
-            match partition_value {
-                Some(value) => {
+            action
+                .partition_values
+                .get(part)
+                .and_then(|value| value.as_ref())
+                .map(|value| {
                     ScalarConverter::string_to_arrow_scalar_value(value, field.data_type())
                         .unwrap_or(ScalarValue::Null)
-                }
-                None => ScalarValue::try_new_null(field.data_type()).unwrap_or(ScalarValue::Null),
-            }
+                })
+                .unwrap_or_else(|| {
+                    ScalarValue::try_new_null(field.data_type()).unwrap_or(ScalarValue::Null)
+                })
         })
         .collect::<Vec<_>>();
 

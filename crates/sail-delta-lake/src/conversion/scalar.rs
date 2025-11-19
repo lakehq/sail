@@ -39,16 +39,12 @@ impl ScalarConverter {
         match stat_val {
             serde_json::Value::Array(_) | serde_json::Value::Object(_) => Ok(None),
             serde_json::Value::Null => Ok(Some(ScalarValue::try_new_null(field_dt)?)),
-            _ => {
-                let string_val = match stat_val {
-                    serde_json::Value::String(s) => Cow::Borrowed(s.as_str()),
-                    other => Cow::Owned(other.to_string()),
-                };
-
-                Ok(Some(Self::string_to_arrow_scalar_value(
-                    string_val.as_ref(),
-                    field_dt,
-                )?))
+            serde_json::Value::String(value) => {
+                Ok(Some(Self::string_to_arrow_scalar_value(value, field_dt)?))
+            }
+            other => {
+                let owned = other.to_string();
+                Ok(Some(Self::string_to_arrow_scalar_value(&owned, field_dt)?))
             }
         }
     }
@@ -282,26 +278,30 @@ impl ScalarExt for Scalar {
             Self::Binary(bytes) => Value::String(create_escaped_binary_string(bytes.as_slice())),
             Self::Null(_) => Value::Null,
             Self::Struct(data) => {
-                let mut result = serde_json::Map::new();
-                for (field, value) in data.fields().iter().zip(data.values().iter()) {
-                    result.insert(field.name.clone(), value.to_json());
-                }
-                Value::Object(result)
+                let map: serde_json::Map<String, Value> = data
+                    .fields()
+                    .iter()
+                    .zip(data.values().iter())
+                    .map(|(field, value)| (field.name.clone(), value.to_json()))
+                    .collect();
+                Value::Object(map)
             }
             Self::Array(array_data) => {
-                let mut result = Vec::new();
                 #[allow(deprecated)]
-                for value in array_data.array_elements() {
-                    result.push(value.to_json());
-                }
-                Value::Array(result)
+                let values: Vec<Value> = array_data
+                    .array_elements()
+                    .iter()
+                    .map(|value| value.to_json())
+                    .collect();
+                Value::Array(values)
             }
             Self::Map(map_data) => {
-                let mut result = serde_json::Map::new();
-                for (key, value) in map_data.pairs() {
-                    result.insert(key.to_string(), value.to_json());
-                }
-                Value::Object(result)
+                let map: serde_json::Map<String, Value> = map_data
+                    .pairs()
+                    .iter()
+                    .map(|(key, value)| (key.to_string(), value.to_json()))
+                    .collect();
+                Value::Object(map)
             }
         }
     }
