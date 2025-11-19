@@ -13,6 +13,8 @@
 /// Unified conversions between Iceberg types and DataFusion/Arrow types.
 ///
 /// This module consolidates all literal/scalar conversions
+use std::sync::Arc;
+
 use datafusion::arrow::array::{
     Array, ArrayRef, BooleanArray, Date32Array, Float32Array, Float64Array, Int32Array, Int64Array,
     StringArray, TimestampMicrosecondArray, TimestampMillisecondArray, TimestampNanosecondArray,
@@ -87,13 +89,13 @@ fn primitive_literal_to_scalar(prim: &PrimitiveLiteral, prim_type: &PrimitiveTyp
         (PrimitiveType::Time, PL::Long(v)) => SV::Time64Microsecond(Some(*v)),
         // Timestamp (no tz): Long (microseconds) -> TimestampMicrosecond
         (PrimitiveType::Timestamp, PL::Long(v)) => SV::TimestampMicrosecond(Some(*v), None),
-        (PrimitiveType::TimestampNs, PL::Long(v)) => SV::TimestampMicrosecond(Some(*v), None),
+        (PrimitiveType::TimestampNs, PL::Long(v)) => SV::TimestampNanosecond(Some(*v), None),
         // Timestamptz (with UTC): Long (microseconds) -> TimestampMicrosecond with UTC
         (PrimitiveType::Timestamptz, PL::Long(v)) => {
             SV::TimestampMicrosecond(Some(*v), Some(std::sync::Arc::from("UTC")))
         }
         (PrimitiveType::TimestamptzNs, PL::Long(v)) => {
-            SV::TimestampMicrosecond(Some(*v), Some(std::sync::Arc::from("UTC")))
+            SV::TimestampNanosecond(Some(*v), Some(Arc::from("UTC")))
         }
         // Decimal: Int128 -> Decimal128
         (PrimitiveType::Decimal { precision, scale }, PL::Int128(v)) => {
@@ -180,7 +182,7 @@ pub fn scalar_to_iceberg_literal(
         SV::TimestampSecond(Some(v), _) => Ok(Literal::Primitive(PL::Long(*v * 1_000_000))),
         SV::TimestampMillisecond(Some(v), _) => Ok(Literal::Primitive(PL::Long(*v * 1_000))),
         SV::TimestampMicrosecond(Some(v), _) => Ok(Literal::Primitive(PL::Long(*v))),
-        SV::TimestampNanosecond(Some(v), _) => Ok(Literal::Primitive(PL::Long(*v / 1_000))),
+        SV::TimestampNanosecond(Some(v), _) => Ok(Literal::Primitive(PL::Long(*v))),
         SV::Decimal128(Some(v), _, _) => Ok(Literal::Primitive(PL::Int128(*v))),
         SV::Decimal256(Some(_), _, _) => Err("Decimal256 not supported".to_string()),
         SV::Null => Err("Cannot convert NULL to Literal".to_string()),
@@ -249,7 +251,7 @@ pub fn array_value_to_literal(array: &ArrayRef, row: usize) -> Option<Literal> {
                 }
                 TimeUnit::Nanosecond => {
                     let a = array.as_any().downcast_ref::<TimestampNanosecondArray>()?;
-                    Some(a.value(row) / 1_000)
+                    Some(a.value(row))
                 }
             };
             value_in_micros.map(|v| Literal::Primitive(PrimitiveLiteral::Long(v)))
@@ -311,6 +313,24 @@ mod tests {
             primitive_literal_to_scalar(&lit, &ty),
             ScalarValue::TimestampMicrosecond(Some(1_000_000), Some(std::sync::Arc::from("UTC")))
         );
+
+        // TimestampNs
+        let lit = PrimitiveLiteral::Long(42_000);
+        let ty = PrimitiveType::TimestampNs;
+        assert_eq!(
+            primitive_literal_to_scalar(&lit, &ty),
+            ScalarValue::TimestampNanosecond(Some(42_000), None)
+        );
+    }
+
+    #[test]
+    #[allow(clippy::unwrap_used)]
+    fn test_scalar_to_iceberg_literal_preserves_nanoseconds() {
+        let sv = ScalarValue::TimestampNanosecond(Some(123_456), None);
+        let result =
+            scalar_to_iceberg_literal(&sv, &ArrowDataType::Timestamp(TimeUnit::Nanosecond, None))
+                .unwrap();
+        assert_eq!(result, Literal::Primitive(PrimitiveLiteral::Long(123_456)));
     }
 
     #[test]
@@ -342,6 +362,20 @@ mod tests {
         assert_eq!(
             result,
             Literal::Primitive(PrimitiveLiteral::Long(1_000_000))
+        );
+    }
+
+    #[test]
+    #[allow(clippy::unwrap_used)]
+    fn test_array_value_to_literal_retains_nanoseconds() {
+        use datafusion::arrow::array::TimestampNanosecondArray;
+
+        let array = TimestampNanosecondArray::from(vec![Some(9_999_999)]);
+        let literal =
+            array_value_to_literal(&(Arc::new(array) as ArrayRef), 0).expect("literal value");
+        assert_eq!(
+            literal,
+            Literal::Primitive(PrimitiveLiteral::Long(9_999_999))
         );
     }
 }

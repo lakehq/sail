@@ -39,7 +39,7 @@ use crate::arrow_conversion::{
 };
 use crate::options::TableIcebergOptions;
 use crate::spec::partition::{UnboundPartitionField, UnboundPartitionSpec};
-use crate::spec::schema::Schema as IcebergSchema;
+use crate::spec::schema::{Schema as IcebergSchema, SchemaBuilder};
 use crate::spec::types::{ListType, MapType, NestedField, StructType, Type};
 use crate::spec::TableMetadata;
 use crate::utils::get_object_store_from_context;
@@ -63,6 +63,7 @@ enum SchemaMode {
     Overwrite,
 }
 
+#[derive(Debug)]
 struct SchemaEvolutionOutcome {
     iceberg_schema: IcebergSchema,
     arrow_schema: Arc<Schema>,
@@ -267,6 +268,7 @@ impl IcebergWriterExec {
     fn field_types_compatible(table_field: &Field, input_field: &Field) -> bool {
         Self::field_types_equivalent(table_field.data_type(), input_field.data_type())
             || Self::is_allowed_type_promotion(table_field.data_type(), input_field.data_type())
+            || Self::is_safe_write_cast(table_field.data_type(), input_field.data_type())
     }
 
     fn field_types_equivalent(table_type: &DataType, input_type: &DataType) -> bool {
@@ -476,6 +478,7 @@ impl IcebergWriterExec {
         let new_schema = builder
             .build()
             .map_err(|e| DataFusionError::Plan(format!("Failed to build merged schema: {e}")))?;
+        Self::validate_partition_spec_sources(table_meta, &new_schema)?;
         let arrow_schema = Arc::new(iceberg_schema_to_arrow(&new_schema)?);
         Ok(SchemaEvolutionOutcome {
             iceberg_schema: new_schema,
@@ -681,10 +684,8 @@ impl IcebergWriterExec {
                 let mut updated_fields = Vec::with_capacity(struct_type.fields().len());
                 for child in struct_type.fields() {
                     let mut nested = child.as_ref().clone();
-                    if nested.id == 0 {
-                        nested.id = *next_field_id;
-                        *next_field_id += 1;
-                    }
+                    nested.id = *next_field_id;
+                    *next_field_id += 1;
                     Self::assign_nested_ids(&mut nested, next_field_id);
                     updated_fields.push(Arc::new(nested));
                 }
@@ -692,26 +693,20 @@ impl IcebergWriterExec {
             }
             Type::List(list_type) => {
                 let mut element = list_type.element_field.as_ref().clone();
-                if element.id == 0 {
-                    element.id = *next_field_id;
-                    *next_field_id += 1;
-                }
+                element.id = *next_field_id;
+                *next_field_id += 1;
                 Self::assign_nested_ids(&mut element, next_field_id);
                 *ty = Type::List(ListType::new(Arc::new(element)));
             }
             Type::Map(map_type) => {
                 let mut key = map_type.key_field.as_ref().clone();
-                if key.id == 0 {
-                    key.id = *next_field_id;
-                    *next_field_id += 1;
-                }
+                key.id = *next_field_id;
+                *next_field_id += 1;
                 Self::assign_nested_ids(&mut key, next_field_id);
 
                 let mut value = map_type.value_field.as_ref().clone();
-                if value.id == 0 {
-                    value.id = *next_field_id;
-                    *next_field_id += 1;
-                }
+                value.id = *next_field_id;
+                *next_field_id += 1;
                 Self::assign_nested_ids(&mut value, next_field_id);
 
                 *ty = Type::Map(MapType::new(Arc::new(key), Arc::new(value)));
@@ -738,10 +733,8 @@ impl IcebergWriterExec {
                             next_field_id,
                         )?;
                     } else {
-                        if new_child.id == 0 {
-                            new_child.id = *next_field_id;
-                            *next_field_id += 1;
-                        }
+                        new_child.id = *next_field_id;
+                        *next_field_id += 1;
                         Self::assign_nested_ids(&mut new_child, next_field_id);
                     }
                     updated_fields.push(Arc::new(new_child));
@@ -785,6 +778,23 @@ impl IcebergWriterExec {
         Ok(())
     }
 
+    fn validate_partition_spec_sources(
+        table_meta: &TableMetadata,
+        schema: &IcebergSchema,
+    ) -> Result<()> {
+        if let Some(spec) = table_meta.default_partition_spec() {
+            for field in spec.fields() {
+                if schema.field_by_id(field.source_id).is_none() {
+                    return Err(DataFusionError::Plan(format!(
+                        "Partition field '{}' references missing column id {} in the new schema. Include the column or update the partition spec before writing.",
+                        field.name, field.source_id
+                    )));
+                }
+            }
+        }
+        Ok(())
+    }
+
     fn overwrite_schema(
         table_meta: &TableMetadata,
         current_schema: &IcebergSchema,
@@ -797,7 +807,6 @@ impl IcebergWriterExec {
             }
         }
 
-        let mut identifier_ids = Vec::new();
         let mut next_field_id = table_meta.last_column_id + 1;
         let mut new_fields = Vec::new();
 
@@ -831,10 +840,19 @@ impl IcebergWriterExec {
             } else {
                 Self::assign_nested_ids(&mut nested, &mut next_field_id);
             }
-            if identifier_names.contains(field.name()) {
-                identifier_ids.push(field_id);
-            }
             new_fields.push(Arc::new(nested));
+        }
+
+        let struct_view = StructType::new(new_fields.clone());
+        let (name_to_id, _) = SchemaBuilder::build_name_indexes(&struct_view);
+        let mut identifier_ids = Vec::new();
+        for identifier in &identifier_names {
+            let Some(id) = name_to_id.get(identifier) else {
+                return Err(DataFusionError::Plan(format!(
+                    "Identifier field '{identifier}' is missing from the overwrite schema. Provide all identifier columns or drop the identifier before overwriting."
+                )));
+            };
+            identifier_ids.push(*id);
         }
 
         let mut builder = IcebergSchema::builder()
@@ -846,6 +864,7 @@ impl IcebergWriterExec {
         let new_schema = builder.build().map_err(|e| {
             DataFusionError::Plan(format!("Failed to build overwritten schema: {e}"))
         })?;
+        Self::validate_partition_spec_sources(table_meta, &new_schema)?;
         let arrow_schema = Arc::new(iceberg_schema_to_arrow(&new_schema)?);
         Ok(SchemaEvolutionOutcome {
             iceberg_schema: new_schema,
@@ -1123,14 +1142,19 @@ impl DisplayAs for IcebergWriterExec {
 
 #[cfg(test)]
 mod tests {
+    #![allow(clippy::expect_used, clippy::panic)]
+
     use datafusion::arrow::datatypes::{Field, Schema};
+    use parquet::arrow::PARQUET_FIELD_ID_META_KEY;
 
     use super::*;
+    use crate::spec::metadata::format::FormatVersion;
+    use crate::spec::partition::PartitionSpec;
+    use crate::spec::transform::Transform;
+    use crate::spec::types::PrimitiveType;
 
     #[test]
     fn assign_schema_field_ids_assigns_nested_children() {
-        use crate::spec::types::PrimitiveType;
-
         let nested_struct = StructType::new(vec![
             Arc::new(NestedField::new(
                 0,
@@ -1197,7 +1221,13 @@ mod tests {
             DataType::Int64,
             true,
         )]));
-        let input_schema = Schema::new(vec![Field::new("value", DataType::Int32, true)]);
+        let field = Field::new("value", DataType::Int32, false);
+        assert!(
+            !field.is_nullable(),
+            "explicitly constructed field should be non-nullable"
+        );
+        let input_schema = Schema::new(vec![field]);
+        println!("input schema debug: {:?}", input_schema);
 
         IcebergWriterExec::validate_exact_schema(table_schema.as_ref(), &input_schema)
             .expect("int -> long promotion should be allowed");
@@ -1220,6 +1250,207 @@ mod tests {
                 "unexpected plan error message: {msg}"
             ),
             other => panic!("unexpected error: {other}"),
+        }
+    }
+
+    #[test]
+    fn merge_schema_allows_safe_int_to_long_writes() {
+        let fields = vec![Arc::new(NestedField::new(
+            1,
+            "value",
+            Type::Primitive(PrimitiveType::Long),
+            true,
+        ))];
+        let schema = IcebergSchema::builder()
+            .with_schema_id(1)
+            .with_fields(fields)
+            .build()
+            .expect("schema");
+        let table_meta = test_table_metadata(schema.clone(), None);
+
+        let input_schema = Schema::new(vec![Field::new("value", DataType::Int32, false)]);
+        assert!(
+            !input_schema
+                .field_with_name("value")
+                .expect("value field present")
+                .is_nullable(),
+            "value column should be non-nullable in input schema"
+        );
+
+        let outcome =
+            IcebergWriterExec::merge_schema(&table_meta, &schema, &input_schema).expect("merge");
+        assert!(
+            !outcome.changed,
+            "Safe writes should not force schema evolution"
+        );
+        let merged_field = outcome
+            .iceberg_schema
+            .field_by_name("value")
+            .expect("value field");
+        assert!(merged_field.required, "existing field must remain required");
+        assert!(
+            matches!(
+                merged_field.field_type.as_ref(),
+                Type::Primitive(PrimitiveType::Long)
+            ),
+            "Field type should remain LONG"
+        );
+    }
+
+    #[test]
+    fn build_field_from_arrow_reassigns_nested_ids() {
+        use datafusion::arrow::datatypes::Fields;
+
+        let inner_field = Field::new("child", DataType::Int32, false).with_metadata(
+            [(PARQUET_FIELD_ID_META_KEY.to_string(), "777".to_string())]
+                .into_iter()
+                .collect(),
+        );
+        let arrow_struct = Field::new(
+            "parent",
+            DataType::Struct(Fields::from(vec![inner_field])),
+            false,
+        )
+        .with_metadata(
+            [(PARQUET_FIELD_ID_META_KEY.to_string(), "555".to_string())]
+                .into_iter()
+                .collect(),
+        );
+
+        let mut next_id = 10;
+        let field =
+            IcebergWriterExec::build_field_from_arrow(&arrow_struct, &mut next_id).expect("build");
+        assert_eq!(field.id, 10);
+        let Type::Struct(struct_ty) = field.field_type.as_ref() else {
+            panic!("expected struct");
+        };
+        let child = &struct_ty.fields()[0];
+        assert_eq!(
+            child.id, 11,
+            "child id should come from next_field_id, not metadata"
+        );
+        assert_eq!(next_id, 12);
+    }
+
+    #[test]
+    fn overwrite_schema_preserves_nested_identifier_fields() {
+        let customer_struct = StructType::new(vec![
+            Arc::new(NestedField::new(
+                2,
+                "id",
+                Type::Primitive(PrimitiveType::Long),
+                true,
+            )),
+            Arc::new(NestedField::new(
+                3,
+                "name",
+                Type::Primitive(PrimitiveType::String),
+                true,
+            )),
+        ]);
+        let schema = IcebergSchema::builder()
+            .with_schema_id(1)
+            .with_fields(vec![Arc::new(NestedField::new(
+                1,
+                "customer",
+                Type::Struct(customer_struct),
+                true,
+            ))])
+            .with_identifier_field_ids([2])
+            .build()
+            .expect("schema");
+        let table_meta = test_table_metadata(schema.clone(), None);
+
+        let input_schema = Schema::new(vec![Field::new(
+            "customer",
+            DataType::Struct(
+                vec![
+                    Field::new("id", DataType::Int64, false),
+                    Field::new("name", DataType::Utf8, false),
+                ]
+                .into(),
+            ),
+            false,
+        )]);
+
+        let result =
+            IcebergWriterExec::overwrite_schema(&table_meta, &schema, &input_schema).unwrap();
+        let identifiers: Vec<i32> = result.iceberg_schema.identifier_field_ids().collect();
+        assert_eq!(
+            identifiers,
+            vec![2],
+            "identifier should remain nested field id"
+        );
+    }
+
+    #[test]
+    fn overwrite_schema_rejects_partition_columns_removal() {
+        let fields = vec![Arc::new(NestedField::new(
+            1,
+            "event_ts",
+            Type::Primitive(PrimitiveType::Timestamp),
+            false,
+        ))];
+        let schema = IcebergSchema::builder()
+            .with_schema_id(1)
+            .with_fields(fields)
+            .build()
+            .expect("schema");
+
+        let spec = PartitionSpec::builder()
+            .with_spec_id(7)
+            .add_field(1, "event_ts_bucket", Transform::Identity)
+            .build();
+
+        let table_meta = test_table_metadata(schema.clone(), Some(spec));
+
+        let input_schema = Schema::new(vec![Field::new("other", DataType::Utf8, true)]);
+        let err =
+            IcebergWriterExec::overwrite_schema(&table_meta, &schema, &input_schema).unwrap_err();
+        let msg = format!("{err}");
+        assert!(
+            msg.contains("Partition field"),
+            "expected partition validation error, got {msg}"
+        );
+    }
+
+    fn test_table_metadata(
+        schema: IcebergSchema,
+        partition_spec: Option<PartitionSpec>,
+    ) -> TableMetadata {
+        let last_column_id = schema.highest_field_id();
+        let partition_specs: Vec<PartitionSpec> =
+            partition_spec.clone().into_iter().collect::<Vec<_>>();
+        let default_spec_id = partition_spec
+            .as_ref()
+            .map(|spec| spec.spec_id())
+            .unwrap_or(0);
+        let last_partition_id = partition_spec
+            .as_ref()
+            .and_then(|spec| spec.highest_field_id())
+            .unwrap_or(0);
+        TableMetadata {
+            format_version: FormatVersion::V2,
+            table_uuid: None,
+            location: "file:///tmp/iceberg".to_string(),
+            last_sequence_number: 0,
+            last_updated_ms: 0,
+            last_column_id,
+            schemas: vec![schema.clone()],
+            current_schema_id: schema.schema_id(),
+            partition_specs,
+            default_spec_id,
+            last_partition_id,
+            properties: HashMap::new(),
+            current_snapshot_id: None,
+            snapshots: vec![],
+            snapshot_log: vec![],
+            metadata_log: vec![],
+            sort_orders: vec![],
+            default_sort_order_id: None,
+            refs: HashMap::new(),
+            statistics: vec![],
+            partition_statistics: vec![],
         }
     }
 }

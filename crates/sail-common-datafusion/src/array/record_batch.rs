@@ -6,10 +6,10 @@ use datafusion::arrow::array::{
     RecordBatch, RecordBatchOptions, StructArray,
 };
 use datafusion::arrow::compute::cast;
-use datafusion::arrow::datatypes::Fields;
 use datafusion::arrow::datatypes::{
-    ArrowTimestampType, DataType, FieldRef, Schema, SchemaRef, TimeUnit, TimestampMicrosecondType,
-    TimestampMillisecondType, TimestampNanosecondType, TimestampSecondType,
+    ArrowTimestampType, DataType, FieldRef, Fields, Schema, SchemaRef, TimeUnit,
+    TimestampMicrosecondType, TimestampMillisecondType, TimestampNanosecondType,
+    TimestampSecondType,
 };
 use datafusion::arrow::ipc::reader::StreamReader;
 use datafusion::arrow::ipc::writer::StreamWriter;
@@ -247,8 +247,7 @@ pub fn record_batch_with_schema(batch: RecordBatch, schema: &SchemaRef) -> Resul
 #[cfg(test)]
 mod tests {
     use datafusion::arrow::array::{ArrayRef, Int32Array, StructArray};
-    use datafusion::arrow::datatypes::Field;
-    use datafusion::arrow::datatypes::Fields;
+    use datafusion::arrow::datatypes::{Field, Fields};
 
     use super::*;
 
