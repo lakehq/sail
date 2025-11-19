@@ -397,12 +397,13 @@ impl TryFrom<&Add> for ObjectMeta {
     type Error = DeltaTableError;
 
     fn try_from(value: &Add) -> DeltaResult<Self> {
-        let last_modified = DateTime::from_timestamp_millis(value.modification_time).ok_or(
-            DeltaTableError::MetadataError(format!(
-                "invalid modification_time: {:?}",
-                value.modification_time
-            )),
-        )?;
+        let last_modified =
+            DateTime::from_timestamp_millis(value.modification_time).ok_or_else(|| {
+                DeltaTableError::generic(format!(
+                    "invalid modification_time: {:?}",
+                    value.modification_time
+                ))
+            })?;
 
         Ok(Self {
             location: Path::parse(&value.path)?,

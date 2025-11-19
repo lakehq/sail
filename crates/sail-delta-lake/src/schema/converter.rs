@@ -32,10 +32,9 @@ pub fn arrow_schema_from_struct_type(
         .filter(|f| !partition_columns.contains(&f.name().to_string()))
         .map(field_from_struct_field)
         .chain(partition_columns.iter().map(|partition_col| {
-            #[allow(clippy::expect_used)]
             let f = schema
                 .field(partition_col)
-                .expect("Partition column should exist in schema");
+                .ok_or_else(|| DeltaTableError::missing_column(partition_col))?;
             let field = field_from_struct_field(f)?;
             let corrected = if wrap_partitions {
                 wrap_partition_type(field.data_type())

@@ -348,14 +348,13 @@ mod datafusion {
             } else {
                 Expression::column(["stats_parsed", stats_field, &column.name])
             };
-            #[allow(clippy::expect_used)]
             let evaluator = ARROW_HANDLER
                 .new_expression_evaluator(
                     scan_row_schema(),
                     Arc::new(expression),
                     field.data_type().clone(),
                 )
-                .expect("Failed to create expression evaluator");
+                .ok()?;
 
             let batch = evaluator.evaluate_arrow(self.data.clone()).ok()?;
             batch.column_by_name("output").cloned()
@@ -369,9 +368,7 @@ mod datafusion {
         batch
             .column_by_name(name)
             .and_then(|col| col.as_any().downcast_ref::<T>())
-            .ok_or_else(|| DeltaTableError::SchemaMismatch {
-                msg: format!("column {name} not found in log data"),
-            })
+            .ok_or_else(|| DeltaTableError::Schema(format!("column {name} not found in log data")))
     }
 
     fn struct_column_opt<'a, T: Array + 'static>(
@@ -388,23 +385,20 @@ mod datafusion {
         root: &str,
         path: &mut impl Iterator<Item = &'a str>,
     ) -> Result<&'a Arc<dyn Array>, DeltaTableError> {
-        let mut current =
-            array
-                .column_by_name(root)
-                .ok_or_else(|| DeltaTableError::SchemaMismatch {
-                    msg: format!("{root} column not found in stats struct"),
-                })?;
+        let mut current = array.column_by_name(root).ok_or_else(|| {
+            DeltaTableError::Schema(format!("{root} column not found in stats struct"))
+        })?;
         for segment in path {
             let struct_array = current
                 .as_any()
                 .downcast_ref::<StructArray>()
-                .ok_or_else(|| DeltaTableError::SchemaMismatch {
-                    msg: format!("Expected struct while accessing {segment} in stats"),
+                .ok_or_else(|| {
+                    DeltaTableError::Schema(format!(
+                        "Expected struct while accessing {segment} in stats"
+                    ))
                 })?;
             current = struct_array.column_by_name(segment).ok_or_else(|| {
-                DeltaTableError::SchemaMismatch {
-                    msg: format!("{segment} column not found in stats struct"),
-                }
+                DeltaTableError::Schema(format!("{segment} column not found in stats struct"))
             })?;
         }
         Ok(current)
@@ -464,18 +458,19 @@ mod datafusion {
         ///
         /// Note: the returned array must contain `num_containers()` rows
         fn row_counts(&self, _column: &Column) -> Option<ArrayRef> {
-            static ROW_COUNTS_EVAL: LazyLock<Arc<dyn ExpressionEvaluator>> = LazyLock::new(|| {
-                #[allow(clippy::expect_used)]
-                ARROW_HANDLER
-                    .new_expression_evaluator(
-                        scan_row_schema(),
-                        Arc::new(Expression::column(["stats_parsed", "numRecords"])),
-                        DataType::Primitive(PrimitiveType::Long),
-                    )
-                    .expect("Failed to create row counts evaluator")
-            });
+            static ROW_COUNTS_EVAL: LazyLock<Option<Arc<dyn ExpressionEvaluator>>> =
+                LazyLock::new(|| {
+                    ARROW_HANDLER
+                        .new_expression_evaluator(
+                            scan_row_schema(),
+                            Arc::new(Expression::column(["stats_parsed", "numRecords"])),
+                            DataType::Primitive(PrimitiveType::Long),
+                        )
+                        .ok()
+                });
 
-            let batch = ROW_COUNTS_EVAL.evaluate_arrow(self.data.clone()).ok()?;
+            let evaluator = ROW_COUNTS_EVAL.as_ref()?;
+            let batch = evaluator.evaluate_arrow(self.data.clone()).ok()?;
             ::datafusion::arrow::compute::cast(
                 batch.column_by_name("output")?,
                 &ArrowDataType::UInt64,

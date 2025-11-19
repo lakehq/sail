@@ -18,13 +18,14 @@ use object_store::ObjectMeta;
 
 use crate::conversion::ScalarConverter;
 use crate::kernel::models::{Add, Remove};
+use crate::kernel::{DeltaResult, DeltaTableError};
 
 /// Convert an Add action to a PartitionedFile for DataFusion scanning
 pub fn partitioned_file_from_action(
     action: &Add,
     partition_columns: &[String],
     schema: &ArrowSchema,
-) -> PartitionedFile {
+) -> DeltaResult<PartitionedFile> {
     let partition_values = partition_columns
         .iter()
         .map(|part| {
@@ -52,25 +53,29 @@ pub fn partitioned_file_from_action(
         })
         .collect::<Vec<_>>();
 
-    #[allow(clippy::expect_used)]
     let last_modified = chrono::Utc
         .timestamp_millis_opt(action.modification_time)
         .single()
-        .expect("Failed to create timestamp from milliseconds");
-    PartitionedFile {
-        #[allow(clippy::expect_used)]
+        .ok_or_else(|| {
+            DeltaTableError::generic(format!(
+                "Invalid modification time: {}",
+                action.modification_time
+            ))
+        })?;
+
+    let object_meta: ObjectMeta = action.try_into()?;
+
+    Ok(PartitionedFile {
         object_meta: ObjectMeta {
             last_modified,
-            ..action
-                .try_into()
-                .expect("Failed to convert action to ObjectMeta")
+            ..object_meta
         },
         partition_values,
         extensions: None,
         range: None,
         statistics: None,
         metadata_size_hint: None,
-    }
+    })
 }
 
 /// Convert Add actions to Remove actions (used in commit operations)

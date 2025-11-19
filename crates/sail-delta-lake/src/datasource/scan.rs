@@ -15,7 +15,7 @@ use std::sync::Arc;
 
 use datafusion::arrow::datatypes::{DataType as ArrowDataType, Field, SchemaRef};
 use datafusion::catalog::Session;
-use datafusion::common::Result;
+use datafusion::common::{DataFusionError, Result};
 use datafusion::config::TableParquetOptions;
 use datafusion::datasource::listing::PartitionedFile;
 use datafusion::datasource::physical_plan::{
@@ -68,7 +68,8 @@ pub fn build_file_scan_config(
     > = HashMap::new();
 
     for action in files.iter() {
-        let mut part = partitioned_file_from_action(action, table_partition_cols, &complete_schema);
+        let mut part = partitioned_file_from_action(action, table_partition_cols, &complete_schema)
+            .map_err(delta_to_datafusion_error)?;
 
         // Add file column if configured
         if config.file_column_name.is_some() {
@@ -101,29 +102,26 @@ pub fn build_file_scan_config(
     });
 
     // Build table partition columns schema
-    let mut table_partition_cols_schema = table_partition_cols
-        .iter()
-        .map(|col| {
-            #[allow(clippy::expect_used)]
-            let field = complete_schema
-                .field_with_name(col)
-                .expect("Column should exist in schema");
-            let corrected = if config.wrap_partition_values {
-                match field.data_type() {
-                    ArrowDataType::Utf8
-                    | ArrowDataType::LargeUtf8
-                    | ArrowDataType::Binary
-                    | ArrowDataType::LargeBinary => {
-                        wrap_partition_type_in_dict(field.data_type().clone())
-                    }
-                    _ => field.data_type().clone(),
+    let mut table_partition_cols_schema = Vec::with_capacity(table_partition_cols.len());
+    for col in table_partition_cols {
+        let field = complete_schema.field_with_name(col).map_err(|_| {
+            DataFusionError::Plan(format!("Partition column {col} not found in schema"))
+        })?;
+        let corrected = if config.wrap_partition_values {
+            match field.data_type() {
+                ArrowDataType::Utf8
+                | ArrowDataType::LargeUtf8
+                | ArrowDataType::Binary
+                | ArrowDataType::LargeBinary => {
+                    wrap_partition_type_in_dict(field.data_type().clone())
                 }
-            } else {
-                field.data_type().clone()
-            };
-            Field::new(col.clone(), corrected, true)
-        })
-        .collect::<Vec<_>>();
+                _ => field.data_type().clone(),
+            }
+        } else {
+            field.data_type().clone()
+        };
+        table_partition_cols_schema.push(Field::new(col.clone(), corrected, true));
+    }
 
     // Add file column to partition schema if configured
     if let Some(file_column_name) = &config.file_column_name {

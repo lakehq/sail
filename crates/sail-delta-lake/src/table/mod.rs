@@ -118,7 +118,9 @@ impl DeltaTable {
 
     /// Returns the currently loaded state snapshot.
     pub fn snapshot(&self) -> DeltaResult<&DeltaTableState> {
-        self.state.as_ref().ok_or(DeltaTableError::NotInitialized)
+        self.state
+            .as_ref()
+            .ok_or_else(|| DeltaTableError::generic("Table has not yet been initialized"))
     }
 
     /// Currently loaded version of the table - if any.
@@ -252,7 +254,7 @@ async fn load_table_by_options(table: &mut DeltaTable, options: &TableDeltaOptio
         let target_version = find_version_for_timestamp(table, datetime)
             .await
             .map_err(|e| {
-                if let DeltaTableError::InvalidVersion(_) = e {
+                if matches!(e, DeltaTableError::MissingVersion) {
                     DeltaTableError::Generic(format!(
                         "No version of the Delta table exists at or before timestamp {}",
                         timestamp_str
@@ -309,7 +311,7 @@ async fn find_version_for_timestamp(
 
     if target_version == -1 {
         // If no version was found, it means the provided timestamp is before the first commit.
-        Err(DeltaTableError::InvalidVersion(0))
+        Err(DeltaTableError::MissingVersion)
     } else {
         Ok(target_version)
     }

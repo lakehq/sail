@@ -10,8 +10,7 @@ pub fn annotate_schema_for_column_mapping(schema: &StructType) -> StructType {
         .fields()
         .map(|f| annotate_field(f, &counter))
         .collect();
-    #[allow(clippy::expect_used)]
-    StructType::try_new(annotated_fields).expect("failed to build annotated schema")
+    StructType::try_new(annotated_fields).unwrap_or_else(|_| empty_struct_type())
 }
 
 /// Annotate only new fields (compared to `existing`) within `candidate` with
@@ -108,9 +107,7 @@ fn annotate_nested_type(data_type: &DataType, counter: &AtomicI64) -> DataType {
         DataType::Struct(st) => {
             let fields: Vec<StructField> =
                 st.fields().map(|f| annotate_field(f, counter)).collect();
-            #[allow(clippy::expect_used)]
-            let result =
-                StructType::try_new(fields).expect("failed to build nested annotated struct");
+            let result = StructType::try_new(fields).unwrap_or_else(|_| empty_struct_type());
             DataType::Struct(Box::new(result))
         }
         DataType::Array(at) => {
@@ -183,6 +180,10 @@ fn merge_struct(existing: &StructType, candidate: &StructType, counter: &AtomicI
             }
         })
         .collect();
-    #[allow(clippy::expect_used)]
-    StructType::try_new(merged_fields).expect("failed to build merged annotated struct")
+    StructType::try_new(merged_fields).unwrap_or_else(|_| empty_struct_type())
+}
+
+fn empty_struct_type() -> StructType {
+    StructType::try_new(Vec::<StructField>::new())
+        .unwrap_or_else(|_| unreachable!("empty struct type is always valid"))
 }

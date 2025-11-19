@@ -42,19 +42,13 @@ pub fn simplify_expr(
     session: &dyn Session,
     df_schema: &DFSchema,
     expr: Expr,
-) -> Arc<dyn PhysicalExpr> {
+) -> Result<Arc<dyn PhysicalExpr>> {
     let props = ExecutionProps::new();
     let simplify_context = SimplifyContext::new(&props).with_schema(df_schema.clone().into());
     let simplifier = ExprSimplifier::new(simplify_context).with_max_cycles(10);
-    #[allow(clippy::expect_used)]
-    let simplified = simplifier
-        .simplify(expr)
-        .expect("Failed to simplify expression");
+    let simplified = simplifier.simplify(expr)?;
 
-    #[allow(clippy::expect_used)]
-    session
-        .create_physical_expr(simplified, df_schema)
-        .expect("Failed to create physical expression")
+    session.create_physical_expr(simplified, df_schema)
 }
 
 /// Determine which filters can be pushed down to the table provider
@@ -79,8 +73,7 @@ pub fn get_pushdown_filters(
 /// Check if an expression is an exact predicate for the given columns
 fn expr_is_exact_predicate_for_cols(partition_cols: &[String], expr: &Expr) -> bool {
     let mut is_applicable = true;
-    #[allow(clippy::expect_used)]
-    expr.apply(|expr| match expr {
+    let _ = expr.apply(|expr| match expr {
         Expr::Column(Column { ref name, .. }) => {
             is_applicable &= partition_cols.contains(name);
 
@@ -118,8 +111,7 @@ fn expr_is_exact_predicate_for_cols(partition_cols: &[String], expr: &Expr) -> b
             is_applicable = false;
             Ok(TreeNodeRecursion::Stop)
         }
-    })
-    .expect("Failed to apply expression transformation");
+    });
     is_applicable
 }
 

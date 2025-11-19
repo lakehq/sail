@@ -56,10 +56,9 @@ pub fn create_add(
         .map_err(|e| DeltaTableError::generic(format!("Failed to serialize stats: {e}")))?;
 
     // Determine the modification timestamp to include in the add action - milliseconds since epoch
-    #[allow(clippy::expect_used)]
     let modification_time = SystemTime::now()
         .duration_since(UNIX_EPOCH)
-        .expect("System time before Unix epoch")
+        .map_err(|e| DeltaTableError::generic(format!("System time before Unix epoch: {e}")))?
         .as_millis() as i64;
 
     Ok(Add {

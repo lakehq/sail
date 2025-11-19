@@ -570,8 +570,10 @@ pub(crate) fn divide_by_partition_values(
             .fields()
             .iter()
             .map(|f| {
-                #[allow(clippy::unwrap_used)]
-                let col = values.column(schema.index_of(f.name()).unwrap());
+                let col_idx = schema.index_of(f.name()).map_err(|_| {
+                    DeltaTableError::Schema(format!("Column {} not found in batch", f.name()))
+                })?;
+                let col = values.column(col_idx);
                 compute::take(col.as_ref(), &idx, None)
                     .map_err(|e| DeltaTableError::generic(e.to_string()))
             })

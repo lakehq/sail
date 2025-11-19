@@ -211,7 +211,7 @@ impl WinningCommitSummary {
                     commit_info,
                 })
             }
-            None => Err(DeltaTableError::InvalidVersion(winning_commit_version)),
+            None => Err(DeltaTableError::MissingVersion),
         }
     }
 

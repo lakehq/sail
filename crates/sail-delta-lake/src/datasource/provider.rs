@@ -222,7 +222,9 @@ impl TableProvider for DeltaTableProvider {
         let pushdown_filter = if !pushdown_filters.is_empty() {
             let df_schema = logical_schema.clone().to_dfschema()?;
             let pushdown_expr = conjunction(pushdown_filters);
-            pushdown_expr.map(|expr| simplify_expr(session, &df_schema, expr))
+            pushdown_expr
+                .map(|expr| simplify_expr(session, &df_schema, expr))
+                .transpose()?
         } else {
             None
         };

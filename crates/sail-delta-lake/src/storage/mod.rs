@@ -279,7 +279,7 @@ impl LogStore for DefaultLogStore {
         let latest = latest_version_from_listing(self.object_store(None)).await?;
         match latest {
             Some(version) if version >= start => Ok(version),
-            Some(_) | None => Err(DeltaTableError::InvalidVersion(start)),
+            Some(_) | None => Err(DeltaTableError::MissingVersion),
         }
     }
 

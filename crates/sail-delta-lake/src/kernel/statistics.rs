@@ -1,5 +1,6 @@
-use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
+
+use serde::{Deserialize, Serialize};
 
 /// Column statistics stored in `Stats`.
 #[derive(Serialize, Deserialize, Debug, PartialEq, Eq)]

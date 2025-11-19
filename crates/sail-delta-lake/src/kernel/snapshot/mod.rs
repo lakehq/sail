@@ -113,15 +113,15 @@ impl Snapshot {
             builder.build(engine.as_ref())
         })
         .await
-        .map_err(|e| DeltaTableError::Generic(e.to_string()))?
+        .map_err(|e| DeltaTableError::generic(e.to_string()))?
         {
             Ok(snapshot) => snapshot,
             Err(e) => {
                 // TODO: we should have more handling-friendly errors upstream in kernel.
                 if e.to_string().contains("No files in log segment") {
-                    return Err(DeltaTableError::NotATable(e.to_string()));
+                    return Err(DeltaTableError::invalid_table_location(e.to_string()));
                 } else {
-                    return Err(e.into());
+                    return Err(e);
                 }
             }
         };
@@ -240,11 +240,7 @@ impl Snapshot {
             .build()
         {
             Ok(scan) => scan,
-            Err(err) => {
-                return Box::pin(futures::stream::once(async {
-                    Err(DeltaTableError::KernelError(err))
-                }))
-            }
+            Err(err) => return Box::pin(futures::stream::once(async { Err(err) })),
         };
 
         // TODO: which capacity to choose?
@@ -341,7 +337,6 @@ impl Snapshot {
             .boxed())
     }
 
-    #[allow(clippy::expect_used)]
     pub(crate) fn tombstones(
         &self,
         log_store: &dyn LogStore,
@@ -352,7 +347,7 @@ impl Snapshot {
                     StructField::nullable("remove", KernelRemove::to_data_type()),
                     StructField::nullable("sidecar", Sidecar::to_data_type()),
                 ])
-                .expect("Failed to construct TOMBSTONE_SCHEMA"),
+                .unwrap_or_else(|_| empty_struct_type()),
             )
         });
 
@@ -369,11 +364,7 @@ impl Snapshot {
             None,
         ) {
             Ok(data) => data,
-            Err(err) => {
-                return Box::pin(futures::stream::once(async {
-                    Err(DeltaTableError::KernelError(err))
-                }))
-            }
+            Err(err) => return Box::pin(futures::stream::once(async { Err(err) })),
         };
 
         builder.spawn_blocking(move || {
@@ -413,6 +404,11 @@ impl Snapshot {
             .map_err(|e| DeltaTableError::GenericError { source: e.into() })??;
         Ok(version)
     }
+}
+
+fn empty_struct_type() -> StructType {
+    StructType::try_new(Vec::<StructField>::new())
+        .unwrap_or_else(|_| unreachable!("empty struct type is always valid"))
 }
 
 fn read_removes(batch: &RecordBatch) -> DeltaResult<Vec<Remove>> {
@@ -525,27 +521,21 @@ fn required_string_field<'a>(array: &'a StructArray, name: &str) -> DeltaResult<
     array
         .column_by_name(name)
         .and_then(|col| col.as_any().downcast_ref::<StringArray>())
-        .ok_or_else(|| DeltaTableError::SchemaMismatch {
-            msg: format!("{name} column not found on remove struct"),
-        })
+        .ok_or_else(|| DeltaTableError::Schema(format!("{name} column not found on remove struct")))
 }
 
 fn required_bool_field<'a>(array: &'a StructArray, name: &str) -> DeltaResult<&'a BooleanArray> {
     array
         .column_by_name(name)
         .and_then(|col| col.as_any().downcast_ref::<BooleanArray>())
-        .ok_or_else(|| DeltaTableError::SchemaMismatch {
-            msg: format!("{name} column not found on remove struct"),
-        })
+        .ok_or_else(|| DeltaTableError::Schema(format!("{name} column not found on remove struct")))
 }
 
 fn required_i64_field<'a>(array: &'a StructArray, name: &str) -> DeltaResult<&'a Int64Array> {
     array
         .column_by_name(name)
         .and_then(|col| col.as_any().downcast_ref::<Int64Array>())
-        .ok_or_else(|| DeltaTableError::SchemaMismatch {
-            msg: format!("{name} column not found on remove struct"),
-        })
+        .ok_or_else(|| DeltaTableError::Schema(format!("{name} column not found on remove struct")))
 }
 
 fn optional_bool_field<'a>(array: &'a StructArray, name: &str) -> Option<&'a BooleanArray> {
@@ -630,16 +620,12 @@ fn collect_map(val: &StructArray) -> DeltaResult<Vec<(String, Option<String>)>> 
         .column(0)
         .as_any()
         .downcast_ref::<StringArray>()
-        .ok_or_else(|| DeltaTableError::SchemaMismatch {
-            msg: "map key column is not Utf8".to_string(),
-        })?;
+        .ok_or_else(|| DeltaTableError::Schema("map key column is not Utf8".to_string()))?;
     let values = val
         .column(1)
         .as_any()
         .downcast_ref::<StringArray>()
-        .ok_or_else(|| DeltaTableError::SchemaMismatch {
-            msg: "map value column is not Utf8".to_string(),
-        })?;
+        .ok_or_else(|| DeltaTableError::Schema("map value column is not Utf8".to_string()))?;
 
     let mut entries = Vec::with_capacity(keys.len());
     for (key, value) in keys.iter().zip(values.iter()) {
@@ -809,11 +795,7 @@ impl EagerSnapshot {
                 .build()
             {
                 Ok(scan) => scan,
-                Err(err) => {
-                    return Box::pin(futures::stream::once(async {
-                        Err(DeltaTableError::KernelError(err))
-                    }))
-                }
+                Err(err) => return Box::pin(futures::stream::once(async { Err(err) })),
             };
             let engine = log_store.engine(None);
             let current_files = self.files.clone();
@@ -829,20 +811,12 @@ impl EagerSnapshot {
                 None,
             ) {
                 Ok(files_iter) => files_iter,
-                Err(err) => {
-                    return Box::pin(futures::stream::once(async {
-                        Err(DeltaTableError::KernelError(err))
-                    }))
-                }
+                Err(err) => return Box::pin(futures::stream::once(async { Err(err) })),
             };
 
             let files: Vec<_> = match files_iter.map_ok(|s| s.scan_files).try_collect() {
                 Ok(files) => files,
-                Err(err) => {
-                    return Box::pin(futures::stream::once(async {
-                        Err(DeltaTableError::KernelError(err))
-                    }))
-                }
+                Err(err) => return Box::pin(futures::stream::once(async { Err(err) })),
             };
 
             match concat_batches(&SCAN_ROW_ARROW_SCHEMA, &files)

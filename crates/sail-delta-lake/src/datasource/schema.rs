@@ -18,7 +18,7 @@ use datafusion::arrow::datatypes::{
 use delta_kernel::engine::arrow_conversion::TryIntoArrow;
 
 use crate::kernel::snapshot::{EagerSnapshot, LogDataHandler, Snapshot};
-use crate::kernel::DeltaResult;
+use crate::kernel::{DeltaResult, DeltaTableError};
 use crate::schema::arrow_schema_from_struct_type;
 use crate::table::DeltaTableState;
 
@@ -101,11 +101,10 @@ pub fn df_logical_schema(
         .collect();
 
     for partition_col in table_partition_cols.iter() {
-        #[allow(clippy::expect_used)]
         fields.push(Arc::new(
             input_schema
                 .field_with_name(partition_col)
-                .expect("Partition column should exist in input schema")
+                .map_err(|_| DeltaTableError::missing_column(partition_col))?
                 .to_owned(),
         ));
     }
