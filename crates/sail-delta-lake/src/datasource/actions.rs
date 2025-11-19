@@ -10,18 +10,14 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use std::collections::HashMap;
-
 use chrono::TimeZone;
-use datafusion::arrow::array::{Array, DictionaryArray, RecordBatch, StringArray};
-use datafusion::arrow::datatypes::{Schema as ArrowSchema, UInt16Type};
+use datafusion::arrow::datatypes::Schema as ArrowSchema;
 use datafusion::common::scalar::ScalarValue;
 use datafusion::datasource::listing::PartitionedFile;
 use object_store::ObjectMeta;
 
-use crate::kernel::arrow::scalar_converter::ScalarConverter;
+use crate::conversion::ScalarConverter;
 use crate::kernel::models::{Add, Remove};
-use crate::kernel::{DeltaResult, DeltaTableError};
 
 /// Convert an Add action to a PartitionedFile for DataFusion scanning
 pub fn partitioned_file_from_action(
@@ -75,73 +71,6 @@ pub fn partitioned_file_from_action(
         statistics: None,
         metadata_size_hint: None,
     }
-}
-
-/// Extract file paths from a record batch containing a path column
-pub fn get_path_column<'a>(
-    batch: &'a RecordBatch,
-    path_column: &str,
-) -> DeltaResult<impl Iterator<Item = Option<&'a str>>> {
-    let err = || DeltaTableError::Generic("Unable to obtain Delta-rs path column".to_string());
-    let dict_array = batch
-        .column_by_name(path_column)
-        .ok_or_else(err)?
-        .as_any()
-        .downcast_ref::<DictionaryArray<UInt16Type>>()
-        .ok_or_else(err)?;
-
-    let values = dict_array
-        .values()
-        .as_any()
-        .downcast_ref::<StringArray>()
-        .ok_or_else(err)?;
-
-    Ok(dict_array
-        .keys()
-        .iter()
-        .map(move |key| key.and_then(|k| values.value(k as usize).into())))
-}
-
-/// Join record batches with Add actions based on file paths
-pub fn join_batches_with_add_actions(
-    batches: Vec<RecordBatch>,
-    mut actions: HashMap<String, Add>,
-    path_column: &str,
-    dict_array: bool,
-) -> DeltaResult<Vec<Add>> {
-    let mut files = Vec::with_capacity(batches.iter().map(|batch| batch.num_rows()).sum());
-    for batch in batches {
-        let err = || DeltaTableError::Generic("Unable to obtain Delta-rs path column".to_string());
-
-        let iter: Box<dyn Iterator<Item = Option<&str>>> = if dict_array {
-            let array = get_path_column(&batch, path_column)?;
-            Box::new(array)
-        } else {
-            let array = batch
-                .column_by_name(path_column)
-                .ok_or_else(err)?
-                .as_any()
-                .downcast_ref::<StringArray>()
-                .ok_or_else(err)?;
-            Box::new(array.iter())
-        };
-
-        for path in iter {
-            let path = path.ok_or(DeltaTableError::Generic(format!(
-                "{path_column} cannot be null"
-            )))?;
-
-            match actions.remove(path) {
-                Some(action) => files.push(action),
-                None => {
-                    return Err(DeltaTableError::Generic(
-                        "Unable to map __delta_rs_path to action.".to_owned(),
-                    ))
-                }
-            }
-        }
-    }
-    Ok(files)
 }
 
 /// Convert Add actions to Remove actions (used in commit operations)

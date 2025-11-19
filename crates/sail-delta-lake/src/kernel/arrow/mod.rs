@@ -11,4 +11,3 @@
 // limitations under the License.
 
 pub(crate) mod engine_ext;
-pub(crate) mod scalar_converter;

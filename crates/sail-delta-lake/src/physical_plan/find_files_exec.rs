@@ -39,13 +39,13 @@ use datafusion_physical_expr::{Distribution, EquivalenceProperties, PhysicalExpr
 use futures::{stream, TryStreamExt};
 use url::Url;
 
-use crate::datasource::schema_rewriter::DeltaPhysicalExprAdapterFactory;
 use crate::datasource::{
-    collect_physical_columns, datafusion_to_delta_error, join_batches_with_add_actions,
-    DataFusionMixins, DeltaScanConfigBuilder, DeltaTableProvider, PredicateProperties, PATH_COLUMN,
+    collect_physical_columns, datafusion_to_delta_error, DataFusionMixins, DeltaScanConfigBuilder,
+    DeltaTableProvider, PredicateProperties, PATH_COLUMN,
 };
 use crate::kernel::models::Add;
 use crate::kernel::{DeltaResult, DeltaTableError};
+use crate::physical_plan::{join_batches_with_add_actions, DeltaPhysicalExprAdapterFactory};
 use crate::storage::{get_object_store_from_context, LogStore, LogStoreRef, StorageConfig};
 use crate::table::{open_table_with_object_store, DeltaTableState};
 

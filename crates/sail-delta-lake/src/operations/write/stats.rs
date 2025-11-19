@@ -51,7 +51,8 @@ pub fn create_add(
         num_indexed_cols,
         stats_columns,
     )?;
-    let stats_string = serde_json::to_string(&stats)
+    let stats_string = stats
+        .to_json_string()
         .map_err(|e| DeltaTableError::generic(format!("Failed to serialize stats: {e}")))?;
 
     // Determine the modification timestamp to include in the add action - milliseconds since epoch

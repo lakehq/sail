@@ -1,15 +1,3 @@
-// Licensed under the Apache License, Version 2.0 (the "License");
-// you may not use this file except in compliance with the License.
-// You may obtain a copy of the License at
-//
-//     http://www.apache.org/licenses/LICENSE-2.0
-//
-// Unless required by applicable law or agreed to in writing, software
-// distributed under the License is distributed on an "AS IS" BASIS,
-// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
-// See the License for the specific language governing permissions and
-// limitations under the License.
-
 use std::fmt::Debug;
 use std::sync::Arc;
 
@@ -22,12 +10,8 @@ use datafusion::physical_expr::expressions::{self, Column, Literal};
 use datafusion::physical_expr::{PhysicalExpr, ScalarFunctionExpr};
 use datafusion::physical_expr_adapter::{PhysicalExprAdapter, PhysicalExprAdapterFactory};
 
-use crate::datasource::type_converter::DeltaTypeConverter;
+use crate::conversion::DeltaTypeConverter;
 
-// TODO: Later rename this file to `expr_adapter.rs`.
-
-/// A Physical Expression Adapter Factory which provides casting and rewriting of physical expressions
-/// for Delta Lake conventions.
 #[derive(Debug)]
 pub struct DeltaPhysicalExprAdapterFactory {}
 
@@ -51,7 +35,6 @@ impl PhysicalExprAdapterFactory for DeltaPhysicalExprAdapterFactory {
 }
 
 impl DeltaPhysicalExprAdapterFactory {
-    /// Create column mapping and default values for schema evolution
     fn create_column_mapping(
         logical_schema: &Schema,
         physical_schema: &Schema,
@@ -87,16 +70,12 @@ impl DeltaPhysicalExprAdapterFactory {
     }
 }
 
-/// A Physical Expression Adapter that handles Delta Lake specific expression rewriting
-/// with schema evolution support
 #[derive(Debug)]
 pub(crate) struct DeltaPhysicalExprAdapter {
     logical_file_schema: SchemaRef,
     physical_file_schema: SchemaRef,
     partition_values: Vec<(FieldRef, ScalarValue)>,
-    /// Column mapping from logical to physical schema indices
     column_mapping: Vec<Option<usize>>,
-    /// Default values for missing columns in physical schema
     default_values: Vec<Option<ScalarValue>>,
 }
 
@@ -152,23 +131,16 @@ impl<'a> DeltaPhysicalExprRewriter<'a> {
         &self,
         expr: Arc<dyn PhysicalExpr>,
     ) -> Result<Transformed<Arc<dyn PhysicalExpr>>> {
-        // Handle struct field access: if the field is missing in physical schema,
-        // rewrite to a typed NULL literal matching the logical field type.
         if let Some(transformed) = self.try_rewrite_struct_field_access(&expr)? {
             return Ok(Transformed::yes(transformed));
         }
-        // Handle column references with schema evolution
         if let Some(column) = expr.as_any().downcast_ref::<Column>() {
             return self.rewrite_column(Arc::clone(&expr), column);
         }
 
-        // For non-column expressions, continue with default behavior
         Ok(Transformed::no(expr))
     }
 
-    /// Rewrite GetField(struct_col, "field") to NULL when the field is not present
-    /// in the physical schema, casting the NULL to the logical field type.
-    /// This mirrors DataFusion's default adapter behavior.
     fn try_rewrite_struct_field_access(
         &self,
         expr: &Arc<dyn PhysicalExpr>,
@@ -244,12 +216,10 @@ impl<'a> DeltaPhysicalExprRewriter<'a> {
         expr: Arc<dyn PhysicalExpr>,
         column: &Column,
     ) -> Result<Transformed<Arc<dyn PhysicalExpr>>> {
-        // First check if this is a partition column
         if let Some(partition_value) = self.get_partition_value(column.name()) {
             return Ok(Transformed::yes(Arc::new(Literal::new(partition_value))));
         }
 
-        // Get the logical field for this column
         let logical_field_index = match self.logical_file_schema.index_of(column.name()) {
             Ok(index) => index,
             Err(_) => {
@@ -268,7 +238,6 @@ impl<'a> DeltaPhysicalExprRewriter<'a> {
 
         let logical_field = self.logical_file_schema.field(logical_field_index);
 
-        // Check column mapping to see if this column exists in the physical schema
         match self.column_mapping.get(logical_field_index) {
             Some(Some(physical_index)) => {
                 let physical_field = self.physical_file_schema.field(*physical_index);
@@ -313,22 +282,14 @@ impl<'a> DeltaPhysicalExprRewriter<'a> {
         let needs_type_cast = logical_field.data_type() != physical_field.data_type();
 
         match (needs_index_update, needs_type_cast) {
-            (false, false) => {
-                // No changes needed
-                Ok(Transformed::no(expr))
-            }
+            (false, false) => Ok(Transformed::no(expr)),
             (true, false) => {
-                // Only index needs updating
                 let new_column =
                     Column::new_with_schema(logical_field.name(), self.physical_file_schema)?;
                 Ok(Transformed::yes(Arc::new(new_column)))
             }
-            (false, true) => {
-                // Only type casting needed
-                self.apply_type_cast(expr, logical_field, physical_field)
-            }
+            (false, true) => self.apply_type_cast(expr, logical_field, physical_field),
             (true, true) => {
-                // Both index update and type casting needed
                 let new_column =
                     Column::new_with_schema(logical_field.name(), self.physical_file_schema)?;
                 self.apply_type_cast(Arc::new(new_column), logical_field, physical_field)
@@ -342,7 +303,6 @@ impl<'a> DeltaPhysicalExprRewriter<'a> {
         logical_field: &Field,
         physical_field: &Field,
     ) -> Result<Transformed<Arc<dyn PhysicalExpr>>> {
-        // Check if the cast is possible
         if !can_cast_types(physical_field.data_type(), logical_field.data_type()) {
             return exec_err!(
                 "Cannot cast column '{}' from '{}' (physical) to '{}' (logical)",

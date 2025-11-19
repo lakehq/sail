@@ -46,7 +46,7 @@ use crate::datasource::{
 // use delta_kernel::snapshot::Snapshot as KernelSnapshot;
 use crate::kernel::models::Add;
 use crate::kernel::DeltaResult;
-use crate::schema_manager::get_physical_schema;
+use crate::schema::get_physical_schema;
 use crate::storage::LogStoreRef;
 use crate::table::DeltaTableState;
 

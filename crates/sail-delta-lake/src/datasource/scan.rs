@@ -26,12 +26,12 @@ use datafusion::physical_expr::PhysicalExpr;
 use object_store::path::Path;
 use sail_common_datafusion::schema_adapter::DeltaSchemaAdapterFactory;
 
-use crate::datasource::schema_rewriter::DeltaPhysicalExprAdapterFactory;
 use crate::datasource::{
     create_object_store_url, delta_to_datafusion_error, partitioned_file_from_action,
     DataFusionMixins, DeltaScanConfig, DeltaTableStateExt,
 };
 use crate::kernel::models::Add;
+use crate::physical_plan::DeltaPhysicalExprAdapterFactory;
 use crate::storage::LogStoreRef;
 use crate::table::DeltaTableState;
 

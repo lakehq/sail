@@ -12,16 +12,17 @@
 
 mod actions;
 mod metadata;
-mod scalars;
 
 pub use actions::{
-    Action, Add, ColumnCountStat, ColumnValueStat, CommitInfo, DeletionVectorDescriptor, Remove,
-    RemoveOptions, Stats, StorageType, Transaction,
+    Action, Add, CommitInfo, DeletionVectorDescriptor, Remove, RemoveOptions, StorageType,
+    Transaction,
 };
 pub use delta_kernel::actions::{Metadata, Protocol};
 pub use delta_kernel::schema::{DataType, Schema, StructField, StructType};
 pub use metadata::MetadataExt;
-pub use scalars::ScalarExt;
+
+pub use super::statistics::{ColumnCountStat, ColumnValueStat, Stats};
+pub use crate::conversion::ScalarExt;
 
 // [Credit]: <https://github.com/delta-io/delta-rs/blob/5575ad16bf641420404611d65f4ad7626e9acb16/crates/core/src/kernel/models/actions.rs>
 /// Checks if any field (including nested) in the provided iterator is a `timestampNtz`.

@@ -1,39 +1,14 @@
-// Licensed under the Apache License, Version 2.0 (the "License");
-// you may not use this file except in compliance with the License.
-// You may obtain a copy of the License at
-//
-//     http://www.apache.org/licenses/LICENSE-2.0
-//
-// Unless required by applicable law or agreed to in writing, software
-// distributed under the License is distributed on an "AS IS" BASIS,
-// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
-// See the License for the specific language governing permissions and
-// limitations under the License.
-
 use datafusion::arrow::datatypes::Schema as ArrowSchema;
-use delta_kernel::engine::arrow_conversion::{TryIntoArrow, TryIntoKernel};
 use delta_kernel::schema::StructType;
 use delta_kernel::table_features::ColumnMappingMode;
 
-use crate::column_mapping::{
+use super::converter::get_physical_arrow_schema;
+use super::mapping::{
     annotate_new_fields_for_column_mapping, annotate_schema_for_column_mapping,
-    compute_max_column_id, enrich_arrow_with_parquet_field_ids,
+    compute_max_column_id,
 };
 use crate::kernel::models::{Metadata, MetadataExt};
 use crate::kernel::DeltaResult;
-
-/// Convert logical Arrow schema to kernel `StructType`.
-pub fn logical_arrow_to_kernel(arrow: &ArrowSchema) -> DeltaResult<StructType> {
-    Ok(arrow.try_into_kernel()?)
-}
-
-/// Convert kernel `StructType` to logical Arrow schema.
-pub fn kernel_to_logical_arrow(schema: &StructType) -> ArrowSchema {
-    // FIXME: surface error instead of defaulting to empty schema
-    schema
-        .try_into_arrow()
-        .unwrap_or_else(|_| ArrowSchema::empty())
-}
 
 /// Annotate a kernel schema for column mapping (assign ids + physical names).
 pub fn annotate_for_column_mapping(schema: &StructType) -> StructType {
@@ -73,15 +48,5 @@ pub fn evolve_schema(
 /// Get the Arrow physical schema for reading/writing files, enriched with PARQUET:field_id
 /// when column mapping Name/Id mode is active.
 pub fn get_physical_schema(logical: &StructType, mode: ColumnMappingMode) -> ArrowSchema {
-    let physical_kernel = logical.make_physical(mode);
-    // FIXME: surface error instead of defaulting to empty schema
-    let physical_arrow: ArrowSchema = (&physical_kernel)
-        .try_into_arrow()
-        .unwrap_or_else(|_| ArrowSchema::empty());
-    match mode {
-        ColumnMappingMode::Name | ColumnMappingMode::Id => {
-            enrich_arrow_with_parquet_field_ids(&physical_arrow, logical)
-        }
-        ColumnMappingMode::None => physical_arrow,
-    }
+    get_physical_arrow_schema(logical, mode)
 }

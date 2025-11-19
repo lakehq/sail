@@ -1,33 +1,22 @@
-// https://github.com/delta-io/delta-rs/blob/5575ad16bf641420404611d65f4ad7626e9acb16/LICENSE.txt
-//
-// Copyright (2020) QP Hou and a number of other contributors.
-// Portions Copyright (2025) LakeSail, Inc.
-// Modified in 2025 by LakeSail, Inc.
-//
-// Licensed under the Apache License, Version 2.0 (the "License");
-// you may not use this file except in compliance with the License.
-// You may obtain a copy of the License at
-//
-//     http://www.apache.org/licenses/LICENSE-2.0
-//
-// Unless required by applicable law or agreed to in writing, software
-// distributed under the License is distributed on an "AS IS" BASIS,
-// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
-// See the License for the specific language governing permissions and
-// limitations under the License.
-
-// [Credit]: <https://github.com/delta-io/delta-rs/blob/5575ad16bf641420404611d65f4ad7626e9acb16/crates/core/src/kernel/scalars.rs>
-#![allow(dead_code)]
-
-use std::cmp::Ordering;
+use std::sync::Arc;
 
 use chrono::{DateTime, TimeZone, Utc};
-use datafusion::arrow::array::{self, Array};
+use datafusion::arrow::array::{
+    self, Array, BinaryArray, BooleanArray, Date32Array, Decimal128Array, Float32Array,
+    Float64Array, Int16Array, Int32Array, Int64Array, Int8Array, StringArray,
+    TimestampMicrosecondArray,
+};
+use datafusion::arrow::compute::{cast_with_options, CastOptions};
+use datafusion::arrow::datatypes::{DataType as ArrowDataType, TimeUnit};
 use datafusion::common::scalar::ScalarValue;
+use datafusion::common::Result as DataFusionResult;
 use delta_kernel::engine::arrow_conversion::TryIntoKernel as _;
 use delta_kernel::expressions::{Scalar, StructData};
+use delta_kernel::schema::{DataType, PrimitiveType, StructField};
 use percent_encoding::{utf8_percent_encode, AsciiSet, NON_ALPHANUMERIC};
 use serde_json::Value;
+
+use crate::kernel::{DeltaResult as DeltaResultLocal, DeltaTableError};
 
 pub const NULL_PARTITION_VALUE_DATA_PATH: &str = "__HIVE_DEFAULT_PARTITION__";
 
@@ -36,6 +25,197 @@ const RFC3986_PART: &AsciiSet = &NON_ALPHANUMERIC
     .remove(b'.')
     .remove(b'_')
     .remove(b'~');
+
+#[derive(Debug)]
+pub struct ScalarConverter;
+
+impl ScalarConverter {
+    pub fn json_to_arrow_scalar_value(
+        stat_val: &serde_json::Value,
+        field_dt: &ArrowDataType,
+    ) -> DataFusionResult<Option<ScalarValue>> {
+        match stat_val {
+            serde_json::Value::Array(_) | serde_json::Value::Object(_) => Ok(None),
+            serde_json::Value::Null => Ok(Some(ScalarValue::try_new_null(field_dt)?)),
+            _ => {
+                let string_val = match stat_val {
+                    serde_json::Value::String(s) => s.to_owned(),
+                    other => other.to_string(),
+                };
+
+                match field_dt {
+                    ArrowDataType::Timestamp(_, _) => Ok(Some(Self::parse_timestamp(
+                        &serde_json::Value::String(string_val),
+                        field_dt,
+                    )?)),
+                    ArrowDataType::Date32 => Ok(Some(Self::parse_date(
+                        &serde_json::Value::String(string_val),
+                        field_dt,
+                    )?)),
+                    _ => Ok(Some(ScalarValue::try_from_string(string_val, field_dt)?)),
+                }
+            }
+        }
+    }
+
+    pub fn scalars_to_arrow_array(
+        field: &StructField,
+        values: &[Scalar],
+    ) -> DeltaResultLocal<Arc<dyn Array>> {
+        let array: Arc<dyn Array> = match field.data_type() {
+            DataType::Primitive(PrimitiveType::String) => {
+                Arc::new(StringArray::from_iter(values.iter().map(|v| match v {
+                    Scalar::String(s) => Some(s.clone()),
+                    Scalar::Null(_) => None,
+                    _ => None,
+                })))
+            }
+            DataType::Primitive(PrimitiveType::Long) => {
+                Arc::new(Int64Array::from_iter(values.iter().map(|v| match v {
+                    Scalar::Long(i) => Some(*i),
+                    Scalar::Null(_) => None,
+                    _ => None,
+                })))
+            }
+            DataType::Primitive(PrimitiveType::Integer) => {
+                Arc::new(Int32Array::from_iter(values.iter().map(|v| match v {
+                    Scalar::Integer(i) => Some(*i),
+                    Scalar::Null(_) => None,
+                    _ => None,
+                })))
+            }
+            DataType::Primitive(PrimitiveType::Short) => {
+                Arc::new(Int16Array::from_iter(values.iter().map(|v| match v {
+                    Scalar::Short(i) => Some(*i),
+                    Scalar::Null(_) => None,
+                    _ => None,
+                })))
+            }
+            DataType::Primitive(PrimitiveType::Byte) => {
+                Arc::new(Int8Array::from_iter(values.iter().map(|v| match v {
+                    Scalar::Byte(i) => Some(*i),
+                    Scalar::Null(_) => None,
+                    _ => None,
+                })))
+            }
+            DataType::Primitive(PrimitiveType::Float) => {
+                Arc::new(Float32Array::from_iter(values.iter().map(|v| match v {
+                    Scalar::Float(f) => Some(*f),
+                    Scalar::Null(_) => None,
+                    _ => None,
+                })))
+            }
+            DataType::Primitive(PrimitiveType::Double) => {
+                Arc::new(Float64Array::from_iter(values.iter().map(|v| match v {
+                    Scalar::Double(f) => Some(*f),
+                    Scalar::Null(_) => None,
+                    _ => None,
+                })))
+            }
+            DataType::Primitive(PrimitiveType::Boolean) => {
+                Arc::new(BooleanArray::from_iter(values.iter().map(|v| match v {
+                    Scalar::Boolean(b) => Some(*b),
+                    Scalar::Null(_) => None,
+                    _ => None,
+                })))
+            }
+            DataType::Primitive(PrimitiveType::Binary) => {
+                Arc::new(BinaryArray::from_iter(values.iter().map(|v| match v {
+                    Scalar::Binary(b) => Some(b.clone()),
+                    Scalar::Null(_) => None,
+                    _ => None,
+                })))
+            }
+            DataType::Primitive(PrimitiveType::Date) => {
+                Arc::new(Date32Array::from_iter(values.iter().map(|v| match v {
+                    Scalar::Date(d) => Some(*d),
+                    Scalar::Null(_) => None,
+                    _ => None,
+                })))
+            }
+            DataType::Primitive(PrimitiveType::Timestamp) => Arc::new(
+                TimestampMicrosecondArray::from_iter(values.iter().map(|v| match v {
+                    Scalar::Timestamp(ts) => Some(*ts),
+                    Scalar::Null(_) => None,
+                    _ => None,
+                }))
+                .with_timezone("UTC"),
+            ),
+            DataType::Primitive(PrimitiveType::TimestampNtz) => Arc::new(
+                TimestampMicrosecondArray::from_iter(values.iter().map(|v| match v {
+                    Scalar::TimestampNtz(ts) => Some(*ts),
+                    Scalar::Null(_) => None,
+                    _ => None,
+                })),
+            ),
+            DataType::Primitive(PrimitiveType::Decimal(decimal)) => {
+                let array = Decimal128Array::from_iter(values.iter().map(|v| match v {
+                    Scalar::Decimal(d) => Some(d.bits()),
+                    Scalar::Null(_) => None,
+                    _ => None,
+                }));
+                let array = array
+                    .with_precision_and_scale(decimal.precision(), decimal.scale() as i8)
+                    .map_err(|e| {
+                        DeltaTableError::generic(format!("Decimal precision error: {e}"))
+                    })?;
+                Arc::new(array)
+            }
+            _ => {
+                return Err(DeltaTableError::generic(
+                    "complex partition values are not supported",
+                ))
+            }
+        };
+
+        Ok(array)
+    }
+
+    fn parse_date(
+        stat_val: &serde_json::Value,
+        field_dt: &ArrowDataType,
+    ) -> DataFusionResult<ScalarValue> {
+        let string = match stat_val {
+            serde_json::Value::String(s) => s.to_owned(),
+            _ => stat_val.to_string(),
+        };
+
+        let time_micro = ScalarValue::try_from_string(string, &ArrowDataType::Date32)?;
+        let cast_arr = cast_with_options(
+            &time_micro.to_array()?,
+            field_dt,
+            &CastOptions {
+                safe: false,
+                ..Default::default()
+            },
+        )?;
+        ScalarValue::try_from_array(&cast_arr, 0)
+    }
+
+    fn parse_timestamp(
+        stat_val: &serde_json::Value,
+        field_dt: &ArrowDataType,
+    ) -> DataFusionResult<ScalarValue> {
+        let string = match stat_val {
+            serde_json::Value::String(s) => s.to_owned(),
+            _ => stat_val.to_string(),
+        };
+
+        let time_micro = ScalarValue::try_from_string(
+            string,
+            &ArrowDataType::Timestamp(TimeUnit::Microsecond, None),
+        )?;
+        let cast_arr = cast_with_options(
+            &time_micro.to_array()?,
+            field_dt,
+            &CastOptions {
+                safe: false,
+                ..Default::default()
+            },
+        )?;
+        ScalarValue::try_from_array(&cast_arr, 0)
+    }
+}
 
 fn encode_partition_value(value: &str) -> String {
     utf8_percent_encode(value, RFC3986_PART).to_string()
@@ -145,6 +325,8 @@ fn format_date(days: i32) -> String {
 }
 
 fn serialize_decimal(bits: i128, scale: i8) -> String {
+    use std::cmp::Ordering;
+
     match scale.cmp(&0) {
         Ordering::Equal => bits.to_string(),
         Ordering::Greater => {

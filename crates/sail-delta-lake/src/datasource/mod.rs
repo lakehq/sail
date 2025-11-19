@@ -40,14 +40,9 @@ pub mod provider;
 pub mod pruning;
 pub mod scan;
 pub mod schema;
-pub(crate) mod schema_rewriter;
-pub mod type_converter;
 
 // Re-exports
-pub use actions::{
-    adds_to_remove_actions, get_path_column, join_batches_with_add_actions,
-    partitioned_file_from_action,
-};
+pub use actions::{adds_to_remove_actions, partitioned_file_from_action};
 pub use error::{datafusion_to_delta_error, delta_to_datafusion_error};
 pub use expressions::{
     collect_physical_columns, get_pushdown_filters, parse_log_data_predicate,
@@ -56,7 +51,7 @@ pub use expressions::{
 pub use provider::DeltaTableProvider;
 pub use pruning::{prune_files, PruningResult};
 pub use scan::build_file_scan_config;
-pub use schema::{arrow_schema_from_struct_type, df_logical_schema, DataFusionMixins};
+pub use schema::{df_logical_schema, DataFusionMixins};
 
 pub(crate) fn create_object_store_url(location: &Url) -> DeltaResult<ObjectStoreUrl> {
     ObjectStoreUrl::parse(&location[..url::Position::BeforePath]).map_err(datafusion_to_delta_error)

@@ -24,7 +24,6 @@ use std::borrow::Borrow;
 use std::collections::HashMap;
 use std::fmt;
 use std::hash::{Hash, Hasher};
-use std::mem::take;
 use std::str::FromStr;
 
 use chrono::DateTime;
@@ -33,6 +32,7 @@ use object_store::path::Path;
 use object_store::ObjectMeta;
 use serde::{Deserialize, Serialize};
 
+use crate::kernel::statistics::Stats;
 use crate::kernel::{DeltaResult, DeltaTableError};
 
 #[derive(Serialize, Deserialize, Copy, Clone, Debug, PartialEq, Eq, Default)]
@@ -163,10 +163,7 @@ impl Hash for Add {
 impl Add {
     /// Returns parsed statistics if present.
     pub fn get_stats(&self) -> Result<Option<Stats>, serde_json::error::Error> {
-        self.stats
-            .as_ref()
-            .map(|stats| serde_json::from_str::<PartialStats>(stats).map(|mut ps| ps.as_stats()))
-            .transpose()
+        Stats::from_json_opt(self.stats.as_deref())
     }
 
     pub fn into_remove(self, deletion_timestamp: i64) -> Remove {
@@ -210,84 +207,6 @@ impl Borrow<str> for Remove {
         self.path.as_ref()
     }
 }
-/// Column statistics stored in `Stats`.
-#[derive(Serialize, Deserialize, Debug, PartialEq, Eq)]
-#[serde(untagged)]
-pub enum ColumnValueStat {
-    Column(HashMap<String, ColumnValueStat>),
-    Value(serde_json::Value),
-}
-
-impl ColumnValueStat {
-    pub fn as_column(&self) -> Option<&HashMap<String, ColumnValueStat>> {
-        match self {
-            ColumnValueStat::Column(m) => Some(m),
-            _ => None,
-        }
-    }
-
-    pub fn as_value(&self) -> Option<&serde_json::Value> {
-        match self {
-            ColumnValueStat::Value(v) => Some(v),
-            _ => None,
-        }
-    }
-}
-
-/// Column null-count statistics stored in `Stats`.
-#[derive(Serialize, Deserialize, Debug, PartialEq, Eq)]
-#[serde(untagged)]
-pub enum ColumnCountStat {
-    Column(HashMap<String, ColumnCountStat>),
-    Value(i64),
-}
-
-impl ColumnCountStat {
-    pub fn as_column(&self) -> Option<&HashMap<String, ColumnCountStat>> {
-        match self {
-            ColumnCountStat::Column(m) => Some(m),
-            _ => None,
-        }
-    }
-
-    pub fn as_value(&self) -> Option<i64> {
-        match self {
-            ColumnCountStat::Value(v) => Some(*v),
-            _ => None,
-        }
-    }
-}
-
-/// Statistics associated with an Add action.
-#[derive(Serialize, Deserialize, Debug, Default, PartialEq, Eq)]
-#[serde(rename_all = "camelCase")]
-pub struct Stats {
-    pub num_records: i64,
-    pub min_values: HashMap<String, ColumnValueStat>,
-    pub max_values: HashMap<String, ColumnValueStat>,
-    pub null_count: HashMap<String, ColumnCountStat>,
-}
-
-#[derive(Serialize, Deserialize, Debug, Default, PartialEq, Eq)]
-#[serde(rename_all = "camelCase")]
-struct PartialStats {
-    pub num_records: i64,
-    pub min_values: Option<HashMap<String, ColumnValueStat>>,
-    pub max_values: Option<HashMap<String, ColumnValueStat>>,
-    pub null_count: Option<HashMap<String, ColumnCountStat>>,
-}
-
-impl PartialStats {
-    fn as_stats(&mut self) -> Stats {
-        Stats {
-            num_records: self.num_records,
-            min_values: take(&mut self.min_values).unwrap_or_default(),
-            max_values: take(&mut self.max_values).unwrap_or_default(),
-            null_count: take(&mut self.null_count).unwrap_or_default(),
-        }
-    }
-}
-
 /// File addition action.
 #[derive(Debug, Clone, Default, PartialEq, Eq, Deserialize, Serialize)]
 #[serde(rename_all = "camelCase")]

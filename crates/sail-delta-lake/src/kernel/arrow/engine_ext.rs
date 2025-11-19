@@ -47,7 +47,7 @@ use delta_kernel::{
 };
 use itertools::Itertools;
 
-use crate::kernel::arrow::scalar_converter::ScalarConverter;
+use crate::conversion::ScalarConverter;
 use crate::kernel::snapshot::SCAN_ROW_ARROW_SCHEMA;
 use crate::kernel::{DeltaResult as DeltaResultLocal, DeltaTableError};
 

@@ -33,9 +33,9 @@ use datafusion::sql::sqlparser::parser::Parser;
 use datafusion::sql::sqlparser::tokenizer::Tokenizer;
 
 use crate::datasource::error::datafusion_to_delta_error;
-use crate::datasource::schema::arrow_schema_from_struct_type;
 use crate::kernel::snapshot::LogDataHandler;
 use crate::kernel::{DeltaResult, DeltaTableError};
+use crate::schema::arrow_schema_from_struct_type;
 
 /// Simplify a logical expression and convert it to a physical expression
 pub fn simplify_expr(

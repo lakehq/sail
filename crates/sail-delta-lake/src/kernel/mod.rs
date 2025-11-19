@@ -13,6 +13,7 @@
 pub mod arrow;
 pub mod models;
 pub mod snapshot;
+pub mod statistics;
 pub mod transaction;
 
 pub(crate) mod checkpoints;

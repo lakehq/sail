@@ -37,16 +37,17 @@ use futures::stream::{once, StreamExt};
 use sail_common_datafusion::datasource::PhysicalSinkMode;
 use url::Url;
 
-use crate::column_mapping::compute_max_column_id;
+use crate::conversion::DeltaTypeConverter;
 use crate::datasource::delta_to_datafusion_error;
-use crate::datasource::type_converter::DeltaTypeConverter;
 use crate::kernel::models::{Action, Metadata, Protocol};
 // TODO: Follow upstream for `MetadataExt`.
 use crate::kernel::{DeltaOperation, SaveMode};
 use crate::operations::write::writer::{DeltaWriter, WriterConfig};
 use crate::options::{ColumnMappingModeOption, TableDeltaOptions};
 use crate::physical_plan::CommitInfo;
-use crate::schema_manager::{annotate_for_column_mapping, evolve_schema, get_physical_schema};
+use crate::schema::{
+    annotate_for_column_mapping, compute_max_column_id, evolve_schema, get_physical_schema,
+};
 use crate::storage::{get_object_store_from_context, StorageConfig};
 use crate::table::open_table_with_object_store;
 
