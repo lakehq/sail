@@ -18,7 +18,8 @@ import { TreeNode } from "./theme/utils/tree";
 // - SAIL_SITE_URL: The URL of the documentation site.
 //     The URL must end with "/" and contain at least one last path segment corresponding to the documentation version.
 // - SAIL_VERSION: The version of the Sail library.
-// - SAIL_FATHOM_SITE_ID: (Optional) The Fathom site ID for analytics.
+// - SAIL_FATHOM_SITE_ID: (Optional) The Fathom site ID.
+// - SAIL_APOLLOIO_APP_ID: (Optional) The Apollo.io application ID.
 
 class Site {
   static url(): string {
@@ -64,22 +65,34 @@ class Site {
 
 class Analytics {
   static head(): HeadConfig[] {
-    const siteId = process.env.SAIL_FATHOM_SITE_ID;
-    if (siteId) {
-      return [
-        [
-          "script",
-          {
-            src: "https://cdn.usefathom.com/script.js",
-            "data-site": siteId,
-            "data-spa": "auto",
-            defer: "",
-          },
-        ],
-      ];
-    } else {
-      return [];
+    const items: HeadConfig[] = [];
+
+    const fathomSiteId = process.env.SAIL_FATHOM_SITE_ID;
+    if (fathomSiteId) {
+      items.push([
+        "script",
+        {
+          src: "https://cdn.usefathom.com/script.js",
+          "data-site": fathomSiteId,
+          "data-spa": "auto",
+          defer: "",
+        },
+      ]);
     }
+
+    const apolloAppId = process.env.SAIL_APOLLOIO_APP_ID;
+    if (apolloAppId) {
+      items.push([
+        "script",
+        {},
+        `function initApollo(){var n=Math.random().toString(36).substring(7),o=document.createElement("script");
+o.src="https://assets.apollo.io/micro/website-tracker/tracker.iife.js?nocache="+n,o.async=!0,o.defer=!0,
+o.onload=function(){window.trackingFunctions.onLoad({appId:${JSON.stringify(apolloAppId)}})},
+document.head.appendChild(o)}initApollo();`,
+      ]);
+    }
+
+    return items;
   }
 }
 

@@ -31,7 +31,7 @@ Sail benefits from Rust's unique approach to memory management. The _ownership_ 
 
 ## Compatibility
 
-Sail features a drop-in replacement for Spark SQL and the Spark DataFrame API. Your Spark session acts as a gRPC client that communicates with the Sail server via the Spark Connect protocol.
+Sail features a drop-in replacement for Spark SQL and the Spark DataFrame API. Your Spark client session communicates with the Sail server over gRPC via the Spark Connect protocol.
 
 Sail treats compatibility with Spark seriously. If there is a behavior mismatch between Sail and Spark, we consider it a bug. As you explore the documentation, you will find that Sail already supports most common usages of Spark. Our supported features keep expanding toward full parity with Spark.
 
