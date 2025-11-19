@@ -15,8 +15,6 @@ use std::sync::Arc;
 use datafusion::common::{plan_err, DataFusionError, Result};
 use url::Url;
 
-use crate::spec::{Snapshot, TableMetadata};
-
 pub async fn find_latest_metadata_file(
     object_store: &Arc<dyn object_store::ObjectStore>,
     table_url: &Url,
@@ -123,43 +121,4 @@ pub async fn find_latest_metadata_file(
             plan_err!("Failed to list metadata directory: {}", e)
         }
     }
-}
-
-fn parse_timestamp_to_ms(s: &str) -> std::result::Result<i64, String> {
-    use chrono::{DateTime, NaiveDateTime, TimeZone, Utc};
-
-    if let Ok(dt) = DateTime::parse_from_rfc3339(s) {
-        return Ok(dt.with_timezone(&Utc).timestamp_millis());
-    }
-
-    let fmt = "%Y-%m-%d %H:%M:%S%.3f";
-    let naive = NaiveDateTime::parse_from_str(s, fmt)
-        .map_err(|e| format!("Invalid timestamp '{}': {}", s, e))?;
-    Ok(Utc.from_utc_datetime(&naive).timestamp_millis())
-}
-
-fn find_snapshot_by_ts(meta: &TableMetadata, ts_ms: i64) -> Option<&Snapshot> {
-    if let Some(log_entry) = meta
-        .snapshot_log
-        .iter()
-        .filter(|e| e.timestamp_ms <= ts_ms)
-        .max_by(|a, b| {
-            a.timestamp_ms
-                .cmp(&b.timestamp_ms)
-                .then_with(|| a.snapshot_id.cmp(&b.snapshot_id))
-        })
-    {
-        return meta
-            .snapshots
-            .iter()
-            .find(|s| s.snapshot_id() == log_entry.snapshot_id);
-    }
-    meta.snapshots
-        .iter()
-        .filter(|s| s.timestamp_ms() <= ts_ms)
-        .max_by(|a, b| {
-            a.timestamp_ms()
-                .cmp(&b.timestamp_ms())
-                .then_with(|| a.snapshot_id().cmp(&b.snapshot_id()))
-        })
 }
