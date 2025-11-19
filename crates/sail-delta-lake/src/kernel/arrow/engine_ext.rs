@@ -21,13 +21,18 @@
 //! Utilities for interacting with Kernel APIs using Arrow data structures.
 //!
 use std::borrow::Cow;
+use std::collections::HashMap;
 use std::sync::Arc;
 
-use datafusion::arrow::array::{Array, StructArray};
+use arrow_schema::Fields;
+use datafusion::arrow::array::{
+    Array, BinaryArray, BooleanArray, Date32Array, Decimal128Array, Float32Array, Float64Array,
+    Int16Array, Int32Array, Int64Array, Int8Array, MapArray, StringArray, StructArray,
+    TimestampMicrosecondArray,
+};
 use datafusion::arrow::datatypes::{
     DataType as ArrowDataType, Field, Schema as ArrowSchema, SchemaRef as ArrowSchemaRef,
 };
-use delta_kernel::arrow::array::BooleanArray;
 use delta_kernel::arrow::compute::filter_record_batch;
 use delta_kernel::arrow::record_batch::RecordBatch;
 use delta_kernel::engine::arrow_conversion::TryIntoArrow;
@@ -46,7 +51,6 @@ use delta_kernel::{
 };
 use itertools::Itertools;
 
-use crate::kernel::snapshot::replay::parse_partitions;
 use crate::kernel::snapshot::SCAN_ROW_ARROW_SCHEMA;
 use crate::kernel::{DeltaResult as DeltaResultLocal, DeltaTableError};
 
@@ -220,7 +224,7 @@ impl SnapshotExt for Snapshot {
         columns.push(stats_array.clone());
 
         if let Some(partition_schema) = self.partitions_schema()? {
-            let partition_array = parse_partitions(
+            let partition_array = parse_partition_values_array(
                 batch,
                 partition_schema.as_ref(),
                 "fileConstantValues.partitionValues",
@@ -238,6 +242,235 @@ impl SnapshotExt for Snapshot {
             columns,
         )?)
     }
+}
+
+fn parse_partition_values_array(
+    batch: &RecordBatch,
+    partition_schema: &StructType,
+    path: &str,
+) -> DeltaResultLocal<StructArray> {
+    let partitions = map_array_from_path(batch, path)?;
+    let num_rows = partitions.len();
+
+    let mut collected: HashMap<String, Vec<Scalar>> = partition_schema
+        .fields()
+        .map(|f| (f.physical_name().to_string(), Vec::with_capacity(num_rows)))
+        .collect();
+
+    for row in 0..num_rows {
+        if partitions.is_null(row) {
+            return Err(DeltaTableError::generic(
+                "Expected partition values map, found null entry.",
+            ));
+        }
+        let raw_values = collect_partition_row(&partitions.value(row))?;
+
+        for field in partition_schema.fields() {
+            let value = raw_values.get(field.physical_name());
+            let scalar = match field.data_type() {
+                DataType::Primitive(primitive) => match value {
+                    Some(Some(raw)) => primitive.parse_scalar(raw)?,
+                    _ => Scalar::Null(field.data_type().clone()),
+                },
+                _ => {
+                    return Err(DeltaTableError::generic(
+                        "nested partitioning values are not supported",
+                    ))
+                }
+            };
+            #[allow(clippy::expect_used)]
+            collected
+                .get_mut(field.physical_name())
+                .expect("partition field missing")
+                .push(scalar);
+        }
+    }
+
+    #[allow(clippy::unwrap_used)]
+    let columns = partition_schema
+        .fields()
+        .map(|field| build_partition_column(field, collected.get(field.physical_name()).unwrap()))
+        .collect::<DeltaResultLocal<Vec<_>>>()?;
+
+    let arrow_fields: Fields = Fields::from(
+        partition_schema
+            .fields()
+            .map(|f| f.try_into_arrow())
+            .collect::<Result<Vec<Field>, _>>()?,
+    );
+
+    Ok(StructArray::try_new(arrow_fields, columns, None)?)
+}
+
+fn map_array_from_path<'a>(batch: &'a RecordBatch, path: &str) -> DeltaResultLocal<&'a MapArray> {
+    let mut segments = path.split('.');
+    let first = segments
+        .next()
+        .ok_or_else(|| DeltaTableError::generic("partition column path must not be empty"))?;
+
+    let mut current: &dyn Array = batch
+        .column_by_name(first)
+        .map(|col| col.as_ref())
+        .ok_or_else(|| DeltaTableError::SchemaMismatch {
+            msg: format!("{first} column not found when parsing partitions"),
+        })?;
+
+    for segment in segments {
+        let struct_array = current
+            .as_any()
+            .downcast_ref::<StructArray>()
+            .ok_or_else(|| DeltaTableError::SchemaMismatch {
+                msg: format!("Expected struct column while traversing {path}"),
+            })?;
+        current = struct_array
+            .column_by_name(segment)
+            .map(|col| col.as_ref())
+            .ok_or_else(|| DeltaTableError::SchemaMismatch {
+                msg: format!("{segment} column not found while traversing {path}"),
+            })?;
+    }
+
+    current
+        .as_any()
+        .downcast_ref::<MapArray>()
+        .ok_or_else(|| DeltaTableError::SchemaMismatch {
+            msg: format!("Column {path} is not a map"),
+        })
+}
+
+fn collect_partition_row(value: &StructArray) -> DeltaResultLocal<HashMap<String, Option<String>>> {
+    let keys = value
+        .column(0)
+        .as_any()
+        .downcast_ref::<StringArray>()
+        .ok_or_else(|| DeltaTableError::SchemaMismatch {
+            msg: "map key column is not Utf8".to_string(),
+        })?;
+    let vals = value
+        .column(1)
+        .as_any()
+        .downcast_ref::<StringArray>()
+        .ok_or_else(|| DeltaTableError::SchemaMismatch {
+            msg: "map value column is not Utf8".to_string(),
+        })?;
+
+    let mut result = HashMap::with_capacity(keys.len());
+    for (key, value) in keys.iter().zip(vals.iter()) {
+        if let Some(k) = key {
+            result.insert(k.to_string(), value.map(|v| v.to_string()));
+        }
+    }
+    Ok(result)
+}
+
+fn build_partition_column(
+    field: &StructField,
+    values: &[Scalar],
+) -> DeltaResultLocal<Arc<dyn Array>> {
+    let array: Arc<dyn Array> = match field.data_type() {
+        DataType::Primitive(PrimitiveType::String) => {
+            Arc::new(StringArray::from_iter(values.iter().map(|v| match v {
+                Scalar::String(s) => Some(s.clone()),
+                Scalar::Null(_) => None,
+                _ => None,
+            })))
+        }
+        DataType::Primitive(PrimitiveType::Long) => {
+            Arc::new(Int64Array::from_iter(values.iter().map(|v| match v {
+                Scalar::Long(i) => Some(*i),
+                Scalar::Null(_) => None,
+                _ => None,
+            })))
+        }
+        DataType::Primitive(PrimitiveType::Integer) => {
+            Arc::new(Int32Array::from_iter(values.iter().map(|v| match v {
+                Scalar::Integer(i) => Some(*i),
+                Scalar::Null(_) => None,
+                _ => None,
+            })))
+        }
+        DataType::Primitive(PrimitiveType::Short) => {
+            Arc::new(Int16Array::from_iter(values.iter().map(|v| match v {
+                Scalar::Short(i) => Some(*i),
+                Scalar::Null(_) => None,
+                _ => None,
+            })))
+        }
+        DataType::Primitive(PrimitiveType::Byte) => {
+            Arc::new(Int8Array::from_iter(values.iter().map(|v| match v {
+                Scalar::Byte(i) => Some(*i),
+                Scalar::Null(_) => None,
+                _ => None,
+            })))
+        }
+        DataType::Primitive(PrimitiveType::Float) => {
+            Arc::new(Float32Array::from_iter(values.iter().map(|v| match v {
+                Scalar::Float(f) => Some(*f),
+                Scalar::Null(_) => None,
+                _ => None,
+            })))
+        }
+        DataType::Primitive(PrimitiveType::Double) => {
+            Arc::new(Float64Array::from_iter(values.iter().map(|v| match v {
+                Scalar::Double(f) => Some(*f),
+                Scalar::Null(_) => None,
+                _ => None,
+            })))
+        }
+        DataType::Primitive(PrimitiveType::Boolean) => {
+            Arc::new(BooleanArray::from_iter(values.iter().map(|v| match v {
+                Scalar::Boolean(b) => Some(*b),
+                Scalar::Null(_) => None,
+                _ => None,
+            })))
+        }
+        DataType::Primitive(PrimitiveType::Binary) => {
+            Arc::new(BinaryArray::from_iter(values.iter().map(|v| match v {
+                Scalar::Binary(b) => Some(b.clone()),
+                Scalar::Null(_) => None,
+                _ => None,
+            })))
+        }
+        DataType::Primitive(PrimitiveType::Date) => {
+            Arc::new(Date32Array::from_iter(values.iter().map(|v| match v {
+                Scalar::Date(d) => Some(*d),
+                Scalar::Null(_) => None,
+                _ => None,
+            })))
+        }
+        DataType::Primitive(PrimitiveType::Timestamp) => Arc::new(
+            TimestampMicrosecondArray::from_iter(values.iter().map(|v| match v {
+                Scalar::Timestamp(ts) => Some(*ts),
+                Scalar::Null(_) => None,
+                _ => None,
+            }))
+            .with_timezone("UTC"),
+        ),
+        DataType::Primitive(PrimitiveType::TimestampNtz) => Arc::new(
+            TimestampMicrosecondArray::from_iter(values.iter().map(|v| match v {
+                Scalar::TimestampNtz(ts) => Some(*ts),
+                Scalar::Null(_) => None,
+                _ => None,
+            })),
+        ),
+        DataType::Primitive(PrimitiveType::Decimal(decimal)) => {
+            let array = Decimal128Array::from_iter(values.iter().map(|v| match v {
+                Scalar::Decimal(d) => Some(d.bits()),
+                Scalar::Null(_) => None,
+                _ => None,
+            }));
+            let array = array
+                .with_precision_and_scale(decimal.precision(), decimal.scale() as i8)
+                .map_err(|e| DeltaTableError::generic(format!("Decimal precision error: {e}")))?;
+            Arc::new(array)
+        }
+        _ => {
+            return Err(DeltaTableError::generic(
+                "complex partition values are not supported",
+            ))
+        }
+    };
+    Ok(array)
 }
 
 fn partitions_schema(

@@ -24,7 +24,6 @@ use delta_kernel::scan::scan_row_schema;
 use delta_kernel::table_configuration::TableConfiguration;
 use delta_kernel::table_properties::TableProperties;
 
-use crate::kernel::arrow::extract::extract_and_cast;
 use crate::kernel::snapshot::iterators::LogicalFileView;
 use crate::kernel::{DeltaResult, DeltaTableError};
 
@@ -108,7 +107,6 @@ mod datafusion {
 
     use super::*;
     use crate::kernel::arrow::engine_ext::ExpressionEvaluatorExt as _;
-    use crate::kernel::arrow::extract::{extract_and_cast_opt, extract_column};
     use crate::kernel::ARROW_HANDLER;
 
     #[derive(Debug, Default, Clone)]
@@ -128,15 +126,15 @@ mod datafusion {
 
     impl<'a> FileStatsAccessor<'a> {
         pub(crate) fn try_new(data: &'a RecordBatch) -> DeltaResult<Self> {
-            let sizes = extract_and_cast::<Int64Array>(data, "size")?;
-            let stats = extract_and_cast::<StructArray>(data, "stats_parsed")?;
+            let sizes = batch_column::<Int64Array>(data, "size")?;
+            let stats = batch_column::<StructArray>(data, "stats_parsed")?;
             Ok(Self { sizes, stats })
         }
     }
 
     impl FileStatsAccessor<'_> {
         fn collect_count(&self, name: &str) -> Precision<usize> {
-            let num_records = extract_and_cast_opt::<Int64Array>(self.stats, name);
+            let num_records = struct_column_opt::<Int64Array>(self.stats, name);
             if let Some(num_records) = num_records {
                 if num_records.is_empty() {
                     Precision::Exact(0)
@@ -165,17 +163,17 @@ mod datafusion {
             fun_type: AccumulatorType,
         ) -> Precision<ScalarValue> {
             let mut path = name.split('.');
-            let array = if let Ok(array) = extract_column(self.stats, path_step, &mut path) {
-                array
-            } else {
-                return Precision::Absent;
+            let array = match nested_column(self.stats, path_step, &mut path) {
+                Ok(array) => array,
+                Err(_) => return Precision::Absent,
             };
+            let array_ref = array.as_ref();
 
-            if array.data_type().is_primitive() {
+            if array_ref.data_type().is_primitive() {
                 let accumulator: Option<Box<dyn Accumulator>> = match fun_type {
-                    AccumulatorType::Min => MinAccumulator::try_new(array.data_type())
+                    AccumulatorType::Min => MinAccumulator::try_new(array_ref.data_type())
                         .map_or(None, |a| Some(Box::new(a))),
-                    AccumulatorType::Max => MaxAccumulator::try_new(array.data_type())
+                    AccumulatorType::Max => MaxAccumulator::try_new(array_ref.data_type())
                         .map_or(None, |a| Some(Box::new(a))),
                     _ => None,
                 };
@@ -192,7 +190,7 @@ mod datafusion {
                 return Precision::Absent;
             }
 
-            match array.data_type() {
+            match array_ref.data_type() {
                 ArrowDataType::Struct(fields) => fields
                     .iter()
                     .map(|f| {
@@ -362,6 +360,54 @@ mod datafusion {
             let batch = evaluator.evaluate_arrow(self.data.clone()).ok()?;
             batch.column_by_name("output").cloned()
         }
+    }
+
+    fn batch_column<'a, T: Array + 'static>(
+        batch: &'a RecordBatch,
+        name: &str,
+    ) -> DeltaResult<&'a T> {
+        batch
+            .column_by_name(name)
+            .and_then(|col| col.as_any().downcast_ref::<T>())
+            .ok_or_else(|| DeltaTableError::SchemaMismatch {
+                msg: format!("column {name} not found in log data"),
+            })
+    }
+
+    fn struct_column_opt<'a, T: Array + 'static>(
+        array: &'a StructArray,
+        name: &str,
+    ) -> Option<&'a T> {
+        array
+            .column_by_name(name)
+            .and_then(|col| col.as_any().downcast_ref::<T>())
+    }
+
+    fn nested_column<'a>(
+        array: &'a StructArray,
+        root: &str,
+        path: &mut impl Iterator<Item = &'a str>,
+    ) -> Result<&'a Arc<dyn Array>, DeltaTableError> {
+        let mut current =
+            array
+                .column_by_name(root)
+                .ok_or_else(|| DeltaTableError::SchemaMismatch {
+                    msg: format!("{root} column not found in stats struct"),
+                })?;
+        for segment in path {
+            let struct_array = current
+                .as_any()
+                .downcast_ref::<StructArray>()
+                .ok_or_else(|| DeltaTableError::SchemaMismatch {
+                    msg: format!("Expected struct while accessing {segment} in stats"),
+                })?;
+            current = struct_array.column_by_name(segment).ok_or_else(|| {
+                DeltaTableError::SchemaMismatch {
+                    msg: format!("{segment} column not found in stats struct"),
+                }
+            })?;
+        }
+        Ok(current)
     }
 
     impl PruningStatistics for LogDataHandler<'_> {

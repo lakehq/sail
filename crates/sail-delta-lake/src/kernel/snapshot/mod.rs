@@ -18,10 +18,14 @@
 
 // [Credit]: <https://github.com/delta-io/delta-rs/blob/1f0b4d0965a85400c1effc6e9b4c7ebbb6795978/crates/core/src/kernel/snapshot/mod.rs>
 
+use std::collections::HashMap;
 use std::io::{BufRead, BufReader, Cursor};
+use std::str::FromStr;
 use std::sync::{Arc, LazyLock};
 
-use datafusion::arrow::array::RecordBatch;
+use datafusion::arrow::array::{
+    Array, BooleanArray, Int32Array, Int64Array, MapArray, RecordBatch, StringArray, StructArray,
+};
 use datafusion::arrow::compute::concat_batches;
 use delta_kernel::actions::{Remove as KernelRemove, Sidecar};
 use delta_kernel::engine::arrow_conversion::TryIntoArrow;
@@ -39,22 +43,23 @@ use futures::{StreamExt, TryStreamExt};
 use itertools::Itertools;
 use object_store::path::Path;
 use object_store::ObjectStore;
+use percent_encoding::percent_decode_str;
 use tokio::task::spawn_blocking;
 use url::Url;
 
 use crate::kernel::arrow::engine_ext::{ScanExt, SnapshotExt};
-use crate::kernel::models::{Action, CommitInfo, Metadata, Protocol, Remove, StructType};
+use crate::kernel::models::{
+    Action, CommitInfo, DeletionVectorDescriptor, Metadata, Protocol, Remove, StorageType,
+    StructType,
+};
 use crate::kernel::snapshot::iterators::LogicalFileView;
 pub use crate::kernel::snapshot::log_data::LogDataHandler;
-use crate::kernel::snapshot::parse::read_removes;
 use crate::kernel::snapshot::stream::{RecordBatchReceiverStreamBuilder, SendableRBStream};
 use crate::kernel::{DeltaResult, DeltaTableConfig, DeltaTableError};
 use crate::storage::LogStore;
 
 pub mod iterators;
 pub mod log_data;
-mod parse;
-pub mod replay;
 mod stream;
 
 pub(crate) static SCAN_ROW_ARROW_SCHEMA: LazyLock<arrow_schema::SchemaRef> = LazyLock::new(|| {
@@ -408,6 +413,241 @@ impl Snapshot {
             .map_err(|e| DeltaTableError::GenericError { source: e.into() })??;
         Ok(version)
     }
+}
+
+fn read_removes(batch: &RecordBatch) -> DeltaResult<Vec<Remove>> {
+    let Some(remove_col) = batch
+        .column_by_name("remove")
+        .and_then(|col| col.as_any().downcast_ref::<StructArray>())
+    else {
+        return Ok(vec![]);
+    };
+
+    if remove_col.null_count() == remove_col.len() {
+        return Ok(vec![]);
+    }
+
+    let path_col = required_string_field(remove_col, "path")?;
+    let data_change_col = required_bool_field(remove_col, "dataChange")?;
+    let deletion_ts_col = required_i64_field(remove_col, "deletionTimestamp")?;
+    let extended_file_metadata_col = optional_bool_field(remove_col, "extendedFileMetadata");
+    let partition_values_col = optional_map_field(remove_col, "partitionValues");
+    let size_col = optional_i64_field(remove_col, "size");
+    let tags_col = optional_map_field(remove_col, "tags");
+    let dv_struct = optional_struct_field(remove_col, "deletionVector");
+
+    let dv_storage_type = dv_struct
+        .and_then(|c| c.column_by_name("storageType"))
+        .and_then(|col| col.as_any().downcast_ref::<StringArray>());
+    let dv_path = dv_struct
+        .and_then(|c| c.column_by_name("pathOrInlineDv"))
+        .and_then(|col| col.as_any().downcast_ref::<StringArray>());
+    let dv_offset = dv_struct
+        .and_then(|c| c.column_by_name("offset"))
+        .and_then(|col| col.as_any().downcast_ref::<Int32Array>());
+    let dv_size_in_bytes = dv_struct
+        .and_then(|c| c.column_by_name("sizeInBytes"))
+        .and_then(|col| col.as_any().downcast_ref::<Int32Array>());
+    let dv_cardinality = dv_struct
+        .and_then(|c| c.column_by_name("cardinality"))
+        .and_then(|col| col.as_any().downcast_ref::<Int64Array>());
+
+    let mut removes = Vec::with_capacity(remove_col.len());
+    for idx in 0..remove_col.len() {
+        if !remove_col.is_valid(idx) {
+            continue;
+        }
+
+        let raw_path = read_str(path_col, idx)?;
+        let path = percent_decode_str(raw_path)
+            .decode_utf8()
+            .map_err(|_| DeltaTableError::generic("illegal path encoding"))?
+            .to_string();
+
+        let deletion_vector = if let (
+            Some(struct_array),
+            Some(storage),
+            Some(path),
+            Some(size),
+            Some(cardinality),
+        ) = (
+            dv_struct,
+            dv_storage_type,
+            dv_path,
+            dv_size_in_bytes,
+            dv_cardinality,
+        ) {
+            if struct_array.is_valid(idx) {
+                let storage_type =
+                    StorageType::from_str(read_str(storage, idx)?).map_err(|_| {
+                        DeltaTableError::generic("failed to parse deletion vector storage type")
+                    })?;
+                let path_or_inline_dv = read_str(path, idx)?.to_string();
+                let size_in_bytes = read_i32(size, idx)?;
+                let cardinality = read_i64(cardinality, idx)?;
+                let offset = dv_offset.and_then(|arr| read_i32_opt(arr, idx));
+                Some(DeletionVectorDescriptor {
+                    storage_type,
+                    path_or_inline_dv,
+                    size_in_bytes,
+                    cardinality,
+                    offset,
+                })
+            } else {
+                None
+            }
+        } else {
+            None
+        };
+
+        let partition_values = map_to_hash_map(partition_values_col, idx)?;
+        let tags = map_to_hash_map(tags_col, idx)?;
+
+        removes.push(Remove {
+            path,
+            data_change: read_bool(data_change_col, idx)?,
+            deletion_timestamp: read_i64_opt(deletion_ts_col, idx),
+            extended_file_metadata: extended_file_metadata_col
+                .and_then(|col| read_bool_opt(col, idx)),
+            partition_values,
+            size: size_col.and_then(|col| read_i64_opt(col, idx)),
+            tags,
+            deletion_vector,
+            base_row_id: None,
+            default_row_commit_version: None,
+        });
+    }
+
+    Ok(removes)
+}
+
+fn required_string_field<'a>(array: &'a StructArray, name: &str) -> DeltaResult<&'a StringArray> {
+    array
+        .column_by_name(name)
+        .and_then(|col| col.as_any().downcast_ref::<StringArray>())
+        .ok_or_else(|| DeltaTableError::SchemaMismatch {
+            msg: format!("{name} column not found on remove struct"),
+        })
+}
+
+fn required_bool_field<'a>(array: &'a StructArray, name: &str) -> DeltaResult<&'a BooleanArray> {
+    array
+        .column_by_name(name)
+        .and_then(|col| col.as_any().downcast_ref::<BooleanArray>())
+        .ok_or_else(|| DeltaTableError::SchemaMismatch {
+            msg: format!("{name} column not found on remove struct"),
+        })
+}
+
+fn required_i64_field<'a>(array: &'a StructArray, name: &str) -> DeltaResult<&'a Int64Array> {
+    array
+        .column_by_name(name)
+        .and_then(|col| col.as_any().downcast_ref::<Int64Array>())
+        .ok_or_else(|| DeltaTableError::SchemaMismatch {
+            msg: format!("{name} column not found on remove struct"),
+        })
+}
+
+fn optional_bool_field<'a>(array: &'a StructArray, name: &str) -> Option<&'a BooleanArray> {
+    array
+        .column_by_name(name)
+        .and_then(|col| col.as_any().downcast_ref::<BooleanArray>())
+}
+
+fn optional_map_field<'a>(array: &'a StructArray, name: &str) -> Option<&'a MapArray> {
+    array
+        .column_by_name(name)
+        .and_then(|col| col.as_any().downcast_ref::<MapArray>())
+}
+
+fn optional_i64_field<'a>(array: &'a StructArray, name: &str) -> Option<&'a Int64Array> {
+    array
+        .column_by_name(name)
+        .and_then(|col| col.as_any().downcast_ref::<Int64Array>())
+}
+
+fn optional_struct_field<'a>(array: &'a StructArray, name: &str) -> Option<&'a StructArray> {
+    array
+        .column_by_name(name)
+        .and_then(|col| col.as_any().downcast_ref::<StructArray>())
+}
+
+fn read_str(array: &StringArray, idx: usize) -> DeltaResult<&str> {
+    array
+        .is_valid(idx)
+        .then(|| array.value(idx))
+        .ok_or_else(|| DeltaTableError::generic("missing string value"))
+}
+
+fn read_bool(array: &BooleanArray, idx: usize) -> DeltaResult<bool> {
+    array
+        .is_valid(idx)
+        .then(|| array.value(idx))
+        .ok_or_else(|| DeltaTableError::generic("missing boolean value"))
+}
+
+fn read_bool_opt(array: &BooleanArray, idx: usize) -> Option<bool> {
+    array.is_valid(idx).then(|| array.value(idx))
+}
+
+fn read_i64(array: &Int64Array, idx: usize) -> DeltaResult<i64> {
+    array
+        .is_valid(idx)
+        .then(|| array.value(idx))
+        .ok_or_else(|| DeltaTableError::generic("missing i64 value"))
+}
+
+fn read_i64_opt(array: &Int64Array, idx: usize) -> Option<i64> {
+    array.is_valid(idx).then(|| array.value(idx))
+}
+
+fn read_i32(array: &Int32Array, idx: usize) -> DeltaResult<i32> {
+    array
+        .is_valid(idx)
+        .then(|| array.value(idx))
+        .ok_or_else(|| DeltaTableError::generic("missing i32 value"))
+}
+
+fn read_i32_opt(array: &Int32Array, idx: usize) -> Option<i32> {
+    array.is_valid(idx).then(|| array.value(idx))
+}
+
+fn map_to_hash_map(
+    map: Option<&MapArray>,
+    idx: usize,
+) -> DeltaResult<Option<HashMap<String, Option<String>>>> {
+    match map {
+        Some(array) if array.is_valid(idx) => {
+            let entries = collect_map(&array.value(idx))?;
+            Ok(Some(entries.into_iter().collect::<HashMap<_, _>>()))
+        }
+        _ => Ok(None),
+    }
+}
+
+fn collect_map(val: &StructArray) -> DeltaResult<Vec<(String, Option<String>)>> {
+    let keys = val
+        .column(0)
+        .as_any()
+        .downcast_ref::<StringArray>()
+        .ok_or_else(|| DeltaTableError::SchemaMismatch {
+            msg: "map key column is not Utf8".to_string(),
+        })?;
+    let values = val
+        .column(1)
+        .as_any()
+        .downcast_ref::<StringArray>()
+        .ok_or_else(|| DeltaTableError::SchemaMismatch {
+            msg: "map value column is not Utf8".to_string(),
+        })?;
+
+    let mut entries = Vec::with_capacity(keys.len());
+    for (key, value) in keys.iter().zip(values.iter()) {
+        if let Some(k) = key {
+            entries.push((k.to_string(), value.map(|v| v.to_string())));
+        }
+    }
+    Ok(entries)
 }
 
 /// A snapshot of a Delta table that has been eagerly loaded into memory.
