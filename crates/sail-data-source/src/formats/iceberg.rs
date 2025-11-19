@@ -5,6 +5,7 @@ use datafusion::catalog::{Session, TableProvider};
 use datafusion::common::Result;
 use datafusion::physical_plan::ExecutionPlan;
 use sail_common_datafusion::datasource::{SinkInfo, SourceInfo, TableFormat};
+use sail_iceberg::table::find_latest_metadata_file;
 use sail_iceberg::TableIcebergOptions;
 use url::Url;
 
@@ -72,8 +73,7 @@ impl TableFormat for IcebergDataSourceFormat {
             .object_store_registry
             .get_store(&table_url)
             .map_err(|e| datafusion::common::DataFusionError::External(Box::new(e)))?;
-        let exists_res =
-            sail_iceberg::table_format::find_latest_metadata_file(&store, &table_url).await;
+        let exists_res = find_latest_metadata_file(&store, &table_url).await;
         let table_exists = exists_res.is_ok();
 
         match mode {

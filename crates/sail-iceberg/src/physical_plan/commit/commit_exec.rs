@@ -32,10 +32,10 @@ use futures::StreamExt;
 use url::Url;
 
 use crate::io::StoreContext;
-use crate::operations::{SnapshotProduceOperation, Transaction, TransactionAction};
-use crate::physical_plan::commit::bootstrap::{
+use crate::operations::bootstrap::{
     bootstrap_first_snapshot, bootstrap_new_table, PersistStrategy,
 };
+use crate::operations::{SnapshotProduceOperation, Transaction, TransactionAction};
 use crate::physical_plan::commit::IcebergCommitInfo;
 use crate::spec::catalog::TableUpdate;
 use crate::spec::metadata::table_metadata::SnapshotLog;
@@ -265,7 +265,7 @@ impl ExecutionPlan for IcebergCommitExec {
 
             // Load table metadata JSON if exists; for overwrite on new table we bootstrap
             let latest_meta_res =
-                crate::table_format::find_latest_metadata_file(&object_store, &table_url).await;
+                crate::table::find_latest_metadata_file(&object_store, &table_url).await;
 
             if latest_meta_res.is_err()
                 && (matches!(commit_info.operation, crate::spec::Operation::Overwrite)
@@ -289,7 +289,7 @@ impl ExecutionPlan for IcebergCommitExec {
                 let latest_meta = if attempt == 1 {
                     initial_latest_meta.clone()
                 } else {
-                    crate::table_format::find_latest_metadata_file(&object_store, &table_url)
+                    crate::table::find_latest_metadata_file(&object_store, &table_url)
                         .await
                         .map_err(|e| DataFusionError::External(Box::new(e)))?
                 };

@@ -433,6 +433,19 @@ pub fn scalar_to_iceberg_literal(
     }
 }
 
+/// Convert a DataFusion ScalarValue into an Iceberg PrimitiveLiteral.
+///
+/// This is a convenience wrapper around [`scalar_to_iceberg_literal`] that ensures the result is
+/// primitive, which is the common requirement for partition pruning logic.
+pub fn scalar_to_primitive_literal(scalar: &ScalarValue) -> Result<PrimitiveLiteral, String> {
+    match scalar_to_iceberg_literal(scalar, &scalar.data_type())? {
+        Literal::Primitive(prim) => Ok(prim),
+        other => Err(format!(
+            "Expected primitive literal, got non-primitive literal: {other:?}"
+        )),
+    }
+}
+
 /// Extract a literal value from an ArrayRef at a specific row index.
 ///
 /// Returns None if the value is null or the type is not supported.
