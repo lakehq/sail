@@ -24,11 +24,10 @@ use std::collections::HashSet;
 
 use datafusion::catalog::Session;
 use datafusion::logical_expr::Expr;
-use datafusion_common::DFSchema;
 use delta_kernel::table_properties::IsolationLevel;
 use thiserror::Error;
 
-use crate::datasource::{datafusion_to_delta_error, parse_predicate_expression, DataFusionMixins};
+use crate::datasource::parse_log_data_predicate;
 use crate::kernel::models::{Action, Add, CommitInfo, Metadata, Protocol, Remove, Transaction};
 use crate::kernel::snapshot::LogDataHandler;
 use crate::kernel::{DeltaOperation, DeltaResult, DeltaTableError, TablePropertiesExt};
@@ -100,12 +99,7 @@ impl<'a> TransactionInfo<'a> {
         session: Option<&dyn Session>,
     ) -> DeltaResult<Self> {
         let read_predicates = match (read_predicates, session) {
-            (Some(pred), Some(s)) => {
-                let schema = read_snapshot.input_schema()?;
-                let schema = DFSchema::try_from(schema.as_ref().to_owned())
-                    .map_err(datafusion_to_delta_error)?;
-                Some(parse_predicate_expression(&schema, pred, s)?)
-            }
+            (Some(pred), Some(s)) => Some(parse_log_data_predicate(&read_snapshot, pred, s)?),
             _ => None,
         };
 

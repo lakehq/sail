@@ -17,7 +17,7 @@ use datafusion::arrow::datatypes::DataType as ArrowDataType;
 use datafusion::catalog::Session;
 use datafusion::common::config::ConfigOptions;
 use datafusion::common::tree_node::{TreeNode, TreeNodeRecursion};
-use datafusion::common::{Column, DFSchema, Result};
+use datafusion::common::{Column, DFSchema, Result, ToDFSchema};
 use datafusion::logical_expr::execution_props::ExecutionProps;
 use datafusion::logical_expr::planner::ExprPlanner;
 use datafusion::logical_expr::simplify::SimplifyContext;
@@ -32,6 +32,9 @@ use datafusion::sql::sqlparser::dialect::GenericDialect;
 use datafusion::sql::sqlparser::parser::Parser;
 use datafusion::sql::sqlparser::tokenizer::Tokenizer;
 
+use crate::datasource::error::datafusion_to_delta_error;
+use crate::datasource::schema::arrow_schema_from_struct_type;
+use crate::kernel::snapshot::LogDataHandler;
 use crate::kernel::{DeltaResult, DeltaTableError};
 
 /// Simplify a logical expression and convert it to a physical expression
@@ -213,6 +216,25 @@ pub fn parse_predicate_expression(
         .map_err(|err| {
             DeltaTableError::Generic(format!("Failed to convert SQL to expression: {err}"))
         })
+}
+
+/// Parse predicate strings using the schema materialized in [`LogDataHandler`]
+pub fn parse_log_data_predicate(
+    read_snapshot: &LogDataHandler<'_>,
+    expr: impl AsRef<str>,
+    session: &dyn Session,
+) -> DeltaResult<Expr> {
+    let table_config = read_snapshot.table_configuration();
+    let schema = table_config.schema();
+    let arrow_schema = arrow_schema_from_struct_type(
+        schema.as_ref(),
+        table_config.metadata().partition_columns(),
+        false,
+    )?;
+    let df_schema = arrow_schema
+        .to_dfschema_ref()
+        .map_err(datafusion_to_delta_error)?;
+    parse_predicate_expression(df_schema.as_ref(), expr, session)
 }
 
 /// Analyze predicate properties for file pruning

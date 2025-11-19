@@ -20,6 +20,7 @@
 
 //! The module for delta table state.
 
+use std::ops::{Deref, DerefMut};
 use std::sync::Arc;
 
 use chrono::Utc;
@@ -27,13 +28,11 @@ use delta_kernel::engine::arrow_conversion::TryIntoKernel;
 use delta_kernel::expressions::column_expr_ref;
 use delta_kernel::schema::{ColumnMetadataKey, StructField};
 use delta_kernel::table_features::ColumnMappingMode;
-use delta_kernel::table_properties::TableProperties;
 use delta_kernel::{EvaluationHandler, Expression};
 use futures::TryStreamExt;
 
 use crate::kernel::arrow::engine_ext::{ExpressionEvaluatorExt, SnapshotExt};
-use crate::kernel::models::{DataType, Metadata, Protocol, Remove, StructType};
-use crate::kernel::snapshot::log_data::LogDataHandler;
+use crate::kernel::models::{DataType, Remove};
 use crate::kernel::snapshot::EagerSnapshot;
 use crate::kernel::{
     DeltaResult, DeltaTableConfig, DeltaTableError, TablePropertiesExt, ARROW_HANDLER,
@@ -59,46 +58,9 @@ impl DeltaTableState {
         Ok(Self { snapshot })
     }
 
-    /// Return table version
-    pub fn version(&self) -> i64 {
-        self.snapshot.version()
-    }
-
-    /// The most recent protocol of the table.
-    pub fn protocol(&self) -> &Protocol {
-        self.snapshot.protocol()
-    }
-
-    /// The most recent metadata of the table.
-    pub fn metadata(&self) -> &Metadata {
-        self.snapshot.metadata()
-    }
-
-    /// The table schema
-    pub fn schema(&self) -> &StructType {
-        self.snapshot.schema()
-    }
-
-    /// Get the table config which is loaded with of the snapshot
-    pub fn load_config(&self) -> &DeltaTableConfig {
-        self.snapshot.load_config()
-    }
-
-    /// Well known table configuration
-    pub fn table_config(&self) -> &TableProperties {
-        self.snapshot.table_properties()
-    }
-
-    /// Get the timestamp when a version commit was created.
-    /// This is the timestamp of the commit file.
-    /// If the commit file is not present, None is returned.
-    pub fn version_timestamp(&self, version: i64) -> Option<i64> {
-        self.snapshot.version_timestamp(version)
-    }
-
-    /// Returns a semantic accessor to the currently loaded log data.
-    pub fn log_data(&self) -> LogDataHandler<'_> {
-        self.snapshot.log_data()
+    /// Obtain the eagerly materialized snapshot.
+    pub fn snapshot(&self) -> &EagerSnapshot {
+        &self.snapshot
     }
 
     /// Full list of tombstones (remove actions) representing files removed from table state).
@@ -123,29 +85,13 @@ impl DeltaTableState {
     ) -> DeltaResult<impl Iterator<Item = Remove>> {
         let retention_timestamp = Utc::now().timestamp_millis()
             - self
-                .table_config()
+                .table_properties()
                 .deleted_file_retention_duration()
                 .as_millis() as i64;
         let tombstones = self.all_tombstones(log_store).await?.collect::<Vec<_>>();
         Ok(tombstones
             .into_iter()
             .filter(move |t| t.deletion_timestamp.unwrap_or(0) > retention_timestamp))
-    }
-
-    /// Get the transaction version for the given application ID.
-    ///
-    /// Returns `None` if the application ID is not found.
-    pub async fn transaction_version(
-        &self,
-        log_store: &dyn LogStore,
-        app_id: impl ToString,
-    ) -> DeltaResult<Option<i64>> {
-        self.snapshot.transaction_version(log_store, app_id).await
-    }
-
-    /// Obtain the Eager snapshot of the state
-    pub fn snapshot(&self) -> &EagerSnapshot {
-        &self.snapshot
     }
 
     /// Determine effective column mapping mode: when explicit mode is None but
@@ -281,5 +227,19 @@ impl DeltaTableState {
         } else {
             Ok(result)
         }
+    }
+}
+
+impl Deref for DeltaTableState {
+    type Target = EagerSnapshot;
+
+    fn deref(&self) -> &Self::Target {
+        &self.snapshot
+    }
+}
+
+impl DerefMut for DeltaTableState {
+    fn deref_mut(&mut self) -> &mut Self::Target {
+        &mut self.snapshot
     }
 }

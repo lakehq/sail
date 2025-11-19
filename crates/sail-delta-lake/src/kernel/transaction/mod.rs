@@ -216,19 +216,19 @@ impl TableReference for EagerSnapshot {
 
 impl TableReference for DeltaTableState {
     fn config(&self) -> &TableProperties {
-        self.snapshot.config()
+        self.table_properties()
     }
 
     fn protocol(&self) -> &Protocol {
-        self.snapshot.protocol()
+        EagerSnapshot::protocol(self)
     }
 
     fn metadata(&self) -> &Metadata {
-        self.snapshot.metadata()
+        EagerSnapshot::metadata(self)
     }
 
     fn eager_snapshot(&self) -> &EagerSnapshot {
-        &self.snapshot
+        self
     }
 }
 
@@ -673,7 +673,7 @@ impl PostCommit {
             let cleanup_logs = if let Some(cleanup_logs) = self.cleanup_expired_logs {
                 cleanup_logs
             } else {
-                state.table_config().enable_expired_log_cleanup()
+                state.table_properties().enable_expired_log_cleanup()
             };
 
             // Run arbitrary before_post_commit_hook code
@@ -707,7 +707,10 @@ impl PostCommit {
                     self.version,
                     self.log_store.as_ref(),
                     Utc::now().timestamp_millis()
-                        - state.table_config().log_retention_duration().as_millis() as i64,
+                        - state
+                            .table_properties()
+                            .log_retention_duration()
+                            .as_millis() as i64,
                     Some(post_commit_operation_id),
                 )
                 .await? as u64;
