@@ -17,6 +17,7 @@ use std::sync::Arc;
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use async_trait::async_trait;
+use chrono::Utc;
 use datafusion::arrow::array::{Array, StringArray, UInt64Array};
 use datafusion::arrow::datatypes::{DataType, Field, Schema, SchemaRef};
 use datafusion::arrow::record_batch::RecordBatch;
@@ -33,10 +34,11 @@ use datafusion_physical_expr::{Distribution, EquivalenceProperties};
 use delta_kernel::engine::arrow_conversion::TryIntoKernel;
 use delta_kernel::schema::StructType;
 use futures::stream::{self, StreamExt};
+use futures::TryStreamExt;
 use sail_common_datafusion::datasource::PhysicalSinkMode;
 use url::Url;
 
-use crate::kernel::models::{new_metadata, Action, Add, Protocol, Remove};
+use crate::kernel::models::{Action, Add, Metadata, Protocol, Remove};
 use crate::kernel::transaction::{CommitBuilder, CommitProperties, TableReference};
 use crate::kernel::{DeltaOperation, SaveMode};
 use crate::physical_plan::CommitInfo;
@@ -285,8 +287,11 @@ impl ExecutionPlan for DeltaCommitExec {
                 let snapshot = table
                     .snapshot()
                     .map_err(|e| DataFusionError::External(Box::new(e)))?;
-                let all_files = snapshot
-                    .file_actions(table.log_store().as_ref())
+                let all_files: Vec<Add> = snapshot
+                    .snapshot()
+                    .files(table.log_store().as_ref(), None)
+                    .map_ok(|view| view.add_action())
+                    .try_collect()
                     .await
                     .map_err(|e| DataFusionError::External(Box::new(e)))?;
                 let remove_actions = Self::adds_to_remove_actions(all_files).await?;
@@ -363,10 +368,15 @@ impl ExecutionPlan for DeltaCommitExec {
                     let protocol: Protocol = serde_json::from_value(protocol_json).unwrap();
 
                     let configuration: HashMap<String, String> = HashMap::new();
-                    #[allow(deprecated)]
-                    let metadata =
-                        new_metadata(&delta_schema, partition_columns.to_vec(), configuration)
-                            .map_err(|e| DataFusionError::External(Box::new(e)))?;
+                    let metadata = Metadata::try_new(
+                        None,
+                        None,
+                        delta_schema.clone(),
+                        partition_columns.to_vec(),
+                        Utc::now().timestamp_millis(),
+                        configuration,
+                    )
+                    .map_err(|e| DataFusionError::External(Box::new(e)))?;
 
                     let mut updated_actions = final_actions;
                     // Insert in order: Protocol, then Metadata

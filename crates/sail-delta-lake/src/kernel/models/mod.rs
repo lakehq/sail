@@ -10,11 +10,8 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-pub mod fields;
-
 mod actions;
 mod metadata;
-mod protocol;
 mod scalars;
 
 pub use actions::{
@@ -22,10 +19,8 @@ pub use actions::{
     Stats, StorageType, Transaction,
 };
 pub use delta_kernel::actions::{Metadata, Protocol};
-pub use delta_kernel::schema::{
-    ColumnMetadataKey, DataType, MetadataValue, Schema, StructField, StructType,
-};
-pub use metadata::{new_metadata, MetadataExt};
+pub use delta_kernel::schema::{DataType, Schema, StructField, StructType};
+pub use metadata::MetadataExt;
 pub use scalars::ScalarExt;
 
 // [Credit]: <https://github.com/delta-io/delta-rs/blob/5575ad16bf641420404611d65f4ad7626e9acb16/crates/core/src/kernel/models/actions.rs>

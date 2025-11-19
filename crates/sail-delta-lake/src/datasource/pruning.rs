@@ -21,6 +21,7 @@ use futures::TryStreamExt;
 
 use crate::datasource::delta_to_datafusion_error;
 use crate::kernel::models::Add;
+use crate::kernel::DeltaResult;
 use crate::storage::LogStoreRef;
 use crate::table::DeltaTableState;
 
@@ -31,6 +32,18 @@ pub struct PruningResult {
     pub files: Vec<Add>,
     /// Pruning mask used for statistics calculation (None if no pruning was applied)
     pub pruning_mask: Option<Vec<bool>>,
+}
+
+async fn collect_add_actions(
+    snapshot: &DeltaTableState,
+    log_store: &LogStoreRef,
+) -> DeltaResult<Vec<Add>> {
+    snapshot
+        .snapshot()
+        .files(log_store.as_ref(), None)
+        .map_ok(|view| view.add_action())
+        .try_collect()
+        .await
 }
 
 /// Core file pruning function that filters files based on predicates and limit
@@ -46,9 +59,7 @@ pub async fn prune_files(
 
     // Early return if no filters and no limit
     if filter_expr.is_none() && limit.is_none() {
-        let files: Vec<Add> = snapshot
-            .file_actions_iter(log_store.as_ref())
-            .try_collect()
+        let files = collect_add_actions(snapshot, log_store)
             .await
             .map_err(delta_to_datafusion_error)?;
         return Ok(PruningResult {
@@ -73,9 +84,7 @@ pub async fn prune_files(
     };
 
     // Collect all files and apply pruning logic
-    let all_files: Vec<Add> = snapshot
-        .file_actions_iter(log_store.as_ref())
-        .try_collect()
+    let all_files = collect_add_actions(snapshot, log_store)
         .await
         .map_err(delta_to_datafusion_error)?;
 

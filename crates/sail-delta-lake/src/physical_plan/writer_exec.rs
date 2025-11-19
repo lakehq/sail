@@ -16,6 +16,7 @@ use std::fmt;
 use std::sync::Arc;
 
 use async_trait::async_trait;
+use chrono::Utc;
 use datafusion::arrow::array::StringArray;
 use datafusion::arrow::datatypes::{DataType, Field, Schema, SchemaRef};
 use datafusion::arrow::record_batch::RecordBatch;
@@ -39,7 +40,7 @@ use url::Url;
 use crate::column_mapping::compute_max_column_id;
 use crate::datasource::delta_to_datafusion_error;
 use crate::datasource::type_converter::DeltaTypeConverter;
-use crate::kernel::models::{new_metadata, Action, Protocol};
+use crate::kernel::models::{Action, Metadata, Protocol};
 // TODO: Follow upstream for `MetadataExt`.
 use crate::kernel::{DeltaOperation, SaveMode};
 use crate::operations::write::writer::{DeltaWriter, WriterConfig};
@@ -390,11 +391,13 @@ impl ExecutionPlan for DeltaWriterExec {
                     max_id.to_string(),
                 );
 
-                #[allow(deprecated)]
                 #[allow(clippy::unwrap_used)]
-                let metadata = new_metadata(
-                    annotated_schema_opt.as_ref().unwrap(),
+                let metadata = Metadata::try_new(
+                    None,
+                    None,
+                    annotated_schema_opt.as_ref().unwrap().clone(),
                     partition_columns.clone(),
+                    Utc::now().timestamp_millis(),
                     configuration,
                 )
                 .map_err(|e| DataFusionError::External(Box::new(e)))?;

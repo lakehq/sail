@@ -255,6 +255,18 @@ pub struct FindFiles {
     pub partition_scan: bool,
 }
 
+async fn collect_add_actions(
+    snapshot: &DeltaTableState,
+    log_store: &dyn LogStore,
+) -> DeltaResult<Vec<Add>> {
+    snapshot
+        .snapshot()
+        .files(log_store, None)
+        .map_ok(|view| view.add_action())
+        .try_collect()
+        .await
+}
+
 /// Scan memory table (for partition-only predicates)
 pub async fn scan_memory_table_physical(
     snapshot: &DeltaTableState,
@@ -262,7 +274,7 @@ pub async fn scan_memory_table_physical(
     state: &dyn Session,
     physical_predicate: Arc<dyn PhysicalExpr>,
 ) -> DeltaResult<Vec<Add>> {
-    let actions = snapshot.file_actions(log_store).await?;
+    let actions = collect_add_actions(snapshot, log_store).await?;
     let batch = snapshot.add_actions_table(true)?;
     let mut arrays = Vec::new();
     let mut fields = Vec::new();
@@ -339,11 +351,11 @@ pub async fn find_files_scan_physical(
     state: &dyn Session,
     physical_predicate: Arc<dyn PhysicalExpr>,
 ) -> DeltaResult<Vec<Add>> {
-    let candidate_map: HashMap<String, Add> = snapshot
-        .file_actions_iter(log_store.as_ref())
-        .map_ok(|add| (add.path.clone(), add.to_owned()))
-        .try_collect()
-        .await?;
+    let candidate_map: HashMap<String, Add> = collect_add_actions(snapshot, log_store.as_ref())
+        .await?
+        .into_iter()
+        .map(|add| (add.path.clone(), add))
+        .collect();
 
     let scan_config = DeltaScanConfigBuilder::new()
         .with_file_column(true)
@@ -467,7 +479,7 @@ pub async fn find_files_physical(
             }
         }
         None => Ok(FindFiles {
-            candidates: snapshot.file_actions(log_store.as_ref()).await?,
+            candidates: collect_add_actions(snapshot, log_store.as_ref()).await?,
             partition_scan: true,
         }),
     }
