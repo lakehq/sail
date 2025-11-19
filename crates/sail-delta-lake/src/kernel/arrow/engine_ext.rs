@@ -25,11 +25,7 @@ use std::collections::HashMap;
 use std::sync::Arc;
 
 use arrow_schema::Fields;
-use datafusion::arrow::array::{
-    Array, BinaryArray, BooleanArray, Date32Array, Decimal128Array, Float32Array, Float64Array,
-    Int16Array, Int32Array, Int64Array, Int8Array, MapArray, StringArray, StructArray,
-    TimestampMicrosecondArray,
-};
+use datafusion::arrow::array::{Array, BooleanArray, MapArray, StringArray, StructArray};
 use datafusion::arrow::datatypes::{
     DataType as ArrowDataType, Field, Schema as ArrowSchema, SchemaRef as ArrowSchemaRef,
 };
@@ -51,6 +47,7 @@ use delta_kernel::{
 };
 use itertools::Itertools;
 
+use crate::kernel::arrow::scalar_converter::ScalarConverter;
 use crate::kernel::snapshot::SCAN_ROW_ARROW_SCHEMA;
 use crate::kernel::{DeltaResult as DeltaResultLocal, DeltaTableError};
 
@@ -289,7 +286,12 @@ fn parse_partition_values_array(
     #[allow(clippy::unwrap_used)]
     let columns = partition_schema
         .fields()
-        .map(|field| build_partition_column(field, collected.get(field.physical_name()).unwrap()))
+        .map(|field| {
+            ScalarConverter::scalars_to_arrow_array(
+                field,
+                collected.get(field.physical_name()).unwrap(),
+            )
+        })
         .collect::<DeltaResultLocal<Vec<_>>>()?;
 
     let arrow_fields: Fields = Fields::from(
@@ -361,116 +363,6 @@ fn collect_partition_row(value: &StructArray) -> DeltaResultLocal<HashMap<String
         }
     }
     Ok(result)
-}
-
-fn build_partition_column(
-    field: &StructField,
-    values: &[Scalar],
-) -> DeltaResultLocal<Arc<dyn Array>> {
-    let array: Arc<dyn Array> = match field.data_type() {
-        DataType::Primitive(PrimitiveType::String) => {
-            Arc::new(StringArray::from_iter(values.iter().map(|v| match v {
-                Scalar::String(s) => Some(s.clone()),
-                Scalar::Null(_) => None,
-                _ => None,
-            })))
-        }
-        DataType::Primitive(PrimitiveType::Long) => {
-            Arc::new(Int64Array::from_iter(values.iter().map(|v| match v {
-                Scalar::Long(i) => Some(*i),
-                Scalar::Null(_) => None,
-                _ => None,
-            })))
-        }
-        DataType::Primitive(PrimitiveType::Integer) => {
-            Arc::new(Int32Array::from_iter(values.iter().map(|v| match v {
-                Scalar::Integer(i) => Some(*i),
-                Scalar::Null(_) => None,
-                _ => None,
-            })))
-        }
-        DataType::Primitive(PrimitiveType::Short) => {
-            Arc::new(Int16Array::from_iter(values.iter().map(|v| match v {
-                Scalar::Short(i) => Some(*i),
-                Scalar::Null(_) => None,
-                _ => None,
-            })))
-        }
-        DataType::Primitive(PrimitiveType::Byte) => {
-            Arc::new(Int8Array::from_iter(values.iter().map(|v| match v {
-                Scalar::Byte(i) => Some(*i),
-                Scalar::Null(_) => None,
-                _ => None,
-            })))
-        }
-        DataType::Primitive(PrimitiveType::Float) => {
-            Arc::new(Float32Array::from_iter(values.iter().map(|v| match v {
-                Scalar::Float(f) => Some(*f),
-                Scalar::Null(_) => None,
-                _ => None,
-            })))
-        }
-        DataType::Primitive(PrimitiveType::Double) => {
-            Arc::new(Float64Array::from_iter(values.iter().map(|v| match v {
-                Scalar::Double(f) => Some(*f),
-                Scalar::Null(_) => None,
-                _ => None,
-            })))
-        }
-        DataType::Primitive(PrimitiveType::Boolean) => {
-            Arc::new(BooleanArray::from_iter(values.iter().map(|v| match v {
-                Scalar::Boolean(b) => Some(*b),
-                Scalar::Null(_) => None,
-                _ => None,
-            })))
-        }
-        DataType::Primitive(PrimitiveType::Binary) => {
-            Arc::new(BinaryArray::from_iter(values.iter().map(|v| match v {
-                Scalar::Binary(b) => Some(b.clone()),
-                Scalar::Null(_) => None,
-                _ => None,
-            })))
-        }
-        DataType::Primitive(PrimitiveType::Date) => {
-            Arc::new(Date32Array::from_iter(values.iter().map(|v| match v {
-                Scalar::Date(d) => Some(*d),
-                Scalar::Null(_) => None,
-                _ => None,
-            })))
-        }
-        DataType::Primitive(PrimitiveType::Timestamp) => Arc::new(
-            TimestampMicrosecondArray::from_iter(values.iter().map(|v| match v {
-                Scalar::Timestamp(ts) => Some(*ts),
-                Scalar::Null(_) => None,
-                _ => None,
-            }))
-            .with_timezone("UTC"),
-        ),
-        DataType::Primitive(PrimitiveType::TimestampNtz) => Arc::new(
-            TimestampMicrosecondArray::from_iter(values.iter().map(|v| match v {
-                Scalar::TimestampNtz(ts) => Some(*ts),
-                Scalar::Null(_) => None,
-                _ => None,
-            })),
-        ),
-        DataType::Primitive(PrimitiveType::Decimal(decimal)) => {
-            let array = Decimal128Array::from_iter(values.iter().map(|v| match v {
-                Scalar::Decimal(d) => Some(d.bits()),
-                Scalar::Null(_) => None,
-                _ => None,
-            }));
-            let array = array
-                .with_precision_and_scale(decimal.precision(), decimal.scale() as i8)
-                .map_err(|e| DeltaTableError::generic(format!("Decimal precision error: {e}")))?;
-            Arc::new(array)
-        }
-        _ => {
-            return Err(DeltaTableError::generic(
-                "complex partition values are not supported",
-            ))
-        }
-    };
-    Ok(array)
 }
 
 fn partitions_schema(

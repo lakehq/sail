@@ -13,7 +13,6 @@
 use std::any::Any;
 use std::fmt;
 use std::sync::Arc;
-use std::time::{SystemTime, UNIX_EPOCH};
 
 use async_trait::async_trait;
 use datafusion::arrow::array::{Array, StringArray};
@@ -30,8 +29,8 @@ use datafusion_common::{internal_err, DataFusionError, Result};
 use datafusion_physical_expr::{Distribution, EquivalenceProperties};
 use futures::stream::{self, StreamExt};
 
-use crate::kernel::models::{Action, Add, Remove};
-use crate::physical_plan::CommitInfo;
+use crate::kernel::models::{Action, Add, RemoveOptions};
+use crate::physical_plan::{current_timestamp_millis, CommitInfo};
 
 /// Physical execution node to convert Add actions (from FindFiles) into Remove actions
 #[derive(Debug)]
@@ -54,26 +53,18 @@ impl DeltaRemoveActionsExec {
     }
 
     pub(crate) async fn create_remove_actions(adds: Vec<Add>) -> Result<Vec<Action>> {
-        let deletion_timestamp = SystemTime::now()
-            .duration_since(UNIX_EPOCH)
-            .map_err(|e| DataFusionError::External(Box::new(e)))?
-            .as_millis() as i64;
+        let deletion_timestamp = current_timestamp_millis()?;
 
         Ok(adds
             .into_iter()
             .map(|add| {
-                Action::Remove(Remove {
-                    path: add.path,
-                    deletion_timestamp: Some(deletion_timestamp),
-                    data_change: true,
-                    extended_file_metadata: Some(true),
-                    partition_values: Some(add.partition_values),
-                    size: Some(add.size),
-                    deletion_vector: add.deletion_vector,
-                    tags: None,
-                    base_row_id: add.base_row_id,
-                    default_row_commit_version: add.default_row_commit_version,
-                })
+                Action::Remove(add.into_remove_with_options(
+                    deletion_timestamp,
+                    RemoveOptions {
+                        extended_file_metadata: Some(true),
+                        include_tags: false,
+                    },
+                ))
             })
             .collect())
     }

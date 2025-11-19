@@ -14,13 +14,12 @@ use std::collections::HashMap;
 
 use chrono::TimeZone;
 use datafusion::arrow::array::{Array, DictionaryArray, RecordBatch, StringArray};
-use datafusion::arrow::compute::{cast_with_options, CastOptions};
-use datafusion::arrow::datatypes::{DataType as ArrowDataType, Schema as ArrowSchema, UInt16Type};
+use datafusion::arrow::datatypes::{Schema as ArrowSchema, UInt16Type};
 use datafusion::common::scalar::ScalarValue;
-use datafusion::common::Result;
 use datafusion::datasource::listing::PartitionedFile;
 use object_store::ObjectMeta;
 
+use crate::kernel::arrow::scalar_converter::ScalarConverter;
 use crate::kernel::models::{Add, Remove};
 use crate::kernel::{DeltaResult, DeltaTableError};
 
@@ -45,7 +44,7 @@ pub fn partitioned_file_from_action(
 
             // Convert partition value to ScalarValue
             match partition_value {
-                Some(value) => to_correct_scalar_value(
+                Some(value) => ScalarConverter::json_to_arrow_scalar_value(
                     &serde_json::Value::String(value.to_string()),
                     field.data_type(),
                 )
@@ -75,79 +74,6 @@ pub fn partitioned_file_from_action(
         range: None,
         statistics: None,
         metadata_size_hint: None,
-    }
-}
-
-fn parse_date(stat_val: &serde_json::Value, field_dt: &ArrowDataType) -> Result<ScalarValue> {
-    let string = match stat_val {
-        serde_json::Value::String(s) => s.to_owned(),
-        _ => stat_val.to_string(),
-    };
-
-    let time_micro = ScalarValue::try_from_string(string, &ArrowDataType::Date32)?;
-    let cast_arr = cast_with_options(
-        &time_micro.to_array()?,
-        field_dt,
-        &CastOptions {
-            safe: false,
-            ..Default::default()
-        },
-    )?;
-    ScalarValue::try_from_array(&cast_arr, 0)
-}
-
-fn parse_timestamp(stat_val: &serde_json::Value, field_dt: &ArrowDataType) -> Result<ScalarValue> {
-    let string = match stat_val {
-        serde_json::Value::String(s) => s.to_owned(),
-        _ => stat_val.to_string(),
-    };
-
-    let time_micro = ScalarValue::try_from_string(
-        string,
-        &ArrowDataType::Timestamp(datafusion::arrow::datatypes::TimeUnit::Microsecond, None),
-    )?;
-    let cast_arr = cast_with_options(
-        &time_micro.to_array()?,
-        field_dt,
-        &CastOptions {
-            safe: false,
-            ..Default::default()
-        },
-    )?;
-    ScalarValue::try_from_array(&cast_arr, 0)
-}
-
-/// Convert a JSON value to the correct ScalarValue for the given Arrow data type
-pub fn to_correct_scalar_value(
-    stat_val: &serde_json::Value,
-    field_dt: &ArrowDataType,
-) -> Result<Option<ScalarValue>> {
-    match stat_val {
-        serde_json::Value::Array(_) | serde_json::Value::Object(_) => Ok(None),
-        serde_json::Value::Null => {
-            Ok(Some(ScalarValue::try_new_null(field_dt).map_err(|e| {
-                datafusion_common::DataFusionError::External(Box::new(e))
-            })?))
-        }
-        // Consolidate String and other value handling
-        _ => {
-            let string_val = match stat_val {
-                serde_json::Value::String(s) => s.to_owned(),
-                other => other.to_string(),
-            };
-
-            match field_dt {
-                ArrowDataType::Timestamp(_, _) => Ok(Some(parse_timestamp(
-                    &serde_json::Value::String(string_val),
-                    field_dt,
-                )?)),
-                ArrowDataType::Date32 => Ok(Some(parse_date(
-                    &serde_json::Value::String(string_val),
-                    field_dt,
-                )?)),
-                _ => Ok(Some(ScalarValue::try_from_string(string_val, field_dt)?)),
-            }
-        }
     }
 }
 
@@ -220,18 +146,8 @@ pub fn join_batches_with_add_actions(
 
 /// Convert Add actions to Remove actions (used in commit operations)
 pub fn adds_to_remove_actions(adds: Vec<Add>) -> Vec<Remove> {
+    let deletion_timestamp = chrono::Utc::now().timestamp_millis();
     adds.into_iter()
-        .map(|add| Remove {
-            path: add.path,
-            deletion_timestamp: Some(chrono::Utc::now().timestamp_millis()),
-            data_change: true,
-            extended_file_metadata: None,
-            partition_values: Some(add.partition_values),
-            size: Some(add.size),
-            deletion_vector: add.deletion_vector,
-            base_row_id: add.base_row_id,
-            default_row_commit_version: add.default_row_commit_version,
-            tags: add.tags,
-        })
+        .map(|add| add.into_remove(deletion_timestamp))
         .collect()
 }

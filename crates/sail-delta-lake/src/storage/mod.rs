@@ -24,6 +24,8 @@ use std::sync::{Arc, LazyLock};
 
 use async_trait::async_trait;
 use bytes::Bytes;
+use datafusion::execution::context::TaskContext;
+use datafusion_common::{DataFusionError, Result as DataFusionResult};
 use delta_kernel::engine::default::executor::tokio::{
     TokioBackgroundExecutor, TokioMultiThreadExecutor,
 };
@@ -49,6 +51,18 @@ pub use config::StorageConfig;
 
 pub type ObjectStoreRef = Arc<dyn ObjectStore>;
 pub type LogStoreRef = Arc<dyn LogStore>;
+
+/// Retrieve an object store for the provided table URL from the given TaskContext.
+pub fn get_object_store_from_context(
+    context: &Arc<TaskContext>,
+    table_url: &Url,
+) -> DataFusionResult<ObjectStoreRef> {
+    context
+        .runtime_env()
+        .object_store_registry
+        .get_store(table_url)
+        .map_err(|e| DataFusionError::External(Box::new(e)))
+}
 
 const DELTA_LOG_FOLDER: &str = "_delta_log";
 static DELTA_LOG_PATH: LazyLock<Path> = LazyLock::new(|| Path::from(DELTA_LOG_FOLDER));

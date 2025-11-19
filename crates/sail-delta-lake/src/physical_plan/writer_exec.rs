@@ -47,7 +47,7 @@ use crate::operations::write::writer::{DeltaWriter, WriterConfig};
 use crate::options::{ColumnMappingModeOption, TableDeltaOptions};
 use crate::physical_plan::CommitInfo;
 use crate::schema_manager::{annotate_for_column_mapping, evolve_schema, get_physical_schema};
-use crate::storage::StorageConfig;
+use crate::storage::{get_object_store_from_context, StorageConfig};
 use crate::table::open_table_with_object_store;
 
 /// Schema handling mode for Delta Lake writes
@@ -227,7 +227,7 @@ impl ExecutionPlan for DeltaWriterExec {
             } = &options;
 
             let storage_config = StorageConfig;
-            let object_store = Self::get_object_store(&context, &table_url)?;
+            let object_store = get_object_store_from_context(&context, &table_url)?;
 
             // Calculate initial_actions and operation based on sink_mode
             let mut initial_actions: Vec<Action> = Vec::new();
@@ -602,17 +602,6 @@ impl ExecutionPlan for DeltaWriterExec {
 }
 
 impl DeltaWriterExec {
-    fn get_object_store(
-        context: &Arc<TaskContext>,
-        table_url: &Url,
-    ) -> Result<Arc<dyn object_store::ObjectStore>> {
-        context
-            .runtime_env()
-            .object_store_registry
-            .get_store(table_url)
-            .map_err(|e| DataFusionError::External(Box::new(e)))
-    }
-
     /// Determine the schema mode based on options and save mode
     fn get_schema_mode(
         options: &TableDeltaOptions,

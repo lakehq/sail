@@ -12,6 +12,7 @@
 
 use std::collections::HashSet;
 use std::sync::Arc;
+use std::time::{SystemTime, UNIX_EPOCH};
 
 use datafusion::arrow::compute::SortOptions;
 use datafusion::arrow::datatypes::Schema as ArrowSchema;
@@ -183,4 +184,11 @@ pub struct CommitInfo {
     pub actions: Vec<Action>,
     pub initial_actions: Vec<Action>,
     pub operation: Option<DeltaOperation>,
+}
+
+pub(crate) fn current_timestamp_millis() -> Result<i64> {
+    SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map(|duration| duration.as_millis() as i64)
+        .map_err(|e| DataFusionError::External(Box::new(e)))
 }

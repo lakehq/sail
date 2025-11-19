@@ -16,7 +16,7 @@ mod scalars;
 
 pub use actions::{
     Action, Add, ColumnCountStat, ColumnValueStat, CommitInfo, DeletionVectorDescriptor, Remove,
-    Stats, StorageType, Transaction,
+    RemoveOptions, Stats, StorageType, Transaction,
 };
 pub use delta_kernel::actions::{Metadata, Protocol};
 pub use delta_kernel::schema::{DataType, Schema, StructField, StructType};

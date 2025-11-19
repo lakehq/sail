@@ -46,7 +46,7 @@ pub mod type_converter;
 // Re-exports
 pub use actions::{
     adds_to_remove_actions, get_path_column, join_batches_with_add_actions,
-    partitioned_file_from_action, to_correct_scalar_value,
+    partitioned_file_from_action,
 };
 pub use error::{datafusion_to_delta_error, delta_to_datafusion_error};
 pub use expressions::{

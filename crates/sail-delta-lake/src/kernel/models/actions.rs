@@ -168,6 +168,35 @@ impl Add {
             .map(|stats| serde_json::from_str::<PartialStats>(stats).map(|mut ps| ps.as_stats()))
             .transpose()
     }
+
+    pub fn into_remove(self, deletion_timestamp: i64) -> Remove {
+        self.into_remove_with_options(deletion_timestamp, RemoveOptions::default())
+    }
+
+    pub fn into_remove_with_options(
+        self,
+        deletion_timestamp: i64,
+        options: RemoveOptions,
+    ) -> Remove {
+        let tags = if options.include_tags {
+            self.tags
+        } else {
+            None
+        };
+
+        Remove {
+            path: self.path,
+            data_change: true,
+            deletion_timestamp: Some(deletion_timestamp),
+            extended_file_metadata: options.extended_file_metadata,
+            partition_values: Some(self.partition_values),
+            size: Some(self.size),
+            tags,
+            deletion_vector: self.deletion_vector,
+            base_row_id: self.base_row_id,
+            default_row_commit_version: self.default_row_commit_version,
+        }
+    }
 }
 
 impl Hash for Remove {
@@ -304,6 +333,21 @@ pub struct Remove {
     pub base_row_id: Option<i64>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub default_row_commit_version: Option<i64>,
+}
+
+#[derive(Debug, Clone, Copy)]
+pub struct RemoveOptions {
+    pub extended_file_metadata: Option<bool>,
+    pub include_tags: bool,
+}
+
+impl Default for RemoveOptions {
+    fn default() -> Self {
+        Self {
+            extended_file_metadata: None,
+            include_tags: true,
+        }
+    }
 }
 
 /// Change data capture action.

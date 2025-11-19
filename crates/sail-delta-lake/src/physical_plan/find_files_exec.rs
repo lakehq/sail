@@ -46,7 +46,7 @@ use crate::datasource::{
 };
 use crate::kernel::models::Add;
 use crate::kernel::{DeltaResult, DeltaTableError};
-use crate::storage::{LogStore, LogStoreRef, StorageConfig};
+use crate::storage::{get_object_store_from_context, LogStore, LogStoreRef, StorageConfig};
 use crate::table::{open_table_with_object_store, DeltaTableState};
 
 /// Physical execution node for finding files in a Delta table that match a predicate.
@@ -113,11 +113,7 @@ impl DeltaFindFilesExec {
     }
 
     async fn find_files(&self, context: Arc<TaskContext>) -> Result<(Vec<Add>, bool)> {
-        let object_store = context
-            .runtime_env()
-            .object_store_registry
-            .get_store(&self.table_url)
-            .map_err(|e| DataFusionError::External(Box::new(e)))?;
+        let object_store = get_object_store_from_context(&context, &self.table_url)?;
 
         let mut table =
             open_table_with_object_store(self.table_url.clone(), object_store, StorageConfig)
