@@ -41,7 +41,7 @@ use crate::options::TableIcebergOptions;
 use crate::spec::partition::{UnboundPartitionField, UnboundPartitionSpec};
 use crate::spec::schema::{Schema as IcebergSchema, SchemaBuilder};
 use crate::spec::types::{ListType, MapType, NestedField, StructType, Type};
-use crate::spec::TableMetadata;
+use crate::spec::{TableMetadata, TableRequirement};
 use crate::utils::get_object_store_from_context;
 use crate::writer::config::WriterConfig;
 use crate::writer::table_writer::IcebergTableWriter;
@@ -223,7 +223,7 @@ impl IcebergWriterExec {
             }
             None => {
                 let arrow_schema = Arc::new(iceberg_schema_to_arrow(&current_schema)?);
-                Self::validate_exact_schema(arrow_schema.as_ref(), input_schema)?;
+                Self::validate_exact_schema(arrow_schema.as_ref(), &current_schema, input_schema)?;
                 Ok(SchemaEvolutionOutcome {
                     iceberg_schema: current_schema,
                     arrow_schema,
@@ -233,7 +233,11 @@ impl IcebergWriterExec {
         }
     }
 
-    fn validate_exact_schema(table_schema: &Schema, input_schema: &Schema) -> Result<()> {
+    fn validate_exact_schema(
+        table_schema: &Schema,
+        iceberg_schema: &IcebergSchema,
+        input_schema: &Schema,
+    ) -> Result<()> {
         for field in input_schema.fields() {
             let table_field = table_schema.field_with_name(field.name()).map_err(|_| {
                 DataFusionError::Plan(format!(
@@ -254,7 +258,21 @@ impl IcebergWriterExec {
         }
 
         for field in table_schema.fields() {
-            if !field.is_nullable() && input_schema.field_with_name(field.name()).is_err() {
+            if input_schema.field_with_name(field.name()).is_ok() {
+                continue;
+            }
+
+            let has_default = iceberg_schema
+                .field_by_name(field.name())
+                .and_then(|nested| {
+                    nested
+                        .write_default
+                        .as_ref()
+                        .or(nested.initial_default.as_ref())
+                })
+                .is_some();
+
+            if !field.is_nullable() && !has_default {
                 return Err(DataFusionError::Plan(format!(
                     "Column '{}' is required in the Iceberg table schema and must be present in the input data.",
                     field.name()
@@ -970,72 +988,85 @@ impl ExecutionPlan for IcebergWriterExec {
             let object_store = get_object_store_from_context(&context, &table_url)?;
             let input_schema = input_schema.clone();
 
-            let (iceberg_schema, table_schema, default_spec, data_dir, spec_id_val, commit_schema) =
-                if table_exists {
-                    let latest_meta = super::super::table_format::find_latest_metadata_file(
-                        &object_store,
-                        &table_url,
-                    )
+            let (
+                iceberg_schema,
+                table_schema,
+                default_spec,
+                data_dir,
+                spec_id_val,
+                commit_schema,
+                commit_requirements,
+            ) = if table_exists {
+                let latest_meta = super::super::table_format::find_latest_metadata_file(
+                    &object_store,
+                    &table_url,
+                )
+                .await
+                .map_err(|e| DataFusionError::External(Box::new(e)))?;
+                let meta_path = object_store::path::Path::from(latest_meta.as_str());
+                let bytes = object_store
+                    .get(&meta_path)
+                    .await
+                    .map_err(|e| DataFusionError::External(Box::new(e)))?
+                    .bytes()
                     .await
                     .map_err(|e| DataFusionError::External(Box::new(e)))?;
-                    let meta_path = object_store::path::Path::from(latest_meta.as_str());
-                    let bytes = object_store
-                        .get(&meta_path)
-                        .await
-                        .map_err(|e| DataFusionError::External(Box::new(e)))?
-                        .bytes()
-                        .await
-                        .map_err(|e| DataFusionError::External(Box::new(e)))?;
-                    let table_meta = TableMetadata::from_json(&bytes)
-                        .map_err(|e| DataFusionError::External(Box::new(e)))?;
-                    let data_dir = Self::resolve_data_dir(&table_meta, &table_url);
-                    let schema_outcome = Self::handle_schema_evolution(
-                        &table_meta,
-                        input_schema.as_ref(),
-                        schema_mode,
-                    )?;
-                    let default_spec = table_meta.default_partition_spec().cloned();
-                    let spec_id_val = default_spec.as_ref().map(|s| s.spec_id()).unwrap_or(0);
-                    let commit_schema = schema_outcome
-                        .changed
-                        .then(|| schema_outcome.iceberg_schema.clone());
-                    (
-                        schema_outcome.iceberg_schema,
-                        schema_outcome.arrow_schema,
-                        default_spec,
-                        data_dir,
-                        spec_id_val,
-                        commit_schema,
-                    )
-                } else {
-                    // derive schema/spec from input for new-table overwrite
-                    let input_arrow_schema = input_schema.as_ref().clone();
-                    let mut iceberg_schema = arrow_schema_to_iceberg(&input_arrow_schema)?;
-                    iceberg_schema = Self::assign_schema_field_ids(&iceberg_schema)?;
-                    if iceberg_schema.fields().iter().any(|f| f.id == 0) {
-                        return Err(DataFusionError::Plan(
-                            "Invalid Iceberg schema: field id 0 detected after assignment"
-                                .to_string(),
-                        ));
+                let table_meta = TableMetadata::from_json(&bytes)
+                    .map_err(|e| DataFusionError::External(Box::new(e)))?;
+                let data_dir = Self::resolve_data_dir(&table_meta, &table_url);
+                let schema_outcome =
+                    Self::handle_schema_evolution(&table_meta, input_schema.as_ref(), schema_mode)?;
+                let default_spec = table_meta.default_partition_spec().cloned();
+                let spec_id_val = default_spec.as_ref().map(|s| s.spec_id()).unwrap_or(0);
+                let commit_schema = schema_outcome
+                    .changed
+                    .then(|| schema_outcome.iceberg_schema.clone());
+                let requirements = vec![
+                    TableRequirement::LastAssignedFieldIdMatch {
+                        last_assigned_field_id: table_meta.last_column_id,
+                    },
+                    TableRequirement::CurrentSchemaIdMatch {
+                        current_schema_id: table_meta.current_schema_id,
+                    },
+                ];
+                (
+                    schema_outcome.iceberg_schema,
+                    schema_outcome.arrow_schema,
+                    default_spec,
+                    data_dir,
+                    spec_id_val,
+                    commit_schema,
+                    requirements,
+                )
+            } else {
+                // derive schema/spec from input for new-table overwrite
+                let input_arrow_schema = input_schema.as_ref().clone();
+                let mut iceberg_schema = arrow_schema_to_iceberg(&input_arrow_schema)?;
+                iceberg_schema = Self::assign_schema_field_ids(&iceberg_schema)?;
+                if iceberg_schema.fields().iter().any(|f| f.id == 0) {
+                    return Err(DataFusionError::Plan(
+                        "Invalid Iceberg schema: field id 0 detected after assignment".to_string(),
+                    ));
+                }
+                let mut builder = crate::spec::partition::PartitionSpec::builder();
+                use crate::spec::transform::Transform;
+                for name in &partition_columns {
+                    if let Some(fid) = iceberg_schema.field_id_by_name(name) {
+                        builder = builder.add_field(fid, name.clone(), Transform::Identity);
                     }
-                    let mut builder = crate::spec::partition::PartitionSpec::builder();
-                    use crate::spec::transform::Transform;
-                    for name in &partition_columns {
-                        if let Some(fid) = iceberg_schema.field_id_by_name(name) {
-                            builder = builder.add_field(fid, name.clone(), Transform::Identity);
-                        }
-                    }
-                    let spec = builder.build();
-                    let sid = spec.spec_id();
-                    (
-                        iceberg_schema.clone(),
-                        Arc::new(iceberg_schema_to_arrow(&iceberg_schema)?),
-                        Some(spec),
-                        "data".to_string(),
-                        sid,
-                        Some(iceberg_schema),
-                    )
-                };
+                }
+                let spec = builder.build();
+                let sid = spec.spec_id();
+                (
+                    iceberg_schema.clone(),
+                    Arc::new(iceberg_schema_to_arrow(&iceberg_schema)?),
+                    Some(spec),
+                    "data".to_string(),
+                    sid,
+                    Some(iceberg_schema),
+                    Vec::new(),
+                )
+            };
 
             // Build unbound partition spec from bound spec if present
             let unbound_spec = if let Some(spec) = default_spec.as_ref() {
@@ -1098,7 +1129,7 @@ impl ExecutionPlan for IcebergWriterExec {
                 manifest_path: String::new(),
                 manifest_list_path: String::new(),
                 updates: vec![],
-                requirements: vec![],
+                requirements: commit_requirements,
                 operation: if matches!(sink_mode, PhysicalSinkMode::Overwrite) {
                     crate::spec::Operation::Overwrite
                 } else {
@@ -1216,34 +1247,50 @@ mod tests {
 
     #[test]
     fn validate_exact_schema_allows_int_to_long() {
-        let table_schema = Arc::new(Schema::new(vec![Field::new(
-            "value",
-            DataType::Int64,
-            true,
-        )]));
-        let field = Field::new("value", DataType::Int32, false);
-        assert!(
-            !field.is_nullable(),
-            "explicitly constructed field should be non-nullable"
-        );
-        let input_schema = Schema::new(vec![field]);
-        println!("input schema debug: {:?}", input_schema);
+        let iceberg_schema = IcebergSchema::builder()
+            .with_schema_id(1)
+            .with_fields(vec![Arc::new(NestedField::new(
+                1,
+                "value",
+                Type::Primitive(PrimitiveType::Long),
+                true,
+            ))])
+            .build()
+            .expect("schema");
+        let table_schema =
+            Arc::new(iceberg_schema_to_arrow(&iceberg_schema).expect("arrow schema"));
+        let input_schema = Schema::new(vec![Field::new("value", DataType::Int32, false)]);
 
-        IcebergWriterExec::validate_exact_schema(table_schema.as_ref(), &input_schema)
-            .expect("int -> long promotion should be allowed");
+        IcebergWriterExec::validate_exact_schema(
+            table_schema.as_ref(),
+            &iceberg_schema,
+            &input_schema,
+        )
+        .expect("int -> long promotion should be allowed");
     }
 
     #[test]
     fn validate_exact_schema_rejects_missing_required_column() {
-        let table_schema = Arc::new(Schema::new(vec![Field::new(
-            "required_col",
-            DataType::Utf8,
-            false,
-        )]));
+        let iceberg_schema = IcebergSchema::builder()
+            .with_schema_id(1)
+            .with_fields(vec![Arc::new(NestedField::new(
+                1,
+                "required_col",
+                Type::Primitive(PrimitiveType::String),
+                true,
+            ))])
+            .build()
+            .expect("schema");
+        let table_schema =
+            Arc::new(iceberg_schema_to_arrow(&iceberg_schema).expect("arrow schema"));
         let input_schema = Schema::new(Vec::<Field>::new());
 
-        let err = IcebergWriterExec::validate_exact_schema(table_schema.as_ref(), &input_schema)
-            .expect_err("missing required column should fail");
+        let err = IcebergWriterExec::validate_exact_schema(
+            table_schema.as_ref(),
+            &iceberg_schema,
+            &input_schema,
+        )
+        .expect_err("missing required column should fail");
         match err {
             DataFusionError::Plan(msg) => assert!(
                 msg.contains("required_col"),
@@ -1251,6 +1298,35 @@ mod tests {
             ),
             other => panic!("unexpected error: {other}"),
         }
+    }
+
+    #[test]
+    fn validate_exact_schema_allows_missing_required_with_default() {
+        use crate::spec::types::values::{Literal, PrimitiveLiteral};
+
+        let iceberg_schema = IcebergSchema::builder()
+            .with_schema_id(1)
+            .with_fields(vec![Arc::new(
+                NestedField::new(
+                    1,
+                    "generated_col",
+                    Type::Primitive(PrimitiveType::Int),
+                    true,
+                )
+                .with_write_default(Literal::Primitive(PrimitiveLiteral::Int(42))),
+            )])
+            .build()
+            .expect("schema");
+        let table_schema =
+            Arc::new(iceberg_schema_to_arrow(&iceberg_schema).expect("arrow schema"));
+        let input_schema = Schema::new(Vec::<Field>::new());
+
+        IcebergWriterExec::validate_exact_schema(
+            table_schema.as_ref(),
+            &iceberg_schema,
+            &input_schema,
+        )
+        .expect("write defaults should allow omission");
     }
 
     #[test]

@@ -38,7 +38,8 @@ use crate::physical_plan::commit::bootstrap::{
 use crate::physical_plan::commit::IcebergCommitInfo;
 use crate::spec::catalog::TableUpdate;
 use crate::spec::metadata::table_metadata::SnapshotLog;
-use crate::spec::{Schema as IcebergSchema, TableMetadata};
+use crate::spec::snapshots::MAIN_BRANCH;
+use crate::spec::{Schema as IcebergSchema, TableMetadata, TableRequirement};
 use crate::transaction::{SnapshotProduceOperation, Transaction, TransactionAction};
 use crate::utils::get_object_store_from_context;
 
@@ -95,6 +96,84 @@ impl IcebergCommitExec {
 
         table_meta.current_schema_id = schema_id;
         table_meta.last_column_id = table_meta.last_column_id.max(highest_field_id);
+    }
+
+    fn validate_requirements(
+        table_meta: Option<&TableMetadata>,
+        requirements: &[TableRequirement],
+    ) -> Result<()> {
+        for requirement in requirements {
+            match requirement {
+                TableRequirement::NotExist => {
+                    if table_meta.is_some() {
+                        return Err(DataFusionError::Plan(
+                            "Iceberg table already exists but commit asserted non-existence."
+                                .to_string(),
+                        ));
+                    }
+                }
+                TableRequirement::LastAssignedFieldIdMatch {
+                    last_assigned_field_id,
+                } => {
+                    let meta = table_meta.ok_or_else(|| {
+                        DataFusionError::Plan(
+                            "Iceberg table metadata missing while validating field id requirement"
+                                .to_string(),
+                        )
+                    })?;
+                    if &meta.last_column_id != last_assigned_field_id {
+                        return Err(DataFusionError::Plan(format!(
+                            "Iceberg commit failed: expected last assigned field id {} but found {}. Reload table metadata and retry.",
+                            last_assigned_field_id, meta.last_column_id
+                        )));
+                    }
+                }
+                TableRequirement::CurrentSchemaIdMatch { current_schema_id } => {
+                    let meta = table_meta.ok_or_else(|| {
+                        DataFusionError::Plan(
+                            "Iceberg table metadata missing while validating schema requirement"
+                                .to_string(),
+                        )
+                    })?;
+                    if &meta.current_schema_id != current_schema_id {
+                        return Err(DataFusionError::Plan(format!(
+                            "Iceberg commit failed: expected current schema id {} but found {}. Reload table metadata and retry.",
+                            current_schema_id, meta.current_schema_id
+                        )));
+                    }
+                }
+                TableRequirement::RefSnapshotIdMatch {
+                    r#ref: reference,
+                    snapshot_id,
+                } => {
+                    let meta = table_meta.ok_or_else(|| {
+                        DataFusionError::Plan(
+                            "Iceberg table metadata missing while validating snapshot requirement"
+                                .to_string(),
+                        )
+                    })?;
+                    let actual = if reference == MAIN_BRANCH {
+                        meta.current_snapshot_id
+                    } else {
+                        meta.refs
+                            .get(reference)
+                            .map(|ref_entry| ref_entry.snapshot_id)
+                    };
+                    if &actual != snapshot_id {
+                        return Err(DataFusionError::Plan(format!(
+                            "Iceberg commit failed: reference '{}' expected snapshot {:?} but found {:?}",
+                            reference, snapshot_id, actual
+                        )));
+                    }
+                }
+                other => {
+                    return Err(DataFusionError::NotImplemented(format!(
+                        "Table requirement '{other:?}' is not supported in local commits"
+                    )));
+                }
+            }
+        }
+        Ok(())
     }
 }
 
@@ -190,6 +269,7 @@ impl ExecutionPlan for IcebergCommitExec {
                 && (matches!(commit_info.operation, crate::spec::Operation::Overwrite)
                     || matches!(commit_info.operation, crate::spec::Operation::Append))
             {
+                Self::validate_requirements(None, &commit_info.requirements)?;
                 // Bootstrap a new table using the unified bootstrap helper
                 bootstrap_new_table(&table_url, &store_ctx, &commit_info).await?;
 
@@ -211,6 +291,7 @@ impl ExecutionPlan for IcebergCommitExec {
                 .map_err(|e| DataFusionError::External(Box::new(e)))?;
             let mut table_meta = TableMetadata::from_json(&bytes)
                 .map_err(|e| DataFusionError::External(Box::new(e)))?;
+            Self::validate_requirements(Some(&table_meta), &commit_info.requirements)?;
             if let Some(new_schema) = commit_info.schema.clone() {
                 Self::apply_schema_update(&mut table_meta, new_schema);
             }
@@ -248,7 +329,7 @@ impl ExecutionPlan for IcebergCommitExec {
             // Build transaction and action based on operation
             let tx = Transaction::new(table_url.to_string(), snapshot);
             let manifest_meta = tx.default_manifest_metadata(&schema_iceberg);
-            let commit = match commit_info.operation {
+            let action_commit = match commit_info.operation {
                 crate::spec::Operation::Append => {
                     let mut action = tx
                         .fast_append()
@@ -288,7 +369,9 @@ impl ExecutionPlan for IcebergCommitExec {
             };
 
             // Apply updates (only handle the ones we emit: AddSnapshot, SetSnapshotRef)
-            let updates = commit.into_updates();
+            let action_requirements = action_commit.requirements().to_vec();
+            Self::validate_requirements(Some(&table_meta), &action_requirements)?;
+            let updates = action_commit.into_updates();
             log::trace!("commit_exec: applying updates: {:?}", &updates);
             let mut newest_snapshot_seq: Option<i64> = None;
             let timestamp_ms = crate::utils::timestamp::monotonic_timestamp_ms();
