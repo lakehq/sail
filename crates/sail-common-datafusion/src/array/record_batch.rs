@@ -245,6 +245,7 @@ pub fn record_batch_with_schema(batch: RecordBatch, schema: &SchemaRef) -> Resul
 }
 
 #[cfg(test)]
+#[allow(clippy::unwrap_used)]
 mod tests {
     use datafusion::arrow::array::{ArrayRef, Int32Array, StructArray};
     use datafusion::arrow::datatypes::{Field, Fields};
@@ -252,7 +253,7 @@ mod tests {
     use super::*;
 
     fn make_struct_array(fields: Vec<Field>, columns: Vec<ArrayRef>) -> StructArray {
-        let field_refs_vec: Vec<FieldRef> = fields.into_iter().map(|f| Arc::new(f)).collect();
+        let field_refs_vec: Vec<FieldRef> = fields.into_iter().map(Arc::new).collect();
         let field_refs: Fields = field_refs_vec.into();
         StructArray::new(field_refs, columns, None)
     }
