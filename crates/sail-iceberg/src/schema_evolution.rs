@@ -11,6 +11,7 @@
 // limitations under the License.
 
 use std::collections::{HashMap, HashSet};
+use std::mem::discriminant;
 use std::sync::Arc;
 
 use datafusion::arrow::datatypes::{DataType, Field, FieldRef, Schema as ArrowSchema};
@@ -137,6 +138,14 @@ impl SchemaEvolver {
             ) if table_unit == input_unit
                 && Self::timestamp_timezone_compatible(table_tz, input_tz)
         ) || Self::nested_types_equivalent(table_type, input_type)
+    }
+
+    fn field_has_default(field: &NestedField) -> bool {
+        field.write_default.is_some() || field.initial_default.is_some()
+    }
+
+    fn types_share_shape(existing: &Type, candidate: &Type) -> bool {
+        discriminant(existing) == discriminant(candidate)
     }
 
     fn is_allowed_type_promotion(table_type: &DataType, input_type: &DataType) -> bool {
@@ -459,7 +468,7 @@ impl SchemaEvolver {
                     Self::merge_field(child.as_ref(), candidate, next_field_id)?;
                 changed |= child_changed;
                 merged_children.push(Arc::new(merged_child));
-            } else if child.required {
+            } else if child.required && !Self::field_has_default(child) {
                 return Err(DataFusionError::Plan(format!(
                     "Column '{}' is required in the Iceberg schema and must be present in the input data.",
                     child.name
@@ -613,20 +622,38 @@ impl SchemaEvolver {
             }
             (Type::Map(existing_map), Type::Map(candidate_map)) => {
                 let mut new_key = candidate_map.key_field.as_ref().clone();
-                new_key.id = existing_map.key_field.id;
-                Self::reuse_nested_ids_from_existing(
-                    existing_map.key_field.as_ref(),
-                    &mut new_key,
-                    next_field_id,
-                )?;
+                if Self::types_share_shape(
+                    existing_map.key_field.field_type.as_ref(),
+                    new_key.field_type.as_ref(),
+                ) {
+                    new_key.id = existing_map.key_field.id;
+                    Self::reuse_nested_ids_from_existing(
+                        existing_map.key_field.as_ref(),
+                        &mut new_key,
+                        next_field_id,
+                    )?;
+                } else {
+                    new_key.id = *next_field_id;
+                    *next_field_id += 1;
+                    Self::assign_nested_ids(&mut new_key, next_field_id);
+                }
 
                 let mut new_value = candidate_map.value_field.as_ref().clone();
-                new_value.id = existing_map.value_field.id;
-                Self::reuse_nested_ids_from_existing(
-                    existing_map.value_field.as_ref(),
-                    &mut new_value,
-                    next_field_id,
-                )?;
+                if Self::types_share_shape(
+                    existing_map.value_field.field_type.as_ref(),
+                    new_value.field_type.as_ref(),
+                ) {
+                    new_value.id = existing_map.value_field.id;
+                    Self::reuse_nested_ids_from_existing(
+                        existing_map.value_field.as_ref(),
+                        &mut new_value,
+                        next_field_id,
+                    )?;
+                } else {
+                    new_value.id = *next_field_id;
+                    *next_field_id += 1;
+                    Self::assign_nested_ids(&mut new_value, next_field_id);
+                }
 
                 candidate.field_type = Box::new(Type::Map(MapType::new(
                     Arc::new(new_key),
