@@ -233,39 +233,41 @@ impl IcebergWriterExec {
     }
 
     fn validate_exact_schema(table_schema: &Schema, input_schema: &Schema) -> Result<()> {
-        if table_schema.fields().len() != input_schema.fields().len() {
-            return Err(DataFusionError::Plan(
-                "Input data schema does not match Iceberg table schema. Set mergeSchema=true to add columns or overwriteSchema=true to replace the schema."
-                    .to_string(),
-            ));
-        }
-        Self::validate_existing_columns(table_schema, input_schema)
-    }
-
-    fn validate_existing_columns(table_schema: &Schema, input_schema: &Schema) -> Result<()> {
-        for field in table_schema.fields() {
-            let candidate = input_schema.field_with_name(field.name()).map_err(|_| {
+        for field in input_schema.fields() {
+            let table_field = table_schema.field_with_name(field.name()).map_err(|_| {
                 DataFusionError::Plan(format!(
-                    "Column '{}' missing from input data. Set mergeSchema=true or overwriteSchema=true to evolve the schema.",
+                    "Column '{}' not found in Iceberg table schema. Set mergeSchema=true to add columns or overwriteSchema=true to replace the schema.",
                     field.name()
                 ))
             })?;
-            if !Self::field_types_compatible(field, candidate) {
+            if !Self::field_types_equivalent(table_field.data_type(), field.data_type()) {
                 return Err(DataFusionError::Plan(format!(
                     "Column '{}' has type {:?} in the table but {:?} in the input data. Set mergeSchema=true to allow schema evolution or overwriteSchema=true to replace the schema.",
                     field.name(),
+                    table_field.data_type(),
                     field.data_type(),
-                    candidate.data_type(),
                 )));
             }
         }
+
+        for field in table_schema.fields() {
+            if !field.is_nullable() && input_schema.field_with_name(field.name()).is_err() {
+                return Err(DataFusionError::Plan(format!(
+                    "Column '{}' is required in the Iceberg table schema and must be present in the input data.",
+                    field.name()
+                )));
+            }
+        }
+
         Ok(())
     }
 
     fn field_types_compatible(table_field: &Field, input_field: &Field) -> bool {
-        let table_type = table_field.data_type();
-        let input_type = input_field.data_type();
+        Self::field_types_equivalent(table_field.data_type(), input_field.data_type())
+            || Self::is_allowed_type_promotion(table_field.data_type(), input_field.data_type())
+    }
 
+    fn field_types_equivalent(table_type: &DataType, input_type: &DataType) -> bool {
         if table_type == input_type {
             return true;
         }
@@ -278,6 +280,34 @@ impl IcebergWriterExec {
             ) if table_unit == input_unit
                 && Self::timestamp_timezone_compatible(table_tz, input_tz)
         ) || Self::nested_types_equivalent(table_type, input_type)
+    }
+
+    fn is_allowed_type_promotion(table_type: &DataType, input_type: &DataType) -> bool {
+        matches!(
+            (table_type, input_type),
+            (DataType::Int32, DataType::Int64) | (DataType::Float32, DataType::Float64)
+        ) || Self::decimal_precision_expands(table_type, input_type)
+    }
+
+    fn decimal_precision_expands(table_type: &DataType, input_type: &DataType) -> bool {
+        match (table_type, input_type) {
+            (DataType::Decimal128(old_p, old_s), DataType::Decimal128(new_p, new_s))
+                if new_s == old_s && new_p >= old_p =>
+            {
+                true
+            }
+            (DataType::Decimal128(old_p, old_s), DataType::Decimal256(new_p, new_s))
+                if new_s == old_s && new_p >= old_p =>
+            {
+                true
+            }
+            (DataType::Decimal256(old_p, old_s), DataType::Decimal256(new_p, new_s))
+                if new_s == old_s && new_p >= old_p =>
+            {
+                true
+            }
+            _ => false,
+        }
     }
 
     fn nested_types_equivalent(table_type: &DataType, input_type: &DataType) -> bool {
@@ -371,16 +401,23 @@ impl IcebergWriterExec {
         let mut changed = false;
 
         for existing in current_schema.fields() {
-            let candidate = input_schema.field_with_name(&existing.name).map_err(|_| {
-                DataFusionError::Plan(format!(
-                    "Column '{}' missing from input data. Set mergeSchema=true or overwriteSchema=true to evolve the schema.",
-                    existing.name
-                ))
-            })?;
-            let (merged_field, field_changed) =
-                Self::merge_field(existing.as_ref(), candidate, &mut next_field_id)?;
-            changed |= field_changed;
-            merged_fields.push(Arc::new(merged_field));
+            match input_schema.field_with_name(&existing.name) {
+                Ok(candidate) => {
+                    let (merged_field, field_changed) =
+                        Self::merge_field(existing.as_ref(), candidate, &mut next_field_id)?;
+                    changed |= field_changed;
+                    merged_fields.push(Arc::new(merged_field));
+                }
+                Err(_) => {
+                    if existing.required {
+                        return Err(DataFusionError::Plan(format!(
+                            "Column '{}' is required in the Iceberg table schema and must be present in the input data.",
+                            existing.name
+                        )));
+                    }
+                    merged_fields.push(Arc::clone(existing));
+                }
+            }
         }
 
         for field in input_schema.fields() {
@@ -422,15 +459,22 @@ impl IcebergWriterExec {
         input_field: &Field,
         next_field_id: &mut i32,
     ) -> Result<(NestedField, bool)> {
+        let mut updated = existing.clone();
+        let mut field_changed = false;
+
+        if existing.required && input_field.is_nullable() {
+            updated.required = false;
+            field_changed = true;
+        }
+
         match (&*existing.field_type, input_field.data_type()) {
             (Type::Struct(existing_struct), DataType::Struct(input_fields)) => {
                 let (struct_type, changed) =
                     Self::merge_struct(existing_struct, input_fields, next_field_id)?;
-                let mut updated = existing.clone();
                 if changed {
                     updated.field_type = Box::new(Type::Struct(struct_type));
                 }
-                Ok((updated, changed))
+                Ok((updated, field_changed || changed))
             }
             (
                 Type::List(existing_list),
@@ -439,16 +483,13 @@ impl IcebergWriterExec {
                 | DataType::LargeList(child)
                 | DataType::LargeListView(child),
             ) => {
-                let (element_field, changed) =
+                let (element_field, element_changed) =
                     Self::merge_field(existing_list.element_field.as_ref(), child, next_field_id)?;
-                if changed {
-                    let mut updated = existing.clone();
+                if element_changed {
                     updated.field_type =
                         Box::new(Type::List(ListType::new(Arc::new(element_field))));
-                    Ok((updated, true))
-                } else {
-                    Ok((existing.clone(), false))
                 }
+                Ok((updated, field_changed || element_changed))
             }
             (Type::Map(existing_map), DataType::Map(entries, _)) => {
                 let DataType::Struct(entry_fields) = entries.data_type() else {
@@ -479,15 +520,12 @@ impl IcebergWriterExec {
                     next_field_id,
                 )?;
                 if value_changed {
-                    let mut updated = existing.clone();
                     updated.field_type = Box::new(Type::Map(MapType::new(
                         Arc::new(merged_key),
                         Arc::new(merged_value),
                     )));
-                    Ok((updated, true))
-                } else {
-                    Ok((existing.clone(), false))
                 }
+                Ok((updated, field_changed || value_changed))
             }
             _ => {
                 let existing_arrow = iceberg_field_to_arrow(existing)?;
@@ -499,7 +537,14 @@ impl IcebergWriterExec {
                         input_field.data_type(),
                     )));
                 }
-                Ok((existing.clone(), false))
+                if Self::is_allowed_type_promotion(
+                    existing_arrow.data_type(),
+                    input_field.data_type(),
+                ) {
+                    updated.field_type = Box::new(arrow_type_to_iceberg(input_field.data_type())?);
+                    field_changed = true;
+                }
+                Ok((updated, field_changed))
             }
         }
     }
@@ -518,16 +563,19 @@ impl IcebergWriterExec {
         let mut merged_children = Vec::with_capacity(existing_struct.fields().len());
 
         for child in existing_struct.fields() {
-            let Some(candidate) = input_lookup.get(child.name.as_str()) else {
+            if let Some(candidate) = input_lookup.get(child.name.as_str()) {
+                let (merged_child, child_changed) =
+                    Self::merge_field(child.as_ref(), candidate, next_field_id)?;
+                changed |= child_changed;
+                merged_children.push(Arc::new(merged_child));
+            } else if child.required {
                 return Err(DataFusionError::Plan(format!(
-                    "Column '{}' missing from input data. Set mergeSchema=true or overwriteSchema=true to evolve the schema.",
+                    "Column '{}' is required in the Iceberg schema and must be present in the input data.",
                     child.name
                 )));
-            };
-            let (merged_child, child_changed) =
-                Self::merge_field(child.as_ref(), candidate, next_field_id)?;
-            changed |= child_changed;
-            merged_children.push(Arc::new(merged_child));
+            } else {
+                merged_children.push(Arc::clone(child));
+            }
         }
 
         for field in input_fields {

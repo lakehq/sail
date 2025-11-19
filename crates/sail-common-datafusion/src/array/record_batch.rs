@@ -1,7 +1,9 @@
 use std::io::Cursor;
 use std::sync::Arc;
 
-use datafusion::arrow::array::{Array, ArrayRef, PrimitiveArray, RecordBatch, RecordBatchOptions};
+use datafusion::arrow::array::{
+    new_null_array, Array, ArrayRef, PrimitiveArray, RecordBatch, RecordBatchOptions,
+};
 use datafusion::arrow::compute::cast;
 use datafusion::arrow::datatypes::{
     ArrowTimestampType, DataType, Schema, SchemaRef, TimeUnit, TimestampMicrosecondType,
@@ -9,7 +11,7 @@ use datafusion::arrow::datatypes::{
 };
 use datafusion::arrow::ipc::reader::StreamReader;
 use datafusion::arrow::ipc::writer::StreamWriter;
-use datafusion_common::Result;
+use datafusion_common::{DataFusionError, Result};
 
 pub fn cast_record_batch(batch: RecordBatch, schema: SchemaRef) -> Result<RecordBatch> {
     let fields = schema.fields();
@@ -59,11 +61,21 @@ pub fn cast_record_batch_relaxed_tz(
     let mut cols: Vec<ArrayRef> = Vec::with_capacity(target.fields().len());
 
     for field in target.fields() {
-        let idx = batch
-            .schema()
-            .index_of(field.name())
-            .map_err(|e| datafusion_common::DataFusionError::Plan(e.to_string()))?;
-        let src = batch.column(idx);
+        let idx = batch.schema().index_of(field.name());
+        let src = match idx {
+            Ok(i) => batch.column(i),
+            Err(_) => {
+                if field.is_nullable() {
+                    cols.push(new_null_array(field.data_type(), batch.num_rows()));
+                    continue;
+                } else {
+                    return Err(DataFusionError::Plan(format!(
+                        "Missing required column '{}' in input batch",
+                        field.name()
+                    )));
+                }
+            }
+        };
         let src_dt = src.data_type();
         let tgt_dt = field.data_type();
 
