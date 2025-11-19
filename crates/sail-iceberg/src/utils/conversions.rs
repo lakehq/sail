@@ -138,11 +138,9 @@ fn struct_literal_with_type(
         return struct_literal_without_type(literal_fields);
     }
 
-    let arrow_fields = match iceberg_type_to_arrow(&Type::Struct(struct_ty.clone()))
-        .expect("failed to convert struct type to arrow")
-    {
-        ArrowDataType::Struct(fields) => fields,
-        _ => unreachable!("iceberg struct conversion must yield Arrow struct"),
+    let arrow_fields = match iceberg_type_to_arrow(&Type::Struct(struct_ty.clone())) {
+        Ok(ArrowDataType::Struct(fields)) => fields,
+        _ => return struct_literal_without_type(literal_fields),
     };
 
     if arrow_fields.len() != literal_fields.len() {
@@ -164,14 +162,18 @@ fn struct_literal_with_type(
         arrays.push(singleton_array_from_scalar(scalar));
     }
 
-    let struct_array =
-        StructArray::try_new(arrow_fields.clone(), arrays, None).expect("struct literal build");
+    let struct_array = match StructArray::try_new(arrow_fields.clone(), arrays, None) {
+        Ok(array) => array,
+        Err(_) => return struct_literal_without_type(literal_fields),
+    };
     ScalarValue::Struct(Arc::new(struct_array))
 }
 
 fn list_literal_with_type(items: &[Option<Literal>], list_ty: &ListType) -> ScalarValue {
-    let element_type = iceberg_type_to_arrow(list_ty.element_field.field_type.as_ref())
-        .expect("failed to convert list element type");
+    let element_type = match iceberg_type_to_arrow(list_ty.element_field.field_type.as_ref()) {
+        Ok(dt) => dt,
+        Err(_) => return list_literal_without_type(items),
+    };
     let nullable = !list_ty.element_field.required;
     let mut scalars = Vec::with_capacity(items.len());
     for item in items {
@@ -186,19 +188,25 @@ fn list_literal_with_type(items: &[Option<Literal>], list_ty: &ListType) -> Scal
 }
 
 fn map_literal_with_type(entries: &[(Literal, Option<Literal>)], map_ty: &MapType) -> ScalarValue {
-    let map_arrow_type = iceberg_type_to_arrow(&Type::Map(map_ty.clone()))
-        .expect("failed to convert map type to arrow");
+    let map_arrow_type = match iceberg_type_to_arrow(&Type::Map(map_ty.clone())) {
+        Ok(dt) => dt,
+        Err(_) => return map_literal_without_type(entries),
+    };
     let ArrowDataType::Map(entries_field, sorted) = map_arrow_type else {
-        unreachable!("iceberg map conversion must yield Arrow map")
+        return map_literal_without_type(entries);
     };
     let ArrowDataType::Struct(entry_struct_fields) = entries_field.data_type() else {
-        unreachable!("map entries must be struct")
+        return map_literal_without_type(entries);
     };
 
-    let key_type = iceberg_type_to_arrow(map_ty.key_field.field_type.as_ref())
-        .expect("failed to convert map key type");
-    let value_type = iceberg_type_to_arrow(map_ty.value_field.field_type.as_ref())
-        .expect("failed to convert map value type");
+    let key_type = match iceberg_type_to_arrow(map_ty.key_field.field_type.as_ref()) {
+        Ok(dt) => dt,
+        Err(_) => return map_literal_without_type(entries),
+    };
+    let value_type = match iceberg_type_to_arrow(map_ty.value_field.field_type.as_ref()) {
+        Ok(dt) => dt,
+        Err(_) => return map_literal_without_type(entries),
+    };
 
     let mut key_scalars = Vec::with_capacity(entries.len());
     let mut value_scalars = Vec::with_capacity(entries.len());
@@ -217,15 +225,20 @@ fn map_literal_with_type(entries: &[(Literal, Option<Literal>)], map_ty: &MapTyp
     let keys_array = scalars_to_array_or_empty(key_scalars, &key_type);
     let values_array = scalars_to_array_or_empty(value_scalars, &value_type);
 
-    let entries_struct = StructArray::try_new(
+    let entries_struct = match StructArray::try_new(
         entry_struct_fields.clone(),
         vec![keys_array, values_array],
         None,
-    )
-    .expect("map entries struct");
+    ) {
+        Ok(array) => array,
+        Err(_) => return map_literal_without_type(entries),
+    };
     let offsets = OffsetBuffer::new(vec![0, entries.len() as i32].into());
-    let map_array = MapArray::try_new(entries_field.clone(), offsets, entries_struct, None, sorted)
-        .expect("map literal build");
+    let map_array =
+        match MapArray::try_new(entries_field.clone(), offsets, entries_struct, None, sorted) {
+            Ok(array) => array,
+            Err(_) => return map_literal_without_type(entries),
+        };
     ScalarValue::Map(Arc::new(map_array))
 }
 
@@ -250,8 +263,10 @@ fn struct_literal_without_type(fields: &[(String, Option<Literal>)]) -> ScalarVa
         arrow_fields.push(Arc::new(Field::new(name, data_type, true)));
     }
 
-    let struct_array =
-        StructArray::try_new(arrow_fields.into(), arrays, None).expect("struct literal build");
+    let struct_array = match StructArray::try_new(arrow_fields.into(), arrays, None) {
+        Ok(array) => array,
+        Err(_) => return ScalarValue::Null,
+    };
     ScalarValue::Struct(Arc::new(struct_array))
 }
 
@@ -328,20 +343,24 @@ fn map_literal_without_type(entries: &[(Literal, Option<Literal>)]) -> ScalarVal
             true,
         )),
     ];
-    let entries_struct = StructArray::try_new(
+    let entries_struct = match StructArray::try_new(
         entry_fields.clone().into(),
         vec![keys_array, values_array],
         None,
-    )
-    .expect("map literal struct");
+    ) {
+        Ok(array) => array,
+        Err(_) => return ScalarValue::Null,
+    };
     let map_field = Arc::new(Field::new(
         SAIL_MAP_FIELD_NAME,
         ArrowDataType::Struct(entry_fields.into()),
         false,
     ));
     let offsets = OffsetBuffer::new(vec![0, entries.len() as i32].into());
-    let map_array =
-        MapArray::try_new(map_field, offsets, entries_struct, None, false).expect("map literal");
+    let map_array = match MapArray::try_new(map_field, offsets, entries_struct, None, false) {
+        Ok(array) => array,
+        Err(_) => return ScalarValue::Null,
+    };
     ScalarValue::Map(Arc::new(map_array))
 }
 
@@ -349,16 +368,23 @@ fn scalars_to_array_or_empty(values: Vec<ScalarValue>, data_type: &ArrowDataType
     if values.is_empty() {
         new_empty_array(data_type)
     } else {
-        ScalarValue::iter_to_array(values).expect("scalar to array conversion")
+        match ScalarValue::iter_to_array(values) {
+            Ok(array) => array,
+            Err(_) => new_empty_array(data_type),
+        }
     }
 }
 
 fn singleton_array_from_scalar(value: ScalarValue) -> ArrayRef {
-    ScalarValue::iter_to_array(vec![value]).expect("singleton array conversion")
+    let data_type = value.data_type();
+    match ScalarValue::iter_to_array(vec![value]) {
+        Ok(array) => array,
+        Err(_) => new_empty_array(&data_type),
+    }
 }
 
 fn null_scalar_for_type(data_type: &ArrowDataType) -> ScalarValue {
-    ScalarValue::try_new_null(data_type).expect("null scalar conversion")
+    ScalarValue::try_new_null(data_type).unwrap_or(ScalarValue::Null)
 }
 
 /// Convert a DataFusion ScalarValue to an Iceberg Literal.
@@ -583,7 +609,7 @@ mod tests {
     }
 
     #[test]
-    #[allow(clippy::unwrap_used)]
+    #[allow(clippy::unwrap_used, clippy::expect_used)]
     fn test_array_value_to_literal_retains_nanoseconds() {
         use datafusion::arrow::array::TimestampNanosecondArray;
 
