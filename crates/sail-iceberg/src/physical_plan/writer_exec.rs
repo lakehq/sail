@@ -560,6 +560,7 @@ impl IcebergWriterExec {
                     next_field_id,
                 )?;
                 if key_changed {
+                    // FIXME: allow type promotion for map keys that satisfy Iceberg type promotion rules
                     return Err(DataFusionError::Plan(
                         "Schema evolution for map keys is not supported; use overwriteSchema=true to replace the schema."
                             .to_string(),
@@ -808,6 +809,7 @@ impl IcebergWriterExec {
                         field.name, field.source_id
                     )));
                 }
+                // FIXME: validate that the field type is compatible with the partition transform
             }
         }
         Ok(())

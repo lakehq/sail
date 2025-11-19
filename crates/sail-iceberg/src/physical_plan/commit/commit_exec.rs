@@ -457,7 +457,7 @@ impl ExecutionPlan for IcebergCommitExec {
                 .map_err(|e| DataFusionError::External(Box::new(e)))?;
             log::trace!("Metadata written successfully");
 
-            // Update version-hint with the metadata filename (not version number)
+            // FIXME: concurrent schema commits may cause version conflicts without atomic operations
             let metadata_filename = if let Some(fname) = new_meta_rel.rsplit('/').next() {
                 fname.to_string()
             } else {

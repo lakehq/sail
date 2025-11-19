@@ -38,7 +38,7 @@ pub fn iceberg_literal_to_scalar(literal: &Literal, iceberg_type: &Type) -> Scal
         (Literal::Primitive(prim), Type::Primitive(prim_type)) => {
             primitive_literal_to_scalar(prim, prim_type)
         }
-        // Complex types: serialize to JSON for now
+        // FIXME: construct proper ScalarValue::Struct/List/Map instead of serializing to JSON string
         (Literal::Struct(fields), _) => {
             let json_repr = serde_json::to_string(fields).unwrap_or_default();
             ScalarValue::Utf8(Some(json_repr))
@@ -63,6 +63,7 @@ pub fn iceberg_literal_to_scalar(literal: &Literal, iceberg_type: &Type) -> Scal
 pub fn literal_to_scalar_basic(literal: &Literal) -> ScalarValue {
     match literal {
         Literal::Primitive(prim) => primitive_literal_to_scalar_basic(prim),
+        // FIXME: construct proper ScalarValue::Struct/List/Map instead of serializing to JSON string
         Literal::Struct(fields) => {
             let json_repr = serde_json::to_string(fields).unwrap_or_default();
             ScalarValue::Utf8(Some(json_repr))
