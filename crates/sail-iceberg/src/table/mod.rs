@@ -10,10 +10,6 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-pub mod expressions;
-pub mod provider;
-pub mod pruning;
-pub mod schema_adapter;
-pub mod type_converter;
+pub mod metadata_loader;
 
-pub use provider::*;
+pub use metadata_loader::*;

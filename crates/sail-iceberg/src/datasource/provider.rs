@@ -37,10 +37,10 @@ use datafusion::physical_plan::ExecutionPlan;
 use object_store::ObjectMeta;
 use url::Url;
 
-use crate::arrow_conversion::iceberg_schema_to_arrow;
-use crate::datasource::expr_adapter::IcebergPhysicalExprAdapterFactory;
 use crate::datasource::expressions::simplify_expr;
 use crate::datasource::pruning::{prune_files, prune_manifests_by_partition_summaries};
+use crate::datasource::schema_adapter::IcebergPhysicalExprAdapterFactory;
+use crate::datasource::type_converter::iceberg_schema_to_arrow;
 use crate::io::{
     load_manifest as io_load_manifest, load_manifest_list as io_load_manifest_list, StoreContext,
 };

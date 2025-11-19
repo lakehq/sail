@@ -22,16 +22,18 @@ use parquet::arrow::PARQUET_FIELD_ID_META_KEY;
 use sail_common_datafusion::array::record_batch::cast_record_batch_relaxed_tz;
 use url::Url;
 
+use crate::operations::write::arrow_parquet::ArrowParquetWriter;
+use crate::operations::write::base_writer::DataFileWriter;
+use crate::operations::write::config::WriterConfig;
+use crate::operations::write::file_writer::location_generator::{
+    DefaultLocationGenerator, LocationGenerator,
+};
+use crate::operations::write::partition::split_record_batch_by_partition;
 use crate::spec::schema::Schema as IcebergSchema;
 use crate::spec::types::values::Literal;
 use crate::spec::types::NestedField;
 use crate::spec::DataFile;
 use crate::utils::conversions::iceberg_literal_to_scalar;
-use crate::writer::arrow_parquet::ArrowParquetWriter;
-use crate::writer::base_writer::DataFileWriter;
-use crate::writer::config::WriterConfig;
-use crate::writer::file_writer::location_generator::{DefaultLocationGenerator, LocationGenerator};
-use crate::writer::partition::split_record_batch_by_partition;
 
 pub struct IcebergTableWriter {
     pub store: Arc<dyn object_store::ObjectStore>,

@@ -32,6 +32,7 @@ use futures::StreamExt;
 use url::Url;
 
 use crate::io::StoreContext;
+use crate::operations::{SnapshotProduceOperation, Transaction, TransactionAction};
 use crate::physical_plan::commit::bootstrap::{
     bootstrap_first_snapshot, bootstrap_new_table, PersistStrategy,
 };
@@ -40,7 +41,6 @@ use crate::spec::catalog::TableUpdate;
 use crate::spec::metadata::table_metadata::SnapshotLog;
 use crate::spec::snapshots::MAIN_BRANCH;
 use crate::spec::{Schema as IcebergSchema, TableMetadata, TableRequirement};
-use crate::transaction::{SnapshotProduceOperation, Transaction, TransactionAction};
 use crate::utils::get_object_store_from_context;
 
 #[derive(Debug)]
@@ -344,7 +344,7 @@ impl ExecutionPlan for IcebergCommitExec {
                         .map_err(DataFusionError::Execution)?
                 }
                 crate::spec::Operation::Overwrite => {
-                    let producer = super::super::super::transaction::SnapshotProducer::new(
+                    let producer = crate::operations::SnapshotProducer::new(
                         &tx,
                         commit_info.data_files.clone(),
                         Some(store_ctx.clone()),
