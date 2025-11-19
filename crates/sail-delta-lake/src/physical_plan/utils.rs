@@ -2,6 +2,7 @@ use std::collections::HashMap;
 
 use datafusion::arrow::array::{Array, DictionaryArray, RecordBatch, StringArray};
 use datafusion::arrow::datatypes::UInt16Type;
+use itertools::Either;
 
 use crate::kernel::models::Add;
 use crate::kernel::{DeltaResult, DeltaTableError};
@@ -40,9 +41,8 @@ pub(crate) fn join_batches_with_add_actions(
     for batch in batches {
         let err = || DeltaTableError::Generic("Unable to obtain Delta-rs path column".to_string());
 
-        let iter: Box<dyn Iterator<Item = Option<&str>>> = if dict_array {
-            let array = get_path_column(&batch, path_column)?;
-            Box::new(array)
+        let iter = if dict_array {
+            Either::Left(get_path_column(&batch, path_column)?)
         } else {
             let array = batch
                 .column_by_name(path_column)
@@ -50,7 +50,7 @@ pub(crate) fn join_batches_with_add_actions(
                 .as_any()
                 .downcast_ref::<StringArray>()
                 .ok_or_else(err)?;
-            Box::new(array.iter())
+            Either::Right(array.iter())
         };
 
         for path in iter {

@@ -41,13 +41,10 @@ pub fn partitioned_file_from_action(
 
             // Convert partition value to ScalarValue
             match partition_value {
-                Some(value) => ScalarConverter::json_to_arrow_scalar_value(
-                    &serde_json::Value::String(value.to_string()),
-                    field.data_type(),
-                )
-                .ok()
-                .flatten()
-                .unwrap_or(ScalarValue::Null),
+                Some(value) => {
+                    ScalarConverter::string_to_arrow_scalar_value(value, field.data_type())
+                        .unwrap_or(ScalarValue::Null)
+                }
                 None => ScalarValue::try_new_null(field.data_type()).unwrap_or(ScalarValue::Null),
             }
         })

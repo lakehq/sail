@@ -207,7 +207,7 @@ impl LogicalFileView {
                             if v.is_null() {
                                 None
                             } else {
-                                Some(v.serialize())
+                                Some(v.serialize().into_owned())
                             },
                         )
                     })

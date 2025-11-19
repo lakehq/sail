@@ -1,3 +1,5 @@
+use std::borrow::Cow;
+use std::fmt::Write;
 use std::sync::Arc;
 
 use chrono::{DateTime, TimeZone, Utc};
@@ -39,22 +41,26 @@ impl ScalarConverter {
             serde_json::Value::Null => Ok(Some(ScalarValue::try_new_null(field_dt)?)),
             _ => {
                 let string_val = match stat_val {
-                    serde_json::Value::String(s) => s.to_owned(),
-                    other => other.to_string(),
+                    serde_json::Value::String(s) => Cow::Borrowed(s.as_str()),
+                    other => Cow::Owned(other.to_string()),
                 };
 
-                match field_dt {
-                    ArrowDataType::Timestamp(_, _) => Ok(Some(Self::parse_timestamp(
-                        &serde_json::Value::String(string_val),
-                        field_dt,
-                    )?)),
-                    ArrowDataType::Date32 => Ok(Some(Self::parse_date(
-                        &serde_json::Value::String(string_val),
-                        field_dt,
-                    )?)),
-                    _ => Ok(Some(ScalarValue::try_from_string(string_val, field_dt)?)),
-                }
+                Ok(Some(Self::string_to_arrow_scalar_value(
+                    string_val.as_ref(),
+                    field_dt,
+                )?))
             }
+        }
+    }
+
+    pub fn string_to_arrow_scalar_value(
+        value: &str,
+        field_dt: &ArrowDataType,
+    ) -> DataFusionResult<ScalarValue> {
+        match field_dt {
+            ArrowDataType::Timestamp(_, _) => Self::parse_timestamp_str(value, field_dt),
+            ArrowDataType::Date32 => Self::parse_date_str(value, field_dt),
+            _ => ScalarValue::try_from_string(value.to_string(), field_dt),
         }
     }
 
@@ -171,16 +177,9 @@ impl ScalarConverter {
         Ok(array)
     }
 
-    fn parse_date(
-        stat_val: &serde_json::Value,
-        field_dt: &ArrowDataType,
-    ) -> DataFusionResult<ScalarValue> {
-        let string = match stat_val {
-            serde_json::Value::String(s) => s.to_owned(),
-            _ => stat_val.to_string(),
-        };
-
-        let time_micro = ScalarValue::try_from_string(string, &ArrowDataType::Date32)?;
+    fn parse_date_str(date_str: &str, field_dt: &ArrowDataType) -> DataFusionResult<ScalarValue> {
+        let time_micro =
+            ScalarValue::try_from_string(date_str.to_string(), &ArrowDataType::Date32)?;
         let cast_arr = cast_with_options(
             &time_micro.to_array()?,
             field_dt,
@@ -192,17 +191,12 @@ impl ScalarConverter {
         ScalarValue::try_from_array(&cast_arr, 0)
     }
 
-    fn parse_timestamp(
-        stat_val: &serde_json::Value,
+    fn parse_timestamp_str(
+        timestamp_str: &str,
         field_dt: &ArrowDataType,
     ) -> DataFusionResult<ScalarValue> {
-        let string = match stat_val {
-            serde_json::Value::String(s) => s.to_owned(),
-            _ => stat_val.to_string(),
-        };
-
         let time_micro = ScalarValue::try_from_string(
-            string,
+            timestamp_str.to_string(),
             &ArrowDataType::Timestamp(TimeUnit::Microsecond, None),
         )?;
         let cast_arr = cast_with_options(
@@ -222,29 +216,31 @@ fn encode_partition_value(value: &str) -> String {
 }
 
 pub trait ScalarExt: Sized {
-    fn serialize(&self) -> String;
+    fn serialize(&self) -> Cow<'_, str>;
     fn serialize_encoded(&self) -> String;
     fn from_array(arr: &dyn Array, index: usize) -> Option<Self>;
     fn to_json(&self) -> Value;
 }
 
 impl ScalarExt for Scalar {
-    fn serialize(&self) -> String {
+    fn serialize(&self) -> Cow<'_, str> {
         match self {
-            Self::String(value) => value.to_owned(),
-            Self::Byte(value) => value.to_string(),
-            Self::Short(value) => value.to_string(),
-            Self::Integer(value) => value.to_string(),
-            Self::Long(value) => value.to_string(),
-            Self::Float(value) => value.to_string(),
-            Self::Double(value) => value.to_string(),
-            Self::Boolean(value) => value.to_string(),
-            Self::TimestampNtz(ts) | Self::Timestamp(ts) => format_timestamp(*ts),
-            Self::Date(days) => format_date(*days),
-            Self::Decimal(decimal) => serialize_decimal(decimal.bits(), decimal.scale() as i8),
-            Self::Binary(bytes) => create_escaped_binary_string(bytes.as_slice()),
-            Self::Null(_) => "null".to_string(),
-            Self::Struct(_) | Self::Array(_) | Self::Map(_) => self.to_string(),
+            Self::String(value) => Cow::Borrowed(value),
+            Self::Byte(value) => Cow::Owned(value.to_string()),
+            Self::Short(value) => Cow::Owned(value.to_string()),
+            Self::Integer(value) => Cow::Owned(value.to_string()),
+            Self::Long(value) => Cow::Owned(value.to_string()),
+            Self::Float(value) => Cow::Owned(value.to_string()),
+            Self::Double(value) => Cow::Owned(value.to_string()),
+            Self::Boolean(value) => Cow::Owned(value.to_string()),
+            Self::TimestampNtz(ts) | Self::Timestamp(ts) => Cow::Owned(format_timestamp(*ts)),
+            Self::Date(days) => Cow::Owned(format_date(*days)),
+            Self::Decimal(decimal) => {
+                Cow::Owned(serialize_decimal(decimal.bits(), decimal.scale() as i8))
+            }
+            Self::Binary(bytes) => Cow::Owned(create_escaped_binary_string(bytes.as_slice())),
+            Self::Null(_) => Cow::Borrowed("null"),
+            Self::Struct(_) | Self::Array(_) | Self::Map(_) => Cow::Owned(self.to_string()),
         }
     }
 
@@ -252,7 +248,7 @@ impl ScalarExt for Scalar {
         if self.is_null() {
             return NULL_PARTITION_VALUE_DATA_PATH.to_string();
         }
-        encode_partition_value(self.serialize().as_str())
+        encode_partition_value(self.serialize().as_ref())
     }
 
     fn from_array(arr: &dyn Array, index: usize) -> Option<Self> {
@@ -355,10 +351,9 @@ fn serialize_decimal(bits: i128, scale: i8) -> String {
 }
 
 fn create_escaped_binary_string(bytes: &[u8]) -> String {
-    let mut escaped = String::new();
+    let mut escaped = String::with_capacity(bytes.len() * 6);
     for byte in bytes {
-        escaped.push_str("\\u");
-        escaped.push_str(&format!("{byte:04X}"));
+        let _ = write!(escaped, "\\u{:04X}", byte);
     }
     escaped
 }

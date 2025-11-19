@@ -72,7 +72,7 @@ pub fn create_add(
                     if v.is_null() {
                         None
                     } else {
-                        Some(v.serialize())
+                        Some(v.serialize().into_owned())
                     },
                 )
             })
@@ -140,38 +140,13 @@ fn stats_from_metadata(
     let mut max_values: HashMap<String, ColumnValueStat> = HashMap::new();
     let mut null_count: HashMap<String, ColumnCountStat> = HashMap::new();
 
-    // Determine which columns to collect stats for
-    let idx_to_iterate = if let Some(stats_cols) = stats_columns {
-        schema_descriptor
-            .columns()
-            .iter()
-            .enumerate()
-            .filter_map(|(index, col)| {
-                if stats_cols.contains(&col.name().to_string()) {
-                    Some(index)
-                } else {
-                    None
-                }
-            })
-            .collect()
-    } else if num_indexed_cols == -1 {
-        (0..schema_descriptor.num_columns()).collect::<Vec<_>>()
-    } else if num_indexed_cols >= 0 {
-        (0..min(num_indexed_cols as usize, schema_descriptor.num_columns())).collect::<Vec<_>>()
-    } else {
-        return Err(DeltaTableError::generic(
-            "delta.dataSkippingNumIndexedCols valid values are >=-1".to_string(),
-        ));
-    };
-
-    for idx in idx_to_iterate {
+    let mut handle_column = |idx: usize| -> Result<(), DeltaTableError> {
         let column_descr = schema_descriptor.column(idx);
         let column_path = column_descr.path();
         let column_path_parts = column_path.parts();
 
-        // Do not include partition columns in statistics
         if partition_values.contains_key(&column_path_parts[0]) {
-            continue;
+            return Ok(());
         }
 
         let maybe_stats: Option<AggregatedStats> = row_group_metadata
@@ -205,6 +180,39 @@ fn stats_from_metadata(
                 &mut max_values,
                 &mut null_count,
             )?;
+        }
+
+        Ok(())
+    };
+
+    if let Some(stats_cols) = stats_columns {
+        let idx_to_iterate: Vec<usize> = schema_descriptor
+            .columns()
+            .iter()
+            .enumerate()
+            .filter_map(|(index, col)| {
+                if stats_cols.contains(&col.name().to_string()) {
+                    Some(index)
+                } else {
+                    None
+                }
+            })
+            .collect();
+        for idx in idx_to_iterate {
+            handle_column(idx)?;
+        }
+    } else {
+        let limit = if num_indexed_cols == -1 {
+            schema_descriptor.num_columns()
+        } else if num_indexed_cols >= 0 {
+            min(num_indexed_cols as usize, schema_descriptor.num_columns())
+        } else {
+            return Err(DeltaTableError::generic(
+                "delta.dataSkippingNumIndexedCols valid values are >=-1".to_string(),
+            ));
+        };
+        for idx in 0..limit {
+            handle_column(idx)?;
         }
     }
 

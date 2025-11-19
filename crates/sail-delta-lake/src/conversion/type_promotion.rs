@@ -1,4 +1,3 @@
-use std::collections::HashMap;
 use std::sync::Arc;
 
 use datafusion::arrow::compute::can_cast_types;
@@ -7,6 +6,7 @@ use datafusion::common::Result;
 use datafusion::physical_expr::expressions::CastExpr;
 use datafusion::physical_expr::PhysicalExpr;
 use datafusion_common::DataFusionError;
+use indexmap::IndexMap;
 
 /// Shared type conversion utilities for Delta Lake operations.
 #[derive(Debug)]
@@ -51,25 +51,20 @@ impl DeltaTypeConverter {
 
         let merged_type = match (table_type, input_type) {
             (DataType::Struct(table_fields), DataType::Struct(input_fields)) => {
-                let mut by_name: HashMap<&str, Field> = HashMap::new();
-                let mut order: Vec<&str> = Vec::new();
-                for f in table_fields {
-                    by_name.insert(f.name().as_str(), f.as_ref().clone());
-                    order.push(f.name().as_str());
-                }
+                let mut merged_fields: IndexMap<&str, Field> = table_fields
+                    .iter()
+                    .map(|f| (f.name().as_str(), f.as_ref().clone()))
+                    .collect();
                 for inf in input_fields {
-                    if let Some(tf) = by_name.get(inf.name().as_str()).cloned() {
-                        let merged_child = Self::promote_field_types(&tf, inf.as_ref())?;
-                        by_name.insert(inf.name().as_str(), merged_child);
+                    let name = inf.name().as_str();
+                    if let Some(existing) = merged_fields.get(name).cloned() {
+                        let merged_child = Self::promote_field_types(&existing, inf.as_ref())?;
+                        merged_fields.insert(name, merged_child);
                     } else {
-                        by_name.insert(inf.name().as_str(), inf.as_ref().clone());
-                        order.push(inf.name().as_str());
+                        merged_fields.insert(name, inf.as_ref().clone());
                     }
                 }
-                let merged_children: Vec<Field> = order
-                    .into_iter()
-                    .filter_map(|n| by_name.remove(n))
-                    .collect();
+                let merged_children: Vec<Field> = merged_fields.into_values().collect();
                 Some(DataType::Struct(merged_children.into()))
             }
             (DataType::List(table_elem), DataType::List(input_elem)) => {
