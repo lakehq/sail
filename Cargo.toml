@@ -135,17 +135,17 @@ prost-types = "0.14"
 # The `axum` version must match the one used in `tonic` (replace `RELEASE` with the release we are using):
 #   https://github.com/hyperium/tonic/blob/vRELEASE/tonic/Cargo.toml
 axum = "0.8.4"
-datafusion = { git = "https://github.com/apache/datafusion.git", rev = "187c6b2", features = ["serde", "avro", "sql"] }
-datafusion-common = { git = "https://github.com/apache/datafusion.git", rev = "187c6b2", features = ["object_store", "avro"] }
-datafusion-datasource = { git = "https://github.com/apache/datafusion.git", rev = "187c6b2" }
-datafusion-expr = { git = "https://github.com/apache/datafusion.git", rev = "187c6b2" }
-datafusion-expr-common = { git = "https://github.com/apache/datafusion.git", rev = "187c6b2" }
-datafusion-proto = { git = "https://github.com/apache/datafusion.git", rev = "187c6b2" }
-datafusion-functions = { git = "https://github.com/apache/datafusion.git", rev = "187c6b2" }
-datafusion-functions-nested = { git = "https://github.com/apache/datafusion.git", rev = "187c6b2" }
-datafusion-physical-expr = { git = "https://github.com/apache/datafusion.git", rev = "187c6b2" }
-datafusion-spark = { git = "https://github.com/apache/datafusion.git", rev = "187c6b2" }
-datafusion-functions-json = { git = "https://github.com/lakehq/datafusion-functions-json.git", rev = "e5448982654206025ac15e260a2025fc1cb586c2" }
+datafusion = { version = "51.0.0", features = ["serde", "avro", "sql"] }
+datafusion-common = { version = "51.0.0", features = ["object_store", "avro"] }
+datafusion-datasource = { version = "51.0.0" }
+datafusion-expr = { version = "51.0.0" }
+datafusion-expr-common = { version = "51.0.0" }
+datafusion-proto = { version = "51.0.0" }
+datafusion-functions = { version = "51.0.0" }
+datafusion-functions-nested = { version = "51.0.0" }
+datafusion-physical-expr = { version = "51.0.0" }
+datafusion-spark = { version = "51.0.0" }
+datafusion-functions-json = { git = "https://github.com/lakehq/datafusion-functions-json.git", rev = "fa89d63" }
 # The `pyo3` version must match the one used in `arrow-pyarrow` (replace `RELEASE` with the release we are using):
 #   https://github.com/apache/arrow-rs/blob/RELEASE/arrow-pyarrow/Cargo.toml
 # auto-initialize: Changes [`Python::with_gil`] to automatically initialize the Python interpreter if needed.
