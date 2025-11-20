@@ -27,13 +27,15 @@ use testcontainers::core::{ContainerPort, WaitFor};
 use testcontainers::runners::AsyncRunner;
 use testcontainers::{ContainerAsync, GenericImage, ImageExt};
 
-async fn setup_catalog() -> (
+async fn setup_catalog(
+    network_name: &str,
+) -> (
     RuntimeAwareCatalogProvider<IcebergRestCatalogProvider>,
     ContainerAsync<GenericImage>,
     ContainerAsync<GenericImage>,
     ContainerAsync<GenericImage>,
 ) {
-    let network = "rest_bridge";
+    let network = format!("iceberg_{}", network_name);
 
     let minio = GenericImage::new("minio/minio", "RELEASE.2025-05-24T17-08-30Z")
         .with_wait_for(WaitFor::message_on_stderr("MinIO Object Storage Server"))
@@ -41,7 +43,7 @@ async fn setup_catalog() -> (
         .with_exposed_port(ContainerPort::Tcp(9001))
         .with_env_var("MINIO_ROOT_USER", "admin")
         .with_env_var("MINIO_ROOT_PASSWORD", "password")
-        .with_network(network)
+        .with_network(&network)
         .with_cmd(vec!["server", "/data", "--console-address", ":9001"])
         .start()
         .await
@@ -62,7 +64,7 @@ async fn setup_catalog() -> (
         .with_env_var("AWS_ACCESS_KEY_ID", "admin")
         .with_env_var("AWS_SECRET_ACCESS_KEY", "password")
         .with_env_var("AWS_REGION", "us-east-1")
-        .with_network(network)
+        .with_network(&network)
         .start()
         .await
         .expect("Failed to start MC");
@@ -86,7 +88,7 @@ async fn setup_catalog() -> (
         .with_env_var("CATALOG_WAREHOUSE", "s3://icebergdata/demo")
         .with_env_var("CATALOG_IO__IMPL", "org.apache.iceberg.aws.s3.S3FileIO")
         .with_env_var("CATALOG_S3_ENDPOINT", minio_internal_endpoint)
-        .with_network(network)
+        .with_network(&network)
         .start()
         .await
         .expect("Failed to start REST catalog");
@@ -117,7 +119,7 @@ async fn setup_catalog() -> (
 #[tokio::test]
 #[ignore]
 async fn test_create_namespace() {
-    let (rest_catalog, _minio, _mc, _rest) = setup_catalog().await;
+    let (rest_catalog, _minio, _mc, _rest) = setup_catalog("test_create_namespace_network").await;
 
     let namespace = Namespace::try_from(vec!["test_create_namespace".to_string()]).unwrap();
 
@@ -203,7 +205,8 @@ async fn test_create_namespace() {
 #[tokio::test]
 #[ignore]
 async fn test_get_non_exist_namespace() {
-    let (rest_catalog, _minio, _mc, _rest) = setup_catalog().await;
+    let (rest_catalog, _minio, _mc, _rest) =
+        setup_catalog("test_get_non_exist_namespace_network").await;
 
     let namespace = Namespace::try_from(vec!["test_get_non_exist_namespace".to_string()]).unwrap();
     let result = rest_catalog.get_database(&namespace).await;
@@ -218,7 +221,7 @@ async fn test_get_non_exist_namespace() {
 #[tokio::test]
 #[ignore]
 async fn test_get_namespace() {
-    let (rest_catalog, _minio, _mc, _rest) = setup_catalog().await;
+    let (rest_catalog, _minio, _mc, _rest) = setup_catalog("test_get_namespace_network").await;
 
     let namespace = Namespace::try_from(vec!["apple".to_string(), "ios".to_string()]).unwrap();
     let properties = vec![
@@ -262,7 +265,7 @@ async fn test_get_namespace() {
 #[tokio::test]
 #[ignore]
 async fn test_list_namespaces() {
-    let (rest_catalog, _minio, _mc, _rest) = setup_catalog().await;
+    let (rest_catalog, _minio, _mc, _rest) = setup_catalog("test_list_namespaces_network").await;
 
     let ns1 =
         Namespace::try_from(vec!["test_list_namespace".to_string(), "ios".to_string()]).unwrap();
@@ -322,7 +325,8 @@ async fn test_list_namespaces() {
 #[tokio::test]
 #[ignore]
 async fn test_list_empty_namespaces() {
-    let (rest_catalog, _minio, _mc, _rest) = setup_catalog().await;
+    let (rest_catalog, _minio, _mc, _rest) =
+        setup_catalog("test_list_empty_namespaces_network").await;
 
     let ns_apple = Namespace::try_from(vec![
         "test_list_empty_namespace".to_string(),
@@ -356,7 +360,8 @@ async fn test_list_empty_namespaces() {
 #[tokio::test]
 #[ignore]
 async fn test_list_root_namespaces() {
-    let (rest_catalog, _minio, _mc, _rest) = setup_catalog().await;
+    let (rest_catalog, _minio, _mc, _rest) =
+        setup_catalog("test_list_root_namespaces_network").await;
 
     let ns1 = Namespace::try_from(vec![
         "test_list_root_namespace".to_string(),
@@ -421,7 +426,8 @@ async fn test_list_root_namespaces() {
 #[tokio::test]
 #[ignore]
 async fn test_list_empty_multi_level_namespaces() {
-    let (rest_catalog, _minio, _mc, _rest) = setup_catalog().await;
+    let (rest_catalog, _minio, _mc, _rest) =
+        setup_catalog("test_list_empty_multi_level_namespaces_network").await;
 
     let ns_apple = Namespace::try_from(vec![
         "test_list_empty_multi_level_namespace".to_string(),
@@ -456,7 +462,7 @@ async fn test_list_empty_multi_level_namespaces() {
 #[tokio::test]
 #[ignore]
 async fn test_drop_namespace() {
-    let (rest_catalog, _minio, _mc, _rest) = setup_catalog().await;
+    let (rest_catalog, _minio, _mc, _rest) = setup_catalog("test_drop_namespace_network").await;
 
     let namespace = Namespace::try_from(vec!["test_drop_namespace".to_string()]).unwrap();
 
@@ -516,7 +522,7 @@ async fn test_drop_namespace() {
 #[tokio::test]
 #[ignore]
 async fn test_create_table() {
-    let (rest_catalog, _minio, _mc, _rest) = setup_catalog().await;
+    let (rest_catalog, _minio, _mc, _rest) = setup_catalog("test_create_table_network").await;
 
     let ns = Namespace::try_from(vec![
         "test_create_table".to_string(),
@@ -887,7 +893,7 @@ async fn test_create_table() {
 #[tokio::test]
 #[ignore]
 async fn test_get_table() {
-    let (rest_catalog, _minio, _mc, _rest) = setup_catalog().await;
+    let (rest_catalog, _minio, _mc, _rest) = setup_catalog("test_get_table_network").await;
 
     let ns = Namespace::try_from(vec![
         "test_create_table".to_string(),
@@ -1119,7 +1125,7 @@ async fn test_get_table() {
 #[tokio::test]
 #[ignore]
 async fn test_list_tables() {
-    let (rest_catalog, _minio, _mc, _rest) = setup_catalog().await;
+    let (rest_catalog, _minio, _mc, _rest) = setup_catalog("test_list_tables_network").await;
 
     let ns = Namespace::try_from(vec!["test_list_tables".to_string()]).unwrap();
 
@@ -1215,7 +1221,7 @@ async fn test_list_tables() {
 #[tokio::test]
 #[ignore]
 async fn test_drop_table() {
-    let (rest_catalog, _minio, _mc, _rest) = setup_catalog().await;
+    let (rest_catalog, _minio, _mc, _rest) = setup_catalog("test_drop_table_network").await;
 
     let namespace = Namespace::try_from(vec!["test_drop_table".to_string()]).unwrap();
 
@@ -1349,7 +1355,7 @@ async fn test_drop_table() {
 #[tokio::test]
 #[ignore]
 async fn test_create_view() {
-    let (rest_catalog, _minio, _mc, _rest) = setup_catalog().await;
+    let (rest_catalog, _minio, _mc, _rest) = setup_catalog("test_create_view_network").await;
 
     let ns = Namespace::try_from(vec!["test_create_view".to_string()]).unwrap();
 
@@ -1565,7 +1571,7 @@ async fn test_create_view() {
 #[tokio::test]
 #[ignore]
 async fn test_get_view() {
-    let (rest_catalog, _minio, _mc, _rest) = setup_catalog().await;
+    let (rest_catalog, _minio, _mc, _rest) = setup_catalog("test_get_view_network").await;
 
     let ns = Namespace::try_from(vec!["test_get_view".to_string()]).unwrap();
 
@@ -1668,7 +1674,7 @@ async fn test_get_view() {
 #[tokio::test]
 #[ignore]
 async fn test_list_views() {
-    let (rest_catalog, _minio, _mc, _rest) = setup_catalog().await;
+    let (rest_catalog, _minio, _mc, _rest) = setup_catalog("test_list_views_network").await;
 
     let ns = Namespace::try_from(vec!["test_list_views".to_string()]).unwrap();
 
@@ -1747,7 +1753,7 @@ async fn test_list_views() {
 #[tokio::test]
 #[ignore]
 async fn test_drop_view() {
-    let (rest_catalog, _minio, _mc, _rest) = setup_catalog().await;
+    let (rest_catalog, _minio, _mc, _rest) = setup_catalog("test_drop_view_network").await;
 
     let namespace = Namespace::try_from(vec!["test_drop_view".to_string()]).unwrap();
 
