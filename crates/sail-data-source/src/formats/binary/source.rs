@@ -6,11 +6,10 @@ use datafusion::arrow::datatypes::{Schema, SchemaRef};
 use datafusion::physical_plan::metrics::ExecutionPlanMetricsSet;
 use datafusion_common::{internal_err, DataFusionError, Result, Statistics};
 use datafusion_datasource::file::FileSource;
-use datafusion_datasource::file_meta::FileMeta;
 use datafusion_datasource::file_scan_config::FileScanConfig;
 use datafusion_datasource::file_stream::{FileOpenFuture, FileOpener};
 use datafusion_datasource::schema_adapter::SchemaAdapterFactory;
-use datafusion_datasource::PartitionedFile;
+use datafusion_datasource::{PartitionedFile, TableSchema};
 use futures::StreamExt;
 use object_store::ObjectStore;
 
@@ -71,9 +70,9 @@ impl FileSource for BinarySource {
         Arc::new(conf)
     }
 
-    fn with_schema(&self, schema: SchemaRef) -> Arc<dyn FileSource> {
+    fn with_schema(&self, schema: TableSchema) -> Arc<dyn FileSource> {
         let mut conf = self.clone();
-        conf.file_schema = Some(schema);
+        conf.file_schema = Some(schema.file_schema().clone());
         Arc::new(conf)
     }
 
@@ -136,9 +135,9 @@ impl BinaryOpener {
 }
 
 impl FileOpener for BinaryOpener {
-    fn open(&self, file_meta: FileMeta, _file: PartitionedFile) -> Result<FileOpenFuture> {
+    fn open(&self, file: PartitionedFile) -> Result<FileOpenFuture> {
         if let Some(ref glob_pattern) = self.config.path_glob_filter {
-            let file_name = file_meta.location().filename().unwrap_or("");
+            let file_name = file.object_meta.location.filename().unwrap_or("");
             let pattern = glob::Pattern::new(glob_pattern)
                 .map_err(|e| DataFusionError::External(Box::new(e)))?;
             if !pattern.matches(file_name) {
@@ -149,9 +148,9 @@ impl FileOpener for BinaryOpener {
         }
 
         let store = Arc::clone(&self.object_store);
-        let location = file_meta.location().clone();
-        let last_modified = file_meta.object_meta.last_modified;
-        let size = file_meta.object_meta.size as i64;
+        let location = file.object_meta.location.clone();
+        let last_modified = file.object_meta.last_modified;
+        let size = file.object_meta.size as i64;
         let projection = self.config.file_projection.clone();
         let schema = if let Some(schema) = &self.config.file_schema {
             Arc::clone(schema)

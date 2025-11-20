@@ -24,10 +24,10 @@ use std::sync::Arc;
 
 use async_trait::async_trait;
 use datafusion::arrow::datatypes::Schema as ArrowSchema;
-use datafusion::catalog::memory::DataSourceExec;
 use datafusion::catalog::Session;
 use datafusion::common::stats::Statistics;
 use datafusion::common::{Result, ToDFSchema};
+use datafusion::datasource::source::DataSourceExec;
 use datafusion::datasource::{TableProvider, TableType};
 use datafusion::logical_expr::utils::conjunction;
 use datafusion::logical_expr::{Expr, LogicalPlan, TableProviderFilterPushDown};

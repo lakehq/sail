@@ -252,6 +252,11 @@ mod tests {
     fn test_resolve_parquet_read_options() -> datafusion_common::Result<()> {
         let ctx = SessionContext::default();
         let state = ctx.state();
+        let default_hint = state
+            .default_table_options()
+            .parquet
+            .global
+            .metadata_size_hint;
 
         let mut kv = build_options(&[
             ("enable_page_index", "true"),
@@ -279,11 +284,11 @@ mod tests {
 
         kv.insert("metadata_size_hint".to_string(), "0".to_string());
         let options = resolve_parquet_read_options(&state, vec![kv.clone()])?;
-        assert_eq!(options.global.metadata_size_hint, None);
+        assert_eq!(options.global.metadata_size_hint, default_hint);
 
         kv.insert("metadata_size_hint".to_string(), "".to_string());
         let options = resolve_parquet_read_options(&state, vec![kv])?;
-        assert_eq!(options.global.metadata_size_hint, None);
+        assert_eq!(options.global.metadata_size_hint, default_hint);
 
         Ok(())
     }

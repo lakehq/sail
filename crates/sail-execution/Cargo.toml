@@ -23,6 +23,7 @@ thiserror = { workspace = true }
 tokio = { workspace = true }
 tonic = { workspace = true }
 tonic-types = { workspace = true }
+tonic-prost = { workspace = true }
 prost = { workspace = true }
 datafusion = { workspace = true }
 datafusion-proto = { workspace = true }
@@ -39,4 +40,4 @@ url = { workspace = true }
 
 [build-dependencies]
 prost-build = { workspace = true }
-tonic-build = { workspace = true }
+tonic-prost-build = { workspace = true }
