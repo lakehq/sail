@@ -252,7 +252,6 @@ mod tests {
     fn test_resolve_parquet_read_options() -> datafusion_common::Result<()> {
         let ctx = SessionContext::default();
         let state = ctx.state();
-        // CHECK HERE BEFORE MERGE!
         let default_hint = state
             .default_table_options()
             .parquet
@@ -285,12 +284,10 @@ mod tests {
 
         kv.insert("metadata_size_hint".to_string(), "0".to_string());
         let options = resolve_parquet_read_options(&state, vec![kv.clone()])?;
-        // CHECK HERE BEFORE MERGE!
         assert_eq!(options.global.metadata_size_hint, default_hint);
 
         kv.insert("metadata_size_hint".to_string(), "".to_string());
         let options = resolve_parquet_read_options(&state, vec![kv])?;
-        // CHECK HERE BEFORE MERGE!
         assert_eq!(options.global.metadata_size_hint, default_hint);
 
         Ok(())
