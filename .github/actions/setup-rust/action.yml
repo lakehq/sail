@@ -20,13 +20,7 @@ runs:
 
     # Install grcov for code coverage
     - name: Install grcov
-      run: |
-        wget -q -O grcov.tar.bz2 "https://github.com/mozilla/grcov/releases/download/v0.10.5/grcov-x86_64-unknown-linux-gnu.tar.bz2"
-        tar -xjf grcov.tar.bz2
-        sudo mv grcov /usr/local/bin/
-        chmod +x /usr/local/bin/grcov
-        rm grcov.tar.bz2
-      shell: bash
+      uses: taiki-e/install-action@grcov
 
     - name: Show versions
       id: versions
