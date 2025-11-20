@@ -28,6 +28,9 @@ runs:
         rm grcov.tar.bz2
       shell: bash
 
+    - name: Install cargo-nextest
+      uses: taiki-e/install-action@nextest
+
     - name: Show versions
       id: versions
       run: |
