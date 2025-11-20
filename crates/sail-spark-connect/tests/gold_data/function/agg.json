@@ -1835,7 +1835,7 @@
         }
       },
       "output": {
-        "failure": "not implemented: unknown aggregate function: percentile"
+        "success": "ok"
       }
     },
     {
@@ -1857,7 +1857,7 @@
         }
       },
       "output": {
-        "failure": "not implemented: unknown aggregate function: percentile"
+        "failure": "error in DataFusion: Arrow error: Cast error: Casting from Interval(YearMonth) to Float64 not supported"
       }
     },
     {
@@ -1883,7 +1883,7 @@
         }
       },
       "output": {
-        "failure": "not implemented: unknown aggregate function: percentile"
+        "success": "ok"
       }
     },
     {
@@ -1909,7 +1909,7 @@
         }
       },
       "output": {
-        "failure": "not implemented: unknown aggregate function: percentile"
+        "success": "ok"
       }
     },
     {
