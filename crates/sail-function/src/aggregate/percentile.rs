@@ -494,11 +494,7 @@ mod tests {
         let mut acc = StringPercentileAccumulator::new(0.5, DataType::Utf8);
 
         // Test with repeated value "a"
-        let values: ArrayRef = Arc::new(StringArray::from(vec![
-            Some("a"),
-            Some("a"),
-            Some("a"),
-        ]));
+        let values: ArrayRef = Arc::new(StringArray::from(vec![Some("a"), Some("a"), Some("a")]));
 
         acc.update_batch(&[values])?;
         let result = acc.evaluate()?;
