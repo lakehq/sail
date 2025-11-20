@@ -76,7 +76,7 @@ jobs:
         run: cargo clippy --all-targets --all-features -- -D warnings
 
       - name: Run Cargo Test
-        run: cargo nextest run --run-ignored all -j 6
+        run: cargo nextest run
 
       - name: Run Cargo Test (Ignored)
         if: ${{ github.event_name == 'push' }}
