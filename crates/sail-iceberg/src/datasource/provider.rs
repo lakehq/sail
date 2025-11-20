@@ -21,7 +21,7 @@ use datafusion::catalog::memory::DataSourceExec;
 use datafusion::catalog::Session;
 use datafusion::common::scalar::ScalarValue;
 use datafusion::common::stats::{ColumnStatistics, Precision, Statistics};
-use datafusion::common::{Result as DataFusionResult, ToDFSchema};
+use datafusion::common::{Result, ToDFSchema};
 use datafusion::config::TableParquetOptions;
 use datafusion::datasource::listing::PartitionedFile;
 use datafusion::datasource::physical_plan::{FileGroup, FileScanConfigBuilder, ParquetSource};
@@ -83,7 +83,7 @@ impl IcebergTableProvider {
         schema: Schema,
         snapshot: Snapshot,
         partition_specs: Vec<PartitionSpec>,
-    ) -> DataFusionResult<Self> {
+    ) -> Result<Self> {
         let table_uri_str = table_uri.to_string();
         log::trace!("Creating table provider for: {}", table_uri_str);
 
@@ -122,7 +122,7 @@ impl IcebergTableProvider {
     }
 
     /// Load manifest list from snapshot
-    async fn load_manifest_list(&self, store_ctx: &StoreContext) -> DataFusionResult<ManifestList> {
+    async fn load_manifest_list(&self, store_ctx: &StoreContext) -> Result<ManifestList> {
         let manifest_list_str = self.snapshot.manifest_list();
         log::trace!("Manifest list path: {}", manifest_list_str);
         let ml = io_load_manifest_list(store_ctx, manifest_list_str).await?;
@@ -136,7 +136,7 @@ impl IcebergTableProvider {
         filters: &[Expr],
         store_ctx: &StoreContext,
         manifest_list: &ManifestList,
-    ) -> DataFusionResult<Vec<DataFile>> {
+    ) -> Result<Vec<DataFile>> {
         let mut data_files = Vec::new();
 
         let spec_map: HashMap<i32, PartitionSpec> = self
@@ -206,7 +206,7 @@ impl IcebergTableProvider {
         &self,
         store_ctx: &StoreContext,
         manifest_list: &ManifestList,
-    ) -> DataFusionResult<std::collections::HashMap<String, IcebergDeleteAttachment>> {
+    ) -> Result<std::collections::HashMap<String, IcebergDeleteAttachment>> {
         let mut index: std::collections::HashMap<String, IcebergDeleteAttachment> =
             std::collections::HashMap::new();
 
@@ -252,7 +252,7 @@ impl IcebergTableProvider {
         store_ctx: &StoreContext,
         data_files: Vec<DataFile>,
         delete_index: &std::collections::HashMap<String, IcebergDeleteAttachment>,
-    ) -> DataFusionResult<Vec<PartitionedFile>> {
+    ) -> Result<Vec<PartitionedFile>> {
         let mut partitioned_files = Vec::new();
 
         for data_file in data_files {
@@ -489,7 +489,7 @@ impl TableProvider for IcebergTableProvider {
         projection: Option<&Vec<usize>>,
         filters: &[Expr],
         limit: Option<usize>,
-    ) -> DataFusionResult<Arc<dyn ExecutionPlan>> {
+    ) -> Result<Arc<dyn ExecutionPlan>> {
         log::trace!("Starting scan for table: {}", self.table_uri);
 
         let table_url = Url::parse(&self.table_uri)
@@ -618,7 +618,7 @@ impl TableProvider for IcebergTableProvider {
     fn supports_filters_pushdown(
         &self,
         filter: &[&Expr],
-    ) -> DataFusionResult<Vec<TableProviderFilterPushDown>> {
+    ) -> Result<Vec<TableProviderFilterPushDown>> {
         Ok(filter
             .iter()
             .map(|e| self.classify_pushdown_for_expr(e))

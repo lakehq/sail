@@ -23,7 +23,7 @@ use datafusion::arrow::array::{
 use datafusion::arrow::buffer::OffsetBuffer;
 use datafusion::arrow::datatypes::{DataType as ArrowDataType, TimeUnit};
 use datafusion::common::scalar::ScalarValue;
-use datafusion::common::{DataFusionError, Result as DFResult};
+use datafusion::common::{DataFusionError, Result};
 use ordered_float::OrderedFloat;
 
 use crate::datasource::type_converter::iceberg_type_to_arrow;
@@ -31,7 +31,7 @@ use crate::spec::types::values::{Literal, PrimitiveLiteral};
 use crate::spec::types::{ListType, MapType, PrimitiveType, StructType, Type};
 
 /// Convert an Iceberg `Literal` to a DataFusion `ScalarValue` using explicit Iceberg type context.
-pub fn to_scalar(literal: &Literal, iceberg_type: &Type) -> DFResult<ScalarValue> {
+pub fn to_scalar(literal: &Literal, iceberg_type: &Type) -> Result<ScalarValue> {
     match (literal, iceberg_type) {
         (Literal::Primitive(prim), Type::Primitive(prim_type)) => {
             Ok(primitive_literal_to_scalar(prim, prim_type))
@@ -117,7 +117,7 @@ pub fn primitive_to_scalar_default(prim: &PrimitiveLiteral) -> ScalarValue {
 fn struct_literal_with_type(
     literal_fields: &[(String, Option<Literal>)],
     struct_ty: &StructType,
-) -> DFResult<ScalarValue> {
+) -> Result<ScalarValue> {
     if literal_fields.len() != struct_ty.fields().len() {
         return Err(DataFusionError::Internal(format!(
             "Struct literal field count {} does not match struct type {}",
@@ -159,7 +159,7 @@ fn struct_literal_with_type(
     Ok(ScalarValue::Struct(Arc::new(struct_array)))
 }
 
-fn list_literal_with_type(items: &[Option<Literal>], list_ty: &ListType) -> DFResult<ScalarValue> {
+fn list_literal_with_type(items: &[Option<Literal>], list_ty: &ListType) -> Result<ScalarValue> {
     let element_type = iceberg_type_to_arrow(list_ty.element_field.field_type.as_ref())?;
     let nullable = !list_ty.element_field.required;
     let mut scalars = Vec::with_capacity(items.len());
@@ -177,7 +177,7 @@ fn list_literal_with_type(items: &[Option<Literal>], list_ty: &ListType) -> DFRe
 fn map_literal_with_type(
     entries: &[(Literal, Option<Literal>)],
     map_ty: &MapType,
-) -> DFResult<ScalarValue> {
+) -> Result<ScalarValue> {
     let map_arrow_type = iceberg_type_to_arrow(&Type::Map(map_ty.clone()))?;
     let ArrowDataType::Map(entries_field, sorted) = map_arrow_type else {
         return Err(DataFusionError::Internal(
