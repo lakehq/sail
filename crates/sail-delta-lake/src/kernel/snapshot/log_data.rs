@@ -355,7 +355,6 @@ mod datafusion {
                     field.data_type().clone(),
                 )
                 .ok()?;
-
             let batch = evaluator.evaluate_arrow(self.data.clone()).ok()?;
             batch.column_by_name("output").cloned()
         }
