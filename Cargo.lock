@@ -2188,7 +2188,7 @@ dependencies = [
 [[package]]
 name = "datafusion-functions-json"
 version = "0.50.0"
-source = "git+https://github.com/lakehq/datafusion-functions-json.git?rev=fa89d63#fa89d63df9d18b12deb06def4de644c7ce08443e"
+source = "git+https://github.com/lakehq/datafusion-functions-json.git?rev=f768013#f768013d628a483eac2d83f434a42bfbb5c4ccd4"
 dependencies = [
  "datafusion",
  "jiter",
