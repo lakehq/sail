@@ -1,9 +1,10 @@
 import uuid
 
+import pytest
 from pyiceberg.schema import Schema
 from pyiceberg.types import FloatType, IntegerType, ListType, NestedField, StringType, UUIDType
 from pyspark.sql.types import LongType as SparkLongType
-import pytest
+
 
 @pytest.mark.skip(reason="pyiceberg client does not support list literals for default values")
 def test_complex_type_default_values(spark, sql_catalog):
@@ -25,9 +26,7 @@ def test_complex_type_default_values(spark, sql_catalog):
             )
         table.refresh()
 
-        rows = (
-            spark.read.format("iceberg").load(table.location()).sort("id").collect()
-        )
+        rows = spark.read.format("iceberg").load(table.location()).sort("id").collect()
         assert rows[0].tags == ["unknown"]
         assert rows[1].tags == ["unknown"]
     finally:
@@ -56,9 +55,7 @@ def test_schema_evolution_nested_type_promotion(spark, sql_catalog):
             [(2, [30, 40])],
             schema="id INT, data ARRAY<LONG>",
         )
-        df_long.write.format("iceberg").option("mergeSchema", "true").mode("append").save(
-            table.location()
-        )
+        df_long.write.format("iceberg").option("mergeSchema", "true").mode("append").save(table.location())
 
         result = spark.read.format("iceberg").load(table.location()).sort("id")
         assert isinstance(result.schema["data"].dataType.elementType, SparkLongType)
@@ -90,7 +87,6 @@ def test_pruning_exotic_types(spark, sql_catalog):
         filtered = spark.read.format("iceberg").load(table.location()).filter("f_val > 5.0")
         rows = filtered.collect()
         assert len(rows) == 1
-        assert rows[0].id == 2
+        assert rows[0].id == 2  # noqa: PLR2004
     finally:
         sql_catalog.drop_table(identifier)
-
