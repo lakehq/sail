@@ -1,3 +1,9 @@
+// https://github.com/delta-io/delta-rs/blob/5575ad16bf641420404611d65f4ad7626e9acb16/LICENSE.txt
+//
+// Copyright (2020) QP Hou and a number of other contributors.
+// Portions Copyright (2025) LakeSail, Inc.
+// Modified in 2025 by LakeSail, Inc.
+//
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
 // You may obtain a copy of the License at
@@ -10,12 +16,14 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+// [Credit]: <https://github.com/delta-io/delta-rs/blob/3607c314cbdd2ad06c6ee0677b92a29f695c71f3/crates/core/src/operations/write/execution.rs>
 use std::any::Any;
 use std::collections::HashMap;
 use std::fmt;
 use std::sync::Arc;
 
 use async_trait::async_trait;
+use chrono::Utc;
 use datafusion::arrow::array::StringArray;
 use datafusion::arrow::datatypes::{DataType, Field, Schema, SchemaRef};
 use datafusion::arrow::record_batch::RecordBatch;
@@ -32,22 +40,22 @@ use datafusion_physical_expr::{Distribution, EquivalenceProperties, PhysicalExpr
 use delta_kernel::engine::arrow_conversion::{TryIntoArrow, TryIntoKernel};
 use delta_kernel::schema::StructType;
 use delta_kernel::table_features::ColumnMappingMode;
-#[allow(deprecated)]
-use deltalake::kernel::Action;
-// TODO: Follow upstream for `MetadataExt`.
-use deltalake::logstore::StorageConfig;
-use deltalake::protocol::{DeltaOperation, SaveMode};
 use futures::stream::{once, StreamExt};
 use sail_common_datafusion::datasource::PhysicalSinkMode;
 use url::Url;
 
-use crate::column_mapping::compute_max_column_id;
+use crate::conversion::DeltaTypeConverter;
 use crate::datasource::delta_to_datafusion_error;
-use crate::datasource::type_converter::DeltaTypeConverter;
+use crate::kernel::models::{Action, Metadata, Protocol};
+// TODO: Follow upstream for `MetadataExt`.
+use crate::kernel::{DeltaOperation, SaveMode};
 use crate::operations::write::writer::{DeltaWriter, WriterConfig};
 use crate::options::{ColumnMappingModeOption, TableDeltaOptions};
 use crate::physical_plan::CommitInfo;
-use crate::schema_manager::{annotate_for_column_mapping, evolve_schema, get_physical_schema};
+use crate::schema::{
+    annotate_for_column_mapping, compute_max_column_id, evolve_schema, get_physical_schema,
+};
+use crate::storage::{get_object_store_from_context, StorageConfig};
 use crate::table::open_table_with_object_store;
 
 /// Schema handling mode for Delta Lake writes
@@ -226,8 +234,8 @@ impl ExecutionPlan for DeltaWriterExec {
                 ..
             } = &options;
 
-            let storage_config = StorageConfig::default();
-            let object_store = Self::get_object_store(&context, &table_url)?;
+            let storage_config = StorageConfig;
+            let object_store = get_object_store_from_context(&context, &table_url)?;
 
             // Calculate initial_actions and operation based on sink_mode
             let mut initial_actions: Vec<Action> = Vec::new();
@@ -368,14 +376,13 @@ impl ExecutionPlan for DeltaWriterExec {
 
                 // Protocol and features for column mapping
                 #[allow(clippy::unwrap_used)]
-                let protocol: deltalake::kernel::Protocol =
-                    serde_json::from_value(serde_json::json!({
-                        "minReaderVersion": 3,
-                        "minWriterVersion": 7,
-                        "readerFeatures": ["columnMapping"],
-                        "writerFeatures": ["columnMapping"]
-                    }))
-                    .unwrap();
+                let protocol: Protocol = serde_json::from_value(serde_json::json!({
+                    "minReaderVersion": 3,
+                    "minWriterVersion": 7,
+                    "readerFeatures": ["columnMapping"],
+                    "writerFeatures": ["columnMapping"]
+                }))
+                .unwrap();
 
                 let mut configuration = HashMap::new();
                 let mode_str = match effective_mode {
@@ -392,11 +399,13 @@ impl ExecutionPlan for DeltaWriterExec {
                     max_id.to_string(),
                 );
 
-                #[allow(deprecated)]
                 #[allow(clippy::unwrap_used)]
-                let metadata = deltalake::kernel::new_metadata(
-                    annotated_schema_opt.as_ref().unwrap(),
+                let metadata = Metadata::try_new(
+                    None,
+                    None,
+                    annotated_schema_opt.as_ref().unwrap().clone(),
                     partition_columns.clone(),
+                    Utc::now().timestamp_millis(),
                     configuration,
                 )
                 .map_err(|e| DataFusionError::External(Box::new(e)))?;
@@ -601,17 +610,6 @@ impl ExecutionPlan for DeltaWriterExec {
 }
 
 impl DeltaWriterExec {
-    fn get_object_store(
-        context: &Arc<TaskContext>,
-        table_url: &Url,
-    ) -> Result<Arc<dyn object_store::ObjectStore>> {
-        context
-            .runtime_env()
-            .object_store_registry
-            .get_store(table_url)
-            .map_err(|e| DataFusionError::External(Box::new(e)))
-    }
-
     /// Determine the schema mode based on options and save mode
     fn get_schema_mode(
         options: &TableDeltaOptions,

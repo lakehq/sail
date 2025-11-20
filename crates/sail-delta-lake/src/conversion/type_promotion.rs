@@ -10,7 +10,6 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use std::collections::HashMap;
 use std::sync::Arc;
 
 use datafusion::arrow::compute::can_cast_types;
@@ -19,45 +18,36 @@ use datafusion::common::Result;
 use datafusion::physical_expr::expressions::CastExpr;
 use datafusion::physical_expr::PhysicalExpr;
 use datafusion_common::DataFusionError;
+use indexmap::IndexMap;
 
 /// Shared type conversion utilities for Delta Lake operations.
 #[derive(Debug)]
 pub struct DeltaTypeConverter;
 
 impl DeltaTypeConverter {
-    /// Check if two data types can be promoted/merged
     pub fn can_promote_types(from_type: &DataType, to_type: &DataType) -> bool {
         if from_type == to_type {
             return true;
         }
 
         match (from_type, to_type) {
-            // String type promotions
             (
                 DataType::Utf8 | DataType::Utf8View | DataType::LargeUtf8,
                 DataType::Utf8 | DataType::LargeUtf8 | DataType::Utf8View,
             ) => true,
-
-            // Binary type promotions
             (
                 DataType::Binary | DataType::BinaryView | DataType::LargeBinary,
                 DataType::Binary | DataType::LargeBinary | DataType::BinaryView,
             ) => true,
-
-            // Decimal type promotions
             (
                 DataType::Decimal128(from_precision, from_scale)
                 | DataType::Decimal256(from_precision, from_scale),
                 DataType::Decimal128(to_precision, to_scale),
             ) => from_precision <= to_precision && from_scale <= to_scale,
-
-            // For other types, use Arrow's can_cast_types to determine compatibility
             (from_dt, to_dt) => can_cast_types(from_dt, to_dt) || can_cast_types(to_dt, from_dt),
         }
     }
 
-    /// Promote/merge two field types
-    /// Returns the promoted field type, combining nullability.
     pub fn promote_field_types(table_field: &Field, input_field: &Field) -> Result<Field> {
         let table_type = table_field.data_type();
         let input_type = input_field.data_type();
@@ -72,32 +62,23 @@ impl DeltaTypeConverter {
         }
 
         let merged_type = match (table_type, input_type) {
-            // Struct type promotion: merge fields by name, preserve existing order and append new fields
             (DataType::Struct(table_fields), DataType::Struct(input_fields)) => {
-                let mut by_name: HashMap<&str, Field> = HashMap::new();
-                let mut order: Vec<&str> = Vec::new();
-                for f in table_fields {
-                    by_name.insert(f.name().as_str(), f.as_ref().clone());
-                    order.push(f.name().as_str());
-                }
-                // Append/merge input fields
+                let mut merged_fields: IndexMap<&str, Field> = table_fields
+                    .iter()
+                    .map(|f| (f.name().as_str(), f.as_ref().clone()))
+                    .collect();
                 for inf in input_fields {
-                    if let Some(tf) = by_name.get(inf.name().as_str()).cloned() {
-                        let merged_child = Self::promote_field_types(&tf, inf.as_ref())?;
-                        by_name.insert(inf.name().as_str(), merged_child);
+                    let name = inf.name().as_str();
+                    if let Some(existing) = merged_fields.get(name).cloned() {
+                        let merged_child = Self::promote_field_types(&existing, inf.as_ref())?;
+                        merged_fields.insert(name, merged_child);
                     } else {
-                        by_name.insert(inf.name().as_str(), inf.as_ref().clone());
-                        order.push(inf.name().as_str());
+                        merged_fields.insert(name, inf.as_ref().clone());
                     }
                 }
-                let merged_children: Vec<Field> = order
-                    .into_iter()
-                    .filter_map(|n| by_name.remove(n))
-                    .collect();
+                let merged_children: Vec<Field> = merged_fields.into_values().collect();
                 Some(DataType::Struct(merged_children.into()))
             }
-
-            // List type promotion: merge element field (List and LargeList)
             (DataType::List(table_elem), DataType::List(input_elem)) => {
                 let merged_elem =
                     Self::promote_field_types(table_elem.as_ref(), input_elem.as_ref())?;
@@ -114,16 +95,14 @@ impl DeltaTypeConverter {
             ) => {
                 if t_len != i_len {
                     return Err(DataFusionError::Plan(format!(
-                    "Schema evolution failed: incompatible sizes for fixed-size list field '{}': {t_len} vs {i_len}",
-                    table_field.name()
-                )));
+                        "Schema evolution failed: incompatible sizes for fixed-size list field '{}': {t_len} vs {i_len}",
+                        table_field.name()
+                    )));
                 }
                 let merged_elem =
                     Self::promote_field_types(table_elem.as_ref(), input_elem.as_ref())?;
                 Some(DataType::FixedSizeList(Arc::new(merged_elem), *t_len))
             }
-
-            // Map type promotion: require identical key type; merge value type; preserve table child field name and sorted flag
             (DataType::Map(table_kv, t_sorted), DataType::Map(input_kv, i_sorted)) => {
                 let t_kv_dt = table_kv.data_type();
                 let i_kv_dt = input_kv.data_type();
@@ -154,36 +133,32 @@ impl DeltaTypeConverter {
                 if t_key.data_type() != i_key.data_type() {
                     return Err(DataFusionError::Plan(format!(
                         "Schema evolution failed: incompatible map key types for field '{}': {:?} vs {:?}",
-                        table_field.name(), t_key.data_type(), i_key.data_type()
+                        table_field.name(),
+                        t_key.data_type(),
+                        i_key.data_type()
                     )));
                 }
                 let merged_val = Self::promote_field_types(t_val, i_val)?;
                 let kv_struct = DataType::Struct(vec![t_key.as_ref().clone(), merged_val].into());
                 let kv_field = Field::new(table_kv.name(), kv_struct, false);
-                // Prefer table's sorted flag
-                let _ = i_sorted; // appease lints; we intentionally ignore input sorted flag
+                let _ = i_sorted;
                 Some(DataType::Map(Arc::new(kv_field), *t_sorted))
             }
-            // String type promotions
             (
                 DataType::Utf8 | DataType::Utf8View | DataType::LargeUtf8,
                 DataType::Utf8 | DataType::LargeUtf8 | DataType::Utf8View,
             ) => Some(input_type.clone()),
-
-            // Binary type promotions
             (
                 DataType::Binary | DataType::BinaryView | DataType::LargeBinary,
                 DataType::Binary | DataType::LargeBinary | DataType::BinaryView,
             ) => Some(input_type.clone()),
-
-            // Decimal type promotions
             (
                 DataType::Decimal128(table_precision, table_scale)
                 | DataType::Decimal256(table_precision, table_scale),
                 DataType::Decimal128(input_precision, input_scale),
             ) => {
                 if input_precision <= table_precision && input_scale <= table_scale {
-                    Some(table_type.clone()) // Keep table type for decimals
+                    Some(table_type.clone())
                 } else {
                     return Err(DataFusionError::Plan(format!(
                         "Cannot merge field {} from {} to {}. Decimal precision/scale mismatch.",
@@ -193,9 +168,6 @@ impl DeltaTypeConverter {
                     )));
                 }
             }
-
-            // For other types, use Arrow's can_cast_types to determine compatibility
-            // Prefer widening conversions (table -> input) over narrowing (input -> table)
             (table_dt, input_dt) => {
                 if can_cast_types(table_dt, input_dt) {
                     Some(input_type.clone())
@@ -208,7 +180,6 @@ impl DeltaTypeConverter {
         };
 
         if let Some(new_type) = merged_type {
-            // Create new field with merged type, combining nullability
             let is_nullable = table_field.is_nullable() || input_field.is_nullable();
             Ok(Field::new(table_field.name(), new_type, is_nullable))
         } else {
@@ -228,7 +199,6 @@ impl DeltaTypeConverter {
         Ok(Arc::new(CastExpr::new(expr, target_type.clone(), None)))
     }
 
-    /// Validate that a cast operation is safe
     pub fn validate_cast_safety(
         from_type: &DataType,
         to_type: &DataType,
@@ -251,20 +221,15 @@ impl DeltaTypeConverter {
                     )));
                 }
             }
-
             (DataType::Int64, DataType::Int32)
             | (DataType::Int32, DataType::Int16)
-            | (DataType::Int16, DataType::Int8) => {
-                // Allow these casts now but could add runtime checks sooner
-            }
-
+            | (DataType::Int16, DataType::Int8) => {}
             _ => {}
         }
 
         Ok(())
     }
 
-    /// Get the "wider" type between two compatible types for promotion
     pub fn get_wider_type(type1: &DataType, type2: &DataType) -> Option<DataType> {
         if type1 == type2 {
             return Some(type1.clone());
@@ -272,26 +237,26 @@ impl DeltaTypeConverter {
 
         match (type1, type2) {
             // Integer promotions
-            (DataType::Int8, DataType::Int16 | DataType::Int32 | DataType::Int64) => {
-                Some(type2.clone())
-            }
-            (DataType::Int16, DataType::Int32 | DataType::Int64) => Some(type2.clone()),
-            (DataType::Int32, DataType::Int64) => Some(type2.clone()),
-
-            // Reverse cases
-            (DataType::Int16 | DataType::Int32 | DataType::Int64, DataType::Int8) => {
-                Some(type1.clone())
-            }
-            (DataType::Int32 | DataType::Int64, DataType::Int16) => Some(type1.clone()),
-            (DataType::Int64, DataType::Int32) => Some(type1.clone()),
+            (DataType::Int8, DataType::Int16 | DataType::Int32 | DataType::Int64)
+            | (DataType::Int16, DataType::Int32 | DataType::Int64)
+            | (DataType::Int32, DataType::Int64) => Some(type2.clone()),
+            (DataType::Int16 | DataType::Int32 | DataType::Int64, DataType::Int8)
+            | (DataType::Int32 | DataType::Int64, DataType::Int16)
+            | (DataType::Int64, DataType::Int32) => Some(type1.clone()),
 
             // Float promotions
-            (DataType::Float32, DataType::Float64) => Some(DataType::Float64),
-            (DataType::Float64, DataType::Float32) => Some(DataType::Float64),
+            (DataType::Float32, DataType::Float64) | (DataType::Float64, DataType::Float32) => {
+                Some(DataType::Float64)
+            }
 
             // String promotions
-            (DataType::Utf8, DataType::LargeUtf8) => Some(DataType::LargeUtf8),
-            (DataType::LargeUtf8, DataType::Utf8) => Some(DataType::LargeUtf8),
+            (DataType::Utf8, DataType::LargeUtf8) | (DataType::LargeUtf8, DataType::Utf8) => {
+                Some(DataType::LargeUtf8)
+            }
+
+            // Binary promotions
+            (DataType::Binary, DataType::LargeBinary)
+            | (DataType::LargeBinary, DataType::Binary) => Some(DataType::LargeBinary),
 
             _ => None,
         }
@@ -306,26 +271,18 @@ mod tests {
 
     #[test]
     fn test_can_promote_types() {
-        // Same types
         assert!(DeltaTypeConverter::can_promote_types(
             &DataType::Int32,
             &DataType::Int32
         ));
-
-        // String types
         assert!(DeltaTypeConverter::can_promote_types(
             &DataType::Utf8,
             &DataType::LargeUtf8
         ));
-
-        // Decimal types
         assert!(DeltaTypeConverter::can_promote_types(
             &DataType::Decimal128(10, 2),
             &DataType::Decimal128(12, 2)
         ));
-
-        // Test that our method works correctly for compatible types
-        // Note: Arrow's can_cast_types is quite permissive, so we focus on testing our specific logic
         assert!(DeltaTypeConverter::can_promote_types(
             &DataType::Int32,
             &DataType::Int64
@@ -340,8 +297,6 @@ mod tests {
         let result = DeltaTypeConverter::promote_field_types(&table_field, &input_field)
             .unwrap_or(Field::new("test", DataType::Null, true));
 
-        // Should combine nullability - when types are identical, we return table field
-        // but with combined nullability
         assert!(result.is_nullable());
         assert_eq!(result.data_type(), &DataType::Int32);
         assert_eq!(result.name(), "test");
@@ -355,7 +310,6 @@ mod tests {
         let result = DeltaTypeConverter::promote_field_types(&table_field, &input_field)
             .unwrap_or(Field::new("test", DataType::Null, true));
 
-        // Should prefer input type (LargeUtf8) and combine nullability
         assert!(result.is_nullable());
         assert_eq!(result.data_type(), &DataType::LargeUtf8);
     }
@@ -368,7 +322,6 @@ mod tests {
         let result = DeltaTypeConverter::promote_field_types(&table_field, &input_field)
             .unwrap_or(Field::new("test", DataType::Null, true));
 
-        // Should keep table type for decimals when input fits
         assert!(result.is_nullable());
         assert_eq!(result.data_type(), &DataType::Decimal128(12, 2));
     }
@@ -380,7 +333,6 @@ mod tests {
 
         let result = DeltaTypeConverter::promote_field_types(&table_field, &input_field);
 
-        // Should fail for incompatible decimal precision/scale
         assert!(result.is_err());
     }
 
@@ -390,12 +342,10 @@ mod tests {
             DeltaTypeConverter::get_wider_type(&DataType::Int32, &DataType::Int64),
             Some(DataType::Int64)
         );
-
         assert_eq!(
             DeltaTypeConverter::get_wider_type(&DataType::Float32, &DataType::Float64),
             Some(DataType::Float64)
         );
-
         assert_eq!(
             DeltaTypeConverter::get_wider_type(&DataType::Utf8, &DataType::Int32),
             None

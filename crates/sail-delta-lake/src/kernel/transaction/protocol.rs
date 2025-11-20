@@ -22,12 +22,11 @@ use std::collections::HashSet;
 use std::sync::LazyLock;
 
 use delta_kernel::table_features::TableFeature;
-use deltalake::kernel::{contains_timestampntz, Action, Protocol, Schema};
-use deltalake::protocol::DeltaOperation;
-use deltalake::table::config::TablePropertiesExt as _;
 
 use super::{TableReference, TransactionError};
+use crate::kernel::models::{contains_timestampntz, Action, Protocol, Schema};
 use crate::kernel::snapshot::EagerSnapshot;
+use crate::kernel::{DeltaOperation, TablePropertiesExt};
 use crate::table::DeltaTableState;
 
 static READER_V2: LazyLock<HashSet<TableFeature>> =

@@ -20,8 +20,10 @@
 
 use std::borrow::Cow;
 use std::collections::HashMap;
+use std::str::FromStr;
 use std::sync::LazyLock;
 
+// TODO: Stop depending on delta-rs StorageType.
 use chrono::{DateTime, Utc};
 use datafusion::arrow::array::cast::AsArray;
 use datafusion::arrow::array::types::Int64Type;
@@ -30,10 +32,10 @@ use datafusion::arrow::datatypes::{DataType as ArrowDataType, Int32Type};
 use delta_kernel::expressions::{Scalar, StructData};
 use delta_kernel::scan::scan_row_schema;
 use delta_kernel::schema::DataType;
-use deltalake::kernel::scalars::ScalarExt;
-use deltalake::kernel::{Add, DeletionVectorDescriptor, Remove};
-use deltalake::{DeltaResult, DeltaTableError};
 use percent_encoding::percent_decode_str;
+
+use crate::kernel::models::{Add, DeletionVectorDescriptor, Remove, ScalarExt, StorageType};
+use crate::kernel::{DeltaResult, DeltaTableError};
 
 const FIELD_NAME_PATH: &str = "path";
 const FIELD_NAME_SIZE: &str = "size";
@@ -162,12 +164,12 @@ impl LogicalFileView {
 
     /// Returns the file modification time as a UTC DateTime.
     pub fn modification_datetime(&self) -> DeltaResult<chrono::DateTime<Utc>> {
-        DateTime::from_timestamp_millis(self.modification_time()).ok_or(
-            DeltaTableError::MetadataError(format!(
+        DateTime::from_timestamp_millis(self.modification_time()).ok_or_else(|| {
+            DeltaTableError::generic(format!(
                 "invalid modification_time: {:?}",
                 self.modification_time()
-            )),
-        )
+            ))
+        })
     }
 
     /// Returns the raw JSON statistics string for this file, if available.
@@ -205,7 +207,7 @@ impl LogicalFileView {
                             if v.is_null() {
                                 None
                             } else {
-                                Some(v.serialize())
+                                Some(v.serialize().into_owned())
                             },
                         )
                     })
@@ -373,8 +375,10 @@ struct DeletionVectorView<'a> {
 impl DeletionVectorView<'_> {
     /// Converts this view into a DeletionVectorDescriptor.
     fn descriptor(&self) -> DeletionVectorDescriptor {
+        let storage_type =
+            StorageType::from_str(self.storage_type()).unwrap_or(StorageType::UuidRelativePath);
         DeletionVectorDescriptor {
-            storage_type: self.storage_type().parse().unwrap_or_default(),
+            storage_type,
             path_or_inline_dv: self.path_or_inline_dv().to_string(),
             size_in_bytes: self.size_in_bytes(),
             cardinality: self.cardinality(),

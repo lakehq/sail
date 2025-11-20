@@ -25,12 +25,13 @@ use std::pin::Pin;
 
 use datafusion::arrow::datatypes::SchemaRef;
 use datafusion::arrow::record_batch::RecordBatch;
-use deltalake::kernel::Add;
-use deltalake::{DeltaResult, DeltaTableError};
 use futures::stream::BoxStream;
 use futures::{Future, Stream, StreamExt};
 use tokio::sync::mpsc::{Receiver, Sender};
 use tokio::task::JoinSet;
+
+use crate::kernel::models::Add;
+use crate::kernel::{DeltaResult, DeltaTableError};
 
 /// Trait for types that stream [RecordBatch]
 ///

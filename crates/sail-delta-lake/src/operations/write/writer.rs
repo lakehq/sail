@@ -28,9 +28,6 @@ use datafusion::arrow::compute;
 use datafusion::arrow::datatypes::{Schema as ArrowSchema, SchemaRef as ArrowSchemaRef};
 use datafusion::arrow::row::{RowConverter, SortField};
 use delta_kernel::expressions::Scalar;
-use deltalake::errors::DeltaTableError;
-use deltalake::kernel::scalars::ScalarExt;
-use deltalake::kernel::Add;
 use indexmap::IndexMap;
 use object_store::path::Path;
 use object_store::ObjectStore;
@@ -43,6 +40,8 @@ use uuid::Uuid;
 
 use super::async_utils::AsyncShareableBuffer;
 use super::stats::create_add;
+use crate::kernel::models::{Add, ScalarExt};
+use crate::kernel::DeltaTableError;
 
 /// Trait for creating hive partition paths from partition values
 pub trait PartitionsExt {
@@ -571,8 +570,10 @@ pub(crate) fn divide_by_partition_values(
             .fields()
             .iter()
             .map(|f| {
-                #[allow(clippy::unwrap_used)]
-                let col = values.column(schema.index_of(f.name()).unwrap());
+                let col_idx = schema.index_of(f.name()).map_err(|_| {
+                    DeltaTableError::Schema(format!("Column {} not found in batch", f.name()))
+                })?;
+                let col = values.column(col_idx);
                 compute::take(col.as_ref(), &idx, None)
                     .map_err(|e| DeltaTableError::generic(e.to_string()))
             })

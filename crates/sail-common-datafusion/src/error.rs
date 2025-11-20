@@ -2,7 +2,6 @@ use std::collections::HashSet;
 
 use datafusion::arrow::error::ArrowError;
 use datafusion_common::DataFusionError;
-use deltalake::DeltaTableError;
 use serde::{Deserialize, Serialize};
 use thiserror::Error;
 
@@ -156,10 +155,6 @@ impl CommonErrorCause {
 
         if let Some(e) = error.downcast_ref::<RemotePythonError>() {
             return Self::Python(e.clone().into());
-        }
-
-        if let Some(e) = error.downcast_ref::<DeltaTableError>() {
-            return Self::DeltaTable(e.to_string());
         }
 
         if let Some(e) = error.source() {

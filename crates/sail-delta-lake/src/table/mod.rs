@@ -26,15 +26,14 @@ use datafusion::arrow::datatypes::Schema;
 use datafusion::catalog::Session;
 use datafusion::datasource::listing::ListingTableUrl;
 use datafusion_common::Result;
-use deltalake::logstore::{default_logstore, LogStoreRef, StorageConfig};
-use deltalake::table::builder::DeltaTableConfig;
-use deltalake::{DeltaResult, DeltaTableError};
 use object_store::ObjectStore;
 pub use state::DeltaTableState;
 use url::Url;
 
 use crate::datasource::{delta_to_datafusion_error, DeltaScanConfig, DeltaTableProvider};
+use crate::kernel::{DeltaResult, DeltaTableConfig, DeltaTableError};
 use crate::options::TableDeltaOptions;
+use crate::storage::{commit_uri_from_version, default_logstore, LogStoreRef, StorageConfig};
 mod state;
 
 /// In memory representation of a Delta Table
@@ -91,7 +90,7 @@ impl DeltaTable {
             return Ok(ts);
         }
 
-        let commit_uri = deltalake::logstore::commit_uri_from_version(version);
+        let commit_uri = commit_uri_from_version(version);
         let meta = self.log_store.object_store(None).head(&commit_uri).await?;
         Ok(meta.last_modified.timestamp_millis())
     }
@@ -103,11 +102,14 @@ impl DeltaTable {
         max_version: Option<i64>,
     ) -> Result<(), DeltaTableError> {
         match self.state.as_mut() {
-            Some(state) => state.update(&self.log_store, max_version).await,
+            Some(state) => state.update(self.log_store.as_ref(), max_version).await,
             _ => {
-                let state =
-                    DeltaTableState::try_new(&self.log_store, self.config.clone(), max_version)
-                        .await?;
+                let state = DeltaTableState::try_new(
+                    self.log_store.as_ref(),
+                    self.config.clone(),
+                    max_version,
+                )
+                .await?;
                 self.state = Some(state);
                 Ok(())
             }
@@ -116,7 +118,9 @@ impl DeltaTable {
 
     /// Returns the currently loaded state snapshot.
     pub fn snapshot(&self) -> DeltaResult<&DeltaTableState> {
-        self.state.as_ref().ok_or(DeltaTableError::NotInitialized)
+        self.state
+            .as_ref()
+            .ok_or_else(|| DeltaTableError::generic("Table has not yet been initialized"))
     }
 
     /// Currently loaded version of the table - if any.
@@ -199,7 +203,7 @@ pub async fn create_delta_provider(
 ) -> Result<Arc<dyn datafusion::catalog::TableProvider>> {
     let url = ListingTableUrl::try_new(table_url.clone(), None)?;
     let object_store = ctx.runtime_env().object_store(&url)?;
-    let storage_config = StorageConfig::default();
+    let storage_config = StorageConfig;
     let log_store =
         create_logstore_with_object_store(object_store, table_url.clone(), storage_config)
             .map_err(delta_to_datafusion_error)?;
@@ -250,7 +254,7 @@ async fn load_table_by_options(table: &mut DeltaTable, options: &TableDeltaOptio
         let target_version = find_version_for_timestamp(table, datetime)
             .await
             .map_err(|e| {
-                if let DeltaTableError::InvalidVersion(_) = e {
+                if matches!(e, DeltaTableError::MissingVersion) {
                     DeltaTableError::Generic(format!(
                         "No version of the Delta table exists at or before timestamp {}",
                         timestamp_str
@@ -307,7 +311,7 @@ async fn find_version_for_timestamp(
 
     if target_version == -1 {
         // If no version was found, it means the provided timestamp is before the first commit.
-        Err(DeltaTableError::InvalidVersion(0))
+        Err(DeltaTableError::MissingVersion)
     } else {
         Ok(target_version)
     }

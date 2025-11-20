@@ -1,3 +1,9 @@
+// https://github.com/delta-io/delta-rs/blob/5575ad16bf641420404611d65f4ad7626e9acb16/LICENSE.txt
+//
+// Copyright (2020) QP Hou and a number of other contributors.
+// Portions Copyright (2025) LakeSail, Inc.
+// Modified in 2025 by LakeSail, Inc.
+//
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
 // You may obtain a copy of the License at
@@ -10,12 +16,14 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+// [Credit]: <https://github.com/delta-io/delta-rs/blob/3607c314cbdd2ad06c6ee0677b92a29f695c71f3/crates/core/src/delta_datafusion/mod.rs>
+
 use std::collections::HashMap;
 use std::sync::Arc;
 
 use datafusion::arrow::datatypes::{DataType as ArrowDataType, Field, SchemaRef};
 use datafusion::catalog::Session;
-use datafusion::common::Result;
+use datafusion::common::{DataFusionError, Result};
 use datafusion::config::TableParquetOptions;
 use datafusion::datasource::listing::PartitionedFile;
 use datafusion::datasource::physical_plan::{
@@ -23,16 +31,16 @@ use datafusion::datasource::physical_plan::{
     FileScanConfigBuilder, FileSource as _, ParquetSource,
 };
 use datafusion::physical_expr::PhysicalExpr;
-use deltalake::kernel::Add;
-use deltalake::logstore::LogStoreRef;
 use object_store::path::Path;
 use sail_common_datafusion::schema_adapter::DeltaSchemaAdapterFactory;
 
-use crate::datasource::schema_rewriter::DeltaPhysicalExprAdapterFactory;
 use crate::datasource::{
     create_object_store_url, delta_to_datafusion_error, partitioned_file_from_action,
     DataFusionMixins, DeltaScanConfig, DeltaTableStateExt,
 };
+use crate::kernel::models::Add;
+use crate::physical_plan::DeltaPhysicalExprAdapterFactory;
+use crate::storage::LogStoreRef;
 use crate::table::DeltaTableState;
 
 /// Parameters for building file scan configuration
@@ -68,7 +76,8 @@ pub fn build_file_scan_config(
     > = HashMap::new();
 
     for action in files.iter() {
-        let mut part = partitioned_file_from_action(action, table_partition_cols, &complete_schema);
+        let mut part = partitioned_file_from_action(action, table_partition_cols, &complete_schema)
+            .map_err(delta_to_datafusion_error)?;
 
         // Add file column if configured
         if config.file_column_name.is_some() {
@@ -101,29 +110,26 @@ pub fn build_file_scan_config(
     });
 
     // Build table partition columns schema
-    let mut table_partition_cols_schema = table_partition_cols
-        .iter()
-        .map(|col| {
-            #[allow(clippy::expect_used)]
-            let field = complete_schema
-                .field_with_name(col)
-                .expect("Column should exist in schema");
-            let corrected = if config.wrap_partition_values {
-                match field.data_type() {
-                    ArrowDataType::Utf8
-                    | ArrowDataType::LargeUtf8
-                    | ArrowDataType::Binary
-                    | ArrowDataType::LargeBinary => {
-                        wrap_partition_type_in_dict(field.data_type().clone())
-                    }
-                    _ => field.data_type().clone(),
+    let mut table_partition_cols_schema = Vec::with_capacity(table_partition_cols.len());
+    for col in table_partition_cols {
+        let field = complete_schema.field_with_name(col).map_err(|_| {
+            DataFusionError::Plan(format!("Partition column {col} not found in schema"))
+        })?;
+        let corrected = if config.wrap_partition_values {
+            match field.data_type() {
+                ArrowDataType::Utf8
+                | ArrowDataType::LargeUtf8
+                | ArrowDataType::Binary
+                | ArrowDataType::LargeBinary => {
+                    wrap_partition_type_in_dict(field.data_type().clone())
                 }
-            } else {
-                field.data_type().clone()
-            };
-            Field::new(col.clone(), corrected, true)
-        })
-        .collect::<Vec<_>>();
+                _ => field.data_type().clone(),
+            }
+        } else {
+            field.data_type().clone()
+        };
+        table_partition_cols_schema.push(Field::new(col.clone(), corrected, true));
+    }
 
     // Add file column to partition schema if configured
     if let Some(file_column_name) = &config.file_column_name {

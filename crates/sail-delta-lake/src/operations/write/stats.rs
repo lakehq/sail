@@ -25,9 +25,6 @@ use std::sync::Arc;
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use delta_kernel::expressions::Scalar;
-use deltalake::errors::DeltaTableError;
-use deltalake::kernel::scalars::ScalarExt;
-use deltalake::kernel::Add;
 use indexmap::IndexMap;
 use log::warn;
 use parquet::basic::{LogicalType, TimeUnit, Type};
@@ -35,73 +32,9 @@ use parquet::file::metadata::{ParquetMetaData, RowGroupMetaData};
 use parquet::file::statistics::Statistics;
 use parquet::schema::types::{ColumnDescriptor, SchemaDescriptor};
 use sail_common::spec::SAIL_LIST_FIELD_NAME;
-use serde::{Deserialize, Serialize};
-use serde_json::Value;
 
-/// Represent minValues and maxValues in add action statistics.
-#[derive(Serialize, Deserialize, Debug, PartialEq, Eq)]
-#[serde(untagged)]
-pub enum ColumnValueStat {
-    /// Composite HashMap representation of statistics.
-    Column(HashMap<String, ColumnValueStat>),
-    /// Json representation of statistics.
-    Value(Value),
-}
-#[allow(dead_code)]
-impl ColumnValueStat {
-    pub fn as_column(&self) -> Option<&HashMap<String, ColumnValueStat>> {
-        match self {
-            ColumnValueStat::Column(m) => Some(m),
-            _ => None,
-        }
-    }
-
-    pub fn as_value(&self) -> Option<&Value> {
-        match self {
-            ColumnValueStat::Value(v) => Some(v),
-            _ => None,
-        }
-    }
-}
-
-/// Represent nullCount in add action statistics.
-#[derive(Serialize, Deserialize, Debug, PartialEq, Eq)]
-#[serde(untagged)]
-pub enum ColumnCountStat {
-    /// Composite HashMap representation of statistics.
-    Column(HashMap<String, ColumnCountStat>),
-    /// Json representation of statistics.
-    Value(i64),
-}
-#[allow(dead_code)]
-impl ColumnCountStat {
-    pub fn as_column(&self) -> Option<&HashMap<String, ColumnCountStat>> {
-        match self {
-            ColumnCountStat::Column(m) => Some(m),
-            _ => None,
-        }
-    }
-
-    pub fn as_value(&self) -> Option<i64> {
-        match self {
-            ColumnCountStat::Value(v) => Some(*v),
-            _ => None,
-        }
-    }
-}
-
-#[derive(Serialize, Deserialize, Debug, Default, PartialEq, Eq)]
-#[serde(rename_all = "camelCase")]
-pub struct Stats {
-    /// Number of records in the file associated with the log action.
-    pub num_records: i64,
-    /// Contains a value smaller than all values present in the file for all columns.
-    pub min_values: HashMap<String, ColumnValueStat>,
-    /// Contains a value larger than all values present in the file for all columns.
-    pub max_values: HashMap<String, ColumnValueStat>,
-    /// The number of null values for all columns.
-    pub null_count: HashMap<String, ColumnCountStat>,
-}
+use crate::kernel::models::{Add, ColumnCountStat, ColumnValueStat, ScalarExt, Stats};
+use crate::kernel::DeltaTableError;
 
 /// Creates an [`Add`] log action struct with statistics.
 pub fn create_add(
@@ -118,14 +51,14 @@ pub fn create_add(
         num_indexed_cols,
         stats_columns,
     )?;
-    let stats_string = serde_json::to_string(&stats)
+    let stats_string = stats
+        .to_json_string()
         .map_err(|e| DeltaTableError::generic(format!("Failed to serialize stats: {e}")))?;
 
     // Determine the modification timestamp to include in the add action - milliseconds since epoch
-    #[allow(clippy::expect_used)]
     let modification_time = SystemTime::now()
         .duration_since(UNIX_EPOCH)
-        .expect("System time before Unix epoch")
+        .map_err(|e| DeltaTableError::generic(format!("System time before Unix epoch: {e}")))?
         .as_millis() as i64;
 
     Ok(Add {
@@ -139,7 +72,7 @@ pub fn create_add(
                     if v.is_null() {
                         None
                     } else {
-                        Some(v.serialize())
+                        Some(v.serialize().into_owned())
                     },
                 )
             })
@@ -207,38 +140,13 @@ fn stats_from_metadata(
     let mut max_values: HashMap<String, ColumnValueStat> = HashMap::new();
     let mut null_count: HashMap<String, ColumnCountStat> = HashMap::new();
 
-    // Determine which columns to collect stats for
-    let idx_to_iterate = if let Some(stats_cols) = stats_columns {
-        schema_descriptor
-            .columns()
-            .iter()
-            .enumerate()
-            .filter_map(|(index, col)| {
-                if stats_cols.contains(&col.name().to_string()) {
-                    Some(index)
-                } else {
-                    None
-                }
-            })
-            .collect()
-    } else if num_indexed_cols == -1 {
-        (0..schema_descriptor.num_columns()).collect::<Vec<_>>()
-    } else if num_indexed_cols >= 0 {
-        (0..min(num_indexed_cols as usize, schema_descriptor.num_columns())).collect::<Vec<_>>()
-    } else {
-        return Err(DeltaTableError::generic(
-            "delta.dataSkippingNumIndexedCols valid values are >=-1".to_string(),
-        ));
-    };
-
-    for idx in idx_to_iterate {
+    let mut handle_column = |idx: usize| -> Result<(), DeltaTableError> {
         let column_descr = schema_descriptor.column(idx);
         let column_path = column_descr.path();
         let column_path_parts = column_path.parts();
 
-        // Do not include partition columns in statistics
         if partition_values.contains_key(&column_path_parts[0]) {
-            continue;
+            return Ok(());
         }
 
         let maybe_stats: Option<AggregatedStats> = row_group_metadata
@@ -272,6 +180,39 @@ fn stats_from_metadata(
                 &mut max_values,
                 &mut null_count,
             )?;
+        }
+
+        Ok(())
+    };
+
+    if let Some(stats_cols) = stats_columns {
+        let idx_to_iterate: Vec<usize> = schema_descriptor
+            .columns()
+            .iter()
+            .enumerate()
+            .filter_map(|(index, col)| {
+                if stats_cols.contains(&col.name().to_string()) {
+                    Some(index)
+                } else {
+                    None
+                }
+            })
+            .collect();
+        for idx in idx_to_iterate {
+            handle_column(idx)?;
+        }
+    } else {
+        let limit = if num_indexed_cols == -1 {
+            schema_descriptor.num_columns()
+        } else if num_indexed_cols >= 0 {
+            min(num_indexed_cols as usize, schema_descriptor.num_columns())
+        } else {
+            return Err(DeltaTableError::generic(
+                "delta.dataSkippingNumIndexedCols valid values are >=-1".to_string(),
+            ));
+        };
+        for idx in 0..limit {
+            handle_column(idx)?;
         }
     }
 

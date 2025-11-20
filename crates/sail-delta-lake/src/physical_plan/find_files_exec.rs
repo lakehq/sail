@@ -1,3 +1,9 @@
+// https://github.com/delta-io/delta-rs/blob/5575ad16bf641420404611d65f4ad7626e9acb16/LICENSE.txt
+//
+// Copyright (2020) QP Hou and a number of other contributors.
+// Portions Copyright (2025) LakeSail, Inc.
+// Modified in 2025 by LakeSail, Inc.
+//
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
 // You may obtain a copy of the License at
@@ -9,6 +15,8 @@
 // WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 // See the License for the specific language governing permissions and
 // limitations under the License.
+
+// [Credit]: <https://github.com/delta-io/delta-rs/blob/3607c314cbdd2ad06c6ee0677b92a29f695c71f3/crates/core/src/delta_datafusion/mod.rs>
 
 use std::any::Any;
 use std::collections::HashMap;
@@ -36,17 +44,17 @@ use datafusion::physical_plan::{
 };
 use datafusion_common::{internal_err, DataFusionError, Result};
 use datafusion_physical_expr::{Distribution, EquivalenceProperties, PhysicalExpr};
-use deltalake::kernel::Add;
-use deltalake::logstore::{LogStore, LogStoreRef, StorageConfig};
-use deltalake::{DeltaResult, DeltaTableError};
 use futures::{stream, TryStreamExt};
 use url::Url;
 
-use crate::datasource::schema_rewriter::DeltaPhysicalExprAdapterFactory;
 use crate::datasource::{
-    collect_physical_columns, datafusion_to_delta_error, join_batches_with_add_actions,
-    DataFusionMixins, DeltaScanConfigBuilder, DeltaTableProvider, PredicateProperties, PATH_COLUMN,
+    collect_physical_columns, datafusion_to_delta_error, DataFusionMixins, DeltaScanConfigBuilder,
+    DeltaTableProvider, PredicateProperties, PATH_COLUMN,
 };
+use crate::kernel::models::Add;
+use crate::kernel::{DeltaResult, DeltaTableError};
+use crate::physical_plan::{join_batches_with_add_actions, DeltaPhysicalExprAdapterFactory};
+use crate::storage::{get_object_store_from_context, LogStore, LogStoreRef, StorageConfig};
 use crate::table::{open_table_with_object_store, DeltaTableState};
 
 /// Physical execution node for finding files in a Delta table that match a predicate.
@@ -112,23 +120,13 @@ impl DeltaFindFilesExec {
         self.version
     }
 
-    async fn find_files(
-        &self,
-        context: Arc<TaskContext>,
-    ) -> Result<(Vec<deltalake::kernel::Add>, bool)> {
-        let object_store = context
-            .runtime_env()
-            .object_store_registry
-            .get_store(&self.table_url)
-            .map_err(|e| DataFusionError::External(Box::new(e)))?;
+    async fn find_files(&self, context: Arc<TaskContext>) -> Result<(Vec<Add>, bool)> {
+        let object_store = get_object_store_from_context(&context, &self.table_url)?;
 
-        let mut table = open_table_with_object_store(
-            self.table_url.clone(),
-            object_store,
-            StorageConfig::default(),
-        )
-        .await
-        .map_err(|e| DataFusionError::External(Box::new(e)))?;
+        let mut table =
+            open_table_with_object_store(self.table_url.clone(), object_store, StorageConfig)
+                .await
+                .map_err(|e| DataFusionError::External(Box::new(e)))?;
         table
             .load_version(self.version)
             .await
@@ -261,6 +259,18 @@ pub struct FindFiles {
     pub partition_scan: bool,
 }
 
+async fn collect_add_actions(
+    snapshot: &DeltaTableState,
+    log_store: &dyn LogStore,
+) -> DeltaResult<Vec<Add>> {
+    snapshot
+        .snapshot()
+        .files(log_store, None)
+        .map_ok(|view| view.add_action())
+        .try_collect()
+        .await
+}
+
 /// Scan memory table (for partition-only predicates)
 pub async fn scan_memory_table_physical(
     snapshot: &DeltaTableState,
@@ -268,7 +278,7 @@ pub async fn scan_memory_table_physical(
     state: &dyn Session,
     physical_predicate: Arc<dyn PhysicalExpr>,
 ) -> DeltaResult<Vec<Add>> {
-    let actions = snapshot.file_actions(log_store).await?;
+    let actions = collect_add_actions(snapshot, log_store).await?;
     let batch = snapshot.add_actions_table(true)?;
     let mut arrays = Vec::new();
     let mut fields = Vec::new();
@@ -345,11 +355,11 @@ pub async fn find_files_scan_physical(
     state: &dyn Session,
     physical_predicate: Arc<dyn PhysicalExpr>,
 ) -> DeltaResult<Vec<Add>> {
-    let candidate_map: HashMap<String, Add> = snapshot
-        .file_actions_iter(&log_store)
-        .map_ok(|add| (add.path.clone(), add.to_owned()))
-        .try_collect()
-        .await?;
+    let candidate_map: HashMap<String, Add> = collect_add_actions(snapshot, log_store.as_ref())
+        .await?
+        .into_iter()
+        .map(|add| (add.path.clone(), add))
+        .collect();
 
     let scan_config = DeltaScanConfigBuilder::new()
         .with_file_column(true)
@@ -444,9 +454,13 @@ pub async fn find_files_physical(
                     .map_err(datafusion_to_delta_error)?;
 
                 // Use partition-only scanning (memory table approach)
-                let candidates =
-                    scan_memory_table_physical(snapshot, &log_store, state, adapted_predicate)
-                        .await?;
+                let candidates = scan_memory_table_physical(
+                    snapshot,
+                    log_store.as_ref(),
+                    state,
+                    adapted_predicate,
+                )
+                .await?;
                 Ok(FindFiles {
                     candidates,
                     partition_scan: true,
@@ -469,7 +483,7 @@ pub async fn find_files_physical(
             }
         }
         None => Ok(FindFiles {
-            candidates: snapshot.file_actions(&log_store).await?,
+            candidates: collect_add_actions(snapshot, log_store.as_ref()).await?,
             partition_scan: true,
         }),
     }
