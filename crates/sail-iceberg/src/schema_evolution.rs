@@ -159,6 +159,12 @@ impl SchemaEvolver {
         matches!(
             (table_type, input_type),
             (DataType::Int64, DataType::Int32) | (DataType::Float64, DataType::Float32)
+        ) || matches!(
+            (table_type, input_type),
+            (
+                DataType::FixedSizeBinary(_),
+                DataType::Binary | DataType::LargeBinary
+            )
         ) || Self::decimal_precision_contracts(table_type, input_type)
     }
 

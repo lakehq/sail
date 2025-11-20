@@ -27,7 +27,7 @@ use crate::spec::partition::PartitionSpec;
 use crate::spec::types::values::{Datum, Literal, PrimitiveLiteral};
 use crate::spec::types::{PrimitiveType, Type};
 use crate::spec::{DataFile, Manifest, ManifestContentType, ManifestList, Schema};
-use crate::utils::conversions::{iceberg_literal_to_scalar, scalar_to_primitive_literal};
+use crate::utils::conversions::{scalar_to_primitive_literal, to_scalar};
 // TODO: Implement robust logical expression parsing for summary pruning
 
 /// Pruning statistics over Iceberg DataFiles
@@ -87,7 +87,17 @@ impl IcebergPruningStats {
             .map(|p| Type::Primitive(p.clone()))
             .unwrap_or_else(|| Type::Primitive(datum.r#type.clone()));
 
-        iceberg_literal_to_scalar(&Literal::Primitive(datum.literal.clone()), &iceberg_type)
+        match to_scalar(&Literal::Primitive(datum.literal.clone()), &iceberg_type) {
+            Ok(value) => value,
+            Err(err) => {
+                log::warn!(
+                    "Failed to convert literal for field {} during pruning: {}",
+                    field_id,
+                    err
+                );
+                datafusion::common::scalar::ScalarValue::Null
+            }
+        }
     }
 }
 

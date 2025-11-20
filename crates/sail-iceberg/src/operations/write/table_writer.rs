@@ -33,7 +33,7 @@ use crate::spec::schema::Schema as IcebergSchema;
 use crate::spec::types::values::Literal;
 use crate::spec::types::NestedField;
 use crate::spec::DataFile;
-use crate::utils::conversions::iceberg_literal_to_scalar;
+use crate::utils::conversions::to_scalar;
 
 pub struct IcebergTableWriter {
     pub store: Arc<dyn object_store::ObjectStore>,
@@ -263,7 +263,7 @@ impl IcebergTableWriter {
             .as_ref()
             .or(field.initial_default.as_ref());
         if let Some(lit) = literal {
-            let scalar = iceberg_literal_to_scalar(lit, field.field_type.as_ref());
+            let scalar = to_scalar(lit, field.field_type.as_ref())?;
             let array = scalar
                 .to_array_of_size(num_rows)
                 .map_err(|e| DataFusionError::Plan(e.to_string()))?;

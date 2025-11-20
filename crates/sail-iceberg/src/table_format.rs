@@ -58,17 +58,6 @@ pub async fn parse_table_url(ctx: &dyn Session, paths: Vec<String>) -> Result<Ur
     Ok(table_url)
 }
 
-/// Load Iceberg table metadata from the table location
-#[allow(dead_code)]
-pub(crate) async fn load_table_metadata(
-    ctx: &dyn Session,
-    table_url: &Url,
-) -> Result<(Schema, Snapshot, Vec<PartitionSpec>)> {
-    log::trace!("Loading table metadata from: {}", table_url);
-    let table = Table::load(ctx, table_url.clone()).await?;
-    table.scan_state(&TableIcebergOptions::default())
-}
-
 /// Load metadata and pick snapshot per options (precedence: snapshot_id > ref > timestamp > current).
 #[allow(dead_code)]
 pub(crate) async fn load_table_metadata_with_options(

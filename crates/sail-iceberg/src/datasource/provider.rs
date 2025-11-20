@@ -49,7 +49,7 @@ use crate::spec::types::values::Literal;
 use crate::spec::{
     DataFile, ManifestContentType, ManifestList, ManifestStatus, PartitionSpec, Schema, Snapshot,
 };
-use crate::utils::conversions::literal_to_scalar_basic;
+use crate::utils::conversions::primitive_to_scalar_default;
 use crate::utils::get_object_store_from_session;
 
 #[derive(Debug, Clone)]
@@ -275,7 +275,14 @@ impl IcebergTableProvider {
                 .partition()
                 .iter()
                 .map(|literal_opt| match literal_opt {
-                    Some(literal) => literal_to_scalar_basic(literal),
+                    Some(Literal::Primitive(prim)) => primitive_to_scalar_default(prim),
+                    Some(other) => {
+                        log::warn!(
+                            "Unexpected non-primitive partition literal {:?}, treating as NULL",
+                            other
+                        );
+                        ScalarValue::Null
+                    }
                     None => ScalarValue::Null,
                 })
                 .collect();
@@ -346,8 +353,7 @@ impl IcebergTableProvider {
 
                 // min
                 if let Some(d) = df.lower_bounds().get(field_id) {
-                    let v = Literal::Primitive(d.literal.clone());
-                    let sv = literal_to_scalar_basic(&v);
+                    let sv = primitive_to_scalar_default(&d.literal);
                     min_scalars[col_idx] = match (&min_scalars[col_idx], &sv) {
                         (None, s) => Some(s.clone()),
                         (Some(existing), s) => Some(if s < existing {
@@ -360,8 +366,7 @@ impl IcebergTableProvider {
 
                 // max
                 if let Some(d) = df.upper_bounds().get(field_id) {
-                    let v = Literal::Primitive(d.literal.clone());
-                    let sv = literal_to_scalar_basic(&v);
+                    let sv = primitive_to_scalar_default(&d.literal);
                     max_scalars[col_idx] = match (&max_scalars[col_idx], &sv) {
                         (None, s) => Some(s.clone()),
                         (Some(existing), s) => Some(if s > existing {
@@ -427,21 +432,14 @@ impl IcebergTableProvider {
                 let min_value = data_file
                     .lower_bounds()
                     .get(&field_id)
-                    .map(|datum| {
-                        // convert Datum -> Literal for existing scalar conversion
-                        let lit = Literal::Primitive(datum.literal.clone());
-                        literal_to_scalar_basic(&lit)
-                    })
+                    .map(|datum| primitive_to_scalar_default(&datum.literal))
                     .map(Precision::Exact)
                     .unwrap_or(Precision::Absent);
 
                 let max_value = data_file
                     .upper_bounds()
                     .get(&field_id)
-                    .map(|datum| {
-                        let lit = Literal::Primitive(datum.literal.clone());
-                        literal_to_scalar_basic(&lit)
-                    })
+                    .map(|datum| primitive_to_scalar_default(&datum.literal))
                     .map(Precision::Exact)
                     .unwrap_or(Precision::Absent);
 
