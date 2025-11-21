@@ -294,6 +294,8 @@ impl ExecutionPlan for IcebergWriterExec {
                 let table_meta = TableMetadata::from_json(&bytes)
                     .map_err(|e| DataFusionError::External(Box::new(e)))?;
                 let data_dir = Self::resolve_data_dir(&table_meta, &table_url);
+                // FIXME: Concurrency Issue with Schema Evolution.
+                // This requires a mechanism to reserve Field IDs or restart the Writer task upon conflict.
                 let schema_outcome =
                     SchemaEvolver::evolve(&table_meta, input_schema.as_ref(), schema_mode)?;
                 let default_spec = table_meta.default_partition_spec().cloned();

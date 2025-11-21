@@ -303,6 +303,7 @@ impl SchemaEvolver {
         let mut changed = false;
 
         for existing in current_schema.fields() {
+            // FIXME: Consider implementing case-insensitive matching like SchemaUpdate in Iceberg.
             match input_schema.field_with_name(&existing.name) {
                 Ok(candidate) => {
                     let (merged_field, field_changed) =
@@ -459,6 +460,7 @@ impl SchemaEvolver {
         input_fields: &[FieldRef],
         next_field_id: &mut i32,
     ) -> Result<(StructType, bool)> {
+        // FIXME: This lookup map is case-sensitive.
         let mut input_lookup: HashMap<&str, &Field> = HashMap::new();
         for field in input_fields {
             input_lookup.insert(field.name(), field.as_ref());
