@@ -389,6 +389,20 @@ impl PlanFormatter for SparkPlanFormatter {
                 let value = self.literal_to_string(value, config)?;
                 Ok(format!("dictionary({value})"))
             }
+            ScalarValue::Decimal32(value, _precision, scale) => match value {
+                Some(value) => {
+                    let value = format!("{value}");
+                    Ok(format_decimal(value.as_str(), *scale))
+                }
+                None => Ok("NULL".to_string()),
+            },
+            ScalarValue::Decimal64(value, _precision, scale) => match value {
+                Some(value) => {
+                    let value = format!("{value}");
+                    Ok(format_decimal(value.as_str(), *scale))
+                }
+                None => Ok("NULL".to_string()),
+            },
             ScalarValue::Decimal128(value, _precision, scale) => match value {
                 Some(value) => {
                     let value = format!("{value}");

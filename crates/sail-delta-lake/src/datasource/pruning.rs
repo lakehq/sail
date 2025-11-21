@@ -1,3 +1,9 @@
+// https://github.com/delta-io/delta-rs/blob/5575ad16bf641420404611d65f4ad7626e9acb16/LICENSE.txt
+//
+// Copyright (2020) QP Hou and a number of other contributors.
+// Portions Copyright (2025) LakeSail, Inc.
+// Modified in 2025 by LakeSail, Inc.
+//
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
 // You may obtain a copy of the License at
@@ -10,6 +16,8 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+// [Credit]: <https://github.com/delta-io/delta-rs/blob/3607c314cbdd2ad06c6ee0677b92a29f695c71f3/crates/core/src/delta_datafusion/mod.rs>
+
 use datafusion::arrow::datatypes::SchemaRef;
 use datafusion::catalog::Session;
 use datafusion::common::{Result, ToDFSchema};
@@ -17,11 +25,12 @@ use datafusion::logical_expr::utils::conjunction;
 use datafusion::logical_expr::Expr;
 use datafusion::physical_optimizer::pruning::PruningPredicate;
 use datafusion_common::pruning::PruningStatistics;
-use deltalake::kernel::Add;
-use deltalake::logstore::LogStoreRef;
 use futures::TryStreamExt;
 
 use crate::datasource::delta_to_datafusion_error;
+use crate::kernel::models::Add;
+use crate::kernel::DeltaResult;
+use crate::storage::LogStoreRef;
 use crate::table::DeltaTableState;
 
 /// Result of file pruning operation
@@ -31,6 +40,18 @@ pub struct PruningResult {
     pub files: Vec<Add>,
     /// Pruning mask used for statistics calculation (None if no pruning was applied)
     pub pruning_mask: Option<Vec<bool>>,
+}
+
+async fn collect_add_actions(
+    snapshot: &DeltaTableState,
+    log_store: &LogStoreRef,
+) -> DeltaResult<Vec<Add>> {
+    snapshot
+        .snapshot()
+        .files(log_store.as_ref(), None)
+        .map_ok(|view| view.add_action())
+        .try_collect()
+        .await
 }
 
 /// Core file pruning function that filters files based on predicates and limit
@@ -46,9 +67,7 @@ pub async fn prune_files(
 
     // Early return if no filters and no limit
     if filter_expr.is_none() && limit.is_none() {
-        let files: Vec<Add> = snapshot
-            .file_actions_iter(log_store)
-            .try_collect()
+        let files = collect_add_actions(snapshot, log_store)
             .await
             .map_err(delta_to_datafusion_error)?;
         return Ok(PruningResult {
@@ -73,9 +92,7 @@ pub async fn prune_files(
     };
 
     // Collect all files and apply pruning logic
-    let all_files: Vec<Add> = snapshot
-        .file_actions_iter(log_store)
-        .try_collect()
+    let all_files = collect_add_actions(snapshot, log_store)
         .await
         .map_err(delta_to_datafusion_error)?;
 
