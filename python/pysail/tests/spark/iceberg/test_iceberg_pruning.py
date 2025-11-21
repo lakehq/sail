@@ -3,7 +3,6 @@ import pandas as pd
 import pyarrow as pa
 from pyiceberg.schema import Schema
 from pyiceberg.types import BooleanType, DoubleType, IntegerType, LongType, NestedField, StringType
-from .utils import create_sql_catalog
 
 
 def _make_eq_in_table(catalog, ident):
@@ -28,8 +27,7 @@ def _make_eq_in_table(catalog, ident):
     return table
 
 
-def test_pruning_equality_filters(spark, tmp_path):
-    catalog = create_sql_catalog(tmp_path)
+def test_pruning_equality_filters(spark, catalog):
     ident = "default.prune_eq_only"
     table = _make_eq_in_table(catalog, ident)
     try:
@@ -42,8 +40,7 @@ def test_pruning_equality_filters(spark, tmp_path):
         catalog.drop_table(ident)
 
 
-def test_pruning_in_clause(spark, tmp_path):
-    catalog = create_sql_catalog(tmp_path)
+def test_pruning_in_clause(spark, catalog):
     ident = "default.prune_in_only"
     table = _make_eq_in_table(catalog, ident)
     try:
@@ -54,8 +51,7 @@ def test_pruning_in_clause(spark, tmp_path):
         catalog.drop_table(ident)
 
 
-def test_comparison_and_between(spark, tmp_path):
-    catalog = create_sql_catalog(tmp_path)
+def test_comparison_and_between(spark, catalog):
     table = catalog.create_table(
         identifier="default.prune_cmp",
         schema=Schema(
@@ -87,8 +83,7 @@ def test_comparison_and_between(spark, tmp_path):
         catalog.drop_table("default.prune_cmp")
 
 
-def test_null_and_boolean(spark, tmp_path):
-    catalog = create_sql_catalog(tmp_path)
+def test_null_and_boolean(spark, catalog):
     table = catalog.create_table(
         identifier="default.prune_null_bool",
         schema=Schema(
@@ -120,8 +115,7 @@ def test_null_and_boolean(spark, tmp_path):
         catalog.drop_table("default.prune_null_bool")
 
 
-def test_correctness_small(spark, tmp_path):
-    catalog = create_sql_catalog(tmp_path)
+def test_correctness_small(spark, catalog):
     table = catalog.create_table(
         identifier="default.prune_correct",
         schema=Schema(
@@ -157,8 +151,7 @@ def test_correctness_small(spark, tmp_path):
         catalog.drop_table("default.prune_correct")
 
 
-def test_or_and_not_pruning(spark, tmp_path):
-    catalog = create_sql_catalog(tmp_path)
+def test_or_and_not_pruning(spark, catalog):
     table = catalog.create_table(
         identifier="default.prune_or_and_not",
         schema=Schema(
@@ -191,8 +184,7 @@ def test_or_and_not_pruning(spark, tmp_path):
         catalog.drop_table("default.prune_or_and_not")
 
 
-def test_string_in_and_range_pruning(spark, tmp_path):
-    catalog = create_sql_catalog(tmp_path)
+def test_string_in_and_range_pruning(spark, catalog):
     table = catalog.create_table(
         identifier="default.prune_string_in_range",
         schema=Schema(
@@ -221,8 +213,7 @@ def test_string_in_and_range_pruning(spark, tmp_path):
         catalog.drop_table("default.prune_string_in_range")
 
 
-def test_metrics_based_pruning_numeric(spark, tmp_path):
-    catalog = create_sql_catalog(tmp_path)
+def test_metrics_based_pruning_numeric(spark, catalog):
     table = catalog.create_table(
         identifier="default.prune_metrics_numeric",
         schema=Schema(
@@ -249,8 +240,7 @@ def test_metrics_based_pruning_numeric(spark, tmp_path):
         catalog.drop_table("default.prune_metrics_numeric")
 
 
-def test_limit_pushdown_behavior(spark, tmp_path):
-    catalog = create_sql_catalog(tmp_path)
+def test_limit_pushdown_behavior(spark, catalog):
     table = catalog.create_table(
         identifier="default.prune_limit",
         schema=Schema(

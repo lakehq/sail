@@ -19,7 +19,7 @@ from pyiceberg.types import DateType, IntegerType, NestedField, StringType, Time
 
 from pysail.tests.spark.utils import escape_sql_string_literal
 
-from .utils import create_sql_catalog, pyiceberg_to_pandas  # noqa: TID252
+from .utils import pyiceberg_to_pandas  # noqa: TID252
 
 
 def _common_schema() -> Schema:
@@ -110,9 +110,8 @@ def _build_sample_rows() -> List[Tuple[int, str, dt.datetime, dt.date]]:  # noqa
 )
 @pytest.mark.skipif(platform.system() == "Windows", reason="may not work on Windows")
 def test_partitioned_write_then_sail_read(
-    spark, tmp_path, table_name, spec, predicate_column, predicate_value, expected_numbers
+    spark, catalog, table_name, spec, predicate_column, predicate_value, expected_numbers
 ):
-    catalog = create_sql_catalog(tmp_path)
     schema = _common_schema()
     table = catalog.create_table(identifier=table_name, schema=schema, partition_spec=spec)
     try:
@@ -162,8 +161,7 @@ def test_partitioned_write_then_sail_read(
     ],
 )
 @pytest.mark.skipif(platform.system() == "Windows", reason="may not work on Windows")
-def test_partitioned_write_then_pyiceberg_read_all(spark, tmp_path, table_name, spec):
-    catalog = create_sql_catalog(tmp_path)
+def test_partitioned_write_then_pyiceberg_read_all(spark, catalog, table_name, spec):
     schema = _common_schema()
     table = catalog.create_table(identifier=table_name, schema=schema, partition_spec=spec)
     try:

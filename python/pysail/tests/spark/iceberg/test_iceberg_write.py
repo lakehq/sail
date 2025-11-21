@@ -7,9 +7,9 @@ from pyiceberg.types import DoubleType, LongType, NestedField, StringType
 from pysail.tests.spark.utils import escape_sql_string_literal
 
 
-def test_iceberg_write_overwrite_and_read(spark, sql_catalog):
+def test_iceberg_write_overwrite_and_read(spark, catalog):
     identifier = "default.write_overwrite"
-    table = sql_catalog.create_table(
+    table = catalog.create_table(
         identifier=identifier,
         schema=Schema(
             NestedField(field_id=1, name="id", field_type=LongType(), required=False),
@@ -35,12 +35,12 @@ def test_iceberg_write_overwrite_and_read(spark, sql_catalog):
         pdf = result_df.toPandas()
         assert_frame_equal(pdf, expected.astype(pdf.dtypes))
     finally:
-        sql_catalog.drop_table(identifier)
+        catalog.drop_table(identifier)
 
 
-def test_iceberg_write_overwrite_existing_data(spark, sql_catalog):
+def test_iceberg_write_overwrite_existing_data(spark, catalog):
     identifier = "default.write_overwrite_existing"
-    table = sql_catalog.create_table(
+    table = catalog.create_table(
         identifier=identifier,
         schema=Schema(
             NestedField(field_id=1, name="id", field_type=LongType(), required=False),
@@ -69,12 +69,12 @@ def test_iceberg_write_overwrite_existing_data(spark, sql_catalog):
         pdf = result_df.toPandas()
         assert_frame_equal(pdf, expected.astype(pdf.dtypes))
     finally:
-        sql_catalog.drop_table(identifier)
+        catalog.drop_table(identifier)
 
 
-def test_iceberg_write_append_mode(spark, sql_catalog):
+def test_iceberg_write_append_mode(spark, catalog):
     identifier = "default.write_append"
-    table = sql_catalog.create_table(
+    table = catalog.create_table(
         identifier=identifier,
         schema=Schema(
             NestedField(field_id=1, name="id", field_type=LongType(), required=False),
@@ -92,12 +92,12 @@ def test_iceberg_write_append_mode(spark, sql_catalog):
         expected = pd.DataFrame({"id": [1, 2, 3, 4], "event": ["a", "b", "c", "d"]})
         assert_frame_equal(result_df.toPandas(), expected.astype(result_df.toPandas().dtypes))
     finally:
-        sql_catalog.drop_table(identifier)
+        catalog.drop_table(identifier)
 
 
-def test_iceberg_sql_read_after_write(spark, sql_catalog):
+def test_iceberg_sql_read_after_write(spark, catalog):
     identifier = "default.write_sql_table"
-    table = sql_catalog.create_table(
+    table = catalog.create_table(
         identifier=identifier,
         schema=Schema(
             NestedField(field_id=1, name="id", field_type=LongType(), required=False),
@@ -120,12 +120,12 @@ def test_iceberg_sql_read_after_write(spark, sql_catalog):
         finally:
             spark.sql("DROP TABLE IF EXISTS tmp_ice")
     finally:
-        sql_catalog.drop_table(identifier)
+        catalog.drop_table(identifier)
 
 
-def test_iceberg_append_bootstrap_first_snapshot(spark, sql_catalog):
+def test_iceberg_append_bootstrap_first_snapshot(spark, catalog):
     identifier = "default.append_bootstrap"
-    table = sql_catalog.create_table(
+    table = catalog.create_table(
         identifier=identifier,
         schema=Schema(
             NestedField(field_id=1, name="id", field_type=LongType(), required=False),
@@ -143,4 +143,4 @@ def test_iceberg_append_bootstrap_first_snapshot(spark, sql_catalog):
         table.refresh()
         assert table.current_snapshot() is not None
     finally:
-        sql_catalog.drop_table(identifier)
+        catalog.drop_table(identifier)

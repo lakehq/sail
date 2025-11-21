@@ -1,0 +1,34 @@
+name: Iceberg Integration Tests
+
+on:
+  workflow_call:
+
+jobs:
+  test:
+    name: Iceberg Tests
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Install Hatch
+        uses: pypa/hatch@install
+
+      - name: Download Python Package
+        uses: actions/download-artifact@v4
+        with:
+          name: python-package
+          path: target/wheels
+
+      - name: Install PySail
+        run: hatch run install-pysail
+
+      - name: Run Iceberg integration tests
+        env:
+          DOCKER_BUILDKIT: "1"
+        run: |
+          chmod +x scripts/iceberg-tests/run-tests.sh
+          ./scripts/iceberg-tests/run-tests.sh

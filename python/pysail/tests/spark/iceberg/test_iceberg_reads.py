@@ -4,11 +4,8 @@ import pyarrow as pa
 from pyiceberg.schema import Schema
 from pyiceberg.types import BooleanType, DoubleType, NestedField, StringType, TimestampType
 
-from .utils import create_sql_catalog  # noqa: TID252
 
-
-def test_nan_reads(spark, tmp_path):
-    catalog = create_sql_catalog(tmp_path)
+def test_nan_reads(spark, catalog):
     identifier = "default.test_nan_reads"
     table = catalog.create_table(
         identifier=identifier,
@@ -30,10 +27,9 @@ def test_nan_reads(spark, tmp_path):
         catalog.drop_table(identifier)
 
 
-def test_datetime_filter_reads(spark, tmp_path):
+def test_datetime_filter_reads(spark, catalog):
     from datetime import datetime, timedelta
 
-    catalog = create_sql_catalog(tmp_path)
     identifier = "default.test_datetime_filter_reads"
     table = catalog.create_table(
         identifier=identifier,
@@ -56,8 +52,7 @@ def test_datetime_filter_reads(spark, tmp_path):
         catalog.drop_table(identifier)
 
 
-def test_struct_null_filters(spark, tmp_path):
-    catalog = create_sql_catalog(tmp_path)
+def test_struct_null_filters(spark, catalog):
     identifier = "default.test_struct_null_filters"
     struct_field = pa.struct([("test", pa.int32())])
     arrow_schema = pa.schema([pa.field("col_struct", struct_field)])
@@ -78,8 +73,7 @@ def test_struct_null_filters(spark, tmp_path):
         catalog.drop_table(identifier)
 
 
-def test_limit_with_multiple_files(spark, tmp_path):
-    catalog = create_sql_catalog(tmp_path)
+def test_limit_with_multiple_files(spark, catalog):
     identifier = "default.test_limit_with_multiple_files"
     table = catalog.create_table(
         identifier=identifier,
@@ -99,8 +93,7 @@ def test_limit_with_multiple_files(spark, tmp_path):
         catalog.drop_table(identifier)
 
 
-def test_limit_with_filter(spark, tmp_path):
-    catalog = create_sql_catalog(tmp_path)
+def test_limit_with_filter(spark, catalog):
     identifier = "default.test_limit_with_filter"
     table = catalog.create_table(
         identifier=identifier,

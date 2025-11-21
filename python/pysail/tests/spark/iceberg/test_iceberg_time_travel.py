@@ -8,11 +8,8 @@ from pyiceberg.schema import Schema
 from pyiceberg.types import LongType, NestedField, StringType
 from pyspark.sql.types import Row
 
-from .utils import create_sql_catalog  # noqa: TID252
 
-
-def test_iceberg_time_travel_by_snapshot_id(spark, tmp_path):
-    catalog = create_sql_catalog(tmp_path)
+def test_iceberg_time_travel_by_snapshot_id(spark, catalog):
     identifier = "default.tt_by_snapshot"
     table = catalog.create_table(
         identifier=identifier,
@@ -93,8 +90,7 @@ def test_iceberg_time_travel_by_timestamp(spark, tmp_path):
         pass
 
 
-def test_iceberg_time_travel_precedence_snapshot_over_timestamp(spark, tmp_path):
-    catalog = create_sql_catalog(tmp_path)
+def test_iceberg_time_travel_precedence_snapshot_over_timestamp(spark, catalog):
     identifier = "default.tt_precedence"
     table = catalog.create_table(
         identifier=identifier,
@@ -123,8 +119,7 @@ def test_iceberg_time_travel_precedence_snapshot_over_timestamp(spark, tmp_path)
         catalog.drop_table(identifier)
 
 
-def test_iceberg_time_travel_by_ref_main_if_available(spark, tmp_path):
-    catalog = create_sql_catalog(tmp_path)
+def test_iceberg_time_travel_by_ref_main_if_available(spark, catalog):
     identifier = "default.tt_ref_main"
     table = catalog.create_table(
         identifier=identifier,
