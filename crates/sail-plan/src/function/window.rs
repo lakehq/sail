@@ -25,6 +25,8 @@ use sail_common_datafusion::utils::items::ItemTaker;
 use sail_function::aggregate::kurtosis::KurtosisFunction;
 use sail_function::aggregate::max_min_by::{MaxByFunction, MinByFunction};
 use sail_function::aggregate::mode::ModeFunction;
+use sail_function::aggregate::percentile::PercentileFunction;
+use sail_function::aggregate::percentile_disc::PercentileDiscFunction;
 use sail_function::aggregate::skewness::SkewnessFunc;
 use sail_function::aggregate::try_avg::TryAvgFunction;
 use sail_function::aggregate::try_sum::TrySumFunction;
@@ -416,6 +418,58 @@ fn median(input: WinFunctionInput) -> PlanResult<expr::Expr> {
     ))
 }
 
+fn percentile_exact_agg(input: WinFunctionInput) -> PlanResult<expr::Expr> {
+    let WinFunctionInput {
+        arguments,
+        partition_by,
+        order_by,
+        window_frame,
+        ignore_nulls,
+        distinct,
+        function_context: _,
+    } = input;
+    Ok(expr::Expr::WindowFunction(Box::new(expr::WindowFunction {
+        fun: WindowFunctionDefinition::AggregateUDF(Arc::new(AggregateUDF::from(
+            PercentileFunction::new(),
+        ))),
+        params: WindowFunctionParams {
+            args: arguments,
+            partition_by,
+            order_by,
+            window_frame,
+            filter: None,
+            null_treatment: get_null_treatment(ignore_nulls),
+            distinct,
+        },
+    })))
+}
+
+fn percentile_disc_agg(input: WinFunctionInput) -> PlanResult<expr::Expr> {
+    let WinFunctionInput {
+        arguments,
+        partition_by,
+        order_by,
+        window_frame,
+        ignore_nulls,
+        distinct,
+        function_context: _,
+    } = input;
+    Ok(expr::Expr::WindowFunction(Box::new(expr::WindowFunction {
+        fun: WindowFunctionDefinition::AggregateUDF(Arc::new(AggregateUDF::from(
+            PercentileDiscFunction::new(),
+        ))),
+        params: WindowFunctionParams {
+            args: arguments,
+            partition_by,
+            order_by,
+            window_frame,
+            filter: None,
+            null_treatment: get_null_treatment(ignore_nulls),
+            distinct,
+        },
+    })))
+}
+
 fn approx_count_distinct(input: WinFunctionInput) -> PlanResult<expr::Expr> {
     let WinFunctionInput {
         arguments,
@@ -513,13 +567,13 @@ fn list_built_in_window_functions() -> Vec<(&'static str, WinFunction)> {
             "mode",
             F::aggregate(|| Arc::new(AggregateUDF::from(ModeFunction::new()))),
         ),
-        ("percentile", F::unknown("percentile")),
+        ("percentile", F::custom(percentile_exact_agg)),
         (
             "percentile_approx",
             F::aggregate(approx_percentile_cont::approx_percentile_cont_udaf),
         ),
-        ("percentile_cont", F::unknown("percentile_cont")),
-        ("percentile_disc", F::unknown("percentile_disc")),
+        ("percentile_cont", F::custom(percentile_exact_agg)),
+        ("percentile_disc", F::custom(percentile_disc_agg)),
         ("regr_avgx", F::aggregate(regr::regr_avgx_udaf)),
         ("regr_avgy", F::aggregate(regr::regr_avgy_udaf)),
         ("regr_count", F::aggregate(regr::regr_count_udaf)),
