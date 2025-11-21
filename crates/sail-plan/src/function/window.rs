@@ -545,7 +545,7 @@ fn list_built_in_window_functions() -> Vec<(&'static str, WinFunction)> {
             "percentile_approx",
             F::aggregate(approx_percentile_cont::approx_percentile_cont_udaf),
         ),
-        ("percentile_cont", F::unknown("percentile_cont")),
+        ("percentile_cont", F::custom(percentile_exact_agg)),
         ("percentile_disc", F::unknown("percentile_disc")),
         ("regr_avgx", F::aggregate(regr::regr_avgx_udaf)),
         ("regr_avgy", F::aggregate(regr::regr_avgy_udaf)),
