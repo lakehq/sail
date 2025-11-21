@@ -562,4 +562,174 @@ mod tests {
         assert_eq!(result, ScalarValue::Utf8(None));
         Ok(())
     }
+
+    #[test]
+    fn test_percentile_75() -> Result<()> {
+        let mut acc = NumericPercentileAccumulator::new(0.75);
+
+        let values: ArrayRef = Arc::new(Float64Array::from(vec![
+            Some(0.0),
+            Some(1.0),
+            Some(2.5),
+            Some(3.5),
+            Some(5.0),
+            Some(6.0),
+            Some(7.5),
+            Some(8.5),
+        ]));
+
+        acc.update_batch(&[values])?;
+        let result = acc.evaluate()?;
+
+        // For 8 values, 75th percentile position = (8-1) * 0.75 = 5.25
+        // Interpolate between index 5 (6.0) and index 6 (7.5)
+        // Result = 6.0 + 0.25 * (7.5 - 6.0) = 6.0 + 0.375 = 6.375
+        assert_eq!(result, ScalarValue::Float64(Some(6.375)));
+        Ok(())
+    }
+
+    #[test]
+    fn test_percentile_0() -> Result<()> {
+        let mut acc = NumericPercentileAccumulator::new(0.0);
+
+        let values: ArrayRef = Arc::new(Float64Array::from(vec![
+            Some(5.0),
+            Some(1.0),
+            Some(9.0),
+            Some(3.0),
+        ]));
+
+        acc.update_batch(&[values])?;
+        let result = acc.evaluate()?;
+
+        // 0th percentile is the minimum value
+        assert_eq!(result, ScalarValue::Float64(Some(1.0)));
+        Ok(())
+    }
+
+    #[test]
+    fn test_percentile_100() -> Result<()> {
+        let mut acc = NumericPercentileAccumulator::new(1.0);
+
+        let values: ArrayRef = Arc::new(Float64Array::from(vec![
+            Some(5.0),
+            Some(1.0),
+            Some(9.0),
+            Some(3.0),
+        ]));
+
+        acc.update_batch(&[values])?;
+        let result = acc.evaluate()?;
+
+        // 100th percentile is the maximum value
+        assert_eq!(result, ScalarValue::Float64(Some(9.0)));
+        Ok(())
+    }
+    #[test]
+    fn test_percentile_merge_batches() -> Result<()> {
+        use datafusion::arrow::array::UInt8Array;
+        use datafusion_common::DataFusionError;
+
+        // Create first accumulator with some values
+        let mut acc1 = NumericPercentileAccumulator::new(0.5);
+        let values1: ArrayRef = Arc::new(Float64Array::from(vec![Some(1.0), Some(2.0), Some(3.0)]));
+        acc1.update_batch(&[values1])?;
+
+        // Create second accumulator with more values
+        let mut acc2 = NumericPercentileAccumulator::new(0.5);
+        let values2: ArrayRef = Arc::new(Float64Array::from(vec![Some(4.0), Some(5.0), Some(6.0)]));
+        acc2.update_batch(&[values2])?;
+
+        // Get state from acc2
+        let state2 = acc2.state()?;
+
+        // Convert state to ArrayRef for merging — no `panic!`
+        let values_list: ArrayRef = match &state2[0] {
+            ScalarValue::List(list_array) => Arc::clone(list_array) as ArrayRef,
+            other => {
+                return Err(DataFusionError::Internal(format!(
+                    "Expected List in percentile accumulator state[0], got: {:?}",
+                    other
+                )))
+            }
+        };
+
+        let percentile_array: ArrayRef = Arc::new(Float64Array::from(vec![state2[1]
+            .clone()
+            .try_into()
+            .unwrap_or(0.5_f64)]));
+
+        let data_type_array: ArrayRef = Arc::new(UInt8Array::from(vec![state2[2]
+            .clone()
+            .try_into()
+            .unwrap_or(0u8)]));
+
+        // Merge state2 into acc1
+        acc1.merge_batch(&[values_list, percentile_array, data_type_array])?;
+
+        // After merge, acc1 should have [1, 2, 3, 4, 5, 6]
+        // Median = (3 + 4) / 2 = 3.5
+        let result = acc1.evaluate()?;
+        assert_eq!(result, ScalarValue::Float64(Some(3.5)));
+
+        Ok(())
+    }
+
+    #[test]
+    fn test_percentile_group_by_scenario() -> Result<()> {
+        // Simulate the scenario from the user's test case with GROUP BY
+        // Group 1: Java earnings [20000, 22000, 30000] -> median should be 22000
+        let mut acc_java = NumericPercentileAccumulator::new(0.5);
+        let java_values: ArrayRef = Arc::new(Float64Array::from(vec![
+            Some(20000.0),
+            Some(22000.0),
+            Some(30000.0),
+        ]));
+        acc_java.update_batch(&[java_values])?;
+        let java_result = acc_java.evaluate()?;
+        assert_eq!(java_result, ScalarValue::Float64(Some(22000.0)));
+
+        // Group 2: dotNET earnings [5000, 10000, 48000] -> median should be 10000
+        let mut acc_dotnet = NumericPercentileAccumulator::new(0.5);
+        let dotnet_values: ArrayRef = Arc::new(Float64Array::from(vec![
+            Some(5000.0),
+            Some(10000.0),
+            Some(48000.0),
+        ]));
+        acc_dotnet.update_batch(&[dotnet_values])?;
+        let dotnet_result = acc_dotnet.evaluate()?;
+        assert_eq!(dotnet_result, ScalarValue::Float64(Some(10000.0)));
+
+        Ok(())
+    }
+
+    #[test]
+    fn test_percentile_group_by_scenario_2() -> Result<()> {
+        let mut acc_java = NumericPercentileAccumulator::new(0.5);
+        let java_values: ArrayRef = Arc::new(Float64Array::from(vec![
+            Some(2.0),
+            Some(2.0),
+            Some(22000.0),
+            Some(30000.0),
+        ]));
+        acc_java.update_batch(&[java_values])?;
+        let java_result = acc_java.evaluate()?;
+        assert_eq!(java_result, ScalarValue::Float64(Some(11001.0)));
+
+        Ok(())
+    }
+
+    #[test]
+    fn test_percentile_two_values() -> Result<()> {
+        let mut acc = NumericPercentileAccumulator::new(0.5);
+
+        let values: ArrayRef = Arc::new(Float64Array::from(vec![Some(10.0), Some(20.0)]));
+
+        acc.update_batch(&[values])?;
+        let result = acc.evaluate()?;
+
+        // Median of [10, 20] with interpolation: 10 + 0.5 * (20 - 10) = 15
+        assert_eq!(result, ScalarValue::Float64(Some(15.0)));
+        Ok(())
+    }
 }
