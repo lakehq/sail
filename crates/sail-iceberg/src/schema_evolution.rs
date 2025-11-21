@@ -18,7 +18,7 @@ use datafusion::arrow::datatypes::{DataType, Field, FieldRef, Schema as ArrowSch
 use datafusion_common::{DataFusionError, Result};
 
 use crate::spec::schema::{Schema as IcebergSchema, SchemaBuilder};
-use crate::spec::types::{ListType, MapType, NestedField, StructType, Type};
+use crate::spec::types::{ListType, MapType, NestedField, PrimitiveType, StructType, Type};
 use crate::spec::TableMetadata;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -739,6 +739,7 @@ impl SchemaEvolver {
 
         let struct_view = StructType::new(new_fields.clone());
         let (name_to_id, _) = SchemaBuilder::build_name_indexes(&struct_view);
+        let id_to_field = SchemaBuilder::build_id_to_field_index(&struct_view);
         let mut identifier_ids = Vec::new();
         for identifier in &identifier_names {
             let Some(id) = name_to_id.get(identifier) else {
@@ -746,6 +747,33 @@ impl SchemaEvolver {
                     "Identifier field '{identifier}' is missing from the overwrite schema. Provide all identifier columns or drop the identifier before overwriting."
                 )));
             };
+
+            if let Some(field) = id_to_field.get(id) {
+                if !field.required {
+                    return Err(DataFusionError::Plan(format!(
+                        "Cannot overwrite table: Identifier field '{}' must be required, but input schema defines it as optional.",
+                        identifier
+                    )));
+                }
+
+                match field.field_type.as_ref() {
+                    Type::Primitive(p) => {
+                        if matches!(p, PrimitiveType::Float | PrimitiveType::Double) {
+                            return Err(DataFusionError::Plan(format!(
+                                "Cannot overwrite table: Identifier field '{}' cannot be type Float or Double.",
+                                identifier
+                            )));
+                        }
+                    }
+                    _ => {
+                        return Err(DataFusionError::Plan(format!(
+                            "Cannot overwrite table: Identifier field '{}' must be a primitive type.",
+                            identifier
+                        )));
+                    }
+                }
+            }
+
             identifier_ids.push(*id);
         }
 
