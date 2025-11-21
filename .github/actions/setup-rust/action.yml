@@ -18,9 +18,11 @@ runs:
         rustup toolchain install nightly --profile default
       shell: bash
 
-    # Install grcov for code coverage
     - name: Install grcov
       uses: taiki-e/install-action@grcov
+
+    - name: Install cargo-nextest
+      uses: taiki-e/install-action@nextest
 
     - name: Show versions
       id: versions
