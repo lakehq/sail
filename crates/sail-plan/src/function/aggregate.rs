@@ -330,14 +330,16 @@ fn listagg(input: AggFunctionInput) -> PlanResult<expr::Expr> {
 }
 
 fn median(input: AggFunctionInput) -> PlanResult<expr::Expr> {
+    let mut args = input.arguments.clone();
+    args.push(lit(0.5_f64));
     Ok(cast(
         expr::Expr::AggregateFunction(AggregateFunction {
-            func: median::median_udaf(),
+            func: Arc::new(AggregateUDF::from(PercentileFunction::new())),
             params: AggregateFunctionParams {
-                args: input.arguments.clone(),
+                args,
                 distinct: input.distinct,
-                order_by: input.order_by,
                 filter: input.filter,
+                order_by: input.order_by,
                 null_treatment: get_null_treatment(input.ignore_nulls),
             },
         }),
