@@ -14,49 +14,17 @@ use std::collections::BTreeMap;
 
 use apache_avro::schema::{
     ArraySchema, DecimalSchema, FixedSchema, Name, RecordField as AvroRecordField,
-    RecordFieldOrder, RecordSchema, UnionSchema,
+    RecordFieldOrder, RecordSchema,
 };
 use apache_avro::Schema as AvroSchema;
 use serde_json::{Number, Value as JsonValue};
 
+use crate::spec::avro_utils::{optional, record_field, FIELD_ID_ATTR};
 use crate::spec::types::{PrimitiveType, StructType, Type};
 
-const FIELD_ID: &str = "field-id";
 const ELEMENT_ID: &str = "element-id";
 const LOGICAL_TYPE: &str = "logicalType";
 const MAP_LOGICAL_TYPE: &str = "map";
-
-fn optional(schema: AvroSchema) -> AvroSchema {
-    #[allow(clippy::unwrap_used)]
-    AvroSchema::Union(UnionSchema::new(vec![AvroSchema::Null, schema]).unwrap())
-}
-
-fn record_field(name: &str, schema: AvroSchema, field_id: i32, required: bool) -> AvroRecordField {
-    let mut schema = schema;
-    let default = if required {
-        None
-    } else {
-        Some(JsonValue::Null)
-    };
-    if !required {
-        schema = optional(schema);
-    }
-    let mut field = AvroRecordField {
-        name: name.to_string(),
-        doc: None,
-        default,
-        aliases: None,
-        order: RecordFieldOrder::Ignore,
-        position: 0,
-        schema,
-        custom_attributes: Default::default(),
-    };
-    field.custom_attributes.insert(
-        FIELD_ID.to_string(),
-        JsonValue::Number(Number::from(field_id)),
-    );
-    field
-}
 
 fn avro_primitive(prim: &PrimitiveType) -> AvroSchema {
     match prim {
@@ -151,7 +119,7 @@ fn struct_to_avro_record(name: &str, s: &StructType) -> AvroSchema {
                         _ => AvroSchema::String,
                     },
                     custom_attributes: BTreeMap::from([(
-                        FIELD_ID.to_string(),
+                        FIELD_ID_ATTR.to_string(),
                         JsonValue::Number(Number::from(map.key_field.id)),
                     )]),
                 };
@@ -176,7 +144,7 @@ fn struct_to_avro_record(name: &str, s: &StructType) -> AvroSchema {
                         optional(value_schema)
                     },
                     custom_attributes: BTreeMap::from([(
-                        FIELD_ID.to_string(),
+                        FIELD_ID_ATTR.to_string(),
                         JsonValue::Number(Number::from(map.value_field.id)),
                     )]),
                 };
@@ -289,7 +257,7 @@ pub fn data_file_schema_v2(partition_type: &StructType) -> AvroSchema {
             position: 0,
             schema: array_of_longs(133, false),
             custom_attributes: BTreeMap::from([(
-                FIELD_ID.to_string(),
+                FIELD_ID_ATTR.to_string(),
                 JsonValue::Number(Number::from(132)),
             )]),
         },
@@ -303,7 +271,7 @@ pub fn data_file_schema_v2(partition_type: &StructType) -> AvroSchema {
             position: 0,
             schema: array_of_ints(136, false),
             custom_attributes: BTreeMap::from([(
-                FIELD_ID.to_string(),
+                FIELD_ID_ATTR.to_string(),
                 JsonValue::Number(Number::from(135)),
             )]),
         },
@@ -345,7 +313,7 @@ pub fn manifest_entry_schema_v2(partition_type: &StructType) -> AvroSchema {
             position: 0,
             schema: df_schema,
             custom_attributes: BTreeMap::from([(
-                FIELD_ID.to_string(),
+                FIELD_ID_ATTR.to_string(),
                 JsonValue::Number(Number::from(2)),
             )]),
         },

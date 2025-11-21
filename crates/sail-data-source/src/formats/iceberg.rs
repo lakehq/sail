@@ -5,6 +5,7 @@ use datafusion::catalog::{Session, TableProvider};
 use datafusion::common::Result;
 use datafusion::physical_plan::ExecutionPlan;
 use sail_common_datafusion::datasource::{SinkInfo, SourceInfo, TableFormat};
+use sail_iceberg::table::find_latest_metadata_file;
 use sail_iceberg::TableIcebergOptions;
 use url::Url;
 
@@ -35,7 +36,7 @@ impl TableFormat for IcebergDataSourceFormat {
             options,
         } = info;
 
-        let table_url = Self::parse_table_url(ctx, paths).await?;
+        let table_url = Self::parse_table_url(paths).await?;
         let iceberg_options = resolve_iceberg_read_options(options)?;
 
         sail_iceberg::table_format::create_iceberg_provider(ctx, table_url, iceberg_options).await
@@ -64,7 +65,7 @@ impl TableFormat for IcebergDataSourceFormat {
             return datafusion::common::not_impl_err!("bucketing for Iceberg format");
         }
 
-        let table_url = Self::parse_table_url(ctx, vec![path]).await?;
+        let table_url = Self::parse_table_url(vec![path]).await?;
         let iceberg_options = resolve_iceberg_write_options(options)?;
 
         let store = ctx
@@ -72,8 +73,7 @@ impl TableFormat for IcebergDataSourceFormat {
             .object_store_registry
             .get_store(&table_url)
             .map_err(|e| datafusion::common::DataFusionError::External(Box::new(e)))?;
-        let exists_res =
-            sail_iceberg::table_format::find_latest_metadata_file(&store, &table_url).await;
+        let exists_res = find_latest_metadata_file(&store, &table_url).await;
         let table_exists = exists_res.is_ok();
 
         match mode {
@@ -121,7 +121,7 @@ impl TableFormat for IcebergDataSourceFormat {
 }
 
 impl IcebergDataSourceFormat {
-    async fn parse_table_url(ctx: &dyn Session, paths: Vec<String>) -> Result<Url> {
+    async fn parse_table_url(paths: Vec<String>) -> Result<Url> {
         if paths.len() != 1 {
             return datafusion::common::plan_err!(
                 "Iceberg table requires exactly one path, got {}",
@@ -136,13 +136,6 @@ impl IcebergDataSourceFormat {
         if !table_url.path().ends_with('/') {
             table_url.set_path(&format!("{}/", table_url.path()));
         }
-
-        let _object_store = ctx
-            .runtime_env()
-            .object_store_registry
-            .get_store(&table_url)
-            .map_err(|e| datafusion::common::DataFusionError::External(Box::new(e)))?;
-
         Ok(table_url)
     }
 }

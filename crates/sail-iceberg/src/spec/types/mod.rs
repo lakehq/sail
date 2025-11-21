@@ -24,6 +24,7 @@ use std::fmt;
 use std::ops::Index;
 use std::sync::{Arc, OnceLock};
 
+use ordered_float::OrderedFloat;
 use serde::de::{Error, IntoDeserializer, MapAccess, Visitor};
 use serde::{de, Deserialize, Deserializer, Serialize, Serializer};
 use serde_json::Value as JsonValue;
@@ -268,6 +269,86 @@ impl PrimitiveType {
                 | (PrimitiveType::Fixed(_), PrimitiveLiteral::Binary(_))
                 | (PrimitiveType::Binary, PrimitiveLiteral::Binary(_))
         )
+    }
+
+    /// Decode a PrimitiveLiteral from the serialized bound bytes that appear in manifests.
+    pub fn literal_from_bytes(&self, bytes: &[u8]) -> Result<PrimitiveLiteral, String> {
+        use crate::spec::types::values::PrimitiveLiteral as PL;
+
+        let literal = match self {
+            PrimitiveType::Boolean => {
+                let val = !(bytes.len() == 1 && bytes.first().copied().unwrap_or(0) == 0);
+                PL::Boolean(val)
+            }
+            PrimitiveType::Int | PrimitiveType::Date => {
+                let val = i32::from_le_bytes(
+                    bytes
+                        .try_into()
+                        .map_err(|_| "Invalid i32 bytes".to_string())?,
+                );
+                PL::Int(val)
+            }
+            PrimitiveType::Long
+            | PrimitiveType::Time
+            | PrimitiveType::Timestamp
+            | PrimitiveType::Timestamptz
+            | PrimitiveType::TimestampNs
+            | PrimitiveType::TimestamptzNs => {
+                let val = if bytes.len() == 4 {
+                    i32::from_le_bytes(
+                        bytes
+                            .try_into()
+                            .map_err(|_| "Invalid i32 bytes".to_string())?,
+                    ) as i64
+                } else {
+                    i64::from_le_bytes(
+                        bytes
+                            .try_into()
+                            .map_err(|_| "Invalid i64 bytes".to_string())?,
+                    )
+                };
+                PL::Long(val)
+            }
+            PrimitiveType::Float => {
+                let val = f32::from_le_bytes(
+                    bytes
+                        .try_into()
+                        .map_err(|_| "Invalid f32 bytes for float bound".to_string())?,
+                );
+                PL::Float(OrderedFloat(val))
+            }
+            PrimitiveType::Double => {
+                let val = if bytes.len() == 4 {
+                    f32::from_le_bytes(
+                        bytes
+                            .try_into()
+                            .map_err(|_| "Invalid f32 bytes for double bound".to_string())?,
+                    ) as f64
+                } else {
+                    f64::from_le_bytes(
+                        bytes
+                            .try_into()
+                            .map_err(|_| "Invalid f64 bytes for double bound".to_string())?,
+                    )
+                };
+                PL::Double(OrderedFloat(val))
+            }
+            PrimitiveType::String => {
+                let val = std::str::from_utf8(bytes)
+                    .map_err(|_| "Invalid UTF-8 in bound bytes".to_string())?
+                    .to_string();
+                PL::String(val)
+            }
+            PrimitiveType::Uuid => {
+                return Err("uuid bound decoding not supported".to_string());
+            }
+            PrimitiveType::Fixed(_) | PrimitiveType::Binary => PL::Binary(bytes.to_vec()),
+            PrimitiveType::Decimal { .. } => {
+                return Err("decimal bound decoding not supported".to_string());
+            }
+        };
+
+        Ok(literal)
     }
 }
 

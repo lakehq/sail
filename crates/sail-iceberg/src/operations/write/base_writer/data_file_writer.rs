@@ -12,10 +12,10 @@
 
 use std::collections::HashMap;
 
+use crate::operations::write::arrow_parquet::ParquetFileMeta;
+use crate::operations::write::WriteOutcome;
 use crate::spec::types::values::Literal;
 use crate::spec::{DataContentType, DataFile, DataFileFormat, Datum};
-use crate::writer::arrow_parquet::ParquetFileMeta;
-use crate::writer::WriteOutcome;
 
 pub struct DataFileWriter {
     pub partition_spec_id: i32,

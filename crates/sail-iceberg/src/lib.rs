@@ -10,26 +10,27 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-pub mod arrow_conversion;
 pub mod datasource;
 pub mod io;
+pub mod operations;
 pub mod options;
 pub mod physical_plan;
+pub mod schema_evolution;
 pub mod spec;
+pub mod table;
 pub mod table_format;
-pub mod transaction;
 pub mod utils;
-pub mod writer;
 
-pub use arrow_conversion::*;
+pub use datasource::type_converter::*;
 pub use datasource::*;
+pub use operations::action::*;
+pub use operations::append::*;
+pub use operations::snapshot::*;
+pub use operations::write::base_writer::*;
+pub use operations::write::file_writer::*;
+pub use operations::write::{IcebergWriter, WriteOutcome};
+pub use operations::Transaction;
 pub use options::*;
+pub use schema_evolution::*;
 pub use spec::*;
 pub use table_format::*;
-pub use transaction::action::*;
-pub use transaction::append::*;
-pub use transaction::snapshot::*;
-pub use transaction::Transaction;
-pub use writer::base_writer::*;
-pub use writer::file_writer::*;
-pub use writer::{IcebergWriter, WriteOutcome};

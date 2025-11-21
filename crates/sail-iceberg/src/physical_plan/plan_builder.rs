@@ -133,6 +133,7 @@ impl<'a> IcebergPlanBuilder<'a> {
             self.table_config.partition_columns.clone(),
             self.sink_mode.clone(),
             self.table_config.table_exists,
+            self.table_config.options.clone(),
         )))
     }
 

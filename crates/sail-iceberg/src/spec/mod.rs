@@ -17,6 +17,7 @@
 
 // [CREDIT]: https://raw.githubusercontent.com/apache/iceberg-rust/dc349284a4204c1a56af47fb3177ace6f9e899a0/crates/iceberg/src/spec/mod.rs
 
+pub mod avro_utils;
 pub mod catalog;
 pub mod encrypted_key;
 pub mod manifest;

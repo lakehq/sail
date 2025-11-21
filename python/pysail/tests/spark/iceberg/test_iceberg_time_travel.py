@@ -144,3 +144,43 @@ def test_iceberg_time_travel_by_ref_main_if_available(spark, tmp_path):
             raise
     finally:
         catalog.drop_table(identifier)
+
+
+def test_iceberg_time_travel_across_merge_schema(spark, tmp_path):
+    catalog = create_sql_catalog(tmp_path)
+    identifier = "default.tt_schema_evolution"
+    table = catalog.create_table(
+        identifier=identifier,
+        schema=Schema(
+            NestedField(field_id=1, name="id", field_type=LongType(), required=False),
+            NestedField(field_id=2, name="value", field_type=StringType(), required=False),
+        ),
+    )
+    try:
+        base_df = spark.createDataFrame([Row(id=1, value="base")])
+        base_df.write.format("iceberg").mode("overwrite").save(table.location())
+        table.refresh()
+        snapshot_id = table.current_snapshot().snapshot_id
+
+        evolved_df = spark.createDataFrame([Row(id=2, value="new", extra=10)])
+        (evolved_df.write.format("iceberg").mode("append").option("mergeSchema", "true").save(table.location()))
+
+        latest_df = spark.read.format("iceberg").load(table.location()).orderBy("id")
+        assert latest_df.columns == ["id", "value", "extra"]
+        latest_rows = latest_df.collect()
+        assert latest_rows[0].id == 1
+        assert latest_rows[0].extra is None
+        assert latest_rows[1].id == 2  # noqa: PLR2004
+        assert latest_rows[1].extra == 10  # noqa: PLR2004
+
+        tt_df = spark.read.format("iceberg").option("snapshotId", str(snapshot_id)).load(table.location()).orderBy("id")
+        tt_rows = tt_df.collect()
+        assert len(tt_rows) == 1
+        assert tt_rows[0].id == 1
+        assert tt_rows[0].value == "base"
+        if "extra" in tt_df.columns:
+            assert tt_df.select("extra").first().extra is None
+        else:
+            assert "extra" not in tt_df.columns
+    finally:
+        catalog.drop_table(identifier)

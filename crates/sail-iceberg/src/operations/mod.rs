@@ -12,12 +12,15 @@
 
 pub mod action;
 pub mod append;
+pub mod bootstrap;
 pub mod helpers;
 pub mod overwrite;
 pub mod snapshot;
+pub mod write;
 
 pub use action::*;
 pub use append::*;
+pub use bootstrap::*;
 pub use overwrite::*;
 pub use snapshot::*;
 

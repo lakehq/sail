@@ -27,7 +27,7 @@ use crate::spec::partition::PartitionSpec;
 use crate::spec::types::values::{Datum, Literal, PrimitiveLiteral};
 use crate::spec::types::{PrimitiveType, Type};
 use crate::spec::{DataFile, Manifest, ManifestContentType, ManifestList, Schema};
-use crate::utils::conversions::{iceberg_literal_to_scalar, scalar_to_iceberg_literal};
+use crate::utils::conversions::{scalar_to_primitive_literal, to_scalar};
 // TODO: Implement robust logical expression parsing for summary pruning
 
 /// Pruning statistics over Iceberg DataFiles
@@ -87,7 +87,17 @@ impl IcebergPruningStats {
             .map(|p| Type::Primitive(p.clone()))
             .unwrap_or_else(|| Type::Primitive(datum.r#type.clone()));
 
-        iceberg_literal_to_scalar(&Literal::Primitive(datum.literal.clone()), &iceberg_type)
+        match to_scalar(&Literal::Primitive(datum.literal.clone()), &iceberg_type) {
+            Ok(value) => value,
+            Err(err) => {
+                log::warn!(
+                    "Failed to convert literal for field {} during pruning: {}",
+                    field_id,
+                    err
+                );
+                datafusion::common::scalar::ScalarValue::Null
+            }
+        }
     }
 }
 
@@ -275,11 +285,11 @@ pub fn prune_manifests_by_partition_summaries<'a>(
                             let lower = summary
                                 .lower_bound_bytes
                                 .as_ref()
-                                .and_then(|b| decode_bound_bytes(prim_ty, b).ok());
+                                .and_then(|b| prim_ty.literal_from_bytes(b).ok());
                             let upper = summary
                                 .upper_bound_bytes
                                 .as_ref()
-                                .and_then(|b| decode_bound_bytes(prim_ty, b).ok());
+                                .and_then(|b| prim_ty.literal_from_bytes(b).ok());
 
                             if let (Some(lb), Some(ub)) = (lower.as_ref(), upper.as_ref()) {
                                 if lit < lb || lit > ub {
@@ -310,11 +320,11 @@ pub fn prune_manifests_by_partition_summaries<'a>(
                             let lower = summary
                                 .lower_bound_bytes
                                 .as_ref()
-                                .and_then(|b| decode_bound_bytes(prim_ty, b).ok());
+                                .and_then(|b| prim_ty.literal_from_bytes(b).ok());
                             let upper = summary
                                 .upper_bound_bytes
                                 .as_ref()
-                                .and_then(|b| decode_bound_bytes(prim_ty, b).ok());
+                                .and_then(|b| prim_ty.literal_from_bytes(b).ok());
                             if let (Some(lb), Some(ub)) = (lower.as_ref(), upper.as_ref()) {
                                 let mut any_in = false;
                                 for lit in lits {
@@ -353,11 +363,11 @@ pub fn prune_manifests_by_partition_summaries<'a>(
                             let lower = summary
                                 .lower_bound_bytes
                                 .as_ref()
-                                .and_then(|b| decode_bound_bytes(prim_ty, b).ok());
+                                .and_then(|b| prim_ty.literal_from_bytes(b).ok());
                             let upper = summary
                                 .upper_bound_bytes
                                 .as_ref()
-                                .and_then(|b| decode_bound_bytes(prim_ty, b).ok());
+                                .and_then(|b| prim_ty.literal_from_bytes(b).ok());
                             if let (Some(lb), Some(ub)) = (lower.as_ref(), upper.as_ref()) {
                                 if let Some((ref qmin, _incl_min)) = range.min {
                                     if qmin > ub {
@@ -400,10 +410,7 @@ pub fn prune_manifest_entries(
         .collect()
 }
 
-fn collect_identity_eq_filters(
-    schema: &Schema,
-    filters: &[Expr],
-) -> Vec<(i32, crate::spec::types::values::PrimitiveLiteral)> {
+fn collect_identity_eq_filters(schema: &Schema, filters: &[Expr]) -> Vec<(i32, PrimitiveLiteral)> {
     fn strip(expr: &Expr) -> &Expr {
         match expr {
             Expr::Cast(c) => strip(&c.expr),
@@ -414,11 +421,7 @@ fn collect_identity_eq_filters(
 
     let mut result = Vec::new();
 
-    fn visit_expr(
-        acc: &mut Vec<(i32, crate::spec::types::values::PrimitiveLiteral)>,
-        schema: &Schema,
-        e: &Expr,
-    ) {
+    fn visit_expr(acc: &mut Vec<(i32, PrimitiveLiteral)>, schema: &Schema, e: &Expr) {
         match e {
             Expr::BinaryExpr(BinaryExpr { left, op, right }) if *op == Operator::Eq => {
                 let l = strip(left);
@@ -429,7 +432,7 @@ fn collect_identity_eq_filters(
                     if let Expr::Literal(sv, _) = r {
                         let col_name = c.name.clone();
                         if let Some(field) = schema.field_by_name(&col_name) {
-                            if let Some(pl) = scalar_to_primitive_literal(sv) {
+                            if let Ok(pl) = scalar_to_primitive_literal(sv) {
                                 acc.push((field.id, pl));
                                 return;
                             }
@@ -442,7 +445,7 @@ fn collect_identity_eq_filters(
                     if let Expr::Column(c) = r {
                         let col_name = c.name.clone();
                         if let Some(field) = schema.field_by_name(&col_name) {
-                            if let Some(pl) = scalar_to_primitive_literal(sv) {
+                            if let Ok(pl) = scalar_to_primitive_literal(sv) {
                                 acc.push((field.id, pl));
                             }
                         }
@@ -466,7 +469,7 @@ fn collect_identity_eq_filters(
 fn collect_identity_in_filters(
     schema: &Schema,
     filters: &[Expr],
-) -> std::collections::HashMap<i32, Vec<crate::spec::types::values::PrimitiveLiteral>> {
+) -> std::collections::HashMap<i32, Vec<PrimitiveLiteral>> {
     fn strip(expr: &Expr) -> &Expr {
         match expr {
             Expr::Cast(c) => strip(&c.expr),
@@ -478,7 +481,7 @@ fn collect_identity_in_filters(
     let mut result: std::collections::HashMap<_, Vec<_>> = std::collections::HashMap::new();
 
     fn visit_expr(
-        acc: &mut std::collections::HashMap<i32, Vec<crate::spec::types::values::PrimitiveLiteral>>,
+        acc: &mut std::collections::HashMap<i32, Vec<PrimitiveLiteral>>,
         schema: &Schema,
         e: &Expr,
     ) {
@@ -490,7 +493,7 @@ fn collect_identity_in_filters(
                         let mut vals = Vec::new();
                         for item in &in_list.list {
                             if let Expr::Literal(ref sv, _) = item {
-                                if let Some(pl) = scalar_to_primitive_literal(sv) {
+                                if let Ok(pl) = scalar_to_primitive_literal(sv) {
                                     vals.push(pl);
                                 }
                             }
@@ -517,8 +520,8 @@ fn collect_identity_in_filters(
 
 #[derive(Clone, Default)]
 struct RangeConstraint {
-    min: Option<(crate::spec::types::values::PrimitiveLiteral, bool)>,
-    max: Option<(crate::spec::types::values::PrimitiveLiteral, bool)>,
+    min: Option<(PrimitiveLiteral, bool)>,
+    max: Option<(PrimitiveLiteral, bool)>,
 }
 
 fn collect_identity_range_filters(
@@ -533,10 +536,7 @@ fn collect_identity_range_filters(
         }
     }
 
-    fn tighten_min(
-        cur: &mut Option<(crate::spec::types::values::PrimitiveLiteral, bool)>,
-        cand: (crate::spec::types::values::PrimitiveLiteral, bool),
-    ) {
+    fn tighten_min(cur: &mut Option<(PrimitiveLiteral, bool)>, cand: (PrimitiveLiteral, bool)) {
         match cur {
             None => *cur = Some(cand),
             Some((ref mut v, ref mut incl)) => {
@@ -547,10 +547,7 @@ fn collect_identity_range_filters(
             }
         }
     }
-    fn tighten_max(
-        cur: &mut Option<(crate::spec::types::values::PrimitiveLiteral, bool)>,
-        cand: (crate::spec::types::values::PrimitiveLiteral, bool),
-    ) {
+    fn tighten_max(cur: &mut Option<(PrimitiveLiteral, bool)>, cand: (PrimitiveLiteral, bool)) {
         match cur {
             None => *cur = Some(cand),
             Some((ref mut v, ref mut incl)) => {
@@ -577,7 +574,7 @@ fn collect_identity_range_filters(
                 Operator::Gt | Operator::GtEq => {
                     if let (Expr::Column(c), Expr::Literal(sv, _)) = (l, r) {
                         if let Some(field) = schema.field_by_name(&c.name) {
-                            if let Some(pl) = scalar_to_primitive_literal(sv) {
+                            if let Ok(pl) = scalar_to_primitive_literal(sv) {
                                 let entry = acc.entry(field.id).or_default();
                                 tighten_min(&mut entry.min, (pl, *op == Operator::GtEq));
                             }
@@ -587,7 +584,7 @@ fn collect_identity_range_filters(
                 Operator::Lt | Operator::LtEq => {
                     if let (Expr::Column(c), Expr::Literal(sv, _)) = (l, r) {
                         if let Some(field) = schema.field_by_name(&c.name) {
-                            if let Some(pl) = scalar_to_primitive_literal(sv) {
+                            if let Ok(pl) = scalar_to_primitive_literal(sv) {
                                 let entry = acc.entry(field.id).or_default();
                                 tighten_max(&mut entry.max, (pl, *op == Operator::LtEq));
                             }
@@ -607,72 +604,4 @@ fn collect_identity_range_filters(
         visit_expr(&mut result, schema, expr);
     }
     result
-}
-
-fn scalar_to_primitive_literal(
-    sv: &datafusion::common::scalar::ScalarValue,
-) -> Option<PrimitiveLiteral> {
-    // Use the unified conversion function
-    scalar_to_iceberg_literal(sv, &sv.data_type())
-        .ok()
-        .and_then(|lit| match lit {
-            Literal::Primitive(p) => Some(p),
-            _ => None,
-        })
-}
-
-fn decode_bound_bytes(
-    ty: &PrimitiveType,
-    bytes: &[u8],
-) -> Result<crate::spec::types::values::PrimitiveLiteral, String> {
-    use crate::spec::types::values::PrimitiveLiteral as PL;
-    let pl = match ty {
-        PrimitiveType::Boolean => {
-            let val = !(bytes.len() == 1 && bytes[0] == 0u8);
-            PL::Boolean(val)
-        }
-        PrimitiveType::Int | PrimitiveType::Date => {
-            let val = i32::from_le_bytes(bytes.try_into().map_err(|_| "Invalid i32 bytes")?);
-            PL::Int(val)
-        }
-        PrimitiveType::Long
-        | PrimitiveType::Time
-        | PrimitiveType::Timestamp
-        | PrimitiveType::Timestamptz
-        | PrimitiveType::TimestampNs
-        | PrimitiveType::TimestamptzNs => {
-            let val = if bytes.len() == 4 {
-                i32::from_le_bytes(bytes.try_into().map_err(|_| "Invalid i32 bytes")?) as i64
-            } else {
-                i64::from_le_bytes(bytes.try_into().map_err(|_| "Invalid i64 bytes")?)
-            };
-            PL::Long(val)
-        }
-        PrimitiveType::Float => {
-            let val = f32::from_le_bytes(bytes.try_into().map_err(|_| "Invalid f32 bytes")?);
-            PL::Float(ordered_float::OrderedFloat(val))
-        }
-        PrimitiveType::Double => {
-            let val = if bytes.len() == 4 {
-                f32::from_le_bytes(bytes.try_into().map_err(|_| "Invalid f32 bytes")?) as f64
-            } else {
-                f64::from_le_bytes(bytes.try_into().map_err(|_| "Invalid f64 bytes")?)
-            };
-            PL::Double(ordered_float::OrderedFloat(val))
-        }
-        PrimitiveType::String => {
-            let val = std::str::from_utf8(bytes)
-                .map_err(|_| "Invalid UTF-8")?
-                .to_string();
-            PL::String(val)
-        }
-        PrimitiveType::Uuid => {
-            return Err("uuid bound decoding not supported".to_string());
-        }
-        PrimitiveType::Fixed(_) | PrimitiveType::Binary => PL::Binary(bytes.to_vec()),
-        PrimitiveType::Decimal { .. } => {
-            return Err("decimal bound decoding not supported".to_string());
-        }
-    };
-    Ok(pl)
 }

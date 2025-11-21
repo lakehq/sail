@@ -14,5 +14,6 @@ pub mod expr_adapter;
 pub mod expressions;
 pub mod provider;
 pub mod pruning;
+pub mod type_converter;
 
 pub use provider::*;
