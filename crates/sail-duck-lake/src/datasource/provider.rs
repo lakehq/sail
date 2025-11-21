@@ -288,6 +288,8 @@ impl DuckLakeTableProvider {
         (pruning_filters, parquet_pushdown_filters)
     }
 
+    // TODO: Add extraction of stats-based filters for column statistics pushdown.
+
     fn extract_partition_filters(
         filters: &[Expr],
         columns: &[ColumnInfo],

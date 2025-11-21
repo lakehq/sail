@@ -31,6 +31,7 @@ pub trait DuckLakeMetaStore: Send + Sync {
 
     async fn snapshot_by_id(&self, snapshot_id: u64) -> DataFusionResult<DuckLakeSnapshot>;
 
+    // TODO: Add paginated or streaming metadata APIs for listing data files.
     async fn list_data_files(
         &self,
         table_id: crate::spec::TableIndex,

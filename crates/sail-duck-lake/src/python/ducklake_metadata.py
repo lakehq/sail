@@ -216,6 +216,8 @@ def list_data_files(
     snapshot_id: int | None,
     partition_filters: list[tuple[int, list[str]]] | None = None,
 ) -> list[dict[str, Any]]:
+    # TODO: Add optional stats-based filter pushdown using ducklake_file_column_stats.
+    # TODO: Add iterator-based API for lazy or paginated data file loading.
     base_select = """
         select data_file_id, table_id, begin_snapshot, end_snapshot, file_order,
                path, path_is_relative, file_format, record_count, file_size_bytes,
@@ -240,38 +242,39 @@ def list_data_files(
             if not values:
                 continue
             key_param = f"pf_{idx}_key"
-            value_param_names_for_filter: list[str] = []
-            for j, v in enumerate(values):
-                value_param = f"pf_{idx}_v_{j}"
-                value_param_names_for_filter.append(value_param)
-                params_active[value_param] = v
-                params_asof[value_param] = v
+            values_param = f"pf_{idx}_values"
             exists_clauses.append(
                 f"exists (select 1 from ducklake_file_partition_value pv_{idx} "
                 f"where pv_{idx}.data_file_id = ducklake_data_file.data_file_id "
                 f"and pv_{idx}.partition_key_index = :{key_param} "
-                f"and pv_{idx}.partition_value in ("
-                + ", ".join(f":{name}" for name in value_param_names_for_filter)
-                + "))"
+                f"and pv_{idx}.partition_value in :{values_param})"
             )
             params_active[key_param] = int(partition_key_index)
             params_asof[key_param] = int(partition_key_index)
+            params_active[values_param] = list(values)
+            params_asof[values_param] = list(values)
         if exists_clauses:
             where_clauses_active.append(" and ".join(exists_clauses))
             where_clauses_asof.append(" and ".join(exists_clauses))
 
-    sql_active = text(
-        base_select
-        + " where "
-        + " and ".join(where_clauses_active)
-        + " order by file_order asc"
-    )
-    sql_asof = text(
-        base_select
-        + " where "
-        + " and ".join(where_clauses_asof)
-        + " order by file_order asc"
-    )
+    def _build_sql(where_clauses: list[str], params: dict[str, Any]):
+        sql = text(
+            base_select
+            + " where "
+            + " and ".join(where_clauses)
+            + " order by file_order asc"
+        )
+        expanding_params = [
+            bindparam(name, expanding=True)
+            for name, value in params.items()
+            if isinstance(value, list)
+        ]
+        if expanding_params:
+            sql = sql.bindparams(*expanding_params)
+        return sql
+
+    sql_active = _build_sql(where_clauses_active, params_active)
+    sql_asof = _build_sql(where_clauses_asof, params_asof)
     with _get_engine(url).connect() as conn:
         if snapshot_id is None:
             rows = conn.execute(sql_active, params_active).all()
