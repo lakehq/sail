@@ -1,7 +1,7 @@
 from collections import Counter
 from inspect import cleandoc
 
-from pysail.util.pyspark_function_scanner import _parse_and_scan
+from pysail.util.pyspark_function_scanner import parse_and_scan_code
 
 
 def test_import_module_with_alias():
@@ -14,7 +14,7 @@ def test_import_module_with_alias():
         W.partitionBy("x")
         """
     )
-    result = _parse_and_scan(code)
+    result = parse_and_scan_code(code)
     assert result == Counter(
         {
             ("pyspark.sql.functions", "col"): 1,
@@ -31,7 +31,7 @@ def test_import_function_directly():
         lit("x")
         """
     )
-    result = _parse_and_scan(code)
+    result = parse_and_scan_code(code)
     assert result == Counter(
         {
             ("pyspark.sql.functions", "lit"): 1,
@@ -50,7 +50,7 @@ def test_import_whole_module():
         window.orderBy("y")
         """
     )
-    result = _parse_and_scan(code)
+    result = parse_and_scan_code(code)
     assert result == Counter(
         {
             ("pyspark.sql.functions", "lit"): 1,

@@ -51,7 +51,6 @@ class PysparkFunctionScanner(ast.NodeVisitor):
                 module_adr = f"{node.module}.{alias.name}".lower()
                 if module_adr in TARGET_MODULES:
                     self.module_aliases[alias.asname or alias.name] = module_adr
-
         self.generic_visit(node)
 
     def visit_Call(self, node: ast.Call) -> None:
@@ -63,23 +62,13 @@ class PysparkFunctionScanner(ast.NodeVisitor):
         elif isinstance(func, ast.Name) and func.id in self.direct_imports:
             origin, real_name = self.direct_imports[func.id]
             self.calls[(origin, real_name)] += 1
-
         self.generic_visit(node)
 
 
-def _sanitize_code(source: str) -> str:
-    """Comment out IPython magics/shell commands so ast.parse won't fail."""
-    prefixes = ("%%", "%", "!", "?")
-    return "\n".join(
-        ("# " + ln if ln.lstrip().startswith(prefixes) else ln)
-        for ln in source.splitlines()
-    )
-
-
-def _parse_and_scan(source: str) -> Counter:
+def parse_and_scan_code(source: str) -> Counter:
     scanner = PysparkFunctionScanner()
     try:
-        tree = ast.parse(_sanitize_code(source))
+        tree = ast.parse(source)
     except SyntaxError:
         logging.error("Failed to parse source code.")
         return Counter()
@@ -87,48 +76,49 @@ def _parse_and_scan(source: str) -> Counter:
     return scanner.calls
 
 
-def scan_py_file(path: Path) -> Counter:
+def scan_file(path: Path) -> Counter:
     try:
-        text = path.read_text(encoding="utf-8")
-    except (IOError, UnicodeDecodeError):
+        raw_content = path.read_text(encoding="utf-8")
+        if path.suffix == ".ipynb":
+            nb = json.loads(raw_content)
+            # only keep code cells
+            code_cells = [
+                c["source"] for c in nb.get("cells", []) if c.get("cell_type") == "code"
+            ]
+            code = "\n".join(
+                "".join(lines) if isinstance(lines, list) else lines
+                for lines in code_cells
+            )
+            # sanitize magic commands by commenting them out
+            clean_code = "\n".join(
+                f"# {ln}" if ln.lstrip().startswith(("%", "!", "?")) else ln
+                for ln in code.splitlines()
+            )
+            return parse_and_scan_code(clean_code)
+        elif path.suffix == ".py":
+            return parse_and_scan_code(raw_content)
+        else:
+            raise ValueError(f"Unsupported file type {path.suffix}")
+    except (IOError, UnicodeDecodeError, json.JSONDecodeError):
         logging.error("Failed to read file: %s", path)
         return Counter()
-    return _parse_and_scan(text)
-
-
-def scan_ipynb_file(path: Path) -> Counter:
-    try:
-        nb = json.loads(path.read_text(encoding="utf-8"))
-    except (IOError, json.JSONDecodeError):
-        logging.error("Failed to read/decode notebook JSON: %s", path)
-        return Counter()
-
-    cells = nb.get("cells", [])
-    code = []
-    for c in cells:
-        if c.get("cell_type") == "code":
-            src = c.get("source", "")
-            code.append("".join(src) if isinstance(src, list) else src)
-
-    return _parse_and_scan("\n\n".join(code))
 
 
 def scan_folder(base_path: Path) -> Counter:
     """Recursively scans a directory for .py and .ipynb files."""
     total = Counter()
 
-    for file_path in base_path.rglob("*"):
-        if file_path.suffix == ".py":
-            total.update(scan_py_file(file_path))
-        elif file_path.suffix == ".ipynb":
-            total.update(scan_ipynb_file(file_path))
+    for file_path in filter(
+        lambda p: p.suffix in {".py", ".ipynb"}, base_path.rglob("*")
+    ):
+        total.update(scan_file(file_path))
 
     return total
 
 
 def main():
     parser = argparse.ArgumentParser(
-        description="Scan Python files and Jupyter notebooks for pyspark.sql function usage."
+        description=f"Scan Python files and Jupyter notebooks for usage of {', '.join(TARGET_MODULES)}."
     )
     parser.add_argument("directory", help="Directory to scan recursively")
 
@@ -153,7 +143,7 @@ def main():
     if args.output == "text":
         print("\n=== Usage Counts ===")
         if not total:
-            print("No PySpark function calls found.")
+            print(f"No function calls found for {', '.join(TARGET_MODULES)}.")
             return
 
         for (module, func), count in total.most_common():
