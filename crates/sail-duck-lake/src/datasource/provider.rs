@@ -6,7 +6,6 @@ use async_trait::async_trait;
 use datafusion::arrow::datatypes::SchemaRef as ArrowSchemaRef;
 use datafusion::catalog::memory::DataSourceExec;
 use datafusion::catalog::Session;
-use datafusion::common::scalar::ScalarValue;
 use datafusion::common::stats::{ColumnStatistics, Precision, Statistics};
 use datafusion::common::ToDFSchema;
 use datafusion::config::TableParquetOptions;
