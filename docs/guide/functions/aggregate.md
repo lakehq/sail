@@ -73,4 +73,3 @@ rank: 2
 | `histogram_numeric`     | :construction:     |
 | `hll_sketch_agg`        | :construction:     |
 | `hll_union_agg`         | :construction:     |
-| `percentile_disc`       | :construction:     |
