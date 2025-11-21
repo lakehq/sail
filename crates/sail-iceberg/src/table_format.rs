@@ -13,7 +13,7 @@
 use std::sync::Arc;
 
 use datafusion::catalog::Session;
-use datafusion::common::{plan_err, DataFusionError, Result};
+use datafusion::common::Result;
 use datafusion::datasource::TableProvider;
 use url::Url;
 
@@ -30,32 +30,6 @@ pub async fn create_iceberg_provider(
     let table = Table::load(ctx, table_url).await?;
     let provider = table.to_provider(&options)?;
     Ok(Arc::new(provider))
-}
-
-/// Parse a table URL from a path string
-pub async fn parse_table_url(ctx: &dyn Session, paths: Vec<String>) -> Result<Url> {
-    if paths.len() != 1 {
-        return plan_err!(
-            "Iceberg table requires exactly one path, got {}",
-            paths.len()
-        );
-    }
-
-    let path = &paths[0];
-    let mut table_url = Url::parse(path).map_err(|e| DataFusionError::External(Box::new(e)))?;
-
-    if !table_url.path().ends_with('/') {
-        table_url.set_path(&format!("{}/", table_url.path()));
-    }
-
-    // Validate that we can access the object store
-    let _object_store = ctx
-        .runtime_env()
-        .object_store_registry
-        .get_store(&table_url)
-        .map_err(|e| DataFusionError::External(Box::new(e)))?;
-
-    Ok(table_url)
 }
 
 /// Load metadata and pick snapshot per options (precedence: snapshot_id > ref > timestamp > current).
