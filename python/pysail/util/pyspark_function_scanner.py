@@ -1,8 +1,8 @@
 #!/usr/bin/env python3
 """
-The purpose of this script is to scan Python files and Jupyter notebooks
-for usage of functions from a specified set of modules (`TARGET_MODULES`).
-It returns the total count of function calls per module and function name.
+Scan Python files and Jupyter notebooks for usage of functions from
+specified modules (TARGET_MODULES). Returns total count of function
+calls per module and function name.
 """
 
 import argparse
@@ -11,146 +11,175 @@ import json
 import logging
 from collections import Counter
 from pathlib import Path
-from typing import Optional, Set, Tuple, Dict
-
 
 logging.basicConfig(level=logging.INFO, format="%(levelname)s: %(message)s")
 
-# Relevant modules to track
-TARGET_MODULES = {
-    "pyspark.sql.functions",
-    "pyspark.sql.window",
-}
+# Modules to track (stored lowercase for case-insensitive matching)
+TARGET_MODULES: frozenset[str] = frozenset(
+    {
+        "pyspark.sql.functions",
+        "pyspark.sql.window",
+    }
+)
 
-# Derived set of package roots to optimize checks (e.g., "pyspark.sql")
-TARGET_PACKAGES = {
-    module.rsplit(".", 1)[0] for module in TARGET_MODULES if "." in module
-}
+# Parent packages for "from X import module" style imports
+TARGET_PACKAGES: frozenset[str] = frozenset(
+    m.rsplit(".", 1)[0] for m in TARGET_MODULES if "." in m
+)
+
+SUPPORTED_EXTENSIONS = {".py", ".ipynb"}
+MAGIC_PREFIXES = ("%", "!", "?")
 
 
 class PysparkFunctionScanner(ast.NodeVisitor):
-    """
-    AST Visitor that tracks imports and function calls for specific target modules.
-    """
+    """AST visitor tracking imports and function calls for target modules."""
+
+    __slots__ = ("module_aliases", "direct_imports", "calls")
 
     def __init__(self):
-        self.module_aliases: Dict[str, str] = {}
-        self.direct_imports: Dict[str, Tuple[str, str]] = {}
-        self.calls: Counter = Counter()
-        self.wildcard_warning = False
+        self.module_aliases: dict[str, str] = {}  # alias -> full module
+        self.direct_imports: dict[str, tuple[str, str]] = (
+            {}
+        )  # local name -> (module, func)
+        self.calls: Counter[tuple[str, str]] = Counter()
 
-    def _register_alias(self, full_name: str, alias: Optional[str] = None) -> None:
-        """Registers a local alias for a tracked module."""
-        if full_name in TARGET_MODULES:
+    def _register_module_alias(self, full_name: str, alias: str | None = None) -> None:
+        """Register an alias for a tracked module."""
+        name_lower = full_name.lower()
+        if name_lower in TARGET_MODULES:
             local_name = alias or full_name.rsplit(".", 1)[-1]
-            self.module_aliases[local_name] = full_name
+            self.module_aliases[local_name] = name_lower
 
     def visit_Import(self, node: ast.Import) -> None:
+        # import pyspark.sql.functions as F
         for alias in node.names:
-            self._register_alias(alias.name, alias.asname)
+            self._register_module_alias(alias.name, alias.asname)
         self.generic_visit(node)
 
     def visit_ImportFrom(self, node: ast.ImportFrom) -> None:
         if not node.module:
             return self.generic_visit(node)
 
-        module_name = node.module.lower()
+        module_lower = node.module.lower()
 
-        # Case 1: from pyspark.sql.functions import col
-        if module_name in TARGET_MODULES:
+        if module_lower in TARGET_MODULES:
+            # from pyspark.sql.functions import col, lit as L
             for alias in node.names:
                 if alias.name == "*":
-                    self.wildcard_warning = True
+                    logging.warning(
+                        "Wildcard import from %s; calls may be missed", node.module
+                    )
                     continue
                 local = alias.asname or alias.name
-                self.direct_imports[local] = (module_name, alias.name)
+                self.direct_imports[local] = (module_lower, alias.name)
 
-        # Case 2: from pyspark.sql import functions as F
-        elif module_name in TARGET_PACKAGES:
+        elif module_lower in TARGET_PACKAGES:
+            # from pyspark.sql import functions as F
             for alias in node.names:
-                full_imported_module = f"{module_name}.{alias.name}".lower()
-                if full_imported_module in TARGET_MODULES:
-                    self._register_alias(
-                        full_imported_module, alias.asname or alias.name
-                    )
+                full_module = f"{module_lower}.{alias.name.lower()}"
+                if full_module in TARGET_MODULES:
+                    self._register_module_alias(full_module, alias.asname or alias.name)
 
         self.generic_visit(node)
 
     def visit_Call(self, node: ast.Call) -> None:
         func = node.func
 
-        # Case: F.col(...) -> where F is an alias for a target module
         if isinstance(func, ast.Attribute) and isinstance(func.value, ast.Name):
-            alias = func.value.id
-            if alias in self.module_aliases:
-                self.calls[(self.module_aliases[alias], func.attr)] += 1
+            # F.col(...) where F is module alias
+            module = self.module_aliases.get(func.value.id)
+            if module:
+                self.calls[(module, func.attr)] += 1
 
-        # Case: col(...) -> where col was imported directly
-        elif isinstance(func, ast.Name) and func.id in self.direct_imports:
-            origin, real_name = self.direct_imports[func.id]
-            self.calls[(origin, real_name)] += 1
+        elif isinstance(func, ast.Name):
+            # col(...) where col was directly imported
+            origin = self.direct_imports.get(func.id)
+            if origin:
+                self.calls[origin] += 1
 
         self.generic_visit(node)
 
 
-def parse_and_scan_code(source: str) -> Counter:
-    scanner = PysparkFunctionScanner()
+def parse_and_scan_code(source: str) -> Counter[tuple[str, str]]:
+    """Parse source code and return function call counts."""
     try:
         tree = ast.parse(source)
-    except SyntaxError:
-        logging.error("Failed to parse source code.")
+    except SyntaxError as e:
+        logging.error("Syntax error: %s", e)
         return Counter()
+
+    scanner = PysparkFunctionScanner()
     scanner.visit(tree)
     return scanner.calls
 
 
-def scan_file(path: Path) -> Counter:
+def extract_notebook_code(content: str) -> str:
+    """Extract Python code from Jupyter notebook JSON."""
+    nb = json.loads(content)
+    lines = []
+
+    for cell in nb.get("cells", []):
+        if cell.get("cell_type") != "code":
+            continue
+        source = cell.get("source", [])
+        code = "".join(source) if isinstance(source, list) else source
+        lines.append(code)
+
+    # Comment out magic commands to avoid syntax errors
+    return "\n".join(
+        f"# {ln}" if ln.lstrip().startswith(MAGIC_PREFIXES) else ln for ln in lines
+    )
+
+
+def scan_file(path: Path) -> Counter[tuple[str, str]]:
+    """Scan a single .py or .ipynb file."""
     try:
-        raw_content = path.read_text(encoding="utf-8")
+        content = path.read_text(encoding="utf-8")
+
         if path.suffix == ".ipynb":
-            nb = json.loads(raw_content)
-            # only keep code cells
-            code_cells = [
-                c["source"] for c in nb.get("cells", []) if c.get("cell_type") == "code"
-            ]
-            code = "\n".join(
-                "".join(lines) if isinstance(lines, list) else lines
-                for lines in code_cells
-            )
-            # sanitize magic commands by commenting them out
-            clean_code = "\n".join(
-                f"# {ln}" if ln.lstrip().startswith(("%", "!", "?")) else ln
-                for ln in code.splitlines()
-            )
-            return parse_and_scan_code(clean_code)
-        elif path.suffix == ".py":
-            return parse_and_scan_code(raw_content)
-        else:
-            raise ValueError(f"Unsupported file type {path.suffix}")
-    except (IOError, UnicodeDecodeError, json.JSONDecodeError):
-        logging.error("Failed to read file: %s", path)
+            content = extract_notebook_code(content)
+
+        return parse_and_scan_code(content)
+
+    except (OSError, json.JSONDecodeError) as e:
+        logging.error("Failed to read %s: %s", path, e)
         return Counter()
 
 
-def scan_folder(base_path: Path) -> Counter:
-    """Recursively scans a directory for .py and .ipynb files."""
-    total = Counter()
+def scan_directory(base: Path) -> Counter[tuple[str, str]]:
+    """Recursively scan directory for .py and .ipynb files."""
+    total: Counter[tuple[str, str]] = Counter()
 
-    for file_path in filter(
-        lambda p: p.suffix in {".py", ".ipynb"}, base_path.rglob("*")
-    ):
-        total.update(scan_file(file_path))
+    for path in base.rglob("*"):
+        if path.suffix in SUPPORTED_EXTENSIONS:
+            total.update(scan_file(path))
 
     return total
 
 
-def main():
-    parser = argparse.ArgumentParser(
-        description=f"Scan Python files and Jupyter notebooks for usage of {', '.join(TARGET_MODULES)}."
-    )
-    parser.add_argument("directory", help="Directory to scan recursively")
+def format_output(counts: Counter[tuple[str, str]], fmt: str) -> str:
+    """Format results as text or JSON."""
+    if fmt == "json":
+        results = [
+            {"module": mod, "function": func, "count": cnt}
+            for (mod, func), cnt in counts.most_common()
+        ]
+        return json.dumps(results, indent=2)
 
-    # Optional output format argument for machine readable result
+    if not counts:
+        return f"No function calls found for {', '.join(sorted(TARGET_MODULES))}."
+
+    lines = ["", "=== Usage Counts ==="]
+    for (mod, func), cnt in counts.most_common():
+        lines.append(f"  {mod}.{func}: {cnt}")
+    return "\n".join(lines)
+
+
+def main() -> None:
+    parser = argparse.ArgumentParser(
+        description=f"Scan Python files for usage of {', '.join(sorted(TARGET_MODULES))}."
+    )
+    parser.add_argument("directory", type=Path, help="Directory to scan recursively")
     parser.add_argument(
         "-o",
         "--output",
@@ -160,30 +189,14 @@ def main():
     )
     args = parser.parse_args()
 
-    base = Path(args.directory)
-    if not base.exists():
-        raise SystemExit(f"Directory not found: {base}")
+    if not args.directory.exists():
+        raise SystemExit(f"Directory not found: {args.directory}")
 
-    logging.info("Starting scan in directory: %s", base)
-    total = scan_folder(base)
+    logging.info("Scanning: %s", args.directory)
+    counts = scan_directory(args.directory)
     logging.info("Scan complete.")
 
-    if args.output == "text":
-        print("\n=== Usage Counts ===")
-        if not total:
-            print(f"No function calls found for {', '.join(TARGET_MODULES)}.")
-            return
-
-        for (module, func), count in total.most_common():
-            print(f"  {module}.{func}: {count}")
-
-    elif args.output == "json":
-        # Convert Counter output to a list of dicts for JSON serialization
-        results = [
-            {"module": mod, "function": func, "count": count}
-            for (mod, func), count in total.most_common()
-        ]
-        print(json.dumps(results, indent=2))
+    print(format_output(counts, args.output))
 
 
 if __name__ == "__main__":
