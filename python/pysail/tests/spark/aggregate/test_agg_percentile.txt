@@ -233,25 +233,25 @@ root
 +------------+
 
 # Test 23: Percentile with interval types (YearMonth)
->>> spark.sql("SELECT percentile(col, 0.5) FROM VALUES (interval '0 months'), (interval '10 months') AS tab(col)").show(truncate=False)
+>>> spark.sql("SELECT percentile(col, 0.5) as median FROM VALUES (interval '0 months'), (interval '10 months') AS tab(col)").show(truncate=False)
 +----------------------------+
-|percentile(col, 0.5, 1)     |
+|median                      |
 +----------------------------+
 |INTERVAL '0-5' YEAR TO MONTH|
 +----------------------------+
 
 # Test 24: Percentile with interval types (DayTime)
->>> spark.sql("SELECT percentile(col, 0.5) FROM VALUES (interval '0 seconds'), (interval '10 seconds') AS tab(col)").show(truncate=False)
-+-------------------------------+
-|percentile(col, 0.5, 1)        |
-+-------------------------------+
-|INTERVAL '0 00:00:05' DAY TO SE|
-+-------------------------------+
+>>> spark.sql("SELECT percentile(col, 0.5) as median FROM VALUES (interval '0 seconds'), (interval '10 seconds') AS tab(col)").show(truncate=False)
++-----------------------------------+
+|median                             |
++-----------------------------------+
+|INTERVAL '0 00:00:05' DAY TO SECOND|
++-----------------------------------+
 
 # Test 25: Percentile with interval types and NULLs
->>> spark.sql("SELECT percentile(col, 0.5) FROM VALUES (interval '0 months'), null, (interval '10 months') AS tab(col)").show(truncate=False)
+>>> spark.sql("SELECT percentile(col, 0.5) as median FROM VALUES (interval '0 months'), null, (interval '10 months') AS tab(col)").show(truncate=False)
 +----------------------------+
-|percentile(col, 0.5, 1)     |
+|median                      |
 +----------------------------+
 |INTERVAL '0-5' YEAR TO MONTH|
 +----------------------------+
