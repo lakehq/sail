@@ -2,7 +2,7 @@ use async_trait::async_trait;
 use datafusion::common::{DataFusionError, Result as DataFusionResult};
 use pyo3::prelude::PyAnyMethods;
 use pyo3::type_object::PyTypeInfo;
-use pyo3::{PyResult, Python};
+use pyo3::{FromPyObject, PyResult, Python};
 use serde::Deserialize;
 
 use crate::metadata::{DuckLakeMetaStore, DuckLakeSnapshot, DuckLakeTable};
@@ -12,16 +12,17 @@ use crate::spec::{
     SnapshotInfo, TableIndex, TableInfo,
 };
 
-#[derive(Deserialize)]
+#[derive(Deserialize, FromPyObject)]
+#[pyo3(from_item_all)]
 struct LoadTableResult {
     schema_info: PySchemaInfo,
     table_info: PyTableInfo,
     columns: Vec<PyColumnInfo>,
-    #[serde(default)]
     partition_fields: Vec<PyPartitionField>,
 }
 
-#[derive(Deserialize)]
+#[derive(Deserialize, FromPyObject)]
+#[pyo3(from_item_all)]
 struct PySchemaInfo {
     schema_id: u64,
     schema_uuid: String,
@@ -32,7 +33,8 @@ struct PySchemaInfo {
     path_is_relative: bool,
 }
 
-#[derive(Deserialize)]
+#[derive(Deserialize, FromPyObject)]
+#[pyo3(from_item_all)]
 struct PyTableInfo {
     table_id: u64,
     table_uuid: String,
@@ -44,7 +46,8 @@ struct PyTableInfo {
     path_is_relative: bool,
 }
 
-#[derive(Deserialize)]
+#[derive(Deserialize, FromPyObject)]
+#[pyo3(from_item_all)]
 struct PyColumnInfo {
     column_id: u64,
     begin_snapshot: Option<u64>,
@@ -60,14 +63,16 @@ struct PyColumnInfo {
     parent_column: Option<u64>,
 }
 
-#[derive(Deserialize)]
+#[derive(Deserialize, FromPyObject)]
+#[pyo3(from_item_all)]
 struct PyPartitionField {
     partition_key_index: u64,
     column_id: u64,
     transform: String,
 }
 
-#[derive(Deserialize)]
+#[derive(Deserialize, FromPyObject)]
+#[pyo3(from_item_all)]
 struct PySnapshotInfo {
     snapshot_id: u64,
     snapshot_time: String,
@@ -80,7 +85,8 @@ struct PySnapshotInfo {
     commit_extra_info: Option<String>,
 }
 
-#[derive(Deserialize)]
+#[derive(Deserialize, FromPyObject)]
+#[pyo3(from_item_all)]
 struct PyFileInfo {
     data_file_id: u64,
     #[allow(dead_code)]
@@ -99,13 +105,12 @@ struct PyFileInfo {
     encryption_key: String,
     partial_file_info: Option<String>,
     mapping_id: u64,
-    #[serde(default)]
     column_stats: Vec<PyColumnStatsInfo>,
-    #[serde(default)]
     partition_values: Vec<PyFilePartitionInfo>,
 }
 
-#[derive(Deserialize)]
+#[derive(Deserialize, FromPyObject)]
+#[pyo3(from_item_all)]
 struct PyColumnStatsInfo {
     column_id: u64,
     column_size_bytes: Option<u64>,
@@ -117,7 +122,8 @@ struct PyColumnStatsInfo {
     extra_stats: Option<String>,
 }
 
-#[derive(Deserialize)]
+#[derive(Deserialize, FromPyObject)]
+#[pyo3(from_item_all)]
 struct PyFilePartitionInfo {
     partition_key_index: u64,
     partition_value: String,
@@ -136,19 +142,142 @@ impl PythonMetaStore {
 }
 
 fn parse_snapshot_time(s: &str) -> DataFusionResult<chrono::DateTime<chrono::Utc>> {
-    // Try with timezone like "+08" then without colon.
     chrono::DateTime::parse_from_str(s, "%Y-%m-%d %H:%M:%S%.f%:z")
         .or_else(|_| chrono::DateTime::parse_from_str(s, "%Y-%m-%d %H:%M:%S%.f%z"))
         .map(|dt| dt.with_timezone(&chrono::Utc))
         .map_err(|e| DataFusionError::Plan(format!("Failed to parse snapshot_time: {}: {}", s, e)))
 }
 
-fn py_serialize_to_json<'py>(
-    py: Python<'py>,
-    obj: pyo3::Bound<'py, pyo3::PyAny>,
-) -> PyResult<String> {
-    let json = pyo3::types::PyModule::import(py, "json")?;
-    json.getattr("dumps")?.call1((obj,))?.extract()
+impl TryFrom<PySchemaInfo> for SchemaInfo {
+    type Error = DataFusionError;
+
+    fn try_from(p: PySchemaInfo) -> Result<Self, Self::Error> {
+        Ok(Self {
+            schema_id: crate::spec::SchemaIndex(p.schema_id),
+            schema_uuid: uuid::Uuid::parse_str(&p.schema_uuid)
+                .map_err(|e| DataFusionError::External(Box::new(e)))?,
+            begin_snapshot: p.begin_snapshot,
+            end_snapshot: p.end_snapshot,
+            schema_name: p.schema_name,
+            path: p.path,
+            path_is_relative: p.path_is_relative,
+        })
+    }
+}
+
+impl TryFrom<PyTableInfo> for TableInfo {
+    type Error = DataFusionError;
+
+    fn try_from(p: PyTableInfo) -> Result<Self, Self::Error> {
+        Ok(Self {
+            table_id: TableIndex(p.table_id),
+            table_uuid: uuid::Uuid::parse_str(&p.table_uuid)
+                .map_err(|e| DataFusionError::External(Box::new(e)))?,
+            begin_snapshot: p.begin_snapshot,
+            end_snapshot: p.end_snapshot,
+            schema_id: crate::spec::SchemaIndex(p.schema_id),
+            table_name: p.table_name,
+            path: p.path,
+            path_is_relative: p.path_is_relative,
+            columns: vec![],
+            inlined_data_tables: vec![],
+        })
+    }
+}
+
+impl PyColumnInfo {
+    fn into_column_info(self, table_id: TableIndex) -> ColumnInfo {
+        ColumnInfo {
+            column_id: FieldIndex(self.column_id),
+            begin_snapshot: self.begin_snapshot,
+            end_snapshot: self.end_snapshot,
+            table_id,
+            column_order: self.column_order,
+            column_name: self.column_name,
+            column_type: self.column_type,
+            initial_default: self.initial_default,
+            default_value: self.default_value,
+            nulls_allowed: self.nulls_allowed,
+            parent_column: self.parent_column.map(FieldIndex),
+        }
+    }
+}
+
+impl From<PyPartitionField> for crate::spec::PartitionFieldInfo {
+    fn from(p: PyPartitionField) -> Self {
+        Self {
+            partition_key_index: p.partition_key_index,
+            column_id: FieldIndex(p.column_id),
+            transform: p.transform,
+        }
+    }
+}
+
+impl TryFrom<PySnapshotInfo> for SnapshotInfo {
+    type Error = DataFusionError;
+
+    fn try_from(p: PySnapshotInfo) -> Result<Self, Self::Error> {
+        Ok(Self {
+            snapshot_id: p.snapshot_id,
+            snapshot_time: parse_snapshot_time(&p.snapshot_time)?,
+            schema_version: p.schema_version,
+            next_catalog_id: p.next_catalog_id,
+            next_file_id: p.next_file_id,
+            changes_made: p.changes_made,
+            author: p.author,
+            commit_message: p.commit_message,
+            commit_extra_info: p.commit_extra_info,
+        })
+    }
+}
+
+impl From<PyColumnStatsInfo> for crate::spec::ColumnStatsInfo {
+    fn from(s: PyColumnStatsInfo) -> Self {
+        Self {
+            column_id: FieldIndex(s.column_id),
+            column_size_bytes: s.column_size_bytes,
+            value_count: s.value_count,
+            null_count: s.null_count,
+            min_value: s.min_value,
+            max_value: s.max_value,
+            contains_nan: s.contains_nan,
+            extra_stats: s.extra_stats,
+        }
+    }
+}
+
+impl From<PyFilePartitionInfo> for crate::spec::FilePartitionInfo {
+    fn from(p: PyFilePartitionInfo) -> Self {
+        Self {
+            partition_key_index: p.partition_key_index,
+            partition_value: p.partition_value,
+        }
+    }
+}
+
+impl PyFileInfo {
+    fn into_file_info(self, table_id: TableIndex) -> FileInfo {
+        FileInfo {
+            data_file_id: DataFileIndex(self.data_file_id),
+            table_id,
+            begin_snapshot: self.begin_snapshot,
+            end_snapshot: self.end_snapshot,
+            file_order: self.file_order,
+            path: self.path,
+            path_is_relative: self.path_is_relative,
+            file_format: self.file_format,
+            record_count: self.record_count,
+            file_size_bytes: self.file_size_bytes,
+            footer_size: self.footer_size,
+            row_id_start: self.row_id_start,
+            partition_id: self.partition_id.map(PartitionId),
+            encryption_key: self.encryption_key,
+            partial_file_info: self.partial_file_info,
+            mapping_id: MappingIndex(self.mapping_id),
+            column_stats: self.column_stats.into_iter().map(Into::into).collect(),
+            partition_values: self.partition_values.into_iter().map(Into::into).collect(),
+        }
+    }
 }
 
 #[async_trait]
@@ -161,19 +290,19 @@ impl DuckLakeMetaStore for PythonMetaStore {
         let url = self.url.clone();
         let table_name = table_name.to_string();
         let schema_name = schema_name.map(|s| s.to_string());
-        let json: String = tokio::task::spawn_blocking(move || {
+        let parsed: LoadTableResult = tokio::task::spawn_blocking(move || {
             Python::attach(|py| {
-                let call: PyResult<String> = (|| {
+                let call: PyResult<LoadTableResult> = (|| {
                     let m = crate::python::Modules::DUCKLAKE_METADATA.load(py)?;
                     let obj = m.getattr("load_table")?.call1((
                         url.as_str(),
                         table_name.as_str(),
                         schema_name.as_deref(),
                     ))?;
-                    py_serialize_to_json(py, obj)
+                    obj.extract()
                 })();
                 match call {
-                    Ok(s) => Ok(s),
+                    Ok(result) => Ok(result),
                     Err(e) => {
                         let is_value_error = e
                             .matches(py, pyo3::exceptions::PyValueError::type_object(py))
@@ -191,51 +320,13 @@ impl DuckLakeMetaStore for PythonMetaStore {
         .await
         .map_err(|e| DataFusionError::External(Box::new(e)))??;
 
-        let parsed: LoadTableResult =
-            serde_json::from_str(&json).map_err(|e| DataFusionError::External(Box::new(e)))?;
-
-        let schema_info = SchemaInfo {
-            schema_id: crate::spec::SchemaIndex(parsed.schema_info.schema_id),
-            schema_uuid: uuid::Uuid::parse_str(&parsed.schema_info.schema_uuid)
-                .map_err(|e| DataFusionError::External(Box::new(e)))?,
-            begin_snapshot: parsed.schema_info.begin_snapshot,
-            end_snapshot: parsed.schema_info.end_snapshot,
-            schema_name: parsed.schema_info.schema_name,
-            path: parsed.schema_info.path,
-            path_is_relative: parsed.schema_info.path_is_relative,
-        };
-
-        let table_id = TableIndex(parsed.table_info.table_id);
-        let table_info = TableInfo {
-            table_id,
-            table_uuid: uuid::Uuid::parse_str(&parsed.table_info.table_uuid)
-                .map_err(|e| DataFusionError::External(Box::new(e)))?,
-            begin_snapshot: parsed.table_info.begin_snapshot,
-            end_snapshot: parsed.table_info.end_snapshot,
-            schema_id: crate::spec::SchemaIndex(parsed.table_info.schema_id),
-            table_name: parsed.table_info.table_name,
-            path: parsed.table_info.path,
-            path_is_relative: parsed.table_info.path_is_relative,
-            columns: vec![],
-            inlined_data_tables: vec![],
-        };
-
+        let schema_info: SchemaInfo = parsed.schema_info.try_into()?;
+        let table_info: TableInfo = parsed.table_info.try_into()?;
+        let table_id = table_info.table_id;
         let columns: Vec<ColumnInfo> = parsed
             .columns
             .into_iter()
-            .map(|c| ColumnInfo {
-                column_id: FieldIndex(c.column_id),
-                begin_snapshot: c.begin_snapshot,
-                end_snapshot: c.end_snapshot,
-                table_id,
-                column_order: c.column_order,
-                column_name: c.column_name,
-                column_type: c.column_type,
-                initial_default: c.initial_default,
-                default_value: c.default_value,
-                nulls_allowed: c.nulls_allowed,
-                parent_column: c.parent_column.map(FieldIndex),
-            })
+            .map(|c| c.into_column_info(table_id))
             .collect();
 
         Ok(DuckLakeTable {
@@ -245,26 +336,22 @@ impl DuckLakeMetaStore for PythonMetaStore {
             partition_fields: parsed
                 .partition_fields
                 .into_iter()
-                .map(|pf| crate::spec::PartitionFieldInfo {
-                    partition_key_index: pf.partition_key_index,
-                    column_id: FieldIndex(pf.column_id),
-                    transform: pf.transform,
-                })
+                .map(Into::into)
                 .collect(),
         })
     }
 
     async fn current_snapshot(&self) -> DataFusionResult<DuckLakeSnapshot> {
         let url = self.url.clone();
-        let json: String = tokio::task::spawn_blocking(move || {
+        let p: PySnapshotInfo = tokio::task::spawn_blocking(move || {
             Python::attach(|py| {
-                let call: PyResult<String> = (|| {
+                let call: PyResult<PySnapshotInfo> = (|| {
                     let m = Modules::DUCKLAKE_METADATA.load(py)?;
                     let obj = m.getattr("current_snapshot")?.call1((url.as_str(),))?;
-                    py_serialize_to_json(py, obj)
+                    obj.extract()
                 })();
                 match call {
-                    Ok(s) => Ok(s),
+                    Ok(result) => Ok(result),
                     Err(e) => {
                         let is_value_error = e
                             .matches(py, pyo3::exceptions::PyValueError::type_object(py))
@@ -282,36 +369,24 @@ impl DuckLakeMetaStore for PythonMetaStore {
         .await
         .map_err(|e| DataFusionError::External(Box::new(e)))??;
 
-        let p: PySnapshotInfo =
-            serde_json::from_str(&json).map_err(|e| DataFusionError::External(Box::new(e)))?;
         Ok(DuckLakeSnapshot {
-            snapshot: SnapshotInfo {
-                snapshot_id: p.snapshot_id,
-                snapshot_time: parse_snapshot_time(&p.snapshot_time)?,
-                schema_version: p.schema_version,
-                next_catalog_id: p.next_catalog_id,
-                next_file_id: p.next_file_id,
-                changes_made: p.changes_made,
-                author: p.author,
-                commit_message: p.commit_message,
-                commit_extra_info: p.commit_extra_info,
-            },
+            snapshot: p.try_into()?,
         })
     }
 
     async fn snapshot_by_id(&self, snapshot_id: u64) -> DataFusionResult<DuckLakeSnapshot> {
         let url = self.url.clone();
-        let json: String = tokio::task::spawn_blocking(move || {
+        let p: PySnapshotInfo = tokio::task::spawn_blocking(move || {
             Python::attach(|py| {
-                let call: PyResult<String> = (|| {
+                let call: PyResult<PySnapshotInfo> = (|| {
                     let m = Modules::DUCKLAKE_METADATA.load(py)?;
                     let obj = m
                         .getattr("snapshot_by_id")?
                         .call1((url.as_str(), snapshot_id))?;
-                    py_serialize_to_json(py, obj)
+                    obj.extract()
                 })();
                 match call {
-                    Ok(s) => Ok(s),
+                    Ok(result) => Ok(result),
                     Err(e) => {
                         let is_value_error = e
                             .matches(py, pyo3::exceptions::PyValueError::type_object(py))
@@ -328,20 +403,8 @@ impl DuckLakeMetaStore for PythonMetaStore {
         .await
         .map_err(|e| DataFusionError::External(Box::new(e)))??;
 
-        let p: PySnapshotInfo =
-            serde_json::from_str(&json).map_err(|e| DataFusionError::External(Box::new(e)))?;
         Ok(DuckLakeSnapshot {
-            snapshot: SnapshotInfo {
-                snapshot_id: p.snapshot_id,
-                snapshot_time: parse_snapshot_time(&p.snapshot_time)?,
-                schema_version: p.schema_version,
-                next_catalog_id: p.next_catalog_id,
-                next_file_id: p.next_file_id,
-                changes_made: p.changes_made,
-                author: p.author,
-                commit_message: p.commit_message,
-                commit_extra_info: p.commit_extra_info,
-            },
+            snapshot: p.try_into()?,
         })
     }
 
@@ -351,19 +414,19 @@ impl DuckLakeMetaStore for PythonMetaStore {
         snapshot_id: Option<u64>,
     ) -> DataFusionResult<Vec<FileInfo>> {
         let url = self.url.clone();
-        let json: String = tokio::task::spawn_blocking(move || {
+        let rows: Vec<PyFileInfo> = tokio::task::spawn_blocking(move || {
             Python::attach(|py| {
-                let call: PyResult<String> = (|| {
+                let call: PyResult<Vec<PyFileInfo>> = (|| {
                     let m = Modules::DUCKLAKE_METADATA.load(py)?;
                     let obj = m.getattr("list_data_files")?.call1((
                         url.as_str(),
                         table_id.0,
                         snapshot_id,
                     ))?;
-                    py_serialize_to_json(py, obj)
+                    obj.extract()
                 })();
                 match call {
-                    Ok(s) => Ok(s),
+                    Ok(result) => Ok(result),
                     Err(e) => {
                         let is_value_error = e
                             .matches(py, pyo3::exceptions::PyValueError::type_object(py))
@@ -380,50 +443,9 @@ impl DuckLakeMetaStore for PythonMetaStore {
         .await
         .map_err(|e| DataFusionError::External(Box::new(e)))??;
 
-        let rows: Vec<PyFileInfo> =
-            serde_json::from_str(&json).map_err(|e| DataFusionError::External(Box::new(e)))?;
         let out = rows
             .into_iter()
-            .map(|r| FileInfo {
-                data_file_id: DataFileIndex(r.data_file_id),
-                table_id,
-                begin_snapshot: r.begin_snapshot,
-                end_snapshot: r.end_snapshot,
-                file_order: r.file_order,
-                path: r.path,
-                path_is_relative: r.path_is_relative,
-                file_format: r.file_format,
-                record_count: r.record_count,
-                file_size_bytes: r.file_size_bytes,
-                footer_size: r.footer_size,
-                row_id_start: r.row_id_start,
-                partition_id: r.partition_id.map(PartitionId),
-                encryption_key: r.encryption_key,
-                partial_file_info: r.partial_file_info,
-                mapping_id: MappingIndex(r.mapping_id),
-                column_stats: r
-                    .column_stats
-                    .into_iter()
-                    .map(|s| crate::spec::ColumnStatsInfo {
-                        column_id: FieldIndex(s.column_id),
-                        column_size_bytes: s.column_size_bytes,
-                        value_count: s.value_count,
-                        null_count: s.null_count,
-                        min_value: s.min_value,
-                        max_value: s.max_value,
-                        contains_nan: s.contains_nan,
-                        extra_stats: s.extra_stats,
-                    })
-                    .collect(),
-                partition_values: r
-                    .partition_values
-                    .into_iter()
-                    .map(|p| crate::spec::FilePartitionInfo {
-                        partition_key_index: p.partition_key_index,
-                        partition_value: p.partition_value,
-                    })
-                    .collect(),
-            })
+            .map(|r| r.into_file_info(table_id))
             .collect();
         Ok(out)
     }

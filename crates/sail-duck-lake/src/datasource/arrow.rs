@@ -5,6 +5,15 @@ use datafusion::common::{DataFusionError, Result as DataFusionResult};
 
 use crate::spec::ColumnInfo;
 
+impl TryFrom<&ColumnInfo> for Field {
+    type Error = DataFusionError;
+
+    fn try_from(col: &ColumnInfo) -> Result<Self, Self::Error> {
+        let data_type = parse_ducklake_type(&col.column_type)?;
+        Ok(Field::new(&col.column_name, data_type, col.nulls_allowed))
+    }
+}
+
 pub fn parse_ducklake_type(type_str: &str) -> DataFusionResult<DataType> {
     let type_str = type_str.trim().to_uppercase();
 
@@ -71,21 +80,10 @@ pub fn parse_ducklake_type(type_str: &str) -> DataFusionResult<DataType> {
 }
 
 pub fn columns_to_arrow_schema(columns: &[ColumnInfo]) -> DataFusionResult<ArrowSchema> {
-    let top_level_columns: Vec<&ColumnInfo> = columns
+    let fields: Vec<Field> = columns
         .iter()
         .filter(|c| c.parent_column.is_none())
-        .collect();
-
-    let fields: Vec<Field> = top_level_columns
-        .into_iter()
-        .map(|col| {
-            let data_type = parse_ducklake_type(&col.column_type)?;
-            Ok(Field::new(
-                col.column_name.clone(),
-                data_type,
-                col.nulls_allowed,
-            ))
-        })
+        .map(Field::try_from)
         .collect::<DataFusionResult<Vec<_>>>()?;
 
     Ok(ArrowSchema::new(fields))
