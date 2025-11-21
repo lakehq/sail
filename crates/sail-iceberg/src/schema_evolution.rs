@@ -461,36 +461,41 @@ impl SchemaEvolver {
         next_field_id: &mut i32,
     ) -> Result<(StructType, bool)> {
         // FIXME: This lookup map is case-sensitive.
-        let mut input_lookup: HashMap<&str, &Field> = HashMap::new();
-        for field in input_fields {
-            input_lookup.insert(field.name(), field.as_ref());
+        let mut existing_pool: HashMap<String, Arc<NestedField>> = HashMap::new();
+        for field in existing_struct.fields() {
+            existing_pool.insert(field.name.clone(), Arc::clone(field));
         }
 
         let mut changed = false;
-        let mut merged_children = Vec::with_capacity(existing_struct.fields().len());
+        let mut merged_children =
+            Vec::with_capacity(existing_struct.fields().len().max(input_fields.len()));
 
-        for child in existing_struct.fields() {
-            if let Some(candidate) = input_lookup.get(child.name.as_str()) {
-                let (merged_child, child_changed) =
-                    Self::merge_field(child.as_ref(), candidate, next_field_id)?;
-                changed |= child_changed;
-                merged_children.push(Arc::new(merged_child));
-            } else if child.required && !Self::field_has_default(child) {
-                return Err(DataFusionError::Plan(format!(
-                    "Column '{}' is required in the Iceberg schema and must be present in the input data.",
-                    child.name
-                )));
+        // 1. Build fields in the order of Input Arrow Schema
+        for input_field in input_fields {
+            if let Some(existing_field) = existing_pool.remove(input_field.name()) {
+                // Field exists: perform recursive merge_field, preserving original ID
+                let (merged_field, field_changed) =
+                    Self::merge_field(existing_field.as_ref(), input_field, next_field_id)?;
+                changed |= field_changed;
+                merged_children.push(Arc::new(merged_field));
             } else {
-                merged_children.push(Arc::clone(child));
+                // Field doesn't exist: this is a new field, assign new ID
+                let new_field = Self::build_field_from_arrow(input_field, next_field_id)?;
+                merged_children.push(Arc::new(new_field));
+                changed = true;
             }
         }
 
-        for field in input_fields {
-            if existing_struct.field_by_name(field.name()).is_none() {
-                let new_child = Self::build_field_from_arrow(field, next_field_id)?;
-                merged_children.push(Arc::new(new_child));
-                changed = true;
+        // 2. Handle fields that exist in Iceberg but not in Input (i.e., omitted old fields)
+        // These fields should be preserved and placed at the end
+        for remaining_field in existing_pool.values() {
+            if remaining_field.required && !Self::field_has_default(remaining_field) {
+                return Err(DataFusionError::Plan(format!(
+                    "Column '{}' is required in the Iceberg schema and must be present in the input data.",
+                    remaining_field.name
+                )));
             }
+            merged_children.push(Arc::clone(remaining_field));
         }
 
         Ok((StructType::new(merged_children), changed))
@@ -500,6 +505,11 @@ impl SchemaEvolver {
         use crate::datasource::type_converter::arrow_field_to_iceberg;
 
         let mut iceberg_field = arrow_field_to_iceberg(field)?;
+
+        if iceberg_field.required && iceberg_field.initial_default.is_none() {
+            iceberg_field.required = false;
+        }
+
         iceberg_field.id = *next_field_id;
         *next_field_id += 1;
         Self::assign_nested_ids(&mut iceberg_field, next_field_id);
