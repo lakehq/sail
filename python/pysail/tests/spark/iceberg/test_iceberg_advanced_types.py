@@ -2,8 +2,20 @@ import uuid
 
 import pytest
 from pyiceberg.schema import Schema
-from pyiceberg.types import FloatType, IntegerType, ListType, NestedField, StringType, UUIDType
+from pyiceberg.types import (
+    FloatType,
+    IntegerType,
+    ListType,
+    LongType,
+    MapType,
+    NestedField,
+    StringType,
+    StructType,
+    UUIDType,
+)
+from pyspark.sql.types import DoubleType as SparkDoubleType
 from pyspark.sql.types import LongType as SparkLongType
+from pyspark.sql.types import MapType as SparkMapType
 
 
 @pytest.mark.skip(reason="pyiceberg client does not support list literals for default values")
@@ -61,6 +73,161 @@ def test_schema_evolution_nested_type_promotion(spark, sql_catalog):
         assert isinstance(result.schema["data"].dataType.elementType, SparkLongType)
         rows = result.collect()
         assert rows[1].data == [30, 40]
+    finally:
+        sql_catalog.drop_table(identifier)
+
+
+def test_iceberg_merge_schema_nested_struct_promotes_float_to_double(spark, sql_catalog):
+    identifier = "default.merge_schema_nested_struct_float_to_double"
+    schema = Schema(
+        NestedField(field_id=1, name="id", field_type=LongType(), required=False),
+        NestedField(
+            field_id=2,
+            name="location",
+            field_type=StructType(
+                NestedField(field_id=3, name="latitude", field_type=FloatType(), required=False),
+                NestedField(field_id=4, name="longitude", field_type=FloatType(), required=False),
+            ),
+            required=False,
+        ),
+    )
+    table = sql_catalog.create_table(identifier=identifier, schema=schema)
+    try:
+        base_df = spark.createDataFrame(
+            [(1, (10.0, 20.0))],
+            schema="id LONG, location STRUCT<latitude: FLOAT, longitude: FLOAT>",
+        )
+        base_df.write.format("iceberg").mode("overwrite").save(table.location())
+
+        evolved_df = spark.createDataFrame(
+            [(2, (30.5, 40.5))],
+            schema="id LONG, location STRUCT<latitude: DOUBLE, longitude: DOUBLE>",
+        )
+        (evolved_df.write.format("iceberg").mode("append").option("mergeSchema", "true").save(table.location()))
+
+        result = spark.read.format("iceberg").load(table.location()).orderBy("id")
+        location_field = result.schema["location"].dataType
+        assert isinstance(location_field["latitude"].dataType, SparkDoubleType)
+        assert isinstance(location_field["longitude"].dataType, SparkDoubleType)
+        rows = result.collect()
+        assert rows[0].location.latitude == 10.0  # noqa: PLR2004
+        assert rows[0].location.longitude == 20.0  # noqa: PLR2004
+        assert rows[1].location.latitude == 30.5  # noqa: PLR2004
+        assert rows[1].location.longitude == 40.5  # noqa: PLR2004
+    finally:
+        sql_catalog.drop_table(identifier)
+
+
+def test_iceberg_merge_schema_map_value_promotes_int_to_long(spark, sql_catalog):
+    identifier = "default.merge_schema_map_value_int_to_long"
+    schema = Schema(
+        NestedField(field_id=1, name="id", field_type=LongType(), required=False),
+        NestedField(
+            field_id=2,
+            name="metrics",
+            field_type=MapType(
+                key_id=3,
+                key_type=StringType(),
+                value_id=4,
+                value_type=IntegerType(),
+                value_required=False,
+            ),
+            required=False,
+        ),
+    )
+    table = sql_catalog.create_table(identifier=identifier, schema=schema)
+    try:
+        base_df = spark.createDataFrame(
+            [(1, {"cpu": 80, "mem": 65})],
+            schema="id LONG, metrics MAP<STRING, INT>",
+        )
+        base_df.write.format("iceberg").mode("overwrite").save(table.location())
+
+        evolved_df = spark.createDataFrame(
+            [(2, {"cpu": 95, "mem": 70})],
+            schema="id LONG, metrics MAP<STRING, LONG>",
+        )
+        (evolved_df.write.format("iceberg").mode("append").option("mergeSchema", "true").save(table.location()))
+
+        result = spark.read.format("iceberg").load(table.location()).orderBy("id")
+        metrics_type = result.schema["metrics"].dataType
+        assert isinstance(metrics_type, SparkMapType)
+        assert isinstance(metrics_type.valueType, SparkLongType)
+        rows = result.collect()
+        assert rows[0].metrics == {"cpu": 80, "mem": 65}
+        assert rows[1].metrics == {"cpu": 95, "mem": 70}
+    finally:
+        sql_catalog.drop_table(identifier)
+
+
+def test_iceberg_merge_schema_map_key_promotion(spark, sql_catalog):
+    identifier = "default.merge_schema_map_key_promotion"
+    schema = Schema(
+        NestedField(field_id=1, name="id", field_type=LongType(), required=False),
+        NestedField(
+            field_id=2,
+            name="metrics",
+            field_type=MapType(
+                key_id=3,
+                key_type=IntegerType(),
+                value_id=4,
+                value_type=IntegerType(),
+                value_required=False,
+            ),
+            required=False,
+        ),
+    )
+    table = sql_catalog.create_table(identifier=identifier, schema=schema)
+    try:
+        base_df = spark.createDataFrame(
+            [(1, {10: 80})],
+            schema="id LONG, metrics MAP<INT, INT>",
+        )
+        base_df.write.format("iceberg").mode("overwrite").save(table.location())
+
+        evolved_df = spark.createDataFrame(
+            [(2, {20: 90})],
+            schema="id LONG, metrics MAP<BIGINT, INT>",
+        )
+        with pytest.raises(Exception, match=r"(?i)Schema evolution for map keys is not allowed"):
+            (evolved_df.write.format("iceberg").mode("append").option("mergeSchema", "true").save(table.location()))
+    finally:
+        sql_catalog.drop_table(identifier)
+
+
+def test_iceberg_merge_schema_map_key_invalid_promotion(spark, sql_catalog):
+    identifier = "default.merge_schema_map_key_invalid"
+    schema = Schema(
+        NestedField(field_id=1, name="id", field_type=LongType(), required=False),
+        NestedField(
+            field_id=2,
+            name="metrics",
+            field_type=MapType(
+                key_id=3,
+                key_type=StringType(),
+                value_id=4,
+                value_type=IntegerType(),
+                value_required=False,
+            ),
+            required=False,
+        ),
+    )
+    table = sql_catalog.create_table(identifier=identifier, schema=schema)
+    try:
+        base_df = spark.createDataFrame(
+            [(1, {"cpu": 80})],
+            schema="id LONG, metrics MAP<STRING, INT>",
+        )
+        base_df.write.format("iceberg").mode("overwrite").save(table.location())
+
+        evolved_df = spark.createDataFrame(
+            [(2, {10: 90})],
+            schema="id LONG, metrics MAP<INT, INT>",
+        )
+        with pytest.raises(
+            Exception, match=r"(?i)Column 'key' has type.*Set mergeSchema=true to allow schema evolution"
+        ):
+            (evolved_df.write.format("iceberg").mode("append").option("mergeSchema", "true").save(table.location()))
     finally:
         sql_catalog.drop_table(identifier)
 

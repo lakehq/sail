@@ -1,10 +1,13 @@
+from datetime import datetime, timezone
 from decimal import Decimal
 
 import pandas as pd
 import pyarrow as pa
 import pytest
 from pandas.testing import assert_frame_equal
+from pyiceberg.partitioning import PartitionField, PartitionSpec
 from pyiceberg.schema import Schema
+from pyiceberg.transforms import IdentityTransform
 from pyiceberg.types import (
     DecimalType,
     DoubleType,
@@ -14,6 +17,7 @@ from pyiceberg.types import (
     NestedField,
     StringType,
     StructType,
+    TimestampType,
 )
 from pyspark.sql.types import (
     DecimalType as SparkDecimalType,
@@ -528,5 +532,94 @@ def test_iceberg_overwrite_schema_replaces_columns(spark, sql_catalog):
         expected = pd.DataFrame({"user_id": [10, 20], "active": [True, False]})
         pdf = result_df.toPandas()
         assert_frame_equal(pdf, expected.astype(pdf.dtypes))
+    finally:
+        sql_catalog.drop_table(identifier)
+
+
+def test_iceberg_overwrite_schema_rejects_dropping_partition_column(spark, sql_catalog):
+    identifier = "default.overwrite_schema_partition_error"
+    schema = Schema(
+        NestedField(field_id=1, name="id", field_type=LongType(), required=False),
+        NestedField(field_id=2, name="event_ts", field_type=TimestampType(), required=False),
+        NestedField(field_id=3, name="value", field_type=StringType(), required=False),
+    )
+    spec = PartitionSpec(
+        PartitionField(source_id=2, field_id=1000, transform=IdentityTransform(), name="event_ts_identity")
+    )
+    table = sql_catalog.create_table(identifier=identifier, schema=schema, partition_spec=spec)
+    spark_table = "tmp_overwrite_schema_partition_error"
+    spark.sql(f"DROP TABLE IF EXISTS {spark_table}")
+    spark.sql(
+        f"""
+        CREATE TABLE {spark_table}
+        USING iceberg
+        LOCATION '{escape_sql_string_literal(table.location())}'
+        """
+    )
+    try:
+        seed_df = spark.createDataFrame(
+            [(1, datetime(2023, 1, 1, 0, 0, 0, tzinfo=timezone.utc), "seed")],
+            schema="id LONG, event_ts TIMESTAMP, value STRING",
+        )
+        seed_df.write.format("iceberg").mode("overwrite").save(table.location())
+
+        replacement_df = spark.createDataFrame(
+            [(10, "overwrite")],
+            schema="id LONG, value STRING",
+        )
+        with pytest.raises(Exception, match=r"(?i)Partition field"):
+            (
+                replacement_df.write.format("iceberg")
+                .mode("overwrite")
+                .option("overwriteSchema", "true")
+                .saveAsTable(spark_table)
+            )
+    finally:
+        spark.sql(f"DROP TABLE IF EXISTS {spark_table}")
+        sql_catalog.drop_table(identifier)
+
+
+def test_iceberg_write_allows_int_to_long_without_merge_schema(spark, sql_catalog):
+    identifier = "default.safe_cast_int_to_long"
+    table = sql_catalog.create_table(
+        identifier=identifier,
+        schema=Schema(
+            NestedField(field_id=1, name="id", field_type=LongType(), required=False),
+            NestedField(field_id=2, name="value", field_type=LongType(), required=False),
+        ),
+    )
+    try:
+        df = spark.createDataFrame(
+            [(1, 100)],
+            schema="id LONG, value INT",
+        )
+        df.write.format("iceberg").mode("overwrite").save(table.location())
+
+        result_df = spark.read.format("iceberg").load(table.location())
+        assert isinstance(result_df.schema["value"].dataType, SparkLongType)
+        rows = result_df.collect()
+        assert len(rows) == 1
+        assert rows[0].id == 1
+        assert rows[0].value == 100  # noqa: PLR2004
+    finally:
+        sql_catalog.drop_table(identifier)
+
+
+def test_iceberg_write_rejects_incompatible_type_without_merge_schema(spark, sql_catalog):
+    identifier = "default.safe_cast_incompatible"
+    table = sql_catalog.create_table(
+        identifier=identifier,
+        schema=Schema(
+            NestedField(field_id=1, name="id", field_type=LongType(), required=False),
+            NestedField(field_id=2, name="value", field_type=LongType(), required=False),
+        ),
+    )
+    try:
+        df = spark.createDataFrame(
+            [(1, "bad")],
+            schema="id LONG, value STRING",
+        )
+        with pytest.raises(Exception, match=r"(?i)Column 'value' has type"):
+            df.write.format("iceberg").mode("overwrite").save(table.location())
     finally:
         sql_catalog.drop_table(identifier)

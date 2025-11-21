@@ -414,9 +414,8 @@ impl SchemaEvolver {
                     next_field_id,
                 )?;
                 if key_changed {
-                    // FIXME: allow type promotion for map keys that satisfy Iceberg type promotion rules
                     return Err(DataFusionError::Plan(
-                        "Schema evolution for map keys is not supported; use overwriteSchema=true to replace the schema."
+                        "Schema evolution for map keys is not allowed; use overwriteSchema=true to replace the schema."
                             .to_string(),
                     ));
                 }
