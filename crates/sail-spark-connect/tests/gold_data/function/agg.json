@@ -1511,7 +1511,7 @@
         }
       },
       "output": {
-        "failure": "error in DataFusion: Arrow error: Cast error: Casting from Interval(YearMonth) to Float64 not supported"
+        "success": "ok"
       }
     },
     {
@@ -1857,7 +1857,7 @@
         }
       },
       "output": {
-        "failure": "error in DataFusion: Arrow error: Cast error: Casting from Interval(YearMonth) to Float64 not supported"
+        "success": "ok"
       }
     },
     {

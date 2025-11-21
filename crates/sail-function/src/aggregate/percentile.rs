@@ -71,6 +71,8 @@ impl AggregateUDFImpl for PercentileFunction {
             DataType::Utf8 => Ok(DataType::Utf8),
             DataType::Utf8View => Ok(DataType::Utf8View),
             DataType::LargeUtf8 => Ok(DataType::LargeUtf8),
+            dt @ DataType::Interval(_) => Ok(dt.clone()),
+            dt @ DataType::Duration(_) => Ok(dt.clone()),
             _ => Ok(DataType::Float64),
         }
     }
@@ -80,6 +82,7 @@ impl AggregateUDFImpl for PercentileFunction {
 
         let storage_type = match &value_type {
             DataType::Utf8 | DataType::Utf8View | DataType::LargeUtf8 => DataType::Utf8,
+            DataType::Interval(_) | DataType::Duration(_) => DataType::Int64,
             _ => DataType::Float64,
         };
 
@@ -105,6 +108,9 @@ impl AggregateUDFImpl for PercentileFunction {
         match data_type {
             DataType::Utf8 | DataType::Utf8View | DataType::LargeUtf8 => Ok(Box::new(
                 StringPercentileAccumulator::new(percentile, data_type.clone()),
+            )),
+            DataType::Interval(_) | DataType::Duration(_) => Ok(Box::new(
+                IntervalPercentileAccumulator::new(percentile, data_type.clone()),
             )),
             _ => Ok(Box::new(NumericPercentileAccumulator::new(percentile))),
         }
@@ -394,6 +400,287 @@ impl Accumulator for StringPercentileAccumulator {
     fn size(&self) -> usize {
         std::mem::size_of_val(&self.values)
             + self.values.iter().map(|s| s.capacity()).sum::<usize>()
+            + std::mem::size_of::<f64>()
+            + std::mem::size_of::<DataType>()
+    }
+}
+
+/// Accumulator for interval/duration types
+#[derive(Debug)]
+pub struct IntervalPercentileAccumulator {
+    values: Vec<i64>,
+    percentile: f64,
+    data_type: DataType,
+}
+
+impl IntervalPercentileAccumulator {
+    pub fn new(percentile: f64, data_type: DataType) -> Self {
+        Self {
+            values: Vec::new(),
+            percentile,
+            data_type,
+        }
+    }
+
+    fn calculate_percentile(&self, sorted_values: &[i64], percentile: f64) -> Option<i64> {
+        if sorted_values.is_empty() {
+            return None;
+        }
+
+        if sorted_values.len() == 1 {
+            return Some(sorted_values[0]);
+        }
+
+        let n = sorted_values.len();
+        let pos = (n - 1) as f64 * percentile;
+        let lower_idx = pos.floor() as usize;
+        let upper_idx = pos.ceil() as usize;
+
+        if lower_idx == upper_idx {
+            Some(sorted_values[lower_idx])
+        } else {
+            let lower = sorted_values[lower_idx] as f64;
+            let upper = sorted_values[upper_idx] as f64;
+            let fraction = pos - lower_idx as f64;
+            Some((lower + fraction * (upper - lower)).round() as i64)
+        }
+    }
+}
+
+impl Accumulator for IntervalPercentileAccumulator {
+    fn update_batch(&mut self, values: &[ArrayRef]) -> Result<()> {
+        if values.is_empty() {
+            return Ok(());
+        }
+
+        let array = &values[0];
+
+        for i in 0..array.len() {
+            if array.is_null(i) {
+                continue;
+            }
+
+            // Convert interval/duration to i64 for calculation
+            let value = match &self.data_type {
+                DataType::Interval(unit) => {
+                    use datafusion::arrow::datatypes::IntervalUnit;
+                    match unit {
+                        IntervalUnit::YearMonth => {
+                            let arr = array.as_primitive::<datafusion::arrow::datatypes::IntervalYearMonthType>();
+                            arr.value(i) as i64
+                        }
+                        IntervalUnit::DayTime => {
+                            let arr = array
+                                .as_primitive::<datafusion::arrow::datatypes::IntervalDayTimeType>(
+                                );
+                            let val = arr.value(i);
+                            // IntervalDayTime is stored as (days, milliseconds)
+                            // Convert to total milliseconds for interpolation
+                            val.days as i64 * 86400000 + val.milliseconds as i64
+                        }
+                        IntervalUnit::MonthDayNano => {
+                            let arr = array.as_primitive::<datafusion::arrow::datatypes::IntervalMonthDayNanoType>();
+                            let val = arr.value(i);
+                            // Convert to nanoseconds for interpolation
+                            val.months as i64 * 2592000000000000 // ~30 days in nanos
+                                + val.days as i64 * 86400000000000 // days to nanos
+                                + val.nanoseconds
+                        }
+                    }
+                }
+                DataType::Duration(unit) => {
+                    use datafusion::arrow::datatypes::TimeUnit;
+                    match unit {
+                        TimeUnit::Second => array
+                            .as_primitive::<datafusion::arrow::datatypes::DurationSecondType>()
+                            .value(i),
+                        TimeUnit::Millisecond => array
+                            .as_primitive::<datafusion::arrow::datatypes::DurationMillisecondType>()
+                            .value(i),
+                        TimeUnit::Microsecond => array
+                            .as_primitive::<datafusion::arrow::datatypes::DurationMicrosecondType>()
+                            .value(i),
+                        TimeUnit::Nanosecond => array
+                            .as_primitive::<datafusion::arrow::datatypes::DurationNanosecondType>()
+                            .value(i),
+                    }
+                }
+                _ => {
+                    return Err(datafusion::error::DataFusionError::Execution(format!(
+                        "IntervalPercentileAccumulator does not support type {:?}",
+                        self.data_type
+                    )));
+                }
+            };
+
+            self.values.push(value);
+        }
+
+        Ok(())
+    }
+
+    fn merge_batch(&mut self, states: &[ArrayRef]) -> Result<()> {
+        if states.is_empty() {
+            return Ok(());
+        }
+
+        let values_list = states[0].as_list::<i32>();
+        let percentile_array =
+            states[1].as_primitive::<datafusion::arrow::datatypes::Float64Type>();
+
+        for i in 0..values_list.len() {
+            if values_list.is_null(i) {
+                continue;
+            }
+
+            if !percentile_array.is_null(i) {
+                self.percentile = percentile_array.value(i);
+            }
+
+            let values_array = values_list.value(i);
+            let int_array = values_array.as_primitive::<datafusion::arrow::datatypes::Int64Type>();
+
+            for j in 0..int_array.len() {
+                if !int_array.is_null(j) {
+                    self.values.push(int_array.value(j));
+                }
+            }
+        }
+
+        Ok(())
+    }
+
+    fn evaluate(&mut self) -> Result<ScalarValue> {
+        if self.values.is_empty() {
+            return match &self.data_type {
+                DataType::Interval(unit) => {
+                    use datafusion::arrow::datatypes::IntervalUnit;
+                    match unit {
+                        IntervalUnit::YearMonth => Ok(ScalarValue::IntervalYearMonth(None)),
+                        IntervalUnit::DayTime => Ok(ScalarValue::IntervalDayTime(None)),
+                        IntervalUnit::MonthDayNano => Ok(ScalarValue::IntervalMonthDayNano(None)),
+                    }
+                }
+                DataType::Duration(unit) => {
+                    use datafusion::arrow::datatypes::TimeUnit;
+                    match unit {
+                        TimeUnit::Second => Ok(ScalarValue::DurationSecond(None)),
+                        TimeUnit::Millisecond => Ok(ScalarValue::DurationMillisecond(None)),
+                        TimeUnit::Microsecond => Ok(ScalarValue::DurationMicrosecond(None)),
+                        TimeUnit::Nanosecond => Ok(ScalarValue::DurationNanosecond(None)),
+                    }
+                }
+                _ => Err(datafusion::error::DataFusionError::Execution(format!(
+                    "Unsupported type {:?}",
+                    self.data_type
+                ))),
+            };
+        }
+
+        let mut sorted_values = self.values.clone();
+        sorted_values.sort();
+
+        match self.calculate_percentile(&sorted_values, self.percentile) {
+            Some(result_i64) => match &self.data_type {
+                DataType::Interval(unit) => {
+                    use datafusion::arrow::datatypes::IntervalUnit;
+                    match unit {
+                        IntervalUnit::YearMonth => {
+                            Ok(ScalarValue::IntervalYearMonth(Some(result_i64 as i32)))
+                        }
+                        IntervalUnit::DayTime => {
+                            // Convert back from milliseconds to (days, milliseconds)
+                            use datafusion::arrow::datatypes::IntervalDayTime;
+                            let days = (result_i64 / 86400000) as i32;
+                            let milliseconds = (result_i64 % 86400000) as i32;
+                            Ok(ScalarValue::IntervalDayTime(Some(IntervalDayTime {
+                                days,
+                                milliseconds,
+                            })))
+                        }
+                        IntervalUnit::MonthDayNano => {
+                            // Convert back from nanoseconds
+                            use datafusion::arrow::datatypes::IntervalMonthDayNano;
+                            let months = (result_i64 / 2592000000000000) as i32;
+                            let remaining = result_i64 % 2592000000000000;
+                            let days = (remaining / 86400000000000) as i32;
+                            let nanoseconds = remaining % 86400000000000;
+                            Ok(ScalarValue::IntervalMonthDayNano(Some(
+                                IntervalMonthDayNano {
+                                    months,
+                                    days,
+                                    nanoseconds,
+                                },
+                            )))
+                        }
+                    }
+                }
+                DataType::Duration(unit) => {
+                    use datafusion::arrow::datatypes::TimeUnit;
+                    match unit {
+                        TimeUnit::Second => Ok(ScalarValue::DurationSecond(Some(result_i64))),
+                        TimeUnit::Millisecond => {
+                            Ok(ScalarValue::DurationMillisecond(Some(result_i64)))
+                        }
+                        TimeUnit::Microsecond => {
+                            Ok(ScalarValue::DurationMicrosecond(Some(result_i64)))
+                        }
+                        TimeUnit::Nanosecond => {
+                            Ok(ScalarValue::DurationNanosecond(Some(result_i64)))
+                        }
+                    }
+                }
+                _ => Err(datafusion::error::DataFusionError::Execution(format!(
+                    "Unsupported type {:?}",
+                    self.data_type
+                ))),
+            },
+            None => match &self.data_type {
+                DataType::Interval(unit) => {
+                    use datafusion::arrow::datatypes::IntervalUnit;
+                    match unit {
+                        IntervalUnit::YearMonth => Ok(ScalarValue::IntervalYearMonth(None)),
+                        IntervalUnit::DayTime => Ok(ScalarValue::IntervalDayTime(None)),
+                        IntervalUnit::MonthDayNano => Ok(ScalarValue::IntervalMonthDayNano(None)),
+                    }
+                }
+                DataType::Duration(unit) => {
+                    use datafusion::arrow::datatypes::TimeUnit;
+                    match unit {
+                        TimeUnit::Second => Ok(ScalarValue::DurationSecond(None)),
+                        TimeUnit::Millisecond => Ok(ScalarValue::DurationMillisecond(None)),
+                        TimeUnit::Microsecond => Ok(ScalarValue::DurationMicrosecond(None)),
+                        TimeUnit::Nanosecond => Ok(ScalarValue::DurationNanosecond(None)),
+                    }
+                }
+                _ => Err(datafusion::error::DataFusionError::Execution(format!(
+                    "Unsupported type {:?}",
+                    self.data_type
+                ))),
+            },
+        }
+    }
+
+    fn state(&mut self) -> Result<Vec<ScalarValue>> {
+        let values_scalar = ScalarValue::new_list_nullable(
+            &self
+                .values
+                .iter()
+                .map(|&v| ScalarValue::Int64(Some(v)))
+                .collect::<Vec<_>>(),
+            &DataType::Int64,
+        );
+
+        Ok(vec![
+            ScalarValue::List(values_scalar),
+            ScalarValue::Float64(Some(self.percentile)),
+            ScalarValue::UInt8(Some(2)), // 2 = interval type
+        ])
+    }
+
+    fn size(&self) -> usize {
+        std::mem::size_of_val(&self.values)
+            + self.values.capacity() * std::mem::size_of::<i64>()
             + std::mem::size_of::<f64>()
             + std::mem::size_of::<DataType>()
     }
@@ -730,6 +1017,275 @@ mod tests {
 
         // Median of [10, 20] with interpolation: 10 + 0.5 * (20 - 10) = 15
         assert_eq!(result, ScalarValue::Float64(Some(15.0)));
+        Ok(())
+    }
+
+    #[test]
+    fn test_interval_year_month_percentile_50() -> Result<()> {
+        use datafusion::arrow::array::IntervalYearMonthArray;
+
+        let mut acc = IntervalPercentileAccumulator::new(
+            0.5,
+            DataType::Interval(datafusion::arrow::datatypes::IntervalUnit::YearMonth),
+        );
+
+        // VALUES: INTERVAL '0' MONTH, INTERVAL '10' MONTH
+        // Expected: INTERVAL '5' MONTH (0-5 in YEAR TO MONTH format)
+        let values: ArrayRef = Arc::new(IntervalYearMonthArray::from(vec![Some(0), Some(10)]));
+
+        acc.update_batch(&[values])?;
+        let result = acc.evaluate()?;
+
+        // Percentile 0.5 of [0, 10] = 0 + 0.5 * (10 - 0) = 5 months
+        assert_eq!(result, ScalarValue::IntervalYearMonth(Some(5)));
+        Ok(())
+    }
+    use datafusion_common::{DataFusionError, Result};
+
+    #[test]
+    fn test_interval_year_month_percentile_25() -> Result<()> {
+        use datafusion::arrow::array::IntervalYearMonthArray;
+
+        let mut acc = IntervalPercentileAccumulator::new(
+            0.25,
+            DataType::Interval(datafusion::arrow::datatypes::IntervalUnit::YearMonth),
+        );
+
+        let values: ArrayRef = Arc::new(IntervalYearMonthArray::from(vec![Some(0), Some(10)]));
+
+        acc.update_batch(&[values])?;
+        let result = acc.evaluate()?;
+
+        match result {
+            ScalarValue::IntervalYearMonth(Some(v)) => {
+                assert!((2..=3).contains(&v));
+                Ok(())
+            }
+            other => Err(DataFusionError::Internal(format!(
+                "Expected IntervalYearMonth, got: {:?}",
+                other
+            ))),
+        }
+    }
+
+    #[test]
+    fn test_interval_day_time_percentile_50() -> Result<()> {
+        use datafusion::arrow::array::IntervalDayTimeArray;
+        use datafusion::arrow::datatypes::IntervalDayTime;
+
+        let mut acc = IntervalPercentileAccumulator::new(
+            0.5,
+            DataType::Interval(datafusion::arrow::datatypes::IntervalUnit::DayTime),
+        );
+
+        let val1 = IntervalDayTime {
+            days: 0,
+            milliseconds: 0,
+        };
+        let val2 = IntervalDayTime {
+            days: 0,
+            milliseconds: 10000,
+        };
+
+        let values: ArrayRef = Arc::new(IntervalDayTimeArray::from(vec![Some(val1), Some(val2)]));
+
+        acc.update_batch(&[values])?;
+        let result = acc.evaluate()?;
+
+        match result {
+            ScalarValue::IntervalDayTime(Some(interval)) => {
+                assert_eq!(interval.days, 0);
+                assert_eq!(interval.milliseconds, 5000);
+                Ok(())
+            }
+            other => Err(DataFusionError::Internal(format!(
+                "Expected IntervalDayTime, got: {:?}",
+                other
+            ))),
+        }
+    }
+
+    #[test]
+    fn test_interval_year_month_multiple_values() -> Result<()> {
+        use datafusion::arrow::array::IntervalYearMonthArray;
+
+        let mut acc = IntervalPercentileAccumulator::new(
+            0.5,
+            DataType::Interval(datafusion::arrow::datatypes::IntervalUnit::YearMonth),
+        );
+
+        let values: ArrayRef = Arc::new(IntervalYearMonthArray::from(vec![
+            Some(0),
+            Some(1),
+            Some(2),
+            Some(10),
+        ]));
+
+        acc.update_batch(&[values])?;
+        let result = acc.evaluate()?;
+
+        match result {
+            ScalarValue::IntervalYearMonth(Some(v)) => {
+                assert!((1..=2).contains(&v));
+                Ok(())
+            }
+            other => Err(DataFusionError::Internal(format!(
+                "Expected IntervalYearMonth, got: {:?}",
+                other
+            ))),
+        }
+    }
+
+    #[test]
+    fn test_interval_with_nulls() -> Result<()> {
+        use datafusion::arrow::array::IntervalYearMonthArray;
+
+        let mut acc = IntervalPercentileAccumulator::new(
+            0.5,
+            DataType::Interval(datafusion::arrow::datatypes::IntervalUnit::YearMonth),
+        );
+
+        let values: ArrayRef = Arc::new(IntervalYearMonthArray::from(vec![
+            Some(0),
+            None,
+            Some(10),
+            None,
+        ]));
+
+        acc.update_batch(&[values])?;
+        let result = acc.evaluate()?;
+
+        assert_eq!(result, ScalarValue::IntervalYearMonth(Some(5)));
+        Ok(())
+    }
+
+    #[test]
+    fn test_interval_empty() -> Result<()> {
+        let mut acc = IntervalPercentileAccumulator::new(
+            0.5,
+            DataType::Interval(datafusion::arrow::datatypes::IntervalUnit::YearMonth),
+        );
+
+        let result = acc.evaluate()?;
+
+        assert_eq!(result, ScalarValue::IntervalYearMonth(None));
+        Ok(())
+    }
+
+    #[test]
+    fn test_interval_single_value() -> Result<()> {
+        use datafusion::arrow::array::IntervalYearMonthArray;
+
+        let mut acc = IntervalPercentileAccumulator::new(
+            0.5,
+            DataType::Interval(datafusion::arrow::datatypes::IntervalUnit::YearMonth),
+        );
+
+        let values: ArrayRef = Arc::new(IntervalYearMonthArray::from(vec![Some(12)]));
+
+        acc.update_batch(&[values])?;
+        let result = acc.evaluate()?;
+
+        assert_eq!(result, ScalarValue::IntervalYearMonth(Some(12)));
+        Ok(())
+    }
+
+    #[test]
+    fn test_duration_second_percentile() -> Result<()> {
+        use datafusion::arrow::array::DurationSecondArray;
+
+        let mut acc = IntervalPercentileAccumulator::new(
+            0.5,
+            DataType::Duration(datafusion::arrow::datatypes::TimeUnit::Second),
+        );
+
+        let values: ArrayRef = Arc::new(DurationSecondArray::from(vec![Some(0), Some(100)]));
+
+        acc.update_batch(&[values])?;
+        let result = acc.evaluate()?;
+
+        assert_eq!(result, ScalarValue::DurationSecond(Some(50)));
+        Ok(())
+    }
+
+    #[test]
+    fn test_interval_day_time_with_days() -> Result<()> {
+        use datafusion::arrow::array::IntervalDayTimeArray;
+        use datafusion::arrow::datatypes::IntervalDayTime;
+
+        let mut acc = IntervalPercentileAccumulator::new(
+            0.5,
+            DataType::Interval(datafusion::arrow::datatypes::IntervalUnit::DayTime),
+        );
+
+        let val1 = IntervalDayTime {
+            days: 0,
+            milliseconds: 0,
+        };
+        let val2 = IntervalDayTime {
+            days: 2,
+            milliseconds: 0,
+        };
+
+        let values: ArrayRef = Arc::new(IntervalDayTimeArray::from(vec![Some(val1), Some(val2)]));
+
+        acc.update_batch(&[values])?;
+        let result = acc.evaluate()?;
+
+        match result {
+            ScalarValue::IntervalDayTime(Some(interval)) => {
+                assert_eq!(interval.days, 1);
+                assert_eq!(interval.milliseconds, 0);
+                Ok(())
+            }
+            other => Err(DataFusionError::Internal(format!(
+                "Expected IntervalDayTime, got: {:?}",
+                other
+            ))),
+        }
+    }
+
+    #[test]
+    fn test_interval_percentile_0() -> Result<()> {
+        use datafusion::arrow::array::IntervalYearMonthArray;
+
+        let mut acc = IntervalPercentileAccumulator::new(
+            0.0,
+            DataType::Interval(datafusion::arrow::datatypes::IntervalUnit::YearMonth),
+        );
+
+        let values: ArrayRef = Arc::new(IntervalYearMonthArray::from(vec![
+            Some(5),
+            Some(10),
+            Some(15),
+        ]));
+
+        acc.update_batch(&[values])?;
+        let result = acc.evaluate()?;
+
+        assert_eq!(result, ScalarValue::IntervalYearMonth(Some(5)));
+        Ok(())
+    }
+
+    #[test]
+    fn test_interval_percentile_100() -> Result<()> {
+        use datafusion::arrow::array::IntervalYearMonthArray;
+
+        let mut acc = IntervalPercentileAccumulator::new(
+            1.0,
+            DataType::Interval(datafusion::arrow::datatypes::IntervalUnit::YearMonth),
+        );
+
+        let values: ArrayRef = Arc::new(IntervalYearMonthArray::from(vec![
+            Some(5),
+            Some(10),
+            Some(15),
+        ]));
+
+        acc.update_batch(&[values])?;
+        let result = acc.evaluate()?;
+
+        assert_eq!(result, ScalarValue::IntervalYearMonth(Some(15)));
         Ok(())
     }
 }

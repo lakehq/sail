@@ -331,19 +331,16 @@ fn listagg(input: AggFunctionInput) -> PlanResult<expr::Expr> {
 fn median(input: AggFunctionInput) -> PlanResult<expr::Expr> {
     let mut args = input.arguments.clone();
     args.push(lit(0.5_f64));
-    Ok(cast(
-        expr::Expr::AggregateFunction(AggregateFunction {
-            func: Arc::new(AggregateUDF::from(PercentileFunction::new())),
-            params: AggregateFunctionParams {
-                args,
-                distinct: input.distinct,
-                filter: input.filter,
-                order_by: input.order_by,
-                null_treatment: get_null_treatment(input.ignore_nulls),
-            },
-        }),
-        DataType::Float64,
-    ))
+    Ok(expr::Expr::AggregateFunction(AggregateFunction {
+        func: Arc::new(AggregateUDF::from(PercentileFunction::new())),
+        params: AggregateFunctionParams {
+            args,
+            distinct: input.distinct,
+            filter: input.filter,
+            order_by: input.order_by,
+            null_treatment: get_null_treatment(input.ignore_nulls),
+        },
+    }))
 }
 
 fn percentile_exact(input: AggFunctionInput) -> PlanResult<expr::Expr> {

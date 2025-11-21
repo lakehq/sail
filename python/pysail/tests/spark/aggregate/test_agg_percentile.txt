@@ -113,23 +113,22 @@ root
 +------+
 
 # Test 13: Percentile with group by
-# error check
-# from pyspark.sql import functions as sf, types as T
-# data = [("A", 1), ("A", 2), ("A", 3), ("B", 10), ("B", 20), ("B", 30),]
-# df = spark.createDataFrame(data, ["group", "value"])
-# out = df.groupBy("group").agg(sf.percentile("value", sf.lit(0.5)).alias("median")).orderBy("group")
-# out.show()
-# +-----+------+
-# |group|median|
-# +-----+------+
-# |    A|   2.0|
-# |    B|  20.0|
-# +-----+------+
+>>> from pyspark.sql import functions as sf, types as T
+>>> data = [("A", 1), ("A", 2), ("A", 3), ("B", 10), ("B", 20), ("B", 30),]
+>>> df = spark.createDataFrame(data, ["group", "value"])
+>>> out = df.groupBy("group").agg(sf.percentile("value", sf.lit(0.5)).alias("median")).orderBy("group")
+>>> out.show()
++-----+------+
+|group|median|
++-----+------+
+|    A|   2.0|
+|    B|  20.0|
++-----+------+
 
-# >>> out.printSchema()
-# root
-#  |-- group: string (nullable = true)
-#  |-- median: double (nullable = true)
+>>> out.printSchema()
+root
+ |-- group: string (nullable = true)
+ |-- median: double (nullable = true)
 
 # Test 14: Percentile with duplicates
 >>> df = spark.createDataFrame([(1,), (2,), (2,), (2,), (3,)], ["x"])
@@ -186,41 +185,37 @@ root
 +-----+----+-----+
 
 # Test 19: Percentile with string column (if supported)
-# Note: Spark SQL's percentile doesn't support strings directly
-# This would fail in standard Spark but Sail supports it
-# [CAST_INVALID_INPUT] The value 'a' of the type "STRING" cannot be cast to "DOUBLE"
-# df = spark.createDataFrame([("a",), ("b",), ("c",), ("d",), ("e",)], ["x"])
-# df.select(sf.percentile("x", sf.lit(0.5)).alias("median")).show()
-# +------+
-# |median|
-# +------+
-# |     c|
-# +------+
+>>> df = spark.createDataFrame([("a",), ("b",), ("c",), ("d",), ("e",)], ["x"])
+>>> df.select(sf.percentile("x", sf.lit(0.5)).alias("median")).show()
++------+
+|median|
++------+
+|     c|
++------+
 
 # Test 20: Percentile with repeated string values
-# df = spark.createDataFrame([("a",), ("a",), ("a",), ("a",), ("a",)], ["x"])
-# df.select(sf.percentile("x", sf.lit(0.5)).alias("median")).show()
-# +------+
-# |median|
-# +------+
-# |     a|
-# +------+
+>>> df = spark.createDataFrame([("a",), ("a",), ("a",), ("a",), ("a",)], ["x"])
+>>> df.select(sf.percentile("x", sf.lit(0.5)).alias("median")).show()
++------+
+|median|
++------+
+|     a|
++------+
 
 # Test 21: Percentile with sorted strings
-# df = spark.createDataFrame([
-# ("apple",),
-# ("banana",),
-# ("cherry",),
-# ("date",),
-# ("elderberry",)
-# ], ["fruit"])
-# df.select(sf.percentile("fruit", sf.lit(0.5)).alias("median_fruit")).show(truncate=False)
-# [CAST_INVALID_INPUT] The value 'elderberry' of the type "STRING" cannot be cast to "DOUBLE"
-# +------------+
-# |median_fruit|
-# +------------+
-# |cherry      |
-# +------------+
+>>> df = spark.createDataFrame([
+...     ("apple",),
+...     ("banana",),
+...     ("cherry",),
+...     ("date",),
+...     ("elderberry",)
+...     ], ["fruit"])
+>>> df.select(sf.percentile("fruit", sf.lit(0.5)).alias("median_fruit")).show(truncate=False)
++------------+
+|median_fruit|
++------------+
+|cherry      |
++------------+
 
 # Test 22: Percentile with NULLs in string column
 >>> df = spark.createDataFrame([
@@ -238,28 +233,28 @@ root
 +------------+
 
 # Test 23: Percentile with interval types (YearMonth)
-# >>> spark.sql("SELECT percentile(col, 0.5) FROM VALUES (interval '0 months'), (interval '10 months') AS tab(col)").show(truncate=False)
-# +----------------------------+
-# |percentile(col, 0.5, 1)     |
-# +----------------------------+
-# |INTERVAL '0-5' YEAR TO MONTH|
-# +----------------------------+
+>>> spark.sql("SELECT percentile(col, 0.5) FROM VALUES (interval '0 months'), (interval '10 months') AS tab(col)").show(truncate=False)
++----------------------------+
+|percentile(col, 0.5, 1)     |
++----------------------------+
+|INTERVAL '0-5' YEAR TO MONTH|
++----------------------------+
 
 # Test 24: Percentile with interval types (DayTime)
-# >>> spark.sql("SELECT percentile(col, 0.5) FROM VALUES (interval '0 seconds'), (interval '10 seconds') AS tab(col)").show(truncate=False)
-# +-------------------------------+
-# |percentile(col, 0.5, 1)        |
-# +-------------------------------+
-# |INTERVAL '0 00:00:05' DAY TO SE|
-# +-------------------------------+
+>>> spark.sql("SELECT percentile(col, 0.5) FROM VALUES (interval '0 seconds'), (interval '10 seconds') AS tab(col)").show(truncate=False)
++-------------------------------+
+|percentile(col, 0.5, 1)        |
++-------------------------------+
+|INTERVAL '0 00:00:05' DAY TO SE|
++-------------------------------+
 
 # Test 25: Percentile with interval types and NULLs
-# >>> spark.sql("SELECT percentile(col, 0.5) FROM VALUES (interval '0 months'), null, (interval '10 months') AS tab(col)").show(truncate=False)
-# +----------------------------+
-# |percentile(col, 0.5, 1)     |
-# +----------------------------+
-# |INTERVAL '0-5' YEAR TO MONTH|
-# +----------------------------+
+>>> spark.sql("SELECT percentile(col, 0.5) FROM VALUES (interval '0 months'), null, (interval '10 months') AS tab(col)").show(truncate=False)
++----------------------------+
+|percentile(col, 0.5, 1)     |
++----------------------------+
+|INTERVAL '0-5' YEAR TO MONTH|
++----------------------------+
 
 # Test 26: Percentile with decimal values
 >>> from decimal import Decimal
