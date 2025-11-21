@@ -2071,7 +2071,7 @@
         }
       },
       "output": {
-        "failure": "not implemented: unknown aggregate function: percentile_disc"
+        "success": "ok"
       }
     },
     {
@@ -2093,7 +2093,7 @@
         }
       },
       "output": {
-        "failure": "not implemented: unknown aggregate function: percentile_disc"
+        "success": "ok"
       }
     },
     {
