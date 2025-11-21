@@ -162,7 +162,7 @@ impl DuckLakeMetaStore for PythonMetaStore {
         let table_name = table_name.to_string();
         let schema_name = schema_name.map(|s| s.to_string());
         let json: String = tokio::task::spawn_blocking(move || {
-            Python::with_gil(|py| {
+            Python::attach(|py| {
                 let call: PyResult<String> = (|| {
                     let m = crate::python::Modules::DUCKLAKE_METADATA.load(py)?;
                     let obj = m.getattr("load_table")?.call1((
@@ -257,7 +257,7 @@ impl DuckLakeMetaStore for PythonMetaStore {
     async fn current_snapshot(&self) -> DataFusionResult<DuckLakeSnapshot> {
         let url = self.url.clone();
         let json: String = tokio::task::spawn_blocking(move || {
-            Python::with_gil(|py| {
+            Python::attach(|py| {
                 let call: PyResult<String> = (|| {
                     let m = Modules::DUCKLAKE_METADATA.load(py)?;
                     let obj = m.getattr("current_snapshot")?.call1((url.as_str(),))?;
@@ -302,7 +302,7 @@ impl DuckLakeMetaStore for PythonMetaStore {
     async fn snapshot_by_id(&self, snapshot_id: u64) -> DataFusionResult<DuckLakeSnapshot> {
         let url = self.url.clone();
         let json: String = tokio::task::spawn_blocking(move || {
-            Python::with_gil(|py| {
+            Python::attach(|py| {
                 let call: PyResult<String> = (|| {
                     let m = Modules::DUCKLAKE_METADATA.load(py)?;
                     let obj = m
@@ -352,7 +352,7 @@ impl DuckLakeMetaStore for PythonMetaStore {
     ) -> DataFusionResult<Vec<FileInfo>> {
         let url = self.url.clone();
         let json: String = tokio::task::spawn_blocking(move || {
-            Python::with_gil(|py| {
+            Python::attach(|py| {
                 let call: PyResult<String> = (|| {
                     let m = Modules::DUCKLAKE_METADATA.load(py)?;
                     let obj = m.getattr("list_data_files")?.call1((

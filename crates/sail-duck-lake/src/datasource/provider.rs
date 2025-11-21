@@ -248,7 +248,7 @@ impl TableProvider for DuckLakeTableProvider {
             FileScanConfigBuilder::new(object_store_url, self.schema.clone(), parquet_source)
                 .with_file_groups(file_groups)
                 .with_statistics(table_stats)
-                .with_projection(projection.cloned())
+                .with_projection_indices(projection.cloned())
                 .with_limit(limit)
                 .build();
 
