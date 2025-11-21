@@ -32,5 +32,3 @@ jobs:
         run: |
           chmod +x scripts/iceberg-tests/run-tests.sh
           ./scripts/iceberg-tests/run-tests.sh
-
-
