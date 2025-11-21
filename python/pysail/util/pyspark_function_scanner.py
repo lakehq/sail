@@ -11,7 +11,10 @@ import json
 import logging
 from collections import Counter
 from pathlib import Path
-from typing import Optional, Tuple
+from typing import Optional, Set, Tuple, Dict
+
+
+logging.basicConfig(level=logging.INFO, format="%(levelname)s: %(message)s")
 
 # Relevant modules to track
 TARGET_MODULES = {
@@ -19,49 +22,74 @@ TARGET_MODULES = {
     "pyspark.sql.window",
 }
 
-_TARGET_PACKAGES = {module_adr.rsplit(".", 1)[0] for module_adr in TARGET_MODULES}
-
-logging.basicConfig(level=logging.INFO, format="%(levelname)s: %(message)s")
+# Derived set of package roots to optimize checks (e.g., "pyspark.sql")
+TARGET_PACKAGES = {
+    module.rsplit(".", 1)[0] for module in TARGET_MODULES if "." in module
+}
 
 
 class PysparkFunctionScanner(ast.NodeVisitor):
-    def __init__(self):
-        self.module_aliases: dict[str, str] = {}
-        self.direct_imports: dict[str, Tuple[str, str]] = {}
-        self.calls: Counter = Counter()
+    """
+    AST Visitor that tracks imports and function calls for specific target modules.
+    """
 
-    def _handle_module_alias(self, full_name: str, alias: Optional[str] = None) -> None:
-        if full_name.lower() in TARGET_MODULES:
+    def __init__(self):
+        self.module_aliases: Dict[str, str] = {}
+        self.direct_imports: Dict[str, Tuple[str, str]] = {}
+        self.calls: Counter = Counter()
+        self.wildcard_warning = False
+
+    def _register_alias(self, full_name: str, alias: Optional[str] = None) -> None:
+        """Registers a local alias for a tracked module."""
+        if full_name in TARGET_MODULES:
             local_name = alias or full_name.rsplit(".", 1)[-1]
             self.module_aliases[local_name] = full_name
 
     def visit_Import(self, node: ast.Import) -> None:
         for alias in node.names:
-            self._handle_module_alias(alias.name, alias.asname)
+            self._register_alias(alias.name, alias.asname)
         self.generic_visit(node)
 
     def visit_ImportFrom(self, node: ast.ImportFrom) -> None:
-        # Direct imports from tracked modules -> direct_imports
-        if node.module.lower() in TARGET_MODULES:
+        if not node.module:
+            return self.generic_visit(node)
+
+        module_name = node.module.lower()
+
+        # Case 1: from pyspark.sql.functions import col
+        if module_name in TARGET_MODULES:
             for alias in node.names:
+                if alias.name == "*":
+                    self.wildcard_warning = True
+                    continue
                 local = alias.asname or alias.name
-                self.direct_imports[local] = (node.module, alias.name)
-        elif node.module.lower() in _TARGET_PACKAGES:
+                self.direct_imports[local] = (module_name, alias.name)
+
+        # Case 2: from pyspark.sql import functions as F
+        elif module_name in TARGET_PACKAGES:
             for alias in node.names:
-                module_adr = f"{node.module}.{alias.name}".lower()
-                if module_adr in TARGET_MODULES:
-                    self.module_aliases[alias.asname or alias.name] = module_adr
+                full_imported_module = f"{module_name}.{alias.name}".lower()
+                if full_imported_module in TARGET_MODULES:
+                    self._register_alias(
+                        full_imported_module, alias.asname or alias.name
+                    )
+
         self.generic_visit(node)
 
     def visit_Call(self, node: ast.Call) -> None:
         func = node.func
+
+        # Case: F.col(...) -> where F is an alias for a target module
         if isinstance(func, ast.Attribute) and isinstance(func.value, ast.Name):
             alias = func.value.id
             if alias in self.module_aliases:
                 self.calls[(self.module_aliases[alias], func.attr)] += 1
+
+        # Case: col(...) -> where col was imported directly
         elif isinstance(func, ast.Name) and func.id in self.direct_imports:
             origin, real_name = self.direct_imports[func.id]
             self.calls[(origin, real_name)] += 1
+
         self.generic_visit(node)
 
 
