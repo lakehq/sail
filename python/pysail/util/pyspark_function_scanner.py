@@ -14,10 +14,12 @@ from pathlib import Path
 from typing import Optional, Tuple
 
 # Relevant modules to track
-TARGET_MODULES = (
+TARGET_MODULES = {
     "pyspark.sql.functions",
     "pyspark.sql.window",
-)
+}
+
+_TARGET_PACKAGES = {module_adr.rsplit(".", 1)[0] for module_adr in TARGET_MODULES}
 
 logging.basicConfig(level=logging.INFO, format="%(levelname)s: %(message)s")
 
@@ -29,7 +31,7 @@ class PysparkFunctionScanner(ast.NodeVisitor):
         self.calls: Counter = Counter()
 
     def _handle_module_alias(self, full_name: str, alias: Optional[str] = None) -> None:
-        if full_name in TARGET_MODULES:
+        if full_name.lower() in TARGET_MODULES:
             local_name = alias or full_name.rsplit(".", 1)[-1]
             self.module_aliases[local_name] = full_name
 
@@ -40,17 +42,15 @@ class PysparkFunctionScanner(ast.NodeVisitor):
 
     def visit_ImportFrom(self, node: ast.ImportFrom) -> None:
         # Direct imports from tracked modules -> direct_imports
-        if node.module in TARGET_MODULES:
+        if node.module.lower() in TARGET_MODULES:
             for alias in node.names:
                 local = alias.asname or alias.name
                 self.direct_imports[local] = (node.module, alias.name)
-        elif node.module == "pyspark.sql":
+        elif node.module.lower() in _TARGET_PACKAGES:
             for alias in node.names:
-                name = alias.name
-                if name in ("functions", "window"):
-                    self._handle_module_alias(f"pyspark.sql.{name}", alias.asname)
-                elif name == "Window":
-                    self.module_aliases[alias.asname or "Window"] = "pyspark.sql.window"
+                module_adr = f"{node.module}.{alias.name}".lower()
+                if module_adr in TARGET_MODULES:
+                    self.module_aliases[alias.asname or alias.name] = module_adr
 
         self.generic_visit(node)
 
@@ -132,7 +132,7 @@ def main():
     )
     parser.add_argument("directory", help="Directory to scan recursively")
 
-    # Optional output format for machine reading
+    # Optional output format argument for machine readable result
     parser.add_argument(
         "-o",
         "--output",
