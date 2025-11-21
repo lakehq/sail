@@ -2,6 +2,7 @@ use std::cell::RefCell;
 use std::collections::HashMap;
 use std::sync::Arc;
 
+use chrono::{Datelike, Timelike};
 use datafusion::arrow::array::{ArrayRef, BooleanArray, UInt64Array};
 use datafusion::arrow::datatypes::{DataType as ArrowDataType, Schema as ArrowSchema};
 use datafusion::catalog::Session;
@@ -12,7 +13,10 @@ use datafusion::logical_expr::utils::conjunction;
 use datafusion::logical_expr::Expr;
 use datafusion::physical_optimizer::pruning::PruningPredicate;
 
-use crate::spec::{ColumnInfo, ColumnStatsInfo, FieldIndex, FileInfo};
+use crate::spec::{
+    parse_year, parse_year_month, parse_year_month_day, parse_year_month_day_hour, ColumnInfo,
+    ColumnStatsInfo, FieldIndex, FileInfo, PartitionFieldInfo, Transform,
+};
 
 /// TODO:Implement contains_nan-aware float/double pruning gates
 struct DuckLakePruningStats {
@@ -23,10 +27,16 @@ struct DuckLakePruningStats {
     max_cache: RefCell<HashMap<FieldIndex, ArrayRef>>,
     nulls_cache: RefCell<HashMap<FieldIndex, ArrayRef>>,
     rows_cache: RefCell<Option<ArrayRef>>,
+    partition_col_map: HashMap<FieldIndex, Vec<(u64, Transform)>>,
 }
 
 impl DuckLakePruningStats {
-    fn new(files: Vec<FileInfo>, arrow_schema: Arc<ArrowSchema>, columns: &[ColumnInfo]) -> Self {
+    fn new(
+        files: Vec<FileInfo>,
+        arrow_schema: Arc<ArrowSchema>,
+        columns: &[ColumnInfo],
+        partition_fields: &[PartitionFieldInfo],
+    ) -> Self {
         let mut name_to_field_id: HashMap<String, FieldIndex> = HashMap::new();
         let mut field_id_to_datatype: HashMap<FieldIndex, ArrowDataType> = HashMap::new();
         for c in columns {
@@ -45,6 +55,7 @@ impl DuckLakePruningStats {
             max_cache: RefCell::new(HashMap::new()),
             nulls_cache: RefCell::new(HashMap::new()),
             rows_cache: RefCell::new(None),
+            partition_col_map: Self::build_partition_map(partition_fields),
         }
     }
 
@@ -67,6 +78,160 @@ impl DuckLakePruningStats {
     ) -> Option<&'a ColumnStatsInfo> {
         file.column_stats.iter().find(|s| s.column_id == *field_id)
     }
+
+    fn build_partition_map(
+        partition_fields: &[PartitionFieldInfo],
+    ) -> HashMap<FieldIndex, Vec<(u64, Transform)>> {
+        let mut map: HashMap<FieldIndex, Vec<(u64, Transform)>> = HashMap::new();
+        for field in partition_fields {
+            let transform = field.transform.parse().unwrap_or(Transform::Unknown);
+            map.entry(field.column_id)
+                .or_default()
+                .push((field.partition_key_index, transform));
+        }
+        map
+    }
+
+    fn get_partition_range_for_file(
+        &self,
+        file: &FileInfo,
+        field_id: &FieldIndex,
+    ) -> Option<(ScalarValue, ScalarValue)> {
+        let mappings = self.partition_col_map.get(field_id)?;
+        let data_type = self.field_type_for(field_id)?;
+        let mut identity_value: Option<ScalarValue> = None;
+        let mut year_component: Option<i32> = None;
+        let mut month_component: Option<u32> = None;
+        let mut day_component: Option<u32> = None;
+        let mut hour_component: Option<u32> = None;
+
+        for (partition_key_index, transform) in mappings {
+            let part_value = file
+                .partition_values
+                .iter()
+                .find(|v| v.partition_key_index == *partition_key_index)
+                .map(|v| v.partition_value.as_str());
+            let Some(part_value) = part_value else {
+                continue;
+            };
+            match transform {
+                Transform::Identity => {
+                    if identity_value.is_none() {
+                        if let Ok(value) =
+                            ScalarValue::try_from_string(part_value.to_string(), &data_type)
+                        {
+                            identity_value = Some(value);
+                        }
+                    }
+                }
+                Transform::Year => {
+                    if year_component.is_none() {
+                        year_component = parse_year(part_value);
+                    }
+                }
+                Transform::Month => {
+                    if let Some((year, month)) = parse_year_month(part_value) {
+                        if year_component.is_none() {
+                            year_component = Some(year);
+                        }
+                        if Self::is_valid_month(month) {
+                            month_component = Some(month);
+                        }
+                    } else if let Ok(month) = part_value.trim().parse::<u32>() {
+                        if Self::is_valid_month(month) {
+                            month_component = Some(month);
+                        }
+                    }
+                }
+                Transform::Day => {
+                    if let Some(date) = parse_year_month_day(part_value) {
+                        if year_component.is_none() {
+                            year_component = Some(date.year());
+                        }
+                        if month_component.is_none() && Self::is_valid_month(date.month()) {
+                            month_component = Some(date.month());
+                        }
+                        if Self::is_valid_day(date.day()) {
+                            day_component = Some(date.day());
+                        }
+                    } else if let Ok(day) = part_value.trim().parse::<u32>() {
+                        if Self::is_valid_day(day) {
+                            day_component = Some(day);
+                        }
+                    }
+                }
+                Transform::Hour => {
+                    if let Some(dt) = parse_year_month_day_hour(part_value) {
+                        if year_component.is_none() {
+                            year_component = Some(dt.year());
+                        }
+                        if month_component.is_none() && Self::is_valid_month(dt.month()) {
+                            month_component = Some(dt.month());
+                        }
+                        if day_component.is_none() && Self::is_valid_day(dt.day()) {
+                            day_component = Some(dt.day());
+                        }
+                        if Self::is_valid_hour(dt.hour()) {
+                            hour_component = Some(dt.hour());
+                        }
+                    } else if let Ok(hour) = part_value.trim().parse::<u32>() {
+                        if Self::is_valid_hour(hour) {
+                            hour_component = Some(hour);
+                        }
+                    }
+                }
+                Transform::Unknown => {}
+            }
+        }
+
+        if let Some(identity) = identity_value {
+            return Some((identity.clone(), identity));
+        }
+
+        Self::build_temporal_range(
+            &data_type,
+            year_component,
+            month_component,
+            day_component,
+            hour_component,
+        )
+    }
+
+    fn build_temporal_range(
+        data_type: &ArrowDataType,
+        year: Option<i32>,
+        month: Option<u32>,
+        day: Option<u32>,
+        hour: Option<u32>,
+    ) -> Option<(ScalarValue, ScalarValue)> {
+        let year = year?;
+        if let Some(month) = month {
+            if let Some(day) = day {
+                if let Some(hour) = hour {
+                    let value = format!("{year:04}-{month:02}-{day:02}-{hour:02}");
+                    return Transform::Hour.get_range(&value, data_type);
+                }
+                let value = format!("{year:04}-{month:02}-{day:02}");
+                return Transform::Day.get_range(&value, data_type);
+            }
+            let value = format!("{year:04}-{month:02}");
+            return Transform::Month.get_range(&value, data_type);
+        }
+        let value = format!("{year}");
+        Transform::Year.get_range(&value, data_type)
+    }
+
+    fn is_valid_month(month: u32) -> bool {
+        (1..=12).contains(&month)
+    }
+
+    fn is_valid_day(day: u32) -> bool {
+        (1..=31).contains(&day)
+    }
+
+    fn is_valid_hour(hour: u32) -> bool {
+        hour < 24
+    }
 }
 
 impl PruningStatistics for DuckLakePruningStats {
@@ -76,11 +241,14 @@ impl PruningStatistics for DuckLakePruningStats {
             return Some(arr.clone());
         }
         let values = self.files.iter().map(|f| {
-            let v = Self::get_column_stats(f, &field_id)
-                .and_then(|s| s.min_value.as_deref())
-                .and_then(|s| self.parse_stat_value(&field_id, s))
-                .unwrap_or(ScalarValue::Null);
-            v
+            self.get_partition_range_for_file(f, &field_id)
+                .map(|(min, _)| min)
+                .or_else(|| {
+                    Self::get_column_stats(f, &field_id)
+                        .and_then(|s| s.min_value.as_deref())
+                        .and_then(|s| self.parse_stat_value(&field_id, s))
+                })
+                .unwrap_or(ScalarValue::Null)
         });
         let arr = ScalarValue::iter_to_array(values).ok()?;
         self.min_cache.borrow_mut().insert(field_id, arr.clone());
@@ -93,11 +261,14 @@ impl PruningStatistics for DuckLakePruningStats {
             return Some(arr.clone());
         }
         let values = self.files.iter().map(|f| {
-            let v = Self::get_column_stats(f, &field_id)
-                .and_then(|s| s.max_value.as_deref())
-                .and_then(|s| self.parse_stat_value(&field_id, s))
-                .unwrap_or(ScalarValue::Null);
-            v
+            self.get_partition_range_for_file(f, &field_id)
+                .map(|(_, max)| max)
+                .or_else(|| {
+                    Self::get_column_stats(f, &field_id)
+                        .and_then(|s| s.max_value.as_deref())
+                        .and_then(|s| self.parse_stat_value(&field_id, s))
+                })
+                .unwrap_or(ScalarValue::Null)
         });
         let arr = ScalarValue::iter_to_array(values).ok()?;
         self.max_cache.borrow_mut().insert(field_id, arr.clone());
@@ -153,13 +324,14 @@ pub fn prune_files(
     logical_schema: Arc<ArrowSchema>,
     files: Vec<FileInfo>,
     columns: &[ColumnInfo],
+    partition_fields: &[PartitionFieldInfo],
 ) -> DataFusionResult<(Vec<FileInfo>, Option<Vec<bool>>)> {
     let filter_expr = conjunction(filters.iter().cloned());
     if filter_expr.is_none() && limit.is_none() {
         return Ok((files, None));
     }
 
-    let stats = DuckLakePruningStats::new(files, logical_schema.clone(), columns);
+    let stats = DuckLakePruningStats::new(files, logical_schema.clone(), columns, partition_fields);
     let files_to_keep = if let Some(predicate) = &filter_expr {
         let df_schema = logical_schema.clone().to_dfschema()?;
         let physical_predicate = session.create_physical_expr(predicate.clone(), &df_schema)?;

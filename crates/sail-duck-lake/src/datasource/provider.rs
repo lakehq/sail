@@ -24,7 +24,6 @@ use crate::datasource::expressions::{get_pushdown_filters, simplify_expr};
 use crate::datasource::pruning::prune_files;
 use crate::metadata::{DuckLakeMetaStore, DuckLakeTable};
 use crate::options::DuckLakeOptions;
-use crate::spec::{FileInfo, FilePartitionInfo};
 
 pub struct DuckLakeTableProvider {
     table: DuckLakeTable,
@@ -155,12 +154,10 @@ impl TableProvider for DuckLakeTableProvider {
                 prune_schema.clone(),
                 files,
                 &self.table.columns,
+                &self.table.partition_fields,
             )?;
             kept
         };
-
-        // Partition pruning (identity transform only)
-        files = self.prune_by_identity_partitions(&files, &pruning_filters);
 
         // Parse base_path URL and construct ObjectStoreUrl with only scheme + authority
         let base_url =
@@ -291,153 +288,6 @@ impl DuckLakeTableProvider {
             num_rows: Precision::Absent,
             total_byte_size: Precision::Absent,
             column_statistics,
-        }
-    }
-
-    fn prune_by_identity_partitions(&self, files: &[FileInfo], filters: &[Expr]) -> Vec<FileInfo> {
-        if self.table.partition_fields.is_empty() {
-            return files.to_vec();
-        }
-        // Build mapping: partition_key_index -> (column_name, datatype), only identity transforms
-        let mut pki_to_col: HashMap<u64, (&str, datafusion::arrow::datatypes::DataType)> =
-            HashMap::new();
-        for pf in &self.table.partition_fields {
-            if pf.transform.to_lowercase() != "identity" {
-                continue;
-            }
-            if let Some(col) = self
-                .table
-                .columns
-                .iter()
-                .find(|c| c.column_id == pf.column_id)
-            {
-                if let Ok(idx) = self.schema.index_of(col.column_name.as_str()) {
-                    let dt = self.schema.field(idx).data_type().clone();
-                    pki_to_col.insert(pf.partition_key_index, (col.column_name.as_str(), dt));
-                }
-            }
-        }
-        if pki_to_col.is_empty() {
-            return files.to_vec();
-        }
-
-        // Helper to parse string to ScalarValue using Arrow type
-        fn parse_scalar(
-            s: &str,
-            dt: &datafusion::arrow::datatypes::DataType,
-        ) -> Option<datafusion::common::scalar::ScalarValue> {
-            datafusion::common::scalar::ScalarValue::try_from_string(s.to_string(), dt).ok()
-        }
-
-        // Build auxiliary mapping: col_name -> datatype
-        let mut col_to_dt: HashMap<&str, datafusion::arrow::datatypes::DataType> = HashMap::new();
-        for (name, dt) in pki_to_col.values() {
-            col_to_dt.insert(name, dt.clone());
-        }
-
-        // Build per-file map: col_name -> scalar partition value
-        let mut kept = Vec::with_capacity(files.len());
-        'next_file: for f in files.iter() {
-            let mut part_vals: HashMap<&str, datafusion::common::scalar::ScalarValue> =
-                HashMap::new();
-            for FilePartitionInfo {
-                partition_key_index,
-                partition_value,
-            } in &f.partition_values
-            {
-                if let Some((col_name, dt)) = pki_to_col.get(partition_key_index) {
-                    if let Some(sv) = parse_scalar(partition_value, dt) {
-                        part_vals.insert(col_name, sv);
-                    }
-                }
-            }
-            // Evaluate each filter as top-level AND
-            for expr in filters {
-                if let Some(false) = Self::eval_partition_expr(expr, &part_vals, &col_to_dt) {
-                    continue 'next_file;
-                }
-            }
-            kept.push(f.clone());
-        }
-        kept
-    }
-
-    fn eval_partition_expr(
-        expr: &Expr,
-        vals: &HashMap<&str, datafusion::common::scalar::ScalarValue>,
-        dtypes: &HashMap<&str, datafusion::arrow::datatypes::DataType>,
-    ) -> Option<bool> {
-        use datafusion::logical_expr::{BinaryExpr, Operator};
-        match expr {
-            Expr::BinaryExpr(BinaryExpr { left, op, right }) => {
-                match **left {
-                    Expr::Column(ref c) => {
-                        if let Expr::Literal(ref lit, _) = **right {
-                            let col_name = c.name.as_str();
-                            let v = vals.get(col_name)?;
-                            let dt = dtypes.get(col_name)?;
-                            let lit_cast = lit.cast_to(dt).ok()?;
-                            if *op == Operator::Eq {
-                                return Some(&lit_cast == v);
-                            }
-                            use std::cmp::Ordering;
-                            let ord = v.partial_cmp(&lit_cast)?;
-                            let res = match op {
-                                Operator::Lt => ord == Ordering::Less,
-                                Operator::LtEq => ord == Ordering::Less || ord == Ordering::Equal,
-                                Operator::Gt => ord == Ordering::Greater,
-                                Operator::GtEq => {
-                                    ord == Ordering::Greater || ord == Ordering::Equal
-                                }
-                                _ => return None,
-                            };
-                            return Some(res);
-                        }
-                        None
-                    }
-                    _ => {
-                        // handle boolean combinators AND/OR
-                        if *op == Operator::And {
-                            let l = Self::eval_partition_expr(left, vals, dtypes);
-                            let r = Self::eval_partition_expr(right, vals, dtypes);
-                            return match (l, r) {
-                                (Some(true), Some(true)) => Some(true),
-                                (Some(false), _) | (_, Some(false)) => Some(false),
-                                (Some(true), None) | (None, Some(true)) => Some(true),
-                                _ => None,
-                            };
-                        } else if *op == Operator::Or {
-                            let l = Self::eval_partition_expr(left, vals, dtypes);
-                            let r = Self::eval_partition_expr(right, vals, dtypes);
-                            return match (l, r) {
-                                (Some(true), _) | (_, Some(true)) => Some(true),
-                                (Some(false), Some(false)) => Some(false),
-                                _ => None,
-                            };
-                        }
-                        None
-                    }
-                }
-            }
-            Expr::InList(in_list) if !in_list.negated => {
-                if let Expr::Column(ref c) = *in_list.expr {
-                    let col_name = c.name.as_str();
-                    let v = vals.get(col_name)?;
-                    let dt = dtypes.get(col_name)?;
-                    for item in &in_list.list {
-                        if let Expr::Literal(ref lit, _) = item {
-                            let lit_cast = lit.cast_to(dt).ok()?;
-                            if &lit_cast == v {
-                                return Some(true);
-                            }
-                        }
-                    }
-                    return Some(false);
-                }
-                None
-            }
-            // Unsupported: treat as indeterminate so it won't filter out
-            _ => None,
         }
     }
 }

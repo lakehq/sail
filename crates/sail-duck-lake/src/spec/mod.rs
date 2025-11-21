@@ -2,6 +2,12 @@ use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
+pub mod transform;
+
+pub use transform::{
+    parse_year, parse_year_month, parse_year_month_day, parse_year_month_day_hour, Transform,
+};
+
 /// Schema identifier in DuckLake metadata.
 #[derive(Debug, Serialize, Deserialize, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord)]
 pub struct SchemaIndex(pub u64);
