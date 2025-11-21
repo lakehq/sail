@@ -325,10 +325,7 @@ impl SchemaEvolver {
 
         for field in input_schema.fields() {
             if current_schema.field_by_name(field.name()).is_none() {
-                // FIXME: - Missing Column Rename detection.
-                // Current logic strictly relies on name matching. If a user renames a column in the input,
-                // it is treated as a NEW column (Add) with a new ID, and the old column is effectively orphaned or dropped.
-                // To support renames, we need explicit DDL operations or ID-based matching if available in Arrow metadata.
+                // TODO: Support DDL RENAME COLUMN operation.
                 let new_field = Self::build_field_from_arrow(field, &mut next_field_id)?;
                 merged_fields.push(Arc::new(new_field));
                 changed = true;
