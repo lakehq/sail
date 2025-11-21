@@ -21,13 +21,11 @@ use datafusion_common::{plan_datafusion_err, plan_err, Result};
 use parquet::arrow::PARQUET_FIELD_ID_META_KEY;
 use rust_decimal::prelude::ToPrimitive;
 use sail_common::spec::{SAIL_LIST_FIELD_NAME, SAIL_MAP_FIELD_NAME};
-
-use crate::spec::{
-    ListType, MapType, NestedField, PrimitiveType, Schema, StructType, Type,
-};
-use crate::spec::types::values::Literal;
-use crate::ICEBERG_LIST_FIELD_NAME;
 use serde_json;
+
+use crate::spec::types::values::Literal;
+use crate::spec::{ListType, MapType, NestedField, PrimitiveType, Schema, StructType, Type};
+use crate::ICEBERG_LIST_FIELD_NAME;
 
 pub const ICEBERG_ARROW_FIELD_DOC_KEY: &str = "doc";
 pub const ICEBERG_FIELD_INITIAL_DEFAULT: &str = "iceberg.field.initial-default";
@@ -78,12 +76,13 @@ pub fn arrow_schema_to_iceberg(schema: &ArrowSchema) -> Result<Schema> {
 pub fn iceberg_field_to_arrow(field: &NestedField) -> Result<ArrowField> {
     let arrow_type = iceberg_type_to_arrow(&field.field_type)?;
     let nullable = !field.required;
-    let mut metadata = HashMap::from([(PARQUET_FIELD_ID_META_KEY.to_string(), field.id.to_string())]);
-    
+    let mut metadata =
+        HashMap::from([(PARQUET_FIELD_ID_META_KEY.to_string(), field.id.to_string())]);
+
     if let Some(doc) = &field.doc {
         metadata.insert(ICEBERG_ARROW_FIELD_DOC_KEY.to_string(), doc.clone());
     }
-    
+
     if let Some(initial_default) = &field.initial_default {
         let json_value = initial_default
             .try_into_json(&field.field_type)
@@ -92,7 +91,7 @@ pub fn iceberg_field_to_arrow(field: &NestedField) -> Result<ArrowField> {
             .map_err(|e| plan_datafusion_err!("Failed to serialize initial_default: {e}"))?;
         metadata.insert(ICEBERG_FIELD_INITIAL_DEFAULT.to_string(), json_str);
     }
-    
+
     if let Some(write_default) = &field.write_default {
         let json_value = write_default
             .try_into_json(&field.field_type)
@@ -101,7 +100,7 @@ pub fn iceberg_field_to_arrow(field: &NestedField) -> Result<ArrowField> {
             .map_err(|e| plan_datafusion_err!("Failed to serialize write_default: {e}"))?;
         metadata.insert(ICEBERG_FIELD_WRITE_DEFAULT.to_string(), json_str);
     }
-    
+
     Ok(ArrowField::new(&field.name, arrow_type, nullable).with_metadata(metadata))
 }
 
@@ -116,11 +115,11 @@ pub fn arrow_field_to_iceberg(field: &ArrowField) -> Result<NestedField> {
         iceberg_type.clone(),
         required,
     );
-    
+
     if let Some(doc) = doc {
         nested_field = nested_field.with_doc(doc);
     }
-    
+
     if let Some(initial_default_str) = field.metadata().get(ICEBERG_FIELD_INITIAL_DEFAULT) {
         let json_value: serde_json::Value = serde_json::from_str(initial_default_str)
             .map_err(|e| plan_datafusion_err!("Failed to parse initial_default JSON: {e}"))?;
@@ -132,11 +131,13 @@ pub fn arrow_field_to_iceberg(field: &ArrowField) -> Result<NestedField> {
                 return Err(plan_datafusion_err!("initial_default JSON parsed to None"));
             }
             Err(e) => {
-                return Err(plan_datafusion_err!("Failed to convert initial_default JSON to Literal: {e}"));
+                return Err(plan_datafusion_err!(
+                    "Failed to convert initial_default JSON to Literal: {e}"
+                ));
             }
         }
     }
-    
+
     if let Some(write_default_str) = field.metadata().get(ICEBERG_FIELD_WRITE_DEFAULT) {
         let json_value: serde_json::Value = serde_json::from_str(write_default_str)
             .map_err(|e| plan_datafusion_err!("Failed to parse write_default JSON: {e}"))?;
@@ -148,11 +149,13 @@ pub fn arrow_field_to_iceberg(field: &ArrowField) -> Result<NestedField> {
                 return Err(plan_datafusion_err!("write_default JSON parsed to None"));
             }
             Err(e) => {
-                return Err(plan_datafusion_err!("Failed to convert write_default JSON to Literal: {e}"));
+                return Err(plan_datafusion_err!(
+                    "Failed to convert write_default JSON to Literal: {e}"
+                ));
             }
         }
     }
-    
+
     Ok(nested_field)
 }
 
