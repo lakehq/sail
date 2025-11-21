@@ -33,13 +33,15 @@ use testcontainers::{ContainerAsync, GenericImage, ImageExt};
 
 const DEFAULT_CATALOG: &str = "sail_test_catalog";
 
-async fn setup_catalog() -> (
+async fn setup_catalog(
+    network_name: &str,
+) -> (
     RuntimeAwareCatalogProvider<UnityCatalogProvider>,
     ContainerAsync<GenericImage>,
     ContainerAsync<GenericImage>,
     Client,
 ) {
-    let network = "rest_bridge";
+    let network = format!("unity_{}", network_name);
 
     let postgres = GenericImage::new("postgres", "latest")
         .with_wait_for(WaitFor::message_on_stderr(
@@ -48,7 +50,7 @@ async fn setup_catalog() -> (
         .with_env_var("POSTGRES_USER", "test")
         .with_env_var("POSTGRES_PASSWORD", "test")
         .with_env_var("POSTGRES_DB", "test")
-        .with_network(network)
+        .with_network(&network)
         .start()
         .await
         .expect("Failed to start PostgreSQL");
@@ -81,7 +83,7 @@ async fn setup_catalog() -> (
             hibernate_path.to_str().unwrap(),
             "/home/unitycatalog/etc/conf/hibernate.properties",
         ))
-        .with_network(network)
+        .with_network(&network)
         .start()
         .await
         .expect("Failed to start Unity Catalog");
@@ -137,7 +139,8 @@ async fn setup_catalog() -> (
 #[tokio::test]
 #[ignore]
 async fn test_create_schema() {
-    let (unity_catalog, _unity_container, _postgres_container, _client) = setup_catalog().await;
+    let (unity_catalog, _unity_container, _postgres_container, _client) =
+        setup_catalog("test_create_schema_network").await;
 
     let namespace = Namespace::try_from(vec!["test_create_schema".to_string()]).unwrap();
     let full_namespace = Namespace::try_from(vec![
@@ -271,7 +274,8 @@ async fn test_create_schema() {
 #[tokio::test]
 #[ignore]
 async fn test_get_non_exist_schema() {
-    let (unity_catalog, _unity_container, _postgres_container, _client) = setup_catalog().await;
+    let (unity_catalog, _unity_container, _postgres_container, _client) =
+        setup_catalog("test_get_non_exist_schema_network").await;
 
     let namespace = Namespace::try_from(vec!["test_get_non_exist_schema".to_string()]).unwrap();
     let result = unity_catalog.get_database(&namespace).await;
@@ -286,7 +290,8 @@ async fn test_get_non_exist_schema() {
 #[tokio::test]
 #[ignore]
 async fn test_get_schema() {
-    let (unity_catalog, _unity_container, _postgres_container, _client) = setup_catalog().await;
+    let (unity_catalog, _unity_container, _postgres_container, _client) =
+        setup_catalog("test_get_schema_network").await;
 
     let namespace = Namespace::try_from(vec!["apple".to_string()]).unwrap();
     let full_namespace =
@@ -345,7 +350,8 @@ async fn test_get_schema() {
 #[tokio::test]
 #[ignore]
 async fn test_list_schemas() {
-    let (unity_catalog, _unity_container, _postgres_container, _client) = setup_catalog().await;
+    let (unity_catalog, _unity_container, _postgres_container, _client) =
+        setup_catalog("test_list_schemas_network").await;
 
     let ns1 = Namespace::try_from(vec!["ios".to_string()]).unwrap();
     let ns1_full =
@@ -420,7 +426,8 @@ async fn test_list_schemas() {
 #[tokio::test]
 #[ignore]
 async fn test_drop_schema() {
-    let (unity_catalog, _unity_container, _postgres_container, _client) = setup_catalog().await;
+    let (unity_catalog, _unity_container, _postgres_container, _client) =
+        setup_catalog("test_drop_schema_network").await;
 
     let namespace = Namespace::try_from(vec!["test_drop_schema".to_string()]).unwrap();
     let full_namespace = Namespace::try_from(vec![
@@ -530,7 +537,8 @@ async fn test_drop_schema() {
 #[tokio::test]
 #[ignore]
 async fn test_create_table() {
-    let (unity_catalog, _unity_container, _postgres_container, _client) = setup_catalog().await;
+    let (unity_catalog, _unity_container, _postgres_container, _client) =
+        setup_catalog("test_create_table_network").await;
 
     let ns = Namespace::try_from(vec!["test_create_table".to_string()]).unwrap();
     let full_ns = Namespace::try_from(vec![
@@ -922,7 +930,8 @@ async fn test_create_table() {
 #[tokio::test]
 #[ignore]
 async fn test_get_table() {
-    let (unity_catalog, _unity_container, _postgres_container, _client) = setup_catalog().await;
+    let (unity_catalog, _unity_container, _postgres_container, _client) =
+        setup_catalog("test_get_table_network").await;
 
     let ns = Namespace::try_from(vec!["test_get_table".to_string()]).unwrap();
     let full_ns = Namespace::try_from(vec![
@@ -1090,7 +1099,8 @@ async fn test_get_table() {
 #[tokio::test]
 #[ignore]
 async fn test_list_tables() {
-    let (unity_catalog, _unity_container, _postgres_container, _client) = setup_catalog().await;
+    let (unity_catalog, _unity_container, _postgres_container, _client) =
+        setup_catalog("test_list_tables_network").await;
 
     let ns = Namespace::try_from(vec!["test_list_tables".to_string()]).unwrap();
     let full_ns = Namespace::try_from(vec![
@@ -1196,7 +1206,8 @@ async fn test_list_tables() {
 #[tokio::test]
 #[ignore]
 async fn test_drop_table() {
-    let (unity_catalog, _unity_container, _postgres_container, _client) = setup_catalog().await;
+    let (unity_catalog, _unity_container, _postgres_container, _client) =
+        setup_catalog("test_drop_table_network").await;
 
     let namespace = Namespace::try_from(vec!["test_drop_table".to_string()]).unwrap();
 
