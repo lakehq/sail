@@ -1,5 +1,6 @@
 use std::any::Any;
 use std::fmt::Debug;
+use std::sync::Arc;
 
 use datafusion::arrow;
 use datafusion::arrow::array::{Array, ArrayRef, AsArray};
@@ -82,8 +83,14 @@ impl AggregateUDFImpl for PercentileFunction {
             _ => DataType::Float64,
         };
 
+        let values_list_type = DataType::List(Arc::new(arrow::datatypes::Field::new(
+            "item",
+            storage_type,
+            true,
+        )));
+
         Ok(vec![
-            arrow::datatypes::Field::new("values", storage_type, true).into(),
+            arrow::datatypes::Field::new("values", values_list_type, true).into(),
             arrow::datatypes::Field::new("percentile", DataType::Float64, false).into(),
             arrow::datatypes::Field::new("data_type_id", DataType::UInt8, false).into(),
         ])
