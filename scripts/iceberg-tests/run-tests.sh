@@ -83,6 +83,6 @@ export TEST_PROFILE="${TEST_PROFILE:-integration}"
 export SPARK_REMOTE="${SPARK_REMOTE:-sc://localhost:50051}"
 
 echo "Running Iceberg integration tests..."
-hatch run pytest python/pysail/tests/spark/iceberg/
+hatch run pytest --pyargs pysail.tests.spark.iceberg
 
 
