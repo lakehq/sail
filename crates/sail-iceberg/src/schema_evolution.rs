@@ -311,7 +311,7 @@ impl SchemaEvolver {
                     merged_fields.push(Arc::new(merged_field));
                 }
                 Err(_) => {
-                    if existing.required {
+                    if existing.required && !Self::field_has_default(existing) {
                         return Err(DataFusionError::Plan(format!(
                             "Column '{}' is required in the Iceberg table schema and must be present in the input data.",
                             existing.name
