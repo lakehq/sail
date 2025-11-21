@@ -16,9 +16,12 @@ echo "Python version: ${python_version}"
 echo "Sail working directory: ${work_dir}"
 
 export PYARROW_IGNORE_TIMEZONE="1"
-export SAIL_CATALOG__DEFAULT_CATALOG='"spark_catalog"'
-export SAIL_CATALOG__DEFAULT_DATABASE='["default"]'
-export SAIL_CATALOG__LIST='[{name="spark_catalog", type="memory", initial_database=["default"], initial_database_comment="default database"}]'
+: "${SAIL_CATALOG__DEFAULT_CATALOG:='"spark_catalog"'}"
+: "${SAIL_CATALOG__DEFAULT_DATABASE:='["default"]'}"
+: "${SAIL_CATALOG__LIST:='[{name="spark_catalog", type="memory", initial_database=["default"], initial_database_comment="default database"}]'}"
+export SAIL_CATALOG__DEFAULT_CATALOG
+export SAIL_CATALOG__DEFAULT_DATABASE
+export SAIL_CATALOG__LIST
 
 if [ -z "${CI:-}" ]; then
   export PYO3_PYTHON="${VIRTUAL_ENV}/bin/python"
