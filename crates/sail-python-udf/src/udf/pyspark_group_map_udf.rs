@@ -8,7 +8,7 @@ use datafusion::logical_expr::{Accumulator, Signature, Volatility};
 use datafusion_common::Result;
 use datafusion_expr::function::{AccumulatorArgs, StateFieldsArgs};
 use datafusion_expr::AggregateUDFImpl;
-use pyo3::{PyObject, Python};
+use pyo3::{Py, PyAny, Python};
 
 use crate::accumulator::{BatchAggregateAccumulator, BatchAggregator};
 use crate::array::{build_singleton_list_array, get_list_field};
@@ -93,7 +93,7 @@ impl PySparkGroupMapUDF {
         &self.config
     }
 
-    fn udf(&self, py: Python) -> Result<PyObject> {
+    fn udf(&self, py: Python) -> Result<Py<PyAny>> {
         let udf = self.udf.get_or_try_init(py, || {
             let udf = PySparkUdfPayload::load(py, &self.payload)?;
             Ok(PySpark::group_map_udf(
@@ -128,7 +128,7 @@ impl AggregateUDFImpl for PySparkGroupMapUDF {
 
     fn accumulator(&self, _acc_args: AccumulatorArgs) -> Result<Box<dyn Accumulator>> {
         let field = get_list_field(&self.output_type)?;
-        let udf = Python::with_gil(|py| self.udf(py))?;
+        let udf = Python::attach(|py| self.udf(py))?;
         let aggregator = Box::new(PySparkGroupMapper { udf, field });
         Ok(Box::new(BatchAggregateAccumulator::new(
             self.input_types.clone(),
@@ -143,13 +143,13 @@ impl AggregateUDFImpl for PySparkGroupMapUDF {
 }
 
 struct PySparkGroupMapper {
-    udf: PyObject,
+    udf: Py<PyAny>,
     field: FieldRef,
 }
 
 impl BatchAggregator for PySparkGroupMapper {
     fn call(&self, args: &[ArrayRef]) -> Result<ArrayRef> {
-        let data = Python::with_gil(|py| -> PyUdfResult<_> {
+        let data = Python::attach(|py| -> PyUdfResult<_> {
             let output = self.udf.call1(py, (args.try_to_py(py)?,))?;
             Ok(ArrayData::try_from_py(py, &output)?)
         })?;

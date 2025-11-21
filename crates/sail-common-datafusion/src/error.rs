@@ -2,7 +2,6 @@ use std::collections::HashSet;
 
 use datafusion::arrow::error::ArrowError;
 use datafusion_common::DataFusionError;
-use deltalake::DeltaTableError;
 use serde::{Deserialize, Serialize};
 use thiserror::Error;
 
@@ -108,6 +107,7 @@ impl CommonErrorCause {
                 ArrowError::IpcError(x) => Self::ArrowIpc(x.clone()),
                 ArrowError::InvalidArgumentError(x) => Self::InvalidArgument(x.clone()),
                 ArrowError::ParquetError(x) => Self::FormatParquet(x.clone()),
+                ArrowError::AvroError(x) => Self::FormatAvro(x.clone()),
                 ArrowError::CDataInterface(x) => Self::ArrowCDataInterface(x.clone()),
                 ArrowError::DictionaryKeyOverflowError => {
                     Self::ArrowDictionaryKeyOverflow("dictionary key overflow".to_string())
@@ -155,10 +155,6 @@ impl CommonErrorCause {
 
         if let Some(e) = error.downcast_ref::<RemotePythonError>() {
             return Self::Python(e.clone().into());
-        }
-
-        if let Some(e) = error.downcast_ref::<DeltaTableError>() {
-            return Self::DeltaTable(e.to_string());
         }
 
         if let Some(e) = error.source() {

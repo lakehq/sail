@@ -1,3 +1,9 @@
+// https://github.com/delta-io/delta-rs/blob/5575ad16bf641420404611d65f4ad7626e9acb16/LICENSE.txt
+//
+// Copyright (2020) QP Hou and a number of other contributors.
+// Portions Copyright (2025) LakeSail, Inc.
+// Modified in 2025 by LakeSail, Inc.
+//
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
 // You may obtain a copy of the License at
@@ -10,6 +16,8 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+// [Credit]: <https://github.com/delta-io/delta-rs/blob/3607c314cbdd2ad06c6ee0677b92a29f695c71f3/crates/core/src/delta_datafusion/expr.rs>
+
 use std::collections::HashSet;
 use std::sync::Arc;
 
@@ -17,7 +25,7 @@ use datafusion::arrow::datatypes::DataType as ArrowDataType;
 use datafusion::catalog::Session;
 use datafusion::common::config::ConfigOptions;
 use datafusion::common::tree_node::{TreeNode, TreeNodeRecursion};
-use datafusion::common::{Column, DFSchema, Result};
+use datafusion::common::{Column, DFSchema, Result, ToDFSchema};
 use datafusion::logical_expr::execution_props::ExecutionProps;
 use datafusion::logical_expr::planner::ExprPlanner;
 use datafusion::logical_expr::simplify::SimplifyContext;
@@ -31,26 +39,24 @@ use datafusion::sql::planner::{ContextProvider, SqlToRel};
 use datafusion::sql::sqlparser::dialect::GenericDialect;
 use datafusion::sql::sqlparser::parser::Parser;
 use datafusion::sql::sqlparser::tokenizer::Tokenizer;
-use deltalake::errors::{DeltaResult, DeltaTableError};
+
+use crate::datasource::error::datafusion_to_delta_error;
+use crate::kernel::snapshot::LogDataHandler;
+use crate::kernel::{DeltaResult, DeltaTableError};
+use crate::schema::arrow_schema_from_struct_type;
 
 /// Simplify a logical expression and convert it to a physical expression
 pub fn simplify_expr(
     session: &dyn Session,
     df_schema: &DFSchema,
     expr: Expr,
-) -> Arc<dyn PhysicalExpr> {
+) -> Result<Arc<dyn PhysicalExpr>> {
     let props = ExecutionProps::new();
     let simplify_context = SimplifyContext::new(&props).with_schema(df_schema.clone().into());
     let simplifier = ExprSimplifier::new(simplify_context).with_max_cycles(10);
-    #[allow(clippy::expect_used)]
-    let simplified = simplifier
-        .simplify(expr)
-        .expect("Failed to simplify expression");
+    let simplified = simplifier.simplify(expr)?;
 
-    #[allow(clippy::expect_used)]
-    session
-        .create_physical_expr(simplified, df_schema)
-        .expect("Failed to create physical expression")
+    session.create_physical_expr(simplified, df_schema)
 }
 
 /// Determine which filters can be pushed down to the table provider
@@ -75,8 +81,7 @@ pub fn get_pushdown_filters(
 /// Check if an expression is an exact predicate for the given columns
 fn expr_is_exact_predicate_for_cols(partition_cols: &[String], expr: &Expr) -> bool {
     let mut is_applicable = true;
-    #[allow(clippy::expect_used)]
-    expr.apply(|expr| match expr {
+    let _ = expr.apply(|expr| match expr {
         Expr::Column(Column { ref name, .. }) => {
             is_applicable &= partition_cols.contains(name);
 
@@ -114,8 +119,7 @@ fn expr_is_exact_predicate_for_cols(partition_cols: &[String], expr: &Expr) -> b
             is_applicable = false;
             Ok(TreeNodeRecursion::Stop)
         }
-    })
-    .expect("Failed to apply expression transformation");
+    });
     is_applicable
 }
 
@@ -212,6 +216,25 @@ pub fn parse_predicate_expression(
         .map_err(|err| {
             DeltaTableError::Generic(format!("Failed to convert SQL to expression: {err}"))
         })
+}
+
+/// Parse predicate strings using the schema materialized in [`LogDataHandler`]
+pub fn parse_log_data_predicate(
+    read_snapshot: &LogDataHandler<'_>,
+    expr: impl AsRef<str>,
+    session: &dyn Session,
+) -> DeltaResult<Expr> {
+    let table_config = read_snapshot.table_configuration();
+    let schema = table_config.schema();
+    let arrow_schema = arrow_schema_from_struct_type(
+        schema.as_ref(),
+        table_config.metadata().partition_columns(),
+        false,
+    )?;
+    let df_schema = arrow_schema
+        .to_dfschema_ref()
+        .map_err(datafusion_to_delta_error)?;
+    parse_predicate_expression(df_schema.as_ref(), expr, session)
 }
 
 /// Analyze predicate properties for file pruning

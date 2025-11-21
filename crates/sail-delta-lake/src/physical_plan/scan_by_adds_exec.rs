@@ -28,12 +28,13 @@ use datafusion::physical_plan::{
 };
 use datafusion_common::{internal_err, DataFusionError, Result};
 use datafusion_physical_expr::{Distribution, EquivalenceProperties};
-use deltalake::logstore::StorageConfig;
 use futures::stream::{self, StreamExt, TryStreamExt};
 use url::Url;
 
 use crate::datasource::scan::FileScanParams;
 use crate::datasource::{build_file_scan_config, DeltaScanConfigBuilder};
+use crate::kernel::models::Add;
+use crate::storage::StorageConfig;
 use crate::table::open_table_with_object_store;
 
 /// An ExecutionPlan that scans Delta files based on a stream of Add actions from its input.
@@ -81,7 +82,7 @@ impl DeltaScanByAddsExec {
     async fn create_scan_stream(
         &self,
         context: Arc<TaskContext>,
-        candidate_adds: Vec<deltalake::kernel::Add>,
+        candidate_adds: Vec<Add>,
     ) -> Result<SendableRecordBatchStream> {
         let object_store = context
             .runtime_env()
@@ -89,13 +90,10 @@ impl DeltaScanByAddsExec {
             .get_store(&self.table_url)
             .map_err(|e| DataFusionError::External(Box::new(e)))?;
 
-        let table = open_table_with_object_store(
-            self.table_url.clone(),
-            object_store,
-            StorageConfig::default(),
-        )
-        .await
-        .map_err(|e| DataFusionError::External(Box::new(e)))?;
+        let table =
+            open_table_with_object_store(self.table_url.clone(), object_store, StorageConfig)
+                .await
+                .map_err(|e| DataFusionError::External(Box::new(e)))?;
 
         let snapshot = table
             .snapshot()
@@ -122,9 +120,10 @@ impl DeltaScanByAddsExec {
                 .collect::<Vec<_>>(),
         ));
 
+        let log_store = table.log_store();
         let file_scan_config = build_file_scan_config(
             &snapshot,
-            &table.log_store(),
+            &log_store,
             &candidate_adds,
             &scan_config,
             FileScanParams {
@@ -139,7 +138,7 @@ impl DeltaScanByAddsExec {
         .map_err(|e| DataFusionError::External(Box::new(e)))?;
 
         let scan_exec =
-            datafusion::catalog::memory::DataSourceExec::from_data_source(file_scan_config);
+            datafusion::datasource::source::DataSourceExec::from_data_source(file_scan_config);
         scan_exec.execute(0, context)
     }
 }
@@ -231,7 +230,7 @@ impl ExecutionPlan for DeltaScanByAddsExec {
                     if add_json.trim().is_empty() {
                         continue;
                     }
-                    match serde_json::from_str::<deltalake::kernel::Add>(add_json) {
+                    match serde_json::from_str::<Add>(add_json) {
                         Ok(add) => candidate_adds.push(add),
                         Err(e) => return Err(DataFusionError::External(Box::new(e))),
                     }

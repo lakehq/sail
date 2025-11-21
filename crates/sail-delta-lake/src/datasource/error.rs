@@ -11,15 +11,20 @@
 // limitations under the License.
 
 use datafusion_common::DataFusionError;
-use deltalake::errors::DeltaTableError;
+use object_store::Error as ObjectStoreError;
+
+use crate::kernel::DeltaTableError;
 
 /// Convert DeltaTableError to DataFusionError
 pub fn delta_to_datafusion_error(err: DeltaTableError) -> DataFusionError {
     match err {
-        DeltaTableError::Arrow { source } => DataFusionError::ArrowError(Box::new(source), None),
-        DeltaTableError::Io { source } => DataFusionError::IoError(source),
-        DeltaTableError::ObjectStore { source } => DataFusionError::ObjectStore(Box::new(source)),
-        DeltaTableError::Parquet { source } => DataFusionError::ParquetError(Box::new(source)),
+        DeltaTableError::Arrow(source) => DataFusionError::ArrowError(Box::new(source), None),
+        DeltaTableError::IOError(source) => DataFusionError::IoError(source),
+        DeltaTableError::ObjectStore(source) => DataFusionError::ObjectStore(Box::new(source)),
+        DeltaTableError::Parquet(source) => DataFusionError::ParquetError(Box::new(source)),
+        DeltaTableError::ObjectStorePath(source) => {
+            DataFusionError::ObjectStore(Box::new(ObjectStoreError::InvalidPath { source }))
+        }
         _ => DataFusionError::External(Box::new(err)),
     }
 }
@@ -27,10 +32,10 @@ pub fn delta_to_datafusion_error(err: DeltaTableError) -> DataFusionError {
 /// Convert DataFusionError to DeltaTableError
 pub fn datafusion_to_delta_error(err: DataFusionError) -> DeltaTableError {
     match err {
-        DataFusionError::ArrowError(source, _) => DeltaTableError::Arrow { source: *source },
-        DataFusionError::IoError(source) => DeltaTableError::Io { source },
-        DataFusionError::ObjectStore(source) => DeltaTableError::ObjectStore { source: *source },
-        DataFusionError::ParquetError(source) => DeltaTableError::Parquet { source: *source },
+        DataFusionError::ArrowError(source, _) => DeltaTableError::Arrow(*source),
+        DataFusionError::IoError(source) => DeltaTableError::IOError(source),
+        DataFusionError::ObjectStore(source) => DeltaTableError::ObjectStore(*source),
+        DataFusionError::ParquetError(source) => DeltaTableError::Parquet(*source),
         _ => DeltaTableError::Generic(err.to_string()),
     }
 }

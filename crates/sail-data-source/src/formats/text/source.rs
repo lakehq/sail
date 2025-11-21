@@ -13,11 +13,10 @@ use datafusion_common::{DataFusionError, Result, Statistics};
 use datafusion_datasource::decoder::{deserialize_stream, Decoder, DecoderDeserializer};
 use datafusion_datasource::file::FileSource;
 use datafusion_datasource::file_compression_type::FileCompressionType;
-use datafusion_datasource::file_meta::FileMeta;
 use datafusion_datasource::file_scan_config::FileScanConfig;
 use datafusion_datasource::file_stream::{FileOpenFuture, FileOpener};
 use datafusion_datasource::schema_adapter::SchemaAdapterFactory;
-use datafusion_datasource::{calculate_range, PartitionedFile, RangeCalculation};
+use datafusion_datasource::{calculate_range, PartitionedFile, RangeCalculation, TableSchema};
 use futures::{StreamExt, TryStreamExt};
 use object_store::{GetOptions, GetResultPayload, ObjectStore};
 
@@ -122,9 +121,9 @@ impl FileSource for TextSource {
         Arc::new(conf)
     }
 
-    fn with_schema(&self, schema: SchemaRef) -> Arc<dyn FileSource> {
+    fn with_schema(&self, schema: TableSchema) -> Arc<dyn FileSource> {
         let mut conf = self.clone();
-        conf.file_schema = Some(schema);
+        conf.file_schema = Some(schema.file_schema().clone());
         Arc::new(conf)
     }
 
@@ -206,9 +205,9 @@ impl TextOpener {
 }
 
 impl FileOpener for TextOpener {
-    fn open(&self, file_meta: FileMeta, _file: PartitionedFile) -> Result<FileOpenFuture> {
+    fn open(&self, file: PartitionedFile) -> Result<FileOpenFuture> {
         let file_compression_type = self.file_compression_type.to_owned();
-        if file_meta.range.is_some() && file_compression_type.is_compressed() {
+        if file.range.is_some() && file_compression_type.is_compressed() {
             return Err(DataFusionError::Internal(
                 "Reading compressed .txt in parallel is not supported".to_string(),
             ));
@@ -220,7 +219,7 @@ impl FileOpener for TextOpener {
 
         Ok(Box::pin(async move {
             // Current partition contains bytes [start_byte, end_byte) (might contain incomplete lines at boundaries)
-            let calculated_range = calculate_range(&file_meta, &store, line_sep).await?;
+            let calculated_range = calculate_range(&file, &store, line_sep).await?;
             let range = match calculated_range {
                 RangeCalculation::Range(None) => None,
                 RangeCalculation::Range(Some(range)) => Some(range.into()),
@@ -232,19 +231,19 @@ impl FileOpener for TextOpener {
                 range,
                 ..Default::default()
             };
-            let result = store.get_opts(file_meta.location(), options).await?;
+            let result = store.get_opts(&file.object_meta.location, options).await?;
 
             match result.payload {
                 #[cfg(not(target_arch = "wasm32"))]
-                GetResultPayload::File(mut file, _path) => {
-                    let is_whole_file_scanned = file_meta.range.is_none();
+                GetResultPayload::File(mut local_file, _path) => {
+                    let is_whole_file_scanned = file.range.is_none();
                     let decoder = if is_whole_file_scanned {
                         // Don't seek if no range as breaks FIFO files
-                        file_compression_type.convert_read(file)?
+                        file_compression_type.convert_read(local_file)?
                     } else {
-                        file.seek(SeekFrom::Start(result.range.start as _))?;
+                        local_file.seek(SeekFrom::Start(result.range.start as _))?;
                         file_compression_type
-                            .convert_read(file.take(result.range.end - result.range.start))?
+                            .convert_read(local_file.take(result.range.end - result.range.start))?
                     };
 
                     Ok(futures::stream::iter(config.open(decoder)?)

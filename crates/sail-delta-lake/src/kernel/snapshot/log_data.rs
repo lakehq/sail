@@ -18,76 +18,19 @@
 
 // [Credit]: <https://github.com/delta-io/delta-rs/blob/1f0b4d0965a85400c1effc6e9b4c7ebbb6795978/crates/core/src/kernel/snapshot/log_data.rs>
 
-use std::sync::Arc;
-
 use ::datafusion::arrow::array::{Array, RecordBatch, StringArray, StructArray};
 use delta_kernel::actions::{Metadata, Protocol};
-use delta_kernel::expressions::{Scalar, StructData};
+use delta_kernel::scan::scan_row_schema;
 use delta_kernel::table_configuration::TableConfiguration;
 use delta_kernel::table_properties::TableProperties;
-use deltalake::kernel::scalars::ScalarExt;
-use deltalake::{DeltaResult, DeltaTableError};
-use indexmap::IndexMap;
 
-use crate::kernel::arrow::extract::extract_and_cast;
 use crate::kernel::snapshot::iterators::LogicalFileView;
+use crate::kernel::{DeltaResult, DeltaTableError};
 
 const COL_NUM_RECORDS: &str = "numRecords";
 const COL_MIN_VALUES: &str = "minValues";
 const COL_MAX_VALUES: &str = "maxValues";
 const COL_NULL_COUNT: &str = "nullCount";
-
-#[allow(dead_code)]
-pub(crate) trait PartitionsExt {
-    fn hive_partition_path(&self) -> String;
-}
-
-impl PartitionsExt for IndexMap<&str, Scalar> {
-    fn hive_partition_path(&self) -> String {
-        let fields = self
-            .iter()
-            .map(|(k, v)| {
-                let encoded = v.serialize_encoded();
-                format!("{k}={encoded}")
-            })
-            .collect::<Vec<_>>();
-        fields.join("/")
-    }
-}
-
-impl PartitionsExt for IndexMap<String, Scalar> {
-    fn hive_partition_path(&self) -> String {
-        let fields = self
-            .iter()
-            .map(|(k, v)| {
-                let encoded = v.serialize_encoded();
-                format!("{k}={encoded}")
-            })
-            .collect::<Vec<_>>();
-        fields.join("/")
-    }
-}
-
-impl PartitionsExt for StructData {
-    fn hive_partition_path(&self) -> String {
-        let fields = self
-            .fields()
-            .iter()
-            .zip(self.values().iter())
-            .map(|(k, v)| {
-                let encoded = v.serialize_encoded();
-                format!("{}={encoded}", k.name())
-            })
-            .collect::<Vec<_>>();
-        fields.join("/")
-    }
-}
-
-impl<T: PartitionsExt> PartitionsExt for Arc<T> {
-    fn hive_partition_path(&self) -> String {
-        self.as_ref().hive_partition_path()
-    }
-}
 
 /// Provides semanitc access to the log data.
 ///
@@ -164,7 +107,6 @@ mod datafusion {
 
     use super::*;
     use crate::kernel::arrow::engine_ext::ExpressionEvaluatorExt as _;
-    use crate::kernel::arrow::extract::{extract_and_cast_opt, extract_column};
     use crate::kernel::ARROW_HANDLER;
 
     #[derive(Debug, Default, Clone)]
@@ -184,15 +126,15 @@ mod datafusion {
 
     impl<'a> FileStatsAccessor<'a> {
         pub(crate) fn try_new(data: &'a RecordBatch) -> DeltaResult<Self> {
-            let sizes = extract_and_cast::<Int64Array>(data, "size")?;
-            let stats = extract_and_cast::<StructArray>(data, "stats_parsed")?;
+            let sizes = batch_column::<Int64Array>(data, "size")?;
+            let stats = batch_column::<StructArray>(data, "stats_parsed")?;
             Ok(Self { sizes, stats })
         }
     }
 
     impl FileStatsAccessor<'_> {
         fn collect_count(&self, name: &str) -> Precision<usize> {
-            let num_records = extract_and_cast_opt::<Int64Array>(self.stats, name);
+            let num_records = struct_column_opt::<Int64Array>(self.stats, name);
             if let Some(num_records) = num_records {
                 if num_records.is_empty() {
                     Precision::Exact(0)
@@ -221,17 +163,17 @@ mod datafusion {
             fun_type: AccumulatorType,
         ) -> Precision<ScalarValue> {
             let mut path = name.split('.');
-            let array = if let Ok(array) = extract_column(self.stats, path_step, &mut path) {
-                array
-            } else {
-                return Precision::Absent;
+            let array = match nested_column(self.stats, path_step, &mut path) {
+                Ok(array) => array,
+                Err(_) => return Precision::Absent,
             };
+            let array_ref = array.as_ref();
 
-            if array.data_type().is_primitive() {
+            if array_ref.data_type().is_primitive() {
                 let accumulator: Option<Box<dyn Accumulator>> = match fun_type {
-                    AccumulatorType::Min => MinAccumulator::try_new(array.data_type())
+                    AccumulatorType::Min => MinAccumulator::try_new(array_ref.data_type())
                         .map_or(None, |a| Some(Box::new(a))),
-                    AccumulatorType::Max => MaxAccumulator::try_new(array.data_type())
+                    AccumulatorType::Max => MaxAccumulator::try_new(array_ref.data_type())
                         .map_or(None, |a| Some(Box::new(a))),
                     _ => None,
                 };
@@ -248,7 +190,7 @@ mod datafusion {
                 return Precision::Absent;
             }
 
-            match array.data_type() {
+            match array_ref.data_type() {
                 ArrowDataType::Struct(fields) => fields
                     .iter()
                     .map(|f| {
@@ -406,15 +348,59 @@ mod datafusion {
             } else {
                 Expression::column(["stats_parsed", stats_field, &column.name])
             };
-            let evaluator = ARROW_HANDLER.new_expression_evaluator(
-                crate::kernel::models::fields::log_schema_ref().clone(),
-                Arc::new(expression),
-                field.data_type().clone(),
-            );
-
+            let evaluator = ARROW_HANDLER
+                .new_expression_evaluator(
+                    scan_row_schema(),
+                    Arc::new(expression),
+                    field.data_type().clone(),
+                )
+                .ok()?;
             let batch = evaluator.evaluate_arrow(self.data.clone()).ok()?;
             batch.column_by_name("output").cloned()
         }
+    }
+
+    fn batch_column<'a, T: Array + 'static>(
+        batch: &'a RecordBatch,
+        name: &str,
+    ) -> DeltaResult<&'a T> {
+        batch
+            .column_by_name(name)
+            .and_then(|col| col.as_any().downcast_ref::<T>())
+            .ok_or_else(|| DeltaTableError::Schema(format!("column {name} not found in log data")))
+    }
+
+    fn struct_column_opt<'a, T: Array + 'static>(
+        array: &'a StructArray,
+        name: &str,
+    ) -> Option<&'a T> {
+        array
+            .column_by_name(name)
+            .and_then(|col| col.as_any().downcast_ref::<T>())
+    }
+
+    fn nested_column<'a>(
+        array: &'a StructArray,
+        root: &str,
+        path: &mut impl Iterator<Item = &'a str>,
+    ) -> Result<&'a Arc<dyn Array>, DeltaTableError> {
+        let mut current = array.column_by_name(root).ok_or_else(|| {
+            DeltaTableError::Schema(format!("{root} column not found in stats struct"))
+        })?;
+        for segment in path {
+            let struct_array = current
+                .as_any()
+                .downcast_ref::<StructArray>()
+                .ok_or_else(|| {
+                    DeltaTableError::Schema(format!(
+                        "Expected struct while accessing {segment} in stats"
+                    ))
+                })?;
+            current = struct_array.column_by_name(segment).ok_or_else(|| {
+                DeltaTableError::Schema(format!("{segment} column not found in stats struct"))
+            })?;
+        }
+        Ok(current)
     }
 
     impl PruningStatistics for LogDataHandler<'_> {
@@ -471,15 +457,19 @@ mod datafusion {
         ///
         /// Note: the returned array must contain `num_containers()` rows
         fn row_counts(&self, _column: &Column) -> Option<ArrayRef> {
-            static ROW_COUNTS_EVAL: LazyLock<Arc<dyn ExpressionEvaluator>> = LazyLock::new(|| {
-                ARROW_HANDLER.new_expression_evaluator(
-                    crate::kernel::models::fields::log_schema_ref().clone(),
-                    Arc::new(Expression::column(["stats_parsed", "numRecords"])),
-                    DataType::Primitive(PrimitiveType::Long),
-                )
-            });
+            static ROW_COUNTS_EVAL: LazyLock<Option<Arc<dyn ExpressionEvaluator>>> =
+                LazyLock::new(|| {
+                    ARROW_HANDLER
+                        .new_expression_evaluator(
+                            scan_row_schema(),
+                            Arc::new(Expression::column(["stats_parsed", "numRecords"])),
+                            DataType::Primitive(PrimitiveType::Long),
+                        )
+                        .ok()
+                });
 
-            let batch = ROW_COUNTS_EVAL.evaluate_arrow(self.data.clone()).ok()?;
+            let evaluator = ROW_COUNTS_EVAL.as_ref()?;
+            let batch = evaluator.evaluate_arrow(self.data.clone()).ok()?;
             ::datafusion::arrow::compute::cast(
                 batch.column_by_name("output")?,
                 &ArrowDataType::UInt64,

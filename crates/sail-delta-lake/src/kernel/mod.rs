@@ -13,11 +13,22 @@
 pub mod arrow;
 pub mod models;
 pub mod snapshot;
+pub mod statistics;
 pub mod transaction;
+
+pub(crate) mod checkpoints;
+mod config;
+mod error;
+mod operation;
+mod table_properties;
 
 use std::sync::LazyLock;
 
+pub use config::DeltaTableConfig;
 use delta_kernel::engine::arrow_expression::ArrowEvaluationHandler;
+pub use error::{DeltaResult, DeltaTableError};
+pub use operation::{DeltaOperation, SaveMode};
+pub use table_properties::TablePropertiesExt;
 
 pub(crate) static ARROW_HANDLER: LazyLock<ArrowEvaluationHandler> =
     LazyLock::new(|| ArrowEvaluationHandler {});

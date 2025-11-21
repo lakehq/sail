@@ -9,7 +9,7 @@ use datafusion::common::Result;
 use datafusion::logical_expr::{Accumulator, Signature, Volatility};
 use datafusion_expr::function::{AccumulatorArgs, StateFieldsArgs};
 use datafusion_expr::AggregateUDFImpl;
-use pyo3::{PyObject, Python};
+use pyo3::{Py, PyAny, Python};
 
 use crate::accumulator::{BatchAggregateAccumulator, BatchAggregator};
 use crate::cereal::pyspark_udf::PySparkUdfPayload;
@@ -86,7 +86,7 @@ impl PySparkGroupAggregateUDF {
         &self.config
     }
 
-    fn udf(&self, py: Python) -> Result<PyObject> {
+    fn udf(&self, py: Python) -> Result<Py<PyAny>> {
         let udf = self.udf.get_or_try_init(py, || {
             Ok(PySpark::group_agg_udf(
                 py,
@@ -118,7 +118,7 @@ impl AggregateUDFImpl for PySparkGroupAggregateUDF {
     }
 
     fn accumulator(&self, _acc_args: AccumulatorArgs) -> Result<Box<dyn Accumulator>> {
-        let udf = Python::with_gil(|py| self.udf(py))?;
+        let udf = Python::attach(|py| self.udf(py))?;
         let aggregator = Box::new(PySparkGroupAggregator {
             udf,
             output_type: self.output_type.clone(),
@@ -136,13 +136,13 @@ impl AggregateUDFImpl for PySparkGroupAggregateUDF {
 }
 
 struct PySparkGroupAggregator {
-    udf: PyObject,
+    udf: Py<PyAny>,
     output_type: DataType,
 }
 
 impl BatchAggregator for PySparkGroupAggregator {
     fn call(&self, args: &[ArrayRef]) -> Result<ArrayRef> {
-        let data = Python::with_gil(|py| -> PyUdfResult<_> {
+        let data = Python::attach(|py| -> PyUdfResult<_> {
             let output = self.udf.call1(py, (args.try_to_py(py)?,))?;
             Ok(ArrayData::try_from_py(py, &output)?)
         })?;

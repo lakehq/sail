@@ -11,7 +11,7 @@ use datafusion_common::{exec_err, DataFusionError, Result};
 use futures::{Stream, StreamExt};
 use pyo3::exceptions::{PyRuntimeError, PyStopIteration};
 use pyo3::prelude::PyAnyMethods;
-use pyo3::{pyclass, pymethods, IntoPyObject, PyObject, PyRef, PyRefMut, PyResult, Python};
+use pyo3::{pyclass, pymethods, IntoPyObject, Py, PyAny, PyRef, PyRefMut, PyResult, Python};
 use sail_common_datafusion::array::record_batch::record_batch_with_schema;
 use tokio::runtime::Handle;
 use tokio::select;
@@ -62,23 +62,22 @@ impl PyInputStream {
         self_
     }
 
-    fn __next__(self_: PyRefMut<'_, Self>) -> PyResult<PyObject> {
+    fn __next__(self_: PyRefMut<'_, Self>) -> PyResult<Py<PyAny>> {
         let state = Arc::clone(&self_.state);
         let handle = self_.handle.clone();
-        self_
-            .py()
-            .allow_threads(|| {
-                handle.block_on(async {
-                    state
-                        .lock()
-                        .await
-                        .next()
-                        .await
-                        .map(|x| x.map_err(|e| PyRuntimeError::new_err(e.to_string())))
-                })
+        let py = self_.py();
+        py.detach(|| {
+            handle.block_on(async {
+                state
+                    .lock()
+                    .await
+                    .next()
+                    .await
+                    .map(|x| x.map_err(|e| PyRuntimeError::new_err(e.to_string())))
             })
-            .map(|x| x.and_then(|x| x.to_pyarrow(self_.py())))
-            .unwrap_or(Err(PyStopIteration::new_err("")))
+        })
+        .map(|x| x.and_then(|x| x.to_pyarrow(py).map(|b| b.unbind())))
+        .unwrap_or(Err(PyStopIteration::new_err("")))
     }
 }
 
@@ -100,7 +99,7 @@ impl PyMapStream {
 
     pub fn new(
         input: SendableRecordBatchStream,
-        function: PyObject,
+        function: Py<PyAny>,
         output_schema: SchemaRef,
     ) -> Self {
         let (output_tx, output_rx) = mpsc::channel(Self::OUTPUT_CHANNEL_BUFFER);
@@ -110,7 +109,7 @@ impl PyMapStream {
         // We have to spawn a thread instead of spawning a tokio task
         // due to the blocking operation inside the input iterator.
         let python_task = std::thread::spawn(move || {
-            match Python::with_gil(|py| {
+            match Python::attach(|py| {
                 Self::run_python_task(
                     py,
                     function,
@@ -141,7 +140,7 @@ impl PyMapStream {
 
     fn run_python_task(
         py: Python,
-        function: PyObject,
+        function: Py<PyAny>,
         input: SendableRecordBatchStream,
         output_schema: SchemaRef,
         signal: oneshot::Receiver<()>,
@@ -163,7 +162,7 @@ impl PyMapStream {
             }
             let batch = batch.and_then(|x| RecordBatch::from_pyarrow_bound(&x));
             if py
-                .allow_threads(|| {
+                .detach(|| {
                     let batch = batch
                         .map_err(|e| DataFusionError::External(e.into()))
                         .and_then(|x| record_batch_with_schema(x, &output_schema));

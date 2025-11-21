@@ -24,17 +24,55 @@ use std::collections::HashSet;
 
 use datafusion::catalog::Session;
 use datafusion::logical_expr::Expr;
-use datafusion_common::DFSchema;
 use delta_kernel::table_properties::IsolationLevel;
-use deltalake::kernel::transaction::CommitConflictError;
-use deltalake::kernel::{Action, Add, CommitInfo, Metadata, Protocol, Remove, Transaction};
-use deltalake::logstore::{get_actions, LogStore};
-use deltalake::protocol::DeltaOperation;
-use deltalake::table::config::TablePropertiesExt as _;
-use deltalake::{DeltaResult, DeltaTableError};
+use thiserror::Error;
 
-use crate::datasource::{datafusion_to_delta_error, parse_predicate_expression, DataFusionMixins};
+use crate::datasource::parse_log_data_predicate;
+use crate::kernel::models::{Action, Add, CommitInfo, Metadata, Protocol, Remove, Transaction};
 use crate::kernel::snapshot::LogDataHandler;
+use crate::kernel::{DeltaOperation, DeltaResult, DeltaTableError, TablePropertiesExt};
+use crate::storage::{get_actions, LogStore};
+
+/// Exceptions raised during commit conflict resolution.
+#[derive(Error, Debug)]
+pub enum CommitConflictError {
+    #[error("Commit failed: a concurrent transactions added new data.\nHelp: This transaction's query must be rerun to include the new data. Also, if you don't care to require this check to pass in the future, the isolation level can be set to Snapshot Isolation.")]
+    ConcurrentAppend,
+
+    #[error("Commit failed: a concurrent transaction deleted data this operation read.\nHelp: This transaction's query must be rerun to exclude the removed data. Also, if you don't care to require this check to pass in the future, the isolation level can be set to Snapshot Isolation.")]
+    ConcurrentDeleteRead,
+
+    #[error("Commit failed: a concurrent transaction deleted the same data your transaction deletes.\nHelp: you should retry this write operation. If it was based on data contained in the table, you should rerun the query generating the data.")]
+    ConcurrentDeleteDelete,
+
+    #[error("Metadata changed since last commit.")]
+    MetadataChanged,
+
+    #[error("Concurrent transaction failed.")]
+    ConcurrentTransaction,
+
+    #[error("Protocol changed since last commit: {0}")]
+    ProtocolChanged(String),
+
+    #[error("Delta-rs does not support writer version {0}")]
+    UnsupportedWriterVersion(i32),
+
+    #[error("Delta-rs does not support reader version {0}")]
+    UnsupportedReaderVersion(i32),
+
+    #[error("Snapshot is corrupted: {source}")]
+    CorruptedState {
+        source: Box<dyn std::error::Error + Send + Sync + 'static>,
+    },
+
+    #[error("Error evaluating predicate: {source}")]
+    Predicate {
+        source: Box<dyn std::error::Error + Send + Sync + 'static>,
+    },
+
+    #[error("No metadata found, please make sure table is loaded.")]
+    NoMetadata,
+}
 
 /// A struct representing different attributes of current transaction needed for conflict detection.
 #[allow(unused)]
@@ -61,12 +99,7 @@ impl<'a> TransactionInfo<'a> {
         session: Option<&dyn Session>,
     ) -> DeltaResult<Self> {
         let read_predicates = match (read_predicates, session) {
-            (Some(pred), Some(s)) => {
-                let schema = read_snapshot.input_schema()?;
-                let schema = DFSchema::try_from(schema.as_ref().to_owned())
-                    .map_err(datafusion_to_delta_error)?;
-                Some(parse_predicate_expression(&schema, pred, s)?)
-            }
+            (Some(pred), Some(s)) => Some(parse_log_data_predicate(&read_snapshot, pred, s)?),
             _ => None,
         };
 
@@ -162,7 +195,9 @@ impl WinningCommitSummary {
         let commit_log_bytes = log_store.read_commit_entry(winning_commit_version).await?;
         match commit_log_bytes {
             Some(bytes) => {
-                let actions = get_actions(winning_commit_version, bytes).await?;
+                let actions = get_actions(winning_commit_version, &bytes)?
+                    .into_iter()
+                    .collect::<Vec<_>>();
                 let commit_info = actions
                     .iter()
                     .find(|action| matches!(action, Action::CommitInfo(_)))
@@ -176,7 +211,7 @@ impl WinningCommitSummary {
                     commit_info,
                 })
             }
-            None => Err(DeltaTableError::InvalidVersion(winning_commit_version)),
+            None => Err(DeltaTableError::MissingVersion),
         }
     }
 

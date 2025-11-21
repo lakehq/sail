@@ -76,11 +76,11 @@ jobs:
         run: cargo clippy --all-targets --all-features -- -D warnings
 
       - name: Run Cargo Test
-        run: cargo test
+        run: cargo nextest run
 
       - name: Run Cargo Test (Ignored)
         if: ${{ github.event_name == 'push' }}
-        run: cargo test -- --ignored
+        run: cargo nextest run --run-ignored ignored-only -j 6
 
       # Generate coverage report after tests
       - name: Generate coverage report

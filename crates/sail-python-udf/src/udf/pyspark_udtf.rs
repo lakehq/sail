@@ -217,7 +217,7 @@ impl StreamUDF for PySparkUDTF {
     }
 
     fn invoke(&self, input: SendableRecordBatchStream) -> Result<SendableRecordBatchStream> {
-        let function = Python::with_gil(|py| -> PyUdfResult<_> {
+        let function = Python::attach(|py| -> PyUdfResult<_> {
             let udtf = PySparkUdtfPayload::load(py, &self.payload)?;
             let udtf = match self.kind {
                 PySparkUdtfKind::Table => PySpark::table_udf(

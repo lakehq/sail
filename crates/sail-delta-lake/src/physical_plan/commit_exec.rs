@@ -14,9 +14,9 @@ use std::any::Any;
 use std::collections::HashMap;
 use std::fmt;
 use std::sync::Arc;
-use std::time::{SystemTime, UNIX_EPOCH};
 
 use async_trait::async_trait;
+use chrono::Utc;
 use datafusion::arrow::array::{Array, StringArray, UInt64Array};
 use datafusion::arrow::datatypes::{DataType, Field, Schema, SchemaRef};
 use datafusion::arrow::record_batch::RecordBatch;
@@ -32,15 +32,16 @@ use datafusion_common::{internal_err, DataFusionError, Result};
 use datafusion_physical_expr::{Distribution, EquivalenceProperties};
 use delta_kernel::engine::arrow_conversion::TryIntoKernel;
 use delta_kernel::schema::StructType;
-use deltalake::kernel::{Action, Add, Protocol, Remove};
-use deltalake::logstore::StorageConfig;
-use deltalake::protocol::{DeltaOperation, SaveMode};
 use futures::stream::{self, StreamExt};
+use futures::TryStreamExt;
 use sail_common_datafusion::datasource::PhysicalSinkMode;
 use url::Url;
 
+use crate::kernel::models::{Action, Add, Metadata, Protocol, RemoveOptions};
 use crate::kernel::transaction::{CommitBuilder, CommitProperties, TableReference};
-use crate::physical_plan::CommitInfo;
+use crate::kernel::{DeltaOperation, SaveMode};
+use crate::physical_plan::{current_timestamp_millis, CommitInfo};
+use crate::storage::{get_object_store_from_context, StorageConfig};
 use crate::table::{create_delta_table_with_object_store, open_table_with_object_store};
 
 /// Physical execution node for Delta Lake commit operations
@@ -80,33 +81,6 @@ impl DeltaCommitExec {
             sink_mode,
             cache,
         }
-    }
-
-    async fn adds_to_remove_actions(adds: Vec<Add>) -> Result<Vec<Action>> {
-        let deletion_timestamp = SystemTime::now()
-            .duration_since(UNIX_EPOCH)
-            .map_err(|e| DataFusionError::External(Box::new(e)))?
-            .as_millis() as i64;
-
-        let remove_actions: Vec<Action> = adds
-            .into_iter()
-            .map(|add| {
-                Action::Remove(Remove {
-                    path: add.path,
-                    deletion_timestamp: Some(deletion_timestamp),
-                    data_change: true,
-                    extended_file_metadata: Some(true),
-                    partition_values: Some(add.partition_values),
-                    size: Some(add.size),
-                    deletion_vector: add.deletion_vector,
-                    tags: None,
-                    base_row_id: add.base_row_id,
-                    default_row_commit_version: add.default_row_commit_version,
-                })
-            })
-            .collect();
-
-        Ok(remove_actions)
     }
 
     fn compute_properties(schema: SchemaRef) -> PlanProperties {
@@ -214,8 +188,8 @@ impl ExecutionPlan for DeltaCommitExec {
 
         let schema = self.schema();
         let future = async move {
-            let storage_config = StorageConfig::default();
-            let object_store = Self::get_object_store(&context, &table_url)?;
+            let storage_config = StorageConfig;
+            let object_store = get_object_store_from_context(&context, &table_url)?;
 
             let table = if table_exists {
                 open_table_with_object_store(
@@ -285,11 +259,26 @@ impl ExecutionPlan for DeltaCommitExec {
                 let snapshot = table
                     .snapshot()
                     .map_err(|e| DataFusionError::External(Box::new(e)))?;
-                let all_files = snapshot
-                    .file_actions(&*table.log_store())
+                let all_files: Vec<Add> = snapshot
+                    .snapshot()
+                    .files(table.log_store().as_ref(), None)
+                    .map_ok(|view| view.add_action())
+                    .try_collect()
                     .await
                     .map_err(|e| DataFusionError::External(Box::new(e)))?;
-                let remove_actions = Self::adds_to_remove_actions(all_files).await?;
+                let deletion_timestamp = current_timestamp_millis()?;
+                let remove_actions = all_files
+                    .into_iter()
+                    .map(|add| {
+                        Action::Remove(add.into_remove_with_options(
+                            deletion_timestamp,
+                            RemoveOptions {
+                                extended_file_metadata: Some(true),
+                                include_tags: false,
+                            },
+                        ))
+                    })
+                    .collect::<Vec<_>>();
                 actions.extend(remove_actions);
             }
 
@@ -363,10 +352,12 @@ impl ExecutionPlan for DeltaCommitExec {
                     let protocol: Protocol = serde_json::from_value(protocol_json).unwrap();
 
                     let configuration: HashMap<String, String> = HashMap::new();
-                    #[allow(deprecated)]
-                    let metadata = deltalake::kernel::new_metadata(
-                        &delta_schema,
+                    let metadata = Metadata::try_new(
+                        None,
+                        None,
+                        delta_schema.clone(),
                         partition_columns.to_vec(),
+                        Utc::now().timestamp_millis(),
                         configuration,
                     )
                     .map_err(|e| DataFusionError::External(Box::new(e)))?;
@@ -433,19 +424,6 @@ impl ExecutionPlan for DeltaCommitExec {
             self.schema(),
             stream,
         )))
-    }
-}
-
-impl DeltaCommitExec {
-    fn get_object_store(
-        context: &Arc<TaskContext>,
-        table_url: &Url,
-    ) -> Result<Arc<dyn object_store::ObjectStore>> {
-        context
-            .runtime_env()
-            .object_store_registry
-            .get_store(table_url)
-            .map_err(|e| DataFusionError::External(Box::new(e)))
     }
 }
 

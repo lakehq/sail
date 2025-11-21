@@ -80,7 +80,7 @@ pub fn run_spark_mcp_server(settings: McpSettings) -> Result<(), Box<dyn std::er
         Some(x) => x,
     };
 
-    Python::with_gil(|py| -> PyResult<_> {
+    Python::attach(|py| -> PyResult<_> {
         let _ = Modules::NATIVE_LOGGING.load(py)?;
         let server = Modules::SPARK_MCP_SERVER.load(py)?;
         server.getattr("configure_logging")?.call0()?;

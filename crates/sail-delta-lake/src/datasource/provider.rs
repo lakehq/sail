@@ -24,40 +24,49 @@ use std::sync::Arc;
 
 use async_trait::async_trait;
 use datafusion::arrow::datatypes::Schema as ArrowSchema;
-use datafusion::catalog::memory::DataSourceExec;
 use datafusion::catalog::Session;
 use datafusion::common::stats::Statistics;
 use datafusion::common::{Result, ToDFSchema};
+use datafusion::datasource::source::DataSourceExec;
 use datafusion::datasource::{TableProvider, TableType};
 use datafusion::logical_expr::utils::conjunction;
 use datafusion::logical_expr::{Expr, LogicalPlan, TableProviderFilterPushDown};
 use datafusion::physical_plan::ExecutionPlan;
-// use crate::kernel::arrow::engine_ext::SnapshotExt as KernelSnapshotExt;
-// use delta_kernel::snapshot::Snapshot as KernelSnapshot;
 use delta_kernel::table_features::ColumnMappingMode;
-use deltalake::errors::DeltaResult;
-use deltalake::kernel::Add;
-use deltalake::logstore::LogStoreRef;
 use sail_common_datafusion::rename::physical_plan::rename_projected_physical_plan;
 
-// use deltalake::errors::DeltaTableError;
-// use delta_kernel::engine::arrow_conversion::TryIntoArrow;
 use crate::datasource::scan::FileScanParams;
 use crate::datasource::{
     build_file_scan_config, delta_to_datafusion_error, df_logical_schema, get_pushdown_filters,
     prune_files, simplify_expr, DataFusionMixins, DeltaScanConfig, DeltaTableStateExt,
 };
-use crate::schema_manager::get_physical_schema;
+use crate::kernel::models::Add;
+use crate::kernel::DeltaResult;
+use crate::schema::get_physical_schema;
+use crate::storage::LogStoreRef;
 use crate::table::DeltaTableState;
 
 /// A Delta table provider that enables additional metadata columns to be included during the scan
-#[derive(Debug)]
 pub struct DeltaTableProvider {
     snapshot: DeltaTableState,
     log_store: LogStoreRef,
     config: DeltaScanConfig,
     schema: Arc<ArrowSchema>,
     files: Option<Arc<Vec<Add>>>,
+}
+
+impl std::fmt::Debug for DeltaTableProvider {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("DeltaTableProvider")
+            .field("snapshot_version", &self.snapshot.version())
+            .field("config", &self.config)
+            .field("schema", &self.schema)
+            .field(
+                "files_len",
+                &self.files.as_ref().map(|files| files.len()).unwrap_or(0),
+            )
+            .finish()
+    }
 }
 
 impl DeltaTableProvider {
@@ -209,7 +218,9 @@ impl TableProvider for DeltaTableProvider {
         let pushdown_filter = if !pushdown_filters.is_empty() {
             let df_schema = logical_schema.clone().to_dfschema()?;
             let pushdown_expr = conjunction(pushdown_filters);
-            pushdown_expr.map(|expr| simplify_expr(session, &df_schema, expr))
+            pushdown_expr
+                .map(|expr| simplify_expr(session, &df_schema, expr))
+                .transpose()?
         } else {
             None
         };
