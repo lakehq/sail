@@ -8,8 +8,8 @@ use serde::Deserialize;
 use crate::metadata::{DuckLakeMetaStore, DuckLakeSnapshot, DuckLakeTable};
 use crate::python::Modules;
 use crate::spec::{
-    ColumnInfo, DataFileIndex, FieldIndex, FileInfo, MappingIndex, PartitionId, SchemaInfo,
-    SnapshotInfo, TableIndex, TableInfo,
+    ColumnInfo, DataFileIndex, FieldIndex, FileInfo, MappingIndex, PartitionFilter, PartitionId,
+    SchemaInfo, SnapshotInfo, TableIndex, TableInfo,
 };
 
 #[derive(Deserialize, FromPyObject)]
@@ -412,8 +412,16 @@ impl DuckLakeMetaStore for PythonMetaStore {
         &self,
         table_id: TableIndex,
         snapshot_id: Option<u64>,
+        partition_filters: Option<Vec<PartitionFilter>>,
     ) -> DataFusionResult<Vec<FileInfo>> {
         let url = self.url.clone();
+        let py_partition_filters: Option<Vec<(u64, Vec<String>)>> =
+            partition_filters.map(|filters| {
+                filters
+                    .into_iter()
+                    .map(|f| (f.partition_key_index, f.values))
+                    .collect()
+            });
         let rows: Vec<PyFileInfo> = tokio::task::spawn_blocking(move || {
             Python::attach(|py| {
                 let call: PyResult<Vec<PyFileInfo>> = (|| {
@@ -422,6 +430,7 @@ impl DuckLakeMetaStore for PythonMetaStore {
                         url.as_str(),
                         table_id.0,
                         snapshot_id,
+                        py_partition_filters,
                     ))?;
                     obj.extract()
                 })();

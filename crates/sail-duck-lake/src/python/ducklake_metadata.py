@@ -210,34 +210,73 @@ def load_table(url: str, table_name: str, schema_name: str | None) -> dict[str, 
         }
 
 
-def list_data_files(url: str, table_id: int, snapshot_id: int | None) -> list[dict[str, Any]]:
-    sql_active = text(
-        """
+def list_data_files(
+    url: str,
+    table_id: int,
+    snapshot_id: int | None,
+    partition_filters: list[tuple[int, list[str]]] | None = None,
+) -> list[dict[str, Any]]:
+    base_select = """
         select data_file_id, table_id, begin_snapshot, end_snapshot, file_order,
                path, path_is_relative, file_format, record_count, file_size_bytes,
                footer_size, row_id_start, partition_id, encryption_key, partial_file_info, mapping_id
         from ducklake_data_file
-        where table_id = :tid and end_snapshot is null
-        order by file_order asc
-        """
+    """
+
+    where_clauses_active: list[str] = ["table_id = :tid", "end_snapshot is null"]
+    where_clauses_asof: list[str] = [
+        "table_id = :tid",
+        "begin_snapshot <= :sid",
+        "(end_snapshot is null or end_snapshot > :sid)",
+    ]
+    params_active: dict[str, Any] = {"tid": int(table_id)}
+    params_asof: dict[str, Any] = {"tid": int(table_id)}
+    if snapshot_id is not None:
+        params_asof["sid"] = int(snapshot_id)
+
+    if partition_filters:
+        exists_clauses: list[str] = []
+        for idx, (partition_key_index, values) in enumerate(partition_filters):
+            if not values:
+                continue
+            key_param = f"pf_{idx}_key"
+            value_param_names_for_filter: list[str] = []
+            for j, v in enumerate(values):
+                value_param = f"pf_{idx}_v_{j}"
+                value_param_names_for_filter.append(value_param)
+                params_active[value_param] = v
+                params_asof[value_param] = v
+            exists_clauses.append(
+                f"exists (select 1 from ducklake_file_partition_value pv_{idx} "
+                f"where pv_{idx}.data_file_id = ducklake_data_file.data_file_id "
+                f"and pv_{idx}.partition_key_index = :{key_param} "
+                f"and pv_{idx}.partition_value in ("
+                + ", ".join(f":{name}" for name in value_param_names_for_filter)
+                + "))"
+            )
+            params_active[key_param] = int(partition_key_index)
+            params_asof[key_param] = int(partition_key_index)
+        if exists_clauses:
+            where_clauses_active.append(" and ".join(exists_clauses))
+            where_clauses_asof.append(" and ".join(exists_clauses))
+
+    sql_active = text(
+        base_select
+        + " where "
+        + " and ".join(where_clauses_active)
+        + " order by file_order asc"
     )
     sql_asof = text(
-        """
-        select data_file_id, table_id, begin_snapshot, end_snapshot, file_order,
-               path, path_is_relative, file_format, record_count, file_size_bytes,
-               footer_size, row_id_start, partition_id, encryption_key, partial_file_info, mapping_id
-        from ducklake_data_file
-        where table_id = :tid
-          and begin_snapshot <= :sid
-          and (end_snapshot is null or end_snapshot > :sid)
-        order by file_order asc
-        """
+        base_select
+        + " where "
+        + " and ".join(where_clauses_asof)
+        + " order by file_order asc"
     )
     with _get_engine(url).connect() as conn:
         if snapshot_id is None:
-            rows = conn.execute(sql_active, {"tid": int(table_id)}).all()
+            rows = conn.execute(sql_active, params_active).all()
         else:
-            rows = conn.execute(sql_asof, {"tid": int(table_id), "sid": int(snapshot_id)}).all()
+            rows = conn.execute(sql_asof, params_asof).all()
         out: list[dict[str, Any]] = [
             {
                 "data_file_id": int(row[0]),

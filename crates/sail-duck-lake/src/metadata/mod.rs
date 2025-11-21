@@ -4,7 +4,7 @@ use async_trait::async_trait;
 use datafusion::common::Result as DataFusionResult;
 pub use py_impl::PythonMetaStore;
 
-use crate::spec::{ColumnInfo, FileInfo, SchemaInfo, SnapshotInfo, TableInfo};
+use crate::spec::{ColumnInfo, FileInfo, PartitionFilter, SchemaInfo, SnapshotInfo, TableInfo};
 
 #[derive(Debug, Clone)]
 pub struct DuckLakeTable {
@@ -35,6 +35,7 @@ pub trait DuckLakeMetaStore: Send + Sync {
         &self,
         table_id: crate::spec::TableIndex,
         snapshot_id: Option<u64>,
+        partition_filters: Option<Vec<PartitionFilter>>,
     ) -> DataFusionResult<Vec<FileInfo>>;
 
     async fn list_delete_files(

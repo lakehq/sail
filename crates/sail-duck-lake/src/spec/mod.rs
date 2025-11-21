@@ -180,6 +180,12 @@ pub struct FilePartitionInfo {
     pub partition_value: String,
 }
 
+#[derive(Debug, Serialize, Deserialize, Clone, PartialEq, Eq)]
+pub struct PartitionFilter {
+    pub partition_key_index: u64,
+    pub values: Vec<String>,
+}
+
 /// Partition field definition for a table (identity or transformed partition)
 #[derive(Debug, Serialize, Deserialize, Clone, PartialEq, Eq)]
 pub struct PartitionFieldInfo {

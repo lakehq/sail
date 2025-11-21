@@ -6,6 +6,7 @@ use async_trait::async_trait;
 use datafusion::arrow::datatypes::SchemaRef as ArrowSchemaRef;
 use datafusion::catalog::memory::DataSourceExec;
 use datafusion::catalog::Session;
+use datafusion::common::scalar::ScalarValue;
 use datafusion::common::stats::{ColumnStatistics, Precision, Statistics};
 use datafusion::common::ToDFSchema;
 use datafusion::config::TableParquetOptions;
@@ -24,6 +25,7 @@ use crate::datasource::expressions::{get_pushdown_filters, simplify_expr};
 use crate::datasource::pruning::prune_files;
 use crate::metadata::{DuckLakeMetaStore, DuckLakeTable};
 use crate::options::DuckLakeOptions;
+use crate::spec::{ColumnInfo, PartitionFieldInfo, PartitionFilter};
 
 pub struct DuckLakeTableProvider {
     table: DuckLakeTable,
@@ -114,11 +116,24 @@ impl TableProvider for DuckLakeTableProvider {
             self.table.table_info.table_name
         );
 
-        let (pruning_filters, pushdown_filters) = self.separate_filters(filters);
+        let (partition_filters, remaining_filters) = Self::extract_partition_filters(
+            filters,
+            &self.table.columns,
+            &self.table.partition_fields,
+        );
+        let (pruning_filters, pushdown_filters) = self.separate_filters(&remaining_filters);
 
         let files = self
             .meta_store
-            .list_data_files(self.table.table_info.table_id, self.snapshot_id)
+            .list_data_files(
+                self.table.table_info.table_id,
+                self.snapshot_id,
+                if partition_filters.is_empty() {
+                    None
+                } else {
+                    Some(partition_filters)
+                },
+            )
             .await?;
 
         log::trace!("Found {} data files", files.len());
@@ -272,6 +287,126 @@ impl DuckLakeTableProvider {
             }
         }
         (pruning_filters, parquet_pushdown_filters)
+    }
+
+    fn extract_partition_filters(
+        filters: &[Expr],
+        columns: &[ColumnInfo],
+        partition_fields: &[PartitionFieldInfo],
+    ) -> (Vec<PartitionFilter>, Vec<Expr>) {
+        let mut name_to_partition_key: HashMap<String, u64> = HashMap::new();
+        for field in partition_fields {
+            if let Some(col) = columns.iter().find(|c| c.column_id == field.column_id) {
+                if field.transform.trim().eq_ignore_ascii_case("identity") {
+                    name_to_partition_key
+                        .insert(col.column_name.clone(), field.partition_key_index);
+                }
+            }
+        }
+
+        let mut partition_values: HashMap<u64, Vec<String>> = HashMap::new();
+        let mut remaining_filters = Vec::new();
+
+        for expr in filters.iter().cloned() {
+            if let Some((col_name, values)) = Self::extract_values_from_expr(&expr) {
+                if let Some(partition_key_index) = name_to_partition_key.get(&col_name).copied() {
+                    let entry = partition_values.entry(partition_key_index).or_default();
+                    for v in values {
+                        if !entry.contains(&v) {
+                            entry.push(v);
+                        }
+                    }
+                    remaining_filters.push(expr);
+                    continue;
+                }
+            }
+            remaining_filters.push(expr);
+        }
+
+        let mut out_filters = Vec::new();
+        for (partition_key_index, values) in partition_values {
+            if !values.is_empty() {
+                out_filters.push(PartitionFilter {
+                    partition_key_index,
+                    values,
+                });
+            }
+        }
+
+        (out_filters, remaining_filters)
+    }
+
+    fn extract_values_from_expr(expr: &Expr) -> Option<(String, Vec<String>)> {
+        match expr {
+            Expr::BinaryExpr(be) => {
+                use datafusion::logical_expr::Operator;
+                match be.op {
+                    Operator::Eq => {
+                        if let (Some(col), Some(value)) = (
+                            Self::column_name(&be.left),
+                            Self::literal_to_string(&be.right),
+                        ) {
+                            return Some((col, vec![value]));
+                        }
+                        if let (Some(col), Some(value)) = (
+                            Self::column_name(&be.right),
+                            Self::literal_to_string(&be.left),
+                        ) {
+                            return Some((col, vec![value]));
+                        }
+                        None
+                    }
+                    _ => None,
+                }
+            }
+            Expr::InList(in_list) if !in_list.negated => {
+                if let Some(col) = Self::column_name(&in_list.expr) {
+                    let mut values = Vec::new();
+                    for v in &in_list.list {
+                        if let Some(s) = Self::literal_to_string(v) {
+                            values.push(s);
+                        } else {
+                            return None;
+                        }
+                    }
+                    if values.is_empty() {
+                        None
+                    } else {
+                        Some((col, values))
+                    }
+                } else {
+                    None
+                }
+            }
+            _ => None,
+        }
+    }
+
+    fn column_name(expr: &Expr) -> Option<String> {
+        if let Expr::Column(c) = expr {
+            Some(c.name.clone())
+        } else {
+            None
+        }
+    }
+
+    fn literal_to_string(expr: &Expr) -> Option<String> {
+        if let Expr::Literal(value, _) = expr {
+            if value.is_null() {
+                return None;
+            }
+            let s = value.to_string();
+            if let Some(stripped) = s
+                .strip_prefix('\'')
+                .and_then(|rest| rest.strip_suffix('\''))
+            {
+                Some(stripped.to_string())
+            } else {
+                Some(s)
+            }
+        } else {
+            None
+        }
     }
 
     fn aggregate_statistics(&self, schema: &datafusion::arrow::datatypes::Schema) -> Statistics {
