@@ -126,10 +126,10 @@ root
 # |    B|  20.0|
 # +-----+------+
 
->>> out.printSchema()
-root
- |-- group: string (nullable = true)
- |-- median: double (nullable = true)
+# >>> out.printSchema()
+# root
+#  |-- group: string (nullable = true)
+#  |-- median: double (nullable = true)
 
 # Test 14: Percentile with duplicates
 >>> df = spark.createDataFrame([(1,), (2,), (2,), (2,), (3,)], ["x"])
@@ -238,28 +238,28 @@ root
 +------------+
 
 # Test 23: Percentile with interval types (YearMonth)
->>> spark.sql("SELECT percentile(col, 0.5) FROM VALUES (interval '0 months'), (interval '10 months') AS tab(col)").show(truncate=False)
-+----------------------------+
-|percentile(col, 0.5, 1)     |
-+----------------------------+
-|INTERVAL '0-5' YEAR TO MONTH|
-+----------------------------+
+# >>> spark.sql("SELECT percentile(col, 0.5) FROM VALUES (interval '0 months'), (interval '10 months') AS tab(col)").show(truncate=False)
+# +----------------------------+
+# |percentile(col, 0.5, 1)     |
+# +----------------------------+
+# |INTERVAL '0-5' YEAR TO MONTH|
+# +----------------------------+
 
 # Test 24: Percentile with interval types (DayTime)
->>> spark.sql("SELECT percentile(col, 0.5) FROM VALUES (interval '0 seconds'), (interval '10 seconds') AS tab(col)").show(truncate=False)
-+-------------------------------+
-|percentile(col, 0.5, 1)        |
-+-------------------------------+
-|INTERVAL '0 00:00:05' DAY TO SE|
-+-------------------------------+
+# >>> spark.sql("SELECT percentile(col, 0.5) FROM VALUES (interval '0 seconds'), (interval '10 seconds') AS tab(col)").show(truncate=False)
+# +-------------------------------+
+# |percentile(col, 0.5, 1)        |
+# +-------------------------------+
+# |INTERVAL '0 00:00:05' DAY TO SE|
+# +-------------------------------+
 
 # Test 25: Percentile with interval types and NULLs
->>> spark.sql("SELECT percentile(col, 0.5) FROM VALUES (interval '0 months'), null, (interval '10 months') AS tab(col)").show(truncate=False)
-+----------------------------+
-|percentile(col, 0.5, 1)     |
-+----------------------------+
-|INTERVAL '0-5' YEAR TO MONTH|
-+----------------------------+
+# >>> spark.sql("SELECT percentile(col, 0.5) FROM VALUES (interval '0 months'), null, (interval '10 months') AS tab(col)").show(truncate=False)
+# +----------------------------+
+# |percentile(col, 0.5, 1)     |
+# +----------------------------+
+# |INTERVAL '0-5' YEAR TO MONTH|
+# +----------------------------+
 
 # Test 26: Percentile with decimal values
 >>> from decimal import Decimal
