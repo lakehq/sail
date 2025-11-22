@@ -12,123 +12,134 @@ import logging
 from collections import Counter
 from pathlib import Path
 
+import jedi
+
 logging.basicConfig(level=logging.INFO, format="%(levelname)s: %(message)s")
 
-# Modules to track (stored lowercase for case-insensitive matching)
+# Modules to track
 TARGET_MODULES: frozenset[str] = frozenset(
     {
         "pyspark.sql.functions",
         "pyspark.sql.window",
+        "pyspark.sql.types.StructType",
+        "pyspark.sql.column",
+        "pyspark.sql.dataframe",
     }
 )
-
-# Parent packages for "from X import module" style imports
-TARGET_PACKAGES: frozenset[str] = frozenset(
-    m.rsplit(".", 1)[0] for m in TARGET_MODULES if "." in m
-)
+TARGET_MODULES_LOOKUP_HELPER = {t.lower(): t for t in TARGET_MODULES}
 
 SUPPORTED_EXTENSIONS = {".py", ".ipynb"}
 MAGIC_PREFIXES = ("%", "!", "?")
 
 
-class PysparkFunctionScanner(ast.NodeVisitor):
-    """AST visitor tracking imports and function calls for target modules."""
-
-    __slots__ = ("module_aliases", "direct_imports", "calls")
+class CallSiteLocator(ast.NodeVisitor):
+    """
+    AST Visitor that only cares about finding the coordinates (Line, Column)
+    of function calls. We hand these coordinates to Jedi for resolution.
+    """
 
     def __init__(self):
-        self.module_aliases: dict[str, str] = {}  # alias -> full module
-        self.direct_imports: dict[str, tuple[str, str]] = (
-            {}
-        )  # local name -> (module, func)
-        self.calls: Counter[tuple[str, str]] = Counter()
-
-    def _register_module_alias(self, full_name: str, alias: str | None = None) -> None:
-        """Register an alias for a tracked module."""
-        name_lower = full_name.lower()
-        if name_lower in TARGET_MODULES:
-            local_name = alias or full_name.rsplit(".", 1)[-1]
-            self.module_aliases[local_name] = name_lower
-
-    def visit_Import(self, node: ast.Import) -> None:
-        # import pyspark.sql.functions as F
-        for alias in node.names:
-            self._register_module_alias(alias.name, alias.asname)
-        self.generic_visit(node)
-
-    def visit_ImportFrom(self, node: ast.ImportFrom) -> None:
-        if not node.module:
-            return self.generic_visit(node)
-
-        module_lower = node.module.lower()
-
-        if module_lower in TARGET_MODULES:
-            # from pyspark.sql.functions import col, lit as L
-            for alias in node.names:
-                if alias.name == "*":
-                    logging.warning(
-                        "Wildcard import from %s; calls may be missed", node.module
-                    )
-                    continue
-                local = alias.asname or alias.name
-                self.direct_imports[local] = (module_lower, alias.name)
-
-        elif module_lower in TARGET_PACKAGES:
-            # from pyspark.sql import functions as F
-            for alias in node.names:
-                full_module = f"{module_lower}.{alias.name.lower()}"
-                if full_module in TARGET_MODULES:
-                    self._register_module_alias(full_module, alias.asname or alias.name)
-
-        self.generic_visit(node)
+        self.locations: list[tuple[int, int]] = []
 
     def visit_Call(self, node: ast.Call) -> None:
+        """
+        Identify the 'hotspot' of the function call to ask Jedi about.
+        """
         func = node.func
 
-        if isinstance(func, ast.Attribute) and isinstance(func.value, ast.Name):
-            # F.col(...) where F is module alias
-            module = self.module_aliases.get(func.value.id)
-            if module:
-                self.calls[(module, func.attr)] += 1
+        # Case 1: direct call like 'col(...)'
+        if isinstance(func, ast.Name):
+            self.locations.append((func.lineno, func.col_offset))
 
-        elif isinstance(func, ast.Name):
-            # col(...) where col was directly imported
-            origin = self.direct_imports.get(func.id)
-            if origin:
-                self.calls[origin] += 1
+        # Case 2: attribute call like 'F.col(...)' or 'df.select(...)'
+        elif isinstance(func, ast.Attribute):
+            self.locations.append((func.end_lineno, func.end_col_offset - 1))
 
         self.generic_visit(node)
 
 
-def parse_and_scan_code(source: str) -> Counter[tuple[str, str]]:
-    """Parse source code and return function call counts."""
+def resolve_calls_with_jedi(
+    source: str, file_path: Path | None = None
+) -> Counter[tuple[str, str]]:
+    """
+    1. Parse code with AST to find where functions are called.
+    2. Ask Jedi to infer what is being called at those locations.
+    """
+    # 1. Fast scan for function call locations using AST
     try:
         tree = ast.parse(source)
     except SyntaxError as e:
-        logging.error("Syntax error: %s", e)
+        logging.warning("Syntax error in {%s or 'source'}: %s", file_path, e)
         return Counter()
 
-    scanner = PysparkFunctionScanner()
-    scanner.visit(tree)
-    return scanner.calls
+    locator = CallSiteLocator()
+    locator.visit(tree)
+
+    if not locator.locations:
+        return Counter()
+
+    # 2. Initialize Jedi Script
+    try:
+        script = jedi.Script(code=source, path=file_path)
+    except (RuntimeError, OSError, ValueError, TypeError) as e:
+        logging.error("Jedi initialization failed for %s: %s", file_path, e)
+        return Counter()
+
+    counts: Counter[tuple[str, str]] = Counter()
+
+    # 3. Infer types at specific coordinates
+    for line, col in locator.locations:
+        definitions = script.infer(line, col)
+
+        for definition in definitions:
+            full_name = definition.full_name
+            if not full_name:
+                continue
+
+            full_name_lower = full_name.lower()
+            matching_module = None
+            for (
+                target_module_lower,
+                target_module,
+            ) in TARGET_MODULES_LOOKUP_HELPER.items():
+                if full_name_lower.startswith(target_module_lower):
+                    matching_module = target_module
+                    break
+            if matching_module:
+                counts[(matching_module, full_name.split(".")[-1])] += 1
+
+    return counts
 
 
 def extract_notebook_code(content: str) -> str:
     """Extract Python code from Jupyter notebook JSON."""
-    nb = json.loads(content)
-    lines = []
+    try:
+        nb = json.loads(content)
+    except json.JSONDecodeError:
+        return ""
 
+    lines = []
     for cell in nb.get("cells", []):
         if cell.get("cell_type") != "code":
             continue
-        source = cell.get("source", [])
-        code = "".join(source) if isinstance(source, list) else source
-        lines.append(code)
 
-    # Comment out magic commands to avoid syntax errors
-    return "\n".join(
-        f"# {ln}" if ln.lstrip().startswith(MAGIC_PREFIXES) else ln for ln in lines
-    )
+        source = cell.get("source", [])
+        cell_lines = (
+            source if isinstance(source, list) else source.splitlines(keepends=True)
+        )
+
+        for line in cell_lines:
+            # Comment out magic commands (%, !, ?) to keep line numbers aligned
+            # but prevent syntax errors
+            if line.lstrip().startswith(MAGIC_PREFIXES):
+                lines.append(f"# {line}")
+            else:
+                lines.append(line)
+
+        # Add a newline after each cell to ensure separation
+        lines.append("\n")
+
+    return "".join(lines)
 
 
 def scan_file(path: Path) -> Counter[tuple[str, str]]:
@@ -139,9 +150,12 @@ def scan_file(path: Path) -> Counter[tuple[str, str]]:
         if path.suffix == ".ipynb":
             content = extract_notebook_code(content)
 
-        return parse_and_scan_code(content)
+        if not content.strip():
+            return Counter()
 
-    except (OSError, json.JSONDecodeError) as e:
+        return resolve_calls_with_jedi(content, path)
+
+    except OSError as e:
         logging.error("Failed to read %s: %s", path, e)
         return Counter()
 
@@ -150,9 +164,19 @@ def scan_directory(base: Path) -> Counter[tuple[str, str]]:
     """Recursively scan directory for .py and .ipynb files."""
     total: Counter[tuple[str, str]] = Counter()
 
-    for path in base.rglob("*"):
-        if path.suffix in SUPPORTED_EXTENSIONS:
-            total.update(scan_file(path))
+    # Collect all files first to show progress if needed,
+    # or just iterate directly.
+    files = [
+        p for p in base.rglob("*") if p.suffix in SUPPORTED_EXTENSIONS and p.is_file()
+    ]
+
+    total_files = len(files)
+    logging.info(f"Found {total_files} files to scan.")
+
+    for i, path in enumerate(files, 1):
+        if i % 10 == 0:
+            logging.info(f"Scanning file {i}/{total_files}...")
+        total.update(scan_file(path))
 
     return total
 
@@ -166,24 +190,40 @@ def format_output(counts: Counter[tuple[str, str]], fmt: str) -> str:
         ]
         return json.dumps(results, indent=2)
 
+    if fmt == "csv":
+        results = [(mod, func, cnt) for (mod, func), cnt in counts.most_common()]
+        header = [("module", "function", "count")]
+
+        return "\n".join(
+            ";".join(str(item) for item in row) for row in header + results
+        )
+
     if not counts:
         return f"No function calls found for {', '.join(sorted(TARGET_MODULES))}."
 
     lines = ["", "=== Usage Counts ==="]
-    for (mod, func), cnt in counts.most_common():
-        lines.append(f"  {mod}.{func}: {cnt}")
+    # Sort by Module then Count descending
+    sorted_items = sorted(counts.items(), key=lambda x: (x[0][0], -x[1]))
+
+    current_mod = None
+    for (mod, func), cnt in sorted_items:
+        if mod != current_mod:
+            lines.append(f"\n[{mod}]")
+            current_mod = mod
+        lines.append(f"  .{func}: {cnt}")
+
     return "\n".join(lines)
 
 
 def main() -> None:
     parser = argparse.ArgumentParser(
-        description=f"Scan Python files for usage of {', '.join(sorted(TARGET_MODULES))}."
+        description=f"Scan Python files using Jedi for {', '.join(sorted(TARGET_MODULES))}."
     )
     parser.add_argument("directory", type=Path, help="Directory to scan recursively")
     parser.add_argument(
         "-o",
         "--output",
-        choices=["text", "json"],
+        choices=["text", "json", "csv"],
         default="text",
         help="Output format (default: text)",
     )
@@ -193,6 +233,10 @@ def main() -> None:
         raise SystemExit(f"Directory not found: {args.directory}")
 
     logging.info("Scanning: %s", args.directory)
+
+    # Suppress Jedi internal debug logging
+    logging.getLogger("jedi").setLevel(logging.WARNING)
+
     counts = scan_directory(args.directory)
     logging.info("Scan complete.")
 
