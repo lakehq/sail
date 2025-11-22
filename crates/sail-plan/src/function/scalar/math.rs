@@ -17,6 +17,7 @@ use sail_function::scalar::math::spark_bin::SparkBin;
 use sail_function::scalar::math::spark_bround::SparkBRound;
 use sail_function::scalar::math::spark_ceil_floor::{SparkCeil, SparkFloor};
 use sail_function::scalar::math::spark_conv::SparkConv;
+use sail_function::scalar::math::spark_div::SparkIntervalDiv;
 use sail_function::scalar::math::spark_hex_unhex::{SparkHex, SparkUnHex};
 use sail_function::scalar::math::spark_signum::SparkSignum;
 use sail_function::scalar::math::spark_try_add::SparkTryAdd;
@@ -269,6 +270,14 @@ fn spark_div(input: ScalarFunctionInput) -> PlanResult<Expr> {
         (Ok(DataType::Duration(_)), Ok(DataType::Duration(_))) => {
             // Match duration because we cast Spark's DayTime interval to Duration.
             cast(dividend, DataType::Int64) / cast(divisor, DataType::Int64)
+        }
+        // Handle Interval / Interval division using custom UDF
+        (Ok(DataType::Interval(_)), Ok(DataType::Interval(_))) => {
+            let interval_div = Arc::new(ScalarUDF::from(SparkIntervalDiv::new()));
+            Expr::ScalarFunction(expr::ScalarFunction {
+                func: interval_div,
+                args: vec![dividend, divisor],
+            })
         }
         // TODO: In case getting the type fails, we don't want to fail the query.
         //  Future work is needed here, ideally we create something like `Operator::SparkDivide`.
