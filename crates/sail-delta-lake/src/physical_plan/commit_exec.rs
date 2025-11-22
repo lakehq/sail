@@ -30,14 +30,17 @@ use datafusion::physical_plan::{
 };
 use datafusion_common::{internal_err, DataFusionError, Result};
 use datafusion_physical_expr::{Distribution, EquivalenceProperties};
-use delta_kernel::engine::arrow_conversion::TryIntoKernel;
+use delta_kernel::committer::FileSystemCommitter;
+use delta_kernel::engine::arrow_conversion::{TryIntoArrow, TryIntoKernel};
+use delta_kernel::engine::arrow_data::ArrowEngineData;
 use delta_kernel::schema::StructType;
+use delta_kernel::EngineData;
 use futures::stream::{self, StreamExt};
 use futures::TryStreamExt;
 use sail_common_datafusion::datasource::PhysicalSinkMode;
 use url::Url;
 
-use crate::kernel::models::{Action, Add, Metadata, Protocol, RemoveOptions};
+use crate::kernel::models::{Action, Add, Metadata, Protocol, Remove, RemoveOptions};
 use crate::kernel::transaction::{CommitBuilder, CommitProperties, TableReference};
 use crate::kernel::{DeltaOperation, SaveMode};
 use crate::physical_plan::{current_timestamp_millis, CommitInfo};
@@ -284,7 +287,7 @@ impl ExecutionPlan for DeltaCommitExec {
 
             // Prepend initial actions
             let mut final_actions = initial_actions;
-            final_actions.extend(actions);
+            final_actions.extend(actions.clone());
             let kinds: Vec<&'static str> = final_actions
                 .iter()
                 .map(|a| match a {
@@ -392,27 +395,45 @@ impl ExecutionPlan for DeltaCommitExec {
                 )
             };
 
-            let snapshot = if table_exists {
-                Some(
-                    table
-                        .snapshot()
-                        .map_err(|e| DataFusionError::External(Box::new(e)))?,
+            // FIXME: Hybrid Transaction Strategy
+            let use_kernel_txn = table_exists && is_dml_operation(&final_actions);
+
+            if use_kernel_txn {
+                let snapshot = table
+                    .snapshot()
+                    .map_err(|e| DataFusionError::External(Box::new(e)))?;
+
+                commit_with_kernel_transaction(
+                    snapshot,
+                    &final_actions,
+                    &operation,
+                    table.log_store().as_ref(),
                 )
-            } else {
-                None
-            };
-            let reference = snapshot.as_ref().map(|s| *s as &dyn TableReference);
-
-            let session_state = SessionStateBuilder::new()
-                .with_runtime_env(context.runtime_env().clone())
-                .with_config(context.session_config().clone())
-                .build();
-
-            CommitBuilder::from(CommitProperties::default())
-                .with_actions(final_actions)
-                .build(reference, table.log_store(), operation, &session_state)
                 .await
                 .map_err(|e| DataFusionError::External(Box::new(e)))?;
+            } else {
+                let snapshot = if table_exists {
+                    Some(
+                        table
+                            .snapshot()
+                            .map_err(|e| DataFusionError::External(Box::new(e)))?,
+                    )
+                } else {
+                    None
+                };
+                let reference = snapshot.as_ref().map(|s| *s as &dyn TableReference);
+
+                let session_state = SessionStateBuilder::new()
+                    .with_runtime_env(context.runtime_env().clone())
+                    .with_config(context.session_config().clone())
+                    .build();
+
+                CommitBuilder::from(CommitProperties::default())
+                    .with_actions(final_actions)
+                    .build(reference, table.log_store(), operation, &session_state)
+                    .await
+                    .map_err(|e| DataFusionError::External(Box::new(e)))?;
+            }
 
             let array = Arc::new(UInt64Array::from(vec![total_rows]));
             let batch = RecordBatch::try_new(schema, vec![array])?;
@@ -439,4 +460,233 @@ impl DisplayAs for DeltaCommitExec {
             }
         }
     }
+}
+
+fn is_dml_operation(actions: &[Action]) -> bool {
+    let has_protocol_or_metadata = actions
+        .iter()
+        .any(|a| matches!(a, Action::Protocol(_) | Action::Metadata(_)));
+
+    if has_protocol_or_metadata {
+        return false;
+    }
+
+    let has_add_or_remove = actions
+        .iter()
+        .any(|a| matches!(a, Action::Add(_) | Action::Remove(_)));
+
+    has_add_or_remove
+}
+
+async fn commit_with_kernel_transaction(
+    snapshot: &crate::kernel::snapshot::EagerSnapshot,
+    actions: &[Action],
+    operation: &DeltaOperation,
+    log_store: &dyn crate::storage::LogStore,
+) -> Result<(), crate::kernel::DeltaTableError> {
+    use crate::kernel::DeltaTableError;
+
+    let kernel_snapshot = snapshot.snapshot().inner.clone();
+    let committer = Box::new(FileSystemCommitter::new());
+    let mut txn = kernel_snapshot
+        .transaction(committer)
+        .map_err(|e| DeltaTableError::generic(e.to_string()))?;
+
+    let operation_str = operation.name();
+    txn = txn.with_operation(operation_str.to_string());
+
+    let add_actions: Vec<&Add> = actions
+        .iter()
+        .filter_map(|a| match a {
+            Action::Add(add) => Some(add),
+            _ => None,
+        })
+        .collect();
+
+    let remove_actions: Vec<&Remove> = actions
+        .iter()
+        .filter_map(|a| match a {
+            Action::Remove(remove) => Some(remove),
+            _ => None,
+        })
+        .collect();
+
+    if !add_actions.is_empty() {
+        let add_data = convert_adds_to_engine_data(&add_actions, txn.add_files_schema())?;
+        txn.add_files(add_data);
+    }
+
+    if !remove_actions.is_empty() {
+        let remove_data = convert_removes_to_filtered_data(&remove_actions, snapshot)?;
+        txn.remove_files(remove_data);
+    }
+
+    let engine = log_store.engine(None);
+    let result = txn
+        .commit(engine.as_ref())
+        .map_err(|e| DeltaTableError::generic(e.to_string()))?;
+
+    match result {
+        delta_kernel::transaction::CommitResult::CommittedTransaction(_) => Ok(()),
+        delta_kernel::transaction::CommitResult::ConflictedTransaction(conflict) => {
+            Err(DeltaTableError::generic(format!(
+                "Transaction conflict at version {}",
+                conflict.conflict_version()
+            )))
+        }
+        delta_kernel::transaction::CommitResult::RetryableTransaction(retryable) => Err(
+            DeltaTableError::generic(format!("Retryable transaction error: {}", retryable.error)),
+        ),
+    }
+}
+
+fn convert_adds_to_engine_data(
+    adds: &[&Add],
+    schema: &delta_kernel::schema::SchemaRef,
+) -> Result<Box<dyn EngineData>, crate::kernel::DeltaTableError> {
+    use crate::kernel::DeltaTableError;
+    use datafusion::arrow::array::{
+        ArrayRef, Int64Array, MapBuilder, MapFieldNames, RecordBatch, StringBuilder, StructBuilder,
+    };
+    use datafusion::arrow::datatypes::{DataType as ArrowDataType, Field, Schema as ArrowSchema};
+    use std::sync::Arc;
+
+    let arrow_schema: ArrowSchema = schema
+        .as_ref()
+        .try_into_arrow()
+        .map_err(|e| DeltaTableError::generic(format!("Failed to convert schema: {}", e)))?;
+
+    let mut path_builder = StringBuilder::new();
+    let map_field_names = MapFieldNames {
+        entry: "key_value".to_string(),
+        key: "key".to_string(),
+        value: "value".to_string(),
+    };
+    let mut partition_values_builder = MapBuilder::new(
+        Some(map_field_names),
+        StringBuilder::new(),
+        StringBuilder::new(),
+    );
+    let mut size_builder = Int64Array::builder(adds.len());
+    let mut modification_time_builder = Int64Array::builder(adds.len());
+    let mut stats_num_records_builder = Int64Array::builder(adds.len());
+
+    for add in adds {
+        path_builder.append_value(&add.path);
+
+        for (key, value) in &add.partition_values {
+            partition_values_builder.keys().append_value(key);
+            if let Some(v) = value {
+                partition_values_builder.values().append_value(v);
+            } else {
+                partition_values_builder.values().append_null();
+            }
+        }
+        partition_values_builder.append(true).map_err(|e| {
+            DeltaTableError::generic(format!("Failed to append partition values: {}", e))
+        })?;
+
+        size_builder.append_value(add.size);
+        modification_time_builder.append_value(add.modification_time);
+
+        let num_records = if let Some(stats_str) = &add.stats {
+            serde_json::from_str::<serde_json::Value>(stats_str)
+                .ok()
+                .and_then(|v| v.get("numRecords")?.as_i64())
+                .unwrap_or(0)
+        } else {
+            0
+        };
+        stats_num_records_builder.append_value(num_records);
+    }
+
+    let path_array: ArrayRef = Arc::new(path_builder.finish());
+    let partition_values_array: ArrayRef = Arc::new(partition_values_builder.finish());
+    let size_array: ArrayRef = Arc::new(size_builder.finish());
+    let modification_time_array: ArrayRef = Arc::new(modification_time_builder.finish());
+
+    let mut stats_builder = StructBuilder::new(
+        vec![Field::new("numRecords", ArrowDataType::Int64, true)],
+        vec![Box::new(stats_num_records_builder)],
+    );
+    for _ in 0..adds.len() {
+        stats_builder.append(true);
+    }
+    let stats_array: ArrayRef = Arc::new(stats_builder.finish());
+
+    let batch = RecordBatch::try_new(
+        Arc::new(arrow_schema),
+        vec![
+            path_array,
+            partition_values_array,
+            size_array,
+            modification_time_array,
+            stats_array,
+        ],
+    )
+    .map_err(|e| DeltaTableError::generic(format!("Failed to create record batch: {}", e)))?;
+
+    Ok(Box::new(ArrowEngineData::new(batch)))
+}
+
+fn convert_removes_to_filtered_data(
+    removes: &[&Remove],
+    snapshot: &crate::kernel::snapshot::EagerSnapshot,
+) -> Result<delta_kernel::engine_data::FilteredEngineData, crate::kernel::DeltaTableError> {
+    use crate::kernel::DeltaTableError;
+    use datafusion::arrow::array::Array;
+    use datafusion::arrow::datatypes::Schema as ArrowSchema;
+    use delta_kernel::engine::arrow_conversion::TryIntoArrow;
+    use delta_kernel::scan::scan_row_schema;
+    use std::collections::HashSet;
+    use std::sync::Arc;
+
+    let files_batch = &snapshot.files;
+
+    let path_column = files_batch
+        .column_by_name("path")
+        .ok_or_else(|| DeltaTableError::generic("path column not found in snapshot files"))?;
+
+    let path_array = path_column
+        .as_any()
+        .downcast_ref::<datafusion::arrow::array::StringArray>()
+        .ok_or_else(|| DeltaTableError::generic("path column is not a string array"))?;
+
+    let remove_paths: HashSet<&str> = removes.iter().map(|r| r.path.as_str()).collect();
+
+    let mut selection_vector = Vec::with_capacity(files_batch.num_rows());
+    for i in 0..files_batch.num_rows() {
+        let file_path = path_array.value(i);
+        selection_vector.push(remove_paths.contains(file_path));
+    }
+
+    let has_any_selected = selection_vector.iter().any(|&selected| selected);
+    if !has_any_selected {
+        return Err(DeltaTableError::generic(
+            "No files found in snapshot matching remove actions",
+        ));
+    }
+
+    let kernel_scan_schema: ArrowSchema = scan_row_schema()
+        .as_ref()
+        .try_into_arrow()
+        .map_err(|e| DeltaTableError::generic(format!("Failed to convert scan schema: {}", e)))?;
+
+    let mut columns = Vec::new();
+    for field in kernel_scan_schema.fields() {
+        let column = files_batch.column_by_name(field.name()).ok_or_else(|| {
+            DeltaTableError::generic(format!(
+                "Required column '{}' not found in snapshot files",
+                field.name()
+            ))
+        })?;
+        columns.push(column.clone());
+    }
+
+    let kernel_batch = RecordBatch::try_new(Arc::new(kernel_scan_schema), columns)
+        .map_err(|e| DeltaTableError::generic(format!("Failed to create kernel batch: {}", e)))?;
+
+    let engine_data = Box::new(ArrowEngineData::new(kernel_batch));
+    delta_kernel::engine_data::FilteredEngineData::try_new(engine_data, selection_vector)
+        .map_err(|e| DeltaTableError::generic(e.to_string()))
 }
