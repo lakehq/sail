@@ -84,6 +84,7 @@ dependencies = [
     "pillow>=10.3.0",
     "pyiceberg[sql-sqlite,pyiceberg-core]==0.10.0",
     "pydantic>=2.11,<2.12",
+    "jedi",
 ]
 path = ".venvs/default"
 
