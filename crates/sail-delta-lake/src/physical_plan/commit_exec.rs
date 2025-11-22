@@ -544,12 +544,14 @@ fn convert_adds_to_engine_data(
     adds: &[&Add],
     schema: &delta_kernel::schema::SchemaRef,
 ) -> Result<Box<dyn EngineData>, crate::kernel::DeltaTableError> {
-    use crate::kernel::DeltaTableError;
+    use std::sync::Arc;
+
     use datafusion::arrow::array::{
         ArrayRef, Int64Array, MapBuilder, MapFieldNames, RecordBatch, StringBuilder, StructBuilder,
     };
     use datafusion::arrow::datatypes::{DataType as ArrowDataType, Field, Schema as ArrowSchema};
-    use std::sync::Arc;
+
+    use crate::kernel::DeltaTableError;
 
     let arrow_schema: ArrowSchema = schema
         .as_ref()
@@ -633,13 +635,15 @@ fn convert_removes_to_filtered_data(
     removes: &[&Remove],
     snapshot: &crate::kernel::snapshot::EagerSnapshot,
 ) -> Result<delta_kernel::engine_data::FilteredEngineData, crate::kernel::DeltaTableError> {
-    use crate::kernel::DeltaTableError;
+    use std::collections::HashSet;
+    use std::sync::Arc;
+
     use datafusion::arrow::array::Array;
     use datafusion::arrow::datatypes::Schema as ArrowSchema;
     use delta_kernel::engine::arrow_conversion::TryIntoArrow;
     use delta_kernel::scan::scan_row_schema;
-    use std::collections::HashSet;
-    use std::sync::Arc;
+
+    use crate::kernel::DeltaTableError;
 
     let files_batch = &snapshot.files;
 
