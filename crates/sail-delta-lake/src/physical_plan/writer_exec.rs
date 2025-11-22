@@ -83,10 +83,16 @@ pub struct DeltaWriterExec {
 
 impl DeltaWriterExec {
     /// Build a map from physical field name to logical name for top-level columns
-    fn build_physical_to_logical_map(logical_kernel: &StructType) -> HashMap<String, String> {
+    fn build_physical_to_logical_map(
+        logical_kernel: &StructType,
+        column_mapping_mode: ColumnMappingMode,
+    ) -> HashMap<String, String> {
         let mut map = HashMap::new();
         for kf in logical_kernel.fields() {
-            map.insert(kf.physical_name().to_string(), kf.name().clone());
+            map.insert(
+                kf.physical_name(column_mapping_mode).to_string(),
+                kf.name().clone(),
+            );
         }
         map
     }
@@ -533,7 +539,12 @@ impl ExecutionPlan for DeltaWriterExec {
                         .clone()
                         .expect("annotated schema should exist for new table with column mapping")
                 };
-                let map = Self::build_physical_to_logical_map(&logical_kernel);
+                let kernel_mode = match effective_mode {
+                    ColumnMappingModeOption::Name => ColumnMappingMode::Name,
+                    ColumnMappingModeOption::Id => ColumnMappingMode::Id,
+                    ColumnMappingModeOption::None => ColumnMappingMode::None,
+                };
+                let map = Self::build_physical_to_logical_map(&logical_kernel, kernel_mode);
                 log::trace!("phys_to_logical: {:?}", &map);
                 Some(map)
             } else {

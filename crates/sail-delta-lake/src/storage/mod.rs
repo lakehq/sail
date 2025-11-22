@@ -26,9 +26,6 @@ use async_trait::async_trait;
 use bytes::Bytes;
 use datafusion::execution::context::TaskContext;
 use datafusion_common::{DataFusionError, Result as DataFusionResult};
-use delta_kernel::engine::default::executor::tokio::{
-    TokioBackgroundExecutor, TokioMultiThreadExecutor,
-};
 use delta_kernel::engine::default::DefaultEngine;
 use delta_kernel::path::ParsedLogPath;
 use delta_kernel::{Engine, FileMeta, LogPath};
@@ -37,7 +34,6 @@ use log::{debug, error};
 use object_store::path::Path;
 use object_store::{Error as ObjectStoreError, ObjectMeta, ObjectStore, PutMode, PutOptions};
 use serde_json::Deserializer as JsonDeserializer;
-use tokio::runtime::{Handle, RuntimeFlavor};
 use url::Url;
 use uuid::Uuid;
 
@@ -341,24 +337,7 @@ async fn latest_version_from_listing(store: Arc<dyn ObjectStore>) -> DeltaResult
 }
 
 fn get_engine(store: Arc<dyn ObjectStore>) -> Arc<dyn Engine> {
-    let handle = Handle::current();
-    match handle.runtime_flavor() {
-        RuntimeFlavor::MultiThread => Arc::new(DefaultEngine::new(
-            store,
-            Arc::new(TokioMultiThreadExecutor::new(handle)),
-        )),
-        RuntimeFlavor::CurrentThread => Arc::new(DefaultEngine::new(
-            store,
-            Arc::new(TokioBackgroundExecutor::new()),
-        )),
-        _ => {
-            error!("unsupported runtime flavor, using background executor");
-            Arc::new(DefaultEngine::new(
-                store,
-                Arc::new(TokioBackgroundExecutor::new()),
-            ))
-        }
-    }
+    Arc::new(DefaultEngine::new(store))
 }
 
 fn to_uri(root: &Url, location: &Path) -> String {
