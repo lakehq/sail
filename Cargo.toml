@@ -161,7 +161,7 @@ object_store = { version = "0.12.4", features = ["aws", "gcp", "azure", "http"] 
 hdfs-native-object-store = "0.15.0"
 
 # Lakehouse
-delta_kernel = { version = "0.17.0", features = ["arrow-57", "default-engine-rustls", "internal-api"] }
+delta_kernel = { version = "0.18.0", features = ["arrow-57", "default-engine-rustls", "internal-api"] }
 ######
 # This is the end of the manually managed dependencies.
 # Do not add more dependencies below.
