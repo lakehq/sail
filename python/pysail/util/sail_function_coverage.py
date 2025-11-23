@@ -1,34 +1,37 @@
+from __future__ import annotations
+
 import json
 import re
 from collections import Counter
 from pathlib import Path
+from typing import TYPE_CHECKING
 
 from markdown_it import MarkdownIt
-from markdown_it.token import Token
 
 from python.pysail.util.pyspark_function_scanner import scan_directory
+
+if TYPE_CHECKING:
+    from markdown_it.token import Token
 
 
 def load_markdown(path: str | list) -> str:
     """Load Markdown content from a file or directory of .md files."""
 
-    if not isinstance(path, list):
-        paths = [path]
-    else:
-        paths = path
+    paths = [path] if not isinstance(path, list) else path
 
     md_str = []
     for path in paths:
         base = Path(path)
         if not base.exists():
-            raise FileNotFoundError("Path not found: %s", path)
+            msg = "Path not found: %s"
+            raise FileNotFoundError(msg, path)
 
         if base.suffix == ".md" and base.is_file():
             md_str.append(base.read_text(encoding="utf-8"))
 
-        for p in base.rglob("*.md"):
-            if p.is_file():
-                md_str.append(p.read_text(encoding="utf-8"))
+        md_str.extend(
+            p.read_text(encoding="utf-8") for p in base.rglob("*.md") if p.is_file()
+        )
 
     return "\n".join(md_str)
 

@@ -4,9 +4,9 @@ from markdown_it import MarkdownIt
 
 from pysail.util.sail_function_coverage import (
     check_sail_function_coverage,
+    extract_function_coverage_from_md,
     extract_tables_from_tokens,
     postprocess_tables,
-    extract_function_coverage_from_md,
 )
 
 

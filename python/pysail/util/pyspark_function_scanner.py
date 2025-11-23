@@ -4,13 +4,18 @@ specified modules (TARGET_MODULES). Returns total count of function
 calls per module and function name.
 """
 
+from __future__ import annotations
+
 import ast
 import json
 import logging
 from collections import Counter
-from pathlib import Path
+from typing import TYPE_CHECKING
 
 import jedi
+
+if TYPE_CHECKING:
+    from pathlib import Path
 
 logging.basicConfig(level=logging.INFO, format="%(levelname)s: %(message)s")
 
@@ -40,7 +45,7 @@ class CallSiteLocator(ast.NodeVisitor):
     def __init__(self):
         self.locations: list[tuple[int, int]] = []
 
-    def visit_Call(self, node: ast.Call) -> None:
+    def visit_Call(self, node: ast.Call) -> None:  # noqa: N802
         """
         Identify the 'hotspot' of the function call to ask Jedi about.
         """
@@ -80,8 +85,8 @@ def resolve_calls_with_jedi(
     # 2. Initialize Jedi Script
     try:
         script = jedi.Script(code=source, path=file_path)
-    except (RuntimeError, OSError, ValueError, TypeError) as e:
-        logging.error("Jedi initialization failed for %s: %s", file_path, e)
+    except (RuntimeError, OSError, ValueError, TypeError):
+        logging.exception("Jedi initialization failed for %s", file_path)
         return Counter()
 
     counts: Counter[tuple[str, str]] = Counter()
@@ -154,8 +159,8 @@ def scan_file(path: Path) -> Counter[tuple[str, str]]:
 
         return resolve_calls_with_jedi(content, path)
 
-    except OSError as e:
-        logging.error("Failed to read %s: %s", path, e)
+    except OSError:
+        logging.exception("Failed to read %s", path)
         return Counter()
 
 
@@ -170,11 +175,11 @@ def scan_directory(base: Path) -> Counter[tuple[str, str]]:
     ]
 
     total_files = len(files)
-    logging.info(f"Found {total_files} files to scan.")
+    logging.info("Found %d files to scan.", total_files)
 
     for i, path in enumerate(files, 1):
         if i % 10 == 0:
-            logging.info(f"Scanning file {i}/{total_files}...")
+            logging.info("Scanning file %d/%d ...", i, total_files)
         total.update(scan_file(path))
 
     return total
