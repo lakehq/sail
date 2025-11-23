@@ -1,33 +1,30 @@
+#!/usr/bin/env python3
 import re
 from pathlib import Path
 from markdown_it import MarkdownIt
 from markdown_it.token import Token
 
 
-def extract_function_coverage_from_md(path: str) -> list[list[list[str]]]:
-    """Parse Markdown and extract function coverage tables."""
-
-    md_str = load_markdown(path)
-    md = MarkdownIt("commonmark").enable("table")
-    tokens = md.parse(md_str)
-    tables = extract_tables_from_tokens(tokens)
-    return postprocess_tables(tables)
-
-
-def load_markdown(path: str) -> str:
+def load_markdown(path: str | list) -> str:
     """Load Markdown content from a file or directory of .md files."""
 
-    base = Path(path)
-    if not base.exists():
-        raise FileNotFoundError(f"Path not found: {path}")
-
-    if base.suffix == ".md" and base.is_file():
-        return base.read_text(encoding="utf-8")
+    if not isinstance(path, list):
+        paths = [path]
+    else:
+        paths = path
 
     md_str = []
-    for p in base.rglob("*.md"):
-        if p.is_file():
-            md_str.append(p.read_text(encoding="utf-8"))
+    for path in paths:
+        base = Path(path)
+        if not base.exists():
+            raise FileNotFoundError("Path not found: %s", path)
+
+        if base.suffix == ".md" and base.is_file():
+            md_str.append(base.read_text(encoding="utf-8"))
+
+        for p in base.rglob("*.md"):
+            if p.is_file():
+                md_str.append(p.read_text(encoding="utf-8"))
 
     return "\n".join(md_str)
 
@@ -70,7 +67,7 @@ def extract_function_name(text: str) -> list[str]:
     If functions are qualified (e.g., module.function), only the function name is returned.
     """
     functions = re.findall(r"`([^`]*)`", text)
-    return [func.split(".")[-1] for func in functions]
+    return [func.split(".")[-1].replace("()", "") for func in functions]
 
 
 def decode_md_support_label(label: str) -> str:
@@ -104,3 +101,13 @@ def postprocess_tables(tables: list[list[list[str]]]) -> dict[str, str]:
                     result[key] = value
 
     return result
+
+
+def extract_function_coverage_from_md(path: str) -> dict[str, str]:
+    """Parse Markdown and extract function coverage tables."""
+
+    md_str = load_markdown(path)
+    md = MarkdownIt("commonmark").enable("table")
+    tokens = md.parse(md_str)
+    tables = extract_tables_from_tokens(tokens)
+    return postprocess_tables(tables)
