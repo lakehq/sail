@@ -166,7 +166,7 @@ def format_output(counts: Counter[tuple[str, str, str]], fmt: str) -> str:
             {
                 "module": mod,
                 "function": func,
-                "sail_support_satus": support,
+                "sail_support_status": support,
                 "count": cnt,
             }
             for (mod, func, support), cnt in counts.most_common()
@@ -178,7 +178,7 @@ def format_output(counts: Counter[tuple[str, str, str]], fmt: str) -> str:
             (mod, func, support, cnt)
             for (mod, func, support), cnt in counts.most_common()
         ]
-        header = [("module", "function", "support satus", "count")]
+        header = [("module", "function", "sail_support_status", "count")]
 
         return "\n".join(
             ";".join(str(item) for item in row) for row in header + results
