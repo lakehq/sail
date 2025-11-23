@@ -73,7 +73,7 @@ def extract_function_name(text: str) -> list[str]:
     return [func.split(".")[-1] for func in functions]
 
 
-def decode_support_label(label: str) -> str:
+def decode_md_support_label(label: str) -> str:
     """Decode markdown emoji-style support labels into readable status strings."""
 
     stripped_label = label.strip()
@@ -99,7 +99,7 @@ def postprocess_tables(tables: list[list[list[str]]]) -> dict[str, str]:
         for row in table[1:]:  # skip header row
             if len(row) >= 2:
                 keys = extract_function_name(row[0])
-                value = decode_support_label(row[1])
+                value = decode_md_support_label(row[1])
                 for key in keys:
                     result[key] = value
 

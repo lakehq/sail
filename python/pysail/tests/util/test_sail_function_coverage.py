@@ -34,10 +34,11 @@ def test_extract_tables():
     md = MarkdownIt("commonmark").enable("table")
     tokens = md.parse(markdown_content)
 
-    assert [
+    expected = [
         [["A", "B"], ["1", "3"], ["2", "4"]],
         [["C", "D", "E"], ["1", "3", "5"], ["2", "4", "6"]],
-    ] == extract_tables_from_tokens(tokens)
+    ]
+    assert expected == extract_tables_from_tokens(tokens)
 
 
 def test_postprocess_table():

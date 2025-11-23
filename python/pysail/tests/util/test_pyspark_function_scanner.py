@@ -1,7 +1,7 @@
 from collections import Counter
 from inspect import cleandoc
 
-from pysail.util.pyspark_function_scanner import scan_file
+from pysail.util.pyspark_function_scanner import scan_file, scan_directory
 
 
 def test_import_module_with_alias(tmp_path):
@@ -138,3 +138,26 @@ def test_column(tmp_path):
             ("pyspark.sql.functions", "col"): 1,
         }
     ) == scan_file(path)
+
+
+def test_scan_directory(tmp_path):
+    code = cleandoc(
+        """
+        import pyspark.sql.functions as F
+        import pyspark.sql.window as W
+        F.col("a")
+        F.when(True, 1)
+        W.Window.partitionBy("x")
+        """
+    )
+    for i in range(15):
+        path = tmp_path / f"snippet_{i}.py"
+        path.write_text(code, encoding="utf-8")
+
+    assert Counter(
+        {
+            ("pyspark.sql.functions", "col"): 15,
+            ("pyspark.sql.functions", "when"): 15,
+            ("pyspark.sql.window", "partitionBy"): 15,
+        }
+    ) == scan_directory(tmp_path)
