@@ -43,7 +43,7 @@ def test_extract_tables():
 def test_postprocess_table():
     table = [
         ["Function", "Support"],
-        ["`len` (length)", ":white_check_mark:"],
+        ["`function.len` (length)", ":white_check_mark:"],
         ["lower case: `lower`", ":x:"],
         ["`rtrim`", ":construction:"],
         ["foo", ":bar:"],

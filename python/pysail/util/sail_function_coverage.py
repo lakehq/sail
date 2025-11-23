@@ -5,6 +5,8 @@ from markdown_it.token import Token
 
 
 def extract_function_coverage_from_md(path: str) -> list[list[list[str]]]:
+    """Parse Markdown and extract function coverage tables."""
+
     md_str = load_markdown(path)
     md = MarkdownIt("commonmark").enable("table")
     tokens = md.parse(md_str)
@@ -13,6 +15,8 @@ def extract_function_coverage_from_md(path: str) -> list[list[list[str]]]:
 
 
 def load_markdown(path: str) -> str:
+    """Load Markdown content from a file or directory of .md files."""
+
     base = Path(path)
     if not base.exists():
         raise FileNotFoundError(f"Path not found: {path}")
@@ -29,6 +33,8 @@ def load_markdown(path: str) -> str:
 
 
 def extract_tables_from_tokens(tokens: list[Token]) -> list[list[list[str]]]:
+    """Extract tables as lists of rows and cells from markdown-it tokens."""
+
     tables = []
     current_table = []
     current_row = []
@@ -59,10 +65,17 @@ def extract_tables_from_tokens(tokens: list[Token]) -> list[list[list[str]]]:
 
 
 def extract_function_name(text: str) -> list[str]:
-    return re.findall(r"`([^`]*)`", text)
+    """
+    Extract function names from markdown table cell text.
+    If functions are qualified (e.g., module.function), only the function name is returned.
+    """
+    functions = re.findall(r"`([^`]*)`", text)
+    return [func.split(".")[-1] for func in functions]
 
 
 def decode_support_label(label: str) -> str:
+    """Decode markdown emoji-style support labels into readable status strings."""
+
     stripped_label = label.strip()
     mappings = {
         ":white_check_mark:": "✅ supported",
@@ -78,6 +91,8 @@ def decode_support_label(label: str) -> str:
 
 
 def postprocess_tables(tables: list[list[list[str]]]) -> dict[str, str]:
+    """Map parsed tables to function support statuses."""
+
     result = {}
 
     for table in tables:
