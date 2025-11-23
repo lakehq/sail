@@ -41,19 +41,15 @@ def extract_tables_from_tokens(tokens: list[Token]) -> list[list[list[str]]]:
         if token.type == "table_open":
             inside_table = True
             current_table = []
-
         elif token.type == "table_close":
             inside_table = False
             tables.append(current_table)
-
         elif token.type == "tr_open":
             inside_row = True
             current_row = []
-
         elif token.type == "tr_close":
             inside_row = False
             current_table.append(current_row)
-
         elif token.type == "inline" and inside_row and inside_table:
             # In markdown-it, the text content of a cell (th/td)
             # is contained within an 'inline' token.
@@ -67,12 +63,18 @@ def extract_function_name(text: str) -> list[str]:
 
 
 def decode_support_label(label: str) -> str:
-    mapping = {
+    stripped_label = label.strip()
+    mappings = {
         ":white_check_mark:": "✅ supported",
         ":construction:": "🚧 in progress",
         ":x:": "❌ not supported",
     }
-    return mapping.get(label.strip(), "❔ unknown")
+
+    for icon, new_label in mappings.items():
+        if icon in stripped_label:
+            return new_label
+
+    return "❔ unknown"
 
 
 def postprocess_tables(tables: list[list[list[str]]]) -> dict[str, str]:
@@ -85,4 +87,5 @@ def postprocess_tables(tables: list[list[list[str]]]) -> dict[str, str]:
                 value = decode_support_label(row[1])
                 for key in keys:
                     result[key] = value
+
     return result
