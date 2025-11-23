@@ -20,7 +20,7 @@ def test_import_module_with_alias(tmp_path):
         {
             ("pyspark.sql.functions", "col"): 1,
             ("pyspark.sql.functions", "when"): 1,
-            ("pyspark.sql.window", "partitionBy"): 1,
+            ("pyspark.sql.Window", "partitionBy"): 1,
         }
     ) == scan_file(path)
 
@@ -56,8 +56,8 @@ def test_import_whole_module(tmp_path):
     assert Counter(
         {
             ("pyspark.sql.functions", "lit"): 1,
-            ("pyspark.sql.window", "partitionBy"): 1,
-            ("pyspark.sql.window", "orderBy"): 1,
+            ("pyspark.sql.Window", "partitionBy"): 1,
+            ("pyspark.sql.Window", "orderBy"): 1,
         }
     ) == scan_file(path)
 
@@ -111,7 +111,7 @@ def test_column(tmp_path):
         from pyspark.sql import SparkSession
         import pyspark.sql.functions as F
 
-        spark: SparkSession = SparkSession.builder.appName("TestApp").getOrCreate()
+        spark: SparkSession = SparkSession.builder.getOrCreate()
         df = spark.range(10).toDF("value")
         df.filter(df.height.isNotNull()).collect()
 
@@ -126,16 +126,18 @@ def test_column(tmp_path):
     path.write_text(code, encoding="utf-8")
     assert Counter(
         {
-            ("pyspark.sql.column", "cast"): 1,
-            ("pyspark.sql.column", "endswith"): 1,
-            ("pyspark.sql.column", "eqNullSafe"): 1,
-            ("pyspark.sql.column", "isNotNull"): 1,
-            ("pyspark.sql.dataframe", "collect"): 1,
-            ("pyspark.sql.dataframe", "filter"): 1,
-            ("pyspark.sql.dataframe", "select"): 1,
-            ("pyspark.sql.dataframe", "show"): 1,
-            ("pyspark.sql.dataframe", "toDF"): 1,
+            ("pyspark.sql.Column", "cast"): 1,
+            ("pyspark.sql.Column", "endswith"): 1,
+            ("pyspark.sql.Column", "eqNullSafe"): 1,
+            ("pyspark.sql.Column", "isNotNull"): 1,
+            ("pyspark.sql.DataFrame", "collect"): 1,
+            ("pyspark.sql.DataFrame", "filter"): 1,
+            ("pyspark.sql.DataFrame", "select"): 1,
+            ("pyspark.sql.DataFrame", "show"): 1,
+            ("pyspark.sql.DataFrame", "toDF"): 1,
             ("pyspark.sql.functions", "col"): 1,
+            ("pyspark.sql.session.SparkSession", "getOrCreate"): 1,
+            ("pyspark.sql.session.SparkSession", "range"): 1,
         }
     ) == scan_file(path)
 
@@ -158,6 +160,6 @@ def test_scan_directory(tmp_path):
         {
             ("pyspark.sql.functions", "col"): 15,
             ("pyspark.sql.functions", "when"): 15,
-            ("pyspark.sql.window", "partitionBy"): 15,
+            ("pyspark.sql.Window", "partitionBy"): 15,
         }
     ) == scan_directory(tmp_path)

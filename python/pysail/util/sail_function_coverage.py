@@ -1,8 +1,12 @@
-#!/usr/bin/env python3
+import json
 import re
+from collections import Counter
 from pathlib import Path
+
 from markdown_it import MarkdownIt
 from markdown_it.token import Token
+
+from python.pysail.util.pyspark_function_scanner import scan_directory
 
 
 def load_markdown(path: str | list) -> str:
@@ -111,3 +115,84 @@ def extract_function_coverage_from_md(path: str) -> dict[str, str]:
     tokens = md.parse(md_str)
     tables = extract_tables_from_tokens(tokens)
     return postprocess_tables(tables)
+
+
+def check_sail_function_coverage(path: str) -> Counter[tuple[str, str, str]]:
+    """
+    ...
+    """
+    sail_coverage = {
+        **{
+            ("pyspark.sql.functions", function_name): label
+            for function_name, label in extract_function_coverage_from_md(
+                [
+                    Path("docs/guide/functions/aggregate.md"),
+                    Path("docs/guide/functions/generator.md"),
+                    Path("docs/guide/functions/scalar.md"),
+                    Path("docs/guide/functions/window.md"),
+                ]
+            ).items()
+        },
+        **{
+            ("pyspark.sql.DataFrame", function_name): label
+            for function_name, label in extract_function_coverage_from_md(
+                Path("docs/guide/dataframe/features.md")
+            ).items()
+        },
+        **{
+            ("pyspark.sql.session.SparkSession", function_name): label
+            for function_name, label in extract_function_coverage_from_md(
+                Path("docs/guide/functions/table.md")
+            ).items()
+        },
+    }
+
+    pyspark_function_usage = scan_directory(Path(path))
+
+    counter: Counter[tuple[str, str, str]] = Counter()
+    for key, count in pyspark_function_usage.items():
+        counter[(*key, sail_coverage.get(key, "❔ unknown"))] = count
+
+    return counter
+
+
+def format_output(counts: Counter[tuple[str, str, str]], fmt: str) -> str:
+    """Format results as text or JSON."""
+    if fmt == "json":
+        results = [
+            {
+                "module": mod,
+                "function": func,
+                "sail_support_satus": support,
+                "count": cnt,
+            }
+            for (mod, func, support), cnt in counts.most_common()
+        ]
+        return json.dumps(results, indent=2)
+
+    if fmt == "csv":
+        results = [
+            (mod, func, support, cnt)
+            for (mod, func, support), cnt in counts.most_common()
+        ]
+        header = [("module", "function", "support satus", "count")]
+
+        return "\n".join(
+            ";".join(str(item) for item in row) for row in header + results
+        )
+
+    if not counts:
+        return "No relevant function calls found."
+
+    lines = ["", "=== Usage Counts ==="]
+    # Sort by module name, then descending by call count
+    sorted_items = sorted(counts.items(), key=lambda x: (x[0][0], -x[1]))
+
+    current_mod = None
+    for (mod, func, support), cnt in sorted_items:
+        if mod != current_mod:
+            lines.append(f"\n[{mod}]")
+            current_mod = mod
+        lines.append(f"  .{func}: {cnt} ({support})")
+
+    return "\n".join(lines)

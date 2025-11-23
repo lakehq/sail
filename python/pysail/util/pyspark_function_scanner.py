@@ -1,11 +1,9 @@
-#!/usr/bin/env python3
 """
 Scan Python files and Jupyter notebooks for usage of functions from
 specified modules (TARGET_MODULES). Returns total count of function
 calls per module and function name.
 """
 
-import argparse
 import ast
 import json
 import logging
@@ -19,11 +17,12 @@ logging.basicConfig(level=logging.INFO, format="%(levelname)s: %(message)s")
 # Modules to track
 TARGET_MODULES: frozenset[str] = frozenset(
     {
+        "pyspark.sql.Column",
+        "pyspark.sql.DataFrame",
         "pyspark.sql.functions",
-        "pyspark.sql.window",
+        "pyspark.sql.session.SparkSession",
         "pyspark.sql.types.StructType",
-        "pyspark.sql.column",
-        "pyspark.sql.dataframe",
+        "pyspark.sql.Window",
     }
 )
 TARGET_MODULES_LOOKUP_HELPER = {t.lower(): t for t in TARGET_MODULES}
@@ -179,69 +178,3 @@ def scan_directory(base: Path) -> Counter[tuple[str, str]]:
         total.update(scan_file(path))
 
     return total
-
-
-def format_output(counts: Counter[tuple[str, str]], fmt: str) -> str:
-    """Format results as text or JSON."""
-    if fmt == "json":
-        results = [
-            {"module": mod, "function": func, "count": cnt}
-            for (mod, func), cnt in counts.most_common()
-        ]
-        return json.dumps(results, indent=2)
-
-    if fmt == "csv":
-        results = [(mod, func, cnt) for (mod, func), cnt in counts.most_common()]
-        header = [("module", "function", "count")]
-
-        return "\n".join(
-            ";".join(str(item) for item in row) for row in header + results
-        )
-
-    if not counts:
-        return f"No function calls found for {', '.join(sorted(TARGET_MODULES))}."
-
-    lines = ["", "=== Usage Counts ==="]
-    # Sort by Module then Count descending
-    sorted_items = sorted(counts.items(), key=lambda x: (x[0][0], -x[1]))
-
-    current_mod = None
-    for (mod, func), cnt in sorted_items:
-        if mod != current_mod:
-            lines.append(f"\n[{mod}]")
-            current_mod = mod
-        lines.append(f"  .{func}: {cnt}")
-
-    return "\n".join(lines)
-
-
-def main() -> None:
-    parser = argparse.ArgumentParser(
-        description=f"Scan Python files using Jedi for {', '.join(sorted(TARGET_MODULES))}."
-    )
-    parser.add_argument("directory", type=Path, help="Directory to scan recursively")
-    parser.add_argument(
-        "-o",
-        "--output",
-        choices=["text", "json", "csv"],
-        default="text",
-        help="Output format (default: text)",
-    )
-    args = parser.parse_args()
-
-    if not args.directory.exists():
-        raise SystemExit(f"Directory not found: {args.directory}")
-
-    logging.info("Scanning: %s", args.directory)
-
-    # Suppress Jedi internal debug logging
-    logging.getLogger("jedi").setLevel(logging.WARNING)
-
-    counts = scan_directory(args.directory)
-    logging.info("Scan complete.")
-
-    print(format_output(counts, args.output))
-
-
-if __name__ == "__main__":
-    main()
