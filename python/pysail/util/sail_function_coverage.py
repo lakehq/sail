@@ -100,12 +100,9 @@ def postprocess_tables(tables: list[list[list[str]]]) -> dict[str, str]:
     result = {}
 
     for table in tables:
-        for row in table[1:]:  # skip header row
-            if len(row) >= 2:
-                keys = extract_function_name(row[0])
-                value = decode_md_support_label(row[1])
-                for key in keys:
-                    result[key] = value
+        for fn_cell, label_cell in table[1:]:  # skip header row
+            for key in extract_function_name(fn_cell):
+                result[key] = decode_md_support_label(label_cell)
 
     return result
 
@@ -121,9 +118,7 @@ def extract_function_coverage_from_md(path: str) -> dict[str, str]:
 
 
 def check_sail_function_coverage(path: str) -> Counter[tuple[str, str, str]]:
-    """
-    ...
-    """
+    """Scan a directory for PySpark function usage and cross-refernce it with sail docs for compatibility."""
     sail_coverage = {
         **{
             ("pyspark.sql.functions", function_name): label
@@ -160,7 +155,7 @@ def check_sail_function_coverage(path: str) -> Counter[tuple[str, str, str]]:
 
 
 def format_output(counts: Counter[tuple[str, str, str]], fmt: str) -> str:
-    """Format results as text or JSON."""
+    """Format results as text, CSV or JSON."""
     if fmt == "json":
         results = [
             {
