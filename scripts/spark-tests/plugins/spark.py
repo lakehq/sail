@@ -267,6 +267,14 @@ SKIPPED_SPARK_TESTS = [
         keywords=["test_parity_job_cancellation.py"],
         reason="Slow test not working yet",
     ),
+    TestMarker(
+        keywords=["CogroupedApplyInPandasTests", "test_with_local_data"],
+        reason="Flaky test",
+    ),
+    TestMarker(
+        keywords=["CogroupedMapInArrowParityTests", "test_with_local_data"],
+        reason="Flaky test",
+    ),
     # We skip all the streaming tests since some of them are slow,
     # and some of them test behaviors that are tied to the specific JVM implementation
     # of Spark Structured Streaming.
