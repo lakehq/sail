@@ -1149,6 +1149,12 @@
               }
             },
             {
+              "name": "Box(Statement)",
+              "node": {
+                "nonTerminal": "Statement"
+              }
+            },
+            {
               "name": "Box(TableWithJoins)",
               "node": {
                 "nonTerminal": "TableWithJoins"
@@ -9162,7 +9168,7 @@
                         "nonTerminal": "Option(ExplainFormat)"
                       },
                       {
-                        "nonTerminal": "Query"
+                        "nonTerminal": "Box(Statement)"
                       }
                     ]
                   },
