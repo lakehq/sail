@@ -24,7 +24,7 @@ use crate::ast::operator::{
     Asterisk, Colon, Comma, Equals, ExclamationMark, LeftParenthesis, Minus, Plus, RightParenthesis,
 };
 use crate::ast::query::{AliasClause, IdentList, Query, WhereClause};
-use crate::combinator::{compose, sequence, unit};
+use crate::combinator::{boxed, compose, sequence, unit};
 use crate::common::Sequence;
 use crate::token::TokenLabel;
 
@@ -191,8 +191,8 @@ pub enum Statement {
     Explain {
         explain: Explain,
         format: Option<ExplainFormat>,
-        #[parser(function = |(_, q, _, _), _| q)]
-        query: Query,
+        #[parser(function = |(s, _, _, _), _| boxed(s))]
+        statement: Box<Statement>,
     },
     InsertOverwriteDirectory {
         insert: Insert,
