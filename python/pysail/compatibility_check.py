@@ -2,7 +2,7 @@ import argparse
 import logging
 from pathlib import Path
 
-from python.pysail.util.sail_function_coverage import (
+from pysail.util.sail_function_coverage import (
     check_sail_function_coverage,
     format_output,
 )
