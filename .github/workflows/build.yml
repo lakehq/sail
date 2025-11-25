@@ -129,6 +129,14 @@ jobs:
       - setup
       - build
 
+  iceberg-tests:
+    name: Iceberg Tests
+    if: ${{ needs.setup.outputs.build_package == 'true' }}
+    uses: ./.github/workflows/iceberg-tests.yml
+    needs:
+      - setup
+      - build
+
   python-build:
     name: Python Build
     if: ${{ needs.setup.outputs.build_package == 'true' }}

@@ -2,11 +2,8 @@ import pyarrow as pa
 from pyiceberg.schema import Schema
 from pyiceberg.types import IntegerType, NestedField, StringType, StructType
 
-from .utils import create_sql_catalog  # noqa: TID252
 
-
-def test_column_projection_subset_and_order(spark, tmp_path):
-    catalog = create_sql_catalog(tmp_path)
+def test_column_projection_subset_and_order(spark, catalog):
     identifier = "default.test_projection_subset"
     schema = Schema(
         NestedField(1, "a", IntegerType(), required=False),
@@ -33,8 +30,7 @@ def test_column_projection_subset_and_order(spark, tmp_path):
         catalog.drop_table(identifier)
 
 
-def test_nested_struct_projection_and_nulls(spark, tmp_path):
-    catalog = create_sql_catalog(tmp_path)
+def test_nested_struct_projection_and_nulls(spark, catalog):
     identifier = "default.test_projection_nested"
     inner = StructType(
         NestedField(10, "x", IntegerType(), required=False), NestedField(11, "y", StringType(), required=False)

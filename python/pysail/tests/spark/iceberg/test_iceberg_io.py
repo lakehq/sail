@@ -26,7 +26,7 @@ def expected_pandas_df():
     )
 
 
-def test_iceberg_io_basic_read(spark, iceberg_test_data, expected_pandas_df, sql_catalog):
+def test_iceberg_io_basic_read(spark, iceberg_test_data, expected_pandas_df, catalog):
     table_name = "test_table"
 
     schema = Schema(
@@ -35,7 +35,7 @@ def test_iceberg_io_basic_read(spark, iceberg_test_data, expected_pandas_df, sql
         NestedField(field_id=3, name="score", field_type=DoubleType(), required=False),
     )
 
-    table = sql_catalog.create_table(
+    table = catalog.create_table(
         identifier=f"default.{table_name}",
         schema=schema,
     )
@@ -53,10 +53,10 @@ def test_iceberg_io_basic_read(spark, iceberg_test_data, expected_pandas_df, sql
             result_df.toPandas(), expected_pandas_df.sort_values("id").reset_index(drop=True), check_dtype=True
         )
     finally:
-        sql_catalog.drop_table(f"default.{table_name}")
+        catalog.drop_table(f"default.{table_name}")
 
 
-def test_iceberg_io_read_with_sql(spark, iceberg_test_data, expected_pandas_df, sql_catalog):
+def test_iceberg_io_read_with_sql(spark, iceberg_test_data, expected_pandas_df, catalog):
     table_name = "test_table_sql"
 
     schema = Schema(
@@ -65,7 +65,7 @@ def test_iceberg_io_read_with_sql(spark, iceberg_test_data, expected_pandas_df, 
         NestedField(field_id=3, name="score", field_type=DoubleType(), required=False),
     )
 
-    table = sql_catalog.create_table(
+    table = catalog.create_table(
         identifier=f"default.{table_name}",
         schema=schema,
     )
@@ -88,10 +88,10 @@ def test_iceberg_io_read_with_sql(spark, iceberg_test_data, expected_pandas_df, 
         finally:
             spark.sql("DROP TABLE IF EXISTS my_iceberg")
     finally:
-        sql_catalog.drop_table(f"default.{table_name}")
+        catalog.drop_table(f"default.{table_name}")
 
 
-def test_iceberg_io_multiple_files(spark, sql_catalog):
+def test_iceberg_io_multiple_files(spark, catalog):
     table_name = "test_table_multiple"
 
     schema = Schema(
@@ -99,7 +99,7 @@ def test_iceberg_io_multiple_files(spark, sql_catalog):
         NestedField(field_id=2, name="value", field_type=StringType(), required=False),
     )
 
-    table = sql_catalog.create_table(
+    table = catalog.create_table(
         identifier=f"default.{table_name}",
         schema=schema,
     )
@@ -129,4 +129,4 @@ def test_iceberg_io_multiple_files(spark, sql_catalog):
 
         assert result_df.count() == 4  # noqa: PLR2004
     finally:
-        sql_catalog.drop_table(f"default.{table_name}")
+        catalog.drop_table(f"default.{table_name}")

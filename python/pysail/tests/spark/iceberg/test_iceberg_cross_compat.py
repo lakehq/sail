@@ -8,12 +8,11 @@ from pyiceberg.schema import Schema
 from pyiceberg.table import StaticTable
 from pyiceberg.types import DoubleType, LongType, NestedField, StringType
 
-from .utils import create_sql_catalog, pyiceberg_to_pandas  # noqa: TID252
+from .utils import pyiceberg_to_pandas  # noqa: TID252
 
 
 @pytest.mark.skipif(platform.system() == "Windows", reason="not working on Windows")
-def test_pyiceberg_read_after_sail_overwrite(spark, tmp_path):
-    catalog = create_sql_catalog(tmp_path)
+def test_pyiceberg_read_after_sail_overwrite(spark, catalog):
     identifier = "default.cross_overwrite"
     schema = Schema(
         NestedField(field_id=1, name="id", field_type=LongType(), required=False),
@@ -44,8 +43,7 @@ def test_pyiceberg_read_after_sail_overwrite(spark, tmp_path):
 
 
 @pytest.mark.skipif(platform.system() == "Windows", reason="not working on Windows")
-def test_pyiceberg_read_after_sail_append(spark, tmp_path):
-    catalog = create_sql_catalog(tmp_path)
+def test_pyiceberg_read_after_sail_append(spark, catalog):
     identifier = "default.cross_append"
     schema = Schema(
         NestedField(field_id=1, name="id", field_type=LongType(), required=False),
@@ -81,8 +79,7 @@ def test_pyiceberg_read_after_sail_append(spark, tmp_path):
 
 
 @pytest.mark.skipif(platform.system() == "Windows", reason="not working on Windows")
-def test_static_table_read_after_sail_overwrite(spark, tmp_path):
-    catalog = create_sql_catalog(tmp_path)
+def test_static_table_read_after_sail_overwrite(spark, catalog, iceberg_rest_config):
     identifier = "default.static_overwrite"
     schema = Schema(
         NestedField(field_id=1, name="id", field_type=LongType(), required=False),
@@ -97,7 +94,16 @@ def test_static_table_read_after_sail_overwrite(spark, tmp_path):
         )
         df.write.format("iceberg").mode("overwrite").save(table.location())
 
-        static_table = StaticTable.from_metadata(table.location())
+        static_table_props = {}
+        if iceberg_rest_config:
+            static_table_props = {
+                "warehouse": iceberg_rest_config["warehouse"],
+                "s3.endpoint": iceberg_rest_config["s3_endpoint"],
+                "s3.access-key-id": iceberg_rest_config["s3_access_key"],
+                "s3.secret-access-key": iceberg_rest_config["s3_secret_key"],
+            }
+
+        static_table = StaticTable.from_metadata(table.location(), properties=static_table_props)
 
         expected = (
             pd.DataFrame({"id": [10, 11, 12], "event": ["A", "B", "A"], "score": [0.98, 0.54, 0.76]})
@@ -115,8 +121,7 @@ def test_static_table_read_after_sail_overwrite(spark, tmp_path):
 
 
 @pytest.mark.skipif(platform.system() == "Windows", reason="not working on Windows")
-def test_static_table_read_after_sail_append(spark, tmp_path):
-    catalog = create_sql_catalog(tmp_path)
+def test_static_table_read_after_sail_append(spark, catalog, iceberg_rest_config):
     identifier = "default.static_append"
     schema = Schema(
         NestedField(field_id=1, name="id", field_type=LongType(), required=False),
@@ -130,7 +135,16 @@ def test_static_table_read_after_sail_append(spark, tmp_path):
         df2 = spark.createDataFrame([(3, "c"), (4, "d")], schema="id LONG, event STRING")
         df2.write.format("iceberg").mode("append").save(table.location())
 
-        static_table = StaticTable.from_metadata(table.location())
+        static_table_props = {}
+        if iceberg_rest_config:
+            static_table_props = {
+                "warehouse": iceberg_rest_config["warehouse"],
+                "s3.endpoint": iceberg_rest_config["s3_endpoint"],
+                "s3.access-key-id": iceberg_rest_config["s3_access_key"],
+                "s3.secret-access-key": iceberg_rest_config["s3_secret_key"],
+            }
+
+        static_table = StaticTable.from_metadata(table.location(), properties=static_table_props)
         actual_static = pyiceberg_to_pandas(static_table, sort_by="id")
 
         expected = (
@@ -148,8 +162,7 @@ def test_static_table_read_after_sail_append(spark, tmp_path):
 
 
 @pytest.mark.skipif(platform.system() == "Windows", reason="not working on Windows")
-def test_static_table_read_multiple_sail_writes(spark, tmp_path):
-    catalog = create_sql_catalog(tmp_path)
+def test_static_table_read_multiple_sail_writes(spark, catalog, iceberg_rest_config):
     identifier = "default.static_multiple"
     schema = Schema(
         NestedField(field_id=1, name="id", field_type=LongType(), required=False),
@@ -166,13 +179,22 @@ def test_static_table_read_multiple_sail_writes(spark, tmp_path):
         ]
 
         current_rows = []
+        static_table_props = {}
+        if iceberg_rest_config:
+            static_table_props = {
+                "warehouse": iceberg_rest_config["warehouse"],
+                "s3.endpoint": iceberg_rest_config["s3_endpoint"],
+                "s3.access-key-id": iceberg_rest_config["s3_access_key"],
+                "s3.secret-access-key": iceberg_rest_config["s3_secret_key"],
+            }
+
         for mode, rows in operations:
             df = spark.createDataFrame(rows, schema="id LONG, value STRING")
             df.write.format("iceberg").mode(mode).save(table.location())
 
             current_rows = list(rows) if mode == "overwrite" else current_rows + list(rows)
 
-            static_table = StaticTable.from_metadata(table.location())
+            static_table = StaticTable.from_metadata(table.location(), properties=static_table_props)
             actual = pyiceberg_to_pandas(static_table, sort_by="id")
 
             expected = (
