@@ -221,10 +221,12 @@ impl SnapshotExt for Snapshot {
         columns.push(stats_array.clone());
 
         if let Some(partition_schema) = self.partitions_schema()? {
+            let column_mapping_mode = self.table_configuration().column_mapping_mode();
             let partition_array = parse_partition_values_array(
                 batch,
                 partition_schema.as_ref(),
                 "fileConstantValues.partitionValues",
+                column_mapping_mode,
             )?;
             fields.push(Arc::new(Field::new(
                 "partitionValues_parsed",
@@ -245,13 +247,19 @@ fn parse_partition_values_array(
     batch: &RecordBatch,
     partition_schema: &StructType,
     path: &str,
+    column_mapping_mode: delta_kernel::table_features::ColumnMappingMode,
 ) -> DeltaResultLocal<StructArray> {
     let partitions = map_array_from_path(batch, path)?;
     let num_rows = partitions.len();
 
     let mut collected: HashMap<String, Vec<Scalar>> = partition_schema
         .fields()
-        .map(|f| (f.physical_name().to_string(), Vec::with_capacity(num_rows)))
+        .map(|f| {
+            (
+                f.physical_name(column_mapping_mode).to_string(),
+                Vec::with_capacity(num_rows),
+            )
+        })
         .collect();
 
     for row in 0..num_rows {
@@ -263,7 +271,7 @@ fn parse_partition_values_array(
         let raw_values = collect_partition_row(&partitions.value(row))?;
 
         for field in partition_schema.fields() {
-            let value = raw_values.get(field.physical_name());
+            let value = raw_values.get(field.physical_name(column_mapping_mode));
             let scalar = match field.data_type() {
                 DataType::Primitive(primitive) => match value {
                     Some(Some(raw)) => primitive.parse_scalar(raw)?,
@@ -276,7 +284,7 @@ fn parse_partition_values_array(
                 }
             };
             collected
-                .get_mut(field.physical_name())
+                .get_mut(field.physical_name(column_mapping_mode))
                 .ok_or_else(|| DeltaTableError::Schema("partition field missing".to_string()))?
                 .push(scalar);
         }
@@ -287,9 +295,11 @@ fn parse_partition_values_array(
         .map(|field| {
             ScalarConverter::scalars_to_arrow_array(
                 field,
-                collected.get(field.physical_name()).ok_or_else(|| {
-                    DeltaTableError::Schema("partition field missing".to_string())
-                })?,
+                collected
+                    .get(field.physical_name(column_mapping_mode))
+                    .ok_or_else(|| {
+                        DeltaTableError::Schema("partition field missing".to_string())
+                    })?,
             )
         })
         .collect::<DeltaResultLocal<Vec<_>>>()?;
