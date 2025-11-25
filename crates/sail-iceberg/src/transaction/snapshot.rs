@@ -71,7 +71,7 @@ impl<'a> SnapshotProducer<'a> {
     }
 
     pub async fn commit(self, op: impl SnapshotProduceOperation) -> Result<ActionCommit, String> {
-        let timestamp_ms = crate::utils::timestamp::monotonic_timestamp_ms();
+        let timestamp_ms = chrono::Utc::now().timestamp_millis();
         let is_overwrite = op.operation() == Operation::Overwrite.as_str();
         let summary = if is_overwrite {
             crate::spec::snapshots::Summary::new(Operation::Overwrite)
