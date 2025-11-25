@@ -193,6 +193,30 @@ dependencies = [
 ]
 
 [[package]]
+name = "apache-avro"
+version = "0.21.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "36fa98bc79671c7981272d91a8753a928ff6a1cd8e4f20a44c45bd5d313840bf"
+dependencies = [
+ "bigdecimal",
+ "bon",
+ "digest",
+ "log",
+ "miniz_oxide",
+ "num-bigint",
+ "quad-rand",
+ "rand 0.9.2",
+ "regex-lite",
+ "serde",
+ "serde_bytes",
+ "serde_json",
+ "strum",
+ "strum_macros",
+ "thiserror",
+ "uuid",
+]
+
+[[package]]
 name = "ar_archive_writer"
 version = "0.2.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1863,7 +1887,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "7c10f7659e96127d25e8366be7c8be4109595d6a2c3eac70421f380a7006a1b0"
 dependencies = [
  "ahash 0.8.12",
- "apache-avro",
+ "apache-avro 0.20.0",
  "arrow",
  "arrow-ipc",
  "chrono",
@@ -1957,7 +1981,7 @@ version = "51.0.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "388ed8be535f562cc655b9c3d22edbfb0f1a50a25c242647a98b6d92a75b55a1"
 dependencies = [
- "apache-avro",
+ "apache-avro 0.20.0",
  "arrow",
  "async-trait",
  "bytes",
@@ -2510,9 +2534,9 @@ checksum = "092966b41edc516079bdf31ec78a2e0588d1d0c08f78b91d8307215928642b2b"
 
 [[package]]
 name = "delta_kernel"
-version = "0.17.1"
+version = "0.18.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "257847441ea2aa53040e31ddd9e0339ba7d178f948642504b232dce62ceff511"
+checksum = "3f0c7e25ed8986d97815e3c6f4a1dc627749388c30ceb7ede97b78016876f6c2"
 dependencies = [
  "arrow",
  "bytes",
@@ -2541,9 +2565,9 @@ dependencies = [
 
 [[package]]
 name = "delta_kernel_derive"
-version = "0.17.1"
+version = "0.18.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "ab6761d75dd687d962e4c056a4b6c53660b09ba39a33c49a9baf67a23b55324e"
+checksum = "c17dcf5e8f6b9be4ca9de81c82854c7b905af578a8e32d624a951643a0f09626"
 dependencies = [
  "proc-macro2",
  "quote",
@@ -6120,7 +6144,7 @@ dependencies = [
 name = "sail-iceberg"
 version = "0.4.2"
 dependencies = [
- "apache-avro",
+ "apache-avro 0.21.0",
  "async-trait",
  "bytes",
  "chrono",

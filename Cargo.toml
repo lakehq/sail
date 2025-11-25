@@ -105,7 +105,7 @@ bytes = "1.11.0"
 indexmap = "2.12.1"
 pin-project-lite = "0.2.16"
 ordered-float = { version = "5.1.0", features = ["serde"] }
-apache-avro = { version = "0.20.0" }
+apache-avro = { version = "0.21.0" }
 rust_decimal = "1.39.0"
 wiremock = "0.6.5"
 testcontainers = "0.25.2"
@@ -161,7 +161,7 @@ object_store = { version = "0.12.4", features = ["aws", "gcp", "azure", "http"] 
 hdfs-native-object-store = "0.15.0"
 
 # Lakehouse
-delta_kernel = { version = "0.17.0", features = ["arrow-57", "default-engine-rustls", "internal-api"] }
+delta_kernel = { version = "0.18.1", features = ["arrow-57", "default-engine-rustls", "internal-api"] }
 ######
 # This is the end of the manually managed dependencies.
 # Do not add more dependencies below.
