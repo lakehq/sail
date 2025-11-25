@@ -429,13 +429,13 @@ pub fn from_ast_statement(statement: Statement) -> SqlResult<spec::Plan> {
         Statement::Explain {
             explain: _,
             format,
-            query,
+            statement,
         } => {
             let mode = from_ast_explain_format(format)?;
-            let query = from_ast_query(query)?;
+            let statement = from_ast_statement(*statement)?;
             let node = spec::CommandNode::Explain {
                 mode,
-                input: Box::new(query),
+                input: Box::new(statement),
             };
             Ok(spec::Plan::Command(spec::CommandPlan::new(node)))
         }

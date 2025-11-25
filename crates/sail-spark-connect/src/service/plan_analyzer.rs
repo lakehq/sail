@@ -69,7 +69,7 @@ pub(crate) async fn handle_analyze_explain(
     let explain_mode = ExplainMode::try_from(explain_mode)?;
     let explain = spec::Plan::Command(spec::CommandPlan::new(spec::CommandNode::Explain {
         mode: explain_mode.try_into()?,
-        input: Box::new(plan.try_into()?),
+        input: Box::new(spec::Plan::Query(plan.try_into()?)),
     }));
     let (plan, _) = resolve_and_execute_plan(ctx, spark.plan_config()?, explain).await?;
     let stream = spark.job_runner().execute(ctx, plan).await?;

@@ -524,6 +524,7 @@ message IcebergWriterExecNode {
   repeated string partition_columns = 3;
   PhysicalSinkMode sink_mode = 4;
   bool table_exists = 5;
+  string options = 6;
 }
 
 message IcebergCommitExecNode {

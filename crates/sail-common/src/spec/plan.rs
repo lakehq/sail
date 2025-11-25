@@ -413,7 +413,7 @@ pub enum CommandNode {
     Explain {
         // TODO: Support stringified_plans
         mode: ExplainMode,
-        input: Box<QueryPlan>,
+        input: Box<Plan>,
     },
     InsertInto {
         input: Box<QueryPlan>,
