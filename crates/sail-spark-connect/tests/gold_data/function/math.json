@@ -2549,7 +2549,7 @@
         }
       },
       "output": {
-        "failure": "not implemented: function: uniform"
+        "success": "ok"
       }
     },
     {
