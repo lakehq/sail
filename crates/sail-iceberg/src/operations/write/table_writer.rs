@@ -13,19 +13,27 @@
 use std::collections::HashMap;
 use std::sync::Arc;
 
+use datafusion::arrow::array::{new_null_array, ArrayRef};
+use datafusion::arrow::datatypes::{FieldRef, Schema, SchemaRef};
 use datafusion::arrow::record_batch::RecordBatch;
+use datafusion_common::DataFusionError;
 use object_store::path::Path as ObjectPath;
 use parquet::arrow::PARQUET_FIELD_ID_META_KEY;
 use sail_common_datafusion::array::record_batch::cast_record_batch_relaxed_tz;
 use url::Url;
 
+use crate::operations::write::arrow_parquet::ArrowParquetWriter;
+use crate::operations::write::base_writer::DataFileWriter;
+use crate::operations::write::config::WriterConfig;
+use crate::operations::write::file_writer::location_generator::{
+    DefaultLocationGenerator, LocationGenerator,
+};
+use crate::operations::write::partition::split_record_batch_by_partition;
+use crate::spec::schema::Schema as IcebergSchema;
 use crate::spec::types::values::Literal;
+use crate::spec::types::NestedField;
 use crate::spec::DataFile;
-use crate::writer::arrow_parquet::ArrowParquetWriter;
-use crate::writer::base_writer::DataFileWriter;
-use crate::writer::config::WriterConfig;
-use crate::writer::file_writer::location_generator::{DefaultLocationGenerator, LocationGenerator};
-use crate::writer::partition::split_record_batch_by_partition;
+use crate::utils::conversions::to_scalar;
 
 pub struct IcebergTableWriter {
     pub store: Arc<dyn object_store::ObjectStore>,
@@ -95,7 +103,13 @@ impl IcebergTableWriter {
             self.partition_values_map
                 .entry(partition_dir.clone())
                 .or_default();
-            let aligned = cast_record_batch_relaxed_tz(batch, &self.config.table_schema)
+            let padded = Self::align_batch_with_table_schema(
+                batch,
+                &self.config.table_schema,
+                self.config.iceberg_schema.as_ref(),
+            )
+            .map_err(|e| e.to_string())?;
+            let aligned = cast_record_batch_relaxed_tz(&padded, &self.config.table_schema)
                 .map_err(|e| e.to_string())?;
             writer.write_batch(&aligned).await?;
             return Ok(());
@@ -127,7 +141,13 @@ impl IcebergTableWriter {
             self.partition_values_map
                 .entry(partition_dir.clone())
                 .or_insert(p.partition_values);
-            let aligned = cast_record_batch_relaxed_tz(&p.record_batch, &self.config.table_schema)
+            let padded = Self::align_batch_with_table_schema(
+                &p.record_batch,
+                &self.config.table_schema,
+                self.config.iceberg_schema.as_ref(),
+            )
+            .map_err(|e| e.to_string())?;
+            let aligned = cast_record_batch_relaxed_tz(&padded, &self.config.table_schema)
                 .map_err(|e| e.to_string())?;
             writer.write_batch(&aligned).await?;
         }
@@ -179,5 +199,76 @@ impl IcebergTableWriter {
             self.flush_partition(&k, vals).await?;
         }
         Ok(self.written)
+    }
+
+    fn align_batch_with_table_schema(
+        batch: &RecordBatch,
+        table_schema: &SchemaRef,
+        iceberg_schema: &IcebergSchema,
+    ) -> Result<RecordBatch, DataFusionError> {
+        let mut columns: Vec<ArrayRef> = Vec::with_capacity(table_schema.fields().len());
+        let mut schema_fields: Vec<FieldRef> = Vec::with_capacity(table_schema.fields().len());
+
+        for field in table_schema.fields() {
+            match batch.schema().index_of(field.name()) {
+                Ok(idx) => {
+                    columns.push(batch.column(idx).clone());
+                    schema_fields.push(Arc::new(batch.schema().field(idx).clone()));
+                }
+                Err(_) => {
+                    let array =
+                        Self::build_missing_column_array(field, iceberg_schema, batch.num_rows())?;
+                    columns.push(array);
+                    schema_fields.push(field.clone());
+                }
+            }
+        }
+
+        let aligned_schema = Arc::new(Schema::new(schema_fields));
+        Ok(RecordBatch::try_new(aligned_schema, columns)?)
+    }
+
+    fn build_missing_column_array(
+        field: &FieldRef,
+        iceberg_schema: &IcebergSchema,
+        num_rows: usize,
+    ) -> Result<ArrayRef, DataFusionError> {
+        let iceberg_field = iceberg_schema.field_by_name(field.name()).ok_or_else(|| {
+            DataFusionError::Plan(format!(
+                "Column '{}' missing from Iceberg schema during alignment",
+                field.name()
+            ))
+        })?;
+
+        if let Some(array) = Self::default_array_for_field(iceberg_field.as_ref(), num_rows)? {
+            return Ok(array);
+        }
+
+        if field.is_nullable() {
+            return Ok(new_null_array(field.data_type(), num_rows));
+        }
+
+        Err(DataFusionError::Plan(format!(
+            "Column '{}' is required but missing in input batch and has no default value",
+            field.name()
+        )))
+    }
+
+    fn default_array_for_field(
+        field: &NestedField,
+        num_rows: usize,
+    ) -> Result<Option<ArrayRef>, DataFusionError> {
+        let literal = field
+            .write_default
+            .as_ref()
+            .or(field.initial_default.as_ref());
+        if let Some(lit) = literal {
+            let scalar = to_scalar(lit, field.field_type.as_ref())?;
+            let array = scalar
+                .to_array_of_size(num_rows)
+                .map_err(|e| DataFusionError::Plan(e.to_string()))?;
+            return Ok(Some(array));
+        }
+        Ok(None)
     }
 }

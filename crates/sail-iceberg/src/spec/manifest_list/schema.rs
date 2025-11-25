@@ -12,45 +12,12 @@
 
 use std::collections::BTreeMap;
 
-use apache_avro::schema::{
-    ArraySchema, Name, RecordField as AvroRecordField, RecordFieldOrder, RecordSchema, UnionSchema,
-};
+use apache_avro::schema::{ArraySchema, Name, RecordField as AvroRecordField, RecordSchema};
 use apache_avro::Schema as AvroSchema;
 use once_cell::sync::Lazy;
 use serde_json::{Number, Value as JsonValue};
 
-// Utilities adapted from spec/manifest/schema.rs
-fn optional(schema: AvroSchema) -> AvroSchema {
-    #[allow(clippy::unwrap_used)]
-    AvroSchema::Union(UnionSchema::new(vec![AvroSchema::Null, schema]).unwrap())
-}
-
-fn record_field(name: &str, schema: AvroSchema, field_id: i32, required: bool) -> AvroRecordField {
-    let mut schema = schema;
-    let default = if required {
-        None
-    } else {
-        Some(JsonValue::Null)
-    };
-    if !required {
-        schema = optional(schema);
-    }
-    let mut field = AvroRecordField {
-        name: name.to_string(),
-        doc: None,
-        default,
-        aliases: None,
-        order: RecordFieldOrder::Ignore,
-        position: 0,
-        schema,
-        custom_attributes: Default::default(),
-    };
-    field.custom_attributes.insert(
-        "field-id".to_string(),
-        JsonValue::Number(Number::from(field_id)),
-    );
-    field
-}
+use crate::spec::avro_utils::record_field;
 
 fn partitions_field() -> AvroRecordField {
     // element record for partitions: field_summary
