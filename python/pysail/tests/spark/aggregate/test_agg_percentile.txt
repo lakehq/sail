@@ -305,3 +305,10 @@ root
 +------+
 |   0.0|
 +------+
+
+spark.sql("SELECT percentile(x, 0.5) AS p FROM (VALUES (0), (1), (2), (3)) AS t(x)").show()
++---+
+|  p|
++---+
+|1.5|
++---+
