@@ -43,7 +43,7 @@ fn regex_from_lazy(
 ) -> DeltaResult<&'static Regex> {
     match LazyLock::force(lazy) {
         Ok(regex) => Ok(regex),
-        Err(err) => Err(DeltaTableError::Generic(format!(
+        Err(err) => Err(DeltaTableError::generic(format!(
             "Failed to compile {name} regex: {err}"
         ))),
     }

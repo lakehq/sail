@@ -31,7 +31,7 @@ use delta_kernel::engine::default::executor::tokio::{
 };
 use delta_kernel::engine::default::DefaultEngine;
 use delta_kernel::path::ParsedLogPath;
-use delta_kernel::{Engine, FileMeta, LogPath};
+use delta_kernel::{Engine, Error as KernelError, FileMeta, LogPath};
 use futures::TryStreamExt;
 use log::{debug, error};
 use object_store::path::Path;
@@ -140,7 +140,7 @@ pub fn get_actions(version: i64, commit_log_bytes: &Bytes) -> Result<Vec<Action>
         .map(|result| {
             result.map_err(|e| {
                 let line = format!("Error at line {}, column {}", e.line(), e.column());
-                DeltaTableError::Generic(format!(
+                DeltaTableError::generic(format!(
                     "Invalid JSON in log record, version={version}, {line}"
                 ))
             })
@@ -279,7 +279,7 @@ impl LogStore for DefaultLogStore {
         let latest = latest_version_from_listing(self.object_store(None)).await?;
         match latest {
             Some(version) if version >= start => Ok(version),
-            Some(_) | None => Err(DeltaTableError::MissingVersion),
+            Some(_) | None => Err(KernelError::MissingVersion.into()),
         }
     }
 

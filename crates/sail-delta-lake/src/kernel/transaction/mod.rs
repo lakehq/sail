@@ -40,7 +40,7 @@ use crate::kernel::checkpoints::cleanup_expired_logs_for;
 use crate::kernel::models::{Action, Metadata, Protocol, Transaction};
 use crate::kernel::snapshot::EagerSnapshot;
 use crate::kernel::transaction::conflict_checker::{TransactionInfo, WinningCommitSummary};
-use crate::kernel::{DeltaOperation, DeltaResult, DeltaTableError, TablePropertiesExt};
+use crate::kernel::{DeltaOperation, DeltaResult, TablePropertiesExt};
 use crate::storage::{CommitOrBytes, LogStoreRef, ObjectStoreRef};
 use crate::table::DeltaTableState;
 
@@ -825,11 +825,5 @@ impl std::future::IntoFuture for PostCommit {
                 Err(err) => Err(err),
             }
         })
-    }
-}
-
-impl From<TransactionError> for DeltaTableError {
-    fn from(value: TransactionError) -> Self {
-        DeltaTableError::Generic(value.to_string())
     }
 }

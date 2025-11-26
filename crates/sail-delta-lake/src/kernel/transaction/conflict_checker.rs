@@ -25,12 +25,13 @@ use std::collections::HashSet;
 use datafusion::catalog::Session;
 use datafusion::logical_expr::Expr;
 use delta_kernel::table_properties::IsolationLevel;
+use delta_kernel::Error as KernelError;
 use thiserror::Error;
 
 use crate::datasource::parse_log_data_predicate;
 use crate::kernel::models::{Action, Add, CommitInfo, Metadata, Protocol, Remove, Transaction};
 use crate::kernel::snapshot::LogDataHandler;
-use crate::kernel::{DeltaOperation, DeltaResult, DeltaTableError, TablePropertiesExt};
+use crate::kernel::{DeltaOperation, DeltaResult, TablePropertiesExt};
 use crate::storage::{get_actions, LogStore};
 
 /// Exceptions raised during commit conflict resolution.
@@ -211,7 +212,7 @@ impl WinningCommitSummary {
                     commit_info,
                 })
             }
-            None => Err(DeltaTableError::MissingVersion),
+            None => Err(KernelError::MissingVersion.into()),
         }
     }
 

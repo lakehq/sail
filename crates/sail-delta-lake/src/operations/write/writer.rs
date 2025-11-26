@@ -571,7 +571,7 @@ pub(crate) fn divide_by_partition_values(
             .iter()
             .map(|f| {
                 let col_idx = schema.index_of(f.name()).map_err(|_| {
-                    DeltaTableError::Schema(format!("Column {} not found in batch", f.name()))
+                    DeltaTableError::schema(format!("Column {} not found in batch", f.name()))
                 })?;
                 let col = values.column(col_idx);
                 compute::take(col.as_ref(), &idx, None)
