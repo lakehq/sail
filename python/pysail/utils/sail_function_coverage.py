@@ -8,7 +8,7 @@ from typing import TYPE_CHECKING
 
 from markdown_it import MarkdownIt
 
-from python.pysail.util.pyspark_function_scanner import scan_directory
+from python.pysail.utils.pyspark_function_scanner import scan_directory
 
 if TYPE_CHECKING:
     from markdown_it.token import Token

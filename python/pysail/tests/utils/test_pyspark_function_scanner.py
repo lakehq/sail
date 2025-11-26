@@ -1,7 +1,7 @@
 from collections import Counter
 from inspect import cleandoc
 
-from pysail.util.pyspark_function_scanner import scan_directory, scan_file
+from pysail.utils.pyspark_function_scanner import scan_directory, scan_file
 
 
 def test_import_module_with_alias(tmp_path):

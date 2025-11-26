@@ -2,7 +2,7 @@ from inspect import cleandoc
 
 from markdown_it import MarkdownIt
 
-from pysail.util.sail_function_coverage import (
+from pysail.utils.sail_function_coverage import (
     check_sail_function_coverage,
     extract_function_coverage_from_md,
     extract_tables_from_tokens,
