@@ -44,7 +44,22 @@ impl WritePathMode {
 
 pub fn join_table_uri(table_uri: &str, rel: &str, mode: &WritePathMode) -> String {
     match mode {
-        WritePathMode::Absolute => format!("{}{}", table_uri, rel),
+        WritePathMode::Absolute => {
+            let trimmed_rel = rel.trim_start_matches('/');
+            if let Ok(base_url) = Url::parse(table_uri) {
+                if let Ok(joined) = base_url.join(trimmed_rel) {
+                    return joined.to_string();
+                }
+            }
+            let base = table_uri.trim_end_matches('/');
+            if base.is_empty() {
+                trimmed_rel.to_string()
+            } else if trimmed_rel.is_empty() {
+                base.to_string()
+            } else {
+                format!("{}/{}", base, trimmed_rel)
+            }
+        }
         WritePathMode::Relative => rel.to_string(),
     }
 }

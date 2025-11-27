@@ -21,6 +21,7 @@ use apache_avro::types::Value as AvroValue;
 use apache_avro::{from_value as avro_from_value, Reader as AvroReader};
 use serde::{Deserialize, Serialize};
 
+use crate::error::{IcebergError, IcebergResult};
 use crate::spec::FormatVersion;
 mod schema;
 
@@ -62,34 +63,26 @@ impl ManifestList {
     }
 
     /// Parse manifest list from bytes with a specified version.
-    pub fn parse_with_version(bs: &[u8], version: FormatVersion) -> Result<ManifestList, String> {
+    pub fn parse_with_version(bs: &[u8], version: FormatVersion) -> IcebergResult<ManifestList> {
         match version {
             FormatVersion::V1 => {
-                let reader = AvroReader::new(bs).map_err(|e| format!("Avro read error: {e}"))?;
+                let reader = AvroReader::new(bs)?;
                 let mut entries = Vec::new();
                 for value in reader {
-                    let value = value.map_err(|e| format!("Avro read value error: {e}"))?;
-                    let v1: _serde::ManifestFileV1 =
-                        avro_from_value(&value).map_err(|e| format!("Avro decode error: {e}"))?;
+                    let value = value?;
+                    let v1: _serde::ManifestFileV1 = avro_from_value(&value)?;
                     entries.push(ManifestFile::from(v1));
                 }
                 Ok(ManifestList::new(entries))
             }
             FormatVersion::V2 => {
-                let reader = AvroReader::new(bs).map_err(|e| format!("Avro read error: {e}"))?;
+                let reader = AvroReader::new(bs)?;
                 let mut entries = Vec::new();
                 for value in reader {
-                    let value = value.map_err(|e| format!("Avro read value error: {e}"))?;
+                    let value = value?;
                     match avro_from_value::<_serde::ManifestFileV2>(&value) {
                         Ok(v2) => entries.push(ManifestFile::from(v2)),
-                        Err(_) => {
-                            if let Ok(mf) = Self::parse_manifest_v2_fallback(&value) {
-                                entries.push(mf);
-                            } else {
-                                let err = format!("Avro decode error: Failed to deserialize Avro value into value: {value:?}");
-                                return Err(err);
-                            }
-                        }
+                        Err(_) => entries.push(Self::parse_manifest_v2_fallback(&value)?),
                     }
                 }
                 Ok(ManifestList::new(entries))
@@ -123,7 +116,7 @@ impl ManifestListWriter {
         ManifestList::new(self.entries)
     }
 
-    pub fn to_bytes(&self, _version: FormatVersion) -> Result<Vec<u8>, String> {
+    pub fn to_bytes(&self, _version: FormatVersion) -> IcebergResult<Vec<u8>> {
         use apache_avro::Writer;
 
         use crate::spec::manifest_list::schema::MANIFEST_LIST_AVRO_SCHEMA_V2;
@@ -169,16 +162,14 @@ impl ManifestListWriter {
                 || mf.existing_rows_count.is_none()
                 || mf.deleted_rows_count.is_none()
             {
-                return Err("Missing required V2 counts/rows fields".to_string());
+                return Err(IcebergError::general(
+                    "Missing required V2 counts/rows fields",
+                ));
             }
-            writer
-                .append_ser(v2)
-                .map_err(|e| format!("Avro append error: {e}"))?;
+            writer.append_ser(v2)?;
         }
 
-        writer
-            .into_inner()
-            .map_err(|e| format!("Avro writer finalize error: {e}"))
+        writer.into_inner().map_err(IcebergError::from)
     }
 }
 
@@ -210,43 +201,64 @@ impl From<FieldSummaryAvro> for FieldSummary {
 }
 
 impl ManifestList {
-    fn parse_manifest_v2_fallback(value: &AvroValue) -> Result<ManifestFile, String> {
+    fn parse_manifest_v2_fallback(value: &AvroValue) -> IcebergResult<ManifestFile> {
         match value {
             AvroValue::Record(fields) => {
                 let get = |name: &str| -> Option<&AvroValue> {
                     fields.iter().find(|(k, _)| k == name).map(|(_, v)| v)
                 };
+                let missing_field = |name: &str| {
+                    IcebergError::general(format!("Missing field '{name}' in manifest list entry"))
+                };
 
-                let string = |v: &AvroValue| -> Result<String, String> {
+                let string = |v: &AvroValue| -> IcebergResult<String> {
                     if let AvroValue::String(s) = v {
                         Ok(s.clone())
                     } else {
-                        Err("string".into())
+                        Err(IcebergError::general(format!(
+                            "Expected string value, found {v:?}"
+                        )))
                     }
                 };
-                let long = |v: &AvroValue| -> Result<i64, String> {
+                let long = |v: &AvroValue| -> IcebergResult<i64> {
                     if let AvroValue::Long(x) = v {
                         Ok(*x)
                     } else {
-                        Err("long".into())
+                        Err(IcebergError::general(format!(
+                            "Expected long value, found {v:?}"
+                        )))
                     }
                 };
-                let int = |v: &AvroValue| -> Result<i32, String> {
+                let int = |v: &AvroValue| -> IcebergResult<i32> {
                     if let AvroValue::Int(x) = v {
                         Ok(*x)
                     } else {
-                        Err("int".into())
+                        Err(IcebergError::general(format!(
+                            "Expected int value, found {v:?}"
+                        )))
                     }
                 };
 
-                let manifest_path = string(get("manifest_path").ok_or("manifest_path")?)?;
-                let manifest_length = long(get("manifest_length").ok_or("manifest_length")?)?;
-                let partition_spec_id = int(get("partition_spec_id").ok_or("partition_spec_id")?)?;
-                let content = int(get("content").unwrap_or(&AvroValue::Int(0)))?;
-                let sequence_number = long(get("sequence_number").ok_or("sequence_number")?)?;
-                let min_sequence_number =
-                    long(get("min_sequence_number").ok_or("min_sequence_number")?)?;
-                let added_snapshot_id = long(get("added_snapshot_id").ok_or("added_snapshot_id")?)?;
+                let manifest_path =
+                    string(get("manifest_path").ok_or_else(|| missing_field("manifest_path"))?)?;
+                let manifest_length =
+                    long(get("manifest_length").ok_or_else(|| missing_field("manifest_length"))?)?;
+                let partition_spec_id =
+                    int(get("partition_spec_id")
+                        .ok_or_else(|| missing_field("partition_spec_id"))?)?;
+                let content = match get("content") {
+                    Some(value) => int(value)?,
+                    None => 0,
+                };
+                let sequence_number =
+                    long(get("sequence_number").ok_or_else(|| missing_field("sequence_number"))?)?;
+                let min_sequence_number = long(
+                    get("min_sequence_number")
+                        .ok_or_else(|| missing_field("min_sequence_number"))?,
+                )?;
+                let added_snapshot_id = long(
+                    get("added_snapshot_id").ok_or_else(|| missing_field("added_snapshot_id"))?,
+                )?;
                 let added_files_count = get("added_files_count")
                     .or_else(|| get("added_data_files_count"))
                     .and_then(|v| {
@@ -277,11 +289,16 @@ impl ManifestList {
                         }
                     })
                     .unwrap_or(0);
-                let added_rows_count = long(get("added_rows_count").ok_or("added_rows_count")?)?;
-                let existing_rows_count =
-                    long(get("existing_rows_count").ok_or("existing_rows_count")?)?;
-                let deleted_rows_count =
-                    long(get("deleted_rows_count").ok_or("deleted_rows_count")?)?;
+                let added_rows_count = long(
+                    get("added_rows_count").ok_or_else(|| missing_field("added_rows_count"))?,
+                )?;
+                let existing_rows_count = long(
+                    get("existing_rows_count")
+                        .ok_or_else(|| missing_field("existing_rows_count"))?,
+                )?;
+                let deleted_rows_count = long(
+                    get("deleted_rows_count").ok_or_else(|| missing_field("deleted_rows_count"))?,
+                )?;
 
                 let partitions = match get("partitions") {
                     Some(AvroValue::Union(_, inner)) => match inner.as_ref() {
@@ -356,7 +373,9 @@ impl ManifestList {
                     key_metadata,
                 })
             }
-            _ => Err("not a record".into()),
+            other => Err(IcebergError::general(format!(
+                "Expected manifest record, found {other:?}"
+            ))),
         }
     }
 }
@@ -651,8 +670,10 @@ impl ManifestFileBuilder {
     }
 
     /// Build the manifest file.
-    pub fn build(self) -> Result<ManifestFile, String> {
-        let manifest_path = self.manifest_path.ok_or("manifest_path is required")?;
+    pub fn build(self) -> IcebergResult<ManifestFile> {
+        let manifest_path = self
+            .manifest_path
+            .ok_or_else(|| IcebergError::general("manifest_path is required"))?;
 
         Ok(ManifestFile {
             manifest_path,

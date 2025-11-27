@@ -17,6 +17,7 @@ use async_trait::async_trait;
 use super::{
     ActionCommit, SnapshotProduceOperation, SnapshotProducer, Transaction, TransactionAction,
 };
+use crate::error::IcebergResult;
 
 pub struct OverwriteAction;
 
@@ -41,7 +42,7 @@ impl SnapshotProduceOperation for OverwriteOperation {
 
 #[async_trait]
 impl TransactionAction for OverwriteAction {
-    async fn commit(self: Arc<Self>, tx: &Transaction) -> Result<ActionCommit, String> {
+    async fn commit(self: Arc<Self>, tx: &Transaction) -> IcebergResult<ActionCommit> {
         // TODO: Implement full overwrite semantics (predicate/partition replaces, conflict checks,
         // delete manifests) instead of relying solely on SnapshotProducer for added data files.
         let snapshot_producer = SnapshotProducer::new(tx, vec![], None, None);

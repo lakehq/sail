@@ -22,6 +22,7 @@ use parquet::arrow::PARQUET_FIELD_ID_META_KEY;
 use sail_common_datafusion::array::record_batch::cast_record_batch_relaxed_tz;
 use url::Url;
 
+use crate::error::{IcebergError, IcebergResult};
 use crate::operations::write::arrow_parquet::ArrowParquetWriter;
 use crate::operations::write::base_writer::DataFileWriter;
 use crate::operations::write::config::WriterConfig;
@@ -69,7 +70,7 @@ impl IcebergTableWriter {
         }
     }
 
-    pub async fn write(&mut self, batch: &RecordBatch) -> Result<(), String> {
+    pub async fn write(&mut self, batch: &RecordBatch) -> IcebergResult<()> {
         if batch.num_rows() == 0 {
             return Ok(());
         }
@@ -80,26 +81,6 @@ impl IcebergTableWriter {
         if spec.fields.is_empty() {
             // Unpartitioned: write as-is once
             let partition_dir = String::new();
-            #[allow(clippy::expect_used)]
-            let writer = self
-                .writers
-                .entry(partition_dir.clone())
-                .or_insert_with(|| {
-                    for (i, f) in self.config.table_schema.fields().iter().enumerate() {
-                        log::trace!(
-                            "iceberg.table_writer.writer_schema: field[{}]='{}' type={:?} field_id_meta={:?}",
-                            i,
-                            f.name(),
-                            f.data_type(),
-                            f.metadata().get(PARQUET_FIELD_ID_META_KEY)
-                        );
-                    }
-                    ArrowParquetWriter::try_new(
-                        self.config.table_schema.as_ref(),
-                        self.config.writer_properties.clone(),
-                    )
-                    .expect("parquet writer")
-                });
             self.partition_values_map
                 .entry(partition_dir.clone())
                 .or_default();
@@ -107,10 +88,9 @@ impl IcebergTableWriter {
                 batch,
                 &self.config.table_schema,
                 self.config.iceberg_schema.as_ref(),
-            )
-            .map_err(|e| e.to_string())?;
-            let aligned = cast_record_batch_relaxed_tz(&padded, &self.config.table_schema)
-                .map_err(|e| e.to_string())?;
+            )?;
+            let aligned = cast_record_batch_relaxed_tz(&padded, &self.config.table_schema)?;
+            let writer = self.ensure_writer(&partition_dir)?;
             writer.write_batch(&aligned).await?;
             return Ok(());
         }
@@ -118,26 +98,6 @@ impl IcebergTableWriter {
         let parts = split_record_batch_by_partition(batch, spec, iceberg_schema)?;
         for p in parts.into_iter() {
             let partition_dir = p.partition_dir;
-            #[allow(clippy::expect_used)]
-            let writer = self
-                .writers
-                .entry(partition_dir.clone())
-                .or_insert_with(|| {
-                    for (i, f) in self.config.table_schema.fields().iter().enumerate() {
-                        log::trace!(
-                            "iceberg.table_writer.writer_schema: field[{}]='{}' type={:?} field_id_meta={:?}",
-                            i,
-                            f.name(),
-                            f.data_type(),
-                            f.metadata().get(PARQUET_FIELD_ID_META_KEY)
-                        );
-                    }
-                    ArrowParquetWriter::try_new(
-                        self.config.table_schema.as_ref(),
-                        self.config.writer_properties.clone(),
-                    )
-                    .expect("parquet writer")
-                });
             self.partition_values_map
                 .entry(partition_dir.clone())
                 .or_insert(p.partition_values);
@@ -145,10 +105,9 @@ impl IcebergTableWriter {
                 &p.record_batch,
                 &self.config.table_schema,
                 self.config.iceberg_schema.as_ref(),
-            )
-            .map_err(|e| e.to_string())?;
-            let aligned = cast_record_batch_relaxed_tz(&padded, &self.config.table_schema)
-                .map_err(|e| e.to_string())?;
+            )?;
+            let aligned = cast_record_batch_relaxed_tz(&padded, &self.config.table_schema)?;
+            let writer = self.ensure_writer(&partition_dir)?;
             writer.write_batch(&aligned).await?;
         }
 
@@ -159,15 +118,14 @@ impl IcebergTableWriter {
         &mut self,
         partition_dir: &str,
         partition_values: Vec<Option<Literal>>,
-    ) -> Result<(), String> {
+    ) -> IcebergResult<()> {
         if let Some(writer) = self.writers.remove(partition_dir) {
             let (bytes, meta) = writer.close().await?;
             let (rel, full) = self.generator.with_partition_dir(Some(partition_dir));
             log::trace!("iceberg.table_writer.flush_partition.writing: {}", &full);
             self.store
                 .put(&full, object_store::PutPayload::from(bytes))
-                .await
-                .map_err(|e| e.to_string())?;
+                .await?;
             log::trace!(
                 "iceberg.table_writer.flush_partition.written: rel={} full={}",
                 &rel,
@@ -187,7 +145,7 @@ impl IcebergTableWriter {
         Ok(())
     }
 
-    pub async fn close(mut self) -> Result<Vec<DataFile>, String> {
+    pub async fn close(mut self) -> IcebergResult<Vec<DataFile>> {
         let keys: Vec<String> = self.writers.keys().cloned().collect();
         for k in keys {
             let vals = self
@@ -199,6 +157,32 @@ impl IcebergTableWriter {
             self.flush_partition(&k, vals).await?;
         }
         Ok(self.written)
+    }
+
+    fn ensure_writer(&mut self, partition_dir: &str) -> IcebergResult<&mut ArrowParquetWriter> {
+        if !self.writers.contains_key(partition_dir) {
+            let writer = self.create_writer()?;
+            self.writers.insert(partition_dir.to_string(), writer);
+        }
+        self.writers
+            .get_mut(partition_dir)
+            .ok_or_else(|| IcebergError::general("Failed to initialize writer"))
+    }
+
+    fn create_writer(&self) -> IcebergResult<ArrowParquetWriter> {
+        for (i, f) in self.config.table_schema.fields().iter().enumerate() {
+            log::trace!(
+                "iceberg.table_writer.writer_schema: field[{}]='{}' type={:?} field_id_meta={:?}",
+                i,
+                f.name(),
+                f.data_type(),
+                f.metadata().get(PARQUET_FIELD_ID_META_KEY)
+            );
+        }
+        ArrowParquetWriter::try_new(
+            self.config.table_schema.as_ref(),
+            self.config.writer_properties.clone(),
+        )
     }
 
     fn align_batch_with_table_schema(

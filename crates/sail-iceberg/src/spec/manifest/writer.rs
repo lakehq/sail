@@ -24,6 +24,7 @@ use apache_avro::{to_value, Writer as AvroWriter};
 use super::{
     DataFile, Manifest, ManifestEntry, ManifestEntryRef, ManifestMetadata, ManifestStatus,
 };
+use crate::error::{IcebergError, IcebergResult};
 use crate::spec::manifest_list::{ManifestContentType, ManifestFile};
 
 #[derive(Debug, Clone)]
@@ -125,42 +126,40 @@ impl ManifestWriter {
         }
     }
 
-    pub fn to_avro_bytes_v2(&self) -> Result<Vec<u8>, String> {
+    pub fn to_avro_bytes_v2(&self) -> IcebergResult<Vec<u8>> {
         // Build Avro schema from partition spec
         let partition_type = self
             .metadata
             .partition_spec
             .partition_type(&self.metadata.schema)
-            .map_err(|e| format!("Partition type error: {e}"))?;
+            .map_err(IcebergError::general)?;
         let avro_schema = super::schema::manifest_entry_schema_v2(&partition_type);
         let mut writer = AvroWriter::new(&avro_schema, Vec::new());
 
         // Add user metadata per Iceberg spec
-        let schema_json = serde_json::to_vec(&self.metadata.schema)
-            .map_err(|e| format!("Fail to serialize table schema: {e}"))?;
+        let schema_json = serde_json::to_vec(&self.metadata.schema)?;
         writer
             .add_user_metadata("schema".to_string(), schema_json)
-            .map_err(|e| format!("Avro add_user_metadata error: {e}"))?;
+            .map_err(IcebergError::from)?;
         writer
             .add_user_metadata("schema-id".to_string(), self.metadata.schema_id.to_string())
-            .map_err(|e| format!("Avro add_user_metadata error: {e}"))?;
-        let part_fields = serde_json::to_vec(&self.metadata.partition_spec.fields())
-            .map_err(|e| format!("Fail to serialize partition spec: {e}"))?;
+            .map_err(IcebergError::from)?;
+        let part_fields = serde_json::to_vec(&self.metadata.partition_spec.fields())?;
         writer
             .add_user_metadata("partition-spec".to_string(), part_fields)
-            .map_err(|e| format!("Avro add_user_metadata error: {e}"))?;
+            .map_err(IcebergError::from)?;
         writer
             .add_user_metadata(
                 "partition-spec-id".to_string(),
                 self.metadata.partition_spec.spec_id().to_string(),
             )
-            .map_err(|e| format!("Avro add_user_metadata error: {e}"))?;
+            .map_err(IcebergError::from)?;
         writer
             .add_user_metadata(
                 "format-version".to_string(),
                 (self.metadata.format_version as u8).to_string(),
             )
-            .map_err(|e| format!("Avro add_user_metadata error: {e}"))?;
+            .map_err(IcebergError::from)?;
         if self.metadata.format_version as u8 == 2 {
             let content_str = match self.metadata.content {
                 ManifestContentType::Data => "data",
@@ -168,23 +167,16 @@ impl ManifestWriter {
             };
             writer
                 .add_user_metadata("content".to_string(), content_str)
-                .map_err(|e| format!("Avro add_user_metadata error: {e}"))?;
+                .map_err(IcebergError::from)?;
         }
 
         for e in &self.entries {
             let serde_entry =
                 super::_serde::ManifestEntryV2::from_entry((*e.clone()).clone(), &partition_type);
-            let value = to_value(serde_entry)
-                .map_err(|e| format!("Avro to_value error: {e}"))?
-                .resolve(&avro_schema)
-                .map_err(|e| format!("Avro resolve error: {e}"))?;
-            writer
-                .append(value)
-                .map_err(|e| format!("Avro append error: {e}"))?;
+            let value = to_value(serde_entry)?.resolve(&avro_schema)?;
+            writer.append(value)?;
         }
 
-        writer
-            .into_inner()
-            .map_err(|e| format!("Avro writer finalize error: {e}"))
+        writer.into_inner().map_err(IcebergError::from)
     }
 }

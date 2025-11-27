@@ -11,8 +11,10 @@
 // limitations under the License.
 
 use bytes::Bytes;
+use object_store::path::Path as ObjectPath;
 
 use super::{ActionCommit, Transaction};
+use crate::error::{IcebergError, IcebergResult};
 use crate::io::StoreContext;
 use crate::spec::manifest::ManifestWriterBuilder;
 use crate::spec::manifest_list::{ManifestListWriter, UNASSIGNED_SEQUENCE_NUMBER};
@@ -66,11 +68,11 @@ impl<'a> SnapshotProducer<'a> {
         self
     }
 
-    pub fn validate_added_data_files(&self, _files: &[DataFile]) -> Result<(), String> {
+    pub fn validate_added_data_files(&self, _files: &[DataFile]) -> IcebergResult<()> {
         Ok(())
     }
 
-    pub async fn commit(self, op: impl SnapshotProduceOperation) -> Result<ActionCommit, String> {
+    pub async fn commit(self, op: impl SnapshotProduceOperation) -> IcebergResult<ActionCommit> {
         let timestamp_ms = crate::utils::timestamp::monotonic_timestamp_ms();
         let is_overwrite = op.operation() == Operation::Overwrite.as_str();
         let summary = if is_overwrite {
@@ -89,7 +91,7 @@ impl<'a> SnapshotProducer<'a> {
                 .with_schema_id(schema_id)
                 .with_fields(vec![])
                 .build()
-                .map_err(|e| format!("schema build error: {e}"))?;
+                .map_err(IcebergError::general)?;
             let partition_spec = PartitionSpec::builder().with_spec_id(0).build();
             crate::spec::manifest::ManifestMetadata::new(
                 std::sync::Arc::new(schema.clone()),
@@ -117,19 +119,18 @@ impl<'a> SnapshotProducer<'a> {
         let store_ctx = self
             .store_ctx
             .as_ref()
-            .ok_or_else(|| "store context not available".to_string())?;
+            .ok_or_else(|| IcebergError::general("store context not available"))?;
 
         let manifest_len = manifest_bytes.len() as i64;
         let manifest_rel = format!("metadata/manifest-{}.avro", uuid::Uuid::new_v4());
-        let manifest_path = object_store::path::Path::from(manifest_rel.as_str());
+        let manifest_path = ObjectPath::parse(manifest_rel.as_str())?;
         store_ctx
             .prefixed
             .put(
                 &manifest_path,
                 object_store::PutPayload::from(Bytes::from(manifest_bytes)),
             )
-            .await
-            .map_err(|e| format!("{}", e))?;
+            .await?;
 
         // Build a manifest file entry for manifest list
         let added_rows: i64 = self
@@ -162,21 +163,14 @@ impl<'a> SnapshotProducer<'a> {
         let parent_manifest_list_path_str = parent_snapshot.manifest_list();
 
         if !self.is_bootstrap && !is_overwrite && !parent_manifest_list_path_str.is_empty() {
-            let (store_ref, manifest_list_path) = store_ctx
-                .resolve(parent_manifest_list_path_str)
-                .map_err(|e| format!("{}", e))?;
+            let (store_ref, manifest_list_path) =
+                store_ctx.resolve(parent_manifest_list_path_str)?;
 
             log::trace!(
                 "snapshot producer: loading parent manifest list: {}",
                 &manifest_list_path
             );
-            let manifest_list_data = store_ref
-                .get(&manifest_list_path)
-                .await
-                .map_err(|e| format!("Failed to get parent manifest list: {}", e))?
-                .bytes()
-                .await
-                .map_err(|e| format!("Failed to read parent manifest list bytes: {}", e))?;
+            let manifest_list_data = store_ref.get(&manifest_list_path).await?.bytes().await?;
             let parent_manifest_list = crate::spec::ManifestList::parse_with_version(
                 &manifest_list_data,
                 FormatVersion::V2,
@@ -206,15 +200,14 @@ impl<'a> SnapshotProducer<'a> {
         );
         let list_bytes = list_writer.to_bytes(FormatVersion::V2)?;
         let list_rel = format!("metadata/snap-{}.avro", new_snapshot_id);
-        let list_path = object_store::path::Path::from(list_rel.as_str());
+        let list_path = ObjectPath::parse(list_rel.as_str())?;
         store_ctx
             .prefixed
             .put(
                 &list_path,
                 object_store::PutPayload::from(Bytes::from(list_bytes)),
             )
-            .await
-            .map_err(|e| format!("{}", e))?;
+            .await?;
 
         let manifest_list_uri =
             join_table_uri(self.tx.table_uri(), &list_rel, &self.write_path_mode);
@@ -239,7 +232,7 @@ impl<'a> SnapshotProducer<'a> {
                 snapshot_builder.with_parent_snapshot_id(self.tx.snapshot().snapshot_id());
         }
 
-        let new_snapshot = snapshot_builder.build()?;
+        let new_snapshot = snapshot_builder.build().map_err(IcebergError::general)?;
 
         let updates = vec![
             TableUpdate::AddSnapshot {

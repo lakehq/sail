@@ -58,11 +58,20 @@ impl LocationGenerator for DefaultLocationGenerator {
             }
             _ => format!("{}/{}", self.data_dir, file),
         };
-        // Join each component to avoid encoding '/' into '%2F'
-        let mut full = self.base.clone();
-        for comp in rel.split('/').filter(|s| !s.is_empty()) {
-            full = full.child(comp);
-        }
+        let base_str = self.base.to_string();
+        let full_path_str = if base_str.is_empty() {
+            rel.clone()
+        } else {
+            format!("{}/{}", base_str, rel)
+        };
+        let full = ObjectPath::parse(&full_path_str).unwrap_or_else(|_| {
+            // Fallback to manual component joins if parsing fails (e.g., unexpected '%2F')
+            let mut fallback = self.base.clone();
+            for comp in rel.split('/').filter(|s| !s.is_empty()) {
+                fallback = fallback.child(comp);
+            }
+            fallback
+        });
         (rel, full)
     }
 }

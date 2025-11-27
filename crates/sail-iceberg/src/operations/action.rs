@@ -15,6 +15,7 @@ use std::sync::Arc;
 use async_trait::async_trait;
 
 use super::Transaction;
+use crate::error::IcebergResult;
 use crate::spec::{TableRequirement, TableUpdate};
 
 pub struct ActionCommit {
@@ -45,7 +46,7 @@ impl ActionCommit {
 
 #[async_trait]
 pub trait TransactionAction: Send + Sync {
-    async fn commit(self: Arc<Self>, _tx: &Transaction) -> Result<ActionCommit, String>;
+    async fn commit(self: Arc<Self>, _tx: &Transaction) -> IcebergResult<ActionCommit>;
 }
 
 pub trait ApplyTransactionAction {

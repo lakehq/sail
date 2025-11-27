@@ -19,8 +19,10 @@ use std::sync::Arc;
 
 use bytes::Bytes;
 use datafusion_common::{DataFusionError, Result};
+use object_store::path::Path as ObjectPath;
 use url::Url;
 
+use crate::error::IcebergError;
 use crate::io::StoreContext;
 use crate::operations::{SnapshotProduceOperation, SnapshotProducer, Transaction};
 use crate::physical_plan::commit::IcebergCommitInfo;
@@ -82,7 +84,7 @@ pub async fn bootstrap_new_table(
         ))
         .with_schema_id(iceberg_schema.schema_id())
         .build()
-        .map_err(DataFusionError::Execution)?;
+        .map_err(IcebergError::general)?;
 
     let tx = Transaction::new(table_url.to_string(), empty_snapshot);
     let manifest_meta = crate::spec::manifest::ManifestMetadata::new(
@@ -103,10 +105,7 @@ pub async fn bootstrap_new_table(
     .with_bootstrap(true)
     .with_write_path_mode(WritePathMode::Absolute);
 
-    let action_commit = producer
-        .commit(BootstrapOperation)
-        .await
-        .map_err(DataFusionError::Execution)?;
+    let action_commit = producer.commit(BootstrapOperation).await?;
 
     // Extract the new snapshot from the updates
     let updates = action_commit.into_updates();
@@ -163,7 +162,8 @@ pub async fn bootstrap_new_table(
         .to_json()
         .map_err(|e| DataFusionError::External(Box::new(e)))?;
     let new_meta_rel = format!("metadata/{:05}-{}.metadata.json", 1, uuid::Uuid::new_v4());
-    let meta_path = object_store::path::Path::from(new_meta_rel.as_str());
+    let meta_path = ObjectPath::parse(new_meta_rel.as_str())
+        .map_err(|e| DataFusionError::External(Box::new(e)))?;
     store_ctx
         .prefixed
         .put(
@@ -174,7 +174,8 @@ pub async fn bootstrap_new_table(
         .map_err(|e| DataFusionError::External(Box::new(e)))?;
 
     // Write version-hint
-    let hint_path = object_store::path::Path::from("metadata/version-hint.text");
+    let hint_path = ObjectPath::parse("metadata/version-hint.text")
+        .map_err(|e| DataFusionError::External(Box::new(e)))?;
     store_ctx
         .prefixed
         .put(
@@ -221,7 +222,7 @@ pub async fn bootstrap_first_snapshot(
         ))
         .with_schema_id(schema_iceberg.schema_id())
         .build()
-        .map_err(DataFusionError::Execution)?;
+        .map_err(IcebergError::general)?;
 
     let tx = Transaction::new(table_url.to_string(), empty_snapshot);
     let manifest_meta = crate::spec::manifest::ManifestMetadata::new(
@@ -242,10 +243,7 @@ pub async fn bootstrap_first_snapshot(
     .with_bootstrap(true)
     .with_write_path_mode(WritePathMode::Absolute);
 
-    let action_commit = producer
-        .commit(BootstrapOperation)
-        .await
-        .map_err(DataFusionError::Execution)?;
+    let action_commit = producer.commit(BootstrapOperation).await?;
 
     // Extract the new snapshot from the updates
     let updates = action_commit.into_updates();
@@ -304,7 +302,8 @@ pub async fn bootstrap_first_snapshot(
             } else {
                 "metadata/00000.metadata.json".to_string()
             };
-            let rel_path = object_store::path::Path::from(rel_name.as_str());
+            let rel_path = ObjectPath::parse(rel_name.as_str())
+                .map_err(|e| DataFusionError::External(Box::new(e)))?;
             store_ctx
                 .prefixed
                 .put(
@@ -322,7 +321,8 @@ pub async fn bootstrap_first_snapshot(
             };
 
             // Write version-hint
-            let hint_path = object_store::path::Path::from("metadata/version-hint.text");
+            let hint_path = ObjectPath::parse("metadata/version-hint.text")
+                .map_err(|e| DataFusionError::External(Box::new(e)))?;
             store_ctx
                 .prefixed
                 .put(
@@ -342,7 +342,8 @@ pub async fn bootstrap_first_snapshot(
                 version,
                 uuid::Uuid::new_v4()
             );
-            let meta_path = object_store::path::Path::from(new_meta_rel.as_str());
+            let meta_path = ObjectPath::parse(new_meta_rel.as_str())
+                .map_err(|e| DataFusionError::External(Box::new(e)))?;
             store_ctx
                 .prefixed
                 .put(
@@ -353,7 +354,8 @@ pub async fn bootstrap_first_snapshot(
                 .map_err(|e| DataFusionError::External(Box::new(e)))?;
 
             // Write version-hint
-            let hint_path = object_store::path::Path::from("metadata/version-hint.text");
+            let hint_path = ObjectPath::parse("metadata/version-hint.text")
+                .map_err(|e| DataFusionError::External(Box::new(e)))?;
             store_ctx
                 .prefixed
                 .put(

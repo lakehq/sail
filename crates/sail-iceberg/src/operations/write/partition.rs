@@ -14,6 +14,7 @@ use datafusion::arrow::array::{ArrayRef, UInt32Array};
 use datafusion::arrow::compute;
 use datafusion::arrow::record_batch::RecordBatch;
 
+use crate::error::{IcebergError, IcebergResult};
 use crate::spec::partition::UnboundPartitionSpec as PartitionSpec;
 use crate::spec::schema::Schema as IcebergSchema;
 use crate::spec::types::values::{Literal, PrimitiveLiteral};
@@ -92,16 +93,13 @@ pub fn compute_partition_values(
     spec: &PartitionSpec,
     iceberg_schema: &IcebergSchema,
     partition_columns: &[String],
-) -> Result<(Vec<Option<Literal>>, String), String> {
+) -> IcebergResult<(Vec<Option<Literal>>, String)> {
     let _ = partition_columns; // not used in single-group fallback
     let mut values = Vec::with_capacity(spec.fields.len());
     for f in &spec.fields {
         let col_name = field_name_from_id(iceberg_schema, f.source_id)
-            .ok_or_else(|| format!("Unknown field id {}", f.source_id))?;
-        let col_index = batch
-            .schema()
-            .index_of(&col_name)
-            .map_err(|e| e.to_string())?;
+            .ok_or_else(|| IcebergError::general(format!("Unknown field id {}", f.source_id)))?;
+        let col_index = batch.schema().index_of(&col_name)?;
         let lit = scalar_to_literal(batch.column(col_index), 0);
         let field_type = iceberg_schema
             .field_by_id(f.source_id)
@@ -117,7 +115,7 @@ pub fn split_record_batch_by_partition(
     batch: &RecordBatch,
     spec: &PartitionSpec,
     iceberg_schema: &IcebergSchema,
-) -> Result<Vec<PartitionBatchResult>, String> {
+) -> IcebergResult<Vec<PartitionBatchResult>> {
     if batch.num_rows() == 0 {
         return Ok(vec![]);
     }
@@ -141,12 +139,10 @@ pub fn split_record_batch_by_partition(
     for row in 0..num_rows {
         let mut vals: Vec<Option<Literal>> = Vec::with_capacity(spec.fields.len());
         for f in &spec.fields {
-            let col_name = field_name_from_id(iceberg_schema, f.source_id)
-                .ok_or_else(|| format!("Unknown field id {}", f.source_id))?;
-            let col_index = batch
-                .schema()
-                .index_of(&col_name)
-                .map_err(|e| e.to_string())?;
+            let col_name = field_name_from_id(iceberg_schema, f.source_id).ok_or_else(|| {
+                IcebergError::general(format!("Unknown field id {}", f.source_id))
+            })?;
+            let col_index = batch.schema().index_of(&col_name)?;
             let lit = scalar_to_literal(batch.column(col_index), row);
             let field_type = iceberg_schema
                 .field_by_id(f.source_id)
@@ -167,10 +163,10 @@ pub fn split_record_batch_by_partition(
         let indices = UInt32Array::from(grp.indices);
         let mut cols = Vec::with_capacity(batch.num_columns());
         for col in batch.columns() {
-            let taken = compute::take(col.as_ref(), &indices, None).map_err(|e| e.to_string())?;
+            let taken = compute::take(col.as_ref(), &indices, None)?;
             cols.push(taken);
         }
-        let rb = RecordBatch::try_new(batch.schema(), cols).map_err(|e| e.to_string())?;
+        let rb = RecordBatch::try_new(batch.schema(), cols)?;
         out.push(PartitionBatchResult {
             record_batch: rb,
             partition_values: grp.values,
