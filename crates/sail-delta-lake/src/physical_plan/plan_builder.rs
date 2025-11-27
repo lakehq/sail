@@ -28,6 +28,7 @@ use datafusion::physical_plan::joins::NestedLoopJoinExec;
 use datafusion::physical_plan::projection::ProjectionExec;
 use datafusion::physical_plan::union::UnionExec;
 use datafusion::physical_plan::ExecutionPlan;
+use datafusion_common::tree_node::{Transformed, TransformedResult, TreeNode};
 use datafusion_common::{JoinSide, JoinType, Result, ScalarValue};
 use sail_common_datafusion::datasource::{MergeInfo as PhysicalMergeInfo, PhysicalSinkMode};
 use url::Url;
@@ -577,8 +578,6 @@ impl<'a> DeltaMergePlanBuilder<'a> {
             .iter()
             .map(|f| f.name().clone())
             .collect();
-        dbg!(("merge_augment_source_logical_fields", &logical_field_names));
-        dbg!(("merge_augment_source_logical_metadata", &logical_metadata));
         for (idx, field) in source.schema().fields().iter().enumerate() {
             let name = logical_schema
                 .fields()
@@ -594,6 +593,8 @@ impl<'a> DeltaMergePlanBuilder<'a> {
             .iter()
             .map(|(_, name)| name.clone())
             .collect();
+        dbg!(("merge_augment_source_logical_fields", &logical_field_names));
+        dbg!(("merge_augment_source_logical_metadata", &logical_metadata));
         dbg!(("merge_augment_source_physical_fields", &physical_names));
         dbg!(("merge_augment_source_output_fields", &projected_names));
 
@@ -802,6 +803,8 @@ impl<'a> DeltaMergePlanBuilder<'a> {
         let active_expr = Arc::new(BinaryExpr::new(keep_or_update, Operator::Or, insert_expr))
             as Arc<dyn PhysicalExpr>;
 
+        dbg!(("build_merge_row_filter active_expr", &active_expr));
+
         let filter = FilterExec::try_new(active_expr, input)?;
         Ok(Arc::new(filter))
     }
@@ -816,6 +819,7 @@ impl<'a> DeltaMergePlanBuilder<'a> {
         source_physical_schema: SchemaRef,
         table_schema: SchemaRef,
     ) -> Result<Arc<dyn ExecutionPlan>> {
+        let input_schema = input.schema();
         let target_fields = target_physical_schema.fields();
         let source_fields = source_physical_schema.fields();
         let num_target = target_fields.len();
@@ -831,6 +835,19 @@ impl<'a> DeltaMergePlanBuilder<'a> {
         dbg!(("merge_projection_target_fields", &target_field_names));
         dbg!(("merge_projection_source_fields", &source_field_names));
         dbg!(("merge_projection_table_fields", &table_field_names));
+
+        // Logical MERGE assignments can refer to normalized column names (e.g. "#1")
+        // while the table schema uses the actual column names. Keep an index-based
+        // mapping between logical target schema fields and the physical table schema.
+        let logical_target_schema = self.merge_info.target_schema.as_ref().as_arrow();
+        let mut logical_to_physical: HashMap<String, String> = HashMap::new();
+        if logical_target_schema.fields().len() == table_schema.fields().len() {
+            for (idx, logical_field) in logical_target_schema.fields().iter().enumerate() {
+                let physical_field = table_schema.field(idx);
+                logical_to_physical
+                    .insert(logical_field.name().clone(), physical_field.name().clone());
+            }
+        }
 
         let path_idx = target_fields
             .iter()
@@ -893,6 +910,10 @@ impl<'a> DeltaMergePlanBuilder<'a> {
         for (idx, field) in target_fields.iter().enumerate() {
             target_idx_by_name.insert(field.name().clone(), idx);
         }
+        let mut source_idx_by_name: HashMap<String, usize> = HashMap::new();
+        for (idx, field) in source_fields.iter().enumerate() {
+            source_idx_by_name.insert(field.name().clone(), num_target + idx);
+        }
 
         dbg!(("merge_projection_target_idx_by_name", &target_idx_by_name));
 
@@ -944,6 +965,13 @@ impl<'a> DeltaMergePlanBuilder<'a> {
                 pred = Arc::new(BinaryExpr::new(pred, Operator::And, Arc::clone(cond)))
                     as Arc<dyn PhysicalExpr>;
             }
+            let pred = Self::align_expr_columns(
+                &pred,
+                &input_schema,
+                &target_idx_by_name,
+                &source_idx_by_name,
+                &logical_to_physical,
+            )?;
 
             use sail_common_datafusion::datasource::{
                 MergeAssignmentInfo, MergeMatchedActionInfo as MMAI,
@@ -967,13 +995,26 @@ impl<'a> DeltaMergePlanBuilder<'a> {
                     }
                 }
                 MMAI::UpdateSet(assignments) => {
-                    let mut assign_map: HashMap<&str, &Arc<dyn PhysicalExpr>> = HashMap::new();
+                    let mut assign_map: HashMap<String, Arc<dyn PhysicalExpr>> = HashMap::new();
                     for MergeAssignmentInfo { column, value } in assignments {
-                        assign_map.insert(column.as_str(), value);
+                        let phys_name = logical_to_physical
+                            .get(column.as_str())
+                            .cloned()
+                            .unwrap_or_else(|| column.clone());
+                        let aligned_value = Self::align_expr_columns(
+                            value,
+                            &input_schema,
+                            &target_idx_by_name,
+                            &source_idx_by_name,
+                            &logical_to_physical,
+                        )?;
+                        assign_map.insert(phys_name, aligned_value);
                     }
+                    dbg!(("UpdateSet assignments", &assign_map));
                     for (col, value_expr) in assign_map {
-                        if let Some(cases) = column_cases.get_mut(col) {
-                            cases.push((pred.clone(), Arc::clone(value_expr)));
+                        if let Some(cases) = column_cases.get_mut(col.as_str()) {
+                            dbg!(("Pushing UpdateSet case", col.as_str(), &value_expr));
+                            cases.push((pred.clone(), Arc::clone(&value_expr)));
                         }
                     }
                 }
@@ -987,6 +1028,13 @@ impl<'a> DeltaMergePlanBuilder<'a> {
                 pred = Arc::new(BinaryExpr::new(pred, Operator::And, Arc::clone(cond)))
                     as Arc<dyn PhysicalExpr>;
             }
+            let pred = Self::align_expr_columns(
+                &pred,
+                &input_schema,
+                &target_idx_by_name,
+                &source_idx_by_name,
+                &logical_to_physical,
+            )?;
 
             use sail_common_datafusion::datasource::{
                 MergeAssignmentInfo, MergeNotMatchedBySourceActionInfo as NMBAI,
@@ -996,13 +1044,24 @@ impl<'a> DeltaMergePlanBuilder<'a> {
                     // Values are irrelevant for deleted rows (already filtered out)
                 }
                 NMBAI::UpdateSet(assignments) => {
-                    let mut assign_map: HashMap<&str, &Arc<dyn PhysicalExpr>> = HashMap::new();
+                    let mut assign_map: HashMap<String, Arc<dyn PhysicalExpr>> = HashMap::new();
                     for MergeAssignmentInfo { column, value } in assignments {
-                        assign_map.insert(column.as_str(), value);
+                        let phys_name = logical_to_physical
+                            .get(column.as_str())
+                            .cloned()
+                            .unwrap_or_else(|| column.clone());
+                        let aligned_value = Self::align_expr_columns(
+                            value,
+                            &input_schema,
+                            &target_idx_by_name,
+                            &source_idx_by_name,
+                            &logical_to_physical,
+                        )?;
+                        assign_map.insert(phys_name, aligned_value);
                     }
                     for (col, value_expr) in assign_map {
-                        if let Some(cases) = column_cases.get_mut(col) {
-                            cases.push((pred.clone(), Arc::clone(value_expr)));
+                        if let Some(cases) = column_cases.get_mut(col.as_str()) {
+                            cases.push((pred.clone(), Arc::clone(&value_expr)));
                         }
                     }
                 }
@@ -1016,6 +1075,13 @@ impl<'a> DeltaMergePlanBuilder<'a> {
                 pred = Arc::new(BinaryExpr::new(pred, Operator::And, Arc::clone(cond)))
                     as Arc<dyn PhysicalExpr>;
             }
+            let pred = Self::align_expr_columns(
+                &pred,
+                &input_schema,
+                &target_idx_by_name,
+                &source_idx_by_name,
+                &logical_to_physical,
+            )?;
 
             use sail_common_datafusion::datasource::MergeNotMatchedByTargetActionInfo as NMTI;
             match &clause.action {
@@ -1035,8 +1101,19 @@ impl<'a> DeltaMergePlanBuilder<'a> {
                 }
                 NMTI::InsertColumns { columns, values } => {
                     for (col, value_expr) in columns.iter().zip(values.iter()) {
-                        if let Some(cases) = column_cases.get_mut(col.as_str()) {
-                            cases.push((pred.clone(), Arc::clone(value_expr)));
+                        let phys_name = logical_to_physical
+                            .get(col.as_str())
+                            .cloned()
+                            .unwrap_or_else(|| col.clone());
+                        let aligned_value = Self::align_expr_columns(
+                            value_expr,
+                            &input_schema,
+                            &target_idx_by_name,
+                            &source_idx_by_name,
+                            &logical_to_physical,
+                        )?;
+                        if let Some(cases) = column_cases.get_mut(phys_name.as_str()) {
+                            cases.push((pred.clone(), aligned_value));
                         }
                     }
                 }
@@ -1066,5 +1143,56 @@ impl<'a> DeltaMergePlanBuilder<'a> {
         }
 
         Ok(Arc::new(ProjectionExec::try_new(projection_exprs, input)?))
+    }
+
+    fn align_expr_columns(
+        expr: &Arc<dyn PhysicalExpr>,
+        schema: &SchemaRef,
+        target_idx_by_name: &HashMap<String, usize>,
+        source_idx_by_name: &HashMap<String, usize>,
+        logical_to_physical: &HashMap<String, String>,
+    ) -> Result<Arc<dyn PhysicalExpr>> {
+        let schema = Arc::clone(schema);
+        expr
+            .clone()
+            .transform_up(|e| {
+                if let Some(col) = e.as_any().downcast_ref::<Column>() {
+                    let mut target_name: Option<String> = None;
+                    let name = col.name();
+                    let mut new_index: Option<usize> = None;
+
+                    if let Some(mapped) = logical_to_physical.get(name) {
+                        target_name = Some(mapped.clone());
+                        new_index = target_idx_by_name.get(mapped).cloned();
+                    } else if let Some(idx) = target_idx_by_name.get(name) {
+                        new_index = Some(*idx);
+                    } else if let Some(idx) = source_idx_by_name.get(name) {
+                        new_index = Some(*idx);
+                    } else if let Some(idx) =
+                        schema.fields().iter().position(|f| f.name() == name)
+                    {
+                        new_index = Some(idx);
+                        target_name = Some(schema.field(idx).name().clone());
+                    }
+
+                    if let Some(idx) = new_index {
+                        let final_name = target_name.unwrap_or_else(|| name.to_string());
+                        if idx != col.index() || final_name != name {
+                            dbg!((
+                                "align_expr_columns remap",
+                                name,
+                                col.index(),
+                                &final_name,
+                                idx
+                            ));
+                            let updated =
+                                Arc::new(Column::new(final_name.as_str(), idx)) as Arc<dyn PhysicalExpr>;
+                            return Ok(Transformed::yes(updated));
+                        }
+                    }
+                }
+                Ok(Transformed::no(e))
+            })
+            .data()
     }
 }
