@@ -45,7 +45,6 @@ use sail_common_datafusion::datasource::PhysicalSinkMode;
 use url::Url;
 
 use crate::conversion::DeltaTypeConverter;
-use crate::datasource::delta_to_datafusion_error;
 use crate::kernel::models::{Action, Metadata, Protocol};
 // TODO: Follow upstream for `MetadataExt`.
 use crate::kernel::{DeltaOperation, SaveMode};
@@ -648,10 +647,7 @@ impl DeltaWriterExec {
         input_schema: &SchemaRef,
         schema_mode: Option<SchemaMode>,
     ) -> Result<(SchemaRef, Vec<Action>)> {
-        let table_metadata = table
-            .snapshot()
-            .map_err(delta_to_datafusion_error)?
-            .metadata();
+        let table_metadata = table.snapshot()?.metadata();
         let table_schema = table_metadata
             .parse_schema()
             .map_err(|e| DataFusionError::External(Box::new(e)))?;
@@ -668,7 +664,7 @@ impl DeltaWriterExec {
                         .try_into_kernel()
                         .map_err(|e| DataFusionError::External(Box::new(e)))?;
 
-                    let snapshot = table.snapshot().map_err(delta_to_datafusion_error)?;
+                    let snapshot = table.snapshot()?;
                     let current_metadata = snapshot.metadata();
                     let current_kernel = snapshot.snapshot().schema().clone();
                     let kmode = snapshot.effective_column_mapping_mode();
@@ -691,7 +687,7 @@ impl DeltaWriterExec {
                     .try_into_kernel()
                     .map_err(|e| DataFusionError::External(Box::new(e)))?;
 
-                let snapshot = table.snapshot().map_err(delta_to_datafusion_error)?;
+                let snapshot = table.snapshot()?;
                 let current_metadata = snapshot.metadata();
                 let current_kernel = snapshot.snapshot().schema().clone();
                 let kmode = snapshot.effective_column_mapping_mode();

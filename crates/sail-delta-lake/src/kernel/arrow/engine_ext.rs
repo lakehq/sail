@@ -159,7 +159,7 @@ impl SnapshotExt for Snapshot {
         Ok(Arc::new(stats_schema(
             &physical_schema,
             self.table_properties(),
-        )))
+        )?))
     }
 
     fn partitions_schema(&self) -> DeltaResultLocal<Option<SchemaRef>> {
@@ -198,7 +198,7 @@ impl SnapshotExt for Snapshot {
 
     fn parse_stats_column(&self, batch: &RecordBatch) -> DeltaResultLocal<RecordBatch> {
         let Some((stats_idx, _)) = batch.schema_ref().column_with_name("stats") else {
-            return Err(DeltaTableError::Schema(
+            return Err(DeltaTableError::schema(
                 "stats column not found".to_string(),
             ));
         };
@@ -287,7 +287,7 @@ fn parse_partition_values_array(
             };
             collected
                 .get_mut(physical_name)
-                .ok_or_else(|| DeltaTableError::Schema("partition field missing".to_string()))?
+                .ok_or_else(|| DeltaTableError::schema("partition field missing".to_string()))?
                 .push(scalar);
         }
     }
@@ -299,7 +299,7 @@ fn parse_partition_values_array(
             ScalarConverter::scalars_to_arrow_array(
                 field,
                 collected.get(physical_name).ok_or_else(|| {
-                    DeltaTableError::Schema("partition field missing".to_string())
+                    DeltaTableError::schema("partition field missing".to_string())
                 })?,
             )
         })
@@ -325,7 +325,7 @@ fn map_array_from_path<'a>(batch: &'a RecordBatch, path: &str) -> DeltaResultLoc
         .column_by_name(first)
         .map(|col| col.as_ref())
         .ok_or_else(|| {
-            DeltaTableError::Schema(format!("{first} column not found when parsing partitions"))
+            DeltaTableError::schema(format!("{first} column not found when parsing partitions"))
         })?;
 
     for segment in segments {
@@ -333,13 +333,13 @@ fn map_array_from_path<'a>(batch: &'a RecordBatch, path: &str) -> DeltaResultLoc
             .as_any()
             .downcast_ref::<StructArray>()
             .ok_or_else(|| {
-                DeltaTableError::Schema(format!("Expected struct column while traversing {path}"))
+                DeltaTableError::schema(format!("Expected struct column while traversing {path}"))
             })?;
         current = struct_array
             .column_by_name(segment)
             .map(|col| col.as_ref())
             .ok_or_else(|| {
-                DeltaTableError::Schema(format!(
+                DeltaTableError::schema(format!(
                     "{segment} column not found while traversing {path}"
                 ))
             })?;
@@ -348,7 +348,7 @@ fn map_array_from_path<'a>(batch: &'a RecordBatch, path: &str) -> DeltaResultLoc
     current
         .as_any()
         .downcast_ref::<MapArray>()
-        .ok_or_else(|| DeltaTableError::Schema(format!("Column {path} is not a map")))
+        .ok_or_else(|| DeltaTableError::schema(format!("Column {path} is not a map")))
 }
 
 fn collect_partition_row(value: &StructArray) -> DeltaResultLocal<HashMap<String, Option<String>>> {
@@ -356,12 +356,12 @@ fn collect_partition_row(value: &StructArray) -> DeltaResultLocal<HashMap<String
         .column(0)
         .as_any()
         .downcast_ref::<StringArray>()
-        .ok_or_else(|| DeltaTableError::Schema("map key column is not Utf8".to_string()))?;
+        .ok_or_else(|| DeltaTableError::schema("map key column is not Utf8".to_string()))?;
     let vals = value
         .column(1)
         .as_any()
         .downcast_ref::<StringArray>()
-        .ok_or_else(|| DeltaTableError::Schema("map value column is not Utf8".to_string()))?;
+        .ok_or_else(|| DeltaTableError::schema("map value column is not Utf8".to_string()))?;
 
     let mut result = HashMap::with_capacity(keys.len());
     for (key, value) in keys.iter().zip(vals.iter()) {
@@ -384,7 +384,7 @@ fn partitions_schema(
             .iter()
             .map(|col| {
                 schema.field(col).cloned().ok_or_else(|| {
-                    DeltaTableError::Generic(format!("Partition column {col} not found in schema"))
+                    DeltaTableError::generic(format!("Partition column {col} not found in schema"))
                 })
             })
             .collect::<Result<Vec<_>, _>>()?,
@@ -418,7 +418,7 @@ fn partitions_schema(
 pub(crate) fn stats_schema(
     physical_file_schema: &Schema,
     table_properties: &TableProperties,
-) -> Schema {
+) -> DeltaResult<Schema> {
     let mut fields = Vec::with_capacity(4);
     fields.push(StructField::nullable("numRecords", DataType::LONG));
 
@@ -446,12 +446,7 @@ pub(crate) fn stats_schema(
             fields.push(StructField::nullable("maxValues", min_max_schema));
         }
     }
-    StructType::try_new(fields).unwrap_or_else(|_| empty_struct_type())
-}
-
-fn empty_struct_type() -> StructType {
-    StructType::try_new(Vec::<StructField>::new())
-        .unwrap_or_else(|_| unreachable!("empty struct type is always valid"))
+    StructType::try_new(fields)
 }
 
 // Convert a min/max stats schema into a nullcount schema (all leaf fields are LONG)
