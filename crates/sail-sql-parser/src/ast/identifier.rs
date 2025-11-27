@@ -3,7 +3,7 @@ use chumsky::input::{Input, InputRef, ValueInput};
 use chumsky::label::LabelError;
 use chumsky::prelude::custom;
 use chumsky::Parser;
-use sail_sql_macro::TreeParser;
+use sail_sql_macro::{TreeParser, TreeSyntax, TreeText};
 
 use crate::ast::operator::{Asterisk, Period};
 use crate::combinator::sequence;
@@ -12,7 +12,7 @@ use crate::options::ParserOptions;
 use crate::span::TokenSpan;
 use crate::string::StringValue;
 use crate::token::{Keyword, Punctuation, StringStyle, Token, TokenLabel};
-use crate::tree::TreeParser;
+use crate::tree::{SyntaxDescriptor, SyntaxNode, TerminalKind, TreeParser, TreeSyntax, TreeText};
 use crate::utils::skip_whitespace;
 
 fn parse_identifier<'a, F, I, E>(
@@ -24,7 +24,7 @@ where
     F: Fn(&Option<Keyword>) -> bool,
     I: Input<'a, Token = Token<'a>> + ValueInput<'a>,
     I::Span: Into<TokenSpan> + Clone,
-    E: ParserExtra<'a, I>,
+    E: ParserExtra<'a, I> + 'a,
     E::Error: LabelError<'a, I, TokenLabel>,
 {
     let before = input.cursor();
@@ -71,11 +71,27 @@ impl<'a, I, E> TreeParser<'a, I, E> for Ident
 where
     I: Input<'a, Token = Token<'a>> + ValueInput<'a>,
     I::Span: Into<TokenSpan> + Clone,
-    E: ParserExtra<'a, I>,
+    E: ParserExtra<'a, I> + 'a,
     E::Error: LabelError<'a, I, TokenLabel>,
 {
     fn parser(_args: (), options: &'a ParserOptions) -> impl Parser<'a, I, Self, E> + Clone {
         custom(move |input| parse_identifier(input, |_| true, options))
+    }
+}
+
+impl TreeSyntax for Ident {
+    fn syntax() -> SyntaxDescriptor {
+        SyntaxDescriptor {
+            name: "Identifier".to_string(),
+            node: SyntaxNode::Terminal(TerminalKind::Identifier),
+            children: vec![],
+        }
+    }
+}
+
+impl TreeText for Ident {
+    fn text(&self) -> String {
+        format!("{} ", self.value.clone())
     }
 }
 
@@ -86,7 +102,7 @@ pub(crate) fn column_ident<'a, I, E>(
 where
     I: Input<'a, Token = Token<'a>> + ValueInput<'a>,
     I::Span: Into<TokenSpan> + Clone,
-    E: ParserExtra<'a, I>,
+    E: ParserExtra<'a, I> + 'a,
     E::Error: LabelError<'a, I, TokenLabel>,
 {
     fn matcher(keyword: &Option<Keyword>) -> bool {
@@ -103,7 +119,7 @@ pub(crate) fn table_ident<'a, I, E>(
 where
     I: Input<'a, Token = Token<'a>> + ValueInput<'a>,
     I::Span: Into<TokenSpan> + Clone,
-    E: ParserExtra<'a, I>,
+    E: ParserExtra<'a, I> + 'a,
     E::Error: LabelError<'a, I, TokenLabel>,
 {
     fn matcher(keyword: &Option<Keyword>) -> bool {
@@ -113,7 +129,7 @@ where
     custom(move |input| parse_identifier(input, matcher, options))
 }
 
-#[derive(Debug, Clone, TreeParser)]
+#[derive(Debug, Clone, TreeParser, TreeSyntax, TreeText)]
 pub struct ObjectName(pub Sequence<Ident, Period>);
 
 /// A restricted object name parser.
@@ -124,14 +140,14 @@ pub(crate) fn object_name<'a, I, E, P>(
 where
     I: Input<'a, Token = Token<'a>> + ValueInput<'a>,
     I::Span: Into<TokenSpan> + Clone,
-    E: ParserExtra<'a, I>,
+    E: ParserExtra<'a, I> + 'a,
     E::Error: LabelError<'a, I, TokenLabel>,
     P: Parser<'a, I, Ident, E> + Clone,
 {
     sequence(ident, Period::parser((), options)).map(ObjectName)
 }
 
-#[derive(Debug, Clone, TreeParser)]
+#[derive(Debug, Clone, TreeParser, TreeSyntax, TreeText)]
 pub struct QualifiedWildcard(pub Sequence<Ident, Period>, pub Period, pub Asterisk);
 
 /// A named variable `$name` or `:name`, or an unnamed variable `?`.
@@ -145,7 +161,7 @@ fn parse_named_variable<'a, I, E>(input: &mut InputRef<'a, '_, I, E>) -> Option<
 where
     I: Input<'a, Token = Token<'a>> + ValueInput<'a>,
     I::Span: Into<TokenSpan>,
-    E: ParserExtra<'a, I>,
+    E: ParserExtra<'a, I> + 'a,
     E::Error: LabelError<'a, I, TokenLabel>,
 {
     let marker = input.save();
@@ -172,7 +188,7 @@ fn parse_unnamed_variable<'a, I, E>(input: &mut InputRef<'a, '_, I, E>) -> Optio
 where
     I: Input<'a, Token = Token<'a>> + ValueInput<'a>,
     I::Span: Into<TokenSpan>,
-    E: ParserExtra<'a, I>,
+    E: ParserExtra<'a, I> + 'a,
     E::Error: LabelError<'a, I, TokenLabel>,
 {
     let marker = input.save();
@@ -196,7 +212,7 @@ impl<'a, I, E> TreeParser<'a, I, E> for Variable
 where
     I: Input<'a, Token = Token<'a>> + ValueInput<'a>,
     I::Span: Into<TokenSpan>,
-    E: ParserExtra<'a, I>,
+    E: ParserExtra<'a, I> + 'a,
     E::Error: LabelError<'a, I, TokenLabel>,
 {
     fn parser(_args: (), _options: &'a ParserOptions) -> impl Parser<'a, I, Self, E> + Clone {
@@ -215,6 +231,22 @@ where
                 input.span_since(&before),
             ))
         })
+    }
+}
+
+impl TreeSyntax for Variable {
+    fn syntax() -> SyntaxDescriptor {
+        SyntaxDescriptor {
+            name: "Variable".to_string(),
+            node: SyntaxNode::Terminal(TerminalKind::Variable),
+            children: vec![],
+        }
+    }
+}
+
+impl TreeText for Variable {
+    fn text(&self) -> String {
+        format!("{} ", self.value)
     }
 }
 

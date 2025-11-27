@@ -1187,7 +1187,7 @@
         }
       },
       "output": {
-        "failure": "error in DataFusion: Arrow error: Compute error: Regular expression did not compile: Syntax(\n~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~\nregex parse error:\n    %SystemDrive%\\Users.*\n                   ^\nerror: invalid hexadecimal digit\n~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~\n)"
+        "failure": "error in DataFusion: Optimizer rule 'simplify_expressions' failed\ncaused by\nInvalid regex\ncaused by\nExternal error: regex parse error:\n    %SystemDrive%\\Users.*\n                   ^\nerror: invalid hexadecimal digit"
       }
     },
     {
@@ -1253,7 +1253,7 @@
         }
       },
       "output": {
-        "failure": "error in DataFusion: Arrow error: Compute error: Regular expression did not compile: Syntax(\n~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~\nregex parse error:\n    %SystemDrive%\\Users.*\n                   ^\nerror: invalid hexadecimal digit\n~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~\n)"
+        "failure": "error in DataFusion: Optimizer rule 'simplify_expressions' failed\ncaused by\nInvalid regex\ncaused by\nExternal error: regex parse error:\n    %SystemDrive%\\Users.*\n                   ^\nerror: invalid hexadecimal digit"
       }
     },
     {
@@ -1319,7 +1319,7 @@
         }
       },
       "output": {
-        "failure": "error in DataFusion: Arrow error: Compute error: Regular expression did not compile: Syntax(\n~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~\nregex parse error:\n    %SystemDrive%\\Users.*\n                   ^\nerror: invalid hexadecimal digit\n~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~\n)"
+        "failure": "error in DataFusion: Optimizer rule 'simplify_expressions' failed\ncaused by\nInvalid regex\ncaused by\nExternal error: regex parse error:\n    %SystemDrive%\\Users.*\n                   ^\nerror: invalid hexadecimal digit"
       }
     },
     {

@@ -126,3 +126,14 @@
   supported: true
   rust_type: usize
   rust_deserialize_with: crate::options::serde::deserialize_non_zero_usize
+
+- key: column_mapping_mode
+  aliases:
+    - columnMappingMode
+    - column_mapping
+  description: |
+    Column mapping mode for new Delta tables. Supported values: "none", "name", and "id".
+    When set to "name" or "id", new tables will be created with Delta Column Mapping.
+  default: "none"
+  supported: true
+  rust_type: String

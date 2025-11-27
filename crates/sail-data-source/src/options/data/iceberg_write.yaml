@@ -1,0 +1,22 @@
+# Options for writing to an Apache Iceberg table.
+
+- key: overwrite_schema
+  aliases:
+    - overwriteSchema
+  description: |
+    If `true`, allows overwriting the schema of the table when using overwrite mode.
+  default: "false"
+  supported: true
+  rust_type: bool
+  rust_deserialize_with: crate::options::serde::deserialize_bool
+
+- key: merge_schema
+  aliases:
+    - mergeSchema
+  description: |
+    If `true`, allows automatic schema merging during an append or overwrite operation.
+  default: "false"
+  supported: true
+  rust_type: bool
+  rust_deserialize_with: crate::options::serde::deserialize_bool
+

@@ -50,7 +50,11 @@ enum StringLiteralList {
 
 impl StringLiteralList {
     fn try_new(value: StringLiteral) -> SqlResult<Self> {
-        let StringLiteral { span: _, value } = value;
+        let StringLiteral {
+            span: _,
+            tokens: _,
+            value,
+        } = value;
         match value {
             StringValue::Valid {
                 value,
@@ -116,7 +120,11 @@ pub(crate) fn from_ast_boolean_literal(value: BooleanLiteral) -> SqlResult<spec:
 }
 
 pub(crate) fn from_ast_string(s: StringLiteral) -> SqlResult<String> {
-    let StringLiteral { span: _, value } = s;
+    let StringLiteral {
+        span: _,
+        tokens: _,
+        value,
+    } = s;
     match value {
         StringValue::Valid { value, prefix: _ } => Ok(value),
         StringValue::Invalid { reason } => Err(SqlError::invalid(reason)),

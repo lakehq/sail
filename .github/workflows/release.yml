@@ -32,6 +32,8 @@ jobs:
 
       - name: Install Hatch
         uses: pypa/hatch@install
+        with:
+          version: 1.15.1
 
       - name: Get Version
         id: version
@@ -198,11 +200,11 @@ jobs:
             case "${platform_target}" in
               "aarch64")
                 apt-get update
-                apt-get install -y wget unzip pkg-config libssl-dev
+                apt-get install -y wget unzip pkg-config
                 ;;
               "x86_64")
                 yum update -y
-                yum install -y wget unzip pkgconfig openssl-devel
+                yum install -y wget unzip pkgconfig
                 ;;
               *)
                 echo "Unsupported platform target: ${platform_target}"

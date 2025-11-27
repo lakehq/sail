@@ -389,6 +389,20 @@ impl PlanFormatter for SparkPlanFormatter {
                 let value = self.literal_to_string(value, config)?;
                 Ok(format!("dictionary({value})"))
             }
+            ScalarValue::Decimal32(value, _precision, scale) => match value {
+                Some(value) => {
+                    let value = format!("{value}");
+                    Ok(format_decimal(value.as_str(), *scale))
+                }
+                None => Ok("NULL".to_string()),
+            },
+            ScalarValue::Decimal64(value, _precision, scale) => match value {
+                Some(value) => {
+                    let value = format!("{value}");
+                    Ok(format_decimal(value.as_str(), *scale))
+                }
+                None => Ok("NULL".to_string()),
+            },
             ScalarValue::Decimal128(value, _precision, scale) => match value {
                 Some(value) => {
                     let value = format!("{value}");
@@ -687,6 +701,7 @@ mod tests {
         i256, DataType, Field, Int32Type, IntervalDayTime, IntervalMonthDayNano,
     };
     use datafusion_common::arrow::array::ArrayRef;
+    use sail_common::spec::SAIL_MAP_FIELD_NAME;
 
     use super::*;
     use crate::error::PlanResult;
@@ -862,7 +877,7 @@ mod tests {
         assert_eq!(
             to_string(ScalarValue::Map(Arc::new(MapArray::new(
                 Arc::new(Field::new(
-                    "entries",
+                    SAIL_MAP_FIELD_NAME,
                     DataType::Struct(
                         vec![
                             Arc::new(Field::new("keys", DataType::Utf8, false)),

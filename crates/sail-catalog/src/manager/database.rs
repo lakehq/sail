@@ -70,6 +70,8 @@ impl CatalogManager {
         database: &[T],
         options: CreateDatabaseOptions,
     ) -> CatalogResult<DatabaseStatus> {
+        // TODO: Add options["owner"] = current user name
+        //  https://github.com/apache/spark/blob/3d18fe1927f140b7f2429c7b88e5156a6e9155d7/core/src/main/scala/org/apache/spark/util/Utils.scala#L2429-L2443
         let (provider, database) = self.resolve_database(database)?;
         provider.create_database(&database, options).await
     }

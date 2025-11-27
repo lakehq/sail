@@ -1,18 +1,29 @@
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+
 [package]
 name = "sail-delta-lake"
 version = { workspace = true }
 edition = { workspace = true }
 
 [dependencies]
+sail-common = { path = "../sail-common" }
 sail-common-datafusion = { path = "../sail-common-datafusion" }
 # Delta Lake
-deltalake = { workspace = true }
 delta_kernel = { workspace = true }
 
 # DataFusion dependencies
 datafusion = { workspace = true }
 datafusion-common = { workspace = true }
-datafusion-physical-expr-adapter = { workspace = true }
 datafusion-physical-expr = { workspace = true }
 
 # Arrow dependencies
@@ -21,6 +32,7 @@ arrow-schema = { workspace = true }
 # Essential utilities
 async-trait = { workspace = true }
 object_store = { workspace = true }
+thiserror = { workspace = true }
 chrono = { workspace = true }
 serde_json = { workspace = true }
 url = { workspace = true }
@@ -34,6 +46,7 @@ indexmap = { workspace = true }
 log = { workspace = true }
 itertools = { workspace = true }
 percent-encoding = { workspace = true }
+regex = { workspace = true }
 
 [lints]
 workspace = true

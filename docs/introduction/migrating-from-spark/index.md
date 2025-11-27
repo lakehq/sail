@@ -17,7 +17,6 @@ spark = SparkSession.builder.remote("sc://localhost:50051").getOrCreate()  # [!c
 
 ## Considerations
 
-Is Sail production ready? There is no single answer to this question, as it depends on your specific use case and requirements.
 Here we recommend some practices to help you adopt Sail in your production environment.
 
 - Make sure you PySpark code works with a recent Spark version. Sail is designed to be compatible with Spark 3.5 and later versions. If your existing code was developed for Spark 2.x or earlier Spark 3.x versions, you may need to update it to make it working with newer versions of Spark.
@@ -41,14 +40,12 @@ which are the most commonly used features in Spark applications.
 
 There is no support for Spark RDD in Sail since it relies on the JVM implementation of Spark internals and is not covered by the Spark Connect protocol.
 
-| Feature              | PySpark API                      | Supported          |
-| -------------------- | -------------------------------- | ------------------ |
-| SQL                  | `pyspark.sql.SparkSession`       | :white_check_mark: |
-| DataFrame            | `pyspark.sql.SparkSession`       | :white_check_mark: |
-| Structured Streaming | `pyspark.sql.streaming`          | :construction:     |
-| Pandas on Spark      | `pyspark.pandas`                 | :construction:     |
-| RDD                  | `pyspark.SparkContext`           | :x:                |
-| MLlib                | `pyspark.mllib` and `pyspark.ml` | :x:                |
-| GraphX               | -                                | :x:                |
+| Feature              | PySpark API                | Supported                    |
+| -------------------- | -------------------------- | ---------------------------- |
+| SQL                  | `pyspark.sql.SparkSession` | :white_check_mark:           |
+| DataFrame            | `pyspark.sql.SparkSession` | :white_check_mark:           |
+| Structured Streaming | `pyspark.sql.streaming`    | :white_check_mark: (partial) |
+| Pandas on Spark      | `pyspark.pandas`           | :construction:               |
+| RDD                  | `pyspark.SparkContext`     | :x:                          |
 
 As you go through the rest of the documentation, you will find more details about the supported features as we cover different aspects of Sail.

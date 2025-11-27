@@ -7,7 +7,7 @@ use chumsky::Parser;
 use crate::options::ParserOptions;
 use crate::span::TokenSpan;
 use crate::token::{Keyword, Token, TokenLabel};
-use crate::tree::TreeParser;
+use crate::tree::{SyntaxDescriptor, SyntaxNode, TerminalKind, TreeParser, TreeSyntax, TreeText};
 use crate::utils::skip_whitespace;
 
 fn parse_keyword<'a, I, E>(
@@ -17,7 +17,7 @@ fn parse_keyword<'a, I, E>(
 where
     I: Input<'a, Token = Token<'a>> + ValueInput<'a>,
     I::Span: std::convert::Into<TokenSpan>,
-    E: ParserExtra<'a, I>,
+    E: ParserExtra<'a, I> + 'a,
     E::Error: LabelError<'a, I, TokenLabel>,
 {
     let before = input.cursor();
@@ -70,7 +70,7 @@ macro_rules! keyword_types {
             where
                 I: Input<'a, Token = Token<'a>> + ValueInput<'a>,
                 I::Span: std::convert::Into<TokenSpan>,
-                E: ParserExtra<'a, I>,
+                E: ParserExtra<'a, I> + 'a,
                 E::Error: LabelError<'a, I, TokenLabel>,
             {
                 fn parser(
@@ -78,6 +78,23 @@ macro_rules! keyword_types {
                     _options: &'a ParserOptions
                 ) -> impl Parser<'a, I, Self, E> + Clone {
                     custom(move |input| parse_keyword(input, Self::keyword()).map(Self::new))
+                }
+            }
+
+            impl TreeSyntax for $name {
+                fn syntax() -> SyntaxDescriptor {
+                    let keyword = Self::keyword().as_str().to_string();
+                    SyntaxDescriptor {
+                        name: format!("Keyword({})", stringify!($name)),
+                        node: SyntaxNode::Terminal(TerminalKind::Keyword(keyword)),
+                        children: vec![],
+                    }
+                }
+            }
+
+            impl TreeText for $name {
+                fn text(&self) -> std::string::String {
+                    format!("{} ", Self::keyword().as_str())
                 }
             }
         )*

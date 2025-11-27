@@ -1,13 +1,13 @@
 ---
 title: Troubleshooting
-rank: 10
+rank: 11
 ---
 
 # Troubleshooting
 
 ## System Time Zone Issue on Amazon Linux
 
-When you run Sail on Amazon Linux, you may encounter the following error when creating a Spark session:
+When you run Sail on Amazon Linux, you may encounter the following error when creating a session:
 
 > `failed to get system time zone: No such file or directory (os error 2)`
 

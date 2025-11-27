@@ -7,6 +7,7 @@ use datafusion::arrow::buffer::{NullBuffer, OffsetBuffer};
 use datafusion::arrow::compute::filter;
 use datafusion::arrow::datatypes::{DataType, Field, Fields};
 use datafusion_common::{exec_err, internal_err, Result, ScalarValue};
+use sail_common::spec::{SAIL_MAP_FIELD_NAME, SAIL_MAP_KEY_FIELD_NAME, SAIL_MAP_VALUE_FIELD_NAME};
 
 /// Helper function to get element [`DataType`]
 /// from [`List`](DataType::List)/[`LargeList`](DataType::LargeList)/[`FixedSizeList`](DataType::FixedSizeList)<br>
@@ -70,11 +71,11 @@ pub fn get_list_offsets(array: &ArrayRef) -> Result<Cow<'_, [i32]>> {
 pub fn map_type_from_key_value_types(key_type: &DataType, value_type: &DataType) -> DataType {
     DataType::Map(
         Arc::new(Field::new(
-            "entries",
+            SAIL_MAP_FIELD_NAME,
             DataType::Struct(Fields::from(vec![
                 // the key must not be nullable
-                Field::new("key", key_type.clone(), false),
-                Field::new("value", value_type.clone(), true),
+                Field::new(SAIL_MAP_KEY_FIELD_NAME, key_type.clone(), false),
+                Field::new(SAIL_MAP_VALUE_FIELD_NAME, value_type.clone(), true),
             ])),
             false, // the entry is not nullable
         )),
@@ -116,11 +117,23 @@ pub fn map_from_keys_values_offsets_nulls(
     let nulls = NullBuffer::union(keys_nulls, values_nulls);
 
     let fields = Fields::from(vec![
-        Field::new("key", flat_keys.data_type().clone(), false),
-        Field::new("value", flat_values.data_type().clone(), true),
+        Field::new(
+            SAIL_MAP_KEY_FIELD_NAME,
+            flat_keys.data_type().clone(),
+            false,
+        ),
+        Field::new(
+            SAIL_MAP_VALUE_FIELD_NAME,
+            flat_values.data_type().clone(),
+            true,
+        ),
     ]);
     let entries = StructArray::try_new(fields.clone(), vec![keys, values], None)?;
-    let field = Arc::new(Field::new("entries", DataType::Struct(fields), false));
+    let field = Arc::new(Field::new(
+        SAIL_MAP_FIELD_NAME,
+        DataType::Struct(fields),
+        false,
+    ));
     Ok(Arc::new(MapArray::try_new(
         field, offsets, entries, nulls, false,
     )?))

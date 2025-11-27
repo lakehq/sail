@@ -5,15 +5,8 @@ rank: 1
 
 # Delta Lake
 
-You can use the `delta` format in Sail to work with Delta Lake.
+You can use the `delta` format in Sail to work with [Delta Lake](https://delta.io/).
 You can use the Spark DataFrame API or Spark SQL to read and write Delta tables.
-
-::: warning
-The Delta Lake integration in Sail is under active development.
-You can use Sail to read Delta tables and write new Delta tables.
-But it is not recommended to use Sail to overwrite or modify existing Delta tables created by other engines.
-If you encounter any issues or would like to request advanced Delta Lake features, feel free to reach out to us on [GitHub Issues](https://github.com/lakehq/sail/issues)!
-:::
 
 ## Examples
 
@@ -32,7 +25,7 @@ df = spark.createDataFrame(
 
 # This creates a new table or overwrites an existing one.
 df.write.format("delta").mode("overwrite").save(path)
-# This appends data to an existing Delta table.
+# This appends data to an existing table.
 df.write.format("delta").mode("append").save(path)
 
 df = spark.read.format("delta").load(path)
@@ -105,13 +98,25 @@ df.write.format("delta").mode("overwrite").option("overwriteSchema", "true").sav
 
 ### Time Travel
 
-You can use the time travel feature of Delta Lake to query historical versions of a Delta table.
+You can use the time travel feature to query historical versions of a Delta table.
 
 ```python
 df = spark.read.format("delta").option("versionAsOf", "0").load(path)
+df = spark.read.format("delta").option("timestampAsOf", "2025-01-02T03:04:05.678").load(path)
 ```
 
 Time travel is not available for Spark SQL in Sail yet, but we plan to support it soon.
+
+### Column Mapping
+
+You can write Delta tables with column mapping enabled. The supported column mapping modes are `name` and `id`. You must write to a new Delta table to enable column mapping.
+
+```python
+df.write.format("delta").option("columnMappingMode", "name").save(path)
+df.write.format("delta").option("columnMappingMode", "id").save(path)
+```
+
+Existing Delta tables with column mapping can be read as usual.
 
 ### More Features
 

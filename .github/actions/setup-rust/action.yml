@@ -14,21 +14,15 @@ runs:
     # The Rust nightly toolchain is needed for features used in e.g. code formatting.
     - name: Install Rust toolchains
       run: |
-        rustup toolchain install stable
-        rustup toolchain install nightly
-        rustup component add --toolchain stable rustfmt clippy llvm-tools-preview
-        rustup component add --toolchain nightly rustfmt
+        rustup toolchain install stable --profile default --component llvm-tools-preview
+        rustup toolchain install nightly --profile default
       shell: bash
 
-    # Install grcov for code coverage
     - name: Install grcov
-      run: |
-        wget -q -O grcov.tar.bz2 "https://github.com/mozilla/grcov/releases/download/v0.10.5/grcov-x86_64-unknown-linux-gnu.tar.bz2"
-        tar -xjf grcov.tar.bz2
-        sudo mv grcov /usr/local/bin/
-        chmod +x /usr/local/bin/grcov
-        rm grcov.tar.bz2
-      shell: bash
+      uses: taiki-e/install-action@grcov
+
+    - name: Install cargo-nextest
+      uses: taiki-e/install-action@nextest
 
     - name: Show versions
       id: versions

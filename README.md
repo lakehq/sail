@@ -101,9 +101,18 @@ Here are the storage options supported:
 
 ### Lakehouse Formats
 
-Sail provides native support for **Delta Lake**, offering a reliable storage layer with strong data management guarantees and ensuring interoperability with existing Delta datasets.
+Sail provides native support for modern lakehouse table formats, offering reliable storage layers with strong data management guarantees and ensuring interoperability with existing datasets.
 
-For more details on usage and best practices, see the [Delta Lake Guide](https://docs.lakesail.com/sail/latest/guide/formats/delta.html).
+Please refer to the following guides for the supported formats:
+
+- [Delta Lake Guide](https://docs.lakesail.com/sail/latest/guide/formats/delta.html)
+- [Apache Iceberg Guide](https://docs.lakesail.com/sail/latest/guide/formats/iceberg.html)
+
+### Catalog Providers
+
+Sail supports multiple catalog providers, such as the Apache Iceberg REST Catalog and Unity Catalog. You can manage datasets as external tables and integrate with broader data-platform ecosystems.
+
+For more details on usage and best practices, see the [Catalog Guide](https://docs.lakesail.com/sail/latest/guide/catalog/).
 
 ## Benchmark Results
 
@@ -153,7 +162,7 @@ Sail solves these problems with a modern, Rust-native design.
 
 ### Sail is Spark-compatible
 
-Sail offers a drop-in replacement for Spark SQL and the Spark DataFrame API. Existing PySpark code works out of the box once you connect the Spark session to Sail over the Spark Connect protocol.
+Sail offers a drop-in replacement for Spark SQL and the Spark DataFrame API. Existing PySpark code works out of the box once you connect your Spark client session to Sail over the Spark Connect protocol.
 
 - **Spark SQL Dialect Support.** A custom Rust parser (built with parser combinators and Rust procedural macros) covers Spark SQL syntax with production-grade accuracy.
 - **DataFrame API Support.** Spark DataFrame operations run on Sail with identical semantics.

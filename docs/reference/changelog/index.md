@@ -5,6 +5,73 @@ next: false
 
 # Changelog
 
+## 0.4.2
+
+_November 13, 2025_
+
+- Supported column mapping for Delta Lake ([#985](https://github.com/lakehq/sail/pull/985)).
+- Supported time travel for Iceberg ([#1039](https://github.com/lakehq/sail/pull/1039)).
+- Supported Unity Catalog ([#1005](https://github.com/lakehq/sail/pull/1005)).
+- Improved Iceberg integration ([#1006](https://github.com/lakehq/sail/pull/1006), [#1009](https://github.com/lakehq/sail/pull/1009), and [#1042](https://github.com/lakehq/sail/pull/1042)).
+- Added the `luhn_check` SQL function ([#909](https://github.com/lakehq/sail/pull/909)).
+- Improved the following SQL functions ([#909](https://github.com/lakehq/sail/pull/909) and [#1024](https://github.com/lakehq/sail/pull/1024)):
+  - `bit_count`
+  - `bit_get`
+  - `getbit`
+  - `crc32`
+  - `sha`
+  - `sha1`
+  - `expm1`
+  - `pmod`
+  - `width_bucket`
+  - `bitmap_count`
+  - `to_date`
+- Added the `try_avg` SQL aggregate function ([#1012](https://github.com/lakehq/sail/pull/1012)).
+- Supported the `try_sum` and `try_avg` SQL aggregate functions in window expressions ([#1040](https://github.com/lakehq/sail/pull/1040)).
+
+### Contributors
+
+Huge thanks to [@davidlghellin](https://github.com/davidlghellin) for the contribution!
+
+## 0.4.1
+
+_November 2, 2025_
+
+- Supported writing partitioned Iceberg tables ([#1003](https://github.com/lakehq/sail/pull/1003)).
+- Added the `try_sum` SQL aggregate function ([#960](https://github.com/lakehq/sail/pull/960)).
+- Fixed a filter pushdown performance issue ([#1008](https://github.com/lakehq/sail/pull/1008)).
+
+### Contributors
+
+Huge thanks to [@davidlghellin](https://github.com/davidlghellin) for the contribution!
+
+## 0.4.0
+
+_October 29, 2025_
+
+- Added basic support for reading and writing Iceberg tables ([#944](https://github.com/lakehq/sail/pull/944), [#987](https://github.com/lakehq/sail/pull/987), [#976](https://github.com/lakehq/sail/pull/976), [#994](https://github.com/lakehq/sail/pull/994), and [#997](https://github.com/lakehq/sail/pull/997)).
+- Supported Iceberg REST catalog ([#961](https://github.com/lakehq/sail/pull/961), [#974](https://github.com/lakehq/sail/pull/974), [#993](https://github.com/lakehq/sail/pull/993), and [#995](https://github.com/lakehq/sail/pull/995)).
+- Improved Delta Lake integration ([#921](https://github.com/lakehq/sail/pull/921)).
+- Supported multiple arguments for the `count_distinct` SQL function ([#957](https://github.com/lakehq/sail/pull/957)).
+- Added guide for HDFS Kerberos authentication ([#992](https://github.com/lakehq/sail/pull/992)).
+- Updated a few execution configuration options ([#975](https://github.com/lakehq/sail/pull/975)).
+- Fixed a cost estimation issue with the join reorder optimizer ([#969](https://github.com/lakehq/sail/pull/969)).
+
+### Contributors
+
+Huge thanks to [@SparkApplicationMaster](https://github.com/SparkApplicationMaster), [@davidlghellin](https://github.com/davidlghellin), and [@zemin-piao](https://github.com/zemin-piao) (_first-time contributor_) for the contributions!
+
+## 0.3.7
+
+_October 3, 2025_
+
+- Improved error reporting for the SQL parser ([#938](https://github.com/lakehq/sail/pull/938)).
+- Supported the `df.unpivot()` method in the Spark DataFrame API ([#948](https://github.com/lakehq/sail/pull/948)).
+
+### Contributors
+
+Huge thanks to [@SparkApplicationMaster](https://github.com/SparkApplicationMaster) for the continued contributions!
+
 ## 0.3.6
 
 _September 30, 2025_

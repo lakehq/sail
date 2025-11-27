@@ -1,21 +1,79 @@
-//! Helper module to check if a transaction can be committed in case of conflicting commits.
+// https://github.com/delta-io/delta-rs/blob/5575ad16bf641420404611d65f4ad7626e9acb16/LICENSE.txt
+//
+// Copyright (2020) QP Hou and a number of other contributors.
+// Portions Copyright (2025) LakeSail, Inc.
+// Modified in 2025 by LakeSail, Inc.
+//
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+//     http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
 
 // [Credit]: <https://github.com/delta-io/delta-rs/blob/1f0b4d0965a85400c1effc6e9b4c7ebbb6795978/crates/core/src/kernel/transaction/conflict_checker.rs>
 
+//! Helper module to check if a transaction can be committed in case of conflicting commits.
+
 use std::collections::HashSet;
 
+use datafusion::catalog::Session;
 use datafusion::logical_expr::Expr;
-use datafusion::prelude::SessionContext;
 use delta_kernel::table_properties::IsolationLevel;
-use deltalake::kernel::transaction::CommitConflictError;
-use deltalake::kernel::{Action, Add, CommitInfo, Metadata, Protocol, Remove, Transaction};
-use deltalake::logstore::{get_actions, LogStore};
-use deltalake::protocol::DeltaOperation;
-use deltalake::table::config::TablePropertiesExt as _;
-use deltalake::{DeltaResult, DeltaTableError};
+use delta_kernel::Error as KernelError;
+use thiserror::Error;
 
-use crate::delta_datafusion::DataFusionMixins;
+use crate::datasource::parse_log_data_predicate;
+use crate::kernel::models::{Action, Add, CommitInfo, Metadata, Protocol, Remove, Transaction};
 use crate::kernel::snapshot::LogDataHandler;
+use crate::kernel::{DeltaOperation, DeltaResult, TablePropertiesExt};
+use crate::storage::{get_actions, LogStore};
+
+/// Exceptions raised during commit conflict resolution.
+#[derive(Error, Debug)]
+pub enum CommitConflictError {
+    #[error("Commit failed: a concurrent transactions added new data.\nHelp: This transaction's query must be rerun to include the new data. Also, if you don't care to require this check to pass in the future, the isolation level can be set to Snapshot Isolation.")]
+    ConcurrentAppend,
+
+    #[error("Commit failed: a concurrent transaction deleted data this operation read.\nHelp: This transaction's query must be rerun to exclude the removed data. Also, if you don't care to require this check to pass in the future, the isolation level can be set to Snapshot Isolation.")]
+    ConcurrentDeleteRead,
+
+    #[error("Commit failed: a concurrent transaction deleted the same data your transaction deletes.\nHelp: you should retry this write operation. If it was based on data contained in the table, you should rerun the query generating the data.")]
+    ConcurrentDeleteDelete,
+
+    #[error("Metadata changed since last commit.")]
+    MetadataChanged,
+
+    #[error("Concurrent transaction failed.")]
+    ConcurrentTransaction,
+
+    #[error("Protocol changed since last commit: {0}")]
+    ProtocolChanged(String),
+
+    #[error("Delta-rs does not support writer version {0}")]
+    UnsupportedWriterVersion(i32),
+
+    #[error("Delta-rs does not support reader version {0}")]
+    UnsupportedReaderVersion(i32),
+
+    #[error("Snapshot is corrupted: {source}")]
+    CorruptedState {
+        source: Box<dyn std::error::Error + Send + Sync + 'static>,
+    },
+
+    #[error("Error evaluating predicate: {source}")]
+    Predicate {
+        source: Box<dyn std::error::Error + Send + Sync + 'static>,
+    },
+
+    #[error("No metadata found, please make sure table is loaded.")]
+    NoMetadata,
+}
 
 /// A struct representing different attributes of current transaction needed for conflict detection.
 #[allow(unused)]
@@ -39,11 +97,12 @@ impl<'a> TransactionInfo<'a> {
         read_predicates: Option<String>,
         actions: &'a [Action],
         read_whole_table: bool,
+        session: Option<&dyn Session>,
     ) -> DeltaResult<Self> {
-        let session = SessionContext::new();
-        let read_predicates = read_predicates
-            .map(|pred| read_snapshot.parse_predicate_expression(pred, &session.state()))
-            .transpose()?;
+        let read_predicates = match (read_predicates, session) {
+            (Some(pred), Some(s)) => Some(parse_log_data_predicate(&read_snapshot, pred, s)?),
+            _ => None,
+        };
 
         let mut read_app_ids = HashSet::<String>::new();
         for action in actions.iter() {
@@ -91,7 +150,7 @@ impl<'a> TransactionInfo<'a> {
 
     // TODO: properly handle predicates in the PhysicalPlan
     // pub fn read_files(&self) -> Result<impl Iterator<Item = Add> + '_, CommitConflictError> {
-    //     use crate::delta_datafusion::files_matching_predicate;
+    //     use crate::datasource::files_matching_predicate;
 
     //     if let Some(predicate) = &self.read_predicates {
     //         Ok(Either::Left(
@@ -137,7 +196,9 @@ impl WinningCommitSummary {
         let commit_log_bytes = log_store.read_commit_entry(winning_commit_version).await?;
         match commit_log_bytes {
             Some(bytes) => {
-                let actions = get_actions(winning_commit_version, bytes).await?;
+                let actions = get_actions(winning_commit_version, &bytes)?
+                    .into_iter()
+                    .collect::<Vec<_>>();
                 let commit_info = actions
                     .iter()
                     .find(|action| matches!(action, Action::CommitInfo(_)))
@@ -151,7 +212,7 @@ impl WinningCommitSummary {
                     commit_info,
                 })
             }
-            None => Err(DeltaTableError::InvalidVersion(winning_commit_version)),
+            None => Err(KernelError::MissingVersion.into()),
         }
     }
 

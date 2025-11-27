@@ -3,8 +3,9 @@ use std::sync::Arc;
 
 use datafusion::arrow::array::{ArrayRef, AsArray, Float64Array};
 use datafusion::arrow::datatypes::{
-    DataType, Float16Type, Float32Type, Float64Type, Int16Type, Int32Type, Int64Type, Int8Type,
-    IntervalUnit, IntervalYearMonthType, UInt16Type, UInt32Type, UInt64Type, UInt8Type,
+    DataType, Decimal128Type, Float16Type, Float32Type, Float64Type, Int16Type, Int32Type,
+    Int64Type, Int8Type, IntervalUnit, IntervalYearMonthType, UInt16Type, UInt32Type, UInt64Type,
+    UInt8Type,
 };
 use datafusion_common::{exec_err, Result, ScalarValue};
 use datafusion_expr::{
@@ -162,6 +163,17 @@ impl ScalarUDFImpl for SparkSignum {
                     }
                 }))))
             }
+            ColumnarValue::Scalar(ScalarValue::Decimal128(val, _precision, _scale)) => {
+                Ok(ColumnarValue::Scalar(ScalarValue::Float64(val.map(|x| {
+                    if x == 0 {
+                        0.0
+                    } else if x > 0 {
+                        1.0
+                    } else {
+                        -1.0
+                    }
+                }))))
+            }
             ColumnarValue::Scalar(ScalarValue::IntervalYearMonth(val)) => {
                 Ok(ColumnarValue::Scalar(ScalarValue::Float64(val.map(|x| {
                     if x == 0_i32 {
@@ -283,6 +295,20 @@ impl ScalarUDFImpl for SparkSignum {
                         });
                         Ok(Arc::new(result) as ArrayRef)
                     }
+                    DataType::Decimal128(_p, _s) => {
+                        let result: Float64Array =
+                            array.as_primitive::<Decimal128Type>().unary(|x| {
+                                if x == 0 {
+                                    0.0
+                                } else if x > 0 {
+                                    1.0
+                                } else {
+                                    -1.0
+                                }
+                            });
+                        Ok(Arc::new(result) as ArrayRef)
+                    }
+
                     DataType::Interval(IntervalUnit::YearMonth) => {
                         let result: Float64Array = array
                             .as_primitive::<IntervalYearMonthType>()

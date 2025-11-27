@@ -1,13 +1,34 @@
+// https://github.com/delta-io/delta-rs/blob/5575ad16bf641420404611d65f4ad7626e9acb16/LICENSE.txt
+//
+// Copyright (2020) QP Hou and a number of other contributors.
+// Portions Copyright (2025) LakeSail, Inc.
+// Modified in 2025 by LakeSail, Inc.
+//
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+//     http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
+
+// [Credit]: <https://github.com/delta-io/delta-rs/blob/1f0b4d0965a85400c1effc6e9b4c7ebbb6795978/crates/core/src/kernel/arrow/engine_ext.rs>
+
 //! Utilities for interacting with Kernel APIs using Arrow data structures.
 //!
 use std::borrow::Cow;
+use std::collections::HashMap;
 use std::sync::Arc;
 
-use datafusion::arrow::array::{Array, StructArray};
+use arrow_schema::Fields;
+use datafusion::arrow::array::{Array, BooleanArray, MapArray, StringArray, StructArray};
 use datafusion::arrow::datatypes::{
     DataType as ArrowDataType, Field, Schema as ArrowSchema, SchemaRef as ArrowSchemaRef,
 };
-use delta_kernel::arrow::array::BooleanArray;
 use delta_kernel::arrow::compute::filter_record_batch;
 use delta_kernel::arrow::record_batch::RecordBatch;
 use delta_kernel::engine::arrow_conversion::TryIntoArrow;
@@ -20,16 +41,16 @@ use delta_kernel::schema::{
     StructType,
 };
 use delta_kernel::snapshot::Snapshot;
+use delta_kernel::table_features::ColumnMappingMode;
 use delta_kernel::table_properties::{DataSkippingNumIndexedCols, TableProperties};
 use delta_kernel::{
     DeltaResult, Engine, EngineData, ExpressionEvaluator, ExpressionRef, PredicateRef, Version,
 };
-use deltalake::errors::{DeltaResult as DeltaResultLocal, DeltaTableError};
 use itertools::Itertools;
 
-/// [Credit]: <https://github.com/delta-io/delta-rs/blob/1f0b4d0965a85400c1effc6e9b4c7ebbb6795978/crates/core/src/kernel/arrow/engine_ext.rs>
-use crate::kernel::snapshot::replay::parse_partitions;
+use crate::conversion::ScalarConverter;
 use crate::kernel::snapshot::SCAN_ROW_ARROW_SCHEMA;
+use crate::kernel::{DeltaResult as DeltaResultLocal, DeltaTableError};
 
 /// [`ScanMetadata`] contains (1) a [`RecordBatch`] specifying data files to be scanned
 /// and (2) a vector of transforms (one transform per scan file) that must be applied to the data read
@@ -127,25 +148,26 @@ pub(crate) trait SnapshotExt {
 
 impl SnapshotExt for Snapshot {
     fn stats_schema(&self) -> DeltaResult<SchemaRef> {
-        let partition_columns = self.metadata().partition_columns();
+        let partition_columns = self.table_configuration().metadata().partition_columns();
         let column_mapping_mode = self.table_configuration().column_mapping_mode();
-        let physical_schema = StructType::new(
+        let physical_schema = StructType::try_new(
             self.schema()
                 .fields()
                 .filter(|field| !partition_columns.contains(field.name()))
                 .map(|field| field.make_physical(column_mapping_mode)),
-        );
+        )?;
         Ok(Arc::new(stats_schema(
             &physical_schema,
             self.table_properties(),
-        )))
+        )?))
     }
 
     fn partitions_schema(&self) -> DeltaResultLocal<Option<SchemaRef>> {
-        Ok(
-            partitions_schema(self.schema().as_ref(), self.metadata().partition_columns())?
-                .map(Arc::new),
-        )
+        Ok(partitions_schema(
+            self.schema().as_ref(),
+            self.table_configuration().metadata().partition_columns(),
+        )?
+        .map(Arc::new))
     }
 
     /// Arrow schema for a parsed (including stats_parsed and partitionValues_parsed)
@@ -176,13 +198,14 @@ impl SnapshotExt for Snapshot {
 
     fn parse_stats_column(&self, batch: &RecordBatch) -> DeltaResultLocal<RecordBatch> {
         let Some((stats_idx, _)) = batch.schema_ref().column_with_name("stats") else {
-            return Err(DeltaTableError::SchemaMismatch {
-                msg: "stats column not found".to_string(),
-            });
+            return Err(DeltaTableError::schema(
+                "stats column not found".to_string(),
+            ));
         };
 
         let mut columns = batch.columns().to_vec();
         let mut fields = batch.schema().fields().to_vec();
+        let column_mapping_mode = self.table_configuration().column_mapping_mode();
 
         let stats_schema = self.stats_schema()?;
         let stats_batch = batch.project(&[stats_idx])?;
@@ -200,10 +223,11 @@ impl SnapshotExt for Snapshot {
         columns.push(stats_array.clone());
 
         if let Some(partition_schema) = self.partitions_schema()? {
-            let partition_array = parse_partitions(
+            let partition_array = parse_partition_values_array(
                 batch,
                 partition_schema.as_ref(),
                 "fileConstantValues.partitionValues",
+                column_mapping_mode,
             )?;
             fields.push(Arc::new(Field::new(
                 "partitionValues_parsed",
@@ -220,6 +244,134 @@ impl SnapshotExt for Snapshot {
     }
 }
 
+fn parse_partition_values_array(
+    batch: &RecordBatch,
+    partition_schema: &StructType,
+    path: &str,
+    column_mapping_mode: ColumnMappingMode,
+) -> DeltaResultLocal<StructArray> {
+    let partitions = map_array_from_path(batch, path)?;
+    let num_rows = partitions.len();
+
+    let mut collected: HashMap<String, Vec<Scalar>> = partition_schema
+        .fields()
+        .map(|f| {
+            (
+                f.physical_name(column_mapping_mode).to_string(),
+                Vec::with_capacity(num_rows),
+            )
+        })
+        .collect();
+
+    for row in 0..num_rows {
+        if partitions.is_null(row) {
+            return Err(DeltaTableError::generic(
+                "Expected partition values map, found null entry.",
+            ));
+        }
+        let raw_values = collect_partition_row(&partitions.value(row))?;
+
+        for field in partition_schema.fields() {
+            let physical_name = field.physical_name(column_mapping_mode);
+            let value = raw_values.get(physical_name);
+            let scalar = match field.data_type() {
+                DataType::Primitive(primitive) => match value {
+                    Some(Some(raw)) => primitive.parse_scalar(raw)?,
+                    _ => Scalar::Null(field.data_type().clone()),
+                },
+                _ => {
+                    return Err(DeltaTableError::generic(
+                        "nested partitioning values are not supported",
+                    ))
+                }
+            };
+            collected
+                .get_mut(physical_name)
+                .ok_or_else(|| DeltaTableError::schema("partition field missing".to_string()))?
+                .push(scalar);
+        }
+    }
+
+    let columns = partition_schema
+        .fields()
+        .map(|field| {
+            let physical_name = field.physical_name(column_mapping_mode);
+            ScalarConverter::scalars_to_arrow_array(
+                field,
+                collected.get(physical_name).ok_or_else(|| {
+                    DeltaTableError::schema("partition field missing".to_string())
+                })?,
+            )
+        })
+        .collect::<DeltaResultLocal<Vec<_>>>()?;
+
+    let arrow_fields: Fields = Fields::from(
+        partition_schema
+            .fields()
+            .map(|f| f.try_into_arrow())
+            .collect::<Result<Vec<Field>, _>>()?,
+    );
+
+    Ok(StructArray::try_new(arrow_fields, columns, None)?)
+}
+
+fn map_array_from_path<'a>(batch: &'a RecordBatch, path: &str) -> DeltaResultLocal<&'a MapArray> {
+    let mut segments = path.split('.');
+    let first = segments
+        .next()
+        .ok_or_else(|| DeltaTableError::generic("partition column path must not be empty"))?;
+
+    let mut current: &dyn Array = batch
+        .column_by_name(first)
+        .map(|col| col.as_ref())
+        .ok_or_else(|| {
+            DeltaTableError::schema(format!("{first} column not found when parsing partitions"))
+        })?;
+
+    for segment in segments {
+        let struct_array = current
+            .as_any()
+            .downcast_ref::<StructArray>()
+            .ok_or_else(|| {
+                DeltaTableError::schema(format!("Expected struct column while traversing {path}"))
+            })?;
+        current = struct_array
+            .column_by_name(segment)
+            .map(|col| col.as_ref())
+            .ok_or_else(|| {
+                DeltaTableError::schema(format!(
+                    "{segment} column not found while traversing {path}"
+                ))
+            })?;
+    }
+
+    current
+        .as_any()
+        .downcast_ref::<MapArray>()
+        .ok_or_else(|| DeltaTableError::schema(format!("Column {path} is not a map")))
+}
+
+fn collect_partition_row(value: &StructArray) -> DeltaResultLocal<HashMap<String, Option<String>>> {
+    let keys = value
+        .column(0)
+        .as_any()
+        .downcast_ref::<StringArray>()
+        .ok_or_else(|| DeltaTableError::schema("map key column is not Utf8".to_string()))?;
+    let vals = value
+        .column(1)
+        .as_any()
+        .downcast_ref::<StringArray>()
+        .ok_or_else(|| DeltaTableError::schema("map value column is not Utf8".to_string()))?;
+
+    let mut result = HashMap::with_capacity(keys.len());
+    for (key, value) in keys.iter().zip(vals.iter()) {
+        if let Some(k) = key {
+            result.insert(k.to_string(), value.map(|v| v.to_string()));
+        }
+    }
+    Ok(result)
+}
+
 fn partitions_schema(
     schema: &StructType,
     partition_columns: &[String],
@@ -227,16 +379,16 @@ fn partitions_schema(
     if partition_columns.is_empty() {
         return Ok(None);
     }
-    Ok(Some(StructType::new(
+    Ok(Some(StructType::try_new(
         partition_columns
             .iter()
             .map(|col| {
                 schema.field(col).cloned().ok_or_else(|| {
-                    DeltaTableError::Generic(format!("Partition column {col} not found in schema"))
+                    DeltaTableError::generic(format!("Partition column {col} not found in schema"))
                 })
             })
             .collect::<Result<Vec<_>, _>>()?,
-    )))
+    )?))
 }
 
 /// Generates the expected schema for file statistics.
@@ -266,7 +418,7 @@ fn partitions_schema(
 pub(crate) fn stats_schema(
     physical_file_schema: &Schema,
     table_properties: &TableProperties,
-) -> Schema {
+) -> DeltaResult<Schema> {
     let mut fields = Vec::with_capacity(4);
     fields.push(StructField::nullable("numRecords", DataType::LONG));
 
@@ -294,8 +446,7 @@ pub(crate) fn stats_schema(
             fields.push(StructField::nullable("maxValues", min_max_schema));
         }
     }
-
-    StructType::new(fields)
+    StructType::try_new(fields)
 }
 
 // Convert a min/max stats schema into a nullcount schema (all leaf fields are LONG)
@@ -422,7 +573,10 @@ impl<'a> SchemaTransform<'a> for BaseStatsTransform {
         self.path.pop();
 
         // exclude struct fields with no children
-        if matches!(field.data_type(), DataType::Struct(dt) if dt.fields.is_empty()) {
+        if matches!(
+            field.data_type(),
+            DataType::Struct(dt) if dt.fields().count() == 0
+        ) {
             None
         } else {
             Some(field)
@@ -492,13 +646,11 @@ fn kernel_to_arrow(metadata: ScanMetadata) -> DeltaResult<ScanMetadataArrow> {
         .scan_file_transforms
         .into_iter()
         .enumerate()
-        .filter_map(|(i, v)| metadata.scan_files.selection_vector[i].then_some(v))
+        .filter_map(|(i, v)| metadata.scan_files.selection_vector()[i].then_some(v))
         .collect();
-    let batch = ArrowEngineData::try_from_engine_data(metadata.scan_files.data)?.into();
-    let scan_files = filter_record_batch(
-        &batch,
-        &BooleanArray::from(metadata.scan_files.selection_vector),
-    )?;
+    let (data, selection) = metadata.scan_files.into_parts();
+    let batch = ArrowEngineData::try_from_engine_data(data)?.into();
+    let scan_files = filter_record_batch(&batch, &BooleanArray::from(selection))?;
     Ok(ScanMetadataArrow {
         scan_files,
         scan_file_transforms,

@@ -11,11 +11,12 @@ use sail_common_datafusion::datasource::{
     DeleteInfo, PhysicalSinkMode, SinkInfo, SourceInfo, TableFormat,
 };
 use sail_common_datafusion::streaming::event::schema::is_flow_event_schema;
-use sail_delta_lake::create_delta_provider;
-use sail_delta_lake::delta_datafusion::{parse_predicate_expression, DataFusionMixins};
-use sail_delta_lake::delta_format::{DeltaDeletePlanBuilder, DeltaPlanBuilder};
-use sail_delta_lake::options::TableDeltaOptions;
+use sail_delta_lake::datasource::{parse_predicate_expression, DataFusionMixins};
+use sail_delta_lake::options::{ColumnMappingModeOption, TableDeltaOptions};
+use sail_delta_lake::physical_plan::plan_builder::DeltaTableConfig;
+use sail_delta_lake::physical_plan::{DeltaDeletePlanBuilder, DeltaPlanBuilder};
 use sail_delta_lake::table::open_table_with_object_store;
+use sail_delta_lake::{create_delta_provider, DeltaTableError, KernelError};
 use url::Url;
 
 use crate::options::{load_default_options, load_options, DeltaReadOptions, DeltaWriteOptions};
@@ -80,9 +81,14 @@ impl TableFormat for DeltaTableFormat {
             .get_store(&table_url)
             .map_err(|e| DataFusionError::External(Box::new(e)))?;
         let table_exists =
-            open_table_with_object_store(table_url.clone(), object_store, Default::default())
+            match open_table_with_object_store(table_url.clone(), object_store, Default::default())
                 .await
-                .is_ok();
+            {
+                Ok(_) => true,
+                Err(DeltaTableError::Kernel(KernelError::InvalidTableLocation(_)))
+                | Err(DeltaTableError::Kernel(KernelError::FileNotFound(_))) => false,
+                Err(err) => return Err(DataFusionError::External(Box::new(err))),
+            };
 
         // Handle cases that don't require actual writing
         match mode {
@@ -124,7 +130,7 @@ impl TableFormat for DeltaTableFormat {
             (mode, None)
         };
 
-        let table_config = sail_delta_lake::delta_format::plan_builder::DeltaTableConfig {
+        let table_config = DeltaTableConfig {
             table_url,
             options: delta_options,
             partition_columns: partition_by,
@@ -248,6 +254,13 @@ fn apply_delta_write_options(from: DeltaWriteOptions, to: &mut TableDeltaOptions
     }
     if let Some(write_batch_size) = from.write_batch_size {
         to.write_batch_size = write_batch_size;
+    }
+    if let Some(column_mapping_mode) = from.column_mapping_mode {
+        match column_mapping_mode.to_ascii_lowercase().as_str() {
+            "name" => to.column_mapping_mode = ColumnMappingModeOption::Name,
+            "id" => to.column_mapping_mode = ColumnMappingModeOption::Id,
+            _ => to.column_mapping_mode = ColumnMappingModeOption::None,
+        }
     }
     Ok(())
 }

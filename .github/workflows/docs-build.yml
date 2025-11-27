@@ -2,6 +2,7 @@ name: Docs Build
 
 # This workflow uses the following variable(s) from the environment:
 # - FATHOM_SITE_ID (optional)
+# - APOLLOIO_APP_ID (optional)
 
 on:
   workflow_call:
@@ -30,6 +31,8 @@ jobs:
 
       - name: Install Hatch
         uses: pypa/hatch@install
+        with:
+          version: 1.15.1
 
       - uses: pnpm/action-setup@v4
 
@@ -69,6 +72,8 @@ jobs:
           SAIL_SITE_URL: "https://${{ inputs.stage == 'prod' && 'docs' || 'docs.dev' }}.lakesail.com/sail/${{ inputs.version }}/"
           # The Fathom Analytics script will not be added if the site ID is not set.
           SAIL_FATHOM_SITE_ID: ${{ vars.FATHOM_SITE_ID }}
+          # The Apollo.io script will not be added if the app ID is not set.
+          SAIL_APOLLOIO_APP_ID: ${{ vars.APOLLOIO_APP_ID }}
         run: |
           if [[ "${SAIL_SITE_URL}" == */main/ ]]; then
             version="$(hatch version)+$(git rev-parse --short=7 HEAD)"

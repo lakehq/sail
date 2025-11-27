@@ -413,7 +413,7 @@ pub enum CommandNode {
     Explain {
         // TODO: Support stringified_plans
         mode: ExplainMode,
-        input: Box<QueryPlan>,
+        input: Box<Plan>,
     },
     InsertInto {
         input: Box<QueryPlan>,
@@ -679,7 +679,7 @@ pub struct Unpivot {
     /// When `ids` is [None] (for SQL statements), all remaining columns are included.
     /// When `ids` is [Some] (for the DataFrame API), only the specified columns are included.
     pub ids: Option<Vec<Expr>>,
-    pub values: Vec<UnpivotValue>,
+    pub values: Option<Vec<UnpivotValue>>,
     pub variable_column_name: Identifier,
     pub value_column_names: Vec<Identifier>,
     pub include_nulls: bool,
@@ -871,19 +871,14 @@ pub struct SaveBucketBy {
     pub num_buckets: usize,
 }
 
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[derive(Debug, Default, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub enum SaveMode {
     Append,
     Overwrite,
+    #[default]
     ErrorIfExists,
     IgnoreIfExists,
-}
-
-impl Default for SaveMode {
-    fn default() -> Self {
-        Self::ErrorIfExists
-    }
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]

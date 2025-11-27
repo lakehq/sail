@@ -22,8 +22,8 @@ brew install node
 Use the following commands to install the Rust toolchains via rustup.
 
 ```bash
-rustup toolchain install stable --component rustfmt clippy
-rustup toolchain install nightly --component rustfmt
+rustup toolchain install stable --profile default --component llvm-tools-preview
+rustup toolchain install nightly --profile default
 ```
 
 You also need the following tools when working on the project.

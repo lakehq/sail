@@ -3,6 +3,9 @@ use std::sync::Arc;
 
 use datafusion::arrow::datatypes as adt;
 use sail_common::spec;
+use sail_common::spec::{
+    SAIL_LIST_FIELD_NAME, SAIL_MAP_FIELD_NAME, SAIL_MAP_KEY_FIELD_NAME, SAIL_MAP_VALUE_FIELD_NAME,
+};
 
 use crate::config::DefaultTimestampType;
 use crate::error::{PlanError, PlanResult};
@@ -100,7 +103,7 @@ impl PlanResolver<'_> {
                 nullable,
             } => {
                 let field = spec::Field {
-                    name: "item".to_string(),
+                    name: SAIL_LIST_FIELD_NAME.to_string(),
                     data_type: data_type.as_ref().clone(),
                     nullable: *nullable,
                     metadata: vec![],
@@ -115,7 +118,7 @@ impl PlanResolver<'_> {
                 length,
             } => {
                 let field = spec::Field {
-                    name: "item".to_string(),
+                    name: SAIL_LIST_FIELD_NAME.to_string(),
                     data_type: data_type.as_ref().clone(),
                     nullable: *nullable,
                     metadata: vec![],
@@ -130,7 +133,7 @@ impl PlanResolver<'_> {
                 nullable,
             } => {
                 let field = spec::Field {
-                    name: "item".to_string(),
+                    name: SAIL_LIST_FIELD_NAME.to_string(),
                     data_type: data_type.as_ref().clone(),
                     nullable: *nullable,
                     metadata: vec![],
@@ -176,13 +179,13 @@ impl PlanResolver<'_> {
             } => {
                 let fields = spec::Fields::from(vec![
                     spec::Field {
-                        name: "key".to_string(),
+                        name: SAIL_MAP_KEY_FIELD_NAME.to_string(),
                         data_type: *key_type.clone(),
                         nullable: false,
                         metadata: vec![],
                     },
                     spec::Field {
-                        name: "value".to_string(),
+                        name: SAIL_MAP_VALUE_FIELD_NAME.to_string(),
                         data_type: *value_type.clone(),
                         nullable: *value_type_nullable,
                         metadata: vec![],
@@ -190,7 +193,7 @@ impl PlanResolver<'_> {
                 ]);
                 Ok(adt::DataType::Map(
                     Arc::new(adt::Field::new(
-                        "entries",
+                        SAIL_MAP_FIELD_NAME,
                         adt::DataType::Struct(self.resolve_fields(&fields, state)?),
                         false,
                     )),

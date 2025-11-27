@@ -1,69 +1,86 @@
+// https://github.com/delta-io/delta-rs/blob/5575ad16bf641420404611d65f4ad7626e9acb16/LICENSE.txt
+//
+// Copyright (2020) QP Hou and a number of other contributors.
+// Portions Copyright (2025) LakeSail, Inc.
+// Modified in 2025 by LakeSail, Inc.
+//
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+//     http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
+
 // [Credit]: <https://github.com/delta-io/delta-rs/blob/1f0b4d0965a85400c1effc6e9b4c7ebbb6795978/crates/core/src/kernel/transaction/protocol.rs>
 
 use std::collections::HashSet;
 use std::sync::LazyLock;
 
-use delta_kernel::table_features::{ReaderFeature, WriterFeature};
-use deltalake::kernel::{contains_timestampntz, Action, Protocol, Schema};
-use deltalake::protocol::DeltaOperation;
-use deltalake::table::config::TablePropertiesExt as _;
+use delta_kernel::table_features::TableFeature;
 
 use super::{TableReference, TransactionError};
+use crate::kernel::models::{contains_timestampntz, Action, Protocol, Schema};
 use crate::kernel::snapshot::EagerSnapshot;
+use crate::kernel::{DeltaOperation, TablePropertiesExt};
 use crate::table::DeltaTableState;
 
-static READER_V2: LazyLock<HashSet<ReaderFeature>> =
-    LazyLock::new(|| HashSet::from_iter([ReaderFeature::ColumnMapping]));
-static WRITER_V2: LazyLock<HashSet<WriterFeature>> =
-    LazyLock::new(|| HashSet::from_iter([WriterFeature::AppendOnly, WriterFeature::Invariants]));
-static WRITER_V3: LazyLock<HashSet<WriterFeature>> = LazyLock::new(|| {
+static READER_V2: LazyLock<HashSet<TableFeature>> =
+    LazyLock::new(|| HashSet::from_iter([TableFeature::ColumnMapping]));
+static WRITER_V2: LazyLock<HashSet<TableFeature>> =
+    LazyLock::new(|| HashSet::from_iter([TableFeature::AppendOnly, TableFeature::Invariants]));
+static WRITER_V3: LazyLock<HashSet<TableFeature>> = LazyLock::new(|| {
     HashSet::from_iter([
-        WriterFeature::AppendOnly,
-        WriterFeature::Invariants,
-        WriterFeature::CheckConstraints,
+        TableFeature::AppendOnly,
+        TableFeature::Invariants,
+        TableFeature::CheckConstraints,
     ])
 });
-static WRITER_V4: LazyLock<HashSet<WriterFeature>> = LazyLock::new(|| {
+static WRITER_V4: LazyLock<HashSet<TableFeature>> = LazyLock::new(|| {
     HashSet::from_iter([
-        WriterFeature::AppendOnly,
-        WriterFeature::Invariants,
-        WriterFeature::CheckConstraints,
-        WriterFeature::ChangeDataFeed,
-        WriterFeature::GeneratedColumns,
+        TableFeature::AppendOnly,
+        TableFeature::Invariants,
+        TableFeature::CheckConstraints,
+        TableFeature::ChangeDataFeed,
+        TableFeature::GeneratedColumns,
     ])
 });
-static WRITER_V5: LazyLock<HashSet<WriterFeature>> = LazyLock::new(|| {
+static WRITER_V5: LazyLock<HashSet<TableFeature>> = LazyLock::new(|| {
     HashSet::from_iter([
-        WriterFeature::AppendOnly,
-        WriterFeature::Invariants,
-        WriterFeature::CheckConstraints,
-        WriterFeature::ChangeDataFeed,
-        WriterFeature::GeneratedColumns,
-        WriterFeature::ColumnMapping,
+        TableFeature::AppendOnly,
+        TableFeature::Invariants,
+        TableFeature::CheckConstraints,
+        TableFeature::ChangeDataFeed,
+        TableFeature::GeneratedColumns,
+        TableFeature::ColumnMapping,
     ])
 });
-static WRITER_V6: LazyLock<HashSet<WriterFeature>> = LazyLock::new(|| {
+static WRITER_V6: LazyLock<HashSet<TableFeature>> = LazyLock::new(|| {
     HashSet::from_iter([
-        WriterFeature::AppendOnly,
-        WriterFeature::Invariants,
-        WriterFeature::CheckConstraints,
-        WriterFeature::ChangeDataFeed,
-        WriterFeature::GeneratedColumns,
-        WriterFeature::ColumnMapping,
-        WriterFeature::IdentityColumns,
+        TableFeature::AppendOnly,
+        TableFeature::Invariants,
+        TableFeature::CheckConstraints,
+        TableFeature::ChangeDataFeed,
+        TableFeature::GeneratedColumns,
+        TableFeature::ColumnMapping,
+        TableFeature::IdentityColumns,
     ])
 });
 
 pub struct ProtocolChecker {
-    reader_features: HashSet<ReaderFeature>,
-    writer_features: HashSet<WriterFeature>,
+    reader_features: HashSet<TableFeature>,
+    writer_features: HashSet<TableFeature>,
 }
 
 impl ProtocolChecker {
     /// Create a new protocol checker.
     pub fn new(
-        reader_features: HashSet<ReaderFeature>,
-        writer_features: HashSet<WriterFeature>,
+        reader_features: HashSet<TableFeature>,
+        writer_features: HashSet<TableFeature>,
     ) -> Self {
         Self {
             reader_features,
@@ -96,23 +113,23 @@ impl ProtocolChecker {
         schema: &Schema,
     ) -> Result<(), TransactionError> {
         let contains_timestampntz = contains_timestampntz(schema.fields());
-        let required_features: Option<&[WriterFeature]> =
+        let required_features: Option<&[TableFeature]> =
             match snapshot.protocol().min_writer_version() {
                 0..=6 => None,
                 _ => snapshot.protocol().writer_features(),
             };
 
         if let Some(table_features) = required_features {
-            if !table_features.contains(&WriterFeature::TimestampWithoutTimezone)
+            if !table_features.contains(&TableFeature::TimestampWithoutTimezone)
                 && contains_timestampntz
             {
-                return Err(TransactionError::WriterFeaturesRequired(
-                    WriterFeature::TimestampWithoutTimezone,
+                return Err(TransactionError::TableFeaturesRequired(
+                    TableFeature::TimestampWithoutTimezone,
                 ));
             }
         } else if contains_timestampntz {
-            return Err(TransactionError::WriterFeaturesRequired(
-                WriterFeature::TimestampWithoutTimezone,
+            return Err(TransactionError::TableFeaturesRequired(
+                TableFeature::TimestampWithoutTimezone,
             ));
         }
         Ok(())
@@ -124,17 +141,16 @@ impl ProtocolChecker {
     }
 
     pub fn can_read_from_protocol(&self, protocol: &Protocol) -> Result<(), TransactionError> {
-        let required_features: Option<HashSet<ReaderFeature>> = match protocol.min_reader_version()
-        {
+        let required_features: Option<HashSet<TableFeature>> = match protocol.min_reader_version() {
             0 | 1 => None,
             2 => Some(READER_V2.clone()),
             // _ => protocol.reader_features_set(),
-            _ => Some(HashSet::new()), // FIXME: adopt kernel actions
+            _ => Some(HashSet::new()),
         };
         if let Some(features) = required_features {
             let mut diff = features.difference(&self.reader_features).peekable();
             if diff.peek().is_some() {
-                return Err(TransactionError::UnsupportedReaderFeatures(
+                return Err(TransactionError::UnsupportedTableFeatures(
                     diff.cloned().collect(),
                 ));
             }
@@ -148,7 +164,7 @@ impl ProtocolChecker {
         self.can_read_from(snapshot)?;
         let min_writer_version = snapshot.protocol().min_writer_version();
 
-        let required_features: Option<HashSet<WriterFeature>> = match min_writer_version {
+        let required_features: Option<HashSet<TableFeature>> = match min_writer_version {
             0 | 1 => None,
             2 => Some(WRITER_V2.clone()),
             3 => Some(WRITER_V3.clone()),
@@ -156,13 +172,13 @@ impl ProtocolChecker {
             5 => Some(WRITER_V5.clone()),
             6 => Some(WRITER_V6.clone()),
             //  _ => snapshot.protocol().writer_features_set(),
-            _ => Some(HashSet::new()), // FIXME: adopt kernel actions
+            _ => Some(HashSet::new()),
         };
 
         if let Some(features) = required_features {
             let mut diff = features.difference(&self.writer_features).peekable();
             if diff.peek().is_some() {
-                return Err(TransactionError::UnsupportedWriterFeatures(
+                return Err(TransactionError::UnsupportedTableFeatures(
                     diff.cloned().collect(),
                 ));
             }
@@ -187,10 +203,10 @@ impl ProtocolChecker {
             snapshot
                 .protocol()
                 .writer_features()
-                .ok_or(TransactionError::WriterFeaturesRequired(
-                    WriterFeature::AppendOnly,
+                .ok_or(TransactionError::TableFeaturesRequired(
+                    TableFeature::AppendOnly,
                 ))?
-                .contains(&WriterFeature::AppendOnly)
+                .contains(&TableFeature::AppendOnly)
                 && snapshot.config().append_only()
         };
         if append_only_enabled {
@@ -220,20 +236,20 @@ impl ProtocolChecker {
 /// resulting version support is determined by the supported table feature set.
 pub static INSTANCE: LazyLock<ProtocolChecker> = LazyLock::new(|| {
     let mut reader_features = HashSet::new();
-    reader_features.insert(ReaderFeature::TimestampWithoutTimezone);
-    // reader_features.insert(ReaderFeature::ColumnMapping);
+    reader_features.insert(TableFeature::TimestampWithoutTimezone);
+    reader_features.insert(TableFeature::ColumnMapping);
 
     let mut writer_features = HashSet::new();
-    writer_features.insert(WriterFeature::AppendOnly);
-    writer_features.insert(WriterFeature::TimestampWithoutTimezone);
+    writer_features.insert(TableFeature::AppendOnly);
+    writer_features.insert(TableFeature::TimestampWithoutTimezone);
     {
-        writer_features.insert(WriterFeature::ChangeDataFeed);
-        writer_features.insert(WriterFeature::Invariants);
-        writer_features.insert(WriterFeature::CheckConstraints);
-        writer_features.insert(WriterFeature::GeneratedColumns);
+        writer_features.insert(TableFeature::ChangeDataFeed);
+        writer_features.insert(TableFeature::Invariants);
+        writer_features.insert(TableFeature::CheckConstraints);
+        writer_features.insert(TableFeature::GeneratedColumns);
     }
-    // writer_features.insert(WriterFeature::ColumnMapping);
-    // writer_features.insert(WriterFeature::IdentityColumns);
+    writer_features.insert(TableFeature::ColumnMapping);
+    // writer_features.insert(TableFeature::IdentityColumns);
 
     ProtocolChecker::new(reader_features, writer_features)
 });

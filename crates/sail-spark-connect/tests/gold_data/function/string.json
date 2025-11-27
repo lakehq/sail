@@ -63,7 +63,7 @@
         }
       },
       "output": {
-        "failure": "invalid argument: found 'Spark SQL' at 17:28 expected identifier"
+        "failure": "invalid argument: found collate at 29:36 expected string, '.', '[', '::', 'ESCAPE', 'IS', 'NOT', 'IN', '*', '/', '%', 'DIV', '+', '-', '||', '>>>', '>>', '<<', '&', '^', '|', '!=', '!>', '!<', '==', '=', '>=', '>', '<=>', '<=', '<>', '<', 'BETWEEN', 'LIKE', 'ILIKE', 'RLIKE', 'REGEXP', 'SIMILAR', 'AND', 'OR', ',', 'RESPECT', 'IGNORE', or ')'"
       }
     },
     {
@@ -1051,7 +1051,7 @@
         }
       },
       "output": {
-        "failure": "error in DataFusion: Arrow error: Invalid argument error: Encountered non UTF-8 data: invalid utf-8 sequence of 1 bytes from index 0"
+        "failure": "error in DataFusion: Optimizer rule 'simplify_expressions' failed\ncaused by\nArrow error: Invalid argument error: Encountered non UTF-8 data: invalid utf-8 sequence of 1 bytes from index 0"
       }
     },
     {
@@ -1073,7 +1073,7 @@
         }
       },
       "output": {
-        "failure": "error in DataFusion: Arrow error: Invalid argument error: Encountered non UTF-8 data: invalid utf-8 sequence of 1 bytes from index 0"
+        "failure": "error in DataFusion: Optimizer rule 'simplify_expressions' failed\ncaused by\nArrow error: Invalid argument error: Encountered non UTF-8 data: invalid utf-8 sequence of 1 bytes from index 0"
       }
     },
     {
@@ -1095,7 +1095,7 @@
         }
       },
       "output": {
-        "failure": "error in DataFusion: Arrow error: Invalid argument error: Encountered non UTF-8 data: invalid utf-8 sequence of 1 bytes from index 0"
+        "failure": "error in DataFusion: Optimizer rule 'simplify_expressions' failed\ncaused by\nArrow error: Invalid argument error: Encountered non UTF-8 data: invalid utf-8 sequence of 1 bytes from index 0"
       }
     },
     {
@@ -1117,7 +1117,7 @@
         }
       },
       "output": {
-        "failure": "error in DataFusion: Arrow error: Invalid argument error: Encountered non UTF-8 data: invalid utf-8 sequence of 1 bytes from index 0"
+        "failure": "error in DataFusion: Optimizer rule 'simplify_expressions' failed\ncaused by\nArrow error: Invalid argument error: Encountered non UTF-8 data: invalid utf-8 sequence of 1 bytes from index 0"
       }
     },
     {
@@ -1623,7 +1623,7 @@
         }
       },
       "output": {
-        "failure": "not implemented: function: luhn_check"
+        "success": "ok"
       }
     },
     {
@@ -1645,7 +1645,7 @@
         }
       },
       "output": {
-        "failure": "not implemented: function: luhn_check"
+        "success": "ok"
       }
     },
     {
@@ -1667,7 +1667,7 @@
         }
       },
       "output": {
-        "failure": "not implemented: function: luhn_check"
+        "success": "ok"
       }
     },
     {

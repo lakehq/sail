@@ -1,29 +1,47 @@
+// https://github.com/delta-io/delta-rs/blob/5575ad16bf641420404611d65f4ad7626e9acb16/LICENSE.txt
+//
+// Copyright (2020) QP Hou and a number of other contributors.
+// Portions Copyright (2025) LakeSail, Inc.
+// Modified in 2025 by LakeSail, Inc.
+//
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+//     http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
+
 // [Credit]: <https://github.com/delta-io/delta-rs/blob/1f0b4d0965a85400c1effc6e9b4c7ebbb6795978/crates/core/src/kernel/transaction/mod.rs>
 
 use std::collections::HashMap;
 use std::sync::Arc;
 
+use async_trait::async_trait;
 use bytes::Bytes;
 use chrono::Utc;
+use datafusion::catalog::Session;
+use delta_kernel::table_features::TableFeature;
 use delta_kernel::table_properties::TableProperties;
-use deltalake::checkpoints::cleanup_expired_logs_for;
-use deltalake::kernel::transaction::CommitData;
-// create_checkpoint_for
-use deltalake::kernel::transaction::{CommitMetrics, Metrics, PostCommitMetrics, TransactionError};
-use deltalake::kernel::{Action, Metadata, Protocol, Transaction};
-use deltalake::logstore::{CommitOrBytes, LogStoreRef, ObjectStoreRef};
-use deltalake::operations::CustomExecuteHandler;
-use deltalake::protocol::DeltaOperation;
-use deltalake::table::config::TablePropertiesExt as _;
-use deltalake::DeltaResult;
 use futures::future::BoxFuture;
 use log::*;
 use object_store::path::Path;
+use object_store::Error as ObjectStoreError;
+use serde::{Deserialize, Serialize};
 use serde_json::Value;
+use thiserror::Error;
 use uuid::Uuid;
 
+use crate::kernel::checkpoints::cleanup_expired_logs_for;
+use crate::kernel::models::{Action, Metadata, Protocol, Transaction};
 use crate::kernel::snapshot::EagerSnapshot;
-use crate::kernel::transaction::conflict_checker::WinningCommitSummary;
+use crate::kernel::transaction::conflict_checker::{TransactionInfo, WinningCommitSummary};
+use crate::kernel::{DeltaOperation, DeltaResult, TablePropertiesExt};
+use crate::storage::{CommitOrBytes, LogStoreRef, ObjectStoreRef};
 use crate::table::DeltaTableState;
 
 mod conflict_checker;
@@ -32,10 +50,135 @@ mod protocol;
 use conflict_checker::ConflictChecker;
 pub use protocol::INSTANCE as PROTOCOL;
 
-use crate::kernel::transaction::conflict_checker::TransactionInfo;
-
 const DELTA_LOG_FOLDER: &str = "_delta_log";
 pub(crate) const DEFAULT_RETRIES: usize = 15;
+
+#[derive(Default, Debug, PartialEq, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct CommitMetrics {
+    pub num_retries: u64,
+}
+
+#[derive(Default, Debug, PartialEq, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct PostCommitMetrics {
+    pub new_checkpoint_created: bool,
+    pub num_log_files_cleaned_up: u64,
+}
+
+#[derive(Default, Debug, PartialEq, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct Metrics {
+    pub num_retries: u64,
+    pub new_checkpoint_created: bool,
+    pub num_log_files_cleaned_up: u64,
+}
+
+#[derive(Error, Debug)]
+pub enum TransactionError {
+    #[error("Tried committing existing table version: {0}")]
+    VersionAlreadyExists(i64),
+
+    #[error("Error serializing commit log to json: {json_err}")]
+    SerializeLogJson { json_err: serde_json::error::Error },
+
+    #[error("Log storage error: {source}")]
+    ObjectStore {
+        #[from]
+        source: ObjectStoreError,
+    },
+
+    #[error("Failed to commit transaction: {0}")]
+    CommitConflict(#[from] conflict_checker::CommitConflictError),
+
+    #[error("Failed to commit transaction: {0}")]
+    MaxCommitAttempts(i32),
+
+    #[error(
+        "The transaction includes Remove action with data change but Delta table is append-only"
+    )]
+    DeltaTableAppendOnly,
+
+    #[error("Unsupported table features required: {0:?}")]
+    UnsupportedTableFeatures(Vec<TableFeature>),
+
+    #[error("Table features must be specified, please specify: {0:?}")]
+    TableFeaturesRequired(TableFeature),
+
+    #[error("Transaction failed: {msg}")]
+    LogStoreError {
+        msg: String,
+        #[source]
+        source: Box<dyn std::error::Error + Send + Sync + 'static>,
+    },
+}
+
+#[derive(Debug)]
+pub struct CommitData {
+    pub actions: Vec<Action>,
+    pub operation: DeltaOperation,
+    _app_metadata: HashMap<String, Value>,
+    _app_transactions: Vec<Transaction>,
+}
+
+impl CommitData {
+    pub fn new(
+        mut actions: Vec<Action>,
+        operation: DeltaOperation,
+        mut app_metadata: HashMap<String, Value>,
+        app_transactions: Vec<Transaction>,
+    ) -> Self {
+        if !actions.iter().any(|a| matches!(a, Action::CommitInfo(..))) {
+            let mut commit_info = operation.get_commit_info();
+            commit_info.timestamp = Some(Utc::now().timestamp_millis());
+            app_metadata.insert(
+                "clientVersion".to_string(),
+                Value::String(format!("sail-delta-lake.{}", env!("CARGO_PKG_VERSION"))),
+            );
+            app_metadata.extend(commit_info.info.clone());
+            commit_info.info = app_metadata.clone();
+            actions.push(Action::CommitInfo(commit_info));
+        }
+
+        for txn in &app_transactions {
+            actions.push(Action::Txn(txn.clone()));
+        }
+
+        Self {
+            actions,
+            operation,
+            _app_metadata: app_metadata,
+            _app_transactions: app_transactions,
+        }
+    }
+
+    pub fn get_bytes(&self) -> Result<Bytes, TransactionError> {
+        let mut jsons = Vec::<String>::new();
+        for action in &self.actions {
+            let json = serde_json::to_string(action)
+                .map_err(|e| TransactionError::SerializeLogJson { json_err: e })?;
+            jsons.push(json);
+        }
+        Ok(Bytes::from(jsons.join("\n")))
+    }
+}
+
+#[async_trait]
+pub trait CustomExecuteHandler: Send + Sync {
+    async fn before_post_commit_hook(
+        &self,
+        log_store: &LogStoreRef,
+        file_operation: bool,
+        operation_id: Uuid,
+    ) -> DeltaResult<()>;
+
+    async fn after_post_commit_hook(
+        &self,
+        log_store: &LogStoreRef,
+        file_operation: bool,
+        operation_id: Uuid,
+    ) -> DeltaResult<()>;
+}
 
 /// Reference to some structure that contains mandatory attributes for performing a commit.
 pub trait TableReference: Send + Sync {
@@ -73,19 +216,19 @@ impl TableReference for EagerSnapshot {
 
 impl TableReference for DeltaTableState {
     fn config(&self) -> &TableProperties {
-        self.snapshot.config()
+        self.table_properties()
     }
 
     fn protocol(&self) -> &Protocol {
-        self.snapshot.protocol()
+        EagerSnapshot::protocol(self)
     }
 
     fn metadata(&self) -> &Metadata {
-        self.snapshot.metadata()
+        EagerSnapshot::metadata(self)
     }
 
     fn eager_snapshot(&self) -> &EagerSnapshot {
-        &self.snapshot
+        self
     }
 }
 
@@ -247,6 +390,7 @@ impl<'a> CommitBuilder {
         table_data: Option<&'a dyn TableReference>,
         log_store: LogStoreRef,
         operation: DeltaOperation,
+        session: &'a dyn Session,
     ) -> PreCommit<'a> {
         let data = CommitData::new(
             self.actions,
@@ -262,6 +406,7 @@ impl<'a> CommitBuilder {
             post_commit_hook: self.post_commit_hook,
             post_commit_hook_handler: self.post_commit_hook_handler,
             operation_id: self.operation_id,
+            session,
         }
     }
 }
@@ -275,6 +420,7 @@ pub struct PreCommit<'a> {
     post_commit_hook: Option<PostCommitHookProperties>,
     post_commit_hook_handler: Option<Arc<dyn CustomExecuteHandler>>,
     operation_id: Uuid,
+    session: &'a dyn Session,
 }
 
 impl<'a> std::future::IntoFuture for PreCommit<'a> {
@@ -304,8 +450,9 @@ impl<'a> PreCommit<'a> {
         }
 
         Box::pin(async move {
+            let local_actions: Vec<_> = this.data.actions.to_vec();
             if let Some(table_reference) = this.table_data {
-                PROTOCOL.can_commit(table_reference, &this.data.actions, &this.data.operation)?;
+                PROTOCOL.can_commit(table_reference, &local_actions, &this.data.operation)?;
             }
             let log_entry = this.data.get_bytes()?;
 
@@ -332,6 +479,7 @@ impl<'a> PreCommit<'a> {
                 post_commit: this.post_commit_hook,
                 post_commit_hook_handler: this.post_commit_hook_handler,
                 operation_id: this.operation_id,
+                session: this.session,
             })
         })
     }
@@ -347,6 +495,7 @@ pub struct PreparedCommit<'a> {
     post_commit: Option<PostCommitHookProperties>,
     post_commit_hook_handler: Option<Arc<dyn CustomExecuteHandler>>,
     operation_id: Uuid,
+    session: &'a dyn Session,
 }
 
 // impl PreparedCommit<'_> {
@@ -365,6 +514,7 @@ impl<'a> std::future::IntoFuture for PreparedCommit<'a> {
 
         Box::pin(async move {
             let commit_or_bytes = this.commit_or_bytes;
+            let local_actions: Vec<_> = this.data.actions.to_vec();
 
             if this.table_data.is_none() {
                 this.log_store
@@ -402,7 +552,11 @@ impl<'a> std::future::IntoFuture for PreparedCommit<'a> {
                             TransactionError::MaxCommitAttempts(this.max_retries as i32).into()
                         );
                     }
-                    warn!("Attempting to write a transaction {} but the underlying table has been updated to {latest_version}\n{:?}", read_snapshot.version() + 1, this.log_store);
+                    warn!(
+                        "Attempting to write a transaction {} but the underlying table has been updated to {latest_version} (log_store={})",
+                        read_snapshot.version() + 1,
+                        this.log_store.name()
+                    );
                     let mut steps = latest_version - read_snapshot.version();
 
                     // Need to check for conflicts with each version between the read_snapshot and
@@ -417,8 +571,9 @@ impl<'a> std::future::IntoFuture for PreparedCommit<'a> {
                         let transaction_info = TransactionInfo::try_new(
                             read_snapshot.log_data(),
                             this.data.operation.read_predicate(),
-                            &this.data.actions,
+                            &local_actions,
                             this.data.operation.read_whole_table(),
+                            Some(this.session),
                         )?;
                         let conflict_checker = ConflictChecker::new(
                             transaction_info,
@@ -436,7 +591,7 @@ impl<'a> std::future::IntoFuture for PreparedCommit<'a> {
                     }
                     // Update snapshot to latest version after successful conflict check
                     read_snapshot
-                        .update(&this.log_store, Some(latest_version as u64))
+                        .update(this.log_store.as_ref(), Some(latest_version as u64))
                         .await?;
                 }
                 let version: i64 = latest_version + 1;
@@ -509,7 +664,7 @@ impl PostCommit {
             let mut snapshot = table.eager_snapshot().clone();
             if self.version != snapshot.version() {
                 snapshot
-                    .update(&self.log_store, Some(self.version as u64))
+                    .update(self.log_store.as_ref(), Some(self.version as u64))
                     .await?;
             }
 
@@ -518,7 +673,7 @@ impl PostCommit {
             let cleanup_logs = if let Some(cleanup_logs) = self.cleanup_expired_logs {
                 cleanup_logs
             } else {
-                state.table_config().enable_expired_log_cleanup()
+                state.table_properties().enable_expired_log_cleanup()
             };
 
             // Run arbitrary before_post_commit_hook code
@@ -552,13 +707,16 @@ impl PostCommit {
                     self.version,
                     self.log_store.as_ref(),
                     Utc::now().timestamp_millis()
-                        - state.table_config().log_retention_duration().as_millis() as i64,
+                        - state
+                            .table_properties()
+                            .log_retention_duration()
+                            .as_millis() as i64,
                     Some(post_commit_operation_id),
                 )
                 .await? as u64;
                 if num_log_files_cleaned_up > 0 {
                     state = DeltaTableState::try_new(
-                        &self.log_store,
+                        self.log_store.as_ref(),
                         state.load_config().clone(),
                         Some(self.version),
                     )
@@ -584,9 +742,12 @@ impl PostCommit {
                 },
             ))
         } else {
-            let state =
-                DeltaTableState::try_new(&self.log_store, Default::default(), Some(self.version))
-                    .await?;
+            let state = DeltaTableState::try_new(
+                self.log_store.as_ref(),
+                Default::default(),
+                Some(self.version),
+            )
+            .await?;
             Ok((
                 state,
                 PostCommitMetrics {

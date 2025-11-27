@@ -1,41 +1,66 @@
+// https://github.com/delta-io/delta-rs/blob/5575ad16bf641420404611d65f4ad7626e9acb16/LICENSE.txt
+//
+// Copyright (2020) QP Hou and a number of other contributors.
+// Portions Copyright (2025) LakeSail, Inc.
+// Modified in 2025 by LakeSail, Inc.
+//
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+//     http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
+
 // [Credit]: <https://github.com/delta-io/delta-rs/blob/1f0b4d0965a85400c1effc6e9b4c7ebbb6795978/crates/core/src/kernel/snapshot/mod.rs>
 
+use std::collections::HashMap;
 use std::io::{BufRead, BufReader, Cursor};
+use std::str::FromStr;
 use std::sync::{Arc, LazyLock};
 
-use datafusion::arrow::array::RecordBatch;
+use datafusion::arrow::array::{
+    Array, BooleanArray, Int32Array, Int64Array, MapArray, RecordBatch, StringArray, StructArray,
+};
 use datafusion::arrow::compute::concat_batches;
+use delta_kernel::actions::{Remove as KernelRemove, Sidecar};
 use delta_kernel::engine::arrow_conversion::TryIntoArrow;
 use delta_kernel::engine::arrow_data::ArrowEngineData;
 use delta_kernel::path::{LogPathFileType, ParsedLogPath};
 use delta_kernel::scan::scan_row_schema;
-use delta_kernel::schema::SchemaRef;
+use delta_kernel::schema::derive_macro_utils::ToDataType;
+use delta_kernel::schema::{SchemaRef, StructField};
 use delta_kernel::snapshot::Snapshot as KernelSnapshot;
 use delta_kernel::table_configuration::TableConfiguration;
 use delta_kernel::table_properties::TableProperties;
 use delta_kernel::{PredicateRef, Version};
-use deltalake::kernel::{Action, ActionType, CommitInfo, Metadata, Protocol, Remove, StructType};
-use deltalake::logstore::LogStore;
-use deltalake::{DeltaResult, DeltaTableConfig, DeltaTableError};
 use futures::stream::BoxStream;
 use futures::{StreamExt, TryStreamExt};
 use itertools::Itertools;
 use object_store::path::Path;
 use object_store::ObjectStore;
+use percent_encoding::percent_decode_str;
+use sail_common_datafusion::array::record_batch::cast_record_batch_relaxed_tz;
 use tokio::task::spawn_blocking;
 use url::Url;
 
 use crate::kernel::arrow::engine_ext::{ScanExt, SnapshotExt};
-use crate::kernel::models::fields::ActionTypeExt;
+use crate::kernel::models::{
+    Action, CommitInfo, DeletionVectorDescriptor, Metadata, Protocol, Remove, StorageType,
+    StructType,
+};
 use crate::kernel::snapshot::iterators::LogicalFileView;
 pub use crate::kernel::snapshot::log_data::LogDataHandler;
-use crate::kernel::snapshot::parse::read_removes;
 use crate::kernel::snapshot::stream::{RecordBatchReceiverStreamBuilder, SendableRBStream};
+use crate::kernel::{DeltaResult, DeltaTableConfig, DeltaTableError};
+use crate::storage::LogStore;
 
 pub mod iterators;
 pub mod log_data;
-mod parse;
-pub mod replay;
 mod stream;
 
 pub(crate) static SCAN_ROW_ARROW_SCHEMA: LazyLock<arrow_schema::SchemaRef> = LazyLock::new(|| {
@@ -82,16 +107,20 @@ impl Snapshot {
             table_root.set_path(&format!("{}/", table_root.path()));
         }
         let snapshot = match spawn_blocking(move || {
-            KernelSnapshot::try_new(table_root, engine.as_ref(), version)
+            let mut builder = KernelSnapshot::builder_for(table_root);
+            if let Some(v) = version {
+                builder = builder.at_version(v);
+            }
+            builder.build(engine.as_ref())
         })
         .await
-        .map_err(|e| DeltaTableError::Generic(e.to_string()))?
+        .map_err(|e| DeltaTableError::generic(e.to_string()))?
         {
             Ok(snapshot) => snapshot,
             Err(e) => {
                 // TODO: we should have more handling-friendly errors upstream in kernel.
                 if e.to_string().contains("No files in log segment") {
-                    return Err(DeltaTableError::NotATable(e.to_string()));
+                    return Err(DeltaTableError::invalid_table_location(e.to_string()));
                 } else {
                     return Err(e.into());
                 }
@@ -101,7 +130,7 @@ impl Snapshot {
         let schema = snapshot.table_configuration().schema();
 
         Ok(Self {
-            inner: Arc::new(snapshot),
+            inner: snapshot,
             config,
             schema,
             table_url: log_store.config().location.clone(),
@@ -119,7 +148,7 @@ impl Snapshot {
                 return Ok(());
             }
             if version < self.version() as u64 {
-                return Err(DeltaTableError::Generic("Cannot downgrade snapshot".into()));
+                return Err(DeltaTableError::generic("Cannot downgrade snapshot"));
             }
         }
 
@@ -127,10 +156,14 @@ impl Snapshot {
         let engine = log_store.engine(None);
         let current = self.inner.clone();
         let snapshot = spawn_blocking(move || {
-            KernelSnapshot::try_new_from(current, engine.as_ref(), target_version)
+            let mut builder = KernelSnapshot::builder_from(current);
+            if let Some(v) = target_version {
+                builder = builder.at_version(v);
+            }
+            builder.build(engine.as_ref())
         })
         .await
-        .map_err(|e| DeltaTableError::Generic(e.to_string()))??;
+        .map_err(|e| DeltaTableError::generic(e.to_string()))??;
 
         self.inner = snapshot;
         self.schema = self.inner.table_configuration().schema();
@@ -150,12 +183,12 @@ impl Snapshot {
 
     /// Get the table metadata of the snapshot
     pub fn metadata(&self) -> &Metadata {
-        self.inner.metadata()
+        self.inner.table_configuration().metadata()
     }
 
     /// Get the table protocol of the snapshot
     pub fn protocol(&self) -> &Protocol {
-        self.inner.protocol()
+        self.inner.table_configuration().protocol()
     }
 
     /// Get the table config which is loaded with of the snapshot
@@ -208,11 +241,7 @@ impl Snapshot {
             .build()
         {
             Ok(scan) => scan,
-            Err(err) => {
-                return Box::pin(futures::stream::once(async {
-                    Err(DeltaTableError::KernelError(err))
-                }))
-            }
+            Err(err) => return Box::pin(futures::stream::once(async { Err(err.into()) })),
         };
 
         // TODO: which capacity to choose?
@@ -226,7 +255,11 @@ impl Snapshot {
             let scan_iter = scan.scan_metadata_arrow(engine.as_ref())?;
             for res in scan_iter {
                 let batch = res?.scan_files;
-                let batch = inner.parse_stats_column(&batch)?;
+                // Be tolerant of malformed or empty stats JSON
+                let batch = match inner.parse_stats_column(&batch) {
+                    Ok(parsed) => parsed,
+                    Err(_) => batch,
+                };
                 if tx.blocking_send(Ok(batch)).is_err() {
                     break;
                 }
@@ -310,10 +343,13 @@ impl Snapshot {
         log_store: &dyn LogStore,
     ) -> BoxStream<'_, DeltaResult<Remove>> {
         static TOMBSTONE_SCHEMA: LazyLock<Arc<StructType>> = LazyLock::new(|| {
-            Arc::new(StructType::new(vec![
-                ActionType::Remove.schema_field().clone(),
-                ActionType::Sidecar.schema_field().clone(),
-            ]))
+            Arc::new(
+                StructType::try_new(vec![
+                    StructField::nullable("remove", KernelRemove::to_data_type()),
+                    StructField::nullable("sidecar", Sidecar::to_data_type()),
+                ])
+                .unwrap_or_else(|_| empty_struct_type()),
+            )
         });
 
         // TODO: which capacity to choose?
@@ -326,15 +362,10 @@ impl Snapshot {
         let remove_data = match self.inner.log_segment().read_actions(
             engine.as_ref(),
             TOMBSTONE_SCHEMA.clone(),
-            TOMBSTONE_SCHEMA.clone(),
             None,
         ) {
             Ok(data) => data,
-            Err(err) => {
-                return Box::pin(futures::stream::once(async {
-                    Err(DeltaTableError::KernelError(err))
-                }))
-            }
+            Err(err) => return Box::pin(futures::stream::once(async { Err(err.into()) })),
         };
 
         builder.spawn_blocking(move || {
@@ -371,9 +402,239 @@ impl Snapshot {
         let inner = self.inner.clone();
         let version = spawn_blocking(move || inner.get_app_id_version(&app_id, engine.as_ref()))
             .await
-            .map_err(|e| DeltaTableError::GenericError { source: e.into() })??;
+            .map_err(DeltaTableError::generic_err)??;
         Ok(version)
     }
+}
+
+fn empty_struct_type() -> StructType {
+    StructType::try_new(Vec::<StructField>::new())
+        .unwrap_or_else(|_| unreachable!("empty struct type is always valid"))
+}
+
+fn read_removes(batch: &RecordBatch) -> DeltaResult<Vec<Remove>> {
+    let Some(remove_col) = batch
+        .column_by_name("remove")
+        .and_then(|col| col.as_any().downcast_ref::<StructArray>())
+    else {
+        return Ok(vec![]);
+    };
+
+    if remove_col.null_count() == remove_col.len() {
+        return Ok(vec![]);
+    }
+
+    let path_col = required_string_field(remove_col, "path")?;
+    let data_change_col = required_bool_field(remove_col, "dataChange")?;
+    let deletion_ts_col = required_i64_field(remove_col, "deletionTimestamp")?;
+    let extended_file_metadata_col = optional_bool_field(remove_col, "extendedFileMetadata");
+    let partition_values_col = optional_map_field(remove_col, "partitionValues");
+    let size_col = optional_i64_field(remove_col, "size");
+    let tags_col = optional_map_field(remove_col, "tags");
+    let dv_struct = optional_struct_field(remove_col, "deletionVector");
+
+    let dv_storage_type = dv_struct
+        .and_then(|c| c.column_by_name("storageType"))
+        .and_then(|col| col.as_any().downcast_ref::<StringArray>());
+    let dv_path = dv_struct
+        .and_then(|c| c.column_by_name("pathOrInlineDv"))
+        .and_then(|col| col.as_any().downcast_ref::<StringArray>());
+    let dv_offset = dv_struct
+        .and_then(|c| c.column_by_name("offset"))
+        .and_then(|col| col.as_any().downcast_ref::<Int32Array>());
+    let dv_size_in_bytes = dv_struct
+        .and_then(|c| c.column_by_name("sizeInBytes"))
+        .and_then(|col| col.as_any().downcast_ref::<Int32Array>());
+    let dv_cardinality = dv_struct
+        .and_then(|c| c.column_by_name("cardinality"))
+        .and_then(|col| col.as_any().downcast_ref::<Int64Array>());
+
+    let mut removes = Vec::with_capacity(remove_col.len());
+    for idx in 0..remove_col.len() {
+        if !remove_col.is_valid(idx) {
+            continue;
+        }
+
+        let raw_path = read_str(path_col, idx)?;
+        let path = percent_decode_str(raw_path)
+            .decode_utf8()
+            .map_err(|_| DeltaTableError::generic("illegal path encoding"))?
+            .to_string();
+
+        let deletion_vector = if let (
+            Some(struct_array),
+            Some(storage),
+            Some(path),
+            Some(size),
+            Some(cardinality),
+        ) = (
+            dv_struct,
+            dv_storage_type,
+            dv_path,
+            dv_size_in_bytes,
+            dv_cardinality,
+        ) {
+            if struct_array.is_valid(idx) {
+                let storage_type =
+                    StorageType::from_str(read_str(storage, idx)?).map_err(|_| {
+                        DeltaTableError::generic("failed to parse deletion vector storage type")
+                    })?;
+                let path_or_inline_dv = read_str(path, idx)?.to_string();
+                let size_in_bytes = read_i32(size, idx)?;
+                let cardinality = read_i64(cardinality, idx)?;
+                let offset = dv_offset.and_then(|arr| read_i32_opt(arr, idx));
+                Some(DeletionVectorDescriptor {
+                    storage_type,
+                    path_or_inline_dv,
+                    size_in_bytes,
+                    cardinality,
+                    offset,
+                })
+            } else {
+                None
+            }
+        } else {
+            None
+        };
+
+        let partition_values = map_to_hash_map(partition_values_col, idx)?;
+        let tags = map_to_hash_map(tags_col, idx)?;
+
+        removes.push(Remove {
+            path,
+            data_change: read_bool(data_change_col, idx)?,
+            deletion_timestamp: read_i64_opt(deletion_ts_col, idx),
+            extended_file_metadata: extended_file_metadata_col
+                .and_then(|col| read_bool_opt(col, idx)),
+            partition_values,
+            size: size_col.and_then(|col| read_i64_opt(col, idx)),
+            tags,
+            deletion_vector,
+            base_row_id: None,
+            default_row_commit_version: None,
+        });
+    }
+
+    Ok(removes)
+}
+
+fn required_string_field<'a>(array: &'a StructArray, name: &str) -> DeltaResult<&'a StringArray> {
+    array
+        .column_by_name(name)
+        .and_then(|col| col.as_any().downcast_ref::<StringArray>())
+        .ok_or_else(|| DeltaTableError::schema(format!("{name} column not found on remove struct")))
+}
+
+fn required_bool_field<'a>(array: &'a StructArray, name: &str) -> DeltaResult<&'a BooleanArray> {
+    array
+        .column_by_name(name)
+        .and_then(|col| col.as_any().downcast_ref::<BooleanArray>())
+        .ok_or_else(|| DeltaTableError::schema(format!("{name} column not found on remove struct")))
+}
+
+fn required_i64_field<'a>(array: &'a StructArray, name: &str) -> DeltaResult<&'a Int64Array> {
+    array
+        .column_by_name(name)
+        .and_then(|col| col.as_any().downcast_ref::<Int64Array>())
+        .ok_or_else(|| DeltaTableError::schema(format!("{name} column not found on remove struct")))
+}
+
+fn optional_bool_field<'a>(array: &'a StructArray, name: &str) -> Option<&'a BooleanArray> {
+    array
+        .column_by_name(name)
+        .and_then(|col| col.as_any().downcast_ref::<BooleanArray>())
+}
+
+fn optional_map_field<'a>(array: &'a StructArray, name: &str) -> Option<&'a MapArray> {
+    array
+        .column_by_name(name)
+        .and_then(|col| col.as_any().downcast_ref::<MapArray>())
+}
+
+fn optional_i64_field<'a>(array: &'a StructArray, name: &str) -> Option<&'a Int64Array> {
+    array
+        .column_by_name(name)
+        .and_then(|col| col.as_any().downcast_ref::<Int64Array>())
+}
+
+fn optional_struct_field<'a>(array: &'a StructArray, name: &str) -> Option<&'a StructArray> {
+    array
+        .column_by_name(name)
+        .and_then(|col| col.as_any().downcast_ref::<StructArray>())
+}
+
+fn read_str(array: &StringArray, idx: usize) -> DeltaResult<&str> {
+    array
+        .is_valid(idx)
+        .then(|| array.value(idx))
+        .ok_or_else(|| DeltaTableError::generic("missing string value"))
+}
+
+fn read_bool(array: &BooleanArray, idx: usize) -> DeltaResult<bool> {
+    array
+        .is_valid(idx)
+        .then(|| array.value(idx))
+        .ok_or_else(|| DeltaTableError::generic("missing boolean value"))
+}
+
+fn read_bool_opt(array: &BooleanArray, idx: usize) -> Option<bool> {
+    array.is_valid(idx).then(|| array.value(idx))
+}
+
+fn read_i64(array: &Int64Array, idx: usize) -> DeltaResult<i64> {
+    array
+        .is_valid(idx)
+        .then(|| array.value(idx))
+        .ok_or_else(|| DeltaTableError::generic("missing i64 value"))
+}
+
+fn read_i64_opt(array: &Int64Array, idx: usize) -> Option<i64> {
+    array.is_valid(idx).then(|| array.value(idx))
+}
+
+fn read_i32(array: &Int32Array, idx: usize) -> DeltaResult<i32> {
+    array
+        .is_valid(idx)
+        .then(|| array.value(idx))
+        .ok_or_else(|| DeltaTableError::generic("missing i32 value"))
+}
+
+fn read_i32_opt(array: &Int32Array, idx: usize) -> Option<i32> {
+    array.is_valid(idx).then(|| array.value(idx))
+}
+
+fn map_to_hash_map(
+    map: Option<&MapArray>,
+    idx: usize,
+) -> DeltaResult<Option<HashMap<String, Option<String>>>> {
+    match map {
+        Some(array) if array.is_valid(idx) => {
+            let entries = collect_map(&array.value(idx))?;
+            Ok(Some(entries.into_iter().collect::<HashMap<_, _>>()))
+        }
+        _ => Ok(None),
+    }
+}
+
+fn collect_map(val: &StructArray) -> DeltaResult<Vec<(String, Option<String>)>> {
+    let keys = val
+        .column(0)
+        .as_any()
+        .downcast_ref::<StringArray>()
+        .ok_or_else(|| DeltaTableError::schema("map key column is not Utf8".to_string()))?;
+    let values = val
+        .column(1)
+        .as_any()
+        .downcast_ref::<StringArray>()
+        .ok_or_else(|| DeltaTableError::schema("map value column is not Utf8".to_string()))?;
+
+    let mut entries = Vec::with_capacity(keys.len());
+    for (key, value) in keys.iter().zip(values.iter()) {
+        if let Some(k) = key {
+            entries.push((k.to_string(), value.map(|v| v.to_string())));
+        }
+    }
+    Ok(entries)
 }
 
 /// A snapshot of a Delta table that has been eagerly loaded into memory.
@@ -399,6 +660,18 @@ impl EagerSnapshot {
         };
 
         let scan_row_schema = snapshot.inner.scan_row_parsed_schema_arrow()?;
+        let files = files
+            .into_iter()
+            .map(|batch| {
+                if batch.schema().as_ref() == scan_row_schema.as_ref() {
+                    Ok(batch)
+                } else {
+                    // Align row batches to the canonical scan schema before concatenation.
+                    cast_record_batch_relaxed_tz(&batch, &scan_row_schema)
+                        .map_err(|e| DeltaTableError::generic(e.to_string()))
+                }
+            })
+            .collect::<DeltaResult<Vec<_>>>()?;
         let files = concat_batches(&scan_row_schema, &files)?;
 
         Ok(Self { snapshot, files })
@@ -431,10 +704,13 @@ impl EagerSnapshot {
             .try_collect()
         })
         .await
-        .map_err(|e| DeltaTableError::Generic(e.to_string()))??;
+        .map_err(|e| DeltaTableError::generic(e.to_string()))??;
 
         let files = concat_batches(&SCAN_ROW_ARROW_SCHEMA, &files)?;
-        let files = self.snapshot.inner.parse_stats_column(&files)?;
+        let files = match self.snapshot.inner.parse_stats_column(&files) {
+            Ok(parsed) => parsed,
+            Err(_) => files,
+        };
 
         self.files = files;
 
@@ -532,11 +808,7 @@ impl EagerSnapshot {
                 .build()
             {
                 Ok(scan) => scan,
-                Err(err) => {
-                    return Box::pin(futures::stream::once(async {
-                        Err(DeltaTableError::KernelError(err))
-                    }))
-                }
+                Err(err) => return Box::pin(futures::stream::once(async { Err(err.into()) })),
             };
             let engine = log_store.engine(None);
             let current_files = self.files.clone();
@@ -552,20 +824,12 @@ impl EagerSnapshot {
                 None,
             ) {
                 Ok(files_iter) => files_iter,
-                Err(err) => {
-                    return Box::pin(futures::stream::once(async {
-                        Err(DeltaTableError::KernelError(err))
-                    }))
-                }
+                Err(err) => return Box::pin(futures::stream::once(async { Err(err.into()) })),
             };
 
             let files: Vec<_> = match files_iter.map_ok(|s| s.scan_files).try_collect() {
                 Ok(files) => files,
-                Err(err) => {
-                    return Box::pin(futures::stream::once(async {
-                        Err(DeltaTableError::KernelError(err))
-                    }))
-                }
+                Err(err) => return Box::pin(futures::stream::once(async { Err(err.into()) })),
             };
 
             match concat_batches(&SCAN_ROW_ARROW_SCHEMA, &files)

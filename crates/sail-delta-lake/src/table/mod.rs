@@ -1,3 +1,23 @@
+// https://github.com/delta-io/delta-rs/blob/5575ad16bf641420404611d65f4ad7626e9acb16/LICENSE.txt
+//
+// Copyright (2020) QP Hou and a number of other contributors.
+// Portions Copyright (2025) LakeSail, Inc.
+// Modified in 2025 by LakeSail, Inc.
+//
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+//     http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
+
+// [Credit]: https://github.com/delta-io/delta-rs/blob/1f0b4d0965a85400c1effc6e9b4c7ebbb6795978/crates/core/src/table/mod.rs
+
 use std::fmt;
 use std::sync::Arc;
 
@@ -6,16 +26,15 @@ use datafusion::arrow::datatypes::Schema;
 use datafusion::catalog::Session;
 use datafusion::datasource::listing::ListingTableUrl;
 use datafusion_common::Result;
-use deltalake::logstore::{default_logstore, LogStoreRef, StorageConfig};
-use deltalake::table::builder::DeltaTableConfig;
-use deltalake::{DeltaResult, DeltaTableError};
+use delta_kernel::Error as KernelError;
 use object_store::ObjectStore;
 pub use state::DeltaTableState;
 use url::Url;
 
-// [Credit]: https://github.com/delta-io/delta-rs/blob/1f0b4d0965a85400c1effc6e9b4c7ebbb6795978/crates/core/src/table/mod.rs
-use crate::delta_datafusion::{delta_to_datafusion_error, DeltaScanConfig, DeltaTableProvider};
+use crate::datasource::{DeltaScanConfig, DeltaTableProvider};
+use crate::kernel::{DeltaResult, DeltaTableConfig, DeltaTableError};
 use crate::options::TableDeltaOptions;
+use crate::storage::{commit_uri_from_version, default_logstore, LogStoreRef, StorageConfig};
 mod state;
 
 /// In memory representation of a Delta Table
@@ -72,7 +91,7 @@ impl DeltaTable {
             return Ok(ts);
         }
 
-        let commit_uri = deltalake::logstore::commit_uri_from_version(version);
+        let commit_uri = commit_uri_from_version(version);
         let meta = self.log_store.object_store(None).head(&commit_uri).await?;
         Ok(meta.last_modified.timestamp_millis())
     }
@@ -84,11 +103,14 @@ impl DeltaTable {
         max_version: Option<i64>,
     ) -> Result<(), DeltaTableError> {
         match self.state.as_mut() {
-            Some(state) => state.update(&self.log_store, max_version).await,
+            Some(state) => state.update(self.log_store.as_ref(), max_version).await,
             _ => {
-                let state =
-                    DeltaTableState::try_new(&self.log_store, self.config.clone(), max_version)
-                        .await?;
+                let state = DeltaTableState::try_new(
+                    self.log_store.as_ref(),
+                    self.config.clone(),
+                    max_version,
+                )
+                .await?;
                 self.state = Some(state);
                 Ok(())
             }
@@ -97,7 +119,9 @@ impl DeltaTable {
 
     /// Returns the currently loaded state snapshot.
     pub fn snapshot(&self) -> DeltaResult<&DeltaTableState> {
-        self.state.as_ref().ok_or(DeltaTableError::NotInitialized)
+        self.state
+            .as_ref()
+            .ok_or_else(|| DeltaTableError::generic("Table has not yet been initialized"))
     }
 
     /// Currently loaded version of the table - if any.
@@ -180,10 +204,9 @@ pub async fn create_delta_provider(
 ) -> Result<Arc<dyn datafusion::catalog::TableProvider>> {
     let url = ListingTableUrl::try_new(table_url.clone(), None)?;
     let object_store = ctx.runtime_env().object_store(&url)?;
-    let storage_config = StorageConfig::default();
+    let storage_config = StorageConfig;
     let log_store =
-        create_logstore_with_object_store(object_store, table_url.clone(), storage_config)
-            .map_err(delta_to_datafusion_error)?;
+        create_logstore_with_object_store(object_store, table_url.clone(), storage_config)?;
 
     // Create a new DeltaTable instance but do not load it yet.
     let mut deltalake_table = DeltaTable::new(log_store.clone(), Default::default());
@@ -191,10 +214,7 @@ pub async fn create_delta_provider(
     // Load the table state according to the provided time travel options.
     load_table_by_options(&mut deltalake_table, &options).await?;
 
-    let snapshot = deltalake_table
-        .snapshot()
-        .map_err(delta_to_datafusion_error)?
-        .clone();
+    let snapshot = deltalake_table.snapshot()?.clone();
 
     let scan_config = DeltaScanConfig {
         file_column_name: None,
@@ -207,8 +227,7 @@ pub async fn create_delta_provider(
         },
     };
 
-    let table_provider = DeltaTableProvider::try_new(snapshot, log_store, scan_config)
-        .map_err(delta_to_datafusion_error)?;
+    let table_provider = DeltaTableProvider::try_new(snapshot, log_store, scan_config)?;
 
     Ok(Arc::new(table_provider))
 }
@@ -217,38 +236,30 @@ pub async fn create_delta_provider(
 async fn load_table_by_options(table: &mut DeltaTable, options: &TableDeltaOptions) -> Result<()> {
     // Precedence: version > timestamp > latest.
     if let Some(version) = options.version_as_of {
-        table
-            .load_version(version)
-            .await
-            .map_err(delta_to_datafusion_error)?;
+        table.load_version(version).await?;
     } else if let Some(timestamp_str) = &options.timestamp_as_of {
         // This logic is adapted from delta-rs `DeltaTable::load_with_datetime`
         let datetime = DateTime::parse_from_rfc3339(timestamp_str)
-            .map_err(|e| DeltaTableError::Generic(format!("Invalid timestamp string: {}", e)))
-            .map_err(delta_to_datafusion_error)?
+            .map_err(|e| DeltaTableError::generic(format!("Invalid timestamp string: {}", e)))?
             .with_timezone(&Utc);
 
         let target_version = find_version_for_timestamp(table, datetime)
             .await
             .map_err(|e| {
-                if let DeltaTableError::InvalidVersion(_) = e {
-                    DeltaTableError::Generic(format!(
+                if matches!(e, DeltaTableError::Kernel(KernelError::MissingVersion)) {
+                    DeltaTableError::generic(format!(
                         "No version of the Delta table exists at or before timestamp {}",
                         timestamp_str
                     ))
                 } else {
                     e
                 }
-            })
-            .map_err(delta_to_datafusion_error)?;
+            })?;
 
-        table
-            .load_version(target_version)
-            .await
-            .map_err(delta_to_datafusion_error)?;
+        table.load_version(target_version).await?;
     } else {
         // Default behavior: load the latest version.
-        table.load().await.map_err(delta_to_datafusion_error)?;
+        table.load().await?;
     }
     Ok(())
 }
@@ -288,7 +299,7 @@ async fn find_version_for_timestamp(
 
     if target_version == -1 {
         // If no version was found, it means the provided timestamp is before the first commit.
-        Err(DeltaTableError::InvalidVersion(0))
+        Err(KernelError::MissingVersion.into())
     } else {
         Ok(target_version)
     }

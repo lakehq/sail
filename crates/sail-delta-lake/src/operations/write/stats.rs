@@ -1,4 +1,23 @@
-/// Credit: <https://github.com/delta-io/delta-rs/blob/3607c314cbdd2ad06c6ee0677b92a29f695c71f3/crates/core/src/writer/stats.rs>
+// https://github.com/delta-io/delta-rs/blob/5575ad16bf641420404611d65f4ad7626e9acb16/LICENSE.txt
+//
+// Copyright (2020) QP Hou and a number of other contributors.
+// Portions Copyright (2025) LakeSail, Inc.
+// Modified in 2025 by LakeSail, Inc.
+//
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+//     http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
+
+// [Credit]: <https://github.com/delta-io/delta-rs/blob/3607c314cbdd2ad06c6ee0677b92a29f695c71f3/crates/core/src/writer/stats.rs>
+
 use std::cmp::min;
 use std::collections::HashMap;
 use std::ops::{AddAssign, Not};
@@ -6,90 +25,23 @@ use std::sync::Arc;
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use delta_kernel::expressions::Scalar;
-use deltalake::errors::DeltaTableError;
-use deltalake::kernel::scalars::ScalarExt;
-use deltalake::kernel::Add;
 use indexmap::IndexMap;
 use log::warn;
-use parquet::basic::{LogicalType, Type};
+use parquet::basic::{LogicalType, TimeUnit, Type};
 use parquet::file::metadata::{ParquetMetaData, RowGroupMetaData};
 use parquet::file::statistics::Statistics;
-use parquet::format::{FileMetaData, TimeUnit};
 use parquet::schema::types::{ColumnDescriptor, SchemaDescriptor};
-use serde::{Deserialize, Serialize};
-use serde_json::Value;
+use sail_common::spec::SAIL_LIST_FIELD_NAME;
 
-/// Represent minValues and maxValues in add action statistics.
-#[derive(Serialize, Deserialize, Debug, PartialEq, Eq)]
-#[serde(untagged)]
-pub enum ColumnValueStat {
-    /// Composite HashMap representation of statistics.
-    Column(HashMap<String, ColumnValueStat>),
-    /// Json representation of statistics.
-    Value(Value),
-}
-#[allow(dead_code)]
-impl ColumnValueStat {
-    pub fn as_column(&self) -> Option<&HashMap<String, ColumnValueStat>> {
-        match self {
-            ColumnValueStat::Column(m) => Some(m),
-            _ => None,
-        }
-    }
-
-    pub fn as_value(&self) -> Option<&Value> {
-        match self {
-            ColumnValueStat::Value(v) => Some(v),
-            _ => None,
-        }
-    }
-}
-
-/// Represent nullCount in add action statistics.
-#[derive(Serialize, Deserialize, Debug, PartialEq, Eq)]
-#[serde(untagged)]
-pub enum ColumnCountStat {
-    /// Composite HashMap representation of statistics.
-    Column(HashMap<String, ColumnCountStat>),
-    /// Json representation of statistics.
-    Value(i64),
-}
-#[allow(dead_code)]
-impl ColumnCountStat {
-    pub fn as_column(&self) -> Option<&HashMap<String, ColumnCountStat>> {
-        match self {
-            ColumnCountStat::Column(m) => Some(m),
-            _ => None,
-        }
-    }
-
-    pub fn as_value(&self) -> Option<i64> {
-        match self {
-            ColumnCountStat::Value(v) => Some(*v),
-            _ => None,
-        }
-    }
-}
-
-#[derive(Serialize, Deserialize, Debug, Default, PartialEq, Eq)]
-#[serde(rename_all = "camelCase")]
-pub struct Stats {
-    /// Number of records in the file associated with the log action.
-    pub num_records: i64,
-    /// Contains a value smaller than all values present in the file for all columns.
-    pub min_values: HashMap<String, ColumnValueStat>,
-    /// Contains a value larger than all values present in the file for all columns.
-    pub max_values: HashMap<String, ColumnValueStat>,
-    /// The number of null values for all columns.
-    pub null_count: HashMap<String, ColumnCountStat>,
-}
+use crate::kernel::models::{Add, ColumnCountStat, ColumnValueStat, ScalarExt, Stats};
+use crate::kernel::DeltaTableError;
 
 /// Creates an [`Add`] log action struct with statistics.
 pub fn create_add(
     partition_values: &IndexMap<String, Scalar>,
     path: String,
     size: i64,
-    file_metadata: &FileMetaData,
+    file_metadata: &ParquetMetaData,
     num_indexed_cols: i32,
     stats_columns: &Option<Vec<String>>,
 ) -> Result<Add, DeltaTableError> {
@@ -99,14 +51,14 @@ pub fn create_add(
         num_indexed_cols,
         stats_columns,
     )?;
-    let stats_string = serde_json::to_string(&stats)
+    let stats_string = stats
+        .to_json_string()
         .map_err(|e| DeltaTableError::generic(format!("Failed to serialize stats: {e}")))?;
 
     // Determine the modification timestamp to include in the add action - milliseconds since epoch
-    #[allow(clippy::expect_used)]
     let modification_time = SystemTime::now()
         .duration_since(UNIX_EPOCH)
-        .expect("System time before Unix epoch")
+        .map_err(|e| DeltaTableError::generic(format!("System time before Unix epoch: {e}")))?
         .as_millis() as i64;
 
     Ok(Add {
@@ -120,7 +72,7 @@ pub fn create_add(
                     if v.is_null() {
                         None
                     } else {
-                        Some(v.serialize())
+                        Some(v.serialize().into_owned())
                     },
                 )
             })
@@ -159,30 +111,18 @@ pub fn stats_from_parquet_metadata(
 
 fn stats_from_file_metadata(
     partition_values: &IndexMap<String, Scalar>,
-    file_metadata: &FileMetaData,
+    file_metadata: &ParquetMetaData,
     num_indexed_cols: i32,
     stats_columns: &Option<Vec<String>>,
 ) -> Result<Stats, DeltaTableError> {
-    let type_ptr =
-        parquet::schema::types::from_thrift(file_metadata.schema.as_slice()).map_err(|e| {
-            DeltaTableError::generic(format!("Failed to parse schema from thrift: {e}"))
-        })?;
-    let schema_descriptor = Arc::new(SchemaDescriptor::new(type_ptr));
-
-    let row_group_metadata: Vec<RowGroupMetaData> = file_metadata
-        .row_groups
-        .iter()
-        .map(|rg| RowGroupMetaData::from_thrift(schema_descriptor.clone(), rg.clone()))
-        .collect::<Result<Vec<RowGroupMetaData>, _>>()
-        .map_err(|e| {
-            DeltaTableError::generic(format!("Failed to parse row group metadata: {e}"))
-        })?;
+    let schema_descriptor = file_metadata.file_metadata().schema_descr();
+    let row_group_metadata: Vec<RowGroupMetaData> = file_metadata.row_groups().to_vec();
 
     stats_from_metadata(
         partition_values,
-        schema_descriptor,
+        Arc::new(schema_descriptor.clone()),
         row_group_metadata,
-        file_metadata.num_rows,
+        file_metadata.file_metadata().num_rows(),
         num_indexed_cols,
         stats_columns,
     )
@@ -200,46 +140,22 @@ fn stats_from_metadata(
     let mut max_values: HashMap<String, ColumnValueStat> = HashMap::new();
     let mut null_count: HashMap<String, ColumnCountStat> = HashMap::new();
 
-    // Determine which columns to collect stats for
-    let idx_to_iterate = if let Some(stats_cols) = stats_columns {
-        schema_descriptor
-            .columns()
-            .iter()
-            .enumerate()
-            .filter_map(|(index, col)| {
-                if stats_cols.contains(&col.name().to_string()) {
-                    Some(index)
-                } else {
-                    None
-                }
-            })
-            .collect()
-    } else if num_indexed_cols == -1 {
-        (0..schema_descriptor.num_columns()).collect::<Vec<_>>()
-    } else if num_indexed_cols >= 0 {
-        (0..min(num_indexed_cols as usize, schema_descriptor.num_columns())).collect::<Vec<_>>()
-    } else {
-        return Err(DeltaTableError::generic(
-            "delta.dataSkippingNumIndexedCols valid values are >=-1".to_string(),
-        ));
-    };
-
-    for idx in idx_to_iterate {
+    let mut handle_column = |idx: usize| -> Result<(), DeltaTableError> {
         let column_descr = schema_descriptor.column(idx);
         let column_path = column_descr.path();
         let column_path_parts = column_path.parts();
 
-        // Do not include partition columns in statistics
         if partition_values.contains_key(&column_path_parts[0]) {
-            continue;
+            return Ok(());
         }
 
         let maybe_stats: Option<AggregatedStats> = row_group_metadata
             .iter()
             .flat_map(|g| {
                 g.column(idx).statistics().into_iter().filter_map(|s| {
+                    let logical_type = column_descr.logical_type_ref();
                     let is_binary = matches!(&column_descr.physical_type(), Type::BYTE_ARRAY)
-                        && matches!(column_descr.logical_type(), Some(LogicalType::String)).not();
+                        && matches!(logical_type, Some(LogicalType::String)).not();
                     if is_binary {
                         warn!(
                             "Skipping column {} because it's a binary field.",
@@ -247,7 +163,7 @@ fn stats_from_metadata(
                         );
                         None
                     } else {
-                        Some(AggregatedStats::from((s, &column_descr.logical_type())))
+                        Some(AggregatedStats::from((s, logical_type)))
                     }
                 })
             })
@@ -265,6 +181,39 @@ fn stats_from_metadata(
                 &mut max_values,
                 &mut null_count,
             )?;
+        }
+
+        Ok(())
+    };
+
+    if let Some(stats_cols) = stats_columns {
+        let idx_to_iterate: Vec<usize> = schema_descriptor
+            .columns()
+            .iter()
+            .enumerate()
+            .filter_map(|(index, col)| {
+                if stats_cols.contains(&col.name().to_string()) {
+                    Some(index)
+                } else {
+                    None
+                }
+            })
+            .collect();
+        for idx in idx_to_iterate {
+            handle_column(idx)?;
+        }
+    } else {
+        let limit = if num_indexed_cols == -1 {
+            schema_descriptor.num_columns()
+        } else if num_indexed_cols >= 0 {
+            min(num_indexed_cols as usize, schema_descriptor.num_columns())
+        } else {
+            return Err(DeltaTableError::generic(
+                "delta.dataSkippingNumIndexedCols valid values are >=-1".to_string(),
+            ));
+        };
+        for idx in 0..limit {
+            handle_column(idx)?;
         }
     }
 
@@ -295,7 +244,7 @@ enum StatsScalar {
 impl StatsScalar {
     fn try_from_stats(
         stats: &Statistics,
-        logical_type: &Option<LogicalType>,
+        logical_type: Option<&LogicalType>,
         use_min: bool,
     ) -> Result<Self, DeltaTableError> {
         macro_rules! get_stat {
@@ -324,9 +273,9 @@ impl StatsScalar {
             (Statistics::Int64(v), Some(LogicalType::Timestamp { unit, .. })) => {
                 let v = get_stat!(v);
                 let timestamp = match unit {
-                    TimeUnit::MILLIS(_) => chrono::DateTime::from_timestamp_millis(v),
-                    TimeUnit::MICROS(_) => chrono::DateTime::from_timestamp_micros(v),
-                    TimeUnit::NANOS(_) => {
+                    TimeUnit::MILLIS => chrono::DateTime::from_timestamp_millis(v),
+                    TimeUnit::MICROS => chrono::DateTime::from_timestamp_micros(v),
+                    TimeUnit::NANOS => {
                         let secs = v / 1_000_000_000;
                         let nanosecs = (v % 1_000_000_000) as u32;
                         chrono::DateTime::from_timestamp(secs, nanosecs)
@@ -466,8 +415,8 @@ struct AggregatedStats {
     pub null_count: u64,
 }
 
-impl From<(&Statistics, &Option<LogicalType>)> for AggregatedStats {
-    fn from(value: (&Statistics, &Option<LogicalType>)) -> Self {
+impl From<(&Statistics, Option<&LogicalType>)> for AggregatedStats {
+    fn from(value: (&Statistics, Option<&LogicalType>)) -> Self {
         let (stats, logical_type) = value;
         let null_count = stats.null_count_opt().unwrap_or_default();
         if stats.min_bytes_opt().is_some() && stats.max_bytes_opt().is_some() {
@@ -531,8 +480,11 @@ fn get_list_field_name(column_descr: &Arc<ColumnDescriptor>) -> Option<String> {
         match (part.as_str(), lists_seen, items_seen) {
             ("list", seen, _) if seen == max_rep_levels => return Some("list".to_string()),
             ("element", _, seen) if seen == max_rep_levels => return Some("element".to_string()),
+            (SAIL_LIST_FIELD_NAME, _, seen) if seen == max_rep_levels => {
+                return Some(SAIL_LIST_FIELD_NAME.to_string())
+            }
             ("list", _, _) => lists_seen += 1,
-            ("element", _, _) => items_seen += 1,
+            ("element", _, _) | (SAIL_LIST_FIELD_NAME, _, _) => items_seen += 1,
             (other, _, _) => return Some(other.to_string()),
         }
     }

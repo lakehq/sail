@@ -1,30 +1,43 @@
+// https://github.com/delta-io/delta-rs/blob/5575ad16bf641420404611d65f4ad7626e9acb16/LICENSE.txt
+//
+// Copyright (2020) QP Hou and a number of other contributors.
+// Portions Copyright (2025) LakeSail, Inc.
+// Modified in 2025 by LakeSail, Inc.
+//
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+//     http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
+
+// [Credit]: <https://github.com/delta-io/delta-rs/blob/1f0b4d0965a85400c1effc6e9b4c7ebbb6795978/crates/core/src/table/state.rs>
+
 //! The module for delta table state.
 
+use std::ops::{Deref, DerefMut};
 use std::sync::Arc;
 
 use chrono::Utc;
 use delta_kernel::engine::arrow_conversion::TryIntoKernel;
 use delta_kernel::expressions::column_expr_ref;
-use delta_kernel::schema::StructField;
-use delta_kernel::table_properties::TableProperties;
+use delta_kernel::schema::{ColumnMetadataKey, StructField};
+use delta_kernel::table_features::ColumnMappingMode;
 use delta_kernel::{EvaluationHandler, Expression};
-use deltalake::kernel::{Add, DataType, Metadata, Protocol, Remove, StructType};
-use deltalake::logstore::LogStore;
-// use deltalake::partitions::PartitionFilter;
-use deltalake::table::config::TablePropertiesExt;
-use deltalake::{DeltaResult, DeltaTableConfig, DeltaTableError};
-use futures::stream::BoxStream;
-use futures::{StreamExt, TryStreamExt};
+use futures::TryStreamExt;
 
-// use object_store::path::Path;
 use crate::kernel::arrow::engine_ext::{ExpressionEvaluatorExt, SnapshotExt};
-// use crate::kernel::schema::to_kernel_predicate;
-// use crate::kernel::snapshot::iterators::LogicalFileView;
-use crate::kernel::snapshot::log_data::LogDataHandler;
+use crate::kernel::models::{DataType, Remove};
 use crate::kernel::snapshot::EagerSnapshot;
-use crate::kernel::ARROW_HANDLER;
-
-// [Credit]: <https://github.com/delta-io/delta-rs/blob/1f0b4d0965a85400c1effc6e9b4c7ebbb6795978/crates/core/src/table/state.rs>
+use crate::kernel::{
+    DeltaResult, DeltaTableConfig, DeltaTableError, TablePropertiesExt, ARROW_HANDLER,
+};
+use crate::storage::LogStore;
 
 /// State snapshot currently held by the Delta Table instance.
 #[derive(Debug, Clone)]
@@ -45,46 +58,9 @@ impl DeltaTableState {
         Ok(Self { snapshot })
     }
 
-    /// Return table version
-    pub fn version(&self) -> i64 {
-        self.snapshot.version()
-    }
-
-    /// The most recent protocol of the table.
-    pub fn protocol(&self) -> &Protocol {
-        self.snapshot.protocol()
-    }
-
-    /// The most recent metadata of the table.
-    pub fn metadata(&self) -> &Metadata {
-        self.snapshot.metadata()
-    }
-
-    /// The table schema
-    pub fn schema(&self) -> &StructType {
-        self.snapshot.schema()
-    }
-
-    /// Get the table config which is loaded with of the snapshot
-    pub fn load_config(&self) -> &DeltaTableConfig {
-        self.snapshot.load_config()
-    }
-
-    /// Well known table configuration
-    pub fn table_config(&self) -> &TableProperties {
-        self.snapshot.table_properties()
-    }
-
-    /// Get the timestamp when a version commit was created.
-    /// This is the timestamp of the commit file.
-    /// If the commit file is not present, None is returned.
-    pub fn version_timestamp(&self, version: i64) -> Option<i64> {
-        self.snapshot.version_timestamp(version)
-    }
-
-    /// Returns a semantic accessor to the currently loaded log data.
-    pub fn log_data(&self) -> LogDataHandler<'_> {
-        self.snapshot.log_data()
+    /// Obtain the eagerly materialized snapshot.
+    pub fn snapshot(&self) -> &EagerSnapshot {
+        &self.snapshot
     }
 
     /// Full list of tombstones (remove actions) representing files removed from table state).
@@ -109,7 +85,7 @@ impl DeltaTableState {
     ) -> DeltaResult<impl Iterator<Item = Remove>> {
         let retention_timestamp = Utc::now().timestamp_millis()
             - self
-                .table_config()
+                .table_properties()
                 .deleted_file_retention_duration()
                 .as_millis() as i64;
         let tombstones = self.all_tombstones(log_store).await?.collect::<Vec<_>>();
@@ -118,40 +94,28 @@ impl DeltaTableState {
             .filter(move |t| t.deletion_timestamp.unwrap_or(0) > retention_timestamp))
     }
 
-    /// Full list of add actions representing all parquet files that are part of the current
-    /// delta table state.
-    pub async fn file_actions(&self, log_store: &dyn LogStore) -> DeltaResult<Vec<Add>> {
-        self.file_actions_iter(log_store).try_collect().await
-    }
-
-    /// Full list of add actions representing all parquet files that are part of the current
-    /// delta table state.
-    pub fn file_actions_iter(&self, log_store: &dyn LogStore) -> BoxStream<'_, DeltaResult<Add>> {
-        self.snapshot
-            .files(log_store, None)
-            .map_ok(|v| v.add_action())
-            .boxed()
-    }
-
-    /// Returns an iterator of file names present in the loaded state
-    // #[inline]
-    // pub fn file_paths_iter(&self) -> impl Iterator<Item = Path> + '_ {
-    //     self.log_data().iter().map(|add| add.object_store_path())
-    // }
-    /// Get the transaction version for the given application ID.
-    ///
-    /// Returns `None` if the application ID is not found.
-    pub async fn transaction_version(
-        &self,
-        log_store: &dyn LogStore,
-        app_id: impl ToString,
-    ) -> DeltaResult<Option<i64>> {
-        self.snapshot.transaction_version(log_store, app_id).await
-    }
-
-    /// Obtain the Eager snapshot of the state
-    pub fn snapshot(&self) -> &EagerSnapshot {
-        &self.snapshot
+    /// Determine effective column mapping mode: when explicit mode is None but
+    /// the schema carries column mapping annotations on any top-level field,
+    /// treat it as Name.
+    pub fn effective_column_mapping_mode(&self) -> ColumnMappingMode {
+        let explicit = self
+            .snapshot()
+            .snapshot()
+            .table_configuration()
+            .column_mapping_mode();
+        if matches!(explicit, ColumnMappingMode::None) {
+            let kschema = self.snapshot().snapshot().schema().clone();
+            let has_annotations = kschema.fields().any(|f| {
+                f.metadata()
+                    .contains_key(ColumnMetadataKey::ColumnMappingPhysicalName.as_ref())
+                    && f.metadata()
+                        .contains_key(ColumnMetadataKey::ColumnMappingId.as_ref())
+            });
+            if has_annotations {
+                return ColumnMappingMode::Name;
+            }
+        }
+        explicit
     }
 
     /// Update the state of the table to the given version.
@@ -166,21 +130,6 @@ impl DeltaTableState {
             .await?;
         Ok(())
     }
-
-    // pub fn get_active_add_actions_by_partitions(
-    //     &self,
-    //     log_store: &dyn LogStore,
-    //     filters: &[PartitionFilter],
-    // ) -> BoxStream<'_, DeltaResult<LogicalFileView>> {
-    //     if filters.is_empty() {
-    //         return self.snapshot().files(log_store, None);
-    //     }
-    //     let predicate = match to_kernel_predicate(filters, self.snapshot.schema()) {
-    //         Ok(predicate) => Arc::new(predicate),
-    //         Err(err) => return Box::pin(futures::stream::once(async { Err(err) })),
-    //     };
-    //     self.snapshot().files(log_store, Some(predicate))
-    // }
 
     /// Get an [arrow::record_batch::RecordBatch] containing add action data.
     ///
@@ -226,9 +175,7 @@ impl DeltaTableState {
         let stats_schema = self.snapshot.snapshot().inner.stats_schema()?;
         let num_records_field = stats_schema
             .field("numRecords")
-            .ok_or_else(|| DeltaTableError::SchemaMismatch {
-                msg: "numRecords field not found".to_string(),
-            })?
+            .ok_or_else(|| DeltaTableError::schema("numRecords field not found".to_string()))?
             .with_name("num_records");
 
         expressions.push(column_expr_ref!("stats_parsed.numRecords"));
@@ -255,23 +202,22 @@ impl DeltaTableState {
         if let Some(partition_schema) = self.snapshot.snapshot().inner.partitions_schema()? {
             fields.push(StructField::nullable(
                 "partition",
-                DataType::struct_type(partition_schema.fields().cloned()),
+                DataType::try_struct_type(partition_schema.fields().cloned())?,
             ));
             expressions.push(column_expr_ref!("partitionValues_parsed"));
         }
 
         let expression = Expression::Struct(expressions);
-        let table_schema = DataType::struct_type(fields);
+        let table_schema = DataType::try_struct_type(fields)?;
 
         let input_schema = self.snapshot.files.schema();
         let input_schema = Arc::new(input_schema.as_ref().try_into_kernel()?);
         let actions = self.snapshot.files.clone();
 
-        let evaluator = ARROW_HANDLER.new_expression_evaluator(
-            input_schema,
-            Arc::new(expression),
-            table_schema,
-        );
+        #[allow(clippy::expect_used)]
+        let evaluator = ARROW_HANDLER
+            .new_expression_evaluator(input_schema, Arc::new(expression), table_schema)
+            .expect("Failed to create expression evaluator");
         let result = evaluator.evaluate_arrow(actions)?;
 
         if flatten {
@@ -279,5 +225,19 @@ impl DeltaTableState {
         } else {
             Ok(result)
         }
+    }
+}
+
+impl Deref for DeltaTableState {
+    type Target = EagerSnapshot;
+
+    fn deref(&self) -> &Self::Target {
+        &self.snapshot
+    }
+}
+
+impl DerefMut for DeltaTableState {
+    fn deref_mut(&mut self) -> &mut Self::Target {
+        &mut self.snapshot
     }
 }

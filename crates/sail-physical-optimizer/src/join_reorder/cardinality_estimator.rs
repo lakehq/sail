@@ -264,11 +264,11 @@ impl CardinalityEstimator {
     }
 
     /// Get all edges that are completely contained within the given join_set.
-    fn get_edges_contained_in_set(&self, join_set: JoinSet) -> Vec<&JoinEdge> {
+    pub fn get_edges_contained_in_set(&self, join_set: JoinSet) -> Vec<&JoinEdge> {
         self.graph
             .edges
             .iter()
-            .filter(|edge| join_set.is_subset(&edge.join_set))
+            .filter(|edge| edge.join_set.is_subset(&join_set))
             .collect()
     }
 
@@ -497,5 +497,99 @@ mod tests {
 
         // This should have non-equi filters
         assert!(estimator.has_non_equi_filter(&combined_edge));
+    }
+
+    #[test]
+    fn test_get_edges_contained_in_set_direction() {
+        use std::sync::Arc;
+
+        use datafusion::arrow::datatypes::{DataType, Field, Schema};
+        use datafusion::common::Statistics;
+        use datafusion::logical_expr::JoinType;
+        use datafusion::physical_expr::expressions::{BinaryExpr, Column};
+        use datafusion::physical_expr::PhysicalExpr;
+        use datafusion::physical_plan::empty::EmptyExec;
+
+        let mut graph: QueryGraph = QueryGraph::new();
+        let schema: Arc<Schema> =
+            Arc::new(Schema::new(vec![Field::new("id", DataType::Int32, false)]));
+
+        // 3 relations: R0, R1, R2
+        for (id, rows) in [(0, 1000.0), (1, 2000.0), (2, 3000.0)] {
+            let plan: Arc<EmptyExec> = Arc::new(EmptyExec::new(schema.clone()));
+            let rel: RelationNode =
+                RelationNode::new(plan, id, rows, Statistics::new_unknown(&schema));
+            graph.add_relation(rel);
+        }
+
+        let equi_join = || {
+            let l: Arc<dyn PhysicalExpr> = Arc::new(Column::new("id", 0));
+            let r: Arc<dyn PhysicalExpr> = Arc::new(Column::new("id", 0));
+            Arc::new(BinaryExpr::new(l, Operator::Eq, r)) as Arc<dyn PhysicalExpr>
+        };
+
+        // Edge R0 and R1
+        let js01: JoinSet = JoinSet::new_singleton(0)
+            .unwrap()
+            .union(&JoinSet::new_singleton(1).unwrap());
+        let edge01: JoinEdge = JoinEdge::new(
+            js01,
+            equi_join(),
+            JoinType::Inner,
+            vec![(
+                StableColumn {
+                    relation_id: 0,
+                    column_index: 0,
+                    name: "id".into(),
+                },
+                StableColumn {
+                    relation_id: 1,
+                    column_index: 0,
+                    name: "id".into(),
+                },
+            )],
+        );
+        let _ = graph.add_edge(edge01);
+
+        // Edge R1 and R2
+        let js12: JoinSet = JoinSet::new_singleton(1)
+            .unwrap()
+            .union(&JoinSet::new_singleton(2).unwrap());
+        let edge12: JoinEdge = JoinEdge::new(
+            js12,
+            equi_join(),
+            JoinType::Inner,
+            vec![(
+                StableColumn {
+                    relation_id: 1,
+                    column_index: 0,
+                    name: "id".into(),
+                },
+                StableColumn {
+                    relation_id: 2,
+                    column_index: 0,
+                    name: "id".into(),
+                },
+            )],
+        );
+        let _ = graph.add_edge(edge12);
+
+        let estimator: CardinalityEstimator = CardinalityEstimator::new(graph);
+
+        // {0,1} → edge 0–1
+        let s01: JoinSet = JoinSet::new_singleton(0)
+            .unwrap()
+            .union(&JoinSet::new_singleton(1).unwrap());
+        assert_eq!(estimator.get_edges_contained_in_set(s01).len(), 1);
+
+        // {0,1,2} → both edges
+        let s012: JoinSet = JoinSet::from_iter([0, 1, 2]).unwrap();
+        assert_eq!(estimator.get_edges_contained_in_set(s012).len(), 2);
+
+        // {0,2} → none
+        let s02: JoinSet = JoinSet::new_singleton(0)
+            .unwrap()
+            .union(&JoinSet::new_singleton(2).unwrap());
+        assert_eq!(estimator.get_edges_contained_in_set(s02).len(), 0);
     }
 }

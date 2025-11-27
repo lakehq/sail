@@ -173,11 +173,17 @@ fn to_chrono_fmt(format: Expr) -> Expr {
     ScalarUDF::from(SparkToChronoFmt::new()).call(vec![format])
 }
 
-fn to_date(args: Vec<Expr>) -> PlanResult<Expr> {
-    if args.len() == 1 {
-        Ok(expr_fn::to_date(args))
-    } else if args.len() == 2 {
-        let (expr, format) = args.two()?;
+fn to_date(input: ScalarFunctionInput) -> PlanResult<Expr> {
+    if input.arguments.len() == 1 {
+        // If format is not supplied, the function is a synonym for cast(expr AS DATE).
+        crate::function::scalar::conversion::cast_to_date(input)
+    } else if input.arguments.len() == 2 {
+        let (expr, format) = input.arguments.two()?;
+        let expr = match expr.get_type(input.function_context.schema) {
+            Ok(DataType::Timestamp(_time_unit, _tz)) => cast(expr, DataType::Utf8),
+            Ok(_other) => expr,
+            Err(_) => cast(expr, DataType::Utf8), // In case of error, cast to string
+        };
         let format = to_chrono_fmt(format);
         Ok(expr_fn::to_date(vec![expr, format]))
     } else {
@@ -424,7 +430,9 @@ fn months_between(input: ScalarFunctionInput) -> PlanResult<Expr> {
         - seconds_in_day(date2.clone(), tu2);
 
     let months_between = when(
-        (days1.eq(days2)).or(is_last_day(date1).and(is_last_day(date2))),
+        days1
+            .eq(days2)
+            .or(is_last_day(date1).and(is_last_day(date2))),
         month_diff.clone(),
     )
     .when(lit(true), month_diff + seconds_diff / seconds_in_month)
@@ -548,7 +556,7 @@ pub(super) fn list_built_in_datetime_functions() -> Vec<(&'static str, ScalarFun
                 )
             }),
         ),
-        ("to_date", F::var_arg(to_date)),
+        ("to_date", F::custom(to_date)),
         ("to_timestamp", F::var_arg(to_timestamp)),
         // The description for `to_timestamp_ltz` and `to_timestamp_ntz` are the same:
         //  "Parses the timestamp with the format to a timestamp without time zone. Returns null with invalid input."

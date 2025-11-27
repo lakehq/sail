@@ -819,7 +819,7 @@
       "input": "1 - f('o', o(bar)) hello * world",
       "exception": "\n[PARSE_SYNTAX_ERROR] Syntax error at or near '*'. SQLSTATE: 42601 (line 1, pos 25)\n\n== SQL ==\n1 - f('o', o(bar)) hello * world\n-------------------------^^^\n",
       "output": {
-        "failure": "invalid argument: found something at 25:26 expected something else"
+        "failure": "invalid argument: found * at 25:26 expected something else, or end of input"
       }
     },
     {
@@ -867,7 +867,7 @@
       "input": "GEO '(10,-6)'",
       "exception": "\n[UNSUPPORTED_TYPED_LITERAL] Literals of the type \"GEO\" are not supported. Supported types are \"DATE\", \"TIMESTAMP_NTZ\", \"TIMESTAMP_LTZ\", \"TIMESTAMP\", \"INTERVAL\", \"X\". SQLSTATE: 0A000\n== SQL (line 1, position 1) ==\nGEO '(10,-6)'\n^^^^^^^^^^^^^\n",
       "output": {
-        "failure": "invalid argument: found something at 4:13 expected something else"
+        "failure": "invalid argument: found '(10,-6)' at 4:13 expected '->', '.', '(', '[', '::', 'ESCAPE', 'IS', 'NOT', 'IN', '*', '/', '%', 'DIV', '+', '-', '||', '>>>', '>>', '<<', '&', '^', '|', '!=', '!>', '!<', '==', '=', '>=', '>', '<=>', '<=', '<>', '<', 'BETWEEN', 'LIKE', 'ILIKE', 'RLIKE', 'REGEXP', 'SIMILAR', 'AND', 'OR', 'AS', identifier, something else, or end of input"
       }
     },
     {
@@ -946,7 +946,7 @@
       "input": "`fo`o.`ba`r",
       "exception": "\n[PARSE_SYNTAX_ERROR] Syntax error at or near '.'. SQLSTATE: 42601 (line 1, pos 5)\n\n== SQL ==\n`fo`o.`ba`r\n-----^^^\n",
       "output": {
-        "failure": "invalid argument: found something at 5:6 expected something else"
+        "failure": "invalid argument: found . at 5:6 expected something else, or end of input"
       }
     },
     {
@@ -3956,7 +3956,7 @@
       "input": "foo(a x)",
       "exception": "\n[PARSE_SYNTAX_ERROR] Syntax error at or near 'x': extra input 'x'. SQLSTATE: 42601 (line 1, pos 6)\n\n== SQL ==\nfoo(a x)\n------^^^\n",
       "output": {
-        "failure": "invalid argument: found x at 6:7 expected ',', or ')'"
+        "failure": "invalid argument: found x at 6:7 expected '->', '.', '(', '[', '::', 'ESCAPE', 'IS', 'NOT', 'IN', '*', '/', '%', 'DIV', '+', '-', '||', '>>>', '>>', '<<', '&', '^', '|', '!=', '!>', '!<', '==', '=', '>=', '>', '<=>', '<=', '<>', '<', 'BETWEEN', 'LIKE', 'ILIKE', 'RLIKE', 'REGEXP', 'SIMILAR', 'AND', 'OR', '=>', ',', 'RESPECT', 'IGNORE', or ')'"
       }
     },
     {

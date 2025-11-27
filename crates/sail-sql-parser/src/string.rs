@@ -92,21 +92,21 @@ impl StringStyle {
 
 fn octal<'a, E>() -> impl Parser<'a, &'a str, char, E>
 where
-    E: ParserExtra<'a, &'a str>,
+    E: ParserExtra<'a, &'a str> + 'a,
 {
     any().filter(|c: &char| c.is_digit(8))
 }
 
 fn hex<'a, E>() -> impl Parser<'a, &'a str, char, E>
 where
-    E: ParserExtra<'a, &'a str>,
+    E: ParserExtra<'a, &'a str> + 'a,
 {
     any().filter(|c: &char| c.is_ascii_hexdigit())
 }
 
 fn backslash_escape_char<'a, E, D>(delimiter: D) -> impl Parser<'a, &'a str, Char<'a>, E>
 where
-    E: ParserExtra<'a, &'a str>,
+    E: ParserExtra<'a, &'a str> + 'a,
     D: OrderedSeq<'a, char> + Clone,
 {
     choice((
@@ -145,7 +145,7 @@ where
 
 fn dual_quote_escape_char<'a, E>(delimiter: char) -> impl Parser<'a, &'a str, Char<'a>, E>
 where
-    E: ParserExtra<'a, &'a str>,
+    E: ParserExtra<'a, &'a str> + 'a,
 {
     just(delimiter)
         .then(just(delimiter))
@@ -155,7 +155,7 @@ where
 
 fn text<'a, E, C, D, P>(delimiter: D, character: P) -> impl Parser<'a, &'a str, StringValue, E>
 where
-    E: ParserExtra<'a, &'a str>,
+    E: ParserExtra<'a, &'a str> + 'a,
     D: OrderedSeq<'a, char> + Clone,
     P: Parser<'a, &'a str, C, E>,
     StringValue: Container<C>,
@@ -165,7 +165,7 @@ where
 
 fn with_prefix<'a, E, P>(prefix: char, text: P) -> impl Parser<'a, &'a str, StringValue, E>
 where
-    E: ParserExtra<'a, &'a str>,
+    E: ParserExtra<'a, &'a str> + 'a,
     P: Parser<'a, &'a str, StringValue, E>,
 {
     just(prefix)
@@ -179,7 +179,7 @@ fn raw_string_value<'a, E, D>(
     delimiter: D,
 ) -> impl Parser<'a, &'a str, StringValue, E>
 where
-    E: ParserExtra<'a, &'a str>,
+    E: ParserExtra<'a, &'a str> + 'a,
     D: OrderedSeq<'a, char> + Clone,
 {
     let character = any().and_is(just(delimiter.clone()).not());
@@ -188,7 +188,7 @@ where
 
 fn backslash_escape_string_value<'a, E, D>(delimiter: D) -> impl Parser<'a, &'a str, StringValue, E>
 where
-    E: ParserExtra<'a, &'a str>,
+    E: ParserExtra<'a, &'a str> + 'a,
     D: OrderedSeq<'a, char> + Clone,
 {
     let character = backslash_escape_char(delimiter.clone());
@@ -200,7 +200,7 @@ fn prefixed_backslash_escape_string_value<'a, E, D>(
     delimiter: D,
 ) -> impl Parser<'a, &'a str, StringValue, E>
 where
-    E: ParserExtra<'a, &'a str>,
+    E: ParserExtra<'a, &'a str> + 'a,
     D: OrderedSeq<'a, char> + Clone,
 {
     let character = backslash_escape_char(delimiter.clone());
@@ -211,7 +211,7 @@ fn dual_quote_escape_string_value<'a, E>(
     delimiter: char,
 ) -> impl Parser<'a, &'a str, StringValue, E>
 where
-    E: ParserExtra<'a, &'a str>,
+    E: ParserExtra<'a, &'a str> + 'a,
 {
     let character = dual_quote_escape_char(delimiter);
     text(delimiter, character)
@@ -222,7 +222,7 @@ fn prefixed_dual_quote_escape_string_value<'a, E>(
     delimiter: char,
 ) -> impl Parser<'a, &'a str, StringValue, E>
 where
-    E: ParserExtra<'a, &'a str>,
+    E: ParserExtra<'a, &'a str> + 'a,
 {
     let character = dual_quote_escape_char(delimiter);
     with_prefix(prefix, text(delimiter, character))
@@ -233,7 +233,7 @@ fn unicode_escape_string_value<'a, E>(
     escape: Option<char>,
 ) -> impl Parser<'a, &'a str, StringValue, E>
 where
-    E: ParserExtra<'a, &'a str>,
+    E: ParserExtra<'a, &'a str> + 'a,
 {
     let escape = escape.unwrap_or('\\');
     let character = choice((
@@ -255,7 +255,7 @@ where
 
 fn backtick_quoted_string_value<'a, E>() -> impl Parser<'a, &'a str, StringValue, E>
 where
-    E: ParserExtra<'a, &'a str>,
+    E: ParserExtra<'a, &'a str> + 'a,
 {
     let character = none_of('`').or(just('`').repeated().exactly(2).map(|_| '`'));
     text('`', character)
@@ -263,7 +263,7 @@ where
 
 fn dollar_quoted_string_value<'a, E>(tag: &'a str) -> impl Parser<'a, &'a str, StringValue, E>
 where
-    E: ParserExtra<'a, &'a str>,
+    E: ParserExtra<'a, &'a str> + 'a,
 {
     let character = any().and_is(just(tag).not());
     text(tag, character)

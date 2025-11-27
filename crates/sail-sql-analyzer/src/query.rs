@@ -724,7 +724,7 @@ fn query_plan_with_table_modifier(
                 spec::Unpivot {
                     input: Box::new(plan),
                     ids: None,
-                    values,
+                    values: Some(values),
                     variable_column_name,
                     value_column_names,
                     include_nulls,

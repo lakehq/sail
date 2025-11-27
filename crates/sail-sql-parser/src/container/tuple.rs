@@ -1,10 +1,12 @@
+use std::any::TypeId;
+
 use chumsky::extra::ParserExtra;
 use chumsky::prelude::Input;
 use chumsky::Parser;
 use paste::paste;
 
 use crate::options::ParserOptions;
-use crate::tree::TreeParser;
+use crate::tree::{SyntaxDescriptor, SyntaxNode, TreeParser, TreeSyntax, TreeText};
 
 macro_rules! nested {
     (@fold $acc:tt) => { $acc };
@@ -19,7 +21,7 @@ macro_rules! impl_tree_parser_for_tuple {
             $T: TreeParser<'a, I, E, A>
             $(,$Ts: TreeParser<'a, I, E, A>)*
             , I: Input<'a>
-            , E: ParserExtra<'a, I>
+            , E: ParserExtra<'a, I> + 'a
             , A: Clone
         {
             fn parser(args: A, options: &'a ParserOptions) -> impl Parser<'a, I, Self, E> + Clone {
@@ -28,6 +30,48 @@ macro_rules! impl_tree_parser_for_tuple {
                 paste! {
                     parser.map(|nested!([<$T:lower>] $([<$Ts:lower>])*)| ([<$T:lower>], $([<$Ts:lower>],)*))
                 }
+            }
+        }
+
+        impl<$T $(,$Ts)*> TreeSyntax for ($T, $($Ts,)*)
+        where
+            $T: TreeSyntax + 'static
+            $(,$Ts: TreeSyntax + 'static)*
+        {
+            fn syntax() -> SyntaxDescriptor {
+                let name = format!(
+                    "Tuple({})",
+                    vec![$T::syntax().name $(, $Ts::syntax().name)*].join(", ")
+                );
+                SyntaxDescriptor {
+                    name,
+                    node: SyntaxNode::Sequence(vec![
+                        SyntaxNode::NonTerminal(TypeId::of::<$T>())
+                        $(,SyntaxNode::NonTerminal(TypeId::of::<$Ts>()))*
+                    ]),
+                    children: vec![
+                        (TypeId::of::<$T>(), Box::new($T::syntax))
+                        $(,(TypeId::of::<$Ts>(), Box::new($Ts::syntax)))*
+                    ],
+                }
+            }
+        }
+
+        impl<$T $(,$Ts)*> TreeText for ($T, $($Ts,)*)
+        where
+            $T: TreeText
+            $(,$Ts: TreeText)*
+        {
+            fn text(&self) -> String {
+                let mut result = String::new();
+                paste! {
+                    let ([<$T:lower>], $([<$Ts:lower>],)*) = self;
+                    result.push_str(&[<$T:lower>].text());
+                    $(
+                        result.push_str(&[<$Ts:lower>].text());
+                    )*
+                }
+                result
             }
         }
     };

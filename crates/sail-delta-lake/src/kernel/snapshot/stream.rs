@@ -1,17 +1,37 @@
+// https://github.com/delta-io/delta-rs/blob/5575ad16bf641420404611d65f4ad7626e9acb16/LICENSE.txt
+//
+// Copyright (2020) QP Hou and a number of other contributors.
+// Portions Copyright (2025) LakeSail, Inc.
+// Modified in 2025 by LakeSail, Inc.
+//
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+//     http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
+
+// [Credit]: <https://github.com/delta-io/delta-rs/blob/1f0b4d0965a85400c1effc6e9b4c7ebbb6795978/crates/core/src/kernel/snapshot/stream.rs>
+
 //! the code in this file is hoisted from datafusion with only slight modifications
 //!
-// [Credit]: <https://github.com/delta-io/delta-rs/blob/1f0b4d0965a85400c1effc6e9b4c7ebbb6795978/crates/core/src/kernel/snapshot/stream.rs>
 
 use std::pin::Pin;
 
 use datafusion::arrow::datatypes::SchemaRef;
 use datafusion::arrow::record_batch::RecordBatch;
-use deltalake::kernel::Add;
-use deltalake::{DeltaResult, DeltaTableError};
 use futures::stream::BoxStream;
 use futures::{Future, Stream, StreamExt};
 use tokio::sync::mpsc::{Receiver, Sender};
 use tokio::task::JoinSet;
+
+use crate::kernel::models::Add;
+use crate::kernel::{DeltaResult, DeltaTableError};
 
 /// Trait for types that stream [RecordBatch]
 ///
@@ -151,7 +171,7 @@ impl<O: Send + 'static> ReceiverStreamBuilder<O> {
                             // the JoinSet were aborted, which in turn
                             // would imply that the receiver has been
                             // dropped and this code is not running
-                            return Some(Err(DeltaTableError::Generic(format!(
+                            return Some(Err(DeltaTableError::generic(format!(
                                 "Non Panic Task error: {e}"
                             ))));
                         }

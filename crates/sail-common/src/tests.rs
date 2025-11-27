@@ -99,7 +99,12 @@ where
     F: Fn(S) -> Result<T, E>,
     H: Fn(String) -> E,
 {
-    let paths = glob::glob(path).map_err(|e| error(e.to_string()))?;
+    let paths = glob::glob(path)
+        .map_err(|e| error(e.to_string()))?
+        .collect::<Vec<_>>();
+    if paths.is_empty() {
+        return Err(error(format!("no test data files found at path: {path}")));
+    }
     for entry in paths {
         let path = entry.map_err(|e| error(e.to_string()))?;
         let content = fs::read_to_string(path.clone()).map_err(|e| error(e.to_string()))?;

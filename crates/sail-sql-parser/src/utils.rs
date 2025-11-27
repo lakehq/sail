@@ -8,7 +8,7 @@ use crate::token::Token;
 pub(crate) fn whitespace<'a, I, E>() -> impl Parser<'a, I, (), E> + Clone
 where
     I: Input<'a, Token = Token<'a>> + ValueInput<'a>,
-    E: ParserExtra<'a, I>,
+    E: ParserExtra<'a, I> + 'a,
 {
     any()
         .filter(|token: &Token| token.is_whitespace())
@@ -18,7 +18,7 @@ where
 pub(crate) fn skip_whitespace<'a, I, E>(input: &mut InputRef<'a, '_, I, E>)
 where
     I: Input<'a, Token = Token<'a>> + ValueInput<'a>,
-    E: ParserExtra<'a, I>,
+    E: ParserExtra<'a, I> + 'a,
 {
     loop {
         match input.peek() {

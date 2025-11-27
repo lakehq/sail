@@ -28,7 +28,7 @@
       "input": "'''",
       "exception": "\n[PARSE_SYNTAX_ERROR] Syntax error at or near ''': extra input '''. SQLSTATE: 42601 (line 1, pos 2)\n\n== SQL ==\n'''\n--^^^\n",
       "output": {
-        "failure": "invalid argument: found something at 2:3 expected something else, any, ''\\'', or '''''"
+        "failure": "invalid argument: found end of input expected any, '\\', or '''"
       }
     },
     {

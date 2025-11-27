@@ -1,16 +1,13 @@
 from __future__ import annotations
 
+import importlib
 import os
 from pathlib import Path
-from typing import TYPE_CHECKING, Any
-
-import pytest
-
-if TYPE_CHECKING:
-    from _pytest.fixtures import FixtureDef, SubRequest
 
 # pytest markers defined in `pyproject.toml` of the Ibis project
 IBIS_MARKERS = [
+    "athena",
+    "databricks",
     "backend: tests specific to a backend",
     "benchmark: benchmarks",
     "core: tests that do not required a backend",
@@ -46,42 +43,20 @@ IBIS_MARKERS = [
 ]
 
 
-@pytest.fixture(scope="session", autouse=True)
-def patch_ibis_spark_session():
-    from ibis.backends.pyspark.tests.conftest import TestConf, TestConfForStreaming
-
-    def connect(*, tmpdir, worker_id, **kw):  # noqa: ARG001
-        import ibis
-        from pyspark.sql import SparkSession
-
-        spark = SparkSession.builder.getOrCreate()
-        return ibis.pyspark.connect(spark, **kw)
-
-    TestConf.connect = staticmethod(connect)
-    TestConfForStreaming.connect = staticmethod(connect)
-
-
-def pytest_configure(config):
-    for marker in IBIS_MARKERS:
-        config.addinivalue_line("markers", marker)
-
-
-def pytest_fixture_setup(
-    fixturedef: FixtureDef[Any],
-    request: SubRequest,  # noqa: ARG001
-) -> object | None:
-    from _pytest.nodes import SEP
-
+def _resolve_data_volume() -> str:
     env_var = "IBIS_TESTING_DATA_DIR"
     data_dir = os.environ.get(env_var)
     if not data_dir:
         msg = f"missing environment variable '{env_var}'"
         raise RuntimeError(msg)
+    return str(Path(data_dir) / "parquet")
 
-    data_dir = Path(data_dir)
-    if fixturedef.argname == "data_dir" and fixturedef.baseid.endswith(f"{SEP}ibis{SEP}backends"):
-        # override the result of the `data_dir` fixture
-        fixturedef.cached_result = (data_dir, None, None)
-        return data_dir
 
-    return None
+def pytest_configure(config):
+    data_volume = _resolve_data_volume()
+    mod = importlib.import_module("ibis.backends.pyspark.tests.conftest")
+    TestConf = getattr(mod, "TestConf")  # noqa: N806 B009
+    TestConf.data_volume = data_volume
+    TestConf.parquet_dir = property(lambda _: data_volume)
+    for marker in IBIS_MARKERS:
+        config.addinivalue_line("markers", marker)

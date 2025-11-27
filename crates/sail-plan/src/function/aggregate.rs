@@ -10,13 +10,17 @@ use datafusion::functions_aggregate::{
 use datafusion::functions_nested::string::array_to_string;
 use datafusion_common::ScalarValue;
 use datafusion_expr::expr::{AggregateFunction, AggregateFunctionParams};
-use datafusion_expr::{cast, expr, lit, when, AggregateUDF, ExprSchemable};
+use datafusion_expr::{cast, expr, lit, when, AggregateUDF, ExprSchemable, ScalarUDF};
 use lazy_static::lazy_static;
+use sail_common::spec::SAIL_LIST_FIELD_NAME;
 use sail_common_datafusion::utils::items::ItemTaker;
 use sail_function::aggregate::kurtosis::KurtosisFunction;
 use sail_function::aggregate::max_min_by::{MaxByFunction, MinByFunction};
 use sail_function::aggregate::mode::ModeFunction;
 use sail_function::aggregate::skewness::SkewnessFunc;
+use sail_function::aggregate::try_avg::TryAvgFunction;
+use sail_function::aggregate::try_sum::TrySumFunction;
+use sail_function::scalar::struct_function::StructFunction;
 
 use crate::error::{PlanError, PlanResult};
 use crate::function::common::{
@@ -167,6 +171,36 @@ fn skewness(input: AggFunctionInput) -> PlanResult<expr::Expr> {
     }))
 }
 
+fn try_sum(input: AggFunctionInput) -> PlanResult<expr::Expr> {
+    let args = input.arguments;
+
+    Ok(expr::Expr::AggregateFunction(AggregateFunction {
+        func: Arc::new(AggregateUDF::from(TrySumFunction::new())),
+        params: AggregateFunctionParams {
+            args,
+            distinct: input.distinct,
+            filter: input.filter,
+            order_by: input.order_by,
+            null_treatment: get_null_treatment(input.ignore_nulls),
+        },
+    }))
+}
+
+fn try_avg(input: AggFunctionInput) -> PlanResult<expr::Expr> {
+    let args = input.arguments;
+
+    Ok(expr::Expr::AggregateFunction(AggregateFunction {
+        func: Arc::new(AggregateUDF::from(TryAvgFunction::new())),
+        params: AggregateFunctionParams {
+            args,
+            distinct: input.distinct,
+            filter: input.filter,
+            order_by: input.order_by,
+            null_treatment: get_null_treatment(input.ignore_nulls),
+        },
+    }))
+}
+
 fn count(input: AggFunctionInput) -> PlanResult<expr::Expr> {
     let AggFunctionInput {
         arguments,
@@ -178,6 +212,16 @@ fn count(input: AggFunctionInput) -> PlanResult<expr::Expr> {
     } = input;
     let null_treatment = get_null_treatment(ignore_nulls);
     let args = transform_count_star_wildcard_expr(arguments);
+    // TODO: remove StructFunction call when count distinct from multiple arguments is implemented
+    // https://github.com/apache/datafusion/blob/58ddf0d4390c770bc571f3ac2727c7de77aa25ab/datafusion/functions-aggregate/src/count.rs#L333
+    let args = if distinct && (args.len() > 1) {
+        vec![ScalarUDF::from(StructFunction::new(
+            (0..args.len()).map(|i| format!("col{i}")).collect(),
+        ))
+        .call(args)]
+    } else {
+        args
+    };
     Ok(expr::Expr::AggregateFunction(AggregateFunction {
         func: count::count_udaf(),
         params: AggregateFunctionParams {
@@ -263,7 +307,11 @@ fn listagg(input: AggFunctionInput) -> PlanResult<expr::Expr> {
 
     let string_agg = array_to_string(
         agg.cast_to(
-            &DataType::List(Arc::new(Field::new("item", DataType::Utf8, true))),
+            &DataType::List(Arc::new(Field::new(
+                SAIL_LIST_FIELD_NAME,
+                DataType::Utf8,
+                true,
+            ))),
             schema,
         )?,
         delim.cast_to(&DataType::Utf8, schema)?,
@@ -383,8 +431,8 @@ fn list_built_in_aggregate_functions() -> Vec<(&'static str, AggFunction)> {
         ("stddev_samp", F::default(stddev::stddev_udaf)),
         ("string_agg", F::custom(listagg)),
         ("sum", F::default(sum::sum_udaf)),
-        ("try_avg", F::unknown("try_avg")),
-        ("try_sum", F::unknown("try_sum")),
+        ("try_avg", F::custom(try_avg)),
+        ("try_sum", F::custom(try_sum)),
         ("var_pop", F::default(variance::var_pop_udaf)),
         ("var_samp", F::default(variance::var_samp_udaf)),
         ("variance", F::default(variance::var_samp_udaf)),

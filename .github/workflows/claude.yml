@@ -39,6 +39,8 @@ jobs:
           python-version: "3.11"
 
       - uses: pypa/hatch@install
+        with:
+          version: 1.15.1
 
       - uses: ./.github/actions/setup-rust
 
@@ -64,12 +66,12 @@ jobs:
           role-to-assume: ${{ vars.CLAUDE_CODE_AWS_ROLE_ARN }}
           aws-region: us-east-1
 
-      - uses: anthropics/claude-code-action@beta
+      - uses: anthropics/claude-code-action@v1
         with:
           trigger_phrase: "@claude"
           timeout_minutes: "60"
           github_token: ${{ steps.app-token.outputs.token }}
           use_bedrock: "true"
-          allowed_tools: |
-            Bash
-          model: "us.anthropic.claude-sonnet-4-20250514-v1:0"
+          claude_args: |
+            --allowedTools Bash
+            --model us.anthropic.claude-sonnet-4-5-20250929-v1:0

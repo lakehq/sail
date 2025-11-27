@@ -1,3 +1,24 @@
+// https://github.com/delta-io/delta-rs/blob/5575ad16bf641420404611d65f4ad7626e9acb16/LICENSE.txt
+//
+// Copyright (2020) QP Hou and a number of other contributors.
+// Portions Copyright (2025) LakeSail, Inc.
+// Modified in 2025 by LakeSail, Inc.
+//
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+//     http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
+
+// [Credit]: <https://github.com/delta-io/delta-rs/blob/3607c314cbdd2ad06c6ee0677b92a29f695c71f3/crates/core/src/operations/write/writer.rs>
+// [Credit]: <https://github.com/delta-io/delta-rs/blob/3607c314cbdd2ad06c6ee0677b92a29f695c71f3/crates/core/src/writer/record_batch.rs>
+
 use std::collections::HashMap;
 use std::sync::Arc;
 
@@ -7,21 +28,20 @@ use datafusion::arrow::compute;
 use datafusion::arrow::datatypes::{Schema as ArrowSchema, SchemaRef as ArrowSchemaRef};
 use datafusion::arrow::row::{RowConverter, SortField};
 use delta_kernel::expressions::Scalar;
-use deltalake::errors::DeltaTableError;
-use deltalake::kernel::scalars::ScalarExt;
-use deltalake::kernel::Add;
 use indexmap::IndexMap;
 use object_store::path::Path;
 use object_store::ObjectStore;
 use parquet::arrow::AsyncArrowWriter;
 use parquet::basic::Compression;
+use parquet::file::metadata::ParquetMetaData;
 use parquet::file::properties::WriterProperties;
 use parquet::schema::types::ColumnPath;
 use uuid::Uuid;
 
-/// [Credit]: <https://github.com/delta-io/delta-rs/blob/3607c314cbdd2ad06c6ee0677b92a29f695c71f3/crates/core/src/operations/write/writer.rs>
 use super::async_utils::AsyncShareableBuffer;
 use super::stats::create_add;
+use crate::kernel::models::{Add, ScalarExt};
+use crate::kernel::DeltaTableError;
 
 /// Trait for creating hive partition paths from partition values
 pub trait PartitionsExt {
@@ -351,7 +371,7 @@ impl PartitionWriter {
             .map_err(|e| DeltaTableError::generic(format!("Failed to close arrow writer: {e}")))?;
 
         // Skip empty files
-        if metadata.num_rows == 0 {
+        if metadata.file_metadata().num_rows() == 0 {
             self.reset_writer()?;
             return Ok(());
         }
@@ -421,7 +441,7 @@ impl PartitionWriter {
         &self,
         path: &str,
         file_size: i64,
-        metadata: &parquet::format::FileMetaData,
+        metadata: &ParquetMetaData,
     ) -> Result<Add, DeltaTableError> {
         create_add(
             &self.config.partition_values,
@@ -487,7 +507,7 @@ fn arrow_schema_without_partitions(
     ))
 }
 
-/// [Credit]: <https://github.com/delta-io/delta-rs/blob/3607c314cbdd2ad06c6ee0677b92a29f695c71f3/crates/core/src/writer/record_batch.rs>
+// [Credit]: <https://github.com/delta-io/delta-rs/blob/3607c314cbdd2ad06c6ee0677b92a29f695c71f3/crates/core/src/writer/record_batch.rs>
 /// Partition a RecordBatch along partition columns
 pub(crate) fn divide_by_partition_values(
     arrow_schema: ArrowSchemaRef,
@@ -550,8 +570,10 @@ pub(crate) fn divide_by_partition_values(
             .fields()
             .iter()
             .map(|f| {
-                #[allow(clippy::unwrap_used)]
-                let col = values.column(schema.index_of(f.name()).unwrap());
+                let col_idx = schema.index_of(f.name()).map_err(|_| {
+                    DeltaTableError::schema(format!("Column {} not found in batch", f.name()))
+                })?;
+                let col = values.column(col_idx);
                 compute::take(col.as_ref(), &idx, None)
                     .map_err(|e| DeltaTableError::generic(e.to_string()))
             })

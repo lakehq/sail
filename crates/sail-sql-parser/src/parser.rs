@@ -20,7 +20,7 @@ fn statement<'a, I, E>(options: &'a ParserOptions) -> impl Parser<'a, I, Stateme
 where
     I: Input<'a, Token = Token<'a>> + ValueInput<'a>,
     I::Span: Into<TokenSpan> + Clone,
-    E: ParserExtra<'a, I>,
+    E: ParserExtra<'a, I> + 'a,
     E::Error: LabelError<'a, I, TokenLabel>,
 {
     let mut statement = Recursive::declare();
@@ -59,7 +59,7 @@ fn data_type<'a, I, E>(options: &'a ParserOptions) -> impl Parser<'a, I, DataTyp
 where
     I: Input<'a, Token = Token<'a>> + ValueInput<'a>,
     I::Span: Into<TokenSpan> + Clone,
-    E: ParserExtra<'a, I>,
+    E: ParserExtra<'a, I> + 'a,
     E::Error: LabelError<'a, I, TokenLabel>,
 {
     let mut data_type = Recursive::declare();
@@ -71,7 +71,7 @@ fn object_name<'a, I, E>(options: &'a ParserOptions) -> impl Parser<'a, I, Objec
 where
     I: Input<'a, Token = Token<'a>> + ValueInput<'a>,
     I::Span: Into<TokenSpan> + Clone,
-    E: ParserExtra<'a, I>,
+    E: ParserExtra<'a, I> + 'a,
     E::Error: LabelError<'a, I, TokenLabel>,
 {
     ObjectName::parser((), options)
@@ -83,7 +83,7 @@ fn qualified_wildcard<'a, I, E>(
 where
     I: Input<'a, Token = Token<'a>> + ValueInput<'a>,
     I::Span: Into<TokenSpan> + Clone,
-    E: ParserExtra<'a, I>,
+    E: ParserExtra<'a, I> + 'a,
     E::Error: LabelError<'a, I, TokenLabel>,
 {
     QualifiedWildcard::parser((), options)
@@ -93,7 +93,7 @@ fn expression<'a, I, E>(options: &'a ParserOptions) -> impl Parser<'a, I, Expr, 
 where
     I: Input<'a, Token = Token<'a>> + ValueInput<'a>,
     I::Span: Into<TokenSpan> + Clone,
-    E: ParserExtra<'a, I>,
+    E: ParserExtra<'a, I> + 'a,
     E::Error: LabelError<'a, I, TokenLabel>,
 {
     let mut expression = Recursive::declare();
@@ -124,7 +124,7 @@ fn named_expression<'a, I, E>(
 where
     I: Input<'a, Token = Token<'a>> + ValueInput<'a>,
     I::Span: Into<TokenSpan> + Clone,
-    E: ParserExtra<'a, I>,
+    E: ParserExtra<'a, I> + 'a,
     E::Error: LabelError<'a, I, TokenLabel>,
 {
     let ident = Ident::parser((), options);
@@ -137,7 +137,7 @@ fn interval_literal<'a, I, E>(
 where
     I: Input<'a, Token = Token<'a>> + ValueInput<'a>,
     I::Span: Into<TokenSpan> + Clone,
-    E: ParserExtra<'a, I>,
+    E: ParserExtra<'a, I> + 'a,
     E::Error: LabelError<'a, I, TokenLabel>,
 {
     IntervalLiteral::parser(expression(options), options)
@@ -149,7 +149,7 @@ pub fn create_parser<'a, I, E>(
 where
     I: Input<'a, Token = Token<'a>> + ValueInput<'a>,
     I::Span: Into<TokenSpan> + Clone,
-    E: ParserExtra<'a, I>,
+    E: ParserExtra<'a, I> + 'a,
     E::Error: LabelError<'a, I, TokenLabel>,
 {
     let semicolon = Semicolon::parser((), options);
@@ -174,7 +174,7 @@ macro_rules! define_sub_parser {
         where
             I: Input<'a, Token = Token<'a>> + ValueInput<'a>,
             I::Span: Into<TokenSpan> + Clone,
-            E: ParserExtra<'a, I>,
+            E: ParserExtra<'a, I> + 'a,
             E::Error: LabelError<'a, I, TokenLabel>,
         {
             $parse(options)

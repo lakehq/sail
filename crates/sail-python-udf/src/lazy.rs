@@ -1,14 +1,14 @@
 use std::fmt::Debug;
 use std::hash::{Hash, Hasher};
 
-use pyo3::sync::GILOnceCell;
-use pyo3::{PyObject, Python};
+use pyo3::sync::PyOnceLock;
+use pyo3::{Py, PyAny, Python};
 
 use crate::error::PyUdfResult;
 
-/// A wrapper around a `PyObject` that is lazily initialized
+/// A wrapper around a `Py<PyAny>` that is lazily initialized
 /// and implements the [Debug] trait.
-pub(crate) struct LazyPyObject(GILOnceCell<PyObject>);
+pub(crate) struct LazyPyObject(PyOnceLock<Py<PyAny>>);
 
 impl Debug for LazyPyObject {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
@@ -36,12 +36,12 @@ impl Hash for LazyPyObject {
 
 impl LazyPyObject {
     pub fn new() -> Self {
-        Self(GILOnceCell::new())
+        Self(PyOnceLock::new())
     }
 
-    pub fn get_or_try_init<F>(&self, py: Python, f: F) -> PyUdfResult<&PyObject>
+    pub fn get_or_try_init<F>(&self, py: Python, f: F) -> PyUdfResult<&Py<PyAny>>
     where
-        F: FnOnce() -> PyUdfResult<PyObject>,
+        F: FnOnce() -> PyUdfResult<Py<PyAny>>,
     {
         self.0.get_or_try_init(py, f)
     }
