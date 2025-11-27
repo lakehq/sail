@@ -4,7 +4,16 @@ Test Delta Lake schema handling (mergeSchema, overwriteSchema, evolution) in Sai
 
 import pandas as pd
 import pytest
-from pyspark.sql.types import Row
+from pyspark.sql.types import (
+    DoubleType,
+    FloatType,
+    IntegerType,
+    LongType,
+    Row,
+    StringType,
+    StructField,
+    StructType,
+)
 
 
 class TestDeltaSchemaHandling:
@@ -12,8 +21,6 @@ class TestDeltaSchemaHandling:
 
     def test_delta_schema_read_with_custom_schema(self, spark, tmp_path):
         """Test with a custom schema and filter conditions."""
-        from pyspark.sql.types import IntegerType, StringType, StructField, StructType
-
         delta_path = tmp_path / "delta_custom_schema"
         delta_table_path = f"{delta_path}"
 
@@ -147,8 +154,6 @@ class TestDeltaSchemaHandling:
 
     def test_delta_schema_merge_with_compatible_types(self, spark, tmp_path):
         """Test mergeSchema behavior with compatible type changes."""
-        from pyspark.sql.types import IntegerType, LongType, StructField, StructType
-
         delta_path = tmp_path / "delta_merge_type_changes"
 
         initial_schema = StructType([StructField("id", LongType(), True), StructField("value", IntegerType(), True)])
@@ -183,8 +188,6 @@ class TestDeltaSchemaHandling:
 
     def test_delta_schema_merge_float_promotion(self, spark, tmp_path):
         """Test mergeSchema with Float32 to Float64 promotion."""
-        from pyspark.sql.types import DoubleType, FloatType, IntegerType, StructField, StructType
-
         delta_path = tmp_path / "delta_float_promotion"
 
         # Create table with Float32
