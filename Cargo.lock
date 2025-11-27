@@ -5985,6 +5985,7 @@ dependencies = [
  "sail-common-datafusion",
  "serde",
  "serde_json",
+ "thiserror",
  "url",
  "uuid",
 ]

@@ -17,6 +17,8 @@ use parquet::arrow::async_writer::AsyncArrowWriter;
 use parquet::file::metadata::ParquetMetaData;
 use parquet::file::properties::WriterProperties;
 
+use crate::error::{IcebergError, IcebergResult};
+
 pub struct ParquetFileMeta {
     pub num_rows: u64,
     pub file_size: u64,
@@ -31,10 +33,9 @@ impl ArrowParquetWriter {
     pub fn try_new(
         schema: &datafusion::arrow::datatypes::Schema,
         props: WriterProperties,
-    ) -> Result<Self, String> {
+    ) -> IcebergResult<Self> {
         let buffer = Vec::new();
-        let writer = AsyncArrowWriter::try_new(buffer, Arc::new(schema.clone()), Some(props))
-            .map_err(|e| format!("parquet writer error: {e}"))?;
+        let writer = AsyncArrowWriter::try_new(buffer, Arc::new(schema.clone()), Some(props))?;
         Ok(Self {
             writer: Some(writer),
         })
@@ -43,20 +44,21 @@ impl ArrowParquetWriter {
     pub async fn write_batch(
         &mut self,
         batch: &datafusion::arrow::array::RecordBatch,
-    ) -> Result<(), String> {
-        let writer = self.writer.as_mut().ok_or("writer closed")?;
-        writer
-            .write(batch)
-            .await
-            .map_err(|e| format!("parquet write: {e}"))
+    ) -> IcebergResult<()> {
+        let writer = self
+            .writer
+            .as_mut()
+            .ok_or_else(|| IcebergError::general("writer closed"))?;
+        writer.write(batch).await?;
+        Ok(())
     }
 
-    pub async fn close(mut self) -> Result<(Bytes, ParquetFileMeta), String> {
-        let mut writer = self.writer.take().ok_or("writer already closed")?;
-        let metadata = writer
-            .finish()
-            .await
-            .map_err(|e| format!("parquet finish: {e}"))?;
+    pub async fn close(mut self) -> IcebergResult<(Bytes, ParquetFileMeta)> {
+        let mut writer = self
+            .writer
+            .take()
+            .ok_or_else(|| IcebergError::general("writer already closed"))?;
+        let metadata = writer.finish().await?;
         let buf = writer.into_inner();
         let file_size = buf.len() as u64;
         let bytes = Bytes::from(buf);

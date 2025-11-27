@@ -41,6 +41,7 @@ use crate::datasource::expr_adapter::IcebergPhysicalExprAdapterFactory;
 use crate::datasource::expressions::simplify_expr;
 use crate::datasource::pruning::{prune_files, prune_manifests_by_partition_summaries};
 use crate::datasource::type_converter::iceberg_schema_to_arrow;
+use crate::error::{IcebergError, IcebergResult};
 use crate::io::{
     load_manifest as io_load_manifest, load_manifest_list as io_load_manifest_list, StoreContext,
 };
@@ -122,7 +123,7 @@ impl IcebergTableProvider {
     }
 
     /// Load manifest list from snapshot
-    async fn load_manifest_list(&self, store_ctx: &StoreContext) -> Result<ManifestList> {
+    async fn load_manifest_list(&self, store_ctx: &StoreContext) -> IcebergResult<ManifestList> {
         let manifest_list_str = self.snapshot.manifest_list();
         log::trace!("Manifest list path: {}", manifest_list_str);
         let ml = io_load_manifest_list(store_ctx, manifest_list_str).await?;
@@ -136,7 +137,7 @@ impl IcebergTableProvider {
         filters: &[Expr],
         store_ctx: &StoreContext,
         manifest_list: &ManifestList,
-    ) -> Result<Vec<DataFile>> {
+    ) -> IcebergResult<Vec<DataFile>> {
         let mut data_files = Vec::new();
 
         let spec_map: HashMap<i32, PartitionSpec> = self
@@ -206,7 +207,7 @@ impl IcebergTableProvider {
         &self,
         store_ctx: &StoreContext,
         manifest_list: &ManifestList,
-    ) -> Result<std::collections::HashMap<String, IcebergDeleteAttachment>> {
+    ) -> IcebergResult<std::collections::HashMap<String, IcebergDeleteAttachment>> {
         let mut index: std::collections::HashMap<String, IcebergDeleteAttachment> =
             std::collections::HashMap::new();
 
@@ -252,7 +253,7 @@ impl IcebergTableProvider {
         store_ctx: &StoreContext,
         data_files: Vec<DataFile>,
         delete_index: &std::collections::HashMap<String, IcebergDeleteAttachment>,
-    ) -> Result<Vec<PartitionedFile>> {
+    ) -> IcebergResult<Vec<PartitionedFile>> {
         let mut partitioned_files = Vec::new();
 
         for data_file in data_files {
@@ -493,7 +494,7 @@ impl TableProvider for IcebergTableProvider {
         log::trace!("Starting scan for table: {}", self.table_uri);
 
         let table_url = Url::parse(&self.table_uri)
-            .map_err(|e| datafusion::common::DataFusionError::External(Box::new(e)))?;
+            .map_err(|e| IcebergError::invalid_url(&self.table_uri, e))?;
         let base_store = get_object_store_from_session(session, &table_url)?;
         let store_ctx = StoreContext::new(base_store.clone(), &table_url)?;
         log::trace!("Got object store");
@@ -548,12 +549,9 @@ impl TableProvider for IcebergTableProvider {
 
         // Step 5: Create file scan configuration
         let file_schema = self.arrow_schema.clone();
-        let table_url = Url::parse(&self.table_uri)
-            .map_err(|e| datafusion::common::DataFusionError::External(Box::new(e)))?;
-
         let base_url = format!("{}://{}", table_url.scheme(), table_url.authority());
-        let base_url_parsed = Url::parse(&base_url)
-            .map_err(|e| datafusion::common::DataFusionError::External(Box::new(e)))?;
+        let base_url_parsed =
+            Url::parse(&base_url).map_err(|e| IcebergError::invalid_url(&base_url, e))?;
         let object_store_url = ObjectStoreUrl::parse(base_url_parsed)
             .map_err(|e| datafusion::common::DataFusionError::External(Box::new(e)))?;
 

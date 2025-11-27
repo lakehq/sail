@@ -19,6 +19,7 @@ use uuid::Uuid;
 use super::{
     ActionCommit, SnapshotProduceOperation, SnapshotProducer, Transaction, TransactionAction,
 };
+use crate::error::IcebergResult;
 use crate::io::StoreContext;
 use crate::spec::manifest::ManifestMetadata;
 use crate::spec::manifest_list::ManifestList;
@@ -97,7 +98,7 @@ impl FastAppendAction {
 
 #[async_trait]
 impl TransactionAction for FastAppendAction {
-    async fn commit(self: Arc<Self>, tx: &Transaction) -> Result<ActionCommit, String> {
+    async fn commit(self: Arc<Self>, tx: &Transaction) -> IcebergResult<ActionCommit> {
         let snapshot_producer = SnapshotProducer::new(
             tx,
             self.added_data_files.clone(),

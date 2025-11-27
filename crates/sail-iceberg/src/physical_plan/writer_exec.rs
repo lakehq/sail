@@ -395,13 +395,10 @@ impl ExecutionPlan for IcebergWriterExec {
                 total_rows += u64::try_from(batch_row_count).map_err(|e| {
                     DataFusionError::Execution(format!("Row count overflow: {}", e))
                 })?;
-                writer
-                    .write(&batch)
-                    .await
-                    .map_err(DataFusionError::Execution)?;
+                writer.write(&batch).await?;
             }
 
-            let data_files = writer.close().await.map_err(DataFusionError::Execution)?;
+            let data_files = writer.close().await?;
 
             let info = crate::physical_plan::commit::IcebergCommitInfo {
                 table_uri: table_url.to_string(),

@@ -12,10 +12,10 @@
 
 use std::sync::Arc;
 
-use datafusion::common::DataFusionError;
 use object_store::path::Path as ObjectPath;
 use url::Url;
 
+use crate::error::IcebergResult;
 use crate::spec::{FormatVersion, Manifest, ManifestList};
 
 #[derive(Clone)]
@@ -26,12 +26,8 @@ pub struct StoreContext {
 }
 
 impl StoreContext {
-    pub fn new(
-        base: Arc<dyn object_store::ObjectStore>,
-        table_url: &Url,
-    ) -> Result<Self, DataFusionError> {
-        let base_path = ObjectPath::parse(table_url.path())
-            .map_err(|e| DataFusionError::External(Box::new(e)))?;
+    pub fn new(base: Arc<dyn object_store::ObjectStore>, table_url: &Url) -> IcebergResult<Self> {
+        let base_path = ObjectPath::parse(table_url.path())?;
         let prefixed: Arc<dyn object_store::ObjectStore> = Arc::new(
             object_store::prefix::PrefixStore::new(base.clone(), base_path.clone()),
         );
@@ -45,38 +41,29 @@ impl StoreContext {
     pub fn resolve<'a>(
         &'a self,
         raw: &str,
-    ) -> Result<(&'a Arc<dyn object_store::ObjectStore>, ObjectPath), DataFusionError> {
+    ) -> IcebergResult<(&'a Arc<dyn object_store::ObjectStore>, ObjectPath)> {
         if let Ok(url) = Url::parse(raw) {
             let p = url.path();
             let no_leading = p.strip_prefix('/').unwrap_or(p);
-            return Ok((
-                &self.base,
-                ObjectPath::parse(no_leading)
-                    .map_err(|e| DataFusionError::External(Box::new(e)))?,
-            ));
+            return Ok((&self.base, ObjectPath::parse(no_leading)?));
         }
         if raw.starts_with(object_store::path::DELIMITER) {
             let no_leading = raw.strip_prefix('/').unwrap_or(raw);
             return Ok((&self.base, ObjectPath::from(no_leading)));
         }
-        Ok((
-            &self.prefixed,
-            ObjectPath::parse(raw).map_err(|e| DataFusionError::External(Box::new(e)))?,
-        ))
+        Ok((&self.prefixed, ObjectPath::parse(raw)?))
     }
 
-    pub fn resolve_to_absolute_path(&self, raw_path: &str) -> Result<ObjectPath, DataFusionError> {
+    pub fn resolve_to_absolute_path(&self, raw_path: &str) -> IcebergResult<ObjectPath> {
         if let Ok(url) = Url::parse(raw_path) {
             let encoded_path = url.path();
             let path_no_leading = encoded_path.strip_prefix('/').unwrap_or(encoded_path);
-            return ObjectPath::parse(path_no_leading)
-                .map_err(|e| DataFusionError::External(Box::new(e)));
+            return Ok(ObjectPath::parse(path_no_leading)?);
         }
 
         if raw_path.starts_with(object_store::path::DELIMITER) {
             let no_leading = raw_path.strip_prefix('/').unwrap_or(raw_path);
-            return ObjectPath::parse(no_leading)
-                .map_err(|e| DataFusionError::External(Box::new(e)));
+            return Ok(ObjectPath::parse(no_leading)?);
         }
 
         let mut full = self.prefix_path.clone();
@@ -90,29 +77,17 @@ impl StoreContext {
 pub async fn load_manifest_list(
     store_ctx: &StoreContext,
     manifest_list_str: &str,
-) -> Result<ManifestList, DataFusionError> {
+) -> IcebergResult<ManifestList> {
     let (store_ref, path) = store_ctx.resolve(manifest_list_str)?;
-    let bytes = store_ref
-        .get(&path)
-        .await
-        .map_err(|e| DataFusionError::External(Box::new(e)))?
-        .bytes()
-        .await
-        .map_err(|e| DataFusionError::External(Box::new(e)))?;
-    ManifestList::parse_with_version(&bytes, FormatVersion::V2).map_err(DataFusionError::Execution)
+    let bytes = store_ref.get(&path).await?.bytes().await?;
+    ManifestList::parse_with_version(&bytes, FormatVersion::V2)
 }
 
 pub async fn load_manifest(
     store_ctx: &StoreContext,
     manifest_path_str: &str,
-) -> Result<Manifest, DataFusionError> {
+) -> IcebergResult<Manifest> {
     let (store_ref, path) = store_ctx.resolve(manifest_path_str)?;
-    let bytes = store_ref
-        .get(&path)
-        .await
-        .map_err(|e| DataFusionError::External(Box::new(e)))?
-        .bytes()
-        .await
-        .map_err(|e| DataFusionError::External(Box::new(e)))?;
-    Manifest::parse_avro(&bytes).map_err(DataFusionError::Execution)
+    let bytes = store_ref.get(&path).await?.bytes().await?;
+    Manifest::parse_avro(&bytes)
 }

@@ -370,10 +370,7 @@ impl ExecutionPlan for IcebergCommitExec {
                         for df in commit_info.data_files.clone().into_iter() {
                             action.add_file(df);
                         }
-                        Arc::new(action)
-                            .commit(&tx)
-                            .await
-                            .map_err(DataFusionError::Execution)?
+                        Arc::new(action).commit(&tx).await?
                     }
                     crate::spec::Operation::Overwrite => {
                         let producer = crate::operations::SnapshotProducer::new(
@@ -388,10 +385,7 @@ impl ExecutionPlan for IcebergCommitExec {
                                 "overwrite"
                             }
                         }
-                        producer
-                            .commit(LocalOverwriteOperation)
-                            .await
-                            .map_err(DataFusionError::Execution)?
+                        producer.commit(LocalOverwriteOperation).await?
                     }
                     _ => {
                         return Err(DataFusionError::NotImplemented(
