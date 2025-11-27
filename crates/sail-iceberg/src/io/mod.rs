@@ -60,11 +60,23 @@ impl StoreContext {
             return Ok(ObjectPath::parse(raw_path)?);
         }
 
-        let mut full = self.prefix_path.clone();
-        for comp in raw_path.split('/').filter(|s| !s.is_empty()) {
-            full = full.child(comp);
+        let normalized_rel = raw_path
+            .split(object_store::path::DELIMITER)
+            .filter(|s| !s.is_empty())
+            .collect::<Vec<_>>()
+            .join(object_store::path::DELIMITER);
+
+        if normalized_rel.is_empty() {
+            return Ok(self.prefix_path.clone());
         }
-        Ok(full)
+
+        let prefix_str = self.prefix_path.to_string();
+        let joined_path = if prefix_str.is_empty() {
+            normalized_rel
+        } else {
+            format!("{}/{}", prefix_str, normalized_rel)
+        };
+        Ok(ObjectPath::parse(&joined_path)?)
     }
 }
 

@@ -11,6 +11,7 @@
 // limitations under the License.
 
 use bytes::Bytes;
+use object_store::path::Path as ObjectPath;
 
 use super::{ActionCommit, Transaction};
 use crate::error::{IcebergError, IcebergResult};
@@ -122,7 +123,7 @@ impl<'a> SnapshotProducer<'a> {
 
         let manifest_len = manifest_bytes.len() as i64;
         let manifest_rel = format!("metadata/manifest-{}.avro", uuid::Uuid::new_v4());
-        let manifest_path = object_store::path::Path::from(manifest_rel.as_str());
+        let manifest_path = ObjectPath::parse(manifest_rel.as_str())?;
         store_ctx
             .prefixed
             .put(
@@ -199,7 +200,7 @@ impl<'a> SnapshotProducer<'a> {
         );
         let list_bytes = list_writer.to_bytes(FormatVersion::V2)?;
         let list_rel = format!("metadata/snap-{}.avro", new_snapshot_id);
-        let list_path = object_store::path::Path::from(list_rel.as_str());
+        let list_path = ObjectPath::parse(list_rel.as_str())?;
         store_ctx
             .prefixed
             .put(
