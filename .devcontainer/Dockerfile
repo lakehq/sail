@@ -10,7 +10,6 @@ RUN apt-get update && \
     git \
     libc6-dev \
     libprotobuf-dev \
-    libssl-dev \
     pkg-config \
     protobuf-compiler && \
     rm -rf /var/lib/apt/lists/*
