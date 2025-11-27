@@ -143,9 +143,9 @@ class TestDeltaPartitioning:
                         if category_dir.startswith("category="):
                             actual_partitions.add(f"{region_dir}/{category_dir}")
 
-        assert (
-            actual_partitions == expected_partition_structure
-        ), f"Expected {expected_partition_structure}, got {actual_partitions}"
+        assert actual_partitions == expected_partition_structure, (
+            f"Expected {expected_partition_structure}, got {actual_partitions}"
+        )
 
         df_region1 = spark.read.format("delta").load(f"{delta_path}").filter("region = 1")
         assert df_region1.count() == 2, "Region 1 should have 2 records"  # noqa: PLR2004
