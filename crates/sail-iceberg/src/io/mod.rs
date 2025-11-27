@@ -43,27 +43,21 @@ impl StoreContext {
         raw: &str,
     ) -> IcebergResult<(&'a Arc<dyn object_store::ObjectStore>, ObjectPath)> {
         if let Ok(url) = Url::parse(raw) {
-            let p = url.path();
-            let no_leading = p.strip_prefix('/').unwrap_or(p);
-            return Ok((&self.base, ObjectPath::parse(no_leading)?));
+            return Ok((&self.base, ObjectPath::parse(url.path())?));
         }
         if raw.starts_with(object_store::path::DELIMITER) {
-            let no_leading = raw.strip_prefix('/').unwrap_or(raw);
-            return Ok((&self.base, ObjectPath::from(no_leading)));
+            return Ok((&self.base, ObjectPath::parse(raw)?));
         }
         Ok((&self.prefixed, ObjectPath::parse(raw)?))
     }
 
     pub fn resolve_to_absolute_path(&self, raw_path: &str) -> IcebergResult<ObjectPath> {
         if let Ok(url) = Url::parse(raw_path) {
-            let encoded_path = url.path();
-            let path_no_leading = encoded_path.strip_prefix('/').unwrap_or(encoded_path);
-            return Ok(ObjectPath::parse(path_no_leading)?);
+            return Ok(ObjectPath::parse(url.path())?);
         }
 
         if raw_path.starts_with(object_store::path::DELIMITER) {
-            let no_leading = raw_path.strip_prefix('/').unwrap_or(raw_path);
-            return Ok(ObjectPath::parse(no_leading)?);
+            return Ok(ObjectPath::parse(raw_path)?);
         }
 
         let mut full = self.prefix_path.clone();

@@ -549,10 +549,7 @@ impl TableProvider for IcebergTableProvider {
 
         // Step 5: Create file scan configuration
         let file_schema = self.arrow_schema.clone();
-        let base_url = format!("{}://{}", table_url.scheme(), table_url.authority());
-        let base_url_parsed =
-            Url::parse(&base_url).map_err(|e| IcebergError::invalid_url(&base_url, e))?;
-        let object_store_url = ObjectStoreUrl::parse(base_url_parsed)
+        let object_store_url = ObjectStoreUrl::parse(&table_url[..url::Position::BeforePath])
             .map_err(|e| datafusion::common::DataFusionError::External(Box::new(e)))?;
 
         let parquet_options = TableParquetOptions {
