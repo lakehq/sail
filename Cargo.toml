@@ -149,19 +149,19 @@ datafusion-functions-json = { git = "https://github.com/lakehq/datafusion-functi
 # The `pyo3` version must match the one used in `arrow-pyarrow` (replace `RELEASE` with the release we are using):
 #   https://github.com/apache/arrow-rs/blob/RELEASE/arrow-pyarrow/Cargo.toml
 pyo3 = { version = "0.26.0", features = ["serde"] }
-arrow = { version = "57.0.0", features = ["chrono-tz"] }
-arrow-buffer = { version = "57.0.0" }
-arrow-schema = { version = "57.0.0", features = ["serde"] }
-arrow-flight = { version = "57.0.0" }
-arrow-pyarrow = { version = "57.0.0" }
-parquet = { version = "57.0.0" }
+arrow = { version = "57.1.0", features = ["chrono-tz"] }
+arrow-buffer = { version = "57.1.0" }
+arrow-schema = { version = "57.1.0", features = ["serde"] }
+arrow-flight = { version = "57.1.0" }
+arrow-pyarrow = { version = "57.1.0" }
+parquet = { version = "57.1.0" }
 serde_arrow = { version = "0.13.7", features = ["arrow-57"] }
 # The `object_store` version must match the one used in DataFusion.
 object_store = { version = "0.12.4", features = ["aws", "gcp", "azure", "http"] }
 hdfs-native-object-store = "0.15.0"
 
 # Lakehouse
-delta_kernel = { version = "0.17.0", features = ["arrow-57", "default-engine-rustls", "internal-api"] }
+delta_kernel = { version = "0.18.1", features = ["arrow-57", "default-engine-rustls", "internal-api"] }
 ######
 # This is the end of the manually managed dependencies.
 # Do not add more dependencies below.
