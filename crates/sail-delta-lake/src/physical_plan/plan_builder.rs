@@ -21,8 +21,8 @@ use datafusion::physical_plan::filter::FilterExec;
 use datafusion::physical_plan::projection::ProjectionExec;
 use datafusion::physical_plan::union::UnionExec;
 use datafusion::physical_plan::ExecutionPlan;
-use datafusion_common::Result;
-use sail_common_datafusion::datasource::PhysicalSinkMode;
+use datafusion_common::{not_impl_err, Result};
+use sail_common_datafusion::datasource::{MergeInfo as PhysicalMergeInfo, PhysicalSinkMode};
 use url::Url;
 
 use super::{
@@ -409,5 +409,39 @@ impl<'a> DeltaDeletePlanBuilder<'a> {
         ));
 
         Ok(commit_exec)
+    }
+}
+
+/// Builder for MERGE INTO execution plans.
+pub struct DeltaMergePlanBuilder<'a> {
+    table_url: Url,
+    merge_info: PhysicalMergeInfo,
+    session: &'a dyn Session,
+    options: TableDeltaOptions,
+}
+
+impl<'a> DeltaMergePlanBuilder<'a> {
+    pub fn new(
+        table_url: Url,
+        merge_info: PhysicalMergeInfo,
+        session: &'a dyn Session,
+        options: TableDeltaOptions,
+    ) -> Self {
+        Self {
+            table_url,
+            merge_info,
+            session,
+            options,
+        }
+    }
+
+    pub async fn build(self) -> Result<Arc<dyn ExecutionPlan>> {
+        let _ = (
+            self.table_url,
+            self.merge_info,
+            self.session,
+            self.options,
+        );
+        not_impl_err!("Delta MERGE execution plan builder is not implemented yet")
     }
 }

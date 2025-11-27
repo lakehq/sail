@@ -42,7 +42,7 @@ mod writer_exec;
 pub use commit_exec::DeltaCommitExec;
 pub use expr_adapter::DeltaPhysicalExprAdapterFactory;
 pub use find_files_exec::DeltaFindFilesExec;
-pub use plan_builder::{DeltaDeletePlanBuilder, DeltaPlanBuilder};
+pub use plan_builder::{DeltaDeletePlanBuilder, DeltaMergePlanBuilder, DeltaPlanBuilder};
 pub use remove_actions_exec::DeltaRemoveActionsExec;
 pub use scan_by_adds_exec::DeltaScanByAddsExec;
 pub(crate) use utils::join_batches_with_add_actions;

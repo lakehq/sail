@@ -8,13 +8,13 @@ use datafusion::datasource::listing::ListingTableUrl;
 use datafusion::execution::SessionStateBuilder;
 use datafusion::physical_plan::ExecutionPlan;
 use sail_common_datafusion::datasource::{
-    DeleteInfo, PhysicalSinkMode, SinkInfo, SourceInfo, TableFormat,
+    DeleteInfo, MergeInfo, PhysicalSinkMode, SinkInfo, SourceInfo, TableFormat,
 };
 use sail_common_datafusion::streaming::event::schema::is_flow_event_schema;
 use sail_delta_lake::datasource::{parse_predicate_expression, DataFusionMixins};
 use sail_delta_lake::options::{ColumnMappingModeOption, TableDeltaOptions};
 use sail_delta_lake::physical_plan::plan_builder::DeltaTableConfig;
-use sail_delta_lake::physical_plan::{DeltaDeletePlanBuilder, DeltaPlanBuilder};
+use sail_delta_lake::physical_plan::{DeltaDeletePlanBuilder, DeltaMergePlanBuilder, DeltaPlanBuilder};
 use sail_delta_lake::table::open_table_with_object_store;
 use sail_delta_lake::{create_delta_provider, DeltaTableError, KernelError};
 use url::Url;
@@ -167,6 +167,18 @@ impl TableFormat for DeltaTableFormat {
         let delete_exec = plan_builder.build().await?;
 
         Ok(delete_exec)
+    }
+
+    async fn create_merger(
+        &self,
+        ctx: &dyn Session,
+        info: MergeInfo,
+    ) -> Result<Arc<dyn ExecutionPlan>> {
+        let table_url = Self::parse_table_url(ctx, vec![info.target.path.clone()]).await?;
+        let delta_options = resolve_delta_write_options(info.target.options.clone())?;
+        let plan_builder = DeltaMergePlanBuilder::new(table_url, info, ctx, delta_options);
+        let merge_exec = plan_builder.build().await?;
+        Ok(merge_exec)
     }
 }
 
