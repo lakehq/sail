@@ -55,7 +55,7 @@ Issues = "https://github.com/lakehq/sail/issues"
 sail = "pysail.cli:main"
 
 [build-system]
-requires = ["maturin>=1.0,<2.0"]
+requires = ["maturin>=1.0,<2.0", "hatchling==1.15.1"]
 build-backend = "maturin"
 
 # All Hatch environments are configured to have `skip-install = true`,
