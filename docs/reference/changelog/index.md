@@ -5,6 +5,24 @@ next: false
 
 # Changelog
 
+## 0.4.3
+
+_November 26, 2025_
+
+- Added schema evolution support for Iceberg ([#1048](https://github.com/lakehq/sail/pull/1048)).
+- Improved the following SQL functions ([#1049](https://github.com/lakehq/sail/pull/1049), [#1056](https://github.com/lakehq/sail/pull/1056), [#1057](https://github.com/lakehq/sail/pull/1057), and [#1077](https://github.com/lakehq/sail/pull/1077)):
+  - `max_by`
+  - `min_by`
+  - `signum`
+  - `greatest`
+  - `least`
+  - `div`
+- Added support for `EXPLAIN` in SQL statements ([#1078](https://github.com/lakehq/sail/pull/1078)).
+
+### Contributors
+
+Huge thanks to [@davidlghellin](https://github.com/davidlghellin) for your contributions!
+
 ## 0.4.2
 
 _November 13, 2025_
