@@ -32,6 +32,8 @@ jobs:
 
       - name: Install Hatch
         uses: pypa/hatch@install
+        with:
+          version: 1.15.1
 
       - name: Get Version
         id: version

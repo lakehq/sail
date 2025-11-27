@@ -44,6 +44,8 @@ jobs:
 
       - name: Install Hatch
         uses: pypa/hatch@install
+        with:
+          version: 1.15.1
 
       - name: Checkout ibis testing data
         uses: actions/checkout@v4
