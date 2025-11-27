@@ -11,7 +11,6 @@ apt-get install -y --no-install-recommends \
     git-lfs \
     libc6-dev \
     libprotobuf-dev \
-    libssl-dev \
     pkg-config \
     protobuf-compiler
 rm -rf /var/lib/apt/lists/*
