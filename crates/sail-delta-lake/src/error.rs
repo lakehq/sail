@@ -119,7 +119,7 @@ fn map_kernel_error_to_datafusion(err: KernelError) -> DataFusionError {
         KernelError::Parquet(err) => DataFusionError::ParquetError(Box::new(err)),
         KernelError::FileNotFound(path) => {
             DataFusionError::ObjectStore(Box::new(ObjectStoreError::NotFound {
-                path: path.into(),
+                path,
                 source: Box::new(std::io::Error::new(
                     std::io::ErrorKind::NotFound,
                     "File not found in Delta kernel",

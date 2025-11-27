@@ -446,7 +446,7 @@ pub(crate) fn stats_schema(
             fields.push(StructField::nullable("maxValues", min_max_schema));
         }
     }
-    Ok(StructType::try_new(fields)?)
+    StructType::try_new(fields)
 }
 
 // Convert a min/max stats schema into a nullcount schema (all leaf fields are LONG)

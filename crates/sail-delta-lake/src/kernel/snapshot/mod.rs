@@ -402,7 +402,7 @@ impl Snapshot {
         let inner = self.inner.clone();
         let version = spawn_blocking(move || inner.get_app_id_version(&app_id, engine.as_ref()))
             .await
-            .map_err(|e| DeltaTableError::generic_err(e))??;
+            .map_err(DeltaTableError::generic_err)??;
         Ok(version)
     }
 }
@@ -837,7 +837,7 @@ impl EagerSnapshot {
                 .and_then(|batch| self.snapshot.inner.parse_stats_column(&batch))
             {
                 Ok(files) => files,
-                Err(err) => return Box::pin(futures::stream::once(async { Err(err.into()) })),
+                Err(err) => return Box::pin(futures::stream::once(async { Err(err) })),
             }
         } else {
             self.files.clone()
