@@ -14,7 +14,9 @@ use sail_common_datafusion::streaming::event::schema::is_flow_event_schema;
 use sail_delta_lake::datasource::{parse_predicate_expression, DataFusionMixins};
 use sail_delta_lake::options::{ColumnMappingModeOption, TableDeltaOptions};
 use sail_delta_lake::physical_plan::plan_builder::DeltaTableConfig;
-use sail_delta_lake::physical_plan::{DeltaDeletePlanBuilder, DeltaMergePlanBuilder, DeltaPlanBuilder};
+use sail_delta_lake::physical_plan::{
+    DeltaDeletePlanBuilder, DeltaMergePlanBuilder, DeltaPlanBuilder,
+};
 use sail_delta_lake::table::open_table_with_object_store;
 use sail_delta_lake::{create_delta_provider, DeltaTableError, KernelError};
 use url::Url;

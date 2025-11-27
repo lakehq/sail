@@ -46,7 +46,11 @@ impl PlanResolver<'_> {
 
         let target_schema = target_plan.schema();
         let source_schema = source_plan.schema();
-        let merge_schema = Arc::new(build_join_schema(target_schema, source_schema, &JoinType::Inner)?);
+        let merge_schema = Arc::new(build_join_schema(
+            target_schema,
+            source_schema,
+            &JoinType::Inner,
+        )?);
 
         let on_condition = self
             .resolve_expression(on_condition, &merge_schema, state)
@@ -84,9 +88,7 @@ impl PlanResolver<'_> {
     ) -> PlanResult<(LogicalPlan, Option<String>)> {
         match source {
             spec::MergeSource::Table { name, alias } => {
-                let alias_string = alias
-                    .as_ref()
-                    .map(|a| a.as_ref().to_string());
+                let alias_string = alias.as_ref().map(|a| a.as_ref().to_string());
                 let mut plan = self.resolve_merge_table_plan(name, state).await?;
                 if let Some(alias) = alias_string.as_ref() {
                     plan = self.apply_table_alias(plan, alias)?;
@@ -95,9 +97,7 @@ impl PlanResolver<'_> {
             }
             spec::MergeSource::Query { input, alias } => {
                 let mut plan = self.resolve_query_plan(*input, state).await?;
-                let alias_string = alias
-                    .as_ref()
-                    .map(|a| a.as_ref().to_string());
+                let alias_string = alias.as_ref().map(|a| a.as_ref().to_string());
                 if let Some(alias) = alias_string.as_ref() {
                     plan = self.apply_table_alias(plan, alias)?;
                 }
