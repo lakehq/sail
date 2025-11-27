@@ -5675,7 +5675,7 @@ checksum = "28d3b2b1366ec20994f1fd18c3c594f05c5dd4bc44d8bb0c1c632c8d6829481f"
 
 [[package]]
 name = "sail-cache"
-version = "0.4.2"
+version = "0.4.3"
 dependencies = [
  "chrono",
  "datafusion",
@@ -5688,7 +5688,7 @@ dependencies = [
 
 [[package]]
 name = "sail-catalog"
-version = "0.4.2"
+version = "0.4.3"
 dependencies = [
  "async-trait",
  "datafusion",
@@ -5706,7 +5706,7 @@ dependencies = [
 
 [[package]]
 name = "sail-catalog-iceberg"
-version = "0.4.2"
+version = "0.4.3"
 dependencies = [
  "arrow",
  "async-trait",
@@ -5726,7 +5726,7 @@ dependencies = [
 
 [[package]]
 name = "sail-catalog-memory"
-version = "0.4.2"
+version = "0.4.3"
 dependencies = [
  "async-trait",
  "dashmap",
@@ -5735,7 +5735,7 @@ dependencies = [
 
 [[package]]
 name = "sail-catalog-unity"
-version = "0.4.2"
+version = "0.4.3"
 dependencies = [
  "arrow",
  "async-trait",
@@ -5759,7 +5759,7 @@ dependencies = [
 
 [[package]]
 name = "sail-cli"
-version = "0.4.2"
+version = "0.4.3"
 dependencies = [
  "clap",
  "fastrace",
@@ -5776,7 +5776,7 @@ dependencies = [
 
 [[package]]
 name = "sail-common"
-version = "0.4.2"
+version = "0.4.3"
 dependencies = [
  "arrow",
  "arrow-buffer",
@@ -5797,7 +5797,7 @@ dependencies = [
 
 [[package]]
 name = "sail-common-datafusion"
-version = "0.4.2"
+version = "0.4.3"
 dependencies = [
  "async-trait",
  "chrono",
@@ -5819,7 +5819,7 @@ dependencies = [
 
 [[package]]
 name = "sail-data-source"
-version = "0.4.2"
+version = "0.4.3"
 dependencies = [
  "async-trait",
  "bytes",
@@ -5852,7 +5852,7 @@ dependencies = [
 
 [[package]]
 name = "sail-delta-lake"
-version = "0.4.2"
+version = "0.4.3"
 dependencies = [
  "arrow-schema",
  "async-trait",
@@ -5882,7 +5882,7 @@ dependencies = [
 
 [[package]]
 name = "sail-execution"
-version = "0.4.2"
+version = "0.4.3"
 dependencies = [
  "arrow-flight",
  "datafusion",
@@ -5919,7 +5919,7 @@ dependencies = [
 
 [[package]]
 name = "sail-function"
-version = "0.4.2"
+version = "0.4.3"
 dependencies = [
  "aes",
  "aes-gcm",
@@ -5953,7 +5953,7 @@ dependencies = [
 
 [[package]]
 name = "sail-gold-test"
-version = "0.4.2"
+version = "0.4.3"
 dependencies = [
  "clap",
  "lazy_static",
@@ -5965,7 +5965,7 @@ dependencies = [
 
 [[package]]
 name = "sail-iceberg"
-version = "0.4.2"
+version = "0.4.3"
 dependencies = [
  "apache-avro",
  "async-trait",
@@ -5991,14 +5991,14 @@ dependencies = [
 
 [[package]]
 name = "sail-logical-optimizer"
-version = "0.4.2"
+version = "0.4.3"
 dependencies = [
  "datafusion",
 ]
 
 [[package]]
 name = "sail-logical-plan"
-version = "0.4.2"
+version = "0.4.3"
 dependencies = [
  "comfy-table",
  "datafusion",
@@ -6012,7 +6012,7 @@ dependencies = [
 
 [[package]]
 name = "sail-object-store"
-version = "0.4.2"
+version = "0.4.3"
 dependencies = [
  "async-stream",
  "async-trait",
@@ -6043,7 +6043,7 @@ dependencies = [
 
 [[package]]
 name = "sail-physical-optimizer"
-version = "0.4.2"
+version = "0.4.3"
 dependencies = [
  "datafusion",
  "datafusion-physical-expr",
@@ -6054,7 +6054,7 @@ dependencies = [
 
 [[package]]
 name = "sail-physical-plan"
-version = "0.4.2"
+version = "0.4.3"
 dependencies = [
  "datafusion",
  "datafusion-common",
@@ -6068,7 +6068,7 @@ dependencies = [
 
 [[package]]
 name = "sail-plan"
-version = "0.4.2"
+version = "0.4.3"
 dependencies = [
  "arrow",
  "async-recursion",
@@ -6107,7 +6107,7 @@ dependencies = [
 
 [[package]]
 name = "sail-python"
-version = "0.4.2"
+version = "0.4.3"
 dependencies = [
  "fastrace",
  "log",
@@ -6121,7 +6121,7 @@ dependencies = [
 
 [[package]]
 name = "sail-python-udf"
-version = "0.4.2"
+version = "0.4.3"
 dependencies = [
  "arrow-pyarrow",
  "datafusion",
@@ -6140,7 +6140,7 @@ dependencies = [
 
 [[package]]
 name = "sail-server"
-version = "0.4.2"
+version = "0.4.3"
 dependencies = [
  "axum",
  "log",
@@ -6155,7 +6155,7 @@ dependencies = [
 
 [[package]]
 name = "sail-session"
-version = "0.4.2"
+version = "0.4.3"
 dependencies = [
  "datafusion",
  "sail-catalog",
@@ -6168,7 +6168,7 @@ dependencies = [
 
 [[package]]
 name = "sail-spark-connect"
-version = "0.4.2"
+version = "0.4.3"
 dependencies = [
  "async-stream",
  "datafusion",
@@ -6212,7 +6212,7 @@ dependencies = [
 
 [[package]]
 name = "sail-sql-analyzer"
-version = "0.4.2"
+version = "0.4.3"
 dependencies = [
  "chrono",
  "chumsky",
@@ -6226,7 +6226,7 @@ dependencies = [
 
 [[package]]
 name = "sail-sql-macro"
-version = "0.4.2"
+version = "0.4.3"
 dependencies = [
  "proc-macro2",
  "quote",
@@ -6235,7 +6235,7 @@ dependencies = [
 
 [[package]]
 name = "sail-sql-parser"
-version = "0.4.2"
+version = "0.4.3"
 dependencies = [
  "chumsky",
  "either",
@@ -6252,7 +6252,7 @@ dependencies = [
 
 [[package]]
 name = "sail-telemetry"
-version = "0.4.2"
+version = "0.4.3"
 dependencies = [
  "env_logger",
  "fastrace",
