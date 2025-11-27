@@ -33,7 +33,13 @@ def test_derived_tpcds_query_execution(spark, query):
 
 
 def read_sql(query):
-    path = Path(__file__).parent.parent.parent / "data" / "tpcds" / "queries" / f"{query}.sql"
+    path = (
+        Path(__file__).parent.parent.parent
+        / "data"
+        / "tpcds"
+        / "queries"
+        / f"{query}.sql"
+    )
     with open(path) as f:
         text = f.read()
     for sql in text.split(";"):

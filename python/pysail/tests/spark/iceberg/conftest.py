@@ -20,7 +20,9 @@ def iceberg_table(sql_catalog, request) -> Table:
     schema: Schema = params["schema"]
     identifier: str = params["identifier"]
     partition_spec = params.get("partition_spec")
-    table = sql_catalog.create_table(identifier=identifier, schema=schema, partition_spec=partition_spec)
+    table = sql_catalog.create_table(
+        identifier=identifier, schema=schema, partition_spec=partition_spec
+    )
     try:
         yield table
     finally:

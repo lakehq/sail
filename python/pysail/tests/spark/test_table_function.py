@@ -41,7 +41,11 @@ def test_lateral_view(spark):
     assert_frame_equal(
         df.toPandas(),
         pd.DataFrame(
-            {"id": [0, 0, 0, 0, 1, 1, 1, 1], "u": [0, 0, 1, 1, 1, 1, 2, 2], "v": [0, 0, 1, 2, 1, 2, 2, 4]},
+            {
+                "id": [0, 0, 0, 0, 1, 1, 1, 1],
+                "u": [0, 0, 1, 1, 1, 1, 2, 2],
+                "v": [0, 0, 1, 2, 1, 2, 2, 4],
+            },
             dtype="int64",
         ),
     )

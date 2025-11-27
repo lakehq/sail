@@ -26,7 +26,9 @@ class TestDeltaWriteOptions:
             batch_path = delta_path / f"batch_{batch_size}"
 
             # Write with specific batch size
-            df.write.format("delta").mode("overwrite").option("write_batch_size", str(batch_size)).save(str(batch_path))
+            df.write.format("delta").mode("overwrite").option(
+                "write_batch_size", str(batch_size)
+            ).save(str(batch_path))
 
             # Read back and verify data integrity
             result_df = spark.read.format("delta").load(f"{batch_path}").sort("id")
@@ -57,15 +59,17 @@ class TestDeltaWriteOptions:
         for file_size in [50000, 100000, 150000]:
             size_path = delta_path / f"size_{file_size}"
 
-            df.write.format("delta").mode("overwrite").option("target_file_size", str(file_size)).option(
-                "write_batch_size", "100"
-            ).save(str(size_path))
+            df.write.format("delta").mode("overwrite").option(
+                "target_file_size", str(file_size)
+            ).option("write_batch_size", "100").save(str(size_path))
 
             # target_file_size should create multiple files
             data_files = get_data_files(str(size_path))
             assert (
                 len(data_files) > 2  # noqa: PLR2004
-            ), f"target_file_size ({file_size}) should create multiple output files, got {len(data_files)} files"
+            ), (
+                f"target_file_size ({file_size}) should create multiple output files, got {len(data_files)} files"
+            )
 
             result_df = spark.read.format("delta").load(f"{size_path}").sort("id")
             result_data = result_df.collect()
@@ -82,15 +86,20 @@ class TestDeltaWriteOptions:
 
         # Create test data
         test_data = [
-            Row(id=i, name=f"user_{i}", data=f"data_content_{i}" * 5, score=float(i * 0.01))
+            Row(
+                id=i,
+                name=f"user_{i}",
+                data=f"data_content_{i}" * 5,
+                score=float(i * 0.01),
+            )
             for i in range(1, 151)  # 150 rows
         ]
         df = spark.createDataFrame(test_data)
 
         # Write with both options
-        df.write.format("delta").mode("overwrite").option("write_batch_size", "20").option(
-            "target_file_size", "2048"
-        ).save(str(delta_path))
+        df.write.format("delta").mode("overwrite").option(
+            "write_batch_size", "20"
+        ).option("target_file_size", "2048").save(str(delta_path))
 
         # Read back and verify data integrity
         result_df = spark.read.format("delta").load(f"{delta_path}").sort("id")
@@ -120,9 +129,11 @@ class TestDeltaWriteOptions:
         df = spark.createDataFrame(test_data)
 
         # Write with options and partitioning
-        df.write.format("delta").mode("overwrite").option("write_batch_size", "15").option(
-            "target_file_size", "1024"
-        ).partitionBy("category").save(str(delta_path))
+        df.write.format("delta").mode("overwrite").option(
+            "write_batch_size", "15"
+        ).option("target_file_size", "1024").partitionBy("category").save(
+            str(delta_path)
+        )
 
         # Read back and verify data integrity
         result_df = spark.read.format("delta").load(f"{delta_path}").sort("id")
@@ -138,6 +149,12 @@ class TestDeltaWriteOptions:
         assert categories == {"cat_0", "cat_1", "cat_2"}
 
         # Test partition filtering
-        filtered_df = spark.read.format("delta").load(f"{delta_path}").filter("category = 'cat_0'")
+        filtered_df = (
+            spark.read.format("delta")
+            .load(f"{delta_path}")
+            .filter("category = 'cat_0'")
+        )
         filtered_data = filtered_df.collect()
-        assert len(filtered_data) == 20  # 60 rows / 3 categories = 20 rows per category  # noqa: PLR2004
+        assert (
+            len(filtered_data) == 20
+        )  # 60 rows / 3 categories = 20 rows per category  # noqa: PLR2004

@@ -105,7 +105,11 @@ def patch_pyspark_pandas_test_utils():
     ):
         import pandas as pd
 
-        if not check_row_order and isinstance(left, pd.DataFrame) and isinstance(right, pd.DataFrame):
+        if (
+            not check_row_order
+            and isinstance(left, pd.DataFrame)
+            and isinstance(right, pd.DataFrame)
+        ):
             left = normalize_pandas_data_frame(left)
             right = normalize_pandas_data_frame(right)
 
@@ -240,7 +244,10 @@ SKIPPED_SPARK_TESTS = [
         reason="Buggy test",
     ),
     TestMarker(
-        keywords=["test_parity_pandas_cogrouped_map.py", "test_apply_in_pandas_returning_wrong_column_names"],
+        keywords=[
+            "test_parity_pandas_cogrouped_map.py",
+            "test_apply_in_pandas_returning_wrong_column_names",
+        ],
         reason="Buggy test",
     ),
     TestMarker(
@@ -353,7 +360,10 @@ def normalize_show_string(s: str) -> str:
 
     data_rows.sort()
 
-    widths = [max([len(header_row[i])] + [len(row[i]) for row in data_rows]) for i in range(len(header_row))]
+    widths = [
+        max([len(header_row[i])] + [len(row[i]) for row in data_rows])
+        for i in range(len(header_row))
+    ]
 
     separator = "+" + "+".join("-" * width for width in widths) + "+"
 
@@ -378,10 +388,12 @@ def normalize_summary_df_show_string(s: str) -> str:
     # For these next four, Spark uses approx percentiles in df.summary() which are not exact.
     # We adjust the values to match the expected output.
     s = s.replace(
-        "|    75%|  13|              44.1|            150.5|", "|    75%|  12|             43.15|           148.45|"
+        "|    75%|  13|              44.1|            150.5|",
+        "|    75%|  12|             43.15|           148.45|",
     )
     s = s.replace(
-        "|    25%|  11|              37.8|            142.2|", "|    25%|  11|            38.425|          142.225|"
+        "|    25%|  11|              37.8|            142.2|",
+        "|    25%|  11|            38.425|          142.225|",
     )
     if "|    75%| 13|  44.1| 150.5|" in s and "|    25%| 11|  37.8| 142.2|" in s:
         s = s.replace("|    75%| 13|  44.1| 150.5|", "|    75%| 12| 43.15| 148.45|")
@@ -407,7 +419,10 @@ def patch_pyspark_doctest_output_checker():
             if (
                 "|   mean|12.0| 40.73333333333333|            145.0|" in want
                 and "| stddev| 1.0|3.1722757341273704|4.763402145525822|" in want
-            ) or ("|    75%| 13|  44.1| 150.5|" in want and "|    25%| 11|  37.8| 142.2|" in want):
+            ) or (
+                "|    75%| 13|  44.1| 150.5|" in want
+                and "|    25%| 11|  37.8| 142.2|" in want
+            ):
                 want = normalize_summary_df_show_string(want)
             if want.startswith("+"):
                 want = normalize_show_string(want)
@@ -417,7 +432,9 @@ def patch_pyspark_doctest_output_checker():
     _pytest.doctest.CHECKER_CLASS = OutputChecker
 
 
-def pytest_collection_modifyitems(session: pytest.Session, config: pytest.Config, items: list[pytest.Item]) -> None:  # noqa: ARG001
+def pytest_collection_modifyitems(
+    session: pytest.Session, config: pytest.Config, items: list[pytest.Item]
+) -> None:  # noqa: ARG001
     if _is_spark_testing():
         add_pyspark_test_markers(items)
 

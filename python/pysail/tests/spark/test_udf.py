@@ -22,25 +22,35 @@ def test_implicit_string_casting(spark):
     df = spark.sql("SELECT 1 as a").select(udf(lambda x: x)("a").alias("b"))
     assert df.collect() == [Row(b="1")]
 
-    df = spark.sql("SELECT 1 as a").select(udf(lambda x: [x], returnType="array<string>")("a").alias("b"))
+    df = spark.sql("SELECT 1 as a").select(
+        udf(lambda x: [x], returnType="array<string>")("a").alias("b")
+    )
     assert df.collect() == [Row(b=["1"])]
 
 
 @pytest.mark.usefixtures("arrow")
 @pytest.mark.skip(reason="not working")
 def test_implicit_binary_casting_invalid_type(spark):
-    df = spark.sql("SELECT 1 as a").select(udf(lambda x: x, returnType="binary")("a").alias("b"))
+    df = spark.sql("SELECT 1 as a").select(
+        udf(lambda x: x, returnType="binary")("a").alias("b")
+    )
     assert df.collect() == [Row(b=None)]
 
-    df = spark.sql("SELECT 1 as a").select(udf(lambda x: [x], returnType="array<binary>")("a").alias("b"))
+    df = spark.sql("SELECT 1 as a").select(
+        udf(lambda x: [x], returnType="array<binary>")("a").alias("b")
+    )
     assert df.collect() == [Row(b=[None])]
 
 
 @pytest.mark.usefixtures("arrow")
 @pytest.mark.skip(reason="not working")
 def test_implicit_binary_casting_string_type(spark):
-    df = spark.sql("SELECT '1' as a").select(udf(lambda x: x, returnType="binary")("a").alias("b"))
+    df = spark.sql("SELECT '1' as a").select(
+        udf(lambda x: x, returnType="binary")("a").alias("b")
+    )
     assert df.collect() == [Row(b=bytearray(b"1"))]
 
-    df = spark.sql("SELECT '1' as a").select(udf(lambda x: [x], returnType="array<binary>")("a").alias("b"))
+    df = spark.sql("SELECT '1' as a").select(
+        udf(lambda x: [x], returnType="array<binary>")("a").alias("b")
+    )
     assert df.collect() == [Row(b=[bytearray(b"1")])]

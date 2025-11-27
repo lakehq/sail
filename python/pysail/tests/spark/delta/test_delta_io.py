@@ -21,9 +21,9 @@ class TestDeltaIO:
     @pytest.fixture(scope="class")
     def expected_pandas_df(self):
         """Expected pandas DataFrame"""
-        return pd.DataFrame({"id": [10, 11, 12], "event": ["A", "B", "A"], "score": [0.98, 0.54, 0.76]}).astype(
-            {"id": "int32", "event": "string", "score": "float64"}
-        )
+        return pd.DataFrame(
+            {"id": [10, 11, 12], "event": ["A", "B", "A"], "score": [0.98, 0.54, 0.76]}
+        ).astype({"id": "int32", "event": "string", "score": "float64"})
 
     def test_delta_io_write_with_input_partitions(self, spark, tmp_path):
         delta_path = tmp_path / "delta_table"
@@ -31,10 +31,14 @@ class TestDeltaIO:
         spark.range(1).write.format("delta").save(str(delta_path))
         assert spark.read.format("delta").load(f"{delta_path}").count() == 1
 
-        spark.range(1, 101, 1, 10).write.format("delta").mode("overwrite").save(str(delta_path))
+        spark.range(1, 101, 1, 10).write.format("delta").mode("overwrite").save(
+            str(delta_path)
+        )
         assert spark.read.format("delta").load(f"{delta_path}").count() == 100  # noqa: PLR2004
 
-    def test_delta_io_basic_overwrite_and_read(self, spark, delta_test_data, expected_pandas_df, tmp_path):
+    def test_delta_io_basic_overwrite_and_read(
+        self, spark, delta_test_data, expected_pandas_df, tmp_path
+    ):
         """Test basic Delta Lake write and read operations"""
         delta_path = tmp_path / "delta_table"
 
@@ -43,15 +47,21 @@ class TestDeltaIO:
         df.write.format("delta").mode("overwrite").save(str(delta_path))
 
         data_files = get_data_files(str(delta_path))
-        assert len(data_files) == 1, f"Expected exactly 1 data file, got {len(data_files)}"
+        assert len(data_files) == 1, (
+            f"Expected exactly 1 data file, got {len(data_files)}"
+        )
 
         result_df = spark.read.format("delta").load(f"{delta_path}").sort("id")
 
         assert_frame_equal(
-            result_df.toPandas(), expected_pandas_df.sort_values("id").reset_index(drop=True), check_dtype=False
+            result_df.toPandas(),
+            expected_pandas_df.sort_values("id").reset_index(drop=True),
+            check_dtype=False,
         )
 
-    def test_delta_io_create_table_with_sql(self, spark, delta_test_data, expected_pandas_df, tmp_path):
+    def test_delta_io_create_table_with_sql(
+        self, spark, delta_test_data, expected_pandas_df, tmp_path
+    ):
         """Test creating Delta table with SQL and querying"""
         delta_path = tmp_path / "delta_table"
         delta_table_path = f"{delta_path}"
@@ -60,13 +70,17 @@ class TestDeltaIO:
 
         df.write.format("delta").mode("overwrite").save(str(delta_path))
 
-        spark.sql(f"CREATE TABLE my_delta USING delta LOCATION '{escape_sql_string_literal(delta_table_path)}'")
+        spark.sql(
+            f"CREATE TABLE my_delta USING delta LOCATION '{escape_sql_string_literal(delta_table_path)}'"
+        )
 
         try:
             result_df = spark.sql("SELECT * FROM my_delta").sort("id")
 
             assert_frame_equal(
-                result_df.toPandas(), expected_pandas_df.sort_values("id").reset_index(drop=True), check_dtype=False
+                result_df.toPandas(),
+                expected_pandas_df.sort_values("id").reset_index(drop=True),
+                check_dtype=False,
             )
         finally:
             spark.sql("DROP TABLE IF EXISTS my_delta")
@@ -105,7 +119,9 @@ class TestDeltaIO:
         ).astype({"id": "int32", "event": "string", "score": "float64"})
 
         assert_frame_equal(
-            result_df.toPandas(), expected_data.sort_values("id").reset_index(drop=True), check_dtype=False
+            result_df.toPandas(),
+            expected_data.sort_values("id").reset_index(drop=True),
+            check_dtype=False,
         )
 
     def test_delta_io_overwrite_mode(self, spark, delta_test_data, tmp_path):
@@ -133,12 +149,14 @@ class TestDeltaIO:
 
         result_df = spark.read.format("delta").load(delta_table_path).sort("id")
 
-        expected_data = pd.DataFrame({"id": [20, 21], "event": ["X", "Y"], "score": [0.95, 0.88]}).astype(
-            {"id": "int32", "event": "string", "score": "float64"}
-        )
+        expected_data = pd.DataFrame(
+            {"id": [20, 21], "event": ["X", "Y"], "score": [0.95, 0.88]}
+        ).astype({"id": "int32", "event": "string", "score": "float64"})
 
         assert_frame_equal(
-            result_df.toPandas(), expected_data.sort_values("id").reset_index(drop=True), check_dtype=False
+            result_df.toPandas(),
+            expected_data.sort_values("id").reset_index(drop=True),
+            check_dtype=False,
         )
 
     def test_delta_io_overwrite_partitions_with_replace_where(self, spark, tmp_path):
@@ -162,7 +180,9 @@ class TestDeltaIO:
             Row(id=6, category="A", value=200),
         ]
         new_df = spark.createDataFrame(new_data)
-        new_df.write.format("delta").mode("overwrite").option("replaceWhere", "category = 'A'").save(str(delta_path))
+        new_df.write.format("delta").mode("overwrite").option(
+            "replaceWhere", "category = 'A'"
+        ).save(str(delta_path))
 
         result_df = spark.read.format("delta").load(delta_table_path).sort("id")
         result = result_df.collect()
@@ -205,15 +225,21 @@ class TestDeltaIO:
             ]
             new_df = spark.createDataFrame(new_data)
 
-            condition = (F.col("category") == "A") & (F.col("value") < F.lit(50).cast("bigint"))
+            condition = (F.col("category") == "A") & (
+                F.col("value") < F.lit(50).cast("bigint")
+            )
             new_df.writeTo(table_name).overwrite(condition)
 
             result_df = spark.read.format("delta").load(delta_table_path).sort("id")
             result = result_df.collect()
 
             assert {row.id for row in result} == {2, 4, 5, 6, 8, 7}
-            assert {row.value for row in result if row.category == "A" and row.value < 50} == {10}  # noqa: PLR2004
-            assert {row.value for row in result if row.category == "A" and row.value >= 100} == {100, 200}  # noqa: PLR2004
+            assert {
+                row.value for row in result if row.category == "A" and row.value < 50
+            } == {10}  # noqa: PLR2004
+            assert {
+                row.value for row in result if row.category == "A" and row.value >= 100
+            } == {100, 200}  # noqa: PLR2004
             assert {row.value for row in result if row.category == "B"} == {20, 40, 999}
         finally:
             spark.sql(f"DROP TABLE IF EXISTS {table_name}")
@@ -249,8 +275,12 @@ class TestDeltaIO:
             result = result_df.collect()
 
             assert {row.id for row in result} == {2, 4, 5, 6, 8, 7}
-            assert {row.value for row in result if row.category == "A" and row.value < 50} == {10}  # noqa: PLR2004
-            assert {row.value for row in result if row.category == "A" and row.value >= 100} == {100, 200}  # noqa: PLR2004
+            assert {
+                row.value for row in result if row.category == "A" and row.value < 50
+            } == {10}  # noqa: PLR2004
+            assert {
+                row.value for row in result if row.category == "A" and row.value >= 100
+            } == {100, 200}  # noqa: PLR2004
             assert {row.value for row in result if row.category == "B"} == {20, 40, 999}
         finally:
             spark.sql(f"DROP TABLE IF EXISTS {table_name}")

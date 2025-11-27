@@ -37,7 +37,8 @@ def test_nested_struct_projection_and_nulls(spark, tmp_path):
     catalog = create_sql_catalog(tmp_path)
     identifier = "default.test_projection_nested"
     inner = StructType(
-        NestedField(10, "x", IntegerType(), required=False), NestedField(11, "y", StringType(), required=False)
+        NestedField(10, "x", IntegerType(), required=False),
+        NestedField(11, "y", StringType(), required=False),
     )
     schema = Schema(
         NestedField(1, "id", IntegerType(), required=False),

@@ -70,7 +70,10 @@ def collect_spark_config(spark):
         )
         for entry in obj.getConfigEntries().toArray()
     ]
-    removed_entries = [_build_removed_config_entry(entry) for entry in to_java_map(obj.removedSQLConfigs()).values()]
+    removed_entries = [
+        _build_removed_config_entry(entry)
+        for entry in to_java_map(obj.removedSQLConfigs()).values()
+    ]
 
     return {
         "sparkVersion": pyspark.__version__,
@@ -87,7 +90,11 @@ def main():
     parser.add_argument("-o", "--output", required=True)
     args = parser.parse_args()
 
-    spark = pyspark.sql.SparkSession.builder.master("local[1]").appName("Test").getOrCreate()
+    spark = (
+        pyspark.sql.SparkSession.builder.master("local[1]")
+        .appName("Test")
+        .getOrCreate()
+    )
 
     with open(args.output, "w") as f:
         json.dump(collect_spark_config(spark), f, indent=2)

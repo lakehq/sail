@@ -3,7 +3,9 @@ import pytest
 from pysail.tests.spark.utils import is_jvm_spark
 
 if is_jvm_spark():
-    pytest.skip("JVM spark does not support the rate format in SQL", allow_module_level=True)
+    pytest.skip(
+        "JVM spark does not support the rate format in SQL", allow_module_level=True
+    )
 
 
 @pytest.fixture(scope="module", autouse=True)
@@ -53,5 +55,7 @@ def test_rate_with_filtering(spark):
 
 def test_rate_union_all_with_non_streaming_source(spark):
     # This is not working in cluster mode yet since the boundedness for shuffle nodes are not correct in all cases.
-    actual = spark.sql("(SELECT a.value FROM t2 AS a LIMIT 1) UNION ALL (SELECT * FROM VALUES (10), (20))").collect()
+    actual = spark.sql(
+        "(SELECT a.value FROM t2 AS a LIMIT 1) UNION ALL (SELECT * FROM VALUES (10), (20))"
+    ).collect()
     assert sorted(actual) == [(0,), (10,), (20,)]

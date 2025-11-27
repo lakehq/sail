@@ -53,8 +53,12 @@ def test_iceberg_write_overwrite_and_read(spark, sql_catalog):
         identifier=identifier,
         schema=Schema(
             NestedField(field_id=1, name="id", field_type=LongType(), required=False),
-            NestedField(field_id=2, name="event", field_type=StringType(), required=False),
-            NestedField(field_id=3, name="score", field_type=DoubleType(), required=False),
+            NestedField(
+                field_id=2, name="event", field_type=StringType(), required=False
+            ),
+            NestedField(
+                field_id=3, name="score", field_type=DoubleType(), required=False
+            ),
         ),
     )
     try:
@@ -84,12 +88,18 @@ def test_iceberg_write_overwrite_existing_data(spark, sql_catalog):
         identifier=identifier,
         schema=Schema(
             NestedField(field_id=1, name="id", field_type=LongType(), required=False),
-            NestedField(field_id=2, name="event", field_type=StringType(), required=False),
-            NestedField(field_id=3, name="score", field_type=DoubleType(), required=False),
+            NestedField(
+                field_id=2, name="event", field_type=StringType(), required=False
+            ),
+            NestedField(
+                field_id=3, name="score", field_type=DoubleType(), required=False
+            ),
         ),
     )
     try:
-        seed_df = pd.DataFrame({"id": [1, 2, 3], "event": ["X", "Y", "Z"], "score": [0.1, 0.2, 0.3]})
+        seed_df = pd.DataFrame(
+            {"id": [1, 2, 3], "event": ["X", "Y", "Z"], "score": [0.1, 0.2, 0.3]}
+        )
         table.append(pa.Table.from_pandas(seed_df))
 
         df = spark.createDataFrame(
@@ -118,19 +128,25 @@ def test_iceberg_write_append_mode(spark, sql_catalog):
         identifier=identifier,
         schema=Schema(
             NestedField(field_id=1, name="id", field_type=LongType(), required=False),
-            NestedField(field_id=2, name="event", field_type=StringType(), required=False),
+            NestedField(
+                field_id=2, name="event", field_type=StringType(), required=False
+            ),
         ),
     )
     try:
         seed_df = pd.DataFrame({"id": [1, 2], "event": ["a", "b"]})
         table.append(pa.Table.from_pandas(seed_df))
 
-        df2 = spark.createDataFrame([(3, "c"), (4, "d")], schema="id LONG, event STRING")
+        df2 = spark.createDataFrame(
+            [(3, "c"), (4, "d")], schema="id LONG, event STRING"
+        )
         df2.write.format("iceberg").mode("append").save(table.location())
 
         result_df = spark.read.format("iceberg").load(table.location()).sort("id")
         expected = pd.DataFrame({"id": [1, 2, 3, 4], "event": ["a", "b", "c", "d"]})
-        assert_frame_equal(result_df.toPandas(), expected.astype(result_df.toPandas().dtypes))
+        assert_frame_equal(
+            result_df.toPandas(), expected.astype(result_df.toPandas().dtypes)
+        )
     finally:
         sql_catalog.drop_table(identifier)
 
@@ -141,7 +157,9 @@ def test_iceberg_sql_read_after_write(spark, sql_catalog):
         identifier=identifier,
         schema=Schema(
             NestedField(field_id=1, name="id", field_type=LongType(), required=False),
-            NestedField(field_id=2, name="name", field_type=StringType(), required=False),
+            NestedField(
+                field_id=2, name="name", field_type=StringType(), required=False
+            ),
         ),
     )
     try:
@@ -152,11 +170,15 @@ def test_iceberg_sql_read_after_write(spark, sql_catalog):
         df.write.format("iceberg").mode("append").save(table.location())
 
         table_path = table.location()
-        spark.sql(f"CREATE TABLE tmp_ice USING iceberg LOCATION '{escape_sql_string_literal(table_path)}'")
+        spark.sql(
+            f"CREATE TABLE tmp_ice USING iceberg LOCATION '{escape_sql_string_literal(table_path)}'"
+        )
         try:
             result_df = spark.sql("SELECT * FROM tmp_ice").sort("id")
             expected = pd.DataFrame({"id": [1, 2], "name": ["alice", "bob"]})
-            assert_frame_equal(result_df.toPandas(), expected.astype(result_df.toPandas().dtypes))
+            assert_frame_equal(
+                result_df.toPandas(), expected.astype(result_df.toPandas().dtypes)
+            )
         finally:
             spark.sql("DROP TABLE IF EXISTS tmp_ice")
     finally:
@@ -169,16 +191,22 @@ def test_iceberg_append_bootstrap_first_snapshot(spark, sql_catalog):
         identifier=identifier,
         schema=Schema(
             NestedField(field_id=1, name="id", field_type=LongType(), required=False),
-            NestedField(field_id=2, name="value", field_type=StringType(), required=False),
+            NestedField(
+                field_id=2, name="value", field_type=StringType(), required=False
+            ),
         ),
     )
     try:
-        df = spark.createDataFrame([(10, "x"), (20, "y")], schema="id LONG, value STRING")
+        df = spark.createDataFrame(
+            [(10, "x"), (20, "y")], schema="id LONG, value STRING"
+        )
         df.write.format("iceberg").mode("append").save(table.location())
 
         result_df = spark.read.format("iceberg").load(table.location()).sort("id")
         expected = pd.DataFrame({"id": [10, 20], "value": ["x", "y"]})
-        assert_frame_equal(result_df.toPandas(), expected.astype(result_df.toPandas().dtypes))
+        assert_frame_equal(
+            result_df.toPandas(), expected.astype(result_df.toPandas().dtypes)
+        )
 
         table.refresh()
         assert table.current_snapshot() is not None
@@ -192,18 +220,27 @@ def test_iceberg_merge_schema_append_adds_new_column(spark, sql_catalog):
         identifier=identifier,
         schema=Schema(
             NestedField(field_id=1, name="id", field_type=LongType(), required=False),
-            NestedField(field_id=2, name="name", field_type=StringType(), required=False),
+            NestedField(
+                field_id=2, name="name", field_type=StringType(), required=False
+            ),
         ),
     )
     try:
-        base_df = spark.createDataFrame([(1, "alice"), (2, "bob")], schema="id LONG, name STRING")
+        base_df = spark.createDataFrame(
+            [(1, "alice"), (2, "bob")], schema="id LONG, name STRING"
+        )
         base_df.write.format("iceberg").mode("overwrite").save(table.location())
 
         evolved_df = spark.createDataFrame(
             [(3, "carol", 30), (4, "dave", 34)],
             schema="id LONG, name STRING, age INT",
         )
-        (evolved_df.write.format("iceberg").mode("append").option("mergeSchema", "true").save(table.location()))
+        (
+            evolved_df.write.format("iceberg")
+            .mode("append")
+            .option("mergeSchema", "true")
+            .save(table.location())
+        )
 
         result_df = spark.read.format("iceberg").load(table.location()).sort("id")
         expected = pd.DataFrame(
@@ -225,15 +262,19 @@ def test_iceberg_merge_schema_missing_option_errors(spark, sql_catalog):
         identifier=identifier,
         schema=Schema(
             NestedField(field_id=1, name="id", field_type=LongType(), required=False),
-            NestedField(field_id=2, name="name", field_type=StringType(), required=False),
+            NestedField(
+                field_id=2, name="name", field_type=StringType(), required=False
+            ),
         ),
     )
     try:
-        spark.createDataFrame([(1, "alice")], schema="id LONG, name STRING").write.format("iceberg").mode(
-            "overwrite"
-        ).save(table.location())
+        spark.createDataFrame(
+            [(1, "alice")], schema="id LONG, name STRING"
+        ).write.format("iceberg").mode("overwrite").save(table.location())
 
-        new_df = spark.createDataFrame([(2, "bob", 30)], schema="id LONG, name STRING, age INT")
+        new_df = spark.createDataFrame(
+            [(2, "bob", 30)], schema="id LONG, name STRING, age INT"
+        )
         with pytest.raises(Exception, match=r"(?i)mergeSchema"):
             new_df.write.format("iceberg").mode("append").save(table.location())
     finally:
@@ -249,7 +290,11 @@ def test_iceberg_merge_schema_nested_struct(spark, sql_catalog):
             NestedField(
                 field_id=2,
                 name="payload",
-                field_type=StructType(NestedField(field_id=3, name="inner", field_type=LongType(), required=False)),
+                field_type=StructType(
+                    NestedField(
+                        field_id=3, name="inner", field_type=LongType(), required=False
+                    )
+                ),
                 required=False,
             ),
         ),
@@ -265,7 +310,12 @@ def test_iceberg_merge_schema_nested_struct(spark, sql_catalog):
             [(2, (20, "note"))],
             schema="id LONG, payload STRUCT<inner: LONG, extra: STRING>",
         )
-        (evolved_df.write.format("iceberg").mode("append").option("mergeSchema", "true").save(table.location()))
+        (
+            evolved_df.write.format("iceberg")
+            .mode("append")
+            .option("mergeSchema", "true")
+            .save(table.location())
+        )
 
         result = (
             spark.read.format("iceberg")
@@ -273,7 +323,9 @@ def test_iceberg_merge_schema_nested_struct(spark, sql_catalog):
             .orderBy("id")
             .selectExpr("id", "payload.inner AS inner", "payload.extra AS extra")
         )
-        expected = pd.DataFrame({"id": [1, 2], "inner": [10, 20], "extra": [None, "note"]})
+        expected = pd.DataFrame(
+            {"id": [1, 2], "inner": [10, 20], "extra": [None, "note"]}
+        )
         pdf = result.toPandas()
         assert_frame_equal(pdf, expected.astype(pdf.dtypes))
     finally:
@@ -289,7 +341,11 @@ def test_iceberg_merge_schema_nested_struct_missing_option_errors(spark, sql_cat
             NestedField(
                 field_id=2,
                 name="payload",
-                field_type=StructType(NestedField(field_id=3, name="inner", field_type=LongType(), required=False)),
+                field_type=StructType(
+                    NestedField(
+                        field_id=3, name="inner", field_type=LongType(), required=False
+                    )
+                ),
                 required=False,
             ),
         ),
@@ -316,7 +372,9 @@ def test_iceberg_merge_schema_promotes_int_to_long(spark, sql_catalog):
         identifier=identifier,
         schema=Schema(
             NestedField(field_id=1, name="id", field_type=LongType(), required=False),
-            NestedField(field_id=2, name="value", field_type=IntegerType(), required=False),
+            NestedField(
+                field_id=2, name="value", field_type=IntegerType(), required=False
+            ),
         ),
     )
     try:
@@ -326,9 +384,9 @@ def test_iceberg_merge_schema_promotes_int_to_long(spark, sql_catalog):
                 SparkStructField("value", SparkIntegerType(), True),
             ]
         )
-        spark.createDataFrame([(1, 100)], schema=initial_schema).write.format("iceberg").mode("overwrite").save(
-            table.location()
-        )
+        spark.createDataFrame([(1, 100)], schema=initial_schema).write.format(
+            "iceberg"
+        ).mode("overwrite").save(table.location())
 
         promoted_schema = SparkStructType(
             [
@@ -336,9 +394,9 @@ def test_iceberg_merge_schema_promotes_int_to_long(spark, sql_catalog):
                 SparkStructField("value", SparkLongType(), True),
             ]
         )
-        spark.createDataFrame([(2, 200)], schema=promoted_schema).write.format("iceberg").mode("append").option(
-            "mergeSchema", "true"
-        ).save(table.location())
+        spark.createDataFrame([(2, 200)], schema=promoted_schema).write.format(
+            "iceberg"
+        ).mode("append").option("mergeSchema", "true").save(table.location())
 
         result_df = spark.read.format("iceberg").load(table.location()).orderBy("id")
         assert result_df.schema["value"].dataType == SparkLongType()
@@ -356,7 +414,9 @@ def test_iceberg_merge_schema_promotes_float_to_double(spark, sql_catalog):
         identifier=identifier,
         schema=Schema(
             NestedField(field_id=1, name="id", field_type=LongType(), required=False),
-            NestedField(field_id=2, name="value", field_type=FloatType(), required=False),
+            NestedField(
+                field_id=2, name="value", field_type=FloatType(), required=False
+            ),
         ),
     )
     try:
@@ -366,9 +426,9 @@ def test_iceberg_merge_schema_promotes_float_to_double(spark, sql_catalog):
                 SparkStructField("value", SparkFloatType(), True),
             ]
         )
-        spark.createDataFrame([(1, 1.5)], schema=initial_schema).write.format("iceberg").mode("overwrite").save(
-            table.location()
-        )
+        spark.createDataFrame([(1, 1.5)], schema=initial_schema).write.format(
+            "iceberg"
+        ).mode("overwrite").save(table.location())
 
         promoted_schema = SparkStructType(
             [
@@ -376,9 +436,9 @@ def test_iceberg_merge_schema_promotes_float_to_double(spark, sql_catalog):
                 SparkStructField("value", SparkDoubleType(), True),
             ]
         )
-        spark.createDataFrame([(2, 2.5)], schema=promoted_schema).write.format("iceberg").mode("append").option(
-            "mergeSchema", "true"
-        ).save(table.location())
+        spark.createDataFrame([(2, 2.5)], schema=promoted_schema).write.format(
+            "iceberg"
+        ).mode("append").option("mergeSchema", "true").save(table.location())
 
         result_df = spark.read.format("iceberg").load(table.location()).orderBy("id")
         assert result_df.schema["value"].dataType == SparkDoubleType()
@@ -396,7 +456,9 @@ def test_iceberg_merge_schema_promotes_decimal_precision(spark, sql_catalog):
         identifier=identifier,
         schema=Schema(
             NestedField(field_id=1, name="id", field_type=LongType(), required=False),
-            NestedField(field_id=2, name="amount", field_type=DecimalType(5, 2), required=False),
+            NestedField(
+                field_id=2, name="amount", field_type=DecimalType(5, 2), required=False
+            ),
         ),
     )
     try:
@@ -406,9 +468,9 @@ def test_iceberg_merge_schema_promotes_decimal_precision(spark, sql_catalog):
                 SparkStructField("amount", SparkDecimalType(5, 2), True),
             ]
         )
-        spark.createDataFrame([(1, Decimal("12.34"))], schema=initial_schema).write.format("iceberg").mode(
-            "overwrite"
-        ).save(table.location())
+        spark.createDataFrame(
+            [(1, Decimal("12.34"))], schema=initial_schema
+        ).write.format("iceberg").mode("overwrite").save(table.location())
 
         promoted_schema = SparkStructType(
             [
@@ -416,15 +478,19 @@ def test_iceberg_merge_schema_promotes_decimal_precision(spark, sql_catalog):
                 SparkStructField("amount", SparkDecimalType(10, 2), True),
             ]
         )
-        spark.createDataFrame([(2, Decimal("9876.54"))], schema=promoted_schema).write.format("iceberg").mode(
-            "append"
-        ).option("mergeSchema", "true").save(table.location())
+        spark.createDataFrame(
+            [(2, Decimal("9876.54"))], schema=promoted_schema
+        ).write.format("iceberg").mode("append").option("mergeSchema", "true").save(
+            table.location()
+        )
 
         result_df = spark.read.format("iceberg").load(table.location()).orderBy("id")
         assert result_df.schema["amount"].dataType == SparkDecimalType(10, 2)
 
         pdf = result_df.toPandas().reset_index(drop=True)
-        expected = pd.DataFrame({"id": [1, 2], "amount": [Decimal("12.34"), Decimal("9876.54")]})
+        expected = pd.DataFrame(
+            {"id": [1, 2], "amount": [Decimal("12.34"), Decimal("9876.54")]}
+        )
         assert_frame_equal(pdf, expected.astype(pdf.dtypes))
     finally:
         sql_catalog.drop_table(identifier)
@@ -436,7 +502,9 @@ def test_iceberg_merge_schema_relaxes_nullability(spark, sql_catalog):
         identifier=identifier,
         schema=Schema(
             NestedField(field_id=1, name="id", field_type=LongType(), required=True),
-            NestedField(field_id=2, name="status", field_type=StringType(), required=True),
+            NestedField(
+                field_id=2, name="status", field_type=StringType(), required=True
+            ),
         ),
     )
     try:
@@ -446,9 +514,9 @@ def test_iceberg_merge_schema_relaxes_nullability(spark, sql_catalog):
                 SparkStructField("status", SparkStringType(), False),
             ]
         )
-        spark.createDataFrame([(1, "good")], schema=initial_schema).write.format("iceberg").mode("overwrite").save(
-            table.location()
-        )
+        spark.createDataFrame([(1, "good")], schema=initial_schema).write.format(
+            "iceberg"
+        ).mode("overwrite").save(table.location())
 
         relaxed_schema = SparkStructType(
             [
@@ -456,9 +524,9 @@ def test_iceberg_merge_schema_relaxes_nullability(spark, sql_catalog):
                 SparkStructField("status", SparkStringType(), True),
             ]
         )
-        spark.createDataFrame([(2, None)], schema=relaxed_schema).write.format("iceberg").mode("append").option(
-            "mergeSchema", "true"
-        ).save(table.location())
+        spark.createDataFrame([(2, None)], schema=relaxed_schema).write.format(
+            "iceberg"
+        ).mode("append").option("mergeSchema", "true").save(table.location())
 
         result_df = spark.read.format("iceberg").load(table.location()).orderBy("id")
         assert result_df.schema["status"].nullable
@@ -476,7 +544,9 @@ def test_iceberg_append_missing_optional_columns(spark, sql_catalog):
         identifier=identifier,
         schema=Schema(
             NestedField(field_id=1, name="id", field_type=LongType(), required=False),
-            NestedField(field_id=2, name="note", field_type=StringType(), required=False),
+            NestedField(
+                field_id=2, name="note", field_type=StringType(), required=False
+            ),
         ),
     )
     try:
@@ -486,14 +556,16 @@ def test_iceberg_append_missing_optional_columns(spark, sql_catalog):
                 SparkStructField("note", SparkStringType(), True),
             ]
         )
-        spark.createDataFrame([(1, "alpha"), (2, "beta")], schema=initial_schema).write.format("iceberg").mode(
-            "overwrite"
-        ).save(table.location())
+        spark.createDataFrame(
+            [(1, "alpha"), (2, "beta")], schema=initial_schema
+        ).write.format("iceberg").mode("overwrite").save(table.location())
 
-        partial_schema = SparkStructType([SparkStructField("id", SparkLongType(), True)])
-        spark.createDataFrame([(3,)], schema=partial_schema).write.format("iceberg").mode("append").save(
-            table.location()
+        partial_schema = SparkStructType(
+            [SparkStructField("id", SparkLongType(), True)]
         )
+        spark.createDataFrame([(3,)], schema=partial_schema).write.format(
+            "iceberg"
+        ).mode("append").save(table.location())
 
         result_df = spark.read.format("iceberg").load(table.location()).orderBy("id")
         pdf = result_df.toPandas().reset_index(drop=True)
@@ -509,13 +581,15 @@ def test_iceberg_overwrite_schema_replaces_columns(spark, sql_catalog):
         identifier=identifier,
         schema=Schema(
             NestedField(field_id=1, name="id", field_type=LongType(), required=False),
-            NestedField(field_id=2, name="name", field_type=StringType(), required=False),
+            NestedField(
+                field_id=2, name="name", field_type=StringType(), required=False
+            ),
         ),
     )
     try:
-        spark.createDataFrame([(1, "alice"), (2, "bob")], schema="id LONG, name STRING").write.format("iceberg").mode(
-            "overwrite"
-        ).save(table.location())
+        spark.createDataFrame(
+            [(1, "alice"), (2, "bob")], schema="id LONG, name STRING"
+        ).write.format("iceberg").mode("overwrite").save(table.location())
 
         replacement_df = spark.createDataFrame(
             [(10, True), (20, False)],
@@ -540,13 +614,22 @@ def test_iceberg_overwrite_schema_rejects_dropping_partition_column(spark, sql_c
     identifier = "default.overwrite_schema_partition_error"
     schema = Schema(
         NestedField(field_id=1, name="id", field_type=LongType(), required=False),
-        NestedField(field_id=2, name="event_ts", field_type=TimestampType(), required=False),
+        NestedField(
+            field_id=2, name="event_ts", field_type=TimestampType(), required=False
+        ),
         NestedField(field_id=3, name="value", field_type=StringType(), required=False),
     )
     spec = PartitionSpec(
-        PartitionField(source_id=2, field_id=1000, transform=IdentityTransform(), name="event_ts_identity")
+        PartitionField(
+            source_id=2,
+            field_id=1000,
+            transform=IdentityTransform(),
+            name="event_ts_identity",
+        )
     )
-    table = sql_catalog.create_table(identifier=identifier, schema=schema, partition_spec=spec)
+    table = sql_catalog.create_table(
+        identifier=identifier, schema=schema, partition_spec=spec
+    )
     spark_table = "tmp_overwrite_schema_partition_error"
     spark.sql(f"DROP TABLE IF EXISTS {spark_table}")
     spark.sql(
@@ -585,7 +668,9 @@ def test_iceberg_write_allows_int_to_long_without_merge_schema(spark, sql_catalo
         identifier=identifier,
         schema=Schema(
             NestedField(field_id=1, name="id", field_type=LongType(), required=False),
-            NestedField(field_id=2, name="value", field_type=LongType(), required=False),
+            NestedField(
+                field_id=2, name="value", field_type=LongType(), required=False
+            ),
         ),
     )
     try:
@@ -605,13 +690,17 @@ def test_iceberg_write_allows_int_to_long_without_merge_schema(spark, sql_catalo
         sql_catalog.drop_table(identifier)
 
 
-def test_iceberg_write_rejects_incompatible_type_without_merge_schema(spark, sql_catalog):
+def test_iceberg_write_rejects_incompatible_type_without_merge_schema(
+    spark, sql_catalog
+):
     identifier = "default.safe_cast_incompatible"
     table = sql_catalog.create_table(
         identifier=identifier,
         schema=Schema(
             NestedField(field_id=1, name="id", field_type=LongType(), required=False),
-            NestedField(field_id=2, name="value", field_type=LongType(), required=False),
+            NestedField(
+                field_id=2, name="value", field_type=LongType(), required=False
+            ),
         ),
     )
     try:

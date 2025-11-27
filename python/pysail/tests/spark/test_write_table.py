@@ -9,7 +9,9 @@ from pysail.tests.spark.utils import escape_sql_string_literal, is_jvm_spark
 @pytest.fixture(autouse=True)
 def tables(spark, tmp_path):
     location = str(tmp_path / "t1")
-    spark.sql(f"CREATE TABLE t1 (id LONG, name STRING, age LONG) LOCATION '{escape_sql_string_literal(location)}'")
+    spark.sql(
+        f"CREATE TABLE t1 (id LONG, name STRING, age LONG) LOCATION '{escape_sql_string_literal(location)}'"
+    )
     yield
     spark.sql("DROP TABLE t1")
     spark.sql("DROP TABLE IF EXISTS t2")
@@ -61,7 +63,9 @@ def test_insert_into_with_invalid_options(spark):
         df.write.partitionBy("id").insertInto("t1")
 
 
-@pytest.mark.skipif(not is_jvm_spark(), reason="`INSERT OVERWRITE` is not supported in Sail yet")
+@pytest.mark.skipif(
+    not is_jvm_spark(), reason="`INSERT OVERWRITE` is not supported in Sail yet"
+)
 def test_insert_overwrite(spark):
     spark.sql("INSERT INTO t1 VALUES (401, 'Alice', 22)")
     spark.sql("INSERT OVERWRITE t1 VALUES (402, 'Bob', 32)")
@@ -135,7 +139,9 @@ def test_save_as_table(spark, tmp_path):
         assert_frame_equal(actual, expected(1))
 
 
-@pytest.mark.skipif(is_jvm_spark(), reason="Spark does not handle v1 and v2 tables properly")
+@pytest.mark.skipif(
+    is_jvm_spark(), reason="Spark does not handle v1 and v2 tables properly"
+)
 def test_write_to(spark, tmp_path):
     location = str(tmp_path / "t3")
     df = spark.createDataFrame([(2002, "Bob")], schema="id LONG, name STRING")
@@ -172,7 +178,9 @@ def test_write_to(spark, tmp_path):
     assert_frame_equal(actual, expected(1))
 
 
-@pytest.mark.skipif(not is_jvm_spark(), reason="the options overwrite logic is not fully compatible yet")
+@pytest.mark.skipif(
+    not is_jvm_spark(), reason="the options overwrite logic is not fully compatible yet"
+)
 def test_write_options(spark, tmp_path):
     location = str(tmp_path / "t4")
     spark.sql(f"""
@@ -198,7 +206,9 @@ def test_write_options(spark, tmp_path):
         ("1|2", "3"),
     ]
     # Spark ignores the options if it conflicts with the table definition.
-    assert sorted(spark.read.format("csv").option("delimiter", "|").table("t4").collect()) == [
+    assert sorted(
+        spark.read.format("csv").option("delimiter", "|").table("t4").collect()
+    ) == [
         ("1-2", "3"),
         ("1|2", "3"),
         ("1|2", "3"),

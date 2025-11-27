@@ -3,7 +3,9 @@ from pandas.testing import assert_frame_equal
 
 
 def test_map_in_pandas(spark):
-    df = spark.createDataFrame([(1, "Alice"), (2, "Bob")], schema="id long, name string")
+    df = spark.createDataFrame(
+        [(1, "Alice"), (2, "Bob")], schema="id long, name string"
+    )
 
     def f(it):
         for pdf in it:

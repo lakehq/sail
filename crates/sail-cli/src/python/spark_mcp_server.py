@@ -11,7 +11,12 @@ from pyspark.sql import SparkSession
 
 
 def _is_temp_view(table):
-    return table.catalog is None and not table.namespace and table.tableType == "TEMPORARY" and table.isTemporary
+    return (
+        table.catalog is None
+        and not table.namespace
+        and table.tableType == "TEMPORARY"
+        and table.isTemporary
+    )
 
 
 def _describe_table(table):
@@ -71,7 +76,9 @@ def create_spark_mcp_server(host: str, port: int, spark_remote: str):
         logging.info("Stopping Spark session")
         spark.stop()
 
-    mcp = FastMCP("Sail MCP server for Spark SQL", lifespan=lifespan, host=host, port=port)
+    mcp = FastMCP(
+        "Sail MCP server for Spark SQL", lifespan=lifespan, host=host, port=port
+    )
 
     @mcp.tool()
     def list_local_directories(path: str, ctx: Context) -> str:  # noqa: ARG001
@@ -116,7 +123,9 @@ def create_spark_mcp_server(host: str, port: int, spark_remote: str):
         try:
             import boto3
         except ImportError as e:
-            message = "Please install boto3 to use AWS functionalities in the MCP server."
+            message = (
+                "Please install boto3 to use AWS functionalities in the MCP server."
+            )
             raise RuntimeError(message) from e
 
         s3 = boto3.client("s3", region_name=region)
@@ -125,11 +134,15 @@ def create_spark_mcp_server(host: str, port: int, spark_remote: str):
         results = []
         for item in response:
             if "CommonPrefixes" in item:
-                results.extend([x["Prefix"][len(prefix) :] for x in item["CommonPrefixes"]])
+                results.extend(
+                    [x["Prefix"][len(prefix) :] for x in item["CommonPrefixes"]]
+                )
         return json.dumps(results)
 
     @mcp.tool()
-    def create_parquet_views_from_s3(bucket: str, prefix: str, region: str, ctx: Context) -> str:
+    def create_parquet_views_from_s3(
+        bucket: str, prefix: str, region: str, ctx: Context
+    ) -> str:
         """
         Create temporary views for all Parquet datasets stored under a given S3 prefix.
         Uses `list_s3_directories` to enumerate directories within the prefix and
@@ -171,7 +184,9 @@ def create_spark_mcp_server(host: str, port: int, spark_remote: str):
         return json.dumps({})
 
     @mcp.tool()
-    def create_csv_views_from_s3(bucket: str, prefix: str, region: str, header: bool, ctx: Context) -> str:  # noqa: FBT001
+    def create_csv_views_from_s3(
+        bucket: str, prefix: str, region: str, header: bool, ctx: Context
+    ) -> str:  # noqa: FBT001
         """
         Create temporary views for all CSV datasets stored under a given S3 prefix.
         Uses `list_s3_directories` to enumerate directories within the prefix and
@@ -193,7 +208,9 @@ def create_spark_mcp_server(host: str, port: int, spark_remote: str):
             dir_prefix = prefix + directory
             view_name = directory.rstrip("/").replace("/", "_").replace("-", "_")
             s3_path = f"s3a://{bucket}/{dir_prefix}"
-            spark.read.option("header", header).csv(s3_path).createOrReplaceTempView(view_name)
+            spark.read.option("header", header).csv(s3_path).createOrReplaceTempView(
+                view_name
+            )
         return json.dumps({})
 
     @mcp.tool()
@@ -215,7 +232,9 @@ def create_spark_mcp_server(host: str, port: int, spark_remote: str):
         return json.dumps({})
 
     @mcp.tool()
-    def create_json_views_from_s3(bucket: str, prefix: str, region: str, ctx: Context) -> str:
+    def create_json_views_from_s3(
+        bucket: str, prefix: str, region: str, ctx: Context
+    ) -> str:
         """
         Create temporary views for all JSON datasets stored under a given S3 prefix.
         Uses `list_s3_directories` to enumerate directories within the prefix and
@@ -307,7 +326,9 @@ def create_spark_mcp_server(host: str, port: int, spark_remote: str):
             A JSON array of objects.
         """
         spark: SparkSession = ctx.request_context.lifespan_context
-        views = [_describe_table(t) for t in spark.catalog.listTables() if _is_temp_view(t)]
+        views = [
+            _describe_table(t) for t in spark.catalog.listTables() if _is_temp_view(t)
+        ]
         return json.dumps(views)
 
     @mcp.tool()
@@ -338,10 +359,24 @@ def main():
     import argparse
 
     parser = argparse.ArgumentParser(description="Spark MCP server")
-    parser.add_argument("--transport", default="sse", help="The transport for the MCP server", choices=["stdio", "sse"])
-    parser.add_argument("--host", default="127.0.0.1", help="The host for the MCP server to bind to")
-    parser.add_argument("--port", default=8000, type=int, help="The port for the MCP server to listen on")
-    parser.add_argument("--spark-remote", required=True, help="The Spark remote address to connect to")
+    parser.add_argument(
+        "--transport",
+        default="sse",
+        help="The transport for the MCP server",
+        choices=["stdio", "sse"],
+    )
+    parser.add_argument(
+        "--host", default="127.0.0.1", help="The host for the MCP server to bind to"
+    )
+    parser.add_argument(
+        "--port",
+        default=8000,
+        type=int,
+        help="The port for the MCP server to listen on",
+    )
+    parser.add_argument(
+        "--spark-remote", required=True, help="The Spark remote address to connect to"
+    )
     args = parser.parse_args()
 
     mcp = create_spark_mcp_server(args.host, args.port, args.spark_remote)
