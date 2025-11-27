@@ -22,8 +22,7 @@ RUN apt-get update && \
         libprotobuf-dev \
         curl \
         git \
-        pkg-config \
-        libssl-dev
+        pkg-config
 
 RUN curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs > /tmp/rustup-init && \
     chmod a+x /tmp/rustup-init && \
