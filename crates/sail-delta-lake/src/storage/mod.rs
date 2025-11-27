@@ -343,17 +343,17 @@ async fn latest_version_from_listing(store: Arc<dyn ObjectStore>) -> DeltaResult
 fn get_engine(store: Arc<dyn ObjectStore>) -> Arc<dyn Engine> {
     let handle = Handle::current();
     match handle.runtime_flavor() {
-        RuntimeFlavor::MultiThread => Arc::new(DefaultEngine::new(
+        RuntimeFlavor::MultiThread => Arc::new(DefaultEngine::new_with_executor(
             store,
             Arc::new(TokioMultiThreadExecutor::new(handle)),
         )),
-        RuntimeFlavor::CurrentThread => Arc::new(DefaultEngine::new(
+        RuntimeFlavor::CurrentThread => Arc::new(DefaultEngine::new_with_executor(
             store,
             Arc::new(TokioBackgroundExecutor::new()),
         )),
         _ => {
             error!("unsupported runtime flavor, using background executor");
-            Arc::new(DefaultEngine::new(
+            Arc::new(DefaultEngine::new_with_executor(
                 store,
                 Arc::new(TokioBackgroundExecutor::new()),
             ))
