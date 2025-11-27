@@ -6,12 +6,8 @@ from pyspark.sql.functions import col, lit
 
 
 def test_dataframe_drop(spark):
-    df = spark.createDataFrame(
-        [(14, "Tom"), (23, "Alice"), (16, "Bob")], ["age", "name"]
-    )
-    df2 = spark.createDataFrame(
-        [Row(height=80, name="Tom"), Row(height=85, name="Bob")]
-    )
+    df = spark.createDataFrame([(14, "Tom"), (23, "Alice"), (16, "Bob")], ["age", "name"])
+    df2 = spark.createDataFrame([Row(height=80, name="Tom"), Row(height=85, name="Bob")])
 
     assert_frame_equal(
         df.drop("age").sort("name").toPandas(),
@@ -49,9 +45,7 @@ def test_dataframe_drop(spark):
 
     assert_frame_equal(
         df3.drop("name").sort("age", "height").toPandas(),
-        pd.DataFrame(
-            {"age": [14, 14, 16, 16, 23, 23], "height": [80, 85, 80, 85, 80, 85]}
-        ),
+        pd.DataFrame({"age": [14, 14, 16, 16, 23, 23], "height": [80, 85, 80, 85, 80, 85]}),
     )
 
     with pytest.raises(Exception, match="AMBIGUOUS_REFERENCE"):
@@ -60,9 +54,9 @@ def test_dataframe_drop(spark):
     df4 = df.withColumn("a.b.c", lit(1))
     assert_frame_equal(
         df4.sort("age").toPandas(),
-        pd.DataFrame(
-            {"age": [14, 16, 23], "name": ["Tom", "Bob", "Alice"], "a.b.c": [1, 1, 1]}
-        ).astype({"a.b.c": "int32"}),
+        pd.DataFrame({"age": [14, 16, 23], "name": ["Tom", "Bob", "Alice"], "a.b.c": [1, 1, 1]}).astype(
+            {"a.b.c": "int32"}
+        ),
     )
 
     assert_frame_equal(
@@ -72,7 +66,7 @@ def test_dataframe_drop(spark):
 
     assert_frame_equal(
         df4.drop(col("a.b.c")).sort("age").toPandas(),
-        pd.DataFrame(
-            {"age": [14, 16, 23], "name": ["Tom", "Bob", "Alice"], "a.b.c": [1, 1, 1]}
-        ).astype({"a.b.c": "int32"}),
+        pd.DataFrame({"age": [14, 16, 23], "name": ["Tom", "Bob", "Alice"], "a.b.c": [1, 1, 1]}).astype(
+            {"a.b.c": "int32"}
+        ),
     )

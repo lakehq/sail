@@ -20,17 +20,13 @@ def iceberg_test_data():
 @pytest.fixture
 def expected_pandas_df():
     return (
-        pd.DataFrame(
-            {"id": [10, 11, 12], "event": ["A", "B", "A"], "score": [0.98, 0.54, 0.76]}
-        )
+        pd.DataFrame({"id": [10, 11, 12], "event": ["A", "B", "A"], "score": [0.98, 0.54, 0.76]})
         .astype({"id": "int64", "score": "float64"})
         .assign(event=lambda df: df["event"].astype("object"))
     )
 
 
-def test_iceberg_io_basic_read(
-    spark, iceberg_test_data, expected_pandas_df, sql_catalog
-):
+def test_iceberg_io_basic_read(spark, iceberg_test_data, expected_pandas_df, sql_catalog):
     table_name = "test_table"
 
     schema = Schema(
@@ -54,17 +50,13 @@ def test_iceberg_io_basic_read(
         result_df = spark.read.format("iceberg").load(table_path).sort("id")
 
         assert_frame_equal(
-            result_df.toPandas(),
-            expected_pandas_df.sort_values("id").reset_index(drop=True),
-            check_dtype=True,
+            result_df.toPandas(), expected_pandas_df.sort_values("id").reset_index(drop=True), check_dtype=True
         )
     finally:
         sql_catalog.drop_table(f"default.{table_name}")
 
 
-def test_iceberg_io_read_with_sql(
-    spark, iceberg_test_data, expected_pandas_df, sql_catalog
-):
+def test_iceberg_io_read_with_sql(spark, iceberg_test_data, expected_pandas_df, sql_catalog):
     table_name = "test_table_sql"
 
     schema = Schema(
@@ -85,17 +77,13 @@ def test_iceberg_io_read_with_sql(
 
         table_path = table.location()
 
-        spark.sql(
-            f"CREATE TABLE my_iceberg USING iceberg LOCATION '{escape_sql_string_literal(table_path)}'"
-        )
+        spark.sql(f"CREATE TABLE my_iceberg USING iceberg LOCATION '{escape_sql_string_literal(table_path)}'")
 
         try:
             result_df = spark.sql("SELECT * FROM my_iceberg").sort("id")
 
             assert_frame_equal(
-                result_df.toPandas(),
-                expected_pandas_df.sort_values("id").reset_index(drop=True),
-                check_dtype=True,
+                result_df.toPandas(), expected_pandas_df.sort_values("id").reset_index(drop=True), check_dtype=True
             )
         finally:
             spark.sql("DROP TABLE IF EXISTS my_iceberg")
@@ -136,9 +124,7 @@ def test_iceberg_io_multiple_files(spark, sql_catalog):
         )
 
         assert_frame_equal(
-            result_df.toPandas(),
-            expected_data.sort_values("id").reset_index(drop=True),
-            check_dtype=True,
+            result_df.toPandas(), expected_data.sort_values("id").reset_index(drop=True), check_dtype=True
         )
 
         assert result_df.count() == 4  # noqa: PLR2004

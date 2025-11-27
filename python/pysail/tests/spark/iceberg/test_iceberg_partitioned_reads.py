@@ -14,13 +14,7 @@ from pyiceberg.partitioning import (
     YearTransform,
 )
 from pyiceberg.schema import Schema
-from pyiceberg.types import (
-    DateType,
-    IntegerType,
-    NestedField,
-    StringType,
-    TimestampType,
-)
+from pyiceberg.types import DateType, IntegerType, NestedField, StringType, TimestampType
 
 from .utils import create_sql_catalog  # noqa: TID252
 
@@ -122,9 +116,7 @@ def _append_sample_data(table):
         ),
         pytest.param(
             "default.test_partitioned_by_truncate",
-            PartitionSpec(
-                PartitionField(2, 1006, TruncateTransform(1), "letter_trunc")
-            ),
+            PartitionSpec(PartitionField(2, 1006, TruncateTransform(1), "letter_trunc")),
             "letter",
             "'e'",
             {5, 6, 7, 8, 9, 10, 11, 12},
@@ -141,19 +133,11 @@ def _append_sample_data(table):
     ],
 )
 def test_partition_transform_pruning(
-    spark,
-    tmp_path,
-    table_name,
-    spec,
-    predicate_column,
-    predicate_value,
-    expected_numbers,
+    spark, tmp_path, table_name, spec, predicate_column, predicate_value, expected_numbers
 ):
     catalog = create_sql_catalog(tmp_path)
     schema = _make_common_schema()
-    table = catalog.create_table(
-        identifier=table_name, schema=schema, partition_spec=spec
-    )
+    table = catalog.create_table(identifier=table_name, schema=schema, partition_spec=spec)
     try:
         _append_sample_data(table)
         path = table.location()

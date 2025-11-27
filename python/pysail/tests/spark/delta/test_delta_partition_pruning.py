@@ -22,29 +22,17 @@ class TestDeltaPartitionPruning:
         ]
         df = spark.createDataFrame(partition_data)
 
-        df.write.format("delta").mode("overwrite").partitionBy("year", "month").save(
-            str(delta_path)
-        )
+        df.write.format("delta").mode("overwrite").partitionBy("year", "month").save(str(delta_path))
 
-        filtered_df = (
-            spark.read.format("delta").load(delta_table_path).filter("year = 2023")
-        )
+        filtered_df = spark.read.format("delta").load(delta_table_path).filter("year = 2023")
         result_count = filtered_df.count()
         assert result_count == 4, f"Expected 4 rows for year=2023, got {result_count}"  # noqa: PLR2004
 
-        filtered_df = (
-            spark.read.format("delta")
-            .load(delta_table_path)
-            .filter("year = 2023 AND month = 1")
-        )
+        filtered_df = spark.read.format("delta").load(delta_table_path).filter("year = 2023 AND month = 1")
         result_count = filtered_df.count()
-        assert result_count == 2, (
-            f"Expected 2 rows for year=2023 AND month=1, got {result_count}"
-        )  # noqa: PLR2004
+        assert result_count == 2, f"Expected 2 rows for year=2023 AND month=1, got {result_count}"  # noqa: PLR2004
 
-        filtered_df = (
-            spark.read.format("delta").load(delta_table_path).filter("year != 2023")
-        )
+        filtered_df = spark.read.format("delta").load(delta_table_path).filter("year != 2023")
         result_count = filtered_df.count()
         assert result_count == 4, f"Expected 4 rows for year!=2023, got {result_count}"  # noqa: PLR2004
 
@@ -58,60 +46,35 @@ class TestDeltaPartitionPruning:
             for month in [1, 6, 12]:
                 for i in range(2):
                     partition_data.append(
-                        Row(
-                            id=len(partition_data),
-                            value=f"data_{year}_{month}_{i}",
-                            year=year,
-                            month=month,
-                        )
+                        Row(id=len(partition_data), value=f"data_{year}_{month}_{i}", year=year, month=month)
                     )
 
         df = spark.createDataFrame(partition_data)
-        df.write.format("delta").mode("overwrite").partitionBy("year", "month").save(
-            str(delta_path)
-        )
+        df.write.format("delta").mode("overwrite").partitionBy("year", "month").save(str(delta_path))
 
         # Test greater than
-        filtered_df = (
-            spark.read.format("delta").load(delta_table_path).filter("year > 2022")
-        )
+        filtered_df = spark.read.format("delta").load(delta_table_path).filter("year > 2022")
         result_count = filtered_df.count()
         assert result_count == 12, f"Expected 12 rows for year>2022, got {result_count}"  # noqa: PLR2004
 
         # Test greater than or equal
-        filtered_df = (
-            spark.read.format("delta").load(delta_table_path).filter("year >= 2023")
-        )
+        filtered_df = spark.read.format("delta").load(delta_table_path).filter("year >= 2023")
         result_count = filtered_df.count()
-        assert result_count == 12, (
-            f"Expected 12 rows for year>=2023, got {result_count}"
-        )  # noqa: PLR2004
+        assert result_count == 12, f"Expected 12 rows for year>=2023, got {result_count}"  # noqa: PLR2004
 
         # Test less than
-        filtered_df = (
-            spark.read.format("delta").load(delta_table_path).filter("year < 2022")
-        )
+        filtered_df = spark.read.format("delta").load(delta_table_path).filter("year < 2022")
         result_count = filtered_df.count()
         assert result_count == 12, f"Expected 12 rows for year<2022, got {result_count}"  # noqa: PLR2004
 
         # Test less than or equal
-        filtered_df = (
-            spark.read.format("delta").load(delta_table_path).filter("year <= 2021")
-        )
+        filtered_df = spark.read.format("delta").load(delta_table_path).filter("year <= 2021")
         result_count = filtered_df.count()
-        assert result_count == 12, (
-            f"Expected 12 rows for year<=2021, got {result_count}"
-        )  # noqa: PLR2004
+        assert result_count == 12, f"Expected 12 rows for year<=2021, got {result_count}"  # noqa: PLR2004
 
-        filtered_df = (
-            spark.read.format("delta")
-            .load(delta_table_path)
-            .filter("year >= 2022 AND month >= 6")
-        )
+        filtered_df = spark.read.format("delta").load(delta_table_path).filter("year >= 2022 AND month >= 6")
         result_count = filtered_df.count()
-        assert result_count == 12, (
-            f"Expected 12 rows for year>=2022 AND month>=6, got {result_count}"
-        )  # noqa: PLR2004
+        assert result_count == 12, f"Expected 12 rows for year>=2022 AND month>=6, got {result_count}"  # noqa: PLR2004
 
     def test_delta_pruning_with_in_operator(self, spark, tmp_path):
         """Test partition pruning with IN operator"""
@@ -127,42 +90,22 @@ class TestDeltaPartitionPruning:
             Row(id=6, event="D", category="cat3", priority=1, value="data6"),
         ]
         df = spark.createDataFrame(partition_data)
-        df.write.format("delta").mode("overwrite").partitionBy(
-            "event", "category"
-        ).save(str(delta_path))
+        df.write.format("delta").mode("overwrite").partitionBy("event", "category").save(str(delta_path))
 
         # Test IN with string values
-        filtered_df = (
-            spark.read.format("delta")
-            .load(delta_table_path)
-            .filter("event IN ('A', 'B')")
-        )
+        filtered_df = spark.read.format("delta").load(delta_table_path).filter("event IN ('A', 'B')")
         result_count = filtered_df.count()
-        assert result_count == 4, (
-            f"Expected 4 rows for event IN ('A', 'B'), got {result_count}"
-        )  # noqa: PLR2004
+        assert result_count == 4, f"Expected 4 rows for event IN ('A', 'B'), got {result_count}"  # noqa: PLR2004
 
         # Test IN with single value (should behave like equality)
-        filtered_df = (
-            spark.read.format("delta")
-            .load(delta_table_path)
-            .filter("category IN ('cat1')")
-        )
+        filtered_df = spark.read.format("delta").load(delta_table_path).filter("category IN ('cat1')")
         result_count = filtered_df.count()
-        assert result_count == 2, (
-            f"Expected 2 rows for category IN ('cat1'), got {result_count}"
-        )  # noqa: PLR2004
+        assert result_count == 2, f"Expected 2 rows for category IN ('cat1'), got {result_count}"  # noqa: PLR2004
 
         # Test NOT IN
-        filtered_df = (
-            spark.read.format("delta")
-            .load(delta_table_path)
-            .filter("event NOT IN ('A')")
-        )
+        filtered_df = spark.read.format("delta").load(delta_table_path).filter("event NOT IN ('A')")
         result_count = filtered_df.count()
-        assert result_count == 4, (
-            f"Expected 4 rows for event NOT IN ('A'), got {result_count}"
-        )  # noqa: PLR2004
+        assert result_count == 4, f"Expected 4 rows for event NOT IN ('A'), got {result_count}"  # noqa: PLR2004
 
     def test_delta_pruning_with_between_operator(self, spark, tmp_path):
         """Test partition pruning with BETWEEN operator"""
@@ -173,51 +116,26 @@ class TestDeltaPartitionPruning:
         for year in range(2020, 2025):
             for month in range(1, 13):
                 partition_data.append(
-                    Row(
-                        id=len(partition_data),
-                        year=year,
-                        month=month,
-                        value=f"data_{year}_{month:02d}",
-                    )
+                    Row(id=len(partition_data), year=year, month=month, value=f"data_{year}_{month:02d}")
                 )
 
         df = spark.createDataFrame(partition_data)
-        df.write.format("delta").mode("overwrite").partitionBy("year", "month").save(
-            str(delta_path)
-        )
+        df.write.format("delta").mode("overwrite").partitionBy("year", "month").save(str(delta_path))
 
         # Test BETWEEN on year
-        filtered_df = (
-            spark.read.format("delta")
-            .load(delta_table_path)
-            .filter("year BETWEEN 2022 AND 2023")
-        )
+        filtered_df = spark.read.format("delta").load(delta_table_path).filter("year BETWEEN 2022 AND 2023")
         result_count = filtered_df.count()
-        assert result_count == 24, (
-            f"Expected 24 rows for year BETWEEN 2022 AND 2023, got {result_count}"
-        )  # noqa: PLR2004
+        assert result_count == 24, f"Expected 24 rows for year BETWEEN 2022 AND 2023, got {result_count}"  # noqa: PLR2004
 
         # Test BETWEEN on month
-        filtered_df = (
-            spark.read.format("delta")
-            .load(delta_table_path)
-            .filter("month BETWEEN 6 AND 8")
-        )
+        filtered_df = spark.read.format("delta").load(delta_table_path).filter("month BETWEEN 6 AND 8")
         result_count = filtered_df.count()
-        assert result_count == 15, (
-            f"Expected 15 rows for month BETWEEN 6 AND 8, got {result_count}"
-        )  # noqa: PLR2004
+        assert result_count == 15, f"Expected 15 rows for month BETWEEN 6 AND 8, got {result_count}"  # noqa: PLR2004
 
         # Test NOT BETWEEN
-        filtered_df = (
-            spark.read.format("delta")
-            .load(delta_table_path)
-            .filter("year NOT BETWEEN 2021 AND 2022")
-        )
+        filtered_df = spark.read.format("delta").load(delta_table_path).filter("year NOT BETWEEN 2021 AND 2022")
         result_count = filtered_df.count()
-        assert result_count == 36, (
-            f"Expected 36 rows for year NOT BETWEEN 2021 AND 2022, got {result_count}"
-        )  # noqa: PLR2004
+        assert result_count == 36, f"Expected 36 rows for year NOT BETWEEN 2021 AND 2022, got {result_count}"  # noqa: PLR2004
 
     def test_delta_pruning_with_null_handling(self, spark, tmp_path):
         """Test partition pruning with NULL values and IS NULL/IS NOT NULL"""
@@ -233,40 +151,22 @@ class TestDeltaPartitionPruning:
             Row(id=6, region="ASIA", category="C", value="data6"),
         ]
         df = spark.createDataFrame(partition_data)
-        df.write.format("delta").mode("overwrite").partitionBy(
-            "region", "category"
-        ).save(str(delta_path))
+        df.write.format("delta").mode("overwrite").partitionBy("region", "category").save(str(delta_path))
 
         # Test IS NULL on single column
-        filtered_df = (
-            spark.read.format("delta").load(delta_table_path).filter("region IS NULL")
-        )
+        filtered_df = spark.read.format("delta").load(delta_table_path).filter("region IS NULL")
         result_count = filtered_df.count()
-        assert result_count == 2, (
-            f"Expected 2 rows for region IS NULL, got {result_count}"
-        )  # noqa: PLR2004
+        assert result_count == 2, f"Expected 2 rows for region IS NULL, got {result_count}"  # noqa: PLR2004
 
         # Test IS NOT NULL
-        filtered_df = (
-            spark.read.format("delta")
-            .load(delta_table_path)
-            .filter("region IS NOT NULL")
-        )
+        filtered_df = spark.read.format("delta").load(delta_table_path).filter("region IS NOT NULL")
         result_count = filtered_df.count()
-        assert result_count == 4, (
-            f"Expected 4 rows for region IS NOT NULL, got {result_count}"
-        )  # noqa: PLR2004
+        assert result_count == 4, f"Expected 4 rows for region IS NOT NULL, got {result_count}"  # noqa: PLR2004
 
         # Test combination of NULL and equality
-        filtered_df = (
-            spark.read.format("delta")
-            .load(delta_table_path)
-            .filter("region IS NOT NULL AND category = 'A'")
-        )
+        filtered_df = spark.read.format("delta").load(delta_table_path).filter("region IS NOT NULL AND category = 'A'")
         result_count = filtered_df.count()
-        assert result_count == 2, (
-            f"Expected 2 rows for region IS NOT NULL AND category = 'A', got {result_count}"
-        )  # noqa: PLR2004
+        assert result_count == 2, f"Expected 2 rows for region IS NOT NULL AND category = 'A', got {result_count}"  # noqa: PLR2004
 
     def test_delta_pruning_with_complex_expressions(self, spark, tmp_path):
         """Test partition pruning with complex boolean expressions"""
@@ -289,20 +189,12 @@ class TestDeltaPartitionPruning:
                         )
 
         df = spark.createDataFrame(partition_data)
-        df.write.format("delta").mode("overwrite").partitionBy(
-            "year", "quarter", "region"
-        ).save(str(delta_path))
+        df.write.format("delta").mode("overwrite").partitionBy("year", "quarter", "region").save(str(delta_path))
 
         # Test OR conditions
-        filtered_df = (
-            spark.read.format("delta")
-            .load(delta_table_path)
-            .filter("year = 2022 OR year = 2024")
-        )
+        filtered_df = spark.read.format("delta").load(delta_table_path).filter("year = 2022 OR year = 2024")
         result_count = filtered_df.count()
-        assert result_count == 48, (
-            f"Expected 48 rows for year = 2022 OR year = 2024, got {result_count}"
-        )  # noqa: PLR2004
+        assert result_count == 48, f"Expected 48 rows for year = 2022 OR year = 2024, got {result_count}"  # noqa: PLR2004
 
         # Test AND conditions across multiple partition columns
         filtered_df = (
@@ -311,9 +203,7 @@ class TestDeltaPartitionPruning:
             .filter("year >= 2023 AND quarter IN (1, 4) AND region != 'ASIA'")
         )
         result_count = filtered_df.count()
-        assert result_count == 16, (
-            f"Expected 16 rows for complex AND condition, got {result_count}"
-        )  # noqa: PLR2004
+        assert result_count == 16, f"Expected 16 rows for complex AND condition, got {result_count}"  # noqa: PLR2004
 
         # Test mixed AND/OR with parentheses
         filtered_df = (
@@ -322,20 +212,12 @@ class TestDeltaPartitionPruning:
             .filter("(year = 2022 AND quarter = 1) OR (year = 2024 AND quarter = 4)")
         )
         result_count = filtered_df.count()
-        assert result_count == 12, (
-            f"Expected 12 rows for mixed AND/OR condition, got {result_count}"
-        )  # noqa: PLR2004
+        assert result_count == 12, f"Expected 12 rows for mixed AND/OR condition, got {result_count}"  # noqa: PLR2004
 
         # Test NOT with complex expression
-        filtered_df = (
-            spark.read.format("delta")
-            .load(delta_table_path)
-            .filter("NOT (year = 2023 AND region = 'US')")
-        )
+        filtered_df = spark.read.format("delta").load(delta_table_path).filter("NOT (year = 2023 AND region = 'US')")
         result_count = filtered_df.count()
-        assert result_count == 64, (
-            f"Expected 64 rows for NOT condition, got {result_count}"
-        )  # noqa: PLR2004
+        assert result_count == 64, f"Expected 64 rows for NOT condition, got {result_count}"  # noqa: PLR2004
 
     def test_delta_pruning_with_string_partitions(self, spark, tmp_path):
         """Test partition pruning with string partition values"""
@@ -352,42 +234,24 @@ class TestDeltaPartitionPruning:
             Row(id=7, department="sales", team="smb", name="Grace"),
         ]
         df = spark.createDataFrame(partition_data)
-        df.write.format("delta").mode("overwrite").partitionBy(
-            "department", "team"
-        ).save(str(delta_path))
+        df.write.format("delta").mode("overwrite").partitionBy("department", "team").save(str(delta_path))
 
         # Test string equality
-        filtered_df = (
-            spark.read.format("delta")
-            .load(delta_table_path)
-            .filter("department = 'engineering'")
-        )
+        filtered_df = spark.read.format("delta").load(delta_table_path).filter("department = 'engineering'")
         result_count = filtered_df.count()
-        assert result_count == 3, (
-            f"Expected 3 rows for department = 'engineering', got {result_count}"
-        )  # noqa: PLR2004
+        assert result_count == 3, f"Expected 3 rows for department = 'engineering', got {result_count}"  # noqa: PLR2004
 
         # Test string IN operator
         filtered_df = (
-            spark.read.format("delta")
-            .load(delta_table_path)
-            .filter("team IN ('backend', 'frontend', 'growth')")
+            spark.read.format("delta").load(delta_table_path).filter("team IN ('backend', 'frontend', 'growth')")
         )
         result_count = filtered_df.count()
-        assert result_count == 3, (
-            f"Expected 3 rows for team IN list, got {result_count}"
-        )  # noqa: PLR2004
+        assert result_count == 3, f"Expected 3 rows for team IN list, got {result_count}"  # noqa: PLR2004
 
         # Test string comparison (lexicographic order)
-        filtered_df = (
-            spark.read.format("delta")
-            .load(delta_table_path)
-            .filter("department > 'engineering'")
-        )
+        filtered_df = spark.read.format("delta").load(delta_table_path).filter("department > 'engineering'")
         result_count = filtered_df.count()
-        assert result_count == 4, (
-            f"Expected 4 rows for department > 'engineering', got {result_count}"
-        )  # noqa: PLR2004
+        assert result_count == 4, f"Expected 4 rows for department > 'engineering', got {result_count}"  # noqa: PLR2004
 
     def test_delta_pruning_with_edge_cases(self, spark, tmp_path):
         """Test partition pruning edge cases and boundary conditions"""
@@ -403,42 +267,22 @@ class TestDeltaPartitionPruning:
             Row(id=5, num_partition=-999999, str_partition="lowercase", value="data5"),
         ]
         df = spark.createDataFrame(partition_data)
-        df.write.format("delta").mode("overwrite").partitionBy(
-            "num_partition", "str_partition"
-        ).save(str(delta_path))
+        df.write.format("delta").mode("overwrite").partitionBy("num_partition", "str_partition").save(str(delta_path))
 
         # Test zero value
-        filtered_df = (
-            spark.read.format("delta")
-            .load(delta_table_path)
-            .filter("num_partition = 0")
-        )
+        filtered_df = spark.read.format("delta").load(delta_table_path).filter("num_partition = 0")
         result_count = filtered_df.count()
-        assert result_count == 1, (
-            f"Expected 1 row for num_partition = 0, got {result_count}"
-        )
+        assert result_count == 1, f"Expected 1 row for num_partition = 0, got {result_count}"
 
         # Test negative values
-        filtered_df = (
-            spark.read.format("delta")
-            .load(delta_table_path)
-            .filter("num_partition < 0")
-        )
+        filtered_df = spark.read.format("delta").load(delta_table_path).filter("num_partition < 0")
         result_count = filtered_df.count()
-        assert result_count == 2, (
-            f"Expected 2 rows for num_partition < 0, got {result_count}"
-        )  # noqa: PLR2004
+        assert result_count == 2, f"Expected 2 rows for num_partition < 0, got {result_count}"  # noqa: PLR2004
 
         # Test large values
-        filtered_df = (
-            spark.read.format("delta")
-            .load(delta_table_path)
-            .filter("num_partition > 1000")
-        )
+        filtered_df = spark.read.format("delta").load(delta_table_path).filter("num_partition > 1000")
         result_count = filtered_df.count()
-        assert result_count == 1, (
-            f"Expected 1 row for num_partition > 1000, got {result_count}"
-        )
+        assert result_count == 1, f"Expected 1 row for num_partition > 1000, got {result_count}"
 
     def test_delta_pruning_with_no_matching_partitions(self, spark, tmp_path):
         """Test partition pruning when no partitions match the filter"""
@@ -452,27 +296,17 @@ class TestDeltaPartitionPruning:
             Row(id=3, year=2024, month=1, value="data3"),
         ]
         df = spark.createDataFrame(partition_data)
-        df.write.format("delta").mode("overwrite").partitionBy("year", "month").save(
-            str(delta_path)
-        )
+        df.write.format("delta").mode("overwrite").partitionBy("year", "month").save(str(delta_path))
 
         # Test filter that matches no partitions
-        filtered_df = (
-            spark.read.format("delta").load(delta_table_path).filter("year = 2025")
-        )
+        filtered_df = spark.read.format("delta").load(delta_table_path).filter("year = 2025")
         result_count = filtered_df.count()
         assert result_count == 0, f"Expected 0 rows for year = 2025, got {result_count}"
 
         # Test filter with impossible condition
-        filtered_df = (
-            spark.read.format("delta")
-            .load(delta_table_path)
-            .filter("year = 2023 AND year = 2024")
-        )
+        filtered_df = spark.read.format("delta").load(delta_table_path).filter("year = 2023 AND year = 2024")
         result_count = filtered_df.count()
-        assert result_count == 0, (
-            f"Expected 0 rows for impossible condition, got {result_count}"
-        )
+        assert result_count == 0, f"Expected 0 rows for impossible condition, got {result_count}"
 
     def test_delta_pruning_with_mixed_types(self, spark, tmp_path):
         """Test partition pruning with different data types"""
@@ -487,38 +321,24 @@ class TestDeltaPartitionPruning:
             Row(id=4, int_col=400, str_col="delta", bool_col=False, value="data4"),
         ]
         df = spark.createDataFrame(partition_data)
-        df.write.format("delta").mode("overwrite").partitionBy(
-            "int_col", "str_col", "bool_col"
-        ).save(str(delta_path))
+        df.write.format("delta").mode("overwrite").partitionBy("int_col", "str_col", "bool_col").save(str(delta_path))
 
         # Test integer partition filtering
-        filtered_df = (
-            spark.read.format("delta").load(delta_table_path).filter("int_col >= 200")
-        )
+        filtered_df = spark.read.format("delta").load(delta_table_path).filter("int_col >= 200")
         result_count = filtered_df.count()
-        assert result_count == 3, (
-            f"Expected 3 rows for int_col >= 200, got {result_count}"
-        )  # noqa: PLR2004
+        assert result_count == 3, f"Expected 3 rows for int_col >= 200, got {result_count}"  # noqa: PLR2004
 
         # Test boolean partition filtering
-        filtered_df = (
-            spark.read.format("delta").load(delta_table_path).filter("bool_col = true")
-        )
+        filtered_df = spark.read.format("delta").load(delta_table_path).filter("bool_col = true")
         result_count = filtered_df.count()
-        assert result_count == 2, (
-            f"Expected 2 rows for bool_col = true, got {result_count}"
-        )  # noqa: PLR2004
+        assert result_count == 2, f"Expected 2 rows for bool_col = true, got {result_count}"  # noqa: PLR2004
 
         # Test mixed type conditions
         filtered_df = (
-            spark.read.format("delta")
-            .load(delta_table_path)
-            .filter("int_col IN (100, 300) AND bool_col = true")
+            spark.read.format("delta").load(delta_table_path).filter("int_col IN (100, 300) AND bool_col = true")
         )
         result_count = filtered_df.count()
-        assert result_count == 2, (
-            f"Expected 2 rows for mixed type condition, got {result_count}"
-        )  # noqa: PLR2004
+        assert result_count == 2, f"Expected 2 rows for mixed type condition, got {result_count}"  # noqa: PLR2004
 
     def test_delta_pruning_correctness(self, spark, tmp_path):
         """Test partition pruning correctness"""
@@ -542,62 +362,36 @@ class TestDeltaPartitionPruning:
                         )
 
         df = spark.createDataFrame(partition_data)
-        df.write.format("delta").mode("overwrite").partitionBy(
-            "year", "month", "day"
-        ).save(str(delta_path))
+        df.write.format("delta").mode("overwrite").partitionBy("year", "month", "day").save(str(delta_path))
 
-        filtered_df = (
-            spark.read.format("delta").load(delta_table_path).filter("year = 2023")
-        )
+        filtered_df = spark.read.format("delta").load(delta_table_path).filter("year = 2023")
         result_count = filtered_df.count()
         expected_count = 12 * 2 * 10  # 12 months * 2 days * 10 records
-        assert result_count == expected_count, (
-            f"Expected {expected_count} rows for year=2023, got {result_count}"
-        )
+        assert result_count == expected_count, f"Expected {expected_count} rows for year=2023, got {result_count}"
 
-        filtered_df = (
-            spark.read.format("delta")
-            .load(delta_table_path)
-            .filter("year = 2022 AND month = 6")
-        )
+        filtered_df = spark.read.format("delta").load(delta_table_path).filter("year = 2022 AND month = 6")
         result_count = filtered_df.count()
         expected_count = 2 * 10  # 2 days * 10 records
-        assert result_count == expected_count, (
-            f"Expected {expected_count} rows for year=2022 AND month=6, got {result_count}"
-        )
+        assert (
+            result_count == expected_count
+        ), f"Expected {expected_count} rows for year=2022 AND month=6, got {result_count}"
 
-        filtered_df = (
-            spark.read.format("delta")
-            .load(delta_table_path)
-            .filter("year = 2021 AND month = 3 AND day = 15")
-        )
+        filtered_df = spark.read.format("delta").load(delta_table_path).filter("year = 2021 AND month = 3 AND day = 15")
         result_count = filtered_df.count()
         expected_count = 10  # 10 records
-        assert result_count == expected_count, (
-            f"Expected {expected_count} rows for specific date, got {result_count}"
-        )
+        assert result_count == expected_count, f"Expected {expected_count} rows for specific date, got {result_count}"
 
-        filtered_df = (
-            spark.read.format("delta")
-            .load(delta_table_path)
-            .filter("year >= 2023 AND month <= 3")
-        )
+        filtered_df = spark.read.format("delta").load(delta_table_path).filter("year >= 2023 AND month <= 3")
         result_count = filtered_df.count()
         expected_count = 2 * 3 * 2 * 10  # 2 years * 3 months * 2 days * 10 records
-        assert result_count == expected_count, (
-            f"Expected {expected_count} rows for range filter, got {result_count}"
-        )
+        assert result_count == expected_count, f"Expected {expected_count} rows for range filter, got {result_count}"
 
         filtered_df = (
-            spark.read.format("delta")
-            .load(delta_table_path)
-            .filter("year IN (2020, 2024) AND month IN (1, 12)")
+            spark.read.format("delta").load(delta_table_path).filter("year IN (2020, 2024) AND month IN (1, 12)")
         )
         result_count = filtered_df.count()
         expected_count = 2 * 2 * 2 * 10  # 2 years * 2 months * 2 days * 10 records
-        assert result_count == expected_count, (
-            f"Expected {expected_count} rows for IN filter, got {result_count}"
-        )
+        assert result_count == expected_count, f"Expected {expected_count} rows for IN filter, got {result_count}"
 
         filtered_df = (
             spark.read.format("delta")
@@ -606,9 +400,7 @@ class TestDeltaPartitionPruning:
         )
         result_count = filtered_df.count()
         expected_count = 2 * 2 * 10  # 2 conditions * 2 days * 10 records
-        assert result_count == expected_count, (
-            f"Expected {expected_count} rows for OR condition, got {result_count}"
-        )
+        assert result_count == expected_count, f"Expected {expected_count} rows for OR condition, got {result_count}"
 
     def test_delta_pruning_with_non_partition_columns(self, spark, tmp_path):
         """Test that partition pruning works correctly when combined with non-partition column filters"""
@@ -625,28 +417,18 @@ class TestDeltaPartitionPruning:
                             year=year,
                             category=category,
                             score=i % 10,  # Non-partition column
-                            status="active"
-                            if i % 2 == 0
-                            else "inactive",  # Non-partition column
+                            status="active" if i % 2 == 0 else "inactive",  # Non-partition column
                             data=f"record_{year}_{category}_{i}",
                         )
                     )
 
         df = spark.createDataFrame(partition_data)
-        df.write.format("delta").mode("overwrite").partitionBy("year", "category").save(
-            str(delta_path)
-        )
+        df.write.format("delta").mode("overwrite").partitionBy("year", "category").save(str(delta_path))
 
-        filtered_df = (
-            spark.read.format("delta")
-            .load(delta_table_path)
-            .filter("year = 2023 AND score >= 5")
-        )
+        filtered_df = spark.read.format("delta").load(delta_table_path).filter("year = 2023 AND score >= 5")
         result_count = filtered_df.count()
         expected_count = 3 * 10  # 3 categories * 10 records with score >= 5
-        assert result_count == expected_count, (
-            f"Expected {expected_count} rows, got {result_count}"
-        )
+        assert result_count == expected_count, f"Expected {expected_count} rows, got {result_count}"
 
         filtered_df = (
             spark.read.format("delta")
@@ -655,18 +437,12 @@ class TestDeltaPartitionPruning:
         )
         result_count = filtered_df.count()
         expected_count = 2 * 10  # 2 categories * 10 active records each
-        assert result_count == expected_count, (
-            f"Expected {expected_count} rows, got {result_count}"
-        )
+        assert result_count == expected_count, f"Expected {expected_count} rows, got {result_count}"
 
-        filtered_df = (
-            spark.read.format("delta").load(delta_table_path).filter("score = 7")
-        )
+        filtered_df = spark.read.format("delta").load(delta_table_path).filter("score = 7")
         result_count = filtered_df.count()
         expected_count = 2 * 3 * 2  # 2 years * 3 categories * 2 records with score = 7
-        assert result_count == expected_count, (
-            f"Expected {expected_count} rows, got {result_count}"
-        )
+        assert result_count == expected_count, f"Expected {expected_count} rows, got {result_count}"
 
     @pytest.fixture(scope="class")
     def setup_partitioned_table(self, spark, tmp_path_factory):
@@ -691,27 +467,16 @@ class TestDeltaPartitionPruning:
                         )
 
         df = spark.createDataFrame(partition_data)
-        df.write.format("delta").partitionBy("year", "month").mode("overwrite").save(
-            str(delta_path)
-        )
+        df.write.format("delta").partitionBy("year", "month").mode("overwrite").save(str(delta_path))
 
         return f"{delta_path}"
 
     @pytest.mark.parametrize(
         ("filter_str", "expected_count"),
         [
-            (
-                "year = 2023",
-                12 * 2 * 10,
-            ),  # 1 year * 12 months * 2 categories * 10 records
-            (
-                "year = 2022 AND month = 6",
-                2 * 10,
-            ),  # 1 year * 1 month * 2 categories * 10 records
-            (
-                "year >= 2023 AND month <= 3",
-                1 * 3 * 2 * 10,
-            ),  # 1 year * 3 months * 2 categories * 10 records
+            ("year = 2023", 12 * 2 * 10),  # 1 year * 12 months * 2 categories * 10 records
+            ("year = 2022 AND month = 6", 2 * 10),  # 1 year * 1 month * 2 categories * 10 records
+            ("year >= 2023 AND month <= 3", 1 * 3 * 2 * 10),  # 1 year * 3 months * 2 categories * 10 records
             (
                 "year IN (2022, 2023) AND month IN (1, 12)",
                 2 * 2 * 2 * 10,
@@ -720,34 +485,21 @@ class TestDeltaPartitionPruning:
                 "year BETWEEN 2022 AND 2023 AND month BETWEEN 6 AND 8",
                 2 * 3 * 2 * 10,
             ),  # 2 years * 3 months * 2 categories * 10 records
-            (
-                "year != 2022",
-                1 * 12 * 2 * 10,
-            ),  # 1 year * 12 months * 2 categories * 10 records
-            (
-                "month > 10",
-                2 * 2 * 2 * 10,
-            ),  # 2 years * 2 months (11,12) * 2 categories * 10 records
-            (
-                "month < 3",
-                2 * 2 * 2 * 10,
-            ),  # 2 years * 2 months (1,2) * 2 categories * 10 records
+            ("year != 2022", 1 * 12 * 2 * 10),  # 1 year * 12 months * 2 categories * 10 records
+            ("month > 10", 2 * 2 * 2 * 10),  # 2 years * 2 months (11,12) * 2 categories * 10 records
+            ("month < 3", 2 * 2 * 2 * 10),  # 2 years * 2 months (1,2) * 2 categories * 10 records
         ],
     )
-    def test_delta_pruning_parametrized_scenarios(
-        self, spark, setup_partitioned_table, filter_str, expected_count
-    ):
+    def test_delta_pruning_parametrized_scenarios(self, spark, setup_partitioned_table, filter_str, expected_count):
         """Parametrized test for partition pruning scenarios"""
         delta_table_path = setup_partitioned_table
 
-        filtered_df = (
-            spark.read.format("delta").load(delta_table_path).filter(filter_str)
-        )
+        filtered_df = spark.read.format("delta").load(delta_table_path).filter(filter_str)
         actual_count = filtered_df.count()
 
-        assert actual_count == expected_count, (
-            f"Filter '{filter_str}': expected {expected_count} records, got {actual_count}"
-        )
+        assert (
+            actual_count == expected_count
+        ), f"Filter '{filter_str}': expected {expected_count} records, got {actual_count}"
 
     @pytest.mark.parametrize(
         ("filter_condition", "expected_count", "description"),
@@ -761,9 +513,7 @@ class TestDeltaPartitionPruning:
             ("year IN (2025, 2026)", 4, "IN clause with multiple values"),
         ],
     )
-    def test_delta_pruning_basic_scenarios(
-        self, spark, tmp_path, filter_condition, expected_count, description
-    ):
+    def test_delta_pruning_basic_scenarios(self, spark, tmp_path, filter_condition, expected_count, description):
         """Parametrized test for various partition filtering scenarios"""
         delta_path = tmp_path / "delta_partition_filter_test"
 
@@ -775,15 +525,9 @@ class TestDeltaPartitionPruning:
         ]
         df = spark.createDataFrame(partition_data)
 
-        df.write.format("delta").mode("overwrite").partitionBy("year").save(
-            str(delta_path)
-        )
+        df.write.format("delta").mode("overwrite").partitionBy("year").save(str(delta_path))
 
-        filtered_df = (
-            spark.read.format("delta").load(f"{delta_path}").filter(filter_condition)
-        )
+        filtered_df = spark.read.format("delta").load(f"{delta_path}").filter(filter_condition)
         actual_count = filtered_df.count()
 
-        assert actual_count == expected_count, (
-            f"{description}: expected {expected_count} records, got {actual_count}"
-        )
+        assert actual_count == expected_count, f"{description}: expected {expected_count} records, got {actual_count}"

@@ -11,19 +11,9 @@ def partition_count(df):
 
 def test_explicit_repartition(spark):
     assert partition_count(spark.range(0, 10, 1, 2)) == 2  # noqa: PLR2004
-    assert (
-        partition_count(
-            spark.range(0, 10, 1, 3)
-            .select("id", F.lit("foo").alias("a"))
-            .repartition("a")
-        )
-        == 3
-    )  # noqa: PLR2004
+    assert partition_count(spark.range(0, 10, 1, 3).select("id", F.lit("foo").alias("a")).repartition("a")) == 3  # noqa: PLR2004
     assert partition_count(spark.sql("SELECT 1 AS a, 'foo' as b").repartition(5)) == 5  # noqa: PLR2004
-    assert (
-        partition_count(spark.sql("SELECT 1 AS a, 'foo' as b").repartition(6, "b", "a"))
-        == 6
-    )  # noqa: PLR2004
+    assert partition_count(spark.sql("SELECT 1 AS a, 'foo' as b").repartition(6, "b", "a")) == 6  # noqa: PLR2004
     assert partition_count(spark.sql("SELECT 1 AS a, 'foo' as b").repartition("a")) == 1
 
 

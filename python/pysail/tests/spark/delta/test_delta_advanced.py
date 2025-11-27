@@ -36,18 +36,11 @@ class TestDeltaAdvancedFeatures:
         assert latest_df.collect() == [Row(id=3, value="v2")]
 
         # Read version 0
-        v0_df = (
-            spark.read.format("delta").option("versionAsOf", "0").load(delta_table_path)
-        )
+        v0_df = spark.read.format("delta").option("versionAsOf", "0").load(delta_table_path)
         assert v0_df.collect() == [Row(id=1, value="v0")]
 
         # Read version 1
-        v1_df = (
-            spark.read.format("delta")
-            .option("versionAsOf", "1")
-            .load(delta_table_path)
-            .sort("id")
-        )
+        v1_df = spark.read.format("delta").option("versionAsOf", "1").load(delta_table_path).sort("id")
         expected_v1 = [Row(id=1, value="v0"), Row(id=2, value="v1")]
         assert v1_df.collect() == expected_v1
 
@@ -83,27 +76,14 @@ class TestDeltaAdvancedFeatures:
         assert latest_df.collect() == [Row(id=3, value="v2")]
 
         # Read state as of timestamp ts0 (version 0)
-        v0_df = (
-            spark.read.format("delta")
-            .option("timestampAsOf", ts0)
-            .load(delta_table_path)
-        )
+        v0_df = spark.read.format("delta").option("timestampAsOf", ts0).load(delta_table_path)
         assert v0_df.collect() == [Row(id=1, value="v0")]
 
         # Read state as of timestamp ts1 (version 1)
-        v1_df = (
-            spark.read.format("delta")
-            .option("timestampAsOf", ts1)
-            .load(delta_table_path)
-            .sort("id")
-        )
+        v1_df = spark.read.format("delta").option("timestampAsOf", ts1).load(delta_table_path).sort("id")
         expected_v1 = [Row(id=1, value="v0"), Row(id=2, value="v1")]
         assert v1_df.collect() == expected_v1
 
         # Read state as of timestamp ts2 (version 2)
-        v2_df = (
-            spark.read.format("delta")
-            .option("timestampAsOf", ts2)
-            .load(delta_table_path)
-        )
+        v2_df = spark.read.format("delta").option("timestampAsOf", ts2).load(delta_table_path)
         assert v2_df.collect() == [Row(id=3, value="v2")]

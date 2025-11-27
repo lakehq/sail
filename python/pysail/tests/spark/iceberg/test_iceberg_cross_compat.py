@@ -30,19 +30,11 @@ def test_pyiceberg_read_after_sail_overwrite(spark, tmp_path):
 
         py_tbl = catalog.load_table(identifier)
         expected = (
-            pd.DataFrame(
-                {
-                    "id": [10, 11, 12],
-                    "event": ["A", "B", "A"],
-                    "score": [0.98, 0.54, 0.76],
-                }
-            )
+            pd.DataFrame({"id": [10, 11, 12], "event": ["A", "B", "A"], "score": [0.98, 0.54, 0.76]})
             .astype({"id": "int64", "score": "float64"})
             .assign(event=lambda d: d["event"].astype("object"))
         )
-        spark_pdf = (
-            spark.read.format("iceberg").load(table.location()).sort("id").toPandas()
-        )
+        spark_pdf = spark.read.format("iceberg").load(table.location()).sort("id").toPandas()
         assert_frame_equal(spark_pdf, expected)
 
         actual = pyiceberg_to_pandas(py_tbl, sort_by="id")
@@ -61,14 +53,10 @@ def test_pyiceberg_read_after_sail_append(spark, tmp_path):
     )
     table = catalog.create_table(identifier=identifier, schema=schema)
     try:
-        seed_df = pd.DataFrame({"id": [1, 2], "event": ["a", "b"]}).astype(
-            {"id": "int64"}
-        )
+        seed_df = pd.DataFrame({"id": [1, 2], "event": ["a", "b"]}).astype({"id": "int64"})
         table.append(pa.Table.from_pandas(seed_df))
 
-        df2 = spark.createDataFrame(
-            [(3, "c"), (4, "d")], schema="id LONG, event STRING"
-        )
+        df2 = spark.createDataFrame([(3, "c"), (4, "d")], schema="id LONG, event STRING")
         df2.write.format("iceberg").mode("append").save(table.location())
 
         py_tbl = catalog.load_table(identifier)
@@ -79,9 +67,7 @@ def test_pyiceberg_read_after_sail_append(spark, tmp_path):
             .astype({"id": "int64"})
             .assign(event=lambda d: d["event"].astype("object"))
         )
-        spark_df = (
-            spark.read.format("iceberg").load(table.location()).sort("id").toPandas()
-        )
+        spark_df = spark.read.format("iceberg").load(table.location()).sort("id").toPandas()
         assert_frame_equal(spark_df, expected)
         # FIXME: Add support to update catalog
         expected_py = (
@@ -114,20 +100,12 @@ def test_static_table_read_after_sail_overwrite(spark, tmp_path):
         static_table = StaticTable.from_metadata(table.location())
 
         expected = (
-            pd.DataFrame(
-                {
-                    "id": [10, 11, 12],
-                    "event": ["A", "B", "A"],
-                    "score": [0.98, 0.54, 0.76],
-                }
-            )
+            pd.DataFrame({"id": [10, 11, 12], "event": ["A", "B", "A"], "score": [0.98, 0.54, 0.76]})
             .astype({"id": "int64", "score": "float64"})
             .assign(event=lambda d: d["event"].astype("object"))
         )
 
-        spark_pdf = (
-            spark.read.format("iceberg").load(table.location()).sort("id").toPandas()
-        )
+        spark_pdf = spark.read.format("iceberg").load(table.location()).sort("id").toPandas()
         assert_frame_equal(spark_pdf, expected)
 
         actual = pyiceberg_to_pandas(static_table, sort_by="id")
@@ -146,14 +124,10 @@ def test_static_table_read_after_sail_append(spark, tmp_path):
     )
     table = catalog.create_table(identifier=identifier, schema=schema)
     try:
-        seed_df = pd.DataFrame({"id": [1, 2], "event": ["a", "b"]}).astype(
-            {"id": "int64"}
-        )
+        seed_df = pd.DataFrame({"id": [1, 2], "event": ["a", "b"]}).astype({"id": "int64"})
         table.append(pa.Table.from_pandas(seed_df))
 
-        df2 = spark.createDataFrame(
-            [(3, "c"), (4, "d")], schema="id LONG, event STRING"
-        )
+        df2 = spark.createDataFrame([(3, "c"), (4, "d")], schema="id LONG, event STRING")
         df2.write.format("iceberg").mode("append").save(table.location())
 
         static_table = StaticTable.from_metadata(table.location())
@@ -165,9 +139,7 @@ def test_static_table_read_after_sail_append(spark, tmp_path):
             .assign(event=lambda d: d["event"].astype("object"))
         )
 
-        spark_df = (
-            spark.read.format("iceberg").load(table.location()).sort("id").toPandas()
-        )
+        spark_df = spark.read.format("iceberg").load(table.location()).sort("id").toPandas()
         assert_frame_equal(spark_df, expected)
 
         assert_frame_equal(actual_static, expected)
@@ -198,9 +170,7 @@ def test_static_table_read_multiple_sail_writes(spark, tmp_path):
             df = spark.createDataFrame(rows, schema="id LONG, value STRING")
             df.write.format("iceberg").mode(mode).save(table.location())
 
-            current_rows = (
-                list(rows) if mode == "overwrite" else current_rows + list(rows)
-            )
+            current_rows = list(rows) if mode == "overwrite" else current_rows + list(rows)
 
             static_table = StaticTable.from_metadata(table.location())
             actual = pyiceberg_to_pandas(static_table, sort_by="id")

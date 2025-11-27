@@ -2,13 +2,7 @@ import math
 
 import pyarrow as pa
 from pyiceberg.schema import Schema
-from pyiceberg.types import (
-    BooleanType,
-    DoubleType,
-    NestedField,
-    StringType,
-    TimestampType,
-)
+from pyiceberg.types import BooleanType, DoubleType, NestedField, StringType, TimestampType
 
 from .utils import create_sql_catalog  # noqa: TID252
 
@@ -24,17 +18,10 @@ def test_nan_reads(spark, tmp_path):
         ),
     )
     try:
-        tbl = pa.table(
-            {"idx": [1.0, 2.0, 3.0], "col_numeric": [float("nan"), 2.0, 3.0]}
-        )
+        tbl = pa.table({"idx": [1.0, 2.0, 3.0], "col_numeric": [float("nan"), 2.0, 3.0]})
         table.append(tbl)
         path = table.location()
-        df = (
-            spark.read.format("iceberg")
-            .load(path)
-            .select("idx", "col_numeric")
-            .filter("isnan(col_numeric)")
-        )
+        df = spark.read.format("iceberg").load(path).select("idx", "col_numeric").filter("isnan(col_numeric)")
         rows = df.collect()
         assert len(rows) == 1
         assert int(rows[0][0]) == 1
@@ -61,9 +48,7 @@ def test_datetime_filter_reads(spark, tmp_path):
         table.append(tbl)
         path = table.location()
         iso_ts = yesterday.isoformat()
-        df_ge = (
-            spark.read.format("iceberg").load(path).filter(f"datetime >= '{iso_ts}'")
-        )
+        df_ge = spark.read.format("iceberg").load(path).filter(f"datetime >= '{iso_ts}'")
         assert df_ge.count() == 1
         df_lt = spark.read.format("iceberg").load(path).filter(f"datetime < '{iso_ts}'")
         assert df_lt.count() == 0
@@ -78,12 +63,8 @@ def test_struct_null_filters(spark, tmp_path):
     arrow_schema = pa.schema([pa.field("col_struct", struct_field)])
     table = catalog.create_table(identifier=identifier, schema=arrow_schema)
     try:
-        t1 = pa.Table.from_arrays(
-            [pa.array([None], type=struct_field)], schema=arrow_schema
-        )
-        t2 = pa.Table.from_arrays(
-            [pa.array([{"test": 1}], type=struct_field)], schema=arrow_schema
-        )
+        t1 = pa.Table.from_arrays([pa.array([None], type=struct_field)], schema=arrow_schema)
+        t2 = pa.Table.from_arrays([pa.array([{"test": 1}], type=struct_field)], schema=arrow_schema)
         table.append(t1)
         table.append(t2)
         path = table.location()
@@ -129,12 +110,8 @@ def test_limit_with_filter(spark, tmp_path):
         ),
     )
     try:
-        tbl1 = pa.table(
-            {"id": ["a", "b", "c", "d", "e"], "flag": [True, False, True, True, False]}
-        )
-        tbl2 = pa.table(
-            {"id": ["f", "g", "h", "i", "j"], "flag": [False, True, False, True, True]}
-        )
+        tbl1 = pa.table({"id": ["a", "b", "c", "d", "e"], "flag": [True, False, True, True, False]})
+        tbl2 = pa.table({"id": ["f", "g", "h", "i", "j"], "flag": [False, True, False, True, True]})
         table.append(tbl1)
         table.append(tbl2)
         path = table.location()

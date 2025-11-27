@@ -11,12 +11,7 @@ from pyspark.sql import SparkSession
 from pytest_bdd import given, parsers, then, when
 
 from pysail.spark import SparkConnectServer
-from pysail.tests.spark.utils import (
-    SAIL_ONLY,
-    escape_sql_string_literal,
-    is_jvm_spark,
-    parse_show_string,
-)
+from pysail.tests.spark.utils import SAIL_ONLY, escape_sql_string_literal, is_jvm_spark, parse_show_string
 
 
 @pytest.fixture(scope="session")
@@ -111,10 +106,7 @@ def variables():
     return {}
 
 
-@given(
-    parsers.parse("variable {name} for JSON value {definition}"),
-    target_fixture="variables",
-)
+@given(parsers.parse("variable {name} for JSON value {definition}"), target_fixture="variables")
 def variable_for_json_value(name, definition, variables):
     """Defines a variable with a JSON value."""
     variables[name] = json.loads(definition)
@@ -138,10 +130,7 @@ class PathWrapper:
         return f"'{escape_sql_string_literal(str(self.path))}'"
 
 
-@given(
-    parsers.parse("variable {name} for temporary directory {directory}"),
-    target_fixture="variables",
-)
+@given(parsers.parse("variable {name} for temporary directory {directory}"), target_fixture="variables")
 def variable_for_temporary_directory(name, directory, tmp_path, variables):
     """Defines a variable for a temporary directory with the given name.
     The temporary directory is located inside the temporary directory that pytest creates

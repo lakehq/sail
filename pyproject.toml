@@ -210,10 +210,6 @@ packages = ["python/pysail"]
 [tool.hatch.build.targets.wheel]
 packages = ["python/pysail"]
 
-[tool.hatch.envs.hatch-static-analysis]
-dependencies = ["ruff>=0.14.6"]
-config-path = "none"
-
 [tool.ruff.lint.per-file-ignores]
 "crates/**/*.py" = ["INP001"]
 "python/pysail/docs/conf.py" = ["INP001"]

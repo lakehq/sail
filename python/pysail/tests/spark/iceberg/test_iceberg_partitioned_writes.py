@@ -15,13 +15,7 @@ from pyiceberg.partitioning import (
     YearTransform,
 )
 from pyiceberg.schema import Schema
-from pyiceberg.types import (
-    DateType,
-    IntegerType,
-    NestedField,
-    StringType,
-    TimestampType,
-)
+from pyiceberg.types import DateType, IntegerType, NestedField, StringType, TimestampType
 
 from pysail.tests.spark.utils import escape_sql_string_literal
 
@@ -56,14 +50,7 @@ def _build_sample_rows() -> List[Tuple[int, str, dt.datetime, dt.date]]:  # noqa
     ]
     rows: List[Tuple[int, str, dt.datetime, dt.date]] = []  # noqa: UP006
     for i in range(12):
-        rows.append(
-            (
-                i + 1,
-                letters[i],
-                start_ts + dt.timedelta(days=i),
-                start_date + dt.timedelta(days=i),
-            )
-        )  # noqa: PERF401
+        rows.append((i + 1, letters[i], start_ts + dt.timedelta(days=i), start_date + dt.timedelta(days=i)))  # noqa: PERF401
     return rows
 
 
@@ -107,9 +94,7 @@ def _build_sample_rows() -> List[Tuple[int, str, dt.datetime, dt.date]]:  # noqa
         ),
         (
             "default.write_partition_trunc",
-            PartitionSpec(
-                PartitionField(2, 1006, TruncateTransform(1), "letter_trunc")
-            ),
+            PartitionSpec(PartitionField(2, 1006, TruncateTransform(1), "letter_trunc")),
             "letter",
             "'e'",
             {5, 6, 7, 8, 9, 10, 11, 12},
@@ -125,33 +110,18 @@ def _build_sample_rows() -> List[Tuple[int, str, dt.datetime, dt.date]]:  # noqa
 )
 @pytest.mark.skipif(platform.system() == "Windows", reason="may not work on Windows")
 def test_partitioned_write_then_sail_read(
-    spark,
-    tmp_path,
-    table_name,
-    spec,
-    predicate_column,
-    predicate_value,
-    expected_numbers,
+    spark, tmp_path, table_name, spec, predicate_column, predicate_value, expected_numbers
 ):
     catalog = create_sql_catalog(tmp_path)
     schema = _common_schema()
-    table = catalog.create_table(
-        identifier=table_name, schema=schema, partition_spec=spec
-    )
+    table = catalog.create_table(identifier=table_name, schema=schema, partition_spec=spec)
     try:
         rows = _build_sample_rows()
-        df = spark.createDataFrame(
-            rows, schema="number INT, letter STRING, ts TIMESTAMP, dt DATE"
-        )
+        df = spark.createDataFrame(rows, schema="number INT, letter STRING, ts TIMESTAMP, dt DATE")
         df.write.format("iceberg").mode("overwrite").save(table.location())
 
         predicate = f"{predicate_column} >= {predicate_value}"
-        out_df = (
-            spark.read.format("iceberg")
-            .load(table.location())
-            .filter(predicate)
-            .select("number")
-        )
+        out_df = spark.read.format("iceberg").load(table.location()).filter(predicate).select("number")
         result = {r[0] for r in out_df.collect()}
         assert result == expected_numbers
     finally:
@@ -183,9 +153,7 @@ def test_partitioned_write_then_sail_read(
         ),
         (
             "default.write_partition_trunc_all",
-            PartitionSpec(
-                PartitionField(2, 1006, TruncateTransform(1), "letter_trunc")
-            ),
+            PartitionSpec(PartitionField(2, 1006, TruncateTransform(1), "letter_trunc")),
         ),
         (
             "default.write_partition_bucket_all",
@@ -197,14 +165,10 @@ def test_partitioned_write_then_sail_read(
 def test_partitioned_write_then_pyiceberg_read_all(spark, tmp_path, table_name, spec):
     catalog = create_sql_catalog(tmp_path)
     schema = _common_schema()
-    table = catalog.create_table(
-        identifier=table_name, schema=schema, partition_spec=spec
-    )
+    table = catalog.create_table(identifier=table_name, schema=schema, partition_spec=spec)
     try:
         rows = _build_sample_rows()
-        df = spark.createDataFrame(
-            rows, schema="number INT, letter STRING, ts TIMESTAMP, dt DATE"
-        )
+        df = spark.createDataFrame(rows, schema="number INT, letter STRING, ts TIMESTAMP, dt DATE")
         df.write.format("iceberg").mode("overwrite").save(table.location())
 
         py_tbl = catalog.load_table(table_name)
@@ -249,8 +213,7 @@ def test_iceberg_partition_writes_sql(spark, tmp_path):
     )
     try:
         df_single = spark.createDataFrame(
-            [(10, "A", 1), (11, "B", 2), (12, "A", 3)],
-            schema="id INT, event STRING, score INT",
+            [(10, "A", 1), (11, "B", 2), (12, "A", 3)], schema="id INT, event STRING, score INT"
         )
         df_single.write.format("iceberg").mode("append").save(path_single)
         out_single = spark.read.format("iceberg").load(path_single).sort("id")
@@ -277,18 +240,8 @@ def test_iceberg_partition_writes_sql(spark, tmp_path):
             schema="id INT, region INT, category INT, value INT",
         )
         df_multi.write.format("iceberg").mode("append").save(path_multi)
-        parts = (
-            spark.read.format("iceberg")
-            .load(path_multi)
-            .select("region", "category")
-            .distinct()
-        )
+        parts = spark.read.format("iceberg").load(path_multi).select("region", "category").distinct()
         actual = {f"region={r[0]}/category={r[1]}" for r in parts.collect()}
-        assert actual == {
-            "region=1/category=1",
-            "region=1/category=2",
-            "region=2/category=1",
-            "region=2/category=2",
-        }
+        assert actual == {"region=1/category=1", "region=1/category=2", "region=2/category=1", "region=2/category=2"}
     finally:
         spark.sql("DROP TABLE IF EXISTS tmp_ice_multi")

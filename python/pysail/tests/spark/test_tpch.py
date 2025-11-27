@@ -33,13 +33,7 @@ def test_derived_tpch_query_execution(spark, query):
 
 
 def read_sql(query):
-    path = (
-        Path(__file__).parent.parent.parent
-        / "data"
-        / "tpch"
-        / "queries"
-        / f"{query}.sql"
-    )
+    path = Path(__file__).parent.parent.parent / "data" / "tpch" / "queries" / f"{query}.sql"
     with open(path) as f:
         text = f.read()
     for sql in text.split(";"):

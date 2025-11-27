@@ -8,16 +8,7 @@ from pyspark.sql import SparkSession
 
 
 class TpchBenchmark:
-    TABLE_NAMES = (
-        "customer",
-        "lineitem",
-        "nation",
-        "orders",
-        "part",
-        "partsupp",
-        "region",
-        "supplier",
-    )
+    TABLE_NAMES = ("customer", "lineitem", "nation", "orders", "part", "partsupp", "region", "supplier")
 
     def __init__(self, url: str, data_path: str, query_path: str):
         self.url = url
@@ -29,11 +20,7 @@ class TpchBenchmark:
 
     @contextlib.contextmanager
     def spark_session(self):
-        builder = (
-            SparkSession.builder.remote(self.url)
-            if self._is_remote()
-            else SparkSession.builder.master(self.url)
-        )
+        builder = SparkSession.builder.remote(self.url) if self._is_remote() else SparkSession.builder.master(self.url)
         spark = builder.appName("TPC-H").getOrCreate()
         for table in self.TABLE_NAMES:
             path = f"{self.data_path}/{table}.parquet"
@@ -72,9 +59,7 @@ class TpchBenchmark:
                     end_time = time.time()
                     query_time = end_time - start_time
                     total_time += query_time
-                    print(
-                        f"The query returned {len(rows)} rows and took {query_time} seconds."
-                    )
+                    print(f"The query returned {len(rows)} rows and took {query_time} seconds.")
         return total_time
 
     def run(self, query: int | None = None, explain: bool = False, num_runs: int = 1):  # noqa: FBT001, FBT002
@@ -87,17 +72,11 @@ class TpchBenchmark:
                     total_time = 0
                     for query in range(1, 23):
                         total_time += self._run_query(spark, query, explain)
-                    min_total_time = (
-                        total_time if run == 0 else min(min_total_time, total_time)
-                    )
+                    min_total_time = total_time if run == 0 else min(min_total_time, total_time)
                     if not explain:
-                        print(
-                            f"\n\nRun {run + 1} Total time for all queries: {total_time} seconds."
-                        )
+                        print(f"\n\nRun {run+1} Total time for all queries: {total_time} seconds.")
                 if not explain:
-                    print(
-                        f"\n\nMin total time across {num_runs}: {min_total_time} seconds."
-                    )
+                    print(f"\n\nMin total time across {num_runs}: {min_total_time} seconds.")
 
 
 def main():

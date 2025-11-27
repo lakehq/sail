@@ -40,9 +40,7 @@ def person_table(spark):
 
 
 def test_group_by(spark):
-    actual = spark.sql(
-        "SELECT id, sum(quantity) FROM dealer GROUP BY id ORDER BY id"
-    ).toPandas()
+    actual = spark.sql("SELECT id, sum(quantity) FROM dealer GROUP BY id ORDER BY id").toPandas()
     expected = pd.DataFrame(
         {"id": [100, 200, 300], "sum(quantity)": [32, 33, 13]},
     ).astype({"id": "int32", "sum(quantity)": "int64"})
@@ -50,9 +48,7 @@ def test_group_by(spark):
 
 
 def test_group_by_column_position(spark):
-    actual = spark.sql(
-        "SELECT id, sum(quantity) FROM dealer GROUP BY 1 ORDER BY 1"
-    ).toPandas()
+    actual = spark.sql("SELECT id, sum(quantity) FROM dealer GROUP BY 1 ORDER BY 1").toPandas()
     expected = pd.DataFrame(
         {"id": [100, 200, 300], "sum(quantity)": [32, 33, 13]},
     ).astype({"id": "int32", "sum(quantity)": "int64"})
@@ -66,9 +62,9 @@ def test_multiple_aggregations(spark):
         GROUP BY id
         ORDER BY id
     """).toPandas()
-    expected = pd.DataFrame(
-        {"id": [100, 200, 300], "sum": [32, 33, 13], "max": [15, 20, 8]}
-    ).astype({"id": "int32", "sum": "int64", "max": "int32"})
+    expected = pd.DataFrame({"id": [100, 200, 300], "sum": [32, 33, 13], "max": [15, 20, 8]}).astype(
+        {"id": "int32", "sum": "int64", "max": "int32"}
+    )
     assert_frame_equal(actual, expected)
 
 
@@ -78,9 +74,7 @@ def test_count_distinct(spark):
         FROM dealer
         GROUP BY car_model
     """).toPandas()
-    expected = pd.DataFrame(
-        {"car_model": ["Honda Civic", "Honda CRV", "Honda Accord"], "count": [3, 2, 3]}
-    )
+    expected = pd.DataFrame({"car_model": ["Honda Civic", "Honda CRV", "Honda Accord"], "count": [3, 2, 3]})
 
     def sort(df):
         return df.sort_values("car_model", ignore_index=True)
@@ -98,9 +92,9 @@ def test_aggregation_filter(spark):
         GROUP BY id
         ORDER BY id
     """).toPandas()
-    expected = pd.DataFrame(
-        {"id": [100, 200, 300], "sum(quantity)": [17, 23, 5]}
-    ).astype({"id": "int32", "sum(quantity)": "int64"})
+    expected = pd.DataFrame({"id": [100, 200, 300], "sum(quantity)": [17, 23, 5]}).astype(
+        {"id": "int32", "sum(quantity)": "int64"}
+    )
     assert_frame_equal(actual, expected)
 
 
@@ -253,8 +247,6 @@ def test_aggregation_with_nulls(spark):
 
 @pytest.mark.skip(reason="not implemented")
 def test_aggregation_ignore_nulls(spark):
-    actual = spark.sql(
-        "SELECT FIRST(age IGNORE NULLS), LAST(id), SUM(id) FROM person"
-    ).toPandas()
+    actual = spark.sql("SELECT FIRST(age IGNORE NULLS), LAST(id), SUM(id) FROM person").toPandas()
     expected = pd.DataFrame({"first(age)": [30], "last(id)": [400], "sum(id)": [1000]})
     assert_frame_equal(actual, expected)

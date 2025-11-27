@@ -67,17 +67,13 @@ def test_data_frame_schema(df):
     assert df.schema == StructType(
         [
             StructField("a", IntegerType(), True),
-            StructField(
-                "b", StructType([StructField("foo", StringType(), True)]), True
-            ),
+            StructField("b", StructType([StructField("foo", StringType(), True)]), True),
         ]
     )
 
 
 def test_range(spark):
-    assert_frame_equal(
-        spark.range(-1).toPandas(), pd.DataFrame({"id": []}, dtype="int64")
-    )
+    assert_frame_equal(spark.range(-1).toPandas(), pd.DataFrame({"id": []}, dtype="int64"))
     assert_frame_equal(
         spark.range(10, 0, -2, 3).toPandas().sort_values("id").reset_index(drop=True),
         pd.DataFrame({"id": [2, 4, 6, 8, 10]}, dtype="int64"),
@@ -86,23 +82,17 @@ def test_range(spark):
 
 def test_create_data_frame(spark):
     assert_frame_equal(
-        spark.createDataFrame([1, 2, 3], schema="long").toPandas(),
-        pd.DataFrame({"value": [1, 2, 3]}, dtype="int64"),
+        spark.createDataFrame([1, 2, 3], schema="long").toPandas(), pd.DataFrame({"value": [1, 2, 3]}, dtype="int64")
     )
     assert_frame_equal(
-        spark.createDataFrame(
-            [(1, "a"), (2, "b")], schema="a integer, t string"
-        ).toPandas(),
+        spark.createDataFrame([(1, "a"), (2, "b")], schema="a integer, t string").toPandas(),
         pd.DataFrame({"a": [1, 2], "t": ["a", "b"]}).astype({"a": "int32"}),
     )
 
 
 def test_schema_simple_string(spark):
     df = spark.range(1).selectExpr("struct(id, 1, 2.0D AS foo, id) as struct")
-    assert (
-        df.schema.simpleString()
-        == "struct<struct:struct<id:bigint,col2:int,foo:double,id:bigint>>"
-    )
+    assert df.schema.simpleString() == "struct<struct:struct<id:bigint,col2:int,foo:double,id:bigint>>"
 
 
 def test_data_frame_operations(df):
@@ -120,10 +110,7 @@ def test_data_frame_operations(df):
     )
 
     assert_frame_equal(
-        df.select(
-            F.col("a"),
-            F.create_map(F.col("a"), df.b["foo"], F.lit(10), F.lit("foo")).alias("m"),
-        )
+        df.select(F.col("a"), F.create_map(F.col("a"), df.b["foo"], F.lit(10), F.lit("foo")).alias("m"))
         .sort("a")
         .toPandas(),
         pd.DataFrame(
@@ -235,12 +222,10 @@ def test_data_frame_operations(df):
 
 def test_sql(spark):
     assert_frame_equal(
-        spark.sql("SELECT 1").alias("a").select("a.*").toPandas(),
-        pd.DataFrame({"1": [1]}, dtype="int32"),
+        spark.sql("SELECT 1").alias("a").select("a.*").toPandas(), pd.DataFrame({"1": [1]}, dtype="int32")
     )
     assert_frame_equal(
-        spark.sql("SELECT 1").alias("a").selectExpr("a.*").toPandas(),
-        pd.DataFrame({"1": [1]}, dtype="int32"),
+        spark.sql("SELECT 1").alias("a").selectExpr("a.*").toPandas(), pd.DataFrame({"1": [1]}, dtype="int32")
     )
 
 
@@ -389,9 +374,7 @@ def test_udf(df, udf_add_one, udf_add_x_y, udf_add):
 
 def test_sql_with_clause(spark, df, df_view):
     assert_frame_equal(
-        spark.sql(
-            f"WITH test AS (SELECT * FROM {df_view}) SELECT * FROM test"
-        ).toPandas(),  # noqa: S608
+        spark.sql(f"WITH test AS (SELECT * FROM {df_view}) SELECT * FROM test").toPandas(),  # noqa: S608
         df.toPandas(),
     )
 
@@ -407,12 +390,8 @@ def test_sql_parameters(spark):
 
 
 def test_select_expression(df):
-    assert_frame_equal(
-        df.selectExpr("b.foo").toPandas(), pd.DataFrame({"foo": ["hello", "world"]})
-    )
-    assert_frame_equal(
-        df.selectExpr("b.*").toPandas(), pd.DataFrame({"foo": ["hello", "world"]})
-    )
+    assert_frame_equal(df.selectExpr("b.foo").toPandas(), pd.DataFrame({"foo": ["hello", "world"]}))
+    assert_frame_equal(df.selectExpr("b.*").toPandas(), pd.DataFrame({"foo": ["hello", "world"]}))
 
 
 @pytest.mark.skip(reason="not implemented")

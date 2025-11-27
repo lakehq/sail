@@ -36,9 +36,7 @@ def large_dataset(spark):
     """Create a larger dataset to test distributed execution."""
     total = []
     for i in range(1000):
-        data = Row(
-            id=i, group=i % 10, value=i * 2, name=f"item_{i}", category=f"cat_{i % 5}"
-        )
+        data = Row(id=i, group=i % 10, value=i * 2, name=f"item_{i}", category=f"cat_{i % 5}")
         total.append(data)
 
     df = spark.createDataFrame(total)
@@ -56,9 +54,7 @@ class TestLocalClusterExecution:
 
     def test_dataframe_operations(self, spark):
         """Test DataFrame operations in local-cluster mode."""
-        df = spark.createDataFrame(
-            [Row(a=1, b="hello"), Row(a=2, b="world"), Row(a=3, b="test")]
-        )
+        df = spark.createDataFrame([Row(a=1, b="hello"), Row(a=2, b="world"), Row(a=3, b="test")])
 
         result = df.select("a", "b").filter(F.col("a") > 1).orderBy("a").toPandas()
         expected = pd.DataFrame({"a": [2, 3], "b": ["world", "test"]}).astype(
