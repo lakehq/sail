@@ -661,10 +661,21 @@ pub fn from_ast_statement(statement: Statement) -> SqlResult<spec::Plan> {
                                     .into_items()
                                     .map(from_ast_object_name)
                                     .collect::<SqlResult<Vec<_>>>()?;
-                                let values = expressions
+                                let mut values = expressions
                                     .into_items()
                                     .map(from_ast_expression)
                                     .collect::<SqlResult<Vec<_>>>()?;
+                                if values.len() == 1 {
+                                    if let spec::Expr::UnresolvedFunction(func) = values.pop().unwrap() {
+                                        if func.function_name == spec::ObjectName::bare("struct")
+                                            && func.named_arguments.is_empty()
+                                        {
+                                            values = func.arguments;
+                                        } else {
+                                            values = vec![spec::Expr::UnresolvedFunction(func)];
+                                        }
+                                    }
+                                }
                                 if columns.len() != values.len() {
                                     return Err(SqlError::invalid(format!(
                                         "INSERT action has {} columns but {} expressions",

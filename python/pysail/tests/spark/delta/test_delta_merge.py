@@ -69,3 +69,61 @@ def test_delta_merge_basic_insert_update_delete(spark, tmp_path):
     finally:
         spark.sql(f"DROP TABLE IF EXISTS {table_name}")
 
+
+def test_delta_merge_not_matched_by_source_and_insert_columns(spark, tmp_path):
+    delta_path = tmp_path / "delta_merge_table_extended"
+    delta_table_path = f"{delta_path}"
+
+    target_rows = [
+        Row(id=1, value="old_keep", flag="keep"),
+        Row(id=2, value="old_update", flag="update"),
+        Row(id=3, value="old_orphan", flag="orphan"),
+    ]
+    spark.createDataFrame(target_rows).write.format("delta").mode("overwrite").save(
+        delta_table_path
+    )
+
+    source_rows = [
+        Row(id=2, value="src_update", flag="ignored"),
+        Row(id=4, value="src_insert", flag="inserted"),
+    ]
+    spark.createDataFrame(source_rows).createOrReplaceTempView("src_merge_delta_ext")
+
+    table_name = "delta_merge_extended"
+    spark.sql(
+        f"CREATE TABLE {table_name} USING delta LOCATION '{escape_sql_string_literal(delta_table_path)}'"
+    )
+
+    try:
+        spark.sql(
+            f"""
+            MERGE INTO {table_name} AS t
+            USING src_merge_delta_ext AS s
+            ON t.id = s.id
+            WHEN MATCHED AND t.flag = 'update' THEN
+              UPDATE SET value = concat(s.value, '_', t.flag),
+                         flag = t.flag
+            WHEN NOT MATCHED BY SOURCE AND t.flag = 'orphan' THEN
+              UPDATE SET value = concat(t.value, '_orphan')
+            WHEN NOT MATCHED THEN
+              INSERT (id, value, flag)
+              VALUES (s.id, concat(s.value, '_insert'), s.flag)
+            """
+        )
+
+        result = (
+            spark.read.format("delta")
+            .load(delta_table_path)
+            .select("id", "value", "flag")
+            .sort("id")
+            .collect()
+        )
+
+        assert result == [
+            Row(id=1, value="old_keep", flag="keep"),
+            Row(id=2, value="src_update_update", flag="update"),
+            Row(id=3, value="old_orphan_orphan", flag="orphan"),
+            Row(id=4, value="src_insert_insert", flag="inserted"),
+        ]
+    finally:
+        spark.sql(f"DROP TABLE IF EXISTS {table_name}")
