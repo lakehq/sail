@@ -238,7 +238,7 @@ impl PlanResolver<'_> {
                 )
                 .await
             }
-            CommandNode::MergeInto { .. } => Err(PlanError::todo("CommandNode::MergeInto")),
+            CommandNode::MergeInto(_) => Err(PlanError::todo("CommandNode::MergeInto")),
             CommandNode::SetVariable { variable, value } => {
                 self.resolve_command_set_variable(variable, value).await
             }

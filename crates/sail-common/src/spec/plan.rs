@@ -430,11 +430,7 @@ pub enum CommandNode {
         row_format: Option<TableRowFormat>,
         options: Vec<(String, String)>,
     },
-    MergeInto {
-        target: ObjectName,
-        with_schema_evolution: bool,
-        // TODO: add other fields
-    },
+    MergeInto(MergeInto),
     SetVariable {
         variable: String,
         value: String,
@@ -513,6 +509,84 @@ pub enum CommandNode {
     CommentOnColumn {
         column: ObjectName,
         value: Option<String>,
+    },
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct MergeInto {
+    pub target: ObjectName,
+    pub target_alias: Option<Identifier>,
+    pub source: MergeSource,
+    pub on_condition: Expr,
+    pub clauses: Vec<MergeClause>,
+    pub with_schema_evolution: bool,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub enum MergeSource {
+    Table {
+        name: ObjectName,
+        alias: Option<Identifier>,
+    },
+    Query {
+        input: Box<QueryPlan>,
+        alias: Option<Identifier>,
+    },
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub enum MergeClause {
+    Matched(MergeMatchedClause),
+    NotMatchedBySource(MergeNotMatchedBySourceClause),
+    NotMatchedByTarget(MergeNotMatchedByTargetClause),
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct MergeMatchedClause {
+    pub condition: Option<Expr>,
+    pub action: MergeMatchedAction,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub enum MergeMatchedAction {
+    Delete,
+    UpdateAll,
+    UpdateSet(Vec<(ObjectName, Expr)>),
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct MergeNotMatchedBySourceClause {
+    pub condition: Option<Expr>,
+    pub action: MergeNotMatchedBySourceAction,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub enum MergeNotMatchedBySourceAction {
+    Delete,
+    UpdateSet(Vec<(ObjectName, Expr)>),
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct MergeNotMatchedByTargetClause {
+    pub condition: Option<Expr>,
+    pub action: MergeNotMatchedByTargetAction,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub enum MergeNotMatchedByTargetAction {
+    InsertAll,
+    InsertColumns {
+        columns: Vec<ObjectName>,
+        values: Vec<Expr>,
     },
 }
 
