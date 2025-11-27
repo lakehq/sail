@@ -8,7 +8,7 @@ use datafusion::physical_expr::{
     create_physical_sort_exprs, LexOrdering, LexRequirement, PhysicalExpr, PhysicalSortRequirement,
 };
 use datafusion::physical_plan::ExecutionPlan;
-use datafusion_common::{not_impl_err, plan_err, Constraints, DFSchema, Result};
+use datafusion_common::{not_impl_err, plan_err, Constraints, DFSchema, DFSchemaRef, Result};
 use datafusion_expr::expr::Sort;
 use datafusion_expr::Expr;
 
@@ -77,6 +77,74 @@ pub struct DeleteInfo {
     pub options: Vec<HashMap<String, String>>,
 }
 
+#[derive(Debug, Clone)]
+pub struct MergeTargetInfo {
+    pub table_name: Vec<String>,
+    pub path: String,
+    pub partition_by: Vec<String>,
+    pub options: Vec<HashMap<String, String>>,
+}
+
+#[derive(Debug, Clone)]
+pub struct MergeAssignmentInfo {
+    pub column: String,
+    pub value: Arc<dyn PhysicalExpr>,
+}
+
+#[derive(Debug, Clone)]
+pub enum MergeMatchedActionInfo {
+    Delete,
+    UpdateAll,
+    UpdateSet(Vec<MergeAssignmentInfo>),
+}
+
+#[derive(Debug, Clone)]
+pub struct MergeMatchedClauseInfo {
+    pub condition: Option<Arc<dyn PhysicalExpr>>,
+    pub action: MergeMatchedActionInfo,
+}
+
+#[derive(Debug, Clone)]
+pub enum MergeNotMatchedBySourceActionInfo {
+    Delete,
+    UpdateSet(Vec<MergeAssignmentInfo>),
+}
+
+#[derive(Debug, Clone)]
+pub struct MergeNotMatchedBySourceClauseInfo {
+    pub condition: Option<Arc<dyn PhysicalExpr>>,
+    pub action: MergeNotMatchedBySourceActionInfo,
+}
+
+#[derive(Debug, Clone)]
+pub enum MergeNotMatchedByTargetActionInfo {
+    InsertAll,
+    InsertColumns {
+        columns: Vec<String>,
+        values: Vec<Arc<dyn PhysicalExpr>>,
+    },
+}
+
+#[derive(Debug, Clone)]
+pub struct MergeNotMatchedByTargetClauseInfo {
+    pub condition: Option<Arc<dyn PhysicalExpr>>,
+    pub action: MergeNotMatchedByTargetActionInfo,
+}
+
+#[derive(Debug, Clone)]
+pub struct MergeInfo {
+    pub target: MergeTargetInfo,
+    pub target_input: Arc<dyn ExecutionPlan>,
+    pub source: Arc<dyn ExecutionPlan>,
+    pub target_schema: DFSchemaRef,
+    pub source_schema: DFSchemaRef,
+    pub on_condition: Arc<dyn PhysicalExpr>,
+    pub matched_clauses: Vec<MergeMatchedClauseInfo>,
+    pub not_matched_by_source_clauses: Vec<MergeNotMatchedBySourceClauseInfo>,
+    pub not_matched_by_target_clauses: Vec<MergeNotMatchedByTargetClauseInfo>,
+    pub with_schema_evolution: bool,
+}
+
 /// A trait for preparing physical execution for a specific format.
 #[async_trait]
 pub trait TableFormat: Send + Sync {
@@ -106,6 +174,19 @@ pub trait TableFormat: Send + Sync {
         let _ = (ctx, info);
         not_impl_err!(
             "DELETE operation is not yet implemented for {} format",
+            self.name()
+        )
+    }
+
+    /// Creates an `ExecutionPlan` for MERGE.
+    async fn create_merger(
+        &self,
+        ctx: &dyn Session,
+        info: MergeInfo,
+    ) -> Result<Arc<dyn ExecutionPlan>> {
+        let _ = (ctx, info);
+        not_impl_err!(
+            "MERGE operation is not yet implemented for {} format",
             self.name()
         )
     }

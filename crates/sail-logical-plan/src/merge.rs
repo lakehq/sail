@@ -1,4 +1,6 @@
 use std::fmt::Formatter;
+use std::cmp::Ordering;
+use std::hash::{Hash, Hasher};
 use std::sync::Arc;
 
 use datafusion_common::{DFSchema, DFSchemaRef};
@@ -9,11 +11,21 @@ use sail_common_datafusion::utils::items::ItemTaker;
 pub struct MergeIntoOptions {
     pub target_alias: Option<String>,
     pub source_alias: Option<String>,
+    pub target: MergeTargetInfo,
     pub with_schema_evolution: bool,
     pub on_condition: Expr,
     pub matched_clauses: Vec<MergeMatchedClause>,
     pub not_matched_by_source_clauses: Vec<MergeNotMatchedBySourceClause>,
     pub not_matched_by_target_clauses: Vec<MergeNotMatchedByTargetClause>,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq, Hash, PartialOrd)]
+pub struct MergeTargetInfo {
+    pub table_name: Vec<String>,
+    pub format: String,
+    pub location: String,
+    pub partition_by: Vec<String>,
+    pub options: Vec<Vec<(String, String)>>,
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -62,12 +74,13 @@ pub struct MergeAssignment {
     pub value: Expr,
 }
 
-#[derive(Clone, Debug, PartialEq)]
+#[derive(Clone, Debug)]
 pub struct MergeIntoNode {
     target: Arc<LogicalPlan>,
     source: Arc<LogicalPlan>,
     options: MergeIntoOptions,
     schema: DFSchemaRef,
+    input_schema: DFSchemaRef,
 }
 
 impl MergeIntoNode {
@@ -75,12 +88,14 @@ impl MergeIntoNode {
         target: Arc<LogicalPlan>,
         source: Arc<LogicalPlan>,
         options: MergeIntoOptions,
+        input_schema: DFSchemaRef,
     ) -> Self {
         Self {
             target,
             source,
             options,
             schema: Arc::new(DFSchema::empty()),
+            input_schema,
         }
     }
 
@@ -95,28 +110,31 @@ impl MergeIntoNode {
     pub fn source(&self) -> &Arc<LogicalPlan> {
         &self.source
     }
+
+    pub fn input_schema(&self) -> &DFSchemaRef {
+        &self.input_schema
+    }
 }
 
-#[derive(PartialEq, PartialOrd)]
-struct MergeIntoNodeOrd<'a> {
-    target: &'a Arc<LogicalPlan>,
-    source: &'a Arc<LogicalPlan>,
-    options: &'a MergeIntoOptions,
+impl PartialEq for MergeIntoNode {
+    fn eq(&self, other: &Self) -> bool {
+        std::ptr::eq(self, other)
+    }
 }
 
-impl<'a> From<&'a MergeIntoNode> for MergeIntoNodeOrd<'a> {
-    fn from(node: &'a MergeIntoNode) -> Self {
-        Self {
-            target: &node.target,
-            source: &node.source,
-            options: &node.options,
-        }
+impl Eq for MergeIntoNode {}
+
+impl Hash for MergeIntoNode {
+    fn hash<H: Hasher>(&self, state: &mut H) {
+        (self as *const Self as usize).hash(state);
     }
 }
 
 impl PartialOrd for MergeIntoNode {
-    fn partial_cmp(&self, other: &Self) -> Option<std::cmp::Ordering> {
-        MergeIntoNodeOrd::from(self).partial_cmp(&other.into())
+    fn partial_cmp(&self, other: &Self) -> Option<Ordering> {
+        let a = self as *const Self as usize;
+        let b = other as *const Self as usize;
+        a.partial_cmp(&b)
     }
 }
 
@@ -153,6 +171,7 @@ impl UserDefinedLogicalNodeCore for MergeIntoNode {
             source: Arc::new(source),
             options: self.options.clone(),
             schema: self.schema.clone(),
+            input_schema: self.input_schema.clone(),
         })
     }
 

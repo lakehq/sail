@@ -1,13 +1,15 @@
-use std::collections::HashMap;
 use std::sync::Arc;
 
-use datafusion_common::{DFField, DFSchema, TableReference};
-use datafusion_expr::{Expr, Extension, LogicalPlan, SubqueryAlias};
+use datafusion_common::{JoinType, TableReference};
+use datafusion_expr::{build_join_schema, Expr, Extension, LogicalPlan, SubqueryAlias};
+use sail_catalog::manager::CatalogManager;
+use sail_catalog::provider::TableKind;
 use sail_common::spec;
+use sail_common_datafusion::extension::SessionExtensionAccessor;
 use sail_logical_plan::merge::{
     MergeAssignment, MergeIntoNode, MergeIntoOptions, MergeMatchedAction, MergeMatchedClause,
     MergeNotMatchedBySourceAction, MergeNotMatchedBySourceClause, MergeNotMatchedByTargetAction,
-    MergeNotMatchedByTargetClause,
+    MergeNotMatchedByTargetClause, MergeTargetInfo,
 };
 
 use crate::error::{PlanError, PlanResult};
@@ -29,7 +31,11 @@ impl PlanResolver<'_> {
             with_schema_evolution,
         } = merge;
 
-        let target_alias_string = target_alias.as_ref().map(|alias| alias.clone().into());
+        let target_metadata = self.get_merge_target_info(&target).await?;
+
+        let target_alias_string = target_alias
+            .as_ref()
+            .map(|alias| alias.as_ref().to_string());
         let mut target_plan = self.resolve_merge_table_plan(target.clone(), state).await?;
 
         if let Some(alias) = target_alias_string.as_ref() {
@@ -40,8 +46,7 @@ impl PlanResolver<'_> {
 
         let target_schema = target_plan.schema();
         let source_schema = source_plan.schema();
-        let merge_schema =
-            self.combine_merge_schema(target_schema.clone(), source_schema.clone())?;
+        let merge_schema = Arc::new(build_join_schema(target_schema, source_schema, &JoinType::Inner)?);
 
         let on_condition = self
             .resolve_expression(on_condition, &merge_schema, state)
@@ -54,6 +59,7 @@ impl PlanResolver<'_> {
         let options = MergeIntoOptions {
             target_alias: target_alias_string,
             source_alias: source_alias_string,
+            target: target_metadata,
             with_schema_evolution,
             on_condition,
             matched_clauses,
@@ -66,6 +72,7 @@ impl PlanResolver<'_> {
                 Arc::new(target_plan),
                 Arc::new(source_plan),
                 options,
+                merge_schema,
             )),
         }))
     }
@@ -77,7 +84,9 @@ impl PlanResolver<'_> {
     ) -> PlanResult<(LogicalPlan, Option<String>)> {
         match source {
             spec::MergeSource::Table { name, alias } => {
-                let alias_string = alias.as_ref().map(|a| a.clone().into());
+                let alias_string = alias
+                    .as_ref()
+                    .map(|a| a.as_ref().to_string());
                 let mut plan = self.resolve_merge_table_plan(name, state).await?;
                 if let Some(alias) = alias_string.as_ref() {
                     plan = self.apply_table_alias(plan, alias)?;
@@ -86,7 +95,9 @@ impl PlanResolver<'_> {
             }
             spec::MergeSource::Query { input, alias } => {
                 let mut plan = self.resolve_query_plan(*input, state).await?;
-                let alias_string = alias.as_ref().map(|a| a.clone().into());
+                let alias_string = alias
+                    .as_ref()
+                    .map(|a| a.as_ref().to_string());
                 if let Some(alias) = alias_string.as_ref() {
                     plan = self.apply_table_alias(plan, alias)?;
                 }
@@ -120,26 +131,6 @@ impl PlanResolver<'_> {
                 table: Arc::from(alias.to_string()),
             },
         )?))
-    }
-
-    fn combine_merge_schema(
-        &self,
-        target_schema: datafusion_common::DFSchemaRef,
-        source_schema: datafusion_common::DFSchemaRef,
-    ) -> PlanResult<datafusion_common::DFSchemaRef> {
-        let mut fields: Vec<DFField> = target_schema
-            .fields()
-            .iter()
-            .map(|field| field.as_ref().clone())
-            .collect();
-        fields.extend(
-            source_schema
-                .fields()
-                .iter()
-                .map(|field| field.as_ref().clone()),
-        );
-        let schema = DFSchema::new_with_metadata(fields, HashMap::new())?;
-        Ok(Arc::new(schema))
     }
 
     async fn resolve_merge_clauses(
@@ -349,6 +340,37 @@ impl PlanResolver<'_> {
         match expression {
             Some(expr) => Ok(Some(self.resolve_expression(expr, schema, state).await?)),
             None => Ok(None),
+        }
+    }
+
+    async fn get_merge_target_info(&self, table: &spec::ObjectName) -> PlanResult<MergeTargetInfo> {
+        let catalog_manager = self.ctx.extension::<CatalogManager>()?;
+        let status = catalog_manager
+            .get_table_or_view(table.parts())
+            .await
+            .map_err(PlanError::from)?;
+        match status.kind {
+            TableKind::Table {
+                location,
+                format,
+                partition_by,
+                options,
+                ..
+            } => {
+                let location = location.ok_or_else(|| {
+                    PlanError::invalid(format!("table does not have a location: {table:?}"))
+                })?;
+                Ok(MergeTargetInfo {
+                    table_name: table.clone().into(),
+                    format,
+                    location,
+                    partition_by,
+                    options: vec![options],
+                })
+            }
+            _ => Err(PlanError::unsupported(
+                "MERGE is only supported against tables",
+            )),
         }
     }
 }
