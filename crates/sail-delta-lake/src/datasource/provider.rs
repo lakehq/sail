@@ -37,8 +37,8 @@ use sail_common_datafusion::rename::physical_plan::rename_projected_physical_pla
 
 use crate::datasource::scan::FileScanParams;
 use crate::datasource::{
-    build_file_scan_config, delta_to_datafusion_error, df_logical_schema, get_pushdown_filters,
-    prune_files, simplify_expr, DataFusionMixins, DeltaScanConfig, DeltaTableStateExt,
+    build_file_scan_config, df_logical_schema, get_pushdown_filters, prune_files, simplify_expr,
+    DataFusionMixins, DeltaScanConfig, DeltaTableStateExt,
 };
 use crate::kernel::models::Add;
 use crate::kernel::DeltaResult;
@@ -152,15 +152,13 @@ impl TableProvider for DeltaTableProvider {
             Some(value) => Ok(value),
             // Change from `arrow_schema` to input_schema for Spark compatibility
             None => self.snapshot.input_schema(),
-        }
-        .map_err(delta_to_datafusion_error)?;
+        }?;
 
         let logical_schema = df_logical_schema(
             &self.snapshot,
             &config.file_column_name,
             Some(schema.clone()),
-        )
-        .map_err(delta_to_datafusion_error)?;
+        )?;
 
         let logical_schema = if let Some(used_columns) = projection {
             let mut fields = vec![];

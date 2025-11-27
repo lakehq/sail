@@ -40,7 +40,6 @@ use datafusion::sql::sqlparser::dialect::GenericDialect;
 use datafusion::sql::sqlparser::parser::Parser;
 use datafusion::sql::sqlparser::tokenizer::Tokenizer;
 
-use crate::datasource::error::datafusion_to_delta_error;
 use crate::kernel::snapshot::LogDataHandler;
 use crate::kernel::{DeltaResult, DeltaTableError};
 use crate::schema::arrow_schema_from_struct_type;
@@ -201,12 +200,12 @@ pub fn parse_predicate_expression(
     let mut tokenizer = Tokenizer::new(dialect, expr.as_ref());
     let tokens = tokenizer
         .tokenize()
-        .map_err(|err| DeltaTableError::Generic(format!("Failed to tokenize expression: {err}")))?;
+        .map_err(|err| DeltaTableError::generic(format!("Failed to tokenize expression: {err}")))?;
 
     let sql = Parser::new(dialect)
         .with_tokens(tokens)
         .parse_expr()
-        .map_err(|err| DeltaTableError::Generic(format!("Failed to parse expression: {err}")))?;
+        .map_err(|err| DeltaTableError::generic(format!("Failed to parse expression: {err}")))?;
 
     let context_provider = DeltaContextProvider::new(session);
     let sql_to_rel = SqlToRel::new(&context_provider);
@@ -214,7 +213,7 @@ pub fn parse_predicate_expression(
     sql_to_rel
         .sql_to_expr(sql, schema, &mut Default::default())
         .map_err(|err| {
-            DeltaTableError::Generic(format!("Failed to convert SQL to expression: {err}"))
+            DeltaTableError::generic(format!("Failed to convert SQL to expression: {err}"))
         })
 }
 
@@ -231,9 +230,7 @@ pub fn parse_log_data_predicate(
         table_config.metadata().partition_columns(),
         false,
     )?;
-    let df_schema = arrow_schema
-        .to_dfschema_ref()
-        .map_err(datafusion_to_delta_error)?;
+    let df_schema = arrow_schema.to_dfschema_ref()?;
     parse_predicate_expression(df_schema.as_ref(), expr, session)
 }
 

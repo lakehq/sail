@@ -44,7 +44,7 @@ impl std::str::FromStr for SaveMode {
             "overwrite" => Ok(Self::Overwrite),
             "error" | "error_if_exists" => Ok(Self::ErrorIfExists),
             "ignore" => Ok(Self::Ignore),
-            _ => Err(DeltaTableError::Generic(format!(
+            _ => Err(DeltaTableError::generic(format!(
                 "Invalid save mode provided: {s}, only these are supported: ['append', 'overwrite', 'error', 'ignore']"
             ))),
         }
@@ -108,8 +108,8 @@ impl DeltaOperation {
                 })
                 .collect())
         } else {
-            Err(DeltaTableError::Generic(
-                "Operation parameters serialized into unexpected shape".into(),
+            Err(DeltaTableError::generic(
+                "Operation parameters serialized into unexpected shape",
             ))
         }
     }

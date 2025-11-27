@@ -34,7 +34,6 @@ use crate::table::DeltaTableState;
 pub(crate) const PATH_COLUMN: &str = "__delta_rs_path";
 
 pub mod actions;
-pub mod error;
 pub mod expressions;
 pub mod provider;
 pub mod pruning;
@@ -43,7 +42,6 @@ pub mod schema;
 
 // Re-exports
 pub use actions::{adds_to_remove_actions, partitioned_file_from_action};
-pub use error::{datafusion_to_delta_error, delta_to_datafusion_error};
 pub use expressions::{
     collect_physical_columns, get_pushdown_filters, parse_log_data_predicate,
     parse_predicate_expression, simplify_expr, DeltaContextProvider, PredicateProperties,
@@ -54,7 +52,9 @@ pub use scan::build_file_scan_config;
 pub use schema::{df_logical_schema, DataFusionMixins};
 
 pub(crate) fn create_object_store_url(location: &Url) -> DeltaResult<ObjectStoreUrl> {
-    ObjectStoreUrl::parse(&location[..url::Position::BeforePath]).map_err(datafusion_to_delta_error)
+    Ok(ObjectStoreUrl::parse(
+        &location[..url::Position::BeforePath],
+    )?)
 }
 
 // Extension trait to add datafusion_table_statistics method to DeltaTableState
@@ -137,7 +137,7 @@ impl DeltaScanConfigBuilder {
             match &self.file_column_name {
                 Some(name) => {
                     if column_names.contains(name) {
-                        return Err(DeltaTableError::Generic(format!(
+                        return Err(DeltaTableError::generic(format!(
                             "Unable to add file path column since column with name {name} exits"
                         )));
                     }

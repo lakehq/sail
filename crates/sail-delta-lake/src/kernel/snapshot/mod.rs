@@ -44,6 +44,7 @@ use itertools::Itertools;
 use object_store::path::Path;
 use object_store::ObjectStore;
 use percent_encoding::percent_decode_str;
+use sail_common_datafusion::array::record_batch::cast_record_batch_relaxed_tz;
 use tokio::task::spawn_blocking;
 use url::Url;
 
@@ -121,7 +122,7 @@ impl Snapshot {
                 if e.to_string().contains("No files in log segment") {
                     return Err(DeltaTableError::invalid_table_location(e.to_string()));
                 } else {
-                    return Err(e);
+                    return Err(e.into());
                 }
             }
         };
@@ -147,7 +148,7 @@ impl Snapshot {
                 return Ok(());
             }
             if version < self.version() as u64 {
-                return Err(DeltaTableError::Generic("Cannot downgrade snapshot".into()));
+                return Err(DeltaTableError::generic("Cannot downgrade snapshot"));
             }
         }
 
@@ -162,7 +163,7 @@ impl Snapshot {
             builder.build(engine.as_ref())
         })
         .await
-        .map_err(|e| DeltaTableError::Generic(e.to_string()))??;
+        .map_err(|e| DeltaTableError::generic(e.to_string()))??;
 
         self.inner = snapshot;
         self.schema = self.inner.table_configuration().schema();
@@ -240,7 +241,7 @@ impl Snapshot {
             .build()
         {
             Ok(scan) => scan,
-            Err(err) => return Box::pin(futures::stream::once(async { Err(err) })),
+            Err(err) => return Box::pin(futures::stream::once(async { Err(err.into()) })),
         };
 
         // TODO: which capacity to choose?
@@ -364,7 +365,7 @@ impl Snapshot {
             None,
         ) {
             Ok(data) => data,
-            Err(err) => return Box::pin(futures::stream::once(async { Err(err) })),
+            Err(err) => return Box::pin(futures::stream::once(async { Err(err.into()) })),
         };
 
         builder.spawn_blocking(move || {
@@ -401,7 +402,7 @@ impl Snapshot {
         let inner = self.inner.clone();
         let version = spawn_blocking(move || inner.get_app_id_version(&app_id, engine.as_ref()))
             .await
-            .map_err(|e| DeltaTableError::GenericError { source: e.into() })??;
+            .map_err(DeltaTableError::generic_err)??;
         Ok(version)
     }
 }
@@ -521,21 +522,21 @@ fn required_string_field<'a>(array: &'a StructArray, name: &str) -> DeltaResult<
     array
         .column_by_name(name)
         .and_then(|col| col.as_any().downcast_ref::<StringArray>())
-        .ok_or_else(|| DeltaTableError::Schema(format!("{name} column not found on remove struct")))
+        .ok_or_else(|| DeltaTableError::schema(format!("{name} column not found on remove struct")))
 }
 
 fn required_bool_field<'a>(array: &'a StructArray, name: &str) -> DeltaResult<&'a BooleanArray> {
     array
         .column_by_name(name)
         .and_then(|col| col.as_any().downcast_ref::<BooleanArray>())
-        .ok_or_else(|| DeltaTableError::Schema(format!("{name} column not found on remove struct")))
+        .ok_or_else(|| DeltaTableError::schema(format!("{name} column not found on remove struct")))
 }
 
 fn required_i64_field<'a>(array: &'a StructArray, name: &str) -> DeltaResult<&'a Int64Array> {
     array
         .column_by_name(name)
         .and_then(|col| col.as_any().downcast_ref::<Int64Array>())
-        .ok_or_else(|| DeltaTableError::Schema(format!("{name} column not found on remove struct")))
+        .ok_or_else(|| DeltaTableError::schema(format!("{name} column not found on remove struct")))
 }
 
 fn optional_bool_field<'a>(array: &'a StructArray, name: &str) -> Option<&'a BooleanArray> {
@@ -620,12 +621,12 @@ fn collect_map(val: &StructArray) -> DeltaResult<Vec<(String, Option<String>)>> 
         .column(0)
         .as_any()
         .downcast_ref::<StringArray>()
-        .ok_or_else(|| DeltaTableError::Schema("map key column is not Utf8".to_string()))?;
+        .ok_or_else(|| DeltaTableError::schema("map key column is not Utf8".to_string()))?;
     let values = val
         .column(1)
         .as_any()
         .downcast_ref::<StringArray>()
-        .ok_or_else(|| DeltaTableError::Schema("map value column is not Utf8".to_string()))?;
+        .ok_or_else(|| DeltaTableError::schema("map value column is not Utf8".to_string()))?;
 
     let mut entries = Vec::with_capacity(keys.len());
     for (key, value) in keys.iter().zip(values.iter()) {
@@ -659,6 +660,18 @@ impl EagerSnapshot {
         };
 
         let scan_row_schema = snapshot.inner.scan_row_parsed_schema_arrow()?;
+        let files = files
+            .into_iter()
+            .map(|batch| {
+                if batch.schema().as_ref() == scan_row_schema.as_ref() {
+                    Ok(batch)
+                } else {
+                    // Align row batches to the canonical scan schema before concatenation.
+                    cast_record_batch_relaxed_tz(&batch, &scan_row_schema)
+                        .map_err(|e| DeltaTableError::generic(e.to_string()))
+                }
+            })
+            .collect::<DeltaResult<Vec<_>>>()?;
         let files = concat_batches(&scan_row_schema, &files)?;
 
         Ok(Self { snapshot, files })
@@ -691,7 +704,7 @@ impl EagerSnapshot {
             .try_collect()
         })
         .await
-        .map_err(|e| DeltaTableError::Generic(e.to_string()))??;
+        .map_err(|e| DeltaTableError::generic(e.to_string()))??;
 
         let files = concat_batches(&SCAN_ROW_ARROW_SCHEMA, &files)?;
         let files = match self.snapshot.inner.parse_stats_column(&files) {
@@ -795,7 +808,7 @@ impl EagerSnapshot {
                 .build()
             {
                 Ok(scan) => scan,
-                Err(err) => return Box::pin(futures::stream::once(async { Err(err) })),
+                Err(err) => return Box::pin(futures::stream::once(async { Err(err.into()) })),
             };
             let engine = log_store.engine(None);
             let current_files = self.files.clone();
@@ -811,12 +824,12 @@ impl EagerSnapshot {
                 None,
             ) {
                 Ok(files_iter) => files_iter,
-                Err(err) => return Box::pin(futures::stream::once(async { Err(err) })),
+                Err(err) => return Box::pin(futures::stream::once(async { Err(err.into()) })),
             };
 
             let files: Vec<_> = match files_iter.map_ok(|s| s.scan_files).try_collect() {
                 Ok(files) => files,
-                Err(err) => return Box::pin(futures::stream::once(async { Err(err) })),
+                Err(err) => return Box::pin(futures::stream::once(async { Err(err.into()) })),
             };
 
             match concat_batches(&SCAN_ROW_ARROW_SCHEMA, &files)
