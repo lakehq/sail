@@ -95,7 +95,7 @@ iana-time-zone = "0.1.64"
 chumsky = { version = "0.11.2", default-features = false, features = ["pratt"] }
 num = "0.4.3"
 hf-hub = { version = "0.4.3", default-features = false, features = ["tokio"] }
-reqwest = { version = "0.12.24", features = ["json", "multipart", "stream"] }
+reqwest = { version = "0.12.24", default-features = false, features = ["rustls-tls", "json", "multipart", "stream"] }
 percent-encoding = "2.3.2"
 rustls = "0.23.35"
 dashmap = "6.1.0"
