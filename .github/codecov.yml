@@ -11,6 +11,7 @@ coverage:
 codecov:
   notify:
     wait_for_ci: yes
+    require_ci_to_pass: yes
 
 comment:
   layout: "header, files"
