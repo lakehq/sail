@@ -438,7 +438,7 @@ pub struct DeltaMergePlanBuilder<'a> {
     options: TableDeltaOptions,
 }
 
-const SOURCE_PRESENT_COLUMN: &str = "__delta_rs_source_present";
+const SOURCE_PRESENT_COLUMN: &str = "__sail_merge_source_row_present";
 
 #[derive(Debug, Clone)]
 struct JoinConditionAnalysis {
@@ -684,8 +684,14 @@ impl<'a> DeltaMergePlanBuilder<'a> {
             .iter()
             .map(|f| f.name().clone())
             .collect();
-        dbg!(("merge_target_physical_fields", &target_physical_fields));
-        dbg!(("merge_source_physical_fields", &source_physical_fields));
+        log::trace!(
+            "merge_target_physical_fields: {:?}",
+            &target_physical_fields
+        );
+        log::trace!(
+            "merge_source_physical_fields: {:?}",
+            &source_physical_fields
+        );
 
         let join_for_ident = self.build_join_plan(
             Arc::clone(&target_plan),
@@ -844,9 +850,15 @@ impl<'a> DeltaMergePlanBuilder<'a> {
             .iter()
             .map(|(_, name)| name.clone())
             .collect();
-        dbg!(("merge_augment_target_logical_fields", &logical_field_names));
-        dbg!(("merge_augment_target_physical_fields", &physical_field_names));
-        dbg!(("merge_augment_target_output_fields", &projected_names));
+        log::trace!(
+            "merge_augment_target_logical_fields: {:?}",
+            &logical_field_names
+        );
+        log::trace!(
+            "merge_augment_target_physical_fields: {:?}",
+            &physical_field_names
+        );
+        log::trace!("merge_augment_target_output_fields: {:?}", &projected_names);
         Ok(Arc::new(ProjectionExec::try_new(projection_exprs, target)?))
     }
 
@@ -887,10 +899,19 @@ impl<'a> DeltaMergePlanBuilder<'a> {
             .iter()
             .map(|(_, name)| name.clone())
             .collect();
-        dbg!(("merge_augment_source_logical_fields", &logical_field_names));
-        dbg!(("merge_augment_source_logical_metadata", &logical_metadata));
-        dbg!(("merge_augment_source_physical_fields", &physical_names));
-        dbg!(("merge_augment_source_output_fields", &projected_names));
+        log::trace!(
+            "merge_augment_source_logical_fields: {:?}",
+            &logical_field_names
+        );
+        log::trace!(
+            "merge_augment_source_logical_metadata: {:?}",
+            &logical_metadata
+        );
+        log::trace!(
+            "merge_augment_source_physical_fields: {:?}",
+            &physical_names
+        );
+        log::trace!("merge_augment_source_output_fields: {:?}", &projected_names);
 
         projection_exprs.push((
             Arc::new(Literal::new(ScalarValue::Boolean(Some(true)))) as Arc<dyn PhysicalExpr>,
@@ -1042,8 +1063,7 @@ impl<'a> DeltaMergePlanBuilder<'a> {
             })?;
         let src_present_idx = num_target + source_present_idx_in_source;
 
-        let base_path_col =
-            Arc::new(Column::new(PATH_COLUMN, path_idx)) as Arc<dyn PhysicalExpr>;
+        let base_path_col = Arc::new(Column::new(PATH_COLUMN, path_idx)) as Arc<dyn PhysicalExpr>;
         let source_present = Arc::new(IsNotNullExpr::new(Arc::new(Column::new(
             SOURCE_PRESENT_COLUMN,
             src_present_idx,
@@ -1107,11 +1127,8 @@ impl<'a> DeltaMergePlanBuilder<'a> {
         }
 
         let filter = Arc::new(FilterExec::try_new(rewrite_pred.unwrap(), input)?);
-        let projected_path = Arc::new(CastExpr::new(
-            base_path_col.clone(),
-            DataType::Utf8,
-            None,
-        )) as Arc<dyn PhysicalExpr>;
+        let projected_path = Arc::new(CastExpr::new(base_path_col.clone(), DataType::Utf8, None))
+            as Arc<dyn PhysicalExpr>;
         let projection =
             ProjectionExec::try_new(vec![(projected_path, PATH_COLUMN.to_string())], filter)?;
         Ok(Some(Arc::new(projection)))
@@ -1268,7 +1285,7 @@ impl<'a> DeltaMergePlanBuilder<'a> {
         let active_expr = Arc::new(BinaryExpr::new(keep_or_update, Operator::Or, insert_expr))
             as Arc<dyn PhysicalExpr>;
 
-        dbg!(("build_merge_row_filter active_expr", &active_expr));
+        log::trace!("build_merge_row_filter active_expr: {:?}", &active_expr);
 
         let filter = FilterExec::try_new(active_expr, input)?;
         Ok(Arc::new(filter))
@@ -1297,9 +1314,9 @@ impl<'a> DeltaMergePlanBuilder<'a> {
             .iter()
             .map(|f| f.name().clone())
             .collect();
-        dbg!(("merge_projection_target_fields", &target_field_names));
-        dbg!(("merge_projection_source_fields", &source_field_names));
-        dbg!(("merge_projection_table_fields", &table_field_names));
+        log::trace!("merge_projection_target_fields: {:?}", &target_field_names);
+        log::trace!("merge_projection_source_fields: {:?}", &source_field_names);
+        log::trace!("merge_projection_table_fields: {:?}", &table_field_names);
 
         // Logical MERGE assignments can refer to normalized column names (e.g. "#1")
         // while the table schema uses the actual column names. Keep an index-based
@@ -1386,7 +1403,10 @@ impl<'a> DeltaMergePlanBuilder<'a> {
             source_idx_by_name.insert(field.name().clone(), num_target + idx);
         }
 
-        dbg!(("merge_projection_target_idx_by_name", &target_idx_by_name));
+        log::trace!(
+            "merge_projection_target_idx_by_name: {:?}",
+            &target_idx_by_name
+        );
 
         // Precompute target/source column expressions for each output column.
         // Target expressions are resolved by column name, while source expressions
@@ -1399,22 +1419,21 @@ impl<'a> DeltaMergePlanBuilder<'a> {
             let name = field.name().clone();
             let data_type = field.data_type().clone();
 
-            let target_expr: Arc<dyn PhysicalExpr> =
-                if let Some(idx) = physical_target_idx_by_name
-                    .get(&name)
-                    .copied()
-                    .or_else(|| target_idx_by_name.get(&name).copied())
-                {
-                    let target_name = target_fields
-                        .get(idx)
-                        .map(|f| f.name().clone())
-                        .unwrap_or_else(|| name.clone());
-                    Arc::new(Column::new(target_name.as_str(), idx)) as Arc<dyn PhysicalExpr>
-                } else {
-                    let typed_null =
-                        ScalarValue::try_from(&data_type).map_err(DataFusionError::from)?;
-                    Arc::new(Literal::new(typed_null)) as Arc<dyn PhysicalExpr>
-                };
+            let target_expr: Arc<dyn PhysicalExpr> = if let Some(idx) = physical_target_idx_by_name
+                .get(&name)
+                .copied()
+                .or_else(|| target_idx_by_name.get(&name).copied())
+            {
+                let target_name = target_fields
+                    .get(idx)
+                    .map(|f| f.name().clone())
+                    .unwrap_or_else(|| name.clone());
+                Arc::new(Column::new(target_name.as_str(), idx)) as Arc<dyn PhysicalExpr>
+            } else {
+                let typed_null =
+                    ScalarValue::try_from(&data_type).map_err(DataFusionError::from)?;
+                Arc::new(Literal::new(typed_null)) as Arc<dyn PhysicalExpr>
+            };
             let source_expr: Arc<dyn PhysicalExpr> = if i < num_source {
                 let source_field = &source_fields[i];
                 let source_name = source_field.name();
@@ -1489,10 +1508,14 @@ impl<'a> DeltaMergePlanBuilder<'a> {
                         )?;
                         assign_map.insert(phys_name, aligned_value);
                     }
-                    dbg!(("UpdateSet assignments", &assign_map));
+                    log::trace!("UpdateSet assignments: {:?}", &assign_map);
                     for (col, value_expr) in assign_map {
                         if let Some(cases) = column_cases.get_mut(col.as_str()) {
-                            dbg!(("Pushing UpdateSet case", col.as_str(), &value_expr));
+                            log::trace!(
+                                "Pushing UpdateSet case for column {}: {:?}",
+                                col.as_str(),
+                                &value_expr
+                            );
                             cases.push((pred.clone(), Arc::clone(&value_expr)));
                         }
                     }
@@ -1655,13 +1678,13 @@ impl<'a> DeltaMergePlanBuilder<'a> {
                     if let Some(idx) = new_index {
                         let final_name = target_name.unwrap_or_else(|| name.to_string());
                         if idx != col.index() || final_name != name {
-                            dbg!((
-                                "align_expr_columns remap",
+                            log::trace!(
+                                "align_expr_columns remap: name={} old_idx={} final_name={} new_idx={}",
                                 name,
                                 col.index(),
-                                &final_name,
+                                final_name.as_str(),
                                 idx
-                            ));
+                            );
                             let updated = Arc::new(Column::new(final_name.as_str(), idx))
                                 as Arc<dyn PhysicalExpr>;
                             return Ok(Transformed::yes(updated));
