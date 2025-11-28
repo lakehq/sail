@@ -10,7 +10,7 @@ coverage:
 
 codecov:
   notify:
-    after_n_builds: 1
+    wait_for_ci: yes
 
 comment:
   layout: "header, files"
