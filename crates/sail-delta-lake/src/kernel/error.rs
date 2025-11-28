@@ -16,7 +16,4 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-pub use delta_kernel::Error as DeltaTableError;
-
-/// Result alias used across the Delta integration.
-pub type DeltaResult<T> = Result<T, DeltaTableError>;
+pub use crate::error::{DeltaError as DeltaTableError, DeltaResult};

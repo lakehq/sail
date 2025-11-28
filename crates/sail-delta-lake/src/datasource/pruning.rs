@@ -27,7 +27,6 @@ use datafusion::physical_optimizer::pruning::PruningPredicate;
 use datafusion_common::pruning::PruningStatistics;
 use futures::TryStreamExt;
 
-use crate::datasource::delta_to_datafusion_error;
 use crate::kernel::models::Add;
 use crate::kernel::DeltaResult;
 use crate::storage::LogStoreRef;
@@ -67,9 +66,7 @@ pub async fn prune_files(
 
     // Early return if no filters and no limit
     if filter_expr.is_none() && limit.is_none() {
-        let files = collect_add_actions(snapshot, log_store)
-            .await
-            .map_err(delta_to_datafusion_error)?;
+        let files = collect_add_actions(snapshot, log_store).await?;
         return Ok(PruningResult {
             files,
             pruning_mask: None,
@@ -92,9 +89,7 @@ pub async fn prune_files(
     };
 
     // Collect all files and apply pruning logic
-    let all_files = collect_add_actions(snapshot, log_store)
-        .await
-        .map_err(delta_to_datafusion_error)?;
+    let all_files = collect_add_actions(snapshot, log_store).await?;
 
     // Apply limit-based pruning with statistics consideration
     let mut pruned_without_stats = vec![];

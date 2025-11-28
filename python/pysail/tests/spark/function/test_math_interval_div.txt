@@ -1,0 +1,39 @@
+# Test interval division - INTERVAL YEAR TO MONTH div INTERVAL MONTH
+>>> spark.sql("SELECT INTERVAL '1-1' YEAR TO MONTH div INTERVAL '-1' MONTH as div").show()
++---+
+|div|
++---+
+|-13|
++---+
+
+# Test interval division - positive values
+>>> spark.sql("SELECT INTERVAL '2-6' YEAR TO MONTH div INTERVAL '3' MONTH as div").show()
++---+
+|div|
++---+
+| 10|
++---+
+
+# Test interval division - equal intervals
+>>> spark.sql("SELECT INTERVAL '12' MONTH div INTERVAL '12' MONTH as div").show()
++---+
+|div|
++---+
+|  1|
++---+
+
+# Test interval division - larger dividend
+>>> spark.sql("SELECT INTERVAL '10' YEAR div INTERVAL '2' YEAR as div").show()
++---+
+|div|
++---+
+|  5|
++---+
+
+# Test interval division - fractional result (should truncate)
+>>> spark.sql("SELECT INTERVAL '5' MONTH div INTERVAL '2' MONTH as div").show()
++---+
+|div|
++---+
+|  2|
++---+

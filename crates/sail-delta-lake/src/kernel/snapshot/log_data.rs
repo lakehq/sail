@@ -23,6 +23,7 @@ use delta_kernel::actions::{Metadata, Protocol};
 use delta_kernel::scan::scan_row_schema;
 use delta_kernel::table_configuration::TableConfiguration;
 use delta_kernel::table_properties::TableProperties;
+use log::warn;
 
 use crate::kernel::snapshot::iterators::LogicalFileView;
 use crate::kernel::{DeltaResult, DeltaTableError};
@@ -348,14 +349,30 @@ mod datafusion {
             } else {
                 Expression::column(["stats_parsed", stats_field, &column.name])
             };
-            let evaluator = ARROW_HANDLER
-                .new_expression_evaluator(
-                    scan_row_schema(),
-                    Arc::new(expression),
-                    field.data_type().clone(),
-                )
-                .ok()?;
-            let batch = evaluator.evaluate_arrow(self.data.clone()).ok()?;
+            let evaluator = match ARROW_HANDLER.new_expression_evaluator(
+                scan_row_schema(),
+                Arc::new(expression),
+                field.data_type().clone(),
+            ) {
+                Ok(value) => value,
+                Err(err) => {
+                    warn!(
+                        "Failed to construct stats evaluator for column {} (field {stats_field}): {err}",
+                        column.name()
+                    );
+                    return None;
+                }
+            };
+            let batch = match evaluator.evaluate_arrow(self.data.clone()) {
+                Ok(batch) => batch,
+                Err(err) => {
+                    warn!(
+                        "Failed to evaluate stats expression for column {} (field {stats_field}): {err}",
+                        column.name()
+                    );
+                    return None;
+                }
+            };
             batch.column_by_name("output").cloned()
         }
     }
@@ -367,7 +384,7 @@ mod datafusion {
         batch
             .column_by_name(name)
             .and_then(|col| col.as_any().downcast_ref::<T>())
-            .ok_or_else(|| DeltaTableError::Schema(format!("column {name} not found in log data")))
+            .ok_or_else(|| DeltaTableError::schema(format!("column {name} not found in log data")))
     }
 
     fn struct_column_opt<'a, T: Array + 'static>(
@@ -385,19 +402,19 @@ mod datafusion {
         path: &mut impl Iterator<Item = &'a str>,
     ) -> Result<&'a Arc<dyn Array>, DeltaTableError> {
         let mut current = array.column_by_name(root).ok_or_else(|| {
-            DeltaTableError::Schema(format!("{root} column not found in stats struct"))
+            DeltaTableError::schema(format!("{root} column not found in stats struct"))
         })?;
         for segment in path {
             let struct_array = current
                 .as_any()
                 .downcast_ref::<StructArray>()
                 .ok_or_else(|| {
-                    DeltaTableError::Schema(format!(
+                    DeltaTableError::schema(format!(
                         "Expected struct while accessing {segment} in stats"
                     ))
                 })?;
             current = struct_array.column_by_name(segment).ok_or_else(|| {
-                DeltaTableError::Schema(format!("{segment} column not found in stats struct"))
+                DeltaTableError::schema(format!("{segment} column not found in stats struct"))
             })?;
         }
         Ok(current)

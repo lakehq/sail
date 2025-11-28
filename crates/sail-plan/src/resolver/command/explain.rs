@@ -1,5 +1,6 @@
 use std::sync::Arc;
 
+use async_recursion::async_recursion;
 use datafusion_common::display::{PlanType, StringifiedPlan, ToStringifiedPlan};
 use datafusion_common::ToDFSchema;
 use datafusion_expr::{Explain, ExplainFormat, LogicalPlan};
@@ -10,13 +11,17 @@ use crate::resolver::state::PlanResolverState;
 use crate::resolver::PlanResolver;
 
 impl PlanResolver<'_> {
+    #[async_recursion]
     pub(super) async fn resolve_command_explain(
         &self,
-        input: spec::QueryPlan,
+        input: spec::Plan,
         mode: spec::ExplainMode,
         state: &mut PlanResolverState,
     ) -> PlanResult<LogicalPlan> {
-        let input = self.resolve_query_plan(input, state).await?;
+        let input = match input {
+            spec::Plan::Query(query) => self.resolve_query_plan(query, state).await?,
+            spec::Plan::Command(command) => self.resolve_command_plan(command, state).await?,
+        };
         let stringified_plans: Vec<StringifiedPlan> =
             vec![input.to_stringified(PlanType::InitialLogicalPlan)];
         let schema = LogicalPlan::explain_schema();

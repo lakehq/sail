@@ -48,8 +48,8 @@ use futures::{stream, TryStreamExt};
 use url::Url;
 
 use crate::datasource::{
-    collect_physical_columns, datafusion_to_delta_error, DataFusionMixins, DeltaScanConfigBuilder,
-    DeltaTableProvider, PredicateProperties, PATH_COLUMN,
+    collect_physical_columns, DataFusionMixins, DeltaScanConfigBuilder, DeltaTableProvider,
+    PredicateProperties, PATH_COLUMN,
 };
 use crate::kernel::models::Add;
 use crate::kernel::{DeltaResult, DeltaTableError};
@@ -288,7 +288,7 @@ pub async fn scan_memory_table_physical(
     arrays.push(
         batch
             .column_by_name("path")
-            .ok_or(DeltaTableError::Generic(
+            .ok_or(DeltaTableError::generic(
                 "Column with name `path` does not exist".to_owned(),
             ))?
             .to_owned(),
@@ -302,7 +302,7 @@ pub async fn scan_memory_table_physical(
             arrays.push(array.to_owned());
             let field = schema
                 .field_with_name(&partition_column_name)
-                .map_err(|err| DeltaTableError::Generic(err.to_string()))?;
+                .map_err(|err| DeltaTableError::generic(err.to_string()))?;
             // Create a new field with the original partition column name (without "partition." prefix)
             let partition_field = Field::new(
                 partition_column,
@@ -315,15 +315,12 @@ pub async fn scan_memory_table_physical(
 
     let schema = Arc::new(Schema::new(fields));
     let batch = RecordBatch::try_new(schema.clone(), arrays)
-        .map_err(|err| DeltaTableError::Generic(err.to_string()))?;
+        .map_err(|err| DeltaTableError::generic(err.to_string()))?;
 
-    let memory_source = MemorySourceConfig::try_new(&[vec![batch]], schema, None)
-        .map_err(datafusion_to_delta_error)?;
+    let memory_source = MemorySourceConfig::try_new(&[vec![batch]], schema, None)?;
     let memory_exec = DataSourceExec::from_data_source(memory_source);
 
-    let filter_exec = Arc::new(
-        FilterExec::try_new(physical_predicate, memory_exec).map_err(datafusion_to_delta_error)?,
-    );
+    let filter_exec = Arc::new(FilterExec::try_new(physical_predicate, memory_exec)?);
 
     let task_ctx = Arc::new(TaskContext::from(state));
     let mut partitions = Vec::new();
@@ -333,10 +330,8 @@ pub async fn scan_memory_table_physical(
         .output_partitioning()
         .partition_count()
     {
-        let stream = filter_exec
-            .execute(i, task_ctx.clone())
-            .map_err(datafusion_to_delta_error)?;
-        let data = collect(stream).await.map_err(datafusion_to_delta_error)?;
+        let stream = filter_exec.execute(i, task_ctx.clone())?;
+        let data = collect(stream).await?;
         partitions.extend(data);
     }
 
@@ -398,8 +393,7 @@ pub async fn find_files_scan_physical(
     // Scan without filtering first, then apply the physical predicate
     let scan = table_provider
         .scan(state, Some(&used_columns), &[], Some(1))
-        .await
-        .map_err(datafusion_to_delta_error)?;
+        .await?;
 
     // For non-partition columns, Scan without filtering to identify candidate files
     let limit: Arc<dyn ExecutionPlan> = scan;
@@ -408,10 +402,8 @@ pub async fn find_files_scan_physical(
     let mut partitions = Vec::new();
 
     for i in 0..limit.properties().output_partitioning().partition_count() {
-        let stream = limit
-            .execute(i, task_ctx.clone())
-            .map_err(datafusion_to_delta_error)?;
-        let data = collect(stream).await.map_err(datafusion_to_delta_error)?;
+        let stream = limit.execute(i, task_ctx.clone())?;
+        let data = collect(stream).await?;
         partitions.extend(data);
     }
 
@@ -449,9 +441,7 @@ pub async fn find_files_physical(
                 let partition_schema = Arc::new(Schema::new(fields));
 
                 let adapter = adapter_factory.create(logical_schema.clone(), partition_schema);
-                let adapted_predicate = adapter
-                    .rewrite(physical_predicate)
-                    .map_err(datafusion_to_delta_error)?;
+                let adapted_predicate = adapter.rewrite(physical_predicate)?;
 
                 // Use partition-only scanning (memory table approach)
                 let candidates = scan_memory_table_physical(
@@ -469,9 +459,7 @@ pub async fn find_files_physical(
                 // For non-partition predicates, use the full schema
                 let physical_schema = logical_schema.clone();
                 let adapter = adapter_factory.create(logical_schema, physical_schema);
-                let adapted_predicate = adapter
-                    .rewrite(physical_predicate)
-                    .map_err(datafusion_to_delta_error)?;
+                let adapted_predicate = adapter.rewrite(physical_predicate)?;
 
                 // Use full file scanning
                 let candidates =

@@ -97,20 +97,20 @@ Here are the storage options supported:
 - HDFS
 - File systems
 - HTTP/HTTPS
-- In‐memory storage
+- In-memory storage
 
 ### Lakehouse Formats
 
 Sail provides native support for modern lakehouse table formats, offering reliable storage layers with strong data management guarantees and ensuring interoperability with existing datasets.
 
-Supported formats include:
+Please refer to the following guides for the supported formats:
 
-- Delta Lake — See the [Delta Lake Guide](https://docs.lakesail.com/sail/latest/guide/formats/delta.html)
-- Apache Iceberg — See the [Apache Iceberg Guide](https://docs.lakesail.com/sail/latest/guide/formats/iceberg.html)
+- [Delta Lake Guide](https://docs.lakesail.com/sail/latest/guide/formats/delta.html)
+- [Apache Iceberg Guide](https://docs.lakesail.com/sail/latest/guide/formats/iceberg.html)
 
 ### Catalog Providers
 
-Sail supports multiple catalog providers—including the Apache Iceberg REST Catalog and Unity Catalog—enabling you to manage datasets as external tables and integrate with broader data-platform ecosystems.
+Sail supports multiple catalog providers, such as the Apache Iceberg REST Catalog and Unity Catalog. You can manage datasets as external tables and integrate with broader data-platform ecosystems.
 
 For more details on usage and best practices, see the [Catalog Guide](https://docs.lakesail.com/sail/latest/guide/catalog/).
 

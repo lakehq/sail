@@ -12,6 +12,7 @@
 
 pub mod conversion;
 pub mod datasource;
+pub mod error;
 mod kernel;
 pub mod operations;
 pub mod options;
@@ -21,3 +22,5 @@ pub mod storage;
 pub mod table;
 
 pub use table::create_delta_provider;
+
+pub use crate::error::{DeltaError, DeltaError as DeltaTableError, DeltaResult, KernelError};

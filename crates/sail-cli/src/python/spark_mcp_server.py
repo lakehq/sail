@@ -9,6 +9,8 @@ import uvicorn.server
 from mcp.server.fastmcp import Context, FastMCP
 from pyspark.sql import SparkSession
 
+logger = logging.getLogger(__name__)
+
 
 def _is_temp_view(table):
     return table.catalog is None and not table.namespace and table.tableType == "TEMPORARY" and table.isTemporary
@@ -65,10 +67,10 @@ def configure_fastmcp_log_level():
 def create_spark_mcp_server(host: str, port: int, spark_remote: str):
     @asynccontextmanager
     async def lifespan(server: FastMCP) -> AsyncIterator[SparkSession]:  # noqa: ARG001
-        logging.info("Creating Spark session")
+        logger.info("Creating Spark session")
         spark = SparkSession.builder.remote(spark_remote).getOrCreate()
         yield spark
-        logging.info("Stopping Spark session")
+        logger.info("Stopping Spark session")
         spark.stop()
 
     mcp = FastMCP("Sail MCP server for Spark SQL", lifespan=lifespan, host=host, port=port)
@@ -114,7 +116,7 @@ def create_spark_mcp_server(host: str, port: int, spark_remote: str):
             Please concatenate the key prefix with the directory name (without any separator) to get the full path.
         """
         try:
-            import boto3
+            import boto3  # noqa: PLC0415
         except ImportError as e:
             message = "Please install boto3 to use AWS functionalities in the MCP server."
             raise RuntimeError(message) from e
@@ -335,7 +337,7 @@ def main():
     This is used when running the Python script directly during development.
     It is not used by the Sail CLI to start the MCP server.
     """
-    import argparse
+    import argparse  # noqa: PLC0415
 
     parser = argparse.ArgumentParser(description="Spark MCP server")
     parser.add_argument("--transport", default="sse", help="The transport for the MCP server", choices=["stdio", "sse"])

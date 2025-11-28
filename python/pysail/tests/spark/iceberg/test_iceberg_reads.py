@@ -1,4 +1,5 @@
 import math
+from datetime import datetime, timedelta
 
 import pyarrow as pa
 from pyiceberg.schema import Schema
@@ -31,8 +32,6 @@ def test_nan_reads(spark, tmp_path):
 
 
 def test_datetime_filter_reads(spark, tmp_path):
-    from datetime import datetime, timedelta
-
     catalog = create_sql_catalog(tmp_path)
     identifier = "default.test_datetime_filter_reads"
     table = catalog.create_table(

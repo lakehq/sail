@@ -153,8 +153,9 @@ fn stats_from_metadata(
             .iter()
             .flat_map(|g| {
                 g.column(idx).statistics().into_iter().filter_map(|s| {
+                    let logical_type = column_descr.logical_type_ref();
                     let is_binary = matches!(&column_descr.physical_type(), Type::BYTE_ARRAY)
-                        && matches!(column_descr.logical_type(), Some(LogicalType::String)).not();
+                        && matches!(logical_type, Some(LogicalType::String)).not();
                     if is_binary {
                         warn!(
                             "Skipping column {} because it's a binary field.",
@@ -162,7 +163,7 @@ fn stats_from_metadata(
                         );
                         None
                     } else {
-                        Some(AggregatedStats::from((s, &column_descr.logical_type())))
+                        Some(AggregatedStats::from((s, logical_type)))
                     }
                 })
             })
@@ -243,7 +244,7 @@ enum StatsScalar {
 impl StatsScalar {
     fn try_from_stats(
         stats: &Statistics,
-        logical_type: &Option<LogicalType>,
+        logical_type: Option<&LogicalType>,
         use_min: bool,
     ) -> Result<Self, DeltaTableError> {
         macro_rules! get_stat {
@@ -414,8 +415,8 @@ struct AggregatedStats {
     pub null_count: u64,
 }
 
-impl From<(&Statistics, &Option<LogicalType>)> for AggregatedStats {
-    fn from(value: (&Statistics, &Option<LogicalType>)) -> Self {
+impl From<(&Statistics, Option<&LogicalType>)> for AggregatedStats {
+    fn from(value: (&Statistics, Option<&LogicalType>)) -> Self {
         let (stats, logical_type) = value;
         let null_count = stats.null_count_opt().unwrap_or_default();
         if stats.min_bytes_opt().is_some() && stats.max_bytes_opt().is_some() {
