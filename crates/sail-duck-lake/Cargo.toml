@@ -1,0 +1,23 @@
+[package]
+name = "sail-duck-lake"
+version = { workspace = true }
+edition = { workspace = true }
+
+[dependencies]
+
+serde = { workspace = true, features = ["derive"] }
+serde_json = { workspace = true }
+uuid = { workspace = true }
+chrono = { workspace = true, features = ["serde"] }
+async-trait = { workspace = true }
+datafusion = { workspace = true }
+datafusion-common = { workspace = true }
+object_store = { workspace = true }
+url = { workspace = true }
+log = { workspace = true }
+tokio = { workspace = true }
+pyo3 = { workspace = true }
+
+[lints]
+workspace = true
+
