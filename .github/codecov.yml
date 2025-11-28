@@ -6,21 +6,7 @@ coverage:
     project:
       default:
         target: 0
-        threshold: 10%
-      rust_unit:
-        target: auto
-        flags:
-          - rust-unit
-      python_unit:
-        target: auto
-        flags:
-          - python-unit
-      spark_tests:
-        target: auto
-        flags:
-          - spark-tests
-    carryforward: true
-    informational: true
+        informational: true
 
 codecov:
   notify:
@@ -36,9 +22,12 @@ flags:
   rust-unit:
     paths:
       - crates/
+    carry_forward: true
   python-unit:
     paths:
       - crates/
+    carry_forward: true
   spark-tests:
     paths:
       - crates/
+    carry_forward: true
