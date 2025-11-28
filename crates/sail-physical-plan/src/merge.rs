@@ -198,7 +198,10 @@ fn convert_assignments(
     let mut out = Vec::with_capacity(assignments.len());
     for MergeAssignment { column, value } in assignments {
         let expr = planner.create_physical_expr(value, input_schema, ctx)?;
-        dbg!(("convert_assignments", column, value, &expr));
+        // log::trace!(
+        //     "convert_assignments: column={}, value={value:?}, expr={expr:?}",
+        //     column
+        // );
         let resolved_column = resolve_target_column(column.as_str(), &target_schema)?;
         out.push(MergeAssignmentInfo {
             column: resolved_column,
