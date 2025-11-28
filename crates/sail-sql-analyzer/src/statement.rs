@@ -666,9 +666,12 @@ pub fn from_ast_statement(statement: Statement) -> SqlResult<spec::Plan> {
                                     .map(from_ast_expression)
                                     .collect::<SqlResult<Vec<_>>>()?;
                                 if values.len() == 1 {
-                                    if let spec::Expr::UnresolvedFunction(func) =
-                                        values.pop().unwrap()
-                                    {
+                                    let expr = values.pop().ok_or_else(|| {
+                                        SqlError::invalid(
+                                            "INSERT action must include at least one expression",
+                                        )
+                                    })?;
+                                    if let spec::Expr::UnresolvedFunction(func) = expr {
                                         if func.function_name == spec::ObjectName::bare("struct")
                                             && func.named_arguments.is_empty()
                                         {
@@ -676,6 +679,8 @@ pub fn from_ast_statement(statement: Statement) -> SqlResult<spec::Plan> {
                                         } else {
                                             values = vec![spec::Expr::UnresolvedFunction(func)];
                                         }
+                                    } else {
+                                        values = vec![expr];
                                     }
                                 }
                                 if columns.len() != values.len() {
