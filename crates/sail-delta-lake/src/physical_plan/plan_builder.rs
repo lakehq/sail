@@ -21,7 +21,7 @@ use datafusion::datasource::memory::MemTable;
 use datafusion::datasource::TableProvider;
 use datafusion::logical_expr::Operator;
 use datafusion::physical_expr::expressions::{
-    BinaryExpr, CaseExpr, Column, InListExpr, IsNotNullExpr, Literal, NotExpr,
+    BinaryExpr, CaseExpr, CastExpr, Column, InListExpr, IsNotNullExpr, Literal, NotExpr,
 };
 use datafusion::physical_expr::utils::split_conjunction;
 use datafusion::physical_expr::{LexRequirement, PhysicalExpr};
@@ -669,6 +669,7 @@ impl<'a> DeltaMergePlanBuilder<'a> {
                 &join_analysis.target_only_filters,
             )
             .await?;
+        let target_plan = self.augment_target_plan(target_plan)?;
         let source_plan = self.augment_source_plan(Arc::clone(&self.merge_info.source))?;
         let target_physical_schema = target_plan.schema();
         let source_physical_schema = source_plan.schema();
@@ -811,6 +812,44 @@ impl<'a> DeltaMergePlanBuilder<'a> {
             .data()
     }
 
+    fn augment_target_plan(
+        &self,
+        target: Arc<dyn ExecutionPlan>,
+    ) -> Result<Arc<dyn ExecutionPlan>> {
+        let logical_schema = self.merge_info.target_schema.as_ref().as_arrow().clone();
+        let logical_field_names: Vec<String> = logical_schema
+            .fields()
+            .iter()
+            .map(|f| f.name().clone())
+            .collect();
+        let physical_field_names: Vec<String> = target
+            .schema()
+            .fields()
+            .iter()
+            .map(|f| f.name().clone())
+            .collect();
+        let mut projection_exprs: Vec<(Arc<dyn PhysicalExpr>, String)> = Vec::new();
+        for (idx, field) in target.schema().fields().iter().enumerate() {
+            let alias = logical_schema
+                .fields()
+                .get(idx)
+                .map(|f| f.name().clone())
+                .unwrap_or_else(|| field.name().clone());
+            projection_exprs.push((
+                Arc::new(Column::new(field.name(), idx)) as Arc<dyn PhysicalExpr>,
+                alias,
+            ));
+        }
+        let projected_names: Vec<String> = projection_exprs
+            .iter()
+            .map(|(_, name)| name.clone())
+            .collect();
+        dbg!(("merge_augment_target_logical_fields", &logical_field_names));
+        dbg!(("merge_augment_target_physical_fields", &physical_field_names));
+        dbg!(("merge_augment_target_output_fields", &projected_names));
+        Ok(Arc::new(ProjectionExec::try_new(projection_exprs, target)?))
+    }
+
     fn augment_source_plan(
         &self,
         source: Arc<dyn ExecutionPlan>,
@@ -881,7 +920,7 @@ impl<'a> DeltaMergePlanBuilder<'a> {
                 filter,
                 &JoinType::Full,
                 None,
-                PartitionMode::Auto,
+                PartitionMode::Partitioned,
                 NullEquality::NullEqualsNothing,
             )?;
             Ok(Arc::new(join))
@@ -1003,13 +1042,14 @@ impl<'a> DeltaMergePlanBuilder<'a> {
             })?;
         let src_present_idx = num_target + source_present_idx_in_source;
 
-        let path_col = Arc::new(Column::new(PATH_COLUMN, path_idx)) as Arc<dyn PhysicalExpr>;
+        let base_path_col =
+            Arc::new(Column::new(PATH_COLUMN, path_idx)) as Arc<dyn PhysicalExpr>;
         let source_present = Arc::new(IsNotNullExpr::new(Arc::new(Column::new(
             SOURCE_PRESENT_COLUMN,
             src_present_idx,
         )) as Arc<dyn PhysicalExpr>)) as Arc<dyn PhysicalExpr>;
         let target_present =
-            Arc::new(IsNotNullExpr::new(path_col.clone())) as Arc<dyn PhysicalExpr>;
+            Arc::new(IsNotNullExpr::new(base_path_col.clone())) as Arc<dyn PhysicalExpr>;
         let matched_pred = Arc::new(BinaryExpr::new(
             target_present.clone(),
             Operator::And,
@@ -1067,8 +1107,13 @@ impl<'a> DeltaMergePlanBuilder<'a> {
         }
 
         let filter = Arc::new(FilterExec::try_new(rewrite_pred.unwrap(), input)?);
+        let projected_path = Arc::new(CastExpr::new(
+            base_path_col.clone(),
+            DataType::Utf8,
+            None,
+        )) as Arc<dyn PhysicalExpr>;
         let projection =
-            ProjectionExec::try_new(vec![(path_col, PATH_COLUMN.to_string())], filter)?;
+            ProjectionExec::try_new(vec![(projected_path, PATH_COLUMN.to_string())], filter)?;
         Ok(Some(Arc::new(projection)))
     }
 
@@ -1330,6 +1375,12 @@ impl<'a> DeltaMergePlanBuilder<'a> {
         for (idx, field) in target_fields.iter().enumerate() {
             target_idx_by_name.insert(field.name().clone(), idx);
         }
+        let mut physical_target_idx_by_name: HashMap<String, usize> = HashMap::new();
+        for (logical_name, physical_name) in &logical_to_physical {
+            if let Some(idx) = target_idx_by_name.get(logical_name) {
+                physical_target_idx_by_name.insert(physical_name.clone(), *idx);
+            }
+        }
         let mut source_idx_by_name: HashMap<String, usize> = HashMap::new();
         for (idx, field) in source_fields.iter().enumerate() {
             source_idx_by_name.insert(field.name().clone(), num_target + idx);
@@ -1349,8 +1400,16 @@ impl<'a> DeltaMergePlanBuilder<'a> {
             let data_type = field.data_type().clone();
 
             let target_expr: Arc<dyn PhysicalExpr> =
-                if let Some(idx) = target_idx_by_name.get(&name) {
-                    Arc::new(Column::new(&name, *idx)) as Arc<dyn PhysicalExpr>
+                if let Some(idx) = physical_target_idx_by_name
+                    .get(&name)
+                    .copied()
+                    .or_else(|| target_idx_by_name.get(&name).copied())
+                {
+                    let target_name = target_fields
+                        .get(idx)
+                        .map(|f| f.name().clone())
+                        .unwrap_or_else(|| name.clone());
+                    Arc::new(Column::new(target_name.as_str(), idx)) as Arc<dyn PhysicalExpr>
                 } else {
                     let typed_null =
                         ScalarValue::try_from(&data_type).map_err(DataFusionError::from)?;
