@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from typing import Any
+from urllib.parse import urlparse, urlunparse
 
 from sqlalchemy import and_, bindparam, column, create_engine, or_, select, table, text
 
@@ -8,25 +9,17 @@ _ENGINES: dict[str, Any] = {}
 
 
 def _normalize_sqlalchemy_url(url: str) -> str:
-    # Normalize Postgres URLs to use psycopg driver for SQLAlchemy.
-    # Accept postgres:// or postgresql:// and coerce to postgresql+psycopg://
-    if url.startswith(("postgres://", "postgresql://")):
-        # If already has an explicit driver, preserve it
-        if url.startswith("postgresql+"):
-            return url
-        return "postgresql+psycopg://" + url.split("://", 1)[1]
-    # Support legacy "sqlite://<path>" by converting to SQLAlchemy format.
-    if url.startswith("sqlite://"):
-        if url.startswith(("sqlite:////", "sqlite:///")):
-            return url
-        rest = url[len("sqlite://") :]
-        if not rest:
-            return "sqlite://"
-        # Absolute path (starts with '/'): prefer four slashes for absolute
-        if rest.startswith("/"):
-            return "sqlite:////" + rest.lstrip("/")
-        # Relative path
-        return "sqlite:///" + rest
+    parsed = urlparse(url)
+    scheme_lower = parsed.scheme.lower()
+
+    if scheme_lower in ("postgres", "postgresql"):
+        return urlunparse(parsed._replace(scheme="postgresql+psycopg"))
+
+    if scheme_lower == "sqlite" and parsed.netloc:
+        # Legacy sqlite URLs sometimes encode the path inside the netloc portion.
+        new_path = f"/{parsed.netloc}{parsed.path}"
+        return urlunparse(parsed._replace(netloc="", path=new_path))
+
     return url
 
 

@@ -1,4 +1,5 @@
 use datafusion::common::{DataFusionError, Result};
+use url::Url;
 
 #[derive(Debug, Clone, Default)]
 pub struct DuckLakeOptions {
@@ -37,16 +38,16 @@ impl DuckLakeOptions {
     }
 
     fn validate_url(url: &str) -> Result<()> {
-        if !url.starts_with("sqlite://")
-            && !url.starts_with("postgres://")
-            && !url.starts_with("postgresql://")
-        {
-            return Err(DataFusionError::Plan(format!(
-                "Invalid metadata URL scheme. Expected sqlite://, postgres://, or postgresql://, got: {}",
-                url
-            )));
+        let parsed = Url::parse(url)
+            .map_err(|e| DataFusionError::Plan(format!("Invalid metadata URL: {}: {}", url, e)))?;
+
+        match parsed.scheme() {
+            "sqlite" | "postgres" | "postgresql" => Ok(()),
+            scheme => Err(DataFusionError::Plan(format!(
+                "Invalid metadata URL scheme. Expected sqlite, postgres, or postgresql, got: {}",
+                scheme
+            ))),
         }
-        Ok(())
     }
 
     fn validate_table_name(table: &str) -> Result<()> {
@@ -71,7 +72,7 @@ impl DuckLakeOptions {
                 "Base path cannot be empty".to_string(),
             ));
         }
-        url::Url::parse(base_path).map_err(|e| {
+        Url::parse(base_path).map_err(|e| {
             DataFusionError::Plan(format!("Invalid base_path URL: {}: {}", base_path, e))
         })?;
         Ok(())
