@@ -13,9 +13,8 @@ use sail_common_datafusion::datasource::{
 use sail_common_datafusion::streaming::event::schema::is_flow_event_schema;
 use sail_delta_lake::datasource::{parse_predicate_expression, DataFusionMixins};
 use sail_delta_lake::options::{ColumnMappingModeOption, TableDeltaOptions};
-use sail_delta_lake::physical_plan::plan_builder::DeltaTableConfig;
-use sail_delta_lake::physical_plan::{
-    DeltaDeletePlanBuilder, DeltaMergePlanBuilder, DeltaPlanBuilder,
+use sail_delta_lake::physical_plan::planner::{
+    plan_delete, plan_merge, DeltaPhysicalPlanner, DeltaTableConfig, PlannerContext,
 };
 use sail_delta_lake::table::open_table_with_object_store;
 use sail_delta_lake::{create_delta_provider, DeltaTableError, KernelError};
@@ -132,16 +131,16 @@ impl TableFormat for DeltaTableFormat {
             (mode, None)
         };
 
-        let table_config = DeltaTableConfig {
+        let table_config = DeltaTableConfig::new(
             table_url,
-            options: delta_options,
-            partition_columns: partition_by,
+            delta_options,
+            partition_by,
             table_schema_for_cond,
             table_exists,
-        };
-        let plan_builder =
-            DeltaPlanBuilder::new(input, table_config, unified_mode, sort_order, ctx);
-        let sink_exec = plan_builder.build().await?;
+        );
+        let planner_ctx = PlannerContext::new(ctx, table_config);
+        let planner = DeltaPhysicalPlanner::new(planner_ctx);
+        let sink_exec = planner.create_plan(input, unified_mode, sort_order).await?;
 
         Ok(sink_exec)
     }
@@ -165,8 +164,9 @@ impl TableFormat for DeltaTableFormat {
 
         let delta_options = resolve_delta_write_options(options)?;
 
-        let plan_builder = DeltaDeletePlanBuilder::new(table_url, condition, ctx, delta_options);
-        let delete_exec = plan_builder.build().await?;
+        let delete_config = DeltaTableConfig::new(table_url, delta_options, Vec::new(), None, true);
+        let delete_ctx = PlannerContext::new(ctx, delete_config);
+        let delete_exec = plan_delete(&delete_ctx, condition).await?;
 
         Ok(delete_exec)
     }
@@ -178,8 +178,15 @@ impl TableFormat for DeltaTableFormat {
     ) -> Result<Arc<dyn ExecutionPlan>> {
         let table_url = Self::parse_table_url(ctx, vec![info.target.path.clone()]).await?;
         let delta_options = resolve_delta_write_options(info.target.options.clone())?;
-        let plan_builder = DeltaMergePlanBuilder::new(table_url, info, ctx, delta_options);
-        let merge_exec = plan_builder.build().await?;
+        let merge_config = DeltaTableConfig::new(
+            table_url,
+            delta_options,
+            info.target.partition_by.clone(),
+            None,
+            true,
+        );
+        let merge_ctx = PlannerContext::new(ctx, merge_config);
+        let merge_exec = plan_merge(&merge_ctx, info).await?;
         Ok(merge_exec)
     }
 }
