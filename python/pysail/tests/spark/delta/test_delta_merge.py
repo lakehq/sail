@@ -1,10 +1,8 @@
-import pytest
 from pyspark.sql.types import Row
 
-from ..utils import escape_sql_string_literal, is_jvm_spark
+from pysail.tests.spark.utils import escape_sql_string_literal
 
 
-@pytest.mark.skipif(is_jvm_spark(), reason="Sail only - Delta Lake MERGE INTO")
 def test_delta_merge_basic_insert_update_delete(spark, tmp_path):
     delta_path = tmp_path / "delta_merge_table"
     delta_table_path = f"{delta_path}"
@@ -29,9 +27,7 @@ def test_delta_merge_basic_insert_update_delete(spark, tmp_path):
     source_df.createOrReplaceTempView("src_merge_delta")
 
     table_name = "delta_merge_basic"
-    spark.sql(
-        f"CREATE TABLE {table_name} USING delta LOCATION '{escape_sql_string_literal(delta_table_path)}'"
-    )
+    spark.sql(f"CREATE TABLE {table_name} USING delta LOCATION '{escape_sql_string_literal(delta_table_path)}'")
 
     # Basic MERGE:
     # - when matched and flag='update' -> update value
@@ -52,13 +48,7 @@ def test_delta_merge_basic_insert_update_delete(spark, tmp_path):
             """
         )
 
-        result = (
-            spark.read.format("delta")
-            .load(delta_table_path)
-            .select("id", "value", "flag")
-            .sort("id")
-            .collect()
-        )
+        result = spark.read.format("delta").load(delta_table_path).select("id", "value", "flag").sort("id").collect()
 
         assert result == [
             Row(id=1, value="old", flag="keep"),  # unchanged
@@ -79,9 +69,7 @@ def test_delta_merge_not_matched_by_source_and_insert_columns(spark, tmp_path):
         Row(id=2, value="old_update", flag="update"),
         Row(id=3, value="old_orphan", flag="orphan"),
     ]
-    spark.createDataFrame(target_rows).write.format("delta").mode("overwrite").save(
-        delta_table_path
-    )
+    spark.createDataFrame(target_rows).write.format("delta").mode("overwrite").save(delta_table_path)
 
     source_rows = [
         Row(id=2, value="src_update", flag="ignored"),
@@ -90,9 +78,7 @@ def test_delta_merge_not_matched_by_source_and_insert_columns(spark, tmp_path):
     spark.createDataFrame(source_rows).createOrReplaceTempView("src_merge_delta_ext")
 
     table_name = "delta_merge_extended"
-    spark.sql(
-        f"CREATE TABLE {table_name} USING delta LOCATION '{escape_sql_string_literal(delta_table_path)}'"
-    )
+    spark.sql(f"CREATE TABLE {table_name} USING delta LOCATION '{escape_sql_string_literal(delta_table_path)}'")
 
     try:
         spark.sql(
@@ -108,16 +94,10 @@ def test_delta_merge_not_matched_by_source_and_insert_columns(spark, tmp_path):
             WHEN NOT MATCHED THEN
               INSERT (id, value, flag)
               VALUES (s.id, concat(s.value, '_insert'), s.flag)
-            """
+            """  # noqa S608
         )
 
-        result = (
-            spark.read.format("delta")
-            .load(delta_table_path)
-            .select("id", "value", "flag")
-            .sort("id")
-            .collect()
-        )
+        result = spark.read.format("delta").load(delta_table_path).select("id", "value", "flag").sort("id").collect()
 
         assert result == [
             Row(id=1, value="old_keep", flag="keep"),
