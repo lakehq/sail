@@ -2,6 +2,9 @@ name: Python Build
 
 on:
   workflow_call:
+    secrets:
+      CODECOV_TOKEN:
+        required: false
 
 jobs:
   python-build:
