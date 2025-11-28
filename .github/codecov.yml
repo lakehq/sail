@@ -5,11 +5,22 @@ coverage:
         target: 0
     project:
       default:
-        only_pulls: true
-        paths:
-          - "crates/"
-        target: 0
-        informational: true
+        target: auto
+        threshold: 10%
+      rust_unit:
+        target: auto
+        flags:
+          - rust-unit
+      python_unit:
+        target: auto
+        flags:
+          - python-unit
+      spark_tests:
+        target: auto
+        flags:
+          - spark-tests
+      carryforward: true
+      informational: true
 
 codecov:
   notify:
@@ -20,3 +31,14 @@ comment:
 
 ignore:
   - "crates/sail-gold-test"
+
+flags:
+  rust-unit:
+    paths:
+      - crates/
+  python-unit:
+    paths:
+      - crates/
+  spark-tests:
+    paths:
+      - crates/
