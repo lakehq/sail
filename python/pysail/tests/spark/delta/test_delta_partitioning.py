@@ -1,4 +1,5 @@
 import os
+from datetime import datetime, timezone
 
 import pandas as pd
 import pytest
@@ -155,3 +156,38 @@ class TestDeltaPartitioning:
 
         df_region_ge2 = spark.read.format("delta").load(f"{delta_path}").filter("region >= 2")
         assert df_region_ge2.count() == 2, "Region >= 2 should have 2 records"  # noqa: PLR2004
+
+    def test_delta_partitioning_with_timestamp_column(self, spark, tmp_path):
+        """Ensure timestamp columns can be used for partitioning."""
+        delta_path = tmp_path / "timestamp_partitioned_delta_table"
+
+        df = spark.createDataFrame(
+            [
+                {"id": 1, "some_ts": datetime(2025, 11, 27, 1, 2, 3, 987654, tzinfo=timezone.utc)},
+                {"id": 2, "some_ts": datetime(1990, 11, 27, 1, 2, 3, 987654, tzinfo=timezone.utc)},
+            ]
+        )
+
+        df.write.format("delta").mode("overwrite").partitionBy("some_ts").save(str(delta_path))
+
+        result_df = spark.read.format("delta").load(str(delta_path)).sort("id")
+        result_pandas = result_df.toPandas().reset_index(drop=True)
+
+        expected_pandas = pd.DataFrame(
+            {
+                "id": [1, 2],
+                "some_ts": [
+                    pd.Timestamp("2025-11-27 01:02:03.987654"),
+                    pd.Timestamp("1990-11-27 01:02:03.987654"),
+                ],
+            }
+        )
+
+        assert_frame_equal(result_pandas, expected_pandas, check_dtype=False)
+
+        partitions = get_partition_structure(str(delta_path))
+        expected_partition_count = 2
+        assert len(partitions) == expected_partition_count, "Expected two timestamp partitions to be created"
+        assert all(part.startswith("some_ts=") for part in partitions), (
+            f"Partitions should be based on 'some_ts', got {partitions}"
+        )
