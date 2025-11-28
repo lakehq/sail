@@ -666,7 +666,9 @@ pub fn from_ast_statement(statement: Statement) -> SqlResult<spec::Plan> {
                                     .map(from_ast_expression)
                                     .collect::<SqlResult<Vec<_>>>()?;
                                 if values.len() == 1 {
-                                    if let spec::Expr::UnresolvedFunction(func) = values.pop().unwrap() {
+                                    if let spec::Expr::UnresolvedFunction(func) =
+                                        values.pop().unwrap()
+                                    {
                                         if func.function_name == spec::ObjectName::bare("struct")
                                             && func.named_arguments.is_empty()
                                         {

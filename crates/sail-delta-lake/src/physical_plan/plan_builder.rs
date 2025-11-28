@@ -10,6 +10,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
 
 use datafusion::arrow::array::{BooleanArray, StringArray};
@@ -25,13 +26,12 @@ use datafusion::physical_expr::expressions::{
 };
 use datafusion::physical_expr::utils::split_conjunction;
 use datafusion::physical_expr::{LexRequirement, PhysicalExpr};
-use datafusion::physical_plan::collect;
 use datafusion::physical_plan::filter::FilterExec;
 use datafusion::physical_plan::joins::utils::{ColumnIndex, JoinFilter};
 use datafusion::physical_plan::joins::{HashJoinExec, NestedLoopJoinExec, PartitionMode};
 use datafusion::physical_plan::projection::ProjectionExec;
 use datafusion::physical_plan::union::UnionExec;
-use datafusion::physical_plan::ExecutionPlan;
+use datafusion::physical_plan::{collect, ExecutionPlan};
 use datafusion_common::tree_node::{Transformed, TransformedResult, TreeNode};
 use datafusion_common::{JoinSide, JoinType, Result, ScalarValue};
 use futures::TryStreamExt;
@@ -49,8 +49,6 @@ use crate::kernel::models::Add;
 use crate::options::TableDeltaOptions;
 use crate::storage::{default_logstore, LogStoreRef, StorageConfig};
 use crate::table::{open_table_with_object_store, DeltaTableState};
-
-use std::collections::{HashMap, HashSet};
 
 /// Configuration for Delta table operations
 pub struct DeltaTableConfig {
@@ -440,9 +438,14 @@ pub struct DeltaMergePlanBuilder<'a> {
 
 const SOURCE_PRESENT_COLUMN: &str = "__sail_merge_source_row_present";
 
+type PhysicalExprRef = Arc<dyn PhysicalExpr>;
+type PhysicalExprPair = (PhysicalExprRef, PhysicalExprRef);
+type ColumnCaseBranches = Vec<PhysicalExprPair>;
+type ColumnCasesMap = HashMap<String, ColumnCaseBranches>;
+
 #[derive(Debug, Clone)]
 struct JoinConditionAnalysis {
-    join_keys: Vec<(Arc<dyn PhysicalExpr>, Arc<dyn PhysicalExpr>)>,
+    join_keys: Vec<PhysicalExprPair>,
     residual_filter: Option<Arc<dyn PhysicalExpr>>,
     target_only_filters: Vec<Arc<dyn PhysicalExpr>>,
 }
@@ -473,13 +476,13 @@ impl<'a> DeltaMergePlanBuilder<'a> {
     fn analyze_join_condition(&self) -> Result<JoinConditionAnalysis> {
         let num_target = self.merge_info.target_schema.fields().len();
         let num_source = self.merge_info.source_schema.fields().len();
-        let mut join_keys: Vec<(Arc<dyn PhysicalExpr>, Arc<dyn PhysicalExpr>)> = Vec::new();
+        let mut join_keys: Vec<PhysicalExprPair> = Vec::new();
         let mut residual_filters: Vec<Arc<dyn PhysicalExpr>> = Vec::new();
         let mut target_only_filters: Vec<Arc<dyn PhysicalExpr>> = Vec::new();
 
         for predicate in split_conjunction(&self.merge_info.on_condition.clone()) {
             if let Some((left, right)) =
-                self.extract_equality_join_key(&predicate, num_target, num_source)?
+                self.extract_equality_join_key(predicate, num_target, num_source)?
             {
                 join_keys.push((left, right));
                 continue;
@@ -508,7 +511,7 @@ impl<'a> DeltaMergePlanBuilder<'a> {
         predicate: &Arc<dyn PhysicalExpr>,
         num_target: usize,
         num_source: usize,
-    ) -> Result<Option<(Arc<dyn PhysicalExpr>, Arc<dyn PhysicalExpr>)>> {
+    ) -> Result<Option<PhysicalExprPair>> {
         let Some(binary) = predicate.as_any().downcast_ref::<BinaryExpr>() else {
             return Ok(None);
         };
@@ -1122,11 +1125,12 @@ impl<'a> DeltaMergePlanBuilder<'a> {
             }
         }
 
-        if rewrite_pred.is_none() {
-            return Ok(None);
-        }
+        let rewrite_pred = match rewrite_pred {
+            Some(pred) => pred,
+            None => return Ok(None),
+        };
 
-        let filter = Arc::new(FilterExec::try_new(rewrite_pred.unwrap(), input)?);
+        let filter = Arc::new(FilterExec::try_new(rewrite_pred, input)?);
         let projected_path = Arc::new(CastExpr::new(base_path_col.clone(), DataType::Utf8, None))
             as Arc<dyn PhysicalExpr>;
         let projection =
@@ -1411,15 +1415,14 @@ impl<'a> DeltaMergePlanBuilder<'a> {
         // Precompute target/source column expressions for each output column.
         // Target expressions are resolved by column name, while source expressions
         // are resolved by ordinal position to handle unnamed source columns like "#3".
-        let mut target_exprs: HashMap<String, Arc<dyn PhysicalExpr>> = HashMap::new();
-        let mut source_exprs: HashMap<String, Arc<dyn PhysicalExpr>> = HashMap::new();
+        let mut target_exprs: HashMap<String, PhysicalExprRef> = HashMap::new();
+        let mut source_exprs: HashMap<String, PhysicalExprRef> = HashMap::new();
         let num_source = source_fields.len();
 
         for (i, field) in table_schema.fields().iter().enumerate() {
             let name = field.name().clone();
-            let data_type = field.data_type().clone();
 
-            let target_expr: Arc<dyn PhysicalExpr> = if let Some(idx) = physical_target_idx_by_name
+            let target_expr: PhysicalExprRef = if let Some(idx) = physical_target_idx_by_name
                 .get(&name)
                 .copied()
                 .or_else(|| target_idx_by_name.get(&name).copied())
@@ -1428,21 +1431,17 @@ impl<'a> DeltaMergePlanBuilder<'a> {
                     .get(idx)
                     .map(|f| f.name().clone())
                     .unwrap_or_else(|| name.clone());
-                Arc::new(Column::new(target_name.as_str(), idx)) as Arc<dyn PhysicalExpr>
+                Arc::new(Column::new(target_name.as_str(), idx)) as PhysicalExprRef
             } else {
-                let typed_null =
-                    ScalarValue::try_from(&data_type).map_err(DataFusionError::from)?;
-                Arc::new(Literal::new(typed_null)) as Arc<dyn PhysicalExpr>
+                Arc::new(Literal::new(Self::typed_null(field.data_type())?)) as PhysicalExprRef
             };
-            let source_expr: Arc<dyn PhysicalExpr> = if i < num_source {
+            let source_expr: PhysicalExprRef = if i < num_source {
                 let source_field = &source_fields[i];
                 let source_name = source_field.name();
                 let source_idx = num_target + i;
-                Arc::new(Column::new(source_name, source_idx)) as Arc<dyn PhysicalExpr>
+                Arc::new(Column::new(source_name, source_idx)) as PhysicalExprRef
             } else {
-                let typed_null =
-                    ScalarValue::try_from(&data_type).map_err(DataFusionError::from)?;
-                Arc::new(Literal::new(typed_null)) as Arc<dyn PhysicalExpr>
+                Arc::new(Literal::new(Self::typed_null(field.data_type())?)) as PhysicalExprRef
             };
 
             target_exprs.insert(name.clone(), target_expr);
@@ -1450,8 +1449,7 @@ impl<'a> DeltaMergePlanBuilder<'a> {
         }
 
         // For each output column, collect CASE when/then branches
-        let mut column_cases: HashMap<String, Vec<(Arc<dyn PhysicalExpr>, Arc<dyn PhysicalExpr>)>> =
-            HashMap::new();
+        let mut column_cases: ColumnCasesMap = HashMap::new();
         for field in table_schema.fields() {
             column_cases.insert(field.name().clone(), Vec::new());
         }
@@ -1481,12 +1479,11 @@ impl<'a> DeltaMergePlanBuilder<'a> {
                 MMAI::UpdateAll => {
                     for field in table_schema.fields() {
                         let name = field.name();
-                        let src_expr = source_exprs.get(name).cloned().unwrap_or_else(|| {
-                            let typed_null = ScalarValue::try_from(field.data_type())
-                                .map_err(DataFusionError::from)
-                                .unwrap();
-                            Arc::new(Literal::new(typed_null)) as Arc<dyn PhysicalExpr>
-                        });
+                        let src_expr = match source_exprs.get(name).cloned() {
+                            Some(expr) => expr,
+                            None => Arc::new(Literal::new(Self::typed_null(field.data_type())?))
+                                as PhysicalExprRef,
+                        };
                         if let Some(cases) = column_cases.get_mut(name) {
                             cases.push((pred.clone(), src_expr));
                         }
@@ -1590,12 +1587,11 @@ impl<'a> DeltaMergePlanBuilder<'a> {
                 NMTI::InsertAll => {
                     for field in table_schema.fields() {
                         let name = field.name();
-                        let src_expr = source_exprs.get(name).cloned().unwrap_or_else(|| {
-                            let typed_null = ScalarValue::try_from(field.data_type())
-                                .map_err(DataFusionError::from)
-                                .unwrap();
-                            Arc::new(Literal::new(typed_null)) as Arc<dyn PhysicalExpr>
-                        });
+                        let src_expr = match source_exprs.get(name).cloned() {
+                            Some(expr) => expr,
+                            None => Arc::new(Literal::new(Self::typed_null(field.data_type())?))
+                                as PhysicalExprRef,
+                        };
                         if let Some(cases) = column_cases.get_mut(name) {
                             cases.push((pred.clone(), src_expr));
                         }
@@ -1623,22 +1619,21 @@ impl<'a> DeltaMergePlanBuilder<'a> {
         }
 
         // Build projection expressions for final table columns
-        let mut projection_exprs: Vec<(Arc<dyn PhysicalExpr>, String)> = Vec::new();
+        let mut projection_exprs: Vec<(PhysicalExprRef, String)> = Vec::new();
         for field in table_schema.fields() {
             let name = field.name().clone();
-            let default_expr = target_exprs.get(&name).cloned().unwrap_or_else(|| {
-                let typed_null = ScalarValue::try_from(field.data_type())
-                    .map_err(DataFusionError::from)
-                    .unwrap();
-                Arc::new(Literal::new(typed_null)) as Arc<dyn PhysicalExpr>
-            });
+            let default_expr = match target_exprs.get(&name).cloned() {
+                Some(expr) => expr,
+                None => {
+                    Arc::new(Literal::new(Self::typed_null(field.data_type())?)) as PhysicalExprRef
+                }
+            };
 
             let cases = column_cases.remove(&name).unwrap_or_default();
-            let expr: Arc<dyn PhysicalExpr> = if cases.is_empty() {
+            let expr: PhysicalExprRef = if cases.is_empty() {
                 default_expr
             } else {
-                Arc::new(CaseExpr::try_new(None, cases, Some(default_expr))?)
-                    as Arc<dyn PhysicalExpr>
+                Arc::new(CaseExpr::try_new(None, cases, Some(default_expr))?) as PhysicalExprRef
             };
 
             projection_exprs.push((expr, name));
@@ -1696,11 +1691,13 @@ impl<'a> DeltaMergePlanBuilder<'a> {
             .data()
     }
 
+    fn typed_null(data_type: &DataType) -> Result<ScalarValue> {
+        ScalarValue::try_from(data_type)
+    }
+
     async fn collect_touched_paths(&self, plan: Arc<dyn ExecutionPlan>) -> Result<HashSet<String>> {
         let task_ctx = self.session.task_ctx();
-        let batches = collect(plan, task_ctx)
-            .await
-            .map_err(DataFusionError::from)?;
+        let batches = collect(plan, task_ctx).await?;
         let mut paths = HashSet::new();
         for batch in batches {
             if batch.num_columns() == 0 {
@@ -1767,11 +1764,10 @@ impl<'a> DeltaMergePlanBuilder<'a> {
             let add_array = Arc::new(StringArray::from(add_strings?));
             let bools = vec![false; adds.len()];
             let partition_scan = Arc::new(BooleanArray::from(bools));
-            RecordBatch::try_new(schema.clone(), vec![add_array, partition_scan])
-                .map_err(DataFusionError::from)?
+            RecordBatch::try_new(schema.clone(), vec![add_array, partition_scan])?
         };
 
-        let table = MemTable::try_new(schema, vec![vec![batch]]).map_err(DataFusionError::from)?;
+        let table = MemTable::try_new(schema, vec![vec![batch]])?;
         table
             .scan(self.session, None, &[], None)
             .await
