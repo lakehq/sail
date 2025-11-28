@@ -41,29 +41,34 @@ def ducklake_setup(tmp_path, duckdb_conn):
     data_path = tmp_path / "data"
     data_path.mkdir(exist_ok=True)
 
-    duckdb_conn.execute(f"""
+    duckdb_conn.execute(
+        f"""
         ATTACH 'ducklake:sqlite:{metadata_path}' AS my_ducklake
         (DATA_PATH '{data_path}/')
-    """)
+    """
+    )
 
     # Create a test table
     table_name = "my_ducklake.test_table"
-    duckdb_conn.execute(f"""
-        CREATE TABLE {table_name} (
+    duckdb_conn.execute(
+        """
+        CREATE TABLE my_ducklake.test_table (
             id INTEGER,
             name VARCHAR,
             score DOUBLE
         )
-    """)
+    """
+    )
 
-    table_identifier = table_name
-    duckdb_conn.execute(f"""
-        INSERT INTO {table_identifier}
+    duckdb_conn.execute(
+        """
+        INSERT INTO my_ducklake.test_table
         VALUES
             (1, 'Alice', 95.5),
             (2, 'Bob', 87.3),
             (3, 'Charlie', 92.1)
-    """)
+    """
+    )
 
     # IMPORTANT: Detach the database to release the SQLite lock
     # This allows Sail's Diesel connection to access the database
@@ -74,7 +79,7 @@ def ducklake_setup(tmp_path, duckdb_conn):
 
 def test_ducklake_basic_read(spark, ducklake_setup):
     """Test basic DuckLake table read."""
-    metadata_path, data_path, table_name = ducklake_setup
+    metadata_path, data_path, _table_name = ducklake_setup
 
     df = (
         spark.read.format("ducklake")
@@ -104,7 +109,7 @@ def test_ducklake_basic_read(spark, ducklake_setup):
 
 def test_ducklake_read_with_filter(spark, ducklake_setup):
     """Test DuckLake read with filter pushdown."""
-    metadata_path, data_path, table_name = ducklake_setup
+    metadata_path, data_path, _table_name = ducklake_setup
 
     df = (
         spark.read.format("ducklake")
@@ -123,7 +128,7 @@ def test_ducklake_read_with_filter(spark, ducklake_setup):
 
 def test_ducklake_read_with_projection(spark, ducklake_setup):
     """Test DuckLake read with column projection."""
-    metadata_path, data_path, table_name = ducklake_setup
+    metadata_path, data_path, _table_name = ducklake_setup
 
     df = (
         spark.read.format("ducklake")
@@ -143,7 +148,7 @@ def test_ducklake_read_with_projection(spark, ducklake_setup):
 
 def test_ducklake_read_with_limit(spark, ducklake_setup):
     """Test DuckLake read with limit."""
-    metadata_path, data_path, table_name = ducklake_setup
+    metadata_path, data_path, _table_name = ducklake_setup
 
     df = (
         spark.read.format("ducklake")
@@ -160,7 +165,7 @@ def test_ducklake_read_with_limit(spark, ducklake_setup):
 
 def test_ducklake_read_to_pandas(spark, ducklake_setup):
     """Test DuckLake read and conversion to pandas."""
-    metadata_path, data_path, table_name = ducklake_setup
+    metadata_path, data_path, _table_name = ducklake_setup
 
     df = (
         spark.read.format("ducklake")
@@ -180,7 +185,7 @@ def test_ducklake_read_to_pandas(spark, ducklake_setup):
 @pytest.mark.skipif(platform.system() == "Windows", reason="may not work on Windows")
 def test_ducklake_read_with_sql(spark, ducklake_setup):
     """Test DuckLake read using SQL CREATE TABLE."""
-    metadata_path, data_path, table_name = ducklake_setup
+    metadata_path, data_path, _table_name = ducklake_setup
 
     spark.sql(
         f"""
@@ -405,7 +410,7 @@ def test_ducklake_read_missing_options_error(spark):
 
 def test_ducklake_read_with_aggregation(spark, ducklake_setup):
     """Test DuckLake read with aggregation."""
-    metadata_path, data_path, table_name = ducklake_setup
+    metadata_path, data_path, _table_name = ducklake_setup
 
     df = (
         spark.read.format("ducklake")
@@ -501,16 +506,15 @@ def ducklake_pg_setup(tmp_path, duckdb_conn, postgres_url):
     pg_url_sql = postgres_url.replace("'", "''")
     duckdb_conn.execute(
         f"""
-        ATTACH 'ducklake:postgresql://{pg_url_sql[len('postgresql://'):]}' AS my_ducklake
+        ATTACH 'ducklake:postgresql://{pg_url_sql[len("postgresql://") :]}' AS my_ducklake
         (DATA_PATH '{data_path}/')
         """
     )
 
     try:
-        table_name = "my_ducklake.test_table"
         duckdb_conn.execute(
-            f"""
-            CREATE TABLE {table_name} (
+            """
+            CREATE TABLE my_ducklake.test_table (
                 id INTEGER,
                 name VARCHAR,
                 score DOUBLE
@@ -518,8 +522,8 @@ def ducklake_pg_setup(tmp_path, duckdb_conn, postgres_url):
             """
         )
         duckdb_conn.execute(
-            f"""
-            INSERT INTO {table_name}
+            """
+            INSERT INTO my_ducklake.test_table
             VALUES
                 (1, 'Alice', 95.5),
                 (2, 'Bob', 87.3),
