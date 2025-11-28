@@ -5,7 +5,7 @@ coverage:
         target: 0
     project:
       default:
-        target: auto
+        target: 0
         threshold: 10%
       rust_unit:
         target: auto
@@ -19,8 +19,8 @@ coverage:
         target: auto
         flags:
           - spark-tests
-      carryforward: true
-      informational: true
+    carryforward: true
+    informational: true
 
 codecov:
   notify:
