@@ -163,8 +163,8 @@ class TestDeltaPartitioning:
 
         df = spark.createDataFrame(
             [
-                {"id": 1, "some_ts": datetime(2025, 11, 27, 1, 2, 3, 987654, tzinfo=timezone.utc)},
-                {"id": 2, "some_ts": datetime(1990, 11, 27, 1, 2, 3, 987654, tzinfo=timezone.utc)},
+                {"id": 1, "some_ts": datetime(2025, 11, 27, 1, 2, 3, 987654)},
+                {"id": 2, "some_ts": datetime(1990, 11, 27, 1, 2, 3, 987654)},
             ]
         )
 
