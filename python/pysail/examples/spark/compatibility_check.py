@@ -30,13 +30,14 @@ def main() -> None:
     )
     args = parser.parse_args()
 
-    if not args.directory.exists():
+    base_dir = Path(args.directory)
+    if not base_dir.exists():
         msg = "Directory not found: %s"
         raise SystemExit(msg, args.directory)
 
-    logger.info("Scanning: %s", args.directory)
+    logger.info("Scanning: %s", base_dir)
 
-    counts = check_sail_function_coverage(args.directory)
+    counts = check_sail_function_coverage(base_dir)
     logger.info("Scan complete.")
 
     print(format_output(counts, args.output))

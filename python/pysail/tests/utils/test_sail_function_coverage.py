@@ -88,7 +88,7 @@ def test_extract_function_coverage_from_md(tmp_path):
         "rtrim": "🚧 in progress",
     }
     # result = extract_function_coverage_from_md(tmp_path)
-    assert expected == extract_function_coverage_from_md(tmp_path)
+    assert expected == extract_function_coverage_from_md([tmp_path])
 
 
 def test_check_sail_function_coverage(tmp_path):

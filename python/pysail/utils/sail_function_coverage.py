@@ -4,7 +4,7 @@ import json
 import re
 from collections import Counter
 from pathlib import Path
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Iterable
 
 from markdown_it import MarkdownIt
 
@@ -14,23 +14,23 @@ if TYPE_CHECKING:
     from markdown_it.token import Token
 
 
-def load_markdown(path: str | list) -> str:
-    """Load Markdown content from a file or directory of .md files."""
-
-    paths = [path] if not isinstance(path, list) else path
+def load_markdown(md_file_paths: Iterable[Path]) -> str:
+    """Load Markdown content from a list of .md files."""
 
     md_str = []
-    for path in paths:
-        base = Path(path)
-        if not base.exists():
+    for md_file_path in md_file_paths:
+        base = Path(md_file_path)
+        if not md_file_path.exists():
             msg = "Path not found: %s"
-            raise FileNotFoundError(msg, path)
+            raise FileNotFoundError(msg, md_file_path)
 
-        if base.suffix == ".md" and base.is_file():
+        if md_file_path.suffix == ".md" and md_file_path.is_file():
             md_str.append(base.read_text(encoding="utf-8"))
 
         md_str.extend(
-            p.read_text(encoding="utf-8") for p in base.rglob("*.md") if p.is_file()
+            p.read_text(encoding="utf-8")
+            for p in md_file_path.rglob("*.md")
+            if p.is_file()
         )
 
     return "\n".join(md_str)
@@ -107,17 +107,17 @@ def postprocess_tables(tables: list[list[list[str]]]) -> dict[str, str]:
     return result
 
 
-def extract_function_coverage_from_md(path: str) -> dict[str, str]:
+def extract_function_coverage_from_md(md_file_paths: Iterable[Path]) -> dict[str, str]:
     """Parse Markdown and extract function coverage tables."""
 
-    md_str = load_markdown(path)
+    md_str = load_markdown(md_file_paths)
     md = MarkdownIt("commonmark").enable("table")
     tokens = md.parse(md_str)
     tables = extract_tables_from_tokens(tokens)
     return postprocess_tables(tables)
 
 
-def check_sail_function_coverage(path: str) -> Counter[tuple[str, str, str]]:
+def check_sail_function_coverage(repo_path: Path) -> Counter[tuple[str, str, str]]:
     """Scan a directory for PySpark function usage and cross-refernce it with sail docs for compatibility."""
     sail_coverage = {
         **{
@@ -134,18 +134,22 @@ def check_sail_function_coverage(path: str) -> Counter[tuple[str, str, str]]:
         **{
             ("pyspark.sql.DataFrame", function_name): label
             for function_name, label in extract_function_coverage_from_md(
-                Path("docs/guide/dataframe/features.md")
+                [
+                    Path("docs/guide/dataframe/features.md"),
+                ]
             ).items()
         },
         **{
             ("pyspark.sql.session.SparkSession", function_name): label
             for function_name, label in extract_function_coverage_from_md(
-                Path("docs/guide/functions/table.md")
+                [
+                    Path("docs/guide/functions/table.md"),
+                ]
             ).items()
         },
     }
 
-    pyspark_function_usage = scan_directory(Path(path))
+    pyspark_function_usage = scan_directory(repo_path)
 
     counter: Counter[tuple[str, str, str]] = Counter()
     for key, count in pyspark_function_usage.items():

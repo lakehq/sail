@@ -48,7 +48,7 @@ class CallSiteLocator(ast.NodeVisitor):
     def __init__(self):
         self.locations: list[tuple[int, int]] = []
 
-    def visit_Call(self, node: ast.Call) -> None:
+    def visit_Call(self, node: ast.Call) -> None:  # noqa: N802
         """
         Identify the 'hotspot' of the function call to ask Jedi about.
         """
@@ -75,8 +75,8 @@ def resolve_calls_with_jedi(
     # 1. Fast scan for function call locations using AST
     try:
         tree = ast.parse(source)
-    except SyntaxError as e:
-        logger.warning("Syntax error in %s (or 'source'): %s", file_path, e)
+    except SyntaxError:
+        logger.exception("Syntax error in %s (or 'source')", file_path)
         return Counter()
 
     locator = CallSiteLocator()
@@ -88,8 +88,8 @@ def resolve_calls_with_jedi(
     # 2. Initialize Jedi Script
     try:
         script = jedi.Script(code=source, path=file_path)
-    except (RuntimeError, OSError, ValueError, TypeError) as e:
-        logger.exception("Jedi initialization failed for %s: %s", file_path, e)
+    except (RuntimeError, OSError, ValueError, TypeError):
+        logger.exception("Jedi initialization failed for %s", file_path)
         return Counter()
 
     counts: Counter[tuple[str, str]] = Counter()
@@ -98,13 +98,12 @@ def resolve_calls_with_jedi(
     for line, col in locator.locations:
         try:
             definitions = script.infer(line, col)
-        except (RuntimeError, OSError, ValueError, TypeError) as e:
+        except (RuntimeError, OSError, ValueError, TypeError):
             logger.exception(
-                "Jedi inference failed for line %i, position %i, in file %s: %s",
+                "Jedi inference failed for line %i, position %i, in file %s",
                 line,
                 col,
                 file_path,
-                e,
             )
             return Counter()
 
@@ -183,12 +182,22 @@ def scan_directory(base: Path) -> Counter[tuple[str, str]]:
 
     # Collect all files first to show progress if needed,
     # or just iterate directly.
-    files = [
-        p for p in base.rglob("*") if p.suffix in SUPPORTED_EXTENSIONS and p.is_file()
-    ]
+    if base.is_dir():
+        files = [
+            p
+            for p in base.rglob("*")
+            if p.suffix in SUPPORTED_EXTENSIONS and p.is_file()
+        ]
+    elif base.is_file() and base.suffix in SUPPORTED_EXTENSIONS:
+        files = [base]
+    else:
+        msg = f"Path is not a directory or supported file: {base}"
+        raise ValueError(msg)
 
     total_files = len(files)
     logger.info("Found %d files to scan.", total_files)
+    if total_files > 20:  # noqa: PLR2004
+        logger.info("Scanning is going to take some time...")
 
     for i, path in enumerate(files, 1):
         if i % 10 == 0:
