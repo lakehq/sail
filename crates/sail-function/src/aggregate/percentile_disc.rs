@@ -16,7 +16,7 @@ use datafusion::logical_expr::{Accumulator, AggregateUDFImpl, Signature, Volatil
 use datafusion::physical_expr::PhysicalExpr;
 use datafusion_common::DataFusionError;
 
-use crate::aggregate::util::percentile::extract_literal;
+use crate::aggregate::util::percentile::{extract_literal, return_type, state_fields};
 
 /// The `PercentileDiscFunction` calculates the discrete percentile (quantile) from a set of values.
 ///
@@ -71,14 +71,7 @@ impl AggregateUDFImpl for PercentileDiscFunction {
     }
 
     fn return_type(&self, arg_types: &[DataType]) -> Result<DataType> {
-        match &arg_types[0] {
-            DataType::Utf8 => Ok(DataType::Utf8),
-            DataType::Utf8View => Ok(DataType::Utf8View),
-            DataType::LargeUtf8 => Ok(DataType::LargeUtf8),
-            dt @ DataType::Interval(_) => Ok(dt.clone()),
-            dt @ DataType::Duration(_) => Ok(dt.clone()),
-            _ => Ok(DataType::Float64),
-        }
+        return_type(arg_types)
     }
 
     fn accumulator(&self, acc_args: AccumulatorArgs) -> Result<Box<dyn Accumulator>> {
@@ -109,25 +102,7 @@ impl AggregateUDFImpl for PercentileDiscFunction {
     }
 
     fn state_fields(&self, args: StateFieldsArgs) -> Result<Vec<arrow::datatypes::FieldRef>> {
-        let value_type = args.input_fields[0].data_type().clone();
-
-        let storage_type = match &value_type {
-            DataType::Utf8 | DataType::Utf8View | DataType::LargeUtf8 => DataType::Utf8,
-            DataType::Interval(_) | DataType::Duration(_) => DataType::Int64,
-            _ => DataType::Float64,
-        };
-
-        let values_list_type = DataType::List(Arc::new(arrow::datatypes::Field::new(
-            "item",
-            storage_type,
-            true,
-        )));
-
-        Ok(vec![
-            arrow::datatypes::Field::new("values", values_list_type, true).into(),
-            arrow::datatypes::Field::new("percentile", DataType::Float64, false).into(),
-            arrow::datatypes::Field::new("data_type_id", DataType::UInt8, false).into(),
-        ])
+        state_fields(args)
     }
 }
 

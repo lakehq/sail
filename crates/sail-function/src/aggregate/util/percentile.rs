@@ -1,9 +1,10 @@
 use std::sync::Arc;
 
 use datafusion::arrow::array::{RecordBatch, RecordBatchOptions};
-use datafusion::arrow::datatypes::{Field, Schema, SchemaRef};
+use datafusion::arrow::datatypes::{DataType, Field, FieldRef, Schema, SchemaRef};
 use datafusion::physical_expr::PhysicalExpr;
 use datafusion_common::{DataFusionError, ScalarValue};
+use datafusion_expr::function::StateFieldsArgs;
 use datafusion_expr_common::columnar_value::ColumnarValue;
 
 pub fn extract_literal(
@@ -52,4 +53,33 @@ pub fn extract_literal(
         ))
     })?;
     Ok(percentile)
+}
+
+pub fn state_fields(args: StateFieldsArgs) -> datafusion_common::Result<Vec<FieldRef>> {
+    let value_type = args.input_fields[0].data_type().clone();
+
+    let storage_type = match &value_type {
+        DataType::Utf8 | DataType::Utf8View | DataType::LargeUtf8 => DataType::Utf8,
+        DataType::Interval(_) | DataType::Duration(_) => DataType::Int64,
+        _ => DataType::Float64,
+    };
+
+    let values_list_type = DataType::List(Arc::new(Field::new("item", storage_type, true)));
+
+    Ok(vec![
+        Field::new("values", values_list_type, true).into(),
+        Field::new("percentile", DataType::Float64, false).into(),
+        Field::new("data_type_id", DataType::UInt8, false).into(),
+    ])
+}
+
+pub fn return_type(arg_types: &[DataType]) -> datafusion_common::Result<DataType> {
+    match &arg_types[0] {
+        DataType::Utf8 => Ok(DataType::Utf8),
+        DataType::Utf8View => Ok(DataType::Utf8View),
+        DataType::LargeUtf8 => Ok(DataType::LargeUtf8),
+        dt @ DataType::Interval(_) => Ok(dt.clone()),
+        dt @ DataType::Duration(_) => Ok(dt.clone()),
+        _ => Ok(DataType::Float64),
+    }
 }
