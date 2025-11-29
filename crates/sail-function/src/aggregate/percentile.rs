@@ -3,13 +3,16 @@ use std::fmt::Debug;
 use std::sync::Arc;
 
 use datafusion::arrow;
-use datafusion::arrow::array::{Array, ArrayRef, AsArray};
-use datafusion::arrow::datatypes::DataType;
+use datafusion::arrow::array::{Array, ArrayRef, AsArray, RecordBatch, RecordBatchOptions};
+use datafusion::arrow::datatypes::{DataType, Field, Schema, SchemaRef};
 use datafusion::common::cast::{as_float64_array, as_string_array};
 use datafusion::common::ScalarValue;
 use datafusion::error::Result;
 use datafusion::logical_expr::function::{AccumulatorArgs, StateFieldsArgs};
 use datafusion::logical_expr::{Accumulator, AggregateUDFImpl, Signature, Volatility};
+use datafusion::physical_expr::PhysicalExpr;
+use datafusion_common::DataFusionError;
+use datafusion_expr_common::columnar_value::ColumnarValue;
 
 macro_rules! match_string_type {
     ($data_type:expr, $value:expr) => {
@@ -146,8 +149,56 @@ impl AggregateUDFImpl for PercentileFunction {
     fn accumulator(&self, acc_args: AccumulatorArgs) -> Result<Box<dyn Accumulator>> {
         let data_type = &acc_args.exprs[0].data_type(acc_args.schema)?;
 
-        // Extract the percentile value from the second argument if present
-        let percentile = 0.5f64;
+        // El percentil debe venir SIEMPRE como segundo parámetro
+        let expr: &Arc<dyn PhysicalExpr> = acc_args.exprs.get(1).ok_or_else(|| {
+            DataFusionError::Execution(
+                "percentile() requires a second argument (percentile value)".into(),
+            )
+        })?;
+
+        fn dummy_batch() -> RecordBatch {
+            let fields: Vec<Field> = Vec::new();
+            let schema: SchemaRef = Arc::new(Schema::new(fields));
+
+            RecordBatch::try_new_with_options(
+                schema,
+                Vec::new(),
+                &RecordBatchOptions::default().with_row_count(Some(1)),
+            )
+            .expect("failed to create dummy batch for percentile literal")
+        }
+        let batch = dummy_batch();
+
+        let col_val = expr.evaluate(&batch)?;
+
+        let scalar = match col_val {
+            ColumnarValue::Scalar(s) => s,
+            ColumnarValue::Array(arr) => ScalarValue::try_from_array(arr.as_ref(), 0)?,
+        };
+        fn scalar_to_f64(sv: &ScalarValue) -> Option<f64> {
+            match sv {
+                ScalarValue::Float64(Some(v)) => Some(*v),
+                ScalarValue::Float32(Some(v)) => Some(*v as f64),
+
+                ScalarValue::Int64(Some(v)) => Some(*v as f64),
+                ScalarValue::UInt64(Some(v)) => Some(*v as f64),
+                ScalarValue::Int32(Some(v)) => Some(*v as f64),
+                ScalarValue::UInt32(Some(v)) => Some(*v as f64),
+
+                ScalarValue::Decimal128(Some(v), _precision, scale) => {
+                    Some((*v as f64) / 10f64.powi(*scale as i32))
+                }
+
+                _ => None,
+            }
+        }
+
+        let percentile: f64 = scalar_to_f64(&scalar).ok_or_else(|| {
+            DataFusionError::Execution(format!(
+                "Cannot convert percentile literal {:?} to f64",
+                scalar
+            ))
+        })?;
 
         match data_type {
             DataType::Utf8 | DataType::Utf8View | DataType::LargeUtf8 => Ok(Box::new(
