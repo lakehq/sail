@@ -1883,7 +1883,7 @@
         }
       },
       "output": {
-        "failure": "error in DataFusion: Execution error: Cannot convert percentile literal List([0.2, 0.5]) to f64"
+        "failure": "error in DataFusion: Execution error: Failed to extract percentile value in percentile(): Execution error: Cannot convert percentile literal List([0.2, 0.5]) to f64"
       }
     },
     {
@@ -1909,7 +1909,7 @@
         }
       },
       "output": {
-        "failure": "error in DataFusion: Execution error: Cannot convert percentile literal List([0.25, 0.75]) to f64"
+        "failure": "error in DataFusion: Execution error: Failed to extract percentile value in percentile(): Execution error: Cannot convert percentile literal List([0.25, 0.75]) to f64"
       }
     },
     {
@@ -2071,7 +2071,7 @@
         }
       },
       "output": {
-        "success": "ok"
+        "failure": "error in DataFusion: Execution error: percentile_disc() requires a second argument (percentile value)"
       }
     },
     {
@@ -2093,7 +2093,7 @@
         }
       },
       "output": {
-        "success": "ok"
+        "failure": "error in DataFusion: Execution error: percentile_disc() requires a second argument (percentile value)"
       }
     },
     {

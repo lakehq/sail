@@ -149,54 +149,16 @@ impl AggregateUDFImpl for PercentileFunction {
     fn accumulator(&self, acc_args: AccumulatorArgs) -> Result<Box<dyn Accumulator>> {
         let data_type = &acc_args.exprs[0].data_type(acc_args.schema)?;
 
-        // El percentil debe venir SIEMPRE como segundo parámetro
         let expr: &Arc<dyn PhysicalExpr> = acc_args.exprs.get(1).ok_or_else(|| {
             DataFusionError::Execution(
                 "percentile() requires a second argument (percentile value)".into(),
             )
         })?;
 
-        fn dummy_batch() -> Result<RecordBatch> {
-            let fields: Vec<Field> = Vec::new();
-            let schema: SchemaRef = Arc::new(Schema::new(fields));
-
-            RecordBatch::try_new_with_options(
-                schema,
-                Vec::new(), // 0 columnas
-                &RecordBatchOptions::default().with_row_count(Some(1)),
-            )
-            .map_err(DataFusionError::from)
-        }
-
-        let batch = dummy_batch()?;
-        let col_val = expr.evaluate(&batch)?;
-        let scalar = match col_val {
-            ColumnarValue::Scalar(s) => s,
-            ColumnarValue::Array(arr) => ScalarValue::try_from_array(arr.as_ref(), 0)?,
-        };
-
-        fn scalar_to_f64(sv: &ScalarValue) -> Option<f64> {
-            match sv {
-                ScalarValue::Float64(Some(v)) => Some(*v),
-                ScalarValue::Float32(Some(v)) => Some(*v as f64),
-
-                ScalarValue::Int64(Some(v)) => Some(*v as f64),
-                ScalarValue::UInt64(Some(v)) => Some(*v as f64),
-                ScalarValue::Int32(Some(v)) => Some(*v as f64),
-                ScalarValue::UInt32(Some(v)) => Some(*v as f64),
-
-                ScalarValue::Decimal128(Some(v), _precision, scale) => {
-                    Some((*v as f64) / 10f64.powi(*scale as i32))
-                }
-
-                _ => None,
-            }
-        }
-
-        let percentile: f64 = scalar_to_f64(&scalar).ok_or_else(|| {
+        let percentile: f64 = extract_literal(expr).map_err(|e| {
             DataFusionError::Execution(format!(
-                "Cannot convert percentile literal {:?} to f64",
-                scalar
+                "Failed to extract percentile value in percentile(): {}",
+                e
             ))
         })?;
 
@@ -212,6 +174,51 @@ impl AggregateUDFImpl for PercentileFunction {
     }
 }
 
+pub fn extract_literal(expr: &Arc<dyn PhysicalExpr>) -> Result<f64, DataFusionError> {
+    fn dummy_batch() -> Result<RecordBatch> {
+        let fields: Vec<Field> = Vec::new();
+        let schema: SchemaRef = Arc::new(Schema::new(fields));
+
+        RecordBatch::try_new_with_options(
+            schema,
+            Vec::new(),
+            &RecordBatchOptions::default().with_row_count(Some(1)),
+        )
+        .map_err(DataFusionError::from)
+    }
+
+    let batch = dummy_batch()?;
+    let col_val = expr.evaluate(&batch)?;
+    let scalar = match col_val {
+        ColumnarValue::Scalar(s) => s,
+        ColumnarValue::Array(arr) => ScalarValue::try_from_array(arr.as_ref(), 0)?,
+    };
+
+    fn scalar_to_f64(sv: &ScalarValue) -> Option<f64> {
+        match sv {
+            ScalarValue::Float64(Some(v)) => Some(*v),
+            ScalarValue::Float32(Some(v)) => Some(*v as f64),
+
+            ScalarValue::Int64(Some(v)) => Some(*v as f64),
+            ScalarValue::UInt64(Some(v)) => Some(*v as f64),
+            ScalarValue::Int32(Some(v)) => Some(*v as f64),
+            ScalarValue::UInt32(Some(v)) => Some(*v as f64),
+
+            ScalarValue::Decimal128(Some(v), _precision, scale) => {
+                Some((*v as f64) / 10f64.powi(*scale as i32))
+            }
+
+            _ => None,
+        }
+    }
+    let percentile: f64 = scalar_to_f64(&scalar).ok_or_else(|| {
+        DataFusionError::Execution(format!(
+            "Cannot convert percentile literal {:?} to f64",
+            scalar
+        ))
+    })?;
+    Ok(percentile)
+}
 #[derive(Debug)]
 pub struct NumericPercentileAccumulator {
     values: Vec<f64>,
@@ -280,6 +287,25 @@ impl Accumulator for NumericPercentileAccumulator {
 
         Ok(())
     }
+    fn evaluate(&mut self) -> Result<ScalarValue> {
+        if self.values.is_empty() {
+            return Ok(ScalarValue::Float64(None));
+        }
+
+        let mut sorted_values = self.values.clone();
+        sorted_values.sort_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal));
+
+        match self.calculate_percentile(&sorted_values, self.percentile) {
+            Some(result) => Ok(ScalarValue::Float64(Some(result))),
+            None => Ok(ScalarValue::Float64(None)),
+        }
+    }
+
+    fn size(&self) -> usize {
+        std::mem::size_of_val(&self.values)
+            + self.values.capacity() * std::mem::size_of::<f64>()
+            + std::mem::size_of::<f64>()
+    }
 
     fn state(&mut self) -> Result<Vec<ScalarValue>> {
         let values_scalar = ScalarValue::new_list_nullable(
@@ -328,24 +354,25 @@ impl Accumulator for NumericPercentileAccumulator {
         Ok(())
     }
 
-    fn evaluate(&mut self) -> Result<ScalarValue> {
-        if self.values.is_empty() {
-            return Ok(ScalarValue::Float64(None));
+    fn retract_batch(&mut self, values: &[ArrayRef]) -> Result<()> {
+        if values.is_empty() {
+            return Ok(());
         }
 
-        let mut sorted_values = self.values.clone();
-        sorted_values.sort_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal));
+        let array = &values[0];
+        let float_array = arrow::compute::cast(array, &DataType::Float64)?;
+        let float_array = as_float64_array(&float_array)?;
 
-        match self.calculate_percentile(&sorted_values, self.percentile) {
-            Some(result) => Ok(ScalarValue::Float64(Some(result))),
-            None => Ok(ScalarValue::Float64(None)),
+        for v in float_array.iter().flatten() {
+            if let Some(pos) = self.values.iter().position(|x| *x == v) {
+                self.values.remove(pos);
+            }
         }
+
+        Ok(())
     }
-
-    fn size(&self) -> usize {
-        std::mem::size_of_val(&self.values)
-            + self.values.capacity() * std::mem::size_of::<f64>()
-            + std::mem::size_of::<f64>()
+    fn supports_retract_batch(&self) -> bool {
+        true
     }
 }
 
@@ -416,6 +443,27 @@ impl Accumulator for StringPercentileAccumulator {
 
         Ok(())
     }
+    fn evaluate(&mut self) -> Result<ScalarValue> {
+        if self.values.is_empty() {
+            return match_string_type!(&self.data_type, None);
+        }
+
+        // Sort values alphabetically
+        let mut sorted_values = self.values.clone();
+        sorted_values.sort();
+
+        match self.calculate_percentile(&sorted_values, self.percentile) {
+            Some(result) => match_string_type!(&self.data_type, Some(result)),
+            None => match_string_type!(&self.data_type, None),
+        }
+    }
+
+    fn size(&self) -> usize {
+        std::mem::size_of_val(&self.values)
+            + self.values.iter().map(|s| s.capacity()).sum::<usize>()
+            + std::mem::size_of::<f64>()
+            + std::mem::size_of::<DataType>()
+    }
 
     fn state(&mut self) -> Result<Vec<ScalarValue>> {
         let values_scalar = ScalarValue::new_list_nullable(
@@ -465,26 +513,26 @@ impl Accumulator for StringPercentileAccumulator {
         Ok(())
     }
 
-    fn evaluate(&mut self) -> Result<ScalarValue> {
-        if self.values.is_empty() {
-            return match_string_type!(&self.data_type, None);
+    fn retract_batch(&mut self, values: &[ArrayRef]) -> Result<()> {
+        if values.is_empty() {
+            return Ok(());
         }
 
-        // Sort values alphabetically
-        let mut sorted_values = self.values.clone();
-        sorted_values.sort();
+        let array = &values[0];
 
-        match self.calculate_percentile(&sorted_values, self.percentile) {
-            Some(result) => match_string_type!(&self.data_type, Some(result)),
-            None => match_string_type!(&self.data_type, None),
+        let string_array = arrow::compute::cast(array, &DataType::Utf8)?;
+        let string_array = as_string_array(&string_array)?;
+
+        for v in string_array.iter().flatten() {
+            if let Some(pos) = self.values.iter().position(|s| s == v) {
+                self.values.remove(pos);
+            }
         }
+
+        Ok(())
     }
-
-    fn size(&self) -> usize {
-        std::mem::size_of_val(&self.values)
-            + self.values.iter().map(|s| s.capacity()).sum::<usize>()
-            + std::mem::size_of::<f64>()
-            + std::mem::size_of::<DataType>()
+    fn supports_retract_batch(&self) -> bool {
+        true
     }
 }
 
@@ -601,38 +649,6 @@ impl Accumulator for IntervalPercentileAccumulator {
 
         Ok(())
     }
-
-    fn merge_batch(&mut self, states: &[ArrayRef]) -> Result<()> {
-        if states.is_empty() {
-            return Ok(());
-        }
-
-        let values_list = states[0].as_list::<i32>();
-        let percentile_array =
-            states[1].as_primitive::<datafusion::arrow::datatypes::Float64Type>();
-
-        for i in 0..values_list.len() {
-            if values_list.is_null(i) {
-                continue;
-            }
-
-            if !percentile_array.is_null(i) {
-                self.percentile = percentile_array.value(i);
-            }
-
-            let values_array = values_list.value(i);
-            let int_array = values_array.as_primitive::<datafusion::arrow::datatypes::Int64Type>();
-
-            for j in 0..int_array.len() {
-                if !int_array.is_null(j) {
-                    self.values.push(int_array.value(j));
-                }
-            }
-        }
-
-        Ok(())
-    }
-
     fn evaluate(&mut self) -> Result<ScalarValue> {
         if self.values.is_empty() {
             return match &self.data_type {
@@ -713,6 +729,12 @@ impl Accumulator for IntervalPercentileAccumulator {
             },
         }
     }
+    fn size(&self) -> usize {
+        std::mem::size_of_val(&self.values)
+            + self.values.capacity() * std::mem::size_of::<i64>()
+            + std::mem::size_of::<f64>()
+            + std::mem::size_of::<DataType>()
+    }
 
     fn state(&mut self) -> Result<Vec<ScalarValue>> {
         let values_scalar = ScalarValue::new_list_nullable(
@@ -731,11 +753,108 @@ impl Accumulator for IntervalPercentileAccumulator {
         ])
     }
 
-    fn size(&self) -> usize {
-        std::mem::size_of_val(&self.values)
-            + self.values.capacity() * std::mem::size_of::<i64>()
-            + std::mem::size_of::<f64>()
-            + std::mem::size_of::<DataType>()
+    fn merge_batch(&mut self, states: &[ArrayRef]) -> Result<()> {
+        if states.is_empty() {
+            return Ok(());
+        }
+
+        let values_list = states[0].as_list::<i32>();
+        let percentile_array =
+            states[1].as_primitive::<datafusion::arrow::datatypes::Float64Type>();
+
+        for i in 0..values_list.len() {
+            if values_list.is_null(i) {
+                continue;
+            }
+
+            if !percentile_array.is_null(i) {
+                self.percentile = percentile_array.value(i);
+            }
+
+            let values_array = values_list.value(i);
+            let int_array = values_array.as_primitive::<datafusion::arrow::datatypes::Int64Type>();
+
+            for j in 0..int_array.len() {
+                if !int_array.is_null(j) {
+                    self.values.push(int_array.value(j));
+                }
+            }
+        }
+
+        Ok(())
+    }
+
+    fn retract_batch(&mut self, values: &[ArrayRef]) -> Result<()> {
+        if values.is_empty() {
+            return Ok(());
+        }
+
+        let array = &values[0];
+
+        for i in 0..array.len() {
+            if array.is_null(i) {
+                continue;
+            }
+
+            let val_i64 = match &self.data_type {
+                DataType::Interval(unit) => {
+                    use datafusion::arrow::datatypes::IntervalUnit;
+                    match unit {
+                        IntervalUnit::YearMonth => {
+                            let arr = array.as_primitive::<datafusion::arrow::datatypes::IntervalYearMonthType>();
+                            arr.value(i) as i64
+                        }
+                        IntervalUnit::DayTime => {
+                            let arr = array
+                                .as_primitive::<datafusion::arrow::datatypes::IntervalDayTimeType>(
+                                );
+                            let v = arr.value(i);
+                            v.days as i64 * 86_400_000 + v.milliseconds as i64
+                        }
+                        IntervalUnit::MonthDayNano => {
+                            let arr = array.as_primitive::<datafusion::arrow::datatypes::IntervalMonthDayNanoType>();
+                            let v = arr.value(i);
+                            v.months as i64 * 2_592_000_000_000_000
+                                + v.days as i64 * 86_400_000_000_000
+                                + v.nanoseconds
+                        }
+                    }
+                }
+                DataType::Duration(unit) => {
+                    use datafusion::arrow::datatypes::TimeUnit;
+                    match unit {
+                        TimeUnit::Second => array
+                            .as_primitive::<datafusion::arrow::datatypes::DurationSecondType>()
+                            .value(i),
+                        TimeUnit::Millisecond => array
+                            .as_primitive::<datafusion::arrow::datatypes::DurationMillisecondType>()
+                            .value(i),
+                        TimeUnit::Microsecond => array
+                            .as_primitive::<datafusion::arrow::datatypes::DurationMicrosecondType>()
+                            .value(i),
+                        TimeUnit::Nanosecond => array
+                            .as_primitive::<datafusion::arrow::datatypes::DurationNanosecondType>()
+                            .value(i),
+                    }
+                }
+                _ => {
+                    return Err(datafusion::error::DataFusionError::Execution(format!(
+                        "IntervalPercentileAccumulator does not support type {:?}",
+                        self.data_type
+                    )));
+                }
+            };
+
+            if let Some(pos) = self.values.iter().position(|x| *x == val_i64) {
+                self.values.remove(pos);
+            }
+        }
+
+        Ok(())
+    }
+
+    fn supports_retract_batch(&self) -> bool {
+        true
     }
 }
 
