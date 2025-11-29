@@ -76,7 +76,7 @@ def resolve_calls_with_jedi(
     try:
         tree = ast.parse(source)
     except SyntaxError as e:
-        logger.warning("Syntax error in {%s or 'source'}: %s", file_path, e)
+        logger.warning("Syntax error in %s (or 'source'): %s", file_path, e)
         return Counter()
 
     locator = CallSiteLocator()
@@ -88,15 +88,25 @@ def resolve_calls_with_jedi(
     # 2. Initialize Jedi Script
     try:
         script = jedi.Script(code=source, path=file_path)
-    except (RuntimeError, OSError, ValueError, TypeError):
-        logger.exception("Jedi initialization failed for %s", file_path)
+    except (RuntimeError, OSError, ValueError, TypeError) as e:
+        logger.exception("Jedi initialization failed for %s: %s", file_path, e)
         return Counter()
 
     counts: Counter[tuple[str, str]] = Counter()
 
     # 3. Infer types at specific coordinates
     for line, col in locator.locations:
-        definitions = script.infer(line, col)
+        try:
+            definitions = script.infer(line, col)
+        except (RuntimeError, OSError, ValueError, TypeError) as e:
+            logger.exception(
+                "Jedi inference failed for line %i, position %i, in file %s: %s",
+                line,
+                col,
+                file_path,
+                e,
+            )
+            return Counter()
 
         for definition in definitions:
             full_name = definition.full_name
