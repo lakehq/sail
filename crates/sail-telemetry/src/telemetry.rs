@@ -1,20 +1,23 @@
 use std::borrow::Cow;
 use std::env;
+use std::io::Write;
 use std::sync::Mutex;
 use std::time::Duration;
 
 use fastrace::collector::{Config, Reporter, SpanRecord};
 use fastrace_opentelemetry::OpenTelemetryReporter;
-use logforth::append::opentelemetry::OpentelemetryLogBuilder;
-use logforth::append::Stderr;
-use logforth::filter::env_filter::EnvFilterBuilder;
+use log::Log;
 use opentelemetry::{global, InstrumentationScope};
+use opentelemetry_appender_log::OpenTelemetryLogBridge;
 use opentelemetry_otlp::{LogExporter, Protocol, WithExportConfig};
+use opentelemetry_sdk::logs::SdkLoggerProvider;
 use opentelemetry_sdk::metrics::SdkMeterProvider;
 use opentelemetry_sdk::Resource;
 use sail_common::config::{OtlpProtocol, TelemetryConfig};
 
 use crate::error::{TelemetryError, TelemetryResult};
+use crate::logger::composite::CompositeLogger;
+use crate::logger::span::SpanEventLogger;
 
 enum TelemetryStatus {
     Uninitialized,
@@ -25,6 +28,7 @@ enum TelemetryStatus {
 #[derive(Default)]
 struct TelemetryState {
     meter_provider: Option<SdkMeterProvider>,
+    logger_provider: Option<SdkLoggerProvider>,
 }
 
 static TELEMETRY_STATUS: Mutex<TelemetryStatus> = Mutex::new(TelemetryStatus::Uninitialized);
@@ -101,39 +105,44 @@ fn init_metrics(config: &TelemetryConfig, state: &mut TelemetryState) -> Telemet
     Ok(())
 }
 
-fn init_logs(config: &TelemetryConfig, _: &mut TelemetryState) -> TelemetryResult<()> {
-    let exporter = if config.export_logs {
+fn init_logs(config: &TelemetryConfig, state: &mut TelemetryState) -> TelemetryResult<()> {
+    let primary =
+        env_logger::Builder::from_env(env_logger::Env::default().default_filter_or("info"))
+            .format(move |buf, record| {
+                let level = record.level();
+                let target = record.target();
+                let style = buf.default_level_style(level);
+                let timestamp = buf.timestamp();
+                let args = record.args();
+                writeln!(buf, "[{timestamp} {style}{level}{style:#} {target}] {args}")
+            })
+            .build();
+    let primary = Box::new(primary);
+    let max_level = primary.filter();
+
+    let mut secondary: Vec<Box<dyn Log>> = vec![];
+
+    if config.export_logs {
         let exporter = LogExporter::builder()
             .with_tonic()
             .with_endpoint(config.otlp_endpoint.clone())
             .with_protocol(get_otlp_protocol(&config.otlp_protocol))
             .with_timeout(Duration::from_secs(config.otlp_timeout_secs))
             .build()?;
-        Some(exporter)
-    } else {
-        None
-    };
-    logforth::core::builder()
-        .dispatch(|d| {
-            let d = d.filter(EnvFilterBuilder::from_default_env().build());
-            let d = if let Some(exporter) = exporter {
-                d.append(
-                    OpentelemetryLogBuilder::new("sail", exporter)
-                        .label("service.name", "sail")
-                        .build(),
-                )
-            } else {
-                d.append(Stderr::default())
-            };
-            if config.export_traces {
-                d.append(logforth::append::FastraceEvent::default())
-            } else {
-                d
-            }
-        })
-        .try_apply()
-        .map_err(|_| TelemetryError::internal("the global logger is already set"))?;
-    logforth::bridge::log::try_setup().map_err(|e| TelemetryError::internal(e.to_string()))?;
+        let provider = SdkLoggerProvider::builder()
+            .with_batch_exporter(exporter)
+            .with_resource(default_resource())
+            .build();
+        secondary.push(Box::new(OpenTelemetryLogBridge::new(&provider)));
+        state.logger_provider = Some(provider);
+    }
+    if config.export_traces {
+        secondary.push(Box::new(SpanEventLogger));
+    }
+
+    log::set_boxed_logger(Box::new(CompositeLogger::new(primary, secondary)))
+        .map_err(|e| TelemetryError::internal(e.to_string()))?;
+    log::set_max_level(max_level);
     Ok(())
 }
 
@@ -141,8 +150,11 @@ pub fn shutdown_telemetry() {
     fastrace::flush();
     if let Ok(status) = TELEMETRY_STATUS.lock() {
         if let TelemetryStatus::Initialized(ref state) = *status {
-            if let Some(meter_provider) = &state.meter_provider {
-                let _ = meter_provider.shutdown();
+            if let Some(provider) = &state.meter_provider {
+                let _ = provider.shutdown();
+            }
+            if let Some(provider) = &state.logger_provider {
+                let _ = provider.shutdown();
             }
         }
     }
