@@ -464,16 +464,6 @@ impl Accumulator for IntervalPercentileDiscAccumulator {
 
         let array = &values[0];
 
-        if values.len() >= 2 {
-            if let Some(percentile_array) =
-                values[1].as_primitive_opt::<arrow::datatypes::Float64Type>()
-            {
-                if !percentile_array.is_empty() && !percentile_array.is_null(0) {
-                    self.percentile = percentile_array.value(0);
-                }
-            }
-        }
-
         match &self.data_type {
             DataType::Interval(IntervalUnit::YearMonth) => {
                 let interval_array =

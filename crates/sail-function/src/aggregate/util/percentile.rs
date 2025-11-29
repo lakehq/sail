@@ -66,11 +66,7 @@ pub fn state_fields(args: StateFieldsArgs) -> datafusion_common::Result<Vec<Fiel
 
     let values_list_type = DataType::List(Arc::new(Field::new("item", storage_type, true)));
 
-    Ok(vec![
-        Field::new("values", values_list_type, true).into(),
-        Field::new("percentile", DataType::Float64, false).into(),
-        Field::new("data_type_id", DataType::UInt8, false).into(),
-    ])
+    Ok(vec![Field::new("values", values_list_type, true).into()])
 }
 
 pub fn return_type(arg_types: &[DataType]) -> datafusion_common::Result<DataType> {

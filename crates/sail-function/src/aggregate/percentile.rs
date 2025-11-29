@@ -155,16 +155,6 @@ impl Accumulator for NumericPercentileAccumulator {
 
         let array = &values[0];
 
-        if values.len() >= 2 {
-            if let Some(percentile_array) =
-                values[1].as_primitive_opt::<arrow::datatypes::Float64Type>()
-            {
-                if !percentile_array.is_empty() && !percentile_array.is_null(0) {
-                    self.percentile = percentile_array.value(0);
-                }
-            }
-        }
-
         let float_array = arrow::compute::cast(array, &DataType::Float64)?;
         let float_array = as_float64_array(&float_array)?;
 
@@ -205,11 +195,7 @@ impl Accumulator for NumericPercentileAccumulator {
             &DataType::Float64,
         );
 
-        Ok(vec![
-            ScalarValue::List(values_scalar),
-            ScalarValue::Float64(Some(self.percentile)),
-            ScalarValue::UInt8(Some(0)), // 0 = numeric type
-        ])
+        Ok(vec![ScalarValue::List(values_scalar)])
     }
 
     fn merge_batch(&mut self, states: &[ArrayRef]) -> Result<()> {
@@ -229,13 +215,6 @@ impl Accumulator for NumericPercentileAccumulator {
                         self.values.push(value);
                     }
                 }
-            }
-        }
-
-        if states.len() >= 2 {
-            let percentile_array = as_float64_array(&states[1])?;
-            if !percentile_array.is_empty() && !percentile_array.is_null(0) {
-                self.percentile = percentile_array.value(0);
             }
         }
 
@@ -310,17 +289,6 @@ impl Accumulator for StringPercentileAccumulator {
 
         let array = &values[0];
 
-        // Update percentile value if provided as second argument
-        if values.len() >= 2 {
-            if let Some(percentile_array) =
-                values[1].as_primitive_opt::<arrow::datatypes::Float64Type>()
-            {
-                if !percentile_array.is_empty() && !percentile_array.is_null(0) {
-                    self.percentile = percentile_array.value(0);
-                }
-            }
-        }
-
         // Convert input to Utf8 and collect values
         let string_array = arrow::compute::cast(array, &DataType::Utf8)?;
         let string_array = as_string_array(&string_array)?;
@@ -364,11 +332,7 @@ impl Accumulator for StringPercentileAccumulator {
             &DataType::Utf8,
         );
 
-        Ok(vec![
-            ScalarValue::List(values_scalar),
-            ScalarValue::Float64(Some(self.percentile)),
-            ScalarValue::UInt8(Some(1)), // 1 = string type
-        ])
+        Ok(vec![ScalarValue::List(values_scalar)])
     }
 
     fn merge_batch(&mut self, states: &[ArrayRef]) -> Result<()> {
@@ -388,14 +352,6 @@ impl Accumulator for StringPercentileAccumulator {
                         self.values.push(value.to_string());
                     }
                 }
-            }
-        }
-
-        // Update percentile from state if present
-        if states.len() >= 2 {
-            let percentile_array = as_float64_array(&states[1])?;
-            if !percentile_array.is_empty() && !percentile_array.is_null(0) {
-                self.percentile = percentile_array.value(0);
             }
         }
 
@@ -636,11 +592,7 @@ impl Accumulator for IntervalPercentileAccumulator {
             &DataType::Int64,
         );
 
-        Ok(vec![
-            ScalarValue::List(values_scalar),
-            ScalarValue::Float64(Some(self.percentile)),
-            ScalarValue::UInt8(Some(2)), // 2 = interval type
-        ])
+        Ok(vec![ScalarValue::List(values_scalar)])
     }
 
     fn merge_batch(&mut self, states: &[ArrayRef]) -> Result<()> {
@@ -649,16 +601,10 @@ impl Accumulator for IntervalPercentileAccumulator {
         }
 
         let values_list = states[0].as_list::<i32>();
-        let percentile_array =
-            states[1].as_primitive::<datafusion::arrow::datatypes::Float64Type>();
 
         for i in 0..values_list.len() {
             if values_list.is_null(i) {
                 continue;
-            }
-
-            if !percentile_array.is_null(i) {
-                self.percentile = percentile_array.value(i);
             }
 
             let values_array = values_list.value(i);
@@ -977,7 +923,6 @@ mod tests {
 
     #[test]
     fn test_percentile_merge_batches() -> Result<()> {
-        use datafusion::arrow::array::UInt8Array;
         use datafusion_common::DataFusionError;
 
         // Create first accumulator with some values
@@ -1004,18 +949,8 @@ mod tests {
             }
         };
 
-        let percentile_array: ArrayRef = Arc::new(Float64Array::from(vec![state2[1]
-            .clone()
-            .try_into()
-            .unwrap_or(0.5_f64)]));
-
-        let data_type_array: ArrayRef = Arc::new(UInt8Array::from(vec![state2[2]
-            .clone()
-            .try_into()
-            .unwrap_or(0u8)]));
-
         // Merge state2 into acc1
-        acc1.merge_batch(&[values_list, percentile_array, data_type_array])?;
+        acc1.merge_batch(&[values_list])?;
 
         // After merge, acc1 should have [1, 2, 3, 4, 5, 6]
         // Median = (3 + 4) / 2 = 3.5
