@@ -4,8 +4,7 @@ use std::sync::Arc;
 use arrow::datatypes::{DataType, Field};
 use datafusion::functions_aggregate::{
     approx_distinct, approx_percentile_cont, array_agg, average, bit_and_or_xor, bool_and_or,
-    correlation, count, covariance, first_last, grouping, median, min_max, regr, stddev, sum,
-    variance,
+    correlation, count, covariance, first_last, grouping, min_max, regr, stddev, sum, variance,
 };
 use datafusion::functions_nested::string::array_to_string;
 use datafusion_common::ScalarValue;
@@ -17,6 +16,8 @@ use sail_common_datafusion::utils::items::ItemTaker;
 use sail_function::aggregate::kurtosis::KurtosisFunction;
 use sail_function::aggregate::max_min_by::{MaxByFunction, MinByFunction};
 use sail_function::aggregate::mode::ModeFunction;
+use sail_function::aggregate::percentile::PercentileFunction;
+use sail_function::aggregate::percentile_disc::PercentileDiscFunction;
 use sail_function::aggregate::skewness::SkewnessFunc;
 use sail_function::aggregate::try_avg::TryAvgFunction;
 use sail_function::aggregate::try_sum::TrySumFunction;
@@ -329,19 +330,44 @@ fn listagg(input: AggFunctionInput) -> PlanResult<expr::Expr> {
 }
 
 fn median(input: AggFunctionInput) -> PlanResult<expr::Expr> {
-    Ok(cast(
-        expr::Expr::AggregateFunction(AggregateFunction {
-            func: median::median_udaf(),
-            params: AggregateFunctionParams {
-                args: input.arguments.clone(),
-                distinct: input.distinct,
-                order_by: input.order_by,
-                filter: input.filter,
-                null_treatment: get_null_treatment(input.ignore_nulls),
-            },
-        }),
-        DataType::Float64,
-    ))
+    let mut args = input.arguments.clone();
+    args.push(lit(0.5_f64));
+    Ok(expr::Expr::AggregateFunction(AggregateFunction {
+        func: Arc::new(AggregateUDF::from(PercentileFunction::new())),
+        params: AggregateFunctionParams {
+            args,
+            distinct: input.distinct,
+            filter: input.filter,
+            order_by: input.order_by,
+            null_treatment: get_null_treatment(input.ignore_nulls),
+        },
+    }))
+}
+
+fn percentile_exact(input: AggFunctionInput) -> PlanResult<expr::Expr> {
+    Ok(expr::Expr::AggregateFunction(AggregateFunction {
+        func: Arc::new(AggregateUDF::from(PercentileFunction::new())),
+        params: AggregateFunctionParams {
+            args: input.arguments,
+            distinct: input.distinct,
+            filter: input.filter,
+            order_by: input.order_by,
+            null_treatment: get_null_treatment(input.ignore_nulls),
+        },
+    }))
+}
+
+fn percentile_disc_fn(input: AggFunctionInput) -> PlanResult<expr::Expr> {
+    Ok(expr::Expr::AggregateFunction(AggregateFunction {
+        func: Arc::new(AggregateUDF::from(PercentileDiscFunction::new())),
+        params: AggregateFunctionParams {
+            args: input.arguments,
+            distinct: input.distinct,
+            filter: input.filter,
+            order_by: input.order_by,
+            null_treatment: get_null_treatment(input.ignore_nulls),
+        },
+    }))
 }
 
 fn approx_count_distinct(input: AggFunctionInput) -> PlanResult<expr::Expr> {
@@ -407,13 +433,13 @@ fn list_built_in_aggregate_functions() -> Vec<(&'static str, AggFunction)> {
         ("min", F::default(min_max::min_udaf)),
         ("min_by", F::custom(min_by)),
         ("mode", F::custom(mode)),
-        ("percentile", F::unknown("percentile")),
+        ("percentile", F::custom(percentile_exact)),
         (
             "percentile_approx",
             F::default(approx_percentile_cont::approx_percentile_cont_udaf),
         ),
-        ("percentile_cont", F::unknown("percentile_cont")),
-        ("percentile_disc", F::unknown("percentile_disc")),
+        ("percentile_cont", F::custom(percentile_exact)),
+        ("percentile_disc", F::custom(percentile_disc_fn)),
         ("regr_avgx", F::default(regr::regr_avgx_udaf)),
         ("regr_avgy", F::default(regr::regr_avgy_udaf)),
         ("regr_count", F::default(regr::regr_count_udaf)),
