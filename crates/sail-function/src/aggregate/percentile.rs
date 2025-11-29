@@ -156,25 +156,25 @@ impl AggregateUDFImpl for PercentileFunction {
             )
         })?;
 
-        fn dummy_batch() -> RecordBatch {
+        fn dummy_batch() -> Result<RecordBatch> {
             let fields: Vec<Field> = Vec::new();
             let schema: SchemaRef = Arc::new(Schema::new(fields));
 
             RecordBatch::try_new_with_options(
                 schema,
-                Vec::new(),
+                Vec::new(), // 0 columnas
                 &RecordBatchOptions::default().with_row_count(Some(1)),
             )
-            .expect("failed to create dummy batch for percentile literal")
+            .map_err(DataFusionError::from)
         }
-        let batch = dummy_batch();
 
+        let batch = dummy_batch()?;
         let col_val = expr.evaluate(&batch)?;
-
         let scalar = match col_val {
             ColumnarValue::Scalar(s) => s,
             ColumnarValue::Array(arr) => ScalarValue::try_from_array(arr.as_ref(), 0)?,
         };
+
         fn scalar_to_f64(sv: &ScalarValue) -> Option<f64> {
             match sv {
                 ScalarValue::Float64(Some(v)) => Some(*v),
