@@ -1,4 +1,5 @@
 use clap::{Parser, Subcommand};
+use sail_common::error::CommonError;
 
 use crate::spark::{
     run_pyspark_shell, run_spark_connect_server, run_spark_mcp_server, McpSettings, McpTransport,
@@ -79,6 +80,15 @@ enum SparkCommand {
 }
 
 pub fn main(args: Vec<String>) -> Result<(), Box<dyn std::error::Error>> {
+    if rustls::crypto::aws_lc_rs::default_provider()
+        .install_default()
+        .is_err()
+    {
+        Err(CommonError::InternalError(
+            "failed to install crypto provider".to_string(),
+        ))?;
+    }
+
     let cli = Cli::parse_from(args);
 
     match cli.command {

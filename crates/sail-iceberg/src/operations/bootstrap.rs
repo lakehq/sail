@@ -22,6 +22,7 @@ use datafusion_common::{DataFusionError, Result};
 use url::Url;
 
 use crate::io::StoreContext;
+use crate::operations::{SnapshotProduceOperation, SnapshotProducer, Transaction};
 use crate::physical_plan::commit::IcebergCommitInfo;
 use crate::spec::metadata::format::FormatVersion;
 use crate::spec::metadata::table_metadata::SnapshotLog;
@@ -29,7 +30,6 @@ use crate::spec::partition::PartitionSpec;
 use crate::spec::schema::Schema as IcebergSchema;
 use crate::spec::snapshots::{SnapshotBuilder, SnapshotReference, SnapshotRetention};
 use crate::spec::TableMetadata;
-use crate::transaction::{SnapshotProduceOperation, SnapshotProducer, Transaction};
 use crate::utils::WritePathMode;
 
 /// Strategy for persisting metadata during bootstrap

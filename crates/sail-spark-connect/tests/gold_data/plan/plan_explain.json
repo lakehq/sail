@@ -9,24 +9,26 @@
             "explain": {
               "mode": "formatted",
               "input": {
-                "project": {
-                  "input": {
-                    "empty": {
-                      "produceOneRow": true
+                "query": {
+                  "project": {
+                    "input": {
+                      "empty": {
+                        "produceOneRow": true
+                      },
+                      "planId": null
                     },
-                    "planId": null
-                  },
-                  "expressions": [
-                    {
-                      "literal": {
-                        "int32": {
-                          "value": 1
+                    "expressions": [
+                      {
+                        "literal": {
+                          "int32": {
+                            "value": 1
+                          }
                         }
                       }
-                    }
-                  ]
-                },
-                "planId": null
+                    ]
+                  },
+                  "planId": null
+                }
               }
             },
             "planId": null
@@ -38,7 +40,7 @@
       "input": "EXPLAIN logical SELECT 1",
       "exception": "\n[INVALID_SQL_SYNTAX.UNSUPPORTED_SQL_STATEMENT] Invalid SQL syntax: Unsupported SQL statement: EXPLAIN logical SELECT 1. SQLSTATE: 42000\n== SQL (line 1, position 1) ==\nEXPLAIN logical SELECT 1\n^^^^^^^^^^^^^^^^^^^^^^^^\n",
       "output": {
-        "failure": "invalid argument: found logical at 8:15 expected 'EXTENDED', 'CODEGEN', 'COST', 'FORMATTED', 'ANALYZE', 'VERBOSE', or query"
+        "failure": "invalid argument: found logical at 8:15 expected 'EXTENDED', 'CODEGEN', 'COST', 'FORMATTED', 'ANALYZE', 'VERBOSE', or statement"
       }
     }
   ]

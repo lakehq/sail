@@ -35,8 +35,8 @@ use object_store::path::Path;
 use sail_common_datafusion::schema_adapter::DeltaSchemaAdapterFactory;
 
 use crate::datasource::{
-    create_object_store_url, delta_to_datafusion_error, partitioned_file_from_action,
-    DataFusionMixins, DeltaScanConfig, DeltaTableStateExt,
+    create_object_store_url, partitioned_file_from_action, DataFusionMixins, DeltaScanConfig,
+    DeltaTableStateExt,
 };
 use crate::kernel::models::Add;
 use crate::physical_plan::DeltaPhysicalExprAdapterFactory;
@@ -64,7 +64,7 @@ pub fn build_file_scan_config(
     // Get the complete schema that includes partition columns
     let complete_schema = match scan_config.schema.clone() {
         Some(schema) => schema,
-        None => snapshot.input_schema().map_err(delta_to_datafusion_error)?,
+        None => snapshot.input_schema()?,
     };
     let config = scan_config.clone();
     let table_partition_cols = snapshot.metadata().partition_columns();
@@ -76,8 +76,8 @@ pub fn build_file_scan_config(
     > = HashMap::new();
 
     for action in files.iter() {
-        let mut part = partitioned_file_from_action(action, table_partition_cols, &complete_schema)
-            .map_err(delta_to_datafusion_error)?;
+        let mut part =
+            partitioned_file_from_action(action, table_partition_cols, &complete_schema)?;
 
         // Add file column if configured
         if config.file_column_name.is_some() {
@@ -168,8 +168,7 @@ pub fn build_file_scan_config(
         parquet_source.with_schema_adapter_factory(Arc::new(DeltaSchemaAdapterFactory))?;
 
     // Build the final FileScanConfig
-    let object_store_url =
-        create_object_store_url(&log_store.config().location).map_err(delta_to_datafusion_error)?;
+    let object_store_url = create_object_store_url(&log_store.config().location)?;
 
     let file_scan_config = FileScanConfigBuilder::new(object_store_url, file_schema, file_source)
         .with_file_groups(

@@ -60,10 +60,17 @@ kind create cluster
 ```
 
 Alternatively, you can create a kind cluster with a custom configuration.
+Here is an example.
 
 ```bash
 kind create cluster --config k8s/kind-config.yaml
 ```
+
+::: code-group
+
+<<< ../../../k8s/kind-config.yaml [k8s/kind-config.yaml]
+
+:::
 
 Then load the Docker image into the cluster.
 
@@ -80,11 +87,11 @@ Please refer to the [Changelog](/reference/changelog/) if the configuration ever
 
 :::
 
-Create a file named `sail.yaml` with the following content.
+Create a file `k8s/sail.yaml` with the following content.
 
 ::: code-group
 
-<<< ../../../k8s/sail.yaml
+<<< ../../../k8s/sail.yaml [k8s/sail.yaml]
 
 :::
 
@@ -92,33 +99,33 @@ Create the Kubernetes resources using the following command.
 The Sail Spark Connect server runs as a Kubernetes deployment, and the gRPC port is exposed as a Kubernetes service.
 
 ```bash
-kubectl apply -f sail.yaml
+kubectl apply -f k8s/sail.yaml
 ```
 
 ## Overriding the Default Pod Spec
 
-By default, the worker pod spec is created programmatically. If a `worker_pod_template` is provided, it is merged into
+By default, the worker pod spec is created programmatically. If the `kubernetes.worker_pod_template` configuration option is provided, it is merged into
 the generated spec, allowing you to customize the worker pods.
 
 ### Using a Custom Pod Template
 
 You can use Kustomize to declaratively define the Kubernetes resources. This approach makes it easier to manage
-overrides and reuse manifests across environments. For example, you can specify a custom image in your `k8s/` overlay
+overrides and reuse manifests across environments. For example, you can specify custom volumes in your overlay
 with the following content.
 
 ::: code-group
 
-<<< ../../../k8s/kustomization.yaml
+<<< ../../../k8s/kustomization.yaml [k8s/kustomization.yaml]
 
 :::
 
 ::: code-group
 
-<<< ../../../k8s/test-volume-patch.yaml
+<<< ../../../k8s/test-volume-patch.yaml [k8s/test-volume-patch.yaml]
 
 :::
 
-Apply the customized manifests with:
+You can then apply the customized manifests using the following command.
 
 ```bash
 kubectl apply -k k8s/
@@ -141,15 +148,15 @@ The worker pods are terminated after a certain period of inactivity.
 env SPARK_CONNECT_MODE_ENABLED=1 SPARK_REMOTE="sc://localhost:50051" pyspark
 ```
 
-## Running Pytest
+## Running Python Tests
 
 When running tests with pytest, the worker pods may need a writable volume for temporary files. To handle this, define a
-custom pod template (such as the `test-volume-patch.yaml` shown above) that mounts a temporary volume into the pod.
+custom pod template (such as the `k8s/test-volume-patch.yaml` file shown above) that mounts a temporary volume into the pod.
 
 Once the pod template is in place, you can run pytest locally against the cluster with the following command.
 
 ```bash
-env SPARK_REMOTE="sc://localhost:50051" PYTEST_DEBUG_TEMPROOT="/tmp/sail" hatch run pytest
+env SPARK_REMOTE="sc://localhost:50051" PYTEST_DEBUG_TEMPROOT="/tmp/sail" pytest --pyargs pysail
 ```
 
 ## Cleaning Up
@@ -158,7 +165,7 @@ Run the following command to clean up the Kubernetes resources for the Sail serv
 All Sail worker pods will be terminated automatically as well.
 
 ```bash
-kubectl delete -f sail.yaml
+kubectl delete -f k8s/sail.yaml
 ```
 
 If you used Kustomize to deploy the Sail server, you can clean up the resources with the following command.

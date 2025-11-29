@@ -3,22 +3,12 @@ use std::ffi::NulError;
 use pyo3::ffi::{PyUnicode_AsWideCharString, PyUnicode_FromString, Py_Main};
 use pyo3::Python;
 use sail_common::config::{CliConfig, CliConfigEnv};
-use sail_common::error::CommonError;
 
 #[cfg(feature = "mimalloc")]
 #[global_allocator]
 static GLOBAL: mimalloc::MiMalloc = mimalloc::MiMalloc;
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
-    if rustls::crypto::aws_lc_rs::default_provider()
-        .install_default()
-        .is_err()
-    {
-        Err(CommonError::InternalError(
-            "failed to install crypto provider".to_string(),
-        ))?;
-    }
-
     let config = CliConfig::load()?;
     if config.run_python {
         // When the environment variable is set, we are the forked child process.

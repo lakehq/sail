@@ -1,7 +1,7 @@
 import os
 from datetime import date
 
-from pyspark.sql.types import Row
+from pyspark.sql.types import LongType, Row, StringType, StructField, StructType
 
 from ..utils import get_data_files  # noqa: TID252
 
@@ -63,8 +63,6 @@ class TestDeltaDataSkipping:
 
         df1_data = [Row(id=i, optional_col=f"value_{i}") for i in range(10)]
         spark.createDataFrame(df1_data).write.format("delta").mode("overwrite").save(str(delta_path))
-
-        from pyspark.sql.types import LongType, StringType, StructField, StructType
 
         schema = StructType(
             [

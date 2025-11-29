@@ -175,7 +175,7 @@ impl DeltaTableState {
         let stats_schema = self.snapshot.snapshot().inner.stats_schema()?;
         let num_records_field = stats_schema
             .field("numRecords")
-            .ok_or_else(|| DeltaTableError::Schema("numRecords field not found".to_string()))?
+            .ok_or_else(|| DeltaTableError::schema("numRecords field not found".to_string()))?
             .with_name("num_records");
 
         expressions.push(column_expr_ref!("stats_parsed.numRecords"));

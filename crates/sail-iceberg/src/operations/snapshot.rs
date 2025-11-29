@@ -219,13 +219,19 @@ impl<'a> SnapshotProducer<'a> {
         let manifest_list_uri =
             join_table_uri(self.tx.table_uri(), &list_rel, &self.write_path_mode);
 
+        let schema_id = if let Some(meta) = &self.manifest_metadata {
+            meta.schema_id
+        } else {
+            self.tx.snapshot().schema_id().unwrap_or_default()
+        };
+
         let mut snapshot_builder = SnapshotBuilder::new()
             .with_snapshot_id(new_snapshot_id)
             .with_sequence_number(new_sequence_number)
             .with_timestamp_ms(timestamp_ms)
             .with_manifest_list(manifest_list_uri)
             .with_summary(summary)
-            .with_schema_id(self.tx.snapshot().schema_id().unwrap_or_default());
+            .with_schema_id(schema_id);
 
         // Only set parent snapshot ID if not in bootstrap mode
         if !self.is_bootstrap {
