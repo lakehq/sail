@@ -11,6 +11,50 @@ use datafusion::error::Result;
 use datafusion::logical_expr::function::{AccumulatorArgs, StateFieldsArgs};
 use datafusion::logical_expr::{Accumulator, AggregateUDFImpl, Signature, Volatility};
 
+macro_rules! match_string_type {
+    ($data_type:expr, $value:expr) => {
+        match $data_type {
+            DataType::Utf8View => Ok(ScalarValue::Utf8View($value)),
+            DataType::LargeUtf8 => Ok(ScalarValue::LargeUtf8($value)),
+            _ => Ok(ScalarValue::Utf8($value)),
+        }
+    };
+}
+
+macro_rules! interval_none {
+    ($unit:expr) => {
+        match $unit {
+            datafusion::arrow::datatypes::IntervalUnit::YearMonth => {
+                Ok(ScalarValue::IntervalYearMonth(None))
+            }
+            datafusion::arrow::datatypes::IntervalUnit::DayTime => {
+                Ok(ScalarValue::IntervalDayTime(None))
+            }
+            datafusion::arrow::datatypes::IntervalUnit::MonthDayNano => {
+                Ok(ScalarValue::IntervalMonthDayNano(None))
+            }
+        }
+    };
+}
+
+/// Macro to handle Duration type matching for None values
+macro_rules! duration_none {
+    ($unit:expr) => {
+        match $unit {
+            datafusion::arrow::datatypes::TimeUnit::Second => Ok(ScalarValue::DurationSecond(None)),
+            datafusion::arrow::datatypes::TimeUnit::Millisecond => {
+                Ok(ScalarValue::DurationMillisecond(None))
+            }
+            datafusion::arrow::datatypes::TimeUnit::Microsecond => {
+                Ok(ScalarValue::DurationMicrosecond(None))
+            }
+            datafusion::arrow::datatypes::TimeUnit::Nanosecond => {
+                Ok(ScalarValue::DurationNanosecond(None))
+            }
+        }
+    };
+}
+
 /// The `PercentileFunction` calculates the exact percentile (quantile) from a set of values.
 ///
 /// Unlike `approx_percentile_cont`, this function calculates the exact percentile by:
@@ -372,11 +416,7 @@ impl Accumulator for StringPercentileAccumulator {
 
     fn evaluate(&mut self) -> Result<ScalarValue> {
         if self.values.is_empty() {
-            return match &self.data_type {
-                DataType::Utf8View => Ok(ScalarValue::Utf8View(None)),
-                DataType::LargeUtf8 => Ok(ScalarValue::LargeUtf8(None)),
-                _ => Ok(ScalarValue::Utf8(None)),
-            };
+            return match_string_type!(&self.data_type, None);
         }
 
         // Sort values alphabetically
@@ -384,16 +424,8 @@ impl Accumulator for StringPercentileAccumulator {
         sorted_values.sort();
 
         match self.calculate_percentile(&sorted_values, self.percentile) {
-            Some(result) => match &self.data_type {
-                DataType::Utf8View => Ok(ScalarValue::Utf8View(Some(result))),
-                DataType::LargeUtf8 => Ok(ScalarValue::LargeUtf8(Some(result))),
-                _ => Ok(ScalarValue::Utf8(Some(result))),
-            },
-            None => match &self.data_type {
-                DataType::Utf8View => Ok(ScalarValue::Utf8View(None)),
-                DataType::LargeUtf8 => Ok(ScalarValue::LargeUtf8(None)),
-                _ => Ok(ScalarValue::Utf8(None)),
-            },
+            Some(result) => match_string_type!(&self.data_type, Some(result)),
+            None => match_string_type!(&self.data_type, None),
         }
     }
 
@@ -553,23 +585,8 @@ impl Accumulator for IntervalPercentileAccumulator {
     fn evaluate(&mut self) -> Result<ScalarValue> {
         if self.values.is_empty() {
             return match &self.data_type {
-                DataType::Interval(unit) => {
-                    use datafusion::arrow::datatypes::IntervalUnit;
-                    match unit {
-                        IntervalUnit::YearMonth => Ok(ScalarValue::IntervalYearMonth(None)),
-                        IntervalUnit::DayTime => Ok(ScalarValue::IntervalDayTime(None)),
-                        IntervalUnit::MonthDayNano => Ok(ScalarValue::IntervalMonthDayNano(None)),
-                    }
-                }
-                DataType::Duration(unit) => {
-                    use datafusion::arrow::datatypes::TimeUnit;
-                    match unit {
-                        TimeUnit::Second => Ok(ScalarValue::DurationSecond(None)),
-                        TimeUnit::Millisecond => Ok(ScalarValue::DurationMillisecond(None)),
-                        TimeUnit::Microsecond => Ok(ScalarValue::DurationMicrosecond(None)),
-                        TimeUnit::Nanosecond => Ok(ScalarValue::DurationNanosecond(None)),
-                    }
-                }
+                DataType::Interval(unit) => interval_none!(unit),
+                DataType::Duration(unit) => duration_none!(unit),
                 _ => Err(datafusion::error::DataFusionError::Execution(format!(
                     "Unsupported type {:?}",
                     self.data_type
@@ -636,23 +653,8 @@ impl Accumulator for IntervalPercentileAccumulator {
                 ))),
             },
             None => match &self.data_type {
-                DataType::Interval(unit) => {
-                    use datafusion::arrow::datatypes::IntervalUnit;
-                    match unit {
-                        IntervalUnit::YearMonth => Ok(ScalarValue::IntervalYearMonth(None)),
-                        IntervalUnit::DayTime => Ok(ScalarValue::IntervalDayTime(None)),
-                        IntervalUnit::MonthDayNano => Ok(ScalarValue::IntervalMonthDayNano(None)),
-                    }
-                }
-                DataType::Duration(unit) => {
-                    use datafusion::arrow::datatypes::TimeUnit;
-                    match unit {
-                        TimeUnit::Second => Ok(ScalarValue::DurationSecond(None)),
-                        TimeUnit::Millisecond => Ok(ScalarValue::DurationMillisecond(None)),
-                        TimeUnit::Microsecond => Ok(ScalarValue::DurationMicrosecond(None)),
-                        TimeUnit::Nanosecond => Ok(ScalarValue::DurationNanosecond(None)),
-                    }
-                }
+                DataType::Interval(unit) => interval_none!(unit),
+                DataType::Duration(unit) => duration_none!(unit),
                 _ => Err(datafusion::error::DataFusionError::Execution(format!(
                     "Unsupported type {:?}",
                     self.data_type
@@ -695,26 +697,21 @@ mod tests {
     use super::*;
 
     #[test]
-    fn test_percentile_median() -> Result<()> {
-        let mut acc = NumericPercentileAccumulator::new(0.5);
+    fn test_percentile_0() -> Result<()> {
+        let mut acc = NumericPercentileAccumulator::new(0.0);
 
-        // Test data from the Ibis test
         let values: ArrayRef = Arc::new(Float64Array::from(vec![
-            Some(0.0),
-            Some(1.0),
-            Some(2.5),
-            Some(3.5),
             Some(5.0),
-            Some(6.0),
-            Some(7.5),
-            Some(8.5),
+            Some(1.0),
+            Some(9.0),
+            Some(3.0),
         ]));
 
         acc.update_batch(&[values])?;
         let result = acc.evaluate()?;
 
-        // Expected median: (3.5 + 5.0) / 2 = 4.25
-        assert_eq!(result, ScalarValue::Float64(Some(4.25)));
+        // 0th percentile is the minimum value
+        assert_eq!(result, ScalarValue::Float64(Some(1.0)));
         Ok(())
     }
 
@@ -740,6 +737,74 @@ mod tests {
         // Interpolate between index 1 (1.0) and index 2 (2.5)
         // Result = 1.0 + 0.75 * (2.5 - 1.0) = 1.0 + 0.75 * 1.5 = 2.125
         assert_eq!(result, ScalarValue::Float64(Some(2.125)));
+        Ok(())
+    }
+
+    #[test]
+    fn test_percentile_median() -> Result<()> {
+        let mut acc = NumericPercentileAccumulator::new(0.5);
+
+        // Test data from the Ibis test
+        let values: ArrayRef = Arc::new(Float64Array::from(vec![
+            Some(0.0),
+            Some(1.0),
+            Some(2.5),
+            Some(3.5),
+            Some(5.0),
+            Some(6.0),
+            Some(7.5),
+            Some(8.5),
+        ]));
+
+        acc.update_batch(&[values])?;
+        let result = acc.evaluate()?;
+
+        // Expected median: (3.5 + 5.0) / 2 = 4.25
+        assert_eq!(result, ScalarValue::Float64(Some(4.25)));
+        Ok(())
+    }
+
+    #[test]
+    fn test_percentile_75() -> Result<()> {
+        let mut acc = NumericPercentileAccumulator::new(0.75);
+
+        let values: ArrayRef = Arc::new(Float64Array::from(vec![
+            Some(0.0),
+            Some(1.0),
+            Some(2.5),
+            Some(3.5),
+            Some(5.0),
+            Some(6.0),
+            Some(7.5),
+            Some(8.5),
+        ]));
+
+        acc.update_batch(&[values])?;
+        let result = acc.evaluate()?;
+
+        // For 8 values, 75th percentile position = (8-1) * 0.75 = 5.25
+        // Interpolate between index 5 (6.0) and index 6 (7.5)
+        // Result = 6.0 + 0.25 * (7.5 - 6.0) = 6.0 + 0.375 = 6.375
+        assert_eq!(result, ScalarValue::Float64(Some(6.375)));
+        Ok(())
+    }
+
+    #[test]
+    fn test_percentile_100() -> Result<()> {
+        let mut acc = NumericPercentileAccumulator::new(1.0);
+
+        let values: ArrayRef = Arc::new(Float64Array::from(vec![
+            Some(5.0),
+            Some(1.0),
+            Some(9.0),
+            Some(3.0),
+        ]));
+
+        acc.update_batch(&[values])?;
+        let result = acc.evaluate()?;
+
+        // 100th percentile is the maximum value
+        assert_eq!(result, ScalarValue::Float64(Some(9.0)));
         Ok(())
     }
 
@@ -850,68 +915,6 @@ mod tests {
         Ok(())
     }
 
-    #[test]
-    fn test_percentile_75() -> Result<()> {
-        let mut acc = NumericPercentileAccumulator::new(0.75);
-
-        let values: ArrayRef = Arc::new(Float64Array::from(vec![
-            Some(0.0),
-            Some(1.0),
-            Some(2.5),
-            Some(3.5),
-            Some(5.0),
-            Some(6.0),
-            Some(7.5),
-            Some(8.5),
-        ]));
-
-        acc.update_batch(&[values])?;
-        let result = acc.evaluate()?;
-
-        // For 8 values, 75th percentile position = (8-1) * 0.75 = 5.25
-        // Interpolate between index 5 (6.0) and index 6 (7.5)
-        // Result = 6.0 + 0.25 * (7.5 - 6.0) = 6.0 + 0.375 = 6.375
-        assert_eq!(result, ScalarValue::Float64(Some(6.375)));
-        Ok(())
-    }
-
-    #[test]
-    fn test_percentile_0() -> Result<()> {
-        let mut acc = NumericPercentileAccumulator::new(0.0);
-
-        let values: ArrayRef = Arc::new(Float64Array::from(vec![
-            Some(5.0),
-            Some(1.0),
-            Some(9.0),
-            Some(3.0),
-        ]));
-
-        acc.update_batch(&[values])?;
-        let result = acc.evaluate()?;
-
-        // 0th percentile is the minimum value
-        assert_eq!(result, ScalarValue::Float64(Some(1.0)));
-        Ok(())
-    }
-
-    #[test]
-    fn test_percentile_100() -> Result<()> {
-        let mut acc = NumericPercentileAccumulator::new(1.0);
-
-        let values: ArrayRef = Arc::new(Float64Array::from(vec![
-            Some(5.0),
-            Some(1.0),
-            Some(9.0),
-            Some(3.0),
-        ]));
-
-        acc.update_batch(&[values])?;
-        let result = acc.evaluate()?;
-
-        // 100th percentile is the maximum value
-        assert_eq!(result, ScalarValue::Float64(Some(9.0)));
-        Ok(())
-    }
     #[test]
     fn test_percentile_merge_batches() -> Result<()> {
         use datafusion::arrow::array::UInt8Array;
