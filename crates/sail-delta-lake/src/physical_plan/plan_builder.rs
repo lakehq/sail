@@ -29,7 +29,7 @@ use super::{
     create_projection, create_repartition, create_sort, DeltaCommitExec, DeltaFindFilesExec,
     DeltaRemoveActionsExec, DeltaScanByAddsExec, DeltaWriterExec,
 };
-use crate::datasource::{delta_to_datafusion_error, DataFusionMixins};
+use crate::datasource::DataFusionMixins;
 use crate::options::TableDeltaOptions;
 use crate::storage::{default_logstore, StorageConfig};
 use crate::table::open_table_with_object_store;
@@ -119,7 +119,7 @@ impl<'a> DeltaPlanBuilder<'a> {
             .await
             .map_err(|e| datafusion_common::DataFusionError::External(Box::new(e)))?;
 
-        let snapshot_state = table.snapshot().map_err(delta_to_datafusion_error)?;
+        let snapshot_state = table.snapshot()?;
         let version = snapshot_state.version();
         let table_schema = snapshot_state
             .snapshot()

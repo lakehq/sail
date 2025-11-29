@@ -41,7 +41,7 @@
         }
       },
       "output": {
-        "failure": "error in DataFusion: Internal error: Unsupported data type in hasher: List(nullable Int32).\nThis issue was likely caused by a bug in DataFusion's code. Please help us to resolve this by filing a bug report in our issue tracker: https://github.com/apache/datafusion/issues"
+        "failure": "error in DataFusion: Internal error: Unsupported data type in hasher: List(Int32).\nThis issue was likely caused by a bug in DataFusion's code. Please help us to resolve this by filing a bug report in our issue tracker: https://github.com/apache/datafusion/issues"
       }
     },
     {
@@ -151,7 +151,7 @@
         }
       },
       "output": {
-        "failure": "error in DataFusion: Internal error: Unsupported data type in hasher: List(nullable Int32).\nThis issue was likely caused by a bug in DataFusion's code. Please help us to resolve this by filing a bug report in our issue tracker: https://github.com/apache/datafusion/issues"
+        "failure": "error in DataFusion: Internal error: Unsupported data type in hasher: List(Int32).\nThis issue was likely caused by a bug in DataFusion's code. Please help us to resolve this by filing a bug report in our issue tracker: https://github.com/apache/datafusion/issues"
       }
     }
   ]

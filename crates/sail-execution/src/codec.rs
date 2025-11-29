@@ -110,6 +110,7 @@ use sail_function::scalar::math::spark_bin::SparkBin;
 use sail_function::scalar::math::spark_bround::SparkBRound;
 use sail_function::scalar::math::spark_ceil_floor::{SparkCeil, SparkFloor};
 use sail_function::scalar::math::spark_conv::SparkConv;
+use sail_function::scalar::math::spark_div::SparkIntervalDiv;
 use sail_function::scalar::math::spark_hex_unhex::{SparkHex, SparkUnHex};
 use sail_function::scalar::math::spark_signum::SparkSignum;
 use sail_function::scalar::math::spark_try_add::SparkTryAdd;
@@ -141,6 +142,7 @@ use sail_function::scalar::url::spark_try_parse_url::SparkTryParseUrl;
 use sail_function::scalar::url::url_decode::UrlDecode;
 use sail_function::scalar::url::url_encode::UrlEncode;
 use sail_iceberg::physical_plan::{IcebergCommitExec, IcebergWriterExec};
+use sail_iceberg::TableIcebergOptions;
 use sail_logical_plan::range::Range;
 use sail_logical_plan::show_string::{ShowStringFormat, ShowStringStyle};
 use sail_physical_plan::map_partitions::MapPartitionsExec;
@@ -745,6 +747,7 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
                 partition_columns,
                 sink_mode,
                 table_exists,
+                options,
             }) => {
                 let input = self.try_decode_plan(&input)?;
                 let sink_mode = match sink_mode {
@@ -754,6 +757,13 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
                 let sink_mode = self.try_decode_physical_sink_mode(sink_mode, &input.schema())?;
                 let table_url = Url::parse(&table_url)
                     .map_err(|e| plan_datafusion_err!("failed to parse table URL: {e}"))?;
+                let options = if options.is_empty() {
+                    TableIcebergOptions::default()
+                } else {
+                    serde_json::from_str(&options).map_err(|e| {
+                        plan_datafusion_err!("failed to decode Iceberg options: {e}")
+                    })?
+                };
 
                 Ok(Arc::new(IcebergWriterExec::new(
                     input,
@@ -761,6 +771,7 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
                     partition_columns,
                     sink_mode,
                     table_exists,
+                    options,
                 )))
             }
             NodeKind::IcebergCommit(gen::IcebergCommitExecNode { input, table_url }) => {
@@ -1174,12 +1185,15 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
         {
             let input = self.try_encode_plan(iceberg_writer_exec.input().clone())?;
             let sink_mode = self.try_encode_physical_sink_mode(iceberg_writer_exec.sink_mode())?;
+            let options = serde_json::to_string(iceberg_writer_exec.options())
+                .map_err(|e| plan_datafusion_err!("failed to encode Iceberg options: {e}"))?;
             NodeKind::IcebergWriter(gen::IcebergWriterExecNode {
                 input,
                 table_url: iceberg_writer_exec.table_url().to_string(),
                 partition_columns: iceberg_writer_exec.partition_columns().to_vec(),
                 sink_mode: Some(sink_mode),
                 table_exists: iceberg_writer_exec.table_exists(),
+                options,
             })
         } else if let Some(iceberg_commit_exec) = node.as_any().downcast_ref::<IcebergCommitExec>()
         {
@@ -1356,6 +1370,7 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
             "json_as_text" => Ok(datafusion_functions_json::udfs::json_as_text_udf()),
             "spark_base64" | "base64" => Ok(Arc::new(ScalarUDF::from(SparkBase64::new()))),
             "spark_bround" | "bround" => Ok(Arc::new(ScalarUDF::from(SparkBRound::new()))),
+            "spark_interval_div" => Ok(Arc::new(ScalarUDF::from(SparkIntervalDiv::new()))),
             "spark_unbase64" | "unbase64" => Ok(Arc::new(ScalarUDF::from(SparkUnbase64::new()))),
             "spark_aes_encrypt" | "aes_encrypt" => {
                 Ok(Arc::new(ScalarUDF::from(SparkAESEncrypt::new())))
@@ -1491,6 +1506,7 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
             || node_inner.is::<SparkFloor>()
             || node_inner.is::<SparkFromCSV>()
             || node_inner.is::<SparkHex>()
+            || node_inner.is::<SparkIntervalDiv>()
             || node_inner.is::<SparkLastDay>()
             || node_inner.is::<SparkLuhnCheck>()
             || node_inner.is::<SparkMakeDtInterval>()

@@ -70,11 +70,11 @@ class TpchBenchmark:
                 min_total_time = 0
                 for run in range(num_runs):
                     total_time = 0
-                    for query in range(1, 23):
-                        total_time += self._run_query(spark, query, explain)
+                    for query_id in range(1, 23):
+                        total_time += self._run_query(spark, query_id, explain)
                     min_total_time = total_time if run == 0 else min(min_total_time, total_time)
                     if not explain:
-                        print(f"\n\nRun {run+1} Total time for all queries: {total_time} seconds.")
+                        print(f"\n\nRun {run + 1} Total time for all queries: {total_time} seconds.")
                 if not explain:
                     print(f"\n\nMin total time across {num_runs}: {min_total_time} seconds.")
 
@@ -95,9 +95,9 @@ def main():
     benchmark = TpchBenchmark(args.url, args.data_path, args.query_path)
     if args.console:
         with benchmark.spark_session() as spark:
-            import code
-            import readline
-            from rlcompleter import Completer
+            import code  # noqa: PLC0415
+            import readline  # noqa: PLC0415
+            from rlcompleter import Completer  # noqa: PLC0415
 
             namespace = {"spark": spark}
             readline.parse_and_bind("tab: complete")

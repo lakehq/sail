@@ -11,7 +11,7 @@ pub(crate) fn get_path_column<'a>(
     batch: &'a RecordBatch,
     path_column: &str,
 ) -> DeltaResult<impl Iterator<Item = Option<&'a str>>> {
-    let err = || DeltaTableError::Generic("Unable to obtain Delta-rs path column".to_string());
+    let err = || DeltaTableError::generic("Unable to obtain Delta-rs path column".to_string());
     let dict_array = batch
         .column_by_name(path_column)
         .ok_or_else(err)?
@@ -39,7 +39,7 @@ pub(crate) fn join_batches_with_add_actions(
 ) -> DeltaResult<Vec<Add>> {
     let mut files = Vec::with_capacity(batches.iter().map(|batch| batch.num_rows()).sum());
     for batch in batches {
-        let err = || DeltaTableError::Generic("Unable to obtain Delta-rs path column".to_string());
+        let err = || DeltaTableError::generic("Unable to obtain Delta-rs path column".to_string());
 
         let iter = if dict_array {
             Either::Left(get_path_column(&batch, path_column)?)
@@ -54,14 +54,14 @@ pub(crate) fn join_batches_with_add_actions(
         };
 
         for path in iter {
-            let path = path.ok_or(DeltaTableError::Generic(format!(
+            let path = path.ok_or(DeltaTableError::generic(format!(
                 "{path_column} cannot be null"
             )))?;
 
             match actions.remove(path) {
                 Some(action) => files.push(action),
                 None => {
-                    return Err(DeltaTableError::Generic(
+                    return Err(DeltaTableError::generic(
                         "Unable to map __delta_rs_path to action.".to_owned(),
                     ))
                 }
