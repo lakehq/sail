@@ -73,6 +73,7 @@ num_enum = "0.7.4"
 num-traits = "0.2.19"
 log = "0.4.28"
 env_logger = "0.11.8"
+logforth = { version = "0.29.1", features = ["bridge-log", "append-fastrace", "append-opentelemetry"] }
 fastrace = { version = "0.7.14", features = ["enable"] }
 fastrace-opentelemetry = "0.14.0"
 opentelemetry = "0.31.0"

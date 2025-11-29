@@ -17,6 +17,8 @@ services:
       interval: 5s
       timeout: 5s
       retries: 6
+    profiles:
+      - storage
 
   azurite:
     image: mcr.microsoft.com/azure-storage/azurite:latest
@@ -39,6 +41,8 @@ services:
       - "10000:10000" # Blob service
       - "10001:10001" # Queue service
       - "11000:11000" # Table service
+    profiles:
+      - storage
 
   hdfs:
     build:
@@ -58,6 +62,21 @@ services:
       interval: 60s
       timeout: 60s
       retries: 5
+    profiles:
+      - storage
+
+  otel-collector:
+    image: otel/opentelemetry-collector:latest
+    command: [
+      "--config=/etc/otel-collector.yaml"
+    ]
+    volumes:
+      - ./deployments/telemetry/otel-collector-debug.yaml:/etc/otel-collector.yaml
+    ports:
+      - "4317:4317"
+      - "4318:4318"
+    profiles:
+      - telemetry
 
 volumes:
   minio-data:
