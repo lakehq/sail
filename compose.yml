@@ -17,6 +17,8 @@ services:
       interval: 5s
       timeout: 5s
       retries: 6
+    profiles:
+      - storage
 
   azurite:
     image: mcr.microsoft.com/azure-storage/azurite:latest
@@ -39,6 +41,8 @@ services:
       - "10000:10000" # Blob service
       - "10001:10001" # Queue service
       - "11000:11000" # Table service
+    profiles:
+      - storage
 
   hdfs:
     build:
@@ -58,6 +62,58 @@ services:
       interval: 60s
       timeout: 60s
       retries: 5
+    profiles:
+      - storage
+
+  otel-collector:
+    image: otel/opentelemetry-collector:latest
+    command: ["--config=/etc/otel-collector.yaml"]
+    volumes:
+      - ./deployments/telemetry/otel-collector-debug.yaml:/etc/otel-collector.yaml
+    ports:
+      - "4317:4317"
+      - "4318:4318"
+    profiles:
+      - telemetry
+
+  tempo:
+    image: grafana/tempo:latest
+    command: ["-config.file=/etc/tempo.yaml"]
+    volumes:
+      - ./deployments/telemetry/tempo.yaml:/etc/tempo.yaml
+    ports:
+      - "3200"
+      - "4317"
+    profiles:
+      - telemetry
+
+  prometheus:
+    image: prom/prometheus:latest
+    command:
+      - --config.file=/etc/prometheus.yaml
+      - --web.enable-remote-write-receiver
+      - --enable-feature=exemplar-storage
+      - --enable-feature=native-histograms
+    volumes:
+      - ./deployments/telemetry/prometheus.yaml:/etc/prometheus.yaml
+    ports:
+      - "9090:9090"
+    profiles:
+      - telemetry
+
+  grafana:
+    image: grafana/grafana:latest
+    volumes:
+      - ./deployments/telemetry/grafana-datasources.yaml:/etc/grafana/provisioning/datasources/datasources.yaml
+    environment:
+      - GF_AUTH_ANONYMOUS_ENABLED=true
+      - GF_AUTH_ANONYMOUS_ORG_ROLE=Admin
+      - GF_AUTH_DISABLE_LOGIN_FORM=true
+      - GF_FEATURE_TOGGLES_ENABLE=traceqlEditor
+    ports:
+      - "3000:3000"
+    profiles:
+      - telemetry
 
 volumes:
   minio-data:

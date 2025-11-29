@@ -64,10 +64,13 @@ fn run_spark_connect_server(
 }
 
 pub fn run_spark_mcp_server(settings: McpSettings) -> Result<(), Box<dyn std::error::Error>> {
-    init_telemetry()?;
-
     let config = Arc::new(AppConfig::load()?);
     let runtime = RuntimeManager::try_new(&config.runtime)?;
+
+    runtime
+        .handle()
+        .primary()
+        .block_on(async { init_telemetry(&config.telemetry) })?;
 
     let spark_remote = match settings.spark_remote {
         None => {

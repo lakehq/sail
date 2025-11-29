@@ -2,6 +2,7 @@
 
 !.github/
 !docs/
+!deployments/
 !/*.js
 !/*.json
 !/*.yml
