@@ -80,7 +80,7 @@ def test_import_star_wildcard(tmp_path):
     ) == scan_file(path)
 
 
-def test_structtype(tmp_path):
+def test_infer_structtype(tmp_path):
     code = cleandoc(
         """
         from pyspark.sql.types import StructType
@@ -105,7 +105,7 @@ def test_structtype(tmp_path):
     ) == scan_file(path)
 
 
-def test_column(tmp_path):
+def test_infer_column(tmp_path):
     code = cleandoc(
         """
         from pyspark.sql import SparkSession
@@ -138,6 +138,36 @@ def test_column(tmp_path):
             ("pyspark.sql.functions", "col"): 1,
             ("pyspark.sql.session.SparkSession", "getOrCreate"): 1,
             ("pyspark.sql.session.SparkSession", "range"): 1,
+        }
+    ) == scan_file(path)
+
+
+def test_infer_dataframe_agg(tmp_path):
+    code = cleandoc(
+        """
+        from pyspark.sql import functions as F
+        from pyspark.sql import SparkSession
+
+        spark: SparkSession = SparkSession.builder.getOrCreate()
+        df = spark.createDataFrame([(2, "Alice"), (5, "Bob")], schema=["age", "name"])
+        df.agg({"age": "max"}).show()
+
+        df.agg(
+            F.coalesce(F.sum("age"), F.lit(0))
+        ).show()
+        """
+    )
+    path = tmp_path / "snippet.py"
+    path.write_text(code, encoding="utf-8")
+    assert Counter(
+        {
+            ("pyspark.sql.DataFrame", "agg"): 2,
+            ("pyspark.sql.DataFrame", "show"): 2,
+            ("pyspark.sql.functions", "sum"): 1,
+            ("pyspark.sql.functions", "lit"): 1,
+            ("pyspark.sql.functions", "coalesce"): 1,
+            ("pyspark.sql.session.SparkSession", "createDataFrame"): 1,
+            ("pyspark.sql.session.SparkSession", "getOrCreate"): 1,
         }
     ) == scan_file(path)
 
