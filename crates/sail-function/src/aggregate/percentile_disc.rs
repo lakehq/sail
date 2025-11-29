@@ -13,6 +13,10 @@ use datafusion::common::ScalarValue;
 use datafusion::error::Result;
 use datafusion::logical_expr::function::{AccumulatorArgs, StateFieldsArgs};
 use datafusion::logical_expr::{Accumulator, AggregateUDFImpl, Signature, Volatility};
+use datafusion::physical_expr::PhysicalExpr;
+use datafusion_common::DataFusionError;
+
+use crate::aggregate::percentile::extract_literal;
 
 /// The `PercentileDiscFunction` calculates the discrete percentile (quantile) from a set of values.
 ///
@@ -102,8 +106,18 @@ impl AggregateUDFImpl for PercentileDiscFunction {
     fn accumulator(&self, acc_args: AccumulatorArgs) -> Result<Box<dyn Accumulator>> {
         let data_type = &acc_args.exprs[0].data_type(acc_args.schema)?;
 
-        // Extract the percentile value from the second argument if present
-        let percentile = 0.5f64;
+        let expr: &Arc<dyn PhysicalExpr> = acc_args.exprs.get(1).ok_or_else(|| {
+            DataFusionError::Execution(
+                "percentile_disc() requires a second argument (percentile value)".into(),
+            )
+        })?;
+
+        let percentile: f64 = extract_literal(expr).map_err(|e| {
+            DataFusionError::Execution(format!(
+                "Failed to extract percentile value in percentile_disc(): {}",
+                e
+            ))
+        })?;
 
         match data_type {
             DataType::Utf8 | DataType::Utf8View | DataType::LargeUtf8 => Ok(Box::new(
