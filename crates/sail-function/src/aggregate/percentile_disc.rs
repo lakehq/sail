@@ -81,28 +81,6 @@ impl AggregateUDFImpl for PercentileDiscFunction {
         }
     }
 
-    fn state_fields(&self, args: StateFieldsArgs) -> Result<Vec<arrow::datatypes::FieldRef>> {
-        let value_type = args.input_fields[0].data_type().clone();
-
-        let storage_type = match &value_type {
-            DataType::Utf8 | DataType::Utf8View | DataType::LargeUtf8 => DataType::Utf8,
-            DataType::Interval(_) | DataType::Duration(_) => DataType::Int64,
-            _ => DataType::Float64,
-        };
-
-        let values_list_type = DataType::List(Arc::new(arrow::datatypes::Field::new(
-            "item",
-            storage_type,
-            true,
-        )));
-
-        Ok(vec![
-            arrow::datatypes::Field::new("values", values_list_type, true).into(),
-            arrow::datatypes::Field::new("percentile", DataType::Float64, false).into(),
-            arrow::datatypes::Field::new("data_type_id", DataType::UInt8, false).into(),
-        ])
-    }
-
     fn accumulator(&self, acc_args: AccumulatorArgs) -> Result<Box<dyn Accumulator>> {
         let data_type = &acc_args.exprs[0].data_type(acc_args.schema)?;
 
@@ -128,6 +106,28 @@ impl AggregateUDFImpl for PercentileDiscFunction {
             )),
             _ => Ok(Box::new(NumericPercentileDiscAccumulator::new(percentile))),
         }
+    }
+
+    fn state_fields(&self, args: StateFieldsArgs) -> Result<Vec<arrow::datatypes::FieldRef>> {
+        let value_type = args.input_fields[0].data_type().clone();
+
+        let storage_type = match &value_type {
+            DataType::Utf8 | DataType::Utf8View | DataType::LargeUtf8 => DataType::Utf8,
+            DataType::Interval(_) | DataType::Duration(_) => DataType::Int64,
+            _ => DataType::Float64,
+        };
+
+        let values_list_type = DataType::List(Arc::new(arrow::datatypes::Field::new(
+            "item",
+            storage_type,
+            true,
+        )));
+
+        Ok(vec![
+            arrow::datatypes::Field::new("values", values_list_type, true).into(),
+            arrow::datatypes::Field::new("percentile", DataType::Float64, false).into(),
+            arrow::datatypes::Field::new("data_type_id", DataType::UInt8, false).into(),
+        ])
     }
 }
 
@@ -194,6 +194,24 @@ impl Accumulator for NumericPercentileDiscAccumulator {
         Ok(())
     }
 
+    fn evaluate(&mut self) -> Result<ScalarValue> {
+        if self.values.is_empty() {
+            return Ok(ScalarValue::Float64(None));
+        }
+
+        let mut sorted_values = self.values.clone();
+        sorted_values.sort_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal));
+
+        match self.calculate_percentile_disc(&sorted_values, self.percentile) {
+            Some(result) => Ok(ScalarValue::Float64(Some(result))),
+            None => Ok(ScalarValue::Float64(None)),
+        }
+    }
+
+    fn size(&self) -> usize {
+        std::mem::size_of_val(self) + self.values.capacity() * std::mem::size_of::<f64>()
+    }
+
     fn state(&mut self) -> Result<Vec<ScalarValue>> {
         let values_scalar = ScalarValue::new_list_nullable(
             &self
@@ -241,22 +259,28 @@ impl Accumulator for NumericPercentileDiscAccumulator {
         Ok(())
     }
 
-    fn evaluate(&mut self) -> Result<ScalarValue> {
-        if self.values.is_empty() {
-            return Ok(ScalarValue::Float64(None));
+    fn retract_batch(&mut self, values: &[ArrayRef]) -> Result<()> {
+        if values.is_empty() {
+            return Ok(());
         }
 
-        let mut sorted_values = self.values.clone();
-        sorted_values.sort_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal));
+        let array = &values[0];
+        // Igual que en update_batch: cast a Float64
+        let float_array = arrow::compute::cast(array, &DataType::Float64)?;
+        let float_array = as_float64_array(&float_array)?;
 
-        match self.calculate_percentile_disc(&sorted_values, self.percentile) {
-            Some(result) => Ok(ScalarValue::Float64(Some(result))),
-            None => Ok(ScalarValue::Float64(None)),
+        // Por cada valor que sale de la ventana, borra UNA ocurrencia
+        for v in float_array.iter().flatten() {
+            if let Some(pos) = self.values.iter().position(|x| *x == v) {
+                self.values.remove(pos);
+            }
         }
+
+        Ok(())
     }
 
-    fn size(&self) -> usize {
-        std::mem::size_of_val(self) + self.values.capacity() * std::mem::size_of::<f64>()
+    fn supports_retract_batch(&self) -> bool {
+        true
     }
 }
 
@@ -327,6 +351,33 @@ impl Accumulator for StringPercentileDiscAccumulator {
         Ok(())
     }
 
+    fn evaluate(&mut self) -> Result<ScalarValue> {
+        if self.values.is_empty() {
+            return Ok(ScalarValue::Utf8(None));
+        }
+
+        let mut sorted_values = self.values.clone();
+        sorted_values.sort();
+
+        match self.calculate_percentile_disc(&sorted_values, self.percentile) {
+            Some(result) => match &self.data_type {
+                DataType::Utf8View => Ok(ScalarValue::Utf8View(Some(result))),
+                DataType::LargeUtf8 => Ok(ScalarValue::LargeUtf8(Some(result))),
+                _ => Ok(ScalarValue::Utf8(Some(result))),
+            },
+            None => Ok(ScalarValue::Utf8(None)),
+        }
+    }
+
+    fn size(&self) -> usize {
+        std::mem::size_of_val(self)
+            + self
+                .values
+                .iter()
+                .map(|s| std::mem::size_of_val(s) + s.len())
+                .sum::<usize>()
+    }
+
     fn state(&mut self) -> Result<Vec<ScalarValue>> {
         let values_scalar = ScalarValue::new_list_nullable(
             &self
@@ -374,31 +425,25 @@ impl Accumulator for StringPercentileDiscAccumulator {
         Ok(())
     }
 
-    fn evaluate(&mut self) -> Result<ScalarValue> {
-        if self.values.is_empty() {
-            return Ok(ScalarValue::Utf8(None));
+    fn retract_batch(&mut self, values: &[ArrayRef]) -> Result<()> {
+        if values.is_empty() {
+            return Ok(());
         }
 
-        let mut sorted_values = self.values.clone();
-        sorted_values.sort();
+        let array = &values[0];
+        let string_array = as_string_array(array)?;
 
-        match self.calculate_percentile_disc(&sorted_values, self.percentile) {
-            Some(result) => match &self.data_type {
-                DataType::Utf8View => Ok(ScalarValue::Utf8View(Some(result))),
-                DataType::LargeUtf8 => Ok(ScalarValue::LargeUtf8(Some(result))),
-                _ => Ok(ScalarValue::Utf8(Some(result))),
-            },
-            None => Ok(ScalarValue::Utf8(None)),
+        for v in string_array.iter().flatten() {
+            if let Some(pos) = self.values.iter().position(|s| s == v) {
+                self.values.remove(pos);
+            }
         }
+
+        Ok(())
     }
 
-    fn size(&self) -> usize {
-        std::mem::size_of_val(self)
-            + self
-                .values
-                .iter()
-                .map(|s| std::mem::size_of_val(s) + s.len())
-                .sum::<usize>()
+    fn supports_retract_batch(&self) -> bool {
+        true
     }
 }
 
@@ -512,53 +557,6 @@ impl Accumulator for IntervalPercentileDiscAccumulator {
         Ok(())
     }
 
-    fn state(&mut self) -> Result<Vec<ScalarValue>> {
-        let values_scalar = ScalarValue::new_list_nullable(
-            &self
-                .values
-                .iter()
-                .map(|&v| ScalarValue::Int64(Some(v)))
-                .collect::<Vec<_>>(),
-            &DataType::Int64,
-        );
-
-        Ok(vec![
-            ScalarValue::List(values_scalar),
-            ScalarValue::Float64(Some(self.percentile)),
-            ScalarValue::UInt8(Some(2)), // 2 = interval/duration type
-        ])
-    }
-
-    fn merge_batch(&mut self, states: &[ArrayRef]) -> Result<()> {
-        if states.is_empty() {
-            return Ok(());
-        }
-
-        let values_list = &states[0];
-
-        if let Some(list_array) = values_list.as_list_opt::<i32>() {
-            for i in 0..list_array.len() {
-                if !list_array.is_null(i) {
-                    let value_array = list_array.value(i);
-                    let int64_array = value_array.as_primitive::<arrow::datatypes::Int64Type>();
-
-                    for value in int64_array.iter().flatten() {
-                        self.values.push(value);
-                    }
-                }
-            }
-        }
-
-        if states.len() >= 2 {
-            let percentile_array = as_float64_array(&states[1])?;
-            if !percentile_array.is_empty() && !percentile_array.is_null(0) {
-                self.percentile = percentile_array.value(0);
-            }
-        }
-
-        Ok(())
-    }
-
     fn evaluate(&mut self) -> Result<ScalarValue> {
         if self.values.is_empty() {
             return match &self.data_type {
@@ -638,6 +636,115 @@ impl Accumulator for IntervalPercentileDiscAccumulator {
 
     fn size(&self) -> usize {
         std::mem::size_of_val(self) + self.values.capacity() * std::mem::size_of::<i64>()
+    }
+
+    fn state(&mut self) -> Result<Vec<ScalarValue>> {
+        let values_scalar = ScalarValue::new_list_nullable(
+            &self
+                .values
+                .iter()
+                .map(|&v| ScalarValue::Int64(Some(v)))
+                .collect::<Vec<_>>(),
+            &DataType::Int64,
+        );
+
+        Ok(vec![
+            ScalarValue::List(values_scalar),
+            ScalarValue::Float64(Some(self.percentile)),
+            ScalarValue::UInt8(Some(2)), // 2 = interval/duration type
+        ])
+    }
+
+    fn merge_batch(&mut self, states: &[ArrayRef]) -> Result<()> {
+        if states.is_empty() {
+            return Ok(());
+        }
+
+        let values_list = &states[0];
+
+        if let Some(list_array) = values_list.as_list_opt::<i32>() {
+            for i in 0..list_array.len() {
+                if !list_array.is_null(i) {
+                    let value_array = list_array.value(i);
+                    let int64_array = value_array.as_primitive::<arrow::datatypes::Int64Type>();
+
+                    for value in int64_array.iter().flatten() {
+                        self.values.push(value);
+                    }
+                }
+            }
+        }
+
+        if states.len() >= 2 {
+            let percentile_array = as_float64_array(&states[1])?;
+            if !percentile_array.is_empty() && !percentile_array.is_null(0) {
+                self.percentile = percentile_array.value(0);
+            }
+        }
+
+        Ok(())
+    }
+    fn retract_batch(&mut self, values: &[ArrayRef]) -> Result<()> {
+        if values.is_empty() {
+            return Ok(());
+        }
+
+        let array = &values[0];
+
+        for i in 0..array.len() {
+            if array.is_null(i) {
+                continue;
+            }
+
+            let val_i64 = match &self.data_type {
+                DataType::Interval(IntervalUnit::YearMonth) => {
+                    let arr = array.as_primitive::<arrow::datatypes::IntervalYearMonthType>();
+                    arr.value(i) as i64
+                }
+                DataType::Interval(IntervalUnit::DayTime) => {
+                    let arr = array.as_primitive::<IntervalDayTimeType>();
+                    let v = arr.value(i);
+                    v.days as i64 * 86_400_000 + v.milliseconds as i64
+                }
+                DataType::Interval(IntervalUnit::MonthDayNano) => {
+                    let arr = array.as_primitive::<IntervalMonthDayNanoType>();
+                    let v = arr.value(i);
+                    v.months as i64 * 2_592_000_000_000_000
+                        + v.days as i64 * 86_400_000_000_000
+                        + v.nanoseconds
+                }
+                DataType::Duration(unit) => match unit {
+                    arrow::datatypes::TimeUnit::Second => {
+                        array.as_primitive::<DurationSecondType>().value(i)
+                    }
+                    arrow::datatypes::TimeUnit::Millisecond => {
+                        array.as_primitive::<DurationMillisecondType>().value(i)
+                    }
+                    arrow::datatypes::TimeUnit::Microsecond => {
+                        array.as_primitive::<DurationMicrosecondType>().value(i)
+                    }
+                    arrow::datatypes::TimeUnit::Nanosecond => {
+                        array.as_primitive::<DurationNanosecondType>().value(i)
+                    }
+                },
+                _ => {
+                    return Err(DataFusionError::Execution(format!(
+                        "IntervalPercentileDiscAccumulator does not support type {:?}",
+                        self.data_type
+                    )));
+                }
+            };
+
+            if let Some(pos) = self.values.iter().position(|x| *x == val_i64) {
+                self.values.remove(pos);
+            }
+        }
+
+        Ok(())
+    }
+
+    fn supports_retract_batch(&self) -> bool {
+        true
     }
 }
 
