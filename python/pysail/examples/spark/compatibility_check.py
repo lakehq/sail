@@ -2,12 +2,14 @@ import argparse
 import logging
 from pathlib import Path
 
+from pysail.utils.logging_config import setup_logging
 from pysail.utils.sail_function_coverage import (
     check_sail_function_coverage,
     format_output,
 )
 
-logging.basicConfig(level=logging.INFO, format="%(levelname)s: %(message)s")
+setup_logging()
+logger = logging.getLogger(__name__)
 
 
 def main() -> None:
@@ -32,15 +34,12 @@ def main() -> None:
         msg = "Directory not found: %s"
         raise SystemExit(msg, args.directory)
 
-    logging.info("Scanning: %s", args.directory)
-
-    # Suppress Jedi internal debug logging
-    logging.getLogger("jedi").setLevel(logging.WARNING)
+    logger.info("Scanning: %s", args.directory)
 
     counts = check_sail_function_coverage(args.directory)
-    logging.info("Scan complete.")
+    logger.info("Scan complete.")
 
-    print(format_output(counts, args.output))  # noqa: T201
+    print(format_output(counts, args.output))
 
 
 if __name__ == "__main__":
