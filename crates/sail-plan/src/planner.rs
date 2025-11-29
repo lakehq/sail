@@ -21,6 +21,7 @@ use sail_data_source::default_registry;
 use sail_logical_plan::file_delete::FileDeleteNode;
 use sail_logical_plan::file_write::FileWriteNode;
 use sail_logical_plan::map_partitions::MapPartitionsNode;
+use sail_logical_plan::merge::MergeIntoNode;
 use sail_logical_plan::range::RangeNode;
 use sail_logical_plan::repartition::ExplicitRepartitionNode;
 use sail_logical_plan::schema_pivot::SchemaPivotNode;
@@ -33,6 +34,7 @@ use sail_logical_plan::streaming::source_wrapper::StreamSourceWrapperNode;
 use sail_physical_plan::file_delete::create_file_delete_physical_plan;
 use sail_physical_plan::file_write::create_file_write_physical_plan;
 use sail_physical_plan::map_partitions::MapPartitionsExec;
+use sail_physical_plan::merge::create_merge_physical_plan;
 use sail_physical_plan::range::RangeExec;
 use sail_physical_plan::repartition::ExplicitRepartitionExec;
 use sail_physical_plan::schema_pivot::SchemaPivotExec;
@@ -189,6 +191,23 @@ impl ExtensionPlanner for ExtensionPhysicalPlanner {
             }?;
             create_file_delete_physical_plan(session_state, planner, schema, node.options().clone())
                 .await?
+        } else if let Some(node) = node.as_any().downcast_ref::<MergeIntoNode>() {
+            let [logical_target, logical_source] = logical_inputs else {
+                return internal_err!("MergeIntoNode requires exactly two logical inputs");
+            };
+            let [physical_target, physical_source] = physical_inputs else {
+                return internal_err!("MergeIntoNode requires exactly two physical inputs");
+            };
+            create_merge_physical_plan(
+                session_state,
+                planner,
+                logical_target,
+                logical_source,
+                physical_target.clone(),
+                physical_source.clone(),
+                node,
+            )
+            .await?
         } else if let Some(node) = node.as_any().downcast_ref::<ExplicitRepartitionNode>() {
             let [input] = physical_inputs else {
                 return internal_err!(
