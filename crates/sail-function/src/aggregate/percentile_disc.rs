@@ -16,7 +16,7 @@ use datafusion::logical_expr::{Accumulator, AggregateUDFImpl, Signature, Volatil
 use datafusion::physical_expr::PhysicalExpr;
 use datafusion_common::DataFusionError;
 
-use crate::aggregate::percentile::extract_literal;
+use crate::aggregate::util::percentile::extract_literal;
 
 /// The `PercentileDiscFunction` calculates the discrete percentile (quantile) from a set of values.
 ///
@@ -265,11 +265,9 @@ impl Accumulator for NumericPercentileDiscAccumulator {
         }
 
         let array = &values[0];
-        // Igual que en update_batch: cast a Float64
         let float_array = arrow::compute::cast(array, &DataType::Float64)?;
         let float_array = as_float64_array(&float_array)?;
 
-        // Por cada valor que sale de la ventana, borra UNA ocurrencia
         for v in float_array.iter().flatten() {
             if let Some(pos) = self.values.iter().position(|x| *x == v) {
                 self.values.remove(pos);
@@ -332,6 +330,7 @@ impl Accumulator for StringPercentileDiscAccumulator {
 
         let array = &values[0];
 
+        // Update percentile value if provided as second argument
         if values.len() >= 2 {
             if let Some(percentile_array) =
                 values[1].as_primitive_opt::<arrow::datatypes::Float64Type>()
@@ -353,19 +352,16 @@ impl Accumulator for StringPercentileDiscAccumulator {
 
     fn evaluate(&mut self) -> Result<ScalarValue> {
         if self.values.is_empty() {
-            return Ok(ScalarValue::Utf8(None));
+            return match_string_type!(&self.data_type, None);
         }
 
+        // Sort values alphabetically
         let mut sorted_values = self.values.clone();
         sorted_values.sort();
 
         match self.calculate_percentile_disc(&sorted_values, self.percentile) {
-            Some(result) => match &self.data_type {
-                DataType::Utf8View => Ok(ScalarValue::Utf8View(Some(result))),
-                DataType::LargeUtf8 => Ok(ScalarValue::LargeUtf8(Some(result))),
-                _ => Ok(ScalarValue::Utf8(Some(result))),
-            },
-            None => Ok(ScalarValue::Utf8(None)),
+            Some(result) => match_string_type!(&self.data_type, Some(result)),
+            None => match_string_type!(&self.data_type, None),
         }
     }
 
@@ -415,6 +411,7 @@ impl Accumulator for StringPercentileDiscAccumulator {
             }
         }
 
+        // Update percentile from state if present
         if states.len() >= 2 {
             let percentile_array = as_float64_array(&states[1])?;
             if !percentile_array.is_empty() && !percentile_array.is_null(0) {
@@ -447,6 +444,7 @@ impl Accumulator for StringPercentileDiscAccumulator {
     }
 }
 
+/// Accumulator for interval/duration types
 #[derive(Debug)]
 pub struct IntervalPercentileDiscAccumulator {
     values: Vec<i64>,
@@ -560,26 +558,12 @@ impl Accumulator for IntervalPercentileDiscAccumulator {
     fn evaluate(&mut self) -> Result<ScalarValue> {
         if self.values.is_empty() {
             return match &self.data_type {
-                DataType::Interval(IntervalUnit::YearMonth) => {
-                    Ok(ScalarValue::IntervalYearMonth(None))
-                }
-                DataType::Interval(IntervalUnit::DayTime) => Ok(ScalarValue::IntervalDayTime(None)),
-                DataType::Interval(IntervalUnit::MonthDayNano) => {
-                    Ok(ScalarValue::IntervalMonthDayNano(None))
-                }
-                DataType::Duration(unit) => match unit {
-                    arrow::datatypes::TimeUnit::Second => Ok(ScalarValue::DurationSecond(None)),
-                    arrow::datatypes::TimeUnit::Millisecond => {
-                        Ok(ScalarValue::DurationMillisecond(None))
-                    }
-                    arrow::datatypes::TimeUnit::Microsecond => {
-                        Ok(ScalarValue::DurationMicrosecond(None))
-                    }
-                    arrow::datatypes::TimeUnit::Nanosecond => {
-                        Ok(ScalarValue::DurationNanosecond(None))
-                    }
-                },
-                _ => Ok(ScalarValue::Int64(None)),
+                DataType::Interval(unit) => interval_none!(unit),
+                DataType::Duration(unit) => duration_none!(unit),
+                _ => Err(datafusion::error::DataFusionError::Execution(format!(
+                    "Unsupported type {:?}",
+                    self.data_type
+                ))),
             };
         }
 

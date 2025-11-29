@@ -3,8 +3,8 @@ use std::fmt::Debug;
 use std::sync::Arc;
 
 use datafusion::arrow;
-use datafusion::arrow::array::{Array, ArrayRef, AsArray, RecordBatch, RecordBatchOptions};
-use datafusion::arrow::datatypes::{DataType, Field, Schema, SchemaRef};
+use datafusion::arrow::array::{Array, ArrayRef, AsArray};
+use datafusion::arrow::datatypes::DataType;
 use datafusion::common::cast::{as_float64_array, as_string_array};
 use datafusion::common::ScalarValue;
 use datafusion::error::Result;
@@ -12,51 +12,8 @@ use datafusion::logical_expr::function::{AccumulatorArgs, StateFieldsArgs};
 use datafusion::logical_expr::{Accumulator, AggregateUDFImpl, Signature, Volatility};
 use datafusion::physical_expr::PhysicalExpr;
 use datafusion_common::DataFusionError;
-use datafusion_expr_common::columnar_value::ColumnarValue;
 
-macro_rules! match_string_type {
-    ($data_type:expr, $value:expr) => {
-        match $data_type {
-            DataType::Utf8View => Ok(ScalarValue::Utf8View($value)),
-            DataType::LargeUtf8 => Ok(ScalarValue::LargeUtf8($value)),
-            _ => Ok(ScalarValue::Utf8($value)),
-        }
-    };
-}
-
-macro_rules! interval_none {
-    ($unit:expr) => {
-        match $unit {
-            datafusion::arrow::datatypes::IntervalUnit::YearMonth => {
-                Ok(ScalarValue::IntervalYearMonth(None))
-            }
-            datafusion::arrow::datatypes::IntervalUnit::DayTime => {
-                Ok(ScalarValue::IntervalDayTime(None))
-            }
-            datafusion::arrow::datatypes::IntervalUnit::MonthDayNano => {
-                Ok(ScalarValue::IntervalMonthDayNano(None))
-            }
-        }
-    };
-}
-
-/// Macro to handle Duration type matching for None values
-macro_rules! duration_none {
-    ($unit:expr) => {
-        match $unit {
-            datafusion::arrow::datatypes::TimeUnit::Second => Ok(ScalarValue::DurationSecond(None)),
-            datafusion::arrow::datatypes::TimeUnit::Millisecond => {
-                Ok(ScalarValue::DurationMillisecond(None))
-            }
-            datafusion::arrow::datatypes::TimeUnit::Microsecond => {
-                Ok(ScalarValue::DurationMicrosecond(None))
-            }
-            datafusion::arrow::datatypes::TimeUnit::Nanosecond => {
-                Ok(ScalarValue::DurationNanosecond(None))
-            }
-        }
-    };
-}
+use crate::aggregate::util::percentile::extract_literal;
 
 /// The `PercentileFunction` calculates the exact percentile (quantile) from a set of values.
 ///
@@ -124,28 +81,6 @@ impl AggregateUDFImpl for PercentileFunction {
         }
     }
 
-    fn state_fields(&self, args: StateFieldsArgs) -> Result<Vec<arrow::datatypes::FieldRef>> {
-        let value_type = args.input_fields[0].data_type().clone();
-
-        let storage_type = match &value_type {
-            DataType::Utf8 | DataType::Utf8View | DataType::LargeUtf8 => DataType::Utf8,
-            DataType::Interval(_) | DataType::Duration(_) => DataType::Int64,
-            _ => DataType::Float64,
-        };
-
-        let values_list_type = DataType::List(Arc::new(arrow::datatypes::Field::new(
-            "item",
-            storage_type,
-            true,
-        )));
-
-        Ok(vec![
-            arrow::datatypes::Field::new("values", values_list_type, true).into(),
-            arrow::datatypes::Field::new("percentile", DataType::Float64, false).into(),
-            arrow::datatypes::Field::new("data_type_id", DataType::UInt8, false).into(),
-        ])
-    }
-
     fn accumulator(&self, acc_args: AccumulatorArgs) -> Result<Box<dyn Accumulator>> {
         let data_type = &acc_args.exprs[0].data_type(acc_args.schema)?;
 
@@ -172,53 +107,30 @@ impl AggregateUDFImpl for PercentileFunction {
             _ => Ok(Box::new(NumericPercentileAccumulator::new(percentile))),
         }
     }
+
+    fn state_fields(&self, args: StateFieldsArgs) -> Result<Vec<arrow::datatypes::FieldRef>> {
+        let value_type = args.input_fields[0].data_type().clone();
+
+        let storage_type = match &value_type {
+            DataType::Utf8 | DataType::Utf8View | DataType::LargeUtf8 => DataType::Utf8,
+            DataType::Interval(_) | DataType::Duration(_) => DataType::Int64,
+            _ => DataType::Float64,
+        };
+
+        let values_list_type = DataType::List(Arc::new(arrow::datatypes::Field::new(
+            "item",
+            storage_type,
+            true,
+        )));
+
+        Ok(vec![
+            arrow::datatypes::Field::new("values", values_list_type, true).into(),
+            arrow::datatypes::Field::new("percentile", DataType::Float64, false).into(),
+            arrow::datatypes::Field::new("data_type_id", DataType::UInt8, false).into(),
+        ])
+    }
 }
 
-pub fn extract_literal(expr: &Arc<dyn PhysicalExpr>) -> Result<f64, DataFusionError> {
-    fn dummy_batch() -> Result<RecordBatch> {
-        let fields: Vec<Field> = Vec::new();
-        let schema: SchemaRef = Arc::new(Schema::new(fields));
-
-        RecordBatch::try_new_with_options(
-            schema,
-            Vec::new(),
-            &RecordBatchOptions::default().with_row_count(Some(1)),
-        )
-        .map_err(DataFusionError::from)
-    }
-
-    let batch = dummy_batch()?;
-    let col_val = expr.evaluate(&batch)?;
-    let scalar = match col_val {
-        ColumnarValue::Scalar(s) => s,
-        ColumnarValue::Array(arr) => ScalarValue::try_from_array(arr.as_ref(), 0)?,
-    };
-
-    fn scalar_to_f64(sv: &ScalarValue) -> Option<f64> {
-        match sv {
-            ScalarValue::Float64(Some(v)) => Some(*v),
-            ScalarValue::Float32(Some(v)) => Some(*v as f64),
-
-            ScalarValue::Int64(Some(v)) => Some(*v as f64),
-            ScalarValue::UInt64(Some(v)) => Some(*v as f64),
-            ScalarValue::Int32(Some(v)) => Some(*v as f64),
-            ScalarValue::UInt32(Some(v)) => Some(*v as f64),
-
-            ScalarValue::Decimal128(Some(v), _precision, scale) => {
-                Some((*v as f64) / 10f64.powi(*scale as i32))
-            }
-
-            _ => None,
-        }
-    }
-    let percentile: f64 = scalar_to_f64(&scalar).ok_or_else(|| {
-        DataFusionError::Execution(format!(
-            "Cannot convert percentile literal {:?} to f64",
-            scalar
-        ))
-    })?;
-    Ok(percentile)
-}
 #[derive(Debug)]
 pub struct NumericPercentileAccumulator {
     values: Vec<f64>,
@@ -287,6 +199,7 @@ impl Accumulator for NumericPercentileAccumulator {
 
         Ok(())
     }
+
     fn evaluate(&mut self) -> Result<ScalarValue> {
         if self.values.is_empty() {
             return Ok(ScalarValue::Float64(None));
@@ -443,6 +356,7 @@ impl Accumulator for StringPercentileAccumulator {
 
         Ok(())
     }
+
     fn evaluate(&mut self) -> Result<ScalarValue> {
         if self.values.is_empty() {
             return match_string_type!(&self.data_type, None);
@@ -531,6 +445,7 @@ impl Accumulator for StringPercentileAccumulator {
 
         Ok(())
     }
+
     fn supports_retract_batch(&self) -> bool {
         true
     }
