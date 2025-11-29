@@ -693,8 +693,14 @@
   description: The timeout in seconds for OTLP telemetry data export.
   experimental: true
 
-- key: telemetry.traces_export_millisecs
+- key: telemetry.traces_export_interval_secs
   type: number
-  default: "100"
-  description: The interval in milliseconds for exporting traces.
+  default: "5"
+  description: The interval in seconds for exporting traces.
+  experimental: true
+
+- key: telemetry.metrics_export_interval_secs
+  type: number
+  default: "5"
+  description: The interval in seconds for exporting metrics.
   experimental: true

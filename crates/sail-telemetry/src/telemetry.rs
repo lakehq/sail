@@ -11,7 +11,7 @@ use opentelemetry::{global, InstrumentationScope};
 use opentelemetry_appender_log::OpenTelemetryLogBridge;
 use opentelemetry_otlp::{LogExporter, Protocol, WithExportConfig};
 use opentelemetry_sdk::logs::SdkLoggerProvider;
-use opentelemetry_sdk::metrics::SdkMeterProvider;
+use opentelemetry_sdk::metrics::{PeriodicReader, SdkMeterProvider};
 use opentelemetry_sdk::Resource;
 use sail_common::config::{OtlpProtocol, TelemetryConfig};
 
@@ -78,7 +78,7 @@ fn init_traces(config: &TelemetryConfig, _: &mut TelemetryState) -> TelemetryRes
             default_instrumentation_scope(),
         );
         let reporter_config = Config::default()
-            .report_interval(Duration::from_millis(config.traces_export_millisecs));
+            .report_interval(Duration::from_secs(config.traces_export_interval_secs));
         fastrace::set_reporter(reporter, reporter_config)
     } else {
         let reporter_config = Config::default().report_interval(Duration::MAX);
@@ -96,8 +96,11 @@ fn init_metrics(config: &TelemetryConfig, state: &mut TelemetryState) -> Telemet
         .with_protocol(get_otlp_protocol(&config.otlp_protocol))
         .with_timeout(Duration::from_secs(config.otlp_timeout_secs))
         .build()?;
+    let reader = PeriodicReader::builder(exporter)
+        .with_interval(Duration::from_secs(config.metrics_export_interval_secs))
+        .build();
     let provider = SdkMeterProvider::builder()
-        .with_periodic_exporter(exporter)
+        .with_reader(reader)
         .with_resource(default_resource())
         .build();
     global::set_meter_provider(provider.clone());

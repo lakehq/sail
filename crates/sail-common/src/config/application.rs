@@ -322,7 +322,8 @@ pub struct TelemetryConfig {
     pub otlp_endpoint: String,
     pub otlp_protocol: OtlpProtocol,
     pub otlp_timeout_secs: u64,
-    pub traces_export_millisecs: u64,
+    pub traces_export_interval_secs: u64,
+    pub metrics_export_interval_secs: u64,
 }
 
 #[derive(Debug, Clone, Deserialize)]

@@ -3,7 +3,7 @@
   "private": true,
   "scripts": {
     "lint": "vue-tsc --noEmit && eslint docs",
-    "format": "prettier ${FORMAT_OPTIONS---write} \"*.{js,json,yml,yaml,md}\" \".github/**/*.{yml,yaml,cjs}\" \"docs/**/*.{ts,mts,vue,css,md,json,yml,yaml}\"",
+    "format": "prettier ${FORMAT_OPTIONS---write} \"*.{js,json,yml,yaml,md}\" \".github/**/*.{yml,yaml,cjs}\" \"docs/**/*.{ts,mts,vue,css,md,json,yml,yaml}\" \"deployments/**/*.{json,yml,yaml}\"",
     "docs:dev": "vitepress dev docs",
     "docs:build": "vitepress build docs",
     "docs:preview": "vitepress preview docs"
