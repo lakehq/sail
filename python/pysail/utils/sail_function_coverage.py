@@ -5,6 +5,7 @@ import re
 from collections import Counter
 from pathlib import Path
 from typing import TYPE_CHECKING, Iterable
+import requests
 
 from markdown_it import MarkdownIt
 
@@ -14,24 +15,14 @@ if TYPE_CHECKING:
     from markdown_it.token import Token
 
 
-def load_markdown(md_file_paths: Iterable[Path]) -> str:
+def load_markdown(md_file_urls: Iterable[str]) -> str:
     """Load Markdown content from a list of .md files."""
 
     md_str = []
-    for md_file_path in md_file_paths:
-        base = Path(md_file_path)
-        if not md_file_path.exists():
-            msg = "Path not found: %s"
-            raise FileNotFoundError(msg, md_file_path)
-
-        if md_file_path.suffix == ".md" and md_file_path.is_file():
-            md_str.append(base.read_text(encoding="utf-8"))
-
-        md_str.extend(
-            p.read_text(encoding="utf-8")
-            for p in md_file_path.rglob("*.md")
-            if p.is_file()
-        )
+    for url in md_file_urls:
+        resp = requests.get(url, timeout=10)
+        resp.raise_for_status()
+        md_str.append(resp.text)
 
     return "\n".join(md_str)
 
@@ -107,10 +98,10 @@ def postprocess_tables(tables: list[list[list[str]]]) -> dict[str, str]:
     return result
 
 
-def extract_function_coverage_from_md(md_file_paths: Iterable[Path]) -> dict[str, str]:
+def extract_function_coverage_from_md(md_file_urls: Iterable[str]) -> dict[str, str]:
     """Parse Markdown and extract function coverage tables."""
 
-    md_str = load_markdown(md_file_paths)
+    md_str = load_markdown(md_file_urls)
     md = MarkdownIt("commonmark").enable("table")
     tokens = md.parse(md_str)
     tables = extract_tables_from_tokens(tokens)
@@ -124,10 +115,10 @@ def check_sail_function_coverage(repo_path: Path) -> Counter[tuple[str, str, str
             ("pyspark.sql.functions", function_name): label
             for function_name, label in extract_function_coverage_from_md(
                 [
-                    Path("docs/guide/functions/aggregate.md"),
-                    Path("docs/guide/functions/generator.md"),
-                    Path("docs/guide/functions/scalar.md"),
-                    Path("docs/guide/functions/window.md"),
+                    "https://raw.githubusercontent.com/lakehq/sail/refs/heads/main/docs/guide/functions/aggregate.md",
+                    "https://raw.githubusercontent.com/lakehq/sail/refs/heads/main/docs/guide/functions/generator.md",
+                    "https://raw.githubusercontent.com/lakehq/sail/refs/heads/main/docs/guide/functions/scalar.md",
+                    "https://raw.githubusercontent.com/lakehq/sail/refs/heads/main/docs/guide/functions/window.md",
                 ]
             ).items()
         },
@@ -135,7 +126,7 @@ def check_sail_function_coverage(repo_path: Path) -> Counter[tuple[str, str, str
             ("pyspark.sql.DataFrame", function_name): label
             for function_name, label in extract_function_coverage_from_md(
                 [
-                    Path("docs/guide/dataframe/features.md"),
+                    "https://raw.githubusercontent.com/lakehq/sail/refs/heads/main/docs/guide/dataframe/features.md",
                 ]
             ).items()
         },
@@ -143,7 +134,7 @@ def check_sail_function_coverage(repo_path: Path) -> Counter[tuple[str, str, str
             ("pyspark.sql.session.SparkSession", function_name): label
             for function_name, label in extract_function_coverage_from_md(
                 [
-                    Path("docs/guide/functions/table.md"),
+                    "https://raw.githubusercontent.com/lakehq/sail/refs/heads/main/docs/guide/functions/table.md",
                 ]
             ).items()
         },

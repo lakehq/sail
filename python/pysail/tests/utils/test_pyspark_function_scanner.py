@@ -16,13 +16,13 @@ def test_import_module_with_alias(tmp_path):
     )
     path = tmp_path / "snippet.py"
     path.write_text(code, encoding="utf-8")
-    assert Counter(
+    assert scan_file(path) == Counter(
         {
             ("pyspark.sql.functions", "col"): 1,
             ("pyspark.sql.functions", "when"): 1,
             ("pyspark.sql.Window", "partitionBy"): 1,
         }
-    ) == scan_file(path)
+    )
 
 
 def test_import_function_directly(tmp_path):
@@ -34,11 +34,11 @@ def test_import_function_directly(tmp_path):
     )
     path = tmp_path / "snippet.py"
     path.write_text(code, encoding="utf-8")
-    assert Counter(
+    assert scan_file(path) == Counter(
         {
             ("pyspark.sql.functions", "lit"): 1,
         }
-    ) == scan_file(path)
+    )
 
 
 def test_import_whole_module(tmp_path):
@@ -53,13 +53,13 @@ def test_import_whole_module(tmp_path):
     )
     path = tmp_path / "snippet.py"
     path.write_text(code, encoding="utf-8")
-    assert Counter(
+    assert scan_file(path) == Counter(
         {
             ("pyspark.sql.functions", "lit"): 1,
             ("pyspark.sql.Window", "partitionBy"): 1,
             ("pyspark.sql.Window", "orderBy"): 1,
         }
-    ) == scan_file(path)
+    )
 
 
 def test_import_star_wildcard(tmp_path):
@@ -72,12 +72,12 @@ def test_import_star_wildcard(tmp_path):
     )
     path = tmp_path / "snippet.py"
     path.write_text(code, encoding="utf-8")
-    assert Counter(
+    assert scan_file(path) == Counter(
         {
             ("pyspark.sql.functions", "lit"): 1,
             ("pyspark.sql.functions", "col"): 1,
         }
-    ) == scan_file(path)
+    )
 
 
 def test_infer_structtype(tmp_path):
@@ -96,13 +96,13 @@ def test_infer_structtype(tmp_path):
     )
     path = tmp_path / "snippet.py"
     path.write_text(code, encoding="utf-8")
-    assert Counter(
+    assert scan_file(path) == Counter(
         {
             # ("pyspark.sql.types.StructType", "fromJson"): 1,  # is not recognized yet...
             ("pyspark.sql.types.StructType", "simpleString"): 1,
             ("pyspark.sql.types.StructType", "jsonValue"): 1,
         }
-    ) == scan_file(path)
+    )
 
 
 def test_infer_column(tmp_path):
@@ -124,7 +124,7 @@ def test_infer_column(tmp_path):
     )
     path = tmp_path / "snippet.py"
     path.write_text(code, encoding="utf-8")
-    assert Counter(
+    assert scan_file(path) == Counter(
         {
             ("pyspark.sql.Column", "cast"): 1,
             ("pyspark.sql.Column", "endswith"): 1,
@@ -139,7 +139,7 @@ def test_infer_column(tmp_path):
             ("pyspark.sql.session.SparkSession", "getOrCreate"): 1,
             ("pyspark.sql.session.SparkSession", "range"): 1,
         }
-    ) == scan_file(path)
+    )
 
 
 def test_infer_dataframe_agg(tmp_path):
@@ -159,7 +159,7 @@ def test_infer_dataframe_agg(tmp_path):
     )
     path = tmp_path / "snippet.py"
     path.write_text(code, encoding="utf-8")
-    assert Counter(
+    assert scan_file(path) == Counter(
         {
             ("pyspark.sql.DataFrame", "agg"): 2,
             ("pyspark.sql.DataFrame", "show"): 2,
@@ -169,7 +169,7 @@ def test_infer_dataframe_agg(tmp_path):
             ("pyspark.sql.session.SparkSession", "createDataFrame"): 1,
             ("pyspark.sql.session.SparkSession", "getOrCreate"): 1,
         }
-    ) == scan_file(path)
+    )
 
 
 def test_scan_directory(tmp_path):
@@ -186,10 +186,10 @@ def test_scan_directory(tmp_path):
         path = tmp_path / f"snippet_{i}.py"
         path.write_text(code, encoding="utf-8")
 
-    assert Counter(
+    assert scan_directory(tmp_path) == Counter(
         {
             ("pyspark.sql.functions", "col"): 15,
             ("pyspark.sql.functions", "when"): 15,
             ("pyspark.sql.Window", "partitionBy"): 15,
         }
-    ) == scan_directory(tmp_path)
+    )

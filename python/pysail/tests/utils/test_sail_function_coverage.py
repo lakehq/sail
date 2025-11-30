@@ -1,7 +1,7 @@
 from inspect import cleandoc
 
 from markdown_it import MarkdownIt
-
+from unittest.mock import patch
 from pysail.utils.sail_function_coverage import (
     check_sail_function_coverage,
     extract_function_coverage_from_md,
@@ -39,7 +39,7 @@ def test_extract_tables():
         [["A", "B"], ["1", "3"], ["2", "4"]],
         [["C", "D", "E"], ["1", "3", "5"], ["2", "4", "6"]],
     ]
-    assert expected == extract_tables_from_tokens(tokens)
+    assert extract_tables_from_tokens(tokens) == expected
 
 
 def test_postprocess_table():
@@ -59,36 +59,40 @@ def test_postprocess_table():
         "bar": "❔ unknown",
     }
 
-    assert expected == postprocess_tables([table])
+    assert postprocess_tables([table]) == expected
 
 
-def test_extract_function_coverage_from_md(tmp_path):
-    md_file_1_content = cleandoc(
-        """
-        # Scalar Functions (1)
+def test_extract_function_coverage_from_md():
+    def _md_content():
+        return cleandoc(
+            """
+            # Scalar Functions (1)
 
-        | Function | Support |
-        | - | - |
-        | `len` | :white_check_mark: |
+            | Function | Support |
+            | - | - |
+            | `len` | :white_check_mark: |
 
-        # Scalar Functions (2)
+            # Scalar Functions (2)
 
-        | Function | Support |
-        | - | - |
-        | `lower` | :x: |
-        | `rtrim` | :construction: |
-        """
-    )
-    md_file_1 = tmp_path / "scalar.md"
-    md_file_1.write_text(md_file_1_content, encoding="utf-8")
+            | Function | Support |
+            | - | - |
+            | `lower` | :x: |
+            | `rtrim` | :construction: |
+            """
+        )
+
+    with patch(
+        target="pysail.utils.sail_function_coverage.load_markdown",
+        return_value=_md_content(),
+    ):
+        result = extract_function_coverage_from_md(["https://ignored.example/md.md"])
 
     expected = {
         "len": "✅ supported",
         "lower": "❌ not supported",
         "rtrim": "🚧 in progress",
     }
-    # result = extract_function_coverage_from_md(tmp_path)
-    assert expected == extract_function_coverage_from_md([tmp_path])
+    assert result == expected
 
 
 def test_check_sail_function_coverage(tmp_path):
@@ -113,4 +117,4 @@ def test_check_sail_function_coverage(tmp_path):
         ("pyspark.sql.session.SparkSession", "getOrCreate", "❔ unknown"): 1,
         ("pyspark.sql.session.SparkSession", "range", "✅ supported"): 1,
     }
-    assert expected == check_sail_function_coverage(tmp_path)
+    assert check_sail_function_coverage(tmp_path) == expected
