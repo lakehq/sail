@@ -4,8 +4,8 @@ from pathlib import Path
 
 from pysail.utils.logging_config import setup_logging
 from pysail.utils.sail_function_coverage import (
-    check_sail_function_coverage,
-    format_output,
+    _check_sail_function_coverage,
+    _format_output,
 )
 
 setup_logging()
@@ -37,10 +37,10 @@ def main() -> None:
 
     logger.info("Scanning: %s", base_dir)
 
-    counts = check_sail_function_coverage(base_dir)
+    counts = _check_sail_function_coverage(base_dir)
     logger.info("Scan complete.")
 
-    print(format_output(counts, args.output))
+    print(_format_output(counts, args.output))
 
 
 if __name__ == "__main__":

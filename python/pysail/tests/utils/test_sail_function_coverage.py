@@ -3,10 +3,10 @@ from inspect import cleandoc
 from markdown_it import MarkdownIt
 from unittest.mock import patch
 from pysail.utils.sail_function_coverage import (
-    check_sail_function_coverage,
-    extract_function_coverage_from_md,
-    extract_tables_from_tokens,
-    postprocess_tables,
+    _check_sail_function_coverage,
+    _extract_function_coverage_from_md,
+    _extract_tables_from_tokens,
+    _postprocess_tables,
 )
 
 
@@ -39,7 +39,7 @@ def test_extract_tables():
         [["A", "B"], ["1", "3"], ["2", "4"]],
         [["C", "D", "E"], ["1", "3", "5"], ["2", "4", "6"]],
     ]
-    assert extract_tables_from_tokens(tokens) == expected
+    assert _extract_tables_from_tokens(tokens) == expected
 
 
 def test_postprocess_table():
@@ -59,7 +59,7 @@ def test_postprocess_table():
         "bar": "❔ unknown",
     }
 
-    assert postprocess_tables([table]) == expected
+    assert _postprocess_tables([table]) == expected
 
 
 def test_extract_function_coverage_from_md():
@@ -82,10 +82,10 @@ def test_extract_function_coverage_from_md():
         )
 
     with patch(
-        target="pysail.utils.sail_function_coverage.load_markdown",
+        target="pysail.utils.sail_function_coverage._load_markdown",
         return_value=_md_content(),
     ):
-        result = extract_function_coverage_from_md(["https://ignored.example/md.md"])
+        result = _extract_function_coverage_from_md(["https://ignored.example/md.md"])
 
     expected = {
         "len": "✅ supported",
@@ -117,4 +117,4 @@ def test_check_sail_function_coverage(tmp_path):
         ("pyspark.sql.session.SparkSession", "getOrCreate", "❔ unknown"): 1,
         ("pyspark.sql.session.SparkSession", "range", "✅ supported"): 1,
     }
-    assert check_sail_function_coverage(tmp_path) == expected
+    assert _check_sail_function_coverage(tmp_path) == expected

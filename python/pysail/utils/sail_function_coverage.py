@@ -9,13 +9,13 @@ import requests
 
 from markdown_it import MarkdownIt
 
-from python.pysail.utils.pyspark_function_scanner import scan_directory
+from pysail.utils.pyspark_function_scanner import _scan_directory
 
 if TYPE_CHECKING:
     from markdown_it.token import Token
 
 
-def load_markdown(md_file_urls: Iterable[str]) -> str:
+def _load_markdown(md_file_urls: Iterable[str]) -> str:
     """Load Markdown content from a list of .md files."""
 
     md_str = []
@@ -27,7 +27,7 @@ def load_markdown(md_file_urls: Iterable[str]) -> str:
     return "\n".join(md_str)
 
 
-def extract_tables_from_tokens(tokens: list[Token]) -> list[list[list[str]]]:
+def _extract_tables_from_tokens(tokens: list[Token]) -> list[list[list[str]]]:
     """Extract tables as lists of rows and cells from markdown-it tokens."""
 
     tables = []
@@ -59,7 +59,7 @@ def extract_tables_from_tokens(tokens: list[Token]) -> list[list[list[str]]]:
     return tables
 
 
-def extract_function_name(text: str) -> list[str]:
+def _extract_function_name(text: str) -> list[str]:
     """
     Extract function names from markdown table cell text.
     If functions are qualified (e.g., module.function), only the function name is returned.
@@ -68,7 +68,7 @@ def extract_function_name(text: str) -> list[str]:
     return [func.split(".")[-1].replace("()", "") for func in functions]
 
 
-def decode_md_support_label(label: str) -> str:
+def _decode_md_support_label(label: str) -> str:
     """Decode markdown emoji-style support labels into readable status strings."""
 
     stripped_label = label.strip()
@@ -85,35 +85,35 @@ def decode_md_support_label(label: str) -> str:
     return "❔ unknown"
 
 
-def postprocess_tables(tables: list[list[list[str]]]) -> dict[str, str]:
+def _postprocess_tables(tables: list[list[list[str]]]) -> dict[str, str]:
     """Map parsed tables to function support statuses."""
 
     result = {}
 
     for table in tables:
         for fn_cell, label_cell in table[1:]:  # skip header row
-            for key in extract_function_name(fn_cell):
-                result[key] = decode_md_support_label(label_cell)
+            for key in _extract_function_name(fn_cell):
+                result[key] = _decode_md_support_label(label_cell)
 
     return result
 
 
-def extract_function_coverage_from_md(md_file_urls: Iterable[str]) -> dict[str, str]:
+def _extract_function_coverage_from_md(md_file_urls: Iterable[str]) -> dict[str, str]:
     """Parse Markdown and extract function coverage tables."""
 
-    md_str = load_markdown(md_file_urls)
+    md_str = _load_markdown(md_file_urls)
     md = MarkdownIt("commonmark").enable("table")
     tokens = md.parse(md_str)
-    tables = extract_tables_from_tokens(tokens)
-    return postprocess_tables(tables)
+    tables = _extract_tables_from_tokens(tokens)
+    return _postprocess_tables(tables)
 
 
-def check_sail_function_coverage(repo_path: Path) -> Counter[tuple[str, str, str]]:
+def _check_sail_function_coverage(repo_path: Path) -> Counter[tuple[str, str, str]]:
     """Scan a directory for PySpark function usage and cross-refernce it with sail docs for compatibility."""
     sail_coverage = {
         **{
             ("pyspark.sql.functions", function_name): label
-            for function_name, label in extract_function_coverage_from_md(
+            for function_name, label in _extract_function_coverage_from_md(
                 [
                     "https://raw.githubusercontent.com/lakehq/sail/refs/heads/main/docs/guide/functions/aggregate.md",
                     "https://raw.githubusercontent.com/lakehq/sail/refs/heads/main/docs/guide/functions/generator.md",
@@ -124,7 +124,7 @@ def check_sail_function_coverage(repo_path: Path) -> Counter[tuple[str, str, str
         },
         **{
             ("pyspark.sql.DataFrame", function_name): label
-            for function_name, label in extract_function_coverage_from_md(
+            for function_name, label in _extract_function_coverage_from_md(
                 [
                     "https://raw.githubusercontent.com/lakehq/sail/refs/heads/main/docs/guide/dataframe/features.md",
                 ]
@@ -132,7 +132,7 @@ def check_sail_function_coverage(repo_path: Path) -> Counter[tuple[str, str, str
         },
         **{
             ("pyspark.sql.session.SparkSession", function_name): label
-            for function_name, label in extract_function_coverage_from_md(
+            for function_name, label in _extract_function_coverage_from_md(
                 [
                     "https://raw.githubusercontent.com/lakehq/sail/refs/heads/main/docs/guide/functions/table.md",
                 ]
@@ -140,7 +140,7 @@ def check_sail_function_coverage(repo_path: Path) -> Counter[tuple[str, str, str
         },
     }
 
-    pyspark_function_usage = scan_directory(repo_path)
+    pyspark_function_usage = _scan_directory(repo_path)
 
     counter: Counter[tuple[str, str, str]] = Counter()
     for key, count in pyspark_function_usage.items():
@@ -149,7 +149,7 @@ def check_sail_function_coverage(repo_path: Path) -> Counter[tuple[str, str, str
     return counter
 
 
-def format_output(counts: Counter[tuple[str, str, str]], fmt: str) -> str:
+def _format_output(counts: Counter[tuple[str, str, str]], fmt: str) -> str:
     """Format results as text, CSV or JSON."""
     if fmt == "json":
         results = [
