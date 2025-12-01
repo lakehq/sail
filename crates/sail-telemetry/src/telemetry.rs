@@ -10,7 +10,7 @@ use log::Log;
 use opentelemetry::{global, InstrumentationScope};
 use opentelemetry_appender_log::OpenTelemetryLogBridge;
 use opentelemetry_otlp::{LogExporter, Protocol, WithExportConfig};
-use opentelemetry_sdk::logs::SdkLoggerProvider;
+use opentelemetry_sdk::logs::{BatchConfigBuilder, BatchLogProcessor, SdkLoggerProvider};
 use opentelemetry_sdk::metrics::{PeriodicReader, SdkMeterProvider};
 use opentelemetry_sdk::Resource;
 use sail_common::config::{OtlpProtocol, TelemetryConfig};
@@ -132,8 +132,22 @@ fn init_logs(config: &TelemetryConfig, state: &mut TelemetryState) -> TelemetryR
             .with_protocol(get_otlp_protocol(&config.otlp_protocol))
             .with_timeout(Duration::from_secs(config.otlp_timeout_secs))
             .build()?;
+        let batch_config = BatchConfigBuilder::default()
+            .with_scheduled_delay(Duration::from_secs(config.logs_export_interval_secs))
+            .with_max_queue_size(
+                usize::try_from(config.logs_export_max_queue_size)
+                    .map_err(|_| TelemetryError::invalid("logs export max queue size"))?,
+            )
+            .with_max_export_batch_size(
+                usize::try_from(config.logs_export_batch_size)
+                    .map_err(|_| TelemetryError::invalid("logs export batch size"))?,
+            )
+            .build();
+        let processor = BatchLogProcessor::builder(exporter)
+            .with_batch_config(batch_config)
+            .build();
         let provider = SdkLoggerProvider::builder()
-            .with_batch_exporter(exporter)
+            .with_log_processor(processor)
             .with_resource(default_resource())
             .build();
         secondary.push(Box::new(OpenTelemetryLogBridge::new(&provider)));

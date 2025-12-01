@@ -10,6 +10,9 @@ use datafusion::physical_plan::display::DisplayableExecutionPlan;
 use datafusion::physical_plan::ExecutionPlan;
 use datafusion_proto::physical_plan::AsExecutionPlan;
 use datafusion_proto::protobuf::PhysicalPlanNode;
+use fastrace::future::FutureExt;
+use fastrace::prelude::SpanContext;
+use fastrace::Span;
 use log::{debug, error, info, warn};
 use prost::Message;
 use sail_common_datafusion::error::CommonErrorCause;
@@ -59,7 +62,9 @@ impl WorkerActor {
                 .run(|| {
                     let client = client.clone();
                     let host = host.clone();
-                    async move { client.register_worker(worker_id, host, port).await }
+                    let root = Span::root("worker ready", SpanContext::random())
+                        .with_property(|| ("worker_id", worker_id.to_string()));
+                    async move { client.register_worker(worker_id, host, port).await }.in_span(root)
                 })
                 .await
             {

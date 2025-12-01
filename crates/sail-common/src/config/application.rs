@@ -324,6 +324,9 @@ pub struct TelemetryConfig {
     pub otlp_timeout_secs: u64,
     pub traces_export_interval_secs: u64,
     pub metrics_export_interval_secs: u64,
+    pub logs_export_interval_secs: u64,
+    pub logs_export_max_queue_size: u64,
+    pub logs_export_batch_size: u64,
 }
 
 #[derive(Debug, Clone, Deserialize)]

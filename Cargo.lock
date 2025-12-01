@@ -2749,6 +2749,18 @@ dependencies = [
 ]
 
 [[package]]
+name = "fastrace-tonic"
+version = "0.1.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "9bfe91596cd82e4b4fbd390f0e789fe3cf327b635fa713347f1509db97aa482c"
+dependencies = [
+ "fastrace",
+ "http 1.4.0",
+ "tower-layer",
+ "tower-service",
+]
+
+[[package]]
 name = "fastrand"
 version = "2.3.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -5898,6 +5910,8 @@ dependencies = [
  "datafusion-functions-json",
  "datafusion-proto",
  "datafusion-spark",
+ "fastrace",
+ "fastrace-tonic",
  "futures",
  "k8s-openapi",
  "kube",
@@ -5923,6 +5937,7 @@ dependencies = [
  "tonic-prost",
  "tonic-prost-build",
  "tonic-types",
+ "tower",
  "url",
 ]
 
@@ -6152,6 +6167,7 @@ name = "sail-server"
 version = "0.4.3"
 dependencies = [
  "axum",
+ "fastrace-tonic",
  "log",
  "sail-common",
  "sail-telemetry",
@@ -6273,8 +6289,6 @@ dependencies = [
  "opentelemetry_sdk",
  "sail-common",
  "thiserror",
- "tonic",
- "tower",
 ]
 
 [[package]]

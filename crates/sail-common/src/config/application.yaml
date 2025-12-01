@@ -704,3 +704,25 @@
   default: "5"
   description: The interval in seconds for exporting metrics.
   experimental: true
+
+- key: telemetry.logs_export_interval_secs
+  type: number
+  default: "1"
+  description: The interval in seconds for exporting logs.
+  experimental: true
+
+- key: telemetry.logs_export_max_queue_size
+  type: number
+  default: "65536"
+  description: |
+    The maximum number of log records to queue for exporting.
+    The log record will be dropped if the queue gets full between export intervals.
+  experimental: true
+
+- key: telemetry.logs_export_batch_size
+  type: number
+  default: "512"
+  description: |
+    The batch size for exporting logs. Multiple batches may be sent in each export interval
+    if the number of queued log records exceeds the batch size.
+  experimental: true

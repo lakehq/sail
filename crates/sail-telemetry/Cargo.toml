@@ -10,8 +10,6 @@ workspace = true
 sail-common = { path = "../sail-common" }
 
 thiserror = { workspace = true }
-tonic = { workspace = true }
-tower = { workspace = true }
 env_logger = { workspace = true }
 fastrace = { workspace = true }
 fastrace-opentelemetry = { workspace = true }
