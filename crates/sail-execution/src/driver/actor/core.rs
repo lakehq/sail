@@ -4,6 +4,8 @@ use std::sync::Arc;
 
 use datafusion::prelude::SessionContext;
 use datafusion_proto::physical_plan::PhysicalExtensionCodec;
+use fastrace::future::FutureExt;
+use fastrace::{func_path, trace, Span};
 use log::{error, info};
 use sail_server::actor::{Actor, ActorAction, ActorContext};
 
@@ -59,13 +61,17 @@ impl Actor for DriverActor {
         }
     }
 
+    #[trace]
     async fn start(&mut self, ctx: &mut ActorContext<Self>) {
         let addr = (
             self.options().driver_listen_host.clone(),
             self.options().driver_listen_port,
         );
         let server = mem::take(&mut self.server);
-        self.server = server.start(Self::serve(ctx.handle().clone(), addr)).await;
+        let span = Span::enter_with_local_parent(func_path!());
+        self.server = server
+            .start(Self::serve(ctx.handle().clone(), addr).in_span(span))
+            .await;
     }
 
     fn receive(&mut self, ctx: &mut ActorContext<Self>, message: DriverEvent) -> ActorAction {

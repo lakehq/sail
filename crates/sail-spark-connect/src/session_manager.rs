@@ -10,6 +10,8 @@ use datafusion::execution::cache::cache_manager::{
 use datafusion::execution::runtime_env::RuntimeEnvBuilder;
 use datafusion::execution::SessionStateBuilder;
 use datafusion::prelude::{SessionConfig, SessionContext};
+use fastrace::prelude::SpanContext;
+use fastrace::{func_path, Span};
 use log::{debug, info};
 use sail_cache::file_listing_cache::MokaFileListingCache;
 use sail_cache::file_metadata_cache::MokaFileMetadataCache;
@@ -359,6 +361,8 @@ impl SessionManagerActor {
         } else {
             let key = key.clone();
             info!("creating session {key}");
+            let span = Span::root(func_path!(), SpanContext::random());
+            let _guard = span.set_local_parent();
             match self.create_session_context(system, key.clone()) {
                 Ok(context) => {
                     self.sessions.insert(key, context.clone());
