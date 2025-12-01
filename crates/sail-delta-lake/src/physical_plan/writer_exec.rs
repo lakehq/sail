@@ -755,12 +755,20 @@ impl DeltaWriterExec {
             match table_schema.field_with_name(input_field.name()) {
                 Ok(table_field) => {
                     if table_field.data_type() != input_field.data_type() {
-                        return Err(DataFusionError::Plan(format!(
-                            "Schema mismatch for field '{}': table has type {:?}, input has type {:?}. Use mergeSchema=true to allow schema evolution.",
-                            input_field.name(),
+                        if DeltaTypeConverter::validate_cast_safety(
+                            input_field.data_type(),
                             table_field.data_type(),
-                            input_field.data_type()
-                        )));
+                            input_field.name(),
+                        )
+                        .is_err()
+                        {
+                            return Err(DataFusionError::Plan(format!(
+                                "Schema mismatch for field '{}': table has type {:?}, input has type {:?}. Use mergeSchema=true to allow schema evolution.",
+                                input_field.name(),
+                                table_field.data_type(),
+                                input_field.data_type()
+                            )));
+                        }
                     }
                 }
                 Err(_) => {
