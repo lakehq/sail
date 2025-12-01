@@ -20,7 +20,9 @@ pub mod physical_plan;
 pub mod schema;
 pub mod storage;
 pub mod table;
+pub mod table_format;
 
 pub use table::create_delta_provider;
+pub use table_format::DeltaTableFormat;
 
 pub use crate::error::{DeltaError, DeltaError as DeltaTableError, DeltaResult, KernelError};

@@ -9,6 +9,7 @@ use datafusion_proto::physical_plan::PhysicalExtensionCodec;
 use log::info;
 use sail_object_store::DynamicObjectStoreRegistry;
 use sail_server::actor::{Actor, ActorAction, ActorContext};
+use sail_session::formats::create_table_format_registry;
 use tokio::sync::oneshot;
 
 use crate::codec::RemoteExecutionCodec;
@@ -179,7 +180,7 @@ impl WorkerActor {
                 RuntimeEnvBuilder::default().with_object_store_registry(Arc::new(registry));
             Arc::new(builder.build()?)
         };
-        let config = SessionConfig::default();
+        let config = SessionConfig::default().with_extension(create_table_format_registry());
         let state = SessionStateBuilder::new()
             .with_config(config)
             .with_runtime_env(runtime)
