@@ -18,7 +18,6 @@ sail-iceberg = { path = "../sail-iceberg" }
 sail-function = { path = "../sail-function" }
 sail-logical-plan = { path = "../sail-logical-plan" }
 sail-physical-plan = { path = "../sail-physical-plan" }
-sail-session = { path = "../sail-session" }
 
 thiserror = { workspace = true }
 tokio = { workspace = true }
