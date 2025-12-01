@@ -45,7 +45,7 @@ use sail_common_datafusion::datasource::PhysicalSinkMode;
 use url::Url;
 
 use crate::conversion::DeltaTypeConverter;
-use crate::kernel::models::{Action, Metadata, Protocol};
+use crate::kernel::models::{contains_timestampntz, Action, Metadata, Protocol};
 // TODO: Follow upstream for `MetadataExt`.
 use crate::kernel::{DeltaOperation, SaveMode};
 use crate::operations::write::writer::{DeltaWriter, WriterConfig};
@@ -230,6 +230,12 @@ impl ExecutionPlan for DeltaWriterExec {
         let input_schema = self.input.schema();
         let condition = self.condition.clone();
         // let sink_schema = self.sink_schema.clone();
+        let session_timezone = context
+            .session_config()
+            .options()
+            .execution
+            .time_zone
+            .clone();
 
         let schema = self.schema();
         let future = async move {
@@ -238,6 +244,7 @@ impl ExecutionPlan for DeltaWriterExec {
                 write_batch_size,
                 ..
             } = &options;
+            let timezone = session_timezone;
 
             let storage_config = StorageConfig;
             let object_store = get_object_store_from_context(&context, &table_url)?;
@@ -370,73 +377,111 @@ impl ExecutionPlan for DeltaWriterExec {
                 ColumnMappingModeOption::None => ColumnMappingMode::None,
             };
 
-            // If creating a new table and column mapping mode is requested, prepare initial protocol+metadata
+            // If creating a new table and column mapping or timestampNtz features are required,
+            // prepare initial protocol+metadata
             let mut annotated_schema_opt: Option<StructType> = None;
-            if !table_exists
-                && matches!(
-                    effective_mode,
-                    ColumnMappingModeOption::Name | ColumnMappingModeOption::Id
-                )
-            {
-                // Build annotated kernel schema
+            if !table_exists {
+                // Build kernel schema for feature detection
                 let kernel_schema: StructType = final_schema
                     .as_ref()
                     .try_into_kernel()
                     .map_err(|e| DataFusionError::External(Box::new(e)))?;
-                let annotated_schema = annotate_for_column_mapping(&kernel_schema);
-                annotated_schema_opt = Some(annotated_schema.clone());
+                let has_timestamp_ntz = contains_timestampntz(kernel_schema.fields());
 
-                // Protocol and features for column mapping
-                #[allow(clippy::unwrap_used)]
-                let protocol: Protocol = serde_json::from_value(serde_json::json!({
-                    "minReaderVersion": 3,
-                    "minWriterVersion": 7,
-                    "readerFeatures": ["columnMapping"],
-                    "writerFeatures": ["columnMapping"]
-                }))
-                .unwrap();
+                if matches!(
+                    effective_mode,
+                    ColumnMappingModeOption::Name | ColumnMappingModeOption::Id
+                ) {
+                    let annotated_schema = annotate_for_column_mapping(&kernel_schema);
+                    annotated_schema_opt = Some(annotated_schema.clone());
 
-                let mut configuration = HashMap::new();
-                let mode_str = match effective_mode {
-                    ColumnMappingModeOption::Name => "name",
-                    ColumnMappingModeOption::Id => "id",
-                    ColumnMappingModeOption::None => "none",
-                };
-                configuration.insert("delta.columnMapping.mode".to_string(), mode_str.to_string());
-                // Set maxColumnId for new tables
-                #[allow(clippy::unwrap_used)]
-                let max_id = compute_max_column_id(annotated_schema_opt.as_ref().unwrap());
-                configuration.insert(
-                    "delta.columnMapping.maxColumnId".to_string(),
-                    max_id.to_string(),
-                );
+                    let mut reader_features = vec!["columnMapping"];
+                    let mut writer_features = vec!["columnMapping"];
+                    if has_timestamp_ntz {
+                        reader_features.push("timestampNtz");
+                        writer_features.push("timestampNtz");
+                    }
 
-                #[allow(clippy::unwrap_used)]
-                let metadata = Metadata::try_new(
-                    None,
-                    None,
-                    annotated_schema_opt.as_ref().unwrap().clone(),
-                    partition_columns.clone(),
-                    Utc::now().timestamp_millis(),
-                    configuration,
-                )
-                .map_err(|e| DataFusionError::External(Box::new(e)))?;
+                    #[allow(clippy::unwrap_used)]
+                    let protocol: Protocol = serde_json::from_value(serde_json::json!({
+                        "minReaderVersion": 3,
+                        "minWriterVersion": 7,
+                        "readerFeatures": reader_features,
+                        "writerFeatures": writer_features
+                    }))
+                    .unwrap();
 
-                initial_actions.push(Action::Protocol(protocol.clone()));
-                initial_actions.push(Action::Metadata(metadata.clone()));
-                log::trace!(
-                    "init_protocol: {:?}, init_metadata_has_mode: {:?}",
-                    &protocol,
-                    metadata.configuration().get("delta.columnMapping.mode")
-                );
+                    let mut configuration = HashMap::new();
+                    let mode_str = match effective_mode {
+                        ColumnMappingModeOption::Name => "name",
+                        ColumnMappingModeOption::Id => "id",
+                        ColumnMappingModeOption::None => "none",
+                    };
+                    configuration
+                        .insert("delta.columnMapping.mode".to_string(), mode_str.to_string());
+                    // Set maxColumnId for new tables
+                    #[allow(clippy::unwrap_used)]
+                    let max_id = compute_max_column_id(annotated_schema_opt.as_ref().unwrap());
+                    configuration.insert(
+                        "delta.columnMapping.maxColumnId".to_string(),
+                        max_id.to_string(),
+                    );
 
-                // Prefer explicit Create operation to aid downstream commit
-                operation = Some(DeltaOperation::Create {
-                    mode: SaveMode::ErrorIfExists,
-                    location: table_url.to_string(),
-                    protocol,
-                    metadata,
-                });
+                    #[allow(clippy::unwrap_used)]
+                    let metadata = Metadata::try_new(
+                        None,
+                        None,
+                        annotated_schema_opt.as_ref().unwrap().clone(),
+                        partition_columns.clone(),
+                        Utc::now().timestamp_millis(),
+                        configuration,
+                    )
+                    .map_err(|e| DataFusionError::External(Box::new(e)))?;
+
+                    initial_actions.push(Action::Protocol(protocol.clone()));
+                    initial_actions.push(Action::Metadata(metadata.clone()));
+                    log::trace!(
+                        "init_protocol: {:?}, init_metadata_has_mode: {:?}",
+                        &protocol,
+                        metadata.configuration().get("delta.columnMapping.mode")
+                    );
+
+                    operation = Some(DeltaOperation::Create {
+                        mode: SaveMode::ErrorIfExists,
+                        location: table_url.to_string(),
+                        protocol,
+                        metadata,
+                    });
+                } else if has_timestamp_ntz {
+                    #[allow(clippy::unwrap_used)]
+                    let protocol: Protocol = serde_json::from_value(serde_json::json!({
+                        "minReaderVersion": 3,
+                        "minWriterVersion": 7,
+                        "readerFeatures": ["timestampNtz"],
+                        "writerFeatures": ["timestampNtz"]
+                    }))
+                    .unwrap();
+
+                    let metadata = Metadata::try_new(
+                        None,
+                        None,
+                        kernel_schema,
+                        partition_columns.clone(),
+                        Utc::now().timestamp_millis(),
+                        HashMap::new(),
+                    )
+                    .map_err(|e| DataFusionError::External(Box::new(e)))?;
+
+                    initial_actions.push(Action::Protocol(protocol.clone()));
+                    initial_actions.push(Action::Metadata(metadata.clone()));
+
+                    operation = Some(DeltaOperation::Create {
+                        mode: SaveMode::ErrorIfExists,
+                        location: table_url.to_string(),
+                        protocol,
+                        metadata,
+                    });
+                }
             }
 
             // Build physical writer schema (use physical names and set parquet field ids)
@@ -577,6 +622,7 @@ impl ExecutionPlan for DeltaWriterExec {
                     batch,
                     &writer_schema,
                     phys_to_logical.as_ref(),
+                    timezone.as_deref(),
                 )?;
 
                 writer
@@ -787,6 +833,7 @@ impl DeltaWriterExec {
         batch: RecordBatch,
         final_schema: &SchemaRef,
         phys_to_logical: Option<&HashMap<String, String>>,
+        timezone: Option<&str>,
     ) -> Result<RecordBatch> {
         let batch_schema = batch.schema();
 
@@ -823,8 +870,55 @@ impl DeltaWriterExec {
                         )?;
 
                         let casted_column =
-                            datafusion::arrow::compute::cast(batch_column, final_field.data_type())
-                                .map_err(|e| DataFusionError::ArrowError(Box::new(e), None))?;
+                            match (batch_field.data_type(), final_field.data_type(), timezone) {
+                                (
+                                    DataType::Timestamp(unit_from, None),
+                                    DataType::Timestamp(_unit_to, Some(_)),
+                                    Some(session_tz),
+                                ) => {
+                                    // Interpret NTZ as local time in session timezone before converting
+                                    let session_type = DataType::Timestamp(
+                                        unit_from.clone(),
+                                        Some(Arc::<str>::from(session_tz)),
+                                    );
+                                    let with_session_tz = datafusion::arrow::compute::cast(
+                                        batch_column,
+                                        &session_type,
+                                    )
+                                    .map_err(|e| DataFusionError::ArrowError(Box::new(e), None))?;
+                                    datafusion::arrow::compute::cast(
+                                        &with_session_tz,
+                                        final_field.data_type(),
+                                    )
+                                    .map_err(|e| DataFusionError::ArrowError(Box::new(e), None))?
+                                }
+                                (
+                                    DataType::Timestamp(unit_from, Some(_)),
+                                    DataType::Timestamp(_unit_to, None),
+                                    Some(session_tz),
+                                ) => {
+                                    // Convert to session timezone before dropping timezone info
+                                    let session_type = DataType::Timestamp(
+                                        unit_from.clone(),
+                                        Some(Arc::<str>::from(session_tz)),
+                                    );
+                                    let session_aligned = datafusion::arrow::compute::cast(
+                                        batch_column,
+                                        &session_type,
+                                    )
+                                    .map_err(|e| DataFusionError::ArrowError(Box::new(e), None))?;
+                                    datafusion::arrow::compute::cast(
+                                        &session_aligned,
+                                        final_field.data_type(),
+                                    )
+                                    .map_err(|e| DataFusionError::ArrowError(Box::new(e), None))?
+                                }
+                                _ => datafusion::arrow::compute::cast(
+                                    batch_column,
+                                    final_field.data_type(),
+                                )
+                                .map_err(|e| DataFusionError::ArrowError(Box::new(e), None))?,
+                            };
                         adapted_columns.push(casted_column);
                     }
                 }
