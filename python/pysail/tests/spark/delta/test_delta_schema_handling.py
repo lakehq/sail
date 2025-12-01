@@ -2,8 +2,11 @@
 Test Delta Lake schema handling (mergeSchema, overwriteSchema, evolution) in Sail.
 """
 
+from datetime import datetime
+
 import pandas as pd
 import pytest
+from pyspark.sql import functions as F
 from pyspark.sql.types import (
     DoubleType,
     FloatType,
@@ -13,6 +16,8 @@ from pyspark.sql.types import (
     StringType,
     StructField,
     StructType,
+    TimestampNTZType,
+    TimestampType,
 )
 
 
@@ -88,6 +93,97 @@ class TestDeltaSchemaHandling:
 
         with pytest.raises(Exception, match=r"(?i)(schema|field)"):
             df2.write.format("delta").mode("append").save(str(delta_path))
+
+    def test_delta_schema_allows_safe_cast_without_merge(self, spark, tmp_path):
+        """Appending columns that can be safely widened should succeed without mergeSchema."""
+        delta_path = tmp_path / "delta_safe_cast"
+
+        table_schema = StructType(
+            [
+                StructField("id", LongType(), False),
+                StructField("score", LongType(), True),
+            ]
+        )
+        initial_data = [Row(id=1, score=100)]
+        spark.createDataFrame(initial_data, schema=table_schema).write.format("delta").mode("overwrite").save(
+            str(delta_path)
+        )
+
+        append_schema = StructType(
+            [
+                StructField("id", IntegerType(), False),
+                StructField("score", IntegerType(), True),
+            ]
+        )
+        new_data = [Row(id=2, score=200)]
+        spark.createDataFrame(new_data, schema=append_schema).write.format("delta").mode("append").save(
+            str(delta_path)
+        )
+
+        result_df = spark.read.format("delta").load(str(delta_path)).sort("id")
+        assert result_df.schema["id"].dataType == LongType()
+        assert result_df.schema["score"].dataType == LongType()
+        assert [(row.id, row.score) for row in result_df.collect()] == [(1, 100), (2, 200)]
+
+    def test_delta_schema_handles_timezone_timestamps(self, spark, tmp_path):
+        """Ensure timezone-aware inputs are stored as UTC TimestampType values."""
+        delta_path = tmp_path / "delta_timezone_timestamps"
+
+        df = (
+            spark.createDataFrame(
+                [
+                    (1, "2024-05-01T12:00:00+00:00"),
+                    (2, "2024-05-01T11:00:00+02:00"),
+                ],
+                schema="id INT, raw_ts STRING",
+            )
+            .withColumn("event_time", F.to_timestamp("raw_ts"))
+            .select("id", "event_time")
+            .orderBy("id")
+        )
+
+        df.write.format("delta").mode("overwrite").save(str(delta_path))
+
+        result_df = spark.read.format("delta").load(str(delta_path)).orderBy("id")
+        assert isinstance(result_df.schema["event_time"].dataType, TimestampType)
+
+        result = [(row.id, row.event_time) for row in result_df.collect()]
+        assert result == [
+            (1, datetime(2024, 5, 1, 12, 0)),
+            (2, datetime(2024, 5, 1, 9, 0)),
+        ]
+
+    def test_delta_schema_timestamp_ntz_cast(self, spark, tmp_path):
+        """Appending TimestampNTZType data to a TimestampType table should not require mergeSchema."""
+        delta_path = tmp_path / "delta_timestamp_ntz_cast"
+
+        base_schema = StructType(
+            [
+                StructField("id", IntegerType(), False),
+                StructField("event_time", TimestampType(), True),
+            ]
+        )
+        base_data = [Row(id=1, event_time=datetime(2024, 5, 1, 12, 0))]
+        spark.createDataFrame(base_data, schema=base_schema).write.format("delta").mode("overwrite").save(
+            str(delta_path)
+        )
+
+        ntz_schema = StructType(
+            [
+                StructField("id", IntegerType(), False),
+                StructField("event_time", TimestampNTZType(), True),
+            ]
+        )
+        ntz_data = [Row(id=2, event_time=datetime(2024, 5, 2, 7, 30))]
+        spark.createDataFrame(ntz_data, schema=ntz_schema).write.format("delta").mode("append").save(str(delta_path))
+
+        result_df = spark.read.format("delta").load(str(delta_path)).orderBy("id")
+        assert isinstance(result_df.schema["event_time"].dataType, TimestampType)
+
+        assert [(row.id, row.event_time) for row in result_df.collect()] == [
+            (1, datetime(2024, 5, 1, 12, 0)),
+            (2, datetime(2024, 5, 2, 7, 30)),
+        ]
 
     def test_delta_schema_overwrite_with_overwrite_schema(self, spark, tmp_path):
         """Test overwriteSchema=true with overwrite mode."""
