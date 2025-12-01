@@ -800,21 +800,20 @@ impl DeltaWriterExec {
         for input_field in input_schema.fields() {
             match table_schema.field_with_name(input_field.name()) {
                 Ok(table_field) => {
-                    if table_field.data_type() != input_field.data_type() {
-                        if DeltaTypeConverter::validate_cast_safety(
+                    if table_field.data_type() != input_field.data_type()
+                        && DeltaTypeConverter::validate_cast_safety(
                             input_field.data_type(),
                             table_field.data_type(),
                             input_field.name(),
                         )
                         .is_err()
-                        {
-                            return Err(DataFusionError::Plan(format!(
-                                "Schema mismatch for field '{}': table has type {:?}, input has type {:?}. Use mergeSchema=true to allow schema evolution.",
-                                input_field.name(),
-                                table_field.data_type(),
-                                input_field.data_type()
-                            )));
-                        }
+                    {
+                        return Err(DataFusionError::Plan(format!(
+                            "Schema mismatch for field '{}': table has type {:?}, input has type {:?}. Use mergeSchema=true to allow schema evolution.",
+                            input_field.name(),
+                            table_field.data_type(),
+                            input_field.data_type()
+                        )));
                     }
                 }
                 Err(_) => {
@@ -878,7 +877,7 @@ impl DeltaWriterExec {
                                 ) => {
                                     // Interpret NTZ as local time in session timezone before converting
                                     let session_type = DataType::Timestamp(
-                                        unit_from.clone(),
+                                        *unit_from,
                                         Some(Arc::<str>::from(session_tz)),
                                     );
                                     let with_session_tz = datafusion::arrow::compute::cast(
@@ -899,7 +898,7 @@ impl DeltaWriterExec {
                                 ) => {
                                     // Convert to session timezone before dropping timezone info
                                     let session_type = DataType::Timestamp(
-                                        unit_from.clone(),
+                                        *unit_from,
                                         Some(Arc::<str>::from(session_tz)),
                                     );
                                     let session_aligned = datafusion::arrow::compute::cast(
