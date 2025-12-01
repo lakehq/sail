@@ -180,7 +180,8 @@ impl WorkerActor {
                 RuntimeEnvBuilder::default().with_object_store_registry(Arc::new(registry));
             Arc::new(builder.build()?)
         };
-        let config = SessionConfig::default().with_extension(create_table_format_registry());
+        let table_format_registry = create_table_format_registry()?;
+        let config = SessionConfig::default().with_extension(table_format_registry);
         let state = SessionStateBuilder::new()
             .with_config(config)
             .with_runtime_env(runtime)

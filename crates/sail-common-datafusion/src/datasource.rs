@@ -127,16 +127,20 @@ impl TableFormatRegistry {
         }
     }
 
-    pub fn register(&self, format: Arc<dyn TableFormat>) {
+    pub fn register(&self, format: Arc<dyn TableFormat>) -> Result<()> {
         let mut formats = self
             .formats
             .write()
-            .expect("table format registry poisoned");
+            .map_err(|_| plan_datafusion_err!("table format registry poisoned"))?;
         formats.insert(format.name().to_lowercase(), format);
+        Ok(())
     }
 
     pub fn get(&self, name: &str) -> Result<Arc<dyn TableFormat>> {
-        let formats = self.formats.read().expect("table format registry poisoned");
+        let formats = self
+            .formats
+            .read()
+            .map_err(|_| plan_datafusion_err!("table format registry poisoned"))?;
         formats
             .get(&name.to_lowercase())
             .cloned()

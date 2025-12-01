@@ -35,8 +35,8 @@ use crate::table::{find_latest_metadata_file, Table};
 pub struct IcebergTableFormat;
 
 impl IcebergTableFormat {
-    pub fn register(registry: &TableFormatRegistry) {
-        registry.register(Arc::new(Self::default()));
+    pub fn register(registry: &TableFormatRegistry) -> Result<()> {
+        registry.register(Arc::new(Self))
     }
 }
 

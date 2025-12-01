@@ -29,8 +29,8 @@ use crate::{create_delta_provider, DeltaTableError, KernelError};
 pub struct DeltaTableFormat;
 
 impl DeltaTableFormat {
-    pub fn register(registry: &TableFormatRegistry) {
-        registry.register(Arc::new(Self));
+    pub fn register(registry: &TableFormatRegistry) -> Result<()> {
+        registry.register(Arc::new(Self))
     }
 }
 
