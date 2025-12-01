@@ -25,6 +25,13 @@ spec:
             - name: SAIL_KUBERNETES__WORKER_POD_TEMPLATE
               value: |
                 {
+                  "metadata": {
+                    "labels": {
+                      "custom-label": "sail-worker",
+                      "environment": "development",
+                      "component": "spark-worker"
+                    }
+                  },
                   "spec": {
                     "volumes": [
                       {
