@@ -7,7 +7,6 @@ edition = { workspace = true }
 workspace = true
 
 [dependencies]
-sail-common = { path = "../sail-common" }
 sail-common-datafusion = { path = "../sail-common-datafusion" }
 
 async-trait = { workspace = true }
@@ -22,7 +21,6 @@ glob = { workspace = true }
 url = { workspace = true }
 regex = { workspace = true }
 percent-encoding = { workspace = true }
-once_cell = { workspace = true }
 log = { workspace = true }
 bytes = { workspace = true }
 tokio = { workspace = true }
