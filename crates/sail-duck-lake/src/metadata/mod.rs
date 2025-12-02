@@ -4,7 +4,9 @@ use async_trait::async_trait;
 use datafusion::common::Result as DataFusionResult;
 pub use py_impl::PythonMetaStore;
 
-use crate::spec::{ColumnInfo, FileInfo, PartitionFilter, SchemaInfo, SnapshotInfo, TableInfo};
+use crate::spec::{
+    ColumnInfo, FieldIndex, FileInfo, PartitionFilter, SchemaInfo, SnapshotInfo, TableInfo,
+};
 
 #[derive(Debug, Clone)]
 pub struct DuckLakeTable {
@@ -17,6 +19,14 @@ pub struct DuckLakeTable {
 #[derive(Debug, Clone)]
 pub struct DuckLakeSnapshot {
     pub snapshot: SnapshotInfo,
+}
+
+#[derive(Debug, Clone)]
+pub struct ListDataFilesRequest {
+    pub table_id: crate::spec::TableIndex,
+    pub snapshot_id: Option<u64>,
+    pub partition_filters: Option<Vec<PartitionFilter>>,
+    pub required_column_stats: Option<Vec<FieldIndex>>,
 }
 
 #[async_trait]
@@ -34,9 +44,7 @@ pub trait DuckLakeMetaStore: Send + Sync {
     // TODO: Add paginated or streaming metadata APIs for listing data files.
     async fn list_data_files(
         &self,
-        table_id: crate::spec::TableIndex,
-        snapshot_id: Option<u64>,
-        partition_filters: Option<Vec<PartitionFilter>>,
+        request: ListDataFilesRequest,
     ) -> DataFusionResult<Vec<FileInfo>>;
 
     async fn list_delete_files(

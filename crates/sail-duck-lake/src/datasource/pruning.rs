@@ -1,4 +1,3 @@
-use std::cell::RefCell;
 use std::collections::HashMap;
 use std::sync::Arc;
 
@@ -23,10 +22,10 @@ struct DuckLakePruningStats {
     files: Vec<FileInfo>,
     name_to_field_id: HashMap<String, FieldIndex>,
     field_id_to_datatype: HashMap<FieldIndex, ArrowDataType>,
-    min_cache: RefCell<HashMap<FieldIndex, ArrayRef>>,
-    max_cache: RefCell<HashMap<FieldIndex, ArrayRef>>,
-    nulls_cache: RefCell<HashMap<FieldIndex, ArrayRef>>,
-    rows_cache: RefCell<Option<ArrayRef>>,
+    min_arrays: HashMap<FieldIndex, ArrayRef>,
+    max_arrays: HashMap<FieldIndex, ArrayRef>,
+    null_count_arrays: HashMap<FieldIndex, ArrayRef>,
+    row_counts: ArrayRef,
     partition_col_map: HashMap<FieldIndex, Vec<(u64, Transform)>>,
 }
 
@@ -47,16 +46,21 @@ impl DuckLakePruningStats {
                 field_id_to_datatype.insert(*fid, f.data_type().clone());
             }
         }
-        Self {
+        let rows: Vec<u64> = files.iter().map(|f| f.record_count).collect();
+        let row_counts: ArrayRef = Arc::new(UInt64Array::from(rows));
+        let partition_col_map = Self::build_partition_map(partition_fields);
+        let mut stats = Self {
             files,
             name_to_field_id,
             field_id_to_datatype,
-            min_cache: RefCell::new(HashMap::new()),
-            max_cache: RefCell::new(HashMap::new()),
-            nulls_cache: RefCell::new(HashMap::new()),
-            rows_cache: RefCell::new(None),
-            partition_col_map: Self::build_partition_map(partition_fields),
-        }
+            min_arrays: HashMap::new(),
+            max_arrays: HashMap::new(),
+            null_count_arrays: HashMap::new(),
+            row_counts,
+            partition_col_map,
+        };
+        stats.populate_column_arrays();
+        stats
     }
 
     fn field_id_for(&self, column: &Column) -> Option<FieldIndex> {
@@ -90,6 +94,64 @@ impl DuckLakePruningStats {
                 .push((field.partition_key_index, transform));
         }
         map
+    }
+
+    fn populate_column_arrays(&mut self) {
+        let field_ids: Vec<FieldIndex> = self.field_id_to_datatype.keys().copied().collect();
+        for field_id in field_ids {
+            if let Some((min_arr, max_arr)) = self.build_min_max_arrays(&field_id) {
+                self.min_arrays.insert(field_id, min_arr);
+                self.max_arrays.insert(field_id, max_arr);
+            }
+            let null_arr = self.build_null_count_array(&field_id);
+            self.null_count_arrays.insert(field_id, null_arr);
+        }
+    }
+
+    fn build_null_count_array(&self, field_id: &FieldIndex) -> ArrayRef {
+        let counts: Vec<u64> = self
+            .files
+            .iter()
+            .map(|f| {
+                Self::get_column_stats(f, field_id)
+                    .and_then(|s| s.null_count)
+                    .unwrap_or(0)
+            })
+            .collect();
+        Arc::new(UInt64Array::from(counts))
+    }
+
+    fn build_min_max_arrays(&self, field_id: &FieldIndex) -> Option<(ArrayRef, ArrayRef)> {
+        self.field_type_for(field_id)?;
+        let mut min_values: Vec<ScalarValue> = Vec::with_capacity(self.files.len());
+        let mut max_values: Vec<ScalarValue> = Vec::with_capacity(self.files.len());
+        for file in &self.files {
+            if let Some((min_val, max_val)) = self.get_partition_range_for_file(file, field_id) {
+                min_values.push(min_val);
+                max_values.push(max_val);
+                continue;
+            }
+            if let Some(stats) = Self::get_column_stats(file, field_id) {
+                let min_val = stats
+                    .min_value
+                    .as_deref()
+                    .and_then(|s| self.parse_stat_value(field_id, s))
+                    .unwrap_or(ScalarValue::Null);
+                let max_val = stats
+                    .max_value
+                    .as_deref()
+                    .and_then(|s| self.parse_stat_value(field_id, s))
+                    .unwrap_or(ScalarValue::Null);
+                min_values.push(min_val);
+                max_values.push(max_val);
+            } else {
+                min_values.push(ScalarValue::Null);
+                max_values.push(ScalarValue::Null);
+            }
+        }
+        let min_arr = ScalarValue::iter_to_array(min_values.into_iter()).ok()?;
+        let max_arr = ScalarValue::iter_to_array(max_values.into_iter()).ok()?;
+        Some((min_arr, max_arr))
     }
 
     fn get_partition_range_for_file(
@@ -237,71 +299,21 @@ impl DuckLakePruningStats {
 impl PruningStatistics for DuckLakePruningStats {
     fn min_values(&self, column: &Column) -> Option<ArrayRef> {
         let field_id = self.field_id_for(column)?;
-        if let Some(arr) = self.min_cache.borrow().get(&field_id) {
-            return Some(arr.clone());
-        }
-        let values = self.files.iter().map(|f| {
-            self.get_partition_range_for_file(f, &field_id)
-                .map(|(min, _)| min)
-                .or_else(|| {
-                    Self::get_column_stats(f, &field_id)
-                        .and_then(|s| s.min_value.as_deref())
-                        .and_then(|s| self.parse_stat_value(&field_id, s))
-                })
-                .unwrap_or(ScalarValue::Null)
-        });
-        let arr = ScalarValue::iter_to_array(values).ok()?;
-        self.min_cache.borrow_mut().insert(field_id, arr.clone());
-        Some(arr)
+        self.min_arrays.get(&field_id).cloned()
     }
 
     fn max_values(&self, column: &Column) -> Option<ArrayRef> {
         let field_id = self.field_id_for(column)?;
-        if let Some(arr) = self.max_cache.borrow().get(&field_id) {
-            return Some(arr.clone());
-        }
-        let values = self.files.iter().map(|f| {
-            self.get_partition_range_for_file(f, &field_id)
-                .map(|(_, max)| max)
-                .or_else(|| {
-                    Self::get_column_stats(f, &field_id)
-                        .and_then(|s| s.max_value.as_deref())
-                        .and_then(|s| self.parse_stat_value(&field_id, s))
-                })
-                .unwrap_or(ScalarValue::Null)
-        });
-        let arr = ScalarValue::iter_to_array(values).ok()?;
-        self.max_cache.borrow_mut().insert(field_id, arr.clone());
-        Some(arr)
+        self.max_arrays.get(&field_id).cloned()
     }
 
     fn null_counts(&self, column: &Column) -> Option<ArrayRef> {
         let field_id = self.field_id_for(column)?;
-        if let Some(arr) = self.nulls_cache.borrow().get(&field_id) {
-            return Some(arr.clone());
-        }
-        let counts: Vec<u64> = self
-            .files
-            .iter()
-            .map(|f| {
-                Self::get_column_stats(f, &field_id)
-                    .and_then(|s| s.null_count)
-                    .unwrap_or(0)
-            })
-            .collect();
-        let arr: ArrayRef = Arc::new(UInt64Array::from(counts));
-        self.nulls_cache.borrow_mut().insert(field_id, arr.clone());
-        Some(arr)
+        self.null_count_arrays.get(&field_id).cloned()
     }
 
     fn row_counts(&self, _column: &Column) -> Option<ArrayRef> {
-        if let Some(arr) = self.rows_cache.borrow().as_ref() {
-            return Some(arr.clone());
-        }
-        let rows: Vec<u64> = self.files.iter().map(|f| f.record_count).collect();
-        let arr: ArrayRef = Arc::new(UInt64Array::from(rows));
-        *self.rows_cache.borrow_mut() = Some(arr.clone());
-        Some(arr)
+        Some(self.row_counts.clone())
     }
 
     fn contained(

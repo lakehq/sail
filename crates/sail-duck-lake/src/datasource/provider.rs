@@ -1,5 +1,5 @@
 use std::any::Any;
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
 
 use async_trait::async_trait;
@@ -17,14 +17,15 @@ use datafusion::logical_expr::{Expr, TableProviderFilterPushDown};
 use datafusion::physical_expr::PhysicalExpr;
 use datafusion::physical_plan::ExecutionPlan;
 use datafusion_common::{DataFusionError, Result as DataFusionResult};
+use object_store::path::Path as ObjectStorePath;
 use url::Url;
 
 use crate::datasource::arrow::columns_to_arrow_schema;
 use crate::datasource::expressions::{get_pushdown_filters, simplify_expr};
 use crate::datasource::pruning::prune_files;
-use crate::metadata::{DuckLakeMetaStore, DuckLakeTable};
+use crate::metadata::{DuckLakeMetaStore, DuckLakeTable, ListDataFilesRequest};
 use crate::options::DuckLakeOptions;
-use crate::spec::{ColumnInfo, PartitionFieldInfo, PartitionFilter};
+use crate::spec::{ColumnInfo, FieldIndex, FileInfo, PartitionFieldInfo, PartitionFilter};
 
 pub struct DuckLakeTableProvider {
     table: DuckLakeTable,
@@ -122,118 +123,26 @@ impl TableProvider for DuckLakeTableProvider {
         );
         let (pruning_filters, pushdown_filters) = self.separate_filters(&remaining_filters);
 
-        let files = self
-            .meta_store
-            .list_data_files(
-                self.table.table_info.table_id,
-                self.snapshot_id,
-                if partition_filters.is_empty() {
-                    None
-                } else {
-                    Some(partition_filters)
-                },
-            )
-            .await?;
+        let prune_schema = self.build_prune_schema(projection, &pruning_filters);
+        let required_stats = self.collect_required_stat_fields(prune_schema.as_ref());
+        let request = self.build_data_file_request(partition_filters, required_stats);
+        let files = self.meta_store.list_data_files(request).await?;
 
         log::trace!("Found {} data files", files.len());
 
-        let prune_schema = if let Some(used_columns) = projection {
-            let mut fields = vec![];
-            for idx in used_columns {
-                fields.push(self.schema.field(*idx).to_owned());
-            }
-            if let Some(expr) =
-                datafusion::logical_expr::utils::conjunction(pruning_filters.iter().cloned())
-            {
-                for c in expr.column_refs() {
-                    if let Ok(idx) = self.schema.index_of(c.name.as_str()) {
-                        if !used_columns.contains(&idx)
-                            && !fields.iter().any(|f| f.name() == c.name.as_str())
-                        {
-                            fields.push(self.schema.field(idx).to_owned());
-                        }
-                    }
-                }
-            }
-            Arc::new(datafusion::arrow::datatypes::Schema::new(fields))
-        } else {
-            self.schema.clone()
-        };
+        let (files, _mask) = prune_files(
+            session,
+            &pruning_filters,
+            limit,
+            prune_schema.clone(),
+            files,
+            &self.table.columns,
+            &self.table.partition_fields,
+        )?;
 
-        let mut files = {
-            let (kept, _mask) = prune_files(
-                session,
-                &pruning_filters,
-                limit,
-                prune_schema.clone(),
-                files,
-                &self.table.columns,
-                &self.table.partition_fields,
-            )?;
-            kept
-        };
-
-        // Parse base_path URL and construct ObjectStoreUrl with only scheme + authority
-        let base_url =
-            Url::parse(&self.base_path).map_err(|e| DataFusionError::External(Box::new(e)))?;
-        let object_store_base = format!("{}://{}", base_url.scheme(), base_url.authority());
-        let object_store_base_parsed =
-            Url::parse(&object_store_base).map_err(|e| DataFusionError::External(Box::new(e)))?;
-        let object_store_url = ObjectStoreUrl::parse(object_store_base_parsed)
-            .map_err(|e| DataFusionError::External(Box::new(e)))?;
-
-        // Build table-level prefix: {base_path}/{schema}/{table}
-        let base_path_str = base_url.path();
-        let mut table_prefix =
-            object_store::path::Path::parse(base_path_str.trim_start_matches('/'))
-                .map_err(|e| DataFusionError::External(Box::new(e)))?;
-        table_prefix = table_prefix
-            .child(self.table.schema_info.schema_name.as_str())
-            .child(self.table.table_info.table_name.as_str());
-
-        let mut file_groups: HashMap<Option<u64>, Vec<PartitionedFile>> = HashMap::new();
-
-        for file in files.drain(..) {
-            let object_path = if file.path_is_relative {
-                let mut p = table_prefix.clone();
-                for comp in file.path.split('/') {
-                    if !comp.is_empty() {
-                        p = p.child(comp);
-                    }
-                }
-                p
-            } else if let Ok(path_url) = Url::parse(&file.path) {
-                let encoded_path = path_url.path();
-                let no_leading = encoded_path.strip_prefix('/').unwrap_or(encoded_path);
-                object_store::path::Path::parse(no_leading)
-                    .map_err(|e| DataFusionError::External(Box::new(e)))?
-            } else {
-                let no_leading = file.path.strip_prefix('/').unwrap_or(&file.path);
-                object_store::path::Path::parse(no_leading)
-                    .map_err(|e| DataFusionError::External(Box::new(e)))?
-            };
-
-            let partitioned_file = PartitionedFile::new(object_path.clone(), file.file_size_bytes);
-
-            let partition_key = file.partition_id.map(|p| p.0);
-            file_groups
-                .entry(partition_key)
-                .or_default()
-                .push(partitioned_file);
-        }
-
-        log::trace!(
-            "Created {} file groups from {} files",
-            file_groups.len(),
-            file_groups.values().map(|v| v.len()).sum::<usize>()
-        );
-
-        let file_groups = if file_groups.is_empty() {
-            log::warn!("No data files found for table");
-            vec![FileGroup::from(vec![])]
-        } else {
-            file_groups.into_values().map(FileGroup::from).collect()
-        };
+        let (object_store_url, table_prefix) = self.build_object_store_context()?;
+        let table_stats = self.aggregate_statistics(self.schema.as_ref(), &files);
+        let file_groups = self.build_file_groups(files, &table_prefix)?;
 
         let parquet_options = TableParquetOptions {
             global: session.config().options().execution.parquet.clone(),
@@ -253,8 +162,6 @@ impl TableProvider for DuckLakeTableProvider {
         }
         let parquet_source = Arc::new(parquet_source);
 
-        let table_stats = self.aggregate_statistics(self.schema.as_ref());
-
         let file_scan_config =
             FileScanConfigBuilder::new(object_store_url, self.schema.clone(), parquet_source)
                 .with_file_groups(file_groups)
@@ -268,6 +175,145 @@ impl TableProvider for DuckLakeTableProvider {
 }
 
 impl DuckLakeTableProvider {
+    fn build_prune_schema(
+        &self,
+        projection: Option<&Vec<usize>>,
+        pruning_filters: &[Expr],
+    ) -> Arc<datafusion::arrow::datatypes::Schema> {
+        if let Some(used_columns) = projection {
+            let mut fields = used_columns
+                .iter()
+                .map(|idx| self.schema.field(*idx).to_owned())
+                .collect::<Vec<_>>();
+
+            if let Some(expr) =
+                datafusion::logical_expr::utils::conjunction(pruning_filters.iter().cloned())
+            {
+                for c in expr.column_refs() {
+                    if let Ok(idx) = self.schema.index_of(c.name.as_str()) {
+                        if !used_columns.contains(&idx)
+                            && !fields.iter().any(|f| f.name() == c.name.as_str())
+                        {
+                            fields.push(self.schema.field(idx).to_owned());
+                        }
+                    }
+                }
+            }
+
+            Arc::new(datafusion::arrow::datatypes::Schema::new(fields))
+        } else {
+            self.schema.clone()
+        }
+    }
+
+    fn collect_required_stat_fields(
+        &self,
+        schema: &datafusion::arrow::datatypes::Schema,
+    ) -> Vec<FieldIndex> {
+        let mut name_to_id: HashMap<String, FieldIndex> = HashMap::new();
+        for column in &self.table.columns {
+            name_to_id.insert(column.column_name.clone(), column.column_id);
+        }
+
+        let mut seen = HashSet::new();
+        let mut required = Vec::new();
+        for field in schema.fields() {
+            if let Some(field_id) = name_to_id.get(field.name()) {
+                if seen.insert(*field_id) {
+                    required.push(*field_id);
+                }
+            }
+        }
+        required
+    }
+
+    fn build_data_file_request(
+        &self,
+        partition_filters: Vec<PartitionFilter>,
+        required_stats: Vec<FieldIndex>,
+    ) -> ListDataFilesRequest {
+        ListDataFilesRequest {
+            table_id: self.table.table_info.table_id,
+            snapshot_id: self.snapshot_id,
+            partition_filters: (!partition_filters.is_empty()).then_some(partition_filters),
+            required_column_stats: (!required_stats.is_empty()).then_some(required_stats),
+        }
+    }
+
+    fn build_object_store_context(&self) -> DataFusionResult<(ObjectStoreUrl, ObjectStorePath)> {
+        let base_url =
+            Url::parse(&self.base_path).map_err(|e| DataFusionError::External(Box::new(e)))?;
+        let mut object_store_base = base_url.clone();
+        object_store_base.set_query(None);
+        object_store_base.set_fragment(None);
+        object_store_base.set_path("/");
+        let object_store_url = ObjectStoreUrl::parse(object_store_base.as_str())?;
+
+        let mut table_prefix = ObjectStorePath::parse(base_url.path())
+            .map_err(|e| DataFusionError::External(Box::new(e)))?;
+        table_prefix = table_prefix
+            .child(self.table.schema_info.schema_name.as_str())
+            .child(self.table.table_info.table_name.as_str());
+
+        Ok((object_store_url, table_prefix))
+    }
+
+    fn build_file_groups(
+        &self,
+        files: Vec<FileInfo>,
+        table_prefix: &ObjectStorePath,
+    ) -> DataFusionResult<Vec<FileGroup>> {
+        let mut file_groups: HashMap<Option<u64>, Vec<PartitionedFile>> = HashMap::new();
+
+        for file in files {
+            let object_path = Self::resolve_file_path(table_prefix, &file)?;
+            let partitioned_file = PartitionedFile::new(object_path, file.file_size_bytes);
+            let partition_key = file.partition_id.map(|p| p.0);
+            file_groups
+                .entry(partition_key)
+                .or_default()
+                .push(partitioned_file);
+        }
+
+        log::trace!(
+            "Created {} file groups from {} files",
+            file_groups.len(),
+            file_groups.values().map(|v| v.len()).sum::<usize>()
+        );
+
+        if file_groups.is_empty() {
+            log::warn!("No data files found for table");
+            Ok(vec![FileGroup::from(vec![])])
+        } else {
+            Ok(file_groups.into_values().map(FileGroup::from).collect())
+        }
+    }
+
+    fn resolve_file_path(
+        base_prefix: &ObjectStorePath,
+        file: &FileInfo,
+    ) -> DataFusionResult<ObjectStorePath> {
+        if file.path_is_relative {
+            let relative = ObjectStorePath::parse(&file.path)
+                .map_err(|e| DataFusionError::External(Box::new(e)))?;
+            Ok(Self::append_relative_path(base_prefix, &relative))
+        } else if let Ok(path_url) = Url::parse(&file.path) {
+            ObjectStorePath::from_url_path(path_url.path())
+                .map_err(|e| DataFusionError::External(Box::new(e)))
+        } else {
+            ObjectStorePath::parse(&file.path).map_err(|e| DataFusionError::External(Box::new(e)))
+        }
+    }
+
+    fn append_relative_path(
+        base_prefix: &ObjectStorePath,
+        relative: &ObjectStorePath,
+    ) -> ObjectStorePath {
+        relative
+            .parts()
+            .fold(base_prefix.clone(), |acc, part| acc.child(part))
+    }
+
     fn separate_filters(&self, filters: &[Expr]) -> (Vec<Expr>, Vec<Expr>) {
         let predicates: Vec<&Expr> = filters.iter().collect();
         let pushdown_kinds = get_pushdown_filters(&predicates, &[]);
@@ -410,7 +456,11 @@ impl DuckLakeTableProvider {
         }
     }
 
-    fn aggregate_statistics(&self, schema: &datafusion::arrow::datatypes::Schema) -> Statistics {
+    fn aggregate_statistics(
+        &self,
+        schema: &datafusion::arrow::datatypes::Schema,
+        files: &[FileInfo],
+    ) -> Statistics {
         let column_statistics = (0..schema.fields().len())
             .map(|_| ColumnStatistics {
                 null_count: Precision::Absent,
@@ -420,9 +470,17 @@ impl DuckLakeTableProvider {
                 sum_value: Precision::Absent,
             })
             .collect();
+        let total_rows = files
+            .iter()
+            .fold(0u64, |acc, file| acc.saturating_add(file.record_count));
+        let total_bytes = files
+            .iter()
+            .fold(0u64, |acc, file| acc.saturating_add(file.file_size_bytes));
+        let num_rows = total_rows.min(usize::MAX as u64) as usize;
+        let total_byte_size = total_bytes.min(usize::MAX as u64) as usize;
         Statistics {
-            num_rows: Precision::Absent,
-            total_byte_size: Precision::Absent,
+            num_rows: Precision::Exact(num_rows),
+            total_byte_size: Precision::Exact(total_byte_size),
             column_statistics,
         }
     }

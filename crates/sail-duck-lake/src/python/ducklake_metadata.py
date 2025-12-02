@@ -208,6 +208,7 @@ def list_data_files(
     table_id: int,
     snapshot_id: int | None,
     partition_filters: list[tuple[int, list[str]]] | None = None,
+    required_column_ids: list[int] | None = None,
 ) -> list[dict[str, Any]]:
     # TODO: Add optional stats-based filter pushdown using ducklake_file_column_stats.
     # TODO: Add iterator-based API for lazy or paginated data file loading.
@@ -354,14 +355,22 @@ def list_data_files(
         if not out:
             return out
         file_ids = [int(item["data_file_id"]) for item in out]
-        stats_sql = text(
+        stats_rows: list[tuple[Any, ...]] = []
+        if required_column_ids is None or required_column_ids:
+            stats_query = """
+                select data_file_id, column_id, column_size_bytes, value_count, null_count,
+                       min_value, max_value, contains_nan, extra_stats
+                from ducklake_file_column_stats
+                where data_file_id in :file_ids
             """
-            select data_file_id, column_id, column_size_bytes, value_count, null_count,
-                   min_value, max_value, contains_nan, extra_stats
-            from ducklake_file_column_stats
-            where data_file_id in :file_ids
-            """
-        ).bindparams(bindparam("file_ids", expanding=True))
+            stats_params: dict[str, Any] = {"file_ids": list(file_ids)}
+            if required_column_ids is not None:
+                stats_query += " and column_id in :column_ids"
+                stats_params["column_ids"] = [int(cid) for cid in required_column_ids]
+            stats_sql = text(stats_query).bindparams(bindparam("file_ids", expanding=True))
+            if required_column_ids is not None:
+                stats_sql = stats_sql.bindparams(bindparam("column_ids", expanding=True))
+            stats_rows = conn.execute(stats_sql, stats_params).all()
         pv_sql = text(
             """
             select data_file_id, partition_key_index, partition_value
@@ -369,9 +378,8 @@ def list_data_files(
             where data_file_id in :file_ids
             """
         ).bindparams(bindparam("file_ids", expanding=True))
-        params = {"file_ids": file_ids}
-        stats_rows = conn.execute(stats_sql, params).all()
-        pv_rows = conn.execute(pv_sql, params).all()
+        pv_params = {"file_ids": list(file_ids)}
+        pv_rows = conn.execute(pv_sql, pv_params).all()
 
         stats_map: dict[int, list[dict[str, Any]]] = {}
         for r in stats_rows:
