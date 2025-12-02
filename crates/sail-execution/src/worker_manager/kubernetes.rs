@@ -224,6 +224,7 @@ impl WorkerManager for KubernetesWorkerManager {
             service_account_name: Some(self.options.worker_service_account_name.clone()),
             ..Default::default()
         };
+        let mut labels = BTreeMap::new();
         if !self.options.worker_pod_template.is_empty() {
             let template: PodTemplateSpec = serde_json::from_str(&self.options.worker_pod_template)
                 .map_err(|e| {
@@ -231,14 +232,20 @@ impl WorkerManager for KubernetesWorkerManager {
                         "failed to parse worker pod template: {e}",
                     ))
                 })?;
+            if let Some(metadata) = &template.metadata {
+                if let Some(template_labels) = &metadata.labels {
+                    labels.extend(template_labels.clone());
+                }
+            }
             if let Some(s) = template.spec {
                 spec.merge_from(s);
             }
         }
+        labels.extend(self.build_pod_labels(id));
         let p = Pod {
             metadata: ObjectMeta {
                 name: Some(name),
-                labels: Some(self.build_pod_labels(id)),
+                labels: Some(labels),
                 owner_references: Some(self.get_owner_references().await?),
                 ..Default::default()
             },
@@ -252,5 +259,84 @@ impl WorkerManager for KubernetesWorkerManager {
 
     async fn stop(&self) -> ExecutionResult<()> {
         Ok(())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    #[allow(clippy::unwrap_used)]
+    fn test_label_merging_from_template() {
+        // Test that labels from worker_pod_template are properly merged with default labels
+
+        // Create a template with custom labels
+        let mut template_labels = BTreeMap::new();
+        template_labels.insert("custom-label".to_string(), "custom-value".to_string());
+        template_labels.insert(
+            "app.kubernetes.io/name".to_string(),
+            "should-be-overridden".to_string(),
+        );
+
+        let template = PodTemplateSpec {
+            metadata: Some(ObjectMeta {
+                labels: Some(template_labels.clone()),
+                ..Default::default()
+            }),
+            spec: None,
+        };
+
+        let template_json = serde_json::to_string(&template).unwrap();
+
+        // Parse and merge labels (simulating the logic from launch_worker)
+        let mut labels = BTreeMap::new();
+        let parsed_template: PodTemplateSpec = serde_json::from_str(&template_json).unwrap();
+
+        if let Some(metadata) = &parsed_template.metadata {
+            if let Some(template_labels) = &metadata.labels {
+                labels.extend(template_labels.clone());
+            }
+        }
+
+        // Add default labels (simulating build_pod_labels)
+        let default_labels = BTreeMap::from([
+            ("app.kubernetes.io/name".to_string(), "sail".to_string()),
+            (
+                "app.kubernetes.io/component".to_string(),
+                "worker".to_string(),
+            ),
+            (
+                "app.kubernetes.io/instance".to_string(),
+                "test-instance".to_string(),
+            ),
+        ]);
+        labels.extend(default_labels.clone());
+
+        // Verify custom labels are present
+        assert_eq!(
+            labels.get("custom-label"),
+            Some(&"custom-value".to_string())
+        );
+
+        // Verify default labels override template labels
+        assert_eq!(
+            labels.get("app.kubernetes.io/name"),
+            Some(&"sail".to_string())
+        );
+        assert_ne!(
+            labels.get("app.kubernetes.io/name"),
+            Some(&"should-be-overridden".to_string())
+        );
+
+        // Verify all default labels are present
+        assert_eq!(
+            labels.get("app.kubernetes.io/component"),
+            Some(&"worker".to_string())
+        );
+        assert_eq!(
+            labels.get("app.kubernetes.io/instance"),
+            Some(&"test-instance".to_string())
+        );
     }
 }
