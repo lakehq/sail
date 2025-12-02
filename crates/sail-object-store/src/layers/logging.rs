@@ -2,6 +2,8 @@ use std::fmt;
 use std::ops::Range;
 use std::sync::Arc;
 
+use fastrace::{func_path, trace, Span};
+use fastrace_futures::StreamExt;
 use futures::stream::BoxStream;
 use log::debug;
 use object_store::path::Path;
@@ -29,12 +31,15 @@ impl fmt::Display for LoggingObjectStore {
 }
 
 #[async_trait::async_trait]
+#[warn(clippy::missing_trait_methods)]
 impl ObjectStore for LoggingObjectStore {
+    #[trace]
     async fn put(&self, location: &Path, payload: PutPayload) -> Result<PutResult> {
         debug!("object_store put: location: {location:?}");
         self.inner.put(location, payload).await
     }
 
+    #[trace]
     async fn put_opts(
         &self,
         location: &Path,
@@ -45,11 +50,13 @@ impl ObjectStore for LoggingObjectStore {
         self.inner.put_opts(location, payload, opts).await
     }
 
+    #[trace]
     async fn put_multipart(&self, location: &Path) -> Result<Box<dyn MultipartUpload>> {
         debug!("object_store put_multipart: location: {location:?}");
         self.inner.put_multipart(location).await
     }
 
+    #[trace]
     async fn put_multipart_opts(
         &self,
         location: &Path,
@@ -59,31 +66,37 @@ impl ObjectStore for LoggingObjectStore {
         self.inner.put_multipart_opts(location, opts).await
     }
 
+    #[trace]
     async fn get(&self, location: &Path) -> Result<GetResult> {
         debug!("object_store get: location: {location:?}");
         self.inner.get(location).await
     }
 
+    #[trace]
     async fn get_opts(&self, location: &Path, options: GetOptions) -> Result<GetResult> {
         debug!("object_store get_opts: location: {location:?} options: {options:?}");
         self.inner.get_opts(location, options).await
     }
 
+    #[trace]
     async fn get_range(&self, location: &Path, range: Range<u64>) -> Result<Bytes> {
         debug!("object_store get_range: location: {location:?} range: {range:?}");
         self.inner.get_range(location, range).await
     }
 
+    #[trace]
     async fn get_ranges(&self, location: &Path, ranges: &[Range<u64>]) -> Result<Vec<Bytes>> {
         debug!("object_store get_ranges: location: {location:?} ranges: {ranges:?}");
         self.inner.get_ranges(location, ranges).await
     }
 
+    #[trace]
     async fn head(&self, location: &Path) -> Result<ObjectMeta> {
         debug!("object_store head: location: {location:?}");
         self.inner.head(location).await
     }
 
+    #[trace]
     async fn delete(&self, location: &Path) -> Result<()> {
         debug!("object_store delete: location: {location:?}");
         self.inner.delete(location).await
@@ -94,12 +107,14 @@ impl ObjectStore for LoggingObjectStore {
         locations: BoxStream<'a, Result<Path>>,
     ) -> BoxStream<'a, Result<Path>> {
         debug!("object_store delete_stream");
-        self.inner.delete_stream(locations)
+        let span = Span::enter_with_local_parent(func_path!());
+        Box::pin(self.inner.delete_stream(locations).in_span(span))
     }
 
     fn list(&self, prefix: Option<&Path>) -> BoxStream<'static, Result<ObjectMeta>> {
         debug!("object_store list: prefix: {prefix:?}");
-        self.inner.list(prefix)
+        let span = Span::enter_with_local_parent(func_path!());
+        Box::pin(self.inner.list(prefix).in_span(span))
     }
 
     fn list_with_offset(
@@ -108,29 +123,35 @@ impl ObjectStore for LoggingObjectStore {
         offset: &Path,
     ) -> BoxStream<'static, Result<ObjectMeta>> {
         debug!("object_store list_with_offset: prefix: {prefix:?} offset: {offset:?}");
-        self.inner.list_with_offset(prefix, offset)
+        let span = Span::enter_with_local_parent(func_path!());
+        Box::pin(self.inner.list_with_offset(prefix, offset).in_span(span))
     }
 
+    #[trace]
     async fn list_with_delimiter(&self, prefix: Option<&Path>) -> Result<ListResult> {
         debug!("object_store list_with_delimiter: prefix: {prefix:?}");
         self.inner.list_with_delimiter(prefix).await
     }
 
+    #[trace]
     async fn copy(&self, from: &Path, to: &Path) -> Result<()> {
         debug!("object_store copy: from: {from:?} to: {to:?}");
         self.inner.copy(from, to).await
     }
 
+    #[trace]
     async fn rename(&self, from: &Path, to: &Path) -> Result<()> {
         debug!("object_store rename: from: {from:?} to: {to:?}");
         self.inner.rename(from, to).await
     }
 
+    #[trace]
     async fn copy_if_not_exists(&self, from: &Path, to: &Path) -> Result<()> {
         debug!("object_store copy_if_not_exists: from: {from:?} to: {to:?}");
         self.inner.copy_if_not_exists(from, to).await
     }
 
+    #[trace]
     async fn rename_if_not_exists(&self, from: &Path, to: &Path) -> Result<()> {
         debug!("object_store rename_if_not_exists: from: {from:?} to: {to:?}");
         self.inner.rename_if_not_exists(from, to).await

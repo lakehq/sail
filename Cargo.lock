@@ -2747,6 +2747,18 @@ dependencies = [
 ]
 
 [[package]]
+name = "fastrace-futures"
+version = "0.7.14"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "25e1241db692c6a166407bda3e5f3e01b7cc00d281db35d905c4f44fbd3d0034"
+dependencies = [
+ "fastrace",
+ "futures-core",
+ "futures-sink",
+ "pin-project",
+]
+
+[[package]]
 name = "fastrace-macro"
 version = "0.7.14"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -6077,6 +6089,8 @@ dependencies = [
  "dashmap",
  "datafusion",
  "datafusion-common",
+ "fastrace",
+ "fastrace-futures",
  "futures",
  "hdfs-native-object-store",
  "hf-hub",

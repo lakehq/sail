@@ -3,6 +3,9 @@ use std::task::{Context, Poll};
 
 use datafusion::arrow::compute::concat_batches;
 use datafusion::prelude::SessionContext;
+use fastrace::collector::SpanContext;
+use fastrace::future::FutureExt;
+use fastrace::{func_path, Span};
 use futures::stream;
 use log::debug;
 use sail_common::spec;
@@ -117,8 +120,10 @@ async fn handle_execute_plan(
     let operation_id = metadata.operation_id.clone();
     let (plan, _) = resolve_and_execute_plan(ctx, spark.plan_config()?, plan).await?;
     let stream = spark.job_runner().execute(ctx, plan).await?;
+    let span = Span::root(func_path!(), SpanContext::random());
     let rx = match mode {
         ExecutePlanMode::Lazy => {
+            let _guard = span.set_local_parent();
             let executor = Executor::new(
                 metadata,
                 stream,
@@ -129,7 +134,7 @@ async fn handle_execute_plan(
             rx
         }
         ExecutePlanMode::EagerSilent => {
-            let _ = read_stream(stream).await?;
+            let _ = read_stream(stream).in_span(span).await?;
             let (tx, rx) = tokio::sync::mpsc::channel(1);
             if metadata.reattachable {
                 tx.send(ExecutorOutput::complete()).await?;
