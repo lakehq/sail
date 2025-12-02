@@ -7,5 +7,5 @@ pub mod table_format;
 
 pub use datasource::create_ducklake_provider;
 pub use options::DuckLakeOptions;
-pub use table_format::DuckLakeTableFormat;
 pub use spec::*;
+pub use table_format::DuckLakeTableFormat;

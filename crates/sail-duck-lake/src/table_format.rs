@@ -17,7 +17,7 @@ pub struct DuckLakeTableFormat;
 
 impl DuckLakeTableFormat {
     pub fn register(registry: &TableFormatRegistry) -> Result<()> {
-        registry.register(Arc::new(Self::default()))
+        registry.register(Arc::new(Self))
     }
 }
 
