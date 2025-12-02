@@ -200,7 +200,18 @@ impl IcebergTableProvider {
     }
 
     fn partition_key_for(&self, partition: &[Option<Literal>]) -> String {
-        serde_json::to_string(partition).unwrap_or_default()
+        match serde_json::to_string(partition) {
+            Ok(key) => key,
+            Err(err) => {
+                // Partition literals should always be serializable; log the error so it isn't silent.
+                log::error!(
+                    "Failed to serialize partition key {:?}: {:?}",
+                    partition,
+                    err
+                );
+                String::new()
+            }
+        }
     }
 
     async fn load_delete_index(
@@ -563,8 +574,11 @@ impl TableProvider for IcebergTableProvider {
         {
             let logical_schema = self.rebuild_logical_schema_for_filters(projection, filters);
             let df_schema = logical_schema.to_dfschema()?;
-            let pushdown_expr = conjunction(parquet_pushdown_filters);
-            pushdown_expr.map(|expr| simplify_expr(session, &df_schema, expr))
+            if let Some(expr) = conjunction(parquet_pushdown_filters) {
+                Some(simplify_expr(session, &df_schema, expr)?)
+            } else {
+                None
+            }
         } else {
             None
         };
