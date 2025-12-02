@@ -48,7 +48,7 @@ class CallSiteLocator(ast.NodeVisitor):
     def __init__(self):
         self.locations: list[tuple[int, int]] = []
 
-    def visit_Call(self, node: ast.Call) -> None:  # noqa: N802
+    def visit_Call(self, node: ast.Call) -> None:
         """
         Identify the 'hotspot' of the function call to ask Jedi about.
         """

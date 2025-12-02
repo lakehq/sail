@@ -3,15 +3,17 @@ from __future__ import annotations
 import json
 import re
 from collections import Counter
-from pathlib import Path
-from typing import TYPE_CHECKING, Iterable
-import requests
+from typing import TYPE_CHECKING
 
+import requests
 from markdown_it import MarkdownIt
 
 from pysail.utils.pyspark_function_scanner import _scan_directory
 
 if TYPE_CHECKING:
+    from collections.abc import Iterable
+    from pathlib import Path
+
     from markdown_it.token import Token
 
 

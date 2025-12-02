@@ -1,7 +1,8 @@
 from inspect import cleandoc
+from unittest.mock import patch
 
 from markdown_it import MarkdownIt
-from unittest.mock import patch
+
 from pysail.utils.sail_function_coverage import (
     _check_sail_function_coverage,
     _extract_function_coverage_from_md,
