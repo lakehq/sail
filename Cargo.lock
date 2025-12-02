@@ -5945,7 +5945,6 @@ dependencies = [
  "sail-common-datafusion",
  "sail-data-source",
  "serde",
- "serde_json",
  "tokio",
  "url",
  "uuid",
