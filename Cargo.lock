@@ -6323,15 +6323,19 @@ dependencies = [
 name = "sail-telemetry"
 version = "0.4.3"
 dependencies = [
+ "datafusion",
  "env_logger",
  "fastrace",
+ "fastrace-futures",
  "fastrace-opentelemetry",
+ "futures",
  "log",
  "opentelemetry",
  "opentelemetry-appender-log",
  "opentelemetry-otlp",
  "opentelemetry_sdk",
  "sail-common",
+ "sail-common-datafusion",
  "thiserror",
 ]
 

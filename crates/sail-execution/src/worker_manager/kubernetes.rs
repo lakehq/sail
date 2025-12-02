@@ -1,6 +1,7 @@
 use std::collections::BTreeMap;
 use std::env;
 
+use fastrace::collector::SpanContext;
 use k8s_openapi::api::core::v1::{
     Container, EnvVar, EnvVarSource, ObjectFieldSelector, Pod, PodSpec, PodTemplateSpec,
 };
@@ -112,8 +113,9 @@ impl KubernetesWorkerManager {
             worker_heartbeat_interval,
             worker_stream_buffer,
             rpc_retry_strategy,
-            w3c_traceparent,
         } = options;
+        let w3c_traceparent =
+            SpanContext::current_local_parent().map(|x| x.encode_w3c_traceparent());
 
         // There is no guarantee that serializing a Rust data structure produces an inline table,
         // so we have to construct the nested TOML value manually.

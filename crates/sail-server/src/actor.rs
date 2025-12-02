@@ -95,7 +95,8 @@ impl<T: Actor> ActorContext<T> {
         &mut self,
         task: impl std::future::Future<Output = ()> + Send + 'static,
     ) -> AbortHandle {
-        self.tasks.spawn(task)
+        let span = Span::enter_with_local_parent(func_path!());
+        self.tasks.spawn(task.in_span(span))
     }
 
     /// Join tasks that have completed.
@@ -178,7 +179,6 @@ impl<T: Actor> Clone for ActorHandle<T> {
 }
 
 impl<T: Actor> ActorHandle<T> {
-    #[trace]
     pub async fn send(
         &self,
         message: T::Message,

@@ -4,7 +4,9 @@ use std::sync::Arc;
 use datafusion::execution::SendableRecordBatchStream;
 use datafusion::physical_plan::{execute_stream, ExecutionPlan};
 use datafusion::prelude::SessionContext;
+use fastrace::{func_path, Span};
 use sail_server::actor::{ActorHandle, ActorSystem};
+use sail_telemetry::trace_execution_plan;
 use tokio::sync::oneshot;
 
 use crate::driver::{DriverActor, DriverEvent, DriverOptions};
@@ -51,6 +53,8 @@ impl JobRunner for LocalJobRunner {
                 "job runner is stopped".to_string(),
             ));
         }
+        let span = Span::enter_with_local_parent(func_path!());
+        let plan = trace_execution_plan(plan, span)?;
         Ok(execute_stream(plan, ctx.task_ctx())?)
     }
 

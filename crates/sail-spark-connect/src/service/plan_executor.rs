@@ -116,11 +116,14 @@ async fn handle_execute_plan(
     metadata: ExecutorMetadata,
     mode: ExecutePlanMode,
 ) -> SparkResult<ExecutePlanResponseStream> {
+    let span = Span::root(func_path!(), SpanContext::random());
     let spark = ctx.extension::<SparkSession>()?;
     let operation_id = metadata.operation_id.clone();
     let (plan, _) = resolve_and_execute_plan(ctx, spark.plan_config()?, plan).await?;
-    let stream = spark.job_runner().execute(ctx, plan).await?;
-    let span = Span::root(func_path!(), SpanContext::random());
+    let stream = {
+        let span = Span::enter_with_parent("JobRunner.execute", &span);
+        spark.job_runner().execute(ctx, plan).in_span(span).await?
+    };
     let rx = match mode {
         ExecutePlanMode::Lazy => {
             let _guard = span.set_local_parent();

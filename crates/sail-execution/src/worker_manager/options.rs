@@ -10,5 +10,4 @@ pub struct WorkerLaunchOptions {
     pub worker_heartbeat_interval: Duration,
     pub worker_stream_buffer: usize,
     pub rpc_retry_strategy: RetryStrategy,
-    pub w3c_traceparent: Option<String>,
 }
