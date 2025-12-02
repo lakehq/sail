@@ -1,3 +1,4 @@
+use fastrace::trace;
 use sail_common::config::GRPC_MAX_MESSAGE_LENGTH_DEFAULT;
 use sail_server::actor::ActorHandle;
 use sail_server::ServerBuilder;
@@ -14,6 +15,7 @@ use crate::id::WorkerId;
 use crate::rpc::ClientOptions;
 
 impl DriverActor {
+    #[trace]
     pub(super) async fn serve(
         handle: ActorHandle<Self>,
         addr: impl ToSocketAddrs,

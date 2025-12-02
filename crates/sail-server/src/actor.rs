@@ -1,5 +1,7 @@
 use std::fmt::Debug;
 
+use fastrace::future::FutureExt;
+use fastrace::{func_path, trace, Span};
 use log::error;
 use tokio::sync::mpsc;
 use tokio::task::{AbortHandle, JoinSet};
@@ -65,18 +67,26 @@ impl<T: Actor> ActorContext<T> {
     /// Spawn a task to send a message to the actor itself.
     pub fn send(&mut self, message: T::Message) {
         let handle = self.handle.clone();
-        self.spawn(async move {
-            let _ = handle.send(message).await;
-        });
+        let span = Span::enter_with_local_parent(func_path!());
+        self.spawn(
+            async move {
+                let _ = handle.send(message).await;
+            }
+            .in_span(span),
+        );
     }
 
     /// Spawn a task to send a message to the actor itself after a delay.
     pub fn send_with_delay(&mut self, message: T::Message, delay: std::time::Duration) {
         let handle = self.handle.clone();
-        self.spawn(async move {
-            tokio::time::sleep(delay).await;
-            let _ = handle.send(message).await;
-        });
+        let span = Span::enter_with_local_parent(func_path!());
+        self.spawn(
+            async move {
+                tokio::time::sleep(delay).await;
+                let _ = handle.send(message).await;
+            }
+            .in_span(span),
+        );
     }
 
     /// Spawn a task and save the handle in the context.
@@ -130,7 +140,8 @@ impl ActorSystem {
             ctx: ActorContext::new(&handle),
             receiver: rx,
         };
-        self.tasks.spawn(runner.run());
+        let span = Span::enter_with_local_parent(func_path!());
+        self.tasks.spawn(runner.run().in_span(span));
         handle
     }
 
@@ -149,7 +160,7 @@ impl ActorSystem {
 }
 
 pub struct ActorHandle<T: Actor> {
-    sender: mpsc::Sender<T::Message>,
+    sender: mpsc::Sender<MessageEnvelop<T::Message>>,
 }
 
 impl<T: Actor> Debug for ActorHandle<T> {
@@ -167,24 +178,35 @@ impl<T: Actor> Clone for ActorHandle<T> {
 }
 
 impl<T: Actor> ActorHandle<T> {
+    #[trace]
     pub async fn send(
         &self,
         message: T::Message,
     ) -> Result<(), mpsc::error::SendError<T::Message>> {
-        self.sender.send(message).await
+        let span = Span::enter_with_local_parent(func_path!());
+        self.sender
+            .send(MessageEnvelop { message, span })
+            .await
+            .map_err(
+                |mpsc::error::SendError(MessageEnvelop { message, span: _ })| {
+                    mpsc::error::SendError(message)
+                },
+            )
     }
 }
 
 struct ActorRunner<T: Actor> {
     actor: T,
     ctx: ActorContext<T>,
-    receiver: mpsc::Receiver<T::Message>,
+    receiver: mpsc::Receiver<MessageEnvelop<T::Message>>,
 }
 
 impl<T: Actor> ActorRunner<T> {
+    #[trace]
     async fn run(mut self) {
         self.actor.start(&mut self.ctx).await;
-        while let Some(message) = self.receiver.recv().await {
+        while let Some(MessageEnvelop { message, span }) = self.receiver.recv().await {
+            let _guard = span.set_local_parent();
             let action = self.actor.receive(&mut self.ctx, message);
             match action {
                 ActorAction::Continue => {}
@@ -203,6 +225,12 @@ impl<T: Actor> ActorRunner<T> {
         }
         self.actor.stop(&mut self.ctx).await;
     }
+}
+
+/// A wrapper for an actor message with a tracing span.
+struct MessageEnvelop<M> {
+    message: M,
+    span: Span,
 }
 
 #[cfg(test)]
