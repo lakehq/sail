@@ -39,7 +39,7 @@ serde = { version = "1.0.228", features = ["derive"] }
 serde_json = "1.0.145"
 # TODO: `serde_yaml` is deprecated. No satisfactory alternative exists yet, we may need to build our own in the future.
 serde_yaml = "0.9.34"
-serde_with = { version = "3.16.0", default-features = false, features = ["base64", "std", "macros"] }
+serde_with = { version = "3.16.1", default-features = false, features = ["base64", "std", "macros"] }
 monostate = "1.0.2"
 regex = "1.12.2"
 glob = "0.3.3"
