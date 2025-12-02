@@ -18,12 +18,16 @@ sail-iceberg = { path = "../sail-iceberg" }
 sail-function = { path = "../sail-function" }
 sail-logical-plan = { path = "../sail-logical-plan" }
 sail-physical-plan = { path = "../sail-physical-plan" }
+sail-telemetry = { path = "../sail-telemetry" }
 
 thiserror = { workspace = true }
 tokio = { workspace = true }
 tonic = { workspace = true }
 tonic-types = { workspace = true }
 tonic-prost = { workspace = true }
+fastrace = { workspace = true }
+fastrace-tonic = { workspace = true }
+tower = { workspace = true }
 prost = { workspace = true }
 datafusion = { workspace = true }
 datafusion-proto = { workspace = true }

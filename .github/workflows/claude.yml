@@ -39,8 +39,6 @@ jobs:
           python-version: "3.11"
 
       - uses: pypa/hatch@install
-        with:
-          version: 1.15.1
 
       - uses: ./.github/actions/setup-rust
 

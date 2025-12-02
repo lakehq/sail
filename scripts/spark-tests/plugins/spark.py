@@ -21,7 +21,7 @@ def _is_spark_testing():
 
 @pytest.fixture(scope="session", autouse=_is_spark_testing())
 def spark_working_dir(tmp_path_factory):
-    import pyspark
+    import pyspark  # noqa: PLC0415
 
     working_dir = tmp_path_factory.mktemp("spark-working-dir-")
 
@@ -67,7 +67,7 @@ def spark_env_var(tmp_path_factory):
 @pytest.fixture(scope="module", autouse=_is_spark_testing())
 def spark_doctest_session(doctest_namespace, request):
     if request.config.option.doctestmodules:
-        from pyspark.sql import SparkSession
+        from pyspark.sql import SparkSession  # noqa: PLC0415
 
         spark = SparkSession.builder.appName("doctest").remote("local").getOrCreate()
         doctest_namespace["spark"] = spark
@@ -83,7 +83,7 @@ def spark_doctest_session(doctest_namespace, request):
 
 
 def normalize_pandas_data_frame(df):
-    from pandas.api.types import is_hashable
+    from pandas.api.types import is_hashable  # noqa: PLC0415
 
     columns = [col for col in df.columns if all(is_hashable(v) for v in df[col])]
     return df.sort_values(by=columns, ignore_index=True)
@@ -91,7 +91,7 @@ def normalize_pandas_data_frame(df):
 
 @pytest.fixture(scope="session", autouse=_is_spark_testing())
 def patch_pyspark_pandas_test_utils():
-    from pyspark.testing.pandasutils import PandasOnSparkTestUtils
+    from pyspark.testing.pandasutils import PandasOnSparkTestUtils  # noqa: PLC0415
 
     _assert_eq = PandasOnSparkTestUtils.assert_eq
 
@@ -103,7 +103,7 @@ def patch_pyspark_pandas_test_utils():
         check_row_order: bool = False,  # noqa: FBT001, FBT002
         **kwargs,
     ):
-        import pandas as pd
+        import pandas as pd  # noqa: PLC0415
 
         if not check_row_order and isinstance(left, pd.DataFrame) and isinstance(right, pd.DataFrame):
             left = normalize_pandas_data_frame(left)
@@ -116,8 +116,8 @@ def patch_pyspark_pandas_test_utils():
 
 @pytest.fixture(scope="session", autouse=_is_spark_testing())
 def patch_pandas_test_utils():
-    import pyspark
-    from pandas.testing import assert_frame_equal as _assert_frame_equal
+    import pyspark  # noqa: PLC0415
+    from pandas.testing import assert_frame_equal as _assert_frame_equal  # noqa: PLC0415
 
     def assert_frame_equal(left, right, **kwargs):
         left = normalize_pandas_data_frame(left)
@@ -163,7 +163,7 @@ def patch_pandas_test_utils():
 
 
 def is_row_collection(obj):
-    from pyspark.sql import Row
+    from pyspark.sql import Row  # noqa: PLC0415
 
     return isinstance(obj, Iterable) and all(isinstance(x, Row) for x in obj)
 
@@ -174,7 +174,7 @@ def normalize_row_collection(obj):
 
 @pytest.fixture(scope="session", autouse=_is_spark_testing())
 def patch_pyspark_connect_test_class():
-    from pyspark.testing.connectutils import ReusedConnectTestCase
+    from pyspark.testing.connectutils import ReusedConnectTestCase  # noqa: PLC0415
 
     def assertEqual(self, first, second, msg=None):  # noqa: N802
         if is_row_collection(first) and is_row_collection(second):
@@ -393,7 +393,7 @@ def normalize_summary_df_show_string(s: str) -> str:
 
 
 def patch_pyspark_doctest_output_checker():
-    import _pytest.doctest
+    import _pytest.doctest  # noqa: PLC0415
 
     # ensure the doctest output checker class is initialized
     _ = _pytest.doctest._get_checker()

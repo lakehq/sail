@@ -18,6 +18,7 @@ edition = { workspace = true }
 [dependencies]
 sail-common = { path = "../sail-common" }
 sail-common-datafusion = { path = "../sail-common-datafusion" }
+sail-data-source = { path = "../sail-data-source" }
 
 # DataFusion dependencies
 datafusion = { workspace = true }

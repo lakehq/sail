@@ -8,10 +8,10 @@ use datafusion_datasource::file_format::FileFormat;
 
 use crate::formats::listing::{ListingFormat, ListingTableFormat};
 
-pub(crate) type ArrowTableFormat = ListingTableFormat<ArrowListingFormat>;
+pub type ArrowTableFormat = ListingTableFormat<ArrowListingFormat>;
 
 #[derive(Debug, Default)]
-pub(crate) struct ArrowListingFormat;
+pub struct ArrowListingFormat;
 
 impl ListingFormat for ArrowListingFormat {
     fn name(&self) -> &'static str {

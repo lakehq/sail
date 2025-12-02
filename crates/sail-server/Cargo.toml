@@ -7,13 +7,14 @@ edition = { workspace = true }
 workspace = true
 
 [dependencies]
-sail-telemetry = { path = "../sail-telemetry" }
 sail-common = { path = "../sail-common" }
 
 tokio = { workspace = true }
 tonic = { workspace = true }
 tonic-reflection = { workspace = true }
 tonic-health = { workspace = true }
+fastrace = { workspace = true }
+fastrace-tonic = { workspace = true }
 tower = { workspace = true }
 log = { workspace = true }
 axum = { workspace = true }

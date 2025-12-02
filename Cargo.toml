@@ -39,7 +39,7 @@ serde = { version = "1.0.228", features = ["derive"] }
 serde_json = "1.0.145"
 # TODO: `serde_yaml` is deprecated. No satisfactory alternative exists yet, we may need to build our own in the future.
 serde_yaml = "0.9.34"
-serde_with = { version = "3.16.0", default-features = false, features = ["base64", "std", "macros"] }
+serde_with = { version = "3.16.1", default-features = false, features = ["base64", "std", "macros"] }
 monostate = "1.0.2"
 regex = "1.12.2"
 glob = "0.3.3"
@@ -75,9 +75,11 @@ log = "0.4.28"
 env_logger = "0.11.8"
 fastrace = { version = "0.7.14", features = ["enable"] }
 fastrace-opentelemetry = "0.14.0"
+fastrace-tonic = "0.1.1"
 opentelemetry = "0.31.0"
 opentelemetry_sdk = "0.31.0"
 opentelemetry-otlp = { version = "0.31.0", features = ["tls", "tls-roots", "grpc-tonic"] }
+opentelemetry-appender-log = "0.31.0"
 figment = { version = "0.10.19", features = ["toml", "env"] }
 kube = "2.0.1"
 k8s-openapi = { version = "0.26.0", features = ["latest"] }
@@ -105,10 +107,10 @@ bytes = "1.11.0"
 indexmap = "2.12.1"
 pin-project-lite = "0.2.16"
 ordered-float = { version = "5.1.0", features = ["serde"] }
-apache-avro = { version = "0.20.0" }
+apache-avro = { version = "0.21.0" }
 rust_decimal = "1.39.0"
 wiremock = "0.6.5"
-testcontainers = "0.25.2"
+testcontainers = "0.26.0"
 progenitor = "0.11.2"
 progenitor-client = "0.11.2"
 secrecy = { version = "0.10.3", features = ["serde"] }

@@ -21,6 +21,8 @@ pub struct WorkerOptions {
     pub worker_stream_buffer: usize,
     pub rpc_retry_strategy: RetryStrategy,
     pub runtime: RuntimeHandle,
+    /// An optional W3C traceparent value for distributed tracing.
+    pub w3c_traceparent: Option<String>,
 }
 
 impl WorkerOptions {
@@ -44,6 +46,12 @@ impl WorkerOptions {
             worker_stream_buffer: config.cluster.worker_stream_buffer,
             rpc_retry_strategy: (&config.cluster.rpc_retry_strategy).into(),
             runtime,
+            w3c_traceparent: None,
         })
+    }
+
+    pub fn with_tracing(mut self, traceparent: String) -> Self {
+        self.w3c_traceparent = Some(traceparent);
+        self
     }
 }

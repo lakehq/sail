@@ -3,8 +3,6 @@ pub mod avro;
 pub mod binary;
 pub mod console;
 pub mod csv;
-pub mod delta;
-pub mod iceberg;
 pub mod json;
 pub mod listing;
 pub mod parquet;

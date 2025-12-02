@@ -31,8 +31,6 @@ jobs:
 
       - name: Install Hatch
         uses: pypa/hatch@install
-        with:
-          version: 1.15.1
 
       - uses: pnpm/action-setup@v4
 

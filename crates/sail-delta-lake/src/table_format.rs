@@ -8,21 +8,31 @@ use datafusion::datasource::listing::ListingTableUrl;
 use datafusion::execution::SessionStateBuilder;
 use datafusion::physical_plan::ExecutionPlan;
 use sail_common_datafusion::datasource::{
-    DeleteInfo, PhysicalSinkMode, SinkInfo, SourceInfo, TableFormat,
+    DeleteInfo, PhysicalSinkMode, SinkInfo, SourceInfo, TableFormat, TableFormatRegistry,
 };
 use sail_common_datafusion::streaming::event::schema::is_flow_event_schema;
-use sail_delta_lake::datasource::{parse_predicate_expression, DataFusionMixins};
-use sail_delta_lake::options::{ColumnMappingModeOption, TableDeltaOptions};
-use sail_delta_lake::physical_plan::plan_builder::DeltaTableConfig;
-use sail_delta_lake::physical_plan::{DeltaDeletePlanBuilder, DeltaPlanBuilder};
-use sail_delta_lake::table::open_table_with_object_store;
-use sail_delta_lake::{create_delta_provider, DeltaTableError, KernelError};
+use sail_data_source::options::{
+    load_default_options, load_options, DeltaReadOptions, DeltaWriteOptions,
+};
+use sail_data_source::resolve_listing_urls;
 use url::Url;
 
-use crate::options::{load_default_options, load_options, DeltaReadOptions, DeltaWriteOptions};
+use crate::datasource::{parse_predicate_expression, DataFusionMixins};
+use crate::options::{ColumnMappingModeOption, TableDeltaOptions};
+use crate::physical_plan::plan_builder::DeltaTableConfig;
+use crate::physical_plan::{DeltaDeletePlanBuilder, DeltaPlanBuilder};
+use crate::table::open_table_with_object_store;
+use crate::{create_delta_provider, DeltaTableError, KernelError};
 
+/// Delta Lake implementation of [`TableFormat`].
 #[derive(Debug)]
 pub struct DeltaTableFormat;
+
+impl DeltaTableFormat {
+    pub fn register(registry: &TableFormatRegistry) -> Result<()> {
+        registry.register(Arc::new(Self))
+    }
+}
 
 #[async_trait]
 impl TableFormat for DeltaTableFormat {
@@ -74,7 +84,6 @@ impl TableFormat for DeltaTableFormat {
         let table_url = Self::parse_table_url(ctx, vec![path]).await?;
         let delta_options = resolve_delta_write_options(options)?;
 
-        // Check for table existence
         let object_store = ctx
             .runtime_env()
             .object_store_registry
@@ -90,7 +99,6 @@ impl TableFormat for DeltaTableFormat {
                 Err(err) => return Err(DataFusionError::External(Box::new(err))),
             };
 
-        // Handle cases that don't require actual writing
         match mode {
             PhysicalSinkMode::ErrorIfExists => {
                 if table_exists {
@@ -99,7 +107,6 @@ impl TableFormat for DeltaTableFormat {
             }
             PhysicalSinkMode::IgnoreIfExists => {
                 if table_exists {
-                    // If table exists, do nothing. We can return an empty plan.
                     return Ok(Arc::new(datafusion::physical_plan::empty::EmptyExec::new(
                         input.schema(),
                     )));
@@ -108,13 +115,11 @@ impl TableFormat for DeltaTableFormat {
             PhysicalSinkMode::OverwritePartitions => {
                 return not_impl_err!("unsupported sink mode for Delta: {mode:?}")
             }
-            _ => {} // Other modes will be handled in the execution phase
+            _ => {}
         }
 
-        // Convert Overwrite with replace_where to OverwriteIf
         let (unified_mode, table_schema_for_cond) = if let PhysicalSinkMode::Overwrite = mode {
             if let Some(replace_where) = &delta_options.replace_where {
-                // Parse the replace_where condition into a PhysicalExpr
                 let (mode, schema) = Self::parse_replace_where_condition(
                     ctx,
                     &table_url,
@@ -172,7 +177,7 @@ impl TableFormat for DeltaTableFormat {
 
 impl DeltaTableFormat {
     async fn parse_table_url(ctx: &dyn Session, paths: Vec<String>) -> Result<Url> {
-        let mut urls = crate::url::resolve_listing_urls(ctx, paths.clone()).await?;
+        let mut urls = resolve_listing_urls(ctx, paths.clone()).await?;
         match (urls.pop(), urls.is_empty()) {
             (Some(path), true) => Ok(<ListingTableUrl as AsRef<Url>>::as_ref(&path).clone()),
             _ => plan_err!("expected a single path for Delta table sink: {paths:?}"),
@@ -186,7 +191,6 @@ impl DeltaTableFormat {
         table_exists: bool,
     ) -> Result<(PhysicalSinkMode, Arc<datafusion::arrow::datatypes::Schema>)> {
         if !table_exists {
-            // When table doesn't exist, it's a simple overwrite and no condition is needed.
             return plan_err!("Table does not exist, cannot use replaceWhere");
         }
 
