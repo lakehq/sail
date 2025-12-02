@@ -5,18 +5,24 @@ use async_trait::async_trait;
 use datafusion::catalog::{Session, TableProvider};
 use datafusion::common::{not_impl_err, Result};
 use datafusion::physical_plan::ExecutionPlan;
-use sail_common_datafusion::datasource::{SinkInfo, SourceInfo, TableFormat};
-use sail_duck_lake::create_ducklake_provider;
-use sail_duck_lake::options::DuckLakeOptions;
+use sail_common_datafusion::datasource::{SinkInfo, SourceInfo, TableFormat, TableFormatRegistry};
+use sail_data_source::options::{load_default_options, load_options, DuckLakeReadOptions};
 use url::Url;
 
-use crate::options::{load_default_options, load_options, DuckLakeReadOptions};
+use crate::{create_ducklake_provider, DuckLakeOptions};
 
+/// DuckLake implementation of [`TableFormat`].
 #[derive(Debug, Default)]
-pub struct DuckLakeDataSourceFormat;
+pub struct DuckLakeTableFormat;
+
+impl DuckLakeTableFormat {
+    pub fn register(registry: &TableFormatRegistry) -> Result<()> {
+        registry.register(Arc::new(Self::default()))
+    }
+}
 
 #[async_trait]
-impl TableFormat for DuckLakeDataSourceFormat {
+impl TableFormat for DuckLakeTableFormat {
     fn name(&self) -> &str {
         "ducklake"
     }

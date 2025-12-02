@@ -5,6 +5,8 @@ edition = { workspace = true }
 
 [dependencies]
 
+sail-common-datafusion = { path = "../sail-common-datafusion" }
+sail-data-source = { path = "../sail-data-source" }
 serde = { workspace = true, features = ["derive"] }
 serde_json = { workspace = true }
 uuid = { workspace = true }
@@ -20,4 +22,3 @@ pyo3 = { workspace = true }
 
 [lints]
 workspace = true
-

@@ -5,8 +5,8 @@ use datafusion::execution::SessionState;
 use datafusion::physical_plan::ExecutionPlan;
 use datafusion::physical_planner::PhysicalPlanner;
 use datafusion_common::Result;
-use sail_common_datafusion::datasource::DeleteInfo;
-use sail_data_source::default_registry;
+use sail_common_datafusion::datasource::{DeleteInfo, TableFormatRegistry};
+use sail_common_datafusion::extension::SessionExtensionAccessor;
 use sail_logical_plan::file_delete::FileDeleteOptions;
 
 pub async fn create_file_delete_physical_plan(
@@ -38,8 +38,6 @@ pub async fn create_file_delete_physical_plan(
             .collect(),
     };
 
-    default_registry()
-        .get_format(&format)?
-        .create_deleter(ctx, info)
-        .await
+    let registry = ctx.extension::<TableFormatRegistry>()?;
+    registry.get(&format)?.create_deleter(ctx, info).await
 }

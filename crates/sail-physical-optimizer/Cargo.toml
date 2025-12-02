@@ -11,5 +11,5 @@ sail-physical-plan = { path = "../sail-physical-plan" }
 
 datafusion = { workspace = true }
 datafusion-physical-expr = { workspace = true }
-itertools = { workspace = true }
+# itertools = { workspace = true }
 log = { workspace = true }

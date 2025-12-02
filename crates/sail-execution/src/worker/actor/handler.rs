@@ -10,6 +10,9 @@ use datafusion::physical_plan::display::DisplayableExecutionPlan;
 use datafusion::physical_plan::ExecutionPlan;
 use datafusion_proto::physical_plan::AsExecutionPlan;
 use datafusion_proto::protobuf::PhysicalPlanNode;
+use fastrace::future::FutureExt;
+use fastrace::prelude::SpanContext;
+use fastrace::{func_path, Span};
 use log::{debug, error, info, warn};
 use prost::Message;
 use sail_common_datafusion::error::CommonErrorCause;
@@ -54,12 +57,28 @@ impl WorkerActor {
         let retry_strategy = self.options().rpc_retry_strategy.clone();
         let client = self.driver_client();
         let handle = ctx.handle().clone();
+        let span_context = self
+            .options()
+            .w3c_traceparent
+            .as_ref()
+            .and_then(|x| SpanContext::decode_w3c_traceparent(x));
         ctx.spawn(async move {
+            let mut attempt = 0;
             if let Err(e) = retry_strategy
                 .run(|| {
+                    attempt += 1;
                     let client = client.clone();
                     let host = host.clone();
-                    async move { client.register_worker(worker_id, host, port).await }
+                    let span = span_context
+                        .map(|x| Span::root(func_path!(), x))
+                        .unwrap_or_default()
+                        .with_properties(|| {
+                            [
+                                ("worker_id", worker_id.to_string()),
+                                ("attempt", attempt.to_string()),
+                            ]
+                        });
+                    async move { client.register_worker(worker_id, host, port).await }.in_span(span)
                 })
                 .await
             {
