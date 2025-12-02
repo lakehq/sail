@@ -23,7 +23,7 @@ use crate::utils::split_parquet_compression_string;
 
 // TODO: support global configuration to ignore file extension (by setting it to empty)
 /// A trait for defining the specifics of a listing table format.
-pub(crate) trait ListingFormat: Debug + Send + Sync + 'static {
+pub trait ListingFormat: Debug + Send + Sync + 'static {
     fn name(&self) -> &'static str;
     fn create_read_format(
         &self,
@@ -39,7 +39,7 @@ pub(crate) trait ListingFormat: Debug + Send + Sync + 'static {
 }
 
 #[derive(Debug)]
-pub(crate) struct ListingTableFormat<T: ListingFormat> {
+pub struct ListingTableFormat<T: ListingFormat> {
     inner: T,
 }
 

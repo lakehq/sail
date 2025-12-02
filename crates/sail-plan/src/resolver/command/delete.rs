@@ -5,11 +5,10 @@ use datafusion_expr::{Extension, LogicalPlan};
 use sail_catalog::manager::CatalogManager;
 use sail_catalog::provider::{TableKind, TableStatus};
 use sail_common::spec;
-use sail_common_datafusion::datasource::SourceInfo;
+use sail_common_datafusion::datasource::{SourceInfo, TableFormatRegistry};
 use sail_common_datafusion::extension::SessionExtensionAccessor;
 use sail_common_datafusion::rename::expression::expression_before_rename;
 use sail_common_datafusion::rename::schema::rename_schema;
-use sail_data_source::default_registry;
 use sail_logical_plan::file_delete::{FileDeleteNode, FileDeleteOptions};
 
 use crate::error::{PlanError, PlanResult};
@@ -105,7 +104,8 @@ impl PlanResolver<'_> {
                 sort_order: vec![],
                 options: vec![],
             };
-            let table_format = default_registry().get_format(&format)?;
+            let registry = self.ctx.extension::<TableFormatRegistry>()?;
+            let table_format = registry.get(&format)?;
             let provider = table_format
                 .create_provider(&self.ctx.state(), source_info)
                 .await?;

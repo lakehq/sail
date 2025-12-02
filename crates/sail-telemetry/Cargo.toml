@@ -10,11 +10,11 @@ workspace = true
 sail-common = { path = "../sail-common" }
 
 thiserror = { workspace = true }
-tonic = { workspace = true }
-tower = { workspace = true }
 env_logger = { workspace = true }
 fastrace = { workspace = true }
 fastrace-opentelemetry = { workspace = true }
 opentelemetry = { workspace = true }
 opentelemetry_sdk = { workspace = true }
 opentelemetry-otlp = { workspace = true }
+opentelemetry-appender-log = { workspace = true }
+log = { workspace = true }

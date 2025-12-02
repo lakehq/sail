@@ -57,6 +57,7 @@ impl WorkerManager for LocalWorkerManager {
             worker_stream_buffer: options.worker_stream_buffer,
             rpc_retry_strategy: options.rpc_retry_strategy,
             runtime: self.runtime.clone(),
+            w3c_traceparent: options.w3c_traceparent,
         };
         let mut state = self.state.lock().await;
         let handle = state.system.spawn(options);

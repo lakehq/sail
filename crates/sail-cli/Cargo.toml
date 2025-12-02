@@ -24,6 +24,5 @@ mimalloc = { workspace = true, optional = true }
 clap = { workspace = true }
 tokio = { workspace = true }
 log = { workspace = true }
-fastrace = { workspace = true }
 pyo3 = { workspace = true }
 rustls = { workspace = true }

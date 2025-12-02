@@ -34,10 +34,10 @@ impl Default for TableTextOptions {
     }
 }
 
-pub(crate) type TextTableFormat = ListingTableFormat<TextListingFormat>;
+pub type TextTableFormat = ListingTableFormat<TextListingFormat>;
 
 #[derive(Debug, Default)]
-pub(crate) struct TextListingFormat;
+pub struct TextListingFormat;
 
 impl ListingFormat for TextListingFormat {
     fn name(&self) -> &'static str {

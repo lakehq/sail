@@ -10,8 +10,9 @@ use sail_common_datafusion::datasource::{
     MergeAssignmentInfo, MergeInfo as PhysicalMergeInfo, MergeMatchedActionInfo,
     MergeMatchedClauseInfo, MergeNotMatchedBySourceActionInfo, MergeNotMatchedBySourceClauseInfo,
     MergeNotMatchedByTargetActionInfo, MergeNotMatchedByTargetClauseInfo, MergeTargetInfo,
+    TableFormatRegistry,
 };
-use sail_data_source::default_registry;
+use sail_common_datafusion::extension::SessionExtensionAccessor;
 use sail_logical_plan::merge::{
     MergeAssignment, MergeIntoNode, MergeMatchedAction, MergeMatchedClause,
     MergeNotMatchedBySourceAction, MergeNotMatchedBySourceClause, MergeNotMatchedByTargetAction,
@@ -73,7 +74,8 @@ pub async fn create_merge_physical_plan(
         options: convert_options(&node.options().target.options),
     };
 
-    let merge_info = PhysicalMergeInfo {
+    let format = node.options().target.format.clone();
+    let info = PhysicalMergeInfo {
         target,
         target_input: physical_target,
         source: physical_source,
@@ -86,10 +88,8 @@ pub async fn create_merge_physical_plan(
         with_schema_evolution: node.options().with_schema_evolution,
     };
 
-    default_registry()
-        .get_format(&node.options().target.format)?
-        .create_merger(ctx, merge_info)
-        .await
+    let registry = ctx.extension::<TableFormatRegistry>()?;
+    registry.get(&format)?.create_merger(ctx, info).await
 }
 
 fn convert_matched_clauses(

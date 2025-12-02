@@ -2,9 +2,11 @@ use std::future::Future;
 use std::sync::Arc;
 
 use arrow_flight::flight_service_client::FlightServiceClient;
+use fastrace_tonic::{FastraceClientLayer, FastraceClientService};
 use tokio::sync::{oneshot, OnceCell};
 use tokio::task::JoinHandle;
 use tonic::transport::Channel;
+use tower::ServiceBuilder;
 
 use crate::driver::DriverServiceClient;
 use crate::error::{ExecutionError, ExecutionResult};
@@ -117,19 +119,24 @@ macro_rules! impl_client_builder {
         #[tonic::async_trait]
         impl ClientBuilder for $client_type {
             async fn connect(options: &ClientOptions) -> ExecutionResult<Self> {
-                let conn = tonic::transport::Endpoint::new(options.to_url_string())?
+                let channel = tonic::transport::Endpoint::new(options.to_url_string())?
                     .http2_max_header_list_size(CLIENT_MAX_HEADER_LIST_SIZE)
                     .connect()
                     .await?;
-                Ok(<$client_type>::new(conn))
+                let channel = ServiceBuilder::new()
+                    .layer(FastraceClientLayer)
+                    .service(channel);
+                Ok(<$client_type>::new(channel))
             }
         }
     };
 }
 
-impl_client_builder!(DriverServiceClient<Channel>);
-impl_client_builder!(WorkerServiceClient<Channel>);
-impl_client_builder!(FlightServiceClient<Channel>);
+pub type ClientService = FastraceClientService<Channel>;
+
+impl_client_builder!(DriverServiceClient<ClientService>);
+impl_client_builder!(WorkerServiceClient<ClientService>);
+impl_client_builder!(FlightServiceClient<ClientService>);
 
 /// A handle to a gRPC client to support connection reuse.
 /// The handle can be cheaply cloned and the underlying connection is shared.

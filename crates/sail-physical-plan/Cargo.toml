@@ -8,7 +8,6 @@ workspace = true
 
 [dependencies]
 sail-common-datafusion = { path = "../sail-common-datafusion" }
-sail-data-source = { path = "../sail-data-source" }
 sail-logical-plan = { path = "../sail-logical-plan" }
 
 datafusion = { workspace = true }
