@@ -89,22 +89,22 @@ pub struct SchemaInfo {
     pub path_is_relative: bool,
 }
 
-/// Column metadata from `ducklake_column` table.
-/// Supports nested columns via `parent_column` field for complex types.
-#[derive(Debug, Serialize, Deserialize, Clone, PartialEq, Eq)]
-pub struct ColumnInfo {
-    pub column_id: FieldIndex,
-    pub begin_snapshot: Option<u64>,
-    pub end_snapshot: Option<u64>,
-    pub table_id: TableIndex,
-    pub column_order: u64,
-    pub column_name: String,
-    pub column_type: String,
-    pub initial_default: Option<String>,
-    pub default_value: Option<String>,
-    pub nulls_allowed: bool,
-    pub parent_column: Option<FieldIndex>,
-}
+// /// Column metadata from `ducklake_column` table.
+// /// Supports nested columns via `parent_column` field for complex types.
+// #[derive(Debug, Serialize, Deserialize, Clone, PartialEq, Eq)]
+// pub struct ColumnInfo {
+//     pub column_id: FieldIndex,
+//     pub begin_snapshot: Option<u64>,
+//     pub end_snapshot: Option<u64>,
+//     pub table_id: TableIndex,
+//     pub column_order: u64,
+//     pub column_name: String,
+//     pub column_type: String,
+//     pub initial_default: Option<String>,
+//     pub default_value: Option<String>,
+//     pub nulls_allowed: bool,
+//     pub parent_column: Option<FieldIndex>,
+// }
 
 /// Table metadata from `ducklake_table` table.
 /// Aggregates columns and inlined data tables for the complete table definition.
@@ -118,8 +118,6 @@ pub struct TableInfo {
     pub table_name: String,
     pub path: String,
     pub path_is_relative: bool,
-    #[serde(default, skip_serializing_if = "Vec::is_empty")]
-    pub columns: Vec<ColumnInfo>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub inlined_data_tables: Vec<InlinedTableInfo>,
 }

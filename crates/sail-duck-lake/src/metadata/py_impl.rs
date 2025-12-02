@@ -1,15 +1,19 @@
+use std::sync::Arc;
+
 use async_trait::async_trait;
+use datafusion::arrow::datatypes::{Field, Schema};
 use datafusion::common::{DataFusionError, Result as DataFusionResult};
 use pyo3::prelude::PyAnyMethods;
 use pyo3::type_object::PyTypeInfo;
 use pyo3::{FromPyObject, PyResult, Python};
 use serde::Deserialize;
 
+use crate::datasource::arrow::build_arrow_field;
 use crate::metadata::{DuckLakeMetaStore, DuckLakeSnapshot, DuckLakeTable, ListDataFilesRequest};
 use crate::python::Modules;
 use crate::spec::{
-    ColumnInfo, DataFileIndex, FieldIndex, FileInfo, MappingIndex, PartitionId, SchemaInfo,
-    SnapshotInfo, TableIndex, TableInfo,
+    DataFileIndex, FieldIndex, FileInfo, MappingIndex, PartitionId, SchemaInfo, SnapshotInfo,
+    TableIndex, TableInfo,
 };
 
 #[derive(Deserialize, FromPyObject)]
@@ -50,7 +54,9 @@ struct PyTableInfo {
 #[pyo3(from_item_all)]
 struct PyColumnInfo {
     column_id: u64,
+    #[allow(dead_code)]
     begin_snapshot: Option<u64>,
+    #[allow(dead_code)]
     end_snapshot: Option<u64>,
     #[allow(dead_code)]
     table_id: u64,
@@ -179,27 +185,22 @@ impl TryFrom<PyTableInfo> for TableInfo {
             table_name: p.table_name,
             path: p.path,
             path_is_relative: p.path_is_relative,
-            columns: vec![],
             inlined_data_tables: vec![],
         })
     }
 }
 
 impl PyColumnInfo {
-    fn into_column_info(self, table_id: TableIndex) -> ColumnInfo {
-        ColumnInfo {
-            column_id: FieldIndex(self.column_id),
-            begin_snapshot: self.begin_snapshot,
-            end_snapshot: self.end_snapshot,
-            table_id,
-            column_order: self.column_order,
-            column_name: self.column_name,
-            column_type: self.column_type,
-            initial_default: self.initial_default,
-            default_value: self.default_value,
-            nulls_allowed: self.nulls_allowed,
-            parent_column: self.parent_column.map(FieldIndex),
-        }
+    fn into_arrow_field(self) -> DataFusionResult<Field> {
+        build_arrow_field(
+            &self.column_name,
+            &self.column_type,
+            self.nulls_allowed,
+            FieldIndex(self.column_id),
+            self.column_order,
+            self.default_value.as_deref(),
+            self.initial_default.as_deref(),
+        )
     }
 }
 
@@ -322,17 +323,18 @@ impl DuckLakeMetaStore for PythonMetaStore {
 
         let schema_info: SchemaInfo = parsed.schema_info.try_into()?;
         let table_info: TableInfo = parsed.table_info.try_into()?;
-        let table_id = table_info.table_id;
-        let columns: Vec<ColumnInfo> = parsed
+        let fields: Vec<Field> = parsed
             .columns
             .into_iter()
-            .map(|c| c.into_column_info(table_id))
-            .collect();
+            .filter(|c| c.parent_column.is_none())
+            .map(PyColumnInfo::into_arrow_field)
+            .collect::<DataFusionResult<_>>()?;
+        let schema = Arc::new(Schema::new(fields));
 
         Ok(DuckLakeTable {
             table_info,
             schema_info,
-            columns,
+            schema,
             partition_fields: parsed
                 .partition_fields
                 .into_iter()

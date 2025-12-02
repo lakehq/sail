@@ -1,18 +1,17 @@
 mod py_impl;
 
 use async_trait::async_trait;
+use datafusion::arrow::datatypes::SchemaRef as ArrowSchemaRef;
 use datafusion::common::Result as DataFusionResult;
 pub use py_impl::PythonMetaStore;
 
-use crate::spec::{
-    ColumnInfo, FieldIndex, FileInfo, PartitionFilter, SchemaInfo, SnapshotInfo, TableInfo,
-};
+use crate::spec::{FieldIndex, FileInfo, PartitionFilter, SchemaInfo, SnapshotInfo, TableInfo};
 
 #[derive(Debug, Clone)]
 pub struct DuckLakeTable {
     pub table_info: TableInfo,
     pub schema_info: SchemaInfo,
-    pub columns: Vec<ColumnInfo>,
+    pub schema: ArrowSchemaRef,
     pub partition_fields: Vec<crate::spec::PartitionFieldInfo>,
 }
 

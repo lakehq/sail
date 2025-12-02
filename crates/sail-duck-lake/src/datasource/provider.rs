@@ -20,12 +20,12 @@ use datafusion_common::{DataFusionError, Result as DataFusionResult};
 use object_store::path::Path as ObjectStorePath;
 use url::Url;
 
-use crate::datasource::arrow::columns_to_arrow_schema;
+use crate::datasource::arrow::{field_column_id, schema_column_name_by_id};
 use crate::datasource::expressions::{get_pushdown_filters, simplify_expr};
 use crate::datasource::pruning::prune_files;
 use crate::metadata::{DuckLakeMetaStore, DuckLakeTable, ListDataFilesRequest};
 use crate::options::DuckLakeOptions;
-use crate::spec::{ColumnInfo, FieldIndex, FileInfo, PartitionFieldInfo, PartitionFilter};
+use crate::spec::{FieldIndex, FileInfo, PartitionFieldInfo, PartitionFilter};
 
 pub struct DuckLakeTableProvider {
     table: DuckLakeTable,
@@ -54,13 +54,13 @@ impl DuckLakeTableProvider {
         };
 
         let table = meta_store.load_table(table_name, schema_name).await?;
-        let schema = Arc::new(columns_to_arrow_schema(&table.columns)?);
+        let schema = table.schema.clone();
 
         log::trace!(
             "Loaded DuckLake table: {}.{} with {} columns",
             table.schema_info.schema_name,
             table.table_info.table_name,
-            table.columns.len()
+            schema.fields().len()
         );
 
         Ok(Self {
@@ -118,7 +118,7 @@ impl TableProvider for DuckLakeTableProvider {
 
         let (partition_filters, remaining_filters) = Self::extract_partition_filters(
             filters,
-            &self.table.columns,
+            self.schema.as_ref(),
             &self.table.partition_fields,
         );
         let (pruning_filters, pushdown_filters) = self.separate_filters(&remaining_filters);
@@ -136,7 +136,6 @@ impl TableProvider for DuckLakeTableProvider {
             limit,
             prune_schema.clone(),
             files,
-            &self.table.columns,
             &self.table.partition_fields,
         )?;
 
@@ -211,8 +210,10 @@ impl DuckLakeTableProvider {
         schema: &datafusion::arrow::datatypes::Schema,
     ) -> Vec<FieldIndex> {
         let mut name_to_id: HashMap<String, FieldIndex> = HashMap::new();
-        for column in &self.table.columns {
-            name_to_id.insert(column.column_name.clone(), column.column_id);
+        for field in schema.fields() {
+            if let Some(column_id) = field_column_id(field) {
+                name_to_id.insert(field.name().clone(), column_id);
+            }
         }
 
         let mut seen = HashSet::new();
@@ -338,15 +339,14 @@ impl DuckLakeTableProvider {
 
     fn extract_partition_filters(
         filters: &[Expr],
-        columns: &[ColumnInfo],
+        schema: &datafusion::arrow::datatypes::Schema,
         partition_fields: &[PartitionFieldInfo],
     ) -> (Vec<PartitionFilter>, Vec<Expr>) {
         let mut name_to_partition_key: HashMap<String, u64> = HashMap::new();
         for field in partition_fields {
-            if let Some(col) = columns.iter().find(|c| c.column_id == field.column_id) {
-                if field.transform.trim().eq_ignore_ascii_case("identity") {
-                    name_to_partition_key
-                        .insert(col.column_name.clone(), field.partition_key_index);
+            if field.transform.trim().eq_ignore_ascii_case("identity") {
+                if let Some(column_name) = schema_column_name_by_id(schema, field.column_id) {
+                    name_to_partition_key.insert(column_name, field.partition_key_index);
                 }
             }
         }

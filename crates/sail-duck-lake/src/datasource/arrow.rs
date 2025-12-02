@@ -1,17 +1,36 @@
+use std::collections::HashMap;
 use std::sync::Arc;
 
 use datafusion::arrow::datatypes::{DataType, Field, Schema as ArrowSchema, TimeUnit};
 use datafusion::common::{DataFusionError, Result as DataFusionResult};
 
-use crate::spec::ColumnInfo;
+use crate::spec::FieldIndex;
 
-impl TryFrom<&ColumnInfo> for Field {
-    type Error = DataFusionError;
+pub const METADATA_COLUMN_ID: &str = "ducklake:column_id";
+pub const METADATA_COLUMN_ORDER: &str = "ducklake:column_order";
+pub const METADATA_DEFAULT_VALUE: &str = "ducklake:default_value";
+pub const METADATA_INITIAL_DEFAULT: &str = "ducklake:initial_default";
 
-    fn try_from(col: &ColumnInfo) -> Result<Self, Self::Error> {
-        let data_type = parse_ducklake_type(&col.column_type)?;
-        Ok(Field::new(&col.column_name, data_type, col.nulls_allowed))
+pub fn build_arrow_field(
+    name: &str,
+    type_str: &str,
+    nullable: bool,
+    column_id: FieldIndex,
+    column_order: u64,
+    default_value: Option<&str>,
+    initial_default: Option<&str>,
+) -> DataFusionResult<Field> {
+    let data_type = parse_ducklake_type(type_str)?;
+    let mut metadata = HashMap::new();
+    metadata.insert(METADATA_COLUMN_ID.to_string(), column_id.0.to_string());
+    metadata.insert(METADATA_COLUMN_ORDER.to_string(), column_order.to_string());
+    if let Some(def) = default_value {
+        metadata.insert(METADATA_DEFAULT_VALUE.to_string(), def.to_string());
     }
+    if let Some(initial) = initial_default {
+        metadata.insert(METADATA_INITIAL_DEFAULT.to_string(), initial.to_string());
+    }
+    Ok(Field::new(name, data_type, nullable).with_metadata(metadata))
 }
 
 pub fn parse_ducklake_type(type_str: &str) -> DataFusionResult<DataType> {
@@ -79,12 +98,19 @@ pub fn parse_ducklake_type(type_str: &str) -> DataFusionResult<DataType> {
     }
 }
 
-pub fn columns_to_arrow_schema(columns: &[ColumnInfo]) -> DataFusionResult<ArrowSchema> {
-    let fields: Vec<Field> = columns
-        .iter()
-        .filter(|c| c.parent_column.is_none())
-        .map(Field::try_from)
-        .collect::<DataFusionResult<Vec<_>>>()?;
+pub fn field_column_id(field: &Field) -> Option<FieldIndex> {
+    field
+        .metadata()
+        .get(METADATA_COLUMN_ID)
+        .and_then(|v| v.parse::<u64>().ok())
+        .map(FieldIndex)
+}
 
-    Ok(ArrowSchema::new(fields))
+pub fn schema_column_name_by_id(schema: &ArrowSchema, column_id: FieldIndex) -> Option<String> {
+    for field in schema.fields() {
+        if field_column_id(field) == Some(column_id) {
+            return Some(field.name().clone());
+        }
+    }
+    None
 }

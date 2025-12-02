@@ -12,9 +12,10 @@ use datafusion::logical_expr::utils::conjunction;
 use datafusion::logical_expr::Expr;
 use datafusion::physical_optimizer::pruning::PruningPredicate;
 
+use crate::datasource::arrow::field_column_id;
 use crate::spec::{
-    parse_year, parse_year_month, parse_year_month_day, parse_year_month_day_hour, ColumnInfo,
-    ColumnStatsInfo, FieldIndex, FileInfo, PartitionFieldInfo, Transform,
+    parse_year, parse_year_month, parse_year_month_day, parse_year_month_day_hour, ColumnStatsInfo,
+    FieldIndex, FileInfo, PartitionFieldInfo, Transform,
 };
 
 /// TODO:Implement contains_nan-aware float/double pruning gates
@@ -33,17 +34,14 @@ impl DuckLakePruningStats {
     fn new(
         files: Vec<FileInfo>,
         arrow_schema: Arc<ArrowSchema>,
-        columns: &[ColumnInfo],
         partition_fields: &[PartitionFieldInfo],
     ) -> Self {
         let mut name_to_field_id: HashMap<String, FieldIndex> = HashMap::new();
         let mut field_id_to_datatype: HashMap<FieldIndex, ArrowDataType> = HashMap::new();
-        for c in columns {
-            name_to_field_id.insert(c.column_name.clone(), c.column_id);
-        }
-        for f in arrow_schema.fields() {
-            if let Some(fid) = name_to_field_id.get(f.name()) {
-                field_id_to_datatype.insert(*fid, f.data_type().clone());
+        for field in arrow_schema.fields() {
+            if let Some(field_id) = field_column_id(field) {
+                name_to_field_id.insert(field.name().clone(), field_id);
+                field_id_to_datatype.insert(field_id, field.data_type().clone());
             }
         }
         let rows: Vec<u64> = files.iter().map(|f| f.record_count).collect();
@@ -335,7 +333,6 @@ pub fn prune_files(
     limit: Option<usize>,
     logical_schema: Arc<ArrowSchema>,
     files: Vec<FileInfo>,
-    columns: &[ColumnInfo],
     partition_fields: &[PartitionFieldInfo],
 ) -> DataFusionResult<(Vec<FileInfo>, Option<Vec<bool>>)> {
     let filter_expr = conjunction(filters.iter().cloned());
@@ -343,7 +340,7 @@ pub fn prune_files(
         return Ok((files, None));
     }
 
-    let stats = DuckLakePruningStats::new(files, logical_schema.clone(), columns, partition_fields);
+    let stats = DuckLakePruningStats::new(files, logical_schema.clone(), partition_fields);
     let files_to_keep = if let Some(predicate) = &filter_expr {
         let df_schema = logical_schema.clone().to_dfschema()?;
         let physical_predicate = session.create_physical_expr(predicate.clone(), &df_schema)?;
