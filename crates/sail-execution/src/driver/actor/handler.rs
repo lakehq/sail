@@ -10,6 +10,7 @@ use datafusion::physical_plan::stream::RecordBatchStreamAdapter;
 use datafusion::physical_plan::{ExecutionPlan, ExecutionPlanProperties};
 use datafusion_proto::physical_plan::AsExecutionPlan;
 use datafusion_proto::protobuf::PhysicalPlanNode;
+use fastrace::collector::SpanContext;
 use futures::future::try_join_all;
 use futures::TryStreamExt;
 use log::{debug, error, info, warn};
@@ -359,6 +360,8 @@ impl DriverActor {
     }
 
     fn start_worker(&mut self, ctx: &mut ActorContext<Self>, worker_id: WorkerId) {
+        let w3c_traceparent =
+            SpanContext::current_local_parent().map(|x| x.encode_w3c_traceparent());
         let Some(port) = self.server.port() else {
             error!("the driver server is not ready");
             return;
@@ -374,6 +377,7 @@ impl DriverActor {
             worker_heartbeat_interval: self.options().worker_heartbeat_interval,
             worker_stream_buffer: self.options().worker_stream_buffer,
             rpc_retry_strategy: self.options().rpc_retry_strategy.clone(),
+            w3c_traceparent,
         };
         let worker_manager = Arc::clone(&self.worker_manager);
         ctx.spawn(async move {

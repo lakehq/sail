@@ -11,6 +11,7 @@ use rand::distr::Uniform;
 use rand::Rng;
 use sail_common::config::ClusterConfigEnv;
 use sail_server::RetryStrategy;
+use sail_telemetry::common::ContextPropagationEnv;
 use tokio::sync::OnceCell;
 
 use crate::error::{ExecutionError, ExecutionResult};
@@ -111,6 +112,7 @@ impl KubernetesWorkerManager {
             worker_heartbeat_interval,
             worker_stream_buffer,
             rpc_retry_strategy,
+            w3c_traceparent,
         } = options;
 
         // There is no guarantee that serializing a Rust data structure produces an inline table,
@@ -138,7 +140,7 @@ impl KubernetesWorkerManager {
                 )
             }
         };
-        vec![
+        let mut env = vec![
             EnvVar {
                 name: "RUST_LOG".to_string(),
                 value: Some(env::var("RUST_LOG").unwrap_or("info".to_string())),
@@ -195,7 +197,15 @@ impl KubernetesWorkerManager {
                 value: Some(rpc_retry_strategy),
                 value_from: None,
             },
-        ]
+        ];
+        if let Some(traceparent) = w3c_traceparent {
+            env.push(EnvVar {
+                name: ContextPropagationEnv::TRACEPARENT.to_string(),
+                value: Some(traceparent),
+                value_from: None,
+            });
+        }
+        env
     }
 }
 

@@ -22,6 +22,7 @@ pub struct AppConfig {
     pub catalog: CatalogConfig,
     pub optimizer: OptimizerConfig,
     pub spark: SparkConfig,
+    pub telemetry: TelemetryConfig,
     /// Reserved for internal use.
     /// This field ensures that environment variables with prefix `SAIL_INTERNAL_`
     /// can only be used for internal configuration.
@@ -310,6 +311,32 @@ pub enum CatalogType {
 pub struct SparkConfig {
     pub session_timeout_secs: u64,
     pub execution_heartbeat_interval_secs: u64,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct TelemetryConfig {
+    pub export_traces: bool,
+    pub export_metrics: bool,
+    pub export_logs: bool,
+    pub otlp_endpoint: String,
+    pub otlp_protocol: OtlpProtocol,
+    pub otlp_timeout_secs: u64,
+    pub traces_export_interval_secs: u64,
+    pub metrics_export_interval_secs: u64,
+    pub logs_export_interval_secs: u64,
+    pub logs_export_max_queue_size: u64,
+    pub logs_export_batch_size: u64,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum OtlpProtocol {
+    Grpc,
+    #[serde(alias = "http-binary")]
+    HttpBinary,
+    #[serde(alias = "http-json")]
+    HttpJson,
 }
 
 /// Environment variables for application cluster configuration.
