@@ -11,10 +11,10 @@ use crate::formats::listing::{ListingFormat, ListingTableFormat};
 
 mod options;
 
-pub(crate) type CsvTableFormat = ListingTableFormat<CsvListingFormat>;
+pub type CsvTableFormat = ListingTableFormat<CsvListingFormat>;
 
 #[derive(Debug, Default)]
-pub(crate) struct CsvListingFormat;
+pub struct CsvListingFormat;
 
 impl ListingFormat for CsvListingFormat {
     fn name(&self) -> &'static str {

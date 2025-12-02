@@ -14,10 +14,10 @@ use crate::formats::parquet::options::{
 
 mod options;
 
-pub(crate) type ParquetTableFormat = ListingTableFormat<ParquetListingFormat>;
+pub type ParquetTableFormat = ListingTableFormat<ParquetListingFormat>;
 
 #[derive(Debug, Default)]
-pub(crate) struct ParquetListingFormat;
+pub struct ParquetListingFormat;
 
 impl ListingFormat for ParquetListingFormat {
     fn name(&self) -> &'static str {

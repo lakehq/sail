@@ -5,8 +5,10 @@ use datafusion::physical_plan::ExecutionPlan;
 use datafusion::physical_planner::PhysicalPlanner;
 use datafusion_common::Result;
 use datafusion_expr::LogicalPlan;
-use sail_common_datafusion::datasource::{create_sort_order, PhysicalSinkMode, SinkInfo, SinkMode};
-use sail_data_source::default_registry;
+use sail_common_datafusion::datasource::{
+    create_sort_order, PhysicalSinkMode, SinkInfo, SinkMode, TableFormatRegistry,
+};
+use sail_common_datafusion::extension::SessionExtensionAccessor;
 use sail_logical_plan::file_write::FileWriteOptions;
 
 pub async fn create_file_write_physical_plan(
@@ -51,8 +53,6 @@ pub async fn create_file_write_physical_plan(
             .map(|x| x.into_iter().collect())
             .collect(),
     };
-    default_registry()
-        .get_format(&format)?
-        .create_writer(ctx, info)
-        .await
+    let registry = ctx.extension::<TableFormatRegistry>()?;
+    registry.get(&format)?.create_writer(ctx, info).await
 }

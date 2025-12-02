@@ -22,10 +22,10 @@ pub struct TableBinaryOptions {
     pub path_glob_filter: Option<String>,
 }
 
-pub(crate) type BinaryTableFormat = ListingTableFormat<BinaryListingFormat>;
+pub type BinaryTableFormat = ListingTableFormat<BinaryListingFormat>;
 
 #[derive(Debug, Default)]
-pub(crate) struct BinaryListingFormat;
+pub struct BinaryListingFormat;
 
 impl ListingFormat for BinaryListingFormat {
     fn name(&self) -> &'static str {

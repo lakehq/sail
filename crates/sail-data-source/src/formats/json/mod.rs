@@ -11,10 +11,10 @@ use crate::formats::listing::{ListingFormat, ListingTableFormat};
 
 mod options;
 
-pub(crate) type JsonTableFormat = ListingTableFormat<JsonListingFormat>;
+pub type JsonTableFormat = ListingTableFormat<JsonListingFormat>;
 
 #[derive(Debug, Default)]
-pub(crate) struct JsonListingFormat;
+pub struct JsonListingFormat;
 
 impl ListingFormat for JsonListingFormat {
     fn name(&self) -> &'static str {
