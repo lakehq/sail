@@ -76,6 +76,7 @@ impl fmt::Display for RuntimeAwareObjectStore {
 }
 
 #[async_trait::async_trait]
+#[warn(clippy::missing_trait_methods)]
 impl ObjectStore for RuntimeAwareObjectStore {
     async fn put(&self, location: &Path, payload: PutPayload) -> Result<PutResult> {
         let inner = self.inner.clone();

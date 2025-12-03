@@ -4,6 +4,7 @@ use std::io::Write;
 use std::sync::Mutex;
 use std::time::Duration;
 
+use datafusion::common::runtime::set_join_set_tracer;
 use fastrace::collector::{Config, Reporter, SpanRecord};
 use fastrace_opentelemetry::OpenTelemetryReporter;
 use log::Log;
@@ -16,6 +17,7 @@ use opentelemetry_sdk::Resource;
 use sail_common::config::{OtlpProtocol, TelemetryConfig};
 
 use crate::error::{TelemetryError, TelemetryResult};
+use crate::execution::join_set::DefaultJoinSetTracer;
 use crate::logger::composite::CompositeLogger;
 use crate::logger::span::SpanEventLogger;
 
@@ -33,7 +35,11 @@ struct TelemetryState {
 
 static TELEMETRY_STATUS: Mutex<TelemetryStatus> = Mutex::new(TelemetryStatus::Uninitialized);
 
-pub fn init_telemetry(config: &TelemetryConfig) -> TelemetryResult<()> {
+pub struct ResourceOptions {
+    pub kind: &'static str,
+}
+
+pub fn init_telemetry(config: &TelemetryConfig, resource: ResourceOptions) -> TelemetryResult<()> {
     let mut status = TELEMETRY_STATUS
         .lock()
         .map_err(|e| TelemetryError::internal(e.to_string()))?;
@@ -41,9 +47,10 @@ pub fn init_telemetry(config: &TelemetryConfig) -> TelemetryResult<()> {
     match *status {
         TelemetryStatus::Uninitialized => {
             let mut state = TelemetryState::default();
-            match init_traces(config, &mut state)
-                .and_then(|_| init_metrics(config, &mut state))
-                .and_then(|_| init_logs(config, &mut state))
+            match init_traces(config, &mut state, &resource)
+                .and_then(|()| init_metrics(config, &mut state, &resource))
+                .and_then(|()| init_logs(config, &mut state, &resource))
+                .and_then(|()| init_datafusion_telemetry())
             {
                 Ok(()) => {
                     *status = TelemetryStatus::Initialized(state);
@@ -64,7 +71,11 @@ pub fn init_telemetry(config: &TelemetryConfig) -> TelemetryResult<()> {
     }
 }
 
-fn init_traces(config: &TelemetryConfig, _: &mut TelemetryState) -> TelemetryResult<()> {
+fn init_traces(
+    config: &TelemetryConfig,
+    _: &mut TelemetryState,
+    resource: &ResourceOptions,
+) -> TelemetryResult<()> {
     if config.export_traces {
         let exporter = opentelemetry_otlp::SpanExporter::builder()
             .with_tonic()
@@ -74,8 +85,8 @@ fn init_traces(config: &TelemetryConfig, _: &mut TelemetryState) -> TelemetryRes
             .build()?;
         let reporter = OpenTelemetryReporter::new(
             exporter,
-            Cow::Owned(default_resource()),
-            default_instrumentation_scope(),
+            Cow::Owned(get_resource(resource)),
+            get_instrumentation_scope(),
         );
         let reporter_config = Config::default()
             .report_interval(Duration::from_secs(config.traces_export_interval_secs));
@@ -89,7 +100,11 @@ fn init_traces(config: &TelemetryConfig, _: &mut TelemetryState) -> TelemetryRes
     Ok(())
 }
 
-fn init_metrics(config: &TelemetryConfig, state: &mut TelemetryState) -> TelemetryResult<()> {
+fn init_metrics(
+    config: &TelemetryConfig,
+    state: &mut TelemetryState,
+    resource: &ResourceOptions,
+) -> TelemetryResult<()> {
     let exporter = opentelemetry_otlp::MetricExporter::builder()
         .with_tonic()
         .with_endpoint(config.otlp_endpoint.clone())
@@ -101,14 +116,18 @@ fn init_metrics(config: &TelemetryConfig, state: &mut TelemetryState) -> Telemet
         .build();
     let provider = SdkMeterProvider::builder()
         .with_reader(reader)
-        .with_resource(default_resource())
+        .with_resource(get_resource(resource))
         .build();
     global::set_meter_provider(provider.clone());
     state.meter_provider = Some(provider);
     Ok(())
 }
 
-fn init_logs(config: &TelemetryConfig, state: &mut TelemetryState) -> TelemetryResult<()> {
+fn init_logs(
+    config: &TelemetryConfig,
+    state: &mut TelemetryState,
+    resource: &ResourceOptions,
+) -> TelemetryResult<()> {
     let primary =
         env_logger::Builder::from_env(env_logger::Env::default().default_filter_or("info"))
             .format(move |buf, record| {
@@ -148,7 +167,7 @@ fn init_logs(config: &TelemetryConfig, state: &mut TelemetryState) -> TelemetryR
             .build();
         let provider = SdkLoggerProvider::builder()
             .with_log_processor(processor)
-            .with_resource(default_resource())
+            .with_resource(get_resource(resource))
             .build();
         secondary.push(Box::new(OpenTelemetryLogBridge::new(&provider)));
         state.logger_provider = Some(provider);
@@ -160,6 +179,12 @@ fn init_logs(config: &TelemetryConfig, state: &mut TelemetryState) -> TelemetryR
     log::set_boxed_logger(Box::new(CompositeLogger::new(primary, secondary)))
         .map_err(|e| TelemetryError::internal(e.to_string()))?;
     log::set_max_level(max_level);
+    Ok(())
+}
+
+fn init_datafusion_telemetry() -> TelemetryResult<()> {
+    set_join_set_tracer(&DefaultJoinSetTracer)
+        .map_err(|e| TelemetryError::internal(e.to_string()))?;
     Ok(())
 }
 
@@ -192,11 +217,13 @@ fn get_otlp_protocol(protocol: &OtlpProtocol) -> Protocol {
     }
 }
 
-fn default_resource() -> Resource {
-    Resource::builder().with_service_name("sail").build()
+fn get_resource(resource: &ResourceOptions) -> Resource {
+    Resource::builder()
+        .with_service_name(format!("sail.{}", resource.kind))
+        .build()
 }
 
-fn default_instrumentation_scope() -> InstrumentationScope {
+fn get_instrumentation_scope() -> InstrumentationScope {
     InstrumentationScope::builder("sail")
         .with_version(env!("CARGO_PKG_VERSION"))
         .build()

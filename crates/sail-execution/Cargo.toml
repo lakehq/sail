@@ -26,7 +26,6 @@ tonic = { workspace = true }
 tonic-types = { workspace = true }
 tonic-prost = { workspace = true }
 fastrace = { workspace = true }
-fastrace-tonic = { workspace = true }
 tower = { workspace = true }
 prost = { workspace = true }
 datafusion = { workspace = true }

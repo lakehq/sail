@@ -2747,6 +2747,18 @@ dependencies = [
 ]
 
 [[package]]
+name = "fastrace-futures"
+version = "0.7.14"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "25e1241db692c6a166407bda3e5f3e01b7cc00d281db35d905c4f44fbd3d0034"
+dependencies = [
+ "fastrace",
+ "futures-core",
+ "futures-sink",
+ "pin-project",
+]
+
+[[package]]
 name = "fastrace-macro"
 version = "0.7.14"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -2769,18 +2781,6 @@ dependencies = [
  "opentelemetry",
  "opentelemetry_sdk",
  "pollster",
-]
-
-[[package]]
-name = "fastrace-tonic"
-version = "0.1.1"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "9bfe91596cd82e4b4fbd390f0e789fe3cf327b635fa713347f1509db97aa482c"
-dependencies = [
- "fastrace",
- "http 1.4.0",
- "tower-layer",
- "tower-service",
 ]
 
 [[package]]
@@ -5941,7 +5941,6 @@ dependencies = [
  "datafusion-proto",
  "datafusion-spark",
  "fastrace",
- "fastrace-tonic",
  "futures",
  "k8s-openapi",
  "kube",
@@ -6077,6 +6076,8 @@ dependencies = [
  "dashmap",
  "datafusion",
  "datafusion-common",
+ "fastrace",
+ "fastrace-futures",
  "futures",
  "hdfs-native-object-store",
  "hf-hub",
@@ -6086,6 +6087,7 @@ dependencies = [
  "regex",
  "reqwest",
  "sail-common",
+ "sail-telemetry",
  "thiserror",
  "tokio",
  "tokio-stream",
@@ -6193,9 +6195,9 @@ version = "0.4.3"
 dependencies = [
  "axum",
  "fastrace",
- "fastrace-tonic",
  "log",
  "sail-common",
+ "sail-telemetry",
  "tokio",
  "tonic",
  "tonic-health",
@@ -6253,6 +6255,7 @@ dependencies = [
  "sail-server",
  "sail-session",
  "sail-sql-analyzer",
+ "sail-telemetry",
  "serde",
  "serde_json",
  "syn 2.0.111",
@@ -6309,16 +6312,23 @@ dependencies = [
 name = "sail-telemetry"
 version = "0.4.3"
 dependencies = [
+ "datafusion",
  "env_logger",
  "fastrace",
+ "fastrace-futures",
  "fastrace-opentelemetry",
+ "futures",
  "log",
  "opentelemetry",
  "opentelemetry-appender-log",
  "opentelemetry-otlp",
  "opentelemetry_sdk",
+ "pin-project-lite",
  "sail-common",
+ "sail-common-datafusion",
  "thiserror",
+ "tonic",
+ "tower",
 ]
 
 [[package]]

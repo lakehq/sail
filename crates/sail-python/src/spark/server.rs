@@ -9,7 +9,7 @@ use pyo3::prelude::*;
 use sail_common::config::AppConfig;
 use sail_common::runtime::RuntimeManager;
 use sail_spark_connect::entrypoint::{serve, SessionManagerOptions};
-use sail_telemetry::telemetry::init_telemetry;
+use sail_telemetry::telemetry::{init_telemetry, ResourceOptions};
 use tokio::net::TcpListener;
 use tokio::runtime::Handle;
 use tokio::sync::oneshot::{Receiver, Sender};
@@ -114,7 +114,10 @@ impl SparkConnectServer {
         let handle = self.runtime.handle();
         handle
             .primary()
-            .block_on(async { init_telemetry(&self.config.telemetry) })
+            .block_on(async {
+                let resource = ResourceOptions { kind: "server" };
+                init_telemetry(&self.config.telemetry, resource)
+            })
             .map_err(|e| PyErr::new::<PyRuntimeError, _>(format!("{e:?}")))
     }
 }

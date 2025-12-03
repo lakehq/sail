@@ -19,6 +19,7 @@ sail-object-store = { path = "../sail-object-store" }
 sail-session = { path = "../sail-session" }
 sail-logical-optimizer = { path = "../sail-logical-optimizer" }
 sail-physical-optimizer = { path = "../sail-physical-optimizer" }
+sail-telemetry = { path = "../sail-telemetry" }
 
 thiserror = { workspace = true }
 tokio = { workspace = true }
