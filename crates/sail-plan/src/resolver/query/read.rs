@@ -9,12 +9,11 @@ use datafusion_expr::{LogicalPlan, TableScan, UNNAMED_TABLE};
 use sail_catalog::manager::CatalogManager;
 use sail_catalog::provider::TableKind;
 use sail_common::spec;
-use sail_common_datafusion::datasource::SourceInfo;
+use sail_common_datafusion::datasource::{SourceInfo, TableFormatRegistry};
 use sail_common_datafusion::extension::SessionExtensionAccessor;
 use sail_common_datafusion::rename::logical_plan::rename_logical_plan;
 use sail_common_datafusion::rename::table_provider::RenameTableProvider;
 use sail_common_datafusion::utils::items::ItemTaker;
-use sail_data_source::default_registry;
 use sail_python_udf::udf::pyspark_unresolved_udf::PySparkUnresolvedUDF;
 
 use crate::error::{PlanError, PlanResult};
@@ -83,8 +82,9 @@ impl PlanResolver<'_> {
                         options.into_iter().collect(),
                     ],
                 };
-                let table_provider = default_registry()
-                    .get_format(&format)?
+                let registry = self.ctx.extension::<TableFormatRegistry>()?;
+                let table_provider = registry
+                    .get(&format)?
                     .create_provider(&self.ctx.state(), info)
                     .await?;
                 self.resolve_table_provider_with_rename(
@@ -229,8 +229,9 @@ impl PlanResolver<'_> {
             sort_order: vec![],
             options: vec![options.into_iter().collect()],
         };
-        let table_provider = default_registry()
-            .get_format(&format)?
+        let registry = self.ctx.extension::<TableFormatRegistry>()?;
+        let table_provider = registry
+            .get(&format)?
             .create_provider(&self.ctx.state(), info)
             .await?;
         self.resolve_table_provider_with_rename(

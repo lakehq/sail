@@ -10,6 +10,8 @@ use datafusion::execution::cache::cache_manager::{
 use datafusion::execution::runtime_env::RuntimeEnvBuilder;
 use datafusion::execution::SessionStateBuilder;
 use datafusion::prelude::{SessionConfig, SessionContext};
+use fastrace::prelude::SpanContext;
+use fastrace::{func_path, Span};
 use log::{debug, info};
 use sail_cache::file_listing_cache::MokaFileListingCache;
 use sail_cache::file_metadata_cache::MokaFileMetadataCache;
@@ -28,6 +30,7 @@ use sail_plan::function::{
 use sail_plan::planner::new_query_planner;
 use sail_server::actor::{Actor, ActorAction, ActorContext, ActorHandle, ActorSystem};
 use sail_session::catalog::create_catalog_manager;
+use sail_session::formats::create_table_format_registry;
 use tokio::sync::oneshot;
 use tokio::time::Instant;
 
@@ -104,6 +107,7 @@ impl SessionManagerActor {
             // We do not use the DataFusion catalog and schema since we manage catalogs ourselves.
             .with_create_default_catalog_and_schema(false)
             .with_information_schema(false)
+            .with_extension(create_table_format_registry()?)
             .with_extension(Arc::new(create_catalog_manager(
                 &options.config,
                 options.runtime.clone(),
@@ -359,6 +363,8 @@ impl SessionManagerActor {
         } else {
             let key = key.clone();
             info!("creating session {key}");
+            let span = Span::root(func_path!(), SpanContext::random());
+            let _guard = span.set_local_parent();
             match self.create_session_context(system, key.clone()) {
                 Ok(context) => {
                     self.sessions.insert(key, context.clone());
