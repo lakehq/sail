@@ -47,7 +47,7 @@ use datafusion_spark::function::bitwise::bitwise_not::SparkBitwiseNot;
 use datafusion_spark::function::hash::crc32::SparkCrc32;
 use datafusion_spark::function::hash::sha1::SparkSha1;
 use datafusion_spark::function::math::expm1::SparkExpm1;
-use datafusion_spark::function::math::modulus::{SparkMod, SparkPmod};
+use datafusion_spark::function::math::modulus::SparkPmod;
 use datafusion_spark::function::math::width_bucket::SparkWidthBucket;
 use datafusion_spark::function::string::format_string::FormatStringFunc;
 use datafusion_spark::function::string::luhn_check::SparkLuhnCheck;
@@ -1395,7 +1395,9 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
             "spark_bit_get" | "bit_get" | "getbit" => {
                 Ok(Arc::new(ScalarUDF::from(SparkBitGet::new())))
             }
-            "spark_bitwise_not" | "bitwise_not" => Ok(Arc::new(ScalarUDF::from(SparkBitwiseNot::new()))),
+            "spark_bitwise_not" | "bitwise_not" => {
+                Ok(Arc::new(ScalarUDF::from(SparkBitwiseNot::new())))
+            }
             "spark_conv" | "conv" => Ok(Arc::new(ScalarUDF::from(SparkConv::new()))),
             "spark_signum" | "signum" => Ok(Arc::new(ScalarUDF::from(SparkSignum::new()))),
             "spark_last_day" | "last_day" => Ok(Arc::new(ScalarUDF::from(SparkLastDay::new()))),
@@ -1416,7 +1418,6 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
                 Ok(Arc::new(ScalarUDF::from(SparkMakeTimestampNtz::new())))
             }
             "spark_mask" | "mask" => Ok(Arc::new(ScalarUDF::from(SparkMask::new()))),
-            "spark_modulus" | "modulus" => Ok(Arc::new(ScalarUDF::from(SparkMod::new()))),
             "spark_sequence" | "sequence" => Ok(Arc::new(ScalarUDF::from(SparkSequence::new()))),
             "spark_shuffle" | "shuffle" => Ok(Arc::new(ScalarUDF::from(SparkShuffle::new()))),
             "spark_encode" | "encode" => Ok(Arc::new(ScalarUDF::from(SparkEncode::new()))),
@@ -1521,7 +1522,6 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
             || node_inner.is::<SparkMakeTimestampNtz>()
             || node_inner.is::<SparkMakeYmInterval>()
             || node_inner.is::<SparkMask>()
-            || node_inner.is::<SparkMod>()
             || node_inner.is::<SparkMurmur3Hash>()
             || node_inner.is::<SparkNextDay>()
             || node_inner.is::<SparkPmod>()
