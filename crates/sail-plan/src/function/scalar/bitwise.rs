@@ -41,6 +41,7 @@ pub(super) fn list_built_in_bitwise_functions() -> Vec<(&'static str, ScalarFunc
         ("&", F::binary_op(Operator::BitwiseAnd)),
         ("^", F::binary_op(Operator::BitwiseXor)),
         ("bit_count", F::unary(bitwise_fn::bit_count)),
+        ("bitwise_not", F::unary(bitwise_fn::bitwise_not)),
         ("bit_get", F::binary(bitwise_fn::bit_get)),
         ("getbit", F::binary(bitwise_fn::bit_get)),
         ("shiftleft", F::binary_op(Operator::BitwiseShiftLeft)),
