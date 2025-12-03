@@ -4,7 +4,7 @@ use std::sync::Arc;
 
 use datafusion::arrow::datatypes::SchemaRef;
 use datafusion::common::tree_node::{Transformed, TransformedResult, TreeNode};
-use datafusion::common::{plan_err, Result, Statistics};
+use datafusion::common::{Result, Statistics};
 use datafusion::config::ConfigOptions;
 use datafusion::execution::{SendableRecordBatchStream, TaskContext};
 use datafusion::physical_expr::{Distribution, OrderingRequirements, PhysicalExpr};
@@ -20,16 +20,13 @@ use datafusion::physical_plan::stream::RecordBatchStreamAdapter;
 use datafusion::physical_plan::{DisplayAs, DisplayFormatType, ExecutionPlan, PlanProperties};
 use fastrace::Span;
 use fastrace_futures::StreamExt;
+use sail_common_datafusion::utils::items::ItemTaker;
 
-pub fn trace_execution_plan(
-    plan: Arc<dyn ExecutionPlan>,
-    span: Span,
-) -> Result<Arc<dyn ExecutionPlan>> {
-    plan.transform(|plan| {
-        let span = Span::enter_with_parent(plan.name().to_owned(), &span);
-        Ok(Transformed::yes(Arc::new(TracingExec::new(plan, span))))
-    })
-    .data()
+use crate::common::SpanAttribute;
+
+pub fn trace_execution_plan(plan: Arc<dyn ExecutionPlan>) -> Result<Arc<dyn ExecutionPlan>> {
+    plan.transform(|plan| Ok(Transformed::yes(Arc::new(TracingExec::new(plan)))))
+        .data()
 }
 
 /// A physical execution plan wrapper that emits traces and metrics
@@ -40,22 +37,14 @@ pub fn trace_execution_plan(
 /// of this wrapper only have placeholder implementations, so physical optimizers
 /// may break or become ineffective if this wrapper ever participates in
 /// physical optimization.
+#[derive(Debug)]
 pub struct TracingExec {
     inner: Arc<dyn ExecutionPlan>,
-    span: Span,
 }
 
 impl TracingExec {
-    pub fn new(inner: Arc<dyn ExecutionPlan>, span: Span) -> Self {
-        Self { inner, span }
-    }
-}
-
-impl fmt::Debug for TracingExec {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        f.debug_struct("TracingExec")
-            .field("inner", &self.inner)
-            .finish()
+    pub fn new(inner: Arc<dyn ExecutionPlan>) -> Self {
+        Self { inner }
     }
 }
 
@@ -116,17 +105,15 @@ impl ExecutionPlan for TracingExec {
 
     fn with_new_children(
         self: Arc<Self>,
-        _children: Vec<Arc<dyn ExecutionPlan>>,
+        children: Vec<Arc<dyn ExecutionPlan>>,
     ) -> Result<Arc<dyn ExecutionPlan>> {
-        // We cannot replace children since `Span` does not implement `Clone`.
-        // This is fine since this wrapper is only intended to be injected
-        // right before query execution.
-        plan_err!("{} cannot have replaced children", self.name())
+        let child = children.one()?;
+        Ok(Arc::new(TracingExec::new(child)))
     }
 
     fn reset_state(self: Arc<Self>) -> Result<Arc<dyn ExecutionPlan>> {
         let child = Arc::clone(&self.inner);
-        self.with_new_children(vec![child])
+        Ok(Arc::new(TracingExec::new(child)))
     }
 
     fn repartitioned(
@@ -142,8 +129,12 @@ impl ExecutionPlan for TracingExec {
         partition: usize,
         context: Arc<TaskContext>,
     ) -> Result<SendableRecordBatchStream> {
-        let stream = self.inner.execute(partition, context)?;
-        let span = Span::enter_with_parent("poll", &self.span);
+        let span = Span::enter_with_local_parent(self.inner.name().to_string())
+            .with_property(|| (SpanAttribute::EXECUTION_PARTITION, partition.to_string()));
+        let stream = {
+            let _guard = span.set_local_parent();
+            self.inner.execute(partition, context)?
+        };
         Ok(Box::pin(RecordBatchStreamAdapter::new(
             stream.schema(),
             stream.in_span(span),

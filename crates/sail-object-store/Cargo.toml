@@ -8,6 +8,7 @@ workspace = true
 
 [dependencies]
 sail-common = { path = "../sail-common" }
+sail-telemetry = { path = "../sail-telemetry" }
 
 object_store = { workspace = true }
 aws-config = { workspace = true }

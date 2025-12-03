@@ -115,9 +115,7 @@ impl SparkConnectServer {
         handle
             .primary()
             .block_on(async {
-                let resource = ResourceOptions {
-                    kind: "spark_connect_server",
-                };
+                let resource = ResourceOptions { kind: "server" };
                 init_telemetry(&self.config.telemetry, resource)
             })
             .map_err(|e| PyErr::new::<PyRuntimeError, _>(format!("{e:?}")))

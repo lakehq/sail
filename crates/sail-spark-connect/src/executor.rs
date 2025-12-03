@@ -10,7 +10,7 @@ use datafusion::arrow::array::RecordBatch;
 use datafusion::arrow::ipc::writer::StreamWriter;
 use datafusion::execution::SendableRecordBatchStream;
 use fastrace::future::FutureExt;
-use fastrace::{func_path, trace, Span};
+use fastrace::Span;
 use futures::stream::{StreamExt, TryStreamExt};
 use futures::Stream;
 use tokio::sync::{mpsc, oneshot};
@@ -137,7 +137,7 @@ impl ExecutorTaskContext {
     }
 
     async fn next(&mut self) -> SparkResult<Option<RecordBatch>> {
-        let span = Span::enter_with_local_parent(func_path!());
+        let span = Span::enter_with_local_parent("ExecutorTaskContext::next");
         tokio::select! {
             batch = self.stream.next().in_span(span) => Ok(batch.transpose()?),
             _ = tokio::time::sleep(self.heartbeat_interval) => {
@@ -174,7 +174,7 @@ impl Executor {
             metadata,
             state: Mutex::new(ExecutorState::Pending {
                 context: ExecutorTaskContext::new(stream, heartbeat_interval),
-                span: Span::enter_with_local_parent(func_path!()),
+                span: Span::enter_with_local_parent("Executor::new"),
             }),
         }
     }
@@ -213,7 +213,6 @@ impl Executor {
         Ok(())
     }
 
-    #[trace]
     async fn run(
         mut context: ExecutorTaskContext,
         listener: oneshot::Receiver<()>,
@@ -257,7 +256,7 @@ impl Executor {
         let (notifier, listener) = oneshot::channel();
         let buffer = Arc::clone(&context.buffer);
         let handle = {
-            let span = { Span::enter_with_parent(func_path!(), &span) };
+            let span = { Span::enter_with_parent("Executor::run", &span) };
             tokio::spawn(async move { Executor::run(context, listener, tx).in_span(span).await })
         };
         *state = ExecutorState::Running {

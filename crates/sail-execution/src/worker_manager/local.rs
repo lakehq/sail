@@ -1,6 +1,5 @@
 use std::collections::HashMap;
 
-use fastrace::collector::SpanContext;
 use sail_common::runtime::RuntimeHandle;
 use sail_server::actor::{ActorHandle, ActorSystem};
 use tokio::sync::Mutex;
@@ -45,8 +44,6 @@ impl WorkerManager for LocalWorkerManager {
         id: WorkerId,
         options: WorkerLaunchOptions,
     ) -> ExecutionResult<()> {
-        let w3c_traceparent =
-            SpanContext::current_local_parent().map(|x| x.encode_w3c_traceparent());
         let options = WorkerOptions {
             worker_id: id,
             enable_tls: options.enable_tls,
@@ -60,7 +57,6 @@ impl WorkerManager for LocalWorkerManager {
             worker_stream_buffer: options.worker_stream_buffer,
             rpc_retry_strategy: options.rpc_retry_strategy,
             runtime: self.runtime.clone(),
-            w3c_traceparent,
         };
         let mut state = self.state.lock().await;
         let handle = state.system.spawn(options);

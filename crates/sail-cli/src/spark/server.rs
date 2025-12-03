@@ -31,9 +31,7 @@ pub fn run_spark_connect_server(ip: IpAddr, port: u16) -> Result<(), Box<dyn std
     let runtime = RuntimeManager::try_new(&config.runtime)?;
 
     runtime.handle().primary().block_on(async {
-        let resource = ResourceOptions {
-            kind: "spark_connect_server",
-        };
+        let resource = ResourceOptions { kind: "server" };
         init_telemetry(&config.telemetry, resource)
     })?;
 

@@ -17,7 +17,7 @@ use opentelemetry_sdk::Resource;
 use sail_common::config::{OtlpProtocol, TelemetryConfig};
 
 use crate::error::{TelemetryError, TelemetryResult};
-use crate::execution::join_set::FastraceJoinSetTracer;
+use crate::execution::join_set::DefaultJoinSetTracer;
 use crate::logger::composite::CompositeLogger;
 use crate::logger::span::SpanEventLogger;
 
@@ -183,7 +183,7 @@ fn init_logs(
 }
 
 fn init_datafusion_telemetry() -> TelemetryResult<()> {
-    set_join_set_tracer(&FastraceJoinSetTracer)
+    set_join_set_tracer(&DefaultJoinSetTracer)
         .map_err(|e| TelemetryError::internal(e.to_string()))?;
     Ok(())
 }

@@ -1,4 +1,3 @@
-use fastrace::trace;
 use sail_common_datafusion::error::CommonErrorCause;
 
 use crate::driver::gen;
@@ -24,7 +23,6 @@ impl DriverClient {
         }
     }
 
-    #[trace]
     pub async fn register_worker(
         &self,
         worker_id: WorkerId,
@@ -41,7 +39,6 @@ impl DriverClient {
         Ok(())
     }
 
-    #[trace]
     pub async fn report_worker_heartbeat(&self, worker_id: WorkerId) -> ExecutionResult<()> {
         let request = tonic::Request::new(gen::ReportWorkerHeartbeatRequest {
             worker_id: worker_id.into(),
@@ -56,7 +53,6 @@ impl DriverClient {
         Ok(())
     }
 
-    #[trace]
     pub async fn report_task_status(
         &self,
         task_id: TaskId,

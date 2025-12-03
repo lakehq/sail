@@ -68,9 +68,7 @@ pub fn run_spark_mcp_server(settings: McpSettings) -> Result<(), Box<dyn std::er
     let runtime = RuntimeManager::try_new(&config.runtime)?;
 
     runtime.handle().primary().block_on(async {
-        let resource = ResourceOptions {
-            kind: "spark_mcp_server",
-        };
+        let resource = ResourceOptions { kind: "server" };
         init_telemetry(&config.telemetry, resource)
     })?;
 
