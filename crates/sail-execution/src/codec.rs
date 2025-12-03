@@ -47,6 +47,7 @@ use datafusion_spark::function::hash::sha1::SparkSha1;
 use datafusion_spark::function::math::expm1::SparkExpm1;
 use datafusion_spark::function::math::modulus::SparkPmod;
 use datafusion_spark::function::math::width_bucket::SparkWidthBucket;
+use datafusion_spark::function::string::elt::SparkElt;
 use datafusion_spark::function::string::luhn_check::SparkLuhnCheck;
 use prost::bytes::BytesMut;
 use prost::Message;
@@ -126,7 +127,6 @@ use sail_function::scalar::spark_to_string::{SparkToLargeUtf8, SparkToUtf8, Spar
 use sail_function::scalar::string::levenshtein::Levenshtein;
 use sail_function::scalar::string::make_valid_utf8::MakeValidUtf8;
 use sail_function::scalar::string::spark_base64::{SparkBase64, SparkUnbase64};
-use sail_function::scalar::string::spark_elt::SparkElt;
 use sail_function::scalar::string::spark_encode_decode::{SparkDecode, SparkEncode};
 use sail_function::scalar::string::spark_mask::SparkMask;
 use sail_function::scalar::string::spark_split::SparkSplit;
