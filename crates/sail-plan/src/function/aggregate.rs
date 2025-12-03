@@ -17,7 +17,6 @@ use sail_function::aggregate::kurtosis::KurtosisFunction;
 use sail_function::aggregate::max_min_by::{MaxByFunction, MinByFunction};
 use sail_function::aggregate::mode::ModeFunction;
 use sail_function::aggregate::percentile::PercentileFunction;
-use sail_function::aggregate::percentile_disc::PercentileDiscFunction;
 use sail_function::aggregate::skewness::SkewnessFunc;
 use sail_function::aggregate::try_avg::TryAvgFunction;
 use sail_function::aggregate::try_sum::TrySumFunction;
@@ -357,19 +356,6 @@ fn percentile_exact(input: AggFunctionInput) -> PlanResult<expr::Expr> {
     }))
 }
 
-fn percentile_disc_fn(input: AggFunctionInput) -> PlanResult<expr::Expr> {
-    Ok(expr::Expr::AggregateFunction(AggregateFunction {
-        func: Arc::new(AggregateUDF::from(PercentileDiscFunction::new())),
-        params: AggregateFunctionParams {
-            args: input.arguments,
-            distinct: input.distinct,
-            filter: input.filter,
-            order_by: input.order_by,
-            null_treatment: get_null_treatment(input.ignore_nulls),
-        },
-    }))
-}
-
 fn approx_count_distinct(input: AggFunctionInput) -> PlanResult<expr::Expr> {
     Ok(cast(
         expr::Expr::AggregateFunction(AggregateFunction {
@@ -438,8 +424,8 @@ fn list_built_in_aggregate_functions() -> Vec<(&'static str, AggFunction)> {
             "percentile_approx",
             F::default(approx_percentile_cont::approx_percentile_cont_udaf),
         ),
-        ("percentile_cont", F::custom(percentile_exact)),
-        ("percentile_disc", F::custom(percentile_disc_fn)),
+        ("percentile_cont", F::unknown("percentile_cont")),
+        ("percentile_disc", F::unknown("percentile_disc")),
         ("regr_avgx", F::default(regr::regr_avgx_udaf)),
         ("regr_avgy", F::default(regr::regr_avgy_udaf)),
         ("regr_count", F::default(regr::regr_count_udaf)),

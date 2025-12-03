@@ -15,12 +15,12 @@ root
 
 # Test 2: Percentile 0.5 (median) with even number of values
 >>> df = spark.createDataFrame([(0,), (1,), (2,), (3,)], ["x"])
->>> df.select(sf.percentile("x", sf.lit(0.5)).alias("median")).show()
-+------+
-|median|
-+------+
-|   1.5|
-+------+
+>>> df.select(sf.percentile("x", sf.lit(0.5)).alias("p_05"), sf.median("x").alias("median")).show()
++----+------+
+|p_05|median|
++----+------+
+| 1.5|   1.5|
++----+------+
 
 # Test 3: Percentile with odd number of values
 >>> df = spark.createDataFrame([(0,), (1,), (2,), (3,), (4,)], ["x"])

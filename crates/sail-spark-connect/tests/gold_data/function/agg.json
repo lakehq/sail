@@ -2027,7 +2027,7 @@
         }
       },
       "output": {
-        "failure": "error in DataFusion: Execution error: percentile() requires a second argument (percentile value)"
+        "failure": "not implemented: unknown aggregate function: percentile_cont"
       }
     },
     {
@@ -2049,7 +2049,7 @@
         }
       },
       "output": {
-        "failure": "error in DataFusion: Execution error: percentile() requires a second argument (percentile value)"
+        "failure": "not implemented: unknown aggregate function: percentile_cont"
       }
     },
     {
@@ -2071,7 +2071,7 @@
         }
       },
       "output": {
-        "failure": "error in DataFusion: Execution error: percentile_disc() requires a second argument (percentile value)"
+        "failure": "not implemented: unknown aggregate function: percentile_disc"
       }
     },
     {
@@ -2093,7 +2093,7 @@
         }
       },
       "output": {
-        "failure": "error in DataFusion: Execution error: percentile_disc() requires a second argument (percentile value)"
+        "failure": "not implemented: unknown aggregate function: percentile_disc"
       }
     },
     {

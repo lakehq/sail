@@ -42,8 +42,6 @@ rank: 2
 | `mode`                  | :white_check_mark: |
 | `percentile`            | :white_check_mark: |
 | `percentile_approx`     | :white_check_mark: |
-| `percentile_cont`       | :white_check_mark: |
-| `percentile_disc`       | :white_check_mark: |
 | `regr_avgx`             | :white_check_mark: |
 | `regr_avgy`             | :white_check_mark: |
 | `regr_count`            | :white_check_mark: |
@@ -73,3 +71,5 @@ rank: 2
 | `histogram_numeric`     | :construction:     |
 | `hll_sketch_agg`        | :construction:     |
 | `hll_union_agg`         | :construction:     |
+| `percentile_cont`       | :construction:     |
+| `percentile_disc`       | :construction:     |
