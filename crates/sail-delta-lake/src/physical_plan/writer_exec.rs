@@ -25,7 +25,11 @@ use std::sync::Arc;
 use async_trait::async_trait;
 use chrono::Utc;
 use datafusion::arrow::array::StringArray;
-use datafusion::arrow::datatypes::{DataType, Field, Schema, SchemaRef};
+use datafusion::arrow::array::{ArrayRef, PrimitiveArray};
+use datafusion::arrow::datatypes::{
+    ArrowTimestampType, DataType, Field, Schema, SchemaRef, TimeUnit, TimestampMicrosecondType,
+    TimestampMillisecondType, TimestampNanosecondType, TimestampSecondType,
+};
 use datafusion::arrow::record_batch::RecordBatch;
 use datafusion::execution::context::TaskContext;
 use datafusion::physical_expr_common::physical_expr::fmt_sql;
@@ -53,6 +57,7 @@ use crate::options::{ColumnMappingModeOption, TableDeltaOptions};
 use crate::physical_plan::CommitInfo;
 use crate::schema::{
     annotate_for_column_mapping, compute_max_column_id, evolve_schema, get_physical_schema,
+    normalize_delta_schema,
 };
 use crate::storage::{get_object_store_from_context, StorageConfig};
 use crate::table::open_table_with_object_store;
@@ -227,7 +232,7 @@ impl ExecutionPlan for DeltaWriterExec {
         let partition_columns = self.partition_columns.clone();
         let sink_mode = self.sink_mode.clone();
         let table_exists = self.table_exists;
-        let input_schema = self.input.schema();
+        let input_schema = normalize_delta_schema(&self.input.schema());
         let condition = self.condition.clone();
         // let sink_schema = self.sink_schema.clone();
         let session_timezone = context
@@ -350,6 +355,7 @@ impl ExecutionPlan for DeltaWriterExec {
             } else {
                 (input_schema.clone(), Vec::new())
             };
+            let final_schema = normalize_delta_schema(&final_schema);
 
             // Determine effective column mapping mode
             let effective_mode = if let Some(table) = &table {
@@ -382,10 +388,10 @@ impl ExecutionPlan for DeltaWriterExec {
             let mut annotated_schema_opt: Option<StructType> = None;
             if !table_exists {
                 // Build kernel schema for feature detection
-                let kernel_schema: StructType = final_schema
-                    .as_ref()
-                    .try_into_kernel()
-                    .map_err(|e| DataFusionError::External(Box::new(e)))?;
+                let kernel_schema: StructType =
+                    final_schema.as_ref().try_into_kernel().map_err(|e| {
+                        DataFusionError::External(Box::new(e))
+                    })?;
                 let has_timestamp_ntz = contains_timestampntz(kernel_schema.fields());
 
                 if matches!(
@@ -871,6 +877,15 @@ impl DeltaWriterExec {
                         let casted_column =
                             match (batch_field.data_type(), final_field.data_type(), timezone) {
                                 (
+                                    DataType::Timestamp(unit_from, Some(_)),
+                                    DataType::Timestamp(unit_to, Some(target_tz)),
+                                    _,
+                                ) if unit_from == unit_to => reinterpret_timestamp_timezone(
+                                    batch_column,
+                                    *unit_to,
+                                    Some(target_tz.clone()),
+                                )?,
+                                (
                                     DataType::Timestamp(unit_from, None),
                                     DataType::Timestamp(_unit_to, Some(_)),
                                     Some(session_tz),
@@ -942,6 +957,36 @@ impl DeltaWriterExec {
         // Create new RecordBatch with adapted columns
         RecordBatch::try_new(final_schema.clone(), adapted_columns)
             .map_err(|e| DataFusionError::ArrowError(Box::new(e), None))
+    }
+}
+
+fn reinterpret_timestamp_timezone(
+    array: &ArrayRef,
+    unit: TimeUnit,
+    target_tz: Option<Arc<str>>,
+) -> Result<ArrayRef> {
+    fn adjust<T: ArrowTimestampType>(
+        array: &ArrayRef,
+        target_tz: Option<Arc<str>>,
+    ) -> Result<ArrayRef> {
+        let ts_array = array
+            .as_any()
+            .downcast_ref::<PrimitiveArray<T>>()
+            .ok_or_else(|| {
+                DataFusionError::Plan(format!(
+                    "Failed to downcast timestamp array for timezone rewrite: {:?}",
+                    array.data_type()
+                ))
+            })?;
+
+        Ok(Arc::new(ts_array.clone().with_timezone_opt(target_tz)))
+    }
+
+    match unit {
+        TimeUnit::Second => adjust::<TimestampSecondType>(array, target_tz),
+        TimeUnit::Millisecond => adjust::<TimestampMillisecondType>(array, target_tz),
+        TimeUnit::Microsecond => adjust::<TimestampMicrosecondType>(array, target_tz),
+        TimeUnit::Nanosecond => adjust::<TimestampNanosecondType>(array, target_tz),
     }
 }
 

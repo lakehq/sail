@@ -201,6 +201,35 @@ class TestDeltaSchemaHandling:
             (2, datetime(2024, 5, 2, 7, 30, tzinfo=timezone.utc)),
         ]
 
+    @pytest.mark.parametrize(
+        ("session_timezone", "local_timezone"),
+        [("America/Los_Angeles", "America/Los_Angeles")],
+        indirect=True,
+    )
+    def test_delta_schema_timestamp_partition_with_session_timezone(
+        self, spark, tmp_path, session_timezone, local_timezone
+    ):
+        """Writing TimestampType partition columns should convert to UTC inside the engine."""
+        _ = session_timezone
+        _ = local_timezone
+        delta_path = tmp_path / "delta_timestamp_partition_session_tz"
+
+        df = spark.createDataFrame(
+            [
+                Row(id=1, some_ts=datetime(2025, 11, 27, 1, 2, 3, 987654)),  # noqa: DTZ001
+                Row(id=2, some_ts=datetime(1990, 11, 27, 1, 2, 3, 987654)),  # noqa: DTZ001
+            ]
+        )
+
+        df.write.format("delta").mode("overwrite").partitionBy("some_ts").save(str(delta_path))
+
+        result_df = spark.read.format("delta").load(str(delta_path)).orderBy("id")
+        assert isinstance(result_df.schema["some_ts"].dataType, TimestampType)
+        assert [(row.id, _as_utc(row.some_ts)) for row in result_df.collect()] == [
+            (1, datetime(2025, 11, 27, 9, 2, 3, 987654, tzinfo=timezone.utc)),
+            (2, datetime(1990, 11, 27, 9, 2, 3, 987654, tzinfo=timezone.utc)),
+        ]
+
     def test_delta_schema_overwrite_with_overwrite_schema(self, spark, tmp_path):
         """Test overwriteSchema=true with overwrite mode."""
         delta_path = tmp_path / "delta_overwrite_schema"
