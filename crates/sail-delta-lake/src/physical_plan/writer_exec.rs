@@ -24,8 +24,7 @@ use std::sync::Arc;
 
 use async_trait::async_trait;
 use chrono::Utc;
-use datafusion::arrow::array::StringArray;
-use datafusion::arrow::array::{ArrayRef, PrimitiveArray};
+use datafusion::arrow::array::{ArrayRef, PrimitiveArray, StringArray};
 use datafusion::arrow::datatypes::{
     ArrowTimestampType, DataType, Field, Schema, SchemaRef, TimeUnit, TimestampMicrosecondType,
     TimestampMillisecondType, TimestampNanosecondType, TimestampSecondType,
@@ -388,10 +387,10 @@ impl ExecutionPlan for DeltaWriterExec {
             let mut annotated_schema_opt: Option<StructType> = None;
             if !table_exists {
                 // Build kernel schema for feature detection
-                let kernel_schema: StructType =
-                    final_schema.as_ref().try_into_kernel().map_err(|e| {
-                        DataFusionError::External(Box::new(e))
-                    })?;
+                let kernel_schema: StructType = final_schema
+                    .as_ref()
+                    .try_into_kernel()
+                    .map_err(|e| DataFusionError::External(Box::new(e)))?;
                 let has_timestamp_ntz = contains_timestampntz(kernel_schema.fields());
 
                 if matches!(
