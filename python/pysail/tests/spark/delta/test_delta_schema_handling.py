@@ -2,11 +2,10 @@
 Test Delta Lake schema handling (mergeSchema, overwriteSchema, evolution) in Sail.
 """
 
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 
 import pandas as pd
 import pytest
-from pyspark.sql import functions as sql_functions
 from pyspark.sql.types import (
     DoubleType,
     FloatType,
@@ -24,7 +23,8 @@ from pyspark.sql.types import (
 def _as_utc(dt: datetime) -> datetime:
     """Return a timezone-aware datetime in UTC for comparison purposes."""
     if dt.tzinfo is None:
-        return dt.replace(tzinfo=timezone.utc)
+        # Treat naive datetimes as local timestamps and normalize to UTC.
+        return datetime.fromtimestamp(dt.timestamp(), tz=timezone.utc)
     return dt.astimezone(timezone.utc)
 
 
@@ -130,27 +130,33 @@ class TestDeltaSchemaHandling:
         assert result_df.schema["score"].dataType == LongType()
         assert [(row.id, row.score) for row in result_df.collect()] == [(1, 100), (2, 200)]
 
-    def test_delta_schema_handles_timezone_timestamps(self, spark, tmp_path):
+    @pytest.mark.parametrize("session_timezone", ["UTC"], indirect=True)
+    def test_delta_schema_handles_timezone_timestamps(self, spark, tmp_path, session_timezone):
         """Ensure timezone-aware inputs are stored as UTC TimestampType values."""
+        _ = session_timezone
         delta_path = tmp_path / "delta_timezone_timestamps"
 
-        df = (
-            spark.createDataFrame(
-                [
-                    (1, "2024-05-01T12:00:00+00:00"),
-                    (2, "2024-05-01T11:00:00+02:00"),
-                ],
-                schema="id INT, raw_ts STRING",
-            )
-            .withColumn("event_time", sql_functions.to_timestamp("raw_ts"))
-            .select("id", "event_time")
-            .orderBy("id")
+        schema = StructType(
+            [
+                StructField("id", IntegerType(), False),
+                StructField("event_time", TimestampType(), True),
+            ]
         )
+        df = spark.createDataFrame(
+            [
+                Row(id=1, event_time=datetime(2024, 5, 1, 12, 0, tzinfo=timezone.utc)),
+                Row(
+                    id=2,
+                    event_time=datetime(2024, 5, 1, 11, 0, tzinfo=timezone(timedelta(hours=2))),
+                ),
+            ],
+            schema=schema,
+        ).orderBy("id")
 
         df.write.format("delta").mode("overwrite").save(str(delta_path))
 
         result_df = spark.read.format("delta").load(str(delta_path)).orderBy("id")
-        assert isinstance(result_df.schema["event_time"].dataType, TimestampNTZType)
+        assert isinstance(result_df.schema["event_time"].dataType, TimestampType)
 
         result = [(row.id, _as_utc(row.event_time)) for row in result_df.collect()]
         assert result == [
@@ -158,8 +164,10 @@ class TestDeltaSchemaHandling:
             (2, datetime(2024, 5, 1, 9, 0, tzinfo=timezone.utc)),
         ]
 
-    def test_delta_schema_timestamp_ntz_cast(self, spark, tmp_path):
+    @pytest.mark.parametrize("session_timezone", ["UTC"], indirect=True)
+    def test_delta_schema_timestamp_ntz_cast(self, spark, tmp_path, session_timezone):
         """Appending TimestampNTZType data to a TimestampType table should not require mergeSchema."""
+        _ = session_timezone
         delta_path = tmp_path / "delta_timestamp_ntz_cast"
 
         base_schema = StructType(
@@ -189,8 +197,8 @@ class TestDeltaSchemaHandling:
 
         # Base TimestampType rows are interpreted relative to the session timezone
         assert [(row.id, _as_utc(row.event_time)) for row in result_df.collect()] == [
-            (1, datetime(2024, 5, 1, 20, 0, tzinfo=timezone.utc)),
-            (2, datetime(2024, 5, 2, 15, 30, tzinfo=timezone.utc)),
+            (1, datetime(2024, 5, 1, 12, 0, tzinfo=timezone.utc)),
+            (2, datetime(2024, 5, 2, 7, 30, tzinfo=timezone.utc)),
         ]
 
     def test_delta_schema_overwrite_with_overwrite_schema(self, spark, tmp_path):
