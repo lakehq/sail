@@ -14,6 +14,31 @@ pub trait ItemTaker {
     fn three(self) -> Result<(Self::Item, Self::Item, Self::Item)>;
     #[allow(clippy::type_complexity)]
     fn four(self) -> Result<(Self::Item, Self::Item, Self::Item, Self::Item)>;
+    #[allow(clippy::type_complexity)]
+    fn five(self) -> Result<(Self::Item, Self::Item, Self::Item, Self::Item, Self::Item)>;
+    #[allow(clippy::type_complexity)]
+    fn six(
+        self,
+    ) -> Result<(
+        Self::Item,
+        Self::Item,
+        Self::Item,
+        Self::Item,
+        Self::Item,
+        Self::Item,
+    )>;
+    #[allow(clippy::type_complexity)]
+    fn seven(
+        self,
+    ) -> Result<(
+        Self::Item,
+        Self::Item,
+        Self::Item,
+        Self::Item,
+        Self::Item,
+        Self::Item,
+        Self::Item,
+    )>;
     fn at_least_one(self) -> Result<(Self::Item, Vec<Self::Item>)>;
     fn one_or_more(self) -> Result<Either<Self::Item, Vec<Self::Item>>>;
 }
@@ -53,6 +78,31 @@ impl<T: Debug> ItemTaker for Vec<T> {
         match <[T; 4] as TryFrom<_>>::try_from(self) {
             Ok([first, second, third, fourth]) => Ok((first, second, third, fourth)),
             Err(v) => plan_err!("four values expected: {v:?}"),
+        }
+    }
+
+    fn five(self) -> Result<(T, T, T, T, T)> {
+        match <[T; 5] as TryFrom<_>>::try_from(self) {
+            Ok([first, second, third, fourth, fifth]) => Ok((first, second, third, fourth, fifth)),
+            Err(v) => plan_err!("five values expected: {v:?}"),
+        }
+    }
+
+    fn six(self) -> Result<(T, T, T, T, T, T)> {
+        match <[T; 6] as TryFrom<_>>::try_from(self) {
+            Ok([first, second, third, fourth, fifth, sixth]) => {
+                Ok((first, second, third, fourth, fifth, sixth))
+            }
+            Err(v) => plan_err!("six values expected: {v:?}"),
+        }
+    }
+
+    fn seven(self) -> Result<(T, T, T, T, T, T, T)> {
+        match <[T; 7] as TryFrom<_>>::try_from(self) {
+            Ok([first, second, third, fourth, fifth, sixth, seventh]) => {
+                Ok((first, second, third, fourth, fifth, sixth, seventh))
+            }
+            Err(v) => plan_err!("seven values expected: {v:?}"),
         }
     }
 
