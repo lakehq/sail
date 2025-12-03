@@ -654,3 +654,75 @@
     during long-running operations. The empty response serves as a heartbeat to keep
     the session active.
   experimental: true
+
+- key: telemetry.export_traces
+  type: boolean
+  default: "false"
+  description: Whether to export traces to an OpenTelemetry collector.
+  experimental: true
+
+- key: telemetry.export_metrics
+  type: boolean
+  default: "false"
+  description: Whether to export metrics to an OpenTelemetry collector.
+  experimental: true
+
+- key: telemetry.export_logs
+  type: boolean
+  default: "false"
+  description: Whether to export logs to an OpenTelemetry collector.
+  experimental: true
+
+- key: telemetry.otlp_endpoint
+  type: string
+  default: "http://localhost:4317"
+  description: The OTLP endpoint for telemetry data export.
+  experimental: true
+
+- key: telemetry.otlp_protocol
+  type: string
+  default: "grpc"
+  description: |
+    The OTLP protocol for telemetry data export.
+    Valid values are `grpc`, `http-binary`, and `http-json`.
+  experimental: true
+
+- key: telemetry.otlp_timeout_secs
+  type: number
+  default: "10"
+  description: The timeout in seconds for OTLP telemetry data export.
+  experimental: true
+
+- key: telemetry.traces_export_interval_secs
+  type: number
+  default: "5"
+  description: The interval in seconds for exporting traces.
+  experimental: true
+
+- key: telemetry.metrics_export_interval_secs
+  type: number
+  default: "5"
+  description: The interval in seconds for exporting metrics.
+  experimental: true
+
+- key: telemetry.logs_export_interval_secs
+  type: number
+  default: "1"
+  description: The interval in seconds for exporting logs.
+  experimental: true
+
+- key: telemetry.logs_export_max_queue_size
+  type: number
+  default: "65536"
+  description: |
+    The maximum number of log records to queue for exporting.
+    The log record will be dropped if the queue gets full between export intervals.
+  experimental: true
+
+- key: telemetry.logs_export_batch_size
+  type: number
+  default: "512"
+  description: |
+    The batch size for exporting logs. Multiple batches may be sent in each export interval
+    if the number of queued log records exceeds the batch size.
+  experimental: true

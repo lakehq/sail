@@ -1,7 +1,7 @@
 use std::convert::Infallible;
 use std::future::Future;
 
-use sail_telemetry::trace_layer::TraceLayer;
+use fastrace_tonic::FastraceServerLayer;
 use tokio::net::TcpListener;
 use tonic::body::Body;
 use tonic::codegen::http::Request;
@@ -40,7 +40,7 @@ pub struct ServerBuilder<'b> {
     health_reporter: HealthReporter,
     reflection_server_builder: tonic_reflection::server::Builder<'b>,
     // The router type has to change accordingly when layers are added.
-    router: Router<Stack<Stack<TraceLayer, Identity>, Identity>>,
+    router: Router<Stack<Stack<FastraceServerLayer, Identity>, Identity>>,
 }
 
 impl<'b> ServerBuilder<'b> {
@@ -57,7 +57,7 @@ impl<'b> ServerBuilder<'b> {
             // .layer(
             //     CompressionLayer::new().gzip(true).zstd(true),
             // )
-            .layer(TraceLayer::new(name))
+            .layer(FastraceServerLayer)
             .into_inner();
 
         let router = tonic::transport::Server::builder()
