@@ -997,7 +997,7 @@
         }
       },
       "output": {
-        "failure": "not implemented: function: shuffle"
+        "success": "ok"
       }
     },
     {
@@ -1023,7 +1023,7 @@
         }
       },
       "output": {
-        "failure": "not implemented: function: shuffle"
+        "success": "ok"
       }
     },
     {
