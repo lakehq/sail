@@ -462,6 +462,7 @@ pub(super) fn list_built_in_math_functions() -> Vec<(&'static str, ScalarFunctio
         ("log1p", F::unary(double(log1p))),
         ("log2", F::unary(double(log2))),
         ("mod", F::binary_op(Operator::Modulo)),
+        ("modulus", F::binary(math_fn::modulus)),
         ("negative", F::unary(|x| Expr::Negative(Box::new(x)))),
         ("pi", F::nullary(expr_fn::pi)),
         ("pmod", F::binary(math_fn::pmod)),

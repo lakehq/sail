@@ -12,6 +12,7 @@ use sail_function::scalar::array::spark_array::SparkArray;
 use sail_function::scalar::array::spark_array_min_max::{ArrayMax, ArrayMin};
 use sail_function::scalar::array::spark_sequence::SparkSequence;
 use sail_function::scalar::misc::raise_error::RaiseError;
+use datafusion_spark::function::array::expr_fn as array_fn;
 
 use crate::error::{PlanError, PlanResult};
 use crate::function::common::{ScalarFunction, ScalarFunctionInput};
@@ -246,7 +247,7 @@ pub(super) fn list_built_in_array_functions() -> Vec<(&'static str, ScalarFuncti
         ("flatten", F::custom(flatten)),
         ("get", F::binary(array_element)),
         ("sequence", F::udf(SparkSequence::new())),
-        ("shuffle", F::unknown("shuffle")),
+        ("shuffle",  F::unary(array_fn::shuffle)),
         ("slice", F::ternary(slice)),
         ("sort_array", F::binary(sort_array)),
     ]
