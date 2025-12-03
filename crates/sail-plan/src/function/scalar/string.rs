@@ -4,7 +4,7 @@ use datafusion::functions::regex::expr_fn as regex_fn;
 use datafusion::functions::regex::regexpcount::RegexpCountFunc;
 use datafusion::functions::regex::regexpinstr::RegexpInstrFunc;
 use datafusion_common::{DFSchema, ScalarValue};
-use datafusion_expr::{cast, expr, lit, try_cast, when, Expr, ExprSchemable, ScalarUDF};
+use datafusion_expr::{cast, expr, lit, try_cast, when, ExprSchemable, ScalarUDF};
 use datafusion_spark::function::string::elt::SparkElt;
 use datafusion_spark::function::string::expr_fn as string_fn;
 use sail_common_datafusion::utils::items::ItemTaker;
@@ -153,7 +153,7 @@ fn cast_to_logical_string_or_try(
     })
 }
 
-fn elt(args: Vec<Expr>) -> PlanResult<Expr> {
+fn elt(args: Vec<expr::Expr>) -> PlanResult<expr::Expr> {
     Ok(ScalarUDF::from(SparkElt::new()).call(args))
 }
 
