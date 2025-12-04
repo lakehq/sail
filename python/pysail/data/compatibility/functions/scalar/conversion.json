@@ -1,0 +1,67 @@
+[
+  {
+    "module": "pyspark.sql.functions",
+    "function": "bigint",
+    "status": "supported"
+  },
+  {
+    "module": "pyspark.sql.functions",
+    "function": "binary",
+    "status": "supported"
+  },
+  {
+    "module": "pyspark.sql.functions",
+    "function": "boolean",
+    "status": "supported"
+  },
+  {
+    "module": "pyspark.sql.functions",
+    "function": "cast",
+    "status": "supported"
+  },
+  {
+    "module": "pyspark.sql.functions",
+    "function": "date",
+    "status": "supported"
+  },
+  {
+    "module": "pyspark.sql.functions",
+    "function": "decimal",
+    "status": "supported"
+  },
+  {
+    "module": "pyspark.sql.functions",
+    "function": "double",
+    "status": "supported"
+  },
+  {
+    "module": "pyspark.sql.functions",
+    "function": "float",
+    "status": "supported"
+  },
+  {
+    "module": "pyspark.sql.functions",
+    "function": "int",
+    "status": "supported"
+  },
+  {
+    "module": "pyspark.sql.functions",
+    "function": "smallint",
+    "status": "supported"
+  },
+  {
+    "module": "pyspark.sql.functions",
+    "function": "string",
+    "status": "supported"
+  },
+  {
+    "module": "pyspark.sql.functions",
+    "function": "timestamp",
+    "status": "supported"
+  },
+  {
+    "module": "pyspark.sql.functions",
+    "function": "tinyint",
+    "status": "supported"
+  }
+]

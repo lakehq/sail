@@ -1,0 +1,116 @@
+[
+  {
+    "module": "pyspark.sql.functions",
+    "function": "!",
+    "status": "supported",
+    "explanation": "logical not"
+  },
+  {
+    "module": "pyspark.sql.functions",
+    "function": "!=",
+    "status": "supported",
+    "explanation": "not equal"
+  },
+  {
+    "module": "pyspark.sql.functions",
+    "function": "<",
+    "status": "supported",
+    "explanation": "less than"
+  },
+  {
+    "module": "pyspark.sql.functions",
+    "function": "<=",
+    "status": "supported",
+    "explanation": "less than or equal"
+  },
+  {
+    "module": "pyspark.sql.functions",
+    "function": "<=>",
+    "status": "supported",
+    "explanation": "not distinct from"
+  },
+  {
+    "module": "pyspark.sql.functions",
+    "function": "=",
+    "status": "supported",
+    "explanation": "equal"
+  },
+  {
+    "module": "pyspark.sql.functions",
+    "function": "==",
+    "status": "supported",
+    "explanation": "equal"
+  },
+  {
+    "module": "pyspark.sql.functions",
+    "function": ">",
+    "status": "supported",
+    "explanation": "greater than"
+  },
+  {
+    "module": "pyspark.sql.functions",
+    "function": ">=",
+    "status": "supported",
+    "explanation": "greater than or equal"
+  },
+  {
+    "module": "pyspark.sql.functions",
+    "function": "and",
+    "status": "supported"
+  },
+  {
+    "module": "pyspark.sql.functions",
+    "function": "ilike",
+    "status": "supported"
+  },
+  {
+    "module": "pyspark.sql.functions",
+    "function": "in",
+    "status": "supported"
+  },
+  {
+    "module": "pyspark.sql.functions",
+    "function": "isnan",
+    "status": "supported"
+  },
+  {
+    "module": "pyspark.sql.functions",
+    "function": "isnotnull",
+    "status": "supported"
+  },
+  {
+    "module": "pyspark.sql.functions",
+    "function": "isnull",
+    "status": "supported"
+  },
+  {
+    "module": "pyspark.sql.functions",
+    "function": "like",
+    "status": "supported"
+  },
+  {
+    "module": "pyspark.sql.functions",
+    "function": "not",
+    "status": "supported"
+  },
+  {
+    "module": "pyspark.sql.functions",
+    "function": "or",
+    "status": "supported"
+  },
+  {
+    "module": "pyspark.sql.functions",
+    "function": "regexp",
+    "status": "supported"
+  },
+  {
+    "module": "pyspark.sql.functions",
+    "function": "regexp_like",
+    "status": "supported"
+  },
+  {
+    "module": "pyspark.sql.functions",
+    "function": "rlike",
+    "status": "supported"
+  }
+]

@@ -1,0 +1,17 @@
+[
+  {
+    "module": "pyspark.sql.session.SparkSession",
+    "function": "range",
+    "status": "supported"
+  },
+  {
+    "module": "pyspark.sql.DataFrame",
+    "function": "read",
+    "status": "supported"
+  },
+  {
+    "module": "pyspark.sql.DataFrame",
+    "function": "readStream",
+    "status": "in progress"
+  }
+]
