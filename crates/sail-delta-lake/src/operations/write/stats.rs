@@ -235,6 +235,7 @@ enum StatsScalar {
     Float64(f64),
     Date(chrono::NaiveDate),
     Timestamp(chrono::NaiveDateTime),
+    // TODO: Consider TimestampNTZ
     Decimal(f64),
     String(String),
     Bytes(Vec<u8>),
