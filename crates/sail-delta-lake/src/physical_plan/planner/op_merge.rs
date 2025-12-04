@@ -76,11 +76,405 @@ type PhysicalExprPair = (PhysicalExprRef, PhysicalExprRef);
 type ColumnCaseBranches = Vec<PhysicalExprPair>;
 type ColumnCasesMap = HashMap<String, ColumnCaseBranches>;
 
+/// DSL extension trait for building physical expressions with less boilerplate
+trait PhysExprExt {
+    fn and(self, other: Arc<dyn PhysicalExpr>) -> Arc<dyn PhysicalExpr>;
+    fn or(self, other: Arc<dyn PhysicalExpr>) -> Arc<dyn PhysicalExpr>;
+    fn not(self) -> Arc<dyn PhysicalExpr>;
+    fn not_null(self) -> Arc<dyn PhysicalExpr>;
+}
+
+impl PhysExprExt for Arc<dyn PhysicalExpr> {
+    fn and(self, other: Arc<dyn PhysicalExpr>) -> Arc<dyn PhysicalExpr> {
+        Arc::new(BinaryExpr::new(self, Operator::And, other))
+    }
+
+    fn or(self, other: Arc<dyn PhysicalExpr>) -> Arc<dyn PhysicalExpr> {
+        Arc::new(BinaryExpr::new(self, Operator::Or, other))
+    }
+
+    fn not(self) -> Arc<dyn PhysicalExpr> {
+        Arc::new(NotExpr::new(self))
+    }
+
+    fn not_null(self) -> Arc<dyn PhysicalExpr> {
+        Arc::new(IsNotNullExpr::new(self))
+    }
+}
+
+fn lit_bool(val: bool) -> Arc<dyn PhysicalExpr> {
+    Arc::new(Literal::new(ScalarValue::Boolean(Some(val))))
+}
+
 #[derive(Debug, Clone)]
 struct JoinConditionAnalysis {
     join_keys: Vec<PhysicalExprPair>,
     residual_filter: Option<Arc<dyn PhysicalExpr>>,
     target_only_filters: Vec<Arc<dyn PhysicalExpr>>,
+}
+
+/// Context object that encapsulates all schema-related information for a MERGE operation.
+struct MergeSchemaContext {
+    target_physical_schema: SchemaRef,
+    source_physical_schema: SchemaRef,
+    table_schema: SchemaRef,
+    /// Logical column name -> physical column name mapping
+    logical_to_physical: HashMap<String, String>,
+    /// Target column name -> index in target schema
+    target_col_idx: HashMap<String, usize>,
+    /// Source column name -> index in joined schema (offset by target length)
+    source_col_idx: HashMap<String, usize>,
+    /// Physical target column name -> index mapping (for logical_to_physical mapped names)
+    physical_target_col_idx: HashMap<String, usize>,
+    /// Index of PATH_COLUMN in target schema
+    path_col_idx: usize,
+    /// Index of SOURCE_PRESENT_COLUMN in joined schema
+    source_present_col_idx: usize,
+    /// Number of target columns
+    num_target: usize,
+}
+
+impl MergeSchemaContext {
+    fn new(
+        target_physical_schema: SchemaRef,
+        source_physical_schema: SchemaRef,
+        table_schema: SchemaRef,
+        logical_target_schema: SchemaRef,
+    ) -> Result<Self> {
+        let target_fields = target_physical_schema.fields();
+        let source_fields = source_physical_schema.fields();
+        let num_target = target_fields.len();
+
+        // Build logical to physical mapping
+        let mut logical_to_physical = HashMap::new();
+        if logical_target_schema.fields().len() == table_schema.fields().len() {
+            for (idx, logical_field) in logical_target_schema.fields().iter().enumerate() {
+                let physical_field = table_schema.field(idx);
+                logical_to_physical
+                    .insert(logical_field.name().clone(), physical_field.name().clone());
+            }
+        }
+
+        // Build target column index map
+        let mut target_col_idx = HashMap::new();
+        for (idx, field) in target_fields.iter().enumerate() {
+            target_col_idx.insert(field.name().clone(), idx);
+        }
+
+        // Build physical target column index map
+        let mut physical_target_col_idx = HashMap::new();
+        for (logical_name, physical_name) in &logical_to_physical {
+            if let Some(idx) = target_col_idx.get(logical_name) {
+                physical_target_col_idx.insert(physical_name.clone(), *idx);
+            }
+        }
+
+        // Build source column index map (offset by num_target for joined schema)
+        let mut source_col_idx = HashMap::new();
+        for (idx, field) in source_fields.iter().enumerate() {
+            source_col_idx.insert(field.name().clone(), num_target + idx);
+        }
+
+        // Find PATH_COLUMN index
+        let path_col_idx = target_fields
+            .iter()
+            .enumerate()
+            .find(|(_, f)| f.name() == PATH_COLUMN)
+            .map(|(idx, _)| idx)
+            .ok_or_else(|| {
+                DataFusionError::Plan(format!(
+                    "Column '{}' not found in target schema",
+                    PATH_COLUMN
+                ))
+            })?;
+
+        // Find SOURCE_PRESENT_COLUMN index in joined schema
+        let source_present_idx_in_source = source_fields
+            .iter()
+            .enumerate()
+            .find(|(_, f)| f.name() == SOURCE_PRESENT_COLUMN)
+            .map(|(idx, _)| idx)
+            .ok_or_else(|| {
+                DataFusionError::Plan(format!(
+                    "Column '{}' not found in source schema",
+                    SOURCE_PRESENT_COLUMN
+                ))
+            })?;
+        let source_present_col_idx = num_target + source_present_idx_in_source;
+
+        Ok(Self {
+            target_physical_schema,
+            source_physical_schema,
+            table_schema,
+            logical_to_physical,
+            target_col_idx,
+            source_col_idx,
+            physical_target_col_idx,
+            path_col_idx,
+            source_present_col_idx,
+            num_target,
+        })
+    }
+
+    /// Get a physical column expression from the target side.
+    /// Handles both direct column names and logical-to-physical column name mappings.
+    fn target_col_expr(&self, name: &str, data_type: &DataType) -> Result<Arc<dyn PhysicalExpr>> {
+        // Try physical_target_col_idx first (for mapped names), then target_col_idx
+        if let Some(idx) = self
+            .physical_target_col_idx
+            .get(name)
+            .copied()
+            .or_else(|| self.target_col_idx.get(name).copied())
+        {
+            let target_name = self
+                .target_physical_schema
+                .fields()
+                .get(idx)
+                .map(|f| f.name().clone())
+                .unwrap_or_else(|| name.to_string());
+            Ok(Arc::new(Column::new(target_name.as_str(), idx)) as Arc<dyn PhysicalExpr>)
+        } else {
+            Ok(Arc::new(Literal::new(Self::typed_null(data_type)?)) as Arc<dyn PhysicalExpr>)
+        }
+    }
+
+    fn typed_null(data_type: &DataType) -> Result<ScalarValue> {
+        ScalarValue::try_from(data_type)
+    }
+
+    /// Get a physical column expression from the source side by ordinal position
+    fn source_col_expr_by_idx(&self, idx: usize) -> Option<Arc<dyn PhysicalExpr>> {
+        if idx < self.source_physical_schema.fields().len() {
+            let field = &self.source_physical_schema.fields()[idx];
+            Some(Arc::new(Column::new(field.name(), self.num_target + idx)) as Arc<dyn PhysicalExpr>)
+        } else {
+            None
+        }
+    }
+
+    /// Get the PATH column expression
+    fn path_col_expr(&self) -> Arc<dyn PhysicalExpr> {
+        Arc::new(Column::new(PATH_COLUMN, self.path_col_idx)) as Arc<dyn PhysicalExpr>
+    }
+
+    /// Get the SOURCE_PRESENT column expression
+    fn source_present_col_expr(&self) -> Arc<dyn PhysicalExpr> {
+        Arc::new(Column::new(
+            SOURCE_PRESENT_COLUMN,
+            self.source_present_col_idx,
+        )) as Arc<dyn PhysicalExpr>
+    }
+
+    /// Build commonly used predicates
+    fn target_present_expr(&self) -> Arc<dyn PhysicalExpr> {
+        self.path_col_expr().not_null()
+    }
+
+    fn source_present_expr(&self) -> Arc<dyn PhysicalExpr> {
+        self.source_present_col_expr().not_null()
+    }
+
+    /// Align an expression's column references to the join schema
+    fn align_expr(
+        &self,
+        expr: &Arc<dyn PhysicalExpr>,
+        schema: &SchemaRef,
+    ) -> Result<Arc<dyn PhysicalExpr>> {
+        let schema = Arc::clone(schema);
+        let target_col_idx = &self.target_col_idx;
+        let source_col_idx = &self.source_col_idx;
+        let logical_to_physical = &self.logical_to_physical;
+
+        expr.clone()
+            .transform_up(|e| {
+                if let Some(col) = e.as_any().downcast_ref::<Column>() {
+                    let mut target_name: Option<String> = None;
+                    let name = col.name();
+                    let mut new_index: Option<usize> = None;
+
+                    if let Some(mapped) = logical_to_physical.get(name) {
+                        target_name = Some(mapped.clone());
+                        new_index = target_col_idx.get(mapped).cloned();
+                    } else if let Some(idx) = target_col_idx.get(name) {
+                        new_index = Some(*idx);
+                    } else if let Some(idx) = source_col_idx.get(name) {
+                        new_index = Some(*idx);
+                    } else if let Some(idx) = schema.fields().iter().position(|f| f.name() == name)
+                    {
+                        new_index = Some(idx);
+                        target_name = Some(schema.field(idx).name().clone());
+                    }
+
+                    if let Some(idx) = new_index {
+                        let final_name = target_name.unwrap_or_else(|| name.to_string());
+                        if idx != col.index() || final_name != name {
+                            log::trace!(
+                                "align_expr remap: name={} old_idx={} final_name={} new_idx={}",
+                                name,
+                                col.index(),
+                                final_name.as_str(),
+                                idx
+                            );
+                            let updated = Arc::new(Column::new(final_name.as_str(), idx))
+                                as Arc<dyn PhysicalExpr>;
+                            return Ok(Transformed::yes(updated));
+                        }
+                    }
+                }
+                Ok(Transformed::no(e))
+            })
+            .data()
+    }
+}
+
+/// Helper struct to find files affected by a MERGE operation.
+/// Encapsulates the logic for building a plan to identify touched files,
+/// collecting file paths, and loading their Add actions.
+struct AffectedFilesFinder<'a> {
+    snapshot: &'a DeltaTableState,
+    log_store: LogStoreRef,
+    session: &'a dyn Session,
+    merge_info: &'a PhysicalMergeInfo,
+}
+
+impl<'a> AffectedFilesFinder<'a> {
+    fn new(
+        snapshot: &'a DeltaTableState,
+        log_store: LogStoreRef,
+        session: &'a dyn Session,
+        merge_info: &'a PhysicalMergeInfo,
+    ) -> Self {
+        Self {
+            snapshot,
+            log_store,
+            session,
+            merge_info,
+        }
+    }
+
+    /// Find all files touched by the merge operation
+    async fn find_touched_files(
+        &self,
+        join_plan: Arc<dyn ExecutionPlan>,
+        ctx: &MergeSchemaContext,
+    ) -> Result<Vec<Add>> {
+        let touched_plan = self.build_touched_file_plan(join_plan, ctx)?;
+
+        let touched_paths = if let Some(plan) = touched_plan {
+            self.collect_touched_paths(plan).await?
+        } else {
+            HashSet::new()
+        };
+
+        self.load_add_actions_for_paths(&touched_paths).await
+    }
+
+    fn build_touched_file_plan(
+        &self,
+        input: Arc<dyn ExecutionPlan>,
+        ctx: &MergeSchemaContext,
+    ) -> Result<Option<Arc<dyn ExecutionPlan>>> {
+        let target_present = ctx.target_present_expr();
+        let source_present = ctx.source_present_expr();
+
+        let matched_pred = target_present.clone().and(source_present.clone());
+        let not_matched_by_source_pred = target_present.clone().and(source_present.clone().not());
+
+        let mut rewrite_pred: Option<Arc<dyn PhysicalExpr>> = None;
+        let accumulate = |existing: &mut Option<Arc<dyn PhysicalExpr>>,
+                          expr: Arc<dyn PhysicalExpr>| {
+            *existing = Some(match existing.take() {
+                Some(prev) => prev.or(expr),
+                None => expr,
+            });
+        };
+
+        for clause in &self.merge_info.matched_clauses {
+            let mut pred = matched_pred.clone();
+            if let Some(cond) = &clause.condition {
+                pred = pred.and(Arc::clone(cond));
+            }
+            use sail_common_datafusion::datasource::MergeMatchedActionInfo as MMAI;
+            match &clause.action {
+                MMAI::Delete | MMAI::UpdateAll | MMAI::UpdateSet(_) => {
+                    accumulate(&mut rewrite_pred, pred);
+                }
+            }
+        }
+
+        for clause in &self.merge_info.not_matched_by_source_clauses {
+            let mut pred = not_matched_by_source_pred.clone();
+            if let Some(cond) = &clause.condition {
+                pred = pred.and(Arc::clone(cond));
+            }
+            use sail_common_datafusion::datasource::MergeNotMatchedBySourceActionInfo as NMBAI;
+            match &clause.action {
+                NMBAI::Delete | NMBAI::UpdateSet(_) => {
+                    accumulate(&mut rewrite_pred, pred);
+                }
+            }
+        }
+
+        let rewrite_pred = match rewrite_pred {
+            Some(pred) => pred,
+            None => return Ok(None),
+        };
+
+        let filter = Arc::new(FilterExec::try_new(rewrite_pred, input)?);
+        let base_path_col = ctx.path_col_expr();
+        let projected_path = Arc::new(CastExpr::new(base_path_col.clone(), DataType::Utf8, None))
+            as Arc<dyn PhysicalExpr>;
+        let projection =
+            ProjectionExec::try_new(vec![(projected_path, PATH_COLUMN.to_string())], filter)?;
+        Ok(Some(Arc::new(projection)))
+    }
+
+    async fn collect_touched_paths(&self, plan: Arc<dyn ExecutionPlan>) -> Result<HashSet<String>> {
+        let task_ctx = self.session.task_ctx();
+        let batches = collect(plan, task_ctx).await?;
+        let mut paths = HashSet::new();
+        for batch in batches {
+            if batch.num_columns() == 0 {
+                continue;
+            }
+            let array = batch
+                .column(0)
+                .as_any()
+                .downcast_ref::<StringArray>()
+                .ok_or_else(|| {
+                    DataFusionError::Plan(
+                        "Touched file plan must yield a Utf8 path column".to_string(),
+                    )
+                })?;
+            for value in array.iter().flatten() {
+                paths.insert(value.to_string());
+            }
+        }
+        Ok(paths)
+    }
+
+    async fn load_add_actions_for_paths(&self, paths: &HashSet<String>) -> Result<Vec<Add>> {
+        if paths.is_empty() {
+            return Ok(Vec::new());
+        }
+
+        let mut stream = self
+            .snapshot
+            .snapshot()
+            .files(self.log_store.as_ref(), None);
+        let mut adds = Vec::new();
+        while let Some(view) = stream
+            .try_next()
+            .await
+            .map_err(|e| DataFusionError::External(Box::new(e)))?
+        {
+            let add = view.add_action();
+            if paths.contains(&add.path) {
+                adds.push(add);
+            }
+        }
+        Ok(adds)
+    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -329,45 +723,43 @@ impl<'a> DeltaMergePlanBuilder<'a> {
             &source_physical_fields
         );
 
+        // Build schema context to encapsulate all schema-related logic
+        let logical_target_schema =
+            Arc::new(self.merge_info.target_schema.as_ref().as_arrow().clone());
+        let ctx = MergeSchemaContext::new(
+            Arc::clone(&target_physical_schema),
+            Arc::clone(&source_physical_schema),
+            table_schema.clone(),
+            logical_target_schema,
+        )?;
+
         let join_for_ident = self.build_join_plan(
             Arc::clone(&target_plan),
             Arc::clone(&source_plan),
             &join_analysis,
         )?;
 
-        let touched_plan = self.build_touched_file_plan(
-            Arc::clone(&join_for_ident),
-            Arc::clone(&target_physical_schema),
-            Arc::clone(&source_physical_schema),
-        )?;
-
-        let touched_paths = if let Some(plan) = touched_plan {
-            self.collect_touched_paths(plan).await?
-        } else {
-            HashSet::new()
-        };
-
-        let touched_adds = self
-            .load_add_actions_for_paths(&snapshot_state, &log_store, &touched_paths)
+        // Find affected files using the AffectedFilesFinder
+        let finder = AffectedFilesFinder::new(
+            &snapshot_state,
+            log_store.clone(),
+            self.session,
+            &self.merge_info,
+        );
+        let touched_adds = finder
+            .find_touched_files(Arc::clone(&join_for_ident), &ctx)
             .await?;
+
+        // Extract touched paths for filtering
+        let touched_paths: HashSet<String> =
+            touched_adds.iter().map(|add| add.path.clone()).collect();
 
         let join_plan =
             self.build_join_plan(target_plan, Arc::clone(&source_plan), &join_analysis)?;
 
-        let filtered = self.build_merge_row_filter(
-            join_plan,
-            Arc::clone(&target_physical_schema),
-            Arc::clone(&source_physical_schema),
-            table_schema.clone(),
-        )?;
-        let filtered =
-            self.filter_to_touched_rows(filtered, &target_physical_schema, &touched_paths)?;
-        let projected = self.build_merge_projection(
-            filtered,
-            target_physical_schema,
-            source_physical_schema,
-            table_schema.clone(),
-        )?;
+        let filtered = self.build_merge_row_filter(join_plan, &ctx)?;
+        let filtered = self.filter_to_touched_rows(filtered, &ctx, &touched_paths)?;
+        let projected = self.build_merge_projection(filtered, &ctx)?;
 
         let writer = Arc::new(DeltaWriterExec::new(
             Arc::clone(&projected),
@@ -619,25 +1011,12 @@ impl<'a> DeltaMergePlanBuilder<'a> {
     fn filter_to_touched_rows(
         &self,
         input: Arc<dyn ExecutionPlan>,
-        target_physical_schema: &SchemaRef,
+        ctx: &MergeSchemaContext,
         touched_paths: &HashSet<String>,
     ) -> Result<Arc<dyn ExecutionPlan>> {
-        let target_fields = target_physical_schema.fields();
-        let path_idx = target_fields
-            .iter()
-            .enumerate()
-            .find(|(_, f)| f.name() == PATH_COLUMN)
-            .map(|(idx, _)| idx)
-            .ok_or_else(|| {
-                DataFusionError::Plan(format!(
-                    "Column '{}' not found in MERGE join schema",
-                    PATH_COLUMN
-                ))
-            })?;
+        let path_col = ctx.path_col_expr();
+        let target_present = ctx.target_present_expr();
 
-        let path_col = Arc::new(Column::new(PATH_COLUMN, path_idx)) as Arc<dyn PhysicalExpr>;
-        let target_present =
-            Arc::new(IsNotNullExpr::new(path_col.clone())) as Arc<dyn PhysicalExpr>;
         let touched_literals: Vec<Arc<dyn PhysicalExpr>> = touched_paths
             .iter()
             .map(|path| {
@@ -645,8 +1024,9 @@ impl<'a> DeltaMergePlanBuilder<'a> {
                     as Arc<dyn PhysicalExpr>
             })
             .collect();
+
         let path_in_touched: Arc<dyn PhysicalExpr> = if touched_literals.is_empty() {
-            Arc::new(Literal::new(ScalarValue::Boolean(Some(false))))
+            lit_bool(false)
         } else {
             Arc::new(InListExpr::new(
                 path_col.clone(),
@@ -655,121 +1035,12 @@ impl<'a> DeltaMergePlanBuilder<'a> {
                 None,
             ))
         };
-        let touched_targets = Arc::new(BinaryExpr::new(
-            target_present.clone(),
-            Operator::And,
-            path_in_touched,
-        )) as Arc<dyn PhysicalExpr>;
-        let source_only = Arc::new(NotExpr::new(target_present.clone())) as Arc<dyn PhysicalExpr>;
-        let keep_pred = Arc::new(BinaryExpr::new(touched_targets, Operator::Or, source_only))
-            as Arc<dyn PhysicalExpr>;
+
+        let touched_targets = target_present.clone().and(path_in_touched);
+        let source_only = target_present.clone().not();
+        let keep_pred = touched_targets.or(source_only);
 
         Ok(Arc::new(FilterExec::try_new(keep_pred, input)?))
-    }
-
-    fn build_touched_file_plan(
-        &self,
-        input: Arc<dyn ExecutionPlan>,
-        target_physical_schema: SchemaRef,
-        source_physical_schema: SchemaRef,
-    ) -> Result<Option<Arc<dyn ExecutionPlan>>> {
-        let target_fields = target_physical_schema.fields();
-        let source_fields = source_physical_schema.fields();
-        let num_target = target_fields.len();
-        let path_idx = target_fields
-            .iter()
-            .enumerate()
-            .find(|(_, f)| f.name() == PATH_COLUMN)
-            .map(|(idx, _)| idx)
-            .ok_or_else(|| {
-                DataFusionError::Plan(format!(
-                    "Column '{}' not found in MERGE join schema",
-                    PATH_COLUMN
-                ))
-            })?;
-        let source_present_idx_in_source = source_fields
-            .iter()
-            .enumerate()
-            .find(|(_, f)| f.name() == SOURCE_PRESENT_COLUMN)
-            .map(|(idx, _)| idx)
-            .ok_or_else(|| {
-                DataFusionError::Plan(format!(
-                    "Column '{}' not found in MERGE join schema",
-                    SOURCE_PRESENT_COLUMN
-                ))
-            })?;
-        let src_present_idx = num_target + source_present_idx_in_source;
-
-        let base_path_col = Arc::new(Column::new(PATH_COLUMN, path_idx)) as Arc<dyn PhysicalExpr>;
-        let source_present = Arc::new(IsNotNullExpr::new(Arc::new(Column::new(
-            SOURCE_PRESENT_COLUMN,
-            src_present_idx,
-        )) as Arc<dyn PhysicalExpr>)) as Arc<dyn PhysicalExpr>;
-        let target_present =
-            Arc::new(IsNotNullExpr::new(base_path_col.clone())) as Arc<dyn PhysicalExpr>;
-        let matched_pred = Arc::new(BinaryExpr::new(
-            target_present.clone(),
-            Operator::And,
-            source_present.clone(),
-        )) as Arc<dyn PhysicalExpr>;
-        let not_source_present =
-            Arc::new(NotExpr::new(source_present.clone())) as Arc<dyn PhysicalExpr>;
-        let not_matched_by_source_pred = Arc::new(BinaryExpr::new(
-            target_present.clone(),
-            Operator::And,
-            not_source_present.clone(),
-        )) as Arc<dyn PhysicalExpr>;
-
-        let mut rewrite_pred: Option<Arc<dyn PhysicalExpr>> = None;
-        let accumulate = |existing: &mut Option<Arc<dyn PhysicalExpr>>,
-                          expr: Arc<dyn PhysicalExpr>| {
-            *existing = Some(match existing.take() {
-                Some(prev) => {
-                    Arc::new(BinaryExpr::new(prev, Operator::Or, expr)) as Arc<dyn PhysicalExpr>
-                }
-                None => expr,
-            });
-        };
-
-        for clause in &self.merge_info.matched_clauses {
-            let mut pred = matched_pred.clone();
-            if let Some(cond) = &clause.condition {
-                pred = Arc::new(BinaryExpr::new(pred, Operator::And, Arc::clone(cond)))
-                    as Arc<dyn PhysicalExpr>;
-            }
-            use sail_common_datafusion::datasource::MergeMatchedActionInfo as MMAI;
-            match &clause.action {
-                MMAI::Delete | MMAI::UpdateAll | MMAI::UpdateSet(_) => {
-                    accumulate(&mut rewrite_pred, pred);
-                }
-            }
-        }
-
-        for clause in &self.merge_info.not_matched_by_source_clauses {
-            let mut pred = not_matched_by_source_pred.clone();
-            if let Some(cond) = &clause.condition {
-                pred = Arc::new(BinaryExpr::new(pred, Operator::And, Arc::clone(cond)))
-                    as Arc<dyn PhysicalExpr>;
-            }
-            use sail_common_datafusion::datasource::MergeNotMatchedBySourceActionInfo as NMBAI;
-            match &clause.action {
-                NMBAI::Delete | NMBAI::UpdateSet(_) => {
-                    accumulate(&mut rewrite_pred, pred);
-                }
-            }
-        }
-
-        let rewrite_pred = match rewrite_pred {
-            Some(pred) => pred,
-            None => return Ok(None),
-        };
-
-        let filter = Arc::new(FilterExec::try_new(rewrite_pred, input)?);
-        let projected_path = Arc::new(CastExpr::new(base_path_col.clone(), DataType::Utf8, None))
-            as Arc<dyn PhysicalExpr>;
-        let projection =
-            ProjectionExec::try_new(vec![(projected_path, PATH_COLUMN.to_string())], filter)?;
-        Ok(Some(Arc::new(projection)))
     }
 
     /// Build a row-level filter that keeps:
@@ -778,118 +1049,33 @@ impl<'a> DeltaMergePlanBuilder<'a> {
     fn build_merge_row_filter(
         &self,
         input: Arc<dyn ExecutionPlan>,
-        target_physical_schema: SchemaRef,
-        source_physical_schema: SchemaRef,
-        table_schema: SchemaRef,
+        ctx: &MergeSchemaContext,
     ) -> Result<Arc<dyn ExecutionPlan>> {
         let input_schema = input.schema();
-        let target_fields = target_physical_schema.fields();
-        let source_fields = source_physical_schema.fields();
-        let num_target = target_fields.len();
-        let logical_target_schema = self.merge_info.target_schema.as_ref().as_arrow();
-        let mut logical_to_physical: HashMap<String, String> = HashMap::new();
-        if logical_target_schema.fields().len() == table_schema.fields().len() {
-            for (idx, logical_field) in logical_target_schema.fields().iter().enumerate() {
-                let physical_field = table_schema.field(idx);
-                logical_to_physical
-                    .insert(logical_field.name().clone(), physical_field.name().clone());
-            }
-        }
 
-        let mut target_idx_by_name: HashMap<String, usize> = HashMap::new();
-        for (idx, field) in target_fields.iter().enumerate() {
-            target_idx_by_name.insert(field.name().clone(), idx);
-        }
-        let mut source_idx_by_name: HashMap<String, usize> = HashMap::new();
-        for (idx, field) in source_fields.iter().enumerate() {
-            source_idx_by_name.insert(field.name().clone(), num_target + idx);
-        }
+        let target_present = ctx.target_present_expr();
+        let source_present = ctx.source_present_expr();
 
-        let path_idx = target_fields
-            .iter()
-            .enumerate()
-            .find(|(_, f)| f.name() == PATH_COLUMN)
-            .map(|(idx, _)| idx)
-            .ok_or_else(|| {
-                DataFusionError::Plan(format!(
-                    "Column '{}' not found in MERGE join schema",
-                    PATH_COLUMN
-                ))
-            })?;
-
-        let source_present_idx_in_source = source_fields
-            .iter()
-            .enumerate()
-            .find(|(_, f)| f.name() == SOURCE_PRESENT_COLUMN)
-            .map(|(idx, _)| idx)
-            .ok_or_else(|| {
-                DataFusionError::Plan(format!(
-                    "Column '{}' not found in MERGE join schema",
-                    SOURCE_PRESENT_COLUMN
-                ))
-            })?;
-        let src_present_idx = num_target + source_present_idx_in_source;
-
-        let path_col = Arc::new(Column::new(PATH_COLUMN, path_idx)) as Arc<dyn PhysicalExpr>;
-        let source_present_col =
-            Arc::new(Column::new(SOURCE_PRESENT_COLUMN, src_present_idx)) as Arc<dyn PhysicalExpr>;
-
-        let target_present =
-            Arc::new(IsNotNullExpr::new(path_col.clone())) as Arc<dyn PhysicalExpr>;
-        let source_present =
-            Arc::new(IsNotNullExpr::new(source_present_col.clone())) as Arc<dyn PhysicalExpr>;
-
-        let matched_pred = Arc::new(BinaryExpr::new(
-            target_present.clone(),
-            Operator::And,
-            source_present.clone(),
-        )) as Arc<dyn PhysicalExpr>;
-
-        let not_source_present =
-            Arc::new(NotExpr::new(source_present.clone())) as Arc<dyn PhysicalExpr>;
-        let not_target_present =
-            Arc::new(NotExpr::new(target_present.clone())) as Arc<dyn PhysicalExpr>;
-
-        let not_matched_by_source_pred = Arc::new(BinaryExpr::new(
-            target_present.clone(),
-            Operator::And,
-            not_source_present.clone(),
-        )) as Arc<dyn PhysicalExpr>;
-
-        let not_matched_by_target_pred = Arc::new(BinaryExpr::new(
-            not_target_present.clone(),
-            Operator::And,
-            source_present.clone(),
-        )) as Arc<dyn PhysicalExpr>;
+        let matched_pred = target_present.clone().and(source_present.clone());
+        let not_matched_by_source_pred = target_present.clone().and(source_present.clone().not());
+        let not_matched_by_target_pred = target_present.clone().not().and(source_present.clone());
 
         let mut delete_pred: Option<Arc<dyn PhysicalExpr>> = None;
         let mut insert_pred: Option<Arc<dyn PhysicalExpr>> = None;
-
-        let or_expr =
-            |left: Arc<dyn PhysicalExpr>, right: Arc<dyn PhysicalExpr>| -> Arc<dyn PhysicalExpr> {
-                Arc::new(BinaryExpr::new(left, Operator::Or, right)) as Arc<dyn PhysicalExpr>
-            };
 
         // Matched clauses
         for clause in &self.merge_info.matched_clauses {
             let mut pred = matched_pred.clone();
             if let Some(cond) = &clause.condition {
-                pred = Arc::new(BinaryExpr::new(pred, Operator::And, Arc::clone(cond)))
-                    as Arc<dyn PhysicalExpr>;
+                pred = pred.and(Arc::clone(cond));
             }
-            let pred = Self::align_expr_columns(
-                &pred,
-                &input_schema,
-                &target_idx_by_name,
-                &source_idx_by_name,
-                &logical_to_physical,
-            )?;
+            let pred = ctx.align_expr(&pred, &input_schema)?;
 
             use sail_common_datafusion::datasource::MergeMatchedActionInfo as MMAI;
             match &clause.action {
                 MMAI::Delete => {
                     delete_pred = Some(match delete_pred {
-                        Some(existing) => or_expr(existing, pred),
+                        Some(existing) => existing.or(pred),
                         None => pred,
                     });
                 }
@@ -901,22 +1087,15 @@ impl<'a> DeltaMergePlanBuilder<'a> {
         for clause in &self.merge_info.not_matched_by_source_clauses {
             let mut pred = not_matched_by_source_pred.clone();
             if let Some(cond) = &clause.condition {
-                pred = Arc::new(BinaryExpr::new(pred, Operator::And, Arc::clone(cond)))
-                    as Arc<dyn PhysicalExpr>;
+                pred = pred.and(Arc::clone(cond));
             }
-            let pred = Self::align_expr_columns(
-                &pred,
-                &input_schema,
-                &target_idx_by_name,
-                &source_idx_by_name,
-                &logical_to_physical,
-            )?;
+            let pred = ctx.align_expr(&pred, &input_schema)?;
 
             use sail_common_datafusion::datasource::MergeNotMatchedBySourceActionInfo as NMBAI;
             match &clause.action {
                 NMBAI::Delete => {
                     delete_pred = Some(match delete_pred {
-                        Some(existing) => or_expr(existing, pred),
+                        Some(existing) => existing.or(pred),
                         None => pred,
                     });
                 }
@@ -928,42 +1107,26 @@ impl<'a> DeltaMergePlanBuilder<'a> {
         for clause in &self.merge_info.not_matched_by_target_clauses {
             let mut pred = not_matched_by_target_pred.clone();
             if let Some(cond) = &clause.condition {
-                pred = Arc::new(BinaryExpr::new(pred, Operator::And, Arc::clone(cond)))
-                    as Arc<dyn PhysicalExpr>;
+                pred = pred.and(Arc::clone(cond));
             }
-            let pred = Self::align_expr_columns(
-                &pred,
-                &input_schema,
-                &target_idx_by_name,
-                &source_idx_by_name,
-                &logical_to_physical,
-            )?;
+            let pred = ctx.align_expr(&pred, &input_schema)?;
 
             use sail_common_datafusion::datasource::MergeNotMatchedByTargetActionInfo as NMTI;
             match &clause.action {
                 NMTI::InsertAll | NMTI::InsertColumns { .. } => {
                     insert_pred = Some(match insert_pred {
-                        Some(existing) => or_expr(existing, pred),
+                        Some(existing) => existing.or(pred),
                         None => pred,
                     });
                 }
             }
         }
 
-        let false_lit =
-            Arc::new(Literal::new(ScalarValue::Boolean(Some(false)))) as Arc<dyn PhysicalExpr>;
-        let delete_expr = delete_pred.unwrap_or_else(|| false_lit.clone());
-        let insert_expr = insert_pred.unwrap_or_else(|| false_lit.clone());
+        let delete_expr = delete_pred.unwrap_or_else(|| lit_bool(false));
+        let insert_expr = insert_pred.unwrap_or_else(|| lit_bool(false));
 
-        let not_delete = Arc::new(NotExpr::new(delete_expr)) as Arc<dyn PhysicalExpr>;
-        let keep_or_update = Arc::new(BinaryExpr::new(
-            target_present.clone(),
-            Operator::And,
-            not_delete,
-        )) as Arc<dyn PhysicalExpr>;
-
-        let active_expr = Arc::new(BinaryExpr::new(keep_or_update, Operator::Or, insert_expr))
-            as Arc<dyn PhysicalExpr>;
+        let keep_or_update = target_present.clone().and(delete_expr.not());
+        let active_expr = keep_or_update.or(insert_expr);
 
         log::trace!("build_merge_row_filter active_expr: {:?}", &active_expr);
 
@@ -977,148 +1140,63 @@ impl<'a> DeltaMergePlanBuilder<'a> {
     fn build_merge_projection(
         &self,
         input: Arc<dyn ExecutionPlan>,
-        target_physical_schema: SchemaRef,
-        source_physical_schema: SchemaRef,
-        table_schema: SchemaRef,
+        ctx: &MergeSchemaContext,
     ) -> Result<Arc<dyn ExecutionPlan>> {
         let input_schema = input.schema();
-        let target_fields = target_physical_schema.fields();
-        let source_fields = source_physical_schema.fields();
-        let num_target = target_fields.len();
-        let target_field_names: Vec<String> =
-            target_fields.iter().map(|f| f.name().clone()).collect();
-        let source_field_names: Vec<String> =
-            source_fields.iter().map(|f| f.name().clone()).collect();
-        let table_field_names: Vec<String> = table_schema
-            .fields()
-            .iter()
-            .map(|f| f.name().clone())
-            .collect();
-        log::trace!("merge_projection_target_fields: {:?}", &target_field_names);
-        log::trace!("merge_projection_source_fields: {:?}", &source_field_names);
-        log::trace!("merge_projection_table_fields: {:?}", &table_field_names);
+        let table_schema = &ctx.table_schema;
 
-        // Logical MERGE assignments can refer to normalized column names (e.g. "#1")
-        // while the table schema uses the actual column names. Keep an index-based
-        // mapping between logical target schema fields and the physical table schema.
-        let logical_target_schema = self.merge_info.target_schema.as_ref().as_arrow();
-        let mut logical_to_physical: HashMap<String, String> = HashMap::new();
-        if logical_target_schema.fields().len() == table_schema.fields().len() {
-            for (idx, logical_field) in logical_target_schema.fields().iter().enumerate() {
-                let physical_field = table_schema.field(idx);
-                logical_to_physical
-                    .insert(logical_field.name().clone(), physical_field.name().clone());
-            }
-        }
+        log::trace!(
+            "merge_projection_target_fields: {:?}",
+            ctx.target_physical_schema
+                .fields()
+                .iter()
+                .map(|f| f.name())
+                .collect::<Vec<_>>()
+        );
+        log::trace!(
+            "merge_projection_source_fields: {:?}",
+            ctx.source_physical_schema
+                .fields()
+                .iter()
+                .map(|f| f.name())
+                .collect::<Vec<_>>()
+        );
+        log::trace!(
+            "merge_projection_table_fields: {:?}",
+            table_schema
+                .fields()
+                .iter()
+                .map(|f| f.name())
+                .collect::<Vec<_>>()
+        );
 
-        let path_idx = target_fields
-            .iter()
-            .enumerate()
-            .find(|(_, f)| f.name() == PATH_COLUMN)
-            .map(|(idx, _)| idx)
-            .ok_or_else(|| {
-                DataFusionError::Plan(format!(
-                    "Column '{}' not found in MERGE join schema",
-                    PATH_COLUMN
-                ))
-            })?;
+        let target_present = ctx.target_present_expr();
+        let source_present = ctx.source_present_expr();
 
-        let source_present_idx_in_source = source_fields
-            .iter()
-            .enumerate()
-            .find(|(_, f)| f.name() == SOURCE_PRESENT_COLUMN)
-            .map(|(idx, _)| idx)
-            .ok_or_else(|| {
-                DataFusionError::Plan(format!(
-                    "Column '{}' not found in MERGE join schema",
-                    SOURCE_PRESENT_COLUMN
-                ))
-            })?;
-        let src_present_idx = num_target + source_present_idx_in_source;
-
-        let path_col = Arc::new(Column::new(PATH_COLUMN, path_idx)) as Arc<dyn PhysicalExpr>;
-        let source_present_col =
-            Arc::new(Column::new(SOURCE_PRESENT_COLUMN, src_present_idx)) as Arc<dyn PhysicalExpr>;
-
-        let target_present =
-            Arc::new(IsNotNullExpr::new(path_col.clone())) as Arc<dyn PhysicalExpr>;
-        let source_present =
-            Arc::new(IsNotNullExpr::new(source_present_col.clone())) as Arc<dyn PhysicalExpr>;
-
-        let matched_pred = Arc::new(BinaryExpr::new(
-            target_present.clone(),
-            Operator::And,
-            source_present.clone(),
-        )) as Arc<dyn PhysicalExpr>;
-
-        let not_source_present =
-            Arc::new(NotExpr::new(source_present.clone())) as Arc<dyn PhysicalExpr>;
-        let not_target_present =
-            Arc::new(NotExpr::new(target_present.clone())) as Arc<dyn PhysicalExpr>;
-
-        let not_matched_by_source_pred = Arc::new(BinaryExpr::new(
-            target_present.clone(),
-            Operator::And,
-            not_source_present.clone(),
-        )) as Arc<dyn PhysicalExpr>;
-
-        let not_matched_by_target_pred = Arc::new(BinaryExpr::new(
-            not_target_present.clone(),
-            Operator::And,
-            source_present.clone(),
-        )) as Arc<dyn PhysicalExpr>;
-
-        let mut target_idx_by_name: HashMap<String, usize> = HashMap::new();
-        for (idx, field) in target_fields.iter().enumerate() {
-            target_idx_by_name.insert(field.name().clone(), idx);
-        }
-        let mut physical_target_idx_by_name: HashMap<String, usize> = HashMap::new();
-        for (logical_name, physical_name) in &logical_to_physical {
-            if let Some(idx) = target_idx_by_name.get(logical_name) {
-                physical_target_idx_by_name.insert(physical_name.clone(), *idx);
-            }
-        }
-        let mut source_idx_by_name: HashMap<String, usize> = HashMap::new();
-        for (idx, field) in source_fields.iter().enumerate() {
-            source_idx_by_name.insert(field.name().clone(), num_target + idx);
-        }
+        let matched_pred = target_present.clone().and(source_present.clone());
+        let not_matched_by_source_pred = target_present.clone().and(source_present.clone().not());
+        let not_matched_by_target_pred = target_present.clone().not().and(source_present.clone());
 
         log::trace!(
             "merge_projection_target_idx_by_name: {:?}",
-            &target_idx_by_name
+            &ctx.target_col_idx
         );
 
         // Precompute target/source column expressions for each output column.
-        // Target expressions are resolved by column name, while source expressions
-        // are resolved by ordinal position to handle unnamed source columns like "#3".
         let mut target_exprs: HashMap<String, PhysicalExprRef> = HashMap::new();
         let mut source_exprs: HashMap<String, PhysicalExprRef> = HashMap::new();
-        let num_source = source_fields.len();
 
         for (i, field) in table_schema.fields().iter().enumerate() {
             let name = field.name().clone();
 
-            let target_expr: PhysicalExprRef = if let Some(idx) = physical_target_idx_by_name
-                .get(&name)
-                .copied()
-                .or_else(|| target_idx_by_name.get(&name).copied())
-            {
-                let target_name = target_fields
-                    .get(idx)
-                    .map(|f| f.name().clone())
-                    .unwrap_or_else(|| name.clone());
-                Arc::new(Column::new(target_name.as_str(), idx)) as PhysicalExprRef
-            } else {
-                Arc::new(Literal::new(Self::typed_null(field.data_type())?)) as PhysicalExprRef
-            };
-            let source_expr: PhysicalExprRef = if i < num_source {
-                let source_field = &source_fields[i];
-                let source_name = source_field.name();
-                let source_idx = num_target + i;
-                Arc::new(Column::new(source_name, source_idx)) as PhysicalExprRef
-            } else {
-                Arc::new(Literal::new(Self::typed_null(field.data_type())?)) as PhysicalExprRef
-            };
+            // Use the simplified target_col_expr method from context
+            let target_expr = ctx.target_col_expr(&name, field.data_type())?;
+
+            let source_expr: PhysicalExprRef = ctx.source_col_expr_by_idx(i).unwrap_or_else(|| {
+                Arc::new(Literal::new(
+                    Self::typed_null(field.data_type()).unwrap_or(ScalarValue::Null),
+                )) as PhysicalExprRef
+            });
 
             target_exprs.insert(name.clone(), target_expr);
             source_exprs.insert(name.clone(), source_expr);
@@ -1134,16 +1212,9 @@ impl<'a> DeltaMergePlanBuilder<'a> {
         for clause in &self.merge_info.matched_clauses {
             let mut pred = matched_pred.clone();
             if let Some(cond) = &clause.condition {
-                pred = Arc::new(BinaryExpr::new(pred, Operator::And, Arc::clone(cond)))
-                    as Arc<dyn PhysicalExpr>;
+                pred = pred.and(Arc::clone(cond));
             }
-            let pred = Self::align_expr_columns(
-                &pred,
-                &input_schema,
-                &target_idx_by_name,
-                &source_idx_by_name,
-                &logical_to_physical,
-            )?;
+            let pred = ctx.align_expr(&pred, &input_schema)?;
 
             use sail_common_datafusion::datasource::{
                 MergeAssignmentInfo, MergeMatchedActionInfo as MMAI,
@@ -1168,17 +1239,12 @@ impl<'a> DeltaMergePlanBuilder<'a> {
                 MMAI::UpdateSet(assignments) => {
                     let mut assign_map: HashMap<String, Arc<dyn PhysicalExpr>> = HashMap::new();
                     for MergeAssignmentInfo { column, value } in assignments {
-                        let phys_name = logical_to_physical
+                        let phys_name = ctx
+                            .logical_to_physical
                             .get(column.as_str())
                             .cloned()
                             .unwrap_or_else(|| column.clone());
-                        let aligned_value = Self::align_expr_columns(
-                            value,
-                            &input_schema,
-                            &target_idx_by_name,
-                            &source_idx_by_name,
-                            &logical_to_physical,
-                        )?;
+                        let aligned_value = ctx.align_expr(value, &input_schema)?;
                         assign_map.insert(phys_name, aligned_value);
                     }
                     log::trace!("UpdateSet assignments: {:?}", &assign_map);
@@ -1200,16 +1266,9 @@ impl<'a> DeltaMergePlanBuilder<'a> {
         for clause in &self.merge_info.not_matched_by_source_clauses {
             let mut pred = not_matched_by_source_pred.clone();
             if let Some(cond) = &clause.condition {
-                pred = Arc::new(BinaryExpr::new(pred, Operator::And, Arc::clone(cond)))
-                    as Arc<dyn PhysicalExpr>;
+                pred = pred.and(Arc::clone(cond));
             }
-            let pred = Self::align_expr_columns(
-                &pred,
-                &input_schema,
-                &target_idx_by_name,
-                &source_idx_by_name,
-                &logical_to_physical,
-            )?;
+            let pred = ctx.align_expr(&pred, &input_schema)?;
 
             use sail_common_datafusion::datasource::{
                 MergeAssignmentInfo, MergeNotMatchedBySourceActionInfo as NMBAI,
@@ -1221,17 +1280,12 @@ impl<'a> DeltaMergePlanBuilder<'a> {
                 NMBAI::UpdateSet(assignments) => {
                     let mut assign_map: HashMap<String, Arc<dyn PhysicalExpr>> = HashMap::new();
                     for MergeAssignmentInfo { column, value } in assignments {
-                        let phys_name = logical_to_physical
+                        let phys_name = ctx
+                            .logical_to_physical
                             .get(column.as_str())
                             .cloned()
                             .unwrap_or_else(|| column.clone());
-                        let aligned_value = Self::align_expr_columns(
-                            value,
-                            &input_schema,
-                            &target_idx_by_name,
-                            &source_idx_by_name,
-                            &logical_to_physical,
-                        )?;
+                        let aligned_value = ctx.align_expr(value, &input_schema)?;
                         assign_map.insert(phys_name, aligned_value);
                     }
                     for (col, value_expr) in assign_map {
@@ -1247,16 +1301,9 @@ impl<'a> DeltaMergePlanBuilder<'a> {
         for clause in &self.merge_info.not_matched_by_target_clauses {
             let mut pred = not_matched_by_target_pred.clone();
             if let Some(cond) = &clause.condition {
-                pred = Arc::new(BinaryExpr::new(pred, Operator::And, Arc::clone(cond)))
-                    as Arc<dyn PhysicalExpr>;
+                pred = pred.and(Arc::clone(cond));
             }
-            let pred = Self::align_expr_columns(
-                &pred,
-                &input_schema,
-                &target_idx_by_name,
-                &source_idx_by_name,
-                &logical_to_physical,
-            )?;
+            let pred = ctx.align_expr(&pred, &input_schema)?;
 
             use sail_common_datafusion::datasource::MergeNotMatchedByTargetActionInfo as NMTI;
             match &clause.action {
@@ -1275,17 +1322,12 @@ impl<'a> DeltaMergePlanBuilder<'a> {
                 }
                 NMTI::InsertColumns { columns, values } => {
                     for (col, value_expr) in columns.iter().zip(values.iter()) {
-                        let phys_name = logical_to_physical
+                        let phys_name = ctx
+                            .logical_to_physical
                             .get(col.as_str())
                             .cloned()
                             .unwrap_or_else(|| col.clone());
-                        let aligned_value = Self::align_expr_columns(
-                            value_expr,
-                            &input_schema,
-                            &target_idx_by_name,
-                            &source_idx_by_name,
-                            &logical_to_physical,
-                        )?;
+                        let aligned_value = ctx.align_expr(value_expr, &input_schema)?;
                         if let Some(cases) = column_cases.get_mut(phys_name.as_str()) {
                             cases.push((pred.clone(), aligned_value));
                         }
@@ -1318,106 +1360,8 @@ impl<'a> DeltaMergePlanBuilder<'a> {
         Ok(Arc::new(ProjectionExec::try_new(projection_exprs, input)?))
     }
 
-    fn align_expr_columns(
-        expr: &Arc<dyn PhysicalExpr>,
-        schema: &SchemaRef,
-        target_idx_by_name: &HashMap<String, usize>,
-        source_idx_by_name: &HashMap<String, usize>,
-        logical_to_physical: &HashMap<String, String>,
-    ) -> Result<Arc<dyn PhysicalExpr>> {
-        let schema = Arc::clone(schema);
-        expr.clone()
-            .transform_up(|e| {
-                if let Some(col) = e.as_any().downcast_ref::<Column>() {
-                    let mut target_name: Option<String> = None;
-                    let name = col.name();
-                    let mut new_index: Option<usize> = None;
-
-                    if let Some(mapped) = logical_to_physical.get(name) {
-                        target_name = Some(mapped.clone());
-                        new_index = target_idx_by_name.get(mapped).cloned();
-                    } else if let Some(idx) = target_idx_by_name.get(name) {
-                        new_index = Some(*idx);
-                    } else if let Some(idx) = source_idx_by_name.get(name) {
-                        new_index = Some(*idx);
-                    } else if let Some(idx) = schema.fields().iter().position(|f| f.name() == name)
-                    {
-                        new_index = Some(idx);
-                        target_name = Some(schema.field(idx).name().clone());
-                    }
-
-                    if let Some(idx) = new_index {
-                        let final_name = target_name.unwrap_or_else(|| name.to_string());
-                        if idx != col.index() || final_name != name {
-                            log::trace!(
-                                "align_expr_columns remap: name={} old_idx={} final_name={} new_idx={}",
-                                name,
-                                col.index(),
-                                final_name.as_str(),
-                                idx
-                            );
-                            let updated = Arc::new(Column::new(final_name.as_str(), idx))
-                                as Arc<dyn PhysicalExpr>;
-                            return Ok(Transformed::yes(updated));
-                        }
-                    }
-                }
-                Ok(Transformed::no(e))
-            })
-            .data()
-    }
-
     fn typed_null(data_type: &DataType) -> Result<ScalarValue> {
         ScalarValue::try_from(data_type)
-    }
-
-    async fn collect_touched_paths(&self, plan: Arc<dyn ExecutionPlan>) -> Result<HashSet<String>> {
-        let task_ctx = self.session.task_ctx();
-        let batches = collect(plan, task_ctx).await?;
-        let mut paths = HashSet::new();
-        for batch in batches {
-            if batch.num_columns() == 0 {
-                continue;
-            }
-            let array = batch
-                .column(0)
-                .as_any()
-                .downcast_ref::<StringArray>()
-                .ok_or_else(|| {
-                    DataFusionError::Plan(
-                        "Touched file plan must yield a Utf8 path column".to_string(),
-                    )
-                })?;
-            for value in array.iter().flatten() {
-                paths.insert(value.to_string());
-            }
-        }
-        Ok(paths)
-    }
-
-    async fn load_add_actions_for_paths(
-        &self,
-        snapshot_state: &DeltaTableState,
-        log_store: &LogStoreRef,
-        paths: &HashSet<String>,
-    ) -> Result<Vec<Add>> {
-        if paths.is_empty() {
-            return Ok(Vec::new());
-        }
-
-        let mut stream = snapshot_state.snapshot().files(log_store.as_ref(), None);
-        let mut adds = Vec::new();
-        while let Some(view) = stream
-            .try_next()
-            .await
-            .map_err(|e| DataFusionError::External(Box::new(e)))?
-        {
-            let add = view.add_action();
-            if paths.contains(&add.path) {
-                adds.push(add);
-            }
-        }
-        Ok(adds)
     }
 
     async fn create_add_actions_plan(&self, adds: &[Add]) -> Result<Arc<dyn ExecutionPlan>> {
