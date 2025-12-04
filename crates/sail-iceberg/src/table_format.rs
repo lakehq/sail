@@ -116,11 +116,48 @@ impl TableFormat for IcebergTableFormat {
             _ => {}
         }
 
-        let mut resolved_partition_columns = partition_by;
-        if table_exists && resolved_partition_columns.is_empty() {
+        // Get existing partition columns if table exists
+        let existing_partition_columns = if table_exists {
             let table = Table::load(ctx, table_url.clone()).await?;
-            resolved_partition_columns = Self::partition_columns_from_metadata(&table)?;
+            Some(Self::partition_columns_from_metadata(&table)?)
+        } else {
+            None
+        };
+
+        // Validate partition column mismatch for append/overwrite operations
+        if let Some(existing_partitions) = &existing_partition_columns {
+            if !partition_by.is_empty() && partition_by != *existing_partitions {
+                // For append mode, partition column changes are not allowed
+                match mode {
+                    PhysicalSinkMode::Append => {
+                        return plan_err!(
+                            "Partition column mismatch. Table is partitioned by {:?}, but write specified {:?}. \
+                            Cannot change partitioning on append.",
+                            existing_partitions,
+                            partition_by
+                        );
+                    }
+                    PhysicalSinkMode::Overwrite => {
+                        // For overwrite mode, check if schema overwrite is allowed
+                        if !iceberg_options.overwrite_schema {
+                            return plan_err!(
+                                "Partition column mismatch. Table is partitioned by {:?}, but write specified {:?}. \
+                                Set overwriteSchema=true to change partitioning.",
+                                existing_partitions,
+                                partition_by
+                            );
+                        }
+                    }
+                    _ => {}
+                }
+            }
         }
+
+        let resolved_partition_columns = if !partition_by.is_empty() {
+            partition_by
+        } else {
+            existing_partition_columns.unwrap_or_default()
+        };
 
         let table_config = IcebergTableConfig {
             table_url,

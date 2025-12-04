@@ -136,17 +136,54 @@ impl TableFormat for DeltaTableFormat {
             (mode, None)
         };
 
+        // Get existing partition columns from table metadata if available
+        let existing_partition_columns = if let Some(table) = &table {
+            Some(
+                table
+                    .snapshot()
+                    .map_err(|e| DataFusionError::External(Box::new(e)))?
+                    .metadata()
+                    .partition_columns()
+                    .clone(),
+            )
+        } else {
+            None
+        };
+
+        // Validate partition column mismatch for append/overwrite operations
+        if let Some(existing_partitions) = &existing_partition_columns {
+            if !partition_by.is_empty() && partition_by != *existing_partitions {
+                // Allow partition column changes only when overwriting with schema changes
+                // For append mode, this is always an error
+                match unified_mode {
+                    PhysicalSinkMode::Append => {
+                        return plan_err!(
+                            "Partition column mismatch. Table is partitioned by {:?}, but write specified {:?}. \
+                            Cannot change partitioning on append.",
+                            existing_partitions,
+                            partition_by
+                        );
+                    }
+                    PhysicalSinkMode::Overwrite | PhysicalSinkMode::OverwriteIf { .. } => {
+                        // For overwrite mode, check if schema overwrite is allowed
+                        if !delta_options.overwrite_schema {
+                            return plan_err!(
+                                "Partition column mismatch. Table is partitioned by {:?}, but write specified {:?}. \
+                                Set overwriteSchema=true to change partitioning.",
+                                existing_partitions,
+                                partition_by
+                            );
+                        }
+                    }
+                    _ => {}
+                }
+            }
+        }
+
         let partition_columns = if !partition_by.is_empty() {
             partition_by
-        } else if let Some(table) = &table {
-            table
-                .snapshot()
-                .map_err(|e| DataFusionError::External(Box::new(e)))?
-                .metadata()
-                .partition_columns()
-                .clone()
         } else {
-            vec![]
+            existing_partition_columns.unwrap_or_default()
         };
 
         let table_config = DeltaTableConfig {
