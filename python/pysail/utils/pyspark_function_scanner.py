@@ -65,9 +65,7 @@ class CallSiteLocator(ast.NodeVisitor):
         self.generic_visit(node)
 
 
-def _resolve_calls_with_jedi(
-    source: str, file_path: Path | None = None
-) -> Counter[tuple[str, str]]:
+def _resolve_calls_with_jedi(source: str, file_path: Path | None = None) -> Counter[tuple[str, str]]:
     """
     1. Parse code with AST to find where functions are called.
     2. Ask Jedi to infer what is being called at those locations.
@@ -140,9 +138,7 @@ def _extract_notebook_code(content: str) -> str:
             continue
 
         source = cell.get("source", [])
-        cell_lines = (
-            source if isinstance(source, list) else source.splitlines(keepends=True)
-        )
+        cell_lines = source if isinstance(source, list) else source.splitlines(keepends=True)
 
         for line in cell_lines:
             # Comment out magic commands (%, !, ?) to keep line numbers aligned
@@ -183,11 +179,7 @@ def _scan_directory(base: Path) -> Counter[tuple[str, str]]:
     # Collect all files first to show progress if needed,
     # or just iterate directly.
     if base.is_dir():
-        files = [
-            p
-            for p in base.rglob("*")
-            if p.suffix in SUPPORTED_EXTENSIONS and p.is_file()
-        ]
+        files = [p for p in base.rglob("*") if p.suffix in SUPPORTED_EXTENSIONS and p.is_file()]
     elif base.is_file() and base.suffix in SUPPORTED_EXTENSIONS:
         files = [base]
     else:
