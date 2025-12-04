@@ -35,20 +35,15 @@ def _check_sail_pyspark_compatibility(repo_path: Path) -> Counter[tuple[str, str
 
 
 def _decode_support_label(label: str) -> str:
-    """Decode support labels into emoji-sytel status strings."""
-
+    """Decode support labels into emoji-style status strings."""
+    preprocessed_label = label.strip().lower()
     mappings = {
-        "supported": "✅ supported",
         "in progress": "🚧 in progress",
         "not supported": "❌ not supported",
+        "supported": "✅ supported",
         "unknown": "❔ unknown",
     }
-
-    for old_label, new_label in mappings.items():
-        if old_label in label.strip():
-            return new_label
-
-    return "❔ unknown"
+    return mappings.get(preprocessed_label, "❔ unknown")
 
 
 def _format_output(counts: Counter[tuple[str, str, str]], fmt: Literal["json", "csv", "text"]) -> str:
@@ -89,4 +84,5 @@ def _format_output(counts: Counter[tuple[str, str, str]], fmt: Literal["json", "
 
         return "\n".join(lines)
 
-    raise ValueError("Unsupported format: {fmt}")
+    msg = f"Unsupported format: {fmt}"
+    raise ValueError(msg)

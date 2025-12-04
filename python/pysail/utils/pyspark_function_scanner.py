@@ -96,14 +96,10 @@ def _resolve_calls_with_jedi(source: str, file_path: Path | None = None) -> Coun
     for line, col in locator.locations:
         try:
             definitions = script.infer(line, col)
-        except (RuntimeError, OSError, ValueError, TypeError):
-            logger.exception(
-                "Jedi inference failed for line %i, position %i, in file %s",
-                line,
-                col,
-                file_path,
-            )
-            return Counter()
+        except (RuntimeError, OSError, ValueError, TypeError) as e:
+            logger.warning("Jedi inference failed for line %i, col %i in file %s: %s", line, col, file_path, e)
+            # skip this location, do not abort the whole file
+            continue
 
         for definition in definitions:
             full_name = definition.full_name
