@@ -203,7 +203,7 @@ class TestDeltaPartitioning:
             parquet_files = [f for f in os.listdir(partition_path) if f.endswith(".parquet")]
             partition_file_counts[partition] = len(parquet_files)
 
-        assert partition_file_counts["category=A"] == 2
+        assert partition_file_counts["category=A"] == 2  # noqa: PLR2004
         assert partition_file_counts["category=B"] == 1
         assert partition_file_counts["category=C"] == 1
 
