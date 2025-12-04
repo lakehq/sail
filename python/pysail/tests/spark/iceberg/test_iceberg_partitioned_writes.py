@@ -278,8 +278,7 @@ def test_partitioned_append_infers_spec_from_metadata(spark, tmp_path):
         )
 
         result = {
-            (row.id, row.category, row.value)
-            for row in spark.read.format("iceberg").load(table.location()).collect()
+            (row.id, row.category, row.value) for row in spark.read.format("iceberg").load(table.location()).collect()
         }
         assert result == {(1, "A", 10), (2, "B", 20), (3, "A", 30), (4, "C", 40)}
 
@@ -289,13 +288,13 @@ def test_partitioned_append_infers_spec_from_metadata(spark, tmp_path):
         assert partition_dirs == {"category=A", "category=B", "category=C"}
 
         def count_parquet_files(partition: str) -> int:
-            return len([f for f in (data_dir / partition).glob("*.parquet")])
+            return len(list((data_dir / partition).glob("*.parquet")))
 
-        assert count_parquet_files("category=A") == 2
-        assert count_parquet_files("category=B") == 1
-        assert count_parquet_files("category=C") == 1
+        expected_file_counts = {"category=A": 2, "category=B": 1, "category=C": 1}
+        for partition, expected_count in expected_file_counts.items():
+            assert count_parquet_files(partition) == expected_count
 
-        root_files = [f for f in data_dir.glob("*.parquet")]
+        root_files = list(data_dir.glob("*.parquet"))
         assert not root_files, "Partitioned Iceberg tables should not place files directly under data/"
     finally:
         catalog.drop_table(table_name)
