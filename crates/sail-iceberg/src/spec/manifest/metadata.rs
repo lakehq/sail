@@ -19,6 +19,7 @@
 
 use serde::{Deserialize, Serialize};
 
+use crate::error::{IcebergError, IcebergResult};
 use crate::spec::{
     FormatVersion, ManifestContentType, PartitionSpec, Schema as IcebergSchema, SchemaId, SchemaRef,
 };
@@ -52,13 +53,12 @@ impl ManifestMetadata {
 
     pub(crate) fn parse_from_avro_meta(
         meta: &std::collections::HashMap<String, Vec<u8>>,
-    ) -> Result<Self, String> {
+    ) -> IcebergResult<Self> {
         // schema
-        let schema_bs = meta
-            .get("schema")
-            .ok_or_else(|| "schema is required in manifest metadata but not found".to_string())?;
-        let schema: IcebergSchema = serde_json::from_slice(schema_bs)
-            .map_err(|e| format!("Fail to parse schema in manifest metadata: {e}"))?;
+        let schema_bs = meta.get("schema").ok_or_else(|| {
+            IcebergError::schema("schema is required in manifest metadata but not found")
+        })?;
+        let schema: IcebergSchema = serde_json::from_slice(schema_bs)?;
         let schema_ref = std::sync::Arc::new(schema);
 
         // schema-id (optional)
@@ -70,11 +70,10 @@ impl ManifestMetadata {
 
         // partition-spec and id
         let part_fields_bs = meta.get("partition-spec").ok_or_else(|| {
-            "partition-spec is required in manifest metadata but not found".to_string()
+            IcebergError::schema("partition-spec is required in manifest metadata but not found")
         })?;
         let part_fields: Vec<crate::spec::partition::PartitionField> =
-            serde_json::from_slice(part_fields_bs)
-                .map_err(|e| format!("Fail to parse partition spec in manifest metadata: {e}"))?;
+            serde_json::from_slice(part_fields_bs)?;
         let spec_id: i32 = meta
             .get("partition-spec-id")
             .and_then(|bs| String::from_utf8(bs.clone()).ok())

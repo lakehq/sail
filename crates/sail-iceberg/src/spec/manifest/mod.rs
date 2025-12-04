@@ -35,6 +35,7 @@ pub use entry::*;
 pub use metadata::*;
 pub use writer::*;
 
+use crate::error::{IcebergError, IcebergResult};
 use crate::spec::metadata::format::FormatVersion;
 use crate::spec::types::StructType;
 use crate::spec::Schema as IcebergSchema;
@@ -45,7 +46,7 @@ pub fn write_data_files_to_avro<W: std::io::Write>(
     data_files: impl IntoIterator<Item = DataFile>,
     partition_type: &StructType,
     version: FormatVersion,
-) -> Result<usize, String> {
+) -> IcebergResult<usize> {
     let avro_schema = match version {
         FormatVersion::V1 => super::manifest::schema::data_file_schema_v2(partition_type),
         FormatVersion::V2 => super::manifest::schema::data_file_schema_v2(partition_type),
@@ -55,16 +56,11 @@ pub fn write_data_files_to_avro<W: std::io::Write>(
     for data_file in data_files {
         let serde_df =
             super::manifest::_serde::DataFileSerde::from_data_file(data_file, partition_type);
-        let value = to_value(serde_df)
-            .map_err(|e| format!("Avro to_value error: {e}"))?
-            .resolve(&avro_schema)
-            .map_err(|e| format!("Avro resolve error: {e}"))?;
-        writer
-            .append(value)
-            .map_err(|e| format!("Avro append error: {e}"))?;
+        let value = to_value(serde_df)?.resolve(&avro_schema)?;
+        writer.append(value)?;
     }
 
-    writer.flush().map_err(|e| format!("Avro flush error: {e}"))
+    writer.flush().map_err(IcebergError::from)
 }
 
 /// Parse data files from avro bytes.
@@ -74,19 +70,17 @@ pub fn read_data_files_from_avro<R: std::io::Read>(
     partition_spec_id: i32,
     partition_type: &StructType,
     _version: FormatVersion,
-) -> Result<Vec<DataFile>, String> {
+) -> IcebergResult<Vec<DataFile>> {
     let avro_schema = super::manifest::schema::data_file_schema_v2(partition_type);
-    let reader = AvroReader::with_schema(&avro_schema, reader)
-        .map_err(|e| format!("Avro reader error: {e}"))?;
+    let reader = AvroReader::with_schema(&avro_schema, reader)?;
     reader
         .into_iter()
         .map(|value| {
-            let value = value.map_err(|e| format!("Avro read error: {e}"))?;
-            let serde_df: super::manifest::_serde::DataFileSerde =
-                avro_from_value(&value).map_err(|e| format!("Avro decode DataFile error: {e}"))?;
+            let value = value?;
+            let serde_df: super::manifest::_serde::DataFileSerde = avro_from_value(&value)?;
             Ok(serde_df.into_data_file(partition_spec_id, partition_type))
         })
-        .collect::<Result<Vec<_>, String>>()
+        .collect::<IcebergResult<Vec<_>>>()
 }
 
 /// Reference to [`ManifestEntry`].
@@ -129,8 +123,8 @@ impl Manifest {
     /// Parse manifest metadata and entries from bytes of avro file.
     pub(crate) fn try_from_avro_bytes(
         bs: &[u8],
-    ) -> Result<(ManifestMetadata, Vec<ManifestEntry>), String> {
-        let reader = AvroReader::new(bs).map_err(|e| format!("Avro read error: {e}"))?;
+    ) -> IcebergResult<(ManifestMetadata, Vec<ManifestEntry>)> {
+        let reader = AvroReader::new(bs)?;
 
         // Parse manifest metadata from avro user metadata
         let meta = reader.user_metadata();
@@ -142,15 +136,13 @@ impl Manifest {
         let partition_type = metadata
             .partition_spec
             .partition_type(&metadata.schema)
-            .map_err(|e| format!("Partition type error: {e}"))?;
+            .map_err(IcebergError::general)?;
         let avro_schema = schema::manifest_entry_schema_v2(&partition_type);
         let mut cursor = std::io::Cursor::new(bs);
-        let reader = AvroReader::with_schema(&avro_schema, &mut cursor)
-            .map_err(|e| format!("Avro read error: {e}"))?;
+        let reader = AvroReader::with_schema(&avro_schema, &mut cursor)?;
         for value in reader {
-            let value = value.map_err(|e| format!("Avro read value error: {e}"))?;
-            let entry: _serde::ManifestEntryV2 =
-                avro_from_value(&value).map_err(|e| format!("Avro decode entry error: {e}"))?;
+            let value = value?;
+            let entry: _serde::ManifestEntryV2 = avro_from_value(&value)?;
             entries.push(entry.into_entry(metadata.partition_spec.spec_id(), &partition_type));
         }
 
@@ -158,12 +150,12 @@ impl Manifest {
     }
 
     /// Parse a manifest from bytes of avro file.
-    pub fn parse_avro(bs: &[u8]) -> Result<Self, String> {
+    pub fn parse_avro(bs: &[u8]) -> IcebergResult<Self> {
         let (metadata, entries) = Self::try_from_avro_bytes(bs)?;
         Ok(Manifest::new(metadata, entries))
     }
 
-    pub fn to_avro_bytes_v2(&self) -> Result<Vec<u8>, String> {
+    pub fn to_avro_bytes_v2(&self) -> IcebergResult<Vec<u8>> {
         let builder = crate::spec::manifest::writer::ManifestWriterBuilder::new(
             None,
             None,

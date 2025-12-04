@@ -29,6 +29,7 @@ use datafusion::physical_plan::{
 use datafusion_common::{internal_err, DataFusionError, Result};
 use futures::stream::once;
 use futures::StreamExt;
+use object_store::path::Path as ObjectPath;
 use url::Url;
 
 use crate::io::StoreContext;
@@ -294,7 +295,8 @@ impl ExecutionPlan for IcebergCommitExec {
                         .map_err(|e| DataFusionError::External(Box::new(e)))?
                 };
 
-                let meta_path = object_store::path::Path::from(latest_meta.as_str());
+                let meta_path = ObjectPath::parse(latest_meta.as_str())
+                    .map_err(|e| DataFusionError::External(Box::new(e)))?;
                 let bytes = store_ctx
                     .base
                     .get(&meta_path)
@@ -370,10 +372,7 @@ impl ExecutionPlan for IcebergCommitExec {
                         for df in commit_info.data_files.clone().into_iter() {
                             action.add_file(df);
                         }
-                        Arc::new(action)
-                            .commit(&tx)
-                            .await
-                            .map_err(DataFusionError::Execution)?
+                        Arc::new(action).commit(&tx).await?
                     }
                     crate::spec::Operation::Overwrite => {
                         let producer = crate::operations::SnapshotProducer::new(
@@ -388,10 +387,7 @@ impl ExecutionPlan for IcebergCommitExec {
                                 "overwrite"
                             }
                         }
-                        producer
-                            .commit(LocalOverwriteOperation)
-                            .await
-                            .map_err(DataFusionError::Execution)?
+                        producer.commit(LocalOverwriteOperation).await?
                     }
                     _ => {
                         return Err(DataFusionError::NotImplemented(
@@ -458,7 +454,8 @@ impl ExecutionPlan for IcebergCommitExec {
                     &table_url
                 );
 
-                let new_meta_path = object_store::path::Path::from(new_meta_rel.as_str());
+                let new_meta_path = ObjectPath::parse(new_meta_rel.as_str())
+                    .map_err(|e| DataFusionError::External(Box::new(e)))?;
                 let put_opts = object_store::PutOptions {
                     mode: object_store::PutMode::Create,
                     ..Default::default()
@@ -513,7 +510,8 @@ impl ExecutionPlan for IcebergCommitExec {
                     new_meta_rel.clone()
                 };
                 let hint_bytes = Bytes::from(metadata_filename.into_bytes());
-                let hint_path = object_store::path::Path::from("metadata/version-hint.text");
+                let hint_path = ObjectPath::parse("metadata/version-hint.text")
+                    .map_err(|e| DataFusionError::External(Box::new(e)))?;
                 store_ctx
                     .prefixed
                     .put(&hint_path, object_store::PutPayload::from(hint_bytes))
@@ -564,7 +562,8 @@ fn parse_version_from_path(p: &str) -> Option<i32> {
 }
 
 async fn metadata_files_for_version(store_ctx: &StoreContext, version: i32) -> Result<Vec<String>> {
-    let prefix = object_store::path::Path::from("metadata/");
+    let prefix =
+        ObjectPath::parse("metadata").map_err(|e| DataFusionError::External(Box::new(e)))?;
     let mut stream = store_ctx.prefixed.list(Some(&prefix));
     let mut matches = Vec::new();
     while let Some(meta) = stream.next().await {

@@ -11,6 +11,7 @@
 // limitations under the License.
 
 pub mod datasource;
+pub mod error;
 pub mod io;
 pub mod operations;
 pub mod options;
@@ -23,6 +24,7 @@ pub mod utils;
 
 pub use datasource::type_converter::*;
 pub use datasource::*;
+pub use error::{IcebergError, IcebergResult};
 pub use operations::action::*;
 pub use operations::append::*;
 pub use operations::snapshot::*;
