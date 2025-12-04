@@ -358,6 +358,7 @@ impl<'a> DeltaMergePlanBuilder<'a> {
             join_plan,
             Arc::clone(&target_physical_schema),
             Arc::clone(&source_physical_schema),
+            table_schema.clone(),
         )?;
         let filtered =
             self.filter_to_touched_rows(filtered, &target_physical_schema, &touched_paths)?;
@@ -779,10 +780,31 @@ impl<'a> DeltaMergePlanBuilder<'a> {
         input: Arc<dyn ExecutionPlan>,
         target_physical_schema: SchemaRef,
         source_physical_schema: SchemaRef,
+        table_schema: SchemaRef,
     ) -> Result<Arc<dyn ExecutionPlan>> {
+        let input_schema = input.schema();
         let target_fields = target_physical_schema.fields();
         let source_fields = source_physical_schema.fields();
         let num_target = target_fields.len();
+        let logical_target_schema = self.merge_info.target_schema.as_ref().as_arrow();
+        let mut logical_to_physical: HashMap<String, String> = HashMap::new();
+        if logical_target_schema.fields().len() == table_schema.fields().len() {
+            for (idx, logical_field) in logical_target_schema.fields().iter().enumerate() {
+                let physical_field = table_schema.field(idx);
+                logical_to_physical
+                    .insert(logical_field.name().clone(), physical_field.name().clone());
+            }
+        }
+
+        let mut target_idx_by_name: HashMap<String, usize> = HashMap::new();
+        for (idx, field) in target_fields.iter().enumerate() {
+            target_idx_by_name.insert(field.name().clone(), idx);
+        }
+        let mut source_idx_by_name: HashMap<String, usize> = HashMap::new();
+        for (idx, field) in source_fields.iter().enumerate() {
+            source_idx_by_name.insert(field.name().clone(), num_target + idx);
+        }
+
         let path_idx = target_fields
             .iter()
             .enumerate()
@@ -855,6 +877,13 @@ impl<'a> DeltaMergePlanBuilder<'a> {
                 pred = Arc::new(BinaryExpr::new(pred, Operator::And, Arc::clone(cond)))
                     as Arc<dyn PhysicalExpr>;
             }
+            let pred = Self::align_expr_columns(
+                &pred,
+                &input_schema,
+                &target_idx_by_name,
+                &source_idx_by_name,
+                &logical_to_physical,
+            )?;
 
             use sail_common_datafusion::datasource::MergeMatchedActionInfo as MMAI;
             match &clause.action {
@@ -875,6 +904,13 @@ impl<'a> DeltaMergePlanBuilder<'a> {
                 pred = Arc::new(BinaryExpr::new(pred, Operator::And, Arc::clone(cond)))
                     as Arc<dyn PhysicalExpr>;
             }
+            let pred = Self::align_expr_columns(
+                &pred,
+                &input_schema,
+                &target_idx_by_name,
+                &source_idx_by_name,
+                &logical_to_physical,
+            )?;
 
             use sail_common_datafusion::datasource::MergeNotMatchedBySourceActionInfo as NMBAI;
             match &clause.action {
@@ -895,6 +931,13 @@ impl<'a> DeltaMergePlanBuilder<'a> {
                 pred = Arc::new(BinaryExpr::new(pred, Operator::And, Arc::clone(cond)))
                     as Arc<dyn PhysicalExpr>;
             }
+            let pred = Self::align_expr_columns(
+                &pred,
+                &input_schema,
+                &target_idx_by_name,
+                &source_idx_by_name,
+                &logical_to_physical,
+            )?;
 
             use sail_common_datafusion::datasource::MergeNotMatchedByTargetActionInfo as NMTI;
             match &clause.action {

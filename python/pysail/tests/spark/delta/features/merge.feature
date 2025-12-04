@@ -202,9 +202,9 @@ Feature: Delta Lake Merge
         """
         CREATE OR REPLACE TEMP VIEW src_merge_conditional AS
         SELECT * FROM VALUES
-          (CAST(1 AS INT), 'existing', CAST(15 AS INT), 'promote'),
-          (CAST(3 AS INT), 'vip', CAST(30 AS INT), 'priority'),
-          (CAST(4 AS INT), 'standard', CAST(25 AS INT), 'regular')
+          (1, 'existing', 15, 'promote'),
+          (3, 'vip', 30, 'priority'),
+          (4, 'standard', 25, 'regular')
         AS src(id, category, amount, note)
         """
 
@@ -213,16 +213,16 @@ Feature: Delta Lake Merge
         """
         MERGE INTO delta_merge_conditional AS t
         USING src_merge_conditional AS s
-        ON t.id = CAST(s.id AS INT)
+        ON t.id = s.id
         WHEN MATCHED THEN
-          UPDATE SET amount = CAST(s.amount AS INT),
+          UPDATE SET amount = s.amount,
                      note = concat('updated_', s.note)
-        WHEN NOT MATCHED AND CAST(s.id AS STRING) = '3' THEN
+        WHEN NOT MATCHED AND s.id = 3 THEN
           INSERT (id, category, amount, note)
-          VALUES (CAST(s.id AS INT), s.category, CAST(s.amount AS INT) * 10, concat('priority_', s.note))
+          VALUES (s.id, s.category, s.amount * 10, concat('priority_', s.note))
         WHEN NOT MATCHED THEN
           INSERT (id, category, amount, note)
-          VALUES (CAST(s.id AS INT), s.category, CAST(s.amount AS INT), concat('default_', s.note))
+          VALUES (s.id, s.category, s.amount, concat('default_', s.note))
         """
       When query
         """
