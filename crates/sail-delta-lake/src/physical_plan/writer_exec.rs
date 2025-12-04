@@ -511,6 +511,7 @@ impl ExecutionPlan for DeltaWriterExec {
 
             let writer_config = WriterConfig::new(
                 writer_schema.clone(),
+                partition_columns.clone(),
                 physical_partition_columns.clone(),
                 None,
                 *target_file_size,
