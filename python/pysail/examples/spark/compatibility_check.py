@@ -3,8 +3,8 @@ import logging
 from pathlib import Path
 
 from pysail.utils.logging_config import setup_logging
-from pysail.utils.sail_function_coverage import (
-    _check_sail_function_coverage,
+from pysail.utils.sail_function_support import (
+    _check_sail_pyspark_compatibility,
     _format_output,
 )
 
@@ -37,7 +37,7 @@ def main() -> None:
 
     logger.info("Scanning: %s", base_dir)
 
-    counts = _check_sail_function_coverage(base_dir)
+    counts = _check_sail_pyspark_compatibility(base_dir)
     logger.info("Scan complete.")
 
     print(_format_output(counts, args.output))
