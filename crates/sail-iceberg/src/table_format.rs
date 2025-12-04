@@ -116,9 +116,15 @@ impl TableFormat for IcebergTableFormat {
             _ => {}
         }
 
+        let mut resolved_partition_columns = partition_by;
+        if table_exists && resolved_partition_columns.is_empty() {
+            let table = Table::load(ctx, table_url.clone()).await?;
+            resolved_partition_columns = Self::partition_columns_from_metadata(&table)?;
+        }
+
         let table_config = IcebergTableConfig {
             table_url,
-            partition_columns: partition_by,
+            partition_columns: resolved_partition_columns,
             table_exists,
             options: iceberg_options,
         };
@@ -181,6 +187,37 @@ impl IcebergTableFormat {
             table_url.set_path(&format!("{}/", table_url.path()));
         }
         Ok(table_url)
+    }
+
+    fn partition_columns_from_metadata(table: &Table) -> Result<Vec<String>> {
+        let metadata = table.metadata();
+        let spec = match metadata.default_partition_spec() {
+            Some(spec) => spec,
+            None => return Ok(vec![]),
+        };
+        if spec.is_unpartitioned() {
+            return Ok(vec![]);
+        }
+
+        let schema = metadata.current_schema().ok_or_else(|| {
+            DataFusionError::Plan("Iceberg table metadata is missing current schema".to_string())
+        })?;
+
+        let mut columns = Vec::with_capacity(spec.fields().len());
+        for field in spec.fields() {
+            let col_name = schema
+                .field_by_id(field.source_id)
+                .map(|f| f.name.clone())
+                .ok_or_else(|| {
+                    DataFusionError::Plan(format!(
+                        "Partition field references unknown source column id {}",
+                        field.source_id
+                    ))
+                })?;
+            columns.push(col_name);
+        }
+
+        Ok(columns)
     }
 }
 
