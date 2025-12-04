@@ -40,7 +40,7 @@ use crate::physical_plan::commit::IcebergCommitInfo;
 use crate::spec::catalog::TableUpdate;
 use crate::spec::metadata::table_metadata::SnapshotLog;
 use crate::spec::snapshots::MAIN_BRANCH;
-use crate::spec::{Schema as IcebergSchema, TableMetadata, TableRequirement};
+use crate::spec::{PartitionSpec, Schema as IcebergSchema, TableMetadata, TableRequirement};
 use crate::utils::get_object_store_from_context;
 
 const MAX_COMMIT_RETRIES: usize = 5;
@@ -360,7 +360,12 @@ impl ExecutionPlan for IcebergCommitExec {
 
                 // Build transaction and action based on operation
                 let tx = Transaction::new(table_url.to_string(), snapshot);
-                let manifest_meta = tx.default_manifest_metadata(&schema_iceberg);
+                let partition_spec_for_commit = table_meta
+                    .default_partition_spec()
+                    .cloned()
+                    .unwrap_or_else(PartitionSpec::unpartitioned_spec);
+                let manifest_meta =
+                    tx.default_manifest_metadata(&schema_iceberg, &partition_spec_for_commit);
                 let action_commit = match commit_info.operation {
                     crate::spec::Operation::Append => {
                         let mut action = tx
