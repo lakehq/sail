@@ -6,6 +6,7 @@ use datafusion_common::ScalarValue;
 use datafusion_expr::{cast, expr, is_null, lit, not, or, when, ExprSchemable, ScalarUDF};
 use datafusion_functions_nested::make_array::make_array;
 use datafusion_functions_nested::string::ArrayToString;
+use datafusion_spark::function::array::expr_fn as array_fn;
 use sail_common_datafusion::utils::items::ItemTaker;
 use sail_function::scalar::array::arrays_zip::ArraysZip;
 use sail_function::scalar::array::spark_array::SparkArray;
@@ -246,7 +247,7 @@ pub(super) fn list_built_in_array_functions() -> Vec<(&'static str, ScalarFuncti
         ("flatten", F::custom(flatten)),
         ("get", F::binary(array_element)),
         ("sequence", F::udf(SparkSequence::new())),
-        ("shuffle", F::unknown("shuffle")),
+        ("shuffle", F::unary(array_fn::shuffle)),
         ("slice", F::ternary(slice)),
         ("sort_array", F::binary(sort_array)),
     ]

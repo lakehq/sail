@@ -221,7 +221,7 @@ pub(super) fn list_built_in_string_functions() -> Vec<(&'static str, ScalarFunct
         ("endswith", F::custom(endswith)),
         ("find_in_set", F::binary(expr_fn::find_in_set)),
         ("format_number", F::unknown("format_number")),
-        ("format_string", F::unknown("format_string")),
+        ("format_string", F::binary(string_fn::format_string)),
         ("initcap", F::unary(expr_fn::initcap)),
         ("instr", F::binary(expr_fn::instr)),
         ("is_valid_utf8", F::custom(is_valid_utf8)),
