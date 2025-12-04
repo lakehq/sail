@@ -89,15 +89,19 @@ impl TableFormat for DeltaTableFormat {
             .object_store_registry
             .get_store(&table_url)
             .map_err(|e| DataFusionError::External(Box::new(e)))?;
-        let table_exists =
-            match open_table_with_object_store(table_url.clone(), object_store, Default::default())
-                .await
-            {
-                Ok(_) => true,
-                Err(DeltaTableError::Kernel(KernelError::InvalidTableLocation(_)))
-                | Err(DeltaTableError::Kernel(KernelError::FileNotFound(_))) => false,
-                Err(err) => return Err(DataFusionError::External(Box::new(err))),
-            };
+        let table = match open_table_with_object_store(
+            table_url.clone(),
+            object_store,
+            Default::default(),
+        )
+        .await
+        {
+            Ok(table) => Some(table),
+            Err(DeltaTableError::Kernel(KernelError::InvalidTableLocation(_)))
+            | Err(DeltaTableError::Kernel(KernelError::FileNotFound(_))) => None,
+            Err(err) => return Err(DataFusionError::External(Box::new(err))),
+        };
+        let table_exists = table.is_some();
 
         match mode {
             PhysicalSinkMode::ErrorIfExists => {
@@ -135,10 +139,23 @@ impl TableFormat for DeltaTableFormat {
             (mode, None)
         };
 
+        let partition_columns = if !partition_by.is_empty() {
+            partition_by
+        } else if let Some(table) = &table {
+            table
+                .snapshot()
+                .map_err(|e| DataFusionError::External(Box::new(e)))?
+                .metadata()
+                .partition_columns()
+                .clone()
+        } else {
+            vec![]
+        };
+
         let table_config = DeltaTableConfig {
             table_url,
             options: delta_options,
-            partition_columns: partition_by,
+            partition_columns,
             table_schema_for_cond,
             table_exists,
         };
