@@ -587,6 +587,8 @@ fn apply_min_max_for_column(
 
 #[cfg(test)]
 mod tests {
+    #![allow(clippy::expect_used, clippy::unwrap_used, clippy::panic)]
+
     use parquet::file::statistics::Statistics;
 
     use super::*;
