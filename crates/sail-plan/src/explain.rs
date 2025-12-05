@@ -1,8 +1,7 @@
 use std::sync::Arc;
 
-use datafusion::physical_plan::{
-    collect, display::DisplayableExecutionPlan, displayable, ExecutionPlan,
-};
+use datafusion::physical_plan::display::DisplayableExecutionPlan;
+use datafusion::physical_plan::{collect, displayable, ExecutionPlan};
 use datafusion::prelude::SessionContext;
 use datafusion_common::display::{PlanType, StringifiedPlan, ToStringifiedPlan};
 use datafusion_common::Result as DataFusionResult;
