@@ -524,11 +524,6 @@ pub(crate) fn divide_by_partition_values(
 ) -> Result<Vec<PartitionResult>, DeltaTableError> {
     let mut partitions = Vec::new();
 
-    debug_assert_eq!(
-        logical_partition_columns.len(),
-        physical_partition_columns.len()
-    );
-
     if logical_partition_columns.is_empty() {
         partitions.push(PartitionResult {
             partition_values: IndexMap::new(),
