@@ -223,6 +223,20 @@ def query_result(datatable, ordered, query, spark):
         assert sorted(rows) == sorted(r)
 
 
+@then("query plan equals")
+def query_plan_equals(docstring, query, spark):
+    """Executes the SQL query and asserts the single-row plan output exactly matches the expected text."""
+    df = spark.sql(query)
+    rows = df.collect()
+    assert len(rows) == 1, f"expected single row, got {len(rows)}"
+    plan = rows[0][0]
+    assert isinstance(plan, str) and plan, "expected non-empty string plan output"
+    expected = docstring.strip()
+    actual = plan.strip()
+    assert (
+        actual == expected
+    ), f"plan mismatch\nExpected:\n{expected}\n\nActual:\n{actual}"
+
 @then(parsers.parse("query error {error}"))
 def query_error(error, query, spark):
     """Executes the SQL query defined in a previous step

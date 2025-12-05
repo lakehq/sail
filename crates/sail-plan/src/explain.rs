@@ -1,0 +1,340 @@
+use std::sync::Arc;
+
+use datafusion::physical_plan::{collect, displayable, ExecutionPlan};
+use datafusion::prelude::SessionContext;
+use datafusion_common::display::{PlanType, StringifiedPlan, ToStringifiedPlan};
+use datafusion_common::Result as DataFusionResult;
+use datafusion_expr::LogicalPlan;
+use sail_common::spec;
+use sail_common_datafusion::rename::physical_plan::rename_physical_plan;
+
+use crate::config::PlanConfig;
+use crate::error::{PlanError, PlanResult};
+use crate::execute_logical_plan;
+use crate::resolver::plan::NamedPlan;
+use crate::resolver::PlanResolver;
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ExplainKind {
+    Simple,
+    Extended,
+    Codegen,
+    Cost,
+    Formatted,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct ExplainOptions {
+    pub kind: ExplainKind,
+    pub verbose: bool,
+    pub analyze: bool,
+}
+
+impl ExplainOptions {
+    pub fn from_mode(mode: spec::ExplainMode) -> Self {
+        match mode {
+            spec::ExplainMode::Unspecified | spec::ExplainMode::Simple => Self {
+                kind: ExplainKind::Simple,
+                verbose: false,
+                analyze: false,
+            },
+            spec::ExplainMode::Extended => Self {
+                kind: ExplainKind::Extended,
+                verbose: false,
+                analyze: false,
+            },
+            spec::ExplainMode::Codegen => Self {
+                kind: ExplainKind::Codegen,
+                verbose: false,
+                analyze: false,
+            },
+            spec::ExplainMode::Cost => Self {
+                kind: ExplainKind::Cost,
+                verbose: false,
+                analyze: false,
+            },
+            spec::ExplainMode::Formatted => Self {
+                kind: ExplainKind::Formatted,
+                verbose: true,
+                analyze: false,
+            },
+            spec::ExplainMode::Analyze => Self {
+                kind: ExplainKind::Simple,
+                verbose: true,
+                analyze: true,
+            },
+            spec::ExplainMode::Verbose => Self {
+                kind: ExplainKind::Simple,
+                verbose: true,
+                analyze: false,
+            },
+        }
+    }
+}
+
+#[derive(Debug, Clone)]
+pub struct ExplainString {
+    pub output: String,
+    pub stringified_plans: Vec<StringifiedPlan>,
+}
+
+struct CollectedPlan {
+    initial_logical: LogicalPlan,
+    optimized_logical: LogicalPlan,
+    physical_plan: Option<Arc<dyn ExecutionPlan>>,
+    physical_error: Option<String>,
+    stringified: Vec<StringifiedPlan>,
+}
+
+impl CollectedPlan {
+    fn logical_string(&self, plan: &LogicalPlan, plan_type: PlanType) -> String {
+        plan.to_stringified(plan_type).plan.to_string()
+    }
+
+    fn physical_string(&self, verbose: bool, with_stats: bool, with_schema: bool) -> String {
+        if let Some(plan) = &self.physical_plan {
+            displayable(plan.as_ref())
+                .set_show_statistics(with_stats)
+                .set_show_schema(with_schema)
+                .indent(verbose)
+                .to_string()
+        } else if let Some(err) = &self.physical_error {
+            format!("Physical plan error: {err}")
+        } else {
+            "Physical plan unavailable".to_string()
+        }
+    }
+}
+
+async fn collect_plan(
+    ctx: &SessionContext,
+    config: Arc<PlanConfig>,
+    plan: spec::Plan,
+) -> PlanResult<CollectedPlan> {
+    let resolver = PlanResolver::new(ctx, config);
+    let NamedPlan { plan, fields } = resolver.resolve_named_plan(plan).await?;
+
+    let initial_logical = plan.clone();
+    let mut stringified = vec![initial_logical.to_stringified(PlanType::InitialLogicalPlan)];
+
+    let df = execute_logical_plan(ctx, plan).await?;
+    let (session_state, logical_plan) = df.into_parts();
+    let optimized_logical = session_state.optimize(&logical_plan)?;
+    stringified.push(optimized_logical.to_stringified(PlanType::FinalLogicalPlan));
+
+    let mut physical_error = None;
+    let mut physical_plan = match session_state
+        .query_planner()
+        .create_physical_plan(&optimized_logical, &session_state)
+        .await
+    {
+        Ok(plan) => Some(plan),
+        Err(err) => {
+            let err = PlanError::from(err);
+            let msg = err.to_string();
+            stringified.push(StringifiedPlan::new(
+                PlanType::PhysicalPlanError,
+                msg.clone(),
+            ));
+            physical_error = Some(msg);
+            None
+        }
+    };
+
+    if let Some(plan) = physical_plan.take() {
+        let plan = match fields {
+            Some(fields) => match rename_physical_plan(plan, &fields) {
+                Ok(plan) => Some(plan),
+                Err(err) => {
+                    let msg = err.to_string();
+                    stringified.push(StringifiedPlan::new(
+                        PlanType::PhysicalPlanError,
+                        msg.clone(),
+                    ));
+                    physical_error = Some(msg);
+                    None
+                }
+            },
+            None => Some(plan),
+        };
+
+        if let Some(plan) = plan {
+            stringified.push(StringifiedPlan::new(
+                PlanType::FinalPhysicalPlan,
+                displayable(plan.as_ref()).indent(true).to_string(),
+            ));
+            physical_plan = Some(plan);
+        } else {
+            physical_plan = None;
+        }
+    }
+
+    Ok(CollectedPlan {
+        initial_logical,
+        optimized_logical,
+        physical_plan,
+        physical_error,
+        stringified,
+    })
+}
+
+fn render_section(title: &str, body: &str) -> String {
+    format!("== {title} ==\n{body}")
+}
+
+async fn maybe_collect_metrics(
+    options: &ExplainOptions,
+    physical: &Option<Arc<dyn ExecutionPlan>>,
+    ctx: &SessionContext,
+) -> DataFusionResult<()> {
+    if options.analyze {
+        // Run the plan to populate metrics. Ignore the output batches.
+        if let Some(plan) = physical {
+            let _ = collect(Arc::clone(plan), ctx.task_ctx()).await?;
+        }
+    }
+    Ok(())
+}
+
+pub async fn explain_string(
+    ctx: &SessionContext,
+    config: Arc<PlanConfig>,
+    plan: spec::Plan,
+    options: ExplainOptions,
+) -> PlanResult<ExplainString> {
+    let collected = collect_plan(ctx, config, plan).await?;
+    maybe_collect_metrics(&options, &collected.physical_plan, ctx)
+        .await
+        .map_err(PlanError::from)?;
+
+    let logical_simple =
+        collected.logical_string(&collected.initial_logical, PlanType::InitialLogicalPlan);
+    let logical_optimized =
+        collected.logical_string(&collected.optimized_logical, PlanType::FinalLogicalPlan);
+
+    let physical_plain = collected.physical_string(options.verbose, false, false);
+    let physical_with_stats = collected.physical_string(true, true, false);
+    let formatted_physical = collected.physical_string(true, true, true);
+
+    let output = match options.kind {
+        ExplainKind::Simple => render_section("Physical Plan", &physical_plain),
+        ExplainKind::Extended => [
+            render_section("Parsed Logical Plan", &logical_simple),
+            render_section("Analyzed Logical Plan", &logical_optimized),
+            render_section("Physical Plan", &physical_plain),
+        ]
+        .join("\n\n"),
+        ExplainKind::Codegen => [
+            render_section(
+                "Codegen",
+                "Whole-stage codegen is not supported; showing physical plan instead.",
+            ),
+            render_section("Physical Plan", &physical_plain),
+        ]
+        .join("\n\n"),
+        ExplainKind::Cost => [
+            render_section("Parsed Logical Plan", &logical_simple),
+            render_section("Analyzed Logical Plan", &logical_optimized),
+            render_section("Physical Plan", &physical_with_stats),
+        ]
+        .join("\n\n"),
+        ExplainKind::Formatted => render_section("Physical Plan", &formatted_physical),
+    };
+
+    Ok(ExplainString {
+        output,
+        stringified_plans: collected.stringified,
+    })
+}
+
+#[cfg(test)]
+mod tests {
+    use datafusion::prelude::SessionContext;
+    use sail_common::spec;
+
+    use super::*;
+
+    fn empty_relation_plan() -> spec::Plan {
+        let schema = spec::Schema {
+            fields: vec![spec::Field {
+                name: "id".to_string(),
+                data_type: spec::DataType::Int64,
+                nullable: false,
+                metadata: vec![],
+            }]
+            .into(),
+        };
+
+        spec::Plan::Query(spec::QueryPlan::new(spec::QueryNode::LocalRelation {
+            data: None,
+            schema: Some(schema),
+        }))
+    }
+
+    fn plan_config() -> Arc<PlanConfig> {
+        Arc::new(PlanConfig::default())
+    }
+
+    #[tokio::test]
+    async fn explain_simple_returns_physical_plan() {
+        let ctx = SessionContext::new();
+        let options = ExplainOptions::from_mode(spec::ExplainMode::Simple);
+        let explain = explain_string(&ctx, plan_config(), empty_relation_plan(), options)
+            .await
+            .expect("simple explain should succeed");
+
+        assert!(
+            explain.output.contains("Physical Plan"),
+            "expected Physical Plan heading"
+        );
+        assert!(
+            explain
+                .stringified_plans
+                .iter()
+                .any(|p| p.plan_type == PlanType::FinalPhysicalPlan),
+            "missing physical plan in stringified output: {:?}",
+            explain.stringified_plans
+        );
+    }
+
+    #[tokio::test]
+    async fn explain_extended_contains_logical_sections() {
+        let ctx = SessionContext::new();
+        let options = ExplainOptions::from_mode(spec::ExplainMode::Extended);
+        let explain = explain_string(&ctx, plan_config(), empty_relation_plan(), options)
+            .await
+            .expect("extended explain should succeed");
+
+        assert!(
+            explain.output.contains("Parsed Logical Plan"),
+            "output: {}",
+            explain.output
+        );
+        assert!(
+            explain.output.contains("Analyzed Logical Plan"),
+            "output: {}",
+            explain.output
+        );
+        assert!(
+            explain.output.contains("Physical Plan"),
+            "output: {}",
+            explain.output
+        );
+    }
+
+    #[tokio::test]
+    async fn explain_analyze_executes_plan() {
+        let ctx = SessionContext::new();
+        let options = ExplainOptions::from_mode(spec::ExplainMode::Analyze);
+        let explain = explain_string(&ctx, plan_config(), empty_relation_plan(), options)
+            .await
+            .expect("analyze explain should succeed");
+
+        assert!(explain.output.contains("Physical Plan"));
+        assert!(
+            !explain.output.contains("Physical plan error"),
+            "expected plan execution without physical errors. Output: {}",
+            explain.output
+        );
+    }
+}
