@@ -491,7 +491,7 @@ impl ExecutionPlan for DeltaWriterExec {
 
             // Build physical writer schema (use physical names and set parquet field ids)
             // Prefer schema from pending Metadata action (schema evolution) if present
-            let writer_schema = if matches!(
+            let (writer_schema, physical_partition_columns, logical_kernel_for_mapping) = if matches!(
                 effective_mode,
                 ColumnMappingModeOption::Name | ColumnMappingModeOption::Id
             ) {
@@ -538,14 +538,31 @@ impl ExecutionPlan for DeltaWriterExec {
                     effective_mode,
                     &writer_field_names
                 );
-                arc_schema
+
+                // Resolve logical partition columns to their physical names so that the
+                // writer can locate them in the batch when column mapping is enabled.
+                let resolved_partitions = partition_columns
+                    .iter()
+                    .map(|logical_name| {
+                        let field = logical_kernel.field(logical_name).ok_or_else(|| {
+                            DataFusionError::Plan(format!(
+                                "Partition column '{}' not found in logical schema",
+                                logical_name
+                            ))
+                        })?;
+                        Ok(field.physical_name(kernel_mode).to_string())
+                    })
+                    .collect::<Result<Vec<_>>>()?;
+
+                (arc_schema, resolved_partitions, Some(logical_kernel))
             } else {
-                final_schema.clone()
+                (final_schema.clone(), partition_columns.clone(), None)
             };
 
             let writer_config = WriterConfig::new(
                 writer_schema.clone(),
-                partition_columns.to_vec(),
+                partition_columns.clone(),
+                physical_partition_columns.clone(),
                 None,
                 *target_file_size,
                 *write_batch_size,
@@ -557,45 +574,11 @@ impl ExecutionPlan for DeltaWriterExec {
             let mut writer = DeltaWriter::new(object_store.clone(), writer_path, writer_config);
 
             // Compute physical-to-logical mapping once before the loop
-            #[allow(clippy::unwrap_used)]
-            #[allow(clippy::expect_used)]
-            let phys_to_logical = if matches!(
-                effective_mode,
-                ColumnMappingModeOption::Name | ColumnMappingModeOption::Id
-            ) {
-                // Build a physical->logical name map from the logical kernel schema (top-level only)
-                let logical_kernel: StructType = if let Some(meta_action_schema) = schema_actions
-                    .iter()
-                    .find_map(|a| match a {
-                        Action::Metadata(m) => Some(
-                            m.parse_schema()
-                                .map_err(|e| DataFusionError::External(Box::new(e))),
-                        ),
-                        _ => None,
-                    })
-                    .transpose()?
-                {
-                    meta_action_schema
-                } else if table_exists {
-                    table
-                        .as_ref()
-                        .unwrap()
-                        .snapshot()
-                        .map_err(|e| DataFusionError::External(Box::new(e)))?
-                        .snapshot()
-                        .schema()
-                        .clone()
-                } else {
-                    annotated_schema_opt
-                        .clone()
-                        .expect("annotated schema should exist for new table with column mapping")
-                };
-                let map = Self::build_physical_to_logical_map(&logical_kernel, kernel_mode);
+            let phys_to_logical = logical_kernel_for_mapping.as_ref().map(|logical_kernel| {
+                let map = Self::build_physical_to_logical_map(logical_kernel, kernel_mode);
                 log::trace!("phys_to_logical: {:?}", &map);
-                Some(map)
-            } else {
-                None
-            };
+                map
+            });
 
             let mut total_rows = 0u64;
             let mut data = stream;

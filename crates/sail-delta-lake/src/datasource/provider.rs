@@ -20,6 +20,7 @@
 
 use std::any::Any;
 use std::borrow::Cow;
+use std::collections::HashSet;
 use std::sync::Arc;
 
 use async_trait::async_trait;
@@ -235,10 +236,19 @@ impl TableProvider for DeltaTableProvider {
             .map(|f| f.name().clone())
             .collect();
         log::trace!("read_file_schema_fields: {:?}", &phys_field_names);
+        let physical_partition_cols: HashSet<String> = table_partition_cols
+            .iter()
+            .map(|col| {
+                kschema_arc
+                    .field(col)
+                    .map(|f| f.physical_name(kmode).to_string())
+                    .unwrap_or_else(|| col.clone())
+            })
+            .collect();
         let file_fields = physical_arrow
             .fields()
             .iter()
-            .filter(|f| !table_partition_cols.contains(f.name()))
+            .filter(|f| !physical_partition_cols.contains(f.name()))
             .cloned()
             .collect::<Vec<_>>();
         let file_schema = Arc::new(ArrowSchema::new(file_fields));

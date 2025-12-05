@@ -273,7 +273,9 @@ fn parse_partition_values_array(
 
         for field in partition_schema.fields() {
             let physical_name = field.physical_name(column_mapping_mode);
-            let value = raw_values.get(physical_name);
+            let value = raw_values
+                .get(physical_name)
+                .or_else(|| raw_values.get(field.name()));
             let scalar = match field.data_type() {
                 DataType::Primitive(primitive) => match value {
                     Some(Some(raw)) => primitive.parse_scalar(raw)?,
