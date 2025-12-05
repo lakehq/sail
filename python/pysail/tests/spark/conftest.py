@@ -1,8 +1,8 @@
 import doctest
 import json
 import os
-import time
 import re
+import time
 
 import pyspark.sql.connect.session
 import pytest
@@ -236,7 +236,8 @@ def query_plan_equals(docstring, query, spark):
     rows = df.collect()
     assert len(rows) == 1, f"expected single row, got {len(rows)}"
     plan = rows[0][0]
-    assert isinstance(plan, str) and plan, "expected non-empty string plan output"
+    assert isinstance(plan, str), "expected string plan output"
+    assert plan, "expected non-empty plan output"
     expected = normalize(docstring)
     actual = normalize(plan)
     assert (
