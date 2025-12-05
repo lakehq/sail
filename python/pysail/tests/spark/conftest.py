@@ -240,9 +240,8 @@ def query_plan_equals(docstring, query, spark):
     assert plan, "expected non-empty plan output"
     expected = normalize(docstring)
     actual = normalize(plan)
-    assert (
-        actual == expected
-    ), f"plan mismatch\nExpected:\n{expected}\n\nActual:\n{actual}"
+    assert actual == expected, f"plan mismatch\nExpected:\n{expected}\n\nActual:\n{actual}"
+
 
 @then(parsers.parse("query error {error}"))
 def query_error(error, query, spark):
