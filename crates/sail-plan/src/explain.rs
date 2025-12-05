@@ -93,9 +93,20 @@ impl CollectedPlan {
         plan.to_stringified(plan_type).plan.to_string()
     }
 
-    fn physical_string(&self, verbose: bool, with_stats: bool, with_schema: bool) -> String {
+    fn physical_string(
+        &self,
+        verbose: bool,
+        with_stats: bool,
+        with_schema: bool,
+        with_metrics: bool,
+    ) -> String {
         if let Some(plan) = &self.physical_plan {
-            DisplayableExecutionPlan::new(plan.as_ref())
+            let displayable = if with_metrics {
+                DisplayableExecutionPlan::with_metrics(plan.as_ref())
+            } else {
+                DisplayableExecutionPlan::new(plan.as_ref())
+            };
+            displayable
                 .set_show_statistics(with_stats)
                 .set_show_schema(with_schema)
                 .indent(verbose)
@@ -214,16 +225,14 @@ pub async fn explain_string(
     let logical_optimized =
         collected.logical_string(&collected.optimized_logical, PlanType::FinalLogicalPlan);
 
-    // Always render the base physical plan with indentation; verbose mode controls
-    // whether we add extra sections below.
-    let physical_plain = collected.physical_string(true, false, false);
-    let physical_with_stats = collected.physical_string(true, true, false);
-    let physical_with_schema = collected.physical_string(true, false, true);
-    let physical_full = collected.physical_string(true, true, true);
+    let physical_plain = collected.physical_string(options.verbose, false, false, false);
+    let physical_with_stats = collected.physical_string(true, true, false, false);
+    let physical_with_schema = collected.physical_string(true, false, true, false);
+    let physical_full = collected.physical_string(true, true, true, false);
+    let physical_full_with_metrics = collected.physical_string(true, true, true, true);
 
     let physical_for_mode = if options.analyze {
-        // TODO: include runtime metrics once we can render them deterministically.
-        &physical_full
+        &physical_full_with_metrics
     } else {
         &physical_plain
     };
@@ -231,7 +240,7 @@ pub async fn explain_string(
     let output = match options.kind {
         ExplainKind::Simple => {
             let mut sections = vec![render_section("Physical Plan", physical_for_mode)];
-            if !options.verbose && !options.analyze {
+            if options.verbose && !options.analyze {
                 sections.push(render_section(
                     "Physical Plan (with statistics)",
                     &physical_with_stats,

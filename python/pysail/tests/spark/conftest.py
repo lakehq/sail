@@ -2,6 +2,7 @@ import doctest
 import json
 import os
 import time
+import re
 
 import pyspark.sql.connect.session
 import pytest
@@ -226,13 +227,18 @@ def query_result(datatable, ordered, query, spark):
 @then("query plan equals")
 def query_plan_equals(docstring, query, spark):
     """Executes the SQL query and asserts the single-row plan output exactly matches the expected text."""
+
+    def normalize(plan_text: str) -> str:
+        """Strip whitespace and remove non-deterministic metrics sections."""
+        return re.sub(r", metrics=\[[^\]]*\]", "", plan_text).strip()
+
     df = spark.sql(query)
     rows = df.collect()
     assert len(rows) == 1, f"expected single row, got {len(rows)}"
     plan = rows[0][0]
     assert isinstance(plan, str) and plan, "expected non-empty string plan output"
-    expected = docstring.strip()
-    actual = plan.strip()
+    expected = normalize(docstring)
+    actual = normalize(plan)
     assert (
         actual == expected
     ), f"plan mismatch\nExpected:\n{expected}\n\nActual:\n{actual}"
