@@ -230,7 +230,11 @@ def query_plan_equals(docstring, query, spark):
 
     def normalize(plan_text: str) -> str:
         """Strip whitespace and remove non-deterministic metrics sections."""
-        return re.sub(r", metrics=\[[^\]]*\]", "", plan_text).strip()
+        text = re.sub(r", metrics=\[[^\]]*\]", "", plan_text).strip()
+        # Normalize partition counts which depend on available cores.
+        text = re.sub(r"Hash\(\[([^\]]+)\], \d+\)", r"Hash([\1], <partitions>)", text)
+        text = re.sub(r"RoundRobinBatch\(\d+\)", r"RoundRobinBatch(<partitions>)", text)
+        return re.sub(r"input_partitions=\d+", r"input_partitions=<partitions>", text)
 
     df = spark.sql(query)
     rows = df.collect()
