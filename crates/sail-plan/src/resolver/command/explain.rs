@@ -1,12 +1,10 @@
-use std::sync::Arc;
-
 use async_recursion::async_recursion;
-use datafusion_common::display::{PlanType, StringifiedPlan, ToStringifiedPlan};
-use datafusion_common::ToDFSchema;
-use datafusion_expr::{Explain, ExplainFormat, LogicalPlan};
+use datafusion_common::ScalarValue;
+use datafusion_expr::{col, lit, LogicalPlan, LogicalPlanBuilder};
 use sail_common::spec;
 
 use crate::error::PlanResult;
+use crate::explain::{explain_string, ExplainOptions};
 use crate::resolver::state::PlanResolverState;
 use crate::resolver::PlanResolver;
 
@@ -18,21 +16,13 @@ impl PlanResolver<'_> {
         mode: spec::ExplainMode,
         state: &mut PlanResolverState,
     ) -> PlanResult<LogicalPlan> {
-        let input = match input {
-            spec::Plan::Query(query) => self.resolve_query_plan(query, state).await?,
-            spec::Plan::Command(command) => self.resolve_command_plan(command, state).await?,
-        };
-        let stringified_plans: Vec<StringifiedPlan> =
-            vec![input.to_stringified(PlanType::InitialLogicalPlan)];
-        let schema = LogicalPlan::explain_schema();
-        let schema = schema.to_dfschema_ref()?;
-        Ok(LogicalPlan::Explain(Explain {
-            verbose: matches!(mode, spec::ExplainMode::Verbose),
-            explain_format: ExplainFormat::Indent,
-            plan: Arc::new(input),
-            stringified_plans,
-            schema,
-            logical_optimization_succeeded: true,
-        }))
+        let _ = state;
+        let options = ExplainOptions::from_mode(mode);
+        let explain = explain_string(self.ctx, self.config.clone(), input, options).await?;
+        let plan =
+            LogicalPlanBuilder::values(vec![vec![lit(ScalarValue::Utf8(Some(explain.output)))]])?
+                .project(vec![col("column1").alias("plan")])?
+                .build()?;
+        Ok(plan)
     }
 }

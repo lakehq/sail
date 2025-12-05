@@ -1,6 +1,7 @@
 import doctest
 import json
 import os
+import re
 import time
 
 import pyspark.sql.connect.session
@@ -20,6 +21,8 @@ def remote():
         yield r
     else:
         server = SparkConnectServer("127.0.0.1", 0)
+        if os.environ.get("SAIL_TEST_INIT_TELEMETRY") == "1":
+            server.init_telemetry()
         server.start(background=True)
         _, port = server.listening_address
         yield f"sc://localhost:{port}"
@@ -219,6 +222,29 @@ def query_result(datatable, ordered, query, spark):
         assert rows == r
     else:
         assert sorted(rows) == sorted(r)
+
+
+@then("query plan equals")
+def query_plan_equals(docstring, query, spark):
+    """Executes the SQL query and asserts the single-row plan output exactly matches the expected text."""
+
+    def normalize(plan_text: str) -> str:
+        """Strip whitespace and remove non-deterministic metrics sections."""
+        text = re.sub(r", metrics=\[[^\]]*\]", "", plan_text).strip()
+        # Normalize partition counts which depend on available cores.
+        text = re.sub(r"Hash\(\[([^\]]+)\], \d+\)", r"Hash([\1], <partitions>)", text)
+        text = re.sub(r"RoundRobinBatch\(\d+\)", r"RoundRobinBatch(<partitions>)", text)
+        return re.sub(r"input_partitions=\d+", r"input_partitions=<partitions>", text)
+
+    df = spark.sql(query)
+    rows = df.collect()
+    assert len(rows) == 1, f"expected single row, got {len(rows)}"
+    plan = rows[0][0]
+    assert isinstance(plan, str), "expected string plan output"
+    assert plan, "expected non-empty plan output"
+    expected = normalize(docstring)
+    actual = normalize(plan)
+    assert actual == expected, f"plan mismatch\nExpected:\n{expected}\n\nActual:\n{actual}"
 
 
 @then(parsers.parse("query error {error}"))
