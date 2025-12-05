@@ -20,6 +20,8 @@ def remote():
         yield r
     else:
         server = SparkConnectServer("127.0.0.1", 0)
+        if os.environ.get("SAIL_TEST_INIT_TELEMETRY") == "1":
+            server.init_telemetry()
         server.start(background=True)
         _, port = server.listening_address
         yield f"sc://localhost:{port}"
