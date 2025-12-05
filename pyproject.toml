@@ -40,6 +40,7 @@ test = [
     "pillow>=10.3.0",
     "pyiceberg[sql-sqlite,pyiceberg-core]==0.10.0",
     "pydantic>=2.11,<2.12",
+    "jedi>=0.19.2",
 ]
 mcp = [
     "mcp>=1.0.0,<2",
@@ -84,7 +85,7 @@ dependencies = [
     "pillow>=10.3.0",
     "pyiceberg[sql-sqlite,pyiceberg-core]==0.10.0",
     "pydantic>=2.11,<2.12",
-    "jedi",
+    "jedi>=0.19.2",
 ]
 path = ".venvs/default"
 
@@ -127,6 +128,7 @@ dependencies = [
     "pillow>=10.3.0",
     "pyiceberg[sql-sqlite,pyiceberg-core]==0.10.0",
     "pydantic>=2.11,<2.12",
+    "jedi>=0.19.2",
 ]
 
 [[tool.hatch.envs.test.matrix]]

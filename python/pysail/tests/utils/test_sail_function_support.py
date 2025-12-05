@@ -1,6 +1,6 @@
 from inspect import cleandoc
 
-from python.pysail.utils.sail_function_support import (
+from pysail.utils.sail_function_support import (
     _check_sail_pyspark_compatibility,
     _load_sail_support_data,
 )
