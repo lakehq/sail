@@ -41,6 +41,7 @@ use crate::kernel::models::{Action, Add, Metadata, Protocol, RemoveOptions};
 use crate::kernel::transaction::{CommitBuilder, CommitProperties, TableReference};
 use crate::kernel::{DeltaOperation, SaveMode};
 use crate::physical_plan::{current_timestamp_millis, CommitInfo};
+use crate::schema::normalize_delta_schema;
 use crate::storage::{get_object_store_from_context, StorageConfig};
 use crate::table::{create_delta_table_with_object_store, open_table_with_object_store};
 
@@ -339,7 +340,8 @@ impl ExecutionPlan for DeltaCommitExec {
                     )
                 } else {
                     // Construct minimal protocol/metadata and insert them
-                    let delta_schema: StructType = sink_schema
+                    let normalized_sink = normalize_delta_schema(&sink_schema);
+                    let delta_schema: StructType = normalized_sink
                         .as_ref()
                         .try_into_kernel()
                         .map_err(|e| DataFusionError::External(Box::new(e)))?;
