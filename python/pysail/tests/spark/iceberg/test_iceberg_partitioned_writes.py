@@ -1,5 +1,6 @@
 import datetime as dt
 import platform
+from pathlib import Path
 from typing import List, Tuple  # noqa: UP035
 
 import pytest
@@ -245,3 +246,55 @@ def test_iceberg_partition_writes_sql(spark, tmp_path):
         assert actual == {"region=1/category=1", "region=1/category=2", "region=2/category=1", "region=2/category=2"}
     finally:
         spark.sql("DROP TABLE IF EXISTS tmp_ice_multi")
+
+
+@pytest.mark.skipif(platform.system() == "Windows", reason="may not work on Windows")
+def test_partitioned_append_infers_spec_from_metadata(spark, tmp_path):
+    catalog = create_sql_catalog(tmp_path)
+    schema = Schema(
+        NestedField(1, "id", IntegerType(), required=True),
+        NestedField(2, "category", StringType(), required=False),
+        NestedField(3, "value", IntegerType(), required=False),
+    )
+    spec = PartitionSpec(PartitionField(2, 2008, IdentityTransform(), "category"))
+    table_name = "default.partitioned_append_metadata"
+    table = catalog.create_table(identifier=table_name, schema=schema, partition_spec=spec)
+    try:
+        schema_str = "id INT, category STRING, value INT"
+        initial_rows = [
+            (1, "A", 10),
+            (2, "B", 20),
+        ]
+        append_rows = [
+            (3, "A", 30),
+            (4, "C", 40),
+        ]
+
+        spark.createDataFrame(initial_rows, schema=schema_str).write.format("iceberg").mode("append").save(
+            table.location()
+        )
+        spark.createDataFrame(append_rows, schema=schema_str).write.format("iceberg").mode("append").save(
+            table.location()
+        )
+
+        result = {
+            (row.id, row.category, row.value) for row in spark.read.format("iceberg").load(table.location()).collect()
+        }
+        assert result == {(1, "A", 10), (2, "B", 20), (3, "A", 30), (4, "C", 40)}
+
+        table_path = Path(table.location().removeprefix("file://"))
+        data_dir = table_path / "data"
+        partition_dirs = {p.name for p in data_dir.iterdir() if p.is_dir()}
+        assert partition_dirs == {"category=A", "category=B", "category=C"}
+
+        def count_parquet_files(partition: str) -> int:
+            return len(list((data_dir / partition).glob("*.parquet")))
+
+        expected_file_counts = {"category=A": 2, "category=B": 1, "category=C": 1}
+        for partition, expected_count in expected_file_counts.items():
+            assert count_parquet_files(partition) == expected_count
+
+        root_files = list(data_dir.glob("*.parquet"))
+        assert not root_files, "Partitioned Iceberg tables should not place files directly under data/"
+    finally:
+        catalog.drop_table(table_name)

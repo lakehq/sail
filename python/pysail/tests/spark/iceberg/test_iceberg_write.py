@@ -567,7 +567,7 @@ def test_iceberg_overwrite_schema_rejects_dropping_partition_column(spark, sql_c
             [(10, "overwrite")],
             schema="id LONG, value STRING",
         )
-        with pytest.raises(Exception, match=r"(?i)Partition field"):
+        with pytest.raises(Exception, match=r"(?i)Partition (?:field|column)"):
             (
                 replacement_df.write.format("iceberg")
                 .mode("overwrite")

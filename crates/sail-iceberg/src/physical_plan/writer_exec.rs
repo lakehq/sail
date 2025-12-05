@@ -37,7 +37,10 @@ use crate::operations::write::config::WriterConfig;
 use crate::operations::write::table_writer::IcebergTableWriter;
 use crate::options::TableIcebergOptions;
 use crate::schema_evolution::{SchemaEvolver, SchemaMode};
-use crate::spec::partition::{UnboundPartitionField, UnboundPartitionSpec};
+use crate::spec::partition::{
+    PartitionSpec as BoundPartitionSpec, UnboundPartitionField, UnboundPartitionSpec,
+};
+use crate::spec::schema::Schema as IcebergSchema;
 use crate::spec::{TableMetadata, TableRequirement};
 use crate::utils::get_object_store_from_context;
 
@@ -53,6 +56,27 @@ pub struct IcebergWriterExec {
 }
 
 impl IcebergWriterExec {
+    fn extract_partition_columns(
+        spec: &Option<BoundPartitionSpec>,
+        iceberg_schema: &IcebergSchema,
+    ) -> Result<Vec<String>> {
+        if let Some(spec) = spec {
+            let mut cols = Vec::with_capacity(spec.fields().len());
+            for f in spec.fields() {
+                let field = iceberg_schema.field_by_id(f.source_id).ok_or_else(|| {
+                    DataFusionError::Plan(format!(
+                        "Partition column mismatch: field id {} missing in schema",
+                        f.source_id
+                    ))
+                })?;
+                cols.push(field.name.clone());
+            }
+            Ok(cols)
+        } else {
+            Ok(Vec::new())
+        }
+    }
+
     pub fn new(
         input: Arc<dyn ExecutionPlan>,
         table_url: Url,
@@ -298,7 +322,44 @@ impl ExecutionPlan for IcebergWriterExec {
                 // This requires a mechanism to reserve Field IDs or restart the Writer task upon conflict.
                 let schema_outcome =
                     SchemaEvolver::evolve(&table_meta, input_schema.as_ref(), schema_mode)?;
-                let default_spec = table_meta.default_partition_spec().cloned();
+                let mut default_spec = table_meta.default_partition_spec().cloned();
+                if matches!(schema_mode, Some(SchemaMode::Overwrite)) {
+                    if !partition_columns.is_empty() {
+                        let current_schema = schema_outcome.iceberg_schema.clone();
+                        let mut builder = crate::spec::partition::PartitionSpec::builder();
+                        if let Some(existing) = &default_spec {
+                            builder = builder.with_spec_id(existing.spec_id());
+                        }
+                        use crate::spec::transform::Transform;
+                        for name in &partition_columns {
+                            let fid = current_schema.field_id_by_name(name).ok_or_else(|| {
+                                DataFusionError::Plan(format!(
+                                    "Partition column mismatch: column '{}' not found in schema",
+                                    name
+                                ))
+                            })?;
+                            builder = builder.add_field(fid, name.clone(), Transform::Identity);
+                        }
+                        default_spec = Some(builder.build());
+                    }
+                } else {
+                    let table_partition_columns = {
+                        let current_schema = table_meta.current_schema().ok_or_else(|| {
+                            DataFusionError::Plan(
+                                "Partition column mismatch: missing current schema".to_string(),
+                            )
+                        })?;
+                        Self::extract_partition_columns(&default_spec, current_schema)?
+                    };
+                    if partition_columns.is_empty() {
+                        // inherit table partitioning
+                    } else if partition_columns != table_partition_columns {
+                        return Err(DataFusionError::Plan(format!(
+                            "Partition column mismatch: table uses {:?}, requested {:?}",
+                            table_partition_columns, partition_columns
+                        )));
+                    }
+                }
                 let spec_id_val = default_spec.as_ref().map(|s| s.spec_id()).unwrap_or(0);
                 let commit_schema = schema_outcome
                     .changed
@@ -328,6 +389,14 @@ impl ExecutionPlan for IcebergWriterExec {
                     return Err(DataFusionError::Plan(
                         "Invalid Iceberg schema: field id 0 detected after assignment".to_string(),
                     ));
+                }
+                for name in &partition_columns {
+                    if iceberg_schema.field_id_by_name(name).is_none() {
+                        return Err(DataFusionError::Plan(format!(
+                            "Partition column mismatch: column '{}' not found in schema",
+                            name
+                        )));
+                    }
                 }
                 let mut builder = crate::spec::partition::PartitionSpec::builder();
                 use crate::spec::transform::Transform;
@@ -417,7 +486,9 @@ impl ExecutionPlan for IcebergWriterExec {
                     crate::spec::Operation::Append
                 },
                 schema: commit_schema.clone(),
-                partition_spec: if !table_exists {
+                partition_spec: if !table_exists
+                    || matches!(schema_mode, Some(SchemaMode::Overwrite))
+                {
                     default_spec.clone()
                 } else {
                     None

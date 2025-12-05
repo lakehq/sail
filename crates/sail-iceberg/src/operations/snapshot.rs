@@ -67,6 +67,7 @@ impl<'a> SnapshotProducer<'a> {
     }
 
     pub fn validate_added_data_files(&self, _files: &[DataFile]) -> Result<(), String> {
+        // TODO: Implement this function to validate the added data files
         Ok(())
     }
 

@@ -155,3 +155,57 @@ class TestDeltaPartitioning:
 
         df_region_ge2 = spark.read.format("delta").load(f"{delta_path}").filter("region >= 2")
         assert df_region_ge2.count() == 2, "Region >= 2 should have 2 records"  # noqa: PLR2004
+
+    def test_delta_append_uses_existing_partition_metadata(self, spark, tmp_path):
+        """Ensure append inherits partitioning when user omits partitionBy."""
+        delta_path = tmp_path / "append_partitioned_table"
+
+        initial_data = [
+            Row(id=1, category="A", value=10),
+            Row(id=2, category="B", value=20),
+        ]
+        append_data = [
+            Row(id=3, category="A", value=30),
+            Row(id=4, category="C", value=40),
+        ]
+
+        spark.createDataFrame(initial_data).write.format("delta").mode("overwrite").partitionBy("category").save(
+            str(delta_path)
+        )
+
+        # Append rows without specifying partitionBy; writer should reuse table metadata.
+        spark.createDataFrame(append_data).write.format("delta").mode("append").save(str(delta_path))
+
+        result_df = spark.read.format("delta").load(str(delta_path)).sort("id")
+        expected = (
+            pd.DataFrame(
+                {
+                    "id": [1, 2, 3, 4],
+                    "value": [10, 20, 30, 40],
+                    "category": ["A", "B", "A", "C"],
+                }
+            )
+            .astype({"id": "int32", "value": "int32", "category": "string"})
+            .sort_values("id")
+            .reset_index(drop=True)
+        )
+
+        result_pdf = result_df.toPandas().sort_values("id").reset_index(drop=True)
+        result_pdf = result_pdf[["id", "value", "category"]]
+        assert_frame_equal(result_pdf, expected, check_dtype=False)
+
+        partitions = get_partition_structure(str(delta_path))
+        assert partitions == {"category=A", "category=B", "category=C"}
+
+        partition_file_counts = {}
+        for partition in partitions:
+            partition_path = delta_path / partition
+            parquet_files = [f for f in os.listdir(partition_path) if f.endswith(".parquet")]
+            partition_file_counts[partition] = len(parquet_files)
+
+        assert partition_file_counts["category=A"] == 2  # noqa: PLR2004
+        assert partition_file_counts["category=B"] == 1
+        assert partition_file_counts["category=C"] == 1
+
+        root_parquet_files = [f for f in os.listdir(delta_path) if f.endswith(".parquet")]
+        assert not root_parquet_files, "Partitioned tables should not create root-level parquet files on append"
