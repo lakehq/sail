@@ -1,6 +1,8 @@
 use std::sync::Arc;
 
-use datafusion::physical_plan::{collect, displayable, ExecutionPlan};
+use datafusion::physical_plan::{
+    collect, display::DisplayableExecutionPlan, displayable, ExecutionPlan,
+};
 use datafusion::prelude::SessionContext;
 use datafusion_common::display::{PlanType, StringifiedPlan, ToStringifiedPlan};
 use datafusion_common::Result as DataFusionResult;
@@ -93,7 +95,7 @@ impl CollectedPlan {
 
     fn physical_string(&self, verbose: bool, with_stats: bool, with_schema: bool) -> String {
         if let Some(plan) = &self.physical_plan {
-            displayable(plan.as_ref())
+            DisplayableExecutionPlan::new(plan.as_ref())
                 .set_show_statistics(with_stats)
                 .set_show_schema(with_schema)
                 .indent(verbose)
@@ -212,16 +214,41 @@ pub async fn explain_string(
     let logical_optimized =
         collected.logical_string(&collected.optimized_logical, PlanType::FinalLogicalPlan);
 
-    let physical_plain = collected.physical_string(options.verbose, false, false);
+    // Always render the base physical plan with indentation; verbose mode controls
+    // whether we add extra sections below.
+    let physical_plain = collected.physical_string(true, false, false);
     let physical_with_stats = collected.physical_string(true, true, false);
-    let formatted_physical = collected.physical_string(true, true, true);
+    let physical_with_schema = collected.physical_string(true, false, true);
+    let physical_full = collected.physical_string(true, true, true);
+
+    let physical_for_mode = if options.analyze {
+        // TODO: include runtime metrics once we can render them deterministically.
+        &physical_full
+    } else {
+        &physical_plain
+    };
 
     let output = match options.kind {
-        ExplainKind::Simple => render_section("Physical Plan", &physical_plain),
+        ExplainKind::Simple => {
+            let mut sections = vec![render_section("Physical Plan", physical_for_mode)];
+            if !options.verbose && !options.analyze {
+                sections.push(render_section(
+                    "Physical Plan (with statistics)",
+                    &physical_with_stats,
+                ));
+                sections.push(render_section(
+                    "Physical Plan (with schema)",
+                    &physical_with_schema,
+                ));
+            }
+            sections.join("\n\n")
+        }
         ExplainKind::Extended => [
             render_section("Parsed Logical Plan", &logical_simple),
+            // TODO: Spark expects distinct analyzed vs optimized plans
+            // Avoid duplicating the same plan until we can separate.
             render_section("Analyzed Logical Plan", &logical_optimized),
-            render_section("Physical Plan", &physical_plain),
+            render_section("Physical Plan", physical_for_mode),
         ]
         .join("\n\n"),
         ExplainKind::Codegen => [
@@ -229,16 +256,26 @@ pub async fn explain_string(
                 "Codegen",
                 "Whole-stage codegen is not supported; showing physical plan instead.",
             ),
-            render_section("Physical Plan", &physical_plain),
+            render_section("Physical Plan", physical_for_mode),
         ]
         .join("\n\n"),
         ExplainKind::Cost => [
             render_section("Parsed Logical Plan", &logical_simple),
             render_section("Analyzed Logical Plan", &logical_optimized),
-            render_section("Physical Plan", &physical_with_stats),
+            // TODO: Spark COST mode shows logical plan + stats; we currently return physical +
+            // stats
+            render_section(
+                "Physical Plan",
+                if options.verbose || options.analyze {
+                    &physical_full
+                } else {
+                    &physical_with_stats
+                },
+            ),
         ]
         .join("\n\n"),
-        ExplainKind::Formatted => render_section("Physical Plan", &formatted_physical),
+        // TODO: Spark FORMATTED mode emits outline + node details
+        ExplainKind::Formatted => render_section("Physical Plan", &physical_full),
     };
 
     Ok(ExplainString {
