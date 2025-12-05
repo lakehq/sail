@@ -1,5 +1,8 @@
 """Test partition column mismatch validation for Iceberg tables"""
 
+import json
+from pathlib import Path
+
 import pytest
 from pyspark.sql.types import Row
 from pyspark.sql.utils import AnalysisException
@@ -161,6 +164,16 @@ class TestIcebergPartitionMismatch:
         assert "region" in columns, "New partition column 'region' should exist"
         assert "category" in columns, "Column 'category' should still exist in data"
 
+        # Verify table metadata reflects the new partition spec
+        table_dir = Path(iceberg_path.replace("file://", ""))
+        metadata_files = sorted(table_dir.joinpath("metadata").glob("*.metadata.json"))
+        latest_meta = metadata_files[-1]
+        meta = json.loads(latest_meta.read_text())
+        default_spec_id = meta["default-spec-id"]
+        default_spec = next(spec for spec in meta["partition-specs"] if spec["spec-id"] == default_spec_id)
+        partition_names = [field["name"] for field in default_spec.get("fields", [])]
+        assert partition_names == ["region"], f"Expected default partition spec to be ['region'], got {partition_names}"
+
     def test_append_to_unpartitioned_table_with_partitioning_raises_error(self, spark, tmp_path):
         """Test that appending with partitioning to an unpartitioned table raises error"""
         iceberg_path = f"file://{tmp_path}/unpartitioned_table"
@@ -207,3 +220,16 @@ class TestIcebergPartitionMismatch:
         result_df = spark.read.format("iceberg").load(iceberg_path).sort("id")
         result_count = result_df.count()
         assert result_count == 4, f"Expected 4 rows, got {result_count}"  # noqa: PLR2004
+
+    def test_create_partition_with_unknown_column_raises_error(self, spark, tmp_path):
+        """Test that creating a table with a non-existent partition column raises an error"""
+        iceberg_path = f"file://{tmp_path}/unknown_partition_column_table"
+
+        data = [
+            Row(id=1, category="A", value=100),
+            Row(id=2, category="B", value=200),
+        ]
+        df = spark.createDataFrame(data)
+
+        with pytest.raises(AnalysisException, match="Partition column"):
+            df.write.format("iceberg").mode("overwrite").partitionBy("missing_col").save(iceberg_path)
