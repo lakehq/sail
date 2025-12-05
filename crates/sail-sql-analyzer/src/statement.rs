@@ -1531,8 +1531,8 @@ fn from_ast_explain_format(format: Option<ExplainFormat>) -> SqlResult<spec::Exp
     //   - EXTENDED: emit Parsed/Analyzed/Optimized Logical Plan sections distinctly.
     //   - COST: match Spark (logical + stats, not physical-with-stats).
     //   - FORMATTED: add outline + node-details sections to mirror Spark.
-    //   - ANALYZE: surface runtime metrics/Executed Plan in output.
     //   - CODEGEN: keep "unsupported" notice until DataFusion adds support.
+    //   - ANALYZE: align metrics formatting with Spark once available.
     //   Reference: https://spark.apache.org/docs/latest/sql-ref-syntax-qry-explain.html
     match format {
         None => Ok(spec::ExplainMode::Simple),
