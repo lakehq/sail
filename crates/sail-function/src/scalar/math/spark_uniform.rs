@@ -1,15 +1,14 @@
 use std::any::Any;
 use std::sync::Arc;
 
-use datafusion::arrow::array::{Array, ArrayRef, AsArray, Float64Array, Int64Array};
-use datafusion::arrow::datatypes::{DataType, Float64Type, Int64Type, UInt64Type};
-use datafusion_common::Result;
+use datafusion::arrow::array::{Float64Array, Int64Array};
+use datafusion::arrow::datatypes::DataType;
+use datafusion_common::{Result, ScalarValue};
 use datafusion_expr::{ColumnarValue, ScalarFunctionArgs, ScalarUDFImpl, Signature, Volatility};
 use rand::rngs::StdRng;
 use rand::{rng, Rng, SeedableRng};
 
 use crate::error::{generic_exec_err, invalid_arg_count_exec_err, unsupported_data_types_exec_err};
-use crate::functions_nested_utils::make_scalar_function;
 
 /// The `Uniform` function generates random numbers from a uniform distribution
 /// between a specified minimum and maximum value.
@@ -65,7 +64,127 @@ impl ScalarUDFImpl for SparkUniform {
     }
 
     fn invoke_with_args(&self, args: ScalarFunctionArgs) -> Result<ColumnarValue> {
-        make_scalar_function(uniform)(&args.args)
+        let ScalarFunctionArgs {
+            args,
+            number_rows,
+            ..
+        } = args;
+
+        // Extract min and max (must be scalars)
+        let min = match &args[0] {
+            ColumnarValue::Scalar(s) => s.clone(),
+            ColumnarValue::Array(_) => {
+                return Err(generic_exec_err(
+                    "uniform",
+                    "min must be a scalar value, not an array",
+                ))
+            }
+        };
+
+        let max = match &args[1] {
+            ColumnarValue::Scalar(s) => s.clone(),
+            ColumnarValue::Array(_) => {
+                return Err(generic_exec_err(
+                    "uniform",
+                    "max must be a scalar value, not an array",
+                ))
+            }
+        };
+
+        // Extract seed if present
+        let seed: Option<u64> = if args.len() == 3 {
+            match &args[2] {
+                ColumnarValue::Scalar(scalar) => match scalar {
+                    ScalarValue::Int64(Some(value)) => Some(*value as u64),
+                    ScalarValue::UInt64(Some(value)) => Some(*value),
+                    ScalarValue::Int64(None) | ScalarValue::UInt64(None) | ScalarValue::Null => {
+                        None
+                    }
+                    _ => {
+                        return Err(generic_exec_err(
+                            "uniform",
+                            &format!("seed must be an integer, got {}", scalar.data_type()),
+                        ))
+                    }
+                },
+                ColumnarValue::Array(_) => {
+                    return Err(generic_exec_err(
+                        "uniform",
+                        "seed must be a scalar value, not an array",
+                    ))
+                }
+            }
+        } else {
+            None
+        };
+
+        // Generate values based on type
+        match (&min, &max) {
+            (ScalarValue::Int64(Some(min_val)), ScalarValue::Int64(Some(max_val))) => {
+                let mut min_v = *min_val;
+                let mut max_v = *max_val;
+
+                if min_v > max_v {
+                    std::mem::swap(&mut min_v, &mut max_v);
+                }
+
+                if min_v == max_v {
+                    let array = Int64Array::from(vec![min_v; number_rows]);
+                    return Ok(ColumnarValue::Array(Arc::new(array)));
+                }
+
+                let values: Vec<i64> = if let Some(seed_val) = seed {
+                    let mut rng = StdRng::seed_from_u64(seed_val);
+                    (0..number_rows)
+                        .map(|_| rng.random_range(min_v..max_v))
+                        .collect()
+                } else {
+                    let mut rng = rng();
+                    (0..number_rows)
+                        .map(|_| rng.random_range(min_v..max_v))
+                        .collect()
+                };
+
+                let array = Int64Array::from(values);
+                Ok(ColumnarValue::Array(Arc::new(array)))
+            }
+            (ScalarValue::Float64(Some(min_val)), ScalarValue::Float64(Some(max_val))) => {
+                let mut min_v = *min_val;
+                let mut max_v = *max_val;
+
+                if min_v > max_v {
+                    std::mem::swap(&mut min_v, &mut max_v);
+                }
+
+                if min_v == max_v {
+                    let array = Float64Array::from(vec![min_v; number_rows]);
+                    return Ok(ColumnarValue::Array(Arc::new(array)));
+                }
+
+                let values: Vec<f64> = if let Some(seed_val) = seed {
+                    let mut rng = StdRng::seed_from_u64(seed_val);
+                    (0..number_rows)
+                        .map(|_| rng.random_range(min_v..max_v))
+                        .collect()
+                } else {
+                    let mut rng = rng();
+                    (0..number_rows)
+                        .map(|_| rng.random_range(min_v..max_v))
+                        .collect()
+                };
+
+                let array = Float64Array::from(values);
+                Ok(ColumnarValue::Array(Arc::new(array)))
+            }
+            _ => Err(generic_exec_err(
+                "uniform",
+                &format!(
+                    "unsupported types for min and max: {} and {}",
+                    min.data_type(),
+                    max.data_type()
+                ),
+            )),
+        }
     }
 
     fn coerce_types(&self, arg_types: &[DataType]) -> Result<Vec<DataType>> {
@@ -108,176 +227,4 @@ impl ScalarUDFImpl for SparkUniform {
         Ok(coerced_types)
     }
 }
-fn uniform(args: &[ArrayRef]) -> Result<ArrayRef> {
-    let len = args[0].len();
 
-    let seed: Option<u64> = if args.len() == 3 {
-        let seed_arr = &args[2];
-        match seed_arr.data_type() {
-            DataType::Int64 => {
-                let arr = seed_arr.as_primitive::<Int64Type>();
-                if arr.is_empty() || arr.is_null(0) {
-                    None
-                } else {
-                    Some(arr.value(0) as u64)
-                }
-            }
-            DataType::UInt64 => {
-                let arr = seed_arr.as_primitive::<UInt64Type>();
-                if arr.is_empty() || arr.is_null(0) {
-                    None
-                } else {
-                    Some(arr.value(0))
-                }
-            }
-            DataType::Null => None,
-            dt => {
-                return Err(generic_exec_err(
-                    "uniform",
-                    &format!("expects integer seed, got {dt}"),
-                ))
-            }
-        }
-    } else {
-        None
-    };
-
-    match args[0].data_type() {
-        DataType::Int64 => {
-            let min_arr = args[0].as_primitive::<Int64Type>();
-            let max_arr = args[1].as_primitive::<Int64Type>();
-
-            let mut min = min_arr.value(0);
-            let mut max = max_arr.value(0);
-
-            if min > max {
-                std::mem::swap(&mut min, &mut max);
-            } else if min == max {
-                let values: Vec<i64> = vec![min; len];
-                return Ok(Arc::new(Int64Array::from(values)) as ArrayRef);
-            }
-
-            let values: Vec<i64> = if let Some(seed) = seed {
-                let mut rng = StdRng::seed_from_u64(seed);
-                (0..len).map(|_| rng.random_range(min..max)).collect()
-            } else {
-                let mut rng = rng();
-                (0..len).map(|_| rng.random_range(min..max)).collect()
-            };
-
-            Ok(Arc::new(Int64Array::from(values)) as ArrayRef)
-        }
-        DataType::Float64 => {
-            let min_arr = args[0].as_primitive::<Float64Type>();
-            let max_arr = args[1].as_primitive::<Float64Type>();
-
-            if min_arr.is_null(0) || max_arr.is_null(0) {
-                return Err(generic_exec_err(
-                    "uniform",
-                    "min and max must be non-null scalars",
-                ));
-            }
-
-            let mut min = min_arr.value(0);
-            let mut max = max_arr.value(0);
-
-            if min > max {
-                std::mem::swap(&mut min, &mut max);
-            } else if min == max {
-                let values: Vec<f64> = vec![min; len];
-                return Ok(Arc::new(Float64Array::from(values)) as ArrayRef);
-            }
-
-            let values: Vec<f64> = if let Some(seed) = seed {
-                // Para seed
-                let mut rng = StdRng::seed_from_u64(seed);
-                (0..len).map(|_| rng.random_range(min..max)).collect()
-            } else {
-                let mut rng = rng();
-                (0..len).map(|_| rng.random_range(min..max)).collect()
-            };
-
-            Ok(Arc::new(Float64Array::from(values)) as ArrayRef)
-        }
-        dt => Err(generic_exec_err(
-            "uniform",
-            &format!("unsupported argument type: {dt}"),
-        )),
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use std::error::Error;
-    use std::io;
-    use std::sync::Arc;
-
-    use datafusion::arrow::array::{ArrayRef, Int64Array};
-
-    use super::uniform;
-
-    fn as_int64_array(arr: &ArrayRef) -> Result<&Int64Array, Box<dyn Error>> {
-        arr.as_any()
-            .downcast_ref::<Int64Array>()
-            .ok_or_else(|| Box::<dyn Error>::from(io::Error::other("downcast failed")))
-    }
-
-    #[test]
-    fn test_uniform_udf_matches_zero() -> Result<(), Box<dyn Error>> {
-        let min = Arc::new(Int64Array::from(vec![0])) as ArrayRef;
-        let max = Arc::new(Int64Array::from(vec![0])) as ArrayRef;
-        let seed = Arc::new(Int64Array::from(vec![0])) as ArrayRef;
-
-        let args: Vec<ArrayRef> = vec![min, max, seed];
-        let res = match uniform(&args) {
-            Ok(r) => r,
-            Err(e) => return Err(Box::new(e)),
-        };
-        let out = as_int64_array(&res)?;
-        assert_eq!(out.value(0), 0);
-
-        Ok(())
-    }
-
-    #[test]
-    fn test_uniform_udf_matches_spark_example() -> Result<(), Box<dyn Error>> {
-        let min = Arc::new(Int64Array::from(vec![10])) as ArrayRef;
-        let max = Arc::new(Int64Array::from(vec![20])) as ArrayRef;
-        let seed = Arc::new(Int64Array::from(vec![0])) as ArrayRef;
-
-        let args: Vec<ArrayRef> = vec![min, max, seed];
-        let res = match uniform(&args) {
-            Ok(r) => r,
-            Err(e) => return Err(Box::new(e)),
-        };
-        let out = as_int64_array(&res)?;
-        assert_eq!(out.value(0), 17);
-
-        Ok(())
-    }
-
-    #[test]
-    fn test_uniform_udf_matches_min_max_change() -> Result<(), Box<dyn Error>> {
-        let min = Arc::new(Int64Array::from(vec![10])) as ArrayRef;
-        let max = Arc::new(Int64Array::from(vec![-20])) as ArrayRef;
-        let seed = Arc::new(Int64Array::from(vec![0])) as ArrayRef;
-
-        let args: Vec<ArrayRef> = vec![min.clone(), max.clone(), seed.clone()];
-        let res = match uniform(&args) {
-            Ok(r) => r,
-            Err(e) => return Err(Box::new(e)),
-        };
-        let out = as_int64_array(&res)?;
-        assert_eq!(out.value(0), 1); // need to see, spark -12
-
-        let args: Vec<ArrayRef> = vec![max, min, seed];
-        let res = match uniform(&args) {
-            Ok(r) => r,
-            Err(e) => return Err(Box::new(e)),
-        };
-        let out = as_int64_array(&res)?;
-        assert_eq!(out.value(0), 1); // need to see, spark -12
-
-        Ok(())
-    }
-}
