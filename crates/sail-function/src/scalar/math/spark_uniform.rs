@@ -2,9 +2,11 @@ use std::any::Any;
 use std::sync::Arc;
 
 use datafusion::arrow::array::{Decimal128Array, Float64Array, Int32Array};
-use datafusion::arrow::datatypes::DataType;
+use datafusion::arrow::datatypes::{DataType, Field, FieldRef};
 use datafusion_common::{Result, ScalarValue};
-use datafusion_expr::{ColumnarValue, ScalarFunctionArgs, ScalarUDFImpl, Signature, Volatility};
+use datafusion_expr::{
+    ColumnarValue, ReturnFieldArgs, ScalarFunctionArgs, ScalarUDFImpl, Signature, Volatility,
+};
 use rand::rngs::StdRng;
 use rand::{rng, Rng, SeedableRng};
 
@@ -108,6 +110,20 @@ impl ScalarUDFImpl for SparkUniform {
         let t_min = &arg_types[0];
         let t_max = &arg_types[1];
         Ok(Self::calculate_output_type(t_min, t_max))
+    }
+
+    fn return_field_from_args(&self, args: ReturnFieldArgs) -> Result<FieldRef> {
+        // Get the data types from the argument fields
+        let arg_types: Vec<DataType> = args
+            .arg_fields
+            .iter()
+            .map(|field| field.data_type().clone())
+            .collect();
+
+        let return_type = self.return_type(&arg_types)?;
+
+        // Create field with nullable = false (uniform never returns NULL)
+        Ok(Arc::new(Field::new(self.name(), return_type, false)))
     }
 
     fn invoke_with_args(&self, args: ScalarFunctionArgs) -> Result<ColumnarValue> {
@@ -585,6 +601,44 @@ mod tests {
             DataType::Decimal128(3, 1),
             "Should use max precision from inputs"
         );
+        Ok(())
+    }
+
+    /// Test 22: Verify that return_field_from_args returns non-nullable field
+    #[test]
+    fn test_uniform_is_not_nullable() -> Result<()> {
+        use std::sync::Arc;
+
+        let uniform_fn = SparkUniform::new();
+
+        // Create argument fields (representing the schema of the inputs)
+        let arg_fields = vec![
+            Arc::new(Field::new("min", DataType::Int64, false)),
+            Arc::new(Field::new("max", DataType::Int64, false)),
+            Arc::new(Field::new("seed", DataType::Int64, false)),
+        ];
+
+        // Create ReturnFieldArgs
+        let return_field_args = ReturnFieldArgs {
+            arg_fields: &arg_fields,
+            scalar_arguments: &[None, None, None],
+        };
+
+        // Get the field using return_field_from_args
+        let field = uniform_fn.return_field_from_args(return_field_args)?;
+
+        // Verify that the field is not nullable
+        assert!(
+            !field.is_nullable(),
+            "uniform() should return non-nullable field (nullable = false)"
+        );
+        assert_eq!(
+            field.data_type(),
+            &DataType::Int32,
+            "Should return Int32 for integer inputs"
+        );
+        assert_eq!(field.name(), "uniform", "Field name should be 'uniform'");
+
         Ok(())
     }
 }
