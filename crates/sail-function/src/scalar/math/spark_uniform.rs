@@ -1,7 +1,7 @@
 use std::any::Any;
 use std::sync::Arc;
 
-use datafusion::arrow::array::{Float64Array, Int64Array};
+use datafusion::arrow::array::{Float64Array, Int32Array};
 use datafusion::arrow::datatypes::DataType;
 use datafusion_common::{Result, ScalarValue};
 use datafusion_expr::{ColumnarValue, ScalarFunctionArgs, ScalarUDFImpl, Signature, Volatility};
@@ -118,9 +118,9 @@ impl ScalarUDFImpl for SparkUniform {
 
         // Generate values based on type
         match (&min, &max) {
-            (ScalarValue::Int64(Some(min_val)), ScalarValue::Int64(Some(max_val))) => {
+            (ScalarValue::Int32(Some(min_val)), ScalarValue::Int32(Some(max_val))) => {
                 let values = generate_uniform_int(*min_val, *max_val, seed, number_rows)?;
-                let array = Int64Array::from(values);
+                let array = Int32Array::from(values);
                 Ok(ColumnarValue::Array(Arc::new(array)))
             }
             (ScalarValue::Float64(Some(min_val)), ScalarValue::Float64(Some(max_val))) => {
@@ -152,7 +152,7 @@ impl ScalarUDFImpl for SparkUniform {
         let t_max = &arg_types[1];
 
         let output_type = match (t_min, t_max) {
-            (t1, t2) if t1.is_integer() && t2.is_integer() => DataType::Int64,
+            (t1, t2) if t1.is_integer() && t2.is_integer() => DataType::Int32,
             _ => DataType::Float64,
         };
 
@@ -216,19 +216,19 @@ macro_rules! generate_uniform_fn {
     };
 }
 
-generate_uniform_fn!(generate_uniform_int, i64);
+generate_uniform_fn!(generate_uniform_int, i32);
 generate_uniform_fn!(generate_uniform_float, f64);
 
 #[cfg(test)]
 mod tests {
     use super::*;
 
-    /// Test 1: uniform(10, 20, 0) should return 17
+    /// Test 1: uniform(10, 20, 0) should return 18 (with i32)
     #[test]
     fn test_uniform_single_value() {
         let values = generate_uniform_int(10, 20, Some(0), 1).expect("generation failed");
         assert_eq!(values.len(), 1);
-        assert_eq!(values[0], 17);
+        assert_eq!(values[0], 18);
     }
 
     /// Test 2: uniform(10, 20, 0) FROM range(5) - should return DIFFERENT values
@@ -239,8 +239,8 @@ mod tests {
         // Verify that we have 5 values
         assert_eq!(values.len(), 5);
 
-        // Verify that the first value is 17
-        assert_eq!(values[0], 17);
+        // Verify that the first value is 18 (with i32 RNG)
+        assert_eq!(values[0], 18);
 
         // Verify that NOT all values are the same (this is the key test)
         let all_same = values.windows(2).all(|w| w[0] == w[1]);
@@ -325,8 +325,7 @@ mod tests {
         let values = generate_uniform_int(10, 20, Some(0), 10).expect("generation failed");
         assert_eq!(values.len(), 10);
 
-        // The first value should be 17
-        assert_eq!(values[0], 17);
+        assert_eq!(values[0], 18);
 
         // Verify that there is variety
         let unique_count = values
@@ -355,8 +354,7 @@ mod tests {
     #[test]
     fn test_uniform_seed_42_value() {
         let values = generate_uniform_int(0, 100, Some(42), 1).expect("generation failed");
-        // With Rust StdRng, seed 42 should give 52
-        assert_eq!(values[0], 52);
+        assert_eq!(values[0], 13);
     }
 
     /// Test 12: Float min == max
@@ -427,8 +425,8 @@ mod tests {
         let coerced = uniform_fn.coerce_types(&arg_types).expect("coerce_types failed");
         assert_eq!(
             coerced,
-            vec![DataType::Int64, DataType::Int64, DataType::Int64],
-            "Int32 should be coerced to Int64"
+            vec![DataType::Int32, DataType::Int32, DataType::Int64],
+            "Int32 inputs should remain Int32 for min/max, Int64 for seed"
         );
     }
 
