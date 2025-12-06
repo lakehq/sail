@@ -71,6 +71,24 @@ impl SparkUniform {
             signature: Signature::user_defined(Volatility::Volatile),
         }
     }
+
+    fn calculate_output_type(t_min: &DataType, t_max: &DataType) -> DataType {
+        if t_min.is_integer() && t_max.is_integer() {
+            return DataType::Int32;
+        }
+
+        match (t_min, t_max) {
+            (DataType::Decimal128(p1, s1), DataType::Decimal128(p2, s2)) => {
+                let precision = (*p1).max(*p2);
+                let scale = (*s1).max(*s2);
+                DataType::Decimal128(precision, scale)
+            }
+            (DataType::Decimal128(p, s), _) | (_, DataType::Decimal128(p, s)) => {
+                DataType::Decimal128(*p, *s)
+            }
+            _ => DataType::Float64,
+        }
+    }
 }
 
 impl ScalarUDFImpl for SparkUniform {
@@ -89,30 +107,7 @@ impl ScalarUDFImpl for SparkUniform {
     fn return_type(&self, arg_types: &[DataType]) -> Result<DataType> {
         let t_min = &arg_types[0];
         let t_max = &arg_types[1];
-
-        // If both inputs are integers, return Int32 (Spark's integer type)
-        if t_min.is_integer() && t_max.is_integer() {
-            return Ok(DataType::Int32);
-        }
-
-        // If either input is Decimal, calculate the result decimal type
-        // This matches Spark's behavior of inferring decimal precision from input literals
-        match (t_min, t_max) {
-            (DataType::Decimal128(p1, s1), DataType::Decimal128(p2, s2)) => {
-                // For uniform distribution, the output should have:
-                // - precision: max of the two precisions
-                // - scale: max of the two scales
-                let precision = (*p1).max(*p2);
-                let scale = (*s1).max(*s2);
-                Ok(DataType::Decimal128(precision, scale))
-            }
-            (DataType::Decimal128(p, s), _) | (_, DataType::Decimal128(p, s)) => {
-                // If only one is decimal, use that decimal's precision/scale
-                Ok(DataType::Decimal128(*p, *s))
-            }
-            // For any other float types (Float32, Float64), return Float64
-            _ => Ok(DataType::Float64),
-        }
+        Ok(Self::calculate_output_type(t_min, t_max))
     }
 
     fn invoke_with_args(&self, args: ScalarFunctionArgs) -> Result<ColumnarValue> {
@@ -226,22 +221,7 @@ impl ScalarUDFImpl for SparkUniform {
         let t_min = &arg_types[0];
         let t_max = &arg_types[1];
 
-        // Calculate output type matching the logic in return_type
-        let output_type = if t_min.is_integer() && t_max.is_integer() {
-            DataType::Int32
-        } else {
-            match (t_min, t_max) {
-                (DataType::Decimal128(p1, s1), DataType::Decimal128(p2, s2)) => {
-                    let precision = (*p1).max(*p2);
-                    let scale = (*s1).max(*s2);
-                    DataType::Decimal128(precision, scale)
-                }
-                (DataType::Decimal128(p, s), _) | (_, DataType::Decimal128(p, s)) => {
-                    DataType::Decimal128(*p, *s)
-                }
-                _ => DataType::Float64,
-            }
-        };
+        let output_type: DataType = Self::calculate_output_type(t_min, t_max);
 
         let mut coerced_types = vec![output_type.clone(), output_type];
 
