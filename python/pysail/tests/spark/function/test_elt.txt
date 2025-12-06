@@ -23,4 +23,11 @@ root
 |           NULL|
 +---------------+
 
+>>> spark.sql("SELECT elt(6, 'scala', 'java', 'c', 'c++', 'python', 'rust')").show()
++-----------------------------------------+
+|elt(6, scala, java, c, c++, python, rust)|
++-----------------------------------------+
+|                                     rust|
++-----------------------------------------+
+
 # If spark.sql.ansi.enabled is set to true, it throws ArrayIndexOutOfBoundsException for invalid indices.

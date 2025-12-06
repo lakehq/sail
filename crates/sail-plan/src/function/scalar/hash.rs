@@ -4,10 +4,10 @@ use datafusion::functions::expr_fn;
 use datafusion_common::ScalarValue;
 use datafusion_expr::{expr, ScalarUDF};
 use datafusion_spark::function::hash::expr_fn as hash_fn;
+use datafusion_spark::function::math::hex::SparkHex;
 use sail_common_datafusion::utils::items::ItemTaker;
 use sail_function::scalar::hash::spark_murmur3_hash::SparkMurmur3Hash;
 use sail_function::scalar::hash::spark_xxhash64::SparkXxhash64;
-use sail_function::scalar::math::spark_hex_unhex::SparkHex;
 
 use crate::error::PlanResult;
 use crate::function::common::{ScalarFunction, ScalarFunctionInput};
