@@ -1,3 +1,4 @@
+use std::borrow::Cow;
 use std::collections::HashMap;
 use std::fmt::{Debug, Display};
 use std::ops::DerefMut;
@@ -11,7 +12,7 @@ use datafusion::execution::runtime_env::RuntimeEnvBuilder;
 use datafusion::execution::SessionStateBuilder;
 use datafusion::prelude::{SessionConfig, SessionContext};
 use fastrace::prelude::SpanContext;
-use fastrace::{func_path, Span};
+use fastrace::Span;
 use log::{debug, info};
 use sail_cache::file_listing_cache::MokaFileListingCache;
 use sail_cache::file_metadata_cache::MokaFileMetadataCache;
@@ -31,6 +32,7 @@ use sail_plan::planner::new_query_planner;
 use sail_server::actor::{Actor, ActorAction, ActorContext, ActorHandle, ActorSystem};
 use sail_session::catalog::create_catalog_manager;
 use sail_session::formats::create_table_format_registry;
+use sail_telemetry::common::SpanAssociation;
 use tokio::sync::oneshot;
 use tokio::time::Instant;
 
@@ -311,6 +313,20 @@ enum SessionManagerEvent {
     },
 }
 
+impl SpanAssociation for SessionManagerEvent {
+    fn name(&self) -> Cow<'static, str> {
+        let name = match self {
+            SessionManagerEvent::GetOrCreateSession { .. } => "GetOrCreateSession",
+            SessionManagerEvent::ProbeIdleSession { .. } => "ProbeIdleSession",
+        };
+        name.into()
+    }
+
+    fn properties(&self) -> impl IntoIterator<Item = (Cow<'static, str>, Cow<'static, str>)> {
+        vec![]
+    }
+}
+
 struct SessionManagerActor {
     options: SessionManagerOptions,
     sessions: HashMap<SessionKey, SessionContext>,
@@ -323,6 +339,10 @@ struct SessionManagerActor {
 impl Actor for SessionManagerActor {
     type Message = SessionManagerEvent;
     type Options = SessionManagerOptions;
+
+    fn name() -> &'static str {
+        "SessionManagerActor"
+    }
 
     fn new(options: Self::Options) -> Self {
         Self {
@@ -363,7 +383,10 @@ impl SessionManagerActor {
         } else {
             let key = key.clone();
             info!("creating session {key}");
-            let span = Span::root(func_path!(), SpanContext::random());
+            let span = Span::root(
+                "SessionManagerActor::create_session_context",
+                SpanContext::random(),
+            );
             let _guard = span.set_local_parent();
             match self.create_session_context(system, key.clone()) {
                 Ok(context) => {

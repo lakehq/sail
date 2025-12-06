@@ -9,9 +9,7 @@ use tokio::task::JoinError;
 pub type ExecutionResult<T> = Result<T, ExecutionError>;
 
 #[derive(Debug, Error)]
-#[allow(clippy::large_enum_variant)]
 pub enum ExecutionError {
-    // FIXME: Rust 1.87 triggers `clippy::large_enum_variant` warning
     #[error("error in DataFusion: {0}")]
     DataFusionError(#[from] DataFusionError),
     #[error("invalid argument: {0}")]

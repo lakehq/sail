@@ -8,13 +8,13 @@ workspace = true
 
 [dependencies]
 sail-common = { path = "../sail-common" }
+sail-telemetry = { path = "../sail-telemetry" }
 
 tokio = { workspace = true }
 tonic = { workspace = true }
 tonic-reflection = { workspace = true }
 tonic-health = { workspace = true }
 fastrace = { workspace = true }
-fastrace-tonic = { workspace = true }
 tower = { workspace = true }
 log = { workspace = true }
 axum = { workspace = true }
