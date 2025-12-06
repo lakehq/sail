@@ -59,6 +59,26 @@ class TestIcebergPartitionMismatch:
         with pytest.raises(AnalysisException, match="Partition column mismatch"):
             df_append.write.format("iceberg").mode("append").partitionBy("year", "day").save(iceberg_path)
 
+    def test_append_with_reordered_partition_columns_raises_error(self, spark, tmp_path):
+        """Test that appending with the same columns but different order is rejected"""
+        iceberg_path = f"file://{tmp_path}/reordered_partition_table"
+
+        initial_data = [
+            Row(id=1, year=2023, month=1, value=10),
+            Row(id=2, year=2023, month=2, value=20),
+        ]
+        df_initial = spark.createDataFrame(initial_data)
+        df_initial.write.format("iceberg").mode("overwrite").partitionBy("year", "month").save(iceberg_path)
+
+        append_data = [
+            Row(id=3, year=2024, month=3, value=30),
+            Row(id=4, year=2024, month=4, value=40),
+        ]
+        df_append = spark.createDataFrame(append_data)
+
+        with pytest.raises(AnalysisException, match="Partition column mismatch"):
+            df_append.write.format("iceberg").mode("append").partitionBy("month", "year").save(iceberg_path)
+
     def test_append_with_same_partition_columns_succeeds(self, spark, tmp_path):
         """Test that appending with same partition columns succeeds"""
         iceberg_path = f"file://{tmp_path}/consistent_partitioned_table"
