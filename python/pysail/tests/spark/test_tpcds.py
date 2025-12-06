@@ -2,8 +2,11 @@ from pathlib import Path
 
 import duckdb
 import pytest
+from pandas.testing import assert_frame_equal
 
-from .utils import is_jvm_spark  # noqa: TID252
+from pysail.tests.spark.tpc_common import is_ddl, normalize, read_sql_queries, run_duck_query
+
+from .utils import is_jvm_spark, to_pandas  # noqa: TID252
 
 
 @pytest.fixture(scope="module")
@@ -26,17 +29,26 @@ def data(spark, duck):
 
 @pytest.mark.parametrize("query", [f"q{x + 1}" for x in range(99)])
 @pytest.mark.skipif(is_jvm_spark(), reason="slow tests in JVM Spark")
-def test_derived_tpcds_query_execution(spark, query):
-    # TODO: add tests for result parity
+def test_derived_tpcds_query_execution(spark, duck, query):
     for sql in read_sql(query):
-        spark.sql(sql).toPandas()
+        if is_ddl(sql):
+            duck.sql(sql)
+            spark.sql(sql)
+            continue
+
+        duck_df = normalize(run_duck_query(duck, sql))
+        spark_df = normalize(to_pandas(spark.sql(sql)))
+        assert_frame_equal(
+            duck_df,
+            spark_df,
+            check_dtype=False,
+            check_exact=False,
+            rtol=1e-4,
+            atol=1e-8,
+            check_names=False,
+        )
 
 
 def read_sql(query):
-    path = Path(__file__).parent.parent.parent / "data" / "tpcds" / "queries" / f"{query}.sql"
-    with open(path) as f:
-        text = f.read()
-    for sql in text.split(";"):
-        sql = sql.strip()  # noqa: PLW2901
-        if sql:
-            yield sql
+    base_dir = Path(__file__).parent.parent.parent / "data" / "tpcds" / "queries"
+    yield from read_sql_queries(base_dir, query)

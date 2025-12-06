@@ -2,8 +2,10 @@ from pathlib import Path
 
 import duckdb
 import pytest
+from pandas.testing import assert_frame_equal
 
-from pysail.tests.spark.utils import is_jvm_spark
+from pysail.tests.spark.tpc_common import is_ddl, normalize, read_sql_queries, run_duck_query
+from pysail.tests.spark.utils import is_jvm_spark, to_pandas
 
 
 @pytest.fixture(scope="module")
@@ -26,22 +28,26 @@ def data(spark, duck):
 
 @pytest.mark.parametrize("query", [f"q{x + 1}" for x in range(22)])
 @pytest.mark.skipif(is_jvm_spark(), reason="slow tests in JVM Spark")
-def test_derived_tpch_query_execution(spark, query):
-    # TODO: add tests for result parity
+def test_derived_tpch_query_execution(spark, duck, query):
     for sql in read_sql(query):
-        spark.sql(sql).toPandas()
+        if is_ddl(sql):
+            duck.sql(sql)
+            spark.sql(sql)
+            continue
+
+        duck_df = normalize(run_duck_query(duck, sql))
+        spark_df = normalize(to_pandas(spark.sql(sql)))
+        assert_frame_equal(
+            duck_df,
+            spark_df,
+            check_dtype=False,
+            check_exact=False,
+            rtol=1e-4,
+            atol=1e-8,
+            check_names=False,
+        )
 
 
 def read_sql(query):
-    path = Path(__file__).parent.parent.parent / "data" / "tpch" / "queries" / f"{query}.sql"
-    with open(path) as f:
-        text = f.read()
-    for sql in text.split(";"):
-        sql = sql.strip()  # noqa: PLW2901
-        sql = sql.replace("create view", "create temp view")  # noqa: PLW2901
-        if sql:
-            yield sql
-
-
-def is_ddl(sql):
-    return any(x in sql for x in ("create view", "create temp view", "drop view"))
+    base_dir = Path(__file__).parent.parent.parent / "data" / "tpch" / "queries"
+    yield from read_sql_queries(base_dir, query, replace_create_view=True)
