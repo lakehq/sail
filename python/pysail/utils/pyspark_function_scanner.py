@@ -46,21 +46,26 @@ class CallSiteLocator(ast.NodeVisitor):
     """
 
     def __init__(self):
-        self.locations: list[tuple[int, int]] = []
+        # Using a set to avoid duplicate coordinates
+        self.locations: set[tuple[int, int]] = set()
 
     def visit_Call(self, node: ast.Call) -> None:
         """
-        Identify the 'hotspot' of the function call to ask Jedi about.
+        Identify the 'hotspot' of the function call.
         """
         func = node.func
 
-        # Case 1: direct call like 'col(...)'
-        if isinstance(func, ast.Name):
-            self.locations.append((func.lineno, func.col_offset))
+        # 1. Prefer the end of the expression (works best for Attributes like `df.select`)
+        # Jedi usually prefers the cursor at the end of the method name.
+        # end_col_offset is exclusive, so we subtract 1 to land on the last char.
+        if getattr(func, "end_lineno", None) is not None and getattr(func, "end_col_offset", None) is not None:
+            self.locations.add((func.end_lineno, max(func.end_col_offset - 1, 0)))
 
-        # Case 2: attribute call like 'F.col(...)' or 'df.select(...)'
-        elif isinstance(func, ast.Attribute):
-            self.locations.append((func.end_lineno, func.end_col_offset - 1))
+        # 2. Fallback: Start of the expression
+        # Essential for ast.Name (e.g., `col(...)`) or older Python versions
+        # without end_lineno info.
+        elif hasattr(func, "lineno") and hasattr(func, "col_offset"):
+            self.locations.add((func.lineno, func.col_offset))
 
         self.generic_visit(node)
 
