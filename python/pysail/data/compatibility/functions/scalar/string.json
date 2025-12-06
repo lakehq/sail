@@ -1,0 +1,367 @@
+[
+  {
+    "module": "pyspark.sql.functions",
+    "function": "ascii",
+    "status": "supported"
+  },
+  {
+    "module": "pyspark.sql.functions",
+    "function": "base64",
+    "status": "supported"
+  },
+  {
+    "module": "pyspark.sql.functions",
+    "function": "bit_length",
+    "status": "supported"
+  },
+  {
+    "module": "pyspark.sql.functions",
+    "function": "btrim",
+    "status": "supported"
+  },
+  {
+    "module": "pyspark.sql.functions",
+    "function": "char",
+    "status": "supported"
+  },
+  {
+    "module": "pyspark.sql.functions",
+    "function": "char_length",
+    "status": "supported"
+  },
+  {
+    "module": "pyspark.sql.functions",
+    "function": "character_length",
+    "status": "supported"
+  },
+  {
+    "module": "pyspark.sql.functions",
+    "function": "chr",
+    "status": "supported"
+  },
+  {
+    "module": "pyspark.sql.functions",
+    "function": "concat_ws",
+    "status": "supported"
+  },
+  {
+    "module": "pyspark.sql.functions",
+    "function": "contains",
+    "status": "supported"
+  },
+  {
+    "module": "pyspark.sql.functions",
+    "function": "decode",
+    "status": "supported"
+  },
+  {
+    "module": "pyspark.sql.functions",
+    "function": "elt",
+    "status": "supported"
+  },
+  {
+    "module": "pyspark.sql.functions",
+    "function": "encode",
+    "status": "supported"
+  },
+  {
+    "module": "pyspark.sql.functions",
+    "function": "endswith",
+    "status": "supported"
+  },
+  {
+    "module": "pyspark.sql.functions",
+    "function": "find_in_set",
+    "status": "supported"
+  },
+  {
+    "module": "pyspark.sql.functions",
+    "function": "initcap",
+    "status": "supported"
+  },
+  {
+    "module": "pyspark.sql.functions",
+    "function": "instr",
+    "status": "supported"
+  },
+  {
+    "module": "pyspark.sql.functions",
+    "function": "is_valid_utf8",
+    "status": "supported"
+  },
+  {
+    "module": "pyspark.sql.functions",
+    "function": "lcase",
+    "status": "supported"
+  },
+  {
+    "module": "pyspark.sql.functions",
+    "function": "left",
+    "status": "supported"
+  },
+  {
+    "module": "pyspark.sql.functions",
+    "function": "len",
+    "status": "supported"
+  },
+  {
+    "module": "pyspark.sql.functions",
+    "function": "length",
+    "status": "supported"
+  },
+  {
+    "module": "pyspark.sql.functions",
+    "function": "levenshtein",
+    "status": "supported"
+  },
+  {
+    "module": "pyspark.sql.functions",
+    "function": "locate",
+    "status": "supported"
+  },
+  {
+    "module": "pyspark.sql.functions",
+    "function": "lower",
+    "status": "supported"
+  },
+  {
+    "module": "pyspark.sql.functions",
+    "function": "lpad",
+    "status": "supported"
+  },
+  {
+    "module": "pyspark.sql.functions",
+    "function": "ltrim",
+    "status": "supported"
+  },
+  {
+    "module": "pyspark.sql.functions",
+    "function": "luhn_check",
+    "status": "supported"
+  },
+  {
+    "module": "pyspark.sql.functions",
+    "function": "make_valid_utf8",
+    "status": "supported"
+  },
+  {
+    "module": "pyspark.sql.functions",
+    "function": "mask",
+    "status": "supported"
+  },
+  {
+    "module": "pyspark.sql.functions",
+    "function": "octet_length",
+    "status": "supported"
+  },
+  {
+    "module": "pyspark.sql.functions",
+    "function": "overlay",
+    "status": "supported"
+  },
+  {
+    "module": "pyspark.sql.functions",
+    "function": "position",
+    "status": "supported"
+  },
+  {
+    "module": "pyspark.sql.functions",
+    "function": "regexp_count",
+    "status": "supported"
+  },
+  {
+    "module": "pyspark.sql.functions",
+    "function": "regexp_instr",
+    "status": "supported"
+  },
+  {
+    "module": "pyspark.sql.functions",
+    "function": "regexp_replace",
+    "status": "supported"
+  },
+  {
+    "module": "pyspark.sql.functions",
+    "function": "repeat",
+    "status": "supported"
+  },
+  {
+    "module": "pyspark.sql.functions",
+    "function": "replace",
+    "status": "supported"
+  },
+  {
+    "module": "pyspark.sql.functions",
+    "function": "right",
+    "status": "supported"
+  },
+  {
+    "module": "pyspark.sql.functions",
+    "function": "rpad",
+    "status": "supported"
+  },
+  {
+    "module": "pyspark.sql.functions",
+    "function": "rtrim",
+    "status": "supported"
+  },
+  {
+    "module": "pyspark.sql.functions",
+    "function": "space",
+    "status": "supported"
+  },
+  {
+    "module": "pyspark.sql.functions",
+    "function": "split",
+    "status": "supported"
+  },
+  {
+    "module": "pyspark.sql.functions",
+    "function": "split_part",
+    "status": "supported"
+  },
+  {
+    "module": "pyspark.sql.functions",
+    "function": "startswith",
+    "status": "supported"
+  },
+  {
+    "module": "pyspark.sql.functions",
+    "function": "substr",
+    "status": "supported"
+  },
+  {
+    "module": "pyspark.sql.functions",
+    "function": "substring",
+    "status": "supported"
+  },
+  {
+    "module": "pyspark.sql.functions",
+    "function": "substring_index",
+    "status": "supported"
+  },
+  {
+    "module": "pyspark.sql.functions",
+    "function": "to_binary",
+    "status": "supported"
+  },
+  {
+    "module": "pyspark.sql.functions",
+    "function": "to_number",
+    "status": "supported"
+  },
+  {
+    "module": "pyspark.sql.functions",
+    "function": "translate",
+    "status": "supported"
+  },
+  {
+    "module": "pyspark.sql.functions",
+    "function": "trim",
+    "status": "supported"
+  },
+  {
+    "module": "pyspark.sql.functions",
+    "function": "try_to_binary",
+    "status": "supported"
+  },
+  {
+    "module": "pyspark.sql.functions",
+    "function": "try_to_number",
+    "status": "supported"
+  },
+  {
+    "module": "pyspark.sql.functions",
+    "function": "try_validate_utf8",
+    "status": "supported"
+  },
+  {
+    "module": "pyspark.sql.functions",
+    "function": "ucase",
+    "status": "supported"
+  },
+  {
+    "module": "pyspark.sql.functions",
+    "function": "unbase64",
+    "status": "supported"
+  },
+  {
+    "module": "pyspark.sql.functions",
+    "function": "upper",
+    "status": "supported"
+  },
+  {
+    "module": "pyspark.sql.functions",
+    "function": "validate_utf8",
+    "status": "supported"
+  },
+  {
+    "module": "pyspark.sql.functions",
+    "function": "strpos",
+    "status": "supported"
+  },
+  {
+    "module": "pyspark.sql.functions",
+    "function": "collate",
+    "status": "in progress"
+  },
+  {
+    "module": "pyspark.sql.functions",
+    "function": "collation",
+    "status": "in progress"
+  },
+  {
+    "module": "pyspark.sql.functions",
+    "function": "format_number",
+    "status": "in progress"
+  },
+  {
+    "module": "pyspark.sql.functions",
+    "function": "format_string",
+    "status": "in progress"
+  },
+  {
+    "module": "pyspark.sql.functions",
+    "function": "printf",
+    "status": "in progress"
+  },
+  {
+    "module": "pyspark.sql.functions",
+    "function": "randstr",
+    "status": "in progress"
+  },
+  {
+    "module": "pyspark.sql.functions",
+    "function": "regexp_extract",
+    "status": "in progress"
+  },
+  {
+    "module": "pyspark.sql.functions",
+    "function": "regexp_extract_all",
+    "status": "in progress"
+  },
+  {
+    "module": "pyspark.sql.functions",
+    "function": "regexp_substr",
+    "status": "in progress"
+  },
+  {
+    "module": "pyspark.sql.functions",
+    "function": "sentences",
+    "status": "in progress"
+  },
+  {
+    "module": "pyspark.sql.functions",
+    "function": "soundex",
+    "status": "in progress"
+  },
+  {
+    "module": "pyspark.sql.functions",
+    "function": "to_char",
+    "status": "in progress"
+  },
+  {
+    "module": "pyspark.sql.functions",
+    "function": "to_varchar",
+    "status": "in progress"
+  }
+]

@@ -1,0 +1,37 @@
+[
+  {
+    "module": "pyspark.sql.functions",
+    "function": "cardinality",
+    "status": "supported"
+  },
+  {
+    "module": "pyspark.sql.functions",
+    "function": "deep_size",
+    "status": "supported"
+  },
+  {
+    "module": "pyspark.sql.functions",
+    "function": "element_at",
+    "status": "supported"
+  },
+  {
+    "module": "pyspark.sql.functions",
+    "function": "size",
+    "status": "supported"
+  },
+  {
+    "module": "pyspark.sql.functions",
+    "function": "concat",
+    "status": "supported"
+  },
+  {
+    "module": "pyspark.sql.functions",
+    "function": "reverse",
+    "status": "supported"
+  },
+  {
+    "module": "pyspark.sql.functions",
+    "function": "try_element_at",
+    "status": "supported"
+  }
+]

@@ -1,0 +1,352 @@
+[
+  {
+    "module": "pyspark.sql.functions",
+    "function": "%",
+    "status": "supported",
+    "explanation": "remainder"
+  },
+  {
+    "module": "pyspark.sql.functions",
+    "function": "*",
+    "status": "supported",
+    "explanation": "multiplication"
+  },
+  {
+    "module": "pyspark.sql.functions",
+    "function": "+",
+    "status": "supported",
+    "explanation": "addition"
+  },
+  {
+    "module": "pyspark.sql.functions",
+    "function": "-",
+    "status": "supported",
+    "explanation": "substraction"
+  },
+  {
+    "module": "pyspark.sql.functions",
+    "function": "/",
+    "status": "supported",
+    "explanation": "devision"
+  },
+  {
+    "module": "pyspark.sql.functions",
+    "function": "abs",
+    "status": "supported"
+  },
+  {
+    "module": "pyspark.sql.functions",
+    "function": "acos",
+    "status": "supported"
+  },
+  {
+    "module": "pyspark.sql.functions",
+    "function": "acosh",
+    "status": "supported"
+  },
+  {
+    "module": "pyspark.sql.functions",
+    "function": "asin",
+    "status": "supported"
+  },
+  {
+    "module": "pyspark.sql.functions",
+    "function": "asinh",
+    "status": "supported"
+  },
+  {
+    "module": "pyspark.sql.functions",
+    "function": "atan",
+    "status": "supported"
+  },
+  {
+    "module": "pyspark.sql.functions",
+    "function": "atan2",
+    "status": "supported"
+  },
+  {
+    "module": "pyspark.sql.functions",
+    "function": "atanh",
+    "status": "supported"
+  },
+  {
+    "module": "pyspark.sql.functions",
+    "function": "bin",
+    "status": "supported"
+  },
+  {
+    "module": "pyspark.sql.functions",
+    "function": "bround",
+    "status": "supported"
+  },
+  {
+    "module": "pyspark.sql.functions",
+    "function": "cbrt",
+    "status": "supported"
+  },
+  {
+    "module": "pyspark.sql.functions",
+    "function": "ceil",
+    "status": "supported"
+  },
+  {
+    "module": "pyspark.sql.functions",
+    "function": "ceiling",
+    "status": "supported"
+  },
+  {
+    "module": "pyspark.sql.functions",
+    "function": "conv",
+    "status": "supported"
+  },
+  {
+    "module": "pyspark.sql.functions",
+    "function": "cos",
+    "status": "supported"
+  },
+  {
+    "module": "pyspark.sql.functions",
+    "function": "cosh",
+    "status": "supported"
+  },
+  {
+    "module": "pyspark.sql.functions",
+    "function": "cot",
+    "status": "supported"
+  },
+  {
+    "module": "pyspark.sql.functions",
+    "function": "csc",
+    "status": "supported"
+  },
+  {
+    "module": "pyspark.sql.functions",
+    "function": "degrees",
+    "status": "supported"
+  },
+  {
+    "module": "pyspark.sql.functions",
+    "function": "div",
+    "status": "supported"
+  },
+  {
+    "module": "pyspark.sql.functions",
+    "function": "e",
+    "status": "supported"
+  },
+  {
+    "module": "pyspark.sql.functions",
+    "function": "exp",
+    "status": "supported"
+  },
+  {
+    "module": "pyspark.sql.functions",
+    "function": "expm1",
+    "status": "supported"
+  },
+  {
+    "module": "pyspark.sql.functions",
+    "function": "factorial",
+    "status": "supported"
+  },
+  {
+    "module": "pyspark.sql.functions",
+    "function": "floor",
+    "status": "supported"
+  },
+  {
+    "module": "pyspark.sql.functions",
+    "function": "greatest",
+    "status": "supported"
+  },
+  {
+    "module": "pyspark.sql.functions",
+    "function": "hex",
+    "status": "supported"
+  },
+  {
+    "module": "pyspark.sql.functions",
+    "function": "hypot",
+    "status": "supported"
+  },
+  {
+    "module": "pyspark.sql.functions",
+    "function": "least",
+    "status": "supported"
+  },
+  {
+    "module": "pyspark.sql.functions",
+    "function": "ln",
+    "status": "supported"
+  },
+  {
+    "module": "pyspark.sql.functions",
+    "function": "log",
+    "status": "supported"
+  },
+  {
+    "module": "pyspark.sql.functions",
+    "function": "log10",
+    "status": "supported"
+  },
+  {
+    "module": "pyspark.sql.functions",
+    "function": "log1p",
+    "status": "supported"
+  },
+  {
+    "module": "pyspark.sql.functions",
+    "function": "log2",
+    "status": "supported"
+  },
+  {
+    "module": "pyspark.sql.functions",
+    "function": "mod",
+    "status": "supported"
+  },
+  {
+    "module": "pyspark.sql.functions",
+    "function": "negative",
+    "status": "supported"
+  },
+  {
+    "module": "pyspark.sql.functions",
+    "function": "pi",
+    "status": "supported"
+  },
+  {
+    "module": "pyspark.sql.functions",
+    "function": "pmod",
+    "status": "supported"
+  },
+  {
+    "module": "pyspark.sql.functions",
+    "function": "positive",
+    "status": "supported"
+  },
+  {
+    "module": "pyspark.sql.functions",
+    "function": "pow",
+    "status": "supported"
+  },
+  {
+    "module": "pyspark.sql.functions",
+    "function": "power",
+    "status": "supported"
+  },
+  {
+    "module": "pyspark.sql.functions",
+    "function": "radians",
+    "status": "supported"
+  },
+  {
+    "module": "pyspark.sql.functions",
+    "function": "rand",
+    "status": "supported"
+  },
+  {
+    "module": "pyspark.sql.functions",
+    "function": "random_poisson",
+    "status": "supported"
+  },
+  {
+    "module": "pyspark.sql.functions",
+    "function": "randn",
+    "status": "supported"
+  },
+  {
+    "module": "pyspark.sql.functions",
+    "function": "random",
+    "status": "supported"
+  },
+  {
+    "module": "pyspark.sql.functions",
+    "function": "rint",
+    "status": "supported"
+  },
+  {
+    "module": "pyspark.sql.functions",
+    "function": "round",
+    "status": "supported"
+  },
+  {
+    "module": "pyspark.sql.functions",
+    "function": "sec",
+    "status": "supported"
+  },
+  {
+    "module": "pyspark.sql.functions",
+    "function": "sign",
+    "status": "supported"
+  },
+  {
+    "module": "pyspark.sql.functions",
+    "function": "signum",
+    "status": "supported"
+  },
+  {
+    "module": "pyspark.sql.functions",
+    "function": "sin",
+    "status": "supported"
+  },
+  {
+    "module": "pyspark.sql.functions",
+    "function": "sinh",
+    "status": "supported"
+  },
+  {
+    "module": "pyspark.sql.functions",
+    "function": "sqrt",
+    "status": "supported"
+  },
+  {
+    "module": "pyspark.sql.functions",
+    "function": "tan",
+    "status": "supported"
+  },
+  {
+    "module": "pyspark.sql.functions",
+    "function": "tanh",
+    "status": "supported"
+  },
+  {
+    "module": "pyspark.sql.functions",
+    "function": "try_add",
+    "status": "supported"
+  },
+  {
+    "module": "pyspark.sql.functions",
+    "function": "try_divide",
+    "status": "supported"
+  },
+  {
+    "module": "pyspark.sql.functions",
+    "function": "try_multiply",
+    "status": "supported"
+  },
+  {
+    "module": "pyspark.sql.functions",
+    "function": "try_mod",
+    "status": "supported"
+  },
+  {
+    "module": "pyspark.sql.functions",
+    "function": "try_subtract",
+    "status": "supported"
+  },
+  {
+    "module": "pyspark.sql.functions",
+    "function": "unhex",
+    "status": "supported"
+  },
+  {
+    "module": "pyspark.sql.functions",
+    "function": "width_bucket",
+    "status": "supported"
+  },
+  {
+    "module": "pyspark.sql.functions",
+    "function": "uniform",
+    "status": "in progress"
+  }
+]

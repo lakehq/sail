@@ -1,0 +1,352 @@
+[
+  {
+    "module": "pyspark.sql.functions",
+    "function": "add_years",
+    "status": "supported"
+  },
+  {
+    "module": "pyspark.sql.functions",
+    "function": "add_months",
+    "status": "supported"
+  },
+  {
+    "module": "pyspark.sql.functions",
+    "function": "add_days",
+    "status": "supported"
+  },
+  {
+    "module": "pyspark.sql.functions",
+    "function": "convert_timezone",
+    "status": "supported"
+  },
+  {
+    "module": "pyspark.sql.functions",
+    "function": "curdate",
+    "status": "supported"
+  },
+  {
+    "module": "pyspark.sql.functions",
+    "function": "current_date",
+    "status": "supported"
+  },
+  {
+    "module": "pyspark.sql.functions",
+    "function": "current_timestamp",
+    "status": "supported"
+  },
+  {
+    "module": "pyspark.sql.functions",
+    "function": "current_timezone",
+    "status": "supported"
+  },
+  {
+    "module": "pyspark.sql.functions",
+    "function": "date_add",
+    "status": "supported"
+  },
+  {
+    "module": "pyspark.sql.functions",
+    "function": "date_diff",
+    "status": "supported"
+  },
+  {
+    "module": "pyspark.sql.functions",
+    "function": "date_format",
+    "status": "supported"
+  },
+  {
+    "module": "pyspark.sql.functions",
+    "function": "date_from_unix_date",
+    "status": "supported"
+  },
+  {
+    "module": "pyspark.sql.functions",
+    "function": "date_part",
+    "status": "supported"
+  },
+  {
+    "module": "pyspark.sql.functions",
+    "function": "date_sub",
+    "status": "supported"
+  },
+  {
+    "module": "pyspark.sql.functions",
+    "function": "date_trunc",
+    "status": "supported"
+  },
+  {
+    "module": "pyspark.sql.functions",
+    "function": "dateadd",
+    "status": "supported"
+  },
+  {
+    "module": "pyspark.sql.functions",
+    "function": "datediff",
+    "status": "supported"
+  },
+  {
+    "module": "pyspark.sql.functions",
+    "function": "datepart",
+    "status": "supported"
+  },
+  {
+    "module": "pyspark.sql.functions",
+    "function": "day",
+    "status": "supported"
+  },
+  {
+    "module": "pyspark.sql.functions",
+    "function": "dayname",
+    "status": "supported"
+  },
+  {
+    "module": "pyspark.sql.functions",
+    "function": "dayofmonth",
+    "status": "supported"
+  },
+  {
+    "module": "pyspark.sql.functions",
+    "function": "dayofweek",
+    "status": "supported"
+  },
+  {
+    "module": "pyspark.sql.functions",
+    "function": "dayofyear",
+    "status": "supported"
+  },
+  {
+    "module": "pyspark.sql.functions",
+    "function": "extract",
+    "status": "supported"
+  },
+  {
+    "module": "pyspark.sql.functions",
+    "function": "from_unixtime",
+    "status": "supported"
+  },
+  {
+    "module": "pyspark.sql.functions",
+    "function": "from_utc_timestamp",
+    "status": "supported"
+  },
+  {
+    "module": "pyspark.sql.functions",
+    "function": "hour",
+    "status": "supported"
+  },
+  {
+    "module": "pyspark.sql.functions",
+    "function": "last_day",
+    "status": "supported"
+  },
+  {
+    "module": "pyspark.sql.functions",
+    "function": "localtimestamp",
+    "status": "supported"
+  },
+  {
+    "module": "pyspark.sql.functions",
+    "function": "make_date",
+    "status": "supported"
+  },
+  {
+    "module": "pyspark.sql.functions",
+    "function": "make_dt_interval",
+    "status": "supported"
+  },
+  {
+    "module": "pyspark.sql.functions",
+    "function": "make_interval",
+    "status": "supported"
+  },
+  {
+    "module": "pyspark.sql.functions",
+    "function": "make_timestamp",
+    "status": "supported"
+  },
+  {
+    "module": "pyspark.sql.functions",
+    "function": "make_timestamp_ltz",
+    "status": "supported"
+  },
+  {
+    "module": "pyspark.sql.functions",
+    "function": "make_timestamp_ntz",
+    "status": "supported"
+  },
+  {
+    "module": "pyspark.sql.functions",
+    "function": "make_ym_interval",
+    "status": "supported"
+  },
+  {
+    "module": "pyspark.sql.functions",
+    "function": "minute",
+    "status": "supported"
+  },
+  {
+    "module": "pyspark.sql.functions",
+    "function": "month",
+    "status": "supported"
+  },
+  {
+    "module": "pyspark.sql.functions",
+    "function": "monthname",
+    "status": "supported"
+  },
+  {
+    "module": "pyspark.sql.functions",
+    "function": "months_between",
+    "status": "supported"
+  },
+  {
+    "module": "pyspark.sql.functions",
+    "function": "next_day",
+    "status": "supported"
+  },
+  {
+    "module": "pyspark.sql.functions",
+    "function": "now",
+    "status": "supported"
+  },
+  {
+    "module": "pyspark.sql.functions",
+    "function": "quarter",
+    "status": "supported"
+  },
+  {
+    "module": "pyspark.sql.functions",
+    "function": "second",
+    "status": "supported"
+  },
+  {
+    "module": "pyspark.sql.functions",
+    "function": "timestamp_micros",
+    "status": "supported"
+  },
+  {
+    "module": "pyspark.sql.functions",
+    "function": "timestamp_millis",
+    "status": "supported"
+  },
+  {
+    "module": "pyspark.sql.functions",
+    "function": "timestamp_seconds",
+    "status": "supported"
+  },
+  {
+    "module": "pyspark.sql.functions",
+    "function": "to_date",
+    "status": "supported"
+  },
+  {
+    "module": "pyspark.sql.functions",
+    "function": "to_timestamp",
+    "status": "supported"
+  },
+  {
+    "module": "pyspark.sql.functions",
+    "function": "to_timestamp_ltz",
+    "status": "supported"
+  },
+  {
+    "module": "pyspark.sql.functions",
+    "function": "to_timestamp_ntz",
+    "status": "supported"
+  },
+  {
+    "module": "pyspark.sql.functions",
+    "function": "to_unix_timestamp",
+    "status": "supported"
+  },
+  {
+    "module": "pyspark.sql.functions",
+    "function": "to_utc_timestamp",
+    "status": "supported"
+  },
+  {
+    "module": "pyspark.sql.functions",
+    "function": "trunc",
+    "status": "supported"
+  },
+  {
+    "module": "pyspark.sql.functions",
+    "function": "try_to_timestamp",
+    "status": "supported"
+  },
+  {
+    "module": "pyspark.sql.functions",
+    "function": "unix_date",
+    "status": "supported"
+  },
+  {
+    "module": "pyspark.sql.functions",
+    "function": "unix_micros",
+    "status": "supported"
+  },
+  {
+    "module": "pyspark.sql.functions",
+    "function": "unix_millis",
+    "status": "supported"
+  },
+  {
+    "module": "pyspark.sql.functions",
+    "function": "unix_seconds",
+    "status": "supported"
+  },
+  {
+    "module": "pyspark.sql.functions",
+    "function": "unix_timestamp",
+    "status": "supported"
+  },
+  {
+    "module": "pyspark.sql.functions",
+    "function": "weekday",
+    "status": "supported"
+  },
+  {
+    "module": "pyspark.sql.functions",
+    "function": "weekofyear",
+    "status": "supported"
+  },
+  {
+    "module": "pyspark.sql.functions",
+    "function": "year",
+    "status": "supported"
+  },
+  {
+    "module": "pyspark.sql.functions",
+    "function": "session_window",
+    "status": "in progress"
+  },
+  {
+    "module": "pyspark.sql.functions",
+    "function": "try_make_interval",
+    "status": "in progress"
+  },
+  {
+    "module": "pyspark.sql.functions",
+    "function": "try_make_timestamp",
+    "status": "in progress"
+  },
+  {
+    "module": "pyspark.sql.functions",
+    "function": "try_make_timestamp_ltz",
+    "status": "in progress"
+  },
+  {
+    "module": "pyspark.sql.functions",
+    "function": "try_make_timestamp_ntz",
+    "status": "in progress"
+  },
+  {
+    "module": "pyspark.sql.functions",
+    "function": "window",
+    "status": "in progress"
+  },
+  {
+    "module": "pyspark.sql.functions",
+    "function": "window_time",
+    "status": "in progress"
+  }
+]

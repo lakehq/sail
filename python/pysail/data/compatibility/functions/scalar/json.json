@@ -1,0 +1,37 @@
+[
+  {
+    "module": "pyspark.sql.functions",
+    "function": "get_json_object",
+    "status": "supported"
+  },
+  {
+    "module": "pyspark.sql.functions",
+    "function": "json_array_length",
+    "status": "supported"
+  },
+  {
+    "module": "pyspark.sql.functions",
+    "function": "json_object_keys",
+    "status": "supported"
+  },
+  {
+    "module": "pyspark.sql.functions",
+    "function": "from_json",
+    "status": "in progress"
+  },
+  {
+    "module": "pyspark.sql.functions",
+    "function": "json_tuple",
+    "status": "in progress"
+  },
+  {
+    "module": "pyspark.sql.functions",
+    "function": "schema_of_json",
+    "status": "in progress"
+  },
+  {
+    "module": "pyspark.sql.functions",
+    "function": "to_json",
+    "status": "in progress"
+  }
+]

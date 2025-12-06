@@ -1,0 +1,332 @@
+[
+  {
+    "module": "pyspark.sql.functions",
+    "function": "any",
+    "status": "supported"
+  },
+  {
+    "module": "pyspark.sql.functions",
+    "function": "any_value",
+    "status": "supported"
+  },
+  {
+    "module": "pyspark.sql.functions",
+    "function": "approx_count_distinct",
+    "status": "supported"
+  },
+  {
+    "module": "pyspark.sql.functions",
+    "function": "approx_percentile",
+    "status": "supported"
+  },
+  {
+    "module": "pyspark.sql.functions",
+    "function": "array_agg",
+    "status": "supported"
+  },
+  {
+    "module": "pyspark.sql.functions",
+    "function": "avg",
+    "status": "supported"
+  },
+  {
+    "module": "pyspark.sql.functions",
+    "function": "bit_and",
+    "status": "supported"
+  },
+  {
+    "module": "pyspark.sql.functions",
+    "function": "bit_or",
+    "status": "supported"
+  },
+  {
+    "module": "pyspark.sql.functions",
+    "function": "bit_xor",
+    "status": "supported"
+  },
+  {
+    "module": "pyspark.sql.functions",
+    "function": "bool_and",
+    "status": "supported"
+  },
+  {
+    "module": "pyspark.sql.functions",
+    "function": "bool_or",
+    "status": "supported"
+  },
+  {
+    "module": "pyspark.sql.functions",
+    "function": "collect_list",
+    "status": "supported"
+  },
+  {
+    "module": "pyspark.sql.functions",
+    "function": "collect_set",
+    "status": "supported"
+  },
+  {
+    "module": "pyspark.sql.functions",
+    "function": "corr",
+    "status": "supported"
+  },
+  {
+    "module": "pyspark.sql.functions",
+    "function": "count",
+    "status": "supported"
+  },
+  {
+    "module": "pyspark.sql.functions",
+    "function": "count_if",
+    "status": "supported"
+  },
+  {
+    "module": "pyspark.sql.functions",
+    "function": "covar_pop",
+    "status": "supported"
+  },
+  {
+    "module": "pyspark.sql.functions",
+    "function": "covar_samp",
+    "status": "supported"
+  },
+  {
+    "module": "pyspark.sql.functions",
+    "function": "every",
+    "status": "supported"
+  },
+  {
+    "module": "pyspark.sql.functions",
+    "function": "first",
+    "status": "supported"
+  },
+  {
+    "module": "pyspark.sql.functions",
+    "function": "first_value",
+    "status": "supported"
+  },
+  {
+    "module": "pyspark.sql.functions",
+    "function": "grouping",
+    "status": "supported"
+  },
+  {
+    "module": "pyspark.sql.functions",
+    "function": "kurtosis",
+    "status": "supported"
+  },
+  {
+    "module": "pyspark.sql.functions",
+    "function": "last",
+    "status": "supported"
+  },
+  {
+    "module": "pyspark.sql.functions",
+    "function": "last_value",
+    "status": "supported"
+  },
+  {
+    "module": "pyspark.sql.functions",
+    "function": "listagg",
+    "status": "supported"
+  },
+  {
+    "module": "pyspark.sql.functions",
+    "function": "max",
+    "status": "supported"
+  },
+  {
+    "module": "pyspark.sql.functions",
+    "function": "max_by",
+    "status": "supported"
+  },
+  {
+    "module": "pyspark.sql.functions",
+    "function": "mean",
+    "status": "supported"
+  },
+  {
+    "module": "pyspark.sql.functions",
+    "function": "median",
+    "status": "supported"
+  },
+  {
+    "module": "pyspark.sql.functions",
+    "function": "min",
+    "status": "supported"
+  },
+  {
+    "module": "pyspark.sql.functions",
+    "function": "min_by",
+    "status": "supported"
+  },
+  {
+    "module": "pyspark.sql.functions",
+    "function": "mode",
+    "status": "supported"
+  },
+  {
+    "module": "pyspark.sql.functions",
+    "function": "percentile_approx",
+    "status": "supported"
+  },
+  {
+    "module": "pyspark.sql.functions",
+    "function": "regr_avgx",
+    "status": "supported"
+  },
+  {
+    "module": "pyspark.sql.functions",
+    "function": "regr_avgy",
+    "status": "supported"
+  },
+  {
+    "module": "pyspark.sql.functions",
+    "function": "regr_count",
+    "status": "supported"
+  },
+  {
+    "module": "pyspark.sql.functions",
+    "function": "regr_intercept",
+    "status": "supported"
+  },
+  {
+    "module": "pyspark.sql.functions",
+    "function": "regr_r2",
+    "status": "supported"
+  },
+  {
+    "module": "pyspark.sql.functions",
+    "function": "regr_slope",
+    "status": "supported"
+  },
+  {
+    "module": "pyspark.sql.functions",
+    "function": "regr_sxx",
+    "status": "supported"
+  },
+  {
+    "module": "pyspark.sql.functions",
+    "function": "regr_sxy",
+    "status": "supported"
+  },
+  {
+    "module": "pyspark.sql.functions",
+    "function": "regr_syy",
+    "status": "supported"
+  },
+  {
+    "module": "pyspark.sql.functions",
+    "function": "skewness",
+    "status": "supported"
+  },
+  {
+    "module": "pyspark.sql.functions",
+    "function": "some",
+    "status": "supported"
+  },
+  {
+    "module": "pyspark.sql.functions",
+    "function": "std",
+    "status": "supported"
+  },
+  {
+    "module": "pyspark.sql.functions",
+    "function": "stddev",
+    "status": "supported"
+  },
+  {
+    "module": "pyspark.sql.functions",
+    "function": "stddev_pop",
+    "status": "supported"
+  },
+  {
+    "module": "pyspark.sql.functions",
+    "function": "stddev_samp",
+    "status": "supported"
+  },
+  {
+    "module": "pyspark.sql.functions",
+    "function": "string_agg",
+    "status": "supported"
+  },
+  {
+    "module": "pyspark.sql.functions",
+    "function": "sum",
+    "status": "supported"
+  },
+  {
+    "module": "pyspark.sql.functions",
+    "function": "try_avg",
+    "status": "supported"
+  },
+  {
+    "module": "pyspark.sql.functions",
+    "function": "try_sum",
+    "status": "supported"
+  },
+  {
+    "module": "pyspark.sql.functions",
+    "function": "var_pop",
+    "status": "supported"
+  },
+  {
+    "module": "pyspark.sql.functions",
+    "function": "var_samp",
+    "status": "supported"
+  },
+  {
+    "module": "pyspark.sql.functions",
+    "function": "variance",
+    "status": "supported"
+  },
+  {
+    "module": "pyspark.sql.functions",
+    "function": "bitmap_construct_agg",
+    "status": "in progress"
+  },
+  {
+    "module": "pyspark.sql.functions",
+    "function": "bitmap_or_agg",
+    "status": "in progress"
+  },
+  {
+    "module": "pyspark.sql.functions",
+    "function": "count_min_sketch",
+    "status": "in progress"
+  },
+  {
+    "module": "pyspark.sql.functions",
+    "function": "grouping_id",
+    "status": "in progress"
+  },
+  {
+    "module": "pyspark.sql.functions",
+    "function": "histogram_numeric",
+    "status": "in progress"
+  },
+  {
+    "module": "pyspark.sql.functions",
+    "function": "hll_sketch_agg",
+    "status": "in progress"
+  },
+  {
+    "module": "pyspark.sql.functions",
+    "function": "hll_union_agg",
+    "status": "in progress"
+  },
+  {
+    "module": "pyspark.sql.functions",
+    "function": "percentile",
+    "status": "in progress"
+  },
+  {
+    "module": "pyspark.sql.functions",
+    "function": "percentile_cont",
+    "status": "in progress"
+  },
+  {
+    "module": "pyspark.sql.functions",
+    "function": "percentile_disc",
+    "status": "in progress"
+  }
+]

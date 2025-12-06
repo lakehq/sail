@@ -1,0 +1,12 @@
+[
+  {
+    "module": "pyspark.sql.functions",
+    "function": "named_struct",
+    "status": "supported"
+  },
+  {
+    "module": "pyspark.sql.functions",
+    "function": "struct",
+    "status": "supported"
+  }
+]
