@@ -29,6 +29,7 @@
 +------+
 |    18|
 +------+
+
 >>> spark.sql("SELECT uniform(10, 20, 0) AS result").printSchema()
 root
  |-- result: integer (nullable = false)
