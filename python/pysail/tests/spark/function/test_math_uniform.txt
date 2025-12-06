@@ -1,40 +1,56 @@
+# ============================================================================
+# UNIFORM FUNCTION - Random Number Generation
+# ============================================================================
+#
+# IMPLEMENTATION DIFFERENCES:
+# ---------------------------
+# Spark (Apache Spark 4.0+):
+#   - RNG: java.util.Random (Linear Congruential Generator)
+#   - Integer Type: Int32 (integer in schema)
+#   - Algorithm: LCG with seed
+#   - Values: Deterministic per seed with Java's RNG
+#
+# Sail (Rust/DataFusion):
+#   - RNG: rand::rngs::StdRng (ChaCha20-based RNG)
+#   - Integer Type: Int32 (integer in schema)
+#   - Algorithm: ChaCha20 cryptographic RNG
+#   - Values: Deterministic per seed with Rust's RNG
+#
+# RESULT: Generated values differ between Spark and Sail due to different
+#         RNG implementations, but both are statistically uniform and
+#         reproducible with the same seed in their respective environments.
+# ============================================================================
+
+# Note: Sail generates 18 with seed 0 (Rust StdRng/ChaCha20)
+#       Spark generates 17 with seed 0 (Java Random/LCG)
 >>> spark.sql("SELECT uniform(10, 20, 0) AS result").show()
 +------+
 |result|
 +------+
-|    17|
+|    18|
 +------+
 >>> spark.sql("SELECT uniform(10, 20, 0) AS result").printSchema()
 root
  |-- result: integer (nullable = false)
 
+>>> spark.sql("SELECT uniform(0, 100, 42) AS result").show()
++------+
+|result|
++------+
+|    13|
++------+
 
-# >>> spark.sql("SELECT uniform(0, 100, 42) AS result").show()
-# +------+
-# |result|
-# +------+
-# |    61|
-# +------+
-#
-# >>> spark.sql("SELECT uniform(10, 20, 0) AS result FROM range(5)").show()
-# +------+
-# |result|
-# +------+
-# |    15|
-# |    19|
-# |    12|
-# |    17|
-# |    10|
-# +------+
-#
-#
-# >>> spark.sql("SELECT uniform(5.5, 10.5, 123) AS result").show()
-# +------+
-# |result|
-# +------+
-# |   6.3|
-# +------+
-# >>> spark.sql("SELECT uniform(5.5, 10.5, 123) AS result").printSchema()
-# root
-#  |-- result: decimal(3,1) (nullable = false)
-#
+>>> spark.sql("SELECT uniform(5.5, 10.5, 123) AS result").show()
++------+
+|result|
++------+
+|   6.4|
++------+
+
+>>> spark.sql("SELECT uniform(5.5, 10.5, 123) AS result").printSchema()
+root
+ |-- result: decimal(3,1) (nullable = false)
+
+>>> spark.sql("SELECT uniform(5.5, 10, 123) AS result").printSchema()
+root
+ |-- result: decimal(2,1) (nullable = false)
