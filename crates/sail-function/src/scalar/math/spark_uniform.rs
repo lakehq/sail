@@ -13,13 +13,47 @@ use crate::error::{generic_exec_err, invalid_arg_count_exec_err, unsupported_dat
 /// The `Uniform` function generates random numbers from a uniform distribution
 /// between a specified minimum and maximum value.
 ///
-/// Syntax: `uniform(min, max, seed)`
+/// # Syntax
+/// `uniform(min, max, seed)`
 /// - min: minimum value of the range (inclusive)
 /// - max: maximum value of the range (exclusive)
 /// - seed: optional random seed for reproducibility
 ///
-/// This function is similar to Spark's `uniform` function.
-/// <https://spark.apache.org/docs/latest/api/python/reference/pyspark.sql/api/pyspark.sql.functions.uniform.html>
+/// # Implementation Notes
+///
+/// This implementation follows Apache Spark's `uniform` function API but uses
+/// different random number generation algorithms.
+///
+/// **Spark (Java/Scala)**:
+/// - RNG: `java.util.Random` (Linear Congruential Generator)
+/// - Algorithm: LCG with 48-bit seed
+/// - Integer type: Int32
+/// - Implementation: Uses `XORShiftRandom` wrapper around `java.util.Random`
+/// - Source: See `randomExpressions.scala` in Spark's Catalyst module
+///
+/// **Sail (Rust)**:
+/// - RNG: `rand::rngs::StdRng` (ChaCha20-based cryptographic RNG)
+/// - Algorithm: ChaCha20 stream cipher (20 rounds)
+/// - Integer type: Int32
+/// - Implementation: Uses `rand` crate's standard RNG
+/// - Source: <https://docs.rs/rand/latest/rand/>
+///
+/// **Why Different RNGs?**
+/// - Spark uses `java.util.Random` for JVM ecosystem compatibility
+/// - Sail uses `StdRng` for better cryptographic properties and Rust ecosystem standards
+/// - Both produce statistically uniform distributions
+/// - Both are deterministic (reproducible with same seed in their respective environments)
+/// - Cross-platform reproducibility (Spark ↔ Sail) is **not guaranteed**
+///
+/// Due to different RNG implementations, the same seed produces different
+/// sequences in Spark vs Sail, but both produce statistically uniform
+/// distributions and are deterministic within their respective environments.
+///
+/// # References
+/// - Spark Python API: <https://spark.apache.org/docs/latest/api/python/reference/pyspark.sql/api/pyspark.sql.functions.uniform.html>
+/// - Spark Scala source: <https://github.com/apache/spark/blob/master/sql/catalyst/src/main/scala/org/apache/spark/sql/catalyst/expressions/randomExpressions.scala>
+/// - Rust rand crate: <https://docs.rs/rand/latest/rand/rngs/struct.StdRng.html>
+/// - ChaCha20 algorithm: <https://docs.rs/rand_chacha/latest/rand_chacha/>
 #[derive(Debug, PartialEq, Eq, Hash)]
 pub struct SparkUniform {
     signature: Signature,
@@ -146,7 +180,10 @@ impl ScalarUDFImpl for SparkUniform {
                 let array = Float64Array::from(values);
                 Ok(ColumnarValue::Array(Arc::new(array)))
             }
-            (ScalarValue::Decimal128(Some(min_val), p1, s1), ScalarValue::Decimal128(Some(max_val), p2, s2)) => {
+            (
+                ScalarValue::Decimal128(Some(min_val), p1, s1),
+                ScalarValue::Decimal128(Some(max_val), p2, s2),
+            ) => {
                 // Convert Decimal128 to f64 for generation
                 let min_f64 = *min_val as f64 / 10_f64.powi(*s1 as i32);
                 let max_f64 = *max_val as f64 / 10_f64.powi(*s2 as i32);
@@ -420,7 +457,9 @@ mod tests {
     fn test_uniform_return_type_integer() {
         let uniform_fn = SparkUniform::new();
         let arg_types = vec![DataType::Int64, DataType::Int64, DataType::Int64];
-        let return_type = uniform_fn.return_type(&arg_types).expect("return_type failed");
+        let return_type = uniform_fn
+            .return_type(&arg_types)
+            .expect("return_type failed");
         assert_eq!(
             return_type,
             DataType::Int32,
@@ -433,7 +472,9 @@ mod tests {
     fn test_uniform_return_type_int32() {
         let uniform_fn = SparkUniform::new();
         let arg_types = vec![DataType::Int32, DataType::Int32, DataType::Int64];
-        let return_type = uniform_fn.return_type(&arg_types).expect("return_type failed");
+        let return_type = uniform_fn
+            .return_type(&arg_types)
+            .expect("return_type failed");
         assert_eq!(
             return_type,
             DataType::Int32,
@@ -446,7 +487,9 @@ mod tests {
     fn test_uniform_return_type_float() {
         let uniform_fn = SparkUniform::new();
         let arg_types = vec![DataType::Float64, DataType::Float64, DataType::Int64];
-        let return_type = uniform_fn.return_type(&arg_types).expect("return_type failed");
+        let return_type = uniform_fn
+            .return_type(&arg_types)
+            .expect("return_type failed");
         assert_eq!(
             return_type,
             DataType::Float64,
@@ -459,7 +502,9 @@ mod tests {
     fn test_uniform_return_type_mixed() {
         let uniform_fn = SparkUniform::new();
         let arg_types = vec![DataType::Int64, DataType::Float64, DataType::Int64];
-        let return_type = uniform_fn.return_type(&arg_types).expect("return_type failed");
+        let return_type = uniform_fn
+            .return_type(&arg_types)
+            .expect("return_type failed");
         assert_eq!(
             return_type,
             DataType::Float64,
@@ -472,7 +517,9 @@ mod tests {
     fn test_uniform_coerce_types_integer() {
         let uniform_fn = SparkUniform::new();
         let arg_types = vec![DataType::Int32, DataType::Int32, DataType::Int64];
-        let coerced = uniform_fn.coerce_types(&arg_types).expect("coerce_types failed");
+        let coerced = uniform_fn
+            .coerce_types(&arg_types)
+            .expect("coerce_types failed");
         assert_eq!(
             coerced,
             vec![DataType::Int32, DataType::Int32, DataType::Int64],
@@ -485,7 +532,9 @@ mod tests {
     fn test_uniform_coerce_types_float() {
         let uniform_fn = SparkUniform::new();
         let arg_types = vec![DataType::Float32, DataType::Float32, DataType::Int64];
-        let coerced = uniform_fn.coerce_types(&arg_types).expect("coerce_types failed");
+        let coerced = uniform_fn
+            .coerce_types(&arg_types)
+            .expect("coerce_types failed");
         assert_eq!(
             coerced,
             vec![DataType::Float64, DataType::Float64, DataType::Int64],
@@ -503,7 +552,9 @@ mod tests {
             DataType::Decimal128(3, 1),
             DataType::Int64,
         ];
-        let return_type = uniform_fn.return_type(&arg_types).expect("return_type failed");
+        let return_type = uniform_fn
+            .return_type(&arg_types)
+            .expect("return_type failed");
         assert_eq!(
             return_type,
             DataType::Decimal128(3, 1),
@@ -520,7 +571,9 @@ mod tests {
             DataType::Decimal128(3, 1),
             DataType::Int64,
         ];
-        let coerced = uniform_fn.coerce_types(&arg_types).expect("coerce_types failed");
+        let coerced = uniform_fn
+            .coerce_types(&arg_types)
+            .expect("coerce_types failed");
         assert_eq!(
             coerced,
             vec![
@@ -542,7 +595,9 @@ mod tests {
             DataType::Decimal128(3, 1),
             DataType::Int64,
         ];
-        let return_type = uniform_fn.return_type(&arg_types).expect("return_type failed");
+        let return_type = uniform_fn
+            .return_type(&arg_types)
+            .expect("return_type failed");
         assert_eq!(
             return_type,
             DataType::Decimal128(3, 1),
