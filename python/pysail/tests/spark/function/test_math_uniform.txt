@@ -30,10 +30,6 @@
 |    18|
 +------+
 
->>> spark.sql("SELECT uniform(10, 20, 0) AS result").printSchema()
-root
- |-- result: integer (nullable = false)
-
 >>> spark.sql("SELECT uniform(0, 100, 42) AS result").show()
 +------+
 |result|
@@ -55,3 +51,7 @@ root
 >>> spark.sql("SELECT uniform(5.5, 10, 123) AS result").printSchema()
 root
  |-- result: decimal(2,1) (nullable = false)
+
+>>> spark.sql("SELECT uniform(10, 20, 0) AS result").printSchema()
+root
+ |-- result: integer (nullable = false)
