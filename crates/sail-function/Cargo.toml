@@ -23,6 +23,7 @@ regex = { workspace = true }
 rand = { workspace = true }
 rand_chacha = { workspace = true }
 rand_distr = { workspace = true }
+ordered-float = { workspace = true }
 lazy_static = { workspace = true }
 twox-hash = { workspace = true }
 aes = { workspace = true }

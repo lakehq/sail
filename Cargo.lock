@@ -5991,6 +5991,7 @@ dependencies = [
  "half",
  "lazy_static",
  "num",
+ "ordered-float 5.1.0",
  "percent-encoding",
  "rand 0.9.2",
  "rand_chacha 0.9.0",

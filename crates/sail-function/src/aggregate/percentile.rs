@@ -1,4 +1,5 @@
 use std::any::Any;
+use std::collections::HashMap;
 use std::fmt::Debug;
 use std::sync::Arc;
 
@@ -12,6 +13,7 @@ use datafusion::logical_expr::function::{AccumulatorArgs, StateFieldsArgs};
 use datafusion::logical_expr::{Accumulator, AggregateUDFImpl, Signature, Volatility};
 use datafusion::physical_expr::PhysicalExpr;
 use datafusion_common::DataFusionError;
+use ordered_float::OrderedFloat;
 
 use crate::aggregate::util::percentile::{extract_literal, return_type, state_fields};
 
@@ -106,16 +108,24 @@ impl AggregateUDFImpl for PercentileFunction {
     }
 }
 
+/// Accumulator for numeric types (with linear interpolation)
+///
+/// Optimization: Uses HashMap to track value counts for O(1) retract operations
+/// instead of O(n) removal from Vec.
 #[derive(Debug)]
 pub struct NumericPercentileAccumulator {
-    values: Vec<f64>,
+    /// Map from value to count (how many times it appears)
+    value_counts: HashMap<OrderedFloat<f64>, usize>,
+    /// Total number of values (sum of all counts)
+    total_count: usize,
     percentile: f64,
 }
 
 impl NumericPercentileAccumulator {
     pub fn new(percentile: f64) -> Self {
         Self {
-            values: Vec::new(),
+            value_counts: HashMap::new(),
+            total_count: 0,
             percentile,
         }
     }
@@ -145,6 +155,21 @@ impl NumericPercentileAccumulator {
             Some(lower_val + fraction * (upper_val - lower_val))
         }
     }
+
+    /// Convert HashMap to sorted Vec for percentile calculation
+    fn get_sorted_values(&self) -> Vec<f64> {
+        let mut values = Vec::with_capacity(self.total_count);
+
+        for (ordered_val, &count) in &self.value_counts {
+            let val = ordered_val.into_inner();
+            for _ in 0..count {
+                values.push(val);
+            }
+        }
+
+        values.sort_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal));
+        values
+    }
 }
 
 impl Accumulator for NumericPercentileAccumulator {
@@ -159,19 +184,20 @@ impl Accumulator for NumericPercentileAccumulator {
         let float_array = as_float64_array(&float_array)?;
 
         for value in float_array.iter().flatten() {
-            self.values.push(value);
+            let ordered_val = OrderedFloat(value);
+            *self.value_counts.entry(ordered_val).or_insert(0) += 1;
+            self.total_count += 1;
         }
 
         Ok(())
     }
 
     fn evaluate(&mut self) -> Result<ScalarValue> {
-        if self.values.is_empty() {
+        if self.total_count == 0 {
             return Ok(ScalarValue::Float64(None));
         }
 
-        let mut sorted_values = self.values.clone();
-        sorted_values.sort_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal));
+        let sorted_values = self.get_sorted_values();
 
         match self.calculate_percentile(&sorted_values, self.percentile) {
             Some(result) => Ok(ScalarValue::Float64(Some(result))),
@@ -180,15 +206,17 @@ impl Accumulator for NumericPercentileAccumulator {
     }
 
     fn size(&self) -> usize {
-        std::mem::size_of_val(&self.values)
-            + self.values.capacity() * std::mem::size_of::<f64>()
+        std::mem::size_of_val(&self.value_counts)
+            + self.value_counts.capacity() * std::mem::size_of::<(OrderedFloat<f64>, usize)>()
+            + std::mem::size_of::<usize>()
             + std::mem::size_of::<f64>()
     }
 
     fn state(&mut self) -> Result<Vec<ScalarValue>> {
+        let sorted_values = self.get_sorted_values();
+
         let values_scalar = ScalarValue::new_list_nullable(
-            &self
-                .values
+            &sorted_values
                 .iter()
                 .map(|&v| ScalarValue::Float64(Some(v)))
                 .collect::<Vec<_>>(),
@@ -212,7 +240,9 @@ impl Accumulator for NumericPercentileAccumulator {
                     let float_array = as_float64_array(&value_array)?;
 
                     for value in float_array.iter().flatten() {
-                        self.values.push(value);
+                        let ordered_val = OrderedFloat(value);
+                        *self.value_counts.entry(ordered_val).or_insert(0) += 1;
+                        self.total_count += 1;
                     }
                 }
             }
@@ -230,23 +260,35 @@ impl Accumulator for NumericPercentileAccumulator {
         let float_array = arrow::compute::cast(array, &DataType::Float64)?;
         let float_array = as_float64_array(&float_array)?;
 
+        // O(1) removal using HashMap
         for v in float_array.iter().flatten() {
-            if let Some(pos) = self.values.iter().position(|x| *x == v) {
-                self.values.remove(pos);
+            let ordered_val = OrderedFloat(v);
+            if let Some(count) = self.value_counts.get_mut(&ordered_val) {
+                *count -= 1;
+                self.total_count -= 1;
+
+                // Remove entry if count reaches 0
+                if *count == 0 {
+                    self.value_counts.remove(&ordered_val);
+                }
             }
         }
 
         Ok(())
     }
+
     fn supports_retract_batch(&self) -> bool {
         true
     }
 }
 
 /// Accumulator for string types (returns the value at the percentile position)
+///
+/// Optimization: Uses HashMap to track string counts for O(1) retract operations
 #[derive(Debug)]
 pub struct StringPercentileAccumulator {
-    values: Vec<String>,
+    value_counts: HashMap<String, usize>,
+    total_count: usize,
     percentile: f64,
     data_type: DataType,
 }
@@ -254,7 +296,8 @@ pub struct StringPercentileAccumulator {
 impl StringPercentileAccumulator {
     pub fn new(percentile: f64, data_type: DataType) -> Self {
         Self {
-            values: Vec::new(),
+            value_counts: HashMap::new(),
+            total_count: 0,
             percentile,
             data_type,
         }
@@ -279,6 +322,20 @@ impl StringPercentileAccumulator {
 
         Some(sorted_values[idx].clone())
     }
+
+    /// Convert HashMap to sorted Vec
+    fn get_sorted_values(&self) -> Vec<String> {
+        let mut values = Vec::with_capacity(self.total_count);
+
+        for (val, &count) in &self.value_counts {
+            for _ in 0..count {
+                values.push(val.clone());
+            }
+        }
+
+        values.sort();
+        values
+    }
 }
 
 impl Accumulator for StringPercentileAccumulator {
@@ -294,20 +351,20 @@ impl Accumulator for StringPercentileAccumulator {
         let string_array = as_string_array(&string_array)?;
 
         for value in string_array.iter().flatten() {
-            self.values.push(value.to_string());
+            let val = value.to_string();
+            *self.value_counts.entry(val).or_insert(0) += 1;
+            self.total_count += 1;
         }
 
         Ok(())
     }
 
     fn evaluate(&mut self) -> Result<ScalarValue> {
-        if self.values.is_empty() {
+        if self.total_count == 0 {
             return match_string_type!(&self.data_type, None);
         }
 
-        // Sort values alphabetically
-        let mut sorted_values = self.values.clone();
-        sorted_values.sort();
+        let sorted_values = self.get_sorted_values();
 
         match self.calculate_percentile(&sorted_values, self.percentile) {
             Some(result) => match_string_type!(&self.data_type, Some(result)),
@@ -316,16 +373,22 @@ impl Accumulator for StringPercentileAccumulator {
     }
 
     fn size(&self) -> usize {
-        std::mem::size_of_val(&self.values)
-            + self.values.iter().map(|s| s.capacity()).sum::<usize>()
+        std::mem::size_of_val(&self.value_counts)
+            + self
+                .value_counts
+                .keys()
+                .map(|k| k.capacity() + std::mem::size_of::<usize>())
+                .sum::<usize>()
+            + std::mem::size_of::<usize>()
             + std::mem::size_of::<f64>()
             + std::mem::size_of::<DataType>()
     }
 
     fn state(&mut self) -> Result<Vec<ScalarValue>> {
+        let sorted_values = self.get_sorted_values();
+
         let values_scalar = ScalarValue::new_list_nullable(
-            &self
-                .values
+            &sorted_values
                 .iter()
                 .map(|v| ScalarValue::Utf8(Some(v.clone())))
                 .collect::<Vec<_>>(),
@@ -349,7 +412,9 @@ impl Accumulator for StringPercentileAccumulator {
                     let string_array = as_string_array(&value_array)?;
 
                     for value in string_array.iter().flatten() {
-                        self.values.push(value.to_string());
+                        let val = value.to_string();
+                        *self.value_counts.entry(val).or_insert(0) += 1;
+                        self.total_count += 1;
                     }
                 }
             }
@@ -368,9 +433,16 @@ impl Accumulator for StringPercentileAccumulator {
         let string_array = arrow::compute::cast(array, &DataType::Utf8)?;
         let string_array = as_string_array(&string_array)?;
 
+        // O(1) removal using HashMap
         for v in string_array.iter().flatten() {
-            if let Some(pos) = self.values.iter().position(|s| s == v) {
-                self.values.remove(pos);
+            let val = v.to_string();
+            if let Some(count) = self.value_counts.get_mut(&val) {
+                *count -= 1;
+                self.total_count -= 1;
+
+                if *count == 0 {
+                    self.value_counts.remove(&val);
+                }
             }
         }
 
@@ -383,9 +455,12 @@ impl Accumulator for StringPercentileAccumulator {
 }
 
 /// Accumulator for interval/duration types
+///
+/// Optimization: Uses HashMap to track interval counts for O(1) retract operations
 #[derive(Debug)]
 pub struct IntervalPercentileAccumulator {
-    values: Vec<i64>,
+    value_counts: HashMap<i64, usize>,
+    total_count: usize,
     percentile: f64,
     data_type: DataType,
 }
@@ -393,7 +468,8 @@ pub struct IntervalPercentileAccumulator {
 impl IntervalPercentileAccumulator {
     pub fn new(percentile: f64, data_type: DataType) -> Self {
         Self {
-            values: Vec::new(),
+            value_counts: HashMap::new(),
+            total_count: 0,
             percentile,
             data_type,
         }
@@ -421,6 +497,20 @@ impl IntervalPercentileAccumulator {
             let fraction = pos - lower_idx as f64;
             Some((lower + fraction * (upper - lower)).round() as i64)
         }
+    }
+
+    /// Convert HashMap to sorted Vec
+    fn get_sorted_values(&self) -> Vec<i64> {
+        let mut values = Vec::with_capacity(self.total_count);
+
+        for (&val, &count) in &self.value_counts {
+            for _ in 0..count {
+                values.push(val);
+            }
+        }
+
+        values.sort_unstable();
+        values
     }
 }
 
@@ -490,13 +580,14 @@ impl Accumulator for IntervalPercentileAccumulator {
                 }
             };
 
-            self.values.push(value);
+            *self.value_counts.entry(value).or_insert(0) += 1;
+            self.total_count += 1;
         }
 
         Ok(())
     }
     fn evaluate(&mut self) -> Result<ScalarValue> {
-        if self.values.is_empty() {
+        if self.total_count == 0 {
             return match &self.data_type {
                 DataType::Interval(unit) => interval_none!(unit),
                 DataType::Duration(unit) => duration_none!(unit),
@@ -507,8 +598,7 @@ impl Accumulator for IntervalPercentileAccumulator {
             };
         }
 
-        let mut sorted_values = self.values.clone();
-        sorted_values.sort();
+        let sorted_values = self.get_sorted_values();
 
         match self.calculate_percentile(&sorted_values, self.percentile) {
             Some(result_i64) => match &self.data_type {
@@ -576,16 +666,18 @@ impl Accumulator for IntervalPercentileAccumulator {
         }
     }
     fn size(&self) -> usize {
-        std::mem::size_of_val(&self.values)
-            + self.values.capacity() * std::mem::size_of::<i64>()
+        std::mem::size_of_val(&self.value_counts)
+            + self.value_counts.capacity() * std::mem::size_of::<(i64, usize)>()
+            + std::mem::size_of::<usize>()
             + std::mem::size_of::<f64>()
             + std::mem::size_of::<DataType>()
     }
 
     fn state(&mut self) -> Result<Vec<ScalarValue>> {
+        let sorted_values = self.get_sorted_values();
+
         let values_scalar = ScalarValue::new_list_nullable(
-            &self
-                .values
+            &sorted_values
                 .iter()
                 .map(|&v| ScalarValue::Int64(Some(v)))
                 .collect::<Vec<_>>(),
@@ -612,7 +704,9 @@ impl Accumulator for IntervalPercentileAccumulator {
 
             for j in 0..int_array.len() {
                 if !int_array.is_null(j) {
-                    self.values.push(int_array.value(j));
+                    let value = int_array.value(j);
+                    *self.value_counts.entry(value).or_insert(0) += 1;
+                    self.total_count += 1;
                 }
             }
         }
@@ -681,8 +775,14 @@ impl Accumulator for IntervalPercentileAccumulator {
                 }
             };
 
-            if let Some(pos) = self.values.iter().position(|x| *x == val_i64) {
-                self.values.remove(pos);
+            // O(1) removal using HashMap
+            if let Some(count) = self.value_counts.get_mut(&val_i64) {
+                *count -= 1;
+                self.total_count -= 1;
+
+                if *count == 0 {
+                    self.value_counts.remove(&val_i64);
+                }
             }
         }
 
