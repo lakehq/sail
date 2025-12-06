@@ -312,16 +312,17 @@ mod tests {
 
     /// Test 1: uniform(10, 20, 0) should return 18 (with i32)
     #[test]
-    fn test_uniform_single_value() {
-        let values = generate_uniform_int(10, 20, Some(0), 1).expect("generation failed");
+    fn test_uniform_single_value() -> Result<()> {
+        let values = generate_uniform_int(10, 20, Some(0), 1)?;
         assert_eq!(values.len(), 1);
         assert_eq!(values[0], 18);
+        Ok(())
     }
 
     /// Test 2: uniform(10, 20, 0) FROM range(5) - should return DIFFERENT values
     #[test]
-    fn test_uniform_multiple_values_are_different() {
-        let values = generate_uniform_int(10, 20, Some(0), 5).expect("generation failed");
+    fn test_uniform_multiple_values_are_different() -> Result<()> {
+        let values = generate_uniform_int(10, 20, Some(0), 5)?;
 
         // Verify that we have 5 values
         assert_eq!(values.len(), 5);
@@ -341,28 +342,31 @@ mod tests {
         for &v in &values {
             assert!((10..20).contains(&v), "Value {} out of range", v);
         }
+        Ok(())
     }
 
     /// Test 3: min == max should return that constant value
     #[test]
-    fn test_uniform_min_equals_max() {
-        let values = generate_uniform_int(5, 5, Some(0), 3).expect("generation failed");
+    fn test_uniform_min_equals_max() -> Result<()> {
+        let values = generate_uniform_int(5, 5, Some(0), 3)?;
         assert_eq!(values, vec![5, 5, 5]);
+        Ok(())
     }
 
     /// Test 4: Seed 42 should always give the same result (reproducibility)
     #[test]
-    fn test_uniform_reproducibility() {
-        let values1 = generate_uniform_int(0, 100, Some(42), 5).expect("generation failed");
-        let values2 = generate_uniform_int(0, 100, Some(42), 5).expect("generation failed");
+    fn test_uniform_reproducibility() -> Result<()> {
+        let values1 = generate_uniform_int(0, 100, Some(42), 5)?;
+        let values2 = generate_uniform_int(0, 100, Some(42), 5)?;
         assert_eq!(values1, values2, "Same seed should produce same values");
+        Ok(())
     }
 
     /// Test 5: Without seed should give different values on each call
     #[test]
-    fn test_uniform_without_seed_is_random() {
-        let values1 = generate_uniform_int(0, 100, None, 5).expect("generation failed");
-        let values2 = generate_uniform_int(0, 100, None, 5).expect("generation failed");
+    fn test_uniform_without_seed_is_random() -> Result<()> {
+        let values1 = generate_uniform_int(0, 100, None, 5)?;
+        let values2 = generate_uniform_int(0, 100, None, 5)?;
 
         // It's extremely unlikely they're all the same if it's random
         let probably_different = values1 != values2;
@@ -371,29 +375,32 @@ mod tests {
             "Without seed, values should likely be different: {:?} vs {:?}",
             values1, values2
         );
+        Ok(())
     }
 
     /// Test 6: Swapping min and max
     #[test]
-    fn test_uniform_swapped_min_max() {
-        let values1 = generate_uniform_int(20, 10, Some(0), 1).expect("generation failed");
-        let values2 = generate_uniform_int(10, 20, Some(0), 1).expect("generation failed");
+    fn test_uniform_swapped_min_max() -> Result<()> {
+        let values1 = generate_uniform_int(20, 10, Some(0), 1)?;
+        let values2 = generate_uniform_int(10, 20, Some(0), 1)?;
         assert_eq!(values1, values2, "Swapped min/max should give same result");
+        Ok(())
     }
 
     /// Test 7: Float values
     #[test]
-    fn test_uniform_float_values() {
-        let values = generate_uniform_float(5.5, 10.5, Some(123), 1).expect("generation failed");
+    fn test_uniform_float_values() -> Result<()> {
+        let values = generate_uniform_float(5.5, 10.5, Some(123), 1)?;
         assert_eq!(values.len(), 1);
         let val = values[0];
         assert!((5.5..10.5).contains(&val), "Value {} out of range", val);
+        Ok(())
     }
 
     /// Test 8: Multiple different float values
     #[test]
-    fn test_uniform_float_multiple_different() {
-        let values = generate_uniform_float(0.0, 1.0, Some(99), 10).expect("generation failed");
+    fn test_uniform_float_multiple_different() -> Result<()> {
+        let values = generate_uniform_float(0.0, 1.0, Some(99), 10)?;
         assert_eq!(values.len(), 10);
 
         // Verify that not all are the same
@@ -404,12 +411,13 @@ mod tests {
         for &v in &values {
             assert!((0.0..1.0).contains(&v), "Value {} out of range", v);
         }
+        Ok(())
     }
 
     /// Test 9: Verify that seed 0 with 10 values generates the expected sequence
     #[test]
-    fn test_uniform_seed_zero_sequence() {
-        let values = generate_uniform_int(10, 20, Some(0), 10).expect("generation failed");
+    fn test_uniform_seed_zero_sequence() -> Result<()> {
+        let values = generate_uniform_int(10, 20, Some(0), 10)?;
         assert_eq!(values.len(), 10);
 
         assert_eq!(values[0], 18);
@@ -424,127 +432,125 @@ mod tests {
             "Should have multiple unique values, got {:?}",
             values
         );
+        Ok(())
     }
 
     /// Test 10: Negative numbers
     #[test]
-    fn test_uniform_negative_range() {
-        let values = generate_uniform_int(-10, 10, Some(0), 5).expect("generation failed");
+    fn test_uniform_negative_range() -> Result<()> {
+        let values = generate_uniform_int(-10, 10, Some(0), 5)?;
         assert_eq!(values.len(), 5);
 
         for &v in &values {
             assert!((-10..10).contains(&v), "Value {} out of range [-10, 10)", v);
         }
+        Ok(())
     }
 
     /// Test 11: Verify specific value with seed 42
     #[test]
-    fn test_uniform_seed_42_value() {
-        let values = generate_uniform_int(0, 100, Some(42), 1).expect("generation failed");
+    fn test_uniform_seed_42_value() -> Result<()> {
+        let values = generate_uniform_int(0, 100, Some(42), 1)?;
         assert_eq!(values[0], 13);
+        Ok(())
     }
 
     /// Test 12: Float min == max
     #[test]
-    fn test_uniform_float_equal() {
-        let values = generate_uniform_float(2.5, 2.5, Some(0), 5).expect("generation failed");
+    fn test_uniform_float_equal() -> Result<()> {
+        let values = generate_uniform_float(2.5, 2.5, Some(0), 5)?;
         assert_eq!(values, vec![2.5, 2.5, 2.5, 2.5, 2.5]);
+        Ok(())
     }
 
     /// Test 13: Verify return type for integers (should be Int32)
     /// This corresponds to Spark's "integer" type in the schema
     #[test]
-    fn test_uniform_return_type_integer() {
+    fn test_uniform_return_type_integer() -> Result<()> {
         let uniform_fn = SparkUniform::new();
         let arg_types = vec![DataType::Int64, DataType::Int64, DataType::Int64];
-        let return_type = uniform_fn
-            .return_type(&arg_types)
-            .expect("return_type failed");
+        let return_type = uniform_fn.return_type(&arg_types)?;
         assert_eq!(
             return_type,
             DataType::Int32,
             "Integer inputs should return Int32 (maps to Spark's integer type)"
         );
+        Ok(())
     }
 
     /// Test 14: Verify return type for Int32 inputs (should still be Int32)
     #[test]
-    fn test_uniform_return_type_int32() {
+    fn test_uniform_return_type_int32() -> Result<()> {
         let uniform_fn = SparkUniform::new();
         let arg_types = vec![DataType::Int32, DataType::Int32, DataType::Int64];
-        let return_type = uniform_fn
-            .return_type(&arg_types)
-            .expect("return_type failed");
+        let return_type = uniform_fn.return_type(&arg_types)?;
         assert_eq!(
             return_type,
             DataType::Int32,
             "Int32 inputs should be coerced to Int32"
         );
+        Ok(())
     }
 
     /// Test 15: Verify return type for floats (should be Float64)
     #[test]
-    fn test_uniform_return_type_float() {
+    fn test_uniform_return_type_float() -> Result<()> {
         let uniform_fn = SparkUniform::new();
         let arg_types = vec![DataType::Float64, DataType::Float64, DataType::Int64];
-        let return_type = uniform_fn
-            .return_type(&arg_types)
-            .expect("return_type failed");
+        let return_type = uniform_fn.return_type(&arg_types)?;
         assert_eq!(
             return_type,
             DataType::Float64,
             "Float inputs should return Float64"
         );
+        Ok(())
     }
 
     /// Test 16: Verify return type for mixed int/float (should be Float64)
     #[test]
-    fn test_uniform_return_type_mixed() {
+    fn test_uniform_return_type_mixed() -> Result<()> {
         let uniform_fn = SparkUniform::new();
         let arg_types = vec![DataType::Int64, DataType::Float64, DataType::Int64];
-        let return_type = uniform_fn
-            .return_type(&arg_types)
-            .expect("return_type failed");
+        let return_type = uniform_fn.return_type(&arg_types)?;
         assert_eq!(
             return_type,
             DataType::Float64,
             "Mixed int/float inputs should return Float64"
         );
+        Ok(())
     }
 
     /// Test 17: Verify coerce_types for integer inputs
     #[test]
-    fn test_uniform_coerce_types_integer() {
+    fn test_uniform_coerce_types_integer() -> Result<()> {
         let uniform_fn = SparkUniform::new();
         let arg_types = vec![DataType::Int32, DataType::Int32, DataType::Int64];
-        let coerced = uniform_fn
-            .coerce_types(&arg_types)
-            .expect("coerce_types failed");
+        let coerced = uniform_fn.coerce_types(&arg_types)?;
         assert_eq!(
             coerced,
             vec![DataType::Int32, DataType::Int32, DataType::Int64],
             "Int32 inputs should remain Int32 for min/max, Int64 for seed"
         );
+        Ok(())
     }
 
     /// Test 18: Verify coerce_types for float inputs
     #[test]
-    fn test_uniform_coerce_types_float() {
+    fn test_uniform_coerce_types_float() -> Result<()> {
         let uniform_fn = SparkUniform::new();
         let arg_types = vec![DataType::Float32, DataType::Float32, DataType::Int64];
-        let coerced = uniform_fn
-            .coerce_types(&arg_types)
-            .expect("coerce_types failed");
+        let coerced = uniform_fn.coerce_types(&arg_types)?;
         assert_eq!(
             coerced,
             vec![DataType::Float64, DataType::Float64, DataType::Int64],
             "Float32 should be coerced to Float64"
         );
+        Ok(())
     }
 
     /// Test 19: Verify return type for decimal inputs (Spark's behavior with literals like 5.5, 10.5)
     #[test]
-    fn test_uniform_return_type_decimal() {
+    fn test_uniform_return_type_decimal() -> Result<()> {
         let uniform_fn = SparkUniform::new();
         // Decimal(3, 1) represents numbers like 5.5, 10.5 (3 total digits, 1 after decimal)
         let arg_types = vec![
@@ -552,28 +558,25 @@ mod tests {
             DataType::Decimal128(3, 1),
             DataType::Int64,
         ];
-        let return_type = uniform_fn
-            .return_type(&arg_types)
-            .expect("return_type failed");
+        let return_type = uniform_fn.return_type(&arg_types)?;
         assert_eq!(
             return_type,
             DataType::Decimal128(3, 1),
             "Decimal(3,1) inputs should return Decimal(3,1) matching Spark's behavior"
         );
+        Ok(())
     }
 
     /// Test 20: Verify coerce_types for decimal inputs
     #[test]
-    fn test_uniform_coerce_types_decimal() {
+    fn test_uniform_coerce_types_decimal() -> Result<()> {
         let uniform_fn = SparkUniform::new();
         let arg_types = vec![
             DataType::Decimal128(3, 1),
             DataType::Decimal128(3, 1),
             DataType::Int64,
         ];
-        let coerced = uniform_fn
-            .coerce_types(&arg_types)
-            .expect("coerce_types failed");
+        let coerced = uniform_fn.coerce_types(&arg_types)?;
         assert_eq!(
             coerced,
             vec![
@@ -583,11 +586,12 @@ mod tests {
             ],
             "Decimal types should be preserved in coercion"
         );
+        Ok(())
     }
 
     /// Test 21: Verify decimal values with different precision/scale
     #[test]
-    fn test_uniform_return_type_decimal_different() {
+    fn test_uniform_return_type_decimal_different() -> Result<()> {
         let uniform_fn = SparkUniform::new();
         // One with Decimal(2, 1) [5.5] and another with Decimal(3, 1) [10.5]
         let arg_types = vec![
@@ -595,13 +599,12 @@ mod tests {
             DataType::Decimal128(3, 1),
             DataType::Int64,
         ];
-        let return_type = uniform_fn
-            .return_type(&arg_types)
-            .expect("return_type failed");
+        let return_type = uniform_fn.return_type(&arg_types)?;
         assert_eq!(
             return_type,
             DataType::Decimal128(3, 1),
             "Should use max precision from inputs"
         );
+        Ok(())
     }
 }
