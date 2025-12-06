@@ -57,7 +57,7 @@ impl ScalarUDFImpl for SparkUniform {
         let t_max = &arg_types[1];
 
         if t_min.is_integer() && t_max.is_integer() {
-            Ok(DataType::Int64)
+            Ok(DataType::Int32)
         } else {
             Ok(DataType::Float64)
         }
@@ -220,7 +220,6 @@ generate_uniform_fn!(generate_uniform_int, i64);
 generate_uniform_fn!(generate_uniform_float, f64);
 
 #[cfg(test)]
-#[allow(clippy::expect_used)]
 mod tests {
     use super::*;
 
@@ -365,5 +364,84 @@ mod tests {
     fn test_uniform_float_equal() {
         let values = generate_uniform_float(2.5, 2.5, Some(0), 5).expect("generation failed");
         assert_eq!(values, vec![2.5, 2.5, 2.5, 2.5, 2.5]);
+    }
+
+    /// Test 13: Verify return type for integers (should be Int32)
+    /// This corresponds to Spark's "integer" type in the schema
+    #[test]
+    fn test_uniform_return_type_integer() {
+        let uniform_fn = SparkUniform::new();
+        let arg_types = vec![DataType::Int64, DataType::Int64, DataType::Int64];
+        let return_type = uniform_fn.return_type(&arg_types).expect("return_type failed");
+        assert_eq!(
+            return_type,
+            DataType::Int32,
+            "Integer inputs should return Int32 (maps to Spark's integer type)"
+        );
+    }
+
+    /// Test 14: Verify return type for Int32 inputs (should still be Int32)
+    #[test]
+    fn test_uniform_return_type_int32() {
+        let uniform_fn = SparkUniform::new();
+        let arg_types = vec![DataType::Int32, DataType::Int32, DataType::Int64];
+        let return_type = uniform_fn.return_type(&arg_types).expect("return_type failed");
+        assert_eq!(
+            return_type,
+            DataType::Int32,
+            "Int32 inputs should be coerced to Int32"
+        );
+    }
+
+    /// Test 15: Verify return type for floats (should be Float64)
+    #[test]
+    fn test_uniform_return_type_float() {
+        let uniform_fn = SparkUniform::new();
+        let arg_types = vec![DataType::Float64, DataType::Float64, DataType::Int64];
+        let return_type = uniform_fn.return_type(&arg_types).expect("return_type failed");
+        assert_eq!(
+            return_type,
+            DataType::Float64,
+            "Float inputs should return Float64"
+        );
+    }
+
+    /// Test 16: Verify return type for mixed int/float (should be Float64)
+    #[test]
+    fn test_uniform_return_type_mixed() {
+        let uniform_fn = SparkUniform::new();
+        let arg_types = vec![DataType::Int64, DataType::Float64, DataType::Int64];
+        let return_type = uniform_fn.return_type(&arg_types).expect("return_type failed");
+        assert_eq!(
+            return_type,
+            DataType::Float64,
+            "Mixed int/float inputs should return Float64"
+        );
+    }
+
+    /// Test 17: Verify coerce_types for integer inputs
+    #[test]
+    fn test_uniform_coerce_types_integer() {
+        let uniform_fn = SparkUniform::new();
+        let arg_types = vec![DataType::Int32, DataType::Int32, DataType::Int64];
+        let coerced = uniform_fn.coerce_types(&arg_types).expect("coerce_types failed");
+        assert_eq!(
+            coerced,
+            vec![DataType::Int64, DataType::Int64, DataType::Int64],
+            "Int32 should be coerced to Int64"
+        );
+    }
+
+    /// Test 18: Verify coerce_types for float inputs
+    #[test]
+    fn test_uniform_coerce_types_float() {
+        let uniform_fn = SparkUniform::new();
+        let arg_types = vec![DataType::Float32, DataType::Float32, DataType::Int64];
+        let coerced = uniform_fn.coerce_types(&arg_types).expect("coerce_types failed");
+        assert_eq!(
+            coerced,
+            vec![DataType::Float64, DataType::Float64, DataType::Int64],
+            "Float32 should be coerced to Float64"
+        );
     }
 }
