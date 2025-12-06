@@ -1,7 +1,7 @@
 use std::any::Any;
 use std::sync::Arc;
 
-use datafusion::arrow::array::{Float64Array, Int32Array};
+use datafusion::arrow::array::{Decimal128Array, Float64Array, Int32Array};
 use datafusion::arrow::datatypes::DataType;
 use datafusion_common::{Result, ScalarValue};
 use datafusion_expr::{ColumnarValue, ScalarFunctionArgs, ScalarUDFImpl, Signature, Volatility};
@@ -56,10 +56,28 @@ impl ScalarUDFImpl for SparkUniform {
         let t_min = &arg_types[0];
         let t_max = &arg_types[1];
 
+        // If both inputs are integers, return Int32 (Spark's integer type)
         if t_min.is_integer() && t_max.is_integer() {
-            Ok(DataType::Int32)
-        } else {
-            Ok(DataType::Float64)
+            return Ok(DataType::Int32);
+        }
+
+        // If either input is Decimal, calculate the result decimal type
+        // This matches Spark's behavior of inferring decimal precision from input literals
+        match (t_min, t_max) {
+            (DataType::Decimal128(p1, s1), DataType::Decimal128(p2, s2)) => {
+                // For uniform distribution, the output should have:
+                // - precision: max of the two precisions
+                // - scale: max of the two scales
+                let precision = (*p1).max(*p2);
+                let scale = (*s1).max(*s2);
+                Ok(DataType::Decimal128(precision, scale))
+            }
+            (DataType::Decimal128(p, s), _) | (_, DataType::Decimal128(p, s)) => {
+                // If only one is decimal, use that decimal's precision/scale
+                Ok(DataType::Decimal128(*p, *s))
+            }
+            // For any other float types (Float32, Float64), return Float64
+            _ => Ok(DataType::Float64),
         }
     }
 
@@ -128,6 +146,26 @@ impl ScalarUDFImpl for SparkUniform {
                 let array = Float64Array::from(values);
                 Ok(ColumnarValue::Array(Arc::new(array)))
             }
+            (ScalarValue::Decimal128(Some(min_val), p1, s1), ScalarValue::Decimal128(Some(max_val), p2, s2)) => {
+                // Convert Decimal128 to f64 for generation
+                let min_f64 = *min_val as f64 / 10_f64.powi(*s1 as i32);
+                let max_f64 = *max_val as f64 / 10_f64.powi(*s2 as i32);
+
+                // Generate float values
+                let float_values = generate_uniform_float(min_f64, max_f64, seed, number_rows)?;
+
+                // Convert back to Decimal128
+                let precision = (*p1).max(*p2);
+                let scale = (*s1).max(*s2);
+                let decimal_values: Vec<i128> = float_values
+                    .iter()
+                    .map(|&v| (v * 10_f64.powi(scale as i32)).round() as i128)
+                    .collect();
+
+                let array = Decimal128Array::from(decimal_values)
+                    .with_precision_and_scale(precision, scale)?;
+                Ok(ColumnarValue::Array(Arc::new(array)))
+            }
             _ => Err(generic_exec_err(
                 "uniform",
                 &format!(
@@ -151,9 +189,21 @@ impl ScalarUDFImpl for SparkUniform {
         let t_min = &arg_types[0];
         let t_max = &arg_types[1];
 
-        let output_type = match (t_min, t_max) {
-            (t1, t2) if t1.is_integer() && t2.is_integer() => DataType::Int32,
-            _ => DataType::Float64,
+        // Calculate output type matching the logic in return_type
+        let output_type = if t_min.is_integer() && t_max.is_integer() {
+            DataType::Int32
+        } else {
+            match (t_min, t_max) {
+                (DataType::Decimal128(p1, s1), DataType::Decimal128(p2, s2)) => {
+                    let precision = (*p1).max(*p2);
+                    let scale = (*s1).max(*s2);
+                    DataType::Decimal128(precision, scale)
+                }
+                (DataType::Decimal128(p, s), _) | (_, DataType::Decimal128(p, s)) => {
+                    DataType::Decimal128(*p, *s)
+                }
+                _ => DataType::Float64,
+            }
         };
 
         let mut coerced_types = vec![output_type.clone(), output_type];
@@ -440,6 +490,63 @@ mod tests {
             coerced,
             vec![DataType::Float64, DataType::Float64, DataType::Int64],
             "Float32 should be coerced to Float64"
+        );
+    }
+
+    /// Test 19: Verify return type for decimal inputs (Spark's behavior with literals like 5.5, 10.5)
+    #[test]
+    fn test_uniform_return_type_decimal() {
+        let uniform_fn = SparkUniform::new();
+        // Decimal(3, 1) represents numbers like 5.5, 10.5 (3 total digits, 1 after decimal)
+        let arg_types = vec![
+            DataType::Decimal128(3, 1),
+            DataType::Decimal128(3, 1),
+            DataType::Int64,
+        ];
+        let return_type = uniform_fn.return_type(&arg_types).expect("return_type failed");
+        assert_eq!(
+            return_type,
+            DataType::Decimal128(3, 1),
+            "Decimal(3,1) inputs should return Decimal(3,1) matching Spark's behavior"
+        );
+    }
+
+    /// Test 20: Verify coerce_types for decimal inputs
+    #[test]
+    fn test_uniform_coerce_types_decimal() {
+        let uniform_fn = SparkUniform::new();
+        let arg_types = vec![
+            DataType::Decimal128(3, 1),
+            DataType::Decimal128(3, 1),
+            DataType::Int64,
+        ];
+        let coerced = uniform_fn.coerce_types(&arg_types).expect("coerce_types failed");
+        assert_eq!(
+            coerced,
+            vec![
+                DataType::Decimal128(3, 1),
+                DataType::Decimal128(3, 1),
+                DataType::Int64
+            ],
+            "Decimal types should be preserved in coercion"
+        );
+    }
+
+    /// Test 21: Verify decimal values with different precision/scale
+    #[test]
+    fn test_uniform_return_type_decimal_different() {
+        let uniform_fn = SparkUniform::new();
+        // One with Decimal(2, 1) [5.5] and another with Decimal(3, 1) [10.5]
+        let arg_types = vec![
+            DataType::Decimal128(2, 1),
+            DataType::Decimal128(3, 1),
+            DataType::Int64,
+        ];
+        let return_type = uniform_fn.return_type(&arg_types).expect("return_type failed");
+        assert_eq!(
+            return_type,
+            DataType::Decimal128(3, 1),
+            "Should use max precision from inputs"
         );
     }
 }
