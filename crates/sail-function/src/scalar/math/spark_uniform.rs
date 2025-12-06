@@ -180,69 +180,44 @@ impl ScalarUDFImpl for SparkUniform {
     }
 }
 
-fn generate_uniform_int(
-    min: i64,
-    max: i64,
-    seed: Option<u64>,
-    number_rows: usize,
-) -> Result<Vec<i64>> {
-    let mut min_v = min;
-    let mut max_v = max;
+macro_rules! generate_uniform_fn {
+    ($fn_name:ident, $type:ty) => {
+        fn $fn_name(
+            min: $type,
+            max: $type,
+            seed: Option<u64>,
+            number_rows: usize,
+        ) -> Result<Vec<$type>> {
+            let mut min_v = min;
+            let mut max_v = max;
 
-    if min_v > max_v {
-        std::mem::swap(&mut min_v, &mut max_v);
-    }
+            if min_v > max_v {
+                std::mem::swap(&mut min_v, &mut max_v);
+            }
 
-    if min_v == max_v {
-        return Ok(vec![min_v; number_rows]);
-    }
+            if min_v == max_v {
+                return Ok(vec![min_v; number_rows]);
+            }
 
-    let values: Vec<i64> = if let Some(seed_val) = seed {
-        let mut rng = StdRng::seed_from_u64(seed_val);
-        (0..number_rows)
-            .map(|_| rng.random_range(min_v..max_v))
-            .collect()
-    } else {
-        let mut rng = rng();
-        (0..number_rows)
-            .map(|_| rng.random_range(min_v..max_v))
-            .collect()
+            let values: Vec<$type> = if let Some(seed_val) = seed {
+                let mut rng = StdRng::seed_from_u64(seed_val);
+                (0..number_rows)
+                    .map(|_| rng.random_range(min_v..max_v))
+                    .collect()
+            } else {
+                let mut rng = rng();
+                (0..number_rows)
+                    .map(|_| rng.random_range(min_v..max_v))
+                    .collect()
+            };
+
+            Ok(values)
+        }
     };
-
-    Ok(values)
 }
 
-fn generate_uniform_float(
-    min: f64,
-    max: f64,
-    seed: Option<u64>,
-    number_rows: usize,
-) -> Result<Vec<f64>> {
-    let mut min_v = min;
-    let mut max_v = max;
-
-    if min_v > max_v {
-        std::mem::swap(&mut min_v, &mut max_v);
-    }
-
-    if min_v == max_v {
-        return Ok(vec![min_v; number_rows]);
-    }
-
-    let values: Vec<f64> = if let Some(seed_val) = seed {
-        let mut rng = StdRng::seed_from_u64(seed_val);
-        (0..number_rows)
-            .map(|_| rng.random_range(min_v..max_v))
-            .collect()
-    } else {
-        let mut rng = rng();
-        (0..number_rows)
-            .map(|_| rng.random_range(min_v..max_v))
-            .collect()
-    };
-
-    Ok(values)
-}
+generate_uniform_fn!(generate_uniform_int, i64);
+generate_uniform_fn!(generate_uniform_float, f64);
 
 #[cfg(test)]
 #[allow(clippy::expect_used)]
