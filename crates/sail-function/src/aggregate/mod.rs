@@ -49,5 +49,3 @@ pub mod percentile;
 pub mod skewness;
 pub mod try_avg;
 pub mod try_sum;
-
-pub mod util;

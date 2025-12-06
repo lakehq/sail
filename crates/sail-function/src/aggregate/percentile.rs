@@ -4,8 +4,8 @@ use std::fmt::Debug;
 use std::sync::Arc;
 
 use datafusion::arrow;
-use datafusion::arrow::array::{Array, ArrayRef, AsArray};
-use datafusion::arrow::datatypes::DataType;
+use datafusion::arrow::array::{Array, ArrayRef, AsArray, RecordBatch, RecordBatchOptions};
+use datafusion::arrow::datatypes::{DataType, Field, FieldRef, Schema, SchemaRef};
 use datafusion::common::cast::{as_float64_array, as_string_array};
 use datafusion::common::ScalarValue;
 use datafusion::error::Result;
@@ -13,9 +13,8 @@ use datafusion::logical_expr::function::{AccumulatorArgs, StateFieldsArgs};
 use datafusion::logical_expr::{Accumulator, AggregateUDFImpl, Signature, Volatility};
 use datafusion::physical_expr::PhysicalExpr;
 use datafusion_common::DataFusionError;
+use datafusion_expr_common::columnar_value::ColumnarValue;
 use ordered_float::OrderedFloat;
-
-use crate::aggregate::util::percentile::{extract_literal, return_type, state_fields};
 
 /// The `PercentileFunction` calculates the exact percentile (quantile) from a set of values.
 ///
@@ -130,7 +129,8 @@ impl NumericPercentileAccumulator {
         }
     }
 
-    fn calculate_percentile(&self, sorted_values: &[f64], percentile: f64) -> Option<f64> {
+    /// Calculate percentile with linear interpolation (Spark's formula)
+    fn calculate_percentile(&self, sorted_values: &[f64]) -> Option<f64> {
         if sorted_values.is_empty() {
             return None;
         }
@@ -139,24 +139,22 @@ impl NumericPercentileAccumulator {
             return Some(sorted_values[0]);
         }
 
-        let n = sorted_values.len();
-
-        // Spark uses (n - 1) * percentile for the position
-        let pos = (n - 1) as f64 * percentile;
-        let lower_idx = pos.floor() as usize;
-        let upper_idx = pos.ceil() as usize;
+        let n: usize = sorted_values.len();
+        let pos: f64 = (n - 1) as f64 * self.percentile;
+        let lower_idx: usize = pos.floor() as usize;
+        let upper_idx: usize = pos.ceil() as usize;
 
         if lower_idx == upper_idx {
             Some(sorted_values[lower_idx])
         } else {
-            let lower_val = sorted_values[lower_idx];
-            let upper_val = sorted_values[upper_idx];
-            let fraction = pos - lower_idx as f64;
+            let lower_val: f64 = sorted_values[lower_idx];
+            let upper_val: f64 = sorted_values[upper_idx];
+            let fraction: f64 = pos - lower_idx as f64;
             Some(lower_val + fraction * (upper_val - lower_val))
         }
     }
 
-    /// Convert HashMap to sorted Vec for percentile calculation
+    /// Convert HashMap to sorted Vec
     fn get_sorted_values(&self) -> Vec<f64> {
         let mut values = Vec::with_capacity(self.total_count);
 
@@ -199,7 +197,7 @@ impl Accumulator for NumericPercentileAccumulator {
 
         let sorted_values = self.get_sorted_values();
 
-        match self.calculate_percentile(&sorted_values, self.percentile) {
+        match self.calculate_percentile(&sorted_values) {
             Some(result) => Ok(ScalarValue::Float64(Some(result))),
             None => Ok(ScalarValue::Float64(None)),
         }
@@ -234,9 +232,9 @@ impl Accumulator for NumericPercentileAccumulator {
         let values_list = &states[0];
 
         if let Some(list_array) = values_list.as_list_opt::<i32>() {
-            for i in 0..list_array.len() {
-                if !list_array.is_null(i) {
-                    let value_array = list_array.value(i);
+            for list_idx in 0..list_array.len() {
+                if !list_array.is_null(list_idx) {
+                    let value_array = list_array.value(list_idx);
                     let float_array = as_float64_array(&value_array)?;
 
                     for value in float_array.iter().flatten() {
@@ -303,9 +301,8 @@ impl StringPercentileAccumulator {
         }
     }
 
-    /// Calculate the string at the percentile position
-    /// For strings, we can't interpolate, so we return the value at the closest index
-    fn calculate_percentile(&self, sorted_values: &[String], percentile: f64) -> Option<String> {
+    /// Calculate percentile for strings (no interpolation, uses rounding)
+    fn calculate_percentile(&self, sorted_values: &[String]) -> Option<String> {
         if sorted_values.is_empty() {
             return None;
         }
@@ -314,11 +311,9 @@ impl StringPercentileAccumulator {
             return Some(sorted_values[0].clone());
         }
 
-        let n = sorted_values.len();
-
-        // Use the same position calculation as Spark
-        let pos = (n - 1) as f64 * percentile;
-        let idx = pos.round() as usize;
+        let n: usize = sorted_values.len();
+        let pos: f64 = (n - 1) as f64 * self.percentile;
+        let idx: usize = pos.round() as usize;
 
         Some(sorted_values[idx].clone())
     }
@@ -366,7 +361,7 @@ impl Accumulator for StringPercentileAccumulator {
 
         let sorted_values = self.get_sorted_values();
 
-        match self.calculate_percentile(&sorted_values, self.percentile) {
+        match self.calculate_percentile(&sorted_values) {
             Some(result) => match_string_type!(&self.data_type, Some(result)),
             None => match_string_type!(&self.data_type, None),
         }
@@ -406,9 +401,9 @@ impl Accumulator for StringPercentileAccumulator {
         let values_list = &states[0];
 
         if let Some(list_array) = values_list.as_list_opt::<i32>() {
-            for i in 0..list_array.len() {
-                if !list_array.is_null(i) {
-                    let value_array = list_array.value(i);
+            for list_idx in 0..list_array.len() {
+                if !list_array.is_null(list_idx) {
+                    let value_array = list_array.value(list_idx);
                     let string_array = as_string_array(&value_array)?;
 
                     for value in string_array.iter().flatten() {
@@ -475,7 +470,8 @@ impl IntervalPercentileAccumulator {
         }
     }
 
-    fn calculate_percentile(&self, sorted_values: &[i64], percentile: f64) -> Option<i64> {
+    /// Calculate percentile for i64 with interpolation
+    fn calculate_percentile(&self, sorted_values: &[i64]) -> Option<i64> {
         if sorted_values.is_empty() {
             return None;
         }
@@ -484,17 +480,17 @@ impl IntervalPercentileAccumulator {
             return Some(sorted_values[0]);
         }
 
-        let n = sorted_values.len();
-        let pos = (n - 1) as f64 * percentile;
-        let lower_idx = pos.floor() as usize;
-        let upper_idx = pos.ceil() as usize;
+        let n: usize = sorted_values.len();
+        let pos: f64 = (n - 1) as f64 * self.percentile;
+        let lower_idx: usize = pos.floor() as usize;
+        let upper_idx: usize = pos.ceil() as usize;
 
         if lower_idx == upper_idx {
             Some(sorted_values[lower_idx])
         } else {
-            let lower = sorted_values[lower_idx] as f64;
-            let upper = sorted_values[upper_idx] as f64;
-            let fraction = pos - lower_idx as f64;
+            let lower: f64 = sorted_values[lower_idx] as f64;
+            let upper: f64 = sorted_values[upper_idx] as f64;
+            let fraction: f64 = pos - lower_idx as f64;
             Some((lower + fraction * (upper - lower)).round() as i64)
         }
     }
@@ -522,8 +518,8 @@ impl Accumulator for IntervalPercentileAccumulator {
 
         let array = &values[0];
 
-        for i in 0..array.len() {
-            if array.is_null(i) {
+        for row_idx in 0..array.len() {
+            if array.is_null(row_idx) {
                 continue;
             }
 
@@ -534,20 +530,20 @@ impl Accumulator for IntervalPercentileAccumulator {
                     match unit {
                         IntervalUnit::YearMonth => {
                             let arr = array.as_primitive::<datafusion::arrow::datatypes::IntervalYearMonthType>();
-                            arr.value(i) as i64
+                            arr.value(row_idx) as i64
                         }
                         IntervalUnit::DayTime => {
                             let arr = array
                                 .as_primitive::<datafusion::arrow::datatypes::IntervalDayTimeType>(
                                 );
-                            let val = arr.value(i);
+                            let val = arr.value(row_idx);
                             // IntervalDayTime is stored as (days, milliseconds)
                             // Convert to total milliseconds for interpolation
                             val.days as i64 * 86400000 + val.milliseconds as i64
                         }
                         IntervalUnit::MonthDayNano => {
                             let arr = array.as_primitive::<datafusion::arrow::datatypes::IntervalMonthDayNanoType>();
-                            let val = arr.value(i);
+                            let val = arr.value(row_idx);
                             // Convert to nanoseconds for interpolation
                             val.months as i64 * 2592000000000000 // ~30 days in nanos
                                 + val.days as i64 * 86400000000000 // days to nanos
@@ -560,16 +556,16 @@ impl Accumulator for IntervalPercentileAccumulator {
                     match unit {
                         TimeUnit::Second => array
                             .as_primitive::<datafusion::arrow::datatypes::DurationSecondType>()
-                            .value(i),
+                            .value(row_idx),
                         TimeUnit::Millisecond => array
                             .as_primitive::<datafusion::arrow::datatypes::DurationMillisecondType>()
-                            .value(i),
+                            .value(row_idx),
                         TimeUnit::Microsecond => array
                             .as_primitive::<datafusion::arrow::datatypes::DurationMicrosecondType>()
-                            .value(i),
+                            .value(row_idx),
                         TimeUnit::Nanosecond => array
                             .as_primitive::<datafusion::arrow::datatypes::DurationNanosecondType>()
-                            .value(i),
+                            .value(row_idx),
                     }
                 }
                 _ => {
@@ -600,7 +596,7 @@ impl Accumulator for IntervalPercentileAccumulator {
 
         let sorted_values = self.get_sorted_values();
 
-        match self.calculate_percentile(&sorted_values, self.percentile) {
+        match self.calculate_percentile(&sorted_values) {
             Some(result_i64) => match &self.data_type {
                 DataType::Interval(unit) => {
                     use datafusion::arrow::datatypes::IntervalUnit;
@@ -694,17 +690,17 @@ impl Accumulator for IntervalPercentileAccumulator {
 
         let values_list = states[0].as_list::<i32>();
 
-        for i in 0..values_list.len() {
-            if values_list.is_null(i) {
+        for list_idx in 0..values_list.len() {
+            if values_list.is_null(list_idx) {
                 continue;
             }
 
-            let values_array = values_list.value(i);
+            let values_array = values_list.value(list_idx);
             let int_array = values_array.as_primitive::<datafusion::arrow::datatypes::Int64Type>();
 
-            for j in 0..int_array.len() {
-                if !int_array.is_null(j) {
-                    let value = int_array.value(j);
+            for elem_idx in 0..int_array.len() {
+                if !int_array.is_null(elem_idx) {
+                    let value = int_array.value(elem_idx);
                     *self.value_counts.entry(value).or_insert(0) += 1;
                     self.total_count += 1;
                 }
@@ -721,8 +717,8 @@ impl Accumulator for IntervalPercentileAccumulator {
 
         let array = &values[0];
 
-        for i in 0..array.len() {
-            if array.is_null(i) {
+        for row_idx in 0..array.len() {
+            if array.is_null(row_idx) {
                 continue;
             }
 
@@ -732,18 +728,18 @@ impl Accumulator for IntervalPercentileAccumulator {
                     match unit {
                         IntervalUnit::YearMonth => {
                             let arr = array.as_primitive::<datafusion::arrow::datatypes::IntervalYearMonthType>();
-                            arr.value(i) as i64
+                            arr.value(row_idx) as i64
                         }
                         IntervalUnit::DayTime => {
                             let arr = array
                                 .as_primitive::<datafusion::arrow::datatypes::IntervalDayTimeType>(
                                 );
-                            let v = arr.value(i);
+                            let v = arr.value(row_idx);
                             v.days as i64 * 86_400_000 + v.milliseconds as i64
                         }
                         IntervalUnit::MonthDayNano => {
                             let arr = array.as_primitive::<datafusion::arrow::datatypes::IntervalMonthDayNanoType>();
-                            let v = arr.value(i);
+                            let v = arr.value(row_idx);
                             v.months as i64 * 2_592_000_000_000_000
                                 + v.days as i64 * 86_400_000_000_000
                                 + v.nanoseconds
@@ -755,16 +751,16 @@ impl Accumulator for IntervalPercentileAccumulator {
                     match unit {
                         TimeUnit::Second => array
                             .as_primitive::<datafusion::arrow::datatypes::DurationSecondType>()
-                            .value(i),
+                            .value(row_idx),
                         TimeUnit::Millisecond => array
                             .as_primitive::<datafusion::arrow::datatypes::DurationMillisecondType>()
-                            .value(i),
+                            .value(row_idx),
                         TimeUnit::Microsecond => array
                             .as_primitive::<datafusion::arrow::datatypes::DurationMicrosecondType>()
-                            .value(i),
+                            .value(row_idx),
                         TimeUnit::Nanosecond => array
                             .as_primitive::<datafusion::arrow::datatypes::DurationNanosecondType>()
-                            .value(i),
+                            .value(row_idx),
                     }
                 }
                 _ => {
@@ -791,5 +787,76 @@ impl Accumulator for IntervalPercentileAccumulator {
 
     fn supports_retract_batch(&self) -> bool {
         true
+    }
+}
+
+/// Extract a literal f64 value from a PhysicalExpr (for percentile parameter)
+fn extract_literal(expr: &Arc<dyn PhysicalExpr>) -> Result<f64, DataFusionError> {
+    fn dummy_batch() -> Result<RecordBatch> {
+        let fields: Vec<Field> = Vec::new();
+        let schema: SchemaRef = Arc::new(Schema::new(fields));
+
+        RecordBatch::try_new_with_options(
+            schema,
+            Vec::new(),
+            &RecordBatchOptions::default().with_row_count(Some(1)),
+        )
+        .map_err(DataFusionError::from)
+    }
+
+    let batch = dummy_batch()?;
+    let col_val = expr.evaluate(&batch)?;
+    let scalar = match col_val {
+        ColumnarValue::Scalar(s) => s,
+        ColumnarValue::Array(arr) => ScalarValue::try_from_array(arr.as_ref(), 0)?,
+    };
+
+    fn scalar_to_f64(sv: &ScalarValue) -> Option<f64> {
+        match sv {
+            ScalarValue::Float64(Some(v)) => Some(*v),
+            ScalarValue::Float32(Some(v)) => Some(*v as f64),
+            ScalarValue::Int64(Some(v)) => Some(*v as f64),
+            ScalarValue::UInt64(Some(v)) => Some(*v as f64),
+            ScalarValue::Int32(Some(v)) => Some(*v as f64),
+            ScalarValue::UInt32(Some(v)) => Some(*v as f64),
+            ScalarValue::Decimal128(Some(v), _precision, scale) => {
+                Some((*v as f64) / 10f64.powi(*scale as i32))
+            }
+            _ => None,
+        }
+    }
+
+    let percentile: f64 = scalar_to_f64(&scalar).ok_or_else(|| {
+        DataFusionError::Execution(format!(
+            "Cannot convert percentile literal {:?} to f64",
+            scalar
+        ))
+    })?;
+    Ok(percentile)
+}
+
+/// Determine the state fields for percentile accumulator
+fn state_fields(args: StateFieldsArgs) -> Result<Vec<FieldRef>> {
+    let value_type = args.input_fields[0].data_type().clone();
+
+    let storage_type = match &value_type {
+        DataType::Utf8 | DataType::Utf8View | DataType::LargeUtf8 => DataType::Utf8,
+        DataType::Interval(_) | DataType::Duration(_) => DataType::Int64,
+        _ => DataType::Float64,
+    };
+
+    let values_list_type = DataType::List(Arc::new(Field::new("item", storage_type, true)));
+
+    Ok(vec![Field::new("values", values_list_type, true).into()])
+}
+
+fn return_type(arg_types: &[DataType]) -> Result<DataType> {
+    match &arg_types[0] {
+        DataType::Utf8 => Ok(DataType::Utf8),
+        DataType::Utf8View => Ok(DataType::Utf8View),
+        DataType::LargeUtf8 => Ok(DataType::LargeUtf8),
+        dt @ DataType::Interval(_) => Ok(dt.clone()),
+        dt @ DataType::Duration(_) => Ok(dt.clone()),
+        _ => Ok(DataType::Float64),
     }
 }
