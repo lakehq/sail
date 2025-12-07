@@ -44,6 +44,13 @@
 |   6.4|
 +------+
 
+>>> spark.sql("SELECT uniform(5, 105, -3) AS result").show()
++------+
+|result|
++------+
+|    17|
++------+
+
 >>> spark.sql("SELECT uniform(5.5, 10.5, 123) AS result").printSchema()
 root
  |-- result: decimal(3,1) (nullable = false)
