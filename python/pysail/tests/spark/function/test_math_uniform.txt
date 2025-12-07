@@ -170,10 +170,76 @@ root
 >>> spark.sql("""
 ...   SELECT uniform(
 ...     1.2,
-...     CAST(9223372036854775807 AS BIGINT),
-...     43
+...     CAST(12345678901234567890 AS DECIMAL(20,0)),
+...     42
 ...   ) AS result
 ... """).printSchema()
+root
+ |-- result: decimal(20,0) (nullable = false)
+
+>>> INT_MAX   = 2**31 - 1
+>>> spark.sql(f"""
+...   SELECT uniform(
+...     1.2,
+...     {INT_MAX},
+...     42
+...   ) AS result
+... """).printSchema()
+root
+ |-- result: decimal(2,1) (nullable = false)
+
+
+>>> INT64_MAX = 2**31 - 1
+>>> spark.sql(f"""
+...   SELECT uniform(
+...     1.2,
+...     {INT64_MAX},
+...     42
+...   ) AS result
+... """).printSchema()
+root
+ |-- result: decimal(2,1) (nullable = false)
+
+>>> NEXT_INT64_MAX = INT64_MAX
+>>> spark.sql(f"""
+...   SELECT uniform(
+...     1.2,
+...     {NEXT_INT64_MAX},
+...     42
+...   ) AS result
+... """).printSchema()
+root
+ |-- result: decimal(2,1) (nullable = false)
+
+
+# To get Decimal(20,0), both inputs must have scale 0
+spark.sql("""
+  SELECT uniform(
+    CAST(1 AS DECIMAL(1,0)),
+    CAST(12345678901234567890 AS DECIMAL(20,0)),
+    42
+  ) AS result
+""").printSchema()
+root
+ |-- result: decimal(20,0) (nullable = false)
+
+>>> spark.sql("""
+...   SELECT uniform(
+...     CAST(1.2 AS DECIMAL(2,1)),
+...     CAST(12345678901234567890 AS DECIMAL(20,0)),
+...     42
+...   ) AS result
+... """).printSchema()
+root
+ |-- result: decimal(20,0) (nullable = false)
+
+spark.sql("""
+  SELECT uniform(
+    1.2,
+    CAST(9223372036854775807 AS BIGINT),
+    43
+  ) AS result
+""").printSchema()
 root
  |-- result: decimal(2,1) (nullable = false)
 
