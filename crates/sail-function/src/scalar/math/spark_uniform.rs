@@ -76,18 +76,26 @@ impl SparkUniform {
 
     fn calculate_output_type(t_min: &DataType, t_max: &DataType) -> DataType {
         if t_min.is_integer() && t_max.is_integer() {
-            return DataType::Int32;
+            let is_64: bool = matches!(t_min, DataType::Int64 | DataType::UInt64)
+                || matches!(t_max, DataType::Int64 | DataType::UInt64);
+            return if is_64 {
+                DataType::Int64
+            } else {
+                DataType::Int32
+            };
         }
 
         match (t_min, t_max) {
             (DataType::Decimal128(p1, s1), DataType::Decimal128(p2, s2)) => {
+                // Use the max precision and max scale (simple but reasonable approximation of Spark)
                 let precision = (*p1).max(*p2);
                 let scale = (*s1).max(*s2);
                 DataType::Decimal128(precision, scale)
             }
-            (DataType::Decimal128(p, s), _) | (_, DataType::Decimal128(p, s)) => {
+            (DataType::Decimal128(p, s), _) => {
                 DataType::Decimal128(*p, *s)
             }
+            (_, DataType::Decimal128(p, s)) => DataType::Decimal128(*p, *s),
             _ => DataType::Float64,
         }
     }
@@ -468,8 +476,8 @@ mod tests {
         let return_type = uniform_fn.return_type(&arg_types)?;
         assert_eq!(
             return_type,
-            DataType::Int32,
-            "Integer inputs should return Int32 (maps to Spark's integer type)"
+            DataType::Int64,
+            "Integer inputs should return Int64 (maps to Spark's integer type)"
         );
         Ok(())
     }
@@ -634,8 +642,8 @@ mod tests {
         );
         assert_eq!(
             field.data_type(),
-            &DataType::Int32,
-            "Should return Int32 for integer inputs"
+            &DataType::Int64,
+            "Should return Int64 for integer inputs when arg fields are Int64"
         );
         assert_eq!(field.name(), "uniform", "Field name should be 'uniform'");
 
