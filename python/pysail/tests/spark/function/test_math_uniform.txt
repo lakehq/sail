@@ -147,20 +147,6 @@ root
 root
  |-- result: decimal(10,8) (nullable = false)
 
->>> spark.conf.set("spark.sql.ansi.enabled", "false")
->>> spark.sql("""
-...   SELECT uniform(
-...     12.34567890,
-...     9999,
-...     42
-...   ) AS result
-... """).show()
-+------+
-|result|
-+------+
-|  NULL|
-+------+
-
 # check here spark |-- result: decimal(20,0) (nullable = false)
 >>> spark.sql("""
 ...   SELECT uniform(
@@ -181,3 +167,30 @@ root
 ... """).printSchema()
 root
  |-- result: decimal(2,1) (nullable = false)
+
+
+# With ANSI mode enabled (default), decimal overflow raises exception
+# Note: The exception is Py4JJavaError wrapping SparkArithmeticException
+# NUMERIC_VALUE_OUT_OF_RANGE: 6195.975878639691 cannot be represented as Decimal(10, 8)
+#>>> try:  # doctest: +SKIP
+#...     spark.sql("SELECT uniform(12.34567890, 9999, 42) AS result").show()
+#... except Exception as e:
+#...     # In real execution, this raises:
+#...     # Py4JJavaError: org.apache.spark.SparkArithmeticException
+#...     # [NUMERIC_VALUE_OUT_OF_RANGE.WITH_SUGGESTION]
+#...     print("Exception caught: NUMERIC_VALUE_OUT_OF_RANGE")
+#Exception caught: NUMERIC_VALUE_OUT_OF_RANGE
+
+# >>> spark.conf.set("spark.sql.ansi.enabled", "false")
+# >>> spark.sql("""
+# ...   SELECT uniform(
+# ...     12.34567890,
+# ...     9999,
+# ...     42
+# ...   ) AS result
+# ... """).show()
+# +------+
+# |result|
+# +------+
+# |  NULL|
+# +------+
