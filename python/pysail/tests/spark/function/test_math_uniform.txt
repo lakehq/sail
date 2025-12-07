@@ -107,6 +107,60 @@ root
 root
  |-- result: decimal(2,1) (nullable = false)
 
+>>> spark.sql("""
+...   SELECT uniform(
+...     1234567890,
+...     1.2,
+...     42
+...   ) AS result
+... """).printSchema()
+root
+ |-- result: decimal(2,1) (nullable = false)
+
+>>> spark.sql("""
+...   SELECT uniform(
+...     1,
+...     12345.67890,
+...     42
+...   ) AS result
+... """).printSchema()
+root
+ |-- result: decimal(10,5) (nullable = false)
+
+>>> spark.sql("""
+...   SELECT uniform(
+...     1,
+...     12.34567890,
+...     42
+...   ) AS result
+... """).printSchema()
+root
+ |-- result: decimal(10,8) (nullable = false)
+
+>>> spark.sql("""
+...   SELECT uniform(
+...     12.34567890,
+...     9999,
+...     42
+...   ) AS result
+... """).printSchema()
+root
+ |-- result: decimal(10,8) (nullable = false)
+
+>>> spark.conf.set("spark.sql.ansi.enabled", "false")
+>>> spark.sql("""
+...   SELECT uniform(
+...     12.34567890,
+...     9999,
+...     42
+...   ) AS result
+... """).show()
++------+
+|result|
++------+
+|  NULL|
++------+
+
 # check here spark |-- result: decimal(20,0) (nullable = false)
 >>> spark.sql("""
 ...   SELECT uniform(
