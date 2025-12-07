@@ -12,6 +12,7 @@
 
 use std::collections::HashMap;
 
+use crate::error::IcebergResult;
 use crate::operations::write::arrow_parquet::ParquetFileMeta;
 use crate::operations::write::WriteOutcome;
 use crate::spec::types::values::Literal;
@@ -36,7 +37,7 @@ impl DataFileWriter {
         }
     }
 
-    pub fn finish(self, meta: ParquetFileMeta) -> Result<WriteOutcome, String> {
+    pub fn finish(self, meta: ParquetFileMeta) -> IcebergResult<WriteOutcome> {
         let (
             column_sizes,
             value_counts,
@@ -85,7 +86,7 @@ type AggregatedMetadata = (
 
 fn aggregate_from_parquet_metadata(
     parquet_meta: &parquet::file::metadata::ParquetMetaData,
-) -> Result<AggregatedMetadata, String> {
+) -> IcebergResult<AggregatedMetadata> {
     let row_groups = parquet_meta.row_groups();
 
     let mut col_sizes: HashMap<i32, u64> = HashMap::new();

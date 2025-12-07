@@ -36,6 +36,7 @@ fn partitions_field() -> AvroRecordField {
 
     let element_record = AvroSchema::Record(RecordSchema {
         #[allow(clippy::unwrap_used)]
+        // SAFETY: "field_summary" is a constant, schema-verified name; failure would mean a programming error.
         name: Name::new("field_summary").unwrap_or_else(|_| Name::new("field_summary").unwrap()),
         aliases: None,
         doc: None,
@@ -87,6 +88,7 @@ pub static MANIFEST_LIST_AVRO_SCHEMA_V2: Lazy<AvroSchema> = Lazy::new(|| {
 
     AvroSchema::Record(RecordSchema {
         #[allow(clippy::unwrap_used)]
+        // SAFETY: this static name is controlled by us and guaranteed valid during development.
         name: Name::new("manifest_file").unwrap_or_else(|_| Name::new("manifest_file").unwrap()),
         aliases: None,
         doc: None,

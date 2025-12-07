@@ -41,6 +41,7 @@ use crate::datasource::expr_adapter::IcebergPhysicalExprAdapterFactory;
 use crate::datasource::expressions::simplify_expr;
 use crate::datasource::pruning::{prune_files, prune_manifests_by_partition_summaries};
 use crate::datasource::type_converter::iceberg_schema_to_arrow;
+use crate::error::{IcebergError, IcebergResult};
 use crate::io::{
     load_manifest as io_load_manifest, load_manifest_list as io_load_manifest_list, StoreContext,
 };
@@ -122,7 +123,7 @@ impl IcebergTableProvider {
     }
 
     /// Load manifest list from snapshot
-    async fn load_manifest_list(&self, store_ctx: &StoreContext) -> Result<ManifestList> {
+    async fn load_manifest_list(&self, store_ctx: &StoreContext) -> IcebergResult<ManifestList> {
         let manifest_list_str = self.snapshot.manifest_list();
         log::trace!("Manifest list path: {}", manifest_list_str);
         let ml = io_load_manifest_list(store_ctx, manifest_list_str).await?;
@@ -136,7 +137,7 @@ impl IcebergTableProvider {
         filters: &[Expr],
         store_ctx: &StoreContext,
         manifest_list: &ManifestList,
-    ) -> Result<Vec<DataFile>> {
+    ) -> IcebergResult<Vec<DataFile>> {
         let mut data_files = Vec::new();
 
         let spec_map: HashMap<i32, PartitionSpec> = self
@@ -199,14 +200,25 @@ impl IcebergTableProvider {
     }
 
     fn partition_key_for(&self, partition: &[Option<Literal>]) -> String {
-        serde_json::to_string(partition).unwrap_or_default()
+        match serde_json::to_string(partition) {
+            Ok(key) => key,
+            Err(err) => {
+                // Partition literals should always be serializable; log the error so it isn't silent.
+                log::error!(
+                    "Failed to serialize partition key {:?}: {:?}",
+                    partition,
+                    err
+                );
+                String::new()
+            }
+        }
     }
 
     async fn load_delete_index(
         &self,
         store_ctx: &StoreContext,
         manifest_list: &ManifestList,
-    ) -> Result<std::collections::HashMap<String, IcebergDeleteAttachment>> {
+    ) -> IcebergResult<std::collections::HashMap<String, IcebergDeleteAttachment>> {
         let mut index: std::collections::HashMap<String, IcebergDeleteAttachment> =
             std::collections::HashMap::new();
 
@@ -252,7 +264,7 @@ impl IcebergTableProvider {
         store_ctx: &StoreContext,
         data_files: Vec<DataFile>,
         delete_index: &std::collections::HashMap<String, IcebergDeleteAttachment>,
-    ) -> Result<Vec<PartitionedFile>> {
+    ) -> IcebergResult<Vec<PartitionedFile>> {
         let mut partitioned_files = Vec::new();
 
         for data_file in data_files {
@@ -493,7 +505,7 @@ impl TableProvider for IcebergTableProvider {
         log::trace!("Starting scan for table: {}", self.table_uri);
 
         let table_url = Url::parse(&self.table_uri)
-            .map_err(|e| datafusion::common::DataFusionError::External(Box::new(e)))?;
+            .map_err(|e| IcebergError::invalid_url(&self.table_uri, e))?;
         let base_store = get_object_store_from_session(session, &table_url)?;
         let store_ctx = StoreContext::new(base_store.clone(), &table_url)?;
         log::trace!("Got object store");
@@ -548,13 +560,7 @@ impl TableProvider for IcebergTableProvider {
 
         // Step 5: Create file scan configuration
         let file_schema = self.arrow_schema.clone();
-        let table_url = Url::parse(&self.table_uri)
-            .map_err(|e| datafusion::common::DataFusionError::External(Box::new(e)))?;
-
-        let base_url = format!("{}://{}", table_url.scheme(), table_url.authority());
-        let base_url_parsed = Url::parse(&base_url)
-            .map_err(|e| datafusion::common::DataFusionError::External(Box::new(e)))?;
-        let object_store_url = ObjectStoreUrl::parse(base_url_parsed)
+        let object_store_url = ObjectStoreUrl::parse(&table_url[..url::Position::BeforePath])
             .map_err(|e| datafusion::common::DataFusionError::External(Box::new(e)))?;
 
         let parquet_options = TableParquetOptions {
@@ -568,8 +574,11 @@ impl TableProvider for IcebergTableProvider {
         {
             let logical_schema = self.rebuild_logical_schema_for_filters(projection, filters);
             let df_schema = logical_schema.to_dfschema()?;
-            let pushdown_expr = conjunction(parquet_pushdown_filters);
-            pushdown_expr.map(|expr| simplify_expr(session, &df_schema, expr))
+            if let Some(expr) = conjunction(parquet_pushdown_filters) {
+                Some(simplify_expr(session, &df_schema, expr)?)
+            } else {
+                None
+            }
         } else {
             None
         };

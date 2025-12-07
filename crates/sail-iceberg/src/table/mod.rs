@@ -46,7 +46,8 @@ impl Table {
         let metadata_location =
             metadata_loader::find_latest_metadata_file(&object_store, &table_url).await?;
         log::trace!("Found Iceberg metadata file at {}", metadata_location);
-        let metadata_path = ObjectPath::from(metadata_location.as_str());
+        let metadata_path = ObjectPath::parse(metadata_location.as_str())
+            .map_err(|e| DataFusionError::External(Box::new(e)))?;
         let metadata_data = object_store
             .get(&metadata_path)
             .await

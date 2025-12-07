@@ -17,11 +17,12 @@ pub mod file_writer;
 pub mod partition;
 pub mod table_writer;
 
+use crate::error::IcebergResult;
 use crate::spec::DataFile;
 
 pub trait IcebergWriter<T> {
-    fn add(&mut self, data: T) -> Result<(), String>;
-    fn close(self) -> Result<Vec<DataFile>, String>;
+    fn add(&mut self, data: T) -> IcebergResult<()>;
+    fn close(self) -> IcebergResult<Vec<DataFile>>;
 }
 
 pub struct WriteOutcome {

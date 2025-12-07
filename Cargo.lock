@@ -6037,6 +6037,7 @@ dependencies = [
  "sail-data-source",
  "serde",
  "serde_json",
+ "thiserror",
  "url",
  "uuid",
 ]

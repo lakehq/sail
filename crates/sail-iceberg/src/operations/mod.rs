@@ -24,6 +24,7 @@ pub use bootstrap::*;
 pub use overwrite::*;
 pub use snapshot::*;
 
+use crate::error::IcebergResult;
 use crate::spec::Snapshot;
 
 pub struct Transaction {
@@ -49,8 +50,10 @@ impl Transaction {
         &self.snapshot
     }
 
-    pub async fn commit(self, _summary_op: &str) -> Result<Snapshot, String> {
-        Err("commit is not implemented yet".to_string())
+    pub async fn commit(self, _summary_op: &str) -> IcebergResult<Snapshot> {
+        Err(crate::error::IcebergError::general(
+            "commit is not implemented yet",
+        ))
     }
 
     pub fn overwrite(&self) -> OverwriteAction {
