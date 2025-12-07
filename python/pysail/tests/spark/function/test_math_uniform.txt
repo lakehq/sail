@@ -67,6 +67,15 @@ root
 root
  |-- result: integer (nullable = false)
 
+>>> INT_MAX = 2147483647
+>>> spark.sql(f"SELECT uniform({INT_MAX}, {INT_MAX}, 0) AS result").printSchema()
+root
+ |-- result: integer (nullable = false)
+
+>>> spark.sql(f"SELECT uniform({INT_MAX}, 21474836471, 0) AS result").printSchema()
+root
+ |-- result: long (nullable = false)
+
 >>> spark.sql("""
 ...   SELECT uniform(
 ...     CAST(2147483648 AS BIGINT),
