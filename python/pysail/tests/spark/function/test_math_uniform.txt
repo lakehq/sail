@@ -51,6 +51,10 @@
 |    17|
 +------+
 
+>>> spark.sql("SELECT uniform(10, 20) AS result").printSchema()
+root
+ |-- result: integer (nullable = false)
+
 >>> spark.sql("SELECT uniform(5.5, 10.5, 123) AS result").printSchema()
 root
  |-- result: decimal(3,1) (nullable = false)
@@ -62,3 +66,64 @@ root
 >>> spark.sql("SELECT uniform(10, 20, 0) AS result").printSchema()
 root
  |-- result: integer (nullable = false)
+
+>>> spark.sql("""
+...   SELECT uniform(
+...     CAST(2147483648 AS BIGINT),
+...     CAST(9223372036854775807 AS BIGINT),
+...     42
+...   ) AS result
+... """).printSchema()
+root
+ |-- result: long (nullable = false)
+
+>>> spark.sql("""
+...   SELECT uniform(
+...     1,
+...     CAST(9223372036854775807 AS BIGINT),
+...     42
+...   ) AS result
+... """).printSchema()
+root
+ |-- result: long (nullable = false)
+
+>>> spark.sql("""
+...   SELECT uniform(
+...     1,
+...     CAST(9223372036854775807 AS DECIMAL(20,0)),
+...     42
+...   ) AS result
+... """).printSchema()
+root
+ |-- result: decimal(20,0) (nullable = false)
+
+>>> spark.sql("""
+...   SELECT uniform(
+...     1.2,
+...     1234567890,
+...     42
+...   ) AS result
+... """).printSchema()
+root
+ |-- result: decimal(2,1) (nullable = false)
+
+# check here spark |-- result: decimal(20,0) (nullable = false)
+>>> spark.sql("""
+...   SELECT uniform(
+...     1.2,
+...     12345678901234567890,
+...     42
+...   ) AS result
+... """).printSchema()
+root
+ |-- result: decimal(20,1) (nullable = false)
+
+>>> spark.sql("""
+...   SELECT uniform(
+...     1.2,
+...     CAST(9223372036854775807 AS BIGINT),
+...     43
+...   ) AS result
+... """).printSchema()
+root
+ |-- result: decimal(2,1) (nullable = false)
