@@ -89,15 +89,16 @@ impl TableFormat for DeltaTableFormat {
             .object_store_registry
             .get_store(&table_url)
             .map_err(|e| DataFusionError::External(Box::new(e)))?;
-        let table_exists =
+        let table =
             match open_table_with_object_store(table_url.clone(), object_store, Default::default())
                 .await
             {
-                Ok(_) => true,
+                Ok(table) => Some(table),
                 Err(DeltaTableError::Kernel(KernelError::InvalidTableLocation(_)))
-                | Err(DeltaTableError::Kernel(KernelError::FileNotFound(_))) => false,
+                | Err(DeltaTableError::Kernel(KernelError::FileNotFound(_))) => None,
                 Err(err) => return Err(DataFusionError::External(Box::new(err))),
             };
+        let table_exists = table.is_some();
 
         match mode {
             PhysicalSinkMode::ErrorIfExists => {
@@ -135,10 +136,60 @@ impl TableFormat for DeltaTableFormat {
             (mode, None)
         };
 
+        // Get existing partition columns from table metadata if available
+        let existing_partition_columns = if let Some(table) = &table {
+            Some(
+                table
+                    .snapshot()
+                    .map_err(|e| DataFusionError::External(Box::new(e)))?
+                    .metadata()
+                    .partition_columns()
+                    .clone(),
+            )
+        } else {
+            None
+        };
+
+        // Validate partition column mismatch for append/overwrite operations
+        if let Some(existing_partitions) = &existing_partition_columns {
+            if !partition_by.is_empty() && partition_by != *existing_partitions {
+                // Allow partition column changes only when overwriting with schema changes
+                // For append mode, this is always an error
+                match unified_mode {
+                    PhysicalSinkMode::Append => {
+                        return plan_err!(
+                            "Partition column mismatch. Table is partitioned by {:?}, but write specified {:?}. \
+                            Cannot change partitioning on append.",
+                            existing_partitions,
+                            partition_by
+                        );
+                    }
+                    PhysicalSinkMode::Overwrite | PhysicalSinkMode::OverwriteIf { .. } => {
+                        // For overwrite mode, check if schema overwrite is allowed
+                        if !delta_options.overwrite_schema {
+                            return plan_err!(
+                                "Partition column mismatch. Table is partitioned by {:?}, but write specified {:?}. \
+                                Set overwriteSchema=true to change partitioning.",
+                                existing_partitions,
+                                partition_by
+                            );
+                        }
+                    }
+                    _ => {}
+                }
+            }
+        }
+
+        let partition_columns = if !partition_by.is_empty() {
+            partition_by
+        } else {
+            existing_partition_columns.unwrap_or_default()
+        };
+
         let table_config = DeltaTableConfig {
             table_url,
             options: delta_options,
-            partition_columns: partition_by,
+            partition_columns,
             table_schema_for_cond,
             table_exists,
         };
