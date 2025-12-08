@@ -5,7 +5,7 @@ use datafusion::physical_plan::display::DisplayableExecutionPlan;
 use datafusion::physical_plan::{collect, displayable, ExecutionPlan};
 use datafusion::prelude::SessionContext;
 use datafusion_common::display::{PlanType, StringifiedPlan, ToStringifiedPlan};
-use datafusion_common::Result as DataFusionResult;
+use datafusion_common::{DataFusionError, Result};
 use datafusion_expr::LogicalPlan;
 use sail_common::spec;
 use sail_common_datafusion::rename::physical_plan::rename_physical_plan;
@@ -170,7 +170,31 @@ async fn collect_plan_with(
 
     let df = execute_logical_plan(ctx, plan).await?;
     let (session_state, logical_plan) = df.into_parts();
-    let optimized_logical = session_state.optimize(&logical_plan)?;
+    let config_options = session_state.config_options();
+    let explain_config = &config_options.explain;
+
+    let analyzed_logical = session_state.analyzer().execute_and_check(
+        logical_plan,
+        config_options.as_ref(),
+        |analyzed_plan, analyzer| {
+            let plan_type = PlanType::AnalyzedLogicalPlan {
+                analyzer_name: analyzer.name().to_string(),
+            };
+            stringified.push(analyzed_plan.to_stringified(plan_type));
+        },
+    )?;
+    stringified.push(analyzed_logical.to_stringified(PlanType::FinalAnalyzedLogicalPlan));
+
+    let optimized_logical = session_state.optimizer().optimize(
+        analyzed_logical,
+        &session_state,
+        |optimized_plan, optimizer| {
+            let plan_type = PlanType::OptimizedLogicalPlan {
+                optimizer_name: optimizer.name().to_string(),
+            };
+            stringified.push(optimized_plan.to_stringified(plan_type));
+        },
+    )?;
     stringified.push(optimized_logical.to_stringified(PlanType::FinalLogicalPlan));
 
     let mut physical_error = None;
@@ -193,20 +217,77 @@ async fn collect_plan_with(
     };
 
     if let Some(plan) = physical_plan.take() {
-        let plan = match fields {
-            Some(fields) => match rename_physical_plan(plan, &fields) {
-                Ok(plan) => Some(plan),
-                Err(err) => {
-                    let msg = err.to_string();
+        let display_with = |plan: &dyn ExecutionPlan, show_statistics: bool, show_schema: bool| {
+            displayable(plan)
+                .set_show_statistics(show_statistics)
+                .set_show_schema(show_schema)
+                .indent(true)
+                .to_string()
+        };
+
+        stringified.push(StringifiedPlan::new(
+            PlanType::InitialPhysicalPlan,
+            display_with(
+                plan.as_ref(),
+                explain_config.show_statistics,
+                explain_config.show_schema,
+            ),
+        ));
+
+        if !explain_config.show_statistics {
+            stringified.push(StringifiedPlan::new(
+                PlanType::InitialPhysicalPlanWithStats,
+                display_with(plan.as_ref(), true, explain_config.show_schema),
+            ));
+        }
+        if !explain_config.show_schema {
+            stringified.push(StringifiedPlan::new(
+                PlanType::InitialPhysicalPlanWithSchema,
+                display_with(plan.as_ref(), explain_config.show_statistics, true),
+            ));
+        }
+
+        let mut optimized_physical_plan = plan;
+        for optimizer in session_state.physical_optimizers() {
+            let optimizer_name = optimizer.name().to_string();
+            match optimizer.optimize(Arc::clone(&optimized_physical_plan), config_options) {
+                Ok(new_plan) => {
+                    optimized_physical_plan = new_plan;
                     stringified.push(StringifiedPlan::new(
-                        PlanType::PhysicalPlanError,
-                        msg.clone(),
+                        PlanType::OptimizedPhysicalPlan { optimizer_name },
+                        display_with(
+                            optimized_physical_plan.as_ref(),
+                            explain_config.show_statistics,
+                            explain_config.show_schema,
+                        ),
                     ));
-                    physical_error = Some(msg);
-                    None
                 }
-            },
-            None => Some(plan),
+                Err(DataFusionError::Context(_, err)) => {
+                    stringified.push(StringifiedPlan::new(
+                        PlanType::OptimizedPhysicalPlan { optimizer_name },
+                        err.to_string(),
+                    ));
+                }
+                Err(err) => return Err(PlanError::from(err)),
+            }
+        }
+
+        let plan = match fields {
+            Some(fields) => {
+                match rename_physical_plan(Arc::clone(&optimized_physical_plan), &fields) {
+                    Ok(plan) => Some(plan),
+                    Err(err) => {
+                        let msg = err.to_string();
+                        stringified.push(StringifiedPlan::new(
+                            PlanType::PhysicalPlanError,
+                            msg.clone(),
+                        ));
+                        physical_error = Some(msg);
+                        None
+                    }
+                }
+            }
+            None => Some(optimized_physical_plan),
         };
 
         if let Some(plan) = plan {
@@ -233,11 +314,19 @@ fn render_section(title: &str, body: &str) -> String {
     format!("== {title} ==\n{body}")
 }
 
+fn render_stringified_plans(plans: &[StringifiedPlan]) -> String {
+    plans
+        .iter()
+        .map(|plan| format!("{}:\n{}", plan.plan_type, plan.plan))
+        .collect::<Vec<_>>()
+        .join("\n\n")
+}
+
 async fn maybe_collect_metrics(
     options: &ExplainOptions,
     physical: &Option<Arc<dyn ExecutionPlan>>,
     ctx: &SessionContext,
-) -> DataFusionResult<()> {
+) -> Result<()> {
     if options.analyze {
         // Run the plan to populate metrics. Ignore the output batches.
         if let Some(plan) = physical {
@@ -327,6 +416,10 @@ async fn explain_from_collected(
             render_section(
                 "Codegen",
                 "Whole-stage codegen is not supported; showing physical plan instead.",
+            ),
+            render_section(
+                "Plan Steps",
+                &render_stringified_plans(&collected.stringified),
             ),
             render_section(
                 "Physical Plan",
