@@ -32,6 +32,17 @@ def normalize_plan_text(plan_text: str) -> str:
     return text
 
 
+def _collect_plan(query: str, spark) -> str:
+    """Execute query and extract the single-row plan string."""
+    df = spark.sql(query)
+    rows = df.collect()
+    assert len(rows) == 1, f"expected single row, got {len(rows)}"
+    plan = rows[0][0]
+    assert isinstance(plan, str), "expected string plan output"
+    assert plan, "expected non-empty plan output"
+    return plan
+
+
 class PlanSnapshotExtension(SingleFileSnapshotExtension):
     """Snapshot extension that stores normalized plan text."""
 
@@ -254,18 +265,20 @@ def query_result(datatable, ordered, query, spark):
 def query_plan_equals(docstring, query, spark, snapshot: SnapshotAssertion):
     """Executes the SQL query and asserts the single-row plan output exactly matches the expected text."""
 
-    df = spark.sql(query)
-    rows = df.collect()
-    assert len(rows) == 1, f"expected single row, got {len(rows)}"
-    plan = rows[0][0]
-    assert isinstance(plan, str), "expected string plan output"
-    assert plan, "expected non-empty plan output"
-
+    plan = _collect_plan(query, spark)
     expected = normalize_plan_text(docstring)
     actual = normalize_plan_text(plan)
     assert actual == expected, f"plan mismatch\nExpected:\n{expected}\n\nActual:\n{actual}"
 
     # Persist a normalized snapshot for easier updates and diffing.
+    snapshot.use_extension(PlanSnapshotExtension).assert_match(plan)
+
+
+@then("query plan matches snapshot")
+def query_plan_matches_snapshot(query, spark, snapshot: SnapshotAssertion):
+    """Executes the SQL query and only asserts against the stored snapshot."""
+
+    plan = _collect_plan(query, spark)
     snapshot.use_extension(PlanSnapshotExtension).assert_match(plan)
 
 
