@@ -60,7 +60,7 @@ jobs:
           fi
 
       - name: Run Tests
-        run: hatch run pytest --pyargs pysail --snapshot-update --snapshot-details
+        run: hatch run pytest --pyargs pysail
 
       # Generate coverage report after Python tests
       - name: Generate coverage report
