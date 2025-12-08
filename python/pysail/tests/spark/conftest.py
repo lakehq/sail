@@ -29,8 +29,7 @@ def normalize_plan_text(plan_text: str) -> str:
     text = re.sub(r"input_partitions=\d+", r"input_partitions=<partitions>", text)
     text = re.sub(r"partition_sizes=\[[^\]]+\]", r"partition_sizes=[<sizes>]", text)
     text = re.sub(r"Bytes=Exact\(\d+\)", r"Bytes=Exact(<bytes>)", text)
-    text = re.sub(r"Bytes=Inexact\(\d+\)", r"Bytes=Inexact(<bytes>)", text)
-    return text
+    return re.sub(r"Bytes=Inexact\(\d+\)", r"Bytes=Inexact(<bytes>)", text)
 
 
 def _collect_plan(query: str, spark) -> str:
