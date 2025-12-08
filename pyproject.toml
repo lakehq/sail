@@ -36,7 +36,7 @@ test = [
     "duckdb>=1.0,<2",
     "pytest>=8.4,<9",
     "pytest-bdd>=8.1,<9",
-    "syrupy>=4.6,<5",
+    "syrupy>=5.0,<6",
     "jinja2>=3.1,<4",
     "pillow>=10.3.0",
     "pyiceberg[sql-sqlite,pyiceberg-core]==0.10.0",
