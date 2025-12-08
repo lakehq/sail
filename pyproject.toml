@@ -36,6 +36,7 @@ test = [
     "duckdb>=1.0,<2",
     "pytest>=8.4,<9",
     "pytest-bdd>=8.1,<9",
+    "syrupy>=4.6,<5",
     "jinja2>=3.1,<4",
     "pillow>=10.3.0",
     "pyiceberg[sql-sqlite,pyiceberg-core]==0.10.0",
@@ -77,6 +78,7 @@ dependencies = [
     "ibis-framework>=11,<12",
     "pytest>=8.4,<9",
     "pytest-bdd>=8.1,<9",
+    "syrupy>=4.6,<5",
     "jinja2>=3.1,<4",
     "duckdb>=1.1,<2",
     "mcp>=1.0,<2",
@@ -121,6 +123,7 @@ skip-install = true
 dependencies = [
     "pytest>=8.4,<9",
     "pytest-bdd>=8.1,<9",
+    "syrupy>=4.6,<5",
     "jinja2>=3.1,<4",
     "duckdb>=1.1,<2",
     "pillow>=10.3.0",
@@ -152,6 +155,7 @@ dependencies = [
     "pytest-xdist>=3.7,<4",
     "pytest-timeout>=2.4,<3",
     "pytest-reportlog>=0.4,<0.5",
+    "syrupy>=4.6,<5",
 ]
 
 [[tool.hatch.envs.test-spark.matrix]]
