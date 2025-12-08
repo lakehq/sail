@@ -73,14 +73,14 @@ fn build_job_graph(
         match join.mode {
             PartitionMode::Partitioned => {
                 vec![
-                    build_job_graph(left.clone(), PartitionUsage::Once, graph)?,
-                    build_job_graph(right.clone(), PartitionUsage::Once, graph)?,
+                    build_job_graph(left.clone(), usage, graph)?,
+                    build_job_graph(right.clone(), usage, graph)?,
                 ]
             }
             PartitionMode::CollectLeft => {
                 vec![
                     build_job_graph(left.clone(), PartitionUsage::Shared, graph)?,
-                    build_job_graph(right.clone(), PartitionUsage::Once, graph)?,
+                    build_job_graph(right.clone(), usage, graph)?,
                 ]
             }
             PartitionMode::Auto => {
@@ -96,7 +96,7 @@ fn build_job_graph(
         let (left, right) = plan.children().two()?;
         vec![
             build_job_graph(left.clone(), PartitionUsage::Shared, graph)?,
-            build_job_graph(right.clone(), PartitionUsage::Once, graph)?,
+            build_job_graph(right.clone(), usage, graph)?,
         ]
     } else if plan.as_any().is::<RepartitionExec>() || plan.as_any().is::<CoalescePartitionsExec>()
     {
