@@ -1,3 +1,4 @@
+use std::future::Future;
 use std::sync::Arc;
 
 use datafusion::physical_plan::display::DisplayableExecutionPlan;
@@ -118,14 +119,12 @@ impl CollectedPlan {
     }
 }
 
-async fn collect_plan(
-    ctx: &SessionContext,
-    config: Arc<PlanConfig>,
-    plan: spec::Plan,
-) -> PlanResult<CollectedPlan> {
-    let resolver = PlanResolver::new(ctx, config);
-    let NamedPlan { plan, fields } = resolver.resolve_named_plan(plan).await?;
-
+async fn collect_plan_with<F, Fut>(ctx: &SessionContext, plan_fn: F) -> PlanResult<CollectedPlan>
+where
+    F: FnOnce() -> Fut,
+    Fut: Future<Output = PlanResult<(LogicalPlan, Option<Vec<String>>)>>,
+{
+    let (plan, fields) = plan_fn().await?;
     let initial_logical = plan.clone();
     let mut stringified = vec![initial_logical.to_stringified(PlanType::InitialLogicalPlan)];
 
@@ -214,7 +213,33 @@ pub async fn explain_string(
     plan: spec::Plan,
     options: ExplainOptions,
 ) -> PlanResult<ExplainString> {
-    let collected = collect_plan(ctx, config, plan).await?;
+    let collected = collect_plan_with(ctx, || {
+        let config = Arc::clone(&config);
+        async move {
+            let resolver = PlanResolver::new(ctx, config);
+            let NamedPlan { plan, fields } = resolver.resolve_named_plan(plan).await?;
+            Ok((plan, fields))
+        }
+    })
+    .await?;
+    explain_from_collected(ctx, collected, options).await
+}
+
+pub async fn explain_string_from_logical_plan(
+    ctx: &SessionContext,
+    plan: LogicalPlan,
+    fields: Option<Vec<String>>,
+    options: ExplainOptions,
+) -> PlanResult<ExplainString> {
+    let collected = collect_plan_with(ctx, || async move { Ok((plan, fields)) }).await?;
+    explain_from_collected(ctx, collected, options).await
+}
+
+async fn explain_from_collected(
+    ctx: &SessionContext,
+    collected: CollectedPlan,
+    options: ExplainOptions,
+) -> PlanResult<ExplainString> {
     maybe_collect_metrics(&options, &collected.physical_plan, ctx)
         .await
         .map_err(PlanError::from)?;
