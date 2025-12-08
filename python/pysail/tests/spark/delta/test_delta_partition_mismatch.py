@@ -101,8 +101,8 @@ class TestDeltaPartitionMismatch:
         result_count = result_df.count()
         assert result_count == 4, f"Expected 4 rows, got {result_count}"  # noqa: PLR2004
 
-    def test_append_without_specifying_partition_columns_succeeds(self, spark, tmp_path):
-        """Test that appending without specifying partition columns uses existing partitioning"""
+    def test_append_without_specifying_partition_columns_inherits_partitioning(self, spark, tmp_path):
+        """Appending without partition spec should inherit existing partitioning"""
         delta_path = tmp_path / "auto_partitioned_table"
 
         # Create initial partitioned table
@@ -125,6 +125,10 @@ class TestDeltaPartitionMismatch:
         result_df = spark.read.format("delta").load(str(delta_path)).sort("id")
         result_count = result_df.count()
         assert result_count == 4, f"Expected 4 rows, got {result_count}"  # noqa: PLR2004
+
+        # Verify partition layout inherited the existing spec
+        partition_dirs = {p.name for p in delta_path.iterdir() if p.is_dir() and not p.name.startswith("_")}
+        assert partition_dirs == {"category=A", "category=B", "category=C", "category=D"}
 
     def test_overwrite_with_different_partition_without_schema_overwrite_raises_error(self, spark, tmp_path):
         """Test that overwriting with different partition columns without overwriteSchema raises error"""
@@ -202,28 +206,3 @@ class TestDeltaPartitionMismatch:
 
         with pytest.raises(AnalysisException, match="Partition column mismatch"):
             df_append.write.format("delta").mode("append").partitionBy("category").save(str(delta_path))
-
-    def test_append_without_partitioning_to_partitioned_table_succeeds(self, spark, tmp_path):
-        """Test that appending unpartitioned to a partitioned table inherits partitioning"""
-        delta_path = tmp_path / "inherit_partition_table"
-
-        # Create initial partitioned table
-        initial_data = [
-            Row(id=1, category="A", value=100),
-            Row(id=2, category="B", value=200),
-        ]
-        df_initial = spark.createDataFrame(initial_data)
-        df_initial.write.format("delta").mode("overwrite").partitionBy("category").save(str(delta_path))
-
-        # Append without specifying partitioning (should inherit)
-        append_data = [
-            Row(id=3, category="C", value=300),
-            Row(id=4, category="D", value=400),
-        ]
-        df_append = spark.createDataFrame(append_data)
-        df_append.write.format("delta").mode("append").save(str(delta_path))
-
-        # Verify the data
-        result_df = spark.read.format("delta").load(str(delta_path)).sort("id")
-        result_count = result_df.count()
-        assert result_count == 4, f"Expected 4 rows, got {result_count}"  # noqa: PLR2004
