@@ -119,12 +119,52 @@ impl CollectedPlan {
     }
 }
 
-async fn collect_plan_with<F, Fut>(ctx: &SessionContext, plan_fn: F) -> PlanResult<CollectedPlan>
-where
-    F: FnOnce() -> Fut,
-    Fut: Future<Output = PlanResult<(LogicalPlan, Option<Vec<String>>)>>,
-{
-    let (plan, fields) = plan_fn().await?;
+#[derive(Default)]
+struct PhysicalStrings {
+    plain: Option<String>,
+    with_stats: Option<String>,
+    with_schema: Option<String>,
+    full: Option<String>,
+    full_with_metrics: Option<String>,
+}
+
+impl PhysicalStrings {
+    fn plain<'a>(&'a mut self, collected: &CollectedPlan, verbose: bool) -> &'a str {
+        self.plain
+            .get_or_insert_with(|| collected.physical_string(verbose, false, false, false))
+            .as_str()
+    }
+
+    fn with_stats<'a>(&'a mut self, collected: &CollectedPlan) -> &'a str {
+        self.with_stats
+            .get_or_insert_with(|| collected.physical_string(true, true, false, false))
+            .as_str()
+    }
+
+    fn with_schema<'a>(&'a mut self, collected: &CollectedPlan) -> &'a str {
+        self.with_schema
+            .get_or_insert_with(|| collected.physical_string(true, false, true, false))
+            .as_str()
+    }
+
+    fn full<'a>(&'a mut self, collected: &CollectedPlan) -> &'a str {
+        self.full
+            .get_or_insert_with(|| collected.physical_string(true, true, true, false))
+            .as_str()
+    }
+
+    fn full_with_metrics<'a>(&'a mut self, collected: &CollectedPlan) -> &'a str {
+        self.full_with_metrics
+            .get_or_insert_with(|| collected.physical_string(true, true, true, true))
+            .as_str()
+    }
+}
+
+async fn collect_plan_with(
+    ctx: &SessionContext,
+    plan_future: impl Future<Output = PlanResult<(LogicalPlan, Option<Vec<String>>)>>,
+) -> PlanResult<CollectedPlan> {
+    let (plan, fields) = plan_future.await?;
     let initial_logical = plan.clone();
     let mut stringified = vec![initial_logical.to_stringified(PlanType::InitialLogicalPlan)];
 
@@ -213,13 +253,10 @@ pub async fn explain_string(
     plan: spec::Plan,
     options: ExplainOptions,
 ) -> PlanResult<ExplainString> {
-    let collected = collect_plan_with(ctx, || {
-        let config = Arc::clone(&config);
-        async move {
-            let resolver = PlanResolver::new(ctx, config);
-            let NamedPlan { plan, fields } = resolver.resolve_named_plan(plan).await?;
-            Ok((plan, fields))
-        }
+    let collected = collect_plan_with(ctx, async {
+        let resolver = PlanResolver::new(ctx, Arc::clone(&config));
+        let NamedPlan { plan, fields } = resolver.resolve_named_plan(plan).await?;
+        Ok((plan, fields))
     })
     .await?;
     explain_from_collected(ctx, collected, options).await
@@ -231,7 +268,7 @@ pub async fn explain_string_from_logical_plan(
     fields: Option<Vec<String>>,
     options: ExplainOptions,
 ) -> PlanResult<ExplainString> {
-    let collected = collect_plan_with(ctx, || async move { Ok((plan, fields)) }).await?;
+    let collected = collect_plan_with(ctx, async move { Ok((plan, fields)) }).await?;
     explain_from_collected(ctx, collected, options).await
 }
 
@@ -249,29 +286,24 @@ async fn explain_from_collected(
     let logical_optimized =
         collected.logical_string(&collected.optimized_logical, PlanType::FinalLogicalPlan);
 
-    let physical_plain = collected.physical_string(options.verbose, false, false, false);
-    let physical_with_stats = collected.physical_string(true, true, false, false);
-    let physical_with_schema = collected.physical_string(true, false, true, false);
-    let physical_full = collected.physical_string(true, true, true, false);
-    let physical_full_with_metrics = collected.physical_string(true, true, true, true);
-
-    let physical_for_mode = if options.analyze {
-        &physical_full_with_metrics
-    } else {
-        &physical_plain
-    };
+    let mut physical = PhysicalStrings::default();
 
     let output = match options.kind {
         ExplainKind::Simple => {
+            let physical_for_mode = if options.analyze {
+                physical.full_with_metrics(&collected)
+            } else {
+                physical.plain(&collected, options.verbose)
+            };
             let mut sections = vec![render_section("Physical Plan", physical_for_mode)];
             if options.verbose && !options.analyze {
                 sections.push(render_section(
                     "Physical Plan (with statistics)",
-                    &physical_with_stats,
+                    physical.with_stats(&collected),
                 ));
                 sections.push(render_section(
                     "Physical Plan (with schema)",
-                    &physical_with_schema,
+                    physical.with_schema(&collected),
                 ));
             }
             sections.join("\n\n")
@@ -281,7 +313,14 @@ async fn explain_from_collected(
             // TODO: Spark expects distinct analyzed vs optimized plans
             // Avoid duplicating the same plan until we can separate.
             render_section("Analyzed Logical Plan", &logical_optimized),
-            render_section("Physical Plan", physical_for_mode),
+            render_section(
+                "Physical Plan",
+                if options.analyze {
+                    physical.full_with_metrics(&collected)
+                } else {
+                    physical.plain(&collected, options.verbose)
+                },
+            ),
         ]
         .join("\n\n"),
         ExplainKind::Codegen => [
@@ -289,7 +328,14 @@ async fn explain_from_collected(
                 "Codegen",
                 "Whole-stage codegen is not supported; showing physical plan instead.",
             ),
-            render_section("Physical Plan", physical_for_mode),
+            render_section(
+                "Physical Plan",
+                if options.analyze {
+                    physical.full_with_metrics(&collected)
+                } else {
+                    physical.plain(&collected, options.verbose)
+                },
+            ),
         ]
         .join("\n\n"),
         ExplainKind::Cost => [
@@ -300,15 +346,15 @@ async fn explain_from_collected(
             render_section(
                 "Physical Plan",
                 if options.verbose || options.analyze {
-                    &physical_full
+                    physical.full(&collected)
                 } else {
-                    &physical_with_stats
+                    physical.with_stats(&collected)
                 },
             ),
         ]
         .join("\n\n"),
         // TODO: Spark FORMATTED mode emits outline + node details
-        ExplainKind::Formatted => render_section("Physical Plan", &physical_full),
+        ExplainKind::Formatted => render_section("Physical Plan", physical.full(&collected)),
     };
 
     Ok(ExplainString {
