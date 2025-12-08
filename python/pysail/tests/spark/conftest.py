@@ -4,6 +4,7 @@ import os
 import re
 import textwrap
 import time
+from pathlib import Path
 
 import pyspark.sql.connect.session
 import pytest
@@ -12,7 +13,7 @@ from jinja2 import Template
 from pyspark.sql import SparkSession
 from pytest_bdd import given, parsers, then, when
 from syrupy.assertion import SnapshotAssertion
-from syrupy.extensions.single_file import SingleFileSnapshotExtension
+from syrupy.extensions.single_file import SingleFileSnapshotExtension, WriteMode
 from syrupy.types import SerializableData
 
 from pysail.spark import SparkConnectServer
@@ -47,9 +48,15 @@ class PlanSnapshotExtension(SingleFileSnapshotExtension):
     """Snapshot extension that stores normalized plan text."""
 
     file_extension = "plan"
+    _write_mode = WriteMode.TEXT
+
+    @classmethod
+    def dirname(cls, *, test_location):
+        base_dir = Path(test_location.filepath).parent
+        return str(base_dir / "__plan_snapshots__" / test_location.basename)
 
     def serialize(self, data: SerializableData, **_: object) -> str:
-        return normalize_plan_text(str(data)).encode()
+        return normalize_plan_text(str(data))
 
 
 @pytest.fixture(scope="session")
