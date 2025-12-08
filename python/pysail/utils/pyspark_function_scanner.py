@@ -17,9 +17,6 @@ import jedi
 if TYPE_CHECKING:
     from pathlib import Path
 
-from pysail.utils.logging_config import setup_logging
-
-setup_logging()
 logger = logging.getLogger(__name__)
 
 # Modules to track

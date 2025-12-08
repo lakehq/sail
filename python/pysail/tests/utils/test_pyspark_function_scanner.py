@@ -88,9 +88,9 @@ def test_infer_structtype(tmp_path):
 
         json_str = "..."
 
-        scheme = StructType.fromJson(json.loads(json_str))
-        scheme.simpleString()
-        scheme.jsonValue()
+        schema = StructType.fromJson(json.loads(json_str))
+        schema.simpleString()
+        schema.jsonValue()
 
         """
     )
@@ -112,13 +112,18 @@ def test_infer_column(tmp_path):
         import pyspark.sql.functions as F
 
         spark: SparkSession = SparkSession.builder.getOrCreate()
-        df = spark.range(10).toDF("value")
-        df.filter(df.height.isNotNull()).collect()
+        df = spark.createDataFrame(
+            schema="id INTEGER, name STRING, value INTEGER",
+            data=[
+                (1, "alice", 10),
+                (2, "bob", 20),
+            ],
+        )
 
-        df.select(
-            df["value"].endswith("y"),
-            df["value"].cast("STRING"),
-            F.col("value").eqNullSafe(42),
+        df.filter(
+            F.col("name").like("a%")
+            | (F.col("name").substr(1, 3) == F.lit("bob"))
+            | F.col("id").isin([1, 5])
         ).show()
         """
     )
@@ -126,18 +131,15 @@ def test_infer_column(tmp_path):
     path.write_text(code, encoding="utf-8")
     assert _scan_file(path) == Counter(
         {
-            ("pyspark.sql.Column", "cast"): 1,
-            ("pyspark.sql.Column", "endswith"): 1,
-            ("pyspark.sql.Column", "eqNullSafe"): 1,
-            ("pyspark.sql.Column", "isNotNull"): 1,
-            ("pyspark.sql.DataFrame", "collect"): 1,
+            ("pyspark.sql.Column", "isin"): 1,
+            ("pyspark.sql.Column", "like"): 1,
+            ("pyspark.sql.Column", "substr"): 1,
             ("pyspark.sql.DataFrame", "filter"): 1,
-            ("pyspark.sql.DataFrame", "select"): 1,
             ("pyspark.sql.DataFrame", "show"): 1,
-            ("pyspark.sql.DataFrame", "toDF"): 1,
-            ("pyspark.sql.functions", "col"): 1,
+            ("pyspark.sql.functions", "col"): 3,
+            ("pyspark.sql.functions", "lit"): 1,
+            ("pyspark.sql.session.SparkSession", "createDataFrame"): 1,
             ("pyspark.sql.session.SparkSession", "getOrCreate"): 1,
-            ("pyspark.sql.session.SparkSession", "range"): 1,
         }
     )
 
@@ -182,14 +184,14 @@ def test_scan_directory(tmp_path):
         W.Window.partitionBy("x")
         """
     )
-    for i in range(15):
+    for i in range(3):
         path = tmp_path / f"snippet_{i}.py"
         path.write_text(code, encoding="utf-8")
 
     assert _scan_directory(tmp_path) == Counter(
         {
-            ("pyspark.sql.functions", "col"): 15,
-            ("pyspark.sql.functions", "when"): 15,
-            ("pyspark.sql.Window", "partitionBy"): 15,
+            ("pyspark.sql.functions", "col"): 3,
+            ("pyspark.sql.functions", "when"): 3,
+            ("pyspark.sql.Window", "partitionBy"): 3,
         }
     )

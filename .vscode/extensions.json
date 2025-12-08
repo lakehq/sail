@@ -1,16 +1,17 @@
 {
   "recommendations": [
     "bradlc.vscode-tailwindcss",
+    "charliermarsh.ruff",
     "dbaeumer.vscode-eslint",
-    "esbenp.prettier-vscode",
     "editorconfig.editorconfig",
+    "esbenp.prettier-vscode",
     "vue.volar",
-    "wayou.vscode-todo-highlight"
+    "wayou.vscode-todo-highlight",
   ],
   "unwantedRecommendations": [
     "octref.vetur",
     "hookyqr.beautify",
     "dbaeumer.jshint",
-    "ms-vscode.vscode-typescript-tslint-plugin"
+    "ms-vscode.vscode-typescript-tslint-plugin",
   ]
 }

@@ -5,12 +5,12 @@
     "status": "supported"
   },
   {
-    "module": "pyspark.sql.DataFrame",
+    "module": "pyspark.sql.session.SparkSession",
     "function": "read",
     "status": "supported"
   },
   {
-    "module": "pyspark.sql.DataFrame",
+    "module": "pyspark.sql.session.SparkSession",
     "function": "readStream",
     "status": "in progress"
   }
