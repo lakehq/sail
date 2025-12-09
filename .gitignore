@@ -85,6 +85,7 @@ poetry.lock
 
 # Node modules
 node_modules/
+.pnpm-store/
 
 # VitePress build and cache directories
 docs/.vitepress/dist
