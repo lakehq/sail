@@ -17,63 +17,6 @@ use datafusion_expr::ScalarFunctionArgs;
 use datafusion_expr_common::signature::TypeSignature;
 
 #[derive(Debug, PartialEq, Eq, Hash)]
-pub struct SparkHex {
-    signature: Signature,
-}
-
-impl Default for SparkHex {
-    fn default() -> Self {
-        Self::new()
-    }
-}
-
-impl SparkHex {
-    pub fn new() -> Self {
-        Self {
-            signature: Signature::any(1, Volatility::Immutable),
-        }
-    }
-}
-
-impl ScalarUDFImpl for SparkHex {
-    fn as_any(&self) -> &dyn Any {
-        self
-    }
-
-    fn name(&self) -> &str {
-        "spark_hex"
-    }
-
-    fn signature(&self) -> &Signature {
-        &self.signature
-    }
-
-    fn return_type(&self, _arg_types: &[DataType]) -> Result<DataType> {
-        Ok(DataType::Utf8)
-    }
-
-    fn invoke_with_args(&self, args: ScalarFunctionArgs) -> Result<ColumnarValue> {
-        let ScalarFunctionArgs { args, .. } = args;
-        let [arg] = args.as_slice() else {
-            return exec_err!("`spark_hex` expects exactly one argument");
-        };
-
-        match arg {
-            ColumnarValue::Array(_) => spark_hex(&args),
-            ColumnarValue::Scalar(scalar) => {
-                let scalar = if let ScalarValue::Int32(value) = scalar {
-                    &ScalarValue::Int64(value.map(|v| v as i64))
-                } else {
-                    scalar
-                };
-                let array = scalar.to_array()?;
-                spark_hex(&[ColumnarValue::Array(array)])
-            }
-        }
-    }
-}
-
-#[derive(Debug, PartialEq, Eq, Hash)]
 pub struct SparkUnHex {
     signature: Signature,
 }

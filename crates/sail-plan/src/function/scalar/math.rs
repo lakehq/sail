@@ -18,13 +18,13 @@ use sail_function::scalar::math::spark_bround::SparkBRound;
 use sail_function::scalar::math::spark_ceil_floor::{SparkCeil, SparkFloor};
 use sail_function::scalar::math::spark_conv::SparkConv;
 use sail_function::scalar::math::spark_div::SparkIntervalDiv;
-use sail_function::scalar::math::spark_hex_unhex::{SparkHex, SparkUnHex};
 use sail_function::scalar::math::spark_signum::SparkSignum;
 use sail_function::scalar::math::spark_try_add::SparkTryAdd;
 use sail_function::scalar::math::spark_try_div::SparkTryDiv;
 use sail_function::scalar::math::spark_try_mod::SparkTryMod;
 use sail_function::scalar::math::spark_try_mult::SparkTryMult;
 use sail_function::scalar::math::spark_try_subtract::SparkTrySubtract;
+use sail_function::scalar::math::spark_unhex::SparkUnHex;
 
 use crate::error::{PlanError, PlanResult};
 use crate::function::common::{ScalarFunction, ScalarFunctionInput};
@@ -453,7 +453,7 @@ pub(super) fn list_built_in_math_functions() -> Vec<(&'static str, ScalarFunctio
         ("factorial", F::unary(expr_fn::factorial)),
         ("floor", F::custom(|arg| ceil_floor(arg, "floor"))),
         ("greatest", F::var_arg(expr_fn::greatest)),
-        ("hex", F::udf(SparkHex::new())),
+        ("hex", F::unary(math_fn::hex)),
         ("hypot", F::binary(hypot)),
         ("least", F::var_arg(expr_fn::least)),
         ("ln", F::unary(double(ln))),
