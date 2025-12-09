@@ -29,7 +29,7 @@ pbjson = "0.8.0"
 pbjson-types = "0.8.0"
 pbjson-build = "0.8.0"
 tower = { version = "0.5.2", features = ["full"] }
-uuid = { version = "1.18.1", features = ["serde", "v4"] }
+uuid = { version = "1.19.0", features = ["serde", "v4"] }
 async-trait = "0.1.89"
 async-recursion = "1.1.1"
 async-stream = "0.3.6"
@@ -71,7 +71,7 @@ aws-smithy-async = "1.2.6"
 clap = { version = "4.5.53", features = ["derive"] }
 num_enum = "0.7.4"
 num-traits = "0.2.19"
-log = "0.4.28"
+log = "0.4.29"
 env_logger = "0.11.8"
 fastrace = { version = "0.7.14", features = ["enable"] }
 fastrace-opentelemetry = "0.14.0"
@@ -163,7 +163,7 @@ object_store = { version = "0.12.4", features = ["aws", "gcp", "azure", "http"] 
 hdfs-native-object-store = "0.15.0"
 
 # Lakehouse
-delta_kernel = { version = "0.18.1", features = ["arrow-57", "default-engine-rustls", "internal-api"] }
+delta_kernel = { version = "0.18.2", features = ["arrow-57", "default-engine-rustls", "internal-api"] }
 ######
 # This is the end of the manually managed dependencies.
 # Do not add more dependencies below.
