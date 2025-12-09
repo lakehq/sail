@@ -1,0 +1,74 @@
+[
+  {
+    "module": "pyspark.sql.functions",
+    "function": "&",
+    "status": "supported",
+    "explanation": "bitwise and"
+  },
+  {
+    "module": "pyspark.sql.functions",
+    "function": "^",
+    "status": "supported",
+    "explanation": "bitwise exclusive or"
+  },
+  {
+    "module": "pyspark.sql.functions",
+    "function": "bit_count",
+    "status": "supported"
+  },
+  {
+    "module": "pyspark.sql.functions",
+    "function": "bit_get",
+    "status": "supported"
+  },
+  {
+    "module": "pyspark.sql.functions",
+    "function": "getbit",
+    "status": "supported"
+  },
+  {
+    "module": "pyspark.sql.functions",
+    "function": "shiftleft",
+    "status": "supported"
+  },
+  {
+    "module": "pyspark.sql.functions",
+    "function": "<<",
+    "status": "supported",
+    "explanation": "bitwise left shift"
+  },
+  {
+    "module": "pyspark.sql.functions",
+    "function": "shiftright",
+    "status": "supported"
+  },
+  {
+    "module": "pyspark.sql.functions",
+    "function": ">>",
+    "status": "supported",
+    "explanation": "bitwise right shift"
+  },
+  {
+    "module": "pyspark.sql.functions",
+    "function": "shiftrightunsigned",
+    "status": "supported"
+  },
+  {
+    "module": "pyspark.sql.functions",
+    "function": ">>>",
+    "status": "supported",
+    "explanation": "bitwise unsigned right shift"
+  },
+  {
+    "module": "pyspark.sql.functions",
+    "function": "|",
+    "status": "supported",
+    "explanation": "bitwise or"
+  },
+  {
+    "module": "pyspark.sql.functions",
+    "function": "~",
+    "status": "supported",
+    "explanation": "bitwise not"
+  }
+]
