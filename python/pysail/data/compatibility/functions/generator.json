@@ -1,0 +1,37 @@
+[
+  {
+    "module": "pyspark.sql.functions",
+    "function": "explode",
+    "status": "supported"
+  },
+  {
+    "module": "pyspark.sql.functions",
+    "function": "explode_outer",
+    "status": "supported"
+  },
+  {
+    "module": "pyspark.sql.functions",
+    "function": "inline",
+    "status": "supported"
+  },
+  {
+    "module": "pyspark.sql.functions",
+    "function": "inline_outer",
+    "status": "supported"
+  },
+  {
+    "module": "pyspark.sql.functions",
+    "function": "posexplode",
+    "status": "supported"
+  },
+  {
+    "module": "pyspark.sql.functions",
+    "function": "posexplode_outer",
+    "status": "supported"
+  },
+  {
+    "module": "pyspark.sql.functions",
+    "function": "stack",
+    "status": "supported"
+  }
+]

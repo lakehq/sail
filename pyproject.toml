@@ -37,9 +37,10 @@ test = [
     "pytest>=8.4,<9",
     "pytest-bdd>=8.1,<9",
     "jinja2>=3.1,<4",
-    "pillow>=10.3.0",
+    "pillow>=10.3.0,<11",
     "pyiceberg[sql-sqlite,pyiceberg-core]==0.10.0",
     "pydantic>=2.11,<2.12",
+    "jedi>=0.19.2,<0.20",
 ]
 mcp = [
     "mcp>=1.0.0,<2",
@@ -81,9 +82,10 @@ dependencies = [
     "duckdb>=1.1,<2",
     "mcp>=1.0,<2",
     "boto3>=1.38,<2",
-    "pillow>=10.3.0",
+    "pillow>=10.3.0,<11",
     "pyiceberg[sql-sqlite,pyiceberg-core]==0.10.0",
     "pydantic>=2.11,<2.12",
+    "jedi>=0.19.2,<0.20",
 ]
 path = ".venvs/default"
 
@@ -123,9 +125,10 @@ dependencies = [
     "pytest-bdd>=8.1,<9",
     "jinja2>=3.1,<4",
     "duckdb>=1.1,<2",
-    "pillow>=10.3.0",
+    "pillow>=10.3.0,<11",
     "pyiceberg[sql-sqlite,pyiceberg-core]==0.10.0",
     "pydantic>=2.11,<2.12",
+    "jedi>=0.19.2,<0.20",
 ]
 
 [[tool.hatch.envs.test.matrix]]
@@ -209,6 +212,9 @@ packages = ["python/pysail"]
 
 [tool.hatch.build.targets.wheel]
 packages = ["python/pysail"]
+
+[tool.ruff]
+line-length = 120
 
 [tool.ruff.lint.per-file-ignores]
 "crates/**/*.py" = ["INP001"]

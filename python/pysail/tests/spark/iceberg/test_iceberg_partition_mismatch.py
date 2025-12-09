@@ -59,6 +59,26 @@ class TestIcebergPartitionMismatch:
         with pytest.raises(AnalysisException, match="Partition column mismatch"):
             df_append.write.format("iceberg").mode("append").partitionBy("year", "day").save(iceberg_path)
 
+    def test_append_with_reordered_partition_columns_raises_error(self, spark, tmp_path):
+        """Test that appending with the same columns but different order is rejected"""
+        iceberg_path = f"file://{tmp_path}/reordered_partition_table"
+
+        initial_data = [
+            Row(id=1, year=2023, month=1, value=10),
+            Row(id=2, year=2023, month=2, value=20),
+        ]
+        df_initial = spark.createDataFrame(initial_data)
+        df_initial.write.format("iceberg").mode("overwrite").partitionBy("year", "month").save(iceberg_path)
+
+        append_data = [
+            Row(id=3, year=2024, month=3, value=30),
+            Row(id=4, year=2024, month=4, value=40),
+        ]
+        df_append = spark.createDataFrame(append_data)
+
+        with pytest.raises(AnalysisException, match="Partition column mismatch"):
+            df_append.write.format("iceberg").mode("append").partitionBy("month", "year").save(iceberg_path)
+
     def test_append_with_same_partition_columns_succeeds(self, spark, tmp_path):
         """Test that appending with same partition columns succeeds"""
         iceberg_path = f"file://{tmp_path}/consistent_partitioned_table"
@@ -84,8 +104,8 @@ class TestIcebergPartitionMismatch:
         result_count = result_df.count()
         assert result_count == 4, f"Expected 4 rows, got {result_count}"  # noqa: PLR2004
 
-    def test_append_without_specifying_partition_columns_succeeds(self, spark, tmp_path):
-        """Test that appending without specifying partition columns uses existing partitioning"""
+    def test_append_without_specifying_partition_columns_inherits_partitioning(self, spark, tmp_path):
+        """Appending without partition spec should inherit existing partitioning"""
         iceberg_path = f"file://{tmp_path}/auto_partitioned_table"
 
         # Create initial partitioned table
@@ -108,6 +128,15 @@ class TestIcebergPartitionMismatch:
         result_df = spark.read.format("iceberg").load(iceberg_path).sort("id")
         result_count = result_df.count()
         assert result_count == 4, f"Expected 4 rows, got {result_count}"  # noqa: PLR2004
+
+        # Verify table metadata still reflects the original partition spec
+        table_dir = Path(iceberg_path.replace("file://", ""))
+        metadata_files = sorted(table_dir.joinpath("metadata").glob("*.metadata.json"))
+        latest_meta = json.loads(metadata_files[-1].read_text())
+        default_spec_id = latest_meta["default-spec-id"]
+        default_spec = next(spec for spec in latest_meta["partition-specs"] if spec["spec-id"] == default_spec_id)
+        partition_names = [field["name"] for field in default_spec.get("fields", [])]
+        assert partition_names == ["category"], f"Expected partition spec to remain ['category'], got {partition_names}"
 
     def test_overwrite_with_different_partition_without_schema_overwrite_raises_error(self, spark, tmp_path):
         """Test that overwriting with different partition columns without overwriteSchema raises error"""
@@ -195,31 +224,6 @@ class TestIcebergPartitionMismatch:
 
         with pytest.raises(AnalysisException, match="Partition column mismatch"):
             df_append.write.format("iceberg").mode("append").partitionBy("category").save(iceberg_path)
-
-    def test_append_without_partitioning_to_partitioned_table_succeeds(self, spark, tmp_path):
-        """Test that appending unpartitioned to a partitioned table inherits partitioning"""
-        iceberg_path = f"file://{tmp_path}/inherit_partition_table"
-
-        # Create initial partitioned table
-        initial_data = [
-            Row(id=1, category="A", value=100),
-            Row(id=2, category="B", value=200),
-        ]
-        df_initial = spark.createDataFrame(initial_data)
-        df_initial.write.format("iceberg").mode("overwrite").partitionBy("category").save(iceberg_path)
-
-        # Append without specifying partitioning (should inherit)
-        append_data = [
-            Row(id=3, category="C", value=300),
-            Row(id=4, category="D", value=400),
-        ]
-        df_append = spark.createDataFrame(append_data)
-        df_append.write.format("iceberg").mode("append").save(iceberg_path)
-
-        # Verify the data
-        result_df = spark.read.format("iceberg").load(iceberg_path).sort("id")
-        result_count = result_df.count()
-        assert result_count == 4, f"Expected 4 rows, got {result_count}"  # noqa: PLR2004
 
     def test_create_partition_with_unknown_column_raises_error(self, spark, tmp_path):
         """Test that creating a table with a non-existent partition column raises an error"""
