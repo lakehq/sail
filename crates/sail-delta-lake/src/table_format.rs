@@ -19,8 +19,9 @@ use url::Url;
 
 use crate::datasource::{parse_predicate_expression, DataFusionMixins};
 use crate::options::{ColumnMappingModeOption, TableDeltaOptions};
-use crate::physical_plan::planner::DeltaTableConfig;
-use crate::physical_plan::{plan_delete, plan_merge, DeltaPhysicalPlanner, PlannerContext};
+use crate::physical_plan::planner::{
+    plan_delete, plan_merge, DeltaPhysicalPlanner, DeltaTableConfig, PlannerContext,
+};
 use crate::table::open_table_with_object_store;
 use crate::{create_delta_provider, DeltaTableError, KernelError};
 

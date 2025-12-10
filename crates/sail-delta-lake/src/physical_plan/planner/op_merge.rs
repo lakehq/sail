@@ -389,28 +389,47 @@ impl<'a> AffectedFilesFinder<'a> {
             });
         };
 
-        for clause in &self.merge_info.matched_clauses {
-            let mut pred = matched_pred.clone();
-            if let Some(cond) = &clause.condition {
-                pred = pred.and(Arc::clone(cond));
+        if !self.merge_info.rewrite_matched_predicates.is_empty()
+            || !self
+                .merge_info
+                .rewrite_not_matched_by_source_predicates
+                .is_empty()
+        {
+            for pred in &self.merge_info.rewrite_matched_predicates {
+                let aligned = ctx.align_expr(pred, &input.schema())?;
+                accumulate(&mut rewrite_pred, matched_pred.clone().and(aligned));
             }
-            use sail_common_datafusion::datasource::MergeMatchedActionInfo as MMAI;
-            match &clause.action {
-                MMAI::Delete | MMAI::UpdateAll | MMAI::UpdateSet(_) => {
-                    accumulate(&mut rewrite_pred, pred);
+            for pred in &self.merge_info.rewrite_not_matched_by_source_predicates {
+                let aligned = ctx.align_expr(pred, &input.schema())?;
+                accumulate(
+                    &mut rewrite_pred,
+                    not_matched_by_source_pred.clone().and(aligned),
+                );
+            }
+        } else {
+            for clause in &self.merge_info.matched_clauses {
+                let mut pred = matched_pred.clone();
+                if let Some(cond) = &clause.condition {
+                    pred = pred.and(Arc::clone(cond));
+                }
+                use sail_common_datafusion::datasource::MergeMatchedActionInfo as MMAI;
+                match &clause.action {
+                    MMAI::Delete | MMAI::UpdateAll | MMAI::UpdateSet(_) => {
+                        accumulate(&mut rewrite_pred, pred);
+                    }
                 }
             }
-        }
 
-        for clause in &self.merge_info.not_matched_by_source_clauses {
-            let mut pred = not_matched_by_source_pred.clone();
-            if let Some(cond) = &clause.condition {
-                pred = pred.and(Arc::clone(cond));
-            }
-            use sail_common_datafusion::datasource::MergeNotMatchedBySourceActionInfo as NMBAI;
-            match &clause.action {
-                NMBAI::Delete | NMBAI::UpdateSet(_) => {
-                    accumulate(&mut rewrite_pred, pred);
+            for clause in &self.merge_info.not_matched_by_source_clauses {
+                let mut pred = not_matched_by_source_pred.clone();
+                if let Some(cond) = &clause.condition {
+                    pred = pred.and(Arc::clone(cond));
+                }
+                use sail_common_datafusion::datasource::MergeNotMatchedBySourceActionInfo as NMBAI;
+                match &clause.action {
+                    NMBAI::Delete | NMBAI::UpdateSet(_) => {
+                        accumulate(&mut rewrite_pred, pred);
+                    }
                 }
             }
         }
@@ -1339,22 +1358,22 @@ impl<'a> DeltaMergePlanBuilder<'a> {
         // Build projection expressions for final table columns
         let mut projection_exprs: Vec<(PhysicalExprRef, String)> = Vec::new();
         for field in table_schema.fields() {
-            let name = field.name().clone();
-            let default_expr = match target_exprs.get(&name).cloned() {
+            let name = field.name();
+            let default_expr = match target_exprs.get(name).cloned() {
                 Some(expr) => expr,
                 None => {
                     Arc::new(Literal::new(Self::typed_null(field.data_type())?)) as PhysicalExprRef
                 }
             };
 
-            let cases = column_cases.remove(&name).unwrap_or_default();
+            let cases = column_cases.remove(name).unwrap_or_default();
             let expr: PhysicalExprRef = if cases.is_empty() {
                 default_expr
             } else {
                 Arc::new(CaseExpr::try_new(None, cases, Some(default_expr))?) as PhysicalExprRef
             };
 
-            projection_exprs.push((expr, name));
+            projection_exprs.push((expr, name.clone()));
         }
 
         Ok(Arc::new(ProjectionExec::try_new(projection_exprs, input)?))

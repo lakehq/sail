@@ -1,6 +1,7 @@
 use std::sync::Arc;
 
 use datafusion_common::{JoinType, TableReference};
+use datafusion_expr::utils::{expr_to_columns, split_conjunction};
 use datafusion_expr::{build_join_schema, Expr, Extension, LogicalPlan, SubqueryAlias};
 use sail_catalog::manager::CatalogManager;
 use sail_catalog::provider::TableKind;
@@ -55,6 +56,8 @@ impl PlanResolver<'_> {
         let on_condition = self
             .resolve_expression(on_condition, &merge_schema, state)
             .await?;
+        let (join_key_pairs, residual_predicates, target_only_predicates) =
+            analyze_merge_join(&on_condition, &merge_schema, target_schema.clone());
 
         let (matched_clauses, not_matched_by_source, not_matched_by_target) = self
             .resolve_merge_clauses(clauses, &merge_schema, target_schema.clone(), state)
@@ -69,6 +72,9 @@ impl PlanResolver<'_> {
             matched_clauses,
             not_matched_by_source_clauses: not_matched_by_source,
             not_matched_by_target_clauses: not_matched_by_target,
+            join_key_pairs,
+            residual_predicates,
+            target_only_predicates,
         };
 
         Ok(LogicalPlan::Extension(Extension {
@@ -373,4 +379,86 @@ impl PlanResolver<'_> {
             )),
         }
     }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum ExprColumnDomain {
+    None,
+    TargetOnly,
+    SourceOnly,
+    Mixed,
+}
+
+fn classify_expr_domain(
+    expr: &Expr,
+    merge_schema: &datafusion_common::DFSchemaRef,
+    target_len: usize,
+) -> ExprColumnDomain {
+    use std::collections::HashSet;
+
+    let mut seen_target = false;
+    let mut seen_source = false;
+    let mut cols: HashSet<datafusion_common::Column> = HashSet::new();
+    if expr_to_columns(expr, &mut cols).is_err() {
+        return ExprColumnDomain::Mixed;
+    }
+    for col in cols.into_iter() {
+        if let Ok(idx) = merge_schema.index_of_column(&col) {
+            if idx < target_len {
+                seen_target = true;
+            } else {
+                seen_source = true;
+            }
+        } else {
+            return ExprColumnDomain::Mixed;
+        }
+    }
+    match (seen_target, seen_source) {
+        (false, false) => ExprColumnDomain::None,
+        (true, false) => ExprColumnDomain::TargetOnly,
+        (false, true) => ExprColumnDomain::SourceOnly,
+        (true, true) => ExprColumnDomain::Mixed,
+    }
+}
+
+/// Extract join key pairs and residual predicates from the ON condition.
+/// target_len is the number of target columns in the merged schema.
+fn analyze_merge_join(
+    on_condition: &Expr,
+    merge_schema: &datafusion_common::DFSchemaRef,
+    target_schema: datafusion_common::DFSchemaRef,
+) -> (Vec<(Expr, Expr)>, Vec<Expr>, Vec<Expr>) {
+    let mut join_key_pairs = Vec::new();
+    let mut residual_predicates = Vec::new();
+    let mut target_only_predicates = Vec::new();
+
+    let target_len = target_schema.fields().len();
+
+    for predicate in split_conjunction(on_condition) {
+        if let Expr::BinaryExpr(be) = predicate {
+            if be.op == datafusion_expr::Operator::Eq {
+                let left_domain = classify_expr_domain(&be.left, merge_schema, target_len);
+                let right_domain = classify_expr_domain(&be.right, merge_schema, target_len);
+                match (left_domain, right_domain) {
+                    (ExprColumnDomain::TargetOnly, ExprColumnDomain::SourceOnly) => {
+                        join_key_pairs.push(((*be.left).clone(), (*be.right).clone()));
+                        continue;
+                    }
+                    (ExprColumnDomain::SourceOnly, ExprColumnDomain::TargetOnly) => {
+                        join_key_pairs.push(((*be.right).clone(), (*be.left).clone()));
+                        continue;
+                    }
+                    _ => {}
+                }
+            }
+        }
+
+        if classify_expr_domain(predicate, merge_schema, target_len) == ExprColumnDomain::TargetOnly
+        {
+            target_only_predicates.push(predicate.clone());
+        }
+        residual_predicates.push(predicate.clone());
+    }
+
+    (join_key_pairs, residual_predicates, target_only_predicates)
 }

@@ -42,6 +42,7 @@ use sail_physical_plan::show_string::ShowStringExec;
 use sail_physical_plan::streaming::collector::StreamCollectorExec;
 use sail_physical_plan::streaming::limit::StreamLimitExec;
 use sail_physical_plan::streaming::source_adapter::StreamSourceAdapterExec;
+use sail_plan_lakehouse::new_lakehouse_extension_planners;
 
 #[derive(Debug)]
 pub(crate) struct ExtensionQueryPlanner {}
@@ -53,9 +54,9 @@ impl QueryPlanner for ExtensionQueryPlanner {
         logical_plan: &LogicalPlan,
         session_state: &SessionState,
     ) -> datafusion::common::Result<Arc<dyn ExecutionPlan>> {
-        let planner = DefaultPhysicalPlanner::with_extension_planners(vec![Arc::new(
-            ExtensionPhysicalPlanner {},
-        )]);
+        let mut extension_planners = new_lakehouse_extension_planners();
+        extension_planners.push(Arc::new(ExtensionPhysicalPlanner {}));
+        let planner = DefaultPhysicalPlanner::with_extension_planners(extension_planners);
         planner
             .create_physical_plan(logical_plan, session_state)
             .await
@@ -193,6 +194,9 @@ impl ExtensionPlanner for ExtensionPhysicalPlanner {
             create_file_delete_physical_plan(session_state, planner, schema, node.options().clone())
                 .await?
         } else if let Some(node) = node.as_any().downcast_ref::<MergeIntoNode>() {
+            if node.options().target.format.eq_ignore_ascii_case("delta") {
+                return Ok(None);
+            }
             let [logical_target, logical_source] = logical_inputs else {
                 return internal_err!("MergeIntoNode requires exactly two logical inputs");
             };

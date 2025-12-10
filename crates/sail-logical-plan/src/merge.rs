@@ -17,6 +17,12 @@ pub struct MergeIntoOptions {
     pub matched_clauses: Vec<MergeMatchedClause>,
     pub not_matched_by_source_clauses: Vec<MergeNotMatchedBySourceClause>,
     pub not_matched_by_target_clauses: Vec<MergeNotMatchedByTargetClause>,
+    /// Pre-analyzed join equality keys extracted from the ON condition (target, source)
+    pub join_key_pairs: Vec<(Expr, Expr)>,
+    /// Residual predicates from the ON condition that are not equality join keys
+    pub residual_predicates: Vec<Expr>,
+    /// Predicates from ON that only touch target columns (useful for early pruning)
+    pub target_only_predicates: Vec<Expr>,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq, Hash, PartialOrd)]

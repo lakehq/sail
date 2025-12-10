@@ -2,10 +2,13 @@ use std::collections::HashMap;
 use std::sync::Arc;
 
 use datafusion::execution::SessionState;
+use datafusion::physical_expr::expressions::{BinaryExpr, Literal};
+use datafusion::physical_expr::PhysicalExpr;
 use datafusion::physical_plan::ExecutionPlan;
 use datafusion::physical_planner::PhysicalPlanner;
+use datafusion::scalar::ScalarValue;
 use datafusion_common::{internal_err, Result};
-use datafusion_expr::LogicalPlan;
+use datafusion_expr::{Expr, LogicalPlan, Operator};
 use sail_common_datafusion::datasource::{
     MergeAssignmentInfo, MergeInfo as PhysicalMergeInfo, MergeMatchedActionInfo,
     MergeMatchedClauseInfo, MergeNotMatchedBySourceActionInfo, MergeNotMatchedBySourceClauseInfo,
@@ -46,6 +49,29 @@ pub async fn create_merge_physical_plan(
     let on_condition =
         planner.create_physical_expr(&node.options().on_condition, &input_schema, ctx)?;
 
+    let join_keys: Vec<(Arc<dyn PhysicalExpr>, Arc<dyn PhysicalExpr>)> = node
+        .options()
+        .join_key_pairs
+        .iter()
+        .map(|(l, r)| {
+            Ok((
+                planner.create_physical_expr(l, &input_schema, ctx)?,
+                planner.create_physical_expr(r, &input_schema, ctx)?,
+            ))
+        })
+        .collect::<Result<Vec<_>>>()?;
+
+    let join_filter = combine_conjunction(&node.options().residual_predicates)
+        .map(|expr| planner.create_physical_expr(&expr, &input_schema, ctx))
+        .transpose()?;
+
+    let target_only_filters: Vec<Arc<dyn PhysicalExpr>> = node
+        .options()
+        .target_only_predicates
+        .iter()
+        .map(|expr| planner.create_physical_expr(expr, &input_schema, ctx))
+        .collect::<Result<Vec<_>>>()?;
+
     let matched = convert_matched_clauses(
         planner,
         ctx,
@@ -66,6 +92,14 @@ pub async fn create_merge_physical_plan(
         node.options().not_matched_by_target_clauses.as_slice(),
         &input_schema,
     )?;
+    let (rewrite_matched_predicates, rewrite_not_matched_by_source_predicates) =
+        build_rewrite_predicates(&matched, &not_matched_by_source, &on_condition);
+    let output_columns: Vec<String> = logical_target
+        .schema()
+        .fields()
+        .iter()
+        .map(|f| f.name().clone())
+        .collect();
 
     let target = MergeTargetInfo {
         table_name: node.options().target.table_name.clone(),
@@ -82,6 +116,12 @@ pub async fn create_merge_physical_plan(
         target_schema: logical_target.schema().clone(),
         source_schema: logical_source.schema().clone(),
         on_condition,
+        join_keys,
+        join_filter,
+        target_only_filters,
+        rewrite_matched_predicates,
+        rewrite_not_matched_by_source_predicates,
+        output_columns,
         matched_clauses: matched,
         not_matched_by_source_clauses: not_matched_by_source,
         not_matched_by_target_clauses: not_matched_by_target,
@@ -209,6 +249,51 @@ fn convert_assignments(
         });
     }
     Ok(out)
+}
+
+fn combine_conjunction(exprs: &[Expr]) -> Option<Expr> {
+    let mut iter = exprs.iter().cloned();
+    let first = iter.next()?;
+    Some(iter.fold(first, |acc, expr| Expr::and(acc, expr)))
+}
+
+fn build_rewrite_predicates(
+    matched: &[MergeMatchedClauseInfo],
+    not_matched_by_source: &[MergeNotMatchedBySourceClauseInfo],
+    on_condition: &Arc<dyn PhysicalExpr>,
+) -> (Vec<Arc<dyn PhysicalExpr>>, Vec<Arc<dyn PhysicalExpr>>) {
+    let mut matched_preds = Vec::new();
+    let mut not_matched_by_source_preds = Vec::new();
+
+    for clause in matched {
+        match clause.action {
+            MergeMatchedActionInfo::Delete
+            | MergeMatchedActionInfo::UpdateAll
+            | MergeMatchedActionInfo::UpdateSet(_) => {
+                let mut pred = Arc::clone(on_condition);
+                if let Some(cond) = &clause.condition {
+                    pred = Arc::new(BinaryExpr::new(pred, Operator::And, Arc::clone(cond)))
+                        as Arc<dyn PhysicalExpr>;
+                }
+                matched_preds.push(pred);
+            }
+        }
+    }
+
+    for clause in not_matched_by_source {
+        match clause.action {
+            MergeNotMatchedBySourceActionInfo::Delete
+            | MergeNotMatchedBySourceActionInfo::UpdateSet(_) => {
+                let pred = clause
+                    .condition
+                    .clone()
+                    .unwrap_or_else(|| Arc::new(Literal::new(ScalarValue::Boolean(Some(true)))));
+                not_matched_by_source_preds.push(pred);
+            }
+        }
+    }
+
+    (matched_preds, not_matched_by_source_preds)
 }
 
 fn resolve_target_column(

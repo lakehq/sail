@@ -142,6 +142,18 @@ pub struct MergeInfo {
     pub target_schema: DFSchemaRef,
     pub source_schema: DFSchemaRef,
     pub on_condition: Arc<dyn PhysicalExpr>,
+    /// Equality join keys extracted from the ON condition (target, source)
+    pub join_keys: Vec<(Arc<dyn PhysicalExpr>, Arc<dyn PhysicalExpr>)>,
+    /// Residual predicates from the ON condition (applied as join filter)
+    pub join_filter: Option<Arc<dyn PhysicalExpr>>,
+    /// Filters that only touch target columns (can be applied before join)
+    pub target_only_filters: Vec<Arc<dyn PhysicalExpr>>,
+    /// Predicates for matched clauses that rewrite target rows (delete/update)
+    pub rewrite_matched_predicates: Vec<Arc<dyn PhysicalExpr>>,
+    /// Predicates for NOT MATCHED BY SOURCE clauses that rewrite target rows
+    pub rewrite_not_matched_by_source_predicates: Vec<Arc<dyn PhysicalExpr>>,
+    /// Final output column order for the target table
+    pub output_columns: Vec<String>,
     pub matched_clauses: Vec<MergeMatchedClauseInfo>,
     pub not_matched_by_source_clauses: Vec<MergeNotMatchedBySourceClauseInfo>,
     pub not_matched_by_target_clauses: Vec<MergeNotMatchedByTargetClauseInfo>,
