@@ -5932,6 +5932,25 @@ dependencies = [
 ]
 
 [[package]]
+name = "sail-duck-lake"
+version = "0.4.3"
+dependencies = [
+ "async-trait",
+ "chrono",
+ "datafusion",
+ "datafusion-common",
+ "log",
+ "object_store",
+ "pyo3",
+ "sail-common-datafusion",
+ "sail-data-source",
+ "serde",
+ "tokio",
+ "url",
+ "uuid",
+]
+
+[[package]]
 name = "sail-execution"
 version = "0.4.3"
 dependencies = [
@@ -6218,6 +6237,7 @@ dependencies = [
  "sail-common-datafusion",
  "sail-data-source",
  "sail-delta-lake",
+ "sail-duck-lake",
  "sail-iceberg",
  "secrecy",
 ]
