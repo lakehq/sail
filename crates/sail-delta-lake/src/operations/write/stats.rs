@@ -235,6 +235,7 @@ enum StatsScalar {
     Float64(f64),
     Date(chrono::NaiveDate),
     Timestamp(chrono::NaiveDateTime),
+    TimestampNtz(chrono::NaiveDateTime),
     Decimal(f64),
     String(String),
     Bytes(Vec<u8>),
@@ -270,7 +271,13 @@ impl StatsScalar {
                 Ok(Self::Decimal(val))
             }
             (Statistics::Int32(v), _) => Ok(Self::Int32(get_stat!(v))),
-            (Statistics::Int64(v), Some(LogicalType::Timestamp { unit, .. })) => {
+            (
+                Statistics::Int64(v),
+                Some(LogicalType::Timestamp {
+                    unit,
+                    is_adjusted_to_u_t_c,
+                }),
+            ) => {
                 let v = get_stat!(v);
                 let timestamp = match unit {
                     TimeUnit::MILLIS => chrono::DateTime::from_timestamp_millis(v),
@@ -284,7 +291,11 @@ impl StatsScalar {
                 let timestamp = timestamp.ok_or_else(|| {
                     DeltaTableError::generic(format!("Failed to parse timestamp: {v}"))
                 })?;
-                Ok(Self::Timestamp(timestamp.naive_utc()))
+                if *is_adjusted_to_u_t_c {
+                    Ok(Self::Timestamp(timestamp.naive_utc()))
+                } else {
+                    Ok(Self::TimestampNtz(timestamp.naive_utc()))
+                }
             }
             (Statistics::Int64(v), Some(LogicalType::Decimal { scale, .. })) => {
                 let val = get_stat!(v) as f64 / 10.0_f64.powi(*scale);
@@ -391,6 +402,9 @@ impl From<StatsScalar> for serde_json::Value {
             StatsScalar::Date(v) => serde_json::Value::from(v.format("%Y-%m-%d").to_string()),
             StatsScalar::Timestamp(v) => {
                 serde_json::Value::from(v.format("%Y-%m-%dT%H:%M:%S%.fZ").to_string())
+            }
+            StatsScalar::TimestampNtz(v) => {
+                serde_json::Value::from(v.format("%Y-%m-%dT%H:%M:%S%.f").to_string())
             }
             StatsScalar::Decimal(v) => serde_json::Value::from(v),
             StatsScalar::String(v) => serde_json::Value::from(v),
@@ -568,5 +582,62 @@ fn apply_min_max_for_column(
             }
         }
         (_, None) => unreachable!(),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    #![allow(clippy::expect_used, clippy::unwrap_used, clippy::panic)]
+
+    use parquet::file::statistics::Statistics;
+
+    use super::*;
+
+    #[test]
+    fn stats_scalar_handles_timestamp_ntz_correctly() {
+        let micros = 1_700_000_000_123_456;
+        let stats = Statistics::int64(Some(micros), Some(micros), None, Some(0), false);
+
+        let logical_timestamp = LogicalType::Timestamp {
+            is_adjusted_to_u_t_c: true,
+            unit: TimeUnit::MICROS,
+        };
+        let logical_timestamp_ntz = LogicalType::Timestamp {
+            is_adjusted_to_u_t_c: false,
+            unit: TimeUnit::MICROS,
+        };
+
+        let expected = chrono::DateTime::from_timestamp_micros(micros)
+            .expect("valid timestamp")
+            .naive_utc();
+
+        let scalar_timestamp =
+            StatsScalar::try_from_stats(&stats, Some(&logical_timestamp), true).unwrap();
+        let scalar_timestamp_ntz =
+            StatsScalar::try_from_stats(&stats, Some(&logical_timestamp_ntz), true).unwrap();
+
+        if let StatsScalar::Timestamp(value) = &scalar_timestamp {
+            assert_eq!(value, &expected);
+        } else {
+            panic!("Expected timestamp scalar");
+        }
+
+        if let StatsScalar::TimestampNtz(value) = &scalar_timestamp_ntz {
+            assert_eq!(value, &expected);
+        } else {
+            panic!("Expected timestamp ntz scalar");
+        }
+
+        let timestamp_json = serde_json::Value::from(scalar_timestamp);
+        let timestamp_ntz_json = serde_json::Value::from(scalar_timestamp_ntz);
+
+        assert_eq!(
+            timestamp_json,
+            serde_json::Value::String(expected.format("%Y-%m-%dT%H:%M:%S%.fZ").to_string())
+        );
+        assert_eq!(
+            timestamp_ntz_json,
+            serde_json::Value::String(expected.format("%Y-%m-%dT%H:%M:%S%.f").to_string())
+        );
     }
 }

@@ -1,0 +1,132 @@
+[
+  {
+    "module": "pyspark.sql.DataFrame",
+    "function": "write",
+    "status": "supported"
+  },
+  {
+    "module": "pyspark.sql.DataFrame",
+    "function": "writeTo",
+    "status": "supported"
+  },
+  {
+    "module": "pyspark.sql.DataFrame",
+    "function": "show",
+    "status": "supported"
+  },
+  {
+    "module": "pyspark.sql.DataFrame",
+    "function": "collect",
+    "status": "supported"
+  },
+  {
+    "module": "pyspark.sql.DataFrame",
+    "function": "count",
+    "status": "supported"
+  },
+  {
+    "module": "pyspark.sql.DataFrame",
+    "function": "printSchema",
+    "status": "supported"
+  },
+  {
+    "module": "pyspark.sql.DataFrame",
+    "function": "select",
+    "status": "supported"
+  },
+  {
+    "module": "pyspark.sql.DataFrame",
+    "function": "selectExpr",
+    "status": "supported"
+  },
+  {
+    "module": "pyspark.sql.DataFrame",
+    "function": "withColumn",
+    "status": "supported"
+  },
+  {
+    "module": "pyspark.sql.DataFrame",
+    "function": "replace",
+    "status": "supported"
+  },
+  {
+    "module": "pyspark.sql.DataFrame",
+    "function": "drop",
+    "status": "supported"
+  },
+  {
+    "module": "pyspark.sql.DataFrame",
+    "function": "filter",
+    "status": "supported"
+  },
+  {
+    "module": "pyspark.sql.DataFrame",
+    "function": "agg",
+    "status": "supported"
+  },
+  {
+    "module": "pyspark.sql.DataFrame",
+    "function": "groupBy",
+    "status": "supported"
+  },
+  {
+    "module": "pyspark.sql.DataFrame",
+    "function": "join",
+    "status": "supported"
+  },
+  {
+    "module": "pyspark.sql.DataFrame",
+    "function": "union",
+    "status": "supported"
+  },
+  {
+    "module": "pyspark.sql.DataFrame",
+    "function": "intersect",
+    "status": "supported"
+  },
+  {
+    "module": "pyspark.sql.DataFrame",
+    "function": "exceptAll",
+    "status": "supported"
+  },
+  {
+    "module": "pyspark.sql.DataFrame",
+    "function": "offset",
+    "status": "supported"
+  },
+  {
+    "module": "pyspark.sql.DataFrame",
+    "function": "limit",
+    "status": "supported"
+  },
+  {
+    "module": "pyspark.sql.DataFrame",
+    "function": "sort",
+    "status": "supported"
+  },
+  {
+    "module": "pyspark.sql.DataFrame",
+    "function": "orderBy",
+    "status": "supported"
+  },
+  {
+    "module": "pyspark.sql.DataFrame",
+    "function": "na",
+    "status": "supported"
+  },
+  {
+    "module": "pyspark.sql.DataFrame",
+    "function": "stat",
+    "status": "in progress"
+  },
+  {
+    "module": "pyspark.sql.DataFrame",
+    "function": "createOrReplaceTempView",
+    "status": "supported"
+  },
+  {
+    "module": "pyspark.sql.DataFrame",
+    "function": "rdd",
+    "status": "not supported"
+  }
+]

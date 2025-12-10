@@ -1,0 +1,37 @@
+[
+  {
+    "module": "pyspark.sql.functions",
+    "function": "crc32",
+    "status": "supported"
+  },
+  {
+    "module": "pyspark.sql.functions",
+    "function": "hash",
+    "status": "supported"
+  },
+  {
+    "module": "pyspark.sql.functions",
+    "function": "md5",
+    "status": "supported"
+  },
+  {
+    "module": "pyspark.sql.functions",
+    "function": "sha",
+    "status": "supported"
+  },
+  {
+    "module": "pyspark.sql.functions",
+    "function": "sha1",
+    "status": "supported"
+  },
+  {
+    "module": "pyspark.sql.functions",
+    "function": "sha2",
+    "status": "supported"
+  },
+  {
+    "module": "pyspark.sql.functions",
+    "function": "xxhash64",
+    "status": "supported"
+  }
+]
