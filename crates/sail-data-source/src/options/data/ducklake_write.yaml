@@ -141,4 +141,36 @@
   rust_type: bool
   rust_deserialize_with: crate::options::serde::deserialize_bool
 
+- key: data_path
+  aliases:
+    - dataPath
+  description: |
+    Override path/prefix for data files written to DuckLake.
+  supported: true
+  rust_type: String
+
+- key: encrypted
+  description: |
+    Whether Parquet files written to the data path should be encrypted.
+  supported: true
+  rust_type: bool
+  rust_deserialize_with: crate::options::serde::deserialize_bool
+
+- key: access_mode
+  aliases:
+    - accessMode
+  description: |
+    Access mode for metadata/database during write. One of: AUTOMATIC, READ_ONLY, READ_WRITE.
+  supported: true
+  rust_type: String
+
+- key: busy_timeout
+  aliases:
+    - busyTimeout
+  description: |
+    Busy timeout in milliseconds for SQLite metadata connections during write operations.
+  supported: true
+  rust_type: u64
+  rust_deserialize_with: crate::options::serde::deserialize_u64
+
 

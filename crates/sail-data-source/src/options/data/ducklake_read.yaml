@@ -13,7 +13,8 @@
 - key: table
   description: |
     Table name to read. Format: 'table_name' or 'schema.table_name'.
-    If schema is omitted, defaults to 'main'.
+    If schema is omitted, defaults to 'main'. This schema is the table namespace,
+    not the metadata database schema.
   supported: true
   rust_type: String
 
@@ -50,4 +51,36 @@
   supported: true
   rust_type: bool
   rust_deserialize_with: crate::options::serde::deserialize_bool
+
+- key: data_path
+  aliases:
+    - dataPath
+  description: |
+    Override path/prefix for data files. If set, it replaces the data path
+    stored in DuckLake metadata.
+  supported: true
+  rust_type: String
+
+- key: access_mode
+  aliases:
+    - accessMode
+  description: |
+    Access mode for the metadata/database. One of: AUTOMATIC, READ_ONLY, READ_WRITE.
+  supported: true
+  rust_type: String
+
+- key: encryption
+  description: |
+    Encryption mode for DuckLake data files. One of: automatic, encrypted, unencrypted.
+  supported: true
+  rust_type: String
+
+- key: busy_timeout
+  aliases:
+    - busyTimeout
+  description: |
+    Busy timeout in milliseconds for SQLite metadata connections.
+  supported: true
+  rust_type: u64
+  rust_deserialize_with: crate::options::serde::deserialize_u64
 
