@@ -141,6 +141,8 @@ pub struct MergeInfo {
     pub source: Arc<dyn ExecutionPlan>,
     pub target_schema: DFSchemaRef,
     pub source_schema: DFSchemaRef,
+    /// Joined logical schema (target followed by source)
+    pub join_schema: Arc<datafusion::arrow::datatypes::Schema>,
     pub on_condition: Arc<dyn PhysicalExpr>,
     /// Equality join keys extracted from the ON condition (target, source)
     pub join_keys: Vec<(Arc<dyn PhysicalExpr>, Arc<dyn PhysicalExpr>)>,

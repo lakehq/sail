@@ -891,21 +891,22 @@ impl<'a> DeltaMergePlanBuilder<'a> {
         let mut column_indices = Vec::new();
         let mut fields = Vec::new();
 
-        let target_arrow = self.merge_info.target_schema.as_ref().as_arrow().clone();
-        for (idx, field) in target_arrow.fields().iter().enumerate() {
+        let target_len = self.merge_info.target_schema.fields().len();
+        for (idx, field) in self.merge_info.join_schema.fields().iter().enumerate() {
             fields.push(field.as_ref().clone());
+            let side = if idx < target_len {
+                JoinSide::Left
+            } else {
+                JoinSide::Right
+            };
+            let side_idx = if idx < target_len {
+                idx
+            } else {
+                idx - target_len
+            };
             column_indices.push(ColumnIndex {
-                index: idx,
-                side: JoinSide::Left,
-            });
-        }
-
-        let source_arrow = self.merge_info.source_schema.as_ref().as_arrow().clone();
-        for (idx, field) in source_arrow.fields().iter().enumerate() {
-            fields.push(field.as_ref().clone());
-            column_indices.push(ColumnIndex {
-                index: idx,
-                side: JoinSide::Right,
+                index: side_idx,
+                side,
             });
         }
 

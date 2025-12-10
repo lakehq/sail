@@ -109,12 +109,14 @@ pub async fn create_merge_physical_plan(
     };
 
     let format = node.options().target.format.clone();
+    let join_schema = Arc::new(node.input_schema().as_ref().as_arrow().clone());
     let info = PhysicalMergeInfo {
         target,
         target_input: physical_target,
         source: physical_source,
         target_schema: logical_target.schema().clone(),
         source_schema: logical_source.schema().clone(),
+        join_schema,
         on_condition,
         join_keys,
         join_filter,
