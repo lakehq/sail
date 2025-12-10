@@ -24,7 +24,6 @@ use datafusion::logical_expr::Operator;
 use datafusion::physical_expr::expressions::{
     BinaryExpr, CaseExpr, CastExpr, Column, InListExpr, IsNotNullExpr, Literal, NotExpr,
 };
-use datafusion::physical_expr::utils::split_conjunction;
 use datafusion::physical_expr::PhysicalExpr;
 use datafusion::physical_plan::filter::FilterExec;
 use datafusion::physical_plan::joins::utils::{ColumnIndex, JoinFilter};
@@ -496,14 +495,6 @@ impl<'a> AffectedFilesFinder<'a> {
     }
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum ExprColumnDomain {
-    None,
-    TargetOnly,
-    SourceOnly,
-    Mixed,
-}
-
 impl<'a> DeltaMergePlanBuilder<'a> {
     pub fn new(
         table_url: Url,
@@ -522,117 +513,20 @@ impl<'a> DeltaMergePlanBuilder<'a> {
     fn analyze_join_condition(&self) -> Result<JoinConditionAnalysis> {
         let num_target = self.merge_info.target_schema.fields().len();
         let num_source = self.merge_info.source_schema.fields().len();
-        let mut join_keys: Vec<PhysicalExprPair> = Vec::new();
-        let mut residual_filters: Vec<Arc<dyn PhysicalExpr>> = Vec::new();
-        let mut target_only_filters: Vec<Arc<dyn PhysicalExpr>> = Vec::new();
+        let mut join_keys = Vec::with_capacity(self.merge_info.join_keys.len());
 
-        for predicate in split_conjunction(&self.merge_info.on_condition.clone()) {
-            if let Some((left, right)) =
-                self.extract_equality_join_key(predicate, num_target, num_source)?
-            {
-                join_keys.push((left, right));
-                continue;
-            }
-
-            match Self::classify_expr_domain(predicate, num_target, num_source) {
-                ExprColumnDomain::TargetOnly => {
-                    target_only_filters.push(Arc::clone(predicate));
-                    residual_filters.push(Arc::clone(predicate));
-                }
-                ExprColumnDomain::SourceOnly | ExprColumnDomain::None | ExprColumnDomain::Mixed => {
-                    residual_filters.push(Arc::clone(predicate));
-                }
-            }
+        for (left, right) in &self.merge_info.join_keys {
+            let left = Self::remap_expr_for_side(left, 0, num_target, num_target + num_source)?;
+            let right =
+                Self::remap_expr_for_side(right, num_target, num_source, num_target + num_source)?;
+            join_keys.push((left, right));
         }
 
         Ok(JoinConditionAnalysis {
-            residual_filter: Self::combine_conjunction(&residual_filters),
+            residual_filter: self.merge_info.join_filter.clone(),
+            target_only_filters: self.merge_info.target_only_filters.clone(),
             join_keys,
-            target_only_filters,
         })
-    }
-
-    fn extract_equality_join_key(
-        &self,
-        predicate: &Arc<dyn PhysicalExpr>,
-        num_target: usize,
-        num_source: usize,
-    ) -> Result<Option<PhysicalExprPair>> {
-        let Some(binary) = predicate.as_any().downcast_ref::<BinaryExpr>() else {
-            return Ok(None);
-        };
-
-        if binary.op() != &Operator::Eq {
-            return Ok(None);
-        }
-
-        let left_domain = Self::classify_expr_domain(binary.left(), num_target, num_source);
-        let right_domain = Self::classify_expr_domain(binary.right(), num_target, num_source);
-
-        match (left_domain, right_domain) {
-            (ExprColumnDomain::TargetOnly, ExprColumnDomain::SourceOnly) => {
-                let left = Self::remap_expr_for_side(
-                    binary.left(),
-                    0,
-                    num_target,
-                    num_target + num_source,
-                )?;
-                let right = Self::remap_expr_for_side(
-                    binary.right(),
-                    num_target,
-                    num_source,
-                    num_target + num_source,
-                )?;
-                Ok(Some((left, right)))
-            }
-            (ExprColumnDomain::SourceOnly, ExprColumnDomain::TargetOnly) => {
-                let right = Self::remap_expr_for_side(
-                    binary.right(),
-                    0,
-                    num_target,
-                    num_target + num_source,
-                )?;
-                let left = Self::remap_expr_for_side(
-                    binary.left(),
-                    num_target,
-                    num_source,
-                    num_target + num_source,
-                )?;
-                Ok(Some((right, left)))
-            }
-            _ => Ok(None),
-        }
-    }
-
-    fn classify_expr_domain(
-        expr: &Arc<dyn PhysicalExpr>,
-        num_target: usize,
-        _num_source: usize,
-    ) -> ExprColumnDomain {
-        let mut seen_target = false;
-        let mut seen_source = false;
-
-        let mut stack: Vec<Arc<dyn PhysicalExpr>> = vec![Arc::clone(expr)];
-        while let Some(node) = stack.pop() {
-            if let Some(col) = node.as_any().downcast_ref::<Column>() {
-                if col.index() < num_target {
-                    seen_target = true;
-                } else {
-                    seen_source = true;
-                }
-            }
-
-            for child in node.children() {
-                stack.push(Arc::clone(child));
-            }
-        }
-
-        match (seen_target, seen_source) {
-            (false, false) => ExprColumnDomain::None,
-            (true, false) => ExprColumnDomain::TargetOnly,
-            (false, true) => ExprColumnDomain::SourceOnly,
-            (true, true) => ExprColumnDomain::Mixed,
-        }
     }
 
     fn remap_expr_for_side(
@@ -669,14 +563,6 @@ impl<'a> DeltaMergePlanBuilder<'a> {
                 Ok(Transformed::no(node))
             })
             .data()
-    }
-
-    fn combine_conjunction(exprs: &[Arc<dyn PhysicalExpr>]) -> Option<Arc<dyn PhysicalExpr>> {
-        let mut iter = exprs.iter().cloned();
-        let first = iter.next()?;
-        Some(iter.fold(first, |acc, expr| {
-            Arc::new(BinaryExpr::new(acc, Operator::And, expr)) as Arc<dyn PhysicalExpr>
-        }))
     }
 
     pub async fn build(self) -> Result<Arc<dyn ExecutionPlan>> {
