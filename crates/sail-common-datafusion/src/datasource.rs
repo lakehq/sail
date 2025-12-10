@@ -143,6 +143,12 @@ pub struct MergeInfo {
     pub source_schema: DFSchemaRef,
     /// Joined logical schema (target followed by source)
     pub join_schema: Arc<datafusion::arrow::datatypes::Schema>,
+    /// Indicates that join/filter/project have been expanded in the logical plan
+    pub pre_expanded: bool,
+    /// Final physical plan ready for writing (if pre_expanded)
+    pub expanded_input: Option<Arc<dyn ExecutionPlan>>,
+    /// Physical plan that yields touched file paths (if pre_expanded)
+    pub touched_file_plan: Option<Arc<dyn ExecutionPlan>>,
     pub on_condition: Arc<dyn PhysicalExpr>,
     /// Equality join keys extracted from the ON condition (target, source)
     pub join_keys: Vec<(Arc<dyn PhysicalExpr>, Arc<dyn PhysicalExpr>)>,

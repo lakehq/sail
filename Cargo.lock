@@ -6046,6 +6046,7 @@ name = "sail-logical-optimizer"
 version = "0.4.3"
 dependencies = [
  "datafusion",
+ "sail-plan-lakehouse",
 ]
 
 [[package]]

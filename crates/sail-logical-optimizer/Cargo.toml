@@ -8,3 +8,4 @@ workspace = true
 
 [dependencies]
 datafusion = { workspace = true }
+sail-plan-lakehouse = { path = "../sail-plan-lakehouse" }

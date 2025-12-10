@@ -12,11 +12,17 @@ use sail_delta_lake::datasource::schema::DataFusionMixins;
 use sail_delta_lake::table::open_table_with_object_store;
 use sail_logical_plan::file_delete::FileDeleteNode;
 use sail_logical_plan::file_write::FileWriteNode;
-use sail_logical_plan::merge::MergeIntoNode;
+use sail_logical_plan::merge::{MergeIntoNode, MergeIntoWriteNode};
 use sail_physical_plan::file_delete::create_file_delete_physical_plan;
 use sail_physical_plan::file_write::create_file_write_physical_plan;
-use sail_physical_plan::merge::create_merge_physical_plan;
+use sail_physical_plan::merge::{
+    create_merge_physical_plan, create_preexpanded_merge_physical_plan,
+};
 use url::Url;
+
+mod optimizer;
+
+pub use optimizer::lakehouse_optimizer_rules;
 
 fn is_lakehouse_format(format: &str) -> bool {
     format.eq_ignore_ascii_case("delta")
@@ -119,6 +125,27 @@ impl ExtensionPlanner for DeltaExtensionPlanner {
                 logical_source,
                 physical_target.clone(),
                 physical_source.clone(),
+                node,
+            )
+            .await?;
+            return Ok(Some(plan));
+        }
+
+        if let Some(node) = node.as_any().downcast_ref::<MergeIntoWriteNode>() {
+            if !is_lakehouse_format(&node.options().target.format) {
+                return Ok(None);
+            }
+
+            let physical_write = planner
+                .create_physical_plan(node.input(), session_state)
+                .await?;
+            let physical_touched = planner
+                .create_physical_plan(node.touched_files_plan(), session_state)
+                .await?;
+
+            let plan = create_preexpanded_merge_physical_plan(
+                session_state,
+                &[physical_write, physical_touched],
                 node,
             )
             .await?;

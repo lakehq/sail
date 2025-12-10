@@ -68,6 +68,8 @@ impl PlanResolver<'_> {
             source_alias: source_alias_string,
             target: target_metadata,
             with_schema_evolution,
+            resolved_target_schema: target_schema.clone(),
+            resolved_source_schema: source_schema.clone(),
             on_condition,
             matched_clauses,
             not_matched_by_source_clauses: not_matched_by_source,

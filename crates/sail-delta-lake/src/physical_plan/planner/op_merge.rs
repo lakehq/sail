@@ -368,6 +368,11 @@ impl<'a> AffectedFilesFinder<'a> {
         self.load_add_actions_for_paths(&touched_paths).await
     }
 
+    async fn find_touched_files_from_plan(&self, plan: Arc<dyn ExecutionPlan>) -> Result<Vec<Add>> {
+        let touched_paths = self.collect_touched_paths(plan).await?;
+        self.load_add_actions_for_paths(&touched_paths).await
+    }
+
     fn build_touched_file_plan(
         &self,
         input: Arc<dyn ExecutionPlan>,
@@ -595,6 +600,35 @@ impl<'a> DeltaMergePlanBuilder<'a> {
             options.merge_schema = true;
         }
 
+        if self.merge_info.pre_expanded {
+            let projected = self.merge_info.expanded_input.clone().ok_or_else(|| {
+                DataFusionError::Plan("pre-expanded MERGE plan missing expanded input".to_string())
+            })?;
+
+            let finder = AffectedFilesFinder::new(
+                &snapshot_state,
+                log_store.clone(),
+                self.session,
+                &self.merge_info,
+            );
+
+            let touched_adds = if let Some(plan) = self.merge_info.touched_file_plan.clone() {
+                finder.find_touched_files_from_plan(plan).await?
+            } else {
+                Vec::new()
+            };
+
+            return self
+                .finalize_merge(
+                    projected,
+                    options,
+                    partition_columns,
+                    table_schema,
+                    touched_adds,
+                )
+                .await;
+        }
+
         let join_analysis = self.analyze_join_condition()?;
 
         let target_plan = self
@@ -665,43 +699,14 @@ impl<'a> DeltaMergePlanBuilder<'a> {
         let filtered = self.build_merge_row_filter(join_plan, &ctx)?;
         let filtered = self.filter_to_touched_rows(filtered, &ctx, &touched_paths)?;
         let projected = self.build_merge_projection(filtered, &ctx)?;
-
-        let writer = Arc::new(DeltaWriterExec::new(
-            Arc::clone(&projected),
-            self.table_url.clone(),
+        self.finalize_merge(
+            projected,
             options,
-            partition_columns.clone(),
-            PhysicalSinkMode::Append,
-            true,
-            table_schema.clone(),
-            None,
-        ));
-
-        let mut action_inputs: Vec<Arc<dyn ExecutionPlan>> =
-            vec![Arc::clone(&writer) as Arc<dyn ExecutionPlan>];
-
-        if !touched_adds.is_empty() {
-            let remove_source = self.create_add_actions_plan(&touched_adds).await?;
-            let remove_plan = Arc::new(DeltaRemoveActionsExec::new(remove_source));
-            action_inputs.push(remove_plan);
-        }
-
-        let commit_input: Arc<dyn ExecutionPlan> = if action_inputs.len() == 1 {
-            writer
-        } else {
-            UnionExec::try_new(action_inputs)?
-        };
-
-        let commit = Arc::new(DeltaCommitExec::new(
-            commit_input,
-            self.table_url.clone(),
             partition_columns,
-            true, // table exists
             table_schema,
-            PhysicalSinkMode::Append,
-        ));
-
-        Ok(commit)
+            touched_adds,
+        )
+        .await
     }
 
     async fn build_target_plan(
@@ -1298,5 +1303,51 @@ impl<'a> DeltaMergePlanBuilder<'a> {
             .scan(self.session, None, &[], None)
             .await
             .map_err(|e| DataFusionError::External(Box::new(e)))
+    }
+
+    async fn finalize_merge(
+        &self,
+        projected: Arc<dyn ExecutionPlan>,
+        options: TableDeltaOptions,
+        partition_columns: Vec<String>,
+        table_schema: SchemaRef,
+        touched_adds: Vec<Add>,
+    ) -> Result<Arc<dyn ExecutionPlan>> {
+        let writer = Arc::new(DeltaWriterExec::new(
+            Arc::clone(&projected),
+            self.table_url.clone(),
+            options,
+            partition_columns.clone(),
+            PhysicalSinkMode::Append,
+            true,
+            table_schema.clone(),
+            None,
+        ));
+
+        let mut action_inputs: Vec<Arc<dyn ExecutionPlan>> =
+            vec![Arc::clone(&writer) as Arc<dyn ExecutionPlan>];
+
+        if !touched_adds.is_empty() {
+            let remove_source = self.create_add_actions_plan(&touched_adds).await?;
+            let remove_plan = Arc::new(DeltaRemoveActionsExec::new(remove_source));
+            action_inputs.push(remove_plan);
+        }
+
+        let commit_input: Arc<dyn ExecutionPlan> = if action_inputs.len() == 1 {
+            writer
+        } else {
+            UnionExec::try_new(action_inputs)?
+        };
+
+        let commit = Arc::new(DeltaCommitExec::new(
+            commit_input,
+            self.table_url.clone(),
+            partition_columns,
+            true, // table exists
+            table_schema,
+            PhysicalSinkMode::Append,
+        ));
+
+        Ok(commit)
     }
 }
