@@ -162,6 +162,11 @@ pub struct MergeInfo {
     pub with_schema_evolution: bool,
 }
 
+// TODO: MERGE schema evolution end-to-end
+// - Expand sink schema during MERGE: detect source-only columns (case-insensitive), keep target order, append new cols, project source/NULL for them.
+// - Emit Metadata (and Protocol if required) in writer/commit so the new schema is persisted and readable.
+// - Reading: time-travel must stay on the requested version; non-time-travel can refresh to latest snapshot to see new schema.
+
 /// A trait for preparing physical execution for a specific format.
 #[async_trait]
 pub trait TableFormat: Send + Sync {
