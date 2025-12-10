@@ -24,6 +24,7 @@ use datafusion::execution::context::TaskContext;
 use datafusion::physical_plan::union::UnionExec;
 use datafusion::physical_plan::{collect, ExecutionPlan};
 use futures::TryStreamExt;
+use sail_common_datafusion::datasource::{MergeInfo as PhysicalMergeInfo, PhysicalSinkMode};
 use url::Url;
 
 use super::context::PlannerContext;
@@ -33,7 +34,6 @@ use crate::options::TableDeltaOptions;
 use crate::physical_plan::{DeltaCommitExec, DeltaRemoveActionsExec, DeltaWriterExec};
 use crate::storage::LogStoreRef;
 use crate::table::DeltaTableState;
-use sail_common_datafusion::datasource::{MergeInfo as PhysicalMergeInfo, PhysicalSinkMode};
 
 /// Entry point for MERGE execution. Expects the logical MERGE to be fully
 /// expanded (handled by ExpandMergeRule) and passed down as pre-expanded plans.

@@ -6,7 +6,8 @@ use std::sync::Arc;
 
 use datafusion_common::tree_node::{Transformed, TreeNode};
 use datafusion_common::{
-    plan_err, Column, DFSchema, DFSchemaRef, NullEquality, Result, ScalarValue, TableReference,
+    plan_err, Column, DFSchema, DFSchemaRef, DataFusionError, NullEquality, Result, ScalarValue,
+    TableReference,
 };
 use datafusion_expr::expr::Case;
 use datafusion_expr::expr_fn::not;
@@ -264,7 +265,7 @@ impl UserDefinedLogicalNodeCore for MergeIntoWriteNode {
     }
 
     fn inputs(&self) -> Vec<&LogicalPlan> {
-        vec![]
+        vec![self.input.as_ref(), self.touched_files_plan.as_ref()]
     }
 
     fn schema(&self) -> &DFSchemaRef {
@@ -285,13 +286,15 @@ impl UserDefinedLogicalNodeCore for MergeIntoWriteNode {
         inputs: Vec<LogicalPlan>,
     ) -> datafusion_common::Result<Self> {
         exprs.zero()?;
-        let _ = inputs;
+        let (input, touched) = inputs.two().map_err(|_| {
+            DataFusionError::Internal("MergeIntoWriteNode expects exactly 2 inputs".to_string())
+        })?;
         Ok(Self {
             raw_target: self.raw_target.clone(),
             raw_source: self.raw_source.clone(),
             raw_input_schema: self.raw_input_schema.clone(),
-            input: self.input.clone(),
-            touched_files_plan: self.touched_files_plan.clone(),
+            input: Arc::new(input),
+            touched_files_plan: Arc::new(touched),
             options: self.options.clone(),
             schema: self.schema.clone(),
         })
