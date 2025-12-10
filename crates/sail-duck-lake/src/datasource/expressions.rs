@@ -30,6 +30,7 @@ pub fn get_pushdown_filters(
     filters: &[&Expr],
     _partition_cols: &[String],
 ) -> Vec<TableProviderFilterPushDown> {
+    // TODO: make partition-aware and support broader operators/structural predicates for pushdown (incl. deletes/inlined)
     filters
         .iter()
         .map(|expr| match expr {

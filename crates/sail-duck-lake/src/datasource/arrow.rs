@@ -57,6 +57,7 @@ pub fn parse_ducklake_type(type_str: &str) -> DataFusionResult<DataType> {
         "VARCHAR" | "TEXT" | "STRING" | "UTF8" => Ok(DataType::Utf8),
         "BLOB" | "BYTEA" | "BINARY" => Ok(DataType::Binary),
         "UUID" => Ok(DataType::Utf8),
+        // TODO: add HUGEINT (128-bit) and GEOMETRY mappings consistent with DuckLake types
         s if s.starts_with("DECIMAL(") => {
             let inner = s
                 .strip_prefix("DECIMAL(")

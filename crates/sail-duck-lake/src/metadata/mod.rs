@@ -51,6 +51,7 @@ pub trait DuckLakeMetaStore: Send + Sync {
         _table_id: crate::spec::TableIndex,
         _snapshot_id: Option<u64>,
     ) -> DataFusionResult<Vec<crate::spec::DeleteFileInfo>> {
+        // TODO: wire through delete files so reads can apply row-level deletes
         Ok(vec![])
     }
 }

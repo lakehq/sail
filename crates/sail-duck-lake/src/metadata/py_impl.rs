@@ -414,6 +414,7 @@ impl DuckLakeMetaStore for PythonMetaStore {
         &self,
         request: ListDataFilesRequest,
     ) -> DataFusionResult<Vec<FileInfo>> {
+        // TODO: also surface associated ducklake_delete_file rows so readers can apply row-level deletes
         let table_id = request.table_id;
         let snapshot_id = request.snapshot_id;
         let url = self.url.clone();

@@ -127,6 +127,9 @@ impl TableProvider for DuckLakeTableProvider {
         let required_stats = self.collect_required_stat_fields(prune_schema.as_ref());
         let request = self.build_data_file_request(partition_filters, required_stats);
         let files = self.meta_store.list_data_files(request).await?;
+        // TODO: fetch and apply delete files (row-level deletes) alongside data files
+        // TODO: load name mappings (mapping_id) and adapt physical<->logical schema for schema evolution
+        // TODO: union inlined_data_tables into the scan (MemoryExec) so unflushed inserts are visible
 
         log::trace!("Found {} data files", files.len());
 
@@ -256,6 +259,7 @@ impl DuckLakeTableProvider {
             .child(self.table.schema_info.schema_name.as_str())
             .child(self.table.table_info.table_name.as_str());
 
+        // TODO: honor catalog path/path_is_relative instead of assuming schema/table layout
         Ok((object_store_url, table_prefix))
     }
 
@@ -268,6 +272,7 @@ impl DuckLakeTableProvider {
 
         for file in files {
             let object_path = Self::resolve_file_path(table_prefix, &file)?;
+            // TODO: propagate row_id_start, mapping_id, encryption, delete file refs, and file_format into scan config
             let partitioned_file = PartitionedFile::new(object_path, file.file_size_bytes);
             let partition_key = file.partition_id.map(|p| p.0);
             file_groups
@@ -342,6 +347,7 @@ impl DuckLakeTableProvider {
         schema: &datafusion::arrow::datatypes::Schema,
         partition_fields: &[PartitionFieldInfo],
     ) -> (Vec<PartitionFilter>, Vec<Expr>) {
+        // TODO: support non-identity transforms and richer predicates for partition pruning/pushdown
         let mut name_to_partition_key: HashMap<String, u64> = HashMap::new();
         for field in partition_fields {
             if field.transform.trim().eq_ignore_ascii_case("identity") {
@@ -461,6 +467,7 @@ impl DuckLakeTableProvider {
         schema: &datafusion::arrow::datatypes::Schema,
         files: &[FileInfo],
     ) -> Statistics {
+        // TODO: fill min/max/null_count from FileInfo.column_stats so pruning/limits can use stats
         let column_statistics = (0..schema.fields().len())
             .map(|_| ColumnStatistics {
                 null_count: Precision::Absent,
