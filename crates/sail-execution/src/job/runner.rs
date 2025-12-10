@@ -5,6 +5,7 @@ use datafusion::execution::SendableRecordBatchStream;
 use datafusion::physical_plan::{execute_stream, ExecutionPlan};
 use datafusion::prelude::SessionContext;
 use sail_server::actor::{ActorHandle, ActorSystem};
+use sail_telemetry::trace_execution_plan;
 use tokio::sync::oneshot;
 
 use crate::driver::{DriverActor, DriverEvent, DriverOptions};
@@ -51,6 +52,7 @@ impl JobRunner for LocalJobRunner {
                 "job runner is stopped".to_string(),
             ));
         }
+        let plan = trace_execution_plan(plan)?;
         Ok(execute_stream(plan, ctx.task_ctx())?)
     }
 

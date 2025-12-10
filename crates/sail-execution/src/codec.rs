@@ -39,14 +39,17 @@ use datafusion_proto::physical_plan::{AsExecutionPlan, PhysicalExtensionCodec};
 use datafusion_proto::protobuf::{
     JoinType as ProtoJoinType, PhysicalPlanNode, PhysicalSortExprNode,
 };
+use datafusion_spark::function::array::shuffle::SparkShuffle;
 use datafusion_spark::function::bitmap::bitmap_count::BitmapCount;
 use datafusion_spark::function::bitwise::bit_count::SparkBitCount;
 use datafusion_spark::function::bitwise::bit_get::SparkBitGet;
+use datafusion_spark::function::bitwise::bitwise_not::SparkBitwiseNot;
 use datafusion_spark::function::hash::crc32::SparkCrc32;
 use datafusion_spark::function::hash::sha1::SparkSha1;
 use datafusion_spark::function::math::expm1::SparkExpm1;
 use datafusion_spark::function::math::modulus::SparkPmod;
 use datafusion_spark::function::math::width_bucket::SparkWidthBucket;
+use datafusion_spark::function::string::format_string::FormatStringFunc;
 use datafusion_spark::function::string::luhn_check::SparkLuhnCheck;
 use prost::bytes::BytesMut;
 use prost::Message;
@@ -1335,6 +1338,7 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
             "arrays_zip" => Ok(Arc::new(ScalarUDF::from(ArraysZip::new()))),
             "bitmap_count" => Ok(Arc::new(ScalarUDF::from(BitmapCount::new()))),
             "convert_tz" => Ok(Arc::new(ScalarUDF::from(ConvertTz::new()))),
+            "format_string" => Ok(Arc::new(ScalarUDF::from(FormatStringFunc::new()))),
             "greatest" => Ok(Arc::new(ScalarUDF::from(GreatestFunc::new()))),
             "least" => Ok(Arc::new(ScalarUDF::from(LeastFunc::new()))),
             "levenshtein" => Ok(Arc::new(ScalarUDF::from(Levenshtein::new()))),
@@ -1391,6 +1395,9 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
             "spark_bit_get" | "bit_get" | "getbit" => {
                 Ok(Arc::new(ScalarUDF::from(SparkBitGet::new())))
             }
+            "spark_bitwise_not" | "bitwise_not" => {
+                Ok(Arc::new(ScalarUDF::from(SparkBitwiseNot::new())))
+            }
             "spark_conv" | "conv" => Ok(Arc::new(ScalarUDF::from(SparkConv::new()))),
             "spark_signum" | "signum" => Ok(Arc::new(ScalarUDF::from(SparkSignum::new()))),
             "spark_last_day" | "last_day" => Ok(Arc::new(ScalarUDF::from(SparkLastDay::new()))),
@@ -1412,6 +1419,7 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
             }
             "spark_mask" | "mask" => Ok(Arc::new(ScalarUDF::from(SparkMask::new()))),
             "spark_sequence" | "sequence" => Ok(Arc::new(ScalarUDF::from(SparkSequence::new()))),
+            "spark_shuffle" | "shuffle" => Ok(Arc::new(ScalarUDF::from(SparkShuffle::new()))),
             "spark_encode" | "encode" => Ok(Arc::new(ScalarUDF::from(SparkEncode::new()))),
             "spark_elt" | "elt" => Ok(Arc::new(ScalarUDF::from(SparkElt::new()))),
             "spark_decode" | "decode" => Ok(Arc::new(ScalarUDF::from(SparkDecode::new()))),
@@ -1468,6 +1476,7 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
             || node_inner.is::<ArraysZip>()
             || node_inner.is::<BitmapCount>()
             || node_inner.is::<ConvertTz>()
+            || node_inner.is::<FormatStringFunc>()
             || node_inner.is::<GreatestFunc>()
             || node_inner.is::<LeastFunc>()
             || node_inner.is::<Levenshtein>()
@@ -1489,6 +1498,7 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
             || node_inner.is::<SparkBin>()
             || node_inner.is::<SparkBitCount>()
             || node_inner.is::<SparkBitGet>()
+            || node_inner.is::<SparkBitwiseNot>()
             || node_inner.is::<SparkBRound>()
             || node_inner.is::<SparkCalendarInterval>()
             || node_inner.is::<SparkCeil>()
@@ -1517,6 +1527,7 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
             || node_inner.is::<SparkPmod>()
             || node_inner.is::<SparkReverse>()
             || node_inner.is::<SparkSequence>()
+            || node_inner.is::<SparkShuffle>()
             || node_inner.is::<SparkSha1>()
             || node_inner.is::<SparkSignum>()
             || node_inner.is::<SparkSplit>()

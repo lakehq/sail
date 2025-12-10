@@ -5,7 +5,7 @@ use log::info;
 use sail_common::config::AppConfig;
 use sail_common::runtime::RuntimeManager;
 use sail_spark_connect::entrypoint::{serve, SessionManagerOptions};
-use sail_telemetry::telemetry::{init_telemetry, shutdown_telemetry};
+use sail_telemetry::telemetry::{init_telemetry, shutdown_telemetry, ResourceOptions};
 use tokio::net::TcpListener;
 
 /// Handles graceful shutdown by waiting for a `SIGINT` signal in [tokio].
@@ -30,10 +30,10 @@ pub fn run_spark_connect_server(ip: IpAddr, port: u16) -> Result<(), Box<dyn std
     let config = Arc::new(AppConfig::load()?);
     let runtime = RuntimeManager::try_new(&config.runtime)?;
 
-    runtime
-        .handle()
-        .primary()
-        .block_on(async { init_telemetry(&config.telemetry) })?;
+    runtime.handle().primary().block_on(async {
+        let resource = ResourceOptions { kind: "server" };
+        init_telemetry(&config.telemetry, resource)
+    })?;
 
     let options = SessionManagerOptions {
         config: Arc::clone(&config),

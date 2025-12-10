@@ -10,7 +10,7 @@ use pyo3::{PyResult, Python};
 use sail_common::config::AppConfig;
 use sail_common::runtime::RuntimeManager;
 use sail_spark_connect::entrypoint::{serve, SessionManagerOptions};
-use sail_telemetry::telemetry::init_telemetry;
+use sail_telemetry::telemetry::{init_telemetry, ResourceOptions};
 use tokio::net::TcpListener;
 
 use crate::python::Modules;
@@ -67,10 +67,10 @@ pub fn run_spark_mcp_server(settings: McpSettings) -> Result<(), Box<dyn std::er
     let config = Arc::new(AppConfig::load()?);
     let runtime = RuntimeManager::try_new(&config.runtime)?;
 
-    runtime
-        .handle()
-        .primary()
-        .block_on(async { init_telemetry(&config.telemetry) })?;
+    runtime.handle().primary().block_on(async {
+        let resource = ResourceOptions { kind: "server" };
+        init_telemetry(&config.telemetry, resource)
+    })?;
 
     let spark_remote = match settings.spark_remote {
         None => {

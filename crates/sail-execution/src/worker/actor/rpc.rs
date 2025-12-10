@@ -1,5 +1,4 @@
 use arrow_flight::flight_service_server::FlightServiceServer;
-use fastrace::trace;
 use sail_common::config::GRPC_MAX_MESSAGE_LENGTH_DEFAULT;
 use sail_server::actor::ActorHandle;
 use sail_server::ServerBuilder;
@@ -14,7 +13,6 @@ use crate::worker::server::WorkerServer;
 use crate::worker::WorkerEvent;
 
 impl WorkerActor {
-    #[trace]
     pub(super) async fn serve(
         handle: ActorHandle<WorkerActor>,
         addr: impl ToSocketAddrs,

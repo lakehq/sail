@@ -2494,9 +2494,9 @@ checksum = "092966b41edc516079bdf31ec78a2e0588d1d0c08f78b91d8307215928642b2b"
 
 [[package]]
 name = "delta_kernel"
-version = "0.18.1"
+version = "0.18.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "3f0c7e25ed8986d97815e3c6f4a1dc627749388c30ceb7ede97b78016876f6c2"
+checksum = "59c53769ac0aea07e2efeb0859eb759cffb6007486e0cb1c27cc32a1e72ddd8f"
 dependencies = [
  "arrow",
  "bytes",
@@ -2525,9 +2525,9 @@ dependencies = [
 
 [[package]]
 name = "delta_kernel_derive"
-version = "0.18.1"
+version = "0.18.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "c17dcf5e8f6b9be4ca9de81c82854c7b905af578a8e32d624a951643a0f09626"
+checksum = "dbe4ce45d99298a34ffdf533840f5cad5002682f5a397ac469b8381a2f47a378"
 dependencies = [
  "proc-macro2",
  "quote",
@@ -2747,6 +2747,18 @@ dependencies = [
 ]
 
 [[package]]
+name = "fastrace-futures"
+version = "0.7.14"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "25e1241db692c6a166407bda3e5f3e01b7cc00d281db35d905c4f44fbd3d0034"
+dependencies = [
+ "fastrace",
+ "futures-core",
+ "futures-sink",
+ "pin-project",
+]
+
+[[package]]
 name = "fastrace-macro"
 version = "0.7.14"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -2769,18 +2781,6 @@ dependencies = [
  "opentelemetry",
  "opentelemetry_sdk",
  "pollster",
-]
-
-[[package]]
-name = "fastrace-tonic"
-version = "0.1.1"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "9bfe91596cd82e4b4fbd390f0e789fe3cf327b635fa713347f1509db97aa482c"
-dependencies = [
- "fastrace",
- "http 1.4.0",
- "tower-layer",
- "tower-service",
 ]
 
 [[package]]
@@ -3999,9 +3999,9 @@ dependencies = [
 
 [[package]]
 name = "log"
-version = "0.4.28"
+version = "0.4.29"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "34080505efa8e45a4b816c349525ebe327ceaa8559756f0356cba97ef3bf7432"
+checksum = "5e5032e24019045c762d3c0f28f5b6b8bbf38563a65908389bf7978758920897"
 
 [[package]]
 name = "lru-slab"
@@ -5960,7 +5960,6 @@ dependencies = [
  "datafusion-proto",
  "datafusion-spark",
  "fastrace",
- "fastrace-tonic",
  "futures",
  "k8s-openapi",
  "kube",
@@ -6096,6 +6095,8 @@ dependencies = [
  "dashmap",
  "datafusion",
  "datafusion-common",
+ "fastrace",
+ "fastrace-futures",
  "futures",
  "hdfs-native-object-store",
  "hf-hub",
@@ -6105,6 +6106,7 @@ dependencies = [
  "regex",
  "reqwest",
  "sail-common",
+ "sail-telemetry",
  "thiserror",
  "tokio",
  "tokio-stream",
@@ -6212,9 +6214,9 @@ version = "0.4.3"
 dependencies = [
  "axum",
  "fastrace",
- "fastrace-tonic",
  "log",
  "sail-common",
+ "sail-telemetry",
  "tokio",
  "tonic",
  "tonic-health",
@@ -6273,6 +6275,7 @@ dependencies = [
  "sail-server",
  "sail-session",
  "sail-sql-analyzer",
+ "sail-telemetry",
  "serde",
  "serde_json",
  "syn 2.0.111",
@@ -6329,16 +6332,23 @@ dependencies = [
 name = "sail-telemetry"
 version = "0.4.3"
 dependencies = [
+ "datafusion",
  "env_logger",
  "fastrace",
+ "fastrace-futures",
  "fastrace-opentelemetry",
+ "futures",
  "log",
  "opentelemetry",
  "opentelemetry-appender-log",
  "opentelemetry-otlp",
  "opentelemetry_sdk",
+ "pin-project-lite",
  "sail-common",
+ "sail-common-datafusion",
  "thiserror",
+ "tonic",
+ "tower",
 ]
 
 [[package]]
@@ -7600,14 +7610,14 @@ checksum = "06abde3611657adf66d383f00b093d7faecc7fa57071cce2578660c9f1010821"
 
 [[package]]
 name = "uuid"
-version = "1.18.1"
+version = "1.19.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "2f87b8aa10b915a06587d0dec516c282ff295b475d94abf425d62b57710070a2"
+checksum = "e2e054861b4bd027cd373e18e8d8d8e6548085000e41290d95ce0c373a654b4a"
 dependencies = [
  "getrandom 0.3.4",
  "js-sys",
  "rand 0.9.2",
- "serde",
+ "serde_core",
  "wasm-bindgen",
 ]
 
