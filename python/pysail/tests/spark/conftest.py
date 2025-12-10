@@ -260,25 +260,12 @@ def query_result(datatable, ordered, query, spark):
         assert sorted(rows) == sorted(r)
 
 
-@then("query plan equals")
-def query_plan_equals(docstring, query, spark, snapshot: SnapshotAssertion):
-    """Executes the SQL query and asserts the single-row plan output exactly matches the expected text."""
-
-    plan = _collect_plan(query, spark)
-    expected = normalize_plan_text(docstring)
-    actual = normalize_plan_text(plan)
-    assert actual == expected, f"plan mismatch\nExpected:\n{expected}\n\nActual:\n{actual}"
-
-    # Persist a normalized snapshot for easier updates and diffing.
-    snapshot.use_extension(PlanSnapshotExtension).assert_match(plan)
-
-
 @then("query plan matches snapshot")
 def query_plan_matches_snapshot(query, spark, snapshot: SnapshotAssertion):
     """Executes the SQL query and only asserts against the stored snapshot."""
 
     plan = _collect_plan(query, spark)
-    snapshot.use_extension(PlanSnapshotExtension).assert_match(plan)
+    assert snapshot(extension_class=PlanSnapshotExtension) == plan
 
 
 @then(parsers.parse("query error {error}"))

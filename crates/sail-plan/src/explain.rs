@@ -315,11 +315,26 @@ fn render_section(title: &str, body: &str) -> String {
 }
 
 fn render_stringified_plans(plans: &[StringifiedPlan]) -> String {
-    plans
-        .iter()
-        .map(|plan| format!("{}:\n{}", plan.plan_type, plan.plan))
-        .collect::<Vec<_>>()
-        .join("\n\n")
+    let mut rendered = Vec::with_capacity(plans.len());
+    let mut prev: Option<&StringifiedPlan> = None;
+
+    for plan in plans {
+        let body = match prev {
+            Some(previous) if !should_show(previous, plan) => "SAME TEXT AS ABOVE",
+            _ => plan.plan.as_ref(),
+        };
+        rendered.push(format!("{}:\n{}", plan.plan_type, body));
+        prev = Some(plan);
+    }
+
+    rendered.join("\n\n")
+}
+
+/// Decide whether we should render the full text for `this_plan`
+/// given the previously rendered plan to avoid repeating identical
+/// plan strings in explain output.
+fn should_show(previous_plan: &StringifiedPlan, this_plan: &StringifiedPlan) -> bool {
+    (previous_plan.plan != this_plan.plan) || this_plan.should_display(false)
 }
 
 async fn maybe_collect_metrics(

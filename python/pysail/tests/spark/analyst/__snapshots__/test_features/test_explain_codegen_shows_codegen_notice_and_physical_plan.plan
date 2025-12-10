@@ -25,122 +25,67 @@ analyzed_logical_plan:
 SAME TEXT AS ABOVE
 
 logical_plan after eliminate_nested_union:
-Projection: t.#2 AS #4, sum(t.#3) AS #5
-  Aggregate: groupBy=[[t.#2]], aggr=[[sum(CAST(t.#3 AS Int64))]]
-    SubqueryAlias: t
-      Projection: #0 AS #2, #1 AS #3
-        Projection: column1 AS #0, column2 AS #1
-          Values: (Int32(1), Int32(2)), (Int32(1), Int32(3))
+SAME TEXT AS ABOVE
 
 logical_plan after simplify_expressions:
 SAME TEXT AS ABOVE
 
 logical_plan after replace_distinct_aggregate:
-Projection: t.#2 AS #4, sum(t.#3) AS #5
-  Aggregate: groupBy=[[t.#2]], aggr=[[sum(CAST(t.#3 AS Int64))]]
-    SubqueryAlias: t
-      Projection: #0 AS #2, #1 AS #3
-        Projection: column1 AS #0, column2 AS #1
-          Values: (Int32(1), Int32(2)), (Int32(1), Int32(3))
+SAME TEXT AS ABOVE
 
 logical_plan after eliminate_join:
 SAME TEXT AS ABOVE
 
 logical_plan after decorrelate_predicate_subquery:
-Projection: t.#2 AS #4, sum(t.#3) AS #5
-  Aggregate: groupBy=[[t.#2]], aggr=[[sum(CAST(t.#3 AS Int64))]]
-    SubqueryAlias: t
-      Projection: #0 AS #2, #1 AS #3
-        Projection: column1 AS #0, column2 AS #1
-          Values: (Int32(1), Int32(2)), (Int32(1), Int32(3))
+SAME TEXT AS ABOVE
 
 logical_plan after scalar_subquery_to_join:
 SAME TEXT AS ABOVE
 
 logical_plan after decorrelate_lateral_join:
-Projection: t.#2 AS #4, sum(t.#3) AS #5
-  Aggregate: groupBy=[[t.#2]], aggr=[[sum(CAST(t.#3 AS Int64))]]
-    SubqueryAlias: t
-      Projection: #0 AS #2, #1 AS #3
-        Projection: column1 AS #0, column2 AS #1
-          Values: (Int32(1), Int32(2)), (Int32(1), Int32(3))
+SAME TEXT AS ABOVE
 
 logical_plan after extract_equijoin_predicate:
 SAME TEXT AS ABOVE
 
 logical_plan after eliminate_duplicated_expr:
-Projection: t.#2 AS #4, sum(t.#3) AS #5
-  Aggregate: groupBy=[[t.#2]], aggr=[[sum(CAST(t.#3 AS Int64))]]
-    SubqueryAlias: t
-      Projection: #0 AS #2, #1 AS #3
-        Projection: column1 AS #0, column2 AS #1
-          Values: (Int32(1), Int32(2)), (Int32(1), Int32(3))
+SAME TEXT AS ABOVE
 
 logical_plan after eliminate_filter:
 SAME TEXT AS ABOVE
 
 logical_plan after eliminate_cross_join:
-Projection: t.#2 AS #4, sum(t.#3) AS #5
-  Aggregate: groupBy=[[t.#2]], aggr=[[sum(CAST(t.#3 AS Int64))]]
-    SubqueryAlias: t
-      Projection: #0 AS #2, #1 AS #3
-        Projection: column1 AS #0, column2 AS #1
-          Values: (Int32(1), Int32(2)), (Int32(1), Int32(3))
+SAME TEXT AS ABOVE
 
 logical_plan after eliminate_limit:
 SAME TEXT AS ABOVE
 
 logical_plan after propagate_empty_relation:
-Projection: t.#2 AS #4, sum(t.#3) AS #5
-  Aggregate: groupBy=[[t.#2]], aggr=[[sum(CAST(t.#3 AS Int64))]]
-    SubqueryAlias: t
-      Projection: #0 AS #2, #1 AS #3
-        Projection: column1 AS #0, column2 AS #1
-          Values: (Int32(1), Int32(2)), (Int32(1), Int32(3))
+SAME TEXT AS ABOVE
 
 logical_plan after eliminate_one_union:
 SAME TEXT AS ABOVE
 
 logical_plan after filter_null_join_keys:
-Projection: t.#2 AS #4, sum(t.#3) AS #5
-  Aggregate: groupBy=[[t.#2]], aggr=[[sum(CAST(t.#3 AS Int64))]]
-    SubqueryAlias: t
-      Projection: #0 AS #2, #1 AS #3
-        Projection: column1 AS #0, column2 AS #1
-          Values: (Int32(1), Int32(2)), (Int32(1), Int32(3))
+SAME TEXT AS ABOVE
 
 logical_plan after eliminate_outer_join:
 SAME TEXT AS ABOVE
 
 logical_plan after push_down_limit:
-Projection: t.#2 AS #4, sum(t.#3) AS #5
-  Aggregate: groupBy=[[t.#2]], aggr=[[sum(CAST(t.#3 AS Int64))]]
-    SubqueryAlias: t
-      Projection: #0 AS #2, #1 AS #3
-        Projection: column1 AS #0, column2 AS #1
-          Values: (Int32(1), Int32(2)), (Int32(1), Int32(3))
+SAME TEXT AS ABOVE
 
 logical_plan after push_down_filter:
 SAME TEXT AS ABOVE
 
 logical_plan after single_distinct_aggregation_to_group_by:
-Projection: t.#2 AS #4, sum(t.#3) AS #5
-  Aggregate: groupBy=[[t.#2]], aggr=[[sum(CAST(t.#3 AS Int64))]]
-    SubqueryAlias: t
-      Projection: #0 AS #2, #1 AS #3
-        Projection: column1 AS #0, column2 AS #1
-          Values: (Int32(1), Int32(2)), (Int32(1), Int32(3))
+SAME TEXT AS ABOVE
 
 logical_plan after eliminate_group_by_constant:
 SAME TEXT AS ABOVE
 
 logical_plan after common_sub_expression_eliminate:
-Projection: t.#2 AS #4, sum(t.#3) AS #5
-  Aggregate: groupBy=[[t.#2]], aggr=[[sum(CAST(t.#3 AS Int64))]]
-    SubqueryAlias: t
-      Projection: #0 AS #2, #1 AS #3
-        Projection: column1 AS #0, column2 AS #1
-          Values: (Int32(1), Int32(2)), (Int32(1), Int32(3))
+SAME TEXT AS ABOVE
 
 logical_plan after optimize_projections:
 Projection: t.#2 AS #4, sum(t.#3) AS #5
@@ -153,111 +98,67 @@ logical_plan after eliminate_nested_union:
 SAME TEXT AS ABOVE
 
 logical_plan after simplify_expressions:
-Projection: t.#2 AS #4, sum(t.#3) AS #5
-  Aggregate: groupBy=[[t.#2]], aggr=[[sum(CAST(t.#3 AS Int64))]]
-    SubqueryAlias: t
-      Projection: column1 AS #2, column2 AS #3
-        Values: (Int32(1), Int32(2)), (Int32(1), Int32(3))
+SAME TEXT AS ABOVE
 
 logical_plan after replace_distinct_aggregate:
 SAME TEXT AS ABOVE
 
 logical_plan after eliminate_join:
-Projection: t.#2 AS #4, sum(t.#3) AS #5
-  Aggregate: groupBy=[[t.#2]], aggr=[[sum(CAST(t.#3 AS Int64))]]
-    SubqueryAlias: t
-      Projection: column1 AS #2, column2 AS #3
-        Values: (Int32(1), Int32(2)), (Int32(1), Int32(3))
+SAME TEXT AS ABOVE
 
 logical_plan after decorrelate_predicate_subquery:
 SAME TEXT AS ABOVE
 
 logical_plan after scalar_subquery_to_join:
-Projection: t.#2 AS #4, sum(t.#3) AS #5
-  Aggregate: groupBy=[[t.#2]], aggr=[[sum(CAST(t.#3 AS Int64))]]
-    SubqueryAlias: t
-      Projection: column1 AS #2, column2 AS #3
-        Values: (Int32(1), Int32(2)), (Int32(1), Int32(3))
+SAME TEXT AS ABOVE
 
 logical_plan after decorrelate_lateral_join:
 SAME TEXT AS ABOVE
 
 logical_plan after extract_equijoin_predicate:
-Projection: t.#2 AS #4, sum(t.#3) AS #5
-  Aggregate: groupBy=[[t.#2]], aggr=[[sum(CAST(t.#3 AS Int64))]]
-    SubqueryAlias: t
-      Projection: column1 AS #2, column2 AS #3
-        Values: (Int32(1), Int32(2)), (Int32(1), Int32(3))
+SAME TEXT AS ABOVE
 
 logical_plan after eliminate_duplicated_expr:
 SAME TEXT AS ABOVE
 
 logical_plan after eliminate_filter:
-Projection: t.#2 AS #4, sum(t.#3) AS #5
-  Aggregate: groupBy=[[t.#2]], aggr=[[sum(CAST(t.#3 AS Int64))]]
-    SubqueryAlias: t
-      Projection: column1 AS #2, column2 AS #3
-        Values: (Int32(1), Int32(2)), (Int32(1), Int32(3))
+SAME TEXT AS ABOVE
 
 logical_plan after eliminate_cross_join:
 SAME TEXT AS ABOVE
 
 logical_plan after eliminate_limit:
-Projection: t.#2 AS #4, sum(t.#3) AS #5
-  Aggregate: groupBy=[[t.#2]], aggr=[[sum(CAST(t.#3 AS Int64))]]
-    SubqueryAlias: t
-      Projection: column1 AS #2, column2 AS #3
-        Values: (Int32(1), Int32(2)), (Int32(1), Int32(3))
+SAME TEXT AS ABOVE
 
 logical_plan after propagate_empty_relation:
 SAME TEXT AS ABOVE
 
 logical_plan after eliminate_one_union:
-Projection: t.#2 AS #4, sum(t.#3) AS #5
-  Aggregate: groupBy=[[t.#2]], aggr=[[sum(CAST(t.#3 AS Int64))]]
-    SubqueryAlias: t
-      Projection: column1 AS #2, column2 AS #3
-        Values: (Int32(1), Int32(2)), (Int32(1), Int32(3))
+SAME TEXT AS ABOVE
 
 logical_plan after filter_null_join_keys:
 SAME TEXT AS ABOVE
 
 logical_plan after eliminate_outer_join:
-Projection: t.#2 AS #4, sum(t.#3) AS #5
-  Aggregate: groupBy=[[t.#2]], aggr=[[sum(CAST(t.#3 AS Int64))]]
-    SubqueryAlias: t
-      Projection: column1 AS #2, column2 AS #3
-        Values: (Int32(1), Int32(2)), (Int32(1), Int32(3))
+SAME TEXT AS ABOVE
 
 logical_plan after push_down_limit:
 SAME TEXT AS ABOVE
 
 logical_plan after push_down_filter:
-Projection: t.#2 AS #4, sum(t.#3) AS #5
-  Aggregate: groupBy=[[t.#2]], aggr=[[sum(CAST(t.#3 AS Int64))]]
-    SubqueryAlias: t
-      Projection: column1 AS #2, column2 AS #3
-        Values: (Int32(1), Int32(2)), (Int32(1), Int32(3))
+SAME TEXT AS ABOVE
 
 logical_plan after single_distinct_aggregation_to_group_by:
 SAME TEXT AS ABOVE
 
 logical_plan after eliminate_group_by_constant:
-Projection: t.#2 AS #4, sum(t.#3) AS #5
-  Aggregate: groupBy=[[t.#2]], aggr=[[sum(CAST(t.#3 AS Int64))]]
-    SubqueryAlias: t
-      Projection: column1 AS #2, column2 AS #3
-        Values: (Int32(1), Int32(2)), (Int32(1), Int32(3))
+SAME TEXT AS ABOVE
 
 logical_plan after common_sub_expression_eliminate:
 SAME TEXT AS ABOVE
 
 logical_plan after optimize_projections:
-Projection: t.#2 AS #4, sum(t.#3) AS #5
-  Aggregate: groupBy=[[t.#2]], aggr=[[sum(CAST(t.#3 AS Int64))]]
-    SubqueryAlias: t
-      Projection: column1 AS #2, column2 AS #3
-        Values: (Int32(1), Int32(2)), (Int32(1), Int32(3))
+SAME TEXT AS ABOVE
 
 logical_plan:
 Projection: t.#2 AS #4, sum(t.#3) AS #5
@@ -314,34 +215,14 @@ OutputRequirementExec: order_by=[], dist_by=Unspecified
 physical_plan after aggregate_statistics:
 SAME TEXT AS ABOVE
 
-
 physical_plan after join_selection:
-OutputRequirementExec: order_by=[], dist_by=Unspecified
-  ProjectionExec: expr=[#2@0 as #4, sum(t.#3)@1 as #5]
-    AggregateExec: mode=FinalPartitioned, gby=[#2@0 as #2], aggr=[sum(t.#3)]
-      CoalesceBatchesExec: target_batch_size=8192
-        RepartitionExec: partitioning=Hash([#2@0], <partitions>), input_partitions=<partitions>
-          RepartitionExec: partitioning=RoundRobinBatch(<partitions>), input_partitions=<partitions>
-            AggregateExec: mode=Partial, gby=[#2@0 as #2], aggr=[sum(t.#3)]
-              ProjectionExec: expr=[column1@0 as #2, column2@1 as #3]
-                DataSourceExec: partitions=1, partition_sizes=[<sizes>]
-
+SAME TEXT AS ABOVE
 
 physical_plan after LimitedDistinctAggregation:
 SAME TEXT AS ABOVE
 
-
 physical_plan after FilterPushdown:
-OutputRequirementExec: order_by=[], dist_by=Unspecified
-  ProjectionExec: expr=[#2@0 as #4, sum(t.#3)@1 as #5]
-    AggregateExec: mode=FinalPartitioned, gby=[#2@0 as #2], aggr=[sum(t.#3)]
-      CoalesceBatchesExec: target_batch_size=8192
-        RepartitionExec: partitioning=Hash([#2@0], <partitions>), input_partitions=<partitions>
-          RepartitionExec: partitioning=RoundRobinBatch(<partitions>), input_partitions=<partitions>
-            AggregateExec: mode=Partial, gby=[#2@0 as #2], aggr=[sum(t.#3)]
-              ProjectionExec: expr=[column1@0 as #2, column2@1 as #3]
-                DataSourceExec: partitions=1, partition_sizes=[<sizes>]
-
+SAME TEXT AS ABOVE
 
 physical_plan after EnforceDistribution:
 OutputRequirementExec: order_by=[], dist_by=Unspecified
@@ -358,34 +239,14 @@ OutputRequirementExec: order_by=[], dist_by=Unspecified
 physical_plan after CombinePartialFinalAggregate:
 SAME TEXT AS ABOVE
 
-
 physical_plan after EnforceSorting:
-OutputRequirementExec: order_by=[], dist_by=Unspecified
-  ProjectionExec: expr=[#2@0 as #4, sum(t.#3)@1 as #5]
-    AggregateExec: mode=FinalPartitioned, gby=[#2@0 as #2], aggr=[sum(t.#3)]
-      RepartitionExec: partitioning=Hash([#2@0], <partitions>), input_partitions=<partitions>
-        RepartitionExec: partitioning=RoundRobinBatch(<partitions>), input_partitions=<partitions>
-          CoalesceBatchesExec: target_batch_size=8192
-            AggregateExec: mode=Partial, gby=[#2@0 as #2], aggr=[sum(t.#3)]
-              ProjectionExec: expr=[column1@0 as #2, column2@1 as #3]
-                DataSourceExec: partitions=1, partition_sizes=[<sizes>]
-
+SAME TEXT AS ABOVE
 
 physical_plan after OptimizeAggregateOrder:
 SAME TEXT AS ABOVE
 
-
 physical_plan after ProjectionPushdown:
-OutputRequirementExec: order_by=[], dist_by=Unspecified
-  ProjectionExec: expr=[#2@0 as #4, sum(t.#3)@1 as #5]
-    AggregateExec: mode=FinalPartitioned, gby=[#2@0 as #2], aggr=[sum(t.#3)]
-      RepartitionExec: partitioning=Hash([#2@0], <partitions>), input_partitions=<partitions>
-        RepartitionExec: partitioning=RoundRobinBatch(<partitions>), input_partitions=<partitions>
-          CoalesceBatchesExec: target_batch_size=8192
-            AggregateExec: mode=Partial, gby=[#2@0 as #2], aggr=[sum(t.#3)]
-              ProjectionExec: expr=[column1@0 as #2, column2@1 as #3]
-                DataSourceExec: partitions=1, partition_sizes=[<sizes>]
-
+SAME TEXT AS ABOVE
 
 physical_plan after coalesce_batches:
 OutputRequirementExec: order_by=[], dist_by=Unspecified
@@ -403,7 +264,6 @@ OutputRequirementExec: order_by=[], dist_by=Unspecified
 physical_plan after coalesce_async_exec_input:
 SAME TEXT AS ABOVE
 
-
 physical_plan after OutputRequirements:
 ProjectionExec: expr=[#2@0 as #4, sum(t.#3)@1 as #5]
   AggregateExec: mode=FinalPartitioned, gby=[#2@0 as #2], aggr=[sum(t.#3)]
@@ -419,66 +279,26 @@ ProjectionExec: expr=[#2@0 as #4, sum(t.#3)@1 as #5]
 physical_plan after LimitAggregation:
 SAME TEXT AS ABOVE
 
-
 physical_plan after LimitPushPastWindows:
-ProjectionExec: expr=[#2@0 as #4, sum(t.#3)@1 as #5]
-  AggregateExec: mode=FinalPartitioned, gby=[#2@0 as #2], aggr=[sum(t.#3)]
-    CoalesceBatchesExec: target_batch_size=8192
-      RepartitionExec: partitioning=Hash([#2@0], <partitions>), input_partitions=<partitions>
-        RepartitionExec: partitioning=RoundRobinBatch(<partitions>), input_partitions=<partitions>
-          CoalesceBatchesExec: target_batch_size=8192
-            AggregateExec: mode=Partial, gby=[#2@0 as #2], aggr=[sum(t.#3)]
-              ProjectionExec: expr=[column1@0 as #2, column2@1 as #3]
-                DataSourceExec: partitions=1, partition_sizes=[<sizes>]
-
+SAME TEXT AS ABOVE
 
 physical_plan after LimitPushdown:
 SAME TEXT AS ABOVE
 
-
 physical_plan after ProjectionPushdown:
-ProjectionExec: expr=[#2@0 as #4, sum(t.#3)@1 as #5]
-  AggregateExec: mode=FinalPartitioned, gby=[#2@0 as #2], aggr=[sum(t.#3)]
-    CoalesceBatchesExec: target_batch_size=8192
-      RepartitionExec: partitioning=Hash([#2@0], <partitions>), input_partitions=<partitions>
-        RepartitionExec: partitioning=RoundRobinBatch(<partitions>), input_partitions=<partitions>
-          CoalesceBatchesExec: target_batch_size=8192
-            AggregateExec: mode=Partial, gby=[#2@0 as #2], aggr=[sum(t.#3)]
-              ProjectionExec: expr=[column1@0 as #2, column2@1 as #3]
-                DataSourceExec: partitions=1, partition_sizes=[<sizes>]
-
+SAME TEXT AS ABOVE
 
 physical_plan after EnsureCooperative:
 SAME TEXT AS ABOVE
 
-
 physical_plan after FilterPushdown(Post):
-ProjectionExec: expr=[#2@0 as #4, sum(t.#3)@1 as #5]
-  AggregateExec: mode=FinalPartitioned, gby=[#2@0 as #2], aggr=[sum(t.#3)]
-    CoalesceBatchesExec: target_batch_size=8192
-      RepartitionExec: partitioning=Hash([#2@0], <partitions>), input_partitions=<partitions>
-        RepartitionExec: partitioning=RoundRobinBatch(<partitions>), input_partitions=<partitions>
-          CoalesceBatchesExec: target_batch_size=8192
-            AggregateExec: mode=Partial, gby=[#2@0 as #2], aggr=[sum(t.#3)]
-              ProjectionExec: expr=[column1@0 as #2, column2@1 as #3]
-                DataSourceExec: partitions=1, partition_sizes=[<sizes>]
-
+SAME TEXT AS ABOVE
 
 physical_plan after RewriteExplicitRepartition:
 SAME TEXT AS ABOVE
 
-
 physical_plan after SanityCheckPlan:
-ProjectionExec: expr=[#2@0 as #4, sum(t.#3)@1 as #5]
-  AggregateExec: mode=FinalPartitioned, gby=[#2@0 as #2], aggr=[sum(t.#3)]
-    CoalesceBatchesExec: target_batch_size=8192
-      RepartitionExec: partitioning=Hash([#2@0], <partitions>), input_partitions=<partitions>
-        RepartitionExec: partitioning=RoundRobinBatch(<partitions>), input_partitions=<partitions>
-          CoalesceBatchesExec: target_batch_size=8192
-            AggregateExec: mode=Partial, gby=[#2@0 as #2], aggr=[sum(t.#3)]
-              ProjectionExec: expr=[column1@0 as #2, column2@1 as #3]
-                DataSourceExec: partitions=1, partition_sizes=[<sizes>]
-
+SAME TEXT AS ABOVE
 
 physical_plan:
 ProjectionExec: expr=[#4@0 as k, #5@1 as SUM(v)]
