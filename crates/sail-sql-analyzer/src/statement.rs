@@ -1527,14 +1527,13 @@ fn from_ast_sort_column(sort: SortColumn) -> SqlResult<spec::SortOrder> {
 }
 
 fn from_ast_explain_format(format: Option<ExplainFormat>) -> SqlResult<spec::ExplainMode> {
-    // TODO: Properly implement each explain mode:
-    //   1. Format the explain output the way Spark does.
-    //   2. Implement each explain mode. "verbose" or "analyze" don't accurately reflect
-    //      Spark's behavior.
-    //   Output for each pair of "verbose" and "analyze" for `test_simple_explain_string`:
-    //   https://github.com/lakehq/sail/pull/72/files#r1660104742
-    //   Spark's documentation for each explain mode:
-    //   https://spark.apache.org/docs/latest/sql-ref-syntax-qry-explain.html
+    // TODO(spark-compat):
+    //   - EXTENDED: emit Parsed/Analyzed/Optimized Logical Plan sections distinctly.
+    //   - COST: match Spark (logical + stats, not physical-with-stats).
+    //   - FORMATTED: add outline + node-details sections to mirror Spark.
+    //   - CODEGEN: keep "unsupported" notice until DataFusion adds support.
+    //   - ANALYZE: align metrics formatting with Spark once available.
+    //   Reference: https://spark.apache.org/docs/latest/sql-ref-syntax-qry-explain.html
     match format {
         None => Ok(spec::ExplainMode::Simple),
         Some(ExplainFormat::Extended(_)) => Ok(spec::ExplainMode::Extended),

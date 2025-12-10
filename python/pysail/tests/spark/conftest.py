@@ -1,6 +1,8 @@
 import doctest
 import json
 import os
+import re
+import textwrap
 import time
 
 import pyspark.sql.connect.session
@@ -9,9 +11,44 @@ from _pytest.doctest import DoctestItem
 from jinja2 import Template
 from pyspark.sql import SparkSession
 from pytest_bdd import given, parsers, then, when
+from syrupy.assertion import SnapshotAssertion
+from syrupy.extensions.single_file import SingleFileSnapshotExtension
+from syrupy.types import SerializableData
 
 from pysail.spark import SparkConnectServer
 from pysail.tests.spark.utils import SAIL_ONLY, escape_sql_string_literal, is_jvm_spark, parse_show_string
+
+
+def normalize_plan_text(plan_text: str) -> str:
+    """Normalize plan text by scrubbing non-deterministic fields."""
+    text = textwrap.dedent(plan_text).strip()
+    text = re.sub(r", metrics=\[[^\]]*\]", "", text)
+    text = re.sub(r"Hash\(\[([^\]]+)\], \d+\)", r"Hash([\1], <partitions>)", text)
+    text = re.sub(r"RoundRobinBatch\(\d+\)", r"RoundRobinBatch(<partitions>)", text)
+    text = re.sub(r"input_partitions=\d+", r"input_partitions=<partitions>", text)
+    text = re.sub(r"partition_sizes=\[[^\]]+\]", r"partition_sizes=[<sizes>]", text)
+    text = re.sub(r"Bytes=Exact\(\d+\)", r"Bytes=Exact(<bytes>)", text)
+    return re.sub(r"Bytes=Inexact\(\d+\)", r"Bytes=Inexact(<bytes>)", text)
+
+
+def _collect_plan(query: str, spark) -> str:
+    """Execute query and extract the single-row plan string."""
+    df = spark.sql(query)
+    rows = df.collect()
+    assert len(rows) == 1, f"expected single row, got {len(rows)}"
+    plan = rows[0][0]
+    assert isinstance(plan, str), "expected string plan output"
+    assert plan, "expected non-empty plan output"
+    return plan
+
+
+class PlanSnapshotExtension(SingleFileSnapshotExtension):
+    """Snapshot extension that stores normalized plan text."""
+
+    file_extension = "plan"
+
+    def serialize(self, data: SerializableData, **_: object) -> str:
+        return normalize_plan_text(str(data)).encode()
 
 
 @pytest.fixture(scope="session")
@@ -20,6 +57,8 @@ def remote():
         yield r
     else:
         server = SparkConnectServer("127.0.0.1", 0)
+        if os.environ.get("SAIL_TEST_INIT_TELEMETRY") == "1":
+            server.init_telemetry()
         server.start(background=True)
         _, port = server.listening_address
         yield f"sc://localhost:{port}"
@@ -219,6 +258,14 @@ def query_result(datatable, ordered, query, spark):
         assert rows == r
     else:
         assert sorted(rows) == sorted(r)
+
+
+@then("query plan matches snapshot")
+def query_plan_matches_snapshot(query, spark, snapshot: SnapshotAssertion):
+    """Executes the SQL query and only asserts against the stored snapshot."""
+
+    plan = _collect_plan(query, spark)
+    assert snapshot(extension_class=PlanSnapshotExtension) == plan
 
 
 @then(parsers.parse("query error {error}"))
