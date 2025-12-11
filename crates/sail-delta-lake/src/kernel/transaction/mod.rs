@@ -129,9 +129,20 @@ impl CommitData {
         mut app_metadata: HashMap<String, Value>,
         app_transactions: Vec<Transaction>,
     ) -> Self {
-        if !actions.iter().any(|a| matches!(a, Action::CommitInfo(..))) {
+        let is_blind_append = Self::is_blind_append(&actions, &operation);
+
+        let mut has_commit_info = false;
+        for action in actions.iter_mut() {
+            if let Action::CommitInfo(info) = action {
+                info.is_blind_append = Some(is_blind_append);
+                has_commit_info = true;
+            }
+        }
+
+        if !has_commit_info {
             let mut commit_info = operation.get_commit_info();
             commit_info.timestamp = Some(Utc::now().timestamp_millis());
+            commit_info.is_blind_append = Some(is_blind_append);
             app_metadata.insert(
                 "clientVersion".to_string(),
                 Value::String(format!("sail-delta-lake.{}", env!("CARGO_PKG_VERSION"))),
@@ -161,6 +172,15 @@ impl CommitData {
             jsons.push(json);
         }
         Ok(Bytes::from(jsons.join("\n")))
+    }
+
+    fn is_blind_append(actions: &[Action], operation: &DeltaOperation) -> bool {
+        match operation {
+            DeltaOperation::Write { predicate, .. } if predicate.is_none() => actions
+                .iter()
+                .all(|action| matches!(action, Action::Add(_) | Action::Txn(_))),
+            _ => false,
+        }
     }
 }
 
@@ -516,13 +536,27 @@ impl<'a> std::future::IntoFuture for PreparedCommit<'a> {
         Box::pin(async move {
             let commit_or_bytes = this.commit_or_bytes;
             let local_actions: Vec<_> = this.data.actions.to_vec();
+            let creation_intent = this.table_data.is_none();
+            let current_is_blind_append = local_actions
+                .iter()
+                .find_map(|action| match action {
+                    Action::CommitInfo(info) => info.is_blind_append,
+                    _ => None,
+                })
+                .unwrap_or(false);
+            let effective_max_retries = if creation_intent {
+                this.max_retries
+            } else if current_is_blind_append {
+                this.max_retries
+            } else {
+                0
+            };
             let mut attempt_number: usize = 1;
-            let total_retries = this.max_retries + 1;
+            let total_retries = effective_max_retries + 1;
 
             let mut read_snapshot: Option<EagerSnapshot> = this
                 .table_data
                 .map(|table_ref| table_ref.eager_snapshot().clone());
-            let creation_intent = this.table_data.is_none();
             while attempt_number <= total_retries {
                 let snapshot_version = read_snapshot.as_ref().map(|s| s.version()).unwrap_or(-1);
                 let latest_version = match this.log_store.get_latest_version(snapshot_version).await
@@ -533,31 +567,6 @@ impl<'a> std::future::IntoFuture for PreparedCommit<'a> {
                 };
 
                 if let Some(latest_version) = latest_version {
-                    // If we intended to create a table but it now exists, reject concurrent creation
-                    // when the commit carries protocol or metadata actions (Spark-compatible behavior).
-                    if creation_intent
-                        && local_actions
-                            .iter()
-                            .any(|a| matches!(a, Action::Protocol(_) | Action::Metadata(_)))
-                    {
-                        if local_actions
-                            .iter()
-                            .any(|a| matches!(a, Action::Protocol(_)))
-                        {
-                            return Err(TransactionError::CommitConflict(
-                                conflict_checker::CommitConflictError::ProtocolChanged(
-                                    "protocol changed".into(),
-                                ),
-                            )
-                            .into());
-                        } else {
-                            return Err(TransactionError::CommitConflict(
-                                conflict_checker::CommitConflictError::MetadataChanged,
-                            )
-                            .into());
-                        }
-                    }
-
                     // Ensure we have a snapshot aligned to the latest version.
                     if read_snapshot
                         .as_ref()
@@ -575,12 +584,40 @@ impl<'a> std::future::IntoFuture for PreparedCommit<'a> {
                     }
 
                     if let Some(snapshot) = &read_snapshot {
+                        // For creation attempts where the table now exists, ensure protocol/metadata match.
+                        if creation_intent {
+                            if let Some(txn_protocol) = local_actions.iter().find_map(|a| match a {
+                                Action::Protocol(p) => Some(p),
+                                _ => None,
+                            }) {
+                                if txn_protocol != snapshot.protocol() {
+                                    return Err(TransactionError::CommitConflict(
+                                        conflict_checker::CommitConflictError::ProtocolChanged(
+                                            "protocol changed".into(),
+                                        ),
+                                    )
+                                    .into());
+                                }
+                            }
+                            if let Some(txn_metadata) = local_actions.iter().find_map(|a| match a {
+                                Action::Metadata(m) => Some(m),
+                                _ => None,
+                            }) {
+                                if txn_metadata != snapshot.metadata() {
+                                    return Err(TransactionError::CommitConflict(
+                                        conflict_checker::CommitConflictError::MetadataChanged,
+                                    )
+                                    .into());
+                                }
+                            }
+                        }
+
                         if latest_version > snapshot.version() {
                             // If max_retries are set to 0, do not try to use the conflict checker to resolve the conflict
                             // and throw immediately
-                            if this.max_retries == 0 {
+                            if effective_max_retries == 0 {
                                 return Err(TransactionError::MaxCommitAttempts(
-                                    this.max_retries as i32,
+                                    effective_max_retries as i32,
                                 )
                                 .into());
                             }
@@ -673,7 +710,7 @@ impl<'a> std::future::IntoFuture for PreparedCommit<'a> {
                 }
             }
 
-            Err(TransactionError::MaxCommitAttempts(this.max_retries as i32).into())
+            Err(TransactionError::MaxCommitAttempts(effective_max_retries as i32).into())
         })
     }
 }

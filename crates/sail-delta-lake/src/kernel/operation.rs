@@ -136,9 +136,6 @@ impl DeltaOperation {
     }
 
     pub fn read_whole_table(&self) -> bool {
-        match self {
-            Self::Write { predicate, .. } => predicate.is_none(),
-            _ => false,
-        }
+        false
     }
 }
