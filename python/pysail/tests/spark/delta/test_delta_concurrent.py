@@ -2,8 +2,6 @@ import json
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 
-import pytest
-
 
 def test_delta_concurrent_initial_consistent_metadata(spark, tmp_path):
     """Concurrent creation with consistent metadata should land as create + clean appends."""
