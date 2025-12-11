@@ -534,9 +534,17 @@ impl<'a> std::future::IntoFuture for PreparedCommit<'a> {
         let this = self;
 
         Box::pin(async move {
-            let commit_or_bytes = this.commit_or_bytes;
-            let local_actions: Vec<_> = this.data.actions.to_vec();
+            let mut commit_or_bytes = this.commit_or_bytes;
+            let mut local_actions: Vec<_> = this.data.actions.to_vec();
             let creation_intent = this.table_data.is_none();
+            let creation_protocol = local_actions.iter().find_map(|a| match a {
+                Action::Protocol(p) => Some(p.clone()),
+                _ => None,
+            });
+            let creation_metadata = local_actions.iter().find_map(|a| match a {
+                Action::Metadata(m) => Some(m.clone()),
+                _ => None,
+            });
             let current_is_blind_append = local_actions
                 .iter()
                 .find_map(|action| match action {
@@ -555,6 +563,7 @@ impl<'a> std::future::IntoFuture for PreparedCommit<'a> {
             let mut read_snapshot: Option<EagerSnapshot> = this
                 .table_data
                 .map(|table_ref| table_ref.eager_snapshot().clone());
+            let mut creation_actions_stripped = false;
             while attempt_number <= total_retries {
                 let snapshot_version = read_snapshot.as_ref().map(|s| s.version()).unwrap_or(-1);
                 let latest_version = match this.log_store.get_latest_version(snapshot_version).await
@@ -582,12 +591,10 @@ impl<'a> std::future::IntoFuture for PreparedCommit<'a> {
                     }
 
                     if let Some(snapshot) = &read_snapshot {
-                        // For creation attempts where the table now exists, ensure protocol/metadata match.
+                        // For creation attempts where the table now exists, ensure protocol/metadata match
+                        // and strip creation-only actions before retrying as an append.
                         if creation_intent {
-                            if let Some(txn_protocol) = local_actions.iter().find_map(|a| match a {
-                                Action::Protocol(p) => Some(p),
-                                _ => None,
-                            }) {
+                            if let Some(txn_protocol) = creation_protocol.as_ref() {
                                 if txn_protocol != snapshot.protocol() {
                                     return Err(TransactionError::CommitConflict(
                                         conflict_checker::CommitConflictError::ProtocolChanged(
@@ -597,16 +604,53 @@ impl<'a> std::future::IntoFuture for PreparedCommit<'a> {
                                     .into());
                                 }
                             }
-                            if let Some(txn_metadata) = local_actions.iter().find_map(|a| match a {
-                                Action::Metadata(m) => Some(m),
-                                _ => None,
-                            }) {
-                                if txn_metadata != snapshot.metadata() {
+                            if let Some(txn_metadata) = creation_metadata.as_ref() {
+                                let schemas_match = match (
+                                    txn_metadata.parse_schema(),
+                                    snapshot.metadata().parse_schema(),
+                                ) {
+                                    (Ok(left), Ok(right)) => left == right,
+                                    _ => false,
+                                };
+                                let metadata_compatible = schemas_match
+                                    && txn_metadata.partition_columns()
+                                        == snapshot.metadata().partition_columns()
+                                    && txn_metadata.configuration()
+                                        == snapshot.metadata().configuration();
+
+                                if !metadata_compatible {
                                     return Err(TransactionError::CommitConflict(
                                         conflict_checker::CommitConflictError::MetadataChanged,
                                     )
                                     .into());
                                 }
+                            }
+
+                            if !creation_actions_stripped
+                                && local_actions.iter().any(|action| {
+                                    matches!(action, Action::Protocol(_) | Action::Metadata(_))
+                                })
+                            {
+                                local_actions.retain(|action| {
+                                    !matches!(action, Action::Protocol(_) | Action::Metadata(_))
+                                });
+
+                                for action in local_actions.iter_mut() {
+                                    if let Action::CommitInfo(info) = action {
+                                        info.is_blind_append = Some(true);
+                                    }
+                                }
+
+                                let mut jsons = Vec::<String>::new();
+                                for action in &local_actions {
+                                    let json = serde_json::to_string(action).map_err(|e| {
+                                        TransactionError::SerializeLogJson { json_err: e }
+                                    })?;
+                                    jsons.push(json);
+                                }
+                                commit_or_bytes =
+                                    CommitOrBytes::LogBytes(Bytes::from(jsons.join("\n")));
+                                creation_actions_stripped = true;
                             }
                         }
 

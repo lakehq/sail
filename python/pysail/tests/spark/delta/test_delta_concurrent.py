@@ -6,7 +6,7 @@ import pytest
 
 
 def test_delta_concurrent_initial_consistent_metadata(spark, tmp_path):
-    """Concurrent creation with consistent metadata should succeed; retries may land on later versions."""
+    """Concurrent creation with consistent metadata should land as create + clean appends."""
 
     delta_path = tmp_path / "delta_concurrent_initial"
     table_uri = str(delta_path)
@@ -26,31 +26,34 @@ def test_delta_concurrent_initial_consistent_metadata(spark, tmp_path):
             except Exception as exc:  # noqa: BLE001
                 errors.append((idx, exc))
 
-    # Some writers may conflict; measure success count.
-    success = num_writers - len(errors)
-    assert success >= 1, f"All writers failed: {errors}"
+    assert errors == [], f"Concurrent writers failed during initial creation: {errors}"
 
     df = spark.read.format("delta").load(table_uri)
-    assert df.count() == success
-    assert df.select("p").distinct().count() == success
+    assert df.count() == num_writers
+    assert df.select("p").distinct().count() == num_writers
 
     log_dir = Path(delta_path) / "_delta_log"
     log_files = sorted(p.name for p in log_dir.glob("*.json"))
-    # Version 0 must exist; later versions are allowed due to retries.
-    assert "00000000000000000000.json" in log_files
-    # Protocol/Metadata may repeat across later versions; ensure at least once.
+    assert log_files, "Expected delta logs to be written"
+    assert log_files[0] == "00000000000000000000.json"
+    # All versions should be contiguous starting at 0 (one per successful writer).
+    assert log_files == [f"{i:020}.json" for i in range(num_writers)], f"Non-contiguous log files: {log_files}"
+
+    # Protocol/Metadata should appear exactly once (creation only).
     protocol_count = 0
     metadata_count = 0
-    for log_file in log_files:
+    for idx, log_file in enumerate(log_files):
         with open(log_dir / log_file, encoding="utf-8") as fh:
             for line in fh:
                 action = json.loads(line)
                 if "protocol" in action:
                     protocol_count += 1
+                    assert idx == 0, "Protocol action should only be in version 0"
                 if "metaData" in action:
                     metadata_count += 1
-    assert protocol_count >= 1, f"Expected protocol actions, got {protocol_count}"
-    assert metadata_count >= 1, f"Expected metadata actions, got {metadata_count}"
+                    assert idx == 0, "Metadata action should only be in version 0"
+    assert protocol_count == 1, f"Expected exactly one protocol action, got {protocol_count}"
+    assert metadata_count == 1, f"Expected exactly one metadata action, got {metadata_count}"
 
 
 def test_delta_concurrent_initial_metadata_mismatch_errors(spark, tmp_path):
