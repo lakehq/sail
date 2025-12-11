@@ -604,11 +604,11 @@ impl<'a> std::future::IntoFuture for PreparedCommit<'a> {
                                 }
                             }
                             let metadata_compatible =
-                                creation_metadata.as_ref().map_or(true, |txn| {
+                                creation_metadata.as_ref().is_none_or(|txn| {
                                     txn.parse_schema()
                                         .ok()
                                         .zip(snapshot.metadata().parse_schema().ok())
-                                        .map_or(false, |(left, right)| left == right)
+                                        .is_some_and(|(left, right)| left == right)
                                         && txn.partition_columns()
                                             == snapshot.metadata().partition_columns()
                                         && txn.configuration()
@@ -876,6 +876,7 @@ impl PostCommit {
 
         let checkpoint_interval = table_state.config().checkpoint_interval().get() as i64;
         if ((version + 1) % checkpoint_interval) == 0 {
+            // TODO: Implement checkpoint creation
             info!(
                 "Checkpoint interval reached at version {version}, checkpoint creation is not implemented yet."
             );
