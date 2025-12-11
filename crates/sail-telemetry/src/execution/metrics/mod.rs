@@ -6,10 +6,12 @@ mod join;
 #[cfg(test)]
 pub(super) mod testing;
 
-use datafusion::physical_plan::Metric;
-pub use default::*;
-pub use filter::*;
-pub use join::*;
+use datafusion::physical_plan::filter::FilterExec;
+use datafusion::physical_plan::joins::{
+    CrossJoinExec, HashJoinExec, NestedLoopJoinExec, PiecewiseMergeJoinExec, SortMergeJoinExec,
+    SymmetricHashJoinExec,
+};
+use datafusion::physical_plan::{ExecutionPlan, Metric};
 use paste::paste;
 
 use crate::common::KeyValue;
@@ -64,3 +66,34 @@ impl_chained_metric_emitter!(T1 T2 T3 T4 T5 : T6);
 impl_chained_metric_emitter!(T1 T2 T3 T4 T5 T6 : T7);
 impl_chained_metric_emitter!(T1 T2 T3 T4 T5 T6 T7 : T8);
 impl_chained_metric_emitter!(T1 T2 T3 T4 T5 T6 T7 T8 : T9);
+
+/// Build a metric emitter based on the type of the execution plan.
+pub fn build_metric_emitter(plan: &dyn ExecutionPlan) -> Box<dyn MetricEmitter> {
+    let plan = plan.as_any();
+    if plan.is::<FilterExec>() {
+        Box::new((filter::FilterMetricEmitter, default::DefaultMetricEmitter))
+    } else if plan.is::<HashJoinExec>()
+        || plan.is::<PiecewiseMergeJoinExec>()
+        || plan.is::<CrossJoinExec>()
+    {
+        Box::new((
+            join::BuildProbeJoinMetricEmitter,
+            default::DefaultMetricEmitter,
+        ))
+    } else if plan.is::<NestedLoopJoinExec>() {
+        Box::new((
+            join::BuildProbeJoinMetricEmitter,
+            join::NestedLoopJoinMetricEmitter,
+            default::DefaultMetricEmitter,
+        ))
+    } else if plan.is::<SymmetricHashJoinExec>() {
+        Box::new((join::StreamJoinMetricEmitter, default::DefaultMetricEmitter))
+    } else if plan.is::<SortMergeJoinExec>() {
+        Box::new((
+            join::SortMergeJoinMetricEmitter,
+            default::DefaultMetricEmitter,
+        ))
+    } else {
+        Box::new(default::DefaultMetricEmitter)
+    }
+}

@@ -263,39 +263,7 @@ impl ExecutionPlan for TracingExec {
 
 impl TracingExec {
     fn build_metric_emitter(&self) -> Box<dyn MetricEmitter> {
-        let plan = self.inner.as_ref().as_any();
-        if plan.is::<FilterExec>() {
-            Box::new((
-                super::metrics::FilterMetricEmitter,
-                super::metrics::DefaultMetricEmitter,
-            ))
-        } else if plan.is::<HashJoinExec>()
-            || plan.is::<PiecewiseMergeJoinExec>()
-            || plan.is::<CrossJoinExec>()
-        {
-            Box::new((
-                super::metrics::BuildProbeJoinMetricEmitter,
-                super::metrics::DefaultMetricEmitter,
-            ))
-        } else if plan.is::<NestedLoopJoinExec>() {
-            Box::new((
-                super::metrics::BuildProbeJoinMetricEmitter,
-                super::metrics::NestedLoopJoinMetricEmitter,
-                super::metrics::DefaultMetricEmitter,
-            ))
-        } else if plan.is::<SymmetricHashJoinExec>() {
-            Box::new((
-                super::metrics::StreamJoinMetricEmitter,
-                super::metrics::DefaultMetricEmitter,
-            ))
-        } else if plan.is::<SortMergeJoinExec>() {
-            Box::new((
-                super::metrics::SortMergeJoinMetricEmitter,
-                super::metrics::DefaultMetricEmitter,
-            ))
-        } else {
-            Box::new(super::metrics::DefaultMetricEmitter)
-        }
+        crate::execution::metrics::build_metric_emitter(self.inner.as_ref())
     }
 
     fn build_metric_attributes(&self) -> Vec<KeyValue> {
