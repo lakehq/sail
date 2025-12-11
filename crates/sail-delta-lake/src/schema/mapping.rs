@@ -10,6 +10,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+use std::collections::HashMap;
 use std::sync::atomic::{AtomicI64, Ordering};
 
 use delta_kernel::schema::{ArrayType, DataType, MapType, MetadataValue, StructField, StructType};
@@ -94,6 +95,45 @@ pub fn compute_max_column_id(schema: &StructType) -> i64 {
     max_id
 }
 
+fn column_mapping_id(field: &StructField) -> Option<i64> {
+    field
+        .metadata()
+        .get("delta.columnMapping.id")
+        .and_then(|v| match v {
+            MetadataValue::Number(n) => Some(*n),
+            _ => None,
+        })
+}
+
+fn column_mapping_physical_name(field: &StructField) -> Option<&str> {
+    field
+        .metadata()
+        .get("delta.columnMapping.physicalName")
+        .and_then(|v| match v {
+            MetadataValue::String(s) => Some(s.as_str()),
+            _ => None,
+        })
+}
+
+fn merge_metadata(prev: &StructField, new: &StructField) -> HashMap<String, MetadataValue> {
+    let mut merged = prev.metadata().clone();
+
+    for (key, value) in new.metadata() {
+        let is_column_mapping_key =
+            key == "delta.columnMapping.id" || key == "delta.columnMapping.physicalName";
+
+        if is_column_mapping_key {
+            // Preserve existing column mapping metadata if present; otherwise add it.
+            merged.entry(key.clone()).or_insert_with(|| value.clone());
+        } else {
+            // For non-column-mapping keys, prefer the value from the new field (to keep user-added metadata).
+            merged.insert(key.clone(), value.clone());
+        }
+    }
+
+    merged
+}
+
 fn annotate_field(field: &StructField, counter: &AtomicI64) -> StructField {
     let next_id = counter.fetch_add(1, Ordering::Relaxed);
     let physical_name = format!("col-{}", uuid::Uuid::new_v4());
@@ -173,19 +213,51 @@ fn merge_types(
     }
 }
 
+fn find_matching_field<'a>(
+    candidate: &StructField,
+    existing_fields: &'a [&StructField],
+) -> Option<&'a StructField> {
+    if let Some(cid) = column_mapping_id(candidate) {
+        if let Some(field) = existing_fields
+            .iter()
+            .copied()
+            .find(|f| column_mapping_id(f) == Some(cid))
+        {
+            return Some(field);
+        }
+    }
+
+    if let Some(phys) = column_mapping_physical_name(candidate) {
+        if let Some(field) = existing_fields
+            .iter()
+            .copied()
+            .find(|f| column_mapping_physical_name(f) == Some(phys))
+        {
+            return Some(field);
+        }
+    }
+
+    existing_fields
+        .iter()
+        .copied()
+        .find(|f| f.name() == candidate.name())
+}
+
 fn merge_struct(existing: &StructType, candidate: &StructType, counter: &AtomicI64) -> StructType {
+    let existing_fields: Vec<&StructField> = existing.fields().collect();
     let merged_fields: Vec<StructField> = candidate
         .fields()
         .map(|nf| {
-            let prev = existing.fields().find(|f| f.name() == nf.name());
+            let prev = find_matching_field(nf, &existing_fields);
             if let Some(prev_field) = prev {
                 let merged_dtype =
                     merge_types(Some(prev_field.data_type()), nf.data_type(), counter);
+                let merged_metadata = merge_metadata(prev_field, nf);
                 StructField {
-                    name: prev_field.name().clone(),
+                    name: nf.name().clone(),
                     data_type: merged_dtype,
                     nullable: nf.is_nullable(),
-                    metadata: prev_field.metadata().clone(),
+                    metadata: merged_metadata,
                 }
             } else {
                 annotate_field(nf, counter)
