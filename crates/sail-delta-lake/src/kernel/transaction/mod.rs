@@ -544,9 +544,7 @@ impl<'a> std::future::IntoFuture for PreparedCommit<'a> {
                     _ => None,
                 })
                 .unwrap_or(false);
-            let effective_max_retries = if creation_intent {
-                this.max_retries
-            } else if current_is_blind_append {
+            let effective_max_retries = if creation_intent || current_is_blind_append {
                 this.max_retries
             } else {
                 0
@@ -563,7 +561,7 @@ impl<'a> std::future::IntoFuture for PreparedCommit<'a> {
                 {
                     Ok(v) => Some(v),
                     Err(DeltaError::Kernel(KernelError::MissingVersion)) => None,
-                    Err(err) => return Err(err.into()),
+                    Err(err) => return Err(err),
                 };
 
                 if let Some(latest_version) = latest_version {
