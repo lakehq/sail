@@ -5,7 +5,6 @@ use std::sync::PoisonError;
 
 use datafusion::arrow::error::ArrowError;
 use datafusion::common::DataFusionError;
-use log::error;
 use prost::{DecodeError, UnknownEnumValue};
 use sail_cache::error::CacheError;
 use sail_common::error::CommonError;
