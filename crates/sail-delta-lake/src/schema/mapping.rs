@@ -10,6 +10,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+use std::collections::HashMap;
 use std::sync::atomic::{AtomicI64, Ordering};
 
 use delta_kernel::schema::{ArrayType, DataType, MapType, MetadataValue, StructField, StructType};
@@ -112,6 +113,25 @@ fn column_mapping_physical_name(field: &StructField) -> Option<&str> {
             MetadataValue::String(s) => Some(s.as_str()),
             _ => None,
         })
+}
+
+fn merge_metadata(prev: &StructField, new: &StructField) -> HashMap<String, MetadataValue> {
+    let mut merged = prev.metadata().clone();
+
+    for (key, value) in new.metadata() {
+        let is_column_mapping_key =
+            key == "delta.columnMapping.id" || key == "delta.columnMapping.physicalName";
+
+        if is_column_mapping_key {
+            // Preserve existing column mapping metadata if present; otherwise add it.
+            merged.entry(key.clone()).or_insert_with(|| value.clone());
+        } else {
+            // For non-column-mapping keys, prefer the value from the new field (to keep user-added metadata).
+            merged.insert(key.clone(), value.clone());
+        }
+    }
+
+    merged
 }
 
 fn annotate_field(field: &StructField, counter: &AtomicI64) -> StructField {
@@ -232,11 +252,12 @@ fn merge_struct(existing: &StructType, candidate: &StructType, counter: &AtomicI
             if let Some(prev_field) = prev {
                 let merged_dtype =
                     merge_types(Some(prev_field.data_type()), nf.data_type(), counter);
+                let merged_metadata = merge_metadata(prev_field, nf);
                 StructField {
                     name: nf.name().clone(),
                     data_type: merged_dtype,
                     nullable: nf.is_nullable(),
-                    metadata: prev_field.metadata().clone(),
+                    metadata: merged_metadata,
                 }
             } else {
                 annotate_field(nf, counter)

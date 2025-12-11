@@ -111,3 +111,36 @@ class TestDeltaColumnMappingRenameDrop:
         assert id_new.get("delta.columnMapping.physicalName") == id_meta.get("delta.columnMapping.physicalName")
         assert age_new.get("delta.columnMapping.physicalName") == age_meta.get("delta.columnMapping.physicalName")
         assert cfg1.get("delta.columnMapping.maxColumnId") == cfg0.get("delta.columnMapping.maxColumnId")
+
+    def test_column_mapping_overwrite_preserves_custom_metadata(self, spark, tmp_path: Path):
+        """Ensure non-columnMapping metadata survives overwriteSchema with column mapping."""
+
+        base = tmp_path / "delta_cm_metadata_preserve"
+        df = spark.createDataFrame([Row(id=1)])
+        (df.write.format("delta").mode("overwrite").option("column_mapping_mode", "name").save(str(base)))
+
+        metadata0 = _latest_metadata(base)
+        schema0 = _schema_json(metadata0)
+        id_meta_full = _field_metadata(schema0, "id")
+        id_meta = _mapping_physical_metadata(id_meta_full)
+        id_before = id_meta_full.get("delta.columnMapping.id")
+        phys_before = id_meta.get("delta.columnMapping.physicalName")
+
+        # Add a custom metadata key on the same field and overwrite schema
+        # Only add the new user metadata; existing columnMapping metadata should be preserved
+        # by the engine.
+        custom_meta = {"user.comment": "keep-me"}
+        new_schema = StructType([StructField("id", IntegerType(), True, metadata=custom_meta)])
+        df2 = spark.createDataFrame([Row(id=2)], schema=new_schema)
+        (df2.write.format("delta").mode("overwrite").option("overwriteSchema", "true").save(str(base)))
+
+        metadata1 = _latest_metadata(base)
+        schema1 = _schema_json(metadata1)
+        id_meta_new = _field_metadata(schema1, "id")
+
+        # Column mapping metadata should remain, and custom metadata should be preserved
+        assert id_meta_new.get("delta.columnMapping.physicalName") == phys_before
+        if id_before is not None:
+            assert id_meta_new.get("delta.columnMapping.id") == id_before
+        user_comment = id_meta_new.get("user.comment") or id_meta_new.get("metadata.user.comment")
+        assert user_comment == "keep-me"
