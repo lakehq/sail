@@ -175,6 +175,20 @@ impl<'a> TransactionInfo<'a> {
     pub fn read_whole_table(&self) -> bool {
         self.read_whole_table
     }
+
+    pub fn protocol_action(&self) -> Option<&Protocol> {
+        self.actions.iter().find_map(|a| match a {
+            Action::Protocol(p) => Some(p),
+            _ => None,
+        })
+    }
+
+    pub fn metadata_action(&self) -> Option<&Metadata> {
+        self.actions.iter().find_map(|a| match a {
+            Action::Metadata(m) => Some(m),
+            _ => None,
+        })
+    }
 }
 
 /// Summary of the Winning commit against which we want to check the conflict
@@ -370,16 +384,19 @@ impl<'a> ConflictChecker<'a> {
                 ));
             };
         }
-        if !self.winning_commit_summary.protocol().is_empty()
-            && self
-                .txn_info
-                .actions
-                .iter()
-                .any(|a| matches!(a, Action::Protocol(_)))
-        {
-            return Err(CommitConflictError::ProtocolChanged(
-                "protocol changed".into(),
-            ));
+        if !self.winning_commit_summary.protocol().is_empty() {
+            if let Some(txn_protocol) = self.txn_info.protocol_action() {
+                let wins = self.winning_commit_summary.protocol();
+                if wins.iter().any(|p| p != txn_protocol) {
+                    return Err(CommitConflictError::ProtocolChanged(
+                        "protocol changed".into(),
+                    ));
+                }
+            } else {
+                return Err(CommitConflictError::ProtocolChanged(
+                    "protocol changed".into(),
+                ));
+            }
         };
         Ok(())
     }
@@ -388,10 +405,16 @@ impl<'a> ConflictChecker<'a> {
     fn check_no_metadata_updates(&self) -> Result<(), CommitConflictError> {
         // Fail if the metadata is different than what the txn read.
         if !self.winning_commit_summary.metadata_updates().is_empty() {
-            Err(CommitConflictError::MetadataChanged)
-        } else {
-            Ok(())
+            if let Some(txn_metadata) = self.txn_info.metadata_action() {
+                let wins = self.winning_commit_summary.metadata_updates();
+                if wins.iter().any(|m| m != txn_metadata) {
+                    return Err(CommitConflictError::MetadataChanged);
+                }
+            } else {
+                return Err(CommitConflictError::MetadataChanged);
+            }
         }
+        Ok(())
     }
 
     /// Check if the new files added by the already committed transactions
