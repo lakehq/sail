@@ -557,14 +557,13 @@ impl<'a> std::future::IntoFuture for PreparedCommit<'a> {
             } else {
                 0
             };
-            let mut attempt_number: usize = 1;
             let total_retries = effective_max_retries + 1;
 
             let mut read_snapshot: Option<EagerSnapshot> = this
                 .table_data
                 .map(|table_ref| table_ref.eager_snapshot().clone());
             let mut creation_actions_stripped = false;
-            while attempt_number <= total_retries {
+            for attempt_number in 1..=total_retries {
                 let snapshot_version = read_snapshot.as_ref().map(|s| s.version()).unwrap_or(-1);
                 let latest_version = match this.log_store.get_latest_version(snapshot_version).await
                 {
@@ -604,26 +603,22 @@ impl<'a> std::future::IntoFuture for PreparedCommit<'a> {
                                     .into());
                                 }
                             }
-                            if let Some(txn_metadata) = creation_metadata.as_ref() {
-                                let schemas_match = match (
-                                    txn_metadata.parse_schema(),
-                                    snapshot.metadata().parse_schema(),
-                                ) {
-                                    (Ok(left), Ok(right)) => left == right,
-                                    _ => false,
-                                };
-                                let metadata_compatible = schemas_match
-                                    && txn_metadata.partition_columns()
-                                        == snapshot.metadata().partition_columns()
-                                    && txn_metadata.configuration()
-                                        == snapshot.metadata().configuration();
-
-                                if !metadata_compatible {
-                                    return Err(TransactionError::CommitConflict(
-                                        conflict_checker::CommitConflictError::MetadataChanged,
-                                    )
-                                    .into());
-                                }
+                            let metadata_compatible =
+                                creation_metadata.as_ref().map_or(true, |txn| {
+                                    txn.parse_schema()
+                                        .ok()
+                                        .zip(snapshot.metadata().parse_schema().ok())
+                                        .map_or(false, |(left, right)| left == right)
+                                        && txn.partition_columns()
+                                            == snapshot.metadata().partition_columns()
+                                        && txn.configuration()
+                                            == snapshot.metadata().configuration()
+                                });
+                            if !metadata_compatible {
+                                return Err(TransactionError::CommitConflict(
+                                    conflict_checker::CommitConflictError::MetadataChanged,
+                                )
+                                .into());
                             }
 
                             if !creation_actions_stripped
@@ -668,15 +663,12 @@ impl<'a> std::future::IntoFuture for PreparedCommit<'a> {
                                 snapshot.version() + 1,
                                 this.log_store.name()
                             );
-                            let mut steps = latest_version - snapshot.version();
-
-                            // Need to check for conflicts with each version between the read_snapshot and
-                            // the latest!
-                            while steps != 0 {
+                            // Need to check for conflicts with each version between the read_snapshot and the latest
+                            for v in (snapshot.version() + 1)..=latest_version {
                                 let summary = WinningCommitSummary::try_new(
                                     this.log_store.as_ref(),
-                                    latest_version - steps,
-                                    (latest_version - steps) + 1,
+                                    v - 1,
+                                    v,
                                 )
                                 .await?;
                                 let transaction_info = TransactionInfo::try_new(
@@ -698,7 +690,6 @@ impl<'a> std::future::IntoFuture for PreparedCommit<'a> {
                                         return Err(TransactionError::CommitConflict(err).into());
                                     }
                                 }
-                                steps -= 1;
                             }
                             // Update snapshot to latest version after successful conflict check
                             if let Some(snapshot) = &mut read_snapshot {
@@ -739,9 +730,7 @@ impl<'a> std::future::IntoFuture for PreparedCommit<'a> {
                     }
                     Err(TransactionError::VersionAlreadyExists(version)) => {
                         error!("The transaction {version} already exists, will retry!");
-                        // If the version already exists, loop through again and re-check
-                        // conflicts
-                        attempt_number += 1;
+                        continue;
                     }
                     Err(err) => {
                         this.log_store
