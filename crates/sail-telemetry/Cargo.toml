@@ -25,3 +25,12 @@ futures = { workspace = true }
 tower = { workspace = true }
 tonic = { workspace = true }
 pin-project-lite = { workspace = true }
+num-traits = { workspace = true }
+
+[build-dependencies]
+serde = { workspace = true }
+serde_yaml = { workspace = true }
+syn = { workspace = true }
+prettyplease = { workspace = true }
+quote = { workspace = true }
+proc-macro2 = { workspace = true }

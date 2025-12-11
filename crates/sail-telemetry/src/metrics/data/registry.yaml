@@ -1,0 +1,52 @@
+- name: execution.output_size
+  description: The total output size.
+  unit: byte
+  type: Gauge
+  value_type: u64
+  attributes:
+    - partition
+
+- name: execution.output_row_count
+  description: The total number of output rows.
+  type: Gauge
+  value_type: u64
+  attributes:
+    - partition
+
+- name: execution.elapsed_compute_time
+  description: The total elapsed compute time.
+  unit: s
+  type: Gauge
+  value_type: f64
+  attributes:
+    - partition
+
+- name: execution.spill_count
+  description: The total number of spills to disk.
+  type: Gauge
+  value_type: u64
+  attributes:
+    - partition
+
+- name: execution.spill_size
+  description: The total size of spills to disk.
+  unit: byte
+  type: Gauge
+  value_type: u64
+  attributes:
+    - partition
+
+- name: execution.spill_row_count
+  description: The total number of rows for all spills to disk.
+  type: Gauge
+  value_type: u64
+  attributes:
+    - partition
+
+- name: execution.memory_used
+  description: The amount of memory used.
+  unit: byte
+  type: Gauge
+  value_type: u64
+  attributes:
+    - partition

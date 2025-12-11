@@ -4,28 +4,29 @@ use std::path::PathBuf;
 use quote::{format_ident, quote};
 use serde::Deserialize;
 
-#[derive(Debug, Deserialize)]
+#[derive(Deserialize)]
 #[serde(deny_unknown_fields)]
-pub struct OptionEntry {
+struct OptionEntry {
     /// The key for the option (case-insensitive).
-    pub key: String,
+    key: String,
     /// The aliases for the option (case-insensitive), if any.
-    pub aliases: Option<Vec<String>>,
+    aliases: Option<Vec<String>>,
     /// The default value for the option, or [`None`] if the option should not have a default.
     /// If the option is not set by the user, there are two scenarios:
     ///   1. If the option has a default, the default value is used.
     ///   2. If the option does not have a default, certain global configuration options may apply.
-    pub default: Option<String>,
+    default: Option<String>,
     /// The option description in Markdown format.
-    pub description: String,
+    #[expect(unused)]
+    description: String,
     /// Whether the option is supported by the data source.
     /// Unsupported options will be excluded from the generated code.
-    pub supported: bool,
+    supported: bool,
     /// The Rust type for the option, which defaults to `String`.
-    pub rust_type: Option<String>,
+    rust_type: Option<String>,
     /// The Rust deserialization function, which defaults to a `String` deserializer.
     /// The function should deserialize `Option<T>` when `rust_type` is `T`.
-    pub rust_deserialize_with: Option<String>,
+    rust_deserialize_with: Option<String>,
 }
 
 fn build_options(name: &str, kind: &str) -> Result<(), Box<dyn std::error::Error>> {
