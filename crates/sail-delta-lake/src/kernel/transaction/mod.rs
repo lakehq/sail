@@ -40,9 +40,7 @@ use crate::error::{DeltaError, KernelError};
 use crate::kernel::checkpoints::cleanup_expired_logs_for;
 use crate::kernel::models::{Action, Metadata, Protocol, Transaction};
 use crate::kernel::snapshot::EagerSnapshot;
-use crate::kernel::transaction::conflict_checker::{
-    CommitConflictError, TransactionInfo, WinningCommitSummary,
-};
+use crate::kernel::transaction::conflict_checker::{TransactionInfo, WinningCommitSummary};
 use crate::kernel::{DeltaOperation, DeltaResult, TablePropertiesExt};
 use crate::storage::{CommitOrBytes, LogStoreRef, ObjectStoreRef};
 use crate::table::DeltaTableState;
@@ -516,15 +514,15 @@ impl<'a> std::future::IntoFuture for PreparedCommit<'a> {
         let this = self;
 
         Box::pin(async move {
-            let mut commit_or_bytes = this.commit_or_bytes;
-            let mut local_actions: Vec<_> = this.data.actions.to_vec();
+            let commit_or_bytes = this.commit_or_bytes;
+            let local_actions: Vec<_> = this.data.actions.to_vec();
             let mut attempt_number: usize = 1;
             let total_retries = this.max_retries + 1;
 
             let mut read_snapshot: Option<EagerSnapshot> = this
                 .table_data
                 .map(|table_ref| table_ref.eager_snapshot().clone());
-            let mut creation_actions_stripped = false;
+            let creation_intent = this.table_data.is_none();
             while attempt_number <= total_retries {
                 let snapshot_version = read_snapshot.as_ref().map(|s| s.version()).unwrap_or(-1);
                 let latest_version = match this.log_store.get_latest_version(snapshot_version).await
@@ -535,6 +533,31 @@ impl<'a> std::future::IntoFuture for PreparedCommit<'a> {
                 };
 
                 if let Some(latest_version) = latest_version {
+                    // If we intended to create a table but it now exists, reject concurrent creation
+                    // when the commit carries protocol or metadata actions (Spark-compatible behavior).
+                    if creation_intent
+                        && local_actions
+                            .iter()
+                            .any(|a| matches!(a, Action::Protocol(_) | Action::Metadata(_)))
+                    {
+                        if local_actions
+                            .iter()
+                            .any(|a| matches!(a, Action::Protocol(_)))
+                        {
+                            return Err(TransactionError::CommitConflict(
+                                conflict_checker::CommitConflictError::ProtocolChanged(
+                                    "protocol changed".into(),
+                                ),
+                            )
+                            .into());
+                        } else {
+                            return Err(TransactionError::CommitConflict(
+                                conflict_checker::CommitConflictError::MetadataChanged,
+                            )
+                            .into());
+                        }
+                    }
+
                     // Ensure we have a snapshot aligned to the latest version.
                     if read_snapshot
                         .as_ref()
@@ -547,66 +570,6 @@ impl<'a> std::future::IntoFuture for PreparedCommit<'a> {
                             Some(latest_version),
                         )
                         .await?;
-
-                        // If we were racing table creation, verify compatibility and strip creation-only actions.
-                        if !creation_actions_stripped {
-                            if let Some(protocol) = local_actions.iter().find_map(|a| match a {
-                                Action::Protocol(p) => Some(p),
-                                _ => None,
-                            }) {
-                                if protocol != snapshot.protocol() {
-                                    return Err(TransactionError::CommitConflict(
-                                        CommitConflictError::ProtocolChanged(
-                                            "protocol changed".into(),
-                                        ),
-                                    )
-                                    .into());
-                                }
-                            }
-                            if let Some(metadata) = local_actions.iter().find_map(|a| match a {
-                                Action::Metadata(m) => Some(m),
-                                _ => None,
-                            }) {
-                                let schemas_match = match (
-                                    metadata.parse_schema(),
-                                    snapshot.metadata().parse_schema(),
-                                ) {
-                                    (Ok(left), Ok(right)) => left == right,
-                                    _ => false,
-                                };
-                                let metadata_compatible = schemas_match
-                                    && metadata.partition_columns()
-                                        == snapshot.metadata().partition_columns()
-                                    && metadata.configuration()
-                                        == snapshot.metadata().configuration();
-
-                                if !metadata_compatible {
-                                    return Err(TransactionError::CommitConflict(
-                                        CommitConflictError::MetadataChanged,
-                                    )
-                                    .into());
-                                }
-                            }
-
-                            // Strip creation-only actions before retrying as an append.
-                            if local_actions.iter().any(|action| {
-                                matches!(action, Action::Protocol(_) | Action::Metadata(_))
-                            }) {
-                                local_actions.retain(|action| {
-                                    !matches!(action, Action::Protocol(_) | Action::Metadata(_))
-                                });
-                                let mut jsons = Vec::<String>::new();
-                                for action in &local_actions {
-                                    let json = serde_json::to_string(action).map_err(|e| {
-                                        TransactionError::SerializeLogJson { json_err: e }
-                                    })?;
-                                    jsons.push(json);
-                                }
-                                commit_or_bytes =
-                                    CommitOrBytes::LogBytes(Bytes::from(jsons.join("\n")));
-                                creation_actions_stripped = true;
-                            }
-                        }
 
                         read_snapshot = Some(snapshot);
                     }
