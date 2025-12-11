@@ -24,6 +24,9 @@ struct MetricDefinition {
     value_type: MetricValueType,
     /// The allowed attributes associated with the metric.
     attributes: Vec<AttributeName>,
+    /// Whether the metric is defined in debug builds only.
+    #[serde(default)]
+    debug: bool,
 }
 
 impl MetricDefinition {
@@ -148,8 +151,14 @@ fn build_metric_registry() -> Result<(), Box<dyn std::error::Error>> {
                     ))
                 }
             };
+            let debug = if metric.debug {
+                quote! { #[cfg(debug_assertions)] }
+            } else {
+                quote! {}
+            };
             Ok(quote! {
                 #doc
+                #debug
                 pub #field_name: #field_type,
             })
         })
@@ -168,7 +177,7 @@ fn build_metric_registry() -> Result<(), Box<dyn std::error::Error>> {
                 None => quote! {},
             };
             let description = &metric.description;
-            let build = quote! { #with_unit.with_description(#description).build() };
+            let builder = quote! { #with_unit.with_description(#description) };
             let attributes = metric
                 .attributes
                 .iter()
@@ -180,56 +189,56 @@ fn build_metric_registry() -> Result<(), Box<dyn std::error::Error>> {
             let keys = quote! { std::sync::Arc::from([#(#attributes),*]) };
             let initializer = match (&metric.r#type, &metric.value_type) {
                 (MetricType::Counter, MetricValueType::U64) => quote! {
-                    #field_name: crate::metrics::Counter::new(
-                        meter.u64_counter(#metric_name)#build,
+                    #field_name: <crate::metrics::Counter<u64>>::new(
+                        meter.u64_counter(#metric_name)#builder,
                         #keys,
                     ),
                 },
                 (MetricType::Counter, MetricValueType::F64) => quote! {
-                    #field_name: crate::metrics::Counter::new(
-                        meter.f64_counter(#metric_name)#build,
+                    #field_name: <crate::metrics::Counter<f64>>::new(
+                        meter.f64_counter(#metric_name)#builder,
                         #keys,
                     ),
                 },
                 (MetricType::UpDownCounter, MetricValueType::I64) => quote! {
-                    #field_name: crate::metrics::UpDownCounter::new(
-                        meter.i64_up_down_counter(#metric_name)#build,
+                    #field_name: <crate::metrics::UpDownCounter<i64>>::new(
+                        meter.i64_up_down_counter(#metric_name)#builder,
                         #keys,
                     ),
                 },
                 (MetricType::UpDownCounter, MetricValueType::F64) => quote! {
-                    #field_name: crate::metrics::UpDownCounter::new(
-                        meter.f64_up_down_counter(#metric_name)#build,
+                    #field_name: <crate::metrics::UpDownCounter<f64>>::new(
+                        meter.f64_up_down_counter(#metric_name)#builder,
                         #keys,
                     ),
                 },
                 (MetricType::Gauge, MetricValueType::U64) => quote! {
-                    #field_name: crate::metrics::Gauge::new(
-                        meter.u64_gauge(#metric_name)#build,
+                    #field_name: <crate::metrics::Gauge<u64>>::new(
+                        meter.u64_gauge(#metric_name)#builder,
                         #keys,
                     ),
                 },
                 (MetricType::Gauge, MetricValueType::I64) => quote! {
-                    #field_name: crate::metrics::Gauge::new(
-                        meter.i64_gauge(#metric_name)#build,
+                    #field_name: <crate::metrics::Gauge<i64>>::new(
+                        meter.i64_gauge(#metric_name)#builder,
                         #keys,
                     ),
                 },
                 (MetricType::Gauge, MetricValueType::F64) => quote! {
-                    #field_name: crate::metrics::Gauge::new(
-                        meter.f64_gauge(#metric_name)#build,
+                    #field_name: <crate::metrics::Gauge<f64>>::new(
+                        meter.f64_gauge(#metric_name)#builder,
                         #keys,
                     ),
                 },
                 (MetricType::Histogram, MetricValueType::U64) => quote! {
-                    #field_name: crate::metrics::Histogram::new(
-                        meter.u64_histogram(#metric_name)#build,
+                    #field_name: <crate::metrics::Histogram<u64>>::new(
+                        meter.u64_histogram(#metric_name)#builder,
                         #keys,
                     ),
                 },
                 (MetricType::Histogram, MetricValueType::F64) => quote! {
-                    #field_name: crate::metrics::Histogram::new(
-                        meter.f64_histogram(#metric_name)#build,
+                    #field_name: <crate::metrics::Histogram<f64>>::new(
+                        meter.f64_histogram(#metric_name)#builder,
                         #keys,
                     ),
                 },
@@ -240,7 +249,15 @@ fn build_metric_registry() -> Result<(), Box<dyn std::error::Error>> {
                     ))
                 }
             };
-            Ok(initializer)
+            let debug = if metric.debug {
+                quote! { #[cfg(debug_assertions)] }
+            } else {
+                quote! {}
+            };
+            Ok(quote! {
+                #debug
+                #initializer
+            })
         })
         .collect::<Result<Vec<_>, syn::Error>>()?;
 

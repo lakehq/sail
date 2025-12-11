@@ -4456,6 +4456,8 @@ dependencies = [
  "percent-encoding",
  "rand 0.9.2",
  "thiserror",
+ "tokio",
+ "tokio-stream",
 ]
 
 [[package]]
@@ -6324,6 +6326,7 @@ dependencies = [
  "opentelemetry-appender-log",
  "opentelemetry-otlp",
  "opentelemetry_sdk",
+ "paste",
  "pin-project-lite",
  "prettyplease",
  "proc-macro2",
@@ -6334,6 +6337,7 @@ dependencies = [
  "serde_yaml",
  "syn 2.0.111",
  "thiserror",
+ "tokio",
  "tonic",
  "tower",
 ]
