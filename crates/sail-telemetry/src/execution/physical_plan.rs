@@ -1,7 +1,10 @@
 use std::any::Any;
 use std::fmt;
+use std::pin::Pin;
 use std::sync::Arc;
+use std::task::{Context, Poll};
 
+use datafusion::arrow::array::RecordBatch;
 use datafusion::arrow::datatypes::SchemaRef;
 use datafusion::common::tree_node::{Transformed, TransformedResult, TreeNode};
 use datafusion::common::{Result, Statistics};
@@ -20,9 +23,14 @@ use datafusion::physical_plan::stream::RecordBatchStreamAdapter;
 use datafusion::physical_plan::{DisplayAs, DisplayFormatType, ExecutionPlan, PlanProperties};
 use fastrace::Span;
 use fastrace_futures::StreamExt;
+use futures::Stream;
+use pin_project_lite::pin_project;
 use sail_common_datafusion::utils::items::ItemTaker;
 
 use crate::common::SpanAttribute;
+use crate::execution::metrics::MetricEmitter;
+use crate::metrics::MetricRegistry;
+use crate::telemetry::global_metric_registry;
 
 pub fn trace_execution_plan(plan: Arc<dyn ExecutionPlan>) -> Result<Arc<dyn ExecutionPlan>> {
     plan.transform(|plan| Ok(Transformed::yes(Arc::new(TracingExec::new(plan)))))
@@ -135,10 +143,24 @@ impl ExecutionPlan for TracingExec {
             let _guard = span.set_local_parent();
             self.inner.execute(partition, context)?
         };
-        Ok(Box::pin(RecordBatchStreamAdapter::new(
-            stream.schema(),
-            stream.in_span(span),
-        )))
+        let schema = stream.schema();
+        if let Some(registry) = global_metric_registry() {
+            let stream = MetricEmitterStream {
+                inner: stream,
+                plan: self.inner.clone(),
+                emitter: MetricEmitter::default(),
+                registry,
+            };
+            Ok(Box::pin(RecordBatchStreamAdapter::new(
+                schema,
+                stream.in_span(span),
+            )))
+        } else {
+            Ok(Box::pin(RecordBatchStreamAdapter::new(
+                schema,
+                stream.in_span(span),
+            )))
+        }
     }
 
     fn metrics(&self) -> Option<MetricsSet> {
@@ -200,5 +222,34 @@ impl ExecutionPlan for TracingExec {
 
     fn with_new_state(&self, _state: Arc<dyn Any + Send + Sync>) -> Option<Arc<dyn ExecutionPlan>> {
         None
+    }
+}
+
+pin_project! {
+    struct MetricEmitterStream {
+        #[pin]
+        inner: SendableRecordBatchStream,
+        plan: Arc<dyn ExecutionPlan>,
+        emitter: MetricEmitter,
+        registry: Arc<MetricRegistry>,
+    }
+}
+
+impl Stream for MetricEmitterStream {
+    type Item = Result<RecordBatch>;
+
+    fn poll_next(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Option<Self::Item>> {
+        let this = self.project();
+        let poll = this.inner.poll_next(cx);
+        if poll.is_ready() {
+            if let Some(metrics) = this.plan.metrics() {
+                this.emitter.emit(&metrics, this.registry)
+            }
+        }
+        poll
+    }
+
+    fn size_hint(&self) -> (usize, Option<usize>) {
+        self.inner.size_hint()
     }
 }

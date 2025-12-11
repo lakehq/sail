@@ -1,0 +1,2 @@
+- name: partition
+  description: The execution partition.

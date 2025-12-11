@@ -1,13 +1,14 @@
 use std::borrow::Cow;
 use std::env;
 use std::io::Write;
-use std::sync::Mutex;
+use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
 use datafusion::common::runtime::set_join_set_tracer;
 use fastrace::collector::{Config, Reporter, SpanRecord};
 use fastrace_opentelemetry::OpenTelemetryReporter;
 use log::Log;
+use opentelemetry::metrics::Meter;
 use opentelemetry::{global, InstrumentationScope};
 use opentelemetry_appender_log::OpenTelemetryLogBridge;
 use opentelemetry_otlp::{LogExporter, Protocol, WithExportConfig};
@@ -18,18 +19,22 @@ use sail_common::config::{OtlpProtocol, TelemetryConfig};
 
 use crate::error::{TelemetryError, TelemetryResult};
 use crate::execution::join_set::DefaultJoinSetTracer;
-use crate::logger::composite::CompositeLogger;
-use crate::logger::span::SpanEventLogger;
+use crate::loggers::composite::CompositeLogger;
+use crate::loggers::span::SpanEventLogger;
+use crate::metrics::MetricRegistry;
 
 enum TelemetryStatus {
     Uninitialized,
     Initialized(TelemetryState),
     Failed,
+    Finalized,
 }
 
 #[derive(Default)]
 struct TelemetryState {
     meter_provider: Option<SdkMeterProvider>,
+    meter: Option<Meter>,
+    metric_registry: Option<Arc<MetricRegistry>>,
     logger_provider: Option<SdkLoggerProvider>,
 }
 
@@ -68,6 +73,9 @@ pub fn init_telemetry(config: &TelemetryConfig, resource: ResourceOptions) -> Te
         TelemetryStatus::Failed => Err(TelemetryError::internal(
             "telemetry failed to initialize previously",
         )),
+        TelemetryStatus::Finalized => Err(TelemetryError::internal(
+            "telemetry has been finalized and cannot be re-initialized",
+        )),
     }
 }
 
@@ -105,21 +113,26 @@ fn init_metrics(
     state: &mut TelemetryState,
     resource: &ResourceOptions,
 ) -> TelemetryResult<()> {
-    let exporter = opentelemetry_otlp::MetricExporter::builder()
-        .with_tonic()
-        .with_endpoint(config.otlp_endpoint.clone())
-        .with_protocol(get_otlp_protocol(&config.otlp_protocol))
-        .with_timeout(Duration::from_secs(config.otlp_timeout_secs))
-        .build()?;
-    let reader = PeriodicReader::builder(exporter)
-        .with_interval(Duration::from_secs(config.metrics_export_interval_secs))
-        .build();
-    let provider = SdkMeterProvider::builder()
-        .with_reader(reader)
-        .with_resource(get_resource(resource))
-        .build();
-    global::set_meter_provider(provider.clone());
-    state.meter_provider = Some(provider);
+    if config.export_metrics {
+        let exporter = opentelemetry_otlp::MetricExporter::builder()
+            .with_tonic()
+            .with_endpoint(config.otlp_endpoint.clone())
+            .with_protocol(get_otlp_protocol(&config.otlp_protocol))
+            .with_timeout(Duration::from_secs(config.otlp_timeout_secs))
+            .build()?;
+        let reader = PeriodicReader::builder(exporter)
+            .with_interval(Duration::from_secs(config.metrics_export_interval_secs))
+            .build();
+        let provider = SdkMeterProvider::builder()
+            .with_reader(reader)
+            .with_resource(get_resource(resource))
+            .build();
+        global::set_meter_provider(provider.clone());
+        let meter = global::meter_with_scope(get_instrumentation_scope());
+        state.meter_provider = Some(provider);
+        state.metric_registry = Some(Arc::new(MetricRegistry::new(&meter)));
+        state.meter = Some(meter);
+    }
     Ok(())
 }
 
@@ -190,7 +203,7 @@ fn init_datafusion_telemetry() -> TelemetryResult<()> {
 
 pub fn shutdown_telemetry() {
     fastrace::flush();
-    if let Ok(status) = TELEMETRY_STATUS.lock() {
+    if let Ok(mut status) = TELEMETRY_STATUS.lock() {
         if let TelemetryStatus::Initialized(ref state) = *status {
             if let Some(provider) = &state.meter_provider {
                 let _ = provider.shutdown();
@@ -198,8 +211,19 @@ pub fn shutdown_telemetry() {
             if let Some(provider) = &state.logger_provider {
                 let _ = provider.shutdown();
             }
+            *status = TelemetryStatus::Finalized;
         }
     }
+}
+
+pub fn global_metric_registry() -> Option<Arc<MetricRegistry>> {
+    TELEMETRY_STATUS
+        .lock()
+        .ok()
+        .and_then(|status| match &*status {
+            TelemetryStatus::Initialized(state) => state.metric_registry.clone(),
+            _ => None,
+        })
 }
 
 /// A fastrace reporter that does nothing.
