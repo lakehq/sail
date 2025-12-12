@@ -8,8 +8,11 @@ use datafusion::physical_plan::display::DisplayableExecutionPlan;
 use datafusion::physical_plan::joins::{
     CrossJoinExec, HashJoinExec, NestedLoopJoinExec, PartitionMode, PiecewiseMergeJoinExec,
 };
+use datafusion::physical_plan::limit::{GlobalLimitExec, LocalLimitExec};
 use datafusion::physical_plan::repartition::RepartitionExec;
-use datafusion::physical_plan::{with_new_children_if_necessary, ExecutionPlan};
+use datafusion::physical_plan::{
+    with_new_children_if_necessary, ExecutionPlan, ExecutionPlanProperties,
+};
 use sail_common_datafusion::utils::items::ItemTaker;
 
 use crate::error::{ExecutionError, ExecutionResult};
@@ -32,6 +35,7 @@ impl Display for JobGraph {
 
 impl JobGraph {
     pub fn try_new(plan: Arc<dyn ExecutionPlan>) -> ExecutionResult<Self> {
+        let plan = ensure_single_partition_for_fetch(plan)?;
         let mut graph = Self { stages: vec![] };
         let last = build_job_graph(plan, PartitionUsage::Once, &mut graph)?;
         graph.stages.push(last);
@@ -41,6 +45,52 @@ impl JobGraph {
     pub fn stages(&self) -> &[Arc<dyn ExecutionPlan>] {
         &self.stages
     }
+}
+
+fn ensure_single_partition_for_fetch(
+    plan: Arc<dyn ExecutionPlan>,
+) -> ExecutionResult<Arc<dyn ExecutionPlan>> {
+    if let Some(gl) = plan.as_any().downcast_ref::<GlobalLimitExec>() {
+        return rebuild_global_limit(gl);
+    }
+
+    // If the plan has a single child that is a GlobalLimitExec, rebuild that child
+    // and replace it in the tree.
+    if plan.children().len() == 1 {
+        if let Some(gl) = plan.children()[0]
+            .as_any()
+            .downcast_ref::<GlobalLimitExec>()
+        {
+            let rebuilt = rebuild_global_limit(gl)?;
+            let new_children = vec![rebuilt];
+            let new_plan = with_new_children_if_necessary(plan, new_children)?;
+            return Ok(new_plan);
+        }
+    }
+
+    Ok(plan)
+}
+
+fn rebuild_global_limit(gl: &GlobalLimitExec) -> ExecutionResult<Arc<dyn ExecutionPlan>> {
+    let skip = gl.skip();
+    let fetch = gl.fetch();
+    if fetch.is_none() {
+        return Ok(Arc::new(gl.clone()));
+    }
+
+    // Unwrap LocalLimitExec if present to avoid double limiting.
+    let mut input: Arc<dyn ExecutionPlan> =
+        if let Some(ll) = gl.input().as_any().downcast_ref::<LocalLimitExec>() {
+            ll.input().clone()
+        } else {
+            gl.input().clone()
+        };
+
+    if input.output_partitioning().partition_count() > 1 {
+        input = Arc::new(CoalescePartitionsExec::new(input));
+    }
+
+    Ok(Arc::new(GlobalLimitExec::new(input, skip, fetch)))
 }
 
 /// A flag to indicate how the partitions from physical plan execution are used.
@@ -129,7 +179,14 @@ fn build_job_graph(
     } else if let Some(coalesce) = plan.as_any().downcast_ref::<CoalescePartitionsExec>() {
         let child = plan.children().one()?;
         let partitioning = coalesce.properties().partitioning.clone();
-        create_shuffle(child, graph, partitioning, consumption)?
+        let fetch = coalesce.fetch();
+        let shuffled = create_shuffle(child, graph, partitioning, consumption)?;
+        if let Some(f) = fetch {
+            Arc::new(CoalescePartitionsExec::new(shuffled).with_fetch(Some(f)))
+                as Arc<dyn ExecutionPlan>
+        } else {
+            shuffled
+        }
     } else {
         plan
     };
