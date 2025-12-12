@@ -1,0 +1,172 @@
+[
+  {
+    "module": "pyspark.sql.Column",
+    "function": "alias",
+    "status": "supported"
+  },
+  {
+    "module": "pyspark.sql.Column",
+    "function": "asc",
+    "status": "supported"
+  },
+  {
+    "module": "pyspark.sql.Column",
+    "function": "asc_nulls_first",
+    "status": "supported"
+  },
+  {
+    "module": "pyspark.sql.Column",
+    "function": "asc_nulls_last",
+    "status": "supported"
+  },
+  {
+    "module": "pyspark.sql.Column",
+    "function": "astype",
+    "status": "supported"
+  },
+  {
+    "module": "pyspark.sql.Column",
+    "function": "between",
+    "status": "supported"
+  },
+  {
+    "module": "pyspark.sql.Column",
+    "function": "bitwiseAND",
+    "status": "supported"
+  },
+  {
+    "module": "pyspark.sql.Column",
+    "function": "bitwiseOR",
+    "status": "supported"
+  },
+  {
+    "module": "pyspark.sql.Column",
+    "function": "bitwiseXOR",
+    "status": "supported"
+  },
+  {
+    "module": "pyspark.sql.Column",
+    "function": "cast",
+    "status": "supported"
+  },
+  {
+    "module": "pyspark.sql.Column",
+    "function": "contains",
+    "status": "supported"
+  },
+  {
+    "module": "pyspark.sql.Column",
+    "function": "desc",
+    "status": "supported"
+  },
+  {
+    "module": "pyspark.sql.Column",
+    "function": "desc_nulls_first",
+    "status": "supported"
+  },
+  {
+    "module": "pyspark.sql.Column",
+    "function": "desc_nulls_last",
+    "status": "supported"
+  },
+  {
+    "module": "pyspark.sql.Column",
+    "function": "dropFields",
+    "status": "supported"
+  },
+  {
+    "module": "pyspark.sql.Column",
+    "function": "endswith",
+    "status": "supported"
+  },
+  {
+    "module": "pyspark.sql.Column",
+    "function": "eqNullSafe",
+    "status": "supported"
+  },
+  {
+    "module": "pyspark.sql.Column",
+    "function": "getField",
+    "status": "supported"
+  },
+  {
+    "module": "pyspark.sql.Column",
+    "function": "getItem",
+    "status": "supported"
+  },
+  {
+    "module": "pyspark.sql.Column",
+    "function": "ilike",
+    "status": "supported"
+  },
+  {
+    "module": "pyspark.sql.Column",
+    "function": "isNaN",
+    "status": "supported"
+  },
+  {
+    "module": "pyspark.sql.Column",
+    "function": "isNotNull",
+    "status": "supported"
+  },
+  {
+    "module": "pyspark.sql.Column",
+    "function": "isNull",
+    "status": "supported"
+  },
+  {
+    "module": "pyspark.sql.Column",
+    "function": "isin",
+    "status": "supported"
+  },
+  {
+    "module": "pyspark.sql.Column",
+    "function": "like",
+    "status": "supported"
+  },
+  {
+    "module": "pyspark.sql.Column",
+    "function": "name",
+    "status": "supported"
+  },
+  {
+    "module": "pyspark.sql.Column",
+    "function": "otherwise",
+    "status": "supported"
+  },
+  {
+    "module": "pyspark.sql.Column",
+    "function": "over",
+    "status": "supported"
+  },
+  {
+    "module": "pyspark.sql.Column",
+    "function": "rlike",
+    "status": "supported"
+  },
+  {
+    "module": "pyspark.sql.Column",
+    "function": "startswith",
+    "status": "supported"
+  },
+  {
+    "module": "pyspark.sql.Column",
+    "function": "substr",
+    "status": "supported"
+  },
+  {
+    "module": "pyspark.sql.Column",
+    "function": "try_cast",
+    "status": "supported"
+  },
+  {
+    "module": "pyspark.sql.Column",
+    "function": "when",
+    "status": "supported"
+  },
+  {
+    "module": "pyspark.sql.Column",
+    "function": "withField",
+    "status": "supported"
+  }
+]
