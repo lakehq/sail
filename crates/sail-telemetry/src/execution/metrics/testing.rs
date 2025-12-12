@@ -8,7 +8,9 @@ use futures::TryStreamExt;
 use opentelemetry::metrics::MeterProvider;
 use opentelemetry_sdk::metrics::{InMemoryMetricExporter, SdkMeterProvider};
 
+use crate::execution::physical_plan::TracingExec;
 use crate::metrics::MetricRegistry;
+use crate::TracingExecOptions;
 
 /// A utility for metric emitter unit tests.
 /// This tester executes a given plan and examines the emitted metrics
@@ -51,30 +53,38 @@ impl MetricEmitterTester {
         }
     }
 
+    /// Set the execution plan to be tested.
+    /// This must be called before running the tester.
+    /// The outermost plan will be wrapped with metric emitters.
+    /// No metrics will be emitted for the child plans.
     pub fn with_plan(mut self, plan: Arc<dyn ExecutionPlan>) -> Self {
         self.plan = Some(plan);
         self
     }
 
-    pub fn with_expected_metrics(mut self, metrics: Vec<Cow<'static, str>>) -> Self {
-        self.expected_metrics.extend(metrics);
+    pub fn with_expected_metrics<F: FnOnce(&MetricRegistry) -> Vec<Cow<'static, str>>>(
+        mut self,
+        metrics: F,
+    ) -> Self {
+        self.expected_metrics.extend(metrics(&self.registry));
         self
     }
 
     #[expect(unused)]
-    pub fn with_unexpected_metrics(mut self, metrics: Vec<Cow<'static, str>>) -> Self {
-        self.unexpected_metrics.extend(metrics);
+    pub fn with_unexpected_metrics<F: FnOnce(&MetricRegistry) -> Vec<Cow<'static, str>>>(
+        mut self,
+        metrics: F,
+    ) -> Self {
+        self.unexpected_metrics.extend(metrics(&self.registry));
         self
-    }
-
-    pub fn registry(&self) -> Arc<MetricRegistry> {
-        self.registry.clone()
     }
 
     pub async fn run(self) -> Result<()> {
         let Some(plan) = self.plan else {
             return plan_err!("missing execution plan");
         };
+        let options = TracingExecOptions::default().with_metric_registry(self.registry);
+        let plan = Arc::new(TracingExec::new(plan, options));
         let context = Arc::new(TaskContext::default());
         let _ = plan.execute(0, context)?.try_collect::<Vec<_>>().await?;
         self.provider

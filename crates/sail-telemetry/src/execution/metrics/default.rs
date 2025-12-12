@@ -92,3 +92,32 @@ impl MetricEmitter for DefaultMetricEmitter {
         MetricHandled::Yes
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use std::sync::Arc;
+
+    use datafusion::arrow::datatypes::{DataType, Field, Schema};
+    use datafusion::common::Result;
+    use datafusion::physical_expr::expressions::Column;
+    use datafusion::physical_plan::empty::EmptyExec;
+    use datafusion::physical_plan::projection::ProjectionExec;
+    use datafusion::physical_plan::PhysicalExpr;
+
+    use crate::execution::metrics::testing::MetricEmitterTester;
+
+    #[tokio::test]
+    async fn test_projection_metrics() -> Result<()> {
+        let schema = Arc::new(Schema::new(vec![Field::new("a", DataType::Utf8, true)]));
+        let plan = Arc::new(EmptyExec::new(schema));
+        let plan = Arc::new(ProjectionExec::try_new(
+            vec![(
+                Arc::new(Column::new("a", 0)) as Arc<dyn PhysicalExpr>,
+                "b".to_string(),
+            )],
+            plan,
+        )?);
+
+        MetricEmitterTester::new().with_plan(plan).run().await
+    }
+}

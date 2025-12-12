@@ -50,26 +50,21 @@ mod tests {
     use datafusion::physical_plan::filter::FilterExec;
 
     use crate::execution::metrics::testing::MetricEmitterTester;
-    use crate::execution::physical_plan::TracingExec;
-    use crate::TracingExecOptions;
 
     #[tokio::test]
     async fn test_filter_metrics() -> Result<()> {
-        let tester = MetricEmitterTester::new();
-        let registry = tester.registry();
-
         let schema = Arc::new(Schema::new(vec![Field::new("a", DataType::Boolean, true)]));
         let plan = Arc::new(EmptyExec::new(schema));
         let plan = Arc::new(FilterExec::try_new(Arc::new(Column::new("a", 0)), plan)?);
-        let options = TracingExecOptions::default().with_metric_registry(registry.clone());
-        let plan = Arc::new(TracingExec::new(plan, options));
 
-        tester
+        MetricEmitterTester::new()
             .with_plan(plan)
-            .with_expected_metrics(vec![
-                registry.execution_filter_input_row_count.name(),
-                registry.execution_filter_output_row_count.name(),
-            ])
+            .with_expected_metrics(|registry| {
+                vec![
+                    registry.execution_filter_input_row_count.name(),
+                    registry.execution_filter_output_row_count.name(),
+                ]
+            })
             .run()
             .await
     }

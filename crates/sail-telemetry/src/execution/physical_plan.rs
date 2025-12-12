@@ -14,13 +14,8 @@ use datafusion::physical_expr::{Distribution, OrderingRequirements, PhysicalExpr
 use datafusion::physical_plan::execution_plan::{
     check_default_invariants, CardinalityEffect, InvariantLevel,
 };
-use datafusion::physical_plan::filter::FilterExec;
 use datafusion::physical_plan::filter_pushdown::{
     ChildPushdownResult, FilterDescription, FilterPushdownPhase, FilterPushdownPropagation,
-};
-use datafusion::physical_plan::joins::{
-    CrossJoinExec, HashJoinExec, NestedLoopJoinExec, PiecewiseMergeJoinExec, SortMergeJoinExec,
-    SymmetricHashJoinExec,
 };
 use datafusion::physical_plan::metrics::MetricsSet;
 use datafusion::physical_plan::projection::ProjectionExec;

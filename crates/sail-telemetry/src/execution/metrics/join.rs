@@ -221,9 +221,7 @@ mod tests {
     };
 
     use crate::execution::metrics::testing::MetricEmitterTester;
-    use crate::execution::physical_plan::TracingExec;
     use crate::metrics::MetricRegistry;
-    use crate::TracingExecOptions;
 
     fn expected_build_probe_join_metrics(registry: &MetricRegistry) -> Vec<Cow<'static, str>> {
         vec![
@@ -260,9 +258,6 @@ mod tests {
 
     #[tokio::test]
     async fn test_hash_join_metrics() -> Result<()> {
-        let tester = MetricEmitterTester::new();
-        let registry = tester.registry();
-
         let schema1 = Arc::new(Schema::new(vec![Field::new("a", DataType::Int32, true)]));
         let schema2 = Arc::new(Schema::new(vec![Field::new("b", DataType::Int32, true)]));
         let plan1 = Arc::new(EmptyExec::new(schema1));
@@ -277,12 +272,10 @@ mod tests {
             PartitionMode::CollectLeft,
             NullEquality::NullEqualsNothing,
         )?);
-        let options = TracingExecOptions::default().with_metric_registry(registry.clone());
-        let plan = Arc::new(TracingExec::new(plan, options));
 
-        tester
+        MetricEmitterTester::new()
             .with_plan(plan)
-            .with_expected_metrics(expected_build_probe_join_metrics(&registry))
+            .with_expected_metrics(expected_build_probe_join_metrics)
             .run()
             .await
     }
@@ -291,9 +284,6 @@ mod tests {
     // #[tokio::test]
     #[expect(unused)]
     async fn test_piecewise_merge_join_metrics() -> Result<()> {
-        let tester = MetricEmitterTester::new();
-        let registry = tester.registry();
-
         let schema1 = Arc::new(Schema::new(vec![Field::new("a", DataType::Int32, true)]));
         let schema2 = Arc::new(Schema::new(vec![Field::new("b", DataType::Int32, true)]));
         let plan1 = Arc::new(EmptyExec::new(schema1));
@@ -306,41 +296,31 @@ mod tests {
             JoinType::Inner,
             1,
         )?);
-        let options = TracingExecOptions::default().with_metric_registry(registry.clone());
-        let plan = Arc::new(TracingExec::new(plan, options));
 
-        tester
+        MetricEmitterTester::new()
             .with_plan(plan)
-            .with_expected_metrics(expected_build_probe_join_metrics(&registry))
+            .with_expected_metrics(expected_build_probe_join_metrics)
             .run()
             .await
     }
 
     #[tokio::test]
     async fn test_cross_join_metrics() -> Result<()> {
-        let tester = MetricEmitterTester::new();
-        let registry = tester.registry();
-
         let schema1 = Arc::new(Schema::new(vec![Field::new("a", DataType::Int32, true)]));
         let schema2 = Arc::new(Schema::new(vec![Field::new("b", DataType::Int32, true)]));
         let plan1 = Arc::new(EmptyExec::new(schema1));
         let plan2 = Arc::new(EmptyExec::new(schema2));
         let plan = Arc::new(CrossJoinExec::new(plan1, plan2));
-        let options = TracingExecOptions::default().with_metric_registry(registry.clone());
-        let plan = Arc::new(TracingExec::new(plan, options));
 
-        tester
+        MetricEmitterTester::new()
             .with_plan(plan)
-            .with_expected_metrics(expected_build_probe_join_metrics(&registry))
+            .with_expected_metrics(expected_build_probe_join_metrics)
             .run()
             .await
     }
 
     #[tokio::test]
     async fn test_nested_loop_join_metrics() -> Result<()> {
-        let tester = MetricEmitterTester::new();
-        let registry = tester.registry();
-
         let schema1 = Arc::new(Schema::new(vec![Field::new("a", DataType::Int32, true)]));
         let schema2 = Arc::new(Schema::new(vec![Field::new("b", DataType::Int32, true)]));
         let plan1 = Arc::new(EmptyExec::new(schema1));
@@ -352,13 +332,11 @@ mod tests {
             &JoinType::Inner,
             None,
         )?);
-        let options = TracingExecOptions::default().with_metric_registry(registry.clone());
-        let plan = Arc::new(TracingExec::new(plan, options));
 
-        tester
+        MetricEmitterTester::new()
             .with_plan(plan)
-            .with_expected_metrics(expected_build_probe_join_metrics(&registry))
-            .with_expected_metrics(expected_nested_loop_join_metrics(&registry))
+            .with_expected_metrics(expected_build_probe_join_metrics)
+            .with_expected_metrics(expected_nested_loop_join_metrics)
             .run()
             .await
     }
@@ -367,9 +345,6 @@ mod tests {
     // #[tokio::test]
     #[expect(unused)]
     async fn test_symmetric_hash_join_metrics() -> Result<()> {
-        let tester = MetricEmitterTester::new();
-        let registry = tester.registry();
-
         let schema1 = Arc::new(Schema::new(vec![Field::new("a", DataType::Int32, true)]));
         let schema2 = Arc::new(Schema::new(vec![Field::new("b", DataType::Int32, true)]));
         let plan1 = Arc::new(EmptyExec::new(schema1));
@@ -385,22 +360,16 @@ mod tests {
             None,
             StreamJoinPartitionMode::Partitioned,
         )?);
-        let options = TracingExecOptions::default().with_metric_registry(registry.clone());
-        let plan = Arc::new(TracingExec::new(plan, options));
 
-        tester
+        MetricEmitterTester::new()
             .with_plan(plan)
             // FIXME: add expected metrics
-            .with_expected_metrics(vec![])
             .run()
             .await
     }
 
     #[tokio::test]
     async fn test_sort_merge_join_metrics() -> Result<()> {
-        let tester = MetricEmitterTester::new();
-        let registry = tester.registry();
-
         let schema1 = Arc::new(Schema::new(vec![Field::new("a", DataType::Int32, true)]));
         let schema2 = Arc::new(Schema::new(vec![Field::new("b", DataType::Int32, true)]));
         let plan1 = Arc::new(EmptyExec::new(schema1));
@@ -417,12 +386,10 @@ mod tests {
             }],
             NullEquality::NullEqualsNothing,
         )?);
-        let options = TracingExecOptions::default().with_metric_registry(registry.clone());
-        let plan = Arc::new(TracingExec::new(plan, options));
 
-        tester
+        MetricEmitterTester::new()
             .with_plan(plan)
-            .with_expected_metrics(expected_sort_merge_join_metrics(&registry))
+            .with_expected_metrics(expected_sort_merge_join_metrics)
             .run()
             .await
     }
