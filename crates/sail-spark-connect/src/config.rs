@@ -93,19 +93,30 @@ impl SparkRuntimeConfig {
         )))
     }
 
+    pub(crate) fn get_option(&self, key: &str) -> Option<&str> {
+        if let Some(value) = self.get_by_key(key) {
+            return Some(value);
+        }
+        let entry = SPARK_CONFIG.get(key);
+        if let Some(fallback) = entry.and_then(|x| x.fallback) {
+            return self.get_option(fallback);
+        }
+        entry.and_then(|x| x.default_value)
+    }
+
     pub(crate) fn get_with_default<'a>(
         &'a self,
         key: &'a str,
         default: Option<&'a str>,
-    ) -> SparkResult<Option<&'a str>> {
+    ) -> Option<&'a str> {
         if let Some(value) = self.get_by_key(key) {
-            return Ok(Some(value));
+            return Some(value);
         }
         let entry = SPARK_CONFIG.get(key);
         if let Some(fallback) = entry.and_then(|x| x.fallback) {
             return self.get_with_default(fallback, default);
         }
-        Ok(default)
+        default
     }
 
     pub(crate) fn set(&mut self, key: String, value: String) -> SparkResult<()> {
