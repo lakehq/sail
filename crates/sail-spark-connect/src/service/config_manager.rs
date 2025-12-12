@@ -61,11 +61,7 @@ pub(crate) fn handle_config_get_option(
 ) -> SparkResult<ConfigResponse> {
     let spark = ctx.extension::<SparkSession>()?;
     let warnings = SparkRuntimeConfig::get_warnings_by_keys(&keys);
-    let kv = keys
-        .into_iter()
-        .map(|key| ConfigKeyValue { key, value: None })
-        .collect::<Vec<_>>();
-    let pairs = spark.get_config_with_default(kv)?;
+    let pairs = spark.get_config_option(keys)?;
     let pairs = pairs.into_iter().map(Into::into).collect();
     Ok(ConfigResponse {
         session_id: spark.session_id().to_string(),
