@@ -107,10 +107,10 @@ def test_save_as_table(spark, tmp_path):
         actual = spark.sql("SELECT * FROM t2").toPandas()
         assert_frame_equal(actual, expected(1))
 
-    with pytest.raises(Exception, match=".*"):
+    with pytest.raises(Exception, match=r".*"):
         df.write.saveAsTable("t2", mode="error", location=location)
 
-    with pytest.raises(Exception, match=".*"):
+    with pytest.raises(Exception, match=r".*"):
         df.write.saveAsTable("t2", location=location)
 
     df.write.saveAsTable("t2", mode="append")
@@ -122,10 +122,10 @@ def test_save_as_table(spark, tmp_path):
     actual = spark.sql("SELECT * FROM t2").toPandas()
     assert_frame_equal(actual, expected(3))
 
-    with pytest.raises(Exception, match=".*"):
+    with pytest.raises(Exception, match=r".*"):
         df.select(F.col("name").alias("n"), "id").write.saveAsTable("t2", mode="append")
 
-    with pytest.raises(Exception, match=".*"):
+    with pytest.raises(Exception, match=r".*"):
         df.select("id").write.saveAsTable("t2", mode="append")
 
     if is_jvm_spark():
@@ -145,7 +145,7 @@ def test_write_to(spark, tmp_path):
             {"id": [2002] * n, "name": ["Bob"] * n},
         )
 
-    with pytest.raises(Exception, match=".*"):
+    with pytest.raises(Exception, match=r".*"):
         # The table does not exist yet.
         df.writeTo("t3").option("location", location).replace()
 
@@ -216,7 +216,7 @@ def test_write_with_partition_columns(spark, tmp_path):
     df = spark.createDataFrame([(42, "foo")], schema="a INT, b STRING")
     df.write.partitionBy("a").format("parquet").saveAsTable("t5", mode="append")
 
-    with pytest.raises(Exception, match=".*"):
+    with pytest.raises(Exception, match=r".*"):
         df.write.partitionBy("b").format("parquet").saveAsTable("t5", mode="append")
 
     assert spark.read.format("parquet").table("t5").select("a", "b").collect() == [

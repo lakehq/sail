@@ -20,6 +20,7 @@
 
 use std::any::Any;
 use std::borrow::Cow;
+use std::collections::HashSet;
 use std::sync::Arc;
 
 use async_trait::async_trait;
@@ -37,8 +38,8 @@ use sail_common_datafusion::rename::physical_plan::rename_projected_physical_pla
 
 use crate::datasource::scan::FileScanParams;
 use crate::datasource::{
-    build_file_scan_config, delta_to_datafusion_error, df_logical_schema, get_pushdown_filters,
-    prune_files, simplify_expr, DataFusionMixins, DeltaScanConfig, DeltaTableStateExt,
+    build_file_scan_config, df_logical_schema, get_pushdown_filters, prune_files, simplify_expr,
+    DataFusionMixins, DeltaScanConfig, DeltaTableStateExt,
 };
 use crate::kernel::models::Add;
 use crate::kernel::DeltaResult;
@@ -152,15 +153,13 @@ impl TableProvider for DeltaTableProvider {
             Some(value) => Ok(value),
             // Change from `arrow_schema` to input_schema for Spark compatibility
             None => self.snapshot.input_schema(),
-        }
-        .map_err(delta_to_datafusion_error)?;
+        }?;
 
         let logical_schema = df_logical_schema(
             &self.snapshot,
             &config.file_column_name,
             Some(schema.clone()),
-        )
-        .map_err(delta_to_datafusion_error)?;
+        )?;
 
         let logical_schema = if let Some(used_columns) = projection {
             let mut fields = vec![];
@@ -237,10 +236,19 @@ impl TableProvider for DeltaTableProvider {
             .map(|f| f.name().clone())
             .collect();
         log::trace!("read_file_schema_fields: {:?}", &phys_field_names);
+        let physical_partition_cols: HashSet<String> = table_partition_cols
+            .iter()
+            .map(|col| {
+                kschema_arc
+                    .field(col)
+                    .map(|f| f.physical_name(kmode).to_string())
+                    .unwrap_or_else(|| col.clone())
+            })
+            .collect();
         let file_fields = physical_arrow
             .fields()
             .iter()
-            .filter(|f| !table_partition_cols.contains(f.name()))
+            .filter(|f| !physical_partition_cols.contains(f.name()))
             .cloned()
             .collect::<Vec<_>>();
         let file_schema = Arc::new(ArrowSchema::new(file_fields));

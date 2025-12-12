@@ -9,7 +9,7 @@ use pyo3::prelude::*;
 use sail_common::config::AppConfig;
 use sail_common::runtime::RuntimeManager;
 use sail_spark_connect::entrypoint::{serve, SessionManagerOptions};
-use sail_telemetry::telemetry::init_telemetry;
+use sail_telemetry::telemetry::{init_telemetry, ResourceOptions};
 use tokio::net::TcpListener;
 use tokio::runtime::Handle;
 use tokio::sync::oneshot::{Receiver, Sender};
@@ -23,7 +23,7 @@ struct SparkConnectServerState {
 impl SparkConnectServerState {
     /// Waits for the server to stop. If `shutdown` is `true`, sends a shutdown signal to the server
     /// before waiting.
-    /// This method should be called within [Python::allow_threads]. Otherwise, the GIL is not
+    /// This method should be called within [Python::detach]. Otherwise, the GIL is not
     /// released, and Python UDFs will be blocked when the server handles client requests.
     fn wait(self, shutdown: bool) -> PyResult<()> {
         if shutdown {
@@ -33,7 +33,6 @@ impl SparkConnectServerState {
             PyErr::new::<PyRuntimeError, _>(format!("failed to join the server thread: {e:?}"))
         })??;
         info!("The Spark Connect server has stopped.");
-        fastrace::flush();
         Ok(())
     }
 }
@@ -115,7 +114,10 @@ impl SparkConnectServer {
         let handle = self.runtime.handle();
         handle
             .primary()
-            .block_on(async { init_telemetry() })
+            .block_on(async {
+                let resource = ResourceOptions { kind: "server" };
+                init_telemetry(&self.config.telemetry, resource)
+            })
             .map_err(|e| PyErr::new::<PyRuntimeError, _>(format!("{e:?}")))
     }
 }
@@ -136,7 +138,6 @@ impl SparkConnectServer {
             _ = rx => { }
         }
         info!("Shutting down the Spark Connect server...");
-        fastrace::flush();
     }
 
     fn run_blocking(

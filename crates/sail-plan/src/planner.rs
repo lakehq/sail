@@ -12,12 +12,12 @@ use datafusion_expr::{Expr, LogicalPlan, UserDefinedLogicalNode};
 use datafusion_physical_expr::{create_physical_sort_exprs, Partitioning};
 use sail_catalog::manager::CatalogManager;
 use sail_catalog::provider::TableKind;
-use sail_common_datafusion::datasource::SourceInfo;
+use sail_common_datafusion::datasource::{SourceInfo, TableFormatRegistry};
+use sail_common_datafusion::extension::SessionExtensionAccessor;
 use sail_common_datafusion::rename::physical_plan::rename_projected_physical_plan;
 use sail_common_datafusion::streaming::event::schema::{
     to_flow_event_field_names, to_flow_event_projection,
 };
-use sail_data_source::default_registry;
 use sail_logical_plan::file_delete::FileDeleteNode;
 use sail_logical_plan::file_write::FileWriteNode;
 use sail_logical_plan::map_partitions::MapPartitionsNode;
@@ -173,8 +173,9 @@ impl ExtensionPlanner for ExtensionPhysicalPlanner {
                         sort_order: vec![],
                         options: vec![],
                     };
-                    let provider = default_registry()
-                        .get_format(format)?
+                    let registry = session_state.extension::<TableFormatRegistry>()?;
+                    let provider = registry
+                        .get(format)?
                         .create_provider(session_state, source_info)
                         .await?;
                     Ok(provider.schema().to_dfschema_ref()?)

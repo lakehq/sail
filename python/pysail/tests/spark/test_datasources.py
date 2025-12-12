@@ -1,7 +1,10 @@
 import glob
+import io
 
+import numpy as np
 import pandas as pd
 import pytest
+from PIL import Image
 from pyspark.sql import Row
 from pyspark.sql import functions as F  # noqa: N812
 from pyspark.sql.types import (
@@ -337,11 +340,6 @@ class TestTextDataSource:
 class TestBinaryDataSource:
     @staticmethod
     def _create_test_files(tmp_path):
-        import io
-
-        import numpy as np
-        from PIL import Image
-
         files = {}
 
         png_path = tmp_path / "test.png"

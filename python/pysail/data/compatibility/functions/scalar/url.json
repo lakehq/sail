@@ -1,0 +1,27 @@
+[
+  {
+    "module": "pyspark.sql.functions",
+    "function": "parse_url",
+    "status": "supported"
+  },
+  {
+    "module": "pyspark.sql.functions",
+    "function": "try_parse_url",
+    "status": "supported"
+  },
+  {
+    "module": "pyspark.sql.functions",
+    "function": "url_decode",
+    "status": "supported"
+  },
+  {
+    "module": "pyspark.sql.functions",
+    "function": "url_encode",
+    "status": "supported"
+  },
+  {
+    "module": "pyspark.sql.functions",
+    "function": "try_url_decode",
+    "status": "in progress"
+  }
+]

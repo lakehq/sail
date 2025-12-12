@@ -4,6 +4,8 @@ use std::sync::Arc;
 
 use datafusion::prelude::SessionContext;
 use datafusion_proto::physical_plan::PhysicalExtensionCodec;
+use fastrace::future::FutureExt;
+use fastrace::Span;
 use log::{error, info};
 use sail_server::actor::{Actor, ActorAction, ActorContext};
 
@@ -37,6 +39,10 @@ impl Actor for DriverActor {
     type Message = DriverEvent;
     type Options = DriverOptions;
 
+    fn name() -> &'static str {
+        "DriverActor"
+    }
+
     fn new(options: DriverOptions) -> Self {
         let worker_manager: Arc<dyn WorkerManager> = match &options.worker_manager {
             WorkerManagerOptions::Local => {
@@ -65,7 +71,10 @@ impl Actor for DriverActor {
             self.options().driver_listen_port,
         );
         let server = mem::take(&mut self.server);
-        self.server = server.start(Self::serve(ctx.handle().clone(), addr)).await;
+        let span = Span::enter_with_local_parent("DriverActor::serve");
+        self.server = server
+            .start(Self::serve(ctx.handle().clone(), addr).in_span(span))
+            .await;
     }
 
     fn receive(&mut self, ctx: &mut ActorContext<Self>, message: DriverEvent) -> ActorAction {

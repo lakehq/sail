@@ -5,7 +5,6 @@ use std::sync::PoisonError;
 
 use datafusion::arrow::error::ArrowError;
 use datafusion::common::DataFusionError;
-use log::error;
 use prost::{DecodeError, UnknownEnumValue};
 use sail_cache::error::CacheError;
 use sail_common::error::CommonError;
@@ -23,9 +22,7 @@ use tonic_types::{ErrorDetails, StatusExt};
 pub type SparkResult<T> = Result<T, SparkError>;
 
 #[derive(Debug, Error)]
-#[allow(clippy::large_enum_variant)]
 pub enum SparkError {
-    // FIXME: Rust 1.87 triggers `clippy::large_enum_variant` warning
     #[error("error in DataFusion: {0}")]
     DataFusionError(#[from] DataFusionError),
     #[error("IO error: {0}")]

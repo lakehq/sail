@@ -1,9 +1,10 @@
 use std::collections::HashMap;
-use std::sync::Arc;
+use std::sync::{Arc, RwLock};
 
 use async_trait::async_trait;
 use datafusion::arrow::datatypes::{DataType, Schema};
 use datafusion::catalog::{Session, TableProvider};
+use datafusion::common::plan_datafusion_err;
 use datafusion::physical_expr::{
     create_physical_sort_exprs, LexOrdering, LexRequirement, PhysicalExpr, PhysicalSortRequirement,
 };
@@ -11,6 +12,8 @@ use datafusion::physical_plan::ExecutionPlan;
 use datafusion_common::{not_impl_err, plan_err, Constraints, DFSchema, Result};
 use datafusion_expr::expr::Sort;
 use datafusion_expr::Expr;
+
+use crate::extension::SessionExtension;
 
 #[derive(Clone, Debug, Eq, PartialEq, Hash, PartialOrd)]
 pub enum SinkMode {
@@ -108,6 +111,46 @@ pub trait TableFormat: Send + Sync {
             "DELETE operation is not yet implemented for {} format",
             self.name()
         )
+    }
+}
+
+/// Thread-safe registry of available `TableFormat` implementations.
+#[derive(Default)]
+pub struct TableFormatRegistry {
+    formats: RwLock<HashMap<String, Arc<dyn TableFormat>>>,
+}
+
+impl TableFormatRegistry {
+    pub fn new() -> Self {
+        Self {
+            formats: RwLock::new(HashMap::new()),
+        }
+    }
+
+    pub fn register(&self, format: Arc<dyn TableFormat>) -> Result<()> {
+        let mut formats = self
+            .formats
+            .write()
+            .map_err(|_| plan_datafusion_err!("table format registry poisoned"))?;
+        formats.insert(format.name().to_lowercase(), format);
+        Ok(())
+    }
+
+    pub fn get(&self, name: &str) -> Result<Arc<dyn TableFormat>> {
+        let formats = self
+            .formats
+            .read()
+            .map_err(|_| plan_datafusion_err!("table format registry poisoned"))?;
+        formats
+            .get(&name.to_lowercase())
+            .cloned()
+            .ok_or_else(|| plan_datafusion_err!("No table format found for: {name}"))
+    }
+}
+
+impl SessionExtension for TableFormatRegistry {
+    fn name() -> &'static str {
+        "TableFormatRegistry"
     }
 }
 

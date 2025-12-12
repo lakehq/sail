@@ -8,13 +8,29 @@ workspace = true
 
 [dependencies]
 sail-common = { path = "../sail-common" }
+sail-common-datafusion = { path = "../sail-common-datafusion" }
 
 thiserror = { workspace = true }
-tonic = { workspace = true }
-tower = { workspace = true }
 env_logger = { workspace = true }
 fastrace = { workspace = true }
 fastrace-opentelemetry = { workspace = true }
+fastrace-futures = { workspace = true }
 opentelemetry = { workspace = true }
 opentelemetry_sdk = { workspace = true }
 opentelemetry-otlp = { workspace = true }
+opentelemetry-appender-log = { workspace = true }
+log = { workspace = true }
+datafusion = { workspace = true }
+futures = { workspace = true }
+tower = { workspace = true }
+tonic = { workspace = true }
+pin-project-lite = { workspace = true }
+num-traits = { workspace = true }
+
+[build-dependencies]
+serde = { workspace = true }
+serde_yaml = { workspace = true }
+syn = { workspace = true }
+prettyplease = { workspace = true }
+quote = { workspace = true }
+proc-macro2 = { workspace = true }

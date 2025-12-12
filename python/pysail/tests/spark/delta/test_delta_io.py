@@ -1,9 +1,17 @@
+from datetime import UTC, date, datetime
+
 import pandas as pd
 import pytest
 from pandas.testing import assert_frame_equal
+from pyspark.sql import functions as F  # noqa: N812
 from pyspark.sql.types import Row
 
-from ..utils import assert_file_lifecycle, escape_sql_string_literal, get_data_files  # noqa: TID252
+from ..utils import (  # noqa: TID252
+    assert_file_lifecycle,
+    escape_sql_string_literal,
+    get_data_files,
+    is_jvm_spark,
+)
 
 
 class TestDeltaIO:
@@ -143,8 +151,6 @@ class TestDeltaIO:
 
     def test_delta_io_overwrite_partitions_with_replace_where(self, spark, tmp_path):
         """Test Delta Lake overwrite with replaceWhere option."""
-        from pyspark.sql.types import Row
-
         delta_path = tmp_path / "delta_replace_where"
         delta_table_path = f"{delta_path}"
 
@@ -174,9 +180,6 @@ class TestDeltaIO:
 
     def test_delta_io_overwrite_partitions_with_v2_api(self, spark, tmp_path):
         """Test Delta Lake overwrite with a condition using the V2 API."""
-        from pyspark.sql import functions as F  # noqa: N812
-        from pyspark.sql.types import Row
-
         delta_path = tmp_path / "delta_condition_v2"
         delta_table_path = f"{delta_path}"
         table_name = "delta_v2_overwrite_test"
@@ -220,8 +223,6 @@ class TestDeltaIO:
 
     def test_delta_io_overwrite_partitions_with_sql_condition(self, spark, tmp_path):
         """Test Delta Lake overwrite with a complex condition using SQL REPLACE WHERE."""
-        from pyspark.sql.types import Row
-
         delta_path = tmp_path / "delta_condition_sql"
         delta_table_path = f"{delta_path}"
         table_name = "delta_sql_overwrite_test"
@@ -257,8 +258,6 @@ class TestDeltaIO:
 
     def test_delta_io_all_data_types(self, spark, tmp_path):
         """Test Delta Lake support for different data types"""
-        from datetime import UTC, date, datetime
-
         delta_path = tmp_path / "delta_table"
         delta_table_path = f"{delta_path}"
         complex_data = [
@@ -363,15 +362,13 @@ class TestDeltaIO:
 
     def test_delta_io_error_on_read_nonexistent_table(self, spark, tmp_path):
         """Test Delta Lake error handling"""
-        from pysail.tests.spark.utils import is_jvm_spark
-
         delta_path = tmp_path / "delta_table"
         delta_table_path = f"{delta_path}"
 
         # Skip for JVM Spark as error handling may differ
         if not is_jvm_spark():
             # Try to read non-existent Delta table
-            with pytest.raises(Exception, match=".*"):
+            with pytest.raises(Exception, match=r".*"):
                 spark.read.format("delta").load(delta_table_path).collect()
 
         # Create table and try again

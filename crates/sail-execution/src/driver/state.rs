@@ -1,4 +1,6 @@
 use std::collections::{HashMap, HashSet};
+use std::fmt;
+use std::fmt::Formatter;
 use std::sync::Arc;
 
 use datafusion::physical_plan::ExecutionPlan;
@@ -415,6 +417,17 @@ pub enum TaskStatus {
     Succeeded,
     Failed,
     Canceled,
+}
+
+impl fmt::Display for TaskStatus {
+    fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
+        match self {
+            TaskStatus::Running => write!(f, "RUNNING"),
+            TaskStatus::Succeeded => write!(f, "SUCCEEDED"),
+            TaskStatus::Failed => write!(f, "FAILED"),
+            TaskStatus::Canceled => write!(f, "CANCELED"),
+        }
+    }
 }
 
 impl From<gen::TaskStatus> for TaskStatus {

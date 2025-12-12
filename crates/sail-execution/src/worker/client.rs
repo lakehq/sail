@@ -3,11 +3,10 @@ use arrow_flight::flight_service_client::FlightServiceClient;
 use datafusion::arrow::datatypes::SchemaRef;
 use futures::TryStreamExt;
 use prost::Message;
-use tonic::transport::Channel;
 
 use crate::error::ExecutionResult;
 use crate::id::TaskId;
-use crate::rpc::{ClientHandle, ClientOptions};
+use crate::rpc::{ClientHandle, ClientOptions, ClientService};
 use crate::stream::channel::ChannelName;
 use crate::stream::reader::TaskStreamSource;
 use crate::worker::gen::worker_service_client::WorkerServiceClient;
@@ -16,10 +15,10 @@ use crate::worker::gen::{
     StopTaskResponse, StopWorkerRequest, StopWorkerResponse, TaskStreamTicket,
 };
 
-#[derive(Debug, Clone)]
+#[derive(Clone)]
 pub struct WorkerClient {
-    client: ClientHandle<WorkerServiceClient<Channel>>,
-    flight_client: ClientHandle<FlightServiceClient<Channel>>,
+    client: ClientHandle<WorkerServiceClient<ClientService>>,
+    flight_client: ClientHandle<FlightServiceClient<ClientService>>,
 }
 
 impl WorkerClient {
@@ -84,7 +83,7 @@ impl WorkerClient {
         let response = self.flight_client.get().await?.do_get(request).await?;
         let stream = response.into_inner().map_err(|e| e.into());
         let stream = FlightRecordBatchStream::new_from_flight_data(stream).map_err(|e| e.into());
-        Ok(Box::pin(stream))
+        Ok(Box::pin(stream) as TaskStreamSource)
     }
 
     pub async fn remove_stream(&self, channel_prefix: String) -> ExecutionResult<()> {

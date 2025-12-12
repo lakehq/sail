@@ -4,7 +4,7 @@ use tonic::codegen::tokio_stream::StreamExt;
 use tonic::{Request, Response, Status, Streaming};
 use uuid::Uuid;
 
-use crate::error::ProtoFieldExt;
+use crate::error::{ProtoFieldExt, SparkError};
 use crate::executor::ExecutorMetadata;
 use crate::service;
 use crate::service::ExecutePlanResponseStream;
@@ -460,7 +460,20 @@ impl SparkConnectService for SparkConnectServer {
     ) -> Result<Response<ReleaseSessionResponse>, Status> {
         let request = request.into_inner();
         debug!("{request:?}");
-        Err(Status::unimplemented("release session"))
+        if request.allow_reconnect {
+            Err(SparkError::unsupported("reconnect session"))?;
+        }
+        let session_key = SessionKey {
+            user_id: request.user_context.map(|u| u.user_id).unwrap_or_default(),
+            session_id: request.session_id.clone(),
+        };
+        self.session_manager.delete_session(session_key).await?;
+        let response = ReleaseSessionResponse {
+            session_id: request.session_id.clone(),
+            server_side_session_id: request.session_id,
+        };
+        debug!("{response:?}");
+        Ok(Response::new(response))
     }
 
     async fn fetch_error_details(

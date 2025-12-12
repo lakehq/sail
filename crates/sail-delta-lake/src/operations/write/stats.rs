@@ -153,8 +153,9 @@ fn stats_from_metadata(
             .iter()
             .flat_map(|g| {
                 g.column(idx).statistics().into_iter().filter_map(|s| {
+                    let logical_type = column_descr.logical_type_ref();
                     let is_binary = matches!(&column_descr.physical_type(), Type::BYTE_ARRAY)
-                        && matches!(column_descr.logical_type(), Some(LogicalType::String)).not();
+                        && matches!(logical_type, Some(LogicalType::String)).not();
                     if is_binary {
                         warn!(
                             "Skipping column {} because it's a binary field.",
@@ -162,7 +163,7 @@ fn stats_from_metadata(
                         );
                         None
                     } else {
-                        Some(AggregatedStats::from((s, &column_descr.logical_type())))
+                        Some(AggregatedStats::from((s, logical_type)))
                     }
                 })
             })
@@ -234,6 +235,7 @@ enum StatsScalar {
     Float64(f64),
     Date(chrono::NaiveDate),
     Timestamp(chrono::NaiveDateTime),
+    TimestampNtz(chrono::NaiveDateTime),
     Decimal(f64),
     String(String),
     Bytes(Vec<u8>),
@@ -243,7 +245,7 @@ enum StatsScalar {
 impl StatsScalar {
     fn try_from_stats(
         stats: &Statistics,
-        logical_type: &Option<LogicalType>,
+        logical_type: Option<&LogicalType>,
         use_min: bool,
     ) -> Result<Self, DeltaTableError> {
         macro_rules! get_stat {
@@ -269,7 +271,13 @@ impl StatsScalar {
                 Ok(Self::Decimal(val))
             }
             (Statistics::Int32(v), _) => Ok(Self::Int32(get_stat!(v))),
-            (Statistics::Int64(v), Some(LogicalType::Timestamp { unit, .. })) => {
+            (
+                Statistics::Int64(v),
+                Some(LogicalType::Timestamp {
+                    unit,
+                    is_adjusted_to_u_t_c,
+                }),
+            ) => {
                 let v = get_stat!(v);
                 let timestamp = match unit {
                     TimeUnit::MILLIS => chrono::DateTime::from_timestamp_millis(v),
@@ -283,7 +291,11 @@ impl StatsScalar {
                 let timestamp = timestamp.ok_or_else(|| {
                     DeltaTableError::generic(format!("Failed to parse timestamp: {v}"))
                 })?;
-                Ok(Self::Timestamp(timestamp.naive_utc()))
+                if *is_adjusted_to_u_t_c {
+                    Ok(Self::Timestamp(timestamp.naive_utc()))
+                } else {
+                    Ok(Self::TimestampNtz(timestamp.naive_utc()))
+                }
             }
             (Statistics::Int64(v), Some(LogicalType::Decimal { scale, .. })) => {
                 let val = get_stat!(v) as f64 / 10.0_f64.powi(*scale);
@@ -370,7 +382,7 @@ impl StatsScalar {
 
 /// Performs big endian sign extension
 pub fn sign_extend_be<const N: usize>(b: &[u8]) -> [u8; N] {
-    assert!(b.len() <= N, "Array too large, expected less than {N}");
+    assert!(b.len() <= N, "Array too large, expected at most {N}");
     let is_negative = (b[0] & 128u8) == 128u8;
     let mut result = if is_negative { [255u8; N] } else { [0u8; N] };
     for (d, s) in result.iter_mut().skip(N - b.len()).zip(b) {
@@ -390,6 +402,9 @@ impl From<StatsScalar> for serde_json::Value {
             StatsScalar::Date(v) => serde_json::Value::from(v.format("%Y-%m-%d").to_string()),
             StatsScalar::Timestamp(v) => {
                 serde_json::Value::from(v.format("%Y-%m-%dT%H:%M:%S%.fZ").to_string())
+            }
+            StatsScalar::TimestampNtz(v) => {
+                serde_json::Value::from(v.format("%Y-%m-%dT%H:%M:%S%.f").to_string())
             }
             StatsScalar::Decimal(v) => serde_json::Value::from(v),
             StatsScalar::String(v) => serde_json::Value::from(v),
@@ -414,8 +429,8 @@ struct AggregatedStats {
     pub null_count: u64,
 }
 
-impl From<(&Statistics, &Option<LogicalType>)> for AggregatedStats {
-    fn from(value: (&Statistics, &Option<LogicalType>)) -> Self {
+impl From<(&Statistics, Option<&LogicalType>)> for AggregatedStats {
+    fn from(value: (&Statistics, Option<&LogicalType>)) -> Self {
         let (stats, logical_type) = value;
         let null_count = stats.null_count_opt().unwrap_or_default();
         if stats.min_bytes_opt().is_some() && stats.max_bytes_opt().is_some() {
@@ -567,5 +582,62 @@ fn apply_min_max_for_column(
             }
         }
         (_, None) => unreachable!(),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    #![allow(clippy::expect_used, clippy::unwrap_used, clippy::panic)]
+
+    use parquet::file::statistics::Statistics;
+
+    use super::*;
+
+    #[test]
+    fn stats_scalar_handles_timestamp_ntz_correctly() {
+        let micros = 1_700_000_000_123_456;
+        let stats = Statistics::int64(Some(micros), Some(micros), None, Some(0), false);
+
+        let logical_timestamp = LogicalType::Timestamp {
+            is_adjusted_to_u_t_c: true,
+            unit: TimeUnit::MICROS,
+        };
+        let logical_timestamp_ntz = LogicalType::Timestamp {
+            is_adjusted_to_u_t_c: false,
+            unit: TimeUnit::MICROS,
+        };
+
+        let expected = chrono::DateTime::from_timestamp_micros(micros)
+            .expect("valid timestamp")
+            .naive_utc();
+
+        let scalar_timestamp =
+            StatsScalar::try_from_stats(&stats, Some(&logical_timestamp), true).unwrap();
+        let scalar_timestamp_ntz =
+            StatsScalar::try_from_stats(&stats, Some(&logical_timestamp_ntz), true).unwrap();
+
+        if let StatsScalar::Timestamp(value) = &scalar_timestamp {
+            assert_eq!(value, &expected);
+        } else {
+            panic!("Expected timestamp scalar");
+        }
+
+        if let StatsScalar::TimestampNtz(value) = &scalar_timestamp_ntz {
+            assert_eq!(value, &expected);
+        } else {
+            panic!("Expected timestamp ntz scalar");
+        }
+
+        let timestamp_json = serde_json::Value::from(scalar_timestamp);
+        let timestamp_ntz_json = serde_json::Value::from(scalar_timestamp_ntz);
+
+        assert_eq!(
+            timestamp_json,
+            serde_json::Value::String(expected.format("%Y-%m-%dT%H:%M:%S%.fZ").to_string())
+        );
+        assert_eq!(
+            timestamp_ntz_json,
+            serde_json::Value::String(expected.format("%Y-%m-%dT%H:%M:%S%.f").to_string())
+        );
     }
 }

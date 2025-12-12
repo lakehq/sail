@@ -24,8 +24,11 @@ use std::sync::Arc;
 
 use async_trait::async_trait;
 use chrono::Utc;
-use datafusion::arrow::array::StringArray;
-use datafusion::arrow::datatypes::{DataType, Field, Schema, SchemaRef};
+use datafusion::arrow::array::{ArrayRef, PrimitiveArray, StringArray};
+use datafusion::arrow::datatypes::{
+    ArrowTimestampType, DataType, Field, Schema, SchemaRef, TimeUnit, TimestampMicrosecondType,
+    TimestampMillisecondType, TimestampNanosecondType, TimestampSecondType,
+};
 use datafusion::arrow::record_batch::RecordBatch;
 use datafusion::execution::context::TaskContext;
 use datafusion::physical_expr_common::physical_expr::fmt_sql;
@@ -45,8 +48,7 @@ use sail_common_datafusion::datasource::PhysicalSinkMode;
 use url::Url;
 
 use crate::conversion::DeltaTypeConverter;
-use crate::datasource::delta_to_datafusion_error;
-use crate::kernel::models::{Action, Metadata, Protocol};
+use crate::kernel::models::{contains_timestampntz, Action, Metadata, Protocol};
 // TODO: Follow upstream for `MetadataExt`.
 use crate::kernel::{DeltaOperation, SaveMode};
 use crate::operations::write::writer::{DeltaWriter, WriterConfig};
@@ -54,6 +56,7 @@ use crate::options::{ColumnMappingModeOption, TableDeltaOptions};
 use crate::physical_plan::CommitInfo;
 use crate::schema::{
     annotate_for_column_mapping, compute_max_column_id, evolve_schema, get_physical_schema,
+    normalize_delta_schema,
 };
 use crate::storage::{get_object_store_from_context, StorageConfig};
 use crate::table::open_table_with_object_store;
@@ -83,10 +86,16 @@ pub struct DeltaWriterExec {
 
 impl DeltaWriterExec {
     /// Build a map from physical field name to logical name for top-level columns
-    fn build_physical_to_logical_map(logical_kernel: &StructType) -> HashMap<String, String> {
+    fn build_physical_to_logical_map(
+        logical_kernel: &StructType,
+        column_mapping_mode: ColumnMappingMode,
+    ) -> HashMap<String, String> {
         let mut map = HashMap::new();
         for kf in logical_kernel.fields() {
-            map.insert(kf.physical_name().to_string(), kf.name().clone());
+            map.insert(
+                kf.physical_name(column_mapping_mode).to_string(),
+                kf.name().clone(),
+            );
         }
         map
     }
@@ -222,9 +231,15 @@ impl ExecutionPlan for DeltaWriterExec {
         let partition_columns = self.partition_columns.clone();
         let sink_mode = self.sink_mode.clone();
         let table_exists = self.table_exists;
-        let input_schema = self.input.schema();
+        let input_schema = normalize_delta_schema(&self.input.schema());
         let condition = self.condition.clone();
         // let sink_schema = self.sink_schema.clone();
+        let session_timezone = context
+            .session_config()
+            .options()
+            .execution
+            .time_zone
+            .clone();
 
         let schema = self.schema();
         let future = async move {
@@ -233,6 +248,7 @@ impl ExecutionPlan for DeltaWriterExec {
                 write_batch_size,
                 ..
             } = &options;
+            let timezone = session_timezone;
 
             let storage_config = StorageConfig;
             let object_store = get_object_store_from_context(&context, &table_url)?;
@@ -338,6 +354,7 @@ impl ExecutionPlan for DeltaWriterExec {
             } else {
                 (input_schema.clone(), Vec::new())
             };
+            let final_schema = normalize_delta_schema(&final_schema);
 
             // Determine effective column mapping mode
             let effective_mode = if let Some(table) = &table {
@@ -358,78 +375,123 @@ impl ExecutionPlan for DeltaWriterExec {
                 options.column_mapping_mode
             };
 
-            // If creating a new table and column mapping mode is requested, prepare initial protocol+metadata
+            // Determine the kernel column mapping mode once for downstream conversions
+            let kernel_mode = match effective_mode {
+                ColumnMappingModeOption::Name => ColumnMappingMode::Name,
+                ColumnMappingModeOption::Id => ColumnMappingMode::Id,
+                ColumnMappingModeOption::None => ColumnMappingMode::None,
+            };
+
+            // If creating a new table and column mapping or timestampNtz features are required,
+            // prepare initial protocol+metadata
             let mut annotated_schema_opt: Option<StructType> = None;
-            if !table_exists
-                && matches!(
-                    effective_mode,
-                    ColumnMappingModeOption::Name | ColumnMappingModeOption::Id
-                )
-            {
-                // Build annotated kernel schema
+            if !table_exists {
+                // Build kernel schema for feature detection
                 let kernel_schema: StructType = final_schema
                     .as_ref()
                     .try_into_kernel()
                     .map_err(|e| DataFusionError::External(Box::new(e)))?;
-                let annotated_schema = annotate_for_column_mapping(&kernel_schema);
-                annotated_schema_opt = Some(annotated_schema.clone());
+                let has_timestamp_ntz = contains_timestampntz(kernel_schema.fields());
 
-                // Protocol and features for column mapping
-                #[allow(clippy::unwrap_used)]
-                let protocol: Protocol = serde_json::from_value(serde_json::json!({
-                    "minReaderVersion": 3,
-                    "minWriterVersion": 7,
-                    "readerFeatures": ["columnMapping"],
-                    "writerFeatures": ["columnMapping"]
-                }))
-                .unwrap();
+                if matches!(
+                    effective_mode,
+                    ColumnMappingModeOption::Name | ColumnMappingModeOption::Id
+                ) {
+                    let annotated_schema = annotate_for_column_mapping(&kernel_schema);
+                    annotated_schema_opt = Some(annotated_schema.clone());
 
-                let mut configuration = HashMap::new();
-                let mode_str = match effective_mode {
-                    ColumnMappingModeOption::Name => "name",
-                    ColumnMappingModeOption::Id => "id",
-                    ColumnMappingModeOption::None => "none",
-                };
-                configuration.insert("delta.columnMapping.mode".to_string(), mode_str.to_string());
-                // Set maxColumnId for new tables
-                #[allow(clippy::unwrap_used)]
-                let max_id = compute_max_column_id(annotated_schema_opt.as_ref().unwrap());
-                configuration.insert(
-                    "delta.columnMapping.maxColumnId".to_string(),
-                    max_id.to_string(),
-                );
+                    let mut reader_features = vec!["columnMapping"];
+                    let mut writer_features = vec!["columnMapping"];
+                    if has_timestamp_ntz {
+                        reader_features.push("timestampNtz");
+                        writer_features.push("timestampNtz");
+                    }
 
-                #[allow(clippy::unwrap_used)]
-                let metadata = Metadata::try_new(
-                    None,
-                    None,
-                    annotated_schema_opt.as_ref().unwrap().clone(),
-                    partition_columns.clone(),
-                    Utc::now().timestamp_millis(),
-                    configuration,
-                )
-                .map_err(|e| DataFusionError::External(Box::new(e)))?;
+                    #[allow(clippy::unwrap_used)]
+                    let protocol: Protocol = serde_json::from_value(serde_json::json!({
+                        "minReaderVersion": 3,
+                        "minWriterVersion": 7,
+                        "readerFeatures": reader_features,
+                        "writerFeatures": writer_features
+                    }))
+                    .unwrap();
 
-                initial_actions.push(Action::Protocol(protocol.clone()));
-                initial_actions.push(Action::Metadata(metadata.clone()));
-                log::trace!(
-                    "init_protocol: {:?}, init_metadata_has_mode: {:?}",
-                    &protocol,
-                    metadata.configuration().get("delta.columnMapping.mode")
-                );
+                    let mut configuration = HashMap::new();
+                    let mode_str = match effective_mode {
+                        ColumnMappingModeOption::Name => "name",
+                        ColumnMappingModeOption::Id => "id",
+                        ColumnMappingModeOption::None => "none",
+                    };
+                    configuration
+                        .insert("delta.columnMapping.mode".to_string(), mode_str.to_string());
+                    // Set maxColumnId for new tables
+                    #[allow(clippy::unwrap_used)]
+                    let max_id = compute_max_column_id(annotated_schema_opt.as_ref().unwrap());
+                    configuration.insert(
+                        "delta.columnMapping.maxColumnId".to_string(),
+                        max_id.to_string(),
+                    );
 
-                // Prefer explicit Create operation to aid downstream commit
-                operation = Some(DeltaOperation::Create {
-                    mode: SaveMode::ErrorIfExists,
-                    location: table_url.to_string(),
-                    protocol,
-                    metadata,
-                });
+                    #[allow(clippy::unwrap_used)]
+                    let metadata = Metadata::try_new(
+                        None,
+                        None,
+                        annotated_schema_opt.as_ref().unwrap().clone(),
+                        partition_columns.clone(),
+                        Utc::now().timestamp_millis(),
+                        configuration,
+                    )
+                    .map_err(|e| DataFusionError::External(Box::new(e)))?;
+
+                    initial_actions.push(Action::Protocol(protocol.clone()));
+                    initial_actions.push(Action::Metadata(metadata.clone()));
+                    log::trace!(
+                        "init_protocol: {:?}, init_metadata_has_mode: {:?}",
+                        &protocol,
+                        metadata.configuration().get("delta.columnMapping.mode")
+                    );
+
+                    operation = Some(DeltaOperation::Create {
+                        mode: SaveMode::ErrorIfExists,
+                        location: table_url.to_string(),
+                        protocol,
+                        metadata,
+                    });
+                } else if has_timestamp_ntz {
+                    #[allow(clippy::unwrap_used)]
+                    let protocol: Protocol = serde_json::from_value(serde_json::json!({
+                        "minReaderVersion": 3,
+                        "minWriterVersion": 7,
+                        "readerFeatures": ["timestampNtz"],
+                        "writerFeatures": ["timestampNtz"]
+                    }))
+                    .unwrap();
+
+                    let metadata = Metadata::try_new(
+                        None,
+                        None,
+                        kernel_schema,
+                        partition_columns.clone(),
+                        Utc::now().timestamp_millis(),
+                        HashMap::new(),
+                    )
+                    .map_err(|e| DataFusionError::External(Box::new(e)))?;
+
+                    initial_actions.push(Action::Protocol(protocol.clone()));
+                    initial_actions.push(Action::Metadata(metadata.clone()));
+
+                    operation = Some(DeltaOperation::Create {
+                        mode: SaveMode::ErrorIfExists,
+                        location: table_url.to_string(),
+                        protocol,
+                        metadata,
+                    });
+                }
             }
 
             // Build physical writer schema (use physical names and set parquet field ids)
             // Prefer schema from pending Metadata action (schema evolution) if present
-            let writer_schema = if matches!(
+            let (writer_schema, physical_partition_columns, logical_kernel_for_mapping) = if matches!(
                 effective_mode,
                 ColumnMappingModeOption::Name | ColumnMappingModeOption::Id
             ) {
@@ -464,11 +526,6 @@ impl ExecutionPlan for DeltaWriterExec {
                 };
 
                 // Build physical Arrow schema enriched with PARQUET:field_id
-                let kernel_mode = match effective_mode {
-                    ColumnMappingModeOption::Name => ColumnMappingMode::Name,
-                    ColumnMappingModeOption::Id => ColumnMappingMode::Id,
-                    ColumnMappingModeOption::None => ColumnMappingMode::None,
-                };
                 let enriched_arrow = get_physical_schema(&logical_kernel, kernel_mode);
                 let arc_schema = Arc::new(enriched_arrow);
                 let writer_field_names: Vec<String> = arc_schema
@@ -481,14 +538,31 @@ impl ExecutionPlan for DeltaWriterExec {
                     effective_mode,
                     &writer_field_names
                 );
-                arc_schema
+
+                // Resolve logical partition columns to their physical names so that the
+                // writer can locate them in the batch when column mapping is enabled.
+                let resolved_partitions = partition_columns
+                    .iter()
+                    .map(|logical_name| {
+                        let field = logical_kernel.field(logical_name).ok_or_else(|| {
+                            DataFusionError::Plan(format!(
+                                "Partition column '{}' not found in logical schema",
+                                logical_name
+                            ))
+                        })?;
+                        Ok(field.physical_name(kernel_mode).to_string())
+                    })
+                    .collect::<Result<Vec<_>>>()?;
+
+                (arc_schema, resolved_partitions, Some(logical_kernel))
             } else {
-                final_schema.clone()
+                (final_schema.clone(), partition_columns.clone(), None)
             };
 
             let writer_config = WriterConfig::new(
                 writer_schema.clone(),
-                partition_columns.to_vec(),
+                partition_columns.clone(),
+                physical_partition_columns.clone(),
                 None,
                 *target_file_size,
                 *write_batch_size,
@@ -500,45 +574,11 @@ impl ExecutionPlan for DeltaWriterExec {
             let mut writer = DeltaWriter::new(object_store.clone(), writer_path, writer_config);
 
             // Compute physical-to-logical mapping once before the loop
-            #[allow(clippy::unwrap_used)]
-            #[allow(clippy::expect_used)]
-            let phys_to_logical = if matches!(
-                effective_mode,
-                ColumnMappingModeOption::Name | ColumnMappingModeOption::Id
-            ) {
-                // Build a physical->logical name map from the logical kernel schema (top-level only)
-                let logical_kernel: StructType = if let Some(meta_action_schema) = schema_actions
-                    .iter()
-                    .find_map(|a| match a {
-                        Action::Metadata(m) => Some(
-                            m.parse_schema()
-                                .map_err(|e| DataFusionError::External(Box::new(e))),
-                        ),
-                        _ => None,
-                    })
-                    .transpose()?
-                {
-                    meta_action_schema
-                } else if table_exists {
-                    table
-                        .as_ref()
-                        .unwrap()
-                        .snapshot()
-                        .map_err(|e| DataFusionError::External(Box::new(e)))?
-                        .snapshot()
-                        .schema()
-                        .clone()
-                } else {
-                    annotated_schema_opt
-                        .clone()
-                        .expect("annotated schema should exist for new table with column mapping")
-                };
-                let map = Self::build_physical_to_logical_map(&logical_kernel);
+            let phys_to_logical = logical_kernel_for_mapping.as_ref().map(|logical_kernel| {
+                let map = Self::build_physical_to_logical_map(logical_kernel, kernel_mode);
                 log::trace!("phys_to_logical: {:?}", &map);
-                Some(map)
-            } else {
-                None
-            };
+                map
+            });
 
             let mut total_rows = 0u64;
             let mut data = stream;
@@ -570,6 +610,7 @@ impl ExecutionPlan for DeltaWriterExec {
                     batch,
                     &writer_schema,
                     phys_to_logical.as_ref(),
+                    timezone.as_deref(),
                 )?;
 
                 writer
@@ -640,10 +681,7 @@ impl DeltaWriterExec {
         input_schema: &SchemaRef,
         schema_mode: Option<SchemaMode>,
     ) -> Result<(SchemaRef, Vec<Action>)> {
-        let table_metadata = table
-            .snapshot()
-            .map_err(delta_to_datafusion_error)?
-            .metadata();
+        let table_metadata = table.snapshot()?.metadata();
         let table_schema = table_metadata
             .parse_schema()
             .map_err(|e| DataFusionError::External(Box::new(e)))?;
@@ -660,7 +698,7 @@ impl DeltaWriterExec {
                         .try_into_kernel()
                         .map_err(|e| DataFusionError::External(Box::new(e)))?;
 
-                    let snapshot = table.snapshot().map_err(delta_to_datafusion_error)?;
+                    let snapshot = table.snapshot()?;
                     let current_metadata = snapshot.metadata();
                     let current_kernel = snapshot.snapshot().schema().clone();
                     let kmode = snapshot.effective_column_mapping_mode();
@@ -683,7 +721,7 @@ impl DeltaWriterExec {
                     .try_into_kernel()
                     .map_err(|e| DataFusionError::External(Box::new(e)))?;
 
-                let snapshot = table.snapshot().map_err(delta_to_datafusion_error)?;
+                let snapshot = table.snapshot()?;
                 let current_metadata = snapshot.metadata();
                 let current_kernel = snapshot.snapshot().schema().clone();
                 let kmode = snapshot.effective_column_mapping_mode();
@@ -750,7 +788,14 @@ impl DeltaWriterExec {
         for input_field in input_schema.fields() {
             match table_schema.field_with_name(input_field.name()) {
                 Ok(table_field) => {
-                    if table_field.data_type() != input_field.data_type() {
+                    if table_field.data_type() != input_field.data_type()
+                        && DeltaTypeConverter::validate_cast_safety(
+                            input_field.data_type(),
+                            table_field.data_type(),
+                            input_field.name(),
+                        )
+                        .is_err()
+                    {
                         return Err(DataFusionError::Plan(format!(
                             "Schema mismatch for field '{}': table has type {:?}, input has type {:?}. Use mergeSchema=true to allow schema evolution.",
                             input_field.name(),
@@ -775,6 +820,7 @@ impl DeltaWriterExec {
         batch: RecordBatch,
         final_schema: &SchemaRef,
         phys_to_logical: Option<&HashMap<String, String>>,
+        timezone: Option<&str>,
     ) -> Result<RecordBatch> {
         let batch_schema = batch.schema();
 
@@ -811,8 +857,64 @@ impl DeltaWriterExec {
                         )?;
 
                         let casted_column =
-                            datafusion::arrow::compute::cast(batch_column, final_field.data_type())
-                                .map_err(|e| DataFusionError::ArrowError(Box::new(e), None))?;
+                            match (batch_field.data_type(), final_field.data_type(), timezone) {
+                                (
+                                    DataType::Timestamp(unit_from, Some(_)),
+                                    DataType::Timestamp(unit_to, Some(target_tz)),
+                                    _,
+                                ) if unit_from == unit_to => reinterpret_timestamp_timezone(
+                                    batch_column,
+                                    *unit_to,
+                                    Some(target_tz.clone()),
+                                )?,
+                                (
+                                    DataType::Timestamp(unit_from, None),
+                                    DataType::Timestamp(_unit_to, Some(_)),
+                                    Some(session_tz),
+                                ) => {
+                                    // Interpret NTZ as local time in session timezone before converting
+                                    let session_type = DataType::Timestamp(
+                                        *unit_from,
+                                        Some(Arc::<str>::from(session_tz)),
+                                    );
+                                    let with_session_tz = datafusion::arrow::compute::cast(
+                                        batch_column,
+                                        &session_type,
+                                    )
+                                    .map_err(|e| DataFusionError::ArrowError(Box::new(e), None))?;
+                                    datafusion::arrow::compute::cast(
+                                        &with_session_tz,
+                                        final_field.data_type(),
+                                    )
+                                    .map_err(|e| DataFusionError::ArrowError(Box::new(e), None))?
+                                }
+                                (
+                                    DataType::Timestamp(unit_from, Some(_)),
+                                    DataType::Timestamp(_unit_to, None),
+                                    Some(session_tz),
+                                ) => {
+                                    // Convert to session timezone before dropping timezone info
+                                    let session_type = DataType::Timestamp(
+                                        *unit_from,
+                                        Some(Arc::<str>::from(session_tz)),
+                                    );
+                                    let session_aligned = datafusion::arrow::compute::cast(
+                                        batch_column,
+                                        &session_type,
+                                    )
+                                    .map_err(|e| DataFusionError::ArrowError(Box::new(e), None))?;
+                                    datafusion::arrow::compute::cast(
+                                        &session_aligned,
+                                        final_field.data_type(),
+                                    )
+                                    .map_err(|e| DataFusionError::ArrowError(Box::new(e), None))?
+                                }
+                                _ => datafusion::arrow::compute::cast(
+                                    batch_column,
+                                    final_field.data_type(),
+                                )
+                                .map_err(|e| DataFusionError::ArrowError(Box::new(e), None))?,
+                            };
                         adapted_columns.push(casted_column);
                     }
                 }
@@ -837,6 +939,36 @@ impl DeltaWriterExec {
         // Create new RecordBatch with adapted columns
         RecordBatch::try_new(final_schema.clone(), adapted_columns)
             .map_err(|e| DataFusionError::ArrowError(Box::new(e), None))
+    }
+}
+
+fn reinterpret_timestamp_timezone(
+    array: &ArrayRef,
+    unit: TimeUnit,
+    target_tz: Option<Arc<str>>,
+) -> Result<ArrayRef> {
+    fn adjust<T: ArrowTimestampType>(
+        array: &ArrayRef,
+        target_tz: Option<Arc<str>>,
+    ) -> Result<ArrayRef> {
+        let ts_array = array
+            .as_any()
+            .downcast_ref::<PrimitiveArray<T>>()
+            .ok_or_else(|| {
+                DataFusionError::Plan(format!(
+                    "Failed to downcast timestamp array for timezone rewrite: {:?}",
+                    array.data_type()
+                ))
+            })?;
+
+        Ok(Arc::new(ts_array.clone().with_timezone_opt(target_tz)))
+    }
+
+    match unit {
+        TimeUnit::Second => adjust::<TimestampSecondType>(array, target_tz),
+        TimeUnit::Millisecond => adjust::<TimestampMillisecondType>(array, target_tz),
+        TimeUnit::Microsecond => adjust::<TimestampMicrosecondType>(array, target_tz),
+        TimeUnit::Nanosecond => adjust::<TimestampNanosecondType>(array, target_tz),
     }
 }
 

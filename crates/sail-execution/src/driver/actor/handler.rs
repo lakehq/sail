@@ -10,6 +10,8 @@ use datafusion::physical_plan::stream::RecordBatchStreamAdapter;
 use datafusion::physical_plan::{ExecutionPlan, ExecutionPlanProperties};
 use datafusion_proto::physical_plan::AsExecutionPlan;
 use datafusion_proto::protobuf::PhysicalPlanNode;
+use fastrace::collector::SpanContext;
+use fastrace::Span;
 use futures::future::try_join_all;
 use futures::TryStreamExt;
 use log::{debug, error, info, warn};
@@ -18,6 +20,7 @@ use prost::Message;
 use sail_common_datafusion::error::CommonErrorCause;
 use sail_python_udf::error::PyErrExtractor;
 use sail_server::actor::{ActorAction, ActorContext};
+use sail_telemetry::common::SpanAttribute;
 use tokio::sync::{mpsc, oneshot};
 use tokio::time::Instant;
 use tonic::codegen::tokio_stream::wrappers::ReceiverStream;
@@ -345,6 +348,17 @@ impl DriverActor {
             return;
         };
         for &worker_id in worker_ids.iter() {
+            // We create a placeholder span when starting the worker before creating the new trace.
+            let span = Span::enter_with_local_parent("DriverActor::start_worker")
+                .with_property(|| (SpanAttribute::CLUSTER_WORKER_ID, worker_id.to_string()));
+            let _guard = span.set_local_parent();
+            // Create a new trace when starting the worker. Otherwise, the spans for the worker
+            // may be nested in a query execution trace, which makes the trace harder to understand.
+            // Note: We could have linked the span to the current trace,
+            // but Fastrace currently does not support span links yet.
+            let span = Span::root("DriverActor::start_worker", SpanContext::random())
+                .with_property(|| (SpanAttribute::CLUSTER_WORKER_ID, worker_id.to_string()));
+            let _guard = span.set_local_parent();
             let descriptor = WorkerDescriptor {
                 state: WorkerState::Pending,
                 messages: vec![],

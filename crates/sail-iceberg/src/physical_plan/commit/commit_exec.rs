@@ -40,7 +40,7 @@ use crate::physical_plan::commit::IcebergCommitInfo;
 use crate::spec::catalog::TableUpdate;
 use crate::spec::metadata::table_metadata::SnapshotLog;
 use crate::spec::snapshots::MAIN_BRANCH;
-use crate::spec::{Schema as IcebergSchema, TableMetadata, TableRequirement};
+use crate::spec::{PartitionSpec, Schema as IcebergSchema, TableMetadata, TableRequirement};
 use crate::utils::get_object_store_from_context;
 
 const MAX_COMMIT_RETRIES: usize = 5;
@@ -98,6 +98,25 @@ impl IcebergCommitExec {
 
         table_meta.current_schema_id = schema_id;
         table_meta.last_column_id = table_meta.last_column_id.max(highest_field_id);
+    }
+
+    fn apply_partition_spec_update(table_meta: &mut TableMetadata, new_spec: PartitionSpec) {
+        let spec_id = new_spec.spec_id();
+        let mut replaced = false;
+        for spec in table_meta.partition_specs.iter_mut() {
+            if spec.spec_id() == spec_id {
+                *spec = new_spec.clone();
+                replaced = true;
+                break;
+            }
+        }
+        if !replaced {
+            table_meta.partition_specs.push(new_spec.clone());
+        }
+        table_meta.default_spec_id = spec_id;
+        if let Some(highest) = new_spec.highest_field_id() {
+            table_meta.last_partition_id = table_meta.last_partition_id.max(highest);
+        }
     }
 
     fn validate_requirements(
@@ -309,6 +328,19 @@ impl ExecutionPlan for IcebergCommitExec {
                 if let Some(new_schema) = commit_info.schema.clone() {
                     Self::apply_schema_update(&mut table_meta, new_schema);
                 }
+                let mut partition_spec_for_commit = table_meta
+                    .default_partition_spec()
+                    .cloned()
+                    .unwrap_or_else(PartitionSpec::unpartitioned_spec);
+                if let Some(new_spec) = commit_info.partition_spec.clone() {
+                    let spec = if new_spec.spec_id() == 0 && table_meta.default_spec_id != 0 {
+                        new_spec.with_spec_id(table_meta.default_spec_id)
+                    } else {
+                        new_spec
+                    };
+                    Self::apply_partition_spec_update(&mut table_meta, spec.clone());
+                    partition_spec_for_commit = spec;
+                }
                 let maybe_snapshot = table_meta.current_snapshot().cloned();
                 let schema_iceberg = table_meta.current_schema().cloned().ok_or_else(|| {
                     DataFusionError::Plan("No current schema in table metadata".to_string())
@@ -360,7 +392,8 @@ impl ExecutionPlan for IcebergCommitExec {
 
                 // Build transaction and action based on operation
                 let tx = Transaction::new(table_url.to_string(), snapshot);
-                let manifest_meta = tx.default_manifest_metadata(&schema_iceberg);
+                let manifest_meta =
+                    tx.default_manifest_metadata(&schema_iceberg, &partition_spec_for_commit);
                 let action_commit = match commit_info.operation {
                     crate::spec::Operation::Append => {
                         let mut action = tx

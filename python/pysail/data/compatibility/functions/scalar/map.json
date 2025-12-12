@@ -1,0 +1,47 @@
+[
+  {
+    "module": "pyspark.sql.functions",
+    "function": "map",
+    "status": "supported"
+  },
+  {
+    "module": "pyspark.sql.functions",
+    "function": "map_concat",
+    "status": "supported"
+  },
+  {
+    "module": "pyspark.sql.functions",
+    "function": "map_contains_key",
+    "status": "supported"
+  },
+  {
+    "module": "pyspark.sql.functions",
+    "function": "map_entries",
+    "status": "supported"
+  },
+  {
+    "module": "pyspark.sql.functions",
+    "function": "map_from_arrays",
+    "status": "supported"
+  },
+  {
+    "module": "pyspark.sql.functions",
+    "function": "map_from_entries",
+    "status": "supported"
+  },
+  {
+    "module": "pyspark.sql.functions",
+    "function": "map_keys",
+    "status": "supported"
+  },
+  {
+    "module": "pyspark.sql.functions",
+    "function": "map_values",
+    "status": "supported"
+  },
+  {
+    "module": "pyspark.sql.functions",
+    "function": "str_to_map",
+    "status": "supported"
+  }
+]

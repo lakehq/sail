@@ -1,6 +1,6 @@
 [project]
 name = "pysail"
-version = "0.4.2"
+version = "0.4.4"
 description = "Sail Python library"
 authors = [
     { name = "LakeSail", email = "hello@lakesail.com" },
@@ -36,10 +36,12 @@ test = [
     "duckdb>=1.0,<2",
     "pytest>=8.4,<9",
     "pytest-bdd>=8.1,<9",
+    "syrupy>=5.0,<6",
     "jinja2>=3.1,<4",
-    "pillow>=10.3.0",
+    "pillow>=10.3.0,<11",
     "pyiceberg[sql-sqlite,pyiceberg-core]==0.10.0",
     "pydantic>=2.11,<2.12",
+    "jedi>=0.19.2,<0.20",
 ]
 mcp = [
     "mcp>=1.0.0,<2",
@@ -77,13 +79,15 @@ dependencies = [
     "ibis-framework>=11,<12",
     "pytest>=8.4,<9",
     "pytest-bdd>=8.1,<9",
+    "syrupy>=5.0,<6",
     "jinja2>=3.1,<4",
     "duckdb>=1.1,<2",
     "mcp>=1.0,<2",
     "boto3>=1.38,<2",
-    "pillow>=10.3.0",
+    "pillow>=10.3.0,<11",
     "pyiceberg[sql-sqlite,pyiceberg-core]==0.10.0",
     "pydantic>=2.11,<2.12",
+    "jedi>=0.19.2,<0.20",
 ]
 path = ".venvs/default"
 
@@ -121,11 +125,13 @@ skip-install = true
 dependencies = [
     "pytest>=8.4,<9",
     "pytest-bdd>=8.1,<9",
+    "syrupy>=5.0,<6",
     "jinja2>=3.1,<4",
     "duckdb>=1.1,<2",
-    "pillow>=10.3.0",
+    "pillow>=10.3.0,<11",
     "pyiceberg[sql-sqlite,pyiceberg-core]==0.10.0",
     "pydantic>=2.11,<2.12",
+    "jedi>=0.19.2,<0.20",
 ]
 
 [[tool.hatch.envs.test.matrix]]
@@ -152,6 +158,7 @@ dependencies = [
     "pytest-xdist>=3.7,<4",
     "pytest-timeout>=2.4,<3",
     "pytest-reportlog>=0.4,<0.5",
+    "syrupy>=5.0,<6",
 ]
 
 [[tool.hatch.envs.test-spark.matrix]]
@@ -209,6 +216,9 @@ packages = ["python/pysail"]
 
 [tool.hatch.build.targets.wheel]
 packages = ["python/pysail"]
+
+[tool.ruff]
+line-length = 120
 
 [tool.ruff.lint.per-file-ignores]
 "crates/**/*.py" = ["INP001"]

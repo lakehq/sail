@@ -171,7 +171,7 @@ impl<O: Send + 'static> ReceiverStreamBuilder<O> {
                             // the JoinSet were aborted, which in turn
                             // would imply that the receiver has been
                             // dropped and this code is not running
-                            return Some(Err(DeltaTableError::Generic(format!(
+                            return Some(Err(DeltaTableError::generic(format!(
                                 "Non Panic Task error: {e}"
                             ))));
                         }

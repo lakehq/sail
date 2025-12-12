@@ -6,6 +6,8 @@ use datafusion::execution::runtime_env::RuntimeEnvBuilder;
 use datafusion::execution::SessionStateBuilder;
 use datafusion::prelude::{SessionConfig, SessionContext};
 use datafusion_proto::physical_plan::PhysicalExtensionCodec;
+use fastrace::future::FutureExt;
+use fastrace::Span;
 use log::info;
 use sail_object_store::DynamicObjectStoreRegistry;
 use sail_server::actor::{Actor, ActorAction, ActorContext};
@@ -40,6 +42,10 @@ impl Actor for WorkerActor {
     type Message = WorkerEvent;
     type Options = WorkerOptions;
 
+    fn name() -> &'static str {
+        "WorkerActor"
+    }
+
     fn new(options: WorkerOptions) -> Self {
         let driver_client = DriverClient::new(ClientOptions {
             enable_tls: options.enable_tls,
@@ -65,7 +71,10 @@ impl Actor for WorkerActor {
             self.options().worker_listen_port,
         );
         let server = mem::take(&mut self.server);
-        self.server = server.start(Self::serve(ctx.handle().clone(), addr)).await;
+        let span = Span::enter_with_local_parent("WorkerActor::serve");
+        self.server = server
+            .start(Self::serve(ctx.handle().clone(), addr).in_span(span))
+            .await;
     }
 
     fn receive(&mut self, ctx: &mut ActorContext<Self>, message: Self::Message) -> ActorAction {

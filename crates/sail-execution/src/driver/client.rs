@@ -1,5 +1,4 @@
 use sail_common_datafusion::error::CommonErrorCause;
-use tonic::transport::Channel;
 
 use crate::driver::gen;
 use crate::driver::gen::driver_service_client::DriverServiceClient;
@@ -10,11 +9,11 @@ use crate::driver::gen::{
 use crate::driver::state::TaskStatus;
 use crate::error::{ExecutionError, ExecutionResult};
 use crate::id::{TaskId, WorkerId};
-use crate::rpc::{ClientHandle, ClientOptions};
+use crate::rpc::{ClientHandle, ClientOptions, ClientService};
 
-#[derive(Debug, Clone)]
+#[derive(Clone)]
 pub struct DriverClient {
-    inner: ClientHandle<DriverServiceClient<Channel>>,
+    inner: ClientHandle<DriverServiceClient<ClientService>>,
 }
 
 impl DriverClient {

@@ -19,6 +19,7 @@ sail-object-store = { path = "../sail-object-store" }
 sail-session = { path = "../sail-session" }
 sail-logical-optimizer = { path = "../sail-logical-optimizer" }
 sail-physical-optimizer = { path = "../sail-physical-optimizer" }
+sail-telemetry = { path = "../sail-telemetry" }
 
 thiserror = { workspace = true }
 tokio = { workspace = true }
@@ -40,6 +41,7 @@ regex = { workspace = true }
 phf = { workspace = true }
 log = { workspace = true }
 futures = { workspace = true }
+fastrace = { workspace = true }
 
 [build-dependencies]
 prost-build = { workspace = true }
