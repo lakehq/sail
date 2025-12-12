@@ -21,7 +21,7 @@ from pysail.tests.spark.utils import SAIL_ONLY, escape_sql_string_literal, is_jv
 
 def normalize_plan_text(plan_text: str) -> str:
     """Normalize plan text by scrubbing non-deterministic fields."""
-    text = textwrap.dedent(plan_text).strip()
+    text = textwrap.dedent(plan_text).replace("\r\n", "\n").strip()
     text = re.sub(r", metrics=\[[^\]]*\]", "", text)
     text = re.sub(r"Hash\(\[([^\]]+)\], \d+\)", r"Hash([\1], <partitions>)", text)
     text = re.sub(r"RoundRobinBatch\(\d+\)", r"RoundRobinBatch(<partitions>)", text)
