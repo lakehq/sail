@@ -38,17 +38,25 @@ def normalize_plan_text(plan_text: str) -> str:
         # Works for e.g.
         # - macOS: /private/var/folders/.../T/pytest-of-<user>/pytest-1535/test_xxx_0/
         # - Linux: /tmp/pytest-of-runner/pytest-0/test_xxx_0/
-        # - Windows (after `\` -> `/`): C:/Users/.../AppData/Local/Temp/pytest-of-<user>/pytest-0/test_xxx_0/
-        # Allow both absolute paths (/tmp/..., /private/...) and relative-looking
-        # ones (private/var/...) that sometimes show up in formatted plans.
-        r"(?:[A-Za-z]:)?(?:[^ \t\r\n\),]+/)*pytest-of-[^/]+/pytest-\d+/[^/]+/",
+        # - Windows (after `\` -> `/`): C:/Users/.../pytest-of-<user>/pytest-0/test_xxx_0/
+        #
+        # Also matches relative-looking ones (private/var/...) that sometimes
+        # show up in formatted plans.
+        r"(^|[\s\[\(=,:{\"])"  # delimiter (kept)
+        r"(?!\[)"  # avoid starting at the first `[` of `[[...]]`
+        # Don't accidentally start matching at identifiers like `file_groups=...`.
+        # Require the path to start like an absolute path (`/` or `C:/`) or a
+        # known relative tmp prefix (`private/...` or `tmp/...`).
+        r"(?:(?:[A-Za-z]:)?/|private/|tmp/)"
+        r"(?:[^ \t\r\n\),\]]+/)*"
+        r"pytest-of-[^/]+/pytest-\d+/[^/]+/",
         re.IGNORECASE,
     )
 
     def normalize_path(path: str) -> str:
         # Make Windows paths match the regexes and snapshots.
         path = path.replace("\\", "/")
-        path = pytest_tmp_prefix.sub("<tmp>/", path)
+        path = pytest_tmp_prefix.sub(lambda m: f"{m.group(1)}<tmp>/", path)
         return re.sub(
             r"part-\d+-[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}-c\d+\.snappy\.parquet",
             "part-<id>.snappy.parquet",
@@ -67,7 +75,7 @@ def normalize_plan_text(plan_text: str) -> str:
         text,
     )
     # Normalize raw path occurrences (e.g. parquet file groups) without destroying structure.
-    text = pytest_tmp_prefix.sub("<tmp>/", text)
+    text = pytest_tmp_prefix.sub(lambda m: f"{m.group(1)}<tmp>/", text)
     text = re.sub(
         r"part-\d+-[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}-c\d+\.snappy\.parquet",
         "part-<id>.snappy.parquet",
