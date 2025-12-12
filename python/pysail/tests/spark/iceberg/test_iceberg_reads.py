@@ -142,5 +142,10 @@ def test_limit_with_offset(spark, tmp_path):
         df.createOrReplaceTempView("tmp_limit_offset")
         ids = [row.id for row in spark.sql("SELECT id FROM tmp_limit_offset LIMIT 3 OFFSET 2").collect()]
         assert ids == [3, 6, 8]
+        # Nested subquery to ensure we handle `GlobalLimitExec` not at the root.
+        ids2 = [
+            row.id for row in spark.sql("SELECT id FROM (SELECT id FROM tmp_limit_offset) t LIMIT 3 OFFSET 2").collect()
+        ]
+        assert ids2 == [3, 6, 8]
     finally:
         catalog.drop_table(identifier)
