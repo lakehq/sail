@@ -1,6 +1,11 @@
 [
   {
     "module": "pyspark.sql.session.SparkSession",
+    "function": "createDataFrame",
+    "status": "supported"
+  },
+  {
+    "module": "pyspark.sql.session.SparkSession",
     "function": "range",
     "status": "supported"
   },
@@ -13,5 +18,20 @@
     "module": "pyspark.sql.session.SparkSession",
     "function": "readStream",
     "status": "in progress"
+  },
+  {
+    "module": "pyspark.sql.session.SparkSession",
+    "function": "sparkContext",
+    "status": "not supported"
+  },
+  {
+    "module": "pyspark.sql.session.SparkSession",
+    "function": "sql",
+    "status": "supported"
+  },
+  {
+    "module": "pyspark.sql.session.SparkSession",
+    "function": "table",
+    "status": "supported"
   }
 ]
