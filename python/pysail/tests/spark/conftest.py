@@ -22,20 +22,32 @@ from pysail.tests.spark.utils import SAIL_ONLY, escape_sql_string_literal, is_jv
 def normalize_plan_text(plan_text: str) -> str:
     """Normalize plan text by scrubbing non-deterministic fields."""
     text = textwrap.dedent(plan_text).strip()
+    # Make Windows paths match the regexes and snapshots early, so the
+    # raw-text substitutions below also work cross-platform.
+    text = text.replace("\\", "/")
     text = re.sub(r", metrics=\[[^\]]*\]", "", text)
     text = re.sub(r"Hash\(\[([^\]]+)\], \d+\)", r"Hash([\1], <partitions>)", text)
     text = re.sub(r"RoundRobinBatch\(\d+\)", r"RoundRobinBatch(<partitions>)", text)
     text = re.sub(r"input_partitions=\d+", r"input_partitions=<partitions>", text)
     text = re.sub(r"partition_sizes=\[[^\]]+\]", r"partition_sizes=[<sizes>]", text)
 
-    # Normalize temp paths / file URIs that appear in plans,
-    # keep meaningful suffixes like the table directory name.
+    # Normalize temp paths / file URIs that appear in plans.
     pytest_tmp_prefix = re.compile(
-        r"(?:/)?(?:private/)?var/folders/[^\s]+?/T/pytest-of-[^/]+/pytest-\d+/[^/]+/",
+        # Match (and scrub) the pytest per-test tmp root prefix, cross-platform.
+        #
+        # Works for e.g.
+        # - macOS: /private/var/folders/.../T/pytest-of-<user>/pytest-1535/test_xxx_0/
+        # - Linux: /tmp/pytest-of-runner/pytest-0/test_xxx_0/
+        # - Windows (after `\` -> `/`): C:/Users/.../AppData/Local/Temp/pytest-of-<user>/pytest-0/test_xxx_0/
+        # Allow both absolute paths (/tmp/..., /private/...) and relative-looking
+        # ones (private/var/...) that sometimes show up in formatted plans.
+        r"(?:[A-Za-z]:)?(?:[^ \t\r\n\),]+/)*pytest-of-[^/]+/pytest-\d+/[^/]+/",
         re.IGNORECASE,
     )
 
     def normalize_path(path: str) -> str:
+        # Make Windows paths match the regexes and snapshots.
+        path = path.replace("\\", "/")
         path = pytest_tmp_prefix.sub("<tmp>/", path)
         return re.sub(
             r"part-\d+-[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}-c\d+\.snappy\.parquet",

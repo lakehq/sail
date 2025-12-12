@@ -573,7 +573,7 @@ DeltaCommitExec(table_path=file://<tmp>/merge_explain_codegen/)
                                         FilterExec: column3@2 + 1 > 10 AND (column1@0 = 1 OR column1@0 = 2 OR column1@0 = 4)
                                           DataSourceExec: partitions=1, partition_sizes=[<sizes>]
                                 ProjectionExec: expr=[id@0 as id, category@1 as category, amount@2 as amount, note@3 as note, __sail_file_path@4 as __sail_file_path, true as __sail_merge_target_row_present]
-                                  DataSourceExec: file_groups={1 group: [[<tmp>/merge_explain_codegen/part-<id>.snappy.parquet]]}, projection=[id, category, amount, note, __sail_file_path], file_type=parquet
+                                  DataSourceExec: file_groups={1 group: <tmp>/merge_explain_codegen/part-<id>.snappy.parquet]]}, projection=[id, category, amount, note, __sail_file_path], file_type=parquet
       DeltaRemoveActionsExec
         DataSourceExec: partitions=1, partition_sizes=[<sizes>]
 
@@ -602,7 +602,7 @@ DeltaCommitExec(table_path=file://<tmp>/merge_explain_codegen/), statistics=[Row
                                         FilterExec: column3@2 + 1 > 10 AND (column1@0 = 1 OR column1@0 = 2 OR column1@0 = 4), statistics=[Rows=Inexact(1), Bytes=Inexact(<bytes>), [(Col[0]: Null=Inexact(0)),(Col[1]: Null=Inexact(0)),(Col[2]: Null=Inexact(0)),(Col[3]: Null=Inexact(0))]]
                                           DataSourceExec: partitions=1, partition_sizes=[<sizes>], statistics=[Rows=Exact(3), Bytes=Exact(<bytes>), [(Col[0]: Null=Exact(0)),(Col[1]: Null=Exact(0)),(Col[2]: Null=Exact(0)),(Col[3]: Null=Exact(0))]]
                                 ProjectionExec: expr=[id@0 as id, category@1 as category, amount@2 as amount, note@3 as note, __sail_file_path@4 as __sail_file_path, true as __sail_merge_target_row_present], statistics=[Rows=Exact(3), Bytes=Inexact(<bytes>), [(Col[0]: Min=Exact(Int32(1)) Max=Exact(Int32(3))),(Col[1]:),(Col[2]: Min=Exact(Int32(10)) Max=Exact(Int32(30))),(Col[3]:),(Col[4]:),(Col[5]:)]]
-                                  DataSourceExec: file_groups={1 group: [[<tmp>/merge_explain_codegen/part-<id>.snappy.parquet]]}, projection=[id, category, amount, note, __sail_file_path], file_type=parquet, statistics=[Rows=Exact(3), Bytes=Inexact(<bytes>), [(Col[0]: Min=Exact(Int32(1)) Max=Exact(Int32(3))),(Col[1]:),(Col[2]: Min=Exact(Int32(10)) Max=Exact(Int32(30))),(Col[3]:),(Col[4]:)]]
+                                  DataSourceExec: file_groups={1 group: <tmp>/merge_explain_codegen/part-<id>.snappy.parquet]]}, projection=[id, category, amount, note, __sail_file_path], file_type=parquet, statistics=[Rows=Exact(3), Bytes=Inexact(<bytes>), [(Col[0]: Min=Exact(Int32(1)) Max=Exact(Int32(3))),(Col[1]:),(Col[2]: Min=Exact(Int32(10)) Max=Exact(Int32(30))),(Col[3]:),(Col[4]:)]]
       DeltaRemoveActionsExec, statistics=[Rows=Absent, Bytes=Absent, [(Col[0]:)]]
         DataSourceExec: partitions=1, partition_sizes=[<sizes>], statistics=[Rows=Exact(1), Bytes=Exact(<bytes>), [(Col[0]: Null=Exact(0)),(Col[1]: Null=Exact(0))]]
 
@@ -631,7 +631,7 @@ DeltaCommitExec(table_path=file://<tmp>/merge_explain_codegen/), schema=[count:U
                                         FilterExec: column3@2 + 1 > 10 AND (column1@0 = 1 OR column1@0 = 2 OR column1@0 = 4), schema=[column1:Int32;N, column2:Utf8;N, column3:Int32;N, column4:Utf8;N]
                                           DataSourceExec: partitions=1, partition_sizes=[<sizes>], schema=[column1:Int32;N, column2:Utf8;N, column3:Int32;N, column4:Utf8;N]
                                 ProjectionExec: expr=[id@0 as id, category@1 as category, amount@2 as amount, note@3 as note, __sail_file_path@4 as __sail_file_path, true as __sail_merge_target_row_present], schema=[id:Int32;N, category:Utf8;N, amount:Int32;N, note:Utf8;N, __sail_file_path:Utf8;N, __sail_merge_target_row_present:Boolean]
-                                  DataSourceExec: file_groups={1 group: [[<tmp>/merge_explain_codegen/part-<id>.snappy.parquet]]}, projection=[id, category, amount, note, __sail_file_path], file_type=parquet, schema=[id:Int32;N, category:Utf8;N, amount:Int32;N, note:Utf8;N, __sail_file_path:Utf8;N]
+                                  DataSourceExec: file_groups={1 group: <tmp>/merge_explain_codegen/part-<id>.snappy.parquet]]}, projection=[id, category, amount, note, __sail_file_path], file_type=parquet, schema=[id:Int32;N, category:Utf8;N, amount:Int32;N, note:Utf8;N, __sail_file_path:Utf8;N]
       DeltaRemoveActionsExec, schema=[data:Utf8;N]
         DataSourceExec: partitions=1, partition_sizes=[<sizes>], schema=[add:Utf8;N, partition_scan:Boolean]
 
@@ -661,7 +661,7 @@ OutputRequirementExec: order_by=[], dist_by=Unspecified
                                           FilterExec: column3@2 + 1 > 10 AND (column1@0 = 1 OR column1@0 = 2 OR column1@0 = 4)
                                             DataSourceExec: partitions=1, partition_sizes=[<sizes>]
                                   ProjectionExec: expr=[id@0 as id, category@1 as category, amount@2 as amount, note@3 as note, __sail_file_path@4 as __sail_file_path, true as __sail_merge_target_row_present]
-                                    DataSourceExec: file_groups={1 group: [[<tmp>/merge_explain_codegen/part-<id>.snappy.parquet]]}, projection=[id, category, amount, note, __sail_file_path], file_type=parquet
+                                    DataSourceExec: file_groups={1 group: <tmp>/merge_explain_codegen/part-<id>.snappy.parquet]]}, projection=[id, category, amount, note, __sail_file_path], file_type=parquet
         DeltaRemoveActionsExec
           DataSourceExec: partitions=1, partition_sizes=[<sizes>]
 
@@ -721,7 +721,7 @@ OutputRequirementExec: order_by=[], dist_by=Unspecified
                                                 FilterExec: column3@2 + 1 > 10 AND (column1@0 = 1 OR column1@0 = 2 OR column1@0 = 4)
                                                   DataSourceExec: partitions=1, partition_sizes=[<sizes>]
                                       ProjectionExec: expr=[id@0 as id, category@1 as category, amount@2 as amount, note@3 as note, __sail_file_path@4 as __sail_file_path, true as __sail_merge_target_row_present]
-                                        DataSourceExec: file_groups={1 group: [[<tmp>/merge_explain_codegen/part-<id>.snappy.parquet]]}, projection=[id, category, amount, note, __sail_file_path], file_type=parquet
+                                        DataSourceExec: file_groups={1 group: <tmp>/merge_explain_codegen/part-<id>.snappy.parquet]]}, projection=[id, category, amount, note, __sail_file_path], file_type=parquet
         DeltaRemoveActionsExec
           DataSourceExec: partitions=1, partition_sizes=[<sizes>]
 
@@ -756,7 +756,7 @@ DeltaCommitExec(table_path=file://<tmp>/merge_explain_codegen/)
                                               FilterExec: column3@2 + 1 > 10 AND (column1@0 = 1 OR column1@0 = 2 OR column1@0 = 4)
                                                 DataSourceExec: partitions=1, partition_sizes=[<sizes>]
                                     ProjectionExec: expr=[id@0 as id, category@1 as category, amount@2 as amount, note@3 as note, __sail_file_path@4 as __sail_file_path, true as __sail_merge_target_row_present]
-                                      DataSourceExec: file_groups={1 group: [[<tmp>/merge_explain_codegen/part-<id>.snappy.parquet]]}, projection=[id, category, amount, note, __sail_file_path], file_type=parquet
+                                      DataSourceExec: file_groups={1 group: <tmp>/merge_explain_codegen/part-<id>.snappy.parquet]]}, projection=[id, category, amount, note, __sail_file_path], file_type=parquet
       DeltaRemoveActionsExec
         DataSourceExec: partitions=1, partition_sizes=[<sizes>]
 
@@ -812,7 +812,7 @@ DeltaCommitExec(table_path=file://<tmp>/merge_explain_codegen/)
                                               FilterExec: column3@2 + 1 > 10 AND (column1@0 = 1 OR column1@0 = 2 OR column1@0 = 4)
                                                 DataSourceExec: partitions=1, partition_sizes=[<sizes>]
                                     ProjectionExec: expr=[id@0 as id, category@1 as category, amount@2 as amount, note@3 as note, __sail_file_path@4 as __sail_file_path, true as __sail_merge_target_row_present]
-                                      DataSourceExec: file_groups={1 group: [[<tmp>/merge_explain_codegen/part-<id>.snappy.parquet]]}, projection=[id, category, amount, note, __sail_file_path], file_type=parquet
+                                      DataSourceExec: file_groups={1 group: <tmp>/merge_explain_codegen/part-<id>.snappy.parquet]]}, projection=[id, category, amount, note, __sail_file_path], file_type=parquet
       DeltaRemoveActionsExec
         DataSourceExec: partitions=1, partition_sizes=[<sizes>]
 
@@ -844,6 +844,6 @@ DeltaCommitExec(table_path=file://<tmp>/merge_explain_codegen/)
                                               FilterExec: column3@2 + 1 > 10 AND (column1@0 = 1 OR column1@0 = 2 OR column1@0 = 4)
                                                 DataSourceExec: partitions=1, partition_sizes=[<sizes>]
                                     ProjectionExec: expr=[id@0 as id, category@1 as category, amount@2 as amount, note@3 as note, __sail_file_path@4 as __sail_file_path, true as __sail_merge_target_row_present]
-                                      DataSourceExec: file_groups={1 group: [[<tmp>/merge_explain_codegen/part-<id>.snappy.parquet]]}, projection=[id, category, amount, note, __sail_file_path], file_type=parquet
+                                      DataSourceExec: file_groups={1 group: <tmp>/merge_explain_codegen/part-<id>.snappy.parquet]]}, projection=[id, category, amount, note, __sail_file_path], file_type=parquet
       DeltaRemoveActionsExec
         DataSourceExec: partitions=1, partition_sizes=[<sizes>]
