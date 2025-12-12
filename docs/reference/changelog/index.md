@@ -19,6 +19,7 @@ _December 12, 2025_
   - `format_string`
 - Improved the output of the `EXPLAIN` statement ([#1110](https://github.com/lakehq/sail/pull/1110)).
 - Fixed a few shuffle planning issues in distributed query execution ([#1111](https://github.com/lakehq/sail/pull/1111)).
+- Fixed an issue with the `LIMIT` clause in distributed query execution ([#1121](https://github.com/lakehq/sail/pull/1121)).
 - Improved data source implementation ([#1099](https://github.com/lakehq/sail/pull/1099)).
 
 ### Contributors
