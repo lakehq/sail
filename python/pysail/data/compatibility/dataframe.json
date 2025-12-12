@@ -115,12 +115,12 @@
   },
   {
     "module": "pyspark.sql.DataFrame",
-    "function": "dropDuplicates",
+    "function": "drop_duplicates",
     "status": "supported"
   },
   {
     "module": "pyspark.sql.DataFrame",
-    "function": "drop_duplicates",
+    "function": "dropDuplicates",
     "status": "supported"
   },
   {

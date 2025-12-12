@@ -116,6 +116,11 @@
   },
   {
     "module": "pyspark.sql.functions",
+    "function": "shuffle",
+    "status": "in progress"
+  },
+  {
+    "module": "pyspark.sql.functions",
     "function": "slice",
     "status": "supported"
   },
@@ -123,10 +128,5 @@
     "module": "pyspark.sql.functions",
     "function": "sort_array",
     "status": "supported"
-  },
-  {
-    "module": "pyspark.sql.functions",
-    "function": "shuffle",
-    "status": "in progress"
   }
 ]

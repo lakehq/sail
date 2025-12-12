@@ -41,6 +41,16 @@
   },
   {
     "module": "pyspark.sql.functions",
+    "function": "collate",
+    "status": "in progress"
+  },
+  {
+    "module": "pyspark.sql.functions",
+    "function": "collation",
+    "status": "in progress"
+  },
+  {
+    "module": "pyspark.sql.functions",
     "function": "concat_ws",
     "status": "supported"
   },
@@ -73,6 +83,16 @@
     "module": "pyspark.sql.functions",
     "function": "find_in_set",
     "status": "supported"
+  },
+  {
+    "module": "pyspark.sql.functions",
+    "function": "format_number",
+    "status": "in progress"
+  },
+  {
+    "module": "pyspark.sql.functions",
+    "function": "format_string",
+    "status": "in progress"
   },
   {
     "module": "pyspark.sql.functions",
@@ -166,8 +186,28 @@
   },
   {
     "module": "pyspark.sql.functions",
+    "function": "printf",
+    "status": "in progress"
+  },
+  {
+    "module": "pyspark.sql.functions",
+    "function": "randstr",
+    "status": "in progress"
+  },
+  {
+    "module": "pyspark.sql.functions",
     "function": "regexp_count",
     "status": "supported"
+  },
+  {
+    "module": "pyspark.sql.functions",
+    "function": "regexp_extract",
+    "status": "in progress"
+  },
+  {
+    "module": "pyspark.sql.functions",
+    "function": "regexp_extract_all",
+    "status": "in progress"
   },
   {
     "module": "pyspark.sql.functions",
@@ -178,6 +218,11 @@
     "module": "pyspark.sql.functions",
     "function": "regexp_replace",
     "status": "supported"
+  },
+  {
+    "module": "pyspark.sql.functions",
+    "function": "regexp_substr",
+    "status": "in progress"
   },
   {
     "module": "pyspark.sql.functions",
@@ -206,6 +251,16 @@
   },
   {
     "module": "pyspark.sql.functions",
+    "function": "sentences",
+    "status": "in progress"
+  },
+  {
+    "module": "pyspark.sql.functions",
+    "function": "soundex",
+    "status": "in progress"
+  },
+  {
+    "module": "pyspark.sql.functions",
     "function": "space",
     "status": "supported"
   },
@@ -222,6 +277,11 @@
   {
     "module": "pyspark.sql.functions",
     "function": "startswith",
+    "status": "supported"
+  },
+  {
+    "module": "pyspark.sql.functions",
+    "function": "strpos",
     "status": "supported"
   },
   {
@@ -246,8 +306,18 @@
   },
   {
     "module": "pyspark.sql.functions",
+    "function": "to_char",
+    "status": "in progress"
+  },
+  {
+    "module": "pyspark.sql.functions",
     "function": "to_number",
     "status": "supported"
+  },
+  {
+    "module": "pyspark.sql.functions",
+    "function": "to_varchar",
+    "status": "in progress"
   },
   {
     "module": "pyspark.sql.functions",
@@ -293,75 +363,5 @@
     "module": "pyspark.sql.functions",
     "function": "validate_utf8",
     "status": "supported"
-  },
-  {
-    "module": "pyspark.sql.functions",
-    "function": "strpos",
-    "status": "supported"
-  },
-  {
-    "module": "pyspark.sql.functions",
-    "function": "collate",
-    "status": "in progress"
-  },
-  {
-    "module": "pyspark.sql.functions",
-    "function": "collation",
-    "status": "in progress"
-  },
-  {
-    "module": "pyspark.sql.functions",
-    "function": "format_number",
-    "status": "in progress"
-  },
-  {
-    "module": "pyspark.sql.functions",
-    "function": "format_string",
-    "status": "in progress"
-  },
-  {
-    "module": "pyspark.sql.functions",
-    "function": "printf",
-    "status": "in progress"
-  },
-  {
-    "module": "pyspark.sql.functions",
-    "function": "randstr",
-    "status": "in progress"
-  },
-  {
-    "module": "pyspark.sql.functions",
-    "function": "regexp_extract",
-    "status": "in progress"
-  },
-  {
-    "module": "pyspark.sql.functions",
-    "function": "regexp_extract_all",
-    "status": "in progress"
-  },
-  {
-    "module": "pyspark.sql.functions",
-    "function": "regexp_substr",
-    "status": "in progress"
-  },
-  {
-    "module": "pyspark.sql.functions",
-    "function": "sentences",
-    "status": "in progress"
-  },
-  {
-    "module": "pyspark.sql.functions",
-    "function": "soundex",
-    "status": "in progress"
-  },
-  {
-    "module": "pyspark.sql.functions",
-    "function": "to_char",
-    "status": "in progress"
-  },
-  {
-    "module": "pyspark.sql.functions",
-    "function": "to_varchar",
-    "status": "in progress"
   }
 ]

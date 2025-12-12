@@ -101,6 +101,11 @@
   },
   {
     "module": "pyspark.sql.Column",
+    "function": "isin",
+    "status": "supported"
+  },
+  {
+    "module": "pyspark.sql.Column",
     "function": "isNaN",
     "status": "supported"
   },
@@ -112,11 +117,6 @@
   {
     "module": "pyspark.sql.Column",
     "function": "isNull",
-    "status": "supported"
-  },
-  {
-    "module": "pyspark.sql.Column",
-    "function": "isin",
     "status": "supported"
   },
   {
