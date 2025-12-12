@@ -234,3 +234,67 @@ Feature: Delta Lake Merge
         | 2  | vip      | 20     | gold              |
         | 3  | vip      | 300    | priority_priority |
         | 4  | standard | 25     | default_regular   |
+
+  Rule: EXPLAIN CODEGEN shows stepwise optimization for MERGE
+    Background:
+      Given variable location for temporary directory merge_explain_codegen
+      Given final statement
+        """
+        DROP TABLE IF EXISTS delta_merge_explain_codegen
+        """
+      Given statement template
+        """
+        CREATE TABLE delta_merge_explain_codegen (
+          id INT,
+          category STRING,
+          amount INT,
+          note STRING
+        )
+        USING DELTA LOCATION {{ location.sql }}
+        """
+      Given statement
+        """
+        INSERT INTO delta_merge_explain_codegen
+        SELECT * FROM VALUES
+          (1, 'existing', 10, 'keep'),
+          (2, 'vip', 20, 'gold'),
+          (3, 'stale', 30, 'old')
+        """
+      Given statement
+        """
+        CREATE OR REPLACE TEMP VIEW src_merge_explain_codegen AS
+        SELECT
+          id,
+          category,
+          amount,
+          note
+        FROM VALUES
+          (1, 'existing', 15, 'promote'),
+          (2, 'vip', 22, 'platinum'),
+          (4, 'standard', 25, 'regular')
+        AS src(id, category, amount, note)
+        """
+
+    Scenario: EXPLAIN CODEGEN includes plan steps and merge rewrite artifacts
+      When query
+        """
+        EXPLAIN CODEGEN
+        MERGE INTO delta_merge_explain_codegen AS t
+        USING (
+          SELECT *
+          FROM src_merge_explain_codegen
+          WHERE amount + 1 > 10 AND (id = 1 OR id = 2 OR id = 4)
+        ) AS s
+        ON t.id = s.id AND t.category IS NOT NULL
+        WHEN MATCHED AND t.category = 'vip' THEN
+          UPDATE SET amount = s.amount + 1,
+                     note = concat(s.note, '_', t.id)
+        WHEN MATCHED AND t.category = 'stale' THEN
+          DELETE
+        WHEN NOT MATCHED BY SOURCE AND t.category = 'stale' THEN
+          UPDATE SET note = concat(t.note, '_orphan')
+        WHEN NOT MATCHED THEN
+          INSERT (id, category, amount, note)
+          VALUES (s.id, s.category, s.amount, concat('insert_', s.note))
+        """
+      Then query plan matches snapshot

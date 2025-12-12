@@ -28,6 +28,42 @@ def normalize_plan_text(plan_text: str) -> str:
     text = re.sub(r"RoundRobinBatch\(\d+\)", r"RoundRobinBatch(<partitions>)", text)
     text = re.sub(r"input_partitions=\d+", r"input_partitions=<partitions>", text)
     text = re.sub(r"partition_sizes=\[[^\]]+\]", r"partition_sizes=[<sizes>]", text)
+
+    # Normalize temp paths / file URIs that appear in plans,
+    # keep meaningful suffixes like the table directory name.
+    pytest_tmp_prefix = re.compile(
+        r"(?:/)?(?:private/)?var/folders/[^\s]+?/T/pytest-of-[^/]+/pytest-\d+/[^/]+/",
+        re.IGNORECASE,
+    )
+
+    def normalize_path(path: str) -> str:
+        path = pytest_tmp_prefix.sub("<tmp>/", path)
+        return re.sub(
+            r"part-\d+-[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}-c\d+\.snappy\.parquet",
+            "part-<id>.snappy.parquet",
+            path,
+            flags=re.IGNORECASE,
+        )
+
+    text = re.sub(
+        r"table_path=file://([^\s\),]+)",
+        lambda m: f"table_path=file://{normalize_path(m.group(1))}",
+        text,
+    )
+    text = re.sub(
+        r'location: "([^"]+)"',
+        lambda m: f'location: "{normalize_path(m.group(1))}"',
+        text,
+    )
+    # Normalize raw path occurrences (e.g. parquet file groups) without destroying structure.
+    text = pytest_tmp_prefix.sub("<tmp>/", text)
+    text = re.sub(
+        r"part-\d+-[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}-c\d+\.snappy\.parquet",
+        "part-<id>.snappy.parquet",
+        text,
+        flags=re.IGNORECASE,
+    )
+
     text = re.sub(r"Bytes=Exact\(\d+\)", r"Bytes=Exact(<bytes>)", text)
     return re.sub(r"Bytes=Inexact\(\d+\)", r"Bytes=Inexact(<bytes>)", text)
 
