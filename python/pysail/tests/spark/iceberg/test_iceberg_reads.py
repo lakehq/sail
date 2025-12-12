@@ -3,7 +3,7 @@ from datetime import datetime, timedelta
 
 import pyarrow as pa
 from pyiceberg.schema import Schema
-from pyiceberg.types import BooleanType, DoubleType, NestedField, StringType, TimestampType
+from pyiceberg.types import BooleanType, DoubleType, LongType, NestedField, StringType, TimestampType
 
 from .utils import create_sql_catalog  # noqa: TID252
 
@@ -116,5 +116,36 @@ def test_limit_with_filter(spark, tmp_path):
         path = table.location()
         df = spark.read.format("iceberg").load(path).filter("flag = true").limit(3)
         assert df.count() == 3  # noqa: PLR2004
+    finally:
+        catalog.drop_table(identifier)
+
+
+def test_limit_with_offset(spark, tmp_path):
+    catalog = create_sql_catalog(tmp_path)
+    identifier = "default.test_limit_with_offset"
+    table = catalog.create_table(
+        identifier=identifier,
+        schema=Schema(
+            NestedField(1, "id", LongType(), required=False),
+            NestedField(2, "flag", BooleanType(), required=False),
+        ),
+    )
+    try:
+        # Multiple data files to exercise distributed limit/offset correctness.
+        tbl1 = pa.table({"id": [0, 1, 2, 3, 4], "flag": [True, False, True, True, False]})
+        tbl2 = pa.table({"id": [5, 6, 7, 8, 9], "flag": [False, True, False, True, True]})
+        table.append(tbl1)
+        table.append(tbl2)
+
+        path = table.location()
+        df = spark.read.format("iceberg").load(path).where("flag = true").orderBy("id")
+        df.createOrReplaceTempView("tmp_limit_offset")
+        ids = [row.id for row in spark.sql("SELECT id FROM tmp_limit_offset LIMIT 3 OFFSET 2").collect()]
+        assert ids == [3, 6, 8]
+        # Nested subquery to ensure we handle `GlobalLimitExec` not at the root.
+        ids2 = [
+            row.id for row in spark.sql("SELECT id FROM (SELECT id FROM tmp_limit_offset) t LIMIT 3 OFFSET 2").collect()
+        ]
+        assert ids2 == [3, 6, 8]
     finally:
         catalog.drop_table(identifier)
