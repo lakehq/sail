@@ -2,14 +2,18 @@ use std::fmt::Display;
 use std::sync::Arc;
 
 use datafusion::common::plan_datafusion_err;
+use datafusion::common::tree_node::{Transformed, TransformedResult, TreeNode};
 use datafusion::physical_expr::Partitioning;
 use datafusion::physical_plan::coalesce_partitions::CoalescePartitionsExec;
 use datafusion::physical_plan::display::DisplayableExecutionPlan;
 use datafusion::physical_plan::joins::{
     CrossJoinExec, HashJoinExec, NestedLoopJoinExec, PartitionMode, PiecewiseMergeJoinExec,
 };
+use datafusion::physical_plan::limit::GlobalLimitExec;
 use datafusion::physical_plan::repartition::RepartitionExec;
-use datafusion::physical_plan::{with_new_children_if_necessary, ExecutionPlan};
+use datafusion::physical_plan::{
+    with_new_children_if_necessary, ExecutionPlan, ExecutionPlanProperties,
+};
 use sail_common_datafusion::utils::items::ItemTaker;
 
 use crate::error::{ExecutionError, ExecutionResult};
@@ -32,6 +36,7 @@ impl Display for JobGraph {
 
 impl JobGraph {
     pub fn try_new(plan: Arc<dyn ExecutionPlan>) -> ExecutionResult<Self> {
+        let plan = ensure_single_partition_for_fetch(plan)?;
         let mut graph = Self { stages: vec![] };
         let last = build_job_graph(plan, PartitionUsage::Once, &mut graph)?;
         graph.stages.push(last);
@@ -41,6 +46,42 @@ impl JobGraph {
     pub fn stages(&self) -> &[Arc<dyn ExecutionPlan>] {
         &self.stages
     }
+}
+
+fn ensure_single_partition_for_fetch(
+    plan: Arc<dyn ExecutionPlan>,
+) -> ExecutionResult<Arc<dyn ExecutionPlan>> {
+    // Rewrite *all* `GlobalLimitExec` nodes in the tree to ensure their input is single-partition
+    let result = plan.transform(|node| {
+        if let Some(gl) = node.as_any().downcast_ref::<GlobalLimitExec>() {
+            let rebuilt = rebuild_global_limit(gl)?;
+            Ok(Transformed::yes(rebuilt))
+        } else {
+            Ok(Transformed::no(node))
+        }
+    });
+    Ok(result.data()?)
+}
+
+fn rebuild_global_limit(
+    gl: &GlobalLimitExec,
+) -> datafusion::common::Result<Arc<dyn ExecutionPlan>> {
+    let skip = gl.skip();
+    let fetch = gl.fetch();
+    // If there is neither LIMIT nor OFFSET, return as-is.
+    if fetch.is_none() && skip == 0 {
+        return Ok(Arc::new(gl.clone()));
+    }
+
+    // Keep `LocalLimitExec` (if any) to preserve the per-partition "top-k" optimization, but make
+    // sure the input to `GlobalLimitExec` is single-partition.
+    let mut input: Arc<dyn ExecutionPlan> = gl.input().clone();
+
+    if input.output_partitioning().partition_count() > 1 {
+        input = Arc::new(CoalescePartitionsExec::new(input));
+    }
+
+    Ok(Arc::new(GlobalLimitExec::new(input, skip, fetch)))
 }
 
 /// A flag to indicate how the partitions from physical plan execution are used.
@@ -129,7 +170,14 @@ fn build_job_graph(
     } else if let Some(coalesce) = plan.as_any().downcast_ref::<CoalescePartitionsExec>() {
         let child = plan.children().one()?;
         let partitioning = coalesce.properties().partitioning.clone();
-        create_shuffle(child, graph, partitioning, consumption)?
+        let fetch = coalesce.fetch();
+        let shuffled = create_shuffle(child, graph, partitioning, consumption)?;
+        if let Some(f) = fetch {
+            Arc::new(CoalescePartitionsExec::new(shuffled).with_fetch(Some(f)))
+                as Arc<dyn ExecutionPlan>
+        } else {
+            shuffled
+        }
     } else {
         plan
     };
