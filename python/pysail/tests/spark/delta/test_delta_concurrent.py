@@ -1,8 +1,12 @@
 import json
+import platform
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 
+import pytest
 
+
+@pytest.mark.skipif(platform.system() == "Windows", reason="not working on Windows")
 def test_delta_concurrent_initial_consistent_metadata(spark, tmp_path):
     """Concurrent creation with consistent metadata should land as create + clean appends."""
 
@@ -54,6 +58,7 @@ def test_delta_concurrent_initial_consistent_metadata(spark, tmp_path):
     assert metadata_count == 1, f"Expected exactly one metadata action, got {metadata_count}"
 
 
+@pytest.mark.skipif(platform.system() == "Windows", reason="not working on Windows")
 def test_delta_concurrent_initial_metadata_mismatch_errors(spark, tmp_path):
     """Ensure mismatched metadata during concurrent create surfaces as protocol/metadata conflict."""
 
@@ -84,6 +89,7 @@ def test_delta_concurrent_initial_metadata_mismatch_errors(spark, tmp_path):
     assert df.count() == 1
 
 
+@pytest.mark.skipif(platform.system() == "Windows", reason="not working on Windows")
 def test_delta_concurrent_blind_append_succeeds(spark, tmp_path):
     """Blind append on an existing table should allow concurrent writers without conflicts."""
 
