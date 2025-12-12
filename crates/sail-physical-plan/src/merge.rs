@@ -22,6 +22,8 @@ use sail_logical_plan::merge::{
     MergeNotMatchedByTargetClause,
 };
 
+type PhysicalExprVec = Vec<Arc<dyn PhysicalExpr>>;
+
 fn convert_options(options: &[Vec<(String, String)>]) -> Vec<HashMap<String, String>> {
     options
         .iter()
@@ -313,14 +315,14 @@ fn convert_assignments(
 fn combine_conjunction(exprs: &[Expr]) -> Option<Expr> {
     let mut iter = exprs.iter().cloned();
     let first = iter.next()?;
-    Some(iter.fold(first, |acc, expr| Expr::and(acc, expr)))
+    Some(iter.fold(first, Expr::and))
 }
 
 fn build_rewrite_predicates(
     matched: &[MergeMatchedClauseInfo],
     not_matched_by_source: &[MergeNotMatchedBySourceClauseInfo],
     on_condition: &Arc<dyn PhysicalExpr>,
-) -> (Vec<Arc<dyn PhysicalExpr>>, Vec<Arc<dyn PhysicalExpr>>) {
+) -> (PhysicalExprVec, PhysicalExprVec) {
     let mut matched_preds = Vec::new();
     let mut not_matched_by_source_preds = Vec::new();
 

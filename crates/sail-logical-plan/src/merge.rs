@@ -15,6 +15,7 @@ use datafusion_expr::logical_plan::LogicalPlanBuilder;
 use datafusion_expr::{
     col, lit, Expr, Join, JoinConstraint, JoinType, LogicalPlan, UserDefinedLogicalNodeCore,
 };
+use log::trace;
 use sail_common_datafusion::utils::items::ItemTaker;
 
 pub const SOURCE_PRESENT_COLUMN: &str = "__sail_merge_source_row_present";
@@ -335,16 +336,16 @@ pub fn expand_merge(node: &MergeIntoNode, path_column: &str) -> Result<MergeExpa
     let mut options = node.options().clone();
     let merge_schema = node.input_schema.clone();
 
-    let _ = dbg!(
-        "merge input schema fields",
+    trace!(
+        "merge input schema fields: {:?}",
         merge_schema
             .fields()
             .iter()
             .map(|f| f.name().clone())
             .collect::<Vec<_>>()
     );
-    let _ = dbg!(
-        "resolved target/source schema fields",
+    trace!(
+        "resolved target/source schema fields - target: {:?}, source: {:?}",
         options
             .resolved_target_schema
             .fields()
@@ -379,8 +380,8 @@ pub fn expand_merge(node: &MergeIntoNode, path_column: &str) -> Result<MergeExpa
                 .map(|f| f.name().clone())
                 .collect()
         });
-    let _ = dbg!("resolved target names", &desired_target_names);
-    let _ = dbg!("resolved source names", &desired_source_names);
+    trace!("resolved target names: {:?}", &desired_target_names);
+    trace!("resolved source names: {:?}", &desired_source_names);
 
     let _target_relation = node
         .options()
@@ -403,7 +404,10 @@ pub fn expand_merge(node: &MergeIntoNode, path_column: &str) -> Result<MergeExpa
         .iter()
         .map(|f| f.name().clone())
         .collect();
-    let _ = dbg!("target scan fields pre-projection", &target_scan_fields);
+    trace!(
+        "target scan fields pre-projection: {:?}",
+        &target_scan_fields
+    );
 
     let mut target_proj_exprs: Vec<Expr> = target_plan
         .schema()
@@ -427,8 +431,8 @@ pub fn expand_merge(node: &MergeIntoNode, path_column: &str) -> Result<MergeExpa
         );
     }
 
-    let _ = dbg!(
-        "target projection expr names",
+    trace!(
+        "target projection expr names: {:?}",
         target_proj_exprs
             .iter()
             .map(|e| e.to_string())
@@ -492,8 +496,8 @@ pub fn expand_merge(node: &MergeIntoNode, path_column: &str) -> Result<MergeExpa
 
     let target_schema = target_plan.schema();
     let source_schema = source_plan.schema();
-    let _ = dbg!(
-        "expand_merge target/source fields",
+    trace!(
+        "expand_merge target/source fields - target: {:?}, source: {:?}",
         target_schema
             .fields()
             .iter()
@@ -508,7 +512,7 @@ pub fn expand_merge(node: &MergeIntoNode, path_column: &str) -> Result<MergeExpa
 
     let augmented_target = LogicalPlanBuilder::from(target_plan.clone())
         .project(append_presence_projection(
-            &target_schema,
+            target_schema,
             TARGET_PRESENT_COLUMN,
             Some(path_column),
         )?)?
@@ -516,7 +520,7 @@ pub fn expand_merge(node: &MergeIntoNode, path_column: &str) -> Result<MergeExpa
 
     let augmented_source = LogicalPlanBuilder::from(source_plan.clone())
         .project(append_presence_projection(
-            &source_schema,
+            source_schema,
             SOURCE_PRESENT_COLUMN,
             None,
         )?)?
@@ -543,8 +547,8 @@ pub fn expand_merge(node: &MergeIntoNode, path_column: &str) -> Result<MergeExpa
     rewrite_clauses(&mut options.matched_clauses, &rewrite)?;
     rewrite_not_matched_by_source(&mut options.not_matched_by_source_clauses, &rewrite)?;
     rewrite_not_matched_by_target(&mut options.not_matched_by_target_clauses, &rewrite)?;
-    let _ = dbg!(
-        "expand_merge options after rewrite",
+    trace!(
+        "expand_merge options after rewrite - join_key_pairs: {:?}, matched_clauses: {:?}, not_matched_by_source_clauses: {:?}, not_matched_by_target_clauses: {:?}, on_condition: {:?}",
         &options.join_key_pairs,
         &options.matched_clauses,
         &options.not_matched_by_source_clauses,
@@ -626,7 +630,7 @@ pub fn expand_merge(node: &MergeIntoNode, path_column: &str) -> Result<MergeExpa
 
     let projection_exprs =
         build_merge_projection(&options, target_schema, source_schema, path_column)?;
-    let _ = dbg!("projection exprs", &projection_exprs);
+    trace!("projection exprs: {:?}", &projection_exprs);
     let projected = LogicalPlanBuilder::from(filtered)
         .project(projection_exprs.clone())?
         .build()?;
@@ -938,7 +942,7 @@ fn normalize_target_column_names(
     }
 }
 
-fn rewrite_clauses<F>(clauses: &mut Vec<MergeMatchedClause>, rewrite: &F) -> Result<()>
+fn rewrite_clauses<F>(clauses: &mut [MergeMatchedClause], rewrite: &F) -> Result<()>
 where
     F: Fn(Expr) -> Result<Expr>,
 {
@@ -956,7 +960,7 @@ where
 }
 
 fn rewrite_not_matched_by_source<F>(
-    clauses: &mut Vec<MergeNotMatchedBySourceClause>,
+    clauses: &mut [MergeNotMatchedBySourceClause],
     rewrite: &F,
 ) -> Result<()>
 where
@@ -976,7 +980,7 @@ where
 }
 
 fn rewrite_not_matched_by_target<F>(
-    clauses: &mut Vec<MergeNotMatchedByTargetClause>,
+    clauses: &mut [MergeNotMatchedByTargetClause],
     rewrite: &F,
 ) -> Result<()>
 where

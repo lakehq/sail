@@ -8,6 +8,7 @@ use datafusion_common::tree_node::{Transformed, TreeNode};
 use datafusion_common::{Column, Result};
 use datafusion_expr::logical_plan::Extension;
 use datafusion_expr::{Expr, LogicalPlan};
+use log::trace;
 use sail_delta_lake::datasource::DeltaTableProvider;
 use sail_logical_plan::merge::{expand_merge, MergeIntoNode, MergeIntoWriteNode};
 
@@ -43,8 +44,8 @@ impl OptimizerRule for ExpandMergeRule {
                         .iter()
                         .map(|f| f.name().clone())
                         .collect();
-                    let _ = dbg!(
-                        "rewrite target_plan schema after ensure_file_column",
+                    trace!(
+                        "rewrite target_plan schema after ensure_file_column: {:?}",
                         &target_fields
                     );
                     if !target_fields.iter().any(|n| n == PATH_COLUMN_NAME) {
@@ -59,8 +60,8 @@ impl OptimizerRule for ExpandMergeRule {
                         target_plan = LogicalPlanBuilder::from(target_plan)
                             .project(exprs)?
                             .build()?;
-                        let _ = dbg!(
-                            "rewrite target_plan schema after patch projection",
+                        trace!(
+                            "rewrite target_plan schema after patch projection: {:?}",
                             target_plan
                                 .schema()
                                 .fields()
@@ -77,8 +78,8 @@ impl OptimizerRule for ExpandMergeRule {
                     );
 
                     let expansion = expand_merge(&node, PATH_COLUMN_NAME)?;
-                    let _ = dbg!(
-                        "ExpandMergeRule write_plan schema fields",
+                    trace!(
+                        "ExpandMergeRule write_plan schema fields: {:?}",
                         expansion
                             .write_plan
                             .schema()
@@ -126,8 +127,8 @@ fn ensure_file_column(plan: LogicalPlan) -> Result<LogicalPlan> {
                     if let Some(delta_provider) =
                         provider.as_any().downcast_ref::<DeltaTableProvider>()
                     {
-                        let _ = dbg!(
-                            "ensure_file_column (scan) before",
+                        trace!(
+                            "ensure_file_column (scan) before - table_name: {:?}, schema_fields: {:?}, projection: {:?}",
                             &scan.table_name,
                             provider
                                 .schema()
@@ -169,8 +170,8 @@ fn ensure_file_column(plan: LogicalPlan) -> Result<LogicalPlan> {
                                 projection,
                             )?
                             .build()?;
-                            let _ = dbg!(
-                                "ensure_file_column (scan) after",
+                            trace!(
+                                "ensure_file_column (scan) after - schema_fields: {:?}, scan: {:?}",
                                 new_scan
                                     .schema()
                                     .fields()
@@ -201,8 +202,8 @@ fn ensure_file_column(plan: LogicalPlan) -> Result<LogicalPlan> {
                     });
 
                     if !has_path {
-                        let _ = dbg!(
-                            "ensure_file_column (proj) add",
+                        trace!(
+                            "ensure_file_column (proj) add - exprs: {:?}, input_schema_fields: {:?}",
                             proj.expr.iter().map(|e| e.to_string()).collect::<Vec<_>>(),
                             input_schema
                                 .fields()
@@ -218,8 +219,8 @@ fn ensure_file_column(plan: LogicalPlan) -> Result<LogicalPlan> {
                         let new_proj = LogicalPlanBuilder::from(proj.input.as_ref().clone())
                             .project(new_exprs)?
                             .build()?;
-                        let _ = dbg!(
-                            "ensure_file_column (proj) after",
+                        trace!(
+                            "ensure_file_column (proj) after: {:?}",
                             new_proj
                                 .schema()
                                 .fields()
@@ -261,8 +262,8 @@ fn ensure_file_column(plan: LogicalPlan) -> Result<LogicalPlan> {
         }
     }
 
-    let _ = dbg!(
-        "ensure_file_column (final) schema",
+    trace!(
+        "ensure_file_column (final) schema: {:?}",
         transformed
             .schema()
             .fields()

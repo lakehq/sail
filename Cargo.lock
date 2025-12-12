@@ -6058,6 +6058,7 @@ dependencies = [
  "datafusion-common",
  "datafusion-expr",
  "html-escape",
+ "log",
  "sail-common",
  "sail-common-datafusion",
 ]
@@ -6166,6 +6167,7 @@ dependencies = [
  "datafusion",
  "datafusion-common",
  "datafusion-expr",
+ "log",
  "sail-data-source",
  "sail-delta-lake",
  "sail-logical-plan",

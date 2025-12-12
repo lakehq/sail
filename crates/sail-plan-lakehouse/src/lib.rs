@@ -51,7 +51,7 @@ async fn delta_table_schema(session_state: &SessionState, path: &str) -> Result<
         .arrow_schema()
         .map_err(|e| DataFusionError::External(Box::new(e)))?;
 
-    Ok(arrow_schema.to_dfschema_ref()?)
+    arrow_schema.to_dfschema_ref()
 }
 
 #[derive(Debug, Default)]
@@ -157,9 +157,9 @@ impl ExtensionPlanner for DeltaExtensionPlanner {
 }
 
 pub fn new_lakehouse_extension_planners() -> Vec<Arc<dyn ExtensionPlanner + Send + Sync>> {
-    vec![Arc::new(DeltaExtensionPlanner::default())]
+    vec![Arc::new(DeltaExtensionPlanner)]
 }
 
 pub fn new_delta_extension_planner() -> Arc<dyn ExtensionPlanner + Send + Sync> {
-    Arc::new(DeltaExtensionPlanner::default())
+    Arc::new(DeltaExtensionPlanner)
 }

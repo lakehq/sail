@@ -18,4 +18,5 @@ datafusion-expr = { workspace = true }
 
 async-trait = { workspace = true }
 url = { workspace = true }
+log = { workspace = true }
 
