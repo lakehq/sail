@@ -20,7 +20,7 @@ use url::Url;
 
 mod optimizer;
 
-pub use optimizer::lakehouse_optimizer_rules;
+pub use optimizer::{lakehouse_optimizer_rules, ExpandMergeRule};
 
 fn is_lakehouse_format(format: &str) -> bool {
     format.eq_ignore_ascii_case("delta")

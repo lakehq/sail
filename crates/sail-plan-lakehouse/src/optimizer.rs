@@ -12,10 +12,10 @@ use log::trace;
 use sail_delta_lake::datasource::DeltaTableProvider;
 use sail_logical_plan::merge::{expand_merge, MergeIntoNode, MergeIntoWriteNode};
 
+const PATH_COLUMN_NAME: &str = "__sail_file_path";
+
 #[derive(Clone, Default)]
 pub struct ExpandMergeRule;
-
-const PATH_COLUMN_NAME: &str = "__sail_file_path";
 
 impl ExpandMergeRule {
     pub fn new() -> Self {

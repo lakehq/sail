@@ -22,7 +22,6 @@ use sail_common::runtime::RuntimeHandle;
 use sail_common_datafusion::extension::SessionExtensionAccessor;
 use sail_execution::driver::DriverOptions;
 use sail_execution::job::{ClusterJobRunner, JobRunner, LocalJobRunner};
-use sail_logical_optimizer::{default_analyzer_rules, default_optimizer_rules};
 use sail_object_store::DynamicObjectStoreRegistry;
 use sail_physical_optimizer::{get_physical_optimizers, PhysicalOptimizerOptions};
 use sail_plan::function::{
@@ -32,6 +31,7 @@ use sail_plan::planner::new_query_planner;
 use sail_server::actor::{Actor, ActorAction, ActorContext, ActorHandle, ActorSystem};
 use sail_session::catalog::create_catalog_manager;
 use sail_session::formats::create_table_format_registry;
+use sail_session::optimizer::{default_analyzer_rules, default_optimizer_rules};
 use sail_telemetry::common::SpanAssociation;
 use tokio::sync::oneshot;
 use tokio::time::Instant;

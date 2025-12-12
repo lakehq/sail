@@ -6046,7 +6046,6 @@ name = "sail-logical-optimizer"
 version = "0.4.4"
 dependencies = [
  "datafusion",
- "sail-plan-lakehouse",
 ]
 
 [[package]]
@@ -6238,6 +6237,8 @@ dependencies = [
  "sail-data-source",
  "sail-delta-lake",
  "sail-iceberg",
+ "sail-logical-optimizer",
+ "sail-plan-lakehouse",
  "secrecy",
 ]
 
@@ -6266,7 +6267,6 @@ dependencies = [
  "sail-common",
  "sail-common-datafusion",
  "sail-execution",
- "sail-logical-optimizer",
  "sail-object-store",
  "sail-physical-optimizer",
  "sail-plan",
