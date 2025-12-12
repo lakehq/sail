@@ -34,7 +34,6 @@ use sail_logical_plan::streaming::source_wrapper::StreamSourceWrapperNode;
 use sail_physical_plan::file_delete::create_file_delete_physical_plan;
 use sail_physical_plan::file_write::create_file_write_physical_plan;
 use sail_physical_plan::map_partitions::MapPartitionsExec;
-use sail_physical_plan::merge::create_merge_physical_plan;
 use sail_physical_plan::range::RangeExec;
 use sail_physical_plan::repartition::ExplicitRepartitionExec;
 use sail_physical_plan::schema_pivot::SchemaPivotExec;
@@ -194,25 +193,17 @@ impl ExtensionPlanner for ExtensionPhysicalPlanner {
             create_file_delete_physical_plan(session_state, planner, schema, node.options().clone())
                 .await?
         } else if let Some(node) = node.as_any().downcast_ref::<MergeIntoNode>() {
-            if node.options().target.format.eq_ignore_ascii_case("delta") {
-                return Ok(None);
-            }
-            let [logical_target, logical_source] = logical_inputs else {
-                return internal_err!("MergeIntoNode requires exactly two logical inputs");
-            };
-            let [physical_target, physical_source] = physical_inputs else {
-                return internal_err!("MergeIntoNode requires exactly two physical inputs");
-            };
-            create_merge_physical_plan(
-                session_state,
+            let _ = (
                 planner,
-                logical_target,
-                logical_source,
-                physical_target.clone(),
-                physical_source.clone(),
+                logical_inputs,
+                physical_inputs,
+                session_state,
                 node,
-            )
-            .await?
+            );
+            return internal_err!(
+                "MERGE planning expects a pre-expanded logical plan (MergeIntoWriteNode). \
+Ensure ExpandMergeRule is enabled; MERGE is currently only supported for Delta tables."
+            );
         } else if let Some(node) = node.as_any().downcast_ref::<ExplicitRepartitionNode>() {
             let [input] = physical_inputs else {
                 return internal_err!(

@@ -12,12 +12,10 @@ use sail_delta_lake::datasource::schema::DataFusionMixins;
 use sail_delta_lake::table::open_table_with_object_store;
 use sail_logical_plan::file_delete::FileDeleteNode;
 use sail_logical_plan::file_write::FileWriteNode;
-use sail_logical_plan::merge::{MergeIntoNode, MergeIntoWriteNode};
+use sail_logical_plan::merge::MergeIntoWriteNode;
 use sail_physical_plan::file_delete::create_file_delete_physical_plan;
 use sail_physical_plan::file_write::create_file_write_physical_plan;
-use sail_physical_plan::merge::{
-    create_merge_physical_plan, create_preexpanded_merge_physical_plan,
-};
+use sail_physical_plan::merge::create_preexpanded_merge_physical_plan;
 use url::Url;
 
 mod optimizer;
@@ -102,30 +100,6 @@ impl ExtensionPlanner for DeltaExtensionPlanner {
                 planner,
                 schema,
                 node.options().clone(),
-            )
-            .await?;
-            return Ok(Some(plan));
-        }
-
-        if let Some(node) = node.as_any().downcast_ref::<MergeIntoNode>() {
-            if !is_lakehouse_format(&node.options().target.format) {
-                return Ok(None);
-            }
-            let [logical_target, logical_source] = logical_inputs else {
-                return internal_err!("MergeIntoNode requires exactly two logical inputs");
-            };
-            let [physical_target, physical_source] = physical_inputs else {
-                return internal_err!("MergeIntoNode requires exactly two physical inputs");
-            };
-
-            let plan = create_merge_physical_plan(
-                session_state,
-                planner,
-                logical_target,
-                logical_source,
-                physical_target.clone(),
-                physical_source.clone(),
-                node,
             )
             .await?;
             return Ok(Some(plan));
