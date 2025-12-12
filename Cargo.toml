@@ -5,14 +5,14 @@ members = [
 resolver = "2"
 
 [workspace.package]
-version = "0.4.3"
+version = "0.4.4"
 authors = ["LakeSail <hello@lakesail.com>"]
 edition = "2021"
 homepage = "https://lakesail.com"
 license = "Apache-2.0"
 readme = "README.md"
 repository = "https://github.com/lakehq/sail"
-rust-version = "1.87.0"
+rust-version = "1.88.0"
 
 [workspace.lints.clippy]
 unwrap_used = "deny"
