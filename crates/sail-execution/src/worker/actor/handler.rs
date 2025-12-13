@@ -16,7 +16,8 @@ use sail_common_datafusion::error::CommonErrorCause;
 use sail_common_datafusion::schema_adapter::DeltaSchemaAdapterFactory;
 use sail_python_udf::error::PyErrExtractor;
 use sail_server::actor::{ActorAction, ActorContext};
-use sail_telemetry::trace_execution_plan;
+use sail_telemetry::telemetry::global_metric_registry;
+use sail_telemetry::{trace_execution_plan, TracingExecOptions};
 use tokio::sync::oneshot;
 
 use crate::driver::state::TaskStatus;
@@ -331,7 +332,14 @@ impl WorkerActor {
             attempt,
             DisplayableExecutionPlan::new(plan.as_ref()).indent(true)
         );
-        let plan = trace_execution_plan(plan)?;
+        let options = TracingExecOptions {
+            metric_registry: global_metric_registry(),
+            job_id: None, // TODO: propagate job ID
+            task_id: Some(task_id.into()),
+            task_attempt: Some(attempt),
+            operator_id: None,
+        };
+        let plan = trace_execution_plan(plan, options)?;
         let stream = plan.execute(partition, session_ctx.task_ctx())?;
         Ok(stream)
     }

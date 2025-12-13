@@ -100,7 +100,7 @@ where
 }
 
 #[cfg(test)]
-pub mod test {
+mod tests {
     use datafusion::arrow::datatypes::DataType;
 
     use super::*;

@@ -88,3 +88,8 @@ pub trait SpanAssociation {
     /// The properties of the object associated with the span.
     fn properties(&self) -> impl IntoIterator<Item = (Cow<'static, str>, Cow<'static, str>)>;
 }
+
+/// A key-value pair for metric attributes.
+/// This is a restriction over [`opentelemetry::KeyValue`] to only allow
+/// static string keys and clone-on-write string values.
+pub type KeyValue = (&'static str, Cow<'static, str>);

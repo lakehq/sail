@@ -8,4 +8,4 @@ pub mod metrics;
 pub mod recorder;
 pub mod telemetry;
 
-pub use execution::physical_plan::trace_execution_plan;
+pub use execution::physical_plan::{trace_execution_plan, TracingExecOptions};

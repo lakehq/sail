@@ -1,11 +1,12 @@
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::Arc;
 
 use datafusion::execution::SendableRecordBatchStream;
 use datafusion::physical_plan::{execute_stream, ExecutionPlan};
 use datafusion::prelude::SessionContext;
 use sail_server::actor::{ActorHandle, ActorSystem};
-use sail_telemetry::trace_execution_plan;
+use sail_telemetry::telemetry::global_metric_registry;
+use sail_telemetry::{trace_execution_plan, TracingExecOptions};
 use tokio::sync::oneshot;
 
 use crate::driver::{DriverActor, DriverEvent, DriverOptions};
@@ -23,12 +24,14 @@ pub trait JobRunner: Send + Sync + 'static {
 }
 
 pub struct LocalJobRunner {
+    next_job_id: AtomicU64,
     stopped: AtomicBool,
 }
 
 impl LocalJobRunner {
     pub fn new() -> Self {
         Self {
+            next_job_id: AtomicU64::new(1),
             stopped: AtomicBool::new(false),
         }
     }
@@ -52,7 +55,15 @@ impl JobRunner for LocalJobRunner {
                 "job runner is stopped".to_string(),
             ));
         }
-        let plan = trace_execution_plan(plan)?;
+        let job_id = self.next_job_id.fetch_add(1, Ordering::Relaxed);
+        let options = TracingExecOptions {
+            metric_registry: global_metric_registry(),
+            job_id: Some(job_id),
+            task_id: None,
+            task_attempt: None,
+            operator_id: None,
+        };
+        let plan = trace_execution_plan(plan, options)?;
         Ok(execute_stream(plan, ctx.task_ctx())?)
     }
 

@@ -1,92 +1,99 @@
 //! This module bridges DataFusion query execution metrics with OpenTelemetry.
-use datafusion::physical_plan::metrics::{MetricValue, MetricsSet};
-use datafusion::physical_plan::Metric;
 
-use crate::metrics::{MetricAttribute, MetricRegistry};
+mod default;
+mod filter;
+mod join;
+#[cfg(test)]
+pub(super) mod testing;
 
-pub enum MetricEmitted {
-    #[expect(unused)]
+use datafusion::physical_plan::filter::FilterExec;
+use datafusion::physical_plan::joins::{
+    CrossJoinExec, HashJoinExec, NestedLoopJoinExec, PiecewiseMergeJoinExec, SortMergeJoinExec,
+    SymmetricHashJoinExec,
+};
+use datafusion::physical_plan::{ExecutionPlan, Metric};
+use paste::paste;
+
+use crate::common::KeyValue;
+use crate::metrics::MetricRegistry;
+
+/// A flag indicating whether the metric was handled by a metric emitter.
+pub enum MetricHandled {
+    /// The metric was emitted or intentionally ignored.
     Yes,
+    /// The metric was not handled.
     No,
 }
 
-pub trait MetricEmitterExtension: Send {
-    fn try_emit(&self, metric: &Metric, registry: &MetricRegistry) -> MetricEmitted;
+/// A trait for emitting DataFusion execution metrics.
+pub trait MetricEmitter: Send {
+    /// Try to emit the given metric.
+    fn try_emit(
+        &self,
+        metric: &Metric,
+        attributes: &[KeyValue],
+        registry: &MetricRegistry,
+    ) -> MetricHandled;
 }
 
-pub struct DefaultMetricEmitterExtension;
-
-impl MetricEmitterExtension for DefaultMetricEmitterExtension {
-    fn try_emit(&self, _metric: &Metric, _registry: &MetricRegistry) -> MetricEmitted {
-        MetricEmitted::No
-    }
-}
-
-pub struct MetricEmitter {
-    extension: Box<dyn MetricEmitterExtension>,
-}
-
-impl Default for MetricEmitter {
-    fn default() -> Self {
-        Self::new(Box::new(DefaultMetricEmitterExtension))
-    }
-}
-
-impl MetricEmitter {
-    pub fn new(extension: Box<dyn MetricEmitterExtension>) -> Self {
-        Self { extension }
-    }
-
-    pub fn emit(&self, metrics: &MetricsSet, registry: &MetricRegistry) {
-        for metric in metrics.iter() {
-            match self.extension.try_emit(metric, registry) {
-                MetricEmitted::Yes => continue,
-                MetricEmitted::No => {}
-            }
-            match metric.value() {
-                MetricValue::OutputRows(count) => registry
-                    .execution_output_row_count
-                    .recorder(count)
-                    .with_optional_attribute(MetricAttribute::PARTITION, metric.partition())
-                    .emit(),
-                MetricValue::ElapsedCompute(time) => registry
-                    .execution_elapsed_compute_time
-                    .recorder(time)
-                    .with_optional_attribute(MetricAttribute::PARTITION, metric.partition())
-                    .emit(),
-                MetricValue::SpillCount(count) => registry
-                    .execution_spill_count
-                    .recorder(count)
-                    .with_optional_attribute(MetricAttribute::PARTITION, metric.partition())
-                    .emit(),
-                MetricValue::SpilledBytes(count) => registry
-                    .execution_spill_size
-                    .recorder(count)
-                    .with_optional_attribute(MetricAttribute::PARTITION, metric.partition())
-                    .emit(),
-                MetricValue::OutputBytes(count) => registry
-                    .execution_output_size
-                    .recorder(count)
-                    .with_optional_attribute(MetricAttribute::PARTITION, metric.partition())
-                    .emit(),
-                MetricValue::SpilledRows(count) => registry
-                    .execution_spill_row_count
-                    .recorder(count)
-                    .with_optional_attribute(MetricAttribute::PARTITION, metric.partition())
-                    .emit(),
-                MetricValue::CurrentMemoryUsage(gauge) => registry
-                    .execution_memory_used
-                    .recorder(gauge)
-                    .with_optional_attribute(MetricAttribute::PARTITION, metric.partition())
-                    .emit(),
-                MetricValue::Count { .. }
-                | MetricValue::Gauge { .. }
-                | MetricValue::Time { .. }
-                | MetricValue::PruningMetrics { .. }
-                | MetricValue::Ratio { .. }
-                | MetricValue::Custom { .. } => {}
-                MetricValue::StartTimestamp(_) | MetricValue::EndTimestamp(_) => {}
+macro_rules! impl_chained_metric_emitter {
+    // We have to use an explicit separator before the last type parameter
+    // to avoid macro parsing ambiguity.
+    ($($Ts:ident)* : $Tn:ident) => {
+        impl<$($Ts: MetricEmitter,)* $Tn: MetricEmitter> MetricEmitter for ($($Ts,)* $Tn,) {
+            fn try_emit(
+                &self,
+                metric: &Metric,
+                attributes: &[KeyValue],
+                registry: &MetricRegistry,
+            ) -> MetricHandled {
+                let paste!(($([<$Ts:lower>],)* [<$Tn:lower>],)) = self;
+                $(if let x @ MetricHandled::Yes = paste!([<$Ts:lower>]).try_emit(metric, attributes, registry) {
+                    return x;
+                })*
+                paste!([<$Tn:lower>]).try_emit(metric, attributes, registry)
             }
         }
+    }
+}
+
+impl_chained_metric_emitter!(: T1);
+impl_chained_metric_emitter!(T1 : T2);
+impl_chained_metric_emitter!(T1 T2 : T3);
+impl_chained_metric_emitter!(T1 T2 T3 : T4);
+impl_chained_metric_emitter!(T1 T2 T3 T4 : T5);
+impl_chained_metric_emitter!(T1 T2 T3 T4 T5 : T6);
+impl_chained_metric_emitter!(T1 T2 T3 T4 T5 T6 : T7);
+impl_chained_metric_emitter!(T1 T2 T3 T4 T5 T6 T7 : T8);
+impl_chained_metric_emitter!(T1 T2 T3 T4 T5 T6 T7 T8 : T9);
+
+/// Build a metric emitter based on the type of the execution plan.
+pub fn build_metric_emitter(plan: &dyn ExecutionPlan) -> Box<dyn MetricEmitter> {
+    let plan = plan.as_any();
+    if plan.is::<FilterExec>() {
+        Box::new((filter::FilterMetricEmitter, default::DefaultMetricEmitter))
+    } else if plan.is::<HashJoinExec>()
+        || plan.is::<PiecewiseMergeJoinExec>()
+        || plan.is::<CrossJoinExec>()
+    {
+        Box::new((
+            join::BuildProbeJoinMetricEmitter,
+            default::DefaultMetricEmitter,
+        ))
+    } else if plan.is::<NestedLoopJoinExec>() {
+        Box::new((
+            join::BuildProbeJoinMetricEmitter,
+            join::NestedLoopJoinMetricEmitter,
+            default::DefaultMetricEmitter,
+        ))
+    } else if plan.is::<SymmetricHashJoinExec>() {
+        Box::new((join::StreamJoinMetricEmitter, default::DefaultMetricEmitter))
+    } else if plan.is::<SortMergeJoinExec>() {
+        Box::new((
+            join::SortMergeJoinMetricEmitter,
+            default::DefaultMetricEmitter,
+        ))
+    } else {
+        Box::new(default::DefaultMetricEmitter)
     }
 }
