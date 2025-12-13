@@ -15,6 +15,7 @@ sail-catalog = { path = "../sail-catalog" }
 sail-function = { path = "../sail-function" }
 sail-logical-plan = { path = "../sail-logical-plan" }
 sail-physical-plan = { path = "../sail-physical-plan" }
+sail-plan-lakehouse = { path = "../sail-plan-lakehouse" }
 
 datafusion = { workspace = true }
 datafusion-common = { workspace = true }

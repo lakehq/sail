@@ -1,0 +1,22 @@
+[package]
+name = "sail-plan-lakehouse"
+version = { workspace = true }
+edition = { workspace = true }
+
+[lints]
+workspace = true
+
+[dependencies]
+sail-data-source = { path = "../sail-data-source" }
+sail-delta-lake = { path = "../sail-delta-lake" }
+sail-logical-plan = { path = "../sail-logical-plan" }
+sail-physical-plan = { path = "../sail-physical-plan" }
+
+datafusion = { workspace = true }
+datafusion-common = { workspace = true }
+datafusion-expr = { workspace = true }
+
+async-trait = { workspace = true }
+url = { workspace = true }
+log = { workspace = true }
+
