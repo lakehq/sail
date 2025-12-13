@@ -1,71 +1,6 @@
 [
   {
     "module": "pyspark.sql.functions",
-    "function": "cume_dist",
-    "status": "supported"
-  },
-  {
-    "module": "pyspark.sql.functions",
-    "function": "dense_rank",
-    "status": "supported"
-  },
-  {
-    "module": "pyspark.sql.functions",
-    "function": "first",
-    "status": "supported"
-  },
-  {
-    "module": "pyspark.sql.functions",
-    "function": "first_value",
-    "status": "supported"
-  },
-  {
-    "module": "pyspark.sql.functions",
-    "function": "lag",
-    "status": "supported"
-  },
-  {
-    "module": "pyspark.sql.functions",
-    "function": "last",
-    "status": "supported"
-  },
-  {
-    "module": "pyspark.sql.functions",
-    "function": "last_value",
-    "status": "supported"
-  },
-  {
-    "module": "pyspark.sql.functions",
-    "function": "lead",
-    "status": "supported"
-  },
-  {
-    "module": "pyspark.sql.functions",
-    "function": "nth_value",
-    "status": "supported"
-  },
-  {
-    "module": "pyspark.sql.functions",
-    "function": "ntile",
-    "status": "supported"
-  },
-  {
-    "module": "pyspark.sql.functions",
-    "function": "rank",
-    "status": "supported"
-  },
-  {
-    "module": "pyspark.sql.functions",
-    "function": "row_number",
-    "status": "supported"
-  },
-  {
-    "module": "pyspark.sql.functions",
-    "function": "percent_rank",
-    "status": "supported"
-  },
-  {
-    "module": "pyspark.sql.functions",
     "function": "any",
     "status": "supported"
   },
@@ -111,6 +46,16 @@
   },
   {
     "module": "pyspark.sql.functions",
+    "function": "bitmap_construct_agg",
+    "status": "in progress"
+  },
+  {
+    "module": "pyspark.sql.functions",
+    "function": "bitmap_or_agg",
+    "status": "in progress"
+  },
+  {
+    "module": "pyspark.sql.functions",
     "function": "bool_and",
     "status": "supported"
   },
@@ -146,6 +91,11 @@
   },
   {
     "module": "pyspark.sql.functions",
+    "function": "count_min_sketch",
+    "status": "in progress"
+  },
+  {
+    "module": "pyspark.sql.functions",
     "function": "covar_pop",
     "status": "supported"
   },
@@ -156,7 +106,27 @@
   },
   {
     "module": "pyspark.sql.functions",
+    "function": "cume_dist",
+    "status": "supported"
+  },
+  {
+    "module": "pyspark.sql.functions",
+    "function": "dense_rank",
+    "status": "supported"
+  },
+  {
+    "module": "pyspark.sql.functions",
     "function": "every",
+    "status": "supported"
+  },
+  {
+    "module": "pyspark.sql.functions",
+    "function": "first",
+    "status": "supported"
+  },
+  {
+    "module": "pyspark.sql.functions",
+    "function": "first_value",
     "status": "supported"
   },
   {
@@ -166,7 +136,47 @@
   },
   {
     "module": "pyspark.sql.functions",
+    "function": "grouping_id",
+    "status": "in progress"
+  },
+  {
+    "module": "pyspark.sql.functions",
+    "function": "histogram_numeric",
+    "status": "in progress"
+  },
+  {
+    "module": "pyspark.sql.functions",
+    "function": "hll_sketch_agg",
+    "status": "in progress"
+  },
+  {
+    "module": "pyspark.sql.functions",
+    "function": "hll_union_agg",
+    "status": "in progress"
+  },
+  {
+    "module": "pyspark.sql.functions",
     "function": "kurtosis",
+    "status": "supported"
+  },
+  {
+    "module": "pyspark.sql.functions",
+    "function": "lag",
+    "status": "supported"
+  },
+  {
+    "module": "pyspark.sql.functions",
+    "function": "last",
+    "status": "supported"
+  },
+  {
+    "module": "pyspark.sql.functions",
+    "function": "last_value",
+    "status": "supported"
+  },
+  {
+    "module": "pyspark.sql.functions",
+    "function": "lead",
     "status": "supported"
   },
   {
@@ -211,7 +221,42 @@
   },
   {
     "module": "pyspark.sql.functions",
+    "function": "nth_value",
+    "status": "supported"
+  },
+  {
+    "module": "pyspark.sql.functions",
+    "function": "ntile",
+    "status": "supported"
+  },
+  {
+    "module": "pyspark.sql.functions",
+    "function": "percent_rank",
+    "status": "supported"
+  },
+  {
+    "module": "pyspark.sql.functions",
+    "function": "percentile",
+    "status": "in progress"
+  },
+  {
+    "module": "pyspark.sql.functions",
     "function": "percentile_approx",
+    "status": "supported"
+  },
+  {
+    "module": "pyspark.sql.functions",
+    "function": "percentile_cont",
+    "status": "in progress"
+  },
+  {
+    "module": "pyspark.sql.functions",
+    "function": "percentile_disc",
+    "status": "in progress"
+  },
+  {
+    "module": "pyspark.sql.functions",
+    "function": "rank",
     "status": "supported"
   },
   {
@@ -257,6 +302,11 @@
   {
     "module": "pyspark.sql.functions",
     "function": "regr_syy",
+    "status": "supported"
+  },
+  {
+    "module": "pyspark.sql.functions",
+    "function": "row_number",
     "status": "supported"
   },
   {
@@ -323,55 +373,5 @@
     "module": "pyspark.sql.functions",
     "function": "variance",
     "status": "supported"
-  },
-  {
-    "module": "pyspark.sql.functions",
-    "function": "bitmap_construct_agg",
-    "status": "in progress"
-  },
-  {
-    "module": "pyspark.sql.functions",
-    "function": "bitmap_or_agg",
-    "status": "in progress"
-  },
-  {
-    "module": "pyspark.sql.functions",
-    "function": "count_min_sketch",
-    "status": "in progress"
-  },
-  {
-    "module": "pyspark.sql.functions",
-    "function": "grouping_id",
-    "status": "in progress"
-  },
-  {
-    "module": "pyspark.sql.functions",
-    "function": "histogram_numeric",
-    "status": "in progress"
-  },
-  {
-    "module": "pyspark.sql.functions",
-    "function": "hll_sketch_agg",
-    "status": "in progress"
-  },
-  {
-    "module": "pyspark.sql.functions",
-    "function": "hll_union_agg",
-    "status": "in progress"
-  },
-  {
-    "module": "pyspark.sql.functions",
-    "function": "percentile",
-    "status": "in progress"
-  },
-  {
-    "module": "pyspark.sql.functions",
-    "function": "percentile_cont",
-    "status": "in progress"
-  },
-  {
-    "module": "pyspark.sql.functions",
-    "function": "percentile_disc",
-    "status": "in progress"
   }
 ]

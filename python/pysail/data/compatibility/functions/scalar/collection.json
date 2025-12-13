@@ -6,6 +6,11 @@
   },
   {
     "module": "pyspark.sql.functions",
+    "function": "concat",
+    "status": "supported"
+  },
+  {
+    "module": "pyspark.sql.functions",
     "function": "deep_size",
     "status": "supported"
   },
@@ -16,17 +21,12 @@
   },
   {
     "module": "pyspark.sql.functions",
-    "function": "size",
-    "status": "supported"
-  },
-  {
-    "module": "pyspark.sql.functions",
-    "function": "concat",
-    "status": "supported"
-  },
-  {
-    "module": "pyspark.sql.functions",
     "function": "reverse",
+    "status": "supported"
+  },
+  {
+    "module": "pyspark.sql.functions",
+    "function": "size",
     "status": "supported"
   },
   {

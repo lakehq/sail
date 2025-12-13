@@ -46,6 +46,16 @@
   },
   {
     "module": "pyspark.sql.functions",
+    "function": "bitmap_construct_agg",
+    "status": "in progress"
+  },
+  {
+    "module": "pyspark.sql.functions",
+    "function": "bitmap_or_agg",
+    "status": "in progress"
+  },
+  {
+    "module": "pyspark.sql.functions",
     "function": "bool_and",
     "status": "supported"
   },
@@ -81,6 +91,11 @@
   },
   {
     "module": "pyspark.sql.functions",
+    "function": "count_min_sketch",
+    "status": "in progress"
+  },
+  {
+    "module": "pyspark.sql.functions",
     "function": "covar_pop",
     "status": "supported"
   },
@@ -108,6 +123,26 @@
     "module": "pyspark.sql.functions",
     "function": "grouping",
     "status": "supported"
+  },
+  {
+    "module": "pyspark.sql.functions",
+    "function": "grouping_id",
+    "status": "in progress"
+  },
+  {
+    "module": "pyspark.sql.functions",
+    "function": "histogram_numeric",
+    "status": "in progress"
+  },
+  {
+    "module": "pyspark.sql.functions",
+    "function": "hll_sketch_agg",
+    "status": "in progress"
+  },
+  {
+    "module": "pyspark.sql.functions",
+    "function": "hll_union_agg",
+    "status": "in progress"
   },
   {
     "module": "pyspark.sql.functions",
@@ -166,8 +201,23 @@
   },
   {
     "module": "pyspark.sql.functions",
+    "function": "percentile",
+    "status": "in progress"
+  },
+  {
+    "module": "pyspark.sql.functions",
     "function": "percentile_approx",
     "status": "supported"
+  },
+  {
+    "module": "pyspark.sql.functions",
+    "function": "percentile_cont",
+    "status": "in progress"
+  },
+  {
+    "module": "pyspark.sql.functions",
+    "function": "percentile_disc",
+    "status": "in progress"
   },
   {
     "module": "pyspark.sql.functions",
@@ -278,55 +328,5 @@
     "module": "pyspark.sql.functions",
     "function": "variance",
     "status": "supported"
-  },
-  {
-    "module": "pyspark.sql.functions",
-    "function": "bitmap_construct_agg",
-    "status": "in progress"
-  },
-  {
-    "module": "pyspark.sql.functions",
-    "function": "bitmap_or_agg",
-    "status": "in progress"
-  },
-  {
-    "module": "pyspark.sql.functions",
-    "function": "count_min_sketch",
-    "status": "in progress"
-  },
-  {
-    "module": "pyspark.sql.functions",
-    "function": "grouping_id",
-    "status": "in progress"
-  },
-  {
-    "module": "pyspark.sql.functions",
-    "function": "histogram_numeric",
-    "status": "in progress"
-  },
-  {
-    "module": "pyspark.sql.functions",
-    "function": "hll_sketch_agg",
-    "status": "in progress"
-  },
-  {
-    "module": "pyspark.sql.functions",
-    "function": "hll_union_agg",
-    "status": "in progress"
-  },
-  {
-    "module": "pyspark.sql.functions",
-    "function": "percentile",
-    "status": "in progress"
-  },
-  {
-    "module": "pyspark.sql.functions",
-    "function": "percentile_cont",
-    "status": "in progress"
-  },
-  {
-    "module": "pyspark.sql.functions",
-    "function": "percentile_disc",
-    "status": "in progress"
   }
 ]

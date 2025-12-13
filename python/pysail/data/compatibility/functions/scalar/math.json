@@ -246,17 +246,17 @@
   },
   {
     "module": "pyspark.sql.functions",
-    "function": "random_poisson",
-    "status": "supported"
-  },
-  {
-    "module": "pyspark.sql.functions",
     "function": "randn",
     "status": "supported"
   },
   {
     "module": "pyspark.sql.functions",
     "function": "random",
+    "status": "supported"
+  },
+  {
+    "module": "pyspark.sql.functions",
+    "function": "random_poisson",
     "status": "supported"
   },
   {
@@ -321,12 +321,12 @@
   },
   {
     "module": "pyspark.sql.functions",
-    "function": "try_multiply",
+    "function": "try_mod",
     "status": "supported"
   },
   {
     "module": "pyspark.sql.functions",
-    "function": "try_mod",
+    "function": "try_multiply",
     "status": "supported"
   },
   {
@@ -341,12 +341,12 @@
   },
   {
     "module": "pyspark.sql.functions",
-    "function": "width_bucket",
-    "status": "supported"
+    "function": "uniform",
+    "status": "in progress"
   },
   {
     "module": "pyspark.sql.functions",
-    "function": "uniform",
-    "status": "in progress"
+    "function": "width_bucket",
+    "status": "supported"
   }
 ]
