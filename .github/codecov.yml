@@ -5,18 +5,30 @@ coverage:
         target: 0
     project:
       default:
-        only_pulls: true
-        paths:
-          - "crates/"
         target: 0
         informational: true
 
 codecov:
   notify:
-    after_n_builds: 1
+    wait_for_ci: yes
+    require_ci_to_pass: yes
 
 comment:
   layout: "header, files"
 
 ignore:
   - "crates/sail-gold-test"
+
+flags:
+  rust-unit:
+    paths:
+      - crates/
+    carry_forward: true
+  python-unit:
+    paths:
+      - crates/
+    carry_forward: true
+  spark-tests:
+    paths:
+      - crates/
+    carry_forward: true
