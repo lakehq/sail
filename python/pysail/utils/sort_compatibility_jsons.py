@@ -11,16 +11,16 @@ import json
 import shutil
 import tempfile
 from pathlib import Path
-from typing import Any
+from typing import Final
 
-EXPECTED_KEYS: list[str] = ["module", "function", "status"]
+EXPECTED_KEYS: Final[tuple[str]] = ("module", "function", "status")
 
 
-def reorder_item(item: dict) -> dict:
+def reorder_item(item: dict[str, str]) -> dict[str, str]:
     """
     reorder dictionary keys: module, function, status, then other keys alphabetically
     """
-    ordered: dict[str, Any] = {}
+    ordered: dict[str, str] = {}
     missing_keys = {ek for ek in EXPECTED_KEYS if ek not in item}
     if missing_keys:
         raise KeyError(f"JSON item {item} does not contain key(s): {missing_keys}")
@@ -34,7 +34,7 @@ def reorder_item(item: dict) -> dict:
     return ordered
 
 
-def sort_json_file(path: Path, key: str = "function") -> None:
+def sort_json_file(path: Path) -> None:
     text = path.read_text(encoding="utf-8")
     data = json.loads(text)
     if not isinstance(data, list):
@@ -42,7 +42,7 @@ def sort_json_file(path: Path, key: str = "function") -> None:
 
     data = [reorder_item(it) for it in data]
 
-    data.sort(key=lambda x: (x["module"], x["function"]))
+    data.sort(key=lambda item: tuple(item[key] for key in EXPECTED_KEYS))
 
     # write atomically to avoid data loss
     with tempfile.NamedTemporaryFile("w", delete=False, dir=path.parent, encoding="utf-8") as tmpf:
@@ -57,7 +57,6 @@ def main() -> None:
     default_dir = Path(__file__).resolve().parents[1] / "data" / "compatibility"
     parser = argparse.ArgumentParser(description="Sort compatibility JSON files by key")
     parser.add_argument("dir", nargs="?", type=Path, default=default_dir, help="Directory with JSON files to sort")
-    parser.add_argument("--key", default="function", help="Dictionary key to sort by (default: function)")
     args = parser.parse_args()
 
     if not args.dir.exists():
@@ -72,7 +71,7 @@ def main() -> None:
 
     for p in json_files:
         try:
-            sort_json_file(p, key=args.key)
+            sort_json_file(p)
             print(f"Sorted: {p}")
         except (KeyError, json.JSONDecodeError) as exc:
             print(f"Failed to sort {p}:\n\t{repr(exc)}")
