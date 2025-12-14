@@ -21,8 +21,9 @@ def reorder_item(item: dict) -> dict:
     reorder dictionary keys: module, function, status, then other keys alphabetically
     """
     ordered: dict[str, Any] = {}
-    if any(ek not in item for ek in EXPECTED_KEYS):
-        raise KeyError(f"JSON items need to contain keys {EXPECTED_KEYS} but found {item}")
+    missing_keys = {ek for ek in EXPECTED_KEYS if ek not in item}
+    if missing_keys:
+        raise KeyError(f"JSON item {item} does not contain key(s): {missing_keys}")
     for k in EXPECTED_KEYS:
         ordered[k] = item[k]
 
