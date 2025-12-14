@@ -66,6 +66,7 @@
   },
   {
     "module": "pyspark.sql.functions",
+    "function": "hll_sketch_estimate",
     "status": "planned",
     "ref": "https://github.com/lakehq/sail/issues/507"
   },

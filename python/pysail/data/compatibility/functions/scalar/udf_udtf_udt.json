@@ -1,33 +1,27 @@
 [
   {
     "module": "pyspark.sql.functions",
-    "function": "broadcast",
-    "status": "not supported"
-  },
-  {
-    "module": "pyspark.sql.functions",
-    "function": "call_function",
-    "status": "partially supported",
-    "info": "Creating a function via Spark SQL does not work yet"
-  },
-  {
-    "module": "pyspark.sql.functions",
-    "function": "col",
+    "function": "call_udf",
     "status": "supported"
   },
   {
     "module": "pyspark.sql.functions",
-    "function": "column",
+    "function": "pandas_udf",
     "status": "supported"
   },
   {
     "module": "pyspark.sql.functions",
-    "function": "expr",
+    "function": "udf",
     "status": "supported"
   },
   {
     "module": "pyspark.sql.functions",
-    "function": "lit",
+    "function": "udtf",
+    "status": "supported"
+  },
+  {
+    "module": "pyspark.sql.functions",
+    "function": "unwrap_udt",
     "status": "supported"
   }
 ]
