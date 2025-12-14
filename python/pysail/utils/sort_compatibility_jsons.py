@@ -8,10 +8,16 @@ from __future__ import annotations
 
 import argparse
 import json
+import logging
 import shutil
 import tempfile
 from pathlib import Path
 from typing import Final
+
+from pysail.utils.logging_config import setup_logging
+
+setup_logging()
+logger = logging.getLogger(__name__)
 
 EXPECTED_KEYS: Final[tuple[str]] = ("module", "function", "status")
 
@@ -28,7 +34,7 @@ def reorder_item(item: dict[str, str]) -> dict[str, str]:
         ordered[k] = item[k]
 
     # remaining keys
-    remaining = [k for k in item.keys() if k not in (EXPECTED_KEYS)]
+    remaining = [k for k in item.keys() if k not in EXPECTED_KEYS]
     for k in sorted(remaining):
         ordered[k] = item[k]
     return ordered
@@ -66,15 +72,15 @@ def main() -> None:
 
     json_files = sorted(p for p in args.dir.rglob("*.json") if p.is_file())
     if not json_files:
-        print(f"No .json files found in {args.dir} (including subdirectories)")
+        logger.info("No .json files found in %s (including subdirectories)", args.dir)
         return
 
-    for p in json_files:
+    for json_file in json_files:
         try:
-            sort_json_file(p)
-            print(f"Sorted: {p}")
-        except (KeyError, json.JSONDecodeError) as exc:
-            print(f"Failed to sort {p}:\n\t{repr(exc)}")
+            sort_json_file(json_file)
+            logger.info("Sorted: %s", json_file)
+        except (KeyError, json.JSONDecodeError) as e:
+            logger.error("Failed to sort %s:\n\t%s", json_file, e)
 
 
 if __name__ == "__main__":
