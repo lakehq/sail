@@ -29,12 +29,13 @@ def reorder_item(item: dict[str, str]) -> dict[str, str]:
     ordered: dict[str, str] = {}
     missing_keys = {ek for ek in EXPECTED_KEYS if ek not in item}
     if missing_keys:
-        raise KeyError(f"JSON item {item} does not contain key(s): {missing_keys}")
+        msg = f"JSON item {item} does not contain key(s): {missing_keys}"
+        raise KeyError(msg)
     for k in EXPECTED_KEYS:
         ordered[k] = item[k]
 
     # remaining keys
-    remaining = [k for k in item.keys() if k not in EXPECTED_KEYS]
+    remaining = [k for k in item if k not in EXPECTED_KEYS]
     for k in sorted(remaining):
         ordered[k] = item[k]
     return ordered
@@ -44,7 +45,8 @@ def sort_json_file(path: Path) -> None:
     text = path.read_text(encoding="utf-8")
     data = json.loads(text)
     if not isinstance(data, list):
-        raise ValueError(f"{path} does not contain a JSON array")
+        msg = f"{path} does not contain a JSON array"
+        raise TypeError(msg)
 
     data = [reorder_item(it) for it in data]
 
@@ -66,9 +68,11 @@ def main() -> None:
     args = parser.parse_args()
 
     if not args.dir.exists():
-        raise SystemExit(f"Directory not found: {args.dir}")
+        msg = f"Directory not found: {args.dir}"
+        raise SystemExit(msg)
     if not args.dir.is_dir():
-        raise SystemExit(f"Not a directory: {args.dir}")
+        msg = f"Not a directory: {args.dir}"
+        raise SystemExit(msg)
 
     json_files = sorted(p for p in args.dir.rglob("*.json") if p.is_file())
     if not json_files:
@@ -79,8 +83,8 @@ def main() -> None:
         try:
             sort_json_file(json_file)
             logger.info("Sorted: %s", json_file)
-        except (KeyError, json.JSONDecodeError) as e:
-            logger.error("Failed to sort %s:\n\t%s", json_file, e)
+        except (KeyError, json.JSONDecodeError):
+            logger.exception("Failed to sort %s", json_file)
 
 
 if __name__ == "__main__":
