@@ -222,7 +222,8 @@
   {
     "module": "pyspark.sql.functions",
     "function": "session_window",
-    "status": "in progress"
+    "status": "planned",
+    "ref": "https://github.com/lakehq/sail/issues/505"
   },
   {
     "module": "pyspark.sql.functions",
@@ -277,22 +278,22 @@
   {
     "module": "pyspark.sql.functions",
     "function": "try_make_interval",
-    "status": "in progress"
+    "status": "??? not on roadmap"
   },
   {
     "module": "pyspark.sql.functions",
     "function": "try_make_timestamp",
-    "status": "in progress"
+    "status": "??? not on roadmap"
   },
   {
     "module": "pyspark.sql.functions",
     "function": "try_make_timestamp_ltz",
-    "status": "in progress"
+    "status": "??? not on roadmap"
   },
   {
     "module": "pyspark.sql.functions",
     "function": "try_make_timestamp_ntz",
-    "status": "in progress"
+    "status": "??? not on roadmap"
   },
   {
     "module": "pyspark.sql.functions",
@@ -337,12 +338,14 @@
   {
     "module": "pyspark.sql.functions",
     "function": "window",
-    "status": "in progress"
+    "status": "planned",
+    "ref": "https://github.com/lakehq/sail/issues/505"
   },
   {
     "module": "pyspark.sql.functions",
     "function": "window_time",
-    "status": "in progress"
+    "status": "planned",
+    "ref": "https://github.com/lakehq/sail/issues/505"
   },
   {
     "module": "pyspark.sql.functions",

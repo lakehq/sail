@@ -17,7 +17,7 @@
   {
     "module": "pyspark.sql.session.SparkSession",
     "function": "readStream",
-    "status": "in progress"
+    "status": "??? not on roadmap"
   },
   {
     "module": "pyspark.sql.session.SparkSession",

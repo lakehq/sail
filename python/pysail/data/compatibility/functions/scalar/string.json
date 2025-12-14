@@ -42,12 +42,12 @@
   {
     "module": "pyspark.sql.functions",
     "function": "collate",
-    "status": "in progress"
+    "status": "??? not on roadmap"
   },
   {
     "module": "pyspark.sql.functions",
     "function": "collation",
-    "status": "in progress"
+    "status": "??? not on roadmap"
   },
   {
     "module": "pyspark.sql.functions",
@@ -87,12 +87,14 @@
   {
     "module": "pyspark.sql.functions",
     "function": "format_number",
-    "status": "in progress"
+    "status": "planned",
+    "ref": "https://github.com/lakehq/sail/issues/508"
   },
   {
     "module": "pyspark.sql.functions",
     "function": "format_string",
-    "status": "in progress"
+    "status": "planned",
+    "ref": "https://github.com/lakehq/sail/issues/508"
   },
   {
     "module": "pyspark.sql.functions",
@@ -157,7 +159,8 @@
   {
     "module": "pyspark.sql.functions",
     "function": "luhn_check",
-    "status": "supported"
+    "status": "planned",
+    "ref": "https://github.com/lakehq/sail/issues/508"
   },
   {
     "module": "pyspark.sql.functions",
@@ -187,12 +190,13 @@
   {
     "module": "pyspark.sql.functions",
     "function": "printf",
-    "status": "in progress"
+    "status": "planned",
+    "ref": "https://github.com/lakehq/sail/issues/508"
   },
   {
     "module": "pyspark.sql.functions",
     "function": "randstr",
-    "status": "in progress"
+    "status": "??? not on roadmap"
   },
   {
     "module": "pyspark.sql.functions",
@@ -202,17 +206,20 @@
   {
     "module": "pyspark.sql.functions",
     "function": "regexp_extract",
-    "status": "in progress"
+    "status": "planned",
+    "ref": "https://github.com/lakehq/sail/issues/508"
   },
   {
     "module": "pyspark.sql.functions",
     "function": "regexp_extract_all",
-    "status": "in progress"
+    "status": "planned",
+    "ref": "https://github.com/lakehq/sail/issues/508"
   },
   {
     "module": "pyspark.sql.functions",
     "function": "regexp_instr",
-    "status": "supported"
+    "status": "planned",
+    "ref": "https://github.com/lakehq/sail/issues/508"
   },
   {
     "module": "pyspark.sql.functions",
@@ -222,7 +229,8 @@
   {
     "module": "pyspark.sql.functions",
     "function": "regexp_substr",
-    "status": "in progress"
+    "status": "planned",
+    "ref": "https://github.com/lakehq/sail/issues/508"
   },
   {
     "module": "pyspark.sql.functions",
@@ -252,12 +260,14 @@
   {
     "module": "pyspark.sql.functions",
     "function": "sentences",
-    "status": "in progress"
+    "status": "planned",
+    "ref": "https://github.com/lakehq/sail/issues/508"
   },
   {
     "module": "pyspark.sql.functions",
     "function": "soundex",
-    "status": "in progress"
+    "status": "planned",
+    "ref": "https://github.com/lakehq/sail/issues/508"
   },
   {
     "module": "pyspark.sql.functions",
@@ -307,7 +317,8 @@
   {
     "module": "pyspark.sql.functions",
     "function": "to_char",
-    "status": "in progress"
+    "status": "planned",
+    "ref": "https://github.com/lakehq/sail/issues/508"
   },
   {
     "module": "pyspark.sql.functions",
@@ -317,7 +328,8 @@
   {
     "module": "pyspark.sql.functions",
     "function": "to_varchar",
-    "status": "in progress"
+    "status": "planned",
+    "ref": "https://github.com/lakehq/sail/issues/508"
   },
   {
     "module": "pyspark.sql.functions",

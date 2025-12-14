@@ -22,14 +22,14 @@
   {
     "module": "pyspark.sql.DataFrame",
     "function": "checkpoint",
-    "status": "in progress",
-    "issue": "https://github.com/lakehq/sail/issues/476"
+    "status": "planned",
+    "ref": "https://github.com/lakehq/sail/issues/476"
   },
   {
     "module": "pyspark.sql.DataFrame",
     "function": "coalesce",
-    "status": "in progress",
-    "issue": "https://github.com/lakehq/sail/issues/477"
+    "status": "planned",
+    "ref": "https://github.com/lakehq/sail/issues/477"
   },
   {
     "module": "pyspark.sql.DataFrame",
@@ -39,8 +39,8 @@
   {
     "module": "pyspark.sql.DataFrame",
     "function": "colRegex",
-    "status": "in progress",
-    "issue": "https://github.com/lakehq/sail/issues/473"
+    "status": "planned",
+    "ref": "https://github.com/lakehq/sail/issues/473"
   },
   {
     "module": "pyspark.sql.DataFrame",
@@ -166,14 +166,14 @@
   {
     "module": "pyspark.sql.DataFrame",
     "function": "foreach",
-    "status": "in progress",
-    "issue": "https://github.com/lakehq/sail/issues/478"
+    "status": "planned",
+    "ref": "https://github.com/lakehq/sail/issues/478"
   },
   {
     "module": "pyspark.sql.DataFrame",
     "function": "foreachPartition",
-    "status": "in progress",
-    "issue": "https://github.com/lakehq/sail/issues/479"
+    "status": "planned",
+    "ref": "https://github.com/lakehq/sail/issues/479"
   },
   {
     "module": "pyspark.sql.DataFrame",
@@ -198,14 +198,14 @@
   {
     "module": "pyspark.sql.DataFrame",
     "function": "hint",
-    "status": "in progress",
-    "issue": "https://github.com/lakehq/sail/issues/480"
+    "status": "planned",
+    "ref": "https://github.com/lakehq/sail/issues/480"
   },
   {
     "module": "pyspark.sql.DataFrame",
     "function": "inputFiles",
-    "status": "in progress",
-    "issue": "https://github.com/lakehq/sail/issues/481"
+    "status": "planned",
+    "ref": "https://github.com/lakehq/sail/issues/481"
   },
   {
     "module": "pyspark.sql.DataFrame",
@@ -250,8 +250,8 @@
   {
     "module": "pyspark.sql.DataFrame",
     "function": "localCheckpoint",
-    "status": "in progress",
-    "issue": "https://github.com/lakehq/sail/issues/482"
+    "status": "planned",
+    "ref": "https://github.com/lakehq/sail/issues/482"
   },
   {
     "module": "pyspark.sql.DataFrame",
@@ -311,8 +311,8 @@
   {
     "module": "pyspark.sql.DataFrame",
     "function": "randomSplit",
-    "status": "in progress",
-    "issue": "https://github.com/lakehq/sail/issues/483"
+    "status": "planned",
+    "ref": "https://github.com/lakehq/sail/issues/483"
   },
   {
     "module": "pyspark.sql.DataFrame",
@@ -347,8 +347,8 @@
   {
     "module": "pyspark.sql.DataFrame",
     "function": "sameSemantics",
-    "status": "in progress",
-    "issue": "https://github.com/lakehq/sail/issues/472"
+    "status": "planned",
+    "ref": "https://github.com/lakehq/sail/issues/472"
   },
   {
     "module": "pyspark.sql.DataFrame",
@@ -413,8 +413,8 @@
   {
     "module": "pyspark.sql.DataFrame",
     "function": "storageLevel",
-    "status": "in progress",
-    "issue": "https://github.com/lakehq/sail/issues/484"
+    "status": "planned",
+    "ref": "https://github.com/lakehq/sail/issues/484"
   },
   {
     "module": "pyspark.sql.DataFrame",
@@ -454,8 +454,8 @@
   {
     "module": "pyspark.sql.DataFrame",
     "function": "toJSON",
-    "status": "in progress",
-    "issue": "https://github.com/lakehq/sail/issues/470"
+    "status": "planned",
+    "ref": "https://github.com/lakehq/sail/issues/470"
   },
   {
     "module": "pyspark.sql.DataFrame",

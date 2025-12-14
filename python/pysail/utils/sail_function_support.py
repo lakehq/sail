@@ -38,8 +38,9 @@ def _decode_support_label(label: str) -> str:
     """Decode support labels into emoji-style status strings."""
     preprocessed_label = label.strip().lower()
     mappings = {
-        "in progress": "🚧 in progress",
+        "planned": "📅 planned",
         "not supported": "❌ not supported",
+        "partially supported": "🚧 partially supported",
         "supported": "✅ supported",
         "unknown": "❔ unknown",
     }

@@ -57,47 +57,53 @@
   {
     "module": "pyspark.sql.functions",
     "function": "from_avro",
-    "status": "in progress"
+    "status": "??? not on roadmap"
   },
   {
     "module": "pyspark.sql.functions",
     "function": "from_protobuf",
-    "status": "in progress"
+    "status": "??? not on roadmap"
   },
   {
     "module": "pyspark.sql.functions",
-    "function": "hll_sketch_estimate",
-    "status": "in progress"
+    "status": "planned",
+    "ref": "https://github.com/lakehq/sail/issues/507"
   },
   {
     "module": "pyspark.sql.functions",
     "function": "hll_union",
-    "status": "in progress"
+    "status": "planned",
+    "ref": "https://github.com/lakehq/sail/issues/507"
   },
   {
     "module": "pyspark.sql.functions",
     "function": "input_file_block_length",
-    "status": "in progress"
+    "status": "planned",
+    "ref": "https://github.com/lakehq/sail/issues/507"
   },
   {
     "module": "pyspark.sql.functions",
     "function": "input_file_block_start",
-    "status": "in progress"
+    "status": "planned",
+    "ref": "https://github.com/lakehq/sail/issues/507"
   },
   {
     "module": "pyspark.sql.functions",
     "function": "input_file_name",
-    "status": "in progress"
+    "status": "planned",
+    "ref": "https://github.com/lakehq/sail/issues/507"
   },
   {
     "module": "pyspark.sql.functions",
     "function": "java_method",
-    "status": "not supported"
+    "status": "planned",
+    "ref": "https://github.com/lakehq/sail/issues/507"
   },
   {
     "module": "pyspark.sql.functions",
     "function": "monotonically_increasing_id",
-    "status": "in progress"
+    "status": "planned",
+    "ref": "https://github.com/lakehq/sail/issues/507"
   },
   {
     "module": "pyspark.sql.functions",
@@ -107,12 +113,13 @@
   {
     "module": "pyspark.sql.functions",
     "function": "reflect",
-    "status": "not supported"
+    "status": "planned",
+    "ref": "https://github.com/lakehq/sail/issues/507"
   },
   {
     "module": "pyspark.sql.functions",
     "function": "schema_of_avro",
-    "status": "in progress"
+    "status": "??? not on roadmap"
   },
   {
     "module": "pyspark.sql.functions",
@@ -122,17 +129,18 @@
   {
     "module": "pyspark.sql.functions",
     "function": "spark_partition_id",
-    "status": "in progress"
+    "status": "planned",
+    "ref": "https://github.com/lakehq/sail/issues/507"
   },
   {
     "module": "pyspark.sql.functions",
     "function": "to_avro",
-    "status": "in progress"
+    "status": "??? not on roadmap"
   },
   {
     "module": "pyspark.sql.functions",
     "function": "to_protobuf",
-    "status": "in progress"
+    "status": "??? not on roadmap"
   },
   {
     "module": "pyspark.sql.functions",
