@@ -227,6 +227,16 @@
   },
   {
     "module": "pyspark.sql.functions",
+    "function": "timestamp_add",
+    "status": "??? not on roadmap"
+  },
+  {
+    "module": "pyspark.sql.functions",
+    "function": "timestamp_diff",
+    "status": "??? not on roadmap"
+  },
+  {
+    "module": "pyspark.sql.functions",
     "function": "timestamp_micros",
     "status": "supported"
   },

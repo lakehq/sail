@@ -206,6 +206,11 @@
   },
   {
     "module": "pyspark.sql.functions",
+    "function": "negate",
+    "status": "supported"
+  },
+  {
+    "module": "pyspark.sql.functions",
     "function": "negative",
     "status": "supported"
   },

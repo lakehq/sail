@@ -41,6 +41,11 @@
   },
   {
     "module": "pyspark.sql.functions",
+    "function": "bitwise_not",
+    "status": "supported"
+  },
+  {
+    "module": "pyspark.sql.functions",
     "function": "getbit",
     "status": "supported"
   },

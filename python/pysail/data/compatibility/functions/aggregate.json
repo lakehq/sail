@@ -89,6 +89,11 @@
   },
   {
     "module": "pyspark.sql.functions",
+    "function": "count_distinct",
+    "status": "supported"
+  },
+  {
+    "module": "pyspark.sql.functions",
     "function": "count_if",
     "status": "supported"
   },
@@ -174,6 +179,11 @@
   },
   {
     "module": "pyspark.sql.functions",
+    "function": "listagg_distinct",
+    "status": "supported"
+  },
+  {
+    "module": "pyspark.sql.functions",
     "function": "max",
     "status": "supported"
   },
@@ -229,6 +239,11 @@
     "function": "percentile_disc",
     "status": "planned",
     "ref": "https://github.com/lakehq/sail/issues/309"
+  },
+  {
+    "module": "pyspark.sql.functions",
+    "function": "product",
+    "status": "??? not on roadmap"
   },
   {
     "module": "pyspark.sql.functions",
@@ -312,7 +327,17 @@
   },
   {
     "module": "pyspark.sql.functions",
+    "function": "string_agg_distinct",
+    "status": "supported"
+  },
+  {
+    "module": "pyspark.sql.functions",
     "function": "sum",
+    "status": "supported"
+  },
+  {
+    "module": "pyspark.sql.functions",
+    "function": "sum_distinct",
     "status": "supported"
   },
   {
