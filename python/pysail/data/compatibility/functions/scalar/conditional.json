@@ -1,17 +1,7 @@
 [
   {
     "module": "pyspark.sql.functions",
-    "function": "case",
-    "status": "supported"
-  },
-  {
-    "module": "pyspark.sql.functions",
     "function": "coalesce",
-    "status": "supported"
-  },
-  {
-    "module": "pyspark.sql.functions",
-    "function": "if",
     "status": "supported"
   },
   {
