@@ -1,0 +1,81 @@
+"""Sort JSON files in the compatibility data directory by the `function` key.
+
+Each file is expected to contain a top-level JSON array. The script sorts
+that array in-place by the `function` attribute of each element.
+"""
+
+from __future__ import annotations
+
+import argparse
+import json
+import shutil
+import tempfile
+from pathlib import Path
+from typing import Any
+
+EXPECTED_KEYS: list[str] = ["module", "function", "status"]
+
+
+def reorder_item(item: dict) -> dict:
+    """
+    reorder dictionary keys: module, function, status, then other keys alphabetically
+    """
+    ordered: dict[str, Any] = {}
+    if any(ek not in item for ek in EXPECTED_KEYS):
+        raise KeyError(f"JSON items need to contain keys {EXPECTED_KEYS} but found {item}")
+    for k in EXPECTED_KEYS:
+        ordered[k] = item[k]
+
+    # remaining keys
+    remaining = [k for k in item.keys() if k not in (EXPECTED_KEYS)]
+    for k in sorted(remaining):
+        ordered[k] = item[k]
+    return ordered
+
+
+def sort_json_file(path: Path, key: str = "function") -> None:
+    text = path.read_text(encoding="utf-8")
+    data = json.loads(text)
+    if not isinstance(data, list):
+        raise ValueError(f"{path} does not contain a JSON array")
+
+    data = [reorder_item(it) for it in data]
+
+    data.sort(key=lambda x: (x["module"], x["function"]))
+
+    # write atomically to avoid data loss
+    with tempfile.NamedTemporaryFile("w", delete=False, dir=path.parent, encoding="utf-8") as tmpf:
+        json.dump(data, tmpf, indent=2, ensure_ascii=False)
+        tmpf.write("\n")
+        tmpname = Path(tmpf.name)
+
+    shutil.move(str(tmpname), str(path))
+
+
+def main() -> None:
+    default_dir = Path(__file__).resolve().parents[1] / "data" / "compatibility"
+    parser = argparse.ArgumentParser(description="Sort compatibility JSON files by key")
+    parser.add_argument("dir", nargs="?", type=Path, default=default_dir, help="Directory with JSON files to sort")
+    parser.add_argument("--key", default="function", help="Dictionary key to sort by (default: function)")
+    args = parser.parse_args()
+
+    if not args.dir.exists():
+        raise SystemExit(f"Directory not found: {args.dir}")
+    if not args.dir.is_dir():
+        raise SystemExit(f"Not a directory: {args.dir}")
+
+    json_files = sorted(p for p in args.dir.rglob("*.json") if p.is_file())
+    if not json_files:
+        print(f"No .json files found in {args.dir} (including subdirectories)")
+        return
+
+    for p in json_files:
+        try:
+            sort_json_file(p, key=args.key)
+            print(f"Sorted: {p}")
+        except (KeyError, json.JSONDecodeError) as exc:
+            print(f"Failed to sort {p}:\n\t{repr(exc)}")
+
+
+if __name__ == "__main__":
+    main()

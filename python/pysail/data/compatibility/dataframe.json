@@ -34,14 +34,14 @@
   },
   {
     "module": "pyspark.sql.DataFrame",
-    "function": "collect",
-    "status": "supported"
-  },
-  {
-    "module": "pyspark.sql.DataFrame",
     "function": "colRegex",
     "status": "planned",
     "ref": "https://github.com/lakehq/sail/issues/473"
+  },
+  {
+    "module": "pyspark.sql.DataFrame",
+    "function": "collect",
+    "status": "supported"
   },
   {
     "module": "pyspark.sql.DataFrame",
@@ -116,11 +116,6 @@
   },
   {
     "module": "pyspark.sql.DataFrame",
-    "function": "drop_duplicates",
-    "status": "supported"
-  },
-  {
-    "module": "pyspark.sql.DataFrame",
     "function": "dropDuplicates",
     "status": "supported"
   },
@@ -128,6 +123,11 @@
     "module": "pyspark.sql.DataFrame",
     "function": "dropDuplicatesWithinWatermark",
     "status": "??? not on roadmap"
+  },
+  {
+    "module": "pyspark.sql.DataFrame",
+    "function": "drop_duplicates",
+    "status": "supported"
   },
   {
     "module": "pyspark.sql.DataFrame",
