@@ -86,6 +86,14 @@ impl SessionManager {
         rx.await
             .map_err(|e| SparkError::internal(format!("failed to get session: {e}")))?
     }
+
+    pub async fn delete_session(&self, key: SessionKey) -> SparkResult<()> {
+        let (tx, rx) = oneshot::channel();
+        let event = SessionManagerEvent::DeleteSession { key, result: tx };
+        self.handle.send(event).await?;
+        rx.await
+            .map_err(|e| SparkError::internal(format!("failed to delete session: {e}")))?
+    }
 }
 
 impl SessionManagerActor {
@@ -300,6 +308,7 @@ pub struct SessionManagerOptions {
     pub runtime: RuntimeHandle,
 }
 
+#[expect(clippy::enum_variant_names)]
 enum SessionManagerEvent {
     GetOrCreateSession {
         key: SessionKey,
@@ -311,6 +320,10 @@ enum SessionManagerEvent {
         /// The time when the session was known to be active.
         instant: Instant,
     },
+    DeleteSession {
+        key: SessionKey,
+        result: oneshot::Sender<SparkResult<()>>,
+    },
 }
 
 impl SpanAssociation for SessionManagerEvent {
@@ -318,6 +331,7 @@ impl SpanAssociation for SessionManagerEvent {
         let name = match self {
             SessionManagerEvent::GetOrCreateSession { .. } => "GetOrCreateSession",
             SessionManagerEvent::ProbeIdleSession { .. } => "ProbeIdleSession",
+            SessionManagerEvent::DeleteSession { .. } => "DeleteSession",
         };
         name.into()
     }
@@ -363,6 +377,9 @@ impl Actor for SessionManagerActor {
             } => self.handle_get_or_create_session(ctx, key, system, result),
             SessionManagerEvent::ProbeIdleSession { key, instant } => {
                 self.handle_probe_idle_session(ctx, key, instant)
+            }
+            SessionManagerEvent::DeleteSession { key, result } => {
+                self.handle_delete_session(ctx, key, result)
             }
         }
     }
@@ -431,6 +448,26 @@ impl SessionManagerActor {
                 }
             }
         }
+        ActorAction::Continue
+    }
+
+    fn handle_delete_session(
+        &mut self,
+        ctx: &mut ActorContext<Self>,
+        key: SessionKey,
+        result: oneshot::Sender<SparkResult<()>>,
+    ) -> ActorAction {
+        let context = self.sessions.remove(&key);
+        let output = if let Some(context) = context {
+            info!("removing session {key}");
+            if let Ok(spark) = context.extension::<SparkSession>() {
+                ctx.spawn(async move { spark.job_runner().stop().await });
+            }
+            Ok(())
+        } else {
+            Err(SparkError::invalid(format!("session not found: {key}")))
+        };
+        let _ = result.send(output);
         ActorAction::Continue
     }
 }
