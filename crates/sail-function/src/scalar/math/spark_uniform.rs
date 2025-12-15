@@ -274,10 +274,10 @@ fn extract_seed(seed_array: Option<&ArrayRef>, i: usize) -> Option<u64> {
         if arr.is_null(i) {
             None
         } else {
-            arr.as_primitive::<datafusion::arrow::datatypes::Int64Type>()
-                .value(i)
-                .try_into()
-                .ok()
+            Some(
+                arr.as_primitive::<datafusion::arrow::datatypes::Int64Type>()
+                    .value(i) as u64,
+            )
         }
     })
 }
