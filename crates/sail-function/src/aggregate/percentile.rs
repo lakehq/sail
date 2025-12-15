@@ -5,7 +5,7 @@ use std::sync::Arc;
 
 use datafusion::arrow;
 use datafusion::arrow::array::{Array, ArrayRef, AsArray, RecordBatch, RecordBatchOptions};
-use datafusion::arrow::datatypes::{DataType, Field, FieldRef, Schema, SchemaRef};
+use datafusion::arrow::datatypes::{DataType, Field, FieldRef, Schema};
 use datafusion::common::cast::{as_float64_array, as_string_array};
 use datafusion::common::ScalarValue;
 use datafusion::error::Result;
@@ -15,6 +15,7 @@ use datafusion::physical_expr::PhysicalExpr;
 use datafusion_common::DataFusionError;
 use datafusion_expr_common::columnar_value::ColumnarValue;
 use ordered_float::OrderedFloat;
+use sail_common_datafusion::literal::LiteralValue;
 
 /// The `PercentileFunction` calculates the exact percentile (quantile) from a set of values.
 ///
@@ -792,46 +793,58 @@ impl Accumulator for IntervalPercentileAccumulator {
 
 /// Extract a literal f64 value from a PhysicalExpr (for percentile parameter)
 fn extract_literal(expr: &Arc<dyn PhysicalExpr>) -> Result<f64, DataFusionError> {
-    fn dummy_batch() -> Result<RecordBatch> {
-        let fields: Vec<Field> = Vec::new();
-        let schema: SchemaRef = Arc::new(Schema::new(fields));
+    // Create empty batch to evaluate the physical expression
+    let fields: Vec<Field> = vec![];
+    let schema = Arc::new(Schema::new(fields));
+    let batch = RecordBatch::try_new_with_options(
+        schema,
+        vec![],
+        &RecordBatchOptions::default().with_row_count(Some(1)),
+    )?;
 
-        RecordBatch::try_new_with_options(
-            schema,
-            Vec::new(),
-            &RecordBatchOptions::default().with_row_count(Some(1)),
-        )
-        .map_err(DataFusionError::from)
-    }
-
-    let batch = dummy_batch()?;
+    // Evaluate the expression to get a scalar value
     let col_val = expr.evaluate(&batch)?;
     let scalar = match col_val {
         ColumnarValue::Scalar(s) => s,
         ColumnarValue::Array(arr) => ScalarValue::try_from_array(arr.as_ref(), 0)?,
     };
 
-    fn scalar_to_f64(sv: &ScalarValue) -> Option<f64> {
-        match sv {
-            ScalarValue::Float64(Some(v)) => Some(*v),
-            ScalarValue::Float32(Some(v)) => Some(*v as f64),
-            ScalarValue::Int64(Some(v)) => Some(*v as f64),
-            ScalarValue::UInt64(Some(v)) => Some(*v as f64),
-            ScalarValue::Int32(Some(v)) => Some(*v as f64),
-            ScalarValue::UInt32(Some(v)) => Some(*v as f64),
-            ScalarValue::Decimal128(Some(v), _precision, scale) => {
-                Some((*v as f64) / 10f64.powi(*scale as i32))
-            }
-            _ => None,
+    // Convert scalar to f64, supporting numeric types and decimals
+    let percentile: f64 = match &scalar {
+        // Try native f64 types first
+        ScalarValue::Float64(Some(v)) => *v,
+        ScalarValue::Float32(Some(v)) => *v as f64,
+        ScalarValue::Float16(Some(v)) => f64::from(*v),
+        // Try integers (use LiteralValue for validation)
+        ScalarValue::Int8(_)
+        | ScalarValue::Int16(_)
+        | ScalarValue::Int32(_)
+        | ScalarValue::Int64(_)
+        | ScalarValue::UInt8(_)
+        | ScalarValue::UInt16(_)
+        | ScalarValue::UInt32(_)
+        | ScalarValue::UInt64(_) => {
+            // LiteralValue will validate and convert
+            let int_val = LiteralValue(&scalar).try_to_i64().map_err(|e| {
+                DataFusionError::Execution(format!(
+                    "Cannot convert percentile literal {:?} to integer: {}",
+                    scalar, e
+                ))
+            })?;
+            int_val as f64
         }
-    }
+        // Handle decimals
+        ScalarValue::Decimal128(Some(v), _precision, scale) => {
+            (*v as f64) / 10f64.powi(*scale as i32)
+        }
+        _ => {
+            return Err(DataFusionError::Execution(format!(
+                "Cannot convert percentile literal {:?} to f64",
+                scalar
+            )))
+        }
+    };
 
-    let percentile: f64 = scalar_to_f64(&scalar).ok_or_else(|| {
-        DataFusionError::Execution(format!(
-            "Cannot convert percentile literal {:?} to f64",
-            scalar
-        ))
-    })?;
     Ok(percentile)
 }
 

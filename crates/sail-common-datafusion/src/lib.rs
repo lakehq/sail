@@ -4,6 +4,7 @@ pub mod display;
 pub mod error;
 pub mod extension;
 pub mod formatter;
+pub mod literal;
 pub mod rename;
 pub mod schema_adapter;
 pub mod streaming;
