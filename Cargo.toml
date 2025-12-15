@@ -77,7 +77,7 @@ fastrace = { version = "0.7.14", features = ["enable"] }
 fastrace-opentelemetry = "0.14.0"
 fastrace-futures = "0.7.14"
 opentelemetry = "0.31.0"
-opentelemetry_sdk = "0.31.0"
+opentelemetry_sdk = { version = "0.31.0", features = ["testing"] }
 opentelemetry-otlp = { version = "0.31.0", features = ["tls", "tls-roots", "grpc-tonic"] }
 opentelemetry-appender-log = "0.31.0"
 figment = { version = "0.10.19", features = ["toml", "env"] }

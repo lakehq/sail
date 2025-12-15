@@ -7,7 +7,7 @@ use std::task::{Context, Poll};
 use datafusion::arrow::array::RecordBatch;
 use datafusion::arrow::datatypes::SchemaRef;
 use datafusion::common::tree_node::{Transformed, TransformedResult, TreeNode};
-use datafusion::common::{Result, Statistics};
+use datafusion::common::{plan_err, Result, Statistics};
 use datafusion::config::ConfigOptions;
 use datafusion::execution::{SendableRecordBatchStream, TaskContext};
 use datafusion::physical_expr::{Distribution, OrderingRequirements, PhysicalExpr};
@@ -27,14 +27,43 @@ use futures::Stream;
 use pin_project_lite::pin_project;
 use sail_common_datafusion::utils::items::ItemTaker;
 
-use crate::common::SpanAttribute;
+use crate::common::{KeyValue, SpanAttribute};
 use crate::execution::metrics::MetricEmitter;
-use crate::metrics::MetricRegistry;
-use crate::telemetry::global_metric_registry;
+use crate::metrics::{MetricAttribute, MetricRegistry};
 
-pub fn trace_execution_plan(plan: Arc<dyn ExecutionPlan>) -> Result<Arc<dyn ExecutionPlan>> {
-    plan.transform(|plan| Ok(Transformed::yes(Arc::new(TracingExec::new(plan)))))
-        .data()
+#[derive(Debug, Clone, Default)]
+pub struct TracingExecOptions {
+    pub metric_registry: Option<Arc<MetricRegistry>>,
+    pub job_id: Option<u64>,
+    pub task_id: Option<u64>,
+    pub task_attempt: Option<usize>,
+    pub operator_id: Option<u64>,
+}
+
+impl TracingExecOptions {
+    pub fn with_metric_registry(mut self, registry: Arc<MetricRegistry>) -> Self {
+        self.metric_registry = Some(registry);
+        self
+    }
+}
+
+pub fn trace_execution_plan(
+    plan: Arc<dyn ExecutionPlan>,
+    options: TracingExecOptions,
+) -> Result<Arc<dyn ExecutionPlan>> {
+    if options.operator_id.is_some() {
+        return plan_err!(
+            "operator ID is supposed to be assigned automatically for tracing execution plan"
+        );
+    }
+    let mut index = 0u64;
+    plan.transform(|plan| {
+        let mut options = options.clone();
+        index += 1;
+        options.operator_id = Some(index);
+        Ok(Transformed::yes(Arc::new(TracingExec::new(plan, options))))
+    })
+    .data()
 }
 
 /// A physical execution plan wrapper that emits traces and metrics
@@ -48,11 +77,12 @@ pub fn trace_execution_plan(plan: Arc<dyn ExecutionPlan>) -> Result<Arc<dyn Exec
 #[derive(Debug)]
 pub struct TracingExec {
     inner: Arc<dyn ExecutionPlan>,
+    options: TracingExecOptions,
 }
 
 impl TracingExec {
-    pub fn new(inner: Arc<dyn ExecutionPlan>) -> Self {
-        Self { inner }
+    pub fn new(inner: Arc<dyn ExecutionPlan>, options: TracingExecOptions) -> Self {
+        Self { inner, options }
     }
 }
 
@@ -116,12 +146,12 @@ impl ExecutionPlan for TracingExec {
         children: Vec<Arc<dyn ExecutionPlan>>,
     ) -> Result<Arc<dyn ExecutionPlan>> {
         let child = children.one()?;
-        Ok(Arc::new(TracingExec::new(child)))
+        Ok(Arc::new(TracingExec::new(child, self.options.clone())))
     }
 
     fn reset_state(self: Arc<Self>) -> Result<Arc<dyn ExecutionPlan>> {
         let child = Arc::clone(&self.inner);
-        Ok(Arc::new(TracingExec::new(child)))
+        Ok(Arc::new(TracingExec::new(child, self.options.clone())))
     }
 
     fn repartitioned(
@@ -144,12 +174,13 @@ impl ExecutionPlan for TracingExec {
             self.inner.execute(partition, context)?
         };
         let schema = stream.schema();
-        if let Some(registry) = global_metric_registry() {
+        if let Some(ref registry) = self.options.metric_registry {
             let stream = MetricEmitterStream {
                 inner: stream,
                 plan: self.inner.clone(),
-                emitter: MetricEmitter::default(),
-                registry,
+                emitter: self.build_metric_emitter(),
+                attributes: self.build_metric_attributes(),
+                registry: registry.clone(),
             };
             Ok(Box::pin(RecordBatchStreamAdapter::new(
                 schema,
@@ -225,12 +256,43 @@ impl ExecutionPlan for TracingExec {
     }
 }
 
+impl TracingExec {
+    fn build_metric_emitter(&self) -> Box<dyn MetricEmitter> {
+        crate::execution::metrics::build_metric_emitter(self.inner.as_ref())
+    }
+
+    fn build_metric_attributes(&self) -> Vec<KeyValue> {
+        let mut attributes = vec![];
+        if let Some(job_id) = self.options.job_id {
+            attributes.push((MetricAttribute::JOB_ID, job_id.to_string().into()));
+        }
+        if let Some(task_id) = self.options.task_id {
+            attributes.push((MetricAttribute::TASK_ID, task_id.to_string().into()));
+        }
+        if let Some(task_attempt) = self.options.task_attempt {
+            attributes.push((
+                MetricAttribute::TASK_ATTEMPT,
+                task_attempt.to_string().into(),
+            ));
+        }
+        if let Some(operator_id) = self.options.operator_id {
+            attributes.push((MetricAttribute::OPERATOR_ID, operator_id.to_string().into()));
+        }
+        attributes.push((
+            MetricAttribute::OPERATOR_NAME,
+            self.inner.name().to_string().into(),
+        ));
+        attributes
+    }
+}
+
 pin_project! {
     struct MetricEmitterStream {
         #[pin]
         inner: SendableRecordBatchStream,
         plan: Arc<dyn ExecutionPlan>,
-        emitter: MetricEmitter,
+        emitter: Box<dyn MetricEmitter>,
+        attributes: Vec<KeyValue>,
         registry: Arc<MetricRegistry>,
     }
 }
@@ -243,7 +305,11 @@ impl Stream for MetricEmitterStream {
         let poll = this.inner.poll_next(cx);
         if poll.is_ready() {
             if let Some(metrics) = this.plan.metrics() {
-                this.emitter.emit(&metrics, this.registry)
+                for metric in metrics.iter() {
+                    let _ = this
+                        .emitter
+                        .try_emit(metric, this.attributes, this.registry);
+                }
             }
         }
         poll
