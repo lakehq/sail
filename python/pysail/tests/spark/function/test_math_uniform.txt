@@ -156,7 +156,10 @@ root
 root
  |-- result: decimal(10,8) (nullable = false)
 
-# check here spark |-- result: decimal(20,0) (nullable = false)
+# Spark's Decimal Type Rule: When one decimal has significantly larger precision,
+# use that decimal's type completely (precision AND scale), not max(scale).
+# Input: 1.2 is Decimal(2,1) and 12345678901234567890 is Decimal(20,0)
+# Result: Since p2 (20) >> p1 (2), use Decimal(20,0) completely (not max(1,0)=1)
 >>> spark.sql("""
 ...   SELECT uniform(
 ...     1.2,
@@ -165,7 +168,7 @@ root
 ...   ) AS result
 ... """).printSchema()
 root
- |-- result: decimal(20,1) (nullable = false)
+ |-- result: decimal(20,0) (nullable = false)
 
 >>> spark.sql("""
 ...   SELECT uniform(
@@ -177,7 +180,9 @@ root
 root
  |-- result: decimal(20,0) (nullable = false)
 
->>> INT_MAX   = 2**31 - 1
+# Decimal + Int32 → uses Decimal type (ignores Int32)
+# INT_MAX (2147483647) is Int32, so it gets coerced based on Decimal presence
+>>> INT_MAX = 2**31 - 1
 >>> spark.sql(f"""
 ...   SELECT uniform(
 ...     1.2,
@@ -188,61 +193,20 @@ root
 root
  |-- result: decimal(2,1) (nullable = false)
 
-
->>> INT64_MAX = 2**31 - 1
->>> spark.sql(f"""
-...   SELECT uniform(
-...     1.2,
-...     {INT64_MAX},
-...     42
-...   ) AS result
-... """).printSchema()
-root
- |-- result: decimal(2,1) (nullable = false)
-
->>> NEXT_INT64_MAX = INT64_MAX
->>> spark.sql(f"""
-...   SELECT uniform(
-...     1.2,
-...     {NEXT_INT64_MAX},
-...     42
-...   ) AS result
-... """).printSchema()
-root
- |-- result: decimal(2,1) (nullable = false)
-
-
-# To get Decimal(20,0), both inputs must have scale 0
-spark.sql("""
-  SELECT uniform(
-    CAST(1 AS DECIMAL(1,0)),
-    CAST(12345678901234567890 AS DECIMAL(20,0)),
-    42
-  ) AS result
-""").printSchema()
-root
- |-- result: decimal(20,0) (nullable = false)
-
+# Decimal + BIGINT → uses Decimal type (ignores Int64)
 >>> spark.sql("""
 ...   SELECT uniform(
-...     CAST(1.2 AS DECIMAL(2,1)),
-...     CAST(12345678901234567890 AS DECIMAL(20,0)),
-...     42
+...     1.2,
+...     CAST(9223372036854775807 AS BIGINT),
+...     43
 ...   ) AS result
 ... """).printSchema()
 root
- |-- result: decimal(20,0) (nullable = false)
-
-spark.sql("""
-  SELECT uniform(
-    1.2,
-    CAST(9223372036854775807 AS BIGINT),
-    43
-  ) AS result
-""").printSchema()
-root
  |-- result: decimal(2,1) (nullable = false)
 
+>>> spark.sql("SELECT uniform(5.65, 100.0, 123) AS result").printSchema()
+root
+ |-- result: decimal(4,1) (nullable = false)
 
 # With ANSI mode enabled (default), decimal overflow raises exception
 # Note: The exception is Py4JJavaError wrapping SparkArithmeticException
