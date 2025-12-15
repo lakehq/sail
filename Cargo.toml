@@ -63,7 +63,7 @@ rand_chacha = "0.9.0"
 rand_distr = "0.5.1"
 url = "2.5.7"
 lexical-core = { version = "1.0.6", default-features = false, features = ["write-integers", "write-floats", "parse-integers", "parse-floats"] }
-aws-config = "1.8.11"
+aws-config = "1.8.12"
 aws-credential-types = "1.2.9"
 aws-smithy-runtime-api = "1.9.1"
 aws-smithy-types = "1.3.3"
@@ -73,16 +73,16 @@ num_enum = "0.7.4"
 num-traits = "0.2.19"
 log = "0.4.29"
 env_logger = "0.11.8"
-fastrace = { version = "0.7.14", features = ["enable"] }
+fastrace = { version = "0.7.15", features = ["enable"] }
 fastrace-opentelemetry = "0.14.0"
-fastrace-futures = "0.7.14"
+fastrace-futures = "0.7.15"
 opentelemetry = "0.31.0"
 opentelemetry_sdk = { version = "0.31.0", features = ["testing"] }
 opentelemetry-otlp = { version = "0.31.0", features = ["tls", "tls-roots", "grpc-tonic"] }
 opentelemetry-appender-log = "0.31.0"
 figment = { version = "0.10.19", features = ["toml", "env"] }
 kube = "2.0.1"
-k8s-openapi = { version = "0.26.0", features = ["latest"] }
+k8s-openapi = { version = "0.26.1", features = ["latest"] }
 twox-hash = "2.1.2"
 murmur3 = "0.5.2"
 aes = "0.8.4"
@@ -97,7 +97,7 @@ iana-time-zone = "0.1.64"
 chumsky = { version = "0.11.2", default-features = false, features = ["pratt"] }
 num = "0.4.3"
 hf-hub = { version = "0.4.3", default-features = false, features = ["tokio"] }
-reqwest = { version = "0.12.24", default-features = false, features = ["rustls-tls", "json", "multipart", "stream"] }
+reqwest = { version = "0.12.26", default-features = false, features = ["rustls-tls", "json", "multipart", "stream"] }
 percent-encoding = "2.3.2"
 rustls = "0.23.35"
 dashmap = "6.1.0"
