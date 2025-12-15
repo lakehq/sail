@@ -24,7 +24,6 @@ pub mod error;
 pub mod explain;
 pub mod formatter;
 pub mod function;
-pub mod literal;
 pub mod planner;
 pub mod resolver;
 mod streaming;
