@@ -1,14 +1,17 @@
 use std::any::Any;
 use std::sync::Arc;
 
-use datafusion::arrow::array::{Decimal128Array, Float64Array, Int32Array, Int64Array};
-use datafusion::arrow::datatypes::{
-    DataType, Field, FieldRef, DECIMAL128_MAX_PRECISION, DECIMAL128_MAX_SCALE,
+use datafusion::arrow::array::{
+    Array, ArrayRef, Decimal128Array, Float64Array, Int32Array, Int64Array, PrimitiveArray,
 };
-use datafusion_common::{Result, ScalarValue};
+use datafusion::arrow::datatypes::{
+    DataType, Field, FieldRef, Int32Type, DECIMAL128_MAX_PRECISION, DECIMAL128_MAX_SCALE,
+};
+use datafusion_common::Result;
 use datafusion_expr::{
     ColumnarValue, ReturnFieldArgs, ScalarFunctionArgs, ScalarUDFImpl, Signature, Volatility,
 };
+use datafusion_functions::utils::make_scalar_function;
 use rand::rngs::StdRng;
 use rand::{rng, Rng, SeedableRng};
 
@@ -81,7 +84,6 @@ impl SparkUniform {
         match dt {
             DataType::Decimal128(p, s) => Some((*p, *s)),
             DataType::Decimal256(p, s) => {
-                // Only support Decimal256 if it fits in Decimal128 limits
                 if *p <= DECIMAL128_MAX_PRECISION && *s <= DECIMAL128_MAX_SCALE {
                     Some((*p, *s))
                 } else {
@@ -139,14 +141,8 @@ impl SparkUniform {
                 let (precision, scale) = Self::calculate_decimal_output(p1, s1, p2, s2);
                 DataType::Decimal128(precision, scale)
             }
-            (Some((p, s)), None) => {
-                // Only min is decimal
-                DataType::Decimal128(p, s)
-            }
-            (None, Some((p, s))) => {
-                // Only max is decimal
-                DataType::Decimal128(p, s)
-            }
+            (Some((p, s)), None) => DataType::Decimal128(p, s),
+            (None, Some((p, s))) => DataType::Decimal128(p, s),
             (None, None) => {
                 // Neither is decimal
                 DataType::Float64
@@ -189,151 +185,7 @@ impl ScalarUDFImpl for SparkUniform {
     }
 
     fn invoke_with_args(&self, args: ScalarFunctionArgs) -> Result<ColumnarValue> {
-        let ScalarFunctionArgs {
-            args, number_rows, ..
-        } = args;
-
-        // Extract min and max (must be scalars)
-        let min = match &args[0] {
-            ColumnarValue::Scalar(s) => s.clone(),
-            ColumnarValue::Array(_) => {
-                return Err(generic_exec_err(
-                    "uniform",
-                    "min must be a scalar value, not an array",
-                ))
-            }
-        };
-
-        let max = match &args[1] {
-            ColumnarValue::Scalar(s) => s.clone(),
-            ColumnarValue::Array(_) => {
-                return Err(generic_exec_err(
-                    "uniform",
-                    "max must be a scalar value, not an array",
-                ))
-            }
-        };
-
-        // Extract seed if present
-        let seed: Option<u64> = if args.len() == 3 {
-            match &args[2] {
-                ColumnarValue::Scalar(scalar) => match scalar {
-                    ScalarValue::Int64(Some(value)) => Some(*value as u64),
-                    ScalarValue::UInt64(Some(value)) => Some(*value),
-                    ScalarValue::Int64(None) | ScalarValue::UInt64(None) | ScalarValue::Null => {
-                        None
-                    }
-                    _ => {
-                        return Err(generic_exec_err(
-                            "uniform",
-                            &format!("seed must be an integer, got {}", scalar.data_type()),
-                        ))
-                    }
-                },
-                ColumnarValue::Array(_) => {
-                    return Err(generic_exec_err(
-                        "uniform",
-                        "seed must be a scalar value, not an array",
-                    ))
-                }
-            }
-        } else {
-            None
-        };
-
-        // Generate values based on type
-        match (&min, &max) {
-            (ScalarValue::Int32(Some(min_val)), ScalarValue::Int32(Some(max_val))) => {
-                let values = generate_uniform_int32(*min_val, *max_val, seed, number_rows)?;
-                let array = Int32Array::from(values);
-                Ok(ColumnarValue::Array(Arc::new(array)))
-            }
-            (ScalarValue::Int64(Some(min_val)), ScalarValue::Int64(Some(max_val))) => {
-                let values = generate_uniform_int64(*min_val, *max_val, seed, number_rows)?;
-                let array = Int64Array::from(values);
-                Ok(ColumnarValue::Array(Arc::new(array)))
-            }
-            (ScalarValue::Float64(Some(min_val)), ScalarValue::Float64(Some(max_val))) => {
-                let values = generate_uniform_float(*min_val, *max_val, seed, number_rows)?;
-                let array = Float64Array::from(values);
-                Ok(ColumnarValue::Array(Arc::new(array)))
-            }
-            (
-                ScalarValue::Decimal128(Some(min_val), p1, s1),
-                ScalarValue::Decimal128(Some(max_val), p2, s2),
-            ) => {
-                // Convert Decimal128 to f64 for generation
-                let min_f64 = *min_val as f64 / 10_f64.powi(*s1 as i32);
-                let max_f64 = *max_val as f64 / 10_f64.powi(*s2 as i32);
-
-                // Generate float values
-                let float_values = generate_uniform_float(min_f64, max_f64, seed, number_rows)?;
-
-                // Convert back to Decimal128
-                let (precision, scale) = Self::calculate_decimal_output(*p1, *s1, *p2, *s2);
-                let decimal_values: Vec<i128> = float_values
-                    .iter()
-                    .map(|&v| (v * 10_f64.powi(scale as i32)).round() as i128)
-                    .collect();
-
-                let array = Decimal128Array::from(decimal_values)
-                    .with_precision_and_scale(precision, scale)?;
-                Ok(ColumnarValue::Array(Arc::new(array)))
-            }
-            (
-                ScalarValue::Decimal256(Some(min_val), p1, s1),
-                ScalarValue::Decimal256(Some(max_val), p2, s2),
-            ) => {
-                // Only support if precision and scale fit in Decimal128
-                if *p1 > DECIMAL128_MAX_PRECISION
-                    || *s1 > DECIMAL128_MAX_SCALE
-                    || *p2 > DECIMAL128_MAX_PRECISION
-                    || *s2 > DECIMAL128_MAX_SCALE
-                {
-                    return Err(generic_exec_err(
-                        "uniform",
-                        &format!(
-                            "Decimal256 with precision > {} or scale > {} is not supported",
-                            DECIMAL128_MAX_PRECISION, DECIMAL128_MAX_SCALE
-                        ),
-                    ));
-                }
-
-                // Convert Decimal256 to f64 for generation
-                // Note: i256 to f64 conversion may lose precision for very large values
-                let min_f64 = min_val
-                    .to_i128()
-                    .ok_or_else(|| generic_exec_err("uniform", "Decimal256 min value overflow"))?
-                    as f64
-                    / 10_f64.powi(*s1 as i32);
-
-                let max_f64 = max_val
-                    .to_i128()
-                    .ok_or_else(|| generic_exec_err("uniform", "Decimal256 max value overflow"))?
-                    as f64
-                    / 10_f64.powi(*s2 as i32);
-
-                let float_values = generate_uniform_float(min_f64, max_f64, seed, number_rows)?;
-
-                let (precision, scale) = Self::calculate_decimal_output(*p1, *s1, *p2, *s2);
-                let decimal_values: Vec<i128> = float_values
-                    .iter()
-                    .map(|&v| (v * 10_f64.powi(scale as i32)).round() as i128)
-                    .collect();
-
-                let array = Decimal128Array::from(decimal_values)
-                    .with_precision_and_scale(precision, scale)?;
-                Ok(ColumnarValue::Array(Arc::new(array)))
-            }
-            _ => Err(generic_exec_err(
-                "uniform",
-                &format!(
-                    "unsupported types for min and max: {} and {}",
-                    min.data_type(),
-                    max.data_type()
-                ),
-            )),
-        }
+        make_scalar_function(uniform, vec![])(&args.args)
     }
 
     fn coerce_types(&self, arg_types: &[DataType]) -> Result<Vec<DataType>> {
@@ -413,6 +265,127 @@ macro_rules! generate_uniform_fn {
 generate_uniform_fn!(generate_uniform_int32, i32);
 generate_uniform_fn!(generate_uniform_int64, i64);
 generate_uniform_fn!(generate_uniform_float, f64);
+
+#[inline]
+fn extract_seed(seed_array: Option<&ArrayRef>, i: usize) -> Option<u64> {
+    use datafusion::arrow::array::AsArray;
+
+    seed_array.and_then(|arr| {
+        if arr.is_null(i) {
+            None
+        } else {
+            arr.as_primitive::<datafusion::arrow::datatypes::Int64Type>()
+                .value(i)
+                .try_into()
+                .ok()
+        }
+    })
+}
+
+fn uniform(args: &[ArrayRef]) -> Result<ArrayRef> {
+    use datafusion::arrow::array::AsArray;
+
+    let min_array = &args[0];
+    let max_array = &args[1];
+    let seed_array = args.get(2);
+
+    let number_rows = min_array.len();
+
+    let output_type =
+        SparkUniform::calculate_output_type(min_array.data_type(), max_array.data_type());
+
+    match output_type {
+        DataType::Int32 => {
+            let min_arr: &PrimitiveArray<Int32Type> =
+                min_array.as_primitive::<datafusion::arrow::datatypes::Int32Type>();
+            let max_arr: &PrimitiveArray<Int32Type> =
+                max_array.as_primitive::<datafusion::arrow::datatypes::Int32Type>();
+
+            let mut builder = Int32Array::builder(number_rows);
+            for i in 0..number_rows {
+                if min_arr.is_null(i) || max_arr.is_null(i) {
+                    builder.append_null();
+                } else {
+                    let min_val = min_arr.value(i);
+                    let max_val = max_arr.value(i);
+                    let seed_val = extract_seed(seed_array, i);
+                    builder.append_value(generate_uniform_int32(min_val, max_val, seed_val, 1)?[0]);
+                }
+            }
+
+            Ok(Arc::new(builder.finish()))
+        }
+        DataType::Int64 => {
+            let min_arr = min_array.as_primitive::<datafusion::arrow::datatypes::Int64Type>();
+            let max_arr = max_array.as_primitive::<datafusion::arrow::datatypes::Int64Type>();
+
+            let mut builder = Int64Array::builder(number_rows);
+            for i in 0..number_rows {
+                if min_arr.is_null(i) || max_arr.is_null(i) {
+                    builder.append_null();
+                } else {
+                    let min_val = min_arr.value(i);
+                    let max_val = max_arr.value(i);
+                    let seed_val = extract_seed(seed_array, i);
+                    builder.append_value(generate_uniform_int64(min_val, max_val, seed_val, 1)?[0]);
+                }
+            }
+
+            Ok(Arc::new(builder.finish()))
+        }
+        DataType::Float64 => {
+            let min_arr = min_array.as_primitive::<datafusion::arrow::datatypes::Float64Type>();
+            let max_arr = max_array.as_primitive::<datafusion::arrow::datatypes::Float64Type>();
+
+            let mut builder = Float64Array::builder(number_rows);
+            for i in 0..number_rows {
+                if min_arr.is_null(i) || max_arr.is_null(i) {
+                    builder.append_null();
+                } else {
+                    let min_val = min_arr.value(i);
+                    let max_val = max_arr.value(i);
+                    let seed_val = extract_seed(seed_array, i);
+                    builder.append_value(generate_uniform_float(min_val, max_val, seed_val, 1)?[0]);
+                }
+            }
+
+            Ok(Arc::new(builder.finish()))
+        }
+        DataType::Decimal128(precision, scale) => {
+            let min_arr = min_array.as_primitive::<datafusion::arrow::datatypes::Decimal128Type>();
+            let max_arr = max_array.as_primitive::<datafusion::arrow::datatypes::Decimal128Type>();
+
+            let mut builder =
+                Decimal128Array::builder(number_rows).with_precision_and_scale(precision, scale)?;
+
+            for i in 0..number_rows {
+                if min_arr.is_null(i) || max_arr.is_null(i) {
+                    builder.append_null();
+                } else {
+                    let min_val = min_arr.value(i);
+                    let max_val = max_arr.value(i);
+                    let seed_val = extract_seed(seed_array, i);
+
+                    // Convert Decimal128 to f64 for generation
+                    let min_f64 = min_val as f64 / 10_f64.powi(scale as i32);
+                    let max_f64 = max_val as f64 / 10_f64.powi(scale as i32);
+
+                    // Generate and convert back to Decimal128
+                    let float_val = generate_uniform_float(min_f64, max_f64, seed_val, 1)?[0];
+                    let decimal_val = (float_val * 10_f64.powi(scale as i32)).round() as i128;
+
+                    builder.append_value(decimal_val);
+                }
+            }
+
+            Ok(Arc::new(builder.finish()))
+        }
+        _ => Err(generic_exec_err(
+            "uniform",
+            &format!("Unsupported array type: {}", output_type),
+        )),
+    }
+}
 
 #[cfg(test)]
 mod tests {
