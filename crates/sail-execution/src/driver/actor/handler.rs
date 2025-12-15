@@ -51,7 +51,10 @@ impl DriverActor {
         let server = mem::take(&mut self.server);
         self.server = match server.ready(signal, port) {
             Ok(x) => x,
-            Err(e) => return ActorAction::fail(e),
+            Err(e) => {
+                error!("{e}");
+                return ActorAction::Stop;
+            }
         };
         info!("driver server is ready on port {port}");
         self.start_workers(ctx, self.options().worker_initial_count);
@@ -407,7 +410,8 @@ impl DriverActor {
         cause: Option<CommonErrorCause>,
     ) -> ActorAction {
         let Some(task) = self.state.get_task(task_id) else {
-            return ActorAction::warn(format!("task {task_id} not found"));
+            warn!("task {task_id} not found");
+            return ActorAction::Continue;
         };
         let job_id = task.job_id;
         match status {
@@ -415,9 +419,8 @@ impl DriverActor {
                 if let Some(state) = task.state.run() {
                     self.state.update_task(task_id, attempt, state, message);
                 } else {
-                    return ActorAction::warn(format!(
-                        "task {task_id} cannot be updated to the running state from its current state"
-                    ));
+                    warn!("task {task_id} cannot be updated to the running state from its current state");
+                    return ActorAction::Continue;
                 }
                 self.schedule_tasks(ctx);
                 self.try_update_job_output(ctx, job_id);
@@ -427,9 +430,8 @@ impl DriverActor {
                 if let Some(state) = task.state.succeed() {
                     self.state.update_task(task_id, attempt, state, message);
                 } else {
-                    return ActorAction::warn(format!(
-                        "task {task_id} cannot be updated to the succeeded state from its current state"
-                    ));
+                    warn!("task {task_id} cannot be updated to the succeeded state from its current state");
+                    return ActorAction::Continue;
                 }
                 if let Some(worker_id) = worker_id {
                     self.state.detach_task_from_worker(task_id, worker_id);
