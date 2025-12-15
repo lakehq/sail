@@ -73,8 +73,10 @@ impl PartitionsExt for IndexMap<String, Scalar> {
 pub struct WriterConfig {
     /// Schema of the delta table
     pub table_schema: ArrowSchemaRef,
-    /// Column names for columns the table is partitioned by
+    /// Logical column names the table is partitioned by (used for metadata/actions)
     pub partition_columns: Vec<String>,
+    /// Physical column names for partition columns in the input batch/schema
+    pub physical_partition_columns: Vec<String>,
     /// Properties passed to underlying parquet writer
     pub writer_properties: WriterProperties,
     /// Size above which we will write a buffered parquet file to disk
@@ -91,6 +93,7 @@ impl WriterConfig {
     pub fn new(
         table_schema: ArrowSchemaRef,
         partition_columns: Vec<String>,
+        physical_partition_columns: Vec<String>,
         writer_properties: Option<WriterProperties>,
         target_file_size: u64,
         write_batch_size: usize,
@@ -106,6 +109,7 @@ impl WriterConfig {
         Self {
             table_schema,
             partition_columns,
+            physical_partition_columns,
             writer_properties,
             target_file_size,
             write_batch_size,
@@ -116,7 +120,7 @@ impl WriterConfig {
 
     /// Schema of files written to disk (without partition columns)
     pub fn file_schema(&self) -> ArrowSchemaRef {
-        arrow_schema_without_partitions(&self.table_schema, &self.partition_columns)
+        arrow_schema_without_partitions(&self.table_schema, &self.physical_partition_columns)
     }
 }
 
@@ -163,8 +167,10 @@ impl DeltaWriter {
     ) -> Result<(), DeltaTableError> {
         let partition_key = partition_values.hive_partition_path();
 
-        let record_batch =
-            record_batch_without_partitions(&record_batch, &self.config.partition_columns)?;
+        let record_batch = record_batch_without_partitions(
+            &record_batch,
+            &self.config.physical_partition_columns,
+        )?;
 
         match self.partition_writers.get_mut(&partition_key) {
             Some(writer) => {
@@ -203,9 +209,10 @@ impl DeltaWriter {
         divide_by_partition_values(
             arrow_schema_without_partitions(
                 &self.config.table_schema,
-                &self.config.partition_columns,
+                &self.config.physical_partition_columns,
             ),
             self.config.partition_columns.clone(),
+            self.config.physical_partition_columns.clone(),
             batch,
         )
     }
@@ -511,12 +518,13 @@ fn arrow_schema_without_partitions(
 /// Partition a RecordBatch along partition columns
 pub(crate) fn divide_by_partition_values(
     arrow_schema: ArrowSchemaRef,
-    partition_columns: Vec<String>,
+    logical_partition_columns: Vec<String>,
+    physical_partition_columns: Vec<String>,
     values: &RecordBatch,
 ) -> Result<Vec<PartitionResult>, DeltaTableError> {
     let mut partitions = Vec::new();
 
-    if partition_columns.is_empty() {
+    if logical_partition_columns.is_empty() {
         partitions.push(PartitionResult {
             partition_values: IndexMap::new(),
             record_batch: values.clone(),
@@ -525,19 +533,23 @@ pub(crate) fn divide_by_partition_values(
     }
 
     let schema = values.schema();
-
-    // Since DeltaProjectExec moves partition columns to the end, we can rely on their positions.
-    let num_cols = schema.fields().len();
-    let num_part_cols = partition_columns.len();
-    let projection: Vec<usize> = (num_cols - num_part_cols..num_cols).collect();
+    let partition_indices: Vec<usize> = physical_partition_columns
+        .iter()
+        .map(|name| {
+            schema.index_of(name).map_err(|_| {
+                DeltaTableError::schema(format!("Partition column '{name}' not found in batch"))
+            })
+        })
+        .collect::<Result<_, _>>()?;
 
     let sort_columns = values
-        .project(&projection)
+        .project(&partition_indices)
         .map_err(|e| DeltaTableError::generic(e.to_string()))?;
 
     let indices = lexsort_to_indices(sort_columns.columns());
-    let sorted_partition_columns = (num_cols - num_part_cols..num_cols)
-        .map(|idx| {
+    let sorted_partition_columns = partition_indices
+        .iter()
+        .map(|&idx| {
             let col = values.column(idx);
             compute::take(col, &indices, None).map_err(|e| DeltaTableError::generic(e.to_string()))
         })
@@ -561,7 +573,7 @@ pub(crate) fn divide_by_partition_values(
             })
             .collect::<Result<Vec<_>, _>>()?;
 
-        let partition_values = partition_columns
+        let partition_values = logical_partition_columns
             .clone()
             .into_iter()
             .zip(partition_key_iter)

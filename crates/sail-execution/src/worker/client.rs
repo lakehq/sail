@@ -1,7 +1,6 @@
 use arrow_flight::decode::FlightRecordBatchStream;
 use arrow_flight::flight_service_client::FlightServiceClient;
 use datafusion::arrow::datatypes::SchemaRef;
-use fastrace::trace;
 use futures::TryStreamExt;
 use prost::Message;
 
@@ -33,7 +32,6 @@ impl WorkerClient {
 }
 
 impl WorkerClient {
-    #[trace]
     pub async fn run_task(
         &self,
         task_id: TaskId,
@@ -54,7 +52,6 @@ impl WorkerClient {
         Ok(())
     }
 
-    #[trace]
     pub async fn stop_task(&self, task_id: TaskId, attempt: usize) -> ExecutionResult<()> {
         let request = StopTaskRequest {
             task_id: task_id.into(),
@@ -65,7 +62,6 @@ impl WorkerClient {
         Ok(())
     }
 
-    #[trace]
     pub async fn fetch_task_stream(
         &self,
         channel: ChannelName,
@@ -90,7 +86,6 @@ impl WorkerClient {
         Ok(Box::pin(stream) as TaskStreamSource)
     }
 
-    #[trace]
     pub async fn remove_stream(&self, channel_prefix: String) -> ExecutionResult<()> {
         let request = RemoveStreamRequest { channel_prefix };
         let response = self.client.get().await?.remove_stream(request).await?;
@@ -98,7 +93,6 @@ impl WorkerClient {
         Ok(())
     }
 
-    #[trace]
     pub async fn stop_worker(&self) -> ExecutionResult<()> {
         let request = StopWorkerRequest {};
         let response = self.client.get().await?.stop_worker(request).await?;

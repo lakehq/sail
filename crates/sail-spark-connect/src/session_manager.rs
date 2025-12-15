@@ -1,3 +1,4 @@
+use std::borrow::Cow;
 use std::collections::HashMap;
 use std::fmt::{Debug, Display};
 use std::ops::DerefMut;
@@ -11,7 +12,7 @@ use datafusion::execution::runtime_env::RuntimeEnvBuilder;
 use datafusion::execution::SessionStateBuilder;
 use datafusion::prelude::{SessionConfig, SessionContext};
 use fastrace::prelude::SpanContext;
-use fastrace::{func_path, Span};
+use fastrace::Span;
 use log::{debug, info};
 use sail_cache::file_listing_cache::MokaFileListingCache;
 use sail_cache::file_metadata_cache::MokaFileMetadataCache;
@@ -31,6 +32,7 @@ use sail_plan::planner::new_query_planner;
 use sail_server::actor::{Actor, ActorAction, ActorContext, ActorHandle, ActorSystem};
 use sail_session::catalog::create_catalog_manager;
 use sail_session::formats::create_table_format_registry;
+use sail_telemetry::common::SpanAssociation;
 use tokio::sync::oneshot;
 use tokio::time::Instant;
 
@@ -83,6 +85,14 @@ impl SessionManager {
         self.handle.send(event).await?;
         rx.await
             .map_err(|e| SparkError::internal(format!("failed to get session: {e}")))?
+    }
+
+    pub async fn delete_session(&self, key: SessionKey) -> SparkResult<()> {
+        let (tx, rx) = oneshot::channel();
+        let event = SessionManagerEvent::DeleteSession { key, result: tx };
+        self.handle.send(event).await?;
+        rx.await
+            .map_err(|e| SparkError::internal(format!("failed to delete session: {e}")))?
     }
 }
 
@@ -298,6 +308,7 @@ pub struct SessionManagerOptions {
     pub runtime: RuntimeHandle,
 }
 
+#[expect(clippy::enum_variant_names)]
 enum SessionManagerEvent {
     GetOrCreateSession {
         key: SessionKey,
@@ -309,6 +320,25 @@ enum SessionManagerEvent {
         /// The time when the session was known to be active.
         instant: Instant,
     },
+    DeleteSession {
+        key: SessionKey,
+        result: oneshot::Sender<SparkResult<()>>,
+    },
+}
+
+impl SpanAssociation for SessionManagerEvent {
+    fn name(&self) -> Cow<'static, str> {
+        let name = match self {
+            SessionManagerEvent::GetOrCreateSession { .. } => "GetOrCreateSession",
+            SessionManagerEvent::ProbeIdleSession { .. } => "ProbeIdleSession",
+            SessionManagerEvent::DeleteSession { .. } => "DeleteSession",
+        };
+        name.into()
+    }
+
+    fn properties(&self) -> impl IntoIterator<Item = (Cow<'static, str>, Cow<'static, str>)> {
+        vec![]
+    }
 }
 
 struct SessionManagerActor {
@@ -323,6 +353,10 @@ struct SessionManagerActor {
 impl Actor for SessionManagerActor {
     type Message = SessionManagerEvent;
     type Options = SessionManagerOptions;
+
+    fn name() -> &'static str {
+        "SessionManagerActor"
+    }
 
     fn new(options: Self::Options) -> Self {
         Self {
@@ -344,6 +378,9 @@ impl Actor for SessionManagerActor {
             SessionManagerEvent::ProbeIdleSession { key, instant } => {
                 self.handle_probe_idle_session(ctx, key, instant)
             }
+            SessionManagerEvent::DeleteSession { key, result } => {
+                self.handle_delete_session(ctx, key, result)
+            }
         }
     }
 }
@@ -363,7 +400,10 @@ impl SessionManagerActor {
         } else {
             let key = key.clone();
             info!("creating session {key}");
-            let span = Span::root(func_path!(), SpanContext::random());
+            let span = Span::root(
+                "SessionManagerActor::create_session_context",
+                SpanContext::random(),
+            );
             let _guard = span.set_local_parent();
             match self.create_session_context(system, key.clone()) {
                 Ok(context) => {
@@ -408,6 +448,26 @@ impl SessionManagerActor {
                 }
             }
         }
+        ActorAction::Continue
+    }
+
+    fn handle_delete_session(
+        &mut self,
+        ctx: &mut ActorContext<Self>,
+        key: SessionKey,
+        result: oneshot::Sender<SparkResult<()>>,
+    ) -> ActorAction {
+        let context = self.sessions.remove(&key);
+        let output = if let Some(context) = context {
+            info!("removing session {key}");
+            if let Ok(spark) = context.extension::<SparkSession>() {
+                ctx.spawn(async move { spark.job_runner().stop().await });
+            }
+            Ok(())
+        } else {
+            Err(SparkError::invalid(format!("session not found: {key}")))
+        };
+        let _ = result.send(output);
         ActorAction::Continue
     }
 }

@@ -11,6 +11,7 @@ use datafusion::physical_plan::{ExecutionPlan, ExecutionPlanProperties};
 use datafusion_proto::physical_plan::AsExecutionPlan;
 use datafusion_proto::protobuf::PhysicalPlanNode;
 use fastrace::collector::SpanContext;
+use fastrace::Span;
 use futures::future::try_join_all;
 use futures::TryStreamExt;
 use log::{debug, error, info, warn};
@@ -19,6 +20,7 @@ use prost::Message;
 use sail_common_datafusion::error::CommonErrorCause;
 use sail_python_udf::error::PyErrExtractor;
 use sail_server::actor::{ActorAction, ActorContext};
+use sail_telemetry::common::SpanAttribute;
 use tokio::sync::{mpsc, oneshot};
 use tokio::time::Instant;
 use tonic::codegen::tokio_stream::wrappers::ReceiverStream;
@@ -49,7 +51,10 @@ impl DriverActor {
         let server = mem::take(&mut self.server);
         self.server = match server.ready(signal, port) {
             Ok(x) => x,
-            Err(e) => return ActorAction::fail(e),
+            Err(e) => {
+                error!("{e}");
+                return ActorAction::Stop;
+            }
         };
         info!("driver server is ready on port {port}");
         self.start_workers(ctx, self.options().worker_initial_count);
@@ -346,6 +351,17 @@ impl DriverActor {
             return;
         };
         for &worker_id in worker_ids.iter() {
+            // We create a placeholder span when starting the worker before creating the new trace.
+            let span = Span::enter_with_local_parent("DriverActor::start_worker")
+                .with_property(|| (SpanAttribute::CLUSTER_WORKER_ID, worker_id.to_string()));
+            let _guard = span.set_local_parent();
+            // Create a new trace when starting the worker. Otherwise, the spans for the worker
+            // may be nested in a query execution trace, which makes the trace harder to understand.
+            // Note: We could have linked the span to the current trace,
+            // but Fastrace currently does not support span links yet.
+            let span = Span::root("DriverActor::start_worker", SpanContext::random())
+                .with_property(|| (SpanAttribute::CLUSTER_WORKER_ID, worker_id.to_string()));
+            let _guard = span.set_local_parent();
             let descriptor = WorkerDescriptor {
                 state: WorkerState::Pending,
                 messages: vec![],
@@ -360,8 +376,6 @@ impl DriverActor {
     }
 
     fn start_worker(&mut self, ctx: &mut ActorContext<Self>, worker_id: WorkerId) {
-        let w3c_traceparent =
-            SpanContext::current_local_parent().map(|x| x.encode_w3c_traceparent());
         let Some(port) = self.server.port() else {
             error!("the driver server is not ready");
             return;
@@ -377,7 +391,6 @@ impl DriverActor {
             worker_heartbeat_interval: self.options().worker_heartbeat_interval,
             worker_stream_buffer: self.options().worker_stream_buffer,
             rpc_retry_strategy: self.options().rpc_retry_strategy.clone(),
-            w3c_traceparent,
         };
         let worker_manager = Arc::clone(&self.worker_manager);
         ctx.spawn(async move {
@@ -397,7 +410,8 @@ impl DriverActor {
         cause: Option<CommonErrorCause>,
     ) -> ActorAction {
         let Some(task) = self.state.get_task(task_id) else {
-            return ActorAction::warn(format!("task {task_id} not found"));
+            warn!("task {task_id} not found");
+            return ActorAction::Continue;
         };
         let job_id = task.job_id;
         match status {
@@ -405,9 +419,8 @@ impl DriverActor {
                 if let Some(state) = task.state.run() {
                     self.state.update_task(task_id, attempt, state, message);
                 } else {
-                    return ActorAction::warn(format!(
-                        "task {task_id} cannot be updated to the running state from its current state"
-                    ));
+                    warn!("task {task_id} cannot be updated to the running state from its current state");
+                    return ActorAction::Continue;
                 }
                 self.schedule_tasks(ctx);
                 self.try_update_job_output(ctx, job_id);
@@ -417,9 +430,8 @@ impl DriverActor {
                 if let Some(state) = task.state.succeed() {
                     self.state.update_task(task_id, attempt, state, message);
                 } else {
-                    return ActorAction::warn(format!(
-                        "task {task_id} cannot be updated to the succeeded state from its current state"
-                    ));
+                    warn!("task {task_id} cannot be updated to the succeeded state from its current state");
+                    return ActorAction::Continue;
                 }
                 if let Some(worker_id) = worker_id {
                     self.state.detach_task_from_worker(task_id, worker_id);

@@ -1,0 +1,57 @@
+[
+  {
+    "module": "pyspark.sql.functions",
+    "function": "coalesce",
+    "status": "supported"
+  },
+  {
+    "module": "pyspark.sql.functions",
+    "function": "if",
+    "status": "supported"
+  },
+  {
+    "module": "pyspark.sql.functions",
+    "function": "ifnull",
+    "status": "supported"
+  },
+  {
+    "module": "pyspark.sql.functions",
+    "function": "nanvl",
+    "status": "supported"
+  },
+  {
+    "module": "pyspark.sql.functions",
+    "function": "nullif",
+    "status": "supported"
+  },
+  {
+    "module": "pyspark.sql.functions",
+    "function": "nullifzero",
+    "status": "supported"
+  },
+  {
+    "module": "pyspark.sql.functions",
+    "function": "nvl",
+    "status": "supported"
+  },
+  {
+    "module": "pyspark.sql.functions",
+    "function": "nvl2",
+    "status": "supported"
+  },
+  {
+    "module": "pyspark.sql.functions",
+    "function": "zeroifnull",
+    "status": "supported"
+  },
+  {
+    "module": "pyspark.sql.functions",
+    "function": "when",
+    "status": "supported"
+  },
+  {
+    "module": "pyspark.sql.functions",
+    "function": "case",
+    "status": "supported"
+  }
+]

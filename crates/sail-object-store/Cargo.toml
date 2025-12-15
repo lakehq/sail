@@ -8,6 +8,7 @@ workspace = true
 
 [dependencies]
 sail-common = { path = "../sail-common" }
+sail-telemetry = { path = "../sail-telemetry" }
 
 object_store = { workspace = true }
 aws-config = { workspace = true }
@@ -33,6 +34,8 @@ chrono = { workspace = true }
 reqwest = { workspace = true }
 dashmap = { workspace = true }
 hf-hub = { workspace = true }
+fastrace = { workspace = true }
+fastrace-futures = { workspace = true }
 
 [features]
 hdfs = ["dep:hdfs-native-object-store"]

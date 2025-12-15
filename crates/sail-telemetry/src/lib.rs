@@ -1,4 +1,11 @@
 pub mod common;
 pub mod error;
-mod logger;
+mod execution;
+pub mod futures;
+pub mod layers;
+mod loggers;
+pub mod metrics;
+pub mod recorder;
 pub mod telemetry;
+
+pub use execution::physical_plan::{trace_execution_plan, TracingExecOptions};

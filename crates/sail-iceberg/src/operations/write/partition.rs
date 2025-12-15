@@ -165,12 +165,7 @@ pub fn split_record_batch_by_partition(
     let mut out: Vec<PartitionBatchResult> = Vec::with_capacity(groups.len());
     for (dir, grp) in groups.into_iter() {
         let indices = UInt32Array::from(grp.indices);
-        let mut cols = Vec::with_capacity(batch.num_columns());
-        for col in batch.columns() {
-            let taken = compute::take(col.as_ref(), &indices, None).map_err(|e| e.to_string())?;
-            cols.push(taken);
-        }
-        let rb = RecordBatch::try_new(batch.schema(), cols).map_err(|e| e.to_string())?;
+        let rb = compute::take_record_batch(batch, &indices).map_err(|e| e.to_string())?;
         out.push(PartitionBatchResult {
             record_batch: rb,
             partition_values: grp.values,

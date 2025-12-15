@@ -36,6 +36,7 @@ use serde_json::Value;
 use thiserror::Error;
 use uuid::Uuid;
 
+use crate::error::{DeltaError, KernelError};
 use crate::kernel::checkpoints::cleanup_expired_logs_for;
 use crate::kernel::models::{Action, Metadata, Protocol, Transaction};
 use crate::kernel::snapshot::EagerSnapshot;
@@ -128,9 +129,20 @@ impl CommitData {
         mut app_metadata: HashMap<String, Value>,
         app_transactions: Vec<Transaction>,
     ) -> Self {
-        if !actions.iter().any(|a| matches!(a, Action::CommitInfo(..))) {
+        let is_blind_append = Self::is_blind_append(&actions, &operation);
+
+        let mut has_commit_info = false;
+        for action in actions.iter_mut() {
+            if let Action::CommitInfo(info) = action {
+                info.is_blind_append = Some(is_blind_append);
+                has_commit_info = true;
+            }
+        }
+
+        if !has_commit_info {
             let mut commit_info = operation.get_commit_info();
             commit_info.timestamp = Some(Utc::now().timestamp_millis());
+            commit_info.is_blind_append = Some(is_blind_append);
             app_metadata.insert(
                 "clientVersion".to_string(),
                 Value::String(format!("sail-delta-lake.{}", env!("CARGO_PKG_VERSION"))),
@@ -160,6 +172,15 @@ impl CommitData {
             jsons.push(json);
         }
         Ok(Bytes::from(jsons.join("\n")))
+    }
+
+    fn is_blind_append(actions: &[Action], operation: &DeltaOperation) -> bool {
+        match operation {
+            DeltaOperation::Write { predicate, .. } if predicate.is_none() => actions
+                .iter()
+                .all(|action| matches!(action, Action::Add(_) | Action::Txn(_))),
+            _ => false,
+        }
     }
 }
 
@@ -513,88 +534,173 @@ impl<'a> std::future::IntoFuture for PreparedCommit<'a> {
         let this = self;
 
         Box::pin(async move {
-            let commit_or_bytes = this.commit_or_bytes;
-            let local_actions: Vec<_> = this.data.actions.to_vec();
+            let mut commit_or_bytes = this.commit_or_bytes;
+            let mut local_actions: Vec<_> = this.data.actions.to_vec();
+            let creation_intent = this.table_data.is_none();
+            let creation_protocol = local_actions.iter().find_map(|a| match a {
+                Action::Protocol(p) => Some(p.clone()),
+                _ => None,
+            });
+            let creation_metadata = local_actions.iter().find_map(|a| match a {
+                Action::Metadata(m) => Some(m.clone()),
+                _ => None,
+            });
+            let current_is_blind_append = local_actions
+                .iter()
+                .find_map(|action| match action {
+                    Action::CommitInfo(info) => info.is_blind_append,
+                    _ => None,
+                })
+                .unwrap_or(false);
+            let effective_max_retries = if creation_intent || current_is_blind_append {
+                this.max_retries
+            } else {
+                0
+            };
+            let total_retries = effective_max_retries + 1;
 
-            if this.table_data.is_none() {
-                this.log_store
-                    .write_commit_entry(0, commit_or_bytes.clone(), this.operation_id)
-                    .await?;
-                return Ok(PostCommit {
-                    version: 0,
-                    data: this.data,
-                    create_checkpoint: false,
-                    cleanup_expired_logs: None,
-                    log_store: this.log_store,
-                    table_data: None,
-                    custom_execute_handler: this.post_commit_hook_handler,
-                    metrics: CommitMetrics { num_retries: 0 },
-                });
-            }
+            let mut read_snapshot: Option<EagerSnapshot> = this
+                .table_data
+                .map(|table_ref| table_ref.eager_snapshot().clone());
+            let mut creation_actions_stripped = false;
+            for attempt_number in 1..=total_retries {
+                let snapshot_version = read_snapshot.as_ref().map(|s| s.version()).unwrap_or(-1);
+                let latest_version = match this.log_store.get_latest_version(snapshot_version).await
+                {
+                    Ok(v) => Some(v),
+                    Err(DeltaError::Kernel(KernelError::MissingVersion)) => None,
+                    Err(err) => return Err(err),
+                };
 
-            // unwrap() is safe here due to the above check
-            #[allow(clippy::unwrap_used)]
-            let mut read_snapshot = this.table_data.unwrap().eager_snapshot().clone();
-
-            let mut attempt_number = 1;
-            let total_retries = this.max_retries + 1;
-            while attempt_number <= total_retries {
-                let latest_version = this
-                    .log_store
-                    .get_latest_version(read_snapshot.version())
-                    .await?;
-
-                if latest_version > read_snapshot.version() {
-                    // If max_retries are set to 0, do not try to use the conflict checker to resolve the conflict
-                    // and throw immediately
-                    if this.max_retries == 0 {
-                        return Err(
-                            TransactionError::MaxCommitAttempts(this.max_retries as i32).into()
-                        );
-                    }
-                    warn!(
-                        "Attempting to write a transaction {} but the underlying table has been updated to {latest_version} (log_store={})",
-                        read_snapshot.version() + 1,
-                        this.log_store.name()
-                    );
-                    let mut steps = latest_version - read_snapshot.version();
-
-                    // Need to check for conflicts with each version between the read_snapshot and
-                    // the latest!
-                    while steps != 0 {
-                        let summary = WinningCommitSummary::try_new(
+                if let Some(latest_version) = latest_version {
+                    // Ensure we have a snapshot aligned to the latest version.
+                    if read_snapshot
+                        .as_ref()
+                        .map(|s| s.version() < latest_version)
+                        .unwrap_or(true)
+                    {
+                        let snapshot = EagerSnapshot::try_new(
                             this.log_store.as_ref(),
-                            latest_version - steps,
-                            (latest_version - steps) + 1,
+                            Default::default(),
+                            Some(latest_version),
                         )
                         .await?;
-                        let transaction_info = TransactionInfo::try_new(
-                            read_snapshot.log_data(),
-                            this.data.operation.read_predicate(),
-                            &local_actions,
-                            this.data.operation.read_whole_table(),
-                            Some(this.session),
-                        )?;
-                        let conflict_checker = ConflictChecker::new(
-                            transaction_info,
-                            summary,
-                            Some(&this.data.operation),
-                        );
 
-                        match conflict_checker.check_conflicts() {
-                            Ok(_) => {}
-                            Err(err) => {
-                                return Err(TransactionError::CommitConflict(err).into());
+                        read_snapshot = Some(snapshot);
+                    }
+
+                    if let Some(snapshot) = &read_snapshot {
+                        // For creation attempts where the table now exists, ensure protocol/metadata match
+                        // and strip creation-only actions before retrying as an append.
+                        if creation_intent {
+                            if let Some(txn_protocol) = creation_protocol.as_ref() {
+                                if txn_protocol != snapshot.protocol() {
+                                    return Err(TransactionError::CommitConflict(
+                                        conflict_checker::CommitConflictError::ProtocolChanged(
+                                            "protocol changed".into(),
+                                        ),
+                                    )
+                                    .into());
+                                }
+                            }
+                            let metadata_compatible =
+                                creation_metadata.as_ref().is_none_or(|txn| {
+                                    txn.parse_schema()
+                                        .ok()
+                                        .zip(snapshot.metadata().parse_schema().ok())
+                                        .is_some_and(|(left, right)| left == right)
+                                        && txn.partition_columns()
+                                            == snapshot.metadata().partition_columns()
+                                        && txn.configuration()
+                                            == snapshot.metadata().configuration()
+                                });
+                            if !metadata_compatible {
+                                return Err(TransactionError::CommitConflict(
+                                    conflict_checker::CommitConflictError::MetadataChanged,
+                                )
+                                .into());
+                            }
+
+                            if !creation_actions_stripped
+                                && local_actions.iter().any(|action| {
+                                    matches!(action, Action::Protocol(_) | Action::Metadata(_))
+                                })
+                            {
+                                local_actions.retain(|action| {
+                                    !matches!(action, Action::Protocol(_) | Action::Metadata(_))
+                                });
+
+                                for action in local_actions.iter_mut() {
+                                    if let Action::CommitInfo(info) = action {
+                                        info.is_blind_append = Some(true);
+                                    }
+                                }
+
+                                let mut jsons = Vec::<String>::new();
+                                for action in &local_actions {
+                                    let json = serde_json::to_string(action).map_err(|e| {
+                                        TransactionError::SerializeLogJson { json_err: e }
+                                    })?;
+                                    jsons.push(json);
+                                }
+                                commit_or_bytes =
+                                    CommitOrBytes::LogBytes(Bytes::from(jsons.join("\n")));
+                                creation_actions_stripped = true;
                             }
                         }
-                        steps -= 1;
+
+                        if latest_version > snapshot.version() {
+                            // If max_retries are set to 0, do not try to use the conflict checker to resolve the conflict
+                            // and throw immediately
+                            if effective_max_retries == 0 {
+                                return Err(TransactionError::MaxCommitAttempts(
+                                    effective_max_retries as i32,
+                                )
+                                .into());
+                            }
+                            warn!(
+                                "Attempting to write a transaction {} but the underlying table has been updated to {latest_version} (log_store={})",
+                                snapshot.version() + 1,
+                                this.log_store.name()
+                            );
+                            // Need to check for conflicts with each version between the read_snapshot and the latest
+                            for v in (snapshot.version() + 1)..=latest_version {
+                                let summary = WinningCommitSummary::try_new(
+                                    this.log_store.as_ref(),
+                                    v - 1,
+                                    v,
+                                )
+                                .await?;
+                                let transaction_info = TransactionInfo::try_new(
+                                    snapshot.log_data(),
+                                    this.data.operation.read_predicate(),
+                                    &local_actions,
+                                    this.data.operation.read_whole_table(),
+                                    Some(this.session),
+                                )?;
+                                let conflict_checker = ConflictChecker::new(
+                                    transaction_info,
+                                    summary,
+                                    Some(&this.data.operation),
+                                );
+
+                                match conflict_checker.check_conflicts() {
+                                    Ok(_) => {}
+                                    Err(err) => {
+                                        return Err(TransactionError::CommitConflict(err).into());
+                                    }
+                                }
+                            }
+                            // Update snapshot to latest version after successful conflict check
+                            if let Some(snapshot) = &mut read_snapshot {
+                                snapshot
+                                    .update(this.log_store.as_ref(), Some(latest_version as u64))
+                                    .await?;
+                            }
+                        }
                     }
-                    // Update snapshot to latest version after successful conflict check
-                    read_snapshot
-                        .update(this.log_store.as_ref(), Some(latest_version as u64))
-                        .await?;
                 }
-                let version: i64 = latest_version + 1;
+                let version: i64 = latest_version.map(|v| v + 1).unwrap_or(0);
 
                 match this
                     .log_store
@@ -614,7 +720,8 @@ impl<'a> std::future::IntoFuture for PreparedCommit<'a> {
                                 .map(|v| v.cleanup_expired_logs)
                                 .unwrap_or_default(),
                             log_store: this.log_store,
-                            table_data: Some(Box::new(read_snapshot)),
+                            table_data: read_snapshot
+                                .map(|snapshot| Box::new(snapshot) as Box<dyn TableReference>),
                             custom_execute_handler: this.post_commit_hook_handler,
                             metrics: CommitMetrics {
                                 num_retries: attempt_number as u64 - 1,
@@ -623,9 +730,7 @@ impl<'a> std::future::IntoFuture for PreparedCommit<'a> {
                     }
                     Err(TransactionError::VersionAlreadyExists(version)) => {
                         error!("The transaction {version} already exists, will retry!");
-                        // If the version already exists, loop through again and re-check
-                        // conflicts
-                        attempt_number += 1;
+                        continue;
                     }
                     Err(err) => {
                         this.log_store
@@ -636,7 +741,7 @@ impl<'a> std::future::IntoFuture for PreparedCommit<'a> {
                 }
             }
 
-            Err(TransactionError::MaxCommitAttempts(this.max_retries as i32).into())
+            Err(TransactionError::MaxCommitAttempts(effective_max_retries as i32).into())
         })
     }
 }
@@ -771,9 +876,11 @@ impl PostCommit {
 
         let checkpoint_interval = table_state.config().checkpoint_interval().get() as i64;
         if ((version + 1) % checkpoint_interval) == 0 {
-            // create_checkpoint_for(version as u64, log_store.as_ref(), Some(operation_id)).await?;
-            // FIXME: check point
-            Ok(true)
+            // TODO: Implement checkpoint creation
+            info!(
+                "Checkpoint interval reached at version {version}, checkpoint creation is not implemented yet."
+            );
+            Ok(false)
         } else {
             Ok(false)
         }

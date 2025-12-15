@@ -2,7 +2,7 @@ use std::future::Future;
 use std::sync::Arc;
 
 use arrow_flight::flight_service_client::FlightServiceClient;
-use fastrace_tonic::{FastraceClientLayer, FastraceClientService};
+use sail_telemetry::layers::{TracingClientLayer, TracingClientService};
 use tokio::sync::{oneshot, OnceCell};
 use tokio::task::JoinHandle;
 use tonic::transport::Channel;
@@ -124,7 +124,7 @@ macro_rules! impl_client_builder {
                     .connect()
                     .await?;
                 let channel = ServiceBuilder::new()
-                    .layer(FastraceClientLayer)
+                    .layer(TracingClientLayer)
                     .service(channel);
                 Ok(<$client_type>::new(channel))
             }
@@ -132,7 +132,7 @@ macro_rules! impl_client_builder {
     };
 }
 
-pub type ClientService = FastraceClientService<Channel>;
+pub type ClientService = TracingClientService<Channel>;
 
 impl_client_builder!(DriverServiceClient<ClientService>);
 impl_client_builder!(WorkerServiceClient<ClientService>);

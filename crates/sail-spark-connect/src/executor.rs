@@ -9,6 +9,8 @@ use std::time::Duration;
 use datafusion::arrow::array::RecordBatch;
 use datafusion::arrow::ipc::writer::StreamWriter;
 use datafusion::execution::SendableRecordBatchStream;
+use fastrace::future::FutureExt;
+use fastrace::Span;
 use futures::stream::{StreamExt, TryStreamExt};
 use futures::Stream;
 use tokio::sync::{mpsc, oneshot};
@@ -99,13 +101,17 @@ pub(crate) struct Executor {
     state: Mutex<ExecutorState>,
 }
 
-#[allow(clippy::large_enum_variant)]
 enum ExecutorState {
     Idle,
-    Pending(ExecutorTaskContext),
-    Running(ExecutorTask),
+    Pending {
+        context: ExecutorTaskContext,
+        span: Span,
+    },
+    Running {
+        task: ExecutorTask,
+        span: Span,
+    },
     Pausing,
-    // FIXME: Rust 1.87 triggers `clippy::large_enum_variant` warning
     Failed(SparkError),
 }
 
@@ -131,8 +137,9 @@ impl ExecutorTaskContext {
     }
 
     async fn next(&mut self) -> SparkResult<Option<RecordBatch>> {
+        let span = Span::enter_with_local_parent("ExecutorTaskContext::next");
         tokio::select! {
-            batch = self.stream.next() => Ok(batch.transpose()?),
+            batch = self.stream.next().in_span(span) => Ok(batch.transpose()?),
             _ = tokio::time::sleep(self.heartbeat_interval) => {
                 Ok(Some(RecordBatch::new_empty(self.stream.schema())))
             }
@@ -151,10 +158,8 @@ impl ExecutorTaskContext {
     }
 }
 
-#[allow(clippy::large_enum_variant)]
 enum ExecutorTaskResult {
     Paused(ExecutorTaskContext),
-    // FIXME: Rust 1.87 triggers `clippy::large_enum_variant` warning
     Failed(SparkError),
     Completed,
 }
@@ -167,10 +172,10 @@ impl Executor {
     ) -> Self {
         Self {
             metadata,
-            state: Mutex::new(ExecutorState::Pending(ExecutorTaskContext::new(
-                stream,
-                heartbeat_interval,
-            ))),
+            state: Mutex::new(ExecutorState::Pending {
+                context: ExecutorTaskContext::new(stream, heartbeat_interval),
+                span: Span::enter_with_local_parent("Executor::new"),
+            }),
         }
     }
 
@@ -226,8 +231,8 @@ impl Executor {
 
     pub(crate) fn start(&self) -> SparkResult<ReceiverStream<ExecutorOutput>> {
         let mut state = self.state.lock()?;
-        let context = match mem::replace(state.deref_mut(), ExecutorState::Idle) {
-            ExecutorState::Pending(context) => context,
+        let (context, span) = match mem::replace(state.deref_mut(), ExecutorState::Idle) {
+            ExecutorState::Pending { context, span } => (context, span),
             ExecutorState::Failed(e) => {
                 *state = ExecutorState::Failed(SparkError::internal(
                     "task failed due to a previous error",
@@ -238,7 +243,7 @@ impl Executor {
                 *state = x;
                 return Err(SparkError::internal("task context not found for operation"));
             }
-            x @ ExecutorState::Running(_) => {
+            x @ ExecutorState::Running { .. } => {
                 *state = x;
                 return Err(SparkError::internal("task is already running"));
             }
@@ -250,22 +255,28 @@ impl Executor {
         let (tx, rx) = mpsc::channel(1);
         let (notifier, listener) = oneshot::channel();
         let buffer = Arc::clone(&context.buffer);
-        let handle = tokio::spawn(async move { Executor::run(context, listener, tx).await });
-        *state = ExecutorState::Running(ExecutorTask {
-            notifier,
-            handle,
-            buffer,
-        });
+        let handle = {
+            let span = { Span::enter_with_parent("Executor::run", &span) };
+            tokio::spawn(async move { Executor::run(context, listener, tx).in_span(span).await })
+        };
+        *state = ExecutorState::Running {
+            task: ExecutorTask {
+                notifier,
+                handle,
+                buffer,
+            },
+            span,
+        };
         Ok(ReceiverStream::new(rx))
     }
 
     pub(crate) async fn pause_if_running(&self) -> SparkResult<()> {
-        let task = {
+        let (task, span) = {
             let mut state = self.state.lock()?;
             match mem::replace(state.deref_mut(), ExecutorState::Idle) {
-                ExecutorState::Running(task) => {
+                ExecutorState::Running { task, span } => {
                     *state = ExecutorState::Pausing;
-                    task
+                    (task, span)
                 }
                 x => {
                     *state = x;
@@ -275,7 +286,7 @@ impl Executor {
         };
         let _ = task.notifier.send(());
         let state = match task.handle.await? {
-            ExecutorTaskResult::Paused(context) => ExecutorState::Pending(context),
+            ExecutorTaskResult::Paused(context) => ExecutorState::Pending { context, span },
             ExecutorTaskResult::Completed => ExecutorState::Idle,
             ExecutorTaskResult::Failed(e) => ExecutorState::Failed(e),
         };
@@ -286,8 +297,8 @@ impl Executor {
     pub(crate) fn release(&self, response_id: Option<String>) -> SparkResult<()> {
         let state = self.state.lock()?;
         let buffer = match state.deref() {
-            ExecutorState::Running(task) => &task.buffer,
-            ExecutorState::Pending(context) => &context.buffer,
+            ExecutorState::Running { task, span: _ } => &task.buffer,
+            ExecutorState::Pending { context, span: _ } => &context.buffer,
             ExecutorState::Idle | ExecutorState::Failed(_) | ExecutorState::Pausing => {
                 return Ok(())
             }

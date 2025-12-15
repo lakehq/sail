@@ -548,20 +548,19 @@ impl SchemaEvolver {
                     Self::reassign_ids_recursive(&mut nested, next_field_id);
                     updated.push(Arc::new(nested));
                 }
-                field.field_type = Box::new(Type::Struct(StructType::new(updated)));
+                *field.field_type = Type::Struct(StructType::new(updated));
             }
             Type::List(list_type) => {
                 let mut element = list_type.element_field.as_ref().clone();
                 Self::reassign_ids_recursive(&mut element, next_field_id);
-                field.field_type = Box::new(Type::List(ListType::new(Arc::new(element))));
+                *field.field_type = Type::List(ListType::new(Arc::new(element)));
             }
             Type::Map(map_type) => {
                 let mut key = map_type.key_field.as_ref().clone();
                 Self::reassign_ids_recursive(&mut key, next_field_id);
                 let mut value = map_type.value_field.as_ref().clone();
                 Self::reassign_ids_recursive(&mut value, next_field_id);
-                field.field_type =
-                    Box::new(Type::Map(MapType::new(Arc::new(key), Arc::new(value))));
+                *field.field_type = Type::Map(MapType::new(Arc::new(key), Arc::new(value)));
             }
             _ => {}
         }
@@ -628,7 +627,7 @@ impl SchemaEvolver {
                     }
                     updated_fields.push(Arc::new(new_child));
                 }
-                candidate.field_type = Box::new(Type::Struct(StructType::new(updated_fields)));
+                *candidate.field_type = Type::Struct(StructType::new(updated_fields));
             }
             (Type::List(existing_list), Type::List(candidate_list)) => {
                 let mut new_child = candidate_list.element_field.as_ref().clone();
@@ -638,7 +637,7 @@ impl SchemaEvolver {
                     &mut new_child,
                     next_field_id,
                 )?;
-                candidate.field_type = Box::new(Type::List(ListType::new(Arc::new(new_child))));
+                *candidate.field_type = Type::List(ListType::new(Arc::new(new_child)));
             }
             (Type::Map(existing_map), Type::Map(candidate_map)) => {
                 let mut new_key = candidate_map.key_field.as_ref().clone();
@@ -675,10 +674,8 @@ impl SchemaEvolver {
                     Self::assign_nested_ids(&mut new_value, next_field_id);
                 }
 
-                candidate.field_type = Box::new(Type::Map(MapType::new(
-                    Arc::new(new_key),
-                    Arc::new(new_value),
-                )));
+                *candidate.field_type =
+                    Type::Map(MapType::new(Arc::new(new_key), Arc::new(new_value)));
             }
             _ => {}
         }
