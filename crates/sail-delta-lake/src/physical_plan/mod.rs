@@ -32,6 +32,7 @@ use crate::kernel::DeltaOperation;
 
 mod commit_exec;
 mod expr_adapter;
+mod file_lookup_exec;
 pub mod find_files_exec;
 mod remove_actions_exec;
 mod scan_by_adds_exec;
@@ -40,6 +41,7 @@ mod writer_exec;
 
 pub use commit_exec::DeltaCommitExec;
 pub use expr_adapter::DeltaPhysicalExprAdapterFactory;
+pub use file_lookup_exec::DeltaFileLookupExec;
 pub use find_files_exec::DeltaFindFilesExec;
 pub mod planner;
 pub use planner::{

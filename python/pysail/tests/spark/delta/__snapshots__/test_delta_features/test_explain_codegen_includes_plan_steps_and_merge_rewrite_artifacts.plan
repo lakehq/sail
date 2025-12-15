@@ -575,7 +575,33 @@ DeltaCommitExec(table_path=file://<tmp>/merge_explain_codegen/)
                                 ProjectionExec: expr=[id@0 as id, category@1 as category, amount@2 as amount, note@3 as note, __sail_file_path@4 as __sail_file_path, true as __sail_merge_target_row_present]
                                   DataSourceExec: file_groups={1 group: [[<tmp>/merge_explain_codegen/part-<id>.snappy.parquet]]}, projection=[id, category, amount, note, __sail_file_path], file_type=parquet
       DeltaRemoveActionsExec
-        DataSourceExec: partitions=1, partition_sizes=[<sizes>]
+        DeltaFileLookupExec(table_url=file:<tmp>/merge_explain_codegen/, version=0)
+          CoalescePartitionsExec
+            AggregateExec: mode=FinalPartitioned, gby=[__sail_file_path@0 as __sail_file_path], aggr=[]
+              CoalesceBatchesExec: target_batch_size=8192
+                RepartitionExec: partitioning=Hash([__sail_file_path@0], <partitions>), input_partitions=<partitions>
+                  CoalesceBatchesExec: target_batch_size=8192
+                    AggregateExec: mode=Partial, gby=[__sail_file_path@4 as __sail_file_path], aggr=[]
+                      CoalesceBatchesExec: target_batch_size=8192
+                        CoalesceBatchesExec: target_batch_size=8192
+                          FilterExec: __sail_merge_source_row_present@10 IS NOT NULL AND id@0 = __sail_src_id@6 AND category@1 IS NOT NULL AND (category@1 = vip OR category@1 = stale) OR __sail_merge_source_row_present@10 IS NULL AND category@1 = stale
+                            CoalesceBatchesExec: target_batch_size=8192
+                              CoalesceBatchesExec: target_batch_size=8192
+                                HashJoinExec: mode=CollectLeft, join_type=Left, on=[(id@0, __sail_src_id@0)], filter=category@0 IS NOT NULL
+                                  CoalescePartitionsExec
+                                    ProjectionExec: expr=[id@0 as id, category@1 as category, amount@2 as amount, note@3 as note, __sail_file_path@4 as __sail_file_path, true as __sail_merge_target_row_present]
+                                      CoalesceBatchesExec: target_batch_size=8192
+                                        CoalesceBatchesExec: target_batch_size=8192
+                                          FilterExec: category@1 IS NOT NULL AND (category@1 = vip OR category@1 = stale) OR category@1 = stale
+                                            RepartitionExec: partitioning=RoundRobinBatch(<partitions>), input_partitions=<partitions>
+                                              DataSourceExec: file_groups={1 group: [[<tmp>/merge_explain_codegen/part-<id>.snappy.parquet]]}, projection=[id, category, amount, note, __sail_file_path], file_type=parquet, predicate=(category@1 IS NOT NULL AND (category@1 = vip OR category@1 = stale) OR category@1 = stale) AND (category@1 IS NOT NULL AND (category@1 = vip OR category@1 = stale) OR category@1 = stale) AND (category@1 IS NOT NULL AND (category@1 = vip OR category@1 = stale) OR category@1 = stale), pruning_predicate=(category_null_count@1 != row_count@0 AND (category_null_count@1 != row_count@0 AND category_min@2 <= vip AND vip <= category_max@3 OR category_null_count@1 != row_count@0 AND category_min@2 <= stale AND stale <= category_max@3) OR category_null_count@1 != row_count@0 AND category_min@2 <= stale AND stale <= category_max@3) AND (category_null_count@1 != row_count@0 AND (category_null_count@1 != row_count@0 AND category_min@2 <= vip AND vip <= category_max@3 OR category_null_count@1 != row_count@0 AND category_min@2 <= stale AND stale <= category_max@3) OR category_null_count@1 != row_count@0 AND category_min@2 <= stale AND stale <= category_max@3) AND (category_null_count@1 != row_count@0 AND (category_null_count@1 != row_count@0 AND category_min@2 <= vip AND vip <= category_max@3 OR category_null_count@1 != row_count@0 AND category_min@2 <= stale AND stale <= category_max@3) OR category_null_count@1 != row_count@0 AND category_min@2 <= stale AND stale <= category_max@3), required_guarantees=[]
+                                  RepartitionExec: partitioning=RoundRobinBatch(<partitions>), input_partitions=<partitions>
+                                    ProjectionExec: expr=[__sail_src_id@0 as __sail_src_id, __sail_src_category@1 as __sail_src_category, __sail_src_amount@2 as __sail_src_amount, __sail_src_note@3 as __sail_src_note, true as __sail_merge_source_row_present]
+                                      ProjectionExec: expr=[column1@0 as __sail_src_id, column2@1 as __sail_src_category, column3@2 as __sail_src_amount, column4@3 as __sail_src_note]
+                                        CoalesceBatchesExec: target_batch_size=8192
+                                          CoalesceBatchesExec: target_batch_size=8192
+                                            FilterExec: column3@2 + 1 > 10 AND (column1@0 = 1 OR column1@0 = 2 OR column1@0 = 4)
+                                              DataSourceExec: partitions=1, partition_sizes=[<sizes>]
 
 
 initial_physical_plan_with_stats:
@@ -604,7 +630,33 @@ DeltaCommitExec(table_path=file://<tmp>/merge_explain_codegen/), statistics=[Row
                                 ProjectionExec: expr=[id@0 as id, category@1 as category, amount@2 as amount, note@3 as note, __sail_file_path@4 as __sail_file_path, true as __sail_merge_target_row_present], statistics=[Rows=Exact(3), Bytes=Inexact(<bytes>), [(Col[0]: Min=Exact(Int32(1)) Max=Exact(Int32(3))),(Col[1]:),(Col[2]: Min=Exact(Int32(10)) Max=Exact(Int32(30))),(Col[3]:),(Col[4]:),(Col[5]:)]]
                                   DataSourceExec: file_groups={1 group: [[<tmp>/merge_explain_codegen/part-<id>.snappy.parquet]]}, projection=[id, category, amount, note, __sail_file_path], file_type=parquet, statistics=[Rows=Exact(3), Bytes=Inexact(<bytes>), [(Col[0]: Min=Exact(Int32(1)) Max=Exact(Int32(3))),(Col[1]:),(Col[2]: Min=Exact(Int32(10)) Max=Exact(Int32(30))),(Col[3]:),(Col[4]:)]]
       DeltaRemoveActionsExec, statistics=[Rows=Absent, Bytes=Absent, [(Col[0]:)]]
-        DataSourceExec: partitions=1, partition_sizes=[<sizes>], statistics=[Rows=Exact(1), Bytes=Exact(<bytes>), [(Col[0]: Null=Exact(0)),(Col[1]: Null=Exact(0))]]
+        DeltaFileLookupExec(table_url=file:<tmp>/merge_explain_codegen/, version=0), statistics=[Rows=Absent, Bytes=Absent, [(Col[0]:),(Col[1]:)]]
+          CoalescePartitionsExec, statistics=[Rows=Inexact(1), Bytes=Absent, [(Col[0]:)]]
+            AggregateExec: mode=FinalPartitioned, gby=[__sail_file_path@0 as __sail_file_path], aggr=[], statistics=[Rows=Inexact(1), Bytes=Absent, [(Col[0]:)]]
+              CoalesceBatchesExec: target_batch_size=8192, statistics=[Rows=Inexact(1), Bytes=Absent, [(Col[0]:)]]
+                RepartitionExec: partitioning=Hash([__sail_file_path@0], <partitions>), input_partitions=<partitions>, statistics=[Rows=Inexact(1), Bytes=Absent, [(Col[0]:)]]
+                  CoalesceBatchesExec: target_batch_size=8192, statistics=[Rows=Inexact(1), Bytes=Absent, [(Col[0]:)]]
+                    AggregateExec: mode=Partial, gby=[__sail_file_path@4 as __sail_file_path], aggr=[], statistics=[Rows=Inexact(1), Bytes=Absent, [(Col[0]:)]]
+                      CoalesceBatchesExec: target_batch_size=8192, statistics=[Rows=Inexact(1), Bytes=Absent, [(Col[0]: Min=Inexact(Int32(1)) Max=Inexact(Int32(3))),(Col[1]:),(Col[2]: Min=Inexact(Int32(10)) Max=Inexact(Int32(30))),(Col[3]:),(Col[4]:),(Col[5]:),(Col[6]: Null=Inexact(0)),(Col[7]: Null=Inexact(0)),(Col[8]: Null=Inexact(0)),(Col[9]: Null=Inexact(0)),(Col[10]:)]]
+                        CoalesceBatchesExec: target_batch_size=8192, statistics=[Rows=Inexact(1), Bytes=Absent, [(Col[0]: Min=Inexact(Int32(1)) Max=Inexact(Int32(3))),(Col[1]:),(Col[2]: Min=Inexact(Int32(10)) Max=Inexact(Int32(30))),(Col[3]:),(Col[4]:),(Col[5]:),(Col[6]: Null=Inexact(0)),(Col[7]: Null=Inexact(0)),(Col[8]: Null=Inexact(0)),(Col[9]: Null=Inexact(0)),(Col[10]:)]]
+                          FilterExec: __sail_merge_source_row_present@10 IS NOT NULL AND id@0 = __sail_src_id@6 AND category@1 IS NOT NULL AND (category@1 = vip OR category@1 = stale) OR __sail_merge_source_row_present@10 IS NULL AND category@1 = stale, statistics=[Rows=Inexact(1), Bytes=Absent, [(Col[0]: Min=Inexact(Int32(1)) Max=Inexact(Int32(3))),(Col[1]:),(Col[2]: Min=Inexact(Int32(10)) Max=Inexact(Int32(30))),(Col[3]:),(Col[4]:),(Col[5]:),(Col[6]: Null=Inexact(0)),(Col[7]: Null=Inexact(0)),(Col[8]: Null=Inexact(0)),(Col[9]: Null=Inexact(0)),(Col[10]:)]]
+                            CoalesceBatchesExec: target_batch_size=8192, statistics=[Rows=Inexact(1), Bytes=Absent, [(Col[0]: Min=Inexact(Int32(1)) Max=Inexact(Int32(3))),(Col[1]:),(Col[2]: Min=Inexact(Int32(10)) Max=Inexact(Int32(30))),(Col[3]:),(Col[4]:),(Col[5]:),(Col[6]: Null=Inexact(0)),(Col[7]: Null=Inexact(0)),(Col[8]: Null=Inexact(0)),(Col[9]: Null=Inexact(0)),(Col[10]:)]]
+                              CoalesceBatchesExec: target_batch_size=8192, statistics=[Rows=Inexact(1), Bytes=Absent, [(Col[0]: Min=Inexact(Int32(1)) Max=Inexact(Int32(3))),(Col[1]:),(Col[2]: Min=Inexact(Int32(10)) Max=Inexact(Int32(30))),(Col[3]:),(Col[4]:),(Col[5]:),(Col[6]: Null=Inexact(0)),(Col[7]: Null=Inexact(0)),(Col[8]: Null=Inexact(0)),(Col[9]: Null=Inexact(0)),(Col[10]:)]]
+                                HashJoinExec: mode=CollectLeft, join_type=Left, on=[(id@0, __sail_src_id@0)], filter=category@0 IS NOT NULL, statistics=[Rows=Inexact(1), Bytes=Absent, [(Col[0]: Min=Inexact(Int32(1)) Max=Inexact(Int32(3))),(Col[1]:),(Col[2]: Min=Inexact(Int32(10)) Max=Inexact(Int32(30))),(Col[3]:),(Col[4]:),(Col[5]:),(Col[6]: Null=Inexact(0)),(Col[7]: Null=Inexact(0)),(Col[8]: Null=Inexact(0)),(Col[9]: Null=Inexact(0)),(Col[10]:)]]
+                                  CoalescePartitionsExec, statistics=[Rows=Inexact(1), Bytes=Inexact(<bytes>), [(Col[0]: Min=Inexact(Int32(1)) Max=Inexact(Int32(3))),(Col[1]:),(Col[2]: Min=Inexact(Int32(10)) Max=Inexact(Int32(30))),(Col[3]:),(Col[4]:),(Col[5]:)]]
+                                    ProjectionExec: expr=[id@0 as id, category@1 as category, amount@2 as amount, note@3 as note, __sail_file_path@4 as __sail_file_path, true as __sail_merge_target_row_present], statistics=[Rows=Inexact(1), Bytes=Inexact(<bytes>), [(Col[0]: Min=Inexact(Int32(1)) Max=Inexact(Int32(3))),(Col[1]:),(Col[2]: Min=Inexact(Int32(10)) Max=Inexact(Int32(30))),(Col[3]:),(Col[4]:),(Col[5]:)]]
+                                      CoalesceBatchesExec: target_batch_size=8192, statistics=[Rows=Inexact(1), Bytes=Inexact(<bytes>), [(Col[0]: Min=Inexact(Int32(1)) Max=Inexact(Int32(3))),(Col[1]:),(Col[2]: Min=Inexact(Int32(10)) Max=Inexact(Int32(30))),(Col[3]:),(Col[4]:)]]
+                                        CoalesceBatchesExec: target_batch_size=8192, statistics=[Rows=Inexact(1), Bytes=Inexact(<bytes>), [(Col[0]: Min=Inexact(Int32(1)) Max=Inexact(Int32(3))),(Col[1]:),(Col[2]: Min=Inexact(Int32(10)) Max=Inexact(Int32(30))),(Col[3]:),(Col[4]:)]]
+                                          FilterExec: category@1 IS NOT NULL AND (category@1 = vip OR category@1 = stale) OR category@1 = stale, statistics=[Rows=Inexact(1), Bytes=Inexact(<bytes>), [(Col[0]: Min=Inexact(Int32(1)) Max=Inexact(Int32(3))),(Col[1]:),(Col[2]: Min=Inexact(Int32(10)) Max=Inexact(Int32(30))),(Col[3]:),(Col[4]:)]]
+                                            RepartitionExec: partitioning=RoundRobinBatch(<partitions>), input_partitions=<partitions>, statistics=[Rows=Inexact(3), Bytes=Inexact(<bytes>), [(Col[0]: Min=Inexact(Int32(1)) Max=Inexact(Int32(3))),(Col[1]:),(Col[2]: Min=Inexact(Int32(10)) Max=Inexact(Int32(30))),(Col[3]:),(Col[4]:)]]
+                                              DataSourceExec: file_groups={1 group: [[<tmp>/merge_explain_codegen/part-<id>.snappy.parquet]]}, projection=[id, category, amount, note, __sail_file_path], file_type=parquet, predicate=(category@1 IS NOT NULL AND (category@1 = vip OR category@1 = stale) OR category@1 = stale) AND (category@1 IS NOT NULL AND (category@1 = vip OR category@1 = stale) OR category@1 = stale) AND (category@1 IS NOT NULL AND (category@1 = vip OR category@1 = stale) OR category@1 = stale), pruning_predicate=(category_null_count@1 != row_count@0 AND (category_null_count@1 != row_count@0 AND category_min@2 <= vip AND vip <= category_max@3 OR category_null_count@1 != row_count@0 AND category_min@2 <= stale AND stale <= category_max@3) OR category_null_count@1 != row_count@0 AND category_min@2 <= stale AND stale <= category_max@3) AND (category_null_count@1 != row_count@0 AND (category_null_count@1 != row_count@0 AND category_min@2 <= vip AND vip <= category_max@3 OR category_null_count@1 != row_count@0 AND category_min@2 <= stale AND stale <= category_max@3) OR category_null_count@1 != row_count@0 AND category_min@2 <= stale AND stale <= category_max@3) AND (category_null_count@1 != row_count@0 AND (category_null_count@1 != row_count@0 AND category_min@2 <= vip AND vip <= category_max@3 OR category_null_count@1 != row_count@0 AND category_min@2 <= stale AND stale <= category_max@3) OR category_null_count@1 != row_count@0 AND category_min@2 <= stale AND stale <= category_max@3), required_guarantees=[], statistics=[Rows=Inexact(3), Bytes=Inexact(<bytes>), [(Col[0]: Min=Inexact(Int32(1)) Max=Inexact(Int32(3))),(Col[1]:),(Col[2]: Min=Inexact(Int32(10)) Max=Inexact(Int32(30))),(Col[3]:),(Col[4]:)]]
+                                  RepartitionExec: partitioning=RoundRobinBatch(<partitions>), input_partitions=<partitions>, statistics=[Rows=Inexact(1), Bytes=Inexact(<bytes>), [(Col[0]: Null=Inexact(0)),(Col[1]: Null=Inexact(0)),(Col[2]: Null=Inexact(0)),(Col[3]: Null=Inexact(0)),(Col[4]:)]]
+                                    ProjectionExec: expr=[__sail_src_id@0 as __sail_src_id, __sail_src_category@1 as __sail_src_category, __sail_src_amount@2 as __sail_src_amount, __sail_src_note@3 as __sail_src_note, true as __sail_merge_source_row_present], statistics=[Rows=Inexact(1), Bytes=Inexact(<bytes>), [(Col[0]: Null=Inexact(0)),(Col[1]: Null=Inexact(0)),(Col[2]: Null=Inexact(0)),(Col[3]: Null=Inexact(0)),(Col[4]:)]]
+                                      ProjectionExec: expr=[column1@0 as __sail_src_id, column2@1 as __sail_src_category, column3@2 as __sail_src_amount, column4@3 as __sail_src_note], statistics=[Rows=Inexact(1), Bytes=Inexact(<bytes>), [(Col[0]: Null=Inexact(0)),(Col[1]: Null=Inexact(0)),(Col[2]: Null=Inexact(0)),(Col[3]: Null=Inexact(0))]]
+                                        CoalesceBatchesExec: target_batch_size=8192, statistics=[Rows=Inexact(1), Bytes=Inexact(<bytes>), [(Col[0]: Null=Inexact(0)),(Col[1]: Null=Inexact(0)),(Col[2]: Null=Inexact(0)),(Col[3]: Null=Inexact(0))]]
+                                          CoalesceBatchesExec: target_batch_size=8192, statistics=[Rows=Inexact(1), Bytes=Inexact(<bytes>), [(Col[0]: Null=Inexact(0)),(Col[1]: Null=Inexact(0)),(Col[2]: Null=Inexact(0)),(Col[3]: Null=Inexact(0))]]
+                                            FilterExec: column3@2 + 1 > 10 AND (column1@0 = 1 OR column1@0 = 2 OR column1@0 = 4), statistics=[Rows=Inexact(1), Bytes=Inexact(<bytes>), [(Col[0]: Null=Inexact(0)),(Col[1]: Null=Inexact(0)),(Col[2]: Null=Inexact(0)),(Col[3]: Null=Inexact(0))]]
+                                              DataSourceExec: partitions=1, partition_sizes=[<sizes>], statistics=[Rows=Exact(3), Bytes=Exact(<bytes>), [(Col[0]: Null=Exact(0)),(Col[1]: Null=Exact(0)),(Col[2]: Null=Exact(0)),(Col[3]: Null=Exact(0))]]
 
 
 initial_physical_plan_with_schema:
@@ -633,7 +685,33 @@ DeltaCommitExec(table_path=file://<tmp>/merge_explain_codegen/), schema=[count:U
                                 ProjectionExec: expr=[id@0 as id, category@1 as category, amount@2 as amount, note@3 as note, __sail_file_path@4 as __sail_file_path, true as __sail_merge_target_row_present], schema=[id:Int32;N, category:Utf8;N, amount:Int32;N, note:Utf8;N, __sail_file_path:Utf8;N, __sail_merge_target_row_present:Boolean]
                                   DataSourceExec: file_groups={1 group: [[<tmp>/merge_explain_codegen/part-<id>.snappy.parquet]]}, projection=[id, category, amount, note, __sail_file_path], file_type=parquet, schema=[id:Int32;N, category:Utf8;N, amount:Int32;N, note:Utf8;N, __sail_file_path:Utf8;N]
       DeltaRemoveActionsExec, schema=[data:Utf8;N]
-        DataSourceExec: partitions=1, partition_sizes=[<sizes>], schema=[add:Utf8;N, partition_scan:Boolean]
+        DeltaFileLookupExec(table_url=file:<tmp>/merge_explain_codegen/, version=0), schema=[add:Utf8;N, partition_scan:Boolean]
+          CoalescePartitionsExec, schema=[__sail_file_path:Utf8;N]
+            AggregateExec: mode=FinalPartitioned, gby=[__sail_file_path@0 as __sail_file_path], aggr=[], schema=[__sail_file_path:Utf8;N]
+              CoalesceBatchesExec: target_batch_size=8192, schema=[__sail_file_path:Utf8;N]
+                RepartitionExec: partitioning=Hash([__sail_file_path@0], <partitions>), input_partitions=<partitions>, schema=[__sail_file_path:Utf8;N]
+                  CoalesceBatchesExec: target_batch_size=8192, schema=[__sail_file_path:Utf8;N]
+                    AggregateExec: mode=Partial, gby=[__sail_file_path@4 as __sail_file_path], aggr=[], schema=[__sail_file_path:Utf8;N]
+                      CoalesceBatchesExec: target_batch_size=8192, schema=[id:Int32;N, category:Utf8;N, amount:Int32;N, note:Utf8;N, __sail_file_path:Utf8;N, __sail_merge_target_row_present:Boolean, __sail_src_id:Int32;N, __sail_src_category:Utf8;N, __sail_src_amount:Int32;N, __sail_src_note:Utf8;N, __sail_merge_source_row_present:Boolean;N]
+                        CoalesceBatchesExec: target_batch_size=8192, schema=[id:Int32;N, category:Utf8;N, amount:Int32;N, note:Utf8;N, __sail_file_path:Utf8;N, __sail_merge_target_row_present:Boolean, __sail_src_id:Int32;N, __sail_src_category:Utf8;N, __sail_src_amount:Int32;N, __sail_src_note:Utf8;N, __sail_merge_source_row_present:Boolean;N]
+                          FilterExec: __sail_merge_source_row_present@10 IS NOT NULL AND id@0 = __sail_src_id@6 AND category@1 IS NOT NULL AND (category@1 = vip OR category@1 = stale) OR __sail_merge_source_row_present@10 IS NULL AND category@1 = stale, schema=[id:Int32;N, category:Utf8;N, amount:Int32;N, note:Utf8;N, __sail_file_path:Utf8;N, __sail_merge_target_row_present:Boolean, __sail_src_id:Int32;N, __sail_src_category:Utf8;N, __sail_src_amount:Int32;N, __sail_src_note:Utf8;N, __sail_merge_source_row_present:Boolean;N]
+                            CoalesceBatchesExec: target_batch_size=8192, schema=[id:Int32;N, category:Utf8;N, amount:Int32;N, note:Utf8;N, __sail_file_path:Utf8;N, __sail_merge_target_row_present:Boolean, __sail_src_id:Int32;N, __sail_src_category:Utf8;N, __sail_src_amount:Int32;N, __sail_src_note:Utf8;N, __sail_merge_source_row_present:Boolean;N]
+                              CoalesceBatchesExec: target_batch_size=8192, schema=[id:Int32;N, category:Utf8;N, amount:Int32;N, note:Utf8;N, __sail_file_path:Utf8;N, __sail_merge_target_row_present:Boolean, __sail_src_id:Int32;N, __sail_src_category:Utf8;N, __sail_src_amount:Int32;N, __sail_src_note:Utf8;N, __sail_merge_source_row_present:Boolean;N]
+                                HashJoinExec: mode=CollectLeft, join_type=Left, on=[(id@0, __sail_src_id@0)], filter=category@0 IS NOT NULL, schema=[id:Int32;N, category:Utf8;N, amount:Int32;N, note:Utf8;N, __sail_file_path:Utf8;N, __sail_merge_target_row_present:Boolean, __sail_src_id:Int32;N, __sail_src_category:Utf8;N, __sail_src_amount:Int32;N, __sail_src_note:Utf8;N, __sail_merge_source_row_present:Boolean;N]
+                                  CoalescePartitionsExec, schema=[id:Int32;N, category:Utf8;N, amount:Int32;N, note:Utf8;N, __sail_file_path:Utf8;N, __sail_merge_target_row_present:Boolean]
+                                    ProjectionExec: expr=[id@0 as id, category@1 as category, amount@2 as amount, note@3 as note, __sail_file_path@4 as __sail_file_path, true as __sail_merge_target_row_present], schema=[id:Int32;N, category:Utf8;N, amount:Int32;N, note:Utf8;N, __sail_file_path:Utf8;N, __sail_merge_target_row_present:Boolean]
+                                      CoalesceBatchesExec: target_batch_size=8192, schema=[id:Int32;N, category:Utf8;N, amount:Int32;N, note:Utf8;N, __sail_file_path:Utf8;N]
+                                        CoalesceBatchesExec: target_batch_size=8192, schema=[id:Int32;N, category:Utf8;N, amount:Int32;N, note:Utf8;N, __sail_file_path:Utf8;N]
+                                          FilterExec: category@1 IS NOT NULL AND (category@1 = vip OR category@1 = stale) OR category@1 = stale, schema=[id:Int32;N, category:Utf8;N, amount:Int32;N, note:Utf8;N, __sail_file_path:Utf8;N]
+                                            RepartitionExec: partitioning=RoundRobinBatch(<partitions>), input_partitions=<partitions>, schema=[id:Int32;N, category:Utf8;N, amount:Int32;N, note:Utf8;N, __sail_file_path:Utf8;N]
+                                              DataSourceExec: file_groups={1 group: [[<tmp>/merge_explain_codegen/part-<id>.snappy.parquet]]}, projection=[id, category, amount, note, __sail_file_path], file_type=parquet, predicate=(category@1 IS NOT NULL AND (category@1 = vip OR category@1 = stale) OR category@1 = stale) AND (category@1 IS NOT NULL AND (category@1 = vip OR category@1 = stale) OR category@1 = stale) AND (category@1 IS NOT NULL AND (category@1 = vip OR category@1 = stale) OR category@1 = stale), pruning_predicate=(category_null_count@1 != row_count@0 AND (category_null_count@1 != row_count@0 AND category_min@2 <= vip AND vip <= category_max@3 OR category_null_count@1 != row_count@0 AND category_min@2 <= stale AND stale <= category_max@3) OR category_null_count@1 != row_count@0 AND category_min@2 <= stale AND stale <= category_max@3) AND (category_null_count@1 != row_count@0 AND (category_null_count@1 != row_count@0 AND category_min@2 <= vip AND vip <= category_max@3 OR category_null_count@1 != row_count@0 AND category_min@2 <= stale AND stale <= category_max@3) OR category_null_count@1 != row_count@0 AND category_min@2 <= stale AND stale <= category_max@3) AND (category_null_count@1 != row_count@0 AND (category_null_count@1 != row_count@0 AND category_min@2 <= vip AND vip <= category_max@3 OR category_null_count@1 != row_count@0 AND category_min@2 <= stale AND stale <= category_max@3) OR category_null_count@1 != row_count@0 AND category_min@2 <= stale AND stale <= category_max@3), required_guarantees=[], schema=[id:Int32;N, category:Utf8;N, amount:Int32;N, note:Utf8;N, __sail_file_path:Utf8;N]
+                                  RepartitionExec: partitioning=RoundRobinBatch(<partitions>), input_partitions=<partitions>, schema=[__sail_src_id:Int32;N, __sail_src_category:Utf8;N, __sail_src_amount:Int32;N, __sail_src_note:Utf8;N, __sail_merge_source_row_present:Boolean]
+                                    ProjectionExec: expr=[__sail_src_id@0 as __sail_src_id, __sail_src_category@1 as __sail_src_category, __sail_src_amount@2 as __sail_src_amount, __sail_src_note@3 as __sail_src_note, true as __sail_merge_source_row_present], schema=[__sail_src_id:Int32;N, __sail_src_category:Utf8;N, __sail_src_amount:Int32;N, __sail_src_note:Utf8;N, __sail_merge_source_row_present:Boolean]
+                                      ProjectionExec: expr=[column1@0 as __sail_src_id, column2@1 as __sail_src_category, column3@2 as __sail_src_amount, column4@3 as __sail_src_note], schema=[__sail_src_id:Int32;N, __sail_src_category:Utf8;N, __sail_src_amount:Int32;N, __sail_src_note:Utf8;N]
+                                        CoalesceBatchesExec: target_batch_size=8192, schema=[column1:Int32;N, column2:Utf8;N, column3:Int32;N, column4:Utf8;N]
+                                          CoalesceBatchesExec: target_batch_size=8192, schema=[column1:Int32;N, column2:Utf8;N, column3:Int32;N, column4:Utf8;N]
+                                            FilterExec: column3@2 + 1 > 10 AND (column1@0 = 1 OR column1@0 = 2 OR column1@0 = 4), schema=[column1:Int32;N, column2:Utf8;N, column3:Int32;N, column4:Utf8;N]
+                                              DataSourceExec: partitions=1, partition_sizes=[<sizes>], schema=[column1:Int32;N, column2:Utf8;N, column3:Int32;N, column4:Utf8;N]
 
 
 physical_plan after OutputRequirements:
@@ -663,7 +741,33 @@ OutputRequirementExec: order_by=[], dist_by=Unspecified
                                   ProjectionExec: expr=[id@0 as id, category@1 as category, amount@2 as amount, note@3 as note, __sail_file_path@4 as __sail_file_path, true as __sail_merge_target_row_present]
                                     DataSourceExec: file_groups={1 group: [[<tmp>/merge_explain_codegen/part-<id>.snappy.parquet]]}, projection=[id, category, amount, note, __sail_file_path], file_type=parquet
         DeltaRemoveActionsExec
-          DataSourceExec: partitions=1, partition_sizes=[<sizes>]
+          DeltaFileLookupExec(table_url=file:<tmp>/merge_explain_codegen/, version=0)
+            CoalescePartitionsExec
+              AggregateExec: mode=FinalPartitioned, gby=[__sail_file_path@0 as __sail_file_path], aggr=[]
+                CoalesceBatchesExec: target_batch_size=8192
+                  RepartitionExec: partitioning=Hash([__sail_file_path@0], <partitions>), input_partitions=<partitions>
+                    CoalesceBatchesExec: target_batch_size=8192
+                      AggregateExec: mode=Partial, gby=[__sail_file_path@4 as __sail_file_path], aggr=[]
+                        CoalesceBatchesExec: target_batch_size=8192
+                          CoalesceBatchesExec: target_batch_size=8192
+                            FilterExec: __sail_merge_source_row_present@10 IS NOT NULL AND id@0 = __sail_src_id@6 AND category@1 IS NOT NULL AND (category@1 = vip OR category@1 = stale) OR __sail_merge_source_row_present@10 IS NULL AND category@1 = stale
+                              CoalesceBatchesExec: target_batch_size=8192
+                                CoalesceBatchesExec: target_batch_size=8192
+                                  HashJoinExec: mode=CollectLeft, join_type=Left, on=[(id@0, __sail_src_id@0)], filter=category@0 IS NOT NULL
+                                    CoalescePartitionsExec
+                                      ProjectionExec: expr=[id@0 as id, category@1 as category, amount@2 as amount, note@3 as note, __sail_file_path@4 as __sail_file_path, true as __sail_merge_target_row_present]
+                                        CoalesceBatchesExec: target_batch_size=8192
+                                          CoalesceBatchesExec: target_batch_size=8192
+                                            FilterExec: category@1 IS NOT NULL AND (category@1 = vip OR category@1 = stale) OR category@1 = stale
+                                              RepartitionExec: partitioning=RoundRobinBatch(<partitions>), input_partitions=<partitions>
+                                                DataSourceExec: file_groups={1 group: [[<tmp>/merge_explain_codegen/part-<id>.snappy.parquet]]}, projection=[id, category, amount, note, __sail_file_path], file_type=parquet, predicate=(category@1 IS NOT NULL AND (category@1 = vip OR category@1 = stale) OR category@1 = stale) AND (category@1 IS NOT NULL AND (category@1 = vip OR category@1 = stale) OR category@1 = stale) AND (category@1 IS NOT NULL AND (category@1 = vip OR category@1 = stale) OR category@1 = stale), pruning_predicate=(category_null_count@1 != row_count@0 AND (category_null_count@1 != row_count@0 AND category_min@2 <= vip AND vip <= category_max@3 OR category_null_count@1 != row_count@0 AND category_min@2 <= stale AND stale <= category_max@3) OR category_null_count@1 != row_count@0 AND category_min@2 <= stale AND stale <= category_max@3) AND (category_null_count@1 != row_count@0 AND (category_null_count@1 != row_count@0 AND category_min@2 <= vip AND vip <= category_max@3 OR category_null_count@1 != row_count@0 AND category_min@2 <= stale AND stale <= category_max@3) OR category_null_count@1 != row_count@0 AND category_min@2 <= stale AND stale <= category_max@3) AND (category_null_count@1 != row_count@0 AND (category_null_count@1 != row_count@0 AND category_min@2 <= vip AND vip <= category_max@3 OR category_null_count@1 != row_count@0 AND category_min@2 <= stale AND stale <= category_max@3) OR category_null_count@1 != row_count@0 AND category_min@2 <= stale AND stale <= category_max@3), required_guarantees=[]
+                                    RepartitionExec: partitioning=RoundRobinBatch(<partitions>), input_partitions=<partitions>
+                                      ProjectionExec: expr=[__sail_src_id@0 as __sail_src_id, __sail_src_category@1 as __sail_src_category, __sail_src_amount@2 as __sail_src_amount, __sail_src_note@3 as __sail_src_note, true as __sail_merge_source_row_present]
+                                        ProjectionExec: expr=[column1@0 as __sail_src_id, column2@1 as __sail_src_category, column3@2 as __sail_src_amount, column4@3 as __sail_src_note]
+                                          CoalesceBatchesExec: target_batch_size=8192
+                                            CoalesceBatchesExec: target_batch_size=8192
+                                              FilterExec: column3@2 + 1 > 10 AND (column1@0 = 1 OR column1@0 = 2 OR column1@0 = 4)
+                                                DataSourceExec: partitions=1, partition_sizes=[<sizes>]
 
 
 physical_plan after aggregate_statistics:
@@ -676,10 +780,116 @@ physical_plan after LimitedDistinctAggregation:
 SAME TEXT AS ABOVE
 
 physical_plan after FilterPushdown:
-SAME TEXT AS ABOVE
+OutputRequirementExec: order_by=[], dist_by=Unspecified
+  DeltaCommitExec(table_path=file://<tmp>/merge_explain_codegen/)
+    CoalescePartitionsExec
+      UnionExec
+        DeltaWriterExec(table_path=file://<tmp>/merge_explain_codegen/)
+          CoalescePartitionsExec
+            ProjectionExec: expr=[CASE WHEN __common_expr_1@0 THEN __sail_src_id@9 ELSE id@3 END as id, CASE WHEN __common_expr_1@0 THEN __sail_src_category@10 ELSE category@4 END as category, CASE WHEN __common_expr_2@1 THEN __sail_src_amount@11 + 1 WHEN __common_expr_1@0 THEN __sail_src_amount@11 ELSE amount@5 END as amount, CASE WHEN __common_expr_2@1 THEN spark_concat(__sail_src_note@12, _, id@3) WHEN __common_expr_3@2 AND __sail_merge_source_row_present@13 IS NULL AND category@4 = stale THEN spark_concat(note@6, _orphan) WHEN __common_expr_1@0 THEN spark_concat(insert_, __sail_src_note@12) ELSE note@6 END as note]
+              ProjectionExec: expr=[__sail_merge_target_row_present@6 IS NULL AND __sail_merge_source_row_present@11 IS NOT NULL as __common_expr_1, __common_expr_4@0 AND __sail_merge_source_row_present@11 IS NOT NULL AND category@2 = vip as __common_expr_2, __common_expr_4@0 as __common_expr_3, id@1 as id, category@2 as category, amount@3 as amount, note@4 as note, __sail_file_path@5 as __sail_file_path, __sail_merge_target_row_present@6 as __sail_merge_target_row_present, __sail_src_id@7 as __sail_src_id, __sail_src_category@8 as __sail_src_category, __sail_src_amount@9 as __sail_src_amount, __sail_src_note@10 as __sail_src_note, __sail_merge_source_row_present@11 as __sail_merge_source_row_present]
+                ProjectionExec: expr=[__sail_merge_target_row_present@5 IS NOT NULL as __common_expr_4, id@0 as id, category@1 as category, amount@2 as amount, note@3 as note, __sail_file_path@4 as __sail_file_path, __sail_merge_target_row_present@5 as __sail_merge_target_row_present, __sail_src_id@6 as __sail_src_id, __sail_src_category@7 as __sail_src_category, __sail_src_amount@8 as __sail_src_amount, __sail_src_note@9 as __sail_src_note, __sail_merge_source_row_present@10 as __sail_merge_source_row_present]
+                  CoalesceBatchesExec: target_batch_size=8192
+                    CoalesceBatchesExec: target_batch_size=8192
+                      FilterExec: __sail_merge_target_row_present@5 IS NOT NULL AND (__sail_merge_target_row_present@5 IS NULL OR __sail_merge_source_row_present@10 IS NULL OR category@1 != stale) OR __sail_merge_target_row_present@5 IS NULL AND __sail_merge_source_row_present@10 IS NOT NULL
+                        RepartitionExec: partitioning=RoundRobinBatch(<partitions>), input_partitions=<partitions>
+                          ProjectionExec: expr=[id@5 as id, category@6 as category, amount@7 as amount, note@8 as note, __sail_file_path@9 as __sail_file_path, __sail_merge_target_row_present@10 as __sail_merge_target_row_present, __sail_src_id@0 as __sail_src_id, __sail_src_category@1 as __sail_src_category, __sail_src_amount@2 as __sail_src_amount, __sail_src_note@3 as __sail_src_note, __sail_merge_source_row_present@4 as __sail_merge_source_row_present]
+                            CoalesceBatchesExec: target_batch_size=8192
+                              CoalesceBatchesExec: target_batch_size=8192
+                                HashJoinExec: mode=CollectLeft, join_type=Full, on=[(__sail_src_id@0, id@0)], filter=category@0 IS NOT NULL
+                                  ProjectionExec: expr=[__sail_src_id@0 as __sail_src_id, __sail_src_category@1 as __sail_src_category, __sail_src_amount@2 as __sail_src_amount, __sail_src_note@3 as __sail_src_note, true as __sail_merge_source_row_present]
+                                    ProjectionExec: expr=[column1@0 as __sail_src_id, column2@1 as __sail_src_category, column3@2 as __sail_src_amount, column4@3 as __sail_src_note]
+                                      CoalesceBatchesExec: target_batch_size=8192
+                                        CoalesceBatchesExec: target_batch_size=8192
+                                          FilterExec: column3@2 + 1 > 10 AND (column1@0 = 1 OR column1@0 = 2 OR column1@0 = 4)
+                                            DataSourceExec: partitions=1, partition_sizes=[<sizes>]
+                                  ProjectionExec: expr=[id@0 as id, category@1 as category, amount@2 as amount, note@3 as note, __sail_file_path@4 as __sail_file_path, true as __sail_merge_target_row_present]
+                                    DataSourceExec: file_groups={1 group: [[<tmp>/merge_explain_codegen/part-<id>.snappy.parquet]]}, projection=[id, category, amount, note, __sail_file_path], file_type=parquet
+        DeltaRemoveActionsExec
+          DeltaFileLookupExec(table_url=file:<tmp>/merge_explain_codegen/, version=0)
+            CoalescePartitionsExec
+              AggregateExec: mode=FinalPartitioned, gby=[__sail_file_path@0 as __sail_file_path], aggr=[]
+                CoalesceBatchesExec: target_batch_size=8192
+                  RepartitionExec: partitioning=Hash([__sail_file_path@0], <partitions>), input_partitions=<partitions>
+                    CoalesceBatchesExec: target_batch_size=8192
+                      AggregateExec: mode=Partial, gby=[__sail_file_path@4 as __sail_file_path], aggr=[]
+                        CoalesceBatchesExec: target_batch_size=8192
+                          CoalesceBatchesExec: target_batch_size=8192
+                            FilterExec: __sail_merge_source_row_present@10 IS NOT NULL AND id@0 = __sail_src_id@6 AND category@1 IS NOT NULL AND (category@1 = vip OR category@1 = stale) OR __sail_merge_source_row_present@10 IS NULL AND category@1 = stale
+                              CoalesceBatchesExec: target_batch_size=8192
+                                CoalesceBatchesExec: target_batch_size=8192
+                                  HashJoinExec: mode=CollectLeft, join_type=Left, on=[(id@0, __sail_src_id@0)], filter=category@0 IS NOT NULL
+                                    CoalescePartitionsExec
+                                      ProjectionExec: expr=[id@0 as id, category@1 as category, amount@2 as amount, note@3 as note, __sail_file_path@4 as __sail_file_path, true as __sail_merge_target_row_present]
+                                        CoalesceBatchesExec: target_batch_size=8192
+                                          CoalesceBatchesExec: target_batch_size=8192
+                                            FilterExec: category@1 IS NOT NULL AND (category@1 = vip OR category@1 = stale) OR category@1 = stale
+                                              RepartitionExec: partitioning=RoundRobinBatch(<partitions>), input_partitions=<partitions>
+                                                DataSourceExec: file_groups={1 group: [[<tmp>/merge_explain_codegen/part-<id>.snappy.parquet]]}, projection=[id, category, amount, note, __sail_file_path], file_type=parquet, predicate=(category@1 IS NOT NULL AND (category@1 = vip OR category@1 = stale) OR category@1 = stale) AND (category@1 IS NOT NULL AND (category@1 = vip OR category@1 = stale) OR category@1 = stale) AND (category@1 IS NOT NULL AND (category@1 = vip OR category@1 = stale) OR category@1 = stale) AND (category@1 IS NOT NULL AND (category@1 = vip OR category@1 = stale) OR category@1 = stale), pruning_predicate=(category_null_count@1 != row_count@0 AND (category_null_count@1 != row_count@0 AND category_min@2 <= vip AND vip <= category_max@3 OR category_null_count@1 != row_count@0 AND category_min@2 <= stale AND stale <= category_max@3) OR category_null_count@1 != row_count@0 AND category_min@2 <= stale AND stale <= category_max@3) AND (category_null_count@1 != row_count@0 AND (category_null_count@1 != row_count@0 AND category_min@2 <= vip AND vip <= category_max@3 OR category_null_count@1 != row_count@0 AND category_min@2 <= stale AND stale <= category_max@3) OR category_null_count@1 != row_count@0 AND category_min@2 <= stale AND stale <= category_max@3) AND (category_null_count@1 != row_count@0 AND (category_null_count@1 != row_count@0 AND category_min@2 <= vip AND vip <= category_max@3 OR category_null_count@1 != row_count@0 AND category_min@2 <= stale AND stale <= category_max@3) OR category_null_count@1 != row_count@0 AND category_min@2 <= stale AND stale <= category_max@3) AND (category_null_count@1 != row_count@0 AND (category_null_count@1 != row_count@0 AND category_min@2 <= vip AND vip <= category_max@3 OR category_null_count@1 != row_count@0 AND category_min@2 <= stale AND stale <= category_max@3) OR category_null_count@1 != row_count@0 AND category_min@2 <= stale AND stale <= category_max@3), required_guarantees=[]
+                                    RepartitionExec: partitioning=RoundRobinBatch(<partitions>), input_partitions=<partitions>
+                                      ProjectionExec: expr=[__sail_src_id@0 as __sail_src_id, __sail_src_category@1 as __sail_src_category, __sail_src_amount@2 as __sail_src_amount, __sail_src_note@3 as __sail_src_note, true as __sail_merge_source_row_present]
+                                        ProjectionExec: expr=[column1@0 as __sail_src_id, column2@1 as __sail_src_category, column3@2 as __sail_src_amount, column4@3 as __sail_src_note]
+                                          CoalesceBatchesExec: target_batch_size=8192
+                                            CoalesceBatchesExec: target_batch_size=8192
+                                              FilterExec: column3@2 + 1 > 10 AND (column1@0 = 1 OR column1@0 = 2 OR column1@0 = 4)
+                                                DataSourceExec: partitions=1, partition_sizes=[<sizes>]
+
 
 physical_plan after EnforceDistribution:
-SAME TEXT AS ABOVE
+OutputRequirementExec: order_by=[], dist_by=Unspecified
+  DeltaCommitExec(table_path=file://<tmp>/merge_explain_codegen/)
+    CoalescePartitionsExec
+      UnionExec
+        DeltaWriterExec(table_path=file://<tmp>/merge_explain_codegen/)
+          CoalescePartitionsExec
+            ProjectionExec: expr=[CASE WHEN __common_expr_1@0 THEN __sail_src_id@9 ELSE id@3 END as id, CASE WHEN __common_expr_1@0 THEN __sail_src_category@10 ELSE category@4 END as category, CASE WHEN __common_expr_2@1 THEN __sail_src_amount@11 + 1 WHEN __common_expr_1@0 THEN __sail_src_amount@11 ELSE amount@5 END as amount, CASE WHEN __common_expr_2@1 THEN spark_concat(__sail_src_note@12, _, id@3) WHEN __common_expr_3@2 AND __sail_merge_source_row_present@13 IS NULL AND category@4 = stale THEN spark_concat(note@6, _orphan) WHEN __common_expr_1@0 THEN spark_concat(insert_, __sail_src_note@12) ELSE note@6 END as note]
+              ProjectionExec: expr=[__sail_merge_target_row_present@6 IS NULL AND __sail_merge_source_row_present@11 IS NOT NULL as __common_expr_1, __common_expr_4@0 AND __sail_merge_source_row_present@11 IS NOT NULL AND category@2 = vip as __common_expr_2, __common_expr_4@0 as __common_expr_3, id@1 as id, category@2 as category, amount@3 as amount, note@4 as note, __sail_file_path@5 as __sail_file_path, __sail_merge_target_row_present@6 as __sail_merge_target_row_present, __sail_src_id@7 as __sail_src_id, __sail_src_category@8 as __sail_src_category, __sail_src_amount@9 as __sail_src_amount, __sail_src_note@10 as __sail_src_note, __sail_merge_source_row_present@11 as __sail_merge_source_row_present]
+                ProjectionExec: expr=[__sail_merge_target_row_present@5 IS NOT NULL as __common_expr_4, id@0 as id, category@1 as category, amount@2 as amount, note@3 as note, __sail_file_path@4 as __sail_file_path, __sail_merge_target_row_present@5 as __sail_merge_target_row_present, __sail_src_id@6 as __sail_src_id, __sail_src_category@7 as __sail_src_category, __sail_src_amount@8 as __sail_src_amount, __sail_src_note@9 as __sail_src_note, __sail_merge_source_row_present@10 as __sail_merge_source_row_present]
+                  CoalesceBatchesExec: target_batch_size=8192
+                    CoalesceBatchesExec: target_batch_size=8192
+                      FilterExec: __sail_merge_target_row_present@5 IS NOT NULL AND (__sail_merge_target_row_present@5 IS NULL OR __sail_merge_source_row_present@10 IS NULL OR category@1 != stale) OR __sail_merge_target_row_present@5 IS NULL AND __sail_merge_source_row_present@10 IS NOT NULL
+                        RepartitionExec: partitioning=RoundRobinBatch(<partitions>), input_partitions=<partitions>
+                          ProjectionExec: expr=[id@5 as id, category@6 as category, amount@7 as amount, note@8 as note, __sail_file_path@9 as __sail_file_path, __sail_merge_target_row_present@10 as __sail_merge_target_row_present, __sail_src_id@0 as __sail_src_id, __sail_src_category@1 as __sail_src_category, __sail_src_amount@2 as __sail_src_amount, __sail_src_note@3 as __sail_src_note, __sail_merge_source_row_present@4 as __sail_merge_source_row_present]
+                            CoalesceBatchesExec: target_batch_size=8192
+                              CoalesceBatchesExec: target_batch_size=8192
+                                HashJoinExec: mode=CollectLeft, join_type=Full, on=[(__sail_src_id@0, id@0)], filter=category@0 IS NOT NULL
+                                  ProjectionExec: expr=[__sail_src_id@0 as __sail_src_id, __sail_src_category@1 as __sail_src_category, __sail_src_amount@2 as __sail_src_amount, __sail_src_note@3 as __sail_src_note, true as __sail_merge_source_row_present]
+                                    ProjectionExec: expr=[column1@0 as __sail_src_id, column2@1 as __sail_src_category, column3@2 as __sail_src_amount, column4@3 as __sail_src_note]
+                                      CoalesceBatchesExec: target_batch_size=8192
+                                        CoalesceBatchesExec: target_batch_size=8192
+                                          FilterExec: column3@2 + 1 > 10 AND (column1@0 = 1 OR column1@0 = 2 OR column1@0 = 4)
+                                            DataSourceExec: partitions=1, partition_sizes=[<sizes>]
+                                  ProjectionExec: expr=[id@0 as id, category@1 as category, amount@2 as amount, note@3 as note, __sail_file_path@4 as __sail_file_path, true as __sail_merge_target_row_present]
+                                    DataSourceExec: file_groups={1 group: [[<tmp>/merge_explain_codegen/part-<id>.snappy.parquet]]}, projection=[id, category, amount, note, __sail_file_path], file_type=parquet
+        DeltaRemoveActionsExec
+          DeltaFileLookupExec(table_url=file:<tmp>/merge_explain_codegen/, version=0)
+            CoalescePartitionsExec
+              AggregateExec: mode=FinalPartitioned, gby=[__sail_file_path@0 as __sail_file_path], aggr=[]
+                RepartitionExec: partitioning=Hash([__sail_file_path@0], <partitions>), input_partitions=<partitions>
+                  CoalesceBatchesExec: target_batch_size=8192
+                    CoalesceBatchesExec: target_batch_size=8192
+                      AggregateExec: mode=Partial, gby=[__sail_file_path@4 as __sail_file_path], aggr=[]
+                        CoalesceBatchesExec: target_batch_size=8192
+                          CoalesceBatchesExec: target_batch_size=8192
+                            FilterExec: __sail_merge_source_row_present@10 IS NOT NULL AND id@0 = __sail_src_id@6 AND category@1 IS NOT NULL AND (category@1 = vip OR category@1 = stale) OR __sail_merge_source_row_present@10 IS NULL AND category@1 = stale
+                              CoalesceBatchesExec: target_batch_size=8192
+                                CoalesceBatchesExec: target_batch_size=8192
+                                  HashJoinExec: mode=CollectLeft, join_type=Left, on=[(id@0, __sail_src_id@0)], filter=category@0 IS NOT NULL
+                                    CoalescePartitionsExec
+                                      ProjectionExec: expr=[id@0 as id, category@1 as category, amount@2 as amount, note@3 as note, __sail_file_path@4 as __sail_file_path, true as __sail_merge_target_row_present]
+                                        CoalesceBatchesExec: target_batch_size=8192
+                                          CoalesceBatchesExec: target_batch_size=8192
+                                            FilterExec: category@1 IS NOT NULL AND (category@1 = vip OR category@1 = stale) OR category@1 = stale
+                                              RepartitionExec: partitioning=RoundRobinBatch(<partitions>), input_partitions=<partitions>
+                                                DataSourceExec: file_groups={1 group: [[<tmp>/merge_explain_codegen/part-<id>.snappy.parquet]]}, projection=[id, category, amount, note, __sail_file_path], file_type=parquet, predicate=(category@1 IS NOT NULL AND (category@1 = vip OR category@1 = stale) OR category@1 = stale) AND (category@1 IS NOT NULL AND (category@1 = vip OR category@1 = stale) OR category@1 = stale) AND (category@1 IS NOT NULL AND (category@1 = vip OR category@1 = stale) OR category@1 = stale) AND (category@1 IS NOT NULL AND (category@1 = vip OR category@1 = stale) OR category@1 = stale), pruning_predicate=(category_null_count@1 != row_count@0 AND (category_null_count@1 != row_count@0 AND category_min@2 <= vip AND vip <= category_max@3 OR category_null_count@1 != row_count@0 AND category_min@2 <= stale AND stale <= category_max@3) OR category_null_count@1 != row_count@0 AND category_min@2 <= stale AND stale <= category_max@3) AND (category_null_count@1 != row_count@0 AND (category_null_count@1 != row_count@0 AND category_min@2 <= vip AND vip <= category_max@3 OR category_null_count@1 != row_count@0 AND category_min@2 <= stale AND stale <= category_max@3) OR category_null_count@1 != row_count@0 AND category_min@2 <= stale AND stale <= category_max@3) AND (category_null_count@1 != row_count@0 AND (category_null_count@1 != row_count@0 AND category_min@2 <= vip AND vip <= category_max@3 OR category_null_count@1 != row_count@0 AND category_min@2 <= stale AND stale <= category_max@3) OR category_null_count@1 != row_count@0 AND category_min@2 <= stale AND stale <= category_max@3) AND (category_null_count@1 != row_count@0 AND (category_null_count@1 != row_count@0 AND category_min@2 <= vip AND vip <= category_max@3 OR category_null_count@1 != row_count@0 AND category_min@2 <= stale AND stale <= category_max@3) OR category_null_count@1 != row_count@0 AND category_min@2 <= stale AND stale <= category_max@3), required_guarantees=[]
+                                    RepartitionExec: partitioning=RoundRobinBatch(<partitions>), input_partitions=<partitions>
+                                      ProjectionExec: expr=[__sail_src_id@0 as __sail_src_id, __sail_src_category@1 as __sail_src_category, __sail_src_amount@2 as __sail_src_amount, __sail_src_note@3 as __sail_src_note, true as __sail_merge_source_row_present]
+                                        ProjectionExec: expr=[column1@0 as __sail_src_id, column2@1 as __sail_src_category, column3@2 as __sail_src_amount, column4@3 as __sail_src_note]
+                                          CoalesceBatchesExec: target_batch_size=8192
+                                            CoalesceBatchesExec: target_batch_size=8192
+                                              FilterExec: column3@2 + 1 > 10 AND (column1@0 = 1 OR column1@0 = 2 OR column1@0 = 4)
+                                                DataSourceExec: partitions=1, partition_sizes=[<sizes>]
+
 
 physical_plan after CombinePartialFinalAggregate:
 SAME TEXT AS ABOVE
@@ -723,7 +933,38 @@ OutputRequirementExec: order_by=[], dist_by=Unspecified
                                       ProjectionExec: expr=[id@0 as id, category@1 as category, amount@2 as amount, note@3 as note, __sail_file_path@4 as __sail_file_path, true as __sail_merge_target_row_present]
                                         DataSourceExec: file_groups={1 group: [[<tmp>/merge_explain_codegen/part-<id>.snappy.parquet]]}, projection=[id, category, amount, note, __sail_file_path], file_type=parquet
         DeltaRemoveActionsExec
-          DataSourceExec: partitions=1, partition_sizes=[<sizes>]
+          DeltaFileLookupExec(table_url=file:<tmp>/merge_explain_codegen/, version=0)
+            CoalescePartitionsExec
+              AggregateExec: mode=FinalPartitioned, gby=[__sail_file_path@0 as __sail_file_path], aggr=[]
+                CoalesceBatchesExec: target_batch_size=8192
+                  RepartitionExec: partitioning=Hash([__sail_file_path@0], <partitions>), input_partitions=<partitions>
+                    CoalesceBatchesExec: target_batch_size=8192
+                      CoalesceBatchesExec: target_batch_size=8192
+                        AggregateExec: mode=Partial, gby=[__sail_file_path@4 as __sail_file_path], aggr=[]
+                          CoalesceBatchesExec: target_batch_size=8192
+                            CoalesceBatchesExec: target_batch_size=8192
+                              CoalesceBatchesExec: target_batch_size=8192
+                                FilterExec: __sail_merge_source_row_present@10 IS NOT NULL AND id@0 = __sail_src_id@6 AND category@1 IS NOT NULL AND (category@1 = vip OR category@1 = stale) OR __sail_merge_source_row_present@10 IS NULL AND category@1 = stale
+                                  CoalesceBatchesExec: target_batch_size=8192
+                                    CoalesceBatchesExec: target_batch_size=8192
+                                      CoalesceBatchesExec: target_batch_size=8192
+                                        HashJoinExec: mode=CollectLeft, join_type=Left, on=[(id@0, __sail_src_id@0)], filter=category@0 IS NOT NULL
+                                          CoalescePartitionsExec
+                                            ProjectionExec: expr=[id@0 as id, category@1 as category, amount@2 as amount, note@3 as note, __sail_file_path@4 as __sail_file_path, true as __sail_merge_target_row_present]
+                                              CoalesceBatchesExec: target_batch_size=8192
+                                                CoalesceBatchesExec: target_batch_size=8192
+                                                  CoalesceBatchesExec: target_batch_size=8192
+                                                    FilterExec: category@1 IS NOT NULL AND (category@1 = vip OR category@1 = stale) OR category@1 = stale
+                                                      RepartitionExec: partitioning=RoundRobinBatch(<partitions>), input_partitions=<partitions>
+                                                        DataSourceExec: file_groups={1 group: [[<tmp>/merge_explain_codegen/part-<id>.snappy.parquet]]}, projection=[id, category, amount, note, __sail_file_path], file_type=parquet, predicate=(category@1 IS NOT NULL AND (category@1 = vip OR category@1 = stale) OR category@1 = stale) AND (category@1 IS NOT NULL AND (category@1 = vip OR category@1 = stale) OR category@1 = stale) AND (category@1 IS NOT NULL AND (category@1 = vip OR category@1 = stale) OR category@1 = stale) AND (category@1 IS NOT NULL AND (category@1 = vip OR category@1 = stale) OR category@1 = stale), pruning_predicate=(category_null_count@1 != row_count@0 AND (category_null_count@1 != row_count@0 AND category_min@2 <= vip AND vip <= category_max@3 OR category_null_count@1 != row_count@0 AND category_min@2 <= stale AND stale <= category_max@3) OR category_null_count@1 != row_count@0 AND category_min@2 <= stale AND stale <= category_max@3) AND (category_null_count@1 != row_count@0 AND (category_null_count@1 != row_count@0 AND category_min@2 <= vip AND vip <= category_max@3 OR category_null_count@1 != row_count@0 AND category_min@2 <= stale AND stale <= category_max@3) OR category_null_count@1 != row_count@0 AND category_min@2 <= stale AND stale <= category_max@3) AND (category_null_count@1 != row_count@0 AND (category_null_count@1 != row_count@0 AND category_min@2 <= vip AND vip <= category_max@3 OR category_null_count@1 != row_count@0 AND category_min@2 <= stale AND stale <= category_max@3) OR category_null_count@1 != row_count@0 AND category_min@2 <= stale AND stale <= category_max@3) AND (category_null_count@1 != row_count@0 AND (category_null_count@1 != row_count@0 AND category_min@2 <= vip AND vip <= category_max@3 OR category_null_count@1 != row_count@0 AND category_min@2 <= stale AND stale <= category_max@3) OR category_null_count@1 != row_count@0 AND category_min@2 <= stale AND stale <= category_max@3), required_guarantees=[]
+                                          RepartitionExec: partitioning=RoundRobinBatch(<partitions>), input_partitions=<partitions>
+                                            ProjectionExec: expr=[__sail_src_id@0 as __sail_src_id, __sail_src_category@1 as __sail_src_category, __sail_src_amount@2 as __sail_src_amount, __sail_src_note@3 as __sail_src_note, true as __sail_merge_source_row_present]
+                                              ProjectionExec: expr=[column1@0 as __sail_src_id, column2@1 as __sail_src_category, column3@2 as __sail_src_amount, column4@3 as __sail_src_note]
+                                                CoalesceBatchesExec: target_batch_size=8192
+                                                  CoalesceBatchesExec: target_batch_size=8192
+                                                    CoalesceBatchesExec: target_batch_size=8192
+                                                      FilterExec: column3@2 + 1 > 10 AND (column1@0 = 1 OR column1@0 = 2 OR column1@0 = 4)
+                                                        DataSourceExec: partitions=1, partition_sizes=[<sizes>]
 
 
 physical_plan after coalesce_async_exec_input:
@@ -758,7 +999,38 @@ DeltaCommitExec(table_path=file://<tmp>/merge_explain_codegen/)
                                     ProjectionExec: expr=[id@0 as id, category@1 as category, amount@2 as amount, note@3 as note, __sail_file_path@4 as __sail_file_path, true as __sail_merge_target_row_present]
                                       DataSourceExec: file_groups={1 group: [[<tmp>/merge_explain_codegen/part-<id>.snappy.parquet]]}, projection=[id, category, amount, note, __sail_file_path], file_type=parquet
       DeltaRemoveActionsExec
-        DataSourceExec: partitions=1, partition_sizes=[<sizes>]
+        DeltaFileLookupExec(table_url=file:<tmp>/merge_explain_codegen/, version=0)
+          CoalescePartitionsExec
+            AggregateExec: mode=FinalPartitioned, gby=[__sail_file_path@0 as __sail_file_path], aggr=[]
+              CoalesceBatchesExec: target_batch_size=8192
+                RepartitionExec: partitioning=Hash([__sail_file_path@0], <partitions>), input_partitions=<partitions>
+                  CoalesceBatchesExec: target_batch_size=8192
+                    CoalesceBatchesExec: target_batch_size=8192
+                      AggregateExec: mode=Partial, gby=[__sail_file_path@4 as __sail_file_path], aggr=[]
+                        CoalesceBatchesExec: target_batch_size=8192
+                          CoalesceBatchesExec: target_batch_size=8192
+                            CoalesceBatchesExec: target_batch_size=8192
+                              FilterExec: __sail_merge_source_row_present@10 IS NOT NULL AND id@0 = __sail_src_id@6 AND category@1 IS NOT NULL AND (category@1 = vip OR category@1 = stale) OR __sail_merge_source_row_present@10 IS NULL AND category@1 = stale
+                                CoalesceBatchesExec: target_batch_size=8192
+                                  CoalesceBatchesExec: target_batch_size=8192
+                                    CoalesceBatchesExec: target_batch_size=8192
+                                      HashJoinExec: mode=CollectLeft, join_type=Left, on=[(id@0, __sail_src_id@0)], filter=category@0 IS NOT NULL
+                                        CoalescePartitionsExec
+                                          ProjectionExec: expr=[id@0 as id, category@1 as category, amount@2 as amount, note@3 as note, __sail_file_path@4 as __sail_file_path, true as __sail_merge_target_row_present]
+                                            CoalesceBatchesExec: target_batch_size=8192
+                                              CoalesceBatchesExec: target_batch_size=8192
+                                                CoalesceBatchesExec: target_batch_size=8192
+                                                  FilterExec: category@1 IS NOT NULL AND (category@1 = vip OR category@1 = stale) OR category@1 = stale
+                                                    RepartitionExec: partitioning=RoundRobinBatch(<partitions>), input_partitions=<partitions>
+                                                      DataSourceExec: file_groups={1 group: [[<tmp>/merge_explain_codegen/part-<id>.snappy.parquet]]}, projection=[id, category, amount, note, __sail_file_path], file_type=parquet, predicate=(category@1 IS NOT NULL AND (category@1 = vip OR category@1 = stale) OR category@1 = stale) AND (category@1 IS NOT NULL AND (category@1 = vip OR category@1 = stale) OR category@1 = stale) AND (category@1 IS NOT NULL AND (category@1 = vip OR category@1 = stale) OR category@1 = stale) AND (category@1 IS NOT NULL AND (category@1 = vip OR category@1 = stale) OR category@1 = stale), pruning_predicate=(category_null_count@1 != row_count@0 AND (category_null_count@1 != row_count@0 AND category_min@2 <= vip AND vip <= category_max@3 OR category_null_count@1 != row_count@0 AND category_min@2 <= stale AND stale <= category_max@3) OR category_null_count@1 != row_count@0 AND category_min@2 <= stale AND stale <= category_max@3) AND (category_null_count@1 != row_count@0 AND (category_null_count@1 != row_count@0 AND category_min@2 <= vip AND vip <= category_max@3 OR category_null_count@1 != row_count@0 AND category_min@2 <= stale AND stale <= category_max@3) OR category_null_count@1 != row_count@0 AND category_min@2 <= stale AND stale <= category_max@3) AND (category_null_count@1 != row_count@0 AND (category_null_count@1 != row_count@0 AND category_min@2 <= vip AND vip <= category_max@3 OR category_null_count@1 != row_count@0 AND category_min@2 <= stale AND stale <= category_max@3) OR category_null_count@1 != row_count@0 AND category_min@2 <= stale AND stale <= category_max@3) AND (category_null_count@1 != row_count@0 AND (category_null_count@1 != row_count@0 AND category_min@2 <= vip AND vip <= category_max@3 OR category_null_count@1 != row_count@0 AND category_min@2 <= stale AND stale <= category_max@3) OR category_null_count@1 != row_count@0 AND category_min@2 <= stale AND stale <= category_max@3), required_guarantees=[]
+                                        RepartitionExec: partitioning=RoundRobinBatch(<partitions>), input_partitions=<partitions>
+                                          ProjectionExec: expr=[__sail_src_id@0 as __sail_src_id, __sail_src_category@1 as __sail_src_category, __sail_src_amount@2 as __sail_src_amount, __sail_src_note@3 as __sail_src_note, true as __sail_merge_source_row_present]
+                                            ProjectionExec: expr=[column1@0 as __sail_src_id, column2@1 as __sail_src_category, column3@2 as __sail_src_amount, column4@3 as __sail_src_note]
+                                              CoalesceBatchesExec: target_batch_size=8192
+                                                CoalesceBatchesExec: target_batch_size=8192
+                                                  CoalesceBatchesExec: target_batch_size=8192
+                                                    FilterExec: column3@2 + 1 > 10 AND (column1@0 = 1 OR column1@0 = 2 OR column1@0 = 4)
+                                                      DataSourceExec: partitions=1, partition_sizes=[<sizes>]
 
 
 physical_plan after LimitAggregation:
@@ -814,7 +1086,38 @@ DeltaCommitExec(table_path=file://<tmp>/merge_explain_codegen/)
                                     ProjectionExec: expr=[id@0 as id, category@1 as category, amount@2 as amount, note@3 as note, __sail_file_path@4 as __sail_file_path, true as __sail_merge_target_row_present]
                                       DataSourceExec: file_groups={1 group: [[<tmp>/merge_explain_codegen/part-<id>.snappy.parquet]]}, projection=[id, category, amount, note, __sail_file_path], file_type=parquet
       DeltaRemoveActionsExec
-        DataSourceExec: partitions=1, partition_sizes=[<sizes>]
+        DeltaFileLookupExec(table_url=file:<tmp>/merge_explain_codegen/, version=0)
+          CoalescePartitionsExec
+            AggregateExec: mode=FinalPartitioned, gby=[__sail_file_path@0 as __sail_file_path], aggr=[]
+              CoalesceBatchesExec: target_batch_size=8192
+                RepartitionExec: partitioning=Hash([__sail_file_path@0], <partitions>), input_partitions=<partitions>
+                  CoalesceBatchesExec: target_batch_size=8192
+                    CoalesceBatchesExec: target_batch_size=8192
+                      AggregateExec: mode=Partial, gby=[__sail_file_path@4 as __sail_file_path], aggr=[]
+                        CoalesceBatchesExec: target_batch_size=8192
+                          CoalesceBatchesExec: target_batch_size=8192
+                            CoalesceBatchesExec: target_batch_size=8192
+                              FilterExec: __sail_merge_source_row_present@10 IS NOT NULL AND id@0 = __sail_src_id@6 AND category@1 IS NOT NULL AND (category@1 = vip OR category@1 = stale) OR __sail_merge_source_row_present@10 IS NULL AND category@1 = stale
+                                CoalesceBatchesExec: target_batch_size=8192
+                                  CoalesceBatchesExec: target_batch_size=8192
+                                    CoalesceBatchesExec: target_batch_size=8192
+                                      HashJoinExec: mode=CollectLeft, join_type=Left, on=[(id@0, __sail_src_id@0)], filter=category@0 IS NOT NULL
+                                        CoalescePartitionsExec
+                                          ProjectionExec: expr=[id@0 as id, category@1 as category, amount@2 as amount, note@3 as note, __sail_file_path@4 as __sail_file_path, true as __sail_merge_target_row_present]
+                                            CoalesceBatchesExec: target_batch_size=8192
+                                              CoalesceBatchesExec: target_batch_size=8192
+                                                CoalesceBatchesExec: target_batch_size=8192
+                                                  FilterExec: category@1 IS NOT NULL AND (category@1 = vip OR category@1 = stale) OR category@1 = stale
+                                                    RepartitionExec: partitioning=RoundRobinBatch(<partitions>), input_partitions=<partitions>
+                                                      DataSourceExec: file_groups={1 group: [[<tmp>/merge_explain_codegen/part-<id>.snappy.parquet]]}, projection=[id, category, amount, note, __sail_file_path], file_type=parquet, predicate=(category@1 IS NOT NULL AND (category@1 = vip OR category@1 = stale) OR category@1 = stale) AND (category@1 IS NOT NULL AND (category@1 = vip OR category@1 = stale) OR category@1 = stale) AND (category@1 IS NOT NULL AND (category@1 = vip OR category@1 = stale) OR category@1 = stale) AND (category@1 IS NOT NULL AND (category@1 = vip OR category@1 = stale) OR category@1 = stale), pruning_predicate=(category_null_count@1 != row_count@0 AND (category_null_count@1 != row_count@0 AND category_min@2 <= vip AND vip <= category_max@3 OR category_null_count@1 != row_count@0 AND category_min@2 <= stale AND stale <= category_max@3) OR category_null_count@1 != row_count@0 AND category_min@2 <= stale AND stale <= category_max@3) AND (category_null_count@1 != row_count@0 AND (category_null_count@1 != row_count@0 AND category_min@2 <= vip AND vip <= category_max@3 OR category_null_count@1 != row_count@0 AND category_min@2 <= stale AND stale <= category_max@3) OR category_null_count@1 != row_count@0 AND category_min@2 <= stale AND stale <= category_max@3) AND (category_null_count@1 != row_count@0 AND (category_null_count@1 != row_count@0 AND category_min@2 <= vip AND vip <= category_max@3 OR category_null_count@1 != row_count@0 AND category_min@2 <= stale AND stale <= category_max@3) OR category_null_count@1 != row_count@0 AND category_min@2 <= stale AND stale <= category_max@3) AND (category_null_count@1 != row_count@0 AND (category_null_count@1 != row_count@0 AND category_min@2 <= vip AND vip <= category_max@3 OR category_null_count@1 != row_count@0 AND category_min@2 <= stale AND stale <= category_max@3) OR category_null_count@1 != row_count@0 AND category_min@2 <= stale AND stale <= category_max@3), required_guarantees=[]
+                                        RepartitionExec: partitioning=RoundRobinBatch(<partitions>), input_partitions=<partitions>
+                                          ProjectionExec: expr=[__sail_src_id@0 as __sail_src_id, __sail_src_category@1 as __sail_src_category, __sail_src_amount@2 as __sail_src_amount, __sail_src_note@3 as __sail_src_note, true as __sail_merge_source_row_present]
+                                            ProjectionExec: expr=[column1@0 as __sail_src_id, column2@1 as __sail_src_category, column3@2 as __sail_src_amount, column4@3 as __sail_src_note]
+                                              CoalesceBatchesExec: target_batch_size=8192
+                                                CoalesceBatchesExec: target_batch_size=8192
+                                                  CoalesceBatchesExec: target_batch_size=8192
+                                                    FilterExec: column3@2 + 1 > 10 AND (column1@0 = 1 OR column1@0 = 2 OR column1@0 = 4)
+                                                      DataSourceExec: partitions=1, partition_sizes=[<sizes>]
 
 
 == Physical Plan ==
@@ -846,4 +1149,35 @@ DeltaCommitExec(table_path=file://<tmp>/merge_explain_codegen/)
                                     ProjectionExec: expr=[id@0 as id, category@1 as category, amount@2 as amount, note@3 as note, __sail_file_path@4 as __sail_file_path, true as __sail_merge_target_row_present]
                                       DataSourceExec: file_groups={1 group: [[<tmp>/merge_explain_codegen/part-<id>.snappy.parquet]]}, projection=[id, category, amount, note, __sail_file_path], file_type=parquet
       DeltaRemoveActionsExec
-        DataSourceExec: partitions=1, partition_sizes=[<sizes>]
+        DeltaFileLookupExec(table_url=file:<tmp>/merge_explain_codegen/, version=0)
+          CoalescePartitionsExec
+            AggregateExec: mode=FinalPartitioned, gby=[__sail_file_path@0 as __sail_file_path], aggr=[]
+              CoalesceBatchesExec: target_batch_size=8192
+                RepartitionExec: partitioning=Hash([__sail_file_path@0], <partitions>), input_partitions=<partitions>
+                  CoalesceBatchesExec: target_batch_size=8192
+                    CoalesceBatchesExec: target_batch_size=8192
+                      AggregateExec: mode=Partial, gby=[__sail_file_path@4 as __sail_file_path], aggr=[]
+                        CoalesceBatchesExec: target_batch_size=8192
+                          CoalesceBatchesExec: target_batch_size=8192
+                            CoalesceBatchesExec: target_batch_size=8192
+                              FilterExec: __sail_merge_source_row_present@10 IS NOT NULL AND id@0 = __sail_src_id@6 AND category@1 IS NOT NULL AND (category@1 = vip OR category@1 = stale) OR __sail_merge_source_row_present@10 IS NULL AND category@1 = stale
+                                CoalesceBatchesExec: target_batch_size=8192
+                                  CoalesceBatchesExec: target_batch_size=8192
+                                    CoalesceBatchesExec: target_batch_size=8192
+                                      HashJoinExec: mode=CollectLeft, join_type=Left, on=[(id@0, __sail_src_id@0)], filter=category@0 IS NOT NULL
+                                        CoalescePartitionsExec
+                                          ProjectionExec: expr=[id@0 as id, category@1 as category, amount@2 as amount, note@3 as note, __sail_file_path@4 as __sail_file_path, true as __sail_merge_target_row_present]
+                                            CoalesceBatchesExec: target_batch_size=8192
+                                              CoalesceBatchesExec: target_batch_size=8192
+                                                CoalesceBatchesExec: target_batch_size=8192
+                                                  FilterExec: category@1 IS NOT NULL AND (category@1 = vip OR category@1 = stale) OR category@1 = stale
+                                                    RepartitionExec: partitioning=RoundRobinBatch(<partitions>), input_partitions=<partitions>
+                                                      DataSourceExec: file_groups={1 group: [[<tmp>/merge_explain_codegen/part-<id>.snappy.parquet]]}, projection=[id, category, amount, note, __sail_file_path], file_type=parquet, predicate=(category@1 IS NOT NULL AND (category@1 = vip OR category@1 = stale) OR category@1 = stale) AND (category@1 IS NOT NULL AND (category@1 = vip OR category@1 = stale) OR category@1 = stale) AND (category@1 IS NOT NULL AND (category@1 = vip OR category@1 = stale) OR category@1 = stale) AND (category@1 IS NOT NULL AND (category@1 = vip OR category@1 = stale) OR category@1 = stale), pruning_predicate=(category_null_count@1 != row_count@0 AND (category_null_count@1 != row_count@0 AND category_min@2 <= vip AND vip <= category_max@3 OR category_null_count@1 != row_count@0 AND category_min@2 <= stale AND stale <= category_max@3) OR category_null_count@1 != row_count@0 AND category_min@2 <= stale AND stale <= category_max@3) AND (category_null_count@1 != row_count@0 AND (category_null_count@1 != row_count@0 AND category_min@2 <= vip AND vip <= category_max@3 OR category_null_count@1 != row_count@0 AND category_min@2 <= stale AND stale <= category_max@3) OR category_null_count@1 != row_count@0 AND category_min@2 <= stale AND stale <= category_max@3) AND (category_null_count@1 != row_count@0 AND (category_null_count@1 != row_count@0 AND category_min@2 <= vip AND vip <= category_max@3 OR category_null_count@1 != row_count@0 AND category_min@2 <= stale AND stale <= category_max@3) OR category_null_count@1 != row_count@0 AND category_min@2 <= stale AND stale <= category_max@3) AND (category_null_count@1 != row_count@0 AND (category_null_count@1 != row_count@0 AND category_min@2 <= vip AND vip <= category_max@3 OR category_null_count@1 != row_count@0 AND category_min@2 <= stale AND stale <= category_max@3) OR category_null_count@1 != row_count@0 AND category_min@2 <= stale AND stale <= category_max@3), required_guarantees=[]
+                                        RepartitionExec: partitioning=RoundRobinBatch(<partitions>), input_partitions=<partitions>
+                                          ProjectionExec: expr=[__sail_src_id@0 as __sail_src_id, __sail_src_category@1 as __sail_src_category, __sail_src_amount@2 as __sail_src_amount, __sail_src_note@3 as __sail_src_note, true as __sail_merge_source_row_present]
+                                            ProjectionExec: expr=[column1@0 as __sail_src_id, column2@1 as __sail_src_category, column3@2 as __sail_src_amount, column4@3 as __sail_src_note]
+                                              CoalesceBatchesExec: target_batch_size=8192
+                                                CoalesceBatchesExec: target_batch_size=8192
+                                                  CoalesceBatchesExec: target_batch_size=8192
+                                                    FilterExec: column3@2 + 1 > 10 AND (column1@0 = 1 OR column1@0 = 2 OR column1@0 = 4)
+                                                      DataSourceExec: partitions=1, partition_sizes=[<sizes>]
