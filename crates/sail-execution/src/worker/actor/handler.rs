@@ -16,7 +16,8 @@ use sail_common_datafusion::error::CommonErrorCause;
 use sail_common_datafusion::schema_adapter::DeltaSchemaAdapterFactory;
 use sail_python_udf::error::PyErrExtractor;
 use sail_server::actor::{ActorAction, ActorContext};
-use sail_telemetry::trace_execution_plan;
+use sail_telemetry::telemetry::global_metric_registry;
+use sail_telemetry::{trace_execution_plan, TracingExecOptions};
 use tokio::sync::oneshot;
 
 use crate::driver::state::TaskStatus;
@@ -44,7 +45,10 @@ impl WorkerActor {
         let server = mem::take(&mut self.server);
         self.server = match server.ready(signal, port) {
             Ok(x) => x,
-            Err(e) => return ActorAction::fail(e),
+            Err(e) => {
+                error!("{e}");
+                return ActorAction::Stop;
+            }
         };
         let host = self.options().worker_external_host.clone();
         let port = if self.options().worker_external_port > 0 {
@@ -169,7 +173,10 @@ impl WorkerActor {
         let sequence = self.sequence;
         self.sequence = match self.sequence.checked_add(1) {
             Some(x) => x,
-            None => return ActorAction::fail("sequence number overflow"),
+            None => {
+                error!("sequence number overflow");
+                return ActorAction::Stop;
+            }
         };
         let client = self.driver_client();
         let handle = ctx.handle().clone();
@@ -209,7 +216,8 @@ impl WorkerActor {
             }
             LocalStreamStorage::Memory => Box::new(MemoryStream::new()),
             LocalStreamStorage::Disk => {
-                return ActorAction::fail("not implemented: create disk stream")
+                error!("not implemented: create disk stream");
+                return ActorAction::Stop;
             }
         };
         let _ = result.send(stream.publish(ctx));
@@ -331,7 +339,14 @@ impl WorkerActor {
             attempt,
             DisplayableExecutionPlan::new(plan.as_ref()).indent(true)
         );
-        let plan = trace_execution_plan(plan)?;
+        let options = TracingExecOptions {
+            metric_registry: global_metric_registry(),
+            job_id: None, // TODO: propagate job ID
+            task_id: Some(task_id.into()),
+            task_attempt: Some(attempt),
+            operator_id: None,
+        };
+        let plan = trace_execution_plan(plan, options)?;
         let stream = plan.execute(partition, session_ctx.task_ctx())?;
         Ok(stream)
     }

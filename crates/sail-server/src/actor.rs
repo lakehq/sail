@@ -34,19 +34,7 @@ pub trait Actor: Sized + Send + 'static {
 
 pub enum ActorAction {
     Continue,
-    Warn(String),
-    Fail(String),
     Stop,
-}
-
-impl ActorAction {
-    pub fn warn(message: impl ToString) -> Self {
-        Self::Warn(message.to_string())
-    }
-
-    pub fn fail(message: impl ToString) -> Self {
-        Self::Fail(message.to_string())
-    }
 }
 
 pub struct ActorContext<T: Actor> {
@@ -223,13 +211,6 @@ impl<T: Actor> ActorRunner<T> {
             let action = self.actor.receive(&mut self.ctx, message);
             match action {
                 ActorAction::Continue => {}
-                ActorAction::Warn(message) => {
-                    log::warn!("{message}");
-                }
-                ActorAction::Fail(message) => {
-                    log::error!("{message}");
-                    break;
-                }
                 ActorAction::Stop => {
                     break;
                 }
