@@ -306,6 +306,9 @@ impl UserDefinedLogicalNodeCore for MergeIntoWriteNode {
     }
 }
 
+// TODO: Implement Eq, Hash, and PartialOrd for MergeIntoWriteNode without pointer operations
+// Use helper structs to skip schema field and other non-comparable fields so PartialOrd can be derived automatically.
+// Consider using proc macro like derivative (https://github.com/mcarton/rust-derivative) or educe (https://github.com/magiclen/educe)
 impl Eq for MergeIntoWriteNode {}
 
 impl Hash for MergeIntoWriteNode {
@@ -1014,6 +1017,9 @@ fn recover_field_names(plan: &LogicalPlan, path_column: &str) -> Option<Vec<Stri
     None
 }
 
+// TODO: Plan resolver might need to provide utilities for working with "resolved" opaque field names.
+// The need to work with the original schema in this file indicates limitations in the current plan resolver design.
+// The merge operation would become a good example for future improvements on the plan resolver.
 fn all_placeholder_schema(schema: &DFSchemaRef, path_column: &str) -> bool {
     let names: Vec<&str> = schema.fields().iter().map(|f| f.name().as_str()).collect();
     let non_path: Vec<&str> = names
