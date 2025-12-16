@@ -6118,6 +6118,8 @@ dependencies = [
  "futures",
  "sail-common-datafusion",
  "sail-logical-plan",
+ "serde",
+ "serde_json",
  "tokio-stream",
 ]
 

@@ -45,6 +45,11 @@ Feature: Delta Lake Delete
         """
         DELETE FROM delta_delete_basic WHERE department = 'Engineering'
         """
+      Then delta log latest operation is DELETE
+      Then delta log latest operation parameters json equals
+        """
+        {"predicate": "department = Engineering"}
+        """
       When query
         """
         SELECT * FROM delta_delete_basic

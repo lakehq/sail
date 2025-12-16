@@ -20,6 +20,7 @@ use url::Url;
 
 use super::context::PlannerContext;
 use crate::datasource::DataFusionMixins;
+use crate::kernel::DeltaOperation;
 use crate::options::TableDeltaOptions;
 use crate::physical_plan::{
     DeltaCommitExec, DeltaFileLookupExec, DeltaRemoveActionsExec, DeltaWriterExec,
@@ -58,6 +59,13 @@ pub async fn build_merge_plan(
         DataFusionError::Plan("pre-expanded MERGE plan missing expanded input".to_string())
     })?;
 
+    let merge_operation = if let Some(json) = merge_info.operation_override_json.as_ref() {
+        Some(serde_json::from_str::<DeltaOperation>(json).map_err(|e| {
+            DataFusionError::Plan(format!("invalid merge operation_override_json: {e}"))
+        })?)
+    } else {
+        None
+    };
     finalize_merge(
         expanded,
         ctx.table_url().clone(),
@@ -66,6 +74,7 @@ pub async fn build_merge_plan(
         partition_columns,
         table_schema,
         merge_info.touched_file_plan.clone(),
+        merge_operation,
     )
     .await
 }
@@ -78,6 +87,7 @@ async fn finalize_merge(
     partition_columns: Vec<String>,
     table_schema: datafusion::arrow::datatypes::SchemaRef,
     touched_file_plan: Option<Arc<dyn ExecutionPlan>>,
+    operation_override: Option<DeltaOperation>,
 ) -> Result<Arc<dyn ExecutionPlan>> {
     let writer = Arc::new(DeltaWriterExec::new(
         Arc::clone(&projected),
@@ -88,6 +98,7 @@ async fn finalize_merge(
         true,
         table_schema.clone(),
         None,
+        operation_override,
     ));
 
     let mut action_inputs: Vec<Arc<dyn ExecutionPlan>> = vec![writer.clone()];

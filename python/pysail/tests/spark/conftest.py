@@ -4,6 +4,7 @@ import os
 import re
 import textwrap
 import time
+from pathlib import Path
 
 import pyspark.sql.connect.session
 import pytest
@@ -336,3 +337,84 @@ def query_error(error, query, spark):
     """
     with pytest.raises(Exception, match=error):
         _ = spark.sql(query).collect()
+
+
+def _latest_commit_info(table_location: Path) -> dict:
+    log_dir = table_location / "_delta_log"
+    logs = sorted(log_dir.glob("*.json"))
+    assert logs, f"no delta logs found in {log_dir}"
+    latest = logs[-1]
+    with latest.open("r", encoding="utf-8") as f:
+        for line in f:
+            obj = json.loads(line)
+            if "commitInfo" in obj:
+                return obj["commitInfo"]
+    msg = f"commitInfo action not found in latest delta log: {latest}"
+    raise AssertionError(msg)
+
+
+def _latest_commit_info_from_variables(variables: dict) -> dict:
+    location = variables.get("location")
+    assert location is not None, "expected variable `location` to be defined for delta log inspection"
+    return _latest_commit_info(Path(location.path))
+
+
+@then(parsers.parse("delta log latest operation is {operation}"))
+def delta_log_latest_operation_is(operation: str, variables):
+    if is_jvm_spark():
+        pytest.skip("Delta log operation assertions are Sail-only")
+    commit_info = _latest_commit_info_from_variables(variables)
+    assert commit_info.get("operation") == operation
+
+
+@then(parsers.parse("delta log latest operation parameters include {keys}"))
+def delta_log_latest_operation_parameters_include(keys: str, variables):
+    if is_jvm_spark():
+        pytest.skip("Delta log operation assertions are Sail-only")
+    commit_info = _latest_commit_info_from_variables(variables)
+    params = commit_info.get("operationParameters") or {}
+    expected = [k.strip() for k in keys.split(",") if k.strip()]
+    missing = [k for k in expected if k not in params]
+    assert not missing, f"missing operationParameters keys: {missing}, got keys={sorted(params.keys())}"
+
+
+@then(parsers.parse("delta log latest operation parameter {key} equals"))
+def delta_log_latest_operation_parameter_equals(key: str, docstring, variables):
+    """Assert a specific operationParameters entry equals the given docstring (trimmed)."""
+    if is_jvm_spark():
+        pytest.skip("Delta log operation assertions are Sail-only")
+    commit_info = _latest_commit_info_from_variables(variables)
+    params = commit_info.get("operationParameters") or {}
+    assert key in params, f"missing operationParameters[{key!r}], got keys={sorted(params.keys())}"
+    expected = (docstring or "").strip()
+    actual = str(params.get(key, "")).strip()
+    assert actual == expected
+
+
+@then("delta log latest operation parameters json equals")
+def delta_log_latest_operation_parameters_json_equals(docstring, variables):
+    """Assert operationParameters contain (at least) the keys/values in the provided JSON object.
+
+    - Expected values can be strings, numbers, booleans, null, arrays, or objects.
+    - Since Delta's operationParameters values are stored as strings, we:
+      - compare string expected values directly
+      - otherwise parse the actual string as JSON and compare structurally
+    """
+    if is_jvm_spark():
+        pytest.skip("Delta log operation assertions are Sail-only")
+
+    expected = json.loads((docstring or "").strip() or "{}")
+    assert isinstance(expected, dict), "expected a JSON object mapping parameter keys to expected values"
+
+    commit_info = _latest_commit_info_from_variables(variables)
+    params = commit_info.get("operationParameters") or {}
+
+    for key, expected_value in expected.items():
+        assert key in params, f"missing operationParameters[{key!r}], got keys={sorted(params.keys())}"
+        actual_raw = params[key]
+        if isinstance(expected_value, str):
+            assert str(actual_raw) == expected_value
+        else:
+            # Interpret the raw string as JSON (e.g. "true", "[]", "{...}")
+            actual_parsed = json.loads(str(actual_raw))
+            assert actual_parsed == expected_value

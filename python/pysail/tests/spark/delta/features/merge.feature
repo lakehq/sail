@@ -47,6 +47,21 @@ Feature: Delta Lake Merge
         WHEN NOT MATCHED THEN
           INSERT *
         """
+      Then delta log latest operation is MERGE
+      Then delta log latest operation parameters json equals
+        """
+        {
+          "mergePredicate": "id = __sail_src_id",
+          "matchedPredicates": [
+            {"actionType": "update", "predicate": "flag = Utf8(\"update\")"},
+            {"actionType": "delete", "predicate": "flag = Utf8(\"delete\")"}
+          ],
+          "notMatchedPredicates": [
+            {"actionType": "insert"}
+          ],
+          "notMatchedBySourcePredicates": []
+        }
+        """
       When query
         """
         SELECT id, value, flag FROM delta_merge_basic ORDER BY id

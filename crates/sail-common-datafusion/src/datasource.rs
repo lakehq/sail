@@ -166,6 +166,10 @@ pub struct MergeInfo {
     pub not_matched_by_source_clauses: Vec<MergeNotMatchedBySourceClauseInfo>,
     pub not_matched_by_target_clauses: Vec<MergeNotMatchedByTargetClauseInfo>,
     pub with_schema_evolution: bool,
+    /// Optional override for commit operation metadata (serialized as JSON).
+    /// This is carried through physical planning so the worker can emit the correct
+    /// Delta `commitInfo.operation` and `operationParameters` in distributed execution.
+    pub operation_override_json: Option<String>,
 }
 
 // TODO: MERGE schema evolution end-to-end

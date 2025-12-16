@@ -92,6 +92,7 @@ async fn build_overwrite_if_plan(
         ctx.table_exists(),
         union_plan.schema(),
         Some(condition.clone()),
+        None,
     ));
 
     let find_files_plan: Arc<dyn ExecutionPlan> = Arc::new(DeltaFindFilesExec::new(
