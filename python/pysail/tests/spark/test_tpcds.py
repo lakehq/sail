@@ -31,7 +31,7 @@ def data(spark, duck):
 def test_derived_tpcds_query_explain_matches_snapshot(spark, query, snapshot: SnapshotAssertion):
     explained = False
     for sql in read_sql(query):
-        plan_rows = spark.sql(f"EXPLAIN CODEGEN {sql}").collect()
+        plan_rows = spark.sql(f"EXPLAIN {sql}").collect()
         assert len(plan_rows) == 1, f"expected single row, got {len(plan_rows)}"
         plan = plan_rows[0][0]
         assert snapshot(extension_class=PlanSnapshotExtension) == plan
