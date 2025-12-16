@@ -21,6 +21,7 @@ use sail_common_datafusion::streaming::event::schema::{
 use sail_logical_plan::file_delete::FileDeleteNode;
 use sail_logical_plan::file_write::FileWriteNode;
 use sail_logical_plan::map_partitions::MapPartitionsNode;
+use sail_logical_plan::merge::MergeIntoNode;
 use sail_logical_plan::range::RangeNode;
 use sail_logical_plan::repartition::ExplicitRepartitionNode;
 use sail_logical_plan::schema_pivot::SchemaPivotNode;
@@ -40,6 +41,7 @@ use sail_physical_plan::show_string::ShowStringExec;
 use sail_physical_plan::streaming::collector::StreamCollectorExec;
 use sail_physical_plan::streaming::limit::StreamLimitExec;
 use sail_physical_plan::streaming::source_adapter::StreamSourceAdapterExec;
+use sail_plan_lakehouse::new_lakehouse_extension_planners;
 
 #[derive(Debug)]
 pub(crate) struct ExtensionQueryPlanner {}
@@ -51,9 +53,9 @@ impl QueryPlanner for ExtensionQueryPlanner {
         logical_plan: &LogicalPlan,
         session_state: &SessionState,
     ) -> datafusion::common::Result<Arc<dyn ExecutionPlan>> {
-        let planner = DefaultPhysicalPlanner::with_extension_planners(vec![Arc::new(
-            ExtensionPhysicalPlanner {},
-        )]);
+        let mut extension_planners = new_lakehouse_extension_planners();
+        extension_planners.push(Arc::new(ExtensionPhysicalPlanner {}));
+        let planner = DefaultPhysicalPlanner::with_extension_planners(extension_planners);
         planner
             .create_physical_plan(logical_plan, session_state)
             .await
@@ -190,6 +192,18 @@ impl ExtensionPlanner for ExtensionPhysicalPlanner {
             }?;
             create_file_delete_physical_plan(session_state, planner, schema, node.options().clone())
                 .await?
+        } else if let Some(node) = node.as_any().downcast_ref::<MergeIntoNode>() {
+            let _ = (
+                planner,
+                logical_inputs,
+                physical_inputs,
+                session_state,
+                node,
+            );
+            return internal_err!(
+                "MERGE planning expects a pre-expanded logical plan (MergeIntoWriteNode). \
+Ensure expand_merge is enabled; MERGE is currently only supported for Delta tables."
+            );
         } else if let Some(node) = node.as_any().downcast_ref::<ExplicitRepartitionNode>() {
             let [input] = physical_inputs else {
                 return internal_err!(

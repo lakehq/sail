@@ -6059,6 +6059,7 @@ dependencies = [
  "datafusion-common",
  "datafusion-expr",
  "html-escape",
+ "log",
  "sail-common",
  "sail-common-datafusion",
 ]
@@ -6149,6 +6150,7 @@ dependencies = [
  "sail-function",
  "sail-logical-plan",
  "sail-physical-plan",
+ "sail-plan-lakehouse",
  "sail-python-udf",
  "sail-sql-analyzer",
  "serde",
@@ -6156,6 +6158,22 @@ dependencies = [
  "tokio",
  "tonic",
  "uuid",
+]
+
+[[package]]
+name = "sail-plan-lakehouse"
+version = "0.4.4"
+dependencies = [
+ "async-trait",
+ "datafusion",
+ "datafusion-common",
+ "datafusion-expr",
+ "log",
+ "sail-data-source",
+ "sail-delta-lake",
+ "sail-logical-plan",
+ "sail-physical-plan",
+ "url",
 ]
 
 [[package]]
@@ -6221,6 +6239,8 @@ dependencies = [
  "sail-data-source",
  "sail-delta-lake",
  "sail-iceberg",
+ "sail-logical-optimizer",
+ "sail-plan-lakehouse",
  "secrecy",
 ]
 
@@ -6249,7 +6269,6 @@ dependencies = [
  "sail-common",
  "sail-common-datafusion",
  "sail-execution",
- "sail-logical-optimizer",
  "sail-object-store",
  "sail-physical-optimizer",
  "sail-plan",

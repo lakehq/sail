@@ -15,6 +15,7 @@ mod delete;
 mod explain;
 mod function;
 mod insert;
+mod merge;
 mod show;
 mod variable;
 mod write;
@@ -238,7 +239,7 @@ impl PlanResolver<'_> {
                 )
                 .await
             }
-            CommandNode::MergeInto { .. } => Err(PlanError::todo("CommandNode::MergeInto")),
+            CommandNode::MergeInto(merge) => self.resolve_command_merge_into(merge, state).await,
             CommandNode::SetVariable { variable, value } => {
                 self.resolve_command_set_variable(variable, value).await
             }

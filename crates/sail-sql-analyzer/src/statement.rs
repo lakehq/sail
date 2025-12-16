@@ -13,10 +13,11 @@ use sail_sql_parser::ast::statement::{
     ColumnDefinition, ColumnDefinitionList, ColumnDefinitionOption, ColumnPosition,
     ColumnTypeDefinition, CommentValue, CreateDatabaseClause, CreateTableClause, CreateViewClause,
     DeleteTableAlias, DescribeItem, ExplainFormat, FileFormat, InsertDirectoryDestination,
-    MergeSource, PartitionClause, PartitionColumn, PartitionColumnList, PartitionValue,
-    PartitionValueList, PropertyKey, PropertyKeyValue, PropertyList, PropertyValue, RowFormat,
-    RowFormatDelimitedClause, SetClause, SortColumn, SortColumnList, Statement, UpdateTableAlias,
-    ViewColumn,
+    MergeMatchClause, MergeMatchedAction, MergeNotMatchedBySourceAction,
+    MergeNotMatchedByTargetAction, MergeSource, PartitionClause, PartitionColumn,
+    PartitionColumnList, PartitionValue, PartitionValueList, PropertyKey, PropertyKeyValue,
+    PropertyList, PropertyValue, RowFormat, RowFormatDelimitedClause, SetClause, SortColumn,
+    SortColumnList, Statement, UpdateTableAlias, ViewColumn,
 };
 
 use crate::data_type::from_ast_data_type;
@@ -557,21 +558,15 @@ pub fn from_ast_statement(statement: Statement) -> SqlResult<spec::Plan> {
             target,
             alias: target_alias,
             using: (_, source),
-            on: _,
+            on: (_, on_expr),
             r#match,
         } => {
-            if target_alias.is_some_and(|alias| alias.columns.is_some()) {
+            if target_alias
+                .as_ref()
+                .is_some_and(|alias| alias.columns.is_some())
+            {
                 return Err(SqlError::invalid(
                     "column aliases are not allowed for target table in MERGE",
-                ));
-            }
-            let source_alias = match source {
-                MergeSource::Table { alias, .. } => alias,
-                MergeSource::Query { alias, .. } => alias,
-            };
-            if source_alias.is_some_and(|alias| alias.columns.is_some()) {
-                return Err(SqlError::invalid(
-                    "column aliases are not allowed for source table in MERGE",
                 ));
             }
             if r#match.is_empty() {
@@ -579,10 +574,143 @@ pub fn from_ast_statement(statement: Statement) -> SqlResult<spec::Plan> {
                     "expected at least one WHEN ... MATCHED ... clause for MERGE",
                 ));
             }
-            let node = spec::CommandNode::MergeInto {
-                target: from_ast_object_name(target)?,
-                with_schema_evolution: with_schema_evolution.is_some(),
+
+            let target_alias = target_alias.map(|alias| alias.table.value.into());
+            let source = match source {
+                MergeSource::Table { name, alias } => {
+                    if alias.as_ref().is_some_and(|alias| alias.columns.is_some()) {
+                        return Err(SqlError::invalid(
+                            "column aliases are not allowed for source table in MERGE",
+                        ));
+                    }
+                    spec::MergeSource::Table {
+                        name: from_ast_object_name(name)?,
+                        alias: alias.map(|alias| alias.table.value.into()),
+                    }
+                }
+                MergeSource::Query {
+                    query,
+                    alias,
+                    left: _,
+                    right: _,
+                } => {
+                    if alias.as_ref().is_some_and(|alias| alias.columns.is_some()) {
+                        return Err(SqlError::invalid(
+                            "column aliases are not allowed for source table in MERGE",
+                        ));
+                    }
+                    spec::MergeSource::Query {
+                        input: Box::new(from_ast_query(query)?),
+                        alias: alias.map(|alias| alias.table.value.into()),
+                    }
+                }
             };
+            let clauses = r#match
+                .into_iter()
+                .map(|clause| match clause {
+                    MergeMatchClause::Matched {
+                        condition, action, ..
+                    } => {
+                        let condition = merge_optional_condition(condition)?;
+                        let action = match action {
+                            MergeMatchedAction::Delete(_) => spec::MergeMatchedAction::Delete,
+                            MergeMatchedAction::UpdateAll(_, _, _) => {
+                                spec::MergeMatchedAction::UpdateAll
+                            }
+                            MergeMatchedAction::Update(_, _, assignments) => {
+                                let assignments = merge_assignment_list(assignments)?;
+                                spec::MergeMatchedAction::UpdateSet(assignments)
+                            }
+                        };
+                        Ok(spec::MergeClause::Matched(spec::MergeMatchedClause {
+                            condition,
+                            action,
+                        }))
+                    }
+                    MergeMatchClause::NotMatchedBySource {
+                        condition, action, ..
+                    } => {
+                        let condition = merge_optional_condition(condition)?;
+                        let action = match action {
+                            MergeNotMatchedBySourceAction::Delete(_) => {
+                                spec::MergeNotMatchedBySourceAction::Delete
+                            }
+                            MergeNotMatchedBySourceAction::Update(_, _, assignments) => {
+                                let assignments = merge_assignment_list(assignments)?;
+                                spec::MergeNotMatchedBySourceAction::UpdateSet(assignments)
+                            }
+                        };
+                        Ok(spec::MergeClause::NotMatchedBySource(
+                            spec::MergeNotMatchedBySourceClause { condition, action },
+                        ))
+                    }
+                    MergeMatchClause::NotMatchedByTarget {
+                        condition, action, ..
+                    } => {
+                        let condition = merge_optional_condition(condition)?;
+                        let action = match action {
+                            MergeNotMatchedByTargetAction::InsertAll(_, _) => {
+                                spec::MergeNotMatchedByTargetAction::InsertAll
+                            }
+                            MergeNotMatchedByTargetAction::Insert {
+                                columns,
+                                expressions,
+                                ..
+                            } => {
+                                let columns = columns
+                                    .into_items()
+                                    .map(from_ast_object_name)
+                                    .collect::<SqlResult<Vec<_>>>()?;
+                                let mut values = expressions
+                                    .into_items()
+                                    .map(from_ast_expression)
+                                    .collect::<SqlResult<Vec<_>>>()?;
+                                if values.len() == 1 {
+                                    let expr = values.pop().ok_or_else(|| {
+                                        SqlError::invalid(
+                                            "INSERT action must include at least one expression",
+                                        )
+                                    })?;
+                                    if let spec::Expr::UnresolvedFunction(func) = expr {
+                                        if func.function_name == spec::ObjectName::bare("struct")
+                                            && func.named_arguments.is_empty()
+                                        {
+                                            values = func.arguments;
+                                        } else {
+                                            values = vec![spec::Expr::UnresolvedFunction(func)];
+                                        }
+                                    } else {
+                                        values = vec![expr];
+                                    }
+                                }
+                                if columns.len() != values.len() {
+                                    return Err(SqlError::invalid(format!(
+                                        "INSERT action has {} columns but {} expressions",
+                                        columns.len(),
+                                        values.len()
+                                    )));
+                                }
+                                spec::MergeNotMatchedByTargetAction::InsertColumns {
+                                    columns,
+                                    values,
+                                }
+                            }
+                        };
+                        Ok(spec::MergeClause::NotMatchedByTarget(
+                            spec::MergeNotMatchedByTargetClause { condition, action },
+                        ))
+                    }
+                })
+                .collect::<SqlResult<Vec<_>>>()?;
+
+            let node = spec::CommandNode::MergeInto(spec::MergeInto {
+                target: from_ast_object_name(target)?,
+                target_alias,
+                source,
+                on_condition: from_ast_expression(on_expr)?,
+                clauses,
+                with_schema_evolution: with_schema_evolution.is_some(),
+            });
             Ok(spec::Plan::Command(spec::CommandPlan::new(node)))
         }
         Statement::Update {
@@ -1617,6 +1745,28 @@ fn from_ast_column_alteration_list(items: ColumnAlterationList) -> SqlResult<()>
         })
         .collect::<SqlResult<Vec<_>>>()?;
     Ok(())
+}
+
+fn merge_optional_condition<T>(condition: Option<(T, Expr)>) -> SqlResult<Option<spec::Expr>> {
+    condition
+        .map(|(_, expr)| from_ast_expression(expr))
+        .transpose()
+}
+
+fn merge_assignment_list(
+    assignments: AssignmentList,
+) -> SqlResult<Vec<(spec::ObjectName, spec::Expr)>> {
+    let assignments = match assignments {
+        AssignmentList::Delimited { assignments, .. } => assignments,
+        AssignmentList::NotDelimited { assignments } => assignments,
+    };
+    assignments
+        .into_items()
+        .map(|assignment| {
+            let Assignment { target, value, .. } = assignment;
+            Ok((from_ast_object_name(target)?, from_ast_expression(value)?))
+        })
+        .collect()
 }
 
 fn from_ast_alter_table_operation(

@@ -63,8 +63,8 @@ use sail_data_source::formats::socket::{SocketSourceExec, TableSocketOptions};
 use sail_data_source::formats::text::source::TextSource;
 use sail_data_source::formats::text::writer::{TextSink, TextWriterOptions};
 use sail_delta_lake::physical_plan::{
-    DeltaCommitExec, DeltaFindFilesExec, DeltaRemoveActionsExec, DeltaScanByAddsExec,
-    DeltaWriterExec,
+    DeltaCommitExec, DeltaFileLookupExec, DeltaFindFilesExec, DeltaRemoveActionsExec,
+    DeltaScanByAddsExec, DeltaWriterExec,
 };
 use sail_function::aggregate::kurtosis::KurtosisFunction;
 use sail_function::aggregate::max_min_by::{MaxByFunction, MinByFunction};
@@ -618,6 +618,18 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
                 let input = self.try_decode_plan(&input)?;
                 Ok(Arc::new(DeltaRemoveActionsExec::new(input)))
             }
+            NodeKind::DeltaFileLookup(gen::DeltaFileLookupExecNode {
+                input,
+                table_url,
+                version,
+            }) => {
+                let input = self.try_decode_plan(&input)?;
+                let table_url = Url::parse(&table_url)
+                    .map_err(|e| plan_datafusion_err!("failed to parse table URL: {e}"))?;
+                Ok(Arc::new(DeltaFileLookupExec::new(
+                    input, table_url, version,
+                )))
+            }
             NodeKind::ConsoleSink(gen::ConsoleSinkExecNode { input }) => {
                 let input = self.try_decode_plan(&input)?;
                 Ok(Arc::new(ConsoleSinkExec::new(input)))
@@ -1072,6 +1084,15 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
         {
             let input = self.try_encode_plan(delta_remove_actions_exec.children()[0].clone())?;
             NodeKind::DeltaRemoveActions(gen::DeltaRemoveActionsExecNode { input })
+        } else if let Some(delta_file_lookup_exec) =
+            node.as_any().downcast_ref::<DeltaFileLookupExec>()
+        {
+            let input = self.try_encode_plan(delta_file_lookup_exec.input().clone())?;
+            NodeKind::DeltaFileLookup(gen::DeltaFileLookupExecNode {
+                input,
+                table_url: delta_file_lookup_exec.table_url().to_string(),
+                version: delta_file_lookup_exec.version(),
+            })
         } else if let Some(console_sink) = node.as_any().downcast_ref::<ConsoleSinkExec>() {
             let input = self.try_encode_plan(console_sink.input().clone())?;
             NodeKind::ConsoleSink(gen::ConsoleSinkExecNode { input })

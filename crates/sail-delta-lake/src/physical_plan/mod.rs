@@ -32,8 +32,8 @@ use crate::kernel::DeltaOperation;
 
 mod commit_exec;
 mod expr_adapter;
+mod file_lookup_exec;
 pub mod find_files_exec;
-pub mod plan_builder;
 mod remove_actions_exec;
 mod scan_by_adds_exec;
 mod utils;
@@ -41,8 +41,12 @@ mod writer_exec;
 
 pub use commit_exec::DeltaCommitExec;
 pub use expr_adapter::DeltaPhysicalExprAdapterFactory;
+pub use file_lookup_exec::DeltaFileLookupExec;
 pub use find_files_exec::DeltaFindFilesExec;
-pub use plan_builder::{DeltaDeletePlanBuilder, DeltaPlanBuilder};
+pub mod planner;
+pub use planner::{
+    plan_delete, plan_merge, plan_update, DeltaPhysicalPlanner, DeltaTableConfig, PlannerContext,
+};
 pub use remove_actions_exec::DeltaRemoveActionsExec;
 pub use scan_by_adds_exec::DeltaScanByAddsExec;
 pub(crate) use utils::join_batches_with_add_actions;
