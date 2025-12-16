@@ -5,6 +5,7 @@ use datafusion::execution::SessionState;
 use datafusion::physical_expr::expressions::Literal;
 use datafusion::physical_plan::ExecutionPlan;
 use datafusion::scalar::ScalarValue;
+use datafusion::sql::unparser::expr_to_sql;
 use datafusion_common::{internal_err, Result};
 use sail_common_datafusion::datasource::{
     MergeInfo as PhysicalMergeInfo, MergePredicateInfo, MergeTargetInfo, OperationOverride,
@@ -51,7 +52,7 @@ pub async fn create_preexpanded_merge_physical_plan(
 
     let opts = node.options();
     let operation_override = {
-        let merge_predicate = Some(opts.on_condition.to_string());
+        let merge_predicate = Some(format!("{}", expr_to_sql(&opts.on_condition)?));
 
         let matched_predicates = opts
             .matched_clauses
@@ -63,21 +64,33 @@ pub async fn create_preexpanded_merge_physical_plan(
                     | sail_logical_plan::merge::MergeMatchedAction::UpdateSet(_) => "update",
                 }
                 .to_string();
-                MergePredicateInfo {
+                let predicate = c
+                    .condition
+                    .as_ref()
+                    .map(|e| expr_to_sql(e).map(|ast| format!("{}", ast)))
+                    .transpose()?;
+                Ok(MergePredicateInfo {
                     action_type,
-                    predicate: c.condition.as_ref().map(|e| e.to_string()),
-                }
+                    predicate,
+                })
             })
-            .collect::<Vec<_>>();
+            .collect::<Result<Vec<_>>>()?;
 
         let not_matched_predicates = opts
             .not_matched_by_target_clauses
             .iter()
-            .map(|c| MergePredicateInfo {
-                action_type: "insert".to_string(),
-                predicate: c.condition.as_ref().map(|e| e.to_string()),
+            .map(|c| {
+                let predicate = c
+                    .condition
+                    .as_ref()
+                    .map(|e| expr_to_sql(e).map(|ast| format!("{}", ast)))
+                    .transpose()?;
+                Ok(MergePredicateInfo {
+                    action_type: "insert".to_string(),
+                    predicate,
+                })
             })
-            .collect::<Vec<_>>();
+            .collect::<Result<Vec<_>>>()?;
 
         let not_matched_by_source_predicates = opts
             .not_matched_by_source_clauses
@@ -90,12 +103,17 @@ pub async fn create_preexpanded_merge_physical_plan(
                     }
                 }
                 .to_string();
-                MergePredicateInfo {
+                let predicate = c
+                    .condition
+                    .as_ref()
+                    .map(|e| expr_to_sql(e).map(|ast| format!("{}", ast)))
+                    .transpose()?;
+                Ok(MergePredicateInfo {
                     action_type,
-                    predicate: c.condition.as_ref().map(|e| e.to_string()),
-                }
+                    predicate,
+                })
             })
-            .collect::<Vec<_>>();
+            .collect::<Result<Vec<_>>>()?;
 
         Some(OperationOverride::Merge {
             predicate: None,

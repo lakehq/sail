@@ -9,14 +9,14 @@
       'matchedPredicates': list([
         dict({
           'actionType': 'update',
-          'predicate': 'flag = Utf8("update")',
+          'predicate': "(flag = 'update')",
         }),
       ]),
-      'mergePredicate': 'id = __sail_src_id',
+      'mergePredicate': '(id = __sail_src_id)',
       'notMatchedBySourcePredicates': list([
         dict({
           'actionType': 'update',
-          'predicate': 'flag = Utf8("orphan")',
+          'predicate': "(flag = 'orphan')",
         }),
       ]),
       'notMatchedPredicates': list([
@@ -38,14 +38,14 @@
       'matchedPredicates': list([
         dict({
           'actionType': 'update',
-          'predicate': 'flag = Utf8("archive")',
+          'predicate': "(flag = 'archive')",
         }),
       ]),
-      'mergePredicate': 'id = __sail_src_id',
+      'mergePredicate': '(id = __sail_src_id)',
       'notMatchedBySourcePredicates': list([
         dict({
           'actionType': 'delete',
-          'predicate': 'flag = Utf8("trim")',
+          'predicate': "(flag = 'trim')",
         }),
       ]),
       'notMatchedPredicates': list([
@@ -81,13 +81,13 @@
           'actionType': 'update',
         }),
       ]),
-      'mergePredicate': 'id = __sail_src_id',
+      'mergePredicate': '(id = __sail_src_id)',
       'notMatchedBySourcePredicates': list([
       ]),
       'notMatchedPredicates': list([
         dict({
           'actionType': 'insert',
-          'predicate': '__sail_src_id = Int32(3)',
+          'predicate': '(__sail_src_id = 3)',
         }),
         dict({
           'actionType': 'insert',
@@ -107,14 +107,14 @@
       'matchedPredicates': list([
         dict({
           'actionType': 'update',
-          'predicate': 'flag = Utf8("update")',
+          'predicate': "(flag = 'update')",
         }),
         dict({
           'actionType': 'delete',
-          'predicate': 'flag = Utf8("delete")',
+          'predicate': "(flag = 'delete')",
         }),
       ]),
-      'mergePredicate': 'id = __sail_src_id',
+      'mergePredicate': '(id = __sail_src_id)',
       'notMatchedBySourcePredicates': list([
       ]),
       'notMatchedPredicates': list([
