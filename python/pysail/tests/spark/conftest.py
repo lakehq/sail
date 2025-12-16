@@ -375,7 +375,7 @@ def _recursive_parse_json_strings(value):
             return value
         try:
             parsed = json.loads(s)
-        except Exception:
+        except json.JSONDecodeError:
             return value
         return _recursive_parse_json_strings(parsed)
     return value
@@ -410,8 +410,6 @@ def delta_log_latest_commit_info_matches_snapshot(snapshot: SnapshotAssertion, v
 
     # Normalize embedded JSON strings in operationParameters
     if "operationParameters" in commit_info:
-        commit_info["operationParameters"] = _recursive_parse_json_strings(
-            commit_info["operationParameters"]
-        )
+        commit_info["operationParameters"] = _recursive_parse_json_strings(commit_info["operationParameters"])
 
     assert commit_info == snapshot
