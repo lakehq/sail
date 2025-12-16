@@ -15,15 +15,15 @@ use sail_logical_plan::merge::{expand_merge, MergeIntoNode, MergeIntoWriteNode};
 const PATH_COLUMN_NAME: &str = "__sail_file_path";
 
 #[derive(Clone, Default)]
-pub struct ExpandMergeRule;
+pub struct ExpandMerge;
 
-impl ExpandMergeRule {
+impl ExpandMerge {
     pub fn new() -> Self {
         Self
     }
 }
 
-impl OptimizerRule for ExpandMergeRule {
+impl OptimizerRule for ExpandMerge {
     fn rewrite(
         &self,
         plan: LogicalPlan,
@@ -108,11 +108,11 @@ impl OptimizerRule for ExpandMergeRule {
     }
 
     fn name(&self) -> &str {
-        "ExpandMergeRule"
+        "expand_merge"
     }
 }
 
-impl Debug for ExpandMergeRule {
+impl Debug for ExpandMerge {
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
         write!(f, "{}", self.name())
     }
@@ -276,7 +276,7 @@ fn ensure_file_column(plan: LogicalPlan) -> Result<LogicalPlan> {
 }
 
 pub fn lakehouse_optimizer_rules() -> Vec<Arc<dyn OptimizerRule + Send + Sync>> {
-    vec![Arc::new(ExpandMergeRule::new())]
+    vec![Arc::new(ExpandMerge::new())]
 }
 
 #[cfg(test)]
@@ -286,6 +286,6 @@ mod tests {
     #[test]
     fn lakehouse_rules_include_expand_merge() {
         let rules = lakehouse_optimizer_rules();
-        assert!(rules.iter().any(|rule| rule.name() == "ExpandMergeRule"));
+        assert!(rules.iter().any(|rule| rule.name() == "expand_merge"));
     }
 }

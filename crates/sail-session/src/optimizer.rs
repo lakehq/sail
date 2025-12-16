@@ -21,8 +21,8 @@ mod tests {
     fn default_rules_start_with_expand_merge() {
         let rules = default_optimizer_rules();
         assert!(
-            rules.first().map(|r| r.name()) == Some("ExpandMergeRule"),
-            "ExpandMergeRule should run before built-in optimizers"
+            rules.first().map(|r| r.name()) == Some("expand_merge"),
+            "expand_merge should run before built-in optimizers"
         );
     }
 }

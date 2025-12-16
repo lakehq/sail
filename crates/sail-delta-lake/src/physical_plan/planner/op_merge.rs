@@ -13,7 +13,6 @@
 use std::sync::Arc;
 
 use datafusion::common::{internal_err, DataFusionError, Result};
-use datafusion::physical_plan::coalesce_partitions::CoalescePartitionsExec;
 use datafusion::physical_plan::union::UnionExec;
 use datafusion::physical_plan::ExecutionPlan;
 use sail_common_datafusion::datasource::{MergeInfo as PhysicalMergeInfo, PhysicalSinkMode};
@@ -34,7 +33,7 @@ pub async fn build_merge_plan(
 ) -> Result<Arc<dyn ExecutionPlan>> {
     if !merge_info.pre_expanded {
         return internal_err!(
-            "MERGE planning expects a pre-expanded logical plan. Ensure ExpandMergeRule is enabled."
+            "MERGE planning expects a pre-expanded logical plan. Ensure expand_merge is enabled."
         );
     }
 
@@ -94,10 +93,6 @@ async fn finalize_merge(
     let mut action_inputs: Vec<Arc<dyn ExecutionPlan>> = vec![writer.clone()];
 
     if let Some(touched_plan) = touched_file_plan {
-        // Ensure a single partition so we can de-duplicate paths and avoid re-loading
-        // the snapshot multiple times.
-        let touched_plan = Arc::new(CoalescePartitionsExec::new(touched_plan));
-
         // Convert Path stream -> Add(JSON) stream on the Worker.
         let lookup_plan = Arc::new(DeltaFileLookupExec::new(
             touched_plan,
