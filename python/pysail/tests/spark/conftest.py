@@ -359,62 +359,59 @@ def _latest_commit_info_from_variables(variables: dict) -> dict:
     return _latest_commit_info(Path(location.path))
 
 
-@then(parsers.parse("delta log latest operation is {operation}"))
-def delta_log_latest_operation_is(operation: str, variables):
-    if is_jvm_spark():
-        pytest.skip("Delta log operation assertions are Sail-only")
-    commit_info = _latest_commit_info_from_variables(variables)
-    assert commit_info.get("operation") == operation
+def _recursive_parse_json_strings(value):
+    """Recursively parse JSON-encoded strings into structured Python values.
 
-
-@then(parsers.parse("delta log latest operation parameters include {keys}"))
-def delta_log_latest_operation_parameters_include(keys: str, variables):
-    if is_jvm_spark():
-        pytest.skip("Delta log operation assertions are Sail-only")
-    commit_info = _latest_commit_info_from_variables(variables)
-    params = commit_info.get("operationParameters") or {}
-    expected = [k.strip() for k in keys.split(",") if k.strip()]
-    missing = [k for k in expected if k not in params]
-    assert not missing, f"missing operationParameters keys: {missing}, got keys={sorted(params.keys())}"
-
-
-@then(parsers.parse("delta log latest operation parameter {key} equals"))
-def delta_log_latest_operation_parameter_equals(key: str, docstring, variables):
-    """Assert a specific operationParameters entry equals the given docstring (trimmed)."""
-    if is_jvm_spark():
-        pytest.skip("Delta log operation assertions are Sail-only")
-    commit_info = _latest_commit_info_from_variables(variables)
-    params = commit_info.get("operationParameters") or {}
-    assert key in params, f"missing operationParameters[{key!r}], got keys={sorted(params.keys())}"
-    expected = (docstring or "").strip()
-    actual = str(params.get(key, "")).strip()
-    assert actual == expected
-
-
-@then("delta log latest operation parameters json equals")
-def delta_log_latest_operation_parameters_json_equals(docstring, variables):
-    """Assert operationParameters contain (at least) the keys/values in the provided JSON object.
-
-    - Expected values can be strings, numbers, booleans, null, arrays, or objects.
-    - Since Delta's operationParameters values are stored as strings, we:
-      - compare string expected values directly
-      - otherwise parse the actual string as JSON and compare structurally
+    Delta `commitInfo.operationParameters` stores values as strings; for snapshot tests we
+    normalize common JSON payloads (objects/arrays/bools/null/numbers) back into structure.
     """
+    if isinstance(value, dict):
+        return {k: _recursive_parse_json_strings(v) for k, v in value.items()}
+    if isinstance(value, list):
+        return [_recursive_parse_json_strings(v) for v in value]
+    if isinstance(value, str):
+        s = value.strip()
+        if not s:
+            return value
+        try:
+            parsed = json.loads(s)
+        except Exception:
+            return value
+        return _recursive_parse_json_strings(parsed)
+    return value
+
+
+def _normalize_delta_commit_info_for_snapshot(commit_info: dict) -> dict:
+    """Normalize volatile / version-specific fields but keep the keys in the snapshot."""
+    normalized = dict(commit_info)
+
+    # Keep timestamp, but normalize its value.
+    if "timestamp" in normalized:
+        normalized["timestamp"] = "<timestamp>"
+
+    # Normalize engine/client versions to stable placeholders.
+    cv = normalized.get("clientVersion")
+    if isinstance(cv, str) and cv.startswith("sail-delta-lake."):
+        normalized["clientVersion"] = "sail-delta-lake.x.x.x"
+
+    ei = normalized.get("engineInfo")
+    if isinstance(ei, str) and ei.startswith("sail-delta-lake:"):
+        normalized["engineInfo"] = "sail-delta-lake:x.x.x"
+
+    return normalized
+
+
+@then("delta log latest commit info matches snapshot")
+def delta_log_latest_commit_info_matches_snapshot(snapshot: SnapshotAssertion, variables):
     if is_jvm_spark():
         pytest.skip("Delta log operation assertions are Sail-only")
-
-    expected = json.loads((docstring or "").strip() or "{}")
-    assert isinstance(expected, dict), "expected a JSON object mapping parameter keys to expected values"
-
     commit_info = _latest_commit_info_from_variables(variables)
-    params = commit_info.get("operationParameters") or {}
+    commit_info = _normalize_delta_commit_info_for_snapshot(commit_info)
 
-    for key, expected_value in expected.items():
-        assert key in params, f"missing operationParameters[{key!r}], got keys={sorted(params.keys())}"
-        actual_raw = params[key]
-        if isinstance(expected_value, str):
-            assert str(actual_raw) == expected_value
-        else:
-            # Interpret the raw string as JSON (e.g. "true", "[]", "{...}")
-            actual_parsed = json.loads(str(actual_raw))
-            assert actual_parsed == expected_value
+    # Normalize embedded JSON strings in operationParameters
+    if "operationParameters" in commit_info:
+        commit_info["operationParameters"] = _recursive_parse_json_strings(
+            commit_info["operationParameters"]
+        )
+
+    assert commit_info == snapshot

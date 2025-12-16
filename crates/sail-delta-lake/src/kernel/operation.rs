@@ -158,6 +158,15 @@ impl DeltaOperation {
         }
     }
 
+    /// Convert this operation into the JSON shape stored in Delta log `commitInfo`.
+    ///
+    /// Note: this does **not** add volatile fields like `timestamp` / `readVersion`; those are
+    /// filled in by the transaction layer at commit time.
+    pub fn to_commit_info_json(&self) -> DeltaResult<Value> {
+        serde_json::to_value(self.get_commit_info())
+            .map_err(|e| DeltaTableError::generic(format!("failed to serialize commit info: {e}")))
+    }
+
     pub fn read_predicate(&self) -> Option<String> {
         match self {
             Self::Write { predicate, .. } => predicate.clone(),
