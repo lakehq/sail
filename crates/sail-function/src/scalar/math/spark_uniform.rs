@@ -7,7 +7,7 @@ use datafusion::arrow::array::{
 use datafusion::arrow::datatypes::{
     DataType, Field, FieldRef, Int32Type, DECIMAL128_MAX_PRECISION, DECIMAL128_MAX_SCALE,
 };
-use datafusion_common::Result;
+use datafusion_common::{internal_err, Result};
 use datafusion_expr::{
     ColumnarValue, ReturnFieldArgs, ScalarFunctionArgs, ScalarUDFImpl, Signature, Volatility,
 };
@@ -164,24 +164,18 @@ impl ScalarUDFImpl for SparkUniform {
         &self.signature
     }
 
-    fn return_type(&self, arg_types: &[DataType]) -> Result<DataType> {
-        let t_min = &arg_types[0];
-        let t_max = &arg_types[1];
-        Ok(Self::calculate_output_type(t_min, t_max))
+    fn return_type(&self, _arg_types: &[DataType]) -> Result<DataType> {
+        internal_err!("return_field_from_args should be used instead")
     }
 
     fn return_field_from_args(&self, args: ReturnFieldArgs) -> Result<FieldRef> {
-        // Get the data types from the argument fields
-        let arg_types: Vec<DataType> = args
-            .arg_fields
-            .iter()
-            .map(|field| field.data_type().clone())
-            .collect();
+        let t_min = args.arg_fields[0].data_type();
+        let t_max = args.arg_fields[1].data_type();
+        let return_type = Self::calculate_output_type(t_min, t_max);
 
-        let return_type = self.return_type(&arg_types)?;
+        let nullable: bool = args.arg_fields[0].is_nullable() || args.arg_fields[1].is_nullable();
 
-        // Create field with nullable = false (uniform never returns NULL)
-        Ok(Arc::new(Field::new(self.name(), return_type, false)))
+        Ok(Arc::new(Field::new(self.name(), return_type, nullable)))
     }
 
     fn invoke_with_args(&self, args: ScalarFunctionArgs) -> Result<ColumnarValue> {
@@ -549,11 +543,22 @@ mod tests {
     #[test]
     fn test_uniform_return_type_integer() -> Result<()> {
         let uniform_fn = SparkUniform::new();
-        let arg_types = vec![DataType::Int64, DataType::Int64, DataType::Int64];
-        let return_type = uniform_fn.return_type(&arg_types)?;
+        let arg_fields = vec![
+            Arc::new(Field::new("min", DataType::Int64, false)),
+            Arc::new(Field::new("max", DataType::Int64, false)),
+            Arc::new(Field::new("seed", DataType::Int64, false)),
+        ];
+
+        let args = ReturnFieldArgs {
+            arg_fields: &arg_fields,
+            scalar_arguments: &[None, None, None],
+        };
+
+        let field = uniform_fn.return_field_from_args(args)?;
+
         assert_eq!(
-            return_type,
-            DataType::Int64,
+            field.data_type(),
+            &DataType::Int64,
             "Integer inputs should return Int64 (maps to Spark's integer type)"
         );
         Ok(())
@@ -563,11 +568,21 @@ mod tests {
     #[test]
     fn test_uniform_return_type_int32() -> Result<()> {
         let uniform_fn = SparkUniform::new();
-        let arg_types = vec![DataType::Int32, DataType::Int32, DataType::Int64];
-        let return_type = uniform_fn.return_type(&arg_types)?;
+        let arg_fields = vec![
+            Arc::new(Field::new("min", DataType::Int32, false)),
+            Arc::new(Field::new("max", DataType::Int32, false)),
+            Arc::new(Field::new("seed", DataType::Int64, false)),
+        ];
+
+        let args = ReturnFieldArgs {
+            arg_fields: &arg_fields,
+            scalar_arguments: &[None, None, None],
+        };
+
+        let field = uniform_fn.return_field_from_args(args)?;
         assert_eq!(
-            return_type,
-            DataType::Int32,
+            field.data_type(),
+            &DataType::Int32,
             "Int32 inputs should be coerced to Int32"
         );
         Ok(())
@@ -577,11 +592,21 @@ mod tests {
     #[test]
     fn test_uniform_return_type_float() -> Result<()> {
         let uniform_fn = SparkUniform::new();
-        let arg_types = vec![DataType::Float64, DataType::Float64, DataType::Int64];
-        let return_type = uniform_fn.return_type(&arg_types)?;
+        let arg_fields = vec![
+            Arc::new(Field::new("min", DataType::Float64, false)),
+            Arc::new(Field::new("max", DataType::Float64, false)),
+            Arc::new(Field::new("seed", DataType::Int64, false)),
+        ];
+
+        let args = ReturnFieldArgs {
+            arg_fields: &arg_fields,
+            scalar_arguments: &[None, None, None],
+        };
+
+        let field = uniform_fn.return_field_from_args(args)?;
         assert_eq!(
-            return_type,
-            DataType::Float64,
+            field.data_type(),
+            &DataType::Float64,
             "Float inputs should return Float64"
         );
         Ok(())
@@ -591,11 +616,22 @@ mod tests {
     #[test]
     fn test_uniform_return_type_mixed() -> Result<()> {
         let uniform_fn = SparkUniform::new();
-        let arg_types = vec![DataType::Int64, DataType::Float64, DataType::Int64];
-        let return_type = uniform_fn.return_type(&arg_types)?;
+        let arg_fields = vec![
+            Arc::new(Field::new("min", DataType::Int64, false)),
+            Arc::new(Field::new("max", DataType::Float64, false)),
+            Arc::new(Field::new("seed", DataType::Int64, false)),
+        ];
+
+        let args = ReturnFieldArgs {
+            arg_fields: &arg_fields,
+            scalar_arguments: &[None, None, None],
+        };
+
+        let field = uniform_fn.return_field_from_args(args)?;
+
         assert_eq!(
-            return_type,
-            DataType::Float64,
+            field.data_type(),
+            &DataType::Float64,
             "Mixed int/float inputs should return Float64"
         );
         Ok(())
@@ -633,18 +669,31 @@ mod tests {
     #[test]
     fn test_uniform_return_type_decimal() -> Result<()> {
         let uniform_fn = SparkUniform::new();
-        // Decimal(3, 1) represents numbers like 5.5, 10.5 (3 total digits, 1 after decimal)
-        let arg_types = vec![
-            DataType::Decimal128(3, 1),
-            DataType::Decimal128(3, 1),
-            DataType::Int64,
+
+        let arg_fields = vec![
+            Arc::new(Field::new("min", DataType::Decimal128(3, 1), false)),
+            Arc::new(Field::new("max", DataType::Decimal128(3, 1), false)),
+            Arc::new(Field::new("seed", DataType::Int64, false)),
         ];
-        let return_type = uniform_fn.return_type(&arg_types)?;
+
+        let args = ReturnFieldArgs {
+            arg_fields: &arg_fields,
+            scalar_arguments: &[None, None, None],
+        };
+
+        let field = uniform_fn.return_field_from_args(args)?;
+
         assert_eq!(
-            return_type,
-            DataType::Decimal128(3, 1),
+            field.data_type(),
+            &DataType::Decimal128(3, 1),
             "Decimal(3,1) inputs should return Decimal(3,1) matching Spark's behavior"
         );
+
+        assert!(
+            !field.is_nullable(),
+            "Field should be non-nullable when min/max are non-nullable"
+        );
+
         Ok(())
     }
 
@@ -675,15 +724,23 @@ mod tests {
     fn test_uniform_return_type_decimal_different() -> Result<()> {
         let uniform_fn = SparkUniform::new();
         // One with Decimal(2, 1) [5.5] and another with Decimal(3, 1) [10.5]
-        let arg_types = vec![
-            DataType::Decimal128(2, 1),
-            DataType::Decimal128(3, 1),
-            DataType::Int64,
+
+        let arg_fields = vec![
+            Arc::new(Field::new("min", DataType::Decimal128(2, 1), false)),
+            Arc::new(Field::new("max", DataType::Decimal128(3, 1), false)),
+            Arc::new(Field::new("seed", DataType::Int64, false)),
         ];
-        let return_type = uniform_fn.return_type(&arg_types)?;
+
+        let args = ReturnFieldArgs {
+            arg_fields: &arg_fields,
+            scalar_arguments: &[None, None, None],
+        };
+
+        let field = uniform_fn.return_field_from_args(args)?;
+
         assert_eq!(
-            return_type,
-            DataType::Decimal128(3, 1),
+            field.data_type(),
+            &DataType::Decimal128(3, 1),
             "Should use max precision from inputs"
         );
         Ok(())
@@ -742,15 +799,22 @@ mod tests {
     #[test]
     fn test_uniform_return_type_decimal_plus_integer() -> Result<()> {
         let uniform_fn = SparkUniform::new();
-        let arg_types = vec![
-            DataType::Decimal128(2, 1), // 5.5
-            DataType::Int32,            // 10
-            DataType::Int64,            // seed
+
+        let arg_fields = vec![
+            Arc::new(Field::new("min", DataType::Decimal128(2, 1), false)),
+            Arc::new(Field::new("max", DataType::Int32, false)),
+            Arc::new(Field::new("seed", DataType::Int64, false)),
         ];
-        let return_type = uniform_fn.return_type(&arg_types)?;
+
+        let args = ReturnFieldArgs {
+            arg_fields: &arg_fields,
+            scalar_arguments: &[None, None, None],
+        };
+
+        let field = uniform_fn.return_field_from_args(args)?;
         assert_eq!(
-            return_type,
-            DataType::Decimal128(2, 1),
+            field.data_type(),
+            &DataType::Decimal128(2, 1),
             "Decimal + Integer should return the Decimal type"
         );
         Ok(())
@@ -761,15 +825,23 @@ mod tests {
     #[test]
     fn test_uniform_return_type_integer_plus_decimal() -> Result<()> {
         let uniform_fn = SparkUniform::new();
-        let arg_types = vec![
-            DataType::Int32,            // 10
-            DataType::Decimal128(2, 1), // 5.5
-            DataType::Int64,            // seed
+
+        let arg_fields = vec![
+            Arc::new(Field::new("min", DataType::Int32, false)),
+            Arc::new(Field::new("max", DataType::Decimal128(2, 1), false)),
+            Arc::new(Field::new("seed", DataType::Int64, false)),
         ];
-        let return_type = uniform_fn.return_type(&arg_types)?;
+
+        let args = ReturnFieldArgs {
+            arg_fields: &arg_fields,
+            scalar_arguments: &[None, None, None],
+        };
+
+        let field = uniform_fn.return_field_from_args(args)?;
+
         assert_eq!(
-            return_type,
-            DataType::Decimal128(2, 1),
+            field.data_type(),
+            &DataType::Decimal128(2, 1),
             "Integer + Decimal should return the Decimal type"
         );
         Ok(())
@@ -780,15 +852,22 @@ mod tests {
     #[test]
     fn test_uniform_return_type_decimal_plus_large_integer() -> Result<()> {
         let uniform_fn = SparkUniform::new();
-        let arg_types = vec![
-            DataType::Decimal128(2, 1), // 1.2
-            DataType::Int32,            // 1234567890
-            DataType::Int64,            // seed
+        let arg_fields = vec![
+            Arc::new(Field::new("min", DataType::Decimal128(2, 1), false)),
+            Arc::new(Field::new("max", DataType::Int32, false)),
+            Arc::new(Field::new("seed", DataType::Int64, false)),
         ];
-        let return_type = uniform_fn.return_type(&arg_types)?;
+
+        let args = ReturnFieldArgs {
+            arg_fields: &arg_fields,
+            scalar_arguments: &[None, None, None],
+        };
+
+        let field = uniform_fn.return_field_from_args(args)?;
+
         assert_eq!(
-            return_type,
-            DataType::Decimal128(2, 1),
+            field.data_type(),
+            &DataType::Decimal128(2, 1),
             "Decimal + Large Integer should return the Decimal type"
         );
         Ok(())
@@ -800,15 +879,22 @@ mod tests {
     #[test]
     fn test_uniform_return_type_large_decimals() -> Result<()> {
         let uniform_fn = SparkUniform::new();
-        let arg_types = vec![
-            DataType::Decimal128(2, 1),  // 1.2
-            DataType::Decimal128(20, 0), // 12345678901234567890 (literal > Int64.MAX)
-            DataType::Int64,             // seed
+        let arg_fields = vec![
+            Arc::new(Field::new("min", DataType::Decimal128(2, 1), false)),
+            Arc::new(Field::new("max", DataType::Decimal128(20, 0), false)),
+            Arc::new(Field::new("seed", DataType::Int64, false)),
         ];
-        let return_type = uniform_fn.return_type(&arg_types)?;
+
+        let args = ReturnFieldArgs {
+            arg_fields: &arg_fields,
+            scalar_arguments: &[None, None, None],
+        };
+
+        let field = uniform_fn.return_field_from_args(args)?;
+
         assert_eq!(
-            return_type,
-            DataType::Decimal128(20, 0),
+            field.data_type(),
+            &DataType::Decimal128(20, 0),
             "When precision differs significantly, should use the larger decimal's type completely: Decimal(20,0)"
         );
         Ok(())
@@ -819,15 +905,22 @@ mod tests {
     #[test]
     fn test_uniform_return_type_decimal_plus_int64() -> Result<()> {
         let uniform_fn = SparkUniform::new();
-        let arg_types = vec![
-            DataType::Decimal128(2, 1), // 1.2
-            DataType::Int64,            // BIGINT
-            DataType::Int64,            // seed
+        let arg_fields = vec![
+            Arc::new(Field::new("min", DataType::Decimal128(2, 1), false)),
+            Arc::new(Field::new("max", DataType::Int64, false)),
+            Arc::new(Field::new("seed", DataType::Int64, false)),
         ];
-        let return_type = uniform_fn.return_type(&arg_types)?;
+
+        let args = ReturnFieldArgs {
+            arg_fields: &arg_fields,
+            scalar_arguments: &[None, None, None],
+        };
+
+        let field = uniform_fn.return_field_from_args(args)?;
+
         assert_eq!(
-            return_type,
-            DataType::Decimal128(2, 1),
+            field.data_type(),
+            &DataType::Decimal128(2, 1),
             "Decimal + Int64 should return the Decimal type (ignores Int64)"
         );
         Ok(())
@@ -838,15 +931,22 @@ mod tests {
     #[test]
     fn test_uniform_return_type_same_precision_different_scale() -> Result<()> {
         let uniform_fn = SparkUniform::new();
-        let arg_types = vec![
-            DataType::Decimal128(3, 1), // e.g., 5.5
-            DataType::Decimal128(3, 2), // e.g., 1.25
-            DataType::Int64,            // seed
+        let arg_fields = vec![
+            Arc::new(Field::new("min", DataType::Decimal128(3, 1), false)),
+            Arc::new(Field::new("max", DataType::Decimal128(3, 2), false)),
+            Arc::new(Field::new("seed", DataType::Int64, false)),
         ];
-        let return_type = uniform_fn.return_type(&arg_types)?;
+
+        let args = ReturnFieldArgs {
+            arg_fields: &arg_fields,
+            scalar_arguments: &[None, None, None],
+        };
+
+        let field = uniform_fn.return_field_from_args(args)?;
+
         assert_eq!(
-            return_type,
-            DataType::Decimal128(3, 2),
+            field.data_type(),
+            &DataType::Decimal128(3, 2),
             "Same precision should use max(scale): Decimal(3, max(1,2)) = Decimal(3,2)"
         );
         Ok(())
@@ -856,11 +956,22 @@ mod tests {
     #[test]
     fn test_uniform_return_type_uint32() -> Result<()> {
         let uniform_fn = SparkUniform::new();
-        let arg_types = vec![DataType::UInt32, DataType::UInt32, DataType::Int64];
-        let return_type = uniform_fn.return_type(&arg_types)?;
+        let arg_fields = vec![
+            Arc::new(Field::new("min", DataType::UInt32, false)),
+            Arc::new(Field::new("max", DataType::UInt32, false)),
+            Arc::new(Field::new("seed", DataType::Int64, false)),
+        ];
+
+        let args = ReturnFieldArgs {
+            arg_fields: &arg_fields,
+            scalar_arguments: &[None, None, None],
+        };
+
+        let field = uniform_fn.return_field_from_args(args)?;
+
         assert_eq!(
-            return_type,
-            DataType::Int64,
+            field.data_type(),
+            &DataType::Int64,
             "UInt32 inputs should return Int64 to safely represent all values"
         );
         Ok(())
@@ -870,11 +981,22 @@ mod tests {
     #[test]
     fn test_uniform_return_type_uint64() -> Result<()> {
         let uniform_fn = SparkUniform::new();
-        let arg_types = vec![DataType::UInt64, DataType::UInt64, DataType::Int64];
-        let return_type = uniform_fn.return_type(&arg_types)?;
+        let arg_fields = vec![
+            Arc::new(Field::new("min", DataType::UInt64, false)),
+            Arc::new(Field::new("max", DataType::UInt64, false)),
+            Arc::new(Field::new("seed", DataType::Int64, false)),
+        ];
+
+        let args = ReturnFieldArgs {
+            arg_fields: &arg_fields,
+            scalar_arguments: &[None, None, None],
+        };
+
+        let field = uniform_fn.return_field_from_args(args)?;
+
         assert_eq!(
-            return_type,
-            DataType::Int64,
+            field.data_type(),
+            &DataType::Int64,
             "UInt64 inputs should return Int64"
         );
         Ok(())
@@ -884,11 +1006,22 @@ mod tests {
     #[test]
     fn test_uniform_return_type_uint32_int32_mixed() -> Result<()> {
         let uniform_fn = SparkUniform::new();
-        let arg_types = vec![DataType::UInt32, DataType::Int32, DataType::Int64];
-        let return_type = uniform_fn.return_type(&arg_types)?;
+        let arg_fields = vec![
+            Arc::new(Field::new("min", DataType::UInt32, false)),
+            Arc::new(Field::new("max", DataType::Int32, false)),
+            Arc::new(Field::new("seed", DataType::Int64, false)),
+        ];
+
+        let args = ReturnFieldArgs {
+            arg_fields: &arg_fields,
+            scalar_arguments: &[None, None, None],
+        };
+
+        let field = uniform_fn.return_field_from_args(args)?;
+
         assert_eq!(
-            return_type,
-            DataType::Int64,
+            field.data_type(),
+            &DataType::Int64,
             "Mixed UInt32 and Int32 should return Int64 to avoid lossy conversion"
         );
         Ok(())
@@ -898,11 +1031,21 @@ mod tests {
     #[test]
     fn test_uniform_return_type_int16() -> Result<()> {
         let uniform_fn = SparkUniform::new();
-        let arg_types = vec![DataType::Int16, DataType::Int16, DataType::Int64];
-        let return_type = uniform_fn.return_type(&arg_types)?;
+        let arg_fields = vec![
+            Arc::new(Field::new("min", DataType::Int16, false)),
+            Arc::new(Field::new("max", DataType::Int16, false)),
+            Arc::new(Field::new("seed", DataType::Int64, false)),
+        ];
+
+        let args = ReturnFieldArgs {
+            arg_fields: &arg_fields,
+            scalar_arguments: &[None, None, None],
+        };
+
+        let field = uniform_fn.return_field_from_args(args)?;
         assert_eq!(
-            return_type,
-            DataType::Int32,
+            field.data_type(),
+            &DataType::Int32,
             "Int16 (SMALLINT) inputs should return Int32"
         );
         Ok(())
@@ -912,11 +1055,22 @@ mod tests {
     #[test]
     fn test_uniform_return_type_int8() -> Result<()> {
         let uniform_fn = SparkUniform::new();
-        let arg_types = vec![DataType::Int8, DataType::Int8, DataType::Int64];
-        let return_type = uniform_fn.return_type(&arg_types)?;
+        let arg_fields = vec![
+            Arc::new(Field::new("min", DataType::Int8, false)),
+            Arc::new(Field::new("max", DataType::Int8, false)),
+            Arc::new(Field::new("seed", DataType::Int64, false)),
+        ];
+
+        let args = ReturnFieldArgs {
+            arg_fields: &arg_fields,
+            scalar_arguments: &[None, None, None],
+        };
+
+        let field = uniform_fn.return_field_from_args(args)?;
+
         assert_eq!(
-            return_type,
-            DataType::Int32,
+            field.data_type(),
+            &DataType::Int32,
             "Int8 inputs should return Int32"
         );
         Ok(())
@@ -946,16 +1100,22 @@ mod tests {
     #[test]
     fn test_uniform_return_type_decimal256_valid() -> Result<()> {
         let uniform_fn = SparkUniform::new();
-        // Decimal256 with precision=10, scale=2 (fits in Decimal128)
-        let arg_types = vec![
-            DataType::Decimal256(10, 2),
-            DataType::Decimal256(10, 2),
-            DataType::Int64,
+        let arg_fields = vec![
+            Arc::new(Field::new("min", DataType::Decimal256(10, 2), false)),
+            Arc::new(Field::new("max", DataType::Decimal256(10, 2), false)),
+            Arc::new(Field::new("seed", DataType::Int64, false)),
         ];
-        let return_type = uniform_fn.return_type(&arg_types)?;
+
+        let args = ReturnFieldArgs {
+            arg_fields: &arg_fields,
+            scalar_arguments: &[None, None, None],
+        };
+
+        let field = uniform_fn.return_field_from_args(args)?;
+
         assert_eq!(
-            return_type,
-            DataType::Decimal128(10, 2),
+            field.data_type(),
+            &DataType::Decimal128(10, 2),
             "Decimal256 with valid precision/scale should convert to Decimal128"
         );
         Ok(())
@@ -966,16 +1126,23 @@ mod tests {
     fn test_uniform_return_type_decimal256_invalid_precision() -> Result<()> {
         let uniform_fn = SparkUniform::new();
         // Decimal256 with precision > 38 (exceeds Decimal128 limit)
-        let arg_types = vec![
-            DataType::Decimal256(50, 2),
-            DataType::Decimal256(50, 2),
-            DataType::Int64,
+        let arg_fields = vec![
+            Arc::new(Field::new("min", DataType::Decimal256(50, 2), false)),
+            Arc::new(Field::new("max", DataType::Decimal256(50, 2), false)),
+            Arc::new(Field::new("seed", DataType::Int64, false)),
         ];
-        let return_type = uniform_fn.return_type(&arg_types)?;
+
+        let args = ReturnFieldArgs {
+            arg_fields: &arg_fields,
+            scalar_arguments: &[None, None, None],
+        };
+
+        let field = uniform_fn.return_field_from_args(args)?;
+
         // Should return Float64 as fallback since it doesn't fit in Decimal128
         assert_eq!(
-            return_type,
-            DataType::Float64,
+            field.data_type(),
+            &DataType::Float64,
             "Decimal256 with precision > 38 should fall back to Float64"
         );
         Ok(())
@@ -985,15 +1152,22 @@ mod tests {
     #[test]
     fn test_uniform_return_type_mixed_decimal128_decimal256() -> Result<()> {
         let uniform_fn = SparkUniform::new();
-        let arg_types = vec![
-            DataType::Decimal128(5, 2),
-            DataType::Decimal256(10, 3),
-            DataType::Int64,
+        let arg_fields = vec![
+            Arc::new(Field::new("min", DataType::Decimal128(5, 2), false)),
+            Arc::new(Field::new("max", DataType::Decimal256(10, 3), false)),
+            Arc::new(Field::new("seed", DataType::Int64, false)),
         ];
-        let return_type = uniform_fn.return_type(&arg_types)?;
+
+        let args = ReturnFieldArgs {
+            arg_fields: &arg_fields,
+            scalar_arguments: &[None, None, None],
+        };
+
+        let field = uniform_fn.return_field_from_args(args)?;
+
         assert_eq!(
-            return_type,
-            DataType::Decimal128(10, 3),
+            field.data_type(),
+            &DataType::Decimal128(10, 3),
             "Mixed Decimal128/Decimal256 should use larger precision"
         );
         Ok(())
@@ -1003,15 +1177,22 @@ mod tests {
     #[test]
     fn test_uniform_return_type_decimal256_same_precision() -> Result<()> {
         let uniform_fn = SparkUniform::new();
-        let arg_types = vec![
-            DataType::Decimal256(15, 2),
-            DataType::Decimal256(15, 5),
-            DataType::Int64,
+        let arg_fields = vec![
+            Arc::new(Field::new("min", DataType::Decimal256(15, 2), false)),
+            Arc::new(Field::new("max", DataType::Decimal256(15, 5), false)),
+            Arc::new(Field::new("seed", DataType::Int64, false)),
         ];
-        let return_type = uniform_fn.return_type(&arg_types)?;
+
+        let args = ReturnFieldArgs {
+            arg_fields: &arg_fields,
+            scalar_arguments: &[None, None, None],
+        };
+
+        let field = uniform_fn.return_field_from_args(args)?;
+
         assert_eq!(
-            return_type,
-            DataType::Decimal128(15, 5),
+            field.data_type(),
+            &DataType::Decimal128(15, 5),
             "Decimal256 with same precision should use max scale"
         );
         Ok(())
