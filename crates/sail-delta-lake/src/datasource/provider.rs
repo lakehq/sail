@@ -36,10 +36,10 @@ use datafusion::physical_plan::ExecutionPlan;
 use delta_kernel::table_features::ColumnMappingMode;
 use sail_common_datafusion::rename::physical_plan::rename_projected_physical_plan;
 
-use crate::datasource::scan::FileScanParams;
+use crate::datasource::scan::{build_file_scan_config, FileScanParams};
 use crate::datasource::{
-    build_file_scan_config, df_logical_schema, get_pushdown_filters, prune_files, simplify_expr,
-    DataFusionMixins, DeltaScanConfig, DeltaTableStateExt,
+    df_logical_schema, get_pushdown_filters, prune_files, simplify_expr, DataFusionMixins,
+    DeltaScanConfig, DeltaTableStateExt,
 };
 use crate::kernel::models::Add;
 use crate::kernel::DeltaResult;
@@ -88,6 +88,18 @@ impl DeltaTableProvider {
     pub fn with_files(mut self, files: Vec<Add>) -> DeltaTableProvider {
         self.files = Some(Arc::new(files));
         self
+    }
+
+    pub fn snapshot(&self) -> &DeltaTableState {
+        &self.snapshot
+    }
+
+    pub fn log_store(&self) -> &LogStoreRef {
+        &self.log_store
+    }
+
+    pub fn config(&self) -> &DeltaScanConfig {
+        &self.config
     }
 
     /// Separate filters into those used for pruning vs those pushed down to Parquet

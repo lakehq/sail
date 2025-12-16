@@ -153,7 +153,7 @@ pub fn build_file_scan_config(
         table_partition_cols_schema.push(Field::new(
             file_column_name.clone(),
             field_name_datatype,
-            false,
+            true,
         ));
     }
 

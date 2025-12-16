@@ -32,17 +32,18 @@ message ExtendedPhysicalPlanNode {
     DeltaScanByAddsExecNode delta_scan_by_adds = 18;
     DeltaFindFilesExecNode delta_find_files = 19;
     DeltaRemoveActionsExecNode delta_remove_actions = 20;
-    AvroExecNode avro = 21;
-    ConsoleSinkExecNode console_sink = 22;
-    SocketSourceExecNode socket_source = 23;
-    RateSourceExecNode rate_source = 24;
-    TextSinkExecNode text_sink = 25;
-    BinarySourceExecNode binary_source = 26;
-    StreamCollectorExecNode stream_collector = 27;
-    StreamLimitExecNode stream_limit = 28;
-    StreamSourceAdapterExecNode stream_source_adapter = 29;
-    IcebergWriterExecNode iceberg_writer = 30;
-    IcebergCommitExecNode iceberg_commit = 31;
+    DeltaFileLookupExecNode delta_file_lookup = 21;
+    AvroExecNode avro = 22;
+    ConsoleSinkExecNode console_sink = 23;
+    SocketSourceExecNode socket_source = 24;
+    RateSourceExecNode rate_source = 25;
+    TextSinkExecNode text_sink = 26;
+    BinarySourceExecNode binary_source = 27;
+    StreamCollectorExecNode stream_collector = 28;
+    StreamLimitExecNode stream_limit = 29;
+    StreamSourceAdapterExecNode stream_source_adapter = 30;
+    IcebergWriterExecNode iceberg_writer = 31;
+    IcebergCommitExecNode iceberg_commit = 32;
   }
 }
 
@@ -372,6 +373,12 @@ message DeltaFindFilesExecNode {
 
 message DeltaRemoveActionsExecNode {
   bytes input = 1;
+}
+
+message DeltaFileLookupExecNode {
+  bytes input = 1;
+  string table_url = 2;
+  int64 version = 3;
 }
 
 message ConsoleSinkExecNode {

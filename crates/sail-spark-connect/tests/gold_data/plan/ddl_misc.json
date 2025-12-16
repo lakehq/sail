@@ -12,6 +12,62 @@
                 "ns2",
                 "tbl"
               ],
+              "targetAlias": "target",
+              "source": {
+                "table": {
+                  "name": [
+                    "testcat2",
+                    "ns1",
+                    "ns2",
+                    "tbl"
+                  ],
+                  "alias": "source"
+                }
+              },
+              "onCondition": {
+                "unresolvedFunction": {
+                  "functionName": [
+                    "=="
+                  ],
+                  "arguments": [
+                    {
+                      "unresolvedAttribute": {
+                        "name": [
+                          "target",
+                          "col1"
+                        ],
+                        "planId": null,
+                        "isMetadataColumn": false
+                      }
+                    },
+                    {
+                      "unresolvedAttribute": {
+                        "name": [
+                          "source",
+                          "col1"
+                        ],
+                        "planId": null,
+                        "isMetadataColumn": false
+                      }
+                    }
+                  ],
+                  "namedArguments": [],
+                  "isDistinct": false,
+                  "isUserDefinedFunction": false,
+                  "isInternal": null,
+                  "ignoreNulls": null,
+                  "filter": null,
+                  "orderBy": null
+                }
+              },
+              "clauses": [
+                {
+                  "notMatchedBySource": {
+                    "condition": null,
+                    "action": "delete"
+                  }
+                }
+              ],
               "withSchemaEvolution": true
             },
             "planId": null
