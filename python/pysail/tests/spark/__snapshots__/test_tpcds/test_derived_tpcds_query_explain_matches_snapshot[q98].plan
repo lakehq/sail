@@ -4,7 +4,7 @@ ProjectionExec: expr=[<exprs>]
     SortExec: [<sort_exprs>]
       SortExec: expr=[<exprs>]
         ProjectionExec: expr=[<exprs>]
-          WindowAggExec: wdw=[sum(sum(store_sales.#<col>)) PARTITION BY [<cols>] ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING: Ok(Field { name: "sum(sum(store_sales.#<col>)) PARTITION BY [<cols>] ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING", data_type: Decimal128(27, 2), nullable: true }), frame: WindowFrame { units: Rows, start_bound: Preceding(UInt64(NULL)), end_bound: Following(UInt64(NULL)), is_causal: false }]
+          WindowAggExec: wdw=[sum(sum(store_sales.#<col>)) PARTITION BY [item.#<col>] ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING: Ok(Field { name: "sum(sum(store_sales.#<col>)) PARTITION BY [item.#<col>] ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING", data_type: Decimal128(27, 2), nullable: true }), frame: WindowFrame { units: Rows, start_bound: Preceding(UInt64(NULL)), end_bound: Following(UInt64(NULL)), is_causal: false }]
             SortExec: expr=[<exprs>]
               CoalesceBatchesExec: target_batch_size=8192
                 RepartitionExec: partitioning=Hash([#<col>], <partitions>), input_partitions=<partitions>

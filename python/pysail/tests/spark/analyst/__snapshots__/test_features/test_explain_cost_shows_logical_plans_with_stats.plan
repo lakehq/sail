@@ -1,16 +1,16 @@
 == Parsed Logical Plan ==
-Projection: <exprs>
+Projection: t.#<col> AS #<col>, sum(t.#<col>) AS #<col>
   Aggregate: groupBy=[[t.#<col>]], aggr=[[sum(t.#<col>)]]
     SubqueryAlias: t
-      Projection: <exprs>
-        Projection: <exprs>
+      Projection: #<col> AS #<col>, #<col> AS #<col>
+        Projection: column1 AS #<col>, column2 AS #<col>
           Values: (Int32(1), Int32(2)), (Int32(1), Int32(3))
 
 == Analyzed Logical Plan ==
-Projection: <exprs>
+Projection: t.#<col> AS #<col>, sum(t.#<col>) AS #<col>
   Aggregate: groupBy=[[t.#<col>]], aggr=[[sum(CAST(t.#<col> AS Int64))]]
     SubqueryAlias: t
-      Projection: <exprs>
+      Projection: column1 AS #<col>, column2 AS #<col>
         Values: (Int32(1), Int32(2)), (Int32(1), Int32(3))
 
 == Physical Plan ==

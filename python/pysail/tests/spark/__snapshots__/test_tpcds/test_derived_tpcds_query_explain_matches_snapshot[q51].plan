@@ -5,9 +5,9 @@ ProjectionExec: expr=[<exprs>]
       ProjectionExec: expr=[<exprs>]
         CoalesceBatchesExec: target_batch_size=8192
           CoalesceBatchesExec: target_batch_size=8192
-            FilterExec: max(x.#<col>) PARTITION BY [<cols>] ORDER BY [<cols>] ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW@<id> < max(x.#<col>) PARTITION BY [<cols>] ORDER BY [<cols>] ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW@<id>
-              BoundedWindowAggExec: wdw=[max(x.#<col>) PARTITION BY [<cols>] ORDER BY [<cols>] ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW: Field { "max(x.#<col>) PARTITION BY [<cols>] ORDER BY [<cols>] ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW": nullable Decimal128(25, 2) }, frame: ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW], mode=[Sorted]
-                BoundedWindowAggExec: wdw=[max(x.#<col>) PARTITION BY [<cols>] ORDER BY [<cols>] ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW: Field { "max(x.#<col>) PARTITION BY [<cols>] ORDER BY [<cols>] ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW": nullable Decimal128(25, 2) }, frame: ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW], mode=[Sorted]
+            FilterExec: max(x.#<col>) PARTITION BY [x.#<col>] ORDER BY [x.#<col> ASC NULLS FIRST] ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW@<id> < max(x.#<col>) PARTITION BY [x.#<col>] ORDER BY [x.#<col> ASC NULLS FIRST] ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW@<id>
+              BoundedWindowAggExec: wdw=[max(x.#<col>) PARTITION BY [x.#<col>] ORDER BY [x.#<col> ASC NULLS FIRST] ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW: Field { "max(x.#<col>) PARTITION BY [x.#<col>] ORDER BY [x.#<col> ASC NULLS FIRST] ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW": nullable Decimal128(25, 2) }, frame: ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW], mode=[Sorted]
+                BoundedWindowAggExec: wdw=[max(x.#<col>) PARTITION BY [x.#<col>] ORDER BY [x.#<col> ASC NULLS FIRST] ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW: Field { "max(x.#<col>) PARTITION BY [x.#<col>] ORDER BY [x.#<col> ASC NULLS FIRST] ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW": nullable Decimal128(25, 2) }, frame: ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW], mode=[Sorted]
                   SortExec: expr=[<exprs>]
                     CoalesceBatchesExec: target_batch_size=8192
                       RepartitionExec: partitioning=Hash([#<col>], <partitions>), input_partitions=<partitions>
@@ -18,7 +18,7 @@ ProjectionExec: expr=[<exprs>]
                                 HashJoinExec: mode=CollectLeft, join_type=Full, on=[(#<col>, #<col>), (#<col>, #<col>)]
                                   CoalescePartitionsExec
                                     ProjectionExec: expr=[<exprs>]
-                                      BoundedWindowAggExec: wdw=[sum(sum(web_sales.#<col>)) PARTITION BY [<cols>] ORDER BY [<cols>] ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW: Field { "sum(sum(web_sales.#<col>)) PARTITION BY [<cols>] ORDER BY [<cols>] ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW": nullable Decimal128(25, 2) }, frame: ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW], mode=[Sorted]
+                                      BoundedWindowAggExec: wdw=[sum(sum(web_sales.#<col>)) PARTITION BY [web_sales.#<col>] ORDER BY [date_dim.#<col> ASC NULLS FIRST] ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW: Field { "sum(sum(web_sales.#<col>)) PARTITION BY [web_sales.#<col>] ORDER BY [date_dim.#<col> ASC NULLS FIRST] ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW": nullable Decimal128(25, 2) }, frame: ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW], mode=[Sorted]
                                         SortExec: expr=[<exprs>]
                                           CoalesceBatchesExec: target_batch_size=8192
                                             RepartitionExec: partitioning=Hash([#<col>], <partitions>), input_partitions=<partitions>
@@ -43,7 +43,7 @@ ProjectionExec: expr=[<exprs>]
                                                                         RepartitionExec: partitioning=RoundRobinBatch(<partitions>), input_partitions=<partitions>
                                                                           DataSourceExec: partitions=1, partition_sizes=[<sizes>]
                                   ProjectionExec: expr=[<exprs>]
-                                    BoundedWindowAggExec: wdw=[sum(sum(store_sales.#<col>)) PARTITION BY [<cols>] ORDER BY [<cols>] ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW: Field { "sum(sum(store_sales.#<col>)) PARTITION BY [<cols>] ORDER BY [<cols>] ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW": nullable Decimal128(25, 2) }, frame: ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW], mode=[Sorted]
+                                    BoundedWindowAggExec: wdw=[sum(sum(store_sales.#<col>)) PARTITION BY [store_sales.#<col>] ORDER BY [date_dim.#<col> ASC NULLS FIRST] ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW: Field { "sum(sum(store_sales.#<col>)) PARTITION BY [store_sales.#<col>] ORDER BY [date_dim.#<col> ASC NULLS FIRST] ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW": nullable Decimal128(25, 2) }, frame: ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW], mode=[Sorted]
                                       SortExec: expr=[<exprs>]
                                         CoalesceBatchesExec: target_batch_size=8192
                                           RepartitionExec: partitioning=Hash([#<col>], <partitions>), input_partitions=<partitions>

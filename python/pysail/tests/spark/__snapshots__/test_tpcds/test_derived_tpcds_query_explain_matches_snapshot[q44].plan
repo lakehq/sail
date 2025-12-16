@@ -24,10 +24,10 @@ ProjectionExec: expr=[<exprs>]
                                     ProjectionExec: expr=[<exprs>]
                                       CoalesceBatchesExec: target_batch_size=8192
                                         CoalesceBatchesExec: target_batch_size=8192
-                                          FilterExec: rank() ORDER BY [<cols>] RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW@<id> < 11
+                                          FilterExec: rank() ORDER BY [V1.#<col> ASC NULLS FIRST] RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW@<id> < 11
                                             RepartitionExec: partitioning=RoundRobinBatch(<partitions>), input_partitions=<partitions>
                                               ProjectionExec: expr=[<exprs>]
-                                                BoundedWindowAggExec: wdw=[rank() ORDER BY [<cols>] RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW: Field { "rank() ORDER BY [<cols>] RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW": UInt64 }, frame: RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW], mode=[Sorted]
+                                                BoundedWindowAggExec: wdw=[rank() ORDER BY [V1.#<col> ASC NULLS FIRST] RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW: Field { "rank() ORDER BY [V1.#<col> ASC NULLS FIRST] RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW": UInt64 }, frame: RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW], mode=[Sorted]
                                                   SortExec: [<sort_exprs>]
                                                     SortExec: expr=[<exprs>]
                                                       ProjectionExec: expr=[<exprs>]
@@ -66,10 +66,10 @@ ProjectionExec: expr=[<exprs>]
                                     ProjectionExec: expr=[<exprs>]
                                       CoalesceBatchesExec: target_batch_size=8192
                                         CoalesceBatchesExec: target_batch_size=8192
-                                          FilterExec: rank() ORDER BY [<cols>] RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW@<id> < 11
+                                          FilterExec: rank() ORDER BY [V2.#<col> DESC NULLS LAST] RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW@<id> < 11
                                             RepartitionExec: partitioning=RoundRobinBatch(<partitions>), input_partitions=<partitions>
                                               ProjectionExec: expr=[<exprs>]
-                                                BoundedWindowAggExec: wdw=[rank() ORDER BY [<cols>] RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW: Field { "rank() ORDER BY [<cols>] RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW": UInt64 }, frame: RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW], mode=[Sorted]
+                                                BoundedWindowAggExec: wdw=[rank() ORDER BY [V2.#<col> DESC NULLS LAST] RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW: Field { "rank() ORDER BY [V2.#<col> DESC NULLS LAST] RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW": UInt64 }, frame: RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW], mode=[Sorted]
                                                   SortExec: [<sort_exprs>]
                                                     SortExec: expr=[<exprs>]
                                                       ProjectionExec: expr=[<exprs>]

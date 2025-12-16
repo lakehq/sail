@@ -5,8 +5,8 @@ ProjectionExec: expr=[<exprs>]
       ProjectionExec: expr=[<exprs>]
         CoalesceBatchesExec: target_batch_size=8192
           CoalesceBatchesExec: target_batch_size=8192
-            FilterExec: rank() PARTITION BY [<cols>] ORDER BY [<cols>] RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW@<id> <= 100
-              BoundedWindowAggExec: wdw=[rank() PARTITION BY [<cols>] ORDER BY [<cols>] RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW: Field { "rank() PARTITION BY [<cols>] ORDER BY [<cols>] RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW": UInt64 }, frame: RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW], mode=[Sorted]
+            FilterExec: rank() PARTITION BY [dw1.#<col>] ORDER BY [dw1.#<col> DESC NULLS LAST] RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW@<id> <= 100
+              BoundedWindowAggExec: wdw=[rank() PARTITION BY [dw1.#<col>] ORDER BY [dw1.#<col> DESC NULLS LAST] RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW: Field { "rank() PARTITION BY [dw1.#<col>] ORDER BY [dw1.#<col> DESC NULLS LAST] RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW": UInt64 }, frame: RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW], mode=[Sorted]
                 SortExec: expr=[<exprs>]
                   CoalesceBatchesExec: target_batch_size=8192
                     RepartitionExec: partitioning=Hash([#<col>], <partitions>), input_partitions=<partitions>

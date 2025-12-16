@@ -5,7 +5,7 @@ ProjectionExec: expr=[<exprs>]
       SortExec: expr=[<exprs>]
         ProjectionExec: expr=[<exprs>]
           ProjectionExec: expr=[<exprs>]
-            BoundedWindowAggExec: wdw=[rank() PARTITION BY [<cols>] ORDER BY [<cols>] RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW: Field { "rank() PARTITION BY [<cols>] ORDER BY [<cols>] RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW": UInt64 }, frame: RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW], mode=[Sorted]
+            BoundedWindowAggExec: wdw=[rank() PARTITION BY [grouping(item.#<col>) + grouping(item.#<col>), CASE WHEN grouping(item.#<col>) = Int32(0) THEN item.#<col> END] ORDER BY [sum(web_sales.#<col>) DESC NULLS LAST] RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW: Field { "rank() PARTITION BY [grouping(item.#<col>) + grouping(item.#<col>), CASE WHEN grouping(item.#<col>) = Int32(0) THEN item.#<col> END] ORDER BY [sum(web_sales.#<col>) DESC NULLS LAST] RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW": UInt64 }, frame: RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW], mode=[Sorted]
               SortExec: expr=[<exprs>]
                 CoalesceBatchesExec: target_batch_size=8192
                   RepartitionExec: partitioning=Hash([grouping(item.#<col>)@<id> + grouping(item.#<col>)@<id>, CASE WHEN grouping(item.#<col>)@<id> = 0 THEN #<col> END], <partitions>), input_partitions=<partitions>

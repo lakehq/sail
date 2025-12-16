@@ -3,22 +3,22 @@ Whole-stage codegen is not supported; showing physical plan instead.
 
 == Plan Steps ==
 initial_logical_plan:
-Projection: <exprs>
+Projection: t.#<col> AS #<col>, sum(t.#<col>) AS #<col>
   Aggregate: groupBy=[[t.#<col>]], aggr=[[sum(t.#<col>)]]
     SubqueryAlias: t
-      Projection: <exprs>
-        Projection: <exprs>
+      Projection: #<col> AS #<col>, #<col> AS #<col>
+        Projection: column1 AS #<col>, column2 AS #<col>
           Values: (Int32(1), Int32(2)), (Int32(1), Int32(3))
 
 logical_plan after resolve_grouping_function:
 SAME TEXT AS ABOVE
 
 logical_plan after type_coercion:
-Projection: <exprs>
+Projection: t.#<col> AS #<col>, sum(t.#<col>) AS #<col>
   Aggregate: groupBy=[[t.#<col>]], aggr=[[sum(CAST(t.#<col> AS Int64))]]
     SubqueryAlias: t
-      Projection: <exprs>
-        Projection: <exprs>
+      Projection: #<col> AS #<col>, #<col> AS #<col>
+        Projection: column1 AS #<col>, column2 AS #<col>
           Values: (Int32(1), Int32(2)), (Int32(1), Int32(3))
 
 analyzed_logical_plan:
@@ -88,10 +88,10 @@ logical_plan after common_sub_expression_eliminate:
 SAME TEXT AS ABOVE
 
 logical_plan after optimize_projections:
-Projection: <exprs>
+Projection: t.#<col> AS #<col>, sum(t.#<col>) AS #<col>
   Aggregate: groupBy=[[t.#<col>]], aggr=[[sum(CAST(t.#<col> AS Int64))]]
     SubqueryAlias: t
-      Projection: <exprs>
+      Projection: column1 AS #<col>, column2 AS #<col>
         Values: (Int32(1), Int32(2)), (Int32(1), Int32(3))
 
 logical_plan after eliminate_nested_union:
@@ -161,10 +161,10 @@ logical_plan after optimize_projections:
 SAME TEXT AS ABOVE
 
 logical_plan:
-Projection: <exprs>
+Projection: t.#<col> AS #<col>, sum(t.#<col>) AS #<col>
   Aggregate: groupBy=[[t.#<col>]], aggr=[[sum(CAST(t.#<col> AS Int64))]]
     SubqueryAlias: t
-      Projection: <exprs>
+      Projection: column1 AS #<col>, column2 AS #<col>
         Values: (Int32(1), Int32(2)), (Int32(1), Int32(3))
 
 initial_physical_plan:

@@ -13,12 +13,12 @@ ProjectionExec: expr=[<exprs>]
                       ProjectionExec: expr=[<exprs>]
                         CoalesceBatchesExec: target_batch_size=8192
                           CoalesceBatchesExec: target_batch_size=8192
-                            FilterExec: rank() ORDER BY [<cols>] RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW@<id> <= 10 OR rank() ORDER BY [<cols>] RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW@<id> <= 10
+                            FilterExec: rank() ORDER BY [in_web.#<col> ASC NULLS FIRST] RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW@<id> <= 10 OR rank() ORDER BY [in_web.#<col> ASC NULLS FIRST] RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW@<id> <= 10
                               RepartitionExec: partitioning=RoundRobinBatch(<partitions>), input_partitions=<partitions>
                                 ProjectionExec: expr=[<exprs>]
-                                  BoundedWindowAggExec: wdw=[rank() ORDER BY [<cols>] RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW: Field { "rank() ORDER BY [<cols>] RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW": UInt64 }, frame: RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW], mode=[Sorted]
+                                  BoundedWindowAggExec: wdw=[rank() ORDER BY [in_web.#<col> ASC NULLS FIRST] RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW: Field { "rank() ORDER BY [in_web.#<col> ASC NULLS FIRST] RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW": UInt64 }, frame: RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW], mode=[Sorted]
                                     SortExec: expr=[<exprs>]
-                                      BoundedWindowAggExec: wdw=[rank() ORDER BY [<cols>] RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW: Field { "rank() ORDER BY [<cols>] RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW": UInt64 }, frame: RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW], mode=[Sorted]
+                                      BoundedWindowAggExec: wdw=[rank() ORDER BY [in_web.#<col> ASC NULLS FIRST] RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW: Field { "rank() ORDER BY [in_web.#<col> ASC NULLS FIRST] RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW": UInt64 }, frame: RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW], mode=[Sorted]
                                         SortExec: [<sort_exprs>]
                                           SortExec: expr=[<exprs>]
                                             ProjectionExec: expr=[<exprs>]
@@ -56,12 +56,12 @@ ProjectionExec: expr=[<exprs>]
                       ProjectionExec: expr=[<exprs>]
                         CoalesceBatchesExec: target_batch_size=8192
                           CoalesceBatchesExec: target_batch_size=8192
-                            FilterExec: rank() ORDER BY [<cols>] RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW@<id> <= 10 OR rank() ORDER BY [<cols>] RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW@<id> <= 10
+                            FilterExec: rank() ORDER BY [in_cat.#<col> ASC NULLS FIRST] RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW@<id> <= 10 OR rank() ORDER BY [in_cat.#<col> ASC NULLS FIRST] RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW@<id> <= 10
                               RepartitionExec: partitioning=RoundRobinBatch(<partitions>), input_partitions=<partitions>
                                 ProjectionExec: expr=[<exprs>]
-                                  BoundedWindowAggExec: wdw=[rank() ORDER BY [<cols>] RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW: Field { "rank() ORDER BY [<cols>] RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW": UInt64 }, frame: RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW], mode=[Sorted]
+                                  BoundedWindowAggExec: wdw=[rank() ORDER BY [in_cat.#<col> ASC NULLS FIRST] RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW: Field { "rank() ORDER BY [in_cat.#<col> ASC NULLS FIRST] RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW": UInt64 }, frame: RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW], mode=[Sorted]
                                     SortExec: expr=[<exprs>]
-                                      BoundedWindowAggExec: wdw=[rank() ORDER BY [<cols>] RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW: Field { "rank() ORDER BY [<cols>] RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW": UInt64 }, frame: RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW], mode=[Sorted]
+                                      BoundedWindowAggExec: wdw=[rank() ORDER BY [in_cat.#<col> ASC NULLS FIRST] RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW: Field { "rank() ORDER BY [in_cat.#<col> ASC NULLS FIRST] RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW": UInt64 }, frame: RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW], mode=[Sorted]
                                         SortExec: [<sort_exprs>]
                                           SortExec: expr=[<exprs>]
                                             ProjectionExec: expr=[<exprs>]
@@ -99,12 +99,12 @@ ProjectionExec: expr=[<exprs>]
                       ProjectionExec: expr=[<exprs>]
                         CoalesceBatchesExec: target_batch_size=8192
                           CoalesceBatchesExec: target_batch_size=8192
-                            FilterExec: rank() ORDER BY [<cols>] RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW@<id> <= 10 OR rank() ORDER BY [<cols>] RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW@<id> <= 10
+                            FilterExec: rank() ORDER BY [in_store.#<col> ASC NULLS FIRST] RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW@<id> <= 10 OR rank() ORDER BY [in_store.#<col> ASC NULLS FIRST] RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW@<id> <= 10
                               RepartitionExec: partitioning=RoundRobinBatch(<partitions>), input_partitions=<partitions>
                                 ProjectionExec: expr=[<exprs>]
-                                  BoundedWindowAggExec: wdw=[rank() ORDER BY [<cols>] RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW: Field { "rank() ORDER BY [<cols>] RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW": UInt64 }, frame: RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW], mode=[Sorted]
+                                  BoundedWindowAggExec: wdw=[rank() ORDER BY [in_store.#<col> ASC NULLS FIRST] RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW: Field { "rank() ORDER BY [in_store.#<col> ASC NULLS FIRST] RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW": UInt64 }, frame: RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW], mode=[Sorted]
                                     SortExec: expr=[<exprs>]
-                                      BoundedWindowAggExec: wdw=[rank() ORDER BY [<cols>] RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW: Field { "rank() ORDER BY [<cols>] RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW": UInt64 }, frame: RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW], mode=[Sorted]
+                                      BoundedWindowAggExec: wdw=[rank() ORDER BY [in_store.#<col> ASC NULLS FIRST] RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW: Field { "rank() ORDER BY [in_store.#<col> ASC NULLS FIRST] RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW": UInt64 }, frame: RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW], mode=[Sorted]
                                         SortExec: [<sort_exprs>]
                                           SortExec: expr=[<exprs>]
                                             ProjectionExec: expr=[<exprs>]
