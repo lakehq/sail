@@ -4,8 +4,9 @@ import duckdb
 import pytest
 from syrupy.assertion import SnapshotAssertion
 
-from .utils import is_jvm_spark  # noqa: TID252
 from pysail.tests.spark.conftest import PlanSnapshotExtension
+
+from .utils import is_jvm_spark  # noqa: TID252
 
 
 @pytest.fixture(scope="module")
