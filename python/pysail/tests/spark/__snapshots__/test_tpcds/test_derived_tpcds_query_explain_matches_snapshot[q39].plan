@@ -1,0 +1,1783 @@
+== Codegen ==
+Whole-stage codegen is not supported; showing physical plan instead.
+
+== Plan Steps ==
+initial_logical_plan:
+Projection: <exprs>
+  Sort: <exprs>
+    Projection: <exprs>
+      Filter: inv1.#<col> = inv2.#<col> AND inv1.#<col> = inv2.#<col> AND inv1.#<col> = Int32(1) AND inv2.#<col> = Int32(1) + Int32(1)
+        Cross Join: 
+          SubqueryAlias: inv1
+            SubqueryAlias: inv
+              SubqueryAlias: inv
+                Projection: <exprs>
+                  Filter: CASE WHEN foo.#<col> = Int32(0) THEN Int32(0) WHEN Boolean(true) THEN CAST(foo.#<col> AS Float64) / CAST(foo.#<col> AS Float64) END > Int32(1)
+                    SubqueryAlias: foo
+                      Projection: <exprs>
+                        Aggregate: groupBy=[[warehouse.#<col>, warehouse.#<col>, item.#<col>, date_dim.#<col>]], aggr=[[stddev(inventory.#<col>), avg(inventory.#<col>)]]
+                          Filter: inventory.#<col> = item.#<col> AND inventory.#<col> = warehouse.#<col> AND inventory.#<col> = date_dim.#<col> AND date_dim.#<col> = Int32(2001)
+                            Cross Join: 
+                              Cross Join: 
+                                Cross Join: 
+                                  Projection: <exprs>
+                                    Projection: <exprs>
+                                      SubqueryAlias: inventory
+                                        Projection: <exprs>
+                                          Projection: <exprs>
+                                            TableScan: ?table?
+                                  Projection: <exprs>
+                                    Projection: <exprs>
+                                      SubqueryAlias: item
+                                        Projection: <exprs>
+                                          Projection: <exprs>
+                                            TableScan: ?table?
+                                Projection: <exprs>
+                                  Projection: <exprs>
+                                    SubqueryAlias: warehouse
+                                      Projection: <exprs>
+                                        Projection: <exprs>
+                                          TableScan: ?table?
+                              Projection: <exprs>
+                                Projection: <exprs>
+                                  SubqueryAlias: date_dim
+                                    Projection: <exprs>
+                                      Projection: <exprs>
+                                        TableScan: ?table?
+          SubqueryAlias: inv2
+            SubqueryAlias: inv
+              SubqueryAlias: inv
+                Projection: <exprs>
+                  Filter: CASE WHEN foo.#<col> = Int32(0) THEN Int32(0) WHEN Boolean(true) THEN CAST(foo.#<col> AS Float64) / CAST(foo.#<col> AS Float64) END > Int32(1)
+                    SubqueryAlias: foo
+                      Projection: <exprs>
+                        Aggregate: groupBy=[[warehouse.#<col>, warehouse.#<col>, item.#<col>, date_dim.#<col>]], aggr=[[stddev(inventory.#<col>), avg(inventory.#<col>)]]
+                          Filter: inventory.#<col> = item.#<col> AND inventory.#<col> = warehouse.#<col> AND inventory.#<col> = date_dim.#<col> AND date_dim.#<col> = Int32(2001)
+                            Cross Join: 
+                              Cross Join: 
+                                Cross Join: 
+                                  Projection: <exprs>
+                                    Projection: <exprs>
+                                      SubqueryAlias: inventory
+                                        Projection: <exprs>
+                                          Projection: <exprs>
+                                            TableScan: ?table?
+                                  Projection: <exprs>
+                                    Projection: <exprs>
+                                      SubqueryAlias: item
+                                        Projection: <exprs>
+                                          Projection: <exprs>
+                                            TableScan: ?table?
+                                Projection: <exprs>
+                                  Projection: <exprs>
+                                    SubqueryAlias: warehouse
+                                      Projection: <exprs>
+                                        Projection: <exprs>
+                                          TableScan: ?table?
+                              Projection: <exprs>
+                                Projection: <exprs>
+                                  SubqueryAlias: date_dim
+                                    Projection: <exprs>
+                                      Projection: <exprs>
+                                        TableScan: ?table?
+
+logical_plan after resolve_grouping_function:
+SAME TEXT AS ABOVE
+
+logical_plan after type_coercion:
+Projection: <exprs>
+  Sort: <exprs>
+    Projection: <exprs>
+      Filter: inv1.#<col> = inv2.#<col> AND inv1.#<col> = inv2.#<col> AND inv1.#<col> = CAST(Int32(1) AS Int64) AND inv2.#<col> = CAST(Int32(1) + Int32(1) AS Int64)
+        Cross Join: 
+          SubqueryAlias: inv1
+            SubqueryAlias: inv
+              SubqueryAlias: inv
+                Projection: <exprs>
+                  Filter: CASE WHEN foo.#<col> = CAST(Int32(0) AS Float64) THEN CAST(Int32(0) AS Float64) WHEN Boolean(true) THEN CAST(foo.#<col> AS Float64) / CAST(foo.#<col> AS Float64) END > CAST(Int32(1) AS Float64)
+                    SubqueryAlias: foo
+                      Projection: <exprs>
+                        Aggregate: groupBy=[[warehouse.#<col>, warehouse.#<col>, item.#<col>, date_dim.#<col>]], aggr=[[stddev(inventory.#<col>), avg(inventory.#<col>)]]
+                          Filter: inventory.#<col> = item.#<col> AND inventory.#<col> = warehouse.#<col> AND inventory.#<col> = date_dim.#<col> AND date_dim.#<col> = CAST(Int32(2001) AS Int64)
+                            Cross Join: 
+                              Cross Join: 
+                                Cross Join: 
+                                  Projection: <exprs>
+                                    Projection: <exprs>
+                                      SubqueryAlias: inventory
+                                        Projection: <exprs>
+                                          Projection: <exprs>
+                                            TableScan: ?table?
+                                  Projection: <exprs>
+                                    Projection: <exprs>
+                                      SubqueryAlias: item
+                                        Projection: <exprs>
+                                          Projection: <exprs>
+                                            TableScan: ?table?
+                                Projection: <exprs>
+                                  Projection: <exprs>
+                                    SubqueryAlias: warehouse
+                                      Projection: <exprs>
+                                        Projection: <exprs>
+                                          TableScan: ?table?
+                              Projection: <exprs>
+                                Projection: <exprs>
+                                  SubqueryAlias: date_dim
+                                    Projection: <exprs>
+                                      Projection: <exprs>
+                                        TableScan: ?table?
+          SubqueryAlias: inv2
+            SubqueryAlias: inv
+              SubqueryAlias: inv
+                Projection: <exprs>
+                  Filter: CASE WHEN foo.#<col> = CAST(Int32(0) AS Float64) THEN CAST(Int32(0) AS Float64) WHEN Boolean(true) THEN CAST(foo.#<col> AS Float64) / CAST(foo.#<col> AS Float64) END > CAST(Int32(1) AS Float64)
+                    SubqueryAlias: foo
+                      Projection: <exprs>
+                        Aggregate: groupBy=[[warehouse.#<col>, warehouse.#<col>, item.#<col>, date_dim.#<col>]], aggr=[[stddev(inventory.#<col>), avg(inventory.#<col>)]]
+                          Filter: inventory.#<col> = item.#<col> AND inventory.#<col> = warehouse.#<col> AND inventory.#<col> = date_dim.#<col> AND date_dim.#<col> = CAST(Int32(2001) AS Int64)
+                            Cross Join: 
+                              Cross Join: 
+                                Cross Join: 
+                                  Projection: <exprs>
+                                    Projection: <exprs>
+                                      SubqueryAlias: inventory
+                                        Projection: <exprs>
+                                          Projection: <exprs>
+                                            TableScan: ?table?
+                                  Projection: <exprs>
+                                    Projection: <exprs>
+                                      SubqueryAlias: item
+                                        Projection: <exprs>
+                                          Projection: <exprs>
+                                            TableScan: ?table?
+                                Projection: <exprs>
+                                  Projection: <exprs>
+                                    SubqueryAlias: warehouse
+                                      Projection: <exprs>
+                                        Projection: <exprs>
+                                          TableScan: ?table?
+                              Projection: <exprs>
+                                Projection: <exprs>
+                                  SubqueryAlias: date_dim
+                                    Projection: <exprs>
+                                      Projection: <exprs>
+                                        TableScan: ?table?
+
+analyzed_logical_plan:
+SAME TEXT AS ABOVE
+
+logical_plan after eliminate_nested_union:
+SAME TEXT AS ABOVE
+
+logical_plan after simplify_expressions:
+Projection: <exprs>
+  Sort: <exprs>
+    Projection: <exprs>
+      Filter: inv2.#<col> = inv1.#<col> AND inv2.#<col> = inv1.#<col> AND inv1.#<col> = Int64(1) AND inv2.#<col> = Int64(2)
+        Cross Join: 
+          SubqueryAlias: inv1
+            SubqueryAlias: inv
+              SubqueryAlias: inv
+                Projection: <exprs>
+                  Filter: CASE WHEN foo.#<col> = Float64(0) THEN Float64(0) ELSE CAST(foo.#<col> AS Float64) / CAST(foo.#<col> AS Float64) END > Float64(1)
+                    SubqueryAlias: foo
+                      Projection: <exprs>
+                        Aggregate: groupBy=[[warehouse.#<col>, warehouse.#<col>, item.#<col>, date_dim.#<col>]], aggr=[[stddev(inventory.#<col>), avg(inventory.#<col>)]]
+                          Filter: item.#<col> = inventory.#<col> AND warehouse.#<col> = inventory.#<col> AND inventory.#<col> = date_dim.#<col> AND date_dim.#<col> = Int64(2001)
+                            Cross Join: 
+                              Cross Join: 
+                                Cross Join: 
+                                  Projection: <exprs>
+                                    Projection: <exprs>
+                                      SubqueryAlias: inventory
+                                        Projection: <exprs>
+                                          Projection: <exprs>
+                                            TableScan: ?table?
+                                  Projection: <exprs>
+                                    Projection: <exprs>
+                                      SubqueryAlias: item
+                                        Projection: <exprs>
+                                          Projection: <exprs>
+                                            TableScan: ?table?
+                                Projection: <exprs>
+                                  Projection: <exprs>
+                                    SubqueryAlias: warehouse
+                                      Projection: <exprs>
+                                        Projection: <exprs>
+                                          TableScan: ?table?
+                              Projection: <exprs>
+                                Projection: <exprs>
+                                  SubqueryAlias: date_dim
+                                    Projection: <exprs>
+                                      Projection: <exprs>
+                                        TableScan: ?table?
+          SubqueryAlias: inv2
+            SubqueryAlias: inv
+              SubqueryAlias: inv
+                Projection: <exprs>
+                  Filter: CASE WHEN foo.#<col> = Float64(0) THEN Float64(0) ELSE CAST(foo.#<col> AS Float64) / CAST(foo.#<col> AS Float64) END > Float64(1)
+                    SubqueryAlias: foo
+                      Projection: <exprs>
+                        Aggregate: groupBy=[[warehouse.#<col>, warehouse.#<col>, item.#<col>, date_dim.#<col>]], aggr=[[stddev(inventory.#<col>), avg(inventory.#<col>)]]
+                          Filter: item.#<col> = inventory.#<col> AND warehouse.#<col> = inventory.#<col> AND inventory.#<col> = date_dim.#<col> AND date_dim.#<col> = Int64(2001)
+                            Cross Join: 
+                              Cross Join: 
+                                Cross Join: 
+                                  Projection: <exprs>
+                                    Projection: <exprs>
+                                      SubqueryAlias: inventory
+                                        Projection: <exprs>
+                                          Projection: <exprs>
+                                            TableScan: ?table?
+                                  Projection: <exprs>
+                                    Projection: <exprs>
+                                      SubqueryAlias: item
+                                        Projection: <exprs>
+                                          Projection: <exprs>
+                                            TableScan: ?table?
+                                Projection: <exprs>
+                                  Projection: <exprs>
+                                    SubqueryAlias: warehouse
+                                      Projection: <exprs>
+                                        Projection: <exprs>
+                                          TableScan: ?table?
+                              Projection: <exprs>
+                                Projection: <exprs>
+                                  SubqueryAlias: date_dim
+                                    Projection: <exprs>
+                                      Projection: <exprs>
+                                        TableScan: ?table?
+
+logical_plan after replace_distinct_aggregate:
+SAME TEXT AS ABOVE
+
+logical_plan after eliminate_join:
+SAME TEXT AS ABOVE
+
+logical_plan after decorrelate_predicate_subquery:
+SAME TEXT AS ABOVE
+
+logical_plan after scalar_subquery_to_join:
+SAME TEXT AS ABOVE
+
+logical_plan after decorrelate_lateral_join:
+SAME TEXT AS ABOVE
+
+logical_plan after extract_equijoin_predicate:
+SAME TEXT AS ABOVE
+
+logical_plan after eliminate_duplicated_expr:
+SAME TEXT AS ABOVE
+
+logical_plan after eliminate_filter:
+SAME TEXT AS ABOVE
+
+logical_plan after eliminate_cross_join:
+Projection: <exprs>
+  Sort: <exprs>
+    Projection: <exprs>
+      Filter: inv1.#<col> = Int64(1) AND inv2.#<col> = Int64(2)
+        Inner Join: inv1.#<col> = inv2.#<col>, inv1.#<col> = inv2.#<col>
+          SubqueryAlias: inv1
+            SubqueryAlias: inv
+              SubqueryAlias: inv
+                Projection: <exprs>
+                  Filter: CASE WHEN foo.#<col> = Float64(0) THEN Float64(0) ELSE CAST(foo.#<col> AS Float64) / CAST(foo.#<col> AS Float64) END > Float64(1)
+                    SubqueryAlias: foo
+                      Projection: <exprs>
+                        Aggregate: groupBy=[[warehouse.#<col>, warehouse.#<col>, item.#<col>, date_dim.#<col>]], aggr=[[stddev(inventory.#<col>), avg(inventory.#<col>)]]
+                          Filter: date_dim.#<col> = Int64(2001)
+                            Inner Join: inventory.#<col> = date_dim.#<col>
+                              Inner Join: inventory.#<col> = warehouse.#<col>
+                                Inner Join: inventory.#<col> = item.#<col>
+                                  Projection: <exprs>
+                                    Projection: <exprs>
+                                      SubqueryAlias: inventory
+                                        Projection: <exprs>
+                                          Projection: <exprs>
+                                            TableScan: ?table?
+                                  Projection: <exprs>
+                                    Projection: <exprs>
+                                      SubqueryAlias: item
+                                        Projection: <exprs>
+                                          Projection: <exprs>
+                                            TableScan: ?table?
+                                Projection: <exprs>
+                                  Projection: <exprs>
+                                    SubqueryAlias: warehouse
+                                      Projection: <exprs>
+                                        Projection: <exprs>
+                                          TableScan: ?table?
+                              Projection: <exprs>
+                                Projection: <exprs>
+                                  SubqueryAlias: date_dim
+                                    Projection: <exprs>
+                                      Projection: <exprs>
+                                        TableScan: ?table?
+          SubqueryAlias: inv2
+            SubqueryAlias: inv
+              SubqueryAlias: inv
+                Projection: <exprs>
+                  Filter: CASE WHEN foo.#<col> = Float64(0) THEN Float64(0) ELSE CAST(foo.#<col> AS Float64) / CAST(foo.#<col> AS Float64) END > Float64(1)
+                    SubqueryAlias: foo
+                      Projection: <exprs>
+                        Aggregate: groupBy=[[warehouse.#<col>, warehouse.#<col>, item.#<col>, date_dim.#<col>]], aggr=[[stddev(inventory.#<col>), avg(inventory.#<col>)]]
+                          Filter: date_dim.#<col> = Int64(2001)
+                            Inner Join: inventory.#<col> = date_dim.#<col>
+                              Inner Join: inventory.#<col> = warehouse.#<col>
+                                Inner Join: inventory.#<col> = item.#<col>
+                                  Projection: <exprs>
+                                    Projection: <exprs>
+                                      SubqueryAlias: inventory
+                                        Projection: <exprs>
+                                          Projection: <exprs>
+                                            TableScan: ?table?
+                                  Projection: <exprs>
+                                    Projection: <exprs>
+                                      SubqueryAlias: item
+                                        Projection: <exprs>
+                                          Projection: <exprs>
+                                            TableScan: ?table?
+                                Projection: <exprs>
+                                  Projection: <exprs>
+                                    SubqueryAlias: warehouse
+                                      Projection: <exprs>
+                                        Projection: <exprs>
+                                          TableScan: ?table?
+                              Projection: <exprs>
+                                Projection: <exprs>
+                                  SubqueryAlias: date_dim
+                                    Projection: <exprs>
+                                      Projection: <exprs>
+                                        TableScan: ?table?
+
+logical_plan after eliminate_limit:
+SAME TEXT AS ABOVE
+
+logical_plan after propagate_empty_relation:
+SAME TEXT AS ABOVE
+
+logical_plan after eliminate_one_union:
+SAME TEXT AS ABOVE
+
+logical_plan after filter_null_join_keys:
+SAME TEXT AS ABOVE
+
+logical_plan after eliminate_outer_join:
+SAME TEXT AS ABOVE
+
+logical_plan after push_down_limit:
+SAME TEXT AS ABOVE
+
+logical_plan after push_down_filter:
+Projection: <exprs>
+  Sort: <exprs>
+    Projection: <exprs>
+      Inner Join: inv1.#<col> = inv2.#<col>, inv1.#<col> = inv2.#<col>
+        SubqueryAlias: inv1
+          SubqueryAlias: inv
+            SubqueryAlias: inv
+              Projection: <exprs>
+                SubqueryAlias: foo
+                  Projection: <exprs>
+                    Filter: CASE WHEN avg(inventory.#<col>) = Float64(0) THEN Float64(0) ELSE CAST(stddev(inventory.#<col>) AS Float64) / CAST(avg(inventory.#<col>) AS Float64) END > Float64(1)
+                      Aggregate: groupBy=[[warehouse.#<col>, warehouse.#<col>, item.#<col>, date_dim.#<col>]], aggr=[[stddev(inventory.#<col>), avg(inventory.#<col>)]]
+                        Inner Join: inventory.#<col> = date_dim.#<col>
+                          Inner Join: inventory.#<col> = warehouse.#<col>
+                            Inner Join: inventory.#<col> = item.#<col>
+                              Projection: <exprs>
+                                Projection: <exprs>
+                                  SubqueryAlias: inventory
+                                    Projection: <exprs>
+                                      Projection: <exprs>
+                                        TableScan: ?table?
+                              Projection: <exprs>
+                                Projection: <exprs>
+                                  SubqueryAlias: item
+                                    Projection: <exprs>
+                                      Projection: <exprs>
+                                        TableScan: ?table?
+                            Projection: <exprs>
+                              Projection: <exprs>
+                                SubqueryAlias: warehouse
+                                  Projection: <exprs>
+                                    Projection: <exprs>
+                                      TableScan: ?table?
+                          Projection: <exprs>
+                            Projection: <exprs>
+                              SubqueryAlias: date_dim
+                                Projection: <exprs>
+                                  Projection: <exprs>
+                                    Filter: ?table?._8 = Int64(1) AND ?table?._6 = Int64(2001)
+                                      TableScan: ?table?
+        SubqueryAlias: inv2
+          SubqueryAlias: inv
+            SubqueryAlias: inv
+              Projection: <exprs>
+                SubqueryAlias: foo
+                  Projection: <exprs>
+                    Filter: CASE WHEN avg(inventory.#<col>) = Float64(0) THEN Float64(0) ELSE CAST(stddev(inventory.#<col>) AS Float64) / CAST(avg(inventory.#<col>) AS Float64) END > Float64(1)
+                      Aggregate: groupBy=[[warehouse.#<col>, warehouse.#<col>, item.#<col>, date_dim.#<col>]], aggr=[[stddev(inventory.#<col>), avg(inventory.#<col>)]]
+                        Inner Join: inventory.#<col> = date_dim.#<col>
+                          Inner Join: inventory.#<col> = warehouse.#<col>
+                            Inner Join: inventory.#<col> = item.#<col>
+                              Projection: <exprs>
+                                Projection: <exprs>
+                                  SubqueryAlias: inventory
+                                    Projection: <exprs>
+                                      Projection: <exprs>
+                                        TableScan: ?table?
+                              Projection: <exprs>
+                                Projection: <exprs>
+                                  SubqueryAlias: item
+                                    Projection: <exprs>
+                                      Projection: <exprs>
+                                        TableScan: ?table?
+                            Projection: <exprs>
+                              Projection: <exprs>
+                                SubqueryAlias: warehouse
+                                  Projection: <exprs>
+                                    Projection: <exprs>
+                                      TableScan: ?table?
+                          Projection: <exprs>
+                            Projection: <exprs>
+                              SubqueryAlias: date_dim
+                                Projection: <exprs>
+                                  Projection: <exprs>
+                                    Filter: ?table?._8 = Int64(2) AND ?table?._6 = Int64(2001)
+                                      TableScan: ?table?
+
+logical_plan after single_distinct_aggregation_to_group_by:
+SAME TEXT AS ABOVE
+
+logical_plan after eliminate_group_by_constant:
+SAME TEXT AS ABOVE
+
+logical_plan after common_sub_expression_eliminate:
+SAME TEXT AS ABOVE
+
+logical_plan after optimize_projections:
+Projection: <exprs>
+  Sort: <exprs>
+    Projection: <exprs>
+      Inner Join: inv1.#<col> = inv2.#<col>, inv1.#<col> = inv2.#<col>
+        SubqueryAlias: inv1
+          SubqueryAlias: inv
+            SubqueryAlias: inv
+              Projection: <exprs>
+                SubqueryAlias: foo
+                  Projection: <exprs>
+                    Filter: CASE WHEN avg(inventory.#<col>) = Float64(0) THEN Float64(0) ELSE CAST(stddev(inventory.#<col>) AS Float64) / CAST(avg(inventory.#<col>) AS Float64) END > Float64(1)
+                      Projection: <exprs>
+                        Aggregate: groupBy=[[warehouse.#<col>, warehouse.#<col>, item.#<col>, date_dim.#<col>]], aggr=[[stddev(inventory.#<col>), avg(inventory.#<col>)]]
+                          Projection: <exprs>
+                            Inner Join: inventory.#<col> = date_dim.#<col>
+                              Projection: <exprs>
+                                Inner Join: inventory.#<col> = warehouse.#<col>
+                                  Projection: <exprs>
+                                    Inner Join: inventory.#<col> = item.#<col>
+                                      Projection: <exprs>
+                                        SubqueryAlias: inventory
+                                          Projection: <exprs>
+                                            TableScan: ?table? projection=[_0, _1, _2, _3]
+                                      Projection: <exprs>
+                                        SubqueryAlias: item
+                                          Projection: <exprs>
+                                            TableScan: ?table? projection=[_0]
+                                  Projection: <exprs>
+                                    SubqueryAlias: warehouse
+                                      Projection: <exprs>
+                                        TableScan: ?table? projection=[_0, _2]
+                              Projection: <exprs>
+                                SubqueryAlias: date_dim
+                                  Projection: <exprs>
+                                    Filter: ?table?._8 = Int64(1) AND ?table?._6 = Int64(2001)
+                                      TableScan: ?table? projection=[_0, _6, _8]
+        SubqueryAlias: inv2
+          SubqueryAlias: inv
+            SubqueryAlias: inv
+              Projection: <exprs>
+                SubqueryAlias: foo
+                  Projection: <exprs>
+                    Filter: CASE WHEN avg(inventory.#<col>) = Float64(0) THEN Float64(0) ELSE CAST(stddev(inventory.#<col>) AS Float64) / CAST(avg(inventory.#<col>) AS Float64) END > Float64(1)
+                      Projection: <exprs>
+                        Aggregate: groupBy=[[warehouse.#<col>, warehouse.#<col>, item.#<col>, date_dim.#<col>]], aggr=[[stddev(inventory.#<col>), avg(inventory.#<col>)]]
+                          Projection: <exprs>
+                            Inner Join: inventory.#<col> = date_dim.#<col>
+                              Projection: <exprs>
+                                Inner Join: inventory.#<col> = warehouse.#<col>
+                                  Projection: <exprs>
+                                    Inner Join: inventory.#<col> = item.#<col>
+                                      Projection: <exprs>
+                                        SubqueryAlias: inventory
+                                          Projection: <exprs>
+                                            TableScan: ?table? projection=[_0, _1, _2, _3]
+                                      Projection: <exprs>
+                                        SubqueryAlias: item
+                                          Projection: <exprs>
+                                            TableScan: ?table? projection=[_0]
+                                  Projection: <exprs>
+                                    SubqueryAlias: warehouse
+                                      Projection: <exprs>
+                                        TableScan: ?table? projection=[_0, _2]
+                              Projection: <exprs>
+                                SubqueryAlias: date_dim
+                                  Projection: <exprs>
+                                    Filter: ?table?._8 = Int64(2) AND ?table?._6 = Int64(2001)
+                                      TableScan: ?table? projection=[_0, _6, _8]
+
+logical_plan after eliminate_nested_union:
+SAME TEXT AS ABOVE
+
+logical_plan after simplify_expressions:
+SAME TEXT AS ABOVE
+
+logical_plan after replace_distinct_aggregate:
+SAME TEXT AS ABOVE
+
+logical_plan after eliminate_join:
+SAME TEXT AS ABOVE
+
+logical_plan after decorrelate_predicate_subquery:
+SAME TEXT AS ABOVE
+
+logical_plan after scalar_subquery_to_join:
+SAME TEXT AS ABOVE
+
+logical_plan after decorrelate_lateral_join:
+SAME TEXT AS ABOVE
+
+logical_plan after extract_equijoin_predicate:
+SAME TEXT AS ABOVE
+
+logical_plan after eliminate_duplicated_expr:
+SAME TEXT AS ABOVE
+
+logical_plan after eliminate_filter:
+SAME TEXT AS ABOVE
+
+logical_plan after eliminate_cross_join:
+SAME TEXT AS ABOVE
+
+logical_plan after eliminate_limit:
+SAME TEXT AS ABOVE
+
+logical_plan after propagate_empty_relation:
+SAME TEXT AS ABOVE
+
+logical_plan after eliminate_one_union:
+SAME TEXT AS ABOVE
+
+logical_plan after filter_null_join_keys:
+SAME TEXT AS ABOVE
+
+logical_plan after eliminate_outer_join:
+SAME TEXT AS ABOVE
+
+logical_plan after push_down_limit:
+SAME TEXT AS ABOVE
+
+logical_plan after push_down_filter:
+Projection: <exprs>
+  Sort: <exprs>
+    Projection: <exprs>
+      Inner Join: inv1.#<col> = inv2.#<col>, inv1.#<col> = inv2.#<col>
+        SubqueryAlias: inv1
+          SubqueryAlias: inv
+            SubqueryAlias: inv
+              Projection: <exprs>
+                SubqueryAlias: foo
+                  Projection: <exprs>
+                    Projection: <exprs>
+                      Filter: CASE WHEN avg(inventory.#<col>) = Float64(0) THEN Float64(0) ELSE CAST(stddev(inventory.#<col>) AS Float64) / CAST(avg(inventory.#<col>) AS Float64) END > Float64(1)
+                        Aggregate: groupBy=[[warehouse.#<col>, warehouse.#<col>, item.#<col>, date_dim.#<col>]], aggr=[[stddev(inventory.#<col>), avg(inventory.#<col>)]]
+                          Projection: <exprs>
+                            Inner Join: inventory.#<col> = date_dim.#<col>
+                              Projection: <exprs>
+                                Inner Join: inventory.#<col> = warehouse.#<col>
+                                  Projection: <exprs>
+                                    Inner Join: inventory.#<col> = item.#<col>
+                                      Projection: <exprs>
+                                        SubqueryAlias: inventory
+                                          Projection: <exprs>
+                                            TableScan: ?table? projection=[_0, _1, _2, _3]
+                                      Projection: <exprs>
+                                        SubqueryAlias: item
+                                          Projection: <exprs>
+                                            TableScan: ?table? projection=[_0]
+                                  Projection: <exprs>
+                                    SubqueryAlias: warehouse
+                                      Projection: <exprs>
+                                        TableScan: ?table? projection=[_0, _2]
+                              Projection: <exprs>
+                                SubqueryAlias: date_dim
+                                  Projection: <exprs>
+                                    Filter: ?table?._8 = Int64(1) AND ?table?._6 = Int64(2001)
+                                      TableScan: ?table? projection=[_0, _6, _8]
+        SubqueryAlias: inv2
+          SubqueryAlias: inv
+            SubqueryAlias: inv
+              Projection: <exprs>
+                SubqueryAlias: foo
+                  Projection: <exprs>
+                    Projection: <exprs>
+                      Filter: CASE WHEN avg(inventory.#<col>) = Float64(0) THEN Float64(0) ELSE CAST(stddev(inventory.#<col>) AS Float64) / CAST(avg(inventory.#<col>) AS Float64) END > Float64(1)
+                        Aggregate: groupBy=[[warehouse.#<col>, warehouse.#<col>, item.#<col>, date_dim.#<col>]], aggr=[[stddev(inventory.#<col>), avg(inventory.#<col>)]]
+                          Projection: <exprs>
+                            Inner Join: inventory.#<col> = date_dim.#<col>
+                              Projection: <exprs>
+                                Inner Join: inventory.#<col> = warehouse.#<col>
+                                  Projection: <exprs>
+                                    Inner Join: inventory.#<col> = item.#<col>
+                                      Projection: <exprs>
+                                        SubqueryAlias: inventory
+                                          Projection: <exprs>
+                                            TableScan: ?table? projection=[_0, _1, _2, _3]
+                                      Projection: <exprs>
+                                        SubqueryAlias: item
+                                          Projection: <exprs>
+                                            TableScan: ?table? projection=[_0]
+                                  Projection: <exprs>
+                                    SubqueryAlias: warehouse
+                                      Projection: <exprs>
+                                        TableScan: ?table? projection=[_0, _2]
+                              Projection: <exprs>
+                                SubqueryAlias: date_dim
+                                  Projection: <exprs>
+                                    Filter: ?table?._8 = Int64(2) AND ?table?._6 = Int64(2001)
+                                      TableScan: ?table? projection=[_0, _6, _8]
+
+logical_plan after single_distinct_aggregation_to_group_by:
+SAME TEXT AS ABOVE
+
+logical_plan after eliminate_group_by_constant:
+SAME TEXT AS ABOVE
+
+logical_plan after common_sub_expression_eliminate:
+SAME TEXT AS ABOVE
+
+logical_plan after optimize_projections:
+Projection: <exprs>
+  Sort: <exprs>
+    Projection: <exprs>
+      Inner Join: inv1.#<col> = inv2.#<col>, inv1.#<col> = inv2.#<col>
+        SubqueryAlias: inv1
+          SubqueryAlias: inv
+            SubqueryAlias: inv
+              Projection: <exprs>
+                SubqueryAlias: foo
+                  Projection: <exprs>
+                    Filter: CASE WHEN avg(inventory.#<col>) = Float64(0) THEN Float64(0) ELSE CAST(stddev(inventory.#<col>) AS Float64) / CAST(avg(inventory.#<col>) AS Float64) END > Float64(1)
+                      Projection: <exprs>
+                        Aggregate: groupBy=[[warehouse.#<col>, warehouse.#<col>, item.#<col>, date_dim.#<col>]], aggr=[[stddev(inventory.#<col>), avg(inventory.#<col>)]]
+                          Projection: <exprs>
+                            Inner Join: inventory.#<col> = date_dim.#<col>
+                              Projection: <exprs>
+                                Inner Join: inventory.#<col> = warehouse.#<col>
+                                  Projection: <exprs>
+                                    Inner Join: inventory.#<col> = item.#<col>
+                                      Projection: <exprs>
+                                        SubqueryAlias: inventory
+                                          Projection: <exprs>
+                                            TableScan: ?table? projection=[_0, _1, _2, _3]
+                                      Projection: <exprs>
+                                        SubqueryAlias: item
+                                          Projection: <exprs>
+                                            TableScan: ?table? projection=[_0]
+                                  Projection: <exprs>
+                                    SubqueryAlias: warehouse
+                                      Projection: <exprs>
+                                        TableScan: ?table? projection=[_0, _2]
+                              Projection: <exprs>
+                                SubqueryAlias: date_dim
+                                  Projection: <exprs>
+                                    Filter: ?table?._8 = Int64(1) AND ?table?._6 = Int64(2001)
+                                      TableScan: ?table? projection=[_0, _6, _8]
+        SubqueryAlias: inv2
+          SubqueryAlias: inv
+            SubqueryAlias: inv
+              Projection: <exprs>
+                SubqueryAlias: foo
+                  Projection: <exprs>
+                    Filter: CASE WHEN avg(inventory.#<col>) = Float64(0) THEN Float64(0) ELSE CAST(stddev(inventory.#<col>) AS Float64) / CAST(avg(inventory.#<col>) AS Float64) END > Float64(1)
+                      Projection: <exprs>
+                        Aggregate: groupBy=[[warehouse.#<col>, warehouse.#<col>, item.#<col>, date_dim.#<col>]], aggr=[[stddev(inventory.#<col>), avg(inventory.#<col>)]]
+                          Projection: <exprs>
+                            Inner Join: inventory.#<col> = date_dim.#<col>
+                              Projection: <exprs>
+                                Inner Join: inventory.#<col> = warehouse.#<col>
+                                  Projection: <exprs>
+                                    Inner Join: inventory.#<col> = item.#<col>
+                                      Projection: <exprs>
+                                        SubqueryAlias: inventory
+                                          Projection: <exprs>
+                                            TableScan: ?table? projection=[_0, _1, _2, _3]
+                                      Projection: <exprs>
+                                        SubqueryAlias: item
+                                          Projection: <exprs>
+                                            TableScan: ?table? projection=[_0]
+                                  Projection: <exprs>
+                                    SubqueryAlias: warehouse
+                                      Projection: <exprs>
+                                        TableScan: ?table? projection=[_0, _2]
+                              Projection: <exprs>
+                                SubqueryAlias: date_dim
+                                  Projection: <exprs>
+                                    Filter: ?table?._8 = Int64(2) AND ?table?._6 = Int64(2001)
+                                      TableScan: ?table? projection=[_0, _6, _8]
+
+logical_plan after eliminate_nested_union:
+SAME TEXT AS ABOVE
+
+logical_plan after simplify_expressions:
+SAME TEXT AS ABOVE
+
+logical_plan after replace_distinct_aggregate:
+SAME TEXT AS ABOVE
+
+logical_plan after eliminate_join:
+SAME TEXT AS ABOVE
+
+logical_plan after decorrelate_predicate_subquery:
+SAME TEXT AS ABOVE
+
+logical_plan after scalar_subquery_to_join:
+SAME TEXT AS ABOVE
+
+logical_plan after decorrelate_lateral_join:
+SAME TEXT AS ABOVE
+
+logical_plan after extract_equijoin_predicate:
+SAME TEXT AS ABOVE
+
+logical_plan after eliminate_duplicated_expr:
+SAME TEXT AS ABOVE
+
+logical_plan after eliminate_filter:
+SAME TEXT AS ABOVE
+
+logical_plan after eliminate_cross_join:
+SAME TEXT AS ABOVE
+
+logical_plan after eliminate_limit:
+SAME TEXT AS ABOVE
+
+logical_plan after propagate_empty_relation:
+SAME TEXT AS ABOVE
+
+logical_plan after eliminate_one_union:
+SAME TEXT AS ABOVE
+
+logical_plan after filter_null_join_keys:
+SAME TEXT AS ABOVE
+
+logical_plan after eliminate_outer_join:
+SAME TEXT AS ABOVE
+
+logical_plan after push_down_limit:
+SAME TEXT AS ABOVE
+
+logical_plan after push_down_filter:
+Projection: <exprs>
+  Sort: <exprs>
+    Projection: <exprs>
+      Inner Join: inv1.#<col> = inv2.#<col>, inv1.#<col> = inv2.#<col>
+        SubqueryAlias: inv1
+          SubqueryAlias: inv
+            SubqueryAlias: inv
+              Projection: <exprs>
+                SubqueryAlias: foo
+                  Projection: <exprs>
+                    Projection: <exprs>
+                      Filter: CASE WHEN avg(inventory.#<col>) = Float64(0) THEN Float64(0) ELSE CAST(stddev(inventory.#<col>) AS Float64) / CAST(avg(inventory.#<col>) AS Float64) END > Float64(1)
+                        Aggregate: groupBy=[[warehouse.#<col>, warehouse.#<col>, item.#<col>, date_dim.#<col>]], aggr=[[stddev(inventory.#<col>), avg(inventory.#<col>)]]
+                          Projection: <exprs>
+                            Inner Join: inventory.#<col> = date_dim.#<col>
+                              Projection: <exprs>
+                                Inner Join: inventory.#<col> = warehouse.#<col>
+                                  Projection: <exprs>
+                                    Inner Join: inventory.#<col> = item.#<col>
+                                      Projection: <exprs>
+                                        SubqueryAlias: inventory
+                                          Projection: <exprs>
+                                            TableScan: ?table? projection=[_0, _1, _2, _3]
+                                      Projection: <exprs>
+                                        SubqueryAlias: item
+                                          Projection: <exprs>
+                                            TableScan: ?table? projection=[_0]
+                                  Projection: <exprs>
+                                    SubqueryAlias: warehouse
+                                      Projection: <exprs>
+                                        TableScan: ?table? projection=[_0, _2]
+                              Projection: <exprs>
+                                SubqueryAlias: date_dim
+                                  Projection: <exprs>
+                                    Filter: ?table?._8 = Int64(1) AND ?table?._6 = Int64(2001)
+                                      TableScan: ?table? projection=[_0, _6, _8]
+        SubqueryAlias: inv2
+          SubqueryAlias: inv
+            SubqueryAlias: inv
+              Projection: <exprs>
+                SubqueryAlias: foo
+                  Projection: <exprs>
+                    Projection: <exprs>
+                      Filter: CASE WHEN avg(inventory.#<col>) = Float64(0) THEN Float64(0) ELSE CAST(stddev(inventory.#<col>) AS Float64) / CAST(avg(inventory.#<col>) AS Float64) END > Float64(1)
+                        Aggregate: groupBy=[[warehouse.#<col>, warehouse.#<col>, item.#<col>, date_dim.#<col>]], aggr=[[stddev(inventory.#<col>), avg(inventory.#<col>)]]
+                          Projection: <exprs>
+                            Inner Join: inventory.#<col> = date_dim.#<col>
+                              Projection: <exprs>
+                                Inner Join: inventory.#<col> = warehouse.#<col>
+                                  Projection: <exprs>
+                                    Inner Join: inventory.#<col> = item.#<col>
+                                      Projection: <exprs>
+                                        SubqueryAlias: inventory
+                                          Projection: <exprs>
+                                            TableScan: ?table? projection=[_0, _1, _2, _3]
+                                      Projection: <exprs>
+                                        SubqueryAlias: item
+                                          Projection: <exprs>
+                                            TableScan: ?table? projection=[_0]
+                                  Projection: <exprs>
+                                    SubqueryAlias: warehouse
+                                      Projection: <exprs>
+                                        TableScan: ?table? projection=[_0, _2]
+                              Projection: <exprs>
+                                SubqueryAlias: date_dim
+                                  Projection: <exprs>
+                                    Filter: ?table?._8 = Int64(2) AND ?table?._6 = Int64(2001)
+                                      TableScan: ?table? projection=[_0, _6, _8]
+
+logical_plan after single_distinct_aggregation_to_group_by:
+SAME TEXT AS ABOVE
+
+logical_plan after eliminate_group_by_constant:
+SAME TEXT AS ABOVE
+
+logical_plan after common_sub_expression_eliminate:
+SAME TEXT AS ABOVE
+
+logical_plan after optimize_projections:
+Projection: <exprs>
+  Sort: <exprs>
+    Projection: <exprs>
+      Inner Join: inv1.#<col> = inv2.#<col>, inv1.#<col> = inv2.#<col>
+        SubqueryAlias: inv1
+          SubqueryAlias: inv
+            SubqueryAlias: inv
+              Projection: <exprs>
+                SubqueryAlias: foo
+                  Projection: <exprs>
+                    Filter: CASE WHEN avg(inventory.#<col>) = Float64(0) THEN Float64(0) ELSE CAST(stddev(inventory.#<col>) AS Float64) / CAST(avg(inventory.#<col>) AS Float64) END > Float64(1)
+                      Projection: <exprs>
+                        Aggregate: groupBy=[[warehouse.#<col>, warehouse.#<col>, item.#<col>, date_dim.#<col>]], aggr=[[stddev(inventory.#<col>), avg(inventory.#<col>)]]
+                          Projection: <exprs>
+                            Inner Join: inventory.#<col> = date_dim.#<col>
+                              Projection: <exprs>
+                                Inner Join: inventory.#<col> = warehouse.#<col>
+                                  Projection: <exprs>
+                                    Inner Join: inventory.#<col> = item.#<col>
+                                      Projection: <exprs>
+                                        SubqueryAlias: inventory
+                                          Projection: <exprs>
+                                            TableScan: ?table? projection=[_0, _1, _2, _3]
+                                      Projection: <exprs>
+                                        SubqueryAlias: item
+                                          Projection: <exprs>
+                                            TableScan: ?table? projection=[_0]
+                                  Projection: <exprs>
+                                    SubqueryAlias: warehouse
+                                      Projection: <exprs>
+                                        TableScan: ?table? projection=[_0, _2]
+                              Projection: <exprs>
+                                SubqueryAlias: date_dim
+                                  Projection: <exprs>
+                                    Filter: ?table?._8 = Int64(1) AND ?table?._6 = Int64(2001)
+                                      TableScan: ?table? projection=[_0, _6, _8]
+        SubqueryAlias: inv2
+          SubqueryAlias: inv
+            SubqueryAlias: inv
+              Projection: <exprs>
+                SubqueryAlias: foo
+                  Projection: <exprs>
+                    Filter: CASE WHEN avg(inventory.#<col>) = Float64(0) THEN Float64(0) ELSE CAST(stddev(inventory.#<col>) AS Float64) / CAST(avg(inventory.#<col>) AS Float64) END > Float64(1)
+                      Projection: <exprs>
+                        Aggregate: groupBy=[[warehouse.#<col>, warehouse.#<col>, item.#<col>, date_dim.#<col>]], aggr=[[stddev(inventory.#<col>), avg(inventory.#<col>)]]
+                          Projection: <exprs>
+                            Inner Join: inventory.#<col> = date_dim.#<col>
+                              Projection: <exprs>
+                                Inner Join: inventory.#<col> = warehouse.#<col>
+                                  Projection: <exprs>
+                                    Inner Join: inventory.#<col> = item.#<col>
+                                      Projection: <exprs>
+                                        SubqueryAlias: inventory
+                                          Projection: <exprs>
+                                            TableScan: ?table? projection=[_0, _1, _2, _3]
+                                      Projection: <exprs>
+                                        SubqueryAlias: item
+                                          Projection: <exprs>
+                                            TableScan: ?table? projection=[_0]
+                                  Projection: <exprs>
+                                    SubqueryAlias: warehouse
+                                      Projection: <exprs>
+                                        TableScan: ?table? projection=[_0, _2]
+                              Projection: <exprs>
+                                SubqueryAlias: date_dim
+                                  Projection: <exprs>
+                                    Filter: ?table?._8 = Int64(2) AND ?table?._6 = Int64(2001)
+                                      TableScan: ?table? projection=[_0, _6, _8]
+
+logical_plan:
+Projection: <exprs>
+  Sort: <exprs>
+    Projection: <exprs>
+      Inner Join: inv1.#<col> = inv2.#<col>, inv1.#<col> = inv2.#<col>
+        SubqueryAlias: inv1
+          SubqueryAlias: inv
+            SubqueryAlias: inv
+              Projection: <exprs>
+                SubqueryAlias: foo
+                  Projection: <exprs>
+                    Filter: CASE WHEN avg(inventory.#<col>) = Float64(0) THEN Float64(0) ELSE CAST(stddev(inventory.#<col>) AS Float64) / CAST(avg(inventory.#<col>) AS Float64) END > Float64(1)
+                      Projection: <exprs>
+                        Aggregate: groupBy=[[warehouse.#<col>, warehouse.#<col>, item.#<col>, date_dim.#<col>]], aggr=[[stddev(inventory.#<col>), avg(inventory.#<col>)]]
+                          Projection: <exprs>
+                            Inner Join: inventory.#<col> = date_dim.#<col>
+                              Projection: <exprs>
+                                Inner Join: inventory.#<col> = warehouse.#<col>
+                                  Projection: <exprs>
+                                    Inner Join: inventory.#<col> = item.#<col>
+                                      Projection: <exprs>
+                                        SubqueryAlias: inventory
+                                          Projection: <exprs>
+                                            TableScan: ?table? projection=[_0, _1, _2, _3]
+                                      Projection: <exprs>
+                                        SubqueryAlias: item
+                                          Projection: <exprs>
+                                            TableScan: ?table? projection=[_0]
+                                  Projection: <exprs>
+                                    SubqueryAlias: warehouse
+                                      Projection: <exprs>
+                                        TableScan: ?table? projection=[_0, _2]
+                              Projection: <exprs>
+                                SubqueryAlias: date_dim
+                                  Projection: <exprs>
+                                    Filter: ?table?._8 = Int64(1) AND ?table?._6 = Int64(2001)
+                                      TableScan: ?table? projection=[_0, _6, _8]
+        SubqueryAlias: inv2
+          SubqueryAlias: inv
+            SubqueryAlias: inv
+              Projection: <exprs>
+                SubqueryAlias: foo
+                  Projection: <exprs>
+                    Filter: CASE WHEN avg(inventory.#<col>) = Float64(0) THEN Float64(0) ELSE CAST(stddev(inventory.#<col>) AS Float64) / CAST(avg(inventory.#<col>) AS Float64) END > Float64(1)
+                      Projection: <exprs>
+                        Aggregate: groupBy=[[warehouse.#<col>, warehouse.#<col>, item.#<col>, date_dim.#<col>]], aggr=[[stddev(inventory.#<col>), avg(inventory.#<col>)]]
+                          Projection: <exprs>
+                            Inner Join: inventory.#<col> = date_dim.#<col>
+                              Projection: <exprs>
+                                Inner Join: inventory.#<col> = warehouse.#<col>
+                                  Projection: <exprs>
+                                    Inner Join: inventory.#<col> = item.#<col>
+                                      Projection: <exprs>
+                                        SubqueryAlias: inventory
+                                          Projection: <exprs>
+                                            TableScan: ?table? projection=[_0, _1, _2, _3]
+                                      Projection: <exprs>
+                                        SubqueryAlias: item
+                                          Projection: <exprs>
+                                            TableScan: ?table? projection=[_0]
+                                  Projection: <exprs>
+                                    SubqueryAlias: warehouse
+                                      Projection: <exprs>
+                                        TableScan: ?table? projection=[_0, _2]
+                              Projection: <exprs>
+                                SubqueryAlias: date_dim
+                                  Projection: <exprs>
+                                    Filter: ?table?._8 = Int64(2) AND ?table?._6 = Int64(2001)
+                                      TableScan: ?table? projection=[_0, _6, _8]
+
+initial_physical_plan:
+ProjectionExec: expr=[<exprs>]
+  SortExec: [<sort_exprs>]
+    SortExec: expr=[<exprs>]
+      ProjectionExec: expr=[<exprs>]
+        CoalesceBatchesExec: target_batch_size=8192
+          HashJoinExec: mode=CollectLeft, join_type=Inner, on=[(#<col>, #<col>), (#<col>, #<col>)]
+            CoalescePartitionsExec
+              ProjectionExec: expr=[<exprs>]
+                CoalesceBatchesExec: target_batch_size=8192
+                  FilterExec: CASE WHEN avg(inventory.#<col>)@<id> = 0 THEN 0 ELSE stddev(inventory.#<col>)@<id> / avg(inventory.#<col>)@<id> END > 1
+                    ProjectionExec: expr=[<exprs>]
+                      AggregateExec: mode=FinalPartitioned, gby=[#<col> as #<col>, #<col> as #<col>, #<col> as #<col>, #<col> as #<col>], aggr=[stddev(inventory.#<col>), avg(inventory.#<col>)], ordering_mode=PartiallySorted([3])
+                        CoalesceBatchesExec: target_batch_size=8192
+                          RepartitionExec: partitioning=Hash([#<col>, #<col>, #<col>, #<col>], <partitions>), input_partitions=<partitions>
+                            AggregateExec: mode=Partial, gby=[#<col> as #<col>, #<col> as #<col>, #<col> as #<col>, #<col> as #<col>], aggr=[stddev(inventory.#<col>), avg(inventory.#<col>)], ordering_mode=PartiallySorted([3])
+                              CoalesceBatchesExec: target_batch_size=8192
+                                HashJoinExec: mode=CollectLeft, join_type=Inner, on=[(#<col>, #<col>)], projection=[#<col>, #<col>, #<col>, #<col>, #<col>]
+                                  CoalescePartitionsExec
+                                    ProjectionExec: expr=[<exprs>]
+                                      CoalesceBatchesExec: target_batch_size=8192
+                                        HashJoinExec: mode=CollectLeft, join_type=Inner, on=[(#<col>, #<col>)], projection=[#<col>, #<col>, #<col>, #<col>, #<col>]
+                                          ProjectionExec: expr=[<exprs>]
+                                            DataSourceExec: partitions=1, partition_sizes=[<sizes>]
+                                          ProjectionExec: expr=[<exprs>]
+                                            CoalesceBatchesExec: target_batch_size=8192
+                                              HashJoinExec: mode=CollectLeft, join_type=Inner, on=[(#<col>, #<col>)], projection=[#<col>, #<col>, #<col>, #<col>]
+                                                ProjectionExec: expr=[<exprs>]
+                                                  DataSourceExec: partitions=1, partition_sizes=[<sizes>]
+                                                RepartitionExec: partitioning=RoundRobinBatch(<partitions>), input_partitions=<partitions>
+                                                  ProjectionExec: expr=[<exprs>]
+                                                    DataSourceExec: partitions=1, partition_sizes=[<sizes>]
+                                  ProjectionExec: expr=[<exprs>]
+                                    CoalesceBatchesExec: target_batch_size=8192
+                                      FilterExec: _8@<id> = 1 AND _6@<id> = 2001, projection=[_0@<id>, _8@<id>]
+                                        RepartitionExec: partitioning=RoundRobinBatch(<partitions>), input_partitions=<partitions>
+                                          DataSourceExec: partitions=1, partition_sizes=[<sizes>]
+            ProjectionExec: expr=[<exprs>]
+              CoalesceBatchesExec: target_batch_size=8192
+                FilterExec: CASE WHEN avg(inventory.#<col>)@<id> = 0 THEN 0 ELSE stddev(inventory.#<col>)@<id> / avg(inventory.#<col>)@<id> END > 1
+                  ProjectionExec: expr=[<exprs>]
+                    AggregateExec: mode=FinalPartitioned, gby=[#<col> as #<col>, #<col> as #<col>, #<col> as #<col>, #<col> as #<col>], aggr=[stddev(inventory.#<col>), avg(inventory.#<col>)], ordering_mode=PartiallySorted([3])
+                      CoalesceBatchesExec: target_batch_size=8192
+                        RepartitionExec: partitioning=Hash([#<col>, #<col>, #<col>, #<col>], <partitions>), input_partitions=<partitions>
+                          AggregateExec: mode=Partial, gby=[#<col> as #<col>, #<col> as #<col>, #<col> as #<col>, #<col> as #<col>], aggr=[stddev(inventory.#<col>), avg(inventory.#<col>)], ordering_mode=PartiallySorted([3])
+                            CoalesceBatchesExec: target_batch_size=8192
+                              HashJoinExec: mode=CollectLeft, join_type=Inner, on=[(#<col>, #<col>)], projection=[#<col>, #<col>, #<col>, #<col>, #<col>]
+                                CoalescePartitionsExec
+                                  ProjectionExec: expr=[<exprs>]
+                                    CoalesceBatchesExec: target_batch_size=8192
+                                      HashJoinExec: mode=CollectLeft, join_type=Inner, on=[(#<col>, #<col>)], projection=[#<col>, #<col>, #<col>, #<col>, #<col>]
+                                        ProjectionExec: expr=[<exprs>]
+                                          DataSourceExec: partitions=1, partition_sizes=[<sizes>]
+                                        ProjectionExec: expr=[<exprs>]
+                                          CoalesceBatchesExec: target_batch_size=8192
+                                            HashJoinExec: mode=CollectLeft, join_type=Inner, on=[(#<col>, #<col>)], projection=[#<col>, #<col>, #<col>, #<col>]
+                                              ProjectionExec: expr=[<exprs>]
+                                                DataSourceExec: partitions=1, partition_sizes=[<sizes>]
+                                              RepartitionExec: partitioning=RoundRobinBatch(<partitions>), input_partitions=<partitions>
+                                                ProjectionExec: expr=[<exprs>]
+                                                  DataSourceExec: partitions=1, partition_sizes=[<sizes>]
+                                ProjectionExec: expr=[<exprs>]
+                                  CoalesceBatchesExec: target_batch_size=8192
+                                    FilterExec: _8@<id> = 2 AND _6@<id> = 2001, projection=[_0@<id>, _8@<id>]
+                                      RepartitionExec: partitioning=RoundRobinBatch(<partitions>), input_partitions=<partitions>
+                                        DataSourceExec: partitions=1, partition_sizes=[<sizes>]
+
+
+initial_physical_plan_with_stats:
+ProjectionExec: expr=[<exprs>]
+  SortExec: [<sort_exprs>]
+    SortExec: expr=[<exprs>]
+      ProjectionExec: expr=[<exprs>]
+        CoalesceBatchesExec: target_batch_size=8192, statistics=[Rows=Inexact(1), Bytes=Absent, [(Col[0]:),(Col[1]:),(Col[2]:),(Col[3]:),(Col[4]:),(Col[5]:),(Col[6]:),(Col[7]:),(Col[8]:),(Col[9]:)]]
+          HashJoinExec: mode=CollectLeft, join_type=Inner, on=[(#<col>, #<col>), (#<col>, #<col>)], statistics=[Rows=Inexact(1), Bytes=Absent, [(Col[0]:),(Col[1]:),(Col[2]:),(Col[3]:),(Col[4]:),(Col[5]:),(Col[6]:),(Col[7]:),(Col[8]:),(Col[9]:)]]
+            CoalescePartitionsExec, statistics=[Rows=Inexact(1), Bytes=Inexact(<bytes>), [(Col[0]:),(Col[1]:),(Col[2]:),(Col[3]:),(Col[4]:)]]
+              ProjectionExec: expr=[<exprs>]
+                CoalesceBatchesExec: target_batch_size=8192, statistics=[Rows=Inexact(1), Bytes=Inexact(<bytes>), [(Col[0]:),(Col[1]:),(Col[2]:),(Col[3]:),(Col[4]:)]]
+                  FilterExec: CASE WHEN avg(inventory.#<col>)@<id> = 0 THEN 0 ELSE stddev(inventory.#<col>)@<id> / avg(inventory.#<col>)@<id> END > 1, statistics=[Rows=Inexact(1), Bytes=Inexact(<bytes>), [(Col[0]:),(Col[1]:),(Col[2]:),(Col[3]:),(Col[4]:)]]
+                    ProjectionExec: expr=[<exprs>]
+                      AggregateExec: mode=FinalPartitioned, gby=[#<col> as #<col>, #<col> as #<col>, #<col> as #<col>, #<col> as #<col>], aggr=[stddev(inventory.#<col>), avg(inventory.#<col>)], ordering_mode=PartiallySorted([3]), statistics=[Rows=Inexact(1), Bytes=Absent, [(Col[0]:),(Col[1]:),(Col[2]:),(Col[3]:),(Col[4]:),(Col[5]:)]]
+                        CoalesceBatchesExec: target_batch_size=8192, statistics=[Rows=Inexact(1), Bytes=Absent, [(Col[0]:),(Col[1]:),(Col[2]:),(Col[3]:),(Col[4]:),(Col[5]:),(Col[6]:),(Col[7]:),(Col[8]:)]]
+                          RepartitionExec: partitioning=Hash([#<col>, #<col>, #<col>, #<col>], <partitions>), input_partitions=<partitions>, statistics=[Rows=Inexact(1), Bytes=Absent, [(Col[0]:),(Col[1]:),(Col[2]:),(Col[3]:),(Col[4]:),(Col[5]:),(Col[6]:),(Col[7]:),(Col[8]:)]]
+                            AggregateExec: mode=Partial, gby=[#<col> as #<col>, #<col> as #<col>, #<col> as #<col>, #<col> as #<col>], aggr=[stddev(inventory.#<col>), avg(inventory.#<col>)], ordering_mode=PartiallySorted([3]), statistics=[Rows=Inexact(1), Bytes=Absent, [(Col[0]:),(Col[1]:),(Col[2]:),(Col[3]:),(Col[4]:),(Col[5]:),(Col[6]:),(Col[7]:),(Col[8]:)]]
+                              CoalesceBatchesExec: target_batch_size=8192, statistics=[Rows=Inexact(1), Bytes=Absent, [(Col[0]: Null=Exact(1162)),(Col[1]: Null=Exact(0)),(Col[2]: Null=Exact(0)),(Col[3]: Null=Exact(0)),(Col[4]: Null=Inexact(0))]]
+                                HashJoinExec: mode=CollectLeft, join_type=Inner, on=[(#<col>, #<col>)], projection=[#<col>, #<col>, #<col>, #<col>, #<col>], statistics=[Rows=Inexact(1), Bytes=Absent, [(Col[0]: Null=Exact(1162)),(Col[1]: Null=Exact(0)),(Col[2]: Null=Exact(0)),(Col[3]: Null=Exact(0)),(Col[4]: Null=Inexact(0))]]
+                                  CoalescePartitionsExec, statistics=[Rows=Inexact(1), Bytes=Absent, [(Col[0]: Null=Exact(0)),(Col[1]: Null=Exact(1162)),(Col[2]: Null=Exact(0)),(Col[3]: Null=Exact(0)),(Col[4]: Null=Exact(0))]]
+                                    ProjectionExec: expr=[<exprs>]
+                                      CoalesceBatchesExec: target_batch_size=8192, statistics=[Rows=Inexact(1), Bytes=Absent, [(Col[0]: Null=Exact(0)),(Col[1]: Null=Exact(0)),(Col[2]: Null=Exact(0)),(Col[3]: Null=Exact(1162)),(Col[4]: Null=Exact(0))]]
+                                        HashJoinExec: mode=CollectLeft, join_type=Inner, on=[(#<col>, #<col>)], projection=[#<col>, #<col>, #<col>, #<col>, #<col>], statistics=[Rows=Inexact(1), Bytes=Absent, [(Col[0]: Null=Exact(0)),(Col[1]: Null=Exact(0)),(Col[2]: Null=Exact(0)),(Col[3]: Null=Exact(1162)),(Col[4]: Null=Exact(0))]]
+                                          ProjectionExec: expr=[<exprs>]
+                                            DataSourceExec: partitions=1, partition_sizes=[<sizes>], statistics=[Rows=Exact(1), Bytes=Exact(<bytes>), [(Col[0]: Null=Exact(0)),(Col[1]: Null=Exact(0))]]
+                                          ProjectionExec: expr=[<exprs>]
+                                            CoalesceBatchesExec: target_batch_size=8192, statistics=[Rows=Inexact(180), Bytes=Absent, [(Col[0]: Null=Exact(0)),(Col[1]: Null=Exact(0)),(Col[2]: Null=Exact(0)),(Col[3]: Null=Exact(1162))]]
+                                              HashJoinExec: mode=CollectLeft, join_type=Inner, on=[(#<col>, #<col>)], projection=[#<col>, #<col>, #<col>, #<col>], statistics=[Rows=Inexact(180), Bytes=Absent, [(Col[0]: Null=Exact(0)),(Col[1]: Null=Exact(0)),(Col[2]: Null=Exact(0)),(Col[3]: Null=Exact(1162))]]
+                                                ProjectionExec: expr=[<exprs>]
+                                                  DataSourceExec: partitions=1, partition_sizes=[<sizes>], statistics=[Rows=Exact(180), Bytes=Exact(<bytes>), [(Col[0]: Null=Exact(0))]]
+                                                RepartitionExec: partitioning=RoundRobinBatch(<partitions>), input_partitions=<partitions>, statistics=[Rows=Exact(23490), Bytes=Exact(<bytes>), [(Col[0]: Null=Exact(0)),(Col[1]: Null=Exact(0)),(Col[2]: Null=Exact(0)),(Col[3]: Null=Exact(1162))]]
+                                                  ProjectionExec: expr=[<exprs>]
+                                                    DataSourceExec: partitions=1, partition_sizes=[<sizes>], statistics=[Rows=Exact(23490), Bytes=Exact(<bytes>), [(Col[0]: Null=Exact(0)),(Col[1]: Null=Exact(0)),(Col[2]: Null=Exact(0)),(Col[3]: Null=Exact(1162))]]
+                                  ProjectionExec: expr=[<exprs>]
+                                    CoalesceBatchesExec: target_batch_size=8192, statistics=[Rows=Inexact(14610), Bytes=Inexact(<bytes>), [(Col[0]: Null=Inexact(0)),(Col[1]: Null=Inexact(0))]]
+                                      FilterExec: _8@<id> = 1 AND _6@<id> = 2001, projection=[_0@<id>, _8@<id>], statistics=[Rows=Inexact(14610), Bytes=Inexact(<bytes>), [(Col[0]: Null=Inexact(0)),(Col[1]: Null=Inexact(0))]]
+                                        RepartitionExec: partitioning=RoundRobinBatch(<partitions>), input_partitions=<partitions>, statistics=[Rows=Exact(73049), Bytes=Exact(<bytes>), [(Col[0]: Null=Exact(0)),(Col[1]: Null=Exact(0)),(Col[2]: Null=Exact(0))]]
+                                          DataSourceExec: partitions=1, partition_sizes=[<sizes>], statistics=[Rows=Exact(73049), Bytes=Exact(<bytes>), [(Col[0]: Null=Exact(0)),(Col[1]: Null=Exact(0)),(Col[2]: Null=Exact(0))]]
+            ProjectionExec: expr=[<exprs>]
+              CoalesceBatchesExec: target_batch_size=8192, statistics=[Rows=Inexact(1), Bytes=Inexact(<bytes>), [(Col[0]:),(Col[1]:),(Col[2]:),(Col[3]:),(Col[4]:)]]
+                FilterExec: CASE WHEN avg(inventory.#<col>)@<id> = 0 THEN 0 ELSE stddev(inventory.#<col>)@<id> / avg(inventory.#<col>)@<id> END > 1, statistics=[Rows=Inexact(1), Bytes=Inexact(<bytes>), [(Col[0]:),(Col[1]:),(Col[2]:),(Col[3]:),(Col[4]:)]]
+                  ProjectionExec: expr=[<exprs>]
+                    AggregateExec: mode=FinalPartitioned, gby=[#<col> as #<col>, #<col> as #<col>, #<col> as #<col>, #<col> as #<col>], aggr=[stddev(inventory.#<col>), avg(inventory.#<col>)], ordering_mode=PartiallySorted([3]), statistics=[Rows=Inexact(1), Bytes=Absent, [(Col[0]:),(Col[1]:),(Col[2]:),(Col[3]:),(Col[4]:),(Col[5]:)]]
+                      CoalesceBatchesExec: target_batch_size=8192, statistics=[Rows=Inexact(1), Bytes=Absent, [(Col[0]:),(Col[1]:),(Col[2]:),(Col[3]:),(Col[4]:),(Col[5]:),(Col[6]:),(Col[7]:),(Col[8]:)]]
+                        RepartitionExec: partitioning=Hash([#<col>, #<col>, #<col>, #<col>], <partitions>), input_partitions=<partitions>, statistics=[Rows=Inexact(1), Bytes=Absent, [(Col[0]:),(Col[1]:),(Col[2]:),(Col[3]:),(Col[4]:),(Col[5]:),(Col[6]:),(Col[7]:),(Col[8]:)]]
+                          AggregateExec: mode=Partial, gby=[#<col> as #<col>, #<col> as #<col>, #<col> as #<col>, #<col> as #<col>], aggr=[stddev(inventory.#<col>), avg(inventory.#<col>)], ordering_mode=PartiallySorted([3]), statistics=[Rows=Inexact(1), Bytes=Absent, [(Col[0]:),(Col[1]:),(Col[2]:),(Col[3]:),(Col[4]:),(Col[5]:),(Col[6]:),(Col[7]:),(Col[8]:)]]
+                            CoalesceBatchesExec: target_batch_size=8192, statistics=[Rows=Inexact(1), Bytes=Absent, [(Col[0]: Null=Exact(1162)),(Col[1]: Null=Exact(0)),(Col[2]: Null=Exact(0)),(Col[3]: Null=Exact(0)),(Col[4]: Null=Inexact(0))]]
+                              HashJoinExec: mode=CollectLeft, join_type=Inner, on=[(#<col>, #<col>)], projection=[#<col>, #<col>, #<col>, #<col>, #<col>], statistics=[Rows=Inexact(1), Bytes=Absent, [(Col[0]: Null=Exact(1162)),(Col[1]: Null=Exact(0)),(Col[2]: Null=Exact(0)),(Col[3]: Null=Exact(0)),(Col[4]: Null=Inexact(0))]]
+                                CoalescePartitionsExec, statistics=[Rows=Inexact(1), Bytes=Absent, [(Col[0]: Null=Exact(0)),(Col[1]: Null=Exact(1162)),(Col[2]: Null=Exact(0)),(Col[3]: Null=Exact(0)),(Col[4]: Null=Exact(0))]]
+                                  ProjectionExec: expr=[<exprs>]
+                                    CoalesceBatchesExec: target_batch_size=8192, statistics=[Rows=Inexact(1), Bytes=Absent, [(Col[0]: Null=Exact(0)),(Col[1]: Null=Exact(0)),(Col[2]: Null=Exact(0)),(Col[3]: Null=Exact(1162)),(Col[4]: Null=Exact(0))]]
+                                      HashJoinExec: mode=CollectLeft, join_type=Inner, on=[(#<col>, #<col>)], projection=[#<col>, #<col>, #<col>, #<col>, #<col>], statistics=[Rows=Inexact(1), Bytes=Absent, [(Col[0]: Null=Exact(0)),(Col[1]: Null=Exact(0)),(Col[2]: Null=Exact(0)),(Col[3]: Null=Exact(1162)),(Col[4]: Null=Exact(0))]]
+                                        ProjectionExec: expr=[<exprs>]
+                                          DataSourceExec: partitions=1, partition_sizes=[<sizes>], statistics=[Rows=Exact(1), Bytes=Exact(<bytes>), [(Col[0]: Null=Exact(0)),(Col[1]: Null=Exact(0))]]
+                                        ProjectionExec: expr=[<exprs>]
+                                          CoalesceBatchesExec: target_batch_size=8192, statistics=[Rows=Inexact(180), Bytes=Absent, [(Col[0]: Null=Exact(0)),(Col[1]: Null=Exact(0)),(Col[2]: Null=Exact(0)),(Col[3]: Null=Exact(1162))]]
+                                            HashJoinExec: mode=CollectLeft, join_type=Inner, on=[(#<col>, #<col>)], projection=[#<col>, #<col>, #<col>, #<col>], statistics=[Rows=Inexact(180), Bytes=Absent, [(Col[0]: Null=Exact(0)),(Col[1]: Null=Exact(0)),(Col[2]: Null=Exact(0)),(Col[3]: Null=Exact(1162))]]
+                                              ProjectionExec: expr=[<exprs>]
+                                                DataSourceExec: partitions=1, partition_sizes=[<sizes>], statistics=[Rows=Exact(180), Bytes=Exact(<bytes>), [(Col[0]: Null=Exact(0))]]
+                                              RepartitionExec: partitioning=RoundRobinBatch(<partitions>), input_partitions=<partitions>, statistics=[Rows=Exact(23490), Bytes=Exact(<bytes>), [(Col[0]: Null=Exact(0)),(Col[1]: Null=Exact(0)),(Col[2]: Null=Exact(0)),(Col[3]: Null=Exact(1162))]]
+                                                ProjectionExec: expr=[<exprs>]
+                                                  DataSourceExec: partitions=1, partition_sizes=[<sizes>], statistics=[Rows=Exact(23490), Bytes=Exact(<bytes>), [(Col[0]: Null=Exact(0)),(Col[1]: Null=Exact(0)),(Col[2]: Null=Exact(0)),(Col[3]: Null=Exact(1162))]]
+                                ProjectionExec: expr=[<exprs>]
+                                  CoalesceBatchesExec: target_batch_size=8192, statistics=[Rows=Inexact(14610), Bytes=Inexact(<bytes>), [(Col[0]: Null=Inexact(0)),(Col[1]: Null=Inexact(0))]]
+                                    FilterExec: _8@<id> = 2 AND _6@<id> = 2001, projection=[_0@<id>, _8@<id>], statistics=[Rows=Inexact(14610), Bytes=Inexact(<bytes>), [(Col[0]: Null=Inexact(0)),(Col[1]: Null=Inexact(0))]]
+                                      RepartitionExec: partitioning=RoundRobinBatch(<partitions>), input_partitions=<partitions>, statistics=[Rows=Exact(73049), Bytes=Exact(<bytes>), [(Col[0]: Null=Exact(0)),(Col[1]: Null=Exact(0)),(Col[2]: Null=Exact(0))]]
+                                        DataSourceExec: partitions=1, partition_sizes=[<sizes>], statistics=[Rows=Exact(73049), Bytes=Exact(<bytes>), [(Col[0]: Null=Exact(0)),(Col[1]: Null=Exact(0)),(Col[2]: Null=Exact(0))]]
+
+
+initial_physical_plan_with_schema:
+ProjectionExec: expr=[<exprs>]
+  SortExec: [<sort_exprs>]
+    SortExec: expr=[<exprs>]
+      ProjectionExec: expr=[<exprs>]
+        CoalesceBatchesExec: target_batch_size=8192, schema=[#<col>:Int64;N, #<col>:Int64;N, #<col>:Int64;N, #<col>:Float64;N, #<col>:Float64;N, #<col>:Int64;N, #<col>:Int64;N, #<col>:Int64;N, #<col>:Float64;N, #<col>:Float64;N]
+          HashJoinExec: mode=CollectLeft, join_type=Inner, on=[(#<col>, #<col>), (#<col>, #<col>)], schema=[#<col>:Int64;N, #<col>:Int64;N, #<col>:Int64;N, #<col>:Float64;N, #<col>:Float64;N, #<col>:Int64;N, #<col>:Int64;N, #<col>:Int64;N, #<col>:Float64;N, #<col>:Float64;N]
+            CoalescePartitionsExec, schema=[#<col>:Int64;N, #<col>:Int64;N, #<col>:Int64;N, #<col>:Float64;N, #<col>:Float64;N]
+              ProjectionExec: expr=[<exprs>]
+                CoalesceBatchesExec: target_batch_size=8192, schema=[#<col>:Int64;N, #<col>:Int64;N, #<col>:Int64;N, stddev(inventory.#<col>):Float64;N, avg(inventory.#<col>):Float64;N]
+                  FilterExec: CASE WHEN avg(inventory.#<col>)@<id> = 0 THEN 0 ELSE stddev(inventory.#<col>)@<id> / avg(inventory.#<col>)@<id> END > 1, schema=[#<col>:Int64;N, #<col>:Int64;N, #<col>:Int64;N, stddev(inventory.#<col>):Float64;N, avg(inventory.#<col>):Float64;N]
+                    ProjectionExec: expr=[<exprs>]
+                      AggregateExec: mode=FinalPartitioned, gby=[#<col> as #<col>, #<col> as #<col>, #<col> as #<col>, #<col> as #<col>], aggr=[stddev(inventory.#<col>), avg(inventory.#<col>)], ordering_mode=PartiallySorted([3]), schema=[#<col>:Utf8;N, #<col>:Int64;N, #<col>:Int64;N, #<col>:Int64;N, stddev(inventory.#<col>):Float64;N, avg(inventory.#<col>):Float64;N]
+                        CoalesceBatchesExec: target_batch_size=8192, schema=[#<col>:Utf8;N, #<col>:Int64;N, #<col>:Int64;N, #<col>:Int64;N, stddev(inventory.#<col>)[count]:UInt64;N, stddev(inventory.#<col>)[mean]:Float64;N, stddev(inventory.#<col>)[m2]:Float64;N, avg(inventory.#<col>)[count]:UInt64;N, avg(inventory.#<col>)[sum]:Float64;N]
+                          RepartitionExec: partitioning=Hash([#<col>, #<col>, #<col>, #<col>], <partitions>), input_partitions=<partitions>, schema=[#<col>:Utf8;N, #<col>:Int64;N, #<col>:Int64;N, #<col>:Int64;N, stddev(inventory.#<col>)[count]:UInt64;N, stddev(inventory.#<col>)[mean]:Float64;N, stddev(inventory.#<col>)[m2]:Float64;N, avg(inventory.#<col>)[count]:UInt64;N, avg(inventory.#<col>)[sum]:Float64;N]
+                            AggregateExec: mode=Partial, gby=[#<col> as #<col>, #<col> as #<col>, #<col> as #<col>, #<col> as #<col>], aggr=[stddev(inventory.#<col>), avg(inventory.#<col>)], ordering_mode=PartiallySorted([3]), schema=[#<col>:Utf8;N, #<col>:Int64;N, #<col>:Int64;N, #<col>:Int64;N, stddev(inventory.#<col>)[count]:UInt64;N, stddev(inventory.#<col>)[mean]:Float64;N, stddev(inventory.#<col>)[m2]:Float64;N, avg(inventory.#<col>)[count]:UInt64;N, avg(inventory.#<col>)[sum]:Float64;N]
+                              CoalesceBatchesExec: target_batch_size=8192, schema=[#<col>:Float64;N, #<col>:Int64;N, #<col>:Int64;N, #<col>:Utf8;N, #<col>:Int64;N]
+                                HashJoinExec: mode=CollectLeft, join_type=Inner, on=[(#<col>, #<col>)], projection=[#<col>, #<col>, #<col>, #<col>, #<col>], schema=[#<col>:Float64;N, #<col>:Int64;N, #<col>:Int64;N, #<col>:Utf8;N, #<col>:Int64;N]
+                                  CoalescePartitionsExec, schema=[#<col>:Int64;N, #<col>:Float64;N, #<col>:Int64;N, #<col>:Int64;N, #<col>:Utf8;N]
+                                    ProjectionExec: expr=[<exprs>]
+                                      CoalesceBatchesExec: target_batch_size=8192, schema=[#<col>:Int64;N, #<col>:Utf8;N, #<col>:Int64;N, #<col>:Float64;N, #<col>:Int64;N]
+                                        HashJoinExec: mode=CollectLeft, join_type=Inner, on=[(#<col>, #<col>)], projection=[#<col>, #<col>, #<col>, #<col>, #<col>], schema=[#<col>:Int64;N, #<col>:Utf8;N, #<col>:Int64;N, #<col>:Float64;N, #<col>:Int64;N]
+                                          ProjectionExec: expr=[<exprs>]
+                                            DataSourceExec: partitions=1, partition_sizes=[<sizes>], schema=[_0:Int64;N, _2:Utf8;N]
+                                          ProjectionExec: expr=[<exprs>]
+                                            CoalesceBatchesExec: target_batch_size=8192, schema=[#<col>:Int64;N, #<col>:Int64;N, #<col>:Int64;N, #<col>:Float64;N]
+                                              HashJoinExec: mode=CollectLeft, join_type=Inner, on=[(#<col>, #<col>)], projection=[#<col>, #<col>, #<col>, #<col>], schema=[#<col>:Int64;N, #<col>:Int64;N, #<col>:Int64;N, #<col>:Float64;N]
+                                                ProjectionExec: expr=[<exprs>]
+                                                  DataSourceExec: partitions=1, partition_sizes=[<sizes>], schema=[_0:Int64;N]
+                                                RepartitionExec: partitioning=RoundRobinBatch(<partitions>), input_partitions=<partitions>, schema=[#<col>:Int64;N, #<col>:Int64;N, #<col>:Int64;N, #<col>:Float64;N]
+                                                  ProjectionExec: expr=[<exprs>]
+                                                    DataSourceExec: partitions=1, partition_sizes=[<sizes>], schema=[_0:Int64;N, _1:Int64;N, _2:Int64;N, _3:Float64;N]
+                                  ProjectionExec: expr=[<exprs>]
+                                    CoalesceBatchesExec: target_batch_size=8192, schema=[_0:Int64;N, _8:Int64;N]
+                                      FilterExec: _8@<id> = 1 AND _6@<id> = 2001, projection=[_0@<id>, _8@<id>], schema=[_0:Int64;N, _8:Int64;N]
+                                        RepartitionExec: partitioning=RoundRobinBatch(<partitions>), input_partitions=<partitions>, schema=[_0:Int64;N, _6:Int64;N, _8:Int64;N]
+                                          DataSourceExec: partitions=1, partition_sizes=[<sizes>], schema=[_0:Int64;N, _6:Int64;N, _8:Int64;N]
+            ProjectionExec: expr=[<exprs>]
+              CoalesceBatchesExec: target_batch_size=8192, schema=[#<col>:Int64;N, #<col>:Int64;N, #<col>:Int64;N, stddev(inventory.#<col>):Float64;N, avg(inventory.#<col>):Float64;N]
+                FilterExec: CASE WHEN avg(inventory.#<col>)@<id> = 0 THEN 0 ELSE stddev(inventory.#<col>)@<id> / avg(inventory.#<col>)@<id> END > 1, schema=[#<col>:Int64;N, #<col>:Int64;N, #<col>:Int64;N, stddev(inventory.#<col>):Float64;N, avg(inventory.#<col>):Float64;N]
+                  ProjectionExec: expr=[<exprs>]
+                    AggregateExec: mode=FinalPartitioned, gby=[#<col> as #<col>, #<col> as #<col>, #<col> as #<col>, #<col> as #<col>], aggr=[stddev(inventory.#<col>), avg(inventory.#<col>)], ordering_mode=PartiallySorted([3]), schema=[#<col>:Utf8;N, #<col>:Int64;N, #<col>:Int64;N, #<col>:Int64;N, stddev(inventory.#<col>):Float64;N, avg(inventory.#<col>):Float64;N]
+                      CoalesceBatchesExec: target_batch_size=8192, schema=[#<col>:Utf8;N, #<col>:Int64;N, #<col>:Int64;N, #<col>:Int64;N, stddev(inventory.#<col>)[count]:UInt64;N, stddev(inventory.#<col>)[mean]:Float64;N, stddev(inventory.#<col>)[m2]:Float64;N, avg(inventory.#<col>)[count]:UInt64;N, avg(inventory.#<col>)[sum]:Float64;N]
+                        RepartitionExec: partitioning=Hash([#<col>, #<col>, #<col>, #<col>], <partitions>), input_partitions=<partitions>, schema=[#<col>:Utf8;N, #<col>:Int64;N, #<col>:Int64;N, #<col>:Int64;N, stddev(inventory.#<col>)[count]:UInt64;N, stddev(inventory.#<col>)[mean]:Float64;N, stddev(inventory.#<col>)[m2]:Float64;N, avg(inventory.#<col>)[count]:UInt64;N, avg(inventory.#<col>)[sum]:Float64;N]
+                          AggregateExec: mode=Partial, gby=[#<col> as #<col>, #<col> as #<col>, #<col> as #<col>, #<col> as #<col>], aggr=[stddev(inventory.#<col>), avg(inventory.#<col>)], ordering_mode=PartiallySorted([3]), schema=[#<col>:Utf8;N, #<col>:Int64;N, #<col>:Int64;N, #<col>:Int64;N, stddev(inventory.#<col>)[count]:UInt64;N, stddev(inventory.#<col>)[mean]:Float64;N, stddev(inventory.#<col>)[m2]:Float64;N, avg(inventory.#<col>)[count]:UInt64;N, avg(inventory.#<col>)[sum]:Float64;N]
+                            CoalesceBatchesExec: target_batch_size=8192, schema=[#<col>:Float64;N, #<col>:Int64;N, #<col>:Int64;N, #<col>:Utf8;N, #<col>:Int64;N]
+                              HashJoinExec: mode=CollectLeft, join_type=Inner, on=[(#<col>, #<col>)], projection=[#<col>, #<col>, #<col>, #<col>, #<col>], schema=[#<col>:Float64;N, #<col>:Int64;N, #<col>:Int64;N, #<col>:Utf8;N, #<col>:Int64;N]
+                                CoalescePartitionsExec, schema=[#<col>:Int64;N, #<col>:Float64;N, #<col>:Int64;N, #<col>:Int64;N, #<col>:Utf8;N]
+                                  ProjectionExec: expr=[<exprs>]
+                                    CoalesceBatchesExec: target_batch_size=8192, schema=[#<col>:Int64;N, #<col>:Utf8;N, #<col>:Int64;N, #<col>:Float64;N, #<col>:Int64;N]
+                                      HashJoinExec: mode=CollectLeft, join_type=Inner, on=[(#<col>, #<col>)], projection=[#<col>, #<col>, #<col>, #<col>, #<col>], schema=[#<col>:Int64;N, #<col>:Utf8;N, #<col>:Int64;N, #<col>:Float64;N, #<col>:Int64;N]
+                                        ProjectionExec: expr=[<exprs>]
+                                          DataSourceExec: partitions=1, partition_sizes=[<sizes>], schema=[_0:Int64;N, _2:Utf8;N]
+                                        ProjectionExec: expr=[<exprs>]
+                                          CoalesceBatchesExec: target_batch_size=8192, schema=[#<col>:Int64;N, #<col>:Int64;N, #<col>:Int64;N, #<col>:Float64;N]
+                                            HashJoinExec: mode=CollectLeft, join_type=Inner, on=[(#<col>, #<col>)], projection=[#<col>, #<col>, #<col>, #<col>], schema=[#<col>:Int64;N, #<col>:Int64;N, #<col>:Int64;N, #<col>:Float64;N]
+                                              ProjectionExec: expr=[<exprs>]
+                                                DataSourceExec: partitions=1, partition_sizes=[<sizes>], schema=[_0:Int64;N]
+                                              RepartitionExec: partitioning=RoundRobinBatch(<partitions>), input_partitions=<partitions>, schema=[#<col>:Int64;N, #<col>:Int64;N, #<col>:Int64;N, #<col>:Float64;N]
+                                                ProjectionExec: expr=[<exprs>]
+                                                  DataSourceExec: partitions=1, partition_sizes=[<sizes>], schema=[_0:Int64;N, _1:Int64;N, _2:Int64;N, _3:Float64;N]
+                                ProjectionExec: expr=[<exprs>]
+                                  CoalesceBatchesExec: target_batch_size=8192, schema=[_0:Int64;N, _8:Int64;N]
+                                    FilterExec: _8@<id> = 2 AND _6@<id> = 2001, projection=[_0@<id>, _8@<id>], schema=[_0:Int64;N, _8:Int64;N]
+                                      RepartitionExec: partitioning=RoundRobinBatch(<partitions>), input_partitions=<partitions>, schema=[_0:Int64;N, _6:Int64;N, _8:Int64;N]
+                                        DataSourceExec: partitions=1, partition_sizes=[<sizes>], schema=[_0:Int64;N, _6:Int64;N, _8:Int64;N]
+
+
+physical_plan after OutputRequirements:
+ProjectionExec: expr=[<exprs>]
+  OutputRequirementExec: order_by=[(#<col>, asc), (#<col>, asc), (#<col>, asc), (#<col>, asc), (#<col>, asc), (#<col>, asc), (#<col>, asc), (#<col>, asc)], dist_by=SinglePartition
+    SortExec: [<sort_exprs>]
+      SortExec: expr=[<exprs>]
+        ProjectionExec: expr=[<exprs>]
+          CoalesceBatchesExec: target_batch_size=8192
+            HashJoinExec: mode=CollectLeft, join_type=Inner, on=[(#<col>, #<col>), (#<col>, #<col>)]
+              CoalescePartitionsExec
+                ProjectionExec: expr=[<exprs>]
+                  CoalesceBatchesExec: target_batch_size=8192
+                    FilterExec: CASE WHEN avg(inventory.#<col>)@<id> = 0 THEN 0 ELSE stddev(inventory.#<col>)@<id> / avg(inventory.#<col>)@<id> END > 1
+                      ProjectionExec: expr=[<exprs>]
+                        AggregateExec: mode=FinalPartitioned, gby=[#<col> as #<col>, #<col> as #<col>, #<col> as #<col>, #<col> as #<col>], aggr=[stddev(inventory.#<col>), avg(inventory.#<col>)], ordering_mode=PartiallySorted([3])
+                          CoalesceBatchesExec: target_batch_size=8192
+                            RepartitionExec: partitioning=Hash([#<col>, #<col>, #<col>, #<col>], <partitions>), input_partitions=<partitions>
+                              AggregateExec: mode=Partial, gby=[#<col> as #<col>, #<col> as #<col>, #<col> as #<col>, #<col> as #<col>], aggr=[stddev(inventory.#<col>), avg(inventory.#<col>)], ordering_mode=PartiallySorted([3])
+                                CoalesceBatchesExec: target_batch_size=8192
+                                  HashJoinExec: mode=CollectLeft, join_type=Inner, on=[(#<col>, #<col>)], projection=[#<col>, #<col>, #<col>, #<col>, #<col>]
+                                    CoalescePartitionsExec
+                                      ProjectionExec: expr=[<exprs>]
+                                        CoalesceBatchesExec: target_batch_size=8192
+                                          HashJoinExec: mode=CollectLeft, join_type=Inner, on=[(#<col>, #<col>)], projection=[#<col>, #<col>, #<col>, #<col>, #<col>]
+                                            ProjectionExec: expr=[<exprs>]
+                                              DataSourceExec: partitions=1, partition_sizes=[<sizes>]
+                                            ProjectionExec: expr=[<exprs>]
+                                              CoalesceBatchesExec: target_batch_size=8192
+                                                HashJoinExec: mode=CollectLeft, join_type=Inner, on=[(#<col>, #<col>)], projection=[#<col>, #<col>, #<col>, #<col>]
+                                                  ProjectionExec: expr=[<exprs>]
+                                                    DataSourceExec: partitions=1, partition_sizes=[<sizes>]
+                                                  RepartitionExec: partitioning=RoundRobinBatch(<partitions>), input_partitions=<partitions>
+                                                    ProjectionExec: expr=[<exprs>]
+                                                      DataSourceExec: partitions=1, partition_sizes=[<sizes>]
+                                    ProjectionExec: expr=[<exprs>]
+                                      CoalesceBatchesExec: target_batch_size=8192
+                                        FilterExec: _8@<id> = 1 AND _6@<id> = 2001, projection=[_0@<id>, _8@<id>]
+                                          RepartitionExec: partitioning=RoundRobinBatch(<partitions>), input_partitions=<partitions>
+                                            DataSourceExec: partitions=1, partition_sizes=[<sizes>]
+              ProjectionExec: expr=[<exprs>]
+                CoalesceBatchesExec: target_batch_size=8192
+                  FilterExec: CASE WHEN avg(inventory.#<col>)@<id> = 0 THEN 0 ELSE stddev(inventory.#<col>)@<id> / avg(inventory.#<col>)@<id> END > 1
+                    ProjectionExec: expr=[<exprs>]
+                      AggregateExec: mode=FinalPartitioned, gby=[#<col> as #<col>, #<col> as #<col>, #<col> as #<col>, #<col> as #<col>], aggr=[stddev(inventory.#<col>), avg(inventory.#<col>)], ordering_mode=PartiallySorted([3])
+                        CoalesceBatchesExec: target_batch_size=8192
+                          RepartitionExec: partitioning=Hash([#<col>, #<col>, #<col>, #<col>], <partitions>), input_partitions=<partitions>
+                            AggregateExec: mode=Partial, gby=[#<col> as #<col>, #<col> as #<col>, #<col> as #<col>, #<col> as #<col>], aggr=[stddev(inventory.#<col>), avg(inventory.#<col>)], ordering_mode=PartiallySorted([3])
+                              CoalesceBatchesExec: target_batch_size=8192
+                                HashJoinExec: mode=CollectLeft, join_type=Inner, on=[(#<col>, #<col>)], projection=[#<col>, #<col>, #<col>, #<col>, #<col>]
+                                  CoalescePartitionsExec
+                                    ProjectionExec: expr=[<exprs>]
+                                      CoalesceBatchesExec: target_batch_size=8192
+                                        HashJoinExec: mode=CollectLeft, join_type=Inner, on=[(#<col>, #<col>)], projection=[#<col>, #<col>, #<col>, #<col>, #<col>]
+                                          ProjectionExec: expr=[<exprs>]
+                                            DataSourceExec: partitions=1, partition_sizes=[<sizes>]
+                                          ProjectionExec: expr=[<exprs>]
+                                            CoalesceBatchesExec: target_batch_size=8192
+                                              HashJoinExec: mode=CollectLeft, join_type=Inner, on=[(#<col>, #<col>)], projection=[#<col>, #<col>, #<col>, #<col>]
+                                                ProjectionExec: expr=[<exprs>]
+                                                  DataSourceExec: partitions=1, partition_sizes=[<sizes>]
+                                                RepartitionExec: partitioning=RoundRobinBatch(<partitions>), input_partitions=<partitions>
+                                                  ProjectionExec: expr=[<exprs>]
+                                                    DataSourceExec: partitions=1, partition_sizes=[<sizes>]
+                                  ProjectionExec: expr=[<exprs>]
+                                    CoalesceBatchesExec: target_batch_size=8192
+                                      FilterExec: _8@<id> = 2 AND _6@<id> = 2001, projection=[_0@<id>, _8@<id>]
+                                        RepartitionExec: partitioning=RoundRobinBatch(<partitions>), input_partitions=<partitions>
+                                          DataSourceExec: partitions=1, partition_sizes=[<sizes>]
+
+
+physical_plan after aggregate_statistics:
+SAME TEXT AS ABOVE
+
+physical_plan after join_selection:
+SAME TEXT AS ABOVE
+
+physical_plan after LimitedDistinctAggregation:
+SAME TEXT AS ABOVE
+
+physical_plan after FilterPushdown:
+SAME TEXT AS ABOVE
+
+physical_plan after EnforceDistribution:
+ProjectionExec: expr=[<exprs>]
+  OutputRequirementExec: order_by=[(#<col>, asc), (#<col>, asc), (#<col>, asc), (#<col>, asc), (#<col>, asc), (#<col>, asc), (#<col>, asc), (#<col>, asc)], dist_by=SinglePartition
+    SortExec: expr=[<exprs>]
+      CoalescePartitionsExec
+        SortExec: expr=[<exprs>]
+          ProjectionExec: expr=[<exprs>]
+            CoalesceBatchesExec: target_batch_size=8192
+              HashJoinExec: mode=CollectLeft, join_type=Inner, on=[(#<col>, #<col>), (#<col>, #<col>)]
+                CoalescePartitionsExec
+                  ProjectionExec: expr=[<exprs>]
+                    CoalesceBatchesExec: target_batch_size=8192
+                      FilterExec: CASE WHEN avg(inventory.#<col>)@<id> = 0 THEN 0 ELSE stddev(inventory.#<col>)@<id> / avg(inventory.#<col>)@<id> END > 1
+                        ProjectionExec: expr=[<exprs>]
+                          AggregateExec: mode=FinalPartitioned, gby=[#<col> as #<col>, #<col> as #<col>, #<col> as #<col>, #<col> as #<col>], aggr=[stddev(inventory.#<col>), avg(inventory.#<col>)], ordering_mode=PartiallySorted([3])
+                            RepartitionExec: partitioning=Hash([#<col>, #<col>, #<col>, #<col>], <partitions>), input_partitions=<partitions>
+                              CoalesceBatchesExec: target_batch_size=8192
+                                AggregateExec: mode=Partial, gby=[#<col> as #<col>, #<col> as #<col>, #<col> as #<col>, #<col> as #<col>], aggr=[stddev(inventory.#<col>), avg(inventory.#<col>)], ordering_mode=PartiallySorted([3])
+                                  CoalesceBatchesExec: target_batch_size=8192
+                                    HashJoinExec: mode=CollectLeft, join_type=Inner, on=[(#<col>, #<col>)], projection=[#<col>, #<col>, #<col>, #<col>, #<col>]
+                                      CoalescePartitionsExec
+                                        ProjectionExec: expr=[<exprs>]
+                                          CoalesceBatchesExec: target_batch_size=8192
+                                            HashJoinExec: mode=CollectLeft, join_type=Inner, on=[(#<col>, #<col>)], projection=[#<col>, #<col>, #<col>, #<col>, #<col>]
+                                              ProjectionExec: expr=[<exprs>]
+                                                DataSourceExec: partitions=1, partition_sizes=[<sizes>]
+                                              ProjectionExec: expr=[<exprs>]
+                                                CoalesceBatchesExec: target_batch_size=8192
+                                                  HashJoinExec: mode=CollectLeft, join_type=Inner, on=[(#<col>, #<col>)], projection=[#<col>, #<col>, #<col>, #<col>]
+                                                    ProjectionExec: expr=[<exprs>]
+                                                      DataSourceExec: partitions=1, partition_sizes=[<sizes>]
+                                                    RepartitionExec: partitioning=RoundRobinBatch(<partitions>), input_partitions=<partitions>
+                                                      ProjectionExec: expr=[<exprs>]
+                                                        DataSourceExec: partitions=1, partition_sizes=[<sizes>]
+                                      ProjectionExec: expr=[<exprs>]
+                                        CoalesceBatchesExec: target_batch_size=8192
+                                          FilterExec: _8@<id> = 1 AND _6@<id> = 2001, projection=[_0@<id>, _8@<id>]
+                                            RepartitionExec: partitioning=RoundRobinBatch(<partitions>), input_partitions=<partitions>
+                                              DataSourceExec: partitions=1, partition_sizes=[<sizes>]
+                ProjectionExec: expr=[<exprs>]
+                  CoalesceBatchesExec: target_batch_size=8192
+                    FilterExec: CASE WHEN avg(inventory.#<col>)@<id> = 0 THEN 0 ELSE stddev(inventory.#<col>)@<id> / avg(inventory.#<col>)@<id> END > 1
+                      ProjectionExec: expr=[<exprs>]
+                        AggregateExec: mode=FinalPartitioned, gby=[#<col> as #<col>, #<col> as #<col>, #<col> as #<col>, #<col> as #<col>], aggr=[stddev(inventory.#<col>), avg(inventory.#<col>)], ordering_mode=PartiallySorted([3])
+                          RepartitionExec: partitioning=Hash([#<col>, #<col>, #<col>, #<col>], <partitions>), input_partitions=<partitions>
+                            CoalesceBatchesExec: target_batch_size=8192
+                              AggregateExec: mode=Partial, gby=[#<col> as #<col>, #<col> as #<col>, #<col> as #<col>, #<col> as #<col>], aggr=[stddev(inventory.#<col>), avg(inventory.#<col>)], ordering_mode=PartiallySorted([3])
+                                CoalesceBatchesExec: target_batch_size=8192
+                                  HashJoinExec: mode=CollectLeft, join_type=Inner, on=[(#<col>, #<col>)], projection=[#<col>, #<col>, #<col>, #<col>, #<col>]
+                                    CoalescePartitionsExec
+                                      ProjectionExec: expr=[<exprs>]
+                                        CoalesceBatchesExec: target_batch_size=8192
+                                          HashJoinExec: mode=CollectLeft, join_type=Inner, on=[(#<col>, #<col>)], projection=[#<col>, #<col>, #<col>, #<col>, #<col>]
+                                            ProjectionExec: expr=[<exprs>]
+                                              DataSourceExec: partitions=1, partition_sizes=[<sizes>]
+                                            ProjectionExec: expr=[<exprs>]
+                                              CoalesceBatchesExec: target_batch_size=8192
+                                                HashJoinExec: mode=CollectLeft, join_type=Inner, on=[(#<col>, #<col>)], projection=[#<col>, #<col>, #<col>, #<col>]
+                                                  ProjectionExec: expr=[<exprs>]
+                                                    DataSourceExec: partitions=1, partition_sizes=[<sizes>]
+                                                  RepartitionExec: partitioning=RoundRobinBatch(<partitions>), input_partitions=<partitions>
+                                                    ProjectionExec: expr=[<exprs>]
+                                                      DataSourceExec: partitions=1, partition_sizes=[<sizes>]
+                                    ProjectionExec: expr=[<exprs>]
+                                      CoalesceBatchesExec: target_batch_size=8192
+                                        FilterExec: _8@<id> = 2 AND _6@<id> = 2001, projection=[_0@<id>, _8@<id>]
+                                          RepartitionExec: partitioning=RoundRobinBatch(<partitions>), input_partitions=<partitions>
+                                            DataSourceExec: partitions=1, partition_sizes=[<sizes>]
+
+
+physical_plan after CombinePartialFinalAggregate:
+SAME TEXT AS ABOVE
+
+physical_plan after EnforceSorting:
+ProjectionExec: expr=[<exprs>]
+  OutputRequirementExec: order_by=[(#<col>, asc), (#<col>, asc), (#<col>, asc), (#<col>, asc), (#<col>, asc), (#<col>, asc), (#<col>, asc), (#<col>, asc)], dist_by=SinglePartition
+    SortExec: [<sort_exprs>]
+      SortExec: expr=[<exprs>]
+        ProjectionExec: expr=[<exprs>]
+          CoalesceBatchesExec: target_batch_size=8192
+            HashJoinExec: mode=CollectLeft, join_type=Inner, on=[(#<col>, #<col>), (#<col>, #<col>)]
+              CoalescePartitionsExec
+                ProjectionExec: expr=[<exprs>]
+                  CoalesceBatchesExec: target_batch_size=8192
+                    FilterExec: CASE WHEN avg(inventory.#<col>)@<id> = 0 THEN 0 ELSE stddev(inventory.#<col>)@<id> / avg(inventory.#<col>)@<id> END > 1
+                      ProjectionExec: expr=[<exprs>]
+                        AggregateExec: mode=FinalPartitioned, gby=[#<col> as #<col>, #<col> as #<col>, #<col> as #<col>, #<col> as #<col>], aggr=[stddev(inventory.#<col>), avg(inventory.#<col>)], ordering_mode=PartiallySorted([3])
+                          RepartitionExec: partitioning=Hash([#<col>, #<col>, #<col>, #<col>], <partitions>), input_partitions=<partitions>
+                            CoalesceBatchesExec: target_batch_size=8192
+                              AggregateExec: mode=Partial, gby=[#<col> as #<col>, #<col> as #<col>, #<col> as #<col>, #<col> as #<col>], aggr=[stddev(inventory.#<col>), avg(inventory.#<col>)], ordering_mode=PartiallySorted([3])
+                                CoalesceBatchesExec: target_batch_size=8192
+                                  HashJoinExec: mode=CollectLeft, join_type=Inner, on=[(#<col>, #<col>)], projection=[#<col>, #<col>, #<col>, #<col>, #<col>]
+                                    CoalescePartitionsExec
+                                      ProjectionExec: expr=[<exprs>]
+                                        CoalesceBatchesExec: target_batch_size=8192
+                                          HashJoinExec: mode=CollectLeft, join_type=Inner, on=[(#<col>, #<col>)], projection=[#<col>, #<col>, #<col>, #<col>, #<col>]
+                                            ProjectionExec: expr=[<exprs>]
+                                              DataSourceExec: partitions=1, partition_sizes=[<sizes>]
+                                            ProjectionExec: expr=[<exprs>]
+                                              CoalesceBatchesExec: target_batch_size=8192
+                                                HashJoinExec: mode=CollectLeft, join_type=Inner, on=[(#<col>, #<col>)], projection=[#<col>, #<col>, #<col>, #<col>]
+                                                  ProjectionExec: expr=[<exprs>]
+                                                    DataSourceExec: partitions=1, partition_sizes=[<sizes>]
+                                                  RepartitionExec: partitioning=RoundRobinBatch(<partitions>), input_partitions=<partitions>
+                                                    ProjectionExec: expr=[<exprs>]
+                                                      DataSourceExec: partitions=1, partition_sizes=[<sizes>]
+                                    ProjectionExec: expr=[<exprs>]
+                                      CoalesceBatchesExec: target_batch_size=8192
+                                        FilterExec: _8@<id> = 1 AND _6@<id> = 2001, projection=[_0@<id>, _8@<id>]
+                                          RepartitionExec: partitioning=RoundRobinBatch(<partitions>), input_partitions=<partitions>
+                                            DataSourceExec: partitions=1, partition_sizes=[<sizes>]
+              ProjectionExec: expr=[<exprs>]
+                CoalesceBatchesExec: target_batch_size=8192
+                  FilterExec: CASE WHEN avg(inventory.#<col>)@<id> = 0 THEN 0 ELSE stddev(inventory.#<col>)@<id> / avg(inventory.#<col>)@<id> END > 1
+                    ProjectionExec: expr=[<exprs>]
+                      AggregateExec: mode=FinalPartitioned, gby=[#<col> as #<col>, #<col> as #<col>, #<col> as #<col>, #<col> as #<col>], aggr=[stddev(inventory.#<col>), avg(inventory.#<col>)], ordering_mode=PartiallySorted([3])
+                        RepartitionExec: partitioning=Hash([#<col>, #<col>, #<col>, #<col>], <partitions>), input_partitions=<partitions>
+                          CoalesceBatchesExec: target_batch_size=8192
+                            AggregateExec: mode=Partial, gby=[#<col> as #<col>, #<col> as #<col>, #<col> as #<col>, #<col> as #<col>], aggr=[stddev(inventory.#<col>), avg(inventory.#<col>)], ordering_mode=PartiallySorted([3])
+                              CoalesceBatchesExec: target_batch_size=8192
+                                HashJoinExec: mode=CollectLeft, join_type=Inner, on=[(#<col>, #<col>)], projection=[#<col>, #<col>, #<col>, #<col>, #<col>]
+                                  CoalescePartitionsExec
+                                    ProjectionExec: expr=[<exprs>]
+                                      CoalesceBatchesExec: target_batch_size=8192
+                                        HashJoinExec: mode=CollectLeft, join_type=Inner, on=[(#<col>, #<col>)], projection=[#<col>, #<col>, #<col>, #<col>, #<col>]
+                                          ProjectionExec: expr=[<exprs>]
+                                            DataSourceExec: partitions=1, partition_sizes=[<sizes>]
+                                          ProjectionExec: expr=[<exprs>]
+                                            CoalesceBatchesExec: target_batch_size=8192
+                                              HashJoinExec: mode=CollectLeft, join_type=Inner, on=[(#<col>, #<col>)], projection=[#<col>, #<col>, #<col>, #<col>]
+                                                ProjectionExec: expr=[<exprs>]
+                                                  DataSourceExec: partitions=1, partition_sizes=[<sizes>]
+                                                RepartitionExec: partitioning=RoundRobinBatch(<partitions>), input_partitions=<partitions>
+                                                  ProjectionExec: expr=[<exprs>]
+                                                    DataSourceExec: partitions=1, partition_sizes=[<sizes>]
+                                  ProjectionExec: expr=[<exprs>]
+                                    CoalesceBatchesExec: target_batch_size=8192
+                                      FilterExec: _8@<id> = 2 AND _6@<id> = 2001, projection=[_0@<id>, _8@<id>]
+                                        RepartitionExec: partitioning=RoundRobinBatch(<partitions>), input_partitions=<partitions>
+                                          DataSourceExec: partitions=1, partition_sizes=[<sizes>]
+
+
+physical_plan after OptimizeAggregateOrder:
+SAME TEXT AS ABOVE
+
+physical_plan after ProjectionPushdown:
+SAME TEXT AS ABOVE
+
+physical_plan after coalesce_batches:
+ProjectionExec: expr=[<exprs>]
+  OutputRequirementExec: order_by=[(#<col>, asc), (#<col>, asc), (#<col>, asc), (#<col>, asc), (#<col>, asc), (#<col>, asc), (#<col>, asc), (#<col>, asc)], dist_by=SinglePartition
+    SortExec: [<sort_exprs>]
+      SortExec: expr=[<exprs>]
+        ProjectionExec: expr=[<exprs>]
+          CoalesceBatchesExec: target_batch_size=8192
+            CoalesceBatchesExec: target_batch_size=8192
+              HashJoinExec: mode=CollectLeft, join_type=Inner, on=[(#<col>, #<col>), (#<col>, #<col>)]
+                CoalescePartitionsExec
+                  ProjectionExec: expr=[<exprs>]
+                    CoalesceBatchesExec: target_batch_size=8192
+                      CoalesceBatchesExec: target_batch_size=8192
+                        FilterExec: CASE WHEN avg(inventory.#<col>)@<id> = 0 THEN 0 ELSE stddev(inventory.#<col>)@<id> / avg(inventory.#<col>)@<id> END > 1
+                          ProjectionExec: expr=[<exprs>]
+                            AggregateExec: mode=FinalPartitioned, gby=[#<col> as #<col>, #<col> as #<col>, #<col> as #<col>, #<col> as #<col>], aggr=[stddev(inventory.#<col>), avg(inventory.#<col>)], ordering_mode=PartiallySorted([3])
+                              CoalesceBatchesExec: target_batch_size=8192
+                                RepartitionExec: partitioning=Hash([#<col>, #<col>, #<col>, #<col>], <partitions>), input_partitions=<partitions>
+                                  CoalesceBatchesExec: target_batch_size=8192
+                                    AggregateExec: mode=Partial, gby=[#<col> as #<col>, #<col> as #<col>, #<col> as #<col>, #<col> as #<col>], aggr=[stddev(inventory.#<col>), avg(inventory.#<col>)], ordering_mode=PartiallySorted([3])
+                                      CoalesceBatchesExec: target_batch_size=8192
+                                        CoalesceBatchesExec: target_batch_size=8192
+                                          HashJoinExec: mode=CollectLeft, join_type=Inner, on=[(#<col>, #<col>)], projection=[#<col>, #<col>, #<col>, #<col>, #<col>]
+                                            CoalescePartitionsExec
+                                              ProjectionExec: expr=[<exprs>]
+                                                CoalesceBatchesExec: target_batch_size=8192
+                                                  CoalesceBatchesExec: target_batch_size=8192
+                                                    HashJoinExec: mode=CollectLeft, join_type=Inner, on=[(#<col>, #<col>)], projection=[#<col>, #<col>, #<col>, #<col>, #<col>]
+                                                      ProjectionExec: expr=[<exprs>]
+                                                        DataSourceExec: partitions=1, partition_sizes=[<sizes>]
+                                                      ProjectionExec: expr=[<exprs>]
+                                                        CoalesceBatchesExec: target_batch_size=8192
+                                                          CoalesceBatchesExec: target_batch_size=8192
+                                                            HashJoinExec: mode=CollectLeft, join_type=Inner, on=[(#<col>, #<col>)], projection=[#<col>, #<col>, #<col>, #<col>]
+                                                              ProjectionExec: expr=[<exprs>]
+                                                                DataSourceExec: partitions=1, partition_sizes=[<sizes>]
+                                                              RepartitionExec: partitioning=RoundRobinBatch(<partitions>), input_partitions=<partitions>
+                                                                ProjectionExec: expr=[<exprs>]
+                                                                  DataSourceExec: partitions=1, partition_sizes=[<sizes>]
+                                            ProjectionExec: expr=[<exprs>]
+                                              CoalesceBatchesExec: target_batch_size=8192
+                                                CoalesceBatchesExec: target_batch_size=8192
+                                                  FilterExec: _8@<id> = 1 AND _6@<id> = 2001, projection=[_0@<id>, _8@<id>]
+                                                    RepartitionExec: partitioning=RoundRobinBatch(<partitions>), input_partitions=<partitions>
+                                                      DataSourceExec: partitions=1, partition_sizes=[<sizes>]
+                ProjectionExec: expr=[<exprs>]
+                  CoalesceBatchesExec: target_batch_size=8192
+                    CoalesceBatchesExec: target_batch_size=8192
+                      FilterExec: CASE WHEN avg(inventory.#<col>)@<id> = 0 THEN 0 ELSE stddev(inventory.#<col>)@<id> / avg(inventory.#<col>)@<id> END > 1
+                        ProjectionExec: expr=[<exprs>]
+                          AggregateExec: mode=FinalPartitioned, gby=[#<col> as #<col>, #<col> as #<col>, #<col> as #<col>, #<col> as #<col>], aggr=[stddev(inventory.#<col>), avg(inventory.#<col>)], ordering_mode=PartiallySorted([3])
+                            CoalesceBatchesExec: target_batch_size=8192
+                              RepartitionExec: partitioning=Hash([#<col>, #<col>, #<col>, #<col>], <partitions>), input_partitions=<partitions>
+                                CoalesceBatchesExec: target_batch_size=8192
+                                  AggregateExec: mode=Partial, gby=[#<col> as #<col>, #<col> as #<col>, #<col> as #<col>, #<col> as #<col>], aggr=[stddev(inventory.#<col>), avg(inventory.#<col>)], ordering_mode=PartiallySorted([3])
+                                    CoalesceBatchesExec: target_batch_size=8192
+                                      CoalesceBatchesExec: target_batch_size=8192
+                                        HashJoinExec: mode=CollectLeft, join_type=Inner, on=[(#<col>, #<col>)], projection=[#<col>, #<col>, #<col>, #<col>, #<col>]
+                                          CoalescePartitionsExec
+                                            ProjectionExec: expr=[<exprs>]
+                                              CoalesceBatchesExec: target_batch_size=8192
+                                                CoalesceBatchesExec: target_batch_size=8192
+                                                  HashJoinExec: mode=CollectLeft, join_type=Inner, on=[(#<col>, #<col>)], projection=[#<col>, #<col>, #<col>, #<col>, #<col>]
+                                                    ProjectionExec: expr=[<exprs>]
+                                                      DataSourceExec: partitions=1, partition_sizes=[<sizes>]
+                                                    ProjectionExec: expr=[<exprs>]
+                                                      CoalesceBatchesExec: target_batch_size=8192
+                                                        CoalesceBatchesExec: target_batch_size=8192
+                                                          HashJoinExec: mode=CollectLeft, join_type=Inner, on=[(#<col>, #<col>)], projection=[#<col>, #<col>, #<col>, #<col>]
+                                                            ProjectionExec: expr=[<exprs>]
+                                                              DataSourceExec: partitions=1, partition_sizes=[<sizes>]
+                                                            RepartitionExec: partitioning=RoundRobinBatch(<partitions>), input_partitions=<partitions>
+                                                              ProjectionExec: expr=[<exprs>]
+                                                                DataSourceExec: partitions=1, partition_sizes=[<sizes>]
+                                          ProjectionExec: expr=[<exprs>]
+                                            CoalesceBatchesExec: target_batch_size=8192
+                                              CoalesceBatchesExec: target_batch_size=8192
+                                                FilterExec: _8@<id> = 2 AND _6@<id> = 2001, projection=[_0@<id>, _8@<id>]
+                                                  RepartitionExec: partitioning=RoundRobinBatch(<partitions>), input_partitions=<partitions>
+                                                    DataSourceExec: partitions=1, partition_sizes=[<sizes>]
+
+
+physical_plan after coalesce_async_exec_input:
+SAME TEXT AS ABOVE
+
+physical_plan after OutputRequirements:
+ProjectionExec: expr=[<exprs>]
+  SortExec: [<sort_exprs>]
+    SortExec: expr=[<exprs>]
+      ProjectionExec: expr=[<exprs>]
+        CoalesceBatchesExec: target_batch_size=8192
+          CoalesceBatchesExec: target_batch_size=8192
+            HashJoinExec: mode=CollectLeft, join_type=Inner, on=[(#<col>, #<col>), (#<col>, #<col>)]
+              CoalescePartitionsExec
+                ProjectionExec: expr=[<exprs>]
+                  CoalesceBatchesExec: target_batch_size=8192
+                    CoalesceBatchesExec: target_batch_size=8192
+                      FilterExec: CASE WHEN avg(inventory.#<col>)@<id> = 0 THEN 0 ELSE stddev(inventory.#<col>)@<id> / avg(inventory.#<col>)@<id> END > 1
+                        ProjectionExec: expr=[<exprs>]
+                          AggregateExec: mode=FinalPartitioned, gby=[#<col> as #<col>, #<col> as #<col>, #<col> as #<col>, #<col> as #<col>], aggr=[stddev(inventory.#<col>), avg(inventory.#<col>)], ordering_mode=PartiallySorted([3])
+                            CoalesceBatchesExec: target_batch_size=8192
+                              RepartitionExec: partitioning=Hash([#<col>, #<col>, #<col>, #<col>], <partitions>), input_partitions=<partitions>
+                                CoalesceBatchesExec: target_batch_size=8192
+                                  AggregateExec: mode=Partial, gby=[#<col> as #<col>, #<col> as #<col>, #<col> as #<col>, #<col> as #<col>], aggr=[stddev(inventory.#<col>), avg(inventory.#<col>)], ordering_mode=PartiallySorted([3])
+                                    CoalesceBatchesExec: target_batch_size=8192
+                                      CoalesceBatchesExec: target_batch_size=8192
+                                        HashJoinExec: mode=CollectLeft, join_type=Inner, on=[(#<col>, #<col>)], projection=[#<col>, #<col>, #<col>, #<col>, #<col>]
+                                          CoalescePartitionsExec
+                                            ProjectionExec: expr=[<exprs>]
+                                              CoalesceBatchesExec: target_batch_size=8192
+                                                CoalesceBatchesExec: target_batch_size=8192
+                                                  HashJoinExec: mode=CollectLeft, join_type=Inner, on=[(#<col>, #<col>)], projection=[#<col>, #<col>, #<col>, #<col>, #<col>]
+                                                    ProjectionExec: expr=[<exprs>]
+                                                      DataSourceExec: partitions=1, partition_sizes=[<sizes>]
+                                                    ProjectionExec: expr=[<exprs>]
+                                                      CoalesceBatchesExec: target_batch_size=8192
+                                                        CoalesceBatchesExec: target_batch_size=8192
+                                                          HashJoinExec: mode=CollectLeft, join_type=Inner, on=[(#<col>, #<col>)], projection=[#<col>, #<col>, #<col>, #<col>]
+                                                            ProjectionExec: expr=[<exprs>]
+                                                              DataSourceExec: partitions=1, partition_sizes=[<sizes>]
+                                                            RepartitionExec: partitioning=RoundRobinBatch(<partitions>), input_partitions=<partitions>
+                                                              ProjectionExec: expr=[<exprs>]
+                                                                DataSourceExec: partitions=1, partition_sizes=[<sizes>]
+                                          ProjectionExec: expr=[<exprs>]
+                                            CoalesceBatchesExec: target_batch_size=8192
+                                              CoalesceBatchesExec: target_batch_size=8192
+                                                FilterExec: _8@<id> = 1 AND _6@<id> = 2001, projection=[_0@<id>, _8@<id>]
+                                                  RepartitionExec: partitioning=RoundRobinBatch(<partitions>), input_partitions=<partitions>
+                                                    DataSourceExec: partitions=1, partition_sizes=[<sizes>]
+              ProjectionExec: expr=[<exprs>]
+                CoalesceBatchesExec: target_batch_size=8192
+                  CoalesceBatchesExec: target_batch_size=8192
+                    FilterExec: CASE WHEN avg(inventory.#<col>)@<id> = 0 THEN 0 ELSE stddev(inventory.#<col>)@<id> / avg(inventory.#<col>)@<id> END > 1
+                      ProjectionExec: expr=[<exprs>]
+                        AggregateExec: mode=FinalPartitioned, gby=[#<col> as #<col>, #<col> as #<col>, #<col> as #<col>, #<col> as #<col>], aggr=[stddev(inventory.#<col>), avg(inventory.#<col>)], ordering_mode=PartiallySorted([3])
+                          CoalesceBatchesExec: target_batch_size=8192
+                            RepartitionExec: partitioning=Hash([#<col>, #<col>, #<col>, #<col>], <partitions>), input_partitions=<partitions>
+                              CoalesceBatchesExec: target_batch_size=8192
+                                AggregateExec: mode=Partial, gby=[#<col> as #<col>, #<col> as #<col>, #<col> as #<col>, #<col> as #<col>], aggr=[stddev(inventory.#<col>), avg(inventory.#<col>)], ordering_mode=PartiallySorted([3])
+                                  CoalesceBatchesExec: target_batch_size=8192
+                                    CoalesceBatchesExec: target_batch_size=8192
+                                      HashJoinExec: mode=CollectLeft, join_type=Inner, on=[(#<col>, #<col>)], projection=[#<col>, #<col>, #<col>, #<col>, #<col>]
+                                        CoalescePartitionsExec
+                                          ProjectionExec: expr=[<exprs>]
+                                            CoalesceBatchesExec: target_batch_size=8192
+                                              CoalesceBatchesExec: target_batch_size=8192
+                                                HashJoinExec: mode=CollectLeft, join_type=Inner, on=[(#<col>, #<col>)], projection=[#<col>, #<col>, #<col>, #<col>, #<col>]
+                                                  ProjectionExec: expr=[<exprs>]
+                                                    DataSourceExec: partitions=1, partition_sizes=[<sizes>]
+                                                  ProjectionExec: expr=[<exprs>]
+                                                    CoalesceBatchesExec: target_batch_size=8192
+                                                      CoalesceBatchesExec: target_batch_size=8192
+                                                        HashJoinExec: mode=CollectLeft, join_type=Inner, on=[(#<col>, #<col>)], projection=[#<col>, #<col>, #<col>, #<col>]
+                                                          ProjectionExec: expr=[<exprs>]
+                                                            DataSourceExec: partitions=1, partition_sizes=[<sizes>]
+                                                          RepartitionExec: partitioning=RoundRobinBatch(<partitions>), input_partitions=<partitions>
+                                                            ProjectionExec: expr=[<exprs>]
+                                                              DataSourceExec: partitions=1, partition_sizes=[<sizes>]
+                                        ProjectionExec: expr=[<exprs>]
+                                          CoalesceBatchesExec: target_batch_size=8192
+                                            CoalesceBatchesExec: target_batch_size=8192
+                                              FilterExec: _8@<id> = 2 AND _6@<id> = 2001, projection=[_0@<id>, _8@<id>]
+                                                RepartitionExec: partitioning=RoundRobinBatch(<partitions>), input_partitions=<partitions>
+                                                  DataSourceExec: partitions=1, partition_sizes=[<sizes>]
+
+
+physical_plan after LimitAggregation:
+SAME TEXT AS ABOVE
+
+physical_plan after LimitPushPastWindows:
+SAME TEXT AS ABOVE
+
+physical_plan after LimitPushdown:
+SAME TEXT AS ABOVE
+
+physical_plan after ProjectionPushdown:
+SAME TEXT AS ABOVE
+
+physical_plan after EnsureCooperative:
+SAME TEXT AS ABOVE
+
+physical_plan after FilterPushdown(Post):
+SAME TEXT AS ABOVE
+
+physical_plan after RewriteExplicitRepartition:
+SAME TEXT AS ABOVE
+
+physical_plan after SanityCheckPlan:
+SAME TEXT AS ABOVE
+
+physical_plan:
+ProjectionExec: expr=[<exprs>]
+  ProjectionExec: expr=[<exprs>]
+    SortExec: [<sort_exprs>]
+      SortExec: expr=[<exprs>]
+        ProjectionExec: expr=[<exprs>]
+          CoalesceBatchesExec: target_batch_size=8192
+            CoalesceBatchesExec: target_batch_size=8192
+              HashJoinExec: mode=CollectLeft, join_type=Inner, on=[(#<col>, #<col>), (#<col>, #<col>)]
+                CoalescePartitionsExec
+                  ProjectionExec: expr=[<exprs>]
+                    CoalesceBatchesExec: target_batch_size=8192
+                      CoalesceBatchesExec: target_batch_size=8192
+                        FilterExec: CASE WHEN avg(inventory.#<col>)@<id> = 0 THEN 0 ELSE stddev(inventory.#<col>)@<id> / avg(inventory.#<col>)@<id> END > 1
+                          ProjectionExec: expr=[<exprs>]
+                            AggregateExec: mode=FinalPartitioned, gby=[#<col> as #<col>, #<col> as #<col>, #<col> as #<col>, #<col> as #<col>], aggr=[stddev(inventory.#<col>), avg(inventory.#<col>)], ordering_mode=PartiallySorted([3])
+                              CoalesceBatchesExec: target_batch_size=8192
+                                RepartitionExec: partitioning=Hash([#<col>, #<col>, #<col>, #<col>], <partitions>), input_partitions=<partitions>
+                                  CoalesceBatchesExec: target_batch_size=8192
+                                    AggregateExec: mode=Partial, gby=[#<col> as #<col>, #<col> as #<col>, #<col> as #<col>, #<col> as #<col>], aggr=[stddev(inventory.#<col>), avg(inventory.#<col>)], ordering_mode=PartiallySorted([3])
+                                      CoalesceBatchesExec: target_batch_size=8192
+                                        CoalesceBatchesExec: target_batch_size=8192
+                                          HashJoinExec: mode=CollectLeft, join_type=Inner, on=[(#<col>, #<col>)], projection=[#<col>, #<col>, #<col>, #<col>, #<col>]
+                                            CoalescePartitionsExec
+                                              ProjectionExec: expr=[<exprs>]
+                                                CoalesceBatchesExec: target_batch_size=8192
+                                                  CoalesceBatchesExec: target_batch_size=8192
+                                                    HashJoinExec: mode=CollectLeft, join_type=Inner, on=[(#<col>, #<col>)], projection=[#<col>, #<col>, #<col>, #<col>, #<col>]
+                                                      ProjectionExec: expr=[<exprs>]
+                                                        DataSourceExec: partitions=1, partition_sizes=[<sizes>]
+                                                      ProjectionExec: expr=[<exprs>]
+                                                        CoalesceBatchesExec: target_batch_size=8192
+                                                          CoalesceBatchesExec: target_batch_size=8192
+                                                            HashJoinExec: mode=CollectLeft, join_type=Inner, on=[(#<col>, #<col>)], projection=[#<col>, #<col>, #<col>, #<col>]
+                                                              ProjectionExec: expr=[<exprs>]
+                                                                DataSourceExec: partitions=1, partition_sizes=[<sizes>]
+                                                              RepartitionExec: partitioning=RoundRobinBatch(<partitions>), input_partitions=<partitions>
+                                                                ProjectionExec: expr=[<exprs>]
+                                                                  DataSourceExec: partitions=1, partition_sizes=[<sizes>]
+                                            ProjectionExec: expr=[<exprs>]
+                                              CoalesceBatchesExec: target_batch_size=8192
+                                                CoalesceBatchesExec: target_batch_size=8192
+                                                  FilterExec: _8@<id> = 1 AND _6@<id> = 2001, projection=[_0@<id>, _8@<id>]
+                                                    RepartitionExec: partitioning=RoundRobinBatch(<partitions>), input_partitions=<partitions>
+                                                      DataSourceExec: partitions=1, partition_sizes=[<sizes>]
+                ProjectionExec: expr=[<exprs>]
+                  CoalesceBatchesExec: target_batch_size=8192
+                    CoalesceBatchesExec: target_batch_size=8192
+                      FilterExec: CASE WHEN avg(inventory.#<col>)@<id> = 0 THEN 0 ELSE stddev(inventory.#<col>)@<id> / avg(inventory.#<col>)@<id> END > 1
+                        ProjectionExec: expr=[<exprs>]
+                          AggregateExec: mode=FinalPartitioned, gby=[#<col> as #<col>, #<col> as #<col>, #<col> as #<col>, #<col> as #<col>], aggr=[stddev(inventory.#<col>), avg(inventory.#<col>)], ordering_mode=PartiallySorted([3])
+                            CoalesceBatchesExec: target_batch_size=8192
+                              RepartitionExec: partitioning=Hash([#<col>, #<col>, #<col>, #<col>], <partitions>), input_partitions=<partitions>
+                                CoalesceBatchesExec: target_batch_size=8192
+                                  AggregateExec: mode=Partial, gby=[#<col> as #<col>, #<col> as #<col>, #<col> as #<col>, #<col> as #<col>], aggr=[stddev(inventory.#<col>), avg(inventory.#<col>)], ordering_mode=PartiallySorted([3])
+                                    CoalesceBatchesExec: target_batch_size=8192
+                                      CoalesceBatchesExec: target_batch_size=8192
+                                        HashJoinExec: mode=CollectLeft, join_type=Inner, on=[(#<col>, #<col>)], projection=[#<col>, #<col>, #<col>, #<col>, #<col>]
+                                          CoalescePartitionsExec
+                                            ProjectionExec: expr=[<exprs>]
+                                              CoalesceBatchesExec: target_batch_size=8192
+                                                CoalesceBatchesExec: target_batch_size=8192
+                                                  HashJoinExec: mode=CollectLeft, join_type=Inner, on=[(#<col>, #<col>)], projection=[#<col>, #<col>, #<col>, #<col>, #<col>]
+                                                    ProjectionExec: expr=[<exprs>]
+                                                      DataSourceExec: partitions=1, partition_sizes=[<sizes>]
+                                                    ProjectionExec: expr=[<exprs>]
+                                                      CoalesceBatchesExec: target_batch_size=8192
+                                                        CoalesceBatchesExec: target_batch_size=8192
+                                                          HashJoinExec: mode=CollectLeft, join_type=Inner, on=[(#<col>, #<col>)], projection=[#<col>, #<col>, #<col>, #<col>]
+                                                            ProjectionExec: expr=[<exprs>]
+                                                              DataSourceExec: partitions=1, partition_sizes=[<sizes>]
+                                                            RepartitionExec: partitioning=RoundRobinBatch(<partitions>), input_partitions=<partitions>
+                                                              ProjectionExec: expr=[<exprs>]
+                                                                DataSourceExec: partitions=1, partition_sizes=[<sizes>]
+                                          ProjectionExec: expr=[<exprs>]
+                                            CoalesceBatchesExec: target_batch_size=8192
+                                              CoalesceBatchesExec: target_batch_size=8192
+                                                FilterExec: _8@<id> = 2 AND _6@<id> = 2001, projection=[_0@<id>, _8@<id>]
+                                                  RepartitionExec: partitioning=RoundRobinBatch(<partitions>), input_partitions=<partitions>
+                                                    DataSourceExec: partitions=1, partition_sizes=[<sizes>]
+
+
+== Physical Plan ==
+ProjectionExec: expr=[<exprs>]
+  ProjectionExec: expr=[<exprs>]
+    SortExec: [<sort_exprs>]
+      SortExec: expr=[<exprs>]
+        ProjectionExec: expr=[<exprs>]
+          CoalesceBatchesExec: target_batch_size=8192
+            CoalesceBatchesExec: target_batch_size=8192
+              HashJoinExec: mode=CollectLeft, join_type=Inner, on=[(#<col>, #<col>), (#<col>, #<col>)]
+                CoalescePartitionsExec
+                  ProjectionExec: expr=[<exprs>]
+                    CoalesceBatchesExec: target_batch_size=8192
+                      CoalesceBatchesExec: target_batch_size=8192
+                        FilterExec: CASE WHEN avg(inventory.#<col>)@<id> = 0 THEN 0 ELSE stddev(inventory.#<col>)@<id> / avg(inventory.#<col>)@<id> END > 1
+                          ProjectionExec: expr=[<exprs>]
+                            AggregateExec: mode=FinalPartitioned, gby=[#<col> as #<col>, #<col> as #<col>, #<col> as #<col>, #<col> as #<col>], aggr=[stddev(inventory.#<col>), avg(inventory.#<col>)], ordering_mode=PartiallySorted([3])
+                              CoalesceBatchesExec: target_batch_size=8192
+                                RepartitionExec: partitioning=Hash([#<col>, #<col>, #<col>, #<col>], <partitions>), input_partitions=<partitions>
+                                  CoalesceBatchesExec: target_batch_size=8192
+                                    AggregateExec: mode=Partial, gby=[#<col> as #<col>, #<col> as #<col>, #<col> as #<col>, #<col> as #<col>], aggr=[stddev(inventory.#<col>), avg(inventory.#<col>)], ordering_mode=PartiallySorted([3])
+                                      CoalesceBatchesExec: target_batch_size=8192
+                                        CoalesceBatchesExec: target_batch_size=8192
+                                          HashJoinExec: mode=CollectLeft, join_type=Inner, on=[(#<col>, #<col>)], projection=[#<col>, #<col>, #<col>, #<col>, #<col>]
+                                            CoalescePartitionsExec
+                                              ProjectionExec: expr=[<exprs>]
+                                                CoalesceBatchesExec: target_batch_size=8192
+                                                  CoalesceBatchesExec: target_batch_size=8192
+                                                    HashJoinExec: mode=CollectLeft, join_type=Inner, on=[(#<col>, #<col>)], projection=[#<col>, #<col>, #<col>, #<col>, #<col>]
+                                                      ProjectionExec: expr=[<exprs>]
+                                                        DataSourceExec: partitions=1, partition_sizes=[<sizes>]
+                                                      ProjectionExec: expr=[<exprs>]
+                                                        CoalesceBatchesExec: target_batch_size=8192
+                                                          CoalesceBatchesExec: target_batch_size=8192
+                                                            HashJoinExec: mode=CollectLeft, join_type=Inner, on=[(#<col>, #<col>)], projection=[#<col>, #<col>, #<col>, #<col>]
+                                                              ProjectionExec: expr=[<exprs>]
+                                                                DataSourceExec: partitions=1, partition_sizes=[<sizes>]
+                                                              RepartitionExec: partitioning=RoundRobinBatch(<partitions>), input_partitions=<partitions>
+                                                                ProjectionExec: expr=[<exprs>]
+                                                                  DataSourceExec: partitions=1, partition_sizes=[<sizes>]
+                                            ProjectionExec: expr=[<exprs>]
+                                              CoalesceBatchesExec: target_batch_size=8192
+                                                CoalesceBatchesExec: target_batch_size=8192
+                                                  FilterExec: _8@<id> = 1 AND _6@<id> = 2001, projection=[_0@<id>, _8@<id>]
+                                                    RepartitionExec: partitioning=RoundRobinBatch(<partitions>), input_partitions=<partitions>
+                                                      DataSourceExec: partitions=1, partition_sizes=[<sizes>]
+                ProjectionExec: expr=[<exprs>]
+                  CoalesceBatchesExec: target_batch_size=8192
+                    CoalesceBatchesExec: target_batch_size=8192
+                      FilterExec: CASE WHEN avg(inventory.#<col>)@<id> = 0 THEN 0 ELSE stddev(inventory.#<col>)@<id> / avg(inventory.#<col>)@<id> END > 1
+                        ProjectionExec: expr=[<exprs>]
+                          AggregateExec: mode=FinalPartitioned, gby=[#<col> as #<col>, #<col> as #<col>, #<col> as #<col>, #<col> as #<col>], aggr=[stddev(inventory.#<col>), avg(inventory.#<col>)], ordering_mode=PartiallySorted([3])
+                            CoalesceBatchesExec: target_batch_size=8192
+                              RepartitionExec: partitioning=Hash([#<col>, #<col>, #<col>, #<col>], <partitions>), input_partitions=<partitions>
+                                CoalesceBatchesExec: target_batch_size=8192
+                                  AggregateExec: mode=Partial, gby=[#<col> as #<col>, #<col> as #<col>, #<col> as #<col>, #<col> as #<col>], aggr=[stddev(inventory.#<col>), avg(inventory.#<col>)], ordering_mode=PartiallySorted([3])
+                                    CoalesceBatchesExec: target_batch_size=8192
+                                      CoalesceBatchesExec: target_batch_size=8192
+                                        HashJoinExec: mode=CollectLeft, join_type=Inner, on=[(#<col>, #<col>)], projection=[#<col>, #<col>, #<col>, #<col>, #<col>]
+                                          CoalescePartitionsExec
+                                            ProjectionExec: expr=[<exprs>]
+                                              CoalesceBatchesExec: target_batch_size=8192
+                                                CoalesceBatchesExec: target_batch_size=8192
+                                                  HashJoinExec: mode=CollectLeft, join_type=Inner, on=[(#<col>, #<col>)], projection=[#<col>, #<col>, #<col>, #<col>, #<col>]
+                                                    ProjectionExec: expr=[<exprs>]
+                                                      DataSourceExec: partitions=1, partition_sizes=[<sizes>]
+                                                    ProjectionExec: expr=[<exprs>]
+                                                      CoalesceBatchesExec: target_batch_size=8192
+                                                        CoalesceBatchesExec: target_batch_size=8192
+                                                          HashJoinExec: mode=CollectLeft, join_type=Inner, on=[(#<col>, #<col>)], projection=[#<col>, #<col>, #<col>, #<col>]
+                                                            ProjectionExec: expr=[<exprs>]
+                                                              DataSourceExec: partitions=1, partition_sizes=[<sizes>]
+                                                            RepartitionExec: partitioning=RoundRobinBatch(<partitions>), input_partitions=<partitions>
+                                                              ProjectionExec: expr=[<exprs>]
+                                                                DataSourceExec: partitions=1, partition_sizes=[<sizes>]
+                                          ProjectionExec: expr=[<exprs>]
+                                            CoalesceBatchesExec: target_batch_size=8192
+                                              CoalesceBatchesExec: target_batch_size=8192
+                                                FilterExec: _8@<id> = 2 AND _6@<id> = 2001, projection=[_0@<id>, _8@<id>]
+                                                  RepartitionExec: partitioning=RoundRobinBatch(<partitions>), input_partitions=<partitions>
+                                                    DataSourceExec: partitions=1, partition_sizes=[<sizes>]

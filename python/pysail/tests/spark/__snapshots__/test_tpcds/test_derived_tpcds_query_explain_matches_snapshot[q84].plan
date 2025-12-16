@@ -1,0 +1,1081 @@
+== Codegen ==
+Whole-stage codegen is not supported; showing physical plan instead.
+
+== Plan Steps ==
+initial_logical_plan:
+Limit: skip=0, fetch=Int32(100)
+  Projection: <exprs>
+    Sort: <exprs>
+      Projection: <exprs>
+        Filter: customer_address.#<col> = Utf8("White Oak") AND customer.#<col> = customer_address.#<col> AND income_band.#<col> >= Int32(45626) AND income_band.#<col> <= Int32(45626) + Int32(50000) AND income_band.#<col> = household_demographics.#<col> AND customer_demographics.#<col> = customer.#<col> AND household_demographics.#<col> = customer.#<col> AND store_returns.#<col> = customer_demographics.#<col>
+          Cross Join: 
+            Cross Join: 
+              Cross Join: 
+                Cross Join: 
+                  Cross Join: 
+                    Projection: <exprs>
+                      Projection: <exprs>
+                        SubqueryAlias: customer
+                          Projection: <exprs>
+                            Projection: <exprs>
+                              TableScan: ?table?
+                    Projection: <exprs>
+                      Projection: <exprs>
+                        SubqueryAlias: customer_address
+                          Projection: <exprs>
+                            Projection: <exprs>
+                              TableScan: ?table?
+                  Projection: <exprs>
+                    Projection: <exprs>
+                      SubqueryAlias: customer_demographics
+                        Projection: <exprs>
+                          Projection: <exprs>
+                            TableScan: ?table?
+                Projection: <exprs>
+                  Projection: <exprs>
+                    SubqueryAlias: household_demographics
+                      Projection: <exprs>
+                        Projection: <exprs>
+                          TableScan: ?table?
+              Projection: <exprs>
+                Projection: <exprs>
+                  SubqueryAlias: income_band
+                    Projection: <exprs>
+                      Projection: <exprs>
+                        TableScan: ?table?
+            Projection: <exprs>
+              Projection: <exprs>
+                SubqueryAlias: store_returns
+                  Projection: <exprs>
+                    Projection: <exprs>
+                      TableScan: ?table?
+
+logical_plan after resolve_grouping_function:
+SAME TEXT AS ABOVE
+
+logical_plan after type_coercion:
+Limit: skip=0, fetch=CAST(Int32(100) AS Int64)
+  Projection: <exprs>
+    Sort: <exprs>
+      Projection: <exprs>
+        Filter: customer_address.#<col> = Utf8("White Oak") AND customer.#<col> = customer_address.#<col> AND income_band.#<col> >= CAST(Int32(45626) AS Int64) AND income_band.#<col> <= Int32(45626) + Int32(50000) AND income_band.#<col> = household_demographics.#<col> AND CAST(customer_demographics.#<col> AS Float64) = customer.#<col> AND CAST(household_demographics.#<col> AS Float64) = customer.#<col> AND store_returns.#<col> = CAST(customer_demographics.#<col> AS Float64)
+          Cross Join: 
+            Cross Join: 
+              Cross Join: 
+                Cross Join: 
+                  Cross Join: 
+                    Projection: <exprs>
+                      Projection: <exprs>
+                        SubqueryAlias: customer
+                          Projection: <exprs>
+                            Projection: <exprs>
+                              TableScan: ?table?
+                    Projection: <exprs>
+                      Projection: <exprs>
+                        SubqueryAlias: customer_address
+                          Projection: <exprs>
+                            Projection: <exprs>
+                              TableScan: ?table?
+                  Projection: <exprs>
+                    Projection: <exprs>
+                      SubqueryAlias: customer_demographics
+                        Projection: <exprs>
+                          Projection: <exprs>
+                            TableScan: ?table?
+                Projection: <exprs>
+                  Projection: <exprs>
+                    SubqueryAlias: household_demographics
+                      Projection: <exprs>
+                        Projection: <exprs>
+                          TableScan: ?table?
+              Projection: <exprs>
+                Projection: <exprs>
+                  SubqueryAlias: income_band
+                    Projection: <exprs>
+                      Projection: <exprs>
+                        TableScan: ?table?
+            Projection: <exprs>
+              Projection: <exprs>
+                SubqueryAlias: store_returns
+                  Projection: <exprs>
+                    Projection: <exprs>
+                      TableScan: ?table?
+
+analyzed_logical_plan:
+SAME TEXT AS ABOVE
+
+logical_plan after eliminate_nested_union:
+SAME TEXT AS ABOVE
+
+logical_plan after simplify_expressions:
+Limit: skip=0, fetch=100
+  Projection: <exprs>
+    Sort: <exprs>
+      Projection: <exprs>
+        Filter: customer_address.#<col> = Utf8("White Oak") AND customer_address.#<col> = customer.#<col> AND income_band.#<col> >= Int64(45626) AND income_band.#<col> <= Int32(95626) AND income_band.#<col> = household_demographics.#<col> AND CAST(customer_demographics.#<col> AS Float64) = customer.#<col> AND CAST(household_demographics.#<col> AS Float64) = customer.#<col> AND store_returns.#<col> = CAST(customer_demographics.#<col> AS Float64)
+          Cross Join: 
+            Cross Join: 
+              Cross Join: 
+                Cross Join: 
+                  Cross Join: 
+                    Projection: <exprs>
+                      Projection: <exprs>
+                        SubqueryAlias: customer
+                          Projection: <exprs>
+                            Projection: <exprs>
+                              TableScan: ?table?
+                    Projection: <exprs>
+                      Projection: <exprs>
+                        SubqueryAlias: customer_address
+                          Projection: <exprs>
+                            Projection: <exprs>
+                              TableScan: ?table?
+                  Projection: <exprs>
+                    Projection: <exprs>
+                      SubqueryAlias: customer_demographics
+                        Projection: <exprs>
+                          Projection: <exprs>
+                            TableScan: ?table?
+                Projection: <exprs>
+                  Projection: <exprs>
+                    SubqueryAlias: household_demographics
+                      Projection: <exprs>
+                        Projection: <exprs>
+                          TableScan: ?table?
+              Projection: <exprs>
+                Projection: <exprs>
+                  SubqueryAlias: income_band
+                    Projection: <exprs>
+                      Projection: <exprs>
+                        TableScan: ?table?
+            Projection: <exprs>
+              Projection: <exprs>
+                SubqueryAlias: store_returns
+                  Projection: <exprs>
+                    Projection: <exprs>
+                      TableScan: ?table?
+
+logical_plan after replace_distinct_aggregate:
+SAME TEXT AS ABOVE
+
+logical_plan after eliminate_join:
+SAME TEXT AS ABOVE
+
+logical_plan after decorrelate_predicate_subquery:
+SAME TEXT AS ABOVE
+
+logical_plan after scalar_subquery_to_join:
+SAME TEXT AS ABOVE
+
+logical_plan after decorrelate_lateral_join:
+SAME TEXT AS ABOVE
+
+logical_plan after extract_equijoin_predicate:
+SAME TEXT AS ABOVE
+
+logical_plan after eliminate_duplicated_expr:
+SAME TEXT AS ABOVE
+
+logical_plan after eliminate_filter:
+SAME TEXT AS ABOVE
+
+logical_plan after eliminate_cross_join:
+Limit: skip=0, fetch=100
+  Projection: <exprs>
+    Sort: <exprs>
+      Projection: <exprs>
+        Filter: customer_address.#<col> = Utf8("White Oak") AND income_band.#<col> >= Int64(45626) AND income_band.#<col> <= Int32(95626)
+          Inner Join: CAST(customer_demographics.#<col> AS Float64) = store_returns.#<col>
+            Inner Join: household_demographics.#<col> = income_band.#<col>
+              Inner Join: customer.#<col> = CAST(household_demographics.#<col> AS Float64)
+                Inner Join: customer.#<col> = CAST(customer_demographics.#<col> AS Float64)
+                  Inner Join: customer.#<col> = customer_address.#<col>
+                    Projection: <exprs>
+                      Projection: <exprs>
+                        SubqueryAlias: customer
+                          Projection: <exprs>
+                            Projection: <exprs>
+                              TableScan: ?table?
+                    Projection: <exprs>
+                      Projection: <exprs>
+                        SubqueryAlias: customer_address
+                          Projection: <exprs>
+                            Projection: <exprs>
+                              TableScan: ?table?
+                  Projection: <exprs>
+                    Projection: <exprs>
+                      SubqueryAlias: customer_demographics
+                        Projection: <exprs>
+                          Projection: <exprs>
+                            TableScan: ?table?
+                Projection: <exprs>
+                  Projection: <exprs>
+                    SubqueryAlias: household_demographics
+                      Projection: <exprs>
+                        Projection: <exprs>
+                          TableScan: ?table?
+              Projection: <exprs>
+                Projection: <exprs>
+                  SubqueryAlias: income_band
+                    Projection: <exprs>
+                      Projection: <exprs>
+                        TableScan: ?table?
+            Projection: <exprs>
+              Projection: <exprs>
+                SubqueryAlias: store_returns
+                  Projection: <exprs>
+                    Projection: <exprs>
+                      TableScan: ?table?
+
+logical_plan after eliminate_limit:
+SAME TEXT AS ABOVE
+
+logical_plan after propagate_empty_relation:
+SAME TEXT AS ABOVE
+
+logical_plan after eliminate_one_union:
+SAME TEXT AS ABOVE
+
+logical_plan after filter_null_join_keys:
+SAME TEXT AS ABOVE
+
+logical_plan after eliminate_outer_join:
+SAME TEXT AS ABOVE
+
+logical_plan after push_down_limit:
+Projection: <exprs>
+  Limit: skip=0, fetch=100
+    Sort: <exprs>
+      Projection: <exprs>
+        Filter: customer_address.#<col> = Utf8("White Oak") AND income_band.#<col> >= Int64(45626) AND income_band.#<col> <= Int32(95626)
+          Inner Join: CAST(customer_demographics.#<col> AS Float64) = store_returns.#<col>
+            Inner Join: household_demographics.#<col> = income_band.#<col>
+              Inner Join: customer.#<col> = CAST(household_demographics.#<col> AS Float64)
+                Inner Join: customer.#<col> = CAST(customer_demographics.#<col> AS Float64)
+                  Inner Join: customer.#<col> = customer_address.#<col>
+                    Projection: <exprs>
+                      Projection: <exprs>
+                        SubqueryAlias: customer
+                          Projection: <exprs>
+                            Projection: <exprs>
+                              TableScan: ?table?
+                    Projection: <exprs>
+                      Projection: <exprs>
+                        SubqueryAlias: customer_address
+                          Projection: <exprs>
+                            Projection: <exprs>
+                              TableScan: ?table?
+                  Projection: <exprs>
+                    Projection: <exprs>
+                      SubqueryAlias: customer_demographics
+                        Projection: <exprs>
+                          Projection: <exprs>
+                            TableScan: ?table?
+                Projection: <exprs>
+                  Projection: <exprs>
+                    SubqueryAlias: household_demographics
+                      Projection: <exprs>
+                        Projection: <exprs>
+                          TableScan: ?table?
+              Projection: <exprs>
+                Projection: <exprs>
+                  SubqueryAlias: income_band
+                    Projection: <exprs>
+                      Projection: <exprs>
+                        TableScan: ?table?
+            Projection: <exprs>
+              Projection: <exprs>
+                SubqueryAlias: store_returns
+                  Projection: <exprs>
+                    Projection: <exprs>
+                      TableScan: ?table?
+
+logical_plan after push_down_filter:
+Projection: <exprs>
+  Limit: skip=0, fetch=100
+    Sort: <exprs>
+      Projection: <exprs>
+        Inner Join: CAST(customer_demographics.#<col> AS Float64) = store_returns.#<col>
+          Inner Join: household_demographics.#<col> = income_band.#<col>
+            Inner Join: customer.#<col> = CAST(household_demographics.#<col> AS Float64)
+              Inner Join: customer.#<col> = CAST(customer_demographics.#<col> AS Float64)
+                Inner Join: customer.#<col> = customer_address.#<col>
+                  Projection: <exprs>
+                    Projection: <exprs>
+                      SubqueryAlias: customer
+                        Projection: <exprs>
+                          Projection: <exprs>
+                            TableScan: ?table?
+                  Projection: <exprs>
+                    Projection: <exprs>
+                      SubqueryAlias: customer_address
+                        Projection: <exprs>
+                          Projection: <exprs>
+                            Filter: ?table?._6 = Utf8("White Oak")
+                              TableScan: ?table?
+                Projection: <exprs>
+                  Projection: <exprs>
+                    SubqueryAlias: customer_demographics
+                      Projection: <exprs>
+                        Projection: <exprs>
+                          TableScan: ?table?
+              Projection: <exprs>
+                Projection: <exprs>
+                  SubqueryAlias: household_demographics
+                    Projection: <exprs>
+                      Projection: <exprs>
+                        TableScan: ?table?
+            Projection: <exprs>
+              Projection: <exprs>
+                SubqueryAlias: income_band
+                  Projection: <exprs>
+                    Projection: <exprs>
+                      Filter: ?table?._1 >= Int64(45626) AND ?table?._2 <= Int32(95626)
+                        TableScan: ?table?
+          Projection: <exprs>
+            Projection: <exprs>
+              SubqueryAlias: store_returns
+                Projection: <exprs>
+                  Projection: <exprs>
+                    TableScan: ?table?
+
+logical_plan after single_distinct_aggregation_to_group_by:
+SAME TEXT AS ABOVE
+
+logical_plan after eliminate_group_by_constant:
+SAME TEXT AS ABOVE
+
+logical_plan after common_sub_expression_eliminate:
+SAME TEXT AS ABOVE
+
+logical_plan after optimize_projections:
+Projection: <exprs>
+  Limit: skip=0, fetch=100
+    Sort: <exprs>
+      Projection: <exprs>
+        Inner Join: CAST(customer_demographics.#<col> AS Float64) = store_returns.#<col>
+          Projection: <exprs>
+            Inner Join: household_demographics.#<col> = income_band.#<col>
+              Projection: <exprs>
+                Inner Join: customer.#<col> = CAST(household_demographics.#<col> AS Float64)
+                  Projection: <exprs>
+                    Inner Join: customer.#<col> = CAST(customer_demographics.#<col> AS Float64)
+                      Projection: <exprs>
+                        Inner Join: customer.#<col> = customer_address.#<col>
+                          Projection: <exprs>
+                            SubqueryAlias: customer
+                              Projection: <exprs>
+                                TableScan: ?table? projection=[_1, _2, _3, _4, _8, _9]
+                          Projection: <exprs>
+                            SubqueryAlias: customer_address
+                              Projection: <exprs>
+                                Filter: ?table?._6 = Utf8("White Oak")
+                                  TableScan: ?table? projection=[_0, _6]
+                      Projection: <exprs>
+                        SubqueryAlias: customer_demographics
+                          Projection: <exprs>
+                            TableScan: ?table? projection=[_0]
+                  Projection: <exprs>
+                    SubqueryAlias: household_demographics
+                      Projection: <exprs>
+                        TableScan: ?table? projection=[_0, _1]
+              Projection: <exprs>
+                SubqueryAlias: income_band
+                  Projection: <exprs>
+                    Filter: ?table?._1 >= Int64(45626) AND ?table?._2 <= Int32(95626)
+                      TableScan: ?table? projection=[_0, _1, _2]
+          Projection: <exprs>
+            SubqueryAlias: store_returns
+              Projection: <exprs>
+                TableScan: ?table? projection=[_4]
+
+logical_plan after eliminate_nested_union:
+SAME TEXT AS ABOVE
+
+logical_plan after simplify_expressions:
+SAME TEXT AS ABOVE
+
+logical_plan after replace_distinct_aggregate:
+SAME TEXT AS ABOVE
+
+logical_plan after eliminate_join:
+SAME TEXT AS ABOVE
+
+logical_plan after decorrelate_predicate_subquery:
+SAME TEXT AS ABOVE
+
+logical_plan after scalar_subquery_to_join:
+SAME TEXT AS ABOVE
+
+logical_plan after decorrelate_lateral_join:
+SAME TEXT AS ABOVE
+
+logical_plan after extract_equijoin_predicate:
+SAME TEXT AS ABOVE
+
+logical_plan after eliminate_duplicated_expr:
+SAME TEXT AS ABOVE
+
+logical_plan after eliminate_filter:
+SAME TEXT AS ABOVE
+
+logical_plan after eliminate_cross_join:
+SAME TEXT AS ABOVE
+
+logical_plan after eliminate_limit:
+SAME TEXT AS ABOVE
+
+logical_plan after propagate_empty_relation:
+SAME TEXT AS ABOVE
+
+logical_plan after eliminate_one_union:
+SAME TEXT AS ABOVE
+
+logical_plan after filter_null_join_keys:
+SAME TEXT AS ABOVE
+
+logical_plan after eliminate_outer_join:
+SAME TEXT AS ABOVE
+
+logical_plan after push_down_limit:
+Projection: <exprs>
+  Sort: <exprs>
+    Projection: <exprs>
+      Inner Join: CAST(customer_demographics.#<col> AS Float64) = store_returns.#<col>
+        Projection: <exprs>
+          Inner Join: household_demographics.#<col> = income_band.#<col>
+            Projection: <exprs>
+              Inner Join: customer.#<col> = CAST(household_demographics.#<col> AS Float64)
+                Projection: <exprs>
+                  Inner Join: customer.#<col> = CAST(customer_demographics.#<col> AS Float64)
+                    Projection: <exprs>
+                      Inner Join: customer.#<col> = customer_address.#<col>
+                        Projection: <exprs>
+                          SubqueryAlias: customer
+                            Projection: <exprs>
+                              TableScan: ?table? projection=[_1, _2, _3, _4, _8, _9]
+                        Projection: <exprs>
+                          SubqueryAlias: customer_address
+                            Projection: <exprs>
+                              Filter: ?table?._6 = Utf8("White Oak")
+                                TableScan: ?table? projection=[_0, _6]
+                    Projection: <exprs>
+                      SubqueryAlias: customer_demographics
+                        Projection: <exprs>
+                          TableScan: ?table? projection=[_0]
+                Projection: <exprs>
+                  SubqueryAlias: household_demographics
+                    Projection: <exprs>
+                      TableScan: ?table? projection=[_0, _1]
+            Projection: <exprs>
+              SubqueryAlias: income_band
+                Projection: <exprs>
+                  Filter: ?table?._1 >= Int64(45626) AND ?table?._2 <= Int32(95626)
+                    TableScan: ?table? projection=[_0, _1, _2]
+        Projection: <exprs>
+          SubqueryAlias: store_returns
+            Projection: <exprs>
+              TableScan: ?table? projection=[_4]
+
+logical_plan after push_down_filter:
+SAME TEXT AS ABOVE
+
+logical_plan after single_distinct_aggregation_to_group_by:
+SAME TEXT AS ABOVE
+
+logical_plan after eliminate_group_by_constant:
+SAME TEXT AS ABOVE
+
+logical_plan after common_sub_expression_eliminate:
+SAME TEXT AS ABOVE
+
+logical_plan after optimize_projections:
+SAME TEXT AS ABOVE
+
+logical_plan after eliminate_nested_union:
+SAME TEXT AS ABOVE
+
+logical_plan after simplify_expressions:
+SAME TEXT AS ABOVE
+
+logical_plan after replace_distinct_aggregate:
+SAME TEXT AS ABOVE
+
+logical_plan after eliminate_join:
+SAME TEXT AS ABOVE
+
+logical_plan after decorrelate_predicate_subquery:
+SAME TEXT AS ABOVE
+
+logical_plan after scalar_subquery_to_join:
+SAME TEXT AS ABOVE
+
+logical_plan after decorrelate_lateral_join:
+SAME TEXT AS ABOVE
+
+logical_plan after extract_equijoin_predicate:
+SAME TEXT AS ABOVE
+
+logical_plan after eliminate_duplicated_expr:
+SAME TEXT AS ABOVE
+
+logical_plan after eliminate_filter:
+SAME TEXT AS ABOVE
+
+logical_plan after eliminate_cross_join:
+SAME TEXT AS ABOVE
+
+logical_plan after eliminate_limit:
+SAME TEXT AS ABOVE
+
+logical_plan after propagate_empty_relation:
+SAME TEXT AS ABOVE
+
+logical_plan after eliminate_one_union:
+SAME TEXT AS ABOVE
+
+logical_plan after filter_null_join_keys:
+SAME TEXT AS ABOVE
+
+logical_plan after eliminate_outer_join:
+SAME TEXT AS ABOVE
+
+logical_plan after push_down_limit:
+SAME TEXT AS ABOVE
+
+logical_plan after push_down_filter:
+SAME TEXT AS ABOVE
+
+logical_plan after single_distinct_aggregation_to_group_by:
+SAME TEXT AS ABOVE
+
+logical_plan after eliminate_group_by_constant:
+SAME TEXT AS ABOVE
+
+logical_plan after common_sub_expression_eliminate:
+SAME TEXT AS ABOVE
+
+logical_plan after optimize_projections:
+SAME TEXT AS ABOVE
+
+logical_plan:
+Projection: <exprs>
+  Sort: <exprs>
+    Projection: <exprs>
+      Inner Join: CAST(customer_demographics.#<col> AS Float64) = store_returns.#<col>
+        Projection: <exprs>
+          Inner Join: household_demographics.#<col> = income_band.#<col>
+            Projection: <exprs>
+              Inner Join: customer.#<col> = CAST(household_demographics.#<col> AS Float64)
+                Projection: <exprs>
+                  Inner Join: customer.#<col> = CAST(customer_demographics.#<col> AS Float64)
+                    Projection: <exprs>
+                      Inner Join: customer.#<col> = customer_address.#<col>
+                        Projection: <exprs>
+                          SubqueryAlias: customer
+                            Projection: <exprs>
+                              TableScan: ?table? projection=[_1, _2, _3, _4, _8, _9]
+                        Projection: <exprs>
+                          SubqueryAlias: customer_address
+                            Projection: <exprs>
+                              Filter: ?table?._6 = Utf8("White Oak")
+                                TableScan: ?table? projection=[_0, _6]
+                    Projection: <exprs>
+                      SubqueryAlias: customer_demographics
+                        Projection: <exprs>
+                          TableScan: ?table? projection=[_0]
+                Projection: <exprs>
+                  SubqueryAlias: household_demographics
+                    Projection: <exprs>
+                      TableScan: ?table? projection=[_0, _1]
+            Projection: <exprs>
+              SubqueryAlias: income_band
+                Projection: <exprs>
+                  Filter: ?table?._1 >= Int64(45626) AND ?table?._2 <= Int32(95626)
+                    TableScan: ?table? projection=[_0, _1, _2]
+        Projection: <exprs>
+          SubqueryAlias: store_returns
+            Projection: <exprs>
+              TableScan: ?table? projection=[_4]
+
+initial_physical_plan:
+ProjectionExec: expr=[<exprs>]
+  SortExec: [<sort_exprs>], fetch=100
+    SortExec: expr=[<exprs>]
+      ProjectionExec: expr=[<exprs>]
+        RepartitionExec: partitioning=RoundRobinBatch(<partitions>), input_partitions=<partitions>
+          CoalesceBatchesExec: target_batch_size=8192
+            HashJoinExec: mode=CollectLeft, join_type=Inner, on=[(CAST(customer_demographics.#<col> AS Float64)@<id>, #<col>)], projection=[#<col>, #<col>, #<col>, #<col>, #<col>]
+              CoalescePartitionsExec
+                ProjectionExec: expr=[<exprs>]
+                  CoalesceBatchesExec: target_batch_size=8192
+                    HashJoinExec: mode=CollectLeft, join_type=Inner, on=[(#<col>, #<col>)], projection=[#<col>, #<col>, #<col>, #<col>]
+                      ProjectionExec: expr=[<exprs>]
+                        CoalesceBatchesExec: target_batch_size=8192
+                          FilterExec: _1@<id> >= 45626 AND _2@<id> <= 95626, projection=[_0@<id>]
+                            DataSourceExec: partitions=1, partition_sizes=[<sizes>]
+                      RepartitionExec: partitioning=RoundRobinBatch(<partitions>), input_partitions=<partitions>
+                        CoalesceBatchesExec: target_batch_size=8192
+                          HashJoinExec: mode=CollectLeft, join_type=Inner, on=[(#<col>, CAST(household_demographics.#<col> AS Float64)@<id>)], projection=[#<col>, #<col>, #<col>, #<col>, #<col>]
+                            CoalescePartitionsExec
+                              CoalesceBatchesExec: target_batch_size=8192
+                                HashJoinExec: mode=CollectLeft, join_type=Inner, on=[(#<col>, CAST(customer_demographics.#<col> AS Float64)@<id>)], projection=[#<col>, #<col>, #<col>, #<col>, #<col>]
+                                  CoalesceBatchesExec: target_batch_size=8192
+                                    HashJoinExec: mode=CollectLeft, join_type=Inner, on=[(#<col>, #<col>)], projection=[#<col>, #<col>, #<col>, #<col>, #<col>]
+                                      ProjectionExec: expr=[<exprs>]
+                                        CoalesceBatchesExec: target_batch_size=8192
+                                          FilterExec: _6@<id> = White Oak, projection=[_0@<id>]
+                                            DataSourceExec: partitions=1, partition_sizes=[<sizes>]
+                                      ProjectionExec: expr=[<exprs>]
+                                        DataSourceExec: partitions=1, partition_sizes=[<sizes>]
+                                  ProjectionExec: expr=[<exprs>]
+                                    RepartitionExec: partitioning=RoundRobinBatch(<partitions>), input_partitions=<partitions>
+                                      ProjectionExec: expr=[<exprs>]
+                                        DataSourceExec: partitions=1, partition_sizes=[<sizes>]
+                            ProjectionExec: expr=[<exprs>]
+                              DataSourceExec: partitions=1, partition_sizes=[<sizes>]
+              ProjectionExec: expr=[<exprs>]
+                DataSourceExec: partitions=1, partition_sizes=[<sizes>]
+
+
+initial_physical_plan_with_stats:
+ProjectionExec: expr=[<exprs>]
+  SortExec: [<sort_exprs>]
+    SortExec: expr=[<exprs>]
+      ProjectionExec: expr=[<exprs>]
+        RepartitionExec: partitioning=RoundRobinBatch(<partitions>), input_partitions=<partitions>, statistics=[Rows=Inexact(4), Bytes=Absent, [(Col[0]: Null=Exact(0)),(Col[1]: Null=Exact(32)),(Col[2]: Null=Exact(24)),(Col[3]: Null=Exact(0)),(Col[4]: Null=Exact(95))]]
+          CoalesceBatchesExec: target_batch_size=8192, statistics=[Rows=Inexact(4), Bytes=Absent, [(Col[0]: Null=Exact(0)),(Col[1]: Null=Exact(32)),(Col[2]: Null=Exact(24)),(Col[3]: Null=Exact(0)),(Col[4]: Null=Exact(95))]]
+            HashJoinExec: mode=CollectLeft, join_type=Inner, on=[(CAST(customer_demographics.#<col> AS Float64)@<id>, #<col>)], projection=[#<col>, #<col>, #<col>, #<col>, #<col>], statistics=[Rows=Inexact(4), Bytes=Absent, [(Col[0]: Null=Exact(0)),(Col[1]: Null=Exact(32)),(Col[2]: Null=Exact(24)),(Col[3]: Null=Exact(0)),(Col[4]: Null=Exact(95))]]
+              CoalescePartitionsExec, statistics=[Rows=Inexact(4), Bytes=Absent, [(Col[0]: Null=Exact(0)),(Col[1]: Null=Exact(32)),(Col[2]: Null=Exact(24)),(Col[3]: Null=Exact(0)),(Col[4]:)]]
+                ProjectionExec: expr=[<exprs>]
+                  CoalesceBatchesExec: target_batch_size=8192, statistics=[Rows=Inexact(4), Bytes=Absent, [(Col[0]: Null=Exact(0)),(Col[1]: Null=Exact(32)),(Col[2]: Null=Exact(24)),(Col[3]: Null=Exact(0))]]
+                    HashJoinExec: mode=CollectLeft, join_type=Inner, on=[(#<col>, #<col>)], projection=[#<col>, #<col>, #<col>, #<col>], statistics=[Rows=Inexact(4), Bytes=Absent, [(Col[0]: Null=Exact(0)),(Col[1]: Null=Exact(32)),(Col[2]: Null=Exact(24)),(Col[3]: Null=Exact(0))]]
+                      ProjectionExec: expr=[<exprs>]
+                        CoalesceBatchesExec: target_batch_size=8192, statistics=[Rows=Inexact(4), Bytes=Inexact(<bytes>), [(Col[0]: Null=Inexact(0))]]
+                          FilterExec: _1@<id> >= 45626 AND _2@<id> <= 95626, projection=[_0@<id>], statistics=[Rows=Inexact(4), Bytes=Inexact(<bytes>), [(Col[0]: Null=Inexact(0))]]
+                            DataSourceExec: partitions=1, partition_sizes=[<sizes>], statistics=[Rows=Exact(20), Bytes=Exact(<bytes>), [(Col[0]: Null=Exact(0)),(Col[1]: Null=Exact(0)),(Col[2]: Null=Exact(0))]]
+                      RepartitionExec: partitioning=RoundRobinBatch(<partitions>), input_partitions=<partitions>, statistics=[Rows=Inexact(100), Bytes=Absent, [(Col[0]: Null=Exact(0)),(Col[1]: Null=Exact(32)),(Col[2]: Null=Exact(24)),(Col[3]: Null=Exact(0)),(Col[4]: Null=Exact(0))]]
+                        CoalesceBatchesExec: target_batch_size=8192, statistics=[Rows=Inexact(100), Bytes=Absent, [(Col[0]: Null=Exact(0)),(Col[1]: Null=Exact(32)),(Col[2]: Null=Exact(24)),(Col[3]: Null=Exact(0)),(Col[4]: Null=Exact(0))]]
+                          HashJoinExec: mode=CollectLeft, join_type=Inner, on=[(#<col>, CAST(household_demographics.#<col> AS Float64)@<id>)], projection=[#<col>, #<col>, #<col>, #<col>, #<col>], statistics=[Rows=Inexact(100), Bytes=Absent, [(Col[0]: Null=Exact(0)),(Col[1]: Null=Exact(32)),(Col[2]: Null=Exact(24)),(Col[3]: Null=Exact(0)),(Col[4]: Null=Exact(0))]]
+                            CoalescePartitionsExec, statistics=[Rows=Inexact(100), Bytes=Absent, [(Col[0]: Null=Exact(0)),(Col[1]: Null=Exact(28)),(Col[2]: Null=Exact(32)),(Col[3]: Null=Exact(24)),(Col[4]: Null=Exact(0))]]
+                              CoalesceBatchesExec: target_batch_size=8192, statistics=[Rows=Inexact(100), Bytes=Absent, [(Col[0]: Null=Exact(0)),(Col[1]: Null=Exact(28)),(Col[2]: Null=Exact(32)),(Col[3]: Null=Exact(24)),(Col[4]: Null=Exact(0))]]
+                                HashJoinExec: mode=CollectLeft, join_type=Inner, on=[(#<col>, CAST(customer_demographics.#<col> AS Float64)@<id>)], projection=[#<col>, #<col>, #<col>, #<col>, #<col>], statistics=[Rows=Inexact(100), Bytes=Absent, [(Col[0]: Null=Exact(0)),(Col[1]: Null=Exact(28)),(Col[2]: Null=Exact(32)),(Col[3]: Null=Exact(24)),(Col[4]: Null=Exact(0))]]
+                                  CoalesceBatchesExec: target_batch_size=8192, statistics=[Rows=Inexact(100), Bytes=Absent, [(Col[0]: Null=Exact(0)),(Col[1]: Null=Exact(26)),(Col[2]: Null=Exact(28)),(Col[3]: Null=Exact(32)),(Col[4]: Null=Exact(24))]]
+                                    HashJoinExec: mode=CollectLeft, join_type=Inner, on=[(#<col>, #<col>)], projection=[#<col>, #<col>, #<col>, #<col>, #<col>], statistics=[Rows=Inexact(100), Bytes=Absent, [(Col[0]: Null=Exact(0)),(Col[1]: Null=Exact(26)),(Col[2]: Null=Exact(28)),(Col[3]: Null=Exact(32)),(Col[4]: Null=Exact(24))]]
+                                      ProjectionExec: expr=[<exprs>]
+                                        CoalesceBatchesExec: target_batch_size=8192, statistics=[Rows=Inexact(100), Bytes=Inexact(<bytes>), [(Col[0]: Null=Inexact(0))]]
+                                          FilterExec: _6@<id> = White Oak, projection=[_0@<id>], statistics=[Rows=Inexact(100), Bytes=Inexact(<bytes>), [(Col[0]: Null=Inexact(0))]]
+                                            DataSourceExec: partitions=1, partition_sizes=[<sizes>], statistics=[Rows=Exact(500), Bytes=Exact(<bytes>), [(Col[0]: Null=Exact(0)),(Col[1]: Null=Exact(14))]]
+                                      ProjectionExec: expr=[<exprs>]
+                                        DataSourceExec: partitions=1, partition_sizes=[<sizes>], statistics=[Rows=Exact(1000), Bytes=Exact(<bytes>), [(Col[0]: Null=Exact(0)),(Col[1]: Null=Exact(26)),(Col[2]: Null=Exact(28)),(Col[3]: Null=Exact(0)),(Col[4]: Null=Exact(32)),(Col[5]: Null=Exact(24))]]
+                                  ProjectionExec: expr=[<exprs>]
+                                    RepartitionExec: partitioning=RoundRobinBatch(<partitions>), input_partitions=<partitions>, statistics=[Rows=Exact(19208), Bytes=Exact(<bytes>), [(Col[0]: Null=Exact(0))]]
+                                      ProjectionExec: expr=[<exprs>]
+                                        DataSourceExec: partitions=1, partition_sizes=[<sizes>], statistics=[Rows=Exact(19208), Bytes=Exact(<bytes>), [(Col[0]: Null=Exact(0))]]
+                            ProjectionExec: expr=[<exprs>]
+                              DataSourceExec: partitions=1, partition_sizes=[<sizes>], statistics=[Rows=Exact(7200), Bytes=Exact(<bytes>), [(Col[0]: Null=Exact(0)),(Col[1]: Null=Exact(0))]]
+              ProjectionExec: expr=[<exprs>]
+                DataSourceExec: partitions=1, partition_sizes=[<sizes>], statistics=[Rows=Exact(2810), Bytes=Exact(<bytes>), [(Col[0]: Null=Exact(95))]]
+
+
+initial_physical_plan_with_schema:
+ProjectionExec: expr=[<exprs>]
+  SortExec: [<sort_exprs>]
+    SortExec: expr=[<exprs>]
+      ProjectionExec: expr=[<exprs>]
+        RepartitionExec: partitioning=RoundRobinBatch(<partitions>), input_partitions=<partitions>, schema=[#<col>:Utf8;N, #<col>:Utf8;N, #<col>:Utf8;N, #<col>:Int64;N, #<col>:Float64;N]
+          CoalesceBatchesExec: target_batch_size=8192, schema=[#<col>:Utf8;N, #<col>:Utf8;N, #<col>:Utf8;N, #<col>:Int64;N, #<col>:Float64;N]
+            HashJoinExec: mode=CollectLeft, join_type=Inner, on=[(CAST(customer_demographics.#<col> AS Float64)@<id>, #<col>)], projection=[#<col>, #<col>, #<col>, #<col>, #<col>], schema=[#<col>:Utf8;N, #<col>:Utf8;N, #<col>:Utf8;N, #<col>:Int64;N, #<col>:Float64;N]
+              CoalescePartitionsExec, schema=[#<col>:Utf8;N, #<col>:Utf8;N, #<col>:Utf8;N, #<col>:Int64;N, CAST(customer_demographics.#<col> AS Float64):Float64;N]
+                ProjectionExec: expr=[<exprs>]
+                  CoalesceBatchesExec: target_batch_size=8192, schema=[#<col>:Utf8;N, #<col>:Utf8;N, #<col>:Utf8;N, #<col>:Int64;N]
+                    HashJoinExec: mode=CollectLeft, join_type=Inner, on=[(#<col>, #<col>)], projection=[#<col>, #<col>, #<col>, #<col>], schema=[#<col>:Utf8;N, #<col>:Utf8;N, #<col>:Utf8;N, #<col>:Int64;N]
+                      ProjectionExec: expr=[<exprs>]
+                        CoalesceBatchesExec: target_batch_size=8192, schema=[_0:Int64;N]
+                          FilterExec: _1@<id> >= 45626 AND _2@<id> <= 95626, projection=[_0@<id>], schema=[_0:Int64;N]
+                            DataSourceExec: partitions=1, partition_sizes=[<sizes>], schema=[_0:Int64;N, _1:Int64;N, _2:Int32;N]
+                      RepartitionExec: partitioning=RoundRobinBatch(<partitions>), input_partitions=<partitions>, schema=[#<col>:Utf8;N, #<col>:Utf8;N, #<col>:Utf8;N, #<col>:Int64;N, #<col>:Int64;N]
+                        CoalesceBatchesExec: target_batch_size=8192, schema=[#<col>:Utf8;N, #<col>:Utf8;N, #<col>:Utf8;N, #<col>:Int64;N, #<col>:Int64;N]
+                          HashJoinExec: mode=CollectLeft, join_type=Inner, on=[(#<col>, CAST(household_demographics.#<col> AS Float64)@<id>)], projection=[#<col>, #<col>, #<col>, #<col>, #<col>], schema=[#<col>:Utf8;N, #<col>:Utf8;N, #<col>:Utf8;N, #<col>:Int64;N, #<col>:Int64;N]
+                            CoalescePartitionsExec, schema=[#<col>:Utf8;N, #<col>:Float64;N, #<col>:Utf8;N, #<col>:Utf8;N, #<col>:Int64;N]
+                              CoalesceBatchesExec: target_batch_size=8192, schema=[#<col>:Utf8;N, #<col>:Float64;N, #<col>:Utf8;N, #<col>:Utf8;N, #<col>:Int64;N]
+                                HashJoinExec: mode=CollectLeft, join_type=Inner, on=[(#<col>, CAST(customer_demographics.#<col> AS Float64)@<id>)], projection=[#<col>, #<col>, #<col>, #<col>, #<col>], schema=[#<col>:Utf8;N, #<col>:Float64;N, #<col>:Utf8;N, #<col>:Utf8;N, #<col>:Int64;N]
+                                  CoalesceBatchesExec: target_batch_size=8192, schema=[#<col>:Utf8;N, #<col>:Float64;N, #<col>:Float64;N, #<col>:Utf8;N, #<col>:Utf8;N]
+                                    HashJoinExec: mode=CollectLeft, join_type=Inner, on=[(#<col>, #<col>)], projection=[#<col>, #<col>, #<col>, #<col>, #<col>], schema=[#<col>:Utf8;N, #<col>:Float64;N, #<col>:Float64;N, #<col>:Utf8;N, #<col>:Utf8;N]
+                                      ProjectionExec: expr=[<exprs>]
+                                        CoalesceBatchesExec: target_batch_size=8192, schema=[_0:Int64;N]
+                                          FilterExec: _6@<id> = White Oak, projection=[_0@<id>], schema=[_0:Int64;N]
+                                            DataSourceExec: partitions=1, partition_sizes=[<sizes>], schema=[_0:Int64;N, _6:Utf8;N]
+                                      ProjectionExec: expr=[<exprs>]
+                                        DataSourceExec: partitions=1, partition_sizes=[<sizes>], schema=[_1:Utf8;N, _2:Float64;N, _3:Float64;N, _4:Int64;N, _8:Utf8;N, _9:Utf8;N]
+                                  ProjectionExec: expr=[<exprs>]
+                                    RepartitionExec: partitioning=RoundRobinBatch(<partitions>), input_partitions=<partitions>, schema=[#<col>:Int64;N]
+                                      ProjectionExec: expr=[<exprs>]
+                                        DataSourceExec: partitions=1, partition_sizes=[<sizes>], schema=[_0:Int64;N]
+                            ProjectionExec: expr=[<exprs>]
+                              DataSourceExec: partitions=1, partition_sizes=[<sizes>], schema=[_0:Int64;N, _1:Int64;N]
+              ProjectionExec: expr=[<exprs>]
+                DataSourceExec: partitions=1, partition_sizes=[<sizes>], schema=[_4:Float64;N]
+
+
+physical_plan after OutputRequirements:
+ProjectionExec: expr=[<exprs>]
+  OutputRequirementExec: order_by=[(#<col>, asc)], dist_by=SinglePartition
+    SortExec: [<sort_exprs>], fetch=100
+      SortExec: expr=[<exprs>]
+        ProjectionExec: expr=[<exprs>]
+          RepartitionExec: partitioning=RoundRobinBatch(<partitions>), input_partitions=<partitions>
+            CoalesceBatchesExec: target_batch_size=8192
+              HashJoinExec: mode=CollectLeft, join_type=Inner, on=[(CAST(customer_demographics.#<col> AS Float64)@<id>, #<col>)], projection=[#<col>, #<col>, #<col>, #<col>, #<col>]
+                CoalescePartitionsExec
+                  ProjectionExec: expr=[<exprs>]
+                    CoalesceBatchesExec: target_batch_size=8192
+                      HashJoinExec: mode=CollectLeft, join_type=Inner, on=[(#<col>, #<col>)], projection=[#<col>, #<col>, #<col>, #<col>]
+                        ProjectionExec: expr=[<exprs>]
+                          CoalesceBatchesExec: target_batch_size=8192
+                            FilterExec: _1@<id> >= 45626 AND _2@<id> <= 95626, projection=[_0@<id>]
+                              DataSourceExec: partitions=1, partition_sizes=[<sizes>]
+                        RepartitionExec: partitioning=RoundRobinBatch(<partitions>), input_partitions=<partitions>
+                          CoalesceBatchesExec: target_batch_size=8192
+                            HashJoinExec: mode=CollectLeft, join_type=Inner, on=[(#<col>, CAST(household_demographics.#<col> AS Float64)@<id>)], projection=[#<col>, #<col>, #<col>, #<col>, #<col>]
+                              CoalescePartitionsExec
+                                CoalesceBatchesExec: target_batch_size=8192
+                                  HashJoinExec: mode=CollectLeft, join_type=Inner, on=[(#<col>, CAST(customer_demographics.#<col> AS Float64)@<id>)], projection=[#<col>, #<col>, #<col>, #<col>, #<col>]
+                                    CoalesceBatchesExec: target_batch_size=8192
+                                      HashJoinExec: mode=CollectLeft, join_type=Inner, on=[(#<col>, #<col>)], projection=[#<col>, #<col>, #<col>, #<col>, #<col>]
+                                        ProjectionExec: expr=[<exprs>]
+                                          CoalesceBatchesExec: target_batch_size=8192
+                                            FilterExec: _6@<id> = White Oak, projection=[_0@<id>]
+                                              DataSourceExec: partitions=1, partition_sizes=[<sizes>]
+                                        ProjectionExec: expr=[<exprs>]
+                                          DataSourceExec: partitions=1, partition_sizes=[<sizes>]
+                                    ProjectionExec: expr=[<exprs>]
+                                      RepartitionExec: partitioning=RoundRobinBatch(<partitions>), input_partitions=<partitions>
+                                        ProjectionExec: expr=[<exprs>]
+                                          DataSourceExec: partitions=1, partition_sizes=[<sizes>]
+                              ProjectionExec: expr=[<exprs>]
+                                DataSourceExec: partitions=1, partition_sizes=[<sizes>]
+                ProjectionExec: expr=[<exprs>]
+                  DataSourceExec: partitions=1, partition_sizes=[<sizes>]
+
+
+physical_plan after aggregate_statistics:
+SAME TEXT AS ABOVE
+
+physical_plan after join_selection:
+SAME TEXT AS ABOVE
+
+physical_plan after LimitedDistinctAggregation:
+SAME TEXT AS ABOVE
+
+physical_plan after FilterPushdown:
+SAME TEXT AS ABOVE
+
+physical_plan after EnforceDistribution:
+ProjectionExec: expr=[<exprs>]
+  OutputRequirementExec: order_by=[(#<col>, asc)], dist_by=SinglePartition
+    SortExec: expr=[<exprs>]
+      CoalescePartitionsExec
+        SortExec: expr=[<exprs>]
+          ProjectionExec: expr=[<exprs>]
+            RepartitionExec: partitioning=RoundRobinBatch(<partitions>), input_partitions=<partitions>
+              CoalesceBatchesExec: target_batch_size=8192
+                HashJoinExec: mode=CollectLeft, join_type=Inner, on=[(CAST(customer_demographics.#<col> AS Float64)@<id>, #<col>)], projection=[#<col>, #<col>, #<col>, #<col>, #<col>]
+                  CoalescePartitionsExec
+                    ProjectionExec: expr=[<exprs>]
+                      CoalesceBatchesExec: target_batch_size=8192
+                        HashJoinExec: mode=CollectLeft, join_type=Inner, on=[(#<col>, #<col>)], projection=[#<col>, #<col>, #<col>, #<col>]
+                          ProjectionExec: expr=[<exprs>]
+                            CoalesceBatchesExec: target_batch_size=8192
+                              FilterExec: _1@<id> >= 45626 AND _2@<id> <= 95626, projection=[_0@<id>]
+                                DataSourceExec: partitions=1, partition_sizes=[<sizes>]
+                          RepartitionExec: partitioning=RoundRobinBatch(<partitions>), input_partitions=<partitions>
+                            CoalesceBatchesExec: target_batch_size=8192
+                              HashJoinExec: mode=CollectLeft, join_type=Inner, on=[(#<col>, CAST(household_demographics.#<col> AS Float64)@<id>)], projection=[#<col>, #<col>, #<col>, #<col>, #<col>]
+                                CoalescePartitionsExec
+                                  CoalesceBatchesExec: target_batch_size=8192
+                                    HashJoinExec: mode=CollectLeft, join_type=Inner, on=[(#<col>, CAST(customer_demographics.#<col> AS Float64)@<id>)], projection=[#<col>, #<col>, #<col>, #<col>, #<col>]
+                                      CoalesceBatchesExec: target_batch_size=8192
+                                        HashJoinExec: mode=CollectLeft, join_type=Inner, on=[(#<col>, #<col>)], projection=[#<col>, #<col>, #<col>, #<col>, #<col>]
+                                          ProjectionExec: expr=[<exprs>]
+                                            CoalesceBatchesExec: target_batch_size=8192
+                                              FilterExec: _6@<id> = White Oak, projection=[_0@<id>]
+                                                DataSourceExec: partitions=1, partition_sizes=[<sizes>]
+                                          ProjectionExec: expr=[<exprs>]
+                                            DataSourceExec: partitions=1, partition_sizes=[<sizes>]
+                                      ProjectionExec: expr=[<exprs>]
+                                        RepartitionExec: partitioning=RoundRobinBatch(<partitions>), input_partitions=<partitions>
+                                          ProjectionExec: expr=[<exprs>]
+                                            DataSourceExec: partitions=1, partition_sizes=[<sizes>]
+                                ProjectionExec: expr=[<exprs>]
+                                  DataSourceExec: partitions=1, partition_sizes=[<sizes>]
+                  ProjectionExec: expr=[<exprs>]
+                    DataSourceExec: partitions=1, partition_sizes=[<sizes>]
+
+
+physical_plan after CombinePartialFinalAggregate:
+SAME TEXT AS ABOVE
+
+physical_plan after EnforceSorting:
+ProjectionExec: expr=[<exprs>]
+  OutputRequirementExec: order_by=[(#<col>, asc)], dist_by=SinglePartition
+    SortExec: [<sort_exprs>], fetch=100
+      SortExec: expr=[<exprs>]
+        ProjectionExec: expr=[<exprs>]
+          RepartitionExec: partitioning=RoundRobinBatch(<partitions>), input_partitions=<partitions>
+            CoalesceBatchesExec: target_batch_size=8192
+              HashJoinExec: mode=CollectLeft, join_type=Inner, on=[(CAST(customer_demographics.#<col> AS Float64)@<id>, #<col>)], projection=[#<col>, #<col>, #<col>, #<col>, #<col>]
+                CoalescePartitionsExec
+                  ProjectionExec: expr=[<exprs>]
+                    CoalesceBatchesExec: target_batch_size=8192
+                      HashJoinExec: mode=CollectLeft, join_type=Inner, on=[(#<col>, #<col>)], projection=[#<col>, #<col>, #<col>, #<col>]
+                        ProjectionExec: expr=[<exprs>]
+                          CoalesceBatchesExec: target_batch_size=8192
+                            FilterExec: _1@<id> >= 45626 AND _2@<id> <= 95626, projection=[_0@<id>]
+                              DataSourceExec: partitions=1, partition_sizes=[<sizes>]
+                        RepartitionExec: partitioning=RoundRobinBatch(<partitions>), input_partitions=<partitions>
+                          CoalesceBatchesExec: target_batch_size=8192
+                            HashJoinExec: mode=CollectLeft, join_type=Inner, on=[(#<col>, CAST(household_demographics.#<col> AS Float64)@<id>)], projection=[#<col>, #<col>, #<col>, #<col>, #<col>]
+                              CoalescePartitionsExec
+                                CoalesceBatchesExec: target_batch_size=8192
+                                  HashJoinExec: mode=CollectLeft, join_type=Inner, on=[(#<col>, CAST(customer_demographics.#<col> AS Float64)@<id>)], projection=[#<col>, #<col>, #<col>, #<col>, #<col>]
+                                    CoalesceBatchesExec: target_batch_size=8192
+                                      HashJoinExec: mode=CollectLeft, join_type=Inner, on=[(#<col>, #<col>)], projection=[#<col>, #<col>, #<col>, #<col>, #<col>]
+                                        ProjectionExec: expr=[<exprs>]
+                                          CoalesceBatchesExec: target_batch_size=8192
+                                            FilterExec: _6@<id> = White Oak, projection=[_0@<id>]
+                                              DataSourceExec: partitions=1, partition_sizes=[<sizes>]
+                                        ProjectionExec: expr=[<exprs>]
+                                          DataSourceExec: partitions=1, partition_sizes=[<sizes>]
+                                    ProjectionExec: expr=[<exprs>]
+                                      RepartitionExec: partitioning=RoundRobinBatch(<partitions>), input_partitions=<partitions>
+                                        ProjectionExec: expr=[<exprs>]
+                                          DataSourceExec: partitions=1, partition_sizes=[<sizes>]
+                              ProjectionExec: expr=[<exprs>]
+                                DataSourceExec: partitions=1, partition_sizes=[<sizes>]
+                ProjectionExec: expr=[<exprs>]
+                  DataSourceExec: partitions=1, partition_sizes=[<sizes>]
+
+
+physical_plan after OptimizeAggregateOrder:
+SAME TEXT AS ABOVE
+
+physical_plan after ProjectionPushdown:
+SAME TEXT AS ABOVE
+
+physical_plan after coalesce_batches:
+ProjectionExec: expr=[<exprs>]
+  OutputRequirementExec: order_by=[(#<col>, asc)], dist_by=SinglePartition
+    SortExec: [<sort_exprs>], fetch=100
+      SortExec: expr=[<exprs>]
+        ProjectionExec: expr=[<exprs>]
+          RepartitionExec: partitioning=RoundRobinBatch(<partitions>), input_partitions=<partitions>
+            CoalesceBatchesExec: target_batch_size=8192
+              CoalesceBatchesExec: target_batch_size=8192
+                HashJoinExec: mode=CollectLeft, join_type=Inner, on=[(CAST(customer_demographics.#<col> AS Float64)@<id>, #<col>)], projection=[#<col>, #<col>, #<col>, #<col>, #<col>]
+                  CoalescePartitionsExec
+                    ProjectionExec: expr=[<exprs>]
+                      CoalesceBatchesExec: target_batch_size=8192
+                        CoalesceBatchesExec: target_batch_size=8192
+                          HashJoinExec: mode=CollectLeft, join_type=Inner, on=[(#<col>, #<col>)], projection=[#<col>, #<col>, #<col>, #<col>]
+                            ProjectionExec: expr=[<exprs>]
+                              CoalesceBatchesExec: target_batch_size=8192
+                                CoalesceBatchesExec: target_batch_size=8192
+                                  FilterExec: _1@<id> >= 45626 AND _2@<id> <= 95626, projection=[_0@<id>]
+                                    DataSourceExec: partitions=1, partition_sizes=[<sizes>]
+                            RepartitionExec: partitioning=RoundRobinBatch(<partitions>), input_partitions=<partitions>
+                              CoalesceBatchesExec: target_batch_size=8192
+                                CoalesceBatchesExec: target_batch_size=8192
+                                  HashJoinExec: mode=CollectLeft, join_type=Inner, on=[(#<col>, CAST(household_demographics.#<col> AS Float64)@<id>)], projection=[#<col>, #<col>, #<col>, #<col>, #<col>]
+                                    CoalescePartitionsExec
+                                      CoalesceBatchesExec: target_batch_size=8192
+                                        CoalesceBatchesExec: target_batch_size=8192
+                                          HashJoinExec: mode=CollectLeft, join_type=Inner, on=[(#<col>, CAST(customer_demographics.#<col> AS Float64)@<id>)], projection=[#<col>, #<col>, #<col>, #<col>, #<col>]
+                                            CoalesceBatchesExec: target_batch_size=8192
+                                              CoalesceBatchesExec: target_batch_size=8192
+                                                HashJoinExec: mode=CollectLeft, join_type=Inner, on=[(#<col>, #<col>)], projection=[#<col>, #<col>, #<col>, #<col>, #<col>]
+                                                  ProjectionExec: expr=[<exprs>]
+                                                    CoalesceBatchesExec: target_batch_size=8192
+                                                      CoalesceBatchesExec: target_batch_size=8192
+                                                        FilterExec: _6@<id> = White Oak, projection=[_0@<id>]
+                                                          DataSourceExec: partitions=1, partition_sizes=[<sizes>]
+                                                  ProjectionExec: expr=[<exprs>]
+                                                    DataSourceExec: partitions=1, partition_sizes=[<sizes>]
+                                            ProjectionExec: expr=[<exprs>]
+                                              RepartitionExec: partitioning=RoundRobinBatch(<partitions>), input_partitions=<partitions>
+                                                ProjectionExec: expr=[<exprs>]
+                                                  DataSourceExec: partitions=1, partition_sizes=[<sizes>]
+                                    ProjectionExec: expr=[<exprs>]
+                                      DataSourceExec: partitions=1, partition_sizes=[<sizes>]
+                  ProjectionExec: expr=[<exprs>]
+                    DataSourceExec: partitions=1, partition_sizes=[<sizes>]
+
+
+physical_plan after coalesce_async_exec_input:
+SAME TEXT AS ABOVE
+
+physical_plan after OutputRequirements:
+ProjectionExec: expr=[<exprs>]
+  SortExec: [<sort_exprs>], fetch=100
+    SortExec: expr=[<exprs>]
+      ProjectionExec: expr=[<exprs>]
+        RepartitionExec: partitioning=RoundRobinBatch(<partitions>), input_partitions=<partitions>
+          CoalesceBatchesExec: target_batch_size=8192
+            CoalesceBatchesExec: target_batch_size=8192
+              HashJoinExec: mode=CollectLeft, join_type=Inner, on=[(CAST(customer_demographics.#<col> AS Float64)@<id>, #<col>)], projection=[#<col>, #<col>, #<col>, #<col>, #<col>]
+                CoalescePartitionsExec
+                  ProjectionExec: expr=[<exprs>]
+                    CoalesceBatchesExec: target_batch_size=8192
+                      CoalesceBatchesExec: target_batch_size=8192
+                        HashJoinExec: mode=CollectLeft, join_type=Inner, on=[(#<col>, #<col>)], projection=[#<col>, #<col>, #<col>, #<col>]
+                          ProjectionExec: expr=[<exprs>]
+                            CoalesceBatchesExec: target_batch_size=8192
+                              CoalesceBatchesExec: target_batch_size=8192
+                                FilterExec: _1@<id> >= 45626 AND _2@<id> <= 95626, projection=[_0@<id>]
+                                  DataSourceExec: partitions=1, partition_sizes=[<sizes>]
+                          RepartitionExec: partitioning=RoundRobinBatch(<partitions>), input_partitions=<partitions>
+                            CoalesceBatchesExec: target_batch_size=8192
+                              CoalesceBatchesExec: target_batch_size=8192
+                                HashJoinExec: mode=CollectLeft, join_type=Inner, on=[(#<col>, CAST(household_demographics.#<col> AS Float64)@<id>)], projection=[#<col>, #<col>, #<col>, #<col>, #<col>]
+                                  CoalescePartitionsExec
+                                    CoalesceBatchesExec: target_batch_size=8192
+                                      CoalesceBatchesExec: target_batch_size=8192
+                                        HashJoinExec: mode=CollectLeft, join_type=Inner, on=[(#<col>, CAST(customer_demographics.#<col> AS Float64)@<id>)], projection=[#<col>, #<col>, #<col>, #<col>, #<col>]
+                                          CoalesceBatchesExec: target_batch_size=8192
+                                            CoalesceBatchesExec: target_batch_size=8192
+                                              HashJoinExec: mode=CollectLeft, join_type=Inner, on=[(#<col>, #<col>)], projection=[#<col>, #<col>, #<col>, #<col>, #<col>]
+                                                ProjectionExec: expr=[<exprs>]
+                                                  CoalesceBatchesExec: target_batch_size=8192
+                                                    CoalesceBatchesExec: target_batch_size=8192
+                                                      FilterExec: _6@<id> = White Oak, projection=[_0@<id>]
+                                                        DataSourceExec: partitions=1, partition_sizes=[<sizes>]
+                                                ProjectionExec: expr=[<exprs>]
+                                                  DataSourceExec: partitions=1, partition_sizes=[<sizes>]
+                                          ProjectionExec: expr=[<exprs>]
+                                            RepartitionExec: partitioning=RoundRobinBatch(<partitions>), input_partitions=<partitions>
+                                              ProjectionExec: expr=[<exprs>]
+                                                DataSourceExec: partitions=1, partition_sizes=[<sizes>]
+                                  ProjectionExec: expr=[<exprs>]
+                                    DataSourceExec: partitions=1, partition_sizes=[<sizes>]
+                ProjectionExec: expr=[<exprs>]
+                  DataSourceExec: partitions=1, partition_sizes=[<sizes>]
+
+
+physical_plan after LimitAggregation:
+SAME TEXT AS ABOVE
+
+physical_plan after LimitPushPastWindows:
+SAME TEXT AS ABOVE
+
+physical_plan after LimitPushdown:
+SAME TEXT AS ABOVE
+
+physical_plan after ProjectionPushdown:
+SAME TEXT AS ABOVE
+
+physical_plan after EnsureCooperative:
+SAME TEXT AS ABOVE
+
+physical_plan after FilterPushdown(Post):
+SAME TEXT AS ABOVE
+
+physical_plan after RewriteExplicitRepartition:
+SAME TEXT AS ABOVE
+
+physical_plan after SanityCheckPlan:
+SAME TEXT AS ABOVE
+
+physical_plan:
+ProjectionExec: expr=[<exprs>]
+  ProjectionExec: expr=[<exprs>]
+    SortExec: [<sort_exprs>], fetch=100
+      SortExec: expr=[<exprs>]
+        ProjectionExec: expr=[<exprs>]
+          RepartitionExec: partitioning=RoundRobinBatch(<partitions>), input_partitions=<partitions>
+            CoalesceBatchesExec: target_batch_size=8192
+              CoalesceBatchesExec: target_batch_size=8192
+                HashJoinExec: mode=CollectLeft, join_type=Inner, on=[(CAST(customer_demographics.#<col> AS Float64)@<id>, #<col>)], projection=[#<col>, #<col>, #<col>, #<col>, #<col>]
+                  CoalescePartitionsExec
+                    ProjectionExec: expr=[<exprs>]
+                      CoalesceBatchesExec: target_batch_size=8192
+                        CoalesceBatchesExec: target_batch_size=8192
+                          HashJoinExec: mode=CollectLeft, join_type=Inner, on=[(#<col>, #<col>)], projection=[#<col>, #<col>, #<col>, #<col>]
+                            ProjectionExec: expr=[<exprs>]
+                              CoalesceBatchesExec: target_batch_size=8192
+                                CoalesceBatchesExec: target_batch_size=8192
+                                  FilterExec: _1@<id> >= 45626 AND _2@<id> <= 95626, projection=[_0@<id>]
+                                    DataSourceExec: partitions=1, partition_sizes=[<sizes>]
+                            RepartitionExec: partitioning=RoundRobinBatch(<partitions>), input_partitions=<partitions>
+                              CoalesceBatchesExec: target_batch_size=8192
+                                CoalesceBatchesExec: target_batch_size=8192
+                                  HashJoinExec: mode=CollectLeft, join_type=Inner, on=[(#<col>, CAST(household_demographics.#<col> AS Float64)@<id>)], projection=[#<col>, #<col>, #<col>, #<col>, #<col>]
+                                    CoalescePartitionsExec
+                                      CoalesceBatchesExec: target_batch_size=8192
+                                        CoalesceBatchesExec: target_batch_size=8192
+                                          HashJoinExec: mode=CollectLeft, join_type=Inner, on=[(#<col>, CAST(customer_demographics.#<col> AS Float64)@<id>)], projection=[#<col>, #<col>, #<col>, #<col>, #<col>]
+                                            CoalesceBatchesExec: target_batch_size=8192
+                                              CoalesceBatchesExec: target_batch_size=8192
+                                                HashJoinExec: mode=CollectLeft, join_type=Inner, on=[(#<col>, #<col>)], projection=[#<col>, #<col>, #<col>, #<col>, #<col>]
+                                                  ProjectionExec: expr=[<exprs>]
+                                                    CoalesceBatchesExec: target_batch_size=8192
+                                                      CoalesceBatchesExec: target_batch_size=8192
+                                                        FilterExec: _6@<id> = White Oak, projection=[_0@<id>]
+                                                          DataSourceExec: partitions=1, partition_sizes=[<sizes>]
+                                                  ProjectionExec: expr=[<exprs>]
+                                                    DataSourceExec: partitions=1, partition_sizes=[<sizes>]
+                                            ProjectionExec: expr=[<exprs>]
+                                              RepartitionExec: partitioning=RoundRobinBatch(<partitions>), input_partitions=<partitions>
+                                                ProjectionExec: expr=[<exprs>]
+                                                  DataSourceExec: partitions=1, partition_sizes=[<sizes>]
+                                    ProjectionExec: expr=[<exprs>]
+                                      DataSourceExec: partitions=1, partition_sizes=[<sizes>]
+                  ProjectionExec: expr=[<exprs>]
+                    DataSourceExec: partitions=1, partition_sizes=[<sizes>]
+
+
+== Physical Plan ==
+ProjectionExec: expr=[<exprs>]
+  ProjectionExec: expr=[<exprs>]
+    SortExec: [<sort_exprs>], fetch=100
+      SortExec: expr=[<exprs>]
+        ProjectionExec: expr=[<exprs>]
+          RepartitionExec: partitioning=RoundRobinBatch(<partitions>), input_partitions=<partitions>
+            CoalesceBatchesExec: target_batch_size=8192
+              CoalesceBatchesExec: target_batch_size=8192
+                HashJoinExec: mode=CollectLeft, join_type=Inner, on=[(CAST(customer_demographics.#<col> AS Float64)@<id>, #<col>)], projection=[#<col>, #<col>, #<col>, #<col>, #<col>]
+                  CoalescePartitionsExec
+                    ProjectionExec: expr=[<exprs>]
+                      CoalesceBatchesExec: target_batch_size=8192
+                        CoalesceBatchesExec: target_batch_size=8192
+                          HashJoinExec: mode=CollectLeft, join_type=Inner, on=[(#<col>, #<col>)], projection=[#<col>, #<col>, #<col>, #<col>]
+                            ProjectionExec: expr=[<exprs>]
+                              CoalesceBatchesExec: target_batch_size=8192
+                                CoalesceBatchesExec: target_batch_size=8192
+                                  FilterExec: _1@<id> >= 45626 AND _2@<id> <= 95626, projection=[_0@<id>]
+                                    DataSourceExec: partitions=1, partition_sizes=[<sizes>]
+                            RepartitionExec: partitioning=RoundRobinBatch(<partitions>), input_partitions=<partitions>
+                              CoalesceBatchesExec: target_batch_size=8192
+                                CoalesceBatchesExec: target_batch_size=8192
+                                  HashJoinExec: mode=CollectLeft, join_type=Inner, on=[(#<col>, CAST(household_demographics.#<col> AS Float64)@<id>)], projection=[#<col>, #<col>, #<col>, #<col>, #<col>]
+                                    CoalescePartitionsExec
+                                      CoalesceBatchesExec: target_batch_size=8192
+                                        CoalesceBatchesExec: target_batch_size=8192
+                                          HashJoinExec: mode=CollectLeft, join_type=Inner, on=[(#<col>, CAST(customer_demographics.#<col> AS Float64)@<id>)], projection=[#<col>, #<col>, #<col>, #<col>, #<col>]
+                                            CoalesceBatchesExec: target_batch_size=8192
+                                              CoalesceBatchesExec: target_batch_size=8192
+                                                HashJoinExec: mode=CollectLeft, join_type=Inner, on=[(#<col>, #<col>)], projection=[#<col>, #<col>, #<col>, #<col>, #<col>]
+                                                  ProjectionExec: expr=[<exprs>]
+                                                    CoalesceBatchesExec: target_batch_size=8192
+                                                      CoalesceBatchesExec: target_batch_size=8192
+                                                        FilterExec: _6@<id> = White Oak, projection=[_0@<id>]
+                                                          DataSourceExec: partitions=1, partition_sizes=[<sizes>]
+                                                  ProjectionExec: expr=[<exprs>]
+                                                    DataSourceExec: partitions=1, partition_sizes=[<sizes>]
+                                            ProjectionExec: expr=[<exprs>]
+                                              RepartitionExec: partitioning=RoundRobinBatch(<partitions>), input_partitions=<partitions>
+                                                ProjectionExec: expr=[<exprs>]
+                                                  DataSourceExec: partitions=1, partition_sizes=[<sizes>]
+                                    ProjectionExec: expr=[<exprs>]
+                                      DataSourceExec: partitions=1, partition_sizes=[<sizes>]
+                  ProjectionExec: expr=[<exprs>]
+                    DataSourceExec: partitions=1, partition_sizes=[<sizes>]

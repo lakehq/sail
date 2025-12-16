@@ -1,0 +1,1085 @@
+== Codegen ==
+Whole-stage codegen is not supported; showing physical plan instead.
+
+== Plan Steps ==
+initial_logical_plan:
+Limit: skip=0, fetch=Int32(100)
+  Projection: <exprs>
+    Sort: <exprs>
+      Projection: <exprs>
+        Aggregate: groupBy=[[store.#<col>, store.#<col>, store.#<col>, store.#<col>, store.#<col>, store.#<col>, store.#<col>, store.#<col>, store.#<col>, store.#<col>]], aggr=[[sum(CASE WHEN store_returns.#<col> - store_sales.#<col> <= Int32(30) THEN Int32(1) WHEN Boolean(true) THEN Int32(0) END), sum(CASE WHEN store_returns.#<col> - store_sales.#<col> > Int32(30) AND store_returns.#<col> - store_sales.#<col> <= Int32(60) THEN Int32(1) WHEN Boolean(true) THEN Int32(0) END), sum(CASE WHEN store_returns.#<col> - store_sales.#<col> > Int32(60) AND store_returns.#<col> - store_sales.#<col> <= Int32(90) THEN Int32(1) WHEN Boolean(true) THEN Int32(0) END), sum(CASE WHEN store_returns.#<col> - store_sales.#<col> > Int32(90) AND store_returns.#<col> - store_sales.#<col> <= Int32(120) THEN Int32(1) WHEN Boolean(true) THEN Int32(0) END), sum(CASE WHEN store_returns.#<col> - store_sales.#<col> > Int32(120) THEN Int32(1) WHEN Boolean(true) THEN Int32(0) END)]]
+          Filter: d2.#<col> = Int32(2002) AND d2.#<col> = Int32(8) AND store_sales.#<col> = store_returns.#<col> AND store_sales.#<col> = store_returns.#<col> AND store_sales.#<col> = d1.#<col> AND store_returns.#<col> = d2.#<col> AND store_sales.#<col> = store_returns.#<col> AND store_sales.#<col> = store.#<col>
+            Cross Join: 
+              Cross Join: 
+                Cross Join: 
+                  Cross Join: 
+                    Projection: <exprs>
+                      Projection: <exprs>
+                        SubqueryAlias: store_sales
+                          Projection: <exprs>
+                            Projection: <exprs>
+                              TableScan: ?table?
+                    Projection: <exprs>
+                      Projection: <exprs>
+                        SubqueryAlias: store_returns
+                          Projection: <exprs>
+                            Projection: <exprs>
+                              TableScan: ?table?
+                  Projection: <exprs>
+                    Projection: <exprs>
+                      SubqueryAlias: store
+                        Projection: <exprs>
+                          Projection: <exprs>
+                            TableScan: ?table?
+                SubqueryAlias: d1
+                  Projection: <exprs>
+                    Projection: <exprs>
+                      SubqueryAlias: date_dim
+                        Projection: <exprs>
+                          Projection: <exprs>
+                            TableScan: ?table?
+              SubqueryAlias: d2
+                Projection: <exprs>
+                  Projection: <exprs>
+                    SubqueryAlias: date_dim
+                      Projection: <exprs>
+                        Projection: <exprs>
+                          TableScan: ?table?
+
+logical_plan after resolve_grouping_function:
+SAME TEXT AS ABOVE
+
+logical_plan after type_coercion:
+Limit: skip=0, fetch=CAST(Int32(100) AS Int64)
+  Projection: <exprs>
+    Sort: <exprs>
+      Projection: <exprs>
+        Aggregate: groupBy=[[store.#<col>, store.#<col>, store.#<col>, store.#<col>, store.#<col>, store.#<col>, store.#<col>, store.#<col>, store.#<col>, store.#<col>]], aggr=[[sum(CAST(CASE WHEN store_returns.#<col> - store_sales.#<col> <= CAST(Int32(30) AS Float64) THEN Int32(1) WHEN Boolean(true) THEN Int32(0) END AS Int64)), sum(CAST(CASE WHEN store_returns.#<col> - store_sales.#<col> > CAST(Int32(30) AS Float64) AND store_returns.#<col> - store_sales.#<col> <= CAST(Int32(60) AS Float64) THEN Int32(1) WHEN Boolean(true) THEN Int32(0) END AS Int64)), sum(CAST(CASE WHEN store_returns.#<col> - store_sales.#<col> > CAST(Int32(60) AS Float64) AND store_returns.#<col> - store_sales.#<col> <= CAST(Int32(90) AS Float64) THEN Int32(1) WHEN Boolean(true) THEN Int32(0) END AS Int64)), sum(CAST(CASE WHEN store_returns.#<col> - store_sales.#<col> > CAST(Int32(90) AS Float64) AND store_returns.#<col> - store_sales.#<col> <= CAST(Int32(120) AS Float64) THEN Int32(1) WHEN Boolean(true) THEN Int32(0) END AS Int64)), sum(CAST(CASE WHEN store_returns.#<col> - store_sales.#<col> > CAST(Int32(120) AS Float64) THEN Int32(1) WHEN Boolean(true) THEN Int32(0) END AS Int64))]]
+          Filter: d2.#<col> = CAST(Int32(2002) AS Int64) AND d2.#<col> = CAST(Int32(8) AS Int64) AND store_sales.#<col> = store_returns.#<col> AND store_sales.#<col> = store_returns.#<col> AND store_sales.#<col> = CAST(d1.#<col> AS Float64) AND store_returns.#<col> = CAST(d2.#<col> AS Float64) AND store_sales.#<col> = store_returns.#<col> AND store_sales.#<col> = CAST(store.#<col> AS Float64)
+            Cross Join: 
+              Cross Join: 
+                Cross Join: 
+                  Cross Join: 
+                    Projection: <exprs>
+                      Projection: <exprs>
+                        SubqueryAlias: store_sales
+                          Projection: <exprs>
+                            Projection: <exprs>
+                              TableScan: ?table?
+                    Projection: <exprs>
+                      Projection: <exprs>
+                        SubqueryAlias: store_returns
+                          Projection: <exprs>
+                            Projection: <exprs>
+                              TableScan: ?table?
+                  Projection: <exprs>
+                    Projection: <exprs>
+                      SubqueryAlias: store
+                        Projection: <exprs>
+                          Projection: <exprs>
+                            TableScan: ?table?
+                SubqueryAlias: d1
+                  Projection: <exprs>
+                    Projection: <exprs>
+                      SubqueryAlias: date_dim
+                        Projection: <exprs>
+                          Projection: <exprs>
+                            TableScan: ?table?
+              SubqueryAlias: d2
+                Projection: <exprs>
+                  Projection: <exprs>
+                    SubqueryAlias: date_dim
+                      Projection: <exprs>
+                        Projection: <exprs>
+                          TableScan: ?table?
+
+analyzed_logical_plan:
+SAME TEXT AS ABOVE
+
+logical_plan after eliminate_nested_union:
+SAME TEXT AS ABOVE
+
+logical_plan after simplify_expressions:
+Limit: skip=0, fetch=100
+  Projection: <exprs>
+    Sort: <exprs>
+      Projection: <exprs>
+        Aggregate: groupBy=[[store.#<col>, store.#<col>, store.#<col>, store.#<col>, store.#<col>, store.#<col>, store.#<col>, store.#<col>, store.#<col>, store.#<col>]], aggr=[[sum(CAST(CASE WHEN store_returns.#<col> - store_sales.#<col> <= Float64(30) THEN Int32(1) ELSE Int32(0) END AS Int64)) AS sum(CASE WHEN store_returns.#<col> - store_sales.#<col> <= Int32(30) THEN Int32(1) WHEN Boolean(true) THEN Int32(0) END), sum(CAST(CASE WHEN store_returns.#<col> - store_sales.#<col> > Float64(30) AND store_returns.#<col> - store_sales.#<col> <= Float64(60) THEN Int32(1) ELSE Int32(0) END AS Int64)) AS sum(CASE WHEN store_returns.#<col> - store_sales.#<col> > Int32(30) AND store_returns.#<col> - store_sales.#<col> <= Int32(60) THEN Int32(1) WHEN Boolean(true) THEN Int32(0) END), sum(CAST(CASE WHEN store_returns.#<col> - store_sales.#<col> > Float64(60) AND store_returns.#<col> - store_sales.#<col> <= Float64(90) THEN Int32(1) ELSE Int32(0) END AS Int64)) AS sum(CASE WHEN store_returns.#<col> - store_sales.#<col> > Int32(60) AND store_returns.#<col> - store_sales.#<col> <= Int32(90) THEN Int32(1) WHEN Boolean(true) THEN Int32(0) END), sum(CAST(CASE WHEN store_returns.#<col> - store_sales.#<col> > Float64(90) AND store_returns.#<col> - store_sales.#<col> <= Float64(120) THEN Int32(1) ELSE Int32(0) END AS Int64)) AS sum(CASE WHEN store_returns.#<col> - store_sales.#<col> > Int32(90) AND store_returns.#<col> - store_sales.#<col> <= Int32(120) THEN Int32(1) WHEN Boolean(true) THEN Int32(0) END), sum(CAST(CASE WHEN store_returns.#<col> - store_sales.#<col> > Float64(120) THEN Int32(1) ELSE Int32(0) END AS Int64)) AS sum(CASE WHEN store_returns.#<col> - store_sales.#<col> > Int32(120) THEN Int32(1) WHEN Boolean(true) THEN Int32(0) END)]]
+          Filter: d2.#<col> = Int64(2002) AND d2.#<col> = Int64(8) AND store_sales.#<col> = store_returns.#<col> AND store_sales.#<col> = store_returns.#<col> AND store_sales.#<col> = CAST(d1.#<col> AS Float64) AND store_returns.#<col> = CAST(d2.#<col> AS Float64) AND store_sales.#<col> = store_returns.#<col> AND store_sales.#<col> = CAST(store.#<col> AS Float64)
+            Cross Join: 
+              Cross Join: 
+                Cross Join: 
+                  Cross Join: 
+                    Projection: <exprs>
+                      Projection: <exprs>
+                        SubqueryAlias: store_sales
+                          Projection: <exprs>
+                            Projection: <exprs>
+                              TableScan: ?table?
+                    Projection: <exprs>
+                      Projection: <exprs>
+                        SubqueryAlias: store_returns
+                          Projection: <exprs>
+                            Projection: <exprs>
+                              TableScan: ?table?
+                  Projection: <exprs>
+                    Projection: <exprs>
+                      SubqueryAlias: store
+                        Projection: <exprs>
+                          Projection: <exprs>
+                            TableScan: ?table?
+                SubqueryAlias: d1
+                  Projection: <exprs>
+                    Projection: <exprs>
+                      SubqueryAlias: date_dim
+                        Projection: <exprs>
+                          Projection: <exprs>
+                            TableScan: ?table?
+              SubqueryAlias: d2
+                Projection: <exprs>
+                  Projection: <exprs>
+                    SubqueryAlias: date_dim
+                      Projection: <exprs>
+                        Projection: <exprs>
+                          TableScan: ?table?
+
+logical_plan after replace_distinct_aggregate:
+SAME TEXT AS ABOVE
+
+logical_plan after eliminate_join:
+SAME TEXT AS ABOVE
+
+logical_plan after decorrelate_predicate_subquery:
+SAME TEXT AS ABOVE
+
+logical_plan after scalar_subquery_to_join:
+SAME TEXT AS ABOVE
+
+logical_plan after decorrelate_lateral_join:
+SAME TEXT AS ABOVE
+
+logical_plan after extract_equijoin_predicate:
+SAME TEXT AS ABOVE
+
+logical_plan after eliminate_duplicated_expr:
+SAME TEXT AS ABOVE
+
+logical_plan after eliminate_filter:
+SAME TEXT AS ABOVE
+
+logical_plan after eliminate_cross_join:
+Limit: skip=0, fetch=100
+  Projection: <exprs>
+    Sort: <exprs>
+      Projection: <exprs>
+        Aggregate: groupBy=[[store.#<col>, store.#<col>, store.#<col>, store.#<col>, store.#<col>, store.#<col>, store.#<col>, store.#<col>, store.#<col>, store.#<col>]], aggr=[[sum(CAST(CASE WHEN store_returns.#<col> - store_sales.#<col> <= Float64(30) THEN Int32(1) ELSE Int32(0) END AS Int64)) AS sum(CASE WHEN store_returns.#<col> - store_sales.#<col> <= Int32(30) THEN Int32(1) WHEN Boolean(true) THEN Int32(0) END), sum(CAST(CASE WHEN store_returns.#<col> - store_sales.#<col> > Float64(30) AND store_returns.#<col> - store_sales.#<col> <= Float64(60) THEN Int32(1) ELSE Int32(0) END AS Int64)) AS sum(CASE WHEN store_returns.#<col> - store_sales.#<col> > Int32(30) AND store_returns.#<col> - store_sales.#<col> <= Int32(60) THEN Int32(1) WHEN Boolean(true) THEN Int32(0) END), sum(CAST(CASE WHEN store_returns.#<col> - store_sales.#<col> > Float64(60) AND store_returns.#<col> - store_sales.#<col> <= Float64(90) THEN Int32(1) ELSE Int32(0) END AS Int64)) AS sum(CASE WHEN store_returns.#<col> - store_sales.#<col> > Int32(60) AND store_returns.#<col> - store_sales.#<col> <= Int32(90) THEN Int32(1) WHEN Boolean(true) THEN Int32(0) END), sum(CAST(CASE WHEN store_returns.#<col> - store_sales.#<col> > Float64(90) AND store_returns.#<col> - store_sales.#<col> <= Float64(120) THEN Int32(1) ELSE Int32(0) END AS Int64)) AS sum(CASE WHEN store_returns.#<col> - store_sales.#<col> > Int32(90) AND store_returns.#<col> - store_sales.#<col> <= Int32(120) THEN Int32(1) WHEN Boolean(true) THEN Int32(0) END), sum(CAST(CASE WHEN store_returns.#<col> - store_sales.#<col> > Float64(120) THEN Int32(1) ELSE Int32(0) END AS Int64)) AS sum(CASE WHEN store_returns.#<col> - store_sales.#<col> > Int32(120) THEN Int32(1) WHEN Boolean(true) THEN Int32(0) END)]]
+          Filter: d2.#<col> = Int64(2002) AND d2.#<col> = Int64(8)
+            Inner Join: store_returns.#<col> = CAST(d2.#<col> AS Float64)
+              Inner Join: store_sales.#<col> = CAST(d1.#<col> AS Float64)
+                Inner Join: store_sales.#<col> = CAST(store.#<col> AS Float64)
+                  Inner Join: store_sales.#<col> = store_returns.#<col>, store_sales.#<col> = store_returns.#<col>, store_sales.#<col> = store_returns.#<col>
+                    Projection: <exprs>
+                      Projection: <exprs>
+                        SubqueryAlias: store_sales
+                          Projection: <exprs>
+                            Projection: <exprs>
+                              TableScan: ?table?
+                    Projection: <exprs>
+                      Projection: <exprs>
+                        SubqueryAlias: store_returns
+                          Projection: <exprs>
+                            Projection: <exprs>
+                              TableScan: ?table?
+                  Projection: <exprs>
+                    Projection: <exprs>
+                      SubqueryAlias: store
+                        Projection: <exprs>
+                          Projection: <exprs>
+                            TableScan: ?table?
+                SubqueryAlias: d1
+                  Projection: <exprs>
+                    Projection: <exprs>
+                      SubqueryAlias: date_dim
+                        Projection: <exprs>
+                          Projection: <exprs>
+                            TableScan: ?table?
+              SubqueryAlias: d2
+                Projection: <exprs>
+                  Projection: <exprs>
+                    SubqueryAlias: date_dim
+                      Projection: <exprs>
+                        Projection: <exprs>
+                          TableScan: ?table?
+
+logical_plan after eliminate_limit:
+SAME TEXT AS ABOVE
+
+logical_plan after propagate_empty_relation:
+SAME TEXT AS ABOVE
+
+logical_plan after eliminate_one_union:
+SAME TEXT AS ABOVE
+
+logical_plan after filter_null_join_keys:
+SAME TEXT AS ABOVE
+
+logical_plan after eliminate_outer_join:
+SAME TEXT AS ABOVE
+
+logical_plan after push_down_limit:
+Projection: <exprs>
+  Limit: skip=0, fetch=100
+    Sort: <exprs>
+      Projection: <exprs>
+        Aggregate: groupBy=[[store.#<col>, store.#<col>, store.#<col>, store.#<col>, store.#<col>, store.#<col>, store.#<col>, store.#<col>, store.#<col>, store.#<col>]], aggr=[[sum(CAST(CASE WHEN store_returns.#<col> - store_sales.#<col> <= Float64(30) THEN Int32(1) ELSE Int32(0) END AS Int64)) AS sum(CASE WHEN store_returns.#<col> - store_sales.#<col> <= Int32(30) THEN Int32(1) WHEN Boolean(true) THEN Int32(0) END), sum(CAST(CASE WHEN store_returns.#<col> - store_sales.#<col> > Float64(30) AND store_returns.#<col> - store_sales.#<col> <= Float64(60) THEN Int32(1) ELSE Int32(0) END AS Int64)) AS sum(CASE WHEN store_returns.#<col> - store_sales.#<col> > Int32(30) AND store_returns.#<col> - store_sales.#<col> <= Int32(60) THEN Int32(1) WHEN Boolean(true) THEN Int32(0) END), sum(CAST(CASE WHEN store_returns.#<col> - store_sales.#<col> > Float64(60) AND store_returns.#<col> - store_sales.#<col> <= Float64(90) THEN Int32(1) ELSE Int32(0) END AS Int64)) AS sum(CASE WHEN store_returns.#<col> - store_sales.#<col> > Int32(60) AND store_returns.#<col> - store_sales.#<col> <= Int32(90) THEN Int32(1) WHEN Boolean(true) THEN Int32(0) END), sum(CAST(CASE WHEN store_returns.#<col> - store_sales.#<col> > Float64(90) AND store_returns.#<col> - store_sales.#<col> <= Float64(120) THEN Int32(1) ELSE Int32(0) END AS Int64)) AS sum(CASE WHEN store_returns.#<col> - store_sales.#<col> > Int32(90) AND store_returns.#<col> - store_sales.#<col> <= Int32(120) THEN Int32(1) WHEN Boolean(true) THEN Int32(0) END), sum(CAST(CASE WHEN store_returns.#<col> - store_sales.#<col> > Float64(120) THEN Int32(1) ELSE Int32(0) END AS Int64)) AS sum(CASE WHEN store_returns.#<col> - store_sales.#<col> > Int32(120) THEN Int32(1) WHEN Boolean(true) THEN Int32(0) END)]]
+          Filter: d2.#<col> = Int64(2002) AND d2.#<col> = Int64(8)
+            Inner Join: store_returns.#<col> = CAST(d2.#<col> AS Float64)
+              Inner Join: store_sales.#<col> = CAST(d1.#<col> AS Float64)
+                Inner Join: store_sales.#<col> = CAST(store.#<col> AS Float64)
+                  Inner Join: store_sales.#<col> = store_returns.#<col>, store_sales.#<col> = store_returns.#<col>, store_sales.#<col> = store_returns.#<col>
+                    Projection: <exprs>
+                      Projection: <exprs>
+                        SubqueryAlias: store_sales
+                          Projection: <exprs>
+                            Projection: <exprs>
+                              TableScan: ?table?
+                    Projection: <exprs>
+                      Projection: <exprs>
+                        SubqueryAlias: store_returns
+                          Projection: <exprs>
+                            Projection: <exprs>
+                              TableScan: ?table?
+                  Projection: <exprs>
+                    Projection: <exprs>
+                      SubqueryAlias: store
+                        Projection: <exprs>
+                          Projection: <exprs>
+                            TableScan: ?table?
+                SubqueryAlias: d1
+                  Projection: <exprs>
+                    Projection: <exprs>
+                      SubqueryAlias: date_dim
+                        Projection: <exprs>
+                          Projection: <exprs>
+                            TableScan: ?table?
+              SubqueryAlias: d2
+                Projection: <exprs>
+                  Projection: <exprs>
+                    SubqueryAlias: date_dim
+                      Projection: <exprs>
+                        Projection: <exprs>
+                          TableScan: ?table?
+
+logical_plan after push_down_filter:
+Projection: <exprs>
+  Limit: skip=0, fetch=100
+    Sort: <exprs>
+      Projection: <exprs>
+        Aggregate: groupBy=[[store.#<col>, store.#<col>, store.#<col>, store.#<col>, store.#<col>, store.#<col>, store.#<col>, store.#<col>, store.#<col>, store.#<col>]], aggr=[[sum(CAST(CASE WHEN store_returns.#<col> - store_sales.#<col> <= Float64(30) THEN Int32(1) ELSE Int32(0) END AS Int64)) AS sum(CASE WHEN store_returns.#<col> - store_sales.#<col> <= Int32(30) THEN Int32(1) WHEN Boolean(true) THEN Int32(0) END), sum(CAST(CASE WHEN store_returns.#<col> - store_sales.#<col> > Float64(30) AND store_returns.#<col> - store_sales.#<col> <= Float64(60) THEN Int32(1) ELSE Int32(0) END AS Int64)) AS sum(CASE WHEN store_returns.#<col> - store_sales.#<col> > Int32(30) AND store_returns.#<col> - store_sales.#<col> <= Int32(60) THEN Int32(1) WHEN Boolean(true) THEN Int32(0) END), sum(CAST(CASE WHEN store_returns.#<col> - store_sales.#<col> > Float64(60) AND store_returns.#<col> - store_sales.#<col> <= Float64(90) THEN Int32(1) ELSE Int32(0) END AS Int64)) AS sum(CASE WHEN store_returns.#<col> - store_sales.#<col> > Int32(60) AND store_returns.#<col> - store_sales.#<col> <= Int32(90) THEN Int32(1) WHEN Boolean(true) THEN Int32(0) END), sum(CAST(CASE WHEN store_returns.#<col> - store_sales.#<col> > Float64(90) AND store_returns.#<col> - store_sales.#<col> <= Float64(120) THEN Int32(1) ELSE Int32(0) END AS Int64)) AS sum(CASE WHEN store_returns.#<col> - store_sales.#<col> > Int32(90) AND store_returns.#<col> - store_sales.#<col> <= Int32(120) THEN Int32(1) WHEN Boolean(true) THEN Int32(0) END), sum(CAST(CASE WHEN store_returns.#<col> - store_sales.#<col> > Float64(120) THEN Int32(1) ELSE Int32(0) END AS Int64)) AS sum(CASE WHEN store_returns.#<col> - store_sales.#<col> > Int32(120) THEN Int32(1) WHEN Boolean(true) THEN Int32(0) END)]]
+          Inner Join: store_returns.#<col> = CAST(d2.#<col> AS Float64)
+            Inner Join: store_sales.#<col> = CAST(d1.#<col> AS Float64)
+              Inner Join: store_sales.#<col> = CAST(store.#<col> AS Float64)
+                Inner Join: store_sales.#<col> = store_returns.#<col>, store_sales.#<col> = store_returns.#<col>, store_sales.#<col> = store_returns.#<col>
+                  Projection: <exprs>
+                    Projection: <exprs>
+                      SubqueryAlias: store_sales
+                        Projection: <exprs>
+                          Projection: <exprs>
+                            TableScan: ?table?
+                  Projection: <exprs>
+                    Projection: <exprs>
+                      SubqueryAlias: store_returns
+                        Projection: <exprs>
+                          Projection: <exprs>
+                            TableScan: ?table?
+                Projection: <exprs>
+                  Projection: <exprs>
+                    SubqueryAlias: store
+                      Projection: <exprs>
+                        Projection: <exprs>
+                          TableScan: ?table?
+              SubqueryAlias: d1
+                Projection: <exprs>
+                  Projection: <exprs>
+                    SubqueryAlias: date_dim
+                      Projection: <exprs>
+                        Projection: <exprs>
+                          TableScan: ?table?
+            SubqueryAlias: d2
+              Projection: <exprs>
+                Projection: <exprs>
+                  SubqueryAlias: date_dim
+                    Projection: <exprs>
+                      Projection: <exprs>
+                        Filter: ?table?._6 = Int64(2002) AND ?table?._8 = Int64(8)
+                          TableScan: ?table?
+
+logical_plan after single_distinct_aggregation_to_group_by:
+SAME TEXT AS ABOVE
+
+logical_plan after eliminate_group_by_constant:
+SAME TEXT AS ABOVE
+
+logical_plan after common_sub_expression_eliminate:
+Projection: <exprs>
+  Limit: skip=0, fetch=100
+    Sort: <exprs>
+      Projection: <exprs>
+        Aggregate: groupBy=[[store.#<col>, store.#<col>, store.#<col>, store.#<col>, store.#<col>, store.#<col>, store.#<col>, store.#<col>, store.#<col>, store.#<col>]], aggr=[[sum(CAST(CASE WHEN __common_expr_1 <= Float64(30) THEN Int32(1) ELSE Int32(0) END AS Int64)) AS sum(CASE WHEN store_returns.#<col> - store_sales.#<col> <= Int32(30) THEN Int32(1) WHEN Boolean(true) THEN Int32(0) END), sum(CAST(CASE WHEN __common_expr_1 > Float64(30) AND __common_expr_1 <= Float64(60) THEN Int32(1) ELSE Int32(0) END AS Int64)) AS sum(CASE WHEN store_returns.#<col> - store_sales.#<col> > Int32(30) AND store_returns.#<col> - store_sales.#<col> <= Int32(60) THEN Int32(1) WHEN Boolean(true) THEN Int32(0) END), sum(CAST(CASE WHEN __common_expr_1 > Float64(60) AND __common_expr_1 <= Float64(90) THEN Int32(1) ELSE Int32(0) END AS Int64)) AS sum(CASE WHEN store_returns.#<col> - store_sales.#<col> > Int32(60) AND store_returns.#<col> - store_sales.#<col> <= Int32(90) THEN Int32(1) WHEN Boolean(true) THEN Int32(0) END), sum(CAST(CASE WHEN __common_expr_1 > Float64(90) AND __common_expr_1 <= Float64(120) THEN Int32(1) ELSE Int32(0) END AS Int64)) AS sum(CASE WHEN store_returns.#<col> - store_sales.#<col> > Int32(90) AND store_returns.#<col> - store_sales.#<col> <= Int32(120) THEN Int32(1) WHEN Boolean(true) THEN Int32(0) END), sum(CAST(CASE WHEN __common_expr_1 > Float64(120) THEN Int32(1) ELSE Int32(0) END AS Int64)) AS sum(CASE WHEN store_returns.#<col> - store_sales.#<col> > Int32(120) THEN Int32(1) WHEN Boolean(true) THEN Int32(0) END)]]
+          Projection: <exprs>
+            Inner Join: store_returns.#<col> = CAST(d2.#<col> AS Float64)
+              Inner Join: store_sales.#<col> = CAST(d1.#<col> AS Float64)
+                Inner Join: store_sales.#<col> = CAST(store.#<col> AS Float64)
+                  Inner Join: store_sales.#<col> = store_returns.#<col>, store_sales.#<col> = store_returns.#<col>, store_sales.#<col> = store_returns.#<col>
+                    Projection: <exprs>
+                      Projection: <exprs>
+                        SubqueryAlias: store_sales
+                          Projection: <exprs>
+                            Projection: <exprs>
+                              TableScan: ?table?
+                    Projection: <exprs>
+                      Projection: <exprs>
+                        SubqueryAlias: store_returns
+                          Projection: <exprs>
+                            Projection: <exprs>
+                              TableScan: ?table?
+                  Projection: <exprs>
+                    Projection: <exprs>
+                      SubqueryAlias: store
+                        Projection: <exprs>
+                          Projection: <exprs>
+                            TableScan: ?table?
+                SubqueryAlias: d1
+                  Projection: <exprs>
+                    Projection: <exprs>
+                      SubqueryAlias: date_dim
+                        Projection: <exprs>
+                          Projection: <exprs>
+                            TableScan: ?table?
+              SubqueryAlias: d2
+                Projection: <exprs>
+                  Projection: <exprs>
+                    SubqueryAlias: date_dim
+                      Projection: <exprs>
+                        Projection: <exprs>
+                          Filter: ?table?._6 = Int64(2002) AND ?table?._8 = Int64(8)
+                            TableScan: ?table?
+
+logical_plan after optimize_projections:
+Projection: <exprs>
+  Limit: skip=0, fetch=100
+    Sort: <exprs>
+      Projection: <exprs>
+        Aggregate: groupBy=[[store.#<col>, store.#<col>, store.#<col>, store.#<col>, store.#<col>, store.#<col>, store.#<col>, store.#<col>, store.#<col>, store.#<col>]], aggr=[[sum(CAST(CASE WHEN __common_expr_1 <= Float64(30) THEN Int32(1) ELSE Int32(0) END AS Int64)) AS sum(CASE WHEN store_returns.#<col> - store_sales.#<col> <= Int32(30) THEN Int32(1) WHEN Boolean(true) THEN Int32(0) END), sum(CAST(CASE WHEN __common_expr_1 > Float64(30) AND __common_expr_1 <= Float64(60) THEN Int32(1) ELSE Int32(0) END AS Int64)) AS sum(CASE WHEN store_returns.#<col> - store_sales.#<col> > Int32(30) AND store_returns.#<col> - store_sales.#<col> <= Int32(60) THEN Int32(1) WHEN Boolean(true) THEN Int32(0) END), sum(CAST(CASE WHEN __common_expr_1 > Float64(60) AND __common_expr_1 <= Float64(90) THEN Int32(1) ELSE Int32(0) END AS Int64)) AS sum(CASE WHEN store_returns.#<col> - store_sales.#<col> > Int32(60) AND store_returns.#<col> - store_sales.#<col> <= Int32(90) THEN Int32(1) WHEN Boolean(true) THEN Int32(0) END), sum(CAST(CASE WHEN __common_expr_1 > Float64(90) AND __common_expr_1 <= Float64(120) THEN Int32(1) ELSE Int32(0) END AS Int64)) AS sum(CASE WHEN store_returns.#<col> - store_sales.#<col> > Int32(90) AND store_returns.#<col> - store_sales.#<col> <= Int32(120) THEN Int32(1) WHEN Boolean(true) THEN Int32(0) END), sum(CAST(CASE WHEN __common_expr_1 > Float64(120) THEN Int32(1) ELSE Int32(0) END AS Int64)) AS sum(CASE WHEN store_returns.#<col> - store_sales.#<col> > Int32(120) THEN Int32(1) WHEN Boolean(true) THEN Int32(0) END)]]
+          Projection: <exprs>
+            Inner Join: store_returns.#<col> = CAST(d2.#<col> AS Float64)
+              Projection: <exprs>
+                Inner Join: store_sales.#<col> = CAST(d1.#<col> AS Float64)
+                  Projection: <exprs>
+                    Inner Join: store_sales.#<col> = CAST(store.#<col> AS Float64)
+                      Projection: <exprs>
+                        Inner Join: store_sales.#<col> = store_returns.#<col>, store_sales.#<col> = store_returns.#<col>, store_sales.#<col> = store_returns.#<col>
+                          Projection: <exprs>
+                            SubqueryAlias: store_sales
+                              Projection: <exprs>
+                                TableScan: ?table? projection=[_0, _2, _3, _7, _9]
+                          Projection: <exprs>
+                            SubqueryAlias: store_returns
+                              Projection: <exprs>
+                                TableScan: ?table? projection=[_0, _2, _3, _9]
+                      Projection: <exprs>
+                        SubqueryAlias: store
+                          Projection: <exprs>
+                            TableScan: ?table? projection=[_0, _5, _16, _18, _19, _20, _21, _22, _23, _24, _25]
+                  SubqueryAlias: d1
+                    Projection: <exprs>
+                      SubqueryAlias: date_dim
+                        Projection: <exprs>
+                          TableScan: ?table? projection=[_0]
+              SubqueryAlias: d2
+                Projection: <exprs>
+                  SubqueryAlias: date_dim
+                    Projection: <exprs>
+                      Filter: ?table?._6 = Int64(2002) AND ?table?._8 = Int64(8)
+                        TableScan: ?table? projection=[_0, _6, _8]
+
+logical_plan after eliminate_nested_union:
+SAME TEXT AS ABOVE
+
+logical_plan after simplify_expressions:
+SAME TEXT AS ABOVE
+
+logical_plan after replace_distinct_aggregate:
+SAME TEXT AS ABOVE
+
+logical_plan after eliminate_join:
+SAME TEXT AS ABOVE
+
+logical_plan after decorrelate_predicate_subquery:
+SAME TEXT AS ABOVE
+
+logical_plan after scalar_subquery_to_join:
+SAME TEXT AS ABOVE
+
+logical_plan after decorrelate_lateral_join:
+SAME TEXT AS ABOVE
+
+logical_plan after extract_equijoin_predicate:
+SAME TEXT AS ABOVE
+
+logical_plan after eliminate_duplicated_expr:
+SAME TEXT AS ABOVE
+
+logical_plan after eliminate_filter:
+SAME TEXT AS ABOVE
+
+logical_plan after eliminate_cross_join:
+SAME TEXT AS ABOVE
+
+logical_plan after eliminate_limit:
+SAME TEXT AS ABOVE
+
+logical_plan after propagate_empty_relation:
+SAME TEXT AS ABOVE
+
+logical_plan after eliminate_one_union:
+SAME TEXT AS ABOVE
+
+logical_plan after filter_null_join_keys:
+SAME TEXT AS ABOVE
+
+logical_plan after eliminate_outer_join:
+SAME TEXT AS ABOVE
+
+logical_plan after push_down_limit:
+Projection: <exprs>
+  Sort: <exprs>
+    Projection: <exprs>
+      Aggregate: groupBy=[[store.#<col>, store.#<col>, store.#<col>, store.#<col>, store.#<col>, store.#<col>, store.#<col>, store.#<col>, store.#<col>, store.#<col>]], aggr=[[sum(CAST(CASE WHEN __common_expr_1 <= Float64(30) THEN Int32(1) ELSE Int32(0) END AS Int64)) AS sum(CASE WHEN store_returns.#<col> - store_sales.#<col> <= Int32(30) THEN Int32(1) WHEN Boolean(true) THEN Int32(0) END), sum(CAST(CASE WHEN __common_expr_1 > Float64(30) AND __common_expr_1 <= Float64(60) THEN Int32(1) ELSE Int32(0) END AS Int64)) AS sum(CASE WHEN store_returns.#<col> - store_sales.#<col> > Int32(30) AND store_returns.#<col> - store_sales.#<col> <= Int32(60) THEN Int32(1) WHEN Boolean(true) THEN Int32(0) END), sum(CAST(CASE WHEN __common_expr_1 > Float64(60) AND __common_expr_1 <= Float64(90) THEN Int32(1) ELSE Int32(0) END AS Int64)) AS sum(CASE WHEN store_returns.#<col> - store_sales.#<col> > Int32(60) AND store_returns.#<col> - store_sales.#<col> <= Int32(90) THEN Int32(1) WHEN Boolean(true) THEN Int32(0) END), sum(CAST(CASE WHEN __common_expr_1 > Float64(90) AND __common_expr_1 <= Float64(120) THEN Int32(1) ELSE Int32(0) END AS Int64)) AS sum(CASE WHEN store_returns.#<col> - store_sales.#<col> > Int32(90) AND store_returns.#<col> - store_sales.#<col> <= Int32(120) THEN Int32(1) WHEN Boolean(true) THEN Int32(0) END), sum(CAST(CASE WHEN __common_expr_1 > Float64(120) THEN Int32(1) ELSE Int32(0) END AS Int64)) AS sum(CASE WHEN store_returns.#<col> - store_sales.#<col> > Int32(120) THEN Int32(1) WHEN Boolean(true) THEN Int32(0) END)]]
+        Projection: <exprs>
+          Inner Join: store_returns.#<col> = CAST(d2.#<col> AS Float64)
+            Projection: <exprs>
+              Inner Join: store_sales.#<col> = CAST(d1.#<col> AS Float64)
+                Projection: <exprs>
+                  Inner Join: store_sales.#<col> = CAST(store.#<col> AS Float64)
+                    Projection: <exprs>
+                      Inner Join: store_sales.#<col> = store_returns.#<col>, store_sales.#<col> = store_returns.#<col>, store_sales.#<col> = store_returns.#<col>
+                        Projection: <exprs>
+                          SubqueryAlias: store_sales
+                            Projection: <exprs>
+                              TableScan: ?table? projection=[_0, _2, _3, _7, _9]
+                        Projection: <exprs>
+                          SubqueryAlias: store_returns
+                            Projection: <exprs>
+                              TableScan: ?table? projection=[_0, _2, _3, _9]
+                    Projection: <exprs>
+                      SubqueryAlias: store
+                        Projection: <exprs>
+                          TableScan: ?table? projection=[_0, _5, _16, _18, _19, _20, _21, _22, _23, _24, _25]
+                SubqueryAlias: d1
+                  Projection: <exprs>
+                    SubqueryAlias: date_dim
+                      Projection: <exprs>
+                        TableScan: ?table? projection=[_0]
+            SubqueryAlias: d2
+              Projection: <exprs>
+                SubqueryAlias: date_dim
+                  Projection: <exprs>
+                    Filter: ?table?._6 = Int64(2002) AND ?table?._8 = Int64(8)
+                      TableScan: ?table? projection=[_0, _6, _8]
+
+logical_plan after push_down_filter:
+SAME TEXT AS ABOVE
+
+logical_plan after single_distinct_aggregation_to_group_by:
+SAME TEXT AS ABOVE
+
+logical_plan after eliminate_group_by_constant:
+SAME TEXT AS ABOVE
+
+logical_plan after common_sub_expression_eliminate:
+SAME TEXT AS ABOVE
+
+logical_plan after optimize_projections:
+SAME TEXT AS ABOVE
+
+logical_plan after eliminate_nested_union:
+SAME TEXT AS ABOVE
+
+logical_plan after simplify_expressions:
+SAME TEXT AS ABOVE
+
+logical_plan after replace_distinct_aggregate:
+SAME TEXT AS ABOVE
+
+logical_plan after eliminate_join:
+SAME TEXT AS ABOVE
+
+logical_plan after decorrelate_predicate_subquery:
+SAME TEXT AS ABOVE
+
+logical_plan after scalar_subquery_to_join:
+SAME TEXT AS ABOVE
+
+logical_plan after decorrelate_lateral_join:
+SAME TEXT AS ABOVE
+
+logical_plan after extract_equijoin_predicate:
+SAME TEXT AS ABOVE
+
+logical_plan after eliminate_duplicated_expr:
+SAME TEXT AS ABOVE
+
+logical_plan after eliminate_filter:
+SAME TEXT AS ABOVE
+
+logical_plan after eliminate_cross_join:
+SAME TEXT AS ABOVE
+
+logical_plan after eliminate_limit:
+SAME TEXT AS ABOVE
+
+logical_plan after propagate_empty_relation:
+SAME TEXT AS ABOVE
+
+logical_plan after eliminate_one_union:
+SAME TEXT AS ABOVE
+
+logical_plan after filter_null_join_keys:
+SAME TEXT AS ABOVE
+
+logical_plan after eliminate_outer_join:
+SAME TEXT AS ABOVE
+
+logical_plan after push_down_limit:
+SAME TEXT AS ABOVE
+
+logical_plan after push_down_filter:
+SAME TEXT AS ABOVE
+
+logical_plan after single_distinct_aggregation_to_group_by:
+SAME TEXT AS ABOVE
+
+logical_plan after eliminate_group_by_constant:
+SAME TEXT AS ABOVE
+
+logical_plan after common_sub_expression_eliminate:
+SAME TEXT AS ABOVE
+
+logical_plan after optimize_projections:
+SAME TEXT AS ABOVE
+
+logical_plan:
+Projection: <exprs>
+  Sort: <exprs>
+    Projection: <exprs>
+      Aggregate: groupBy=[[store.#<col>, store.#<col>, store.#<col>, store.#<col>, store.#<col>, store.#<col>, store.#<col>, store.#<col>, store.#<col>, store.#<col>]], aggr=[[sum(CAST(CASE WHEN __common_expr_1 <= Float64(30) THEN Int32(1) ELSE Int32(0) END AS Int64)) AS sum(CASE WHEN store_returns.#<col> - store_sales.#<col> <= Int32(30) THEN Int32(1) WHEN Boolean(true) THEN Int32(0) END), sum(CAST(CASE WHEN __common_expr_1 > Float64(30) AND __common_expr_1 <= Float64(60) THEN Int32(1) ELSE Int32(0) END AS Int64)) AS sum(CASE WHEN store_returns.#<col> - store_sales.#<col> > Int32(30) AND store_returns.#<col> - store_sales.#<col> <= Int32(60) THEN Int32(1) WHEN Boolean(true) THEN Int32(0) END), sum(CAST(CASE WHEN __common_expr_1 > Float64(60) AND __common_expr_1 <= Float64(90) THEN Int32(1) ELSE Int32(0) END AS Int64)) AS sum(CASE WHEN store_returns.#<col> - store_sales.#<col> > Int32(60) AND store_returns.#<col> - store_sales.#<col> <= Int32(90) THEN Int32(1) WHEN Boolean(true) THEN Int32(0) END), sum(CAST(CASE WHEN __common_expr_1 > Float64(90) AND __common_expr_1 <= Float64(120) THEN Int32(1) ELSE Int32(0) END AS Int64)) AS sum(CASE WHEN store_returns.#<col> - store_sales.#<col> > Int32(90) AND store_returns.#<col> - store_sales.#<col> <= Int32(120) THEN Int32(1) WHEN Boolean(true) THEN Int32(0) END), sum(CAST(CASE WHEN __common_expr_1 > Float64(120) THEN Int32(1) ELSE Int32(0) END AS Int64)) AS sum(CASE WHEN store_returns.#<col> - store_sales.#<col> > Int32(120) THEN Int32(1) WHEN Boolean(true) THEN Int32(0) END)]]
+        Projection: <exprs>
+          Inner Join: store_returns.#<col> = CAST(d2.#<col> AS Float64)
+            Projection: <exprs>
+              Inner Join: store_sales.#<col> = CAST(d1.#<col> AS Float64)
+                Projection: <exprs>
+                  Inner Join: store_sales.#<col> = CAST(store.#<col> AS Float64)
+                    Projection: <exprs>
+                      Inner Join: store_sales.#<col> = store_returns.#<col>, store_sales.#<col> = store_returns.#<col>, store_sales.#<col> = store_returns.#<col>
+                        Projection: <exprs>
+                          SubqueryAlias: store_sales
+                            Projection: <exprs>
+                              TableScan: ?table? projection=[_0, _2, _3, _7, _9]
+                        Projection: <exprs>
+                          SubqueryAlias: store_returns
+                            Projection: <exprs>
+                              TableScan: ?table? projection=[_0, _2, _3, _9]
+                    Projection: <exprs>
+                      SubqueryAlias: store
+                        Projection: <exprs>
+                          TableScan: ?table? projection=[_0, _5, _16, _18, _19, _20, _21, _22, _23, _24, _25]
+                SubqueryAlias: d1
+                  Projection: <exprs>
+                    SubqueryAlias: date_dim
+                      Projection: <exprs>
+                        TableScan: ?table? projection=[_0]
+            SubqueryAlias: d2
+              Projection: <exprs>
+                SubqueryAlias: date_dim
+                  Projection: <exprs>
+                    Filter: ?table?._6 = Int64(2002) AND ?table?._8 = Int64(8)
+                      TableScan: ?table? projection=[_0, _6, _8]
+
+initial_physical_plan:
+ProjectionExec: expr=[<exprs>]
+  SortExec: [<sort_exprs>], fetch=100
+    SortExec: expr=[<exprs>]
+      ProjectionExec: expr=[<exprs>]
+        AggregateExec: mode=FinalPartitioned, gby=[#<col> as #<col>, #<col> as #<col>, #<col> as #<col>, #<col> as #<col>, #<col> as #<col>, #<col> as #<col>, #<col> as #<col>, #<col> as #<col>, #<col> as #<col>, #<col> as #<col>], aggr=[sum(CASE WHEN store_returns.#<col> - store_sales.#<col> <= Int32(30) THEN Int32(1) WHEN Boolean(true) THEN Int32(0) END), sum(CASE WHEN store_returns.#<col> - store_sales.#<col> > Int32(30) AND store_returns.#<col> - store_sales.#<col> <= Int32(60) THEN Int32(1) WHEN Boolean(true) THEN Int32(0) END), sum(CASE WHEN store_returns.#<col> - store_sales.#<col> > Int32(60) AND store_returns.#<col> - store_sales.#<col> <= Int32(90) THEN Int32(1) WHEN Boolean(true) THEN Int32(0) END), sum(CASE WHEN store_returns.#<col> - store_sales.#<col> > Int32(90) AND store_returns.#<col> - store_sales.#<col> <= Int32(120) THEN Int32(1) WHEN Boolean(true) THEN Int32(0) END), sum(CASE WHEN store_returns.#<col> - store_sales.#<col> > Int32(120) THEN Int32(1) WHEN Boolean(true) THEN Int32(0) END)]
+          CoalesceBatchesExec: target_batch_size=8192
+            RepartitionExec: partitioning=Hash([#<col>, #<col>, #<col>, #<col>, #<col>, #<col>, #<col>, #<col>, #<col>, #<col>], <partitions>), input_partitions=<partitions>
+              AggregateExec: mode=Partial, gby=[#<col> as #<col>, #<col> as #<col>, #<col> as #<col>, #<col> as #<col>, #<col> as #<col>, #<col> as #<col>, #<col> as #<col>, #<col> as #<col>, #<col> as #<col>, #<col> as #<col>], aggr=[sum(CASE WHEN store_returns.#<col> - store_sales.#<col> <= Int32(30) THEN Int32(1) WHEN Boolean(true) THEN Int32(0) END), sum(CASE WHEN store_returns.#<col> - store_sales.#<col> > Int32(30) AND store_returns.#<col> - store_sales.#<col> <= Int32(60) THEN Int32(1) WHEN Boolean(true) THEN Int32(0) END), sum(CASE WHEN store_returns.#<col> - store_sales.#<col> > Int32(60) AND store_returns.#<col> - store_sales.#<col> <= Int32(90) THEN Int32(1) WHEN Boolean(true) THEN Int32(0) END), sum(CASE WHEN store_returns.#<col> - store_sales.#<col> > Int32(90) AND store_returns.#<col> - store_sales.#<col> <= Int32(120) THEN Int32(1) WHEN Boolean(true) THEN Int32(0) END), sum(CASE WHEN store_returns.#<col> - store_sales.#<col> > Int32(120) THEN Int32(1) WHEN Boolean(true) THEN Int32(0) END)]
+                ProjectionExec: expr=[<exprs>]
+                  CoalesceBatchesExec: target_batch_size=8192
+                    HashJoinExec: mode=CollectLeft, join_type=Inner, on=[(#<col>, CAST(d2.#<col> AS Float64)@<id>)], projection=[#<col>, #<col>, #<col>, #<col>, #<col>, #<col>, #<col>, #<col>, #<col>, #<col>, #<col>, #<col>]
+                      CoalescePartitionsExec
+                        CoalesceBatchesExec: target_batch_size=8192
+                          HashJoinExec: mode=CollectLeft, join_type=Inner, on=[(#<col>, CAST(d1.#<col> AS Float64)@<id>)], projection=[#<col>, #<col>, #<col>, #<col>, #<col>, #<col>, #<col>, #<col>, #<col>, #<col>, #<col>, #<col>]
+                            CoalescePartitionsExec
+                              ProjectionExec: expr=[<exprs>]
+                                CoalesceBatchesExec: target_batch_size=8192
+                                  HashJoinExec: mode=CollectLeft, join_type=Inner, on=[(CAST(store.#<col> AS Float64)@<id>, #<col>)], projection=[#<col>, #<col>, #<col>, #<col>, #<col>, #<col>, #<col>, #<col>, #<col>, #<col>, #<col>, #<col>]
+                                    ProjectionExec: expr=[<exprs>]
+                                      DataSourceExec: partitions=1, partition_sizes=[<sizes>]
+                                    ProjectionExec: expr=[<exprs>]
+                                      CoalesceBatchesExec: target_batch_size=8192
+                                        HashJoinExec: mode=CollectLeft, join_type=Inner, on=[(#<col>, #<col>), (#<col>, #<col>), (#<col>, #<col>)], projection=[#<col>, #<col>, #<col>]
+                                          ProjectionExec: expr=[<exprs>]
+                                            DataSourceExec: partitions=1, partition_sizes=[<sizes>]
+                                          RepartitionExec: partitioning=RoundRobinBatch(<partitions>), input_partitions=<partitions>
+                                            ProjectionExec: expr=[<exprs>]
+                                              DataSourceExec: partitions=1, partition_sizes=[<sizes>]
+                            ProjectionExec: expr=[<exprs>]
+                              RepartitionExec: partitioning=RoundRobinBatch(<partitions>), input_partitions=<partitions>
+                                ProjectionExec: expr=[<exprs>]
+                                  DataSourceExec: partitions=1, partition_sizes=[<sizes>]
+                      ProjectionExec: expr=[<exprs>]
+                        CoalesceBatchesExec: target_batch_size=8192
+                          FilterExec: _6@<id> = 2002 AND _8@<id> = 8, projection=[_0@<id>]
+                            RepartitionExec: partitioning=RoundRobinBatch(<partitions>), input_partitions=<partitions>
+                              DataSourceExec: partitions=1, partition_sizes=[<sizes>]
+
+
+initial_physical_plan_with_stats:
+ProjectionExec: expr=[<exprs>]
+  SortExec: [<sort_exprs>]
+    SortExec: expr=[<exprs>]
+      ProjectionExec: expr=[<exprs>]
+        AggregateExec: mode=FinalPartitioned, gby=[#<col> as #<col>, #<col> as #<col>, #<col> as #<col>, #<col> as #<col>, #<col> as #<col>, #<col> as #<col>, #<col> as #<col>, #<col> as #<col>, #<col> as #<col>, #<col> as #<col>], aggr=[sum(CASE WHEN store_returns.#<col> - store_sales.#<col> <= Int32(30) THEN Int32(1) WHEN Boolean(true) THEN Int32(0) END), sum(CASE WHEN store_returns.#<col> - store_sales.#<col> > Int32(30) AND store_returns.#<col> - store_sales.#<col> <= Int32(60) THEN Int32(1) WHEN Boolean(true) THEN Int32(0) END), sum(CASE WHEN store_returns.#<col> - store_sales.#<col> > Int32(60) AND store_returns.#<col> - store_sales.#<col> <= Int32(90) THEN Int32(1) WHEN Boolean(true) THEN Int32(0) END), sum(CASE WHEN store_returns.#<col> - store_sales.#<col> > Int32(90) AND store_returns.#<col> - store_sales.#<col> <= Int32(120) THEN Int32(1) WHEN Boolean(true) THEN Int32(0) END), sum(CASE WHEN store_returns.#<col> - store_sales.#<col> > Int32(120) THEN Int32(1) WHEN Boolean(true) THEN Int32(0) END)], statistics=[Rows=Inexact(1), Bytes=Absent, [(Col[0]:),(Col[1]:),(Col[2]:),(Col[3]:),(Col[4]:),(Col[5]:),(Col[6]:),(Col[7]:),(Col[8]:),(Col[9]:),(Col[10]:),(Col[11]:),(Col[12]:),(Col[13]:),(Col[14]:)]]
+          CoalesceBatchesExec: target_batch_size=8192, statistics=[Rows=Inexact(1), Bytes=Absent, [(Col[0]:),(Col[1]:),(Col[2]:),(Col[3]:),(Col[4]:),(Col[5]:),(Col[6]:),(Col[7]:),(Col[8]:),(Col[9]:),(Col[10]:),(Col[11]:),(Col[12]:),(Col[13]:),(Col[14]:)]]
+            RepartitionExec: partitioning=Hash([#<col>, #<col>, #<col>, #<col>, #<col>, #<col>, #<col>, #<col>, #<col>, #<col>], <partitions>), input_partitions=<partitions>, statistics=[Rows=Inexact(1), Bytes=Absent, [(Col[0]:),(Col[1]:),(Col[2]:),(Col[3]:),(Col[4]:),(Col[5]:),(Col[6]:),(Col[7]:),(Col[8]:),(Col[9]:),(Col[10]:),(Col[11]:),(Col[12]:),(Col[13]:),(Col[14]:)]]
+              AggregateExec: mode=Partial, gby=[#<col> as #<col>, #<col> as #<col>, #<col> as #<col>, #<col> as #<col>, #<col> as #<col>, #<col> as #<col>, #<col> as #<col>, #<col> as #<col>, #<col> as #<col>, #<col> as #<col>], aggr=[sum(CASE WHEN store_returns.#<col> - store_sales.#<col> <= Int32(30) THEN Int32(1) WHEN Boolean(true) THEN Int32(0) END), sum(CASE WHEN store_returns.#<col> - store_sales.#<col> > Int32(30) AND store_returns.#<col> - store_sales.#<col> <= Int32(60) THEN Int32(1) WHEN Boolean(true) THEN Int32(0) END), sum(CASE WHEN store_returns.#<col> - store_sales.#<col> > Int32(60) AND store_returns.#<col> - store_sales.#<col> <= Int32(90) THEN Int32(1) WHEN Boolean(true) THEN Int32(0) END), sum(CASE WHEN store_returns.#<col> - store_sales.#<col> > Int32(90) AND store_returns.#<col> - store_sales.#<col> <= Int32(120) THEN Int32(1) WHEN Boolean(true) THEN Int32(0) END), sum(CASE WHEN store_returns.#<col> - store_sales.#<col> > Int32(120) THEN Int32(1) WHEN Boolean(true) THEN Int32(0) END)], statistics=[Rows=Inexact(1), Bytes=Absent, [(Col[0]:),(Col[1]:),(Col[2]:),(Col[3]:),(Col[4]:),(Col[5]:),(Col[6]:),(Col[7]:),(Col[8]:),(Col[9]:),(Col[10]:),(Col[11]:),(Col[12]:),(Col[13]:),(Col[14]:)]]
+                ProjectionExec: expr=[<exprs>]
+                  CoalesceBatchesExec: target_batch_size=8192, statistics=[Rows=Inexact(1), Bytes=Absent, [(Col[0]: Null=Exact(1208)),(Col[1]: Null=Exact(98)),(Col[2]: Null=Exact(0)),(Col[3]: Null=Exact(0)),(Col[4]: Null=Exact(0)),(Col[5]: Null=Exact(0)),(Col[6]: Null=Exact(0)),(Col[7]: Null=Exact(0)),(Col[8]: Null=Exact(0)),(Col[9]: Null=Exact(0)),(Col[10]: Null=Exact(0)),(Col[11]: Null=Exact(0))]]
+                    HashJoinExec: mode=CollectLeft, join_type=Inner, on=[(#<col>, CAST(d2.#<col> AS Float64)@<id>)], projection=[#<col>, #<col>, #<col>, #<col>, #<col>, #<col>, #<col>, #<col>, #<col>, #<col>, #<col>, #<col>], statistics=[Rows=Inexact(1), Bytes=Absent, [(Col[0]: Null=Exact(1208)),(Col[1]: Null=Exact(98)),(Col[2]: Null=Exact(0)),(Col[3]: Null=Exact(0)),(Col[4]: Null=Exact(0)),(Col[5]: Null=Exact(0)),(Col[6]: Null=Exact(0)),(Col[7]: Null=Exact(0)),(Col[8]: Null=Exact(0)),(Col[9]: Null=Exact(0)),(Col[10]: Null=Exact(0)),(Col[11]: Null=Exact(0))]]
+                      CoalescePartitionsExec, statistics=[Rows=Inexact(1), Bytes=Absent, [(Col[0]: Null=Exact(1208)),(Col[1]: Null=Exact(98)),(Col[2]: Null=Exact(0)),(Col[3]: Null=Exact(0)),(Col[4]: Null=Exact(0)),(Col[5]: Null=Exact(0)),(Col[6]: Null=Exact(0)),(Col[7]: Null=Exact(0)),(Col[8]: Null=Exact(0)),(Col[9]: Null=Exact(0)),(Col[10]: Null=Exact(0)),(Col[11]: Null=Exact(0))]]
+                        CoalesceBatchesExec: target_batch_size=8192, statistics=[Rows=Inexact(1), Bytes=Absent, [(Col[0]: Null=Exact(1208)),(Col[1]: Null=Exact(98)),(Col[2]: Null=Exact(0)),(Col[3]: Null=Exact(0)),(Col[4]: Null=Exact(0)),(Col[5]: Null=Exact(0)),(Col[6]: Null=Exact(0)),(Col[7]: Null=Exact(0)),(Col[8]: Null=Exact(0)),(Col[9]: Null=Exact(0)),(Col[10]: Null=Exact(0)),(Col[11]: Null=Exact(0))]]
+                          HashJoinExec: mode=CollectLeft, join_type=Inner, on=[(#<col>, CAST(d1.#<col> AS Float64)@<id>)], projection=[#<col>, #<col>, #<col>, #<col>, #<col>, #<col>, #<col>, #<col>, #<col>, #<col>, #<col>, #<col>], statistics=[Rows=Inexact(1), Bytes=Absent, [(Col[0]: Null=Exact(1208)),(Col[1]: Null=Exact(98)),(Col[2]: Null=Exact(0)),(Col[3]: Null=Exact(0)),(Col[4]: Null=Exact(0)),(Col[5]: Null=Exact(0)),(Col[6]: Null=Exact(0)),(Col[7]: Null=Exact(0)),(Col[8]: Null=Exact(0)),(Col[9]: Null=Exact(0)),(Col[10]: Null=Exact(0)),(Col[11]: Null=Exact(0))]]
+                            CoalescePartitionsExec, statistics=[Rows=Inexact(1), Bytes=Absent, [(Col[0]: Null=Exact(1208)),(Col[1]: Null=Exact(98)),(Col[2]: Null=Exact(0)),(Col[3]: Null=Exact(0)),(Col[4]: Null=Exact(0)),(Col[5]: Null=Exact(0)),(Col[6]: Null=Exact(0)),(Col[7]: Null=Exact(0)),(Col[8]: Null=Exact(0)),(Col[9]: Null=Exact(0)),(Col[10]: Null=Exact(0)),(Col[11]: Null=Exact(0))]]
+                              ProjectionExec: expr=[<exprs>]
+                                CoalesceBatchesExec: target_batch_size=8192, statistics=[Rows=Inexact(1), Bytes=Absent, [(Col[0]: Null=Exact(0)),(Col[1]: Null=Exact(0)),(Col[2]: Null=Exact(0)),(Col[3]: Null=Exact(0)),(Col[4]: Null=Exact(0)),(Col[5]: Null=Exact(0)),(Col[6]: Null=Exact(0)),(Col[7]: Null=Exact(0)),(Col[8]: Null=Exact(0)),(Col[9]: Null=Exact(0)),(Col[10]: Null=Exact(1208)),(Col[11]: Null=Exact(98))]]
+                                  HashJoinExec: mode=CollectLeft, join_type=Inner, on=[(CAST(store.#<col> AS Float64)@<id>, #<col>)], projection=[#<col>, #<col>, #<col>, #<col>, #<col>, #<col>, #<col>, #<col>, #<col>, #<col>, #<col>, #<col>], statistics=[Rows=Inexact(1), Bytes=Absent, [(Col[0]: Null=Exact(0)),(Col[1]: Null=Exact(0)),(Col[2]: Null=Exact(0)),(Col[3]: Null=Exact(0)),(Col[4]: Null=Exact(0)),(Col[5]: Null=Exact(0)),(Col[6]: Null=Exact(0)),(Col[7]: Null=Exact(0)),(Col[8]: Null=Exact(0)),(Col[9]: Null=Exact(0)),(Col[10]: Null=Exact(1208)),(Col[11]: Null=Exact(98))]]
+                                    ProjectionExec: expr=[<exprs>]
+                                      DataSourceExec: partitions=1, partition_sizes=[<sizes>], statistics=[Rows=Exact(1), Bytes=Exact(<bytes>), [(Col[0]: Null=Exact(0)),(Col[1]: Null=Exact(0)),(Col[2]: Null=Exact(0)),(Col[3]: Null=Exact(0)),(Col[4]: Null=Exact(0)),(Col[5]: Null=Exact(0)),(Col[6]: Null=Exact(0)),(Col[7]: Null=Exact(0)),(Col[8]: Null=Exact(0)),(Col[9]: Null=Exact(0)),(Col[10]: Null=Exact(0))]]
+                                    ProjectionExec: expr=[<exprs>]
+                                      CoalesceBatchesExec: target_batch_size=8192, statistics=[Rows=Inexact(2931), Bytes=Absent, [(Col[0]: Null=Exact(98)),(Col[1]: Null=Exact(1208)),(Col[2]: Null=Exact(1242))]]
+                                        HashJoinExec: mode=CollectLeft, join_type=Inner, on=[(#<col>, #<col>), (#<col>, #<col>), (#<col>, #<col>)], projection=[#<col>, #<col>, #<col>], statistics=[Rows=Inexact(2931), Bytes=Absent, [(Col[0]: Null=Exact(98)),(Col[1]: Null=Exact(1208)),(Col[2]: Null=Exact(1242))]]
+                                          ProjectionExec: expr=[<exprs>]
+                                            DataSourceExec: partitions=1, partition_sizes=[<sizes>], statistics=[Rows=Exact(2810), Bytes=Exact(<bytes>), [(Col[0]: Null=Exact(98)),(Col[1]: Null=Exact(0)),(Col[2]: Null=Exact(103)),(Col[3]: Null=Exact(0))]]
+                                          RepartitionExec: partitioning=RoundRobinBatch(<partitions>), input_partitions=<partitions>, statistics=[Rows=Exact(28810), Bytes=Exact(<bytes>), [(Col[0]: Null=Exact(1208)),(Col[1]: Null=Exact(0)),(Col[2]: Null=Exact(1197)),(Col[3]: Null=Exact(1242)),(Col[4]: Null=Exact(0))]]
+                                            ProjectionExec: expr=[<exprs>]
+                                              DataSourceExec: partitions=1, partition_sizes=[<sizes>], statistics=[Rows=Exact(28810), Bytes=Exact(<bytes>), [(Col[0]: Null=Exact(1208)),(Col[1]: Null=Exact(0)),(Col[2]: Null=Exact(1197)),(Col[3]: Null=Exact(1242)),(Col[4]: Null=Exact(0))]]
+                            ProjectionExec: expr=[<exprs>]
+                              RepartitionExec: partitioning=RoundRobinBatch(<partitions>), input_partitions=<partitions>, statistics=[Rows=Exact(73049), Bytes=Exact(<bytes>), [(Col[0]: Null=Exact(0))]]
+                                ProjectionExec: expr=[<exprs>]
+                                  DataSourceExec: partitions=1, partition_sizes=[<sizes>], statistics=[Rows=Exact(73049), Bytes=Exact(<bytes>), [(Col[0]: Null=Exact(0))]]
+                      ProjectionExec: expr=[<exprs>]
+                        CoalesceBatchesExec: target_batch_size=8192, statistics=[Rows=Inexact(14610), Bytes=Inexact(<bytes>), [(Col[0]: Null=Inexact(0))]]
+                          FilterExec: _6@<id> = 2002 AND _8@<id> = 8, projection=[_0@<id>], statistics=[Rows=Inexact(14610), Bytes=Inexact(<bytes>), [(Col[0]: Null=Inexact(0))]]
+                            RepartitionExec: partitioning=RoundRobinBatch(<partitions>), input_partitions=<partitions>, statistics=[Rows=Exact(73049), Bytes=Exact(<bytes>), [(Col[0]: Null=Exact(0)),(Col[1]: Null=Exact(0)),(Col[2]: Null=Exact(0))]]
+                              DataSourceExec: partitions=1, partition_sizes=[<sizes>], statistics=[Rows=Exact(73049), Bytes=Exact(<bytes>), [(Col[0]: Null=Exact(0)),(Col[1]: Null=Exact(0)),(Col[2]: Null=Exact(0))]]
+
+
+initial_physical_plan_with_schema:
+ProjectionExec: expr=[<exprs>]
+  SortExec: [<sort_exprs>]
+    SortExec: expr=[<exprs>]
+      ProjectionExec: expr=[<exprs>]
+        AggregateExec: mode=FinalPartitioned, gby=[#<col> as #<col>, #<col> as #<col>, #<col> as #<col>, #<col> as #<col>, #<col> as #<col>, #<col> as #<col>, #<col> as #<col>, #<col> as #<col>, #<col> as #<col>, #<col> as #<col>], aggr=[sum(CASE WHEN store_returns.#<col> - store_sales.#<col> <= Int32(30) THEN Int32(1) WHEN Boolean(true) THEN Int32(0) END), sum(CASE WHEN store_returns.#<col> - store_sales.#<col> > Int32(30) AND store_returns.#<col> - store_sales.#<col> <= Int32(60) THEN Int32(1) WHEN Boolean(true) THEN Int32(0) END), sum(CASE WHEN store_returns.#<col> - store_sales.#<col> > Int32(60) AND store_returns.#<col> - store_sales.#<col> <= Int32(90) THEN Int32(1) WHEN Boolean(true) THEN Int32(0) END), sum(CASE WHEN store_returns.#<col> - store_sales.#<col> > Int32(90) AND store_returns.#<col> - store_sales.#<col> <= Int32(120) THEN Int32(1) WHEN Boolean(true) THEN Int32(0) END), sum(CASE WHEN store_returns.#<col> - store_sales.#<col> > Int32(120) THEN Int32(1) WHEN Boolean(true) THEN Int32(0) END)], schema=[#<col>:Utf8;N, #<col>:Int64;N, #<col>:Utf8;N, #<col>:Utf8;N, #<col>:Utf8;N, #<col>:Utf8;N, #<col>:Utf8;N, #<col>:Utf8;N, #<col>:Utf8;N, #<col>:Utf8;N, sum(CASE WHEN store_returns.#<col> - store_sales.#<col> <= Int32(30) THEN Int32(1) WHEN Boolean(true) THEN Int32(0) END):Int64;N, sum(CASE WHEN store_returns.#<col> - store_sales.#<col> > Int32(30) AND store_returns.#<col> - store_sales.#<col> <= Int32(60) THEN Int32(1) WHEN Boolean(true) THEN Int32(0) END):Int64;N, sum(CASE WHEN store_returns.#<col> - store_sales.#<col> > Int32(60) AND store_returns.#<col> - store_sales.#<col> <= Int32(90) THEN Int32(1) WHEN Boolean(true) THEN Int32(0) END):Int64;N, sum(CASE WHEN store_returns.#<col> - store_sales.#<col> > Int32(90) AND store_returns.#<col> - store_sales.#<col> <= Int32(120) THEN Int32(1) WHEN Boolean(true) THEN Int32(0) END):Int64;N, sum(CASE WHEN store_returns.#<col> - store_sales.#<col> > Int32(120) THEN Int32(1) WHEN Boolean(true) THEN Int32(0) END):Int64;N]
+          CoalesceBatchesExec: target_batch_size=8192, schema=[#<col>:Utf8;N, #<col>:Int64;N, #<col>:Utf8;N, #<col>:Utf8;N, #<col>:Utf8;N, #<col>:Utf8;N, #<col>:Utf8;N, #<col>:Utf8;N, #<col>:Utf8;N, #<col>:Utf8;N, sum(CASE WHEN store_returns.#<col> - store_sales.#<col> <= Int32(30) THEN Int32(1) WHEN Boolean(true) THEN Int32(0) END)[sum]:Int64;N, sum(CASE WHEN store_returns.#<col> - store_sales.#<col> > Int32(30) AND store_returns.#<col> - store_sales.#<col> <= Int32(60) THEN Int32(1) WHEN Boolean(true) THEN Int32(0) END)[sum]:Int64;N, sum(CASE WHEN store_returns.#<col> - store_sales.#<col> > Int32(60) AND store_returns.#<col> - store_sales.#<col> <= Int32(90) THEN Int32(1) WHEN Boolean(true) THEN Int32(0) END)[sum]:Int64;N, sum(CASE WHEN store_returns.#<col> - store_sales.#<col> > Int32(90) AND store_returns.#<col> - store_sales.#<col> <= Int32(120) THEN Int32(1) WHEN Boolean(true) THEN Int32(0) END)[sum]:Int64;N, sum(CASE WHEN store_returns.#<col> - store_sales.#<col> > Int32(120) THEN Int32(1) WHEN Boolean(true) THEN Int32(0) END)[sum]:Int64;N]
+            RepartitionExec: partitioning=Hash([#<col>, #<col>, #<col>, #<col>, #<col>, #<col>, #<col>, #<col>, #<col>, #<col>], <partitions>), input_partitions=<partitions>, schema=[#<col>:Utf8;N, #<col>:Int64;N, #<col>:Utf8;N, #<col>:Utf8;N, #<col>:Utf8;N, #<col>:Utf8;N, #<col>:Utf8;N, #<col>:Utf8;N, #<col>:Utf8;N, #<col>:Utf8;N, sum(CASE WHEN store_returns.#<col> - store_sales.#<col> <= Int32(30) THEN Int32(1) WHEN Boolean(true) THEN Int32(0) END)[sum]:Int64;N, sum(CASE WHEN store_returns.#<col> - store_sales.#<col> > Int32(30) AND store_returns.#<col> - store_sales.#<col> <= Int32(60) THEN Int32(1) WHEN Boolean(true) THEN Int32(0) END)[sum]:Int64;N, sum(CASE WHEN store_returns.#<col> - store_sales.#<col> > Int32(60) AND store_returns.#<col> - store_sales.#<col> <= Int32(90) THEN Int32(1) WHEN Boolean(true) THEN Int32(0) END)[sum]:Int64;N, sum(CASE WHEN store_returns.#<col> - store_sales.#<col> > Int32(90) AND store_returns.#<col> - store_sales.#<col> <= Int32(120) THEN Int32(1) WHEN Boolean(true) THEN Int32(0) END)[sum]:Int64;N, sum(CASE WHEN store_returns.#<col> - store_sales.#<col> > Int32(120) THEN Int32(1) WHEN Boolean(true) THEN Int32(0) END)[sum]:Int64;N]
+              AggregateExec: mode=Partial, gby=[#<col> as #<col>, #<col> as #<col>, #<col> as #<col>, #<col> as #<col>, #<col> as #<col>, #<col> as #<col>, #<col> as #<col>, #<col> as #<col>, #<col> as #<col>, #<col> as #<col>], aggr=[sum(CASE WHEN store_returns.#<col> - store_sales.#<col> <= Int32(30) THEN Int32(1) WHEN Boolean(true) THEN Int32(0) END), sum(CASE WHEN store_returns.#<col> - store_sales.#<col> > Int32(30) AND store_returns.#<col> - store_sales.#<col> <= Int32(60) THEN Int32(1) WHEN Boolean(true) THEN Int32(0) END), sum(CASE WHEN store_returns.#<col> - store_sales.#<col> > Int32(60) AND store_returns.#<col> - store_sales.#<col> <= Int32(90) THEN Int32(1) WHEN Boolean(true) THEN Int32(0) END), sum(CASE WHEN store_returns.#<col> - store_sales.#<col> > Int32(90) AND store_returns.#<col> - store_sales.#<col> <= Int32(120) THEN Int32(1) WHEN Boolean(true) THEN Int32(0) END), sum(CASE WHEN store_returns.#<col> - store_sales.#<col> > Int32(120) THEN Int32(1) WHEN Boolean(true) THEN Int32(0) END)], schema=[#<col>:Utf8;N, #<col>:Int64;N, #<col>:Utf8;N, #<col>:Utf8;N, #<col>:Utf8;N, #<col>:Utf8;N, #<col>:Utf8;N, #<col>:Utf8;N, #<col>:Utf8;N, #<col>:Utf8;N, sum(CASE WHEN store_returns.#<col> - store_sales.#<col> <= Int32(30) THEN Int32(1) WHEN Boolean(true) THEN Int32(0) END)[sum]:Int64;N, sum(CASE WHEN store_returns.#<col> - store_sales.#<col> > Int32(30) AND store_returns.#<col> - store_sales.#<col> <= Int32(60) THEN Int32(1) WHEN Boolean(true) THEN Int32(0) END)[sum]:Int64;N, sum(CASE WHEN store_returns.#<col> - store_sales.#<col> > Int32(60) AND store_returns.#<col> - store_sales.#<col> <= Int32(90) THEN Int32(1) WHEN Boolean(true) THEN Int32(0) END)[sum]:Int64;N, sum(CASE WHEN store_returns.#<col> - store_sales.#<col> > Int32(90) AND store_returns.#<col> - store_sales.#<col> <= Int32(120) THEN Int32(1) WHEN Boolean(true) THEN Int32(0) END)[sum]:Int64;N, sum(CASE WHEN store_returns.#<col> - store_sales.#<col> > Int32(120) THEN Int32(1) WHEN Boolean(true) THEN Int32(0) END)[sum]:Int64;N]
+                ProjectionExec: expr=[<exprs>]
+                  CoalesceBatchesExec: target_batch_size=8192, schema=[#<col>:Float64;N, #<col>:Float64;N, #<col>:Utf8;N, #<col>:Int64;N, #<col>:Utf8;N, #<col>:Utf8;N, #<col>:Utf8;N, #<col>:Utf8;N, #<col>:Utf8;N, #<col>:Utf8;N, #<col>:Utf8;N, #<col>:Utf8;N]
+                    HashJoinExec: mode=CollectLeft, join_type=Inner, on=[(#<col>, CAST(d2.#<col> AS Float64)@<id>)], projection=[#<col>, #<col>, #<col>, #<col>, #<col>, #<col>, #<col>, #<col>, #<col>, #<col>, #<col>, #<col>], schema=[#<col>:Float64;N, #<col>:Float64;N, #<col>:Utf8;N, #<col>:Int64;N, #<col>:Utf8;N, #<col>:Utf8;N, #<col>:Utf8;N, #<col>:Utf8;N, #<col>:Utf8;N, #<col>:Utf8;N, #<col>:Utf8;N, #<col>:Utf8;N]
+                      CoalescePartitionsExec, schema=[#<col>:Float64;N, #<col>:Float64;N, #<col>:Utf8;N, #<col>:Int64;N, #<col>:Utf8;N, #<col>:Utf8;N, #<col>:Utf8;N, #<col>:Utf8;N, #<col>:Utf8;N, #<col>:Utf8;N, #<col>:Utf8;N, #<col>:Utf8;N]
+                        CoalesceBatchesExec: target_batch_size=8192, schema=[#<col>:Float64;N, #<col>:Float64;N, #<col>:Utf8;N, #<col>:Int64;N, #<col>:Utf8;N, #<col>:Utf8;N, #<col>:Utf8;N, #<col>:Utf8;N, #<col>:Utf8;N, #<col>:Utf8;N, #<col>:Utf8;N, #<col>:Utf8;N]
+                          HashJoinExec: mode=CollectLeft, join_type=Inner, on=[(#<col>, CAST(d1.#<col> AS Float64)@<id>)], projection=[#<col>, #<col>, #<col>, #<col>, #<col>, #<col>, #<col>, #<col>, #<col>, #<col>, #<col>, #<col>], schema=[#<col>:Float64;N, #<col>:Float64;N, #<col>:Utf8;N, #<col>:Int64;N, #<col>:Utf8;N, #<col>:Utf8;N, #<col>:Utf8;N, #<col>:Utf8;N, #<col>:Utf8;N, #<col>:Utf8;N, #<col>:Utf8;N, #<col>:Utf8;N]
+                            CoalescePartitionsExec, schema=[#<col>:Float64;N, #<col>:Float64;N, #<col>:Utf8;N, #<col>:Int64;N, #<col>:Utf8;N, #<col>:Utf8;N, #<col>:Utf8;N, #<col>:Utf8;N, #<col>:Utf8;N, #<col>:Utf8;N, #<col>:Utf8;N, #<col>:Utf8;N]
+                              ProjectionExec: expr=[<exprs>]
+                                CoalesceBatchesExec: target_batch_size=8192, schema=[#<col>:Utf8;N, #<col>:Int64;N, #<col>:Utf8;N, #<col>:Utf8;N, #<col>:Utf8;N, #<col>:Utf8;N, #<col>:Utf8;N, #<col>:Utf8;N, #<col>:Utf8;N, #<col>:Utf8;N, #<col>:Float64;N, #<col>:Float64;N]
+                                  HashJoinExec: mode=CollectLeft, join_type=Inner, on=[(CAST(store.#<col> AS Float64)@<id>, #<col>)], projection=[#<col>, #<col>, #<col>, #<col>, #<col>, #<col>, #<col>, #<col>, #<col>, #<col>, #<col>, #<col>], schema=[#<col>:Utf8;N, #<col>:Int64;N, #<col>:Utf8;N, #<col>:Utf8;N, #<col>:Utf8;N, #<col>:Utf8;N, #<col>:Utf8;N, #<col>:Utf8;N, #<col>:Utf8;N, #<col>:Utf8;N, #<col>:Float64;N, #<col>:Float64;N]
+                                    ProjectionExec: expr=[<exprs>]
+                                      DataSourceExec: partitions=1, partition_sizes=[<sizes>], schema=[_0:Int64;N, _5:Utf8;N, _16:Int64;N, _18:Utf8;N, _19:Utf8;N, _20:Utf8;N, _21:Utf8;N, _22:Utf8;N, _23:Utf8;N, _24:Utf8;N, _25:Utf8;N]
+                                    ProjectionExec: expr=[<exprs>]
+                                      CoalesceBatchesExec: target_batch_size=8192, schema=[#<col>:Float64;N, #<col>:Float64;N, #<col>:Float64;N]
+                                        HashJoinExec: mode=CollectLeft, join_type=Inner, on=[(#<col>, #<col>), (#<col>, #<col>), (#<col>, #<col>)], projection=[#<col>, #<col>, #<col>], schema=[#<col>:Float64;N, #<col>:Float64;N, #<col>:Float64;N]
+                                          ProjectionExec: expr=[<exprs>]
+                                            DataSourceExec: partitions=1, partition_sizes=[<sizes>], schema=[_0:Float64;N, _2:Int64;N, _3:Float64;N, _9:Int64;N]
+                                          RepartitionExec: partitioning=RoundRobinBatch(<partitions>), input_partitions=<partitions>, schema=[#<col>:Float64;N, #<col>:Int64;N, #<col>:Float64;N, #<col>:Float64;N, #<col>:Int64;N]
+                                            ProjectionExec: expr=[<exprs>]
+                                              DataSourceExec: partitions=1, partition_sizes=[<sizes>], schema=[_0:Float64;N, _2:Int64;N, _3:Float64;N, _7:Float64;N, _9:Int64;N]
+                            ProjectionExec: expr=[<exprs>]
+                              RepartitionExec: partitioning=RoundRobinBatch(<partitions>), input_partitions=<partitions>, schema=[#<col>:Int64;N]
+                                ProjectionExec: expr=[<exprs>]
+                                  DataSourceExec: partitions=1, partition_sizes=[<sizes>], schema=[_0:Int64;N]
+                      ProjectionExec: expr=[<exprs>]
+                        CoalesceBatchesExec: target_batch_size=8192, schema=[_0:Int64;N]
+                          FilterExec: _6@<id> = 2002 AND _8@<id> = 8, projection=[_0@<id>], schema=[_0:Int64;N]
+                            RepartitionExec: partitioning=RoundRobinBatch(<partitions>), input_partitions=<partitions>, schema=[_0:Int64;N, _6:Int64;N, _8:Int64;N]
+                              DataSourceExec: partitions=1, partition_sizes=[<sizes>], schema=[_0:Int64;N, _6:Int64;N, _8:Int64;N]
+
+
+physical_plan after OutputRequirements:
+ProjectionExec: expr=[<exprs>]
+  OutputRequirementExec: order_by=[(#<col>, asc), (#<col>, asc), (#<col>, asc), (#<col>, asc), (#<col>, asc), (#<col>, asc), (#<col>, asc), (#<col>, asc), (#<col>, asc), (#<col>, asc)], dist_by=SinglePartition
+    SortExec: [<sort_exprs>], fetch=100
+      SortExec: expr=[<exprs>]
+        ProjectionExec: expr=[<exprs>]
+          AggregateExec: mode=FinalPartitioned, gby=[#<col> as #<col>, #<col> as #<col>, #<col> as #<col>, #<col> as #<col>, #<col> as #<col>, #<col> as #<col>, #<col> as #<col>, #<col> as #<col>, #<col> as #<col>, #<col> as #<col>], aggr=[sum(CASE WHEN store_returns.#<col> - store_sales.#<col> <= Int32(30) THEN Int32(1) WHEN Boolean(true) THEN Int32(0) END), sum(CASE WHEN store_returns.#<col> - store_sales.#<col> > Int32(30) AND store_returns.#<col> - store_sales.#<col> <= Int32(60) THEN Int32(1) WHEN Boolean(true) THEN Int32(0) END), sum(CASE WHEN store_returns.#<col> - store_sales.#<col> > Int32(60) AND store_returns.#<col> - store_sales.#<col> <= Int32(90) THEN Int32(1) WHEN Boolean(true) THEN Int32(0) END), sum(CASE WHEN store_returns.#<col> - store_sales.#<col> > Int32(90) AND store_returns.#<col> - store_sales.#<col> <= Int32(120) THEN Int32(1) WHEN Boolean(true) THEN Int32(0) END), sum(CASE WHEN store_returns.#<col> - store_sales.#<col> > Int32(120) THEN Int32(1) WHEN Boolean(true) THEN Int32(0) END)]
+            CoalesceBatchesExec: target_batch_size=8192
+              RepartitionExec: partitioning=Hash([#<col>, #<col>, #<col>, #<col>, #<col>, #<col>, #<col>, #<col>, #<col>, #<col>], <partitions>), input_partitions=<partitions>
+                AggregateExec: mode=Partial, gby=[#<col> as #<col>, #<col> as #<col>, #<col> as #<col>, #<col> as #<col>, #<col> as #<col>, #<col> as #<col>, #<col> as #<col>, #<col> as #<col>, #<col> as #<col>, #<col> as #<col>], aggr=[sum(CASE WHEN store_returns.#<col> - store_sales.#<col> <= Int32(30) THEN Int32(1) WHEN Boolean(true) THEN Int32(0) END), sum(CASE WHEN store_returns.#<col> - store_sales.#<col> > Int32(30) AND store_returns.#<col> - store_sales.#<col> <= Int32(60) THEN Int32(1) WHEN Boolean(true) THEN Int32(0) END), sum(CASE WHEN store_returns.#<col> - store_sales.#<col> > Int32(60) AND store_returns.#<col> - store_sales.#<col> <= Int32(90) THEN Int32(1) WHEN Boolean(true) THEN Int32(0) END), sum(CASE WHEN store_returns.#<col> - store_sales.#<col> > Int32(90) AND store_returns.#<col> - store_sales.#<col> <= Int32(120) THEN Int32(1) WHEN Boolean(true) THEN Int32(0) END), sum(CASE WHEN store_returns.#<col> - store_sales.#<col> > Int32(120) THEN Int32(1) WHEN Boolean(true) THEN Int32(0) END)]
+                  ProjectionExec: expr=[<exprs>]
+                    CoalesceBatchesExec: target_batch_size=8192
+                      HashJoinExec: mode=CollectLeft, join_type=Inner, on=[(#<col>, CAST(d2.#<col> AS Float64)@<id>)], projection=[#<col>, #<col>, #<col>, #<col>, #<col>, #<col>, #<col>, #<col>, #<col>, #<col>, #<col>, #<col>]
+                        CoalescePartitionsExec
+                          CoalesceBatchesExec: target_batch_size=8192
+                            HashJoinExec: mode=CollectLeft, join_type=Inner, on=[(#<col>, CAST(d1.#<col> AS Float64)@<id>)], projection=[#<col>, #<col>, #<col>, #<col>, #<col>, #<col>, #<col>, #<col>, #<col>, #<col>, #<col>, #<col>]
+                              CoalescePartitionsExec
+                                ProjectionExec: expr=[<exprs>]
+                                  CoalesceBatchesExec: target_batch_size=8192
+                                    HashJoinExec: mode=CollectLeft, join_type=Inner, on=[(CAST(store.#<col> AS Float64)@<id>, #<col>)], projection=[#<col>, #<col>, #<col>, #<col>, #<col>, #<col>, #<col>, #<col>, #<col>, #<col>, #<col>, #<col>]
+                                      ProjectionExec: expr=[<exprs>]
+                                        DataSourceExec: partitions=1, partition_sizes=[<sizes>]
+                                      ProjectionExec: expr=[<exprs>]
+                                        CoalesceBatchesExec: target_batch_size=8192
+                                          HashJoinExec: mode=CollectLeft, join_type=Inner, on=[(#<col>, #<col>), (#<col>, #<col>), (#<col>, #<col>)], projection=[#<col>, #<col>, #<col>]
+                                            ProjectionExec: expr=[<exprs>]
+                                              DataSourceExec: partitions=1, partition_sizes=[<sizes>]
+                                            RepartitionExec: partitioning=RoundRobinBatch(<partitions>), input_partitions=<partitions>
+                                              ProjectionExec: expr=[<exprs>]
+                                                DataSourceExec: partitions=1, partition_sizes=[<sizes>]
+                              ProjectionExec: expr=[<exprs>]
+                                RepartitionExec: partitioning=RoundRobinBatch(<partitions>), input_partitions=<partitions>
+                                  ProjectionExec: expr=[<exprs>]
+                                    DataSourceExec: partitions=1, partition_sizes=[<sizes>]
+                        ProjectionExec: expr=[<exprs>]
+                          CoalesceBatchesExec: target_batch_size=8192
+                            FilterExec: _6@<id> = 2002 AND _8@<id> = 8, projection=[_0@<id>]
+                              RepartitionExec: partitioning=RoundRobinBatch(<partitions>), input_partitions=<partitions>
+                                DataSourceExec: partitions=1, partition_sizes=[<sizes>]
+
+
+physical_plan after aggregate_statistics:
+SAME TEXT AS ABOVE
+
+physical_plan after join_selection:
+SAME TEXT AS ABOVE
+
+physical_plan after LimitedDistinctAggregation:
+SAME TEXT AS ABOVE
+
+physical_plan after FilterPushdown:
+SAME TEXT AS ABOVE
+
+physical_plan after EnforceDistribution:
+ProjectionExec: expr=[<exprs>]
+  OutputRequirementExec: order_by=[(#<col>, asc), (#<col>, asc), (#<col>, asc), (#<col>, asc), (#<col>, asc), (#<col>, asc), (#<col>, asc), (#<col>, asc), (#<col>, asc), (#<col>, asc)], dist_by=SinglePartition
+    SortExec: expr=[<exprs>]
+      CoalescePartitionsExec
+        SortExec: expr=[<exprs>]
+          ProjectionExec: expr=[<exprs>]
+            AggregateExec: mode=FinalPartitioned, gby=[#<col> as #<col>, #<col> as #<col>, #<col> as #<col>, #<col> as #<col>, #<col> as #<col>, #<col> as #<col>, #<col> as #<col>, #<col> as #<col>, #<col> as #<col>, #<col> as #<col>], aggr=[sum(CASE WHEN store_returns.#<col> - store_sales.#<col> <= Int32(30) THEN Int32(1) WHEN Boolean(true) THEN Int32(0) END), sum(CASE WHEN store_returns.#<col> - store_sales.#<col> > Int32(30) AND store_returns.#<col> - store_sales.#<col> <= Int32(60) THEN Int32(1) WHEN Boolean(true) THEN Int32(0) END), sum(CASE WHEN store_returns.#<col> - store_sales.#<col> > Int32(60) AND store_returns.#<col> - store_sales.#<col> <= Int32(90) THEN Int32(1) WHEN Boolean(true) THEN Int32(0) END), sum(CASE WHEN store_returns.#<col> - store_sales.#<col> > Int32(90) AND store_returns.#<col> - store_sales.#<col> <= Int32(120) THEN Int32(1) WHEN Boolean(true) THEN Int32(0) END), sum(CASE WHEN store_returns.#<col> - store_sales.#<col> > Int32(120) THEN Int32(1) WHEN Boolean(true) THEN Int32(0) END)]
+              RepartitionExec: partitioning=Hash([#<col>, #<col>, #<col>, #<col>, #<col>, #<col>, #<col>, #<col>, #<col>, #<col>], <partitions>), input_partitions=<partitions>
+                CoalesceBatchesExec: target_batch_size=8192
+                  AggregateExec: mode=Partial, gby=[#<col> as #<col>, #<col> as #<col>, #<col> as #<col>, #<col> as #<col>, #<col> as #<col>, #<col> as #<col>, #<col> as #<col>, #<col> as #<col>, #<col> as #<col>, #<col> as #<col>], aggr=[sum(CASE WHEN store_returns.#<col> - store_sales.#<col> <= Int32(30) THEN Int32(1) WHEN Boolean(true) THEN Int32(0) END), sum(CASE WHEN store_returns.#<col> - store_sales.#<col> > Int32(30) AND store_returns.#<col> - store_sales.#<col> <= Int32(60) THEN Int32(1) WHEN Boolean(true) THEN Int32(0) END), sum(CASE WHEN store_returns.#<col> - store_sales.#<col> > Int32(60) AND store_returns.#<col> - store_sales.#<col> <= Int32(90) THEN Int32(1) WHEN Boolean(true) THEN Int32(0) END), sum(CASE WHEN store_returns.#<col> - store_sales.#<col> > Int32(90) AND store_returns.#<col> - store_sales.#<col> <= Int32(120) THEN Int32(1) WHEN Boolean(true) THEN Int32(0) END), sum(CASE WHEN store_returns.#<col> - store_sales.#<col> > Int32(120) THEN Int32(1) WHEN Boolean(true) THEN Int32(0) END)]
+                    ProjectionExec: expr=[<exprs>]
+                      CoalesceBatchesExec: target_batch_size=8192
+                        HashJoinExec: mode=CollectLeft, join_type=Inner, on=[(#<col>, CAST(d2.#<col> AS Float64)@<id>)], projection=[#<col>, #<col>, #<col>, #<col>, #<col>, #<col>, #<col>, #<col>, #<col>, #<col>, #<col>, #<col>]
+                          CoalescePartitionsExec
+                            CoalesceBatchesExec: target_batch_size=8192
+                              HashJoinExec: mode=CollectLeft, join_type=Inner, on=[(#<col>, CAST(d1.#<col> AS Float64)@<id>)], projection=[#<col>, #<col>, #<col>, #<col>, #<col>, #<col>, #<col>, #<col>, #<col>, #<col>, #<col>, #<col>]
+                                CoalescePartitionsExec
+                                  ProjectionExec: expr=[<exprs>]
+                                    CoalesceBatchesExec: target_batch_size=8192
+                                      HashJoinExec: mode=CollectLeft, join_type=Inner, on=[(CAST(store.#<col> AS Float64)@<id>, #<col>)], projection=[#<col>, #<col>, #<col>, #<col>, #<col>, #<col>, #<col>, #<col>, #<col>, #<col>, #<col>, #<col>]
+                                        ProjectionExec: expr=[<exprs>]
+                                          DataSourceExec: partitions=1, partition_sizes=[<sizes>]
+                                        ProjectionExec: expr=[<exprs>]
+                                          CoalesceBatchesExec: target_batch_size=8192
+                                            HashJoinExec: mode=CollectLeft, join_type=Inner, on=[(#<col>, #<col>), (#<col>, #<col>), (#<col>, #<col>)], projection=[#<col>, #<col>, #<col>]
+                                              ProjectionExec: expr=[<exprs>]
+                                                DataSourceExec: partitions=1, partition_sizes=[<sizes>]
+                                              RepartitionExec: partitioning=RoundRobinBatch(<partitions>), input_partitions=<partitions>
+                                                ProjectionExec: expr=[<exprs>]
+                                                  DataSourceExec: partitions=1, partition_sizes=[<sizes>]
+                                ProjectionExec: expr=[<exprs>]
+                                  RepartitionExec: partitioning=RoundRobinBatch(<partitions>), input_partitions=<partitions>
+                                    ProjectionExec: expr=[<exprs>]
+                                      DataSourceExec: partitions=1, partition_sizes=[<sizes>]
+                          ProjectionExec: expr=[<exprs>]
+                            CoalesceBatchesExec: target_batch_size=8192
+                              FilterExec: _6@<id> = 2002 AND _8@<id> = 8, projection=[_0@<id>]
+                                RepartitionExec: partitioning=RoundRobinBatch(<partitions>), input_partitions=<partitions>
+                                  DataSourceExec: partitions=1, partition_sizes=[<sizes>]
+
+
+physical_plan after CombinePartialFinalAggregate:
+SAME TEXT AS ABOVE
+
+physical_plan after EnforceSorting:
+ProjectionExec: expr=[<exprs>]
+  OutputRequirementExec: order_by=[(#<col>, asc), (#<col>, asc), (#<col>, asc), (#<col>, asc), (#<col>, asc), (#<col>, asc), (#<col>, asc), (#<col>, asc), (#<col>, asc), (#<col>, asc)], dist_by=SinglePartition
+    SortExec: [<sort_exprs>], fetch=100
+      SortExec: expr=[<exprs>]
+        ProjectionExec: expr=[<exprs>]
+          AggregateExec: mode=FinalPartitioned, gby=[#<col> as #<col>, #<col> as #<col>, #<col> as #<col>, #<col> as #<col>, #<col> as #<col>, #<col> as #<col>, #<col> as #<col>, #<col> as #<col>, #<col> as #<col>, #<col> as #<col>], aggr=[sum(CASE WHEN store_returns.#<col> - store_sales.#<col> <= Int32(30) THEN Int32(1) WHEN Boolean(true) THEN Int32(0) END), sum(CASE WHEN store_returns.#<col> - store_sales.#<col> > Int32(30) AND store_returns.#<col> - store_sales.#<col> <= Int32(60) THEN Int32(1) WHEN Boolean(true) THEN Int32(0) END), sum(CASE WHEN store_returns.#<col> - store_sales.#<col> > Int32(60) AND store_returns.#<col> - store_sales.#<col> <= Int32(90) THEN Int32(1) WHEN Boolean(true) THEN Int32(0) END), sum(CASE WHEN store_returns.#<col> - store_sales.#<col> > Int32(90) AND store_returns.#<col> - store_sales.#<col> <= Int32(120) THEN Int32(1) WHEN Boolean(true) THEN Int32(0) END), sum(CASE WHEN store_returns.#<col> - store_sales.#<col> > Int32(120) THEN Int32(1) WHEN Boolean(true) THEN Int32(0) END)]
+            RepartitionExec: partitioning=Hash([#<col>, #<col>, #<col>, #<col>, #<col>, #<col>, #<col>, #<col>, #<col>, #<col>], <partitions>), input_partitions=<partitions>
+              CoalesceBatchesExec: target_batch_size=8192
+                AggregateExec: mode=Partial, gby=[#<col> as #<col>, #<col> as #<col>, #<col> as #<col>, #<col> as #<col>, #<col> as #<col>, #<col> as #<col>, #<col> as #<col>, #<col> as #<col>, #<col> as #<col>, #<col> as #<col>], aggr=[sum(CASE WHEN store_returns.#<col> - store_sales.#<col> <= Int32(30) THEN Int32(1) WHEN Boolean(true) THEN Int32(0) END), sum(CASE WHEN store_returns.#<col> - store_sales.#<col> > Int32(30) AND store_returns.#<col> - store_sales.#<col> <= Int32(60) THEN Int32(1) WHEN Boolean(true) THEN Int32(0) END), sum(CASE WHEN store_returns.#<col> - store_sales.#<col> > Int32(60) AND store_returns.#<col> - store_sales.#<col> <= Int32(90) THEN Int32(1) WHEN Boolean(true) THEN Int32(0) END), sum(CASE WHEN store_returns.#<col> - store_sales.#<col> > Int32(90) AND store_returns.#<col> - store_sales.#<col> <= Int32(120) THEN Int32(1) WHEN Boolean(true) THEN Int32(0) END), sum(CASE WHEN store_returns.#<col> - store_sales.#<col> > Int32(120) THEN Int32(1) WHEN Boolean(true) THEN Int32(0) END)]
+                  ProjectionExec: expr=[<exprs>]
+                    CoalesceBatchesExec: target_batch_size=8192
+                      HashJoinExec: mode=CollectLeft, join_type=Inner, on=[(#<col>, CAST(d2.#<col> AS Float64)@<id>)], projection=[#<col>, #<col>, #<col>, #<col>, #<col>, #<col>, #<col>, #<col>, #<col>, #<col>, #<col>, #<col>]
+                        CoalescePartitionsExec
+                          CoalesceBatchesExec: target_batch_size=8192
+                            HashJoinExec: mode=CollectLeft, join_type=Inner, on=[(#<col>, CAST(d1.#<col> AS Float64)@<id>)], projection=[#<col>, #<col>, #<col>, #<col>, #<col>, #<col>, #<col>, #<col>, #<col>, #<col>, #<col>, #<col>]
+                              CoalescePartitionsExec
+                                ProjectionExec: expr=[<exprs>]
+                                  CoalesceBatchesExec: target_batch_size=8192
+                                    HashJoinExec: mode=CollectLeft, join_type=Inner, on=[(CAST(store.#<col> AS Float64)@<id>, #<col>)], projection=[#<col>, #<col>, #<col>, #<col>, #<col>, #<col>, #<col>, #<col>, #<col>, #<col>, #<col>, #<col>]
+                                      ProjectionExec: expr=[<exprs>]
+                                        DataSourceExec: partitions=1, partition_sizes=[<sizes>]
+                                      ProjectionExec: expr=[<exprs>]
+                                        CoalesceBatchesExec: target_batch_size=8192
+                                          HashJoinExec: mode=CollectLeft, join_type=Inner, on=[(#<col>, #<col>), (#<col>, #<col>), (#<col>, #<col>)], projection=[#<col>, #<col>, #<col>]
+                                            ProjectionExec: expr=[<exprs>]
+                                              DataSourceExec: partitions=1, partition_sizes=[<sizes>]
+                                            RepartitionExec: partitioning=RoundRobinBatch(<partitions>), input_partitions=<partitions>
+                                              ProjectionExec: expr=[<exprs>]
+                                                DataSourceExec: partitions=1, partition_sizes=[<sizes>]
+                              ProjectionExec: expr=[<exprs>]
+                                RepartitionExec: partitioning=RoundRobinBatch(<partitions>), input_partitions=<partitions>
+                                  ProjectionExec: expr=[<exprs>]
+                                    DataSourceExec: partitions=1, partition_sizes=[<sizes>]
+                        ProjectionExec: expr=[<exprs>]
+                          CoalesceBatchesExec: target_batch_size=8192
+                            FilterExec: _6@<id> = 2002 AND _8@<id> = 8, projection=[_0@<id>]
+                              RepartitionExec: partitioning=RoundRobinBatch(<partitions>), input_partitions=<partitions>
+                                DataSourceExec: partitions=1, partition_sizes=[<sizes>]
+
+
+physical_plan after OptimizeAggregateOrder:
+SAME TEXT AS ABOVE
+
+physical_plan after ProjectionPushdown:
+SAME TEXT AS ABOVE
+
+physical_plan after coalesce_batches:
+ProjectionExec: expr=[<exprs>]
+  OutputRequirementExec: order_by=[(#<col>, asc), (#<col>, asc), (#<col>, asc), (#<col>, asc), (#<col>, asc), (#<col>, asc), (#<col>, asc), (#<col>, asc), (#<col>, asc), (#<col>, asc)], dist_by=SinglePartition
+    SortExec: [<sort_exprs>], fetch=100
+      SortExec: expr=[<exprs>]
+        ProjectionExec: expr=[<exprs>]
+          AggregateExec: mode=FinalPartitioned, gby=[#<col> as #<col>, #<col> as #<col>, #<col> as #<col>, #<col> as #<col>, #<col> as #<col>, #<col> as #<col>, #<col> as #<col>, #<col> as #<col>, #<col> as #<col>, #<col> as #<col>], aggr=[sum(CASE WHEN store_returns.#<col> - store_sales.#<col> <= Int32(30) THEN Int32(1) WHEN Boolean(true) THEN Int32(0) END), sum(CASE WHEN store_returns.#<col> - store_sales.#<col> > Int32(30) AND store_returns.#<col> - store_sales.#<col> <= Int32(60) THEN Int32(1) WHEN Boolean(true) THEN Int32(0) END), sum(CASE WHEN store_returns.#<col> - store_sales.#<col> > Int32(60) AND store_returns.#<col> - store_sales.#<col> <= Int32(90) THEN Int32(1) WHEN Boolean(true) THEN Int32(0) END), sum(CASE WHEN store_returns.#<col> - store_sales.#<col> > Int32(90) AND store_returns.#<col> - store_sales.#<col> <= Int32(120) THEN Int32(1) WHEN Boolean(true) THEN Int32(0) END), sum(CASE WHEN store_returns.#<col> - store_sales.#<col> > Int32(120) THEN Int32(1) WHEN Boolean(true) THEN Int32(0) END)]
+            CoalesceBatchesExec: target_batch_size=8192
+              RepartitionExec: partitioning=Hash([#<col>, #<col>, #<col>, #<col>, #<col>, #<col>, #<col>, #<col>, #<col>, #<col>], <partitions>), input_partitions=<partitions>
+                CoalesceBatchesExec: target_batch_size=8192
+                  AggregateExec: mode=Partial, gby=[#<col> as #<col>, #<col> as #<col>, #<col> as #<col>, #<col> as #<col>, #<col> as #<col>, #<col> as #<col>, #<col> as #<col>, #<col> as #<col>, #<col> as #<col>, #<col> as #<col>], aggr=[sum(CASE WHEN store_returns.#<col> - store_sales.#<col> <= Int32(30) THEN Int32(1) WHEN Boolean(true) THEN Int32(0) END), sum(CASE WHEN store_returns.#<col> - store_sales.#<col> > Int32(30) AND store_returns.#<col> - store_sales.#<col> <= Int32(60) THEN Int32(1) WHEN Boolean(true) THEN Int32(0) END), sum(CASE WHEN store_returns.#<col> - store_sales.#<col> > Int32(60) AND store_returns.#<col> - store_sales.#<col> <= Int32(90) THEN Int32(1) WHEN Boolean(true) THEN Int32(0) END), sum(CASE WHEN store_returns.#<col> - store_sales.#<col> > Int32(90) AND store_returns.#<col> - store_sales.#<col> <= Int32(120) THEN Int32(1) WHEN Boolean(true) THEN Int32(0) END), sum(CASE WHEN store_returns.#<col> - store_sales.#<col> > Int32(120) THEN Int32(1) WHEN Boolean(true) THEN Int32(0) END)]
+                    ProjectionExec: expr=[<exprs>]
+                      CoalesceBatchesExec: target_batch_size=8192
+                        CoalesceBatchesExec: target_batch_size=8192
+                          HashJoinExec: mode=CollectLeft, join_type=Inner, on=[(#<col>, CAST(d2.#<col> AS Float64)@<id>)], projection=[#<col>, #<col>, #<col>, #<col>, #<col>, #<col>, #<col>, #<col>, #<col>, #<col>, #<col>, #<col>]
+                            CoalescePartitionsExec
+                              CoalesceBatchesExec: target_batch_size=8192
+                                CoalesceBatchesExec: target_batch_size=8192
+                                  HashJoinExec: mode=CollectLeft, join_type=Inner, on=[(#<col>, CAST(d1.#<col> AS Float64)@<id>)], projection=[#<col>, #<col>, #<col>, #<col>, #<col>, #<col>, #<col>, #<col>, #<col>, #<col>, #<col>, #<col>]
+                                    CoalescePartitionsExec
+                                      ProjectionExec: expr=[<exprs>]
+                                        CoalesceBatchesExec: target_batch_size=8192
+                                          CoalesceBatchesExec: target_batch_size=8192
+                                            HashJoinExec: mode=CollectLeft, join_type=Inner, on=[(CAST(store.#<col> AS Float64)@<id>, #<col>)], projection=[#<col>, #<col>, #<col>, #<col>, #<col>, #<col>, #<col>, #<col>, #<col>, #<col>, #<col>, #<col>]
+                                              ProjectionExec: expr=[<exprs>]
+                                                DataSourceExec: partitions=1, partition_sizes=[<sizes>]
+                                              ProjectionExec: expr=[<exprs>]
+                                                CoalesceBatchesExec: target_batch_size=8192
+                                                  CoalesceBatchesExec: target_batch_size=8192
+                                                    HashJoinExec: mode=CollectLeft, join_type=Inner, on=[(#<col>, #<col>), (#<col>, #<col>), (#<col>, #<col>)], projection=[#<col>, #<col>, #<col>]
+                                                      ProjectionExec: expr=[<exprs>]
+                                                        DataSourceExec: partitions=1, partition_sizes=[<sizes>]
+                                                      RepartitionExec: partitioning=RoundRobinBatch(<partitions>), input_partitions=<partitions>
+                                                        ProjectionExec: expr=[<exprs>]
+                                                          DataSourceExec: partitions=1, partition_sizes=[<sizes>]
+                                    ProjectionExec: expr=[<exprs>]
+                                      RepartitionExec: partitioning=RoundRobinBatch(<partitions>), input_partitions=<partitions>
+                                        ProjectionExec: expr=[<exprs>]
+                                          DataSourceExec: partitions=1, partition_sizes=[<sizes>]
+                            ProjectionExec: expr=[<exprs>]
+                              CoalesceBatchesExec: target_batch_size=8192
+                                CoalesceBatchesExec: target_batch_size=8192
+                                  FilterExec: _6@<id> = 2002 AND _8@<id> = 8, projection=[_0@<id>]
+                                    RepartitionExec: partitioning=RoundRobinBatch(<partitions>), input_partitions=<partitions>
+                                      DataSourceExec: partitions=1, partition_sizes=[<sizes>]
+
+
+physical_plan after coalesce_async_exec_input:
+SAME TEXT AS ABOVE
+
+physical_plan after OutputRequirements:
+ProjectionExec: expr=[<exprs>]
+  SortExec: [<sort_exprs>], fetch=100
+    SortExec: expr=[<exprs>]
+      ProjectionExec: expr=[<exprs>]
+        AggregateExec: mode=FinalPartitioned, gby=[#<col> as #<col>, #<col> as #<col>, #<col> as #<col>, #<col> as #<col>, #<col> as #<col>, #<col> as #<col>, #<col> as #<col>, #<col> as #<col>, #<col> as #<col>, #<col> as #<col>], aggr=[sum(CASE WHEN store_returns.#<col> - store_sales.#<col> <= Int32(30) THEN Int32(1) WHEN Boolean(true) THEN Int32(0) END), sum(CASE WHEN store_returns.#<col> - store_sales.#<col> > Int32(30) AND store_returns.#<col> - store_sales.#<col> <= Int32(60) THEN Int32(1) WHEN Boolean(true) THEN Int32(0) END), sum(CASE WHEN store_returns.#<col> - store_sales.#<col> > Int32(60) AND store_returns.#<col> - store_sales.#<col> <= Int32(90) THEN Int32(1) WHEN Boolean(true) THEN Int32(0) END), sum(CASE WHEN store_returns.#<col> - store_sales.#<col> > Int32(90) AND store_returns.#<col> - store_sales.#<col> <= Int32(120) THEN Int32(1) WHEN Boolean(true) THEN Int32(0) END), sum(CASE WHEN store_returns.#<col> - store_sales.#<col> > Int32(120) THEN Int32(1) WHEN Boolean(true) THEN Int32(0) END)]
+          CoalesceBatchesExec: target_batch_size=8192
+            RepartitionExec: partitioning=Hash([#<col>, #<col>, #<col>, #<col>, #<col>, #<col>, #<col>, #<col>, #<col>, #<col>], <partitions>), input_partitions=<partitions>
+              CoalesceBatchesExec: target_batch_size=8192
+                AggregateExec: mode=Partial, gby=[#<col> as #<col>, #<col> as #<col>, #<col> as #<col>, #<col> as #<col>, #<col> as #<col>, #<col> as #<col>, #<col> as #<col>, #<col> as #<col>, #<col> as #<col>, #<col> as #<col>], aggr=[sum(CASE WHEN store_returns.#<col> - store_sales.#<col> <= Int32(30) THEN Int32(1) WHEN Boolean(true) THEN Int32(0) END), sum(CASE WHEN store_returns.#<col> - store_sales.#<col> > Int32(30) AND store_returns.#<col> - store_sales.#<col> <= Int32(60) THEN Int32(1) WHEN Boolean(true) THEN Int32(0) END), sum(CASE WHEN store_returns.#<col> - store_sales.#<col> > Int32(60) AND store_returns.#<col> - store_sales.#<col> <= Int32(90) THEN Int32(1) WHEN Boolean(true) THEN Int32(0) END), sum(CASE WHEN store_returns.#<col> - store_sales.#<col> > Int32(90) AND store_returns.#<col> - store_sales.#<col> <= Int32(120) THEN Int32(1) WHEN Boolean(true) THEN Int32(0) END), sum(CASE WHEN store_returns.#<col> - store_sales.#<col> > Int32(120) THEN Int32(1) WHEN Boolean(true) THEN Int32(0) END)]
+                  ProjectionExec: expr=[<exprs>]
+                    CoalesceBatchesExec: target_batch_size=8192
+                      CoalesceBatchesExec: target_batch_size=8192
+                        HashJoinExec: mode=CollectLeft, join_type=Inner, on=[(#<col>, CAST(d2.#<col> AS Float64)@<id>)], projection=[#<col>, #<col>, #<col>, #<col>, #<col>, #<col>, #<col>, #<col>, #<col>, #<col>, #<col>, #<col>]
+                          CoalescePartitionsExec
+                            CoalesceBatchesExec: target_batch_size=8192
+                              CoalesceBatchesExec: target_batch_size=8192
+                                HashJoinExec: mode=CollectLeft, join_type=Inner, on=[(#<col>, CAST(d1.#<col> AS Float64)@<id>)], projection=[#<col>, #<col>, #<col>, #<col>, #<col>, #<col>, #<col>, #<col>, #<col>, #<col>, #<col>, #<col>]
+                                  CoalescePartitionsExec
+                                    ProjectionExec: expr=[<exprs>]
+                                      CoalesceBatchesExec: target_batch_size=8192
+                                        CoalesceBatchesExec: target_batch_size=8192
+                                          HashJoinExec: mode=CollectLeft, join_type=Inner, on=[(CAST(store.#<col> AS Float64)@<id>, #<col>)], projection=[#<col>, #<col>, #<col>, #<col>, #<col>, #<col>, #<col>, #<col>, #<col>, #<col>, #<col>, #<col>]
+                                            ProjectionExec: expr=[<exprs>]
+                                              DataSourceExec: partitions=1, partition_sizes=[<sizes>]
+                                            ProjectionExec: expr=[<exprs>]
+                                              CoalesceBatchesExec: target_batch_size=8192
+                                                CoalesceBatchesExec: target_batch_size=8192
+                                                  HashJoinExec: mode=CollectLeft, join_type=Inner, on=[(#<col>, #<col>), (#<col>, #<col>), (#<col>, #<col>)], projection=[#<col>, #<col>, #<col>]
+                                                    ProjectionExec: expr=[<exprs>]
+                                                      DataSourceExec: partitions=1, partition_sizes=[<sizes>]
+                                                    RepartitionExec: partitioning=RoundRobinBatch(<partitions>), input_partitions=<partitions>
+                                                      ProjectionExec: expr=[<exprs>]
+                                                        DataSourceExec: partitions=1, partition_sizes=[<sizes>]
+                                  ProjectionExec: expr=[<exprs>]
+                                    RepartitionExec: partitioning=RoundRobinBatch(<partitions>), input_partitions=<partitions>
+                                      ProjectionExec: expr=[<exprs>]
+                                        DataSourceExec: partitions=1, partition_sizes=[<sizes>]
+                          ProjectionExec: expr=[<exprs>]
+                            CoalesceBatchesExec: target_batch_size=8192
+                              CoalesceBatchesExec: target_batch_size=8192
+                                FilterExec: _6@<id> = 2002 AND _8@<id> = 8, projection=[_0@<id>]
+                                  RepartitionExec: partitioning=RoundRobinBatch(<partitions>), input_partitions=<partitions>
+                                    DataSourceExec: partitions=1, partition_sizes=[<sizes>]
+
+
+physical_plan after LimitAggregation:
+SAME TEXT AS ABOVE
+
+physical_plan after LimitPushPastWindows:
+SAME TEXT AS ABOVE
+
+physical_plan after LimitPushdown:
+SAME TEXT AS ABOVE
+
+physical_plan after ProjectionPushdown:
+SAME TEXT AS ABOVE
+
+physical_plan after EnsureCooperative:
+SAME TEXT AS ABOVE
+
+physical_plan after FilterPushdown(Post):
+SAME TEXT AS ABOVE
+
+physical_plan after RewriteExplicitRepartition:
+SAME TEXT AS ABOVE
+
+physical_plan after SanityCheckPlan:
+SAME TEXT AS ABOVE
+
+physical_plan:
+ProjectionExec: expr=[<exprs>]
+  ProjectionExec: expr=[<exprs>]
+    SortExec: [<sort_exprs>], fetch=100
+      SortExec: expr=[<exprs>]
+        ProjectionExec: expr=[<exprs>]
+          AggregateExec: mode=FinalPartitioned, gby=[#<col> as #<col>, #<col> as #<col>, #<col> as #<col>, #<col> as #<col>, #<col> as #<col>, #<col> as #<col>, #<col> as #<col>, #<col> as #<col>, #<col> as #<col>, #<col> as #<col>], aggr=[sum(CASE WHEN store_returns.#<col> - store_sales.#<col> <= Int32(30) THEN Int32(1) WHEN Boolean(true) THEN Int32(0) END), sum(CASE WHEN store_returns.#<col> - store_sales.#<col> > Int32(30) AND store_returns.#<col> - store_sales.#<col> <= Int32(60) THEN Int32(1) WHEN Boolean(true) THEN Int32(0) END), sum(CASE WHEN store_returns.#<col> - store_sales.#<col> > Int32(60) AND store_returns.#<col> - store_sales.#<col> <= Int32(90) THEN Int32(1) WHEN Boolean(true) THEN Int32(0) END), sum(CASE WHEN store_returns.#<col> - store_sales.#<col> > Int32(90) AND store_returns.#<col> - store_sales.#<col> <= Int32(120) THEN Int32(1) WHEN Boolean(true) THEN Int32(0) END), sum(CASE WHEN store_returns.#<col> - store_sales.#<col> > Int32(120) THEN Int32(1) WHEN Boolean(true) THEN Int32(0) END)]
+            CoalesceBatchesExec: target_batch_size=8192
+              RepartitionExec: partitioning=Hash([#<col>, #<col>, #<col>, #<col>, #<col>, #<col>, #<col>, #<col>, #<col>, #<col>], <partitions>), input_partitions=<partitions>
+                CoalesceBatchesExec: target_batch_size=8192
+                  AggregateExec: mode=Partial, gby=[#<col> as #<col>, #<col> as #<col>, #<col> as #<col>, #<col> as #<col>, #<col> as #<col>, #<col> as #<col>, #<col> as #<col>, #<col> as #<col>, #<col> as #<col>, #<col> as #<col>], aggr=[sum(CASE WHEN store_returns.#<col> - store_sales.#<col> <= Int32(30) THEN Int32(1) WHEN Boolean(true) THEN Int32(0) END), sum(CASE WHEN store_returns.#<col> - store_sales.#<col> > Int32(30) AND store_returns.#<col> - store_sales.#<col> <= Int32(60) THEN Int32(1) WHEN Boolean(true) THEN Int32(0) END), sum(CASE WHEN store_returns.#<col> - store_sales.#<col> > Int32(60) AND store_returns.#<col> - store_sales.#<col> <= Int32(90) THEN Int32(1) WHEN Boolean(true) THEN Int32(0) END), sum(CASE WHEN store_returns.#<col> - store_sales.#<col> > Int32(90) AND store_returns.#<col> - store_sales.#<col> <= Int32(120) THEN Int32(1) WHEN Boolean(true) THEN Int32(0) END), sum(CASE WHEN store_returns.#<col> - store_sales.#<col> > Int32(120) THEN Int32(1) WHEN Boolean(true) THEN Int32(0) END)]
+                    ProjectionExec: expr=[<exprs>]
+                      CoalesceBatchesExec: target_batch_size=8192
+                        CoalesceBatchesExec: target_batch_size=8192
+                          HashJoinExec: mode=CollectLeft, join_type=Inner, on=[(#<col>, CAST(d2.#<col> AS Float64)@<id>)], projection=[#<col>, #<col>, #<col>, #<col>, #<col>, #<col>, #<col>, #<col>, #<col>, #<col>, #<col>, #<col>]
+                            CoalescePartitionsExec
+                              CoalesceBatchesExec: target_batch_size=8192
+                                CoalesceBatchesExec: target_batch_size=8192
+                                  HashJoinExec: mode=CollectLeft, join_type=Inner, on=[(#<col>, CAST(d1.#<col> AS Float64)@<id>)], projection=[#<col>, #<col>, #<col>, #<col>, #<col>, #<col>, #<col>, #<col>, #<col>, #<col>, #<col>, #<col>]
+                                    CoalescePartitionsExec
+                                      ProjectionExec: expr=[<exprs>]
+                                        CoalesceBatchesExec: target_batch_size=8192
+                                          CoalesceBatchesExec: target_batch_size=8192
+                                            HashJoinExec: mode=CollectLeft, join_type=Inner, on=[(CAST(store.#<col> AS Float64)@<id>, #<col>)], projection=[#<col>, #<col>, #<col>, #<col>, #<col>, #<col>, #<col>, #<col>, #<col>, #<col>, #<col>, #<col>]
+                                              ProjectionExec: expr=[<exprs>]
+                                                DataSourceExec: partitions=1, partition_sizes=[<sizes>]
+                                              ProjectionExec: expr=[<exprs>]
+                                                CoalesceBatchesExec: target_batch_size=8192
+                                                  CoalesceBatchesExec: target_batch_size=8192
+                                                    HashJoinExec: mode=CollectLeft, join_type=Inner, on=[(#<col>, #<col>), (#<col>, #<col>), (#<col>, #<col>)], projection=[#<col>, #<col>, #<col>]
+                                                      ProjectionExec: expr=[<exprs>]
+                                                        DataSourceExec: partitions=1, partition_sizes=[<sizes>]
+                                                      RepartitionExec: partitioning=RoundRobinBatch(<partitions>), input_partitions=<partitions>
+                                                        ProjectionExec: expr=[<exprs>]
+                                                          DataSourceExec: partitions=1, partition_sizes=[<sizes>]
+                                    ProjectionExec: expr=[<exprs>]
+                                      RepartitionExec: partitioning=RoundRobinBatch(<partitions>), input_partitions=<partitions>
+                                        ProjectionExec: expr=[<exprs>]
+                                          DataSourceExec: partitions=1, partition_sizes=[<sizes>]
+                            ProjectionExec: expr=[<exprs>]
+                              CoalesceBatchesExec: target_batch_size=8192
+                                CoalesceBatchesExec: target_batch_size=8192
+                                  FilterExec: _6@<id> = 2002 AND _8@<id> = 8, projection=[_0@<id>]
+                                    RepartitionExec: partitioning=RoundRobinBatch(<partitions>), input_partitions=<partitions>
+                                      DataSourceExec: partitions=1, partition_sizes=[<sizes>]
+
+
+== Physical Plan ==
+ProjectionExec: expr=[<exprs>]
+  ProjectionExec: expr=[<exprs>]
+    SortExec: [<sort_exprs>], fetch=100
+      SortExec: expr=[<exprs>]
+        ProjectionExec: expr=[<exprs>]
+          AggregateExec: mode=FinalPartitioned, gby=[#<col> as #<col>, #<col> as #<col>, #<col> as #<col>, #<col> as #<col>, #<col> as #<col>, #<col> as #<col>, #<col> as #<col>, #<col> as #<col>, #<col> as #<col>, #<col> as #<col>], aggr=[sum(CASE WHEN store_returns.#<col> - store_sales.#<col> <= Int32(30) THEN Int32(1) WHEN Boolean(true) THEN Int32(0) END), sum(CASE WHEN store_returns.#<col> - store_sales.#<col> > Int32(30) AND store_returns.#<col> - store_sales.#<col> <= Int32(60) THEN Int32(1) WHEN Boolean(true) THEN Int32(0) END), sum(CASE WHEN store_returns.#<col> - store_sales.#<col> > Int32(60) AND store_returns.#<col> - store_sales.#<col> <= Int32(90) THEN Int32(1) WHEN Boolean(true) THEN Int32(0) END), sum(CASE WHEN store_returns.#<col> - store_sales.#<col> > Int32(90) AND store_returns.#<col> - store_sales.#<col> <= Int32(120) THEN Int32(1) WHEN Boolean(true) THEN Int32(0) END), sum(CASE WHEN store_returns.#<col> - store_sales.#<col> > Int32(120) THEN Int32(1) WHEN Boolean(true) THEN Int32(0) END)]
+            CoalesceBatchesExec: target_batch_size=8192
+              RepartitionExec: partitioning=Hash([#<col>, #<col>, #<col>, #<col>, #<col>, #<col>, #<col>, #<col>, #<col>, #<col>], <partitions>), input_partitions=<partitions>
+                CoalesceBatchesExec: target_batch_size=8192
+                  AggregateExec: mode=Partial, gby=[#<col> as #<col>, #<col> as #<col>, #<col> as #<col>, #<col> as #<col>, #<col> as #<col>, #<col> as #<col>, #<col> as #<col>, #<col> as #<col>, #<col> as #<col>, #<col> as #<col>], aggr=[sum(CASE WHEN store_returns.#<col> - store_sales.#<col> <= Int32(30) THEN Int32(1) WHEN Boolean(true) THEN Int32(0) END), sum(CASE WHEN store_returns.#<col> - store_sales.#<col> > Int32(30) AND store_returns.#<col> - store_sales.#<col> <= Int32(60) THEN Int32(1) WHEN Boolean(true) THEN Int32(0) END), sum(CASE WHEN store_returns.#<col> - store_sales.#<col> > Int32(60) AND store_returns.#<col> - store_sales.#<col> <= Int32(90) THEN Int32(1) WHEN Boolean(true) THEN Int32(0) END), sum(CASE WHEN store_returns.#<col> - store_sales.#<col> > Int32(90) AND store_returns.#<col> - store_sales.#<col> <= Int32(120) THEN Int32(1) WHEN Boolean(true) THEN Int32(0) END), sum(CASE WHEN store_returns.#<col> - store_sales.#<col> > Int32(120) THEN Int32(1) WHEN Boolean(true) THEN Int32(0) END)]
+                    ProjectionExec: expr=[<exprs>]
+                      CoalesceBatchesExec: target_batch_size=8192
+                        CoalesceBatchesExec: target_batch_size=8192
+                          HashJoinExec: mode=CollectLeft, join_type=Inner, on=[(#<col>, CAST(d2.#<col> AS Float64)@<id>)], projection=[#<col>, #<col>, #<col>, #<col>, #<col>, #<col>, #<col>, #<col>, #<col>, #<col>, #<col>, #<col>]
+                            CoalescePartitionsExec
+                              CoalesceBatchesExec: target_batch_size=8192
+                                CoalesceBatchesExec: target_batch_size=8192
+                                  HashJoinExec: mode=CollectLeft, join_type=Inner, on=[(#<col>, CAST(d1.#<col> AS Float64)@<id>)], projection=[#<col>, #<col>, #<col>, #<col>, #<col>, #<col>, #<col>, #<col>, #<col>, #<col>, #<col>, #<col>]
+                                    CoalescePartitionsExec
+                                      ProjectionExec: expr=[<exprs>]
+                                        CoalesceBatchesExec: target_batch_size=8192
+                                          CoalesceBatchesExec: target_batch_size=8192
+                                            HashJoinExec: mode=CollectLeft, join_type=Inner, on=[(CAST(store.#<col> AS Float64)@<id>, #<col>)], projection=[#<col>, #<col>, #<col>, #<col>, #<col>, #<col>, #<col>, #<col>, #<col>, #<col>, #<col>, #<col>]
+                                              ProjectionExec: expr=[<exprs>]
+                                                DataSourceExec: partitions=1, partition_sizes=[<sizes>]
+                                              ProjectionExec: expr=[<exprs>]
+                                                CoalesceBatchesExec: target_batch_size=8192
+                                                  CoalesceBatchesExec: target_batch_size=8192
+                                                    HashJoinExec: mode=CollectLeft, join_type=Inner, on=[(#<col>, #<col>), (#<col>, #<col>), (#<col>, #<col>)], projection=[#<col>, #<col>, #<col>]
+                                                      ProjectionExec: expr=[<exprs>]
+                                                        DataSourceExec: partitions=1, partition_sizes=[<sizes>]
+                                                      RepartitionExec: partitioning=RoundRobinBatch(<partitions>), input_partitions=<partitions>
+                                                        ProjectionExec: expr=[<exprs>]
+                                                          DataSourceExec: partitions=1, partition_sizes=[<sizes>]
+                                    ProjectionExec: expr=[<exprs>]
+                                      RepartitionExec: partitioning=RoundRobinBatch(<partitions>), input_partitions=<partitions>
+                                        ProjectionExec: expr=[<exprs>]
+                                          DataSourceExec: partitions=1, partition_sizes=[<sizes>]
+                            ProjectionExec: expr=[<exprs>]
+                              CoalesceBatchesExec: target_batch_size=8192
+                                CoalesceBatchesExec: target_batch_size=8192
+                                  FilterExec: _6@<id> = 2002 AND _8@<id> = 8, projection=[_0@<id>]
+                                    RepartitionExec: partitioning=RoundRobinBatch(<partitions>), input_partitions=<partitions>
+                                      DataSourceExec: partitions=1, partition_sizes=[<sizes>]

@@ -1,0 +1,570 @@
+== Codegen ==
+Whole-stage codegen is not supported; showing physical plan instead.
+
+== Plan Steps ==
+initial_logical_plan:
+Projection: <exprs>
+  Sort: <exprs>
+    Projection: <exprs>
+      Aggregate: groupBy=[[orders.#<col>]], aggr=[[count(Int64(1))]]
+        Filter: orders.#<col> >= Date32("1995-04-01") AND orders.#<col> < Date32("1995-04-01") + IntervalYearMonth("3") AND EXISTS (<subquery>)
+          Subquery:
+            Projection: <exprs>
+              Filter: lineitem.#<col> = outer_ref(orders.#<col>) AND lineitem.#<col> < lineitem.#<col>
+                Projection: <exprs>
+                  Projection: <exprs>
+                    SubqueryAlias: lineitem
+                      Projection: <exprs>
+                        Projection: <exprs>
+                          TableScan: ?table?
+          Projection: <exprs>
+            Projection: <exprs>
+              SubqueryAlias: orders
+                Projection: <exprs>
+                  Projection: <exprs>
+                    TableScan: ?table?
+
+logical_plan after resolve_grouping_function:
+SAME TEXT AS ABOVE
+
+logical_plan after type_coercion:
+SAME TEXT AS ABOVE
+
+analyzed_logical_plan:
+SAME TEXT AS ABOVE
+
+logical_plan after eliminate_nested_union:
+SAME TEXT AS ABOVE
+
+logical_plan after simplify_expressions:
+Projection: <exprs>
+  Sort: <exprs>
+    Projection: <exprs>
+      Aggregate: groupBy=[[orders.#<col>]], aggr=[[count(Int64(1))]]
+        Filter: orders.#<col> >= Date32("1995-04-01") AND orders.#<col> < Date32("1995-07-01") AND EXISTS (<subquery>)
+          Subquery:
+            Projection: <exprs>
+              Filter: lineitem.#<col> = outer_ref(orders.#<col>) AND lineitem.#<col> > lineitem.#<col>
+                Projection: <exprs>
+                  Projection: <exprs>
+                    SubqueryAlias: lineitem
+                      Projection: <exprs>
+                        Projection: <exprs>
+                          TableScan: ?table?
+          Projection: <exprs>
+            Projection: <exprs>
+              SubqueryAlias: orders
+                Projection: <exprs>
+                  Projection: <exprs>
+                    TableScan: ?table?
+
+logical_plan after replace_distinct_aggregate:
+SAME TEXT AS ABOVE
+
+logical_plan after eliminate_join:
+SAME TEXT AS ABOVE
+
+logical_plan after decorrelate_predicate_subquery:
+Projection: <exprs>
+  Sort: <exprs>
+    Projection: <exprs>
+      Aggregate: groupBy=[[orders.#<col>]], aggr=[[count(Int64(1))]]
+        Filter: orders.#<col> >= Date32("1995-04-01") AND orders.#<col> < Date32("1995-07-01")
+          LeftSemi Join:  Filter: __correlated_sq_1.#<col> = orders.#<col>
+            Projection: <exprs>
+              Projection: <exprs>
+                SubqueryAlias: orders
+                  Projection: <exprs>
+                    Projection: <exprs>
+                      TableScan: ?table?
+            SubqueryAlias: __correlated_sq_1
+              Projection: <exprs>
+                Filter: lineitem.#<col> > lineitem.#<col>
+                  Projection: <exprs>
+                    Projection: <exprs>
+                      SubqueryAlias: lineitem
+                        Projection: <exprs>
+                          Projection: <exprs>
+                            TableScan: ?table?
+
+logical_plan after scalar_subquery_to_join:
+SAME TEXT AS ABOVE
+
+logical_plan after decorrelate_lateral_join:
+SAME TEXT AS ABOVE
+
+logical_plan after extract_equijoin_predicate:
+Projection: <exprs>
+  Sort: <exprs>
+    Projection: <exprs>
+      Aggregate: groupBy=[[orders.#<col>]], aggr=[[count(Int64(1))]]
+        Filter: orders.#<col> >= Date32("1995-04-01") AND orders.#<col> < Date32("1995-07-01")
+          LeftSemi Join: orders.#<col> = __correlated_sq_1.#<col>
+            Projection: <exprs>
+              Projection: <exprs>
+                SubqueryAlias: orders
+                  Projection: <exprs>
+                    Projection: <exprs>
+                      TableScan: ?table?
+            SubqueryAlias: __correlated_sq_1
+              Projection: <exprs>
+                Filter: lineitem.#<col> > lineitem.#<col>
+                  Projection: <exprs>
+                    Projection: <exprs>
+                      SubqueryAlias: lineitem
+                        Projection: <exprs>
+                          Projection: <exprs>
+                            TableScan: ?table?
+
+logical_plan after eliminate_duplicated_expr:
+SAME TEXT AS ABOVE
+
+logical_plan after eliminate_filter:
+SAME TEXT AS ABOVE
+
+logical_plan after eliminate_cross_join:
+SAME TEXT AS ABOVE
+
+logical_plan after eliminate_limit:
+SAME TEXT AS ABOVE
+
+logical_plan after propagate_empty_relation:
+SAME TEXT AS ABOVE
+
+logical_plan after eliminate_one_union:
+SAME TEXT AS ABOVE
+
+logical_plan after filter_null_join_keys:
+SAME TEXT AS ABOVE
+
+logical_plan after eliminate_outer_join:
+SAME TEXT AS ABOVE
+
+logical_plan after push_down_limit:
+SAME TEXT AS ABOVE
+
+logical_plan after push_down_filter:
+Projection: <exprs>
+  Sort: <exprs>
+    Projection: <exprs>
+      Aggregate: groupBy=[[orders.#<col>]], aggr=[[count(Int64(1))]]
+        LeftSemi Join: orders.#<col> = __correlated_sq_1.#<col>
+          Projection: <exprs>
+            Projection: <exprs>
+              SubqueryAlias: orders
+                Projection: <exprs>
+                  Projection: <exprs>
+                    Filter: ?table?._4 >= Date32("1995-04-01") AND ?table?._4 < Date32("1995-07-01")
+                      TableScan: ?table?
+          SubqueryAlias: __correlated_sq_1
+            Projection: <exprs>
+              Projection: <exprs>
+                Projection: <exprs>
+                  SubqueryAlias: lineitem
+                    Projection: <exprs>
+                      Projection: <exprs>
+                        Filter: ?table?._12 > ?table?._11
+                          TableScan: ?table?
+
+logical_plan after single_distinct_aggregation_to_group_by:
+SAME TEXT AS ABOVE
+
+logical_plan after eliminate_group_by_constant:
+SAME TEXT AS ABOVE
+
+logical_plan after common_sub_expression_eliminate:
+SAME TEXT AS ABOVE
+
+logical_plan after optimize_projections:
+Projection: <exprs>
+  Sort: <exprs>
+    Projection: <exprs>
+      Aggregate: groupBy=[[orders.#<col>]], aggr=[[count(Int64(1))]]
+        Projection: <exprs>
+          LeftSemi Join: orders.#<col> = __correlated_sq_1.#<col>
+            Projection: <exprs>
+              SubqueryAlias: orders
+                Projection: <exprs>
+                  Filter: ?table?._4 >= Date32("1995-04-01") AND ?table?._4 < Date32("1995-07-01")
+                    TableScan: ?table? projection=[_0, _4, _5]
+            SubqueryAlias: __correlated_sq_1
+              Projection: <exprs>
+                SubqueryAlias: lineitem
+                  Projection: <exprs>
+                    Filter: ?table?._12 > ?table?._11
+                      TableScan: ?table? projection=[_0, _11, _12]
+
+logical_plan after eliminate_nested_union:
+SAME TEXT AS ABOVE
+
+logical_plan after simplify_expressions:
+SAME TEXT AS ABOVE
+
+logical_plan after replace_distinct_aggregate:
+SAME TEXT AS ABOVE
+
+logical_plan after eliminate_join:
+SAME TEXT AS ABOVE
+
+logical_plan after decorrelate_predicate_subquery:
+SAME TEXT AS ABOVE
+
+logical_plan after scalar_subquery_to_join:
+SAME TEXT AS ABOVE
+
+logical_plan after decorrelate_lateral_join:
+SAME TEXT AS ABOVE
+
+logical_plan after extract_equijoin_predicate:
+SAME TEXT AS ABOVE
+
+logical_plan after eliminate_duplicated_expr:
+SAME TEXT AS ABOVE
+
+logical_plan after eliminate_filter:
+SAME TEXT AS ABOVE
+
+logical_plan after eliminate_cross_join:
+SAME TEXT AS ABOVE
+
+logical_plan after eliminate_limit:
+SAME TEXT AS ABOVE
+
+logical_plan after propagate_empty_relation:
+SAME TEXT AS ABOVE
+
+logical_plan after eliminate_one_union:
+SAME TEXT AS ABOVE
+
+logical_plan after filter_null_join_keys:
+SAME TEXT AS ABOVE
+
+logical_plan after eliminate_outer_join:
+SAME TEXT AS ABOVE
+
+logical_plan after push_down_limit:
+SAME TEXT AS ABOVE
+
+logical_plan after push_down_filter:
+SAME TEXT AS ABOVE
+
+logical_plan after single_distinct_aggregation_to_group_by:
+SAME TEXT AS ABOVE
+
+logical_plan after eliminate_group_by_constant:
+SAME TEXT AS ABOVE
+
+logical_plan after common_sub_expression_eliminate:
+SAME TEXT AS ABOVE
+
+logical_plan after optimize_projections:
+SAME TEXT AS ABOVE
+
+logical_plan:
+Projection: <exprs>
+  Sort: <exprs>
+    Projection: <exprs>
+      Aggregate: groupBy=[[orders.#<col>]], aggr=[[count(Int64(1))]]
+        Projection: <exprs>
+          LeftSemi Join: orders.#<col> = __correlated_sq_1.#<col>
+            Projection: <exprs>
+              SubqueryAlias: orders
+                Projection: <exprs>
+                  Filter: ?table?._4 >= Date32("1995-04-01") AND ?table?._4 < Date32("1995-07-01")
+                    TableScan: ?table? projection=[_0, _4, _5]
+            SubqueryAlias: __correlated_sq_1
+              Projection: <exprs>
+                SubqueryAlias: lineitem
+                  Projection: <exprs>
+                    Filter: ?table?._12 > ?table?._11
+                      TableScan: ?table? projection=[_0, _11, _12]
+
+initial_physical_plan:
+ProjectionExec: expr=[<exprs>]
+  SortExec: [<sort_exprs>]
+    SortExec: expr=[<exprs>]
+      ProjectionExec: expr=[<exprs>]
+        AggregateExec: mode=FinalPartitioned, gby=[#<col> as #<col>], aggr=[count(Int64(1))]
+          CoalesceBatchesExec: target_batch_size=8192
+            RepartitionExec: partitioning=Hash([#<col>], <partitions>), input_partitions=<partitions>
+              AggregateExec: mode=Partial, gby=[#<col> as #<col>], aggr=[count(Int64(1))]
+                CoalesceBatchesExec: target_batch_size=8192
+                  HashJoinExec: mode=CollectLeft, join_type=RightSemi, on=[(#<col>, #<col>)], projection=[#<col>]
+                    ProjectionExec: expr=[<exprs>]
+                      CoalesceBatchesExec: target_batch_size=8192
+                        FilterExec: _12@<id> > _11@<id>, projection=[_0@<id>]
+                          DataSourceExec: partitions=1, partition_sizes=[<sizes>]
+                    RepartitionExec: partitioning=RoundRobinBatch(<partitions>), input_partitions=<partitions>
+                      ProjectionExec: expr=[<exprs>]
+                        CoalesceBatchesExec: target_batch_size=8192
+                          FilterExec: _4@<id> >= 1995-04-01 AND _4@<id> < 1995-07-01, projection=[_0@<id>, _5@<id>]
+                            DataSourceExec: partitions=1, partition_sizes=[<sizes>]
+
+
+initial_physical_plan_with_stats:
+ProjectionExec: expr=[<exprs>]
+  SortExec: [<sort_exprs>]
+    SortExec: expr=[<exprs>]
+      ProjectionExec: expr=[<exprs>]
+        AggregateExec: mode=FinalPartitioned, gby=[#<col> as #<col>], aggr=[count(Int64(1))], statistics=[Rows=Inexact(300), Bytes=Absent, [(Col[0]:),(Col[1]:)]]
+          CoalesceBatchesExec: target_batch_size=8192, statistics=[Rows=Inexact(300), Bytes=Absent, [(Col[0]:),(Col[1]:)]]
+            RepartitionExec: partitioning=Hash([#<col>], <partitions>), input_partitions=<partitions>, statistics=[Rows=Inexact(300), Bytes=Absent, [(Col[0]:),(Col[1]:)]]
+              AggregateExec: mode=Partial, gby=[#<col> as #<col>], aggr=[count(Int64(1))], statistics=[Rows=Inexact(300), Bytes=Absent, [(Col[0]:),(Col[1]:)]]
+                CoalesceBatchesExec: target_batch_size=8192, statistics=[Rows=Inexact(300), Bytes=Absent, [(Col[0]: Null=Inexact(0))]]
+                  HashJoinExec: mode=CollectLeft, join_type=RightSemi, on=[(#<col>, #<col>)], projection=[#<col>], statistics=[Rows=Inexact(300), Bytes=Absent, [(Col[0]: Null=Inexact(0))]]
+                    ProjectionExec: expr=[<exprs>]
+                      CoalesceBatchesExec: target_batch_size=8192, statistics=[Rows=Inexact(1201), Bytes=Inexact(<bytes>), [(Col[0]: Null=Inexact(0))]]
+                        FilterExec: _12@<id> > _11@<id>, projection=[_0@<id>], statistics=[Rows=Inexact(1201), Bytes=Inexact(<bytes>), [(Col[0]: Null=Inexact(0))]]
+                          DataSourceExec: partitions=1, partition_sizes=[<sizes>], statistics=[Rows=Exact(6005), Bytes=Exact(<bytes>), [(Col[0]: Null=Exact(0)),(Col[1]: Null=Exact(0)),(Col[2]: Null=Exact(0))]]
+                    RepartitionExec: partitioning=RoundRobinBatch(<partitions>), input_partitions=<partitions>, statistics=[Rows=Inexact(300), Bytes=Inexact(<bytes>), [(Col[0]: Null=Inexact(0)),(Col[1]: Null=Inexact(0))]]
+                      ProjectionExec: expr=[<exprs>]
+                        CoalesceBatchesExec: target_batch_size=8192, statistics=[Rows=Inexact(300), Bytes=Inexact(<bytes>), [(Col[0]: Null=Inexact(0)),(Col[1]: Null=Inexact(0))]]
+                          FilterExec: _4@<id> >= 1995-04-01 AND _4@<id> < 1995-07-01, projection=[_0@<id>, _5@<id>], statistics=[Rows=Inexact(300), Bytes=Inexact(<bytes>), [(Col[0]: Null=Inexact(0)),(Col[1]: Null=Inexact(0))]]
+                            DataSourceExec: partitions=1, partition_sizes=[<sizes>], statistics=[Rows=Exact(1500), Bytes=Exact(<bytes>), [(Col[0]: Null=Exact(0)),(Col[1]: Null=Exact(0)),(Col[2]: Null=Exact(0))]]
+
+
+initial_physical_plan_with_schema:
+ProjectionExec: expr=[<exprs>]
+  SortExec: [<sort_exprs>]
+    SortExec: expr=[<exprs>]
+      ProjectionExec: expr=[<exprs>]
+        AggregateExec: mode=FinalPartitioned, gby=[#<col> as #<col>], aggr=[count(Int64(1))], schema=[#<col>:Utf8;N, count(Int64(1)):Int64]
+          CoalesceBatchesExec: target_batch_size=8192, schema=[#<col>:Utf8;N, count(Int64(1))[count]:Int64]
+            RepartitionExec: partitioning=Hash([#<col>], <partitions>), input_partitions=<partitions>, schema=[#<col>:Utf8;N, count(Int64(1))[count]:Int64]
+              AggregateExec: mode=Partial, gby=[#<col> as #<col>], aggr=[count(Int64(1))], schema=[#<col>:Utf8;N, count(Int64(1))[count]:Int64]
+                CoalesceBatchesExec: target_batch_size=8192, schema=[#<col>:Utf8;N]
+                  HashJoinExec: mode=CollectLeft, join_type=RightSemi, on=[(#<col>, #<col>)], projection=[#<col>], schema=[#<col>:Utf8;N]
+                    ProjectionExec: expr=[<exprs>]
+                      CoalesceBatchesExec: target_batch_size=8192, schema=[_0:Int64;N]
+                        FilterExec: _12@<id> > _11@<id>, projection=[_0@<id>], schema=[_0:Int64;N]
+                          DataSourceExec: partitions=1, partition_sizes=[<sizes>], schema=[_0:Int64;N, _11:Date32;N, _12:Date32;N]
+                    RepartitionExec: partitioning=RoundRobinBatch(<partitions>), input_partitions=<partitions>, schema=[#<col>:Int64;N, #<col>:Utf8;N]
+                      ProjectionExec: expr=[<exprs>]
+                        CoalesceBatchesExec: target_batch_size=8192, schema=[_0:Int64;N, _5:Utf8;N]
+                          FilterExec: _4@<id> >= 1995-04-01 AND _4@<id> < 1995-07-01, projection=[_0@<id>, _5@<id>], schema=[_0:Int64;N, _5:Utf8;N]
+                            DataSourceExec: partitions=1, partition_sizes=[<sizes>], schema=[_0:Int64;N, _4:Date32;N, _5:Utf8;N]
+
+
+physical_plan after OutputRequirements:
+ProjectionExec: expr=[<exprs>]
+  OutputRequirementExec: order_by=[(#<col>, asc)], dist_by=SinglePartition
+    SortExec: [<sort_exprs>]
+      SortExec: expr=[<exprs>]
+        ProjectionExec: expr=[<exprs>]
+          AggregateExec: mode=FinalPartitioned, gby=[#<col> as #<col>], aggr=[count(Int64(1))]
+            CoalesceBatchesExec: target_batch_size=8192
+              RepartitionExec: partitioning=Hash([#<col>], <partitions>), input_partitions=<partitions>
+                AggregateExec: mode=Partial, gby=[#<col> as #<col>], aggr=[count(Int64(1))]
+                  CoalesceBatchesExec: target_batch_size=8192
+                    HashJoinExec: mode=CollectLeft, join_type=RightSemi, on=[(#<col>, #<col>)], projection=[#<col>]
+                      ProjectionExec: expr=[<exprs>]
+                        CoalesceBatchesExec: target_batch_size=8192
+                          FilterExec: _12@<id> > _11@<id>, projection=[_0@<id>]
+                            DataSourceExec: partitions=1, partition_sizes=[<sizes>]
+                      RepartitionExec: partitioning=RoundRobinBatch(<partitions>), input_partitions=<partitions>
+                        ProjectionExec: expr=[<exprs>]
+                          CoalesceBatchesExec: target_batch_size=8192
+                            FilterExec: _4@<id> >= 1995-04-01 AND _4@<id> < 1995-07-01, projection=[_0@<id>, _5@<id>]
+                              DataSourceExec: partitions=1, partition_sizes=[<sizes>]
+
+
+physical_plan after aggregate_statistics:
+SAME TEXT AS ABOVE
+
+physical_plan after join_selection:
+SAME TEXT AS ABOVE
+
+physical_plan after LimitedDistinctAggregation:
+SAME TEXT AS ABOVE
+
+physical_plan after FilterPushdown:
+SAME TEXT AS ABOVE
+
+physical_plan after EnforceDistribution:
+ProjectionExec: expr=[<exprs>]
+  OutputRequirementExec: order_by=[(#<col>, asc)], dist_by=SinglePartition
+    SortExec: expr=[<exprs>]
+      CoalescePartitionsExec
+        SortExec: expr=[<exprs>]
+          ProjectionExec: expr=[<exprs>]
+            AggregateExec: mode=FinalPartitioned, gby=[#<col> as #<col>], aggr=[count(Int64(1))]
+              RepartitionExec: partitioning=Hash([#<col>], <partitions>), input_partitions=<partitions>
+                CoalesceBatchesExec: target_batch_size=8192
+                  AggregateExec: mode=Partial, gby=[#<col> as #<col>], aggr=[count(Int64(1))]
+                    CoalesceBatchesExec: target_batch_size=8192
+                      HashJoinExec: mode=CollectLeft, join_type=RightSemi, on=[(#<col>, #<col>)], projection=[#<col>]
+                        ProjectionExec: expr=[<exprs>]
+                          CoalesceBatchesExec: target_batch_size=8192
+                            FilterExec: _12@<id> > _11@<id>, projection=[_0@<id>]
+                              DataSourceExec: partitions=1, partition_sizes=[<sizes>]
+                        RepartitionExec: partitioning=RoundRobinBatch(<partitions>), input_partitions=<partitions>
+                          ProjectionExec: expr=[<exprs>]
+                            CoalesceBatchesExec: target_batch_size=8192
+                              FilterExec: _4@<id> >= 1995-04-01 AND _4@<id> < 1995-07-01, projection=[_0@<id>, _5@<id>]
+                                DataSourceExec: partitions=1, partition_sizes=[<sizes>]
+
+
+physical_plan after CombinePartialFinalAggregate:
+SAME TEXT AS ABOVE
+
+physical_plan after EnforceSorting:
+ProjectionExec: expr=[<exprs>]
+  OutputRequirementExec: order_by=[(#<col>, asc)], dist_by=SinglePartition
+    SortExec: [<sort_exprs>]
+      SortExec: expr=[<exprs>]
+        ProjectionExec: expr=[<exprs>]
+          AggregateExec: mode=FinalPartitioned, gby=[#<col> as #<col>], aggr=[count(Int64(1))]
+            RepartitionExec: partitioning=Hash([#<col>], <partitions>), input_partitions=<partitions>
+              CoalesceBatchesExec: target_batch_size=8192
+                AggregateExec: mode=Partial, gby=[#<col> as #<col>], aggr=[count(Int64(1))]
+                  CoalesceBatchesExec: target_batch_size=8192
+                    HashJoinExec: mode=CollectLeft, join_type=RightSemi, on=[(#<col>, #<col>)], projection=[#<col>]
+                      ProjectionExec: expr=[<exprs>]
+                        CoalesceBatchesExec: target_batch_size=8192
+                          FilterExec: _12@<id> > _11@<id>, projection=[_0@<id>]
+                            DataSourceExec: partitions=1, partition_sizes=[<sizes>]
+                      RepartitionExec: partitioning=RoundRobinBatch(<partitions>), input_partitions=<partitions>
+                        ProjectionExec: expr=[<exprs>]
+                          CoalesceBatchesExec: target_batch_size=8192
+                            FilterExec: _4@<id> >= 1995-04-01 AND _4@<id> < 1995-07-01, projection=[_0@<id>, _5@<id>]
+                              DataSourceExec: partitions=1, partition_sizes=[<sizes>]
+
+
+physical_plan after OptimizeAggregateOrder:
+SAME TEXT AS ABOVE
+
+physical_plan after ProjectionPushdown:
+SAME TEXT AS ABOVE
+
+physical_plan after coalesce_batches:
+ProjectionExec: expr=[<exprs>]
+  OutputRequirementExec: order_by=[(#<col>, asc)], dist_by=SinglePartition
+    SortExec: [<sort_exprs>]
+      SortExec: expr=[<exprs>]
+        ProjectionExec: expr=[<exprs>]
+          AggregateExec: mode=FinalPartitioned, gby=[#<col> as #<col>], aggr=[count(Int64(1))]
+            CoalesceBatchesExec: target_batch_size=8192
+              RepartitionExec: partitioning=Hash([#<col>], <partitions>), input_partitions=<partitions>
+                CoalesceBatchesExec: target_batch_size=8192
+                  AggregateExec: mode=Partial, gby=[#<col> as #<col>], aggr=[count(Int64(1))]
+                    CoalesceBatchesExec: target_batch_size=8192
+                      CoalesceBatchesExec: target_batch_size=8192
+                        HashJoinExec: mode=CollectLeft, join_type=RightSemi, on=[(#<col>, #<col>)], projection=[#<col>]
+                          ProjectionExec: expr=[<exprs>]
+                            CoalesceBatchesExec: target_batch_size=8192
+                              CoalesceBatchesExec: target_batch_size=8192
+                                FilterExec: _12@<id> > _11@<id>, projection=[_0@<id>]
+                                  DataSourceExec: partitions=1, partition_sizes=[<sizes>]
+                          RepartitionExec: partitioning=RoundRobinBatch(<partitions>), input_partitions=<partitions>
+                            ProjectionExec: expr=[<exprs>]
+                              CoalesceBatchesExec: target_batch_size=8192
+                                CoalesceBatchesExec: target_batch_size=8192
+                                  FilterExec: _4@<id> >= 1995-04-01 AND _4@<id> < 1995-07-01, projection=[_0@<id>, _5@<id>]
+                                    DataSourceExec: partitions=1, partition_sizes=[<sizes>]
+
+
+physical_plan after coalesce_async_exec_input:
+SAME TEXT AS ABOVE
+
+physical_plan after OutputRequirements:
+ProjectionExec: expr=[<exprs>]
+  SortExec: [<sort_exprs>]
+    SortExec: expr=[<exprs>]
+      ProjectionExec: expr=[<exprs>]
+        AggregateExec: mode=FinalPartitioned, gby=[#<col> as #<col>], aggr=[count(Int64(1))]
+          CoalesceBatchesExec: target_batch_size=8192
+            RepartitionExec: partitioning=Hash([#<col>], <partitions>), input_partitions=<partitions>
+              CoalesceBatchesExec: target_batch_size=8192
+                AggregateExec: mode=Partial, gby=[#<col> as #<col>], aggr=[count(Int64(1))]
+                  CoalesceBatchesExec: target_batch_size=8192
+                    CoalesceBatchesExec: target_batch_size=8192
+                      HashJoinExec: mode=CollectLeft, join_type=RightSemi, on=[(#<col>, #<col>)], projection=[#<col>]
+                        ProjectionExec: expr=[<exprs>]
+                          CoalesceBatchesExec: target_batch_size=8192
+                            CoalesceBatchesExec: target_batch_size=8192
+                              FilterExec: _12@<id> > _11@<id>, projection=[_0@<id>]
+                                DataSourceExec: partitions=1, partition_sizes=[<sizes>]
+                        RepartitionExec: partitioning=RoundRobinBatch(<partitions>), input_partitions=<partitions>
+                          ProjectionExec: expr=[<exprs>]
+                            CoalesceBatchesExec: target_batch_size=8192
+                              CoalesceBatchesExec: target_batch_size=8192
+                                FilterExec: _4@<id> >= 1995-04-01 AND _4@<id> < 1995-07-01, projection=[_0@<id>, _5@<id>]
+                                  DataSourceExec: partitions=1, partition_sizes=[<sizes>]
+
+
+physical_plan after LimitAggregation:
+SAME TEXT AS ABOVE
+
+physical_plan after LimitPushPastWindows:
+SAME TEXT AS ABOVE
+
+physical_plan after LimitPushdown:
+SAME TEXT AS ABOVE
+
+physical_plan after ProjectionPushdown:
+SAME TEXT AS ABOVE
+
+physical_plan after EnsureCooperative:
+SAME TEXT AS ABOVE
+
+physical_plan after FilterPushdown(Post):
+SAME TEXT AS ABOVE
+
+physical_plan after RewriteExplicitRepartition:
+SAME TEXT AS ABOVE
+
+physical_plan after SanityCheckPlan:
+SAME TEXT AS ABOVE
+
+physical_plan:
+ProjectionExec: expr=[<exprs>]
+  ProjectionExec: expr=[<exprs>]
+    SortExec: [<sort_exprs>]
+      SortExec: expr=[<exprs>]
+        ProjectionExec: expr=[<exprs>]
+          AggregateExec: mode=FinalPartitioned, gby=[#<col> as #<col>], aggr=[count(Int64(1))]
+            CoalesceBatchesExec: target_batch_size=8192
+              RepartitionExec: partitioning=Hash([#<col>], <partitions>), input_partitions=<partitions>
+                CoalesceBatchesExec: target_batch_size=8192
+                  AggregateExec: mode=Partial, gby=[#<col> as #<col>], aggr=[count(Int64(1))]
+                    CoalesceBatchesExec: target_batch_size=8192
+                      CoalesceBatchesExec: target_batch_size=8192
+                        HashJoinExec: mode=CollectLeft, join_type=RightSemi, on=[(#<col>, #<col>)], projection=[#<col>]
+                          ProjectionExec: expr=[<exprs>]
+                            CoalesceBatchesExec: target_batch_size=8192
+                              CoalesceBatchesExec: target_batch_size=8192
+                                FilterExec: _12@<id> > _11@<id>, projection=[_0@<id>]
+                                  DataSourceExec: partitions=1, partition_sizes=[<sizes>]
+                          RepartitionExec: partitioning=RoundRobinBatch(<partitions>), input_partitions=<partitions>
+                            ProjectionExec: expr=[<exprs>]
+                              CoalesceBatchesExec: target_batch_size=8192
+                                CoalesceBatchesExec: target_batch_size=8192
+                                  FilterExec: _4@<id> >= 1995-04-01 AND _4@<id> < 1995-07-01, projection=[_0@<id>, _5@<id>]
+                                    DataSourceExec: partitions=1, partition_sizes=[<sizes>]
+
+
+== Physical Plan ==
+ProjectionExec: expr=[<exprs>]
+  ProjectionExec: expr=[<exprs>]
+    SortExec: [<sort_exprs>]
+      SortExec: expr=[<exprs>]
+        ProjectionExec: expr=[<exprs>]
+          AggregateExec: mode=FinalPartitioned, gby=[#<col> as #<col>], aggr=[count(Int64(1))]
+            CoalesceBatchesExec: target_batch_size=8192
+              RepartitionExec: partitioning=Hash([#<col>], <partitions>), input_partitions=<partitions>
+                CoalesceBatchesExec: target_batch_size=8192
+                  AggregateExec: mode=Partial, gby=[#<col> as #<col>], aggr=[count(Int64(1))]
+                    CoalesceBatchesExec: target_batch_size=8192
+                      CoalesceBatchesExec: target_batch_size=8192
+                        HashJoinExec: mode=CollectLeft, join_type=RightSemi, on=[(#<col>, #<col>)], projection=[#<col>]
+                          ProjectionExec: expr=[<exprs>]
+                            CoalesceBatchesExec: target_batch_size=8192
+                              CoalesceBatchesExec: target_batch_size=8192
+                                FilterExec: _12@<id> > _11@<id>, projection=[_0@<id>]
+                                  DataSourceExec: partitions=1, partition_sizes=[<sizes>]
+                          RepartitionExec: partitioning=RoundRobinBatch(<partitions>), input_partitions=<partitions>
+                            ProjectionExec: expr=[<exprs>]
+                              CoalesceBatchesExec: target_batch_size=8192
+                                CoalesceBatchesExec: target_batch_size=8192
+                                  FilterExec: _4@<id> >= 1995-04-01 AND _4@<id> < 1995-07-01, projection=[_0@<id>, _5@<id>]
+                                    DataSourceExec: partitions=1, partition_sizes=[<sizes>]

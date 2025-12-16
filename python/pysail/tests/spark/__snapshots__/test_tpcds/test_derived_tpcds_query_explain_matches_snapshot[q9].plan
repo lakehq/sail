@@ -1,0 +1,2826 @@
+== Codegen ==
+Whole-stage codegen is not supported; showing physical plan instead.
+
+== Plan Steps ==
+initial_logical_plan:
+Projection: <exprs>
+  Subquery:
+    Projection: <exprs>
+      Aggregate: groupBy=[[]], aggr=[[count(Int64(1))]]
+        Filter: store_sales.#<col> >= Int32(1) AND store_sales.#<col> <= Int32(20)
+          Projection: <exprs>
+            Projection: <exprs>
+              SubqueryAlias: store_sales
+                Projection: <exprs>
+                  Projection: <exprs>
+                    TableScan: ?table?
+  Subquery:
+    Projection: <exprs>
+      Aggregate: groupBy=[[]], aggr=[[avg(store_sales.#<col>)]]
+        Filter: store_sales.#<col> >= Int32(1) AND store_sales.#<col> <= Int32(20)
+          Projection: <exprs>
+            Projection: <exprs>
+              SubqueryAlias: store_sales
+                Projection: <exprs>
+                  Projection: <exprs>
+                    TableScan: ?table?
+  Subquery:
+    Projection: <exprs>
+      Aggregate: groupBy=[[]], aggr=[[avg(store_sales.#<col>)]]
+        Filter: store_sales.#<col> >= Int32(1) AND store_sales.#<col> <= Int32(20)
+          Projection: <exprs>
+            Projection: <exprs>
+              SubqueryAlias: store_sales
+                Projection: <exprs>
+                  Projection: <exprs>
+                    TableScan: ?table?
+  Subquery:
+    Projection: <exprs>
+      Aggregate: groupBy=[[]], aggr=[[count(Int64(1))]]
+        Filter: store_sales.#<col> >= Int32(21) AND store_sales.#<col> <= Int32(40)
+          Projection: <exprs>
+            Projection: <exprs>
+              SubqueryAlias: store_sales
+                Projection: <exprs>
+                  Projection: <exprs>
+                    TableScan: ?table?
+  Subquery:
+    Projection: <exprs>
+      Aggregate: groupBy=[[]], aggr=[[avg(store_sales.#<col>)]]
+        Filter: store_sales.#<col> >= Int32(21) AND store_sales.#<col> <= Int32(40)
+          Projection: <exprs>
+            Projection: <exprs>
+              SubqueryAlias: store_sales
+                Projection: <exprs>
+                  Projection: <exprs>
+                    TableScan: ?table?
+  Subquery:
+    Projection: <exprs>
+      Aggregate: groupBy=[[]], aggr=[[avg(store_sales.#<col>)]]
+        Filter: store_sales.#<col> >= Int32(21) AND store_sales.#<col> <= Int32(40)
+          Projection: <exprs>
+            Projection: <exprs>
+              SubqueryAlias: store_sales
+                Projection: <exprs>
+                  Projection: <exprs>
+                    TableScan: ?table?
+  Subquery:
+    Projection: <exprs>
+      Aggregate: groupBy=[[]], aggr=[[count(Int64(1))]]
+        Filter: store_sales.#<col> >= Int32(41) AND store_sales.#<col> <= Int32(60)
+          Projection: <exprs>
+            Projection: <exprs>
+              SubqueryAlias: store_sales
+                Projection: <exprs>
+                  Projection: <exprs>
+                    TableScan: ?table?
+  Subquery:
+    Projection: <exprs>
+      Aggregate: groupBy=[[]], aggr=[[avg(store_sales.#<col>)]]
+        Filter: store_sales.#<col> >= Int32(41) AND store_sales.#<col> <= Int32(60)
+          Projection: <exprs>
+            Projection: <exprs>
+              SubqueryAlias: store_sales
+                Projection: <exprs>
+                  Projection: <exprs>
+                    TableScan: ?table?
+  Subquery:
+    Projection: <exprs>
+      Aggregate: groupBy=[[]], aggr=[[avg(store_sales.#<col>)]]
+        Filter: store_sales.#<col> >= Int32(41) AND store_sales.#<col> <= Int32(60)
+          Projection: <exprs>
+            Projection: <exprs>
+              SubqueryAlias: store_sales
+                Projection: <exprs>
+                  Projection: <exprs>
+                    TableScan: ?table?
+  Subquery:
+    Projection: <exprs>
+      Aggregate: groupBy=[[]], aggr=[[count(Int64(1))]]
+        Filter: store_sales.#<col> >= Int32(61) AND store_sales.#<col> <= Int32(80)
+          Projection: <exprs>
+            Projection: <exprs>
+              SubqueryAlias: store_sales
+                Projection: <exprs>
+                  Projection: <exprs>
+                    TableScan: ?table?
+  Subquery:
+    Projection: <exprs>
+      Aggregate: groupBy=[[]], aggr=[[avg(store_sales.#<col>)]]
+        Filter: store_sales.#<col> >= Int32(61) AND store_sales.#<col> <= Int32(80)
+          Projection: <exprs>
+            Projection: <exprs>
+              SubqueryAlias: store_sales
+                Projection: <exprs>
+                  Projection: <exprs>
+                    TableScan: ?table?
+  Subquery:
+    Projection: <exprs>
+      Aggregate: groupBy=[[]], aggr=[[avg(store_sales.#<col>)]]
+        Filter: store_sales.#<col> >= Int32(61) AND store_sales.#<col> <= Int32(80)
+          Projection: <exprs>
+            Projection: <exprs>
+              SubqueryAlias: store_sales
+                Projection: <exprs>
+                  Projection: <exprs>
+                    TableScan: ?table?
+  Subquery:
+    Projection: <exprs>
+      Aggregate: groupBy=[[]], aggr=[[count(Int64(1))]]
+        Filter: store_sales.#<col> >= Int32(81) AND store_sales.#<col> <= Int32(100)
+          Projection: <exprs>
+            Projection: <exprs>
+              SubqueryAlias: store_sales
+                Projection: <exprs>
+                  Projection: <exprs>
+                    TableScan: ?table?
+  Subquery:
+    Projection: <exprs>
+      Aggregate: groupBy=[[]], aggr=[[avg(store_sales.#<col>)]]
+        Filter: store_sales.#<col> >= Int32(81) AND store_sales.#<col> <= Int32(100)
+          Projection: <exprs>
+            Projection: <exprs>
+              SubqueryAlias: store_sales
+                Projection: <exprs>
+                  Projection: <exprs>
+                    TableScan: ?table?
+  Subquery:
+    Projection: <exprs>
+      Aggregate: groupBy=[[]], aggr=[[avg(store_sales.#<col>)]]
+        Filter: store_sales.#<col> >= Int32(81) AND store_sales.#<col> <= Int32(100)
+          Projection: <exprs>
+            Projection: <exprs>
+              SubqueryAlias: store_sales
+                Projection: <exprs>
+                  Projection: <exprs>
+                    TableScan: ?table?
+  Filter: reason.#<col> = Int32(1)
+    Projection: <exprs>
+      Projection: <exprs>
+        SubqueryAlias: reason
+          Projection: <exprs>
+            Projection: <exprs>
+              TableScan: ?table?
+
+logical_plan after resolve_grouping_function:
+SAME TEXT AS ABOVE
+
+logical_plan after type_coercion:
+Projection: <exprs>
+  Subquery:
+    Projection: <exprs>
+      Aggregate: groupBy=[[]], aggr=[[count(Int64(1))]]
+        Filter: store_sales.#<col> >= CAST(Int32(1) AS Float64) AND store_sales.#<col> <= CAST(Int32(20) AS Float64)
+          Projection: <exprs>
+            Projection: <exprs>
+              SubqueryAlias: store_sales
+                Projection: <exprs>
+                  Projection: <exprs>
+                    TableScan: ?table?
+  Subquery:
+    Projection: <exprs>
+      Aggregate: groupBy=[[]], aggr=[[avg(store_sales.#<col>)]]
+        Filter: store_sales.#<col> >= CAST(Int32(1) AS Float64) AND store_sales.#<col> <= CAST(Int32(20) AS Float64)
+          Projection: <exprs>
+            Projection: <exprs>
+              SubqueryAlias: store_sales
+                Projection: <exprs>
+                  Projection: <exprs>
+                    TableScan: ?table?
+  Subquery:
+    Projection: <exprs>
+      Aggregate: groupBy=[[]], aggr=[[avg(store_sales.#<col>)]]
+        Filter: store_sales.#<col> >= CAST(Int32(1) AS Float64) AND store_sales.#<col> <= CAST(Int32(20) AS Float64)
+          Projection: <exprs>
+            Projection: <exprs>
+              SubqueryAlias: store_sales
+                Projection: <exprs>
+                  Projection: <exprs>
+                    TableScan: ?table?
+  Subquery:
+    Projection: <exprs>
+      Aggregate: groupBy=[[]], aggr=[[count(Int64(1))]]
+        Filter: store_sales.#<col> >= CAST(Int32(21) AS Float64) AND store_sales.#<col> <= CAST(Int32(40) AS Float64)
+          Projection: <exprs>
+            Projection: <exprs>
+              SubqueryAlias: store_sales
+                Projection: <exprs>
+                  Projection: <exprs>
+                    TableScan: ?table?
+  Subquery:
+    Projection: <exprs>
+      Aggregate: groupBy=[[]], aggr=[[avg(store_sales.#<col>)]]
+        Filter: store_sales.#<col> >= CAST(Int32(21) AS Float64) AND store_sales.#<col> <= CAST(Int32(40) AS Float64)
+          Projection: <exprs>
+            Projection: <exprs>
+              SubqueryAlias: store_sales
+                Projection: <exprs>
+                  Projection: <exprs>
+                    TableScan: ?table?
+  Subquery:
+    Projection: <exprs>
+      Aggregate: groupBy=[[]], aggr=[[avg(store_sales.#<col>)]]
+        Filter: store_sales.#<col> >= CAST(Int32(21) AS Float64) AND store_sales.#<col> <= CAST(Int32(40) AS Float64)
+          Projection: <exprs>
+            Projection: <exprs>
+              SubqueryAlias: store_sales
+                Projection: <exprs>
+                  Projection: <exprs>
+                    TableScan: ?table?
+  Subquery:
+    Projection: <exprs>
+      Aggregate: groupBy=[[]], aggr=[[count(Int64(1))]]
+        Filter: store_sales.#<col> >= CAST(Int32(41) AS Float64) AND store_sales.#<col> <= CAST(Int32(60) AS Float64)
+          Projection: <exprs>
+            Projection: <exprs>
+              SubqueryAlias: store_sales
+                Projection: <exprs>
+                  Projection: <exprs>
+                    TableScan: ?table?
+  Subquery:
+    Projection: <exprs>
+      Aggregate: groupBy=[[]], aggr=[[avg(store_sales.#<col>)]]
+        Filter: store_sales.#<col> >= CAST(Int32(41) AS Float64) AND store_sales.#<col> <= CAST(Int32(60) AS Float64)
+          Projection: <exprs>
+            Projection: <exprs>
+              SubqueryAlias: store_sales
+                Projection: <exprs>
+                  Projection: <exprs>
+                    TableScan: ?table?
+  Subquery:
+    Projection: <exprs>
+      Aggregate: groupBy=[[]], aggr=[[avg(store_sales.#<col>)]]
+        Filter: store_sales.#<col> >= CAST(Int32(41) AS Float64) AND store_sales.#<col> <= CAST(Int32(60) AS Float64)
+          Projection: <exprs>
+            Projection: <exprs>
+              SubqueryAlias: store_sales
+                Projection: <exprs>
+                  Projection: <exprs>
+                    TableScan: ?table?
+  Subquery:
+    Projection: <exprs>
+      Aggregate: groupBy=[[]], aggr=[[count(Int64(1))]]
+        Filter: store_sales.#<col> >= CAST(Int32(61) AS Float64) AND store_sales.#<col> <= CAST(Int32(80) AS Float64)
+          Projection: <exprs>
+            Projection: <exprs>
+              SubqueryAlias: store_sales
+                Projection: <exprs>
+                  Projection: <exprs>
+                    TableScan: ?table?
+  Subquery:
+    Projection: <exprs>
+      Aggregate: groupBy=[[]], aggr=[[avg(store_sales.#<col>)]]
+        Filter: store_sales.#<col> >= CAST(Int32(61) AS Float64) AND store_sales.#<col> <= CAST(Int32(80) AS Float64)
+          Projection: <exprs>
+            Projection: <exprs>
+              SubqueryAlias: store_sales
+                Projection: <exprs>
+                  Projection: <exprs>
+                    TableScan: ?table?
+  Subquery:
+    Projection: <exprs>
+      Aggregate: groupBy=[[]], aggr=[[avg(store_sales.#<col>)]]
+        Filter: store_sales.#<col> >= CAST(Int32(61) AS Float64) AND store_sales.#<col> <= CAST(Int32(80) AS Float64)
+          Projection: <exprs>
+            Projection: <exprs>
+              SubqueryAlias: store_sales
+                Projection: <exprs>
+                  Projection: <exprs>
+                    TableScan: ?table?
+  Subquery:
+    Projection: <exprs>
+      Aggregate: groupBy=[[]], aggr=[[count(Int64(1))]]
+        Filter: store_sales.#<col> >= CAST(Int32(81) AS Float64) AND store_sales.#<col> <= CAST(Int32(100) AS Float64)
+          Projection: <exprs>
+            Projection: <exprs>
+              SubqueryAlias: store_sales
+                Projection: <exprs>
+                  Projection: <exprs>
+                    TableScan: ?table?
+  Subquery:
+    Projection: <exprs>
+      Aggregate: groupBy=[[]], aggr=[[avg(store_sales.#<col>)]]
+        Filter: store_sales.#<col> >= CAST(Int32(81) AS Float64) AND store_sales.#<col> <= CAST(Int32(100) AS Float64)
+          Projection: <exprs>
+            Projection: <exprs>
+              SubqueryAlias: store_sales
+                Projection: <exprs>
+                  Projection: <exprs>
+                    TableScan: ?table?
+  Subquery:
+    Projection: <exprs>
+      Aggregate: groupBy=[[]], aggr=[[avg(store_sales.#<col>)]]
+        Filter: store_sales.#<col> >= CAST(Int32(81) AS Float64) AND store_sales.#<col> <= CAST(Int32(100) AS Float64)
+          Projection: <exprs>
+            Projection: <exprs>
+              SubqueryAlias: store_sales
+                Projection: <exprs>
+                  Projection: <exprs>
+                    TableScan: ?table?
+  Filter: reason.#<col> = CAST(Int32(1) AS Int64)
+    Projection: <exprs>
+      Projection: <exprs>
+        SubqueryAlias: reason
+          Projection: <exprs>
+            Projection: <exprs>
+              TableScan: ?table?
+
+analyzed_logical_plan:
+SAME TEXT AS ABOVE
+
+logical_plan after eliminate_nested_union:
+SAME TEXT AS ABOVE
+
+logical_plan after simplify_expressions:
+Projection: <exprs>
+  Subquery:
+    Projection: <exprs>
+      Aggregate: groupBy=[[]], aggr=[[count(Int64(1))]]
+        Filter: store_sales.#<col> >= Float64(1) AND store_sales.#<col> <= Float64(20)
+          Projection: <exprs>
+            Projection: <exprs>
+              SubqueryAlias: store_sales
+                Projection: <exprs>
+                  Projection: <exprs>
+                    TableScan: ?table?
+  Subquery:
+    Projection: <exprs>
+      Aggregate: groupBy=[[]], aggr=[[avg(store_sales.#<col>)]]
+        Filter: store_sales.#<col> >= Float64(1) AND store_sales.#<col> <= Float64(20)
+          Projection: <exprs>
+            Projection: <exprs>
+              SubqueryAlias: store_sales
+                Projection: <exprs>
+                  Projection: <exprs>
+                    TableScan: ?table?
+  Subquery:
+    Projection: <exprs>
+      Aggregate: groupBy=[[]], aggr=[[avg(store_sales.#<col>)]]
+        Filter: store_sales.#<col> >= Float64(1) AND store_sales.#<col> <= Float64(20)
+          Projection: <exprs>
+            Projection: <exprs>
+              SubqueryAlias: store_sales
+                Projection: <exprs>
+                  Projection: <exprs>
+                    TableScan: ?table?
+  Subquery:
+    Projection: <exprs>
+      Aggregate: groupBy=[[]], aggr=[[count(Int64(1))]]
+        Filter: store_sales.#<col> >= Float64(21) AND store_sales.#<col> <= Float64(40)
+          Projection: <exprs>
+            Projection: <exprs>
+              SubqueryAlias: store_sales
+                Projection: <exprs>
+                  Projection: <exprs>
+                    TableScan: ?table?
+  Subquery:
+    Projection: <exprs>
+      Aggregate: groupBy=[[]], aggr=[[avg(store_sales.#<col>)]]
+        Filter: store_sales.#<col> >= Float64(21) AND store_sales.#<col> <= Float64(40)
+          Projection: <exprs>
+            Projection: <exprs>
+              SubqueryAlias: store_sales
+                Projection: <exprs>
+                  Projection: <exprs>
+                    TableScan: ?table?
+  Subquery:
+    Projection: <exprs>
+      Aggregate: groupBy=[[]], aggr=[[avg(store_sales.#<col>)]]
+        Filter: store_sales.#<col> >= Float64(21) AND store_sales.#<col> <= Float64(40)
+          Projection: <exprs>
+            Projection: <exprs>
+              SubqueryAlias: store_sales
+                Projection: <exprs>
+                  Projection: <exprs>
+                    TableScan: ?table?
+  Subquery:
+    Projection: <exprs>
+      Aggregate: groupBy=[[]], aggr=[[count(Int64(1))]]
+        Filter: store_sales.#<col> >= Float64(41) AND store_sales.#<col> <= Float64(60)
+          Projection: <exprs>
+            Projection: <exprs>
+              SubqueryAlias: store_sales
+                Projection: <exprs>
+                  Projection: <exprs>
+                    TableScan: ?table?
+  Subquery:
+    Projection: <exprs>
+      Aggregate: groupBy=[[]], aggr=[[avg(store_sales.#<col>)]]
+        Filter: store_sales.#<col> >= Float64(41) AND store_sales.#<col> <= Float64(60)
+          Projection: <exprs>
+            Projection: <exprs>
+              SubqueryAlias: store_sales
+                Projection: <exprs>
+                  Projection: <exprs>
+                    TableScan: ?table?
+  Subquery:
+    Projection: <exprs>
+      Aggregate: groupBy=[[]], aggr=[[avg(store_sales.#<col>)]]
+        Filter: store_sales.#<col> >= Float64(41) AND store_sales.#<col> <= Float64(60)
+          Projection: <exprs>
+            Projection: <exprs>
+              SubqueryAlias: store_sales
+                Projection: <exprs>
+                  Projection: <exprs>
+                    TableScan: ?table?
+  Subquery:
+    Projection: <exprs>
+      Aggregate: groupBy=[[]], aggr=[[count(Int64(1))]]
+        Filter: store_sales.#<col> >= Float64(61) AND store_sales.#<col> <= Float64(80)
+          Projection: <exprs>
+            Projection: <exprs>
+              SubqueryAlias: store_sales
+                Projection: <exprs>
+                  Projection: <exprs>
+                    TableScan: ?table?
+  Subquery:
+    Projection: <exprs>
+      Aggregate: groupBy=[[]], aggr=[[avg(store_sales.#<col>)]]
+        Filter: store_sales.#<col> >= Float64(61) AND store_sales.#<col> <= Float64(80)
+          Projection: <exprs>
+            Projection: <exprs>
+              SubqueryAlias: store_sales
+                Projection: <exprs>
+                  Projection: <exprs>
+                    TableScan: ?table?
+  Subquery:
+    Projection: <exprs>
+      Aggregate: groupBy=[[]], aggr=[[avg(store_sales.#<col>)]]
+        Filter: store_sales.#<col> >= Float64(61) AND store_sales.#<col> <= Float64(80)
+          Projection: <exprs>
+            Projection: <exprs>
+              SubqueryAlias: store_sales
+                Projection: <exprs>
+                  Projection: <exprs>
+                    TableScan: ?table?
+  Subquery:
+    Projection: <exprs>
+      Aggregate: groupBy=[[]], aggr=[[count(Int64(1))]]
+        Filter: store_sales.#<col> >= Float64(81) AND store_sales.#<col> <= Float64(100)
+          Projection: <exprs>
+            Projection: <exprs>
+              SubqueryAlias: store_sales
+                Projection: <exprs>
+                  Projection: <exprs>
+                    TableScan: ?table?
+  Subquery:
+    Projection: <exprs>
+      Aggregate: groupBy=[[]], aggr=[[avg(store_sales.#<col>)]]
+        Filter: store_sales.#<col> >= Float64(81) AND store_sales.#<col> <= Float64(100)
+          Projection: <exprs>
+            Projection: <exprs>
+              SubqueryAlias: store_sales
+                Projection: <exprs>
+                  Projection: <exprs>
+                    TableScan: ?table?
+  Subquery:
+    Projection: <exprs>
+      Aggregate: groupBy=[[]], aggr=[[avg(store_sales.#<col>)]]
+        Filter: store_sales.#<col> >= Float64(81) AND store_sales.#<col> <= Float64(100)
+          Projection: <exprs>
+            Projection: <exprs>
+              SubqueryAlias: store_sales
+                Projection: <exprs>
+                  Projection: <exprs>
+                    TableScan: ?table?
+  Filter: reason.#<col> = Int64(1)
+    Projection: <exprs>
+      Projection: <exprs>
+        SubqueryAlias: reason
+          Projection: <exprs>
+            Projection: <exprs>
+              TableScan: ?table?
+
+logical_plan after replace_distinct_aggregate:
+SAME TEXT AS ABOVE
+
+logical_plan after eliminate_join:
+SAME TEXT AS ABOVE
+
+logical_plan after decorrelate_predicate_subquery:
+SAME TEXT AS ABOVE
+
+logical_plan after scalar_subquery_to_join:
+Projection: <exprs>
+  Left Join:  Filter: Boolean(true)
+    Left Join:  Filter: Boolean(true)
+      Left Join:  Filter: Boolean(true)
+        Left Join:  Filter: Boolean(true)
+          Left Join:  Filter: Boolean(true)
+            Left Join:  Filter: Boolean(true)
+              Left Join:  Filter: Boolean(true)
+                Left Join:  Filter: Boolean(true)
+                  Left Join:  Filter: Boolean(true)
+                    Left Join:  Filter: Boolean(true)
+                      Left Join:  Filter: Boolean(true)
+                        Left Join:  Filter: Boolean(true)
+                          Left Join:  Filter: Boolean(true)
+                            Left Join:  Filter: Boolean(true)
+                              Left Join:  Filter: Boolean(true)
+                                Filter: reason.#<col> = Int64(1)
+                                  Projection: <exprs>
+                                    Projection: <exprs>
+                                      SubqueryAlias: reason
+                                        Projection: <exprs>
+                                          Projection: <exprs>
+                                            TableScan: ?table?
+                                SubqueryAlias: __scalar_sq_1
+                                  Projection: <exprs>
+                                    Aggregate: groupBy=[[]], aggr=[[count(Int64(1))]]
+                                      Filter: store_sales.#<col> >= Float64(1) AND store_sales.#<col> <= Float64(20)
+                                        Projection: <exprs>
+                                          Projection: <exprs>
+                                            SubqueryAlias: store_sales
+                                              Projection: <exprs>
+                                                Projection: <exprs>
+                                                  TableScan: ?table?
+                              SubqueryAlias: __scalar_sq_2
+                                Projection: <exprs>
+                                  Aggregate: groupBy=[[]], aggr=[[avg(store_sales.#<col>)]]
+                                    Filter: store_sales.#<col> >= Float64(1) AND store_sales.#<col> <= Float64(20)
+                                      Projection: <exprs>
+                                        Projection: <exprs>
+                                          SubqueryAlias: store_sales
+                                            Projection: <exprs>
+                                              Projection: <exprs>
+                                                TableScan: ?table?
+                            SubqueryAlias: __scalar_sq_3
+                              Projection: <exprs>
+                                Aggregate: groupBy=[[]], aggr=[[avg(store_sales.#<col>)]]
+                                  Filter: store_sales.#<col> >= Float64(1) AND store_sales.#<col> <= Float64(20)
+                                    Projection: <exprs>
+                                      Projection: <exprs>
+                                        SubqueryAlias: store_sales
+                                          Projection: <exprs>
+                                            Projection: <exprs>
+                                              TableScan: ?table?
+                          SubqueryAlias: __scalar_sq_4
+                            Projection: <exprs>
+                              Aggregate: groupBy=[[]], aggr=[[count(Int64(1))]]
+                                Filter: store_sales.#<col> >= Float64(21) AND store_sales.#<col> <= Float64(40)
+                                  Projection: <exprs>
+                                    Projection: <exprs>
+                                      SubqueryAlias: store_sales
+                                        Projection: <exprs>
+                                          Projection: <exprs>
+                                            TableScan: ?table?
+                        SubqueryAlias: __scalar_sq_5
+                          Projection: <exprs>
+                            Aggregate: groupBy=[[]], aggr=[[avg(store_sales.#<col>)]]
+                              Filter: store_sales.#<col> >= Float64(21) AND store_sales.#<col> <= Float64(40)
+                                Projection: <exprs>
+                                  Projection: <exprs>
+                                    SubqueryAlias: store_sales
+                                      Projection: <exprs>
+                                        Projection: <exprs>
+                                          TableScan: ?table?
+                      SubqueryAlias: __scalar_sq_6
+                        Projection: <exprs>
+                          Aggregate: groupBy=[[]], aggr=[[avg(store_sales.#<col>)]]
+                            Filter: store_sales.#<col> >= Float64(21) AND store_sales.#<col> <= Float64(40)
+                              Projection: <exprs>
+                                Projection: <exprs>
+                                  SubqueryAlias: store_sales
+                                    Projection: <exprs>
+                                      Projection: <exprs>
+                                        TableScan: ?table?
+                    SubqueryAlias: __scalar_sq_7
+                      Projection: <exprs>
+                        Aggregate: groupBy=[[]], aggr=[[count(Int64(1))]]
+                          Filter: store_sales.#<col> >= Float64(41) AND store_sales.#<col> <= Float64(60)
+                            Projection: <exprs>
+                              Projection: <exprs>
+                                SubqueryAlias: store_sales
+                                  Projection: <exprs>
+                                    Projection: <exprs>
+                                      TableScan: ?table?
+                  SubqueryAlias: __scalar_sq_8
+                    Projection: <exprs>
+                      Aggregate: groupBy=[[]], aggr=[[avg(store_sales.#<col>)]]
+                        Filter: store_sales.#<col> >= Float64(41) AND store_sales.#<col> <= Float64(60)
+                          Projection: <exprs>
+                            Projection: <exprs>
+                              SubqueryAlias: store_sales
+                                Projection: <exprs>
+                                  Projection: <exprs>
+                                    TableScan: ?table?
+                SubqueryAlias: __scalar_sq_9
+                  Projection: <exprs>
+                    Aggregate: groupBy=[[]], aggr=[[avg(store_sales.#<col>)]]
+                      Filter: store_sales.#<col> >= Float64(41) AND store_sales.#<col> <= Float64(60)
+                        Projection: <exprs>
+                          Projection: <exprs>
+                            SubqueryAlias: store_sales
+                              Projection: <exprs>
+                                Projection: <exprs>
+                                  TableScan: ?table?
+              SubqueryAlias: __scalar_sq_10
+                Projection: <exprs>
+                  Aggregate: groupBy=[[]], aggr=[[count(Int64(1))]]
+                    Filter: store_sales.#<col> >= Float64(61) AND store_sales.#<col> <= Float64(80)
+                      Projection: <exprs>
+                        Projection: <exprs>
+                          SubqueryAlias: store_sales
+                            Projection: <exprs>
+                              Projection: <exprs>
+                                TableScan: ?table?
+            SubqueryAlias: __scalar_sq_11
+              Projection: <exprs>
+                Aggregate: groupBy=[[]], aggr=[[avg(store_sales.#<col>)]]
+                  Filter: store_sales.#<col> >= Float64(61) AND store_sales.#<col> <= Float64(80)
+                    Projection: <exprs>
+                      Projection: <exprs>
+                        SubqueryAlias: store_sales
+                          Projection: <exprs>
+                            Projection: <exprs>
+                              TableScan: ?table?
+          SubqueryAlias: __scalar_sq_12
+            Projection: <exprs>
+              Aggregate: groupBy=[[]], aggr=[[avg(store_sales.#<col>)]]
+                Filter: store_sales.#<col> >= Float64(61) AND store_sales.#<col> <= Float64(80)
+                  Projection: <exprs>
+                    Projection: <exprs>
+                      SubqueryAlias: store_sales
+                        Projection: <exprs>
+                          Projection: <exprs>
+                            TableScan: ?table?
+        SubqueryAlias: __scalar_sq_13
+          Projection: <exprs>
+            Aggregate: groupBy=[[]], aggr=[[count(Int64(1))]]
+              Filter: store_sales.#<col> >= Float64(81) AND store_sales.#<col> <= Float64(100)
+                Projection: <exprs>
+                  Projection: <exprs>
+                    SubqueryAlias: store_sales
+                      Projection: <exprs>
+                        Projection: <exprs>
+                          TableScan: ?table?
+      SubqueryAlias: __scalar_sq_14
+        Projection: <exprs>
+          Aggregate: groupBy=[[]], aggr=[[avg(store_sales.#<col>)]]
+            Filter: store_sales.#<col> >= Float64(81) AND store_sales.#<col> <= Float64(100)
+              Projection: <exprs>
+                Projection: <exprs>
+                  SubqueryAlias: store_sales
+                    Projection: <exprs>
+                      Projection: <exprs>
+                        TableScan: ?table?
+    SubqueryAlias: __scalar_sq_15
+      Projection: <exprs>
+        Aggregate: groupBy=[[]], aggr=[[avg(store_sales.#<col>)]]
+          Filter: store_sales.#<col> >= Float64(81) AND store_sales.#<col> <= Float64(100)
+            Projection: <exprs>
+              Projection: <exprs>
+                SubqueryAlias: store_sales
+                  Projection: <exprs>
+                    Projection: <exprs>
+                      TableScan: ?table?
+
+logical_plan after decorrelate_lateral_join:
+SAME TEXT AS ABOVE
+
+logical_plan after extract_equijoin_predicate:
+SAME TEXT AS ABOVE
+
+logical_plan after eliminate_duplicated_expr:
+SAME TEXT AS ABOVE
+
+logical_plan after eliminate_filter:
+SAME TEXT AS ABOVE
+
+logical_plan after eliminate_cross_join:
+SAME TEXT AS ABOVE
+
+logical_plan after eliminate_limit:
+SAME TEXT AS ABOVE
+
+logical_plan after propagate_empty_relation:
+SAME TEXT AS ABOVE
+
+logical_plan after eliminate_one_union:
+SAME TEXT AS ABOVE
+
+logical_plan after filter_null_join_keys:
+SAME TEXT AS ABOVE
+
+logical_plan after eliminate_outer_join:
+SAME TEXT AS ABOVE
+
+logical_plan after push_down_limit:
+SAME TEXT AS ABOVE
+
+logical_plan after push_down_filter:
+Projection: <exprs>
+  Left Join: 
+    Left Join: 
+      Left Join: 
+        Left Join: 
+          Left Join: 
+            Left Join: 
+              Left Join: 
+                Left Join: 
+                  Left Join: 
+                    Left Join: 
+                      Left Join: 
+                        Left Join: 
+                          Left Join: 
+                            Left Join: 
+                              Left Join: 
+                                Projection: <exprs>
+                                  Projection: <exprs>
+                                    SubqueryAlias: reason
+                                      Projection: <exprs>
+                                        Projection: <exprs>
+                                          Filter: ?table?._0 = Int64(1)
+                                            TableScan: ?table?
+                                SubqueryAlias: __scalar_sq_1
+                                  Projection: <exprs>
+                                    Aggregate: groupBy=[[]], aggr=[[count(Int64(1))]]
+                                      Projection: <exprs>
+                                        Projection: <exprs>
+                                          SubqueryAlias: store_sales
+                                            Projection: <exprs>
+                                              Projection: <exprs>
+                                                Filter: Boolean(true) AND ?table?._10 >= Float64(1) AND ?table?._10 <= Float64(20)
+                                                  TableScan: ?table?
+                              SubqueryAlias: __scalar_sq_2
+                                Projection: <exprs>
+                                  Aggregate: groupBy=[[]], aggr=[[avg(store_sales.#<col>)]]
+                                    Projection: <exprs>
+                                      Projection: <exprs>
+                                        SubqueryAlias: store_sales
+                                          Projection: <exprs>
+                                            Projection: <exprs>
+                                              Filter: Boolean(true) AND ?table?._10 >= Float64(1) AND ?table?._10 <= Float64(20)
+                                                TableScan: ?table?
+                            SubqueryAlias: __scalar_sq_3
+                              Projection: <exprs>
+                                Aggregate: groupBy=[[]], aggr=[[avg(store_sales.#<col>)]]
+                                  Projection: <exprs>
+                                    Projection: <exprs>
+                                      SubqueryAlias: store_sales
+                                        Projection: <exprs>
+                                          Projection: <exprs>
+                                            Filter: Boolean(true) AND ?table?._10 >= Float64(1) AND ?table?._10 <= Float64(20)
+                                              TableScan: ?table?
+                          SubqueryAlias: __scalar_sq_4
+                            Projection: <exprs>
+                              Aggregate: groupBy=[[]], aggr=[[count(Int64(1))]]
+                                Projection: <exprs>
+                                  Projection: <exprs>
+                                    SubqueryAlias: store_sales
+                                      Projection: <exprs>
+                                        Projection: <exprs>
+                                          Filter: Boolean(true) AND ?table?._10 >= Float64(21) AND ?table?._10 <= Float64(40)
+                                            TableScan: ?table?
+                        SubqueryAlias: __scalar_sq_5
+                          Projection: <exprs>
+                            Aggregate: groupBy=[[]], aggr=[[avg(store_sales.#<col>)]]
+                              Projection: <exprs>
+                                Projection: <exprs>
+                                  SubqueryAlias: store_sales
+                                    Projection: <exprs>
+                                      Projection: <exprs>
+                                        Filter: Boolean(true) AND ?table?._10 >= Float64(21) AND ?table?._10 <= Float64(40)
+                                          TableScan: ?table?
+                      SubqueryAlias: __scalar_sq_6
+                        Projection: <exprs>
+                          Aggregate: groupBy=[[]], aggr=[[avg(store_sales.#<col>)]]
+                            Projection: <exprs>
+                              Projection: <exprs>
+                                SubqueryAlias: store_sales
+                                  Projection: <exprs>
+                                    Projection: <exprs>
+                                      Filter: Boolean(true) AND ?table?._10 >= Float64(21) AND ?table?._10 <= Float64(40)
+                                        TableScan: ?table?
+                    SubqueryAlias: __scalar_sq_7
+                      Projection: <exprs>
+                        Aggregate: groupBy=[[]], aggr=[[count(Int64(1))]]
+                          Projection: <exprs>
+                            Projection: <exprs>
+                              SubqueryAlias: store_sales
+                                Projection: <exprs>
+                                  Projection: <exprs>
+                                    Filter: Boolean(true) AND ?table?._10 >= Float64(41) AND ?table?._10 <= Float64(60)
+                                      TableScan: ?table?
+                  SubqueryAlias: __scalar_sq_8
+                    Projection: <exprs>
+                      Aggregate: groupBy=[[]], aggr=[[avg(store_sales.#<col>)]]
+                        Projection: <exprs>
+                          Projection: <exprs>
+                            SubqueryAlias: store_sales
+                              Projection: <exprs>
+                                Projection: <exprs>
+                                  Filter: Boolean(true) AND ?table?._10 >= Float64(41) AND ?table?._10 <= Float64(60)
+                                    TableScan: ?table?
+                SubqueryAlias: __scalar_sq_9
+                  Projection: <exprs>
+                    Aggregate: groupBy=[[]], aggr=[[avg(store_sales.#<col>)]]
+                      Projection: <exprs>
+                        Projection: <exprs>
+                          SubqueryAlias: store_sales
+                            Projection: <exprs>
+                              Projection: <exprs>
+                                Filter: Boolean(true) AND ?table?._10 >= Float64(41) AND ?table?._10 <= Float64(60)
+                                  TableScan: ?table?
+              SubqueryAlias: __scalar_sq_10
+                Projection: <exprs>
+                  Aggregate: groupBy=[[]], aggr=[[count(Int64(1))]]
+                    Projection: <exprs>
+                      Projection: <exprs>
+                        SubqueryAlias: store_sales
+                          Projection: <exprs>
+                            Projection: <exprs>
+                              Filter: Boolean(true) AND ?table?._10 >= Float64(61) AND ?table?._10 <= Float64(80)
+                                TableScan: ?table?
+            SubqueryAlias: __scalar_sq_11
+              Projection: <exprs>
+                Aggregate: groupBy=[[]], aggr=[[avg(store_sales.#<col>)]]
+                  Projection: <exprs>
+                    Projection: <exprs>
+                      SubqueryAlias: store_sales
+                        Projection: <exprs>
+                          Projection: <exprs>
+                            Filter: Boolean(true) AND ?table?._10 >= Float64(61) AND ?table?._10 <= Float64(80)
+                              TableScan: ?table?
+          SubqueryAlias: __scalar_sq_12
+            Projection: <exprs>
+              Aggregate: groupBy=[[]], aggr=[[avg(store_sales.#<col>)]]
+                Projection: <exprs>
+                  Projection: <exprs>
+                    SubqueryAlias: store_sales
+                      Projection: <exprs>
+                        Projection: <exprs>
+                          Filter: Boolean(true) AND ?table?._10 >= Float64(61) AND ?table?._10 <= Float64(80)
+                            TableScan: ?table?
+        SubqueryAlias: __scalar_sq_13
+          Projection: <exprs>
+            Aggregate: groupBy=[[]], aggr=[[count(Int64(1))]]
+              Projection: <exprs>
+                Projection: <exprs>
+                  SubqueryAlias: store_sales
+                    Projection: <exprs>
+                      Projection: <exprs>
+                        Filter: Boolean(true) AND ?table?._10 >= Float64(81) AND ?table?._10 <= Float64(100)
+                          TableScan: ?table?
+      SubqueryAlias: __scalar_sq_14
+        Projection: <exprs>
+          Aggregate: groupBy=[[]], aggr=[[avg(store_sales.#<col>)]]
+            Projection: <exprs>
+              Projection: <exprs>
+                SubqueryAlias: store_sales
+                  Projection: <exprs>
+                    Projection: <exprs>
+                      Filter: Boolean(true) AND ?table?._10 >= Float64(81) AND ?table?._10 <= Float64(100)
+                        TableScan: ?table?
+    SubqueryAlias: __scalar_sq_15
+      Projection: <exprs>
+        Aggregate: groupBy=[[]], aggr=[[avg(store_sales.#<col>)]]
+          Projection: <exprs>
+            Projection: <exprs>
+              SubqueryAlias: store_sales
+                Projection: <exprs>
+                  Projection: <exprs>
+                    Filter: Boolean(true) AND ?table?._10 >= Float64(81) AND ?table?._10 <= Float64(100)
+                      TableScan: ?table?
+
+logical_plan after single_distinct_aggregation_to_group_by:
+SAME TEXT AS ABOVE
+
+logical_plan after eliminate_group_by_constant:
+SAME TEXT AS ABOVE
+
+logical_plan after common_sub_expression_eliminate:
+SAME TEXT AS ABOVE
+
+logical_plan after optimize_projections:
+Projection: <exprs>
+  Left Join: 
+    Left Join: 
+      Left Join: 
+        Left Join: 
+          Left Join: 
+            Left Join: 
+              Left Join: 
+                Left Join: 
+                  Left Join: 
+                    Left Join: 
+                      Left Join: 
+                        Left Join: 
+                          Left Join: 
+                            Left Join: 
+                              Left Join: 
+                                SubqueryAlias: reason
+                                  Projection: <exprs>
+                                    Filter: ?table?._0 = Int64(1)
+                                      TableScan: ?table? projection=[_0]
+                                SubqueryAlias: __scalar_sq_1
+                                  Projection: <exprs>
+                                    Aggregate: groupBy=[[]], aggr=[[count(Int64(1))]]
+                                      SubqueryAlias: store_sales
+                                        Projection: <exprs>
+                                          Filter: Boolean(true) AND ?table?._10 >= Float64(1) AND ?table?._10 <= Float64(20)
+                                            TableScan: ?table? projection=[_10]
+                              SubqueryAlias: __scalar_sq_2
+                                Projection: <exprs>
+                                  Aggregate: groupBy=[[]], aggr=[[avg(store_sales.#<col>)]]
+                                    Projection: <exprs>
+                                      SubqueryAlias: store_sales
+                                        Projection: <exprs>
+                                          Filter: Boolean(true) AND ?table?._10 >= Float64(1) AND ?table?._10 <= Float64(20)
+                                            TableScan: ?table? projection=[_10, _14]
+                            SubqueryAlias: __scalar_sq_3
+                              Projection: <exprs>
+                                Aggregate: groupBy=[[]], aggr=[[avg(store_sales.#<col>)]]
+                                  Projection: <exprs>
+                                    SubqueryAlias: store_sales
+                                      Projection: <exprs>
+                                        Filter: Boolean(true) AND ?table?._10 >= Float64(1) AND ?table?._10 <= Float64(20)
+                                          TableScan: ?table? projection=[_10, _22]
+                          SubqueryAlias: __scalar_sq_4
+                            Projection: <exprs>
+                              Aggregate: groupBy=[[]], aggr=[[count(Int64(1))]]
+                                SubqueryAlias: store_sales
+                                  Projection: <exprs>
+                                    Filter: Boolean(true) AND ?table?._10 >= Float64(21) AND ?table?._10 <= Float64(40)
+                                      TableScan: ?table? projection=[_10]
+                        SubqueryAlias: __scalar_sq_5
+                          Projection: <exprs>
+                            Aggregate: groupBy=[[]], aggr=[[avg(store_sales.#<col>)]]
+                              Projection: <exprs>
+                                SubqueryAlias: store_sales
+                                  Projection: <exprs>
+                                    Filter: Boolean(true) AND ?table?._10 >= Float64(21) AND ?table?._10 <= Float64(40)
+                                      TableScan: ?table? projection=[_10, _14]
+                      SubqueryAlias: __scalar_sq_6
+                        Projection: <exprs>
+                          Aggregate: groupBy=[[]], aggr=[[avg(store_sales.#<col>)]]
+                            Projection: <exprs>
+                              SubqueryAlias: store_sales
+                                Projection: <exprs>
+                                  Filter: Boolean(true) AND ?table?._10 >= Float64(21) AND ?table?._10 <= Float64(40)
+                                    TableScan: ?table? projection=[_10, _22]
+                    SubqueryAlias: __scalar_sq_7
+                      Projection: <exprs>
+                        Aggregate: groupBy=[[]], aggr=[[count(Int64(1))]]
+                          SubqueryAlias: store_sales
+                            Projection: <exprs>
+                              Filter: Boolean(true) AND ?table?._10 >= Float64(41) AND ?table?._10 <= Float64(60)
+                                TableScan: ?table? projection=[_10]
+                  SubqueryAlias: __scalar_sq_8
+                    Projection: <exprs>
+                      Aggregate: groupBy=[[]], aggr=[[avg(store_sales.#<col>)]]
+                        Projection: <exprs>
+                          SubqueryAlias: store_sales
+                            Projection: <exprs>
+                              Filter: Boolean(true) AND ?table?._10 >= Float64(41) AND ?table?._10 <= Float64(60)
+                                TableScan: ?table? projection=[_10, _14]
+                SubqueryAlias: __scalar_sq_9
+                  Projection: <exprs>
+                    Aggregate: groupBy=[[]], aggr=[[avg(store_sales.#<col>)]]
+                      Projection: <exprs>
+                        SubqueryAlias: store_sales
+                          Projection: <exprs>
+                            Filter: Boolean(true) AND ?table?._10 >= Float64(41) AND ?table?._10 <= Float64(60)
+                              TableScan: ?table? projection=[_10, _22]
+              SubqueryAlias: __scalar_sq_10
+                Projection: <exprs>
+                  Aggregate: groupBy=[[]], aggr=[[count(Int64(1))]]
+                    SubqueryAlias: store_sales
+                      Projection: <exprs>
+                        Filter: Boolean(true) AND ?table?._10 >= Float64(61) AND ?table?._10 <= Float64(80)
+                          TableScan: ?table? projection=[_10]
+            SubqueryAlias: __scalar_sq_11
+              Projection: <exprs>
+                Aggregate: groupBy=[[]], aggr=[[avg(store_sales.#<col>)]]
+                  Projection: <exprs>
+                    SubqueryAlias: store_sales
+                      Projection: <exprs>
+                        Filter: Boolean(true) AND ?table?._10 >= Float64(61) AND ?table?._10 <= Float64(80)
+                          TableScan: ?table? projection=[_10, _14]
+          SubqueryAlias: __scalar_sq_12
+            Projection: <exprs>
+              Aggregate: groupBy=[[]], aggr=[[avg(store_sales.#<col>)]]
+                Projection: <exprs>
+                  SubqueryAlias: store_sales
+                    Projection: <exprs>
+                      Filter: Boolean(true) AND ?table?._10 >= Float64(61) AND ?table?._10 <= Float64(80)
+                        TableScan: ?table? projection=[_10, _22]
+        SubqueryAlias: __scalar_sq_13
+          Projection: <exprs>
+            Aggregate: groupBy=[[]], aggr=[[count(Int64(1))]]
+              SubqueryAlias: store_sales
+                Projection: <exprs>
+                  Filter: Boolean(true) AND ?table?._10 >= Float64(81) AND ?table?._10 <= Float64(100)
+                    TableScan: ?table? projection=[_10]
+      SubqueryAlias: __scalar_sq_14
+        Projection: <exprs>
+          Aggregate: groupBy=[[]], aggr=[[avg(store_sales.#<col>)]]
+            Projection: <exprs>
+              SubqueryAlias: store_sales
+                Projection: <exprs>
+                  Filter: Boolean(true) AND ?table?._10 >= Float64(81) AND ?table?._10 <= Float64(100)
+                    TableScan: ?table? projection=[_10, _14]
+    SubqueryAlias: __scalar_sq_15
+      Projection: <exprs>
+        Aggregate: groupBy=[[]], aggr=[[avg(store_sales.#<col>)]]
+          Projection: <exprs>
+            SubqueryAlias: store_sales
+              Projection: <exprs>
+                Filter: Boolean(true) AND ?table?._10 >= Float64(81) AND ?table?._10 <= Float64(100)
+                  TableScan: ?table? projection=[_10, _22]
+
+logical_plan after eliminate_nested_union:
+SAME TEXT AS ABOVE
+
+logical_plan after simplify_expressions:
+Projection: <exprs>
+  Left Join: 
+    Left Join: 
+      Left Join: 
+        Left Join: 
+          Left Join: 
+            Left Join: 
+              Left Join: 
+                Left Join: 
+                  Left Join: 
+                    Left Join: 
+                      Left Join: 
+                        Left Join: 
+                          Left Join: 
+                            Left Join: 
+                              Left Join: 
+                                SubqueryAlias: reason
+                                  Projection: <exprs>
+                                    Filter: ?table?._0 = Int64(1)
+                                      TableScan: ?table? projection=[_0]
+                                SubqueryAlias: __scalar_sq_1
+                                  Projection: <exprs>
+                                    Aggregate: groupBy=[[]], aggr=[[count(Int64(1))]]
+                                      SubqueryAlias: store_sales
+                                        Projection: <exprs>
+                                          Filter: ?table?._10 >= Float64(1) AND ?table?._10 <= Float64(20)
+                                            TableScan: ?table? projection=[_10]
+                              SubqueryAlias: __scalar_sq_2
+                                Projection: <exprs>
+                                  Aggregate: groupBy=[[]], aggr=[[avg(store_sales.#<col>)]]
+                                    Projection: <exprs>
+                                      SubqueryAlias: store_sales
+                                        Projection: <exprs>
+                                          Filter: ?table?._10 >= Float64(1) AND ?table?._10 <= Float64(20)
+                                            TableScan: ?table? projection=[_10, _14]
+                            SubqueryAlias: __scalar_sq_3
+                              Projection: <exprs>
+                                Aggregate: groupBy=[[]], aggr=[[avg(store_sales.#<col>)]]
+                                  Projection: <exprs>
+                                    SubqueryAlias: store_sales
+                                      Projection: <exprs>
+                                        Filter: ?table?._10 >= Float64(1) AND ?table?._10 <= Float64(20)
+                                          TableScan: ?table? projection=[_10, _22]
+                          SubqueryAlias: __scalar_sq_4
+                            Projection: <exprs>
+                              Aggregate: groupBy=[[]], aggr=[[count(Int64(1))]]
+                                SubqueryAlias: store_sales
+                                  Projection: <exprs>
+                                    Filter: ?table?._10 >= Float64(21) AND ?table?._10 <= Float64(40)
+                                      TableScan: ?table? projection=[_10]
+                        SubqueryAlias: __scalar_sq_5
+                          Projection: <exprs>
+                            Aggregate: groupBy=[[]], aggr=[[avg(store_sales.#<col>)]]
+                              Projection: <exprs>
+                                SubqueryAlias: store_sales
+                                  Projection: <exprs>
+                                    Filter: ?table?._10 >= Float64(21) AND ?table?._10 <= Float64(40)
+                                      TableScan: ?table? projection=[_10, _14]
+                      SubqueryAlias: __scalar_sq_6
+                        Projection: <exprs>
+                          Aggregate: groupBy=[[]], aggr=[[avg(store_sales.#<col>)]]
+                            Projection: <exprs>
+                              SubqueryAlias: store_sales
+                                Projection: <exprs>
+                                  Filter: ?table?._10 >= Float64(21) AND ?table?._10 <= Float64(40)
+                                    TableScan: ?table? projection=[_10, _22]
+                    SubqueryAlias: __scalar_sq_7
+                      Projection: <exprs>
+                        Aggregate: groupBy=[[]], aggr=[[count(Int64(1))]]
+                          SubqueryAlias: store_sales
+                            Projection: <exprs>
+                              Filter: ?table?._10 >= Float64(41) AND ?table?._10 <= Float64(60)
+                                TableScan: ?table? projection=[_10]
+                  SubqueryAlias: __scalar_sq_8
+                    Projection: <exprs>
+                      Aggregate: groupBy=[[]], aggr=[[avg(store_sales.#<col>)]]
+                        Projection: <exprs>
+                          SubqueryAlias: store_sales
+                            Projection: <exprs>
+                              Filter: ?table?._10 >= Float64(41) AND ?table?._10 <= Float64(60)
+                                TableScan: ?table? projection=[_10, _14]
+                SubqueryAlias: __scalar_sq_9
+                  Projection: <exprs>
+                    Aggregate: groupBy=[[]], aggr=[[avg(store_sales.#<col>)]]
+                      Projection: <exprs>
+                        SubqueryAlias: store_sales
+                          Projection: <exprs>
+                            Filter: ?table?._10 >= Float64(41) AND ?table?._10 <= Float64(60)
+                              TableScan: ?table? projection=[_10, _22]
+              SubqueryAlias: __scalar_sq_10
+                Projection: <exprs>
+                  Aggregate: groupBy=[[]], aggr=[[count(Int64(1))]]
+                    SubqueryAlias: store_sales
+                      Projection: <exprs>
+                        Filter: ?table?._10 >= Float64(61) AND ?table?._10 <= Float64(80)
+                          TableScan: ?table? projection=[_10]
+            SubqueryAlias: __scalar_sq_11
+              Projection: <exprs>
+                Aggregate: groupBy=[[]], aggr=[[avg(store_sales.#<col>)]]
+                  Projection: <exprs>
+                    SubqueryAlias: store_sales
+                      Projection: <exprs>
+                        Filter: ?table?._10 >= Float64(61) AND ?table?._10 <= Float64(80)
+                          TableScan: ?table? projection=[_10, _14]
+          SubqueryAlias: __scalar_sq_12
+            Projection: <exprs>
+              Aggregate: groupBy=[[]], aggr=[[avg(store_sales.#<col>)]]
+                Projection: <exprs>
+                  SubqueryAlias: store_sales
+                    Projection: <exprs>
+                      Filter: ?table?._10 >= Float64(61) AND ?table?._10 <= Float64(80)
+                        TableScan: ?table? projection=[_10, _22]
+        SubqueryAlias: __scalar_sq_13
+          Projection: <exprs>
+            Aggregate: groupBy=[[]], aggr=[[count(Int64(1))]]
+              SubqueryAlias: store_sales
+                Projection: <exprs>
+                  Filter: ?table?._10 >= Float64(81) AND ?table?._10 <= Float64(100)
+                    TableScan: ?table? projection=[_10]
+      SubqueryAlias: __scalar_sq_14
+        Projection: <exprs>
+          Aggregate: groupBy=[[]], aggr=[[avg(store_sales.#<col>)]]
+            Projection: <exprs>
+              SubqueryAlias: store_sales
+                Projection: <exprs>
+                  Filter: ?table?._10 >= Float64(81) AND ?table?._10 <= Float64(100)
+                    TableScan: ?table? projection=[_10, _14]
+    SubqueryAlias: __scalar_sq_15
+      Projection: <exprs>
+        Aggregate: groupBy=[[]], aggr=[[avg(store_sales.#<col>)]]
+          Projection: <exprs>
+            SubqueryAlias: store_sales
+              Projection: <exprs>
+                Filter: ?table?._10 >= Float64(81) AND ?table?._10 <= Float64(100)
+                  TableScan: ?table? projection=[_10, _22]
+
+logical_plan after replace_distinct_aggregate:
+SAME TEXT AS ABOVE
+
+logical_plan after eliminate_join:
+SAME TEXT AS ABOVE
+
+logical_plan after decorrelate_predicate_subquery:
+SAME TEXT AS ABOVE
+
+logical_plan after scalar_subquery_to_join:
+SAME TEXT AS ABOVE
+
+logical_plan after decorrelate_lateral_join:
+SAME TEXT AS ABOVE
+
+logical_plan after extract_equijoin_predicate:
+SAME TEXT AS ABOVE
+
+logical_plan after eliminate_duplicated_expr:
+SAME TEXT AS ABOVE
+
+logical_plan after eliminate_filter:
+SAME TEXT AS ABOVE
+
+logical_plan after eliminate_cross_join:
+SAME TEXT AS ABOVE
+
+logical_plan after eliminate_limit:
+SAME TEXT AS ABOVE
+
+logical_plan after propagate_empty_relation:
+SAME TEXT AS ABOVE
+
+logical_plan after eliminate_one_union:
+SAME TEXT AS ABOVE
+
+logical_plan after filter_null_join_keys:
+SAME TEXT AS ABOVE
+
+logical_plan after eliminate_outer_join:
+SAME TEXT AS ABOVE
+
+logical_plan after push_down_limit:
+SAME TEXT AS ABOVE
+
+logical_plan after push_down_filter:
+SAME TEXT AS ABOVE
+
+logical_plan after single_distinct_aggregation_to_group_by:
+SAME TEXT AS ABOVE
+
+logical_plan after eliminate_group_by_constant:
+SAME TEXT AS ABOVE
+
+logical_plan after common_sub_expression_eliminate:
+SAME TEXT AS ABOVE
+
+logical_plan after optimize_projections:
+SAME TEXT AS ABOVE
+
+logical_plan after eliminate_nested_union:
+SAME TEXT AS ABOVE
+
+logical_plan after simplify_expressions:
+SAME TEXT AS ABOVE
+
+logical_plan after replace_distinct_aggregate:
+SAME TEXT AS ABOVE
+
+logical_plan after eliminate_join:
+SAME TEXT AS ABOVE
+
+logical_plan after decorrelate_predicate_subquery:
+SAME TEXT AS ABOVE
+
+logical_plan after scalar_subquery_to_join:
+SAME TEXT AS ABOVE
+
+logical_plan after decorrelate_lateral_join:
+SAME TEXT AS ABOVE
+
+logical_plan after extract_equijoin_predicate:
+SAME TEXT AS ABOVE
+
+logical_plan after eliminate_duplicated_expr:
+SAME TEXT AS ABOVE
+
+logical_plan after eliminate_filter:
+SAME TEXT AS ABOVE
+
+logical_plan after eliminate_cross_join:
+SAME TEXT AS ABOVE
+
+logical_plan after eliminate_limit:
+SAME TEXT AS ABOVE
+
+logical_plan after propagate_empty_relation:
+SAME TEXT AS ABOVE
+
+logical_plan after eliminate_one_union:
+SAME TEXT AS ABOVE
+
+logical_plan after filter_null_join_keys:
+SAME TEXT AS ABOVE
+
+logical_plan after eliminate_outer_join:
+SAME TEXT AS ABOVE
+
+logical_plan after push_down_limit:
+SAME TEXT AS ABOVE
+
+logical_plan after push_down_filter:
+SAME TEXT AS ABOVE
+
+logical_plan after single_distinct_aggregation_to_group_by:
+SAME TEXT AS ABOVE
+
+logical_plan after eliminate_group_by_constant:
+SAME TEXT AS ABOVE
+
+logical_plan after common_sub_expression_eliminate:
+SAME TEXT AS ABOVE
+
+logical_plan after optimize_projections:
+SAME TEXT AS ABOVE
+
+logical_plan:
+Projection: <exprs>
+  Left Join: 
+    Left Join: 
+      Left Join: 
+        Left Join: 
+          Left Join: 
+            Left Join: 
+              Left Join: 
+                Left Join: 
+                  Left Join: 
+                    Left Join: 
+                      Left Join: 
+                        Left Join: 
+                          Left Join: 
+                            Left Join: 
+                              Left Join: 
+                                SubqueryAlias: reason
+                                  Projection: <exprs>
+                                    Filter: ?table?._0 = Int64(1)
+                                      TableScan: ?table? projection=[_0]
+                                SubqueryAlias: __scalar_sq_1
+                                  Projection: <exprs>
+                                    Aggregate: groupBy=[[]], aggr=[[count(Int64(1))]]
+                                      SubqueryAlias: store_sales
+                                        Projection: <exprs>
+                                          Filter: ?table?._10 >= Float64(1) AND ?table?._10 <= Float64(20)
+                                            TableScan: ?table? projection=[_10]
+                              SubqueryAlias: __scalar_sq_2
+                                Projection: <exprs>
+                                  Aggregate: groupBy=[[]], aggr=[[avg(store_sales.#<col>)]]
+                                    Projection: <exprs>
+                                      SubqueryAlias: store_sales
+                                        Projection: <exprs>
+                                          Filter: ?table?._10 >= Float64(1) AND ?table?._10 <= Float64(20)
+                                            TableScan: ?table? projection=[_10, _14]
+                            SubqueryAlias: __scalar_sq_3
+                              Projection: <exprs>
+                                Aggregate: groupBy=[[]], aggr=[[avg(store_sales.#<col>)]]
+                                  Projection: <exprs>
+                                    SubqueryAlias: store_sales
+                                      Projection: <exprs>
+                                        Filter: ?table?._10 >= Float64(1) AND ?table?._10 <= Float64(20)
+                                          TableScan: ?table? projection=[_10, _22]
+                          SubqueryAlias: __scalar_sq_4
+                            Projection: <exprs>
+                              Aggregate: groupBy=[[]], aggr=[[count(Int64(1))]]
+                                SubqueryAlias: store_sales
+                                  Projection: <exprs>
+                                    Filter: ?table?._10 >= Float64(21) AND ?table?._10 <= Float64(40)
+                                      TableScan: ?table? projection=[_10]
+                        SubqueryAlias: __scalar_sq_5
+                          Projection: <exprs>
+                            Aggregate: groupBy=[[]], aggr=[[avg(store_sales.#<col>)]]
+                              Projection: <exprs>
+                                SubqueryAlias: store_sales
+                                  Projection: <exprs>
+                                    Filter: ?table?._10 >= Float64(21) AND ?table?._10 <= Float64(40)
+                                      TableScan: ?table? projection=[_10, _14]
+                      SubqueryAlias: __scalar_sq_6
+                        Projection: <exprs>
+                          Aggregate: groupBy=[[]], aggr=[[avg(store_sales.#<col>)]]
+                            Projection: <exprs>
+                              SubqueryAlias: store_sales
+                                Projection: <exprs>
+                                  Filter: ?table?._10 >= Float64(21) AND ?table?._10 <= Float64(40)
+                                    TableScan: ?table? projection=[_10, _22]
+                    SubqueryAlias: __scalar_sq_7
+                      Projection: <exprs>
+                        Aggregate: groupBy=[[]], aggr=[[count(Int64(1))]]
+                          SubqueryAlias: store_sales
+                            Projection: <exprs>
+                              Filter: ?table?._10 >= Float64(41) AND ?table?._10 <= Float64(60)
+                                TableScan: ?table? projection=[_10]
+                  SubqueryAlias: __scalar_sq_8
+                    Projection: <exprs>
+                      Aggregate: groupBy=[[]], aggr=[[avg(store_sales.#<col>)]]
+                        Projection: <exprs>
+                          SubqueryAlias: store_sales
+                            Projection: <exprs>
+                              Filter: ?table?._10 >= Float64(41) AND ?table?._10 <= Float64(60)
+                                TableScan: ?table? projection=[_10, _14]
+                SubqueryAlias: __scalar_sq_9
+                  Projection: <exprs>
+                    Aggregate: groupBy=[[]], aggr=[[avg(store_sales.#<col>)]]
+                      Projection: <exprs>
+                        SubqueryAlias: store_sales
+                          Projection: <exprs>
+                            Filter: ?table?._10 >= Float64(41) AND ?table?._10 <= Float64(60)
+                              TableScan: ?table? projection=[_10, _22]
+              SubqueryAlias: __scalar_sq_10
+                Projection: <exprs>
+                  Aggregate: groupBy=[[]], aggr=[[count(Int64(1))]]
+                    SubqueryAlias: store_sales
+                      Projection: <exprs>
+                        Filter: ?table?._10 >= Float64(61) AND ?table?._10 <= Float64(80)
+                          TableScan: ?table? projection=[_10]
+            SubqueryAlias: __scalar_sq_11
+              Projection: <exprs>
+                Aggregate: groupBy=[[]], aggr=[[avg(store_sales.#<col>)]]
+                  Projection: <exprs>
+                    SubqueryAlias: store_sales
+                      Projection: <exprs>
+                        Filter: ?table?._10 >= Float64(61) AND ?table?._10 <= Float64(80)
+                          TableScan: ?table? projection=[_10, _14]
+          SubqueryAlias: __scalar_sq_12
+            Projection: <exprs>
+              Aggregate: groupBy=[[]], aggr=[[avg(store_sales.#<col>)]]
+                Projection: <exprs>
+                  SubqueryAlias: store_sales
+                    Projection: <exprs>
+                      Filter: ?table?._10 >= Float64(61) AND ?table?._10 <= Float64(80)
+                        TableScan: ?table? projection=[_10, _22]
+        SubqueryAlias: __scalar_sq_13
+          Projection: <exprs>
+            Aggregate: groupBy=[[]], aggr=[[count(Int64(1))]]
+              SubqueryAlias: store_sales
+                Projection: <exprs>
+                  Filter: ?table?._10 >= Float64(81) AND ?table?._10 <= Float64(100)
+                    TableScan: ?table? projection=[_10]
+      SubqueryAlias: __scalar_sq_14
+        Projection: <exprs>
+          Aggregate: groupBy=[[]], aggr=[[avg(store_sales.#<col>)]]
+            Projection: <exprs>
+              SubqueryAlias: store_sales
+                Projection: <exprs>
+                  Filter: ?table?._10 >= Float64(81) AND ?table?._10 <= Float64(100)
+                    TableScan: ?table? projection=[_10, _14]
+    SubqueryAlias: __scalar_sq_15
+      Projection: <exprs>
+        Aggregate: groupBy=[[]], aggr=[[avg(store_sales.#<col>)]]
+          Projection: <exprs>
+            SubqueryAlias: store_sales
+              Projection: <exprs>
+                Filter: ?table?._10 >= Float64(81) AND ?table?._10 <= Float64(100)
+                  TableScan: ?table? projection=[_10, _22]
+
+initial_physical_plan:
+ProjectionExec: expr=[<exprs>]
+  RepartitionExec: partitioning=RoundRobinBatch(<partitions>), input_partitions=<partitions>
+    NestedLoopJoinExec: join_type=Left
+      NestedLoopJoinExec: join_type=Left
+        NestedLoopJoinExec: join_type=Left
+          NestedLoopJoinExec: join_type=Left
+            NestedLoopJoinExec: join_type=Left
+              NestedLoopJoinExec: join_type=Left
+                NestedLoopJoinExec: join_type=Left
+                  NestedLoopJoinExec: join_type=Left
+                    NestedLoopJoinExec: join_type=Left
+                      NestedLoopJoinExec: join_type=Left
+                        NestedLoopJoinExec: join_type=Left
+                          NestedLoopJoinExec: join_type=Left
+                            NestedLoopJoinExec: join_type=Left
+                              NestedLoopJoinExec: join_type=Left
+                                NestedLoopJoinExec: join_type=Left
+                                  ProjectionExec: expr=[<exprs>]
+                                    CoalesceBatchesExec: target_batch_size=8192
+                                      FilterExec: _0@<id> = 1
+                                        DataSourceExec: partitions=1, partition_sizes=[<sizes>]
+                                  ProjectionExec: expr=[<exprs>]
+                                    AggregateExec: mode=Final, gby=[], aggr=[count(Int64(1))]
+                                      CoalescePartitionsExec
+                                        AggregateExec: mode=Partial, gby=[], aggr=[count(Int64(1))]
+                                          ProjectionExec: expr=[<exprs>]
+                                            CoalesceBatchesExec: target_batch_size=8192
+                                              FilterExec: _10@<id> >= 1 AND _10@<id> <= 20
+                                                RepartitionExec: partitioning=RoundRobinBatch(<partitions>), input_partitions=<partitions>
+                                                  DataSourceExec: partitions=1, partition_sizes=[<sizes>]
+                                ProjectionExec: expr=[<exprs>]
+                                  AggregateExec: mode=Final, gby=[], aggr=[avg(store_sales.#<col>)]
+                                    CoalescePartitionsExec
+                                      AggregateExec: mode=Partial, gby=[], aggr=[avg(store_sales.#<col>)]
+                                        ProjectionExec: expr=[<exprs>]
+                                          CoalesceBatchesExec: target_batch_size=8192
+                                            FilterExec: _10@<id> >= 1 AND _10@<id> <= 20, projection=[_14@<id>]
+                                              RepartitionExec: partitioning=RoundRobinBatch(<partitions>), input_partitions=<partitions>
+                                                DataSourceExec: partitions=1, partition_sizes=[<sizes>]
+                              ProjectionExec: expr=[<exprs>]
+                                AggregateExec: mode=Final, gby=[], aggr=[avg(store_sales.#<col>)]
+                                  CoalescePartitionsExec
+                                    AggregateExec: mode=Partial, gby=[], aggr=[avg(store_sales.#<col>)]
+                                      ProjectionExec: expr=[<exprs>]
+                                        CoalesceBatchesExec: target_batch_size=8192
+                                          FilterExec: _10@<id> >= 1 AND _10@<id> <= 20, projection=[_22@<id>]
+                                            RepartitionExec: partitioning=RoundRobinBatch(<partitions>), input_partitions=<partitions>
+                                              DataSourceExec: partitions=1, partition_sizes=[<sizes>]
+                            ProjectionExec: expr=[<exprs>]
+                              AggregateExec: mode=Final, gby=[], aggr=[count(Int64(1))]
+                                CoalescePartitionsExec
+                                  AggregateExec: mode=Partial, gby=[], aggr=[count(Int64(1))]
+                                    ProjectionExec: expr=[<exprs>]
+                                      CoalesceBatchesExec: target_batch_size=8192
+                                        FilterExec: _10@<id> >= 21 AND _10@<id> <= 40
+                                          RepartitionExec: partitioning=RoundRobinBatch(<partitions>), input_partitions=<partitions>
+                                            DataSourceExec: partitions=1, partition_sizes=[<sizes>]
+                          ProjectionExec: expr=[<exprs>]
+                            AggregateExec: mode=Final, gby=[], aggr=[avg(store_sales.#<col>)]
+                              CoalescePartitionsExec
+                                AggregateExec: mode=Partial, gby=[], aggr=[avg(store_sales.#<col>)]
+                                  ProjectionExec: expr=[<exprs>]
+                                    CoalesceBatchesExec: target_batch_size=8192
+                                      FilterExec: _10@<id> >= 21 AND _10@<id> <= 40, projection=[_14@<id>]
+                                        RepartitionExec: partitioning=RoundRobinBatch(<partitions>), input_partitions=<partitions>
+                                          DataSourceExec: partitions=1, partition_sizes=[<sizes>]
+                        ProjectionExec: expr=[<exprs>]
+                          AggregateExec: mode=Final, gby=[], aggr=[avg(store_sales.#<col>)]
+                            CoalescePartitionsExec
+                              AggregateExec: mode=Partial, gby=[], aggr=[avg(store_sales.#<col>)]
+                                ProjectionExec: expr=[<exprs>]
+                                  CoalesceBatchesExec: target_batch_size=8192
+                                    FilterExec: _10@<id> >= 21 AND _10@<id> <= 40, projection=[_22@<id>]
+                                      RepartitionExec: partitioning=RoundRobinBatch(<partitions>), input_partitions=<partitions>
+                                        DataSourceExec: partitions=1, partition_sizes=[<sizes>]
+                      ProjectionExec: expr=[<exprs>]
+                        AggregateExec: mode=Final, gby=[], aggr=[count(Int64(1))]
+                          CoalescePartitionsExec
+                            AggregateExec: mode=Partial, gby=[], aggr=[count(Int64(1))]
+                              ProjectionExec: expr=[<exprs>]
+                                CoalesceBatchesExec: target_batch_size=8192
+                                  FilterExec: _10@<id> >= 41 AND _10@<id> <= 60
+                                    RepartitionExec: partitioning=RoundRobinBatch(<partitions>), input_partitions=<partitions>
+                                      DataSourceExec: partitions=1, partition_sizes=[<sizes>]
+                    ProjectionExec: expr=[<exprs>]
+                      AggregateExec: mode=Final, gby=[], aggr=[avg(store_sales.#<col>)]
+                        CoalescePartitionsExec
+                          AggregateExec: mode=Partial, gby=[], aggr=[avg(store_sales.#<col>)]
+                            ProjectionExec: expr=[<exprs>]
+                              CoalesceBatchesExec: target_batch_size=8192
+                                FilterExec: _10@<id> >= 41 AND _10@<id> <= 60, projection=[_14@<id>]
+                                  RepartitionExec: partitioning=RoundRobinBatch(<partitions>), input_partitions=<partitions>
+                                    DataSourceExec: partitions=1, partition_sizes=[<sizes>]
+                  ProjectionExec: expr=[<exprs>]
+                    AggregateExec: mode=Final, gby=[], aggr=[avg(store_sales.#<col>)]
+                      CoalescePartitionsExec
+                        AggregateExec: mode=Partial, gby=[], aggr=[avg(store_sales.#<col>)]
+                          ProjectionExec: expr=[<exprs>]
+                            CoalesceBatchesExec: target_batch_size=8192
+                              FilterExec: _10@<id> >= 41 AND _10@<id> <= 60, projection=[_22@<id>]
+                                RepartitionExec: partitioning=RoundRobinBatch(<partitions>), input_partitions=<partitions>
+                                  DataSourceExec: partitions=1, partition_sizes=[<sizes>]
+                ProjectionExec: expr=[<exprs>]
+                  AggregateExec: mode=Final, gby=[], aggr=[count(Int64(1))]
+                    CoalescePartitionsExec
+                      AggregateExec: mode=Partial, gby=[], aggr=[count(Int64(1))]
+                        ProjectionExec: expr=[<exprs>]
+                          CoalesceBatchesExec: target_batch_size=8192
+                            FilterExec: _10@<id> >= 61 AND _10@<id> <= 80
+                              RepartitionExec: partitioning=RoundRobinBatch(<partitions>), input_partitions=<partitions>
+                                DataSourceExec: partitions=1, partition_sizes=[<sizes>]
+              ProjectionExec: expr=[<exprs>]
+                AggregateExec: mode=Final, gby=[], aggr=[avg(store_sales.#<col>)]
+                  CoalescePartitionsExec
+                    AggregateExec: mode=Partial, gby=[], aggr=[avg(store_sales.#<col>)]
+                      ProjectionExec: expr=[<exprs>]
+                        CoalesceBatchesExec: target_batch_size=8192
+                          FilterExec: _10@<id> >= 61 AND _10@<id> <= 80, projection=[_14@<id>]
+                            RepartitionExec: partitioning=RoundRobinBatch(<partitions>), input_partitions=<partitions>
+                              DataSourceExec: partitions=1, partition_sizes=[<sizes>]
+            ProjectionExec: expr=[<exprs>]
+              AggregateExec: mode=Final, gby=[], aggr=[avg(store_sales.#<col>)]
+                CoalescePartitionsExec
+                  AggregateExec: mode=Partial, gby=[], aggr=[avg(store_sales.#<col>)]
+                    ProjectionExec: expr=[<exprs>]
+                      CoalesceBatchesExec: target_batch_size=8192
+                        FilterExec: _10@<id> >= 61 AND _10@<id> <= 80, projection=[_22@<id>]
+                          RepartitionExec: partitioning=RoundRobinBatch(<partitions>), input_partitions=<partitions>
+                            DataSourceExec: partitions=1, partition_sizes=[<sizes>]
+          ProjectionExec: expr=[<exprs>]
+            AggregateExec: mode=Final, gby=[], aggr=[count(Int64(1))]
+              CoalescePartitionsExec
+                AggregateExec: mode=Partial, gby=[], aggr=[count(Int64(1))]
+                  ProjectionExec: expr=[<exprs>]
+                    CoalesceBatchesExec: target_batch_size=8192
+                      FilterExec: _10@<id> >= 81 AND _10@<id> <= 100
+                        RepartitionExec: partitioning=RoundRobinBatch(<partitions>), input_partitions=<partitions>
+                          DataSourceExec: partitions=1, partition_sizes=[<sizes>]
+        ProjectionExec: expr=[<exprs>]
+          AggregateExec: mode=Final, gby=[], aggr=[avg(store_sales.#<col>)]
+            CoalescePartitionsExec
+              AggregateExec: mode=Partial, gby=[], aggr=[avg(store_sales.#<col>)]
+                ProjectionExec: expr=[<exprs>]
+                  CoalesceBatchesExec: target_batch_size=8192
+                    FilterExec: _10@<id> >= 81 AND _10@<id> <= 100, projection=[_14@<id>]
+                      RepartitionExec: partitioning=RoundRobinBatch(<partitions>), input_partitions=<partitions>
+                        DataSourceExec: partitions=1, partition_sizes=[<sizes>]
+      ProjectionExec: expr=[<exprs>]
+        AggregateExec: mode=Final, gby=[], aggr=[avg(store_sales.#<col>)]
+          CoalescePartitionsExec
+            AggregateExec: mode=Partial, gby=[], aggr=[avg(store_sales.#<col>)]
+              ProjectionExec: expr=[<exprs>]
+                CoalesceBatchesExec: target_batch_size=8192
+                  FilterExec: _10@<id> >= 81 AND _10@<id> <= 100, projection=[_22@<id>]
+                    RepartitionExec: partitioning=RoundRobinBatch(<partitions>), input_partitions=<partitions>
+                      DataSourceExec: partitions=1, partition_sizes=[<sizes>]
+
+
+initial_physical_plan_with_stats:
+ProjectionExec: expr=[<exprs>]
+  RepartitionExec: partitioning=RoundRobinBatch(<partitions>), input_partitions=<partitions>, statistics=[Rows=Absent, Bytes=Absent, [(Col[0]:),(Col[1]:),(Col[2]:),(Col[3]:),(Col[4]:),(Col[5]:),(Col[6]:),(Col[7]:),(Col[8]:),(Col[9]:),(Col[10]:),(Col[11]:),(Col[12]:),(Col[13]:),(Col[14]:)]]
+    NestedLoopJoinExec: join_type=Left, statistics=[Rows=Absent, Bytes=Absent, [(Col[0]:),(Col[1]:),(Col[2]:),(Col[3]:),(Col[4]:),(Col[5]:),(Col[6]:),(Col[7]:),(Col[8]:),(Col[9]:),(Col[10]:),(Col[11]:),(Col[12]:),(Col[13]:),(Col[14]:)]]
+      NestedLoopJoinExec: join_type=Left, statistics=[Rows=Absent, Bytes=Absent, [(Col[0]:),(Col[1]:),(Col[2]:),(Col[3]:),(Col[4]:),(Col[5]:),(Col[6]:),(Col[7]:),(Col[8]:),(Col[9]:),(Col[10]:),(Col[11]:),(Col[12]:),(Col[13]:)]]
+        NestedLoopJoinExec: join_type=Left, statistics=[Rows=Absent, Bytes=Absent, [(Col[0]:),(Col[1]:),(Col[2]:),(Col[3]:),(Col[4]:),(Col[5]:),(Col[6]:),(Col[7]:),(Col[8]:),(Col[9]:),(Col[10]:),(Col[11]:),(Col[12]:)]]
+          NestedLoopJoinExec: join_type=Left, statistics=[Rows=Absent, Bytes=Absent, [(Col[0]:),(Col[1]:),(Col[2]:),(Col[3]:),(Col[4]:),(Col[5]:),(Col[6]:),(Col[7]:),(Col[8]:),(Col[9]:),(Col[10]:),(Col[11]:)]]
+            NestedLoopJoinExec: join_type=Left, statistics=[Rows=Absent, Bytes=Absent, [(Col[0]:),(Col[1]:),(Col[2]:),(Col[3]:),(Col[4]:),(Col[5]:),(Col[6]:),(Col[7]:),(Col[8]:),(Col[9]:),(Col[10]:)]]
+              NestedLoopJoinExec: join_type=Left, statistics=[Rows=Absent, Bytes=Absent, [(Col[0]:),(Col[1]:),(Col[2]:),(Col[3]:),(Col[4]:),(Col[5]:),(Col[6]:),(Col[7]:),(Col[8]:),(Col[9]:)]]
+                NestedLoopJoinExec: join_type=Left, statistics=[Rows=Absent, Bytes=Absent, [(Col[0]:),(Col[1]:),(Col[2]:),(Col[3]:),(Col[4]:),(Col[5]:),(Col[6]:),(Col[7]:),(Col[8]:)]]
+                  NestedLoopJoinExec: join_type=Left, statistics=[Rows=Absent, Bytes=Absent, [(Col[0]:),(Col[1]:),(Col[2]:),(Col[3]:),(Col[4]:),(Col[5]:),(Col[6]:),(Col[7]:)]]
+                    NestedLoopJoinExec: join_type=Left, statistics=[Rows=Absent, Bytes=Absent, [(Col[0]:),(Col[1]:),(Col[2]:),(Col[3]:),(Col[4]:),(Col[5]:),(Col[6]:)]]
+                      NestedLoopJoinExec: join_type=Left, statistics=[Rows=Absent, Bytes=Absent, [(Col[0]:),(Col[1]:),(Col[2]:),(Col[3]:),(Col[4]:),(Col[5]:)]]
+                        NestedLoopJoinExec: join_type=Left, statistics=[Rows=Absent, Bytes=Absent, [(Col[0]:),(Col[1]:),(Col[2]:),(Col[3]:),(Col[4]:)]]
+                          NestedLoopJoinExec: join_type=Left, statistics=[Rows=Absent, Bytes=Absent, [(Col[0]:),(Col[1]:),(Col[2]:),(Col[3]:)]]
+                            NestedLoopJoinExec: join_type=Left, statistics=[Rows=Absent, Bytes=Absent, [(Col[0]:),(Col[1]:),(Col[2]:)]]
+                              NestedLoopJoinExec: join_type=Left, statistics=[Rows=Absent, Bytes=Absent, [(Col[0]:),(Col[1]:)]]
+                                NestedLoopJoinExec: join_type=Left, statistics=[Rows=Absent, Bytes=Absent, [(Col[0]:)]]
+                                  ProjectionExec: expr=[<exprs>]
+                                    CoalesceBatchesExec: target_batch_size=8192, statistics=[Rows=Inexact(1), Bytes=Inexact(<bytes>), [(Col[0]: Min=Exact(Int64(1)) Max=Exact(Int64(1)) Null=Inexact(0))]]
+                                      FilterExec: _0@<id> = 1, statistics=[Rows=Inexact(1), Bytes=Inexact(<bytes>), [(Col[0]: Min=Exact(Int64(1)) Max=Exact(Int64(1)) Null=Inexact(0))]]
+                                        DataSourceExec: partitions=1, partition_sizes=[<sizes>], statistics=[Rows=Exact(1), Bytes=Exact(<bytes>), [(Col[0]: Null=Exact(0))]]
+                                  ProjectionExec: expr=[<exprs>]
+                                    AggregateExec: mode=Final, gby=[], aggr=[count(Int64(1))], statistics=[Rows=Exact(1), Bytes=Absent, [(Col[0]:)]]
+                                      CoalescePartitionsExec, statistics=[Rows=Inexact(28810), Bytes=Absent, [(Col[0]:)]]
+                                        AggregateExec: mode=Partial, gby=[], aggr=[count(Int64(1))], statistics=[Rows=Inexact(28810), Bytes=Absent, [(Col[0]:)]]
+                                          ProjectionExec: expr=[<exprs>]
+                                            CoalesceBatchesExec: target_batch_size=8192, statistics=[Rows=Inexact(28810), Bytes=Inexact(<bytes>), [(Col[0]: Min=Inexact(Float64(1)) Max=Inexact(Float64(20)) Null=Inexact(1283))]]
+                                              FilterExec: _10@<id> >= 1 AND _10@<id> <= 20, statistics=[Rows=Inexact(28810), Bytes=Inexact(<bytes>), [(Col[0]: Min=Inexact(Float64(1)) Max=Inexact(Float64(20)) Null=Inexact(1283))]]
+                                                RepartitionExec: partitioning=RoundRobinBatch(<partitions>), input_partitions=<partitions>, statistics=[Rows=Exact(28810), Bytes=Exact(<bytes>), [(Col[0]: Null=Exact(1283))]]
+                                                  DataSourceExec: partitions=1, partition_sizes=[<sizes>], statistics=[Rows=Exact(28810), Bytes=Exact(<bytes>), [(Col[0]: Null=Exact(1283))]]
+                                ProjectionExec: expr=[<exprs>]
+                                  AggregateExec: mode=Final, gby=[], aggr=[avg(store_sales.#<col>)], statistics=[Rows=Exact(1), Bytes=Absent, [(Col[0]:)]]
+                                    CoalescePartitionsExec, statistics=[Rows=Inexact(5762), Bytes=Absent, [(Col[0]:),(Col[1]:)]]
+                                      AggregateExec: mode=Partial, gby=[], aggr=[avg(store_sales.#<col>)], statistics=[Rows=Inexact(5762), Bytes=Absent, [(Col[0]:),(Col[1]:)]]
+                                        ProjectionExec: expr=[<exprs>]
+                                          CoalesceBatchesExec: target_batch_size=8192, statistics=[Rows=Inexact(5762), Bytes=Inexact(<bytes>), [(Col[0]: Null=Inexact(1220))]]
+                                            FilterExec: _10@<id> >= 1 AND _10@<id> <= 20, projection=[_14@<id>], statistics=[Rows=Inexact(5762), Bytes=Inexact(<bytes>), [(Col[0]: Null=Inexact(1220))]]
+                                              RepartitionExec: partitioning=RoundRobinBatch(<partitions>), input_partitions=<partitions>, statistics=[Rows=Exact(28810), Bytes=Exact(<bytes>), [(Col[0]: Null=Exact(1283)),(Col[1]: Null=Exact(1220))]]
+                                                DataSourceExec: partitions=1, partition_sizes=[<sizes>], statistics=[Rows=Exact(28810), Bytes=Exact(<bytes>), [(Col[0]: Null=Exact(1283)),(Col[1]: Null=Exact(1220))]]
+                              ProjectionExec: expr=[<exprs>]
+                                AggregateExec: mode=Final, gby=[], aggr=[avg(store_sales.#<col>)], statistics=[Rows=Exact(1), Bytes=Absent, [(Col[0]:)]]
+                                  CoalescePartitionsExec, statistics=[Rows=Inexact(5762), Bytes=Absent, [(Col[0]:),(Col[1]:)]]
+                                    AggregateExec: mode=Partial, gby=[], aggr=[avg(store_sales.#<col>)], statistics=[Rows=Inexact(5762), Bytes=Absent, [(Col[0]:),(Col[1]:)]]
+                                      ProjectionExec: expr=[<exprs>]
+                                        CoalesceBatchesExec: target_batch_size=8192, statistics=[Rows=Inexact(5762), Bytes=Inexact(<bytes>), [(Col[0]: Null=Inexact(1260))]]
+                                          FilterExec: _10@<id> >= 1 AND _10@<id> <= 20, projection=[_22@<id>], statistics=[Rows=Inexact(5762), Bytes=Inexact(<bytes>), [(Col[0]: Null=Inexact(1260))]]
+                                            RepartitionExec: partitioning=RoundRobinBatch(<partitions>), input_partitions=<partitions>, statistics=[Rows=Exact(28810), Bytes=Exact(<bytes>), [(Col[0]: Null=Exact(1283)),(Col[1]: Null=Exact(1260))]]
+                                              DataSourceExec: partitions=1, partition_sizes=[<sizes>], statistics=[Rows=Exact(28810), Bytes=Exact(<bytes>), [(Col[0]: Null=Exact(1283)),(Col[1]: Null=Exact(1260))]]
+                            ProjectionExec: expr=[<exprs>]
+                              AggregateExec: mode=Final, gby=[], aggr=[count(Int64(1))], statistics=[Rows=Exact(1), Bytes=Absent, [(Col[0]:)]]
+                                CoalescePartitionsExec, statistics=[Rows=Inexact(28810), Bytes=Absent, [(Col[0]:)]]
+                                  AggregateExec: mode=Partial, gby=[], aggr=[count(Int64(1))], statistics=[Rows=Inexact(28810), Bytes=Absent, [(Col[0]:)]]
+                                    ProjectionExec: expr=[<exprs>]
+                                      CoalesceBatchesExec: target_batch_size=8192, statistics=[Rows=Inexact(28810), Bytes=Inexact(<bytes>), [(Col[0]: Min=Inexact(Float64(21)) Max=Inexact(Float64(40)) Null=Inexact(1283))]]
+                                        FilterExec: _10@<id> >= 21 AND _10@<id> <= 40, statistics=[Rows=Inexact(28810), Bytes=Inexact(<bytes>), [(Col[0]: Min=Inexact(Float64(21)) Max=Inexact(Float64(40)) Null=Inexact(1283))]]
+                                          RepartitionExec: partitioning=RoundRobinBatch(<partitions>), input_partitions=<partitions>, statistics=[Rows=Exact(28810), Bytes=Exact(<bytes>), [(Col[0]: Null=Exact(1283))]]
+                                            DataSourceExec: partitions=1, partition_sizes=[<sizes>], statistics=[Rows=Exact(28810), Bytes=Exact(<bytes>), [(Col[0]: Null=Exact(1283))]]
+                          ProjectionExec: expr=[<exprs>]
+                            AggregateExec: mode=Final, gby=[], aggr=[avg(store_sales.#<col>)], statistics=[Rows=Exact(1), Bytes=Absent, [(Col[0]:)]]
+                              CoalescePartitionsExec, statistics=[Rows=Inexact(5762), Bytes=Absent, [(Col[0]:),(Col[1]:)]]
+                                AggregateExec: mode=Partial, gby=[], aggr=[avg(store_sales.#<col>)], statistics=[Rows=Inexact(5762), Bytes=Absent, [(Col[0]:),(Col[1]:)]]
+                                  ProjectionExec: expr=[<exprs>]
+                                    CoalesceBatchesExec: target_batch_size=8192, statistics=[Rows=Inexact(5762), Bytes=Inexact(<bytes>), [(Col[0]: Null=Inexact(1220))]]
+                                      FilterExec: _10@<id> >= 21 AND _10@<id> <= 40, projection=[_14@<id>], statistics=[Rows=Inexact(5762), Bytes=Inexact(<bytes>), [(Col[0]: Null=Inexact(1220))]]
+                                        RepartitionExec: partitioning=RoundRobinBatch(<partitions>), input_partitions=<partitions>, statistics=[Rows=Exact(28810), Bytes=Exact(<bytes>), [(Col[0]: Null=Exact(1283)),(Col[1]: Null=Exact(1220))]]
+                                          DataSourceExec: partitions=1, partition_sizes=[<sizes>], statistics=[Rows=Exact(28810), Bytes=Exact(<bytes>), [(Col[0]: Null=Exact(1283)),(Col[1]: Null=Exact(1220))]]
+                        ProjectionExec: expr=[<exprs>]
+                          AggregateExec: mode=Final, gby=[], aggr=[avg(store_sales.#<col>)], statistics=[Rows=Exact(1), Bytes=Absent, [(Col[0]:)]]
+                            CoalescePartitionsExec, statistics=[Rows=Inexact(5762), Bytes=Absent, [(Col[0]:),(Col[1]:)]]
+                              AggregateExec: mode=Partial, gby=[], aggr=[avg(store_sales.#<col>)], statistics=[Rows=Inexact(5762), Bytes=Absent, [(Col[0]:),(Col[1]:)]]
+                                ProjectionExec: expr=[<exprs>]
+                                  CoalesceBatchesExec: target_batch_size=8192, statistics=[Rows=Inexact(5762), Bytes=Inexact(<bytes>), [(Col[0]: Null=Inexact(1260))]]
+                                    FilterExec: _10@<id> >= 21 AND _10@<id> <= 40, projection=[_22@<id>], statistics=[Rows=Inexact(5762), Bytes=Inexact(<bytes>), [(Col[0]: Null=Inexact(1260))]]
+                                      RepartitionExec: partitioning=RoundRobinBatch(<partitions>), input_partitions=<partitions>, statistics=[Rows=Exact(28810), Bytes=Exact(<bytes>), [(Col[0]: Null=Exact(1283)),(Col[1]: Null=Exact(1260))]]
+                                        DataSourceExec: partitions=1, partition_sizes=[<sizes>], statistics=[Rows=Exact(28810), Bytes=Exact(<bytes>), [(Col[0]: Null=Exact(1283)),(Col[1]: Null=Exact(1260))]]
+                      ProjectionExec: expr=[<exprs>]
+                        AggregateExec: mode=Final, gby=[], aggr=[count(Int64(1))], statistics=[Rows=Exact(1), Bytes=Absent, [(Col[0]:)]]
+                          CoalescePartitionsExec, statistics=[Rows=Inexact(28810), Bytes=Absent, [(Col[0]:)]]
+                            AggregateExec: mode=Partial, gby=[], aggr=[count(Int64(1))], statistics=[Rows=Inexact(28810), Bytes=Absent, [(Col[0]:)]]
+                              ProjectionExec: expr=[<exprs>]
+                                CoalesceBatchesExec: target_batch_size=8192, statistics=[Rows=Inexact(28810), Bytes=Inexact(<bytes>), [(Col[0]: Min=Inexact(Float64(41)) Max=Inexact(Float64(60)) Null=Inexact(1283))]]
+                                  FilterExec: _10@<id> >= 41 AND _10@<id> <= 60, statistics=[Rows=Inexact(28810), Bytes=Inexact(<bytes>), [(Col[0]: Min=Inexact(Float64(41)) Max=Inexact(Float64(60)) Null=Inexact(1283))]]
+                                    RepartitionExec: partitioning=RoundRobinBatch(<partitions>), input_partitions=<partitions>, statistics=[Rows=Exact(28810), Bytes=Exact(<bytes>), [(Col[0]: Null=Exact(1283))]]
+                                      DataSourceExec: partitions=1, partition_sizes=[<sizes>], statistics=[Rows=Exact(28810), Bytes=Exact(<bytes>), [(Col[0]: Null=Exact(1283))]]
+                    ProjectionExec: expr=[<exprs>]
+                      AggregateExec: mode=Final, gby=[], aggr=[avg(store_sales.#<col>)], statistics=[Rows=Exact(1), Bytes=Absent, [(Col[0]:)]]
+                        CoalescePartitionsExec, statistics=[Rows=Inexact(5762), Bytes=Absent, [(Col[0]:),(Col[1]:)]]
+                          AggregateExec: mode=Partial, gby=[], aggr=[avg(store_sales.#<col>)], statistics=[Rows=Inexact(5762), Bytes=Absent, [(Col[0]:),(Col[1]:)]]
+                            ProjectionExec: expr=[<exprs>]
+                              CoalesceBatchesExec: target_batch_size=8192, statistics=[Rows=Inexact(5762), Bytes=Inexact(<bytes>), [(Col[0]: Null=Inexact(1220))]]
+                                FilterExec: _10@<id> >= 41 AND _10@<id> <= 60, projection=[_14@<id>], statistics=[Rows=Inexact(5762), Bytes=Inexact(<bytes>), [(Col[0]: Null=Inexact(1220))]]
+                                  RepartitionExec: partitioning=RoundRobinBatch(<partitions>), input_partitions=<partitions>, statistics=[Rows=Exact(28810), Bytes=Exact(<bytes>), [(Col[0]: Null=Exact(1283)),(Col[1]: Null=Exact(1220))]]
+                                    DataSourceExec: partitions=1, partition_sizes=[<sizes>], statistics=[Rows=Exact(28810), Bytes=Exact(<bytes>), [(Col[0]: Null=Exact(1283)),(Col[1]: Null=Exact(1220))]]
+                  ProjectionExec: expr=[<exprs>]
+                    AggregateExec: mode=Final, gby=[], aggr=[avg(store_sales.#<col>)], statistics=[Rows=Exact(1), Bytes=Absent, [(Col[0]:)]]
+                      CoalescePartitionsExec, statistics=[Rows=Inexact(5762), Bytes=Absent, [(Col[0]:),(Col[1]:)]]
+                        AggregateExec: mode=Partial, gby=[], aggr=[avg(store_sales.#<col>)], statistics=[Rows=Inexact(5762), Bytes=Absent, [(Col[0]:),(Col[1]:)]]
+                          ProjectionExec: expr=[<exprs>]
+                            CoalesceBatchesExec: target_batch_size=8192, statistics=[Rows=Inexact(5762), Bytes=Inexact(<bytes>), [(Col[0]: Null=Inexact(1260))]]
+                              FilterExec: _10@<id> >= 41 AND _10@<id> <= 60, projection=[_22@<id>], statistics=[Rows=Inexact(5762), Bytes=Inexact(<bytes>), [(Col[0]: Null=Inexact(1260))]]
+                                RepartitionExec: partitioning=RoundRobinBatch(<partitions>), input_partitions=<partitions>, statistics=[Rows=Exact(28810), Bytes=Exact(<bytes>), [(Col[0]: Null=Exact(1283)),(Col[1]: Null=Exact(1260))]]
+                                  DataSourceExec: partitions=1, partition_sizes=[<sizes>], statistics=[Rows=Exact(28810), Bytes=Exact(<bytes>), [(Col[0]: Null=Exact(1283)),(Col[1]: Null=Exact(1260))]]
+                ProjectionExec: expr=[<exprs>]
+                  AggregateExec: mode=Final, gby=[], aggr=[count(Int64(1))], statistics=[Rows=Exact(1), Bytes=Absent, [(Col[0]:)]]
+                    CoalescePartitionsExec, statistics=[Rows=Inexact(28810), Bytes=Absent, [(Col[0]:)]]
+                      AggregateExec: mode=Partial, gby=[], aggr=[count(Int64(1))], statistics=[Rows=Inexact(28810), Bytes=Absent, [(Col[0]:)]]
+                        ProjectionExec: expr=[<exprs>]
+                          CoalesceBatchesExec: target_batch_size=8192, statistics=[Rows=Inexact(28810), Bytes=Inexact(<bytes>), [(Col[0]: Min=Inexact(Float64(61)) Max=Inexact(Float64(80)) Null=Inexact(1283))]]
+                            FilterExec: _10@<id> >= 61 AND _10@<id> <= 80, statistics=[Rows=Inexact(28810), Bytes=Inexact(<bytes>), [(Col[0]: Min=Inexact(Float64(61)) Max=Inexact(Float64(80)) Null=Inexact(1283))]]
+                              RepartitionExec: partitioning=RoundRobinBatch(<partitions>), input_partitions=<partitions>, statistics=[Rows=Exact(28810), Bytes=Exact(<bytes>), [(Col[0]: Null=Exact(1283))]]
+                                DataSourceExec: partitions=1, partition_sizes=[<sizes>], statistics=[Rows=Exact(28810), Bytes=Exact(<bytes>), [(Col[0]: Null=Exact(1283))]]
+              ProjectionExec: expr=[<exprs>]
+                AggregateExec: mode=Final, gby=[], aggr=[avg(store_sales.#<col>)], statistics=[Rows=Exact(1), Bytes=Absent, [(Col[0]:)]]
+                  CoalescePartitionsExec, statistics=[Rows=Inexact(5762), Bytes=Absent, [(Col[0]:),(Col[1]:)]]
+                    AggregateExec: mode=Partial, gby=[], aggr=[avg(store_sales.#<col>)], statistics=[Rows=Inexact(5762), Bytes=Absent, [(Col[0]:),(Col[1]:)]]
+                      ProjectionExec: expr=[<exprs>]
+                        CoalesceBatchesExec: target_batch_size=8192, statistics=[Rows=Inexact(5762), Bytes=Inexact(<bytes>), [(Col[0]: Null=Inexact(1220))]]
+                          FilterExec: _10@<id> >= 61 AND _10@<id> <= 80, projection=[_14@<id>], statistics=[Rows=Inexact(5762), Bytes=Inexact(<bytes>), [(Col[0]: Null=Inexact(1220))]]
+                            RepartitionExec: partitioning=RoundRobinBatch(<partitions>), input_partitions=<partitions>, statistics=[Rows=Exact(28810), Bytes=Exact(<bytes>), [(Col[0]: Null=Exact(1283)),(Col[1]: Null=Exact(1220))]]
+                              DataSourceExec: partitions=1, partition_sizes=[<sizes>], statistics=[Rows=Exact(28810), Bytes=Exact(<bytes>), [(Col[0]: Null=Exact(1283)),(Col[1]: Null=Exact(1220))]]
+            ProjectionExec: expr=[<exprs>]
+              AggregateExec: mode=Final, gby=[], aggr=[avg(store_sales.#<col>)], statistics=[Rows=Exact(1), Bytes=Absent, [(Col[0]:)]]
+                CoalescePartitionsExec, statistics=[Rows=Inexact(5762), Bytes=Absent, [(Col[0]:),(Col[1]:)]]
+                  AggregateExec: mode=Partial, gby=[], aggr=[avg(store_sales.#<col>)], statistics=[Rows=Inexact(5762), Bytes=Absent, [(Col[0]:),(Col[1]:)]]
+                    ProjectionExec: expr=[<exprs>]
+                      CoalesceBatchesExec: target_batch_size=8192, statistics=[Rows=Inexact(5762), Bytes=Inexact(<bytes>), [(Col[0]: Null=Inexact(1260))]]
+                        FilterExec: _10@<id> >= 61 AND _10@<id> <= 80, projection=[_22@<id>], statistics=[Rows=Inexact(5762), Bytes=Inexact(<bytes>), [(Col[0]: Null=Inexact(1260))]]
+                          RepartitionExec: partitioning=RoundRobinBatch(<partitions>), input_partitions=<partitions>, statistics=[Rows=Exact(28810), Bytes=Exact(<bytes>), [(Col[0]: Null=Exact(1283)),(Col[1]: Null=Exact(1260))]]
+                            DataSourceExec: partitions=1, partition_sizes=[<sizes>], statistics=[Rows=Exact(28810), Bytes=Exact(<bytes>), [(Col[0]: Null=Exact(1283)),(Col[1]: Null=Exact(1260))]]
+          ProjectionExec: expr=[<exprs>]
+            AggregateExec: mode=Final, gby=[], aggr=[count(Int64(1))], statistics=[Rows=Exact(1), Bytes=Absent, [(Col[0]:)]]
+              CoalescePartitionsExec, statistics=[Rows=Inexact(28810), Bytes=Absent, [(Col[0]:)]]
+                AggregateExec: mode=Partial, gby=[], aggr=[count(Int64(1))], statistics=[Rows=Inexact(28810), Bytes=Absent, [(Col[0]:)]]
+                  ProjectionExec: expr=[<exprs>]
+                    CoalesceBatchesExec: target_batch_size=8192, statistics=[Rows=Inexact(28810), Bytes=Inexact(<bytes>), [(Col[0]: Min=Inexact(Float64(81)) Max=Inexact(Float64(100)) Null=Inexact(1283))]]
+                      FilterExec: _10@<id> >= 81 AND _10@<id> <= 100, statistics=[Rows=Inexact(28810), Bytes=Inexact(<bytes>), [(Col[0]: Min=Inexact(Float64(81)) Max=Inexact(Float64(100)) Null=Inexact(1283))]]
+                        RepartitionExec: partitioning=RoundRobinBatch(<partitions>), input_partitions=<partitions>, statistics=[Rows=Exact(28810), Bytes=Exact(<bytes>), [(Col[0]: Null=Exact(1283))]]
+                          DataSourceExec: partitions=1, partition_sizes=[<sizes>], statistics=[Rows=Exact(28810), Bytes=Exact(<bytes>), [(Col[0]: Null=Exact(1283))]]
+        ProjectionExec: expr=[<exprs>]
+          AggregateExec: mode=Final, gby=[], aggr=[avg(store_sales.#<col>)], statistics=[Rows=Exact(1), Bytes=Absent, [(Col[0]:)]]
+            CoalescePartitionsExec, statistics=[Rows=Inexact(5762), Bytes=Absent, [(Col[0]:),(Col[1]:)]]
+              AggregateExec: mode=Partial, gby=[], aggr=[avg(store_sales.#<col>)], statistics=[Rows=Inexact(5762), Bytes=Absent, [(Col[0]:),(Col[1]:)]]
+                ProjectionExec: expr=[<exprs>]
+                  CoalesceBatchesExec: target_batch_size=8192, statistics=[Rows=Inexact(5762), Bytes=Inexact(<bytes>), [(Col[0]: Null=Inexact(1220))]]
+                    FilterExec: _10@<id> >= 81 AND _10@<id> <= 100, projection=[_14@<id>], statistics=[Rows=Inexact(5762), Bytes=Inexact(<bytes>), [(Col[0]: Null=Inexact(1220))]]
+                      RepartitionExec: partitioning=RoundRobinBatch(<partitions>), input_partitions=<partitions>, statistics=[Rows=Exact(28810), Bytes=Exact(<bytes>), [(Col[0]: Null=Exact(1283)),(Col[1]: Null=Exact(1220))]]
+                        DataSourceExec: partitions=1, partition_sizes=[<sizes>], statistics=[Rows=Exact(28810), Bytes=Exact(<bytes>), [(Col[0]: Null=Exact(1283)),(Col[1]: Null=Exact(1220))]]
+      ProjectionExec: expr=[<exprs>]
+        AggregateExec: mode=Final, gby=[], aggr=[avg(store_sales.#<col>)], statistics=[Rows=Exact(1), Bytes=Absent, [(Col[0]:)]]
+          CoalescePartitionsExec, statistics=[Rows=Inexact(5762), Bytes=Absent, [(Col[0]:),(Col[1]:)]]
+            AggregateExec: mode=Partial, gby=[], aggr=[avg(store_sales.#<col>)], statistics=[Rows=Inexact(5762), Bytes=Absent, [(Col[0]:),(Col[1]:)]]
+              ProjectionExec: expr=[<exprs>]
+                CoalesceBatchesExec: target_batch_size=8192, statistics=[Rows=Inexact(5762), Bytes=Inexact(<bytes>), [(Col[0]: Null=Inexact(1260))]]
+                  FilterExec: _10@<id> >= 81 AND _10@<id> <= 100, projection=[_22@<id>], statistics=[Rows=Inexact(5762), Bytes=Inexact(<bytes>), [(Col[0]: Null=Inexact(1260))]]
+                    RepartitionExec: partitioning=RoundRobinBatch(<partitions>), input_partitions=<partitions>, statistics=[Rows=Exact(28810), Bytes=Exact(<bytes>), [(Col[0]: Null=Exact(1283)),(Col[1]: Null=Exact(1260))]]
+                      DataSourceExec: partitions=1, partition_sizes=[<sizes>], statistics=[Rows=Exact(28810), Bytes=Exact(<bytes>), [(Col[0]: Null=Exact(1283)),(Col[1]: Null=Exact(1260))]]
+
+
+initial_physical_plan_with_schema:
+ProjectionExec: expr=[<exprs>]
+  RepartitionExec: partitioning=RoundRobinBatch(<partitions>), input_partitions=<partitions>, schema=[#<col>:Int64;N, #<col>:Decimal128(11, 6);N, #<col>:Decimal128(11, 6);N, #<col>:Int64;N, #<col>:Decimal128(11, 6);N, #<col>:Decimal128(11, 6);N, #<col>:Int64;N, #<col>:Decimal128(11, 6);N, #<col>:Decimal128(11, 6);N, #<col>:Int64;N, #<col>:Decimal128(11, 6);N, #<col>:Decimal128(11, 6);N, #<col>:Int64;N, #<col>:Decimal128(11, 6);N, #<col>:Decimal128(11, 6);N]
+    NestedLoopJoinExec: join_type=Left, schema=[#<col>:Int64;N, #<col>:Decimal128(11, 6);N, #<col>:Decimal128(11, 6);N, #<col>:Int64;N, #<col>:Decimal128(11, 6);N, #<col>:Decimal128(11, 6);N, #<col>:Int64;N, #<col>:Decimal128(11, 6);N, #<col>:Decimal128(11, 6);N, #<col>:Int64;N, #<col>:Decimal128(11, 6);N, #<col>:Decimal128(11, 6);N, #<col>:Int64;N, #<col>:Decimal128(11, 6);N, #<col>:Decimal128(11, 6);N]
+      NestedLoopJoinExec: join_type=Left, schema=[#<col>:Int64;N, #<col>:Decimal128(11, 6);N, #<col>:Decimal128(11, 6);N, #<col>:Int64;N, #<col>:Decimal128(11, 6);N, #<col>:Decimal128(11, 6);N, #<col>:Int64;N, #<col>:Decimal128(11, 6);N, #<col>:Decimal128(11, 6);N, #<col>:Int64;N, #<col>:Decimal128(11, 6);N, #<col>:Decimal128(11, 6);N, #<col>:Int64;N, #<col>:Decimal128(11, 6);N]
+        NestedLoopJoinExec: join_type=Left, schema=[#<col>:Int64;N, #<col>:Decimal128(11, 6);N, #<col>:Decimal128(11, 6);N, #<col>:Int64;N, #<col>:Decimal128(11, 6);N, #<col>:Decimal128(11, 6);N, #<col>:Int64;N, #<col>:Decimal128(11, 6);N, #<col>:Decimal128(11, 6);N, #<col>:Int64;N, #<col>:Decimal128(11, 6);N, #<col>:Decimal128(11, 6);N, #<col>:Int64;N]
+          NestedLoopJoinExec: join_type=Left, schema=[#<col>:Int64;N, #<col>:Decimal128(11, 6);N, #<col>:Decimal128(11, 6);N, #<col>:Int64;N, #<col>:Decimal128(11, 6);N, #<col>:Decimal128(11, 6);N, #<col>:Int64;N, #<col>:Decimal128(11, 6);N, #<col>:Decimal128(11, 6);N, #<col>:Int64;N, #<col>:Decimal128(11, 6);N, #<col>:Decimal128(11, 6);N]
+            NestedLoopJoinExec: join_type=Left, schema=[#<col>:Int64;N, #<col>:Decimal128(11, 6);N, #<col>:Decimal128(11, 6);N, #<col>:Int64;N, #<col>:Decimal128(11, 6);N, #<col>:Decimal128(11, 6);N, #<col>:Int64;N, #<col>:Decimal128(11, 6);N, #<col>:Decimal128(11, 6);N, #<col>:Int64;N, #<col>:Decimal128(11, 6);N]
+              NestedLoopJoinExec: join_type=Left, schema=[#<col>:Int64;N, #<col>:Decimal128(11, 6);N, #<col>:Decimal128(11, 6);N, #<col>:Int64;N, #<col>:Decimal128(11, 6);N, #<col>:Decimal128(11, 6);N, #<col>:Int64;N, #<col>:Decimal128(11, 6);N, #<col>:Decimal128(11, 6);N, #<col>:Int64;N]
+                NestedLoopJoinExec: join_type=Left, schema=[#<col>:Int64;N, #<col>:Decimal128(11, 6);N, #<col>:Decimal128(11, 6);N, #<col>:Int64;N, #<col>:Decimal128(11, 6);N, #<col>:Decimal128(11, 6);N, #<col>:Int64;N, #<col>:Decimal128(11, 6);N, #<col>:Decimal128(11, 6);N]
+                  NestedLoopJoinExec: join_type=Left, schema=[#<col>:Int64;N, #<col>:Decimal128(11, 6);N, #<col>:Decimal128(11, 6);N, #<col>:Int64;N, #<col>:Decimal128(11, 6);N, #<col>:Decimal128(11, 6);N, #<col>:Int64;N, #<col>:Decimal128(11, 6);N]
+                    NestedLoopJoinExec: join_type=Left, schema=[#<col>:Int64;N, #<col>:Decimal128(11, 6);N, #<col>:Decimal128(11, 6);N, #<col>:Int64;N, #<col>:Decimal128(11, 6);N, #<col>:Decimal128(11, 6);N, #<col>:Int64;N]
+                      NestedLoopJoinExec: join_type=Left, schema=[#<col>:Int64;N, #<col>:Decimal128(11, 6);N, #<col>:Decimal128(11, 6);N, #<col>:Int64;N, #<col>:Decimal128(11, 6);N, #<col>:Decimal128(11, 6);N]
+                        NestedLoopJoinExec: join_type=Left, schema=[#<col>:Int64;N, #<col>:Decimal128(11, 6);N, #<col>:Decimal128(11, 6);N, #<col>:Int64;N, #<col>:Decimal128(11, 6);N]
+                          NestedLoopJoinExec: join_type=Left, schema=[#<col>:Int64;N, #<col>:Decimal128(11, 6);N, #<col>:Decimal128(11, 6);N, #<col>:Int64;N]
+                            NestedLoopJoinExec: join_type=Left, schema=[#<col>:Int64;N, #<col>:Decimal128(11, 6);N, #<col>:Decimal128(11, 6);N]
+                              NestedLoopJoinExec: join_type=Left, schema=[#<col>:Int64;N, #<col>:Decimal128(11, 6);N]
+                                NestedLoopJoinExec: join_type=Left, schema=[#<col>:Int64;N]
+                                  ProjectionExec: expr=[<exprs>]
+                                    CoalesceBatchesExec: target_batch_size=8192, schema=[_0:Int64;N]
+                                      FilterExec: _0@<id> = 1, schema=[_0:Int64;N]
+                                        DataSourceExec: partitions=1, partition_sizes=[<sizes>], schema=[_0:Int64;N]
+                                  ProjectionExec: expr=[<exprs>]
+                                    AggregateExec: mode=Final, gby=[], aggr=[count(Int64(1))], schema=[count(Int64(1)):Int64]
+                                      CoalescePartitionsExec, schema=[count(Int64(1))[count]:Int64]
+                                        AggregateExec: mode=Partial, gby=[], aggr=[count(Int64(1))], schema=[count(Int64(1))[count]:Int64]
+                                          ProjectionExec: expr=[<exprs>]
+                                            CoalesceBatchesExec: target_batch_size=8192, schema=[_10:Float64;N]
+                                              FilterExec: _10@<id> >= 1 AND _10@<id> <= 20, schema=[_10:Float64;N]
+                                                RepartitionExec: partitioning=RoundRobinBatch(<partitions>), input_partitions=<partitions>, schema=[_10:Float64;N]
+                                                  DataSourceExec: partitions=1, partition_sizes=[<sizes>], schema=[_10:Float64;N]
+                                ProjectionExec: expr=[<exprs>]
+                                  AggregateExec: mode=Final, gby=[], aggr=[avg(store_sales.#<col>)], schema=[avg(store_sales.#<col>):Decimal128(11, 6);N]
+                                    CoalescePartitionsExec, schema=[avg(store_sales.#<col>)[count]:UInt64;N, avg(store_sales.#<col>)[sum]:Decimal128(7, 2);N]
+                                      AggregateExec: mode=Partial, gby=[], aggr=[avg(store_sales.#<col>)], schema=[avg(store_sales.#<col>)[count]:UInt64;N, avg(store_sales.#<col>)[sum]:Decimal128(7, 2);N]
+                                        ProjectionExec: expr=[<exprs>]
+                                          CoalesceBatchesExec: target_batch_size=8192, schema=[_14:Decimal128(7, 2);N]
+                                            FilterExec: _10@<id> >= 1 AND _10@<id> <= 20, projection=[_14@<id>], schema=[_14:Decimal128(7, 2);N]
+                                              RepartitionExec: partitioning=RoundRobinBatch(<partitions>), input_partitions=<partitions>, schema=[_10:Float64;N, _14:Decimal128(7, 2);N]
+                                                DataSourceExec: partitions=1, partition_sizes=[<sizes>], schema=[_10:Float64;N, _14:Decimal128(7, 2);N]
+                              ProjectionExec: expr=[<exprs>]
+                                AggregateExec: mode=Final, gby=[], aggr=[avg(store_sales.#<col>)], schema=[avg(store_sales.#<col>):Decimal128(10, 6);N]
+                                  CoalescePartitionsExec, schema=[avg(store_sales.#<col>)[count]:UInt64;N, avg(store_sales.#<col>)[sum]:Decimal128(6, 2);N]
+                                    AggregateExec: mode=Partial, gby=[], aggr=[avg(store_sales.#<col>)], schema=[avg(store_sales.#<col>)[count]:UInt64;N, avg(store_sales.#<col>)[sum]:Decimal128(6, 2);N]
+                                      ProjectionExec: expr=[<exprs>]
+                                        CoalesceBatchesExec: target_batch_size=8192, schema=[_22:Decimal128(6, 2);N]
+                                          FilterExec: _10@<id> >= 1 AND _10@<id> <= 20, projection=[_22@<id>], schema=[_22:Decimal128(6, 2);N]
+                                            RepartitionExec: partitioning=RoundRobinBatch(<partitions>), input_partitions=<partitions>, schema=[_10:Float64;N, _22:Decimal128(6, 2);N]
+                                              DataSourceExec: partitions=1, partition_sizes=[<sizes>], schema=[_10:Float64;N, _22:Decimal128(6, 2);N]
+                            ProjectionExec: expr=[<exprs>]
+                              AggregateExec: mode=Final, gby=[], aggr=[count(Int64(1))], schema=[count(Int64(1)):Int64]
+                                CoalescePartitionsExec, schema=[count(Int64(1))[count]:Int64]
+                                  AggregateExec: mode=Partial, gby=[], aggr=[count(Int64(1))], schema=[count(Int64(1))[count]:Int64]
+                                    ProjectionExec: expr=[<exprs>]
+                                      CoalesceBatchesExec: target_batch_size=8192, schema=[_10:Float64;N]
+                                        FilterExec: _10@<id> >= 21 AND _10@<id> <= 40, schema=[_10:Float64;N]
+                                          RepartitionExec: partitioning=RoundRobinBatch(<partitions>), input_partitions=<partitions>, schema=[_10:Float64;N]
+                                            DataSourceExec: partitions=1, partition_sizes=[<sizes>], schema=[_10:Float64;N]
+                          ProjectionExec: expr=[<exprs>]
+                            AggregateExec: mode=Final, gby=[], aggr=[avg(store_sales.#<col>)], schema=[avg(store_sales.#<col>):Decimal128(11, 6);N]
+                              CoalescePartitionsExec, schema=[avg(store_sales.#<col>)[count]:UInt64;N, avg(store_sales.#<col>)[sum]:Decimal128(7, 2);N]
+                                AggregateExec: mode=Partial, gby=[], aggr=[avg(store_sales.#<col>)], schema=[avg(store_sales.#<col>)[count]:UInt64;N, avg(store_sales.#<col>)[sum]:Decimal128(7, 2);N]
+                                  ProjectionExec: expr=[<exprs>]
+                                    CoalesceBatchesExec: target_batch_size=8192, schema=[_14:Decimal128(7, 2);N]
+                                      FilterExec: _10@<id> >= 21 AND _10@<id> <= 40, projection=[_14@<id>], schema=[_14:Decimal128(7, 2);N]
+                                        RepartitionExec: partitioning=RoundRobinBatch(<partitions>), input_partitions=<partitions>, schema=[_10:Float64;N, _14:Decimal128(7, 2);N]
+                                          DataSourceExec: partitions=1, partition_sizes=[<sizes>], schema=[_10:Float64;N, _14:Decimal128(7, 2);N]
+                        ProjectionExec: expr=[<exprs>]
+                          AggregateExec: mode=Final, gby=[], aggr=[avg(store_sales.#<col>)], schema=[avg(store_sales.#<col>):Decimal128(10, 6);N]
+                            CoalescePartitionsExec, schema=[avg(store_sales.#<col>)[count]:UInt64;N, avg(store_sales.#<col>)[sum]:Decimal128(6, 2);N]
+                              AggregateExec: mode=Partial, gby=[], aggr=[avg(store_sales.#<col>)], schema=[avg(store_sales.#<col>)[count]:UInt64;N, avg(store_sales.#<col>)[sum]:Decimal128(6, 2);N]
+                                ProjectionExec: expr=[<exprs>]
+                                  CoalesceBatchesExec: target_batch_size=8192, schema=[_22:Decimal128(6, 2);N]
+                                    FilterExec: _10@<id> >= 21 AND _10@<id> <= 40, projection=[_22@<id>], schema=[_22:Decimal128(6, 2);N]
+                                      RepartitionExec: partitioning=RoundRobinBatch(<partitions>), input_partitions=<partitions>, schema=[_10:Float64;N, _22:Decimal128(6, 2);N]
+                                        DataSourceExec: partitions=1, partition_sizes=[<sizes>], schema=[_10:Float64;N, _22:Decimal128(6, 2);N]
+                      ProjectionExec: expr=[<exprs>]
+                        AggregateExec: mode=Final, gby=[], aggr=[count(Int64(1))], schema=[count(Int64(1)):Int64]
+                          CoalescePartitionsExec, schema=[count(Int64(1))[count]:Int64]
+                            AggregateExec: mode=Partial, gby=[], aggr=[count(Int64(1))], schema=[count(Int64(1))[count]:Int64]
+                              ProjectionExec: expr=[<exprs>]
+                                CoalesceBatchesExec: target_batch_size=8192, schema=[_10:Float64;N]
+                                  FilterExec: _10@<id> >= 41 AND _10@<id> <= 60, schema=[_10:Float64;N]
+                                    RepartitionExec: partitioning=RoundRobinBatch(<partitions>), input_partitions=<partitions>, schema=[_10:Float64;N]
+                                      DataSourceExec: partitions=1, partition_sizes=[<sizes>], schema=[_10:Float64;N]
+                    ProjectionExec: expr=[<exprs>]
+                      AggregateExec: mode=Final, gby=[], aggr=[avg(store_sales.#<col>)], schema=[avg(store_sales.#<col>):Decimal128(11, 6);N]
+                        CoalescePartitionsExec, schema=[avg(store_sales.#<col>)[count]:UInt64;N, avg(store_sales.#<col>)[sum]:Decimal128(7, 2);N]
+                          AggregateExec: mode=Partial, gby=[], aggr=[avg(store_sales.#<col>)], schema=[avg(store_sales.#<col>)[count]:UInt64;N, avg(store_sales.#<col>)[sum]:Decimal128(7, 2);N]
+                            ProjectionExec: expr=[<exprs>]
+                              CoalesceBatchesExec: target_batch_size=8192, schema=[_14:Decimal128(7, 2);N]
+                                FilterExec: _10@<id> >= 41 AND _10@<id> <= 60, projection=[_14@<id>], schema=[_14:Decimal128(7, 2);N]
+                                  RepartitionExec: partitioning=RoundRobinBatch(<partitions>), input_partitions=<partitions>, schema=[_10:Float64;N, _14:Decimal128(7, 2);N]
+                                    DataSourceExec: partitions=1, partition_sizes=[<sizes>], schema=[_10:Float64;N, _14:Decimal128(7, 2);N]
+                  ProjectionExec: expr=[<exprs>]
+                    AggregateExec: mode=Final, gby=[], aggr=[avg(store_sales.#<col>)], schema=[avg(store_sales.#<col>):Decimal128(10, 6);N]
+                      CoalescePartitionsExec, schema=[avg(store_sales.#<col>)[count]:UInt64;N, avg(store_sales.#<col>)[sum]:Decimal128(6, 2);N]
+                        AggregateExec: mode=Partial, gby=[], aggr=[avg(store_sales.#<col>)], schema=[avg(store_sales.#<col>)[count]:UInt64;N, avg(store_sales.#<col>)[sum]:Decimal128(6, 2);N]
+                          ProjectionExec: expr=[<exprs>]
+                            CoalesceBatchesExec: target_batch_size=8192, schema=[_22:Decimal128(6, 2);N]
+                              FilterExec: _10@<id> >= 41 AND _10@<id> <= 60, projection=[_22@<id>], schema=[_22:Decimal128(6, 2);N]
+                                RepartitionExec: partitioning=RoundRobinBatch(<partitions>), input_partitions=<partitions>, schema=[_10:Float64;N, _22:Decimal128(6, 2);N]
+                                  DataSourceExec: partitions=1, partition_sizes=[<sizes>], schema=[_10:Float64;N, _22:Decimal128(6, 2);N]
+                ProjectionExec: expr=[<exprs>]
+                  AggregateExec: mode=Final, gby=[], aggr=[count(Int64(1))], schema=[count(Int64(1)):Int64]
+                    CoalescePartitionsExec, schema=[count(Int64(1))[count]:Int64]
+                      AggregateExec: mode=Partial, gby=[], aggr=[count(Int64(1))], schema=[count(Int64(1))[count]:Int64]
+                        ProjectionExec: expr=[<exprs>]
+                          CoalesceBatchesExec: target_batch_size=8192, schema=[_10:Float64;N]
+                            FilterExec: _10@<id> >= 61 AND _10@<id> <= 80, schema=[_10:Float64;N]
+                              RepartitionExec: partitioning=RoundRobinBatch(<partitions>), input_partitions=<partitions>, schema=[_10:Float64;N]
+                                DataSourceExec: partitions=1, partition_sizes=[<sizes>], schema=[_10:Float64;N]
+              ProjectionExec: expr=[<exprs>]
+                AggregateExec: mode=Final, gby=[], aggr=[avg(store_sales.#<col>)], schema=[avg(store_sales.#<col>):Decimal128(11, 6);N]
+                  CoalescePartitionsExec, schema=[avg(store_sales.#<col>)[count]:UInt64;N, avg(store_sales.#<col>)[sum]:Decimal128(7, 2);N]
+                    AggregateExec: mode=Partial, gby=[], aggr=[avg(store_sales.#<col>)], schema=[avg(store_sales.#<col>)[count]:UInt64;N, avg(store_sales.#<col>)[sum]:Decimal128(7, 2);N]
+                      ProjectionExec: expr=[<exprs>]
+                        CoalesceBatchesExec: target_batch_size=8192, schema=[_14:Decimal128(7, 2);N]
+                          FilterExec: _10@<id> >= 61 AND _10@<id> <= 80, projection=[_14@<id>], schema=[_14:Decimal128(7, 2);N]
+                            RepartitionExec: partitioning=RoundRobinBatch(<partitions>), input_partitions=<partitions>, schema=[_10:Float64;N, _14:Decimal128(7, 2);N]
+                              DataSourceExec: partitions=1, partition_sizes=[<sizes>], schema=[_10:Float64;N, _14:Decimal128(7, 2);N]
+            ProjectionExec: expr=[<exprs>]
+              AggregateExec: mode=Final, gby=[], aggr=[avg(store_sales.#<col>)], schema=[avg(store_sales.#<col>):Decimal128(10, 6);N]
+                CoalescePartitionsExec, schema=[avg(store_sales.#<col>)[count]:UInt64;N, avg(store_sales.#<col>)[sum]:Decimal128(6, 2);N]
+                  AggregateExec: mode=Partial, gby=[], aggr=[avg(store_sales.#<col>)], schema=[avg(store_sales.#<col>)[count]:UInt64;N, avg(store_sales.#<col>)[sum]:Decimal128(6, 2);N]
+                    ProjectionExec: expr=[<exprs>]
+                      CoalesceBatchesExec: target_batch_size=8192, schema=[_22:Decimal128(6, 2);N]
+                        FilterExec: _10@<id> >= 61 AND _10@<id> <= 80, projection=[_22@<id>], schema=[_22:Decimal128(6, 2);N]
+                          RepartitionExec: partitioning=RoundRobinBatch(<partitions>), input_partitions=<partitions>, schema=[_10:Float64;N, _22:Decimal128(6, 2);N]
+                            DataSourceExec: partitions=1, partition_sizes=[<sizes>], schema=[_10:Float64;N, _22:Decimal128(6, 2);N]
+          ProjectionExec: expr=[<exprs>]
+            AggregateExec: mode=Final, gby=[], aggr=[count(Int64(1))], schema=[count(Int64(1)):Int64]
+              CoalescePartitionsExec, schema=[count(Int64(1))[count]:Int64]
+                AggregateExec: mode=Partial, gby=[], aggr=[count(Int64(1))], schema=[count(Int64(1))[count]:Int64]
+                  ProjectionExec: expr=[<exprs>]
+                    CoalesceBatchesExec: target_batch_size=8192, schema=[_10:Float64;N]
+                      FilterExec: _10@<id> >= 81 AND _10@<id> <= 100, schema=[_10:Float64;N]
+                        RepartitionExec: partitioning=RoundRobinBatch(<partitions>), input_partitions=<partitions>, schema=[_10:Float64;N]
+                          DataSourceExec: partitions=1, partition_sizes=[<sizes>], schema=[_10:Float64;N]
+        ProjectionExec: expr=[<exprs>]
+          AggregateExec: mode=Final, gby=[], aggr=[avg(store_sales.#<col>)], schema=[avg(store_sales.#<col>):Decimal128(11, 6);N]
+            CoalescePartitionsExec, schema=[avg(store_sales.#<col>)[count]:UInt64;N, avg(store_sales.#<col>)[sum]:Decimal128(7, 2);N]
+              AggregateExec: mode=Partial, gby=[], aggr=[avg(store_sales.#<col>)], schema=[avg(store_sales.#<col>)[count]:UInt64;N, avg(store_sales.#<col>)[sum]:Decimal128(7, 2);N]
+                ProjectionExec: expr=[<exprs>]
+                  CoalesceBatchesExec: target_batch_size=8192, schema=[_14:Decimal128(7, 2);N]
+                    FilterExec: _10@<id> >= 81 AND _10@<id> <= 100, projection=[_14@<id>], schema=[_14:Decimal128(7, 2);N]
+                      RepartitionExec: partitioning=RoundRobinBatch(<partitions>), input_partitions=<partitions>, schema=[_10:Float64;N, _14:Decimal128(7, 2);N]
+                        DataSourceExec: partitions=1, partition_sizes=[<sizes>], schema=[_10:Float64;N, _14:Decimal128(7, 2);N]
+      ProjectionExec: expr=[<exprs>]
+        AggregateExec: mode=Final, gby=[], aggr=[avg(store_sales.#<col>)], schema=[avg(store_sales.#<col>):Decimal128(10, 6);N]
+          CoalescePartitionsExec, schema=[avg(store_sales.#<col>)[count]:UInt64;N, avg(store_sales.#<col>)[sum]:Decimal128(6, 2);N]
+            AggregateExec: mode=Partial, gby=[], aggr=[avg(store_sales.#<col>)], schema=[avg(store_sales.#<col>)[count]:UInt64;N, avg(store_sales.#<col>)[sum]:Decimal128(6, 2);N]
+              ProjectionExec: expr=[<exprs>]
+                CoalesceBatchesExec: target_batch_size=8192, schema=[_22:Decimal128(6, 2);N]
+                  FilterExec: _10@<id> >= 81 AND _10@<id> <= 100, projection=[_22@<id>], schema=[_22:Decimal128(6, 2);N]
+                    RepartitionExec: partitioning=RoundRobinBatch(<partitions>), input_partitions=<partitions>, schema=[_10:Float64;N, _22:Decimal128(6, 2);N]
+                      DataSourceExec: partitions=1, partition_sizes=[<sizes>], schema=[_10:Float64;N, _22:Decimal128(6, 2);N]
+
+
+physical_plan after OutputRequirements:
+OutputRequirementExec: order_by=[], dist_by=Unspecified
+  ProjectionExec: expr=[<exprs>]
+    RepartitionExec: partitioning=RoundRobinBatch(<partitions>), input_partitions=<partitions>
+      NestedLoopJoinExec: join_type=Left
+        NestedLoopJoinExec: join_type=Left
+          NestedLoopJoinExec: join_type=Left
+            NestedLoopJoinExec: join_type=Left
+              NestedLoopJoinExec: join_type=Left
+                NestedLoopJoinExec: join_type=Left
+                  NestedLoopJoinExec: join_type=Left
+                    NestedLoopJoinExec: join_type=Left
+                      NestedLoopJoinExec: join_type=Left
+                        NestedLoopJoinExec: join_type=Left
+                          NestedLoopJoinExec: join_type=Left
+                            NestedLoopJoinExec: join_type=Left
+                              NestedLoopJoinExec: join_type=Left
+                                NestedLoopJoinExec: join_type=Left
+                                  NestedLoopJoinExec: join_type=Left
+                                    ProjectionExec: expr=[<exprs>]
+                                      CoalesceBatchesExec: target_batch_size=8192
+                                        FilterExec: _0@<id> = 1
+                                          DataSourceExec: partitions=1, partition_sizes=[<sizes>]
+                                    ProjectionExec: expr=[<exprs>]
+                                      AggregateExec: mode=Final, gby=[], aggr=[count(Int64(1))]
+                                        CoalescePartitionsExec
+                                          AggregateExec: mode=Partial, gby=[], aggr=[count(Int64(1))]
+                                            ProjectionExec: expr=[<exprs>]
+                                              CoalesceBatchesExec: target_batch_size=8192
+                                                FilterExec: _10@<id> >= 1 AND _10@<id> <= 20
+                                                  RepartitionExec: partitioning=RoundRobinBatch(<partitions>), input_partitions=<partitions>
+                                                    DataSourceExec: partitions=1, partition_sizes=[<sizes>]
+                                  ProjectionExec: expr=[<exprs>]
+                                    AggregateExec: mode=Final, gby=[], aggr=[avg(store_sales.#<col>)]
+                                      CoalescePartitionsExec
+                                        AggregateExec: mode=Partial, gby=[], aggr=[avg(store_sales.#<col>)]
+                                          ProjectionExec: expr=[<exprs>]
+                                            CoalesceBatchesExec: target_batch_size=8192
+                                              FilterExec: _10@<id> >= 1 AND _10@<id> <= 20, projection=[_14@<id>]
+                                                RepartitionExec: partitioning=RoundRobinBatch(<partitions>), input_partitions=<partitions>
+                                                  DataSourceExec: partitions=1, partition_sizes=[<sizes>]
+                                ProjectionExec: expr=[<exprs>]
+                                  AggregateExec: mode=Final, gby=[], aggr=[avg(store_sales.#<col>)]
+                                    CoalescePartitionsExec
+                                      AggregateExec: mode=Partial, gby=[], aggr=[avg(store_sales.#<col>)]
+                                        ProjectionExec: expr=[<exprs>]
+                                          CoalesceBatchesExec: target_batch_size=8192
+                                            FilterExec: _10@<id> >= 1 AND _10@<id> <= 20, projection=[_22@<id>]
+                                              RepartitionExec: partitioning=RoundRobinBatch(<partitions>), input_partitions=<partitions>
+                                                DataSourceExec: partitions=1, partition_sizes=[<sizes>]
+                              ProjectionExec: expr=[<exprs>]
+                                AggregateExec: mode=Final, gby=[], aggr=[count(Int64(1))]
+                                  CoalescePartitionsExec
+                                    AggregateExec: mode=Partial, gby=[], aggr=[count(Int64(1))]
+                                      ProjectionExec: expr=[<exprs>]
+                                        CoalesceBatchesExec: target_batch_size=8192
+                                          FilterExec: _10@<id> >= 21 AND _10@<id> <= 40
+                                            RepartitionExec: partitioning=RoundRobinBatch(<partitions>), input_partitions=<partitions>
+                                              DataSourceExec: partitions=1, partition_sizes=[<sizes>]
+                            ProjectionExec: expr=[<exprs>]
+                              AggregateExec: mode=Final, gby=[], aggr=[avg(store_sales.#<col>)]
+                                CoalescePartitionsExec
+                                  AggregateExec: mode=Partial, gby=[], aggr=[avg(store_sales.#<col>)]
+                                    ProjectionExec: expr=[<exprs>]
+                                      CoalesceBatchesExec: target_batch_size=8192
+                                        FilterExec: _10@<id> >= 21 AND _10@<id> <= 40, projection=[_14@<id>]
+                                          RepartitionExec: partitioning=RoundRobinBatch(<partitions>), input_partitions=<partitions>
+                                            DataSourceExec: partitions=1, partition_sizes=[<sizes>]
+                          ProjectionExec: expr=[<exprs>]
+                            AggregateExec: mode=Final, gby=[], aggr=[avg(store_sales.#<col>)]
+                              CoalescePartitionsExec
+                                AggregateExec: mode=Partial, gby=[], aggr=[avg(store_sales.#<col>)]
+                                  ProjectionExec: expr=[<exprs>]
+                                    CoalesceBatchesExec: target_batch_size=8192
+                                      FilterExec: _10@<id> >= 21 AND _10@<id> <= 40, projection=[_22@<id>]
+                                        RepartitionExec: partitioning=RoundRobinBatch(<partitions>), input_partitions=<partitions>
+                                          DataSourceExec: partitions=1, partition_sizes=[<sizes>]
+                        ProjectionExec: expr=[<exprs>]
+                          AggregateExec: mode=Final, gby=[], aggr=[count(Int64(1))]
+                            CoalescePartitionsExec
+                              AggregateExec: mode=Partial, gby=[], aggr=[count(Int64(1))]
+                                ProjectionExec: expr=[<exprs>]
+                                  CoalesceBatchesExec: target_batch_size=8192
+                                    FilterExec: _10@<id> >= 41 AND _10@<id> <= 60
+                                      RepartitionExec: partitioning=RoundRobinBatch(<partitions>), input_partitions=<partitions>
+                                        DataSourceExec: partitions=1, partition_sizes=[<sizes>]
+                      ProjectionExec: expr=[<exprs>]
+                        AggregateExec: mode=Final, gby=[], aggr=[avg(store_sales.#<col>)]
+                          CoalescePartitionsExec
+                            AggregateExec: mode=Partial, gby=[], aggr=[avg(store_sales.#<col>)]
+                              ProjectionExec: expr=[<exprs>]
+                                CoalesceBatchesExec: target_batch_size=8192
+                                  FilterExec: _10@<id> >= 41 AND _10@<id> <= 60, projection=[_14@<id>]
+                                    RepartitionExec: partitioning=RoundRobinBatch(<partitions>), input_partitions=<partitions>
+                                      DataSourceExec: partitions=1, partition_sizes=[<sizes>]
+                    ProjectionExec: expr=[<exprs>]
+                      AggregateExec: mode=Final, gby=[], aggr=[avg(store_sales.#<col>)]
+                        CoalescePartitionsExec
+                          AggregateExec: mode=Partial, gby=[], aggr=[avg(store_sales.#<col>)]
+                            ProjectionExec: expr=[<exprs>]
+                              CoalesceBatchesExec: target_batch_size=8192
+                                FilterExec: _10@<id> >= 41 AND _10@<id> <= 60, projection=[_22@<id>]
+                                  RepartitionExec: partitioning=RoundRobinBatch(<partitions>), input_partitions=<partitions>
+                                    DataSourceExec: partitions=1, partition_sizes=[<sizes>]
+                  ProjectionExec: expr=[<exprs>]
+                    AggregateExec: mode=Final, gby=[], aggr=[count(Int64(1))]
+                      CoalescePartitionsExec
+                        AggregateExec: mode=Partial, gby=[], aggr=[count(Int64(1))]
+                          ProjectionExec: expr=[<exprs>]
+                            CoalesceBatchesExec: target_batch_size=8192
+                              FilterExec: _10@<id> >= 61 AND _10@<id> <= 80
+                                RepartitionExec: partitioning=RoundRobinBatch(<partitions>), input_partitions=<partitions>
+                                  DataSourceExec: partitions=1, partition_sizes=[<sizes>]
+                ProjectionExec: expr=[<exprs>]
+                  AggregateExec: mode=Final, gby=[], aggr=[avg(store_sales.#<col>)]
+                    CoalescePartitionsExec
+                      AggregateExec: mode=Partial, gby=[], aggr=[avg(store_sales.#<col>)]
+                        ProjectionExec: expr=[<exprs>]
+                          CoalesceBatchesExec: target_batch_size=8192
+                            FilterExec: _10@<id> >= 61 AND _10@<id> <= 80, projection=[_14@<id>]
+                              RepartitionExec: partitioning=RoundRobinBatch(<partitions>), input_partitions=<partitions>
+                                DataSourceExec: partitions=1, partition_sizes=[<sizes>]
+              ProjectionExec: expr=[<exprs>]
+                AggregateExec: mode=Final, gby=[], aggr=[avg(store_sales.#<col>)]
+                  CoalescePartitionsExec
+                    AggregateExec: mode=Partial, gby=[], aggr=[avg(store_sales.#<col>)]
+                      ProjectionExec: expr=[<exprs>]
+                        CoalesceBatchesExec: target_batch_size=8192
+                          FilterExec: _10@<id> >= 61 AND _10@<id> <= 80, projection=[_22@<id>]
+                            RepartitionExec: partitioning=RoundRobinBatch(<partitions>), input_partitions=<partitions>
+                              DataSourceExec: partitions=1, partition_sizes=[<sizes>]
+            ProjectionExec: expr=[<exprs>]
+              AggregateExec: mode=Final, gby=[], aggr=[count(Int64(1))]
+                CoalescePartitionsExec
+                  AggregateExec: mode=Partial, gby=[], aggr=[count(Int64(1))]
+                    ProjectionExec: expr=[<exprs>]
+                      CoalesceBatchesExec: target_batch_size=8192
+                        FilterExec: _10@<id> >= 81 AND _10@<id> <= 100
+                          RepartitionExec: partitioning=RoundRobinBatch(<partitions>), input_partitions=<partitions>
+                            DataSourceExec: partitions=1, partition_sizes=[<sizes>]
+          ProjectionExec: expr=[<exprs>]
+            AggregateExec: mode=Final, gby=[], aggr=[avg(store_sales.#<col>)]
+              CoalescePartitionsExec
+                AggregateExec: mode=Partial, gby=[], aggr=[avg(store_sales.#<col>)]
+                  ProjectionExec: expr=[<exprs>]
+                    CoalesceBatchesExec: target_batch_size=8192
+                      FilterExec: _10@<id> >= 81 AND _10@<id> <= 100, projection=[_14@<id>]
+                        RepartitionExec: partitioning=RoundRobinBatch(<partitions>), input_partitions=<partitions>
+                          DataSourceExec: partitions=1, partition_sizes=[<sizes>]
+        ProjectionExec: expr=[<exprs>]
+          AggregateExec: mode=Final, gby=[], aggr=[avg(store_sales.#<col>)]
+            CoalescePartitionsExec
+              AggregateExec: mode=Partial, gby=[], aggr=[avg(store_sales.#<col>)]
+                ProjectionExec: expr=[<exprs>]
+                  CoalesceBatchesExec: target_batch_size=8192
+                    FilterExec: _10@<id> >= 81 AND _10@<id> <= 100, projection=[_22@<id>]
+                      RepartitionExec: partitioning=RoundRobinBatch(<partitions>), input_partitions=<partitions>
+                        DataSourceExec: partitions=1, partition_sizes=[<sizes>]
+
+
+physical_plan after aggregate_statistics:
+SAME TEXT AS ABOVE
+
+physical_plan after join_selection:
+SAME TEXT AS ABOVE
+
+physical_plan after LimitedDistinctAggregation:
+SAME TEXT AS ABOVE
+
+physical_plan after FilterPushdown:
+SAME TEXT AS ABOVE
+
+physical_plan after EnforceDistribution:
+SAME TEXT AS ABOVE
+
+physical_plan after CombinePartialFinalAggregate:
+SAME TEXT AS ABOVE
+
+physical_plan after EnforceSorting:
+SAME TEXT AS ABOVE
+
+physical_plan after OptimizeAggregateOrder:
+SAME TEXT AS ABOVE
+
+physical_plan after ProjectionPushdown:
+SAME TEXT AS ABOVE
+
+physical_plan after coalesce_batches:
+OutputRequirementExec: order_by=[], dist_by=Unspecified
+  ProjectionExec: expr=[<exprs>]
+    RepartitionExec: partitioning=RoundRobinBatch(<partitions>), input_partitions=<partitions>
+      NestedLoopJoinExec: join_type=Left
+        NestedLoopJoinExec: join_type=Left
+          NestedLoopJoinExec: join_type=Left
+            NestedLoopJoinExec: join_type=Left
+              NestedLoopJoinExec: join_type=Left
+                NestedLoopJoinExec: join_type=Left
+                  NestedLoopJoinExec: join_type=Left
+                    NestedLoopJoinExec: join_type=Left
+                      NestedLoopJoinExec: join_type=Left
+                        NestedLoopJoinExec: join_type=Left
+                          NestedLoopJoinExec: join_type=Left
+                            NestedLoopJoinExec: join_type=Left
+                              NestedLoopJoinExec: join_type=Left
+                                NestedLoopJoinExec: join_type=Left
+                                  NestedLoopJoinExec: join_type=Left
+                                    ProjectionExec: expr=[<exprs>]
+                                      CoalesceBatchesExec: target_batch_size=8192
+                                        CoalesceBatchesExec: target_batch_size=8192
+                                          FilterExec: _0@<id> = 1
+                                            DataSourceExec: partitions=1, partition_sizes=[<sizes>]
+                                    ProjectionExec: expr=[<exprs>]
+                                      AggregateExec: mode=Final, gby=[], aggr=[count(Int64(1))]
+                                        CoalescePartitionsExec
+                                          AggregateExec: mode=Partial, gby=[], aggr=[count(Int64(1))]
+                                            ProjectionExec: expr=[<exprs>]
+                                              CoalesceBatchesExec: target_batch_size=8192
+                                                CoalesceBatchesExec: target_batch_size=8192
+                                                  FilterExec: _10@<id> >= 1 AND _10@<id> <= 20
+                                                    RepartitionExec: partitioning=RoundRobinBatch(<partitions>), input_partitions=<partitions>
+                                                      DataSourceExec: partitions=1, partition_sizes=[<sizes>]
+                                  ProjectionExec: expr=[<exprs>]
+                                    AggregateExec: mode=Final, gby=[], aggr=[avg(store_sales.#<col>)]
+                                      CoalescePartitionsExec
+                                        AggregateExec: mode=Partial, gby=[], aggr=[avg(store_sales.#<col>)]
+                                          ProjectionExec: expr=[<exprs>]
+                                            CoalesceBatchesExec: target_batch_size=8192
+                                              CoalesceBatchesExec: target_batch_size=8192
+                                                FilterExec: _10@<id> >= 1 AND _10@<id> <= 20, projection=[_14@<id>]
+                                                  RepartitionExec: partitioning=RoundRobinBatch(<partitions>), input_partitions=<partitions>
+                                                    DataSourceExec: partitions=1, partition_sizes=[<sizes>]
+                                ProjectionExec: expr=[<exprs>]
+                                  AggregateExec: mode=Final, gby=[], aggr=[avg(store_sales.#<col>)]
+                                    CoalescePartitionsExec
+                                      AggregateExec: mode=Partial, gby=[], aggr=[avg(store_sales.#<col>)]
+                                        ProjectionExec: expr=[<exprs>]
+                                          CoalesceBatchesExec: target_batch_size=8192
+                                            CoalesceBatchesExec: target_batch_size=8192
+                                              FilterExec: _10@<id> >= 1 AND _10@<id> <= 20, projection=[_22@<id>]
+                                                RepartitionExec: partitioning=RoundRobinBatch(<partitions>), input_partitions=<partitions>
+                                                  DataSourceExec: partitions=1, partition_sizes=[<sizes>]
+                              ProjectionExec: expr=[<exprs>]
+                                AggregateExec: mode=Final, gby=[], aggr=[count(Int64(1))]
+                                  CoalescePartitionsExec
+                                    AggregateExec: mode=Partial, gby=[], aggr=[count(Int64(1))]
+                                      ProjectionExec: expr=[<exprs>]
+                                        CoalesceBatchesExec: target_batch_size=8192
+                                          CoalesceBatchesExec: target_batch_size=8192
+                                            FilterExec: _10@<id> >= 21 AND _10@<id> <= 40
+                                              RepartitionExec: partitioning=RoundRobinBatch(<partitions>), input_partitions=<partitions>
+                                                DataSourceExec: partitions=1, partition_sizes=[<sizes>]
+                            ProjectionExec: expr=[<exprs>]
+                              AggregateExec: mode=Final, gby=[], aggr=[avg(store_sales.#<col>)]
+                                CoalescePartitionsExec
+                                  AggregateExec: mode=Partial, gby=[], aggr=[avg(store_sales.#<col>)]
+                                    ProjectionExec: expr=[<exprs>]
+                                      CoalesceBatchesExec: target_batch_size=8192
+                                        CoalesceBatchesExec: target_batch_size=8192
+                                          FilterExec: _10@<id> >= 21 AND _10@<id> <= 40, projection=[_14@<id>]
+                                            RepartitionExec: partitioning=RoundRobinBatch(<partitions>), input_partitions=<partitions>
+                                              DataSourceExec: partitions=1, partition_sizes=[<sizes>]
+                          ProjectionExec: expr=[<exprs>]
+                            AggregateExec: mode=Final, gby=[], aggr=[avg(store_sales.#<col>)]
+                              CoalescePartitionsExec
+                                AggregateExec: mode=Partial, gby=[], aggr=[avg(store_sales.#<col>)]
+                                  ProjectionExec: expr=[<exprs>]
+                                    CoalesceBatchesExec: target_batch_size=8192
+                                      CoalesceBatchesExec: target_batch_size=8192
+                                        FilterExec: _10@<id> >= 21 AND _10@<id> <= 40, projection=[_22@<id>]
+                                          RepartitionExec: partitioning=RoundRobinBatch(<partitions>), input_partitions=<partitions>
+                                            DataSourceExec: partitions=1, partition_sizes=[<sizes>]
+                        ProjectionExec: expr=[<exprs>]
+                          AggregateExec: mode=Final, gby=[], aggr=[count(Int64(1))]
+                            CoalescePartitionsExec
+                              AggregateExec: mode=Partial, gby=[], aggr=[count(Int64(1))]
+                                ProjectionExec: expr=[<exprs>]
+                                  CoalesceBatchesExec: target_batch_size=8192
+                                    CoalesceBatchesExec: target_batch_size=8192
+                                      FilterExec: _10@<id> >= 41 AND _10@<id> <= 60
+                                        RepartitionExec: partitioning=RoundRobinBatch(<partitions>), input_partitions=<partitions>
+                                          DataSourceExec: partitions=1, partition_sizes=[<sizes>]
+                      ProjectionExec: expr=[<exprs>]
+                        AggregateExec: mode=Final, gby=[], aggr=[avg(store_sales.#<col>)]
+                          CoalescePartitionsExec
+                            AggregateExec: mode=Partial, gby=[], aggr=[avg(store_sales.#<col>)]
+                              ProjectionExec: expr=[<exprs>]
+                                CoalesceBatchesExec: target_batch_size=8192
+                                  CoalesceBatchesExec: target_batch_size=8192
+                                    FilterExec: _10@<id> >= 41 AND _10@<id> <= 60, projection=[_14@<id>]
+                                      RepartitionExec: partitioning=RoundRobinBatch(<partitions>), input_partitions=<partitions>
+                                        DataSourceExec: partitions=1, partition_sizes=[<sizes>]
+                    ProjectionExec: expr=[<exprs>]
+                      AggregateExec: mode=Final, gby=[], aggr=[avg(store_sales.#<col>)]
+                        CoalescePartitionsExec
+                          AggregateExec: mode=Partial, gby=[], aggr=[avg(store_sales.#<col>)]
+                            ProjectionExec: expr=[<exprs>]
+                              CoalesceBatchesExec: target_batch_size=8192
+                                CoalesceBatchesExec: target_batch_size=8192
+                                  FilterExec: _10@<id> >= 41 AND _10@<id> <= 60, projection=[_22@<id>]
+                                    RepartitionExec: partitioning=RoundRobinBatch(<partitions>), input_partitions=<partitions>
+                                      DataSourceExec: partitions=1, partition_sizes=[<sizes>]
+                  ProjectionExec: expr=[<exprs>]
+                    AggregateExec: mode=Final, gby=[], aggr=[count(Int64(1))]
+                      CoalescePartitionsExec
+                        AggregateExec: mode=Partial, gby=[], aggr=[count(Int64(1))]
+                          ProjectionExec: expr=[<exprs>]
+                            CoalesceBatchesExec: target_batch_size=8192
+                              CoalesceBatchesExec: target_batch_size=8192
+                                FilterExec: _10@<id> >= 61 AND _10@<id> <= 80
+                                  RepartitionExec: partitioning=RoundRobinBatch(<partitions>), input_partitions=<partitions>
+                                    DataSourceExec: partitions=1, partition_sizes=[<sizes>]
+                ProjectionExec: expr=[<exprs>]
+                  AggregateExec: mode=Final, gby=[], aggr=[avg(store_sales.#<col>)]
+                    CoalescePartitionsExec
+                      AggregateExec: mode=Partial, gby=[], aggr=[avg(store_sales.#<col>)]
+                        ProjectionExec: expr=[<exprs>]
+                          CoalesceBatchesExec: target_batch_size=8192
+                            CoalesceBatchesExec: target_batch_size=8192
+                              FilterExec: _10@<id> >= 61 AND _10@<id> <= 80, projection=[_14@<id>]
+                                RepartitionExec: partitioning=RoundRobinBatch(<partitions>), input_partitions=<partitions>
+                                  DataSourceExec: partitions=1, partition_sizes=[<sizes>]
+              ProjectionExec: expr=[<exprs>]
+                AggregateExec: mode=Final, gby=[], aggr=[avg(store_sales.#<col>)]
+                  CoalescePartitionsExec
+                    AggregateExec: mode=Partial, gby=[], aggr=[avg(store_sales.#<col>)]
+                      ProjectionExec: expr=[<exprs>]
+                        CoalesceBatchesExec: target_batch_size=8192
+                          CoalesceBatchesExec: target_batch_size=8192
+                            FilterExec: _10@<id> >= 61 AND _10@<id> <= 80, projection=[_22@<id>]
+                              RepartitionExec: partitioning=RoundRobinBatch(<partitions>), input_partitions=<partitions>
+                                DataSourceExec: partitions=1, partition_sizes=[<sizes>]
+            ProjectionExec: expr=[<exprs>]
+              AggregateExec: mode=Final, gby=[], aggr=[count(Int64(1))]
+                CoalescePartitionsExec
+                  AggregateExec: mode=Partial, gby=[], aggr=[count(Int64(1))]
+                    ProjectionExec: expr=[<exprs>]
+                      CoalesceBatchesExec: target_batch_size=8192
+                        CoalesceBatchesExec: target_batch_size=8192
+                          FilterExec: _10@<id> >= 81 AND _10@<id> <= 100
+                            RepartitionExec: partitioning=RoundRobinBatch(<partitions>), input_partitions=<partitions>
+                              DataSourceExec: partitions=1, partition_sizes=[<sizes>]
+          ProjectionExec: expr=[<exprs>]
+            AggregateExec: mode=Final, gby=[], aggr=[avg(store_sales.#<col>)]
+              CoalescePartitionsExec
+                AggregateExec: mode=Partial, gby=[], aggr=[avg(store_sales.#<col>)]
+                  ProjectionExec: expr=[<exprs>]
+                    CoalesceBatchesExec: target_batch_size=8192
+                      CoalesceBatchesExec: target_batch_size=8192
+                        FilterExec: _10@<id> >= 81 AND _10@<id> <= 100, projection=[_14@<id>]
+                          RepartitionExec: partitioning=RoundRobinBatch(<partitions>), input_partitions=<partitions>
+                            DataSourceExec: partitions=1, partition_sizes=[<sizes>]
+        ProjectionExec: expr=[<exprs>]
+          AggregateExec: mode=Final, gby=[], aggr=[avg(store_sales.#<col>)]
+            CoalescePartitionsExec
+              AggregateExec: mode=Partial, gby=[], aggr=[avg(store_sales.#<col>)]
+                ProjectionExec: expr=[<exprs>]
+                  CoalesceBatchesExec: target_batch_size=8192
+                    CoalesceBatchesExec: target_batch_size=8192
+                      FilterExec: _10@<id> >= 81 AND _10@<id> <= 100, projection=[_22@<id>]
+                        RepartitionExec: partitioning=RoundRobinBatch(<partitions>), input_partitions=<partitions>
+                          DataSourceExec: partitions=1, partition_sizes=[<sizes>]
+
+
+physical_plan after coalesce_async_exec_input:
+SAME TEXT AS ABOVE
+
+physical_plan after OutputRequirements:
+ProjectionExec: expr=[<exprs>]
+  RepartitionExec: partitioning=RoundRobinBatch(<partitions>), input_partitions=<partitions>
+    NestedLoopJoinExec: join_type=Left
+      NestedLoopJoinExec: join_type=Left
+        NestedLoopJoinExec: join_type=Left
+          NestedLoopJoinExec: join_type=Left
+            NestedLoopJoinExec: join_type=Left
+              NestedLoopJoinExec: join_type=Left
+                NestedLoopJoinExec: join_type=Left
+                  NestedLoopJoinExec: join_type=Left
+                    NestedLoopJoinExec: join_type=Left
+                      NestedLoopJoinExec: join_type=Left
+                        NestedLoopJoinExec: join_type=Left
+                          NestedLoopJoinExec: join_type=Left
+                            NestedLoopJoinExec: join_type=Left
+                              NestedLoopJoinExec: join_type=Left
+                                NestedLoopJoinExec: join_type=Left
+                                  ProjectionExec: expr=[<exprs>]
+                                    CoalesceBatchesExec: target_batch_size=8192
+                                      CoalesceBatchesExec: target_batch_size=8192
+                                        FilterExec: _0@<id> = 1
+                                          DataSourceExec: partitions=1, partition_sizes=[<sizes>]
+                                  ProjectionExec: expr=[<exprs>]
+                                    AggregateExec: mode=Final, gby=[], aggr=[count(Int64(1))]
+                                      CoalescePartitionsExec
+                                        AggregateExec: mode=Partial, gby=[], aggr=[count(Int64(1))]
+                                          ProjectionExec: expr=[<exprs>]
+                                            CoalesceBatchesExec: target_batch_size=8192
+                                              CoalesceBatchesExec: target_batch_size=8192
+                                                FilterExec: _10@<id> >= 1 AND _10@<id> <= 20
+                                                  RepartitionExec: partitioning=RoundRobinBatch(<partitions>), input_partitions=<partitions>
+                                                    DataSourceExec: partitions=1, partition_sizes=[<sizes>]
+                                ProjectionExec: expr=[<exprs>]
+                                  AggregateExec: mode=Final, gby=[], aggr=[avg(store_sales.#<col>)]
+                                    CoalescePartitionsExec
+                                      AggregateExec: mode=Partial, gby=[], aggr=[avg(store_sales.#<col>)]
+                                        ProjectionExec: expr=[<exprs>]
+                                          CoalesceBatchesExec: target_batch_size=8192
+                                            CoalesceBatchesExec: target_batch_size=8192
+                                              FilterExec: _10@<id> >= 1 AND _10@<id> <= 20, projection=[_14@<id>]
+                                                RepartitionExec: partitioning=RoundRobinBatch(<partitions>), input_partitions=<partitions>
+                                                  DataSourceExec: partitions=1, partition_sizes=[<sizes>]
+                              ProjectionExec: expr=[<exprs>]
+                                AggregateExec: mode=Final, gby=[], aggr=[avg(store_sales.#<col>)]
+                                  CoalescePartitionsExec
+                                    AggregateExec: mode=Partial, gby=[], aggr=[avg(store_sales.#<col>)]
+                                      ProjectionExec: expr=[<exprs>]
+                                        CoalesceBatchesExec: target_batch_size=8192
+                                          CoalesceBatchesExec: target_batch_size=8192
+                                            FilterExec: _10@<id> >= 1 AND _10@<id> <= 20, projection=[_22@<id>]
+                                              RepartitionExec: partitioning=RoundRobinBatch(<partitions>), input_partitions=<partitions>
+                                                DataSourceExec: partitions=1, partition_sizes=[<sizes>]
+                            ProjectionExec: expr=[<exprs>]
+                              AggregateExec: mode=Final, gby=[], aggr=[count(Int64(1))]
+                                CoalescePartitionsExec
+                                  AggregateExec: mode=Partial, gby=[], aggr=[count(Int64(1))]
+                                    ProjectionExec: expr=[<exprs>]
+                                      CoalesceBatchesExec: target_batch_size=8192
+                                        CoalesceBatchesExec: target_batch_size=8192
+                                          FilterExec: _10@<id> >= 21 AND _10@<id> <= 40
+                                            RepartitionExec: partitioning=RoundRobinBatch(<partitions>), input_partitions=<partitions>
+                                              DataSourceExec: partitions=1, partition_sizes=[<sizes>]
+                          ProjectionExec: expr=[<exprs>]
+                            AggregateExec: mode=Final, gby=[], aggr=[avg(store_sales.#<col>)]
+                              CoalescePartitionsExec
+                                AggregateExec: mode=Partial, gby=[], aggr=[avg(store_sales.#<col>)]
+                                  ProjectionExec: expr=[<exprs>]
+                                    CoalesceBatchesExec: target_batch_size=8192
+                                      CoalesceBatchesExec: target_batch_size=8192
+                                        FilterExec: _10@<id> >= 21 AND _10@<id> <= 40, projection=[_14@<id>]
+                                          RepartitionExec: partitioning=RoundRobinBatch(<partitions>), input_partitions=<partitions>
+                                            DataSourceExec: partitions=1, partition_sizes=[<sizes>]
+                        ProjectionExec: expr=[<exprs>]
+                          AggregateExec: mode=Final, gby=[], aggr=[avg(store_sales.#<col>)]
+                            CoalescePartitionsExec
+                              AggregateExec: mode=Partial, gby=[], aggr=[avg(store_sales.#<col>)]
+                                ProjectionExec: expr=[<exprs>]
+                                  CoalesceBatchesExec: target_batch_size=8192
+                                    CoalesceBatchesExec: target_batch_size=8192
+                                      FilterExec: _10@<id> >= 21 AND _10@<id> <= 40, projection=[_22@<id>]
+                                        RepartitionExec: partitioning=RoundRobinBatch(<partitions>), input_partitions=<partitions>
+                                          DataSourceExec: partitions=1, partition_sizes=[<sizes>]
+                      ProjectionExec: expr=[<exprs>]
+                        AggregateExec: mode=Final, gby=[], aggr=[count(Int64(1))]
+                          CoalescePartitionsExec
+                            AggregateExec: mode=Partial, gby=[], aggr=[count(Int64(1))]
+                              ProjectionExec: expr=[<exprs>]
+                                CoalesceBatchesExec: target_batch_size=8192
+                                  CoalesceBatchesExec: target_batch_size=8192
+                                    FilterExec: _10@<id> >= 41 AND _10@<id> <= 60
+                                      RepartitionExec: partitioning=RoundRobinBatch(<partitions>), input_partitions=<partitions>
+                                        DataSourceExec: partitions=1, partition_sizes=[<sizes>]
+                    ProjectionExec: expr=[<exprs>]
+                      AggregateExec: mode=Final, gby=[], aggr=[avg(store_sales.#<col>)]
+                        CoalescePartitionsExec
+                          AggregateExec: mode=Partial, gby=[], aggr=[avg(store_sales.#<col>)]
+                            ProjectionExec: expr=[<exprs>]
+                              CoalesceBatchesExec: target_batch_size=8192
+                                CoalesceBatchesExec: target_batch_size=8192
+                                  FilterExec: _10@<id> >= 41 AND _10@<id> <= 60, projection=[_14@<id>]
+                                    RepartitionExec: partitioning=RoundRobinBatch(<partitions>), input_partitions=<partitions>
+                                      DataSourceExec: partitions=1, partition_sizes=[<sizes>]
+                  ProjectionExec: expr=[<exprs>]
+                    AggregateExec: mode=Final, gby=[], aggr=[avg(store_sales.#<col>)]
+                      CoalescePartitionsExec
+                        AggregateExec: mode=Partial, gby=[], aggr=[avg(store_sales.#<col>)]
+                          ProjectionExec: expr=[<exprs>]
+                            CoalesceBatchesExec: target_batch_size=8192
+                              CoalesceBatchesExec: target_batch_size=8192
+                                FilterExec: _10@<id> >= 41 AND _10@<id> <= 60, projection=[_22@<id>]
+                                  RepartitionExec: partitioning=RoundRobinBatch(<partitions>), input_partitions=<partitions>
+                                    DataSourceExec: partitions=1, partition_sizes=[<sizes>]
+                ProjectionExec: expr=[<exprs>]
+                  AggregateExec: mode=Final, gby=[], aggr=[count(Int64(1))]
+                    CoalescePartitionsExec
+                      AggregateExec: mode=Partial, gby=[], aggr=[count(Int64(1))]
+                        ProjectionExec: expr=[<exprs>]
+                          CoalesceBatchesExec: target_batch_size=8192
+                            CoalesceBatchesExec: target_batch_size=8192
+                              FilterExec: _10@<id> >= 61 AND _10@<id> <= 80
+                                RepartitionExec: partitioning=RoundRobinBatch(<partitions>), input_partitions=<partitions>
+                                  DataSourceExec: partitions=1, partition_sizes=[<sizes>]
+              ProjectionExec: expr=[<exprs>]
+                AggregateExec: mode=Final, gby=[], aggr=[avg(store_sales.#<col>)]
+                  CoalescePartitionsExec
+                    AggregateExec: mode=Partial, gby=[], aggr=[avg(store_sales.#<col>)]
+                      ProjectionExec: expr=[<exprs>]
+                        CoalesceBatchesExec: target_batch_size=8192
+                          CoalesceBatchesExec: target_batch_size=8192
+                            FilterExec: _10@<id> >= 61 AND _10@<id> <= 80, projection=[_14@<id>]
+                              RepartitionExec: partitioning=RoundRobinBatch(<partitions>), input_partitions=<partitions>
+                                DataSourceExec: partitions=1, partition_sizes=[<sizes>]
+            ProjectionExec: expr=[<exprs>]
+              AggregateExec: mode=Final, gby=[], aggr=[avg(store_sales.#<col>)]
+                CoalescePartitionsExec
+                  AggregateExec: mode=Partial, gby=[], aggr=[avg(store_sales.#<col>)]
+                    ProjectionExec: expr=[<exprs>]
+                      CoalesceBatchesExec: target_batch_size=8192
+                        CoalesceBatchesExec: target_batch_size=8192
+                          FilterExec: _10@<id> >= 61 AND _10@<id> <= 80, projection=[_22@<id>]
+                            RepartitionExec: partitioning=RoundRobinBatch(<partitions>), input_partitions=<partitions>
+                              DataSourceExec: partitions=1, partition_sizes=[<sizes>]
+          ProjectionExec: expr=[<exprs>]
+            AggregateExec: mode=Final, gby=[], aggr=[count(Int64(1))]
+              CoalescePartitionsExec
+                AggregateExec: mode=Partial, gby=[], aggr=[count(Int64(1))]
+                  ProjectionExec: expr=[<exprs>]
+                    CoalesceBatchesExec: target_batch_size=8192
+                      CoalesceBatchesExec: target_batch_size=8192
+                        FilterExec: _10@<id> >= 81 AND _10@<id> <= 100
+                          RepartitionExec: partitioning=RoundRobinBatch(<partitions>), input_partitions=<partitions>
+                            DataSourceExec: partitions=1, partition_sizes=[<sizes>]
+        ProjectionExec: expr=[<exprs>]
+          AggregateExec: mode=Final, gby=[], aggr=[avg(store_sales.#<col>)]
+            CoalescePartitionsExec
+              AggregateExec: mode=Partial, gby=[], aggr=[avg(store_sales.#<col>)]
+                ProjectionExec: expr=[<exprs>]
+                  CoalesceBatchesExec: target_batch_size=8192
+                    CoalesceBatchesExec: target_batch_size=8192
+                      FilterExec: _10@<id> >= 81 AND _10@<id> <= 100, projection=[_14@<id>]
+                        RepartitionExec: partitioning=RoundRobinBatch(<partitions>), input_partitions=<partitions>
+                          DataSourceExec: partitions=1, partition_sizes=[<sizes>]
+      ProjectionExec: expr=[<exprs>]
+        AggregateExec: mode=Final, gby=[], aggr=[avg(store_sales.#<col>)]
+          CoalescePartitionsExec
+            AggregateExec: mode=Partial, gby=[], aggr=[avg(store_sales.#<col>)]
+              ProjectionExec: expr=[<exprs>]
+                CoalesceBatchesExec: target_batch_size=8192
+                  CoalesceBatchesExec: target_batch_size=8192
+                    FilterExec: _10@<id> >= 81 AND _10@<id> <= 100, projection=[_22@<id>]
+                      RepartitionExec: partitioning=RoundRobinBatch(<partitions>), input_partitions=<partitions>
+                        DataSourceExec: partitions=1, partition_sizes=[<sizes>]
+
+
+physical_plan after LimitAggregation:
+SAME TEXT AS ABOVE
+
+physical_plan after LimitPushPastWindows:
+SAME TEXT AS ABOVE
+
+physical_plan after LimitPushdown:
+SAME TEXT AS ABOVE
+
+physical_plan after ProjectionPushdown:
+SAME TEXT AS ABOVE
+
+physical_plan after EnsureCooperative:
+SAME TEXT AS ABOVE
+
+physical_plan after FilterPushdown(Post):
+SAME TEXT AS ABOVE
+
+physical_plan after RewriteExplicitRepartition:
+SAME TEXT AS ABOVE
+
+physical_plan after SanityCheckPlan:
+SAME TEXT AS ABOVE
+
+physical_plan:
+ProjectionExec: expr=[<exprs>]
+  ProjectionExec: expr=[<exprs>]
+    RepartitionExec: partitioning=RoundRobinBatch(<partitions>), input_partitions=<partitions>
+      NestedLoopJoinExec: join_type=Left
+        NestedLoopJoinExec: join_type=Left
+          NestedLoopJoinExec: join_type=Left
+            NestedLoopJoinExec: join_type=Left
+              NestedLoopJoinExec: join_type=Left
+                NestedLoopJoinExec: join_type=Left
+                  NestedLoopJoinExec: join_type=Left
+                    NestedLoopJoinExec: join_type=Left
+                      NestedLoopJoinExec: join_type=Left
+                        NestedLoopJoinExec: join_type=Left
+                          NestedLoopJoinExec: join_type=Left
+                            NestedLoopJoinExec: join_type=Left
+                              NestedLoopJoinExec: join_type=Left
+                                NestedLoopJoinExec: join_type=Left
+                                  NestedLoopJoinExec: join_type=Left
+                                    ProjectionExec: expr=[<exprs>]
+                                      CoalesceBatchesExec: target_batch_size=8192
+                                        CoalesceBatchesExec: target_batch_size=8192
+                                          FilterExec: _0@<id> = 1
+                                            DataSourceExec: partitions=1, partition_sizes=[<sizes>]
+                                    ProjectionExec: expr=[<exprs>]
+                                      AggregateExec: mode=Final, gby=[], aggr=[count(Int64(1))]
+                                        CoalescePartitionsExec
+                                          AggregateExec: mode=Partial, gby=[], aggr=[count(Int64(1))]
+                                            ProjectionExec: expr=[<exprs>]
+                                              CoalesceBatchesExec: target_batch_size=8192
+                                                CoalesceBatchesExec: target_batch_size=8192
+                                                  FilterExec: _10@<id> >= 1 AND _10@<id> <= 20
+                                                    RepartitionExec: partitioning=RoundRobinBatch(<partitions>), input_partitions=<partitions>
+                                                      DataSourceExec: partitions=1, partition_sizes=[<sizes>]
+                                  ProjectionExec: expr=[<exprs>]
+                                    AggregateExec: mode=Final, gby=[], aggr=[avg(store_sales.#<col>)]
+                                      CoalescePartitionsExec
+                                        AggregateExec: mode=Partial, gby=[], aggr=[avg(store_sales.#<col>)]
+                                          ProjectionExec: expr=[<exprs>]
+                                            CoalesceBatchesExec: target_batch_size=8192
+                                              CoalesceBatchesExec: target_batch_size=8192
+                                                FilterExec: _10@<id> >= 1 AND _10@<id> <= 20, projection=[_14@<id>]
+                                                  RepartitionExec: partitioning=RoundRobinBatch(<partitions>), input_partitions=<partitions>
+                                                    DataSourceExec: partitions=1, partition_sizes=[<sizes>]
+                                ProjectionExec: expr=[<exprs>]
+                                  AggregateExec: mode=Final, gby=[], aggr=[avg(store_sales.#<col>)]
+                                    CoalescePartitionsExec
+                                      AggregateExec: mode=Partial, gby=[], aggr=[avg(store_sales.#<col>)]
+                                        ProjectionExec: expr=[<exprs>]
+                                          CoalesceBatchesExec: target_batch_size=8192
+                                            CoalesceBatchesExec: target_batch_size=8192
+                                              FilterExec: _10@<id> >= 1 AND _10@<id> <= 20, projection=[_22@<id>]
+                                                RepartitionExec: partitioning=RoundRobinBatch(<partitions>), input_partitions=<partitions>
+                                                  DataSourceExec: partitions=1, partition_sizes=[<sizes>]
+                              ProjectionExec: expr=[<exprs>]
+                                AggregateExec: mode=Final, gby=[], aggr=[count(Int64(1))]
+                                  CoalescePartitionsExec
+                                    AggregateExec: mode=Partial, gby=[], aggr=[count(Int64(1))]
+                                      ProjectionExec: expr=[<exprs>]
+                                        CoalesceBatchesExec: target_batch_size=8192
+                                          CoalesceBatchesExec: target_batch_size=8192
+                                            FilterExec: _10@<id> >= 21 AND _10@<id> <= 40
+                                              RepartitionExec: partitioning=RoundRobinBatch(<partitions>), input_partitions=<partitions>
+                                                DataSourceExec: partitions=1, partition_sizes=[<sizes>]
+                            ProjectionExec: expr=[<exprs>]
+                              AggregateExec: mode=Final, gby=[], aggr=[avg(store_sales.#<col>)]
+                                CoalescePartitionsExec
+                                  AggregateExec: mode=Partial, gby=[], aggr=[avg(store_sales.#<col>)]
+                                    ProjectionExec: expr=[<exprs>]
+                                      CoalesceBatchesExec: target_batch_size=8192
+                                        CoalesceBatchesExec: target_batch_size=8192
+                                          FilterExec: _10@<id> >= 21 AND _10@<id> <= 40, projection=[_14@<id>]
+                                            RepartitionExec: partitioning=RoundRobinBatch(<partitions>), input_partitions=<partitions>
+                                              DataSourceExec: partitions=1, partition_sizes=[<sizes>]
+                          ProjectionExec: expr=[<exprs>]
+                            AggregateExec: mode=Final, gby=[], aggr=[avg(store_sales.#<col>)]
+                              CoalescePartitionsExec
+                                AggregateExec: mode=Partial, gby=[], aggr=[avg(store_sales.#<col>)]
+                                  ProjectionExec: expr=[<exprs>]
+                                    CoalesceBatchesExec: target_batch_size=8192
+                                      CoalesceBatchesExec: target_batch_size=8192
+                                        FilterExec: _10@<id> >= 21 AND _10@<id> <= 40, projection=[_22@<id>]
+                                          RepartitionExec: partitioning=RoundRobinBatch(<partitions>), input_partitions=<partitions>
+                                            DataSourceExec: partitions=1, partition_sizes=[<sizes>]
+                        ProjectionExec: expr=[<exprs>]
+                          AggregateExec: mode=Final, gby=[], aggr=[count(Int64(1))]
+                            CoalescePartitionsExec
+                              AggregateExec: mode=Partial, gby=[], aggr=[count(Int64(1))]
+                                ProjectionExec: expr=[<exprs>]
+                                  CoalesceBatchesExec: target_batch_size=8192
+                                    CoalesceBatchesExec: target_batch_size=8192
+                                      FilterExec: _10@<id> >= 41 AND _10@<id> <= 60
+                                        RepartitionExec: partitioning=RoundRobinBatch(<partitions>), input_partitions=<partitions>
+                                          DataSourceExec: partitions=1, partition_sizes=[<sizes>]
+                      ProjectionExec: expr=[<exprs>]
+                        AggregateExec: mode=Final, gby=[], aggr=[avg(store_sales.#<col>)]
+                          CoalescePartitionsExec
+                            AggregateExec: mode=Partial, gby=[], aggr=[avg(store_sales.#<col>)]
+                              ProjectionExec: expr=[<exprs>]
+                                CoalesceBatchesExec: target_batch_size=8192
+                                  CoalesceBatchesExec: target_batch_size=8192
+                                    FilterExec: _10@<id> >= 41 AND _10@<id> <= 60, projection=[_14@<id>]
+                                      RepartitionExec: partitioning=RoundRobinBatch(<partitions>), input_partitions=<partitions>
+                                        DataSourceExec: partitions=1, partition_sizes=[<sizes>]
+                    ProjectionExec: expr=[<exprs>]
+                      AggregateExec: mode=Final, gby=[], aggr=[avg(store_sales.#<col>)]
+                        CoalescePartitionsExec
+                          AggregateExec: mode=Partial, gby=[], aggr=[avg(store_sales.#<col>)]
+                            ProjectionExec: expr=[<exprs>]
+                              CoalesceBatchesExec: target_batch_size=8192
+                                CoalesceBatchesExec: target_batch_size=8192
+                                  FilterExec: _10@<id> >= 41 AND _10@<id> <= 60, projection=[_22@<id>]
+                                    RepartitionExec: partitioning=RoundRobinBatch(<partitions>), input_partitions=<partitions>
+                                      DataSourceExec: partitions=1, partition_sizes=[<sizes>]
+                  ProjectionExec: expr=[<exprs>]
+                    AggregateExec: mode=Final, gby=[], aggr=[count(Int64(1))]
+                      CoalescePartitionsExec
+                        AggregateExec: mode=Partial, gby=[], aggr=[count(Int64(1))]
+                          ProjectionExec: expr=[<exprs>]
+                            CoalesceBatchesExec: target_batch_size=8192
+                              CoalesceBatchesExec: target_batch_size=8192
+                                FilterExec: _10@<id> >= 61 AND _10@<id> <= 80
+                                  RepartitionExec: partitioning=RoundRobinBatch(<partitions>), input_partitions=<partitions>
+                                    DataSourceExec: partitions=1, partition_sizes=[<sizes>]
+                ProjectionExec: expr=[<exprs>]
+                  AggregateExec: mode=Final, gby=[], aggr=[avg(store_sales.#<col>)]
+                    CoalescePartitionsExec
+                      AggregateExec: mode=Partial, gby=[], aggr=[avg(store_sales.#<col>)]
+                        ProjectionExec: expr=[<exprs>]
+                          CoalesceBatchesExec: target_batch_size=8192
+                            CoalesceBatchesExec: target_batch_size=8192
+                              FilterExec: _10@<id> >= 61 AND _10@<id> <= 80, projection=[_14@<id>]
+                                RepartitionExec: partitioning=RoundRobinBatch(<partitions>), input_partitions=<partitions>
+                                  DataSourceExec: partitions=1, partition_sizes=[<sizes>]
+              ProjectionExec: expr=[<exprs>]
+                AggregateExec: mode=Final, gby=[], aggr=[avg(store_sales.#<col>)]
+                  CoalescePartitionsExec
+                    AggregateExec: mode=Partial, gby=[], aggr=[avg(store_sales.#<col>)]
+                      ProjectionExec: expr=[<exprs>]
+                        CoalesceBatchesExec: target_batch_size=8192
+                          CoalesceBatchesExec: target_batch_size=8192
+                            FilterExec: _10@<id> >= 61 AND _10@<id> <= 80, projection=[_22@<id>]
+                              RepartitionExec: partitioning=RoundRobinBatch(<partitions>), input_partitions=<partitions>
+                                DataSourceExec: partitions=1, partition_sizes=[<sizes>]
+            ProjectionExec: expr=[<exprs>]
+              AggregateExec: mode=Final, gby=[], aggr=[count(Int64(1))]
+                CoalescePartitionsExec
+                  AggregateExec: mode=Partial, gby=[], aggr=[count(Int64(1))]
+                    ProjectionExec: expr=[<exprs>]
+                      CoalesceBatchesExec: target_batch_size=8192
+                        CoalesceBatchesExec: target_batch_size=8192
+                          FilterExec: _10@<id> >= 81 AND _10@<id> <= 100
+                            RepartitionExec: partitioning=RoundRobinBatch(<partitions>), input_partitions=<partitions>
+                              DataSourceExec: partitions=1, partition_sizes=[<sizes>]
+          ProjectionExec: expr=[<exprs>]
+            AggregateExec: mode=Final, gby=[], aggr=[avg(store_sales.#<col>)]
+              CoalescePartitionsExec
+                AggregateExec: mode=Partial, gby=[], aggr=[avg(store_sales.#<col>)]
+                  ProjectionExec: expr=[<exprs>]
+                    CoalesceBatchesExec: target_batch_size=8192
+                      CoalesceBatchesExec: target_batch_size=8192
+                        FilterExec: _10@<id> >= 81 AND _10@<id> <= 100, projection=[_14@<id>]
+                          RepartitionExec: partitioning=RoundRobinBatch(<partitions>), input_partitions=<partitions>
+                            DataSourceExec: partitions=1, partition_sizes=[<sizes>]
+        ProjectionExec: expr=[<exprs>]
+          AggregateExec: mode=Final, gby=[], aggr=[avg(store_sales.#<col>)]
+            CoalescePartitionsExec
+              AggregateExec: mode=Partial, gby=[], aggr=[avg(store_sales.#<col>)]
+                ProjectionExec: expr=[<exprs>]
+                  CoalesceBatchesExec: target_batch_size=8192
+                    CoalesceBatchesExec: target_batch_size=8192
+                      FilterExec: _10@<id> >= 81 AND _10@<id> <= 100, projection=[_22@<id>]
+                        RepartitionExec: partitioning=RoundRobinBatch(<partitions>), input_partitions=<partitions>
+                          DataSourceExec: partitions=1, partition_sizes=[<sizes>]
+
+
+== Physical Plan ==
+ProjectionExec: expr=[<exprs>]
+  ProjectionExec: expr=[<exprs>]
+    RepartitionExec: partitioning=RoundRobinBatch(<partitions>), input_partitions=<partitions>
+      NestedLoopJoinExec: join_type=Left
+        NestedLoopJoinExec: join_type=Left
+          NestedLoopJoinExec: join_type=Left
+            NestedLoopJoinExec: join_type=Left
+              NestedLoopJoinExec: join_type=Left
+                NestedLoopJoinExec: join_type=Left
+                  NestedLoopJoinExec: join_type=Left
+                    NestedLoopJoinExec: join_type=Left
+                      NestedLoopJoinExec: join_type=Left
+                        NestedLoopJoinExec: join_type=Left
+                          NestedLoopJoinExec: join_type=Left
+                            NestedLoopJoinExec: join_type=Left
+                              NestedLoopJoinExec: join_type=Left
+                                NestedLoopJoinExec: join_type=Left
+                                  NestedLoopJoinExec: join_type=Left
+                                    ProjectionExec: expr=[<exprs>]
+                                      CoalesceBatchesExec: target_batch_size=8192
+                                        CoalesceBatchesExec: target_batch_size=8192
+                                          FilterExec: _0@<id> = 1
+                                            DataSourceExec: partitions=1, partition_sizes=[<sizes>]
+                                    ProjectionExec: expr=[<exprs>]
+                                      AggregateExec: mode=Final, gby=[], aggr=[count(Int64(1))]
+                                        CoalescePartitionsExec
+                                          AggregateExec: mode=Partial, gby=[], aggr=[count(Int64(1))]
+                                            ProjectionExec: expr=[<exprs>]
+                                              CoalesceBatchesExec: target_batch_size=8192
+                                                CoalesceBatchesExec: target_batch_size=8192
+                                                  FilterExec: _10@<id> >= 1 AND _10@<id> <= 20
+                                                    RepartitionExec: partitioning=RoundRobinBatch(<partitions>), input_partitions=<partitions>
+                                                      DataSourceExec: partitions=1, partition_sizes=[<sizes>]
+                                  ProjectionExec: expr=[<exprs>]
+                                    AggregateExec: mode=Final, gby=[], aggr=[avg(store_sales.#<col>)]
+                                      CoalescePartitionsExec
+                                        AggregateExec: mode=Partial, gby=[], aggr=[avg(store_sales.#<col>)]
+                                          ProjectionExec: expr=[<exprs>]
+                                            CoalesceBatchesExec: target_batch_size=8192
+                                              CoalesceBatchesExec: target_batch_size=8192
+                                                FilterExec: _10@<id> >= 1 AND _10@<id> <= 20, projection=[_14@<id>]
+                                                  RepartitionExec: partitioning=RoundRobinBatch(<partitions>), input_partitions=<partitions>
+                                                    DataSourceExec: partitions=1, partition_sizes=[<sizes>]
+                                ProjectionExec: expr=[<exprs>]
+                                  AggregateExec: mode=Final, gby=[], aggr=[avg(store_sales.#<col>)]
+                                    CoalescePartitionsExec
+                                      AggregateExec: mode=Partial, gby=[], aggr=[avg(store_sales.#<col>)]
+                                        ProjectionExec: expr=[<exprs>]
+                                          CoalesceBatchesExec: target_batch_size=8192
+                                            CoalesceBatchesExec: target_batch_size=8192
+                                              FilterExec: _10@<id> >= 1 AND _10@<id> <= 20, projection=[_22@<id>]
+                                                RepartitionExec: partitioning=RoundRobinBatch(<partitions>), input_partitions=<partitions>
+                                                  DataSourceExec: partitions=1, partition_sizes=[<sizes>]
+                              ProjectionExec: expr=[<exprs>]
+                                AggregateExec: mode=Final, gby=[], aggr=[count(Int64(1))]
+                                  CoalescePartitionsExec
+                                    AggregateExec: mode=Partial, gby=[], aggr=[count(Int64(1))]
+                                      ProjectionExec: expr=[<exprs>]
+                                        CoalesceBatchesExec: target_batch_size=8192
+                                          CoalesceBatchesExec: target_batch_size=8192
+                                            FilterExec: _10@<id> >= 21 AND _10@<id> <= 40
+                                              RepartitionExec: partitioning=RoundRobinBatch(<partitions>), input_partitions=<partitions>
+                                                DataSourceExec: partitions=1, partition_sizes=[<sizes>]
+                            ProjectionExec: expr=[<exprs>]
+                              AggregateExec: mode=Final, gby=[], aggr=[avg(store_sales.#<col>)]
+                                CoalescePartitionsExec
+                                  AggregateExec: mode=Partial, gby=[], aggr=[avg(store_sales.#<col>)]
+                                    ProjectionExec: expr=[<exprs>]
+                                      CoalesceBatchesExec: target_batch_size=8192
+                                        CoalesceBatchesExec: target_batch_size=8192
+                                          FilterExec: _10@<id> >= 21 AND _10@<id> <= 40, projection=[_14@<id>]
+                                            RepartitionExec: partitioning=RoundRobinBatch(<partitions>), input_partitions=<partitions>
+                                              DataSourceExec: partitions=1, partition_sizes=[<sizes>]
+                          ProjectionExec: expr=[<exprs>]
+                            AggregateExec: mode=Final, gby=[], aggr=[avg(store_sales.#<col>)]
+                              CoalescePartitionsExec
+                                AggregateExec: mode=Partial, gby=[], aggr=[avg(store_sales.#<col>)]
+                                  ProjectionExec: expr=[<exprs>]
+                                    CoalesceBatchesExec: target_batch_size=8192
+                                      CoalesceBatchesExec: target_batch_size=8192
+                                        FilterExec: _10@<id> >= 21 AND _10@<id> <= 40, projection=[_22@<id>]
+                                          RepartitionExec: partitioning=RoundRobinBatch(<partitions>), input_partitions=<partitions>
+                                            DataSourceExec: partitions=1, partition_sizes=[<sizes>]
+                        ProjectionExec: expr=[<exprs>]
+                          AggregateExec: mode=Final, gby=[], aggr=[count(Int64(1))]
+                            CoalescePartitionsExec
+                              AggregateExec: mode=Partial, gby=[], aggr=[count(Int64(1))]
+                                ProjectionExec: expr=[<exprs>]
+                                  CoalesceBatchesExec: target_batch_size=8192
+                                    CoalesceBatchesExec: target_batch_size=8192
+                                      FilterExec: _10@<id> >= 41 AND _10@<id> <= 60
+                                        RepartitionExec: partitioning=RoundRobinBatch(<partitions>), input_partitions=<partitions>
+                                          DataSourceExec: partitions=1, partition_sizes=[<sizes>]
+                      ProjectionExec: expr=[<exprs>]
+                        AggregateExec: mode=Final, gby=[], aggr=[avg(store_sales.#<col>)]
+                          CoalescePartitionsExec
+                            AggregateExec: mode=Partial, gby=[], aggr=[avg(store_sales.#<col>)]
+                              ProjectionExec: expr=[<exprs>]
+                                CoalesceBatchesExec: target_batch_size=8192
+                                  CoalesceBatchesExec: target_batch_size=8192
+                                    FilterExec: _10@<id> >= 41 AND _10@<id> <= 60, projection=[_14@<id>]
+                                      RepartitionExec: partitioning=RoundRobinBatch(<partitions>), input_partitions=<partitions>
+                                        DataSourceExec: partitions=1, partition_sizes=[<sizes>]
+                    ProjectionExec: expr=[<exprs>]
+                      AggregateExec: mode=Final, gby=[], aggr=[avg(store_sales.#<col>)]
+                        CoalescePartitionsExec
+                          AggregateExec: mode=Partial, gby=[], aggr=[avg(store_sales.#<col>)]
+                            ProjectionExec: expr=[<exprs>]
+                              CoalesceBatchesExec: target_batch_size=8192
+                                CoalesceBatchesExec: target_batch_size=8192
+                                  FilterExec: _10@<id> >= 41 AND _10@<id> <= 60, projection=[_22@<id>]
+                                    RepartitionExec: partitioning=RoundRobinBatch(<partitions>), input_partitions=<partitions>
+                                      DataSourceExec: partitions=1, partition_sizes=[<sizes>]
+                  ProjectionExec: expr=[<exprs>]
+                    AggregateExec: mode=Final, gby=[], aggr=[count(Int64(1))]
+                      CoalescePartitionsExec
+                        AggregateExec: mode=Partial, gby=[], aggr=[count(Int64(1))]
+                          ProjectionExec: expr=[<exprs>]
+                            CoalesceBatchesExec: target_batch_size=8192
+                              CoalesceBatchesExec: target_batch_size=8192
+                                FilterExec: _10@<id> >= 61 AND _10@<id> <= 80
+                                  RepartitionExec: partitioning=RoundRobinBatch(<partitions>), input_partitions=<partitions>
+                                    DataSourceExec: partitions=1, partition_sizes=[<sizes>]
+                ProjectionExec: expr=[<exprs>]
+                  AggregateExec: mode=Final, gby=[], aggr=[avg(store_sales.#<col>)]
+                    CoalescePartitionsExec
+                      AggregateExec: mode=Partial, gby=[], aggr=[avg(store_sales.#<col>)]
+                        ProjectionExec: expr=[<exprs>]
+                          CoalesceBatchesExec: target_batch_size=8192
+                            CoalesceBatchesExec: target_batch_size=8192
+                              FilterExec: _10@<id> >= 61 AND _10@<id> <= 80, projection=[_14@<id>]
+                                RepartitionExec: partitioning=RoundRobinBatch(<partitions>), input_partitions=<partitions>
+                                  DataSourceExec: partitions=1, partition_sizes=[<sizes>]
+              ProjectionExec: expr=[<exprs>]
+                AggregateExec: mode=Final, gby=[], aggr=[avg(store_sales.#<col>)]
+                  CoalescePartitionsExec
+                    AggregateExec: mode=Partial, gby=[], aggr=[avg(store_sales.#<col>)]
+                      ProjectionExec: expr=[<exprs>]
+                        CoalesceBatchesExec: target_batch_size=8192
+                          CoalesceBatchesExec: target_batch_size=8192
+                            FilterExec: _10@<id> >= 61 AND _10@<id> <= 80, projection=[_22@<id>]
+                              RepartitionExec: partitioning=RoundRobinBatch(<partitions>), input_partitions=<partitions>
+                                DataSourceExec: partitions=1, partition_sizes=[<sizes>]
+            ProjectionExec: expr=[<exprs>]
+              AggregateExec: mode=Final, gby=[], aggr=[count(Int64(1))]
+                CoalescePartitionsExec
+                  AggregateExec: mode=Partial, gby=[], aggr=[count(Int64(1))]
+                    ProjectionExec: expr=[<exprs>]
+                      CoalesceBatchesExec: target_batch_size=8192
+                        CoalesceBatchesExec: target_batch_size=8192
+                          FilterExec: _10@<id> >= 81 AND _10@<id> <= 100
+                            RepartitionExec: partitioning=RoundRobinBatch(<partitions>), input_partitions=<partitions>
+                              DataSourceExec: partitions=1, partition_sizes=[<sizes>]
+          ProjectionExec: expr=[<exprs>]
+            AggregateExec: mode=Final, gby=[], aggr=[avg(store_sales.#<col>)]
+              CoalescePartitionsExec
+                AggregateExec: mode=Partial, gby=[], aggr=[avg(store_sales.#<col>)]
+                  ProjectionExec: expr=[<exprs>]
+                    CoalesceBatchesExec: target_batch_size=8192
+                      CoalesceBatchesExec: target_batch_size=8192
+                        FilterExec: _10@<id> >= 81 AND _10@<id> <= 100, projection=[_14@<id>]
+                          RepartitionExec: partitioning=RoundRobinBatch(<partitions>), input_partitions=<partitions>
+                            DataSourceExec: partitions=1, partition_sizes=[<sizes>]
+        ProjectionExec: expr=[<exprs>]
+          AggregateExec: mode=Final, gby=[], aggr=[avg(store_sales.#<col>)]
+            CoalescePartitionsExec
+              AggregateExec: mode=Partial, gby=[], aggr=[avg(store_sales.#<col>)]
+                ProjectionExec: expr=[<exprs>]
+                  CoalesceBatchesExec: target_batch_size=8192
+                    CoalesceBatchesExec: target_batch_size=8192
+                      FilterExec: _10@<id> >= 81 AND _10@<id> <= 100, projection=[_22@<id>]
+                        RepartitionExec: partitioning=RoundRobinBatch(<partitions>), input_partitions=<partitions>
+                          DataSourceExec: partitions=1, partition_sizes=[<sizes>]

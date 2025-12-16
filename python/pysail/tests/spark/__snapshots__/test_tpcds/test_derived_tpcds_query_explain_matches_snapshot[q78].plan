@@ -1,0 +1,2280 @@
+== Codegen ==
+Whole-stage codegen is not supported; showing physical plan instead.
+
+== Plan Steps ==
+initial_logical_plan:
+Limit: skip=0, fetch=Int32(100)
+  Projection: <exprs>
+    Sort: <exprs>
+      Projection: <exprs>
+        Filter: (coalesce(ws.#<col>, Int32(0)) > Int32(0) OR coalesce(cs.#<col>, Int32(0)) > Int32(0)) AND ss.#<col> = Int32(2001)
+          Left Join:  Filter: cs.#<col> = ss.#<col> AND cs.#<col> = ss.#<col> AND cs.#<col> = ss.#<col>
+            Left Join:  Filter: ws.#<col> = ss.#<col> AND ws.#<col> = ss.#<col> AND ws.#<col> = ss.#<col>
+              SubqueryAlias: ss
+                SubqueryAlias: ss
+                  Projection: <exprs>
+                    Aggregate: groupBy=[[date_dim.#<col>, store_sales.#<col>, store_sales.#<col>]], aggr=[[sum(store_sales.#<col>), sum(store_sales.#<col>), sum(store_sales.#<col>)]]
+                      Filter: store_returns.#<col> IS NULL
+                        Inner Join:  Filter: store_sales.#<col> = date_dim.#<col>
+                          Left Join:  Filter: store_returns.#<col> = store_sales.#<col> AND store_sales.#<col> = store_returns.#<col>
+                            Projection: <exprs>
+                              Projection: <exprs>
+                                SubqueryAlias: store_sales
+                                  Projection: <exprs>
+                                    Projection: <exprs>
+                                      TableScan: ?table?
+                            Projection: <exprs>
+                              Projection: <exprs>
+                                SubqueryAlias: store_returns
+                                  Projection: <exprs>
+                                    Projection: <exprs>
+                                      TableScan: ?table?
+                          Projection: <exprs>
+                            Projection: <exprs>
+                              SubqueryAlias: date_dim
+                                Projection: <exprs>
+                                  Projection: <exprs>
+                                    TableScan: ?table?
+              SubqueryAlias: ws
+                SubqueryAlias: ws
+                  Projection: <exprs>
+                    Aggregate: groupBy=[[date_dim.#<col>, web_sales.#<col>, web_sales.#<col>]], aggr=[[sum(web_sales.#<col>), sum(web_sales.#<col>), sum(web_sales.#<col>)]]
+                      Filter: web_returns.#<col> IS NULL
+                        Inner Join:  Filter: web_sales.#<col> = date_dim.#<col>
+                          Left Join:  Filter: web_returns.#<col> = web_sales.#<col> AND web_sales.#<col> = web_returns.#<col>
+                            Projection: <exprs>
+                              Projection: <exprs>
+                                SubqueryAlias: web_sales
+                                  Projection: <exprs>
+                                    Projection: <exprs>
+                                      TableScan: ?table?
+                            Projection: <exprs>
+                              Projection: <exprs>
+                                SubqueryAlias: web_returns
+                                  Projection: <exprs>
+                                    Projection: <exprs>
+                                      TableScan: ?table?
+                          Projection: <exprs>
+                            Projection: <exprs>
+                              SubqueryAlias: date_dim
+                                Projection: <exprs>
+                                  Projection: <exprs>
+                                    TableScan: ?table?
+            SubqueryAlias: cs
+              SubqueryAlias: cs
+                Projection: <exprs>
+                  Aggregate: groupBy=[[date_dim.#<col>, catalog_sales.#<col>, catalog_sales.#<col>]], aggr=[[sum(catalog_sales.#<col>), sum(catalog_sales.#<col>), sum(catalog_sales.#<col>)]]
+                    Filter: catalog_returns.#<col> IS NULL
+                      Inner Join:  Filter: catalog_sales.#<col> = date_dim.#<col>
+                        Left Join:  Filter: catalog_returns.#<col> = catalog_sales.#<col> AND catalog_sales.#<col> = catalog_returns.#<col>
+                          Projection: <exprs>
+                            Projection: <exprs>
+                              SubqueryAlias: catalog_sales
+                                Projection: <exprs>
+                                  Projection: <exprs>
+                                    TableScan: ?table?
+                          Projection: <exprs>
+                            Projection: <exprs>
+                              SubqueryAlias: catalog_returns
+                                Projection: <exprs>
+                                  Projection: <exprs>
+                                    TableScan: ?table?
+                        Projection: <exprs>
+                          Projection: <exprs>
+                            SubqueryAlias: date_dim
+                              Projection: <exprs>
+                                Projection: <exprs>
+                                  TableScan: ?table?
+
+logical_plan after resolve_grouping_function:
+SAME TEXT AS ABOVE
+
+logical_plan after type_coercion:
+Limit: skip=0, fetch=CAST(Int32(100) AS Int64)
+  Projection: <exprs>
+    Sort: <exprs>
+      Projection: <exprs>
+        Filter: (coalesce(ws.#<col>, CAST(Int32(0) AS Float64)) > CAST(Int32(0) AS Float64) OR coalesce(cs.#<col>, CAST(Int32(0) AS Float64)) > CAST(Int32(0) AS Float64)) AND ss.#<col> = CAST(Int32(2001) AS Int64)
+          Left Join:  Filter: cs.#<col> = ss.#<col> AND cs.#<col> = ss.#<col> AND cs.#<col> = ss.#<col>
+            Left Join:  Filter: ws.#<col> = ss.#<col> AND ws.#<col> = ss.#<col> AND ws.#<col> = ss.#<col>
+              SubqueryAlias: ss
+                SubqueryAlias: ss
+                  Projection: <exprs>
+                    Aggregate: groupBy=[[date_dim.#<col>, store_sales.#<col>, store_sales.#<col>]], aggr=[[sum(store_sales.#<col>), sum(store_sales.#<col>), sum(store_sales.#<col>)]]
+                      Filter: store_returns.#<col> IS NULL
+                        Inner Join:  Filter: store_sales.#<col> = CAST(date_dim.#<col> AS Float64)
+                          Left Join:  Filter: store_returns.#<col> = store_sales.#<col> AND store_sales.#<col> = store_returns.#<col>
+                            Projection: <exprs>
+                              Projection: <exprs>
+                                SubqueryAlias: store_sales
+                                  Projection: <exprs>
+                                    Projection: <exprs>
+                                      TableScan: ?table?
+                            Projection: <exprs>
+                              Projection: <exprs>
+                                SubqueryAlias: store_returns
+                                  Projection: <exprs>
+                                    Projection: <exprs>
+                                      TableScan: ?table?
+                          Projection: <exprs>
+                            Projection: <exprs>
+                              SubqueryAlias: date_dim
+                                Projection: <exprs>
+                                  Projection: <exprs>
+                                    TableScan: ?table?
+              SubqueryAlias: ws
+                SubqueryAlias: ws
+                  Projection: <exprs>
+                    Aggregate: groupBy=[[date_dim.#<col>, web_sales.#<col>, web_sales.#<col>]], aggr=[[sum(web_sales.#<col>), sum(web_sales.#<col>), sum(web_sales.#<col>)]]
+                      Filter: web_returns.#<col> IS NULL
+                        Inner Join:  Filter: web_sales.#<col> = CAST(date_dim.#<col> AS Float64)
+                          Left Join:  Filter: web_returns.#<col> = web_sales.#<col> AND web_sales.#<col> = web_returns.#<col>
+                            Projection: <exprs>
+                              Projection: <exprs>
+                                SubqueryAlias: web_sales
+                                  Projection: <exprs>
+                                    Projection: <exprs>
+                                      TableScan: ?table?
+                            Projection: <exprs>
+                              Projection: <exprs>
+                                SubqueryAlias: web_returns
+                                  Projection: <exprs>
+                                    Projection: <exprs>
+                                      TableScan: ?table?
+                          Projection: <exprs>
+                            Projection: <exprs>
+                              SubqueryAlias: date_dim
+                                Projection: <exprs>
+                                  Projection: <exprs>
+                                    TableScan: ?table?
+            SubqueryAlias: cs
+              SubqueryAlias: cs
+                Projection: <exprs>
+                  Aggregate: groupBy=[[date_dim.#<col>, catalog_sales.#<col>, catalog_sales.#<col>]], aggr=[[sum(catalog_sales.#<col>), sum(catalog_sales.#<col>), sum(catalog_sales.#<col>)]]
+                    Filter: catalog_returns.#<col> IS NULL
+                      Inner Join:  Filter: catalog_sales.#<col> = CAST(date_dim.#<col> AS Float64)
+                        Left Join:  Filter: catalog_returns.#<col> = catalog_sales.#<col> AND catalog_sales.#<col> = catalog_returns.#<col>
+                          Projection: <exprs>
+                            Projection: <exprs>
+                              SubqueryAlias: catalog_sales
+                                Projection: <exprs>
+                                  Projection: <exprs>
+                                    TableScan: ?table?
+                          Projection: <exprs>
+                            Projection: <exprs>
+                              SubqueryAlias: catalog_returns
+                                Projection: <exprs>
+                                  Projection: <exprs>
+                                    TableScan: ?table?
+                        Projection: <exprs>
+                          Projection: <exprs>
+                            SubqueryAlias: date_dim
+                              Projection: <exprs>
+                                Projection: <exprs>
+                                  TableScan: ?table?
+
+analyzed_logical_plan:
+SAME TEXT AS ABOVE
+
+logical_plan after eliminate_nested_union:
+SAME TEXT AS ABOVE
+
+logical_plan after simplify_expressions:
+Limit: skip=0, fetch=100
+  Projection: <exprs>
+    Sort: <exprs>
+      Projection: <exprs>
+        Filter: (coalesce(ws.#<col>, Float64(0)) > Float64(0) OR coalesce(cs.#<col>, Float64(0)) > Float64(0)) AND ss.#<col> = Int64(2001)
+          Left Join:  Filter: cs.#<col> = ss.#<col> AND cs.#<col> = ss.#<col> AND cs.#<col> = ss.#<col>
+            Left Join:  Filter: ws.#<col> = ss.#<col> AND ws.#<col> = ss.#<col> AND ws.#<col> = ss.#<col>
+              SubqueryAlias: ss
+                SubqueryAlias: ss
+                  Projection: <exprs>
+                    Aggregate: groupBy=[[date_dim.#<col>, store_sales.#<col>, store_sales.#<col>]], aggr=[[sum(store_sales.#<col>), sum(store_sales.#<col>), sum(store_sales.#<col>)]]
+                      Filter: store_returns.#<col> IS NULL
+                        Inner Join:  Filter: store_sales.#<col> = CAST(date_dim.#<col> AS Float64)
+                          Left Join:  Filter: store_returns.#<col> = store_sales.#<col> AND store_sales.#<col> = store_returns.#<col>
+                            Projection: <exprs>
+                              Projection: <exprs>
+                                SubqueryAlias: store_sales
+                                  Projection: <exprs>
+                                    Projection: <exprs>
+                                      TableScan: ?table?
+                            Projection: <exprs>
+                              Projection: <exprs>
+                                SubqueryAlias: store_returns
+                                  Projection: <exprs>
+                                    Projection: <exprs>
+                                      TableScan: ?table?
+                          Projection: <exprs>
+                            Projection: <exprs>
+                              SubqueryAlias: date_dim
+                                Projection: <exprs>
+                                  Projection: <exprs>
+                                    TableScan: ?table?
+              SubqueryAlias: ws
+                SubqueryAlias: ws
+                  Projection: <exprs>
+                    Aggregate: groupBy=[[date_dim.#<col>, web_sales.#<col>, web_sales.#<col>]], aggr=[[sum(web_sales.#<col>), sum(web_sales.#<col>), sum(web_sales.#<col>)]]
+                      Filter: web_returns.#<col> IS NULL
+                        Inner Join:  Filter: web_sales.#<col> = CAST(date_dim.#<col> AS Float64)
+                          Left Join:  Filter: web_returns.#<col> = web_sales.#<col> AND web_sales.#<col> = web_returns.#<col>
+                            Projection: <exprs>
+                              Projection: <exprs>
+                                SubqueryAlias: web_sales
+                                  Projection: <exprs>
+                                    Projection: <exprs>
+                                      TableScan: ?table?
+                            Projection: <exprs>
+                              Projection: <exprs>
+                                SubqueryAlias: web_returns
+                                  Projection: <exprs>
+                                    Projection: <exprs>
+                                      TableScan: ?table?
+                          Projection: <exprs>
+                            Projection: <exprs>
+                              SubqueryAlias: date_dim
+                                Projection: <exprs>
+                                  Projection: <exprs>
+                                    TableScan: ?table?
+            SubqueryAlias: cs
+              SubqueryAlias: cs
+                Projection: <exprs>
+                  Aggregate: groupBy=[[date_dim.#<col>, catalog_sales.#<col>, catalog_sales.#<col>]], aggr=[[sum(catalog_sales.#<col>), sum(catalog_sales.#<col>), sum(catalog_sales.#<col>)]]
+                    Filter: catalog_returns.#<col> IS NULL
+                      Inner Join:  Filter: catalog_sales.#<col> = CAST(date_dim.#<col> AS Float64)
+                        Left Join:  Filter: catalog_returns.#<col> = catalog_sales.#<col> AND catalog_sales.#<col> = catalog_returns.#<col>
+                          Projection: <exprs>
+                            Projection: <exprs>
+                              SubqueryAlias: catalog_sales
+                                Projection: <exprs>
+                                  Projection: <exprs>
+                                    TableScan: ?table?
+                          Projection: <exprs>
+                            Projection: <exprs>
+                              SubqueryAlias: catalog_returns
+                                Projection: <exprs>
+                                  Projection: <exprs>
+                                    TableScan: ?table?
+                        Projection: <exprs>
+                          Projection: <exprs>
+                            SubqueryAlias: date_dim
+                              Projection: <exprs>
+                                Projection: <exprs>
+                                  TableScan: ?table?
+
+logical_plan after replace_distinct_aggregate:
+SAME TEXT AS ABOVE
+
+logical_plan after eliminate_join:
+SAME TEXT AS ABOVE
+
+logical_plan after decorrelate_predicate_subquery:
+SAME TEXT AS ABOVE
+
+logical_plan after scalar_subquery_to_join:
+SAME TEXT AS ABOVE
+
+logical_plan after decorrelate_lateral_join:
+SAME TEXT AS ABOVE
+
+logical_plan after extract_equijoin_predicate:
+Limit: skip=0, fetch=100
+  Projection: <exprs>
+    Sort: <exprs>
+      Projection: <exprs>
+        Filter: (coalesce(ws.#<col>, Float64(0)) > Float64(0) OR coalesce(cs.#<col>, Float64(0)) > Float64(0)) AND ss.#<col> = Int64(2001)
+          Left Join: ss.#<col> = cs.#<col>, ss.#<col> = cs.#<col>, ss.#<col> = cs.#<col>
+            Left Join: ss.#<col> = ws.#<col>, ss.#<col> = ws.#<col>, ss.#<col> = ws.#<col>
+              SubqueryAlias: ss
+                SubqueryAlias: ss
+                  Projection: <exprs>
+                    Aggregate: groupBy=[[date_dim.#<col>, store_sales.#<col>, store_sales.#<col>]], aggr=[[sum(store_sales.#<col>), sum(store_sales.#<col>), sum(store_sales.#<col>)]]
+                      Filter: store_returns.#<col> IS NULL
+                        Inner Join: store_sales.#<col> = CAST(date_dim.#<col> AS Float64)
+                          Left Join: store_sales.#<col> = store_returns.#<col>, store_sales.#<col> = store_returns.#<col>
+                            Projection: <exprs>
+                              Projection: <exprs>
+                                SubqueryAlias: store_sales
+                                  Projection: <exprs>
+                                    Projection: <exprs>
+                                      TableScan: ?table?
+                            Projection: <exprs>
+                              Projection: <exprs>
+                                SubqueryAlias: store_returns
+                                  Projection: <exprs>
+                                    Projection: <exprs>
+                                      TableScan: ?table?
+                          Projection: <exprs>
+                            Projection: <exprs>
+                              SubqueryAlias: date_dim
+                                Projection: <exprs>
+                                  Projection: <exprs>
+                                    TableScan: ?table?
+              SubqueryAlias: ws
+                SubqueryAlias: ws
+                  Projection: <exprs>
+                    Aggregate: groupBy=[[date_dim.#<col>, web_sales.#<col>, web_sales.#<col>]], aggr=[[sum(web_sales.#<col>), sum(web_sales.#<col>), sum(web_sales.#<col>)]]
+                      Filter: web_returns.#<col> IS NULL
+                        Inner Join: web_sales.#<col> = CAST(date_dim.#<col> AS Float64)
+                          Left Join: web_sales.#<col> = web_returns.#<col>, web_sales.#<col> = web_returns.#<col>
+                            Projection: <exprs>
+                              Projection: <exprs>
+                                SubqueryAlias: web_sales
+                                  Projection: <exprs>
+                                    Projection: <exprs>
+                                      TableScan: ?table?
+                            Projection: <exprs>
+                              Projection: <exprs>
+                                SubqueryAlias: web_returns
+                                  Projection: <exprs>
+                                    Projection: <exprs>
+                                      TableScan: ?table?
+                          Projection: <exprs>
+                            Projection: <exprs>
+                              SubqueryAlias: date_dim
+                                Projection: <exprs>
+                                  Projection: <exprs>
+                                    TableScan: ?table?
+            SubqueryAlias: cs
+              SubqueryAlias: cs
+                Projection: <exprs>
+                  Aggregate: groupBy=[[date_dim.#<col>, catalog_sales.#<col>, catalog_sales.#<col>]], aggr=[[sum(catalog_sales.#<col>), sum(catalog_sales.#<col>), sum(catalog_sales.#<col>)]]
+                    Filter: catalog_returns.#<col> IS NULL
+                      Inner Join: catalog_sales.#<col> = CAST(date_dim.#<col> AS Float64)
+                        Left Join: catalog_sales.#<col> = catalog_returns.#<col>, catalog_sales.#<col> = catalog_returns.#<col>
+                          Projection: <exprs>
+                            Projection: <exprs>
+                              SubqueryAlias: catalog_sales
+                                Projection: <exprs>
+                                  Projection: <exprs>
+                                    TableScan: ?table?
+                          Projection: <exprs>
+                            Projection: <exprs>
+                              SubqueryAlias: catalog_returns
+                                Projection: <exprs>
+                                  Projection: <exprs>
+                                    TableScan: ?table?
+                        Projection: <exprs>
+                          Projection: <exprs>
+                            SubqueryAlias: date_dim
+                              Projection: <exprs>
+                                Projection: <exprs>
+                                  TableScan: ?table?
+
+logical_plan after eliminate_duplicated_expr:
+SAME TEXT AS ABOVE
+
+logical_plan after eliminate_filter:
+SAME TEXT AS ABOVE
+
+logical_plan after eliminate_cross_join:
+SAME TEXT AS ABOVE
+
+logical_plan after eliminate_limit:
+SAME TEXT AS ABOVE
+
+logical_plan after propagate_empty_relation:
+SAME TEXT AS ABOVE
+
+logical_plan after eliminate_one_union:
+SAME TEXT AS ABOVE
+
+logical_plan after filter_null_join_keys:
+SAME TEXT AS ABOVE
+
+logical_plan after eliminate_outer_join:
+SAME TEXT AS ABOVE
+
+logical_plan after push_down_limit:
+Projection: <exprs>
+  Limit: skip=0, fetch=100
+    Sort: <exprs>
+      Projection: <exprs>
+        Filter: (coalesce(ws.#<col>, Float64(0)) > Float64(0) OR coalesce(cs.#<col>, Float64(0)) > Float64(0)) AND ss.#<col> = Int64(2001)
+          Left Join: ss.#<col> = cs.#<col>, ss.#<col> = cs.#<col>, ss.#<col> = cs.#<col>
+            Left Join: ss.#<col> = ws.#<col>, ss.#<col> = ws.#<col>, ss.#<col> = ws.#<col>
+              SubqueryAlias: ss
+                SubqueryAlias: ss
+                  Projection: <exprs>
+                    Aggregate: groupBy=[[date_dim.#<col>, store_sales.#<col>, store_sales.#<col>]], aggr=[[sum(store_sales.#<col>), sum(store_sales.#<col>), sum(store_sales.#<col>)]]
+                      Filter: store_returns.#<col> IS NULL
+                        Inner Join: store_sales.#<col> = CAST(date_dim.#<col> AS Float64)
+                          Left Join: store_sales.#<col> = store_returns.#<col>, store_sales.#<col> = store_returns.#<col>
+                            Projection: <exprs>
+                              Projection: <exprs>
+                                SubqueryAlias: store_sales
+                                  Projection: <exprs>
+                                    Projection: <exprs>
+                                      TableScan: ?table?
+                            Projection: <exprs>
+                              Projection: <exprs>
+                                SubqueryAlias: store_returns
+                                  Projection: <exprs>
+                                    Projection: <exprs>
+                                      TableScan: ?table?
+                          Projection: <exprs>
+                            Projection: <exprs>
+                              SubqueryAlias: date_dim
+                                Projection: <exprs>
+                                  Projection: <exprs>
+                                    TableScan: ?table?
+              SubqueryAlias: ws
+                SubqueryAlias: ws
+                  Projection: <exprs>
+                    Aggregate: groupBy=[[date_dim.#<col>, web_sales.#<col>, web_sales.#<col>]], aggr=[[sum(web_sales.#<col>), sum(web_sales.#<col>), sum(web_sales.#<col>)]]
+                      Filter: web_returns.#<col> IS NULL
+                        Inner Join: web_sales.#<col> = CAST(date_dim.#<col> AS Float64)
+                          Left Join: web_sales.#<col> = web_returns.#<col>, web_sales.#<col> = web_returns.#<col>
+                            Projection: <exprs>
+                              Projection: <exprs>
+                                SubqueryAlias: web_sales
+                                  Projection: <exprs>
+                                    Projection: <exprs>
+                                      TableScan: ?table?
+                            Projection: <exprs>
+                              Projection: <exprs>
+                                SubqueryAlias: web_returns
+                                  Projection: <exprs>
+                                    Projection: <exprs>
+                                      TableScan: ?table?
+                          Projection: <exprs>
+                            Projection: <exprs>
+                              SubqueryAlias: date_dim
+                                Projection: <exprs>
+                                  Projection: <exprs>
+                                    TableScan: ?table?
+            SubqueryAlias: cs
+              SubqueryAlias: cs
+                Projection: <exprs>
+                  Aggregate: groupBy=[[date_dim.#<col>, catalog_sales.#<col>, catalog_sales.#<col>]], aggr=[[sum(catalog_sales.#<col>), sum(catalog_sales.#<col>), sum(catalog_sales.#<col>)]]
+                    Filter: catalog_returns.#<col> IS NULL
+                      Inner Join: catalog_sales.#<col> = CAST(date_dim.#<col> AS Float64)
+                        Left Join: catalog_sales.#<col> = catalog_returns.#<col>, catalog_sales.#<col> = catalog_returns.#<col>
+                          Projection: <exprs>
+                            Projection: <exprs>
+                              SubqueryAlias: catalog_sales
+                                Projection: <exprs>
+                                  Projection: <exprs>
+                                    TableScan: ?table?
+                          Projection: <exprs>
+                            Projection: <exprs>
+                              SubqueryAlias: catalog_returns
+                                Projection: <exprs>
+                                  Projection: <exprs>
+                                    TableScan: ?table?
+                        Projection: <exprs>
+                          Projection: <exprs>
+                            SubqueryAlias: date_dim
+                              Projection: <exprs>
+                                Projection: <exprs>
+                                  TableScan: ?table?
+
+logical_plan after push_down_filter:
+Projection: <exprs>
+  Limit: skip=0, fetch=100
+    Sort: <exprs>
+      Projection: <exprs>
+        Filter: coalesce(ws.#<col>, Float64(0)) > Float64(0) OR coalesce(cs.#<col>, Float64(0)) > Float64(0)
+          Left Join: ss.#<col> = cs.#<col>, ss.#<col> = cs.#<col>, ss.#<col> = cs.#<col>
+            Left Join: ss.#<col> = ws.#<col>, ss.#<col> = ws.#<col>, ss.#<col> = ws.#<col>
+              SubqueryAlias: ss
+                SubqueryAlias: ss
+                  Projection: <exprs>
+                    Aggregate: groupBy=[[date_dim.#<col>, store_sales.#<col>, store_sales.#<col>]], aggr=[[sum(store_sales.#<col>), sum(store_sales.#<col>), sum(store_sales.#<col>)]]
+                      Inner Join: store_sales.#<col> = CAST(date_dim.#<col> AS Float64)
+                        Filter: store_returns.#<col> IS NULL
+                          Left Join: store_sales.#<col> = store_returns.#<col>, store_sales.#<col> = store_returns.#<col>
+                            Projection: <exprs>
+                              Projection: <exprs>
+                                SubqueryAlias: store_sales
+                                  Projection: <exprs>
+                                    Projection: <exprs>
+                                      TableScan: ?table?
+                            Projection: <exprs>
+                              Projection: <exprs>
+                                SubqueryAlias: store_returns
+                                  Projection: <exprs>
+                                    Projection: <exprs>
+                                      TableScan: ?table?
+                        Projection: <exprs>
+                          Projection: <exprs>
+                            SubqueryAlias: date_dim
+                              Projection: <exprs>
+                                Projection: <exprs>
+                                  Filter: ?table?._6 = Int64(2001)
+                                    TableScan: ?table?
+              SubqueryAlias: ws
+                SubqueryAlias: ws
+                  Projection: <exprs>
+                    Aggregate: groupBy=[[date_dim.#<col>, web_sales.#<col>, web_sales.#<col>]], aggr=[[sum(web_sales.#<col>), sum(web_sales.#<col>), sum(web_sales.#<col>)]]
+                      Inner Join: web_sales.#<col> = CAST(date_dim.#<col> AS Float64)
+                        Filter: web_returns.#<col> IS NULL
+                          Left Join: web_sales.#<col> = web_returns.#<col>, web_sales.#<col> = web_returns.#<col>
+                            Projection: <exprs>
+                              Projection: <exprs>
+                                SubqueryAlias: web_sales
+                                  Projection: <exprs>
+                                    Projection: <exprs>
+                                      TableScan: ?table?
+                            Projection: <exprs>
+                              Projection: <exprs>
+                                SubqueryAlias: web_returns
+                                  Projection: <exprs>
+                                    Projection: <exprs>
+                                      TableScan: ?table?
+                        Projection: <exprs>
+                          Projection: <exprs>
+                            SubqueryAlias: date_dim
+                              Projection: <exprs>
+                                Projection: <exprs>
+                                  TableScan: ?table?
+            SubqueryAlias: cs
+              SubqueryAlias: cs
+                Projection: <exprs>
+                  Aggregate: groupBy=[[date_dim.#<col>, catalog_sales.#<col>, catalog_sales.#<col>]], aggr=[[sum(catalog_sales.#<col>), sum(catalog_sales.#<col>), sum(catalog_sales.#<col>)]]
+                    Inner Join: catalog_sales.#<col> = CAST(date_dim.#<col> AS Float64)
+                      Filter: catalog_returns.#<col> IS NULL
+                        Left Join: catalog_sales.#<col> = catalog_returns.#<col>, catalog_sales.#<col> = catalog_returns.#<col>
+                          Projection: <exprs>
+                            Projection: <exprs>
+                              SubqueryAlias: catalog_sales
+                                Projection: <exprs>
+                                  Projection: <exprs>
+                                    TableScan: ?table?
+                          Projection: <exprs>
+                            Projection: <exprs>
+                              SubqueryAlias: catalog_returns
+                                Projection: <exprs>
+                                  Projection: <exprs>
+                                    TableScan: ?table?
+                      Projection: <exprs>
+                        Projection: <exprs>
+                          SubqueryAlias: date_dim
+                            Projection: <exprs>
+                              Projection: <exprs>
+                                TableScan: ?table?
+
+logical_plan after single_distinct_aggregation_to_group_by:
+SAME TEXT AS ABOVE
+
+logical_plan after eliminate_group_by_constant:
+SAME TEXT AS ABOVE
+
+logical_plan after common_sub_expression_eliminate:
+Projection: <exprs>
+  Limit: skip=0, fetch=100
+    Sort: <exprs>
+      Projection: <exprs>
+        Projection: <exprs>
+          Filter: coalesce(ws.#<col>, Float64(0)) > Float64(0) OR coalesce(cs.#<col>, Float64(0)) > Float64(0)
+            Left Join: ss.#<col> = cs.#<col>, ss.#<col> = cs.#<col>, ss.#<col> = cs.#<col>
+              Left Join: ss.#<col> = ws.#<col>, ss.#<col> = ws.#<col>, ss.#<col> = ws.#<col>
+                SubqueryAlias: ss
+                  SubqueryAlias: ss
+                    Projection: <exprs>
+                      Aggregate: groupBy=[[date_dim.#<col>, store_sales.#<col>, store_sales.#<col>]], aggr=[[sum(store_sales.#<col>), sum(store_sales.#<col>), sum(store_sales.#<col>)]]
+                        Inner Join: store_sales.#<col> = CAST(date_dim.#<col> AS Float64)
+                          Filter: store_returns.#<col> IS NULL
+                            Left Join: store_sales.#<col> = store_returns.#<col>, store_sales.#<col> = store_returns.#<col>
+                              Projection: <exprs>
+                                Projection: <exprs>
+                                  SubqueryAlias: store_sales
+                                    Projection: <exprs>
+                                      Projection: <exprs>
+                                        TableScan: ?table?
+                              Projection: <exprs>
+                                Projection: <exprs>
+                                  SubqueryAlias: store_returns
+                                    Projection: <exprs>
+                                      Projection: <exprs>
+                                        TableScan: ?table?
+                          Projection: <exprs>
+                            Projection: <exprs>
+                              SubqueryAlias: date_dim
+                                Projection: <exprs>
+                                  Projection: <exprs>
+                                    Filter: ?table?._6 = Int64(2001)
+                                      TableScan: ?table?
+                SubqueryAlias: ws
+                  SubqueryAlias: ws
+                    Projection: <exprs>
+                      Aggregate: groupBy=[[date_dim.#<col>, web_sales.#<col>, web_sales.#<col>]], aggr=[[sum(web_sales.#<col>), sum(web_sales.#<col>), sum(web_sales.#<col>)]]
+                        Inner Join: web_sales.#<col> = CAST(date_dim.#<col> AS Float64)
+                          Filter: web_returns.#<col> IS NULL
+                            Left Join: web_sales.#<col> = web_returns.#<col>, web_sales.#<col> = web_returns.#<col>
+                              Projection: <exprs>
+                                Projection: <exprs>
+                                  SubqueryAlias: web_sales
+                                    Projection: <exprs>
+                                      Projection: <exprs>
+                                        TableScan: ?table?
+                              Projection: <exprs>
+                                Projection: <exprs>
+                                  SubqueryAlias: web_returns
+                                    Projection: <exprs>
+                                      Projection: <exprs>
+                                        TableScan: ?table?
+                          Projection: <exprs>
+                            Projection: <exprs>
+                              SubqueryAlias: date_dim
+                                Projection: <exprs>
+                                  Projection: <exprs>
+                                    TableScan: ?table?
+              SubqueryAlias: cs
+                SubqueryAlias: cs
+                  Projection: <exprs>
+                    Aggregate: groupBy=[[date_dim.#<col>, catalog_sales.#<col>, catalog_sales.#<col>]], aggr=[[sum(catalog_sales.#<col>), sum(catalog_sales.#<col>), sum(catalog_sales.#<col>)]]
+                      Inner Join: catalog_sales.#<col> = CAST(date_dim.#<col> AS Float64)
+                        Filter: catalog_returns.#<col> IS NULL
+                          Left Join: catalog_sales.#<col> = catalog_returns.#<col>, catalog_sales.#<col> = catalog_returns.#<col>
+                            Projection: <exprs>
+                              Projection: <exprs>
+                                SubqueryAlias: catalog_sales
+                                  Projection: <exprs>
+                                    Projection: <exprs>
+                                      TableScan: ?table?
+                            Projection: <exprs>
+                              Projection: <exprs>
+                                SubqueryAlias: catalog_returns
+                                  Projection: <exprs>
+                                    Projection: <exprs>
+                                      TableScan: ?table?
+                        Projection: <exprs>
+                          Projection: <exprs>
+                            SubqueryAlias: date_dim
+                              Projection: <exprs>
+                                Projection: <exprs>
+                                  TableScan: ?table?
+
+logical_plan after optimize_projections:
+Projection: <exprs>
+  Limit: skip=0, fetch=100
+    Sort: <exprs>
+      Projection: <exprs>
+        Projection: <exprs>
+          Filter: coalesce(ws.#<col>, Float64(0)) > Float64(0) OR coalesce(cs.#<col>, Float64(0)) > Float64(0)
+            Projection: <exprs>
+              Left Join: ss.#<col> = cs.#<col>, ss.#<col> = cs.#<col>, ss.#<col> = cs.#<col>
+                Projection: <exprs>
+                  Left Join: ss.#<col> = ws.#<col>, ss.#<col> = ws.#<col>, ss.#<col> = ws.#<col>
+                    SubqueryAlias: ss
+                      SubqueryAlias: ss
+                        Projection: <exprs>
+                          Aggregate: groupBy=[[date_dim.#<col>, store_sales.#<col>, store_sales.#<col>]], aggr=[[sum(store_sales.#<col>), sum(store_sales.#<col>), sum(store_sales.#<col>)]]
+                            Projection: <exprs>
+                              Inner Join: store_sales.#<col> = CAST(date_dim.#<col> AS Float64)
+                                Projection: <exprs>
+                                  Filter: store_returns.#<col> IS NULL
+                                    Projection: <exprs>
+                                      Left Join: store_sales.#<col> = store_returns.#<col>, store_sales.#<col> = store_returns.#<col>
+                                        Projection: <exprs>
+                                          SubqueryAlias: store_sales
+                                            Projection: <exprs>
+                                              TableScan: ?table? projection=[_0, _2, _3, _9, _10, _11, _13]
+                                        Projection: <exprs>
+                                          SubqueryAlias: store_returns
+                                            Projection: <exprs>
+                                              TableScan: ?table? projection=[_2, _9]
+                                Projection: <exprs>
+                                  SubqueryAlias: date_dim
+                                    Projection: <exprs>
+                                      Filter: ?table?._6 = Int64(2001)
+                                        TableScan: ?table? projection=[_0, _6]
+                    SubqueryAlias: ws
+                      SubqueryAlias: ws
+                        Projection: <exprs>
+                          Aggregate: groupBy=[[date_dim.#<col>, web_sales.#<col>, web_sales.#<col>]], aggr=[[sum(web_sales.#<col>), sum(web_sales.#<col>), sum(web_sales.#<col>)]]
+                            Projection: <exprs>
+                              Inner Join: web_sales.#<col> = CAST(date_dim.#<col> AS Float64)
+                                Projection: <exprs>
+                                  Filter: web_returns.#<col> IS NULL
+                                    Projection: <exprs>
+                                      Left Join: web_sales.#<col> = web_returns.#<col>, web_sales.#<col> = web_returns.#<col>
+                                        Projection: <exprs>
+                                          SubqueryAlias: web_sales
+                                            Projection: <exprs>
+                                              TableScan: ?table? projection=[_0, _3, _4, _17, _18, _19, _21]
+                                        Projection: <exprs>
+                                          SubqueryAlias: web_returns
+                                            Projection: <exprs>
+                                              TableScan: ?table? projection=[_2, _13]
+                                Projection: <exprs>
+                                  SubqueryAlias: date_dim
+                                    Projection: <exprs>
+                                      TableScan: ?table? projection=[_0, _6]
+                SubqueryAlias: cs
+                  SubqueryAlias: cs
+                    Projection: <exprs>
+                      Aggregate: groupBy=[[date_dim.#<col>, catalog_sales.#<col>, catalog_sales.#<col>]], aggr=[[sum(catalog_sales.#<col>), sum(catalog_sales.#<col>), sum(catalog_sales.#<col>)]]
+                        Projection: <exprs>
+                          Inner Join: catalog_sales.#<col> = CAST(date_dim.#<col> AS Float64)
+                            Projection: <exprs>
+                              Filter: catalog_returns.#<col> IS NULL
+                                Projection: <exprs>
+                                  Left Join: catalog_sales.#<col> = catalog_returns.#<col>, catalog_sales.#<col> = catalog_returns.#<col>
+                                    Projection: <exprs>
+                                      SubqueryAlias: catalog_sales
+                                        Projection: <exprs>
+                                          TableScan: ?table? projection=[_0, _3, _15, _17, _18, _19, _21]
+                                    Projection: <exprs>
+                                      SubqueryAlias: catalog_returns
+                                        Projection: <exprs>
+                                          TableScan: ?table? projection=[_2, _16]
+                            Projection: <exprs>
+                              SubqueryAlias: date_dim
+                                Projection: <exprs>
+                                  TableScan: ?table? projection=[_0, _6]
+
+logical_plan after eliminate_nested_union:
+SAME TEXT AS ABOVE
+
+logical_plan after simplify_expressions:
+SAME TEXT AS ABOVE
+
+logical_plan after replace_distinct_aggregate:
+SAME TEXT AS ABOVE
+
+logical_plan after eliminate_join:
+SAME TEXT AS ABOVE
+
+logical_plan after decorrelate_predicate_subquery:
+SAME TEXT AS ABOVE
+
+logical_plan after scalar_subquery_to_join:
+SAME TEXT AS ABOVE
+
+logical_plan after decorrelate_lateral_join:
+SAME TEXT AS ABOVE
+
+logical_plan after extract_equijoin_predicate:
+SAME TEXT AS ABOVE
+
+logical_plan after eliminate_duplicated_expr:
+SAME TEXT AS ABOVE
+
+logical_plan after eliminate_filter:
+SAME TEXT AS ABOVE
+
+logical_plan after eliminate_cross_join:
+SAME TEXT AS ABOVE
+
+logical_plan after eliminate_limit:
+SAME TEXT AS ABOVE
+
+logical_plan after propagate_empty_relation:
+SAME TEXT AS ABOVE
+
+logical_plan after eliminate_one_union:
+SAME TEXT AS ABOVE
+
+logical_plan after filter_null_join_keys:
+SAME TEXT AS ABOVE
+
+logical_plan after eliminate_outer_join:
+SAME TEXT AS ABOVE
+
+logical_plan after push_down_limit:
+Projection: <exprs>
+  Sort: <exprs>
+    Projection: <exprs>
+      Projection: <exprs>
+        Filter: coalesce(ws.#<col>, Float64(0)) > Float64(0) OR coalesce(cs.#<col>, Float64(0)) > Float64(0)
+          Projection: <exprs>
+            Left Join: ss.#<col> = cs.#<col>, ss.#<col> = cs.#<col>, ss.#<col> = cs.#<col>
+              Projection: <exprs>
+                Left Join: ss.#<col> = ws.#<col>, ss.#<col> = ws.#<col>, ss.#<col> = ws.#<col>
+                  SubqueryAlias: ss
+                    SubqueryAlias: ss
+                      Projection: <exprs>
+                        Aggregate: groupBy=[[date_dim.#<col>, store_sales.#<col>, store_sales.#<col>]], aggr=[[sum(store_sales.#<col>), sum(store_sales.#<col>), sum(store_sales.#<col>)]]
+                          Projection: <exprs>
+                            Inner Join: store_sales.#<col> = CAST(date_dim.#<col> AS Float64)
+                              Projection: <exprs>
+                                Filter: store_returns.#<col> IS NULL
+                                  Projection: <exprs>
+                                    Left Join: store_sales.#<col> = store_returns.#<col>, store_sales.#<col> = store_returns.#<col>
+                                      Projection: <exprs>
+                                        SubqueryAlias: store_sales
+                                          Projection: <exprs>
+                                            TableScan: ?table? projection=[_0, _2, _3, _9, _10, _11, _13]
+                                      Projection: <exprs>
+                                        SubqueryAlias: store_returns
+                                          Projection: <exprs>
+                                            TableScan: ?table? projection=[_2, _9]
+                              Projection: <exprs>
+                                SubqueryAlias: date_dim
+                                  Projection: <exprs>
+                                    Filter: ?table?._6 = Int64(2001)
+                                      TableScan: ?table? projection=[_0, _6]
+                  SubqueryAlias: ws
+                    SubqueryAlias: ws
+                      Projection: <exprs>
+                        Aggregate: groupBy=[[date_dim.#<col>, web_sales.#<col>, web_sales.#<col>]], aggr=[[sum(web_sales.#<col>), sum(web_sales.#<col>), sum(web_sales.#<col>)]]
+                          Projection: <exprs>
+                            Inner Join: web_sales.#<col> = CAST(date_dim.#<col> AS Float64)
+                              Projection: <exprs>
+                                Filter: web_returns.#<col> IS NULL
+                                  Projection: <exprs>
+                                    Left Join: web_sales.#<col> = web_returns.#<col>, web_sales.#<col> = web_returns.#<col>
+                                      Projection: <exprs>
+                                        SubqueryAlias: web_sales
+                                          Projection: <exprs>
+                                            TableScan: ?table? projection=[_0, _3, _4, _17, _18, _19, _21]
+                                      Projection: <exprs>
+                                        SubqueryAlias: web_returns
+                                          Projection: <exprs>
+                                            TableScan: ?table? projection=[_2, _13]
+                              Projection: <exprs>
+                                SubqueryAlias: date_dim
+                                  Projection: <exprs>
+                                    TableScan: ?table? projection=[_0, _6]
+              SubqueryAlias: cs
+                SubqueryAlias: cs
+                  Projection: <exprs>
+                    Aggregate: groupBy=[[date_dim.#<col>, catalog_sales.#<col>, catalog_sales.#<col>]], aggr=[[sum(catalog_sales.#<col>), sum(catalog_sales.#<col>), sum(catalog_sales.#<col>)]]
+                      Projection: <exprs>
+                        Inner Join: catalog_sales.#<col> = CAST(date_dim.#<col> AS Float64)
+                          Projection: <exprs>
+                            Filter: catalog_returns.#<col> IS NULL
+                              Projection: <exprs>
+                                Left Join: catalog_sales.#<col> = catalog_returns.#<col>, catalog_sales.#<col> = catalog_returns.#<col>
+                                  Projection: <exprs>
+                                    SubqueryAlias: catalog_sales
+                                      Projection: <exprs>
+                                        TableScan: ?table? projection=[_0, _3, _15, _17, _18, _19, _21]
+                                  Projection: <exprs>
+                                    SubqueryAlias: catalog_returns
+                                      Projection: <exprs>
+                                        TableScan: ?table? projection=[_2, _16]
+                          Projection: <exprs>
+                            SubqueryAlias: date_dim
+                              Projection: <exprs>
+                                TableScan: ?table? projection=[_0, _6]
+
+logical_plan after push_down_filter:
+Projection: <exprs>
+  Sort: <exprs>
+    Projection: <exprs>
+      Projection: <exprs>
+        Projection: <exprs>
+          Filter: coalesce(ws.#<col>, Float64(0)) > Float64(0) OR coalesce(cs.#<col>, Float64(0)) > Float64(0)
+            Left Join: ss.#<col> = cs.#<col>, ss.#<col> = cs.#<col>, ss.#<col> = cs.#<col>
+              Projection: <exprs>
+                Left Join: ss.#<col> = ws.#<col>, ss.#<col> = ws.#<col>, ss.#<col> = ws.#<col>
+                  SubqueryAlias: ss
+                    SubqueryAlias: ss
+                      Projection: <exprs>
+                        Aggregate: groupBy=[[date_dim.#<col>, store_sales.#<col>, store_sales.#<col>]], aggr=[[sum(store_sales.#<col>), sum(store_sales.#<col>), sum(store_sales.#<col>)]]
+                          Projection: <exprs>
+                            Inner Join: store_sales.#<col> = CAST(date_dim.#<col> AS Float64)
+                              Projection: <exprs>
+                                Projection: <exprs>
+                                  Filter: store_returns.#<col> IS NULL
+                                    Left Join: store_sales.#<col> = store_returns.#<col>, store_sales.#<col> = store_returns.#<col>
+                                      Projection: <exprs>
+                                        SubqueryAlias: store_sales
+                                          Projection: <exprs>
+                                            TableScan: ?table? projection=[_0, _2, _3, _9, _10, _11, _13]
+                                      Projection: <exprs>
+                                        SubqueryAlias: store_returns
+                                          Projection: <exprs>
+                                            TableScan: ?table? projection=[_2, _9]
+                              Projection: <exprs>
+                                SubqueryAlias: date_dim
+                                  Projection: <exprs>
+                                    Filter: ?table?._6 = Int64(2001)
+                                      TableScan: ?table? projection=[_0, _6]
+                  SubqueryAlias: ws
+                    SubqueryAlias: ws
+                      Projection: <exprs>
+                        Aggregate: groupBy=[[date_dim.#<col>, web_sales.#<col>, web_sales.#<col>]], aggr=[[sum(web_sales.#<col>), sum(web_sales.#<col>), sum(web_sales.#<col>)]]
+                          Projection: <exprs>
+                            Inner Join: web_sales.#<col> = CAST(date_dim.#<col> AS Float64)
+                              Projection: <exprs>
+                                Projection: <exprs>
+                                  Filter: web_returns.#<col> IS NULL
+                                    Left Join: web_sales.#<col> = web_returns.#<col>, web_sales.#<col> = web_returns.#<col>
+                                      Projection: <exprs>
+                                        SubqueryAlias: web_sales
+                                          Projection: <exprs>
+                                            TableScan: ?table? projection=[_0, _3, _4, _17, _18, _19, _21]
+                                      Projection: <exprs>
+                                        SubqueryAlias: web_returns
+                                          Projection: <exprs>
+                                            TableScan: ?table? projection=[_2, _13]
+                              Projection: <exprs>
+                                SubqueryAlias: date_dim
+                                  Projection: <exprs>
+                                    TableScan: ?table? projection=[_0, _6]
+              SubqueryAlias: cs
+                SubqueryAlias: cs
+                  Projection: <exprs>
+                    Aggregate: groupBy=[[date_dim.#<col>, catalog_sales.#<col>, catalog_sales.#<col>]], aggr=[[sum(catalog_sales.#<col>), sum(catalog_sales.#<col>), sum(catalog_sales.#<col>)]]
+                      Projection: <exprs>
+                        Inner Join: catalog_sales.#<col> = CAST(date_dim.#<col> AS Float64)
+                          Projection: <exprs>
+                            Projection: <exprs>
+                              Filter: catalog_returns.#<col> IS NULL
+                                Left Join: catalog_sales.#<col> = catalog_returns.#<col>, catalog_sales.#<col> = catalog_returns.#<col>
+                                  Projection: <exprs>
+                                    SubqueryAlias: catalog_sales
+                                      Projection: <exprs>
+                                        TableScan: ?table? projection=[_0, _3, _15, _17, _18, _19, _21]
+                                  Projection: <exprs>
+                                    SubqueryAlias: catalog_returns
+                                      Projection: <exprs>
+                                        TableScan: ?table? projection=[_2, _16]
+                          Projection: <exprs>
+                            SubqueryAlias: date_dim
+                              Projection: <exprs>
+                                TableScan: ?table? projection=[_0, _6]
+
+logical_plan after single_distinct_aggregation_to_group_by:
+SAME TEXT AS ABOVE
+
+logical_plan after eliminate_group_by_constant:
+SAME TEXT AS ABOVE
+
+logical_plan after common_sub_expression_eliminate:
+SAME TEXT AS ABOVE
+
+logical_plan after optimize_projections:
+Projection: <exprs>
+  Sort: <exprs>
+    Projection: <exprs>
+      Projection: <exprs>
+        Filter: coalesce(ws.#<col>, Float64(0)) > Float64(0) OR coalesce(cs.#<col>, Float64(0)) > Float64(0)
+          Projection: <exprs>
+            Left Join: ss.#<col> = cs.#<col>, ss.#<col> = cs.#<col>, ss.#<col> = cs.#<col>
+              Projection: <exprs>
+                Left Join: ss.#<col> = ws.#<col>, ss.#<col> = ws.#<col>, ss.#<col> = ws.#<col>
+                  SubqueryAlias: ss
+                    SubqueryAlias: ss
+                      Projection: <exprs>
+                        Aggregate: groupBy=[[date_dim.#<col>, store_sales.#<col>, store_sales.#<col>]], aggr=[[sum(store_sales.#<col>), sum(store_sales.#<col>), sum(store_sales.#<col>)]]
+                          Projection: <exprs>
+                            Inner Join: store_sales.#<col> = CAST(date_dim.#<col> AS Float64)
+                              Projection: <exprs>
+                                Filter: store_returns.#<col> IS NULL
+                                  Projection: <exprs>
+                                    Left Join: store_sales.#<col> = store_returns.#<col>, store_sales.#<col> = store_returns.#<col>
+                                      Projection: <exprs>
+                                        SubqueryAlias: store_sales
+                                          Projection: <exprs>
+                                            TableScan: ?table? projection=[_0, _2, _3, _9, _10, _11, _13]
+                                      Projection: <exprs>
+                                        SubqueryAlias: store_returns
+                                          Projection: <exprs>
+                                            TableScan: ?table? projection=[_2, _9]
+                              Projection: <exprs>
+                                SubqueryAlias: date_dim
+                                  Projection: <exprs>
+                                    Filter: ?table?._6 = Int64(2001)
+                                      TableScan: ?table? projection=[_0, _6]
+                  SubqueryAlias: ws
+                    SubqueryAlias: ws
+                      Projection: <exprs>
+                        Aggregate: groupBy=[[date_dim.#<col>, web_sales.#<col>, web_sales.#<col>]], aggr=[[sum(web_sales.#<col>), sum(web_sales.#<col>), sum(web_sales.#<col>)]]
+                          Projection: <exprs>
+                            Inner Join: web_sales.#<col> = CAST(date_dim.#<col> AS Float64)
+                              Projection: <exprs>
+                                Filter: web_returns.#<col> IS NULL
+                                  Projection: <exprs>
+                                    Left Join: web_sales.#<col> = web_returns.#<col>, web_sales.#<col> = web_returns.#<col>
+                                      Projection: <exprs>
+                                        SubqueryAlias: web_sales
+                                          Projection: <exprs>
+                                            TableScan: ?table? projection=[_0, _3, _4, _17, _18, _19, _21]
+                                      Projection: <exprs>
+                                        SubqueryAlias: web_returns
+                                          Projection: <exprs>
+                                            TableScan: ?table? projection=[_2, _13]
+                              Projection: <exprs>
+                                SubqueryAlias: date_dim
+                                  Projection: <exprs>
+                                    TableScan: ?table? projection=[_0, _6]
+              SubqueryAlias: cs
+                SubqueryAlias: cs
+                  Projection: <exprs>
+                    Aggregate: groupBy=[[date_dim.#<col>, catalog_sales.#<col>, catalog_sales.#<col>]], aggr=[[sum(catalog_sales.#<col>), sum(catalog_sales.#<col>), sum(catalog_sales.#<col>)]]
+                      Projection: <exprs>
+                        Inner Join: catalog_sales.#<col> = CAST(date_dim.#<col> AS Float64)
+                          Projection: <exprs>
+                            Filter: catalog_returns.#<col> IS NULL
+                              Projection: <exprs>
+                                Left Join: catalog_sales.#<col> = catalog_returns.#<col>, catalog_sales.#<col> = catalog_returns.#<col>
+                                  Projection: <exprs>
+                                    SubqueryAlias: catalog_sales
+                                      Projection: <exprs>
+                                        TableScan: ?table? projection=[_0, _3, _15, _17, _18, _19, _21]
+                                  Projection: <exprs>
+                                    SubqueryAlias: catalog_returns
+                                      Projection: <exprs>
+                                        TableScan: ?table? projection=[_2, _16]
+                          Projection: <exprs>
+                            SubqueryAlias: date_dim
+                              Projection: <exprs>
+                                TableScan: ?table? projection=[_0, _6]
+
+logical_plan after eliminate_nested_union:
+SAME TEXT AS ABOVE
+
+logical_plan after simplify_expressions:
+SAME TEXT AS ABOVE
+
+logical_plan after replace_distinct_aggregate:
+SAME TEXT AS ABOVE
+
+logical_plan after eliminate_join:
+SAME TEXT AS ABOVE
+
+logical_plan after decorrelate_predicate_subquery:
+SAME TEXT AS ABOVE
+
+logical_plan after scalar_subquery_to_join:
+SAME TEXT AS ABOVE
+
+logical_plan after decorrelate_lateral_join:
+SAME TEXT AS ABOVE
+
+logical_plan after extract_equijoin_predicate:
+SAME TEXT AS ABOVE
+
+logical_plan after eliminate_duplicated_expr:
+SAME TEXT AS ABOVE
+
+logical_plan after eliminate_filter:
+SAME TEXT AS ABOVE
+
+logical_plan after eliminate_cross_join:
+SAME TEXT AS ABOVE
+
+logical_plan after eliminate_limit:
+SAME TEXT AS ABOVE
+
+logical_plan after propagate_empty_relation:
+SAME TEXT AS ABOVE
+
+logical_plan after eliminate_one_union:
+SAME TEXT AS ABOVE
+
+logical_plan after filter_null_join_keys:
+SAME TEXT AS ABOVE
+
+logical_plan after eliminate_outer_join:
+SAME TEXT AS ABOVE
+
+logical_plan after push_down_limit:
+SAME TEXT AS ABOVE
+
+logical_plan after push_down_filter:
+Projection: <exprs>
+  Sort: <exprs>
+    Projection: <exprs>
+      Projection: <exprs>
+        Projection: <exprs>
+          Filter: coalesce(ws.#<col>, Float64(0)) > Float64(0) OR coalesce(cs.#<col>, Float64(0)) > Float64(0)
+            Left Join: ss.#<col> = cs.#<col>, ss.#<col> = cs.#<col>, ss.#<col> = cs.#<col>
+              Projection: <exprs>
+                Left Join: ss.#<col> = ws.#<col>, ss.#<col> = ws.#<col>, ss.#<col> = ws.#<col>
+                  SubqueryAlias: ss
+                    SubqueryAlias: ss
+                      Projection: <exprs>
+                        Aggregate: groupBy=[[date_dim.#<col>, store_sales.#<col>, store_sales.#<col>]], aggr=[[sum(store_sales.#<col>), sum(store_sales.#<col>), sum(store_sales.#<col>)]]
+                          Projection: <exprs>
+                            Inner Join: store_sales.#<col> = CAST(date_dim.#<col> AS Float64)
+                              Projection: <exprs>
+                                Projection: <exprs>
+                                  Filter: store_returns.#<col> IS NULL
+                                    Left Join: store_sales.#<col> = store_returns.#<col>, store_sales.#<col> = store_returns.#<col>
+                                      Projection: <exprs>
+                                        SubqueryAlias: store_sales
+                                          Projection: <exprs>
+                                            TableScan: ?table? projection=[_0, _2, _3, _9, _10, _11, _13]
+                                      Projection: <exprs>
+                                        SubqueryAlias: store_returns
+                                          Projection: <exprs>
+                                            TableScan: ?table? projection=[_2, _9]
+                              Projection: <exprs>
+                                SubqueryAlias: date_dim
+                                  Projection: <exprs>
+                                    Filter: ?table?._6 = Int64(2001)
+                                      TableScan: ?table? projection=[_0, _6]
+                  SubqueryAlias: ws
+                    SubqueryAlias: ws
+                      Projection: <exprs>
+                        Aggregate: groupBy=[[date_dim.#<col>, web_sales.#<col>, web_sales.#<col>]], aggr=[[sum(web_sales.#<col>), sum(web_sales.#<col>), sum(web_sales.#<col>)]]
+                          Projection: <exprs>
+                            Inner Join: web_sales.#<col> = CAST(date_dim.#<col> AS Float64)
+                              Projection: <exprs>
+                                Projection: <exprs>
+                                  Filter: web_returns.#<col> IS NULL
+                                    Left Join: web_sales.#<col> = web_returns.#<col>, web_sales.#<col> = web_returns.#<col>
+                                      Projection: <exprs>
+                                        SubqueryAlias: web_sales
+                                          Projection: <exprs>
+                                            TableScan: ?table? projection=[_0, _3, _4, _17, _18, _19, _21]
+                                      Projection: <exprs>
+                                        SubqueryAlias: web_returns
+                                          Projection: <exprs>
+                                            TableScan: ?table? projection=[_2, _13]
+                              Projection: <exprs>
+                                SubqueryAlias: date_dim
+                                  Projection: <exprs>
+                                    TableScan: ?table? projection=[_0, _6]
+              SubqueryAlias: cs
+                SubqueryAlias: cs
+                  Projection: <exprs>
+                    Aggregate: groupBy=[[date_dim.#<col>, catalog_sales.#<col>, catalog_sales.#<col>]], aggr=[[sum(catalog_sales.#<col>), sum(catalog_sales.#<col>), sum(catalog_sales.#<col>)]]
+                      Projection: <exprs>
+                        Inner Join: catalog_sales.#<col> = CAST(date_dim.#<col> AS Float64)
+                          Projection: <exprs>
+                            Projection: <exprs>
+                              Filter: catalog_returns.#<col> IS NULL
+                                Left Join: catalog_sales.#<col> = catalog_returns.#<col>, catalog_sales.#<col> = catalog_returns.#<col>
+                                  Projection: <exprs>
+                                    SubqueryAlias: catalog_sales
+                                      Projection: <exprs>
+                                        TableScan: ?table? projection=[_0, _3, _15, _17, _18, _19, _21]
+                                  Projection: <exprs>
+                                    SubqueryAlias: catalog_returns
+                                      Projection: <exprs>
+                                        TableScan: ?table? projection=[_2, _16]
+                          Projection: <exprs>
+                            SubqueryAlias: date_dim
+                              Projection: <exprs>
+                                TableScan: ?table? projection=[_0, _6]
+
+logical_plan after single_distinct_aggregation_to_group_by:
+SAME TEXT AS ABOVE
+
+logical_plan after eliminate_group_by_constant:
+SAME TEXT AS ABOVE
+
+logical_plan after common_sub_expression_eliminate:
+SAME TEXT AS ABOVE
+
+logical_plan after optimize_projections:
+Projection: <exprs>
+  Sort: <exprs>
+    Projection: <exprs>
+      Projection: <exprs>
+        Filter: coalesce(ws.#<col>, Float64(0)) > Float64(0) OR coalesce(cs.#<col>, Float64(0)) > Float64(0)
+          Projection: <exprs>
+            Left Join: ss.#<col> = cs.#<col>, ss.#<col> = cs.#<col>, ss.#<col> = cs.#<col>
+              Projection: <exprs>
+                Left Join: ss.#<col> = ws.#<col>, ss.#<col> = ws.#<col>, ss.#<col> = ws.#<col>
+                  SubqueryAlias: ss
+                    SubqueryAlias: ss
+                      Projection: <exprs>
+                        Aggregate: groupBy=[[date_dim.#<col>, store_sales.#<col>, store_sales.#<col>]], aggr=[[sum(store_sales.#<col>), sum(store_sales.#<col>), sum(store_sales.#<col>)]]
+                          Projection: <exprs>
+                            Inner Join: store_sales.#<col> = CAST(date_dim.#<col> AS Float64)
+                              Projection: <exprs>
+                                Filter: store_returns.#<col> IS NULL
+                                  Projection: <exprs>
+                                    Left Join: store_sales.#<col> = store_returns.#<col>, store_sales.#<col> = store_returns.#<col>
+                                      Projection: <exprs>
+                                        SubqueryAlias: store_sales
+                                          Projection: <exprs>
+                                            TableScan: ?table? projection=[_0, _2, _3, _9, _10, _11, _13]
+                                      Projection: <exprs>
+                                        SubqueryAlias: store_returns
+                                          Projection: <exprs>
+                                            TableScan: ?table? projection=[_2, _9]
+                              Projection: <exprs>
+                                SubqueryAlias: date_dim
+                                  Projection: <exprs>
+                                    Filter: ?table?._6 = Int64(2001)
+                                      TableScan: ?table? projection=[_0, _6]
+                  SubqueryAlias: ws
+                    SubqueryAlias: ws
+                      Projection: <exprs>
+                        Aggregate: groupBy=[[date_dim.#<col>, web_sales.#<col>, web_sales.#<col>]], aggr=[[sum(web_sales.#<col>), sum(web_sales.#<col>), sum(web_sales.#<col>)]]
+                          Projection: <exprs>
+                            Inner Join: web_sales.#<col> = CAST(date_dim.#<col> AS Float64)
+                              Projection: <exprs>
+                                Filter: web_returns.#<col> IS NULL
+                                  Projection: <exprs>
+                                    Left Join: web_sales.#<col> = web_returns.#<col>, web_sales.#<col> = web_returns.#<col>
+                                      Projection: <exprs>
+                                        SubqueryAlias: web_sales
+                                          Projection: <exprs>
+                                            TableScan: ?table? projection=[_0, _3, _4, _17, _18, _19, _21]
+                                      Projection: <exprs>
+                                        SubqueryAlias: web_returns
+                                          Projection: <exprs>
+                                            TableScan: ?table? projection=[_2, _13]
+                              Projection: <exprs>
+                                SubqueryAlias: date_dim
+                                  Projection: <exprs>
+                                    TableScan: ?table? projection=[_0, _6]
+              SubqueryAlias: cs
+                SubqueryAlias: cs
+                  Projection: <exprs>
+                    Aggregate: groupBy=[[date_dim.#<col>, catalog_sales.#<col>, catalog_sales.#<col>]], aggr=[[sum(catalog_sales.#<col>), sum(catalog_sales.#<col>), sum(catalog_sales.#<col>)]]
+                      Projection: <exprs>
+                        Inner Join: catalog_sales.#<col> = CAST(date_dim.#<col> AS Float64)
+                          Projection: <exprs>
+                            Filter: catalog_returns.#<col> IS NULL
+                              Projection: <exprs>
+                                Left Join: catalog_sales.#<col> = catalog_returns.#<col>, catalog_sales.#<col> = catalog_returns.#<col>
+                                  Projection: <exprs>
+                                    SubqueryAlias: catalog_sales
+                                      Projection: <exprs>
+                                        TableScan: ?table? projection=[_0, _3, _15, _17, _18, _19, _21]
+                                  Projection: <exprs>
+                                    SubqueryAlias: catalog_returns
+                                      Projection: <exprs>
+                                        TableScan: ?table? projection=[_2, _16]
+                          Projection: <exprs>
+                            SubqueryAlias: date_dim
+                              Projection: <exprs>
+                                TableScan: ?table? projection=[_0, _6]
+
+logical_plan:
+Projection: <exprs>
+  Sort: <exprs>
+    Projection: <exprs>
+      Projection: <exprs>
+        Filter: coalesce(ws.#<col>, Float64(0)) > Float64(0) OR coalesce(cs.#<col>, Float64(0)) > Float64(0)
+          Projection: <exprs>
+            Left Join: ss.#<col> = cs.#<col>, ss.#<col> = cs.#<col>, ss.#<col> = cs.#<col>
+              Projection: <exprs>
+                Left Join: ss.#<col> = ws.#<col>, ss.#<col> = ws.#<col>, ss.#<col> = ws.#<col>
+                  SubqueryAlias: ss
+                    SubqueryAlias: ss
+                      Projection: <exprs>
+                        Aggregate: groupBy=[[date_dim.#<col>, store_sales.#<col>, store_sales.#<col>]], aggr=[[sum(store_sales.#<col>), sum(store_sales.#<col>), sum(store_sales.#<col>)]]
+                          Projection: <exprs>
+                            Inner Join: store_sales.#<col> = CAST(date_dim.#<col> AS Float64)
+                              Projection: <exprs>
+                                Filter: store_returns.#<col> IS NULL
+                                  Projection: <exprs>
+                                    Left Join: store_sales.#<col> = store_returns.#<col>, store_sales.#<col> = store_returns.#<col>
+                                      Projection: <exprs>
+                                        SubqueryAlias: store_sales
+                                          Projection: <exprs>
+                                            TableScan: ?table? projection=[_0, _2, _3, _9, _10, _11, _13]
+                                      Projection: <exprs>
+                                        SubqueryAlias: store_returns
+                                          Projection: <exprs>
+                                            TableScan: ?table? projection=[_2, _9]
+                              Projection: <exprs>
+                                SubqueryAlias: date_dim
+                                  Projection: <exprs>
+                                    Filter: ?table?._6 = Int64(2001)
+                                      TableScan: ?table? projection=[_0, _6]
+                  SubqueryAlias: ws
+                    SubqueryAlias: ws
+                      Projection: <exprs>
+                        Aggregate: groupBy=[[date_dim.#<col>, web_sales.#<col>, web_sales.#<col>]], aggr=[[sum(web_sales.#<col>), sum(web_sales.#<col>), sum(web_sales.#<col>)]]
+                          Projection: <exprs>
+                            Inner Join: web_sales.#<col> = CAST(date_dim.#<col> AS Float64)
+                              Projection: <exprs>
+                                Filter: web_returns.#<col> IS NULL
+                                  Projection: <exprs>
+                                    Left Join: web_sales.#<col> = web_returns.#<col>, web_sales.#<col> = web_returns.#<col>
+                                      Projection: <exprs>
+                                        SubqueryAlias: web_sales
+                                          Projection: <exprs>
+                                            TableScan: ?table? projection=[_0, _3, _4, _17, _18, _19, _21]
+                                      Projection: <exprs>
+                                        SubqueryAlias: web_returns
+                                          Projection: <exprs>
+                                            TableScan: ?table? projection=[_2, _13]
+                              Projection: <exprs>
+                                SubqueryAlias: date_dim
+                                  Projection: <exprs>
+                                    TableScan: ?table? projection=[_0, _6]
+              SubqueryAlias: cs
+                SubqueryAlias: cs
+                  Projection: <exprs>
+                    Aggregate: groupBy=[[date_dim.#<col>, catalog_sales.#<col>, catalog_sales.#<col>]], aggr=[[sum(catalog_sales.#<col>), sum(catalog_sales.#<col>), sum(catalog_sales.#<col>)]]
+                      Projection: <exprs>
+                        Inner Join: catalog_sales.#<col> = CAST(date_dim.#<col> AS Float64)
+                          Projection: <exprs>
+                            Filter: catalog_returns.#<col> IS NULL
+                              Projection: <exprs>
+                                Left Join: catalog_sales.#<col> = catalog_returns.#<col>, catalog_sales.#<col> = catalog_returns.#<col>
+                                  Projection: <exprs>
+                                    SubqueryAlias: catalog_sales
+                                      Projection: <exprs>
+                                        TableScan: ?table? projection=[_0, _3, _15, _17, _18, _19, _21]
+                                  Projection: <exprs>
+                                    SubqueryAlias: catalog_returns
+                                      Projection: <exprs>
+                                        TableScan: ?table? projection=[_2, _16]
+                          Projection: <exprs>
+                            SubqueryAlias: date_dim
+                              Projection: <exprs>
+                                TableScan: ?table? projection=[_0, _6]
+
+initial_physical_plan:
+ProjectionExec: expr=[<exprs>]
+  SortExec: [<sort_exprs>], fetch=100
+    SortExec: expr=[<exprs>]
+      ProjectionExec: expr=[<exprs>]
+        ProjectionExec: expr=[<exprs>]
+          CoalesceBatchesExec: target_batch_size=8192
+            FilterExec: coalesce(#<col>, 0) > 0 OR coalesce(#<col>, 0) > 0
+              ProjectionExec: expr=[<exprs>]
+                CoalesceBatchesExec: target_batch_size=8192
+                  HashJoinExec: mode=CollectLeft, join_type=Right, on=[(#<col>, #<col>), (#<col>, #<col>), (#<col>, #<col>)], projection=[#<col>, #<col>, #<col>, #<col>, #<col>, #<col>, #<col>, #<col>, #<col>, #<col>]
+                    CoalescePartitionsExec
+                      ProjectionExec: expr=[<exprs>]
+                        AggregateExec: mode=FinalPartitioned, gby=[#<col> as #<col>, #<col> as #<col>, #<col> as #<col>], aggr=[sum(catalog_sales.#<col>), sum(catalog_sales.#<col>), sum(catalog_sales.#<col>)]
+                          CoalesceBatchesExec: target_batch_size=8192
+                            RepartitionExec: partitioning=Hash([#<col>, #<col>, #<col>], <partitions>), input_partitions=<partitions>
+                              AggregateExec: mode=Partial, gby=[#<col> as #<col>, #<col> as #<col>, #<col> as #<col>], aggr=[sum(catalog_sales.#<col>), sum(catalog_sales.#<col>), sum(catalog_sales.#<col>)]
+                                CoalesceBatchesExec: target_batch_size=8192
+                                  HashJoinExec: mode=CollectLeft, join_type=Inner, on=[(#<col>, CAST(date_dim.#<col> AS Float64)@<id>)], projection=[#<col>, #<col>, #<col>, #<col>, #<col>, #<col>]
+                                    CoalescePartitionsExec
+                                      CoalesceBatchesExec: target_batch_size=8192
+                                        FilterExec: #<col> IS NULL, projection=[#<col>, #<col>, #<col>, #<col>, #<col>, #<col>]
+                                          ProjectionExec: expr=[<exprs>]
+                                            CoalesceBatchesExec: target_batch_size=8192
+                                              HashJoinExec: mode=CollectLeft, join_type=Right, on=[(#<col>, #<col>), (#<col>, #<col>)], projection=[#<col>, #<col>, #<col>, #<col>, #<col>, #<col>, #<col>]
+                                                ProjectionExec: expr=[<exprs>]
+                                                  DataSourceExec: partitions=1, partition_sizes=[<sizes>]
+                                                RepartitionExec: partitioning=RoundRobinBatch(<partitions>), input_partitions=<partitions>
+                                                  ProjectionExec: expr=[<exprs>]
+                                                    DataSourceExec: partitions=1, partition_sizes=[<sizes>]
+                                    ProjectionExec: expr=[<exprs>]
+                                      RepartitionExec: partitioning=RoundRobinBatch(<partitions>), input_partitions=<partitions>
+                                        ProjectionExec: expr=[<exprs>]
+                                          DataSourceExec: partitions=1, partition_sizes=[<sizes>]
+                    ProjectionExec: expr=[<exprs>]
+                      CoalesceBatchesExec: target_batch_size=8192
+                        HashJoinExec: mode=CollectLeft, join_type=Right, on=[(#<col>, #<col>), (#<col>, #<col>), (#<col>, #<col>)], projection=[#<col>, #<col>, #<col>, #<col>, #<col>, #<col>, #<col>, #<col>, #<col>]
+                          CoalescePartitionsExec
+                            ProjectionExec: expr=[<exprs>]
+                              AggregateExec: mode=FinalPartitioned, gby=[#<col> as #<col>, #<col> as #<col>, #<col> as #<col>], aggr=[sum(web_sales.#<col>), sum(web_sales.#<col>), sum(web_sales.#<col>)]
+                                CoalesceBatchesExec: target_batch_size=8192
+                                  RepartitionExec: partitioning=Hash([#<col>, #<col>, #<col>], <partitions>), input_partitions=<partitions>
+                                    AggregateExec: mode=Partial, gby=[#<col> as #<col>, #<col> as #<col>, #<col> as #<col>], aggr=[sum(web_sales.#<col>), sum(web_sales.#<col>), sum(web_sales.#<col>)]
+                                      CoalesceBatchesExec: target_batch_size=8192
+                                        HashJoinExec: mode=CollectLeft, join_type=Inner, on=[(#<col>, CAST(date_dim.#<col> AS Float64)@<id>)], projection=[#<col>, #<col>, #<col>, #<col>, #<col>, #<col>]
+                                          CoalescePartitionsExec
+                                            CoalesceBatchesExec: target_batch_size=8192
+                                              FilterExec: #<col> IS NULL, projection=[#<col>, #<col>, #<col>, #<col>, #<col>, #<col>]
+                                                RepartitionExec: partitioning=RoundRobinBatch(<partitions>), input_partitions=<partitions>
+                                                  ProjectionExec: expr=[<exprs>]
+                                                    CoalesceBatchesExec: target_batch_size=8192
+                                                      HashJoinExec: mode=CollectLeft, join_type=Right, on=[(#<col>, #<col>), (#<col>, #<col>)], projection=[#<col>, #<col>, #<col>, #<col>, #<col>, #<col>, #<col>]
+                                                        ProjectionExec: expr=[<exprs>]
+                                                          DataSourceExec: partitions=1, partition_sizes=[<sizes>]
+                                                        ProjectionExec: expr=[<exprs>]
+                                                          DataSourceExec: partitions=1, partition_sizes=[<sizes>]
+                                          ProjectionExec: expr=[<exprs>]
+                                            RepartitionExec: partitioning=RoundRobinBatch(<partitions>), input_partitions=<partitions>
+                                              ProjectionExec: expr=[<exprs>]
+                                                DataSourceExec: partitions=1, partition_sizes=[<sizes>]
+                          ProjectionExec: expr=[<exprs>]
+                            AggregateExec: mode=FinalPartitioned, gby=[#<col> as #<col>, #<col> as #<col>, #<col> as #<col>], aggr=[sum(store_sales.#<col>), sum(store_sales.#<col>), sum(store_sales.#<col>)], ordering_mode=PartiallySorted([0])
+                              CoalesceBatchesExec: target_batch_size=8192
+                                RepartitionExec: partitioning=Hash([#<col>, #<col>, #<col>], <partitions>), input_partitions=<partitions>
+                                  AggregateExec: mode=Partial, gby=[#<col> as #<col>, #<col> as #<col>, #<col> as #<col>], aggr=[sum(store_sales.#<col>), sum(store_sales.#<col>), sum(store_sales.#<col>)], ordering_mode=PartiallySorted([0])
+                                    CoalesceBatchesExec: target_batch_size=8192
+                                      HashJoinExec: mode=CollectLeft, join_type=Inner, on=[(#<col>, CAST(date_dim.#<col> AS Float64)@<id>)], projection=[#<col>, #<col>, #<col>, #<col>, #<col>, #<col>]
+                                        CoalescePartitionsExec
+                                          CoalesceBatchesExec: target_batch_size=8192
+                                            FilterExec: #<col> IS NULL, projection=[#<col>, #<col>, #<col>, #<col>, #<col>, #<col>]
+                                              ProjectionExec: expr=[<exprs>]
+                                                CoalesceBatchesExec: target_batch_size=8192
+                                                  HashJoinExec: mode=CollectLeft, join_type=Right, on=[(#<col>, #<col>), (#<col>, #<col>)], projection=[#<col>, #<col>, #<col>, #<col>, #<col>, #<col>, #<col>]
+                                                    ProjectionExec: expr=[<exprs>]
+                                                      DataSourceExec: partitions=1, partition_sizes=[<sizes>]
+                                                    RepartitionExec: partitioning=RoundRobinBatch(<partitions>), input_partitions=<partitions>
+                                                      ProjectionExec: expr=[<exprs>]
+                                                        DataSourceExec: partitions=1, partition_sizes=[<sizes>]
+                                        ProjectionExec: expr=[<exprs>]
+                                          CoalesceBatchesExec: target_batch_size=8192
+                                            FilterExec: _6@<id> = 2001
+                                              RepartitionExec: partitioning=RoundRobinBatch(<partitions>), input_partitions=<partitions>
+                                                DataSourceExec: partitions=1, partition_sizes=[<sizes>]
+
+
+initial_physical_plan_with_stats:
+ProjectionExec: expr=[<exprs>]
+  SortExec: [<sort_exprs>]
+    SortExec: expr=[<exprs>]
+      ProjectionExec: expr=[<exprs>]
+        ProjectionExec: expr=[<exprs>]
+          CoalesceBatchesExec: target_batch_size=8192, statistics=[Rows=Inexact(1153), Bytes=Inexact(<bytes>), [(Col[0]:),(Col[1]:),(Col[2]:),(Col[3]:),(Col[4]:),(Col[5]:),(Col[6]:),(Col[7]:),(Col[8]:),(Col[9]:)]]
+            FilterExec: coalesce(#<col>, 0) > 0 OR coalesce(#<col>, 0) > 0, statistics=[Rows=Inexact(1153), Bytes=Inexact(<bytes>), [(Col[0]:),(Col[1]:),(Col[2]:),(Col[3]:),(Col[4]:),(Col[5]:),(Col[6]:),(Col[7]:),(Col[8]:),(Col[9]:)]]
+              ProjectionExec: expr=[<exprs>]
+                CoalesceBatchesExec: target_batch_size=8192, statistics=[Rows=Inexact(5762), Bytes=Absent, [(Col[0]:),(Col[1]:),(Col[2]:),(Col[3]:),(Col[4]:),(Col[5]:),(Col[6]:),(Col[7]:),(Col[8]:),(Col[9]:)]]
+                  HashJoinExec: mode=CollectLeft, join_type=Right, on=[(#<col>, #<col>), (#<col>, #<col>), (#<col>, #<col>)], projection=[#<col>, #<col>, #<col>, #<col>, #<col>, #<col>, #<col>, #<col>, #<col>, #<col>], statistics=[Rows=Inexact(5762), Bytes=Absent, [(Col[0]:),(Col[1]:),(Col[2]:),(Col[3]:),(Col[4]:),(Col[5]:),(Col[6]:),(Col[7]:),(Col[8]:),(Col[9]:)]]
+                    CoalescePartitionsExec, statistics=[Rows=Inexact(2863), Bytes=Inexact(<bytes>), [(Col[0]:),(Col[1]:),(Col[2]:),(Col[3]:),(Col[4]:),(Col[5]:)]]
+                      ProjectionExec: expr=[<exprs>]
+                        AggregateExec: mode=FinalPartitioned, gby=[#<col> as #<col>, #<col> as #<col>, #<col> as #<col>], aggr=[sum(catalog_sales.#<col>), sum(catalog_sales.#<col>), sum(catalog_sales.#<col>)], statistics=[Rows=Inexact(2863), Bytes=Absent, [(Col[0]:),(Col[1]:),(Col[2]:),(Col[3]:),(Col[4]:),(Col[5]:)]]
+                          CoalesceBatchesExec: target_batch_size=8192, statistics=[Rows=Inexact(2863), Bytes=Absent, [(Col[0]:),(Col[1]:),(Col[2]:),(Col[3]:),(Col[4]:),(Col[5]:)]]
+                            RepartitionExec: partitioning=Hash([#<col>, #<col>, #<col>], <partitions>), input_partitions=<partitions>, statistics=[Rows=Inexact(2863), Bytes=Absent, [(Col[0]:),(Col[1]:),(Col[2]:),(Col[3]:),(Col[4]:),(Col[5]:)]]
+                              AggregateExec: mode=Partial, gby=[#<col> as #<col>, #<col> as #<col>, #<col> as #<col>], aggr=[sum(catalog_sales.#<col>), sum(catalog_sales.#<col>), sum(catalog_sales.#<col>)], statistics=[Rows=Inexact(2863), Bytes=Absent, [(Col[0]:),(Col[1]:),(Col[2]:),(Col[3]:),(Col[4]:),(Col[5]:)]]
+                                CoalesceBatchesExec: target_batch_size=8192, statistics=[Rows=Inexact(2863), Bytes=Absent, [(Col[0]: Null=Inexact(71)),(Col[1]: Null=Inexact(0)),(Col[2]: Null=Inexact(72)),(Col[3]: Null=Inexact(74)),(Col[4]: Null=Inexact(84)),(Col[5]: Null=Exact(0))]]
+                                  HashJoinExec: mode=CollectLeft, join_type=Inner, on=[(#<col>, CAST(date_dim.#<col> AS Float64)@<id>)], projection=[#<col>, #<col>, #<col>, #<col>, #<col>, #<col>], statistics=[Rows=Inexact(2863), Bytes=Absent, [(Col[0]: Null=Inexact(71)),(Col[1]: Null=Inexact(0)),(Col[2]: Null=Inexact(72)),(Col[3]: Null=Inexact(74)),(Col[4]: Null=Inexact(84)),(Col[5]: Null=Exact(0))]]
+                                    CoalescePartitionsExec, statistics=[Rows=Inexact(2863), Bytes=Inexact(<bytes>), [(Col[0]: Null=Inexact(81)),(Col[1]: Null=Inexact(71)),(Col[2]: Null=Inexact(0)),(Col[3]: Null=Inexact(72)),(Col[4]: Null=Inexact(74)),(Col[5]: Null=Inexact(84))]]
+                                      CoalesceBatchesExec: target_batch_size=8192, statistics=[Rows=Inexact(2863), Bytes=Inexact(<bytes>), [(Col[0]: Null=Inexact(81)),(Col[1]: Null=Inexact(71)),(Col[2]: Null=Inexact(0)),(Col[3]: Null=Inexact(72)),(Col[4]: Null=Inexact(74)),(Col[5]: Null=Inexact(84))]]
+                                        FilterExec: #<col> IS NULL, projection=[#<col>, #<col>, #<col>, #<col>, #<col>, #<col>], statistics=[Rows=Inexact(2863), Bytes=Inexact(<bytes>), [(Col[0]: Null=Inexact(81)),(Col[1]: Null=Inexact(71)),(Col[2]: Null=Inexact(0)),(Col[3]: Null=Inexact(72)),(Col[4]: Null=Inexact(74)),(Col[5]: Null=Inexact(84))]]
+                                          ProjectionExec: expr=[<exprs>]
+                                            CoalesceBatchesExec: target_batch_size=8192, statistics=[Rows=Inexact(14313), Bytes=Absent, [(Col[0]: Null=Exact(0)),(Col[1]: Null=Exact(81)),(Col[2]: Null=Exact(71)),(Col[3]: Null=Exact(0)),(Col[4]: Null=Exact(72)),(Col[5]: Null=Exact(74)),(Col[6]: Null=Exact(84))]]
+                                              HashJoinExec: mode=CollectLeft, join_type=Right, on=[(#<col>, #<col>), (#<col>, #<col>)], projection=[#<col>, #<col>, #<col>, #<col>, #<col>, #<col>, #<col>], statistics=[Rows=Inexact(14313), Bytes=Absent, [(Col[0]: Null=Exact(0)),(Col[1]: Null=Exact(81)),(Col[2]: Null=Exact(71)),(Col[3]: Null=Exact(0)),(Col[4]: Null=Exact(72)),(Col[5]: Null=Exact(74)),(Col[6]: Null=Exact(84))]]
+                                                ProjectionExec: expr=[<exprs>]
+                                                  DataSourceExec: partitions=1, partition_sizes=[<sizes>], statistics=[Rows=Exact(1358), Bytes=Exact(<bytes>), [(Col[0]: Null=Exact(0)),(Col[1]: Null=Exact(0))]]
+                                                RepartitionExec: partitioning=RoundRobinBatch(<partitions>), input_partitions=<partitions>, statistics=[Rows=Exact(14313), Bytes=Exact(<bytes>), [(Col[0]: Null=Exact(81)),(Col[1]: Null=Exact(71)),(Col[2]: Null=Exact(0)),(Col[3]: Null=Exact(0)),(Col[4]: Null=Exact(72)),(Col[5]: Null=Exact(74)),(Col[6]: Null=Exact(84))]]
+                                                  ProjectionExec: expr=[<exprs>]
+                                                    DataSourceExec: partitions=1, partition_sizes=[<sizes>], statistics=[Rows=Exact(14313), Bytes=Exact(<bytes>), [(Col[0]: Null=Exact(81)),(Col[1]: Null=Exact(71)),(Col[2]: Null=Exact(0)),(Col[3]: Null=Exact(0)),(Col[4]: Null=Exact(72)),(Col[5]: Null=Exact(74)),(Col[6]: Null=Exact(84))]]
+                                    ProjectionExec: expr=[<exprs>]
+                                      RepartitionExec: partitioning=RoundRobinBatch(<partitions>), input_partitions=<partitions>, statistics=[Rows=Exact(73049), Bytes=Exact(<bytes>), [(Col[0]: Null=Exact(0)),(Col[1]: Null=Exact(0))]]
+                                        ProjectionExec: expr=[<exprs>]
+                                          DataSourceExec: partitions=1, partition_sizes=[<sizes>], statistics=[Rows=Exact(73049), Bytes=Exact(<bytes>), [(Col[0]: Null=Exact(0)),(Col[1]: Null=Exact(0))]]
+                    ProjectionExec: expr=[<exprs>]
+                      CoalesceBatchesExec: target_batch_size=8192, statistics=[Rows=Inexact(5762), Bytes=Absent, [(Col[0]:),(Col[1]:),(Col[2]:),(Col[3]: Min=Exact(Int64(2001)) Max=Exact(Int64(2001))),(Col[4]:),(Col[5]:),(Col[6]:),(Col[7]:),(Col[8]:)]]
+                        HashJoinExec: mode=CollectLeft, join_type=Right, on=[(#<col>, #<col>), (#<col>, #<col>), (#<col>, #<col>)], projection=[#<col>, #<col>, #<col>, #<col>, #<col>, #<col>, #<col>, #<col>, #<col>], statistics=[Rows=Inexact(5762), Bytes=Absent, [(Col[0]:),(Col[1]:),(Col[2]:),(Col[3]: Min=Exact(Int64(2001)) Max=Exact(Int64(2001))),(Col[4]:),(Col[5]:),(Col[6]:),(Col[7]:),(Col[8]:)]]
+                          CoalescePartitionsExec, statistics=[Rows=Inexact(1443), Bytes=Inexact(<bytes>), [(Col[0]:),(Col[1]:),(Col[2]:),(Col[3]:),(Col[4]:),(Col[5]:)]]
+                            ProjectionExec: expr=[<exprs>]
+                              AggregateExec: mode=FinalPartitioned, gby=[#<col> as #<col>, #<col> as #<col>, #<col> as #<col>], aggr=[sum(web_sales.#<col>), sum(web_sales.#<col>), sum(web_sales.#<col>)], statistics=[Rows=Inexact(1443), Bytes=Absent, [(Col[0]:),(Col[1]:),(Col[2]:),(Col[3]:),(Col[4]:),(Col[5]:)]]
+                                CoalesceBatchesExec: target_batch_size=8192, statistics=[Rows=Inexact(1443), Bytes=Absent, [(Col[0]:),(Col[1]:),(Col[2]:),(Col[3]:),(Col[4]:),(Col[5]:)]]
+                                  RepartitionExec: partitioning=Hash([#<col>, #<col>, #<col>], <partitions>), input_partitions=<partitions>, statistics=[Rows=Inexact(1443), Bytes=Absent, [(Col[0]:),(Col[1]:),(Col[2]:),(Col[3]:),(Col[4]:),(Col[5]:)]]
+                                    AggregateExec: mode=Partial, gby=[#<col> as #<col>, #<col> as #<col>, #<col> as #<col>], aggr=[sum(web_sales.#<col>), sum(web_sales.#<col>), sum(web_sales.#<col>)], statistics=[Rows=Inexact(1443), Bytes=Absent, [(Col[0]:),(Col[1]:),(Col[2]:),(Col[3]:),(Col[4]:),(Col[5]:)]]
+                                      CoalesceBatchesExec: target_batch_size=8192, statistics=[Rows=Inexact(1443), Bytes=Absent, [(Col[0]: Null=Inexact(0)),(Col[1]: Null=Inexact(3)),(Col[2]: Null=Inexact(3)),(Col[3]: Null=Inexact(2)),(Col[4]: Null=Inexact(2)),(Col[5]: Null=Exact(0))]]
+                                        HashJoinExec: mode=CollectLeft, join_type=Inner, on=[(#<col>, CAST(date_dim.#<col> AS Float64)@<id>)], projection=[#<col>, #<col>, #<col>, #<col>, #<col>, #<col>], statistics=[Rows=Inexact(1443), Bytes=Absent, [(Col[0]: Null=Inexact(0)),(Col[1]: Null=Inexact(3)),(Col[2]: Null=Inexact(3)),(Col[3]: Null=Inexact(2)),(Col[4]: Null=Inexact(2)),(Col[5]: Null=Exact(0))]]
+                                          CoalescePartitionsExec, statistics=[Rows=Inexact(1443), Bytes=Inexact(<bytes>), [(Col[0]: Null=Inexact(4)),(Col[1]: Null=Inexact(0)),(Col[2]: Null=Inexact(3)),(Col[3]: Null=Inexact(3)),(Col[4]: Null=Inexact(2)),(Col[5]: Null=Inexact(2))]]
+                                            CoalesceBatchesExec: target_batch_size=8192, statistics=[Rows=Inexact(1443), Bytes=Inexact(<bytes>), [(Col[0]: Null=Inexact(4)),(Col[1]: Null=Inexact(0)),(Col[2]: Null=Inexact(3)),(Col[3]: Null=Inexact(3)),(Col[4]: Null=Inexact(2)),(Col[5]: Null=Inexact(2))]]
+                                              FilterExec: #<col> IS NULL, projection=[#<col>, #<col>, #<col>, #<col>, #<col>, #<col>], statistics=[Rows=Inexact(1443), Bytes=Inexact(<bytes>), [(Col[0]: Null=Inexact(4)),(Col[1]: Null=Inexact(0)),(Col[2]: Null=Inexact(3)),(Col[3]: Null=Inexact(3)),(Col[4]: Null=Inexact(2)),(Col[5]: Null=Inexact(2))]]
+                                                RepartitionExec: partitioning=RoundRobinBatch(<partitions>), input_partitions=<partitions>, statistics=[Rows=Inexact(7212), Bytes=Inexact(<bytes>), [(Col[0]: Null=Exact(4)),(Col[1]: Null=Exact(0)),(Col[2]: Null=Exact(3)),(Col[3]: Null=Exact(3)),(Col[4]: Null=Exact(2)),(Col[5]: Null=Exact(2)),(Col[6]: Null=Exact(0))]]
+                                                  ProjectionExec: expr=[<exprs>]
+                                                    CoalesceBatchesExec: target_batch_size=8192, statistics=[Rows=Inexact(7212), Bytes=Absent, [(Col[0]: Null=Exact(0)),(Col[1]: Null=Exact(4)),(Col[2]: Null=Exact(0)),(Col[3]: Null=Exact(3)),(Col[4]: Null=Exact(3)),(Col[5]: Null=Exact(2)),(Col[6]: Null=Exact(2))]]
+                                                      HashJoinExec: mode=CollectLeft, join_type=Right, on=[(#<col>, #<col>), (#<col>, #<col>)], projection=[#<col>, #<col>, #<col>, #<col>, #<col>, #<col>, #<col>], statistics=[Rows=Inexact(7212), Bytes=Absent, [(Col[0]: Null=Exact(0)),(Col[1]: Null=Exact(4)),(Col[2]: Null=Exact(0)),(Col[3]: Null=Exact(3)),(Col[4]: Null=Exact(3)),(Col[5]: Null=Exact(2)),(Col[6]: Null=Exact(2))]]
+                                                        ProjectionExec: expr=[<exprs>]
+                                                          DataSourceExec: partitions=1, partition_sizes=[<sizes>], statistics=[Rows=Exact(679), Bytes=Exact(<bytes>), [(Col[0]: Null=Exact(0)),(Col[1]: Null=Exact(0))]]
+                                                        ProjectionExec: expr=[<exprs>]
+                                                          DataSourceExec: partitions=1, partition_sizes=[<sizes>], statistics=[Rows=Exact(7212), Bytes=Exact(<bytes>), [(Col[0]: Null=Exact(4)),(Col[1]: Null=Exact(0)),(Col[2]: Null=Exact(3)),(Col[3]: Null=Exact(0)),(Col[4]: Null=Exact(3)),(Col[5]: Null=Exact(2)),(Col[6]: Null=Exact(2))]]
+                                          ProjectionExec: expr=[<exprs>]
+                                            RepartitionExec: partitioning=RoundRobinBatch(<partitions>), input_partitions=<partitions>, statistics=[Rows=Exact(73049), Bytes=Exact(<bytes>), [(Col[0]: Null=Exact(0)),(Col[1]: Null=Exact(0))]]
+                                              ProjectionExec: expr=[<exprs>]
+                                                DataSourceExec: partitions=1, partition_sizes=[<sizes>], statistics=[Rows=Exact(73049), Bytes=Exact(<bytes>), [(Col[0]: Null=Exact(0)),(Col[1]: Null=Exact(0))]]
+                          ProjectionExec: expr=[<exprs>]
+                            AggregateExec: mode=FinalPartitioned, gby=[#<col> as #<col>, #<col> as #<col>, #<col> as #<col>], aggr=[sum(store_sales.#<col>), sum(store_sales.#<col>), sum(store_sales.#<col>)], ordering_mode=PartiallySorted([0]), statistics=[Rows=Inexact(5762), Bytes=Absent, [(Col[0]: Min=Exact(Int64(2001)) Max=Exact(Int64(2001))),(Col[1]:),(Col[2]:),(Col[3]:),(Col[4]:),(Col[5]:)]]
+                              CoalesceBatchesExec: target_batch_size=8192, statistics=[Rows=Inexact(5762), Bytes=Absent, [(Col[0]: Min=Exact(Int64(2001)) Max=Exact(Int64(2001))),(Col[1]:),(Col[2]:),(Col[3]:),(Col[4]:),(Col[5]:)]]
+                                RepartitionExec: partitioning=Hash([#<col>, #<col>, #<col>], <partitions>), input_partitions=<partitions>, statistics=[Rows=Inexact(5762), Bytes=Absent, [(Col[0]: Min=Exact(Int64(2001)) Max=Exact(Int64(2001))),(Col[1]:),(Col[2]:),(Col[3]:),(Col[4]:),(Col[5]:)]]
+                                  AggregateExec: mode=Partial, gby=[#<col> as #<col>, #<col> as #<col>, #<col> as #<col>], aggr=[sum(store_sales.#<col>), sum(store_sales.#<col>), sum(store_sales.#<col>)], ordering_mode=PartiallySorted([0]), statistics=[Rows=Inexact(5762), Bytes=Absent, [(Col[0]: Min=Exact(Int64(2001)) Max=Exact(Int64(2001))),(Col[1]:),(Col[2]:),(Col[3]:),(Col[4]:),(Col[5]:)]]
+                                    CoalesceBatchesExec: target_batch_size=8192, statistics=[Rows=Inexact(5762), Bytes=Absent, [(Col[0]: Null=Inexact(0)),(Col[1]: Null=Inexact(1197)),(Col[2]: Null=Inexact(1283)),(Col[3]: Null=Inexact(1227)),(Col[4]: Null=Inexact(1269)),(Col[5]: Min=Exact(Int64(2001)) Max=Exact(Int64(2001)) Null=Inexact(0))]]
+                                      HashJoinExec: mode=CollectLeft, join_type=Inner, on=[(#<col>, CAST(date_dim.#<col> AS Float64)@<id>)], projection=[#<col>, #<col>, #<col>, #<col>, #<col>, #<col>], statistics=[Rows=Inexact(5762), Bytes=Absent, [(Col[0]: Null=Inexact(0)),(Col[1]: Null=Inexact(1197)),(Col[2]: Null=Inexact(1283)),(Col[3]: Null=Inexact(1227)),(Col[4]: Null=Inexact(1269)),(Col[5]: Min=Exact(Int64(2001)) Max=Exact(Int64(2001)) Null=Inexact(0))]]
+                                        CoalescePartitionsExec, statistics=[Rows=Inexact(5762), Bytes=Inexact(<bytes>), [(Col[0]: Null=Inexact(1208)),(Col[1]: Null=Inexact(0)),(Col[2]: Null=Inexact(1197)),(Col[3]: Null=Inexact(1283)),(Col[4]: Null=Inexact(1227)),(Col[5]: Null=Inexact(1269))]]
+                                          CoalesceBatchesExec: target_batch_size=8192, statistics=[Rows=Inexact(5762), Bytes=Inexact(<bytes>), [(Col[0]: Null=Inexact(1208)),(Col[1]: Null=Inexact(0)),(Col[2]: Null=Inexact(1197)),(Col[3]: Null=Inexact(1283)),(Col[4]: Null=Inexact(1227)),(Col[5]: Null=Inexact(1269))]]
+                                            FilterExec: #<col> IS NULL, projection=[#<col>, #<col>, #<col>, #<col>, #<col>, #<col>], statistics=[Rows=Inexact(5762), Bytes=Inexact(<bytes>), [(Col[0]: Null=Inexact(1208)),(Col[1]: Null=Inexact(0)),(Col[2]: Null=Inexact(1197)),(Col[3]: Null=Inexact(1283)),(Col[4]: Null=Inexact(1227)),(Col[5]: Null=Inexact(1269))]]
+                                              ProjectionExec: expr=[<exprs>]
+                                                CoalesceBatchesExec: target_batch_size=8192, statistics=[Rows=Inexact(28810), Bytes=Absent, [(Col[0]: Null=Exact(0)),(Col[1]: Null=Exact(1208)),(Col[2]: Null=Exact(0)),(Col[3]: Null=Exact(1197)),(Col[4]: Null=Exact(1283)),(Col[5]: Null=Exact(1227)),(Col[6]: Null=Exact(1269))]]
+                                                  HashJoinExec: mode=CollectLeft, join_type=Right, on=[(#<col>, #<col>), (#<col>, #<col>)], projection=[#<col>, #<col>, #<col>, #<col>, #<col>, #<col>, #<col>], statistics=[Rows=Inexact(28810), Bytes=Absent, [(Col[0]: Null=Exact(0)),(Col[1]: Null=Exact(1208)),(Col[2]: Null=Exact(0)),(Col[3]: Null=Exact(1197)),(Col[4]: Null=Exact(1283)),(Col[5]: Null=Exact(1227)),(Col[6]: Null=Exact(1269))]]
+                                                    ProjectionExec: expr=[<exprs>]
+                                                      DataSourceExec: partitions=1, partition_sizes=[<sizes>], statistics=[Rows=Exact(2810), Bytes=Exact(<bytes>), [(Col[0]: Null=Exact(0)),(Col[1]: Null=Exact(0))]]
+                                                    RepartitionExec: partitioning=RoundRobinBatch(<partitions>), input_partitions=<partitions>, statistics=[Rows=Exact(28810), Bytes=Exact(<bytes>), [(Col[0]: Null=Exact(1208)),(Col[1]: Null=Exact(0)),(Col[2]: Null=Exact(1197)),(Col[3]: Null=Exact(0)),(Col[4]: Null=Exact(1283)),(Col[5]: Null=Exact(1227)),(Col[6]: Null=Exact(1269))]]
+                                                      ProjectionExec: expr=[<exprs>]
+                                                        DataSourceExec: partitions=1, partition_sizes=[<sizes>], statistics=[Rows=Exact(28810), Bytes=Exact(<bytes>), [(Col[0]: Null=Exact(1208)),(Col[1]: Null=Exact(0)),(Col[2]: Null=Exact(1197)),(Col[3]: Null=Exact(0)),(Col[4]: Null=Exact(1283)),(Col[5]: Null=Exact(1227)),(Col[6]: Null=Exact(1269))]]
+                                        ProjectionExec: expr=[<exprs>]
+                                          CoalesceBatchesExec: target_batch_size=8192, statistics=[Rows=Inexact(73049), Bytes=Inexact(<bytes>), [(Col[0]: Min=Exact(Int64(NULL)) Max=Exact(Int64(NULL)) Null=Inexact(0)),(Col[1]: Min=Exact(Int64(2001)) Max=Exact(Int64(2001)) Null=Inexact(0))]]
+                                            FilterExec: _6@<id> = 2001, statistics=[Rows=Inexact(73049), Bytes=Inexact(<bytes>), [(Col[0]: Min=Exact(Int64(NULL)) Max=Exact(Int64(NULL)) Null=Inexact(0)),(Col[1]: Min=Exact(Int64(2001)) Max=Exact(Int64(2001)) Null=Inexact(0))]]
+                                              RepartitionExec: partitioning=RoundRobinBatch(<partitions>), input_partitions=<partitions>, statistics=[Rows=Exact(73049), Bytes=Exact(<bytes>), [(Col[0]: Null=Exact(0)),(Col[1]: Null=Exact(0))]]
+                                                DataSourceExec: partitions=1, partition_sizes=[<sizes>], statistics=[Rows=Exact(73049), Bytes=Exact(<bytes>), [(Col[0]: Null=Exact(0)),(Col[1]: Null=Exact(0))]]
+
+
+initial_physical_plan_with_schema:
+ProjectionExec: expr=[<exprs>]
+  SortExec: [<sort_exprs>]
+    SortExec: expr=[<exprs>]
+      ProjectionExec: expr=[<exprs>]
+        ProjectionExec: expr=[<exprs>]
+          CoalesceBatchesExec: target_batch_size=8192, schema=[#<col>:Float64;N, #<col>:Float64;N, #<col>:Decimal128(15, 2);N, #<col>:Decimal128(15, 2);N, #<col>:Float64;N, #<col>:Decimal128(14, 2);N, #<col>:Decimal128(15, 2);N, #<col>:Float64;N, #<col>:Decimal128(15, 2);N, #<col>:Decimal128(15, 2);N]
+            FilterExec: coalesce(#<col>, 0) > 0 OR coalesce(#<col>, 0) > 0, schema=[#<col>:Float64;N, #<col>:Float64;N, #<col>:Decimal128(15, 2);N, #<col>:Decimal128(15, 2);N, #<col>:Float64;N, #<col>:Decimal128(14, 2);N, #<col>:Decimal128(15, 2);N, #<col>:Float64;N, #<col>:Decimal128(15, 2);N, #<col>:Decimal128(15, 2);N]
+              ProjectionExec: expr=[<exprs>]
+                CoalesceBatchesExec: target_batch_size=8192, schema=[#<col>:Float64;N, #<col>:Decimal128(15, 2);N, #<col>:Decimal128(15, 2);N, #<col>:Float64;N, #<col>:Float64;N, #<col>:Decimal128(15, 2);N, #<col>:Decimal128(15, 2);N, #<col>:Float64;N, #<col>:Decimal128(14, 2);N, #<col>:Decimal128(15, 2);N]
+                  HashJoinExec: mode=CollectLeft, join_type=Right, on=[(#<col>, #<col>), (#<col>, #<col>), (#<col>, #<col>)], projection=[#<col>, #<col>, #<col>, #<col>, #<col>, #<col>, #<col>, #<col>, #<col>, #<col>], schema=[#<col>:Float64;N, #<col>:Decimal128(15, 2);N, #<col>:Decimal128(15, 2);N, #<col>:Float64;N, #<col>:Float64;N, #<col>:Decimal128(15, 2);N, #<col>:Decimal128(15, 2);N, #<col>:Float64;N, #<col>:Decimal128(14, 2);N, #<col>:Decimal128(15, 2);N]
+                    CoalescePartitionsExec, schema=[#<col>:Int64;N, #<col>:Int64;N, #<col>:Float64;N, #<col>:Float64;N, #<col>:Decimal128(15, 2);N, #<col>:Decimal128(15, 2);N]
+                      ProjectionExec: expr=[<exprs>]
+                        AggregateExec: mode=FinalPartitioned, gby=[#<col> as #<col>, #<col> as #<col>, #<col> as #<col>], aggr=[sum(catalog_sales.#<col>), sum(catalog_sales.#<col>), sum(catalog_sales.#<col>)], schema=[#<col>:Int64;N, #<col>:Int64;N, #<col>:Float64;N, sum(catalog_sales.#<col>):Float64;N, sum(catalog_sales.#<col>):Decimal128(15, 2);N, sum(catalog_sales.#<col>):Decimal128(15, 2);N]
+                          CoalesceBatchesExec: target_batch_size=8192, schema=[#<col>:Int64;N, #<col>:Int64;N, #<col>:Float64;N, sum(catalog_sales.#<col>)[sum]:Float64;N, sum(catalog_sales.#<col>)[sum]:Decimal128(15, 2);N, sum(catalog_sales.#<col>)[sum]:Decimal128(15, 2);N]
+                            RepartitionExec: partitioning=Hash([#<col>, #<col>, #<col>], <partitions>), input_partitions=<partitions>, schema=[#<col>:Int64;N, #<col>:Int64;N, #<col>:Float64;N, sum(catalog_sales.#<col>)[sum]:Float64;N, sum(catalog_sales.#<col>)[sum]:Decimal128(15, 2);N, sum(catalog_sales.#<col>)[sum]:Decimal128(15, 2);N]
+                              AggregateExec: mode=Partial, gby=[#<col> as #<col>, #<col> as #<col>, #<col> as #<col>], aggr=[sum(catalog_sales.#<col>), sum(catalog_sales.#<col>), sum(catalog_sales.#<col>)], schema=[#<col>:Int64;N, #<col>:Int64;N, #<col>:Float64;N, sum(catalog_sales.#<col>)[sum]:Float64;N, sum(catalog_sales.#<col>)[sum]:Decimal128(15, 2);N, sum(catalog_sales.#<col>)[sum]:Decimal128(15, 2);N]
+                                CoalesceBatchesExec: target_batch_size=8192, schema=[#<col>:Float64;N, #<col>:Int64;N, #<col>:Float64;N, #<col>:Decimal128(5, 2);N, #<col>:Decimal128(5, 2);N, #<col>:Int64;N]
+                                  HashJoinExec: mode=CollectLeft, join_type=Inner, on=[(#<col>, CAST(date_dim.#<col> AS Float64)@<id>)], projection=[#<col>, #<col>, #<col>, #<col>, #<col>, #<col>], schema=[#<col>:Float64;N, #<col>:Int64;N, #<col>:Float64;N, #<col>:Decimal128(5, 2);N, #<col>:Decimal128(5, 2);N, #<col>:Int64;N]
+                                    CoalescePartitionsExec, schema=[#<col>:Float64;N, #<col>:Float64;N, #<col>:Int64;N, #<col>:Float64;N, #<col>:Decimal128(5, 2);N, #<col>:Decimal128(5, 2);N]
+                                      CoalesceBatchesExec: target_batch_size=8192, schema=[#<col>:Float64;N, #<col>:Float64;N, #<col>:Int64;N, #<col>:Float64;N, #<col>:Decimal128(5, 2);N, #<col>:Decimal128(5, 2);N]
+                                        FilterExec: #<col> IS NULL, projection=[#<col>, #<col>, #<col>, #<col>, #<col>, #<col>], schema=[#<col>:Float64;N, #<col>:Float64;N, #<col>:Int64;N, #<col>:Float64;N, #<col>:Decimal128(5, 2);N, #<col>:Decimal128(5, 2);N]
+                                          ProjectionExec: expr=[<exprs>]
+                                            CoalesceBatchesExec: target_batch_size=8192, schema=[#<col>:Int64;N, #<col>:Float64;N, #<col>:Float64;N, #<col>:Int64;N, #<col>:Float64;N, #<col>:Decimal128(5, 2);N, #<col>:Decimal128(5, 2);N]
+                                              HashJoinExec: mode=CollectLeft, join_type=Right, on=[(#<col>, #<col>), (#<col>, #<col>)], projection=[#<col>, #<col>, #<col>, #<col>, #<col>, #<col>, #<col>], schema=[#<col>:Int64;N, #<col>:Float64;N, #<col>:Float64;N, #<col>:Int64;N, #<col>:Float64;N, #<col>:Decimal128(5, 2);N, #<col>:Decimal128(5, 2);N]
+                                                ProjectionExec: expr=[<exprs>]
+                                                  DataSourceExec: partitions=1, partition_sizes=[<sizes>], schema=[_2:Int64;N, _16:Int64;N]
+                                                RepartitionExec: partitioning=RoundRobinBatch(<partitions>), input_partitions=<partitions>, schema=[#<col>:Float64;N, #<col>:Float64;N, #<col>:Int64;N, #<col>:Int64;N, #<col>:Float64;N, #<col>:Decimal128(5, 2);N, #<col>:Decimal128(5, 2);N]
+                                                  ProjectionExec: expr=[<exprs>]
+                                                    DataSourceExec: partitions=1, partition_sizes=[<sizes>], schema=[_0:Float64;N, _3:Float64;N, _15:Int64;N, _17:Int64;N, _18:Float64;N, _19:Decimal128(5, 2);N, _21:Decimal128(5, 2);N]
+                                    ProjectionExec: expr=[<exprs>]
+                                      RepartitionExec: partitioning=RoundRobinBatch(<partitions>), input_partitions=<partitions>, schema=[#<col>:Int64;N, #<col>:Int64;N]
+                                        ProjectionExec: expr=[<exprs>]
+                                          DataSourceExec: partitions=1, partition_sizes=[<sizes>], schema=[_0:Int64;N, _6:Int64;N]
+                    ProjectionExec: expr=[<exprs>]
+                      CoalesceBatchesExec: target_batch_size=8192, schema=[#<col>:Float64;N, #<col>:Decimal128(14, 2);N, #<col>:Decimal128(15, 2);N, #<col>:Int64;N, #<col>:Int64;N, #<col>:Float64;N, #<col>:Float64;N, #<col>:Decimal128(15, 2);N, #<col>:Decimal128(15, 2);N]
+                        HashJoinExec: mode=CollectLeft, join_type=Right, on=[(#<col>, #<col>), (#<col>, #<col>), (#<col>, #<col>)], projection=[#<col>, #<col>, #<col>, #<col>, #<col>, #<col>, #<col>, #<col>, #<col>], schema=[#<col>:Float64;N, #<col>:Decimal128(14, 2);N, #<col>:Decimal128(15, 2);N, #<col>:Int64;N, #<col>:Int64;N, #<col>:Float64;N, #<col>:Float64;N, #<col>:Decimal128(15, 2);N, #<col>:Decimal128(15, 2);N]
+                          CoalescePartitionsExec, schema=[#<col>:Int64;N, #<col>:Int64;N, #<col>:Float64;N, #<col>:Float64;N, #<col>:Decimal128(14, 2);N, #<col>:Decimal128(15, 2);N]
+                            ProjectionExec: expr=[<exprs>]
+                              AggregateExec: mode=FinalPartitioned, gby=[#<col> as #<col>, #<col> as #<col>, #<col> as #<col>], aggr=[sum(web_sales.#<col>), sum(web_sales.#<col>), sum(web_sales.#<col>)], schema=[#<col>:Int64;N, #<col>:Int64;N, #<col>:Float64;N, sum(web_sales.#<col>):Float64;N, sum(web_sales.#<col>):Decimal128(14, 2);N, sum(web_sales.#<col>):Decimal128(15, 2);N]
+                                CoalesceBatchesExec: target_batch_size=8192, schema=[#<col>:Int64;N, #<col>:Int64;N, #<col>:Float64;N, sum(web_sales.#<col>)[sum]:Float64;N, sum(web_sales.#<col>)[sum]:Decimal128(14, 2);N, sum(web_sales.#<col>)[sum]:Decimal128(15, 2);N]
+                                  RepartitionExec: partitioning=Hash([#<col>, #<col>, #<col>], <partitions>), input_partitions=<partitions>, schema=[#<col>:Int64;N, #<col>:Int64;N, #<col>:Float64;N, sum(web_sales.#<col>)[sum]:Float64;N, sum(web_sales.#<col>)[sum]:Decimal128(14, 2);N, sum(web_sales.#<col>)[sum]:Decimal128(15, 2);N]
+                                    AggregateExec: mode=Partial, gby=[#<col> as #<col>, #<col> as #<col>, #<col> as #<col>], aggr=[sum(web_sales.#<col>), sum(web_sales.#<col>), sum(web_sales.#<col>)], schema=[#<col>:Int64;N, #<col>:Int64;N, #<col>:Float64;N, sum(web_sales.#<col>)[sum]:Float64;N, sum(web_sales.#<col>)[sum]:Decimal128(14, 2);N, sum(web_sales.#<col>)[sum]:Decimal128(15, 2);N]
+                                      CoalesceBatchesExec: target_batch_size=8192, schema=[#<col>:Int64;N, #<col>:Float64;N, #<col>:Float64;N, #<col>:Decimal128(4, 2);N, #<col>:Decimal128(5, 2);N, #<col>:Int64;N]
+                                        HashJoinExec: mode=CollectLeft, join_type=Inner, on=[(#<col>, CAST(date_dim.#<col> AS Float64)@<id>)], projection=[#<col>, #<col>, #<col>, #<col>, #<col>, #<col>], schema=[#<col>:Int64;N, #<col>:Float64;N, #<col>:Float64;N, #<col>:Decimal128(4, 2);N, #<col>:Decimal128(5, 2);N, #<col>:Int64;N]
+                                          CoalescePartitionsExec, schema=[#<col>:Float64;N, #<col>:Int64;N, #<col>:Float64;N, #<col>:Float64;N, #<col>:Decimal128(4, 2);N, #<col>:Decimal128(5, 2);N]
+                                            CoalesceBatchesExec: target_batch_size=8192, schema=[#<col>:Float64;N, #<col>:Int64;N, #<col>:Float64;N, #<col>:Float64;N, #<col>:Decimal128(4, 2);N, #<col>:Decimal128(5, 2);N]
+                                              FilterExec: #<col> IS NULL, projection=[#<col>, #<col>, #<col>, #<col>, #<col>, #<col>], schema=[#<col>:Float64;N, #<col>:Int64;N, #<col>:Float64;N, #<col>:Float64;N, #<col>:Decimal128(4, 2);N, #<col>:Decimal128(5, 2);N]
+                                                RepartitionExec: partitioning=RoundRobinBatch(<partitions>), input_partitions=<partitions>, schema=[#<col>:Float64;N, #<col>:Int64;N, #<col>:Float64;N, #<col>:Float64;N, #<col>:Decimal128(4, 2);N, #<col>:Decimal128(5, 2);N, #<col>:Int64;N]
+                                                  ProjectionExec: expr=[<exprs>]
+                                                    CoalesceBatchesExec: target_batch_size=8192, schema=[#<col>:Int64;N, #<col>:Float64;N, #<col>:Int64;N, #<col>:Float64;N, #<col>:Float64;N, #<col>:Decimal128(4, 2);N, #<col>:Decimal128(5, 2);N]
+                                                      HashJoinExec: mode=CollectLeft, join_type=Right, on=[(#<col>, #<col>), (#<col>, #<col>)], projection=[#<col>, #<col>, #<col>, #<col>, #<col>, #<col>, #<col>], schema=[#<col>:Int64;N, #<col>:Float64;N, #<col>:Int64;N, #<col>:Float64;N, #<col>:Float64;N, #<col>:Decimal128(4, 2);N, #<col>:Decimal128(5, 2);N]
+                                                        ProjectionExec: expr=[<exprs>]
+                                                          DataSourceExec: partitions=1, partition_sizes=[<sizes>], schema=[_2:Int64;N, _13:Int64;N]
+                                                        ProjectionExec: expr=[<exprs>]
+                                                          DataSourceExec: partitions=1, partition_sizes=[<sizes>], schema=[_0:Float64;N, _3:Int64;N, _4:Float64;N, _17:Int64;N, _18:Float64;N, _19:Decimal128(4, 2);N, _21:Decimal128(5, 2);N]
+                                          ProjectionExec: expr=[<exprs>]
+                                            RepartitionExec: partitioning=RoundRobinBatch(<partitions>), input_partitions=<partitions>, schema=[#<col>:Int64;N, #<col>:Int64;N]
+                                              ProjectionExec: expr=[<exprs>]
+                                                DataSourceExec: partitions=1, partition_sizes=[<sizes>], schema=[_0:Int64;N, _6:Int64;N]
+                          ProjectionExec: expr=[<exprs>]
+                            AggregateExec: mode=FinalPartitioned, gby=[#<col> as #<col>, #<col> as #<col>, #<col> as #<col>], aggr=[sum(store_sales.#<col>), sum(store_sales.#<col>), sum(store_sales.#<col>)], ordering_mode=PartiallySorted([0]), schema=[#<col>:Int64;N, #<col>:Int64;N, #<col>:Float64;N, sum(store_sales.#<col>):Float64;N, sum(store_sales.#<col>):Decimal128(15, 2);N, sum(store_sales.#<col>):Decimal128(15, 2);N]
+                              CoalesceBatchesExec: target_batch_size=8192, schema=[#<col>:Int64;N, #<col>:Int64;N, #<col>:Float64;N, sum(store_sales.#<col>)[sum]:Float64;N, sum(store_sales.#<col>)[sum]:Decimal128(15, 2);N, sum(store_sales.#<col>)[sum]:Decimal128(15, 2);N]
+                                RepartitionExec: partitioning=Hash([#<col>, #<col>, #<col>], <partitions>), input_partitions=<partitions>, schema=[#<col>:Int64;N, #<col>:Int64;N, #<col>:Float64;N, sum(store_sales.#<col>)[sum]:Float64;N, sum(store_sales.#<col>)[sum]:Decimal128(15, 2);N, sum(store_sales.#<col>)[sum]:Decimal128(15, 2);N]
+                                  AggregateExec: mode=Partial, gby=[#<col> as #<col>, #<col> as #<col>, #<col> as #<col>], aggr=[sum(store_sales.#<col>), sum(store_sales.#<col>), sum(store_sales.#<col>)], ordering_mode=PartiallySorted([0]), schema=[#<col>:Int64;N, #<col>:Int64;N, #<col>:Float64;N, sum(store_sales.#<col>)[sum]:Float64;N, sum(store_sales.#<col>)[sum]:Decimal128(15, 2);N, sum(store_sales.#<col>)[sum]:Decimal128(15, 2);N]
+                                    CoalesceBatchesExec: target_batch_size=8192, schema=[#<col>:Int64;N, #<col>:Float64;N, #<col>:Float64;N, #<col>:Decimal128(5, 2);N, #<col>:Decimal128(5, 2);N, #<col>:Int64;N]
+                                      HashJoinExec: mode=CollectLeft, join_type=Inner, on=[(#<col>, CAST(date_dim.#<col> AS Float64)@<id>)], projection=[#<col>, #<col>, #<col>, #<col>, #<col>, #<col>], schema=[#<col>:Int64;N, #<col>:Float64;N, #<col>:Float64;N, #<col>:Decimal128(5, 2);N, #<col>:Decimal128(5, 2);N, #<col>:Int64;N]
+                                        CoalescePartitionsExec, schema=[#<col>:Float64;N, #<col>:Int64;N, #<col>:Float64;N, #<col>:Float64;N, #<col>:Decimal128(5, 2);N, #<col>:Decimal128(5, 2);N]
+                                          CoalesceBatchesExec: target_batch_size=8192, schema=[#<col>:Float64;N, #<col>:Int64;N, #<col>:Float64;N, #<col>:Float64;N, #<col>:Decimal128(5, 2);N, #<col>:Decimal128(5, 2);N]
+                                            FilterExec: #<col> IS NULL, projection=[#<col>, #<col>, #<col>, #<col>, #<col>, #<col>], schema=[#<col>:Float64;N, #<col>:Int64;N, #<col>:Float64;N, #<col>:Float64;N, #<col>:Decimal128(5, 2);N, #<col>:Decimal128(5, 2);N]
+                                              ProjectionExec: expr=[<exprs>]
+                                                CoalesceBatchesExec: target_batch_size=8192, schema=[#<col>:Int64;N, #<col>:Float64;N, #<col>:Int64;N, #<col>:Float64;N, #<col>:Float64;N, #<col>:Decimal128(5, 2);N, #<col>:Decimal128(5, 2);N]
+                                                  HashJoinExec: mode=CollectLeft, join_type=Right, on=[(#<col>, #<col>), (#<col>, #<col>)], projection=[#<col>, #<col>, #<col>, #<col>, #<col>, #<col>, #<col>], schema=[#<col>:Int64;N, #<col>:Float64;N, #<col>:Int64;N, #<col>:Float64;N, #<col>:Float64;N, #<col>:Decimal128(5, 2);N, #<col>:Decimal128(5, 2);N]
+                                                    ProjectionExec: expr=[<exprs>]
+                                                      DataSourceExec: partitions=1, partition_sizes=[<sizes>], schema=[_2:Int64;N, _9:Int64;N]
+                                                    RepartitionExec: partitioning=RoundRobinBatch(<partitions>), input_partitions=<partitions>, schema=[#<col>:Float64;N, #<col>:Int64;N, #<col>:Float64;N, #<col>:Int64;N, #<col>:Float64;N, #<col>:Decimal128(5, 2);N, #<col>:Decimal128(5, 2);N]
+                                                      ProjectionExec: expr=[<exprs>]
+                                                        DataSourceExec: partitions=1, partition_sizes=[<sizes>], schema=[_0:Float64;N, _2:Int64;N, _3:Float64;N, _9:Int64;N, _10:Float64;N, _11:Decimal128(5, 2);N, _13:Decimal128(5, 2);N]
+                                        ProjectionExec: expr=[<exprs>]
+                                          CoalesceBatchesExec: target_batch_size=8192, schema=[_0:Int64;N, _6:Int64;N]
+                                            FilterExec: _6@<id> = 2001, schema=[_0:Int64;N, _6:Int64;N]
+                                              RepartitionExec: partitioning=RoundRobinBatch(<partitions>), input_partitions=<partitions>, schema=[_0:Int64;N, _6:Int64;N]
+                                                DataSourceExec: partitions=1, partition_sizes=[<sizes>], schema=[_0:Int64;N, _6:Int64;N]
+
+
+physical_plan after OutputRequirements:
+ProjectionExec: expr=[<exprs>]
+  OutputRequirementExec: order_by=[(#<col>, asc), (#<col>, desc), (#<col>, desc), (#<col>, desc), (#<col>, asc), (#<col>, asc), (#<col>, asc), (#<col>, asc)], dist_by=SinglePartition
+    SortExec: [<sort_exprs>], fetch=100
+      SortExec: expr=[<exprs>]
+        ProjectionExec: expr=[<exprs>]
+          ProjectionExec: expr=[<exprs>]
+            CoalesceBatchesExec: target_batch_size=8192
+              FilterExec: coalesce(#<col>, 0) > 0 OR coalesce(#<col>, 0) > 0
+                ProjectionExec: expr=[<exprs>]
+                  CoalesceBatchesExec: target_batch_size=8192
+                    HashJoinExec: mode=CollectLeft, join_type=Right, on=[(#<col>, #<col>), (#<col>, #<col>), (#<col>, #<col>)], projection=[#<col>, #<col>, #<col>, #<col>, #<col>, #<col>, #<col>, #<col>, #<col>, #<col>]
+                      CoalescePartitionsExec
+                        ProjectionExec: expr=[<exprs>]
+                          AggregateExec: mode=FinalPartitioned, gby=[#<col> as #<col>, #<col> as #<col>, #<col> as #<col>], aggr=[sum(catalog_sales.#<col>), sum(catalog_sales.#<col>), sum(catalog_sales.#<col>)]
+                            CoalesceBatchesExec: target_batch_size=8192
+                              RepartitionExec: partitioning=Hash([#<col>, #<col>, #<col>], <partitions>), input_partitions=<partitions>
+                                AggregateExec: mode=Partial, gby=[#<col> as #<col>, #<col> as #<col>, #<col> as #<col>], aggr=[sum(catalog_sales.#<col>), sum(catalog_sales.#<col>), sum(catalog_sales.#<col>)]
+                                  CoalesceBatchesExec: target_batch_size=8192
+                                    HashJoinExec: mode=CollectLeft, join_type=Inner, on=[(#<col>, CAST(date_dim.#<col> AS Float64)@<id>)], projection=[#<col>, #<col>, #<col>, #<col>, #<col>, #<col>]
+                                      CoalescePartitionsExec
+                                        CoalesceBatchesExec: target_batch_size=8192
+                                          FilterExec: #<col> IS NULL, projection=[#<col>, #<col>, #<col>, #<col>, #<col>, #<col>]
+                                            ProjectionExec: expr=[<exprs>]
+                                              CoalesceBatchesExec: target_batch_size=8192
+                                                HashJoinExec: mode=CollectLeft, join_type=Right, on=[(#<col>, #<col>), (#<col>, #<col>)], projection=[#<col>, #<col>, #<col>, #<col>, #<col>, #<col>, #<col>]
+                                                  ProjectionExec: expr=[<exprs>]
+                                                    DataSourceExec: partitions=1, partition_sizes=[<sizes>]
+                                                  RepartitionExec: partitioning=RoundRobinBatch(<partitions>), input_partitions=<partitions>
+                                                    ProjectionExec: expr=[<exprs>]
+                                                      DataSourceExec: partitions=1, partition_sizes=[<sizes>]
+                                      ProjectionExec: expr=[<exprs>]
+                                        RepartitionExec: partitioning=RoundRobinBatch(<partitions>), input_partitions=<partitions>
+                                          ProjectionExec: expr=[<exprs>]
+                                            DataSourceExec: partitions=1, partition_sizes=[<sizes>]
+                      ProjectionExec: expr=[<exprs>]
+                        CoalesceBatchesExec: target_batch_size=8192
+                          HashJoinExec: mode=CollectLeft, join_type=Right, on=[(#<col>, #<col>), (#<col>, #<col>), (#<col>, #<col>)], projection=[#<col>, #<col>, #<col>, #<col>, #<col>, #<col>, #<col>, #<col>, #<col>]
+                            CoalescePartitionsExec
+                              ProjectionExec: expr=[<exprs>]
+                                AggregateExec: mode=FinalPartitioned, gby=[#<col> as #<col>, #<col> as #<col>, #<col> as #<col>], aggr=[sum(web_sales.#<col>), sum(web_sales.#<col>), sum(web_sales.#<col>)]
+                                  CoalesceBatchesExec: target_batch_size=8192
+                                    RepartitionExec: partitioning=Hash([#<col>, #<col>, #<col>], <partitions>), input_partitions=<partitions>
+                                      AggregateExec: mode=Partial, gby=[#<col> as #<col>, #<col> as #<col>, #<col> as #<col>], aggr=[sum(web_sales.#<col>), sum(web_sales.#<col>), sum(web_sales.#<col>)]
+                                        CoalesceBatchesExec: target_batch_size=8192
+                                          HashJoinExec: mode=CollectLeft, join_type=Inner, on=[(#<col>, CAST(date_dim.#<col> AS Float64)@<id>)], projection=[#<col>, #<col>, #<col>, #<col>, #<col>, #<col>]
+                                            CoalescePartitionsExec
+                                              CoalesceBatchesExec: target_batch_size=8192
+                                                FilterExec: #<col> IS NULL, projection=[#<col>, #<col>, #<col>, #<col>, #<col>, #<col>]
+                                                  RepartitionExec: partitioning=RoundRobinBatch(<partitions>), input_partitions=<partitions>
+                                                    ProjectionExec: expr=[<exprs>]
+                                                      CoalesceBatchesExec: target_batch_size=8192
+                                                        HashJoinExec: mode=CollectLeft, join_type=Right, on=[(#<col>, #<col>), (#<col>, #<col>)], projection=[#<col>, #<col>, #<col>, #<col>, #<col>, #<col>, #<col>]
+                                                          ProjectionExec: expr=[<exprs>]
+                                                            DataSourceExec: partitions=1, partition_sizes=[<sizes>]
+                                                          ProjectionExec: expr=[<exprs>]
+                                                            DataSourceExec: partitions=1, partition_sizes=[<sizes>]
+                                            ProjectionExec: expr=[<exprs>]
+                                              RepartitionExec: partitioning=RoundRobinBatch(<partitions>), input_partitions=<partitions>
+                                                ProjectionExec: expr=[<exprs>]
+                                                  DataSourceExec: partitions=1, partition_sizes=[<sizes>]
+                            ProjectionExec: expr=[<exprs>]
+                              AggregateExec: mode=FinalPartitioned, gby=[#<col> as #<col>, #<col> as #<col>, #<col> as #<col>], aggr=[sum(store_sales.#<col>), sum(store_sales.#<col>), sum(store_sales.#<col>)], ordering_mode=PartiallySorted([0])
+                                CoalesceBatchesExec: target_batch_size=8192
+                                  RepartitionExec: partitioning=Hash([#<col>, #<col>, #<col>], <partitions>), input_partitions=<partitions>
+                                    AggregateExec: mode=Partial, gby=[#<col> as #<col>, #<col> as #<col>, #<col> as #<col>], aggr=[sum(store_sales.#<col>), sum(store_sales.#<col>), sum(store_sales.#<col>)], ordering_mode=PartiallySorted([0])
+                                      CoalesceBatchesExec: target_batch_size=8192
+                                        HashJoinExec: mode=CollectLeft, join_type=Inner, on=[(#<col>, CAST(date_dim.#<col> AS Float64)@<id>)], projection=[#<col>, #<col>, #<col>, #<col>, #<col>, #<col>]
+                                          CoalescePartitionsExec
+                                            CoalesceBatchesExec: target_batch_size=8192
+                                              FilterExec: #<col> IS NULL, projection=[#<col>, #<col>, #<col>, #<col>, #<col>, #<col>]
+                                                ProjectionExec: expr=[<exprs>]
+                                                  CoalesceBatchesExec: target_batch_size=8192
+                                                    HashJoinExec: mode=CollectLeft, join_type=Right, on=[(#<col>, #<col>), (#<col>, #<col>)], projection=[#<col>, #<col>, #<col>, #<col>, #<col>, #<col>, #<col>]
+                                                      ProjectionExec: expr=[<exprs>]
+                                                        DataSourceExec: partitions=1, partition_sizes=[<sizes>]
+                                                      RepartitionExec: partitioning=RoundRobinBatch(<partitions>), input_partitions=<partitions>
+                                                        ProjectionExec: expr=[<exprs>]
+                                                          DataSourceExec: partitions=1, partition_sizes=[<sizes>]
+                                          ProjectionExec: expr=[<exprs>]
+                                            CoalesceBatchesExec: target_batch_size=8192
+                                              FilterExec: _6@<id> = 2001
+                                                RepartitionExec: partitioning=RoundRobinBatch(<partitions>), input_partitions=<partitions>
+                                                  DataSourceExec: partitions=1, partition_sizes=[<sizes>]
+
+
+physical_plan after aggregate_statistics:
+SAME TEXT AS ABOVE
+
+physical_plan after join_selection:
+SAME TEXT AS ABOVE
+
+physical_plan after LimitedDistinctAggregation:
+SAME TEXT AS ABOVE
+
+physical_plan after FilterPushdown:
+SAME TEXT AS ABOVE
+
+physical_plan after EnforceDistribution:
+ProjectionExec: expr=[<exprs>]
+  OutputRequirementExec: order_by=[(#<col>, asc), (#<col>, desc), (#<col>, desc), (#<col>, desc), (#<col>, asc), (#<col>, asc), (#<col>, asc), (#<col>, asc)], dist_by=SinglePartition
+    SortExec: expr=[<exprs>]
+      CoalescePartitionsExec
+        SortExec: expr=[<exprs>]
+          ProjectionExec: expr=[<exprs>]
+            ProjectionExec: expr=[<exprs>]
+              CoalesceBatchesExec: target_batch_size=8192
+                FilterExec: coalesce(#<col>, 0) > 0 OR coalesce(#<col>, 0) > 0
+                  ProjectionExec: expr=[<exprs>]
+                    CoalesceBatchesExec: target_batch_size=8192
+                      HashJoinExec: mode=CollectLeft, join_type=Right, on=[(#<col>, #<col>), (#<col>, #<col>), (#<col>, #<col>)], projection=[#<col>, #<col>, #<col>, #<col>, #<col>, #<col>, #<col>, #<col>, #<col>, #<col>]
+                        CoalescePartitionsExec
+                          ProjectionExec: expr=[<exprs>]
+                            AggregateExec: mode=FinalPartitioned, gby=[#<col> as #<col>, #<col> as #<col>, #<col> as #<col>], aggr=[sum(catalog_sales.#<col>), sum(catalog_sales.#<col>), sum(catalog_sales.#<col>)]
+                              RepartitionExec: partitioning=Hash([#<col>, #<col>, #<col>], <partitions>), input_partitions=<partitions>
+                                CoalesceBatchesExec: target_batch_size=8192
+                                  AggregateExec: mode=Partial, gby=[#<col> as #<col>, #<col> as #<col>, #<col> as #<col>], aggr=[sum(catalog_sales.#<col>), sum(catalog_sales.#<col>), sum(catalog_sales.#<col>)]
+                                    CoalesceBatchesExec: target_batch_size=8192
+                                      HashJoinExec: mode=CollectLeft, join_type=Inner, on=[(#<col>, CAST(date_dim.#<col> AS Float64)@<id>)], projection=[#<col>, #<col>, #<col>, #<col>, #<col>, #<col>]
+                                        CoalescePartitionsExec
+                                          CoalesceBatchesExec: target_batch_size=8192
+                                            FilterExec: #<col> IS NULL, projection=[#<col>, #<col>, #<col>, #<col>, #<col>, #<col>]
+                                              ProjectionExec: expr=[<exprs>]
+                                                CoalesceBatchesExec: target_batch_size=8192
+                                                  HashJoinExec: mode=CollectLeft, join_type=Right, on=[(#<col>, #<col>), (#<col>, #<col>)], projection=[#<col>, #<col>, #<col>, #<col>, #<col>, #<col>, #<col>]
+                                                    ProjectionExec: expr=[<exprs>]
+                                                      DataSourceExec: partitions=1, partition_sizes=[<sizes>]
+                                                    RepartitionExec: partitioning=RoundRobinBatch(<partitions>), input_partitions=<partitions>
+                                                      ProjectionExec: expr=[<exprs>]
+                                                        DataSourceExec: partitions=1, partition_sizes=[<sizes>]
+                                        ProjectionExec: expr=[<exprs>]
+                                          RepartitionExec: partitioning=RoundRobinBatch(<partitions>), input_partitions=<partitions>
+                                            ProjectionExec: expr=[<exprs>]
+                                              DataSourceExec: partitions=1, partition_sizes=[<sizes>]
+                        ProjectionExec: expr=[<exprs>]
+                          CoalesceBatchesExec: target_batch_size=8192
+                            HashJoinExec: mode=CollectLeft, join_type=Right, on=[(#<col>, #<col>), (#<col>, #<col>), (#<col>, #<col>)], projection=[#<col>, #<col>, #<col>, #<col>, #<col>, #<col>, #<col>, #<col>, #<col>]
+                              CoalescePartitionsExec
+                                ProjectionExec: expr=[<exprs>]
+                                  AggregateExec: mode=FinalPartitioned, gby=[#<col> as #<col>, #<col> as #<col>, #<col> as #<col>], aggr=[sum(web_sales.#<col>), sum(web_sales.#<col>), sum(web_sales.#<col>)]
+                                    RepartitionExec: partitioning=Hash([#<col>, #<col>, #<col>], <partitions>), input_partitions=<partitions>
+                                      CoalesceBatchesExec: target_batch_size=8192
+                                        AggregateExec: mode=Partial, gby=[#<col> as #<col>, #<col> as #<col>, #<col> as #<col>], aggr=[sum(web_sales.#<col>), sum(web_sales.#<col>), sum(web_sales.#<col>)]
+                                          CoalesceBatchesExec: target_batch_size=8192
+                                            HashJoinExec: mode=CollectLeft, join_type=Inner, on=[(#<col>, CAST(date_dim.#<col> AS Float64)@<id>)], projection=[#<col>, #<col>, #<col>, #<col>, #<col>, #<col>]
+                                              CoalescePartitionsExec
+                                                CoalesceBatchesExec: target_batch_size=8192
+                                                  FilterExec: #<col> IS NULL, projection=[#<col>, #<col>, #<col>, #<col>, #<col>, #<col>]
+                                                    RepartitionExec: partitioning=RoundRobinBatch(<partitions>), input_partitions=<partitions>
+                                                      ProjectionExec: expr=[<exprs>]
+                                                        CoalesceBatchesExec: target_batch_size=8192
+                                                          HashJoinExec: mode=CollectLeft, join_type=Right, on=[(#<col>, #<col>), (#<col>, #<col>)], projection=[#<col>, #<col>, #<col>, #<col>, #<col>, #<col>, #<col>]
+                                                            ProjectionExec: expr=[<exprs>]
+                                                              DataSourceExec: partitions=1, partition_sizes=[<sizes>]
+                                                            ProjectionExec: expr=[<exprs>]
+                                                              DataSourceExec: partitions=1, partition_sizes=[<sizes>]
+                                              ProjectionExec: expr=[<exprs>]
+                                                RepartitionExec: partitioning=RoundRobinBatch(<partitions>), input_partitions=<partitions>
+                                                  ProjectionExec: expr=[<exprs>]
+                                                    DataSourceExec: partitions=1, partition_sizes=[<sizes>]
+                              ProjectionExec: expr=[<exprs>]
+                                AggregateExec: mode=FinalPartitioned, gby=[#<col> as #<col>, #<col> as #<col>, #<col> as #<col>], aggr=[sum(store_sales.#<col>), sum(store_sales.#<col>), sum(store_sales.#<col>)], ordering_mode=PartiallySorted([0])
+                                  RepartitionExec: partitioning=Hash([#<col>, #<col>, #<col>], <partitions>), input_partitions=<partitions>
+                                    CoalesceBatchesExec: target_batch_size=8192
+                                      AggregateExec: mode=Partial, gby=[#<col> as #<col>, #<col> as #<col>, #<col> as #<col>], aggr=[sum(store_sales.#<col>), sum(store_sales.#<col>), sum(store_sales.#<col>)], ordering_mode=PartiallySorted([0])
+                                        CoalesceBatchesExec: target_batch_size=8192
+                                          HashJoinExec: mode=CollectLeft, join_type=Inner, on=[(#<col>, CAST(date_dim.#<col> AS Float64)@<id>)], projection=[#<col>, #<col>, #<col>, #<col>, #<col>, #<col>]
+                                            CoalescePartitionsExec
+                                              CoalesceBatchesExec: target_batch_size=8192
+                                                FilterExec: #<col> IS NULL, projection=[#<col>, #<col>, #<col>, #<col>, #<col>, #<col>]
+                                                  ProjectionExec: expr=[<exprs>]
+                                                    CoalesceBatchesExec: target_batch_size=8192
+                                                      HashJoinExec: mode=CollectLeft, join_type=Right, on=[(#<col>, #<col>), (#<col>, #<col>)], projection=[#<col>, #<col>, #<col>, #<col>, #<col>, #<col>, #<col>]
+                                                        ProjectionExec: expr=[<exprs>]
+                                                          DataSourceExec: partitions=1, partition_sizes=[<sizes>]
+                                                        RepartitionExec: partitioning=RoundRobinBatch(<partitions>), input_partitions=<partitions>
+                                                          ProjectionExec: expr=[<exprs>]
+                                                            DataSourceExec: partitions=1, partition_sizes=[<sizes>]
+                                            ProjectionExec: expr=[<exprs>]
+                                              CoalesceBatchesExec: target_batch_size=8192
+                                                FilterExec: _6@<id> = 2001
+                                                  RepartitionExec: partitioning=RoundRobinBatch(<partitions>), input_partitions=<partitions>
+                                                    DataSourceExec: partitions=1, partition_sizes=[<sizes>]
+
+
+physical_plan after CombinePartialFinalAggregate:
+SAME TEXT AS ABOVE
+
+physical_plan after EnforceSorting:
+ProjectionExec: expr=[<exprs>]
+  OutputRequirementExec: order_by=[(#<col>, asc), (#<col>, desc), (#<col>, desc), (#<col>, desc), (#<col>, asc), (#<col>, asc), (#<col>, asc), (#<col>, asc)], dist_by=SinglePartition
+    SortExec: [<sort_exprs>], fetch=100
+      SortExec: expr=[<exprs>]
+        ProjectionExec: expr=[<exprs>]
+          ProjectionExec: expr=[<exprs>]
+            CoalesceBatchesExec: target_batch_size=8192
+              FilterExec: coalesce(#<col>, 0) > 0 OR coalesce(#<col>, 0) > 0
+                ProjectionExec: expr=[<exprs>]
+                  CoalesceBatchesExec: target_batch_size=8192
+                    HashJoinExec: mode=CollectLeft, join_type=Right, on=[(#<col>, #<col>), (#<col>, #<col>), (#<col>, #<col>)], projection=[#<col>, #<col>, #<col>, #<col>, #<col>, #<col>, #<col>, #<col>, #<col>, #<col>]
+                      CoalescePartitionsExec
+                        ProjectionExec: expr=[<exprs>]
+                          AggregateExec: mode=FinalPartitioned, gby=[#<col> as #<col>, #<col> as #<col>, #<col> as #<col>], aggr=[sum(catalog_sales.#<col>), sum(catalog_sales.#<col>), sum(catalog_sales.#<col>)]
+                            RepartitionExec: partitioning=Hash([#<col>, #<col>, #<col>], <partitions>), input_partitions=<partitions>
+                              CoalesceBatchesExec: target_batch_size=8192
+                                AggregateExec: mode=Partial, gby=[#<col> as #<col>, #<col> as #<col>, #<col> as #<col>], aggr=[sum(catalog_sales.#<col>), sum(catalog_sales.#<col>), sum(catalog_sales.#<col>)]
+                                  CoalesceBatchesExec: target_batch_size=8192
+                                    HashJoinExec: mode=CollectLeft, join_type=Inner, on=[(#<col>, CAST(date_dim.#<col> AS Float64)@<id>)], projection=[#<col>, #<col>, #<col>, #<col>, #<col>, #<col>]
+                                      CoalescePartitionsExec
+                                        CoalesceBatchesExec: target_batch_size=8192
+                                          FilterExec: #<col> IS NULL, projection=[#<col>, #<col>, #<col>, #<col>, #<col>, #<col>]
+                                            ProjectionExec: expr=[<exprs>]
+                                              CoalesceBatchesExec: target_batch_size=8192
+                                                HashJoinExec: mode=CollectLeft, join_type=Right, on=[(#<col>, #<col>), (#<col>, #<col>)], projection=[#<col>, #<col>, #<col>, #<col>, #<col>, #<col>, #<col>]
+                                                  ProjectionExec: expr=[<exprs>]
+                                                    DataSourceExec: partitions=1, partition_sizes=[<sizes>]
+                                                  RepartitionExec: partitioning=RoundRobinBatch(<partitions>), input_partitions=<partitions>
+                                                    ProjectionExec: expr=[<exprs>]
+                                                      DataSourceExec: partitions=1, partition_sizes=[<sizes>]
+                                      ProjectionExec: expr=[<exprs>]
+                                        RepartitionExec: partitioning=RoundRobinBatch(<partitions>), input_partitions=<partitions>
+                                          ProjectionExec: expr=[<exprs>]
+                                            DataSourceExec: partitions=1, partition_sizes=[<sizes>]
+                      ProjectionExec: expr=[<exprs>]
+                        CoalesceBatchesExec: target_batch_size=8192
+                          HashJoinExec: mode=CollectLeft, join_type=Right, on=[(#<col>, #<col>), (#<col>, #<col>), (#<col>, #<col>)], projection=[#<col>, #<col>, #<col>, #<col>, #<col>, #<col>, #<col>, #<col>, #<col>]
+                            CoalescePartitionsExec
+                              ProjectionExec: expr=[<exprs>]
+                                AggregateExec: mode=FinalPartitioned, gby=[#<col> as #<col>, #<col> as #<col>, #<col> as #<col>], aggr=[sum(web_sales.#<col>), sum(web_sales.#<col>), sum(web_sales.#<col>)]
+                                  RepartitionExec: partitioning=Hash([#<col>, #<col>, #<col>], <partitions>), input_partitions=<partitions>
+                                    CoalesceBatchesExec: target_batch_size=8192
+                                      AggregateExec: mode=Partial, gby=[#<col> as #<col>, #<col> as #<col>, #<col> as #<col>], aggr=[sum(web_sales.#<col>), sum(web_sales.#<col>), sum(web_sales.#<col>)]
+                                        CoalesceBatchesExec: target_batch_size=8192
+                                          HashJoinExec: mode=CollectLeft, join_type=Inner, on=[(#<col>, CAST(date_dim.#<col> AS Float64)@<id>)], projection=[#<col>, #<col>, #<col>, #<col>, #<col>, #<col>]
+                                            CoalescePartitionsExec
+                                              CoalesceBatchesExec: target_batch_size=8192
+                                                FilterExec: #<col> IS NULL, projection=[#<col>, #<col>, #<col>, #<col>, #<col>, #<col>]
+                                                  RepartitionExec: partitioning=RoundRobinBatch(<partitions>), input_partitions=<partitions>
+                                                    ProjectionExec: expr=[<exprs>]
+                                                      CoalesceBatchesExec: target_batch_size=8192
+                                                        HashJoinExec: mode=CollectLeft, join_type=Right, on=[(#<col>, #<col>), (#<col>, #<col>)], projection=[#<col>, #<col>, #<col>, #<col>, #<col>, #<col>, #<col>]
+                                                          ProjectionExec: expr=[<exprs>]
+                                                            DataSourceExec: partitions=1, partition_sizes=[<sizes>]
+                                                          ProjectionExec: expr=[<exprs>]
+                                                            DataSourceExec: partitions=1, partition_sizes=[<sizes>]
+                                            ProjectionExec: expr=[<exprs>]
+                                              RepartitionExec: partitioning=RoundRobinBatch(<partitions>), input_partitions=<partitions>
+                                                ProjectionExec: expr=[<exprs>]
+                                                  DataSourceExec: partitions=1, partition_sizes=[<sizes>]
+                            ProjectionExec: expr=[<exprs>]
+                              AggregateExec: mode=FinalPartitioned, gby=[#<col> as #<col>, #<col> as #<col>, #<col> as #<col>], aggr=[sum(store_sales.#<col>), sum(store_sales.#<col>), sum(store_sales.#<col>)], ordering_mode=PartiallySorted([0])
+                                RepartitionExec: partitioning=Hash([#<col>, #<col>, #<col>], <partitions>), input_partitions=<partitions>
+                                  CoalesceBatchesExec: target_batch_size=8192
+                                    AggregateExec: mode=Partial, gby=[#<col> as #<col>, #<col> as #<col>, #<col> as #<col>], aggr=[sum(store_sales.#<col>), sum(store_sales.#<col>), sum(store_sales.#<col>)], ordering_mode=PartiallySorted([0])
+                                      CoalesceBatchesExec: target_batch_size=8192
+                                        HashJoinExec: mode=CollectLeft, join_type=Inner, on=[(#<col>, CAST(date_dim.#<col> AS Float64)@<id>)], projection=[#<col>, #<col>, #<col>, #<col>, #<col>, #<col>]
+                                          CoalescePartitionsExec
+                                            CoalesceBatchesExec: target_batch_size=8192
+                                              FilterExec: #<col> IS NULL, projection=[#<col>, #<col>, #<col>, #<col>, #<col>, #<col>]
+                                                ProjectionExec: expr=[<exprs>]
+                                                  CoalesceBatchesExec: target_batch_size=8192
+                                                    HashJoinExec: mode=CollectLeft, join_type=Right, on=[(#<col>, #<col>), (#<col>, #<col>)], projection=[#<col>, #<col>, #<col>, #<col>, #<col>, #<col>, #<col>]
+                                                      ProjectionExec: expr=[<exprs>]
+                                                        DataSourceExec: partitions=1, partition_sizes=[<sizes>]
+                                                      RepartitionExec: partitioning=RoundRobinBatch(<partitions>), input_partitions=<partitions>
+                                                        ProjectionExec: expr=[<exprs>]
+                                                          DataSourceExec: partitions=1, partition_sizes=[<sizes>]
+                                          ProjectionExec: expr=[<exprs>]
+                                            CoalesceBatchesExec: target_batch_size=8192
+                                              FilterExec: _6@<id> = 2001
+                                                RepartitionExec: partitioning=RoundRobinBatch(<partitions>), input_partitions=<partitions>
+                                                  DataSourceExec: partitions=1, partition_sizes=[<sizes>]
+
+
+physical_plan after OptimizeAggregateOrder:
+SAME TEXT AS ABOVE
+
+physical_plan after ProjectionPushdown:
+SAME TEXT AS ABOVE
+
+physical_plan after coalesce_batches:
+ProjectionExec: expr=[<exprs>]
+  OutputRequirementExec: order_by=[(#<col>, asc), (#<col>, desc), (#<col>, desc), (#<col>, desc), (#<col>, asc), (#<col>, asc), (#<col>, asc), (#<col>, asc)], dist_by=SinglePartition
+    SortExec: [<sort_exprs>], fetch=100
+      SortExec: expr=[<exprs>]
+        ProjectionExec: expr=[<exprs>]
+          ProjectionExec: expr=[<exprs>]
+            CoalesceBatchesExec: target_batch_size=8192
+              CoalesceBatchesExec: target_batch_size=8192
+                FilterExec: coalesce(#<col>, 0) > 0 OR coalesce(#<col>, 0) > 0
+                  ProjectionExec: expr=[<exprs>]
+                    CoalesceBatchesExec: target_batch_size=8192
+                      CoalesceBatchesExec: target_batch_size=8192
+                        HashJoinExec: mode=CollectLeft, join_type=Right, on=[(#<col>, #<col>), (#<col>, #<col>), (#<col>, #<col>)], projection=[#<col>, #<col>, #<col>, #<col>, #<col>, #<col>, #<col>, #<col>, #<col>, #<col>]
+                          CoalescePartitionsExec
+                            ProjectionExec: expr=[<exprs>]
+                              AggregateExec: mode=FinalPartitioned, gby=[#<col> as #<col>, #<col> as #<col>, #<col> as #<col>], aggr=[sum(catalog_sales.#<col>), sum(catalog_sales.#<col>), sum(catalog_sales.#<col>)]
+                                CoalesceBatchesExec: target_batch_size=8192
+                                  RepartitionExec: partitioning=Hash([#<col>, #<col>, #<col>], <partitions>), input_partitions=<partitions>
+                                    CoalesceBatchesExec: target_batch_size=8192
+                                      AggregateExec: mode=Partial, gby=[#<col> as #<col>, #<col> as #<col>, #<col> as #<col>], aggr=[sum(catalog_sales.#<col>), sum(catalog_sales.#<col>), sum(catalog_sales.#<col>)]
+                                        CoalesceBatchesExec: target_batch_size=8192
+                                          CoalesceBatchesExec: target_batch_size=8192
+                                            HashJoinExec: mode=CollectLeft, join_type=Inner, on=[(#<col>, CAST(date_dim.#<col> AS Float64)@<id>)], projection=[#<col>, #<col>, #<col>, #<col>, #<col>, #<col>]
+                                              CoalescePartitionsExec
+                                                CoalesceBatchesExec: target_batch_size=8192
+                                                  CoalesceBatchesExec: target_batch_size=8192
+                                                    FilterExec: #<col> IS NULL, projection=[#<col>, #<col>, #<col>, #<col>, #<col>, #<col>]
+                                                      ProjectionExec: expr=[<exprs>]
+                                                        CoalesceBatchesExec: target_batch_size=8192
+                                                          CoalesceBatchesExec: target_batch_size=8192
+                                                            HashJoinExec: mode=CollectLeft, join_type=Right, on=[(#<col>, #<col>), (#<col>, #<col>)], projection=[#<col>, #<col>, #<col>, #<col>, #<col>, #<col>, #<col>]
+                                                              ProjectionExec: expr=[<exprs>]
+                                                                DataSourceExec: partitions=1, partition_sizes=[<sizes>]
+                                                              RepartitionExec: partitioning=RoundRobinBatch(<partitions>), input_partitions=<partitions>
+                                                                ProjectionExec: expr=[<exprs>]
+                                                                  DataSourceExec: partitions=1, partition_sizes=[<sizes>]
+                                              ProjectionExec: expr=[<exprs>]
+                                                RepartitionExec: partitioning=RoundRobinBatch(<partitions>), input_partitions=<partitions>
+                                                  ProjectionExec: expr=[<exprs>]
+                                                    DataSourceExec: partitions=1, partition_sizes=[<sizes>]
+                          ProjectionExec: expr=[<exprs>]
+                            CoalesceBatchesExec: target_batch_size=8192
+                              CoalesceBatchesExec: target_batch_size=8192
+                                HashJoinExec: mode=CollectLeft, join_type=Right, on=[(#<col>, #<col>), (#<col>, #<col>), (#<col>, #<col>)], projection=[#<col>, #<col>, #<col>, #<col>, #<col>, #<col>, #<col>, #<col>, #<col>]
+                                  CoalescePartitionsExec
+                                    ProjectionExec: expr=[<exprs>]
+                                      AggregateExec: mode=FinalPartitioned, gby=[#<col> as #<col>, #<col> as #<col>, #<col> as #<col>], aggr=[sum(web_sales.#<col>), sum(web_sales.#<col>), sum(web_sales.#<col>)]
+                                        CoalesceBatchesExec: target_batch_size=8192
+                                          RepartitionExec: partitioning=Hash([#<col>, #<col>, #<col>], <partitions>), input_partitions=<partitions>
+                                            CoalesceBatchesExec: target_batch_size=8192
+                                              AggregateExec: mode=Partial, gby=[#<col> as #<col>, #<col> as #<col>, #<col> as #<col>], aggr=[sum(web_sales.#<col>), sum(web_sales.#<col>), sum(web_sales.#<col>)]
+                                                CoalesceBatchesExec: target_batch_size=8192
+                                                  CoalesceBatchesExec: target_batch_size=8192
+                                                    HashJoinExec: mode=CollectLeft, join_type=Inner, on=[(#<col>, CAST(date_dim.#<col> AS Float64)@<id>)], projection=[#<col>, #<col>, #<col>, #<col>, #<col>, #<col>]
+                                                      CoalescePartitionsExec
+                                                        CoalesceBatchesExec: target_batch_size=8192
+                                                          CoalesceBatchesExec: target_batch_size=8192
+                                                            FilterExec: #<col> IS NULL, projection=[#<col>, #<col>, #<col>, #<col>, #<col>, #<col>]
+                                                              RepartitionExec: partitioning=RoundRobinBatch(<partitions>), input_partitions=<partitions>
+                                                                ProjectionExec: expr=[<exprs>]
+                                                                  CoalesceBatchesExec: target_batch_size=8192
+                                                                    CoalesceBatchesExec: target_batch_size=8192
+                                                                      HashJoinExec: mode=CollectLeft, join_type=Right, on=[(#<col>, #<col>), (#<col>, #<col>)], projection=[#<col>, #<col>, #<col>, #<col>, #<col>, #<col>, #<col>]
+                                                                        ProjectionExec: expr=[<exprs>]
+                                                                          DataSourceExec: partitions=1, partition_sizes=[<sizes>]
+                                                                        ProjectionExec: expr=[<exprs>]
+                                                                          DataSourceExec: partitions=1, partition_sizes=[<sizes>]
+                                                      ProjectionExec: expr=[<exprs>]
+                                                        RepartitionExec: partitioning=RoundRobinBatch(<partitions>), input_partitions=<partitions>
+                                                          ProjectionExec: expr=[<exprs>]
+                                                            DataSourceExec: partitions=1, partition_sizes=[<sizes>]
+                                  ProjectionExec: expr=[<exprs>]
+                                    AggregateExec: mode=FinalPartitioned, gby=[#<col> as #<col>, #<col> as #<col>, #<col> as #<col>], aggr=[sum(store_sales.#<col>), sum(store_sales.#<col>), sum(store_sales.#<col>)], ordering_mode=PartiallySorted([0])
+                                      CoalesceBatchesExec: target_batch_size=8192
+                                        RepartitionExec: partitioning=Hash([#<col>, #<col>, #<col>], <partitions>), input_partitions=<partitions>
+                                          CoalesceBatchesExec: target_batch_size=8192
+                                            AggregateExec: mode=Partial, gby=[#<col> as #<col>, #<col> as #<col>, #<col> as #<col>], aggr=[sum(store_sales.#<col>), sum(store_sales.#<col>), sum(store_sales.#<col>)], ordering_mode=PartiallySorted([0])
+                                              CoalesceBatchesExec: target_batch_size=8192
+                                                CoalesceBatchesExec: target_batch_size=8192
+                                                  HashJoinExec: mode=CollectLeft, join_type=Inner, on=[(#<col>, CAST(date_dim.#<col> AS Float64)@<id>)], projection=[#<col>, #<col>, #<col>, #<col>, #<col>, #<col>]
+                                                    CoalescePartitionsExec
+                                                      CoalesceBatchesExec: target_batch_size=8192
+                                                        CoalesceBatchesExec: target_batch_size=8192
+                                                          FilterExec: #<col> IS NULL, projection=[#<col>, #<col>, #<col>, #<col>, #<col>, #<col>]
+                                                            ProjectionExec: expr=[<exprs>]
+                                                              CoalesceBatchesExec: target_batch_size=8192
+                                                                CoalesceBatchesExec: target_batch_size=8192
+                                                                  HashJoinExec: mode=CollectLeft, join_type=Right, on=[(#<col>, #<col>), (#<col>, #<col>)], projection=[#<col>, #<col>, #<col>, #<col>, #<col>, #<col>, #<col>]
+                                                                    ProjectionExec: expr=[<exprs>]
+                                                                      DataSourceExec: partitions=1, partition_sizes=[<sizes>]
+                                                                    RepartitionExec: partitioning=RoundRobinBatch(<partitions>), input_partitions=<partitions>
+                                                                      ProjectionExec: expr=[<exprs>]
+                                                                        DataSourceExec: partitions=1, partition_sizes=[<sizes>]
+                                                    ProjectionExec: expr=[<exprs>]
+                                                      CoalesceBatchesExec: target_batch_size=8192
+                                                        CoalesceBatchesExec: target_batch_size=8192
+                                                          FilterExec: _6@<id> = 2001
+                                                            RepartitionExec: partitioning=RoundRobinBatch(<partitions>), input_partitions=<partitions>
+                                                              DataSourceExec: partitions=1, partition_sizes=[<sizes>]
+
+
+physical_plan after coalesce_async_exec_input:
+SAME TEXT AS ABOVE
+
+physical_plan after OutputRequirements:
+ProjectionExec: expr=[<exprs>]
+  SortExec: [<sort_exprs>], fetch=100
+    SortExec: expr=[<exprs>]
+      ProjectionExec: expr=[<exprs>]
+        ProjectionExec: expr=[<exprs>]
+          CoalesceBatchesExec: target_batch_size=8192
+            CoalesceBatchesExec: target_batch_size=8192
+              FilterExec: coalesce(#<col>, 0) > 0 OR coalesce(#<col>, 0) > 0
+                ProjectionExec: expr=[<exprs>]
+                  CoalesceBatchesExec: target_batch_size=8192
+                    CoalesceBatchesExec: target_batch_size=8192
+                      HashJoinExec: mode=CollectLeft, join_type=Right, on=[(#<col>, #<col>), (#<col>, #<col>), (#<col>, #<col>)], projection=[#<col>, #<col>, #<col>, #<col>, #<col>, #<col>, #<col>, #<col>, #<col>, #<col>]
+                        CoalescePartitionsExec
+                          ProjectionExec: expr=[<exprs>]
+                            AggregateExec: mode=FinalPartitioned, gby=[#<col> as #<col>, #<col> as #<col>, #<col> as #<col>], aggr=[sum(catalog_sales.#<col>), sum(catalog_sales.#<col>), sum(catalog_sales.#<col>)]
+                              CoalesceBatchesExec: target_batch_size=8192
+                                RepartitionExec: partitioning=Hash([#<col>, #<col>, #<col>], <partitions>), input_partitions=<partitions>
+                                  CoalesceBatchesExec: target_batch_size=8192
+                                    AggregateExec: mode=Partial, gby=[#<col> as #<col>, #<col> as #<col>, #<col> as #<col>], aggr=[sum(catalog_sales.#<col>), sum(catalog_sales.#<col>), sum(catalog_sales.#<col>)]
+                                      CoalesceBatchesExec: target_batch_size=8192
+                                        CoalesceBatchesExec: target_batch_size=8192
+                                          HashJoinExec: mode=CollectLeft, join_type=Inner, on=[(#<col>, CAST(date_dim.#<col> AS Float64)@<id>)], projection=[#<col>, #<col>, #<col>, #<col>, #<col>, #<col>]
+                                            CoalescePartitionsExec
+                                              CoalesceBatchesExec: target_batch_size=8192
+                                                CoalesceBatchesExec: target_batch_size=8192
+                                                  FilterExec: #<col> IS NULL, projection=[#<col>, #<col>, #<col>, #<col>, #<col>, #<col>]
+                                                    ProjectionExec: expr=[<exprs>]
+                                                      CoalesceBatchesExec: target_batch_size=8192
+                                                        CoalesceBatchesExec: target_batch_size=8192
+                                                          HashJoinExec: mode=CollectLeft, join_type=Right, on=[(#<col>, #<col>), (#<col>, #<col>)], projection=[#<col>, #<col>, #<col>, #<col>, #<col>, #<col>, #<col>]
+                                                            ProjectionExec: expr=[<exprs>]
+                                                              DataSourceExec: partitions=1, partition_sizes=[<sizes>]
+                                                            RepartitionExec: partitioning=RoundRobinBatch(<partitions>), input_partitions=<partitions>
+                                                              ProjectionExec: expr=[<exprs>]
+                                                                DataSourceExec: partitions=1, partition_sizes=[<sizes>]
+                                            ProjectionExec: expr=[<exprs>]
+                                              RepartitionExec: partitioning=RoundRobinBatch(<partitions>), input_partitions=<partitions>
+                                                ProjectionExec: expr=[<exprs>]
+                                                  DataSourceExec: partitions=1, partition_sizes=[<sizes>]
+                        ProjectionExec: expr=[<exprs>]
+                          CoalesceBatchesExec: target_batch_size=8192
+                            CoalesceBatchesExec: target_batch_size=8192
+                              HashJoinExec: mode=CollectLeft, join_type=Right, on=[(#<col>, #<col>), (#<col>, #<col>), (#<col>, #<col>)], projection=[#<col>, #<col>, #<col>, #<col>, #<col>, #<col>, #<col>, #<col>, #<col>]
+                                CoalescePartitionsExec
+                                  ProjectionExec: expr=[<exprs>]
+                                    AggregateExec: mode=FinalPartitioned, gby=[#<col> as #<col>, #<col> as #<col>, #<col> as #<col>], aggr=[sum(web_sales.#<col>), sum(web_sales.#<col>), sum(web_sales.#<col>)]
+                                      CoalesceBatchesExec: target_batch_size=8192
+                                        RepartitionExec: partitioning=Hash([#<col>, #<col>, #<col>], <partitions>), input_partitions=<partitions>
+                                          CoalesceBatchesExec: target_batch_size=8192
+                                            AggregateExec: mode=Partial, gby=[#<col> as #<col>, #<col> as #<col>, #<col> as #<col>], aggr=[sum(web_sales.#<col>), sum(web_sales.#<col>), sum(web_sales.#<col>)]
+                                              CoalesceBatchesExec: target_batch_size=8192
+                                                CoalesceBatchesExec: target_batch_size=8192
+                                                  HashJoinExec: mode=CollectLeft, join_type=Inner, on=[(#<col>, CAST(date_dim.#<col> AS Float64)@<id>)], projection=[#<col>, #<col>, #<col>, #<col>, #<col>, #<col>]
+                                                    CoalescePartitionsExec
+                                                      CoalesceBatchesExec: target_batch_size=8192
+                                                        CoalesceBatchesExec: target_batch_size=8192
+                                                          FilterExec: #<col> IS NULL, projection=[#<col>, #<col>, #<col>, #<col>, #<col>, #<col>]
+                                                            RepartitionExec: partitioning=RoundRobinBatch(<partitions>), input_partitions=<partitions>
+                                                              ProjectionExec: expr=[<exprs>]
+                                                                CoalesceBatchesExec: target_batch_size=8192
+                                                                  CoalesceBatchesExec: target_batch_size=8192
+                                                                    HashJoinExec: mode=CollectLeft, join_type=Right, on=[(#<col>, #<col>), (#<col>, #<col>)], projection=[#<col>, #<col>, #<col>, #<col>, #<col>, #<col>, #<col>]
+                                                                      ProjectionExec: expr=[<exprs>]
+                                                                        DataSourceExec: partitions=1, partition_sizes=[<sizes>]
+                                                                      ProjectionExec: expr=[<exprs>]
+                                                                        DataSourceExec: partitions=1, partition_sizes=[<sizes>]
+                                                    ProjectionExec: expr=[<exprs>]
+                                                      RepartitionExec: partitioning=RoundRobinBatch(<partitions>), input_partitions=<partitions>
+                                                        ProjectionExec: expr=[<exprs>]
+                                                          DataSourceExec: partitions=1, partition_sizes=[<sizes>]
+                                ProjectionExec: expr=[<exprs>]
+                                  AggregateExec: mode=FinalPartitioned, gby=[#<col> as #<col>, #<col> as #<col>, #<col> as #<col>], aggr=[sum(store_sales.#<col>), sum(store_sales.#<col>), sum(store_sales.#<col>)], ordering_mode=PartiallySorted([0])
+                                    CoalesceBatchesExec: target_batch_size=8192
+                                      RepartitionExec: partitioning=Hash([#<col>, #<col>, #<col>], <partitions>), input_partitions=<partitions>
+                                        CoalesceBatchesExec: target_batch_size=8192
+                                          AggregateExec: mode=Partial, gby=[#<col> as #<col>, #<col> as #<col>, #<col> as #<col>], aggr=[sum(store_sales.#<col>), sum(store_sales.#<col>), sum(store_sales.#<col>)], ordering_mode=PartiallySorted([0])
+                                            CoalesceBatchesExec: target_batch_size=8192
+                                              CoalesceBatchesExec: target_batch_size=8192
+                                                HashJoinExec: mode=CollectLeft, join_type=Inner, on=[(#<col>, CAST(date_dim.#<col> AS Float64)@<id>)], projection=[#<col>, #<col>, #<col>, #<col>, #<col>, #<col>]
+                                                  CoalescePartitionsExec
+                                                    CoalesceBatchesExec: target_batch_size=8192
+                                                      CoalesceBatchesExec: target_batch_size=8192
+                                                        FilterExec: #<col> IS NULL, projection=[#<col>, #<col>, #<col>, #<col>, #<col>, #<col>]
+                                                          ProjectionExec: expr=[<exprs>]
+                                                            CoalesceBatchesExec: target_batch_size=8192
+                                                              CoalesceBatchesExec: target_batch_size=8192
+                                                                HashJoinExec: mode=CollectLeft, join_type=Right, on=[(#<col>, #<col>), (#<col>, #<col>)], projection=[#<col>, #<col>, #<col>, #<col>, #<col>, #<col>, #<col>]
+                                                                  ProjectionExec: expr=[<exprs>]
+                                                                    DataSourceExec: partitions=1, partition_sizes=[<sizes>]
+                                                                  RepartitionExec: partitioning=RoundRobinBatch(<partitions>), input_partitions=<partitions>
+                                                                    ProjectionExec: expr=[<exprs>]
+                                                                      DataSourceExec: partitions=1, partition_sizes=[<sizes>]
+                                                  ProjectionExec: expr=[<exprs>]
+                                                    CoalesceBatchesExec: target_batch_size=8192
+                                                      CoalesceBatchesExec: target_batch_size=8192
+                                                        FilterExec: _6@<id> = 2001
+                                                          RepartitionExec: partitioning=RoundRobinBatch(<partitions>), input_partitions=<partitions>
+                                                            DataSourceExec: partitions=1, partition_sizes=[<sizes>]
+
+
+physical_plan after LimitAggregation:
+SAME TEXT AS ABOVE
+
+physical_plan after LimitPushPastWindows:
+SAME TEXT AS ABOVE
+
+physical_plan after LimitPushdown:
+SAME TEXT AS ABOVE
+
+physical_plan after ProjectionPushdown:
+SAME TEXT AS ABOVE
+
+physical_plan after EnsureCooperative:
+SAME TEXT AS ABOVE
+
+physical_plan after FilterPushdown(Post):
+SAME TEXT AS ABOVE
+
+physical_plan after RewriteExplicitRepartition:
+SAME TEXT AS ABOVE
+
+physical_plan after SanityCheckPlan:
+SAME TEXT AS ABOVE
+
+physical_plan:
+ProjectionExec: expr=[<exprs>]
+  ProjectionExec: expr=[<exprs>]
+    SortExec: [<sort_exprs>], fetch=100
+      SortExec: expr=[<exprs>]
+        ProjectionExec: expr=[<exprs>]
+          ProjectionExec: expr=[<exprs>]
+            CoalesceBatchesExec: target_batch_size=8192
+              CoalesceBatchesExec: target_batch_size=8192
+                FilterExec: coalesce(#<col>, 0) > 0 OR coalesce(#<col>, 0) > 0
+                  ProjectionExec: expr=[<exprs>]
+                    CoalesceBatchesExec: target_batch_size=8192
+                      CoalesceBatchesExec: target_batch_size=8192
+                        HashJoinExec: mode=CollectLeft, join_type=Right, on=[(#<col>, #<col>), (#<col>, #<col>), (#<col>, #<col>)], projection=[#<col>, #<col>, #<col>, #<col>, #<col>, #<col>, #<col>, #<col>, #<col>, #<col>]
+                          CoalescePartitionsExec
+                            ProjectionExec: expr=[<exprs>]
+                              AggregateExec: mode=FinalPartitioned, gby=[#<col> as #<col>, #<col> as #<col>, #<col> as #<col>], aggr=[sum(catalog_sales.#<col>), sum(catalog_sales.#<col>), sum(catalog_sales.#<col>)]
+                                CoalesceBatchesExec: target_batch_size=8192
+                                  RepartitionExec: partitioning=Hash([#<col>, #<col>, #<col>], <partitions>), input_partitions=<partitions>
+                                    CoalesceBatchesExec: target_batch_size=8192
+                                      AggregateExec: mode=Partial, gby=[#<col> as #<col>, #<col> as #<col>, #<col> as #<col>], aggr=[sum(catalog_sales.#<col>), sum(catalog_sales.#<col>), sum(catalog_sales.#<col>)]
+                                        CoalesceBatchesExec: target_batch_size=8192
+                                          CoalesceBatchesExec: target_batch_size=8192
+                                            HashJoinExec: mode=CollectLeft, join_type=Inner, on=[(#<col>, CAST(date_dim.#<col> AS Float64)@<id>)], projection=[#<col>, #<col>, #<col>, #<col>, #<col>, #<col>]
+                                              CoalescePartitionsExec
+                                                CoalesceBatchesExec: target_batch_size=8192
+                                                  CoalesceBatchesExec: target_batch_size=8192
+                                                    FilterExec: #<col> IS NULL, projection=[#<col>, #<col>, #<col>, #<col>, #<col>, #<col>]
+                                                      ProjectionExec: expr=[<exprs>]
+                                                        CoalesceBatchesExec: target_batch_size=8192
+                                                          CoalesceBatchesExec: target_batch_size=8192
+                                                            HashJoinExec: mode=CollectLeft, join_type=Right, on=[(#<col>, #<col>), (#<col>, #<col>)], projection=[#<col>, #<col>, #<col>, #<col>, #<col>, #<col>, #<col>]
+                                                              ProjectionExec: expr=[<exprs>]
+                                                                DataSourceExec: partitions=1, partition_sizes=[<sizes>]
+                                                              RepartitionExec: partitioning=RoundRobinBatch(<partitions>), input_partitions=<partitions>
+                                                                ProjectionExec: expr=[<exprs>]
+                                                                  DataSourceExec: partitions=1, partition_sizes=[<sizes>]
+                                              ProjectionExec: expr=[<exprs>]
+                                                RepartitionExec: partitioning=RoundRobinBatch(<partitions>), input_partitions=<partitions>
+                                                  ProjectionExec: expr=[<exprs>]
+                                                    DataSourceExec: partitions=1, partition_sizes=[<sizes>]
+                          ProjectionExec: expr=[<exprs>]
+                            CoalesceBatchesExec: target_batch_size=8192
+                              CoalesceBatchesExec: target_batch_size=8192
+                                HashJoinExec: mode=CollectLeft, join_type=Right, on=[(#<col>, #<col>), (#<col>, #<col>), (#<col>, #<col>)], projection=[#<col>, #<col>, #<col>, #<col>, #<col>, #<col>, #<col>, #<col>, #<col>]
+                                  CoalescePartitionsExec
+                                    ProjectionExec: expr=[<exprs>]
+                                      AggregateExec: mode=FinalPartitioned, gby=[#<col> as #<col>, #<col> as #<col>, #<col> as #<col>], aggr=[sum(web_sales.#<col>), sum(web_sales.#<col>), sum(web_sales.#<col>)]
+                                        CoalesceBatchesExec: target_batch_size=8192
+                                          RepartitionExec: partitioning=Hash([#<col>, #<col>, #<col>], <partitions>), input_partitions=<partitions>
+                                            CoalesceBatchesExec: target_batch_size=8192
+                                              AggregateExec: mode=Partial, gby=[#<col> as #<col>, #<col> as #<col>, #<col> as #<col>], aggr=[sum(web_sales.#<col>), sum(web_sales.#<col>), sum(web_sales.#<col>)]
+                                                CoalesceBatchesExec: target_batch_size=8192
+                                                  CoalesceBatchesExec: target_batch_size=8192
+                                                    HashJoinExec: mode=CollectLeft, join_type=Inner, on=[(#<col>, CAST(date_dim.#<col> AS Float64)@<id>)], projection=[#<col>, #<col>, #<col>, #<col>, #<col>, #<col>]
+                                                      CoalescePartitionsExec
+                                                        CoalesceBatchesExec: target_batch_size=8192
+                                                          CoalesceBatchesExec: target_batch_size=8192
+                                                            FilterExec: #<col> IS NULL, projection=[#<col>, #<col>, #<col>, #<col>, #<col>, #<col>]
+                                                              RepartitionExec: partitioning=RoundRobinBatch(<partitions>), input_partitions=<partitions>
+                                                                ProjectionExec: expr=[<exprs>]
+                                                                  CoalesceBatchesExec: target_batch_size=8192
+                                                                    CoalesceBatchesExec: target_batch_size=8192
+                                                                      HashJoinExec: mode=CollectLeft, join_type=Right, on=[(#<col>, #<col>), (#<col>, #<col>)], projection=[#<col>, #<col>, #<col>, #<col>, #<col>, #<col>, #<col>]
+                                                                        ProjectionExec: expr=[<exprs>]
+                                                                          DataSourceExec: partitions=1, partition_sizes=[<sizes>]
+                                                                        ProjectionExec: expr=[<exprs>]
+                                                                          DataSourceExec: partitions=1, partition_sizes=[<sizes>]
+                                                      ProjectionExec: expr=[<exprs>]
+                                                        RepartitionExec: partitioning=RoundRobinBatch(<partitions>), input_partitions=<partitions>
+                                                          ProjectionExec: expr=[<exprs>]
+                                                            DataSourceExec: partitions=1, partition_sizes=[<sizes>]
+                                  ProjectionExec: expr=[<exprs>]
+                                    AggregateExec: mode=FinalPartitioned, gby=[#<col> as #<col>, #<col> as #<col>, #<col> as #<col>], aggr=[sum(store_sales.#<col>), sum(store_sales.#<col>), sum(store_sales.#<col>)], ordering_mode=PartiallySorted([0])
+                                      CoalesceBatchesExec: target_batch_size=8192
+                                        RepartitionExec: partitioning=Hash([#<col>, #<col>, #<col>], <partitions>), input_partitions=<partitions>
+                                          CoalesceBatchesExec: target_batch_size=8192
+                                            AggregateExec: mode=Partial, gby=[#<col> as #<col>, #<col> as #<col>, #<col> as #<col>], aggr=[sum(store_sales.#<col>), sum(store_sales.#<col>), sum(store_sales.#<col>)], ordering_mode=PartiallySorted([0])
+                                              CoalesceBatchesExec: target_batch_size=8192
+                                                CoalesceBatchesExec: target_batch_size=8192
+                                                  HashJoinExec: mode=CollectLeft, join_type=Inner, on=[(#<col>, CAST(date_dim.#<col> AS Float64)@<id>)], projection=[#<col>, #<col>, #<col>, #<col>, #<col>, #<col>]
+                                                    CoalescePartitionsExec
+                                                      CoalesceBatchesExec: target_batch_size=8192
+                                                        CoalesceBatchesExec: target_batch_size=8192
+                                                          FilterExec: #<col> IS NULL, projection=[#<col>, #<col>, #<col>, #<col>, #<col>, #<col>]
+                                                            ProjectionExec: expr=[<exprs>]
+                                                              CoalesceBatchesExec: target_batch_size=8192
+                                                                CoalesceBatchesExec: target_batch_size=8192
+                                                                  HashJoinExec: mode=CollectLeft, join_type=Right, on=[(#<col>, #<col>), (#<col>, #<col>)], projection=[#<col>, #<col>, #<col>, #<col>, #<col>, #<col>, #<col>]
+                                                                    ProjectionExec: expr=[<exprs>]
+                                                                      DataSourceExec: partitions=1, partition_sizes=[<sizes>]
+                                                                    RepartitionExec: partitioning=RoundRobinBatch(<partitions>), input_partitions=<partitions>
+                                                                      ProjectionExec: expr=[<exprs>]
+                                                                        DataSourceExec: partitions=1, partition_sizes=[<sizes>]
+                                                    ProjectionExec: expr=[<exprs>]
+                                                      CoalesceBatchesExec: target_batch_size=8192
+                                                        CoalesceBatchesExec: target_batch_size=8192
+                                                          FilterExec: _6@<id> = 2001
+                                                            RepartitionExec: partitioning=RoundRobinBatch(<partitions>), input_partitions=<partitions>
+                                                              DataSourceExec: partitions=1, partition_sizes=[<sizes>]
+
+
+== Physical Plan ==
+ProjectionExec: expr=[<exprs>]
+  ProjectionExec: expr=[<exprs>]
+    SortExec: [<sort_exprs>], fetch=100
+      SortExec: expr=[<exprs>]
+        ProjectionExec: expr=[<exprs>]
+          ProjectionExec: expr=[<exprs>]
+            CoalesceBatchesExec: target_batch_size=8192
+              CoalesceBatchesExec: target_batch_size=8192
+                FilterExec: coalesce(#<col>, 0) > 0 OR coalesce(#<col>, 0) > 0
+                  ProjectionExec: expr=[<exprs>]
+                    CoalesceBatchesExec: target_batch_size=8192
+                      CoalesceBatchesExec: target_batch_size=8192
+                        HashJoinExec: mode=CollectLeft, join_type=Right, on=[(#<col>, #<col>), (#<col>, #<col>), (#<col>, #<col>)], projection=[#<col>, #<col>, #<col>, #<col>, #<col>, #<col>, #<col>, #<col>, #<col>, #<col>]
+                          CoalescePartitionsExec
+                            ProjectionExec: expr=[<exprs>]
+                              AggregateExec: mode=FinalPartitioned, gby=[#<col> as #<col>, #<col> as #<col>, #<col> as #<col>], aggr=[sum(catalog_sales.#<col>), sum(catalog_sales.#<col>), sum(catalog_sales.#<col>)]
+                                CoalesceBatchesExec: target_batch_size=8192
+                                  RepartitionExec: partitioning=Hash([#<col>, #<col>, #<col>], <partitions>), input_partitions=<partitions>
+                                    CoalesceBatchesExec: target_batch_size=8192
+                                      AggregateExec: mode=Partial, gby=[#<col> as #<col>, #<col> as #<col>, #<col> as #<col>], aggr=[sum(catalog_sales.#<col>), sum(catalog_sales.#<col>), sum(catalog_sales.#<col>)]
+                                        CoalesceBatchesExec: target_batch_size=8192
+                                          CoalesceBatchesExec: target_batch_size=8192
+                                            HashJoinExec: mode=CollectLeft, join_type=Inner, on=[(#<col>, CAST(date_dim.#<col> AS Float64)@<id>)], projection=[#<col>, #<col>, #<col>, #<col>, #<col>, #<col>]
+                                              CoalescePartitionsExec
+                                                CoalesceBatchesExec: target_batch_size=8192
+                                                  CoalesceBatchesExec: target_batch_size=8192
+                                                    FilterExec: #<col> IS NULL, projection=[#<col>, #<col>, #<col>, #<col>, #<col>, #<col>]
+                                                      ProjectionExec: expr=[<exprs>]
+                                                        CoalesceBatchesExec: target_batch_size=8192
+                                                          CoalesceBatchesExec: target_batch_size=8192
+                                                            HashJoinExec: mode=CollectLeft, join_type=Right, on=[(#<col>, #<col>), (#<col>, #<col>)], projection=[#<col>, #<col>, #<col>, #<col>, #<col>, #<col>, #<col>]
+                                                              ProjectionExec: expr=[<exprs>]
+                                                                DataSourceExec: partitions=1, partition_sizes=[<sizes>]
+                                                              RepartitionExec: partitioning=RoundRobinBatch(<partitions>), input_partitions=<partitions>
+                                                                ProjectionExec: expr=[<exprs>]
+                                                                  DataSourceExec: partitions=1, partition_sizes=[<sizes>]
+                                              ProjectionExec: expr=[<exprs>]
+                                                RepartitionExec: partitioning=RoundRobinBatch(<partitions>), input_partitions=<partitions>
+                                                  ProjectionExec: expr=[<exprs>]
+                                                    DataSourceExec: partitions=1, partition_sizes=[<sizes>]
+                          ProjectionExec: expr=[<exprs>]
+                            CoalesceBatchesExec: target_batch_size=8192
+                              CoalesceBatchesExec: target_batch_size=8192
+                                HashJoinExec: mode=CollectLeft, join_type=Right, on=[(#<col>, #<col>), (#<col>, #<col>), (#<col>, #<col>)], projection=[#<col>, #<col>, #<col>, #<col>, #<col>, #<col>, #<col>, #<col>, #<col>]
+                                  CoalescePartitionsExec
+                                    ProjectionExec: expr=[<exprs>]
+                                      AggregateExec: mode=FinalPartitioned, gby=[#<col> as #<col>, #<col> as #<col>, #<col> as #<col>], aggr=[sum(web_sales.#<col>), sum(web_sales.#<col>), sum(web_sales.#<col>)]
+                                        CoalesceBatchesExec: target_batch_size=8192
+                                          RepartitionExec: partitioning=Hash([#<col>, #<col>, #<col>], <partitions>), input_partitions=<partitions>
+                                            CoalesceBatchesExec: target_batch_size=8192
+                                              AggregateExec: mode=Partial, gby=[#<col> as #<col>, #<col> as #<col>, #<col> as #<col>], aggr=[sum(web_sales.#<col>), sum(web_sales.#<col>), sum(web_sales.#<col>)]
+                                                CoalesceBatchesExec: target_batch_size=8192
+                                                  CoalesceBatchesExec: target_batch_size=8192
+                                                    HashJoinExec: mode=CollectLeft, join_type=Inner, on=[(#<col>, CAST(date_dim.#<col> AS Float64)@<id>)], projection=[#<col>, #<col>, #<col>, #<col>, #<col>, #<col>]
+                                                      CoalescePartitionsExec
+                                                        CoalesceBatchesExec: target_batch_size=8192
+                                                          CoalesceBatchesExec: target_batch_size=8192
+                                                            FilterExec: #<col> IS NULL, projection=[#<col>, #<col>, #<col>, #<col>, #<col>, #<col>]
+                                                              RepartitionExec: partitioning=RoundRobinBatch(<partitions>), input_partitions=<partitions>
+                                                                ProjectionExec: expr=[<exprs>]
+                                                                  CoalesceBatchesExec: target_batch_size=8192
+                                                                    CoalesceBatchesExec: target_batch_size=8192
+                                                                      HashJoinExec: mode=CollectLeft, join_type=Right, on=[(#<col>, #<col>), (#<col>, #<col>)], projection=[#<col>, #<col>, #<col>, #<col>, #<col>, #<col>, #<col>]
+                                                                        ProjectionExec: expr=[<exprs>]
+                                                                          DataSourceExec: partitions=1, partition_sizes=[<sizes>]
+                                                                        ProjectionExec: expr=[<exprs>]
+                                                                          DataSourceExec: partitions=1, partition_sizes=[<sizes>]
+                                                      ProjectionExec: expr=[<exprs>]
+                                                        RepartitionExec: partitioning=RoundRobinBatch(<partitions>), input_partitions=<partitions>
+                                                          ProjectionExec: expr=[<exprs>]
+                                                            DataSourceExec: partitions=1, partition_sizes=[<sizes>]
+                                  ProjectionExec: expr=[<exprs>]
+                                    AggregateExec: mode=FinalPartitioned, gby=[#<col> as #<col>, #<col> as #<col>, #<col> as #<col>], aggr=[sum(store_sales.#<col>), sum(store_sales.#<col>), sum(store_sales.#<col>)], ordering_mode=PartiallySorted([0])
+                                      CoalesceBatchesExec: target_batch_size=8192
+                                        RepartitionExec: partitioning=Hash([#<col>, #<col>, #<col>], <partitions>), input_partitions=<partitions>
+                                          CoalesceBatchesExec: target_batch_size=8192
+                                            AggregateExec: mode=Partial, gby=[#<col> as #<col>, #<col> as #<col>, #<col> as #<col>], aggr=[sum(store_sales.#<col>), sum(store_sales.#<col>), sum(store_sales.#<col>)], ordering_mode=PartiallySorted([0])
+                                              CoalesceBatchesExec: target_batch_size=8192
+                                                CoalesceBatchesExec: target_batch_size=8192
+                                                  HashJoinExec: mode=CollectLeft, join_type=Inner, on=[(#<col>, CAST(date_dim.#<col> AS Float64)@<id>)], projection=[#<col>, #<col>, #<col>, #<col>, #<col>, #<col>]
+                                                    CoalescePartitionsExec
+                                                      CoalesceBatchesExec: target_batch_size=8192
+                                                        CoalesceBatchesExec: target_batch_size=8192
+                                                          FilterExec: #<col> IS NULL, projection=[#<col>, #<col>, #<col>, #<col>, #<col>, #<col>]
+                                                            ProjectionExec: expr=[<exprs>]
+                                                              CoalesceBatchesExec: target_batch_size=8192
+                                                                CoalesceBatchesExec: target_batch_size=8192
+                                                                  HashJoinExec: mode=CollectLeft, join_type=Right, on=[(#<col>, #<col>), (#<col>, #<col>)], projection=[#<col>, #<col>, #<col>, #<col>, #<col>, #<col>, #<col>]
+                                                                    ProjectionExec: expr=[<exprs>]
+                                                                      DataSourceExec: partitions=1, partition_sizes=[<sizes>]
+                                                                    RepartitionExec: partitioning=RoundRobinBatch(<partitions>), input_partitions=<partitions>
+                                                                      ProjectionExec: expr=[<exprs>]
+                                                                        DataSourceExec: partitions=1, partition_sizes=[<sizes>]
+                                                    ProjectionExec: expr=[<exprs>]
+                                                      CoalesceBatchesExec: target_batch_size=8192
+                                                        CoalesceBatchesExec: target_batch_size=8192
+                                                          FilterExec: _6@<id> = 2001
+                                                            RepartitionExec: partitioning=RoundRobinBatch(<partitions>), input_partitions=<partitions>
+                                                              DataSourceExec: partitions=1, partition_sizes=[<sizes>]

@@ -2,8 +2,10 @@ from pathlib import Path
 
 import duckdb
 import pytest
+from syrupy.assertion import SnapshotAssertion
 
 from .utils import is_jvm_spark  # noqa: TID252
+from pysail.tests.spark.conftest import PlanSnapshotExtension
 
 
 @pytest.fixture(scope="module")
@@ -22,6 +24,20 @@ def data(spark, duck):
     yield
     for table in tables:
         spark.catalog.dropTempView(table)
+
+
+@pytest.mark.parametrize("query", [f"q{x + 1}" for x in range(99)])
+@pytest.mark.skipif(is_jvm_spark(), reason="slow tests in JVM Spark")
+def test_derived_tpcds_query_explain_matches_snapshot(spark, query, snapshot: SnapshotAssertion):
+    explained = False
+    for sql in read_sql(query):
+        plan_rows = spark.sql(f"EXPLAIN CODEGEN {sql}").collect()
+        assert len(plan_rows) == 1, f"expected single row, got {len(plan_rows)}"
+        plan = plan_rows[0][0]
+        assert snapshot(extension_class=PlanSnapshotExtension) == plan
+        explained = True
+
+    assert explained, f"expected at least one statement in {query}.sql"
 
 
 @pytest.mark.parametrize("query", [f"q{x + 1}" for x in range(99)])

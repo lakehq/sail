@@ -1,0 +1,1037 @@
+== Codegen ==
+Whole-stage codegen is not supported; showing physical plan instead.
+
+== Plan Steps ==
+initial_logical_plan:
+Limit: skip=0, fetch=Int32(100)
+  Sort: <exprs>
+    Distinct:
+      Projection: <exprs>
+        Filter: i1.#<col> >= Int32(668) AND i1.#<col> <= Int32(668) + Int32(40) AND (<subquery>) > Int32(0)
+          Subquery:
+            Projection: <exprs>
+              Aggregate: groupBy=[[]], aggr=[[count(Int64(1))]]
+                Filter: item.#<col> = outer_ref(i1.#<col>) AND (item.#<col> = Utf8("Women") AND (item.#<col> = Utf8("cream") OR item.#<col> = Utf8("ghost")) AND (item.#<col> = Utf8("Ton") OR item.#<col> = Utf8("Gross")) AND (item.#<col> = Utf8("economy") OR item.#<col> = Utf8("small")) OR item.#<col> = Utf8("Women") AND (item.#<col> = Utf8("midnight") OR item.#<col> = Utf8("burlywood")) AND (item.#<col> = Utf8("Tsp") OR item.#<col> = Utf8("Bundle")) AND (item.#<col> = Utf8("medium") OR item.#<col> = Utf8("extra large")) OR item.#<col> = Utf8("Men") AND (item.#<col> = Utf8("lavender") OR item.#<col> = Utf8("azure")) AND (item.#<col> = Utf8("Each") OR item.#<col> = Utf8("Lb")) AND (item.#<col> = Utf8("large") OR item.#<col> = Utf8("N/A")) OR item.#<col> = Utf8("Men") AND (item.#<col> = Utf8("chocolate") OR item.#<col> = Utf8("steel")) AND (item.#<col> = Utf8("N/A") OR item.#<col> = Utf8("Dozen")) AND (item.#<col> = Utf8("economy") OR item.#<col> = Utf8("small"))) OR item.#<col> = outer_ref(i1.#<col>) AND (item.#<col> = Utf8("Women") AND (item.#<col> = Utf8("floral") OR item.#<col> = Utf8("royal")) AND (item.#<col> = Utf8("Unknown") OR item.#<col> = Utf8("Tbl")) AND (item.#<col> = Utf8("economy") OR item.#<col> = Utf8("small")) OR item.#<col> = Utf8("Women") AND (item.#<col> = Utf8("navy") OR item.#<col> = Utf8("forest")) AND (item.#<col> = Utf8("Bunch") OR item.#<col> = Utf8("Dram")) AND (item.#<col> = Utf8("medium") OR item.#<col> = Utf8("extra large")) OR item.#<col> = Utf8("Men") AND (item.#<col> = Utf8("cyan") OR item.#<col> = Utf8("indian")) AND (item.#<col> = Utf8("Carton") OR item.#<col> = Utf8("Cup")) AND (item.#<col> = Utf8("large") OR item.#<col> = Utf8("N/A")) OR item.#<col> = Utf8("Men") AND (item.#<col> = Utf8("coral") OR item.#<col> = Utf8("pale")) AND (item.#<col> = Utf8("Pallet") OR item.#<col> = Utf8("Gram")) AND (item.#<col> = Utf8("economy") OR item.#<col> = Utf8("small")))
+                  Projection: <exprs>
+                    Projection: <exprs>
+                      SubqueryAlias: item
+                        Projection: <exprs>
+                          Projection: <exprs>
+                            TableScan: ?table?
+          SubqueryAlias: i1
+            Projection: <exprs>
+              Projection: <exprs>
+                SubqueryAlias: item
+                  Projection: <exprs>
+                    Projection: <exprs>
+                      TableScan: ?table?
+
+logical_plan after resolve_grouping_function:
+SAME TEXT AS ABOVE
+
+logical_plan after type_coercion:
+Limit: skip=0, fetch=CAST(Int32(100) AS Int64)
+  Sort: <exprs>
+    Distinct:
+      Projection: <exprs>
+        Filter: i1.#<col> >= CAST(Int32(668) AS Int64) AND i1.#<col> <= CAST(Int32(668) + Int32(40) AS Int64) AND (<subquery>) > CAST(Int32(0) AS Int64)
+          Subquery:
+            Projection: <exprs>
+              Aggregate: groupBy=[[]], aggr=[[count(Int64(1))]]
+                Filter: item.#<col> = outer_ref(i1.#<col>) AND (item.#<col> = Utf8("Women") AND (item.#<col> = Utf8("cream") OR item.#<col> = Utf8("ghost")) AND (item.#<col> = Utf8("Ton") OR item.#<col> = Utf8("Gross")) AND (item.#<col> = Utf8("economy") OR item.#<col> = Utf8("small")) OR item.#<col> = Utf8("Women") AND (item.#<col> = Utf8("midnight") OR item.#<col> = Utf8("burlywood")) AND (item.#<col> = Utf8("Tsp") OR item.#<col> = Utf8("Bundle")) AND (item.#<col> = Utf8("medium") OR item.#<col> = Utf8("extra large")) OR item.#<col> = Utf8("Men") AND (item.#<col> = Utf8("lavender") OR item.#<col> = Utf8("azure")) AND (item.#<col> = Utf8("Each") OR item.#<col> = Utf8("Lb")) AND (item.#<col> = Utf8("large") OR item.#<col> = Utf8("N/A")) OR item.#<col> = Utf8("Men") AND (item.#<col> = Utf8("chocolate") OR item.#<col> = Utf8("steel")) AND (item.#<col> = Utf8("N/A") OR item.#<col> = Utf8("Dozen")) AND (item.#<col> = Utf8("economy") OR item.#<col> = Utf8("small"))) OR item.#<col> = outer_ref(i1.#<col>) AND (item.#<col> = Utf8("Women") AND (item.#<col> = Utf8("floral") OR item.#<col> = Utf8("royal")) AND (item.#<col> = Utf8("Unknown") OR item.#<col> = Utf8("Tbl")) AND (item.#<col> = Utf8("economy") OR item.#<col> = Utf8("small")) OR item.#<col> = Utf8("Women") AND (item.#<col> = Utf8("navy") OR item.#<col> = Utf8("forest")) AND (item.#<col> = Utf8("Bunch") OR item.#<col> = Utf8("Dram")) AND (item.#<col> = Utf8("medium") OR item.#<col> = Utf8("extra large")) OR item.#<col> = Utf8("Men") AND (item.#<col> = Utf8("cyan") OR item.#<col> = Utf8("indian")) AND (item.#<col> = Utf8("Carton") OR item.#<col> = Utf8("Cup")) AND (item.#<col> = Utf8("large") OR item.#<col> = Utf8("N/A")) OR item.#<col> = Utf8("Men") AND (item.#<col> = Utf8("coral") OR item.#<col> = Utf8("pale")) AND (item.#<col> = Utf8("Pallet") OR item.#<col> = Utf8("Gram")) AND (item.#<col> = Utf8("economy") OR item.#<col> = Utf8("small")))
+                  Projection: <exprs>
+                    Projection: <exprs>
+                      SubqueryAlias: item
+                        Projection: <exprs>
+                          Projection: <exprs>
+                            TableScan: ?table?
+          SubqueryAlias: i1
+            Projection: <exprs>
+              Projection: <exprs>
+                SubqueryAlias: item
+                  Projection: <exprs>
+                    Projection: <exprs>
+                      TableScan: ?table?
+
+analyzed_logical_plan:
+SAME TEXT AS ABOVE
+
+logical_plan after eliminate_nested_union:
+SAME TEXT AS ABOVE
+
+logical_plan after simplify_expressions:
+Limit: skip=0, fetch=100
+  Sort: <exprs>
+    Distinct:
+      Projection: <exprs>
+        Filter: i1.#<col> >= Int64(668) AND i1.#<col> <= Int64(708) AND (<subquery>) > Int64(0)
+          Subquery:
+            Projection: <exprs>
+              Aggregate: groupBy=[[]], aggr=[[count(Int64(1))]]
+                Filter: item.#<col> = outer_ref(i1.#<col>) AND (item.#<col> = Utf8("Women") AND ((item.#<col> = Utf8("cream") OR item.#<col> = Utf8("ghost")) AND (item.#<col> = Utf8("Ton") OR item.#<col> = Utf8("Gross")) AND (item.#<col> = Utf8("economy") OR item.#<col> = Utf8("small")) OR (item.#<col> = Utf8("midnight") OR item.#<col> = Utf8("burlywood")) AND (item.#<col> = Utf8("Tsp") OR item.#<col> = Utf8("Bundle")) AND (item.#<col> = Utf8("medium") OR item.#<col> = Utf8("extra large"))) OR item.#<col> = Utf8("Men") AND (item.#<col> = Utf8("lavender") OR item.#<col> = Utf8("azure")) AND (item.#<col> = Utf8("Each") OR item.#<col> = Utf8("Lb")) AND (item.#<col> = Utf8("large") OR item.#<col> = Utf8("N/A")) OR item.#<col> = Utf8("Men") AND (item.#<col> = Utf8("chocolate") OR item.#<col> = Utf8("steel")) AND (item.#<col> = Utf8("N/A") OR item.#<col> = Utf8("Dozen")) AND (item.#<col> = Utf8("economy") OR item.#<col> = Utf8("small")) OR item.#<col> = Utf8("Women") AND ((item.#<col> = Utf8("floral") OR item.#<col> = Utf8("royal")) AND (item.#<col> = Utf8("Unknown") OR item.#<col> = Utf8("Tbl")) AND (item.#<col> = Utf8("economy") OR item.#<col> = Utf8("small")) OR (item.#<col> = Utf8("navy") OR item.#<col> = Utf8("forest")) AND (item.#<col> = Utf8("Bunch") OR item.#<col> = Utf8("Dram")) AND (item.#<col> = Utf8("medium") OR item.#<col> = Utf8("extra large"))) OR item.#<col> = Utf8("Men") AND (item.#<col> = Utf8("cyan") OR item.#<col> = Utf8("indian")) AND (item.#<col> = Utf8("Carton") OR item.#<col> = Utf8("Cup")) AND (item.#<col> = Utf8("large") OR item.#<col> = Utf8("N/A")) OR item.#<col> = Utf8("Men") AND (item.#<col> = Utf8("coral") OR item.#<col> = Utf8("pale")) AND (item.#<col> = Utf8("Pallet") OR item.#<col> = Utf8("Gram")) AND (item.#<col> = Utf8("economy") OR item.#<col> = Utf8("small")))
+                  Projection: <exprs>
+                    Projection: <exprs>
+                      SubqueryAlias: item
+                        Projection: <exprs>
+                          Projection: <exprs>
+                            TableScan: ?table?
+          SubqueryAlias: i1
+            Projection: <exprs>
+              Projection: <exprs>
+                SubqueryAlias: item
+                  Projection: <exprs>
+                    Projection: <exprs>
+                      TableScan: ?table?
+
+logical_plan after replace_distinct_aggregate:
+Limit: skip=0, fetch=100
+  Sort: <exprs>
+    Aggregate: groupBy=[[#<col>]], aggr=[[]]
+      Projection: <exprs>
+        Filter: i1.#<col> >= Int64(668) AND i1.#<col> <= Int64(708) AND (<subquery>) > Int64(0)
+          Subquery:
+            Projection: <exprs>
+              Aggregate: groupBy=[[]], aggr=[[count(Int64(1))]]
+                Filter: item.#<col> = outer_ref(i1.#<col>) AND (item.#<col> = Utf8("Women") AND ((item.#<col> = Utf8("cream") OR item.#<col> = Utf8("ghost")) AND (item.#<col> = Utf8("Ton") OR item.#<col> = Utf8("Gross")) AND (item.#<col> = Utf8("economy") OR item.#<col> = Utf8("small")) OR (item.#<col> = Utf8("midnight") OR item.#<col> = Utf8("burlywood")) AND (item.#<col> = Utf8("Tsp") OR item.#<col> = Utf8("Bundle")) AND (item.#<col> = Utf8("medium") OR item.#<col> = Utf8("extra large"))) OR item.#<col> = Utf8("Men") AND (item.#<col> = Utf8("lavender") OR item.#<col> = Utf8("azure")) AND (item.#<col> = Utf8("Each") OR item.#<col> = Utf8("Lb")) AND (item.#<col> = Utf8("large") OR item.#<col> = Utf8("N/A")) OR item.#<col> = Utf8("Men") AND (item.#<col> = Utf8("chocolate") OR item.#<col> = Utf8("steel")) AND (item.#<col> = Utf8("N/A") OR item.#<col> = Utf8("Dozen")) AND (item.#<col> = Utf8("economy") OR item.#<col> = Utf8("small")) OR item.#<col> = Utf8("Women") AND ((item.#<col> = Utf8("floral") OR item.#<col> = Utf8("royal")) AND (item.#<col> = Utf8("Unknown") OR item.#<col> = Utf8("Tbl")) AND (item.#<col> = Utf8("economy") OR item.#<col> = Utf8("small")) OR (item.#<col> = Utf8("navy") OR item.#<col> = Utf8("forest")) AND (item.#<col> = Utf8("Bunch") OR item.#<col> = Utf8("Dram")) AND (item.#<col> = Utf8("medium") OR item.#<col> = Utf8("extra large"))) OR item.#<col> = Utf8("Men") AND (item.#<col> = Utf8("cyan") OR item.#<col> = Utf8("indian")) AND (item.#<col> = Utf8("Carton") OR item.#<col> = Utf8("Cup")) AND (item.#<col> = Utf8("large") OR item.#<col> = Utf8("N/A")) OR item.#<col> = Utf8("Men") AND (item.#<col> = Utf8("coral") OR item.#<col> = Utf8("pale")) AND (item.#<col> = Utf8("Pallet") OR item.#<col> = Utf8("Gram")) AND (item.#<col> = Utf8("economy") OR item.#<col> = Utf8("small")))
+                  Projection: <exprs>
+                    Projection: <exprs>
+                      SubqueryAlias: item
+                        Projection: <exprs>
+                          Projection: <exprs>
+                            TableScan: ?table?
+          SubqueryAlias: i1
+            Projection: <exprs>
+              Projection: <exprs>
+                SubqueryAlias: item
+                  Projection: <exprs>
+                    Projection: <exprs>
+                      TableScan: ?table?
+
+logical_plan after eliminate_join:
+SAME TEXT AS ABOVE
+
+logical_plan after decorrelate_predicate_subquery:
+SAME TEXT AS ABOVE
+
+logical_plan after scalar_subquery_to_join:
+Limit: skip=0, fetch=100
+  Sort: <exprs>
+    Aggregate: groupBy=[[#<col>]], aggr=[[]]
+      Projection: <exprs>
+        Projection: <exprs>
+          Filter: i1.#<col> >= Int64(668) AND i1.#<col> <= Int64(708) AND CASE WHEN __scalar_sq_1.__always_true IS NULL THEN Int64(0) ELSE __scalar_sq_1.#<col> END > Int64(0)
+            Left Join:  Filter: __scalar_sq_1.#<col> = i1.#<col>
+              SubqueryAlias: i1
+                Projection: <exprs>
+                  Projection: <exprs>
+                    SubqueryAlias: item
+                      Projection: <exprs>
+                        Projection: <exprs>
+                          TableScan: ?table?
+              SubqueryAlias: __scalar_sq_1
+                Projection: <exprs>
+                  Aggregate: groupBy=[[item.#<col>, Boolean(true) AS __always_true]], aggr=[[count(Int64(1))]]
+                    Filter: item.#<col> = Utf8("Women") AND ((item.#<col> = Utf8("cream") OR item.#<col> = Utf8("ghost")) AND (item.#<col> = Utf8("Ton") OR item.#<col> = Utf8("Gross")) AND (item.#<col> = Utf8("economy") OR item.#<col> = Utf8("small")) OR (item.#<col> = Utf8("midnight") OR item.#<col> = Utf8("burlywood")) AND (item.#<col> = Utf8("Tsp") OR item.#<col> = Utf8("Bundle")) AND (item.#<col> = Utf8("medium") OR item.#<col> = Utf8("extra large"))) OR item.#<col> = Utf8("Men") AND (item.#<col> = Utf8("lavender") OR item.#<col> = Utf8("azure")) AND (item.#<col> = Utf8("Each") OR item.#<col> = Utf8("Lb")) AND (item.#<col> = Utf8("large") OR item.#<col> = Utf8("N/A")) OR item.#<col> = Utf8("Men") AND (item.#<col> = Utf8("chocolate") OR item.#<col> = Utf8("steel")) AND (item.#<col> = Utf8("N/A") OR item.#<col> = Utf8("Dozen")) AND (item.#<col> = Utf8("economy") OR item.#<col> = Utf8("small")) OR item.#<col> = Utf8("Women") AND ((item.#<col> = Utf8("floral") OR item.#<col> = Utf8("royal")) AND (item.#<col> = Utf8("Unknown") OR item.#<col> = Utf8("Tbl")) AND (item.#<col> = Utf8("economy") OR item.#<col> = Utf8("small")) OR (item.#<col> = Utf8("navy") OR item.#<col> = Utf8("forest")) AND (item.#<col> = Utf8("Bunch") OR item.#<col> = Utf8("Dram")) AND (item.#<col> = Utf8("medium") OR item.#<col> = Utf8("extra large"))) OR item.#<col> = Utf8("Men") AND (item.#<col> = Utf8("cyan") OR item.#<col> = Utf8("indian")) AND (item.#<col> = Utf8("Carton") OR item.#<col> = Utf8("Cup")) AND (item.#<col> = Utf8("large") OR item.#<col> = Utf8("N/A")) OR item.#<col> = Utf8("Men") AND (item.#<col> = Utf8("coral") OR item.#<col> = Utf8("pale")) AND (item.#<col> = Utf8("Pallet") OR item.#<col> = Utf8("Gram")) AND (item.#<col> = Utf8("economy") OR item.#<col> = Utf8("small"))
+                      Projection: <exprs>
+                        Projection: <exprs>
+                          SubqueryAlias: item
+                            Projection: <exprs>
+                              Projection: <exprs>
+                                TableScan: ?table?
+
+logical_plan after decorrelate_lateral_join:
+SAME TEXT AS ABOVE
+
+logical_plan after extract_equijoin_predicate:
+Limit: skip=0, fetch=100
+  Sort: <exprs>
+    Aggregate: groupBy=[[#<col>]], aggr=[[]]
+      Projection: <exprs>
+        Projection: <exprs>
+          Filter: i1.#<col> >= Int64(668) AND i1.#<col> <= Int64(708) AND CASE WHEN __scalar_sq_1.__always_true IS NULL THEN Int64(0) ELSE __scalar_sq_1.#<col> END > Int64(0)
+            Left Join: i1.#<col> = __scalar_sq_1.#<col>
+              SubqueryAlias: i1
+                Projection: <exprs>
+                  Projection: <exprs>
+                    SubqueryAlias: item
+                      Projection: <exprs>
+                        Projection: <exprs>
+                          TableScan: ?table?
+              SubqueryAlias: __scalar_sq_1
+                Projection: <exprs>
+                  Aggregate: groupBy=[[item.#<col>, Boolean(true) AS __always_true]], aggr=[[count(Int64(1))]]
+                    Filter: item.#<col> = Utf8("Women") AND ((item.#<col> = Utf8("cream") OR item.#<col> = Utf8("ghost")) AND (item.#<col> = Utf8("Ton") OR item.#<col> = Utf8("Gross")) AND (item.#<col> = Utf8("economy") OR item.#<col> = Utf8("small")) OR (item.#<col> = Utf8("midnight") OR item.#<col> = Utf8("burlywood")) AND (item.#<col> = Utf8("Tsp") OR item.#<col> = Utf8("Bundle")) AND (item.#<col> = Utf8("medium") OR item.#<col> = Utf8("extra large"))) OR item.#<col> = Utf8("Men") AND (item.#<col> = Utf8("lavender") OR item.#<col> = Utf8("azure")) AND (item.#<col> = Utf8("Each") OR item.#<col> = Utf8("Lb")) AND (item.#<col> = Utf8("large") OR item.#<col> = Utf8("N/A")) OR item.#<col> = Utf8("Men") AND (item.#<col> = Utf8("chocolate") OR item.#<col> = Utf8("steel")) AND (item.#<col> = Utf8("N/A") OR item.#<col> = Utf8("Dozen")) AND (item.#<col> = Utf8("economy") OR item.#<col> = Utf8("small")) OR item.#<col> = Utf8("Women") AND ((item.#<col> = Utf8("floral") OR item.#<col> = Utf8("royal")) AND (item.#<col> = Utf8("Unknown") OR item.#<col> = Utf8("Tbl")) AND (item.#<col> = Utf8("economy") OR item.#<col> = Utf8("small")) OR (item.#<col> = Utf8("navy") OR item.#<col> = Utf8("forest")) AND (item.#<col> = Utf8("Bunch") OR item.#<col> = Utf8("Dram")) AND (item.#<col> = Utf8("medium") OR item.#<col> = Utf8("extra large"))) OR item.#<col> = Utf8("Men") AND (item.#<col> = Utf8("cyan") OR item.#<col> = Utf8("indian")) AND (item.#<col> = Utf8("Carton") OR item.#<col> = Utf8("Cup")) AND (item.#<col> = Utf8("large") OR item.#<col> = Utf8("N/A")) OR item.#<col> = Utf8("Men") AND (item.#<col> = Utf8("coral") OR item.#<col> = Utf8("pale")) AND (item.#<col> = Utf8("Pallet") OR item.#<col> = Utf8("Gram")) AND (item.#<col> = Utf8("economy") OR item.#<col> = Utf8("small"))
+                      Projection: <exprs>
+                        Projection: <exprs>
+                          SubqueryAlias: item
+                            Projection: <exprs>
+                              Projection: <exprs>
+                                TableScan: ?table?
+
+logical_plan after eliminate_duplicated_expr:
+SAME TEXT AS ABOVE
+
+logical_plan after eliminate_filter:
+SAME TEXT AS ABOVE
+
+logical_plan after eliminate_cross_join:
+SAME TEXT AS ABOVE
+
+logical_plan after eliminate_limit:
+SAME TEXT AS ABOVE
+
+logical_plan after propagate_empty_relation:
+SAME TEXT AS ABOVE
+
+logical_plan after eliminate_one_union:
+SAME TEXT AS ABOVE
+
+logical_plan after filter_null_join_keys:
+SAME TEXT AS ABOVE
+
+logical_plan after eliminate_outer_join:
+SAME TEXT AS ABOVE
+
+logical_plan after push_down_limit:
+Limit: skip=0, fetch=100
+  Sort: <exprs>
+    Aggregate: groupBy=[[#<col>]], aggr=[[]]
+      Projection: <exprs>
+        Projection: <exprs>
+          Filter: i1.#<col> >= Int64(668) AND i1.#<col> <= Int64(708) AND CASE WHEN __scalar_sq_1.__always_true IS NULL THEN Int64(0) ELSE __scalar_sq_1.#<col> END > Int64(0)
+            Left Join: i1.#<col> = __scalar_sq_1.#<col>
+              SubqueryAlias: i1
+                Projection: <exprs>
+                  Projection: <exprs>
+                    SubqueryAlias: item
+                      Projection: <exprs>
+                        Projection: <exprs>
+                          TableScan: ?table?
+              SubqueryAlias: __scalar_sq_1
+                Projection: <exprs>
+                  Aggregate: groupBy=[[item.#<col>, Boolean(true) AS __always_true]], aggr=[[count(Int64(1))]]
+                    Filter: item.#<col> = Utf8("Women") AND ((item.#<col> = Utf8("cream") OR item.#<col> = Utf8("ghost")) AND (item.#<col> = Utf8("Ton") OR item.#<col> = Utf8("Gross")) AND (item.#<col> = Utf8("economy") OR item.#<col> = Utf8("small")) OR (item.#<col> = Utf8("midnight") OR item.#<col> = Utf8("burlywood")) AND (item.#<col> = Utf8("Tsp") OR item.#<col> = Utf8("Bundle")) AND (item.#<col> = Utf8("medium") OR item.#<col> = Utf8("extra large"))) OR item.#<col> = Utf8("Men") AND (item.#<col> = Utf8("lavender") OR item.#<col> = Utf8("azure")) AND (item.#<col> = Utf8("Each") OR item.#<col> = Utf8("Lb")) AND (item.#<col> = Utf8("large") OR item.#<col> = Utf8("N/A")) OR item.#<col> = Utf8("Men") AND (item.#<col> = Utf8("chocolate") OR item.#<col> = Utf8("steel")) AND (item.#<col> = Utf8("N/A") OR item.#<col> = Utf8("Dozen")) AND (item.#<col> = Utf8("economy") OR item.#<col> = Utf8("small")) OR item.#<col> = Utf8("Women") AND ((item.#<col> = Utf8("floral") OR item.#<col> = Utf8("royal")) AND (item.#<col> = Utf8("Unknown") OR item.#<col> = Utf8("Tbl")) AND (item.#<col> = Utf8("economy") OR item.#<col> = Utf8("small")) OR (item.#<col> = Utf8("navy") OR item.#<col> = Utf8("forest")) AND (item.#<col> = Utf8("Bunch") OR item.#<col> = Utf8("Dram")) AND (item.#<col> = Utf8("medium") OR item.#<col> = Utf8("extra large"))) OR item.#<col> = Utf8("Men") AND (item.#<col> = Utf8("cyan") OR item.#<col> = Utf8("indian")) AND (item.#<col> = Utf8("Carton") OR item.#<col> = Utf8("Cup")) AND (item.#<col> = Utf8("large") OR item.#<col> = Utf8("N/A")) OR item.#<col> = Utf8("Men") AND (item.#<col> = Utf8("coral") OR item.#<col> = Utf8("pale")) AND (item.#<col> = Utf8("Pallet") OR item.#<col> = Utf8("Gram")) AND (item.#<col> = Utf8("economy") OR item.#<col> = Utf8("small"))
+                      Projection: <exprs>
+                        Projection: <exprs>
+                          SubqueryAlias: item
+                            Projection: <exprs>
+                              Projection: <exprs>
+                                TableScan: ?table?
+
+logical_plan after push_down_filter:
+Limit: skip=0, fetch=100
+  Sort: <exprs>
+    Aggregate: groupBy=[[#<col>]], aggr=[[]]
+      Projection: <exprs>
+        Projection: <exprs>
+          Filter: CASE WHEN __scalar_sq_1.__always_true IS NULL THEN Int64(0) ELSE __scalar_sq_1.#<col> END > Int64(0)
+            Left Join: i1.#<col> = __scalar_sq_1.#<col>
+              SubqueryAlias: i1
+                Projection: <exprs>
+                  Projection: <exprs>
+                    SubqueryAlias: item
+                      Projection: <exprs>
+                        Projection: <exprs>
+                          Filter: ?table?._13 >= Int64(668) AND ?table?._13 <= Int64(708)
+                            TableScan: ?table?
+              SubqueryAlias: __scalar_sq_1
+                Projection: <exprs>
+                  Aggregate: groupBy=[[item.#<col>, Boolean(true) AS __always_true]], aggr=[[count(Int64(1))]]
+                    Projection: <exprs>
+                      Projection: <exprs>
+                        SubqueryAlias: item
+                          Projection: <exprs>
+                            Projection: <exprs>
+                              Filter: ?table?._12 = Utf8("Women") AND ((?table?._17 = Utf8("cream") OR ?table?._17 = Utf8("ghost")) AND (?table?._18 = Utf8("Ton") OR ?table?._18 = Utf8("Gross")) AND (?table?._15 = Utf8("economy") OR ?table?._15 = Utf8("small")) OR (?table?._17 = Utf8("midnight") OR ?table?._17 = Utf8("burlywood")) AND (?table?._18 = Utf8("Tsp") OR ?table?._18 = Utf8("Bundle")) AND (?table?._15 = Utf8("medium") OR ?table?._15 = Utf8("extra large"))) OR ?table?._12 = Utf8("Men") AND (?table?._17 = Utf8("lavender") OR ?table?._17 = Utf8("azure")) AND (?table?._18 = Utf8("Each") OR ?table?._18 = Utf8("Lb")) AND (?table?._15 = Utf8("large") OR ?table?._15 = Utf8("N/A")) OR ?table?._12 = Utf8("Men") AND (?table?._17 = Utf8("chocolate") OR ?table?._17 = Utf8("steel")) AND (?table?._18 = Utf8("N/A") OR ?table?._18 = Utf8("Dozen")) AND (?table?._15 = Utf8("economy") OR ?table?._15 = Utf8("small")) OR ?table?._12 = Utf8("Women") AND ((?table?._17 = Utf8("floral") OR ?table?._17 = Utf8("royal")) AND (?table?._18 = Utf8("Unknown") OR ?table?._18 = Utf8("Tbl")) AND (?table?._15 = Utf8("economy") OR ?table?._15 = Utf8("small")) OR (?table?._17 = Utf8("navy") OR ?table?._17 = Utf8("forest")) AND (?table?._18 = Utf8("Bunch") OR ?table?._18 = Utf8("Dram")) AND (?table?._15 = Utf8("medium") OR ?table?._15 = Utf8("extra large"))) OR ?table?._12 = Utf8("Men") AND (?table?._17 = Utf8("cyan") OR ?table?._17 = Utf8("indian")) AND (?table?._18 = Utf8("Carton") OR ?table?._18 = Utf8("Cup")) AND (?table?._15 = Utf8("large") OR ?table?._15 = Utf8("N/A")) OR ?table?._12 = Utf8("Men") AND (?table?._17 = Utf8("coral") OR ?table?._17 = Utf8("pale")) AND (?table?._18 = Utf8("Pallet") OR ?table?._18 = Utf8("Gram")) AND (?table?._15 = Utf8("economy") OR ?table?._15 = Utf8("small"))
+                                TableScan: ?table?
+
+logical_plan after single_distinct_aggregation_to_group_by:
+SAME TEXT AS ABOVE
+
+logical_plan after eliminate_group_by_constant:
+Limit: skip=0, fetch=100
+  Sort: <exprs>
+    Aggregate: groupBy=[[#<col>]], aggr=[[]]
+      Projection: <exprs>
+        Projection: <exprs>
+          Filter: CASE WHEN __scalar_sq_1.__always_true IS NULL THEN Int64(0) ELSE __scalar_sq_1.#<col> END > Int64(0)
+            Left Join: i1.#<col> = __scalar_sq_1.#<col>
+              SubqueryAlias: i1
+                Projection: <exprs>
+                  Projection: <exprs>
+                    SubqueryAlias: item
+                      Projection: <exprs>
+                        Projection: <exprs>
+                          Filter: ?table?._13 >= Int64(668) AND ?table?._13 <= Int64(708)
+                            TableScan: ?table?
+              SubqueryAlias: __scalar_sq_1
+                Projection: <exprs>
+                  Projection: <exprs>
+                    Aggregate: groupBy=[[item.#<col>]], aggr=[[count(Int64(1))]]
+                      Projection: <exprs>
+                        Projection: <exprs>
+                          SubqueryAlias: item
+                            Projection: <exprs>
+                              Projection: <exprs>
+                                Filter: ?table?._12 = Utf8("Women") AND ((?table?._17 = Utf8("cream") OR ?table?._17 = Utf8("ghost")) AND (?table?._18 = Utf8("Ton") OR ?table?._18 = Utf8("Gross")) AND (?table?._15 = Utf8("economy") OR ?table?._15 = Utf8("small")) OR (?table?._17 = Utf8("midnight") OR ?table?._17 = Utf8("burlywood")) AND (?table?._18 = Utf8("Tsp") OR ?table?._18 = Utf8("Bundle")) AND (?table?._15 = Utf8("medium") OR ?table?._15 = Utf8("extra large"))) OR ?table?._12 = Utf8("Men") AND (?table?._17 = Utf8("lavender") OR ?table?._17 = Utf8("azure")) AND (?table?._18 = Utf8("Each") OR ?table?._18 = Utf8("Lb")) AND (?table?._15 = Utf8("large") OR ?table?._15 = Utf8("N/A")) OR ?table?._12 = Utf8("Men") AND (?table?._17 = Utf8("chocolate") OR ?table?._17 = Utf8("steel")) AND (?table?._18 = Utf8("N/A") OR ?table?._18 = Utf8("Dozen")) AND (?table?._15 = Utf8("economy") OR ?table?._15 = Utf8("small")) OR ?table?._12 = Utf8("Women") AND ((?table?._17 = Utf8("floral") OR ?table?._17 = Utf8("royal")) AND (?table?._18 = Utf8("Unknown") OR ?table?._18 = Utf8("Tbl")) AND (?table?._15 = Utf8("economy") OR ?table?._15 = Utf8("small")) OR (?table?._17 = Utf8("navy") OR ?table?._17 = Utf8("forest")) AND (?table?._18 = Utf8("Bunch") OR ?table?._18 = Utf8("Dram")) AND (?table?._15 = Utf8("medium") OR ?table?._15 = Utf8("extra large"))) OR ?table?._12 = Utf8("Men") AND (?table?._17 = Utf8("cyan") OR ?table?._17 = Utf8("indian")) AND (?table?._18 = Utf8("Carton") OR ?table?._18 = Utf8("Cup")) AND (?table?._15 = Utf8("large") OR ?table?._15 = Utf8("N/A")) OR ?table?._12 = Utf8("Men") AND (?table?._17 = Utf8("coral") OR ?table?._17 = Utf8("pale")) AND (?table?._18 = Utf8("Pallet") OR ?table?._18 = Utf8("Gram")) AND (?table?._15 = Utf8("economy") OR ?table?._15 = Utf8("small"))
+                                  TableScan: ?table?
+
+logical_plan after common_sub_expression_eliminate:
+Limit: skip=0, fetch=100
+  Sort: <exprs>
+    Aggregate: groupBy=[[#<col>]], aggr=[[]]
+      Projection: <exprs>
+        Projection: <exprs>
+          Filter: CASE WHEN __scalar_sq_1.__always_true IS NULL THEN Int64(0) ELSE __scalar_sq_1.#<col> END > Int64(0)
+            Left Join: i1.#<col> = __scalar_sq_1.#<col>
+              SubqueryAlias: i1
+                Projection: <exprs>
+                  Projection: <exprs>
+                    SubqueryAlias: item
+                      Projection: <exprs>
+                        Projection: <exprs>
+                          Filter: ?table?._13 >= Int64(668) AND ?table?._13 <= Int64(708)
+                            TableScan: ?table?
+              SubqueryAlias: __scalar_sq_1
+                Projection: <exprs>
+                  Projection: <exprs>
+                    Aggregate: groupBy=[[item.#<col>]], aggr=[[count(Int64(1))]]
+                      Projection: <exprs>
+                        Projection: <exprs>
+                          SubqueryAlias: item
+                            Projection: <exprs>
+                              Projection: <exprs>
+                                Projection: <exprs>
+                                  Filter: __common_expr_2 AND ((?table?._17 = Utf8("cream") OR ?table?._17 = Utf8("ghost")) AND (?table?._18 = Utf8("Ton") OR ?table?._18 = Utf8("Gross")) AND (?table?._15 = Utf8("economy") OR ?table?._15 = Utf8("small")) OR (?table?._17 = Utf8("midnight") OR ?table?._17 = Utf8("burlywood")) AND (?table?._18 = Utf8("Tsp") OR ?table?._18 = Utf8("Bundle")) AND (?table?._15 = Utf8("medium") OR ?table?._15 = Utf8("extra large"))) OR ?table?._12 = Utf8("Men") AND (?table?._17 = Utf8("lavender") OR ?table?._17 = Utf8("azure")) AND (?table?._18 = Utf8("Each") OR ?table?._18 = Utf8("Lb")) AND (?table?._15 = Utf8("large") OR ?table?._15 = Utf8("N/A")) OR ?table?._12 = Utf8("Men") AND (?table?._17 = Utf8("chocolate") OR ?table?._17 = Utf8("steel")) AND (?table?._18 = Utf8("N/A") OR ?table?._18 = Utf8("Dozen")) AND (?table?._15 = Utf8("economy") OR ?table?._15 = Utf8("small")) OR __common_expr_2 AND ((?table?._17 = Utf8("floral") OR ?table?._17 = Utf8("royal")) AND (?table?._18 = Utf8("Unknown") OR ?table?._18 = Utf8("Tbl")) AND (?table?._15 = Utf8("economy") OR ?table?._15 = Utf8("small")) OR (?table?._17 = Utf8("navy") OR ?table?._17 = Utf8("forest")) AND (?table?._18 = Utf8("Bunch") OR ?table?._18 = Utf8("Dram")) AND (?table?._15 = Utf8("medium") OR ?table?._15 = Utf8("extra large"))) OR ?table?._12 = Utf8("Men") AND (?table?._17 = Utf8("cyan") OR ?table?._17 = Utf8("indian")) AND (?table?._18 = Utf8("Carton") OR ?table?._18 = Utf8("Cup")) AND (?table?._15 = Utf8("large") OR ?table?._15 = Utf8("N/A")) OR ?table?._12 = Utf8("Men") AND (?table?._17 = Utf8("coral") OR ?table?._17 = Utf8("pale")) AND (?table?._18 = Utf8("Pallet") OR ?table?._18 = Utf8("Gram")) AND (?table?._15 = Utf8("economy") OR ?table?._15 = Utf8("small"))
+                                    Projection: <exprs>
+                                      TableScan: ?table?
+
+logical_plan after optimize_projections:
+Limit: skip=0, fetch=100
+  Sort: <exprs>
+    Aggregate: groupBy=[[#<col>]], aggr=[[]]
+      Projection: <exprs>
+        Filter: CASE WHEN __scalar_sq_1.__always_true IS NULL THEN Int64(0) ELSE __scalar_sq_1.#<col> END > Int64(0)
+          Projection: <exprs>
+            Left Join: i1.#<col> = __scalar_sq_1.#<col>
+              SubqueryAlias: i1
+                Projection: <exprs>
+                  SubqueryAlias: item
+                    Projection: <exprs>
+                      Filter: ?table?._13 >= Int64(668) AND ?table?._13 <= Int64(708)
+                        TableScan: ?table? projection=[_13, _14, _21]
+              SubqueryAlias: __scalar_sq_1
+                Projection: <exprs>
+                  Aggregate: groupBy=[[item.#<col>]], aggr=[[count(Int64(1))]]
+                    Projection: <exprs>
+                      SubqueryAlias: item
+                        Projection: <exprs>
+                          Projection: <exprs>
+                            Filter: __common_expr_2 AND ((?table?._17 = Utf8("cream") OR ?table?._17 = Utf8("ghost")) AND (?table?._18 = Utf8("Ton") OR ?table?._18 = Utf8("Gross")) AND (?table?._15 = Utf8("economy") OR ?table?._15 = Utf8("small")) OR (?table?._17 = Utf8("midnight") OR ?table?._17 = Utf8("burlywood")) AND (?table?._18 = Utf8("Tsp") OR ?table?._18 = Utf8("Bundle")) AND (?table?._15 = Utf8("medium") OR ?table?._15 = Utf8("extra large"))) OR ?table?._12 = Utf8("Men") AND (?table?._17 = Utf8("lavender") OR ?table?._17 = Utf8("azure")) AND (?table?._18 = Utf8("Each") OR ?table?._18 = Utf8("Lb")) AND (?table?._15 = Utf8("large") OR ?table?._15 = Utf8("N/A")) OR ?table?._12 = Utf8("Men") AND (?table?._17 = Utf8("chocolate") OR ?table?._17 = Utf8("steel")) AND (?table?._18 = Utf8("N/A") OR ?table?._18 = Utf8("Dozen")) AND (?table?._15 = Utf8("economy") OR ?table?._15 = Utf8("small")) OR __common_expr_2 AND ((?table?._17 = Utf8("floral") OR ?table?._17 = Utf8("royal")) AND (?table?._18 = Utf8("Unknown") OR ?table?._18 = Utf8("Tbl")) AND (?table?._15 = Utf8("economy") OR ?table?._15 = Utf8("small")) OR (?table?._17 = Utf8("navy") OR ?table?._17 = Utf8("forest")) AND (?table?._18 = Utf8("Bunch") OR ?table?._18 = Utf8("Dram")) AND (?table?._15 = Utf8("medium") OR ?table?._15 = Utf8("extra large"))) OR ?table?._12 = Utf8("Men") AND (?table?._17 = Utf8("cyan") OR ?table?._17 = Utf8("indian")) AND (?table?._18 = Utf8("Carton") OR ?table?._18 = Utf8("Cup")) AND (?table?._15 = Utf8("large") OR ?table?._15 = Utf8("N/A")) OR ?table?._12 = Utf8("Men") AND (?table?._17 = Utf8("coral") OR ?table?._17 = Utf8("pale")) AND (?table?._18 = Utf8("Pallet") OR ?table?._18 = Utf8("Gram")) AND (?table?._15 = Utf8("economy") OR ?table?._15 = Utf8("small"))
+                              Projection: <exprs>
+                                TableScan: ?table? projection=[_12, _14, _15, _17, _18]
+
+logical_plan after eliminate_nested_union:
+SAME TEXT AS ABOVE
+
+logical_plan after simplify_expressions:
+SAME TEXT AS ABOVE
+
+logical_plan after replace_distinct_aggregate:
+SAME TEXT AS ABOVE
+
+logical_plan after eliminate_join:
+SAME TEXT AS ABOVE
+
+logical_plan after decorrelate_predicate_subquery:
+SAME TEXT AS ABOVE
+
+logical_plan after scalar_subquery_to_join:
+SAME TEXT AS ABOVE
+
+logical_plan after decorrelate_lateral_join:
+SAME TEXT AS ABOVE
+
+logical_plan after extract_equijoin_predicate:
+SAME TEXT AS ABOVE
+
+logical_plan after eliminate_duplicated_expr:
+SAME TEXT AS ABOVE
+
+logical_plan after eliminate_filter:
+SAME TEXT AS ABOVE
+
+logical_plan after eliminate_cross_join:
+SAME TEXT AS ABOVE
+
+logical_plan after eliminate_limit:
+SAME TEXT AS ABOVE
+
+logical_plan after propagate_empty_relation:
+SAME TEXT AS ABOVE
+
+logical_plan after eliminate_one_union:
+SAME TEXT AS ABOVE
+
+logical_plan after filter_null_join_keys:
+SAME TEXT AS ABOVE
+
+logical_plan after eliminate_outer_join:
+SAME TEXT AS ABOVE
+
+logical_plan after push_down_limit:
+Sort: <exprs>
+  Aggregate: groupBy=[[#<col>]], aggr=[[]]
+    Projection: <exprs>
+      Filter: CASE WHEN __scalar_sq_1.__always_true IS NULL THEN Int64(0) ELSE __scalar_sq_1.#<col> END > Int64(0)
+        Projection: <exprs>
+          Left Join: i1.#<col> = __scalar_sq_1.#<col>
+            SubqueryAlias: i1
+              Projection: <exprs>
+                SubqueryAlias: item
+                  Projection: <exprs>
+                    Filter: ?table?._13 >= Int64(668) AND ?table?._13 <= Int64(708)
+                      TableScan: ?table? projection=[_13, _14, _21]
+            SubqueryAlias: __scalar_sq_1
+              Projection: <exprs>
+                Aggregate: groupBy=[[item.#<col>]], aggr=[[count(Int64(1))]]
+                  Projection: <exprs>
+                    SubqueryAlias: item
+                      Projection: <exprs>
+                        Projection: <exprs>
+                          Filter: __common_expr_2 AND ((?table?._17 = Utf8("cream") OR ?table?._17 = Utf8("ghost")) AND (?table?._18 = Utf8("Ton") OR ?table?._18 = Utf8("Gross")) AND (?table?._15 = Utf8("economy") OR ?table?._15 = Utf8("small")) OR (?table?._17 = Utf8("midnight") OR ?table?._17 = Utf8("burlywood")) AND (?table?._18 = Utf8("Tsp") OR ?table?._18 = Utf8("Bundle")) AND (?table?._15 = Utf8("medium") OR ?table?._15 = Utf8("extra large"))) OR ?table?._12 = Utf8("Men") AND (?table?._17 = Utf8("lavender") OR ?table?._17 = Utf8("azure")) AND (?table?._18 = Utf8("Each") OR ?table?._18 = Utf8("Lb")) AND (?table?._15 = Utf8("large") OR ?table?._15 = Utf8("N/A")) OR ?table?._12 = Utf8("Men") AND (?table?._17 = Utf8("chocolate") OR ?table?._17 = Utf8("steel")) AND (?table?._18 = Utf8("N/A") OR ?table?._18 = Utf8("Dozen")) AND (?table?._15 = Utf8("economy") OR ?table?._15 = Utf8("small")) OR __common_expr_2 AND ((?table?._17 = Utf8("floral") OR ?table?._17 = Utf8("royal")) AND (?table?._18 = Utf8("Unknown") OR ?table?._18 = Utf8("Tbl")) AND (?table?._15 = Utf8("economy") OR ?table?._15 = Utf8("small")) OR (?table?._17 = Utf8("navy") OR ?table?._17 = Utf8("forest")) AND (?table?._18 = Utf8("Bunch") OR ?table?._18 = Utf8("Dram")) AND (?table?._15 = Utf8("medium") OR ?table?._15 = Utf8("extra large"))) OR ?table?._12 = Utf8("Men") AND (?table?._17 = Utf8("cyan") OR ?table?._17 = Utf8("indian")) AND (?table?._18 = Utf8("Carton") OR ?table?._18 = Utf8("Cup")) AND (?table?._15 = Utf8("large") OR ?table?._15 = Utf8("N/A")) OR ?table?._12 = Utf8("Men") AND (?table?._17 = Utf8("coral") OR ?table?._17 = Utf8("pale")) AND (?table?._18 = Utf8("Pallet") OR ?table?._18 = Utf8("Gram")) AND (?table?._15 = Utf8("economy") OR ?table?._15 = Utf8("small"))
+                            Projection: <exprs>
+                              TableScan: ?table? projection=[_12, _14, _15, _17, _18]
+
+logical_plan after push_down_filter:
+Sort: <exprs>
+  Aggregate: groupBy=[[#<col>]], aggr=[[]]
+    Projection: <exprs>
+      Projection: <exprs>
+        Filter: CASE WHEN __scalar_sq_1.__always_true IS NULL THEN Int64(0) ELSE __scalar_sq_1.#<col> END > Int64(0)
+          Left Join: i1.#<col> = __scalar_sq_1.#<col>
+            SubqueryAlias: i1
+              Projection: <exprs>
+                SubqueryAlias: item
+                  Projection: <exprs>
+                    Filter: ?table?._13 >= Int64(668) AND ?table?._13 <= Int64(708)
+                      TableScan: ?table? projection=[_13, _14, _21]
+            SubqueryAlias: __scalar_sq_1
+              Projection: <exprs>
+                Aggregate: groupBy=[[item.#<col>]], aggr=[[count(Int64(1))]]
+                  Projection: <exprs>
+                    SubqueryAlias: item
+                      Projection: <exprs>
+                        Projection: <exprs>
+                          Projection: <exprs>
+                            Filter: ?table?._12 = Utf8("Women") AND ((?table?._17 = Utf8("cream") OR ?table?._17 = Utf8("ghost")) AND (?table?._18 = Utf8("Ton") OR ?table?._18 = Utf8("Gross")) AND (?table?._15 = Utf8("economy") OR ?table?._15 = Utf8("small")) OR (?table?._17 = Utf8("midnight") OR ?table?._17 = Utf8("burlywood")) AND (?table?._18 = Utf8("Tsp") OR ?table?._18 = Utf8("Bundle")) AND (?table?._15 = Utf8("medium") OR ?table?._15 = Utf8("extra large"))) OR ?table?._12 = Utf8("Men") AND (?table?._17 = Utf8("lavender") OR ?table?._17 = Utf8("azure")) AND (?table?._18 = Utf8("Each") OR ?table?._18 = Utf8("Lb")) AND (?table?._15 = Utf8("large") OR ?table?._15 = Utf8("N/A")) OR ?table?._12 = Utf8("Men") AND (?table?._17 = Utf8("chocolate") OR ?table?._17 = Utf8("steel")) AND (?table?._18 = Utf8("N/A") OR ?table?._18 = Utf8("Dozen")) AND (?table?._15 = Utf8("economy") OR ?table?._15 = Utf8("small")) OR ?table?._12 = Utf8("Women") AND ((?table?._17 = Utf8("floral") OR ?table?._17 = Utf8("royal")) AND (?table?._18 = Utf8("Unknown") OR ?table?._18 = Utf8("Tbl")) AND (?table?._15 = Utf8("economy") OR ?table?._15 = Utf8("small")) OR (?table?._17 = Utf8("navy") OR ?table?._17 = Utf8("forest")) AND (?table?._18 = Utf8("Bunch") OR ?table?._18 = Utf8("Dram")) AND (?table?._15 = Utf8("medium") OR ?table?._15 = Utf8("extra large"))) OR ?table?._12 = Utf8("Men") AND (?table?._17 = Utf8("cyan") OR ?table?._17 = Utf8("indian")) AND (?table?._18 = Utf8("Carton") OR ?table?._18 = Utf8("Cup")) AND (?table?._15 = Utf8("large") OR ?table?._15 = Utf8("N/A")) OR ?table?._12 = Utf8("Men") AND (?table?._17 = Utf8("coral") OR ?table?._17 = Utf8("pale")) AND (?table?._18 = Utf8("Pallet") OR ?table?._18 = Utf8("Gram")) AND (?table?._15 = Utf8("economy") OR ?table?._15 = Utf8("small"))
+                              TableScan: ?table? projection=[_12, _14, _15, _17, _18]
+
+logical_plan after single_distinct_aggregation_to_group_by:
+SAME TEXT AS ABOVE
+
+logical_plan after eliminate_group_by_constant:
+SAME TEXT AS ABOVE
+
+logical_plan after common_sub_expression_eliminate:
+Sort: <exprs>
+  Aggregate: groupBy=[[#<col>]], aggr=[[]]
+    Projection: <exprs>
+      Projection: <exprs>
+        Filter: CASE WHEN __scalar_sq_1.__always_true IS NULL THEN Int64(0) ELSE __scalar_sq_1.#<col> END > Int64(0)
+          Left Join: i1.#<col> = __scalar_sq_1.#<col>
+            SubqueryAlias: i1
+              Projection: <exprs>
+                SubqueryAlias: item
+                  Projection: <exprs>
+                    Filter: ?table?._13 >= Int64(668) AND ?table?._13 <= Int64(708)
+                      TableScan: ?table? projection=[_13, _14, _21]
+            SubqueryAlias: __scalar_sq_1
+              Projection: <exprs>
+                Aggregate: groupBy=[[item.#<col>]], aggr=[[count(Int64(1))]]
+                  Projection: <exprs>
+                    SubqueryAlias: item
+                      Projection: <exprs>
+                        Projection: <exprs>
+                          Projection: <exprs>
+                            Projection: <exprs>
+                              Filter: __common_expr_3 AND ((?table?._17 = Utf8("cream") OR ?table?._17 = Utf8("ghost")) AND (?table?._18 = Utf8("Ton") OR ?table?._18 = Utf8("Gross")) AND (?table?._15 = Utf8("economy") OR ?table?._15 = Utf8("small")) OR (?table?._17 = Utf8("midnight") OR ?table?._17 = Utf8("burlywood")) AND (?table?._18 = Utf8("Tsp") OR ?table?._18 = Utf8("Bundle")) AND (?table?._15 = Utf8("medium") OR ?table?._15 = Utf8("extra large"))) OR ?table?._12 = Utf8("Men") AND (?table?._17 = Utf8("lavender") OR ?table?._17 = Utf8("azure")) AND (?table?._18 = Utf8("Each") OR ?table?._18 = Utf8("Lb")) AND (?table?._15 = Utf8("large") OR ?table?._15 = Utf8("N/A")) OR ?table?._12 = Utf8("Men") AND (?table?._17 = Utf8("chocolate") OR ?table?._17 = Utf8("steel")) AND (?table?._18 = Utf8("N/A") OR ?table?._18 = Utf8("Dozen")) AND (?table?._15 = Utf8("economy") OR ?table?._15 = Utf8("small")) OR __common_expr_3 AND ((?table?._17 = Utf8("floral") OR ?table?._17 = Utf8("royal")) AND (?table?._18 = Utf8("Unknown") OR ?table?._18 = Utf8("Tbl")) AND (?table?._15 = Utf8("economy") OR ?table?._15 = Utf8("small")) OR (?table?._17 = Utf8("navy") OR ?table?._17 = Utf8("forest")) AND (?table?._18 = Utf8("Bunch") OR ?table?._18 = Utf8("Dram")) AND (?table?._15 = Utf8("medium") OR ?table?._15 = Utf8("extra large"))) OR ?table?._12 = Utf8("Men") AND (?table?._17 = Utf8("cyan") OR ?table?._17 = Utf8("indian")) AND (?table?._18 = Utf8("Carton") OR ?table?._18 = Utf8("Cup")) AND (?table?._15 = Utf8("large") OR ?table?._15 = Utf8("N/A")) OR ?table?._12 = Utf8("Men") AND (?table?._17 = Utf8("coral") OR ?table?._17 = Utf8("pale")) AND (?table?._18 = Utf8("Pallet") OR ?table?._18 = Utf8("Gram")) AND (?table?._15 = Utf8("economy") OR ?table?._15 = Utf8("small"))
+                                Projection: <exprs>
+                                  TableScan: ?table? projection=[_12, _14, _15, _17, _18]
+
+logical_plan after optimize_projections:
+Sort: <exprs>
+  Aggregate: groupBy=[[#<col>]], aggr=[[]]
+    Projection: <exprs>
+      Filter: CASE WHEN __scalar_sq_1.__always_true IS NULL THEN Int64(0) ELSE __scalar_sq_1.#<col> END > Int64(0)
+        Projection: <exprs>
+          Left Join: i1.#<col> = __scalar_sq_1.#<col>
+            SubqueryAlias: i1
+              Projection: <exprs>
+                SubqueryAlias: item
+                  Projection: <exprs>
+                    Filter: ?table?._13 >= Int64(668) AND ?table?._13 <= Int64(708)
+                      TableScan: ?table? projection=[_13, _14, _21]
+            SubqueryAlias: __scalar_sq_1
+              Projection: <exprs>
+                Aggregate: groupBy=[[item.#<col>]], aggr=[[count(Int64(1))]]
+                  Projection: <exprs>
+                    SubqueryAlias: item
+                      Projection: <exprs>
+                        Projection: <exprs>
+                          Filter: __common_expr_3 AND ((?table?._17 = Utf8("cream") OR ?table?._17 = Utf8("ghost")) AND (?table?._18 = Utf8("Ton") OR ?table?._18 = Utf8("Gross")) AND (?table?._15 = Utf8("economy") OR ?table?._15 = Utf8("small")) OR (?table?._17 = Utf8("midnight") OR ?table?._17 = Utf8("burlywood")) AND (?table?._18 = Utf8("Tsp") OR ?table?._18 = Utf8("Bundle")) AND (?table?._15 = Utf8("medium") OR ?table?._15 = Utf8("extra large"))) OR ?table?._12 = Utf8("Men") AND (?table?._17 = Utf8("lavender") OR ?table?._17 = Utf8("azure")) AND (?table?._18 = Utf8("Each") OR ?table?._18 = Utf8("Lb")) AND (?table?._15 = Utf8("large") OR ?table?._15 = Utf8("N/A")) OR ?table?._12 = Utf8("Men") AND (?table?._17 = Utf8("chocolate") OR ?table?._17 = Utf8("steel")) AND (?table?._18 = Utf8("N/A") OR ?table?._18 = Utf8("Dozen")) AND (?table?._15 = Utf8("economy") OR ?table?._15 = Utf8("small")) OR __common_expr_3 AND ((?table?._17 = Utf8("floral") OR ?table?._17 = Utf8("royal")) AND (?table?._18 = Utf8("Unknown") OR ?table?._18 = Utf8("Tbl")) AND (?table?._15 = Utf8("economy") OR ?table?._15 = Utf8("small")) OR (?table?._17 = Utf8("navy") OR ?table?._17 = Utf8("forest")) AND (?table?._18 = Utf8("Bunch") OR ?table?._18 = Utf8("Dram")) AND (?table?._15 = Utf8("medium") OR ?table?._15 = Utf8("extra large"))) OR ?table?._12 = Utf8("Men") AND (?table?._17 = Utf8("cyan") OR ?table?._17 = Utf8("indian")) AND (?table?._18 = Utf8("Carton") OR ?table?._18 = Utf8("Cup")) AND (?table?._15 = Utf8("large") OR ?table?._15 = Utf8("N/A")) OR ?table?._12 = Utf8("Men") AND (?table?._17 = Utf8("coral") OR ?table?._17 = Utf8("pale")) AND (?table?._18 = Utf8("Pallet") OR ?table?._18 = Utf8("Gram")) AND (?table?._15 = Utf8("economy") OR ?table?._15 = Utf8("small"))
+                            Projection: <exprs>
+                              TableScan: ?table? projection=[_12, _14, _15, _17, _18]
+
+logical_plan after eliminate_nested_union:
+SAME TEXT AS ABOVE
+
+logical_plan after simplify_expressions:
+SAME TEXT AS ABOVE
+
+logical_plan after replace_distinct_aggregate:
+SAME TEXT AS ABOVE
+
+logical_plan after eliminate_join:
+SAME TEXT AS ABOVE
+
+logical_plan after decorrelate_predicate_subquery:
+SAME TEXT AS ABOVE
+
+logical_plan after scalar_subquery_to_join:
+SAME TEXT AS ABOVE
+
+logical_plan after decorrelate_lateral_join:
+SAME TEXT AS ABOVE
+
+logical_plan after extract_equijoin_predicate:
+SAME TEXT AS ABOVE
+
+logical_plan after eliminate_duplicated_expr:
+SAME TEXT AS ABOVE
+
+logical_plan after eliminate_filter:
+SAME TEXT AS ABOVE
+
+logical_plan after eliminate_cross_join:
+SAME TEXT AS ABOVE
+
+logical_plan after eliminate_limit:
+SAME TEXT AS ABOVE
+
+logical_plan after propagate_empty_relation:
+SAME TEXT AS ABOVE
+
+logical_plan after eliminate_one_union:
+SAME TEXT AS ABOVE
+
+logical_plan after filter_null_join_keys:
+SAME TEXT AS ABOVE
+
+logical_plan after eliminate_outer_join:
+SAME TEXT AS ABOVE
+
+logical_plan after push_down_limit:
+SAME TEXT AS ABOVE
+
+logical_plan after push_down_filter:
+Sort: <exprs>
+  Aggregate: groupBy=[[#<col>]], aggr=[[]]
+    Projection: <exprs>
+      Projection: <exprs>
+        Filter: CASE WHEN __scalar_sq_1.__always_true IS NULL THEN Int64(0) ELSE __scalar_sq_1.#<col> END > Int64(0)
+          Left Join: i1.#<col> = __scalar_sq_1.#<col>
+            SubqueryAlias: i1
+              Projection: <exprs>
+                SubqueryAlias: item
+                  Projection: <exprs>
+                    Filter: ?table?._13 >= Int64(668) AND ?table?._13 <= Int64(708)
+                      TableScan: ?table? projection=[_13, _14, _21]
+            SubqueryAlias: __scalar_sq_1
+              Projection: <exprs>
+                Aggregate: groupBy=[[item.#<col>]], aggr=[[count(Int64(1))]]
+                  Projection: <exprs>
+                    SubqueryAlias: item
+                      Projection: <exprs>
+                        Projection: <exprs>
+                          Projection: <exprs>
+                            Filter: ?table?._12 = Utf8("Women") AND ((?table?._17 = Utf8("cream") OR ?table?._17 = Utf8("ghost")) AND (?table?._18 = Utf8("Ton") OR ?table?._18 = Utf8("Gross")) AND (?table?._15 = Utf8("economy") OR ?table?._15 = Utf8("small")) OR (?table?._17 = Utf8("midnight") OR ?table?._17 = Utf8("burlywood")) AND (?table?._18 = Utf8("Tsp") OR ?table?._18 = Utf8("Bundle")) AND (?table?._15 = Utf8("medium") OR ?table?._15 = Utf8("extra large"))) OR ?table?._12 = Utf8("Men") AND (?table?._17 = Utf8("lavender") OR ?table?._17 = Utf8("azure")) AND (?table?._18 = Utf8("Each") OR ?table?._18 = Utf8("Lb")) AND (?table?._15 = Utf8("large") OR ?table?._15 = Utf8("N/A")) OR ?table?._12 = Utf8("Men") AND (?table?._17 = Utf8("chocolate") OR ?table?._17 = Utf8("steel")) AND (?table?._18 = Utf8("N/A") OR ?table?._18 = Utf8("Dozen")) AND (?table?._15 = Utf8("economy") OR ?table?._15 = Utf8("small")) OR ?table?._12 = Utf8("Women") AND ((?table?._17 = Utf8("floral") OR ?table?._17 = Utf8("royal")) AND (?table?._18 = Utf8("Unknown") OR ?table?._18 = Utf8("Tbl")) AND (?table?._15 = Utf8("economy") OR ?table?._15 = Utf8("small")) OR (?table?._17 = Utf8("navy") OR ?table?._17 = Utf8("forest")) AND (?table?._18 = Utf8("Bunch") OR ?table?._18 = Utf8("Dram")) AND (?table?._15 = Utf8("medium") OR ?table?._15 = Utf8("extra large"))) OR ?table?._12 = Utf8("Men") AND (?table?._17 = Utf8("cyan") OR ?table?._17 = Utf8("indian")) AND (?table?._18 = Utf8("Carton") OR ?table?._18 = Utf8("Cup")) AND (?table?._15 = Utf8("large") OR ?table?._15 = Utf8("N/A")) OR ?table?._12 = Utf8("Men") AND (?table?._17 = Utf8("coral") OR ?table?._17 = Utf8("pale")) AND (?table?._18 = Utf8("Pallet") OR ?table?._18 = Utf8("Gram")) AND (?table?._15 = Utf8("economy") OR ?table?._15 = Utf8("small"))
+                              TableScan: ?table? projection=[_12, _14, _15, _17, _18]
+
+logical_plan after single_distinct_aggregation_to_group_by:
+SAME TEXT AS ABOVE
+
+logical_plan after eliminate_group_by_constant:
+SAME TEXT AS ABOVE
+
+logical_plan after common_sub_expression_eliminate:
+Sort: <exprs>
+  Aggregate: groupBy=[[#<col>]], aggr=[[]]
+    Projection: <exprs>
+      Projection: <exprs>
+        Filter: CASE WHEN __scalar_sq_1.__always_true IS NULL THEN Int64(0) ELSE __scalar_sq_1.#<col> END > Int64(0)
+          Left Join: i1.#<col> = __scalar_sq_1.#<col>
+            SubqueryAlias: i1
+              Projection: <exprs>
+                SubqueryAlias: item
+                  Projection: <exprs>
+                    Filter: ?table?._13 >= Int64(668) AND ?table?._13 <= Int64(708)
+                      TableScan: ?table? projection=[_13, _14, _21]
+            SubqueryAlias: __scalar_sq_1
+              Projection: <exprs>
+                Aggregate: groupBy=[[item.#<col>]], aggr=[[count(Int64(1))]]
+                  Projection: <exprs>
+                    SubqueryAlias: item
+                      Projection: <exprs>
+                        Projection: <exprs>
+                          Projection: <exprs>
+                            Projection: <exprs>
+                              Filter: __common_expr_4 AND ((?table?._17 = Utf8("cream") OR ?table?._17 = Utf8("ghost")) AND (?table?._18 = Utf8("Ton") OR ?table?._18 = Utf8("Gross")) AND (?table?._15 = Utf8("economy") OR ?table?._15 = Utf8("small")) OR (?table?._17 = Utf8("midnight") OR ?table?._17 = Utf8("burlywood")) AND (?table?._18 = Utf8("Tsp") OR ?table?._18 = Utf8("Bundle")) AND (?table?._15 = Utf8("medium") OR ?table?._15 = Utf8("extra large"))) OR ?table?._12 = Utf8("Men") AND (?table?._17 = Utf8("lavender") OR ?table?._17 = Utf8("azure")) AND (?table?._18 = Utf8("Each") OR ?table?._18 = Utf8("Lb")) AND (?table?._15 = Utf8("large") OR ?table?._15 = Utf8("N/A")) OR ?table?._12 = Utf8("Men") AND (?table?._17 = Utf8("chocolate") OR ?table?._17 = Utf8("steel")) AND (?table?._18 = Utf8("N/A") OR ?table?._18 = Utf8("Dozen")) AND (?table?._15 = Utf8("economy") OR ?table?._15 = Utf8("small")) OR __common_expr_4 AND ((?table?._17 = Utf8("floral") OR ?table?._17 = Utf8("royal")) AND (?table?._18 = Utf8("Unknown") OR ?table?._18 = Utf8("Tbl")) AND (?table?._15 = Utf8("economy") OR ?table?._15 = Utf8("small")) OR (?table?._17 = Utf8("navy") OR ?table?._17 = Utf8("forest")) AND (?table?._18 = Utf8("Bunch") OR ?table?._18 = Utf8("Dram")) AND (?table?._15 = Utf8("medium") OR ?table?._15 = Utf8("extra large"))) OR ?table?._12 = Utf8("Men") AND (?table?._17 = Utf8("cyan") OR ?table?._17 = Utf8("indian")) AND (?table?._18 = Utf8("Carton") OR ?table?._18 = Utf8("Cup")) AND (?table?._15 = Utf8("large") OR ?table?._15 = Utf8("N/A")) OR ?table?._12 = Utf8("Men") AND (?table?._17 = Utf8("coral") OR ?table?._17 = Utf8("pale")) AND (?table?._18 = Utf8("Pallet") OR ?table?._18 = Utf8("Gram")) AND (?table?._15 = Utf8("economy") OR ?table?._15 = Utf8("small"))
+                                Projection: <exprs>
+                                  TableScan: ?table? projection=[_12, _14, _15, _17, _18]
+
+logical_plan after optimize_projections:
+Sort: <exprs>
+  Aggregate: groupBy=[[#<col>]], aggr=[[]]
+    Projection: <exprs>
+      Filter: CASE WHEN __scalar_sq_1.__always_true IS NULL THEN Int64(0) ELSE __scalar_sq_1.#<col> END > Int64(0)
+        Projection: <exprs>
+          Left Join: i1.#<col> = __scalar_sq_1.#<col>
+            SubqueryAlias: i1
+              Projection: <exprs>
+                SubqueryAlias: item
+                  Projection: <exprs>
+                    Filter: ?table?._13 >= Int64(668) AND ?table?._13 <= Int64(708)
+                      TableScan: ?table? projection=[_13, _14, _21]
+            SubqueryAlias: __scalar_sq_1
+              Projection: <exprs>
+                Aggregate: groupBy=[[item.#<col>]], aggr=[[count(Int64(1))]]
+                  Projection: <exprs>
+                    SubqueryAlias: item
+                      Projection: <exprs>
+                        Projection: <exprs>
+                          Filter: __common_expr_4 AND ((?table?._17 = Utf8("cream") OR ?table?._17 = Utf8("ghost")) AND (?table?._18 = Utf8("Ton") OR ?table?._18 = Utf8("Gross")) AND (?table?._15 = Utf8("economy") OR ?table?._15 = Utf8("small")) OR (?table?._17 = Utf8("midnight") OR ?table?._17 = Utf8("burlywood")) AND (?table?._18 = Utf8("Tsp") OR ?table?._18 = Utf8("Bundle")) AND (?table?._15 = Utf8("medium") OR ?table?._15 = Utf8("extra large"))) OR ?table?._12 = Utf8("Men") AND (?table?._17 = Utf8("lavender") OR ?table?._17 = Utf8("azure")) AND (?table?._18 = Utf8("Each") OR ?table?._18 = Utf8("Lb")) AND (?table?._15 = Utf8("large") OR ?table?._15 = Utf8("N/A")) OR ?table?._12 = Utf8("Men") AND (?table?._17 = Utf8("chocolate") OR ?table?._17 = Utf8("steel")) AND (?table?._18 = Utf8("N/A") OR ?table?._18 = Utf8("Dozen")) AND (?table?._15 = Utf8("economy") OR ?table?._15 = Utf8("small")) OR __common_expr_4 AND ((?table?._17 = Utf8("floral") OR ?table?._17 = Utf8("royal")) AND (?table?._18 = Utf8("Unknown") OR ?table?._18 = Utf8("Tbl")) AND (?table?._15 = Utf8("economy") OR ?table?._15 = Utf8("small")) OR (?table?._17 = Utf8("navy") OR ?table?._17 = Utf8("forest")) AND (?table?._18 = Utf8("Bunch") OR ?table?._18 = Utf8("Dram")) AND (?table?._15 = Utf8("medium") OR ?table?._15 = Utf8("extra large"))) OR ?table?._12 = Utf8("Men") AND (?table?._17 = Utf8("cyan") OR ?table?._17 = Utf8("indian")) AND (?table?._18 = Utf8("Carton") OR ?table?._18 = Utf8("Cup")) AND (?table?._15 = Utf8("large") OR ?table?._15 = Utf8("N/A")) OR ?table?._12 = Utf8("Men") AND (?table?._17 = Utf8("coral") OR ?table?._17 = Utf8("pale")) AND (?table?._18 = Utf8("Pallet") OR ?table?._18 = Utf8("Gram")) AND (?table?._15 = Utf8("economy") OR ?table?._15 = Utf8("small"))
+                            Projection: <exprs>
+                              TableScan: ?table? projection=[_12, _14, _15, _17, _18]
+
+logical_plan:
+Sort: <exprs>
+  Aggregate: groupBy=[[#<col>]], aggr=[[]]
+    Projection: <exprs>
+      Filter: CASE WHEN __scalar_sq_1.__always_true IS NULL THEN Int64(0) ELSE __scalar_sq_1.#<col> END > Int64(0)
+        Projection: <exprs>
+          Left Join: i1.#<col> = __scalar_sq_1.#<col>
+            SubqueryAlias: i1
+              Projection: <exprs>
+                SubqueryAlias: item
+                  Projection: <exprs>
+                    Filter: ?table?._13 >= Int64(668) AND ?table?._13 <= Int64(708)
+                      TableScan: ?table? projection=[_13, _14, _21]
+            SubqueryAlias: __scalar_sq_1
+              Projection: <exprs>
+                Aggregate: groupBy=[[item.#<col>]], aggr=[[count(Int64(1))]]
+                  Projection: <exprs>
+                    SubqueryAlias: item
+                      Projection: <exprs>
+                        Projection: <exprs>
+                          Filter: __common_expr_4 AND ((?table?._17 = Utf8("cream") OR ?table?._17 = Utf8("ghost")) AND (?table?._18 = Utf8("Ton") OR ?table?._18 = Utf8("Gross")) AND (?table?._15 = Utf8("economy") OR ?table?._15 = Utf8("small")) OR (?table?._17 = Utf8("midnight") OR ?table?._17 = Utf8("burlywood")) AND (?table?._18 = Utf8("Tsp") OR ?table?._18 = Utf8("Bundle")) AND (?table?._15 = Utf8("medium") OR ?table?._15 = Utf8("extra large"))) OR ?table?._12 = Utf8("Men") AND (?table?._17 = Utf8("lavender") OR ?table?._17 = Utf8("azure")) AND (?table?._18 = Utf8("Each") OR ?table?._18 = Utf8("Lb")) AND (?table?._15 = Utf8("large") OR ?table?._15 = Utf8("N/A")) OR ?table?._12 = Utf8("Men") AND (?table?._17 = Utf8("chocolate") OR ?table?._17 = Utf8("steel")) AND (?table?._18 = Utf8("N/A") OR ?table?._18 = Utf8("Dozen")) AND (?table?._15 = Utf8("economy") OR ?table?._15 = Utf8("small")) OR __common_expr_4 AND ((?table?._17 = Utf8("floral") OR ?table?._17 = Utf8("royal")) AND (?table?._18 = Utf8("Unknown") OR ?table?._18 = Utf8("Tbl")) AND (?table?._15 = Utf8("economy") OR ?table?._15 = Utf8("small")) OR (?table?._17 = Utf8("navy") OR ?table?._17 = Utf8("forest")) AND (?table?._18 = Utf8("Bunch") OR ?table?._18 = Utf8("Dram")) AND (?table?._15 = Utf8("medium") OR ?table?._15 = Utf8("extra large"))) OR ?table?._12 = Utf8("Men") AND (?table?._17 = Utf8("cyan") OR ?table?._17 = Utf8("indian")) AND (?table?._18 = Utf8("Carton") OR ?table?._18 = Utf8("Cup")) AND (?table?._15 = Utf8("large") OR ?table?._15 = Utf8("N/A")) OR ?table?._12 = Utf8("Men") AND (?table?._17 = Utf8("coral") OR ?table?._17 = Utf8("pale")) AND (?table?._18 = Utf8("Pallet") OR ?table?._18 = Utf8("Gram")) AND (?table?._15 = Utf8("economy") OR ?table?._15 = Utf8("small"))
+                            Projection: <exprs>
+                              TableScan: ?table? projection=[_12, _14, _15, _17, _18]
+
+initial_physical_plan:
+SortExec: [<sort_exprs>], fetch=100
+  SortExec: expr=[<exprs>]
+    AggregateExec: mode=FinalPartitioned, gby=[#<col> as #<col>], aggr=[]
+      CoalesceBatchesExec: target_batch_size=8192
+        RepartitionExec: partitioning=Hash([#<col>], <partitions>), input_partitions=<partitions>
+          AggregateExec: mode=Partial, gby=[#<col> as #<col>], aggr=[]
+            ProjectionExec: expr=[<exprs>]
+              CoalesceBatchesExec: target_batch_size=8192
+                FilterExec: CASE WHEN __always_true@<id> IS NULL THEN 0 ELSE #<col> END > 0, projection=[#<col>]
+                  ProjectionExec: expr=[<exprs>]
+                    CoalesceBatchesExec: target_batch_size=8192
+                      HashJoinExec: mode=CollectLeft, join_type=Right, on=[(#<col>, #<col>)], projection=[#<col>, __always_true@<id>, #<col>]
+                        CoalescePartitionsExec
+                          ProjectionExec: expr=[<exprs>]
+                            AggregateExec: mode=FinalPartitioned, gby=[#<col> as #<col>], aggr=[count(Int64(1))]
+                              CoalesceBatchesExec: target_batch_size=8192
+                                RepartitionExec: partitioning=Hash([#<col>], <partitions>), input_partitions=<partitions>
+                                  AggregateExec: mode=Partial, gby=[#<col> as #<col>], aggr=[count(Int64(1))]
+                                    RepartitionExec: partitioning=RoundRobinBatch(<partitions>), input_partitions=<partitions>
+                                      ProjectionExec: expr=[<exprs>]
+                                        CoalesceBatchesExec: target_batch_size=8192
+                                          FilterExec: __common_expr_4@<id> AND ((_17@<id> = cream OR _17@<id> = ghost) AND (_18@<id> = Ton OR _18@<id> = Gross) AND (_15@<id> = economy OR _15@<id> = small) OR (_17@<id> = midnight OR _17@<id> = burlywood) AND (_18@<id> = Tsp OR _18@<id> = Bundle) AND (_15@<id> = medium OR _15@<id> = extra large)) OR _12@<id> = Men AND (_17@<id> = lavender OR _17@<id> = azure) AND (_18@<id> = Each OR _18@<id> = Lb) AND (_15@<id> = large OR _15@<id> = N/A) OR _12@<id> = Men AND (_17@<id> = chocolate OR _17@<id> = steel) AND (_18@<id> = N/A OR _18@<id> = Dozen) AND (_15@<id> = economy OR _15@<id> = small) OR __common_expr_4@<id> AND ((_17@<id> = floral OR _17@<id> = royal) AND (_18@<id> = Unknown OR _18@<id> = Tbl) AND (_15@<id> = economy OR _15@<id> = small) OR (_17@<id> = navy OR _17@<id> = forest) AND (_18@<id> = Bunch OR _18@<id> = Dram) AND (_15@<id> = medium OR _15@<id> = extra large)) OR _12@<id> = Men AND (_17@<id> = cyan OR _17@<id> = indian) AND (_18@<id> = Carton OR _18@<id> = Cup) AND (_15@<id> = large OR _15@<id> = N/A) OR _12@<id> = Men AND (_17@<id> = coral OR _17@<id> = pale) AND (_18@<id> = Pallet OR _18@<id> = Gram) AND (_15@<id> = economy OR _15@<id> = small), projection=[_14@<id>]
+                                            ProjectionExec: expr=[<exprs>]
+                                              DataSourceExec: partitions=1, partition_sizes=[<sizes>]
+                        RepartitionExec: partitioning=RoundRobinBatch(<partitions>), input_partitions=<partitions>
+                          ProjectionExec: expr=[<exprs>]
+                            CoalesceBatchesExec: target_batch_size=8192
+                              FilterExec: _13@<id> >= 668 AND _13@<id> <= 708, projection=[_14@<id>, _21@<id>]
+                                DataSourceExec: partitions=1, partition_sizes=[<sizes>]
+
+
+initial_physical_plan_with_stats:
+SortExec: [<sort_exprs>]
+  SortExec: expr=[<exprs>]
+    AggregateExec: mode=FinalPartitioned, gby=[#<col> as #<col>], aggr=[], statistics=[Rows=Inexact(8), Bytes=Absent, [(Col[0]:)]]
+      CoalesceBatchesExec: target_batch_size=8192, statistics=[Rows=Inexact(8), Bytes=Absent, [(Col[0]:)]]
+        RepartitionExec: partitioning=Hash([#<col>], <partitions>), input_partitions=<partitions>, statistics=[Rows=Inexact(8), Bytes=Absent, [(Col[0]:)]]
+          AggregateExec: mode=Partial, gby=[#<col> as #<col>], aggr=[], statistics=[Rows=Inexact(8), Bytes=Absent, [(Col[0]:)]]
+            ProjectionExec: expr=[<exprs>]
+              CoalesceBatchesExec: target_batch_size=8192, statistics=[Rows=Inexact(8), Bytes=Absent, [(Col[0]: Null=Inexact(0))]]
+                FilterExec: CASE WHEN __always_true@<id> IS NULL THEN 0 ELSE #<col> END > 0, projection=[#<col>], statistics=[Rows=Inexact(8), Bytes=Absent, [(Col[0]: Null=Inexact(0))]]
+                  ProjectionExec: expr=[<exprs>]
+                    CoalesceBatchesExec: target_batch_size=8192, statistics=[Rows=Inexact(36), Bytes=Absent, [(Col[0]:),(Col[1]:),(Col[2]: Null=Inexact(0))]]
+                      HashJoinExec: mode=CollectLeft, join_type=Right, on=[(#<col>, #<col>)], projection=[#<col>, __always_true@<id>, #<col>], statistics=[Rows=Inexact(36), Bytes=Absent, [(Col[0]:),(Col[1]:),(Col[2]: Null=Inexact(0))]]
+                        CoalescePartitionsExec, statistics=[Rows=Inexact(36), Bytes=Absent, [(Col[0]:),(Col[1]:),(Col[2]:)]]
+                          ProjectionExec: expr=[<exprs>]
+                            AggregateExec: mode=FinalPartitioned, gby=[#<col> as #<col>], aggr=[count(Int64(1))], statistics=[Rows=Inexact(36), Bytes=Absent, [(Col[0]:),(Col[1]:)]]
+                              CoalesceBatchesExec: target_batch_size=8192, statistics=[Rows=Inexact(36), Bytes=Absent, [(Col[0]:),(Col[1]:)]]
+                                RepartitionExec: partitioning=Hash([#<col>], <partitions>), input_partitions=<partitions>, statistics=[Rows=Inexact(36), Bytes=Absent, [(Col[0]:),(Col[1]:)]]
+                                  AggregateExec: mode=Partial, gby=[#<col> as #<col>], aggr=[count(Int64(1))], statistics=[Rows=Inexact(36), Bytes=Absent, [(Col[0]:),(Col[1]:)]]
+                                    RepartitionExec: partitioning=RoundRobinBatch(<partitions>), input_partitions=<partitions>, statistics=[Rows=Inexact(36), Bytes=Inexact(<bytes>), [(Col[0]: Null=Inexact(0))]]
+                                      ProjectionExec: expr=[<exprs>]
+                                        CoalesceBatchesExec: target_batch_size=8192, statistics=[Rows=Inexact(36), Bytes=Inexact(<bytes>), [(Col[0]: Null=Inexact(0))]]
+                                          FilterExec: __common_expr_4@<id> AND ((_17@<id> = cream OR _17@<id> = ghost) AND (_18@<id> = Ton OR _18@<id> = Gross) AND (_15@<id> = economy OR _15@<id> = small) OR (_17@<id> = midnight OR _17@<id> = burlywood) AND (_18@<id> = Tsp OR _18@<id> = Bundle) AND (_15@<id> = medium OR _15@<id> = extra large)) OR _12@<id> = Men AND (_17@<id> = lavender OR _17@<id> = azure) AND (_18@<id> = Each OR _18@<id> = Lb) AND (_15@<id> = large OR _15@<id> = N/A) OR _12@<id> = Men AND (_17@<id> = chocolate OR _17@<id> = steel) AND (_18@<id> = N/A OR _18@<id> = Dozen) AND (_15@<id> = economy OR _15@<id> = small) OR __common_expr_4@<id> AND ((_17@<id> = floral OR _17@<id> = royal) AND (_18@<id> = Unknown OR _18@<id> = Tbl) AND (_15@<id> = economy OR _15@<id> = small) OR (_17@<id> = navy OR _17@<id> = forest) AND (_18@<id> = Bunch OR _18@<id> = Dram) AND (_15@<id> = medium OR _15@<id> = extra large)) OR _12@<id> = Men AND (_17@<id> = cyan OR _17@<id> = indian) AND (_18@<id> = Carton OR _18@<id> = Cup) AND (_15@<id> = large OR _15@<id> = N/A) OR _12@<id> = Men AND (_17@<id> = coral OR _17@<id> = pale) AND (_18@<id> = Pallet OR _18@<id> = Gram) AND (_15@<id> = economy OR _15@<id> = small), projection=[_14@<id>], statistics=[Rows=Inexact(36), Bytes=Inexact(<bytes>), [(Col[0]: Null=Inexact(0))]]
+                                            ProjectionExec: expr=[<exprs>]
+                                              DataSourceExec: partitions=1, partition_sizes=[<sizes>], statistics=[Rows=Exact(180), Bytes=Exact(<bytes>), [(Col[0]: Null=Exact(0)),(Col[1]: Null=Exact(0)),(Col[2]: Null=Exact(0)),(Col[3]: Null=Exact(0)),(Col[4]: Null=Exact(0))]]
+                        RepartitionExec: partitioning=RoundRobinBatch(<partitions>), input_partitions=<partitions>, statistics=[Rows=Inexact(36), Bytes=Inexact(<bytes>), [(Col[0]: Null=Inexact(0)),(Col[1]: Null=Inexact(0))]]
+                          ProjectionExec: expr=[<exprs>]
+                            CoalesceBatchesExec: target_batch_size=8192, statistics=[Rows=Inexact(36), Bytes=Inexact(<bytes>), [(Col[0]: Null=Inexact(0)),(Col[1]: Null=Inexact(0))]]
+                              FilterExec: _13@<id> >= 668 AND _13@<id> <= 708, projection=[_14@<id>, _21@<id>], statistics=[Rows=Inexact(36), Bytes=Inexact(<bytes>), [(Col[0]: Null=Inexact(0)),(Col[1]: Null=Inexact(0))]]
+                                DataSourceExec: partitions=1, partition_sizes=[<sizes>], statistics=[Rows=Exact(180), Bytes=Exact(<bytes>), [(Col[0]: Null=Exact(0)),(Col[1]: Null=Exact(0)),(Col[2]: Null=Exact(0))]]
+
+
+initial_physical_plan_with_schema:
+SortExec: [<sort_exprs>]
+  SortExec: expr=[<exprs>]
+    AggregateExec: mode=FinalPartitioned, gby=[#<col> as #<col>], aggr=[], schema=[#<col>:Utf8;N]
+      CoalesceBatchesExec: target_batch_size=8192, schema=[#<col>:Utf8;N]
+        RepartitionExec: partitioning=Hash([#<col>], <partitions>), input_partitions=<partitions>, schema=[#<col>:Utf8;N]
+          AggregateExec: mode=Partial, gby=[#<col> as #<col>], aggr=[], schema=[#<col>:Utf8;N]
+            ProjectionExec: expr=[<exprs>]
+              CoalesceBatchesExec: target_batch_size=8192, schema=[#<col>:Utf8;N]
+                FilterExec: CASE WHEN __always_true@<id> IS NULL THEN 0 ELSE #<col> END > 0, projection=[#<col>], schema=[#<col>:Utf8;N]
+                  ProjectionExec: expr=[<exprs>]
+                    CoalesceBatchesExec: target_batch_size=8192, schema=[#<col>:Int64;N, __always_true:Boolean;N, #<col>:Utf8;N]
+                      HashJoinExec: mode=CollectLeft, join_type=Right, on=[(#<col>, #<col>)], projection=[#<col>, __always_true@<id>, #<col>], schema=[#<col>:Int64;N, __always_true:Boolean;N, #<col>:Utf8;N]
+                        CoalescePartitionsExec, schema=[#<col>:Int64, #<col>:Utf8;N, __always_true:Boolean]
+                          ProjectionExec: expr=[<exprs>]
+                            AggregateExec: mode=FinalPartitioned, gby=[#<col> as #<col>], aggr=[count(Int64(1))], schema=[#<col>:Utf8;N, count(Int64(1)):Int64]
+                              CoalesceBatchesExec: target_batch_size=8192, schema=[#<col>:Utf8;N, count(Int64(1))[count]:Int64]
+                                RepartitionExec: partitioning=Hash([#<col>], <partitions>), input_partitions=<partitions>, schema=[#<col>:Utf8;N, count(Int64(1))[count]:Int64]
+                                  AggregateExec: mode=Partial, gby=[#<col> as #<col>], aggr=[count(Int64(1))], schema=[#<col>:Utf8;N, count(Int64(1))[count]:Int64]
+                                    RepartitionExec: partitioning=RoundRobinBatch(<partitions>), input_partitions=<partitions>, schema=[#<col>:Utf8;N]
+                                      ProjectionExec: expr=[<exprs>]
+                                        CoalesceBatchesExec: target_batch_size=8192, schema=[_14:Utf8;N]
+                                          FilterExec: __common_expr_4@<id> AND ((_17@<id> = cream OR _17@<id> = ghost) AND (_18@<id> = Ton OR _18@<id> = Gross) AND (_15@<id> = economy OR _15@<id> = small) OR (_17@<id> = midnight OR _17@<id> = burlywood) AND (_18@<id> = Tsp OR _18@<id> = Bundle) AND (_15@<id> = medium OR _15@<id> = extra large)) OR _12@<id> = Men AND (_17@<id> = lavender OR _17@<id> = azure) AND (_18@<id> = Each OR _18@<id> = Lb) AND (_15@<id> = large OR _15@<id> = N/A) OR _12@<id> = Men AND (_17@<id> = chocolate OR _17@<id> = steel) AND (_18@<id> = N/A OR _18@<id> = Dozen) AND (_15@<id> = economy OR _15@<id> = small) OR __common_expr_4@<id> AND ((_17@<id> = floral OR _17@<id> = royal) AND (_18@<id> = Unknown OR _18@<id> = Tbl) AND (_15@<id> = economy OR _15@<id> = small) OR (_17@<id> = navy OR _17@<id> = forest) AND (_18@<id> = Bunch OR _18@<id> = Dram) AND (_15@<id> = medium OR _15@<id> = extra large)) OR _12@<id> = Men AND (_17@<id> = cyan OR _17@<id> = indian) AND (_18@<id> = Carton OR _18@<id> = Cup) AND (_15@<id> = large OR _15@<id> = N/A) OR _12@<id> = Men AND (_17@<id> = coral OR _17@<id> = pale) AND (_18@<id> = Pallet OR _18@<id> = Gram) AND (_15@<id> = economy OR _15@<id> = small), projection=[_14@<id>], schema=[_14:Utf8;N]
+                                            ProjectionExec: expr=[<exprs>]
+                                              DataSourceExec: partitions=1, partition_sizes=[<sizes>], schema=[_12:Utf8;N, _14:Utf8;N, _15:Utf8;N, _17:Utf8;N, _18:Utf8;N]
+                        RepartitionExec: partitioning=RoundRobinBatch(<partitions>), input_partitions=<partitions>, schema=[#<col>:Utf8;N, #<col>:Utf8;N]
+                          ProjectionExec: expr=[<exprs>]
+                            CoalesceBatchesExec: target_batch_size=8192, schema=[_14:Utf8;N, _21:Utf8;N]
+                              FilterExec: _13@<id> >= 668 AND _13@<id> <= 708, projection=[_14@<id>, _21@<id>], schema=[_14:Utf8;N, _21:Utf8;N]
+                                DataSourceExec: partitions=1, partition_sizes=[<sizes>], schema=[_13:Int64;N, _14:Utf8;N, _21:Utf8;N]
+
+
+physical_plan after OutputRequirements:
+OutputRequirementExec: order_by=[(#<col>, asc)], dist_by=SinglePartition
+  SortExec: [<sort_exprs>], fetch=100
+    SortExec: expr=[<exprs>]
+      AggregateExec: mode=FinalPartitioned, gby=[#<col> as #<col>], aggr=[]
+        CoalesceBatchesExec: target_batch_size=8192
+          RepartitionExec: partitioning=Hash([#<col>], <partitions>), input_partitions=<partitions>
+            AggregateExec: mode=Partial, gby=[#<col> as #<col>], aggr=[]
+              ProjectionExec: expr=[<exprs>]
+                CoalesceBatchesExec: target_batch_size=8192
+                  FilterExec: CASE WHEN __always_true@<id> IS NULL THEN 0 ELSE #<col> END > 0, projection=[#<col>]
+                    ProjectionExec: expr=[<exprs>]
+                      CoalesceBatchesExec: target_batch_size=8192
+                        HashJoinExec: mode=CollectLeft, join_type=Right, on=[(#<col>, #<col>)], projection=[#<col>, __always_true@<id>, #<col>]
+                          CoalescePartitionsExec
+                            ProjectionExec: expr=[<exprs>]
+                              AggregateExec: mode=FinalPartitioned, gby=[#<col> as #<col>], aggr=[count(Int64(1))]
+                                CoalesceBatchesExec: target_batch_size=8192
+                                  RepartitionExec: partitioning=Hash([#<col>], <partitions>), input_partitions=<partitions>
+                                    AggregateExec: mode=Partial, gby=[#<col> as #<col>], aggr=[count(Int64(1))]
+                                      RepartitionExec: partitioning=RoundRobinBatch(<partitions>), input_partitions=<partitions>
+                                        ProjectionExec: expr=[<exprs>]
+                                          CoalesceBatchesExec: target_batch_size=8192
+                                            FilterExec: __common_expr_4@<id> AND ((_17@<id> = cream OR _17@<id> = ghost) AND (_18@<id> = Ton OR _18@<id> = Gross) AND (_15@<id> = economy OR _15@<id> = small) OR (_17@<id> = midnight OR _17@<id> = burlywood) AND (_18@<id> = Tsp OR _18@<id> = Bundle) AND (_15@<id> = medium OR _15@<id> = extra large)) OR _12@<id> = Men AND (_17@<id> = lavender OR _17@<id> = azure) AND (_18@<id> = Each OR _18@<id> = Lb) AND (_15@<id> = large OR _15@<id> = N/A) OR _12@<id> = Men AND (_17@<id> = chocolate OR _17@<id> = steel) AND (_18@<id> = N/A OR _18@<id> = Dozen) AND (_15@<id> = economy OR _15@<id> = small) OR __common_expr_4@<id> AND ((_17@<id> = floral OR _17@<id> = royal) AND (_18@<id> = Unknown OR _18@<id> = Tbl) AND (_15@<id> = economy OR _15@<id> = small) OR (_17@<id> = navy OR _17@<id> = forest) AND (_18@<id> = Bunch OR _18@<id> = Dram) AND (_15@<id> = medium OR _15@<id> = extra large)) OR _12@<id> = Men AND (_17@<id> = cyan OR _17@<id> = indian) AND (_18@<id> = Carton OR _18@<id> = Cup) AND (_15@<id> = large OR _15@<id> = N/A) OR _12@<id> = Men AND (_17@<id> = coral OR _17@<id> = pale) AND (_18@<id> = Pallet OR _18@<id> = Gram) AND (_15@<id> = economy OR _15@<id> = small), projection=[_14@<id>]
+                                              ProjectionExec: expr=[<exprs>]
+                                                DataSourceExec: partitions=1, partition_sizes=[<sizes>]
+                          RepartitionExec: partitioning=RoundRobinBatch(<partitions>), input_partitions=<partitions>
+                            ProjectionExec: expr=[<exprs>]
+                              CoalesceBatchesExec: target_batch_size=8192
+                                FilterExec: _13@<id> >= 668 AND _13@<id> <= 708, projection=[_14@<id>, _21@<id>]
+                                  DataSourceExec: partitions=1, partition_sizes=[<sizes>]
+
+
+physical_plan after aggregate_statistics:
+SAME TEXT AS ABOVE
+
+physical_plan after join_selection:
+SAME TEXT AS ABOVE
+
+physical_plan after LimitedDistinctAggregation:
+SAME TEXT AS ABOVE
+
+physical_plan after FilterPushdown:
+SAME TEXT AS ABOVE
+
+physical_plan after EnforceDistribution:
+OutputRequirementExec: order_by=[(#<col>, asc)], dist_by=SinglePartition
+  SortExec: expr=[<exprs>]
+    CoalescePartitionsExec
+      SortExec: expr=[<exprs>]
+        AggregateExec: mode=FinalPartitioned, gby=[#<col> as #<col>], aggr=[]
+          RepartitionExec: partitioning=Hash([#<col>], <partitions>), input_partitions=<partitions>
+            CoalesceBatchesExec: target_batch_size=8192
+              AggregateExec: mode=Partial, gby=[#<col> as #<col>], aggr=[]
+                ProjectionExec: expr=[<exprs>]
+                  CoalesceBatchesExec: target_batch_size=8192
+                    FilterExec: CASE WHEN __always_true@<id> IS NULL THEN 0 ELSE #<col> END > 0, projection=[#<col>]
+                      ProjectionExec: expr=[<exprs>]
+                        CoalesceBatchesExec: target_batch_size=8192
+                          HashJoinExec: mode=CollectLeft, join_type=Right, on=[(#<col>, #<col>)], projection=[#<col>, __always_true@<id>, #<col>]
+                            CoalescePartitionsExec
+                              ProjectionExec: expr=[<exprs>]
+                                AggregateExec: mode=FinalPartitioned, gby=[#<col> as #<col>], aggr=[count(Int64(1))]
+                                  RepartitionExec: partitioning=Hash([#<col>], <partitions>), input_partitions=<partitions>
+                                    CoalesceBatchesExec: target_batch_size=8192
+                                      AggregateExec: mode=Partial, gby=[#<col> as #<col>], aggr=[count(Int64(1))]
+                                        RepartitionExec: partitioning=RoundRobinBatch(<partitions>), input_partitions=<partitions>
+                                          ProjectionExec: expr=[<exprs>]
+                                            CoalesceBatchesExec: target_batch_size=8192
+                                              FilterExec: __common_expr_4@<id> AND ((_17@<id> = cream OR _17@<id> = ghost) AND (_18@<id> = Ton OR _18@<id> = Gross) AND (_15@<id> = economy OR _15@<id> = small) OR (_17@<id> = midnight OR _17@<id> = burlywood) AND (_18@<id> = Tsp OR _18@<id> = Bundle) AND (_15@<id> = medium OR _15@<id> = extra large)) OR _12@<id> = Men AND (_17@<id> = lavender OR _17@<id> = azure) AND (_18@<id> = Each OR _18@<id> = Lb) AND (_15@<id> = large OR _15@<id> = N/A) OR _12@<id> = Men AND (_17@<id> = chocolate OR _17@<id> = steel) AND (_18@<id> = N/A OR _18@<id> = Dozen) AND (_15@<id> = economy OR _15@<id> = small) OR __common_expr_4@<id> AND ((_17@<id> = floral OR _17@<id> = royal) AND (_18@<id> = Unknown OR _18@<id> = Tbl) AND (_15@<id> = economy OR _15@<id> = small) OR (_17@<id> = navy OR _17@<id> = forest) AND (_18@<id> = Bunch OR _18@<id> = Dram) AND (_15@<id> = medium OR _15@<id> = extra large)) OR _12@<id> = Men AND (_17@<id> = cyan OR _17@<id> = indian) AND (_18@<id> = Carton OR _18@<id> = Cup) AND (_15@<id> = large OR _15@<id> = N/A) OR _12@<id> = Men AND (_17@<id> = coral OR _17@<id> = pale) AND (_18@<id> = Pallet OR _18@<id> = Gram) AND (_15@<id> = economy OR _15@<id> = small), projection=[_14@<id>]
+                                                ProjectionExec: expr=[<exprs>]
+                                                  DataSourceExec: partitions=1, partition_sizes=[<sizes>]
+                            RepartitionExec: partitioning=RoundRobinBatch(<partitions>), input_partitions=<partitions>
+                              ProjectionExec: expr=[<exprs>]
+                                CoalesceBatchesExec: target_batch_size=8192
+                                  FilterExec: _13@<id> >= 668 AND _13@<id> <= 708, projection=[_14@<id>, _21@<id>]
+                                    DataSourceExec: partitions=1, partition_sizes=[<sizes>]
+
+
+physical_plan after CombinePartialFinalAggregate:
+SAME TEXT AS ABOVE
+
+physical_plan after EnforceSorting:
+OutputRequirementExec: order_by=[(#<col>, asc)], dist_by=SinglePartition
+  SortExec: [<sort_exprs>], fetch=100
+    SortExec: expr=[<exprs>]
+      AggregateExec: mode=FinalPartitioned, gby=[#<col> as #<col>], aggr=[]
+        RepartitionExec: partitioning=Hash([#<col>], <partitions>), input_partitions=<partitions>
+          CoalesceBatchesExec: target_batch_size=8192
+            AggregateExec: mode=Partial, gby=[#<col> as #<col>], aggr=[]
+              ProjectionExec: expr=[<exprs>]
+                CoalesceBatchesExec: target_batch_size=8192
+                  FilterExec: CASE WHEN __always_true@<id> IS NULL THEN 0 ELSE #<col> END > 0, projection=[#<col>]
+                    ProjectionExec: expr=[<exprs>]
+                      CoalesceBatchesExec: target_batch_size=8192
+                        HashJoinExec: mode=CollectLeft, join_type=Right, on=[(#<col>, #<col>)], projection=[#<col>, __always_true@<id>, #<col>]
+                          CoalescePartitionsExec
+                            ProjectionExec: expr=[<exprs>]
+                              AggregateExec: mode=FinalPartitioned, gby=[#<col> as #<col>], aggr=[count(Int64(1))]
+                                RepartitionExec: partitioning=Hash([#<col>], <partitions>), input_partitions=<partitions>
+                                  CoalesceBatchesExec: target_batch_size=8192
+                                    AggregateExec: mode=Partial, gby=[#<col> as #<col>], aggr=[count(Int64(1))]
+                                      RepartitionExec: partitioning=RoundRobinBatch(<partitions>), input_partitions=<partitions>
+                                        ProjectionExec: expr=[<exprs>]
+                                          CoalesceBatchesExec: target_batch_size=8192
+                                            FilterExec: __common_expr_4@<id> AND ((_17@<id> = cream OR _17@<id> = ghost) AND (_18@<id> = Ton OR _18@<id> = Gross) AND (_15@<id> = economy OR _15@<id> = small) OR (_17@<id> = midnight OR _17@<id> = burlywood) AND (_18@<id> = Tsp OR _18@<id> = Bundle) AND (_15@<id> = medium OR _15@<id> = extra large)) OR _12@<id> = Men AND (_17@<id> = lavender OR _17@<id> = azure) AND (_18@<id> = Each OR _18@<id> = Lb) AND (_15@<id> = large OR _15@<id> = N/A) OR _12@<id> = Men AND (_17@<id> = chocolate OR _17@<id> = steel) AND (_18@<id> = N/A OR _18@<id> = Dozen) AND (_15@<id> = economy OR _15@<id> = small) OR __common_expr_4@<id> AND ((_17@<id> = floral OR _17@<id> = royal) AND (_18@<id> = Unknown OR _18@<id> = Tbl) AND (_15@<id> = economy OR _15@<id> = small) OR (_17@<id> = navy OR _17@<id> = forest) AND (_18@<id> = Bunch OR _18@<id> = Dram) AND (_15@<id> = medium OR _15@<id> = extra large)) OR _12@<id> = Men AND (_17@<id> = cyan OR _17@<id> = indian) AND (_18@<id> = Carton OR _18@<id> = Cup) AND (_15@<id> = large OR _15@<id> = N/A) OR _12@<id> = Men AND (_17@<id> = coral OR _17@<id> = pale) AND (_18@<id> = Pallet OR _18@<id> = Gram) AND (_15@<id> = economy OR _15@<id> = small), projection=[_14@<id>]
+                                              ProjectionExec: expr=[<exprs>]
+                                                DataSourceExec: partitions=1, partition_sizes=[<sizes>]
+                          RepartitionExec: partitioning=RoundRobinBatch(<partitions>), input_partitions=<partitions>
+                            ProjectionExec: expr=[<exprs>]
+                              CoalesceBatchesExec: target_batch_size=8192
+                                FilterExec: _13@<id> >= 668 AND _13@<id> <= 708, projection=[_14@<id>, _21@<id>]
+                                  DataSourceExec: partitions=1, partition_sizes=[<sizes>]
+
+
+physical_plan after OptimizeAggregateOrder:
+SAME TEXT AS ABOVE
+
+physical_plan after ProjectionPushdown:
+SAME TEXT AS ABOVE
+
+physical_plan after coalesce_batches:
+OutputRequirementExec: order_by=[(#<col>, asc)], dist_by=SinglePartition
+  SortExec: [<sort_exprs>], fetch=100
+    SortExec: expr=[<exprs>]
+      AggregateExec: mode=FinalPartitioned, gby=[#<col> as #<col>], aggr=[]
+        CoalesceBatchesExec: target_batch_size=8192
+          RepartitionExec: partitioning=Hash([#<col>], <partitions>), input_partitions=<partitions>
+            CoalesceBatchesExec: target_batch_size=8192
+              AggregateExec: mode=Partial, gby=[#<col> as #<col>], aggr=[]
+                ProjectionExec: expr=[<exprs>]
+                  CoalesceBatchesExec: target_batch_size=8192
+                    CoalesceBatchesExec: target_batch_size=8192
+                      FilterExec: CASE WHEN __always_true@<id> IS NULL THEN 0 ELSE #<col> END > 0, projection=[#<col>]
+                        ProjectionExec: expr=[<exprs>]
+                          CoalesceBatchesExec: target_batch_size=8192
+                            CoalesceBatchesExec: target_batch_size=8192
+                              HashJoinExec: mode=CollectLeft, join_type=Right, on=[(#<col>, #<col>)], projection=[#<col>, __always_true@<id>, #<col>]
+                                CoalescePartitionsExec
+                                  ProjectionExec: expr=[<exprs>]
+                                    AggregateExec: mode=FinalPartitioned, gby=[#<col> as #<col>], aggr=[count(Int64(1))]
+                                      CoalesceBatchesExec: target_batch_size=8192
+                                        RepartitionExec: partitioning=Hash([#<col>], <partitions>), input_partitions=<partitions>
+                                          CoalesceBatchesExec: target_batch_size=8192
+                                            AggregateExec: mode=Partial, gby=[#<col> as #<col>], aggr=[count(Int64(1))]
+                                              RepartitionExec: partitioning=RoundRobinBatch(<partitions>), input_partitions=<partitions>
+                                                ProjectionExec: expr=[<exprs>]
+                                                  CoalesceBatchesExec: target_batch_size=8192
+                                                    CoalesceBatchesExec: target_batch_size=8192
+                                                      FilterExec: __common_expr_4@<id> AND ((_17@<id> = cream OR _17@<id> = ghost) AND (_18@<id> = Ton OR _18@<id> = Gross) AND (_15@<id> = economy OR _15@<id> = small) OR (_17@<id> = midnight OR _17@<id> = burlywood) AND (_18@<id> = Tsp OR _18@<id> = Bundle) AND (_15@<id> = medium OR _15@<id> = extra large)) OR _12@<id> = Men AND (_17@<id> = lavender OR _17@<id> = azure) AND (_18@<id> = Each OR _18@<id> = Lb) AND (_15@<id> = large OR _15@<id> = N/A) OR _12@<id> = Men AND (_17@<id> = chocolate OR _17@<id> = steel) AND (_18@<id> = N/A OR _18@<id> = Dozen) AND (_15@<id> = economy OR _15@<id> = small) OR __common_expr_4@<id> AND ((_17@<id> = floral OR _17@<id> = royal) AND (_18@<id> = Unknown OR _18@<id> = Tbl) AND (_15@<id> = economy OR _15@<id> = small) OR (_17@<id> = navy OR _17@<id> = forest) AND (_18@<id> = Bunch OR _18@<id> = Dram) AND (_15@<id> = medium OR _15@<id> = extra large)) OR _12@<id> = Men AND (_17@<id> = cyan OR _17@<id> = indian) AND (_18@<id> = Carton OR _18@<id> = Cup) AND (_15@<id> = large OR _15@<id> = N/A) OR _12@<id> = Men AND (_17@<id> = coral OR _17@<id> = pale) AND (_18@<id> = Pallet OR _18@<id> = Gram) AND (_15@<id> = economy OR _15@<id> = small), projection=[_14@<id>]
+                                                        ProjectionExec: expr=[<exprs>]
+                                                          DataSourceExec: partitions=1, partition_sizes=[<sizes>]
+                                RepartitionExec: partitioning=RoundRobinBatch(<partitions>), input_partitions=<partitions>
+                                  ProjectionExec: expr=[<exprs>]
+                                    CoalesceBatchesExec: target_batch_size=8192
+                                      CoalesceBatchesExec: target_batch_size=8192
+                                        FilterExec: _13@<id> >= 668 AND _13@<id> <= 708, projection=[_14@<id>, _21@<id>]
+                                          DataSourceExec: partitions=1, partition_sizes=[<sizes>]
+
+
+physical_plan after coalesce_async_exec_input:
+SAME TEXT AS ABOVE
+
+physical_plan after OutputRequirements:
+SortExec: [<sort_exprs>], fetch=100
+  SortExec: expr=[<exprs>]
+    AggregateExec: mode=FinalPartitioned, gby=[#<col> as #<col>], aggr=[]
+      CoalesceBatchesExec: target_batch_size=8192
+        RepartitionExec: partitioning=Hash([#<col>], <partitions>), input_partitions=<partitions>
+          CoalesceBatchesExec: target_batch_size=8192
+            AggregateExec: mode=Partial, gby=[#<col> as #<col>], aggr=[]
+              ProjectionExec: expr=[<exprs>]
+                CoalesceBatchesExec: target_batch_size=8192
+                  CoalesceBatchesExec: target_batch_size=8192
+                    FilterExec: CASE WHEN __always_true@<id> IS NULL THEN 0 ELSE #<col> END > 0, projection=[#<col>]
+                      ProjectionExec: expr=[<exprs>]
+                        CoalesceBatchesExec: target_batch_size=8192
+                          CoalesceBatchesExec: target_batch_size=8192
+                            HashJoinExec: mode=CollectLeft, join_type=Right, on=[(#<col>, #<col>)], projection=[#<col>, __always_true@<id>, #<col>]
+                              CoalescePartitionsExec
+                                ProjectionExec: expr=[<exprs>]
+                                  AggregateExec: mode=FinalPartitioned, gby=[#<col> as #<col>], aggr=[count(Int64(1))]
+                                    CoalesceBatchesExec: target_batch_size=8192
+                                      RepartitionExec: partitioning=Hash([#<col>], <partitions>), input_partitions=<partitions>
+                                        CoalesceBatchesExec: target_batch_size=8192
+                                          AggregateExec: mode=Partial, gby=[#<col> as #<col>], aggr=[count(Int64(1))]
+                                            RepartitionExec: partitioning=RoundRobinBatch(<partitions>), input_partitions=<partitions>
+                                              ProjectionExec: expr=[<exprs>]
+                                                CoalesceBatchesExec: target_batch_size=8192
+                                                  CoalesceBatchesExec: target_batch_size=8192
+                                                    FilterExec: __common_expr_4@<id> AND ((_17@<id> = cream OR _17@<id> = ghost) AND (_18@<id> = Ton OR _18@<id> = Gross) AND (_15@<id> = economy OR _15@<id> = small) OR (_17@<id> = midnight OR _17@<id> = burlywood) AND (_18@<id> = Tsp OR _18@<id> = Bundle) AND (_15@<id> = medium OR _15@<id> = extra large)) OR _12@<id> = Men AND (_17@<id> = lavender OR _17@<id> = azure) AND (_18@<id> = Each OR _18@<id> = Lb) AND (_15@<id> = large OR _15@<id> = N/A) OR _12@<id> = Men AND (_17@<id> = chocolate OR _17@<id> = steel) AND (_18@<id> = N/A OR _18@<id> = Dozen) AND (_15@<id> = economy OR _15@<id> = small) OR __common_expr_4@<id> AND ((_17@<id> = floral OR _17@<id> = royal) AND (_18@<id> = Unknown OR _18@<id> = Tbl) AND (_15@<id> = economy OR _15@<id> = small) OR (_17@<id> = navy OR _17@<id> = forest) AND (_18@<id> = Bunch OR _18@<id> = Dram) AND (_15@<id> = medium OR _15@<id> = extra large)) OR _12@<id> = Men AND (_17@<id> = cyan OR _17@<id> = indian) AND (_18@<id> = Carton OR _18@<id> = Cup) AND (_15@<id> = large OR _15@<id> = N/A) OR _12@<id> = Men AND (_17@<id> = coral OR _17@<id> = pale) AND (_18@<id> = Pallet OR _18@<id> = Gram) AND (_15@<id> = economy OR _15@<id> = small), projection=[_14@<id>]
+                                                      ProjectionExec: expr=[<exprs>]
+                                                        DataSourceExec: partitions=1, partition_sizes=[<sizes>]
+                              RepartitionExec: partitioning=RoundRobinBatch(<partitions>), input_partitions=<partitions>
+                                ProjectionExec: expr=[<exprs>]
+                                  CoalesceBatchesExec: target_batch_size=8192
+                                    CoalesceBatchesExec: target_batch_size=8192
+                                      FilterExec: _13@<id> >= 668 AND _13@<id> <= 708, projection=[_14@<id>, _21@<id>]
+                                        DataSourceExec: partitions=1, partition_sizes=[<sizes>]
+
+
+physical_plan after LimitAggregation:
+SAME TEXT AS ABOVE
+
+physical_plan after LimitPushPastWindows:
+SAME TEXT AS ABOVE
+
+physical_plan after LimitPushdown:
+SAME TEXT AS ABOVE
+
+physical_plan after ProjectionPushdown:
+SAME TEXT AS ABOVE
+
+physical_plan after EnsureCooperative:
+SAME TEXT AS ABOVE
+
+physical_plan after FilterPushdown(Post):
+SAME TEXT AS ABOVE
+
+physical_plan after RewriteExplicitRepartition:
+SAME TEXT AS ABOVE
+
+physical_plan after SanityCheckPlan:
+SAME TEXT AS ABOVE
+
+physical_plan:
+ProjectionExec: expr=[<exprs>]
+  SortExec: [<sort_exprs>], fetch=100
+    SortExec: expr=[<exprs>]
+      AggregateExec: mode=FinalPartitioned, gby=[#<col> as #<col>], aggr=[]
+        CoalesceBatchesExec: target_batch_size=8192
+          RepartitionExec: partitioning=Hash([#<col>], <partitions>), input_partitions=<partitions>
+            CoalesceBatchesExec: target_batch_size=8192
+              AggregateExec: mode=Partial, gby=[#<col> as #<col>], aggr=[]
+                ProjectionExec: expr=[<exprs>]
+                  CoalesceBatchesExec: target_batch_size=8192
+                    CoalesceBatchesExec: target_batch_size=8192
+                      FilterExec: CASE WHEN __always_true@<id> IS NULL THEN 0 ELSE #<col> END > 0, projection=[#<col>]
+                        ProjectionExec: expr=[<exprs>]
+                          CoalesceBatchesExec: target_batch_size=8192
+                            CoalesceBatchesExec: target_batch_size=8192
+                              HashJoinExec: mode=CollectLeft, join_type=Right, on=[(#<col>, #<col>)], projection=[#<col>, __always_true@<id>, #<col>]
+                                CoalescePartitionsExec
+                                  ProjectionExec: expr=[<exprs>]
+                                    AggregateExec: mode=FinalPartitioned, gby=[#<col> as #<col>], aggr=[count(Int64(1))]
+                                      CoalesceBatchesExec: target_batch_size=8192
+                                        RepartitionExec: partitioning=Hash([#<col>], <partitions>), input_partitions=<partitions>
+                                          CoalesceBatchesExec: target_batch_size=8192
+                                            AggregateExec: mode=Partial, gby=[#<col> as #<col>], aggr=[count(Int64(1))]
+                                              RepartitionExec: partitioning=RoundRobinBatch(<partitions>), input_partitions=<partitions>
+                                                ProjectionExec: expr=[<exprs>]
+                                                  CoalesceBatchesExec: target_batch_size=8192
+                                                    CoalesceBatchesExec: target_batch_size=8192
+                                                      FilterExec: __common_expr_4@<id> AND ((_17@<id> = cream OR _17@<id> = ghost) AND (_18@<id> = Ton OR _18@<id> = Gross) AND (_15@<id> = economy OR _15@<id> = small) OR (_17@<id> = midnight OR _17@<id> = burlywood) AND (_18@<id> = Tsp OR _18@<id> = Bundle) AND (_15@<id> = medium OR _15@<id> = extra large)) OR _12@<id> = Men AND (_17@<id> = lavender OR _17@<id> = azure) AND (_18@<id> = Each OR _18@<id> = Lb) AND (_15@<id> = large OR _15@<id> = N/A) OR _12@<id> = Men AND (_17@<id> = chocolate OR _17@<id> = steel) AND (_18@<id> = N/A OR _18@<id> = Dozen) AND (_15@<id> = economy OR _15@<id> = small) OR __common_expr_4@<id> AND ((_17@<id> = floral OR _17@<id> = royal) AND (_18@<id> = Unknown OR _18@<id> = Tbl) AND (_15@<id> = economy OR _15@<id> = small) OR (_17@<id> = navy OR _17@<id> = forest) AND (_18@<id> = Bunch OR _18@<id> = Dram) AND (_15@<id> = medium OR _15@<id> = extra large)) OR _12@<id> = Men AND (_17@<id> = cyan OR _17@<id> = indian) AND (_18@<id> = Carton OR _18@<id> = Cup) AND (_15@<id> = large OR _15@<id> = N/A) OR _12@<id> = Men AND (_17@<id> = coral OR _17@<id> = pale) AND (_18@<id> = Pallet OR _18@<id> = Gram) AND (_15@<id> = economy OR _15@<id> = small), projection=[_14@<id>]
+                                                        ProjectionExec: expr=[<exprs>]
+                                                          DataSourceExec: partitions=1, partition_sizes=[<sizes>]
+                                RepartitionExec: partitioning=RoundRobinBatch(<partitions>), input_partitions=<partitions>
+                                  ProjectionExec: expr=[<exprs>]
+                                    CoalesceBatchesExec: target_batch_size=8192
+                                      CoalesceBatchesExec: target_batch_size=8192
+                                        FilterExec: _13@<id> >= 668 AND _13@<id> <= 708, projection=[_14@<id>, _21@<id>]
+                                          DataSourceExec: partitions=1, partition_sizes=[<sizes>]
+
+
+== Physical Plan ==
+ProjectionExec: expr=[<exprs>]
+  SortExec: [<sort_exprs>], fetch=100
+    SortExec: expr=[<exprs>]
+      AggregateExec: mode=FinalPartitioned, gby=[#<col> as #<col>], aggr=[]
+        CoalesceBatchesExec: target_batch_size=8192
+          RepartitionExec: partitioning=Hash([#<col>], <partitions>), input_partitions=<partitions>
+            CoalesceBatchesExec: target_batch_size=8192
+              AggregateExec: mode=Partial, gby=[#<col> as #<col>], aggr=[]
+                ProjectionExec: expr=[<exprs>]
+                  CoalesceBatchesExec: target_batch_size=8192
+                    CoalesceBatchesExec: target_batch_size=8192
+                      FilterExec: CASE WHEN __always_true@<id> IS NULL THEN 0 ELSE #<col> END > 0, projection=[#<col>]
+                        ProjectionExec: expr=[<exprs>]
+                          CoalesceBatchesExec: target_batch_size=8192
+                            CoalesceBatchesExec: target_batch_size=8192
+                              HashJoinExec: mode=CollectLeft, join_type=Right, on=[(#<col>, #<col>)], projection=[#<col>, __always_true@<id>, #<col>]
+                                CoalescePartitionsExec
+                                  ProjectionExec: expr=[<exprs>]
+                                    AggregateExec: mode=FinalPartitioned, gby=[#<col> as #<col>], aggr=[count(Int64(1))]
+                                      CoalesceBatchesExec: target_batch_size=8192
+                                        RepartitionExec: partitioning=Hash([#<col>], <partitions>), input_partitions=<partitions>
+                                          CoalesceBatchesExec: target_batch_size=8192
+                                            AggregateExec: mode=Partial, gby=[#<col> as #<col>], aggr=[count(Int64(1))]
+                                              RepartitionExec: partitioning=RoundRobinBatch(<partitions>), input_partitions=<partitions>
+                                                ProjectionExec: expr=[<exprs>]
+                                                  CoalesceBatchesExec: target_batch_size=8192
+                                                    CoalesceBatchesExec: target_batch_size=8192
+                                                      FilterExec: __common_expr_4@<id> AND ((_17@<id> = cream OR _17@<id> = ghost) AND (_18@<id> = Ton OR _18@<id> = Gross) AND (_15@<id> = economy OR _15@<id> = small) OR (_17@<id> = midnight OR _17@<id> = burlywood) AND (_18@<id> = Tsp OR _18@<id> = Bundle) AND (_15@<id> = medium OR _15@<id> = extra large)) OR _12@<id> = Men AND (_17@<id> = lavender OR _17@<id> = azure) AND (_18@<id> = Each OR _18@<id> = Lb) AND (_15@<id> = large OR _15@<id> = N/A) OR _12@<id> = Men AND (_17@<id> = chocolate OR _17@<id> = steel) AND (_18@<id> = N/A OR _18@<id> = Dozen) AND (_15@<id> = economy OR _15@<id> = small) OR __common_expr_4@<id> AND ((_17@<id> = floral OR _17@<id> = royal) AND (_18@<id> = Unknown OR _18@<id> = Tbl) AND (_15@<id> = economy OR _15@<id> = small) OR (_17@<id> = navy OR _17@<id> = forest) AND (_18@<id> = Bunch OR _18@<id> = Dram) AND (_15@<id> = medium OR _15@<id> = extra large)) OR _12@<id> = Men AND (_17@<id> = cyan OR _17@<id> = indian) AND (_18@<id> = Carton OR _18@<id> = Cup) AND (_15@<id> = large OR _15@<id> = N/A) OR _12@<id> = Men AND (_17@<id> = coral OR _17@<id> = pale) AND (_18@<id> = Pallet OR _18@<id> = Gram) AND (_15@<id> = economy OR _15@<id> = small), projection=[_14@<id>]
+                                                        ProjectionExec: expr=[<exprs>]
+                                                          DataSourceExec: partitions=1, partition_sizes=[<sizes>]
+                                RepartitionExec: partitioning=RoundRobinBatch(<partitions>), input_partitions=<partitions>
+                                  ProjectionExec: expr=[<exprs>]
+                                    CoalesceBatchesExec: target_batch_size=8192
+                                      CoalesceBatchesExec: target_batch_size=8192
+                                        FilterExec: _13@<id> >= 668 AND _13@<id> <= 708, projection=[_14@<id>, _21@<id>]
+                                          DataSourceExec: partitions=1, partition_sizes=[<sizes>]
