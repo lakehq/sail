@@ -25,9 +25,9 @@ todo = "deny"
 thiserror = { version = "2.0.17" }
 tokio = { version = "1.47.1", features = ["full"] }
 tokio-stream = { version = "0.1.17", features = ["time", "io-util"] }
-pbjson = "0.8.0"
-pbjson-types = "0.8.0"
-pbjson-build = "0.8.0"
+pbjson = "0.9.0"
+pbjson-types = "0.9.0"
+pbjson-build = "0.9.0"
 tower = { version = "0.5.2", features = ["full"] }
 uuid = { version = "1.19.0", features = ["serde", "v4"] }
 async-trait = "0.1.89"
