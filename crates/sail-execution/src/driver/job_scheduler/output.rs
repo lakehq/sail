@@ -17,7 +17,7 @@ use crate::error::ExecutionResult;
 use crate::id::JobId;
 use crate::stream::error::TaskStreamError;
 
-pub(super) enum JobOutput {
+pub(in crate::driver) enum JobOutput {
     Pending {
         result: oneshot::Sender<ExecutionResult<SendableRecordBatchStream>>,
     },

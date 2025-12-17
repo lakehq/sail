@@ -4,11 +4,12 @@ use datafusion::arrow::datatypes::SchemaRef;
 use futures::TryStreamExt;
 use prost::Message;
 
-use crate::error::ExecutionResult;
-use crate::id::TaskId;
+use crate::error::{ExecutionError, ExecutionResult};
+use crate::id::{JobId, TaskId, WorkerId};
 use crate::rpc::{ClientHandle, ClientOptions, ClientService};
 use crate::stream::channel::ChannelName;
 use crate::stream::reader::TaskStreamSource;
+use crate::worker::gen;
 use crate::worker::gen::worker_service_client::WorkerServiceClient;
 use crate::worker::gen::{
     RemoveStreamRequest, RemoveStreamResponse, RunTaskRequest, RunTaskResponse, StopTaskRequest,
@@ -34,26 +35,36 @@ impl WorkerClient {
 impl WorkerClient {
     pub async fn run_task(
         &self,
+        job_id: JobId,
         task_id: TaskId,
         attempt: usize,
         plan: Vec<u8>,
         partition: usize,
         channel: Option<ChannelName>,
+        peers: Vec<WorkerLocation>,
     ) -> ExecutionResult<()> {
         let request = RunTaskRequest {
+            job_id: job_id.into(),
             task_id: task_id.into(),
             attempt: attempt as u64,
             plan,
             partition: partition as u64,
             channel: channel.map(|x| x.into()),
+            peers: peers.into_iter().map(|x| x.into()).collect(),
         };
         let response = self.client.get().await?.run_task(request).await?;
         let RunTaskResponse {} = response.into_inner();
         Ok(())
     }
 
-    pub async fn stop_task(&self, task_id: TaskId, attempt: usize) -> ExecutionResult<()> {
+    pub async fn stop_task(
+        &self,
+        job_id: JobId,
+        task_id: TaskId,
+        attempt: usize,
+    ) -> ExecutionResult<()> {
         let request = StopTaskRequest {
+            job_id: job_id.into(),
             task_id: task_id.into(),
             attempt: attempt as u64,
         };
@@ -98,5 +109,36 @@ impl WorkerClient {
         let response = self.client.get().await?.stop_worker(request).await?;
         let StopWorkerResponse {} = response.into_inner();
         Ok(())
+    }
+}
+
+pub struct WorkerLocation {
+    pub worker_id: WorkerId,
+    pub host: String,
+    pub port: u16,
+}
+
+impl From<WorkerLocation> for gen::WorkerLocation {
+    fn from(value: WorkerLocation) -> Self {
+        Self {
+            worker_id: value.worker_id.into(),
+            host: value.host,
+            port: value.port as u32,
+        }
+    }
+}
+
+impl TryFrom<gen::WorkerLocation> for WorkerLocation {
+    type Error = ExecutionError;
+
+    fn try_from(value: gen::WorkerLocation) -> Result<Self, Self::Error> {
+        let port = u16::try_from(value.port).map_err(|_| {
+            ExecutionError::InvalidArgument(format!("invalid port: {}", value.port))
+        })?;
+        Ok(Self {
+            worker_id: value.worker_id.into(),
+            host: value.host,
+            port,
+        })
     }
 }

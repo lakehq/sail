@@ -8,6 +8,7 @@ use crate::error::{ExecutionError, ExecutionResult};
 use crate::worker_manager::KubernetesWorkerManagerOptions;
 
 #[derive(Debug)]
+#[readonly::make]
 pub struct DriverOptions {
     pub enable_tls: bool,
     pub driver_listen_host: String,

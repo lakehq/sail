@@ -36,7 +36,13 @@ impl<'a> ProtoBuilder<'a> {
             .map(|file| format!("proto/sail/{}/{}", self.package, file))
             .collect::<Vec<_>>();
 
-        let builder = tonic_prost_build::configure();
+        for p in &protos {
+            println!("cargo:rerun-if-changed={p}");
+        }
+
+        // The `emit_rerun_if_changed` option does not seem to work, so we turn it off explicitly
+        // and emit the instructions ourselves in the code above.
+        let builder = tonic_prost_build::configure().emit_rerun_if_changed(false);
 
         let builder = if self.with_service {
             let out_dir = PathBuf::from(std::env::var("OUT_DIR")?);
@@ -54,12 +60,10 @@ impl<'a> ProtoBuilder<'a> {
             config.skip_debug(skip_debug);
         }
 
-        let proto_paths = protos.iter().map(|s| s.as_str()).collect::<Vec<_>>();
-
         builder
             .protoc_arg("--experimental_allow_proto3_optional")
             .compile_well_known_types(true)
-            .compile_with_config(config, &proto_paths, &["proto"])?;
+            .compile_with_config(config, &protos, &["proto".to_string()])?;
 
         Ok(())
     }

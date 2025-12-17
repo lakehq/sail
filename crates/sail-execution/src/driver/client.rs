@@ -1,14 +1,14 @@
 use sail_common_datafusion::error::CommonErrorCause;
 
+use crate::driver::event::TaskStatus;
 use crate::driver::gen;
 use crate::driver::gen::driver_service_client::DriverServiceClient;
 use crate::driver::gen::{
     RegisterWorkerRequest, RegisterWorkerResponse, ReportTaskStatusRequest,
     ReportTaskStatusResponse,
 };
-use crate::driver::state::TaskStatus;
 use crate::error::{ExecutionError, ExecutionResult};
-use crate::id::{TaskId, WorkerId};
+use crate::id::{JobId, TaskId, WorkerId};
 use crate::rpc::{ClientHandle, ClientOptions, ClientService};
 
 #[derive(Clone)]
@@ -55,6 +55,7 @@ impl DriverClient {
 
     pub async fn report_task_status(
         &self,
+        job_id: JobId,
         task_id: TaskId,
         attempt: usize,
         status: TaskStatus,
@@ -70,6 +71,7 @@ impl DriverClient {
             })
             .transpose()?;
         let request = tonic::Request::new(ReportTaskStatusRequest {
+            job_id: job_id.into(),
             task_id: task_id.into(),
             attempt: attempt as u64,
             status: gen::TaskStatus::from(status) as i32,

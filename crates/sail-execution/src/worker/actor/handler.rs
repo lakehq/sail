@@ -20,9 +20,9 @@ use sail_telemetry::telemetry::global_metric_registry;
 use sail_telemetry::{trace_execution_plan, TracingExecOptions};
 use tokio::sync::oneshot;
 
-use crate::driver::state::TaskStatus;
+use crate::driver::TaskStatus;
 use crate::error::{ExecutionError, ExecutionResult};
-use crate::id::{TaskAttempt, TaskId, WorkerId};
+use crate::id::{JobId, TaskAttempt, TaskId, WorkerId};
 use crate::plan::{ShuffleReadExec, ShuffleWriteExec};
 use crate::stream::channel::ChannelName;
 use crate::stream::reader::TaskStreamSource;
@@ -31,7 +31,7 @@ use crate::worker::actor::core::WorkerActor;
 use crate::worker::actor::local_stream::{EphemeralStream, LocalStream, MemoryStream};
 use crate::worker::actor::stream_accessor::WorkerStreamAccessor;
 use crate::worker::actor::stream_monitor::TaskStreamMonitor;
-use crate::worker::WorkerEvent;
+use crate::worker::{WorkerEvent, WorkerLocation};
 
 impl WorkerActor {
     pub(super) fn handle_server_ready(
@@ -43,7 +43,7 @@ impl WorkerActor {
         let worker_id = self.options().worker_id;
         info!("worker {worker_id} server is ready on port {port}");
         let server = mem::take(&mut self.server);
-        self.server = match server.ready(signal, port) {
+        self.server = match server.ready(signal) {
             Ok(x) => x,
             Err(e) => {
                 error!("{e}");
@@ -96,19 +96,26 @@ impl WorkerActor {
         ActorAction::Continue
     }
 
+    #[expect(clippy::too_many_arguments)]
     pub(super) fn handle_run_task(
         &mut self,
         ctx: &mut ActorContext<Self>,
+        job_id: JobId,
         task_id: TaskId,
         attempt: usize,
         plan: Vec<u8>,
         partition: usize,
         channel: Option<ChannelName>,
+        peers: Vec<WorkerLocation>,
     ) -> ActorAction {
+        for peer in peers {
+            self.set_worker_location(peer.worker_id, peer.host, peer.port);
+        }
         let stream = match self.execute_plan(ctx, task_id, attempt, plan, partition) {
             Ok(x) => x,
             Err(e) => {
                 let event = WorkerEvent::ReportTaskStatus {
+                    job_id,
                     task_id,
                     attempt,
                     status: TaskStatus::Failed,
@@ -121,14 +128,19 @@ impl WorkerActor {
         };
         let handle = ctx.handle().clone();
         let (tx, rx) = oneshot::channel();
-        self.task_signals
-            .insert(TaskAttempt::new(task_id, attempt), tx);
+        let key = TaskAttempt {
+            job_id,
+            task_id,
+            attempt,
+        };
+        self.task_signals.insert(key, tx);
         let monitor = if let Some(channel) = channel {
             let mut output = EphemeralStream::new(self.options().worker_stream_buffer);
             let writer = match output.publish(ctx) {
                 Ok(x) => x,
                 Err(e) => {
                     let event = WorkerEvent::ReportTaskStatus {
+                        job_id,
                         task_id,
                         attempt,
                         status: TaskStatus::Failed,
@@ -140,9 +152,9 @@ impl WorkerActor {
                 }
             };
             self.local_streams.insert(channel, Box::new(output));
-            TaskStreamMonitor::new(handle, task_id, attempt, stream, Some(writer), rx)
+            TaskStreamMonitor::new(handle, job_id, task_id, attempt, stream, Some(writer), rx)
         } else {
-            TaskStreamMonitor::new(handle, task_id, attempt, stream, None, rx)
+            TaskStreamMonitor::new(handle, job_id, task_id, attempt, stream, None, rx)
         };
         ctx.spawn(monitor.run());
         ActorAction::Continue
@@ -151,10 +163,15 @@ impl WorkerActor {
     pub(super) fn handle_stop_task(
         &mut self,
         _ctx: &mut ActorContext<Self>,
+        job_id: JobId,
         task_id: TaskId,
         attempt: usize,
     ) -> ActorAction {
-        let key = TaskAttempt::new(task_id, attempt);
+        let key = TaskAttempt {
+            job_id,
+            task_id,
+            attempt,
+        };
         if let Some(signal) = self.task_signals.remove(&key) {
             let _ = signal.send(());
         }
@@ -164,6 +181,7 @@ impl WorkerActor {
     pub(super) fn handle_report_task_status(
         &mut self,
         ctx: &mut ActorContext<Self>,
+        job_id: JobId,
         task_id: TaskId,
         attempt: usize,
         status: TaskStatus,
@@ -189,7 +207,9 @@ impl WorkerActor {
                     let cause = cause.clone();
                     async move {
                         client
-                            .report_task_status(task_id, attempt, status, message, cause, sequence)
+                            .report_task_status(
+                                job_id, task_id, attempt, status, message, cause, sequence,
+                            )
                             .await
                     }
                 })
@@ -267,13 +287,11 @@ impl WorkerActor {
         &mut self,
         ctx: &mut ActorContext<Self>,
         worker_id: WorkerId,
-        host: String,
-        port: u16,
         channel: ChannelName,
         schema: SchemaRef,
         result: oneshot::Sender<ExecutionResult<TaskStreamSource>>,
     ) -> ActorAction {
-        let client = match self.worker_client(worker_id, host, port) {
+        let client = match self.worker_client(worker_id) {
             Ok(x) => x.clone(),
             Err(e) => {
                 let _ = result.send(Err(e));
