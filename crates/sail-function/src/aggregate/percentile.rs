@@ -5,7 +5,7 @@ use std::sync::Arc;
 
 use datafusion::arrow;
 use datafusion::arrow::array::{Array, ArrayRef, AsArray, RecordBatch, RecordBatchOptions};
-use datafusion::arrow::datatypes::{DataType, Field, FieldRef, Schema};
+use datafusion::arrow::datatypes::{DataType, Field, Schema};
 use datafusion::common::cast::{as_float64_array, as_string_array};
 use datafusion::common::ScalarValue;
 use datafusion::error::Result;
@@ -73,7 +73,14 @@ impl AggregateUDFImpl for PercentileFunction {
     }
 
     fn return_type(&self, arg_types: &[DataType]) -> Result<DataType> {
-        return_type(arg_types)
+        match &arg_types[0] {
+            DataType::Utf8 => Ok(DataType::Utf8),
+            DataType::Utf8View => Ok(DataType::Utf8View),
+            DataType::LargeUtf8 => Ok(DataType::LargeUtf8),
+            dt @ DataType::Interval(_) => Ok(dt.clone()),
+            dt @ DataType::Duration(_) => Ok(dt.clone()),
+            _ => Ok(DataType::Float64),
+        }
     }
 
     fn accumulator(&self, acc_args: AccumulatorArgs) -> Result<Box<dyn Accumulator>> {
@@ -104,7 +111,17 @@ impl AggregateUDFImpl for PercentileFunction {
     }
 
     fn state_fields(&self, args: StateFieldsArgs) -> Result<Vec<arrow::datatypes::FieldRef>> {
-        state_fields(args)
+        let value_type = args.input_fields[0].data_type().clone();
+
+        let storage_type = match &value_type {
+            DataType::Utf8 | DataType::Utf8View | DataType::LargeUtf8 => DataType::Utf8,
+            DataType::Interval(_) | DataType::Duration(_) => DataType::Int64,
+            _ => DataType::Float64,
+        };
+
+        let values_list_type = DataType::List(Arc::new(Field::new("item", storage_type, true)));
+
+        Ok(vec![Field::new("values", values_list_type, true).into()])
     }
 }
 
@@ -846,30 +863,4 @@ fn extract_literal(expr: &Arc<dyn PhysicalExpr>) -> Result<f64, DataFusionError>
     };
 
     Ok(percentile)
-}
-
-/// Determine the state fields for percentile accumulator
-fn state_fields(args: StateFieldsArgs) -> Result<Vec<FieldRef>> {
-    let value_type = args.input_fields[0].data_type().clone();
-
-    let storage_type = match &value_type {
-        DataType::Utf8 | DataType::Utf8View | DataType::LargeUtf8 => DataType::Utf8,
-        DataType::Interval(_) | DataType::Duration(_) => DataType::Int64,
-        _ => DataType::Float64,
-    };
-
-    let values_list_type = DataType::List(Arc::new(Field::new("item", storage_type, true)));
-
-    Ok(vec![Field::new("values", values_list_type, true).into()])
-}
-
-fn return_type(arg_types: &[DataType]) -> Result<DataType> {
-    match &arg_types[0] {
-        DataType::Utf8 => Ok(DataType::Utf8),
-        DataType::Utf8View => Ok(DataType::Utf8View),
-        DataType::LargeUtf8 => Ok(DataType::LargeUtf8),
-        dt @ DataType::Interval(_) => Ok(dt.clone()),
-        dt @ DataType::Duration(_) => Ok(dt.clone()),
-        _ => Ok(DataType::Float64),
-    }
 }
