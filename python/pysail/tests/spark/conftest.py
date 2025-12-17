@@ -4,6 +4,7 @@ import os
 import re
 import textwrap
 import time
+from pathlib import Path
 
 import pyspark.sql.connect.session
 import pytest
@@ -336,3 +337,79 @@ def query_error(error, query, spark):
     """
     with pytest.raises(Exception, match=error):
         _ = spark.sql(query).collect()
+
+
+def _latest_commit_info(table_location: Path) -> dict:
+    log_dir = table_location / "_delta_log"
+    logs = sorted(log_dir.glob("*.json"))
+    assert logs, f"no delta logs found in {log_dir}"
+    latest = logs[-1]
+    with latest.open("r", encoding="utf-8") as f:
+        for line in f:
+            obj = json.loads(line)
+            if "commitInfo" in obj:
+                return obj["commitInfo"]
+    msg = f"commitInfo action not found in latest delta log: {latest}"
+    raise AssertionError(msg)
+
+
+def _latest_commit_info_from_variables(variables: dict) -> dict:
+    location = variables.get("location")
+    assert location is not None, "expected variable `location` to be defined for delta log inspection"
+    return _latest_commit_info(Path(location.path))
+
+
+def _recursive_parse_json_strings(value):
+    """Recursively parse JSON-encoded strings into structured Python values.
+
+    Delta `commitInfo.operationParameters` stores values as strings; for snapshot tests we
+    normalize common JSON payloads (objects/arrays/bools/null/numbers) back into structure.
+    """
+    if isinstance(value, dict):
+        return {k: _recursive_parse_json_strings(v) for k, v in value.items()}
+    if isinstance(value, list):
+        return [_recursive_parse_json_strings(v) for v in value]
+    if isinstance(value, str):
+        s = value.strip()
+        if not s:
+            return value
+        try:
+            parsed = json.loads(s)
+        except json.JSONDecodeError:
+            return value
+        return _recursive_parse_json_strings(parsed)
+    return value
+
+
+def _normalize_delta_commit_info_for_snapshot(commit_info: dict) -> dict:
+    """Normalize volatile / version-specific fields but keep the keys in the snapshot."""
+    normalized = dict(commit_info)
+
+    # Keep timestamp, but normalize its value.
+    if "timestamp" in normalized:
+        normalized["timestamp"] = "<timestamp>"
+
+    # Normalize engine/client versions to stable placeholders.
+    cv = normalized.get("clientVersion")
+    if isinstance(cv, str) and cv.startswith("sail-delta-lake."):
+        normalized["clientVersion"] = "sail-delta-lake.x.x.x"
+
+    ei = normalized.get("engineInfo")
+    if isinstance(ei, str) and ei.startswith("sail-delta-lake:"):
+        normalized["engineInfo"] = "sail-delta-lake:x.x.x"
+
+    return normalized
+
+
+@then("delta log latest commit info matches snapshot")
+def delta_log_latest_commit_info_matches_snapshot(snapshot: SnapshotAssertion, variables):
+    if is_jvm_spark():
+        pytest.skip("Delta log operation assertions are Sail-only")
+    commit_info = _latest_commit_info_from_variables(variables)
+    commit_info = _normalize_delta_commit_info_for_snapshot(commit_info)
+
+    # Normalize embedded JSON strings in operationParameters
+    if "operationParameters" in commit_info:
+        commit_info["operationParameters"] = _recursive_parse_json_strings(commit_info["operationParameters"])
+
+    assert commit_info == snapshot

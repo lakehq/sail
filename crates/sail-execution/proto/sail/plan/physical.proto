@@ -347,6 +347,7 @@ message DeltaWriterExecNode {
   repeated string partition_columns = 5;
   bool table_exists = 6;
   PhysicalSinkMode sink_mode = 7;
+  optional string operation_override_json = 8;
 }
 
 message DeltaCommitExecNode {

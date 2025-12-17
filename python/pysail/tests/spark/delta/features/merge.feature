@@ -47,6 +47,7 @@ Feature: Delta Lake Merge
         WHEN NOT MATCHED THEN
           INSERT *
         """
+      Then delta log latest commit info matches snapshot
       When query
         """
         SELECT id, value, flag FROM delta_merge_basic ORDER BY id
@@ -105,6 +106,7 @@ Feature: Delta Lake Merge
           INSERT (id, value, flag)
           VALUES (s.id, concat(s.value, '_insert'), s.flag)
         """
+      Then delta log latest commit info matches snapshot
       When query
         """
         SELECT id, value, flag FROM delta_merge_extended ORDER BY id
@@ -164,6 +166,7 @@ Feature: Delta Lake Merge
           INSERT (id, value, flag)
           VALUES (s.id, concat('insert_', s.value), s.flag)
         """
+      Then delta log latest commit info matches snapshot
       When query
         """
         SELECT id, value, flag FROM delta_merge_cleanup ORDER BY id
@@ -224,6 +227,7 @@ Feature: Delta Lake Merge
           INSERT (id, category, amount, note)
           VALUES (s.id, s.category, s.amount, concat('default_', s.note))
         """
+      Then delta log latest commit info matches snapshot
       When query
         """
         SELECT id, category, amount, note FROM delta_merge_conditional ORDER BY id

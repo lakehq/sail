@@ -15,6 +15,7 @@ use std::sync::Arc;
 use datafusion::common::{DataFusionError, Result};
 use datafusion::physical_expr::expressions::NotExpr;
 use datafusion::physical_expr::PhysicalExpr;
+use datafusion::physical_expr_common::physical_expr::fmt_sql;
 use datafusion::physical_plan::filter::FilterExec;
 use datafusion::physical_plan::union::UnionExec;
 use datafusion::physical_plan::ExecutionPlan;
@@ -22,6 +23,7 @@ use sail_common_datafusion::datasource::PhysicalSinkMode;
 
 use super::context::PlannerContext;
 use crate::datasource::schema::DataFusionMixins;
+use crate::kernel::DeltaOperation;
 use crate::physical_plan::{
     DeltaCommitExec, DeltaFindFilesExec, DeltaRemoveActionsExec, DeltaScanByAddsExec,
     DeltaWriterExec,
@@ -59,6 +61,9 @@ pub async fn build_delete_plan(
     let negated_condition = Arc::new(NotExpr::new(condition.clone()));
     let filter_exec = Arc::new(FilterExec::try_new(negated_condition, scan_exec)?);
 
+    let operation_override = Some(DeltaOperation::Delete {
+        predicate: Some(format!("{}", fmt_sql(condition.as_ref()))),
+    });
     let writer_exec = Arc::new(DeltaWriterExec::new(
         filter_exec,
         ctx.table_url().clone(),
@@ -68,6 +73,7 @@ pub async fn build_delete_plan(
         ctx.table_exists(),
         table_schema.clone(),
         None,
+        operation_override,
     ));
 
     let remove_exec = Arc::new(DeltaRemoveActionsExec::new(find_files_exec));

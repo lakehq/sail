@@ -1,0 +1,128 @@
+# serializer version: 1
+# name: test_apply_not_matched_by_source_updates_and_insert_expressions
+  dict({
+    'clientVersion': 'sail-delta-lake.x.x.x',
+    'engineInfo': 'sail-delta-lake:x.x.x',
+    'isBlindAppend': False,
+    'operation': 'MERGE',
+    'operationParameters': dict({
+      'matchedPredicates': list([
+        dict({
+          'actionType': 'update',
+          'predicate': "(flag = 'update')",
+        }),
+      ]),
+      'mergePredicate': '(id = __sail_src_id)',
+      'notMatchedBySourcePredicates': list([
+        dict({
+          'actionType': 'update',
+          'predicate': "(flag = 'orphan')",
+        }),
+      ]),
+      'notMatchedPredicates': list([
+        dict({
+          'actionType': 'insert',
+        }),
+      ]),
+    }),
+    'timestamp': '<timestamp>',
+  })
+# ---
+# name: test_rows_missing_from_the_source_are_deleted_after_updates
+  dict({
+    'clientVersion': 'sail-delta-lake.x.x.x',
+    'engineInfo': 'sail-delta-lake:x.x.x',
+    'isBlindAppend': False,
+    'operation': 'MERGE',
+    'operationParameters': dict({
+      'matchedPredicates': list([
+        dict({
+          'actionType': 'update',
+          'predicate': "(flag = 'archive')",
+        }),
+      ]),
+      'mergePredicate': '(id = __sail_src_id)',
+      'notMatchedBySourcePredicates': list([
+        dict({
+          'actionType': 'delete',
+          'predicate': "(flag = 'trim')",
+        }),
+      ]),
+      'notMatchedPredicates': list([
+        dict({
+          'actionType': 'insert',
+        }),
+      ]),
+    }),
+    'timestamp': '<timestamp>',
+  })
+# ---
+# name: test_simple_condition
+  dict({
+    'clientVersion': 'sail-delta-lake.x.x.x',
+    'engineInfo': 'sail-delta-lake:x.x.x',
+    'isBlindAppend': False,
+    'operation': 'DELETE',
+    'operationParameters': dict({
+      'predicate': 'department = Engineering',
+    }),
+    'timestamp': '<timestamp>',
+  })
+# ---
+# name: test_specific_not_matched_inserts_run_before_the_default_clause
+  dict({
+    'clientVersion': 'sail-delta-lake.x.x.x',
+    'engineInfo': 'sail-delta-lake:x.x.x',
+    'isBlindAppend': False,
+    'operation': 'MERGE',
+    'operationParameters': dict({
+      'matchedPredicates': list([
+        dict({
+          'actionType': 'update',
+        }),
+      ]),
+      'mergePredicate': '(id = __sail_src_id)',
+      'notMatchedBySourcePredicates': list([
+      ]),
+      'notMatchedPredicates': list([
+        dict({
+          'actionType': 'insert',
+          'predicate': '(__sail_src_id = 3)',
+        }),
+        dict({
+          'actionType': 'insert',
+        }),
+      ]),
+    }),
+    'timestamp': '<timestamp>',
+  })
+# ---
+# name: test_update_and_delete_matched_rows_while_inserting_unmatched_rows
+  dict({
+    'clientVersion': 'sail-delta-lake.x.x.x',
+    'engineInfo': 'sail-delta-lake:x.x.x',
+    'isBlindAppend': False,
+    'operation': 'MERGE',
+    'operationParameters': dict({
+      'matchedPredicates': list([
+        dict({
+          'actionType': 'update',
+          'predicate': "(flag = 'update')",
+        }),
+        dict({
+          'actionType': 'delete',
+          'predicate': "(flag = 'delete')",
+        }),
+      ]),
+      'mergePredicate': '(id = __sail_src_id)',
+      'notMatchedBySourcePredicates': list([
+      ]),
+      'notMatchedPredicates': list([
+        dict({
+          'actionType': 'insert',
+        }),
+      ]),
+    }),
+    'timestamp': '<timestamp>',
+  })
+# ---

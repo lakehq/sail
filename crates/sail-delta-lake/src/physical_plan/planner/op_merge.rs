@@ -15,11 +15,14 @@ use std::sync::Arc;
 use datafusion::common::{internal_err, DataFusionError, Result};
 use datafusion::physical_plan::union::UnionExec;
 use datafusion::physical_plan::ExecutionPlan;
-use sail_common_datafusion::datasource::{MergeInfo as PhysicalMergeInfo, PhysicalSinkMode};
+use sail_common_datafusion::datasource::{
+    MergeInfo as PhysicalMergeInfo, MergePredicateInfo, OperationOverride, PhysicalSinkMode,
+};
 use url::Url;
 
 use super::context::PlannerContext;
 use crate::datasource::DataFusionMixins;
+use crate::kernel::{DeltaOperation, MergePredicate};
 use crate::options::TableDeltaOptions;
 use crate::physical_plan::{
     DeltaCommitExec, DeltaFileLookupExec, DeltaRemoveActionsExec, DeltaWriterExec,
@@ -58,6 +61,33 @@ pub async fn build_merge_plan(
         DataFusionError::Plan("pre-expanded MERGE plan missing expanded input".to_string())
     })?;
 
+    let merge_operation = match merge_info.operation_override.as_ref() {
+        None => None,
+        Some(OperationOverride::Merge {
+            predicate,
+            merge_predicate,
+            matched_predicates,
+            not_matched_predicates,
+            not_matched_by_source_predicates,
+        }) => {
+            let to_kernel_preds = |preds: &Vec<MergePredicateInfo>| -> Vec<MergePredicate> {
+                preds
+                    .iter()
+                    .map(|p| MergePredicate {
+                        action_type: p.action_type.clone(),
+                        predicate: p.predicate.clone(),
+                    })
+                    .collect()
+            };
+            Some(DeltaOperation::Merge {
+                predicate: predicate.clone(),
+                merge_predicate: merge_predicate.clone(),
+                matched_predicates: to_kernel_preds(matched_predicates),
+                not_matched_predicates: to_kernel_preds(not_matched_predicates),
+                not_matched_by_source_predicates: to_kernel_preds(not_matched_by_source_predicates),
+            })
+        }
+    };
     finalize_merge(
         expanded,
         ctx.table_url().clone(),
@@ -66,6 +96,7 @@ pub async fn build_merge_plan(
         partition_columns,
         table_schema,
         merge_info.touched_file_plan.clone(),
+        merge_operation,
     )
     .await
 }
@@ -78,6 +109,7 @@ async fn finalize_merge(
     partition_columns: Vec<String>,
     table_schema: datafusion::arrow::datatypes::SchemaRef,
     touched_file_plan: Option<Arc<dyn ExecutionPlan>>,
+    operation_override: Option<DeltaOperation>,
 ) -> Result<Arc<dyn ExecutionPlan>> {
     let writer = Arc::new(DeltaWriterExec::new(
         Arc::clone(&projected),
@@ -88,6 +120,7 @@ async fn finalize_merge(
         true,
         table_schema.clone(),
         None,
+        operation_override,
     ));
 
     let mut action_inputs: Vec<Arc<dyn ExecutionPlan>> = vec![writer.clone()];

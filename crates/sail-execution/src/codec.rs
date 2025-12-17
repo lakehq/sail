@@ -507,6 +507,7 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
                 partition_columns,
                 table_exists,
                 sink_mode,
+                operation_override_json,
             }) => {
                 let input = self.try_decode_plan(&input, ctx)?;
                 let sink_schema = self.try_decode_schema(&sink_schema)?;
@@ -528,6 +529,11 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
                     _ => None,
                 };
 
+                let operation_override = if let Some(s) = operation_override_json.as_ref() {
+                    Some(serde_json::from_str(s).map_err(|e| plan_datafusion_err!("{e}"))?)
+                } else {
+                    None
+                };
                 Ok(Arc::new(DeltaWriterExec::new(
                     input,
                     table_url,
@@ -537,6 +543,7 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
                     table_exists,
                     Arc::new(sink_schema),
                     condition,
+                    operation_override,
                 )))
             }
             NodeKind::DeltaCommit(gen::DeltaCommitExecNode {
@@ -1025,6 +1032,11 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
         } else if let Some(delta_writer_exec) = node.as_any().downcast_ref::<DeltaWriterExec>() {
             let input = self.try_encode_plan(delta_writer_exec.input().clone())?;
             let sink_mode = self.try_encode_physical_sink_mode(delta_writer_exec.sink_mode())?;
+            let operation_override_json = if let Some(op) = delta_writer_exec.operation_override() {
+                Some(serde_json::to_string(op).map_err(|e| plan_datafusion_err!("{e}"))?)
+            } else {
+                None
+            };
             NodeKind::DeltaWriter(gen::DeltaWriterExecNode {
                 input,
                 table_url: delta_writer_exec.table_url().to_string(),
@@ -1034,6 +1046,7 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
                 partition_columns: delta_writer_exec.partition_columns().to_vec(),
                 table_exists: delta_writer_exec.table_exists(),
                 sink_mode: Some(sink_mode),
+                operation_override_json,
             })
         } else if let Some(delta_commit_exec) = node.as_any().downcast_ref::<DeltaCommitExec>() {
             let input = self.try_encode_plan(delta_commit_exec.input().clone())?;

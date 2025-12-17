@@ -81,6 +81,8 @@ pub struct DeltaWriterExec {
     table_exists: bool,
     sink_schema: SchemaRef,
     condition: Option<Arc<dyn PhysicalExpr>>,
+    /// Optional override for commit operation metadata.
+    operation_override: Option<DeltaOperation>,
     cache: PlanProperties,
 }
 
@@ -99,6 +101,7 @@ impl DeltaWriterExec {
         }
         map
     }
+    #[allow(clippy::too_many_arguments)]
     pub fn new(
         input: Arc<dyn ExecutionPlan>,
         table_url: Url,
@@ -108,6 +111,7 @@ impl DeltaWriterExec {
         table_exists: bool,
         sink_schema: SchemaRef,
         condition: Option<Arc<dyn PhysicalExpr>>,
+        operation_override: Option<DeltaOperation>,
     ) -> Self {
         let schema = Arc::new(Schema::new(vec![Field::new("data", DataType::Utf8, true)]));
         let cache = Self::compute_properties(schema);
@@ -120,6 +124,7 @@ impl DeltaWriterExec {
             table_exists,
             sink_schema,
             condition,
+            operation_override,
             cache,
         }
     }
@@ -164,6 +169,10 @@ impl DeltaWriterExec {
     pub fn condition(&self) -> &Option<Arc<dyn PhysicalExpr>> {
         &self.condition
     }
+
+    pub fn operation_override(&self) -> Option<&DeltaOperation> {
+        self.operation_override.as_ref()
+    }
 }
 
 #[async_trait]
@@ -205,6 +214,7 @@ impl ExecutionPlan for DeltaWriterExec {
             self.table_exists,
             self.sink_schema.clone(),
             self.condition.clone(),
+            self.operation_override.clone(),
         )))
     }
 
@@ -233,6 +243,7 @@ impl ExecutionPlan for DeltaWriterExec {
         let table_exists = self.table_exists;
         let input_schema = normalize_delta_schema(&self.input.schema());
         let condition = self.condition.clone();
+        let operation_override = self.operation_override.clone();
         // let sink_schema = self.sink_schema.clone();
         let session_timezone = context
             .session_config()
@@ -628,6 +639,7 @@ impl ExecutionPlan for DeltaWriterExec {
             let mut actions: Vec<Action> = schema_actions;
             actions.extend(add_actions.into_iter().map(Action::Add));
 
+            let operation = operation_override.or(operation);
             let commit_info = CommitInfo {
                 row_count: total_rows,
                 actions,
