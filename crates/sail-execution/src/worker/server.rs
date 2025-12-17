@@ -3,6 +3,7 @@ use sail_server::actor::ActorHandle;
 use tonic::{Request, Response, Status};
 
 use crate::error::{ExecutionError, ExecutionResult};
+use crate::id::TaskInstance;
 use crate::worker::actor::WorkerActor;
 use crate::worker::gen::worker_service_server::WorkerService;
 use crate::worker::gen::{
@@ -43,9 +44,11 @@ impl WorkerService for WorkerServer {
             .map(|x| x.try_into())
             .collect::<ExecutionResult<Vec<_>>>()?;
         let event = WorkerEvent::RunTask {
-            job_id: job_id.into(),
-            task_id: task_id.into(),
-            attempt: attempt as usize,
+            instance: TaskInstance {
+                job_id: job_id.into(),
+                task_id: task_id.into(),
+                attempt: attempt as usize,
+            },
             partition: partition as usize,
             plan,
             channel: channel.map(|x| x.into()),
@@ -72,9 +75,11 @@ impl WorkerService for WorkerServer {
             attempt,
         } = request;
         let event = WorkerEvent::StopTask {
-            job_id: job_id.into(),
-            task_id: task_id.into(),
-            attempt: attempt as usize,
+            instance: TaskInstance {
+                job_id: job_id.into(),
+                task_id: task_id.into(),
+                attempt: attempt as usize,
+            },
         };
         self.handle
             .send(event)

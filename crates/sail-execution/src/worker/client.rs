@@ -4,12 +4,12 @@ use datafusion::arrow::datatypes::SchemaRef;
 use futures::TryStreamExt;
 use prost::Message;
 
-use crate::error::{ExecutionError, ExecutionResult};
-use crate::id::{JobId, TaskId, WorkerId};
+use crate::error::ExecutionResult;
+use crate::id::{JobId, TaskId};
 use crate::rpc::{ClientHandle, ClientOptions, ClientService};
 use crate::stream::channel::ChannelName;
 use crate::stream::reader::TaskStreamSource;
-use crate::worker::gen;
+use crate::worker::event::WorkerLocation;
 use crate::worker::gen::worker_service_client::WorkerServiceClient;
 use crate::worker::gen::{
     RemoveStreamRequest, RemoveStreamResponse, RunTaskRequest, RunTaskResponse, StopTaskRequest,
@@ -109,36 +109,5 @@ impl WorkerClient {
         let response = self.client.get().await?.stop_worker(request).await?;
         let StopWorkerResponse {} = response.into_inner();
         Ok(())
-    }
-}
-
-pub struct WorkerLocation {
-    pub worker_id: WorkerId,
-    pub host: String,
-    pub port: u16,
-}
-
-impl From<WorkerLocation> for gen::WorkerLocation {
-    fn from(value: WorkerLocation) -> Self {
-        Self {
-            worker_id: value.worker_id.into(),
-            host: value.host,
-            port: value.port as u32,
-        }
-    }
-}
-
-impl TryFrom<gen::WorkerLocation> for WorkerLocation {
-    type Error = ExecutionError;
-
-    fn try_from(value: gen::WorkerLocation) -> Result<Self, Self::Error> {
-        let port = u16::try_from(value.port).map_err(|_| {
-            ExecutionError::InvalidArgument(format!("invalid port: {}", value.port))
-        })?;
-        Ok(Self {
-            worker_id: value.worker_id.into(),
-            host: value.host,
-            port,
-        })
     }
 }

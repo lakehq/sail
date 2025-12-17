@@ -19,6 +19,13 @@ message RunTaskRequest {
   bytes plan = 4;
   uint64 partition = 5;
   optional string channel = 6;
+  // The locations of peer workers that may or may not be needed
+  // when fetching streams for this task.
+  // Note that we should not broadcast peer information to workers
+  // asynchronously because the requests may arrive out of order.
+  // However, the worker can asynchronously acknowledge the receipt
+  // of peer information to the driver so that the duplicate peer
+  // information does not need to be sent again in the future.
   repeated WorkerLocation peers = 7;
 }
 

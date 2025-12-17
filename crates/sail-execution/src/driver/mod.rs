@@ -3,6 +3,7 @@ mod client;
 mod event;
 pub(super) mod job_scheduler;
 mod options;
+pub(super) mod output;
 mod planner;
 mod server;
 pub(super) mod worker_pool;

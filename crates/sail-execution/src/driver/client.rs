@@ -53,6 +53,25 @@ impl DriverClient {
         Ok(())
     }
 
+    pub async fn report_worker_known_peers(
+        &self,
+        worker_id: WorkerId,
+        peer_worker_ids: Vec<WorkerId>,
+    ) -> ExecutionResult<()> {
+        let request = tonic::Request::new(gen::ReportWorkerKnownPeersRequest {
+            worker_id: worker_id.into(),
+            peer_worker_ids: peer_worker_ids.into_iter().map(|id| id.into()).collect(),
+        });
+        let response = self
+            .inner
+            .get()
+            .await?
+            .report_worker_known_peers(request)
+            .await?;
+        let gen::ReportWorkerKnownPeersResponse {} = response.into_inner();
+        Ok(())
+    }
+
     pub async fn report_task_status(
         &self,
         job_id: JobId,

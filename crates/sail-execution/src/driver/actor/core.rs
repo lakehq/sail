@@ -69,6 +69,10 @@ impl Actor for DriverActor {
             DriverEvent::WorkerHeartbeat { worker_id } => {
                 self.handle_worker_heartbeat(ctx, worker_id)
             }
+            DriverEvent::WorkerKnownPeers {
+                worker_id,
+                peer_worker_ids,
+            } => self.handle_worker_known_peers(ctx, worker_id, peer_worker_ids),
             DriverEvent::ProbePendingWorker { worker_id } => {
                 self.handle_probe_pending_worker(ctx, worker_id)
             }
@@ -81,13 +85,15 @@ impl Actor for DriverActor {
             DriverEvent::ExecuteJob { plan, result } => self.handle_execute_job(ctx, plan, result),
             DriverEvent::CleanUpJob { job_id } => self.handle_clean_up_job(ctx, job_id),
             DriverEvent::UpdateTask {
-                task,
+                instance,
                 status,
                 message,
                 cause,
                 sequence,
-            } => self.handle_update_task(ctx, task, status, message, cause, sequence),
-            DriverEvent::ProbePendingTask { task } => self.handle_probe_pending_task(ctx, task),
+            } => self.handle_update_task(ctx, instance, status, message, cause, sequence),
+            DriverEvent::ProbePendingTask { instance } => {
+                self.handle_probe_pending_task(ctx, instance)
+            }
             DriverEvent::Shutdown => ActorAction::Stop,
         }
     }

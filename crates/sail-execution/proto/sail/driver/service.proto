@@ -18,15 +18,13 @@ message ReportWorkerHeartbeatRequest {
 message ReportWorkerHeartbeatResponse {
 }
 
-/*
-message ReportWorkerPeersRequest {
+message ReportWorkerKnownPeersRequest {
   uint64 worker_id = 1;
   repeated uint64 peer_worker_ids = 2;
 }
 
-message ReportWorkerPeersResponse {
+message ReportWorkerKnownPeersResponse {
 }
-*/
 
 message ReportTaskStatusRequest {
   uint64 job_id = 1;
@@ -53,10 +51,8 @@ message ReportTaskStatusResponse {
 service DriverService {
   rpc RegisterWorker(RegisterWorkerRequest) returns (RegisterWorkerResponse) {}
   rpc ReportWorkerHeartbeat(ReportWorkerHeartbeatRequest) returns (ReportWorkerHeartbeatResponse) {}
-  /*
   // Report the peers known to the worker so that the driver does not need to
   // send the peer information to the worker again when running tasks in the future.
-  rpc ReportWorkerPeers(ReportWorkerPeersRequest) returns (ReportWorkerPeersResponse) {}
-  */
+  rpc ReportWorkerKnownPeers(ReportWorkerKnownPeersRequest) returns (ReportWorkerKnownPeersResponse) {}
   rpc ReportTaskStatus(ReportTaskStatusRequest) returns (ReportTaskStatusResponse) {}
 }

@@ -12,7 +12,7 @@ use tokio::time::Instant;
 
 use crate::driver::gen;
 use crate::error::ExecutionResult;
-use crate::id::{JobId, TaskAttempt, WorkerId};
+use crate::id::{JobId, TaskInstance, WorkerId};
 
 pub enum DriverEvent {
     ServerReady {
@@ -29,6 +29,10 @@ pub enum DriverEvent {
     },
     WorkerHeartbeat {
         worker_id: WorkerId,
+    },
+    WorkerKnownPeers {
+        worker_id: WorkerId,
+        peer_worker_ids: Vec<WorkerId>,
     },
     ProbePendingWorker {
         worker_id: WorkerId,
@@ -49,7 +53,7 @@ pub enum DriverEvent {
         job_id: JobId,
     },
     UpdateTask {
-        task: TaskAttempt,
+        instance: TaskInstance,
         status: TaskStatus,
         message: Option<String>,
         cause: Option<CommonErrorCause>,
@@ -58,7 +62,7 @@ pub enum DriverEvent {
         sequence: Option<u64>,
     },
     ProbePendingTask {
-        task: TaskAttempt,
+        instance: TaskInstance,
     },
     Shutdown,
 }
@@ -110,6 +114,7 @@ impl SpanAssociation for DriverEvent {
             DriverEvent::ServerReady { .. } => "ServerReady",
             DriverEvent::RegisterWorker { .. } => "RegisterWorker",
             DriverEvent::WorkerHeartbeat { .. } => "WorkerHeartbeat",
+            DriverEvent::WorkerKnownPeers { .. } => "WorkerKnownPeers",
             DriverEvent::ProbePendingWorker { .. } => "ProbePendingWorker",
             DriverEvent::ProbeIdleWorker { .. } => "ProbeIdleWorker",
             DriverEvent::ProbeLostWorker { .. } => "ProbeLostWorker",
@@ -139,6 +144,10 @@ impl SpanAssociation for DriverEvent {
                 p.push((SpanAttribute::CLUSTER_WORKER_PORT, port.to_string()));
             }
             DriverEvent::WorkerHeartbeat { worker_id }
+            | DriverEvent::WorkerKnownPeers {
+                worker_id,
+                peer_worker_ids: _,
+            }
             | DriverEvent::ProbePendingWorker { worker_id }
             | DriverEvent::ProbeIdleWorker {
                 worker_id,
@@ -155,8 +164,8 @@ impl SpanAssociation for DriverEvent {
                 p.push((SpanAttribute::CLUSTER_JOB_ID, job_id.to_string()));
             }
             DriverEvent::UpdateTask {
-                task:
-                    TaskAttempt {
+                instance:
+                    TaskInstance {
                         job_id,
                         task_id,
                         attempt,
@@ -181,8 +190,8 @@ impl SpanAssociation for DriverEvent {
                 }
             }
             DriverEvent::ProbePendingTask {
-                task:
-                    TaskAttempt {
+                instance:
+                    TaskInstance {
                         job_id,
                         task_id,
                         attempt,

@@ -16,7 +16,7 @@ use tokio::sync::oneshot;
 use crate::codec::RemoteExecutionCodec;
 use crate::driver::DriverClient;
 use crate::error::{ExecutionError, ExecutionResult};
-use crate::id::{TaskAttempt, WorkerId};
+use crate::id::{TaskInstance, WorkerId};
 use crate::rpc::{ClientOptions, ServerMonitor};
 use crate::stream::channel::ChannelName;
 use crate::worker::actor::local_stream::LocalStream;
@@ -30,7 +30,7 @@ pub struct WorkerActor {
     driver_client: DriverClient,
     worker_clients: HashMap<WorkerId, WorkerClient>,
     worker_locations: HashMap<WorkerId, (String, u16)>,
-    pub(super) task_signals: HashMap<TaskAttempt, oneshot::Sender<()>>,
+    pub(super) task_signals: HashMap<TaskInstance, oneshot::Sender<()>>,
     pub(super) local_streams: HashMap<ChannelName, Box<dyn LocalStream>>,
     pub(super) session_context: Option<Arc<SessionContext>>,
     pub(super) physical_plan_codec: Box<dyn PhysicalExtensionCodec>,
@@ -86,30 +86,19 @@ impl Actor for WorkerActor {
             }
             WorkerEvent::StartHeartbeat => self.handle_start_heartbeat(ctx),
             WorkerEvent::RunTask {
-                job_id,
-                task_id,
-                attempt,
+                instance,
                 plan,
                 partition,
                 channel,
                 peers,
-            } => self.handle_run_task(
-                ctx, job_id, task_id, attempt, plan, partition, channel, peers,
-            ),
-            WorkerEvent::StopTask {
-                job_id,
-                task_id,
-                attempt,
-            } => self.handle_stop_task(ctx, job_id, task_id, attempt),
+            } => self.handle_run_task(ctx, instance, plan, partition, channel, peers),
+            WorkerEvent::StopTask { instance } => self.handle_stop_task(ctx, instance),
             WorkerEvent::ReportTaskStatus {
-                job_id,
-                task_id,
-                attempt,
+                instance,
                 status,
                 message,
                 cause,
-            } => self
-                .handle_report_task_status(ctx, job_id, task_id, attempt, status, message, cause),
+            } => self.handle_report_task_status(ctx, instance, status, message, cause),
             WorkerEvent::CreateLocalStream {
                 channel,
                 storage,

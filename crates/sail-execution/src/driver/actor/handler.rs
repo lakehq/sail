@@ -13,12 +13,12 @@ use tokio::time::Instant;
 use tonic::codegen::tokio_stream::wrappers::ReceiverStream;
 
 use crate::driver::actor::DriverActor;
-use crate::driver::job_scheduler::output::JobOutput;
 use crate::driver::job_scheduler::TaskTimeout;
-use crate::driver::worker_pool::WorkerLost;
+use crate::driver::output::JobOutput;
+use crate::driver::worker_pool::{WorkerIdle, WorkerLost, WorkerTimeout};
 use crate::driver::TaskStatus;
 use crate::error::ExecutionResult;
-use crate::id::{JobId, TaskAttempt, WorkerId};
+use crate::id::{JobId, TaskInstance, WorkerId};
 
 impl DriverActor {
     pub(super) fn handle_server_ready(
@@ -71,12 +71,29 @@ impl DriverActor {
         ActorAction::Continue
     }
 
+    pub(super) fn handle_worker_known_peers(
+        &mut self,
+        _ctx: &mut ActorContext<Self>,
+        worker_id: WorkerId,
+        peer_worker_ids: Vec<WorkerId>,
+    ) -> ActorAction {
+        self.worker_pool
+            .record_worker_known_peers(worker_id, peer_worker_ids);
+        ActorAction::Continue
+    }
+
     pub(super) fn handle_probe_pending_worker(
         &mut self,
         ctx: &mut ActorContext<Self>,
         worker_id: WorkerId,
     ) -> ActorAction {
-        self.worker_pool.probe_pending_worker(ctx, worker_id);
+        match self.worker_pool.probe_pending_worker(worker_id) {
+            WorkerTimeout::Yes => {
+                // start a new worker to compensate the failed one
+                self.worker_pool.start_worker(ctx);
+            }
+            WorkerTimeout::No => {}
+        }
         ActorAction::Continue
     }
 
@@ -86,7 +103,13 @@ impl DriverActor {
         worker_id: WorkerId,
         instant: Instant,
     ) -> ActorAction {
-        self.worker_pool.probe_idle_worker(ctx, worker_id, instant);
+        match self.worker_pool.probe_idle_worker(worker_id, instant) {
+            WorkerIdle::Yes => {
+                let reason = "worker has been idle for too long".to_string();
+                self.worker_pool.stop_worker(ctx, worker_id, Some(reason));
+            }
+            WorkerIdle::No => {}
+        }
         ActorAction::Continue
     }
 
@@ -96,9 +119,12 @@ impl DriverActor {
         worker_id: WorkerId,
         instant: Instant,
     ) -> ActorAction {
-        match self.worker_pool.probe_lost_worker(ctx, worker_id, instant) {
+        match self.worker_pool.probe_lost_worker(worker_id, instant) {
             WorkerLost::Yes => {
-                self.fail_tasks_for_worker(ctx, worker_id, "worker lost".to_string());
+                let reason = "worker heartbeat timeout".to_string();
+                self.worker_pool
+                    .stop_worker(ctx, worker_id, Some(reason.clone()));
+                self.fail_tasks_for_worker(ctx, worker_id, reason);
             }
             WorkerLost::No => {}
         }
@@ -138,7 +164,7 @@ impl DriverActor {
     pub(super) fn handle_update_task(
         &mut self,
         ctx: &mut ActorContext<Self>,
-        task: TaskAttempt,
+        instance: TaskInstance,
         status: TaskStatus,
         message: Option<String>,
         cause: Option<CommonErrorCause>,
@@ -147,31 +173,31 @@ impl DriverActor {
         if let Some(sequence) = sequence {
             if self
                 .task_sequences
-                .get(&task)
+                .get(&instance)
                 .is_some_and(|s| sequence <= *s)
             {
                 // The task status update is outdated, so we skip the remaining logic.
                 warn!(
                     "task {} attempt {} sequence {sequence} is stale",
-                    task.task_id, task.attempt
+                    instance.task_id, instance.attempt
                 );
                 return ActorAction::Continue;
             }
-            self.task_sequences.insert(task.clone(), sequence);
+            self.task_sequences.insert(instance.clone(), sequence);
         }
-        self.update_task(ctx, task, status, message, cause);
+        self.update_task(ctx, instance, status, message, cause);
         ActorAction::Continue
     }
 
     pub(super) fn handle_probe_pending_task(
         &mut self,
         ctx: &mut ActorContext<Self>,
-        task: TaskAttempt,
+        instance: TaskInstance,
     ) -> ActorAction {
-        match self.job_scheduler.probe_pending_task(&task) {
+        match self.job_scheduler.probe_pending_task(&instance) {
             TaskTimeout::Yes => {
                 let message = "task scheduling timeout".to_string();
-                self.update_task(ctx, task, TaskStatus::Failed, Some(message), None);
+                self.update_task(ctx, instance, TaskStatus::Failed, Some(message), None);
             }
             TaskTimeout::No => {}
         }
@@ -204,50 +230,50 @@ impl DriverActor {
     pub fn update_task(
         &mut self,
         ctx: &mut ActorContext<Self>,
-        task: TaskAttempt,
+        instance: TaskInstance,
         status: TaskStatus,
         message: Option<String>,
         cause: Option<CommonErrorCause>,
     ) -> ActorAction {
         match status {
             TaskStatus::Running => {
-                self.job_scheduler.report_running_task(&task, message);
+                self.job_scheduler.record_running_task(&instance, message);
                 self.schedule_tasks(ctx);
-                self.try_update_job_output(ctx, task.job_id);
+                self.try_update_job_output(ctx, instance.job_id);
             }
             TaskStatus::Succeeded => {
-                self.job_scheduler.report_succeeded_task(&task, message);
-                self.worker_pool.detach_task(ctx, &task);
+                self.job_scheduler.record_succeeded_task(&instance, message);
+                self.worker_pool.detach_task(ctx, &instance);
                 self.schedule_tasks(ctx);
-                self.try_update_job_output(ctx, task.job_id);
+                self.try_update_job_output(ctx, instance.job_id);
             }
             TaskStatus::Failed => {
                 // TODO: support task retry
                 let cause = cause.unwrap_or_else(|| {
                     CommonErrorCause::Internal(format!(
                         "task {} failed at attempt {}: {}",
-                        task.task_id,
-                        task.attempt,
+                        instance.task_id,
+                        instance.attempt,
                         message.as_deref().unwrap_or("unknown reason")
                     ))
                 });
-                self.job_scheduler.report_failed_task(&task, message);
-                self.worker_pool.detach_task(ctx, &task);
-                self.cancel_job(ctx, task.job_id, cause);
+                self.job_scheduler.record_failed_task(&instance, message);
+                self.worker_pool.detach_task(ctx, &instance);
+                self.cancel_job(ctx, instance.job_id, cause);
                 self.schedule_tasks(ctx);
             }
             TaskStatus::Canceled => {
                 let cause = cause.unwrap_or_else(|| {
                     CommonErrorCause::Internal(format!(
                         "task {} canceled at attempt {}: {}",
-                        task.task_id,
-                        task.attempt,
+                        instance.task_id,
+                        instance.attempt,
                         message.as_deref().unwrap_or("unknown reason")
                     ))
                 });
-                self.job_scheduler.report_canceled_task(&task, message);
-                self.worker_pool.detach_task(ctx, &task);
-                self.cancel_job(ctx, task.job_id, cause);
+                self.job_scheduler.record_canceled_task(&instance, message);
+                self.worker_pool.detach_task(ctx, &instance);
+                self.cancel_job(ctx, instance.job_id, cause);
                 self.schedule_tasks(ctx);
             }
         }

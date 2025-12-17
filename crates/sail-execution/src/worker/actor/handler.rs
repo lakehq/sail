@@ -22,7 +22,7 @@ use tokio::sync::oneshot;
 
 use crate::driver::TaskStatus;
 use crate::error::{ExecutionError, ExecutionResult};
-use crate::id::{JobId, TaskAttempt, TaskId, WorkerId};
+use crate::id::{TaskId, TaskInstance, WorkerId};
 use crate::plan::{ShuffleReadExec, ShuffleWriteExec};
 use crate::stream::channel::ChannelName;
 use crate::stream::reader::TaskStreamSource;
@@ -31,7 +31,8 @@ use crate::worker::actor::core::WorkerActor;
 use crate::worker::actor::local_stream::{EphemeralStream, LocalStream, MemoryStream};
 use crate::worker::actor::stream_accessor::WorkerStreamAccessor;
 use crate::worker::actor::stream_monitor::TaskStreamMonitor;
-use crate::worker::{WorkerEvent, WorkerLocation};
+use crate::worker::event::WorkerLocation;
+use crate::worker::WorkerEvent;
 
 impl WorkerActor {
     pub(super) fn handle_server_ready(
@@ -96,53 +97,40 @@ impl WorkerActor {
         ActorAction::Continue
     }
 
-    #[expect(clippy::too_many_arguments)]
     pub(super) fn handle_run_task(
         &mut self,
         ctx: &mut ActorContext<Self>,
-        job_id: JobId,
-        task_id: TaskId,
-        attempt: usize,
+        instance: TaskInstance,
         plan: Vec<u8>,
         partition: usize,
         channel: Option<ChannelName>,
         peers: Vec<WorkerLocation>,
     ) -> ActorAction {
-        for peer in peers {
-            self.set_worker_location(peer.worker_id, peer.host, peer.port);
-        }
-        let stream = match self.execute_plan(ctx, task_id, attempt, plan, partition) {
-            Ok(x) => x,
-            Err(e) => {
-                let event = WorkerEvent::ReportTaskStatus {
-                    job_id,
-                    task_id,
-                    attempt,
-                    status: TaskStatus::Failed,
-                    message: Some(format!("failed to execute plan: {e}")),
-                    cause: Some(CommonErrorCause::new::<PyErrExtractor>(&e)),
-                };
-                ctx.send(event);
-                return ActorAction::Continue;
-            }
-        };
+        self.track_known_peers(ctx, peers);
+        let stream =
+            match self.execute_plan(ctx, instance.task_id, instance.attempt, plan, partition) {
+                Ok(x) => x,
+                Err(e) => {
+                    let event = WorkerEvent::ReportTaskStatus {
+                        instance,
+                        status: TaskStatus::Failed,
+                        message: Some(format!("failed to execute plan: {e}")),
+                        cause: Some(CommonErrorCause::new::<PyErrExtractor>(&e)),
+                    };
+                    ctx.send(event);
+                    return ActorAction::Continue;
+                }
+            };
         let handle = ctx.handle().clone();
         let (tx, rx) = oneshot::channel();
-        let key = TaskAttempt {
-            job_id,
-            task_id,
-            attempt,
-        };
-        self.task_signals.insert(key, tx);
+        self.task_signals.insert(instance.clone(), tx);
         let monitor = if let Some(channel) = channel {
             let mut output = EphemeralStream::new(self.options().worker_stream_buffer);
             let writer = match output.publish(ctx) {
                 Ok(x) => x,
                 Err(e) => {
                     let event = WorkerEvent::ReportTaskStatus {
-                        job_id,
-                        task_id,
-                        attempt,
+                        instance,
                         status: TaskStatus::Failed,
                         message: Some(format!("failed to create output stream writer: {e}")),
                         cause: None,
@@ -152,9 +140,9 @@ impl WorkerActor {
                 }
             };
             self.local_streams.insert(channel, Box::new(output));
-            TaskStreamMonitor::new(handle, job_id, task_id, attempt, stream, Some(writer), rx)
+            TaskStreamMonitor::new(handle, instance, stream, Some(writer), rx)
         } else {
-            TaskStreamMonitor::new(handle, job_id, task_id, attempt, stream, None, rx)
+            TaskStreamMonitor::new(handle, instance, stream, None, rx)
         };
         ctx.spawn(monitor.run());
         ActorAction::Continue
@@ -163,16 +151,9 @@ impl WorkerActor {
     pub(super) fn handle_stop_task(
         &mut self,
         _ctx: &mut ActorContext<Self>,
-        job_id: JobId,
-        task_id: TaskId,
-        attempt: usize,
+        instance: TaskInstance,
     ) -> ActorAction {
-        let key = TaskAttempt {
-            job_id,
-            task_id,
-            attempt,
-        };
-        if let Some(signal) = self.task_signals.remove(&key) {
+        if let Some(signal) = self.task_signals.remove(&instance) {
             let _ = signal.send(());
         }
         ActorAction::Continue
@@ -181,9 +162,7 @@ impl WorkerActor {
     pub(super) fn handle_report_task_status(
         &mut self,
         ctx: &mut ActorContext<Self>,
-        job_id: JobId,
-        task_id: TaskId,
-        attempt: usize,
+        instance: TaskInstance,
         status: TaskStatus,
         message: Option<String>,
         cause: Option<CommonErrorCause>,
@@ -208,7 +187,13 @@ impl WorkerActor {
                     async move {
                         client
                             .report_task_status(
-                                job_id, task_id, attempt, status, message, cause, sequence,
+                                instance.job_id,
+                                instance.task_id,
+                                instance.attempt,
+                                status,
+                                message,
+                                cause,
+                                sequence,
                             )
                             .await
                     }
@@ -333,6 +318,28 @@ impl WorkerActor {
             self.local_streams.remove(&key);
         }
         ActorAction::Continue
+    }
+
+    fn track_known_peers(&mut self, ctx: &mut ActorContext<Self>, peers: Vec<WorkerLocation>) {
+        if peers.is_empty() {
+            // Although the logic below can handle empty peer list,
+            // we return early as an optimization to avoid unnecessary gRPC calls.
+            return;
+        }
+        let peer_worker_ids = peers.iter().map(|x| x.worker_id).collect();
+        for peer in peers {
+            self.set_worker_location(peer.worker_id, peer.host, peer.port);
+        }
+        let worker_id = self.options().worker_id;
+        let client = self.driver_client();
+        ctx.spawn(async move {
+            if let Err(e) = client
+                .report_worker_known_peers(worker_id, peer_worker_ids)
+                .await
+            {
+                warn!("failed to report worker known peers: {e}");
+            }
+        });
     }
 
     fn execute_plan(

@@ -5,7 +5,7 @@ use datafusion::physical_plan::{ExecutionPlan, ExecutionPlanProperties};
 
 use crate::driver::planner::JobGraph;
 use crate::error::ExecutionResult;
-use crate::id::{IdGenerator, JobId, TaskAttempt, TaskId, WorkerId};
+use crate::id::{IdGenerator, JobId, TaskId, TaskInstance, WorkerId};
 use crate::stream::channel::ChannelName;
 
 pub struct JobDescriptor {
@@ -71,7 +71,7 @@ impl JobDescriptor {
         &mut self,
         job_id: JobId,
         reason: Option<String>,
-    ) -> Vec<TaskAttempt> {
+    ) -> Vec<TaskInstance> {
         let mut result = vec![];
         for stage in self.stages.iter_mut() {
             for task_id in stage.tasks.iter_mut() {
@@ -82,7 +82,7 @@ impl JobDescriptor {
                             if let Some(reason) = &reason {
                                 task.messages.push(reason.clone());
                             }
-                            result.push(TaskAttempt {
+                            result.push(TaskInstance {
                                 job_id,
                                 task_id: *task_id,
                                 attempt: task.attempt,

@@ -6,12 +6,12 @@ use sail_telemetry::common::{SpanAssociation, SpanAttribute};
 use tokio::sync::oneshot;
 
 use crate::driver::TaskStatus;
-use crate::error::ExecutionResult;
-use crate::id::{JobId, TaskId, WorkerId};
+use crate::error::{ExecutionError, ExecutionResult};
+use crate::id::{TaskInstance, WorkerId};
 use crate::stream::channel::ChannelName;
 use crate::stream::reader::TaskStreamSource;
 use crate::stream::writer::{LocalStreamStorage, TaskStreamSink};
-use crate::worker::WorkerLocation;
+use crate::worker::gen;
 
 pub enum WorkerEvent {
     ServerReady {
@@ -22,23 +22,17 @@ pub enum WorkerEvent {
     },
     StartHeartbeat,
     RunTask {
-        job_id: JobId,
-        task_id: TaskId,
-        attempt: usize,
+        instance: TaskInstance,
         plan: Vec<u8>,
         partition: usize,
         channel: Option<ChannelName>,
         peers: Vec<WorkerLocation>,
     },
     StopTask {
-        job_id: JobId,
-        task_id: TaskId,
-        attempt: usize,
+        instance: TaskInstance,
     },
     ReportTaskStatus {
-        job_id: JobId,
-        task_id: TaskId,
-        attempt: usize,
+        instance: TaskInstance,
         status: TaskStatus,
         message: Option<String>,
         cause: Option<CommonErrorCause>,
@@ -102,9 +96,12 @@ impl SpanAssociation for WorkerEvent {
             }
             WorkerEvent::StartHeartbeat => {}
             WorkerEvent::RunTask {
-                job_id,
-                task_id,
-                attempt,
+                instance:
+                    TaskInstance {
+                        job_id,
+                        task_id,
+                        attempt,
+                    },
                 plan: _,
                 partition,
                 channel,
@@ -119,18 +116,24 @@ impl SpanAssociation for WorkerEvent {
                 }
             }
             WorkerEvent::StopTask {
-                job_id,
-                task_id,
-                attempt,
+                instance:
+                    TaskInstance {
+                        job_id,
+                        task_id,
+                        attempt,
+                    },
             } => {
                 p.push((SpanAttribute::CLUSTER_JOB_ID, job_id.to_string()));
                 p.push((SpanAttribute::CLUSTER_TASK_ID, task_id.to_string()));
                 p.push((SpanAttribute::CLUSTER_TASK_ATTEMPT, attempt.to_string()));
             }
             WorkerEvent::ReportTaskStatus {
-                job_id,
-                task_id,
-                attempt,
+                instance:
+                    TaskInstance {
+                        job_id,
+                        task_id,
+                        attempt,
+                    },
                 status,
                 message,
                 cause,
@@ -196,5 +199,36 @@ impl SpanAssociation for WorkerEvent {
             WorkerEvent::Shutdown => {}
         }
         p.into_iter().map(|(k, v)| (k.into(), v.into()))
+    }
+}
+
+pub struct WorkerLocation {
+    pub worker_id: WorkerId,
+    pub host: String,
+    pub port: u16,
+}
+
+impl From<WorkerLocation> for gen::WorkerLocation {
+    fn from(value: WorkerLocation) -> Self {
+        Self {
+            worker_id: value.worker_id.into(),
+            host: value.host,
+            port: value.port as u32,
+        }
+    }
+}
+
+impl TryFrom<gen::WorkerLocation> for WorkerLocation {
+    type Error = ExecutionError;
+
+    fn try_from(value: gen::WorkerLocation) -> Result<Self, Self::Error> {
+        let port = u16::try_from(value.port).map_err(|_| {
+            ExecutionError::InvalidArgument(format!("invalid port: {}", value.port))
+        })?;
+        Ok(Self {
+            worker_id: value.worker_id.into(),
+            host: value.host,
+            port,
+        })
     }
 }

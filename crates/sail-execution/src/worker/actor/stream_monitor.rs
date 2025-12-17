@@ -8,16 +8,14 @@ use sail_server::actor::ActorHandle;
 use tokio::sync::oneshot;
 
 use crate::driver::TaskStatus;
-use crate::id::{JobId, TaskId};
+use crate::id::TaskInstance;
 use crate::stream::error::TaskStreamError;
 use crate::stream::writer::TaskStreamSink;
 use crate::worker::{WorkerActor, WorkerEvent};
 
 pub(super) struct TaskStreamMonitor {
     handle: ActorHandle<WorkerActor>,
-    job_id: JobId,
-    task_id: TaskId,
-    attempt: usize,
+    instance: TaskInstance,
     stream: SendableRecordBatchStream,
     sink: Option<Box<dyn TaskStreamSink>>,
     signal: oneshot::Receiver<()>,
@@ -26,18 +24,14 @@ pub(super) struct TaskStreamMonitor {
 impl TaskStreamMonitor {
     pub fn new(
         handle: ActorHandle<WorkerActor>,
-        job_id: JobId,
-        task_id: TaskId,
-        attempt: usize,
+        instance: TaskInstance,
         stream: SendableRecordBatchStream,
         sink: Option<Box<dyn TaskStreamSink>>,
         signal: oneshot::Receiver<()>,
     ) -> Self {
         Self {
             handle,
-            job_id,
-            task_id,
-            attempt,
+            instance,
             stream,
             sink,
             signal,
@@ -47,63 +41,51 @@ impl TaskStreamMonitor {
     pub async fn run(self) {
         let Self {
             handle,
-            job_id,
-            task_id,
-            attempt,
+            instance,
             stream,
             sink,
             signal,
         } = self;
-        let event = Self::running(job_id, task_id, attempt);
+        let event = Self::running(instance.clone());
         let _ = handle.send(event).await;
         let event = tokio::select! {
-            x = Self::execute(job_id, task_id, attempt, stream, sink) => x,
-            x = Self::cancel(job_id, task_id, attempt, signal) => x,
+            x = Self::execute(instance.clone(), stream, sink) => x,
+            x = Self::cancel(instance.clone(), signal) => x,
         };
         let _ = handle.send(event).await;
     }
 
-    fn running(job_id: JobId, task_id: TaskId, attempt: usize) -> WorkerEvent {
+    fn running(instance: TaskInstance) -> WorkerEvent {
         WorkerEvent::ReportTaskStatus {
-            job_id,
-            task_id,
-            attempt,
+            instance,
             status: TaskStatus::Running,
             message: None,
             cause: None,
         }
     }
 
-    async fn cancel(
-        job_id: JobId,
-        task_id: TaskId,
-        attempt: usize,
-        signal: oneshot::Receiver<()>,
-    ) -> WorkerEvent {
+    async fn cancel(instance: TaskInstance, signal: oneshot::Receiver<()>) -> WorkerEvent {
         let _ = signal.await;
         WorkerEvent::ReportTaskStatus {
-            job_id,
-            task_id,
-            attempt,
+            instance: instance.clone(),
             status: TaskStatus::Canceled,
-            message: Some(format!("task {task_id} attempt {attempt} canceled")),
+            message: Some(format!(
+                "job {} task {} attempt {} canceled",
+                instance.job_id, instance.task_id, instance.attempt
+            )),
             cause: None,
         }
     }
 
     async fn execute(
-        job_id: JobId,
-        task_id: TaskId,
-        attempt: usize,
+        instance: TaskInstance,
         mut stream: SendableRecordBatchStream,
         mut sink: Option<Box<dyn TaskStreamSink>>,
     ) -> WorkerEvent {
         let event = loop {
             let Some(batch) = stream.next().await else {
                 break WorkerEvent::ReportTaskStatus {
-                    job_id,
-                    task_id,
-                    attempt,
+                    instance: instance.clone(),
                     status: TaskStatus::Succeeded,
                     message: None,
                     cause: None,
@@ -122,9 +104,7 @@ impl TaskStreamMonitor {
                     .await
                 {
                     break WorkerEvent::ReportTaskStatus {
-                        job_id,
-                        task_id,
-                        attempt,
+                        instance: instance.clone(),
                         status: TaskStatus::Failed,
                         message: Some(format!("failed to send batch: {e}")),
                         cause: None,
@@ -133,9 +113,7 @@ impl TaskStreamMonitor {
             }
             if let Some((message, cause)) = error {
                 break WorkerEvent::ReportTaskStatus {
-                    job_id,
-                    task_id,
-                    attempt,
+                    instance: instance.clone(),
                     status: TaskStatus::Failed,
                     message: Some(message),
                     cause: Some(cause),
@@ -145,9 +123,7 @@ impl TaskStreamMonitor {
         if let Some(sink) = sink {
             if let Err(e) = sink.close() {
                 return WorkerEvent::ReportTaskStatus {
-                    job_id,
-                    task_id,
-                    attempt,
+                    instance: instance.clone(),
                     status: TaskStatus::Failed,
                     message: Some(format!("failed to close writer: {e}")),
                     cause: None,

@@ -86,7 +86,7 @@ where
 }
 
 #[derive(Clone, Eq, Hash, PartialEq)]
-pub struct TaskAttempt {
+pub struct TaskInstance {
     pub job_id: JobId,
     pub task_id: TaskId,
     pub attempt: usize,
