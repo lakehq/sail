@@ -403,7 +403,7 @@ def _normalize_delta_commit_info_for_snapshot(commit_info: dict) -> dict:
     if isinstance(op_metrics, dict):
         scrubbed = dict(op_metrics)
         for k in list(scrubbed.keys()):
-            if k.endswith("TimeMs") or k.endswith("DurationMs") or k.endswith("timeMs"):
+            if k.endswith(("TimeMs", "DurationMs", "timeMs")):
                 scrubbed[k] = "<time_ms>"
         normalized["operationMetrics"] = scrubbed
 
