@@ -22,10 +22,13 @@ use datafusion::physical_plan::ExecutionPlan;
 use sail_common_datafusion::datasource::PhysicalSinkMode;
 
 use super::context::PlannerContext;
-use super::utils::{align_schemas_for_union, build_standard_write_layers};
+use super::utils::{
+    adapt_predicate_to_schema, align_schemas_for_union, build_standard_write_layers,
+    build_touched_file_plan,
+};
 use crate::datasource::schema::DataFusionMixins;
 use crate::physical_plan::{
-    create_projection, create_repartition, create_sort, DeltaCommitExec, DeltaFindFilesExec,
+    create_projection, create_repartition, create_sort, DeltaCommitExec, DeltaFileLookupExec,
     DeltaRemoveActionsExec, DeltaScanByAddsExec, DeltaWriterExec,
 };
 
@@ -70,8 +73,15 @@ async fn build_overwrite_if_plan(
         .arrow_schema()
         .map_err(|e| DataFusionError::External(Box::new(e)))?;
 
-    let old_data_plan =
-        build_old_data_plan(ctx, condition.clone(), version, table_schema.clone()).await?;
+    let old_data_plan = build_old_data_plan(
+        ctx,
+        condition.clone(),
+        version,
+        table_schema.clone(),
+        &snapshot_state,
+        table.log_store(),
+    )
+    .await?;
 
     let new_plan = create_projection(Arc::clone(&input), ctx.partition_columns().to_vec())
         .and_then(|plan| create_repartition(plan, ctx.partition_columns().to_vec()))
@@ -95,13 +105,14 @@ async fn build_overwrite_if_plan(
         None,
     ));
 
-    let find_files_plan: Arc<dyn ExecutionPlan> = Arc::new(DeltaFindFilesExec::new(
+    let touched_files =
+        build_touched_file_plan(ctx, &snapshot_state, table.log_store(), condition.clone()).await?;
+    let lookup_plan: Arc<dyn ExecutionPlan> = Arc::new(DeltaFileLookupExec::new(
+        touched_files,
         ctx.table_url().clone(),
-        Some(condition.clone()),
-        ctx.table_schema_for_cond(),
         version,
     ));
-    let remove_plan = Arc::new(DeltaRemoveActionsExec::new(find_files_plan));
+    let remove_plan = Arc::new(DeltaRemoveActionsExec::new(lookup_plan));
 
     let union_actions = UnionExec::try_new(vec![writer, remove_plan])?;
 
@@ -120,21 +131,27 @@ async fn build_old_data_plan(
     condition: Arc<dyn PhysicalExpr>,
     version: i64,
     table_schema: SchemaRef,
+    snapshot_state: &crate::table::DeltaTableState,
+    log_store: crate::storage::LogStoreRef,
 ) -> Result<Arc<dyn ExecutionPlan>> {
-    let find_files_exec: Arc<dyn ExecutionPlan> = Arc::new(DeltaFindFilesExec::new(
+    let touched_files =
+        build_touched_file_plan(ctx, snapshot_state, log_store, condition.clone()).await?;
+    let lookup_plan: Arc<dyn ExecutionPlan> = Arc::new(DeltaFileLookupExec::new(
+        touched_files,
         ctx.table_url().clone(),
-        Some(condition.clone()),
-        Some(table_schema.clone()),
         version,
     ));
 
     let scan_exec = Arc::new(DeltaScanByAddsExec::new(
-        Arc::clone(&find_files_exec),
+        Arc::clone(&lookup_plan),
         ctx.table_url().clone(),
-        table_schema,
+        table_schema.clone(),
     ));
 
-    let negated_condition = Arc::new(NotExpr::new(condition));
+    // Rewrite predicate against the actual scan output schema so `Column` indices line up.
+    let adapted_condition = adapt_predicate_to_schema(table_schema, scan_exec.schema(), condition)?;
+
+    let negated_condition = Arc::new(NotExpr::new(adapted_condition));
     let filter_exec = Arc::new(FilterExec::try_new(negated_condition, scan_exec)?);
 
     Ok(filter_exec)

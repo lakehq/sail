@@ -22,10 +22,11 @@ use datafusion::physical_plan::ExecutionPlan;
 use sail_common_datafusion::datasource::PhysicalSinkMode;
 
 use super::context::PlannerContext;
+use super::utils::{adapt_predicate_to_schema, build_touched_file_plan};
 use crate::datasource::schema::DataFusionMixins;
 use crate::kernel::DeltaOperation;
 use crate::physical_plan::{
-    DeltaCommitExec, DeltaFindFilesExec, DeltaRemoveActionsExec, DeltaScanByAddsExec,
+    DeltaCommitExec, DeltaFileLookupExec, DeltaRemoveActionsExec, DeltaScanByAddsExec,
     DeltaWriterExec,
 };
 
@@ -45,20 +46,27 @@ pub async fn build_delete_plan(
         .map_err(|e| DataFusionError::External(Box::new(e)))?;
     let partition_columns = snapshot_state.metadata().partition_columns().clone();
 
-    let find_files_exec: Arc<dyn ExecutionPlan> = Arc::new(DeltaFindFilesExec::new(
+    let touched_files =
+        build_touched_file_plan(ctx, snapshot_state, table.log_store(), condition.clone()).await?;
+
+    // Convert path stream -> Add(JSON) stream (visible in EXPLAIN as a separate node).
+    let lookup_plan: Arc<dyn ExecutionPlan> = Arc::new(DeltaFileLookupExec::new(
+        touched_files,
         ctx.table_url().clone(),
-        Some(condition.clone()),
-        Some(table_schema.clone()),
         version,
     ));
 
     let scan_exec = Arc::new(DeltaScanByAddsExec::new(
-        Arc::clone(&find_files_exec),
+        Arc::clone(&lookup_plan),
         ctx.table_url().clone(),
         table_schema.clone(),
     ));
 
-    let negated_condition = Arc::new(NotExpr::new(condition.clone()));
+    // Rewrite the predicate against the actual scan schema so `Column` indices line up.
+    let adapted_condition =
+        adapt_predicate_to_schema(table_schema.clone(), scan_exec.schema(), condition.clone())?;
+
+    let negated_condition = Arc::new(NotExpr::new(adapted_condition));
     let filter_exec = Arc::new(FilterExec::try_new(negated_condition, scan_exec)?);
 
     let operation_override = Some(DeltaOperation::Delete {
@@ -76,7 +84,7 @@ pub async fn build_delete_plan(
         operation_override,
     ));
 
-    let remove_exec = Arc::new(DeltaRemoveActionsExec::new(find_files_exec));
+    let remove_exec = Arc::new(DeltaRemoveActionsExec::new(lookup_plan));
     let union_exec = UnionExec::try_new(vec![writer_exec, remove_exec])?;
 
     Ok(Arc::new(DeltaCommitExec::new(

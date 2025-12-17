@@ -169,6 +169,14 @@ Feature: Delta Lake Delete
         | 7  | Grace | 2024 | 2     | 700   |
         | 8  | Henry | 2024 | 2     | 800   |
 
+    Scenario: EXPLAIN CODEGEN includes delta rewrite artifacts for partition column DELETE
+      When query
+        """
+        EXPLAIN CODEGEN
+        DELETE FROM delta_delete_partitioned WHERE year = 2023
+        """
+      Then query plan matches snapshot
+
   Rule: Operations with string comparisons
     Background:
       Given variable location for temporary directory x

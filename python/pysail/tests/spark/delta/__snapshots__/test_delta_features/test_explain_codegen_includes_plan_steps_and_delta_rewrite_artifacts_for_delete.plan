@@ -96,11 +96,19 @@ DeltaCommitExec(table_path=file://<tmp>/delete_explain_codegen/)
             FilterExec: NOT salary@4 + 1 > 70000 AND (department@3 = Engineering OR department@3 = Marketing) AND active@5 IS NOT NULL
               RepartitionExec: partitioning=RoundRobinBatch(<partitions>), input_partitions=<partitions>
                 DeltaScanByAddsExec(table_path=file://<tmp>/delete_explain_codegen/)
-                  CooperativeExec
-                    DeltaFindFilesExec(table_path=file://<tmp>/delete_explain_codegen/, predicate=salary@4 + 1 > 70000 AND (department@3 = Engineering OR department@3 = Marketing) AND active@5 IS NOT NULL)
+                  DeltaFileLookupExec(table_url=file:<tmp>/delete_explain_codegen/, version=0)
+                    CoalescePartitionsExec
+                      CoalesceBatchesExec: target_batch_size=8192
+                        FilterExec: salary@1 + 1 > 70000 AND (department@0 = Engineering OR department@0 = Marketing) AND active@2 IS NOT NULL, projection=[__sail_file_path@3]
+                          RepartitionExec: partitioning=RoundRobinBatch(<partitions>), input_partitions=<partitions>
+                            DataSourceExec: file_groups={1 group: [[<tmp>/delete_explain_codegen/part-<id>.snappy.parquet]]}, projection=[department, salary, active, __sail_file_path], file_type=parquet, predicate=salary@1 + 1 > 70000 AND (department@0 = Engineering OR department@0 = Marketing) AND active@2 IS NOT NULL, pruning_predicate=(department_null_count@2 != row_count@3 AND department_min@0 <= Engineering AND Engineering <= department_max@1 OR department_null_count@2 != row_count@3 AND department_min@0 <= Marketing AND Marketing <= department_max@1) AND active_null_count@4 != row_count@3, required_guarantees=[department in (Engineering, Marketing)]
       DeltaRemoveActionsExec
-        CooperativeExec
-          DeltaFindFilesExec(table_path=file://<tmp>/delete_explain_codegen/, predicate=salary@4 + 1 > 70000 AND (department@3 = Engineering OR department@3 = Marketing) AND active@5 IS NOT NULL)
+        DeltaFileLookupExec(table_url=file:<tmp>/delete_explain_codegen/, version=0)
+          CoalescePartitionsExec
+            CoalesceBatchesExec: target_batch_size=8192
+              FilterExec: salary@1 + 1 > 70000 AND (department@0 = Engineering OR department@0 = Marketing) AND active@2 IS NOT NULL, projection=[__sail_file_path@3]
+                RepartitionExec: partitioning=RoundRobinBatch(<partitions>), input_partitions=<partitions>
+                  DataSourceExec: file_groups={1 group: [[<tmp>/delete_explain_codegen/part-<id>.snappy.parquet]]}, projection=[department, salary, active, __sail_file_path], file_type=parquet, predicate=salary@1 + 1 > 70000 AND (department@0 = Engineering OR department@0 = Marketing) AND active@2 IS NOT NULL, pruning_predicate=(department_null_count@2 != row_count@3 AND department_min@0 <= Engineering AND Engineering <= department_max@1 OR department_null_count@2 != row_count@3 AND department_min@0 <= Marketing AND Marketing <= department_max@1) AND active_null_count@4 != row_count@3, required_guarantees=[department in (Engineering, Marketing)]
 
 
 initial_physical_plan_with_stats:
@@ -113,11 +121,19 @@ DeltaCommitExec(table_path=file://<tmp>/delete_explain_codegen/), statistics=[Ro
             FilterExec: NOT salary@4 + 1 > 70000 AND (department@3 = Engineering OR department@3 = Marketing) AND active@5 IS NOT NULL, statistics=[Rows=Absent, Bytes=Absent, [(Col[0]:),(Col[1]:),(Col[2]:),(Col[3]:),(Col[4]:),(Col[5]:)]]
               RepartitionExec: partitioning=RoundRobinBatch(<partitions>), input_partitions=<partitions>, statistics=[Rows=Absent, Bytes=Absent, [(Col[0]:),(Col[1]:),(Col[2]:),(Col[3]:),(Col[4]:),(Col[5]:)]]
                 DeltaScanByAddsExec(table_path=file://<tmp>/delete_explain_codegen/), statistics=[Rows=Absent, Bytes=Absent, [(Col[0]:),(Col[1]:),(Col[2]:),(Col[3]:),(Col[4]:),(Col[5]:)]]
-                  CooperativeExec, statistics=[Rows=Absent, Bytes=Absent, [(Col[0]:),(Col[1]:)]]
-                    DeltaFindFilesExec(table_path=file://<tmp>/delete_explain_codegen/, predicate=salary@4 + 1 > 70000 AND (department@3 = Engineering OR department@3 = Marketing) AND active@5 IS NOT NULL), statistics=[Rows=Absent, Bytes=Absent, [(Col[0]:),(Col[1]:)]]
+                  DeltaFileLookupExec(table_url=file:<tmp>/delete_explain_codegen/, version=0), statistics=[Rows=Absent, Bytes=Absent, [(Col[0]:),(Col[1]:)]]
+                    CoalescePartitionsExec, statistics=[Rows=Inexact(2), Bytes=Inexact(<bytes>), [(Col[0]:)]]
+                      CoalesceBatchesExec: target_batch_size=8192, statistics=[Rows=Inexact(2), Bytes=Inexact(<bytes>), [(Col[0]:)]]
+                        FilterExec: salary@1 + 1 > 70000 AND (department@0 = Engineering OR department@0 = Marketing) AND active@2 IS NOT NULL, projection=[__sail_file_path@3], statistics=[Rows=Inexact(2), Bytes=Inexact(<bytes>), [(Col[0]:)]]
+                          RepartitionExec: partitioning=RoundRobinBatch(<partitions>), input_partitions=<partitions>, statistics=[Rows=Inexact(8), Bytes=Inexact(<bytes>), [(Col[0]:),(Col[1]: Min=Inexact(Int32(50000)) Max=Inexact(Int32(95000))),(Col[2]:),(Col[3]:)]]
+                            DataSourceExec: file_groups={1 group: [[<tmp>/delete_explain_codegen/part-<id>.snappy.parquet]]}, projection=[department, salary, active, __sail_file_path], file_type=parquet, predicate=salary@1 + 1 > 70000 AND (department@0 = Engineering OR department@0 = Marketing) AND active@2 IS NOT NULL, pruning_predicate=(department_null_count@2 != row_count@3 AND department_min@0 <= Engineering AND Engineering <= department_max@1 OR department_null_count@2 != row_count@3 AND department_min@0 <= Marketing AND Marketing <= department_max@1) AND active_null_count@4 != row_count@3, required_guarantees=[department in (Engineering, Marketing)], statistics=[Rows=Inexact(8), Bytes=Inexact(<bytes>), [(Col[0]:),(Col[1]: Min=Inexact(Int32(50000)) Max=Inexact(Int32(95000))),(Col[2]:),(Col[3]:)]]
       DeltaRemoveActionsExec, statistics=[Rows=Absent, Bytes=Absent, [(Col[0]:)]]
-        CooperativeExec, statistics=[Rows=Absent, Bytes=Absent, [(Col[0]:),(Col[1]:)]]
-          DeltaFindFilesExec(table_path=file://<tmp>/delete_explain_codegen/, predicate=salary@4 + 1 > 70000 AND (department@3 = Engineering OR department@3 = Marketing) AND active@5 IS NOT NULL), statistics=[Rows=Absent, Bytes=Absent, [(Col[0]:),(Col[1]:)]]
+        DeltaFileLookupExec(table_url=file:<tmp>/delete_explain_codegen/, version=0), statistics=[Rows=Absent, Bytes=Absent, [(Col[0]:),(Col[1]:)]]
+          CoalescePartitionsExec, statistics=[Rows=Inexact(2), Bytes=Inexact(<bytes>), [(Col[0]:)]]
+            CoalesceBatchesExec: target_batch_size=8192, statistics=[Rows=Inexact(2), Bytes=Inexact(<bytes>), [(Col[0]:)]]
+              FilterExec: salary@1 + 1 > 70000 AND (department@0 = Engineering OR department@0 = Marketing) AND active@2 IS NOT NULL, projection=[__sail_file_path@3], statistics=[Rows=Inexact(2), Bytes=Inexact(<bytes>), [(Col[0]:)]]
+                RepartitionExec: partitioning=RoundRobinBatch(<partitions>), input_partitions=<partitions>, statistics=[Rows=Inexact(8), Bytes=Inexact(<bytes>), [(Col[0]:),(Col[1]: Min=Inexact(Int32(50000)) Max=Inexact(Int32(95000))),(Col[2]:),(Col[3]:)]]
+                  DataSourceExec: file_groups={1 group: [[<tmp>/delete_explain_codegen/part-<id>.snappy.parquet]]}, projection=[department, salary, active, __sail_file_path], file_type=parquet, predicate=salary@1 + 1 > 70000 AND (department@0 = Engineering OR department@0 = Marketing) AND active@2 IS NOT NULL, pruning_predicate=(department_null_count@2 != row_count@3 AND department_min@0 <= Engineering AND Engineering <= department_max@1 OR department_null_count@2 != row_count@3 AND department_min@0 <= Marketing AND Marketing <= department_max@1) AND active_null_count@4 != row_count@3, required_guarantees=[department in (Engineering, Marketing)], statistics=[Rows=Inexact(8), Bytes=Inexact(<bytes>), [(Col[0]:),(Col[1]: Min=Inexact(Int32(50000)) Max=Inexact(Int32(95000))),(Col[2]:),(Col[3]:)]]
 
 
 initial_physical_plan_with_schema:
@@ -130,11 +146,19 @@ DeltaCommitExec(table_path=file://<tmp>/delete_explain_codegen/), schema=[count:
             FilterExec: NOT salary@4 + 1 > 70000 AND (department@3 = Engineering OR department@3 = Marketing) AND active@5 IS NOT NULL, schema=[id:Int32;N, name:Utf8;N, age:Int32;N, department:Utf8;N, salary:Int32;N, active:Boolean;N]
               RepartitionExec: partitioning=RoundRobinBatch(<partitions>), input_partitions=<partitions>, schema=[id:Int32;N, name:Utf8;N, age:Int32;N, department:Utf8;N, salary:Int32;N, active:Boolean;N]
                 DeltaScanByAddsExec(table_path=file://<tmp>/delete_explain_codegen/), schema=[id:Int32;N, name:Utf8;N, age:Int32;N, department:Utf8;N, salary:Int32;N, active:Boolean;N]
-                  CooperativeExec, schema=[add:Utf8, partition_scan:Boolean]
-                    DeltaFindFilesExec(table_path=file://<tmp>/delete_explain_codegen/, predicate=salary@4 + 1 > 70000 AND (department@3 = Engineering OR department@3 = Marketing) AND active@5 IS NOT NULL), schema=[add:Utf8, partition_scan:Boolean]
+                  DeltaFileLookupExec(table_url=file:<tmp>/delete_explain_codegen/, version=0), schema=[add:Utf8;N, partition_scan:Boolean]
+                    CoalescePartitionsExec, schema=[__sail_file_path:Dictionary(UInt16, Utf8);N]
+                      CoalesceBatchesExec: target_batch_size=8192, schema=[__sail_file_path:Dictionary(UInt16, Utf8);N]
+                        FilterExec: salary@1 + 1 > 70000 AND (department@0 = Engineering OR department@0 = Marketing) AND active@2 IS NOT NULL, projection=[__sail_file_path@3], schema=[__sail_file_path:Dictionary(UInt16, Utf8);N]
+                          RepartitionExec: partitioning=RoundRobinBatch(<partitions>), input_partitions=<partitions>, schema=[department:Utf8;N, salary:Int32;N, active:Boolean;N, __sail_file_path:Dictionary(UInt16, Utf8);N]
+                            DataSourceExec: file_groups={1 group: [[<tmp>/delete_explain_codegen/part-<id>.snappy.parquet]]}, projection=[department, salary, active, __sail_file_path], file_type=parquet, predicate=salary@1 + 1 > 70000 AND (department@0 = Engineering OR department@0 = Marketing) AND active@2 IS NOT NULL, pruning_predicate=(department_null_count@2 != row_count@3 AND department_min@0 <= Engineering AND Engineering <= department_max@1 OR department_null_count@2 != row_count@3 AND department_min@0 <= Marketing AND Marketing <= department_max@1) AND active_null_count@4 != row_count@3, required_guarantees=[department in (Engineering, Marketing)], schema=[department:Utf8;N, salary:Int32;N, active:Boolean;N, __sail_file_path:Dictionary(UInt16, Utf8);N]
       DeltaRemoveActionsExec, schema=[data:Utf8;N]
-        CooperativeExec, schema=[add:Utf8, partition_scan:Boolean]
-          DeltaFindFilesExec(table_path=file://<tmp>/delete_explain_codegen/, predicate=salary@4 + 1 > 70000 AND (department@3 = Engineering OR department@3 = Marketing) AND active@5 IS NOT NULL), schema=[add:Utf8, partition_scan:Boolean]
+        DeltaFileLookupExec(table_url=file:<tmp>/delete_explain_codegen/, version=0), schema=[add:Utf8;N, partition_scan:Boolean]
+          CoalescePartitionsExec, schema=[__sail_file_path:Dictionary(UInt16, Utf8);N]
+            CoalesceBatchesExec: target_batch_size=8192, schema=[__sail_file_path:Dictionary(UInt16, Utf8);N]
+              FilterExec: salary@1 + 1 > 70000 AND (department@0 = Engineering OR department@0 = Marketing) AND active@2 IS NOT NULL, projection=[__sail_file_path@3], schema=[__sail_file_path:Dictionary(UInt16, Utf8);N]
+                RepartitionExec: partitioning=RoundRobinBatch(<partitions>), input_partitions=<partitions>, schema=[department:Utf8;N, salary:Int32;N, active:Boolean;N, __sail_file_path:Dictionary(UInt16, Utf8);N]
+                  DataSourceExec: file_groups={1 group: [[<tmp>/delete_explain_codegen/part-<id>.snappy.parquet]]}, projection=[department, salary, active, __sail_file_path], file_type=parquet, predicate=salary@1 + 1 > 70000 AND (department@0 = Engineering OR department@0 = Marketing) AND active@2 IS NOT NULL, pruning_predicate=(department_null_count@2 != row_count@3 AND department_min@0 <= Engineering AND Engineering <= department_max@1 OR department_null_count@2 != row_count@3 AND department_min@0 <= Marketing AND Marketing <= department_max@1) AND active_null_count@4 != row_count@3, required_guarantees=[department in (Engineering, Marketing)], schema=[department:Utf8;N, salary:Int32;N, active:Boolean;N, __sail_file_path:Dictionary(UInt16, Utf8);N]
 
 
 physical_plan after OutputRequirements:
@@ -148,11 +172,19 @@ OutputRequirementExec: order_by=[], dist_by=Unspecified
               FilterExec: NOT salary@4 + 1 > 70000 AND (department@3 = Engineering OR department@3 = Marketing) AND active@5 IS NOT NULL
                 RepartitionExec: partitioning=RoundRobinBatch(<partitions>), input_partitions=<partitions>
                   DeltaScanByAddsExec(table_path=file://<tmp>/delete_explain_codegen/)
-                    CooperativeExec
-                      DeltaFindFilesExec(table_path=file://<tmp>/delete_explain_codegen/, predicate=salary@4 + 1 > 70000 AND (department@3 = Engineering OR department@3 = Marketing) AND active@5 IS NOT NULL)
+                    DeltaFileLookupExec(table_url=file:<tmp>/delete_explain_codegen/, version=0)
+                      CoalescePartitionsExec
+                        CoalesceBatchesExec: target_batch_size=8192
+                          FilterExec: salary@1 + 1 > 70000 AND (department@0 = Engineering OR department@0 = Marketing) AND active@2 IS NOT NULL, projection=[__sail_file_path@3]
+                            RepartitionExec: partitioning=RoundRobinBatch(<partitions>), input_partitions=<partitions>
+                              DataSourceExec: file_groups={1 group: [[<tmp>/delete_explain_codegen/part-<id>.snappy.parquet]]}, projection=[department, salary, active, __sail_file_path], file_type=parquet, predicate=salary@1 + 1 > 70000 AND (department@0 = Engineering OR department@0 = Marketing) AND active@2 IS NOT NULL, pruning_predicate=(department_null_count@2 != row_count@3 AND department_min@0 <= Engineering AND Engineering <= department_max@1 OR department_null_count@2 != row_count@3 AND department_min@0 <= Marketing AND Marketing <= department_max@1) AND active_null_count@4 != row_count@3, required_guarantees=[department in (Engineering, Marketing)]
         DeltaRemoveActionsExec
-          CooperativeExec
-            DeltaFindFilesExec(table_path=file://<tmp>/delete_explain_codegen/, predicate=salary@4 + 1 > 70000 AND (department@3 = Engineering OR department@3 = Marketing) AND active@5 IS NOT NULL)
+          DeltaFileLookupExec(table_url=file:<tmp>/delete_explain_codegen/, version=0)
+            CoalescePartitionsExec
+              CoalesceBatchesExec: target_batch_size=8192
+                FilterExec: salary@1 + 1 > 70000 AND (department@0 = Engineering OR department@0 = Marketing) AND active@2 IS NOT NULL, projection=[__sail_file_path@3]
+                  RepartitionExec: partitioning=RoundRobinBatch(<partitions>), input_partitions=<partitions>
+                    DataSourceExec: file_groups={1 group: [[<tmp>/delete_explain_codegen/part-<id>.snappy.parquet]]}, projection=[department, salary, active, __sail_file_path], file_type=parquet, predicate=salary@1 + 1 > 70000 AND (department@0 = Engineering OR department@0 = Marketing) AND active@2 IS NOT NULL, pruning_predicate=(department_null_count@2 != row_count@3 AND department_min@0 <= Engineering AND Engineering <= department_max@1 OR department_null_count@2 != row_count@3 AND department_min@0 <= Marketing AND Marketing <= department_max@1) AND active_null_count@4 != row_count@3, required_guarantees=[department in (Engineering, Marketing)]
 
 
 physical_plan after aggregate_statistics:
@@ -165,9 +197,6 @@ physical_plan after LimitedDistinctAggregation:
 SAME TEXT AS ABOVE
 
 physical_plan after FilterPushdown:
-SAME TEXT AS ABOVE
-
-physical_plan after EnforceDistribution:
 OutputRequirementExec: order_by=[], dist_by=Unspecified
   DeltaCommitExec(table_path=file://<tmp>/delete_explain_codegen/)
     CoalescePartitionsExec
@@ -178,16 +207,23 @@ OutputRequirementExec: order_by=[], dist_by=Unspecified
               FilterExec: NOT salary@4 + 1 > 70000 AND (department@3 = Engineering OR department@3 = Marketing) AND active@5 IS NOT NULL
                 RepartitionExec: partitioning=RoundRobinBatch(<partitions>), input_partitions=<partitions>
                   DeltaScanByAddsExec(table_path=file://<tmp>/delete_explain_codegen/)
-                    CoalescePartitionsExec
-                      CooperativeExec
-                        RepartitionExec: partitioning=RoundRobinBatch(<partitions>), input_partitions=<partitions>
-                          DeltaFindFilesExec(table_path=file://<tmp>/delete_explain_codegen/, predicate=salary@4 + 1 > 70000 AND (department@3 = Engineering OR department@3 = Marketing) AND active@5 IS NOT NULL)
+                    DeltaFileLookupExec(table_url=file:<tmp>/delete_explain_codegen/, version=0)
+                      CoalescePartitionsExec
+                        CoalesceBatchesExec: target_batch_size=8192
+                          FilterExec: salary@1 + 1 > 70000 AND (department@0 = Engineering OR department@0 = Marketing) AND active@2 IS NOT NULL, projection=[__sail_file_path@3]
+                            RepartitionExec: partitioning=RoundRobinBatch(<partitions>), input_partitions=<partitions>
+                              DataSourceExec: file_groups={1 group: [[<tmp>/delete_explain_codegen/part-<id>.snappy.parquet]]}, projection=[department, salary, active, __sail_file_path], file_type=parquet, predicate=salary@1 + 1 > 70000 AND (department@0 = Engineering OR department@0 = Marketing) AND active@2 IS NOT NULL AND salary@1 + 1 > 70000 AND (department@0 = Engineering OR department@0 = Marketing) AND active@2 IS NOT NULL, pruning_predicate=(department_null_count@2 != row_count@3 AND department_min@0 <= Engineering AND Engineering <= department_max@1 OR department_null_count@2 != row_count@3 AND department_min@0 <= Marketing AND Marketing <= department_max@1) AND active_null_count@4 != row_count@3 AND (department_null_count@2 != row_count@3 AND department_min@0 <= Engineering AND Engineering <= department_max@1 OR department_null_count@2 != row_count@3 AND department_min@0 <= Marketing AND Marketing <= department_max@1) AND active_null_count@4 != row_count@3, required_guarantees=[department in (Engineering, Marketing)]
         DeltaRemoveActionsExec
-          CoalescePartitionsExec
-            CooperativeExec
-              RepartitionExec: partitioning=RoundRobinBatch(<partitions>), input_partitions=<partitions>
-                DeltaFindFilesExec(table_path=file://<tmp>/delete_explain_codegen/, predicate=salary@4 + 1 > 70000 AND (department@3 = Engineering OR department@3 = Marketing) AND active@5 IS NOT NULL)
+          DeltaFileLookupExec(table_url=file:<tmp>/delete_explain_codegen/, version=0)
+            CoalescePartitionsExec
+              CoalesceBatchesExec: target_batch_size=8192
+                FilterExec: salary@1 + 1 > 70000 AND (department@0 = Engineering OR department@0 = Marketing) AND active@2 IS NOT NULL, projection=[__sail_file_path@3]
+                  RepartitionExec: partitioning=RoundRobinBatch(<partitions>), input_partitions=<partitions>
+                    DataSourceExec: file_groups={1 group: [[<tmp>/delete_explain_codegen/part-<id>.snappy.parquet]]}, projection=[department, salary, active, __sail_file_path], file_type=parquet, predicate=salary@1 + 1 > 70000 AND (department@0 = Engineering OR department@0 = Marketing) AND active@2 IS NOT NULL AND salary@1 + 1 > 70000 AND (department@0 = Engineering OR department@0 = Marketing) AND active@2 IS NOT NULL, pruning_predicate=(department_null_count@2 != row_count@3 AND department_min@0 <= Engineering AND Engineering <= department_max@1 OR department_null_count@2 != row_count@3 AND department_min@0 <= Marketing AND Marketing <= department_max@1) AND active_null_count@4 != row_count@3 AND (department_null_count@2 != row_count@3 AND department_min@0 <= Engineering AND Engineering <= department_max@1 OR department_null_count@2 != row_count@3 AND department_min@0 <= Marketing AND Marketing <= department_max@1) AND active_null_count@4 != row_count@3, required_guarantees=[department in (Engineering, Marketing)]
 
+
+physical_plan after EnforceDistribution:
+SAME TEXT AS ABOVE
 
 physical_plan after CombinePartialFinalAggregate:
 SAME TEXT AS ABOVE
@@ -213,15 +249,21 @@ OutputRequirementExec: order_by=[], dist_by=Unspecified
                 FilterExec: NOT salary@4 + 1 > 70000 AND (department@3 = Engineering OR department@3 = Marketing) AND active@5 IS NOT NULL
                   RepartitionExec: partitioning=RoundRobinBatch(<partitions>), input_partitions=<partitions>
                     DeltaScanByAddsExec(table_path=file://<tmp>/delete_explain_codegen/)
-                      CoalescePartitionsExec
-                        CooperativeExec
-                          RepartitionExec: partitioning=RoundRobinBatch(<partitions>), input_partitions=<partitions>
-                            DeltaFindFilesExec(table_path=file://<tmp>/delete_explain_codegen/, predicate=salary@4 + 1 > 70000 AND (department@3 = Engineering OR department@3 = Marketing) AND active@5 IS NOT NULL)
+                      DeltaFileLookupExec(table_url=file:<tmp>/delete_explain_codegen/, version=0)
+                        CoalescePartitionsExec
+                          CoalesceBatchesExec: target_batch_size=8192
+                            CoalesceBatchesExec: target_batch_size=8192
+                              FilterExec: salary@1 + 1 > 70000 AND (department@0 = Engineering OR department@0 = Marketing) AND active@2 IS NOT NULL, projection=[__sail_file_path@3]
+                                RepartitionExec: partitioning=RoundRobinBatch(<partitions>), input_partitions=<partitions>
+                                  DataSourceExec: file_groups={1 group: [[<tmp>/delete_explain_codegen/part-<id>.snappy.parquet]]}, projection=[department, salary, active, __sail_file_path], file_type=parquet, predicate=salary@1 + 1 > 70000 AND (department@0 = Engineering OR department@0 = Marketing) AND active@2 IS NOT NULL AND salary@1 + 1 > 70000 AND (department@0 = Engineering OR department@0 = Marketing) AND active@2 IS NOT NULL, pruning_predicate=(department_null_count@2 != row_count@3 AND department_min@0 <= Engineering AND Engineering <= department_max@1 OR department_null_count@2 != row_count@3 AND department_min@0 <= Marketing AND Marketing <= department_max@1) AND active_null_count@4 != row_count@3 AND (department_null_count@2 != row_count@3 AND department_min@0 <= Engineering AND Engineering <= department_max@1 OR department_null_count@2 != row_count@3 AND department_min@0 <= Marketing AND Marketing <= department_max@1) AND active_null_count@4 != row_count@3, required_guarantees=[department in (Engineering, Marketing)]
         DeltaRemoveActionsExec
-          CoalescePartitionsExec
-            CooperativeExec
-              RepartitionExec: partitioning=RoundRobinBatch(<partitions>), input_partitions=<partitions>
-                DeltaFindFilesExec(table_path=file://<tmp>/delete_explain_codegen/, predicate=salary@4 + 1 > 70000 AND (department@3 = Engineering OR department@3 = Marketing) AND active@5 IS NOT NULL)
+          DeltaFileLookupExec(table_url=file:<tmp>/delete_explain_codegen/, version=0)
+            CoalescePartitionsExec
+              CoalesceBatchesExec: target_batch_size=8192
+                CoalesceBatchesExec: target_batch_size=8192
+                  FilterExec: salary@1 + 1 > 70000 AND (department@0 = Engineering OR department@0 = Marketing) AND active@2 IS NOT NULL, projection=[__sail_file_path@3]
+                    RepartitionExec: partitioning=RoundRobinBatch(<partitions>), input_partitions=<partitions>
+                      DataSourceExec: file_groups={1 group: [[<tmp>/delete_explain_codegen/part-<id>.snappy.parquet]]}, projection=[department, salary, active, __sail_file_path], file_type=parquet, predicate=salary@1 + 1 > 70000 AND (department@0 = Engineering OR department@0 = Marketing) AND active@2 IS NOT NULL AND salary@1 + 1 > 70000 AND (department@0 = Engineering OR department@0 = Marketing) AND active@2 IS NOT NULL, pruning_predicate=(department_null_count@2 != row_count@3 AND department_min@0 <= Engineering AND Engineering <= department_max@1 OR department_null_count@2 != row_count@3 AND department_min@0 <= Marketing AND Marketing <= department_max@1) AND active_null_count@4 != row_count@3 AND (department_null_count@2 != row_count@3 AND department_min@0 <= Engineering AND Engineering <= department_max@1 OR department_null_count@2 != row_count@3 AND department_min@0 <= Marketing AND Marketing <= department_max@1) AND active_null_count@4 != row_count@3, required_guarantees=[department in (Engineering, Marketing)]
 
 
 physical_plan after coalesce_async_exec_input:
@@ -238,15 +280,21 @@ DeltaCommitExec(table_path=file://<tmp>/delete_explain_codegen/)
               FilterExec: NOT salary@4 + 1 > 70000 AND (department@3 = Engineering OR department@3 = Marketing) AND active@5 IS NOT NULL
                 RepartitionExec: partitioning=RoundRobinBatch(<partitions>), input_partitions=<partitions>
                   DeltaScanByAddsExec(table_path=file://<tmp>/delete_explain_codegen/)
-                    CoalescePartitionsExec
-                      CooperativeExec
-                        RepartitionExec: partitioning=RoundRobinBatch(<partitions>), input_partitions=<partitions>
-                          DeltaFindFilesExec(table_path=file://<tmp>/delete_explain_codegen/, predicate=salary@4 + 1 > 70000 AND (department@3 = Engineering OR department@3 = Marketing) AND active@5 IS NOT NULL)
+                    DeltaFileLookupExec(table_url=file:<tmp>/delete_explain_codegen/, version=0)
+                      CoalescePartitionsExec
+                        CoalesceBatchesExec: target_batch_size=8192
+                          CoalesceBatchesExec: target_batch_size=8192
+                            FilterExec: salary@1 + 1 > 70000 AND (department@0 = Engineering OR department@0 = Marketing) AND active@2 IS NOT NULL, projection=[__sail_file_path@3]
+                              RepartitionExec: partitioning=RoundRobinBatch(<partitions>), input_partitions=<partitions>
+                                DataSourceExec: file_groups={1 group: [[<tmp>/delete_explain_codegen/part-<id>.snappy.parquet]]}, projection=[department, salary, active, __sail_file_path], file_type=parquet, predicate=salary@1 + 1 > 70000 AND (department@0 = Engineering OR department@0 = Marketing) AND active@2 IS NOT NULL AND salary@1 + 1 > 70000 AND (department@0 = Engineering OR department@0 = Marketing) AND active@2 IS NOT NULL, pruning_predicate=(department_null_count@2 != row_count@3 AND department_min@0 <= Engineering AND Engineering <= department_max@1 OR department_null_count@2 != row_count@3 AND department_min@0 <= Marketing AND Marketing <= department_max@1) AND active_null_count@4 != row_count@3 AND (department_null_count@2 != row_count@3 AND department_min@0 <= Engineering AND Engineering <= department_max@1 OR department_null_count@2 != row_count@3 AND department_min@0 <= Marketing AND Marketing <= department_max@1) AND active_null_count@4 != row_count@3, required_guarantees=[department in (Engineering, Marketing)]
       DeltaRemoveActionsExec
-        CoalescePartitionsExec
-          CooperativeExec
-            RepartitionExec: partitioning=RoundRobinBatch(<partitions>), input_partitions=<partitions>
-              DeltaFindFilesExec(table_path=file://<tmp>/delete_explain_codegen/, predicate=salary@4 + 1 > 70000 AND (department@3 = Engineering OR department@3 = Marketing) AND active@5 IS NOT NULL)
+        DeltaFileLookupExec(table_url=file:<tmp>/delete_explain_codegen/, version=0)
+          CoalescePartitionsExec
+            CoalesceBatchesExec: target_batch_size=8192
+              CoalesceBatchesExec: target_batch_size=8192
+                FilterExec: salary@1 + 1 > 70000 AND (department@0 = Engineering OR department@0 = Marketing) AND active@2 IS NOT NULL, projection=[__sail_file_path@3]
+                  RepartitionExec: partitioning=RoundRobinBatch(<partitions>), input_partitions=<partitions>
+                    DataSourceExec: file_groups={1 group: [[<tmp>/delete_explain_codegen/part-<id>.snappy.parquet]]}, projection=[department, salary, active, __sail_file_path], file_type=parquet, predicate=salary@1 + 1 > 70000 AND (department@0 = Engineering OR department@0 = Marketing) AND active@2 IS NOT NULL AND salary@1 + 1 > 70000 AND (department@0 = Engineering OR department@0 = Marketing) AND active@2 IS NOT NULL, pruning_predicate=(department_null_count@2 != row_count@3 AND department_min@0 <= Engineering AND Engineering <= department_max@1 OR department_null_count@2 != row_count@3 AND department_min@0 <= Marketing AND Marketing <= department_max@1) AND active_null_count@4 != row_count@3 AND (department_null_count@2 != row_count@3 AND department_min@0 <= Engineering AND Engineering <= department_max@1 OR department_null_count@2 != row_count@3 AND department_min@0 <= Marketing AND Marketing <= department_max@1) AND active_null_count@4 != row_count@3, required_guarantees=[department in (Engineering, Marketing)]
 
 
 physical_plan after LimitAggregation:
@@ -262,28 +310,7 @@ physical_plan after ProjectionPushdown:
 SAME TEXT AS ABOVE
 
 physical_plan after EnsureCooperative:
-DeltaCommitExec(table_path=file://<tmp>/delete_explain_codegen/)
-  CoalescePartitionsExec
-    UnionExec
-      DeltaWriterExec(table_path=file://<tmp>/delete_explain_codegen/)
-        CoalescePartitionsExec
-          CoalesceBatchesExec: target_batch_size=8192
-            CoalesceBatchesExec: target_batch_size=8192
-              FilterExec: NOT salary@4 + 1 > 70000 AND (department@3 = Engineering OR department@3 = Marketing) AND active@5 IS NOT NULL
-                RepartitionExec: partitioning=RoundRobinBatch(<partitions>), input_partitions=<partitions>
-                  DeltaScanByAddsExec(table_path=file://<tmp>/delete_explain_codegen/)
-                    CoalescePartitionsExec
-                      CooperativeExec
-                        RepartitionExec: partitioning=RoundRobinBatch(<partitions>), input_partitions=<partitions>
-                          CooperativeExec
-                            DeltaFindFilesExec(table_path=file://<tmp>/delete_explain_codegen/, predicate=salary@4 + 1 > 70000 AND (department@3 = Engineering OR department@3 = Marketing) AND active@5 IS NOT NULL)
-      DeltaRemoveActionsExec
-        CoalescePartitionsExec
-          CooperativeExec
-            RepartitionExec: partitioning=RoundRobinBatch(<partitions>), input_partitions=<partitions>
-              CooperativeExec
-                DeltaFindFilesExec(table_path=file://<tmp>/delete_explain_codegen/, predicate=salary@4 + 1 > 70000 AND (department@3 = Engineering OR department@3 = Marketing) AND active@5 IS NOT NULL)
-
+SAME TEXT AS ABOVE
 
 physical_plan after FilterPushdown(Post):
 SAME TEXT AS ABOVE
@@ -305,17 +332,21 @@ DeltaCommitExec(table_path=file://<tmp>/delete_explain_codegen/)
               FilterExec: NOT salary@4 + 1 > 70000 AND (department@3 = Engineering OR department@3 = Marketing) AND active@5 IS NOT NULL
                 RepartitionExec: partitioning=RoundRobinBatch(<partitions>), input_partitions=<partitions>
                   DeltaScanByAddsExec(table_path=file://<tmp>/delete_explain_codegen/)
-                    CoalescePartitionsExec
-                      CooperativeExec
-                        RepartitionExec: partitioning=RoundRobinBatch(<partitions>), input_partitions=<partitions>
-                          CooperativeExec
-                            DeltaFindFilesExec(table_path=file://<tmp>/delete_explain_codegen/, predicate=salary@4 + 1 > 70000 AND (department@3 = Engineering OR department@3 = Marketing) AND active@5 IS NOT NULL)
+                    DeltaFileLookupExec(table_url=file:<tmp>/delete_explain_codegen/, version=0)
+                      CoalescePartitionsExec
+                        CoalesceBatchesExec: target_batch_size=8192
+                          CoalesceBatchesExec: target_batch_size=8192
+                            FilterExec: salary@1 + 1 > 70000 AND (department@0 = Engineering OR department@0 = Marketing) AND active@2 IS NOT NULL, projection=[__sail_file_path@3]
+                              RepartitionExec: partitioning=RoundRobinBatch(<partitions>), input_partitions=<partitions>
+                                DataSourceExec: file_groups={1 group: [[<tmp>/delete_explain_codegen/part-<id>.snappy.parquet]]}, projection=[department, salary, active, __sail_file_path], file_type=parquet, predicate=salary@1 + 1 > 70000 AND (department@0 = Engineering OR department@0 = Marketing) AND active@2 IS NOT NULL AND salary@1 + 1 > 70000 AND (department@0 = Engineering OR department@0 = Marketing) AND active@2 IS NOT NULL, pruning_predicate=(department_null_count@2 != row_count@3 AND department_min@0 <= Engineering AND Engineering <= department_max@1 OR department_null_count@2 != row_count@3 AND department_min@0 <= Marketing AND Marketing <= department_max@1) AND active_null_count@4 != row_count@3 AND (department_null_count@2 != row_count@3 AND department_min@0 <= Engineering AND Engineering <= department_max@1 OR department_null_count@2 != row_count@3 AND department_min@0 <= Marketing AND Marketing <= department_max@1) AND active_null_count@4 != row_count@3, required_guarantees=[department in (Engineering, Marketing)]
       DeltaRemoveActionsExec
-        CoalescePartitionsExec
-          CooperativeExec
-            RepartitionExec: partitioning=RoundRobinBatch(<partitions>), input_partitions=<partitions>
-              CooperativeExec
-                DeltaFindFilesExec(table_path=file://<tmp>/delete_explain_codegen/, predicate=salary@4 + 1 > 70000 AND (department@3 = Engineering OR department@3 = Marketing) AND active@5 IS NOT NULL)
+        DeltaFileLookupExec(table_url=file:<tmp>/delete_explain_codegen/, version=0)
+          CoalescePartitionsExec
+            CoalesceBatchesExec: target_batch_size=8192
+              CoalesceBatchesExec: target_batch_size=8192
+                FilterExec: salary@1 + 1 > 70000 AND (department@0 = Engineering OR department@0 = Marketing) AND active@2 IS NOT NULL, projection=[__sail_file_path@3]
+                  RepartitionExec: partitioning=RoundRobinBatch(<partitions>), input_partitions=<partitions>
+                    DataSourceExec: file_groups={1 group: [[<tmp>/delete_explain_codegen/part-<id>.snappy.parquet]]}, projection=[department, salary, active, __sail_file_path], file_type=parquet, predicate=salary@1 + 1 > 70000 AND (department@0 = Engineering OR department@0 = Marketing) AND active@2 IS NOT NULL AND salary@1 + 1 > 70000 AND (department@0 = Engineering OR department@0 = Marketing) AND active@2 IS NOT NULL, pruning_predicate=(department_null_count@2 != row_count@3 AND department_min@0 <= Engineering AND Engineering <= department_max@1 OR department_null_count@2 != row_count@3 AND department_min@0 <= Marketing AND Marketing <= department_max@1) AND active_null_count@4 != row_count@3 AND (department_null_count@2 != row_count@3 AND department_min@0 <= Engineering AND Engineering <= department_max@1 OR department_null_count@2 != row_count@3 AND department_min@0 <= Marketing AND Marketing <= department_max@1) AND active_null_count@4 != row_count@3, required_guarantees=[department in (Engineering, Marketing)]
 
 
 == Physical Plan ==
@@ -329,14 +360,18 @@ DeltaCommitExec(table_path=file://<tmp>/delete_explain_codegen/)
               FilterExec: NOT salary@4 + 1 > 70000 AND (department@3 = Engineering OR department@3 = Marketing) AND active@5 IS NOT NULL
                 RepartitionExec: partitioning=RoundRobinBatch(<partitions>), input_partitions=<partitions>
                   DeltaScanByAddsExec(table_path=file://<tmp>/delete_explain_codegen/)
-                    CoalescePartitionsExec
-                      CooperativeExec
-                        RepartitionExec: partitioning=RoundRobinBatch(<partitions>), input_partitions=<partitions>
-                          CooperativeExec
-                            DeltaFindFilesExec(table_path=file://<tmp>/delete_explain_codegen/, predicate=salary@4 + 1 > 70000 AND (department@3 = Engineering OR department@3 = Marketing) AND active@5 IS NOT NULL)
+                    DeltaFileLookupExec(table_url=file:<tmp>/delete_explain_codegen/, version=0)
+                      CoalescePartitionsExec
+                        CoalesceBatchesExec: target_batch_size=8192
+                          CoalesceBatchesExec: target_batch_size=8192
+                            FilterExec: salary@1 + 1 > 70000 AND (department@0 = Engineering OR department@0 = Marketing) AND active@2 IS NOT NULL, projection=[__sail_file_path@3]
+                              RepartitionExec: partitioning=RoundRobinBatch(<partitions>), input_partitions=<partitions>
+                                DataSourceExec: file_groups={1 group: [[<tmp>/delete_explain_codegen/part-<id>.snappy.parquet]]}, projection=[department, salary, active, __sail_file_path], file_type=parquet, predicate=salary@1 + 1 > 70000 AND (department@0 = Engineering OR department@0 = Marketing) AND active@2 IS NOT NULL AND salary@1 + 1 > 70000 AND (department@0 = Engineering OR department@0 = Marketing) AND active@2 IS NOT NULL, pruning_predicate=(department_null_count@2 != row_count@3 AND department_min@0 <= Engineering AND Engineering <= department_max@1 OR department_null_count@2 != row_count@3 AND department_min@0 <= Marketing AND Marketing <= department_max@1) AND active_null_count@4 != row_count@3 AND (department_null_count@2 != row_count@3 AND department_min@0 <= Engineering AND Engineering <= department_max@1 OR department_null_count@2 != row_count@3 AND department_min@0 <= Marketing AND Marketing <= department_max@1) AND active_null_count@4 != row_count@3, required_guarantees=[department in (Engineering, Marketing)]
       DeltaRemoveActionsExec
-        CoalescePartitionsExec
-          CooperativeExec
-            RepartitionExec: partitioning=RoundRobinBatch(<partitions>), input_partitions=<partitions>
-              CooperativeExec
-                DeltaFindFilesExec(table_path=file://<tmp>/delete_explain_codegen/, predicate=salary@4 + 1 > 70000 AND (department@3 = Engineering OR department@3 = Marketing) AND active@5 IS NOT NULL)
+        DeltaFileLookupExec(table_url=file:<tmp>/delete_explain_codegen/, version=0)
+          CoalescePartitionsExec
+            CoalesceBatchesExec: target_batch_size=8192
+              CoalesceBatchesExec: target_batch_size=8192
+                FilterExec: salary@1 + 1 > 70000 AND (department@0 = Engineering OR department@0 = Marketing) AND active@2 IS NOT NULL, projection=[__sail_file_path@3]
+                  RepartitionExec: partitioning=RoundRobinBatch(<partitions>), input_partitions=<partitions>
+                    DataSourceExec: file_groups={1 group: [[<tmp>/delete_explain_codegen/part-<id>.snappy.parquet]]}, projection=[department, salary, active, __sail_file_path], file_type=parquet, predicate=salary@1 + 1 > 70000 AND (department@0 = Engineering OR department@0 = Marketing) AND active@2 IS NOT NULL AND salary@1 + 1 > 70000 AND (department@0 = Engineering OR department@0 = Marketing) AND active@2 IS NOT NULL, pruning_predicate=(department_null_count@2 != row_count@3 AND department_min@0 <= Engineering AND Engineering <= department_max@1 OR department_null_count@2 != row_count@3 AND department_min@0 <= Marketing AND Marketing <= department_max@1) AND active_null_count@4 != row_count@3 AND (department_null_count@2 != row_count@3 AND department_min@0 <= Engineering AND Engineering <= department_max@1 OR department_null_count@2 != row_count@3 AND department_min@0 <= Marketing AND Marketing <= department_max@1) AND active_null_count@4 != row_count@3, required_guarantees=[department in (Engineering, Marketing)]

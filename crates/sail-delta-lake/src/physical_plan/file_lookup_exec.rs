@@ -16,7 +16,8 @@ use std::fmt;
 use std::sync::Arc;
 
 use async_trait::async_trait;
-use datafusion::arrow::array::{Array, BooleanArray, StringArray};
+use datafusion::arrow::array::{Array, BooleanArray, DictionaryArray, StringArray};
+use datafusion::arrow::datatypes::UInt16Type;
 use datafusion::arrow::datatypes::{DataType, Field, Schema, SchemaRef};
 use datafusion::arrow::record_batch::RecordBatch;
 use datafusion::execution::context::TaskContext;
@@ -35,6 +36,35 @@ use url::Url;
 use crate::kernel::models::Add;
 use crate::storage::{get_object_store_from_context, StorageConfig};
 use crate::table::open_table_with_object_store;
+
+fn iter_path_column<'a>(
+    batch: &'a RecordBatch,
+) -> Result<Box<dyn Iterator<Item = Option<&'a str>> + 'a>> {
+    // Touched-file plan is expected to yield a single path column. Depending on scan config,
+    // it may be dictionary-encoded.
+    let col = batch.column(0);
+    if let Some(arr) = col.as_any().downcast_ref::<StringArray>() {
+        return Ok(Box::new(arr.iter()));
+    }
+    if let Some(dict) = col.as_any().downcast_ref::<DictionaryArray<UInt16Type>>() {
+        let values = dict
+            .values()
+            .as_any()
+            .downcast_ref::<StringArray>()
+            .ok_or_else(|| {
+                DataFusionError::Plan(
+                    "Touched file plan must yield a Utf8 (or dict-encoded Utf8) path column"
+                        .to_string(),
+                )
+            })?;
+        return Ok(Box::new(dict.keys().iter().map(move |key| {
+            key.and_then(|k| values.value(k as usize).into())
+        })));
+    }
+    Err(DataFusionError::Plan(
+        "Touched file plan must yield a Utf8 (or dict-encoded Utf8) path column".to_string(),
+    ))
+}
 
 /// An ExecutionPlan that converts a stream of touched file paths into a stream of JSON-serialized
 /// Delta `Add` actions.
@@ -225,21 +255,14 @@ impl ExecutionPlan for DeltaFileLookupExec {
                     continue;
                 }
 
-                let paths = match batch.column(0).as_any().downcast_ref::<StringArray>() {
-                    Some(a) => a,
-                    None => {
-                        return Some((
-                            Err(DataFusionError::Plan(
-                                "Touched file plan must yield a Utf8 path column".to_string(),
-                            )),
-                            st,
-                        ))
-                    }
+                let paths = match iter_path_column(&batch) {
+                    Ok(it) => it,
+                    Err(e) => return Some((Err(e), st)),
                 };
 
                 let mut out_adds: Vec<Option<String>> = Vec::new();
-                for path in paths.iter().flatten() {
-                    if !st.seen.insert(path.to_string()) {
+                for path in paths.flatten() {
+                    if !st.seen.insert(path.to_owned()) {
                         continue;
                     }
                     if let Some(add) = file_map.get(path) {

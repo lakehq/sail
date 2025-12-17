@@ -1,0 +1,577 @@
+== Codegen ==
+Whole-stage codegen is not supported; showing physical plan instead.
+
+== Plan Steps ==
+initial_logical_plan:
+WithPreconditions
+  FileWrite: options=FileWriteOptions { path: "<tmp>/x", format: "DELTA", mode: OverwriteIf { condition: BinaryExpr(BinaryExpr { left: BinaryExpr(BinaryExpr { left: Column(Column { relation: None, name: "category" }), op: Eq, right: Literal(Utf8("A"), None) }), op: And, right: BinaryExpr(BinaryExpr { left: Column(Column { relation: None, name: "value" }), op: Lt, right: Cast(Cast { expr: Literal(Int32(50), None), data_type: Int64 }) }) }) }, partition_by: [], sort_by: [], bucket_by: None, options: [[], []] }
+    Projection: id AS id, category AS category, value AS value
+      Projection: #6 AS id, #7 AS category, #8 AS value
+        Projection: t.#3 AS #6, t.#4 AS #7, t.#5 AS #8
+          SubqueryAlias: t
+            Projection: #0 AS #3, #1 AS #4, #2 AS #5
+              Projection: column1 AS #0, column2 AS #1, column3 AS #2
+                Values: (Int32(5), Utf8("A"), CAST(Int32(100) AS Int64)), (Int32(6), Utf8("A"), CAST(Int32(200) AS Int64)), (Int32(7), Utf8("A"), CAST(Int32(10) AS Int64)), (Int32(8), Utf8("B"), CAST(Int32(999) AS Int64))
+
+logical_plan after resolve_grouping_function:
+FileWrite: options=FileWriteOptions { path: "<tmp>/x", format: "DELTA", mode: OverwriteIf { condition: BinaryExpr(BinaryExpr { left: BinaryExpr(BinaryExpr { left: Column(Column { relation: None, name: "category" }), op: Eq, right: Literal(Utf8("A"), None) }), op: And, right: BinaryExpr(BinaryExpr { left: Column(Column { relation: None, name: "value" }), op: Lt, right: Cast(Cast { expr: Literal(Int32(50), None), data_type: Int64 }) }) }) }, partition_by: [], sort_by: [], bucket_by: None, options: [[], []] }
+  Projection: id AS id, category AS category, value AS value
+    Projection: #6 AS id, #7 AS category, #8 AS value
+      Projection: t.#3 AS #6, t.#4 AS #7, t.#5 AS #8
+        SubqueryAlias: t
+          Projection: #0 AS #3, #1 AS #4, #2 AS #5
+            Projection: column1 AS #0, column2 AS #1, column3 AS #2
+              Values: (Int32(5), Utf8("A"), CAST(Int32(100) AS Int64)), (Int32(6), Utf8("A"), CAST(Int32(200) AS Int64)), (Int32(7), Utf8("A"), CAST(Int32(10) AS Int64)), (Int32(8), Utf8("B"), CAST(Int32(999) AS Int64))
+
+logical_plan after type_coercion:
+SAME TEXT AS ABOVE
+
+analyzed_logical_plan:
+SAME TEXT AS ABOVE
+
+logical_plan after expand_merge:
+SAME TEXT AS ABOVE
+
+logical_plan after eliminate_nested_union:
+SAME TEXT AS ABOVE
+
+logical_plan after simplify_expressions:
+FileWrite: options=FileWriteOptions { path: "<tmp>/x", format: "DELTA", mode: OverwriteIf { condition: BinaryExpr(BinaryExpr { left: BinaryExpr(BinaryExpr { left: Column(Column { relation: None, name: "category" }), op: Eq, right: Literal(Utf8("A"), None) }), op: And, right: BinaryExpr(BinaryExpr { left: Column(Column { relation: None, name: "value" }), op: Lt, right: Cast(Cast { expr: Literal(Int32(50), None), data_type: Int64 }) }) }) }, partition_by: [], sort_by: [], bucket_by: None, options: [[], []] }
+  Projection: id AS id, category AS category, value AS value
+    Projection: #6 AS id, #7 AS category, #8 AS value
+      Projection: t.#3 AS #6, t.#4 AS #7, t.#5 AS #8
+        SubqueryAlias: t
+          Projection: #0 AS #3, #1 AS #4, #2 AS #5
+            Projection: column1 AS #0, column2 AS #1, column3 AS #2
+              Values: (Int32(5), Utf8("A"), Int64(100) AS Int32(100)), (Int32(6), Utf8("A"), Int64(200) AS Int32(200)), (Int32(7), Utf8("A"), Int64(10) AS Int32(10)), (Int32(8), Utf8("B"), Int64(999) AS Int32(999))
+
+logical_plan after replace_distinct_aggregate:
+SAME TEXT AS ABOVE
+
+logical_plan after eliminate_join:
+SAME TEXT AS ABOVE
+
+logical_plan after decorrelate_predicate_subquery:
+SAME TEXT AS ABOVE
+
+logical_plan after scalar_subquery_to_join:
+SAME TEXT AS ABOVE
+
+logical_plan after decorrelate_lateral_join:
+SAME TEXT AS ABOVE
+
+logical_plan after extract_equijoin_predicate:
+SAME TEXT AS ABOVE
+
+logical_plan after eliminate_duplicated_expr:
+SAME TEXT AS ABOVE
+
+logical_plan after eliminate_filter:
+SAME TEXT AS ABOVE
+
+logical_plan after eliminate_cross_join:
+SAME TEXT AS ABOVE
+
+logical_plan after eliminate_limit:
+SAME TEXT AS ABOVE
+
+logical_plan after propagate_empty_relation:
+SAME TEXT AS ABOVE
+
+logical_plan after eliminate_one_union:
+SAME TEXT AS ABOVE
+
+logical_plan after filter_null_join_keys:
+SAME TEXT AS ABOVE
+
+logical_plan after eliminate_outer_join:
+SAME TEXT AS ABOVE
+
+logical_plan after push_down_limit:
+SAME TEXT AS ABOVE
+
+logical_plan after push_down_filter:
+SAME TEXT AS ABOVE
+
+logical_plan after single_distinct_aggregation_to_group_by:
+SAME TEXT AS ABOVE
+
+logical_plan after eliminate_group_by_constant:
+SAME TEXT AS ABOVE
+
+logical_plan after common_sub_expression_eliminate:
+SAME TEXT AS ABOVE
+
+logical_plan after optimize_projections:
+FileWrite: options=FileWriteOptions { path: "<tmp>/x", format: "DELTA", mode: OverwriteIf { condition: BinaryExpr(BinaryExpr { left: BinaryExpr(BinaryExpr { left: Column(Column { relation: None, name: "category" }), op: Eq, right: Literal(Utf8("A"), None) }), op: And, right: BinaryExpr(BinaryExpr { left: Column(Column { relation: None, name: "value" }), op: Lt, right: Cast(Cast { expr: Literal(Int32(50), None), data_type: Int64 }) }) }) }, partition_by: [], sort_by: [], bucket_by: None, options: [[], []] }
+  Projection: #6 AS id, #7 AS category, #8 AS value
+    Projection: t.#3 AS #6, t.#4 AS #7, t.#5 AS #8
+      SubqueryAlias: t
+        Projection: column1 AS #3, column2 AS #4, column3 AS #5
+          Values: (Int32(5), Utf8("A"), Int64(100) AS Int32(100)), (Int32(6), Utf8("A"), Int64(200) AS Int32(200)), (Int32(7), Utf8("A"), Int64(10) AS Int32(10)), (Int32(8), Utf8("B"), Int64(999) AS Int32(999))
+
+logical_plan after expand_merge:
+SAME TEXT AS ABOVE
+
+logical_plan after eliminate_nested_union:
+SAME TEXT AS ABOVE
+
+logical_plan after simplify_expressions:
+SAME TEXT AS ABOVE
+
+logical_plan after replace_distinct_aggregate:
+SAME TEXT AS ABOVE
+
+logical_plan after eliminate_join:
+SAME TEXT AS ABOVE
+
+logical_plan after decorrelate_predicate_subquery:
+SAME TEXT AS ABOVE
+
+logical_plan after scalar_subquery_to_join:
+SAME TEXT AS ABOVE
+
+logical_plan after decorrelate_lateral_join:
+SAME TEXT AS ABOVE
+
+logical_plan after extract_equijoin_predicate:
+SAME TEXT AS ABOVE
+
+logical_plan after eliminate_duplicated_expr:
+SAME TEXT AS ABOVE
+
+logical_plan after eliminate_filter:
+SAME TEXT AS ABOVE
+
+logical_plan after eliminate_cross_join:
+SAME TEXT AS ABOVE
+
+logical_plan after eliminate_limit:
+SAME TEXT AS ABOVE
+
+logical_plan after propagate_empty_relation:
+SAME TEXT AS ABOVE
+
+logical_plan after eliminate_one_union:
+SAME TEXT AS ABOVE
+
+logical_plan after filter_null_join_keys:
+SAME TEXT AS ABOVE
+
+logical_plan after eliminate_outer_join:
+SAME TEXT AS ABOVE
+
+logical_plan after push_down_limit:
+SAME TEXT AS ABOVE
+
+logical_plan after push_down_filter:
+SAME TEXT AS ABOVE
+
+logical_plan after single_distinct_aggregation_to_group_by:
+SAME TEXT AS ABOVE
+
+logical_plan after eliminate_group_by_constant:
+SAME TEXT AS ABOVE
+
+logical_plan after common_sub_expression_eliminate:
+SAME TEXT AS ABOVE
+
+logical_plan after optimize_projections:
+FileWrite: options=FileWriteOptions { path: "<tmp>/x", format: "DELTA", mode: OverwriteIf { condition: BinaryExpr(BinaryExpr { left: BinaryExpr(BinaryExpr { left: Column(Column { relation: None, name: "category" }), op: Eq, right: Literal(Utf8("A"), None) }), op: And, right: BinaryExpr(BinaryExpr { left: Column(Column { relation: None, name: "value" }), op: Lt, right: Cast(Cast { expr: Literal(Int32(50), None), data_type: Int64 }) }) }) }, partition_by: [], sort_by: [], bucket_by: None, options: [[], []] }
+  Projection: t.#3 AS id, t.#4 AS category, t.#5 AS value
+    SubqueryAlias: t
+      Projection: column1 AS #3, column2 AS #4, column3 AS #5
+        Values: (Int32(5), Utf8("A"), Int64(100) AS Int32(100)), (Int32(6), Utf8("A"), Int64(200) AS Int32(200)), (Int32(7), Utf8("A"), Int64(10) AS Int32(10)), (Int32(8), Utf8("B"), Int64(999) AS Int32(999))
+
+logical_plan after expand_merge:
+SAME TEXT AS ABOVE
+
+logical_plan after eliminate_nested_union:
+SAME TEXT AS ABOVE
+
+logical_plan after simplify_expressions:
+SAME TEXT AS ABOVE
+
+logical_plan after replace_distinct_aggregate:
+SAME TEXT AS ABOVE
+
+logical_plan after eliminate_join:
+SAME TEXT AS ABOVE
+
+logical_plan after decorrelate_predicate_subquery:
+SAME TEXT AS ABOVE
+
+logical_plan after scalar_subquery_to_join:
+SAME TEXT AS ABOVE
+
+logical_plan after decorrelate_lateral_join:
+SAME TEXT AS ABOVE
+
+logical_plan after extract_equijoin_predicate:
+SAME TEXT AS ABOVE
+
+logical_plan after eliminate_duplicated_expr:
+SAME TEXT AS ABOVE
+
+logical_plan after eliminate_filter:
+SAME TEXT AS ABOVE
+
+logical_plan after eliminate_cross_join:
+SAME TEXT AS ABOVE
+
+logical_plan after eliminate_limit:
+SAME TEXT AS ABOVE
+
+logical_plan after propagate_empty_relation:
+SAME TEXT AS ABOVE
+
+logical_plan after eliminate_one_union:
+SAME TEXT AS ABOVE
+
+logical_plan after filter_null_join_keys:
+SAME TEXT AS ABOVE
+
+logical_plan after eliminate_outer_join:
+SAME TEXT AS ABOVE
+
+logical_plan after push_down_limit:
+SAME TEXT AS ABOVE
+
+logical_plan after push_down_filter:
+SAME TEXT AS ABOVE
+
+logical_plan after single_distinct_aggregation_to_group_by:
+SAME TEXT AS ABOVE
+
+logical_plan after eliminate_group_by_constant:
+SAME TEXT AS ABOVE
+
+logical_plan after common_sub_expression_eliminate:
+SAME TEXT AS ABOVE
+
+logical_plan after optimize_projections:
+SAME TEXT AS ABOVE
+
+logical_plan:
+FileWrite: options=FileWriteOptions { path: "<tmp>/x", format: "DELTA", mode: OverwriteIf { condition: BinaryExpr(BinaryExpr { left: BinaryExpr(BinaryExpr { left: Column(Column { relation: None, name: "category" }), op: Eq, right: Literal(Utf8("A"), None) }), op: And, right: BinaryExpr(BinaryExpr { left: Column(Column { relation: None, name: "value" }), op: Lt, right: Cast(Cast { expr: Literal(Int32(50), None), data_type: Int64 }) }) }) }, partition_by: [], sort_by: [], bucket_by: None, options: [[], []] }
+  Projection: t.#3 AS id, t.#4 AS category, t.#5 AS value
+    SubqueryAlias: t
+      Projection: column1 AS #3, column2 AS #4, column3 AS #5
+        Values: (Int32(5), Utf8("A"), Int64(100) AS Int32(100)), (Int32(6), Utf8("A"), Int64(200) AS Int32(200)), (Int32(7), Utf8("A"), Int64(10) AS Int32(10)), (Int32(8), Utf8("B"), Int64(999) AS Int32(999))
+
+initial_physical_plan:
+DeltaCommitExec(table_path=file://<tmp>/x/)
+  CoalescePartitionsExec
+    UnionExec
+      DeltaWriterExec(table_path=file://<tmp>/x/)
+        CoalescePartitionsExec
+          UnionExec
+            ProjectionExec: expr=[column1@0 as id, column2@1 as category, column3@2 as value]
+              DataSourceExec: partitions=1, partition_sizes=[<sizes>]
+            CoalesceBatchesExec: target_batch_size=8192
+              FilterExec: NOT category@1 = A AND value@2 < CAST(50 AS Int64)
+                RepartitionExec: partitioning=RoundRobinBatch(<partitions>), input_partitions=<partitions>
+                  DeltaScanByAddsExec(table_path=file://<tmp>/x/)
+                    DeltaFileLookupExec(table_url=file:<tmp>/x/, version=0)
+                      CoalescePartitionsExec
+                        CoalesceBatchesExec: target_batch_size=8192
+                          FilterExec: category@0 = A AND value@1 < CAST(50 AS Int64), projection=[__sail_file_path@2]
+                            RepartitionExec: partitioning=RoundRobinBatch(<partitions>), input_partitions=<partitions>
+                              DataSourceExec: file_groups={1 group: [[<tmp>/x/part-<id>.snappy.parquet]]}, projection=[category, value, __sail_file_path], file_type=parquet, predicate=category@0 = A AND value@1 < CAST(50 AS Int64), pruning_predicate=category_null_count@2 != row_count@3 AND category_min@0 <= A AND A <= category_max@1 AND value_null_count@5 != row_count@3 AND value_min@4 < CAST(50 AS Int64), required_guarantees=[category in (A)]
+      DeltaRemoveActionsExec
+        DeltaFileLookupExec(table_url=file:<tmp>/x/, version=0)
+          CoalescePartitionsExec
+            CoalesceBatchesExec: target_batch_size=8192
+              FilterExec: category@0 = A AND value@1 < CAST(50 AS Int64), projection=[__sail_file_path@2]
+                RepartitionExec: partitioning=RoundRobinBatch(<partitions>), input_partitions=<partitions>
+                  DataSourceExec: file_groups={1 group: [[<tmp>/x/part-<id>.snappy.parquet]]}, projection=[category, value, __sail_file_path], file_type=parquet, predicate=category@0 = A AND value@1 < CAST(50 AS Int64), pruning_predicate=category_null_count@2 != row_count@3 AND category_min@0 <= A AND A <= category_max@1 AND value_null_count@5 != row_count@3 AND value_min@4 < CAST(50 AS Int64), required_guarantees=[category in (A)]
+
+
+initial_physical_plan_with_stats:
+DeltaCommitExec(table_path=file://<tmp>/x/), statistics=[Rows=Absent, Bytes=Absent, [(Col[0]:)]]
+  CoalescePartitionsExec, statistics=[Rows=Absent, Bytes=Absent, [(Col[0]:)]]
+    UnionExec, statistics=[Rows=Absent, Bytes=Absent, [(Col[0]:)]]
+      DeltaWriterExec(table_path=file://<tmp>/x/), statistics=[Rows=Absent, Bytes=Absent, [(Col[0]:)]]
+        CoalescePartitionsExec, statistics=[Rows=Absent, Bytes=Absent, [(Col[0]:),(Col[1]:),(Col[2]:)]]
+          UnionExec, statistics=[Rows=Absent, Bytes=Absent, [(Col[0]:),(Col[1]:),(Col[2]:)]]
+            ProjectionExec: expr=[column1@0 as id, column2@1 as category, column3@2 as value], statistics=[Rows=Exact(4), Bytes=Exact(<bytes>), [(Col[0]: Null=Exact(0)),(Col[1]: Null=Exact(0)),(Col[2]: Null=Exact(0))]]
+              DataSourceExec: partitions=1, partition_sizes=[<sizes>], statistics=[Rows=Exact(4), Bytes=Exact(<bytes>), [(Col[0]: Null=Exact(0)),(Col[1]: Null=Exact(0)),(Col[2]: Null=Exact(0))]]
+            CoalesceBatchesExec: target_batch_size=8192, statistics=[Rows=Absent, Bytes=Absent, [(Col[0]:),(Col[1]:),(Col[2]:)]]
+              FilterExec: NOT category@1 = A AND value@2 < CAST(50 AS Int64), statistics=[Rows=Absent, Bytes=Absent, [(Col[0]:),(Col[1]:),(Col[2]:)]]
+                RepartitionExec: partitioning=RoundRobinBatch(<partitions>), input_partitions=<partitions>, statistics=[Rows=Absent, Bytes=Absent, [(Col[0]:),(Col[1]:),(Col[2]:)]]
+                  DeltaScanByAddsExec(table_path=file://<tmp>/x/), statistics=[Rows=Absent, Bytes=Absent, [(Col[0]:),(Col[1]:),(Col[2]:)]]
+                    DeltaFileLookupExec(table_url=file:<tmp>/x/, version=0), statistics=[Rows=Absent, Bytes=Absent, [(Col[0]:),(Col[1]:)]]
+                      CoalescePartitionsExec, statistics=[Rows=Inexact(1), Bytes=Inexact(<bytes>), [(Col[0]:)]]
+                        CoalesceBatchesExec: target_batch_size=8192, statistics=[Rows=Inexact(1), Bytes=Inexact(<bytes>), [(Col[0]:)]]
+                          FilterExec: category@0 = A AND value@1 < CAST(50 AS Int64), projection=[__sail_file_path@2], statistics=[Rows=Inexact(1), Bytes=Inexact(<bytes>), [(Col[0]:)]]
+                            RepartitionExec: partitioning=RoundRobinBatch(<partitions>), input_partitions=<partitions>, statistics=[Rows=Inexact(4), Bytes=Inexact(<bytes>), [(Col[0]:),(Col[1]: Min=Inexact(Int64(10)) Max=Inexact(Int64(999))),(Col[2]:)]]
+                              DataSourceExec: file_groups={1 group: [[<tmp>/x/part-<id>.snappy.parquet]]}, projection=[category, value, __sail_file_path], file_type=parquet, predicate=category@0 = A AND value@1 < CAST(50 AS Int64), pruning_predicate=category_null_count@2 != row_count@3 AND category_min@0 <= A AND A <= category_max@1 AND value_null_count@5 != row_count@3 AND value_min@4 < CAST(50 AS Int64), required_guarantees=[category in (A)], statistics=[Rows=Inexact(4), Bytes=Inexact(<bytes>), [(Col[0]:),(Col[1]: Min=Inexact(Int64(10)) Max=Inexact(Int64(999))),(Col[2]:)]]
+      DeltaRemoveActionsExec, statistics=[Rows=Absent, Bytes=Absent, [(Col[0]:)]]
+        DeltaFileLookupExec(table_url=file:<tmp>/x/, version=0), statistics=[Rows=Absent, Bytes=Absent, [(Col[0]:),(Col[1]:)]]
+          CoalescePartitionsExec, statistics=[Rows=Inexact(1), Bytes=Inexact(<bytes>), [(Col[0]:)]]
+            CoalesceBatchesExec: target_batch_size=8192, statistics=[Rows=Inexact(1), Bytes=Inexact(<bytes>), [(Col[0]:)]]
+              FilterExec: category@0 = A AND value@1 < CAST(50 AS Int64), projection=[__sail_file_path@2], statistics=[Rows=Inexact(1), Bytes=Inexact(<bytes>), [(Col[0]:)]]
+                RepartitionExec: partitioning=RoundRobinBatch(<partitions>), input_partitions=<partitions>, statistics=[Rows=Inexact(4), Bytes=Inexact(<bytes>), [(Col[0]:),(Col[1]: Min=Inexact(Int64(10)) Max=Inexact(Int64(999))),(Col[2]:)]]
+                  DataSourceExec: file_groups={1 group: [[<tmp>/x/part-<id>.snappy.parquet]]}, projection=[category, value, __sail_file_path], file_type=parquet, predicate=category@0 = A AND value@1 < CAST(50 AS Int64), pruning_predicate=category_null_count@2 != row_count@3 AND category_min@0 <= A AND A <= category_max@1 AND value_null_count@5 != row_count@3 AND value_min@4 < CAST(50 AS Int64), required_guarantees=[category in (A)], statistics=[Rows=Inexact(4), Bytes=Inexact(<bytes>), [(Col[0]:),(Col[1]: Min=Inexact(Int64(10)) Max=Inexact(Int64(999))),(Col[2]:)]]
+
+
+initial_physical_plan_with_schema:
+DeltaCommitExec(table_path=file://<tmp>/x/), schema=[count:UInt64;N]
+  CoalescePartitionsExec, schema=[data:Utf8;N]
+    UnionExec, schema=[data:Utf8;N]
+      DeltaWriterExec(table_path=file://<tmp>/x/), schema=[data:Utf8;N]
+        CoalescePartitionsExec, schema=[id:Int32;N, category:Utf8;N, value:Int64;N]
+          UnionExec, schema=[id:Int32;N, category:Utf8;N, value:Int64;N]
+            ProjectionExec: expr=[column1@0 as id, column2@1 as category, column3@2 as value], schema=[id:Int32;N, category:Utf8;N, value:Int64;N]
+              DataSourceExec: partitions=1, partition_sizes=[<sizes>], schema=[column1:Int32;N, column2:Utf8;N, column3:Int64;N]
+            CoalesceBatchesExec: target_batch_size=8192, schema=[id:Int32;N, category:Utf8;N, value:Int64;N]
+              FilterExec: NOT category@1 = A AND value@2 < CAST(50 AS Int64), schema=[id:Int32;N, category:Utf8;N, value:Int64;N]
+                RepartitionExec: partitioning=RoundRobinBatch(<partitions>), input_partitions=<partitions>, schema=[id:Int32;N, category:Utf8;N, value:Int64;N]
+                  DeltaScanByAddsExec(table_path=file://<tmp>/x/), schema=[id:Int32;N, category:Utf8;N, value:Int64;N]
+                    DeltaFileLookupExec(table_url=file:<tmp>/x/, version=0), schema=[add:Utf8;N, partition_scan:Boolean]
+                      CoalescePartitionsExec, schema=[__sail_file_path:Dictionary(UInt16, Utf8);N]
+                        CoalesceBatchesExec: target_batch_size=8192, schema=[__sail_file_path:Dictionary(UInt16, Utf8);N]
+                          FilterExec: category@0 = A AND value@1 < CAST(50 AS Int64), projection=[__sail_file_path@2], schema=[__sail_file_path:Dictionary(UInt16, Utf8);N]
+                            RepartitionExec: partitioning=RoundRobinBatch(<partitions>), input_partitions=<partitions>, schema=[category:Utf8;N, value:Int64;N, __sail_file_path:Dictionary(UInt16, Utf8);N]
+                              DataSourceExec: file_groups={1 group: [[<tmp>/x/part-<id>.snappy.parquet]]}, projection=[category, value, __sail_file_path], file_type=parquet, predicate=category@0 = A AND value@1 < CAST(50 AS Int64), pruning_predicate=category_null_count@2 != row_count@3 AND category_min@0 <= A AND A <= category_max@1 AND value_null_count@5 != row_count@3 AND value_min@4 < CAST(50 AS Int64), required_guarantees=[category in (A)], schema=[category:Utf8;N, value:Int64;N, __sail_file_path:Dictionary(UInt16, Utf8);N]
+      DeltaRemoveActionsExec, schema=[data:Utf8;N]
+        DeltaFileLookupExec(table_url=file:<tmp>/x/, version=0), schema=[add:Utf8;N, partition_scan:Boolean]
+          CoalescePartitionsExec, schema=[__sail_file_path:Dictionary(UInt16, Utf8);N]
+            CoalesceBatchesExec: target_batch_size=8192, schema=[__sail_file_path:Dictionary(UInt16, Utf8);N]
+              FilterExec: category@0 = A AND value@1 < CAST(50 AS Int64), projection=[__sail_file_path@2], schema=[__sail_file_path:Dictionary(UInt16, Utf8);N]
+                RepartitionExec: partitioning=RoundRobinBatch(<partitions>), input_partitions=<partitions>, schema=[category:Utf8;N, value:Int64;N, __sail_file_path:Dictionary(UInt16, Utf8);N]
+                  DataSourceExec: file_groups={1 group: [[<tmp>/x/part-<id>.snappy.parquet]]}, projection=[category, value, __sail_file_path], file_type=parquet, predicate=category@0 = A AND value@1 < CAST(50 AS Int64), pruning_predicate=category_null_count@2 != row_count@3 AND category_min@0 <= A AND A <= category_max@1 AND value_null_count@5 != row_count@3 AND value_min@4 < CAST(50 AS Int64), required_guarantees=[category in (A)], schema=[category:Utf8;N, value:Int64;N, __sail_file_path:Dictionary(UInt16, Utf8);N]
+
+
+physical_plan after OutputRequirements:
+OutputRequirementExec: order_by=[], dist_by=Unspecified
+  DeltaCommitExec(table_path=file://<tmp>/x/)
+    CoalescePartitionsExec
+      UnionExec
+        DeltaWriterExec(table_path=file://<tmp>/x/)
+          CoalescePartitionsExec
+            UnionExec
+              ProjectionExec: expr=[column1@0 as id, column2@1 as category, column3@2 as value]
+                DataSourceExec: partitions=1, partition_sizes=[<sizes>]
+              CoalesceBatchesExec: target_batch_size=8192
+                FilterExec: NOT category@1 = A AND value@2 < CAST(50 AS Int64)
+                  RepartitionExec: partitioning=RoundRobinBatch(<partitions>), input_partitions=<partitions>
+                    DeltaScanByAddsExec(table_path=file://<tmp>/x/)
+                      DeltaFileLookupExec(table_url=file:<tmp>/x/, version=0)
+                        CoalescePartitionsExec
+                          CoalesceBatchesExec: target_batch_size=8192
+                            FilterExec: category@0 = A AND value@1 < CAST(50 AS Int64), projection=[__sail_file_path@2]
+                              RepartitionExec: partitioning=RoundRobinBatch(<partitions>), input_partitions=<partitions>
+                                DataSourceExec: file_groups={1 group: [[<tmp>/x/part-<id>.snappy.parquet]]}, projection=[category, value, __sail_file_path], file_type=parquet, predicate=category@0 = A AND value@1 < CAST(50 AS Int64), pruning_predicate=category_null_count@2 != row_count@3 AND category_min@0 <= A AND A <= category_max@1 AND value_null_count@5 != row_count@3 AND value_min@4 < CAST(50 AS Int64), required_guarantees=[category in (A)]
+        DeltaRemoveActionsExec
+          DeltaFileLookupExec(table_url=file:<tmp>/x/, version=0)
+            CoalescePartitionsExec
+              CoalesceBatchesExec: target_batch_size=8192
+                FilterExec: category@0 = A AND value@1 < CAST(50 AS Int64), projection=[__sail_file_path@2]
+                  RepartitionExec: partitioning=RoundRobinBatch(<partitions>), input_partitions=<partitions>
+                    DataSourceExec: file_groups={1 group: [[<tmp>/x/part-<id>.snappy.parquet]]}, projection=[category, value, __sail_file_path], file_type=parquet, predicate=category@0 = A AND value@1 < CAST(50 AS Int64), pruning_predicate=category_null_count@2 != row_count@3 AND category_min@0 <= A AND A <= category_max@1 AND value_null_count@5 != row_count@3 AND value_min@4 < CAST(50 AS Int64), required_guarantees=[category in (A)]
+
+
+physical_plan after aggregate_statistics:
+SAME TEXT AS ABOVE
+
+physical_plan after join_selection:
+SAME TEXT AS ABOVE
+
+physical_plan after LimitedDistinctAggregation:
+SAME TEXT AS ABOVE
+
+physical_plan after FilterPushdown:
+OutputRequirementExec: order_by=[], dist_by=Unspecified
+  DeltaCommitExec(table_path=file://<tmp>/x/)
+    CoalescePartitionsExec
+      UnionExec
+        DeltaWriterExec(table_path=file://<tmp>/x/)
+          CoalescePartitionsExec
+            UnionExec
+              ProjectionExec: expr=[column1@0 as id, column2@1 as category, column3@2 as value]
+                DataSourceExec: partitions=1, partition_sizes=[<sizes>]
+              CoalesceBatchesExec: target_batch_size=8192
+                FilterExec: NOT category@1 = A AND value@2 < CAST(50 AS Int64)
+                  RepartitionExec: partitioning=RoundRobinBatch(<partitions>), input_partitions=<partitions>
+                    DeltaScanByAddsExec(table_path=file://<tmp>/x/)
+                      DeltaFileLookupExec(table_url=file:<tmp>/x/, version=0)
+                        CoalescePartitionsExec
+                          CoalesceBatchesExec: target_batch_size=8192
+                            FilterExec: category@0 = A AND value@1 < CAST(50 AS Int64), projection=[__sail_file_path@2]
+                              RepartitionExec: partitioning=RoundRobinBatch(<partitions>), input_partitions=<partitions>
+                                DataSourceExec: file_groups={1 group: [[<tmp>/x/part-<id>.snappy.parquet]]}, projection=[category, value, __sail_file_path], file_type=parquet, predicate=category@0 = A AND value@1 < CAST(50 AS Int64) AND category@0 = A AND value@1 < CAST(50 AS Int64), pruning_predicate=category_null_count@2 != row_count@3 AND category_min@0 <= A AND A <= category_max@1 AND value_null_count@5 != row_count@3 AND value_min@4 < CAST(50 AS Int64) AND category_null_count@2 != row_count@3 AND category_min@0 <= A AND A <= category_max@1 AND value_null_count@5 != row_count@3 AND value_min@4 < CAST(50 AS Int64), required_guarantees=[category in (A)]
+        DeltaRemoveActionsExec
+          DeltaFileLookupExec(table_url=file:<tmp>/x/, version=0)
+            CoalescePartitionsExec
+              CoalesceBatchesExec: target_batch_size=8192
+                FilterExec: category@0 = A AND value@1 < CAST(50 AS Int64), projection=[__sail_file_path@2]
+                  RepartitionExec: partitioning=RoundRobinBatch(<partitions>), input_partitions=<partitions>
+                    DataSourceExec: file_groups={1 group: [[<tmp>/x/part-<id>.snappy.parquet]]}, projection=[category, value, __sail_file_path], file_type=parquet, predicate=category@0 = A AND value@1 < CAST(50 AS Int64) AND category@0 = A AND value@1 < CAST(50 AS Int64), pruning_predicate=category_null_count@2 != row_count@3 AND category_min@0 <= A AND A <= category_max@1 AND value_null_count@5 != row_count@3 AND value_min@4 < CAST(50 AS Int64) AND category_null_count@2 != row_count@3 AND category_min@0 <= A AND A <= category_max@1 AND value_null_count@5 != row_count@3 AND value_min@4 < CAST(50 AS Int64), required_guarantees=[category in (A)]
+
+
+physical_plan after EnforceDistribution:
+SAME TEXT AS ABOVE
+
+physical_plan after CombinePartialFinalAggregate:
+SAME TEXT AS ABOVE
+
+physical_plan after EnforceSorting:
+SAME TEXT AS ABOVE
+
+physical_plan after OptimizeAggregateOrder:
+SAME TEXT AS ABOVE
+
+physical_plan after ProjectionPushdown:
+SAME TEXT AS ABOVE
+
+physical_plan after coalesce_batches:
+OutputRequirementExec: order_by=[], dist_by=Unspecified
+  DeltaCommitExec(table_path=file://<tmp>/x/)
+    CoalescePartitionsExec
+      UnionExec
+        DeltaWriterExec(table_path=file://<tmp>/x/)
+          CoalescePartitionsExec
+            UnionExec
+              ProjectionExec: expr=[column1@0 as id, column2@1 as category, column3@2 as value]
+                DataSourceExec: partitions=1, partition_sizes=[<sizes>]
+              CoalesceBatchesExec: target_batch_size=8192
+                CoalesceBatchesExec: target_batch_size=8192
+                  FilterExec: NOT category@1 = A AND value@2 < CAST(50 AS Int64)
+                    RepartitionExec: partitioning=RoundRobinBatch(<partitions>), input_partitions=<partitions>
+                      DeltaScanByAddsExec(table_path=file://<tmp>/x/)
+                        DeltaFileLookupExec(table_url=file:<tmp>/x/, version=0)
+                          CoalescePartitionsExec
+                            CoalesceBatchesExec: target_batch_size=8192
+                              CoalesceBatchesExec: target_batch_size=8192
+                                FilterExec: category@0 = A AND value@1 < CAST(50 AS Int64), projection=[__sail_file_path@2]
+                                  RepartitionExec: partitioning=RoundRobinBatch(<partitions>), input_partitions=<partitions>
+                                    DataSourceExec: file_groups={1 group: [[<tmp>/x/part-<id>.snappy.parquet]]}, projection=[category, value, __sail_file_path], file_type=parquet, predicate=category@0 = A AND value@1 < CAST(50 AS Int64) AND category@0 = A AND value@1 < CAST(50 AS Int64), pruning_predicate=category_null_count@2 != row_count@3 AND category_min@0 <= A AND A <= category_max@1 AND value_null_count@5 != row_count@3 AND value_min@4 < CAST(50 AS Int64) AND category_null_count@2 != row_count@3 AND category_min@0 <= A AND A <= category_max@1 AND value_null_count@5 != row_count@3 AND value_min@4 < CAST(50 AS Int64), required_guarantees=[category in (A)]
+        DeltaRemoveActionsExec
+          DeltaFileLookupExec(table_url=file:<tmp>/x/, version=0)
+            CoalescePartitionsExec
+              CoalesceBatchesExec: target_batch_size=8192
+                CoalesceBatchesExec: target_batch_size=8192
+                  FilterExec: category@0 = A AND value@1 < CAST(50 AS Int64), projection=[__sail_file_path@2]
+                    RepartitionExec: partitioning=RoundRobinBatch(<partitions>), input_partitions=<partitions>
+                      DataSourceExec: file_groups={1 group: [[<tmp>/x/part-<id>.snappy.parquet]]}, projection=[category, value, __sail_file_path], file_type=parquet, predicate=category@0 = A AND value@1 < CAST(50 AS Int64) AND category@0 = A AND value@1 < CAST(50 AS Int64), pruning_predicate=category_null_count@2 != row_count@3 AND category_min@0 <= A AND A <= category_max@1 AND value_null_count@5 != row_count@3 AND value_min@4 < CAST(50 AS Int64) AND category_null_count@2 != row_count@3 AND category_min@0 <= A AND A <= category_max@1 AND value_null_count@5 != row_count@3 AND value_min@4 < CAST(50 AS Int64), required_guarantees=[category in (A)]
+
+
+physical_plan after coalesce_async_exec_input:
+SAME TEXT AS ABOVE
+
+physical_plan after OutputRequirements:
+DeltaCommitExec(table_path=file://<tmp>/x/)
+  CoalescePartitionsExec
+    UnionExec
+      DeltaWriterExec(table_path=file://<tmp>/x/)
+        CoalescePartitionsExec
+          UnionExec
+            ProjectionExec: expr=[column1@0 as id, column2@1 as category, column3@2 as value]
+              DataSourceExec: partitions=1, partition_sizes=[<sizes>]
+            CoalesceBatchesExec: target_batch_size=8192
+              CoalesceBatchesExec: target_batch_size=8192
+                FilterExec: NOT category@1 = A AND value@2 < CAST(50 AS Int64)
+                  RepartitionExec: partitioning=RoundRobinBatch(<partitions>), input_partitions=<partitions>
+                    DeltaScanByAddsExec(table_path=file://<tmp>/x/)
+                      DeltaFileLookupExec(table_url=file:<tmp>/x/, version=0)
+                        CoalescePartitionsExec
+                          CoalesceBatchesExec: target_batch_size=8192
+                            CoalesceBatchesExec: target_batch_size=8192
+                              FilterExec: category@0 = A AND value@1 < CAST(50 AS Int64), projection=[__sail_file_path@2]
+                                RepartitionExec: partitioning=RoundRobinBatch(<partitions>), input_partitions=<partitions>
+                                  DataSourceExec: file_groups={1 group: [[<tmp>/x/part-<id>.snappy.parquet]]}, projection=[category, value, __sail_file_path], file_type=parquet, predicate=category@0 = A AND value@1 < CAST(50 AS Int64) AND category@0 = A AND value@1 < CAST(50 AS Int64), pruning_predicate=category_null_count@2 != row_count@3 AND category_min@0 <= A AND A <= category_max@1 AND value_null_count@5 != row_count@3 AND value_min@4 < CAST(50 AS Int64) AND category_null_count@2 != row_count@3 AND category_min@0 <= A AND A <= category_max@1 AND value_null_count@5 != row_count@3 AND value_min@4 < CAST(50 AS Int64), required_guarantees=[category in (A)]
+      DeltaRemoveActionsExec
+        DeltaFileLookupExec(table_url=file:<tmp>/x/, version=0)
+          CoalescePartitionsExec
+            CoalesceBatchesExec: target_batch_size=8192
+              CoalesceBatchesExec: target_batch_size=8192
+                FilterExec: category@0 = A AND value@1 < CAST(50 AS Int64), projection=[__sail_file_path@2]
+                  RepartitionExec: partitioning=RoundRobinBatch(<partitions>), input_partitions=<partitions>
+                    DataSourceExec: file_groups={1 group: [[<tmp>/x/part-<id>.snappy.parquet]]}, projection=[category, value, __sail_file_path], file_type=parquet, predicate=category@0 = A AND value@1 < CAST(50 AS Int64) AND category@0 = A AND value@1 < CAST(50 AS Int64), pruning_predicate=category_null_count@2 != row_count@3 AND category_min@0 <= A AND A <= category_max@1 AND value_null_count@5 != row_count@3 AND value_min@4 < CAST(50 AS Int64) AND category_null_count@2 != row_count@3 AND category_min@0 <= A AND A <= category_max@1 AND value_null_count@5 != row_count@3 AND value_min@4 < CAST(50 AS Int64), required_guarantees=[category in (A)]
+
+
+physical_plan after LimitAggregation:
+SAME TEXT AS ABOVE
+
+physical_plan after LimitPushPastWindows:
+SAME TEXT AS ABOVE
+
+physical_plan after LimitPushdown:
+SAME TEXT AS ABOVE
+
+physical_plan after ProjectionPushdown:
+SAME TEXT AS ABOVE
+
+physical_plan after EnsureCooperative:
+SAME TEXT AS ABOVE
+
+physical_plan after FilterPushdown(Post):
+SAME TEXT AS ABOVE
+
+physical_plan after RewriteExplicitRepartition:
+SAME TEXT AS ABOVE
+
+physical_plan after SanityCheckPlan:
+SAME TEXT AS ABOVE
+
+physical_plan:
+DeltaCommitExec(table_path=file://<tmp>/x/)
+  CoalescePartitionsExec
+    UnionExec
+      DeltaWriterExec(table_path=file://<tmp>/x/)
+        CoalescePartitionsExec
+          UnionExec
+            ProjectionExec: expr=[column1@0 as id, column2@1 as category, column3@2 as value]
+              DataSourceExec: partitions=1, partition_sizes=[<sizes>]
+            CoalesceBatchesExec: target_batch_size=8192
+              CoalesceBatchesExec: target_batch_size=8192
+                FilterExec: NOT category@1 = A AND value@2 < CAST(50 AS Int64)
+                  RepartitionExec: partitioning=RoundRobinBatch(<partitions>), input_partitions=<partitions>
+                    DeltaScanByAddsExec(table_path=file://<tmp>/x/)
+                      DeltaFileLookupExec(table_url=file:<tmp>/x/, version=0)
+                        CoalescePartitionsExec
+                          CoalesceBatchesExec: target_batch_size=8192
+                            CoalesceBatchesExec: target_batch_size=8192
+                              FilterExec: category@0 = A AND value@1 < CAST(50 AS Int64), projection=[__sail_file_path@2]
+                                RepartitionExec: partitioning=RoundRobinBatch(<partitions>), input_partitions=<partitions>
+                                  DataSourceExec: file_groups={1 group: [[<tmp>/x/part-<id>.snappy.parquet]]}, projection=[category, value, __sail_file_path], file_type=parquet, predicate=category@0 = A AND value@1 < CAST(50 AS Int64) AND category@0 = A AND value@1 < CAST(50 AS Int64), pruning_predicate=category_null_count@2 != row_count@3 AND category_min@0 <= A AND A <= category_max@1 AND value_null_count@5 != row_count@3 AND value_min@4 < CAST(50 AS Int64) AND category_null_count@2 != row_count@3 AND category_min@0 <= A AND A <= category_max@1 AND value_null_count@5 != row_count@3 AND value_min@4 < CAST(50 AS Int64), required_guarantees=[category in (A)]
+      DeltaRemoveActionsExec
+        DeltaFileLookupExec(table_url=file:<tmp>/x/, version=0)
+          CoalescePartitionsExec
+            CoalesceBatchesExec: target_batch_size=8192
+              CoalesceBatchesExec: target_batch_size=8192
+                FilterExec: category@0 = A AND value@1 < CAST(50 AS Int64), projection=[__sail_file_path@2]
+                  RepartitionExec: partitioning=RoundRobinBatch(<partitions>), input_partitions=<partitions>
+                    DataSourceExec: file_groups={1 group: [[<tmp>/x/part-<id>.snappy.parquet]]}, projection=[category, value, __sail_file_path], file_type=parquet, predicate=category@0 = A AND value@1 < CAST(50 AS Int64) AND category@0 = A AND value@1 < CAST(50 AS Int64), pruning_predicate=category_null_count@2 != row_count@3 AND category_min@0 <= A AND A <= category_max@1 AND value_null_count@5 != row_count@3 AND value_min@4 < CAST(50 AS Int64) AND category_null_count@2 != row_count@3 AND category_min@0 <= A AND A <= category_max@1 AND value_null_count@5 != row_count@3 AND value_min@4 < CAST(50 AS Int64), required_guarantees=[category in (A)]
+
+
+== Physical Plan ==
+DeltaCommitExec(table_path=file://<tmp>/x/)
+  CoalescePartitionsExec
+    UnionExec
+      DeltaWriterExec(table_path=file://<tmp>/x/)
+        CoalescePartitionsExec
+          UnionExec
+            ProjectionExec: expr=[column1@0 as id, column2@1 as category, column3@2 as value]
+              DataSourceExec: partitions=1, partition_sizes=[<sizes>]
+            CoalesceBatchesExec: target_batch_size=8192
+              CoalesceBatchesExec: target_batch_size=8192
+                FilterExec: NOT category@1 = A AND value@2 < CAST(50 AS Int64)
+                  RepartitionExec: partitioning=RoundRobinBatch(<partitions>), input_partitions=<partitions>
+                    DeltaScanByAddsExec(table_path=file://<tmp>/x/)
+                      DeltaFileLookupExec(table_url=file:<tmp>/x/, version=0)
+                        CoalescePartitionsExec
+                          CoalesceBatchesExec: target_batch_size=8192
+                            CoalesceBatchesExec: target_batch_size=8192
+                              FilterExec: category@0 = A AND value@1 < CAST(50 AS Int64), projection=[__sail_file_path@2]
+                                RepartitionExec: partitioning=RoundRobinBatch(<partitions>), input_partitions=<partitions>
+                                  DataSourceExec: file_groups={1 group: [[<tmp>/x/part-<id>.snappy.parquet]]}, projection=[category, value, __sail_file_path], file_type=parquet, predicate=category@0 = A AND value@1 < CAST(50 AS Int64) AND category@0 = A AND value@1 < CAST(50 AS Int64), pruning_predicate=category_null_count@2 != row_count@3 AND category_min@0 <= A AND A <= category_max@1 AND value_null_count@5 != row_count@3 AND value_min@4 < CAST(50 AS Int64) AND category_null_count@2 != row_count@3 AND category_min@0 <= A AND A <= category_max@1 AND value_null_count@5 != row_count@3 AND value_min@4 < CAST(50 AS Int64), required_guarantees=[category in (A)]
+      DeltaRemoveActionsExec
+        DeltaFileLookupExec(table_url=file:<tmp>/x/, version=0)
+          CoalescePartitionsExec
+            CoalesceBatchesExec: target_batch_size=8192
+              CoalesceBatchesExec: target_batch_size=8192
+                FilterExec: category@0 = A AND value@1 < CAST(50 AS Int64), projection=[__sail_file_path@2]
+                  RepartitionExec: partitioning=RoundRobinBatch(<partitions>), input_partitions=<partitions>
+                    DataSourceExec: file_groups={1 group: [[<tmp>/x/part-<id>.snappy.parquet]]}, projection=[category, value, __sail_file_path], file_type=parquet, predicate=category@0 = A AND value@1 < CAST(50 AS Int64) AND category@0 = A AND value@1 < CAST(50 AS Int64), pruning_predicate=category_null_count@2 != row_count@3 AND category_min@0 <= A AND A <= category_max@1 AND value_null_count@5 != row_count@3 AND value_min@4 < CAST(50 AS Int64) AND category_null_count@2 != row_count@3 AND category_min@0 <= A AND A <= category_max@1 AND value_null_count@5 != row_count@3 AND value_min@4 < CAST(50 AS Int64), required_guarantees=[category in (A)]
