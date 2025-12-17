@@ -79,8 +79,8 @@ impl JobScheduler {
         };
         let Some(task) = job.tasks.get_mut(&instance.task_id) else {
             warn!(
-                "task {} for job {} not found",
-                instance.task_id, instance.job_id
+                "job {} task {} not found",
+                instance.job_id, instance.task_id,
             );
             return None;
         };
@@ -96,8 +96,8 @@ impl JobScheduler {
             task.messages.extend(message);
         } else {
             warn!(
-                "task {} for job {} cannot be updated to the running state from its current state",
-                instance.task_id, instance.job_id
+                "job {} task {} cannot be updated to the running state from its current state",
+                instance.job_id, instance.task_id,
             );
         }
     }
@@ -110,8 +110,10 @@ impl JobScheduler {
             task.state = state;
             task.messages.extend(message);
         } else {
-            warn!("task {} for job {} cannot be updated to the succeeded state from its current state",
-            instance.task_id, instance.job_id);
+            warn!(
+                "job {} task {} for cannot be updated to the succeeded state from its current state",
+                instance.job_id, instance.task_id
+            );
         }
     }
 
@@ -153,8 +155,8 @@ impl JobScheduler {
             }
             let Some(task) = job.tasks.get_mut(&instance.task_id) else {
                 warn!(
-                    "task {} not found for job {}",
-                    instance.task_id, instance.job_id
+                    "job {} task {} not found",
+                    instance.job_id, instance.task_id
                 );
                 continue;
             };
@@ -171,8 +173,8 @@ impl JobScheduler {
                 TaskState::Pending => {}
                 _ => {
                     warn!(
-                        "task {} cannot be scheduled in its current state",
-                        instance.task_id
+                        "job {} task {} cannot be scheduled in its current state",
+                        instance.job_id, instance.task_id
                     );
                     continue;
                 }
@@ -221,8 +223,8 @@ impl JobScheduler {
         };
         let Some(task) = job.tasks.get(&instance.task_id) else {
             warn!(
-                "task {} for job {} not found",
-                instance.task_id, instance.job_id
+                "job {} task {} not found",
+                instance.job_id, instance.task_id
             );
             return TaskTimeout::No;
         };
@@ -274,7 +276,10 @@ impl JobScheduler {
             .into_iter()
             .map(|(task_id, channel, worker_id)| {
                 let channel = channel.ok_or_else(|| {
-                    ExecutionError::InternalError(format!("task channel is not set: {task_id}"))
+                    ExecutionError::InternalError(format!(
+                        "job {} task {} channel is not set",
+                        job_id, task_id
+                    ))
                 })?;
                 Ok(JobOutputChannel { worker_id, channel })
             })
@@ -301,9 +306,9 @@ impl JobScheduler {
                                 let task = job
                                     .tasks
                                     .get(task_id)
-                                    .ok_or_else(|| exec_datafusion_err!("task {task_id} not found"))?;
+                                    .ok_or_else(|| exec_datafusion_err!("job {} task {} not found", job_id, task_id))?;
                                 let worker_id = task.state.worker_id().ok_or_else(
-                                    || exec_datafusion_err!("task {task_id} is not bound to a worker"),
+                                    || exec_datafusion_err!("job {} task {} is not bound to a worker", job_id, task_id),
                                 )?;
                                 let attempt = task.attempt;
                                 Ok(TaskReadLocation::Worker {
@@ -328,7 +333,7 @@ impl JobScheduler {
                         let task = job
                             .tasks
                             .get(&task_id)
-                            .ok_or_else(|| exec_datafusion_err!("task {task_id} not found"))?;
+                            .ok_or_else(|| exec_datafusion_err!("job {} task {} not found", job_id, task_id))?;
                         let attempt = task.attempt;
                         let locations = (0..shuffle.shuffle_partitioning().partition_count())
                             .map(|p| {

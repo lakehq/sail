@@ -178,8 +178,8 @@ impl DriverActor {
             {
                 // The task status update is outdated, so we skip the remaining logic.
                 warn!(
-                    "task {} attempt {} sequence {sequence} is stale",
-                    instance.task_id, instance.attempt
+                    "job {} task {} attempt {} sequence {sequence} is stale",
+                    instance.job_id, instance.task_id, instance.attempt
                 );
                 return ActorAction::Continue;
             }
@@ -251,7 +251,8 @@ impl DriverActor {
                 // TODO: support task retry
                 let cause = cause.unwrap_or_else(|| {
                     CommonErrorCause::Internal(format!(
-                        "task {} failed at attempt {}: {}",
+                        "job {} task {} failed at attempt {}: {}",
+                        instance.job_id,
                         instance.task_id,
                         instance.attempt,
                         message.as_deref().unwrap_or("unknown reason")
@@ -265,7 +266,8 @@ impl DriverActor {
             TaskStatus::Canceled => {
                 let cause = cause.unwrap_or_else(|| {
                     CommonErrorCause::Internal(format!(
-                        "task {} canceled at attempt {}: {}",
+                        "job {} task {} attempt {} canceled: {}",
+                        instance.job_id,
                         instance.task_id,
                         instance.attempt,
                         message.as_deref().unwrap_or("unknown reason")
@@ -353,13 +355,13 @@ impl DriverActor {
         worker_id: WorkerId,
         reason: String,
     ) {
-        let tasks = self.worker_pool.find_tasks_for_worker(worker_id);
-        for task in tasks {
+        let instances = self.worker_pool.find_tasks_for_worker(worker_id);
+        for instance in instances {
             let reason = format!(
-                "task {} attempt {} failed for worker {worker_id}: {reason}",
-                task.task_id, task.attempt
+                "job {} task {} attempt {} failed for worker {worker_id}: {reason}",
+                instance.job_id, instance.task_id, instance.attempt
             );
-            self.update_task(ctx, task, TaskStatus::Failed, Some(reason), None);
+            self.update_task(ctx, instance, TaskStatus::Failed, Some(reason), None);
         }
     }
 }

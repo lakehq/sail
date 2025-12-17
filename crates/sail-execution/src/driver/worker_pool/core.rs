@@ -21,9 +21,9 @@ use sail_telemetry::common::SpanAttribute;
 use tokio::time::Instant;
 
 use crate::driver::job_scheduler::{JobOutputMetadata, TaskSchedule, TaskSchedulePlan};
+use crate::driver::worker_pool::state::WorkerState;
 use crate::driver::worker_pool::{
-    WorkerDescriptor, WorkerIdle, WorkerLost, WorkerPool, WorkerPoolOptions, WorkerState,
-    WorkerTimeout,
+    WorkerDescriptor, WorkerIdle, WorkerLost, WorkerPool, WorkerPoolOptions, WorkerTimeout,
 };
 use crate::driver::{DriverActor, DriverEvent, TaskStatus};
 use crate::error::{ExecutionError, ExecutionResult};
@@ -368,8 +368,11 @@ impl WorkerPool {
             }
             _ => {
                 let message = format!(
-                    "cannot assign task {} to worker {} that is not running",
-                    schedule.instance.task_id, schedule.worker_id
+                    "cannot assign job {} task {} attempt {} to worker {} that is not running",
+                    schedule.instance.job_id,
+                    schedule.instance.task_id,
+                    schedule.instance.attempt,
+                    schedule.worker_id
                 );
                 ctx.send(DriverEvent::UpdateTask {
                     instance: schedule.instance,
@@ -389,8 +392,8 @@ impl WorkerPool {
             Ok(plan) => plan,
             Err(e) => {
                 let message = format!(
-                    "failed to encode plan for task {}: {e}",
-                    schedule.instance.task_id
+                    "failed to encode plan for job {} task {}: {e}",
+                    schedule.instance.job_id, schedule.instance.task_id
                 );
                 let cause = CommonErrorCause::new::<PyErrExtractor>(&e);
                 ctx.send(DriverEvent::UpdateTask {
@@ -442,21 +445,21 @@ impl WorkerPool {
             Ok(x) => x,
             Err(e) => {
                 warn!(
-                    "failed to cancel task {} attempt {} in worker {worker_id}: {e}",
-                    instance.task_id, instance.attempt
+                    "failed to cancel job {} task {} attempt {} in worker {worker_id}: {e}",
+                    instance.job_id, instance.task_id, instance.attempt
                 );
                 return;
             }
         };
-        let task = instance.clone();
+        let instance = instance.clone();
         ctx.spawn(async move {
             if let Err(e) = client
-                .stop_task(task.job_id, task.task_id, task.attempt)
+                .stop_task(instance.job_id, instance.task_id, instance.attempt)
                 .await
             {
                 warn!(
-                    "failed to stop task {} attempt {}: {e}",
-                    task.task_id, task.attempt
+                    "failed to stop job {} task {} attempt {}: {e}",
+                    instance.job_id, instance.task_id, instance.attempt
                 );
             }
         });

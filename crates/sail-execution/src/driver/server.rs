@@ -108,8 +108,8 @@ impl DriverService for DriverServer {
         let ReportTaskStatusRequest {
             job_id,
             task_id,
-            status,
             attempt,
+            status,
             message,
             cause,
             sequence,

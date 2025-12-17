@@ -22,7 +22,7 @@ use tokio::sync::oneshot;
 
 use crate::driver::TaskStatus;
 use crate::error::{ExecutionError, ExecutionResult};
-use crate::id::{TaskId, TaskInstance, WorkerId};
+use crate::id::{TaskInstance, WorkerId};
 use crate::plan::{ShuffleReadExec, ShuffleWriteExec};
 use crate::stream::channel::ChannelName;
 use crate::stream::reader::TaskStreamSource;
@@ -107,20 +107,19 @@ impl WorkerActor {
         peers: Vec<WorkerLocation>,
     ) -> ActorAction {
         self.track_known_peers(ctx, peers);
-        let stream =
-            match self.execute_plan(ctx, instance.task_id, instance.attempt, plan, partition) {
-                Ok(x) => x,
-                Err(e) => {
-                    let event = WorkerEvent::ReportTaskStatus {
-                        instance,
-                        status: TaskStatus::Failed,
-                        message: Some(format!("failed to execute plan: {e}")),
-                        cause: Some(CommonErrorCause::new::<PyErrExtractor>(&e)),
-                    };
-                    ctx.send(event);
-                    return ActorAction::Continue;
-                }
-            };
+        let stream = match self.execute_plan(ctx, &instance, plan, partition) {
+            Ok(x) => x,
+            Err(e) => {
+                let event = WorkerEvent::ReportTaskStatus {
+                    instance,
+                    status: TaskStatus::Failed,
+                    message: Some(format!("failed to execute plan: {e}")),
+                    cause: Some(CommonErrorCause::new::<PyErrExtractor>(&e)),
+                };
+                ctx.send(event);
+                return ActorAction::Continue;
+            }
+        };
         let handle = ctx.handle().clone();
         let (tx, rx) = oneshot::channel();
         self.task_signals.insert(instance.clone(), tx);
@@ -345,8 +344,7 @@ impl WorkerActor {
     fn execute_plan(
         &mut self,
         ctx: &mut ActorContext<Self>,
-        task_id: TaskId,
-        attempt: usize,
+        instance: &TaskInstance,
         plan: Vec<u8>,
         partition: usize,
     ) -> ExecutionResult<SendableRecordBatchStream> {
@@ -359,16 +357,17 @@ impl WorkerActor {
         let plan = self.rewrite_parquet_adapters(plan)?;
         let plan = self.rewrite_shuffle(ctx, plan)?;
         debug!(
-            "task {} attempt {} execution plan\n{}",
-            task_id,
-            attempt,
+            "job {} task {} attempt {} execution plan\n{}",
+            instance.job_id,
+            instance.task_id,
+            instance.attempt,
             DisplayableExecutionPlan::new(plan.as_ref()).indent(true)
         );
         let options = TracingExecOptions {
             metric_registry: global_metric_registry(),
-            job_id: None, // TODO: propagate job ID
-            task_id: Some(task_id.into()),
-            task_attempt: Some(attempt),
+            job_id: Some(instance.job_id.into()),
+            task_id: Some(instance.task_id.into()),
+            task_attempt: Some(instance.attempt),
             operator_id: None,
         };
         let plan = trace_execution_plan(plan, options)?;
