@@ -29,7 +29,14 @@ def normalize_plan_text(plan_text: str) -> str:
     text = re.sub(r"([A-Za-z][A-Za-z0-9+.\-]*:)//", r"\1__SCHEME_SLASHSLASH__", text)
     text = re.sub(r"/{2,}", "/", text)
     text = text.replace("__SCHEME_SLASHSLASH__", "//")
-    text = re.sub(r", metrics=\[[^\]]*\]", "", text)
+
+    def _normalize_metrics_block(match: re.Match[str]) -> str:
+        body = match.group(1)
+        body = re.sub(r"=\s*[^,\]]+", "=<metric>", body)
+        body = re.sub(r"-?\d+(?:\.\d+)?", "<metric>", body)
+        return f", metrics=[{body}]"
+
+    text = re.sub(r", metrics=\[([^\]]*)\]", _normalize_metrics_block, text)
     text = re.sub(r"Hash\(\[([^\]]+)\], \d+\)", r"Hash([\1], <partitions>)", text)
     text = re.sub(r"RoundRobinBatch\(\d+\)", r"RoundRobinBatch(<partitions>)", text)
     text = re.sub(r"input_partitions=\d+", r"input_partitions=<partitions>", text)
