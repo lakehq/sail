@@ -10,20 +10,18 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-pub mod conversion;
-pub mod datasource;
-pub mod error;
-mod kernel;
-pub mod operations;
-pub mod options;
-pub mod physical_plan;
-pub mod planner;
-pub mod schema;
-pub mod storage;
-pub mod table;
-pub mod table_format;
+use std::sync::Arc;
 
-pub use table::create_delta_provider;
-pub use table_format::DeltaTableFormat;
+use datafusion::common::{DataFusionError, Result};
+use datafusion::physical_plan::ExecutionPlan;
 
-pub use crate::error::{DeltaError, DeltaError as DeltaTableError, DeltaResult, KernelError};
+use super::context::PlannerContext;
+
+pub async fn build_update_plan(
+    _ctx: &PlannerContext<'_>,
+    _input: Arc<dyn ExecutionPlan>,
+) -> Result<Arc<dyn ExecutionPlan>> {
+    Err(DataFusionError::NotImplemented(
+        "UPDATE planner not implemented".to_string(),
+    ))
+}

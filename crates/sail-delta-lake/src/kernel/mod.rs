@@ -27,7 +27,7 @@ use std::sync::LazyLock;
 pub use config::DeltaTableConfig;
 use delta_kernel::engine::arrow_expression::ArrowEvaluationHandler;
 pub use error::{DeltaResult, DeltaTableError};
-pub use operation::{DeltaOperation, SaveMode};
+pub use operation::{DeltaOperation, MergePredicate, SaveMode};
 pub use table_properties::TablePropertiesExt;
 
 pub(crate) static ARROW_HANDLER: LazyLock<ArrowEvaluationHandler> =

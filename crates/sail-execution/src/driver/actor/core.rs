@@ -2,7 +2,6 @@ use std::collections::{HashMap, VecDeque};
 use std::mem;
 use std::sync::Arc;
 
-use datafusion::prelude::SessionContext;
 use datafusion_proto::physical_plan::PhysicalExtensionCodec;
 use fastrace::future::FutureExt;
 use fastrace::Span;
@@ -58,7 +57,7 @@ impl Actor for DriverActor {
             server: ServerMonitor::new(),
             worker_manager,
             worker_clients: HashMap::new(),
-            physical_plan_codec: Box::new(RemoteExecutionCodec::new(SessionContext::default())),
+            physical_plan_codec: Box::new(RemoteExecutionCodec),
             task_queue: VecDeque::new(),
             task_sequences: HashMap::new(),
             job_outputs: HashMap::new(),
