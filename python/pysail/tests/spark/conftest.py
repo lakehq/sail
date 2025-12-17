@@ -398,6 +398,15 @@ def _normalize_delta_commit_info_for_snapshot(commit_info: dict) -> dict:
     if isinstance(ei, str) and ei.startswith("sail-delta-lake:"):
         normalized["engineInfo"] = "sail-delta-lake:x.x.x"
 
+    # Normalize time-related operation metrics (nondeterministic).
+    op_metrics = normalized.get("operationMetrics")
+    if isinstance(op_metrics, dict):
+        scrubbed = dict(op_metrics)
+        for k in list(scrubbed.keys()):
+            if k.endswith("TimeMs") or k.endswith("DurationMs") or k.endswith("timeMs"):
+                scrubbed[k] = "<time_ms>"
+        normalized["operationMetrics"] = scrubbed
+
     return normalized
 
 

@@ -119,6 +119,7 @@ pub struct CommitData {
     pub actions: Vec<Action>,
     pub operation: DeltaOperation,
     _app_metadata: HashMap<String, Value>,
+    _operation_metrics: HashMap<String, Value>,
     _app_transactions: Vec<Transaction>,
 }
 
@@ -127,6 +128,7 @@ impl CommitData {
         mut actions: Vec<Action>,
         operation: DeltaOperation,
         mut app_metadata: HashMap<String, Value>,
+        operation_metrics: HashMap<String, Value>,
         app_transactions: Vec<Transaction>,
     ) -> Self {
         let is_blind_append = Self::is_blind_append(&actions, &operation);
@@ -147,8 +149,27 @@ impl CommitData {
                 "clientVersion".to_string(),
                 Value::String(format!("sail-delta-lake.{}", env!("CARGO_PKG_VERSION"))),
             );
-            app_metadata.extend(commit_info.info.clone());
-            commit_info.info = app_metadata.clone();
+            // Merge operationMetrics into the final commitInfo.info.
+            // If the caller also provided `operationMetrics` in app metadata, merge both.
+            let mut merged_operation_metrics: HashMap<String, Value> = HashMap::new();
+            if let Some(Value::Object(obj)) = commit_info.info.get("operationMetrics").cloned() {
+                merged_operation_metrics.extend(obj);
+            }
+            if let Some(Value::Object(obj)) = app_metadata.get("operationMetrics").cloned() {
+                merged_operation_metrics.extend(obj);
+            }
+            merged_operation_metrics.extend(operation_metrics.clone());
+
+            // Merge base info + app metadata (app metadata wins on conflicts).
+            let mut merged_info = commit_info.info.clone();
+            merged_info.extend(app_metadata.clone());
+            if !merged_operation_metrics.is_empty() {
+                merged_info.insert(
+                    "operationMetrics".to_string(),
+                    Value::Object(merged_operation_metrics.into_iter().collect()),
+                );
+            }
+            commit_info.info = merged_info;
             actions.push(Action::CommitInfo(commit_info));
         }
 
@@ -160,6 +181,7 @@ impl CommitData {
             actions,
             operation,
             _app_metadata: app_metadata,
+            _operation_metrics: operation_metrics,
             _app_transactions: app_transactions,
         }
     }
@@ -266,6 +288,7 @@ pub struct PostCommitHookProperties {
 /// Enable controlling commit behaviour and modifying metadata that is written during a commit.
 pub struct CommitProperties {
     pub(crate) app_metadata: HashMap<String, Value>,
+    pub(crate) operation_metrics: HashMap<String, Value>,
     pub(crate) app_transaction: Vec<Transaction>,
     max_retries: usize,
     create_checkpoint: bool,
@@ -276,11 +299,24 @@ impl Default for CommitProperties {
     fn default() -> Self {
         Self {
             app_metadata: Default::default(),
+            operation_metrics: Default::default(),
             app_transaction: Vec::new(),
             max_retries: DEFAULT_RETRIES,
             create_checkpoint: true,
             cleanup_expired_logs: None,
         }
+    }
+}
+
+impl CommitProperties {
+    /// Attach operation metrics that will be merged into the Delta log `commitInfo` action
+    /// under the `operationMetrics` key.
+    pub(crate) fn with_operation_metrics(
+        mut self,
+        operation_metrics: HashMap<String, Value>,
+    ) -> Self {
+        self.operation_metrics = operation_metrics;
+        self
     }
 }
 
@@ -330,6 +366,7 @@ impl From<CommitProperties> for CommitBuilder {
         CommitBuilder {
             max_retries: value.max_retries,
             app_metadata: value.app_metadata,
+            operation_metrics: value.operation_metrics,
             post_commit_hook: Some(PostCommitHookProperties {
                 create_checkpoint: value.create_checkpoint,
                 cleanup_expired_logs: value.cleanup_expired_logs,
@@ -344,6 +381,7 @@ impl From<CommitProperties> for CommitBuilder {
 pub struct CommitBuilder {
     actions: Vec<Action>,
     app_metadata: HashMap<String, Value>,
+    operation_metrics: HashMap<String, Value>,
     app_transaction: Vec<Transaction>,
     max_retries: usize,
     post_commit_hook: Option<PostCommitHookProperties>,
@@ -356,6 +394,7 @@ impl Default for CommitBuilder {
         CommitBuilder {
             actions: Vec::new(),
             app_metadata: HashMap::new(),
+            operation_metrics: HashMap::new(),
             app_transaction: Vec::new(),
             max_retries: DEFAULT_RETRIES,
             post_commit_hook: None,
@@ -417,6 +456,7 @@ impl<'a> CommitBuilder {
             self.actions,
             operation,
             self.app_metadata,
+            self.operation_metrics,
             self.app_transaction,
         );
         PreCommit {

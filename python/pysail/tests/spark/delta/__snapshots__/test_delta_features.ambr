@@ -5,6 +5,18 @@
     'engineInfo': 'sail-delta-lake:x.x.x',
     'isBlindAppend': False,
     'operation': 'MERGE',
+    'operationMetrics': dict({
+      'executionTimeMs': '<time_ms>',
+      'numAddedBytes': 1132,
+      'numAddedFiles': 1,
+      'numFiles': 1,
+      'numOutputBytes': 1132,
+      'numOutputFiles': 1,
+      'numOutputRows': 4,
+      'numRemovedBytes': 1070,
+      'numRemovedFiles': 1,
+      'writeTimeMs': '<time_ms>',
+    }),
     'operationParameters': dict({
       'matchedPredicates': list([
         dict({
@@ -34,6 +46,18 @@
     'engineInfo': 'sail-delta-lake:x.x.x',
     'isBlindAppend': False,
     'operation': 'MERGE',
+    'operationMetrics': dict({
+      'executionTimeMs': '<time_ms>',
+      'numAddedBytes': 1081,
+      'numAddedFiles': 1,
+      'numFiles': 1,
+      'numOutputBytes': 1081,
+      'numOutputFiles': 1,
+      'numOutputRows': 3,
+      'numRemovedBytes': 1059,
+      'numRemovedFiles': 1,
+      'writeTimeMs': '<time_ms>',
+    }),
     'operationParameters': dict({
       'matchedPredicates': list([
         dict({
@@ -63,6 +87,18 @@
     'engineInfo': 'sail-delta-lake:x.x.x',
     'isBlindAppend': False,
     'operation': 'DELETE',
+    'operationMetrics': dict({
+      'executionTimeMs': '<time_ms>',
+      'numAddedBytes': 1837,
+      'numAddedFiles': 1,
+      'numFiles': 1,
+      'numOutputBytes': 1837,
+      'numOutputFiles': 1,
+      'numOutputRows': 5,
+      'numRemovedBytes': 1941,
+      'numRemovedFiles': 1,
+      'writeTimeMs': '<time_ms>',
+    }),
     'operationParameters': dict({
       'predicate': 'department = Engineering',
     }),
@@ -75,6 +111,18 @@
     'engineInfo': 'sail-delta-lake:x.x.x',
     'isBlindAppend': False,
     'operation': 'MERGE',
+    'operationMetrics': dict({
+      'executionTimeMs': '<time_ms>',
+      'numAddedBytes': 1419,
+      'numAddedFiles': 1,
+      'numFiles': 1,
+      'numOutputBytes': 1419,
+      'numOutputFiles': 1,
+      'numOutputRows': 4,
+      'numRemovedBytes': 1293,
+      'numRemovedFiles': 1,
+      'writeTimeMs': '<time_ms>',
+    }),
     'operationParameters': dict({
       'matchedPredicates': list([
         dict({
@@ -103,6 +151,18 @@
     'engineInfo': 'sail-delta-lake:x.x.x',
     'isBlindAppend': False,
     'operation': 'MERGE',
+    'operationMetrics': dict({
+      'executionTimeMs': '<time_ms>',
+      'numAddedBytes': 1033,
+      'numAddedFiles': 1,
+      'numFiles': 1,
+      'numOutputBytes': 1033,
+      'numOutputFiles': 1,
+      'numOutputRows': 3,
+      'numRemovedBytes': 1017,
+      'numRemovedFiles': 1,
+      'writeTimeMs': '<time_ms>',
+    }),
     'operationParameters': dict({
       'matchedPredicates': list([
         dict({
