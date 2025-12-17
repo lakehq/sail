@@ -150,6 +150,7 @@ pub struct MergePredicateInfo {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub enum OperationOverride {
+    // TODO: extend or rename like `DeltaMerge`, `IcebergMerge` to better distinguish between different implementations.
     #[serde(rename_all = "camelCase")]
     Merge {
         #[serde(skip_serializing_if = "Option::is_none")]
@@ -194,7 +195,7 @@ pub struct MergeInfo {
     pub not_matched_by_source_clauses: Vec<MergeNotMatchedBySourceClauseInfo>,
     pub not_matched_by_target_clauses: Vec<MergeNotMatchedByTargetClauseInfo>,
     pub with_schema_evolution: bool,
-    /// Optional override for commit operation metadata (structured, not JSON).
+    /// Optional override for commit operation metadata.
     pub operation_override: Option<OperationOverride>,
 }
 

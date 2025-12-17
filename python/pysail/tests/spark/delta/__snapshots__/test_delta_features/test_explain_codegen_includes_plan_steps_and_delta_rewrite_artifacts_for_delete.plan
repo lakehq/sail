@@ -1,0 +1,342 @@
+== Codegen ==
+Whole-stage codegen is not supported; showing physical plan instead.
+
+== Plan Steps ==
+initial_logical_plan:
+FileDelete: options=FileDeleteOptions { table_name: ["delta_delete_explain_codegen"], path: "<tmp>/delete_explain_codegen", format: "DELTA", condition: Some(BinaryExpr(BinaryExpr { left: BinaryExpr(BinaryExpr { left: BinaryExpr(BinaryExpr { left: BinaryExpr(BinaryExpr { left: Column(Column { relation: None, name: "salary" }), op: Plus, right: Literal(Int32(1), None) }), op: Gt, right: Literal(Int32(70000), None) }), op: And, right: BinaryExpr(BinaryExpr { left: BinaryExpr(BinaryExpr { left: Column(Column { relation: None, name: "department" }), op: Eq, right: Literal(Utf8("Engineering"), None) }), op: Or, right: BinaryExpr(BinaryExpr { left: Column(Column { relation: None, name: "department" }), op: Eq, right: Literal(Utf8("Marketing"), None) }) }) }), op: And, right: IsNotNull(Column(Column { relation: None, name: "active" })) })), options: [] }
+
+logical_plan after resolve_grouping_function:
+SAME TEXT AS ABOVE
+
+logical_plan after type_coercion:
+SAME TEXT AS ABOVE
+
+analyzed_logical_plan:
+SAME TEXT AS ABOVE
+
+logical_plan after expand_merge:
+SAME TEXT AS ABOVE
+
+logical_plan after eliminate_nested_union:
+SAME TEXT AS ABOVE
+
+logical_plan after simplify_expressions:
+SAME TEXT AS ABOVE
+
+logical_plan after replace_distinct_aggregate:
+SAME TEXT AS ABOVE
+
+logical_plan after eliminate_join:
+SAME TEXT AS ABOVE
+
+logical_plan after decorrelate_predicate_subquery:
+SAME TEXT AS ABOVE
+
+logical_plan after scalar_subquery_to_join:
+SAME TEXT AS ABOVE
+
+logical_plan after decorrelate_lateral_join:
+SAME TEXT AS ABOVE
+
+logical_plan after extract_equijoin_predicate:
+SAME TEXT AS ABOVE
+
+logical_plan after eliminate_duplicated_expr:
+SAME TEXT AS ABOVE
+
+logical_plan after eliminate_filter:
+SAME TEXT AS ABOVE
+
+logical_plan after eliminate_cross_join:
+SAME TEXT AS ABOVE
+
+logical_plan after eliminate_limit:
+SAME TEXT AS ABOVE
+
+logical_plan after propagate_empty_relation:
+SAME TEXT AS ABOVE
+
+logical_plan after eliminate_one_union:
+SAME TEXT AS ABOVE
+
+logical_plan after filter_null_join_keys:
+SAME TEXT AS ABOVE
+
+logical_plan after eliminate_outer_join:
+SAME TEXT AS ABOVE
+
+logical_plan after push_down_limit:
+SAME TEXT AS ABOVE
+
+logical_plan after push_down_filter:
+SAME TEXT AS ABOVE
+
+logical_plan after single_distinct_aggregation_to_group_by:
+SAME TEXT AS ABOVE
+
+logical_plan after eliminate_group_by_constant:
+SAME TEXT AS ABOVE
+
+logical_plan after common_sub_expression_eliminate:
+SAME TEXT AS ABOVE
+
+logical_plan after optimize_projections:
+SAME TEXT AS ABOVE
+
+logical_plan:
+FileDelete: options=FileDeleteOptions { table_name: ["delta_delete_explain_codegen"], path: "<tmp>/delete_explain_codegen", format: "DELTA", condition: Some(BinaryExpr(BinaryExpr { left: BinaryExpr(BinaryExpr { left: BinaryExpr(BinaryExpr { left: BinaryExpr(BinaryExpr { left: Column(Column { relation: None, name: "salary" }), op: Plus, right: Literal(Int32(1), None) }), op: Gt, right: Literal(Int32(70000), None) }), op: And, right: BinaryExpr(BinaryExpr { left: BinaryExpr(BinaryExpr { left: Column(Column { relation: None, name: "department" }), op: Eq, right: Literal(Utf8("Engineering"), None) }), op: Or, right: BinaryExpr(BinaryExpr { left: Column(Column { relation: None, name: "department" }), op: Eq, right: Literal(Utf8("Marketing"), None) }) }) }), op: And, right: IsNotNull(Column(Column { relation: None, name: "active" })) })), options: [] }
+
+initial_physical_plan:
+DeltaCommitExec(table_path=file://<tmp>/delete_explain_codegen/)
+  CoalescePartitionsExec
+    UnionExec
+      DeltaWriterExec(table_path=file://<tmp>/delete_explain_codegen/)
+        CoalescePartitionsExec
+          CoalesceBatchesExec: target_batch_size=8192
+            FilterExec: NOT salary@4 + 1 > 70000 AND (department@3 = Engineering OR department@3 = Marketing) AND active@5 IS NOT NULL
+              RepartitionExec: partitioning=RoundRobinBatch(<partitions>), input_partitions=<partitions>
+                DeltaScanByAddsExec(table_path=file://<tmp>/delete_explain_codegen/)
+                  CooperativeExec
+                    DeltaFindFilesExec(table_path=file://<tmp>/delete_explain_codegen/)
+      DeltaRemoveActionsExec
+        CooperativeExec
+          DeltaFindFilesExec(table_path=file://<tmp>/delete_explain_codegen/)
+
+
+initial_physical_plan_with_stats:
+DeltaCommitExec(table_path=file://<tmp>/delete_explain_codegen/), statistics=[Rows=Absent, Bytes=Absent, [(Col[0]:)]]
+  CoalescePartitionsExec, statistics=[Rows=Absent, Bytes=Absent, [(Col[0]:)]]
+    UnionExec, statistics=[Rows=Absent, Bytes=Absent, [(Col[0]:)]]
+      DeltaWriterExec(table_path=file://<tmp>/delete_explain_codegen/), statistics=[Rows=Absent, Bytes=Absent, [(Col[0]:)]]
+        CoalescePartitionsExec, statistics=[Rows=Absent, Bytes=Absent, [(Col[0]:),(Col[1]:),(Col[2]:),(Col[3]:),(Col[4]:),(Col[5]:)]]
+          CoalesceBatchesExec: target_batch_size=8192, statistics=[Rows=Absent, Bytes=Absent, [(Col[0]:),(Col[1]:),(Col[2]:),(Col[3]:),(Col[4]:),(Col[5]:)]]
+            FilterExec: NOT salary@4 + 1 > 70000 AND (department@3 = Engineering OR department@3 = Marketing) AND active@5 IS NOT NULL, statistics=[Rows=Absent, Bytes=Absent, [(Col[0]:),(Col[1]:),(Col[2]:),(Col[3]:),(Col[4]:),(Col[5]:)]]
+              RepartitionExec: partitioning=RoundRobinBatch(<partitions>), input_partitions=<partitions>, statistics=[Rows=Absent, Bytes=Absent, [(Col[0]:),(Col[1]:),(Col[2]:),(Col[3]:),(Col[4]:),(Col[5]:)]]
+                DeltaScanByAddsExec(table_path=file://<tmp>/delete_explain_codegen/), statistics=[Rows=Absent, Bytes=Absent, [(Col[0]:),(Col[1]:),(Col[2]:),(Col[3]:),(Col[4]:),(Col[5]:)]]
+                  CooperativeExec, statistics=[Rows=Absent, Bytes=Absent, [(Col[0]:),(Col[1]:)]]
+                    DeltaFindFilesExec(table_path=file://<tmp>/delete_explain_codegen/), statistics=[Rows=Absent, Bytes=Absent, [(Col[0]:),(Col[1]:)]]
+      DeltaRemoveActionsExec, statistics=[Rows=Absent, Bytes=Absent, [(Col[0]:)]]
+        CooperativeExec, statistics=[Rows=Absent, Bytes=Absent, [(Col[0]:),(Col[1]:)]]
+          DeltaFindFilesExec(table_path=file://<tmp>/delete_explain_codegen/), statistics=[Rows=Absent, Bytes=Absent, [(Col[0]:),(Col[1]:)]]
+
+
+initial_physical_plan_with_schema:
+DeltaCommitExec(table_path=file://<tmp>/delete_explain_codegen/), schema=[count:UInt64;N]
+  CoalescePartitionsExec, schema=[data:Utf8;N]
+    UnionExec, schema=[data:Utf8;N]
+      DeltaWriterExec(table_path=file://<tmp>/delete_explain_codegen/), schema=[data:Utf8;N]
+        CoalescePartitionsExec, schema=[id:Int32;N, name:Utf8;N, age:Int32;N, department:Utf8;N, salary:Int32;N, active:Boolean;N]
+          CoalesceBatchesExec: target_batch_size=8192, schema=[id:Int32;N, name:Utf8;N, age:Int32;N, department:Utf8;N, salary:Int32;N, active:Boolean;N]
+            FilterExec: NOT salary@4 + 1 > 70000 AND (department@3 = Engineering OR department@3 = Marketing) AND active@5 IS NOT NULL, schema=[id:Int32;N, name:Utf8;N, age:Int32;N, department:Utf8;N, salary:Int32;N, active:Boolean;N]
+              RepartitionExec: partitioning=RoundRobinBatch(<partitions>), input_partitions=<partitions>, schema=[id:Int32;N, name:Utf8;N, age:Int32;N, department:Utf8;N, salary:Int32;N, active:Boolean;N]
+                DeltaScanByAddsExec(table_path=file://<tmp>/delete_explain_codegen/), schema=[id:Int32;N, name:Utf8;N, age:Int32;N, department:Utf8;N, salary:Int32;N, active:Boolean;N]
+                  CooperativeExec, schema=[add:Utf8, partition_scan:Boolean]
+                    DeltaFindFilesExec(table_path=file://<tmp>/delete_explain_codegen/), schema=[add:Utf8, partition_scan:Boolean]
+      DeltaRemoveActionsExec, schema=[data:Utf8;N]
+        CooperativeExec, schema=[add:Utf8, partition_scan:Boolean]
+          DeltaFindFilesExec(table_path=file://<tmp>/delete_explain_codegen/), schema=[add:Utf8, partition_scan:Boolean]
+
+
+physical_plan after OutputRequirements:
+OutputRequirementExec: order_by=[], dist_by=Unspecified
+  DeltaCommitExec(table_path=file://<tmp>/delete_explain_codegen/)
+    CoalescePartitionsExec
+      UnionExec
+        DeltaWriterExec(table_path=file://<tmp>/delete_explain_codegen/)
+          CoalescePartitionsExec
+            CoalesceBatchesExec: target_batch_size=8192
+              FilterExec: NOT salary@4 + 1 > 70000 AND (department@3 = Engineering OR department@3 = Marketing) AND active@5 IS NOT NULL
+                RepartitionExec: partitioning=RoundRobinBatch(<partitions>), input_partitions=<partitions>
+                  DeltaScanByAddsExec(table_path=file://<tmp>/delete_explain_codegen/)
+                    CooperativeExec
+                      DeltaFindFilesExec(table_path=file://<tmp>/delete_explain_codegen/)
+        DeltaRemoveActionsExec
+          CooperativeExec
+            DeltaFindFilesExec(table_path=file://<tmp>/delete_explain_codegen/)
+
+
+physical_plan after aggregate_statistics:
+SAME TEXT AS ABOVE
+
+physical_plan after join_selection:
+SAME TEXT AS ABOVE
+
+physical_plan after LimitedDistinctAggregation:
+SAME TEXT AS ABOVE
+
+physical_plan after FilterPushdown:
+SAME TEXT AS ABOVE
+
+physical_plan after EnforceDistribution:
+OutputRequirementExec: order_by=[], dist_by=Unspecified
+  DeltaCommitExec(table_path=file://<tmp>/delete_explain_codegen/)
+    CoalescePartitionsExec
+      UnionExec
+        DeltaWriterExec(table_path=file://<tmp>/delete_explain_codegen/)
+          CoalescePartitionsExec
+            CoalesceBatchesExec: target_batch_size=8192
+              FilterExec: NOT salary@4 + 1 > 70000 AND (department@3 = Engineering OR department@3 = Marketing) AND active@5 IS NOT NULL
+                RepartitionExec: partitioning=RoundRobinBatch(<partitions>), input_partitions=<partitions>
+                  DeltaScanByAddsExec(table_path=file://<tmp>/delete_explain_codegen/)
+                    CoalescePartitionsExec
+                      CooperativeExec
+                        RepartitionExec: partitioning=RoundRobinBatch(<partitions>), input_partitions=<partitions>
+                          DeltaFindFilesExec(table_path=file://<tmp>/delete_explain_codegen/)
+        DeltaRemoveActionsExec
+          CoalescePartitionsExec
+            CooperativeExec
+              RepartitionExec: partitioning=RoundRobinBatch(<partitions>), input_partitions=<partitions>
+                DeltaFindFilesExec(table_path=file://<tmp>/delete_explain_codegen/)
+
+
+physical_plan after CombinePartialFinalAggregate:
+SAME TEXT AS ABOVE
+
+physical_plan after EnforceSorting:
+SAME TEXT AS ABOVE
+
+physical_plan after OptimizeAggregateOrder:
+SAME TEXT AS ABOVE
+
+physical_plan after ProjectionPushdown:
+SAME TEXT AS ABOVE
+
+physical_plan after coalesce_batches:
+OutputRequirementExec: order_by=[], dist_by=Unspecified
+  DeltaCommitExec(table_path=file://<tmp>/delete_explain_codegen/)
+    CoalescePartitionsExec
+      UnionExec
+        DeltaWriterExec(table_path=file://<tmp>/delete_explain_codegen/)
+          CoalescePartitionsExec
+            CoalesceBatchesExec: target_batch_size=8192
+              CoalesceBatchesExec: target_batch_size=8192
+                FilterExec: NOT salary@4 + 1 > 70000 AND (department@3 = Engineering OR department@3 = Marketing) AND active@5 IS NOT NULL
+                  RepartitionExec: partitioning=RoundRobinBatch(<partitions>), input_partitions=<partitions>
+                    DeltaScanByAddsExec(table_path=file://<tmp>/delete_explain_codegen/)
+                      CoalescePartitionsExec
+                        CooperativeExec
+                          RepartitionExec: partitioning=RoundRobinBatch(<partitions>), input_partitions=<partitions>
+                            DeltaFindFilesExec(table_path=file://<tmp>/delete_explain_codegen/)
+        DeltaRemoveActionsExec
+          CoalescePartitionsExec
+            CooperativeExec
+              RepartitionExec: partitioning=RoundRobinBatch(<partitions>), input_partitions=<partitions>
+                DeltaFindFilesExec(table_path=file://<tmp>/delete_explain_codegen/)
+
+
+physical_plan after coalesce_async_exec_input:
+SAME TEXT AS ABOVE
+
+physical_plan after OutputRequirements:
+DeltaCommitExec(table_path=file://<tmp>/delete_explain_codegen/)
+  CoalescePartitionsExec
+    UnionExec
+      DeltaWriterExec(table_path=file://<tmp>/delete_explain_codegen/)
+        CoalescePartitionsExec
+          CoalesceBatchesExec: target_batch_size=8192
+            CoalesceBatchesExec: target_batch_size=8192
+              FilterExec: NOT salary@4 + 1 > 70000 AND (department@3 = Engineering OR department@3 = Marketing) AND active@5 IS NOT NULL
+                RepartitionExec: partitioning=RoundRobinBatch(<partitions>), input_partitions=<partitions>
+                  DeltaScanByAddsExec(table_path=file://<tmp>/delete_explain_codegen/)
+                    CoalescePartitionsExec
+                      CooperativeExec
+                        RepartitionExec: partitioning=RoundRobinBatch(<partitions>), input_partitions=<partitions>
+                          DeltaFindFilesExec(table_path=file://<tmp>/delete_explain_codegen/)
+      DeltaRemoveActionsExec
+        CoalescePartitionsExec
+          CooperativeExec
+            RepartitionExec: partitioning=RoundRobinBatch(<partitions>), input_partitions=<partitions>
+              DeltaFindFilesExec(table_path=file://<tmp>/delete_explain_codegen/)
+
+
+physical_plan after LimitAggregation:
+SAME TEXT AS ABOVE
+
+physical_plan after LimitPushPastWindows:
+SAME TEXT AS ABOVE
+
+physical_plan after LimitPushdown:
+SAME TEXT AS ABOVE
+
+physical_plan after ProjectionPushdown:
+SAME TEXT AS ABOVE
+
+physical_plan after EnsureCooperative:
+DeltaCommitExec(table_path=file://<tmp>/delete_explain_codegen/)
+  CoalescePartitionsExec
+    UnionExec
+      DeltaWriterExec(table_path=file://<tmp>/delete_explain_codegen/)
+        CoalescePartitionsExec
+          CoalesceBatchesExec: target_batch_size=8192
+            CoalesceBatchesExec: target_batch_size=8192
+              FilterExec: NOT salary@4 + 1 > 70000 AND (department@3 = Engineering OR department@3 = Marketing) AND active@5 IS NOT NULL
+                RepartitionExec: partitioning=RoundRobinBatch(<partitions>), input_partitions=<partitions>
+                  DeltaScanByAddsExec(table_path=file://<tmp>/delete_explain_codegen/)
+                    CoalescePartitionsExec
+                      CooperativeExec
+                        RepartitionExec: partitioning=RoundRobinBatch(<partitions>), input_partitions=<partitions>
+                          CooperativeExec
+                            DeltaFindFilesExec(table_path=file://<tmp>/delete_explain_codegen/)
+      DeltaRemoveActionsExec
+        CoalescePartitionsExec
+          CooperativeExec
+            RepartitionExec: partitioning=RoundRobinBatch(<partitions>), input_partitions=<partitions>
+              CooperativeExec
+                DeltaFindFilesExec(table_path=file://<tmp>/delete_explain_codegen/)
+
+
+physical_plan after FilterPushdown(Post):
+SAME TEXT AS ABOVE
+
+physical_plan after RewriteExplicitRepartition:
+SAME TEXT AS ABOVE
+
+physical_plan after SanityCheckPlan:
+SAME TEXT AS ABOVE
+
+physical_plan:
+DeltaCommitExec(table_path=file://<tmp>/delete_explain_codegen/)
+  CoalescePartitionsExec
+    UnionExec
+      DeltaWriterExec(table_path=file://<tmp>/delete_explain_codegen/)
+        CoalescePartitionsExec
+          CoalesceBatchesExec: target_batch_size=8192
+            CoalesceBatchesExec: target_batch_size=8192
+              FilterExec: NOT salary@4 + 1 > 70000 AND (department@3 = Engineering OR department@3 = Marketing) AND active@5 IS NOT NULL
+                RepartitionExec: partitioning=RoundRobinBatch(<partitions>), input_partitions=<partitions>
+                  DeltaScanByAddsExec(table_path=file://<tmp>/delete_explain_codegen/)
+                    CoalescePartitionsExec
+                      CooperativeExec
+                        RepartitionExec: partitioning=RoundRobinBatch(<partitions>), input_partitions=<partitions>
+                          CooperativeExec
+                            DeltaFindFilesExec(table_path=file://<tmp>/delete_explain_codegen/)
+      DeltaRemoveActionsExec
+        CoalescePartitionsExec
+          CooperativeExec
+            RepartitionExec: partitioning=RoundRobinBatch(<partitions>), input_partitions=<partitions>
+              CooperativeExec
+                DeltaFindFilesExec(table_path=file://<tmp>/delete_explain_codegen/)
+
+
+== Physical Plan ==
+DeltaCommitExec(table_path=file://<tmp>/delete_explain_codegen/)
+  CoalescePartitionsExec
+    UnionExec
+      DeltaWriterExec(table_path=file://<tmp>/delete_explain_codegen/)
+        CoalescePartitionsExec
+          CoalesceBatchesExec: target_batch_size=8192
+            CoalesceBatchesExec: target_batch_size=8192
+              FilterExec: NOT salary@4 + 1 > 70000 AND (department@3 = Engineering OR department@3 = Marketing) AND active@5 IS NOT NULL
+                RepartitionExec: partitioning=RoundRobinBatch(<partitions>), input_partitions=<partitions>
+                  DeltaScanByAddsExec(table_path=file://<tmp>/delete_explain_codegen/)
+                    CoalescePartitionsExec
+                      CooperativeExec
+                        RepartitionExec: partitioning=RoundRobinBatch(<partitions>), input_partitions=<partitions>
+                          CooperativeExec
+                            DeltaFindFilesExec(table_path=file://<tmp>/delete_explain_codegen/)
+      DeltaRemoveActionsExec
+        CoalescePartitionsExec
+          CooperativeExec
+            RepartitionExec: partitioning=RoundRobinBatch(<partitions>), input_partitions=<partitions>
+              CooperativeExec
+                DeltaFindFilesExec(table_path=file://<tmp>/delete_explain_codegen/)
