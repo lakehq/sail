@@ -60,7 +60,7 @@ impl Actor for WorkerActor {
             task_signals: HashMap::new(),
             local_streams: HashMap::new(),
             session_context: None,
-            physical_plan_codec: Box::new(RemoteExecutionCodec::new(SessionContext::default())),
+            physical_plan_codec: Box::new(RemoteExecutionCodec),
             sequence: 42,
         }
     }
