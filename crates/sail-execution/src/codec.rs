@@ -62,8 +62,8 @@ use sail_data_source::formats::socket::{SocketSourceExec, TableSocketOptions};
 use sail_data_source::formats::text::source::TextSource;
 use sail_data_source::formats::text::writer::{TextSink, TextWriterOptions};
 use sail_delta_lake::physical_plan::{
-    DeltaCommitExec, DeltaFileLookupExec, DeltaFindFilesExec, DeltaRemoveActionsExec,
-    DeltaScanByAddsExec, DeltaWriterExec,
+    DeltaCommitExec, DeltaFileLookupExec, DeltaRemoveActionsExec, DeltaScanByAddsExec,
+    DeltaWriterExec,
 };
 use sail_function::aggregate::kurtosis::KurtosisFunction;
 use sail_function::aggregate::max_min_by::{MaxByFunction, MinByFunction};
@@ -589,38 +589,6 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
                     table_schema,
                 )))
             }
-            NodeKind::DeltaFindFiles(gen::DeltaFindFilesExecNode {
-                table_url,
-                predicate,
-                table_schema,
-                version,
-            }) => {
-                let table_url = Url::parse(&table_url)
-                    .map_err(|e| plan_datafusion_err!("failed to parse table URL: {e}"))?;
-                let table_schema = if let Some(schema_bytes) = table_schema {
-                    Some(Arc::new(self.try_decode_schema(&schema_bytes)?))
-                } else {
-                    None
-                };
-                let predicate = if let Some(pred_bytes) = predicate {
-                    let empty_schema = Arc::new(Schema::empty());
-                    let schema = table_schema.as_ref().unwrap_or(&empty_schema);
-                    Some(parse_physical_expr(
-                        &self.try_decode_message(&pred_bytes)?,
-                        ctx,
-                        schema,
-                        self,
-                    )?)
-                } else {
-                    None
-                };
-                Ok(Arc::new(DeltaFindFilesExec::new(
-                    table_url,
-                    predicate,
-                    table_schema,
-                    version,
-                )))
-            }
             NodeKind::DeltaRemoveActions(gen::DeltaRemoveActionsExecNode { input }) => {
                 let input = self.try_decode_plan(&input, ctx)?;
                 Ok(Arc::new(DeltaRemoveActionsExec::new(input)))
@@ -1068,26 +1036,6 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
                 input,
                 table_url: delta_scan_by_adds_exec.table_url().to_string(),
                 table_schema,
-            })
-        } else if let Some(delta_find_files_exec) =
-            node.as_any().downcast_ref::<DeltaFindFilesExec>()
-        {
-            let predicate = if let Some(pred) = delta_find_files_exec.predicate() {
-                let predicate_node = serialize_physical_expr(&pred.clone(), self)?;
-                Some(self.try_encode_message(predicate_node)?)
-            } else {
-                None
-            };
-            let table_schema = if let Some(schema) = delta_find_files_exec.table_schema() {
-                Some(self.try_encode_schema(schema)?)
-            } else {
-                None
-            };
-            NodeKind::DeltaFindFiles(gen::DeltaFindFilesExecNode {
-                table_url: delta_find_files_exec.table_url().to_string(),
-                predicate,
-                table_schema,
-                version: delta_find_files_exec.version(),
             })
         } else if let Some(delta_remove_actions_exec) =
             node.as_any().downcast_ref::<DeltaRemoveActionsExec>()
