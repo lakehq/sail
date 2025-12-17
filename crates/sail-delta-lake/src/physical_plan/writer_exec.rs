@@ -81,7 +81,7 @@ pub struct DeltaWriterExec {
     table_exists: bool,
     sink_schema: SchemaRef,
     condition: Option<Arc<dyn PhysicalExpr>>,
-    /// Optional override for commit operation metadata (used by MERGE/DELETE/UPDATE planners).
+    /// Optional override for commit operation metadata.
     operation_override: Option<DeltaOperation>,
     cache: PlanProperties,
 }
