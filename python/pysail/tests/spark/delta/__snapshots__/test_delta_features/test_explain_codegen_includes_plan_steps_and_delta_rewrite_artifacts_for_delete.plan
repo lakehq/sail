@@ -97,10 +97,10 @@ DeltaCommitExec(table_path=file://<tmp>/delete_explain_codegen/)
               RepartitionExec: partitioning=RoundRobinBatch(<partitions>), input_partitions=<partitions>
                 DeltaScanByAddsExec(table_path=file://<tmp>/delete_explain_codegen/)
                   CooperativeExec
-                    DeltaFindFilesExec(table_path=file://<tmp>/delete_explain_codegen/)
+                    DeltaFindFilesExec(table_path=file://<tmp>/delete_explain_codegen/, predicate=salary@4 + 1 > 70000 AND (department@3 = Engineering OR department@3 = Marketing) AND active@5 IS NOT NULL)
       DeltaRemoveActionsExec
         CooperativeExec
-          DeltaFindFilesExec(table_path=file://<tmp>/delete_explain_codegen/)
+          DeltaFindFilesExec(table_path=file://<tmp>/delete_explain_codegen/, predicate=salary@4 + 1 > 70000 AND (department@3 = Engineering OR department@3 = Marketing) AND active@5 IS NOT NULL)
 
 
 initial_physical_plan_with_stats:
@@ -114,10 +114,10 @@ DeltaCommitExec(table_path=file://<tmp>/delete_explain_codegen/), statistics=[Ro
               RepartitionExec: partitioning=RoundRobinBatch(<partitions>), input_partitions=<partitions>, statistics=[Rows=Absent, Bytes=Absent, [(Col[0]:),(Col[1]:),(Col[2]:),(Col[3]:),(Col[4]:),(Col[5]:)]]
                 DeltaScanByAddsExec(table_path=file://<tmp>/delete_explain_codegen/), statistics=[Rows=Absent, Bytes=Absent, [(Col[0]:),(Col[1]:),(Col[2]:),(Col[3]:),(Col[4]:),(Col[5]:)]]
                   CooperativeExec, statistics=[Rows=Absent, Bytes=Absent, [(Col[0]:),(Col[1]:)]]
-                    DeltaFindFilesExec(table_path=file://<tmp>/delete_explain_codegen/), statistics=[Rows=Absent, Bytes=Absent, [(Col[0]:),(Col[1]:)]]
+                    DeltaFindFilesExec(table_path=file://<tmp>/delete_explain_codegen/, predicate=salary@4 + 1 > 70000 AND (department@3 = Engineering OR department@3 = Marketing) AND active@5 IS NOT NULL), statistics=[Rows=Absent, Bytes=Absent, [(Col[0]:),(Col[1]:)]]
       DeltaRemoveActionsExec, statistics=[Rows=Absent, Bytes=Absent, [(Col[0]:)]]
         CooperativeExec, statistics=[Rows=Absent, Bytes=Absent, [(Col[0]:),(Col[1]:)]]
-          DeltaFindFilesExec(table_path=file://<tmp>/delete_explain_codegen/), statistics=[Rows=Absent, Bytes=Absent, [(Col[0]:),(Col[1]:)]]
+          DeltaFindFilesExec(table_path=file://<tmp>/delete_explain_codegen/, predicate=salary@4 + 1 > 70000 AND (department@3 = Engineering OR department@3 = Marketing) AND active@5 IS NOT NULL), statistics=[Rows=Absent, Bytes=Absent, [(Col[0]:),(Col[1]:)]]
 
 
 initial_physical_plan_with_schema:
@@ -131,10 +131,10 @@ DeltaCommitExec(table_path=file://<tmp>/delete_explain_codegen/), schema=[count:
               RepartitionExec: partitioning=RoundRobinBatch(<partitions>), input_partitions=<partitions>, schema=[id:Int32;N, name:Utf8;N, age:Int32;N, department:Utf8;N, salary:Int32;N, active:Boolean;N]
                 DeltaScanByAddsExec(table_path=file://<tmp>/delete_explain_codegen/), schema=[id:Int32;N, name:Utf8;N, age:Int32;N, department:Utf8;N, salary:Int32;N, active:Boolean;N]
                   CooperativeExec, schema=[add:Utf8, partition_scan:Boolean]
-                    DeltaFindFilesExec(table_path=file://<tmp>/delete_explain_codegen/), schema=[add:Utf8, partition_scan:Boolean]
+                    DeltaFindFilesExec(table_path=file://<tmp>/delete_explain_codegen/, predicate=salary@4 + 1 > 70000 AND (department@3 = Engineering OR department@3 = Marketing) AND active@5 IS NOT NULL), schema=[add:Utf8, partition_scan:Boolean]
       DeltaRemoveActionsExec, schema=[data:Utf8;N]
         CooperativeExec, schema=[add:Utf8, partition_scan:Boolean]
-          DeltaFindFilesExec(table_path=file://<tmp>/delete_explain_codegen/), schema=[add:Utf8, partition_scan:Boolean]
+          DeltaFindFilesExec(table_path=file://<tmp>/delete_explain_codegen/, predicate=salary@4 + 1 > 70000 AND (department@3 = Engineering OR department@3 = Marketing) AND active@5 IS NOT NULL), schema=[add:Utf8, partition_scan:Boolean]
 
 
 physical_plan after OutputRequirements:
@@ -149,10 +149,10 @@ OutputRequirementExec: order_by=[], dist_by=Unspecified
                 RepartitionExec: partitioning=RoundRobinBatch(<partitions>), input_partitions=<partitions>
                   DeltaScanByAddsExec(table_path=file://<tmp>/delete_explain_codegen/)
                     CooperativeExec
-                      DeltaFindFilesExec(table_path=file://<tmp>/delete_explain_codegen/)
+                      DeltaFindFilesExec(table_path=file://<tmp>/delete_explain_codegen/, predicate=salary@4 + 1 > 70000 AND (department@3 = Engineering OR department@3 = Marketing) AND active@5 IS NOT NULL)
         DeltaRemoveActionsExec
           CooperativeExec
-            DeltaFindFilesExec(table_path=file://<tmp>/delete_explain_codegen/)
+            DeltaFindFilesExec(table_path=file://<tmp>/delete_explain_codegen/, predicate=salary@4 + 1 > 70000 AND (department@3 = Engineering OR department@3 = Marketing) AND active@5 IS NOT NULL)
 
 
 physical_plan after aggregate_statistics:
@@ -181,12 +181,12 @@ OutputRequirementExec: order_by=[], dist_by=Unspecified
                     CoalescePartitionsExec
                       CooperativeExec
                         RepartitionExec: partitioning=RoundRobinBatch(<partitions>), input_partitions=<partitions>
-                          DeltaFindFilesExec(table_path=file://<tmp>/delete_explain_codegen/)
+                          DeltaFindFilesExec(table_path=file://<tmp>/delete_explain_codegen/, predicate=salary@4 + 1 > 70000 AND (department@3 = Engineering OR department@3 = Marketing) AND active@5 IS NOT NULL)
         DeltaRemoveActionsExec
           CoalescePartitionsExec
             CooperativeExec
               RepartitionExec: partitioning=RoundRobinBatch(<partitions>), input_partitions=<partitions>
-                DeltaFindFilesExec(table_path=file://<tmp>/delete_explain_codegen/)
+                DeltaFindFilesExec(table_path=file://<tmp>/delete_explain_codegen/, predicate=salary@4 + 1 > 70000 AND (department@3 = Engineering OR department@3 = Marketing) AND active@5 IS NOT NULL)
 
 
 physical_plan after CombinePartialFinalAggregate:
@@ -216,12 +216,12 @@ OutputRequirementExec: order_by=[], dist_by=Unspecified
                       CoalescePartitionsExec
                         CooperativeExec
                           RepartitionExec: partitioning=RoundRobinBatch(<partitions>), input_partitions=<partitions>
-                            DeltaFindFilesExec(table_path=file://<tmp>/delete_explain_codegen/)
+                            DeltaFindFilesExec(table_path=file://<tmp>/delete_explain_codegen/, predicate=salary@4 + 1 > 70000 AND (department@3 = Engineering OR department@3 = Marketing) AND active@5 IS NOT NULL)
         DeltaRemoveActionsExec
           CoalescePartitionsExec
             CooperativeExec
               RepartitionExec: partitioning=RoundRobinBatch(<partitions>), input_partitions=<partitions>
-                DeltaFindFilesExec(table_path=file://<tmp>/delete_explain_codegen/)
+                DeltaFindFilesExec(table_path=file://<tmp>/delete_explain_codegen/, predicate=salary@4 + 1 > 70000 AND (department@3 = Engineering OR department@3 = Marketing) AND active@5 IS NOT NULL)
 
 
 physical_plan after coalesce_async_exec_input:
@@ -241,12 +241,12 @@ DeltaCommitExec(table_path=file://<tmp>/delete_explain_codegen/)
                     CoalescePartitionsExec
                       CooperativeExec
                         RepartitionExec: partitioning=RoundRobinBatch(<partitions>), input_partitions=<partitions>
-                          DeltaFindFilesExec(table_path=file://<tmp>/delete_explain_codegen/)
+                          DeltaFindFilesExec(table_path=file://<tmp>/delete_explain_codegen/, predicate=salary@4 + 1 > 70000 AND (department@3 = Engineering OR department@3 = Marketing) AND active@5 IS NOT NULL)
       DeltaRemoveActionsExec
         CoalescePartitionsExec
           CooperativeExec
             RepartitionExec: partitioning=RoundRobinBatch(<partitions>), input_partitions=<partitions>
-              DeltaFindFilesExec(table_path=file://<tmp>/delete_explain_codegen/)
+              DeltaFindFilesExec(table_path=file://<tmp>/delete_explain_codegen/, predicate=salary@4 + 1 > 70000 AND (department@3 = Engineering OR department@3 = Marketing) AND active@5 IS NOT NULL)
 
 
 physical_plan after LimitAggregation:
@@ -276,13 +276,13 @@ DeltaCommitExec(table_path=file://<tmp>/delete_explain_codegen/)
                       CooperativeExec
                         RepartitionExec: partitioning=RoundRobinBatch(<partitions>), input_partitions=<partitions>
                           CooperativeExec
-                            DeltaFindFilesExec(table_path=file://<tmp>/delete_explain_codegen/)
+                            DeltaFindFilesExec(table_path=file://<tmp>/delete_explain_codegen/, predicate=salary@4 + 1 > 70000 AND (department@3 = Engineering OR department@3 = Marketing) AND active@5 IS NOT NULL)
       DeltaRemoveActionsExec
         CoalescePartitionsExec
           CooperativeExec
             RepartitionExec: partitioning=RoundRobinBatch(<partitions>), input_partitions=<partitions>
               CooperativeExec
-                DeltaFindFilesExec(table_path=file://<tmp>/delete_explain_codegen/)
+                DeltaFindFilesExec(table_path=file://<tmp>/delete_explain_codegen/, predicate=salary@4 + 1 > 70000 AND (department@3 = Engineering OR department@3 = Marketing) AND active@5 IS NOT NULL)
 
 
 physical_plan after FilterPushdown(Post):
@@ -309,13 +309,13 @@ DeltaCommitExec(table_path=file://<tmp>/delete_explain_codegen/)
                       CooperativeExec
                         RepartitionExec: partitioning=RoundRobinBatch(<partitions>), input_partitions=<partitions>
                           CooperativeExec
-                            DeltaFindFilesExec(table_path=file://<tmp>/delete_explain_codegen/)
+                            DeltaFindFilesExec(table_path=file://<tmp>/delete_explain_codegen/, predicate=salary@4 + 1 > 70000 AND (department@3 = Engineering OR department@3 = Marketing) AND active@5 IS NOT NULL)
       DeltaRemoveActionsExec
         CoalescePartitionsExec
           CooperativeExec
             RepartitionExec: partitioning=RoundRobinBatch(<partitions>), input_partitions=<partitions>
               CooperativeExec
-                DeltaFindFilesExec(table_path=file://<tmp>/delete_explain_codegen/)
+                DeltaFindFilesExec(table_path=file://<tmp>/delete_explain_codegen/, predicate=salary@4 + 1 > 70000 AND (department@3 = Engineering OR department@3 = Marketing) AND active@5 IS NOT NULL)
 
 
 == Physical Plan ==
@@ -333,10 +333,10 @@ DeltaCommitExec(table_path=file://<tmp>/delete_explain_codegen/)
                       CooperativeExec
                         RepartitionExec: partitioning=RoundRobinBatch(<partitions>), input_partitions=<partitions>
                           CooperativeExec
-                            DeltaFindFilesExec(table_path=file://<tmp>/delete_explain_codegen/)
+                            DeltaFindFilesExec(table_path=file://<tmp>/delete_explain_codegen/, predicate=salary@4 + 1 > 70000 AND (department@3 = Engineering OR department@3 = Marketing) AND active@5 IS NOT NULL)
       DeltaRemoveActionsExec
         CoalescePartitionsExec
           CooperativeExec
             RepartitionExec: partitioning=RoundRobinBatch(<partitions>), input_partitions=<partitions>
               CooperativeExec
-                DeltaFindFilesExec(table_path=file://<tmp>/delete_explain_codegen/)
+                DeltaFindFilesExec(table_path=file://<tmp>/delete_explain_codegen/, predicate=salary@4 + 1 > 70000 AND (department@3 = Engineering OR department@3 = Marketing) AND active@5 IS NOT NULL)

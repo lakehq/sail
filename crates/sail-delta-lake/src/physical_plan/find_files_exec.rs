@@ -34,6 +34,7 @@ use datafusion::datasource::TableProvider;
 use datafusion::execution::context::TaskContext;
 use datafusion::execution::SessionStateBuilder;
 use datafusion::physical_expr_adapter::PhysicalExprAdapterFactory;
+use datafusion::physical_optimizer::pruning::PruningPredicate;
 use datafusion::physical_plan::common::collect;
 use datafusion::physical_plan::execution_plan::{Boundedness, EmissionType};
 use datafusion::physical_plan::filter::FilterExec;
@@ -232,11 +233,24 @@ impl DisplayAs for DeltaFindFilesExec {
     fn fmt_as(&self, t: DisplayFormatType, f: &mut fmt::Formatter) -> fmt::Result {
         match t {
             DisplayFormatType::Default | DisplayFormatType::Verbose => {
-                write!(f, "DeltaFindFilesExec(table_path={})", self.table_url)
+                let predicate_str = self
+                    .predicate
+                    .as_ref()
+                    .map(|p| format!(", predicate={}", p))
+                    .unwrap_or_default();
+                write!(
+                    f,
+                    "DeltaFindFilesExec(table_path={}{})",
+                    self.table_url, predicate_str
+                )
             }
             DisplayFormatType::TreeRender => {
                 writeln!(f, "format: delta")?;
-                write!(f, "table_path={}", self.table_url)
+                write!(f, "table_path={}", self.table_url)?;
+                if let Some(predicate) = &self.predicate {
+                    writeln!(f, ", predicate={}", predicate)?;
+                }
+                Ok(())
             }
         }
     }
@@ -349,67 +363,80 @@ pub async fn find_files_scan_physical(
     log_store: LogStoreRef,
     state: &dyn Session,
     physical_predicate: Arc<dyn PhysicalExpr>,
+    adapter_factory: Arc<dyn PhysicalExprAdapterFactory>,
 ) -> DeltaResult<Vec<Add>> {
-    let candidate_map: HashMap<String, Add> = collect_add_actions(snapshot, log_store.as_ref())
-        .await?
+    let schema = snapshot.arrow_schema()?;
+    let pruning_predicate = PruningPredicate::try_new(physical_predicate.clone(), schema.clone())?;
+    let log_data = snapshot.log_data();
+    let prune_mask = pruning_predicate.prune(&log_data)?;
+
+    let candidate_adds: Vec<Add> = log_data
         .into_iter()
-        .map(|add| (add.path.clone(), add))
+        .zip(prune_mask)
+        .filter_map(|(file, keep)| if keep { Some(file.add_action()) } else { None })
+        .collect();
+
+    if candidate_adds.is_empty() {
+        return Ok(vec![]);
+    }
+
+    let candidate_map: HashMap<String, Add> = candidate_adds
+        .iter()
+        .map(|add| (add.path.clone(), add.clone()))
         .collect();
 
     let scan_config = DeltaScanConfigBuilder::new()
         .with_file_column(true)
         .build(snapshot)?;
 
-    let logical_schema =
+    let full_logical_schema =
         crate::datasource::df_logical_schema(snapshot, &scan_config.file_column_name, None)?;
 
-    let mut used_columns = Vec::new();
+    // Determine which columns are needed for the predicate and the file path column
+    let mut used_columns_set = collect_physical_columns(&physical_predicate);
+    let file_column_name = scan_config
+        .file_column_name
+        .clone()
+        .ok_or_else(|| DeltaTableError::generic("File column name not found in scan config"))?;
+    used_columns_set.insert(file_column_name.clone());
 
-    let referenced_columns = collect_physical_columns(&physical_predicate);
+    let mut projection_indices = Vec::new();
+    let mut projected_fields = Vec::new();
 
-    for (i, field) in logical_schema.fields().iter().enumerate() {
-        if referenced_columns.contains(field.name()) {
-            used_columns.push(i);
+    for (i, field) in full_logical_schema.fields().iter().enumerate() {
+        if used_columns_set.contains(field.name()) {
+            projection_indices.push(i);
+            projected_fields.push(field.clone());
         }
     }
+    let projected_schema = Arc::new(Schema::new(projected_fields));
 
-    if let Some(file_column_name) = &scan_config.file_column_name {
-        if let Ok(idx) = logical_schema.index_of(file_column_name) {
-            if !used_columns.contains(&idx) {
-                used_columns.push(idx);
-            }
-        }
-    }
+    let table_provider = DeltaTableProvider::try_new(snapshot.clone(), log_store, scan_config)?
+        .with_files(candidate_adds);
 
-    // If no columns were referenced, include all columns to be safe
-    if used_columns.is_empty() {
-        for (i, _field) in logical_schema.fields().iter().enumerate() {
-            used_columns.push(i);
-        }
-    }
-
-    let table_provider = DeltaTableProvider::try_new(snapshot.clone(), log_store, scan_config)?;
-
-    // Scan without filtering first, then apply the physical predicate
+    // 3. Scan the files (with projection)
     let scan = table_provider
-        .scan(state, Some(&used_columns), &[], Some(1))
+        .scan(state, Some(&projection_indices), &[], None)
         .await?;
 
-    // For non-partition columns, Scan without filtering to identify candidate files
-    let limit: Arc<dyn ExecutionPlan> = scan;
+    let adapter = adapter_factory.create(full_logical_schema, projected_schema);
+    let adapted_predicate = adapter.rewrite(physical_predicate)?;
+
+    let filter_exec = Arc::new(FilterExec::try_new(adapted_predicate, scan)?);
 
     let task_ctx = Arc::new(TaskContext::from(state));
     let mut partitions = Vec::new();
 
-    for i in 0..limit.properties().output_partitioning().partition_count() {
-        let stream = limit.execute(i, task_ctx.clone())?;
+    for i in 0..filter_exec
+        .properties()
+        .output_partitioning()
+        .partition_count()
+    {
+        let stream = filter_exec.execute(i, task_ctx.clone())?;
         let data = collect(stream).await?;
         partitions.extend(data);
     }
-
-    let map = candidate_map.into_iter().collect::<HashMap<String, Add>>();
-
-    join_batches_with_add_actions(partitions, map, PATH_COLUMN, true)
+    join_batches_with_add_actions(partitions, candidate_map, &file_column_name, true)
 }
 
 pub async fn find_files_physical(
@@ -462,8 +489,14 @@ pub async fn find_files_physical(
                 let adapted_predicate = adapter.rewrite(physical_predicate)?;
 
                 // Use full file scanning
-                let candidates =
-                    find_files_scan_physical(snapshot, log_store, state, adapted_predicate).await?;
+                let candidates = find_files_scan_physical(
+                    snapshot,
+                    log_store,
+                    state,
+                    adapted_predicate,
+                    adapter_factory,
+                )
+                .await?;
                 Ok(FindFiles {
                     candidates,
                     partition_scan: false,
