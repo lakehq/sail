@@ -233,3 +233,54 @@ root
 # +------+
 # |  NULL|
 # +------+
+
+# Test Int8 (TINYINT)
+>>> spark.sql("SELECT uniform(CAST(10 AS TINYINT), CAST(20 AS TINYINT), 0) AS result").printSchema()
+root
+ |-- result: byte (nullable = false)
+
+>>> spark.sql("SELECT uniform(CAST(10 AS TINYINT), CAST(20 AS TINYINT), 0) AS result").show()
++------+
+|result|
++------+
+|    17|
++------+
+
+# Test Int16 (SMALLINT)
+>>> spark.sql("SELECT uniform(CAST(100 AS SMALLINT), CAST(200 AS SMALLINT), 0) AS result").printSchema()
+root
+ |-- result: short (nullable = false)
+
+>>> spark.sql("SELECT uniform(CAST(100 AS SMALLINT), CAST(200 AS SMALLINT), 0) AS result").show()
++------+
+|result|
++------+
+|   176|
++------+
+
+# Test Float (FLOAT)
+>>> spark.sql("SELECT uniform(CAST(5.5 AS FLOAT), CAST(10.5 AS FLOAT), 123) AS result").printSchema()
+root
+ |-- result: float (nullable = false)
+
+>>> spark.sql("SELECT uniform(CAST(5.5 AS FLOAT), CAST(10.5 AS FLOAT), 123) AS result").show()
++--------+
+|  result|
++--------+
+|6.289764|
++--------+
+
+# Test Int32 (INT)
+>>> spark.sql("SELECT uniform(10, 20, 0) AS result").printSchema()
+root
+ |-- result: integer (nullable = false)
+
+# Test Int64 (BIGINT)
+>>> spark.sql("SELECT uniform(CAST(2147483648 AS BIGINT), CAST(9223372036854775807 AS BIGINT), 42) AS result").printSchema()
+root
+ |-- result: long (nullable = false)
+
+# Test Double (DOUBLE)
+>>> spark.sql("SELECT uniform(5.5, 10.5, 123) AS result").printSchema()
+root
+ |-- result: decimal(3,1) (nullable = false)
