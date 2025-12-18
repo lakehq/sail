@@ -8,7 +8,7 @@ use datafusion::datasource::listing::ListingTableUrl;
 use datafusion::execution::SessionStateBuilder;
 use datafusion::physical_plan::ExecutionPlan;
 use sail_common_datafusion::datasource::{
-    DeleteInfo, PhysicalSinkMode, SinkInfo, SourceInfo, TableFormat, TableFormatRegistry,
+    DeleteInfo, MergeInfo, PhysicalSinkMode, SinkInfo, SourceInfo, TableFormat, TableFormatRegistry,
 };
 use sail_common_datafusion::streaming::event::schema::is_flow_event_schema;
 use sail_data_source::options::{
@@ -19,8 +19,9 @@ use url::Url;
 
 use crate::datasource::{parse_predicate_expression, DataFusionMixins};
 use crate::options::{ColumnMappingModeOption, TableDeltaOptions};
-use crate::physical_plan::plan_builder::DeltaTableConfig;
-use crate::physical_plan::{DeltaDeletePlanBuilder, DeltaPlanBuilder};
+use crate::physical_plan::planner::{
+    plan_delete, plan_merge, DeltaPhysicalPlanner, DeltaTableConfig, PlannerContext,
+};
 use crate::table::open_table_with_object_store;
 use crate::{create_delta_provider, DeltaTableError, KernelError};
 
@@ -89,15 +90,16 @@ impl TableFormat for DeltaTableFormat {
             .object_store_registry
             .get_store(&table_url)
             .map_err(|e| DataFusionError::External(Box::new(e)))?;
-        let table_exists =
+        let table =
             match open_table_with_object_store(table_url.clone(), object_store, Default::default())
                 .await
             {
-                Ok(_) => true,
+                Ok(table) => Some(table),
                 Err(DeltaTableError::Kernel(KernelError::InvalidTableLocation(_)))
-                | Err(DeltaTableError::Kernel(KernelError::FileNotFound(_))) => false,
+                | Err(DeltaTableError::Kernel(KernelError::FileNotFound(_))) => None,
                 Err(err) => return Err(DataFusionError::External(Box::new(err))),
             };
+        let table_exists = table.is_some();
 
         match mode {
             PhysicalSinkMode::ErrorIfExists => {
@@ -135,16 +137,66 @@ impl TableFormat for DeltaTableFormat {
             (mode, None)
         };
 
-        let table_config = DeltaTableConfig {
+        // Get existing partition columns from table metadata if available
+        let existing_partition_columns = if let Some(table) = &table {
+            Some(
+                table
+                    .snapshot()
+                    .map_err(|e| DataFusionError::External(Box::new(e)))?
+                    .metadata()
+                    .partition_columns()
+                    .clone(),
+            )
+        } else {
+            None
+        };
+
+        // Validate partition column mismatch for append/overwrite operations
+        if let Some(existing_partitions) = &existing_partition_columns {
+            if !partition_by.is_empty() && partition_by != *existing_partitions {
+                // Allow partition column changes only when overwriting with schema changes
+                // For append mode, this is always an error
+                match unified_mode {
+                    PhysicalSinkMode::Append => {
+                        return plan_err!(
+                            "Partition column mismatch. Table is partitioned by {:?}, but write specified {:?}. \
+                            Cannot change partitioning on append.",
+                            existing_partitions,
+                            partition_by
+                        );
+                    }
+                    PhysicalSinkMode::Overwrite | PhysicalSinkMode::OverwriteIf { .. } => {
+                        // For overwrite mode, check if schema overwrite is allowed
+                        if !delta_options.overwrite_schema {
+                            return plan_err!(
+                                "Partition column mismatch. Table is partitioned by {:?}, but write specified {:?}. \
+                                Set overwriteSchema=true to change partitioning.",
+                                existing_partitions,
+                                partition_by
+                            );
+                        }
+                    }
+                    _ => {}
+                }
+            }
+        }
+
+        let partition_columns = if !partition_by.is_empty() {
+            partition_by
+        } else {
+            existing_partition_columns.unwrap_or_default()
+        };
+
+        let table_config = DeltaTableConfig::new(
             table_url,
-            options: delta_options,
-            partition_columns: partition_by,
+            delta_options,
+            partition_columns,
             table_schema_for_cond,
             table_exists,
-        };
-        let plan_builder =
-            DeltaPlanBuilder::new(input, table_config, unified_mode, sort_order, ctx);
-        let sink_exec = plan_builder.build().await?;
+        );
+        let planner_ctx = PlannerContext::new(ctx, table_config);
+        let planner = DeltaPhysicalPlanner::new(planner_ctx);
+        let sink_exec = planner.create_plan(input, unified_mode, sort_order).await?;
 
         Ok(sink_exec)
     }
@@ -168,10 +220,30 @@ impl TableFormat for DeltaTableFormat {
 
         let delta_options = resolve_delta_write_options(options)?;
 
-        let plan_builder = DeltaDeletePlanBuilder::new(table_url, condition, ctx, delta_options);
-        let delete_exec = plan_builder.build().await?;
+        let delete_config = DeltaTableConfig::new(table_url, delta_options, Vec::new(), None, true);
+        let delete_ctx = PlannerContext::new(ctx, delete_config);
+        let delete_exec = plan_delete(&delete_ctx, condition).await?;
 
         Ok(delete_exec)
+    }
+
+    async fn create_merger(
+        &self,
+        ctx: &dyn Session,
+        info: MergeInfo,
+    ) -> Result<Arc<dyn ExecutionPlan>> {
+        let table_url = Self::parse_table_url(ctx, vec![info.target.path.clone()]).await?;
+        let delta_options = resolve_delta_write_options(info.target.options.clone())?;
+        let merge_config = DeltaTableConfig::new(
+            table_url,
+            delta_options,
+            info.target.partition_by.clone(),
+            None,
+            true,
+        );
+        let merge_ctx = PlannerContext::new(ctx, merge_config);
+        let merge_exec = plan_merge(&merge_ctx, info).await?;
+        Ok(merge_exec)
     }
 }
 

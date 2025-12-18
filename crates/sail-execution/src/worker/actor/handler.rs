@@ -16,12 +16,13 @@ use sail_common_datafusion::error::CommonErrorCause;
 use sail_common_datafusion::schema_adapter::DeltaSchemaAdapterFactory;
 use sail_python_udf::error::PyErrExtractor;
 use sail_server::actor::{ActorAction, ActorContext};
-use sail_telemetry::trace_execution_plan;
+use sail_telemetry::telemetry::global_metric_registry;
+use sail_telemetry::{trace_execution_plan, TracingExecOptions};
 use tokio::sync::oneshot;
 
-use crate::driver::state::TaskStatus;
+use crate::driver::TaskStatus;
 use crate::error::{ExecutionError, ExecutionResult};
-use crate::id::{TaskAttempt, TaskId, WorkerId};
+use crate::id::{TaskInstance, WorkerId};
 use crate::plan::{ShuffleReadExec, ShuffleWriteExec};
 use crate::stream::channel::ChannelName;
 use crate::stream::reader::TaskStreamSource;
@@ -30,6 +31,7 @@ use crate::worker::actor::core::WorkerActor;
 use crate::worker::actor::local_stream::{EphemeralStream, LocalStream, MemoryStream};
 use crate::worker::actor::stream_accessor::WorkerStreamAccessor;
 use crate::worker::actor::stream_monitor::TaskStreamMonitor;
+use crate::worker::event::WorkerLocation;
 use crate::worker::WorkerEvent;
 
 impl WorkerActor {
@@ -42,9 +44,12 @@ impl WorkerActor {
         let worker_id = self.options().worker_id;
         info!("worker {worker_id} server is ready on port {port}");
         let server = mem::take(&mut self.server);
-        self.server = match server.ready(signal, port) {
+        self.server = match server.ready(signal) {
             Ok(x) => x,
-            Err(e) => return ActorAction::fail(e),
+            Err(e) => {
+                error!("{e}");
+                return ActorAction::Stop;
+            }
         };
         let host = self.options().worker_external_host.clone();
         let port = if self.options().worker_external_port > 0 {
@@ -95,18 +100,18 @@ impl WorkerActor {
     pub(super) fn handle_run_task(
         &mut self,
         ctx: &mut ActorContext<Self>,
-        task_id: TaskId,
-        attempt: usize,
+        instance: TaskInstance,
         plan: Vec<u8>,
         partition: usize,
         channel: Option<ChannelName>,
+        peers: Vec<WorkerLocation>,
     ) -> ActorAction {
-        let stream = match self.execute_plan(ctx, task_id, attempt, plan, partition) {
+        self.track_known_peers(ctx, peers);
+        let stream = match self.execute_plan(ctx, &instance, plan, partition) {
             Ok(x) => x,
             Err(e) => {
                 let event = WorkerEvent::ReportTaskStatus {
-                    task_id,
-                    attempt,
+                    instance,
                     status: TaskStatus::Failed,
                     message: Some(format!("failed to execute plan: {e}")),
                     cause: Some(CommonErrorCause::new::<PyErrExtractor>(&e)),
@@ -117,16 +122,14 @@ impl WorkerActor {
         };
         let handle = ctx.handle().clone();
         let (tx, rx) = oneshot::channel();
-        self.task_signals
-            .insert(TaskAttempt::new(task_id, attempt), tx);
+        self.task_signals.insert(instance.clone(), tx);
         let monitor = if let Some(channel) = channel {
             let mut output = EphemeralStream::new(self.options().worker_stream_buffer);
             let writer = match output.publish(ctx) {
                 Ok(x) => x,
                 Err(e) => {
                     let event = WorkerEvent::ReportTaskStatus {
-                        task_id,
-                        attempt,
+                        instance,
                         status: TaskStatus::Failed,
                         message: Some(format!("failed to create output stream writer: {e}")),
                         cause: None,
@@ -136,9 +139,9 @@ impl WorkerActor {
                 }
             };
             self.local_streams.insert(channel, Box::new(output));
-            TaskStreamMonitor::new(handle, task_id, attempt, stream, Some(writer), rx)
+            TaskStreamMonitor::new(handle, instance, stream, Some(writer), rx)
         } else {
-            TaskStreamMonitor::new(handle, task_id, attempt, stream, None, rx)
+            TaskStreamMonitor::new(handle, instance, stream, None, rx)
         };
         ctx.spawn(monitor.run());
         ActorAction::Continue
@@ -147,11 +150,9 @@ impl WorkerActor {
     pub(super) fn handle_stop_task(
         &mut self,
         _ctx: &mut ActorContext<Self>,
-        task_id: TaskId,
-        attempt: usize,
+        instance: TaskInstance,
     ) -> ActorAction {
-        let key = TaskAttempt::new(task_id, attempt);
-        if let Some(signal) = self.task_signals.remove(&key) {
+        if let Some(signal) = self.task_signals.remove(&instance) {
             let _ = signal.send(());
         }
         ActorAction::Continue
@@ -160,8 +161,7 @@ impl WorkerActor {
     pub(super) fn handle_report_task_status(
         &mut self,
         ctx: &mut ActorContext<Self>,
-        task_id: TaskId,
-        attempt: usize,
+        instance: TaskInstance,
         status: TaskStatus,
         message: Option<String>,
         cause: Option<CommonErrorCause>,
@@ -169,7 +169,10 @@ impl WorkerActor {
         let sequence = self.sequence;
         self.sequence = match self.sequence.checked_add(1) {
             Some(x) => x,
-            None => return ActorAction::fail("sequence number overflow"),
+            None => {
+                error!("sequence number overflow");
+                return ActorAction::Stop;
+            }
         };
         let client = self.driver_client();
         let handle = ctx.handle().clone();
@@ -182,7 +185,15 @@ impl WorkerActor {
                     let cause = cause.clone();
                     async move {
                         client
-                            .report_task_status(task_id, attempt, status, message, cause, sequence)
+                            .report_task_status(
+                                instance.job_id,
+                                instance.task_id,
+                                instance.attempt,
+                                status,
+                                message,
+                                cause,
+                                sequence,
+                            )
                             .await
                     }
                 })
@@ -209,7 +220,8 @@ impl WorkerActor {
             }
             LocalStreamStorage::Memory => Box::new(MemoryStream::new()),
             LocalStreamStorage::Disk => {
-                return ActorAction::fail("not implemented: create disk stream")
+                error!("not implemented: create disk stream");
+                return ActorAction::Stop;
             }
         };
         let _ = result.send(stream.publish(ctx));
@@ -259,13 +271,11 @@ impl WorkerActor {
         &mut self,
         ctx: &mut ActorContext<Self>,
         worker_id: WorkerId,
-        host: String,
-        port: u16,
         channel: ChannelName,
         schema: SchemaRef,
         result: oneshot::Sender<ExecutionResult<TaskStreamSource>>,
     ) -> ActorAction {
-        let client = match self.worker_client(worker_id, host, port) {
+        let client = match self.worker_client(worker_id) {
             Ok(x) => x.clone(),
             Err(e) => {
                 let _ = result.send(Err(e));
@@ -309,11 +319,32 @@ impl WorkerActor {
         ActorAction::Continue
     }
 
+    fn track_known_peers(&mut self, ctx: &mut ActorContext<Self>, peers: Vec<WorkerLocation>) {
+        if peers.is_empty() {
+            // Although the logic below can handle empty peer list,
+            // we return early as an optimization to avoid unnecessary gRPC calls.
+            return;
+        }
+        let peer_worker_ids = peers.iter().map(|x| x.worker_id).collect();
+        for peer in peers {
+            self.set_worker_location(peer.worker_id, peer.host, peer.port);
+        }
+        let worker_id = self.options().worker_id;
+        let client = self.driver_client();
+        ctx.spawn(async move {
+            if let Err(e) = client
+                .report_worker_known_peers(worker_id, peer_worker_ids)
+                .await
+            {
+                warn!("failed to report worker known peers: {e}");
+            }
+        });
+    }
+
     fn execute_plan(
         &mut self,
         ctx: &mut ActorContext<Self>,
-        task_id: TaskId,
-        attempt: usize,
+        instance: &TaskInstance,
         plan: Vec<u8>,
         partition: usize,
     ) -> ExecutionResult<SendableRecordBatchStream> {
@@ -326,12 +357,20 @@ impl WorkerActor {
         let plan = self.rewrite_parquet_adapters(plan)?;
         let plan = self.rewrite_shuffle(ctx, plan)?;
         debug!(
-            "task {} attempt {} execution plan\n{}",
-            task_id,
-            attempt,
+            "job {} task {} attempt {} execution plan\n{}",
+            instance.job_id,
+            instance.task_id,
+            instance.attempt,
             DisplayableExecutionPlan::new(plan.as_ref()).indent(true)
         );
-        let plan = trace_execution_plan(plan)?;
+        let options = TracingExecOptions {
+            metric_registry: global_metric_registry(),
+            job_id: Some(instance.job_id.into()),
+            task_id: Some(instance.task_id.into()),
+            task_attempt: Some(instance.attempt),
+            operator_id: None,
+        };
+        let plan = trace_execution_plan(plan, options)?;
         let stream = plan.execute(partition, session_ctx.task_ctx())?;
         Ok(stream)
     }

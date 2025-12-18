@@ -16,6 +16,8 @@ sail-catalog-unity = { path = "../sail-catalog-unity" }
 sail-data-source = { path = "../sail-data-source" }
 sail-delta-lake = { path = "../sail-delta-lake" }
 sail-iceberg = { path = "../sail-iceberg" }
+sail-logical-optimizer = { path = "../sail-logical-optimizer" }
+sail-plan-lakehouse = { path = "../sail-plan-lakehouse" }
 
 datafusion = { workspace = true }
 secrecy = { workspace = true }

@@ -22,7 +22,6 @@ use sail_common::runtime::RuntimeHandle;
 use sail_common_datafusion::extension::SessionExtensionAccessor;
 use sail_execution::driver::DriverOptions;
 use sail_execution::job::{ClusterJobRunner, JobRunner, LocalJobRunner};
-use sail_logical_optimizer::{default_analyzer_rules, default_optimizer_rules};
 use sail_object_store::DynamicObjectStoreRegistry;
 use sail_physical_optimizer::{get_physical_optimizers, PhysicalOptimizerOptions};
 use sail_plan::function::{
@@ -32,6 +31,7 @@ use sail_plan::planner::new_query_planner;
 use sail_server::actor::{Actor, ActorAction, ActorContext, ActorHandle, ActorSystem};
 use sail_session::catalog::create_catalog_manager;
 use sail_session::formats::create_table_format_registry;
+use sail_session::optimizer::{default_analyzer_rules, default_optimizer_rules};
 use sail_telemetry::common::SpanAssociation;
 use tokio::sync::oneshot;
 use tokio::time::Instant;
@@ -85,6 +85,14 @@ impl SessionManager {
         self.handle.send(event).await?;
         rx.await
             .map_err(|e| SparkError::internal(format!("failed to get session: {e}")))?
+    }
+
+    pub async fn delete_session(&self, key: SessionKey) -> SparkResult<()> {
+        let (tx, rx) = oneshot::channel();
+        let event = SessionManagerEvent::DeleteSession { key, result: tx };
+        self.handle.send(event).await?;
+        rx.await
+            .map_err(|e| SparkError::internal(format!("failed to delete session: {e}")))?
     }
 }
 
@@ -300,6 +308,7 @@ pub struct SessionManagerOptions {
     pub runtime: RuntimeHandle,
 }
 
+#[expect(clippy::enum_variant_names)]
 enum SessionManagerEvent {
     GetOrCreateSession {
         key: SessionKey,
@@ -311,6 +320,10 @@ enum SessionManagerEvent {
         /// The time when the session was known to be active.
         instant: Instant,
     },
+    DeleteSession {
+        key: SessionKey,
+        result: oneshot::Sender<SparkResult<()>>,
+    },
 }
 
 impl SpanAssociation for SessionManagerEvent {
@@ -318,6 +331,7 @@ impl SpanAssociation for SessionManagerEvent {
         let name = match self {
             SessionManagerEvent::GetOrCreateSession { .. } => "GetOrCreateSession",
             SessionManagerEvent::ProbeIdleSession { .. } => "ProbeIdleSession",
+            SessionManagerEvent::DeleteSession { .. } => "DeleteSession",
         };
         name.into()
     }
@@ -363,6 +377,9 @@ impl Actor for SessionManagerActor {
             } => self.handle_get_or_create_session(ctx, key, system, result),
             SessionManagerEvent::ProbeIdleSession { key, instant } => {
                 self.handle_probe_idle_session(ctx, key, instant)
+            }
+            SessionManagerEvent::DeleteSession { key, result } => {
+                self.handle_delete_session(ctx, key, result)
             }
         }
     }
@@ -431,6 +448,26 @@ impl SessionManagerActor {
                 }
             }
         }
+        ActorAction::Continue
+    }
+
+    fn handle_delete_session(
+        &mut self,
+        ctx: &mut ActorContext<Self>,
+        key: SessionKey,
+        result: oneshot::Sender<SparkResult<()>>,
+    ) -> ActorAction {
+        let context = self.sessions.remove(&key);
+        let output = if let Some(context) = context {
+            info!("removing session {key}");
+            if let Ok(spark) = context.extension::<SparkSession>() {
+                ctx.spawn(async move { spark.job_runner().stop().await });
+            }
+            Ok(())
+        } else {
+            Err(SparkError::invalid(format!("session not found: {key}")))
+        };
+        let _ = result.send(output);
         ActorAction::Continue
     }
 }

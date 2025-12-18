@@ -1,4 +1,6 @@
 use std::borrow::Cow;
+use std::fmt;
+use std::fmt::Formatter;
 use std::sync::Arc;
 
 use datafusion::execution::SendableRecordBatchStream;
@@ -8,9 +10,9 @@ use sail_telemetry::common::{SpanAssociation, SpanAttribute};
 use tokio::sync::oneshot;
 use tokio::time::Instant;
 
-use crate::driver::state::TaskStatus;
+use crate::driver::gen;
 use crate::error::ExecutionResult;
-use crate::id::{JobId, TaskId, WorkerId};
+use crate::id::{JobId, TaskInstance, WorkerId};
 
 pub enum DriverEvent {
     ServerReady {
@@ -27,6 +29,10 @@ pub enum DriverEvent {
     },
     WorkerHeartbeat {
         worker_id: WorkerId,
+    },
+    WorkerKnownPeers {
+        worker_id: WorkerId,
+        peer_worker_ids: Vec<WorkerId>,
     },
     ProbePendingWorker {
         worker_id: WorkerId,
@@ -47,8 +53,7 @@ pub enum DriverEvent {
         job_id: JobId,
     },
     UpdateTask {
-        task_id: TaskId,
-        attempt: usize,
+        instance: TaskInstance,
         status: TaskStatus,
         message: Option<String>,
         cause: Option<CommonErrorCause>,
@@ -57,18 +62,59 @@ pub enum DriverEvent {
         sequence: Option<u64>,
     },
     ProbePendingTask {
-        task_id: TaskId,
-        attempt: usize,
+        instance: TaskInstance,
     },
     Shutdown,
 }
 
+/// The observed task status that drives the task state transition.
+#[derive(Debug, Clone, Copy)]
+pub enum TaskStatus {
+    Running,
+    Succeeded,
+    Failed,
+    Canceled,
+}
+
+impl fmt::Display for TaskStatus {
+    fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
+        match self {
+            TaskStatus::Running => write!(f, "RUNNING"),
+            TaskStatus::Succeeded => write!(f, "SUCCEEDED"),
+            TaskStatus::Failed => write!(f, "FAILED"),
+            TaskStatus::Canceled => write!(f, "CANCELED"),
+        }
+    }
+}
+
+impl From<gen::TaskStatus> for TaskStatus {
+    fn from(value: gen::TaskStatus) -> Self {
+        match value {
+            gen::TaskStatus::Running => Self::Running,
+            gen::TaskStatus::Succeeded => Self::Succeeded,
+            gen::TaskStatus::Failed => Self::Failed,
+            gen::TaskStatus::Canceled => Self::Canceled,
+        }
+    }
+}
+
+impl From<TaskStatus> for gen::TaskStatus {
+    fn from(value: TaskStatus) -> Self {
+        match value {
+            TaskStatus::Running => gen::TaskStatus::Running,
+            TaskStatus::Succeeded => gen::TaskStatus::Succeeded,
+            TaskStatus::Failed => gen::TaskStatus::Failed,
+            TaskStatus::Canceled => gen::TaskStatus::Canceled,
+        }
+    }
+}
 impl SpanAssociation for DriverEvent {
     fn name(&self) -> Cow<'static, str> {
         let name = match self {
             DriverEvent::ServerReady { .. } => "ServerReady",
             DriverEvent::RegisterWorker { .. } => "RegisterWorker",
             DriverEvent::WorkerHeartbeat { .. } => "WorkerHeartbeat",
+            DriverEvent::WorkerKnownPeers { .. } => "WorkerKnownPeers",
             DriverEvent::ProbePendingWorker { .. } => "ProbePendingWorker",
             DriverEvent::ProbeIdleWorker { .. } => "ProbeIdleWorker",
             DriverEvent::ProbeLostWorker { .. } => "ProbeLostWorker",
@@ -98,6 +144,10 @@ impl SpanAssociation for DriverEvent {
                 p.push((SpanAttribute::CLUSTER_WORKER_PORT, port.to_string()));
             }
             DriverEvent::WorkerHeartbeat { worker_id }
+            | DriverEvent::WorkerKnownPeers {
+                worker_id,
+                peer_worker_ids: _,
+            }
             | DriverEvent::ProbePendingWorker { worker_id }
             | DriverEvent::ProbeIdleWorker {
                 worker_id,
@@ -114,13 +164,18 @@ impl SpanAssociation for DriverEvent {
                 p.push((SpanAttribute::CLUSTER_JOB_ID, job_id.to_string()));
             }
             DriverEvent::UpdateTask {
-                task_id,
-                attempt,
+                instance:
+                    TaskInstance {
+                        job_id,
+                        task_id,
+                        attempt,
+                    },
                 status,
                 message,
                 cause,
                 sequence: _,
             } => {
+                p.push((SpanAttribute::CLUSTER_JOB_ID, job_id.to_string()));
                 p.push((SpanAttribute::CLUSTER_TASK_ID, task_id.to_string()));
                 p.push((SpanAttribute::CLUSTER_TASK_ATTEMPT, attempt.to_string()));
                 p.push((SpanAttribute::CLUSTER_TASK_STATUS, status.to_string()));
@@ -134,7 +189,15 @@ impl SpanAssociation for DriverEvent {
                     ));
                 }
             }
-            DriverEvent::ProbePendingTask { task_id, attempt } => {
+            DriverEvent::ProbePendingTask {
+                instance:
+                    TaskInstance {
+                        job_id,
+                        task_id,
+                        attempt,
+                    },
+            } => {
+                p.push((SpanAttribute::CLUSTER_JOB_ID, job_id.to_string()));
                 p.push((SpanAttribute::CLUSTER_TASK_ID, task_id.to_string()));
                 p.push((SpanAttribute::CLUSTER_TASK_ATTEMPT, attempt.to_string()));
             }

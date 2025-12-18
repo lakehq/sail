@@ -5,6 +5,27 @@ next: false
 
 # Changelog
 
+## 0.4.4
+
+_December 12, 2025_
+
+- Improved Delta Lake and Iceberg integration ([#1098](https://github.com/lakehq/sail/pull/1098), [#1095](https://github.com/lakehq/sail/pull/1095), [#1108](https://github.com/lakehq/sail/pull/1108), [#1115](https://github.com/lakehq/sail/pull/1115), [#1109](https://github.com/lakehq/sail/pull/1109), and [#1117](https://github.com/lakehq/sail/pull/1117)).
+- Supported exporting logs, metrics, and traces to OpenTelemetry collectors ([#1097](https://github.com/lakehq/sail/pull/1097), [#1104](https://github.com/lakehq/sail/pull/1104), and [#1116](https://github.com/lakehq/sail/pull/1116)).
+- Added a Python example for reporting Sail compatibility for PySpark code ([#1075](https://github.com/lakehq/sail/pull/1075)).
+- Supported customizing pod labels for Sail workers in Kubernetes deployments ([#1103](https://github.com/lakehq/sail/pull/1103)).
+- Added support for the following SQL functions ([#1106](https://github.com/lakehq/sail/pull/1106)):
+  - `shuffle`
+  - `bitwise_not`
+  - `format_string`
+- Improved the output of the `EXPLAIN` statement ([#1110](https://github.com/lakehq/sail/pull/1110)).
+- Fixed a few shuffle planning issues in distributed query execution ([#1111](https://github.com/lakehq/sail/pull/1111)).
+- Fixed an issue with the `LIMIT` clause in distributed query execution ([#1121](https://github.com/lakehq/sail/pull/1121)).
+- Improved data source implementation ([#1099](https://github.com/lakehq/sail/pull/1099)).
+
+### Contributors
+
+Huge thanks to [@davidlghellin](https://github.com/davidlghellin), [@zemin-piao](https://github.com/zemin-piao), [keen85](https://github.com/keen85) (_first-time contributor_), [@YichiZhang0613](https://github.com/YichiZhang0613) (_first-time contributor_), and [@gstvg](https://github.com/gstvg) (_first-time contributor_) for your contributions!
+
 ## 0.4.3
 
 _November 26, 2025_

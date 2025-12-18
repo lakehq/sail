@@ -30,20 +30,21 @@ use crate::kernel::{DeltaResult, DeltaTableError};
 /// Convert an Add action to a PartitionedFile for DataFusion scanning
 pub fn partitioned_file_from_action(
     action: &Add,
-    partition_columns: &[String],
+    partition_columns: &[(String, String)],
     schema: &ArrowSchema,
 ) -> DeltaResult<PartitionedFile> {
     let partition_values = partition_columns
         .iter()
-        .map(|part| {
-            let field = match schema.field_with_name(part) {
+        .map(|(logical_name, physical_name)| {
+            let field = match schema.field_with_name(logical_name) {
                 Ok(field) => field,
                 Err(_) => return ScalarValue::Null,
             };
 
             action
                 .partition_values
-                .get(part)
+                .get(physical_name)
+                .or_else(|| action.partition_values.get(logical_name))
                 .and_then(|value| value.as_ref())
                 .map(|value| {
                     ScalarConverter::string_to_arrow_scalar_value(value, field.data_type())

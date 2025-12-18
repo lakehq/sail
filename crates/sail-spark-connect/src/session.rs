@@ -102,20 +102,34 @@ impl SparkSession {
             .collect::<SparkResult<Vec<_>>>()
     }
 
+    pub(crate) fn get_config_option(&self, keys: Vec<String>) -> SparkResult<Vec<ConfigKeyValue>> {
+        let state = self.state.lock()?;
+        let kv = keys
+            .into_iter()
+            .map(|key| {
+                let value = state.config.get_option(&key).map(|x| x.to_string());
+                ConfigKeyValue { key, value }
+            })
+            .collect();
+        Ok(kv)
+    }
+
     pub(crate) fn get_config_with_default(
         &self,
         kv: Vec<ConfigKeyValue>,
     ) -> SparkResult<Vec<ConfigKeyValue>> {
         let state = self.state.lock()?;
-        kv.into_iter()
+        let kv = kv
+            .into_iter()
             .map(|ConfigKeyValue { key, value }| {
                 let value = state
                     .config
-                    .get_with_default(&key, value.as_deref())?
+                    .get_with_default(&key, value.as_deref())
                     .map(|x| x.to_string());
-                Ok(ConfigKeyValue { key, value })
+                ConfigKeyValue { key, value }
             })
-            .collect::<SparkResult<Vec<_>>>()
+            .collect();
+        Ok(kv)
     }
 
     pub(crate) fn set_config(&self, kv: Vec<ConfigKeyValue>) -> SparkResult<()> {

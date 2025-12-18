@@ -1,7 +1,10 @@
 import doctest
 import json
 import os
+import re
+import textwrap
 import time
+from pathlib import Path
 
 import pyspark.sql.connect.session
 import pytest
@@ -9,9 +12,103 @@ from _pytest.doctest import DoctestItem
 from jinja2 import Template
 from pyspark.sql import SparkSession
 from pytest_bdd import given, parsers, then, when
+from syrupy.assertion import SnapshotAssertion
+from syrupy.extensions.single_file import SingleFileSnapshotExtension
+from syrupy.types import SerializableData
 
 from pysail.spark import SparkConnectServer
 from pysail.tests.spark.utils import SAIL_ONLY, escape_sql_string_literal, is_jvm_spark, parse_show_string
+
+
+def normalize_plan_text(plan_text: str) -> str:
+    """Normalize plan text by scrubbing non-deterministic fields."""
+    text = textwrap.dedent(plan_text).strip()
+    # Make Windows paths match the regexes and snapshots early, so the
+    # raw-text substitutions below also work cross-platform.
+    text = text.replace("\\", "/")
+    text = re.sub(r"([A-Za-z][A-Za-z0-9+.\-]*:)//", r"\1__SCHEME_SLASHSLASH__", text)
+    text = re.sub(r"/{2,}", "/", text)
+    text = text.replace("__SCHEME_SLASHSLASH__", "//")
+    text = re.sub(r", metrics=\[[^\]]*\]", "", text)
+    text = re.sub(r"Hash\(\[([^\]]+)\], \d+\)", r"Hash([\1], <partitions>)", text)
+    text = re.sub(r"RoundRobinBatch\(\d+\)", r"RoundRobinBatch(<partitions>)", text)
+    text = re.sub(r"input_partitions=\d+", r"input_partitions=<partitions>", text)
+    text = re.sub(r"partition_sizes=\[[^\]]+\]", r"partition_sizes=[<sizes>]", text)
+
+    # Normalize temp paths / file URIs that appear in plans.
+    pytest_tmp_prefix = re.compile(
+        # Match (and scrub) the pytest per-test tmp root prefix, cross-platform.
+        #
+        # Works for e.g.
+        # - macOS: /private/var/folders/.../T/pytest-of-<user>/pytest-1535/test_xxx_0/
+        # - Linux: /tmp/pytest-of-runner/pytest-0/test_xxx_0/
+        # - Windows (after `\` -> `/`): C:/Users/.../pytest-of-<user>/pytest-0/test_xxx_0/
+        #
+        # Also matches relative-looking ones (private/var/...) that sometimes
+        # show up in formatted plans.
+        r"(^|[\s\[\(=,:{\"])"  # delimiter (kept)
+        r"(?!\[)"  # avoid starting at the first `[` of `[[...]]`
+        # Don't accidentally start matching at identifiers like `file_groups=...`.
+        # Require the path to start like an absolute path (`/` or `C:/`) or a
+        # known relative tmp prefix (`private/...` or `tmp/...`).
+        r"(?:(?:[A-Za-z]:)?/|private/|tmp/)"
+        r"(?:[^ \t\r\n\),\]]+/)*"
+        r"pytest-of-[^/]+/pytest-\d+/[^/]+/",
+        re.IGNORECASE,
+    )
+
+    def normalize_path(path: str) -> str:
+        # Make Windows paths match the regexes and snapshots.
+        path = path.replace("\\", "/")
+        path = pytest_tmp_prefix.sub(lambda m: f"{m.group(1)}<tmp>/", path)
+        return re.sub(
+            r"part-\d+-[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}-c\d+\.snappy\.parquet",
+            "part-<id>.snappy.parquet",
+            path,
+            flags=re.IGNORECASE,
+        )
+
+    text = re.sub(
+        r"table_path=file://([^\s\),]+)",
+        lambda m: f"table_path=file://{normalize_path(m.group(1))}",
+        text,
+    )
+    text = re.sub(
+        r'location: "([^"]+)"',
+        lambda m: f'location: "{normalize_path(m.group(1))}"',
+        text,
+    )
+    # Normalize raw path occurrences (e.g. parquet file groups) without destroying structure.
+    text = pytest_tmp_prefix.sub(lambda m: f"{m.group(1)}<tmp>/", text)
+    text = re.sub(
+        r"part-\d+-[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}-c\d+\.snappy\.parquet",
+        "part-<id>.snappy.parquet",
+        text,
+        flags=re.IGNORECASE,
+    )
+
+    text = re.sub(r"Bytes=Exact\(\d+\)", r"Bytes=Exact(<bytes>)", text)
+    return re.sub(r"Bytes=Inexact\(\d+\)", r"Bytes=Inexact(<bytes>)", text)
+
+
+def _collect_plan(query: str, spark) -> str:
+    """Execute query and extract the single-row plan string."""
+    df = spark.sql(query)
+    rows = df.collect()
+    assert len(rows) == 1, f"expected single row, got {len(rows)}"
+    plan = rows[0][0]
+    assert isinstance(plan, str), "expected string plan output"
+    assert plan, "expected non-empty plan output"
+    return plan
+
+
+class PlanSnapshotExtension(SingleFileSnapshotExtension):
+    """Snapshot extension that stores normalized plan text."""
+
+    file_extension = "plan"
+
+    def serialize(self, data: SerializableData, **_: object) -> str:
+        return normalize_plan_text(str(data)).encode()
 
 
 @pytest.fixture(scope="session")
@@ -20,6 +117,8 @@ def remote():
         yield r
     else:
         server = SparkConnectServer("127.0.0.1", 0)
+        if os.environ.get("SAIL_TEST_INIT_TELEMETRY") == "1":
+            server.init_telemetry()
         server.start(background=True)
         _, port = server.listening_address
         yield f"sc://localhost:{port}"
@@ -221,6 +320,14 @@ def query_result(datatable, ordered, query, spark):
         assert sorted(rows) == sorted(r)
 
 
+@then("query plan matches snapshot")
+def query_plan_matches_snapshot(query, spark, snapshot: SnapshotAssertion):
+    """Executes the SQL query and only asserts against the stored snapshot."""
+
+    plan = _collect_plan(query, spark)
+    assert snapshot(extension_class=PlanSnapshotExtension) == plan
+
+
 @then(parsers.parse("query error {error}"))
 def query_error(error, query, spark):
     """Executes the SQL query defined in a previous step
@@ -230,3 +337,79 @@ def query_error(error, query, spark):
     """
     with pytest.raises(Exception, match=error):
         _ = spark.sql(query).collect()
+
+
+def _latest_commit_info(table_location: Path) -> dict:
+    log_dir = table_location / "_delta_log"
+    logs = sorted(log_dir.glob("*.json"))
+    assert logs, f"no delta logs found in {log_dir}"
+    latest = logs[-1]
+    with latest.open("r", encoding="utf-8") as f:
+        for line in f:
+            obj = json.loads(line)
+            if "commitInfo" in obj:
+                return obj["commitInfo"]
+    msg = f"commitInfo action not found in latest delta log: {latest}"
+    raise AssertionError(msg)
+
+
+def _latest_commit_info_from_variables(variables: dict) -> dict:
+    location = variables.get("location")
+    assert location is not None, "expected variable `location` to be defined for delta log inspection"
+    return _latest_commit_info(Path(location.path))
+
+
+def _recursive_parse_json_strings(value):
+    """Recursively parse JSON-encoded strings into structured Python values.
+
+    Delta `commitInfo.operationParameters` stores values as strings; for snapshot tests we
+    normalize common JSON payloads (objects/arrays/bools/null/numbers) back into structure.
+    """
+    if isinstance(value, dict):
+        return {k: _recursive_parse_json_strings(v) for k, v in value.items()}
+    if isinstance(value, list):
+        return [_recursive_parse_json_strings(v) for v in value]
+    if isinstance(value, str):
+        s = value.strip()
+        if not s:
+            return value
+        try:
+            parsed = json.loads(s)
+        except json.JSONDecodeError:
+            return value
+        return _recursive_parse_json_strings(parsed)
+    return value
+
+
+def _normalize_delta_commit_info_for_snapshot(commit_info: dict) -> dict:
+    """Normalize volatile / version-specific fields but keep the keys in the snapshot."""
+    normalized = dict(commit_info)
+
+    # Keep timestamp, but normalize its value.
+    if "timestamp" in normalized:
+        normalized["timestamp"] = "<timestamp>"
+
+    # Normalize engine/client versions to stable placeholders.
+    cv = normalized.get("clientVersion")
+    if isinstance(cv, str) and cv.startswith("sail-delta-lake."):
+        normalized["clientVersion"] = "sail-delta-lake.x.x.x"
+
+    ei = normalized.get("engineInfo")
+    if isinstance(ei, str) and ei.startswith("sail-delta-lake:"):
+        normalized["engineInfo"] = "sail-delta-lake:x.x.x"
+
+    return normalized
+
+
+@then("delta log latest commit info matches snapshot")
+def delta_log_latest_commit_info_matches_snapshot(snapshot: SnapshotAssertion, variables):
+    if is_jvm_spark():
+        pytest.skip("Delta log operation assertions are Sail-only")
+    commit_info = _latest_commit_info_from_variables(variables)
+    commit_info = _normalize_delta_commit_info_for_snapshot(commit_info)
+
+    # Normalize embedded JSON strings in operationParameters
+    if "operationParameters" in commit_info:
+        commit_info["operationParameters"] = _recursive_parse_json_strings(commit_info["operationParameters"])
+
+    assert commit_info == snapshot

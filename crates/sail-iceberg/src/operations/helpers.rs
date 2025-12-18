@@ -19,13 +19,15 @@ impl Transaction {
         FastAppendAction::new()
     }
 
-    pub fn default_manifest_metadata(&self, schema: &Schema) -> ManifestMetadata {
-        // Use spec id 0 by default until we plumb real specs
-        let partition_spec = PartitionSpec::builder().with_spec_id(0).build();
+    pub fn default_manifest_metadata(
+        &self,
+        schema: &Schema,
+        partition_spec: &PartitionSpec,
+    ) -> ManifestMetadata {
         ManifestMetadata::new(
             std::sync::Arc::new(schema.clone()),
             schema.schema_id(),
-            partition_spec,
+            partition_spec.clone(),
             FormatVersion::V2,
             ManifestContentType::Data,
         )

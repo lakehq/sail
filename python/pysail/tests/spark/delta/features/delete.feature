@@ -45,6 +45,7 @@ Feature: Delta Lake Delete
         """
         DELETE FROM delta_delete_basic WHERE department = 'Engineering'
         """
+      Then delta log latest commit info matches snapshot
       When query
         """
         SELECT * FROM delta_delete_basic
@@ -250,3 +251,47 @@ Feature: Delta Lake Delete
         | 1  | Alice | Engineering |
         | 3  | NULL  | Marketing   |
         | 4  | Diana | Sales       |
+
+  Rule: EXPLAIN CODEGEN shows stepwise optimization for DELETE
+    Background:
+      Given variable location for temporary directory delete_explain_codegen
+      Given final statement
+        """
+        DROP TABLE IF EXISTS delta_delete_explain_codegen
+        """
+      Given statement template
+        """
+        CREATE TABLE delta_delete_explain_codegen (
+          id INT,
+          name STRING,
+          age INT,
+          department STRING,
+          salary INT,
+          active BOOLEAN
+        )
+        USING DELTA LOCATION {{ location.sql }}
+        """
+      Given statement
+        """
+        INSERT INTO delta_delete_explain_codegen
+        SELECT * FROM VALUES
+          (1, 'Alice', 25, 'Engineering', 75000, true),
+          (2, 'Bob', 30, 'Marketing', 65000, true),
+          (3, 'Charlie', 35, 'Engineering', 85000, false),
+          (4, 'Diana', 28, 'Sales', 55000, true),
+          (5, 'Eve', 32, 'Marketing', 70000, true),
+          (6, 'Frank', 40, 'Engineering', 95000, false),
+          (7, 'Grace', 27, 'Sales', 50000, true),
+          (8, 'Henry', 33, 'HR', 60000, true)
+        """
+
+    Scenario: EXPLAIN CODEGEN includes plan steps and delta rewrite artifacts for DELETE
+      When query
+        """
+        EXPLAIN CODEGEN
+        DELETE FROM delta_delete_explain_codegen
+        WHERE salary + 1 > 70000
+          AND (department = 'Engineering' OR department = 'Marketing')
+          AND active IS NOT NULL
+        """
+      Then query plan matches snapshot
