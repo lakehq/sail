@@ -2,10 +2,11 @@ use std::any::Any;
 use std::sync::Arc;
 
 use datafusion::arrow::array::{
-    Array, ArrayRef, Decimal128Array, Float64Array, Int32Array, Int64Array, PrimitiveArray,
+    Array, ArrayRef, Decimal128Array, Float32Array, Float64Array, Int16Array, Int32Array,
+    Int64Array, Int8Array,
 };
 use datafusion::arrow::datatypes::{
-    DataType, Field, FieldRef, Int32Type, DECIMAL128_MAX_PRECISION, DECIMAL128_MAX_SCALE,
+    DataType, Field, FieldRef, DECIMAL128_MAX_PRECISION, DECIMAL128_MAX_SCALE,
 };
 use datafusion_common::{internal_err, Result};
 use datafusion_expr::{
@@ -82,9 +83,9 @@ impl SparkUniform {
     /// Helper to extract precision and scale from any decimal type
     fn extract_decimal_info(dt: &DataType) -> Option<(u8, i8)> {
         match dt {
-            DataType::Decimal32(p, s)
-            | DataType::Decimal64(p, s)
-            | DataType::Decimal128(p, s) => Some((*p, *s)),
+            DataType::Decimal32(p, s) | DataType::Decimal64(p, s) | DataType::Decimal128(p, s) => {
+                Some((*p, *s))
+            }
             DataType::Decimal256(p, s) => {
                 if *p <= DECIMAL128_MAX_PRECISION && *s <= DECIMAL128_MAX_SCALE {
                     Some((*p, *s))
@@ -111,6 +112,14 @@ impl SparkUniform {
 
     fn calculate_output_type(t_min: &DataType, t_max: &DataType) -> DataType {
         if t_min.is_integer() && t_max.is_integer() {
+            // Preserve type when both arguments have the same small integer type
+            if matches!((t_min, t_max), (DataType::Int8, DataType::Int8)) {
+                return DataType::Int8;
+            }
+            if matches!((t_min, t_max), (DataType::Int16, DataType::Int16)) {
+                return DataType::Int16;
+            }
+
             // Check for 64-bit types (signed or unsigned)
             let is_64: bool = matches!(t_min, DataType::Int64 | DataType::UInt64)
                 || matches!(t_max, DataType::Int64 | DataType::UInt64);
@@ -146,8 +155,12 @@ impl SparkUniform {
             (Some((p, s)), None) => DataType::Decimal128(p, s),
             (None, Some((p, s))) => DataType::Decimal128(p, s),
             (None, None) => {
-                // Neither is decimal
-                DataType::Float64
+                // Preserve Float32 when both arguments are Float32
+                if matches!((t_min, t_max), (DataType::Float32, DataType::Float32)) {
+                    DataType::Float32
+                } else {
+                    DataType::Float64
+                }
             }
         }
     }
@@ -201,21 +214,19 @@ impl ScalarUDFImpl for SparkUniform {
         let mut coerced_types = vec![output_type.clone(), output_type];
 
         if arg_types.len() == 3 {
-            let seed_t = &arg_types[2];
-
-            if seed_t.is_signed_integer() {
-                coerced_types.push(DataType::Int64);
-            } else if seed_t.is_unsigned_integer() {
-                coerced_types.push(DataType::UInt64);
-            } else if seed_t.is_null() {
-                coerced_types.push(DataType::Null);
-            } else {
-                return Err(unsupported_data_types_exec_err(
-                    "uniform",
-                    "Integer Type for seed",
-                    &arg_types[2..],
-                ));
-            }
+            let seed_type = match &arg_types[2] {
+                t if t.is_signed_integer() => DataType::Int64,
+                t if t.is_unsigned_integer() => DataType::UInt64,
+                DataType::Null => DataType::Null,
+                _ => {
+                    return Err(unsupported_data_types_exec_err(
+                        "uniform",
+                        "Integer Type for seed",
+                        &arg_types[2..],
+                    ))
+                }
+            };
+            coerced_types.push(seed_type);
         }
 
         Ok(coerced_types)
@@ -258,8 +269,11 @@ macro_rules! generate_uniform_fn {
     };
 }
 
+generate_uniform_fn!(generate_uniform_int8, i8);
+generate_uniform_fn!(generate_uniform_int16, i16);
 generate_uniform_fn!(generate_uniform_int32, i32);
 generate_uniform_fn!(generate_uniform_int64, i64);
+generate_uniform_fn!(generate_uniform_float32, f32);
 generate_uniform_fn!(generate_uniform_float, f64);
 
 #[inline]
@@ -291,11 +305,45 @@ fn uniform(args: &[ArrayRef]) -> Result<ArrayRef> {
         SparkUniform::calculate_output_type(min_array.data_type(), max_array.data_type());
 
     match output_type {
+        DataType::Int8 => {
+            let min_arr = min_array.as_primitive::<datafusion::arrow::datatypes::Int8Type>();
+            let max_arr = max_array.as_primitive::<datafusion::arrow::datatypes::Int8Type>();
+
+            let mut builder = Int8Array::builder(number_rows);
+            for i in 0..number_rows {
+                if min_arr.is_null(i) || max_arr.is_null(i) {
+                    builder.append_null();
+                } else {
+                    let min_val = min_arr.value(i);
+                    let max_val = max_arr.value(i);
+                    let seed_val = extract_seed(seed_array, i);
+                    builder.append_value(generate_uniform_int8(min_val, max_val, seed_val, 1)?[0]);
+                }
+            }
+
+            Ok(Arc::new(builder.finish()))
+        }
+        DataType::Int16 => {
+            let min_arr = min_array.as_primitive::<datafusion::arrow::datatypes::Int16Type>();
+            let max_arr = max_array.as_primitive::<datafusion::arrow::datatypes::Int16Type>();
+
+            let mut builder = Int16Array::builder(number_rows);
+            for i in 0..number_rows {
+                if min_arr.is_null(i) || max_arr.is_null(i) {
+                    builder.append_null();
+                } else {
+                    let min_val = min_arr.value(i);
+                    let max_val = max_arr.value(i);
+                    let seed_val = extract_seed(seed_array, i);
+                    builder.append_value(generate_uniform_int16(min_val, max_val, seed_val, 1)?[0]);
+                }
+            }
+
+            Ok(Arc::new(builder.finish()))
+        }
         DataType::Int32 => {
-            let min_arr: &PrimitiveArray<Int32Type> =
-                min_array.as_primitive::<datafusion::arrow::datatypes::Int32Type>();
-            let max_arr: &PrimitiveArray<Int32Type> =
-                max_array.as_primitive::<datafusion::arrow::datatypes::Int32Type>();
+            let min_arr = min_array.as_primitive::<datafusion::arrow::datatypes::Int32Type>();
+            let max_arr = max_array.as_primitive::<datafusion::arrow::datatypes::Int32Type>();
 
             let mut builder = Int32Array::builder(number_rows);
             for i in 0..number_rows {
@@ -324,6 +372,25 @@ fn uniform(args: &[ArrayRef]) -> Result<ArrayRef> {
                     let max_val = max_arr.value(i);
                     let seed_val = extract_seed(seed_array, i);
                     builder.append_value(generate_uniform_int64(min_val, max_val, seed_val, 1)?[0]);
+                }
+            }
+
+            Ok(Arc::new(builder.finish()))
+        }
+        DataType::Float32 => {
+            let min_arr = min_array.as_primitive::<datafusion::arrow::datatypes::Float32Type>();
+            let max_arr = max_array.as_primitive::<datafusion::arrow::datatypes::Float32Type>();
+
+            let mut builder = Float32Array::builder(number_rows);
+            for i in 0..number_rows {
+                if min_arr.is_null(i) || max_arr.is_null(i) {
+                    builder.append_null();
+                } else {
+                    let min_val = min_arr.value(i);
+                    let max_val = max_arr.value(i);
+                    let seed_val = extract_seed(seed_array, i);
+                    builder
+                        .append_value(generate_uniform_float32(min_val, max_val, seed_val, 1)?[0]);
                 }
             }
 
@@ -653,7 +720,7 @@ mod tests {
         Ok(())
     }
 
-    /// Test 18: Verify coerce_types for float inputs
+    /// Test 18: Verify coerce_types for float inputs - Float32 is preserved
     #[test]
     fn test_uniform_coerce_types_float() -> Result<()> {
         let uniform_fn = SparkUniform::new();
@@ -661,8 +728,8 @@ mod tests {
         let coerced = uniform_fn.coerce_types(&arg_types)?;
         assert_eq!(
             coerced,
-            vec![DataType::Float64, DataType::Float64, DataType::Int64],
-            "Float32 should be coerced to Float64"
+            vec![DataType::Float32, DataType::Float32, DataType::Int64],
+            "Float32 should be preserved when both arguments are Float32"
         );
         Ok(())
     }
@@ -1029,7 +1096,7 @@ mod tests {
         Ok(())
     }
 
-    /// Test 33: Int16 (SMALLINT) should return Int32
+    /// Test 33: Int16 (SMALLINT) should be preserved as Int16
     #[test]
     fn test_uniform_return_type_int16() -> Result<()> {
         let uniform_fn = SparkUniform::new();
@@ -1047,13 +1114,13 @@ mod tests {
         let field = uniform_fn.return_field_from_args(args)?;
         assert_eq!(
             field.data_type(),
-            &DataType::Int32,
-            "Int16 (SMALLINT) inputs should return Int32"
+            &DataType::Int16,
+            "Int16 (SMALLINT) inputs should return Int16"
         );
         Ok(())
     }
 
-    /// Test 34: Int8 should return Int32
+    /// Test 34: Int8 (TINYINT) should be preserved as Int8
     #[test]
     fn test_uniform_return_type_int8() -> Result<()> {
         let uniform_fn = SparkUniform::new();
@@ -1072,8 +1139,8 @@ mod tests {
 
         assert_eq!(
             field.data_type(),
-            &DataType::Int32,
-            "Int8 inputs should return Int32"
+            &DataType::Int8,
+            "Int8 inputs should return Int8"
         );
         Ok(())
     }
