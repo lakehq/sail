@@ -1,10 +1,12 @@
 mod actor;
 mod client;
 mod event;
+pub(super) mod job_scheduler;
 mod options;
+pub(super) mod output;
 mod planner;
 mod server;
-pub(crate) mod state;
+pub(super) mod worker_pool;
 
 #[allow(clippy::all)]
 mod gen {
@@ -16,7 +18,7 @@ mod gen {
 
 pub(crate) use actor::DriverActor;
 pub(crate) use client::DriverClient;
-pub(crate) use event::DriverEvent;
+pub(crate) use event::{DriverEvent, TaskStatus};
 pub(crate) use gen::driver_service_client::DriverServiceClient;
 pub use options::DriverOptions;
 pub(crate) use options::WorkerManagerOptions;

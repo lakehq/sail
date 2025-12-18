@@ -29,7 +29,14 @@ def normalize_plan_text(plan_text: str) -> str:
     text = re.sub(r"([A-Za-z][A-Za-z0-9+.\-]*:)//", r"\1__SCHEME_SLASHSLASH__", text)
     text = re.sub(r"/{2,}", "/", text)
     text = text.replace("__SCHEME_SLASHSLASH__", "//")
-    text = re.sub(r", metrics=\[[^\]]*\]", "", text)
+
+    def _normalize_metrics_block(match: re.Match[str]) -> str:
+        body = match.group(1)
+        body = re.sub(r"=\s*[^,\]]+", "=<metric>", body)
+        body = re.sub(r"-?\d+(?:\.\d+)?", "<metric>", body)
+        return f", metrics=[{body}]"
+
+    text = re.sub(r", metrics=\[([^\]]*)\]", _normalize_metrics_block, text)
     text = re.sub(r"Hash\(\[([^\]]+)\], \d+\)", r"Hash([\1], <partitions>)", text)
     text = re.sub(r"RoundRobinBatch\(\d+\)", r"RoundRobinBatch(<partitions>)", text)
     text = re.sub(r"input_partitions=\d+", r"input_partitions=<partitions>", text)
@@ -397,6 +404,15 @@ def _normalize_delta_commit_info_for_snapshot(commit_info: dict) -> dict:
     ei = normalized.get("engineInfo")
     if isinstance(ei, str) and ei.startswith("sail-delta-lake:"):
         normalized["engineInfo"] = "sail-delta-lake:x.x.x"
+
+    # Normalize time-related operation metrics (nondeterministic).
+    op_metrics = normalized.get("operationMetrics")
+    if isinstance(op_metrics, dict):
+        scrubbed = dict(op_metrics)
+        for k in list(scrubbed.keys()):
+            if k.endswith(("TimeMs", "DurationMs", "timeMs")):
+                scrubbed[k] = "<time_ms>"
+        normalized["operationMetrics"] = scrubbed
 
     return normalized
 

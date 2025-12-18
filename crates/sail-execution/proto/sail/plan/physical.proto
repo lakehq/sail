@@ -470,9 +470,7 @@ message TaskReadLocation {
 
 message TaskReadLocationWorker {
   uint64 worker_id = 1;
-  string host = 2;
-  uint32 port = 3;
-  string channel = 4;
+  string channel = 2;
 }
 
 message TaskReadLocationRemote {

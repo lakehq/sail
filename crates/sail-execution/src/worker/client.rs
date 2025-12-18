@@ -5,10 +5,11 @@ use futures::TryStreamExt;
 use prost::Message;
 
 use crate::error::ExecutionResult;
-use crate::id::TaskId;
+use crate::id::{JobId, TaskId};
 use crate::rpc::{ClientHandle, ClientOptions, ClientService};
 use crate::stream::channel::ChannelName;
 use crate::stream::reader::TaskStreamSource;
+use crate::worker::event::WorkerLocation;
 use crate::worker::gen::worker_service_client::WorkerServiceClient;
 use crate::worker::gen::{
     RemoveStreamRequest, RemoveStreamResponse, RunTaskRequest, RunTaskResponse, StopTaskRequest,
@@ -34,26 +35,36 @@ impl WorkerClient {
 impl WorkerClient {
     pub async fn run_task(
         &self,
+        job_id: JobId,
         task_id: TaskId,
         attempt: usize,
         plan: Vec<u8>,
         partition: usize,
         channel: Option<ChannelName>,
+        peers: Vec<WorkerLocation>,
     ) -> ExecutionResult<()> {
         let request = RunTaskRequest {
+            job_id: job_id.into(),
             task_id: task_id.into(),
             attempt: attempt as u64,
             plan,
             partition: partition as u64,
             channel: channel.map(|x| x.into()),
+            peers: peers.into_iter().map(|x| x.into()).collect(),
         };
         let response = self.client.get().await?.run_task(request).await?;
         let RunTaskResponse {} = response.into_inner();
         Ok(())
     }
 
-    pub async fn stop_task(&self, task_id: TaskId, attempt: usize) -> ExecutionResult<()> {
+    pub async fn stop_task(
+        &self,
+        job_id: JobId,
+        task_id: TaskId,
+        attempt: usize,
+    ) -> ExecutionResult<()> {
         let request = StopTaskRequest {
+            job_id: job_id.into(),
             task_id: task_id.into(),
             attempt: attempt as u64,
         };

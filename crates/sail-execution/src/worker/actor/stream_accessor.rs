@@ -29,12 +29,7 @@ impl TaskStreamReader for WorkerStreamAccessor {
     ) -> Result<TaskStreamSource> {
         let (tx, rx) = oneshot::channel();
         let event = match location {
-            TaskReadLocation::Worker {
-                worker_id,
-                host,
-                port,
-                channel,
-            } => {
+            TaskReadLocation::Worker { worker_id, channel } => {
                 if *worker_id == self.worker_id {
                     WorkerEvent::FetchThisWorkerStream {
                         channel: channel.clone(),
@@ -43,8 +38,6 @@ impl TaskStreamReader for WorkerStreamAccessor {
                 } else {
                     WorkerEvent::FetchOtherWorkerStream {
                         worker_id: *worker_id,
-                        host: host.clone(),
-                        port: *port,
                         channel: channel.clone(),
                         schema,
                         result: tx,

@@ -118,13 +118,27 @@ def parse_show_string(text) -> list[list[str]]:
 
 
 def get_data_files(path: str, extension: str = ".parquet") -> list[str]:
-    """Recursively find all data files under the given path."""
-    data_files = [
-        os.path.relpath(os.path.join(root, file), path)
-        for root, _, files in os.walk(path)
-        for file in files
-        if file.endswith(extension)
-    ]
+    """Recursively find all *data* files under the given path.
+
+    Notes:
+    - Delta Lake tables store transaction logs under `_delta_log/`, including
+      `*.checkpoint.parquet` files. Those are *not* table data files and should
+      not be counted as such in tests.
+    """
+
+    data_files: list[str] = []
+    for root, dirs, files in os.walk(path):
+        # Never descend into Delta transaction logs (contains checkpoint parquet files).
+        dirs[:] = [d for d in dirs if d != "_delta_log"]
+
+        for file in files:
+            if not file.endswith(extension):
+                continue
+            # Extra safety: even if logs were moved elsewhere, don't treat checkpoints as data.
+            if ".checkpoint." in file:
+                continue
+            data_files.append(os.path.relpath(os.path.join(root, file), path))
+
     return sorted(data_files)
 
 

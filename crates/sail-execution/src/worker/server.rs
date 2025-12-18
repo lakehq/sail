@@ -2,7 +2,8 @@ use log::debug;
 use sail_server::actor::ActorHandle;
 use tonic::{Request, Response, Status};
 
-use crate::error::ExecutionError;
+use crate::error::{ExecutionError, ExecutionResult};
+use crate::id::TaskInstance;
 use crate::worker::actor::WorkerActor;
 use crate::worker::gen::worker_service_server::WorkerService;
 use crate::worker::gen::{
@@ -30,18 +31,28 @@ impl WorkerService for WorkerServer {
         let request = request.into_inner();
         debug!("{request:?}");
         let RunTaskRequest {
+            job_id,
             task_id,
             attempt,
             partition,
             plan,
             channel,
+            peers,
         } = request;
+        let peers = peers
+            .into_iter()
+            .map(|x| x.try_into())
+            .collect::<ExecutionResult<Vec<_>>>()?;
         let event = WorkerEvent::RunTask {
-            task_id: task_id.into(),
-            attempt: attempt as usize,
+            instance: TaskInstance {
+                job_id: job_id.into(),
+                task_id: task_id.into(),
+                attempt: attempt as usize,
+            },
             partition: partition as usize,
             plan,
             channel: channel.map(|x| x.into()),
+            peers,
         };
         self.handle
             .send(event)
@@ -58,10 +69,17 @@ impl WorkerService for WorkerServer {
     ) -> Result<Response<StopTaskResponse>, Status> {
         let request = request.into_inner();
         debug!("{request:?}");
-        let StopTaskRequest { task_id, attempt } = request;
+        let StopTaskRequest {
+            job_id,
+            task_id,
+            attempt,
+        } = request;
         let event = WorkerEvent::StopTask {
-            task_id: task_id.into(),
-            attempt: attempt as usize,
+            instance: TaskInstance {
+                job_id: job_id.into(),
+                task_id: task_id.into(),
+                attempt: attempt as usize,
+            },
         };
         self.handle
             .send(event)

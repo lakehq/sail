@@ -37,7 +37,7 @@ use thiserror::Error;
 use uuid::Uuid;
 
 use crate::error::{DeltaError, KernelError};
-use crate::kernel::checkpoints::cleanup_expired_logs_for;
+use crate::kernel::checkpoints::{cleanup_expired_logs_for, create_checkpoint_for};
 use crate::kernel::models::{Action, Metadata, Protocol, Transaction};
 use crate::kernel::snapshot::EagerSnapshot;
 use crate::kernel::transaction::conflict_checker::{TransactionInfo, WinningCommitSummary};
@@ -73,6 +73,74 @@ pub struct Metrics {
     pub num_retries: u64,
     pub new_checkpoint_created: bool,
     pub num_log_files_cleaned_up: u64,
+}
+
+#[derive(Default, Debug, PartialEq, Clone)]
+pub struct OperationMetrics {
+    pub num_files: Option<u64>,
+    pub num_output_rows: Option<u64>,
+    pub num_output_bytes: Option<u64>,
+    pub execution_time_ms: Option<u64>,
+    pub num_removed_files: Option<u64>,
+    pub num_added_files: Option<u64>,
+    pub extra: HashMap<String, Value>,
+}
+
+impl OperationMetrics {
+    pub fn into_map(self) -> HashMap<String, Value> {
+        let mut out = self.extra;
+        if let Some(v) = self.num_files {
+            out.insert("numFiles".to_string(), Value::from(v));
+        }
+        if let Some(v) = self.num_output_rows {
+            out.insert("numOutputRows".to_string(), Value::from(v));
+        }
+        if let Some(v) = self.num_output_bytes {
+            out.insert("numOutputBytes".to_string(), Value::from(v));
+        }
+        if let Some(v) = self.execution_time_ms {
+            out.insert("executionTimeMs".to_string(), Value::from(v));
+        }
+        if let Some(v) = self.num_removed_files {
+            out.insert("numRemovedFiles".to_string(), Value::from(v));
+        }
+        if let Some(v) = self.num_added_files {
+            out.insert("numAddedFiles".to_string(), Value::from(v));
+        }
+        out
+    }
+}
+
+impl From<HashMap<String, Value>> for OperationMetrics {
+    fn from(mut value: HashMap<String, Value>) -> Self {
+        fn take_u64(map: &mut HashMap<String, Value>, key: &str) -> Option<u64> {
+            match map.remove(key) {
+                Some(Value::Number(n)) => n.as_u64(),
+                Some(other) => {
+                    map.insert(key.to_string(), other);
+                    None
+                }
+                None => None,
+            }
+        }
+
+        let num_files = take_u64(&mut value, "numFiles");
+        let num_output_rows = take_u64(&mut value, "numOutputRows");
+        let num_output_bytes = take_u64(&mut value, "numOutputBytes");
+        let execution_time_ms = take_u64(&mut value, "executionTimeMs");
+        let num_removed_files = take_u64(&mut value, "numRemovedFiles");
+        let num_added_files = take_u64(&mut value, "numAddedFiles");
+
+        Self {
+            num_files,
+            num_output_rows,
+            num_output_bytes,
+            execution_time_ms,
+            num_removed_files,
+            num_added_files,
+            extra: value,
+        }
+    }
 }
 
 #[derive(Error, Debug)]
@@ -118,8 +186,6 @@ pub enum TransactionError {
 pub struct CommitData {
     pub actions: Vec<Action>,
     pub operation: DeltaOperation,
-    _app_metadata: HashMap<String, Value>,
-    _app_transactions: Vec<Transaction>,
 }
 
 impl CommitData {
@@ -127,6 +193,7 @@ impl CommitData {
         mut actions: Vec<Action>,
         operation: DeltaOperation,
         mut app_metadata: HashMap<String, Value>,
+        operation_metrics: OperationMetrics,
         app_transactions: Vec<Transaction>,
     ) -> Self {
         let is_blind_append = Self::is_blind_append(&actions, &operation);
@@ -147,8 +214,27 @@ impl CommitData {
                 "clientVersion".to_string(),
                 Value::String(format!("sail-delta-lake.{}", env!("CARGO_PKG_VERSION"))),
             );
-            app_metadata.extend(commit_info.info.clone());
-            commit_info.info = app_metadata.clone();
+            // Merge operationMetrics into the final commitInfo.info.
+            // If the caller also provided `operationMetrics` in app metadata, merge both.
+            let mut merged_operation_metrics: HashMap<String, Value> = HashMap::new();
+            if let Some(Value::Object(obj)) = commit_info.info.get("operationMetrics").cloned() {
+                merged_operation_metrics.extend(obj);
+            }
+            if let Some(Value::Object(obj)) = app_metadata.get("operationMetrics").cloned() {
+                merged_operation_metrics.extend(obj);
+            }
+            merged_operation_metrics.extend(operation_metrics.into_map());
+
+            // Merge base info + app metadata (app metadata wins on conflicts).
+            let mut merged_info = commit_info.info.clone();
+            merged_info.extend(app_metadata.clone());
+            if !merged_operation_metrics.is_empty() {
+                merged_info.insert(
+                    "operationMetrics".to_string(),
+                    Value::Object(merged_operation_metrics.into_iter().collect()),
+                );
+            }
+            commit_info.info = merged_info;
             actions.push(Action::CommitInfo(commit_info));
         }
 
@@ -156,12 +242,7 @@ impl CommitData {
             actions.push(Action::Txn(txn.clone()));
         }
 
-        Self {
-            actions,
-            operation,
-            _app_metadata: app_metadata,
-            _app_transactions: app_transactions,
-        }
+        Self { actions, operation }
     }
 
     pub fn get_bytes(&self) -> Result<Bytes, TransactionError> {
@@ -266,6 +347,7 @@ pub struct PostCommitHookProperties {
 /// Enable controlling commit behaviour and modifying metadata that is written during a commit.
 pub struct CommitProperties {
     pub(crate) app_metadata: HashMap<String, Value>,
+    pub(crate) operation_metrics: OperationMetrics,
     pub(crate) app_transaction: Vec<Transaction>,
     max_retries: usize,
     create_checkpoint: bool,
@@ -276,11 +358,24 @@ impl Default for CommitProperties {
     fn default() -> Self {
         Self {
             app_metadata: Default::default(),
+            operation_metrics: Default::default(),
             app_transaction: Vec::new(),
             max_retries: DEFAULT_RETRIES,
             create_checkpoint: true,
             cleanup_expired_logs: None,
         }
+    }
+}
+
+impl CommitProperties {
+    /// Attach operation metrics that will be merged into the Delta log `commitInfo` action
+    /// under the `operationMetrics` key.
+    pub(crate) fn with_operation_metrics(
+        mut self,
+        operation_metrics: impl Into<OperationMetrics>,
+    ) -> Self {
+        self.operation_metrics = operation_metrics.into();
+        self
     }
 }
 
@@ -330,6 +425,7 @@ impl From<CommitProperties> for CommitBuilder {
         CommitBuilder {
             max_retries: value.max_retries,
             app_metadata: value.app_metadata,
+            operation_metrics: value.operation_metrics,
             post_commit_hook: Some(PostCommitHookProperties {
                 create_checkpoint: value.create_checkpoint,
                 cleanup_expired_logs: value.cleanup_expired_logs,
@@ -344,6 +440,7 @@ impl From<CommitProperties> for CommitBuilder {
 pub struct CommitBuilder {
     actions: Vec<Action>,
     app_metadata: HashMap<String, Value>,
+    operation_metrics: OperationMetrics,
     app_transaction: Vec<Transaction>,
     max_retries: usize,
     post_commit_hook: Option<PostCommitHookProperties>,
@@ -356,6 +453,7 @@ impl Default for CommitBuilder {
         CommitBuilder {
             actions: Vec::new(),
             app_metadata: HashMap::new(),
+            operation_metrics: OperationMetrics::default(),
             app_transaction: Vec::new(),
             max_retries: DEFAULT_RETRIES,
             post_commit_hook: None,
@@ -417,6 +515,7 @@ impl<'a> CommitBuilder {
             self.actions,
             operation,
             self.app_metadata,
+            self.operation_metrics,
             self.app_transaction,
         );
         PreCommit {
@@ -764,123 +863,120 @@ pub struct PostCommit {
 impl PostCommit {
     /// Runs the post commit activities
     async fn run_post_commit_hook(&self) -> DeltaResult<(DeltaTableState, PostCommitMetrics)> {
-        if let Some(table) = &self.table_data {
-            let post_commit_operation_id = Uuid::new_v4();
+        let post_commit_operation_id = Uuid::new_v4();
+
+        // Always construct a state for the committed version so checkpoint + cleanup can run
+        // even when `table_data` isn't available (e.g. planner didn't provide a snapshot).
+        let mut state = if let Some(table) = &self.table_data {
             let mut snapshot = table.eager_snapshot().clone();
             if self.version != snapshot.version() {
                 snapshot
                     .update(self.log_store.as_ref(), Some(self.version as u64))
                     .await?;
             }
-
-            let mut state = DeltaTableState { snapshot };
-
-            let cleanup_logs = if let Some(cleanup_logs) = self.cleanup_expired_logs {
-                cleanup_logs
-            } else {
-                state.table_properties().enable_expired_log_cleanup()
-            };
-
-            // Run arbitrary before_post_commit_hook code
-            if let Some(custom_execute_handler) = &self.custom_execute_handler {
-                custom_execute_handler
-                    .before_post_commit_hook(
-                        &self.log_store,
-                        cleanup_logs || self.create_checkpoint,
-                        post_commit_operation_id,
-                    )
-                    .await?
-            }
-
-            let mut new_checkpoint_created = false;
-            if self.create_checkpoint {
-                // Execute create checkpoint hook
-                new_checkpoint_created = self
-                    .create_checkpoint(
-                        &state,
-                        &self.log_store,
-                        self.version,
-                        post_commit_operation_id,
-                    )
-                    .await?;
-            }
-
-            let mut num_log_files_cleaned_up: u64 = 0;
-            if cleanup_logs {
-                // Execute clean up logs hook
-                num_log_files_cleaned_up = cleanup_expired_logs_for(
-                    self.version,
-                    self.log_store.as_ref(),
-                    Utc::now().timestamp_millis()
-                        - state
-                            .table_properties()
-                            .log_retention_duration()
-                            .as_millis() as i64,
-                    Some(post_commit_operation_id),
-                )
-                .await? as u64;
-                if num_log_files_cleaned_up > 0 {
-                    state = DeltaTableState::try_new(
-                        self.log_store.as_ref(),
-                        state.load_config().clone(),
-                        Some(self.version),
-                    )
-                    .await?;
-                }
-            }
-
-            // Run arbitrary after_post_commit_hook code
-            if let Some(custom_execute_handler) = &self.custom_execute_handler {
-                custom_execute_handler
-                    .after_post_commit_hook(
-                        &self.log_store,
-                        cleanup_logs || self.create_checkpoint,
-                        post_commit_operation_id,
-                    )
-                    .await?
-            }
-            Ok((
-                state,
-                PostCommitMetrics {
-                    new_checkpoint_created,
-                    num_log_files_cleaned_up,
-                },
-            ))
+            DeltaTableState { snapshot }
         } else {
-            let state = DeltaTableState::try_new(
+            DeltaTableState::try_new(
                 self.log_store.as_ref(),
                 Default::default(),
                 Some(self.version),
             )
-            .await?;
-            Ok((
-                state,
-                PostCommitMetrics {
-                    new_checkpoint_created: false,
-                    num_log_files_cleaned_up: 0,
-                },
-            ))
+            .await?
+        };
+
+        let cleanup_logs = if let Some(cleanup_logs) = self.cleanup_expired_logs {
+            cleanup_logs
+        } else {
+            state.table_properties().enable_expired_log_cleanup()
+        };
+
+        // Run arbitrary before_post_commit_hook code
+        if let Some(custom_execute_handler) = &self.custom_execute_handler {
+            custom_execute_handler
+                .before_post_commit_hook(
+                    &self.log_store,
+                    cleanup_logs || self.create_checkpoint,
+                    post_commit_operation_id,
+                )
+                .await?
         }
+
+        let mut new_checkpoint_created = false;
+        if self.create_checkpoint {
+            // Execute create checkpoint hook
+            new_checkpoint_created = self
+                .create_checkpoint(
+                    &state,
+                    &self.log_store,
+                    self.version,
+                    post_commit_operation_id,
+                )
+                .await?;
+        }
+
+        let mut num_log_files_cleaned_up: u64 = 0;
+        if cleanup_logs {
+            // Execute clean up logs hook
+            num_log_files_cleaned_up = cleanup_expired_logs_for(
+                self.version,
+                self.log_store.as_ref(),
+                Utc::now().timestamp_millis()
+                    - state
+                        .table_properties()
+                        .log_retention_duration()
+                        .as_millis() as i64,
+                Some(post_commit_operation_id),
+            )
+            .await? as u64;
+            if num_log_files_cleaned_up > 0 {
+                state = DeltaTableState::try_new(
+                    self.log_store.as_ref(),
+                    state.load_config().clone(),
+                    Some(self.version),
+                )
+                .await?;
+            }
+        }
+
+        // Run arbitrary after_post_commit_hook code
+        if let Some(custom_execute_handler) = &self.custom_execute_handler {
+            custom_execute_handler
+                .after_post_commit_hook(
+                    &self.log_store,
+                    cleanup_logs || self.create_checkpoint,
+                    post_commit_operation_id,
+                )
+                .await?
+        }
+
+        Ok((
+            state,
+            PostCommitMetrics {
+                new_checkpoint_created,
+                num_log_files_cleaned_up,
+            },
+        ))
     }
     async fn create_checkpoint(
         &self,
         table_state: &DeltaTableState,
-        _log_store: &LogStoreRef,
+        log_store: &LogStoreRef,
         version: i64,
-        _operation_id: Uuid,
+        operation_id: Uuid,
     ) -> DeltaResult<bool> {
         if !table_state.load_config().require_files {
-            warn!("Checkpoint creation in post_commit_hook has been skipped due to table being initialized without files.");
-            return Ok(false);
+            // Even if the in-memory snapshot was created without eagerly loading files, we can
+            // still build a kernel snapshot at the committed version and write a checkpoint.
+            // (The checkpoint writer will read state from the log as needed.)
+            debug!("table_state.load_config().require_files=false; creating checkpoint via kernel snapshot anyway");
         }
 
         let checkpoint_interval = table_state.config().checkpoint_interval().get() as i64;
-        if ((version + 1) % checkpoint_interval) == 0 {
-            // TODO: Implement checkpoint creation
-            info!(
-                "Checkpoint interval reached at version {version}, checkpoint creation is not implemented yet."
-            );
-            Ok(false)
+        // TODO: SQL `TBLPROPERTIES(delta.checkpointInterval)` isn't plumbed into `metaData.configuration` yet.
+        if version >= 0 && (version % checkpoint_interval) == 0 {
+            info!("Creating checkpoint for version {version}");
+            create_checkpoint_for(version, log_store.as_ref(), operation_id).await?;
+            Ok(true)
         } else {
             Ok(false)
         }
