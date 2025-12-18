@@ -11,8 +11,10 @@
 // limitations under the License.
 
 use std::any::Any;
+use std::collections::HashMap;
 use std::fmt;
 use std::sync::Arc;
+use std::time::Instant;
 
 use async_trait::async_trait;
 use datafusion::arrow::array::{Array, StringArray};
@@ -20,6 +22,7 @@ use datafusion::arrow::datatypes::{DataType, Field, Schema};
 use datafusion::arrow::record_batch::RecordBatch;
 use datafusion::execution::context::TaskContext;
 use datafusion::physical_plan::execution_plan::{Boundedness, EmissionType};
+use datafusion::physical_plan::metrics::{ExecutionPlanMetricsSet, MetricBuilder, MetricsSet};
 use datafusion::physical_plan::stream::RecordBatchStreamAdapter;
 use datafusion::physical_plan::{
     DisplayAs, DisplayFormatType, ExecutionPlan, Partitioning, PlanProperties,
@@ -28,6 +31,7 @@ use datafusion::physical_plan::{
 use datafusion_common::{internal_err, DataFusionError, Result};
 use datafusion_physical_expr::{Distribution, EquivalenceProperties};
 use futures::stream::{self, StreamExt};
+use serde_json::Value;
 
 use crate::kernel::models::{Action, Add, RemoveOptions};
 use crate::physical_plan::{current_timestamp_millis, CommitInfo};
@@ -36,6 +40,7 @@ use crate::physical_plan::{current_timestamp_millis, CommitInfo};
 #[derive(Debug)]
 pub struct DeltaRemoveActionsExec {
     input: Arc<dyn ExecutionPlan>,
+    metrics: ExecutionPlanMetricsSet,
     cache: PlanProperties,
 }
 
@@ -49,7 +54,11 @@ impl DeltaRemoveActionsExec {
             EmissionType::Final,
             Boundedness::Bounded,
         );
-        Self { input, cache }
+        Self {
+            input,
+            metrics: ExecutionPlanMetricsSet::new(),
+            cache,
+        }
     }
 
     pub(crate) async fn create_remove_actions(adds: Vec<Add>) -> Result<Vec<Action>> {
@@ -97,6 +106,10 @@ impl ExecutionPlan for DeltaRemoveActionsExec {
         &self.cache
     }
 
+    fn metrics(&self) -> Option<MetricsSet> {
+        Some(self.metrics.clone_inner())
+    }
+
     fn children(&self) -> Vec<&Arc<dyn ExecutionPlan>> {
         vec![&self.input]
     }
@@ -127,8 +140,15 @@ impl ExecutionPlan for DeltaRemoveActionsExec {
         let mut stream = self.input.execute(0, context)?;
         let schema = self.schema();
 
+        let output_rows = MetricBuilder::new(&self.metrics).output_rows(partition);
+        let output_bytes = MetricBuilder::new(&self.metrics).output_bytes(partition);
+        let elapsed_compute = MetricBuilder::new(&self.metrics).elapsed_compute(partition);
+
         let future = async move {
+            let _elapsed_compute_timer = elapsed_compute.timer();
+            let exec_start = Instant::now();
             let mut adds_to_remove = vec![];
+            let mut num_removed_bytes: u64 = 0;
 
             while let Some(batch_result) = stream.next().await {
                 let batch = batch_result?;
@@ -155,17 +175,39 @@ impl ExecutionPlan for DeltaRemoveActionsExec {
                     }
                     let add: Add = serde_json::from_str(add_json)
                         .map_err(|e| DataFusionError::External(Box::new(e)))?;
+                    num_removed_bytes = num_removed_bytes
+                        .saturating_add(u64::try_from(add.size).unwrap_or_default());
                     adds_to_remove.push(add);
                 }
             }
 
+            let num_removed_files: u64 = adds_to_remove.len() as u64;
             let remove_actions = Self::create_remove_actions(adds_to_remove).await?;
+
+            // For execution metrics, treat removed files/bytes as this node's "output".
+            output_rows.add(usize::try_from(num_removed_files).unwrap_or(usize::MAX));
+            output_bytes.add(usize::try_from(num_removed_bytes).unwrap_or(usize::MAX));
+
+            let mut operation_metrics: HashMap<String, Value> = HashMap::new();
+            operation_metrics.insert(
+                "numRemovedFiles".to_string(),
+                Value::from(num_removed_files),
+            );
+            operation_metrics.insert(
+                "numRemovedBytes".to_string(),
+                Value::from(num_removed_bytes),
+            );
+            operation_metrics.insert(
+                "executionTimeMs".to_string(),
+                Value::from(exec_start.elapsed().as_millis() as u64),
+            );
 
             let commit_info = CommitInfo {
                 row_count: 0,
                 actions: remove_actions,
                 initial_actions: Vec::new(),
                 operation: None,
+                operation_metrics,
             };
 
             let json = serde_json::to_string(&commit_info)

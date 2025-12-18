@@ -26,6 +26,7 @@ use datafusion::physical_plan::sorts::sort::SortExec;
 use datafusion::physical_plan::{ExecutionPlan, Partitioning};
 use datafusion_physical_expr::expressions::{lit, Column as PhysicalColumn};
 use serde::{Deserialize, Serialize};
+use serde_json::Value;
 
 use crate::kernel::models::Action;
 use crate::kernel::DeltaOperation;
@@ -192,6 +193,8 @@ pub struct CommitInfo {
     pub actions: Vec<Action>,
     pub initial_actions: Vec<Action>,
     pub operation: Option<DeltaOperation>,
+    #[serde(rename = "operationMetrics", default)]
+    pub operation_metrics: std::collections::HashMap<String, Value>,
 }
 
 pub(crate) fn current_timestamp_millis() -> Result<i64> {

@@ -23,6 +23,7 @@ use datafusion::arrow::record_batch::RecordBatch;
 use datafusion::execution::context::TaskContext;
 use datafusion::execution::SessionStateBuilder;
 use datafusion::physical_plan::execution_plan::{Boundedness, EmissionType};
+use datafusion::physical_plan::metrics::{ExecutionPlanMetricsSet, MetricBuilder, MetricsSet};
 use datafusion::physical_plan::stream::RecordBatchStreamAdapter;
 use datafusion::physical_plan::{
     DisplayAs, DisplayFormatType, ExecutionPlan, ExecutionPlanProperties, Partitioning,
@@ -45,6 +46,10 @@ use crate::schema::normalize_delta_schema;
 use crate::storage::{get_object_store_from_context, StorageConfig};
 use crate::table::{create_delta_table_with_object_store, open_table_with_object_store};
 
+const METRIC_NUM_COMMIT_RETRIES: &str = "num_commit_retries";
+const METRIC_CHECKPOINT_CREATED: &str = "checkpoint_created";
+const METRIC_LOG_FILES_CLEANED: &str = "log_files_cleaned";
+
 /// Physical execution node for Delta Lake commit operations
 #[derive(Debug)]
 pub struct DeltaCommitExec {
@@ -55,6 +60,7 @@ pub struct DeltaCommitExec {
     table_exists: bool,
     sink_schema: SchemaRef,
     sink_mode: PhysicalSinkMode,
+    metrics: ExecutionPlanMetricsSet,
     cache: PlanProperties,
 }
 
@@ -80,6 +86,7 @@ impl DeltaCommitExec {
             table_exists,
             sink_schema,
             sink_mode,
+            metrics: ExecutionPlanMetricsSet::new(),
             cache,
         }
     }
@@ -132,6 +139,10 @@ impl ExecutionPlan for DeltaCommitExec {
         &self.cache
     }
 
+    fn metrics(&self) -> Option<MetricsSet> {
+        Some(self.metrics.clone_inner())
+    }
+
     fn required_input_distribution(&self) -> Vec<Distribution> {
         vec![Distribution::SinglePartition]
     }
@@ -181,6 +192,10 @@ impl ExecutionPlan for DeltaCommitExec {
 
         let input_stream = self.input.execute(0, Arc::clone(&context))?;
 
+        let output_rows = MetricBuilder::new(&self.metrics).output_rows(partition);
+        let elapsed_compute = MetricBuilder::new(&self.metrics).elapsed_compute(partition);
+        let plan_metrics = self.metrics.clone();
+
         let table_url = self.table_url.clone();
         let partition_columns = self.partition_columns.clone();
         let table_exists = self.table_exists;
@@ -189,6 +204,7 @@ impl ExecutionPlan for DeltaCommitExec {
 
         let schema = self.schema();
         let future = async move {
+            let _elapsed_compute_timer = elapsed_compute.timer();
             let storage_config = StorageConfig;
             let object_store = get_object_store_from_context(&context, &table_url)?;
 
@@ -215,6 +231,7 @@ impl ExecutionPlan for DeltaCommitExec {
             let mut actions: Vec<Action> = Vec::new();
             let mut initial_actions: Vec<Action> = Vec::new();
             let mut operation: Option<DeltaOperation> = None;
+            let mut operation_metrics: HashMap<String, serde_json::Value> = HashMap::new();
             let mut data = input_stream;
 
             while let Some(batch_result) = data.next().await {
@@ -243,8 +260,11 @@ impl ExecutionPlan for DeltaCommitExec {
                         if operation.is_none() {
                             operation = commit_info.operation;
                         }
+                        merge_operation_metrics(
+                            &mut operation_metrics,
+                            commit_info.operation_metrics,
+                        );
                         has_data = true;
-                        break;
                     }
                 }
             }
@@ -410,11 +430,34 @@ impl ExecutionPlan for DeltaCommitExec {
                 .with_config(context.session_config().clone())
                 .build();
 
-            CommitBuilder::from(CommitProperties::default())
-                .with_actions(final_actions)
-                .build(reference, table.log_store(), operation, &session_state)
-                .await
-                .map_err(|e| DataFusionError::External(Box::new(e)))?;
+            let finalized_commit = CommitBuilder::from(
+                CommitProperties::default().with_operation_metrics(operation_metrics),
+            )
+            .with_actions(final_actions)
+            .build(reference, table.log_store(), operation, &session_state)
+            .await
+            .map_err(|e| DataFusionError::External(Box::new(e)))?;
+
+            let retries =
+                usize::try_from(finalized_commit.metrics.num_retries).unwrap_or(usize::MAX);
+            MetricBuilder::new(&plan_metrics)
+                .global_counter(METRIC_NUM_COMMIT_RETRIES)
+                .add(retries);
+
+            if finalized_commit.metrics.new_checkpoint_created {
+                MetricBuilder::new(&plan_metrics)
+                    .global_counter(METRIC_CHECKPOINT_CREATED)
+                    .add(1);
+            }
+
+            let cleaned = usize::try_from(finalized_commit.metrics.num_log_files_cleaned_up)
+                .unwrap_or(usize::MAX);
+            MetricBuilder::new(&plan_metrics)
+                .global_counter(METRIC_LOG_FILES_CLEANED)
+                .add(cleaned);
+
+            // Expose row count through execution metrics as well.
+            output_rows.add(usize::try_from(total_rows).unwrap_or(usize::MAX));
 
             let array = Arc::new(UInt64Array::from(vec![total_rows]));
             let batch = RecordBatch::try_new(schema, vec![array])?;
@@ -426,6 +469,48 @@ impl ExecutionPlan for DeltaCommitExec {
             self.schema(),
             stream,
         )))
+    }
+}
+
+fn merge_operation_metrics(
+    target: &mut HashMap<String, serde_json::Value>,
+    source: HashMap<String, serde_json::Value>,
+) {
+    for (k, v) in source {
+        match (target.get(&k), &v) {
+            (Some(serde_json::Value::Number(a)), serde_json::Value::Number(b)) => {
+                let sum_i64 = a
+                    .as_i64()
+                    .and_then(|ai| b.as_i64().map(|bi| ai.saturating_add(bi)));
+                let sum_u64 = a
+                    .as_u64()
+                    .and_then(|au| b.as_u64().map(|bu| au.saturating_add(bu)));
+
+                if let Some(sum) = sum_u64 {
+                    target.insert(k, serde_json::Value::from(sum));
+                } else if let Some(sum) = sum_i64 {
+                    target.insert(k, serde_json::Value::from(sum));
+                } else if let (Some(af), Some(bf)) = (a.as_f64(), b.as_f64()) {
+                    let sum = af + bf;
+                    target.insert(
+                        k,
+                        serde_json::Value::Number(
+                            serde_json::Number::from_f64(sum)
+                                .unwrap_or_else(|| serde_json::Number::from(0)),
+                        ),
+                    );
+                } else {
+                    target.insert(k, v);
+                }
+            }
+            (None, _) => {
+                target.insert(k, v);
+            }
+            _ => {
+                // Different shapes; prefer the latest value.
+                target.insert(k, v);
+            }
+        }
     }
 }
 
