@@ -85,14 +85,9 @@ where
     }
 }
 
-#[derive(Eq, Hash, PartialEq)]
-pub struct TaskAttempt {
+#[derive(Clone, Eq, Hash, PartialEq)]
+pub struct TaskInstance {
+    pub job_id: JobId,
     pub task_id: TaskId,
     pub attempt: usize,
-}
-
-impl TaskAttempt {
-    pub fn new(task_id: TaskId, attempt: usize) -> Self {
-        Self { task_id, attempt }
-    }
 }

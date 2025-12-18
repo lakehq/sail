@@ -115,6 +115,7 @@ progenitor = "0.11.2"
 progenitor-client = "0.11.2"
 secrecy = { version = "0.10.3", features = ["serde"] }
 tempfile = "3.23.0"
+readonly = "0.2.13"
 
 ######
 # The versions of the following dependencies are managed manually.

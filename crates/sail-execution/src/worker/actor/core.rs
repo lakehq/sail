@@ -15,8 +15,8 @@ use tokio::sync::oneshot;
 
 use crate::codec::RemoteExecutionCodec;
 use crate::driver::DriverClient;
-use crate::error::ExecutionResult;
-use crate::id::{TaskAttempt, WorkerId};
+use crate::error::{ExecutionError, ExecutionResult};
+use crate::id::{TaskInstance, WorkerId};
 use crate::rpc::{ClientOptions, ServerMonitor};
 use crate::stream::channel::ChannelName;
 use crate::worker::actor::local_stream::LocalStream;
@@ -29,7 +29,8 @@ pub struct WorkerActor {
     pub(super) server: ServerMonitor,
     driver_client: DriverClient,
     worker_clients: HashMap<WorkerId, WorkerClient>,
-    pub(super) task_signals: HashMap<TaskAttempt, oneshot::Sender<()>>,
+    worker_locations: HashMap<WorkerId, (String, u16)>,
+    pub(super) task_signals: HashMap<TaskInstance, oneshot::Sender<()>>,
     pub(super) local_streams: HashMap<ChannelName, Box<dyn LocalStream>>,
     pub(super) session_context: Option<Arc<SessionContext>>,
     pub(super) physical_plan_codec: Box<dyn PhysicalExtensionCodec>,
@@ -57,6 +58,7 @@ impl Actor for WorkerActor {
             server: ServerMonitor::new(),
             driver_client,
             worker_clients: HashMap::new(),
+            worker_locations: HashMap::new(),
             task_signals: HashMap::new(),
             local_streams: HashMap::new(),
             session_context: None,
@@ -84,22 +86,19 @@ impl Actor for WorkerActor {
             }
             WorkerEvent::StartHeartbeat => self.handle_start_heartbeat(ctx),
             WorkerEvent::RunTask {
-                task_id,
-                attempt,
+                instance,
                 plan,
                 partition,
                 channel,
-            } => self.handle_run_task(ctx, task_id, attempt, plan, partition, channel),
-            WorkerEvent::StopTask { task_id, attempt } => {
-                self.handle_stop_task(ctx, task_id, attempt)
-            }
+                peers,
+            } => self.handle_run_task(ctx, instance, plan, partition, channel, peers),
+            WorkerEvent::StopTask { instance } => self.handle_stop_task(ctx, instance),
             WorkerEvent::ReportTaskStatus {
-                task_id,
-                attempt,
+                instance,
                 status,
                 message,
                 cause,
-            } => self.handle_report_task_status(ctx, task_id, attempt, status, message, cause),
+            } => self.handle_report_task_status(ctx, instance, status, message, cause),
             WorkerEvent::CreateLocalStream {
                 channel,
                 storage,
@@ -116,14 +115,10 @@ impl Actor for WorkerActor {
             }
             WorkerEvent::FetchOtherWorkerStream {
                 worker_id,
-                host,
-                port,
                 channel,
                 schema,
                 result,
-            } => self.handle_fetch_other_worker_stream(
-                ctx, worker_id, host, port, channel, schema, result,
-            ),
+            } => self.handle_fetch_other_worker_stream(ctx, worker_id, channel, schema, result),
             WorkerEvent::FetchRemoteStream {
                 uri,
                 schema,
@@ -151,23 +146,27 @@ impl WorkerActor {
         self.driver_client.clone()
     }
 
-    pub(super) fn worker_client(
-        &mut self,
-        id: WorkerId,
-        host: String,
-        port: u16,
-    ) -> ExecutionResult<WorkerClient> {
+    pub(super) fn worker_client(&mut self, id: WorkerId) -> ExecutionResult<WorkerClient> {
         let enable_tls = self.options().enable_tls;
+        let Some((host, port)) = self.worker_locations.get(&id) else {
+            return Err(ExecutionError::InternalError(format!(
+                "worker location for worker {id} not found"
+            )));
+        };
         let options = ClientOptions {
             enable_tls,
-            host,
-            port,
+            host: host.clone(),
+            port: *port,
         };
         let client = self
             .worker_clients
             .entry(id)
             .or_insert_with(|| WorkerClient::new(options));
         Ok(client.clone())
+    }
+
+    pub(super) fn set_worker_location(&mut self, id: WorkerId, host: String, port: u16) {
+        self.worker_locations.entry(id).or_insert((host, port));
     }
 
     pub(super) fn session_context(&mut self) -> ExecutionResult<Arc<SessionContext>> {

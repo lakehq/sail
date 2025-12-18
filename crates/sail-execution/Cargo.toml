@@ -40,6 +40,7 @@ kube = { workspace = true }
 k8s-openapi = { workspace = true }
 rand = { workspace = true }
 url = { workspace = true }
+readonly = { workspace = true }
 
 [build-dependencies]
 prost-build = { workspace = true }
