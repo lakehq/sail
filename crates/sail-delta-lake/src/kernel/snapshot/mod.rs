@@ -61,7 +61,7 @@ use crate::storage::LogStore;
 
 pub mod iterators;
 pub mod log_data;
-mod stream;
+pub(crate) mod stream;
 
 pub(crate) static SCAN_ROW_ARROW_SCHEMA: LazyLock<arrow_schema::SchemaRef> = LazyLock::new(|| {
     Arc::new(

@@ -5,38 +5,20 @@ use std::sync::Arc;
 use datafusion::execution::runtime_env::RuntimeEnvBuilder;
 use datafusion::execution::SessionStateBuilder;
 use datafusion::prelude::{SessionConfig, SessionContext};
-use datafusion_proto::physical_plan::PhysicalExtensionCodec;
 use fastrace::future::FutureExt;
 use fastrace::Span;
 use log::info;
 use sail_object_store::DynamicObjectStoreRegistry;
 use sail_server::actor::{Actor, ActorAction, ActorContext};
-use tokio::sync::oneshot;
 
 use crate::codec::RemoteExecutionCodec;
 use crate::driver::DriverClient;
-use crate::error::{ExecutionError, ExecutionResult};
-use crate::id::{TaskInstance, WorkerId};
+use crate::error::ExecutionResult;
 use crate::rpc::{ClientOptions, ServerMonitor};
-use crate::stream::channel::ChannelName;
-use crate::worker::actor::local_stream::LocalStream;
+use crate::worker::actor::peer_tracker::{PeerTracker, PeerTrackerOptions};
 use crate::worker::event::WorkerEvent;
 use crate::worker::options::WorkerOptions;
-use crate::worker::WorkerClient;
-
-pub struct WorkerActor {
-    options: WorkerOptions,
-    pub(super) server: ServerMonitor,
-    driver_client: DriverClient,
-    worker_clients: HashMap<WorkerId, WorkerClient>,
-    worker_locations: HashMap<WorkerId, (String, u16)>,
-    pub(super) task_signals: HashMap<TaskInstance, oneshot::Sender<()>>,
-    pub(super) local_streams: HashMap<ChannelName, Box<dyn LocalStream>>,
-    pub(super) session_context: Option<Arc<SessionContext>>,
-    pub(super) physical_plan_codec: Box<dyn PhysicalExtensionCodec>,
-    /// A monotonically increasing sequence number for ordered events.
-    pub(super) sequence: u64,
-}
+use crate::worker::WorkerActor;
 
 #[tonic::async_trait]
 impl Actor for WorkerActor {
@@ -53,12 +35,12 @@ impl Actor for WorkerActor {
             host: options.driver_host.clone(),
             port: options.driver_port,
         });
+        let peer_tracker = PeerTracker::new(PeerTrackerOptions::new(&options));
         Self {
             options,
             server: ServerMonitor::new(),
             driver_client,
-            worker_clients: HashMap::new(),
-            worker_locations: HashMap::new(),
+            peer_tracker,
             task_signals: HashMap::new(),
             local_streams: HashMap::new(),
             session_context: None,
@@ -69,8 +51,8 @@ impl Actor for WorkerActor {
 
     async fn start(&mut self, ctx: &mut ActorContext<Self>) {
         let addr = (
-            self.options().worker_listen_host.clone(),
-            self.options().worker_listen_port,
+            self.options.worker_listen_host.clone(),
+            self.options.worker_listen_port,
         );
         let server = mem::take(&mut self.server);
         let span = Span::enter_with_local_parent("WorkerActor::serve");
@@ -85,6 +67,9 @@ impl Actor for WorkerActor {
                 self.handle_server_ready(ctx, port, signal)
             }
             WorkerEvent::StartHeartbeat => self.handle_start_heartbeat(ctx),
+            WorkerEvent::ReportKnownPeers { peer_worker_ids } => {
+                self.handle_report_known_peers(ctx, peer_worker_ids)
+            }
             WorkerEvent::RunTask {
                 instance,
                 plan,
@@ -138,37 +123,6 @@ impl Actor for WorkerActor {
 }
 
 impl WorkerActor {
-    pub(super) fn options(&self) -> &WorkerOptions {
-        &self.options
-    }
-
-    pub(super) fn driver_client(&mut self) -> DriverClient {
-        self.driver_client.clone()
-    }
-
-    pub(super) fn worker_client(&mut self, id: WorkerId) -> ExecutionResult<WorkerClient> {
-        let enable_tls = self.options().enable_tls;
-        let Some((host, port)) = self.worker_locations.get(&id) else {
-            return Err(ExecutionError::InternalError(format!(
-                "worker location for worker {id} not found"
-            )));
-        };
-        let options = ClientOptions {
-            enable_tls,
-            host: host.clone(),
-            port: *port,
-        };
-        let client = self
-            .worker_clients
-            .entry(id)
-            .or_insert_with(|| WorkerClient::new(options));
-        Ok(client.clone())
-    }
-
-    pub(super) fn set_worker_location(&mut self, id: WorkerId, host: String, port: u16) {
-        self.worker_locations.entry(id).or_insert((host, port));
-    }
-
     pub(super) fn session_context(&mut self) -> ExecutionResult<Arc<SessionContext>> {
         match &self.session_context {
             Some(context) => Ok(context.clone()),
@@ -182,7 +136,7 @@ impl WorkerActor {
 
     fn create_session_context(&self) -> ExecutionResult<SessionContext> {
         let runtime = {
-            let registry = DynamicObjectStoreRegistry::new(self.options().runtime.clone());
+            let registry = DynamicObjectStoreRegistry::new(self.options.runtime.clone());
             let builder =
                 RuntimeEnvBuilder::default().with_object_store_registry(Arc::new(registry));
             Arc::new(builder.build()?)

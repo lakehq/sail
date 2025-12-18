@@ -21,6 +21,7 @@ use std::any::Any;
 use std::collections::HashMap;
 use std::fmt;
 use std::sync::Arc;
+use std::time::Instant;
 
 use async_trait::async_trait;
 use chrono::Utc;
@@ -33,6 +34,7 @@ use datafusion::arrow::record_batch::RecordBatch;
 use datafusion::execution::context::TaskContext;
 use datafusion::physical_expr_common::physical_expr::fmt_sql;
 use datafusion::physical_plan::execution_plan::{Boundedness, EmissionType};
+use datafusion::physical_plan::metrics::{ExecutionPlanMetricsSet, MetricBuilder, MetricsSet};
 use datafusion::physical_plan::stream::RecordBatchStreamAdapter;
 use datafusion::physical_plan::{
     DisplayAs, DisplayFormatType, ExecutionPlan, ExecutionPlanProperties, Partitioning,
@@ -45,6 +47,7 @@ use delta_kernel::schema::StructType;
 use delta_kernel::table_features::ColumnMappingMode;
 use futures::stream::{once, StreamExt};
 use sail_common_datafusion::datasource::PhysicalSinkMode;
+use serde_json::Value;
 use url::Url;
 
 use crate::conversion::DeltaTypeConverter;
@@ -83,6 +86,7 @@ pub struct DeltaWriterExec {
     condition: Option<Arc<dyn PhysicalExpr>>,
     /// Optional override for commit operation metadata.
     operation_override: Option<DeltaOperation>,
+    metrics: ExecutionPlanMetricsSet,
     cache: PlanProperties,
 }
 
@@ -125,6 +129,7 @@ impl DeltaWriterExec {
             sink_schema,
             condition,
             operation_override,
+            metrics: ExecutionPlanMetricsSet::new(),
             cache,
         }
     }
@@ -189,6 +194,10 @@ impl ExecutionPlan for DeltaWriterExec {
         &self.cache
     }
 
+    fn metrics(&self) -> Option<MetricsSet> {
+        Some(self.metrics.clone_inner())
+    }
+
     fn required_input_distribution(&self) -> Vec<Distribution> {
         vec![Distribution::SinglePartition]
     }
@@ -236,6 +245,10 @@ impl ExecutionPlan for DeltaWriterExec {
 
         let stream = self.input.execute(0, Arc::clone(&context))?;
 
+        let output_rows = MetricBuilder::new(&self.metrics).output_rows(partition);
+        let output_bytes = MetricBuilder::new(&self.metrics).output_bytes(partition);
+        let elapsed_compute = MetricBuilder::new(&self.metrics).elapsed_compute(partition);
+
         let table_url = self.table_url.clone();
         let options = self.options.clone();
         let partition_columns = self.partition_columns.clone();
@@ -254,6 +267,8 @@ impl ExecutionPlan for DeltaWriterExec {
 
         let schema = self.schema();
         let future = async move {
+            let _elapsed_compute_timer = elapsed_compute.timer();
+            let exec_start = Instant::now();
             let TableDeltaOptions {
                 target_file_size,
                 write_batch_size,
@@ -328,11 +343,15 @@ impl ExecutionPlan for DeltaWriterExec {
                 PhysicalSinkMode::IgnoreIfExists => {
                     if table_exists {
                         // Table exists, ignore the write operation and return empty commit info
+                        // Still update execution metrics so callers see a completed node.
+                        output_rows.add(0);
+                        output_bytes.add(0);
                         let commit_info = CommitInfo {
                             row_count: 0,
                             actions: Vec::new(),
                             initial_actions: Vec::new(),
                             operation: None,
+                            operation_metrics: HashMap::new(),
                         };
                         let commit_info_json = serde_json::to_string(&commit_info)
                             .map_err(|e| DataFusionError::External(Box::new(e)))?;
@@ -593,8 +612,10 @@ impl ExecutionPlan for DeltaWriterExec {
 
             let mut total_rows = 0u64;
             let mut data = stream;
+            let mut write_time_ms: u64 = 0;
 
             while let Some(batch_result) = data.next().await {
+                let batch_start = Instant::now();
                 let batch = batch_result?;
                 let rows: u64 = u64::try_from(batch.num_rows()).unwrap_or_default();
                 total_rows += rows;
@@ -628,24 +649,57 @@ impl ExecutionPlan for DeltaWriterExec {
                     .write(&validated_batch)
                     .await
                     .map_err(|e| DataFusionError::External(Box::new(e)))?;
+
+                write_time_ms =
+                    write_time_ms.saturating_add(batch_start.elapsed().as_millis() as u64);
             }
 
+            let close_start = Instant::now();
             let add_actions = writer
                 .close()
                 .await
                 .map_err(|e| DataFusionError::External(Box::new(e)))?;
+            let close_time_ms = close_start.elapsed().as_millis() as u64;
+
+            let num_added_files: u64 = add_actions.len() as u64;
+            let num_added_bytes: u64 = add_actions
+                .iter()
+                .map(|a| u64::try_from(a.size).unwrap_or_default())
+                .sum();
 
             // Combine add_actions and schema_actions into a single actions vector
             let mut actions: Vec<Action> = schema_actions;
             actions.extend(add_actions.into_iter().map(Action::Add));
 
             let operation = operation_override.or(operation);
+
+            let mut operation_metrics: HashMap<String, Value> = HashMap::new();
+            operation_metrics.insert("numOutputRows".to_string(), Value::from(total_rows));
+            operation_metrics.insert("numFiles".to_string(), Value::from(num_added_files));
+            operation_metrics.insert("numOutputFiles".to_string(), Value::from(num_added_files));
+            operation_metrics.insert("numAddedFiles".to_string(), Value::from(num_added_files));
+            operation_metrics.insert("numOutputBytes".to_string(), Value::from(num_added_bytes));
+            operation_metrics.insert("numAddedBytes".to_string(), Value::from(num_added_bytes));
+            operation_metrics.insert(
+                "writeTimeMs".to_string(),
+                Value::from(write_time_ms.saturating_add(close_time_ms)),
+            );
+            operation_metrics.insert(
+                "executionTimeMs".to_string(),
+                Value::from(exec_start.elapsed().as_millis() as u64),
+            );
+
             let commit_info = CommitInfo {
                 row_count: total_rows,
                 actions,
                 initial_actions,
                 operation,
+                operation_metrics,
             };
+
+            output_rows.add(usize::try_from(total_rows).unwrap_or(usize::MAX));
+            output_bytes.add(usize::try_from(num_added_bytes).unwrap_or(usize::MAX));
+
             let commit_info_json = serde_json::to_string(&commit_info)
                 .map_err(|e| DataFusionError::External(Box::new(e)))?;
 
