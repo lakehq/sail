@@ -21,6 +21,9 @@ pub enum WorkerEvent {
         signal: oneshot::Sender<()>,
     },
     StartHeartbeat,
+    ReportKnownPeers {
+        peer_worker_ids: Vec<WorkerId>,
+    },
     RunTask {
         instance: TaskInstance,
         plan: Vec<u8>,
@@ -74,6 +77,7 @@ impl SpanAssociation for WorkerEvent {
         let name = match self {
             WorkerEvent::ServerReady { .. } => "ServerReady",
             WorkerEvent::StartHeartbeat => "StartHeartbeat",
+            WorkerEvent::ReportKnownPeers { .. } => "ReportKnownPeers",
             WorkerEvent::RunTask { .. } => "RunTask",
             WorkerEvent::StopTask { .. } => "StopTask",
             WorkerEvent::ReportTaskStatus { .. } => "ReportTaskStatus",
@@ -95,6 +99,7 @@ impl SpanAssociation for WorkerEvent {
                 p.push((SpanAttribute::CLUSTER_WORKER_PORT, port.to_string()));
             }
             WorkerEvent::StartHeartbeat => {}
+            WorkerEvent::ReportKnownPeers { peer_worker_ids: _ } => {}
             WorkerEvent::RunTask {
                 instance:
                     TaskInstance {
