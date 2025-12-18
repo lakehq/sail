@@ -23,6 +23,7 @@ use std::sync::LazyLock;
 use chrono::{TimeZone, Utc};
 use datafusion::arrow::array::BooleanArray;
 use datafusion::arrow::compute::filter_record_batch;
+use datafusion::arrow::datatypes::SchemaRef;
 use datafusion::arrow::record_batch::RecordBatch;
 use delta_kernel::engine::arrow_data::ArrowEngineData;
 use delta_kernel::engine_data::FilteredEngineData;
@@ -36,9 +37,11 @@ use parquet::arrow::async_writer::ParquetObjectWriter;
 use parquet::arrow::AsyncArrowWriter;
 use regex::Regex;
 use sail_common_datafusion::array::record_batch::cast_record_batch_relaxed_tz;
+use tokio::sync::oneshot;
 use tokio::task::spawn_blocking;
 use uuid::Uuid;
 
+use crate::kernel::snapshot::stream::RecordBatchReceiverStreamBuilder;
 use crate::kernel::{DeltaResult, DeltaTableError};
 use crate::storage::LogStore;
 
@@ -68,6 +71,13 @@ fn checkpoint_regex() -> DeltaResult<&'static Regex> {
     regex_from_lazy(&CHECKPOINT_REGEX, "checkpoint")
 }
 
+fn parse_version(regex: &Regex, location: &Path) -> Option<i64> {
+    regex
+        .captures(location.as_ref())
+        .and_then(|caps| caps.get(1))
+        .and_then(|m| m.as_str().parse::<i64>().ok())
+}
+
 fn to_rb(data: FilteredEngineData) -> DeltaResult<RecordBatch> {
     let (underlying_data, selection_vector) = data.into_parts();
     let engine_data = ArrowEngineData::try_from_engine_data(underlying_data)?;
@@ -76,104 +86,138 @@ fn to_rb(data: FilteredEngineData) -> DeltaResult<RecordBatch> {
     Ok(batch)
 }
 
+struct CheckpointManager<'a> {
+    log_store: &'a dyn LogStore,
+    operation_id: Uuid,
+}
+
+impl<'a> CheckpointManager<'a> {
+    fn new(log_store: &'a dyn LogStore, operation_id: Uuid) -> Self {
+        Self {
+            log_store,
+            operation_id,
+        }
+    }
+
+    async fn create_checkpoint(&self, version: i64) -> DeltaResult<()> {
+        if version < 0 {
+            return Err(DeltaTableError::generic(format!(
+                "Cannot create checkpoint for negative version: {version}"
+            )));
+        }
+
+        let mut table_root = self.log_store.config().location.clone();
+        if !table_root.path().ends_with('/') {
+            table_root.set_path(&format!("{}/", table_root.path()));
+        }
+
+        let engine = self.log_store.engine(Some(self.operation_id));
+        let version_u64 = version as u64;
+
+        let snapshot = spawn_blocking(move || {
+            KernelSnapshot::builder_for(table_root)
+                .at_version(version_u64)
+                .build(engine.as_ref())
+        })
+        .await
+        .map_err(|e| DeltaTableError::generic(e.to_string()))??;
+
+        let cp_writer = snapshot.checkpoint()?;
+        let cp_url = cp_writer.checkpoint_path()?;
+        let cp_path = Path::from_url_path(cp_url.path())?;
+
+        // Prepare checkpoint data iterator (sync) in the kernel engine.
+        let engine = self.log_store.engine(Some(self.operation_id));
+        let mut cp_data = cp_writer.checkpoint_data(engine.as_ref())?;
+
+        // Pull the first batch (for schema), but keep the iterator for the producer thread.
+        let (first_batch, mut cp_data_after_first) = spawn_blocking(move || {
+            let Some(first) = cp_data.next() else {
+                return Err(DeltaTableError::generic("No checkpoint data".to_string()));
+            };
+            Ok::<_, DeltaTableError>((to_rb(first?)?, cp_data))
+        })
+        .await
+        .map_err(|e| DeltaTableError::generic(e.to_string()))??;
+
+        let checkpoint_schema: SchemaRef = first_batch.schema();
+
+        // Start writer (consumer) immediately.
+        let root_store = self.log_store.root_object_store(Some(self.operation_id));
+        let object_store_writer = ParquetObjectWriter::new(root_store.clone(), cp_path.clone());
+        let mut writer =
+            AsyncArrowWriter::try_new(object_store_writer, checkpoint_schema.clone(), None)
+                .map_err(DeltaTableError::generic_err)?;
+
+        writer
+            .write(&first_batch)
+            .await
+            .map_err(DeltaTableError::generic_err)?;
+
+        // Stream remaining batches from a blocking producer thread to the async writer.
+        let mut rb_builder = RecordBatchReceiverStreamBuilder::new(4);
+        let tx = rb_builder.tx();
+        let (cp_data_done_tx, cp_data_done_rx) = oneshot::channel();
+
+        rb_builder.spawn_blocking(move || {
+            for next in cp_data_after_first.by_ref() {
+                let batch: DeltaResult<RecordBatch> =
+                    next.map_err(DeltaTableError::from).and_then(to_rb);
+                if tx.blocking_send(batch).is_err() {
+                    break; // consumer dropped
+                }
+            }
+
+            // Return the exhausted iterator (it contains kernel-side stats used by finalize).
+            let _ = cp_data_done_tx.send(cp_data_after_first);
+            Ok(())
+        });
+
+        let mut batch_stream = rb_builder.build();
+        while let Some(batch) = batch_stream.next().await {
+            let batch = batch?;
+            let batch = if batch.schema() != checkpoint_schema {
+                cast_record_batch_relaxed_tz(&batch, &checkpoint_schema)?
+            } else {
+                batch
+            };
+            writer
+                .write(&batch)
+                .await
+                .map_err(DeltaTableError::generic_err)?;
+        }
+
+        let _pq_meta = writer.close().await.map_err(DeltaTableError::generic_err)?;
+
+        let file_meta = root_store.head(&cp_path).await?;
+        let file_meta = FileMeta {
+            location: cp_url,
+            size: file_meta.size,
+            last_modified: file_meta.last_modified.timestamp_millis(),
+        };
+
+        let cp_data_final = cp_data_done_rx
+            .await
+            .map_err(|_| DeltaTableError::generic("checkpoint producer dropped unexpectedly"))?;
+
+        let engine = self.log_store.engine(Some(self.operation_id));
+        spawn_blocking(move || cp_writer.finalize(engine.as_ref(), &file_meta, cp_data_final))
+            .await
+            .map_err(|e| DeltaTableError::generic(e.to_string()))??;
+
+        Ok(())
+    }
+}
+
 /// Creates a checkpoint for the given table version.
 pub(crate) async fn create_checkpoint_for(
     version: i64,
     log_store: &dyn LogStore,
     operation_id: Uuid,
 ) -> DeltaResult<()> {
-    if version < 0 {
-        return Err(DeltaTableError::generic(format!(
-            "Cannot create checkpoint for negative version: {version}"
-        )));
-    }
-
-    let mut table_root = log_store.config().location.clone();
-    if !table_root.path().ends_with('/') {
-        table_root.set_path(&format!("{}/", table_root.path()));
-    }
-
-    let engine = log_store.engine(Some(operation_id));
-    let version_u64 = version as u64;
-
-    let snapshot = spawn_blocking(move || {
-        KernelSnapshot::builder_for(table_root)
-            .at_version(version_u64)
-            .build(engine.as_ref())
-    })
-    .await
-    .map_err(|e| DeltaTableError::generic(e.to_string()))??;
-
-    let cp_writer = snapshot.checkpoint()?;
-    let cp_url = cp_writer.checkpoint_path()?;
-    let cp_path = Path::from_url_path(cp_url.path())?;
-
-    let engine = log_store.engine(Some(operation_id));
-    let mut cp_data = cp_writer.checkpoint_data(engine.as_ref())?;
-
-    let (first_batch, mut cp_data) = spawn_blocking(move || {
-        let Some(first) = cp_data.next() else {
-            return Err(DeltaTableError::generic("No checkpoint data".to_string()));
-        };
-        Ok::<_, DeltaTableError>((to_rb(first?)?, cp_data))
-    })
-    .await
-    .map_err(|e| DeltaTableError::generic(e.to_string()))??;
-
-    let root_store = log_store.root_object_store(Some(operation_id));
-    let object_store_writer = ParquetObjectWriter::new(root_store.clone(), cp_path.clone());
-    let mut writer = AsyncArrowWriter::try_new(object_store_writer, first_batch.schema(), None)
-        .map_err(DeltaTableError::generic_err)?;
-    writer
-        .write(&first_batch)
+    CheckpointManager::new(log_store, operation_id)
+        .create_checkpoint(version)
         .await
-        .map_err(DeltaTableError::generic_err)?;
-
-    let checkpoint_schema = first_batch.schema();
-
-    loop {
-        let (next_batch_opt, next_cp_data) = spawn_blocking(move || {
-            let Some(next) = cp_data.next() else {
-                return Ok::<_, DeltaTableError>((None, cp_data));
-            };
-            Ok((Some(to_rb(next?)?), cp_data))
-        })
-        .await
-        .map_err(|e| DeltaTableError::generic(e.to_string()))??;
-
-        cp_data = next_cp_data;
-
-        let Some(batch) = next_batch_opt else {
-            break;
-        };
-
-        let batch = if batch.schema() != checkpoint_schema {
-            cast_record_batch_relaxed_tz(&batch, &checkpoint_schema)
-        } else {
-            Ok(batch)
-        }?;
-
-        writer
-            .write(&batch)
-            .await
-            .map_err(DeltaTableError::generic_err)?;
-    }
-
-    let _pq_meta = writer.close().await.map_err(DeltaTableError::generic_err)?;
-
-    let file_meta = root_store.head(&cp_path).await?;
-    let file_meta = FileMeta {
-        location: cp_url,
-        size: file_meta.size,
-        last_modified: file_meta.last_modified.timestamp_millis(),
-    };
-
-    let engine = log_store.engine(Some(operation_id));
-    spawn_blocking(move || cp_writer.finalize(engine.as_ref(), &file_meta, cp_data))
-        .await
-        .map_err(|e| DeltaTableError::generic(e.to_string()))??;
-
-    Ok(())
 }
 
 /// Delete expired Delta log files up to a safe checkpoint boundary.
@@ -201,11 +245,7 @@ pub async fn cleanup_expired_logs_for(
         .iter()
         .filter_map(|entry| entry.as_ref().ok())
         .filter_map(|meta| {
-            let path = meta.location.as_ref();
-            delta_log_pattern
-                .captures(path)
-                .and_then(|caps| caps.get(1))
-                .and_then(|v| v.as_str().parse::<i64>().ok())
+            parse_version(delta_log_pattern, &meta.location)
                 .map(|ver| (ver, meta.last_modified.timestamp_millis()))
         })
         .filter(|(_, ts)| *ts >= cutoff_timestamp)
@@ -218,13 +258,7 @@ pub async fn cleanup_expired_logs_for(
     let safe_checkpoint_version = log_entries
         .iter()
         .filter_map(|entry| entry.as_ref().ok())
-        .filter_map(|meta| {
-            let path = meta.location.as_ref();
-            checkpoint_pattern
-                .captures(path)
-                .and_then(|caps| caps.get(1))
-                .and_then(|v| v.as_str().parse::<i64>().ok())
-        })
+        .filter_map(|meta| parse_version(checkpoint_pattern, &meta.location))
         .filter(|ver| *ver <= keep_version)
         .max();
 
@@ -246,12 +280,10 @@ pub async fn cleanup_expired_logs_for(
                     return None;
                 }
             };
-            let path_str = meta.location.as_ref();
-            let captures = delta_log_pattern.captures(path_str)?;
+
             let ts = meta.last_modified.timestamp_millis();
-            let log_ver = captures
-                .get(1)
-                .and_then(|m| m.as_str().parse::<i64>().ok())?;
+            let log_ver = parse_version(delta_log_pattern, &meta.location)?;
+
             if log_ver < safe_checkpoint_version && ts <= cutoff_timestamp {
                 Some(Ok(meta.location))
             } else {
