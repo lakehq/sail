@@ -8,10 +8,11 @@ use crate::driver::gen::driver_service_server::DriverService;
 use crate::driver::gen::{
     RegisterWorkerRequest, RegisterWorkerResponse, ReportTaskStatusRequest,
     ReportTaskStatusResponse, ReportWorkerHeartbeatRequest, ReportWorkerHeartbeatResponse,
+    ReportWorkerKnownPeersRequest, ReportWorkerKnownPeersResponse,
 };
 use crate::driver::{gen, DriverEvent};
 use crate::error::ExecutionError;
-use crate::id::WorkerId;
+use crate::id::{TaskInstance, WorkerId};
 
 pub struct DriverServer {
     handle: ActorHandle<DriverActor>,
@@ -75,6 +76,29 @@ impl DriverService for DriverServer {
         Ok(Response::new(response))
     }
 
+    async fn report_worker_known_peers(
+        &self,
+        request: Request<ReportWorkerKnownPeersRequest>,
+    ) -> Result<Response<ReportWorkerKnownPeersResponse>, Status> {
+        let request = request.into_inner();
+        debug!("{request:?}");
+        let ReportWorkerKnownPeersRequest {
+            worker_id,
+            peer_worker_ids,
+        } = request;
+        let event = DriverEvent::WorkerKnownPeers {
+            worker_id: worker_id.into(),
+            peer_worker_ids: peer_worker_ids.into_iter().map(|x| x.into()).collect(),
+        };
+        self.handle
+            .send(event)
+            .await
+            .map_err(ExecutionError::from)?;
+        let response = ReportWorkerKnownPeersResponse {};
+        debug!("{response:?}");
+        Ok(Response::new(response))
+    }
+
     async fn report_task_status(
         &self,
         request: Request<ReportTaskStatusRequest>,
@@ -82,9 +106,10 @@ impl DriverService for DriverServer {
         let request = request.into_inner();
         debug!("{request:?}");
         let ReportTaskStatusRequest {
+            job_id,
             task_id,
-            status,
             attempt,
+            status,
             message,
             cause,
             sequence,
@@ -95,8 +120,11 @@ impl DriverService for DriverServer {
             .transpose()
             .map_err(ExecutionError::from)?;
         let event = DriverEvent::UpdateTask {
-            task_id: task_id.into(),
-            attempt: attempt as usize,
+            instance: TaskInstance {
+                job_id: job_id.into(),
+                task_id: task_id.into(),
+                attempt: attempt as usize,
+            },
             status: status.into(),
             message,
             cause,

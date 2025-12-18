@@ -5,9 +5,11 @@ use datafusion::execution::SessionState;
 use datafusion::physical_expr::expressions::Literal;
 use datafusion::physical_plan::ExecutionPlan;
 use datafusion::scalar::ScalarValue;
+use datafusion::sql::unparser::expr_to_sql;
 use datafusion_common::{internal_err, Result};
 use sail_common_datafusion::datasource::{
-    MergeInfo as PhysicalMergeInfo, MergeTargetInfo, TableFormatRegistry,
+    MergeInfo as PhysicalMergeInfo, MergePredicateInfo, MergeTargetInfo, OperationOverride,
+    TableFormatRegistry,
 };
 use sail_common_datafusion::extension::SessionExtensionAccessor;
 use sail_logical_plan::merge::MergeIntoWriteNode;
@@ -44,6 +46,84 @@ pub async fn create_preexpanded_merge_physical_plan(
         .map(|f| f.name().clone())
         .collect();
 
+    // Build a structured operation override from the logical MERGE options.
+    // Downstream (format-specific) writers are responsible for converting this
+    // to commit log metadata (e.g. Delta commitInfo.operationParameters).
+
+    let opts = node.options();
+    let operation_override = {
+        let merge_predicate = Some(format!("{}", expr_to_sql(&opts.on_condition)?));
+
+        let matched_predicates = opts
+            .matched_clauses
+            .iter()
+            .map(|c| {
+                let action_type = match &c.action {
+                    sail_logical_plan::merge::MergeMatchedAction::Delete => "delete",
+                    sail_logical_plan::merge::MergeMatchedAction::UpdateAll
+                    | sail_logical_plan::merge::MergeMatchedAction::UpdateSet(_) => "update",
+                }
+                .to_string();
+                let predicate = c
+                    .condition
+                    .as_ref()
+                    .map(|e| expr_to_sql(e).map(|ast| format!("{}", ast)))
+                    .transpose()?;
+                Ok(MergePredicateInfo {
+                    action_type,
+                    predicate,
+                })
+            })
+            .collect::<Result<Vec<_>>>()?;
+
+        let not_matched_predicates = opts
+            .not_matched_by_target_clauses
+            .iter()
+            .map(|c| {
+                let predicate = c
+                    .condition
+                    .as_ref()
+                    .map(|e| expr_to_sql(e).map(|ast| format!("{}", ast)))
+                    .transpose()?;
+                Ok(MergePredicateInfo {
+                    action_type: "insert".to_string(),
+                    predicate,
+                })
+            })
+            .collect::<Result<Vec<_>>>()?;
+
+        let not_matched_by_source_predicates = opts
+            .not_matched_by_source_clauses
+            .iter()
+            .map(|c| {
+                let action_type = match &c.action {
+                    sail_logical_plan::merge::MergeNotMatchedBySourceAction::Delete => "delete",
+                    sail_logical_plan::merge::MergeNotMatchedBySourceAction::UpdateSet(_) => {
+                        "update"
+                    }
+                }
+                .to_string();
+                let predicate = c
+                    .condition
+                    .as_ref()
+                    .map(|e| expr_to_sql(e).map(|ast| format!("{}", ast)))
+                    .transpose()?;
+                Ok(MergePredicateInfo {
+                    action_type,
+                    predicate,
+                })
+            })
+            .collect::<Result<Vec<_>>>()?;
+
+        Some(OperationOverride::Merge {
+            predicate: None,
+            merge_predicate,
+            matched_predicates,
+            not_matched_predicates,
+            not_matched_by_source_predicates,
+        })
+    };
+
     let dummy_expr = Arc::new(Literal::new(ScalarValue::Boolean(Some(true))));
 
     let info = PhysicalMergeInfo {
@@ -67,6 +147,7 @@ pub async fn create_preexpanded_merge_physical_plan(
         not_matched_by_source_clauses: vec![],
         not_matched_by_target_clauses: vec![],
         with_schema_evolution: node.options().with_schema_evolution,
+        operation_override,
     };
 
     let registry = ctx.extension::<TableFormatRegistry>()?;

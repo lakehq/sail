@@ -12,6 +12,7 @@ use datafusion::physical_plan::ExecutionPlan;
 use datafusion_common::{not_impl_err, plan_err, Constraints, DFSchema, DFSchemaRef, Result};
 use datafusion_expr::expr::Sort;
 use datafusion_expr::Expr;
+use serde::{Deserialize, Serialize};
 
 use crate::extension::SessionExtension;
 
@@ -134,6 +135,34 @@ pub struct MergeNotMatchedByTargetClauseInfo {
     pub action: MergeNotMatchedByTargetActionInfo,
 }
 
+/// Merge operation metadata used to construct commit log `operationParameters`.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct MergePredicateInfo {
+    /// The type of merge operation performed (e.g. "update", "delete", "insert").
+    pub action_type: String,
+    /// The predicate used for the merge operation.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub predicate: Option<String>,
+}
+
+/// Optional override metadata for operation commit logs (currently used by Delta MERGE).
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub enum OperationOverride {
+    // TODO: extend or rename like `DeltaMerge`, `IcebergMerge` to better distinguish between different implementations.
+    #[serde(rename_all = "camelCase")]
+    Merge {
+        #[serde(skip_serializing_if = "Option::is_none")]
+        predicate: Option<String>,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        merge_predicate: Option<String>,
+        matched_predicates: Vec<MergePredicateInfo>,
+        not_matched_predicates: Vec<MergePredicateInfo>,
+        not_matched_by_source_predicates: Vec<MergePredicateInfo>,
+    },
+}
+
 #[derive(Debug, Clone)]
 pub struct MergeInfo {
     pub target: MergeTargetInfo,
@@ -166,6 +195,8 @@ pub struct MergeInfo {
     pub not_matched_by_source_clauses: Vec<MergeNotMatchedBySourceClauseInfo>,
     pub not_matched_by_target_clauses: Vec<MergeNotMatchedByTargetClauseInfo>,
     pub with_schema_evolution: bool,
+    /// Optional override for commit operation metadata.
+    pub operation_override: Option<OperationOverride>,
 }
 
 // TODO: MERGE schema evolution end-to-end

@@ -23,8 +23,6 @@ pub enum ServerMonitor {
         signal: oneshot::Sender<()>,
         /// The join handle of the server task.
         handle: JoinHandle<ExecutionResult<()>>,
-        /// The server port.
-        port: u16,
     },
 }
 
@@ -49,13 +47,9 @@ impl ServerMonitor {
         }
     }
 
-    pub fn ready(self, signal: oneshot::Sender<()>, port: u16) -> ExecutionResult<Self> {
+    pub fn ready(self, signal: oneshot::Sender<()>) -> ExecutionResult<Self> {
         match self {
-            Self::Pending { handle } => Ok(Self::Running {
-                signal,
-                handle,
-                port,
-            }),
+            Self::Pending { handle } => Ok(Self::Running { signal, handle }),
             _ => Err(ExecutionError::InternalError(
                 "the server must be in pending state before it can be ready".to_string(),
             )),
@@ -68,21 +62,10 @@ impl ServerMonitor {
             Self::Pending { handle } => {
                 handle.abort();
             }
-            Self::Running {
-                signal,
-                handle,
-                port: _,
-            } => {
+            Self::Running { signal, handle } => {
                 let _ = signal.send(());
                 let _ = handle.await;
             }
-        }
-    }
-
-    pub fn port(&self) -> Option<u16> {
-        match self {
-            Self::Running { port, .. } => Some(*port),
-            _ => None,
         }
     }
 }
