@@ -82,7 +82,9 @@ impl SparkUniform {
     /// Helper to extract precision and scale from any decimal type
     fn extract_decimal_info(dt: &DataType) -> Option<(u8, i8)> {
         match dt {
-            DataType::Decimal128(p, s) => Some((*p, *s)),
+            DataType::Decimal32(p, s)
+            | DataType::Decimal64(p, s)
+            | DataType::Decimal128(p, s) => Some((*p, *s)),
             DataType::Decimal256(p, s) => {
                 if *p <= DECIMAL128_MAX_PRECISION && *s <= DECIMAL128_MAX_SCALE {
                     Some((*p, *s))
