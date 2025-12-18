@@ -74,10 +74,7 @@ pub fn run_spark_mcp_server(settings: McpSettings) -> Result<(), Box<dyn std::er
 
     let spark_remote = match settings.spark_remote {
         None => {
-            let options = SessionManagerOptions {
-                config: Arc::clone(&config),
-                runtime: runtime.handle(),
-            };
+            let options = SessionManagerOptions::new(Arc::clone(&config), runtime.handle());
             run_spark_connect_server(options)?
         }
         Some(x) => x,

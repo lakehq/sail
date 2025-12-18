@@ -3,7 +3,7 @@ use std::sync::Arc;
 use datafusion::arrow::datatypes::{DataType, Field};
 use datafusion_expr::LogicalPlan;
 
-use crate::provider::{CatalogTableBucketBy, CatalogTableConstraint, CatalogTableSort};
+use crate::catalog::{CatalogTableBucketBy, CatalogTableConstraint, CatalogTableSort};
 
 #[derive(Debug, Clone)]
 pub struct DatabaseStatus {

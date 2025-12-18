@@ -35,10 +35,7 @@ pub fn run_spark_connect_server(ip: IpAddr, port: u16) -> Result<(), Box<dyn std
         init_telemetry(&config.telemetry, resource)
     })?;
 
-    let options = SessionManagerOptions {
-        config: Arc::clone(&config),
-        runtime: runtime.handle(),
-    };
+    let options = SessionManagerOptions::new(Arc::clone(&config), runtime.handle());
 
     runtime.handle().primary().block_on(async {
         // A secure connection can be handled by a gateway in production.

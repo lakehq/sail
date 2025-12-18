@@ -157,10 +157,7 @@ impl SparkConnectServer {
     }
 
     fn run(&self, listener: TcpListener) -> PyResult<SparkConnectServerState> {
-        let options = SessionManagerOptions {
-            config: Arc::clone(&self.config),
-            runtime: self.runtime.handle(),
-        };
+        let options = SessionManagerOptions::new(Arc::clone(&self.config), self.runtime.handle());
         // Get the actual listener address.
         // A port is assigned by the OS if the port is 0 when creating the listener.
         let address = listener.local_addr()?;

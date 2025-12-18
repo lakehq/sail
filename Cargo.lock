@@ -5781,6 +5781,7 @@ dependencies = [
  "reqwest",
  "sail-catalog",
  "sail-common",
+ "sail-common-datafusion",
  "sail-iceberg",
  "serde",
  "serde_json",
@@ -5799,6 +5800,7 @@ dependencies = [
  "async-trait",
  "dashmap",
  "sail-catalog",
+ "sail-common-datafusion",
 ]
 
 [[package]]
@@ -5814,6 +5816,7 @@ dependencies = [
  "reqwest",
  "sail-catalog",
  "sail-common",
+ "sail-common-datafusion",
  "secrecy",
  "serde",
  "serde_json",
@@ -5879,7 +5882,9 @@ dependencies = [
  "ryu",
  "sail-common",
  "serde",
+ "serde_arrow",
  "thiserror",
+ "tokio",
  "tonic",
  "tonic-prost-build",
 ]
@@ -6242,6 +6247,10 @@ name = "sail-session"
 version = "0.4.4"
 dependencies = [
  "datafusion",
+ "fastrace",
+ "log",
+ "readonly",
+ "sail-cache",
  "sail-catalog",
  "sail-catalog-iceberg",
  "sail-catalog-memory",
@@ -6250,10 +6259,19 @@ dependencies = [
  "sail-common-datafusion",
  "sail-data-source",
  "sail-delta-lake",
+ "sail-execution",
  "sail-iceberg",
  "sail-logical-optimizer",
+ "sail-object-store",
+ "sail-physical-optimizer",
+ "sail-plan",
  "sail-plan-lakehouse",
+ "sail-server",
+ "sail-telemetry",
  "secrecy",
+ "thiserror",
+ "tokio",
+ "tonic",
 ]
 
 [[package]]

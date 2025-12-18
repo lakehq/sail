@@ -14,10 +14,7 @@ use crate::python::Modules;
 pub fn run_pyspark_shell() -> Result<(), Box<dyn std::error::Error>> {
     let config = Arc::new(AppConfig::load()?);
     let runtime = RuntimeManager::try_new(&config.runtime)?;
-    let options = SessionManagerOptions {
-        config,
-        runtime: runtime.handle(),
-    };
+    let options = SessionManagerOptions::new(config, runtime.handle());
     let (_tx, rx) = oneshot::channel::<()>();
     let handle = runtime.handle().primary().clone();
     let (server_port, server_task) = handle.block_on(async move {
