@@ -46,6 +46,10 @@ use crate::schema::normalize_delta_schema;
 use crate::storage::{get_object_store_from_context, StorageConfig};
 use crate::table::{create_delta_table_with_object_store, open_table_with_object_store};
 
+const METRIC_NUM_COMMIT_RETRIES: &str = "num_commit_retries";
+const METRIC_CHECKPOINT_CREATED: &str = "checkpoint_created";
+const METRIC_LOG_FILES_CLEANED: &str = "log_files_cleaned";
+
 /// Physical execution node for Delta Lake commit operations
 #[derive(Debug)]
 pub struct DeltaCommitExec {
@@ -190,6 +194,7 @@ impl ExecutionPlan for DeltaCommitExec {
 
         let output_rows = MetricBuilder::new(&self.metrics).output_rows(partition);
         let elapsed_compute = MetricBuilder::new(&self.metrics).elapsed_compute(partition);
+        let plan_metrics = self.metrics.clone();
 
         let table_url = self.table_url.clone();
         let partition_columns = self.partition_columns.clone();
@@ -425,13 +430,31 @@ impl ExecutionPlan for DeltaCommitExec {
                 .with_config(context.session_config().clone())
                 .build();
 
-            CommitBuilder::from(
+            let finalized_commit = CommitBuilder::from(
                 CommitProperties::default().with_operation_metrics(operation_metrics),
             )
             .with_actions(final_actions)
             .build(reference, table.log_store(), operation, &session_state)
             .await
             .map_err(|e| DataFusionError::External(Box::new(e)))?;
+
+            let retries =
+                usize::try_from(finalized_commit.metrics.num_retries).unwrap_or(usize::MAX);
+            MetricBuilder::new(&plan_metrics)
+                .global_counter(METRIC_NUM_COMMIT_RETRIES)
+                .add(retries);
+
+            if finalized_commit.metrics.new_checkpoint_created {
+                MetricBuilder::new(&plan_metrics)
+                    .global_counter(METRIC_CHECKPOINT_CREATED)
+                    .add(1);
+            }
+
+            let cleaned = usize::try_from(finalized_commit.metrics.num_log_files_cleaned_up)
+                .unwrap_or(usize::MAX);
+            MetricBuilder::new(&plan_metrics)
+                .global_counter(METRIC_LOG_FILES_CLEANED)
+                .add(cleaned);
 
             // Expose row count through execution metrics as well.
             output_rows.add(usize::try_from(total_rows).unwrap_or(usize::MAX));

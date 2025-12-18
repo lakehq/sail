@@ -37,7 +37,7 @@ use thiserror::Error;
 use uuid::Uuid;
 
 use crate::error::{DeltaError, KernelError};
-use crate::kernel::checkpoints::cleanup_expired_logs_for;
+use crate::kernel::checkpoints::{cleanup_expired_logs_for, create_checkpoint_for};
 use crate::kernel::models::{Action, Metadata, Protocol, Transaction};
 use crate::kernel::snapshot::EagerSnapshot;
 use crate::kernel::transaction::conflict_checker::{TransactionInfo, WinningCommitSummary};
@@ -863,123 +863,120 @@ pub struct PostCommit {
 impl PostCommit {
     /// Runs the post commit activities
     async fn run_post_commit_hook(&self) -> DeltaResult<(DeltaTableState, PostCommitMetrics)> {
-        if let Some(table) = &self.table_data {
-            let post_commit_operation_id = Uuid::new_v4();
+        let post_commit_operation_id = Uuid::new_v4();
+
+        // Always construct a state for the committed version so checkpoint + cleanup can run
+        // even when `table_data` isn't available (e.g. planner didn't provide a snapshot).
+        let mut state = if let Some(table) = &self.table_data {
             let mut snapshot = table.eager_snapshot().clone();
             if self.version != snapshot.version() {
                 snapshot
                     .update(self.log_store.as_ref(), Some(self.version as u64))
                     .await?;
             }
-
-            let mut state = DeltaTableState { snapshot };
-
-            let cleanup_logs = if let Some(cleanup_logs) = self.cleanup_expired_logs {
-                cleanup_logs
-            } else {
-                state.table_properties().enable_expired_log_cleanup()
-            };
-
-            // Run arbitrary before_post_commit_hook code
-            if let Some(custom_execute_handler) = &self.custom_execute_handler {
-                custom_execute_handler
-                    .before_post_commit_hook(
-                        &self.log_store,
-                        cleanup_logs || self.create_checkpoint,
-                        post_commit_operation_id,
-                    )
-                    .await?
-            }
-
-            let mut new_checkpoint_created = false;
-            if self.create_checkpoint {
-                // Execute create checkpoint hook
-                new_checkpoint_created = self
-                    .create_checkpoint(
-                        &state,
-                        &self.log_store,
-                        self.version,
-                        post_commit_operation_id,
-                    )
-                    .await?;
-            }
-
-            let mut num_log_files_cleaned_up: u64 = 0;
-            if cleanup_logs {
-                // Execute clean up logs hook
-                num_log_files_cleaned_up = cleanup_expired_logs_for(
-                    self.version,
-                    self.log_store.as_ref(),
-                    Utc::now().timestamp_millis()
-                        - state
-                            .table_properties()
-                            .log_retention_duration()
-                            .as_millis() as i64,
-                    Some(post_commit_operation_id),
-                )
-                .await? as u64;
-                if num_log_files_cleaned_up > 0 {
-                    state = DeltaTableState::try_new(
-                        self.log_store.as_ref(),
-                        state.load_config().clone(),
-                        Some(self.version),
-                    )
-                    .await?;
-                }
-            }
-
-            // Run arbitrary after_post_commit_hook code
-            if let Some(custom_execute_handler) = &self.custom_execute_handler {
-                custom_execute_handler
-                    .after_post_commit_hook(
-                        &self.log_store,
-                        cleanup_logs || self.create_checkpoint,
-                        post_commit_operation_id,
-                    )
-                    .await?
-            }
-            Ok((
-                state,
-                PostCommitMetrics {
-                    new_checkpoint_created,
-                    num_log_files_cleaned_up,
-                },
-            ))
+            DeltaTableState { snapshot }
         } else {
-            let state = DeltaTableState::try_new(
+            DeltaTableState::try_new(
                 self.log_store.as_ref(),
                 Default::default(),
                 Some(self.version),
             )
-            .await?;
-            Ok((
-                state,
-                PostCommitMetrics {
-                    new_checkpoint_created: false,
-                    num_log_files_cleaned_up: 0,
-                },
-            ))
+            .await?
+        };
+
+        let cleanup_logs = if let Some(cleanup_logs) = self.cleanup_expired_logs {
+            cleanup_logs
+        } else {
+            state.table_properties().enable_expired_log_cleanup()
+        };
+
+        // Run arbitrary before_post_commit_hook code
+        if let Some(custom_execute_handler) = &self.custom_execute_handler {
+            custom_execute_handler
+                .before_post_commit_hook(
+                    &self.log_store,
+                    cleanup_logs || self.create_checkpoint,
+                    post_commit_operation_id,
+                )
+                .await?
         }
+
+        let mut new_checkpoint_created = false;
+        if self.create_checkpoint {
+            // Execute create checkpoint hook
+            new_checkpoint_created = self
+                .create_checkpoint(
+                    &state,
+                    &self.log_store,
+                    self.version,
+                    post_commit_operation_id,
+                )
+                .await?;
+        }
+
+        let mut num_log_files_cleaned_up: u64 = 0;
+        if cleanup_logs {
+            // Execute clean up logs hook
+            num_log_files_cleaned_up = cleanup_expired_logs_for(
+                self.version,
+                self.log_store.as_ref(),
+                Utc::now().timestamp_millis()
+                    - state
+                        .table_properties()
+                        .log_retention_duration()
+                        .as_millis() as i64,
+                Some(post_commit_operation_id),
+            )
+            .await? as u64;
+            if num_log_files_cleaned_up > 0 {
+                state = DeltaTableState::try_new(
+                    self.log_store.as_ref(),
+                    state.load_config().clone(),
+                    Some(self.version),
+                )
+                .await?;
+            }
+        }
+
+        // Run arbitrary after_post_commit_hook code
+        if let Some(custom_execute_handler) = &self.custom_execute_handler {
+            custom_execute_handler
+                .after_post_commit_hook(
+                    &self.log_store,
+                    cleanup_logs || self.create_checkpoint,
+                    post_commit_operation_id,
+                )
+                .await?
+        }
+
+        Ok((
+            state,
+            PostCommitMetrics {
+                new_checkpoint_created,
+                num_log_files_cleaned_up,
+            },
+        ))
     }
     async fn create_checkpoint(
         &self,
         table_state: &DeltaTableState,
-        _log_store: &LogStoreRef,
+        log_store: &LogStoreRef,
         version: i64,
-        _operation_id: Uuid,
+        operation_id: Uuid,
     ) -> DeltaResult<bool> {
         if !table_state.load_config().require_files {
-            warn!("Checkpoint creation in post_commit_hook has been skipped due to table being initialized without files.");
-            return Ok(false);
+            // Even if the in-memory snapshot was created without eagerly loading files, we can
+            // still build a kernel snapshot at the committed version and write a checkpoint.
+            // (The checkpoint writer will read state from the log as needed.)
+            debug!("table_state.load_config().require_files=false; creating checkpoint via kernel snapshot anyway");
         }
 
         let checkpoint_interval = table_state.config().checkpoint_interval().get() as i64;
-        if ((version + 1) % checkpoint_interval) == 0 {
-            // TODO: Implement checkpoint creation
-            info!(
-                "Checkpoint interval reached at version {version}, checkpoint creation is not implemented yet."
-            );
-            Ok(false)
+        // TODO: SQL `TBLPROPERTIES(delta.checkpointInterval)` isn't plumbed into `metaData.configuration` yet.
+        if version >= 0 && (version % checkpoint_interval) == 0 {
+            info!("Creating checkpoint for version {version}");
+            create_checkpoint_for(version, log_store.as_ref(), operation_id).await?;
+            Ok(true)
         } else {
             Ok(false)
         }
