@@ -1,0 +1,37 @@
+== Physical Plan ==
+ProjectionExec: expr=[<exprs>]
+  SortExec: [<sort_exprs>], fetch=100
+    SortExec: expr=[<exprs>]
+      AggregateExec: mode=FinalPartitioned, gby=[#<col> as #<col>], aggr=[]
+        CoalesceBatchesExec: target_batch_size=8192
+          RepartitionExec: partitioning=Hash([#<col>], <partitions>), input_partitions=<partitions>
+            CoalesceBatchesExec: target_batch_size=8192
+              AggregateExec: mode=Partial, gby=[#<col> as #<col>], aggr=[]
+                ProjectionExec: expr=[<exprs>]
+                  CoalesceBatchesExec: target_batch_size=8192
+                    CoalesceBatchesExec: target_batch_size=8192
+                      FilterExec: CASE WHEN __always_true@<id> IS NULL THEN 0 ELSE #<col> END > 0, projection=[#<col>]
+                        ProjectionExec: expr=[<exprs>]
+                          CoalesceBatchesExec: target_batch_size=8192
+                            CoalesceBatchesExec: target_batch_size=8192
+                              HashJoinExec: mode=CollectLeft, join_type=Right, on=[(#<col>, #<col>)], projection=[#<col>, __always_true@<id>, #<col>]
+                                CoalescePartitionsExec
+                                  ProjectionExec: expr=[<exprs>]
+                                    AggregateExec: mode=FinalPartitioned, gby=[#<col> as #<col>], aggr=[count(Int64(1))]
+                                      CoalesceBatchesExec: target_batch_size=8192
+                                        RepartitionExec: partitioning=Hash([#<col>], <partitions>), input_partitions=<partitions>
+                                          CoalesceBatchesExec: target_batch_size=8192
+                                            AggregateExec: mode=Partial, gby=[#<col> as #<col>], aggr=[count(Int64(1))]
+                                              RepartitionExec: partitioning=RoundRobinBatch(<partitions>), input_partitions=<partitions>
+                                                ProjectionExec: expr=[<exprs>]
+                                                  CoalesceBatchesExec: target_batch_size=8192
+                                                    CoalesceBatchesExec: target_batch_size=8192
+                                                      FilterExec: __common_expr_4@<id> AND ((_17@<id> = cream OR _17@<id> = ghost) AND (_18@<id> = Ton OR _18@<id> = Gross) AND (_15@<id> = economy OR _15@<id> = small) OR (_17@<id> = midnight OR _17@<id> = burlywood) AND (_18@<id> = Tsp OR _18@<id> = Bundle) AND (_15@<id> = medium OR _15@<id> = extra large)) OR _12@<id> = Men AND (_17@<id> = lavender OR _17@<id> = azure) AND (_18@<id> = Each OR _18@<id> = Lb) AND (_15@<id> = large OR _15@<id> = N/A) OR _12@<id> = Men AND (_17@<id> = chocolate OR _17@<id> = steel) AND (_18@<id> = N/A OR _18@<id> = Dozen) AND (_15@<id> = economy OR _15@<id> = small) OR __common_expr_4@<id> AND ((_17@<id> = floral OR _17@<id> = royal) AND (_18@<id> = Unknown OR _18@<id> = Tbl) AND (_15@<id> = economy OR _15@<id> = small) OR (_17@<id> = navy OR _17@<id> = forest) AND (_18@<id> = Bunch OR _18@<id> = Dram) AND (_15@<id> = medium OR _15@<id> = extra large)) OR _12@<id> = Men AND (_17@<id> = cyan OR _17@<id> = indian) AND (_18@<id> = Carton OR _18@<id> = Cup) AND (_15@<id> = large OR _15@<id> = N/A) OR _12@<id> = Men AND (_17@<id> = coral OR _17@<id> = pale) AND (_18@<id> = Pallet OR _18@<id> = Gram) AND (_15@<id> = economy OR _15@<id> = small), projection=[_14@<id>]
+                                                        ProjectionExec: expr=[<exprs>]
+                                                          DataSourceExec: partitions=1, partition_sizes=[<sizes>]
+                                RepartitionExec: partitioning=RoundRobinBatch(<partitions>), input_partitions=<partitions>
+                                  ProjectionExec: expr=[<exprs>]
+                                    CoalesceBatchesExec: target_batch_size=8192
+                                      CoalesceBatchesExec: target_batch_size=8192
+                                        FilterExec: _13@<id> >= 668 AND _13@<id> <= 708, projection=[_14@<id>, _21@<id>]
+                                          DataSourceExec: partitions=1, partition_sizes=[<sizes>]

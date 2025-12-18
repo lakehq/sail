@@ -1,0 +1,44 @@
+== Physical Plan ==
+ProjectionExec: expr=[<exprs>]
+  SortExec: [<sort_exprs>]
+    SortExec: expr=[<exprs>]
+      ProjectionExec: expr=[<exprs>]
+        CoalesceBatchesExec: target_batch_size=8192
+          CoalesceBatchesExec: target_batch_size=8192
+            HashJoinExec: mode=CollectLeft, join_type=LeftSemi, on=[(#<col>, #<col>)], projection=[#<col>, #<col>]
+              CoalesceBatchesExec: target_batch_size=8192
+                CoalesceBatchesExec: target_batch_size=8192
+                  HashJoinExec: mode=CollectLeft, join_type=Inner, on=[(#<col>, #<col>)], projection=[#<col>, #<col>, #<col>]
+                    ProjectionExec: expr=[<exprs>]
+                      CoalesceBatchesExec: target_batch_size=8192
+                        CoalesceBatchesExec: target_batch_size=8192
+                          FilterExec: _1@<id> = KENYA, projection=[_0@<id>]
+                            DataSourceExec: partitions=1, partition_sizes=[<sizes>]
+                    ProjectionExec: expr=[<exprs>]
+                      DataSourceExec: partitions=1, partition_sizes=[<sizes>]
+              ProjectionExec: expr=[<exprs>]
+                CoalesceBatchesExec: target_batch_size=8192
+                  CoalesceBatchesExec: target_batch_size=8192
+                    HashJoinExec: mode=CollectLeft, join_type=Inner, on=[(#<col>, #<col>), (#<col>, #<col>)], filter=CAST(#<col> AS Decimal128(23, 3)) > #<col>, projection=[#<col>]
+                      CoalesceBatchesExec: target_batch_size=8192
+                        CoalesceBatchesExec: target_batch_size=8192
+                          HashJoinExec: mode=CollectLeft, join_type=RightSemi, on=[(#<col>, #<col>)]
+                            ProjectionExec: expr=[<exprs>]
+                              CoalesceBatchesExec: target_batch_size=8192
+                                CoalesceBatchesExec: target_batch_size=8192
+                                  FilterExec: _1@<id> LIKE blanched%, projection=[_0@<id>]
+                                    DataSourceExec: partitions=1, partition_sizes=[<sizes>]
+                            ProjectionExec: expr=[<exprs>]
+                              DataSourceExec: partitions=1, partition_sizes=[<sizes>]
+                      ProjectionExec: expr=[<exprs>]
+                        AggregateExec: mode=FinalPartitioned, gby=[#<col> as #<col>, #<col> as #<col>], aggr=[sum(lineitem.#<col>)]
+                          CoalesceBatchesExec: target_batch_size=8192
+                            RepartitionExec: partitioning=Hash([#<col>, #<col>], <partitions>), input_partitions=<partitions>
+                              CoalesceBatchesExec: target_batch_size=8192
+                                AggregateExec: mode=Partial, gby=[#<col> as #<col>, #<col> as #<col>], aggr=[sum(lineitem.#<col>)]
+                                  RepartitionExec: partitioning=RoundRobinBatch(<partitions>), input_partitions=<partitions>
+                                    ProjectionExec: expr=[<exprs>]
+                                      CoalesceBatchesExec: target_batch_size=8192
+                                        CoalesceBatchesExec: target_batch_size=8192
+                                          FilterExec: _10@<id> >= 1993-01-01 AND _10@<id> < 1994-01-01, projection=[_1@<id>, _2@<id>, _4@<id>]
+                                            DataSourceExec: partitions=1, partition_sizes=[<sizes>]

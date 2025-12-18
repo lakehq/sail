@@ -1,0 +1,60 @@
+== Physical Plan ==
+ProjectionExec: expr=[<exprs>]
+  ProjectionExec: expr=[<exprs>]
+    AggregateExec: mode=Final, gby=[], aggr=[avg(store_sales.#<col>), avg(store_sales.#<col>), avg(store_sales.#<col>), sum(store_sales.#<col>)]
+      CoalescePartitionsExec
+        AggregateExec: mode=Partial, gby=[], aggr=[avg(store_sales.#<col>), avg(store_sales.#<col>), avg(store_sales.#<col>), sum(store_sales.#<col>)]
+          CoalesceBatchesExec: target_batch_size=8192
+            CoalesceBatchesExec: target_batch_size=8192
+              HashJoinExec: mode=CollectLeft, join_type=Inner, on=[(#<col>, CAST(date_dim.#<col> AS Float64)@<id>)], projection=[#<col>, #<col>, #<col>]
+                CoalescePartitionsExec
+                  CoalesceBatchesExec: target_batch_size=8192
+                    CoalesceBatchesExec: target_batch_size=8192
+                      HashJoinExec: mode=CollectLeft, join_type=Inner, on=[(#<col>, CAST(customer_address.#<col> AS Float64)@<id>)], filter=(#<col> = CO OR #<col> = MI OR #<col> = MN) AND #<col> >= Some(10000),6,2 AND #<col> <= Some(20000),6,2 OR (#<col> = NC OR #<col> = NY OR #<col> = TX) AND #<col> >= Some(15000),6,2 AND #<col> <= Some(30000),6,2 OR (#<col> = CA OR #<col> = NE OR #<col> = TN) AND #<col> >= Some(5000),6,2 AND #<col> <= Some(25000),6,2, projection=[#<col>, #<col>, #<col>, #<col>]
+                        CoalescePartitionsExec
+                          CoalesceBatchesExec: target_batch_size=8192
+                            CoalesceBatchesExec: target_batch_size=8192
+                              HashJoinExec: mode=CollectLeft, join_type=Inner, on=[(#<col>, CAST(household_demographics.#<col> AS Float64)@<id>)], filter=#<col> = U AND #<col> = 4 yr Degree AND #<col> >= Some(10000),5,2 AND #<col> <= Some(15000),5,2 AND #<col> = 3 OR #<col> = S AND #<col> = Unknown AND #<col> >= Some(5000),5,2 AND #<col> <= Some(10000),5,2 AND #<col> = 1 OR #<col> = D AND #<col> = 2 yr Degree AND #<col> >= Some(15000),5,2 AND #<col> <= Some(20000),5,2 AND #<col> = 1, projection=[#<col>, #<col>, #<col>, #<col>, #<col>, #<col>]
+                                CoalescePartitionsExec
+                                  CoalesceBatchesExec: target_batch_size=8192
+                                    CoalesceBatchesExec: target_batch_size=8192
+                                      HashJoinExec: mode=CollectLeft, join_type=Inner, on=[(#<col>, CAST(customer_demographics.#<col> AS Float64)@<id>)], filter=#<col> = U AND #<col> = 4 yr Degree AND #<col> >= Some(10000),5,2 AND #<col> <= Some(15000),5,2 OR #<col> = S AND #<col> = Unknown AND #<col> >= Some(5000),5,2 AND #<col> <= Some(10000),5,2 OR #<col> = D AND #<col> = 2 yr Degree AND #<col> >= Some(15000),5,2 AND #<col> <= Some(20000),5,2, projection=[#<col>, #<col>, #<col>, #<col>, #<col>, #<col>, #<col>, #<col>, #<col>, #<col>]
+                                        CoalescePartitionsExec
+                                          CoalesceBatchesExec: target_batch_size=8192
+                                            CoalesceBatchesExec: target_batch_size=8192
+                                              HashJoinExec: mode=CollectLeft, join_type=Inner, on=[(CAST(store.#<col> AS Float64)@<id>, #<col>)], projection=[#<col>, #<col>, #<col>, #<col>, #<col>, #<col>, #<col>, #<col>, #<col>]
+                                                ProjectionExec: expr=[<exprs>]
+                                                  DataSourceExec: partitions=1, partition_sizes=[<sizes>]
+                                                ProjectionExec: expr=[<exprs>]
+                                                  CoalesceBatchesExec: target_batch_size=8192
+                                                    CoalesceBatchesExec: target_batch_size=8192
+                                                      FilterExec: (_22@<id> >= Some(10000),6,2 AND _22@<id> <= Some(20000),6,2 OR _22@<id> >= Some(15000),6,2 AND _22@<id> <= Some(30000),6,2 OR _22@<id> >= Some(5000),6,2 AND _22@<id> <= Some(25000),6,2) AND (_13@<id> >= Some(10000),5,2 AND _13@<id> <= Some(15000),5,2 OR _13@<id> >= Some(5000),5,2 AND _13@<id> <= Some(10000),5,2 OR _13@<id> >= Some(15000),5,2 AND _13@<id> <= Some(20000),5,2)
+                                                        RepartitionExec: partitioning=RoundRobinBatch(<partitions>), input_partitions=<partitions>
+                                                          DataSourceExec: partitions=1, partition_sizes=[<sizes>]
+                                        ProjectionExec: expr=[<exprs>]
+                                          CoalesceBatchesExec: target_batch_size=8192
+                                            CoalesceBatchesExec: target_batch_size=8192
+                                              FilterExec: _2@<id> = U AND _3@<id> = 4 yr Degree OR _2@<id> = S AND _3@<id> = Unknown OR _2@<id> = D AND _3@<id> = 2 yr Degree
+                                                RepartitionExec: partitioning=RoundRobinBatch(<partitions>), input_partitions=<partitions>
+                                                  DataSourceExec: partitions=1, partition_sizes=[<sizes>]
+                                ProjectionExec: expr=[<exprs>]
+                                  RepartitionExec: partitioning=RoundRobinBatch(<partitions>), input_partitions=<partitions>
+                                    ProjectionExec: expr=[<exprs>]
+                                      CoalesceBatchesExec: target_batch_size=8192
+                                        CoalesceBatchesExec: target_batch_size=8192
+                                          FilterExec: (__common_expr_2@<id> OR _3@<id> = 1) AND __common_expr_2@<id>, projection=[_0@<id>, _3@<id>]
+                                            ProjectionExec: expr=[<exprs>]
+                                              DataSourceExec: partitions=1, partition_sizes=[<sizes>]
+                        ProjectionExec: expr=[<exprs>]
+                          RepartitionExec: partitioning=RoundRobinBatch(<partitions>), input_partitions=<partitions>
+                            ProjectionExec: expr=[<exprs>]
+                              CoalesceBatchesExec: target_batch_size=8192
+                                CoalesceBatchesExec: target_batch_size=8192
+                                  FilterExec: (_8@<id> = CO OR _8@<id> = MI OR _8@<id> = MN OR _8@<id> = NC OR _8@<id> = NY OR _8@<id> = TX OR _8@<id> = CA OR _8@<id> = NE OR _8@<id> = TN) AND _8@<id> IN (SET) ([CO, MI, MN, NC, NY, TX, CA, NE, TN]) AND _10@<id> = United States, projection=[_0@<id>, _8@<id>]
+                                    DataSourceExec: partitions=1, partition_sizes=[<sizes>]
+                ProjectionExec: expr=[<exprs>]
+                  CoalesceBatchesExec: target_batch_size=8192
+                    CoalesceBatchesExec: target_batch_size=8192
+                      FilterExec: _6@<id> = 2001, projection=[_0@<id>]
+                        RepartitionExec: partitioning=RoundRobinBatch(<partitions>), input_partitions=<partitions>
+                          DataSourceExec: partitions=1, partition_sizes=[<sizes>]

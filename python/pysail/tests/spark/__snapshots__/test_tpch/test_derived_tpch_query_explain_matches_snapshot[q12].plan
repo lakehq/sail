@@ -1,0 +1,22 @@
+== Physical Plan ==
+ProjectionExec: expr=[<exprs>]
+  ProjectionExec: expr=[<exprs>]
+    SortExec: [<sort_exprs>]
+      SortExec: expr=[<exprs>]
+        ProjectionExec: expr=[<exprs>]
+          AggregateExec: mode=FinalPartitioned, gby=[#<col> as #<col>], aggr=[sum(CASE WHEN orders.#<col> = Utf8("1-URGENT") OR orders.#<col> = Utf8("2-HIGH") THEN Int32(1) WHEN Boolean(true) THEN Int32(0) END), sum(CASE WHEN orders.#<col> != Utf8("1-URGENT") AND orders.#<col> != Utf8("2-HIGH") THEN Int32(1) WHEN Boolean(true) THEN Int32(0) END)]
+            CoalesceBatchesExec: target_batch_size=8192
+              RepartitionExec: partitioning=Hash([#<col>], <partitions>), input_partitions=<partitions>
+                CoalesceBatchesExec: target_batch_size=8192
+                  AggregateExec: mode=Partial, gby=[#<col> as #<col>], aggr=[sum(CASE WHEN orders.#<col> = Utf8("1-URGENT") OR orders.#<col> = Utf8("2-HIGH") THEN Int32(1) WHEN Boolean(true) THEN Int32(0) END), sum(CASE WHEN orders.#<col> != Utf8("1-URGENT") AND orders.#<col> != Utf8("2-HIGH") THEN Int32(1) WHEN Boolean(true) THEN Int32(0) END)]
+                    CoalesceBatchesExec: target_batch_size=8192
+                      CoalesceBatchesExec: target_batch_size=8192
+                        HashJoinExec: mode=CollectLeft, join_type=Inner, on=[(#<col>, #<col>)], projection=[#<col>, #<col>]
+                          ProjectionExec: expr=[<exprs>]
+                            DataSourceExec: partitions=1, partition_sizes=[<sizes>]
+                          RepartitionExec: partitioning=RoundRobinBatch(<partitions>), input_partitions=<partitions>
+                            ProjectionExec: expr=[<exprs>]
+                              CoalesceBatchesExec: target_batch_size=8192
+                                CoalesceBatchesExec: target_batch_size=8192
+                                  FilterExec: (_14@<id> = FOB OR _14@<id> = SHIP) AND _12@<id> > _11@<id> AND _11@<id> > _10@<id> AND _12@<id> >= 1995-01-01 AND _12@<id> < 1996-01-01, projection=[_0@<id>, _14@<id>]
+                                    DataSourceExec: partitions=1, partition_sizes=[<sizes>]

@@ -1,0 +1,72 @@
+== Physical Plan ==
+ProjectionExec: expr=[<exprs>]
+  ProjectionExec: expr=[<exprs>]
+    GlobalLimitExec: skip=0, fetch=100
+      CrossJoinExec
+        ProjectionExec: expr=[<exprs>]
+          AggregateExec: mode=Final, gby=[], aggr=[avg(store_sales.#<col>), count(store_sales.#<col>), count(DISTINCT store_sales.#<col>)]
+            CoalescePartitionsExec
+              AggregateExec: mode=Partial, gby=[], aggr=[avg(store_sales.#<col>), count(store_sales.#<col>), count(DISTINCT store_sales.#<col>)]
+                ProjectionExec: expr=[<exprs>]
+                  CoalesceBatchesExec: target_batch_size=8192
+                    CoalesceBatchesExec: target_batch_size=8192
+                      FilterExec: _10@<id> >= 26 AND _10@<id> <= 30 AND (_12@<id> >= Some(16900),5,2 AND _12@<id> <= Some(17900),5,2 OR _19@<id> >= Some(1067200),7,2 AND _19@<id> <= Some(1167200),7,2 OR _11@<id> >= Some(5800),5,2 AND _11@<id> <= Some(7800),5,2), projection=[_12@<id>]
+                        RepartitionExec: partitioning=RoundRobinBatch(<partitions>), input_partitions=<partitions>
+                          DataSourceExec: partitions=1, partition_sizes=[<sizes>]
+        ProjectionExec: expr=[<exprs>]
+          CrossJoinExec
+            ProjectionExec: expr=[<exprs>]
+              AggregateExec: mode=Final, gby=[], aggr=[avg(store_sales.#<col>), count(store_sales.#<col>), count(DISTINCT store_sales.#<col>)]
+                CoalescePartitionsExec
+                  AggregateExec: mode=Partial, gby=[], aggr=[avg(store_sales.#<col>), count(store_sales.#<col>), count(DISTINCT store_sales.#<col>)]
+                    ProjectionExec: expr=[<exprs>]
+                      CoalesceBatchesExec: target_batch_size=8192
+                        CoalesceBatchesExec: target_batch_size=8192
+                          FilterExec: _10@<id> >= 21 AND _10@<id> <= 25 AND (_12@<id> >= Some(7600),5,2 AND _12@<id> <= Some(8600),5,2 OR _19@<id> >= Some(209600),7,2 AND _19@<id> <= Some(309600),7,2 OR _11@<id> >= Some(5000),5,2 AND _11@<id> <= Some(7000),5,2), projection=[_12@<id>]
+                            RepartitionExec: partitioning=RoundRobinBatch(<partitions>), input_partitions=<partitions>
+                              DataSourceExec: partitions=1, partition_sizes=[<sizes>]
+            ProjectionExec: expr=[<exprs>]
+              CrossJoinExec
+                ProjectionExec: expr=[<exprs>]
+                  AggregateExec: mode=Final, gby=[], aggr=[avg(store_sales.#<col>), count(store_sales.#<col>), count(DISTINCT store_sales.#<col>)]
+                    CoalescePartitionsExec
+                      AggregateExec: mode=Partial, gby=[], aggr=[avg(store_sales.#<col>), count(store_sales.#<col>), count(DISTINCT store_sales.#<col>)]
+                        ProjectionExec: expr=[<exprs>]
+                          CoalesceBatchesExec: target_batch_size=8192
+                            CoalesceBatchesExec: target_batch_size=8192
+                              FilterExec: _10@<id> >= 16 AND _10@<id> <= 20 AND (_12@<id> >= Some(2400),5,2 AND _12@<id> <= Some(3400),5,2 OR _19@<id> >= Some(370600),7,2 AND _19@<id> <= Some(470600),7,2 OR _11@<id> >= Some(4600),5,2 AND _11@<id> <= Some(6600),5,2), projection=[_12@<id>]
+                                RepartitionExec: partitioning=RoundRobinBatch(<partitions>), input_partitions=<partitions>
+                                  DataSourceExec: partitions=1, partition_sizes=[<sizes>]
+                ProjectionExec: expr=[<exprs>]
+                  CrossJoinExec
+                    ProjectionExec: expr=[<exprs>]
+                      AggregateExec: mode=Final, gby=[], aggr=[avg(store_sales.#<col>), count(store_sales.#<col>), count(DISTINCT store_sales.#<col>)]
+                        CoalescePartitionsExec
+                          AggregateExec: mode=Partial, gby=[], aggr=[avg(store_sales.#<col>), count(store_sales.#<col>), count(DISTINCT store_sales.#<col>)]
+                            ProjectionExec: expr=[<exprs>]
+                              CoalesceBatchesExec: target_batch_size=8192
+                                CoalesceBatchesExec: target_batch_size=8192
+                                  FilterExec: _10@<id> >= 11 AND _10@<id> <= 15 AND (_12@<id> >= Some(15900),5,2 AND _12@<id> <= Some(16900),5,2 OR _19@<id> >= Some(280700),7,2 AND _19@<id> <= Some(380700),7,2 OR _11@<id> >= Some(2400),5,2 AND _11@<id> <= Some(4400),5,2), projection=[_12@<id>]
+                                    RepartitionExec: partitioning=RoundRobinBatch(<partitions>), input_partitions=<partitions>
+                                      DataSourceExec: partitions=1, partition_sizes=[<sizes>]
+                    CrossJoinExec
+                      ProjectionExec: expr=[<exprs>]
+                        AggregateExec: mode=Final, gby=[], aggr=[avg(store_sales.#<col>), count(store_sales.#<col>), count(DISTINCT store_sales.#<col>)]
+                          CoalescePartitionsExec
+                            AggregateExec: mode=Partial, gby=[], aggr=[avg(store_sales.#<col>), count(store_sales.#<col>), count(DISTINCT store_sales.#<col>)]
+                              ProjectionExec: expr=[<exprs>]
+                                CoalesceBatchesExec: target_batch_size=8192
+                                  CoalesceBatchesExec: target_batch_size=8192
+                                    FilterExec: _10@<id> >= 0 AND _10@<id> <= 5 AND (_12@<id> >= Some(2800),5,2 AND _12@<id> <= Some(3800),5,2 OR _19@<id> >= Some(1257300),7,2 AND _19@<id> <= Some(1357300),7,2 OR _11@<id> >= Some(3300),5,2 AND _11@<id> <= Some(5300),5,2), projection=[_12@<id>]
+                                      RepartitionExec: partitioning=RoundRobinBatch(<partitions>), input_partitions=<partitions>
+                                        DataSourceExec: partitions=1, partition_sizes=[<sizes>]
+                      ProjectionExec: expr=[<exprs>]
+                        AggregateExec: mode=Final, gby=[], aggr=[avg(store_sales.#<col>), count(store_sales.#<col>), count(DISTINCT store_sales.#<col>)]
+                          CoalescePartitionsExec
+                            AggregateExec: mode=Partial, gby=[], aggr=[avg(store_sales.#<col>), count(store_sales.#<col>), count(DISTINCT store_sales.#<col>)]
+                              ProjectionExec: expr=[<exprs>]
+                                CoalesceBatchesExec: target_batch_size=8192
+                                  CoalesceBatchesExec: target_batch_size=8192
+                                    FilterExec: _10@<id> >= 6 AND _10@<id> <= 10 AND (_12@<id> >= Some(14300),5,2 AND _12@<id> <= Some(15300),5,2 OR _19@<id> >= Some(556200),7,2 AND _19@<id> <= Some(656200),7,2 OR _11@<id> >= Some(4500),5,2 AND _11@<id> <= Some(6500),5,2), projection=[_12@<id>]
+                                      RepartitionExec: partitioning=RoundRobinBatch(<partitions>), input_partitions=<partitions>
+                                        DataSourceExec: partitions=1, partition_sizes=[<sizes>]

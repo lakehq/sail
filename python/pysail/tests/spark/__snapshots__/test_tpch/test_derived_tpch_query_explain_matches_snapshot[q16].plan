@@ -1,0 +1,35 @@
+== Physical Plan ==
+ProjectionExec: expr=[<exprs>]
+  ProjectionExec: expr=[<exprs>]
+    SortExec: [<sort_exprs>]
+      SortExec: expr=[<exprs>]
+        ProjectionExec: expr=[<exprs>]
+          AggregateExec: mode=FinalPartitioned, gby=[#<col> as #<col>, #<col> as #<col>, #<col> as #<col>], aggr=[count(alias1)]
+            CoalesceBatchesExec: target_batch_size=8192
+              RepartitionExec: partitioning=Hash([#<col>, #<col>, #<col>], <partitions>), input_partitions=<partitions>
+                CoalesceBatchesExec: target_batch_size=8192
+                  AggregateExec: mode=Partial, gby=[#<col> as #<col>, #<col> as #<col>, #<col> as #<col>], aggr=[count(alias1)]
+                    AggregateExec: mode=FinalPartitioned, gby=[#<col> as #<col>, #<col> as #<col>, #<col> as #<col>, alias1@<id> as alias1], aggr=[]
+                      CoalesceBatchesExec: target_batch_size=8192
+                        RepartitionExec: partitioning=Hash([#<col>, #<col>, #<col>, alias1@<id>], <partitions>), input_partitions=<partitions>
+                          CoalesceBatchesExec: target_batch_size=8192
+                            AggregateExec: mode=Partial, gby=[#<col> as #<col>, #<col> as #<col>, #<col> as #<col>, #<col> as alias1], aggr=[]
+                              CoalesceBatchesExec: target_batch_size=8192
+                                CoalesceBatchesExec: target_batch_size=8192
+                                  HashJoinExec: mode=CollectLeft, join_type=RightAnti, on=[(#<col>, #<col>)]
+                                    ProjectionExec: expr=[<exprs>]
+                                      CoalesceBatchesExec: target_batch_size=8192
+                                        CoalesceBatchesExec: target_batch_size=8192
+                                          FilterExec: _6@<id> LIKE %Customer%Complaints%, projection=[_0@<id>]
+                                            DataSourceExec: partitions=1, partition_sizes=[<sizes>]
+                                    CoalesceBatchesExec: target_batch_size=8192
+                                      CoalesceBatchesExec: target_batch_size=8192
+                                        HashJoinExec: mode=CollectLeft, join_type=Inner, on=[(#<col>, #<col>)], projection=[#<col>, #<col>, #<col>, #<col>]
+                                          ProjectionExec: expr=[<exprs>]
+                                            DataSourceExec: partitions=1, partition_sizes=[<sizes>]
+                                          RepartitionExec: partitioning=RoundRobinBatch(<partitions>), input_partitions=<partitions>
+                                            ProjectionExec: expr=[<exprs>]
+                                              CoalesceBatchesExec: target_batch_size=8192
+                                                CoalesceBatchesExec: target_batch_size=8192
+                                                  FilterExec: _3@<id> != Brand#<col> AND _4@<id> NOT LIKE SMALL PLATED% AND _5@<id> IN (SET) ([14, 6, 5, 31, 49, 15, 41, 47])
+                                                    DataSourceExec: partitions=1, partition_sizes=[<sizes>]

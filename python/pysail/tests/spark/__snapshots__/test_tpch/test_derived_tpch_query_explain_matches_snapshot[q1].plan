@@ -1,0 +1,18 @@
+== Physical Plan ==
+ProjectionExec: expr=[<exprs>]
+  ProjectionExec: expr=[<exprs>]
+    SortExec: [<sort_exprs>]
+      SortExec: expr=[<exprs>]
+        ProjectionExec: expr=[<exprs>]
+          AggregateExec: mode=FinalPartitioned, gby=[#<col> as #<col>, #<col> as #<col>], aggr=[sum(lineitem.#<col>), sum(lineitem.#<col>), sum(lineitem.#<col> * Int32(1) - lineitem.#<col>), sum(lineitem.#<col> * Int32(1) - lineitem.#<col> * Int32(1) + lineitem.#<col>), avg(lineitem.#<col>), avg(lineitem.#<col>), avg(lineitem.#<col>), count(Int64(1))]
+            CoalesceBatchesExec: target_batch_size=8192
+              RepartitionExec: partitioning=Hash([#<col>, #<col>], <partitions>), input_partitions=<partitions>
+                CoalesceBatchesExec: target_batch_size=8192
+                  AggregateExec: mode=Partial, gby=[#<col> as #<col>, #<col> as #<col>], aggr=[sum(lineitem.#<col>), sum(lineitem.#<col>), sum(lineitem.#<col> * Int32(1) - lineitem.#<col>), sum(lineitem.#<col> * Int32(1) - lineitem.#<col> * Int32(1) + lineitem.#<col>), avg(lineitem.#<col>), avg(lineitem.#<col>), avg(lineitem.#<col>), count(Int64(1))]
+                    ProjectionExec: expr=[<exprs>]
+                      RepartitionExec: partitioning=RoundRobinBatch(<partitions>), input_partitions=<partitions>
+                        ProjectionExec: expr=[<exprs>]
+                          CoalesceBatchesExec: target_batch_size=8192
+                            CoalesceBatchesExec: target_batch_size=8192
+                              FilterExec: _10@<id> <= 1998-09-24, projection=[_4@<id>, _5@<id>, _6@<id>, _7@<id>, _8@<id>, _9@<id>]
+                                DataSourceExec: partitions=1, partition_sizes=[<sizes>]

@@ -1,0 +1,18 @@
+== Physical Plan ==
+ProjectionExec: expr=[<exprs>]
+  ProjectionExec: expr=[<exprs>]
+    AggregateExec: mode=Final, gby=[], aggr=[sum(CASE WHEN part.#<col> LIKE Utf8("PROMO%") THEN lineitem.#<col> * Int32(1) - lineitem.#<col> WHEN Boolean(true) THEN Int32(0) END), sum(lineitem.#<col> * Int32(1) - lineitem.#<col>)]
+      CoalescePartitionsExec
+        AggregateExec: mode=Partial, gby=[], aggr=[sum(CASE WHEN part.#<col> LIKE Utf8("PROMO%") THEN lineitem.#<col> * Int32(1) - lineitem.#<col> WHEN Boolean(true) THEN Int32(0) END), sum(lineitem.#<col> * Int32(1) - lineitem.#<col>)]
+          ProjectionExec: expr=[<exprs>]
+            RepartitionExec: partitioning=RoundRobinBatch(<partitions>), input_partitions=<partitions>
+              CoalesceBatchesExec: target_batch_size=8192
+                CoalesceBatchesExec: target_batch_size=8192
+                  HashJoinExec: mode=CollectLeft, join_type=Inner, on=[(#<col>, #<col>)]
+                    ProjectionExec: expr=[<exprs>]
+                      CoalesceBatchesExec: target_batch_size=8192
+                        CoalesceBatchesExec: target_batch_size=8192
+                          FilterExec: _10@<id> >= 1995-02-01 AND _10@<id> < 1995-03-01, projection=[_1@<id>, _5@<id>, _6@<id>]
+                            DataSourceExec: partitions=1, partition_sizes=[<sizes>]
+                    ProjectionExec: expr=[<exprs>]
+                      DataSourceExec: partitions=1, partition_sizes=[<sizes>]

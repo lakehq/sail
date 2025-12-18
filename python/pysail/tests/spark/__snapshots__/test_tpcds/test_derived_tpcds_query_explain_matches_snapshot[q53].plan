@@ -1,0 +1,45 @@
+== Physical Plan ==
+ProjectionExec: expr=[<exprs>]
+  SortExec: [<sort_exprs>], fetch=100
+    SortExec: expr=[<exprs>]
+      ProjectionExec: expr=[<exprs>]
+        CoalesceBatchesExec: target_batch_size=8192
+          CoalesceBatchesExec: target_batch_size=8192
+            FilterExec: CASE WHEN avg(sum(store_sales.#<col>)) PARTITION BY [item.#<col>] ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING@<id> > Some(0),19,6 THEN abs(sum(store_sales.#<col>)@<id> - avg(sum(store_sales.#<col>)) PARTITION BY [item.#<col>] ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING@<id>) / avg(sum(store_sales.#<col>)) PARTITION BY [item.#<col>] ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING@<id> END > Some(1000000000),30,10
+              WindowAggExec: wdw=[avg(sum(store_sales.#<col>)) PARTITION BY [item.#<col>] ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING: Ok(Field { name: "avg(sum(store_sales.#<col>)) PARTITION BY [item.#<col>] ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING", data_type: Decimal128(19, 6), nullable: true }), frame: WindowFrame { units: Rows, start_bound: Preceding(UInt64(NULL)), end_bound: Following(UInt64(NULL)), is_causal: false }]
+                SortExec: expr=[<exprs>]
+                  CoalesceBatchesExec: target_batch_size=8192
+                    RepartitionExec: partitioning=Hash([#<col>], <partitions>), input_partitions=<partitions>
+                      CoalesceBatchesExec: target_batch_size=8192
+                        ProjectionExec: expr=[<exprs>]
+                          AggregateExec: mode=FinalPartitioned, gby=[#<col> as #<col>, #<col> as #<col>], aggr=[sum(store_sales.#<col>)]
+                            CoalesceBatchesExec: target_batch_size=8192
+                              RepartitionExec: partitioning=Hash([#<col>, #<col>], <partitions>), input_partitions=<partitions>
+                                CoalesceBatchesExec: target_batch_size=8192
+                                  AggregateExec: mode=Partial, gby=[#<col> as #<col>, #<col> as #<col>], aggr=[sum(store_sales.#<col>)]
+                                    CoalesceBatchesExec: target_batch_size=8192
+                                      CoalesceBatchesExec: target_batch_size=8192
+                                        HashJoinExec: mode=CollectLeft, join_type=Inner, on=[(CAST(store.#<col> AS Float64)@<id>, #<col>)], projection=[#<col>, #<col>, #<col>]
+                                          ProjectionExec: expr=[<exprs>]
+                                            DataSourceExec: partitions=1, partition_sizes=[<sizes>]
+                                          CoalesceBatchesExec: target_batch_size=8192
+                                            CoalesceBatchesExec: target_batch_size=8192
+                                              HashJoinExec: mode=CollectLeft, join_type=Inner, on=[(#<col>, CAST(date_dim.#<col> AS Float64)@<id>)], projection=[#<col>, #<col>, #<col>, #<col>]
+                                                CoalescePartitionsExec
+                                                  CoalesceBatchesExec: target_batch_size=8192
+                                                    CoalesceBatchesExec: target_batch_size=8192
+                                                      HashJoinExec: mode=CollectLeft, join_type=Inner, on=[(#<col>, #<col>)], projection=[#<col>, #<col>, #<col>, #<col>]
+                                                        ProjectionExec: expr=[<exprs>]
+                                                          CoalesceBatchesExec: target_batch_size=8192
+                                                            CoalesceBatchesExec: target_batch_size=8192
+                                                              FilterExec: (_12@<id> = Books OR _12@<id> = Children OR _12@<id> = Electronics) AND _10@<id> IN (SET) ([personal, portable, reference, self-help]) AND _8@<id> IN (SET) ([scholaramalgamalg #<col>, scholaramalgamalg #<col>, exportiunivamalg #<col>, scholaramalgamalg #<col>]) OR (_12@<id> = Women OR _12@<id> = Music OR _12@<id> = Men) AND _10@<id> IN (SET) ([accessories, classical, fragrances, pants]) AND _8@<id> IN (SET) ([amalgimporto #<col>, edu packscholar #<col>, exportiimporto #<col>, importoamalg #<col>]), projection=[_0@<id>, _13@<id>]
+                                                                DataSourceExec: partitions=1, partition_sizes=[<sizes>]
+                                                        RepartitionExec: partitioning=RoundRobinBatch(<partitions>), input_partitions=<partitions>
+                                                          ProjectionExec: expr=[<exprs>]
+                                                            DataSourceExec: partitions=1, partition_sizes=[<sizes>]
+                                                ProjectionExec: expr=[<exprs>]
+                                                  CoalesceBatchesExec: target_batch_size=8192
+                                                    CoalesceBatchesExec: target_batch_size=8192
+                                                      FilterExec: _3@<id> IN (SET) ([1197, 1198, 1199, 1200, 1201, 1202, 1203, 1204, 1205, 1206, 1207, 1208]), projection=[_0@<id>, _10@<id>]
+                                                        RepartitionExec: partitioning=RoundRobinBatch(<partitions>), input_partitions=<partitions>
+                                                          DataSourceExec: partitions=1, partition_sizes=[<sizes>]

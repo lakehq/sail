@@ -1,0 +1,210 @@
+== Physical Plan ==
+ProjectionExec: expr=[<exprs>]
+  ProjectionExec: expr=[<exprs>]
+    SortExec: [<sort_exprs>], fetch=100
+      SortExec: expr=[<exprs>]
+        ProjectionExec: expr=[<exprs>]
+          CoalesceBatchesExec: target_batch_size=8192
+            CoalesceBatchesExec: target_batch_size=8192
+              HashJoinExec: mode=CollectLeft, join_type=Inner, on=[(#<col>, #<col>)], filter=CASE WHEN #<col> > Some(0),24,6 THEN #<col> / #<col> END > CASE WHEN #<col> > Some(0),24,6 THEN #<col> / #<col> END, projection=[#<col>, #<col>, #<col>, #<col>]
+                CoalescePartitionsExec
+                  ProjectionExec: expr=[<exprs>]
+                    CoalesceBatchesExec: target_batch_size=8192
+                      CoalesceBatchesExec: target_batch_size=8192
+                        HashJoinExec: mode=CollectLeft, join_type=Inner, on=[(#<col>, #<col>)], projection=[#<col>, #<col>, #<col>, #<col>, #<col>, #<col>, #<col>, #<col>]
+                          CoalescePartitionsExec
+                            ProjectionExec: expr=[<exprs>]
+                              CoalesceBatchesExec: target_batch_size=8192
+                                CoalesceBatchesExec: target_batch_size=8192
+                                  FilterExec: sum(web_sales.#<col> - web_sales.#<col> - web_sales.#<col> + web_sales.#<col> / Int32(2))@<id> > Some(0),24,6
+                                    ProjectionExec: expr=[<exprs>]
+                                      AggregateExec: mode=FinalPartitioned, gby=[#<col> as #<col>, #<col> as #<col>, #<col> as #<col>, #<col> as #<col>, #<col> as #<col>, #<col> as #<col>, #<col> as #<col>, #<col> as #<col>], aggr=[sum(web_sales.#<col> - web_sales.#<col> - web_sales.#<col> + web_sales.#<col> / Int32(2))], ordering_mode=PartiallySorted([7])
+                                        CoalesceBatchesExec: target_batch_size=8192
+                                          RepartitionExec: partitioning=Hash([#<col>, #<col>, #<col>, #<col>, #<col>, #<col>, #<col>, #<col>], <partitions>), input_partitions=<partitions>
+                                            CoalesceBatchesExec: target_batch_size=8192
+                                              AggregateExec: mode=Partial, gby=[#<col> as #<col>, #<col> as #<col>, #<col> as #<col>, #<col> as #<col>, #<col> as #<col>, #<col> as #<col>, #<col> as #<col>, #<col> as #<col>], aggr=[sum(web_sales.#<col> - web_sales.#<col> - web_sales.#<col> + web_sales.#<col> / Int32(2))], ordering_mode=PartiallySorted([7])
+                                                CoalesceBatchesExec: target_batch_size=8192
+                                                  CoalesceBatchesExec: target_batch_size=8192
+                                                    HashJoinExec: mode=CollectLeft, join_type=Inner, on=[(#<col>, CAST(date_dim.#<col> AS Float64)@<id>)], projection=[#<col>, #<col>, #<col>, #<col>, #<col>, #<col>, #<col>, #<col>, #<col>, #<col>, #<col>, #<col>]
+                                                      ProjectionExec: expr=[<exprs>]
+                                                        CoalesceBatchesExec: target_batch_size=8192
+                                                          CoalesceBatchesExec: target_batch_size=8192
+                                                            HashJoinExec: mode=CollectLeft, join_type=Inner, on=[(#<col>, CAST(customer.#<col> AS Float64)@<id>)], projection=[#<col>, #<col>, #<col>, #<col>, #<col>, #<col>, #<col>, #<col>, #<col>, #<col>, #<col>, #<col>]
+                                                              ProjectionExec: expr=[<exprs>]
+                                                                DataSourceExec: partitions=1, partition_sizes=[<sizes>]
+                                                              ProjectionExec: expr=[<exprs>]
+                                                                DataSourceExec: partitions=1, partition_sizes=[<sizes>]
+                                                      ProjectionExec: expr=[<exprs>]
+                                                        CoalesceBatchesExec: target_batch_size=8192
+                                                          CoalesceBatchesExec: target_batch_size=8192
+                                                            FilterExec: _6@<id> = 2001
+                                                              RepartitionExec: partitioning=RoundRobinBatch(<partitions>), input_partitions=<partitions>
+                                                                DataSourceExec: partitions=1, partition_sizes=[<sizes>]
+                          CoalesceBatchesExec: target_batch_size=8192
+                            CoalesceBatchesExec: target_batch_size=8192
+                              HashJoinExec: mode=CollectLeft, join_type=Inner, on=[(#<col>, #<col>)], filter=CASE WHEN #<col> > Some(0),24,6 THEN #<col> / #<col> END > CASE WHEN #<col> > Some(0),24,6 THEN #<col> / #<col> END, projection=[#<col>, #<col>, #<col>, #<col>, #<col>, #<col>, #<col>]
+                                CoalescePartitionsExec
+                                  ProjectionExec: expr=[<exprs>]
+                                    CoalesceBatchesExec: target_batch_size=8192
+                                      CoalesceBatchesExec: target_batch_size=8192
+                                        HashJoinExec: mode=CollectLeft, join_type=Inner, on=[(#<col>, #<col>)], projection=[#<col>, #<col>, #<col>, #<col>, #<col>, #<col>, #<col>, #<col>]
+                                          CoalescePartitionsExec
+                                            ProjectionExec: expr=[<exprs>]
+                                              CoalesceBatchesExec: target_batch_size=8192
+                                                CoalesceBatchesExec: target_batch_size=8192
+                                                  FilterExec: sum(catalog_sales.#<col> - catalog_sales.#<col> - catalog_sales.#<col> + catalog_sales.#<col> / Int32(2))@<id> > Some(0),24,6
+                                                    ProjectionExec: expr=[<exprs>]
+                                                      AggregateExec: mode=FinalPartitioned, gby=[#<col> as #<col>, #<col> as #<col>, #<col> as #<col>, #<col> as #<col>, #<col> as #<col>, #<col> as #<col>, #<col> as #<col>, #<col> as #<col>], aggr=[sum(catalog_sales.#<col> - catalog_sales.#<col> - catalog_sales.#<col> + catalog_sales.#<col> / Int32(2))], ordering_mode=PartiallySorted([7])
+                                                        CoalesceBatchesExec: target_batch_size=8192
+                                                          RepartitionExec: partitioning=Hash([#<col>, #<col>, #<col>, #<col>, #<col>, #<col>, #<col>, #<col>], <partitions>), input_partitions=<partitions>
+                                                            CoalesceBatchesExec: target_batch_size=8192
+                                                              AggregateExec: mode=Partial, gby=[#<col> as #<col>, #<col> as #<col>, #<col> as #<col>, #<col> as #<col>, #<col> as #<col>, #<col> as #<col>, #<col> as #<col>, #<col> as #<col>], aggr=[sum(catalog_sales.#<col> - catalog_sales.#<col> - catalog_sales.#<col> + catalog_sales.#<col> / Int32(2))], ordering_mode=PartiallySorted([7])
+                                                                CoalesceBatchesExec: target_batch_size=8192
+                                                                  CoalesceBatchesExec: target_batch_size=8192
+                                                                    HashJoinExec: mode=CollectLeft, join_type=Inner, on=[(#<col>, CAST(date_dim.#<col> AS Float64)@<id>)], projection=[#<col>, #<col>, #<col>, #<col>, #<col>, #<col>, #<col>, #<col>, #<col>, #<col>, #<col>, #<col>]
+                                                                      CoalescePartitionsExec
+                                                                        ProjectionExec: expr=[<exprs>]
+                                                                          CoalesceBatchesExec: target_batch_size=8192
+                                                                            CoalesceBatchesExec: target_batch_size=8192
+                                                                              HashJoinExec: mode=Partitioned, join_type=Inner, on=[(#<col>, CAST(customer.#<col> AS Float64)@<id>)], projection=[#<col>, #<col>, #<col>, #<col>, #<col>, #<col>, #<col>, #<col>, #<col>, #<col>, #<col>, #<col>]
+                                                                                CoalesceBatchesExec: target_batch_size=8192
+                                                                                  RepartitionExec: partitioning=Hash([#<col>], <partitions>), input_partitions=<partitions>
+                                                                                    RepartitionExec: partitioning=RoundRobinBatch(<partitions>), input_partitions=<partitions>
+                                                                                      CoalesceBatchesExec: target_batch_size=8192
+                                                                                        ProjectionExec: expr=[<exprs>]
+                                                                                          DataSourceExec: partitions=1, partition_sizes=[<sizes>]
+                                                                                CoalesceBatchesExec: target_batch_size=8192
+                                                                                  RepartitionExec: partitioning=Hash([CAST(customer.#<col> AS Float64)@<id>], <partitions>), input_partitions=<partitions>
+                                                                                    CoalesceBatchesExec: target_batch_size=8192
+                                                                                      ProjectionExec: expr=[<exprs>]
+                                                                                        DataSourceExec: partitions=1, partition_sizes=[<sizes>]
+                                                                      ProjectionExec: expr=[<exprs>]
+                                                                        CoalesceBatchesExec: target_batch_size=8192
+                                                                          CoalesceBatchesExec: target_batch_size=8192
+                                                                            FilterExec: _6@<id> = 2001
+                                                                              RepartitionExec: partitioning=RoundRobinBatch(<partitions>), input_partitions=<partitions>
+                                                                                DataSourceExec: partitions=1, partition_sizes=[<sizes>]
+                                          CoalesceBatchesExec: target_batch_size=8192
+                                            CoalesceBatchesExec: target_batch_size=8192
+                                              HashJoinExec: mode=CollectLeft, join_type=Inner, on=[(#<col>, #<col>)]
+                                                CoalescePartitionsExec
+                                                  ProjectionExec: expr=[<exprs>]
+                                                    CoalesceBatchesExec: target_batch_size=8192
+                                                      CoalesceBatchesExec: target_batch_size=8192
+                                                        FilterExec: sum(store_sales.#<col> - store_sales.#<col> - store_sales.#<col> + store_sales.#<col> / Int32(2))@<id> > Some(0),24,6
+                                                          ProjectionExec: expr=[<exprs>]
+                                                            AggregateExec: mode=FinalPartitioned, gby=[#<col> as #<col>, #<col> as #<col>, #<col> as #<col>, #<col> as #<col>, #<col> as #<col>, #<col> as #<col>, #<col> as #<col>, #<col> as #<col>], aggr=[sum(store_sales.#<col> - store_sales.#<col> - store_sales.#<col> + store_sales.#<col> / Int32(2))], ordering_mode=PartiallySorted([7])
+                                                              CoalesceBatchesExec: target_batch_size=8192
+                                                                RepartitionExec: partitioning=Hash([#<col>, #<col>, #<col>, #<col>, #<col>, #<col>, #<col>, #<col>], <partitions>), input_partitions=<partitions>
+                                                                  CoalesceBatchesExec: target_batch_size=8192
+                                                                    AggregateExec: mode=Partial, gby=[#<col> as #<col>, #<col> as #<col>, #<col> as #<col>, #<col> as #<col>, #<col> as #<col>, #<col> as #<col>, #<col> as #<col>, #<col> as #<col>], aggr=[sum(store_sales.#<col> - store_sales.#<col> - store_sales.#<col> + store_sales.#<col> / Int32(2))], ordering_mode=PartiallySorted([7])
+                                                                      CoalesceBatchesExec: target_batch_size=8192
+                                                                        CoalesceBatchesExec: target_batch_size=8192
+                                                                          HashJoinExec: mode=CollectLeft, join_type=Inner, on=[(#<col>, CAST(date_dim.#<col> AS Float64)@<id>)], projection=[#<col>, #<col>, #<col>, #<col>, #<col>, #<col>, #<col>, #<col>, #<col>, #<col>, #<col>, #<col>]
+                                                                            CoalescePartitionsExec
+                                                                              ProjectionExec: expr=[<exprs>]
+                                                                                CoalesceBatchesExec: target_batch_size=8192
+                                                                                  CoalesceBatchesExec: target_batch_size=8192
+                                                                                    HashJoinExec: mode=Partitioned, join_type=Inner, on=[(#<col>, CAST(customer.#<col> AS Float64)@<id>)], projection=[#<col>, #<col>, #<col>, #<col>, #<col>, #<col>, #<col>, #<col>, #<col>, #<col>, #<col>, #<col>]
+                                                                                      CoalesceBatchesExec: target_batch_size=8192
+                                                                                        RepartitionExec: partitioning=Hash([#<col>], <partitions>), input_partitions=<partitions>
+                                                                                          RepartitionExec: partitioning=RoundRobinBatch(<partitions>), input_partitions=<partitions>
+                                                                                            CoalesceBatchesExec: target_batch_size=8192
+                                                                                              ProjectionExec: expr=[<exprs>]
+                                                                                                DataSourceExec: partitions=1, partition_sizes=[<sizes>]
+                                                                                      CoalesceBatchesExec: target_batch_size=8192
+                                                                                        RepartitionExec: partitioning=Hash([CAST(customer.#<col> AS Float64)@<id>], <partitions>), input_partitions=<partitions>
+                                                                                          CoalesceBatchesExec: target_batch_size=8192
+                                                                                            ProjectionExec: expr=[<exprs>]
+                                                                                              DataSourceExec: partitions=1, partition_sizes=[<sizes>]
+                                                                            ProjectionExec: expr=[<exprs>]
+                                                                              CoalesceBatchesExec: target_batch_size=8192
+                                                                                CoalesceBatchesExec: target_batch_size=8192
+                                                                                  FilterExec: _6@<id> = 2001
+                                                                                    RepartitionExec: partitioning=RoundRobinBatch(<partitions>), input_partitions=<partitions>
+                                                                                      DataSourceExec: partitions=1, partition_sizes=[<sizes>]
+                                                ProjectionExec: expr=[<exprs>]
+                                                  AggregateExec: mode=FinalPartitioned, gby=[#<col> as #<col>, #<col> as #<col>, #<col> as #<col>, #<col> as #<col>, #<col> as #<col>, #<col> as #<col>, #<col> as #<col>, #<col> as #<col>], aggr=[sum(store_sales.#<col> - store_sales.#<col> - store_sales.#<col> + store_sales.#<col> / Int32(2))], ordering_mode=PartiallySorted([7])
+                                                    CoalesceBatchesExec: target_batch_size=8192
+                                                      RepartitionExec: partitioning=Hash([#<col>, #<col>, #<col>, #<col>, #<col>, #<col>, #<col>, #<col>], <partitions>), input_partitions=<partitions>
+                                                        CoalesceBatchesExec: target_batch_size=8192
+                                                          AggregateExec: mode=Partial, gby=[#<col> as #<col>, #<col> as #<col>, #<col> as #<col>, #<col> as #<col>, #<col> as #<col>, #<col> as #<col>, #<col> as #<col>, #<col> as #<col>], aggr=[sum(store_sales.#<col> - store_sales.#<col> - store_sales.#<col> + store_sales.#<col> / Int32(2))], ordering_mode=PartiallySorted([7])
+                                                            CoalesceBatchesExec: target_batch_size=8192
+                                                              CoalesceBatchesExec: target_batch_size=8192
+                                                                HashJoinExec: mode=CollectLeft, join_type=Inner, on=[(#<col>, CAST(date_dim.#<col> AS Float64)@<id>)], projection=[#<col>, #<col>, #<col>, #<col>, #<col>, #<col>, #<col>, #<col>, #<col>, #<col>, #<col>, #<col>]
+                                                                  CoalescePartitionsExec
+                                                                    ProjectionExec: expr=[<exprs>]
+                                                                      CoalesceBatchesExec: target_batch_size=8192
+                                                                        CoalesceBatchesExec: target_batch_size=8192
+                                                                          HashJoinExec: mode=Partitioned, join_type=Inner, on=[(#<col>, CAST(customer.#<col> AS Float64)@<id>)], projection=[#<col>, #<col>, #<col>, #<col>, #<col>, #<col>, #<col>, #<col>, #<col>, #<col>, #<col>, #<col>]
+                                                                            CoalesceBatchesExec: target_batch_size=8192
+                                                                              RepartitionExec: partitioning=Hash([#<col>], <partitions>), input_partitions=<partitions>
+                                                                                RepartitionExec: partitioning=RoundRobinBatch(<partitions>), input_partitions=<partitions>
+                                                                                  CoalesceBatchesExec: target_batch_size=8192
+                                                                                    ProjectionExec: expr=[<exprs>]
+                                                                                      DataSourceExec: partitions=1, partition_sizes=[<sizes>]
+                                                                            CoalesceBatchesExec: target_batch_size=8192
+                                                                              RepartitionExec: partitioning=Hash([CAST(customer.#<col> AS Float64)@<id>], <partitions>), input_partitions=<partitions>
+                                                                                CoalesceBatchesExec: target_batch_size=8192
+                                                                                  ProjectionExec: expr=[<exprs>]
+                                                                                    DataSourceExec: partitions=1, partition_sizes=[<sizes>]
+                                                                  ProjectionExec: expr=[<exprs>]
+                                                                    CoalesceBatchesExec: target_batch_size=8192
+                                                                      CoalesceBatchesExec: target_batch_size=8192
+                                                                        FilterExec: _6@<id> = 2002
+                                                                          RepartitionExec: partitioning=RoundRobinBatch(<partitions>), input_partitions=<partitions>
+                                                                            DataSourceExec: partitions=1, partition_sizes=[<sizes>]
+                                ProjectionExec: expr=[<exprs>]
+                                  AggregateExec: mode=FinalPartitioned, gby=[#<col> as #<col>, #<col> as #<col>, #<col> as #<col>, #<col> as #<col>, #<col> as #<col>, #<col> as #<col>, #<col> as #<col>, #<col> as #<col>], aggr=[sum(catalog_sales.#<col> - catalog_sales.#<col> - catalog_sales.#<col> + catalog_sales.#<col> / Int32(2))], ordering_mode=PartiallySorted([7])
+                                    CoalesceBatchesExec: target_batch_size=8192
+                                      RepartitionExec: partitioning=Hash([#<col>, #<col>, #<col>, #<col>, #<col>, #<col>, #<col>, #<col>], <partitions>), input_partitions=<partitions>
+                                        CoalesceBatchesExec: target_batch_size=8192
+                                          AggregateExec: mode=Partial, gby=[#<col> as #<col>, #<col> as #<col>, #<col> as #<col>, #<col> as #<col>, #<col> as #<col>, #<col> as #<col>, #<col> as #<col>, #<col> as #<col>], aggr=[sum(catalog_sales.#<col> - catalog_sales.#<col> - catalog_sales.#<col> + catalog_sales.#<col> / Int32(2))], ordering_mode=PartiallySorted([7])
+                                            CoalesceBatchesExec: target_batch_size=8192
+                                              CoalesceBatchesExec: target_batch_size=8192
+                                                HashJoinExec: mode=CollectLeft, join_type=Inner, on=[(#<col>, CAST(date_dim.#<col> AS Float64)@<id>)], projection=[#<col>, #<col>, #<col>, #<col>, #<col>, #<col>, #<col>, #<col>, #<col>, #<col>, #<col>, #<col>]
+                                                  CoalescePartitionsExec
+                                                    ProjectionExec: expr=[<exprs>]
+                                                      CoalesceBatchesExec: target_batch_size=8192
+                                                        CoalesceBatchesExec: target_batch_size=8192
+                                                          HashJoinExec: mode=Partitioned, join_type=Inner, on=[(#<col>, CAST(customer.#<col> AS Float64)@<id>)], projection=[#<col>, #<col>, #<col>, #<col>, #<col>, #<col>, #<col>, #<col>, #<col>, #<col>, #<col>, #<col>]
+                                                            CoalesceBatchesExec: target_batch_size=8192
+                                                              RepartitionExec: partitioning=Hash([#<col>], <partitions>), input_partitions=<partitions>
+                                                                RepartitionExec: partitioning=RoundRobinBatch(<partitions>), input_partitions=<partitions>
+                                                                  CoalesceBatchesExec: target_batch_size=8192
+                                                                    ProjectionExec: expr=[<exprs>]
+                                                                      DataSourceExec: partitions=1, partition_sizes=[<sizes>]
+                                                            CoalesceBatchesExec: target_batch_size=8192
+                                                              RepartitionExec: partitioning=Hash([CAST(customer.#<col> AS Float64)@<id>], <partitions>), input_partitions=<partitions>
+                                                                CoalesceBatchesExec: target_batch_size=8192
+                                                                  ProjectionExec: expr=[<exprs>]
+                                                                    DataSourceExec: partitions=1, partition_sizes=[<sizes>]
+                                                  ProjectionExec: expr=[<exprs>]
+                                                    CoalesceBatchesExec: target_batch_size=8192
+                                                      CoalesceBatchesExec: target_batch_size=8192
+                                                        FilterExec: _6@<id> = 2002
+                                                          RepartitionExec: partitioning=RoundRobinBatch(<partitions>), input_partitions=<partitions>
+                                                            DataSourceExec: partitions=1, partition_sizes=[<sizes>]
+                ProjectionExec: expr=[<exprs>]
+                  AggregateExec: mode=FinalPartitioned, gby=[#<col> as #<col>, #<col> as #<col>, #<col> as #<col>, #<col> as #<col>, #<col> as #<col>, #<col> as #<col>, #<col> as #<col>, #<col> as #<col>], aggr=[sum(web_sales.#<col> - web_sales.#<col> - web_sales.#<col> + web_sales.#<col> / Int32(2))], ordering_mode=PartiallySorted([7])
+                    CoalesceBatchesExec: target_batch_size=8192
+                      RepartitionExec: partitioning=Hash([#<col>, #<col>, #<col>, #<col>, #<col>, #<col>, #<col>, #<col>], <partitions>), input_partitions=<partitions>
+                        CoalesceBatchesExec: target_batch_size=8192
+                          AggregateExec: mode=Partial, gby=[#<col> as #<col>, #<col> as #<col>, #<col> as #<col>, #<col> as #<col>, #<col> as #<col>, #<col> as #<col>, #<col> as #<col>, #<col> as #<col>], aggr=[sum(web_sales.#<col> - web_sales.#<col> - web_sales.#<col> + web_sales.#<col> / Int32(2))], ordering_mode=PartiallySorted([7])
+                            CoalesceBatchesExec: target_batch_size=8192
+                              CoalesceBatchesExec: target_batch_size=8192
+                                HashJoinExec: mode=CollectLeft, join_type=Inner, on=[(#<col>, CAST(date_dim.#<col> AS Float64)@<id>)], projection=[#<col>, #<col>, #<col>, #<col>, #<col>, #<col>, #<col>, #<col>, #<col>, #<col>, #<col>, #<col>]
+                                  ProjectionExec: expr=[<exprs>]
+                                    CoalesceBatchesExec: target_batch_size=8192
+                                      CoalesceBatchesExec: target_batch_size=8192
+                                        HashJoinExec: mode=CollectLeft, join_type=Inner, on=[(#<col>, CAST(customer.#<col> AS Float64)@<id>)], projection=[#<col>, #<col>, #<col>, #<col>, #<col>, #<col>, #<col>, #<col>, #<col>, #<col>, #<col>, #<col>]
+                                          ProjectionExec: expr=[<exprs>]
+                                            DataSourceExec: partitions=1, partition_sizes=[<sizes>]
+                                          ProjectionExec: expr=[<exprs>]
+                                            DataSourceExec: partitions=1, partition_sizes=[<sizes>]
+                                  ProjectionExec: expr=[<exprs>]
+                                    CoalesceBatchesExec: target_batch_size=8192
+                                      CoalesceBatchesExec: target_batch_size=8192
+                                        FilterExec: _6@<id> = 2002
+                                          RepartitionExec: partitioning=RoundRobinBatch(<partitions>), input_partitions=<partitions>
+                                            DataSourceExec: partitions=1, partition_sizes=[<sizes>]

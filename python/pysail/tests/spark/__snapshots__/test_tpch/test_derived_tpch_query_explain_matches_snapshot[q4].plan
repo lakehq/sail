@@ -1,0 +1,25 @@
+== Physical Plan ==
+ProjectionExec: expr=[<exprs>]
+  ProjectionExec: expr=[<exprs>]
+    SortExec: [<sort_exprs>]
+      SortExec: expr=[<exprs>]
+        ProjectionExec: expr=[<exprs>]
+          AggregateExec: mode=FinalPartitioned, gby=[#<col> as #<col>], aggr=[count(Int64(1))]
+            CoalesceBatchesExec: target_batch_size=8192
+              RepartitionExec: partitioning=Hash([#<col>], <partitions>), input_partitions=<partitions>
+                CoalesceBatchesExec: target_batch_size=8192
+                  AggregateExec: mode=Partial, gby=[#<col> as #<col>], aggr=[count(Int64(1))]
+                    CoalesceBatchesExec: target_batch_size=8192
+                      CoalesceBatchesExec: target_batch_size=8192
+                        HashJoinExec: mode=CollectLeft, join_type=RightSemi, on=[(#<col>, #<col>)], projection=[#<col>]
+                          ProjectionExec: expr=[<exprs>]
+                            CoalesceBatchesExec: target_batch_size=8192
+                              CoalesceBatchesExec: target_batch_size=8192
+                                FilterExec: _12@<id> > _11@<id>, projection=[_0@<id>]
+                                  DataSourceExec: partitions=1, partition_sizes=[<sizes>]
+                          RepartitionExec: partitioning=RoundRobinBatch(<partitions>), input_partitions=<partitions>
+                            ProjectionExec: expr=[<exprs>]
+                              CoalesceBatchesExec: target_batch_size=8192
+                                CoalesceBatchesExec: target_batch_size=8192
+                                  FilterExec: _4@<id> >= 1995-04-01 AND _4@<id> < 1995-07-01, projection=[_0@<id>, _5@<id>]
+                                    DataSourceExec: partitions=1, partition_sizes=[<sizes>]

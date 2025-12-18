@@ -1,0 +1,20 @@
+== Physical Plan ==
+ProjectionExec: expr=[<exprs>]
+  ProjectionExec: expr=[<exprs>]
+    AggregateExec: mode=Final, gby=[], aggr=[sum(lineitem.#<col> * Int32(1) - lineitem.#<col>)]
+      CoalescePartitionsExec
+        AggregateExec: mode=Partial, gby=[], aggr=[sum(lineitem.#<col> * Int32(1) - lineitem.#<col>)]
+          CoalesceBatchesExec: target_batch_size=8192
+            CoalesceBatchesExec: target_batch_size=8192
+              HashJoinExec: mode=CollectLeft, join_type=Inner, on=[(#<col>, #<col>)], filter=#<col> = Brand#<col> AND #<col> IN (SET) ([SM CASE, SM BOX, SM PACK, SM PKG]) AND #<col> >= Some(800),4,2 AND #<col> <= Some(1800),4,2 AND #<col> <= 5 OR #<col> = Brand#<col> AND #<col> IN (SET) ([MED BAG, MED BOX, MED PKG, MED PACK]) AND #<col> >= Some(2000),4,2 AND #<col> <= Some(3000),4,2 AND #<col> <= 10 OR #<col> = Brand#<col> AND #<col> IN (SET) ([LG CASE, LG BOX, LG PACK, LG PKG]) AND #<col> >= Some(3000),4,2 AND #<col> <= Some(4000),4,2 AND #<col> <= 15, projection=[#<col>, #<col>]
+                ProjectionExec: expr=[<exprs>]
+                  CoalesceBatchesExec: target_batch_size=8192
+                    CoalesceBatchesExec: target_batch_size=8192
+                      FilterExec: (_3@<id> = Brand#<col> AND _6@<id> IN (SET) ([SM CASE, SM BOX, SM PACK, SM PKG]) AND _5@<id> <= 5 OR _3@<id> = Brand#<col> AND _6@<id> IN (SET) ([MED BAG, MED BOX, MED PKG, MED PACK]) AND _5@<id> <= 10 OR _3@<id> = Brand#<col> AND _6@<id> IN (SET) ([LG CASE, LG BOX, LG PACK, LG PKG]) AND _5@<id> <= 15) AND _5@<id> >= 1
+                        DataSourceExec: partitions=1, partition_sizes=[<sizes>]
+                RepartitionExec: partitioning=RoundRobinBatch(<partitions>), input_partitions=<partitions>
+                  ProjectionExec: expr=[<exprs>]
+                    CoalesceBatchesExec: target_batch_size=8192
+                      CoalesceBatchesExec: target_batch_size=8192
+                        FilterExec: (_4@<id> >= Some(800),4,2 AND _4@<id> <= Some(1800),4,2 OR _4@<id> >= Some(2000),4,2 AND _4@<id> <= Some(3000),4,2 OR _4@<id> >= Some(3000),4,2 AND _4@<id> <= Some(4000),4,2) AND (_14@<id> = AIR OR _14@<id> = AIR REG) AND _13@<id> = DELIVER IN PERSON, projection=[_1@<id>, _4@<id>, _5@<id>, _6@<id>]
+                          DataSourceExec: partitions=1, partition_sizes=[<sizes>]

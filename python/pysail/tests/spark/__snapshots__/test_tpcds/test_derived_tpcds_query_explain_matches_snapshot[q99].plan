@@ -1,0 +1,41 @@
+== Physical Plan ==
+ProjectionExec: expr=[<exprs>]
+  ProjectionExec: expr=[<exprs>]
+    SortExec: [<sort_exprs>], fetch=100
+      SortExec: expr=[<exprs>]
+        ProjectionExec: expr=[<exprs>]
+          AggregateExec: mode=FinalPartitioned, gby=[substr(warehouse.#<col>,Int32(1),Int32(20))@<id> as substr(warehouse.#<col>,Int32(1),Int32(20)), #<col> as #<col>, #<col> as #<col>], aggr=[sum(CASE WHEN catalog_sales.#<col> - catalog_sales.#<col> <= Int32(30) THEN Int32(1) WHEN Boolean(true) THEN Int32(0) END), sum(CASE WHEN catalog_sales.#<col> - catalog_sales.#<col> > Int32(30) AND catalog_sales.#<col> - catalog_sales.#<col> <= Int32(60) THEN Int32(1) WHEN Boolean(true) THEN Int32(0) END), sum(CASE WHEN catalog_sales.#<col> - catalog_sales.#<col> > Int32(60) AND catalog_sales.#<col> - catalog_sales.#<col> <= Int32(90) THEN Int32(1) WHEN Boolean(true) THEN Int32(0) END), sum(CASE WHEN catalog_sales.#<col> - catalog_sales.#<col> > Int32(90) AND catalog_sales.#<col> - catalog_sales.#<col> <= Int32(120) THEN Int32(1) WHEN Boolean(true) THEN Int32(0) END), sum(CASE WHEN catalog_sales.#<col> - catalog_sales.#<col> > Int32(120) THEN Int32(1) WHEN Boolean(true) THEN Int32(0) END)]
+            CoalesceBatchesExec: target_batch_size=8192
+              RepartitionExec: partitioning=Hash([substr(warehouse.#<col>,Int32(1),Int32(20))@<id>, #<col>, #<col>], <partitions>), input_partitions=<partitions>
+                CoalesceBatchesExec: target_batch_size=8192
+                  AggregateExec: mode=Partial, gby=[CAST(substr(#<col>, 1, 20) AS Utf8) as substr(warehouse.#<col>,Int32(1),Int32(20)), #<col> as #<col>, #<col> as #<col>], aggr=[sum(CASE WHEN catalog_sales.#<col> - catalog_sales.#<col> <= Int32(30) THEN Int32(1) WHEN Boolean(true) THEN Int32(0) END), sum(CASE WHEN catalog_sales.#<col> - catalog_sales.#<col> > Int32(30) AND catalog_sales.#<col> - catalog_sales.#<col> <= Int32(60) THEN Int32(1) WHEN Boolean(true) THEN Int32(0) END), sum(CASE WHEN catalog_sales.#<col> - catalog_sales.#<col> > Int32(60) AND catalog_sales.#<col> - catalog_sales.#<col> <= Int32(90) THEN Int32(1) WHEN Boolean(true) THEN Int32(0) END), sum(CASE WHEN catalog_sales.#<col> - catalog_sales.#<col> > Int32(90) AND catalog_sales.#<col> - catalog_sales.#<col> <= Int32(120) THEN Int32(1) WHEN Boolean(true) THEN Int32(0) END), sum(CASE WHEN catalog_sales.#<col> - catalog_sales.#<col> > Int32(120) THEN Int32(1) WHEN Boolean(true) THEN Int32(0) END)]
+                    ProjectionExec: expr=[<exprs>]
+                      CoalesceBatchesExec: target_batch_size=8192
+                        CoalesceBatchesExec: target_batch_size=8192
+                          HashJoinExec: mode=CollectLeft, join_type=Inner, on=[(#<col>, CAST(date_dim.#<col> AS Float64)@<id>)], projection=[#<col>, #<col>, #<col>, #<col>, #<col>]
+                            CoalesceBatchesExec: target_batch_size=8192
+                              CoalesceBatchesExec: target_batch_size=8192
+                                HashJoinExec: mode=CollectLeft, join_type=Inner, on=[(#<col>, CAST(call_center.#<col> AS Float64)@<id>)], projection=[#<col>, #<col>, #<col>, #<col>, #<col>]
+                                  CoalesceBatchesExec: target_batch_size=8192
+                                    CoalesceBatchesExec: target_batch_size=8192
+                                      HashJoinExec: mode=CollectLeft, join_type=Inner, on=[(#<col>, CAST(ship_mode.#<col> AS Float64)@<id>)], projection=[#<col>, #<col>, #<col>, #<col>, #<col>]
+                                        CoalescePartitionsExec
+                                          ProjectionExec: expr=[<exprs>]
+                                            CoalesceBatchesExec: target_batch_size=8192
+                                              CoalesceBatchesExec: target_batch_size=8192
+                                                HashJoinExec: mode=CollectLeft, join_type=Inner, on=[(CAST(warehouse.#<col> AS Float64)@<id>, #<col>)], projection=[#<col>, #<col>, #<col>, #<col>, #<col>]
+                                                  ProjectionExec: expr=[<exprs>]
+                                                    DataSourceExec: partitions=1, partition_sizes=[<sizes>]
+                                                  RepartitionExec: partitioning=RoundRobinBatch(<partitions>), input_partitions=<partitions>
+                                                    ProjectionExec: expr=[<exprs>]
+                                                      DataSourceExec: partitions=1, partition_sizes=[<sizes>]
+                                        ProjectionExec: expr=[<exprs>]
+                                          DataSourceExec: partitions=1, partition_sizes=[<sizes>]
+                                  ProjectionExec: expr=[<exprs>]
+                                    DataSourceExec: partitions=1, partition_sizes=[<sizes>]
+                            ProjectionExec: expr=[<exprs>]
+                              CoalesceBatchesExec: target_batch_size=8192
+                                CoalesceBatchesExec: target_batch_size=8192
+                                  FilterExec: _3@<id> >= 1188 AND _3@<id> <= 1199, projection=[_0@<id>]
+                                    RepartitionExec: partitioning=RoundRobinBatch(<partitions>), input_partitions=<partitions>
+                                      DataSourceExec: partitions=1, partition_sizes=[<sizes>]

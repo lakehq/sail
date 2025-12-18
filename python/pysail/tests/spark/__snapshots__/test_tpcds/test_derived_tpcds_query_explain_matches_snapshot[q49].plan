@@ -1,0 +1,140 @@
+== Physical Plan ==
+ProjectionExec: expr=[<exprs>]
+  SortExec: [<sort_exprs>], fetch=100
+    SortExec: expr=[<exprs>]
+      ProjectionExec: expr=[<exprs>]
+        AggregateExec: mode=FinalPartitioned, gby=[#<col> as #<col>, #<col> as #<col>, #<col> as #<col>, #<col> as #<col>, #<col> as #<col>], aggr=[]
+          CoalesceBatchesExec: target_batch_size=8192
+            RepartitionExec: partitioning=Hash([#<col>, #<col>, #<col>, #<col>, #<col>], <partitions>), input_partitions=<partitions>
+              CoalesceBatchesExec: target_batch_size=8192
+                AggregateExec: mode=Partial, gby=[#<col> as #<col>, #<col> as #<col>, #<col> as #<col>, #<col> as #<col>, #<col> as #<col>], aggr=[], ordering_mode=PartiallySorted([0, 4])
+                  UnionExec
+                    ProjectionExec: expr=[<exprs>]
+                      ProjectionExec: expr=[<exprs>]
+                        CoalesceBatchesExec: target_batch_size=8192
+                          CoalesceBatchesExec: target_batch_size=8192
+                            FilterExec: rank() ORDER BY [in_web.#<col> ASC NULLS FIRST] RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW@<id> <= 10 OR rank() ORDER BY [in_web.#<col> ASC NULLS FIRST] RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW@<id> <= 10
+                              RepartitionExec: partitioning=RoundRobinBatch(<partitions>), input_partitions=<partitions>
+                                ProjectionExec: expr=[<exprs>]
+                                  BoundedWindowAggExec: wdw=[rank() ORDER BY [in_web.#<col> ASC NULLS FIRST] RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW: Field { "rank() ORDER BY [in_web.#<col> ASC NULLS FIRST] RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW": UInt64 }, frame: RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW], mode=[Sorted]
+                                    SortExec: expr=[<exprs>]
+                                      BoundedWindowAggExec: wdw=[rank() ORDER BY [in_web.#<col> ASC NULLS FIRST] RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW: Field { "rank() ORDER BY [in_web.#<col> ASC NULLS FIRST] RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW": UInt64 }, frame: RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW], mode=[Sorted]
+                                        SortExec: [<sort_exprs>]
+                                          SortExec: expr=[<exprs>]
+                                            ProjectionExec: expr=[<exprs>]
+                                              AggregateExec: mode=FinalPartitioned, gby=[#<col> as #<col>], aggr=[sum(coalesce(wr.#<col>,Int32(0))), sum(coalesce(ws.#<col>,Int32(0))), sum(coalesce(wr.#<col>,Int32(0))), sum(coalesce(ws.#<col>,Int32(0)))]
+                                                CoalesceBatchesExec: target_batch_size=8192
+                                                  RepartitionExec: partitioning=Hash([#<col>], <partitions>), input_partitions=<partitions>
+                                                    CoalesceBatchesExec: target_batch_size=8192
+                                                      AggregateExec: mode=Partial, gby=[#<col> as #<col>], aggr=[sum(coalesce(wr.#<col>,Int32(0))), sum(coalesce(ws.#<col>,Int32(0))), sum(coalesce(wr.#<col>,Int32(0))), sum(coalesce(ws.#<col>,Int32(0)))]
+                                                        CoalesceBatchesExec: target_batch_size=8192
+                                                          CoalesceBatchesExec: target_batch_size=8192
+                                                            HashJoinExec: mode=CollectLeft, join_type=Inner, on=[(#<col>, CAST(date_dim.#<col> AS Float64)@<id>)], projection=[#<col>, #<col>, #<col>, #<col>, #<col>]
+                                                              CoalescePartitionsExec
+                                                                CoalesceBatchesExec: target_batch_size=8192
+                                                                  CoalesceBatchesExec: target_batch_size=8192
+                                                                    FilterExec: #<col> > Some(1000000),7,2
+                                                                      ProjectionExec: expr=[<exprs>]
+                                                                        CoalesceBatchesExec: target_batch_size=8192
+                                                                          CoalesceBatchesExec: target_batch_size=8192
+                                                                            HashJoinExec: mode=CollectLeft, join_type=Right, on=[(#<col>, #<col>), (#<col>, #<col>)], projection=[#<col>, #<col>, #<col>, #<col>, #<col>, #<col>]
+                                                                              ProjectionExec: expr=[<exprs>]
+                                                                                DataSourceExec: partitions=1, partition_sizes=[<sizes>]
+                                                                              RepartitionExec: partitioning=RoundRobinBatch(<partitions>), input_partitions=<partitions>
+                                                                                ProjectionExec: expr=[<exprs>]
+                                                                                  CoalesceBatchesExec: target_batch_size=8192
+                                                                                    CoalesceBatchesExec: target_batch_size=8192
+                                                                                      FilterExec: _33@<id> > Some(100),7,2 AND _29@<id> > Some(0),7,2 AND _18@<id> > 0, projection=[_0@<id>, _3@<id>, _17@<id>, _18@<id>, _29@<id>]
+                                                                                        DataSourceExec: partitions=1, partition_sizes=[<sizes>]
+                                                              ProjectionExec: expr=[<exprs>]
+                                                                CoalesceBatchesExec: target_batch_size=8192
+                                                                  CoalesceBatchesExec: target_batch_size=8192
+                                                                    FilterExec: _6@<id> = 2000 AND _8@<id> = 12, projection=[_0@<id>]
+                                                                      RepartitionExec: partitioning=RoundRobinBatch(<partitions>), input_partitions=<partitions>
+                                                                        DataSourceExec: partitions=1, partition_sizes=[<sizes>]
+                    ProjectionExec: expr=[<exprs>]
+                      ProjectionExec: expr=[<exprs>]
+                        CoalesceBatchesExec: target_batch_size=8192
+                          CoalesceBatchesExec: target_batch_size=8192
+                            FilterExec: rank() ORDER BY [in_cat.#<col> ASC NULLS FIRST] RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW@<id> <= 10 OR rank() ORDER BY [in_cat.#<col> ASC NULLS FIRST] RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW@<id> <= 10
+                              RepartitionExec: partitioning=RoundRobinBatch(<partitions>), input_partitions=<partitions>
+                                ProjectionExec: expr=[<exprs>]
+                                  BoundedWindowAggExec: wdw=[rank() ORDER BY [in_cat.#<col> ASC NULLS FIRST] RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW: Field { "rank() ORDER BY [in_cat.#<col> ASC NULLS FIRST] RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW": UInt64 }, frame: RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW], mode=[Sorted]
+                                    SortExec: expr=[<exprs>]
+                                      BoundedWindowAggExec: wdw=[rank() ORDER BY [in_cat.#<col> ASC NULLS FIRST] RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW: Field { "rank() ORDER BY [in_cat.#<col> ASC NULLS FIRST] RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW": UInt64 }, frame: RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW], mode=[Sorted]
+                                        SortExec: [<sort_exprs>]
+                                          SortExec: expr=[<exprs>]
+                                            ProjectionExec: expr=[<exprs>]
+                                              AggregateExec: mode=FinalPartitioned, gby=[#<col> as #<col>], aggr=[sum(coalesce(cr.#<col>,Int32(0))), sum(coalesce(cs.#<col>,Int32(0))), sum(coalesce(cr.#<col>,Int32(0))), sum(coalesce(cs.#<col>,Int32(0)))]
+                                                CoalesceBatchesExec: target_batch_size=8192
+                                                  RepartitionExec: partitioning=Hash([#<col>], <partitions>), input_partitions=<partitions>
+                                                    CoalesceBatchesExec: target_batch_size=8192
+                                                      AggregateExec: mode=Partial, gby=[#<col> as #<col>], aggr=[sum(coalesce(cr.#<col>,Int32(0))), sum(coalesce(cs.#<col>,Int32(0))), sum(coalesce(cr.#<col>,Int32(0))), sum(coalesce(cs.#<col>,Int32(0)))]
+                                                        CoalesceBatchesExec: target_batch_size=8192
+                                                          CoalesceBatchesExec: target_batch_size=8192
+                                                            HashJoinExec: mode=CollectLeft, join_type=Inner, on=[(#<col>, CAST(date_dim.#<col> AS Float64)@<id>)], projection=[#<col>, #<col>, #<col>, #<col>, #<col>]
+                                                              CoalescePartitionsExec
+                                                                CoalesceBatchesExec: target_batch_size=8192
+                                                                  CoalesceBatchesExec: target_batch_size=8192
+                                                                    FilterExec: #<col> > Some(1000000),7,2
+                                                                      ProjectionExec: expr=[<exprs>]
+                                                                        CoalesceBatchesExec: target_batch_size=8192
+                                                                          CoalesceBatchesExec: target_batch_size=8192
+                                                                            HashJoinExec: mode=CollectLeft, join_type=Right, on=[(#<col>, #<col>), (#<col>, #<col>)], projection=[#<col>, #<col>, #<col>, #<col>, #<col>, #<col>]
+                                                                              ProjectionExec: expr=[<exprs>]
+                                                                                DataSourceExec: partitions=1, partition_sizes=[<sizes>]
+                                                                              ProjectionExec: expr=[<exprs>]
+                                                                                CoalesceBatchesExec: target_batch_size=8192
+                                                                                  CoalesceBatchesExec: target_batch_size=8192
+                                                                                    FilterExec: _33@<id> > Some(100),7,2 AND _29@<id> > Some(0),7,2 AND _18@<id> > 0, projection=[_0@<id>, _15@<id>, _17@<id>, _18@<id>, _29@<id>]
+                                                                                      RepartitionExec: partitioning=RoundRobinBatch(<partitions>), input_partitions=<partitions>
+                                                                                        DataSourceExec: partitions=1, partition_sizes=[<sizes>]
+                                                              ProjectionExec: expr=[<exprs>]
+                                                                CoalesceBatchesExec: target_batch_size=8192
+                                                                  CoalesceBatchesExec: target_batch_size=8192
+                                                                    FilterExec: _6@<id> = 2000 AND _8@<id> = 12, projection=[_0@<id>]
+                                                                      RepartitionExec: partitioning=RoundRobinBatch(<partitions>), input_partitions=<partitions>
+                                                                        DataSourceExec: partitions=1, partition_sizes=[<sizes>]
+                    ProjectionExec: expr=[<exprs>]
+                      ProjectionExec: expr=[<exprs>]
+                        CoalesceBatchesExec: target_batch_size=8192
+                          CoalesceBatchesExec: target_batch_size=8192
+                            FilterExec: rank() ORDER BY [in_store.#<col> ASC NULLS FIRST] RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW@<id> <= 10 OR rank() ORDER BY [in_store.#<col> ASC NULLS FIRST] RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW@<id> <= 10
+                              RepartitionExec: partitioning=RoundRobinBatch(<partitions>), input_partitions=<partitions>
+                                ProjectionExec: expr=[<exprs>]
+                                  BoundedWindowAggExec: wdw=[rank() ORDER BY [in_store.#<col> ASC NULLS FIRST] RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW: Field { "rank() ORDER BY [in_store.#<col> ASC NULLS FIRST] RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW": UInt64 }, frame: RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW], mode=[Sorted]
+                                    SortExec: expr=[<exprs>]
+                                      BoundedWindowAggExec: wdw=[rank() ORDER BY [in_store.#<col> ASC NULLS FIRST] RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW: Field { "rank() ORDER BY [in_store.#<col> ASC NULLS FIRST] RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW": UInt64 }, frame: RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW], mode=[Sorted]
+                                        SortExec: [<sort_exprs>]
+                                          SortExec: expr=[<exprs>]
+                                            ProjectionExec: expr=[<exprs>]
+                                              AggregateExec: mode=FinalPartitioned, gby=[#<col> as #<col>], aggr=[sum(coalesce(sr.#<col>,Int32(0))), sum(coalesce(sts.#<col>,Int32(0))), sum(coalesce(sr.#<col>,Int32(0))), sum(coalesce(sts.#<col>,Int32(0)))]
+                                                CoalesceBatchesExec: target_batch_size=8192
+                                                  RepartitionExec: partitioning=Hash([#<col>], <partitions>), input_partitions=<partitions>
+                                                    CoalesceBatchesExec: target_batch_size=8192
+                                                      AggregateExec: mode=Partial, gby=[#<col> as #<col>], aggr=[sum(coalesce(sr.#<col>,Int32(0))), sum(coalesce(sts.#<col>,Int32(0))), sum(coalesce(sr.#<col>,Int32(0))), sum(coalesce(sts.#<col>,Int32(0)))]
+                                                        CoalesceBatchesExec: target_batch_size=8192
+                                                          CoalesceBatchesExec: target_batch_size=8192
+                                                            HashJoinExec: mode=CollectLeft, join_type=Inner, on=[(#<col>, CAST(date_dim.#<col> AS Float64)@<id>)], projection=[#<col>, #<col>, #<col>, #<col>, #<col>]
+                                                              CoalescePartitionsExec
+                                                                CoalesceBatchesExec: target_batch_size=8192
+                                                                  CoalesceBatchesExec: target_batch_size=8192
+                                                                    FilterExec: #<col> > Some(1000000),7,2
+                                                                      ProjectionExec: expr=[<exprs>]
+                                                                        CoalesceBatchesExec: target_batch_size=8192
+                                                                          CoalesceBatchesExec: target_batch_size=8192
+                                                                            HashJoinExec: mode=CollectLeft, join_type=Right, on=[(#<col>, #<col>), (#<col>, #<col>)], projection=[#<col>, #<col>, #<col>, #<col>, #<col>, #<col>]
+                                                                              ProjectionExec: expr=[<exprs>]
+                                                                                DataSourceExec: partitions=1, partition_sizes=[<sizes>]
+                                                                              ProjectionExec: expr=[<exprs>]
+                                                                                CoalesceBatchesExec: target_batch_size=8192
+                                                                                  CoalesceBatchesExec: target_batch_size=8192
+                                                                                    FilterExec: _22@<id> > Some(100),6,2 AND _20@<id> > Some(0),7,2 AND _10@<id> > 0, projection=[_0@<id>, _2@<id>, _9@<id>, _10@<id>, _20@<id>]
+                                                                                      RepartitionExec: partitioning=RoundRobinBatch(<partitions>), input_partitions=<partitions>
+                                                                                        DataSourceExec: partitions=1, partition_sizes=[<sizes>]
+                                                              ProjectionExec: expr=[<exprs>]
+                                                                CoalesceBatchesExec: target_batch_size=8192
+                                                                  CoalesceBatchesExec: target_batch_size=8192
+                                                                    FilterExec: _6@<id> = 2000 AND _8@<id> = 12, projection=[_0@<id>]
+                                                                      RepartitionExec: partitioning=RoundRobinBatch(<partitions>), input_partitions=<partitions>
+                                                                        DataSourceExec: partitions=1, partition_sizes=[<sizes>]

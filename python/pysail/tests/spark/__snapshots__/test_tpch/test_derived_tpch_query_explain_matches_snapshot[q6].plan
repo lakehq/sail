@@ -1,0 +1,12 @@
+== Physical Plan ==
+ProjectionExec: expr=[<exprs>]
+  ProjectionExec: expr=[<exprs>]
+    AggregateExec: mode=Final, gby=[], aggr=[sum(lineitem.#<col> * lineitem.#<col>)]
+      CoalescePartitionsExec
+        AggregateExec: mode=Partial, gby=[], aggr=[sum(lineitem.#<col> * lineitem.#<col>)]
+          RepartitionExec: partitioning=RoundRobinBatch(<partitions>), input_partitions=<partitions>
+            ProjectionExec: expr=[<exprs>]
+              CoalesceBatchesExec: target_batch_size=8192
+                CoalesceBatchesExec: target_batch_size=8192
+                  FilterExec: _10@<id> >= 1994-01-01 AND _10@<id> < 1995-01-01 AND _6@<id> >= Some(3),2,2 AND _6@<id> <= Some(5),2,2 AND _4@<id> < Some(2400),4,2, projection=[_5@<id>, _6@<id>]
+                    DataSourceExec: partitions=1, partition_sizes=[<sizes>]

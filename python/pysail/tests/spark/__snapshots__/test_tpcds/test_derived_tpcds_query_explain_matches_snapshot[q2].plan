@@ -1,0 +1,73 @@
+== Physical Plan ==
+ProjectionExec: expr=[<exprs>]
+  SortExec: [<sort_exprs>]
+    SortExec: expr=[<exprs>]
+      ProjectionExec: expr=[<exprs>]
+        CoalesceBatchesExec: target_batch_size=8192
+          CoalesceBatchesExec: target_batch_size=8192
+            HashJoinExec: mode=Partitioned, join_type=Inner, on=[(#<col>, z.#<col> - Int64(53)@<id>)], projection=[#<col>, #<col>, #<col>, #<col>, #<col>, #<col>, #<col>, #<col>, #<col>, #<col>, #<col>, #<col>, #<col>, #<col>, #<col>]
+              ProjectionExec: expr=[<exprs>]
+                CoalesceBatchesExec: target_batch_size=8192
+                  CoalesceBatchesExec: target_batch_size=8192
+                    HashJoinExec: mode=CollectLeft, join_type=Inner, on=[(#<col>, #<col>)], projection=[#<col>, #<col>, #<col>, #<col>, #<col>, #<col>, #<col>, #<col>]
+                      CoalescePartitionsExec
+                        ProjectionExec: expr=[<exprs>]
+                          CoalesceBatchesExec: target_batch_size=8192
+                            CoalesceBatchesExec: target_batch_size=8192
+                              FilterExec: _6@<id> = 2000, projection=[_4@<id>]
+                                RepartitionExec: partitioning=RoundRobinBatch(<partitions>), input_partitions=<partitions>
+                                  DataSourceExec: partitions=1, partition_sizes=[<sizes>]
+                      ProjectionExec: expr=[<exprs>]
+                        AggregateExec: mode=FinalPartitioned, gby=[#<col> as #<col>], aggr=[sum(CASE WHEN date_dim.#<col> = Utf8("Sunday") THEN wscs.#<col> WHEN Boolean(true) THEN NULL END), sum(CASE WHEN date_dim.#<col> = Utf8("Monday") THEN wscs.#<col> WHEN Boolean(true) THEN NULL END), sum(CASE WHEN date_dim.#<col> = Utf8("Tuesday") THEN wscs.#<col> WHEN Boolean(true) THEN NULL END), sum(CASE WHEN date_dim.#<col> = Utf8("Wednesday") THEN wscs.#<col> WHEN Boolean(true) THEN NULL END), sum(CASE WHEN date_dim.#<col> = Utf8("Thursday") THEN wscs.#<col> WHEN Boolean(true) THEN NULL END), sum(CASE WHEN date_dim.#<col> = Utf8("Friday") THEN wscs.#<col> WHEN Boolean(true) THEN NULL END), sum(CASE WHEN date_dim.#<col> = Utf8("Saturday") THEN wscs.#<col> WHEN Boolean(true) THEN NULL END)]
+                          CoalesceBatchesExec: target_batch_size=8192
+                            RepartitionExec: partitioning=Hash([#<col>], <partitions>), input_partitions=<partitions>
+                              CoalesceBatchesExec: target_batch_size=8192
+                                AggregateExec: mode=Partial, gby=[#<col> as #<col>], aggr=[sum(CASE WHEN date_dim.#<col> = Utf8("Sunday") THEN wscs.#<col> WHEN Boolean(true) THEN NULL END), sum(CASE WHEN date_dim.#<col> = Utf8("Monday") THEN wscs.#<col> WHEN Boolean(true) THEN NULL END), sum(CASE WHEN date_dim.#<col> = Utf8("Tuesday") THEN wscs.#<col> WHEN Boolean(true) THEN NULL END), sum(CASE WHEN date_dim.#<col> = Utf8("Wednesday") THEN wscs.#<col> WHEN Boolean(true) THEN NULL END), sum(CASE WHEN date_dim.#<col> = Utf8("Thursday") THEN wscs.#<col> WHEN Boolean(true) THEN NULL END), sum(CASE WHEN date_dim.#<col> = Utf8("Friday") THEN wscs.#<col> WHEN Boolean(true) THEN NULL END), sum(CASE WHEN date_dim.#<col> = Utf8("Saturday") THEN wscs.#<col> WHEN Boolean(true) THEN NULL END)]
+                                  CoalesceBatchesExec: target_batch_size=8192
+                                    CoalesceBatchesExec: target_batch_size=8192
+                                      HashJoinExec: mode=CollectLeft, join_type=Inner, on=[(#<col>, CAST(date_dim.#<col> AS Float64)@<id>)], projection=[#<col>, #<col>, #<col>]
+                                        CoalescePartitionsExec
+                                          ProjectionExec: expr=[<exprs>]
+                                            UnionExec
+                                              ProjectionExec: expr=[<exprs>]
+                                                DataSourceExec: partitions=1, partition_sizes=[<sizes>]
+                                              ProjectionExec: expr=[<exprs>]
+                                                DataSourceExec: partitions=1, partition_sizes=[<sizes>]
+                                        ProjectionExec: expr=[<exprs>]
+                                          RepartitionExec: partitioning=RoundRobinBatch(<partitions>), input_partitions=<partitions>
+                                            ProjectionExec: expr=[<exprs>]
+                                              DataSourceExec: partitions=1, partition_sizes=[<sizes>]
+              CoalesceBatchesExec: target_batch_size=8192
+                RepartitionExec: partitioning=Hash([z.#<col> - Int64(53)@<id>], <partitions>), input_partitions=<partitions>
+                  CoalesceBatchesExec: target_batch_size=8192
+                    ProjectionExec: expr=[<exprs>]
+                      CoalesceBatchesExec: target_batch_size=8192
+                        CoalesceBatchesExec: target_batch_size=8192
+                          HashJoinExec: mode=CollectLeft, join_type=Inner, on=[(#<col>, #<col>)], projection=[#<col>, #<col>, #<col>, #<col>, #<col>, #<col>, #<col>, #<col>]
+                            CoalescePartitionsExec
+                              ProjectionExec: expr=[<exprs>]
+                                CoalesceBatchesExec: target_batch_size=8192
+                                  CoalesceBatchesExec: target_batch_size=8192
+                                    FilterExec: _6@<id> = 2001, projection=[_4@<id>]
+                                      RepartitionExec: partitioning=RoundRobinBatch(<partitions>), input_partitions=<partitions>
+                                        DataSourceExec: partitions=1, partition_sizes=[<sizes>]
+                            ProjectionExec: expr=[<exprs>]
+                              AggregateExec: mode=FinalPartitioned, gby=[#<col> as #<col>], aggr=[sum(CASE WHEN date_dim.#<col> = Utf8("Sunday") THEN wscs.#<col> WHEN Boolean(true) THEN NULL END), sum(CASE WHEN date_dim.#<col> = Utf8("Monday") THEN wscs.#<col> WHEN Boolean(true) THEN NULL END), sum(CASE WHEN date_dim.#<col> = Utf8("Tuesday") THEN wscs.#<col> WHEN Boolean(true) THEN NULL END), sum(CASE WHEN date_dim.#<col> = Utf8("Wednesday") THEN wscs.#<col> WHEN Boolean(true) THEN NULL END), sum(CASE WHEN date_dim.#<col> = Utf8("Thursday") THEN wscs.#<col> WHEN Boolean(true) THEN NULL END), sum(CASE WHEN date_dim.#<col> = Utf8("Friday") THEN wscs.#<col> WHEN Boolean(true) THEN NULL END), sum(CASE WHEN date_dim.#<col> = Utf8("Saturday") THEN wscs.#<col> WHEN Boolean(true) THEN NULL END)]
+                                CoalesceBatchesExec: target_batch_size=8192
+                                  RepartitionExec: partitioning=Hash([#<col>], <partitions>), input_partitions=<partitions>
+                                    CoalesceBatchesExec: target_batch_size=8192
+                                      AggregateExec: mode=Partial, gby=[#<col> as #<col>], aggr=[sum(CASE WHEN date_dim.#<col> = Utf8("Sunday") THEN wscs.#<col> WHEN Boolean(true) THEN NULL END), sum(CASE WHEN date_dim.#<col> = Utf8("Monday") THEN wscs.#<col> WHEN Boolean(true) THEN NULL END), sum(CASE WHEN date_dim.#<col> = Utf8("Tuesday") THEN wscs.#<col> WHEN Boolean(true) THEN NULL END), sum(CASE WHEN date_dim.#<col> = Utf8("Wednesday") THEN wscs.#<col> WHEN Boolean(true) THEN NULL END), sum(CASE WHEN date_dim.#<col> = Utf8("Thursday") THEN wscs.#<col> WHEN Boolean(true) THEN NULL END), sum(CASE WHEN date_dim.#<col> = Utf8("Friday") THEN wscs.#<col> WHEN Boolean(true) THEN NULL END), sum(CASE WHEN date_dim.#<col> = Utf8("Saturday") THEN wscs.#<col> WHEN Boolean(true) THEN NULL END)]
+                                        CoalesceBatchesExec: target_batch_size=8192
+                                          CoalesceBatchesExec: target_batch_size=8192
+                                            HashJoinExec: mode=CollectLeft, join_type=Inner, on=[(#<col>, CAST(date_dim.#<col> AS Float64)@<id>)], projection=[#<col>, #<col>, #<col>]
+                                              CoalescePartitionsExec
+                                                ProjectionExec: expr=[<exprs>]
+                                                  UnionExec
+                                                    ProjectionExec: expr=[<exprs>]
+                                                      DataSourceExec: partitions=1, partition_sizes=[<sizes>]
+                                                    ProjectionExec: expr=[<exprs>]
+                                                      DataSourceExec: partitions=1, partition_sizes=[<sizes>]
+                                              ProjectionExec: expr=[<exprs>]
+                                                RepartitionExec: partitioning=RoundRobinBatch(<partitions>), input_partitions=<partitions>
+                                                  ProjectionExec: expr=[<exprs>]
+                                                    DataSourceExec: partitions=1, partition_sizes=[<sizes>]
