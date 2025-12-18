@@ -75,6 +75,74 @@ pub struct Metrics {
     pub num_log_files_cleaned_up: u64,
 }
 
+#[derive(Default, Debug, PartialEq, Clone)]
+pub struct OperationMetrics {
+    pub num_files: Option<u64>,
+    pub num_output_rows: Option<u64>,
+    pub num_output_bytes: Option<u64>,
+    pub execution_time_ms: Option<u64>,
+    pub num_removed_files: Option<u64>,
+    pub num_added_files: Option<u64>,
+    pub extra: HashMap<String, Value>,
+}
+
+impl OperationMetrics {
+    pub fn into_map(self) -> HashMap<String, Value> {
+        let mut out = self.extra;
+        if let Some(v) = self.num_files {
+            out.insert("numFiles".to_string(), Value::from(v));
+        }
+        if let Some(v) = self.num_output_rows {
+            out.insert("numOutputRows".to_string(), Value::from(v));
+        }
+        if let Some(v) = self.num_output_bytes {
+            out.insert("numOutputBytes".to_string(), Value::from(v));
+        }
+        if let Some(v) = self.execution_time_ms {
+            out.insert("executionTimeMs".to_string(), Value::from(v));
+        }
+        if let Some(v) = self.num_removed_files {
+            out.insert("numRemovedFiles".to_string(), Value::from(v));
+        }
+        if let Some(v) = self.num_added_files {
+            out.insert("numAddedFiles".to_string(), Value::from(v));
+        }
+        out
+    }
+}
+
+impl From<HashMap<String, Value>> for OperationMetrics {
+    fn from(mut value: HashMap<String, Value>) -> Self {
+        fn take_u64(map: &mut HashMap<String, Value>, key: &str) -> Option<u64> {
+            match map.remove(key) {
+                Some(Value::Number(n)) => n.as_u64(),
+                Some(other) => {
+                    map.insert(key.to_string(), other);
+                    None
+                }
+                None => None,
+            }
+        }
+
+        let num_files = take_u64(&mut value, "numFiles");
+        let num_output_rows = take_u64(&mut value, "numOutputRows");
+        let num_output_bytes = take_u64(&mut value, "numOutputBytes");
+        let execution_time_ms = take_u64(&mut value, "executionTimeMs");
+        let num_removed_files = take_u64(&mut value, "numRemovedFiles");
+        let num_added_files = take_u64(&mut value, "numAddedFiles");
+
+        Self {
+            num_files,
+            num_output_rows,
+            num_output_bytes,
+            execution_time_ms,
+            num_removed_files,
+            num_added_files,
+            extra: value,
+        }
+    }
+}
+
 #[derive(Error, Debug)]
 pub enum TransactionError {
     #[error("Tried committing existing table version: {0}")]
@@ -118,9 +186,6 @@ pub enum TransactionError {
 pub struct CommitData {
     pub actions: Vec<Action>,
     pub operation: DeltaOperation,
-    _app_metadata: HashMap<String, Value>,
-    _operation_metrics: HashMap<String, Value>,
-    _app_transactions: Vec<Transaction>,
 }
 
 impl CommitData {
@@ -128,7 +193,7 @@ impl CommitData {
         mut actions: Vec<Action>,
         operation: DeltaOperation,
         mut app_metadata: HashMap<String, Value>,
-        operation_metrics: HashMap<String, Value>,
+        operation_metrics: OperationMetrics,
         app_transactions: Vec<Transaction>,
     ) -> Self {
         let is_blind_append = Self::is_blind_append(&actions, &operation);
@@ -158,7 +223,7 @@ impl CommitData {
             if let Some(Value::Object(obj)) = app_metadata.get("operationMetrics").cloned() {
                 merged_operation_metrics.extend(obj);
             }
-            merged_operation_metrics.extend(operation_metrics.clone());
+            merged_operation_metrics.extend(operation_metrics.into_map());
 
             // Merge base info + app metadata (app metadata wins on conflicts).
             let mut merged_info = commit_info.info.clone();
@@ -177,13 +242,7 @@ impl CommitData {
             actions.push(Action::Txn(txn.clone()));
         }
 
-        Self {
-            actions,
-            operation,
-            _app_metadata: app_metadata,
-            _operation_metrics: operation_metrics,
-            _app_transactions: app_transactions,
-        }
+        Self { actions, operation }
     }
 
     pub fn get_bytes(&self) -> Result<Bytes, TransactionError> {
@@ -288,7 +347,7 @@ pub struct PostCommitHookProperties {
 /// Enable controlling commit behaviour and modifying metadata that is written during a commit.
 pub struct CommitProperties {
     pub(crate) app_metadata: HashMap<String, Value>,
-    pub(crate) operation_metrics: HashMap<String, Value>,
+    pub(crate) operation_metrics: OperationMetrics,
     pub(crate) app_transaction: Vec<Transaction>,
     max_retries: usize,
     create_checkpoint: bool,
@@ -313,9 +372,9 @@ impl CommitProperties {
     /// under the `operationMetrics` key.
     pub(crate) fn with_operation_metrics(
         mut self,
-        operation_metrics: HashMap<String, Value>,
+        operation_metrics: impl Into<OperationMetrics>,
     ) -> Self {
-        self.operation_metrics = operation_metrics;
+        self.operation_metrics = operation_metrics.into();
         self
     }
 }
@@ -381,7 +440,7 @@ impl From<CommitProperties> for CommitBuilder {
 pub struct CommitBuilder {
     actions: Vec<Action>,
     app_metadata: HashMap<String, Value>,
-    operation_metrics: HashMap<String, Value>,
+    operation_metrics: OperationMetrics,
     app_transaction: Vec<Transaction>,
     max_retries: usize,
     post_commit_hook: Option<PostCommitHookProperties>,
@@ -394,7 +453,7 @@ impl Default for CommitBuilder {
         CommitBuilder {
             actions: Vec::new(),
             app_metadata: HashMap::new(),
-            operation_metrics: HashMap::new(),
+            operation_metrics: OperationMetrics::default(),
             app_transaction: Vec::new(),
             max_retries: DEFAULT_RETRIES,
             post_commit_hook: None,
