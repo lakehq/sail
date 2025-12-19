@@ -1,4 +1,5 @@
 use datafusion::prelude::SessionContext;
+use log::warn;
 use sail_common::spec;
 use sail_common_datafusion::extension::SessionExtensionAccessor;
 use sail_common_datafusion::rename::schema::rename_schema;
@@ -155,6 +156,8 @@ pub(crate) async fn handle_analyze_persist(
     _ctx: &SessionContext,
     _request: PersistRequest,
 ) -> SparkResult<PersistResponse> {
+    // TODO: Implement
+    warn!("Persist operation is not yet supported and is a no-op");
     Ok(PersistResponse {})
 }
 
@@ -162,6 +165,8 @@ pub(crate) async fn handle_analyze_unpersist(
     _ctx: &SessionContext,
     _request: UnpersistRequest,
 ) -> SparkResult<UnpersistResponse> {
+    // TODO: Implement
+    warn!("Unpersist operation is not yet supported and is a no-op");
     Ok(UnpersistResponse {})
 }
 
