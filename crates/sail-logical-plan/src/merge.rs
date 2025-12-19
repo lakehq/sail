@@ -15,13 +15,14 @@ use datafusion_expr::logical_plan::LogicalPlanBuilder;
 use datafusion_expr::{
     col, lit, Expr, Join, JoinConstraint, JoinType, LogicalPlan, UserDefinedLogicalNodeCore,
 };
+use educe::Educe;
 use log::trace;
 use sail_common_datafusion::utils::items::ItemTaker;
 
 pub const SOURCE_PRESENT_COLUMN: &str = "__sail_merge_source_row_present";
 pub const TARGET_PRESENT_COLUMN: &str = "__sail_merge_target_row_present";
 
-#[derive(Clone, Debug, PartialEq)]
+#[derive(Clone, Debug, Eq, PartialEq, Hash)]
 pub struct MergeIntoOptions {
     pub target_alias: Option<String>,
     pub source_alias: Option<String>,
@@ -51,38 +52,38 @@ pub struct MergeTargetInfo {
     pub options: Vec<Vec<(String, String)>>,
 }
 
-#[derive(Clone, Debug, PartialEq)]
+#[derive(Clone, Debug, Eq, PartialEq, Hash)]
 pub struct MergeMatchedClause {
     pub condition: Option<Expr>,
     pub action: MergeMatchedAction,
 }
 
-#[derive(Clone, Debug, PartialEq)]
+#[derive(Clone, Debug, Eq, PartialEq, Hash)]
 pub enum MergeMatchedAction {
     Delete,
     UpdateAll,
     UpdateSet(Vec<MergeAssignment>),
 }
 
-#[derive(Clone, Debug, PartialEq)]
+#[derive(Clone, Debug, Eq, PartialEq, Hash)]
 pub struct MergeNotMatchedBySourceClause {
     pub condition: Option<Expr>,
     pub action: MergeNotMatchedBySourceAction,
 }
 
-#[derive(Clone, Debug, PartialEq)]
+#[derive(Clone, Debug, Eq, PartialEq, Hash)]
 pub enum MergeNotMatchedBySourceAction {
     Delete,
     UpdateSet(Vec<MergeAssignment>),
 }
 
-#[derive(Clone, Debug, PartialEq)]
+#[derive(Clone, Debug, Eq, PartialEq, Hash)]
 pub struct MergeNotMatchedByTargetClause {
     pub condition: Option<Expr>,
     pub action: MergeNotMatchedByTargetAction,
 }
 
-#[derive(Clone, Debug, PartialEq)]
+#[derive(Clone, Debug, Eq, PartialEq, Hash)]
 pub enum MergeNotMatchedByTargetAction {
     InsertAll,
     InsertColumns {
@@ -91,7 +92,7 @@ pub enum MergeNotMatchedByTargetAction {
     },
 }
 
-#[derive(Clone, Debug, PartialEq)]
+#[derive(Clone, Debug, Eq, PartialEq, Hash)]
 pub struct MergeAssignment {
     pub column: String,
     pub value: Expr,
@@ -203,14 +204,18 @@ impl UserDefinedLogicalNodeCore for MergeIntoNode {
     }
 }
 
-#[derive(Clone, Debug, PartialEq)]
+#[derive(Clone, Debug, PartialEq, Educe)]
+#[educe(Eq, Hash, PartialOrd)]
 pub struct MergeIntoWriteNode {
     raw_target: Arc<LogicalPlan>,
     raw_source: Arc<LogicalPlan>,
+    #[educe(PartialOrd(ignore))]
     raw_input_schema: DFSchemaRef,
     input: Arc<LogicalPlan>,
     touched_files_plan: Arc<LogicalPlan>,
+    #[educe(PartialOrd(ignore))]
     options: MergeIntoOptions,
+    #[educe(PartialOrd(ignore))]
     schema: DFSchemaRef,
 }
 
@@ -303,25 +308,6 @@ impl UserDefinedLogicalNodeCore for MergeIntoWriteNode {
 
     fn necessary_children_exprs(&self, _output_columns: &[usize]) -> Option<Vec<Vec<usize>>> {
         None
-    }
-}
-
-// TODO: Implement Eq, Hash, and PartialOrd for MergeIntoWriteNode without pointer operations
-// Use helper structs to skip schema field and other non-comparable fields so PartialOrd can be derived automatically.
-// Consider using proc macro like derivative (https://github.com/mcarton/rust-derivative) or educe (https://github.com/magiclen/educe)
-impl Eq for MergeIntoWriteNode {}
-
-impl Hash for MergeIntoWriteNode {
-    fn hash<H: Hasher>(&self, state: &mut H) {
-        (self as *const Self as usize).hash(state);
-    }
-}
-
-impl PartialOrd for MergeIntoWriteNode {
-    fn partial_cmp(&self, other: &Self) -> Option<Ordering> {
-        let a = self as *const Self as usize;
-        let b = other as *const Self as usize;
-        a.partial_cmp(&b)
     }
 }
 
