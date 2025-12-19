@@ -7,7 +7,7 @@ use fastrace::collector::SpanContext;
 use fastrace::future::FutureExt;
 use fastrace::Span;
 use futures::stream;
-use log::debug;
+use log::{debug, warn};
 use sail_common::spec;
 use sail_common_datafusion::extension::SessionExtensionAccessor;
 use sail_plan::resolve_and_execute_plan;
@@ -25,10 +25,10 @@ use crate::spark::connect::execute_plan_response::{
     ResponseType, ResultComplete, SqlCommandResult,
 };
 use crate::spark::connect::{
-    relation, CommonInlineUserDefinedFunction, CommonInlineUserDefinedTableFunction,
-    CreateDataFrameViewCommand, ExecutePlanResponse, GetResourcesCommand, LocalRelation, Relation,
-    SqlCommand, StreamingQueryCommand, StreamingQueryCommandResult,
-    StreamingQueryListenerBusCommand, StreamingQueryManagerCommand,
+    relation, CheckpointCommand, CheckpointCommandResult, CommonInlineUserDefinedFunction,
+    CommonInlineUserDefinedTableFunction, CreateDataFrameViewCommand, ExecutePlanResponse,
+    GetResourcesCommand, LocalRelation, Relation, SqlCommand, StreamingQueryCommand,
+    StreamingQueryCommandResult, StreamingQueryListenerBusCommand, StreamingQueryManagerCommand,
     StreamingQueryManagerCommandResult, WriteOperation, WriteOperationV2,
     WriteStreamOperationStart, WriteStreamOperationStartResult,
 };
@@ -82,6 +82,10 @@ impl Stream for ExecutePlanResponseStream {
                     ExecutorBatch::StreamingQueryManagerCommandResult(result) => {
                         response.response_type =
                             Some(ResponseType::StreamingQueryManagerCommandResult(*result));
+                    }
+                    ExecutorBatch::CheckpointCommandResult(result) => {
+                        response.response_type =
+                            Some(ResponseType::CheckpointCommandResult(*result));
                     }
                     ExecutorBatch::Schema(schema) => {
                         response.schema = Some(*schema);
@@ -490,6 +494,28 @@ pub(crate) async fn handle_execute_streaming_query_listener_bus_command(
 ) -> SparkResult<ExecutePlanResponseStream> {
     Err(SparkError::NotImplemented(
         "streaming query listener bus".to_string(),
+    ))
+}
+
+pub(crate) async fn handle_execute_checkpoint_command(
+    ctx: &SessionContext,
+    _checkpoint: CheckpointCommand,
+    metadata: ExecutorMetadata,
+) -> SparkResult<ExecutePlanResponseStream> {
+    // TODO: Implement
+    warn!("Checkpoint operation is not yet supported and is a no-op");
+    let spark = ctx.extension::<SparkSession>()?;
+    let result = CheckpointCommandResult { relation: None };
+    let mut output = vec![ExecutorOutput::new(ExecutorBatch::CheckpointCommandResult(
+        Box::new(result),
+    ))];
+    if metadata.reattachable {
+        output.push(ExecutorOutput::complete());
+    }
+    Ok(ExecutePlanResponseStream::new(
+        spark.session_id().to_string(),
+        metadata.operation_id,
+        Box::pin(stream::iter(output)),
     ))
 }
 
