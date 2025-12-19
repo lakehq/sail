@@ -138,7 +138,8 @@ impl PlanResolver<'_> {
     ) -> PlanResult<LogicalPlan> {
         // TODO: Implement
         warn!("Hint operation is not yet supported and is a no-op");
-        self.resolve_query_plan(input, state).await
+        self.resolve_query_plan_with_hidden_fields(input, state)
+            .await
     }
 
     pub(super) async fn resolve_query_collect_metrics(
