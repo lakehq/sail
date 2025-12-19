@@ -134,8 +134,9 @@ impl SparkConnectService for SparkConnectServer {
                     CommandType::CreateResourceProfileCommand(_) => {
                         return Err(Status::unimplemented("create resource profile command"));
                     }
-                    CommandType::CheckpointCommand(_) => {
-                        return Err(Status::unimplemented("checkpoint command"));
+                    CommandType::CheckpointCommand(checkpoint) => {
+                        service::handle_execute_checkpoint_command(&ctx, checkpoint, metadata)
+                            .await?
                     }
                     CommandType::RemoveCachedRemoteRelationCommand(_) => {
                         return Err(Status::unimplemented(
