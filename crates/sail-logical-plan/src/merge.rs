@@ -1,7 +1,6 @@
-use std::cmp::Ordering;
 use std::collections::{HashMap, VecDeque};
 use std::fmt::Formatter;
-use std::hash::{Hash, Hasher};
+use std::hash::Hash;
 use std::sync::Arc;
 
 use datafusion_common::tree_node::{Transformed, TreeNode};
@@ -98,12 +97,16 @@ pub struct MergeAssignment {
     pub value: Expr,
 }
 
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, PartialEq, Educe)]
+#[educe(Eq, Hash, PartialOrd)]
 pub struct MergeIntoNode {
     target: Arc<LogicalPlan>,
     source: Arc<LogicalPlan>,
+    #[educe(PartialOrd(ignore))]
     options: MergeIntoOptions,
+    #[educe(PartialOrd(ignore))]
     schema: DFSchemaRef,
+    #[educe(PartialOrd(ignore))]
     input_schema: DFSchemaRef,
 }
 
@@ -137,28 +140,6 @@ impl MergeIntoNode {
 
     pub fn input_schema(&self) -> &DFSchemaRef {
         &self.input_schema
-    }
-}
-
-impl PartialEq for MergeIntoNode {
-    fn eq(&self, other: &Self) -> bool {
-        std::ptr::eq(self, other)
-    }
-}
-
-impl Eq for MergeIntoNode {}
-
-impl Hash for MergeIntoNode {
-    fn hash<H: Hasher>(&self, state: &mut H) {
-        (self as *const Self as usize).hash(state);
-    }
-}
-
-impl PartialOrd for MergeIntoNode {
-    fn partial_cmp(&self, other: &Self) -> Option<Ordering> {
-        let a = self as *const Self as usize;
-        let b = other as *const Self as usize;
-        a.partial_cmp(&b)
     }
 }
 

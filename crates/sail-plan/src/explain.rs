@@ -5,14 +5,15 @@ use datafusion::physical_plan::display::DisplayableExecutionPlan;
 use datafusion::physical_plan::{collect, displayable, ExecutionPlan};
 use datafusion::prelude::SessionContext;
 use datafusion_common::display::{PlanType, StringifiedPlan, ToStringifiedPlan};
+use datafusion_common::tree_node::{Transformed, TreeNode};
 use datafusion_common::{DataFusionError, Result};
-use datafusion_expr::LogicalPlan;
+use datafusion_expr::{Extension, LogicalPlan};
 use sail_common::spec;
 use sail_common_datafusion::rename::physical_plan::rename_physical_plan;
+use sail_logical_plan::precondition::WithPreconditionsNode;
 
 use crate::config::PlanConfig;
 use crate::error::{PlanError, PlanResult};
-use crate::execute_logical_plan;
 use crate::resolver::plan::NamedPlan;
 use crate::resolver::PlanResolver;
 
@@ -168,13 +169,14 @@ async fn collect_plan_with(
     let initial_logical = plan.clone();
     let mut stringified = vec![initial_logical.to_stringified(PlanType::InitialLogicalPlan)];
 
-    // TODO: The current implementation executes the logical plan to get the DataFrame,
+    // TODO: The commented implementation executes the logical plan to get the DataFrame,
     // which triggers side effects for commands like CREATE TABLE or INSERT.
     // This should be avoided in EXPLAIN. A possible solution is to instead rewrite the logical plan
     // to replace command nodes with dummy nodes (e.g., empty relation with the same schema)
     // to allow generating the physical plan and showing potential errors without execution.
-    let df = execute_logical_plan(ctx, plan).await?;
-    let (session_state, logical_plan) = df.into_parts();
+    // let df = execute_logical_plan(ctx, plan).await?;
+    let session_state = ctx.state();
+    let logical_plan = strip_with_preconditions(plan)?;
     let config_options = session_state.config_options();
     let explain_config = &config_options.explain;
 
@@ -313,6 +315,24 @@ async fn collect_plan_with(
         physical_error,
         stringified,
     })
+}
+
+/// Remove `WithPreconditionsNode` wrappers without executing them.
+/// FIXME: This is a temporary solution to avoid executing this logical plan during EXPLAIN.
+fn strip_with_preconditions(plan: LogicalPlan) -> PlanResult<LogicalPlan> {
+    Ok(plan
+        .transform_up(|plan| match &plan {
+            LogicalPlan::Extension(Extension { node }) => {
+                if let Some(n) = node.as_any().downcast_ref::<WithPreconditionsNode>() {
+                    Ok(Transformed::yes(n.plan().clone()))
+                } else {
+                    Ok(Transformed::no(plan))
+                }
+            }
+            _ => Ok(Transformed::no(plan)),
+        })
+        .map_err(PlanError::from)?
+        .data)
 }
 
 fn render_section(title: &str, body: &str) -> String {
