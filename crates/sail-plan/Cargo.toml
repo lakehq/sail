@@ -41,3 +41,4 @@ arrow = { workspace = true }
 serde = { workspace = true }
 uuid = { workspace = true }
 indexmap = { workspace = true }
+log = { workspace = true }
