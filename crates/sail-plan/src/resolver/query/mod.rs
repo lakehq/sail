@@ -1,6 +1,5 @@
 use async_recursion::async_recursion;
 use datafusion_expr::{Expr, LogicalPlan, LogicalPlanBuilder};
-use log::warn;
 use sail_common::spec;
 
 use crate::error::{PlanError, PlanResult};
@@ -216,14 +215,10 @@ impl PlanResolver<'_> {
                     .await?
             }
             QueryNode::CachedLocalRelation { .. } => {
-                // TODO: Implement
-                warn!("CachedLocalRelation operation is not yet supported and is a no-op");
-                self.resolve_query_empty(false)?
+                return Err(PlanError::todo("cached local relation"));
             }
             QueryNode::CachedRemoteRelation { .. } => {
-                // TODO: Implement
-                warn!("CachedRemoteRelation operation is not yet supported and is a no-op");
-                self.resolve_query_empty(false)?
+                return Err(PlanError::todo("cached remote relation"));
             }
             QueryNode::CommonInlineUserDefinedTableFunction(udtf) => {
                 self.resolve_query_common_inline_udtf(udtf, state).await?
