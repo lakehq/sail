@@ -6,7 +6,7 @@ use tokio::net::{TcpListener, ToSocketAddrs};
 use tonic::codec::CompressionEncoding;
 
 use crate::error::{ExecutionError, ExecutionResult};
-use crate::worker::actor::core::WorkerActor;
+use crate::worker::actor::WorkerActor;
 use crate::worker::flight_server::WorkerFlightServer;
 use crate::worker::gen::worker_service_server::WorkerServiceServer;
 use crate::worker::server::WorkerServer;

@@ -27,10 +27,10 @@ use crate::plan::{ShuffleReadExec, ShuffleWriteExec};
 use crate::stream::channel::ChannelName;
 use crate::stream::reader::TaskStreamSource;
 use crate::stream::writer::{LocalStreamStorage, TaskStreamSink};
-use crate::worker::actor::core::WorkerActor;
 use crate::worker::actor::local_stream::{EphemeralStream, LocalStream, MemoryStream};
 use crate::worker::actor::stream_accessor::WorkerStreamAccessor;
 use crate::worker::actor::stream_monitor::TaskStreamMonitor;
+use crate::worker::actor::WorkerActor;
 use crate::worker::event::WorkerLocation;
 use crate::worker::WorkerEvent;
 
@@ -41,7 +41,7 @@ impl WorkerActor {
         port: u16,
         signal: oneshot::Sender<()>,
     ) -> ActorAction {
-        let worker_id = self.options().worker_id;
+        let worker_id = self.options.worker_id;
         info!("worker {worker_id} server is ready on port {port}");
         let server = mem::take(&mut self.server);
         self.server = match server.ready(signal) {
@@ -51,14 +51,14 @@ impl WorkerActor {
                 return ActorAction::Stop;
             }
         };
-        let host = self.options().worker_external_host.clone();
-        let port = if self.options().worker_external_port > 0 {
-            self.options().worker_external_port
+        let host = self.options.worker_external_host.clone();
+        let port = if self.options.worker_external_port > 0 {
+            self.options.worker_external_port
         } else {
             port
         };
-        let retry_strategy = self.options().rpc_retry_strategy.clone();
-        let client = self.driver_client();
+        let retry_strategy = self.options.rpc_retry_strategy.clone();
+        let client = self.driver_client.clone();
         let handle = ctx.handle().clone();
         ctx.spawn(async move {
             if let Err(e) = retry_strategy
@@ -81,9 +81,9 @@ impl WorkerActor {
     }
 
     pub(super) fn handle_start_heartbeat(&mut self, ctx: &mut ActorContext<Self>) -> ActorAction {
-        let worker_id = self.options().worker_id;
-        let client = self.driver_client();
-        let interval = self.options().worker_heartbeat_interval;
+        let worker_id = self.options.worker_id;
+        let client = self.driver_client.clone();
+        let interval = self.options.worker_heartbeat_interval;
         ctx.spawn(async move {
             loop {
                 tokio::time::sleep(interval).await;
@@ -92,6 +92,24 @@ impl WorkerActor {
                     // We do not retry heartbeat since we will report heartbeat again after
                     // the configured interval.
                 }
+            }
+        });
+        ActorAction::Continue
+    }
+
+    pub(super) fn handle_report_known_peers(
+        &mut self,
+        ctx: &mut ActorContext<Self>,
+        peer_worker_ids: Vec<WorkerId>,
+    ) -> ActorAction {
+        let worker_id = self.options.worker_id;
+        let client = self.driver_client.clone();
+        ctx.spawn(async move {
+            if let Err(e) = client
+                .report_worker_known_peers(worker_id, peer_worker_ids)
+                .await
+            {
+                warn!("failed to report worker known peers: {e}");
             }
         });
         ActorAction::Continue
@@ -106,7 +124,7 @@ impl WorkerActor {
         channel: Option<ChannelName>,
         peers: Vec<WorkerLocation>,
     ) -> ActorAction {
-        self.track_known_peers(ctx, peers);
+        self.peer_tracker.track(ctx, peers);
         let stream = match self.execute_plan(ctx, &instance, plan, partition) {
             Ok(x) => x,
             Err(e) => {
@@ -124,7 +142,7 @@ impl WorkerActor {
         let (tx, rx) = oneshot::channel();
         self.task_signals.insert(instance.clone(), tx);
         let monitor = if let Some(channel) = channel {
-            let mut output = EphemeralStream::new(self.options().worker_stream_buffer);
+            let mut output = EphemeralStream::new(self.options.worker_stream_buffer);
             let writer = match output.publish(ctx) {
                 Ok(x) => x,
                 Err(e) => {
@@ -174,9 +192,9 @@ impl WorkerActor {
                 return ActorAction::Stop;
             }
         };
-        let client = self.driver_client();
+        let client = self.driver_client.clone();
         let handle = ctx.handle().clone();
-        let retry_strategy = self.options().rpc_retry_strategy.clone();
+        let retry_strategy = self.options.rpc_retry_strategy.clone();
         ctx.spawn(async move {
             if let Err(e) = retry_strategy
                 .run(|| {
@@ -216,7 +234,7 @@ impl WorkerActor {
     ) -> ActorAction {
         let mut stream: Box<dyn LocalStream> = match storage {
             LocalStreamStorage::Ephemeral => {
-                Box::new(EphemeralStream::new(self.options().worker_stream_buffer))
+                Box::new(EphemeralStream::new(self.options.worker_stream_buffer))
             }
             LocalStreamStorage::Memory => Box::new(MemoryStream::new()),
             LocalStreamStorage::Disk => {
@@ -275,8 +293,8 @@ impl WorkerActor {
         schema: SchemaRef,
         result: oneshot::Sender<ExecutionResult<TaskStreamSource>>,
     ) -> ActorAction {
-        let client = match self.worker_client(worker_id) {
-            Ok(x) => x.clone(),
+        let client = match self.peer_tracker.get_client(worker_id) {
+            Ok(x) => x,
             Err(e) => {
                 let _ = result.send(Err(e));
                 return ActorAction::Continue;
@@ -317,28 +335,6 @@ impl WorkerActor {
             self.local_streams.remove(&key);
         }
         ActorAction::Continue
-    }
-
-    fn track_known_peers(&mut self, ctx: &mut ActorContext<Self>, peers: Vec<WorkerLocation>) {
-        if peers.is_empty() {
-            // Although the logic below can handle empty peer list,
-            // we return early as an optimization to avoid unnecessary gRPC calls.
-            return;
-        }
-        let peer_worker_ids = peers.iter().map(|x| x.worker_id).collect();
-        for peer in peers {
-            self.set_worker_location(peer.worker_id, peer.host, peer.port);
-        }
-        let worker_id = self.options().worker_id;
-        let client = self.driver_client();
-        ctx.spawn(async move {
-            if let Err(e) = client
-                .report_worker_known_peers(worker_id, peer_worker_ids)
-                .await
-            {
-                warn!("failed to report worker known peers: {e}");
-            }
-        });
     }
 
     fn execute_plan(
@@ -402,7 +398,7 @@ impl WorkerActor {
         ctx: &mut ActorContext<Self>,
         plan: Arc<dyn ExecutionPlan>,
     ) -> ExecutionResult<Arc<dyn ExecutionPlan>> {
-        let worker_id = self.options().worker_id;
+        let worker_id = self.options.worker_id;
         let handle = ctx.handle();
         let result = plan.transform(move |node| {
             if let Some(shuffle) = node.as_any().downcast_ref::<ShuffleReadExec>() {
