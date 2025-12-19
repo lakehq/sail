@@ -168,6 +168,11 @@ async fn collect_plan_with(
     let initial_logical = plan.clone();
     let mut stringified = vec![initial_logical.to_stringified(PlanType::InitialLogicalPlan)];
 
+    // TODO: The current implementation executes the logical plan to get the DataFrame,
+    // which triggers side effects for commands like CREATE TABLE or INSERT.
+    // This should be avoided in EXPLAIN. A possible solution is to instead rewrite the logical plan
+    // to replace command nodes with dummy nodes (e.g., empty relation with the same schema)
+    // to allow generating the physical plan and showing potential errors without execution.
     let df = execute_logical_plan(ctx, plan).await?;
     let (session_state, logical_plan) = df.into_parts();
     let config_options = session_state.config_options();
