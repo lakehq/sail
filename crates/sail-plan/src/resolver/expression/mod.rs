@@ -348,21 +348,31 @@ impl PlanResolver<'_> {
 mod tests {
     use std::sync::Arc;
 
+    use datafusion::execution::SessionStateBuilder;
     use datafusion::prelude::SessionContext;
     use datafusion_common::{DFSchema, ScalarValue};
     use datafusion_expr::expr::{Alias, Expr};
     use datafusion_expr::{BinaryExpr, Operator};
     use sail_common::spec;
+    use sail_common_datafusion::catalog::display::DefaultCatalogDisplay;
+    use sail_common_datafusion::session::PlanService;
 
+    use crate::catalog::SparkCatalogObjectDisplay;
     use crate::config::PlanConfig;
     use crate::error::PlanResult;
+    use crate::formatter::SparkPlanFormatter;
     use crate::resolver::expression::NamedExpr;
     use crate::resolver::state::PlanResolverState;
     use crate::resolver::PlanResolver;
 
     #[tokio::test]
     async fn test_resolve_expression_with_name() -> PlanResult<()> {
-        let ctx = SessionContext::default();
+        let mut state = SessionStateBuilder::new().build();
+        state.config_mut().set_extension(Arc::new(PlanService::new(
+            Box::new(DefaultCatalogDisplay::<SparkCatalogObjectDisplay>::default()),
+            Box::new(SparkPlanFormatter),
+        )));
+        let ctx = SessionContext::new_with_state(state);
         let resolver = PlanResolver::new(&ctx, Arc::new(PlanConfig::new()?));
 
         async fn resolve(resolver: &PlanResolver<'_>, expr: spec::Expr) -> PlanResult<NamedExpr> {

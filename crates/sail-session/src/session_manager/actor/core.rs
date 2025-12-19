@@ -10,29 +10,26 @@ use crate::session_manager::SessionKey;
 #[tonic::async_trait]
 impl<K: SessionKey> Actor for SessionManagerActor<K> {
     type Message = SessionManagerEvent<K>;
-    type Options = SessionManagerOptions;
+    type Options = SessionManagerOptions<K>;
 
     fn name() -> &'static str {
         "SessionManagerActor"
     }
 
     fn new(options: Self::Options) -> Self {
+        let factory = (options.factory)();
         Self {
             options,
+            factory,
             sessions: HashMap::new(),
-            global_file_listing_cache: None,
-            global_file_statistics_cache: None,
-            global_file_metadata_cache: None,
         }
     }
 
     fn receive(&mut self, ctx: &mut ActorContext<Self>, message: Self::Message) -> ActorAction {
         match message {
-            SessionManagerEvent::GetOrCreateSession {
-                key,
-                system,
-                result,
-            } => self.handle_get_or_create_session(ctx, key, system, result),
+            SessionManagerEvent::GetOrCreateSession { key, result } => {
+                self.handle_get_or_create_session(ctx, key, result)
+            }
             SessionManagerEvent::ProbeIdleSession { key, instant } => {
                 self.handle_probe_idle_session(ctx, key, instant)
             }

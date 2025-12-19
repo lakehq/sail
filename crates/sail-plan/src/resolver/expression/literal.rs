@@ -5,7 +5,7 @@ use arrow::datatypes::Date32Type;
 use datafusion_expr::expr;
 use sail_common::spec;
 use sail_common_datafusion::extension::SessionExtensionAccessor;
-use sail_common_datafusion::session::SessionService;
+use sail_common_datafusion::session::PlanService;
 use sail_common_datafusion::utils::datetime::localize_with_fallback;
 use sail_sql_analyzer::parser::{parse_date, parse_timestamp};
 
@@ -22,7 +22,7 @@ impl PlanResolver<'_> {
         state: &mut PlanResolverState,
     ) -> PlanResult<NamedExpr> {
         let literal = self.resolve_literal(literal, state)?;
-        let service = self.ctx.extension::<SessionService>()?;
+        let service = self.ctx.extension::<PlanService>()?;
         let name = service
             .plan_formatter()
             .literal_to_string(&literal, &self.config.session_timezone)?;

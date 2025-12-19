@@ -9,7 +9,7 @@ use datafusion_expr::{
 };
 use sail_common::spec;
 use sail_common_datafusion::extension::SessionExtensionAccessor;
-use sail_common_datafusion::session::SessionService;
+use sail_common_datafusion::session::PlanService;
 use sail_common_datafusion::utils::items::ItemTaker;
 use sail_python_udf::cereal::pyspark_udf::PySparkUdfPayload;
 use sail_python_udf::get_udf_name;
@@ -175,7 +175,7 @@ impl PlanResolver<'_> {
                 )));
             }
         };
-        let service = self.ctx.extension::<SessionService>()?;
+        let service = self.ctx.extension::<PlanService>()?;
         let name = service.plan_formatter().function_to_string(
             function_name.as_str(),
             argument_display_names.iter().map(|x| x.as_str()).collect(),

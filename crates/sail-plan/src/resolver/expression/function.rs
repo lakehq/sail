@@ -4,7 +4,7 @@ use datafusion_expr::expr::ScalarFunction;
 use datafusion_expr::registry::FunctionRegistry;
 use sail_common::spec;
 use sail_common_datafusion::extension::SessionExtensionAccessor;
-use sail_common_datafusion::session::SessionService;
+use sail_common_datafusion::session::PlanService;
 use sail_common_datafusion::utils::items::ItemTaker;
 use sail_python_udf::udf::pyspark_unresolved_udf::PySparkUnresolvedUDF;
 
@@ -126,7 +126,7 @@ impl PlanResolver<'_> {
             )));
         };
 
-        let service = self.ctx.extension::<SessionService>()?;
+        let service = self.ctx.extension::<PlanService>()?;
         let name = service.plan_formatter().function_to_string(
             &function_name,
             argument_display_names.iter().map(|x| x.as_str()).collect(),

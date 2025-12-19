@@ -4,10 +4,9 @@ mod options;
 
 use std::fmt;
 use std::hash::Hash;
-use std::sync::{Arc, Mutex};
 
 use datafusion::prelude::SessionContext;
-use sail_server::actor::{ActorHandle, ActorSystem};
+use sail_server::actor::ActorHandle;
 use tokio::sync::oneshot;
 
 use crate::error::{SessionError, SessionResult};
@@ -19,7 +18,6 @@ pub use crate::session_manager::options::SessionManagerOptions;
 pub trait SessionKey: fmt::Display + Clone + Eq + Hash + Send + 'static {}
 
 pub struct SessionManager<K: SessionKey> {
-    system: Arc<Mutex<ActorSystem>>,
     handle: ActorHandle<SessionManagerActor<K>>,
 }
 
@@ -30,22 +28,15 @@ impl<K: SessionKey> fmt::Debug for SessionManager<K> {
 }
 
 impl<K: SessionKey> SessionManager<K> {
-    pub fn new(options: SessionManagerOptions) -> Self {
-        let mut system = ActorSystem::new();
-        let handle = system.spawn::<SessionManagerActor<K>>(options);
-        Self {
-            system: Arc::new(Mutex::new(system)),
-            handle,
-        }
+    pub fn try_new(options: SessionManagerOptions<K>) -> SessionResult<Self> {
+        let system = options.system.clone();
+        let handle = system.lock()?.spawn::<SessionManagerActor<K>>(options);
+        Ok(Self { handle })
     }
 
     pub async fn get_or_create_session_context(&self, key: K) -> SessionResult<SessionContext> {
         let (tx, rx) = oneshot::channel();
-        let event = SessionManagerEvent::GetOrCreateSession {
-            key,
-            system: self.system.clone(),
-            result: tx,
-        };
+        let event = SessionManagerEvent::GetOrCreateSession { key, result: tx };
         self.handle.send(event).await?;
         rx.await
             .map_err(|e| SessionError::internal(format!("failed to get session: {e}")))?

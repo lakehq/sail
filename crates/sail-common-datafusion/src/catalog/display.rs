@@ -31,6 +31,11 @@ pub trait CatalogObjectDisplay {
     fn function(name: String) -> Self::Function;
 }
 
+/// A trait for providing output display for catalog command.
+/// Different from [`CatalogObjectDisplay`], this trait provides
+/// a higher-level abstraction and is dyn-compatible, so that
+/// an implementation can be stored in the session context
+/// as a trait object.
 pub trait CatalogDisplay: Send + Sync {
     fn empty(&self) -> Box<dyn OutputDisplay<()>>;
     fn bools(&self) -> Box<dyn OutputDisplay<bool>>;
@@ -45,32 +50,6 @@ pub trait CatalogDisplay: Send + Sync {
 pub trait OutputDisplay<T> {
     fn schema(&self) -> Result<SchemaRef>;
     fn to_record_batch(&self, values: Vec<T>) -> Result<RecordBatch>;
-}
-
-struct DefaultOutputDisplay<T> {
-    phantom: std::marker::PhantomData<T>,
-}
-
-impl<T> DefaultOutputDisplay<T> {
-    fn new() -> Self {
-        Self {
-            phantom: std::marker::PhantomData,
-        }
-    }
-}
-
-impl<T> OutputDisplay<T> for DefaultOutputDisplay<T>
-where
-    T: Serialize + for<'de> Deserialize<'de>,
-{
-    fn schema(&self) -> Result<SchemaRef> {
-        build_schema::<T>()
-    }
-
-    fn to_record_batch(&self, items: Vec<T>) -> Result<RecordBatch> {
-        let schema = self.schema()?;
-        build_record_batch(schema, &items)
-    }
 }
 
 struct MappedOutputDisplay<T, U, F> {
@@ -103,6 +82,7 @@ where
     }
 }
 
+#[derive(Default)]
 pub struct DefaultCatalogDisplay<D> {
     phantom: std::marker::PhantomData<D>,
 }
@@ -112,15 +92,21 @@ where
     D: CatalogObjectDisplay + Send + Sync + 'static,
 {
     fn empty(&self) -> Box<dyn OutputDisplay<()>> {
-        Box::new(DefaultOutputDisplay::new())
+        Box::new(<MappedOutputDisplay<(), EmptyOutput, _>>::new(|()| {
+            EmptyOutput {}
+        }))
     }
 
     fn bools(&self) -> Box<dyn OutputDisplay<bool>> {
-        Box::new(DefaultOutputDisplay::new())
+        Box::new(MappedOutputDisplay::<bool, _, _>::new(|value| {
+            SingleValueOutput { value }
+        }))
     }
 
     fn strings(&self) -> Box<dyn OutputDisplay<String>> {
-        Box::new(DefaultOutputDisplay::new())
+        Box::new(MappedOutputDisplay::<String, _, _>::new(|value| {
+            SingleValueOutput { value }
+        }))
     }
 
     fn catalogs(&self) -> Box<dyn OutputDisplay<String>> {
@@ -150,6 +136,14 @@ where
             D::function,
         ))
     }
+}
+
+#[derive(Serialize, Deserialize)]
+pub struct EmptyOutput {}
+
+#[derive(Serialize, Deserialize)]
+pub struct SingleValueOutput<T> {
+    pub value: T,
 }
 
 fn build_schema<T>() -> Result<SchemaRef>

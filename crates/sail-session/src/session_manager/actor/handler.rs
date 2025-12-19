@@ -1,38 +1,16 @@
-use std::ops::DerefMut;
-use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
-use datafusion::execution::cache::cache_manager::{
-    CacheManagerConfig, FileMetadataCache, FileStatisticsCache, ListFilesCache,
-};
-use datafusion::execution::runtime_env::RuntimeEnvBuilder;
-use datafusion::execution::SessionStateBuilder;
-use datafusion::prelude::{SessionConfig, SessionContext};
+use datafusion::prelude::SessionContext;
 use fastrace::collector::SpanContext;
 use fastrace::Span;
-use log::{debug, info};
-use sail_cache::file_listing_cache::MokaFileListingCache;
-use sail_cache::file_metadata_cache::MokaFileMetadataCache;
-use sail_cache::file_statistics_cache::MokaFileStatisticsCache;
-use sail_common::config::{CacheType, ExecutionMode};
+use log::info;
 use sail_common_datafusion::extension::SessionExtensionAccessor;
-use sail_common_datafusion::session::{JobRunner, SessionService};
-use sail_execution::driver::DriverOptions;
-use sail_execution::runner::{ClusterJobRunner, LocalJobRunner};
-use sail_object_store::DynamicObjectStoreRegistry;
-use sail_physical_optimizer::{get_physical_optimizers, PhysicalOptimizerOptions};
-use sail_plan::function::{
-    BUILT_IN_GENERATOR_FUNCTIONS, BUILT_IN_SCALAR_FUNCTIONS, BUILT_IN_TABLE_FUNCTIONS,
-};
-use sail_plan::planner::new_query_planner;
-use sail_server::actor::{ActorAction, ActorContext, ActorSystem};
+use sail_common_datafusion::session::{ActivityTracker, JobService};
+use sail_server::actor::{ActorAction, ActorContext};
 use tokio::sync::oneshot;
 use tokio::time::Instant;
 
-use crate::catalog::create_catalog_manager;
 use crate::error::{SessionError, SessionResult};
-use crate::formats::create_table_format_registry;
-use crate::optimizer::{default_analyzer_rules, default_optimizer_rules};
 use crate::session_manager::actor::SessionManagerActor;
 use crate::session_manager::event::SessionManagerEvent;
 use crate::session_manager::SessionKey;
@@ -42,11 +20,8 @@ impl<K: SessionKey> SessionManagerActor<K> {
         &mut self,
         ctx: &mut ActorContext<Self>,
         key: K,
-        system: Arc<Mutex<ActorSystem>>,
         result: oneshot::Sender<SessionResult<SessionContext>>,
     ) -> ActorAction {
-        // We cannot use `self.sessions.entry()` to perform the get-or-insert operation
-        // because `self.create_session_context()` takes `&mut self`.
         let context = if let Some(context) = self.sessions.get(&key) {
             Ok(context.clone())
         } else {
@@ -57,19 +32,18 @@ impl<K: SessionKey> SessionManagerActor<K> {
                 SpanContext::random(),
             );
             let _guard = span.set_local_parent();
-            match self.create_session_context(system, key.clone()) {
+            match self.factory.create(key.clone()) {
                 Ok(context) => {
                     self.sessions.insert(key, context.clone());
                     Ok(context)
                 }
-                Err(e) => Err(e),
+                Err(e) => Err(e.into()),
             }
         };
         if let Ok(context) = &context {
             if let Ok(active_at) = context
-                .extension::<SessionService>()
-                .map_err(|e| e.into())
-                .and_then(|service| service.track_activity())
+                .extension::<ActivityTracker>()
+                .and_then(|tracker| tracker.track_activity())
             {
                 ctx.send_with_delay(
                     SessionManagerEvent::ProbeIdleSession {
@@ -92,10 +66,12 @@ impl<K: SessionKey> SessionManagerActor<K> {
     ) -> ActorAction {
         let context = self.sessions.get(&key);
         if let Some(context) = context {
-            if let Ok(service) = context.extension::<SessionService>() {
-                if service.active_at().is_ok_and(|x| x <= instant) {
+            if let Ok(tracker) = context.extension::<ActivityTracker>() {
+                if tracker.active_at().is_ok_and(|x| x <= instant) {
                     info!("removing idle session {key}");
-                    ctx.spawn(async move { service.job_runner().stop().await });
+                    if let Ok(service) = context.extension::<JobService>() {
+                        ctx.spawn(async move { service.runner().stop().await });
+                    }
                     self.sessions.remove(&key);
                 }
             }
@@ -112,8 +88,8 @@ impl<K: SessionKey> SessionManagerActor<K> {
         let context = self.sessions.remove(&key);
         let output = if let Some(context) = context {
             info!("removing session {key}");
-            if let Ok(service) = context.extension::<SessionService>() {
-                ctx.spawn(async move { service.job_runner().stop().await });
+            if let Ok(service) = context.extension::<JobService>() {
+                ctx.spawn(async move { service.runner().stop().await });
             }
             Ok(())
         } else {
@@ -121,199 +97,5 @@ impl<K: SessionKey> SessionManagerActor<K> {
         };
         let _ = result.send(output);
         ActorAction::Continue
-    }
-
-    fn create_session_context(
-        &mut self,
-        system: Arc<Mutex<ActorSystem>>,
-        key: K,
-    ) -> SessionResult<SessionContext> {
-        let options = &self.options;
-        let job_runner: Box<dyn JobRunner> = match options.config.mode {
-            ExecutionMode::Local => Box::new(LocalJobRunner::new()),
-            ExecutionMode::LocalCluster | ExecutionMode::KubernetesCluster => {
-                let options = DriverOptions::try_new(&options.config, options.runtime.clone())?;
-                let mut system = system.lock()?;
-                Box::new(ClusterJobRunner::new(system.deref_mut(), options))
-            }
-        };
-        // TODO: support more systematic configuration
-        // TODO: return error on invalid environment variables
-        let mut session_config = SessionConfig::new()
-            // We do not use the DataFusion catalog and schema since we manage catalogs ourselves.
-            .with_create_default_catalog_and_schema(false)
-            .with_information_schema(false)
-            .with_extension(create_table_format_registry()?)
-            .with_extension(Arc::new(create_catalog_manager(
-                &options.config,
-                options.runtime.clone(),
-            )?));
-
-        // execution options
-        {
-            let execution = &mut session_config.options_mut().execution;
-
-            execution.batch_size = options.config.execution.batch_size;
-            execution.collect_statistics = options.config.execution.collect_statistics;
-            execution.use_row_number_estimates_to_optimize_partitioning = options
-                .config
-                .execution
-                .use_row_number_estimates_to_optimize_partitioning;
-            execution.listing_table_ignore_subdirectory = false;
-        }
-
-        // execution Parquet options
-        {
-            let parquet = &mut session_config.options_mut().execution.parquet;
-
-            parquet.created_by = concat!("sail version ", env!("CARGO_PKG_VERSION")).into();
-            parquet.enable_page_index = options.config.parquet.enable_page_index;
-            parquet.pruning = options.config.parquet.pruning;
-            parquet.skip_metadata = options.config.parquet.skip_metadata;
-            parquet.metadata_size_hint = options.config.parquet.metadata_size_hint;
-            parquet.pushdown_filters = options.config.parquet.pushdown_filters;
-            parquet.reorder_filters = options.config.parquet.reorder_filters;
-            parquet.schema_force_view_types = options.config.parquet.schema_force_view_types;
-            parquet.binary_as_string = options.config.parquet.binary_as_string;
-            parquet.coerce_int96 = Some("us".to_string());
-            parquet.data_pagesize_limit = options.config.parquet.data_page_size_limit;
-            parquet.write_batch_size = options.config.parquet.write_batch_size;
-            parquet.writer_version = options.config.parquet.writer_version.clone();
-            parquet.skip_arrow_metadata = options.config.parquet.skip_arrow_metadata;
-            parquet.compression = Some(options.config.parquet.compression.clone());
-            parquet.dictionary_enabled = Some(options.config.parquet.dictionary_enabled);
-            parquet.dictionary_page_size_limit = options.config.parquet.dictionary_page_size_limit;
-            parquet.statistics_enabled = Some(options.config.parquet.statistics_enabled.clone());
-            parquet.max_row_group_size = options.config.parquet.max_row_group_size;
-            parquet.column_index_truncate_length =
-                options.config.parquet.column_index_truncate_length;
-            parquet.statistics_truncate_length = options.config.parquet.statistics_truncate_length;
-            parquet.data_page_row_count_limit = options.config.parquet.data_page_row_count_limit;
-            parquet.encoding = options.config.parquet.encoding.clone();
-            parquet.bloom_filter_on_read = options.config.parquet.bloom_filter_on_read;
-            parquet.bloom_filter_on_write = options.config.parquet.bloom_filter_on_write;
-            parquet.bloom_filter_fpp = Some(options.config.parquet.bloom_filter_fpp);
-            parquet.bloom_filter_ndv = Some(options.config.parquet.bloom_filter_ndv);
-            parquet.allow_single_file_parallelism =
-                options.config.parquet.allow_single_file_parallelism;
-            parquet.maximum_parallel_row_group_writers =
-                options.config.parquet.maximum_parallel_row_group_writers;
-            parquet.maximum_buffered_record_batches_per_stream = options
-                .config
-                .parquet
-                .maximum_buffered_record_batches_per_stream;
-        }
-
-        let runtime = {
-            let registry = DynamicObjectStoreRegistry::new(options.runtime.clone());
-
-            let file_statistics_cache: Option<FileStatisticsCache> = {
-                let ttl = options.config.parquet.file_statistics_cache.ttl;
-                let max_entries = options.config.parquet.file_statistics_cache.max_entries;
-                match &options.config.parquet.file_statistics_cache.r#type {
-                    CacheType::None => {
-                        debug!("Not using file statistics cache");
-                        None
-                    }
-                    CacheType::Global => {
-                        debug!("Using global file statistics cache");
-                        Some(
-                            self.global_file_statistics_cache
-                                .get_or_insert_with(|| {
-                                    Arc::new(MokaFileStatisticsCache::new(ttl, max_entries))
-                                })
-                                .clone(),
-                        )
-                    }
-                    CacheType::Session => {
-                        debug!("Using session file statistics cache");
-                        Some(Arc::new(MokaFileStatisticsCache::new(ttl, max_entries)))
-                    }
-                }
-            };
-            let file_listing_cache: Option<ListFilesCache> = {
-                let ttl = options.config.execution.file_listing_cache.ttl;
-                let max_entries = options.config.execution.file_listing_cache.max_entries;
-                match &options.config.execution.file_listing_cache.r#type {
-                    CacheType::None => {
-                        debug!("Not using file listing cache");
-                        None
-                    }
-                    CacheType::Global => {
-                        debug!("Using global file listing cache");
-                        Some(
-                            self.global_file_listing_cache
-                                .get_or_insert_with(|| {
-                                    Arc::new(MokaFileListingCache::new(ttl, max_entries))
-                                })
-                                .clone(),
-                        )
-                    }
-                    CacheType::Session => {
-                        debug!("Using session file listing cache");
-                        Some(Arc::new(MokaFileListingCache::new(ttl, max_entries)))
-                    }
-                }
-            };
-            let file_metadata_cache: Arc<dyn FileMetadataCache> = {
-                let ttl = options.config.parquet.file_metadata_cache.ttl;
-                let size_limit = options.config.parquet.file_metadata_cache.size_limit;
-                match options.config.parquet.file_metadata_cache.r#type {
-                    CacheType::None => {
-                        debug!("Not using file metadata cache");
-                        Arc::new(MokaFileMetadataCache::new(ttl, Some(0)))
-                    }
-                    CacheType::Global => {
-                        debug!("Using global file metadata cache");
-                        self.global_file_metadata_cache
-                            .get_or_insert_with(|| {
-                                Arc::new(MokaFileMetadataCache::new(ttl, size_limit))
-                            })
-                            .clone()
-                    }
-                    CacheType::Session => {
-                        debug!("Using session file metadata cache");
-                        Arc::new(MokaFileMetadataCache::new(ttl, size_limit))
-                    }
-                }
-            };
-
-            let cache_config = CacheManagerConfig::default()
-                .with_files_statistics_cache(file_statistics_cache)
-                .with_list_files_cache(file_listing_cache)
-                .with_file_metadata_cache(Some(file_metadata_cache));
-            let builder = RuntimeEnvBuilder::default()
-                .with_object_store_registry(Arc::new(registry))
-                .with_cache_manager(cache_config);
-            Arc::new(builder.build()?)
-        };
-
-        let state = SessionStateBuilder::new()
-            .with_config(session_config)
-            .with_runtime_env(runtime)
-            .with_default_features()
-            .with_analyzer_rules(default_analyzer_rules())
-            .with_optimizer_rules(default_optimizer_rules())
-            .with_physical_optimizer_rules(get_physical_optimizers(PhysicalOptimizerOptions {
-                enable_join_reorder: options.config.optimizer.enable_join_reorder,
-            }))
-            .with_query_planner(new_query_planner())
-            .build();
-        let context = SessionContext::new_with_state(state);
-
-        // TODO: This is a temp workaround to deregister all built-in functions that we define.
-        //   We should deregister all context.udfs() once we have better coverage of functions.
-        //   handler.rs needs to do this
-        for (&name, _function) in BUILT_IN_SCALAR_FUNCTIONS.iter() {
-            context.deregister_udf(name);
-        }
-        for (&name, _function) in BUILT_IN_GENERATOR_FUNCTIONS.iter() {
-            context.deregister_udf(name);
-        }
-        for (&name, _function) in BUILT_IN_TABLE_FUNCTIONS.iter() {
-            context.deregister_udtf(name);
-        }
-
-        Ok(context)
     }
 }

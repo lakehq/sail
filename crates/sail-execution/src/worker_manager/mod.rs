@@ -27,5 +27,5 @@ pub trait WorkerManager: Send + Sync + 'static {
     async fn stop(&self) -> ExecutionResult<()>;
 }
 
-pub(crate) use kubernetes::{KubernetesWorkerManager, KubernetesWorkerManagerOptions};
-pub(crate) use local::LocalWorkerManager;
+pub use kubernetes::{KubernetesWorkerManager, KubernetesWorkerManagerOptions};
+pub use local::LocalWorkerManager;

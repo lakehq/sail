@@ -1,9 +1,7 @@
 use std::borrow::Cow;
 use std::fmt;
-use std::sync::{Arc, Mutex};
 
 use datafusion::prelude::SessionContext;
-use sail_server::actor::ActorSystem;
 use sail_telemetry::common::{SpanAssociation, SpanAttribute};
 use tokio::sync::oneshot;
 use tokio::time::Instant;
@@ -14,7 +12,6 @@ use crate::error::SessionResult;
 pub enum SessionManagerEvent<K> {
     GetOrCreateSession {
         key: K,
-        system: Arc<Mutex<ActorSystem>>,
         result: oneshot::Sender<SessionResult<SessionContext>>,
     },
     ProbeIdleSession {
@@ -44,11 +41,7 @@ where
     fn properties(&self) -> impl IntoIterator<Item = (Cow<'static, str>, Cow<'static, str>)> {
         let mut p: Vec<(&'static str, String)> = vec![];
         match self {
-            SessionManagerEvent::GetOrCreateSession {
-                key,
-                system: _,
-                result: _,
-            }
+            SessionManagerEvent::GetOrCreateSession { key, result: _ }
             | SessionManagerEvent::ProbeIdleSession { key, instant: _ }
             | SessionManagerEvent::DeleteSession { key, result: _ } => {
                 p.push((SpanAttribute::SESSION_KEY, key.to_string()));

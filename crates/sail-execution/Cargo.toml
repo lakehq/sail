@@ -12,7 +12,6 @@ sail-common-datafusion = { path = "../sail-common-datafusion" }
 sail-data-source = { path = "../sail-data-source" }
 sail-server = { path = "../sail-server" }
 sail-python-udf = { path = "../sail-python-udf" }
-sail-object-store = { path = "../sail-object-store" }
 sail-delta-lake = { path = "../sail-delta-lake" }
 sail-iceberg = { path = "../sail-iceberg" }
 sail-function = { path = "../sail-function" }

@@ -158,7 +158,8 @@ mod display {
     }
 }
 
-struct SparkCatalogObjectDisplay;
+#[derive(Default)]
+pub struct SparkCatalogObjectDisplay;
 
 impl CatalogObjectDisplay for SparkCatalogObjectDisplay {
     type Catalog = display::SparkCatalog;

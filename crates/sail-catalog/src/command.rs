@@ -3,7 +3,7 @@ use datafusion::arrow::datatypes::SchemaRef;
 use datafusion::prelude::SessionContext;
 use datafusion_expr::ScalarUDF;
 use sail_common_datafusion::extension::SessionExtensionAccessor;
-use sail_common_datafusion::session::SessionService;
+use sail_common_datafusion::session::PlanService;
 
 use crate::error::{CatalogError, CatalogResult};
 use crate::manager::CatalogManager;
@@ -154,8 +154,8 @@ impl CatalogCommand {
     }
 
     pub fn schema(&self, ctx: &SessionContext) -> CatalogResult<SchemaRef> {
-        let service = ctx.extension::<SessionService>()?;
-        let display = service.catalog_command_display();
+        let service = ctx.extension::<PlanService>()?;
+        let display = service.catalog_display();
         let schema = match self {
             CatalogCommand::ListCatalogs { .. } => display.catalogs().schema()?,
             CatalogCommand::GetDatabase { .. } | CatalogCommand::ListDatabases { .. } => {
@@ -197,8 +197,8 @@ impl CatalogCommand {
         manager: &CatalogManager,
     ) -> CatalogResult<RecordBatch> {
         // TODO: make sure we return the same schema as Spark for each command
-        let service = ctx.extension::<SessionService>()?;
-        let display = service.catalog_command_display();
+        let service = ctx.extension::<PlanService>()?;
+        let display = service.catalog_display();
         let batch = match self {
             CatalogCommand::CurrentCatalog => {
                 let value = manager.default_catalog()?;
