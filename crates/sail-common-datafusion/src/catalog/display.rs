@@ -28,6 +28,7 @@ pub trait CatalogObjectDisplay {
     fn table(status: TableStatus) -> Self::Table;
 
     fn table_column(status: TableColumnStatus) -> Self::TableColumn;
+
     fn function(name: String) -> Self::Function;
 }
 
@@ -92,9 +93,7 @@ where
     D: CatalogObjectDisplay + Send + Sync + 'static,
 {
     fn empty(&self) -> Box<dyn OutputDisplay<()>> {
-        Box::new(<MappedOutputDisplay<(), EmptyOutput, _>>::new(|()| {
-            EmptyOutput {}
-        }))
+        Box::new(<MappedOutputDisplay<(), _, _>>::new(|()| EmptyOutput {}))
     }
 
     fn bools(&self) -> Box<dyn OutputDisplay<bool>> {
