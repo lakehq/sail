@@ -4,7 +4,7 @@ use datafusion::functions::regex::expr_fn as regex_fn;
 use datafusion::functions::regex::regexpcount::RegexpCountFunc;
 use datafusion::functions::regex::regexpinstr::RegexpInstrFunc;
 use datafusion_common::{DFSchema, ScalarValue};
-use datafusion_expr::{cast, expr, lit, try_cast, when, ExprSchemable, ScalarUDF};
+use datafusion_expr::{cast, expr, lit, try_cast, when, ExprSchemable};
 use datafusion_spark::function::string::elt::SparkElt;
 use datafusion_spark::function::string::expr_fn as string_fn;
 use sail_common_datafusion::utils::items::ItemTaker;
@@ -153,10 +153,6 @@ fn cast_to_logical_string_or_try(
     })
 }
 
-fn elt(args: Vec<expr::Expr>) -> PlanResult<expr::Expr> {
-    Ok(ScalarUDF::from(SparkElt::new()).call(args))
-}
-
 fn validate_utf8_or_try(input: ScalarFunctionInput, is_try: bool) -> PlanResult<expr::Expr> {
     cast_to_logical_string_or_try(
         input.arguments.one()?,
@@ -220,7 +216,7 @@ pub(super) fn list_built_in_string_functions() -> Vec<(&'static str, ScalarFunct
         ("concat_ws", F::var_arg(concat_ws)),
         ("contains", F::custom(contains)),
         ("decode", F::udf(SparkDecode::new())),
-        ("elt", F::var_arg(elt)),
+        ("elt", F::udf(SparkElt::new())),
         ("encode", F::udf(SparkEncode::new())),
         ("endswith", F::custom(endswith)),
         ("find_in_set", F::binary(expr_fn::find_in_set)),

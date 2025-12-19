@@ -347,96 +347,6 @@ fn make_ym_interval(args: Vec<Expr>) -> PlanResult<Expr> {
     Ok(ScalarUDF::from(SparkMakeYmInterval::new()).call(vec![years, months]))
 }
 
-fn make_interval(args: Vec<Expr>) -> PlanResult<Expr> {
-    let (years, months, weeks, days, hours, mins, secs) = match args.len() {
-        7 => {
-            let (y, mo, w, d, h, m, s) = args.seven()?;
-            (y, mo, w, d, h, m, s)
-        }
-        6 => {
-            let (y, mo, w, d, h, m) = args.six()?;
-            (y, mo, w, d, h, m, lit(0_f64))
-        }
-        5 => {
-            let (y, mo, w, d, h) = args.five()?;
-            (y, mo, w, d, h, lit(0_i32), lit(0_f64))
-        }
-        4 => {
-            let (y, mo, w, d) = args.four()?;
-            (y, mo, w, d, lit(0_i32), lit(0_i32), lit(0_f64))
-        }
-        3 => {
-            let (y, mo, w) = args.three()?;
-            (y, mo, w, lit(0_i32), lit(0_i32), lit(0_i32), lit(0_f64))
-        }
-        2 => {
-            let (y, mo) = args.two()?;
-            (
-                y,
-                mo,
-                lit(0_i32),
-                lit(0_i32),
-                lit(0_i32),
-                lit(0_i32),
-                lit(0_f64),
-            )
-        }
-        1 => {
-            let y = args.one()?;
-            (
-                y,
-                lit(0_i32),
-                lit(0_i32),
-                lit(0_i32),
-                lit(0_i32),
-                lit(0_i32),
-                lit(0_f64),
-            )
-        }
-        0 => {
-            return Ok(ScalarUDF::from(SparkMakeDtInterval::new()).call(vec![]));
-        }
-        _ => {
-            return Err(PlanError::invalid(
-                "make_dt_interval expects between 0 and 4 arguments",
-            ));
-        }
-    };
-    Ok(ScalarUDF::from(SparkMakeInterval::new())
-        .call(vec![years, months, weeks, days, hours, mins, secs]))
-}
-
-fn make_dt_interval(args: Vec<Expr>) -> PlanResult<Expr> {
-    let (days, hours, mins, secs) = match args.len() {
-        4 => {
-            let (d, h, m, s) = args.four()?;
-            (d, h, m, s)
-        }
-        3 => {
-            let (d, h, m) = args.three()?;
-            (d, h, m, lit(0_f64))
-        }
-        2 => {
-            let (d, h) = args.two()?;
-            (d, h, lit(0_i32), lit(0_f64))
-        }
-        1 => {
-            let d = args.one()?;
-            (d, lit(0_i32), lit(0_i32), lit(0_f64))
-        }
-        0 => {
-            return Ok(ScalarUDF::from(SparkMakeDtInterval::new()).call(vec![]));
-        }
-        _ => {
-            return Err(PlanError::invalid(
-                "make_dt_interval expects between 0 and 4 arguments",
-            ));
-        }
-    };
-
-    Ok(ScalarUDF::from(SparkMakeDtInterval::new()).call(vec![days, hours, mins, secs]))
-}
-
 fn make_timestamp(input: ScalarFunctionInput) -> PlanResult<Expr> {
     if input.arguments.len() == 6 {
         Ok(ScalarUDF::from(SparkMakeTimestampNtz::new()).call(input.arguments))
@@ -603,8 +513,8 @@ pub(super) fn list_built_in_datetime_functions() -> Vec<(&'static str, ScalarFun
             F::custom(current_localtimestamp_microseconds),
         ),
         ("make_date", F::ternary(make_date)),
-        ("make_dt_interval", F::var_arg(make_dt_interval)),
-        ("make_interval", F::var_arg(make_interval)),
+        ("make_dt_interval", F::udf(SparkMakeDtInterval::new())),
+        ("make_interval", F::udf(SparkMakeInterval::new())),
         ("make_timestamp", F::custom(make_timestamp)),
         ("make_timestamp_ltz", F::custom(make_timestamp)),
         ("make_timestamp_ntz", F::udf(SparkMakeTimestampNtz::new())),
