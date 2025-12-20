@@ -131,6 +131,18 @@
   rust_type: bool
   rust_deserialize_with: crate::options::serde::deserialize_bool
 
+- key: max_predicate_cache_size
+  aliases:
+    - maxPredicateCacheSize
+  description: |
+    (Reading) The maximum predicate cache size, in bytes. When `pushdown_filters` is enabled, sets the maximum memory
+    used to cache the results of predicate evaluation between filter evaluation and output generation.
+    Decreasing this value will reduce memory usage, but may increase IO and CPU usage.
+    Setting this value to `0` means no caching.
+  supported: true
+  rust_type: usize
+  rust_deserialize_with: crate::options::serde::deserialize_usize
+
 - key: merge_schema
   aliases:
     - mergeSchema
