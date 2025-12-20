@@ -159,6 +159,8 @@ impl SessionManagerActor {
             parquet.reorder_filters = options.config.parquet.reorder_filters;
             parquet.schema_force_view_types = options.config.parquet.schema_force_view_types;
             parquet.binary_as_string = options.config.parquet.binary_as_string;
+            parquet.max_predicate_cache_size =
+                Some(options.config.parquet.max_predicate_cache_size);
             parquet.coerce_int96 = Some("us".to_string());
             parquet.data_pagesize_limit = options.config.parquet.data_page_size_limit;
             parquet.write_batch_size = options.config.parquet.write_batch_size;
