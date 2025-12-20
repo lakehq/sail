@@ -15,3 +15,4 @@ pub mod struct_function;
 pub mod table_input;
 pub mod update_struct_field;
 pub mod url;
+pub mod variant;

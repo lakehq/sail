@@ -1,0 +1,6 @@
+>>> spark.sql("""SELECT parse_json('{"name":"norm"}') AS result""").show()
++---------------+
+|         result|
++---------------+
+|{"name":"norm"}|
++---------------+

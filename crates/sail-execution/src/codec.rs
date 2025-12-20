@@ -142,6 +142,9 @@ use sail_function::scalar::url::parse_url::ParseUrl;
 use sail_function::scalar::url::spark_try_parse_url::SparkTryParseUrl;
 use sail_function::scalar::url::url_decode::UrlDecode;
 use sail_function::scalar::url::url_encode::UrlEncode;
+use sail_function::scalar::variant::spark_is_variant_null::SparkIsVariantNullUdf;
+use sail_function::scalar::variant::spark_json_to_variant::SparkJsonToVariantUdf;
+use sail_function::scalar::variant::spark_variant_to_json::SparkVariantToJsonUdf;
 use sail_iceberg::physical_plan::{IcebergCommitExec, IcebergWriterExec};
 use sail_iceberg::TableIcebergOptions;
 use sail_logical_plan::range::Range;
@@ -1381,6 +1384,8 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
             "raise_error" => Ok(Arc::new(ScalarUDF::from(RaiseError::new()))),
             "random_poisson" => Ok(Arc::new(ScalarUDF::from(RandPoisson::new()))),
             "randn" => Ok(Arc::new(ScalarUDF::from(Randn::new()))),
+            "is_variant_null" => Ok(Arc::new(ScalarUDF::from(SparkIsVariantNullUdf::new()))),
+            "variant_to_json" => Ok(Arc::new(ScalarUDF::from(SparkVariantToJsonUdf::new()))),
             "random" | "rand" => Ok(Arc::new(ScalarUDF::from(Random::new()))),
             "spark_array" | "spark_make_array" | "array" => {
                 Ok(Arc::new(ScalarUDF::from(SparkArray::new())))
@@ -1520,6 +1525,9 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
             || node_inner.is::<ParseUrl>()
             || node_inner.is::<RaiseError>()
             || node_inner.is::<Randn>()
+            || node_inner.is::<SparkIsVariantNullUdf>()
+            || node_inner.is::<SparkJsonToVariantUdf>()
+            || node_inner.is::<SparkVariantToJsonUdf>()
             || node_inner.is::<Random>()
             || node_inner.is::<RandPoisson>()
             || node_inner.is::<SparkAbs>()

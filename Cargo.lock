@@ -4553,6 +4553,50 @@ dependencies = [
 ]
 
 [[package]]
+name = "parquet-variant"
+version = "0.2.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "066f3e371a47d5b0bfd9491992f2400e4f155511d0c9bcfaca04bac7f1e33600"
+dependencies = [
+ "arrow-schema",
+ "chrono",
+ "half",
+ "indexmap 2.12.1",
+ "simdutf8",
+ "uuid",
+]
+
+[[package]]
+name = "parquet-variant-compute"
+version = "0.2.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "497db08281ed670f7e5119116b961282d50645a28b2afb97686f18e2e4034414"
+dependencies = [
+ "arrow",
+ "arrow-schema",
+ "chrono",
+ "half",
+ "indexmap 2.12.1",
+ "parquet-variant",
+ "parquet-variant-json",
+ "uuid",
+]
+
+[[package]]
+name = "parquet-variant-json"
+version = "0.2.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "9958f58a045ec273727651a3d07e32b382a7732f7cae86d26d80e9ec0acf2e3b"
+dependencies = [
+ "arrow-schema",
+ "base64 0.22.1",
+ "chrono",
+ "parquet-variant",
+ "serde_json",
+ "uuid",
+]
+
+[[package]]
 name = "parse-display"
 version = "0.9.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -5866,6 +5910,7 @@ dependencies = [
 name = "sail-common-datafusion"
 version = "0.4.4"
 dependencies = [
+ "arrow-schema",
  "async-trait",
  "chrono",
  "datafusion",
@@ -5874,6 +5919,8 @@ dependencies = [
  "either",
  "futures",
  "lexical-core",
+ "parquet-variant-compute",
+ "parquet-variant-json",
  "pin-project-lite",
  "prost",
  "ryu",
@@ -5991,6 +6038,8 @@ version = "0.4.4"
 dependencies = [
  "aes",
  "aes-gcm",
+ "arrow",
+ "arrow-schema",
  "base64 0.22.1",
  "cbc",
  "chrono",
@@ -6004,6 +6053,9 @@ dependencies = [
  "half",
  "lazy_static",
  "num",
+ "parquet-variant",
+ "parquet-variant-compute",
+ "parquet-variant-json",
  "percent-encoding",
  "rand 0.9.2",
  "rand_chacha 0.9.0",
@@ -6012,6 +6064,7 @@ dependencies = [
  "sail-common",
  "sail-common-datafusion",
  "sail-sql-analyzer",
+ "serde_json",
  "twox-hash",
  "url",
 ]
