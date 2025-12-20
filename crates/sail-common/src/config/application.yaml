@@ -284,11 +284,14 @@
   type: number
   default: "524288"
   description: |
-    (Reading) The metadata size hint in bytes when reading Parquet files.
-    If the value `n` is greater than `8`, the Parquet reader will try and fetch the last `n`
-    bytes of the Parquet file optimistically. Otherwise, two reads are performed to fetch the
-    metadata. The first read fetches the 8-byte Parquet footer and the second read fetches
-    the metadata length encoded in the footer.
+    (Reading) If specified, the reader will try to fetch the last `size_hint` bytes of the parquet file optimistically.
+    If not specified, two reads are required:
+      - One read to fetch the 8-byte parquet footer
+      - Another to fetch the metadata length encoded in the footer
+
+    If the metadata is larger than the hint, two reads will still be performed.
+    Setting this can reduce one I/O operation per parquet file.
+    Defaults to 512 KiB, which should be sufficient for most parquet files.
   experimental: true
 
 - key: parquet.pushdown_filters
