@@ -89,7 +89,12 @@ impl ScalarUDFImpl for SparkIsVariantNullUdf {
 
                 let out: BooleanArray = variant_array
                     .iter()
-                    .map(|v| v.map(|v| v == Variant::Null))
+                    .map(|v| match v {
+                        // NULL in array (from parse_json(null)) is not a Variant null, return false
+                        None => Some(false),
+                        // Check if the Variant contains JSON null
+                        Some(variant) => Some(variant == Variant::Null),
+                    })
                     .collect::<Vec<_>>()
                     .into();
 
