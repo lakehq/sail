@@ -26,6 +26,5 @@ pin-project-lite = { workspace = true }
 parquet-variant-compute = { workspace = true }
 parquet-variant-json = { workspace = true }
 
-
 [build-dependencies]
 tonic-prost-build = { workspace = true }

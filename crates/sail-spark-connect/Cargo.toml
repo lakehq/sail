@@ -41,7 +41,6 @@ phf = { workspace = true }
 log = { workspace = true }
 futures = { workspace = true }
 fastrace = { workspace = true }
-parquet-variant-compute = "0.2.0"
 
 [build-dependencies]
 prost-build = { workspace = true }
