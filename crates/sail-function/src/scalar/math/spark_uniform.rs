@@ -234,7 +234,31 @@ impl ScalarUDFImpl for SparkUniform {
 }
 
 macro_rules! generate_uniform_fn {
-    ($fn_name:ident, $type:ty) => {
+    ($fn_name:ident, $fn_name_single:ident, $type:ty) => {
+        /// Generate a single uniform value
+        #[inline]
+        fn $fn_name_single(min: $type, max: $type, seed: Option<u64>) -> $type {
+            let mut min_v = min;
+            let mut max_v = max;
+
+            if min_v > max_v {
+                std::mem::swap(&mut min_v, &mut max_v);
+            }
+
+            if min_v == max_v {
+                return min_v;
+            }
+
+            if let Some(seed_val) = seed {
+                let mut rng = StdRng::seed_from_u64(seed_val);
+                rng.random_range(min_v..max_v)
+            } else {
+                let mut rng = rng();
+                rng.random_range(min_v..max_v)
+            }
+        }
+
+        #[allow(dead_code)]
         fn $fn_name(
             min: $type,
             max: $type,
@@ -269,12 +293,12 @@ macro_rules! generate_uniform_fn {
     };
 }
 
-generate_uniform_fn!(generate_uniform_int8, i8);
-generate_uniform_fn!(generate_uniform_int16, i16);
-generate_uniform_fn!(generate_uniform_int32, i32);
-generate_uniform_fn!(generate_uniform_int64, i64);
-generate_uniform_fn!(generate_uniform_float32, f32);
-generate_uniform_fn!(generate_uniform_float, f64);
+generate_uniform_fn!(generate_uniform_int8, generate_uniform_int8_single, i8);
+generate_uniform_fn!(generate_uniform_int16, generate_uniform_int16_single, i16);
+generate_uniform_fn!(generate_uniform_int32, generate_uniform_int32_single, i32);
+generate_uniform_fn!(generate_uniform_int64, generate_uniform_int64_single, i64);
+generate_uniform_fn!(generate_uniform_float32, generate_uniform_float32_single, f32);
+generate_uniform_fn!(generate_uniform_float, generate_uniform_float_single, f64);
 
 #[inline]
 fn extract_seed(seed_array: Option<&ArrayRef>, i: usize) -> Option<u64> {
@@ -317,7 +341,7 @@ fn uniform(args: &[ArrayRef]) -> Result<ArrayRef> {
                     let min_val = min_arr.value(i);
                     let max_val = max_arr.value(i);
                     let seed_val = extract_seed(seed_array, i);
-                    builder.append_value(generate_uniform_int8(min_val, max_val, seed_val, 1)?[0]);
+                    builder.append_value(generate_uniform_int8_single(min_val, max_val, seed_val));
                 }
             }
 
@@ -335,7 +359,7 @@ fn uniform(args: &[ArrayRef]) -> Result<ArrayRef> {
                     let min_val = min_arr.value(i);
                     let max_val = max_arr.value(i);
                     let seed_val = extract_seed(seed_array, i);
-                    builder.append_value(generate_uniform_int16(min_val, max_val, seed_val, 1)?[0]);
+                    builder.append_value(generate_uniform_int16_single(min_val, max_val, seed_val));
                 }
             }
 
@@ -353,7 +377,7 @@ fn uniform(args: &[ArrayRef]) -> Result<ArrayRef> {
                     let min_val = min_arr.value(i);
                     let max_val = max_arr.value(i);
                     let seed_val = extract_seed(seed_array, i);
-                    builder.append_value(generate_uniform_int32(min_val, max_val, seed_val, 1)?[0]);
+                    builder.append_value(generate_uniform_int32_single(min_val, max_val, seed_val));
                 }
             }
 
@@ -371,7 +395,7 @@ fn uniform(args: &[ArrayRef]) -> Result<ArrayRef> {
                     let min_val = min_arr.value(i);
                     let max_val = max_arr.value(i);
                     let seed_val = extract_seed(seed_array, i);
-                    builder.append_value(generate_uniform_int64(min_val, max_val, seed_val, 1)?[0]);
+                    builder.append_value(generate_uniform_int64_single(min_val, max_val, seed_val));
                 }
             }
 
@@ -390,7 +414,7 @@ fn uniform(args: &[ArrayRef]) -> Result<ArrayRef> {
                     let max_val = max_arr.value(i);
                     let seed_val = extract_seed(seed_array, i);
                     builder
-                        .append_value(generate_uniform_float32(min_val, max_val, seed_val, 1)?[0]);
+                        .append_value(generate_uniform_float32_single(min_val, max_val, seed_val));
                 }
             }
 
@@ -408,7 +432,7 @@ fn uniform(args: &[ArrayRef]) -> Result<ArrayRef> {
                     let min_val = min_arr.value(i);
                     let max_val = max_arr.value(i);
                     let seed_val = extract_seed(seed_array, i);
-                    builder.append_value(generate_uniform_float(min_val, max_val, seed_val, 1)?[0]);
+                    builder.append_value(generate_uniform_float_single(min_val, max_val, seed_val));
                 }
             }
 
@@ -434,7 +458,7 @@ fn uniform(args: &[ArrayRef]) -> Result<ArrayRef> {
                     let max_f64 = max_val as f64 / 10_f64.powi(scale as i32);
 
                     // Generate and convert back to Decimal128
-                    let float_val = generate_uniform_float(min_f64, max_f64, seed_val, 1)?[0];
+                    let float_val = generate_uniform_float_single(min_f64, max_f64, seed_val);
                     let decimal_val = (float_val * 10_f64.powi(scale as i32)).round() as i128;
 
                     builder.append_value(decimal_val);
