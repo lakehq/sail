@@ -1386,7 +1386,7 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
             "randn" => Ok(Arc::new(ScalarUDF::from(Randn::new()))),
             "is_variant_null" => Ok(Arc::new(ScalarUDF::from(SparkIsVariantNullUdf::new()))),
             "variant_to_json" => Ok(Arc::new(ScalarUDF::from(SparkVariantToJsonUdf::new()))),
-            "parse_json"=> Ok(Arc::new(ScalarUDF::from(SparkJsonToVariantUdf::new()))),
+            "parse_json" => Ok(Arc::new(ScalarUDF::from(SparkJsonToVariantUdf::new()))),
             "random" | "rand" => Ok(Arc::new(ScalarUDF::from(Random::new()))),
             "spark_array" | "spark_make_array" | "array" => {
                 Ok(Arc::new(ScalarUDF::from(SparkArray::new())))
