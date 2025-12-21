@@ -5910,7 +5910,6 @@ dependencies = [
 name = "sail-common-datafusion"
 version = "0.4.4"
 dependencies = [
- "arrow-schema",
  "async-trait",
  "chrono",
  "datafusion",
