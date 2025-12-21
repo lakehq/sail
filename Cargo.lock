@@ -6319,6 +6319,7 @@ dependencies = [
  "lazy_static",
  "log",
  "monostate",
+ "parquet-variant-compute",
  "pbjson",
  "pbjson-build",
  "pbjson-types",

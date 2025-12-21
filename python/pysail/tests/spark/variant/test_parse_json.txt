@@ -1,12 +1,6 @@
-# >>> spark.sql("""SELECT parse_json('{"name":"sail"}') AS result""").printSchema()
-# root
-#  |-- result: variant (nullable = false)
-
 >>> spark.sql("""SELECT parse_json('{"name":"sail"}') AS result""").printSchema()
 root
- |-- result: struct (nullable = true)
- |    |-- metadata: binary (nullable = false)
- |    |-- value: binary (nullable = false)
+ |-- result: variant (nullable = true)
 
 >>> spark.sql("""SELECT parse_json('{"name":"sail"}') AS result""").show()
 +---------------+

@@ -10,6 +10,12 @@ impl TryFrom<adt::Field> for sdt::StructField {
 
     fn try_from(field: adt::Field) -> SparkResult<sdt::StructField> {
         let is_udt = field.metadata().keys().any(|k| k.starts_with("udt."));
+        let is_variant = field
+            .metadata()
+            .get("ARROW:extension:name")
+            .map(|s| s == "arrowrs.variant")
+            .unwrap_or(false);
+
         let data_type = if is_udt {
             DataType {
                 kind: Some(sdt::Kind::Udt(Box::new(sdt::Udt {
@@ -22,6 +28,12 @@ impl TryFrom<adt::Field> for sdt::StructField {
                         .cloned(),
                     sql_type: Some(Box::new(field.data_type().clone().try_into()?)),
                 }))),
+            }
+        } else if is_variant {
+            DataType {
+                kind: Some(sdt::Kind::Variant(sdt::Variant {
+                    type_variation_reference: 0,
+                })),
             }
         } else {
             field.data_type().clone().try_into()?
@@ -138,13 +150,43 @@ impl TryFrom<adt::DataType> for DataType {
                     type_variation_reference: 0,
                 }))
             }
-            adt::DataType::Struct(fields) => Kind::Struct(sdt::Struct {
-                fields: fields
-                    .into_iter()
-                    .map(|f| f.as_ref().clone().try_into())
-                    .collect::<SparkResult<Vec<sdt::StructField>>>()?,
-                type_variation_reference: 0,
-            }),
+            adt::DataType::Struct(fields) => {
+                // Check if this is a Variant type
+                // Variant has specific fields: "metadata" and "value" both of type Binary/BinaryView
+                let is_variant = fields.len() == 2
+                    && fields.iter().any(|f| {
+                        f.name() == "metadata"
+                            && matches!(
+                                f.data_type(),
+                                adt::DataType::Binary
+                                    | adt::DataType::BinaryView
+                                    | adt::DataType::LargeBinary
+                            )
+                    })
+                    && fields.iter().any(|f| {
+                        f.name() == "value"
+                            && matches!(
+                                f.data_type(),
+                                adt::DataType::Binary
+                                    | adt::DataType::BinaryView
+                                    | adt::DataType::LargeBinary
+                            )
+                    });
+
+                if is_variant {
+                    Kind::Variant(sdt::Variant {
+                        type_variation_reference: 0,
+                    })
+                } else {
+                    Kind::Struct(sdt::Struct {
+                        fields: fields
+                            .into_iter()
+                            .map(|f| f.as_ref().clone().try_into())
+                            .collect::<SparkResult<Vec<sdt::StructField>>>()?,
+                        type_variation_reference: 0,
+                    })
+                }
+            }
             adt::DataType::Map(ref field, ref _keys_sorted) => {
                 let field = sdt::StructField::try_from(field.as_ref().clone())?;
                 let Some(DataType {
