@@ -303,15 +303,17 @@ generate_uniform_fn!(generate_uniform_float, generate_uniform_float_single, f64)
 #[inline]
 fn extract_seed(seed_array: Option<&ArrayRef>, i: usize) -> Option<u64> {
     use datafusion::arrow::array::AsArray;
+    use datafusion::arrow::datatypes::{Int64Type, UInt64Type};
 
     seed_array.and_then(|arr| {
         if arr.is_null(i) {
             None
         } else {
-            Some(
-                arr.as_primitive::<datafusion::arrow::datatypes::Int64Type>()
-                    .value(i) as u64,
-            )
+            match arr.data_type() {
+                DataType::Int64 => Some(arr.as_primitive::<Int64Type>().value(i) as u64),
+                DataType::UInt64 => Some(arr.as_primitive::<UInt64Type>().value(i)),
+                _ => None,
+            }
         }
     })
 }
