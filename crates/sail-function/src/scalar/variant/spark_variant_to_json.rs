@@ -6,7 +6,7 @@ use arrow_schema::DataType;
 use datafusion::common::{exec_datafusion_err, exec_err};
 use datafusion::error::Result;
 use datafusion::logical_expr::{
-    ColumnarValue, ScalarFunctionArgs, ScalarUDFImpl, Signature, TypeSignature, Volatility,
+    ColumnarValue, ScalarFunctionArgs, ScalarUDFImpl, Signature, Volatility,
 };
 use datafusion::scalar::ScalarValue;
 use parquet_variant_compute::VariantArray;
@@ -20,7 +20,7 @@ use crate::scalar::variant::spark_is_variant_null::try_field_as_variant_array;
 /// ## Arguments
 /// - expr: a DataType::Struct expression that represents a VariantArray
 /// - options: an optional MAP (note, it seems arrow-rs' parquet-variant is pretty restrictive about the options)
-#[derive(Debug, Hash, PartialEq, Eq)]
+#[derive(Debug, PartialEq, Eq, Hash)]
 pub struct SparkVariantToJsonUdf {
     signature: Signature,
 }
@@ -35,12 +35,7 @@ impl SparkVariantToJsonUdf {
 
 impl Default for SparkVariantToJsonUdf {
     fn default() -> Self {
-        Self {
-            signature: Signature::new(
-                TypeSignature::OneOf(vec![TypeSignature::Any(1), TypeSignature::Any(2)]),
-                Volatility::Immutable,
-            ),
-        }
+        Self::new()
     }
 }
 

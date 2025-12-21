@@ -6,7 +6,7 @@ use arrow_schema::{DataType, Field, Fields};
 use datafusion::common::{exec_datafusion_err, exec_err};
 use datafusion::error::Result;
 use datafusion::logical_expr::{
-    ColumnarValue, ReturnFieldArgs, ScalarFunctionArgs, ScalarUDFImpl, Signature, TypeSignature,
+    ColumnarValue, ReturnFieldArgs, ScalarFunctionArgs, ScalarUDFImpl, Signature,
 };
 use datafusion::scalar::ScalarValue;
 use datafusion_expr_common::signature::Volatility;
@@ -14,32 +14,10 @@ use parquet_variant_compute::{VariantArrayBuilder, VariantType};
 use parquet_variant_json::JsonToVariant as JsonToVariantExt;
 
 use crate::error::{invalid_arg_count_exec_err, unsupported_data_type_exec_err};
-
-pub fn try_field_as_string(field: &Field) -> Result<()> {
-    match field.data_type() {
-        DataType::Utf8 | DataType::Utf8View | DataType::LargeUtf8 | DataType::Null => {}
-        unsupported => return exec_err!("expected string field, got {unsupported} field"),
-    }
-
-    Ok(())
-}
-pub fn try_parse_string_scalar(scalar: &ScalarValue) -> Result<Option<&String>> {
-    let b = match scalar {
-        ScalarValue::Null => return Ok(None),
-        ScalarValue::Utf8(s) | ScalarValue::Utf8View(s) | ScalarValue::LargeUtf8(s) => s,
-        unsupported => {
-            return exec_err!(
-                "expected binary scalar value, got data type: {}",
-                unsupported.data_type()
-            );
-        }
-    };
-
-    Ok(b.as_ref())
-}
+use crate::scalar::variant::utils::string::{try_field_as_string, try_parse_string_scalar};
 
 /// Returns a Variant from a JSON string
-#[derive(Debug, Hash, PartialEq, Eq)]
+#[derive(Debug, PartialEq, Eq, Hash)]
 pub struct SparkJsonToVariantUdf {
     signature: Signature,
 }
@@ -54,15 +32,7 @@ impl SparkJsonToVariantUdf {
 
 impl Default for SparkJsonToVariantUdf {
     fn default() -> Self {
-        Self {
-            signature: Signature::new(
-                TypeSignature::Uniform(
-                    1,
-                    vec![DataType::Utf8, DataType::LargeUtf8, DataType::Utf8View],
-                ),
-                Volatility::Immutable,
-            ),
-        }
+        Self::new()
     }
 }
 

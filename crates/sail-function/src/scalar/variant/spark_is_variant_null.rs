@@ -7,7 +7,7 @@ use arrow_schema::{DataType, Field};
 use datafusion::common::{exec_datafusion_err, exec_err};
 use datafusion::error::Result;
 use datafusion::logical_expr::{
-    ColumnarValue, ScalarFunctionArgs, ScalarUDFImpl, Signature, TypeSignature, Volatility,
+    ColumnarValue, ScalarFunctionArgs, ScalarUDFImpl, Signature, Volatility,
 };
 use datafusion::scalar::ScalarValue;
 use parquet_variant::Variant;
@@ -15,16 +15,14 @@ use parquet_variant_compute::{VariantArray, VariantType};
 
 use crate::error::invalid_arg_count_exec_err;
 
-#[derive(Debug, Hash, PartialEq, Eq)]
+#[derive(Debug, PartialEq, Eq, Hash)]
 pub struct SparkIsVariantNullUdf {
     signature: Signature,
 }
 
 impl Default for SparkIsVariantNullUdf {
     fn default() -> Self {
-        Self {
-            signature: Signature::new(TypeSignature::Any(1), Volatility::Immutable),
-        }
+        Self::new()
     }
 }
 
