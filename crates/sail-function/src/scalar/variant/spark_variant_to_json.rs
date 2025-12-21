@@ -11,6 +11,7 @@ use datafusion::logical_expr::{
 use datafusion::scalar::ScalarValue;
 use parquet_variant_compute::VariantArray;
 use parquet_variant_json::VariantToJson;
+
 use crate::error::invalid_arg_count_exec_err;
 use crate::scalar::variant::spark_is_variant_null::try_field_as_variant_array;
 

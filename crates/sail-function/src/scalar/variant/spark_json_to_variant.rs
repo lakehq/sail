@@ -12,6 +12,7 @@ use datafusion::scalar::ScalarValue;
 use datafusion_expr_common::signature::Volatility;
 use parquet_variant_compute::{VariantArrayBuilder, VariantType};
 use parquet_variant_json::JsonToVariant as JsonToVariantExt;
+
 use crate::error::{invalid_arg_count_exec_err, unsupported_data_type_exec_err};
 
 pub fn try_field_as_string(field: &Field) -> Result<()> {
