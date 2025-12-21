@@ -90,6 +90,7 @@ impl ScalarUDFImpl for SparkJsonToVariantUdf {
 
                 match json_str {
                     Some(json_str) => builder.append_json(json_str.as_str())?,
+                    // When input is NULL, return SQL NULL (not a Variant)
                     None => builder.append_null(),
                 }
 
@@ -148,6 +149,7 @@ macro_rules! define_from_string_array {
             for v in arr {
                 match v {
                     Some(json_str) => builder.append_json(json_str)?,
+                    // When input is NULL, append SQL NULL (not a Variant)
                     None => builder.append_null(),
                 }
             }
@@ -195,9 +197,10 @@ mod tests {
 
         match result {
             ColumnarValue::Scalar(ScalarValue::Struct(sv)) => {
-                assert!(sv.is_null(0), "expected null struct");
+                // parse_json(null) should return SQL NULL
+                assert!(sv.is_null(0), "expected SQL NULL for parse_json(null)");
             }
-            _ => return exec_err!("Expected null struct array result"),
+            _ => return exec_err!("Expected Variant struct result"),
         }
         Ok(())
     }

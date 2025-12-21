@@ -65,16 +65,23 @@ impl ScalarUDFImpl for SparkIsVariantNullUdf {
 
         let out = match variant_arg {
             ColumnarValue::Scalar(scalar_variant) => match scalar_variant {
-                ScalarValue::Null => ColumnarValue::Scalar(ScalarValue::Boolean(None)),
+                // SQL NULL is not a Variant null, so return false
+                ScalarValue::Null => ColumnarValue::Scalar(ScalarValue::Boolean(Some(false))),
                 ScalarValue::Struct(arc_struct) if arc_struct.is_null(0) => {
-                    // If the struct itself is null, return null
-                    ColumnarValue::Scalar(ScalarValue::Boolean(None))
+                    // Struct marked as NULL (from parse_json(null)) is also not a Variant null
+                    ColumnarValue::Scalar(ScalarValue::Boolean(Some(false)))
                 }
-                _ => {
+                ScalarValue::Struct(_) => {
                     let variant_array = try_parse_variant_scalar(scalar_variant)?;
                     let variant = variant_array.value(0);
                     let is_variant_null = variant == Variant::Null;
                     ColumnarValue::Scalar(ScalarValue::Boolean(Some(is_variant_null)))
+                }
+                unsupported => {
+                    return exec_err!(
+                        "expected variant scalar value, got data type: {}",
+                        unsupported.data_type()
+                    );
                 }
             },
             ColumnarValue::Array(variant_array) => {
@@ -181,7 +188,7 @@ mod tests {
         let variant_input = ScalarValue::Struct(Arc::new(input.into()));
 
         let udf = SparkIsVariantNullUdf::default();
-        let return_field = Arc::new(Field::new("result", DataType::Utf8View, true));
+        let return_field = Arc::new(Field::new("result", DataType::Boolean, true));
         let arg_field = Arc::new(
             Field::new("input", DataType::Struct(Fields::empty()), true)
                 .with_extension_type(VariantType),
@@ -202,6 +209,38 @@ mod tests {
         };
 
         assert!(b);
+        Ok(())
+    }
+
+    #[test]
+    fn test_scalar_non_null_value() -> Result<()> {
+        let expected_json = serde_json::json!({"name": "test"});
+        let input = build_variant_array_from_json(&expected_json)?;
+
+        let variant_input = ScalarValue::Struct(Arc::new(input.into()));
+
+        let udf = SparkIsVariantNullUdf::default();
+        let return_field = Arc::new(Field::new("result", DataType::Boolean, true));
+        let arg_field = Arc::new(
+            Field::new("input", DataType::Struct(Fields::empty()), true)
+                .with_extension_type(VariantType),
+        );
+
+        let args = ScalarFunctionArgs {
+            args: vec![ColumnarValue::Scalar(variant_input)],
+            return_field,
+            arg_fields: vec![arg_field],
+            number_rows: Default::default(),
+            config_options: Default::default(),
+        };
+
+        let result = udf.invoke_with_args(args)?;
+
+        let ColumnarValue::Scalar(ScalarValue::Boolean(Some(b))) = result else {
+            return exec_err!("expected Scalar Boolean, got different variant");
+        };
+
+        assert!(!b);
         Ok(())
     }
 
