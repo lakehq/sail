@@ -1,3 +1,10 @@
+>>> spark.sql("""SELECT is_variant_null(parse_json(null)) AS result""").show()
++------+
+|result|
++------+
+| false|
++------+
+
 >>> spark.sql("""SELECT is_variant_null(parse_json('null')) AS result""").show()
 +------+
 |result|
