@@ -1,6 +1,5 @@
 use sail_function::scalar::variant::spark_is_variant_null::SparkIsVariantNullUdf;
 use sail_function::scalar::variant::spark_json_to_variant::SparkJsonToVariantUdf;
-use sail_function::scalar::variant::spark_variant_to_json::SparkVariantToJsonUdf;
 
 use crate::function::common::ScalarFunction;
 
@@ -18,6 +17,5 @@ pub(super) fn list_built_in_variant_functions() -> Vec<(&'static str, ScalarFunc
         ("variant_explode", F::unknown("variant_explode")),
         ("variant_explode_outer", F::unknown("variant_explode_outer")),
         ("variant_get", F::unknown("variant_get")),
-        ("variant_to_json", F::udf(SparkVariantToJsonUdf::new())),
     ]
 }

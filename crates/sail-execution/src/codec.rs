@@ -1386,6 +1386,7 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
             "randn" => Ok(Arc::new(ScalarUDF::from(Randn::new()))),
             "is_variant_null" => Ok(Arc::new(ScalarUDF::from(SparkIsVariantNullUdf::new()))),
             "variant_to_json" => Ok(Arc::new(ScalarUDF::from(SparkVariantToJsonUdf::new()))),
+            "parse_json"=> Ok(Arc::new(ScalarUDF::from(SparkJsonToVariantUdf::new()))),
             "random" | "rand" => Ok(Arc::new(ScalarUDF::from(Random::new()))),
             "spark_array" | "spark_make_array" | "array" => {
                 Ok(Arc::new(ScalarUDF::from(SparkArray::new())))
@@ -1525,9 +1526,6 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
             || node_inner.is::<ParseUrl>()
             || node_inner.is::<RaiseError>()
             || node_inner.is::<Randn>()
-            || node_inner.is::<SparkIsVariantNullUdf>()
-            || node_inner.is::<SparkJsonToVariantUdf>()
-            || node_inner.is::<SparkVariantToJsonUdf>()
             || node_inner.is::<Random>()
             || node_inner.is::<RandPoisson>()
             || node_inner.is::<SparkAbs>()
@@ -1555,6 +1553,8 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
             || node_inner.is::<SparkFromCSV>()
             || node_inner.is::<SparkHex>()
             || node_inner.is::<SparkIntervalDiv>()
+            || node_inner.is::<SparkIsVariantNullUdf>()
+            || node_inner.is::<SparkJsonToVariantUdf>()
             || node_inner.is::<SparkLastDay>()
             || node_inner.is::<SparkLuhnCheck>()
             || node_inner.is::<SparkMakeDtInterval>()
@@ -1590,6 +1590,7 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
             || node_inner.is::<SparkTryToTimestamp>()
             || node_inner.is::<SparkUnbase64>()
             || node_inner.is::<SparkUnHex>()
+            || node_inner.is::<SparkVariantToJsonUdf>()
             || node_inner.is::<SparkVersion>()
             || node_inner.is::<SparkWidthBucket>()
             || node_inner.is::<SparkXxhash64>()
