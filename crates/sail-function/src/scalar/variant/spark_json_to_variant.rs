@@ -3,7 +3,7 @@ use std::sync::Arc;
 /// [Credit]: <https://github.com/datafusion-contrib/datafusion-variant/blob/51e0d4be62d7675e9b7b56ed1c0b0a10ae4a28d7/src/json_to_variant.rs>
 use arrow::array::{Array, ArrayRef, LargeStringArray, StringArray, StringViewArray, StructArray};
 use arrow_schema::{DataType, Field, Fields};
-use datafusion::common::{exec_datafusion_err, exec_err};
+use datafusion::common::exec_datafusion_err;
 use datafusion::error::Result;
 use datafusion::logical_expr::{
     ColumnarValue, ReturnFieldArgs, ScalarFunctionArgs, ScalarUDFImpl, Signature,
@@ -101,7 +101,13 @@ impl ScalarUDFImpl for SparkJsonToVariantUdf {
                 DataType::Utf8 => ColumnarValue::Array(from_utf8_arr(arr)?),
                 DataType::LargeUtf8 => ColumnarValue::Array(from_large_utf8_arr(arr)?),
                 DataType::Utf8View => ColumnarValue::Array(from_utf8view_arr(arr)?),
-                _ => return exec_err!("Invalid data type {}", arr.data_type()),
+                _ => {
+                    return Err(unsupported_data_type_exec_err(
+                        "parse_json",
+                        "string",
+                        arr.data_type(),
+                    ));
+                }
             },
         };
 
@@ -137,19 +143,19 @@ impl ScalarUDFImpl for SparkJsonToVariantUdf {
 macro_rules! define_from_string_array {
     ($fn_name:ident, $array_type:ty) => {
         pub(crate) fn $fn_name(arr: &ArrayRef) -> Result<ArrayRef> {
-            let arr = arr
-                .as_any()
-                .downcast_ref::<$array_type>()
-                .ok_or(exec_datafusion_err!(
-                    "Unable to downcast array as expected by type."
-                ))?;
+            let typed_arr = arr.as_any().downcast_ref::<$array_type>().ok_or_else(|| {
+                exec_datafusion_err!(
+                    "Unable to downcast array of type {} to expected type {}",
+                    arr.data_type(),
+                    stringify!($array_type)
+                )
+            })?;
 
-            let mut builder = VariantArrayBuilder::new(arr.len());
+            let mut builder = VariantArrayBuilder::new(typed_arr.len());
 
-            for v in arr {
+            for v in typed_arr {
                 match v {
                     Some(json_str) => builder.append_json(json_str)?,
-                    // When input is NULL, append SQL NULL (not a Variant)
                     None => builder.append_null(),
                 }
             }
@@ -168,6 +174,7 @@ define_from_string_array!(from_large_utf8_arr, LargeStringArray);
 #[cfg(test)]
 mod tests {
     use datafusion::logical_expr::{ReturnFieldArgs, ScalarFunctionArgs};
+    use datafusion_common::exec_err;
     use parquet_variant::{Variant, VariantBuilder};
     use parquet_variant_compute::VariantArray;
 
