@@ -297,7 +297,11 @@ generate_uniform_fn!(generate_uniform_int8, generate_uniform_int8_single, i8);
 generate_uniform_fn!(generate_uniform_int16, generate_uniform_int16_single, i16);
 generate_uniform_fn!(generate_uniform_int32, generate_uniform_int32_single, i32);
 generate_uniform_fn!(generate_uniform_int64, generate_uniform_int64_single, i64);
-generate_uniform_fn!(generate_uniform_float32, generate_uniform_float32_single, f32);
+generate_uniform_fn!(
+    generate_uniform_float32,
+    generate_uniform_float32_single,
+    f32
+);
 generate_uniform_fn!(generate_uniform_float, generate_uniform_float_single, f64);
 
 #[inline]
