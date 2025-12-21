@@ -74,6 +74,9 @@ impl ScalarUDFImpl for SparkVariantToJsonUdf {
                 ScalarValue::Null => ColumnarValue::Scalar(ScalarValue::Utf8View(None)),
                 ScalarValue::Struct(variant_array) => {
                     let variant_array = VariantArray::try_new(variant_array.as_ref())?;
+                    if variant_array.is_empty() {
+                        return exec_err!("Cannot convert empty VariantArray to JSON: the array must contain at least one element");
+                    }
                     let v = variant_array.value(0);
                     ColumnarValue::Scalar(ScalarValue::Utf8View(Some(v.to_json_string()?)))
                 }
@@ -83,13 +86,13 @@ impl ScalarUDFImpl for SparkVariantToJsonUdf {
                 DataType::Struct(_) => {
                     let variant_array = VariantArray::try_new(arr.as_ref())?;
 
-                    let out: StringViewArray = variant_array
+                    let string_view_array: StringViewArray = variant_array
                         .iter()
-                        .map(|v| v.map(|v| v.to_json_string()).transpose())
+                        .map(|variant| variant.map(|v| v.to_json_string()).transpose())
                         .collect::<Result<Vec<_>, _>>()?
                         .into();
 
-                    ColumnarValue::Array(Arc::new(out))
+                    ColumnarValue::Array(Arc::new(string_view_array))
                 }
                 unsupported => return exec_err!("Invalid data type: {unsupported}"),
             },
@@ -117,17 +120,19 @@ impl ScalarUDFImpl for SparkVariantToJsonUdf {
 mod tests {
     use arrow_schema::{Field, Fields};
     use parquet_variant_compute::{VariantArrayBuilder, VariantType};
-    use parquet_variant_json::JsonToVariant;
     use serde_json::Value;
 
     use super::*;
     fn build_variant_array_from_json(value: &Value) -> Result<VariantArray> {
+        use parquet_variant_json::JsonToVariant;
+
         let json_str = value.to_string();
         let mut builder = VariantArrayBuilder::new(1);
         builder.append_json(json_str.as_str())?;
 
         Ok(builder.build())
     }
+
     #[test]
     fn test_scalar_primitive() -> Result<()> {
         let expected_json = serde_json::json!("norm");
