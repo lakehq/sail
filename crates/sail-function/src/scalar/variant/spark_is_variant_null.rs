@@ -229,7 +229,7 @@ mod tests {
         let variant_input = Arc::new(input) as ArrayRef;
 
         let udf = SparkIsVariantNullUdf::default();
-        let return_field = Arc::new(Field::new("result", DataType::Utf8View, true));
+        let return_field = Arc::new(Field::new("result", DataType::Boolean, true));
         let arg_field = Arc::new(
             Field::new("input", DataType::Struct(Fields::empty()), true)
                 .with_extension_type(VariantType),
