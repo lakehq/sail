@@ -1,7 +1,7 @@
 use std::sync::Arc;
 
 /// [Credit]: <https://github.com/datafusion-contrib/datafusion-variant/blob/51e0d4be62d7675e9b7b56ed1c0b0a10ae4a28d7/src/is_variant_null.rs>
-use arrow::array::{Array, ArrayRef, BooleanArray};
+use arrow::array::{Array, ArrayRef};
 use arrow_schema::DataType;
 use datafusion::common::{exec_datafusion_err, exec_err};
 use datafusion::error::Result;
@@ -74,8 +74,7 @@ impl ScalarUDFImpl for SparkIsVariantNullUdf {
                 ScalarValue::Struct(_) => {
                     let variant_array = try_parse_variant_scalar(scalar_variant)?;
                     let variant = variant_array.value(0);
-                    let is_variant_null = variant == Variant::Null;
-                    ColumnarValue::Scalar(ScalarValue::Boolean(Some(is_variant_null)))
+                    ColumnarValue::Scalar(ScalarValue::Boolean(Some(variant == Variant::Null)))
                 }
                 unsupported => {
                     return exec_err!(
@@ -87,18 +86,16 @@ impl ScalarUDFImpl for SparkIsVariantNullUdf {
             ColumnarValue::Array(variant_array) => {
                 let variant_array = VariantArray::try_new(variant_array.as_ref())?;
 
-                let out: BooleanArray = variant_array
-                    .iter()
-                    .map(|v| match v {
-                        // NULL in array (from parse_json(null)) is not a Variant null, return false
-                        None => Some(false),
-                        // Check if the Variant contains JSON null
-                        Some(variant) => Some(variant == Variant::Null),
-                    })
-                    .collect::<Vec<_>>()
-                    .into();
+                let mut builder = arrow::array::BooleanBuilder::with_capacity(variant_array.len());
+                for variant_option in variant_array.iter() {
+                    match variant_option {
+                        None => builder.append_value(false),
+                        Some(variant) => builder.append_value(variant == Variant::Null),
+                    }
+                }
+                let boolean_array = builder.finish();
 
-                ColumnarValue::Array(Arc::new(out) as ArrayRef)
+                ColumnarValue::Array(Arc::new(boolean_array) as ArrayRef)
             }
         };
 
@@ -121,13 +118,14 @@ impl ScalarUDFImpl for SparkIsVariantNullUdf {
 
 #[cfg(test)]
 mod tests {
-    use arrow::array::StructArray;
+    use arrow::array::{BooleanArray, StructArray};
     use arrow_schema::{Field, Fields};
     use parquet_variant_compute::{VariantArrayBuilder, VariantType};
-    use parquet_variant_json::JsonToVariant;
 
     use super::*;
     fn build_variant_array_from_json(value: &serde_json::Value) -> Result<VariantArray> {
+        use parquet_variant_json::JsonToVariant;
+
         let json_str = value.to_string();
         let mut builder = VariantArrayBuilder::new(1);
         builder.append_json(json_str.as_str())?;
@@ -137,10 +135,12 @@ mod tests {
     fn build_variant_array_from_json_array(
         jsons: &[Option<serde_json::Value>],
     ) -> Result<VariantArray> {
+        use parquet_variant_json::JsonToVariant;
+
         let mut builder = VariantArrayBuilder::new(jsons.len());
 
-        for v in jsons.iter() {
-            match v.as_ref() {
+        for json_value in jsons.iter() {
+            match json_value.as_ref() {
                 Some(json) => builder.append_json(json.to_string().as_str())?,
                 None => builder.append_null(),
             };
@@ -150,9 +150,19 @@ mod tests {
     }
 
     #[test]
+    fn test_build_variant_array_from_json_error() {
+        use parquet_variant_compute::VariantArrayBuilder;
+        use parquet_variant_json::JsonToVariant;
+
+        let mut builder = VariantArrayBuilder::new(1);
+        let result = builder.append_json("{invalid: json}");
+        assert!(result.is_err());
+    }
+
+    #[test]
     fn test_scalar() -> Result<()> {
-        let expected_json = serde_json::json!(null);
-        let input = build_variant_array_from_json(&expected_json)?;
+        let json_value = serde_json::json!(null);
+        let input = build_variant_array_from_json(&json_value)?;
 
         let variant_input = ScalarValue::Struct(Arc::new(input.into()));
 
@@ -183,8 +193,8 @@ mod tests {
 
     #[test]
     fn test_scalar_non_null_value() -> Result<()> {
-        let expected_json = serde_json::json!({"name": "test"});
-        let input = build_variant_array_from_json(&expected_json)?;
+        let json_value = serde_json::json!({"name": "test"});
+        let input = build_variant_array_from_json(&json_value)?;
 
         let variant_input = ScalarValue::Struct(Arc::new(input.into()));
 
