@@ -25,3 +25,73 @@
 +------+
 | false|
 +------+
+
+>>> spark.sql("""SELECT is_variant_null(parse_json('[null]')) AS result""").show()
++------+
+|result|
++------+
+| false|
++------+
+
+>>> spark.sql("""SELECT is_variant_null(parse_json('{"a": null}')) AS result""").show()
++------+
+|result|
++------+
+| false|
++------+
+
+>>> spark.sql("""SELECT is_variant_null(parse_json('""')) AS result""").show()
++------+
+|result|
++------+
+| false|
++------+
+
+>>> spark.sql("""SELECT is_variant_null(parse_json('0')) AS result""").show()
++------+
+|result|
++------+
+| false|
++------+
+
+>>> spark.sql("""SELECT is_variant_null(parse_json('false')) AS result""").show()
++------+
+|result|
++------+
+| false|
++------+
+
+>>> spark.sql("""SELECT is_variant_null(parse_json('[]')) AS result""").show()
++------+
+|result|
++------+
+| false|
++------+
+
+>>> spark.sql("""SELECT is_variant_null(parse_json('{}')) AS result""").show()
++------+
+|result|
++------+
+| false|
++------+
+
+>>> spark.sql("""SELECT is_variant_null(parse_json('null')) AS result""").show()
++------+
+|result|
++------+
+|  true|
++------+
+
+>>> spark.sql("""SELECT is_variant_null(parse_json('"null"')) AS result""").show()
++------+
+|result|
++------+
+| false|
++------+
+
+>>> spark.sql("""SELECT is_variant_null(parse_json(null)) AS result""").show()
++------+
+|result|
++------+
+| false|
++------+
