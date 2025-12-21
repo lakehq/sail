@@ -11,7 +11,7 @@ use datafusion::logical_expr::{
 use datafusion::scalar::ScalarValue;
 use parquet_variant_compute::VariantArray;
 use parquet_variant_json::VariantToJson;
-
+use crate::error::invalid_arg_count_exec_err;
 use crate::scalar::variant::spark_is_variant_null::try_field_as_variant_array;
 
 /// Returns a JSON string from a VariantArray
@@ -74,16 +74,15 @@ impl ScalarUDFImpl for SparkVariantToJsonUdf {
             .ok_or_else(|| exec_datafusion_err!("empty argument, expected 1 argument"))?;
 
         let out = match arg {
-            ColumnarValue::Scalar(scalar) => {
-                let ScalarValue::Struct(variant_array) = scalar else {
-                    return exec_err!("Unsupported data type: {}", scalar.data_type());
-                };
-
-                let variant_array = VariantArray::try_new(variant_array.as_ref())?;
-                let v = variant_array.value(0);
-
-                ColumnarValue::Scalar(ScalarValue::Utf8View(Some(v.to_json_string()?)))
-            }
+            ColumnarValue::Scalar(scalar) => match scalar {
+                ScalarValue::Null => ColumnarValue::Scalar(ScalarValue::Utf8View(None)),
+                ScalarValue::Struct(variant_array) => {
+                    let variant_array = VariantArray::try_new(variant_array.as_ref())?;
+                    let v = variant_array.value(0);
+                    ColumnarValue::Scalar(ScalarValue::Utf8View(Some(v.to_json_string()?)))
+                }
+                _ => return exec_err!("Unsupported data type: {}", scalar.data_type()),
+            },
             ColumnarValue::Array(arr) => match arr.data_type() {
                 DataType::Struct(_) => {
                     let variant_array = VariantArray::try_new(arr.as_ref())?;
@@ -105,10 +104,11 @@ impl ScalarUDFImpl for SparkVariantToJsonUdf {
 
     fn coerce_types(&self, arg_types: &[DataType]) -> Result<Vec<DataType>> {
         if arg_types.is_empty() || arg_types.len() > 2 {
-            return exec_err!(
-                "variant_to_json expects 1 or 2 arguments, got {}",
-                arg_types.len()
-            );
+            return Err(invalid_arg_count_exec_err(
+                "variant_to_json",
+                (1, 2),
+                arg_types.len(),
+            ));
         }
 
         // Accept the variant type as-is (it's a Struct with extension type)

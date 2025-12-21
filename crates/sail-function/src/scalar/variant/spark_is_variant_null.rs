@@ -1,7 +1,7 @@
 use std::sync::Arc;
 
 /// [Credit]: <https://github.com/datafusion-contrib/datafusion-variant/blob/51e0d4be62d7675e9b7b56ed1c0b0a10ae4a28d7/src/is_variant_null.rs>
-use arrow::array::{ArrayRef, BooleanArray};
+use arrow::array::{Array, ArrayRef, BooleanArray};
 use arrow_schema::extension::ExtensionType;
 use arrow_schema::{DataType, Field};
 use datafusion::common::{exec_datafusion_err, exec_err};
@@ -12,6 +12,8 @@ use datafusion::logical_expr::{
 use datafusion::scalar::ScalarValue;
 use parquet_variant::Variant;
 use parquet_variant_compute::{VariantArray, VariantType};
+
+use crate::error::invalid_arg_count_exec_err;
 
 #[derive(Debug, Hash, PartialEq, Eq)]
 pub struct SparkIsVariantNullUdf {
@@ -64,13 +66,19 @@ impl ScalarUDFImpl for SparkIsVariantNullUdf {
         };
 
         let out = match variant_arg {
-            ColumnarValue::Scalar(scalar_variant) => {
-                let variant_array = try_parse_variant_scalar(scalar_variant)?;
-                let variant = variant_array.value(0);
-                let is_variant_null = variant == Variant::Null;
-
-                ColumnarValue::Scalar(ScalarValue::Boolean(Some(is_variant_null)))
-            }
+            ColumnarValue::Scalar(scalar_variant) => match scalar_variant {
+                ScalarValue::Null => ColumnarValue::Scalar(ScalarValue::Boolean(None)),
+                ScalarValue::Struct(arc_struct) if arc_struct.is_null(0) => {
+                    // If the struct itself is null, return null
+                    ColumnarValue::Scalar(ScalarValue::Boolean(None))
+                }
+                _ => {
+                    let variant_array = try_parse_variant_scalar(scalar_variant)?;
+                    let variant = variant_array.value(0);
+                    let is_variant_null = variant == Variant::Null;
+                    ColumnarValue::Scalar(ScalarValue::Boolean(Some(is_variant_null)))
+                }
+            },
             ColumnarValue::Array(variant_array) => {
                 let variant_array = VariantArray::try_new(variant_array.as_ref())?;
 
@@ -89,10 +97,11 @@ impl ScalarUDFImpl for SparkIsVariantNullUdf {
 
     fn coerce_types(&self, arg_types: &[DataType]) -> Result<Vec<DataType>> {
         if arg_types.len() != 1 {
-            return exec_err!(
-                "is_variant_null expects exactly 1 argument, got {}",
-                arg_types.len()
-            );
+            return Err(invalid_arg_count_exec_err(
+                "is_variant_null",
+                (1, 1),
+                arg_types.len(),
+            ));
         }
 
         // Accept the variant type as-is (it's a Struct with extension type)
@@ -100,6 +109,11 @@ impl ScalarUDFImpl for SparkIsVariantNullUdf {
     }
 }
 pub fn try_field_as_variant_array(field: &Field) -> Result<()> {
+    // Accept Null type (for parse_json(null) case)
+    if matches!(field.data_type(), DataType::Null) {
+        return Ok(());
+    }
+
     ensure(
         matches!(field.extension_type(), VariantType),
         "field does not have extension type VariantType",

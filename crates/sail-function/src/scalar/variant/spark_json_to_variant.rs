@@ -12,10 +12,11 @@ use datafusion::scalar::ScalarValue;
 use datafusion_expr_common::signature::Volatility;
 use parquet_variant_compute::{VariantArrayBuilder, VariantType};
 use parquet_variant_json::JsonToVariant as JsonToVariantExt;
+use crate::error::{invalid_arg_count_exec_err, unsupported_data_type_exec_err};
 
 pub fn try_field_as_string(field: &Field) -> Result<()> {
     match field.data_type() {
-        DataType::Utf8 | DataType::Utf8View | DataType::LargeUtf8 => {}
+        DataType::Utf8 | DataType::Utf8View | DataType::LargeUtf8 | DataType::Null => {}
         unsupported => return exec_err!("expected string field, got {unsupported} field"),
     }
 
@@ -23,6 +24,7 @@ pub fn try_field_as_string(field: &Field) -> Result<()> {
 }
 pub fn try_parse_string_scalar(scalar: &ScalarValue) -> Result<Option<&String>> {
     let b = match scalar {
+        ScalarValue::Null => return Ok(None),
         ScalarValue::Utf8(s) | ScalarValue::Utf8View(s) | ScalarValue::LargeUtf8(s) => s,
         unsupported => {
             return exec_err!(
@@ -57,7 +59,7 @@ impl Default for SparkJsonToVariantUdf {
                     1,
                     vec![DataType::Utf8, DataType::LargeUtf8, DataType::Utf8View],
                 ),
-                datafusion::logical_expr::Volatility::Immutable,
+                Volatility::Immutable,
             ),
         }
     }
@@ -136,10 +138,11 @@ impl ScalarUDFImpl for SparkJsonToVariantUdf {
 
     fn coerce_types(&self, arg_types: &[DataType]) -> Result<Vec<DataType>> {
         if arg_types.len() != 1 {
-            return exec_err!(
-                "parse_json expects exactly 1 argument, got {}",
-                arg_types.len()
-            );
+            return Err(invalid_arg_count_exec_err(
+                "parse_json",
+                (1, 1),
+                arg_types.len(),
+            ));
         }
 
         // Coerce all string types to Utf8View for consistency
@@ -147,7 +150,11 @@ impl ScalarUDFImpl for SparkJsonToVariantUdf {
             DataType::Utf8 | DataType::LargeUtf8 | DataType::Utf8View => DataType::Utf8View,
             DataType::Null => DataType::Null,
             other => {
-                return exec_err!("parse_json expects string argument, got {}", other);
+                return Err(unsupported_data_type_exec_err(
+                    "parse_json",
+                    "string",
+                    other,
+                ));
             }
         };
 
