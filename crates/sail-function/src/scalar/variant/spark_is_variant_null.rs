@@ -2,8 +2,7 @@ use std::sync::Arc;
 
 /// [Credit]: <https://github.com/datafusion-contrib/datafusion-variant/blob/51e0d4be62d7675e9b7b56ed1c0b0a10ae4a28d7/src/is_variant_null.rs>
 use arrow::array::{Array, ArrayRef, BooleanArray};
-use arrow_schema::extension::ExtensionType;
-use arrow_schema::{DataType, Field};
+use arrow_schema::DataType;
 use datafusion::common::{exec_datafusion_err, exec_err};
 use datafusion::error::Result;
 use datafusion::logical_expr::{
@@ -11,9 +10,10 @@ use datafusion::logical_expr::{
 };
 use datafusion::scalar::ScalarValue;
 use parquet_variant::Variant;
-use parquet_variant_compute::{VariantArray, VariantType};
+use parquet_variant_compute::VariantArray;
 
 use crate::error::invalid_arg_count_exec_err;
+use crate::scalar::variant::utils::helper::{try_field_as_variant_array, try_parse_variant_scalar};
 
 #[derive(Debug, PartialEq, Eq, Hash)]
 pub struct SparkIsVariantNullUdf {
@@ -117,42 +117,6 @@ impl ScalarUDFImpl for SparkIsVariantNullUdf {
         // Accept the variant type as-is (it's a Struct with extension type)
         Ok(vec![arg_types[0].clone()])
     }
-}
-pub fn try_field_as_variant_array(field: &Field) -> Result<()> {
-    // Accept Null type (for parse_json(null) case)
-    if matches!(field.data_type(), DataType::Null) {
-        return Ok(());
-    }
-
-    ensure(
-        matches!(field.extension_type(), VariantType),
-        "field does not have extension type VariantType",
-    )?;
-
-    let variant_type = VariantType;
-    variant_type.supports_data_type(field.data_type())?;
-
-    Ok(())
-}
-pub fn ensure(pred: bool, err_msg: &str) -> Result<()> {
-    if !pred {
-        return exec_err!("{}", err_msg);
-    }
-
-    Ok(())
-}
-pub fn try_parse_variant_scalar(scalar: &ScalarValue) -> Result<VariantArray> {
-    let v = match scalar {
-        ScalarValue::Struct(v) => v,
-        unsupported => {
-            return exec_err!(
-                "expected variant scalar value, got data type: {}",
-                unsupported.data_type()
-            );
-        }
-    };
-
-    VariantArray::try_new(v.as_ref()).map_err(Into::into)
 }
 
 #[cfg(test)]

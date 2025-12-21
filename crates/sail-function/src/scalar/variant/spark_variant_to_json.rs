@@ -13,7 +13,7 @@ use parquet_variant_compute::VariantArray;
 use parquet_variant_json::VariantToJson;
 
 use crate::error::invalid_arg_count_exec_err;
-use crate::scalar::variant::spark_is_variant_null::try_field_as_variant_array;
+use crate::scalar::variant::utils::helper::try_field_as_variant_array;
 
 /// Returns a JSON string from a VariantArray
 ///
