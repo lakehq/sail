@@ -5,6 +5,28 @@ next: false
 
 # Changelog
 
+## 0.4.5
+
+_December 22, 2025_
+
+- Added basic support for the Delta Lake merge operation ([#1093](https://github.com/lakehq/sail/pull/1093), [#1133](https://github.com/lakehq/sail/pull/1133), [#1139](https://github.com/lakehq/sail/pull/1139), and [#1144](https://github.com/lakehq/sail/pull/1144)).
+- Improved distributed query execution ([#1128](https://github.com/lakehq/sail/pull/1128), [#1134](https://github.com/lakehq/sail/pull/1134), [#1135](https://github.com/lakehq/sail/pull/1135), and [#1137](https://github.com/lakehq/sail/pull/1137)).
+- Improved Spark Connect server logic ([#1126](https://github.com/lakehq/sail/pull/1126) and [#1140](https://github.com/lakehq/sail/pull/1140)).
+- Supported removing sessions ([#1125](https://github.com/lakehq/sail/pull/1125)).
+- Supported metrics and checkpoints for Delta Lake ([#1136](https://github.com/lakehq/sail/pull/1136)).
+- Improved OpenTelemetry metric reporting ([#1119](https://github.com/lakehq/sail/pull/1119)).
+- Improved the following SQL functions ([#1105](https://github.com/lakehq/sail/pull/1105)):
+  - `make_dt_interval`
+  - `make_interval`
+  - `hex`
+  - `elt`
+- Updated Parquet configuration options ([#1141](https://github.com/lakehq/sail/pull/1141)).
+- Updated the Spark Connect protocol for Spark 4.1 ([#1145](https://github.com/lakehq/sail/pull/1145) and [#1148](https://github.com/lakehq/sail/pull/1148)).
+
+### Contributors
+
+Huge thanks to [@davidlghellin](https://github.com/davidlghellin) for your contributions!
+
 ## 0.4.4
 
 _December 12, 2025_
