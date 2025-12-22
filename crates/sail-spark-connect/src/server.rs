@@ -15,10 +15,11 @@ use crate::spark::connect::release_execute_request::{Release, ReleaseAll, Releas
 use crate::spark::connect::spark_connect_service_server::SparkConnectService;
 use crate::spark::connect::{
     config_request, plan, AddArtifactsRequest, AddArtifactsResponse, AnalyzePlanRequest,
-    AnalyzePlanResponse, ArtifactStatusesRequest, ArtifactStatusesResponse, Command, ConfigRequest,
-    ConfigResponse, ExecutePlanRequest, FetchErrorDetailsRequest, FetchErrorDetailsResponse,
-    InterruptRequest, InterruptResponse, Plan, ReattachExecuteRequest, ReleaseExecuteRequest,
-    ReleaseExecuteResponse, ReleaseSessionRequest, ReleaseSessionResponse,
+    AnalyzePlanResponse, ArtifactStatusesRequest, ArtifactStatusesResponse, CloneSessionRequest,
+    CloneSessionResponse, Command, ConfigRequest, ConfigResponse, ExecutePlanRequest,
+    FetchErrorDetailsRequest, FetchErrorDetailsResponse, InterruptRequest, InterruptResponse, Plan,
+    ReattachExecuteRequest, ReleaseExecuteRequest, ReleaseExecuteResponse, ReleaseSessionRequest,
+    ReleaseSessionResponse,
 };
 
 #[derive(Debug)]
@@ -152,10 +153,16 @@ impl SparkConnectService for SparkConnectServer {
                     CommandType::ExecuteExternalCommand(_) => {
                         return Err(Status::unimplemented("execute external command"));
                     }
+                    CommandType::PipelineCommand(_) => {
+                        return Err(Status::unimplemented("pipeline command"));
+                    }
                     CommandType::Extension(_) => {
                         return Err(Status::unimplemented("command extension"));
                     }
                 }
+            }
+            plan::OpType::CompressedOperation(_) => {
+                return Err(Status::unimplemented("compressed operation plan"));
             }
         };
         Ok(Response::new(stream))
@@ -484,5 +491,14 @@ impl SparkConnectService for SparkConnectServer {
         let request = request.into_inner();
         debug!("{request:?}");
         Err(Status::unimplemented("fetch error details"))
+    }
+
+    async fn clone_session(
+        &self,
+        request: Request<CloneSessionRequest>,
+    ) -> Result<Response<CloneSessionResponse>, Status> {
+        let request = request.into_inner();
+        debug!("{request:?}");
+        Err(Status::unimplemented("clone session"))
     }
 }

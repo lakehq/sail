@@ -87,8 +87,26 @@ fn build_spark_config() -> Result<(), Box<dyn std::error::Error>> {
         key.replace('.', "_").to_uppercase()
     };
 
-    let config =
+    let mut config =
         serde_json::from_str::<SparkConfig>(&std::fs::read_to_string("data/spark_config.json")?)?;
+
+    // TODO: remove these overrides
+    config.entries.iter_mut().for_each(|entry| {
+        // Spark 4.1 changes the local relation cache threshold from 64 MB to 1 MB
+        // which causes DataFrame creation more likely to fail since we do not support
+        // caching local relations as artifacts yet.
+        // Here we override the default value to a very high value (2 GB) to
+        // effectively turn off local relation caching.
+        if entry.key == "spark.sql.session.localRelationCacheThreshold" {
+            entry.default_value = Some("2147483648".to_string())
+        }
+        // Spark 4.1 enables safe conversion to Arrow by default, but we turn it off
+        // to avoid a few PySpark test failures caused by datetime conversions.
+        // More investigation is needed here.
+        if entry.key == "spark.sql.execution.pandas.convertToArrowArraySafely" {
+            entry.default_value = Some("false".to_string())
+        }
+    });
 
     let keys = config
         .entries

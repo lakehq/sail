@@ -119,7 +119,11 @@ impl PlanResolver<'_> {
             Literal::Utf8 { value } => Ok(ScalarValue::Utf8(value)),
             Literal::LargeUtf8 { value } => Ok(ScalarValue::LargeUtf8(value)),
             Literal::Utf8View { value } => Ok(ScalarValue::Utf8View(value)),
-            Literal::List { data_type, values } => {
+            Literal::List {
+                data_type,
+                nullable,
+                values,
+            } => {
                 let data_type = self.resolve_data_type(&data_type, state)?;
                 if let Some(values) = values {
                     let scalars: Vec<ScalarValue> = values
@@ -129,7 +133,7 @@ impl PlanResolver<'_> {
                     Ok(ScalarValue::List(ScalarValue::new_list_from_iter(
                         scalars.into_iter(),
                         &data_type,
-                        true,
+                        nullable,
                     )))
                 } else {
                     Ok(ScalarValue::new_null_list(data_type, true, 0))
@@ -138,6 +142,7 @@ impl PlanResolver<'_> {
             Literal::FixedSizeList {
                 length,
                 data_type,
+                nullable,
                 values,
             } => {
                 let data_type = self.resolve_data_type(&data_type, state)?;
@@ -161,7 +166,7 @@ impl PlanResolver<'_> {
                     )))
                 } else {
                     let data_type = adt::DataType::FixedSizeList(
-                        adt::Field::new_list_field(data_type, true).into(),
+                        adt::Field::new_list_field(data_type, nullable).into(),
                         length,
                     );
                     Ok(ScalarValue::FixedSizeList(Arc::new(
@@ -169,7 +174,11 @@ impl PlanResolver<'_> {
                     )))
                 }
             }
-            Literal::LargeList { data_type, values } => {
+            Literal::LargeList {
+                data_type,
+                nullable,
+                values,
+            } => {
                 let data_type = self.resolve_data_type(&data_type, state)?;
                 if let Some(values) = values {
                     let scalars: Vec<ScalarValue> = values
@@ -190,7 +199,7 @@ impl PlanResolver<'_> {
                     )))
                 } else {
                     let data_type = adt::DataType::LargeList(
-                        adt::Field::new_list_field(data_type, true).into(),
+                        adt::Field::new_list_field(data_type, nullable).into(),
                     );
                     Ok(ScalarValue::LargeList(Arc::new(LargeListArray::from(
                         ArrayData::new_null(&data_type, 0),
@@ -268,6 +277,7 @@ impl PlanResolver<'_> {
             Literal::Map {
                 key_type,
                 value_type,
+                value_type_nullable,
                 keys,
                 values,
             } => {
@@ -281,7 +291,7 @@ impl PlanResolver<'_> {
                     spec::Field {
                         name: SAIL_MAP_VALUE_FIELD_NAME.to_string(),
                         data_type: value_type,
-                        nullable: true,
+                        nullable: value_type_nullable,
                         metadata: vec![],
                     },
                 ]);
