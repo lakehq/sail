@@ -28,6 +28,7 @@ tokio-stream = { version = "0.1.17", features = ["time", "io-util"] }
 pbjson = "0.9.0"
 pbjson-types = "0.9.0"
 pbjson-build = "0.9.0"
+educe = "0.6"
 tower = { version = "0.5.2", features = ["full"] }
 uuid = { version = "1.19.0", features = ["serde", "v4"] }
 async-trait = "0.1.89"

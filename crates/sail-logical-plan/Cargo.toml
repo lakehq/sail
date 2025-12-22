@@ -16,3 +16,4 @@ datafusion-expr = { workspace = true }
 comfy-table = { workspace = true }
 html-escape = { workspace = true }
 log = { workspace = true }
+educe = { workspace = true }
