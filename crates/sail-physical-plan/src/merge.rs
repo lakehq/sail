@@ -124,6 +124,10 @@ pub async fn create_preexpanded_merge_physical_plan(
         })
     };
 
+    let is_insert_only = opts.matched_clauses.is_empty()
+        && opts.not_matched_by_source_clauses.is_empty()
+        && !opts.not_matched_by_target_clauses.is_empty();
+
     let dummy_expr = Arc::new(Literal::new(ScalarValue::Boolean(Some(true))));
 
     let info = PhysicalMergeInfo {
@@ -135,7 +139,12 @@ pub async fn create_preexpanded_merge_physical_plan(
         join_schema: Arc::new(node.input().schema().as_ref().as_arrow().clone()),
         pre_expanded: true,
         expanded_input: Some(write_input.clone()),
-        touched_file_plan: Some(touched_plan.clone()),
+        touched_file_plan: if is_insert_only {
+            // Fast append path: no target rows are rewritten, so skip file lookup/remove entirely.
+            None
+        } else {
+            Some(touched_plan.clone())
+        },
         on_condition: dummy_expr.clone(),
         join_keys: vec![],
         join_filter: None,

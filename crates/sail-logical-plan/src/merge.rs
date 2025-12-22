@@ -10,7 +10,8 @@ use datafusion_common::{
 };
 use datafusion_expr::expr::Case;
 use datafusion_expr::expr_fn::not;
-use datafusion_expr::logical_plan::LogicalPlanBuilder;
+use datafusion_expr::logical_plan::{Extension, LogicalPlanBuilder};
+use datafusion_expr::utils::expr_to_columns;
 use datafusion_expr::{
     col, lit, Expr, Join, JoinConstraint, JoinType, LogicalPlan, UserDefinedLogicalNodeCore,
 };
@@ -20,6 +21,97 @@ use sail_common_datafusion::utils::items::ItemTaker;
 
 pub const SOURCE_PRESENT_COLUMN: &str = "__sail_merge_source_row_present";
 pub const TARGET_PRESENT_COLUMN: &str = "__sail_merge_target_row_present";
+pub const TARGET_ROW_ID_COLUMN: &str = "__sail_merge_target_row_id";
+
+#[derive(Clone, Debug, PartialEq, Educe)]
+#[educe(Eq, Hash, PartialOrd)]
+pub struct MergeCardinalityCheckNode {
+    input: Arc<LogicalPlan>,
+    target_row_id_col: String,
+    target_present_col: String,
+    source_present_col: String,
+    #[educe(PartialOrd(ignore))]
+    schema: DFSchemaRef,
+}
+
+impl MergeCardinalityCheckNode {
+    pub fn new(
+        input: Arc<LogicalPlan>,
+        target_row_id_col: impl Into<String>,
+        target_present_col: impl Into<String>,
+        source_present_col: impl Into<String>,
+    ) -> Self {
+        let schema = input.schema().clone();
+        Self {
+            input,
+            target_row_id_col: target_row_id_col.into(),
+            target_present_col: target_present_col.into(),
+            source_present_col: source_present_col.into(),
+            schema,
+        }
+    }
+
+    pub fn target_row_id_col(&self) -> &str {
+        &self.target_row_id_col
+    }
+
+    pub fn target_present_col(&self) -> &str {
+        &self.target_present_col
+    }
+
+    pub fn source_present_col(&self) -> &str {
+        &self.source_present_col
+    }
+}
+
+impl UserDefinedLogicalNodeCore for MergeCardinalityCheckNode {
+    fn name(&self) -> &str {
+        "MergeCardinalityCheck"
+    }
+
+    fn inputs(&self) -> Vec<&LogicalPlan> {
+        vec![self.input.as_ref()]
+    }
+
+    fn schema(&self) -> &DFSchemaRef {
+        &self.schema
+    }
+
+    fn expressions(&self) -> Vec<Expr> {
+        vec![]
+    }
+
+    fn fmt_for_explain(&self, f: &mut Formatter) -> std::fmt::Result {
+        write!(
+            f,
+            "MergeCardinalityCheck: target_row_id_col={}, target_present_col={}, source_present_col={}",
+            self.target_row_id_col, self.target_present_col, self.source_present_col
+        )
+    }
+
+    fn with_exprs_and_inputs(
+        &self,
+        exprs: Vec<Expr>,
+        inputs: Vec<LogicalPlan>,
+    ) -> datafusion_common::Result<Self> {
+        exprs.zero()?;
+        let [input] = inputs.as_slice() else {
+            return Err(DataFusionError::Internal(
+                "MergeCardinalityCheckNode expects exactly 1 input".to_string(),
+            ));
+        };
+        Ok(Self::new(
+            Arc::new(input.clone()),
+            self.target_row_id_col.clone(),
+            self.target_present_col.clone(),
+            self.source_present_col.clone(),
+        ))
+    }
+
+    fn necessary_children_exprs(&self, _output_columns: &[usize]) -> Option<Vec<Vec<usize>>> {
+        None
+    }
+}
 
 #[derive(Clone, Debug, Eq, PartialEq, Hash)]
 pub struct MergeIntoOptions {
@@ -305,6 +397,7 @@ pub fn expand_merge(node: &MergeIntoNode, path_column: &str) -> Result<MergeExpa
     let source_plan = node.source.as_ref().clone();
     let mut options = node.options().clone();
     let merge_schema = node.input_schema.clone();
+    let should_check_cardinality = should_check_cardinality(&options.matched_clauses);
 
     trace!(
         "merge input schema fields: {:?}",
@@ -409,9 +502,23 @@ pub fn expand_merge(node: &MergeIntoNode, path_column: &str) -> Result<MergeExpa
             .collect::<Vec<_>>()
     );
 
-    let target_plan = LogicalPlanBuilder::from(target_plan.clone())
+    let mut target_plan = LogicalPlanBuilder::from(target_plan.clone())
         .project(target_proj_exprs)?
         .build()?;
+
+    if should_check_cardinality {
+        // Add stable per-target-row id before join; JOIN will duplicate this value for matches.
+        let mut exprs: Vec<Expr> = target_plan
+            .schema()
+            .fields()
+            .iter()
+            .map(|f| Expr::Column(Column::from_name(f.name().clone())))
+            .collect();
+        exprs.push(datafusion::functions::string::expr_fn::uuid().alias(TARGET_ROW_ID_COLUMN));
+        target_plan = LogicalPlanBuilder::from(target_plan)
+            .project(exprs)?
+            .build()?;
+    }
 
     // To avoid duplicate unqualified names after JOIN, rename source columns with a stable prefix.
     let target_input_len = options.resolved_target_schema.fields().len();
@@ -432,6 +539,11 @@ pub fn expand_merge(node: &MergeIntoNode, path_column: &str) -> Result<MergeExpa
     }
     // keep path column mapping stable if present
     target_rename_map.insert(path_column.to_string(), path_column.to_string());
+    // keep row id stable if present
+    target_rename_map.insert(
+        TARGET_ROW_ID_COLUMN.to_string(),
+        TARGET_ROW_ID_COLUMN.to_string(),
+    );
 
     let mut source_rename_map: HashMap<String, String> = HashMap::new();
     let target_input_len = options.resolved_target_schema.fields().len();
@@ -480,22 +592,6 @@ pub fn expand_merge(node: &MergeIntoNode, path_column: &str) -> Result<MergeExpa
             .collect::<Vec<_>>()
     );
 
-    let augmented_target = LogicalPlanBuilder::from(target_plan.clone())
-        .project(append_presence_projection(
-            target_schema,
-            TARGET_PRESENT_COLUMN,
-            Some(path_column),
-        )?)?
-        .build()?;
-
-    let augmented_source = LogicalPlanBuilder::from(source_plan.clone())
-        .project(append_presence_projection(
-            source_schema,
-            SOURCE_PRESENT_COLUMN,
-            None,
-        )?)?
-        .build()?;
-
     // Rewrite all expressions that reference source columns to the new prefixed names.
     let rewrite = |expr: Expr| rewrite_merge_columns(expr, &target_rename_map, &source_rename_map);
     options.on_condition = rewrite(options.on_condition.clone())?;
@@ -526,6 +622,69 @@ pub fn expand_merge(node: &MergeIntoNode, path_column: &str) -> Result<MergeExpa
         &options.on_condition
     );
 
+    // Detect insert-only MERGE that can use fast append (anti-join + no touched files).
+    let can_fast_append = can_fast_append_insert_only(&options, target_schema, path_column)?;
+
+    if can_fast_append {
+        // source ANTI target
+        let join_on = options
+            .join_key_pairs
+            .iter()
+            .map(|(t, s)| Ok((s.clone(), t.clone())))
+            .collect::<Result<Vec<_>>>()?;
+        let residual_filter = combine_conjunction(&options.residual_predicates);
+
+        let join = Join::try_new(
+            Arc::new(source_plan.clone()),
+            Arc::new(target_plan.clone()),
+            join_on,
+            residual_filter,
+            JoinType::LeftAnti,
+            JoinConstraint::On,
+            NullEquality::NullEqualsNothing,
+        )?;
+        let join = Arc::new(LogicalPlan::Join(join));
+
+        // Filter rows that do not match any NOT MATCHED BY TARGET clause conditions.
+        let insert_filter = insert_only_insert_filter(&options);
+        let filtered = LogicalPlanBuilder::from(join.as_ref().clone())
+            .filter(insert_filter)?
+            .build()?;
+
+        let projection_exprs =
+            build_insert_only_projection(&options, target_schema, source_schema, path_column)?;
+        let projected = LogicalPlanBuilder::from(filtered)
+            .project(projection_exprs)?
+            .build()?;
+
+        let touched_plan = LogicalPlanBuilder::empty(false).build()?;
+        let command_schema = Arc::new(DFSchema::empty());
+        return Ok(MergeExpansion {
+            write_plan: projected,
+            touched_files_plan: touched_plan,
+            output_schema: command_schema,
+            options,
+        });
+    }
+
+    // Default MERGE expansion path (full outer join + presence columns + touched files).
+
+    let augmented_target = LogicalPlanBuilder::from(target_plan.clone())
+        .project(append_presence_projection(
+            target_schema,
+            TARGET_PRESENT_COLUMN,
+            Some(path_column),
+        )?)?
+        .build()?;
+
+    let augmented_source = LogicalPlanBuilder::from(source_plan.clone())
+        .project(append_presence_projection(
+            source_schema,
+            SOURCE_PRESENT_COLUMN,
+            None,
+        )?)?
+        .build()?;
+
     let join_on = options.join_key_pairs.clone();
     let residual_filter = combine_conjunction(&options.residual_predicates);
 
@@ -540,6 +699,18 @@ pub fn expand_merge(node: &MergeIntoNode, path_column: &str) -> Result<MergeExpa
     )?;
 
     let join = Arc::new(LogicalPlan::Join(join));
+    let join: Arc<LogicalPlan> = if should_check_cardinality {
+        Arc::new(LogicalPlan::Extension(Extension {
+            node: Arc::new(MergeCardinalityCheckNode::new(
+                Arc::clone(&join),
+                TARGET_ROW_ID_COLUMN,
+                TARGET_PRESENT_COLUMN,
+                SOURCE_PRESENT_COLUMN,
+            )),
+        }))
+    } else {
+        join
+    };
 
     let target_present = col(TARGET_PRESENT_COLUMN).is_not_null();
     let source_present = col(SOURCE_PRESENT_COLUMN).is_not_null();
@@ -647,6 +818,146 @@ fn append_presence_projection(
     Ok(exprs)
 }
 
+fn can_fast_append_insert_only(
+    options: &MergeIntoOptions,
+    target_schema: &DFSchemaRef,
+    path_column: &str,
+) -> Result<bool> {
+    // Insert-only: only NOT MATCHED BY TARGET clauses, no updates/deletes.
+    if !options.matched_clauses.is_empty() {
+        return Ok(false);
+    }
+    if !options.not_matched_by_source_clauses.is_empty() {
+        return Ok(false);
+    }
+    if options.not_matched_by_target_clauses.is_empty() {
+        return Ok(false);
+    }
+
+    // Robustness gate: ensure NOT MATCHED BY TARGET conditions/values do not reference target.
+    // (We still allow referencing target columns in the ON condition for the anti join.)
+    let target_names: std::collections::HashSet<String> = target_schema
+        .fields()
+        .iter()
+        .map(|f| f.name().clone())
+        .chain(std::iter::once(path_column.to_string()))
+        .collect();
+
+    let references_target = |expr: &Expr| -> Result<bool> {
+        let mut cols: std::collections::HashSet<Column> = std::collections::HashSet::new();
+        expr_to_columns(expr, &mut cols)?;
+        Ok(cols.iter().any(|c| target_names.contains(&c.name)))
+    };
+
+    for clause in &options.not_matched_by_target_clauses {
+        if let Some(cond) = &clause.condition {
+            if references_target(cond)? {
+                return Ok(false);
+            }
+        }
+        match &clause.action {
+            MergeNotMatchedByTargetAction::InsertAll => {}
+            MergeNotMatchedByTargetAction::InsertColumns { values, .. } => {
+                for v in values {
+                    if references_target(v)? {
+                        return Ok(false);
+                    }
+                }
+            }
+        }
+    }
+
+    Ok(true)
+}
+
+fn insert_only_insert_filter(options: &MergeIntoOptions) -> Expr {
+    let preds = options
+        .not_matched_by_target_clauses
+        .iter()
+        .map(|c| c.condition.clone().unwrap_or_else(|| lit(true)))
+        .collect::<Vec<_>>();
+    combine_disjunction(&preds).unwrap_or_else(|| lit(false))
+}
+
+fn build_insert_only_projection(
+    options: &MergeIntoOptions,
+    target_schema: &DFSchemaRef,
+    source_schema: &DFSchemaRef,
+    path_column: &str,
+) -> Result<Vec<Expr>> {
+    // Match existing MERGE behavior: produce one output row per inserted source row,
+    // with clause order determining first-match semantics.
+    let mut projections = Vec::new();
+
+    // Build lookup for source expressions by index, consistent with existing InsertAll behavior.
+    let source_exprs = source_schema
+        .fields()
+        .iter()
+        .map(|f| Expr::Column(Column::from_name(f.name().clone())))
+        .collect::<Vec<_>>();
+
+    for (idx, field) in target_schema.fields().iter().enumerate() {
+        if field.name() == path_column || field.name() == TARGET_ROW_ID_COLUMN {
+            continue;
+        }
+        let name = field.name().clone();
+        let mut branches: Vec<(Expr, Expr)> = Vec::new();
+
+        for clause in &options.not_matched_by_target_clauses {
+            let pred = clause.condition.clone().unwrap_or_else(|| lit(true));
+            let value = match &clause.action {
+                MergeNotMatchedByTargetAction::InsertAll => source_exprs
+                    .get(idx)
+                    .cloned()
+                    .unwrap_or_else(|| lit(ScalarValue::Null)),
+                MergeNotMatchedByTargetAction::InsertColumns { columns, values } => {
+                    // If column not specified in this clause, it becomes NULL for this clause
+                    // (and must NOT fall through to later clauses).
+                    let mut out = lit(ScalarValue::Null);
+                    for (col_name, expr) in columns.iter().zip(values.iter()) {
+                        if col_name.eq_ignore_ascii_case(&name) {
+                            out = expr.clone();
+                            break;
+                        }
+                    }
+                    out
+                }
+            };
+            branches.push((pred, value));
+        }
+
+        let when_then_expr = branches
+            .into_iter()
+            .map(|(p, v)| (Box::new(p), Box::new(v)))
+            .collect::<Vec<_>>();
+
+        // Rows are pre-filtered by insert_only_insert_filter, but keep an else NULL to be safe.
+        let expr = Expr::Case(Case {
+            expr: None,
+            when_then_expr,
+            else_expr: Some(Box::new(lit(ScalarValue::Null))),
+        });
+        projections.push(expr.alias(name));
+    }
+
+    Ok(projections)
+}
+
+fn should_check_cardinality(matched_clauses: &[MergeMatchedClause]) -> bool {
+    // Spark semantics: If there are no matched clauses, nothing to check.
+    // If there is exactly one matched clause and it is an unconditional DELETE, skip.
+    if matched_clauses.is_empty() {
+        return false;
+    }
+    if matched_clauses.len() == 1 {
+        let clause = &matched_clauses[0];
+        if matches!(clause.action, MergeMatchedAction::Delete) && clause.condition.is_none() {
+            return false;
+        }
+    }
+    true
+}
+
 fn combine_conjunction(exprs: &[Expr]) -> Option<Expr> {
     let mut iter = exprs.iter().cloned();
     let first = iter.next()?;
@@ -675,7 +986,7 @@ fn build_merge_projection(
     let mut cases: Vec<(String, Vec<(Expr, Expr)>)> = target_schema
         .fields()
         .iter()
-        .filter(|f| f.name() != path_column)
+        .filter(|f| f.name() != path_column && f.name() != TARGET_ROW_ID_COLUMN)
         .map(|f| (f.name().clone(), Vec::new()))
         .collect();
 
@@ -775,7 +1086,7 @@ fn build_merge_projection(
 
     let mut projections = Vec::new();
     for field in target_schema.fields() {
-        if field.name() == path_column {
+        if field.name() == path_column || field.name() == TARGET_ROW_ID_COLUMN {
             continue;
         }
         let name = field.name();

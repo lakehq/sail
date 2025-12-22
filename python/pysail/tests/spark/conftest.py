@@ -261,7 +261,7 @@ def statement(template, docstring, spark, variables):
     spark.sql(s)
 
 
-@given(parsers.re("statement(?P<template>( template)?) with error {error}"))
+@given(parsers.re(r"statement(?P<template>( template)?) with error (?P<error>.+)"))
 def statement_with_error(template, error, docstring, spark, variables):
     """Executes a SQL statement that is expected to fail with an error.
 
@@ -429,3 +429,21 @@ def delta_log_latest_commit_info_matches_snapshot(snapshot: SnapshotAssertion, v
         commit_info["operationParameters"] = _recursive_parse_json_strings(commit_info["operationParameters"])
 
     assert commit_info == snapshot
+
+
+@then("delta log latest has no remove actions")
+def delta_log_latest_has_no_remove_actions(variables):
+    if is_jvm_spark():
+        pytest.skip("Delta log operation assertions are Sail-only")
+    location = variables.get("location")
+    assert (
+        location is not None
+    ), "expected variable `location` to be defined for delta log inspection"
+    log_dir = Path(location.path) / "_delta_log"
+    logs = sorted(log_dir.glob("*.json"))
+    assert logs, f"no delta logs found in {log_dir}"
+    latest = logs[-1]
+    with latest.open("r", encoding="utf-8") as f:
+        for line in f:
+            obj = json.loads(line)
+            assert "remove" not in obj, f"unexpected remove action in {latest}"

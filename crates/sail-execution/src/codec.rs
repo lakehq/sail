@@ -147,6 +147,7 @@ use sail_iceberg::TableIcebergOptions;
 use sail_logical_plan::range::Range;
 use sail_logical_plan::show_string::{ShowStringFormat, ShowStringStyle};
 use sail_physical_plan::map_partitions::MapPartitionsExec;
+use sail_physical_plan::merge_cardinality_check::MergeCardinalityCheckExec;
 use sail_physical_plan::range::RangeExec;
 use sail_physical_plan::schema_pivot::SchemaPivotExec;
 use sail_physical_plan::show_string::ShowStringExec;
@@ -758,6 +759,17 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
                 let input = self.try_decode_plan(&input, ctx)?;
                 Ok(Arc::new(StreamSourceAdapterExec::new(input)))
             }
+            NodeKind::MergeCardinalityCheck(gen::MergeCardinalityCheckExecNode {
+                input,
+                target_row_id_col,
+                target_present_col,
+                source_present_col,
+            }) => Ok(Arc::new(MergeCardinalityCheckExec::new(
+                self.try_decode_plan(&input, ctx)?,
+                target_row_id_col,
+                target_present_col,
+                source_present_col,
+            )?)),
             NodeKind::IcebergWriter(gen::IcebergWriterExecNode {
                 input,
                 table_url,
@@ -1214,6 +1226,16 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
         {
             let input = self.try_encode_plan(stream_source_adapter.input().clone())?;
             NodeKind::StreamSourceAdapter(gen::StreamSourceAdapterExecNode { input })
+        } else if let Some(cardinality_check) =
+            node.as_any().downcast_ref::<MergeCardinalityCheckExec>()
+        {
+            let input = self.try_encode_plan(cardinality_check.input().clone())?;
+            NodeKind::MergeCardinalityCheck(gen::MergeCardinalityCheckExecNode {
+                input,
+                target_row_id_col: cardinality_check.target_row_id_col().to_string(),
+                target_present_col: cardinality_check.target_present_col().to_string(),
+                source_present_col: cardinality_check.source_present_col().to_string(),
+            })
         } else if let Some(iceberg_writer_exec) = node.as_any().downcast_ref::<IcebergWriterExec>()
         {
             let input = self.try_encode_plan(iceberg_writer_exec.input().clone())?;
