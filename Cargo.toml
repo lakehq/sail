@@ -75,7 +75,7 @@ num-traits = "0.2.19"
 log = "0.4.29"
 env_logger = "0.11.8"
 fastrace = { version = "0.7.15", features = ["enable"] }
-fastrace-opentelemetry = "0.14.0"
+fastrace-opentelemetry = "0.15.0"
 fastrace-futures = "0.7.15"
 opentelemetry = "0.31.0"
 opentelemetry_sdk = { version = "0.31.0", features = ["testing"] }
@@ -95,7 +95,7 @@ crc32fast = "1.5.0"
 sha1 = "0.10.6"
 half = { version = "2.7.1", features = ["serde", "num-traits", "zerocopy"] }
 iana-time-zone = "0.1.64"
-chumsky = { version = "0.11.2", default-features = false, features = ["pratt"] }
+chumsky = { version = "0.12.0", default-features = false, features = ["pratt"] }
 num = "0.4.3"
 hf-hub = { version = "0.4.3", default-features = false, features = ["tokio"] }
 reqwest = { version = "0.12.26", default-features = false, features = ["rustls-tls", "json", "multipart", "stream"] }
@@ -165,7 +165,7 @@ object_store = { version = "0.12.4", features = ["aws", "gcp", "azure", "http"] 
 hdfs-native-object-store = "0.15.0"
 
 # Lakehouse
-delta_kernel = { version = "0.18.2", features = ["arrow-57", "default-engine-rustls", "internal-api"] }
+delta_kernel = { version = "0.19.0", features = ["arrow-57", "default-engine-rustls", "internal-api"] }
 ######
 # This is the end of the manually managed dependencies.
 # Do not add more dependencies below.
