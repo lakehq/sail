@@ -11,7 +11,6 @@ if TYPE_CHECKING:
 import pandas as pd
 import pyarrow as pa
 import pyspark
-from pyspark.loose_version import LooseVersion
 from pyspark.sql.pandas.serializers import ArrowStreamPandasUDFSerializer, ArrowStreamPandasUDTFSerializer
 from pyspark.sql.pandas.types import from_arrow_type
 from pyspark.sql.types import Row
@@ -369,7 +368,7 @@ class StructConverter(Converter):
         )
 
 
-if LooseVersion(pyspark.__version__) < LooseVersion("4.1.0"):
+if pyspark.__version__.startswith(("3.", "4.0.")):
 
     def _arrow_column_to_pandas(column: pa.Array, serializer: ArrowStreamPandasUDFSerializer):
         return serializer.arrow_to_pandas(column)
