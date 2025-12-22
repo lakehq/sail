@@ -140,7 +140,7 @@ Feature: Delta Lake Merge
         WHEN NOT MATCHED THEN
           INSERT *
         """
-      Then delta log latest has no remove actions
+      Then delta log latest commit info matches snapshot
       When query
         """
         SELECT id, value FROM delta_merge_insert_only ORDER BY id
