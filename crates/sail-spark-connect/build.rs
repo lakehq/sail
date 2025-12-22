@@ -87,8 +87,14 @@ fn build_spark_config() -> Result<(), Box<dyn std::error::Error>> {
         key.replace('.', "_").to_uppercase()
     };
 
-    let config =
+    let mut config =
         serde_json::from_str::<SparkConfig>(&std::fs::read_to_string("data/spark_config.json")?)?;
+
+    config.entries.iter_mut().for_each(|entry| {
+        if entry.key == "spark.sql.session.localRelationCacheThreshold" {
+            entry.default_value = Some("2147483648".to_string())
+        }
+    });
 
     let keys = config
         .entries
