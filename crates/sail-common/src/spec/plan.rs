@@ -788,6 +788,15 @@ pub struct GroupMap {
     pub output_mode: Option<String>,
     pub timeout_conf: Option<String>,
     pub state_schema: Option<Schema>,
+    pub transform_with_state_info: Option<TransformWithStateInfo>,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct TransformWithStateInfo {
+    pub time_mode: String,
+    pub event_time_column_name: Option<Identifier>,
+    pub output_schema: Option<Schema>,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
