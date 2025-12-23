@@ -1,7 +1,7 @@
 use std::sync::Arc;
 
 /// [Credit]: <https://github.com/datafusion-contrib/datafusion-variant/blob/51e0d4be62d7675e9b7b56ed1c0b0a10ae4a28d7/src/json_to_variant.rs>
-use arrow::array::{Array, ArrayRef, LargeStringArray, StringArray, StringViewArray, StructArray};
+use arrow::array::{Array, ArrayRef, StringViewArray, StructArray};
 use arrow_schema::{DataType, Field, Fields};
 use datafusion::common::exec_datafusion_err;
 use datafusion::error::Result;
@@ -98,8 +98,6 @@ impl ScalarUDFImpl for SparkJsonToVariantUdf {
                 ColumnarValue::Scalar(ScalarValue::Struct(Arc::new(struct_array)))
             }
             ColumnarValue::Array(arr) => match arr.data_type() {
-                DataType::Utf8 => ColumnarValue::Array(from_utf8_arr(arr)?),
-                DataType::LargeUtf8 => ColumnarValue::Array(from_large_utf8_arr(arr)?),
                 DataType::Utf8View => ColumnarValue::Array(from_utf8view_arr(arr)?),
                 _ => {
                     return Err(unsupported_data_type_exec_err(
@@ -167,9 +165,7 @@ macro_rules! define_from_string_array {
     };
 }
 
-define_from_string_array!(from_utf8_arr, StringArray);
 define_from_string_array!(from_utf8view_arr, StringViewArray);
-define_from_string_array!(from_large_utf8_arr, LargeStringArray);
 
 #[cfg(test)]
 mod tests {
