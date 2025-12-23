@@ -100,6 +100,73 @@ Feature: Delta Lake Merge
           INSERT *
         """
 
+  Rule: Cardinality check can be skipped when source is provably unique on join keys
+    Background:
+      Given variable location for temporary directory merge_cardinality_skip
+      Given final statement
+        """
+        DROP TABLE IF EXISTS delta_merge_cardinality_skip
+        """
+      Given statement template
+        """
+        CREATE TABLE delta_merge_cardinality_skip (
+          id INT,
+          value STRING
+        )
+        USING DELTA LOCATION {{ location.sql }}
+        """
+      Given statement
+        """
+        INSERT INTO delta_merge_cardinality_skip
+        SELECT * FROM VALUES
+          (1, 't1')
+        """
+      Given statement
+        """
+        CREATE OR REPLACE TEMP VIEW src_merge_cardinality_skip AS
+        SELECT
+          id,
+          max(value) AS value
+        FROM VALUES
+          (1, 's1'),
+          (1, 's2')
+        AS src(id, value)
+        GROUP BY id
+        """
+
+    Scenario: EXPLAIN EXTENDED does not include MergeCardinalityCheck when source is grouped by join keys
+      When query
+        """
+        EXPLAIN EXTENDED
+        MERGE INTO delta_merge_cardinality_skip AS t
+        USING src_merge_cardinality_skip AS s
+        ON t.id = s.id
+        WHEN MATCHED THEN
+          UPDATE SET value = s.value
+        WHEN NOT MATCHED THEN
+          INSERT *
+        """
+      Then query plan matches snapshot
+
+    Scenario: MERGE succeeds when source is grouped by join keys
+      Given statement
+        """
+        MERGE INTO delta_merge_cardinality_skip AS t
+        USING src_merge_cardinality_skip AS s
+        ON t.id = s.id
+        WHEN MATCHED THEN
+          UPDATE SET value = s.value
+        WHEN NOT MATCHED THEN
+          INSERT *
+        """
+      When query
+        """
+        SELECT id, value FROM delta_merge_cardinality_skip ORDER BY id
+        """
+      Then query result ordered
+        | id | value |
+        | 1  | s2    |
+
   Rule: Insert-only MERGE can fast-append without rewriting target files
     Background:
       Given variable location for temporary directory merge_insert_only

@@ -10,7 +10,9 @@ use datafusion_common::{
 };
 use datafusion_expr::expr::Case;
 use datafusion_expr::expr_fn::not;
-use datafusion_expr::logical_plan::{Extension, LogicalPlanBuilder};
+use datafusion_expr::logical_plan::{
+    Aggregate, Extension, Filter, LogicalPlanBuilder, Projection, SubqueryAlias,
+};
 use datafusion_expr::utils::expr_to_columns;
 use datafusion_expr::{
     col, lit, Expr, Join, JoinConstraint, JoinType, LogicalPlan, UserDefinedLogicalNodeCore,
@@ -397,7 +399,12 @@ pub fn expand_merge(node: &MergeIntoNode, path_column: &str) -> Result<MergeExpa
     let source_plan = node.source.as_ref().clone();
     let mut options = node.options().clone();
     let merge_schema = node.input_schema.clone();
-    let should_check_cardinality = should_check_cardinality(&options.matched_clauses);
+    let mut should_check_cardinality = should_check_cardinality(&options.matched_clauses);
+    if should_check_cardinality
+        && can_prove_source_unique_on_join_keys(&source_plan, &options.join_key_pairs)
+    {
+        should_check_cardinality = false;
+    }
 
     trace!(
         "merge input schema fields: {:?}",
@@ -956,6 +963,93 @@ fn should_check_cardinality(matched_clauses: &[MergeMatchedClause]) -> bool {
         }
     }
     true
+}
+
+fn can_prove_source_unique_on_join_keys(
+    source_plan: &LogicalPlan,
+    join_key_pairs: &[(Expr, Expr)],
+) -> bool {
+    // We can only reason about equi-join keys that are plain source columns.
+    let mut key_cols: Vec<String> = Vec::new();
+    for (_, source_key) in join_key_pairs.iter() {
+        match source_key {
+            Expr::Column(c) => key_cols.push(c.name.clone()),
+            _ => return false,
+        }
+    }
+    if key_cols.is_empty() {
+        return false;
+    }
+
+    let mut plan = source_plan;
+    loop {
+        match plan {
+            LogicalPlan::SubqueryAlias(SubqueryAlias { input, .. }) => {
+                plan = input.as_ref();
+            }
+            LogicalPlan::Filter(Filter { input, .. }) => {
+                plan = input.as_ref();
+            }
+            LogicalPlan::Projection(projection) => {
+                let Some(mapped) = map_key_cols_through_projection(projection, &key_cols) else {
+                    return false;
+                };
+                key_cols = mapped;
+                plan = projection.input.as_ref();
+            }
+            LogicalPlan::Aggregate(aggregate) => {
+                return aggregate_groups_exactly_on_columns(aggregate, &key_cols);
+            }
+            _ => return false,
+        }
+    }
+}
+
+fn map_key_cols_through_projection(
+    projection: &Projection,
+    key_cols: &[String],
+) -> Option<Vec<String>> {
+    let mut out = Vec::with_capacity(key_cols.len());
+    for key in key_cols {
+        let idx = projection
+            .schema
+            .fields()
+            .iter()
+            .position(|f| f.name() == key)?;
+        let expr = projection.expr.get(idx)?;
+        let mapped = match expr {
+            Expr::Column(c) => c.name.clone(),
+            Expr::Alias(alias) => match alias.expr.as_ref() {
+                Expr::Column(c) => c.name.clone(),
+                _ => return None,
+            },
+            _ => return None,
+        };
+        out.push(mapped);
+    }
+    Some(out)
+}
+
+fn aggregate_groups_exactly_on_columns(aggregate: &Aggregate, key_cols: &[String]) -> bool {
+    let mut group_cols: Vec<String> = Vec::with_capacity(aggregate.group_expr.len());
+    for expr in aggregate.group_expr.iter() {
+        match expr {
+            Expr::Column(c) => group_cols.push(c.name.clone()),
+            _ => return false,
+        }
+    }
+    same_column_set_case_insensitive(&group_cols, key_cols)
+}
+
+fn same_column_set_case_insensitive(a: &[String], b: &[String]) -> bool {
+    use std::collections::HashSet;
+    if a.len() != b.len() {
+        return false;
+    }
+    let norm = |s: &String| s.to_ascii_lowercase();
+    let sa: HashSet<String> = a.iter().map(norm).collect();
+    let sb: HashSet<String> = b.iter().map(norm).collect();
+    sa.len() == a.len() && sb.len() == b.len() && sa == sb
 }
 
 fn combine_conjunction(exprs: &[Expr]) -> Option<Expr> {
