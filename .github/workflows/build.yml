@@ -189,7 +189,7 @@ jobs:
           echo "coverage_count=$coverage_count" >> $GITHUB_OUTPUT
 
       - name: Upload all coverage reports to Codecov
-        if: steps.coverage-check.outputs.coverage_count >= 4
+        if: steps.coverage-check.outputs.coverage_count >= 5
         uses: codecov/codecov-action@v5
         with:
           token: ${{ secrets.CODECOV_TOKEN }}

@@ -58,7 +58,7 @@ Here are some notes about the `build-pyspark.sh` script.
 2. The script can work with an arbitrary Python 3 installation,
    since the `setup.py` script in the Spark project only uses the Python standard library.
 3. The script takes a while to run.
-   On GitHub Actions, it takes about 40 minutes on the default GitHub-hosted runners.
+   On GitHub Actions, it takes about 30 minutes on the default GitHub-hosted runners.
    Fortunately, you only need to run this script once, unless there is a change in the Spark patch file.
    The patch file is in the `scripts/spark-tests` directory.
 
