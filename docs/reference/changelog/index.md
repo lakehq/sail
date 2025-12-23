@@ -22,6 +22,7 @@ _December 22, 2025_
   - `elt`
 - Updated Parquet configuration options ([#1141](https://github.com/lakehq/sail/pull/1141)).
 - Updated the Spark Connect protocol for Spark 4.1 ([#1145](https://github.com/lakehq/sail/pull/1145) and [#1148](https://github.com/lakehq/sail/pull/1148)).
+- Fixed an issue with the `EXPLAIN` statement output ([#1147](https://github.com/lakehq/sail/pull/1147)).
 
 ### Contributors
 
