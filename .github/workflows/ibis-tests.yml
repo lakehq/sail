@@ -80,6 +80,9 @@ jobs:
         # which can happen occasionally for unknown reasons.
         # The timeout value should be adjusted as we add more tests.
         timeout-minutes: 10
+        env:
+          TEST_RUN_GIT_COMMIT: ${{ github.sha }}
+          TEST_RUN_GIT_REF: ${{ github.ref }}
         run: |
           hatch run test-ibis:env SPARK_REMOTE="sc://localhost:50051" scripts/spark-tests/run-tests.sh || true
 
