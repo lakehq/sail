@@ -5,12 +5,16 @@ use sail_sql_analyzer::literal::numeric::parse_decimal_string;
 use crate::error::{ProtoFieldExt, SparkError, SparkResult};
 use crate::spark::connect::expression::literal::{Array, Decimal, LiteralType, Map, Struct};
 use crate::spark::connect::expression::Literal;
+use crate::spark::connect::{data_type as sdt, DataType};
 
 impl TryFrom<Literal> for spec::Literal {
     type Error = SparkError;
 
     fn try_from(literal: Literal) -> SparkResult<spec::Literal> {
-        let Literal { literal_type } = literal;
+        let Literal {
+            data_type,
+            literal_type,
+        } = literal;
         let literal_type = literal_type.required("literal type")?;
         let literal = match literal_type {
             LiteralType::Null(data_type) => {
@@ -118,13 +122,29 @@ impl TryFrom<Literal> for spec::Literal {
             LiteralType::DayTimeInterval(x) => spec::Literal::DurationMicrosecond {
                 microseconds: Some(x),
             },
+            #[expect(deprecated)]
             LiteralType::Array(Array {
                 element_type,
                 elements,
             }) => {
-                let element_type = element_type.required("element type")?;
+                let (element_type, nullable) = if let Some(data_type) = data_type {
+                    let DataType {
+                        kind: Some(sdt::Kind::Array(array)),
+                    } = data_type
+                    else {
+                        return Err(SparkError::invalid(
+                            "expected array data type for array literal",
+                        ));
+                    };
+                    let element_type = *array.element_type.required("element type")?;
+                    (element_type, array.contains_null)
+                } else {
+                    let element_type = element_type.required("element type")?;
+                    (element_type, true)
+                };
                 spec::Literal::List {
                     data_type: element_type.try_into()?,
+                    nullable,
                     values: Some(
                         elements
                             .into_iter()
@@ -133,17 +153,35 @@ impl TryFrom<Literal> for spec::Literal {
                     ),
                 }
             }
+            #[expect(deprecated)]
             LiteralType::Map(Map {
                 key_type,
                 value_type,
                 keys,
                 values,
             }) => {
-                let key_type = key_type.required("key type")?;
-                let value_type = value_type.required("value type")?;
+                let (key_type, value_type, value_type_nullable) = if let Some(data_type) = data_type
+                {
+                    let DataType {
+                        kind: Some(sdt::Kind::Map(map)),
+                    } = data_type
+                    else {
+                        return Err(SparkError::invalid(
+                            "expected map data type for map literal",
+                        ));
+                    };
+                    let key_type = map.key_type.required("key type")?;
+                    let value_type = map.value_type.required("value type")?;
+                    (*key_type, *value_type, map.value_contains_null)
+                } else {
+                    let key_type = key_type.required("key type")?;
+                    let value_type = value_type.required("value type")?;
+                    (key_type, value_type, true)
+                };
                 spec::Literal::Map {
                     key_type: key_type.try_into()?,
                     value_type: value_type.try_into()?,
+                    value_type_nullable,
                     keys: Some(
                         keys.into_iter()
                             .map(|x| x.try_into())
@@ -157,11 +195,12 @@ impl TryFrom<Literal> for spec::Literal {
                     ),
                 }
             }
+            #[expect(deprecated)]
             LiteralType::Struct(Struct {
                 struct_type,
                 elements,
             }) => {
-                let struct_type = struct_type.required("struct type")?;
+                let struct_type = data_type.or(struct_type).required("struct type")?;
                 spec::Literal::Struct {
                     data_type: struct_type.try_into()?,
                     values: Some(
@@ -175,6 +214,7 @@ impl TryFrom<Literal> for spec::Literal {
             LiteralType::SpecializedArray(_) => {
                 return Err(SparkError::todo("specialized array literal"))
             }
+            LiteralType::Time(_) => return Err(SparkError::todo("time literal")),
         };
         Ok(literal)
     }

@@ -2,6 +2,6 @@
 # We have a CI step that verifies this.
 # We cannot use the Hatch dynamic version feature since the project
 # may be built with Maturin outside of Hatch.
-__version__: str = "0.4.4"
+__version__: str = "0.4.5"
 
 __all__ = ["__version__"]

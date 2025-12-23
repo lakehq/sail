@@ -368,6 +368,16 @@ class StructConverter(Converter):
         )
 
 
+if pyspark.__version__.startswith(("3.", "4.0.")):
+
+    def _arrow_column_to_pandas(column: pa.Array, serializer: ArrowStreamPandasUDFSerializer):
+        return serializer.arrow_to_pandas(column)
+else:
+
+    def _arrow_column_to_pandas(column: pa.Array, serializer: ArrowStreamPandasUDFSerializer):
+        return serializer.arrow_to_pandas(column, 0)
+
+
 def _pandas_to_arrow_array(data, data_type: pa.DataType, serializer: ArrowStreamPandasUDFSerializer) -> pa.Array:
     if serializer._struct_in_pandas == "dict" and pa.types.is_struct(data_type):  # noqa: SLF001
         return serializer._create_struct_array(data, data_type)  # noqa: SLF001
@@ -408,7 +418,7 @@ def _arrow_array_to_output_type(data, data_type: pa.DataType) -> pa.Array:
 def _named_arrays_to_pandas(
     data: Sequence[pa.Array], names: Sequence[str], serializer: ArrowStreamPandasUDFSerializer
 ) -> Sequence[pd.Series]:
-    inputs = [serializer.arrow_to_pandas(x) for x in data]
+    inputs = [_arrow_column_to_pandas(x, serializer) for x in data]
     for x, name in zip(inputs, names):
         x.name = name
     return inputs
@@ -446,7 +456,7 @@ class PySparkArrowBatchUdf:
         if len(args) == 0:
             inputs = tuple(pd.Series([pyspark._NoValue]).repeat(num_rows) for _ in range(1))  # noqa: SLF001
         else:
-            inputs = tuple(self._serializer.arrow_to_pandas(a) for a in args)
+            inputs = tuple(_arrow_column_to_pandas(a, self._serializer) for a in args)
         [(output, output_type)] = list(self._udf(None, (inputs,)))
         return _pandas_to_arrow_array(output, output_type, self._serializer)
 
@@ -469,7 +479,7 @@ class PySparkScalarPandasUdf:
         )
 
     def __call__(self, args: list[pa.Array], _num_rows: int) -> pa.Array:
-        inputs = tuple(self._serializer.arrow_to_pandas(x) for x in args)
+        inputs = tuple(_arrow_column_to_pandas(x, self._serializer) for x in args)
         [(output, output_type)] = list(self._udf(None, (inputs,)))
         return _pandas_to_arrow_array(output, output_type, self._serializer)
 
@@ -492,7 +502,7 @@ class PySparkScalarPandasIterUdf:
         )
 
     def __call__(self, args: list[pa.Array], _num_rows: int) -> pa.Array:
-        inputs = tuple(self._serializer.arrow_to_pandas(x) for x in args)
+        inputs = tuple(_arrow_column_to_pandas(x, self._serializer) for x in args)
         [(output, output_type)] = list(self._udf(None, [inputs]))
         return _pandas_to_arrow_array(output, output_type, self._serializer)
 
@@ -616,7 +626,7 @@ class PySparkMapPandasIterUdf:
         return (self._convert_output(x, t) for x, t in output)
 
     def _convert_input(self, batch: pa.RecordBatch) -> pd.DataFrame:
-        return self._serializer.arrow_to_pandas(batch.to_struct_array())
+        return _arrow_column_to_pandas(batch.to_struct_array(), self._serializer)
 
     def _convert_output(self, df: pd.DataFrame, data_type: pa.DataType) -> pa.RecordBatch:
         array = _pandas_to_arrow_array(df, data_type, self._serializer)
@@ -713,7 +723,7 @@ class PySparkArrowTableUdf:
     def _iter_input(self, args: Iterator[pa.RecordBatch]) -> Iterator[tuple[pd.Series]]:
         for batch in args:
             arrays = batch.to_struct_array().flatten()
-            yield tuple(self._serializer.arrow_to_pandas(x) for x in arrays)
+            yield tuple(_arrow_column_to_pandas(x, self._serializer) for x in arrays)
 
     def _iter_output(self, args: Iterator[pa.RecordBatch]) -> Iterator[pd.DataFrame]:
         args1, args2 = itertools.tee(args)

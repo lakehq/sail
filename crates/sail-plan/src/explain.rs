@@ -1,6 +1,7 @@
 use std::future::Future;
 use std::sync::Arc;
 
+use datafusion::execution::session_state::SessionStateBuilder;
 use datafusion::physical_plan::display::DisplayableExecutionPlan;
 use datafusion::physical_plan::{collect, displayable, ExecutionPlan};
 use datafusion::prelude::SessionContext;
@@ -201,10 +202,14 @@ async fn collect_plan_with(
     )?;
     stringified.push(optimized_logical.to_stringified(PlanType::FinalLogicalPlan));
 
+    let session_state_no_phys_opt = SessionStateBuilder::new_from_existing(session_state.clone())
+        .with_physical_optimizer_rules(vec![])
+        .build();
+
     let mut physical_error = None;
-    let mut physical_plan = match session_state
+    let mut physical_plan = match session_state_no_phys_opt
         .query_planner()
-        .create_physical_plan(&optimized_logical, &session_state)
+        .create_physical_plan(&optimized_logical, &session_state_no_phys_opt)
         .await
     {
         Ok(plan) => Some(plan),

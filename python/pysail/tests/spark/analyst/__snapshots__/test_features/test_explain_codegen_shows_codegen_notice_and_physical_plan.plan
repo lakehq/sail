@@ -176,46 +176,34 @@ Projection: t.#2 AS #4, sum(t.#3) AS #5
 initial_physical_plan:
 ProjectionExec: expr=[#2@0 as #4, sum(t.#3)@1 as #5]
   AggregateExec: mode=FinalPartitioned, gby=[#2@0 as #2], aggr=[sum(t.#3)]
-    CoalesceBatchesExec: target_batch_size=8192
-      RepartitionExec: partitioning=Hash([#2@0], <partitions>), input_partitions=<partitions>
-        RepartitionExec: partitioning=RoundRobinBatch(<partitions>), input_partitions=<partitions>
-          AggregateExec: mode=Partial, gby=[#2@0 as #2], aggr=[sum(t.#3)]
-            ProjectionExec: expr=[column1@0 as #2, column2@1 as #3]
-              DataSourceExec: partitions=1, partition_sizes=[<sizes>]
+    AggregateExec: mode=Partial, gby=[#2@0 as #2], aggr=[sum(t.#3)]
+      ProjectionExec: expr=[column1@0 as #2, column2@1 as #3]
+        DataSourceExec: partitions=1, partition_sizes=[<sizes>]
 
 
 initial_physical_plan_with_stats:
 ProjectionExec: expr=[#2@0 as #4, sum(t.#3)@1 as #5], statistics=[Rows=Inexact(2), Bytes=Inexact(<bytes>), [(Col[0]:),(Col[1]:)]]
   AggregateExec: mode=FinalPartitioned, gby=[#2@0 as #2], aggr=[sum(t.#3)], statistics=[Rows=Inexact(2), Bytes=Absent, [(Col[0]:),(Col[1]:)]]
-    CoalesceBatchesExec: target_batch_size=8192, statistics=[Rows=Inexact(2), Bytes=Absent, [(Col[0]:),(Col[1]:)]]
-      RepartitionExec: partitioning=Hash([#2@0], <partitions>), input_partitions=<partitions>, statistics=[Rows=Inexact(2), Bytes=Absent, [(Col[0]:),(Col[1]:)]]
-        RepartitionExec: partitioning=RoundRobinBatch(<partitions>), input_partitions=<partitions>, statistics=[Rows=Inexact(2), Bytes=Absent, [(Col[0]:),(Col[1]:)]]
-          AggregateExec: mode=Partial, gby=[#2@0 as #2], aggr=[sum(t.#3)], statistics=[Rows=Inexact(2), Bytes=Absent, [(Col[0]:),(Col[1]:)]]
-            ProjectionExec: expr=[column1@0 as #2, column2@1 as #3], statistics=[Rows=Exact(2), Bytes=Exact(<bytes>), [(Col[0]: Null=Exact(0)),(Col[1]: Null=Exact(0))]]
-              DataSourceExec: partitions=1, partition_sizes=[<sizes>], statistics=[Rows=Exact(2), Bytes=Exact(<bytes>), [(Col[0]: Null=Exact(0)),(Col[1]: Null=Exact(0))]]
+    AggregateExec: mode=Partial, gby=[#2@0 as #2], aggr=[sum(t.#3)], statistics=[Rows=Inexact(2), Bytes=Absent, [(Col[0]:),(Col[1]:)]]
+      ProjectionExec: expr=[column1@0 as #2, column2@1 as #3], statistics=[Rows=Exact(2), Bytes=Exact(<bytes>), [(Col[0]: Null=Exact(0)),(Col[1]: Null=Exact(0))]]
+        DataSourceExec: partitions=1, partition_sizes=[<sizes>], statistics=[Rows=Exact(2), Bytes=Exact(<bytes>), [(Col[0]: Null=Exact(0)),(Col[1]: Null=Exact(0))]]
 
 
 initial_physical_plan_with_schema:
 ProjectionExec: expr=[#2@0 as #4, sum(t.#3)@1 as #5], schema=[#4:Int32;N, #5:Int64;N]
   AggregateExec: mode=FinalPartitioned, gby=[#2@0 as #2], aggr=[sum(t.#3)], schema=[#2:Int32;N, sum(t.#3):Int64;N]
-    CoalesceBatchesExec: target_batch_size=8192, schema=[#2:Int32;N, sum(t.#3)[sum]:Int64;N]
-      RepartitionExec: partitioning=Hash([#2@0], <partitions>), input_partitions=<partitions>, schema=[#2:Int32;N, sum(t.#3)[sum]:Int64;N]
-        RepartitionExec: partitioning=RoundRobinBatch(<partitions>), input_partitions=<partitions>, schema=[#2:Int32;N, sum(t.#3)[sum]:Int64;N]
-          AggregateExec: mode=Partial, gby=[#2@0 as #2], aggr=[sum(t.#3)], schema=[#2:Int32;N, sum(t.#3)[sum]:Int64;N]
-            ProjectionExec: expr=[column1@0 as #2, column2@1 as #3], schema=[#2:Int32;N, #3:Int32;N]
-              DataSourceExec: partitions=1, partition_sizes=[<sizes>], schema=[column1:Int32;N, column2:Int32;N]
+    AggregateExec: mode=Partial, gby=[#2@0 as #2], aggr=[sum(t.#3)], schema=[#2:Int32;N, sum(t.#3)[sum]:Int64;N]
+      ProjectionExec: expr=[column1@0 as #2, column2@1 as #3], schema=[#2:Int32;N, #3:Int32;N]
+        DataSourceExec: partitions=1, partition_sizes=[<sizes>], schema=[column1:Int32;N, column2:Int32;N]
 
 
 physical_plan after OutputRequirements:
 OutputRequirementExec: order_by=[], dist_by=Unspecified
   ProjectionExec: expr=[#2@0 as #4, sum(t.#3)@1 as #5]
     AggregateExec: mode=FinalPartitioned, gby=[#2@0 as #2], aggr=[sum(t.#3)]
-      CoalesceBatchesExec: target_batch_size=8192
-        RepartitionExec: partitioning=Hash([#2@0], <partitions>), input_partitions=<partitions>
-          RepartitionExec: partitioning=RoundRobinBatch(<partitions>), input_partitions=<partitions>
-            AggregateExec: mode=Partial, gby=[#2@0 as #2], aggr=[sum(t.#3)]
-              ProjectionExec: expr=[column1@0 as #2, column2@1 as #3]
-                DataSourceExec: partitions=1, partition_sizes=[<sizes>]
+      AggregateExec: mode=Partial, gby=[#2@0 as #2], aggr=[sum(t.#3)]
+        ProjectionExec: expr=[column1@0 as #2, column2@1 as #3]
+          DataSourceExec: partitions=1, partition_sizes=[<sizes>]
 
 
 physical_plan after aggregate_statistics:
@@ -236,10 +224,9 @@ OutputRequirementExec: order_by=[], dist_by=Unspecified
     AggregateExec: mode=FinalPartitioned, gby=[#2@0 as #2], aggr=[sum(t.#3)]
       RepartitionExec: partitioning=Hash([#2@0], <partitions>), input_partitions=<partitions>
         RepartitionExec: partitioning=RoundRobinBatch(<partitions>), input_partitions=<partitions>
-          CoalesceBatchesExec: target_batch_size=8192
-            AggregateExec: mode=Partial, gby=[#2@0 as #2], aggr=[sum(t.#3)]
-              ProjectionExec: expr=[column1@0 as #2, column2@1 as #3]
-                DataSourceExec: partitions=1, partition_sizes=[<sizes>]
+          AggregateExec: mode=Partial, gby=[#2@0 as #2], aggr=[sum(t.#3)]
+            ProjectionExec: expr=[column1@0 as #2, column2@1 as #3]
+              DataSourceExec: partitions=1, partition_sizes=[<sizes>]
 
 
 physical_plan after CombinePartialFinalAggregate:
@@ -261,10 +248,9 @@ OutputRequirementExec: order_by=[], dist_by=Unspecified
       CoalesceBatchesExec: target_batch_size=8192
         RepartitionExec: partitioning=Hash([#2@0], <partitions>), input_partitions=<partitions>
           RepartitionExec: partitioning=RoundRobinBatch(<partitions>), input_partitions=<partitions>
-            CoalesceBatchesExec: target_batch_size=8192
-              AggregateExec: mode=Partial, gby=[#2@0 as #2], aggr=[sum(t.#3)]
-                ProjectionExec: expr=[column1@0 as #2, column2@1 as #3]
-                  DataSourceExec: partitions=1, partition_sizes=[<sizes>]
+            AggregateExec: mode=Partial, gby=[#2@0 as #2], aggr=[sum(t.#3)]
+              ProjectionExec: expr=[column1@0 as #2, column2@1 as #3]
+                DataSourceExec: partitions=1, partition_sizes=[<sizes>]
 
 
 physical_plan after coalesce_async_exec_input:
@@ -276,10 +262,9 @@ ProjectionExec: expr=[#2@0 as #4, sum(t.#3)@1 as #5]
     CoalesceBatchesExec: target_batch_size=8192
       RepartitionExec: partitioning=Hash([#2@0], <partitions>), input_partitions=<partitions>
         RepartitionExec: partitioning=RoundRobinBatch(<partitions>), input_partitions=<partitions>
-          CoalesceBatchesExec: target_batch_size=8192
-            AggregateExec: mode=Partial, gby=[#2@0 as #2], aggr=[sum(t.#3)]
-              ProjectionExec: expr=[column1@0 as #2, column2@1 as #3]
-                DataSourceExec: partitions=1, partition_sizes=[<sizes>]
+          AggregateExec: mode=Partial, gby=[#2@0 as #2], aggr=[sum(t.#3)]
+            ProjectionExec: expr=[column1@0 as #2, column2@1 as #3]
+              DataSourceExec: partitions=1, partition_sizes=[<sizes>]
 
 
 physical_plan after LimitAggregation:
@@ -313,10 +298,9 @@ ProjectionExec: expr=[#4@0 as k, #5@1 as SUM(v)]
       CoalesceBatchesExec: target_batch_size=8192
         RepartitionExec: partitioning=Hash([#2@0], <partitions>), input_partitions=<partitions>
           RepartitionExec: partitioning=RoundRobinBatch(<partitions>), input_partitions=<partitions>
-            CoalesceBatchesExec: target_batch_size=8192
-              AggregateExec: mode=Partial, gby=[#2@0 as #2], aggr=[sum(t.#3)]
-                ProjectionExec: expr=[column1@0 as #2, column2@1 as #3]
-                  DataSourceExec: partitions=1, partition_sizes=[<sizes>]
+            AggregateExec: mode=Partial, gby=[#2@0 as #2], aggr=[sum(t.#3)]
+              ProjectionExec: expr=[column1@0 as #2, column2@1 as #3]
+                DataSourceExec: partitions=1, partition_sizes=[<sizes>]
 
 
 == Physical Plan ==
@@ -326,7 +310,6 @@ ProjectionExec: expr=[#4@0 as k, #5@1 as SUM(v)]
       CoalesceBatchesExec: target_batch_size=8192
         RepartitionExec: partitioning=Hash([#2@0], <partitions>), input_partitions=<partitions>
           RepartitionExec: partitioning=RoundRobinBatch(<partitions>), input_partitions=<partitions>
-            CoalesceBatchesExec: target_batch_size=8192
-              AggregateExec: mode=Partial, gby=[#2@0 as #2], aggr=[sum(t.#3)]
-                ProjectionExec: expr=[column1@0 as #2, column2@1 as #3]
-                  DataSourceExec: partitions=1, partition_sizes=[<sizes>]
+            AggregateExec: mode=Partial, gby=[#2@0 as #2], aggr=[sum(t.#3)]
+              ProjectionExec: expr=[column1@0 as #2, column2@1 as #3]
+                DataSourceExec: partitions=1, partition_sizes=[<sizes>]
