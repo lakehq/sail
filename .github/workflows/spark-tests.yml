@@ -6,7 +6,7 @@ on:
       spark_version:
         description: The Spark version to test
         type: string
-        default: "4.0.0"
+        default: "4.1.0"
 
 jobs:
   setup:
@@ -73,7 +73,7 @@ jobs:
           chmod +x /usr/local/bin/grpc_health_probe
           grpc_health_probe -version
 
-      # Building the patched PySpark package is slow (~40 minutes on GitHub Linux runners),
+      # Building the patched PySpark package is slow (~30 minutes on GitHub Linux runners),
       # so we create a dedicated cache entry for it.
       - uses: actions/cache@v4
         name: Cache PySpark

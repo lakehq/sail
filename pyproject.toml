@@ -75,7 +75,7 @@ python = "3.11"
 installer = "pip"
 skip-install = true
 dependencies = [
-    "pyspark[connect]==4.0.0",
+    "pyspark[connect]==4.1.0",
     "ibis-framework>=11,<12",
     "pytest>=8.4,<9",
     "pytest-bdd>=8.1,<9",
@@ -135,16 +135,18 @@ dependencies = [
 ]
 
 [[tool.hatch.envs.test.matrix]]
-spark = ["3.5.5", "4.0.0"]
+spark = ["3.5.7", "4.0.1", "4.1.0"]
 
 [tool.hatch.envs.test.overrides]
 matrix.spark.path = [
-    { value = ".venvs/test.spark-3.5.5", if = ["3.5.5"] },
-    { value = ".venvs/test.spark-4.0.0", if = ["4.0.0"] },
+    { value = ".venvs/test.spark-3.5.7", if = ["3.5.7"] },
+    { value = ".venvs/test.spark-4.0.1", if = ["4.0.1"] },
+    { value = ".venvs/test.spark-4.1.0", if = ["4.1.0"] },
 ]
 matrix.spark.extra-dependencies = [
-    { value = "pyspark[connect]==3.5.5", if = ["3.5.5"] },
-    { value = "pyspark[connect]==4.0.0", if = ["4.0.0"] },
+    { value = "pyspark[connect]==3.5.7", if = ["3.5.7"] },
+    { value = "pyspark[connect]==4.0.1", if = ["4.0.1"] },
+    { value = "pyspark[connect]==4.1.0", if = ["4.1.0"] },
 ]
 env.CI.installer = "uv"
 
@@ -162,15 +164,15 @@ dependencies = [
 ]
 
 [[tool.hatch.envs.test-spark.matrix]]
-spark = ["3.5.5", "4.0.0"]
+spark = ["3.5.7", "4.1.0"]
 
 [tool.hatch.envs.test-spark.extra-scripts]
 install-pyspark = "\"{env:HATCH_UV}\" pip install --force-reinstall 'pyspark[connect] @ opt/spark/python/dist/pyspark-{matrix:spark}.tar.gz'"
 
 [tool.hatch.envs.test-spark.overrides]
 matrix.spark.path = [
-    { value = ".venvs/test-spark.spark-3.5.5", if = ["3.5.5"] },
-    { value = ".venvs/test-spark.spark-4.0.0", if = ["4.0.0"] },
+    { value = ".venvs/test-spark.spark-3.5.7", if = ["3.5.7"] },
+    { value = ".venvs/test-spark.spark-4.1.0", if = ["4.1.0"] },
 ]
 env.CI.installer = "uv"
 
@@ -179,7 +181,7 @@ python = "3.11"
 installer = "pip"
 skip-install = true
 dependencies = [
-    "pyspark[connect]==3.5.5",
+    "pyspark[connect]==3.5.7",
     "ibis-framework[pyspark]>=11,<12",
     # The test dependencies are borrowed from `pyproject.toml` of the Ibis project.
     # They need to be updated accordingly when we update the Ibis version.

@@ -130,6 +130,50 @@
     },
     {
       "input": {
+        "query": "SELECT get_json_object('[{\"a\":\"b\"},{\"a\":\"c\"}]', '$[*].a');",
+        "result": [
+          "[\"b\",\"c\"]"
+        ],
+        "schema": {
+          "type": "struct",
+          "fields": [
+            {
+              "name": "get_json_object([{\"a\":\"b\"},{\"a\":\"c\"}], $[*].a)",
+              "nullable": true,
+              "type": "string",
+              "metadata": {}
+            }
+          ]
+        }
+      },
+      "output": {
+        "success": "ok"
+      }
+    },
+    {
+      "input": {
+        "query": "SELECT get_json_object('[{\"a\":\"b\"},{\"a\":\"c\"}]', '$[0].a');",
+        "result": [
+          "b"
+        ],
+        "schema": {
+          "type": "struct",
+          "fields": [
+            {
+              "name": "get_json_object([{\"a\":\"b\"},{\"a\":\"c\"}], $[0].a)",
+              "nullable": true,
+              "type": "string",
+              "metadata": {}
+            }
+          ]
+        }
+      },
+      "output": {
+        "success": "ok"
+      }
+    },
+    {
+      "input": {
         "query": "SELECT get_json_object('{\"a\":\"b\"}', '$.a');",
         "result": [
           "b"

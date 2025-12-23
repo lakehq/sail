@@ -1,0 +1,158 @@
+{
+  "tests": [
+    {
+      "input": {
+        "query": "SELECT hex(st_asbinary(st_geogfromwkb(X'0101000000000000000000F03F0000000000000040')));",
+        "result": [
+          "0101000000000000000000F03F0000000000000040"
+        ],
+        "schema": {
+          "type": "struct",
+          "fields": [
+            {
+              "name": "hex(st_asbinary(st_geogfromwkb(X'0101000000000000000000F03F0000000000000040')))",
+              "nullable": false,
+              "type": "string",
+              "metadata": {}
+            }
+          ]
+        }
+      },
+      "output": {
+        "failure": "not supported: unknown function: st_geogfromwkb"
+      }
+    },
+    {
+      "input": {
+        "query": "SELECT hex(st_asbinary(st_geomfromwkb(X'0101000000000000000000F03F0000000000000040')));",
+        "result": [
+          "0101000000000000000000F03F0000000000000040"
+        ],
+        "schema": {
+          "type": "struct",
+          "fields": [
+            {
+              "name": "hex(st_asbinary(st_geomfromwkb(X'0101000000000000000000F03F0000000000000040')))",
+              "nullable": false,
+              "type": "string",
+              "metadata": {}
+            }
+          ]
+        }
+      },
+      "output": {
+        "failure": "not supported: unknown function: st_geomfromwkb"
+      }
+    },
+    {
+      "input": {
+        "query": "SELECT st_srid(NULL);",
+        "result": [
+          "NULL"
+        ],
+        "schema": {
+          "type": "struct",
+          "fields": [
+            {
+              "name": "st_srid(NULL)",
+              "nullable": true,
+              "type": "integer",
+              "metadata": {}
+            }
+          ]
+        }
+      },
+      "output": {
+        "failure": "not supported: unknown function: st_srid"
+      }
+    },
+    {
+      "input": {
+        "query": "SELECT st_srid(st_geogfromwkb(X'0101000000000000000000F03F0000000000000040'));",
+        "result": [
+          "4326"
+        ],
+        "schema": {
+          "type": "struct",
+          "fields": [
+            {
+              "name": "st_srid(st_geogfromwkb(X'0101000000000000000000F03F0000000000000040'))",
+              "nullable": false,
+              "type": "integer",
+              "metadata": {}
+            }
+          ]
+        }
+      },
+      "output": {
+        "failure": "not supported: unknown function: st_geogfromwkb"
+      }
+    },
+    {
+      "input": {
+        "query": "SELECT st_srid(st_geomfromwkb(X'0101000000000000000000F03F0000000000000040'));",
+        "result": [
+          "0"
+        ],
+        "schema": {
+          "type": "struct",
+          "fields": [
+            {
+              "name": "st_srid(st_geomfromwkb(X'0101000000000000000000F03F0000000000000040'))",
+              "nullable": false,
+              "type": "integer",
+              "metadata": {}
+            }
+          ]
+        }
+      },
+      "output": {
+        "failure": "not supported: unknown function: st_geomfromwkb"
+      }
+    },
+    {
+      "input": {
+        "query": "SELECT st_srid(st_setsrid(ST_GeogFromWKB(X'0101000000000000000000F03F0000000000000040'), 4326));",
+        "result": [
+          "4326"
+        ],
+        "schema": {
+          "type": "struct",
+          "fields": [
+            {
+              "name": "st_srid(st_setsrid(st_geogfromwkb(X'0101000000000000000000F03F0000000000000040'), 4326))",
+              "nullable": false,
+              "type": "integer",
+              "metadata": {}
+            }
+          ]
+        }
+      },
+      "output": {
+        "failure": "not supported: unknown function: ST_GeogFromWKB"
+      }
+    },
+    {
+      "input": {
+        "query": "SELECT st_srid(st_setsrid(ST_GeomFromWKB(X'0101000000000000000000F03F0000000000000040'), 3857));",
+        "result": [
+          "3857"
+        ],
+        "schema": {
+          "type": "struct",
+          "fields": [
+            {
+              "name": "st_srid(st_setsrid(st_geomfromwkb(X'0101000000000000000000F03F0000000000000040'), 3857))",
+              "nullable": false,
+              "type": "integer",
+              "metadata": {}
+            }
+          ]
+        }
+      },
+      "output": {
+        "failure": "not supported: unknown function: ST_GeomFromWKB"
+      }
+    }
+  ]
+}

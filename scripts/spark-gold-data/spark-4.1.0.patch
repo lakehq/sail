@@ -1,8 +1,8 @@
 diff --git a/common/utils/src/main/scala/org/apache/spark/internal/Logging.scala b/common/utils/src/main/scala/org/apache/spark/internal/Logging.scala
-index 54f05b959a4..59f635b4ae6 100644
+index 810bdabebb3..079df78998d 100644
 --- a/common/utils/src/main/scala/org/apache/spark/internal/Logging.scala
 +++ b/common/utils/src/main/scala/org/apache/spark/internal/Logging.scala
-@@ -402,6 +402,8 @@ private[spark] object Logging {
+@@ -408,6 +408,8 @@ private[spark] object Logging {
    @volatile private[spark] var sparkShellThresholdLevel: Level = null
    @volatile private[spark] var setLogLevelPrinted: Boolean = false
  
@@ -12,10 +12,10 @@ index 54f05b959a4..59f635b4ae6 100644
    try {
      // We use reflection here to handle the case where users remove the
 diff --git a/core/src/test/scala/org/apache/spark/SparkFunSuite.scala b/core/src/test/scala/org/apache/spark/SparkFunSuite.scala
-index e38efc27b78..b43aea4b412 100644
+index 3b0ec30ee86..bdb6c5e200b 100644
 --- a/core/src/test/scala/org/apache/spark/SparkFunSuite.scala
 +++ b/core/src/test/scala/org/apache/spark/SparkFunSuite.scala
-@@ -90,15 +90,54 @@ abstract class SparkFunSuite
+@@ -89,15 +89,54 @@ abstract class SparkFunSuite
  
    protected val regenerateGoldenFiles: Boolean = System.getenv("SPARK_GENERATE_GOLDEN_FILES") == "1"
  
@@ -71,10 +71,10 @@ index e38efc27b78..b43aea4b412 100644
        // Avoid leaking map entries in tests that use accumulators without SparkContext
        AccumulatorContext.clear()
 diff --git a/sql/api/src/main/scala/org/apache/spark/sql/catalyst/parser/parsers.scala b/sql/api/src/main/scala/org/apache/spark/sql/catalyst/parser/parsers.scala
-index 54af195847d..400a912fb8e 100644
+index 32270df0a98..a52bb7920f6 100644
 --- a/sql/api/src/main/scala/org/apache/spark/sql/catalyst/parser/parsers.scala
 +++ b/sql/api/src/main/scala/org/apache/spark/sql/catalyst/parser/parsers.scala
-@@ -32,13 +32,25 @@ import org.apache.spark.sql.errors.QueryParsingErrors
+@@ -35,13 +35,25 @@ import org.apache.spark.sql.errors.QueryParsingErrors
  import org.apache.spark.sql.internal.SqlApiConf
  import org.apache.spark.sql.types.{DataType, StructType}
  
@@ -101,7 +101,7 @@ index 54af195847d..400a912fb8e 100644
      astBuilder.visitSingleDataType(parser.singleDataType())
    }
  
-@@ -46,7 +58,7 @@ abstract class AbstractParser extends DataTypeParserInterface with Logging {
+@@ -49,7 +61,7 @@ abstract class AbstractParser extends DataTypeParserInterface with Logging {
     * Creates StructType for a given SQL string, which is a comma separated list of field
     * definitions which will preserve the correct Hive metadata.
     */

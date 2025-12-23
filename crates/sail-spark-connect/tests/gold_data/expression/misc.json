@@ -865,9 +865,15 @@
     },
     {
       "input": "GEO '(10,-6)'",
-      "exception": "\n[UNSUPPORTED_TYPED_LITERAL] Literals of the type \"GEO\" are not supported. Supported types are \"DATE\", \"TIMESTAMP_NTZ\", \"TIMESTAMP_LTZ\", \"TIMESTAMP\", \"INTERVAL\", \"X\". SQLSTATE: 0A000\n== SQL (line 1, position 1) ==\nGEO '(10,-6)'\n^^^^^^^^^^^^^\n",
+      "exception": "\n[UNSUPPORTED_TYPED_LITERAL] Literals of the type \"GEO\" are not supported. Supported types are \"DATE\", \"TIMESTAMP_NTZ\", \"TIMESTAMP_LTZ\", \"TIMESTAMP\", \"INTERVAL\", \"X\", \"TIME\". SQLSTATE: 0A000\n== SQL (line 1, position 1) ==\nGEO '(10,-6)'\n^^^^^^^^^^^^^\n",
       "output": {
         "failure": "invalid argument: found '(10,-6)' at 4:13 expected '->', '.', '(', '[', '::', 'ESCAPE', 'IS', 'NOT', 'IN', '*', '/', '%', 'DIV', '+', '-', '||', '>>>', '>>', '<<', '&', '^', '|', '!=', '!>', '!<', '==', '=', '>=', '>', '<=>', '<=', '<>', '<', 'BETWEEN', 'LIKE', 'ILIKE', 'RLIKE', 'REGEXP', 'SIMILAR', 'AND', 'OR', 'AS', identifier, something else, or end of input"
+      }
+    },
+    {
+      "input": "TIME'23:59:59.999999'",
+      "output": {
+        "failure": "invalid argument: found '23:59:59.999999' at 4:21 expected '->', '.', '(', '[', '::', 'ESCAPE', 'IS', 'NOT', 'IN', '*', '/', '%', 'DIV', '+', '-', '||', '>>>', '>>', '<<', '&', '^', '|', '!=', '!>', '!<', '==', '=', '>=', '>', '<=>', '<=', '<>', '<', 'BETWEEN', 'LIKE', 'ILIKE', 'RLIKE', 'REGEXP', 'SIMILAR', 'AND', 'OR', 'AS', identifier, something else, or end of input"
       }
     },
     {
@@ -4399,6 +4405,19 @@
             }
           }
         }
+      }
+    },
+    {
+      "input": "tIme '12:13:14'",
+      "output": {
+        "failure": "invalid argument: found '12:13:14' at 5:15 expected '->', '.', '(', '[', '::', 'ESCAPE', 'IS', 'NOT', 'IN', '*', '/', '%', 'DIV', '+', '-', '||', '>>>', '>>', '<<', '&', '^', '|', '!=', '!>', '!<', '==', '=', '>=', '>', '<=>', '<=', '<>', '<', 'BETWEEN', 'LIKE', 'ILIKE', 'RLIKE', 'REGEXP', 'SIMILAR', 'AND', 'OR', 'AS', identifier, something else, or end of input"
+      }
+    },
+    {
+      "input": "time '12-13.14'",
+      "exception": "\n[INVALID_TYPED_LITERAL] The value of the typed literal \"TIME\" is invalid: '12-13.14'. SQLSTATE: 42604\n== SQL (line 1, position 1) ==\ntime '12-13.14'\n^^^^^^^^^^^^^^^\n",
+      "output": {
+        "failure": "invalid argument: found '12-13.14' at 5:15 expected '->', '.', '(', '[', '::', 'ESCAPE', 'IS', 'NOT', 'IN', '*', '/', '%', 'DIV', '+', '-', '||', '>>>', '>>', '<<', '&', '^', '|', '!=', '!>', '!<', '==', '=', '>=', '>', '<=>', '<=', '<>', '<', 'BETWEEN', 'LIKE', 'ILIKE', 'RLIKE', 'REGEXP', 'SIMILAR', 'AND', 'OR', 'AS', identifier, something else, or end of input"
       }
     },
     {
