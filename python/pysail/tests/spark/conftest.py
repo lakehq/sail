@@ -112,7 +112,7 @@ def _collect_plan(query: str, spark) -> str:
 class PlanSnapshotExtension(SingleFileSnapshotExtension):
     """Snapshot extension that stores normalized plan text."""
 
-    file_extension = "hs"
+    file_extension = "plan"
 
     def serialize(self, data: SerializableData, **_: object) -> str:
         return normalize_plan_text(str(data)).encode()
