@@ -15,9 +15,9 @@
     "@types/js-yaml": "^4.0.9",
     "@types/markdown-it": "^14.1.2",
     "@types/node": "^24.9.1",
-    "@typescript-eslint/eslint-plugin": "^8.49.0",
-    "@typescript-eslint/parser": "^8.49.0",
-    "@viz-js/viz": "^3.23.0",
+    "@typescript-eslint/eslint-plugin": "^8.50.0",
+    "@typescript-eslint/parser": "^8.50.0",
+    "@viz-js/viz": "^3.24.0",
     "autoprefixer": "^10.4.23",
     "eslint": "^9.39.2",
     "eslint-config-prettier": "^10.1.8",
@@ -35,13 +35,13 @@
     "svgo": "^4.0.0",
     "tailwindcss": "^4.1.18",
     "typescript": "^5.9.3",
-    "typescript-eslint": "^8.49.0",
+    "typescript-eslint": "^8.50.0",
     "vega": "^6.2.0",
     "vite": "^5.4.21",
     "vitepress": "^1.6.4",
-    "vue": "^3.5.25",
+    "vue": "^3.5.26",
     "vue-eslint-parser": "^10.2.0",
-    "vue-tsc": "^3.1.8"
+    "vue-tsc": "^3.2.1"
   },
   "prettier": {
     "plugins": [
