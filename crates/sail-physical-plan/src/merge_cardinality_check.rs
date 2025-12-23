@@ -8,8 +8,6 @@ use datafusion::arrow::array::{Array, BooleanArray, LargeStringArray, StringArra
 use datafusion::arrow::datatypes::SchemaRef;
 use datafusion::arrow::record_batch::RecordBatch;
 use datafusion::execution::{SendableRecordBatchStream, TaskContext};
-use datafusion::physical_expr::{EquivalenceProperties, Partitioning};
-use datafusion::physical_plan::execution_plan::{Boundedness, EmissionType};
 use datafusion::physical_plan::{
     DisplayAs, DisplayFormatType, ExecutionPlan, PlanProperties, RecordBatchStream,
 };
@@ -34,13 +32,7 @@ impl MergeCardinalityCheckExec {
         source_present_col: impl Into<String>,
     ) -> Result<Self> {
         let schema = input.schema();
-        // Global correctness: force a single partition so we can track seen row ids reliably.
-        let properties = PlanProperties::new(
-            EquivalenceProperties::new(schema.clone()),
-            Partitioning::UnknownPartitioning(1),
-            EmissionType::Final,
-            Boundedness::Bounded,
-        );
+        let properties = input.properties().clone();
         Ok(Self {
             input,
             target_row_id_col: target_row_id_col.into(),
