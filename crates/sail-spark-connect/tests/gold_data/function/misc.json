@@ -729,7 +729,7 @@
         }
       },
       "output": {
-        "failure": "not implemented: function: monotonically_increasing_id"
+        "success": "ok"
       }
     },
     {

@@ -8,6 +8,7 @@ use sail_catalog::manager::CatalogManager;
 use sail_catalog::utils::quote_namespace_if_needed;
 use sail_common_datafusion::extension::SessionExtensionAccessor;
 use sail_common_datafusion::utils::items::ItemTaker;
+use sail_function::scalar::misc::monotonically_increasing_id::SparkMonotonicallyIncreasingId;
 use sail_function::scalar::misc::raise_error::RaiseError;
 use sail_function::scalar::misc::spark_aes::{
     SparkAESDecrypt, SparkAESEncrypt, SparkTryAESDecrypt, SparkTryAESEncrypt,
@@ -149,7 +150,7 @@ pub(super) fn list_built_in_misc_functions() -> Vec<(&'static str, ScalarFunctio
         ("java_method", F::unknown("java_method")),
         (
             "monotonically_increasing_id",
-            F::unknown("monotonically_increasing_id"),
+            F::udf(SparkMonotonicallyIncreasingId::new()),
         ),
         ("raise_error", F::udf(RaiseError::new())),
         ("reflect", F::unknown("reflect")),

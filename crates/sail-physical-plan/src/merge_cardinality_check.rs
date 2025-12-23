@@ -4,7 +4,7 @@ use std::pin::Pin;
 use std::sync::Arc;
 use std::task::{Context, Poll};
 
-use datafusion::arrow::array::{Array, BooleanArray, LargeStringArray, StringArray};
+use datafusion::arrow::array::{Array, BooleanArray, Int64Array, LargeStringArray, StringArray};
 use datafusion::arrow::datatypes::SchemaRef;
 use datafusion::arrow::record_batch::RecordBatch;
 use datafusion::execution::{SendableRecordBatchStream, TaskContext};
@@ -160,7 +160,7 @@ struct MergeCardinalityCheckStream {
     row_id_idx: usize,
     target_present_idx: usize,
     source_present_idx: usize,
-    seen: HashSet<String>,
+    seen: HashSet<RowIdKey>,
 }
 
 impl RecordBatchStream for MergeCardinalityCheckStream {
@@ -204,11 +204,13 @@ impl Stream for MergeCardinalityCheckStream {
                 let row_id_values: RowIdView<'_> =
                     if let Some(a) = row_id_any.as_any().downcast_ref::<StringArray>() {
                         RowIdView::Utf8(a)
+                    } else if let Some(a) = row_id_any.as_any().downcast_ref::<Int64Array>() {
+                        RowIdView::Int64(a)
                     } else if let Some(a) = row_id_any.as_any().downcast_ref::<LargeStringArray>() {
                         RowIdView::LargeUtf8(a)
                     } else {
                         return Poll::Ready(Some(Err(DataFusionError::Internal(
-                            "expected Utf8/LargeUtf8 for target row id".to_string(),
+                            "expected Int64/Utf8/LargeUtf8 for target row id".to_string(),
                         ))));
                     };
 
@@ -223,7 +225,7 @@ impl Stream for MergeCardinalityCheckStream {
                     if row_id_values.is_null(i) {
                         continue;
                     }
-                    let id = row_id_values.value(i).to_string();
+                    let id = row_id_values.key(i);
                     if !self.seen.insert(id) {
                         return Poll::Ready(Some(Err(DataFusionError::Execution(
                             "MERGE_CARDINALITY_VIOLATION".to_string(),
@@ -239,6 +241,7 @@ impl Stream for MergeCardinalityCheckStream {
 
 enum RowIdView<'a> {
     Utf8(&'a StringArray),
+    Int64(&'a Int64Array),
     LargeUtf8(&'a LargeStringArray),
 }
 
@@ -246,14 +249,22 @@ impl<'a> RowIdView<'a> {
     fn is_null(&self, i: usize) -> bool {
         match self {
             RowIdView::Utf8(a) => a.is_null(i),
+            RowIdView::Int64(a) => a.is_null(i),
             RowIdView::LargeUtf8(a) => a.is_null(i),
         }
     }
 
-    fn value(&self, i: usize) -> &str {
+    fn key(&self, i: usize) -> RowIdKey {
         match self {
-            RowIdView::Utf8(a) => a.value(i),
-            RowIdView::LargeUtf8(a) => a.value(i),
+            RowIdView::Utf8(a) => RowIdKey::Utf8(a.value(i).to_string()),
+            RowIdView::Int64(a) => RowIdKey::Int64(a.value(i)),
+            RowIdView::LargeUtf8(a) => RowIdKey::Utf8(a.value(i).to_string()),
         }
     }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+enum RowIdKey {
+    Utf8(String),
+    Int64(i64),
 }

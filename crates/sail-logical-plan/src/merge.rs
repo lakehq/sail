@@ -21,6 +21,8 @@ use educe::Educe;
 use log::trace;
 use sail_common_datafusion::utils::items::ItemTaker;
 
+use crate::monotonic_id::MonotonicIdNode;
+
 pub const SOURCE_PRESENT_COLUMN: &str = "__sail_merge_source_row_present";
 pub const TARGET_PRESENT_COLUMN: &str = "__sail_merge_target_row_present";
 pub const TARGET_ROW_ID_COLUMN: &str = "__sail_merge_target_row_id";
@@ -515,16 +517,13 @@ pub fn expand_merge(node: &MergeIntoNode, path_column: &str) -> Result<MergeExpa
 
     if should_check_cardinality {
         // Add stable per-target-row id before join; JOIN will duplicate this value for matches.
-        let mut exprs: Vec<Expr> = target_plan
-            .schema()
-            .fields()
-            .iter()
-            .map(|f| Expr::Column(Column::from_name(f.name().clone())))
-            .collect();
-        exprs.push(datafusion::functions::string::expr_fn::uuid().alias(TARGET_ROW_ID_COLUMN));
-        target_plan = LogicalPlanBuilder::from(target_plan)
-            .project(exprs)?
-            .build()?;
+        // Use a dedicated logical node so we don't rely on later expression rewriters (MERGE builds plans directly).
+        target_plan = LogicalPlan::Extension(Extension {
+            node: Arc::new(MonotonicIdNode::try_new(
+                Arc::new(target_plan),
+                TARGET_ROW_ID_COLUMN.to_string(),
+            )?),
+        });
     }
 
     // To avoid duplicate unqualified names after JOIN, rename source columns with a stable prefix.
