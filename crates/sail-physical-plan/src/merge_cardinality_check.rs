@@ -207,9 +207,10 @@ impl Stream for MergeCardinalityCheckStream {
                     } else if let Some(a) = row_id_any.as_any().downcast_ref::<LargeStringArray>() {
                         RowIdView::LargeUtf8(a)
                     } else {
-                        return Poll::Ready(Some(Err(DataFusionError::Internal(
-                            "expected Utf8/LargeUtf8 for target row id".to_string(),
-                        ))));
+                        return Poll::Ready(Some(Err(DataFusionError::Internal(format!(
+                            "expected Utf8/LargeUtf8 for target row id but got {:?}",
+                            row_id_any.data_type()
+                        )))));
                     };
 
                 for i in 0..batch.num_rows() {
@@ -224,9 +225,12 @@ impl Stream for MergeCardinalityCheckStream {
                         continue;
                     }
                     let id = row_id_values.value(i).to_string();
-                    if !self.seen.insert(id) {
+                    if !self.seen.insert(id.clone()) {
                         return Poll::Ready(Some(Err(DataFusionError::Execution(
-                            "MERGE_CARDINALITY_VIOLATION".to_string(),
+                            format!(
+                                "MERGE_CARDINALITY_VIOLATION: Multiple source rows matched target row '{}'",
+                                id
+                            ),
                         ))));
                     }
                 }

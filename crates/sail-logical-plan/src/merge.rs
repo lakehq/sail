@@ -1047,9 +1047,24 @@ fn same_column_set_case_insensitive(a: &[String], b: &[String]) -> bool {
         return false;
     }
     let norm = |s: &String| s.to_ascii_lowercase();
-    let sa: HashSet<String> = a.iter().map(norm).collect();
-    let sb: HashSet<String> = b.iter().map(norm).collect();
-    sa.len() == a.len() && sb.len() == b.len() && sa == sb
+    let mut sa: HashSet<String> = HashSet::with_capacity(a.len());
+    for s in a {
+        let lower = norm(s);
+        if !sa.insert(lower) {
+            return false;
+        }
+    }
+    let mut sb: HashSet<String> = HashSet::with_capacity(b.len());
+    for s in b {
+        let lower = norm(s);
+        if !sb.insert(lower.clone()) {
+            return false;
+        }
+        if !sa.contains(&lower) {
+            return false;
+        }
+    }
+    true
 }
 
 fn combine_conjunction(exprs: &[Expr]) -> Option<Expr> {

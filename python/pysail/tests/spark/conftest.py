@@ -261,7 +261,7 @@ def statement(template, docstring, spark, variables):
     spark.sql(s)
 
 
-@given(parsers.re(r"statement(?P<template>( template)?) with error (?P<error>.+)"))
+@given(parsers.re("statement(?P<template>( template)?) with error {error}"))
 def statement_with_error(template, error, docstring, spark, variables):
     """Executes a SQL statement that is expected to fail with an error.
 
