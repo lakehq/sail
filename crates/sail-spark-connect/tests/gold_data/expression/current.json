@@ -21,6 +21,20 @@
       }
     },
     {
+      "input": "current_time",
+      "output": {
+        "success": {
+          "unresolvedAttribute": {
+            "name": [
+              "current_time"
+            ],
+            "planId": null,
+            "isMetadataColumn": false
+          }
+        }
+      }
+    },
+    {
       "input": "current_timestamp",
       "output": {
         "success": {

@@ -27,16 +27,16 @@ jobs:
         continue-on-error: true
         with:
           workflow_run_id: ${{ github.event.workflow_run.id }}
-          artifact_name: spark-3.5.5-test-report
-          report_name: spark-3.5.5-test
+          artifact_name: spark-3.5.7-test-report
+          report_name: spark-3.5.7-test
 
       - uses: ./.github/actions/pull-request-report
         if: github.event.workflow_run.name == 'Build'
         continue-on-error: true
         with:
           workflow_run_id: ${{ github.event.workflow_run.id }}
-          artifact_name: spark-4.0.0-test-report
-          report_name: spark-4.0.0-test
+          artifact_name: spark-4.1.0-test-report
+          report_name: spark-4.1.0-test
 
       - uses: ./.github/actions/pull-request-report
         if: github.event.workflow_run.name == 'Gold Data' && github.event.workflow_run.conclusion == 'success'

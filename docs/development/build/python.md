@@ -89,13 +89,13 @@ Alternatively, you can run the tests against a specific Spark version.
 For example, you can use the following command to install the package in a specific `test` environment.
 
 ```bash
-hatch run test.spark-3.5.5:install-pysail
+hatch run test.spark-3.5.7:install-pysail
 ```
 
 Then you can run the tests against the specific Spark version.
 
 ```bash
-hatch run test.spark-3.5.5:pytest --pyargs pysail
+hatch run test.spark-3.5.7:pytest --pyargs pysail
 ```
 
 ### Testing with JVM Spark
@@ -107,15 +107,15 @@ Note that tests written for extended features of Sail will be skipped in this ca
 
 ```bash
 env SPARK_REMOTE="local" \
-  PYSPARK_SUBMIT_ARGS="--packages org.apache.spark:spark-connect_2.12:3.5.5 pyspark-shell" \
-  hatch run test.spark-3.5.5:pytest --pyargs pysail
+  PYSPARK_SUBMIT_ARGS="--packages org.apache.spark:spark-connect_2.12:3.5.7 pyspark-shell" \
+  hatch run test.spark-3.5.7:pytest --pyargs pysail
 ```
 
-The `PYSPARK_SUBMIT_ARGS` environment variable is not needed in Spark 4.0.0 and later versions.
+The `PYSPARK_SUBMIT_ARGS` environment variable is no longer needed since Spark 4.0.
 
 ```bash
 env SPARK_REMOTE="local" \
-  hatch run test.spark-4.0.0:pytest --pyargs pysail
+  hatch run test.spark-4.1.0:pytest --pyargs pysail
 ```
 
 ::: info
