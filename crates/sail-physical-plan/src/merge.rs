@@ -2,13 +2,15 @@ use std::collections::HashMap;
 use std::sync::Arc;
 
 use datafusion::execution::SessionState;
+use datafusion::physical_expr::expressions::Literal;
 use datafusion::physical_plan::ExecutionPlan;
-use datafusion_common::{internal_err, Result};
+use datafusion_common::{internal_err, Result, ScalarValue};
 use sail_common_datafusion::datasource::{
     MergeInfo as PhysicalMergeInfo, MergePredicateInfo, MergeTargetInfo, OperationOverride,
     TableFormatRegistry,
 };
 use sail_common_datafusion::extension::SessionExtensionAccessor;
+use sail_common_datafusion::physical_expr::PhysicalExprWithSource;
 use sail_logical_plan::merge::MergeIntoWriteNode;
 
 fn convert_options(options: &[Vec<(String, String)>]) -> Vec<HashMap<String, String>> {
@@ -128,6 +130,10 @@ pub async fn create_preexpanded_merge_physical_plan(
         } else {
             Some(touched_plan.clone())
         },
+        on_condition: PhysicalExprWithSource::new(
+            Arc::new(Literal::new(ScalarValue::Boolean(Some(true)))),
+            Some("true".to_string()),
+        ),
         join_keys: vec![],
         join_filter: None,
         target_only_filters: vec![],

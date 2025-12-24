@@ -3,9 +3,12 @@ use std::sync::Arc;
 
 use datafusion::physical_expr::PhysicalExpr;
 
+/// A physical expression with an optional SQL source string.
 #[derive(Debug, Clone)]
 pub struct PhysicalExprWithSource {
+    /// The physical expression.
     pub expr: Arc<dyn PhysicalExpr>,
+    /// The optional SQL source string for information purposes.
     pub source: Option<String>,
 }
 

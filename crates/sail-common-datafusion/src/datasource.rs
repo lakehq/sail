@@ -92,7 +92,7 @@ pub struct MergeTargetInfo {
 #[derive(Debug, Clone)]
 pub struct MergeAssignmentInfo {
     pub column: String,
-    pub value: PhysicalExprWithSource,
+    pub value: Arc<dyn PhysicalExpr>,
 }
 
 #[derive(Debug, Clone)]
@@ -125,7 +125,7 @@ pub enum MergeNotMatchedByTargetActionInfo {
     InsertAll,
     InsertColumns {
         columns: Vec<String>,
-        values: Vec<PhysicalExprWithSource>,
+        values: Vec<Arc<dyn PhysicalExpr>>,
     },
 }
 
@@ -171,6 +171,7 @@ pub struct MergeInfo {
     pub expanded_input: Option<Arc<dyn ExecutionPlan>>,
     /// Physical plan that yields touched file paths (if pre_expanded)
     pub touched_file_plan: Option<Arc<dyn ExecutionPlan>>,
+    pub on_condition: PhysicalExprWithSource,
     /// Equality join keys extracted from the ON condition (target, source)
     pub join_keys: Vec<(Arc<dyn PhysicalExpr>, Arc<dyn PhysicalExpr>)>,
     /// Residual predicates from the ON condition (applied as join filter)

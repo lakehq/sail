@@ -1278,5 +1278,9 @@ pub struct Delete {
 #[serde(rename_all = "camelCase")]
 pub struct ExprWithSource {
     pub expr: Expr,
+    /// An optional SQL source string for information purposes.
+    /// This source string may not be syntactically correct, or
+    /// may not be an exact representation of the expression
+    /// if the expression is not created from SQL.
     pub source: Option<String>,
 }
