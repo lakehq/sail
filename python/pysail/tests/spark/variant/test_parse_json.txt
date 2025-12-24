@@ -78,3 +78,29 @@ root
 |                           false|
 |                           false|
 +--------------------------------+
+
+>>> spark.sql("""SELECT struct(cast('test' as binary) as value, cast('other' as binary) as data) AS result""").printSchema()
+root
+ |-- result: struct (nullable = false)
+ |    |-- value: binary (nullable = false)
+ |    |-- data: binary (nullable = false)
+
+>>> spark.sql("""SELECT struct(cast('test' as binary) as value, cast('other' as binary) as data) AS result""").show(truncate=False)
++---------------------------------+
+|result                           |
++---------------------------------+
+|{[74 65 73 74], [6F 74 68 65 72]}|
++---------------------------------+
+
+>>> spark.sql("""SELECT struct(cast('test' as binary) as value, cast('meta' as binary) as metadata) AS result""").printSchema()
+root
+ |-- result: struct (nullable = false)
+ |    |-- value: binary (nullable = false)
+ |    |-- metadata: binary (nullable = false)
+
+>>> spark.sql("""SELECT struct(cast('test' as binary) as value, cast('meta' as binary) as metadata) AS result""").show(truncate=False)
++------------------------------+
+|result                        |
++------------------------------+
+|{[74 65 73 74], [6D 65 74 61]}|
++------------------------------+
