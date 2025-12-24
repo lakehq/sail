@@ -101,6 +101,11 @@ jobs:
         run: |
           hatch run test-ibis:env SPARK_REMOTE="sc://localhost:50051" scripts/spark-tests/run-tests.sh || true
 
+      - name: Shutdown Spark Connect Server
+        if: always()
+        run: |
+          scripts/spark-tests/stop-server.sh
+
       # Generate coverage report after Ibis tests
       - name: Generate coverage report
         run: |
@@ -130,11 +135,6 @@ jobs:
           flags: ibis-tests
           fail_ci_if_error: true
           env_vars: OS
-
-      - name: Shutdown Spark Connect Server
-        if: always()
-        run: |
-          scripts/spark-tests/stop-server.sh
 
       - name: Upload Test Logs
         uses: actions/upload-artifact@v4
