@@ -191,7 +191,7 @@
         }
       },
       "output": {
-        "success": "ok"
+        "failure": "error in DataFusion: Internal error: Function 'struct' returned value of type 'Struct([Field { name: \"col1\", data_type: Int32, nullable: true }, Field { name: \"col2\", data_type: Utf8, nullable: true }])' while the following type was promised at planning time and expected: 'Struct([Field { name: \"col1\", data_type: Int32 }, Field { name: \"col2\", data_type: Utf8 }])'.\nThis issue was likely caused by a bug in DataFusion's code. Please help us to resolve this by filing a bug report in our issue tracker: https://github.com/apache/datafusion/issues"
       }
     },
     {
