@@ -27,7 +27,7 @@ use tokio::sync::OnceCell;
 
 use crate::config::UnityCatalogConfig;
 use crate::credential::CredentialProvider;
-use crate::data_type::{field_or_data_type_to_unity_type, unity_type_to_data_type};
+use crate::data_type::{data_type_to_unity_type, unity_type_to_data_type};
 use crate::unity::{types, Client};
 
 pub(crate) const DEFAULT_URI: &str = "http://localhost:8080/api/2.1/unity-catalog";
@@ -567,7 +567,7 @@ impl CatalogProvider for UnityCatalogProvider {
             .iter()
             .enumerate()
             .map(|(idx, col)| {
-                let unity_type = field_or_data_type_to_unity_type(None, &col.data_type)?;
+                let unity_type = data_type_to_unity_type(&col.data_type)?;
                 let (type_precision, type_scale) = match &col.data_type {
                     DataType::Decimal32(precision, scale)
                     | DataType::Decimal64(precision, scale)

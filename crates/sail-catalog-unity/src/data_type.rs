@@ -269,7 +269,6 @@ pub(crate) fn data_type_to_unity_type(data_type: &DataType) -> CatalogResult<Uni
             }
         }
         DataType::Struct(fields) => {
-            // Aquí no se puede distinguir Variant, así que trata todos como struct normal
             let mut type_text_parts = Vec::new();
             let mut json_fields = Vec::new();
             for field in fields.iter() {
@@ -719,37 +718,5 @@ fn get_field_metadata(
             .collect()
     } else {
         HashMap::new()
-    }
-}
-
-pub(crate) fn field_to_unity_type(field: &Field) -> CatalogResult<UnityColumnType> {
-    match field.data_type() {
-        DataType::Struct(_fields) => {
-            if let Some(ext_name) = field.metadata().get("ARROW:extension:name") {
-                if ext_name == "variant" {
-                    return Err(CatalogError::InvalidArgument(
-                        "Field with Variant extension should be treated as Variant, not struct"
-                            .to_string(),
-                    ));
-                }
-            }
-            data_type_to_unity_type(field.data_type())
-        }
-        _ => data_type_to_unity_type(field.data_type()),
-    }
-}
-
-/// If you have a Field (with metadata/extensions) prefer `field_to_unity_type`, otherwise
-/// fall back to `data_type_to_unity_type` which only has DataType information.
-pub(crate) fn field_or_data_type_to_unity_type(
-    field: Option<&Field>,
-    data_type: &DataType,
-) -> CatalogResult<UnityColumnType> {
-    if let Some(f) = field {
-        // Use the field-aware conversion which can detect Variant via metadata
-        field_to_unity_type(f)
-    } else {
-        // No field metadata available, fall back to datatype-only conversion
-        data_type_to_unity_type(data_type)
     }
 }
