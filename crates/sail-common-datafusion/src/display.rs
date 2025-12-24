@@ -332,17 +332,14 @@ fn make_formatter<'a>(
                     .iter()
                     .any(|f| f.name() == "value" && f.data_type() == &DataType::BinaryView)
                 && std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-                    VariantArray::try_new(struct_array).ok().and_then(|variant_array| {
+                    VariantArray::try_new(struct_array).ok().map(|variant_array| {
                         // Try to parse at least one non-null element to validate it's real variant data
                         for i in 0..variant_array.len().min(1) {
                             if !variant_array.is_null(i) {
                                 // Try to get the value - this may panic if invalid
                                 let _ = variant_array.value(i);
-                                return Some(());
                             }
                         }
-                        // If all null, consider it valid variant
-                        Some(())
                     })
                 }))
                 .ok()
