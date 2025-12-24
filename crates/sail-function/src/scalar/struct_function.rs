@@ -2,11 +2,9 @@ use std::any::Any;
 use std::sync::Arc;
 
 use datafusion::arrow::array::{ArrayRef, StructArray};
-use datafusion::arrow::datatypes::{DataType, Field, FieldRef, Fields};
+use datafusion::arrow::datatypes::{DataType, Field, Fields};
 use datafusion_common::{exec_err, Result};
-use datafusion_expr::{
-    ColumnarValue, ReturnFieldArgs, ScalarFunctionArgs, ScalarUDFImpl, Signature, Volatility,
-};
+use datafusion_expr::{ColumnarValue, ScalarFunctionArgs, ScalarUDFImpl, Signature, Volatility};
 
 pub fn to_struct_array(args: &[ArrayRef], field_names: &[String]) -> Result<ArrayRef> {
     if args.is_empty() {
@@ -68,34 +66,11 @@ impl ScalarUDFImpl for StructFunction {
             .iter()
             .zip(self.field_names.iter())
             .map(|(dt, field_name)| {
-                // We conservatively assume fields are nullable in the return type
-                // The actual nullability will be determined at runtime based on the data
+                // Always use nullable=true to match the runtime behavior
                 Ok(Field::new(field_name.clone(), dt.clone(), true))
             })
             .collect::<Result<Vec<Field>>>()?;
         Ok(DataType::Struct(Fields::from(fields)))
-    }
-
-    fn return_field_from_args(&self, args: ReturnFieldArgs) -> Result<FieldRef> {
-        // Build the struct type using the exact nullability from input fields
-        let fields: Vec<Field> = args
-            .arg_fields
-            .iter()
-            .zip(self.field_names.iter())
-            .map(|(arg_field, field_name)| {
-                // Preserve the nullability from the input field
-                eprintln!("DEBUG return_field_from_args: field '{}' has nullable={}", field_name, arg_field.is_nullable());
-                Field::new(
-                    field_name.clone(),
-                    arg_field.data_type().clone(),
-                    arg_field.is_nullable(),
-                )
-            })
-            .collect();
-
-        let struct_type = DataType::Struct(Fields::from(fields));
-        // The struct itself is always non-nullable since we always return a struct value
-        Ok(Arc::new(Field::new(self.name(), struct_type, false)))
     }
 
     fn invoke_with_args(&self, args: ScalarFunctionArgs) -> Result<ColumnarValue> {
