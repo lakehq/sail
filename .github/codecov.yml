@@ -23,12 +23,12 @@ flags:
   rust-unit:
     paths:
       - crates/
-    carry_forward: true
+    carryforward: true
   python-unit:
     paths:
       - crates/
-    carry_forward: true
+    carryforward: true
   spark-tests:
     paths:
       - crates/
-    carry_forward: true
+    carryforward: true
