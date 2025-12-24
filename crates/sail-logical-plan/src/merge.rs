@@ -5,8 +5,8 @@ use std::sync::Arc;
 
 use datafusion_common::tree_node::{Transformed, TreeNode};
 use datafusion_common::{
-    plan_err, Column, DFSchema, DFSchemaRef, DataFusionError, NullEquality, Result, ScalarValue,
-    TableReference,
+    plan_err, Column, DFSchema, DFSchemaRef, DataFusionError, Dependency, NullEquality, Result,
+    ScalarValue, TableReference,
 };
 use datafusion_expr::expr::Case;
 use datafusion_expr::expr_fn::not;
@@ -403,7 +403,7 @@ pub fn expand_merge(node: &MergeIntoNode, path_column: &str) -> Result<MergeExpa
     let merge_schema = node.input_schema.clone();
     let mut should_check_cardinality = should_check_cardinality(&options.matched_clauses);
     if should_check_cardinality
-        && can_prove_source_unique_on_join_keys(&source_plan, &options.join_key_pairs)
+        && source_is_unique_on_merge_join_keys(&source_plan, &options.join_key_pairs)
     {
         should_check_cardinality = false;
     }
@@ -964,20 +964,18 @@ fn should_check_cardinality(matched_clauses: &[MergeMatchedClause]) -> bool {
     true
 }
 
-fn can_prove_source_unique_on_join_keys(
+fn source_is_unique_on_merge_join_keys(
     source_plan: &LogicalPlan,
     join_key_pairs: &[(Expr, Expr)],
 ) -> bool {
-    // We can only reason about equi-join keys that are plain source columns.
-    let mut key_cols: Vec<String> = Vec::new();
-    for (_, source_key) in join_key_pairs.iter() {
-        match source_key {
-            Expr::Column(c) => key_cols.push(c.name.clone()),
-            _ => return false,
-        }
-    }
-    if key_cols.is_empty() {
+    let Some(mut key_cols) = source_join_key_column_names(join_key_pairs) else {
         return false;
+    };
+
+    // Prefer functional-dependency tracking on the plan schema.
+    // If it proves uniqueness, we can safely skip MERGE cardinality checks.
+    if schema_implies_unique_for_columns(source_plan.schema().as_ref(), &key_cols) {
+        return true;
     }
 
     let mut plan = source_plan;
@@ -1002,6 +1000,54 @@ fn can_prove_source_unique_on_join_keys(
             _ => return false,
         }
     }
+}
+
+fn source_join_key_column_names(join_key_pairs: &[(Expr, Expr)]) -> Option<Vec<String>> {
+    // Only handle equi-join keys that are plain source columns.
+    let mut out = Vec::with_capacity(join_key_pairs.len());
+    for (_, source_key) in join_key_pairs {
+        match source_key {
+            Expr::Column(c) => out.push(c.name.clone()),
+            _ => return None,
+        }
+    }
+    (!out.is_empty()).then_some(out)
+}
+
+fn schema_implies_unique_for_columns(schema: &DFSchema, key_cols: &[String]) -> bool {
+    use std::collections::{HashMap, HashSet};
+
+    fn norm_ident(s: &str) -> String {
+        s.to_ascii_lowercase()
+    }
+
+    let mut index_by_name: HashMap<String, usize> = HashMap::new();
+    for (idx, field) in schema.fields().iter().enumerate() {
+        let name = norm_ident(field.name());
+        if index_by_name.insert(name, idx).is_some() {
+            return false;
+        }
+    }
+
+    // Resolve join key column indices. If any key is missing or duplicates
+    // another key (after normalization), we cannot reason safely.
+    let mut key_indices: HashSet<usize> = HashSet::with_capacity(key_cols.len());
+    for key in key_cols {
+        let name = norm_ident(key);
+        let Some(&idx) = index_by_name.get(&name) else {
+            return false;
+        };
+        if !key_indices.insert(idx) {
+            return false;
+        }
+    }
+    if key_indices.is_empty() {
+        return false;
+    }
+
+    schema.functional_dependencies().iter().any(|fd| {
+        fd.mode == Dependency::Single && fd.source_indices.iter().all(|i| key_indices.contains(i))
+    })
 }
 
 fn map_key_cols_through_projection(

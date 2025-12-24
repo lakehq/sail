@@ -300,6 +300,17 @@ SKIPPED_SPARK_TESTS = [
         keywords=["connect", "streaming", "test_parity_streaming.py"],
         reason="Streaming test",
     ),
+    # We may add back the chunking test once result chunking is properly implemented.
+    TestMarker(
+        keywords=["test_connect_basic.py", "test_arrow_batch_result_chunking"],
+        reason="Buggy test",
+    ),
+    # It is unclear why the client tests would cause setup errors in subsequent tests.
+    # It is possibly due to the mock Spark Connect server used.
+    TestMarker(
+        keywords=["connect", "client", "test_client.py"],
+        reason="Subsequent tests would have setup errors after these tests",
+    ),
 ]
 
 

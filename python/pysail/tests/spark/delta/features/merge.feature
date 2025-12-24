@@ -89,7 +89,7 @@ Feature: Delta Lake Merge
         """
 
     Scenario: MERGE errors when a single target row matches multiple source rows
-      Given statement with error MERGE_CARDINALITY_VIOLATION
+      When query
         """
         MERGE INTO delta_merge_cardinality AS t
         USING src_merge_cardinality AS s
@@ -99,6 +99,7 @@ Feature: Delta Lake Merge
         WHEN NOT MATCHED THEN
           INSERT *
         """
+      Then query error MERGE_CARDINALITY_VIOLATION
 
   Rule: Cardinality check can be skipped when source is provably unique on join keys
     Background:

@@ -8,8 +8,6 @@ use datafusion::arrow::array::{Array, BooleanArray, Int64Array, LargeStringArray
 use datafusion::arrow::datatypes::SchemaRef;
 use datafusion::arrow::record_batch::RecordBatch;
 use datafusion::execution::{SendableRecordBatchStream, TaskContext};
-use datafusion::physical_expr::{EquivalenceProperties, Partitioning};
-use datafusion::physical_plan::execution_plan::{Boundedness, EmissionType};
 use datafusion::physical_plan::{
     DisplayAs, DisplayFormatType, ExecutionPlan, PlanProperties, RecordBatchStream,
 };
@@ -34,13 +32,7 @@ impl MergeCardinalityCheckExec {
         source_present_col: impl Into<String>,
     ) -> Result<Self> {
         let schema = input.schema();
-        // Global correctness: force a single partition so we can track seen row ids reliably.
-        let properties = PlanProperties::new(
-            EquivalenceProperties::new(schema.clone()),
-            Partitioning::UnknownPartitioning(1),
-            EmissionType::Final,
-            Boundedness::Bounded,
-        );
+        let properties = input.properties().clone();
         Ok(Self {
             input,
             target_row_id_col: target_row_id_col.into(),
@@ -209,9 +201,10 @@ impl Stream for MergeCardinalityCheckStream {
                     } else if let Some(a) = row_id_any.as_any().downcast_ref::<LargeStringArray>() {
                         RowIdView::LargeUtf8(a)
                     } else {
-                        return Poll::Ready(Some(Err(DataFusionError::Internal(
-                            "expected Int64/Utf8/LargeUtf8 for target row id".to_string(),
-                        ))));
+                        return Poll::Ready(Some(Err(DataFusionError::Internal(format!(
+                            "expected Utf8/LargeUtf8 for target row id but got {:?}",
+                            row_id_any.data_type()
+                        )))));
                     };
 
                 for i in 0..batch.num_rows() {
@@ -226,9 +219,12 @@ impl Stream for MergeCardinalityCheckStream {
                         continue;
                     }
                     let id = row_id_values.key(i);
-                    if !self.seen.insert(id) {
+                    if !self.seen.insert(id.clone()) {
                         return Poll::Ready(Some(Err(DataFusionError::Execution(
-                            "MERGE_CARDINALITY_VIOLATION".to_string(),
+                            format!(
+                                "MERGE_CARDINALITY_VIOLATION: Multiple source rows matched target row '{}'",
+                                id
+                            ),
                         ))));
                     }
                 }
@@ -267,4 +263,13 @@ impl<'a> RowIdView<'a> {
 enum RowIdKey {
     Utf8(String),
     Int64(i64),
+}
+
+impl std::fmt::Display for RowIdKey {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            RowIdKey::Utf8(s) => f.write_str(s),
+            RowIdKey::Int64(i) => write!(f, "{i}"),
+        }
+    }
 }
