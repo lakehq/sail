@@ -317,9 +317,27 @@ fn make_formatter<'a>(
         }
         DataType::Struct(_) => {
             let struct_array = as_struct_array(array);
-            // Check if this is a Variant type by trying to create a VariantArray
-            // Variant arrays have a specific struct layout with "metadata" and "value" fields
-            if VariantArray::try_new(struct_array).is_ok() {
+            // Check if this is a valid Variant by trying to create a VariantArray
+            // and validate that we can actually parse at least one non-null element
+            // We use catch_unwind because variant_array.value() may panic on invalid data
+            let is_valid_variant = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                let variant_array = VariantArray::try_new(struct_array).ok()?;
+                // Try to access the first non-null value to validate the data format
+                for i in 0..variant_array.len().min(10) {
+                    if !variant_array.is_null(i) {
+                        // Try to get the value - this may panic if the data is invalid
+                        let _ = variant_array.value(i);
+                        return Some(());
+                    }
+                }
+                // If all elements are null, still consider it valid
+                Some(())
+            }))
+            .ok()
+            .flatten()
+            .is_some();
+
+            if is_valid_variant {
                 array_format_variant(struct_array, options)
             } else {
                 array_format(struct_array, options)
@@ -427,6 +445,8 @@ impl DisplayIndex for VariantFormat<'_> {
             return Ok(());
         }
 
+        // Try to parse and convert the variant to JSON
+        // If it fails (invalid variant data), return an error that will be caught upstream
         let variant = self.array.value(idx);
         let json_str = variant.to_json_string()?;
         write!(f, "{}", json_str)?;

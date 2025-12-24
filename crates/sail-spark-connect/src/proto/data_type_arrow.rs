@@ -13,7 +13,7 @@ impl TryFrom<adt::Field> for sdt::StructField {
         let is_variant = field
             .metadata()
             .get("ARROW:extension:name")
-            .map(|s| s == "arrowrs.variant")
+            .map(|s| s == "arrow.parquet.variant")
             .unwrap_or(false);
 
         let data_type = if is_udt {
@@ -225,7 +225,7 @@ mod tests {
     #[test]
     #[allow(clippy::assertions_on_constants)]
     fn test_field_with_variant_extension_type_is_variant() {
-        // A field with the arrowrs.variant extension type SHOULD be treated as Variant
+        // A field with the arrow.parquet.variant extension type SHOULD be treated as Variant
         let fields = Fields::from(vec![
             Field::new("value", ArrowDataType::Binary, true),
             Field::new("metadata", ArrowDataType::Binary, true),
@@ -234,7 +234,7 @@ mod tests {
         let mut metadata = HashMap::new();
         metadata.insert(
             "ARROW:extension:name".to_string(),
-            "arrowrs.variant".to_string(),
+            "arrow.parquet.variant".to_string(),
         );
 
         let field = Field::new("test", ArrowDataType::Struct(fields), true).with_metadata(metadata);
@@ -254,7 +254,7 @@ mod tests {
                 spark_field.data_type.and_then(|dt| dt.kind),
                 Some(sdt::Kind::Variant(_))
             ),
-            "Field with arrowrs.variant extension should be treated as Variant"
+            "Field with arrow.parquet.variant extension should be treated as Variant"
         );
     }
 }
