@@ -318,12 +318,11 @@ message PartialSortExecNode {
   uint64 common_prefix_length = 3;
 }
 
-
-
 message AppendMode {}
 message OverwriteMode {}
 message OverwriteIfMode {
   bytes condition = 1;
+  optional string source = 2;
 }
 message ErrorIfExistsMode {}
 message IgnoreIfExistsMode {}

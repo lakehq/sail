@@ -5,11 +5,11 @@ use async_trait::async_trait;
 use datafusion::catalog::{Session, TableProvider};
 use datafusion::common::{not_impl_err, plan_err, DataFusionError, Result, ToDFSchema};
 use datafusion::datasource::listing::ListingTableUrl;
-use datafusion::execution::SessionStateBuilder;
 use datafusion::physical_plan::ExecutionPlan;
 use sail_common_datafusion::datasource::{
     DeleteInfo, MergeInfo, PhysicalSinkMode, SinkInfo, SourceInfo, TableFormat, TableFormatRegistry,
 };
+use sail_common_datafusion::physical_expr::PhysicalExprWithSource;
 use sail_common_datafusion::streaming::event::schema::is_flow_event_schema;
 use sail_data_source::options::{
     load_default_options, load_options, DeltaReadOptions, DeltaWriteOptions,
@@ -287,18 +287,17 @@ impl DeltaTableFormat {
 
         let df_schema = arrow_schema.clone().to_dfschema()?;
 
-        let session_state = SessionStateBuilder::new()
-            .with_runtime_env(ctx.runtime_env().clone())
-            .build();
-
-        let logical_expr = parse_predicate_expression(&df_schema, replace_where, &session_state)
+        let logical_expr = parse_predicate_expression(&df_schema, replace_where, ctx)
             .map_err(|e| DataFusionError::External(Box::new(e)))?;
 
-        let physical_expr = session_state.create_physical_expr(logical_expr, &df_schema)?;
+        let physical_expr = ctx.create_physical_expr(logical_expr, &df_schema)?;
 
         Ok((
             PhysicalSinkMode::OverwriteIf {
-                condition: physical_expr,
+                condition: PhysicalExprWithSource::new(
+                    physical_expr,
+                    Some(replace_where.to_string()),
+                ),
             },
             arrow_schema,
         ))

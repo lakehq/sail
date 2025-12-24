@@ -425,6 +425,13 @@ impl ExecutionPlan for DeltaCommitExec {
             };
             let reference = snapshot.as_ref().map(|s| *s as &dyn TableReference);
 
+            // FIXME: avoid creating a new session state
+            //   This session state is used to parse predicates in the commit info
+            //   back to physical expressions. But the predicate string is not always available
+            //   (e.g., for DML operations constructed from the DataFrame API). Should we
+            //   store the physical expression directly when creating `DeltaCommitExec`?
+            //   The physical expression should be known at planning time so it does not
+            //   need to be sent back from the writer.
             let session_state = SessionStateBuilder::new()
                 .with_runtime_env(context.runtime_env().clone())
                 .with_config(context.session_config().clone())
