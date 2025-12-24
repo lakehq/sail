@@ -1,3 +1,5 @@
+from __future__ import annotations
+
 import doctest
 import json
 import os
@@ -5,19 +7,22 @@ import re
 import textwrap
 import time
 from pathlib import Path
+from typing import TYPE_CHECKING
 
-import pyspark.sql.connect.session
 import pytest
 from _pytest.doctest import DoctestItem
 from jinja2 import Template
 from pyspark.sql import SparkSession
 from pytest_bdd import given, parsers, then, when
-from syrupy.assertion import SnapshotAssertion
 from syrupy.extensions.single_file import SingleFileSnapshotExtension
-from syrupy.types import SerializableData
 
 from pysail.spark import SparkConnectServer
 from pysail.tests.spark.utils import SAIL_ONLY, escape_sql_string_literal, is_jvm_spark, parse_show_string
+
+if TYPE_CHECKING:
+    import pyspark.sql.connect.session
+    from syrupy.assertion import SnapshotAssertion
+    from syrupy.types import SerializableData
 
 
 def normalize_plan_text(plan_text: str) -> str:
@@ -360,6 +365,28 @@ def _latest_commit_info(table_location: Path) -> dict:
     raise AssertionError(msg)
 
 
+def _first_commit_actions(table_location: Path) -> dict:
+    """Extract protocol and metaData from the first delta log commit (version 0)."""
+    log_dir = table_location / "_delta_log"
+    first_log = log_dir / "00000000000000000000.json"
+    assert first_log.exists(), f"first delta log not found: {first_log}"
+    result = {}
+    with first_log.open("r", encoding="utf-8") as f:
+        for line in f:
+            obj = json.loads(line)
+            if "protocol" in obj:
+                result["protocol"] = obj["protocol"]
+            if "metaData" in obj:
+                result["metaData"] = obj["metaData"]
+    return result
+
+
+def _first_commit_actions_from_variables(variables: dict) -> dict:
+    location = variables.get("location")
+    assert location is not None, "expected variable `location` to be defined for delta log inspection"
+    return _first_commit_actions(Path(location.path))
+
+
 def _latest_commit_info_from_variables(variables: dict) -> dict:
     location = variables.get("location")
     assert location is not None, "expected variable `location` to be defined for delta log inspection"
@@ -417,15 +444,364 @@ def _normalize_delta_commit_info_for_snapshot(commit_info: dict) -> dict:
     return normalized
 
 
-@then("delta log latest commit info matches snapshot")
-def delta_log_latest_commit_info_matches_snapshot(snapshot: SnapshotAssertion, variables):
+def _parse_path_expr(path: str) -> list[tuple[str, str | int]]:
+    """
+    Parse a simple path expression:
+    - dict keys separated by dots: a.b.c
+    - list indices in brackets: a.items[0].name
+    - dict keys in brackets (for keys containing dots/special chars):
+      metaData.configuration[\"delta.columnMapping.mode\"]
+    """
+    path_raw = path
+    path = path.strip()
+    if not path:
+        raise _PathExpressionError.empty(path=path_raw)
+
+    tokens: list[tuple[str, str | int]] = []
+    buf = ""
+    i = 0
+    while i < len(path):
+        c = path[i]
+        if c == ".":
+            if buf:
+                tokens.append(("key", buf))
+                buf = ""
+            i += 1
+            continue
+        if c == "[":
+            if buf:
+                tokens.append(("key", buf))
+                buf = ""
+            j = path.find("]", i + 1)
+            if j == -1:
+                raise _PathExpressionError.unclosed_bracket(path=path)
+            raw = path[i + 1 : j].strip()
+            if not raw:
+                raise _PathExpressionError.empty_bracket_selector(path=path)
+            # Dict key selector: JSON-quoted string, e.g. ["a.b"]
+            if raw[0] in ("'", '"'):
+                try:
+                    key = json.loads(raw) if raw[0] == '"' else raw.strip("'")
+                except json.JSONDecodeError as e:
+                    raise _PathExpressionError.invalid_quoted_key_selector(path=path, raw=raw) from e
+                tokens.append(("key", str(key)))
+            else:
+                # List index selector: [0]
+                if not raw.lstrip("-").isdigit():
+                    raise _PathExpressionError.invalid_bracket_selector(path=path, raw=raw)
+                tokens.append(("index", int(raw)))
+            i = j + 1
+            continue
+        buf += c
+        i += 1
+    if buf:
+        tokens.append(("key", buf))
+    return tokens
+
+
+def _get_by_path(obj: object, path: str) -> object:
+    cur: object = obj
+    for kind, tok in _parse_path_expr(path):
+        if kind == "key":
+            if not isinstance(cur, dict) or tok not in cur:
+                raise KeyError(path)
+            cur = cur[tok]  # type: ignore[index]
+        else:
+            if not isinstance(cur, list):
+                raise KeyError(path)
+            idx = tok  # type: ignore[assignment]
+            if idx < 0 or idx >= len(cur):
+                raise KeyError(path)
+            cur = cur[idx]
+    return cur
+
+
+def _set_by_tokens(root: object, tokens: list[tuple[str, str | int]], value: object) -> object:
+    """
+    Create/overwrite a nested structure under `root` following tokens.
+    Returns the (possibly new) root object.
+    """
+    if not tokens:
+        return value
+
+    kind0, _tok0 = tokens[0]
+    if root is None:
+        root = {} if kind0 == "key" else []
+
+    cur = root
+    for i, (kind, tok) in enumerate(tokens):
+        is_last = i == len(tokens) - 1
+        nxt = tokens[i + 1] if not is_last else None
+
+        if kind == "key":
+            if not isinstance(cur, dict):
+                raise _PathSetTypeError.expected_dict()
+            key = tok  # type: ignore[assignment]
+            if is_last:
+                cur[key] = value
+                return root
+            if key not in cur or cur[key] is None:
+                cur[key] = {} if nxt and nxt[0] == "key" else []
+            cur = cur[key]
+            continue
+
+        if not isinstance(cur, list):
+            raise _PathSetTypeError.expected_list()
+        idx = tok  # type: ignore[assignment]
+        if idx < 0:
+            raise _PathSetValueError.negative_index()
+        while len(cur) <= idx:
+            cur.append(None)
+        if is_last:
+            cur[idx] = value
+            return root
+        if cur[idx] is None:
+            cur[idx] = {} if nxt and nxt[0] == "key" else []
+        cur = cur[idx]
+
+    return root
+
+
+def _pick_paths(obj: object, paths: list[str]) -> object:
+    """
+    Extract selected paths from `obj` and return a nested structure containing only those fields.
+    Missing paths raise KeyError to keep assertions explicit.
+    """
+    out: object = None
+    for p in paths:
+        v = _get_by_path(obj, p)
+        out = _set_by_tokens(out, _parse_path_expr(p), v)
+    return out if out is not None else {}
+
+
+def _parse_expected_value(raw: str) -> object:
+    """
+    Parse a datatable value:
+    - JSON if possible (null/true/false/numbers/arrays/objects/quoted strings)
+    - otherwise treat as raw string
+    """
+    s = raw.strip()
+    if not s:
+        return ""
+    try:
+        return json.loads(s)
+    except json.JSONDecodeError:
+        return raw
+
+
+_DELTA_LOG_CACHE_KEY = "__delta_log_cache__"
+
+
+def _delta_log_get_cached(which: str, variables: dict) -> dict | None:
+    cache = variables.get(_DELTA_LOG_CACHE_KEY)
+    if isinstance(cache, dict):
+        v = cache.get(which)
+        if isinstance(v, dict):
+            return v
+    return None
+
+
+def _delta_log_put_cached(which: str, variables: dict, obj: dict) -> None:
+    cache = variables.get(_DELTA_LOG_CACHE_KEY)
+    if not isinstance(cache, dict):
+        cache = {}
+        variables[_DELTA_LOG_CACHE_KEY] = cache
+    cache[which] = obj
+
+
+def _delta_log_compute(which: str, variables: dict) -> dict:
+    """
+    Compute and normalize the delta log object (and cache it per-scenario).
+
+    This is the shared "single source of truth" used by both:
+    - matches snapshot (observability)
+    - contains (explicit KV checks, can be chained)
+    """
+    cached = _delta_log_get_cached(which, variables)
+    if cached is not None:
+        return cached
+
+    if which == "latest commit info":
+        obj = _latest_commit_info_from_variables(variables)
+        obj = _normalize_delta_commit_info_for_snapshot(obj)
+        if "operationParameters" in obj:
+            obj["operationParameters"] = _recursive_parse_json_strings(obj["operationParameters"])
+    else:
+        obj = _first_commit_actions_from_variables(variables)
+        assert "protocol" in obj, "protocol action not found in first commit"
+        assert "metaData" in obj, "metaData action not found in first commit"
+        obj["metaData"] = _normalize_delta_metadata_for_snapshot(obj["metaData"])
+
+    _delta_log_put_cached(which, variables, obj)
+    return obj
+
+
+@then(
+    parsers.re(
+        r"delta log (?P<which>latest commit info|first commit protocol and metadata) "
+        r"(?P<mode>matches snapshot(?: for paths)?|contains)"
+    )
+)
+def delta_log_assert(
+    which: str,
+    mode: str,
+    variables,
+    snapshot: SnapshotAssertion,
+    datatable=None,
+):
+    """
+    Universal delta log assertion step (one function for all delta log checks).
+
+    It matches existing phrases:
+    - Then delta log latest commit info matches snapshot
+    - Then delta log first commit protocol and metadata matches snapshot
+
+    And also supports (without adding more step functions):
+    - "... matches snapshot for paths" + datatable `| path |` to snapshot only a subset
+    - "... contains" + datatable `| path | value |` to assert arbitrary nested values
+    """
     if is_jvm_spark():
-        pytest.skip("Delta log operation assertions are Sail-only")
-    commit_info = _latest_commit_info_from_variables(variables)
-    commit_info = _normalize_delta_commit_info_for_snapshot(commit_info)
+        pytest.skip("Delta log assertions are Sail-only")
 
-    # Normalize embedded JSON strings in operationParameters
-    if "operationParameters" in commit_info:
-        commit_info["operationParameters"] = _recursive_parse_json_strings(commit_info["operationParameters"])
+    # Always operate on a cached, normalized object so "matches" and "contains"
+    # are consistent and can be chained without re-reading delta logs.
+    obj = _delta_log_compute(which, variables)
 
-    assert commit_info == snapshot
+    if mode == "contains":
+        assert datatable is not None, "expected a datatable: | path | value |"
+        header, *rows = datatable
+        assert header, "expected datatable header"
+        assert header[:2] == ["path", "value"], "expected datatable header: path | value"
+        for row in rows:
+            if not row or not row[0].strip():
+                continue
+            path, raw = row[0], row[1] if len(row) > 1 else ""
+            expected = _parse_expected_value(raw)
+            actual = _get_by_path(obj, path)
+            assert actual == expected, f"path {path!r} expected {expected!r}, got {actual!r}"
+        return
+
+    if mode == "matches snapshot for paths":
+        assert datatable is not None, "expected a datatable: | path |"
+        header, *rows = datatable
+        assert header, "expected datatable header"
+        assert header[0] == "path", "expected datatable with single header column: path"
+        paths = [r[0] for r in rows if r and r[0].strip()]
+        obj = _pick_paths(obj, paths)
+
+    assert obj == snapshot
+
+
+class _PathExpressionError(ValueError):
+    def __init__(self, *, code: str, path: str, raw: str | None = None) -> None:
+        self.code = code
+        self.path = path
+        self.raw = raw
+        super().__init__()
+
+    def __str__(self) -> str:
+        if self.raw is None:
+            return f"{self.code} (path={self.path!r})"
+        return f"{self.code} (raw={self.raw!r}, path={self.path!r})"
+
+    @classmethod
+    def empty(cls, *, path: str) -> _PathExpressionError:
+        return cls(code="empty path", path=path)
+
+    @classmethod
+    def unclosed_bracket(cls, *, path: str) -> _PathExpressionError:
+        return cls(code="unclosed '[' in path", path=path)
+
+    @classmethod
+    def empty_bracket_selector(cls, *, path: str) -> _PathExpressionError:
+        return cls(code="empty bracket selector [] in path", path=path)
+
+    @classmethod
+    def invalid_quoted_key_selector(cls, *, path: str, raw: str) -> _PathExpressionError:
+        return cls(code="invalid quoted key selector in path", path=path, raw=raw)
+
+    @classmethod
+    def invalid_bracket_selector(cls, *, path: str, raw: str) -> _PathExpressionError:
+        return cls(code="invalid bracket selector in path", path=path, raw=raw)
+
+
+class _PathSetTypeError(TypeError):
+    def __init__(self, *, code: str) -> None:
+        self.code = code
+        super().__init__()
+
+    def __str__(self) -> str:
+        return self.code
+
+    @classmethod
+    def expected_dict(cls) -> _PathSetTypeError:
+        return cls(code="path expects dict but found non-dict")
+
+    @classmethod
+    def expected_list(cls) -> _PathSetTypeError:
+        return cls(code="path expects list but found non-list")
+
+
+class _PathSetValueError(ValueError):
+    def __init__(self, *, code: str) -> None:
+        self.code = code
+        super().__init__()
+
+    def __str__(self) -> str:
+        return self.code
+
+    @classmethod
+    def negative_index(cls) -> _PathSetValueError:
+        return cls(code="negative indices are not supported for setting")
+
+
+def _normalize_column_mapping_schema(schema: dict) -> dict:
+    """Normalize schema fields for column mapping snapshot tests.
+
+    - Replaces physicalName UUIDs (col-<uuid>) with stable placeholders.
+    - Keeps columnMapping.id values as-is for structural validation.
+    """
+    if not isinstance(schema, dict):
+        return schema
+
+    normalized = dict(schema)
+
+    if "fields" in normalized and isinstance(normalized["fields"], list):
+        for i, field in enumerate(normalized["fields"]):
+            if isinstance(field, dict) and "metadata" in field:
+                meta = field.get("metadata", {})
+                # Normalize physicalName UUIDs
+                phys = meta.get("delta.columnMapping.physicalName", "")
+                if isinstance(phys, str) and phys.startswith("col-"):
+                    meta["delta.columnMapping.physicalName"] = f"<physical_name_{i}>"
+                # Recursively handle nested types
+                if "type" in field and isinstance(field["type"], dict):
+                    field["type"] = _normalize_column_mapping_schema(field["type"])
+    return normalized
+
+
+def _normalize_delta_metadata_for_snapshot(metadata: dict) -> dict:
+    """Normalize metaData action for snapshot comparison."""
+    normalized = dict(metadata)
+
+    # Normalize id (UUID)
+    if "id" in normalized:
+        normalized["id"] = "<table_id>"
+
+    # Normalize createdTime
+    if "createdTime" in normalized:
+        normalized["createdTime"] = "<created_time>"
+
+    # Normalize schema field physicalNames
+    if "schemaString" in normalized:
+        try:
+            schema = json.loads(normalized["schemaString"])
+            schema = _normalize_column_mapping_schema(schema)
+            normalized["schemaString"] = schema
+        except json.JSONDecodeError:
+            pass
+
+    return normalized
+
+
+## Consolidated into `delta_log_assert` above.
