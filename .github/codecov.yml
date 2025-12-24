@@ -5,6 +5,9 @@ coverage:
         target: 0
     project:
       default:
+        only_pulls: true
+        path:
+          - "crates/**"
         target: 0
         informational: true
 
