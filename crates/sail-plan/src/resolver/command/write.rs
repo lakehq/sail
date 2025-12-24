@@ -7,11 +7,11 @@ use datafusion_expr::{col, Expr, ExprSchemable, Extension, LogicalPlan, LogicalP
 use sail_catalog::command::CatalogCommand;
 use sail_catalog::error::CatalogError;
 use sail_catalog::manager::CatalogManager;
-use sail_catalog::provider::{
-    CatalogTableBucketBy, CatalogTableSort, CreateTableColumnOptions, CreateTableOptions,
-    TableColumnStatus, TableKind,
-};
+use sail_catalog::provider::{CreateTableColumnOptions, CreateTableOptions};
 use sail_common::spec;
+use sail_common_datafusion::catalog::{
+    CatalogTableBucketBy, CatalogTableSort, TableColumnStatus, TableKind,
+};
 use sail_common_datafusion::datasource::{BucketBy, SinkMode};
 use sail_common_datafusion::extension::SessionExtensionAccessor;
 use sail_common_datafusion::rename::logical_plan::rename_logical_plan;

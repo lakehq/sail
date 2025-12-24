@@ -17,11 +17,11 @@ use arrow::datatypes::DataType;
 use reqwest::header::HeaderValue;
 use sail_catalog::error::{CatalogError, CatalogResult};
 use sail_catalog::provider::{
-    CatalogProvider, CreateDatabaseOptions, CreateTableOptions, CreateViewOptions, DatabaseStatus,
-    DropDatabaseOptions, DropTableOptions, DropViewOptions, Namespace, TableColumnStatus,
-    TableKind, TableStatus,
+    CatalogProvider, CreateDatabaseOptions, CreateTableOptions, CreateViewOptions,
+    DropDatabaseOptions, DropTableOptions, DropViewOptions, Namespace,
 };
 use sail_catalog::utils::{get_property, quote_name_if_needed};
+use sail_common_datafusion::catalog::{DatabaseStatus, TableColumnStatus, TableKind, TableStatus};
 use secrecy::SecretString;
 use tokio::sync::OnceCell;
 
@@ -107,7 +107,7 @@ impl UnityCatalogProvider {
                     CatalogError::External(format!("Failed to build HTTP client: {e}"))
                 })?;
 
-                Ok(Client::new_with_client(&config.uri, reqwest_client))
+                Ok::<_, CatalogError>(Client::new_with_client(&config.uri, reqwest_client))
             })
             .await?;
         Ok(client)

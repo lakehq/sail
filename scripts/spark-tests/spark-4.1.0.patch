@@ -1,8 +1,8 @@
 diff --git a/python/packaging/classic/setup.py b/python/packaging/classic/setup.py
-index da4d25cc908..5e1a9e50ef8 100755
+index 54ec4abe3be..28edac8f441 100755
 --- a/python/packaging/classic/setup.py
 +++ b/python/packaging/classic/setup.py
-@@ -204,6 +204,9 @@ try:
+@@ -206,6 +206,9 @@ try:
      copyfile("pyspark/shell.py", "pyspark/python/pyspark/shell.py")
  
      if in_spark:
@@ -12,19 +12,20 @@ index da4d25cc908..5e1a9e50ef8 100755
          # !!HACK ALTERT!!
          # `setup.py` has to be located with the same directory with the package.
          # Therefore, we copy the current file, and place it at `spark/python` directory.
-@@ -305,6 +308,7 @@ try:
-             "pyspark.pandas.spark",
+@@ -308,6 +311,7 @@ try:
              "pyspark.pandas.typedef",
              "pyspark.pandas.usage_logging",
+             "pyspark.pipelines",
 +            "pyspark.python",
              "pyspark.python.pyspark",
              "pyspark.python.lib",
              "pyspark.testing",
-@@ -315,6 +319,55 @@ try:
+@@ -318,6 +322,62 @@ try:
              "pyspark.errors.exceptions",
              "pyspark.examples.src.main.python",
              "pyspark.logger",
 +            "pyspark.errors.tests",
++            "pyspark.errors.tests.connect",
 +            "pyspark.logger.tests",
 +            "pyspark.logger.tests.connect",
 +            "pyspark.ml.deepspeed.tests",
@@ -59,6 +60,7 @@ index da4d25cc908..5e1a9e50ef8 100755
 +            "pyspark.pandas.tests.reshape",
 +            "pyspark.pandas.tests.series",
 +            "pyspark.pandas.tests.window",
++            "pyspark.pipelines.tests",
 +            "pyspark.resource.tests",
 +            "pyspark.sql.tests",
 +            "pyspark.sql.tests.arrow",
@@ -66,17 +68,22 @@ index da4d25cc908..5e1a9e50ef8 100755
 +            "pyspark.sql.tests.connect.arrow",
 +            "pyspark.sql.tests.connect.client",
 +            "pyspark.sql.tests.connect.pandas",
++            "pyspark.sql.tests.connect.pandas.streaming",
 +            "pyspark.sql.tests.connect.shell",
 +            "pyspark.sql.tests.connect.streaming",
 +            "pyspark.sql.tests.pandas",
++            "pyspark.sql.tests.pandas.helper",
++            "pyspark.sql.tests.pandas.streaming",
 +            "pyspark.sql.tests.plot",
 +            "pyspark.sql.tests.streaming",
++            "pyspark.sql.tests.udf_type_tests",
 +            "pyspark.streaming.tests",
++            "pyspark.testing.tests",
 +            "pyspark.tests",
          ],
          include_package_data=True,
          package_dir={
-@@ -335,10 +388,29 @@ try:
+@@ -338,10 +398,29 @@ try:
                  "start-history-server.sh",
                  "stop-history-server.sh",
              ],
@@ -106,12 +113,12 @@ index da4d25cc908..5e1a9e50ef8 100755
 +            "pyspark.tests": ["typing/*.yml"],
          },
          scripts=scripts,
-         license="http://www.apache.org/licenses/LICENSE-2.0",
+         license="Apache-2.0",
 diff --git a/python/pyspark/sql/connect/client/core.py b/python/pyspark/sql/connect/client/core.py
-index 4c5a262ebdc..0b1fdd21f33 100644
+index 80d83c69c45..2625eae10ad 100644
 --- a/python/pyspark/sql/connect/client/core.py
 +++ b/python/pyspark/sql/connect/client/core.py
-@@ -329,6 +329,10 @@ class DefaultChannelBuilder(ChannelBuilder):
+@@ -344,6 +344,10 @@ class DefaultChannelBuilder(ChannelBuilder):
              session = PySparkSession._instantiatedSession
  
              if session is not None:
@@ -122,7 +129,7 @@ index 4c5a262ebdc..0b1fdd21f33 100644
                  jvm = PySparkSession._instantiatedSession._jvm  # type: ignore[union-attr]
                  return getattr(
                      getattr(
-@@ -1202,6 +1206,8 @@ class SparkConnectClient(object):
+@@ -1249,6 +1253,8 @@ class SparkConnectClient(object):
          """
          Close the channel.
          """
@@ -132,10 +139,10 @@ index 4c5a262ebdc..0b1fdd21f33 100644
          self._channel.close()
          self._closed = True
 diff --git a/python/pyspark/sql/tests/connect/test_connect_basic.py b/python/pyspark/sql/tests/connect/test_connect_basic.py
-index f0637056ab8..35de4af86f4 100755
+index b789d7919c9..a4ec3bc4bf7 100755
 --- a/python/pyspark/sql/tests/connect/test_connect_basic.py
 +++ b/python/pyspark/sql/tests/connect/test_connect_basic.py
-@@ -89,6 +89,11 @@ class SparkConnectSQLTestCase(ReusedConnectTestCase, SQLTestUtils, PandasOnSpark
+@@ -82,6 +82,11 @@ class SparkConnectSQLTestCase(ReusedMixedTestCase, PandasOnSparkTestUtils):
          cls.spark_connect_clean_up_test_data()
          # Load test data
          cls.spark_connect_load_test_data()
@@ -147,7 +154,7 @@ index f0637056ab8..35de4af86f4 100755
  
      @classmethod
      def tearDownClass(cls):
-@@ -123,8 +128,7 @@ class SparkConnectSQLTestCase(ReusedConnectTestCase, SQLTestUtils, PandasOnSpark
+@@ -113,8 +118,7 @@ class SparkConnectSQLTestCase(ReusedMixedTestCase, PandasOnSparkTestUtils):
                  StructField("lastname", StringType(), True),
              ]
          )
@@ -157,40 +164,6 @@ index f0637056ab8..35de4af86f4 100755
          empty_df.write.saveAsTable(cls.tbl_name_empty)
  
      @classmethod
-diff --git a/python/pyspark/sql/tests/connect/test_connect_plan.py b/python/pyspark/sql/tests/connect/test_connect_plan.py
-index a03cd30c733..8ed3374572d 100644
---- a/python/pyspark/sql/tests/connect/test_connect_plan.py
-+++ b/python/pyspark/sql/tests/connect/test_connect_plan.py
-@@ -753,7 +753,7 @@ class SparkConnectPlanTests(PlanOnlyTestFixture):
-         self.assertIsInstance(col, Column)
-         self.assertEqual("Column<'UnresolvedRegex(col_name)'>", str(col))
- 
--        col_plan = col.to_plan(self.session.client)
-+        col_plan = col.to_plan(None)
-         self.assertIsNotNone(col_plan)
-         self.assertEqual(col_plan.unresolved_regex.col_name, "col_name")
- 
-@@ -933,7 +933,7 @@ class SparkConnectPlanTests(PlanOnlyTestFixture):
-         self.assertEqual("Column<'a AS martin'>", str(col0))
- 
-         col0 = col("a").alias("martin", metadata={"pii": True})
--        plan = col0.to_plan(self.session.client)
-+        plan = col0.to_plan(None)
-         self.assertIsNotNone(plan)
-         self.assertEqual(plan.alias.metadata, '{"pii": true}')
- 
-diff --git a/python/pyspark/testing/connectutils.py b/python/pyspark/testing/connectutils.py
-index 423a717e8ab..56545bfd9a0 100644
---- a/python/pyspark/testing/connectutils.py
-+++ b/python/pyspark/testing/connectutils.py
-@@ -121,7 +121,6 @@ class PlanOnlyTestFixture(unittest.TestCase, PySparkErrorTestUtils):
-         @classmethod
-         def setUpClass(cls):
-             cls.connect = MockRemoteSession()
--            cls.session = SparkSession.builder.remote().getOrCreate()
-             cls.tbl_name = "test_connect_plan_only_table_1"
- 
-             cls.connect.set_hook("readTable", cls._read_table)
 diff --git a/python/pyspark/testing/objects.py b/python/pyspark/testing/objects.py
 index 5b97664afbd..b9deeef91c8 100644
 --- a/python/pyspark/testing/objects.py

@@ -21,4 +21,3 @@ pub(crate) use client::DriverClient;
 pub(crate) use event::{DriverEvent, TaskStatus};
 pub(crate) use gen::driver_service_client::DriverServiceClient;
 pub use options::DriverOptions;
-pub(crate) use options::WorkerManagerOptions;

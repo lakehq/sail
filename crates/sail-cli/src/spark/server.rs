@@ -4,7 +4,7 @@ use std::sync::Arc;
 use log::info;
 use sail_common::config::AppConfig;
 use sail_common::runtime::RuntimeManager;
-use sail_spark_connect::entrypoint::{serve, SessionManagerOptions};
+use sail_spark_connect::entrypoint::serve;
 use sail_telemetry::telemetry::{init_telemetry, shutdown_telemetry, ResourceOptions};
 use tokio::net::TcpListener;
 
@@ -35,11 +35,7 @@ pub fn run_spark_connect_server(ip: IpAddr, port: u16) -> Result<(), Box<dyn std
         init_telemetry(&config.telemetry, resource)
     })?;
 
-    let options = SessionManagerOptions {
-        config: Arc::clone(&config),
-        runtime: runtime.handle(),
-    };
-
+    let handle = runtime.handle();
     runtime.handle().primary().block_on(async {
         // A secure connection can be handled by a gateway in production.
         let listener = TcpListener::bind((ip, port)).await?;
@@ -47,7 +43,7 @@ pub fn run_spark_connect_server(ip: IpAddr, port: u16) -> Result<(), Box<dyn std
             "Starting the Spark Connect server on {}...",
             listener.local_addr()?
         );
-        serve(listener, shutdown(), options).await?;
+        serve(listener, shutdown(), config, handle).await?;
         info!("The Spark Connect server has stopped.");
         <Result<(), Box<dyn std::error::Error>>>::Ok(())
     })?;

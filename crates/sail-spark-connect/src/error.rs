@@ -12,6 +12,7 @@ use sail_common_datafusion::error::{CommonErrorCause, PythonErrorCause};
 use sail_execution::error::ExecutionError;
 use sail_plan::error::PlanError;
 use sail_python_udf::error::PyErrExtractor;
+use sail_session::error::SessionError;
 use sail_sql_analyzer::error::SqlError;
 use thiserror::Error;
 use tokio::sync::mpsc::error::SendError;
@@ -131,6 +132,17 @@ impl From<CacheError> for SparkError {
             CacheError::InvalidArgument(message) => SparkError::InvalidArgument(message),
             CacheError::NotSupported(message) => SparkError::NotSupported(message),
             CacheError::InternalError(message) => SparkError::InternalError(message),
+        }
+    }
+}
+
+impl From<SessionError> for SparkError {
+    fn from(error: SessionError) -> Self {
+        match error {
+            SessionError::DataFusionError(e) => SparkError::DataFusionError(e),
+            SessionError::IoError(e) => SparkError::IoError(e),
+            SessionError::InvalidArgument(message) => SparkError::InvalidArgument(message),
+            SessionError::InternalError(message) => SparkError::InternalError(message),
         }
     }
 }

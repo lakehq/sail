@@ -88,7 +88,7 @@ if [ "${#pytest_args[@]}" -ne 0 ]; then
 else
   case "$(basename "${VIRTUAL_ENV}")" in
     test-spark.*)
-      run_pytest test-connect --pyargs pyspark.sql.tests.connect --tb=no -rN
+      run_pytest test-connect --pyargs pyspark.sql.tests.connect -n 4 --tb=no -rN
       run_pytest doctest-catalog --doctest-modules --pyargs pyspark.sql.catalog --tb=no -rN
       run_pytest doctest-column --doctest-modules --pyargs pyspark.sql.column --tb=no -rN
       run_pytest doctest-dataframe --doctest-modules --pyargs pyspark.sql.dataframe --tb=no -rN

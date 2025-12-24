@@ -6,6 +6,8 @@ use datafusion_common::DFSchemaRef;
 use datafusion_expr::{cast, expr, lit, try_cast, ExprSchemable, ScalarUDF};
 use sail_common::datetime::time_unit_to_multiplier;
 use sail_common::spec;
+use sail_common_datafusion::extension::SessionExtensionAccessor;
+use sail_common_datafusion::session::PlanService;
 use sail_common_datafusion::utils::items::ItemTaker;
 use sail_function::scalar::datetime::spark_date::SparkDate;
 use sail_function::scalar::datetime::spark_interval::{
@@ -34,9 +36,9 @@ impl PlanResolver<'_> {
             self.resolve_named_expression(expr, schema, state).await?;
         let expr_type = expr.get_type(schema)?;
         let name = if need_rename_cast(&expr) {
-            let data_type_string = self
-                .config
-                .plan_formatter
+            let service = self.ctx.extension::<PlanService>()?;
+            let data_type_string = service
+                .plan_formatter()
                 .data_type_to_simple_string(&cast_to_type)?;
             vec![format!(
                 "{}CAST({} AS {})",

@@ -244,9 +244,12 @@ impl TryFrom<DataType> for spec::DataType {
                     sql_type: Box::new(spec::DataType::try_from(*sql_type)?),
                 })
             }
+            Kind::Geometry(_) => Err(SparkError::todo("geometry data type")),
+            Kind::Geography(_) => Err(SparkError::todo("geography data type")),
             Kind::Unparsed(sdt::Unparsed { data_type_string }) => {
                 Ok(parse_spark_data_type(data_type_string.as_str())?)
             }
+            Kind::Time(_) => Err(SparkError::todo("time data type")),
         }
     }
 }

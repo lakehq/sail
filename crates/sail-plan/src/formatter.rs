@@ -1,14 +1,11 @@
-use std::cmp::Ordering;
 use std::fmt::{Debug, Display, Formatter};
-use std::hash::{Hash, Hasher};
+use std::hash::Hash;
 
 use datafusion::arrow::array::timezone::Tz;
 use datafusion::arrow::array::Array;
 use datafusion::arrow::datatypes::{DataType, IntervalUnit, TimeUnit};
 use datafusion_common::{not_impl_err, plan_err, Result, ScalarValue};
 use half::f16;
-use sail_common::impl_dyn_object_traits;
-use sail_common::object::DynObject;
 use sail_common_datafusion::formatter::{
     Date32Formatter, Date64Formatter, DurationMicrosecondFormatter, DurationMillisecondFormatter,
     DurationNanosecondFormatter, DurationSecondFormatter, IntervalDayTimeFormatter,
@@ -17,28 +14,8 @@ use sail_common_datafusion::formatter::{
     TimestampMicrosecondFormatter, TimestampMillisecondFormatter, TimestampNanosecondFormatter,
     TimestampSecondFormatter,
 };
+use sail_common_datafusion::session::PlanFormatter;
 use sail_common_datafusion::utils::items::ItemTaker;
-
-use crate::config::PlanConfig;
-
-/// Utilities to format various data structures in the plan specification.
-pub trait PlanFormatter: DynObject + Debug + Send + Sync {
-    /// Returns a human-readable simple string for the data type.
-    fn data_type_to_simple_string(&self, data_type: &DataType) -> Result<String>;
-
-    /// Returns a human-readable string for the literal.
-    fn literal_to_string(&self, literal: &ScalarValue, config: &PlanConfig) -> Result<String>;
-
-    /// Returns a human-readable string for the function call.
-    fn function_to_string(
-        &self,
-        name: &str,
-        arguments: Vec<&str>,
-        is_distinct: bool,
-    ) -> Result<String>;
-}
-
-impl_dyn_object_traits!(PlanFormatter);
 
 #[derive(Debug, PartialEq, Eq, Hash, PartialOrd)]
 pub struct SparkPlanFormatter;
@@ -149,13 +126,18 @@ impl PlanFormatter for SparkPlanFormatter {
         }
     }
 
-    fn literal_to_string(&self, literal: &ScalarValue, config: &PlanConfig) -> Result<String> {
+    fn literal_to_string(&self, literal: &ScalarValue, display_timezone: &str) -> Result<String> {
         let literal_list_to_string = |name: &str, values: Option<&dyn Array>| -> Result<String> {
             let Some(values) = values else {
                 return Ok("NULL".to_string());
             };
             let values = (0..values.len())
-                .map(|i| self.literal_to_string(&ScalarValue::try_from_array(values, i)?, config))
+                .map(|i| {
+                    self.literal_to_string(
+                        &ScalarValue::try_from_array(values, i)?,
+                        display_timezone,
+                    )
+                })
                 .collect::<Result<Vec<String>>>()?;
             Ok(format!("{name}({})", values.join(", ")))
         };
@@ -224,7 +206,7 @@ impl PlanFormatter for SparkPlanFormatter {
             ScalarValue::TimestampSecond(seconds, timezone) => match seconds {
                 Some(seconds) => {
                     let (prefix, tz) = if timezone.is_some() {
-                        ("TIMESTAMP", Some(config.session_timezone.parse::<Tz>()?))
+                        ("TIMESTAMP", Some(display_timezone.parse::<Tz>()?))
                     } else {
                         ("TIMESTAMP_NTZ", None)
                     };
@@ -236,7 +218,7 @@ impl PlanFormatter for SparkPlanFormatter {
             ScalarValue::TimestampMillisecond(milliseconds, timezone) => match milliseconds {
                 Some(milliseconds) => {
                     let (prefix, tz) = if timezone.is_some() {
-                        ("TIMESTAMP", Some(config.session_timezone.parse::<Tz>()?))
+                        ("TIMESTAMP", Some(display_timezone.parse::<Tz>()?))
                     } else {
                         ("TIMESTAMP_NTZ", None)
                     };
@@ -248,7 +230,7 @@ impl PlanFormatter for SparkPlanFormatter {
             ScalarValue::TimestampMicrosecond(microseconds, timezone) => match microseconds {
                 Some(microseconds) => {
                     let (prefix, tz) = if timezone.is_some() {
-                        ("TIMESTAMP", Some(config.session_timezone.parse::<Tz>()?))
+                        ("TIMESTAMP", Some(display_timezone.parse::<Tz>()?))
                     } else {
                         ("TIMESTAMP_NTZ", None)
                     };
@@ -260,7 +242,7 @@ impl PlanFormatter for SparkPlanFormatter {
             ScalarValue::TimestampNanosecond(nanoseconds, timezone) => match nanoseconds {
                 Some(nanoseconds) => {
                     let (prefix, tz) = if timezone.is_some() {
-                        ("TIMESTAMP", Some(config.session_timezone.parse::<Tz>()?))
+                        ("TIMESTAMP", Some(display_timezone.parse::<Tz>()?))
                     } else {
                         ("TIMESTAMP_NTZ", None)
                     };
@@ -371,7 +353,7 @@ impl PlanFormatter for SparkPlanFormatter {
                         let value = ScalarValue::try_from_array(array, 0)?;
                         Ok(format!(
                             "{} AS {}",
-                            self.literal_to_string(&value, config)?,
+                            self.literal_to_string(&value, display_timezone)?,
                             field.name()
                         ))
                     })
@@ -380,13 +362,13 @@ impl PlanFormatter for SparkPlanFormatter {
             }
             ScalarValue::Union(value, _union_fields, _union_mode) => match value {
                 Some((id, value)) => {
-                    let value = self.literal_to_string(value, config)?;
+                    let value = self.literal_to_string(value, display_timezone)?;
                     Ok(format!("{id}:{value}"))
                 }
                 None => Ok("NULL".to_string()),
             },
             ScalarValue::Dictionary(_, value) => {
-                let value = self.literal_to_string(value, config)?;
+                let value = self.literal_to_string(value, display_timezone)?;
                 Ok(format!("dictionary({value})"))
             }
             ScalarValue::Decimal32(value, _precision, scale) => match value {
@@ -708,9 +690,8 @@ mod tests {
 
     #[test]
     fn test_literal_to_string() -> PlanResult<()> {
-        let plan_config = PlanConfig::new()?;
         let formatter = SparkPlanFormatter;
-        let to_string = |literal| formatter.literal_to_string(&literal, &plan_config);
+        let to_string = |literal| formatter.literal_to_string(&literal, "UTC");
 
         assert_eq!(to_string(ScalarValue::Null)?, "NULL");
         assert_eq!(

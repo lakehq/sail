@@ -1,5 +1,6 @@
 use sail_common::config::AppConfig;
 use sail_common::runtime::RuntimeManager;
+use sail_session::session_factory::{SessionFactory, WorkerSessionFactory};
 use sail_telemetry::telemetry::{init_telemetry, shutdown_telemetry, ResourceOptions};
 
 pub fn run_worker() -> Result<(), Box<dyn std::error::Error>> {
@@ -11,10 +12,15 @@ pub fn run_worker() -> Result<(), Box<dyn std::error::Error>> {
         init_telemetry(&config.telemetry, resource)
     })?;
 
+    let session = WorkerSessionFactory::new(&runtime.handle()).create(())?;
     runtime
         .handle()
         .primary()
-        .block_on(sail_execution::run_worker(&config, runtime.handle()))?;
+        .block_on(sail_execution::run_worker(
+            &config,
+            runtime.handle(),
+            session,
+        ))?;
 
     shutdown_telemetry();
 

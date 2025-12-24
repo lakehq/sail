@@ -1,19 +1,13 @@
 use std::collections::HashMap;
 use std::mem;
-use std::sync::Arc;
 
-use datafusion::execution::runtime_env::RuntimeEnvBuilder;
-use datafusion::execution::SessionStateBuilder;
-use datafusion::prelude::{SessionConfig, SessionContext};
 use fastrace::future::FutureExt;
 use fastrace::Span;
 use log::info;
-use sail_object_store::DynamicObjectStoreRegistry;
 use sail_server::actor::{Actor, ActorAction, ActorContext};
 
 use crate::codec::RemoteExecutionCodec;
 use crate::driver::DriverClient;
-use crate::error::ExecutionResult;
 use crate::rpc::{ClientOptions, ServerMonitor};
 use crate::worker::actor::peer_tracker::{PeerTracker, PeerTrackerOptions};
 use crate::worker::event::WorkerEvent;
@@ -43,7 +37,6 @@ impl Actor for WorkerActor {
             peer_tracker,
             task_signals: HashMap::new(),
             local_streams: HashMap::new(),
-            session_context: None,
             physical_plan_codec: Box::new(RemoteExecutionCodec),
             sequence: 42,
         }
@@ -119,35 +112,5 @@ impl Actor for WorkerActor {
     async fn stop(self, _ctx: &mut ActorContext<Self>) {
         self.server.stop().await;
         info!("worker {} server has stopped", self.options.worker_id);
-    }
-}
-
-impl WorkerActor {
-    pub(super) fn session_context(&mut self) -> ExecutionResult<Arc<SessionContext>> {
-        match &self.session_context {
-            Some(context) => Ok(context.clone()),
-            None => {
-                let context = Arc::new(self.create_session_context()?);
-                self.session_context = Some(context.clone());
-                Ok(context)
-            }
-        }
-    }
-
-    fn create_session_context(&self) -> ExecutionResult<SessionContext> {
-        let runtime = {
-            let registry = DynamicObjectStoreRegistry::new(self.options.runtime.clone());
-            let builder =
-                RuntimeEnvBuilder::default().with_object_store_registry(Arc::new(registry));
-            Arc::new(builder.build()?)
-        };
-        let config = SessionConfig::default();
-        let state = SessionStateBuilder::new()
-            .with_config(config)
-            .with_runtime_env(runtime)
-            .with_default_features()
-            .build();
-        let context = SessionContext::new_with_state(state);
-        Ok(context)
     }
 }

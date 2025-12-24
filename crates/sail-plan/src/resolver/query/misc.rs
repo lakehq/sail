@@ -4,12 +4,13 @@ use std::sync::Arc;
 use datafusion::catalog::MemTable;
 use datafusion_common::{DFSchema, DFSchemaRef, ParamValues};
 use datafusion_expr::{EmptyRelation, Extension, LogicalPlan, UNNAMED_TABLE};
+use log::warn;
 use sail_common::spec;
 use sail_common_datafusion::array::record_batch::{cast_record_batch, read_record_batches};
+use sail_common_datafusion::literal::LiteralEvaluator;
 use sail_logical_plan::range::RangeNode;
 
 use crate::error::{PlanError, PlanResult};
-use crate::literal::LiteralEvaluator;
 use crate::resolver::state::PlanResolverState;
 use crate::resolver::PlanResolver;
 
@@ -130,12 +131,15 @@ impl PlanResolver<'_> {
 
     pub(super) async fn resolve_query_hint(
         &self,
-        _input: spec::QueryPlan,
+        input: spec::QueryPlan,
         _name: String,
         _parameters: Vec<spec::Expr>,
-        _state: &mut PlanResolverState,
+        state: &mut PlanResolverState,
     ) -> PlanResult<LogicalPlan> {
-        Err(PlanError::todo("hint"))
+        // TODO: Implement
+        warn!("Hint operation is not yet supported and is a no-op");
+        self.resolve_query_plan_with_hidden_fields(input, state)
+            .await
     }
 
     pub(super) async fn resolve_query_collect_metrics(

@@ -1,18 +1,21 @@
 use std::future::Future;
 use std::sync::Arc;
 
+use datafusion::execution::session_state::SessionStateBuilder;
 use datafusion::physical_plan::display::DisplayableExecutionPlan;
 use datafusion::physical_plan::{collect, displayable, ExecutionPlan};
 use datafusion::prelude::SessionContext;
 use datafusion_common::display::{PlanType, StringifiedPlan, ToStringifiedPlan};
+use datafusion_common::tree_node::{Transformed, TreeNode};
 use datafusion_common::{DataFusionError, Result};
-use datafusion_expr::LogicalPlan;
+use datafusion_expr::{EmptyRelation, Extension, LogicalPlan, UserDefinedLogicalNodeCore};
 use sail_common::spec;
 use sail_common_datafusion::rename::physical_plan::rename_physical_plan;
+use sail_logical_plan::precondition::WithPreconditionsNode;
 
+use crate::catalog::CatalogCommandNode;
 use crate::config::PlanConfig;
 use crate::error::{PlanError, PlanResult};
-use crate::execute_logical_plan;
 use crate::resolver::plan::NamedPlan;
 use crate::resolver::PlanResolver;
 
@@ -168,8 +171,10 @@ async fn collect_plan_with(
     let initial_logical = plan.clone();
     let mut stringified = vec![initial_logical.to_stringified(PlanType::InitialLogicalPlan)];
 
-    let df = execute_logical_plan(ctx, plan).await?;
-    let (session_state, logical_plan) = df.into_parts();
+    // NOTE: Do NOT call `execute_logical_plan` from EXPLAIN.
+    // It would execute command nodes and trigger side effects (e.g. CREATE TABLE / INSERT).
+    let session_state = ctx.state();
+    let logical_plan = strip_explain_side_effect_nodes(plan)?;
     let config_options = session_state.config_options();
     let explain_config = &config_options.explain;
 
@@ -197,10 +202,14 @@ async fn collect_plan_with(
     )?;
     stringified.push(optimized_logical.to_stringified(PlanType::FinalLogicalPlan));
 
+    let session_state_no_phys_opt = SessionStateBuilder::new_from_existing(session_state.clone())
+        .with_physical_optimizer_rules(vec![])
+        .build();
+
     let mut physical_error = None;
-    let mut physical_plan = match session_state
+    let mut physical_plan = match session_state_no_phys_opt
         .query_planner()
-        .create_physical_plan(&optimized_logical, &session_state)
+        .create_physical_plan(&optimized_logical, &session_state_no_phys_opt)
         .await
     {
         Ok(plan) => Some(plan),
@@ -308,6 +317,36 @@ async fn collect_plan_with(
         physical_error,
         stringified,
     })
+}
+
+/// Remove/neutralize logical nodes that can trigger side effects during EXPLAIN.
+///
+/// - `WithPreconditionsNode` is stripped (preconditions are not executed).
+/// - `CatalogCommandNode` is replaced with an empty relation with the same schema.
+///
+/// This is intentionally EXPLAIN-only: normal execution goes through `execute_logical_plan`,
+/// which performs the required side effects.
+pub(crate) fn strip_explain_side_effect_nodes(plan: LogicalPlan) -> PlanResult<LogicalPlan> {
+    Ok(plan
+        .transform_up(|plan| match &plan {
+            LogicalPlan::Extension(Extension { node }) => {
+                if let Some(n) = node.as_any().downcast_ref::<WithPreconditionsNode>() {
+                    Ok(Transformed::yes(n.plan().clone()))
+                } else if let Some(n) = node.as_any().downcast_ref::<CatalogCommandNode>() {
+                    Ok(Transformed::yes(LogicalPlan::EmptyRelation(
+                        EmptyRelation {
+                            produce_one_row: false,
+                            schema: n.schema().clone(),
+                        },
+                    )))
+                } else {
+                    Ok(Transformed::no(plan))
+                }
+            }
+            _ => Ok(Transformed::no(plan)),
+        })
+        .map_err(PlanError::from)?
+        .data)
 }
 
 fn render_section(title: &str, body: &str) -> String {

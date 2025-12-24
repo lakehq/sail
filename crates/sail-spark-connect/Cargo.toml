@@ -15,10 +15,7 @@ sail-plan = { path = "../sail-plan" }
 sail-python-udf = { path = "../sail-python-udf" }
 sail-sql-analyzer = { path = "../sail-sql-analyzer" }
 sail-execution = { path = "../sail-execution" }
-sail-object-store = { path = "../sail-object-store" }
 sail-session = { path = "../sail-session" }
-sail-physical-optimizer = { path = "../sail-physical-optimizer" }
-sail-telemetry = { path = "../sail-telemetry" }
 
 thiserror = { workspace = true }
 tokio = { workspace = true }

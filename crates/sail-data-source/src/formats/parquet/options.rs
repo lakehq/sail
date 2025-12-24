@@ -30,6 +30,7 @@ fn apply_parquet_read_options(
         binary_as_string,
         coerce_int96,
         bloom_filter_on_read,
+        max_predicate_cache_size,
     } = from;
     if let Some(v) = enable_page_index {
         to.global.enable_page_index = v;
@@ -60,6 +61,9 @@ fn apply_parquet_read_options(
     }
     if let Some(v) = bloom_filter_on_read {
         to.global.bloom_filter_on_read = v;
+    }
+    if let Some(v) = max_predicate_cache_size {
+        to.global.max_predicate_cache_size = Some(v);
     }
     Ok(())
 }
@@ -269,6 +273,7 @@ mod tests {
             ("binary_as_string", "true"),
             ("coerce_int96", "ms"),
             ("bloom_filter_on_read", "true"),
+            ("max_predicate_cache_size", "0"),
         ]);
         let options = resolve_parquet_read_options(&state, vec![kv.clone()])?;
         assert!(options.global.enable_page_index);
@@ -281,6 +286,7 @@ mod tests {
         assert!(options.global.binary_as_string);
         assert_eq!(options.global.coerce_int96, Some("ms".to_string()));
         assert!(options.global.bloom_filter_on_read);
+        assert_eq!(options.global.max_predicate_cache_size, Some(0));
 
         kv.insert("metadata_size_hint".to_string(), "0".to_string());
         let options = resolve_parquet_read_options(&state, vec![kv.clone()])?;
