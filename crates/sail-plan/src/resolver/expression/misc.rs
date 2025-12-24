@@ -10,6 +10,8 @@ use datafusion_expr_common::operator::Operator;
 use datafusion_functions::core::expr_ext::FieldAccessor;
 use datafusion_functions_nested::expr_fn::array_element;
 use sail_common::spec;
+use sail_common_datafusion::extension::SessionExtensionAccessor;
+use sail_common_datafusion::session::PlanService;
 use sail_common_datafusion::utils::items::ItemTaker;
 use sail_function::scalar::drop_struct_field::DropStructField;
 use sail_function::scalar::table_input::TableInput;
@@ -108,10 +110,10 @@ impl PlanResolver<'_> {
             return Err(PlanError::invalid("extraction must be a literal"));
         };
         let extraction = self.resolve_literal(extraction, state)?;
-        let extraction_name = self
-            .config
-            .plan_formatter
-            .literal_to_string(&extraction, &self.config)?;
+        let service = self.ctx.extension::<PlanService>()?;
+        let extraction_name = service
+            .plan_formatter()
+            .literal_to_string(&extraction, &self.config.session_timezone)?;
         let NamedExpr { name, expr, .. } =
             self.resolve_named_expression(child, schema, state).await?;
         let data_type = expr.get_type(schema)?;

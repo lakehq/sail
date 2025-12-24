@@ -7,9 +7,7 @@ mod stream_accessor;
 mod stream_monitor;
 
 use std::collections::HashMap;
-use std::sync::Arc;
 
-use datafusion::prelude::SessionContext;
 use datafusion_proto::physical_plan::PhysicalExtensionCodec;
 use tokio::sync::oneshot;
 
@@ -28,7 +26,6 @@ pub struct WorkerActor {
     peer_tracker: PeerTracker,
     task_signals: HashMap<TaskInstance, oneshot::Sender<()>>,
     local_streams: HashMap<ChannelName, Box<dyn LocalStream>>,
-    session_context: Option<Arc<SessionContext>>,
     physical_plan_codec: Box<dyn PhysicalExtensionCodec>,
     /// A monotonically increasing sequence number for ordered events.
     sequence: u64,

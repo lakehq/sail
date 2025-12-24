@@ -8,8 +8,8 @@ use log::info;
 use pyo3::prelude::PyAnyMethods;
 use pyo3::{PyResult, Python};
 use sail_common::config::AppConfig;
-use sail_common::runtime::RuntimeManager;
-use sail_spark_connect::entrypoint::{serve, SessionManagerOptions};
+use sail_common::runtime::{RuntimeHandle, RuntimeManager};
+use sail_spark_connect::entrypoint::serve;
 use sail_telemetry::telemetry::{init_telemetry, ResourceOptions};
 use tokio::net::TcpListener;
 
@@ -45,21 +45,22 @@ pub struct McpSettings {
 }
 
 fn run_spark_connect_server(
-    options: SessionManagerOptions,
+    config: Arc<AppConfig>,
+    runtime: RuntimeHandle,
 ) -> Result<String, Box<dyn std::error::Error>> {
-    let handle = options.runtime.primary().clone();
-    let (server_port, server_task) = handle.block_on(async move {
+    let handle = runtime.clone();
+    let (server_port, server_task) = runtime.primary().block_on(async move {
         // Listen on only the loopback interface for security.
         let listener = TcpListener::bind((Ipv4Addr::new(127, 0, 0, 1), 0)).await?;
         let port = listener.local_addr()?.port();
         let task = async move {
             info!("Starting the Spark Connect server on port {port}...");
-            let _ = serve(listener, shutdown(), options).await;
+            let _ = serve(listener, shutdown(), config, handle).await;
             info!("The Spark Connect server has stopped.");
         };
         <Result<_, Box<dyn std::error::Error>>>::Ok((port, task))
     })?;
-    handle.spawn(server_task);
+    runtime.primary().spawn(server_task);
     Ok(format!("sc://127.0.0.1:{server_port}"))
 }
 
@@ -73,13 +74,7 @@ pub fn run_spark_mcp_server(settings: McpSettings) -> Result<(), Box<dyn std::er
     })?;
 
     let spark_remote = match settings.spark_remote {
-        None => {
-            let options = SessionManagerOptions {
-                config: Arc::clone(&config),
-                runtime: runtime.handle(),
-            };
-            run_spark_connect_server(options)?
-        }
+        None => run_spark_connect_server(Arc::clone(&config), runtime.handle())?,
         Some(x) => x,
     };
 

@@ -289,7 +289,7 @@ impl PlanResolver<'_> {
 
     fn resolve_catalog_command(&self, command: CatalogCommand) -> PlanResult<LogicalPlan> {
         Ok(LogicalPlan::Extension(Extension {
-            node: Arc::new(CatalogCommandNode::try_new(command)?),
+            node: Arc::new(CatalogCommandNode::try_new(self.ctx, command)?),
         }))
     }
 }

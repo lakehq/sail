@@ -4,8 +4,8 @@ use datafusion_common::{JoinType, TableReference};
 use datafusion_expr::utils::{expr_to_columns, split_conjunction};
 use datafusion_expr::{build_join_schema, Expr, Extension, LogicalPlan, SubqueryAlias};
 use sail_catalog::manager::CatalogManager;
-use sail_catalog::provider::TableKind;
 use sail_common::spec;
+use sail_common_datafusion::catalog::TableKind;
 use sail_common_datafusion::extension::SessionExtensionAccessor;
 use sail_logical_plan::merge::{
     MergeAssignment, MergeIntoNode, MergeIntoOptions, MergeMatchedAction, MergeMatchedClause,

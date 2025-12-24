@@ -1,13 +1,12 @@
+use std::sync::Arc;
 use std::time::Duration;
 
-use sail_common::config::{AppConfig, ExecutionMode};
+use sail_common::config::AppConfig;
 use sail_common::runtime::RuntimeHandle;
 use sail_server::RetryStrategy;
 
-use crate::error::{ExecutionError, ExecutionResult};
-use crate::worker_manager::KubernetesWorkerManagerOptions;
+use crate::worker_manager::WorkerManager;
 
-#[derive(Debug)]
 #[readonly::make]
 pub struct DriverOptions {
     pub enable_tls: bool,
@@ -26,41 +25,17 @@ pub struct DriverOptions {
     pub task_launch_timeout: Duration,
     pub job_output_buffer: usize,
     pub rpc_retry_strategy: RetryStrategy,
-    pub worker_manager: WorkerManagerOptions,
     pub runtime: RuntimeHandle,
-}
-
-#[derive(Debug)]
-pub enum WorkerManagerOptions {
-    Local,
-    Kubernetes(KubernetesWorkerManagerOptions),
+    pub worker_manager: Arc<dyn WorkerManager>,
 }
 
 impl DriverOptions {
-    pub fn try_new(config: &AppConfig, runtime: RuntimeHandle) -> ExecutionResult<Self> {
-        let worker_manager = match config.mode {
-            ExecutionMode::Local => {
-                return Err(ExecutionError::InvalidArgument(
-                    "local deployment is not supposed to work with the driver".to_string(),
-                ))
-            }
-            ExecutionMode::LocalCluster => WorkerManagerOptions::Local,
-            ExecutionMode::KubernetesCluster => {
-                WorkerManagerOptions::Kubernetes(KubernetesWorkerManagerOptions {
-                    image: config.kubernetes.image.clone(),
-                    image_pull_policy: config.kubernetes.image_pull_policy.clone(),
-                    namespace: config.kubernetes.namespace.clone(),
-                    driver_pod_name: config.kubernetes.driver_pod_name.clone(),
-                    worker_pod_name_prefix: config.kubernetes.worker_pod_name_prefix.clone(),
-                    worker_service_account_name: config
-                        .kubernetes
-                        .worker_service_account_name
-                        .clone(),
-                    worker_pod_template: config.kubernetes.worker_pod_template.clone(),
-                })
-            }
-        };
-        Ok(Self {
+    pub fn new(
+        config: &AppConfig,
+        runtime: RuntimeHandle,
+        worker_manager: Arc<dyn WorkerManager>,
+    ) -> Self {
+        Self {
             enable_tls: config.cluster.enable_tls,
             driver_listen_host: config.cluster.driver_listen_host.clone(),
             driver_listen_port: config.cluster.driver_listen_port,
@@ -81,8 +56,8 @@ impl DriverOptions {
             worker_stream_buffer: config.cluster.worker_stream_buffer,
             task_launch_timeout: Duration::from_secs(config.cluster.task_launch_timeout_secs),
             job_output_buffer: config.cluster.job_output_buffer,
-            worker_manager,
             runtime,
-        })
+            worker_manager,
+        }
     }
 }

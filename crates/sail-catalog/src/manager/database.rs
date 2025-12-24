@@ -1,8 +1,10 @@
 use std::sync::Arc;
 
+use sail_common_datafusion::catalog::DatabaseStatus;
+
 use crate::error::CatalogResult;
 use crate::manager::CatalogManager;
-use crate::provider::{CreateDatabaseOptions, DatabaseStatus, DropDatabaseOptions, Namespace};
+use crate::provider::{CreateDatabaseOptions, DropDatabaseOptions, Namespace};
 use crate::utils::{match_pattern, quote_names_if_needed};
 
 impl CatalogManager {

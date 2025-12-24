@@ -7,10 +7,10 @@ use datafusion_expr::{EmptyRelation, Extension, LogicalPlan, UNNAMED_TABLE};
 use log::warn;
 use sail_common::spec;
 use sail_common_datafusion::array::record_batch::{cast_record_batch, read_record_batches};
+use sail_common_datafusion::literal::LiteralEvaluator;
 use sail_logical_plan::range::RangeNode;
 
 use crate::error::{PlanError, PlanResult};
-use crate::literal::LiteralEvaluator;
 use crate::resolver::state::PlanResolverState;
 use crate::resolver::PlanResolver;
 

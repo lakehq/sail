@@ -5,7 +5,6 @@ use std::sync::Arc;
 use sail_python_udf::config::PySparkUdfConfig;
 
 use crate::error::PlanResult;
-use crate::formatter::{PlanFormatter, SparkPlanFormatter};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd)]
 pub enum DefaultTimestampType {
@@ -13,18 +12,14 @@ pub enum DefaultTimestampType {
     TimestampNtz,
 }
 
-// The generic type parameter is used to work around the issue deriving `PartialEq` for `dyn` trait.
-// See also: https://github.com/rust-lang/rust/issues/78808
 #[derive(Debug, Clone, PartialEq, Eq, Hash, PartialOrd)]
-pub struct PlanConfig<F: ?Sized = dyn PlanFormatter> {
+pub struct PlanConfig {
     /// The time zone of the session.
     pub session_timezone: Arc<str>,
     /// The default timestamp type.
     pub default_timestamp_type: DefaultTimestampType,
     /// Whether to use large variable types in Arrow.
     pub arrow_use_large_var_types: bool,
-    /// The plan formatter.
-    pub plan_formatter: Arc<F>,
     /// The Spark UDF configuration.
     pub pyspark_udf_config: Arc<PySparkUdfConfig>,
     /// The default table file format.
@@ -50,7 +45,6 @@ impl Default for PlanConfig {
             session_timezone: Arc::from("UTC"),
             default_timestamp_type: DefaultTimestampType::TimestampLtz,
             arrow_use_large_var_types: false,
-            plan_formatter: Arc::new(SparkPlanFormatter),
             pyspark_udf_config: Arc::new(PySparkUdfConfig::default()),
             default_table_file_format: "PARQUET".to_string(),
             default_warehouse_directory: "spark-warehouse".to_string(),

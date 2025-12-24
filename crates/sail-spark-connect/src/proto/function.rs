@@ -10,14 +10,15 @@ mod tests {
     use sail_common::runtime::RuntimeManager;
     use sail_common::tests::test_gold_set;
     use sail_common_datafusion::extension::SessionExtensionAccessor;
+    use sail_common_datafusion::session::JobService;
     use sail_plan::resolve_and_execute_plan;
     use serde::{Deserialize, Serialize};
 
     use crate::error::{SparkError, SparkResult};
     use crate::executor::read_stream;
     use crate::proto::data_type_json::JsonDataType;
-    use crate::session::SparkSession;
-    use crate::session_manager::{SessionKey, SessionManager, SessionManagerOptions};
+    use crate::session::{SparkSession, SparkSessionKey};
+    use crate::session_manager::create_spark_session_manager;
     use crate::spark::connect::relation::RelType;
     use crate::spark::connect::{Relation, Sql};
 
@@ -56,17 +57,13 @@ mod tests {
         let config = Arc::new(AppConfig::load()?);
         let runtime = RuntimeManager::try_new(&config.runtime)?;
         let handle = runtime.handle();
-        let options = SessionManagerOptions {
-            config,
-            runtime: handle.clone(),
-        };
         // We create the session manager inside an async context, even though the
-        // `SessionManager::new()` function itself is sync. This is because the actor system
+        // `SessionManager::try_new()` function itself is sync. This is because the actor system
         // may need to spawn actors when the session runs in cluster mode.
         let manager = handle
             .primary()
-            .block_on(async { SessionManager::new(options) });
-        let session_key = SessionKey {
+            .block_on(async { create_spark_session_manager(config, handle.clone()) })?;
+        let session_key = SparkSessionKey {
             user_id: "".to_string(),
             session_id: "test".to_string(),
         };
@@ -90,9 +87,10 @@ mod tests {
                 let plan = relation.try_into()?;
                 let result = handle.primary().block_on(async {
                     let spark = context.extension::<SparkSession>()?;
+                    let service = context.extension::<JobService>()?;
                     let (plan, _) =
                         resolve_and_execute_plan(&context, spark.plan_config()?, plan).await?;
-                    let stream = spark.job_runner().execute(&context, plan).await?;
+                    let stream = service.runner().execute(&context, plan).await?;
                     read_stream(stream).await
                 });
                 // TODO: validate the result against the expected output

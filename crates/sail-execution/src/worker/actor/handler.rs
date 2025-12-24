@@ -344,12 +344,9 @@ impl WorkerActor {
         plan: Vec<u8>,
         partition: usize,
     ) -> ExecutionResult<SendableRecordBatchStream> {
-        let session_ctx = self.session_context()?;
+        let task_ctx = self.options.session.task_ctx();
         let plan = PhysicalPlanNode::decode(plan.as_slice())?;
-        let plan = plan.try_into_physical_plan(
-            session_ctx.task_ctx().as_ref(),
-            self.physical_plan_codec.as_ref(),
-        )?;
+        let plan = plan.try_into_physical_plan(&task_ctx, self.physical_plan_codec.as_ref())?;
         let plan = self.rewrite_parquet_adapters(plan)?;
         let plan = self.rewrite_shuffle(ctx, plan)?;
         debug!(
@@ -367,7 +364,7 @@ impl WorkerActor {
             operator_id: None,
         };
         let plan = trace_execution_plan(plan, options)?;
-        let stream = plan.execute(partition, session_ctx.task_ctx())?;
+        let stream = plan.execute(partition, task_ctx)?;
         Ok(stream)
     }
 
