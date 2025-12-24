@@ -7,8 +7,8 @@ use log::info;
 use pyo3::exceptions::{PyRuntimeError, PyValueError};
 use pyo3::prelude::*;
 use sail_common::config::AppConfig;
-use sail_common::runtime::RuntimeManager;
-use sail_spark_connect::entrypoint::{serve, SessionManagerOptions};
+use sail_common::runtime::{RuntimeHandle, RuntimeManager};
+use sail_spark_connect::entrypoint::serve;
 use sail_telemetry::telemetry::{init_telemetry, ResourceOptions};
 use tokio::net::TcpListener;
 use tokio::runtime::Handle;
@@ -142,12 +142,13 @@ impl SparkConnectServer {
 
     fn run_blocking(
         handle: Handle,
-        options: SessionManagerOptions,
+        config: Arc<AppConfig>,
+        runtime: RuntimeHandle,
         listener: TcpListener,
         rx: Receiver<()>,
     ) -> PyResult<()> {
         handle
-            .block_on(async { serve(listener, Self::shutdown(rx), options).await })
+            .block_on(async { serve(listener, Self::shutdown(rx), config, runtime).await })
             .map_err(|e| {
                 PyErr::new::<PyRuntimeError, _>(format!(
                     "failed to run the Spark Connect server: {e:?}"
@@ -157,18 +158,17 @@ impl SparkConnectServer {
     }
 
     fn run(&self, listener: TcpListener) -> PyResult<SparkConnectServerState> {
-        let options = SessionManagerOptions {
-            config: Arc::clone(&self.config),
-            runtime: self.runtime.handle(),
-        };
+        let runtime = self.runtime.handle();
         // Get the actual listener address.
         // A port is assigned by the OS if the port is 0 when creating the listener.
         let address = listener.local_addr()?;
         let (tx, rx) = tokio::sync::oneshot::channel();
         let handle = self.runtime.handle();
+        let config = Arc::clone(&self.config);
         info!("Starting the Spark Connect server on {address}...");
-        let handle = thread::Builder::new()
-            .spawn(move || Self::run_blocking(handle.primary().clone(), options, listener, rx))?;
+        let handle = thread::Builder::new().spawn(move || {
+            Self::run_blocking(handle.primary().clone(), config, runtime, listener, rx)
+        })?;
         Ok(SparkConnectServerState {
             address,
             handle,

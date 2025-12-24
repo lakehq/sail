@@ -1,27 +1,17 @@
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::Arc;
 
+use datafusion::common::{internal_datafusion_err, internal_err, Result};
 use datafusion::execution::SendableRecordBatchStream;
 use datafusion::physical_plan::{execute_stream, ExecutionPlan};
 use datafusion::prelude::SessionContext;
+use sail_common_datafusion::session::JobRunner;
 use sail_server::actor::{ActorHandle, ActorSystem};
 use sail_telemetry::telemetry::global_metric_registry;
 use sail_telemetry::{trace_execution_plan, TracingExecOptions};
 use tokio::sync::oneshot;
 
 use crate::driver::{DriverActor, DriverEvent, DriverOptions};
-use crate::error::{ExecutionError, ExecutionResult};
-
-#[tonic::async_trait]
-pub trait JobRunner: Send + Sync + 'static {
-    async fn execute(
-        &self,
-        ctx: &SessionContext,
-        plan: Arc<dyn ExecutionPlan>,
-    ) -> ExecutionResult<SendableRecordBatchStream>;
-
-    async fn stop(&self);
-}
 
 pub struct LocalJobRunner {
     next_job_id: AtomicU64,
@@ -49,11 +39,9 @@ impl JobRunner for LocalJobRunner {
         &self,
         ctx: &SessionContext,
         plan: Arc<dyn ExecutionPlan>,
-    ) -> ExecutionResult<SendableRecordBatchStream> {
+    ) -> Result<SendableRecordBatchStream> {
         if self.stopped.load(Ordering::Relaxed) {
-            return Err(ExecutionError::InternalError(
-                "job runner is stopped".to_string(),
-            ));
+            return internal_err!("job runner is stopped");
         }
         let job_id = self.next_job_id.fetch_add(1, Ordering::Relaxed);
         let options = TracingExecOptions {
@@ -90,14 +78,15 @@ impl JobRunner for ClusterJobRunner {
         // TODO: propagate session context from the driver to the worker
         _ctx: &SessionContext,
         plan: Arc<dyn ExecutionPlan>,
-    ) -> ExecutionResult<SendableRecordBatchStream> {
+    ) -> Result<SendableRecordBatchStream> {
         let (tx, rx) = oneshot::channel();
         self.driver
             .send(DriverEvent::ExecuteJob { plan, result: tx })
-            .await?;
-        rx.await.map_err(|e| {
-            ExecutionError::InternalError(format!("failed to create job stream: {e}"))
-        })?
+            .await
+            .map_err(|e| internal_datafusion_err!("{e}"))?;
+        rx.await
+            .map_err(|e| internal_datafusion_err!("failed to create job stream: {e}"))?
+            .map_err(|e| internal_datafusion_err!("{e}"))
     }
 
     async fn stop(&self) {

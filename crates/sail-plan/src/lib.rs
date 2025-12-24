@@ -18,13 +18,12 @@ use crate::resolver::plan::NamedPlan;
 use crate::resolver::PlanResolver;
 use crate::streaming::rewriter::{is_streaming_plan, rewrite_streaming_plan};
 
-mod catalog;
+pub mod catalog;
 pub mod config;
 pub mod error;
 pub mod explain;
 pub mod formatter;
 pub mod function;
-pub mod literal;
 pub mod planner;
 pub mod resolver;
 mod streaming;

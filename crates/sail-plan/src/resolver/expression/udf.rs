@@ -5,6 +5,8 @@ use datafusion_common::{DFSchemaRef, DataFusionError};
 use datafusion_expr::expr::AggregateFunctionParams;
 use datafusion_expr::{expr, AggregateUDF, Expr, ExprSchemable, ScalarUDF};
 use sail_common::spec;
+use sail_common_datafusion::extension::SessionExtensionAccessor;
+use sail_common_datafusion::session::PlanService;
 use sail_python_udf::cereal::pyspark_udf::PySparkUdfPayload;
 use sail_python_udf::get_udf_name;
 use sail_python_udf::udf::pyspark_udaf::PySparkGroupAggregateUDF;
@@ -48,7 +50,8 @@ impl PlanResolver<'_> {
             is_distinct,
             state,
         )?;
-        let name = self.config.plan_formatter.function_to_string(
+        let service = self.ctx.extension::<PlanService>()?;
+        let name = service.plan_formatter().function_to_string(
             &function_name,
             argument_display_names.iter().map(|x| x.as_str()).collect(),
             is_distinct,

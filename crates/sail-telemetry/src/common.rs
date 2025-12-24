@@ -56,6 +56,7 @@ impl SpanAttribute {
     pub const CLUSTER_CHANNEL_PREFIX: &'static str = "cluster.channel.prefix";
     pub const CLUSTER_STREAM_LOCAL_STORAGE: &'static str = "cluster.stream.local.storage";
     pub const CLUSTER_STREAM_REMOTE_URI: &'static str = "cluster.stream.remote.uri";
+    pub const SESSION_KEY: &'static str = "session.key";
 }
 
 /// The OpenTelemetry span kinds.

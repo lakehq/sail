@@ -1,6 +1,8 @@
+use sail_common_datafusion::catalog::TableStatus;
+
 use crate::error::{CatalogError, CatalogResult};
 use crate::manager::CatalogManager;
-use crate::provider::{CreateTableOptions, DropTableOptions, TableStatus};
+use crate::provider::{CreateTableOptions, DropTableOptions};
 use crate::utils::match_pattern;
 
 impl CatalogManager {

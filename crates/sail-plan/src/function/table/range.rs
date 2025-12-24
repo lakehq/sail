@@ -8,10 +8,9 @@ use datafusion::catalog::{Session, TableFunctionImpl, TableProvider};
 use datafusion::physical_plan::ExecutionPlan;
 use datafusion_common::{exec_err, Result};
 use datafusion_expr::{logical_plan, Expr, LogicalPlan, TableType, UserDefinedLogicalNodeCore};
+use sail_common_datafusion::literal::{LiteralEvaluator, LiteralValue};
 use sail_logical_plan::range::RangeNode;
 use sail_physical_plan::range::RangeExec;
-
-use crate::literal::{LiteralEvaluator, LiteralValue};
 
 #[derive(Debug)]
 struct RangeTableProvider {

@@ -6,9 +6,7 @@ use datafusion_expr::{ScalarFunctionArgs, ScalarUDFImpl};
 use datafusion_expr_common::columnar_value::ColumnarValue;
 use datafusion_expr_common::signature::{Signature, Volatility};
 
-/// Spark-compatible `monotonically_increasing_id()`.
-///
-/// Important: the actual evaluation is implemented as a plan rewrite + partition-aware
+/// The actual evaluation is implemented as a plan rewrite + partition-aware
 /// physical operator. This UDF exists as a *marker* so the logical rewriter can detect
 /// and replace it before physical planning.
 ///
