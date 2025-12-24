@@ -317,27 +317,39 @@ fn make_formatter<'a>(
         }
         DataType::Struct(_) => {
             let struct_array = as_struct_array(array);
-            // Check if this is a valid Variant by trying to create a VariantArray
-            // and validate that we can actually parse at least one non-null element
-            // We use catch_unwind because variant_array.value() may panic on invalid data
-            let is_valid_variant = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-                let variant_array = VariantArray::try_new(struct_array).ok()?;
-                // Try to access the first non-null value to validate the data format
-                for i in 0..variant_array.len().min(10) {
-                    if !variant_array.is_null(i) {
-                        // Try to get the value - this may panic if the data is invalid
-                        let _ = variant_array.value(i);
-                        return Some(());
-                    }
-                }
-                // If all elements are null, still consider it valid
-                Some(())
-            }))
-            .ok()
-            .flatten()
-            .is_some();
 
-            if is_valid_variant {
+            // Check if this is a Variant by verifying:
+            // 1. Has metadata and value fields of BinaryView type
+            // 2. VariantArray::try_new succeeds
+            // 3. At least one value can be parsed without panic
+            let is_variant = struct_array.fields().len() == 2
+                && struct_array
+                    .fields()
+                    .iter()
+                    .any(|f| f.name() == "metadata" && f.data_type() == &DataType::BinaryView)
+                && struct_array
+                    .fields()
+                    .iter()
+                    .any(|f| f.name() == "value" && f.data_type() == &DataType::BinaryView)
+                && std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                    VariantArray::try_new(struct_array).ok().and_then(|variant_array| {
+                        // Try to parse at least one non-null element to validate it's real variant data
+                        for i in 0..variant_array.len().min(1) {
+                            if !variant_array.is_null(i) {
+                                // Try to get the value - this may panic if invalid
+                                let _ = variant_array.value(i);
+                                return Some(());
+                            }
+                        }
+                        // If all null, consider it valid variant
+                        Some(())
+                    })
+                }))
+                .ok()
+                .flatten()
+                .is_some();
+
+            if is_variant {
                 array_format_variant(struct_array, options)
             } else {
                 array_format(struct_array, options)
