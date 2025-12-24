@@ -282,13 +282,16 @@
 
 - key: parquet.metadata_size_hint
   type: number
-  default: "0"
+  default: "524288"
   description: |
-    (Reading) The metadata size hint in bytes when reading Parquet files.
-    If the value `n` is greater than `8`, the Parquet reader will try and fetch the last `n`
-    bytes of the Parquet file optimistically. Otherwise, two reads are performed to fetch the
-    metadata. The first read fetches the 8-byte Parquet footer and the second read fetches
-    the metadata length encoded in the footer.
+    (Reading) If specified, the reader will try to fetch the last `size_hint` bytes of the parquet file optimistically.
+    If not specified, two reads are required:
+      - One read to fetch the 8-byte parquet footer
+      - Another to fetch the metadata length encoded in the footer
+
+    If the metadata is larger than the hint, two reads will still be performed.
+    Setting this can reduce one I/O operation per parquet file.
+    Defaults to 512 KiB, which should be sufficient for most parquet files.
   experimental: true
 
 - key: parquet.pushdown_filters
@@ -334,6 +337,16 @@
   default: "true"
   description: |
     (Reading) Whether to use available bloom filters when reading Parquet files.
+  experimental: true
+
+- key: parquet.max_predicate_cache_size
+  type: number
+  default: "104857600"
+  description: |
+    (Reading) The maximum predicate cache size, in bytes. When `pushdown_filters` is enabled, sets the maximum memory
+    used to cache the results of predicate evaluation between filter evaluation and output generation.
+    Decreasing this value will reduce memory usage, but may increase IO and CPU usage.
+    Setting this value to `0` means no caching.
   experimental: true
 
 - key: parquet.data_page_size_limit

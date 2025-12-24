@@ -279,6 +279,7 @@ impl<I> ServerSessionFactory<I> {
         parquet.reorder_filters = self.config.parquet.reorder_filters;
         parquet.schema_force_view_types = self.config.parquet.schema_force_view_types;
         parquet.binary_as_string = self.config.parquet.binary_as_string;
+        parquet.max_predicate_cache_size = Some(self.config.parquet.max_predicate_cache_size);
         parquet.coerce_int96 = Some("us".to_string());
         parquet.data_pagesize_limit = self.config.parquet.data_page_size_limit;
         parquet.write_batch_size = self.config.parquet.write_batch_size;

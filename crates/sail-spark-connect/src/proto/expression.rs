@@ -243,6 +243,9 @@ impl TryFrom<Expression> for spec::Expr {
                 Err(SparkError::todo("typed aggregate expression"))
             }
             ExprType::SubqueryExpression(_) => Err(SparkError::todo("subquery expression")),
+            ExprType::DirectShufflePartitionId(_) => {
+                Err(SparkError::todo("direct shuffle partition ID expression"))
+            }
             ExprType::Extension(_) => Err(SparkError::todo("extension expression")),
         }
     }

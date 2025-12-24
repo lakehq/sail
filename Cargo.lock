@@ -961,9 +961,9 @@ dependencies = [
 
 [[package]]
 name = "axum"
-version = "0.8.7"
+version = "0.8.8"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "5b098575ebe77cb6d14fc7f32749631a6e44edbef6b796f89b020e99ba20d425"
+checksum = "8b52af3cb4058c895d37317bb27508dccc8e5f2d39454016b297bf4a400597b8"
 dependencies = [
  "axum-core",
  "bytes",
@@ -2652,6 +2652,18 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "d0881ea181b1df73ff77ffaaf9c7544ecc11e82fba9b5f27b262a3c73a332555"
 
 [[package]]
+name = "educe"
+version = "0.6.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "1d7bc049e1bd8cdeb31b68bbd586a9464ecf9f3944af3958a7a9d0f8b9799417"
+dependencies = [
+ "enum-ordinalize",
+ "proc-macro2",
+ "quote",
+ "syn 2.0.111",
+]
+
+[[package]]
 name = "either"
 version = "1.15.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -2670,6 +2682,26 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "75030f3c4f45dafd7586dd6780965a8c7e8e285a5ecb86713e63a79c5b2766f3"
 dependencies = [
  "cfg-if",
+]
+
+[[package]]
+name = "enum-ordinalize"
+version = "4.3.2"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "4a1091a7bb1f8f2c4b28f1fe2cef4980ca2d410a3d727d67ecc3178c9b0800f0"
+dependencies = [
+ "enum-ordinalize-derive",
+]
+
+[[package]]
+name = "enum-ordinalize-derive"
+version = "4.3.2"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "8ca9601fb2d62598ee17836250842873a413586e5d7ed88b356e38ddbb0ec631"
+dependencies = [
+ "proc-macro2",
+ "quote",
+ "syn 2.0.111",
 ]
 
 [[package]]
@@ -2733,9 +2765,9 @@ dependencies = [
 
 [[package]]
 name = "fastrace"
-version = "0.7.15"
+version = "0.7.16"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "028c5196da5db5bc70bdd05e1b98837aab50ef4ffbd92f6dfe51644611fd10ae"
+checksum = "8df0cb35ba204d668c758a6400c2e43eab9b038843debfab606b26f194ad7f1b"
 dependencies = [
  "fastant",
  "fastrace-macro",
@@ -2748,9 +2780,9 @@ dependencies = [
 
 [[package]]
 name = "fastrace-futures"
-version = "0.7.15"
+version = "0.7.16"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "02eac701c69f5351e64135a62e27c98d60b4fa7f0003927b6ae9ead2ab3ec0b2"
+checksum = "d66198b960cbbca82cf82645d6e63936f2327411643a90544e8a904708e36625"
 dependencies = [
  "fastrace",
  "futures-core",
@@ -2760,9 +2792,9 @@ dependencies = [
 
 [[package]]
 name = "fastrace-macro"
-version = "0.7.15"
+version = "0.7.16"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "b1dcf8996d31b7f8642343a4205c6e1aeda9514ee114173f70b3f841801ee8a3"
+checksum = "fc6ca71d5dfcbab9e09b19b5248e06a4bd8ac779055491fb47e6ebbdd20e5567"
 dependencies = [
  "proc-macro-error2",
  "proc-macro2",
@@ -4123,9 +4155,9 @@ dependencies = [
 
 [[package]]
 name = "moka"
-version = "0.12.11"
+version = "0.12.12"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "8261cd88c312e0004c1d51baad2980c66528dfdb2bee62003e643a4d8f86b077"
+checksum = "a3dec6bd31b08944e08b58fd99373893a6c17054d6f3ea5006cc894f4f4eee2a"
 dependencies = [
  "crossbeam-channel",
  "crossbeam-epoch",
@@ -4133,7 +4165,6 @@ dependencies = [
  "equivalent",
  "parking_lot",
  "portable-atomic",
- "rustc_version",
  "smallvec",
  "tagptr",
  "uuid",
@@ -5472,9 +5503,9 @@ dependencies = [
 
 [[package]]
 name = "reqwest"
-version = "0.12.26"
+version = "0.12.27"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "3b4c14b2d9afca6a60277086b0cc6a6ae0b568f6f7916c943a8cdc79f8be240f"
+checksum = "8e893f6bece5953520ddbb3f8f46f3ef36dd1fef4ee9b087c4b4a725fd5d10e4"
 dependencies = [
  "base64 0.22.1",
  "bytes",
@@ -5738,13 +5769,13 @@ checksum = "b39cdef0fa800fc44525c84ccb54a029961a8215f9619753635a9c0d2538d46d"
 
 [[package]]
 name = "ryu"
-version = "1.0.20"
+version = "1.0.21"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "28d3b2b1366ec20994f1fd18c3c594f05c5dd4bc44d8bb0c1c632c8d6829481f"
+checksum = "62049b2877bf12821e8f9ad256ee38fdc31db7387ec2d3b3f403024de2034aea"
 
 [[package]]
 name = "sail-cache"
-version = "0.4.4"
+version = "0.4.5"
 dependencies = [
  "chrono",
  "datafusion",
@@ -5757,7 +5788,7 @@ dependencies = [
 
 [[package]]
 name = "sail-catalog"
-version = "0.4.4"
+version = "0.4.5"
 dependencies = [
  "async-trait",
  "datafusion",
@@ -5774,7 +5805,7 @@ dependencies = [
 
 [[package]]
 name = "sail-catalog-iceberg"
-version = "0.4.4"
+version = "0.4.5"
 dependencies = [
  "arrow",
  "async-trait",
@@ -5795,7 +5826,7 @@ dependencies = [
 
 [[package]]
 name = "sail-catalog-memory"
-version = "0.4.4"
+version = "0.4.5"
 dependencies = [
  "async-trait",
  "dashmap",
@@ -5805,7 +5836,7 @@ dependencies = [
 
 [[package]]
 name = "sail-catalog-unity"
-version = "0.4.4"
+version = "0.4.5"
 dependencies = [
  "arrow",
  "async-trait",
@@ -5830,7 +5861,7 @@ dependencies = [
 
 [[package]]
 name = "sail-cli"
-version = "0.4.4"
+version = "0.4.5"
 dependencies = [
  "clap",
  "log",
@@ -5847,7 +5878,7 @@ dependencies = [
 
 [[package]]
 name = "sail-common"
-version = "0.4.4"
+version = "0.4.5"
 dependencies = [
  "arrow",
  "arrow-buffer",
@@ -5868,7 +5899,7 @@ dependencies = [
 
 [[package]]
 name = "sail-common-datafusion"
-version = "0.4.4"
+version = "0.4.5"
 dependencies = [
  "async-trait",
  "chrono",
@@ -5892,7 +5923,7 @@ dependencies = [
 
 [[package]]
 name = "sail-data-source"
-version = "0.4.4"
+version = "0.4.5"
 dependencies = [
  "async-trait",
  "bytes",
@@ -5921,7 +5952,7 @@ dependencies = [
 
 [[package]]
 name = "sail-delta-lake"
-version = "0.4.4"
+version = "0.4.5"
 dependencies = [
  "arrow-schema",
  "async-trait",
@@ -5952,7 +5983,7 @@ dependencies = [
 
 [[package]]
 name = "sail-execution"
-version = "0.4.4"
+version = "0.4.5"
 dependencies = [
  "arrow-flight",
  "datafusion",
@@ -5992,7 +6023,7 @@ dependencies = [
 
 [[package]]
 name = "sail-function"
-version = "0.4.4"
+version = "0.4.5"
 dependencies = [
  "aes",
  "aes-gcm",
@@ -6023,7 +6054,7 @@ dependencies = [
 
 [[package]]
 name = "sail-gold-test"
-version = "0.4.4"
+version = "0.4.5"
 dependencies = [
  "clap",
  "lazy_static",
@@ -6035,7 +6066,7 @@ dependencies = [
 
 [[package]]
 name = "sail-iceberg"
-version = "0.4.4"
+version = "0.4.5"
 dependencies = [
  "apache-avro 0.21.0",
  "async-trait",
@@ -6062,19 +6093,20 @@ dependencies = [
 
 [[package]]
 name = "sail-logical-optimizer"
-version = "0.4.4"
+version = "0.4.5"
 dependencies = [
  "datafusion",
 ]
 
 [[package]]
 name = "sail-logical-plan"
-version = "0.4.4"
+version = "0.4.5"
 dependencies = [
  "comfy-table",
  "datafusion",
  "datafusion-common",
  "datafusion-expr",
+ "educe",
  "html-escape",
  "log",
  "sail-common",
@@ -6083,7 +6115,7 @@ dependencies = [
 
 [[package]]
 name = "sail-object-store"
-version = "0.4.4"
+version = "0.4.5"
 dependencies = [
  "async-stream",
  "async-trait",
@@ -6117,7 +6149,7 @@ dependencies = [
 
 [[package]]
 name = "sail-physical-optimizer"
-version = "0.4.4"
+version = "0.4.5"
 dependencies = [
  "datafusion",
  "datafusion-physical-expr",
@@ -6127,7 +6159,7 @@ dependencies = [
 
 [[package]]
 name = "sail-physical-plan"
-version = "0.4.4"
+version = "0.4.5"
 dependencies = [
  "datafusion",
  "datafusion-common",
@@ -6140,7 +6172,7 @@ dependencies = [
 
 [[package]]
 name = "sail-plan"
-version = "0.4.4"
+version = "0.4.5"
 dependencies = [
  "arrow",
  "async-recursion",
@@ -6180,7 +6212,7 @@ dependencies = [
 
 [[package]]
 name = "sail-plan-lakehouse"
-version = "0.4.4"
+version = "0.4.5"
 dependencies = [
  "async-trait",
  "datafusion",
@@ -6196,7 +6228,7 @@ dependencies = [
 
 [[package]]
 name = "sail-python"
-version = "0.4.4"
+version = "0.4.5"
 dependencies = [
  "fastrace",
  "log",
@@ -6210,7 +6242,7 @@ dependencies = [
 
 [[package]]
 name = "sail-python-udf"
-version = "0.4.4"
+version = "0.4.5"
 dependencies = [
  "arrow-pyarrow",
  "datafusion",
@@ -6229,7 +6261,7 @@ dependencies = [
 
 [[package]]
 name = "sail-server"
-version = "0.4.4"
+version = "0.4.5"
 dependencies = [
  "axum",
  "fastrace",
@@ -6245,7 +6277,7 @@ dependencies = [
 
 [[package]]
 name = "sail-session"
-version = "0.4.4"
+version = "0.4.5"
 dependencies = [
  "datafusion",
  "fastrace",
@@ -6277,7 +6309,7 @@ dependencies = [
 
 [[package]]
 name = "sail-spark-connect"
-version = "0.4.4"
+version = "0.4.5"
 dependencies = [
  "async-stream",
  "datafusion",
@@ -6319,7 +6351,7 @@ dependencies = [
 
 [[package]]
 name = "sail-sql-analyzer"
-version = "0.4.4"
+version = "0.4.5"
 dependencies = [
  "chrono",
  "chumsky",
@@ -6333,7 +6365,7 @@ dependencies = [
 
 [[package]]
 name = "sail-sql-macro"
-version = "0.4.4"
+version = "0.4.5"
 dependencies = [
  "proc-macro2",
  "quote",
@@ -6342,7 +6374,7 @@ dependencies = [
 
 [[package]]
 name = "sail-sql-parser"
-version = "0.4.4"
+version = "0.4.5"
 dependencies = [
  "chumsky",
  "either",
@@ -6359,7 +6391,7 @@ dependencies = [
 
 [[package]]
 name = "sail-telemetry"
-version = "0.4.4"
+version = "0.4.5"
 dependencies = [
  "datafusion",
  "env_logger",
@@ -6596,9 +6628,9 @@ dependencies = [
 
 [[package]]
 name = "serde_json"
-version = "1.0.145"
+version = "1.0.146"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "402a6f66d8c709116cf22f558eab210f5a50187f702eb4d7e5ef38d9a7f1c79c"
+checksum = "217ca874ae0207aac254aa02c957ded05585a90892cc8d87f9e5fa49669dadd8"
 dependencies = [
  "itoa",
  "memchr",
@@ -6988,9 +7020,9 @@ dependencies = [
 
 [[package]]
 name = "testcontainers"
-version = "0.26.0"
+version = "0.26.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "a347cac4368ba4f1871743adb27dc14829024d26b1763572404726b0b9943eb8"
+checksum = "1483605f58b2fff80d786eb56a0b6b4e8b1e5423fbc9ec2e3e562fa2040d6f27"
 dependencies = [
  "astral-tokio-tar",
  "async-trait",

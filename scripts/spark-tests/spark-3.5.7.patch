@@ -1,5 +1,5 @@
 diff --git a/pom.xml b/pom.xml
-index 9b009c3a42a..1b18c98b10c 100644
+index a0e25ce4d8d..261a2b03380 100644
 --- a/pom.xml
 +++ b/pom.xml
 @@ -3357,6 +3357,10 @@
@@ -59,7 +59,7 @@ index 7b1aafbefeb..ed0883891c3 100644
          self._channel.close()
          self._closed = True
 diff --git a/python/pyspark/sql/tests/connect/test_connect_basic.py b/python/pyspark/sql/tests/connect/test_connect_basic.py
-index d1f6994edba..7cacc6d7aa0 100644
+index cc95bfface0..7625a7cce85 100644
 --- a/python/pyspark/sql/tests/connect/test_connect_basic.py
 +++ b/python/pyspark/sql/tests/connect/test_connect_basic.py
 @@ -111,6 +111,11 @@ class SparkConnectSQLTestCase(ReusedConnectTestCase, SQLTestUtils, PandasOnSpark
@@ -131,16 +131,16 @@ index a063f27c9ea..784161bbade 100644
          cls.tbl_name = "test_connect_plan_only_table_1"
  
          cls.connect.set_hook("readTable", cls._read_table)
-diff --git a/python/pyspark/testing/sqlutils.py b/python/pyspark/testing/sqlutils.py
-index 077d854b1dd..513a8f5d516 100644
---- a/python/pyspark/testing/sqlutils.py
-+++ b/python/pyspark/testing/sqlutils.py
-@@ -84,7 +84,7 @@ class ExamplePointUDT(UserDefinedType):
+diff --git a/python/pyspark/testing/objects.py b/python/pyspark/testing/objects.py
+index 5b97664afbd..b9deeef91c8 100644
+--- a/python/pyspark/testing/objects.py
++++ b/python/pyspark/testing/objects.py
+@@ -45,7 +45,7 @@ class ExamplePointUDT(UserDefinedType):
  
      @classmethod
      def module(cls):
 -        return "pyspark.sql.tests"
-+        return "pyspark.testing.sqlutils"
++        return "pyspark.testing.objects"
  
      @classmethod
      def scalaUDT(cls):

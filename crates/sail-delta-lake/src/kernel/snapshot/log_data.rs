@@ -349,10 +349,15 @@ mod datafusion {
             } else {
                 Expression::column(["stats_parsed", stats_field, &column.name])
             };
+            // `nullCount` is always a Long/Int64 count in stats (independent of column type).
+            let output_type = match stats_field {
+                COL_NULL_COUNT => DataType::Primitive(PrimitiveType::Long),
+                _ => field.data_type().clone(),
+            };
             let evaluator = match ARROW_HANDLER.new_expression_evaluator(
                 scan_row_schema(),
                 Arc::new(expression),
-                field.data_type().clone(),
+                output_type,
             ) {
                 Ok(value) => value,
                 Err(err) => {
