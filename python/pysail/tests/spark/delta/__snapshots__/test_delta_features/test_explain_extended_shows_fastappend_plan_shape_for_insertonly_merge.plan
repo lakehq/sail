@@ -1,0 +1,44 @@
+== Parsed Logical Plan ==
+MergeInto: options=MergeIntoOptions { target_alias: Some("t"), source_alias: Some("s"), target: MergeTargetInfo { table_name: ["delta_merge_insert_only"], format: "DELTA", location: "<tmp>/merge_insert_only", partition_by: [], options: [[]] }, with_schema_evolution: false, resolved_target_schema: DFSchema { inner: Schema { fields: [Field { name: "#0", data_type: Int32, nullable: true }, Field { name: "#1", data_type: Utf8, nullable: true }], metadata: {} }, field_qualifiers: [Some(Bare { table: "t" }), Some(Bare { table: "t" })], functional_dependencies: FunctionalDependencies { deps: [] } }, resolved_source_schema: DFSchema { inner: Schema { fields: [Field { name: "#2", data_type: Int32, nullable: true }, Field { name: "#3", data_type: Utf8, nullable: true }], metadata: {} }, field_qualifiers: [Some(Bare { table: "s" }), Some(Bare { table: "s" })], functional_dependencies: FunctionalDependencies { deps: [] } }, on_condition: BinaryExpr(BinaryExpr { left: Column(Column { relation: Some(Bare { table: "t" }), name: "#0" }), op: Eq, right: Column(Column { relation: Some(Bare { table: "s" }), name: "#2" }) }), matched_clauses: [], not_matched_by_source_clauses: [], not_matched_by_target_clauses: [MergeNotMatchedByTargetClause { condition: None, action: InsertAll }], join_key_pairs: [(Column(Column { relation: Some(Bare { table: "t" }), name: "#0" }), Column(Column { relation: Some(Bare { table: "s" }), name: "#2" }))], residual_predicates: [], target_only_predicates: [] }
+  SubqueryAlias: t
+    Projection: delta_merge_insert_only.id AS #0, delta_merge_insert_only.value AS #1
+      TableScan: delta_merge_insert_only
+  SubqueryAlias: s
+    Projection: src_merge_insert_only.id AS #2, src_merge_insert_only.value AS #3
+      Projection: src_merge_insert_only.#4 AS id, src_merge_insert_only.#5 AS value
+        SubqueryAlias: src_merge_insert_only
+          Projection: src.#2 AS #4, src.#3 AS #5
+            SubqueryAlias: src
+              Projection: #0 AS #2, #1 AS #3
+                Projection: column1 AS #0, column2 AS #1
+                  Values: (Int32(2), Utf8("ignored")), (Int32(3), Utf8("inserted"))
+
+== Analyzed Logical Plan ==
+MergeIntoWrite: options=MergeIntoOptions { target_alias: Some("t"), source_alias: Some("s"), target: MergeTargetInfo { table_name: ["delta_merge_insert_only"], format: "DELTA", location: "<tmp>/merge_insert_only", partition_by: [], options: [[]] }, with_schema_evolution: false, resolved_target_schema: DFSchema { inner: Schema { fields: [Field { name: "#0", data_type: Int32, nullable: true }, Field { name: "#1", data_type: Utf8, nullable: true }], metadata: {} }, field_qualifiers: [Some(Bare { table: "t" }), Some(Bare { table: "t" })], functional_dependencies: FunctionalDependencies { deps: [] } }, resolved_source_schema: DFSchema { inner: Schema { fields: [Field { name: "#2", data_type: Int32, nullable: true }, Field { name: "#3", data_type: Utf8, nullable: true }], metadata: {} }, field_qualifiers: [Some(Bare { table: "s" }), Some(Bare { table: "s" })], functional_dependencies: FunctionalDependencies { deps: [] } }, on_condition: BinaryExpr(BinaryExpr { left: Column(Column { relation: None, name: "id" }), op: Eq, right: Column(Column { relation: None, name: "__sail_src_id" }) }), matched_clauses: [], not_matched_by_source_clauses: [], not_matched_by_target_clauses: [MergeNotMatchedByTargetClause { condition: None, action: InsertAll }], join_key_pairs: [(Column(Column { relation: None, name: "id" }), Column(Column { relation: None, name: "__sail_src_id" }))], residual_predicates: [], target_only_predicates: [] }
+  Projection: __sail_src_id AS id, __sail_src_value AS value
+    LeftAnti Join: __sail_src_id = id
+      Projection: s.#2 AS __sail_src_id, s.#3 AS __sail_src_value
+        SubqueryAlias: s
+          Projection: src_merge_insert_only.id AS #2, src_merge_insert_only.value AS #3
+            Projection: src_merge_insert_only.#4 AS id, src_merge_insert_only.#5 AS value
+              SubqueryAlias: src_merge_insert_only
+                Projection: src.#2 AS #4, src.#3 AS #5
+                  SubqueryAlias: src
+                    Projection: #0 AS #2, #1 AS #3
+                      Projection: column1 AS #0, column2 AS #1
+                        Values: (Int32(2), Utf8("ignored")), (Int32(3), Utf8("inserted"))
+      Projection: t.#0 AS id, t.#1 AS value, t.__sail_file_path AS __sail_file_path
+        SubqueryAlias: t
+          Projection: delta_merge_insert_only.id AS #0, delta_merge_insert_only.value AS #1, delta_merge_insert_only.__sail_file_path AS __sail_file_path
+            TableScan: delta_merge_insert_only projection=[id, value, __sail_file_path]
+  EmptyRelation: rows=0
+
+== Physical Plan ==
+DeltaCommitExec(table_path=file://<tmp>/merge_insert_only/)
+  DeltaWriterExec(table_path=file://<tmp>/merge_insert_only/)
+    ProjectionExec: expr=[__sail_src_id@0 as id, __sail_src_value@1 as value]
+      CoalesceBatchesExec: target_batch_size=8192
+        HashJoinExec: mode=CollectLeft, join_type=RightAnti, on=[(id@0, __sail_src_id@0)]
+          DataSourceExec: file_groups={1 group: [[<tmp>/merge_insert_only/part-<id>.snappy.parquet]]}, projection=[id, value, __sail_file_path], file_type=parquet
+          ProjectionExec: expr=[column1@0 as __sail_src_id, column2@1 as __sail_src_value]
+            DataSourceExec: partitions=1, partition_sizes=[<sizes>]

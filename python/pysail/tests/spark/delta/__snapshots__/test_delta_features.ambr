@@ -40,6 +40,37 @@
     'timestamp': '<timestamp>',
   })
 # ---
+# name: test_insertonly_merge_appends_new_rows_and_produces_no_remove_actions
+  dict({
+    'clientVersion': 'sail-delta-lake.x.x.x',
+    'engineInfo': 'sail-delta-lake:x.x.x',
+    'isBlindAppend': False,
+    'operation': 'MERGE',
+    'operationMetrics': dict({
+      'executionTimeMs': '<time_ms>',
+      'numAddedBytes': 743,
+      'numAddedFiles': 1,
+      'numFiles': 1,
+      'numOutputBytes': 743,
+      'numOutputFiles': 1,
+      'numOutputRows': 1,
+      'writeTimeMs': '<time_ms>',
+    }),
+    'operationParameters': dict({
+      'matchedPredicates': list([
+      ]),
+      'mergePredicate': '(id = __sail_src_id)',
+      'notMatchedBySourcePredicates': list([
+      ]),
+      'notMatchedPredicates': list([
+        dict({
+          'actionType': 'insert',
+        }),
+      ]),
+    }),
+    'timestamp': '<timestamp>',
+  })
+# ---
 # name: test_rows_missing_from_the_source_are_deleted_after_updates
   dict({
     'clientVersion': 'sail-delta-lake.x.x.x',

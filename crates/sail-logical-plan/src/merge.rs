@@ -5,12 +5,15 @@ use std::sync::Arc;
 
 use datafusion_common::tree_node::{Transformed, TreeNode};
 use datafusion_common::{
-    plan_err, Column, DFSchema, DFSchemaRef, DataFusionError, NullEquality, Result, ScalarValue,
-    TableReference,
+    plan_err, Column, DFSchema, DFSchemaRef, DataFusionError, Dependency, NullEquality, Result,
+    ScalarValue, TableReference,
 };
 use datafusion_expr::expr::Case;
 use datafusion_expr::expr_fn::not;
-use datafusion_expr::logical_plan::LogicalPlanBuilder;
+use datafusion_expr::logical_plan::{
+    Aggregate, Extension, Filter, LogicalPlanBuilder, Projection, SubqueryAlias,
+};
+use datafusion_expr::utils::expr_to_columns;
 use datafusion_expr::{
     col, lit, Expr, Join, JoinConstraint, JoinType, LogicalPlan, UserDefinedLogicalNodeCore,
 };
@@ -20,6 +23,97 @@ use sail_common_datafusion::utils::items::ItemTaker;
 
 pub const SOURCE_PRESENT_COLUMN: &str = "__sail_merge_source_row_present";
 pub const TARGET_PRESENT_COLUMN: &str = "__sail_merge_target_row_present";
+pub const TARGET_ROW_ID_COLUMN: &str = "__sail_merge_target_row_id";
+
+#[derive(Clone, Debug, PartialEq, Educe)]
+#[educe(Eq, Hash, PartialOrd)]
+pub struct MergeCardinalityCheckNode {
+    input: Arc<LogicalPlan>,
+    target_row_id_col: String,
+    target_present_col: String,
+    source_present_col: String,
+    #[educe(PartialOrd(ignore))]
+    schema: DFSchemaRef,
+}
+
+impl MergeCardinalityCheckNode {
+    pub fn new(
+        input: Arc<LogicalPlan>,
+        target_row_id_col: impl Into<String>,
+        target_present_col: impl Into<String>,
+        source_present_col: impl Into<String>,
+    ) -> Self {
+        let schema = input.schema().clone();
+        Self {
+            input,
+            target_row_id_col: target_row_id_col.into(),
+            target_present_col: target_present_col.into(),
+            source_present_col: source_present_col.into(),
+            schema,
+        }
+    }
+
+    pub fn target_row_id_col(&self) -> &str {
+        &self.target_row_id_col
+    }
+
+    pub fn target_present_col(&self) -> &str {
+        &self.target_present_col
+    }
+
+    pub fn source_present_col(&self) -> &str {
+        &self.source_present_col
+    }
+}
+
+impl UserDefinedLogicalNodeCore for MergeCardinalityCheckNode {
+    fn name(&self) -> &str {
+        "MergeCardinalityCheck"
+    }
+
+    fn inputs(&self) -> Vec<&LogicalPlan> {
+        vec![self.input.as_ref()]
+    }
+
+    fn schema(&self) -> &DFSchemaRef {
+        &self.schema
+    }
+
+    fn expressions(&self) -> Vec<Expr> {
+        vec![]
+    }
+
+    fn fmt_for_explain(&self, f: &mut Formatter) -> std::fmt::Result {
+        write!(
+            f,
+            "MergeCardinalityCheck: target_row_id_col={}, target_present_col={}, source_present_col={}",
+            self.target_row_id_col, self.target_present_col, self.source_present_col
+        )
+    }
+
+    fn with_exprs_and_inputs(
+        &self,
+        exprs: Vec<Expr>,
+        inputs: Vec<LogicalPlan>,
+    ) -> datafusion_common::Result<Self> {
+        exprs.zero()?;
+        let [input] = inputs.as_slice() else {
+            return Err(DataFusionError::Internal(
+                "MergeCardinalityCheckNode expects exactly 1 input".to_string(),
+            ));
+        };
+        Ok(Self::new(
+            Arc::new(input.clone()),
+            self.target_row_id_col.clone(),
+            self.target_present_col.clone(),
+            self.source_present_col.clone(),
+        ))
+    }
+
+    fn necessary_children_exprs(&self, _output_columns: &[usize]) -> Option<Vec<Vec<usize>>> {
+        None
+    }
+}
 
 #[derive(Clone, Debug, Eq, PartialEq, Hash)]
 pub struct MergeIntoOptions {
@@ -305,6 +399,12 @@ pub fn expand_merge(node: &MergeIntoNode, path_column: &str) -> Result<MergeExpa
     let source_plan = node.source.as_ref().clone();
     let mut options = node.options().clone();
     let merge_schema = node.input_schema.clone();
+    let mut should_check_cardinality = should_check_cardinality(&options.matched_clauses);
+    if should_check_cardinality
+        && source_is_unique_on_merge_join_keys(&source_plan, &options.join_key_pairs)
+    {
+        should_check_cardinality = false;
+    }
 
     trace!(
         "merge input schema fields: {:?}",
@@ -409,9 +509,23 @@ pub fn expand_merge(node: &MergeIntoNode, path_column: &str) -> Result<MergeExpa
             .collect::<Vec<_>>()
     );
 
-    let target_plan = LogicalPlanBuilder::from(target_plan.clone())
+    let mut target_plan = LogicalPlanBuilder::from(target_plan.clone())
         .project(target_proj_exprs)?
         .build()?;
+
+    if should_check_cardinality {
+        // Add stable per-target-row id before join; JOIN will duplicate this value for matches.
+        let mut exprs: Vec<Expr> = target_plan
+            .schema()
+            .fields()
+            .iter()
+            .map(|f| Expr::Column(Column::from_name(f.name().clone())))
+            .collect();
+        exprs.push(datafusion::functions::string::expr_fn::uuid().alias(TARGET_ROW_ID_COLUMN));
+        target_plan = LogicalPlanBuilder::from(target_plan)
+            .project(exprs)?
+            .build()?;
+    }
 
     // To avoid duplicate unqualified names after JOIN, rename source columns with a stable prefix.
     let target_input_len = options.resolved_target_schema.fields().len();
@@ -432,6 +546,11 @@ pub fn expand_merge(node: &MergeIntoNode, path_column: &str) -> Result<MergeExpa
     }
     // keep path column mapping stable if present
     target_rename_map.insert(path_column.to_string(), path_column.to_string());
+    // keep row id stable if present
+    target_rename_map.insert(
+        TARGET_ROW_ID_COLUMN.to_string(),
+        TARGET_ROW_ID_COLUMN.to_string(),
+    );
 
     let mut source_rename_map: HashMap<String, String> = HashMap::new();
     let target_input_len = options.resolved_target_schema.fields().len();
@@ -480,22 +599,6 @@ pub fn expand_merge(node: &MergeIntoNode, path_column: &str) -> Result<MergeExpa
             .collect::<Vec<_>>()
     );
 
-    let augmented_target = LogicalPlanBuilder::from(target_plan.clone())
-        .project(append_presence_projection(
-            target_schema,
-            TARGET_PRESENT_COLUMN,
-            Some(path_column),
-        )?)?
-        .build()?;
-
-    let augmented_source = LogicalPlanBuilder::from(source_plan.clone())
-        .project(append_presence_projection(
-            source_schema,
-            SOURCE_PRESENT_COLUMN,
-            None,
-        )?)?
-        .build()?;
-
     // Rewrite all expressions that reference source columns to the new prefixed names.
     let rewrite = |expr: Expr| rewrite_merge_columns(expr, &target_rename_map, &source_rename_map);
     options.on_condition = rewrite(options.on_condition.clone())?;
@@ -526,6 +629,69 @@ pub fn expand_merge(node: &MergeIntoNode, path_column: &str) -> Result<MergeExpa
         &options.on_condition
     );
 
+    // Detect insert-only MERGE that can use fast append (anti-join + no touched files).
+    let can_fast_append = can_fast_append_insert_only(&options, target_schema, path_column)?;
+
+    if can_fast_append {
+        // source ANTI target
+        let join_on = options
+            .join_key_pairs
+            .iter()
+            .map(|(t, s)| Ok((s.clone(), t.clone())))
+            .collect::<Result<Vec<_>>>()?;
+        let residual_filter = combine_conjunction(&options.residual_predicates);
+
+        let join = Join::try_new(
+            Arc::new(source_plan.clone()),
+            Arc::new(target_plan.clone()),
+            join_on,
+            residual_filter,
+            JoinType::LeftAnti,
+            JoinConstraint::On,
+            NullEquality::NullEqualsNothing,
+        )?;
+        let join = Arc::new(LogicalPlan::Join(join));
+
+        // Filter rows that do not match any NOT MATCHED BY TARGET clause conditions.
+        let insert_filter = insert_only_insert_filter(&options);
+        let filtered = LogicalPlanBuilder::from(join.as_ref().clone())
+            .filter(insert_filter)?
+            .build()?;
+
+        let projection_exprs =
+            build_insert_only_projection(&options, target_schema, source_schema, path_column)?;
+        let projected = LogicalPlanBuilder::from(filtered)
+            .project(projection_exprs)?
+            .build()?;
+
+        let touched_plan = LogicalPlanBuilder::empty(false).build()?;
+        let command_schema = Arc::new(DFSchema::empty());
+        return Ok(MergeExpansion {
+            write_plan: projected,
+            touched_files_plan: touched_plan,
+            output_schema: command_schema,
+            options,
+        });
+    }
+
+    // Default MERGE expansion path (full outer join + presence columns + touched files).
+
+    let augmented_target = LogicalPlanBuilder::from(target_plan.clone())
+        .project(append_presence_projection(
+            target_schema,
+            TARGET_PRESENT_COLUMN,
+            Some(path_column),
+        )?)?
+        .build()?;
+
+    let augmented_source = LogicalPlanBuilder::from(source_plan.clone())
+        .project(append_presence_projection(
+            source_schema,
+            SOURCE_PRESENT_COLUMN,
+            None,
+        )?)?
+        .build()?;
+
     let join_on = options.join_key_pairs.clone();
     let residual_filter = combine_conjunction(&options.residual_predicates);
 
@@ -540,6 +706,18 @@ pub fn expand_merge(node: &MergeIntoNode, path_column: &str) -> Result<MergeExpa
     )?;
 
     let join = Arc::new(LogicalPlan::Join(join));
+    let join: Arc<LogicalPlan> = if should_check_cardinality {
+        Arc::new(LogicalPlan::Extension(Extension {
+            node: Arc::new(MergeCardinalityCheckNode::new(
+                Arc::clone(&join),
+                TARGET_ROW_ID_COLUMN,
+                TARGET_PRESENT_COLUMN,
+                SOURCE_PRESENT_COLUMN,
+            )),
+        }))
+    } else {
+        join
+    };
 
     let target_present = col(TARGET_PRESENT_COLUMN).is_not_null();
     let source_present = col(SOURCE_PRESENT_COLUMN).is_not_null();
@@ -647,6 +825,279 @@ fn append_presence_projection(
     Ok(exprs)
 }
 
+fn can_fast_append_insert_only(
+    options: &MergeIntoOptions,
+    target_schema: &DFSchemaRef,
+    path_column: &str,
+) -> Result<bool> {
+    // Insert-only: only NOT MATCHED BY TARGET clauses, no updates/deletes.
+    if !options.matched_clauses.is_empty() {
+        return Ok(false);
+    }
+    if !options.not_matched_by_source_clauses.is_empty() {
+        return Ok(false);
+    }
+    if options.not_matched_by_target_clauses.is_empty() {
+        return Ok(false);
+    }
+
+    // Robustness gate: ensure NOT MATCHED BY TARGET conditions/values do not reference target.
+    // (We still allow referencing target columns in the ON condition for the anti join.)
+    let target_names: std::collections::HashSet<String> = target_schema
+        .fields()
+        .iter()
+        .map(|f| f.name().clone())
+        .chain(std::iter::once(path_column.to_string()))
+        .collect();
+
+    let references_target = |expr: &Expr| -> Result<bool> {
+        let mut cols: std::collections::HashSet<Column> = std::collections::HashSet::new();
+        expr_to_columns(expr, &mut cols)?;
+        Ok(cols.iter().any(|c| target_names.contains(&c.name)))
+    };
+
+    for clause in &options.not_matched_by_target_clauses {
+        if let Some(cond) = &clause.condition {
+            if references_target(cond)? {
+                return Ok(false);
+            }
+        }
+        match &clause.action {
+            MergeNotMatchedByTargetAction::InsertAll => {}
+            MergeNotMatchedByTargetAction::InsertColumns { values, .. } => {
+                for v in values {
+                    if references_target(v)? {
+                        return Ok(false);
+                    }
+                }
+            }
+        }
+    }
+
+    Ok(true)
+}
+
+fn insert_only_insert_filter(options: &MergeIntoOptions) -> Expr {
+    let preds = options
+        .not_matched_by_target_clauses
+        .iter()
+        .map(|c| c.condition.clone().unwrap_or_else(|| lit(true)))
+        .collect::<Vec<_>>();
+    combine_disjunction(&preds).unwrap_or_else(|| lit(false))
+}
+
+fn build_insert_only_projection(
+    options: &MergeIntoOptions,
+    target_schema: &DFSchemaRef,
+    source_schema: &DFSchemaRef,
+    path_column: &str,
+) -> Result<Vec<Expr>> {
+    // Match existing MERGE behavior: produce one output row per inserted source row,
+    // with clause order determining first-match semantics.
+    let mut projections = Vec::new();
+
+    // Build lookup for source expressions by index, consistent with existing InsertAll behavior.
+    let source_exprs = source_schema
+        .fields()
+        .iter()
+        .map(|f| Expr::Column(Column::from_name(f.name().clone())))
+        .collect::<Vec<_>>();
+
+    for (idx, field) in target_schema.fields().iter().enumerate() {
+        if field.name() == path_column || field.name() == TARGET_ROW_ID_COLUMN {
+            continue;
+        }
+        let name = field.name().clone();
+        let mut branches: Vec<(Expr, Expr)> = Vec::new();
+
+        for clause in &options.not_matched_by_target_clauses {
+            let pred = clause.condition.clone().unwrap_or_else(|| lit(true));
+            let value = match &clause.action {
+                MergeNotMatchedByTargetAction::InsertAll => source_exprs
+                    .get(idx)
+                    .cloned()
+                    .unwrap_or_else(|| lit(ScalarValue::Null)),
+                MergeNotMatchedByTargetAction::InsertColumns { columns, values } => {
+                    // If column not specified in this clause, it becomes NULL for this clause
+                    // (and must NOT fall through to later clauses).
+                    let mut out = lit(ScalarValue::Null);
+                    for (col_name, expr) in columns.iter().zip(values.iter()) {
+                        if col_name.eq_ignore_ascii_case(&name) {
+                            out = expr.clone();
+                            break;
+                        }
+                    }
+                    out
+                }
+            };
+            branches.push((pred, value));
+        }
+
+        let when_then_expr = branches
+            .into_iter()
+            .map(|(p, v)| (Box::new(p), Box::new(v)))
+            .collect::<Vec<_>>();
+
+        // Rows are pre-filtered by insert_only_insert_filter, but keep an else NULL to be safe.
+        let expr = Expr::Case(Case {
+            expr: None,
+            when_then_expr,
+            else_expr: Some(Box::new(lit(ScalarValue::Null))),
+        });
+        projections.push(expr.alias(name));
+    }
+
+    Ok(projections)
+}
+
+fn should_check_cardinality(matched_clauses: &[MergeMatchedClause]) -> bool {
+    // Spark semantics: If there are no matched clauses, nothing to check.
+    // If there is exactly one matched clause and it is an unconditional DELETE, skip.
+    if matched_clauses.is_empty() {
+        return false;
+    }
+    if matched_clauses.len() == 1 {
+        let clause = &matched_clauses[0];
+        if matches!(clause.action, MergeMatchedAction::Delete) && clause.condition.is_none() {
+            return false;
+        }
+    }
+    true
+}
+
+fn source_is_unique_on_merge_join_keys(
+    source_plan: &LogicalPlan,
+    join_key_pairs: &[(Expr, Expr)],
+) -> bool {
+    let Some(mut key_cols) = source_join_key_column_names(join_key_pairs) else {
+        return false;
+    };
+
+    // Prefer functional-dependency tracking on the plan schema.
+    // If it proves uniqueness, we can safely skip MERGE cardinality checks.
+    if schema_implies_unique_for_columns(source_plan.schema().as_ref(), &key_cols) {
+        return true;
+    }
+
+    let mut plan = source_plan;
+    loop {
+        match plan {
+            LogicalPlan::SubqueryAlias(SubqueryAlias { input, .. }) => {
+                plan = input.as_ref();
+            }
+            LogicalPlan::Filter(Filter { input, .. }) => {
+                plan = input.as_ref();
+            }
+            LogicalPlan::Projection(projection) => {
+                let Some(mapped) = map_key_cols_through_projection(projection, &key_cols) else {
+                    return false;
+                };
+                key_cols = mapped;
+                plan = projection.input.as_ref();
+            }
+            LogicalPlan::Aggregate(aggregate) => {
+                return aggregate_groups_exactly_on_columns(aggregate, &key_cols);
+            }
+            _ => return false,
+        }
+    }
+}
+
+fn source_join_key_column_names(join_key_pairs: &[(Expr, Expr)]) -> Option<Vec<String>> {
+    // Only handle equi-join keys that are plain source columns.
+    let mut out = Vec::with_capacity(join_key_pairs.len());
+    for (_, source_key) in join_key_pairs {
+        match source_key {
+            Expr::Column(c) => out.push(c.name.clone()),
+            _ => return None,
+        }
+    }
+    (!out.is_empty()).then_some(out)
+}
+
+fn schema_implies_unique_for_columns(schema: &DFSchema, key_cols: &[String]) -> bool {
+    use std::collections::{HashMap, HashSet};
+
+    fn norm_ident(s: &str) -> String {
+        s.to_ascii_lowercase()
+    }
+
+    let mut index_by_name: HashMap<String, usize> = HashMap::new();
+    for (idx, field) in schema.fields().iter().enumerate() {
+        let name = norm_ident(field.name());
+        if index_by_name.insert(name, idx).is_some() {
+            return false;
+        }
+    }
+
+    // Resolve join key column indices. If any key is missing or duplicates
+    // another key (after normalization), we cannot reason safely.
+    let mut key_indices: HashSet<usize> = HashSet::with_capacity(key_cols.len());
+    for key in key_cols {
+        let name = norm_ident(key);
+        let Some(&idx) = index_by_name.get(&name) else {
+            return false;
+        };
+        if !key_indices.insert(idx) {
+            return false;
+        }
+    }
+    if key_indices.is_empty() {
+        return false;
+    }
+
+    schema.functional_dependencies().iter().any(|fd| {
+        fd.mode == Dependency::Single && fd.source_indices.iter().all(|i| key_indices.contains(i))
+    })
+}
+
+fn map_key_cols_through_projection(
+    projection: &Projection,
+    key_cols: &[String],
+) -> Option<Vec<String>> {
+    let mut out = Vec::with_capacity(key_cols.len());
+    for key in key_cols {
+        let idx = projection
+            .schema
+            .fields()
+            .iter()
+            .position(|f| f.name() == key)?;
+        let expr = projection.expr.get(idx)?;
+        let mapped = match expr {
+            Expr::Column(c) => c.name.clone(),
+            Expr::Alias(alias) => match alias.expr.as_ref() {
+                Expr::Column(c) => c.name.clone(),
+                _ => return None,
+            },
+            _ => return None,
+        };
+        out.push(mapped);
+    }
+    Some(out)
+}
+
+fn aggregate_groups_exactly_on_columns(aggregate: &Aggregate, key_cols: &[String]) -> bool {
+    let mut group_cols: Vec<String> = Vec::with_capacity(aggregate.group_expr.len());
+    for expr in aggregate.group_expr.iter() {
+        match expr {
+            Expr::Column(c) => group_cols.push(c.name.clone()),
+            _ => return false,
+        }
+    }
+    same_column_set_case_insensitive(&group_cols, key_cols)
+}
+
+fn same_column_set_case_insensitive(a: &[String], b: &[String]) -> bool {
+    use std::collections::HashSet;
+    if a.len() != b.len() {
+        return false;
+    }
+    let norm = |s: &String| s.to_ascii_lowercase();
+    let sa: HashSet<String> = a.iter().map(norm).collect();
+    let sb: HashSet<String> = b.iter().map(norm).collect();
+    sa.len() == a.len() && sb.len() == b.len() && sa == sb
+}
+
 fn combine_conjunction(exprs: &[Expr]) -> Option<Expr> {
     let mut iter = exprs.iter().cloned();
     let first = iter.next()?;
@@ -675,7 +1126,7 @@ fn build_merge_projection(
     let mut cases: Vec<(String, Vec<(Expr, Expr)>)> = target_schema
         .fields()
         .iter()
-        .filter(|f| f.name() != path_column)
+        .filter(|f| f.name() != path_column && f.name() != TARGET_ROW_ID_COLUMN)
         .map(|f| (f.name().clone(), Vec::new()))
         .collect();
 
@@ -775,7 +1226,7 @@ fn build_merge_projection(
 
     let mut projections = Vec::new();
     for field in target_schema.fields() {
-        if field.name() == path_column {
+        if field.name() == path_column || field.name() == TARGET_ROW_ID_COLUMN {
             continue;
         }
         let name = field.name();

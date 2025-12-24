@@ -44,6 +44,7 @@ message ExtendedPhysicalPlanNode {
     StreamSourceAdapterExecNode stream_source_adapter = 30;
     IcebergWriterExecNode iceberg_writer = 31;
     IcebergCommitExecNode iceberg_commit = 32;
+    MergeCardinalityCheckExecNode merge_cardinality_check = 33;
   }
 }
 
@@ -423,6 +424,13 @@ message StreamLimitExecNode {
 
 message StreamSourceAdapterExecNode {
   bytes input = 1;
+}
+
+message MergeCardinalityCheckExecNode {
+  bytes input = 1;
+  string target_row_id_col = 2;
+  string target_present_col = 3;
+  string source_present_col = 4;
 }
 
 message JoinOn {
