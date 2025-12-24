@@ -6,7 +6,7 @@ coverage:
     project:
       default:
         only_pulls: true
-        path:
+        paths:
           - "crates/**"
         target: 0
         informational: true
@@ -32,6 +32,10 @@ flags:
       - crates/
     carryforward: true
   spark-tests:
+    paths:
+      - crates/
+    carryforward: true
+  ibis-tests:
     paths:
       - crates/
     carryforward: true

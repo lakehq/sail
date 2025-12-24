@@ -137,6 +137,8 @@ jobs:
     name: Ibis Tests
     if: ${{ needs.setup.outputs.build_package == 'true' }}
     uses: ./.github/workflows/ibis-tests.yml
+    secrets:
+      CODECOV_TOKEN: ${{ secrets.CODECOV_TOKEN }}
     needs:
       - setup
       - build
