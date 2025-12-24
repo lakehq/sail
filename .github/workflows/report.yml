@@ -39,6 +39,14 @@ jobs:
           report_name: spark-4.1.0-test
 
       - uses: ./.github/actions/pull-request-report
+        if: github.event.workflow_run.name == 'Build'
+        continue-on-error: true
+        with:
+          workflow_run_id: ${{ github.event.workflow_run.id }}
+          artifact_name: ibis-test-report
+          report_name: ibis-test
+
+      - uses: ./.github/actions/pull-request-report
         if: github.event.workflow_run.name == 'Gold Data' && github.event.workflow_run.conclusion == 'success'
         with:
           workflow_run_id: ${{ github.event.workflow_run.id }}

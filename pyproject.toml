@@ -160,7 +160,6 @@ dependencies = [
     "pytest-xdist>=3.7,<4",
     "pytest-timeout>=2.4,<3",
     "pytest-reportlog>=0.4,<0.5",
-    "syrupy>=5.0,<6",
 ]
 
 [[tool.hatch.envs.test-spark.matrix]]
