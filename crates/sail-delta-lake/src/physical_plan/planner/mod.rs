@@ -19,6 +19,7 @@ use sail_common_datafusion::datasource::{MergeInfo, PhysicalSinkMode};
 
 pub mod context;
 pub mod utils;
+mod log_scan;
 
 mod op_delete;
 mod op_merge;

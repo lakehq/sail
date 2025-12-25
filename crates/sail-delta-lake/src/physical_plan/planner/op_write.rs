@@ -16,6 +16,7 @@ use datafusion::arrow::datatypes::SchemaRef;
 use datafusion::common::{DataFusionError, Result};
 use datafusion::physical_expr::expressions::NotExpr;
 use datafusion::physical_expr::{LexRequirement, PhysicalExpr};
+use datafusion::physical_expr_adapter::PhysicalExprAdapterFactory;
 use datafusion::physical_plan::filter::FilterExec;
 use datafusion::physical_plan::union::UnionExec;
 use datafusion::physical_plan::ExecutionPlan;
@@ -23,11 +24,13 @@ use sail_common_datafusion::datasource::PhysicalSinkMode;
 use sail_common_datafusion::physical_expr::PhysicalExprWithSource;
 
 use super::context::PlannerContext;
+use super::log_scan::build_delta_log_datasource_union;
 use super::utils::{align_schemas_for_union, build_standard_write_layers};
 use crate::datasource::schema::DataFusionMixins;
+use crate::datasource::PredicateProperties;
 use crate::physical_plan::{
     create_projection, create_repartition, create_sort, DeltaCommitExec, DeltaFindFilesExec,
-    DeltaRemoveActionsExec, DeltaScanByAddsExec, DeltaWriterExec,
+    DeltaLogScanExec, DeltaRemoveActionsExec, DeltaScanByAddsExec, DeltaWriterExec,
 };
 
 pub async fn build_write_plan(
@@ -70,6 +73,7 @@ async fn build_overwrite_if_plan(
         .snapshot()
         .arrow_schema()
         .map_err(|e| DataFusionError::External(Box::new(e)))?;
+    let partition_columns = snapshot_state.metadata().partition_columns().clone();
 
     let old_data_plan =
         build_old_data_plan(ctx, condition.expr.clone(), version, table_schema.clone()).await?;
@@ -95,11 +99,54 @@ async fn build_overwrite_if_plan(
         None,
     ));
 
-    let find_files_plan: Arc<dyn ExecutionPlan> = Arc::new(DeltaFindFilesExec::new(
+    let mut expr_props = PredicateProperties::new(partition_columns.clone());
+    expr_props
+        .analyze_predicate(&condition.expr)
+        .map_err(|e| DataFusionError::External(Box::new(e)))?;
+
+    let kernel_snapshot = snapshot_state.snapshot().snapshot().inner.clone();
+    let log_segment = kernel_snapshot.log_segment();
+    let checkpoint_files = log_segment
+        .checkpoint_parts
+        .iter()
+        .map(|p| p.filename.clone())
+        .collect::<Vec<_>>();
+    let commit_files = log_segment
+        .ascending_commit_files
+        .iter()
+        .map(|p| p.filename.clone())
+        .collect::<Vec<_>>();
+
+    let (raw_scan, checkpoint_files, commit_files) =
+        build_delta_log_datasource_union(ctx, checkpoint_files, commit_files).await?;
+    let meta_scan: Arc<dyn ExecutionPlan> = Arc::new(DeltaLogScanExec::new(
+        raw_scan,
+        ctx.table_url().clone(),
+        version,
+        partition_columns.clone(),
+        checkpoint_files,
+        commit_files,
+    ));
+
+    let meta_scan: Arc<dyn ExecutionPlan> = if expr_props.partition_only {
+        let adapter_factory = Arc::new(crate::physical_plan::DeltaPhysicalExprAdapterFactory {});
+        let adapter = adapter_factory.create(table_schema.clone(), meta_scan.schema());
+        let adapted = adapter
+            .rewrite(condition.expr.clone())
+            .map_err(|e| DataFusionError::External(Box::new(e)))?;
+        Arc::new(FilterExec::try_new(adapted, meta_scan)?)
+    } else {
+        meta_scan
+    };
+
+    let find_files_plan: Arc<dyn ExecutionPlan> = Arc::new(DeltaFindFilesExec::with_input(
+        meta_scan,
         ctx.table_url().clone(),
         Some(condition.expr.clone()),
-        ctx.table_schema_for_cond(),
+        Some(table_schema.clone()),
         version,
+        partition_columns.clone(),
+        expr_props.partition_only,
     ));
     let remove_plan = Arc::new(DeltaRemoveActionsExec::new(find_files_plan));
 
@@ -121,11 +168,60 @@ async fn build_old_data_plan(
     version: i64,
     table_schema: SchemaRef,
 ) -> Result<Arc<dyn ExecutionPlan>> {
-    let find_files_exec: Arc<dyn ExecutionPlan> = Arc::new(DeltaFindFilesExec::new(
+    // For partition-only predicates, the scan-by-adds stage will be a no-op (partition_scan=true),
+    // so build the same log-derived metadata path as the main find-files plan.
+    let mut expr_props = PredicateProperties::new(ctx.partition_columns().to_vec());
+    expr_props
+        .analyze_predicate(&condition)
+        .map_err(|e| DataFusionError::External(Box::new(e)))?;
+
+    let table = ctx.open_table().await?;
+    let snapshot_state = table
+        .snapshot()
+        .map_err(|e| DataFusionError::External(Box::new(e)))?
+        .clone();
+    let kernel_snapshot = snapshot_state.snapshot().snapshot().inner.clone();
+    let log_segment = kernel_snapshot.log_segment();
+    let checkpoint_files = log_segment
+        .checkpoint_parts
+        .iter()
+        .map(|p| p.filename.clone())
+        .collect::<Vec<_>>();
+    let commit_files = log_segment
+        .ascending_commit_files
+        .iter()
+        .map(|p| p.filename.clone())
+        .collect::<Vec<_>>();
+
+    let (raw_scan, checkpoint_files, commit_files) =
+        build_delta_log_datasource_union(ctx, checkpoint_files, commit_files).await?;
+    let meta_scan: Arc<dyn ExecutionPlan> = Arc::new(DeltaLogScanExec::new(
+        raw_scan,
+        ctx.table_url().clone(),
+        version,
+        ctx.partition_columns().to_vec(),
+        checkpoint_files,
+        commit_files,
+    ));
+    let meta_scan: Arc<dyn ExecutionPlan> = if expr_props.partition_only {
+        let adapter_factory = Arc::new(crate::physical_plan::DeltaPhysicalExprAdapterFactory {});
+        let adapter = adapter_factory.create(table_schema.clone(), meta_scan.schema());
+        let adapted = adapter
+            .rewrite(condition.clone())
+            .map_err(|e| DataFusionError::External(Box::new(e)))?;
+        Arc::new(FilterExec::try_new(adapted, meta_scan)?)
+    } else {
+        meta_scan
+    };
+
+    let find_files_exec: Arc<dyn ExecutionPlan> = Arc::new(DeltaFindFilesExec::with_input(
+        meta_scan,
         ctx.table_url().clone(),
         Some(condition.clone()),
         Some(table_schema.clone()),
         version,
+        ctx.partition_columns().to_vec(),
+        expr_props.partition_only,
     ));
 
     let scan_exec = Arc::new(DeltaScanByAddsExec::new(

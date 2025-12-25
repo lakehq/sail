@@ -24,6 +24,7 @@ use std::fmt;
 use std::sync::Arc;
 
 use async_trait::async_trait;
+use datafusion::arrow::array::Array;
 use datafusion::arrow::datatypes::{DataType, Field, Schema, SchemaRef};
 use datafusion::arrow::record_batch::RecordBatch;
 use datafusion::datasource::memory::MemorySourceConfig;
@@ -64,6 +65,9 @@ pub struct DeltaFindFilesExec {
     predicate: Option<Arc<dyn PhysicalExpr>>,
     table_schema: Option<SchemaRef>, // Schema of the table for predicate evaluation
     version: i64,
+    input: Option<Arc<dyn ExecutionPlan>>,
+    input_partition_columns: Vec<String>,
+    input_partition_scan: bool,
     cache: PlanProperties,
 }
 
@@ -91,8 +95,49 @@ impl DeltaFindFilesExec {
             predicate,
             table_schema,
             version,
+            input: None,
+            input_partition_columns: vec![],
+            input_partition_scan: false,
             cache,
         }
+    }
+
+    /// Create a DeltaFindFilesExec that consumes an upstream metadata plan.
+    ///
+    /// The input is expected to yield a single partition stream of file rows with at least:
+    /// - `PATH_COLUMN` (Utf8, non-null)
+    /// - `size_bytes` (Int64) and `modification_time` (Int64) if present (used for metrics / Add fields)
+    /// - partition columns as named in `partition_columns` (nullable)
+    pub fn from_log_scan(
+        input: Arc<dyn ExecutionPlan>,
+        table_url: Url,
+        version: i64,
+        partition_columns: Vec<String>,
+        partition_scan: bool,
+    ) -> Self {
+        let mut this = Self::new(table_url, None, None, version);
+        this.input = Some(input);
+        this.input_partition_columns = partition_columns;
+        this.input_partition_scan = partition_scan;
+        this
+    }
+
+    /// Create a DeltaFindFilesExec that consumes an upstream metadata plan and can still apply
+    /// a data predicate (non-partition-only) correctly.
+    pub fn with_input(
+        input: Arc<dyn ExecutionPlan>,
+        table_url: Url,
+        predicate: Option<Arc<dyn PhysicalExpr>>,
+        table_schema: Option<SchemaRef>,
+        version: i64,
+        partition_columns: Vec<String>,
+        partition_scan: bool,
+    ) -> Self {
+        let mut this = Self::new(table_url, predicate, table_schema, version);
+        this.input = Some(input);
+        this.input_partition_columns = partition_columns;
+        this.input_partition_scan = partition_scan;
+        this
     }
 
     fn compute_properties(schema: SchemaRef) -> PlanProperties {
@@ -125,6 +170,10 @@ impl DeltaFindFilesExec {
     }
 
     async fn find_files(&self, context: Arc<TaskContext>) -> Result<(Vec<Add>, bool)> {
+        if let Some(input) = &self.input {
+            return self.find_files_from_input(Arc::clone(input), context).await;
+        }
+
         let object_store = get_object_store_from_context(&context, &self.table_url)?;
 
         let mut table =
@@ -155,6 +204,199 @@ impl DeltaFindFilesExec {
 
         Ok((find_result.candidates, find_result.partition_scan))
     }
+
+    async fn find_files_from_input(
+        &self,
+        input: Arc<dyn ExecutionPlan>,
+        context: Arc<TaskContext>,
+    ) -> Result<(Vec<Add>, bool)> {
+        let mut stream = input.execute(0, context.clone())?;
+        let mut adds: Vec<Add> = Vec::new();
+
+        let partition_scan = self.input_partition_scan;
+
+        while let Some(batch) = stream.try_next().await? {
+            if batch.num_rows() == 0 {
+                continue;
+            }
+
+            let path_arr = batch
+                .column_by_name(PATH_COLUMN)
+                .and_then(|c| {
+                    c.as_any()
+                        .downcast_ref::<datafusion::arrow::array::StringArray>()
+                })
+                .ok_or_else(|| {
+                    DataFusionError::Plan(format!(
+                        "DeltaFindFilesExec input must have Utf8 column '{PATH_COLUMN}'"
+                    ))
+                })?;
+
+            let size_arr = batch.column_by_name("size_bytes").and_then(|c| {
+                c.as_any()
+                    .downcast_ref::<datafusion::arrow::array::Int64Array>()
+            });
+            let mod_time_arr = batch.column_by_name("modification_time").and_then(|c| {
+                c.as_any()
+                    .downcast_ref::<datafusion::arrow::array::Int64Array>()
+            });
+
+            // Best-effort partition columns: store as strings.
+            let part_arrays: Vec<(String, Arc<dyn Array>)> = self
+                .input_partition_columns
+                .iter()
+                .filter_map(|name| {
+                    batch
+                        .column_by_name(name)
+                        .map(|a| (name.clone(), a.clone()))
+                })
+                .collect();
+
+            for row in 0..batch.num_rows() {
+                if path_arr.is_null(row) {
+                    return Err(DataFusionError::Plan(format!(
+                        "DeltaFindFilesExec input '{PATH_COLUMN}' cannot be null"
+                    )));
+                }
+                let path = path_arr.value(row);
+                let size = size_arr.map(|a| a.value(row)).unwrap_or_default();
+                let modification_time = mod_time_arr.map(|a| a.value(row)).unwrap_or_default();
+
+                let mut partition_values: HashMap<String, Option<String>> = HashMap::new();
+                for (name, arr) in &part_arrays {
+                    let v = if arr.is_null(row) {
+                        None
+                    } else {
+                        Some(
+                            datafusion_common::scalar::ScalarValue::try_from_array(
+                                arr.as_ref(),
+                                row,
+                            )?
+                            .to_string(),
+                        )
+                    };
+                    partition_values.insert(name.clone(), v);
+                }
+
+                adds.push(Add {
+                    path: path.to_string(),
+                    partition_values,
+                    size,
+                    modification_time,
+                    data_change: true,
+                    stats: None,
+                    tags: None,
+                    deletion_vector: None,
+                    base_row_id: None,
+                    default_row_commit_version: None,
+                    clustering_provider: None,
+                });
+            }
+        }
+
+        // If this exec has a non-partition predicate, we still need to scan data files to identify
+        // matching candidates. Reuse the existing scan path but supply add actions from the input.
+        if let Some(pred) = &self.predicate {
+            if !partition_scan {
+                let object_store = get_object_store_from_context(&context, &self.table_url)?;
+
+                let mut table = open_table_with_object_store(
+                    self.table_url.clone(),
+                    object_store,
+                    StorageConfig,
+                )
+                .await
+                .map_err(|e| DataFusionError::External(Box::new(e)))?;
+                table
+                    .load_version(self.version)
+                    .await
+                    .map_err(|e| DataFusionError::External(Box::new(e)))?;
+
+                let snapshot = table
+                    .snapshot()
+                    .map_err(|e| DataFusionError::External(Box::new(e)))?
+                    .clone();
+
+                let log_store = table.log_store();
+                let candidates = find_files_scan_physical_with_candidates(
+                    &snapshot,
+                    log_store,
+                    context,
+                    Arc::clone(pred),
+                    adds,
+                )
+                .await
+                .map_err(|e| DataFusionError::External(Box::new(e)))?;
+                return Ok((candidates, false));
+            }
+        }
+
+        Ok((adds, partition_scan))
+    }
+}
+
+async fn find_files_scan_physical_with_candidates(
+    snapshot: &DeltaTableState,
+    log_store: LogStoreRef,
+    ctx: Arc<TaskContext>,
+    physical_predicate: Arc<dyn PhysicalExpr>,
+    candidates: Vec<Add>,
+) -> DeltaResult<Vec<Add>> {
+    let candidate_map: HashMap<String, Add> = candidates
+        .into_iter()
+        .map(|add| (add.path.clone(), add))
+        .collect();
+
+    let scan_config = DeltaScanConfigBuilder::new()
+        .with_file_column(true)
+        .build(snapshot)?;
+
+    let logical_schema =
+        crate::datasource::df_logical_schema(snapshot, &scan_config.file_column_name, None)?;
+
+    let mut used_columns = Vec::new();
+    let referenced_columns = collect_physical_columns(&physical_predicate);
+    for (i, field) in logical_schema.fields().iter().enumerate() {
+        if referenced_columns.contains(field.name()) {
+            used_columns.push(i);
+        }
+    }
+    if let Some(file_column_name) = &scan_config.file_column_name {
+        if let Ok(idx) = logical_schema.index_of(file_column_name) {
+            if !used_columns.contains(&idx) {
+                used_columns.push(idx);
+            }
+        }
+    }
+    if used_columns.is_empty() {
+        for (i, _field) in logical_schema.fields().iter().enumerate() {
+            used_columns.push(i);
+        }
+    }
+
+    let table_provider = DeltaTableProvider::try_new(snapshot.clone(), log_store, scan_config)?;
+
+    // FIXME: avoid creating a new session state
+    let session_state = SessionStateBuilder::new()
+        .with_runtime_env(ctx.runtime_env().clone())
+        .with_config(ctx.session_config().clone())
+        .build();
+
+    let scan = table_provider
+        .scan(&session_state, Some(&used_columns), &[], Some(1))
+        .await?;
+
+    let limit: Arc<dyn ExecutionPlan> = scan;
+
+    let mut partitions = Vec::new();
+    for i in 0..limit.properties().output_partitioning().partition_count() {
+        let stream = limit.execute(i, ctx.clone())?;
+        let data = collect(stream).await?;
+        partitions.extend(data);
+    }
+
+    let map = candidate_map.into_iter().collect::<HashMap<String, Add>>();
+    join_batches_with_add_actions(partitions, map, PATH_COLUMN, true)
 }
 
 #[async_trait]
@@ -172,18 +414,32 @@ impl ExecutionPlan for DeltaFindFilesExec {
     }
 
     fn required_input_distribution(&self) -> Vec<Distribution> {
-        vec![]
+        if self.input.is_some() {
+            vec![Distribution::SinglePartition]
+        } else {
+            vec![]
+        }
     }
 
     fn children(&self) -> Vec<&Arc<dyn ExecutionPlan>> {
-        vec![]
+        self.input.as_ref().map(|c| vec![c]).unwrap_or_default()
     }
 
     fn with_new_children(
         self: Arc<Self>,
         _children: Vec<Arc<dyn ExecutionPlan>>,
     ) -> Result<Arc<dyn ExecutionPlan>> {
-        Ok(self)
+        if self.input.is_none() {
+            return Ok(self);
+        }
+        if _children.len() != 1 {
+            return internal_err!(
+                "DeltaFindFilesExec requires exactly one child when used as a unary node"
+            );
+        }
+        let mut cloned = (*self).clone();
+        cloned.input = Some(_children[0].clone());
+        Ok(Arc::new(cloned))
     }
 
     fn execute(
@@ -240,12 +496,16 @@ impl DisplayAs for DeltaFindFilesExec {
 
 impl Clone for DeltaFindFilesExec {
     fn clone(&self) -> Self {
-        Self::new(
+        let mut this = Self::new(
             self.table_url.clone(),
             self.predicate.clone(),
             self.table_schema.clone(),
             self.version,
-        )
+        );
+        this.input = self.input.clone();
+        this.input_partition_columns = self.input_partition_columns.clone();
+        this.input_partition_scan = self.input_partition_scan;
+        this
     }
 }
 
