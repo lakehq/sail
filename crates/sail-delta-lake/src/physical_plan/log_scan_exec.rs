@@ -109,6 +109,14 @@ impl DeltaLogScanExec {
         &self.partition_columns
     }
 
+    pub fn checkpoint_files(&self) -> &[String] {
+        &self.checkpoint_files
+    }
+
+    pub fn commit_files(&self) -> &[String] {
+        &self.commit_files
+    }
+
     fn output_schema(partition_columns: &[String]) -> SchemaRef {
         // Partition columns are typed by the kernel evaluator, so we mark them nullable here.
         let mut fields = vec![

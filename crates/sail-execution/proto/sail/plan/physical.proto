@@ -45,6 +45,7 @@ message ExtendedPhysicalPlanNode {
     IcebergWriterExecNode iceberg_writer = 31;
     IcebergCommitExecNode iceberg_commit = 32;
     MergeCardinalityCheckExecNode merge_cardinality_check = 33;
+    DeltaLogScanExecNode delta_log_scan = 34;
   }
 }
 
@@ -543,4 +544,13 @@ message IcebergWriterExecNode {
 message IcebergCommitExecNode {
   bytes input = 1;
   string table_url = 2;
+}
+
+message DeltaLogScanExecNode {
+  bytes input = 1;
+  string table_url = 2;
+  int64 version = 3;
+  repeated string partition_columns = 4;
+  repeated string checkpoint_files = 5;
+  repeated string commit_files = 6;
 }

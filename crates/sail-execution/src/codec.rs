@@ -67,8 +67,8 @@ use sail_data_source::formats::socket::{SocketSourceExec, TableSocketOptions};
 use sail_data_source::formats::text::source::TextSource;
 use sail_data_source::formats::text::writer::{TextSink, TextWriterOptions};
 use sail_delta_lake::physical_plan::{
-    DeltaCommitExec, DeltaFileLookupExec, DeltaFindFilesExec, DeltaRemoveActionsExec,
-    DeltaScanByAddsExec, DeltaWriterExec,
+    DeltaCommitExec, DeltaFileLookupExec, DeltaFindFilesExec, DeltaLogScanExec,
+    DeltaRemoveActionsExec, DeltaScanByAddsExec, DeltaWriterExec,
 };
 use sail_function::aggregate::kurtosis::KurtosisFunction;
 use sail_function::aggregate::max_min_by::{MaxByFunction, MinByFunction};
@@ -633,6 +633,26 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
                     input, table_url, version,
                 )))
             }
+            NodeKind::DeltaLogScan(gen::DeltaLogScanExecNode {
+                input,
+                table_url,
+                version,
+                partition_columns,
+                checkpoint_files,
+                commit_files,
+            }) => {
+                let input = self.try_decode_plan(&input, ctx)?;
+                let table_url = Url::parse(&table_url)
+                    .map_err(|e| plan_datafusion_err!("failed to parse table URL: {e}"))?;
+                Ok(Arc::new(DeltaLogScanExec::new(
+                    input,
+                    table_url,
+                    version,
+                    partition_columns,
+                    checkpoint_files,
+                    commit_files,
+                )))
+            }
             NodeKind::ConsoleSink(gen::ConsoleSinkExecNode { input }) => {
                 let input = self.try_decode_plan(&input, ctx)?;
                 Ok(Arc::new(ConsoleSinkExec::new(input)))
@@ -1109,6 +1129,18 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
                 input,
                 table_url: delta_file_lookup_exec.table_url().to_string(),
                 version: delta_file_lookup_exec.version(),
+            })
+        } else if let Some(delta_log_scan_exec) =
+            node.as_any().downcast_ref::<DeltaLogScanExec>()
+        {
+            let input = self.try_encode_plan(delta_log_scan_exec.children()[0].clone())?;
+            NodeKind::DeltaLogScan(gen::DeltaLogScanExecNode {
+                input,
+                table_url: delta_log_scan_exec.table_url().to_string(),
+                version: delta_log_scan_exec.version(),
+                partition_columns: delta_log_scan_exec.partition_columns().to_vec(),
+                checkpoint_files: delta_log_scan_exec.checkpoint_files().to_vec(),
+                commit_files: delta_log_scan_exec.commit_files().to_vec(),
             })
         } else if let Some(console_sink) = node.as_any().downcast_ref::<ConsoleSinkExec>() {
             let input = self.try_encode_plan(console_sink.input().clone())?;
