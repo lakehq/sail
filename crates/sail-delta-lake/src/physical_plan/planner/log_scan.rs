@@ -32,6 +32,19 @@ use crate::datasource::create_object_store_url;
 
 const DELTA_LOG_DIR: &str = "_delta_log";
 
+fn parse_log_version_prefix(filename: &str) -> Option<u64> {
+    // Delta log files are typically named with a 20-digit version prefix:
+    // - commits:     00000000000000000010.json
+    // - checkpoints: 00000000000000000010.checkpoint.parquet
+    //
+    // For multipart checkpoints, we still take the leading version prefix.
+    let prefix = filename.get(0..20)?;
+    if !prefix.as_bytes().iter().all(|b| b.is_ascii_digit()) {
+        return None;
+    }
+    prefix.parse::<u64>().ok()
+}
+
 fn log_file_path(table_root_path: &str, filename: &str) -> Path {
     // Object store paths are absolute for local filesystem stores in our setup (DataFusion uses
     // `ObjectStoreUrl::local_filesystem()`).
@@ -117,6 +130,25 @@ pub async fn build_delta_log_datasource_union(
     let object_store_url = create_object_store_url(&log_store.config().location)
         .map_err(|e| DataFusionError::External(Box::new(e)))?;
 
+    // Avoid double-counting actions that are already materialized into the checkpoint:
+    // only scan commit JSONs strictly newer than the latest checkpoint version.
+    let latest_checkpoint_version = checkpoint_files
+        .iter()
+        .filter_map(|f| parse_log_version_prefix(f))
+        .max();
+    let commit_files = if let Some(cp_ver) = latest_checkpoint_version {
+        commit_files
+            .into_iter()
+            .filter(|f| {
+                parse_log_version_prefix(f)
+                    .map(|v| v > cp_ver)
+                    .unwrap_or(true)
+            })
+            .collect::<Vec<_>>()
+    } else {
+        commit_files
+    };
+
     let table_root_path = log_store.config().location.path();
     let (checkpoint_metas, commit_metas) = tokio::try_join!(
         head_many(&store, table_root_path, &checkpoint_files),
@@ -146,8 +178,13 @@ pub async fn build_delta_log_datasource_union(
 
     let merged = match (parquet_schema, json_schema) {
         (Some(p), Some(j)) => {
-            let merged = Schema::try_merge(vec![p.as_ref().clone(), j.as_ref().clone()])?;
-            Arc::new(merged)
+            // The inferred JSON schema may disagree with the checkpoint parquet schema for
+            // map-like fields (e.g. `add.partitionValues`). Prefer a stable schema to avoid
+            // planning failures during EXPLAIN.
+            match Schema::try_merge(vec![p.as_ref().clone(), j.as_ref().clone()]) {
+                Ok(merged) => Arc::new(merged),
+                Err(_) => p,
+            }
         }
         (Some(p), None) => p,
         (None, Some(j)) => j,
