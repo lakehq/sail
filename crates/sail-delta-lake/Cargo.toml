@@ -48,6 +48,7 @@ log = { workspace = true }
 itertools = { workspace = true }
 percent-encoding = { workspace = true }
 regex = { workspace = true }
+serde_arrow = { workspace = true }
 
 [lints]
 workspace = true

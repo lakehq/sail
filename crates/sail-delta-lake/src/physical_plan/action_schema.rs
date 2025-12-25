@@ -11,21 +11,14 @@
 // limitations under the License.
 
 //! Arrow-native row-per-action schema for Delta DML.
-//!
-//! This replaces the previous "CommitInfo JSON in a single Utf8 column" dataflow between
-//! physical nodes. The schema is intentionally minimal but join-friendly (notably `path`).
-
 use std::collections::HashMap;
 use std::sync::Arc;
 
-use datafusion::arrow::array::{
-    Array, ArrayRef, BooleanArray, Int64Array, MapArray, StringArray, StructArray, UInt64Array,
-    UInt8Array,
-};
-use datafusion::arrow::buffer::OffsetBuffer;
+use datafusion::arrow::array::ArrayRef;
 use datafusion::arrow::datatypes::{DataType, Field, Schema, SchemaRef};
 use datafusion::arrow::record_batch::RecordBatch;
 use datafusion_common::{internal_err, DataFusionError, Result};
+use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
 use crate::kernel::models::{Action, Add, Metadata, Protocol, Remove};
@@ -105,211 +98,323 @@ fn empty_scalar_columns(num_rows: usize) -> Result<Vec<ArrayRef>> {
     Ok(cols)
 }
 
-fn build_partition_values_array(values: &[HashMap<String, Option<String>>]) -> Result<ArrayRef> {
-    let mut all_keys: Vec<String> = Vec::new();
-    let mut all_values: Vec<Option<String>> = Vec::new();
-    let mut offsets: Vec<i32> = Vec::with_capacity(values.len() + 1);
-    offsets.push(0);
-
-    for m in values {
-        let mut keys: Vec<&String> = m.keys().collect();
-        keys.sort_unstable();
-
-        for k in keys {
-            all_keys.push(k.clone());
-            all_values.push(m.get(k).cloned().unwrap_or(None));
-        }
-        let next = i32::try_from(all_keys.len()).map_err(|_| {
-            DataFusionError::Internal("partition_values map too large for i32 offsets".to_string())
-        })?;
-        offsets.push(next);
-    }
-
-    let DataType::Map(entries_field, sorted) = partition_values_type() else {
-        return internal_err!("partition_values_type must be Map");
-    };
-
-    let DataType::Struct(entry_struct_fields) = entries_field.data_type() else {
-        return internal_err!("partition_values entries must be a Struct");
-    };
-
-    // Build entries struct using the *schema-provided* fields so nullability matches exactly
-    // (Spark Connect is strict about MapArray entry field nullability).
-    let keys_arr = Arc::new(StringArray::from(all_keys)) as ArrayRef;
-    let values_arr = Arc::new(StringArray::from(all_values)) as ArrayRef;
-    let entries_struct = StructArray::try_new(
-        entry_struct_fields.clone(),
-        vec![keys_arr, values_arr],
-        None,
-    )
-    .map_err(|e| DataFusionError::ArrowError(Box::new(e), None))?;
-
-    let map = MapArray::try_new(
-        entries_field,
-        OffsetBuffer::new(offsets.into()),
-        entries_struct,
-        None,
-        sorted,
-    )
-    .map_err(|e| DataFusionError::ArrowError(Box::new(e), None))?;
-
-    Ok(Arc::new(map) as ArrayRef)
+pub fn encode_add_actions(adds: Vec<Add>) -> Result<RecordBatch> {
+    encode_add_actions_serde_arrow(adds)
 }
 
-pub fn encode_add_actions(adds: Vec<Add>) -> Result<RecordBatch> {
+fn encode_add_actions_serde_arrow(adds: Vec<Add>) -> Result<RecordBatch> {
+    use std::collections::BTreeMap;
+
+    use datafusion::arrow::datatypes::FieldRef;
+    use serde_arrow::schema::{SchemaLike, TracingOptions};
+
+    #[derive(Debug, Serialize, Deserialize)]
+    struct AddRow {
+        action_type: u8,
+        path: String,
+        partition_values: BTreeMap<String, Option<String>>,
+        size: i64,
+        modification_time: i64,
+        data_change: bool,
+        stats_json: Option<String>,
+    }
+
     if adds.is_empty() {
         return Ok(RecordBatch::new_empty(delta_action_schema()));
     }
 
-    let num_rows = adds.len();
+    // Ensure schema matches `delta_action_schema`:
+    // - strings are Utf8 (not LargeUtf8)
+    // - maps are MapArray (not Struct)
+    // - partition_values entry fields are named "keys"/"values" (Spark Connect + our decoder expect this)
+    let options = TracingOptions::default()
+        .map_as_struct(false)
+        .strings_as_large_utf8(false)
+        .sequence_as_large_list(false)
+        .overwrite(
+            "partition_values",
+            Field::new(COL_PARTITION_VALUES, partition_values_type(), true),
+        )
+        .map_err(|e| DataFusionError::External(Box::new(e)))?;
+
+    let rows: Vec<AddRow> = adds
+        .into_iter()
+        .map(|a| AddRow {
+            action_type: ACTION_TYPE_ADD,
+            path: a.path,
+            partition_values: a.partition_values.into_iter().collect(),
+            size: a.size,
+            modification_time: a.modification_time,
+            data_change: a.data_change,
+            stats_json: a.stats,
+        })
+        .collect();
+
+    let fields = Vec::<FieldRef>::from_type::<AddRow>(options)
+        .map_err(|e| DataFusionError::External(Box::new(e)))?;
+    let narrow_batch = serde_arrow::to_record_batch(&fields, &rows)
+        .map_err(|e| DataFusionError::External(Box::new(e)))?;
+
+    let num_rows = narrow_batch.num_rows();
     let mut cols = empty_scalar_columns(num_rows)?;
 
-    let action_type = UInt8Array::from(vec![ACTION_TYPE_ADD; num_rows]);
-    let path = StringArray::from(
-        adds.iter()
-            .map(|a| Some(a.path.as_str()))
-            .collect::<Vec<_>>(),
-    );
-    let partition_values_maps: Vec<HashMap<String, Option<String>>> =
-        adds.iter().map(|a| a.partition_values.clone()).collect();
-    let partition_values = build_partition_values_array(&partition_values_maps)?;
-    let size = Int64Array::from(adds.iter().map(|a| Some(a.size)).collect::<Vec<_>>());
-    let modification_time = Int64Array::from(
-        adds.iter()
-            .map(|a| Some(a.modification_time))
-            .collect::<Vec<_>>(),
-    );
-    let data_change =
-        BooleanArray::from(adds.iter().map(|a| Some(a.data_change)).collect::<Vec<_>>());
-    let stats_json = StringArray::from(adds.iter().map(|a| a.stats.as_deref()).collect::<Vec<_>>());
-
-    set_col(&mut cols, COL_ACTION_TYPE, Arc::new(action_type));
-    set_col(&mut cols, COL_PATH, Arc::new(path));
-    set_col(&mut cols, COL_PARTITION_VALUES, partition_values);
-    set_col(&mut cols, COL_SIZE, Arc::new(size));
-    set_col(
-        &mut cols,
-        COL_MODIFICATION_TIME,
-        Arc::new(modification_time),
-    );
-    set_col(&mut cols, COL_DATA_CHANGE, Arc::new(data_change));
-    set_col(&mut cols, COL_STATS_JSON, Arc::new(stats_json));
+    for (name, col_name) in [
+        ("action_type", COL_ACTION_TYPE),
+        ("path", COL_PATH),
+        ("partition_values", COL_PARTITION_VALUES),
+        ("size", COL_SIZE),
+        ("modification_time", COL_MODIFICATION_TIME),
+        ("data_change", COL_DATA_CHANGE),
+        ("stats_json", COL_STATS_JSON),
+    ] {
+        let arr = narrow_batch
+            .column_by_name(name)
+            .ok_or_else(|| {
+                DataFusionError::Internal(format!(
+                    "serde_arrow AddRow batch missing expected column '{name}'"
+                ))
+            })?
+            .clone();
+        set_col(&mut cols, col_name, arr);
+    }
 
     RecordBatch::try_new(delta_action_schema(), cols)
         .map_err(|e| DataFusionError::ArrowError(Box::new(e), None))
 }
 
 pub fn encode_remove_actions(removes: Vec<Remove>) -> Result<RecordBatch> {
+    encode_remove_actions_serde_arrow(removes)
+}
+
+fn encode_remove_actions_serde_arrow(removes: Vec<Remove>) -> Result<RecordBatch> {
+    use std::collections::BTreeMap;
+
+    use datafusion::arrow::datatypes::FieldRef;
+    use serde_arrow::schema::{SchemaLike, TracingOptions};
+
+    #[derive(Debug, Serialize, Deserialize)]
+    struct RemoveRow {
+        action_type: u8,
+        path: String,
+        // NOTE: Match existing semantics: `partition_values = None` is encoded as an empty map, not NULL.
+        partition_values: BTreeMap<String, Option<String>>,
+        size: Option<i64>,
+        deletion_timestamp: Option<i64>,
+        extended_file_metadata: Option<bool>,
+        data_change: bool,
+    }
+
     if removes.is_empty() {
         return Ok(RecordBatch::new_empty(delta_action_schema()));
     }
 
-    let num_rows = removes.len();
+    let options = TracingOptions::default()
+        .map_as_struct(false)
+        .strings_as_large_utf8(false)
+        .sequence_as_large_list(false)
+        .overwrite(
+            "partition_values",
+            Field::new(COL_PARTITION_VALUES, partition_values_type(), true),
+        )
+        .map_err(|e| DataFusionError::External(Box::new(e)))?;
+
+    let rows: Vec<RemoveRow> = removes
+        .into_iter()
+        .map(|r| RemoveRow {
+            action_type: ACTION_TYPE_REMOVE,
+            path: r.path,
+            partition_values: r.partition_values.unwrap_or_default().into_iter().collect(),
+            size: r.size,
+            deletion_timestamp: r.deletion_timestamp,
+            extended_file_metadata: r.extended_file_metadata,
+            data_change: r.data_change,
+        })
+        .collect();
+
+    let fields = Vec::<FieldRef>::from_type::<RemoveRow>(options)
+        .map_err(|e| DataFusionError::External(Box::new(e)))?;
+    let narrow_batch = serde_arrow::to_record_batch(&fields, &rows)
+        .map_err(|e| DataFusionError::External(Box::new(e)))?;
+
+    let num_rows = narrow_batch.num_rows();
     let mut cols = empty_scalar_columns(num_rows)?;
 
-    let action_type = UInt8Array::from(vec![ACTION_TYPE_REMOVE; num_rows]);
-    let path = StringArray::from(
-        removes
-            .iter()
-            .map(|r| Some(r.path.as_str()))
-            .collect::<Vec<_>>(),
-    );
-    let partition_values_maps: Vec<HashMap<String, Option<String>>> = removes
-        .iter()
-        .map(|r| r.partition_values.clone().unwrap_or_default())
-        .collect();
-    let partition_values = build_partition_values_array(&partition_values_maps)?;
-    let size = Int64Array::from(removes.iter().map(|r| r.size).collect::<Vec<Option<i64>>>());
-    let deletion_timestamp = Int64Array::from(
-        removes
-            .iter()
-            .map(|r| r.deletion_timestamp)
-            .collect::<Vec<Option<i64>>>(),
-    );
-    let extended_file_metadata = BooleanArray::from(
-        removes
-            .iter()
-            .map(|r| r.extended_file_metadata)
-            .collect::<Vec<Option<bool>>>(),
-    );
-    let data_change = BooleanArray::from(
-        removes
-            .iter()
-            .map(|r| Some(r.data_change))
-            .collect::<Vec<_>>(),
-    );
-
-    set_col(&mut cols, COL_ACTION_TYPE, Arc::new(action_type));
-    set_col(&mut cols, COL_PATH, Arc::new(path));
-    set_col(&mut cols, COL_PARTITION_VALUES, partition_values);
-    set_col(&mut cols, COL_SIZE, Arc::new(size));
-    set_col(
-        &mut cols,
-        COL_DELETION_TIMESTAMP,
-        Arc::new(deletion_timestamp),
-    );
-    set_col(
-        &mut cols,
-        COL_EXTENDED_FILE_METADATA,
-        Arc::new(extended_file_metadata),
-    );
-    set_col(&mut cols, COL_DATA_CHANGE, Arc::new(data_change));
+    for (name, col_name) in [
+        ("action_type", COL_ACTION_TYPE),
+        ("path", COL_PATH),
+        ("partition_values", COL_PARTITION_VALUES),
+        ("size", COL_SIZE),
+        ("deletion_timestamp", COL_DELETION_TIMESTAMP),
+        ("extended_file_metadata", COL_EXTENDED_FILE_METADATA),
+        ("data_change", COL_DATA_CHANGE),
+    ] {
+        let arr = narrow_batch
+            .column_by_name(name)
+            .ok_or_else(|| {
+                DataFusionError::Internal(format!(
+                    "serde_arrow RemoveRow batch missing expected column '{name}'"
+                ))
+            })?
+            .clone();
+        set_col(&mut cols, col_name, arr);
+    }
 
     RecordBatch::try_new(delta_action_schema(), cols)
         .map_err(|e| DataFusionError::ArrowError(Box::new(e), None))
 }
 
 pub fn encode_protocol_action(protocol: Protocol) -> Result<RecordBatch> {
-    let mut cols = empty_scalar_columns(1)?;
-    let action_type = UInt8Array::from(vec![ACTION_TYPE_PROTOCOL]);
+    use datafusion::arrow::datatypes::FieldRef;
+    use serde_arrow::schema::{SchemaLike, TracingOptions};
+
+    #[derive(Debug, Serialize, Deserialize)]
+    struct ProtocolRow {
+        action_type: u8,
+        protocol_json: String,
+    }
+
     let protocol_json =
         serde_json::to_string(&protocol).map_err(|e| DataFusionError::External(Box::new(e)))?;
-    let protocol_json = StringArray::from(vec![Some(protocol_json.as_str())]);
 
-    set_col(&mut cols, COL_ACTION_TYPE, Arc::new(action_type));
-    set_col(&mut cols, COL_PROTOCOL_JSON, Arc::new(protocol_json));
+    let rows = vec![ProtocolRow {
+        action_type: ACTION_TYPE_PROTOCOL,
+        protocol_json,
+    }];
+
+    let options = TracingOptions::default()
+        .map_as_struct(false)
+        .strings_as_large_utf8(false)
+        .sequence_as_large_list(false);
+
+    let fields = Vec::<FieldRef>::from_type::<ProtocolRow>(options)
+        .map_err(|e| DataFusionError::External(Box::new(e)))?;
+    let narrow_batch = serde_arrow::to_record_batch(&fields, &rows)
+        .map_err(|e| DataFusionError::External(Box::new(e)))?;
+
+    let mut cols = empty_scalar_columns(1)?;
+    for (name, col_name) in [
+        ("action_type", COL_ACTION_TYPE),
+        ("protocol_json", COL_PROTOCOL_JSON),
+    ] {
+        let arr = narrow_batch
+            .column_by_name(name)
+            .ok_or_else(|| {
+                DataFusionError::Internal(format!(
+                    "serde_arrow ProtocolRow batch missing expected column '{name}'"
+                ))
+            })?
+            .clone();
+        set_col(&mut cols, col_name, arr);
+    }
 
     RecordBatch::try_new(delta_action_schema(), cols)
         .map_err(|e| DataFusionError::ArrowError(Box::new(e), None))
 }
 
 pub fn encode_metadata_action(metadata: Metadata) -> Result<RecordBatch> {
-    let mut cols = empty_scalar_columns(1)?;
-    let action_type = UInt8Array::from(vec![ACTION_TYPE_METADATA]);
+    use datafusion::arrow::datatypes::FieldRef;
+    use serde_arrow::schema::{SchemaLike, TracingOptions};
+
+    #[derive(Debug, Serialize, Deserialize)]
+    struct MetadataRow {
+        action_type: u8,
+        metadata_json: String,
+    }
+
     let metadata_json =
         serde_json::to_string(&metadata).map_err(|e| DataFusionError::External(Box::new(e)))?;
-    let metadata_json = StringArray::from(vec![Some(metadata_json.as_str())]);
 
-    set_col(&mut cols, COL_ACTION_TYPE, Arc::new(action_type));
-    set_col(&mut cols, COL_METADATA_JSON, Arc::new(metadata_json));
+    let rows = vec![MetadataRow {
+        action_type: ACTION_TYPE_METADATA,
+        metadata_json,
+    }];
+
+    let options = TracingOptions::default()
+        .map_as_struct(false)
+        .strings_as_large_utf8(false)
+        .sequence_as_large_list(false);
+
+    let fields = Vec::<FieldRef>::from_type::<MetadataRow>(options)
+        .map_err(|e| DataFusionError::External(Box::new(e)))?;
+    let narrow_batch = serde_arrow::to_record_batch(&fields, &rows)
+        .map_err(|e| DataFusionError::External(Box::new(e)))?;
+
+    let mut cols = empty_scalar_columns(1)?;
+    for (name, col_name) in [
+        ("action_type", COL_ACTION_TYPE),
+        ("metadata_json", COL_METADATA_JSON),
+    ] {
+        let arr = narrow_batch
+            .column_by_name(name)
+            .ok_or_else(|| {
+                DataFusionError::Internal(format!(
+                    "serde_arrow MetadataRow batch missing expected column '{name}'"
+                ))
+            })?
+            .clone();
+        set_col(&mut cols, col_name, arr);
+    }
 
     RecordBatch::try_new(delta_action_schema(), cols)
         .map_err(|e| DataFusionError::ArrowError(Box::new(e), None))
 }
 
 pub fn encode_commit_meta(meta: CommitMeta) -> Result<RecordBatch> {
-    let mut cols = empty_scalar_columns(1)?;
-    let action_type = UInt8Array::from(vec![ACTION_TYPE_COMMIT_META]);
-    let row_count = UInt64Array::from(vec![Some(meta.row_count)]);
+    use datafusion::arrow::datatypes::FieldRef;
+    use serde_arrow::schema::{SchemaLike, TracingOptions};
+
+    #[derive(Debug, Serialize, Deserialize)]
+    struct CommitMetaRow {
+        action_type: u8,
+        commit_row_count: u64,
+        operation_json: Option<String>,
+        operation_metrics_json: String,
+    }
+
     let operation_json = meta
         .operation
         .as_ref()
         .map(serde_json::to_string)
         .transpose()
         .map_err(|e| DataFusionError::External(Box::new(e)))?;
-    let operation_json = StringArray::from(vec![operation_json.as_deref()]);
-    let metrics_json = serde_json::to_string(&meta.operation_metrics)
-        .map_err(|e| DataFusionError::External(Box::new(e)))?;
-    let metrics_json = StringArray::from(vec![Some(metrics_json.as_str())]);
 
-    set_col(&mut cols, COL_ACTION_TYPE, Arc::new(action_type));
-    set_col(&mut cols, COL_COMMIT_ROW_COUNT, Arc::new(row_count));
-    set_col(&mut cols, COL_OPERATION_JSON, Arc::new(operation_json));
-    set_col(
-        &mut cols,
-        COL_OPERATION_METRICS_JSON,
-        Arc::new(metrics_json),
-    );
+    let operation_metrics_json = serde_json::to_string(&meta.operation_metrics)
+        .map_err(|e| DataFusionError::External(Box::new(e)))?;
+
+    let rows = vec![CommitMetaRow {
+        action_type: ACTION_TYPE_COMMIT_META,
+        commit_row_count: meta.row_count,
+        operation_json,
+        operation_metrics_json,
+    }];
+
+    let options = TracingOptions::default()
+        .map_as_struct(false)
+        .strings_as_large_utf8(false)
+        .sequence_as_large_list(false);
+
+    let fields = Vec::<FieldRef>::from_type::<CommitMetaRow>(options)
+        .map_err(|e| DataFusionError::External(Box::new(e)))?;
+    let narrow_batch = serde_arrow::to_record_batch(&fields, &rows)
+        .map_err(|e| DataFusionError::External(Box::new(e)))?;
+
+    let mut cols = empty_scalar_columns(1)?;
+    for (name, col_name) in [
+        ("action_type", COL_ACTION_TYPE),
+        ("commit_row_count", COL_COMMIT_ROW_COUNT),
+        ("operation_json", COL_OPERATION_JSON),
+        ("operation_metrics_json", COL_OPERATION_METRICS_JSON),
+    ] {
+        let arr = narrow_batch
+            .column_by_name(name)
+            .ok_or_else(|| {
+                DataFusionError::Internal(format!(
+                    "serde_arrow CommitMetaRow batch missing expected column '{name}'"
+                ))
+            })?
+            .clone();
+        set_col(&mut cols, col_name, arr);
+    }
 
     RecordBatch::try_new(delta_action_schema(), cols)
         .map_err(|e| DataFusionError::ArrowError(Box::new(e), None))
@@ -329,55 +434,50 @@ pub fn decode_adds_from_batch(batch: &RecordBatch) -> Result<Vec<Add>> {
 pub fn decode_actions_and_meta_from_batch(
     batch: &RecordBatch,
 ) -> Result<(Vec<Action>, Option<CommitMeta>)> {
-    let action_type = col_as::<UInt8Array>(batch, COL_ACTION_TYPE)?;
-    let path = col_as_opt::<StringArray>(batch, COL_PATH)?;
-    let partition_values = col_as_opt::<MapArray>(batch, COL_PARTITION_VALUES)?;
-    let size = col_as_opt::<Int64Array>(batch, COL_SIZE)?;
-    let modification_time = col_as_opt::<Int64Array>(batch, COL_MODIFICATION_TIME)?;
-    let data_change = col_as_opt::<BooleanArray>(batch, COL_DATA_CHANGE)?;
-    let stats_json = col_as_opt::<StringArray>(batch, COL_STATS_JSON)?;
-    let deletion_timestamp = col_as_opt::<Int64Array>(batch, COL_DELETION_TIMESTAMP)?;
-    let extended_file_metadata = col_as_opt::<BooleanArray>(batch, COL_EXTENDED_FILE_METADATA)?;
-    let protocol_json = col_as_opt::<StringArray>(batch, COL_PROTOCOL_JSON)?;
-    let metadata_json = col_as_opt::<StringArray>(batch, COL_METADATA_JSON)?;
-    let commit_row_count = col_as_opt::<UInt64Array>(batch, COL_COMMIT_ROW_COUNT)?;
-    let operation_json = col_as_opt::<StringArray>(batch, COL_OPERATION_JSON)?;
-    let operation_metrics_json = col_as_opt::<StringArray>(batch, COL_OPERATION_METRICS_JSON)?;
+    #[derive(Debug, Deserialize)]
+    struct ActionRow {
+        action_type: u8,
+        path: Option<String>,
+        partition_values: Option<HashMap<String, Option<String>>>,
+        size: Option<i64>,
+        modification_time: Option<i64>,
+        data_change: Option<bool>,
+        stats_json: Option<String>,
+        deletion_timestamp: Option<i64>,
+        extended_file_metadata: Option<bool>,
+        protocol_json: Option<String>,
+        metadata_json: Option<String>,
+        commit_row_count: Option<u64>,
+        operation_json: Option<String>,
+        operation_metrics_json: Option<String>,
+    }
 
     let mut out_actions: Vec<Action> = Vec::new();
     let mut out_meta: Option<CommitMeta> = None;
 
-    for row in 0..batch.num_rows() {
-        let t = action_type.value(row);
+    let rows: Vec<ActionRow> = serde_arrow::from_record_batch(batch)
+        .map_err(|e| DataFusionError::External(Box::new(e)))?;
+
+    for row in rows {
+        let t = row.action_type;
         match t {
             ACTION_TYPE_ADD => {
-                let Some(path) = path.and_then(|a| a.iter().nth(row).flatten()) else {
+                let Some(path) = row.path else {
                     return internal_err!("Add action row missing path");
                 };
-                let pv = partition_values
-                    .map(|m| decode_string_map_row(m, row))
-                    .transpose()?
-                    .unwrap_or_default();
-                let sz = size
-                    .and_then(|a| a.is_valid(row).then(|| a.value(row)))
-                    .ok_or_else(|| {
-                        DataFusionError::Internal("Add action row missing size".to_string())
-                    })?;
-                let mt = modification_time
-                    .and_then(|a| a.is_valid(row).then(|| a.value(row)))
-                    .ok_or_else(|| {
-                        DataFusionError::Internal(
-                            "Add action row missing modification_time".to_string(),
-                        )
-                    })?;
-                let dc = data_change
-                    .and_then(|a| a.is_valid(row).then(|| a.value(row)))
-                    .unwrap_or(true);
-                let stats = stats_json
-                    .and_then(|a| a.iter().nth(row).flatten())
-                    .map(|s| s.to_string());
+                let pv = row.partition_values.unwrap_or_default();
+                let sz = row.size.ok_or_else(|| {
+                    DataFusionError::Internal("Add action row missing size".to_string())
+                })?;
+                let mt = row.modification_time.ok_or_else(|| {
+                    DataFusionError::Internal(
+                        "Add action row missing modification_time".to_string(),
+                    )
+                })?;
+                let dc = row.data_change.unwrap_or(true);
+                let stats = row.stats_json;
                 out_actions.push(Action::Add(Add {
-                    path: path.to_string(),
+                    path,
                     partition_values: pv,
                     size: sz,
                     modification_time: mt,
@@ -391,22 +491,16 @@ pub fn decode_actions_and_meta_from_batch(
                 }));
             }
             ACTION_TYPE_REMOVE => {
-                let Some(path) = path.and_then(|a| a.iter().nth(row).flatten()) else {
+                let Some(path) = row.path else {
                     return internal_err!("Remove action row missing path");
                 };
-                let pv = partition_values
-                    .map(|m| decode_string_map_row(m, row))
-                    .transpose()?
-                    .unwrap_or_default();
-                let dc = data_change
-                    .and_then(|a| a.is_valid(row).then(|| a.value(row)))
-                    .unwrap_or(true);
-                let del_ts = deletion_timestamp.and_then(|a| a.is_valid(row).then(|| a.value(row)));
-                let ext =
-                    extended_file_metadata.and_then(|a| a.is_valid(row).then(|| a.value(row)));
-                let sz = size.and_then(|a| a.is_valid(row).then(|| a.value(row)));
+                let pv = row.partition_values.unwrap_or_default();
+                let dc = row.data_change.unwrap_or(true);
+                let del_ts = row.deletion_timestamp;
+                let ext = row.extended_file_metadata;
+                let sz = row.size;
                 out_actions.push(Action::Remove(Remove {
-                    path: path.to_string(),
+                    path,
                     data_change: dc,
                     deletion_timestamp: del_ts,
                     extended_file_metadata: ext,
@@ -419,33 +513,33 @@ pub fn decode_actions_and_meta_from_batch(
                 }));
             }
             ACTION_TYPE_PROTOCOL => {
-                let Some(s) = protocol_json.and_then(|a| a.iter().nth(row).flatten()) else {
+                let Some(s) = row.protocol_json else {
                     return internal_err!("Protocol action row missing protocol_json");
                 };
                 let p: Protocol =
-                    serde_json::from_str(s).map_err(|e| DataFusionError::External(Box::new(e)))?;
+                    serde_json::from_str(&s).map_err(|e| DataFusionError::External(Box::new(e)))?;
                 out_actions.push(Action::Protocol(p));
             }
             ACTION_TYPE_METADATA => {
-                let Some(s) = metadata_json.and_then(|a| a.iter().nth(row).flatten()) else {
+                let Some(s) = row.metadata_json else {
                     return internal_err!("Metadata action row missing metadata_json");
                 };
                 let m: Metadata =
-                    serde_json::from_str(s).map_err(|e| DataFusionError::External(Box::new(e)))?;
+                    serde_json::from_str(&s).map_err(|e| DataFusionError::External(Box::new(e)))?;
                 out_actions.push(Action::Metadata(m));
             }
             ACTION_TYPE_COMMIT_META => {
-                let row_count = commit_row_count
-                    .and_then(|a| a.is_valid(row).then(|| a.value(row)))
-                    .unwrap_or(0);
-                let operation: Option<DeltaOperation> = operation_json
-                    .and_then(|a| a.iter().nth(row).flatten())
-                    .map(|s| serde_json::from_str::<DeltaOperation>(s))
+                let row_count = row.commit_row_count.unwrap_or(0);
+                let operation: Option<DeltaOperation> = row
+                    .operation_json
+                    .as_deref()
+                    .map(serde_json::from_str::<DeltaOperation>)
                     .transpose()
                     .map_err(|e| DataFusionError::External(Box::new(e)))?;
-                let operation_metrics: HashMap<String, Value> = operation_metrics_json
-                    .and_then(|a| a.iter().nth(row).flatten())
-                    .map(|s| serde_json::from_str::<HashMap<String, Value>>(s))
+                let operation_metrics: HashMap<String, Value> = row
+                    .operation_metrics_json
+                    .as_deref()
+                    .map(serde_json::from_str::<HashMap<String, Value>>)
                     .transpose()
                     .map_err(|e| DataFusionError::External(Box::new(e)))?
                     .unwrap_or_default();
@@ -466,63 +560,177 @@ pub fn decode_actions_and_meta_from_batch(
     Ok((out_actions, out_meta))
 }
 
-fn decode_string_map_row(map: &MapArray, row: usize) -> Result<HashMap<String, Option<String>>> {
-    if map.is_null(row) {
-        return Ok(HashMap::new());
-    }
-    let entries = map.value(row);
-    let st = entries
-        .as_any()
-        .downcast_ref::<StructArray>()
-        .ok_or_else(|| DataFusionError::Internal("Map entry is not a StructArray".to_string()))?;
-
-    let keys = st
-        .column_by_name("keys")
-        .ok_or_else(|| DataFusionError::Internal("Map missing keys column".to_string()))?
-        .as_any()
-        .downcast_ref::<StringArray>()
-        .ok_or_else(|| DataFusionError::Internal("Map keys is not StringArray".to_string()))?;
-    let values = st
-        .column_by_name("values")
-        .ok_or_else(|| DataFusionError::Internal("Map missing values column".to_string()))?
-        .as_any()
-        .downcast_ref::<StringArray>()
-        .ok_or_else(|| DataFusionError::Internal("Map values is not StringArray".to_string()))?;
-
-    let mut out: HashMap<String, Option<String>> = HashMap::with_capacity(keys.len());
-    for i in 0..keys.len() {
-        let k = keys.value(i).to_string();
-        let v = if values.is_null(i) {
-            None
-        } else {
-            Some(values.value(i).to_string())
-        };
-        out.insert(k, v);
-    }
-    Ok(out)
-}
-
-fn col_as<'a, T: 'static>(batch: &'a RecordBatch, name: &str) -> Result<&'a T> {
-    let col = batch
-        .column_by_name(name)
-        .ok_or_else(|| DataFusionError::Internal(format!("Missing column '{name}'")))?;
-    col.as_any()
-        .downcast_ref::<T>()
-        .ok_or_else(|| DataFusionError::Internal(format!("Column '{name}' has unexpected type")))
-}
-
-fn col_as_opt<'a, T: 'static>(batch: &'a RecordBatch, name: &str) -> Result<Option<&'a T>> {
-    Ok(match batch.column_by_name(name) {
-        None => None,
-        Some(col) => Some(col.as_any().downcast_ref::<T>().ok_or_else(|| {
-            DataFusionError::Internal(format!("Column '{name}' has unexpected type"))
-        })?),
-    })
-}
-
 fn set_col(cols: &mut [ArrayRef], name: &str, value: ArrayRef) {
     let schema = delta_action_schema();
     #[allow(clippy::unwrap_used)]
     let idx = schema.index_of(name).unwrap();
     cols[idx] = value;
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use datafusion::arrow::array::Int64Array;
+    use datafusion::arrow::array::{Array, MapArray, StringArray, StructArray};
+    use datafusion::arrow::compute::concat_batches;
+    use datafusion::arrow::record_batch::RecordBatch;
+
+    #[test]
+    fn encode_add_actions_serde_arrow_matches_schema_and_map_entry_names() -> Result<()> {
+        let adds = vec![
+            Add {
+                path: "a.parquet".to_string(),
+                partition_values: HashMap::from([
+                    ("b".to_string(), Some("2".to_string())),
+                    ("a".to_string(), None),
+                ]),
+                size: 123,
+                modification_time: 456,
+                data_change: true,
+                stats: Some(r#"{"numRecords": 1}"#.to_string()),
+                tags: None,
+                deletion_vector: None,
+                base_row_id: None,
+                default_row_commit_version: None,
+                clustering_provider: None,
+            },
+            Add {
+                path: "b.parquet".to_string(),
+                partition_values: HashMap::new(),
+                size: 7,
+                modification_time: 8,
+                data_change: false,
+                stats: None,
+                tags: None,
+                deletion_vector: None,
+                base_row_id: None,
+                default_row_commit_version: None,
+                clustering_provider: None,
+            },
+        ];
+
+        let serde_rb = encode_add_actions_serde_arrow(adds)?;
+
+        // Schema contract must stay wide schema.
+        assert_eq!(serde_rb.schema(), delta_action_schema());
+        assert_eq!(serde_rb.num_rows(), 2);
+
+        // Verify map entry field names match our schema ("keys"/"values").
+        let pv = serde_rb
+            .column_by_name(COL_PARTITION_VALUES)
+            .unwrap()
+            .as_any()
+            .downcast_ref::<MapArray>()
+            .unwrap();
+        let entries = pv.value(0);
+        let st = entries.as_any().downcast_ref::<StructArray>().unwrap();
+        assert!(st.column_by_name("keys").is_some());
+        assert!(st.column_by_name("values").is_some());
+
+        // Spot-check core columns.
+        let path_s = serde_rb
+            .column_by_name(COL_PATH)
+            .unwrap()
+            .as_any()
+            .downcast_ref::<StringArray>()
+            .unwrap();
+        assert_eq!(path_s.value(0), "a.parquet");
+        assert_eq!(path_s.value(1), "b.parquet");
+        let size_s = serde_rb
+            .column_by_name(COL_SIZE)
+            .unwrap()
+            .as_any()
+            .downcast_ref::<Int64Array>()
+            .unwrap();
+        assert_eq!(size_s.value(0), 123);
+        assert_eq!(size_s.value(1), 7);
+
+        Ok(())
+    }
+
+    #[test]
+    fn encode_remove_actions_serde_arrow_partition_values_none_is_empty_map_not_null() -> Result<()>
+    {
+        let removes = vec![Remove {
+            path: "x.parquet".to_string(),
+            data_change: true,
+            deletion_timestamp: Some(1),
+            extended_file_metadata: Some(true),
+            partition_values: None,
+            size: Some(10),
+            tags: None,
+            deletion_vector: None,
+            base_row_id: None,
+            default_row_commit_version: None,
+        }];
+
+        let rb = encode_remove_actions(removes)?;
+        assert_eq!(rb.schema(), delta_action_schema());
+        assert_eq!(rb.num_rows(), 1);
+
+        let pv = rb
+            .column_by_name(COL_PARTITION_VALUES)
+            .unwrap()
+            .as_any()
+            .downcast_ref::<MapArray>()
+            .unwrap();
+        assert!(!pv.is_null(0), "partition_values should not be NULL");
+        let entries = pv.value(0);
+        assert_eq!(entries.len(), 0, "partition_values should be an empty map");
+        Ok(())
+    }
+
+    #[test]
+    fn decode_actions_and_meta_serde_arrow_mixed_batch() -> Result<()> {
+        let adds = vec![Add {
+            path: "a.parquet".to_string(),
+            partition_values: HashMap::from([("p".to_string(), Some("1".to_string()))]),
+            size: 1,
+            modification_time: 2,
+            data_change: true,
+            stats: None,
+            tags: None,
+            deletion_vector: None,
+            base_row_id: None,
+            default_row_commit_version: None,
+            clustering_provider: None,
+        }];
+        let removes = vec![Remove {
+            path: "a.parquet".to_string(),
+            data_change: true,
+            deletion_timestamp: Some(3),
+            extended_file_metadata: Some(true),
+            partition_values: None,
+            size: Some(1),
+            tags: None,
+            deletion_vector: None,
+            base_row_id: None,
+            default_row_commit_version: None,
+        }];
+        let meta = CommitMeta {
+            row_count: 10,
+            operation: None,
+            operation_metrics: HashMap::new(),
+        };
+
+        let schema = delta_action_schema();
+        let out_batches: Vec<RecordBatch> = vec![
+            encode_add_actions(adds)?,
+            encode_remove_actions(removes)?,
+            encode_commit_meta(meta.clone())?,
+        ];
+        let batch = concat_batches(&schema, &out_batches)
+            .map_err(|e| DataFusionError::ArrowError(Box::new(e), None))?;
+
+        let (actions, decoded_meta) = decode_actions_and_meta_from_batch(&batch)?;
+        assert_eq!(actions.len(), 2);
+        assert!(matches!(actions[0], Action::Add(_)));
+        assert!(matches!(actions[1], Action::Remove(_)));
+
+        let decoded_meta = decoded_meta.ok_or_else(|| {
+            DataFusionError::Internal("expected CommitMeta to be present".to_string())
+        })?;
+        assert_eq!(decoded_meta.row_count, 10);
+        Ok(())
+    }
 }
