@@ -252,6 +252,9 @@ impl PlanResolver<'_> {
                 })?;
                 file_write_options.format = info.format;
                 file_write_options.options.insert(0, info.options);
+                if !info.properties.is_empty() {
+                    file_write_options.options.insert(0, info.properties);
+                }
             }
             WriteTarget::NewTable { table, action } => {
                 let info = self.resolve_table_info(&table).await?;
@@ -280,6 +283,11 @@ impl PlanResolver<'_> {
                     file_write_options.path = path.to_string();
                 } else {
                     file_write_options.path = self.resolve_default_table_location(&table)?;
+                }
+                if !table_properties.is_empty() {
+                    file_write_options
+                        .options
+                        .insert(0, table_properties.clone());
                 }
                 let (if_not_exists, replace) = match action {
                     WriteTableAction::Create => (false, false),
@@ -420,7 +428,7 @@ impl PlanResolver<'_> {
                 sort_by,
                 bucket_by,
                 options,
-                properties: _,
+                properties,
             } => Ok(Some(TableInfo {
                 columns,
                 location,
@@ -429,6 +437,7 @@ impl PlanResolver<'_> {
                 sort_by,
                 bucket_by,
                 options,
+                properties,
             })),
             _ => Ok(None),
         }
@@ -544,6 +553,7 @@ struct TableInfo {
     sort_by: Vec<CatalogTableSort>,
     bucket_by: Option<CatalogTableBucketBy>,
     options: Vec<(String, String)>,
+    properties: Vec<(String, String)>,
 }
 
 impl TableInfo {

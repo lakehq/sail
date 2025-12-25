@@ -48,6 +48,13 @@ Feature: Delta Lake Merge
           INSERT *
         """
       Then delta log latest commit info matches snapshot
+      Then delta log latest commit info contains
+        | path                                               | value                  |
+        | operation                                          | "MERGE"                |
+        | operationParameters.mergePredicate                 | "t . id = s . id " |
+        | operationParameters.matchedPredicates[0].actionType | "update"               |
+        | operationParameters.matchedPredicates[1].actionType | "delete"               |
+        | operationParameters.notMatchedPredicates[0].actionType | "insert"            |
       When query
         """
         SELECT id, value, flag FROM delta_merge_basic ORDER BY id
@@ -209,6 +216,13 @@ Feature: Delta Lake Merge
           INSERT *
         """
       Then delta log latest commit info matches snapshot
+      Then delta log latest commit info contains
+        | path                                               | value                  |
+        | operation                                          | "MERGE"                |
+        | operationParameters.mergePredicate                 | "t . id = s . id " |
+        | operationParameters.matchedPredicates              | []                     |
+        | operationParameters.notMatchedBySourcePredicates   | []                     |
+        | operationParameters.notMatchedPredicates[0].actionType | "insert"            |
       When query
         """
         SELECT id, value FROM delta_merge_insert_only ORDER BY id
@@ -280,6 +294,13 @@ Feature: Delta Lake Merge
           VALUES (s.id, concat(s.value, '_insert'), s.flag)
         """
       Then delta log latest commit info matches snapshot
+      Then delta log latest commit info contains
+        | path                                               | value                  |
+        | operation                                          | "MERGE"                |
+        | operationParameters.mergePredicate                 | "t . id = s . id " |
+        | operationParameters.matchedPredicates[0].actionType | "update"               |
+        | operationParameters.notMatchedBySourcePredicates[0].actionType | "update"      |
+        | operationParameters.notMatchedPredicates[0].actionType | "insert"            |
       When query
         """
         SELECT id, value, flag FROM delta_merge_extended ORDER BY id
@@ -340,6 +361,13 @@ Feature: Delta Lake Merge
           VALUES (s.id, concat('insert_', s.value), s.flag)
         """
       Then delta log latest commit info matches snapshot
+      Then delta log latest commit info contains
+        | path                                               | value                  |
+        | operation                                          | "MERGE"                |
+        | operationParameters.mergePredicate                 | "t . id = s . id " |
+        | operationParameters.matchedPredicates[0].actionType | "update"               |
+        | operationParameters.notMatchedBySourcePredicates[0].actionType | "delete"      |
+        | operationParameters.notMatchedPredicates[0].actionType | "insert"            |
       When query
         """
         SELECT id, value, flag FROM delta_merge_cleanup ORDER BY id
@@ -401,6 +429,12 @@ Feature: Delta Lake Merge
           VALUES (s.id, s.category, s.amount, concat('default_', s.note))
         """
       Then delta log latest commit info matches snapshot
+      Then delta log latest commit info contains
+        | path                                               | value                   |
+        | operation                                          | "MERGE"                 |
+        | operationParameters.mergePredicate                 | "t . id = s . id "  |
+        | operationParameters.notMatchedPredicates[0].actionType | "insert"             |
+        | operationParameters.notMatchedPredicates[0].predicate | "s . id = 3 " |
       When query
         """
         SELECT id, category, amount, note FROM delta_merge_conditional ORDER BY id

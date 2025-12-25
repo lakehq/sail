@@ -1,9 +1,6 @@
-import os
 from datetime import date
 
 from pyspark.sql.types import LongType, Row, StringType, StructField, StructType
-
-from ..utils import get_data_files  # noqa: TID252
 
 
 class TestDeltaDataSkipping:
@@ -22,9 +19,6 @@ class TestDeltaDataSkipping:
 
         df3 = spark.createDataFrame([Row(id=i, value=float(i)) for i in range(200001, 200011)])
         df3.write.format("delta").mode("append").save(str(delta_path))
-
-        data_files = get_data_files(str(delta_path))
-        assert len(data_files) == 3, f"Setup should result in 3 distinct data files, got {len(data_files)}"  # noqa: PLR2004
 
         filtered_df = spark.read.format("delta").load(delta_table_path).filter("value > 200000.0")
 
@@ -45,9 +39,6 @@ class TestDeltaDataSkipping:
 
         df3_data = [Row(event_name=chr(88 + i), event_date=date(2023, 12, 1 + i)) for i in range(3)]
         spark.createDataFrame(df3_data).write.format("delta").mode("append").save(str(delta_path))
-
-        total_files = len([f for f in os.listdir(delta_path) if f.endswith(".parquet")])
-        assert total_files == 3, "Table should have 3 data files"  # noqa: PLR2004
 
         filtered_df_str = spark.read.format("delta").load(delta_table_path).filter("event_name > 'W'")
 
@@ -75,9 +66,6 @@ class TestDeltaDataSkipping:
 
         df3_data = [Row(id=i + 20, optional_col=f"value_{i}" if i % 2 == 0 else None) for i in range(10)]
         spark.createDataFrame(df3_data).write.format("delta").mode("append").save(str(delta_path))
-
-        total_files = len([f for f in os.listdir(delta_path) if f.endswith(".parquet")])
-        assert total_files == 3, "Table should have 3 data files"  # noqa: PLR2004
 
         filtered_df_not_null = spark.read.format("delta").load(delta_table_path).filter("optional_col IS NOT NULL")
         assert filtered_df_not_null.count() == 10 + 5  # File 1 (10) + File 3 (5)

@@ -131,6 +131,8 @@
   aliases:
     - columnMappingMode
     - column_mapping
+    # SQL DDL table property (TBLPROPERTIES) for Delta column mapping
+    - delta.columnMapping.mode
   description: |
     Column mapping mode for new Delta tables. Supported values: "none", "name", and "id".
     When set to "name" or "id", new tables will be created with Delta Column Mapping.

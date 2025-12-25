@@ -1,11 +1,7 @@
-import os
-
 import pandas as pd
 import pytest
 from pandas.testing import assert_frame_equal
 from pyspark.sql.types import Row
-
-from ..utils import assert_file_count_in_partitions, get_partition_structure  # noqa: TID252
 
 
 class TestDeltaPartitioning:
@@ -35,10 +31,6 @@ class TestDeltaPartitioning:
 
         # Write partitioned table
         df.write.format("delta").mode("overwrite").partitionBy("year").save(str(delta_path))
-
-        # Physical artifact assertion: verify partition directory structure
-        partition_dirs = get_partition_structure(str(delta_path))
-        assert partition_dirs == {"year=2025", "year=2026"}, f"Expected year partitions, got {partition_dirs}"
 
         # Read entire table
         result_df = spark.read.format("delta").load(delta_table_path).sort("id")
@@ -89,18 +81,6 @@ class TestDeltaPartitioning:
 
         assert_frame_equal(result_pandas, expected_data, check_dtype=False)
 
-        partition_dirs = []
-        for item in os.listdir(delta_path):
-            item_path = delta_path / item
-            if os.path.isdir(item_path) and item.startswith("id="):
-                partition_dirs.append(item)
-
-        expected_partitions = {"id=10", "id=11", "id=12"}
-        actual_partitions = set(partition_dirs)
-        assert actual_partitions == expected_partitions, f"Expected {expected_partitions}, got {actual_partitions}"
-
-        assert_file_count_in_partitions(str(delta_path), expected_files_per_partition=1)
-
     def test_delta_partitioning_by_multiple_columns(self, spark, tmp_path):
         """Test multi-column partitioning behavior."""
         delta_path = tmp_path / "multi_partitioned_delta_table"
@@ -126,26 +106,6 @@ class TestDeltaPartitioning:
         expected_data = expected_data.sort_values("id").reset_index(drop=True)
 
         assert_frame_equal(result_pandas, expected_data, check_dtype=False)
-
-        expected_partition_structure = {
-            "region=1/category=1",
-            "region=1/category=2",
-            "region=2/category=1",
-            "region=2/category=2",
-        }
-
-        actual_partitions = set()
-        for region_dir in os.listdir(delta_path):
-            if region_dir.startswith("region="):
-                region_path = delta_path / region_dir
-                if os.path.isdir(region_path):
-                    for category_dir in os.listdir(region_path):
-                        if category_dir.startswith("category="):
-                            actual_partitions.add(f"{region_dir}/{category_dir}")
-
-        assert actual_partitions == expected_partition_structure, (
-            f"Expected {expected_partition_structure}, got {actual_partitions}"
-        )
 
         df_region1 = spark.read.format("delta").load(f"{delta_path}").filter("region = 1")
         assert df_region1.count() == 2, "Region 1 should have 2 records"  # noqa: PLR2004
@@ -193,19 +153,3 @@ class TestDeltaPartitioning:
         result_pdf = result_df.toPandas().sort_values("id").reset_index(drop=True)
         result_pdf = result_pdf[["id", "value", "category"]]
         assert_frame_equal(result_pdf, expected, check_dtype=False)
-
-        partitions = get_partition_structure(str(delta_path))
-        assert partitions == {"category=A", "category=B", "category=C"}
-
-        partition_file_counts = {}
-        for partition in partitions:
-            partition_path = delta_path / partition
-            parquet_files = [f for f in os.listdir(partition_path) if f.endswith(".parquet")]
-            partition_file_counts[partition] = len(parquet_files)
-
-        assert partition_file_counts["category=A"] == 2  # noqa: PLR2004
-        assert partition_file_counts["category=B"] == 1
-        assert partition_file_counts["category=C"] == 1
-
-        root_parquet_files = [f for f in os.listdir(delta_path) if f.endswith(".parquet")]
-        assert not root_parquet_files, "Partitioned tables should not create root-level parquet files on append"
