@@ -17,7 +17,6 @@ use std::sync::Arc;
 use std::time::Instant;
 
 use async_trait::async_trait;
-use datafusion::arrow::array::{Array, StringArray};
 use datafusion::arrow::compute::concat_batches;
 use datafusion::execution::context::TaskContext;
 use datafusion::physical_plan::execution_plan::{Boundedness, EmissionType};
@@ -155,30 +154,8 @@ impl ExecutionPlan for DeltaRemoveActionsExec {
             while let Some(batch_result) = stream.next().await {
                 let batch = batch_result?;
 
-                // Backward compatible input parsing:
-                // - Old path: "add" column containing JSON-serialized Add actions.
-                // - New path: delta action rows where Add is represented structurally.
-                if let Some(adds_col) = batch.column_by_name("add") {
-                    let adds_col =
-                        adds_col
-                            .as_any()
-                            .downcast_ref::<StringArray>()
-                            .ok_or_else(|| {
-                                DataFusionError::Internal(
-                                    "Expected StringArray for 'add' column".to_string(),
-                                )
-                            })?;
-                    for add_json in adds_col.iter().flatten() {
-                        if add_json.trim().is_empty() {
-                            continue;
-                        }
-                        let add: Add = serde_json::from_str(add_json)
-                            .map_err(|e| DataFusionError::External(Box::new(e)))?;
-                        num_removed_bytes = num_removed_bytes
-                            .saturating_add(u64::try_from(add.size).unwrap_or_default());
-                        adds_to_remove.push(add);
-                    }
-                } else if batch.column_by_name("action_type").is_some() {
+                // Arrow-native action rows only.
+                if batch.column_by_name("action_type").is_some() {
                     let adds = decode_adds_from_batch(&batch)?;
                     for add in adds {
                         num_removed_bytes = num_removed_bytes
@@ -187,7 +164,7 @@ impl ExecutionPlan for DeltaRemoveActionsExec {
                     }
                 } else {
                     return Err(DataFusionError::Plan(
-                        "DeltaRemoveActionsExec input must be either add-json ('add') or delta action rows ('action_type')"
+                        "DeltaRemoveActionsExec input must be delta action rows ('action_type')"
                             .to_string(),
                     ));
                 }

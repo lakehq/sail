@@ -222,31 +222,12 @@ impl ExecutionPlan for DeltaScanByAddsExec {
                     partition_scan = false;
                 }
 
-                // Backward compatible input parsing:
-                // - Old path: "add" column containing JSON-serialized Add actions.
-                // - New path: delta action rows.
-                if let Some(adds_col) = batch.column_by_name("add") {
-                    let adds_col = adds_col
-                        .as_any()
-                        .downcast_ref::<datafusion::arrow::array::StringArray>()
-                        .ok_or_else(|| {
-                            DataFusionError::Internal("add column is not a StringArray".to_string())
-                        })?;
-                    for i in 0..adds_col.len() {
-                        let add_json = adds_col.value(i);
-                        if add_json.trim().is_empty() {
-                            continue;
-                        }
-                        match serde_json::from_str::<Add>(add_json) {
-                            Ok(add) => candidate_adds.push(add),
-                            Err(e) => return Err(DataFusionError::External(Box::new(e))),
-                        }
-                    }
-                } else if batch.column_by_name("action_type").is_some() {
+                // Arrow-native action rows only.
+                if batch.column_by_name("action_type").is_some() {
                     candidate_adds.extend(decode_adds_from_batch(&batch)?);
                 } else {
                     return Err(DataFusionError::Plan(
-                        "DeltaScanByAddsExec input must be either add-json ('add') or delta action rows ('action_type')"
+                        "DeltaScanByAddsExec input must be delta action rows ('action_type')"
                             .to_string(),
                     ));
                 }

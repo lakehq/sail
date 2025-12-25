@@ -25,11 +25,6 @@ use datafusion::physical_plan::repartition::RepartitionExec;
 use datafusion::physical_plan::sorts::sort::SortExec;
 use datafusion::physical_plan::{ExecutionPlan, Partitioning};
 use datafusion_physical_expr::expressions::{lit, Column as PhysicalColumn};
-use serde::{Deserialize, Serialize};
-use serde_json::Value;
-
-use crate::kernel::models::Action;
-use crate::kernel::DeltaOperation;
 
 mod action_schema;
 mod commit_exec;
@@ -192,17 +187,6 @@ pub fn create_repartition(
     };
 
     Ok(Arc::new(RepartitionExec::try_new(input, partitioning)?))
-}
-
-/// Helper struct for serializing commit information into a single JSON field
-#[derive(Serialize, Deserialize, Default)]
-pub struct CommitInfo {
-    pub row_count: u64,
-    pub actions: Vec<Action>,
-    pub initial_actions: Vec<Action>,
-    pub operation: Option<DeltaOperation>,
-    #[serde(rename = "operationMetrics", default)]
-    pub operation_metrics: std::collections::HashMap<String, Value>,
 }
 
 pub(crate) fn current_timestamp_millis() -> Result<i64> {
