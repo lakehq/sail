@@ -20,6 +20,7 @@ use datafusion::physical_plan::filter::FilterExec;
 use datafusion::physical_plan::union::UnionExec;
 use datafusion::physical_plan::ExecutionPlan;
 use sail_common_datafusion::datasource::PhysicalSinkMode;
+use sail_common_datafusion::physical_expr::PhysicalExprWithSource;
 
 use super::context::PlannerContext;
 use super::utils::{align_schemas_for_union, build_standard_write_layers};
@@ -56,7 +57,7 @@ fn build_standard_plan(
 async fn build_overwrite_if_plan(
     ctx: &PlannerContext<'_>,
     input: Arc<dyn ExecutionPlan>,
-    condition: Arc<dyn PhysicalExpr>,
+    condition: PhysicalExprWithSource,
     sort_order: Option<LexRequirement>,
 ) -> Result<Arc<dyn ExecutionPlan>> {
     let table = ctx.open_table().await?;
@@ -71,7 +72,7 @@ async fn build_overwrite_if_plan(
         .map_err(|e| DataFusionError::External(Box::new(e)))?;
 
     let old_data_plan =
-        build_old_data_plan(ctx, condition.clone(), version, table_schema.clone()).await?;
+        build_old_data_plan(ctx, condition.expr.clone(), version, table_schema.clone()).await?;
 
     let new_plan = create_projection(Arc::clone(&input), ctx.partition_columns().to_vec())
         .and_then(|plan| create_repartition(plan, ctx.partition_columns().to_vec()))
@@ -91,13 +92,12 @@ async fn build_overwrite_if_plan(
         },
         ctx.table_exists(),
         union_plan.schema(),
-        Some(condition.clone()),
         None,
     ));
 
     let find_files_plan: Arc<dyn ExecutionPlan> = Arc::new(DeltaFindFilesExec::new(
         ctx.table_url().clone(),
-        Some(condition.clone()),
+        Some(condition.expr.clone()),
         ctx.table_schema_for_cond(),
         version,
     ));

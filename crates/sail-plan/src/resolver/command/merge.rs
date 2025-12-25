@@ -7,6 +7,7 @@ use sail_catalog::manager::CatalogManager;
 use sail_common::spec;
 use sail_common_datafusion::catalog::TableKind;
 use sail_common_datafusion::extension::SessionExtensionAccessor;
+use sail_common_datafusion::logical_expr::ExprWithSource;
 use sail_logical_plan::merge::{
     MergeAssignment, MergeIntoNode, MergeIntoOptions, MergeMatchedAction, MergeMatchedClause,
     MergeNotMatchedBySourceAction, MergeNotMatchedBySourceClause, MergeNotMatchedByTargetAction,
@@ -53,8 +54,9 @@ impl PlanResolver<'_> {
             &JoinType::Inner,
         )?);
 
+        let on_condition_source = on_condition.source;
         let on_condition = self
-            .resolve_expression(on_condition, &merge_schema, state)
+            .resolve_expression(on_condition.expr, &merge_schema, state)
             .await?;
         let (join_key_pairs, residual_predicates, target_only_predicates) =
             analyze_merge_join(&on_condition, &merge_schema, target_schema.clone());
@@ -70,7 +72,7 @@ impl PlanResolver<'_> {
             with_schema_evolution,
             resolved_target_schema: target_schema.clone(),
             resolved_source_schema: source_schema.clone(),
-            on_condition,
+            on_condition: ExprWithSource::new(on_condition, on_condition_source),
             matched_clauses,
             not_matched_by_source_clauses: not_matched_by_source,
             not_matched_by_target_clauses: not_matched_by_target,
@@ -205,7 +207,7 @@ impl PlanResolver<'_> {
         state: &mut PlanResolverState,
     ) -> PlanResult<MergeMatchedClause> {
         let condition = self
-            .resolve_optional_expression(clause.condition, merge_schema, state)
+            .resolve_merge_optional_condition(clause.condition, merge_schema, state)
             .await?;
         let action = match clause.action {
             spec::MergeMatchedAction::Delete => MergeMatchedAction::Delete,
@@ -228,7 +230,7 @@ impl PlanResolver<'_> {
         state: &mut PlanResolverState,
     ) -> PlanResult<MergeNotMatchedBySourceClause> {
         let condition = self
-            .resolve_optional_expression(clause.condition, merge_schema, state)
+            .resolve_merge_optional_condition(clause.condition, merge_schema, state)
             .await?;
         let action = match clause.action {
             spec::MergeNotMatchedBySourceAction::Delete => MergeNotMatchedBySourceAction::Delete,
@@ -250,7 +252,7 @@ impl PlanResolver<'_> {
         state: &mut PlanResolverState,
     ) -> PlanResult<MergeNotMatchedByTargetClause> {
         let condition = self
-            .resolve_optional_expression(clause.condition, merge_schema, state)
+            .resolve_merge_optional_condition(clause.condition, merge_schema, state)
             .await?;
         let action = match clause.action {
             spec::MergeNotMatchedByTargetAction::InsertAll => {
@@ -339,14 +341,17 @@ impl PlanResolver<'_> {
         }
     }
 
-    async fn resolve_optional_expression(
+    async fn resolve_merge_optional_condition(
         &self,
-        expression: Option<spec::Expr>,
+        expression: Option<spec::ExprWithSource>,
         schema: &datafusion_common::DFSchemaRef,
         state: &mut PlanResolverState,
-    ) -> PlanResult<Option<Expr>> {
+    ) -> PlanResult<Option<ExprWithSource>> {
         match expression {
-            Some(expr) => Ok(Some(self.resolve_expression(expr, schema, state).await?)),
+            Some(expr) => Ok(Some(ExprWithSource::new(
+                self.resolve_expression(expr.expr, schema, state).await?,
+                expr.source,
+            ))),
             None => Ok(None),
         }
     }

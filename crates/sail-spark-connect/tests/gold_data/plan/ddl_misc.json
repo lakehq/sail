@@ -25,40 +25,43 @@
                 }
               },
               "onCondition": {
-                "unresolvedFunction": {
-                  "functionName": [
-                    "=="
-                  ],
-                  "arguments": [
-                    {
-                      "unresolvedAttribute": {
-                        "name": [
-                          "target",
-                          "col1"
-                        ],
-                        "planId": null,
-                        "isMetadataColumn": false
+                "expr": {
+                  "unresolvedFunction": {
+                    "functionName": [
+                      "=="
+                    ],
+                    "arguments": [
+                      {
+                        "unresolvedAttribute": {
+                          "name": [
+                            "target",
+                            "col1"
+                          ],
+                          "planId": null,
+                          "isMetadataColumn": false
+                        }
+                      },
+                      {
+                        "unresolvedAttribute": {
+                          "name": [
+                            "source",
+                            "col1"
+                          ],
+                          "planId": null,
+                          "isMetadataColumn": false
+                        }
                       }
-                    },
-                    {
-                      "unresolvedAttribute": {
-                        "name": [
-                          "source",
-                          "col1"
-                        ],
-                        "planId": null,
-                        "isMetadataColumn": false
-                      }
-                    }
-                  ],
-                  "namedArguments": [],
-                  "isDistinct": false,
-                  "isUserDefinedFunction": false,
-                  "isInternal": null,
-                  "ignoreNulls": null,
-                  "filter": null,
-                  "orderBy": null
-                }
+                    ],
+                    "namedArguments": [],
+                    "isDistinct": false,
+                    "isUserDefinedFunction": false,
+                    "isInternal": null,
+                    "ignoreNulls": null,
+                    "filter": null,
+                    "orderBy": null
+                  }
+                },
+                "source": "target . col1 = source . col1 "
               },
               "clauses": [
                 {

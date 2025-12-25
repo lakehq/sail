@@ -1,0 +1,350 @@
+# serializer version: 1
+---
+name: "test_apply_not_matched_by_source_updates_and_insert_expressions"
+data:
+  clientVersion: sail-delta-lake.x.x.x
+  engineInfo: sail-delta-lake:x.x.x
+  isBlindAppend: false
+  operation: MERGE
+  operationMetrics:
+    executionTimeMs: <time_ms>
+    numAddedBytes: 1132
+    numAddedFiles: 1
+    numFiles: 1
+    numOutputBytes: 1132
+    numOutputFiles: 1
+    numOutputRows: 4
+    numRemovedBytes: 1070
+    numRemovedFiles: 1
+    writeTimeMs: <time_ms>
+  operationParameters:
+    matchedPredicates:
+    - actionType: update
+      predicate: 't . flag = ''update'' '
+    mergePredicate: 't . id = s . id '
+    notMatchedBySourcePredicates:
+    - actionType: update
+      predicate: 't . flag = ''orphan'' '
+    notMatchedPredicates:
+    - actionType: insert
+  timestamp: <timestamp>
+---
+name: "test_create_partitioned_table_with_column_mapping_name_mode_ddl"
+data:
+  metaData:
+    configuration:
+      delta.columnMapping.maxColumnId: '3'
+      delta.columnMapping.mode: name
+    createdTime: <created_time>
+    description: null
+    format:
+      options: {}
+      provider: parquet
+    id: <table_id>
+    name: null
+    partitionColumns:
+    - region
+    schemaString:
+      fields:
+      - metadata:
+          delta.columnMapping.id: 1
+          delta.columnMapping.physicalName: <physical_name_0>
+        name: id
+        nullable: true
+        type: integer
+      - metadata:
+          delta.columnMapping.id: 2
+          delta.columnMapping.physicalName: <physical_name_1>
+        name: data
+        nullable: true
+        type: string
+      - metadata:
+          delta.columnMapping.id: 3
+          delta.columnMapping.physicalName: <physical_name_2>
+        name: region
+        nullable: true
+        type: string
+      type: struct
+  protocol:
+    minReaderVersion: 3
+    minWriterVersion: 7
+    readerFeatures:
+    - columnMapping
+    writerFeatures:
+    - columnMapping
+---
+name: "test_create_table_with_column_mapping_id_mode_ddl_and_first_write_materializes_mapping"
+data:
+  metaData:
+    configuration:
+      delta.columnMapping.maxColumnId: '3'
+      delta.columnMapping.mode: id
+    createdTime: <created_time>
+    description: null
+    format:
+      options: {}
+      provider: parquet
+    id: <table_id>
+    name: null
+    partitionColumns: []
+    schemaString:
+      fields:
+      - metadata:
+          delta.columnMapping.id: 1
+          delta.columnMapping.physicalName: <physical_name_0>
+        name: id
+        nullable: true
+        type: integer
+      - metadata:
+          delta.columnMapping.id: 2
+          delta.columnMapping.physicalName: <physical_name_1>
+        name: name
+        nullable: true
+        type: string
+      - metadata:
+          delta.columnMapping.id: 3
+          delta.columnMapping.physicalName: <physical_name_2>
+        name: value
+        nullable: true
+        type: double
+      type: struct
+  protocol:
+    minReaderVersion: 3
+    minWriterVersion: 7
+    readerFeatures:
+    - columnMapping
+    writerFeatures:
+    - columnMapping
+---
+name: "test_create_table_with_column_mapping_name_mode_ddl_and_first_write_materializes_mapping"
+data:
+  metaData:
+    configuration:
+      delta.columnMapping.maxColumnId: '3'
+      delta.columnMapping.mode: name
+    createdTime: <created_time>
+    description: null
+    format:
+      options: {}
+      provider: parquet
+    id: <table_id>
+    name: null
+    partitionColumns: []
+    schemaString:
+      fields:
+      - metadata:
+          delta.columnMapping.id: 1
+          delta.columnMapping.physicalName: <physical_name_0>
+        name: id
+        nullable: true
+        type: integer
+      - metadata:
+          delta.columnMapping.id: 2
+          delta.columnMapping.physicalName: <physical_name_1>
+        name: name
+        nullable: true
+        type: string
+      - metadata:
+          delta.columnMapping.id: 3
+          delta.columnMapping.physicalName: <physical_name_2>
+        name: value
+        nullable: true
+        type: double
+      type: struct
+  protocol:
+    minReaderVersion: 3
+    minWriterVersion: 7
+    readerFeatures:
+    - columnMapping
+    writerFeatures:
+    - columnMapping
+---
+name: "test_create_table_with_nested_struct_in_column_mapping_name_mode_ddl"
+data:
+  metaData:
+    configuration:
+      delta.columnMapping.maxColumnId: '5'
+      delta.columnMapping.mode: name
+    createdTime: <created_time>
+    description: null
+    format:
+      options: {}
+      provider: parquet
+    id: <table_id>
+    name: null
+    partitionColumns: []
+    schemaString:
+      fields:
+      - metadata:
+          delta.columnMapping.id: 1
+          delta.columnMapping.physicalName: <physical_name_0>
+        name: id
+        nullable: true
+        type: integer
+      - metadata:
+          delta.columnMapping.id: 2
+          delta.columnMapping.physicalName: <physical_name_1>
+        name: user
+        nullable: true
+        type:
+          fields:
+          - metadata:
+              delta.columnMapping.id: 3
+              delta.columnMapping.physicalName: <physical_name_1.0>
+            name: name
+            nullable: true
+            type: string
+          - metadata:
+              delta.columnMapping.id: 4
+              delta.columnMapping.physicalName: <physical_name_1.1>
+            name: age
+            nullable: true
+            type: integer
+          type: struct
+      - metadata:
+          delta.columnMapping.id: 5
+          delta.columnMapping.physicalName: <physical_name_2>
+        name: tags
+        nullable: true
+        type:
+          containsNull: true
+          elementType: string
+          type: array
+      type: struct
+  protocol:
+    minReaderVersion: 3
+    minWriterVersion: 7
+    readerFeatures:
+    - columnMapping
+    writerFeatures:
+    - columnMapping
+---
+name: "test_insertonly_merge_appends_new_rows_and_produces_no_remove_actions"
+data:
+  clientVersion: sail-delta-lake.x.x.x
+  engineInfo: sail-delta-lake:x.x.x
+  isBlindAppend: false
+  operation: MERGE
+  operationMetrics:
+    executionTimeMs: <time_ms>
+    numAddedBytes: 743
+    numAddedFiles: 1
+    numFiles: 1
+    numOutputBytes: 743
+    numOutputFiles: 1
+    numOutputRows: 1
+    writeTimeMs: <time_ms>
+  operationParameters:
+    matchedPredicates: []
+    mergePredicate: 't . id = s . id '
+    notMatchedBySourcePredicates: []
+    notMatchedPredicates:
+    - actionType: insert
+  timestamp: <timestamp>
+---
+name: "test_rows_missing_from_the_source_are_deleted_after_updates"
+data:
+  clientVersion: sail-delta-lake.x.x.x
+  engineInfo: sail-delta-lake:x.x.x
+  isBlindAppend: false
+  operation: MERGE
+  operationMetrics:
+    executionTimeMs: <time_ms>
+    numAddedBytes: 1081
+    numAddedFiles: 1
+    numFiles: 1
+    numOutputBytes: 1081
+    numOutputFiles: 1
+    numOutputRows: 3
+    numRemovedBytes: 1059
+    numRemovedFiles: 1
+    writeTimeMs: <time_ms>
+  operationParameters:
+    matchedPredicates:
+    - actionType: update
+      predicate: 't . flag = ''archive'' '
+    mergePredicate: 't . id = s . id '
+    notMatchedBySourcePredicates:
+    - actionType: delete
+      predicate: 't . flag = ''trim'' '
+    notMatchedPredicates:
+    - actionType: insert
+  timestamp: <timestamp>
+---
+name: "test_simple_condition"
+data:
+  clientVersion: sail-delta-lake.x.x.x
+  engineInfo: sail-delta-lake:x.x.x
+  isBlindAppend: false
+  operation: DELETE
+  operationMetrics:
+    executionTimeMs: <time_ms>
+    numAddedBytes: 1837
+    numAddedFiles: 1
+    numFiles: 1
+    numOutputBytes: 1837
+    numOutputFiles: 1
+    numOutputRows: 5
+    numRemovedBytes: 1941
+    numRemovedFiles: 1
+    writeTimeMs: <time_ms>
+  operationParameters:
+    predicate: 'department = ''Engineering'' '
+  timestamp: <timestamp>
+---
+name: "test_specific_not_matched_inserts_run_before_the_default_clause"
+data:
+  clientVersion: sail-delta-lake.x.x.x
+  engineInfo: sail-delta-lake:x.x.x
+  isBlindAppend: false
+  operation: MERGE
+  operationMetrics:
+    executionTimeMs: <time_ms>
+    numAddedBytes: 1419
+    numAddedFiles: 1
+    numFiles: 1
+    numOutputBytes: 1419
+    numOutputFiles: 1
+    numOutputRows: 4
+    numRemovedBytes: 1293
+    numRemovedFiles: 1
+    writeTimeMs: <time_ms>
+  operationParameters:
+    matchedPredicates:
+    - actionType: update
+    mergePredicate: 't . id = s . id '
+    notMatchedBySourcePredicates: []
+    notMatchedPredicates:
+    - actionType: insert
+      predicate: 's . id = 3 '
+    - actionType: insert
+  timestamp: <timestamp>
+---
+name: "test_update_and_delete_matched_rows_while_inserting_unmatched_rows"
+data:
+  clientVersion: sail-delta-lake.x.x.x
+  engineInfo: sail-delta-lake:x.x.x
+  isBlindAppend: false
+  operation: MERGE
+  operationMetrics:
+    executionTimeMs: <time_ms>
+    numAddedBytes: 1033
+    numAddedFiles: 1
+    numFiles: 1
+    numOutputBytes: 1033
+    numOutputFiles: 1
+    numOutputRows: 3
+    numRemovedBytes: 1017
+    numRemovedFiles: 1
+    writeTimeMs: <time_ms>
+  operationParameters:
+    matchedPredicates:
+    - actionType: update
+      predicate: 't . flag = ''update'' '
+    - actionType: delete
+      predicate: 't . flag = ''delete'' '
+    mergePredicate: 't . id = s . id '
+    notMatchedBySourcePredicates: []
+    notMatchedPredicates:
+    - actionType: insert
+  timestamp: <timestamp>
