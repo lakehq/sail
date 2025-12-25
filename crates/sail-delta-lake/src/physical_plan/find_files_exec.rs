@@ -397,15 +397,26 @@ async fn find_files_scan_physical_with_candidates(
         .with_config(ctx.session_config().clone())
         .build();
 
-    let scan = table_provider
-        .scan(&session_state, Some(&used_columns), &[], Some(1))
+    // Scan candidate files and keep only rows that match the predicate. We intentionally do NOT
+    // limit here: limiting before filtering can miss matching rows (e.g. if the first row in a
+    // file doesn't match but later rows do), which would make DELETE/UPDATE a no-op.
+    let scan: Arc<dyn ExecutionPlan> = table_provider
+        .scan(&session_state, Some(&used_columns), &[], None)
         .await?;
 
-    let limit: Arc<dyn ExecutionPlan> = scan;
+    // Adapt the predicate to the projected scan schema (Column indices are schema-dependent).
+    let adapter_factory = Arc::new(DeltaPhysicalExprAdapterFactory {});
+    let adapter = adapter_factory.create(
+        Arc::clone(&logical_schema),
+        scan.schema(),
+    );
+    let adapted_predicate = adapter.rewrite(physical_predicate)?;
+
+    let filtered: Arc<dyn ExecutionPlan> = Arc::new(FilterExec::try_new(adapted_predicate, scan)?);
 
     let mut partitions = Vec::new();
-    for i in 0..limit.properties().output_partitioning().partition_count() {
-        let stream = limit.execute(i, ctx.clone())?;
+    for i in 0..filtered.properties().output_partitioning().partition_count() {
+        let stream = filtered.execute(i, ctx.clone())?;
         let data = collect(stream).await?;
         partitions.extend(data);
     }

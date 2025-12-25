@@ -108,7 +108,15 @@ pub async fn build_delete_plan(
         table_schema.clone(),
     ));
 
-    let negated_condition = Arc::new(NotExpr::new(condition.expr));
+    // Adapt the predicate to the scan schema. PhysicalExpr Column indices are schema-dependent,
+    // and DeltaScanByAddsExec may reorder/augment the schema compared to the original table schema.
+    let adapter_factory = Arc::new(crate::physical_plan::DeltaPhysicalExprAdapterFactory {});
+    let adapter = adapter_factory.create(table_schema.clone(), scan_exec.schema());
+    let adapted_condition = adapter
+        .rewrite(condition.expr.clone())
+        .map_err(|e| DataFusionError::External(Box::new(e)))?;
+
+    let negated_condition = Arc::new(NotExpr::new(adapted_condition));
     let filter_exec = Arc::new(FilterExec::try_new(negated_condition, scan_exec)?);
 
     let operation_override = Some(DeltaOperation::Delete {

@@ -1,4 +1,4 @@
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 
 use datafusion::arrow::array::{Array, DictionaryArray, RecordBatch, StringArray};
 use datafusion::arrow::datatypes::UInt16Type;
@@ -38,6 +38,7 @@ pub(crate) fn join_batches_with_add_actions(
     dict_array: bool,
 ) -> DeltaResult<Vec<Add>> {
     let mut files = Vec::with_capacity(batches.iter().map(|batch| batch.num_rows()).sum());
+    let mut seen: HashSet<String> = HashSet::new();
     for batch in batches {
         let err =
             || DeltaTableError::generic("Unable to obtain internal file path column".to_string());
@@ -59,6 +60,12 @@ pub(crate) fn join_batches_with_add_actions(
                 "{path_column} cannot be null"
             )))?;
 
+            // This helper is used by multiple code paths:
+            // - Some callers intentionally scan a single row per file (so paths are unique)
+            // - Others may scan multiple matching rows per file. In that case, tolerate duplicates.
+            if !seen.insert(path.to_string()) {
+                continue;
+            }
             match actions.remove(path) {
                 Some(action) => files.push(action),
                 None => {
@@ -66,7 +73,7 @@ pub(crate) fn join_batches_with_add_actions(
                         "Unable to map internal file path to action.".to_owned(),
                     ))
                 }
-            }
+            };
         }
     }
     Ok(files)

@@ -310,10 +310,6 @@ async fn finalize_merge(
         let touched_meta: Arc<dyn ExecutionPlan> =
             Arc::new(ProjectionExec::try_new(proj_exprs, join)?);
 
-        // DeltaFindFilesExec (input mode) requires single partition input.
-        let touched_meta: Arc<dyn ExecutionPlan> =
-            Arc::new(CoalescePartitionsExec::new(touched_meta));
-
         let touched_adds: Arc<dyn ExecutionPlan> = Arc::new(DeltaFindFilesExec::from_log_scan(
             touched_meta,
             table_url.clone(),

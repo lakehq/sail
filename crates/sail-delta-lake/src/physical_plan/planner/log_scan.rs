@@ -101,6 +101,12 @@ fn to_file_groups(metas: Vec<ObjectMeta>, target_partitions: usize) -> Vec<FileG
         return vec![];
     }
 
+    // Ensure deterministic file group ordering for stable EXPLAIN snapshots.
+    // `head_many(...).buffer_unordered(...)` is intentionally concurrent, so we sort by path
+    // before chunking into FileGroups.
+    let mut metas = metas;
+    metas.sort_by(|a, b| a.location.as_ref().cmp(b.location.as_ref()));
+
     let mut files = to_partitioned_files(metas);
     let num_groups = std::cmp::min(target_partitions, files.len());
     let chunk_size = files.len().div_ceil(num_groups);

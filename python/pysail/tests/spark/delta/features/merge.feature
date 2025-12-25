@@ -509,3 +509,49 @@ Feature: Delta Lake Merge
           VALUES (s.id, s.category, s.amount, concat('insert_', s.note))
         """
       Then query plan matches snapshot
+
+  Rule: EXPLAIN shows visible delta log scan for MERGE on partitioned tables
+    Background:
+      Given variable location for temporary directory merge_explain_partition_pushdown
+      Given final statement
+        """
+        DROP TABLE IF EXISTS delta_merge_explain_partition_pushdown
+        """
+      Given statement template
+        """
+        CREATE TABLE delta_merge_explain_partition_pushdown (
+          id INT,
+          year INT,
+          value INT
+        )
+        USING DELTA LOCATION {{ location.sql }}
+        PARTITIONED BY (year)
+        """
+      Given statement
+        """
+        INSERT INTO delta_merge_explain_partition_pushdown
+        SELECT * FROM VALUES
+          (1, 2023, 100),
+          (2, 2024, 200),
+          (3, 2024, 700)
+        """
+      Given statement
+        """
+        CREATE OR REPLACE TEMP VIEW src_merge_explain_partition_pushdown AS
+        SELECT * FROM VALUES
+          (2, 2024, 250),
+          (4, 2024, 900)
+        AS src(id, year, value)
+        """
+
+    Scenario: EXPLAIN shows delta log meta scan under MERGE file lookup
+      When query
+        """
+        EXPLAIN
+        MERGE INTO delta_merge_explain_partition_pushdown AS t
+        USING src_merge_explain_partition_pushdown AS s
+        ON t.id = s.id AND t.year = 2024 AND t.value > 150
+        WHEN MATCHED THEN UPDATE SET value = s.value
+        WHEN NOT MATCHED THEN INSERT (id, year, value) VALUES (s.id, s.year, s.value)
+        """
+      Then query plan matches snapshot
