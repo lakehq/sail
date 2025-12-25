@@ -18,8 +18,8 @@ use datafusion::physical_plan::ExecutionPlan;
 use sail_common_datafusion::datasource::{MergeInfo, PhysicalSinkMode};
 
 pub mod context;
-pub mod utils;
 mod log_scan;
+pub mod utils;
 
 mod op_delete;
 mod op_merge;

@@ -1130,9 +1130,7 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
                 table_url: delta_file_lookup_exec.table_url().to_string(),
                 version: delta_file_lookup_exec.version(),
             })
-        } else if let Some(delta_log_scan_exec) =
-            node.as_any().downcast_ref::<DeltaLogScanExec>()
-        {
+        } else if let Some(delta_log_scan_exec) = node.as_any().downcast_ref::<DeltaLogScanExec>() {
             let input = self.try_encode_plan(delta_log_scan_exec.children()[0].clone())?;
             NodeKind::DeltaLogScan(gen::DeltaLogScanExecNode {
                 input,
