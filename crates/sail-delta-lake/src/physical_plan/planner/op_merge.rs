@@ -30,11 +30,13 @@ use sail_common_datafusion::datasource::{
 use url::Url;
 
 use super::context::PlannerContext;
+use super::log_scan::build_delta_log_datasource_union;
 use crate::datasource::{DataFusionMixins, PATH_COLUMN};
 use crate::kernel::{DeltaOperation, MergePredicate};
 use crate::options::TableDeltaOptions;
 use crate::physical_plan::{
-    DeltaCommitExec, DeltaFindFilesExec, DeltaRemoveActionsExec, DeltaWriterExec, COL_ACTION,
+    DeltaCommitExec, DeltaFindFilesExec, DeltaLogScanExec, DeltaRemoveActionsExec, DeltaWriterExec,
+    COL_ACTION,
 };
 
 /// Entry point for MERGE execution. Expects the logical MERGE to be fully
@@ -60,6 +62,19 @@ pub async fn build_merge_plan(
         .arrow_schema()
         .map_err(|e| DataFusionError::External(Box::new(e)))?;
     let partition_columns = snapshot_state.metadata().partition_columns().clone();
+
+    let kernel_snapshot = snapshot_state.snapshot().snapshot().inner.clone();
+    let log_segment = kernel_snapshot.log_segment();
+    let checkpoint_files = log_segment
+        .checkpoint_parts
+        .iter()
+        .map(|p| p.filename.clone())
+        .collect::<Vec<_>>();
+    let commit_files = log_segment
+        .ascending_commit_files
+        .iter()
+        .map(|p| p.filename.clone())
+        .collect::<Vec<_>>();
 
     let mut options = ctx.options().clone();
     if merge_info.with_schema_evolution {
@@ -98,6 +113,7 @@ pub async fn build_merge_plan(
         }
     };
     finalize_merge(
+        ctx,
         expanded,
         ctx.table_url().clone(),
         version,
@@ -105,12 +121,15 @@ pub async fn build_merge_plan(
         partition_columns,
         table_schema,
         merge_info.touched_file_plan.clone(),
+        checkpoint_files,
+        commit_files,
         merge_operation,
     )
     .await
 }
 
 async fn finalize_merge(
+    ctx: &PlannerContext<'_>,
     projected: Arc<dyn ExecutionPlan>,
     table_url: Url,
     version: i64,
@@ -118,6 +137,8 @@ async fn finalize_merge(
     partition_columns: Vec<String>,
     table_schema: datafusion::arrow::datatypes::SchemaRef,
     touched_file_plan: Option<Arc<dyn ExecutionPlan>>,
+    checkpoint_files: Vec<String>,
+    commit_files: Vec<String>,
     operation_override: Option<DeltaOperation>,
 ) -> Result<Arc<dyn ExecutionPlan>> {
     let writer = Arc::new(DeltaWriterExec::new(
@@ -134,12 +155,25 @@ async fn finalize_merge(
     let mut action_inputs: Vec<Arc<dyn ExecutionPlan>> = vec![writer.clone()];
 
     if let Some(touched_plan) = touched_file_plan {
-        // Build a log-side stream of Add rows.
-        let log_adds: Arc<dyn ExecutionPlan> = Arc::new(DeltaFindFilesExec::new(
+        // Build a log-side stream of Add rows using a visible log scan pipeline:
+        // Union(DataSourceExec parquet/json) -> DeltaLogScanExec -> Coalesce -> DeltaFindFilesExec.
+        let (raw_scan, checkpoint_files, commit_files) =
+            build_delta_log_datasource_union(ctx, checkpoint_files, commit_files).await?;
+        let meta_scan: Arc<dyn ExecutionPlan> = Arc::new(DeltaLogScanExec::new(
+            raw_scan,
             table_url.clone(),
-            None, // no predicate
-            None, // schema not needed without predicate
             version,
+            partition_columns.clone(),
+            checkpoint_files,
+            commit_files,
+        ));
+
+        let log_adds: Arc<dyn ExecutionPlan> = Arc::new(DeltaFindFilesExec::from_log_scan(
+            meta_scan,
+            table_url.clone(),
+            version,
+            partition_columns.clone(),
+            true, // partition_scan
         ));
 
         // touched_paths JOIN log_adds ON path (path is extracted from the union `action` column)

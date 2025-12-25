@@ -459,6 +459,8 @@ DeltaCommitExec(table_path=file://<tmp>/merge_explain_codegen/)
                                     FilterExec: column3@2 + 1 > 10 AND (column1@0 = 1 OR column1@0 = 2 OR column1@0 = 4)
                                       DataSourceExec: partitions=1, partition_sizes=[<sizes>]
         DeltaFindFilesExec(table_path=file://<tmp>/merge_explain_codegen/)
+          DeltaLogScanExec(table_path=file://<tmp>/merge_explain_codegen/, version=0)
+            DataSourceExec: file_groups={1 group: [[<tmp>/merge_explain_codegen/_delta_log/00000000000000000000.checkpoint.parquet]]}, projection=[add, remove, metaData, protocol, txn, sidecar], file_type=parquet
 
 
 initial_physical_plan_with_stats:
@@ -512,6 +514,8 @@ DeltaCommitExec(table_path=file://<tmp>/merge_explain_codegen/), statistics=[Row
                                     FilterExec: column3@2 + 1 > 10 AND (column1@0 = 1 OR column1@0 = 2 OR column1@0 = 4), statistics=[Rows=Inexact(1), Bytes=Inexact(<bytes>), [(Col[0]: Null=Inexact(0)),(Col[1]: Null=Inexact(0)),(Col[2]: Null=Inexact(0)),(Col[3]: Null=Inexact(0))]]
                                       DataSourceExec: partitions=1, partition_sizes=[<sizes>], statistics=[Rows=Exact(3), Bytes=Exact(<bytes>), [(Col[0]: Null=Exact(0)),(Col[1]: Null=Exact(0)),(Col[2]: Null=Exact(0)),(Col[3]: Null=Exact(0))]]
         DeltaFindFilesExec(table_path=file://<tmp>/merge_explain_codegen/), statistics=[Rows=Absent, Bytes=Absent, [(Col[0]:),(Col[1]:)]]
+          DeltaLogScanExec(table_path=file://<tmp>/merge_explain_codegen/, version=0), statistics=[Rows=Absent, Bytes=Absent, [(Col[0]:),(Col[1]:),(Col[2]:)]]
+            DataSourceExec: file_groups={1 group: [[<tmp>/merge_explain_codegen/_delta_log/00000000000000000000.checkpoint.parquet]]}, projection=[add, remove, metaData, protocol, txn, sidecar], file_type=parquet, statistics=[Rows=Absent, Bytes=Absent, [(Col[0]:),(Col[1]:),(Col[2]:),(Col[3]:),(Col[4]:),(Col[5]:)]]
 
 
 initial_physical_plan_with_schema:
@@ -565,6 +569,8 @@ DeltaCommitExec(table_path=file://<tmp>/merge_explain_codegen/), schema=[count:U
                                     FilterExec: column3@2 + 1 > 10 AND (column1@0 = 1 OR column1@0 = 2 OR column1@0 = 4), schema=[column1:Int32;N, column2:Utf8;N, column3:Int32;N, column4:Utf8;N]
                                       DataSourceExec: partitions=1, partition_sizes=[<sizes>], schema=[column1:Int32;N, column2:Utf8;N, column3:Int32;N, column4:Utf8;N]
         DeltaFindFilesExec(table_path=file://<tmp>/merge_explain_codegen/), schema=[action:Union([(0, Field { name: "add", data_type: Struct([Field { name: "path", data_type: Utf8 }, Field { name: "partition_values", data_type: Map(Field { name: "entries", data_type: Struct([Field { name: "keys", data_type: Utf8 }, Field { name: "values", data_type: Utf8, nullable: true }]) }, false) }, Field { name: "size", data_type: Int64 }, Field { name: "modification_time", data_type: Int64 }, Field { name: "data_change", data_type: Boolean }, Field { name: "stats_json", data_type: Utf8, nullable: true }]) }), (1, Field { name: "remove", data_type: Struct([Field { name: "path", data_type: Utf8 }, Field { name: "data_change", data_type: Boolean }, Field { name: "deletion_timestamp", data_type: Int64, nullable: true }, Field { name: "extended_file_metadata", data_type: Boolean, nullable: true }, Field { name: "partition_values", data_type: Map(Field { name: "entries", data_type: Struct([Field { name: "keys", data_type: Utf8 }, Field { name: "values", data_type: Utf8, nullable: true }]) }, false) }, Field { name: "size", data_type: Int64, nullable: true }]) }), (2, Field { name: "protocol", data_type: Utf8 }), (3, Field { name: "metadata", data_type: Utf8 }), (4, Field { name: "commit_meta", data_type: Struct([Field { name: "commit_row_count", data_type: UInt64 }, Field { name: "operation_json", data_type: Utf8, nullable: true }, Field { name: "operation_metrics_json", data_type: Utf8 }]) })], Dense), partition_scan:Boolean]
+          DeltaLogScanExec(table_path=file://<tmp>/merge_explain_codegen/, version=0), schema=[__sail_file_path:Utf8, size_bytes:Int64, modification_time:Int64]
+            DataSourceExec: file_groups={1 group: [[<tmp>/merge_explain_codegen/_delta_log/00000000000000000000.checkpoint.parquet]]}, projection=[add, remove, metaData, protocol, txn, sidecar], file_type=parquet, schema=[add:Struct([Field { name: "path", data_type: Utf8 }, Field { name: "partitionValues", data_type: Map(Field { name: "key_value", data_type: Struct([Field { name: "key", data_type: Utf8 }, Field { name: "value", data_type: Utf8, nullable: true }]) }, false) }, Field { name: "size", data_type: Int64 }, Field { name: "modificationTime", data_type: Int64 }, Field { name: "dataChange", data_type: Boolean }, Field { name: "stats", data_type: Utf8, nullable: true }, Field { name: "tags", data_type: Map(Field { name: "key_value", data_type: Struct([Field { name: "key", data_type: Utf8 }, Field { name: "value", data_type: Utf8, nullable: true }]) }, false), nullable: true }, Field { name: "deletionVector", data_type: Struct([Field { name: "storageType", data_type: Utf8 }, Field { name: "pathOrInlineDv", data_type: Utf8 }, Field { name: "offset", data_type: Int32, nullable: true }, Field { name: "sizeInBytes", data_type: Int32 }, Field { name: "cardinality", data_type: Int64 }]), nullable: true }, Field { name: "baseRowId", data_type: Int64, nullable: true }, Field { name: "defaultRowCommitVersion", data_type: Int64, nullable: true }, Field { name: "clusteringProvider", data_type: Utf8, nullable: true }]);N, remove:Struct([Field { name: "path", data_type: Utf8 }, Field { name: "deletionTimestamp", data_type: Int64, nullable: true }, Field { name: "dataChange", data_type: Boolean }, Field { name: "extendedFileMetadata", data_type: Boolean, nullable: true }, Field { name: "partitionValues", data_type: Map(Field { name: "key_value", data_type: Struct([Field { name: "key", data_type: Utf8 }, Field { name: "value", data_type: Utf8 }]) }, false), nullable: true }, Field { name: "size", data_type: Int64, nullable: true }, Field { name: "stats", data_type: Utf8, nullable: true }, Field { name: "tags", data_type: Map(Field { name: "key_value", data_type: Struct([Field { name: "key", data_type: Utf8 }, Field { name: "value", data_type: Utf8 }]) }, false), nullable: true }, Field { name: "deletionVector", data_type: Struct([Field { name: "storageType", data_type: Utf8 }, Field { name: "pathOrInlineDv", data_type: Utf8 }, Field { name: "offset", data_type: Int32, nullable: true }, Field { name: "sizeInBytes", data_type: Int32 }, Field { name: "cardinality", data_type: Int64 }]), nullable: true }, Field { name: "baseRowId", data_type: Int64, nullable: true }, Field { name: "defaultRowCommitVersion", data_type: Int64, nullable: true }]);N, metaData:Struct([Field { name: "id", data_type: Utf8 }, Field { name: "name", data_type: Utf8, nullable: true }, Field { name: "description", data_type: Utf8, nullable: true }, Field { name: "format", data_type: Struct([Field { name: "provider", data_type: Utf8 }, Field { name: "options", data_type: Map(Field { name: "key_value", data_type: Struct([Field { name: "key", data_type: Utf8 }, Field { name: "value", data_type: Utf8 }]) }, false) }]) }, Field { name: "schemaString", data_type: Utf8 }, Field { name: "partitionColumns", data_type: List(Field { name: "element", data_type: Utf8 }) }, Field { name: "createdTime", data_type: Int64, nullable: true }, Field { name: "configuration", data_type: Map(Field { name: "key_value", data_type: Struct([Field { name: "key", data_type: Utf8 }, Field { name: "value", data_type: Utf8 }]) }, false) }]);N, protocol:Struct([Field { name: "minReaderVersion", data_type: Int32 }, Field { name: "minWriterVersion", data_type: Int32 }, Field { name: "readerFeatures", data_type: List(Field { name: "element", data_type: Utf8 }), nullable: true }, Field { name: "writerFeatures", data_type: List(Field { name: "element", data_type: Utf8 }), nullable: true }]);N, txn:Struct([Field { name: "appId", data_type: Utf8 }, Field { name: "version", data_type: Int64 }, Field { name: "lastUpdated", data_type: Int64, nullable: true }]);N, sidecar:Struct([Field { name: "path", data_type: Utf8 }, Field { name: "sizeInBytes", data_type: Int64 }, Field { name: "modificationTime", data_type: Int64 }, Field { name: "tags", data_type: Map(Field { name: "key_value", data_type: Struct([Field { name: "key", data_type: Utf8 }, Field { name: "value", data_type: Utf8 }]) }, false), nullable: true }]);N]
 
 
 physical_plan after OutputRequirements:
@@ -619,6 +625,8 @@ OutputRequirementExec: order_by=[], dist_by=Unspecified
                                       FilterExec: column3@2 + 1 > 10 AND (column1@0 = 1 OR column1@0 = 2 OR column1@0 = 4)
                                         DataSourceExec: partitions=1, partition_sizes=[<sizes>]
           DeltaFindFilesExec(table_path=file://<tmp>/merge_explain_codegen/)
+            DeltaLogScanExec(table_path=file://<tmp>/merge_explain_codegen/, version=0)
+              DataSourceExec: file_groups={1 group: [[<tmp>/merge_explain_codegen/_delta_log/00000000000000000000.checkpoint.parquet]]}, projection=[add, remove, metaData, protocol, txn, sidecar], file_type=parquet
 
 
 physical_plan after aggregate_statistics:
@@ -678,6 +686,8 @@ OutputRequirementExec: order_by=[], dist_by=Unspecified
                                 ProjectionExec: expr=[id@0 as id, category@1 as category, amount@2 as amount, note@3 as note, __sail_file_path@4 as __sail_file_path]
                                   DataSourceExec: file_groups={1 group: [[<tmp>/merge_explain_codegen/part-<id>.snappy.parquet]]}, projection=[id, category, amount, note, __sail_file_path], file_type=parquet
           DeltaFindFilesExec(table_path=file://<tmp>/merge_explain_codegen/)
+            DeltaLogScanExec(table_path=file://<tmp>/merge_explain_codegen/, version=0)
+              DataSourceExec: file_groups={1 group: [[<tmp>/merge_explain_codegen/_delta_log/00000000000000000000.checkpoint.parquet]]}, projection=[add, remove, metaData, protocol, txn, sidecar], file_type=parquet
 
 
 physical_plan after LimitedDistinctAggregation:
@@ -748,6 +758,8 @@ OutputRequirementExec: order_by=[], dist_by=Unspecified
               RepartitionExec: partitioning=Hash([coalesce(get_field(union_extract(action@0, add), path), get_field(union_extract(action@0, remove), path))], <partitions>), input_partitions=<partitions>
                 RepartitionExec: partitioning=RoundRobinBatch(<partitions>), input_partitions=<partitions>
                   DeltaFindFilesExec(table_path=file://<tmp>/merge_explain_codegen/)
+                    DeltaLogScanExec(table_path=file://<tmp>/merge_explain_codegen/, version=0)
+                      DataSourceExec: file_groups={1 group: [[<tmp>/merge_explain_codegen/_delta_log/00000000000000000000.checkpoint.parquet]]}, projection=[add, remove, metaData, protocol, txn, sidecar], file_type=parquet
 
 
 physical_plan after CombinePartialFinalAggregate:
@@ -804,6 +816,8 @@ OutputRequirementExec: order_by=[], dist_by=Unspecified
               RepartitionExec: partitioning=Hash([coalesce(get_field(union_extract(action@0, add), path), get_field(union_extract(action@0, remove), path))], <partitions>), input_partitions=<partitions>
                 RepartitionExec: partitioning=RoundRobinBatch(<partitions>), input_partitions=<partitions>
                   DeltaFindFilesExec(table_path=file://<tmp>/merge_explain_codegen/)
+                    DeltaLogScanExec(table_path=file://<tmp>/merge_explain_codegen/, version=0)
+                      DataSourceExec: file_groups={1 group: [[<tmp>/merge_explain_codegen/_delta_log/00000000000000000000.checkpoint.parquet]]}, projection=[add, remove, metaData, protocol, txn, sidecar], file_type=parquet
 
 
 physical_plan after coalesce_batches:
@@ -860,6 +874,8 @@ OutputRequirementExec: order_by=[], dist_by=Unspecified
                   RepartitionExec: partitioning=Hash([coalesce(get_field(union_extract(action@0, add), path), get_field(union_extract(action@0, remove), path))], <partitions>), input_partitions=<partitions>
                     RepartitionExec: partitioning=RoundRobinBatch(<partitions>), input_partitions=<partitions>
                       DeltaFindFilesExec(table_path=file://<tmp>/merge_explain_codegen/)
+                        DeltaLogScanExec(table_path=file://<tmp>/merge_explain_codegen/, version=0)
+                          DataSourceExec: file_groups={1 group: [[<tmp>/merge_explain_codegen/_delta_log/00000000000000000000.checkpoint.parquet]]}, projection=[add, remove, metaData, protocol, txn, sidecar], file_type=parquet
 
 
 physical_plan after coalesce_async_exec_input:
@@ -918,6 +934,8 @@ DeltaCommitExec(table_path=file://<tmp>/merge_explain_codegen/)
                 RepartitionExec: partitioning=Hash([coalesce(get_field(union_extract(action@0, add), path), get_field(union_extract(action@0, remove), path))], <partitions>), input_partitions=<partitions>
                   RepartitionExec: partitioning=RoundRobinBatch(<partitions>), input_partitions=<partitions>
                     DeltaFindFilesExec(table_path=file://<tmp>/merge_explain_codegen/)
+                      DeltaLogScanExec(table_path=file://<tmp>/merge_explain_codegen/, version=0)
+                        DataSourceExec: file_groups={1 group: [[<tmp>/merge_explain_codegen/_delta_log/00000000000000000000.checkpoint.parquet]]}, projection=[add, remove, metaData, protocol, txn, sidecar], file_type=parquet
 
 
 physical_plan after LimitAggregation:
@@ -980,61 +998,12 @@ DeltaCommitExec(table_path=file://<tmp>/merge_explain_codegen/)
                 RepartitionExec: partitioning=Hash([coalesce(get_field(union_extract(action@0, add), path), get_field(union_extract(action@0, remove), path))], <partitions>), input_partitions=<partitions>
                   RepartitionExec: partitioning=RoundRobinBatch(<partitions>), input_partitions=<partitions>
                     DeltaFindFilesExec(table_path=file://<tmp>/merge_explain_codegen/)
+                      DeltaLogScanExec(table_path=file://<tmp>/merge_explain_codegen/, version=0)
+                        DataSourceExec: file_groups={1 group: [[<tmp>/merge_explain_codegen/_delta_log/00000000000000000000.checkpoint.parquet]]}, projection=[add, remove, metaData, protocol, txn, sidecar], file_type=parquet
 
 
 physical_plan after EnsureCooperative:
-DeltaCommitExec(table_path=file://<tmp>/merge_explain_codegen/)
-  CoalescePartitionsExec
-    UnionExec
-      DeltaWriterExec(table_path=file://<tmp>/merge_explain_codegen/)
-        CoalescePartitionsExec
-          ProjectionExec: expr=[CASE WHEN __common_expr_1@0 THEN __sail_src_id@10 ELSE id@3 END as id, CASE WHEN __common_expr_1@0 THEN __sail_src_category@11 ELSE category@4 END as category, CASE WHEN __common_expr_2@1 THEN __sail_src_amount@12 + 1 WHEN __common_expr_1@0 THEN __sail_src_amount@12 ELSE amount@5 END as amount, CASE WHEN __common_expr_2@1 THEN spark_concat(__sail_src_note@13, _, id@3) WHEN __common_expr_3@2 AND __sail_merge_source_row_present@14 IS NULL AND category@4 = stale THEN spark_concat(note@6, _orphan) WHEN __common_expr_1@0 THEN spark_concat(insert_, __sail_src_note@13) ELSE note@6 END as note]
-            ProjectionExec: expr=[__sail_merge_target_row_present@7 IS NULL AND __sail_merge_source_row_present@12 IS NOT NULL as __common_expr_1, __common_expr_4@0 AND __sail_merge_source_row_present@12 IS NOT NULL AND category@2 = vip as __common_expr_2, __common_expr_4@0 as __common_expr_3, id@1 as id, category@2 as category, amount@3 as amount, note@4 as note, __sail_file_path@5 as __sail_file_path, __sail_merge_target_row_id@6 as __sail_merge_target_row_id, __sail_merge_target_row_present@7 as __sail_merge_target_row_present, __sail_src_id@8 as __sail_src_id, __sail_src_category@9 as __sail_src_category, __sail_src_amount@10 as __sail_src_amount, __sail_src_note@11 as __sail_src_note, __sail_merge_source_row_present@12 as __sail_merge_source_row_present]
-              ProjectionExec: expr=[__sail_merge_target_row_present@6 IS NOT NULL as __common_expr_4, id@0 as id, category@1 as category, amount@2 as amount, note@3 as note, __sail_file_path@4 as __sail_file_path, __sail_merge_target_row_id@5 as __sail_merge_target_row_id, __sail_merge_target_row_present@6 as __sail_merge_target_row_present, __sail_src_id@7 as __sail_src_id, __sail_src_category@8 as __sail_src_category, __sail_src_amount@9 as __sail_src_amount, __sail_src_note@10 as __sail_src_note, __sail_merge_source_row_present@11 as __sail_merge_source_row_present]
-                CoalesceBatchesExec: target_batch_size=8192
-                  FilterExec: __sail_merge_target_row_present@6 IS NOT NULL AND (__sail_merge_target_row_present@6 IS NULL OR __sail_merge_source_row_present@11 IS NULL OR category@1 != stale) OR __sail_merge_target_row_present@6 IS NULL AND __sail_merge_source_row_present@11 IS NOT NULL
-                    RepartitionExec: partitioning=RoundRobinBatch(<partitions>), input_partitions=<partitions>
-                      MergeCardinalityCheckExec: row_id=__sail_merge_target_row_id, target_present=__sail_merge_target_row_present, source_present=__sail_merge_source_row_present
-                        ProjectionExec: expr=[id@5 as id, category@6 as category, amount@7 as amount, note@8 as note, __sail_file_path@9 as __sail_file_path, __sail_merge_target_row_id@10 as __sail_merge_target_row_id, __sail_merge_target_row_present@11 as __sail_merge_target_row_present, __sail_src_id@0 as __sail_src_id, __sail_src_category@1 as __sail_src_category, __sail_src_amount@2 as __sail_src_amount, __sail_src_note@3 as __sail_src_note, __sail_merge_source_row_present@4 as __sail_merge_source_row_present]
-                          CoalesceBatchesExec: target_batch_size=8192
-                            HashJoinExec: mode=CollectLeft, join_type=Full, on=[(__sail_src_id@0, id@0)], filter=category@0 IS NOT NULL
-                              ProjectionExec: expr=[__sail_src_id@0 as __sail_src_id, __sail_src_category@1 as __sail_src_category, __sail_src_amount@2 as __sail_src_amount, __sail_src_note@3 as __sail_src_note, true as __sail_merge_source_row_present]
-                                ProjectionExec: expr=[column1@0 as __sail_src_id, column2@1 as __sail_src_category, column3@2 as __sail_src_amount, column4@3 as __sail_src_note]
-                                  CoalesceBatchesExec: target_batch_size=8192
-                                    FilterExec: column3@2 + 1 > 10 AND (column1@0 = 1 OR column1@0 = 2 OR column1@0 = 4)
-                                      DataSourceExec: partitions=1, partition_sizes=[<sizes>]
-                              ProjectionExec: expr=[id@0 as id, category@1 as category, amount@2 as amount, note@3 as note, __sail_file_path@4 as __sail_file_path, __sail_merge_target_row_id@5 as __sail_merge_target_row_id, true as __sail_merge_target_row_present]
-                                ProjectionExec: expr=[id@0 as id, category@1 as category, amount@2 as amount, note@3 as note, __sail_file_path@4 as __sail_file_path, uuid() as __sail_merge_target_row_id]
-                                  DataSourceExec: file_groups={1 group: [[<tmp>/merge_explain_codegen/part-<id>.snappy.parquet]]}, projection=[id, category, amount, note, __sail_file_path], file_type=parquet
-      DeltaRemoveActionsExec
-        CoalescePartitionsExec
-          CoalesceBatchesExec: target_batch_size=8192
-            HashJoinExec: mode=Partitioned, join_type=Inner, on=[(__sail_file_path@0, coalesce(get_field(union_extract(action@0, add), path), get_field(union_extract(action@0, remove), path)))]
-              AggregateExec: mode=FinalPartitioned, gby=[__sail_file_path@0 as __sail_file_path], aggr=[]
-                CoalesceBatchesExec: target_batch_size=8192
-                  RepartitionExec: partitioning=Hash([__sail_file_path@0], <partitions>), input_partitions=<partitions>
-                    AggregateExec: mode=Partial, gby=[__sail_file_path@4 as __sail_file_path], aggr=[]
-                      CoalesceBatchesExec: target_batch_size=8192
-                        FilterExec: __sail_merge_target_row_present@6 IS NOT NULL AND (__sail_merge_source_row_present@11 IS NOT NULL AND id@0 = __sail_src_id@7 AND category@1 IS NOT NULL AND (category@1 = vip OR category@1 = stale) OR __sail_merge_source_row_present@11 IS NULL AND category@1 = stale)
-                          RepartitionExec: partitioning=RoundRobinBatch(<partitions>), input_partitions=<partitions>
-                            MergeCardinalityCheckExec: row_id=__sail_merge_target_row_id, target_present=__sail_merge_target_row_present, source_present=__sail_merge_source_row_present
-                              ProjectionExec: expr=[id@5 as id, category@6 as category, amount@7 as amount, note@8 as note, __sail_file_path@9 as __sail_file_path, __sail_merge_target_row_id@10 as __sail_merge_target_row_id, __sail_merge_target_row_present@11 as __sail_merge_target_row_present, __sail_src_id@0 as __sail_src_id, __sail_src_category@1 as __sail_src_category, __sail_src_amount@2 as __sail_src_amount, __sail_src_note@3 as __sail_src_note, __sail_merge_source_row_present@4 as __sail_merge_source_row_present]
-                                CoalesceBatchesExec: target_batch_size=8192
-                                  HashJoinExec: mode=CollectLeft, join_type=Full, on=[(__sail_src_id@0, id@0)], filter=category@0 IS NOT NULL
-                                    ProjectionExec: expr=[__sail_src_id@0 as __sail_src_id, __sail_src_category@1 as __sail_src_category, __sail_src_amount@2 as __sail_src_amount, __sail_src_note@3 as __sail_src_note, true as __sail_merge_source_row_present]
-                                      ProjectionExec: expr=[column1@0 as __sail_src_id, column2@1 as __sail_src_category, column3@2 as __sail_src_amount, column4@3 as __sail_src_note]
-                                        CoalesceBatchesExec: target_batch_size=8192
-                                          FilterExec: column3@2 + 1 > 10 AND (column1@0 = 1 OR column1@0 = 2 OR column1@0 = 4)
-                                            DataSourceExec: partitions=1, partition_sizes=[<sizes>]
-                                    ProjectionExec: expr=[id@0 as id, category@1 as category, amount@2 as amount, note@3 as note, __sail_file_path@4 as __sail_file_path, __sail_merge_target_row_id@5 as __sail_merge_target_row_id, true as __sail_merge_target_row_present]
-                                      ProjectionExec: expr=[id@0 as id, category@1 as category, amount@2 as amount, note@3 as note, __sail_file_path@4 as __sail_file_path, uuid() as __sail_merge_target_row_id]
-                                        DataSourceExec: file_groups={1 group: [[<tmp>/merge_explain_codegen/part-<id>.snappy.parquet]]}, projection=[id, category, amount, note, __sail_file_path], file_type=parquet
-              CoalesceBatchesExec: target_batch_size=8192
-                RepartitionExec: partitioning=Hash([coalesce(get_field(union_extract(action@0, add), path), get_field(union_extract(action@0, remove), path))], <partitions>), input_partitions=<partitions>
-                  RepartitionExec: partitioning=RoundRobinBatch(<partitions>), input_partitions=<partitions>
-                    CooperativeExec
-                      DeltaFindFilesExec(table_path=file://<tmp>/merge_explain_codegen/)
-
+SAME TEXT AS ABOVE
 
 physical_plan after FilterPushdown(Post):
 SAME TEXT AS ABOVE
@@ -1095,8 +1064,9 @@ DeltaCommitExec(table_path=file://<tmp>/merge_explain_codegen/)
               CoalesceBatchesExec: target_batch_size=8192
                 RepartitionExec: partitioning=Hash([coalesce(get_field(union_extract(action@0, add), path), get_field(union_extract(action@0, remove), path))], <partitions>), input_partitions=<partitions>
                   RepartitionExec: partitioning=RoundRobinBatch(<partitions>), input_partitions=<partitions>
-                    CooperativeExec
-                      DeltaFindFilesExec(table_path=file://<tmp>/merge_explain_codegen/)
+                    DeltaFindFilesExec(table_path=file://<tmp>/merge_explain_codegen/)
+                      DeltaLogScanExec(table_path=file://<tmp>/merge_explain_codegen/, version=0)
+                        DataSourceExec: file_groups={1 group: [[<tmp>/merge_explain_codegen/_delta_log/00000000000000000000.checkpoint.parquet]]}, projection=[add, remove, metaData, protocol, txn, sidecar], file_type=parquet
 
 
 == Physical Plan ==
@@ -1149,5 +1119,6 @@ DeltaCommitExec(table_path=file://<tmp>/merge_explain_codegen/)
               CoalesceBatchesExec: target_batch_size=8192
                 RepartitionExec: partitioning=Hash([coalesce(get_field(union_extract(action@0, add), path), get_field(union_extract(action@0, remove), path))], <partitions>), input_partitions=<partitions>
                   RepartitionExec: partitioning=RoundRobinBatch(<partitions>), input_partitions=<partitions>
-                    CooperativeExec
-                      DeltaFindFilesExec(table_path=file://<tmp>/merge_explain_codegen/)
+                    DeltaFindFilesExec(table_path=file://<tmp>/merge_explain_codegen/)
+                      DeltaLogScanExec(table_path=file://<tmp>/merge_explain_codegen/, version=0)
+                        DataSourceExec: file_groups={1 group: [[<tmp>/merge_explain_codegen/_delta_log/00000000000000000000.checkpoint.parquet]]}, projection=[add, remove, metaData, protocol, txn, sidecar], file_type=parquet

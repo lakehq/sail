@@ -105,5 +105,6 @@ DeltaCommitExec(table_path=file://<tmp>/merge_cardinality_skip/)
                                           ProjectionExec: expr=[column1@0 as #2, column2@1 as #3]
                                             DataSourceExec: partitions=1, partition_sizes=[<sizes>]
               RepartitionExec: partitioning=RoundRobinBatch(<partitions>), input_partitions=<partitions>
-                CooperativeExec
-                  DeltaFindFilesExec(table_path=file://<tmp>/merge_cardinality_skip/)
+                DeltaFindFilesExec(table_path=file://<tmp>/merge_cardinality_skip/)
+                  DeltaLogScanExec(table_path=file://<tmp>/merge_cardinality_skip/, version=0)
+                    DataSourceExec: file_groups={1 group: [[<tmp>/merge_cardinality_skip/_delta_log/00000000000000000000.checkpoint.parquet]]}, projection=[add, remove, metaData, protocol, txn, sidecar], file_type=parquet
