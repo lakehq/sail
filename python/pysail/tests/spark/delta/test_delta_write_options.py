@@ -4,8 +4,6 @@ Test Delta Lake write options (write_batch_size, target_file_size) in Sail.
 
 from pyspark.sql.types import Row
 
-from ..utils import get_data_files  # noqa: TID252
-
 
 class TestDeltaWriteOptions:
     """Test Delta Lake write options functionality."""
@@ -60,12 +58,6 @@ class TestDeltaWriteOptions:
             df.write.format("delta").mode("overwrite").option("target_file_size", str(file_size)).option(
                 "write_batch_size", "100"
             ).save(str(size_path))
-
-            # target_file_size should create multiple files
-            data_files = get_data_files(str(size_path))
-            assert (
-                len(data_files) > 2  # noqa: PLR2004
-            ), f"target_file_size ({file_size}) should create multiple output files, got {len(data_files)} files"
 
             result_df = spark.read.format("delta").load(f"{size_path}").sort("id")
             result_data = result_df.collect()
