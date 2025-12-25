@@ -2,12 +2,12 @@ from __future__ import annotations
 
 import json
 import math
-import re
 from dataclasses import dataclass
 from functools import lru_cache
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
+import yaml
 from syrupy.data import Snapshot, SnapshotCollection
 from syrupy.exceptions import TaintedSnapshotError
 from syrupy.extensions.base import AbstractSyrupyExtension
@@ -38,97 +38,49 @@ class MalformedYamlSnapshotFileError(ValueError):
         return cls(msg)
 
 
-_SAFE_KEY_RE = re.compile(r"^[A-Za-z_][A-Za-z0-9_.-]*$")
-_RESERVED_PLAIN = {"null", "Null", "NULL", "~", "true", "True", "TRUE", "false", "False", "FALSE"}
-
-
 def _quote_yaml_string(value: str) -> str:
-    # YAML double-quoted scalars are compatible with JSON string escaping.
+    # Snapshot names use JSON quoting (YAML double-quoted compatible).
     return json.dumps(value, ensure_ascii=False)
 
 
-def _format_yaml_key(key: Any) -> str:
-    s = str(key)
-    if _SAFE_KEY_RE.fullmatch(s) and s not in _RESERVED_PLAIN:
-        return s
-    return _quote_yaml_string(s)
-
-
-def _format_yaml_number(value: float) -> str:
-    if isinstance(value, bool):  # bool is a subclass of int
-        return "true" if value else "false"
-    if isinstance(value, int):
-        return str(value)
-    if math.isnan(value):
-        return "nan"
-    if math.isinf(value):
-        return "inf" if value > 0 else "-inf"
-    # repr() is stable and round-trippable enough for snapshot text.
-    return repr(value)
-
-
-def _indent_lines(text: str, level: int, *, indent: str = "  ") -> str:
-    prefix = indent * level
-    return "\n".join((prefix + line) if line else prefix for line in text.splitlines())
-
-
-def _dump_yaml_value(data: Any, *, level: int = 0, sort_keys: bool = True) -> str:
+def _normalize_for_yaml(data: Any) -> Any:
     """
-    Emit a deterministic YAML subset for dict/list/scalars.
-
-    - Scalars are rendered in a single line (strings are always quoted, unless multiline).
-    - Multiline strings are rendered as block scalars using `|-`.
-    - dict keys are emitted as plain scalars when safe, otherwise quoted.
+    Normalize data for deterministic YAML output.
     """
-    if data is None:
-        return "null"
-    if isinstance(data, bool):
-        return "true" if data else "false"
-    if isinstance(data, (int, float)):
-        return _format_yaml_number(data)
-    if isinstance(data, str):
-        if "\n" in data or "\r" in data:
-            # Normalize newlines to be stable across platforms.
-            normalized = data.replace("\r\n", "\n").replace("\r", "\n")
-            # Use chomping indicator to avoid trailing newline differences.
-            lines = normalized.split("\n")
-            block = "\n".join(lines)
-            return "|\n" + _indent_lines(block, level + 1)
-        return _quote_yaml_string(data)
-    if isinstance(data, (list, tuple, set, frozenset)):
-        items = list(data) if not isinstance(data, (list, tuple)) else data
-        if not items:
-            return "[]"
-        out_lines: list[str] = []
-        for item in items:
-            if isinstance(item, (dict, list, tuple, set, frozenset)) or (
-                isinstance(item, str) and ("\n" in item or "\r" in item)
-            ):
-                out_lines.append("-")
-                # Dump nested values at column 0, then indent them under the list item.
-                out_lines.append(_indent_lines(_dump_yaml_value(item, level=0, sort_keys=sort_keys), 1))
-            else:
-                out_lines.append(f"- {_dump_yaml_value(item, level=level, sort_keys=sort_keys)}")
-        return _indent_lines("\n".join(out_lines), level)
     if isinstance(data, dict):
-        if not data:
-            return "{}"
-        keys = list(data.keys())
-        if sort_keys:
-            keys = sorted(keys, key=lambda k: str(k))
-        out_lines = []
-        for k in keys:
-            v = data[k]
-            k_s = _format_yaml_key(k)
-            if isinstance(v, (dict, list, tuple, set, frozenset)) or (isinstance(v, str) and ("\n" in v or "\r" in v)):
-                out_lines.append(f"{k_s}:")
-                out_lines.append(_indent_lines(_dump_yaml_value(v, level=0, sort_keys=sort_keys), 1))
-            else:
-                out_lines.append(f"{k_s}: {_dump_yaml_value(v, level=0, sort_keys=sort_keys)}")
-        return _indent_lines("\n".join(out_lines), level)
+        return {k: _normalize_for_yaml(v) for k, v in data.items()}
+    if isinstance(data, (set, frozenset)):
+        return [_normalize_for_yaml(v) for v in sorted(data, key=lambda v: (type(v).__name__, str(v)))]
+    if isinstance(data, tuple):
+        return [_normalize_for_yaml(v) for v in data]
+    if isinstance(data, list):
+        return [_normalize_for_yaml(v) for v in data]
+    if isinstance(data, str):
+        return data.replace("\r\n", "\n").replace("\r", "\n")
+    return data
 
-    # Fall back to repr() for unknown objects.
-    return _quote_yaml_string(repr(data))
+
+class _SnapshotYamlDumper(yaml.SafeDumper):
+    pass
+
+
+def _repr_str(dumper: yaml.SafeDumper, data: str) -> yaml.nodes.ScalarNode:
+    if "\n" in data:
+        return dumper.represent_scalar("tag:yaml.org,2002:str", data, style="|")
+    return dumper.represent_scalar("tag:yaml.org,2002:str", data)
+
+
+def _repr_float(dumper: yaml.SafeDumper, data: float) -> yaml.nodes.ScalarNode:
+    # Deterministic NaN/Inf.
+    if math.isnan(data):
+        return dumper.represent_scalar("tag:yaml.org,2002:float", "nan")
+    if math.isinf(data):
+        return dumper.represent_scalar("tag:yaml.org,2002:float", "inf" if data > 0 else "-inf")
+    return dumper.represent_scalar("tag:yaml.org,2002:float", repr(data))
+
+
+_SnapshotYamlDumper.add_representer(str, _repr_str)
+_SnapshotYamlDumper.add_representer(float, _repr_float)
 
 
 @dataclass(frozen=True)
@@ -174,14 +126,22 @@ class YamlDataSerializer:
     ) -> str:
         _ = exclude
         _ = include
-        # Best-effort support for Syrupy's property matcher hook.
         if matcher is not None:
             try:
                 data = matcher(data=data, path=())
             except TypeError:
                 data = matcher(data)
 
-        text = _dump_yaml_value(data, level=0, sort_keys=True)
+        normalized = _normalize_for_yaml(data)
+        # `safe_dump` hardcodes the dumper; use our SafeDumper subclass for stable output.
+        text = yaml.dump(
+            normalized,
+            Dumper=_SnapshotYamlDumper,
+            sort_keys=True,
+            default_flow_style=False,
+            allow_unicode=True,
+            width=1000,
+        ).strip()
         return text.replace("\r\n", "\n").replace("\r", "\n")
 
     @classmethod
@@ -201,7 +161,6 @@ class YamlDataSerializer:
                 f.write(f"name: {_quote_yaml_string(snapshot.name)}\n")
                 f.write("data:\n")
                 f.writelines(f"{cls._indent}{line}\n" for line in snapshot.data.splitlines())
-                # Ensure there's always at least one line under data:
                 if not snapshot.data.splitlines():
                     f.write(f"{cls._indent}null\n")
 
@@ -218,7 +177,7 @@ class YamlDataSerializer:
         lines = raw.splitlines(keepends=False)
         tainted = False
 
-        # Version marker is expected at the top of the file (first non-empty line).
+        # Version marker: first non-empty line.
         version_line = None
         for line in lines:
             if not line.strip():
@@ -258,19 +217,14 @@ class YamlDataSerializer:
 
         for line in lines:
             if line.startswith(cls._marker_prefix) and current_name is None and not collecting_data:
-                # Ignore comments outside a doc.
                 continue
             if line.strip() == cls._doc_divider:
                 flush()
                 continue
             if not line.strip():
-                # Ignore blank lines between docs / headers.
                 if current_name is None and not collecting_data:
                     continue
                 if collecting_data:
-                    # We only accept blank lines as part of data when they are indented.
-                    # Our writer always indents blank lines, so an unindented blank line
-                    # here is treated as separator.
                     continue
                 continue
 
@@ -280,7 +234,6 @@ class YamlDataSerializer:
                 name_raw = line.split(":", 1)[1].strip()
                 if name_raw.startswith(("'", '"')):
                     try:
-                        # Parse JSON-style quoted strings (we always write JSON quotes).
                         current_name = json.loads(name_raw)
                     except json.JSONDecodeError as e:
                         raise MalformedYamlSnapshotFileError.invalid_quoted_name(name_raw=name_raw) from e
@@ -294,11 +247,10 @@ class YamlDataSerializer:
                 collecting_data = True
                 continue
 
-            # Collect data lines; must be indented by exactly two spaces.
+            # Data lines must be indented by exactly two spaces.
             if line.startswith(cls._indent):
                 data_lines.append(line[len(cls._indent) :])
             else:
-                # Treat unindented content as malformed; this keeps the format strict and predictable.
                 raise MalformedYamlSnapshotFileError.expected_indented_data_line(line=line)
 
         flush()

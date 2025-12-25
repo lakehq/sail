@@ -42,6 +42,8 @@ test = [
     "pyiceberg[sql-sqlite,pyiceberg-core]==0.10.0",
     "pydantic>=2.11,<2.12",
     "jedi>=0.19.2,<0.20",
+    "jsonpath-ng>=1.6,<2",
+    "PyYAML>=6.0,<7",
 ]
 mcp = [
     "mcp>=1.0.0,<2",
@@ -88,6 +90,8 @@ dependencies = [
     "pyiceberg[sql-sqlite,pyiceberg-core]==0.10.0",
     "pydantic>=2.11,<2.12",
     "jedi>=0.19.2,<0.20",
+    "jsonpath-ng>=1.6,<2",
+    "PyYAML>=6.0,<7",
 ]
 path = ".venvs/default"
 
@@ -132,6 +136,8 @@ dependencies = [
     "pyiceberg[sql-sqlite,pyiceberg-core]==0.10.0",
     "pydantic>=2.11,<2.12",
     "jedi>=0.19.2,<0.20",
+    "jsonpath-ng>=1.6,<2",
+    "PyYAML>=6.0,<7",
 ]
 
 [[tool.hatch.envs.test.matrix]]

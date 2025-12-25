@@ -6,6 +6,7 @@ import os
 import re
 import textwrap
 import time
+from functools import lru_cache
 from pathlib import Path
 from typing import TYPE_CHECKING
 
@@ -23,6 +24,17 @@ if TYPE_CHECKING:
     import pyspark.sql.connect.session
     from syrupy.assertion import SnapshotAssertion
     from syrupy.types import SerializableData
+
+try:
+    from jsonpath_ng import parse as jsonpath_parse  # type: ignore[import-not-found]
+    from jsonpath_ng.exceptions import JsonPathParserError  # type: ignore[import-not-found]
+except ModuleNotFoundError as e:  # pragma: no cover
+    # Delta-log path assertions require `jsonpath-ng` (test extras).
+    jsonpath_parse = None  # type: ignore[assignment]
+    JsonPathParserError = Exception  # type: ignore[assignment]
+    _JSONPATH_IMPORT_ERROR: ModuleNotFoundError | None = e
+else:
+    _JSONPATH_IMPORT_ERROR = None
 
 
 def normalize_plan_text(plan_text: str) -> str:
@@ -394,11 +406,7 @@ def _latest_commit_info_from_variables(variables: dict) -> dict:
 
 
 def _recursive_parse_json_strings(value):
-    """Recursively parse JSON-encoded strings into structured Python values.
-
-    Delta `commitInfo.operationParameters` stores values as strings; for snapshot tests we
-    normalize common JSON payloads (objects/arrays/bools/null/numbers) back into structure.
-    """
+    """Parse JSON-looking strings recursively (e.g. commitInfo.operationParameters)."""
     if isinstance(value, dict):
         return {k: _recursive_parse_json_strings(v) for k, v in value.items()}
     if isinstance(value, list):
@@ -419,11 +427,11 @@ def _normalize_delta_commit_info_for_snapshot(commit_info: dict) -> dict:
     """Normalize volatile / version-specific fields but keep the keys in the snapshot."""
     normalized = dict(commit_info)
 
-    # Keep timestamp, but normalize its value.
+    # Timestamp is volatile.
     if "timestamp" in normalized:
         normalized["timestamp"] = "<timestamp>"
 
-    # Normalize engine/client versions to stable placeholders.
+    # Engine/client versions are volatile.
     cv = normalized.get("clientVersion")
     if isinstance(cv, str) and cv.startswith("sail-delta-lake."):
         normalized["clientVersion"] = "sail-delta-lake.x.x.x"
@@ -432,7 +440,7 @@ def _normalize_delta_commit_info_for_snapshot(commit_info: dict) -> dict:
     if isinstance(ei, str) and ei.startswith("sail-delta-lake:"):
         normalized["engineInfo"] = "sail-delta-lake:x.x.x"
 
-    # Normalize time-related operation metrics (nondeterministic).
+    # Time-related metrics are nondeterministic.
     op_metrics = normalized.get("operationMetrics")
     if isinstance(op_metrics, dict):
         scrubbed = dict(op_metrics)
@@ -444,142 +452,31 @@ def _normalize_delta_commit_info_for_snapshot(commit_info: dict) -> dict:
     return normalized
 
 
-def _parse_path_expr(path: str) -> list[tuple[str, str | int]]:
-    """
-    Parse a simple path expression:
-    - dict keys separated by dots: a.b.c
-    - list indices in brackets: a.items[0].name
-    - dict keys in brackets (for keys containing dots/special chars):
-      metaData.configuration[\"delta.columnMapping.mode\"]
-    """
-    path_raw = path
-    path = path.strip()
-    if not path:
-        raise _PathExpressionError.empty(path=path_raw)
-
-    tokens: list[tuple[str, str | int]] = []
-    buf = ""
-    i = 0
-    while i < len(path):
-        c = path[i]
-        if c == ".":
-            if buf:
-                tokens.append(("key", buf))
-                buf = ""
-            i += 1
-            continue
-        if c == "[":
-            if buf:
-                tokens.append(("key", buf))
-                buf = ""
-            j = path.find("]", i + 1)
-            if j == -1:
-                raise _PathExpressionError.unclosed_bracket(path=path)
-            raw = path[i + 1 : j].strip()
-            if not raw:
-                raise _PathExpressionError.empty_bracket_selector(path=path)
-            # Dict key selector: JSON-quoted string, e.g. ["a.b"]
-            if raw[0] in ("'", '"'):
-                try:
-                    key = json.loads(raw) if raw[0] == '"' else raw.strip("'")
-                except json.JSONDecodeError as e:
-                    raise _PathExpressionError.invalid_quoted_key_selector(path=path, raw=raw) from e
-                tokens.append(("key", str(key)))
-            else:
-                # List index selector: [0]
-                if not raw.lstrip("-").isdigit():
-                    raise _PathExpressionError.invalid_bracket_selector(path=path, raw=raw)
-                tokens.append(("index", int(raw)))
-            i = j + 1
-            continue
-        buf += c
-        i += 1
-    if buf:
-        tokens.append(("key", buf))
-    return tokens
-
-
 def _get_by_path(obj: object, path: str) -> object:
-    cur: object = obj
-    for kind, tok in _parse_path_expr(path):
-        if kind == "key":
-            if not isinstance(cur, dict) or tok not in cur:
-                raise KeyError(path)
-            cur = cur[tok]  # type: ignore[index]
-        else:
-            if not isinstance(cur, list):
-                raise KeyError(path)
-            idx = tok  # type: ignore[assignment]
-            if idx < 0 or idx >= len(cur):
-                raise KeyError(path)
-            cur = cur[idx]
-    return cur
-
-
-def _set_by_tokens(root: object, tokens: list[tuple[str, str | int]], value: object) -> object:
-    """
-    Create/overwrite a nested structure under `root` following tokens.
-    Returns the (possibly new) root object.
-    """
-    if not tokens:
-        return value
-
-    kind0, _tok0 = tokens[0]
-    if root is None:
-        root = {} if kind0 == "key" else []
-
-    cur = root
-    for i, (kind, tok) in enumerate(tokens):
-        is_last = i == len(tokens) - 1
-        nxt = tokens[i + 1] if not is_last else None
-
-        if kind == "key":
-            if not isinstance(cur, dict):
-                raise _PathSetTypeError.expected_dict()
-            key = tok  # type: ignore[assignment]
-            if is_last:
-                cur[key] = value
-                return root
-            if key not in cur or cur[key] is None:
-                cur[key] = {} if nxt and nxt[0] == "key" else []
-            cur = cur[key]
-            continue
-
-        if not isinstance(cur, list):
-            raise _PathSetTypeError.expected_list()
-        idx = tok  # type: ignore[assignment]
-        if idx < 0:
-            raise _PathSetValueError.negative_index()
-        while len(cur) <= idx:
-            cur.append(None)
-        if is_last:
-            cur[idx] = value
-            return root
-        if cur[idx] is None:
-            cur[idx] = {} if nxt and nxt[0] == "key" else []
-        cur = cur[idx]
-
-    return root
+    expr = _compile_jsonpath(path)
+    matches = expr.find(obj)
+    if not matches:
+        raise KeyError(path)
+    if len(matches) != 1:
+        raise KeyError(path)
+    return matches[0].value
 
 
 def _pick_paths(obj: object, paths: list[str]) -> object:
-    """
-    Extract selected paths from `obj` and return a nested structure containing only those fields.
-    Missing paths raise KeyError to keep assertions explicit.
-    """
-    out: object = None
+    """Project a subset of fields by JSONPath; missing/ambiguous paths raise KeyError."""
+    out: object = {}
     for p in paths:
+        expr = _compile_jsonpath(p)
         v = _get_by_path(obj, p)
-        out = _set_by_tokens(out, _parse_path_expr(p), v)
-    return out if out is not None else {}
+        try:
+            expr.update_or_create(out, v)
+        except Exception as e:
+            raise KeyError(p) from e
+    return out
 
 
 def _parse_expected_value(raw: str) -> object:
-    """
-    Parse a datatable value:
-    - JSON if possible (null/true/false/numbers/arrays/objects/quoted strings)
-    - otherwise treat as raw string
-    """
+    """Parse a datatable value as JSON when possible; otherwise keep it as a string."""
     s = raw.strip()
     if not s:
         return ""
@@ -589,36 +486,16 @@ def _parse_expected_value(raw: str) -> object:
         return raw
 
 
-_DELTA_LOG_CACHE_KEY = "__delta_log_cache__"
+@pytest.fixture
+def delta_log_cache() -> dict[str, dict]:
+    """Per-scenario cache for normalized delta log objects."""
+    return {}
 
 
-def _delta_log_get_cached(which: str, variables: dict) -> dict | None:
-    cache = variables.get(_DELTA_LOG_CACHE_KEY)
-    if isinstance(cache, dict):
-        v = cache.get(which)
-        if isinstance(v, dict):
-            return v
-    return None
-
-
-def _delta_log_put_cached(which: str, variables: dict, obj: dict) -> None:
-    cache = variables.get(_DELTA_LOG_CACHE_KEY)
-    if not isinstance(cache, dict):
-        cache = {}
-        variables[_DELTA_LOG_CACHE_KEY] = cache
-    cache[which] = obj
-
-
-def _delta_log_compute(which: str, variables: dict) -> dict:
-    """
-    Compute and normalize the delta log object (and cache it per-scenario).
-
-    This is the shared "single source of truth" used by both:
-    - matches snapshot (observability)
-    - contains (explicit KV checks, can be chained)
-    """
-    cached = _delta_log_get_cached(which, variables)
-    if cached is not None:
+def _delta_log_compute(which: str, variables: dict, delta_log_cache: dict[str, dict]) -> dict:
+    """Compute + normalize the requested delta-log object (cached per-scenario)."""
+    cached = delta_log_cache.get(which)
+    if isinstance(cached, dict):
         return cached
 
     if which == "latest commit info":
@@ -632,7 +509,7 @@ def _delta_log_compute(which: str, variables: dict) -> dict:
         assert "metaData" in obj, "metaData action not found in first commit"
         obj["metaData"] = _normalize_delta_metadata_for_snapshot(obj["metaData"])
 
-    _delta_log_put_cached(which, variables, obj)
+    delta_log_cache[which] = obj
     return obj
 
 
@@ -646,26 +523,15 @@ def delta_log_assert(
     which: str,
     mode: str,
     variables,
+    delta_log_cache: dict[str, dict],
     snapshot: SnapshotAssertion,
     datatable=None,
 ):
-    """
-    Universal delta log assertion step (one function for all delta log checks).
-
-    It matches existing phrases:
-    - Then delta log latest commit info matches snapshot
-    - Then delta log first commit protocol and metadata matches snapshot
-
-    And also supports (without adding more step functions):
-    - "... matches snapshot for paths" + datatable `| path |` to snapshot only a subset
-    - "... contains" + datatable `| path | value |` to assert arbitrary nested values
-    """
+    """Delta log assertions: snapshot whole/subset, or assert specific paths."""
     if is_jvm_spark():
         pytest.skip("Delta log assertions are Sail-only")
 
-    # Always operate on a cached, normalized object so "matches" and "contains"
-    # are consistent and can be chained without re-reading delta logs.
-    obj = _delta_log_compute(which, variables)
+    obj = _delta_log_compute(which, variables, delta_log_cache)
 
     if mode == "contains":
         assert datatable is not None, "expected a datatable: | path | value |"
@@ -709,58 +575,55 @@ class _PathExpressionError(ValueError):
         return cls(code="empty path", path=path)
 
     @classmethod
-    def unclosed_bracket(cls, *, path: str) -> _PathExpressionError:
-        return cls(code="unclosed '[' in path", path=path)
-
-    @classmethod
-    def empty_bracket_selector(cls, *, path: str) -> _PathExpressionError:
-        return cls(code="empty bracket selector [] in path", path=path)
-
-    @classmethod
-    def invalid_quoted_key_selector(cls, *, path: str, raw: str) -> _PathExpressionError:
-        return cls(code="invalid quoted key selector in path", path=path, raw=raw)
-
-    @classmethod
-    def invalid_bracket_selector(cls, *, path: str, raw: str) -> _PathExpressionError:
-        return cls(code="invalid bracket selector in path", path=path, raw=raw)
+    def invalid(cls, *, path: str, raw: str) -> _PathExpressionError:
+        return cls(code="invalid path expression", path=path, raw=raw)
 
 
-class _PathSetTypeError(TypeError):
-    def __init__(self, *, code: str) -> None:
-        self.code = code
-        super().__init__()
+class _JsonPathNgRequiredError(RuntimeError):
+    MESSAGE = (
+        "jsonpath-ng is required for delta-log path assertions. "
+        "Install test dependencies (e.g. `hatch env create` / `pip install -e '.[test]'`)."
+    )
 
-    def __str__(self) -> str:
-        return self.code
-
-    @classmethod
-    def expected_dict(cls) -> _PathSetTypeError:
-        return cls(code="path expects dict but found non-dict")
-
-    @classmethod
-    def expected_list(cls) -> _PathSetTypeError:
-        return cls(code="path expects list but found non-list")
+    def __init__(self) -> None:
+        super().__init__(self.MESSAGE)
 
 
-class _PathSetValueError(ValueError):
-    def __init__(self, *, code: str) -> None:
-        self.code = code
-        super().__init__()
+_JSONPATH_DQ_KEY_RE = re.compile(r'\["((?:[^"\\]|\\.)*)"\]')
 
-    def __str__(self) -> str:
-        return self.code
 
-    @classmethod
-    def negative_index(cls) -> _PathSetValueError:
-        return cls(code="negative indices are not supported for setting")
+def _normalize_to_jsonpath(path: str) -> str:
+    """Normalize input into jsonpath-ng-friendly JSONPath."""
+    p = path.strip()
+    if not p:
+        raise _PathExpressionError.empty(path=path)
+    if not p.startswith("$"):
+        p = "$." + p
+
+    def repl(m: re.Match[str]) -> str:
+        try:
+            val = json.loads(f'"{m.group(1)}"')
+        except json.JSONDecodeError:
+            return m.group(0)
+        val = val.replace("\\", "\\\\").replace("'", "\\'")
+        return f"['{val}']"
+
+    return _JSONPATH_DQ_KEY_RE.sub(repl, p)
+
+
+@lru_cache(maxsize=1024)
+def _compile_jsonpath(path: str):
+    if jsonpath_parse is None:  # pragma: no cover
+        raise _JsonPathNgRequiredError from _JSONPATH_IMPORT_ERROR
+    expr_str = _normalize_to_jsonpath(path)
+    try:
+        return jsonpath_parse(expr_str)
+    except (JsonPathParserError, Exception) as e:
+        raise _PathExpressionError.invalid(path=path, raw=expr_str) from e
 
 
 def _normalize_column_mapping_schema(schema: dict) -> dict:
-    """Normalize schema fields for column mapping snapshot tests.
-
-    - Replaces physicalName UUIDs (col-<uuid>) with stable placeholders.
-    - Keeps columnMapping.id values as-is for structural validation.
-    """
+    """Normalize schemaString for snapshot stability (scrub physicalName UUIDs)."""
     if not isinstance(schema, dict):
         return schema
 
@@ -770,29 +633,24 @@ def _normalize_column_mapping_schema(schema: dict) -> dict:
         for i, field in enumerate(normalized["fields"]):
             if isinstance(field, dict) and "metadata" in field:
                 meta = field.get("metadata", {})
-                # Normalize physicalName UUIDs
                 phys = meta.get("delta.columnMapping.physicalName", "")
                 if isinstance(phys, str) and phys.startswith("col-"):
                     meta["delta.columnMapping.physicalName"] = f"<physical_name_{i}>"
-                # Recursively handle nested types
                 if "type" in field and isinstance(field["type"], dict):
                     field["type"] = _normalize_column_mapping_schema(field["type"])
     return normalized
 
 
 def _normalize_delta_metadata_for_snapshot(metadata: dict) -> dict:
-    """Normalize metaData action for snapshot comparison."""
+    """Normalize metaData action for stable snapshots."""
     normalized = dict(metadata)
 
-    # Normalize id (UUID)
     if "id" in normalized:
         normalized["id"] = "<table_id>"
 
-    # Normalize createdTime
     if "createdTime" in normalized:
         normalized["createdTime"] = "<created_time>"
 
-    # Normalize schema field physicalNames
     if "schemaString" in normalized:
         try:
             schema = json.loads(normalized["schemaString"])
@@ -802,6 +660,3 @@ def _normalize_delta_metadata_for_snapshot(metadata: dict) -> dict:
             pass
 
     return normalized
-
-
-## Consolidated into `delta_log_assert` above.
