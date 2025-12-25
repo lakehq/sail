@@ -39,9 +39,7 @@ mod writer_exec;
 pub use action_schema::{
     decode_actions_and_meta_from_batch, decode_adds_from_batch, delta_action_schema,
     encode_add_actions, encode_commit_meta, encode_metadata_action, encode_protocol_action,
-    encode_remove_actions, CommitMeta, ACTION_TYPE_ADD, ACTION_TYPE_COMMIT_META,
-    ACTION_TYPE_METADATA, ACTION_TYPE_PROTOCOL, ACTION_TYPE_REMOVE, COL_ACTION_TYPE,
-    COL_PARTITION_VALUES, COL_PATH,
+    encode_remove_actions, CommitMeta, COL_ACTION,
 };
 pub use commit_exec::DeltaCommitExec;
 pub use expr_adapter::DeltaPhysicalExprAdapterFactory;

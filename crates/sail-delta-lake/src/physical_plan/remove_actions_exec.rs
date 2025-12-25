@@ -34,7 +34,7 @@ use serde_json::Value;
 use crate::kernel::models::{Add, Remove, RemoveOptions};
 use crate::physical_plan::{
     current_timestamp_millis, decode_adds_from_batch, delta_action_schema, encode_commit_meta,
-    encode_remove_actions, CommitMeta,
+    encode_remove_actions, CommitMeta, COL_ACTION,
 };
 
 /// Physical execution node to convert Add actions (from FindFiles) into Remove actions
@@ -155,7 +155,7 @@ impl ExecutionPlan for DeltaRemoveActionsExec {
                 let batch = batch_result?;
 
                 // Arrow-native action rows only.
-                if batch.column_by_name("action_type").is_some() {
+                if batch.column_by_name(COL_ACTION).is_some() {
                     let adds = decode_adds_from_batch(&batch)?;
                     for add in adds {
                         num_removed_bytes = num_removed_bytes
@@ -164,7 +164,7 @@ impl ExecutionPlan for DeltaRemoveActionsExec {
                     }
                 } else {
                     return Err(DataFusionError::Plan(
-                        "DeltaRemoveActionsExec input must be delta action rows ('action_type')"
+                        "DeltaRemoveActionsExec input must be delta action rows ('action')"
                             .to_string(),
                     ));
                 }

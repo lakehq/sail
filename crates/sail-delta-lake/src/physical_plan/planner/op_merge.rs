@@ -12,9 +12,15 @@
 
 use std::sync::Arc;
 
-use datafusion::common::{internal_err, DataFusionError, JoinType, NullEquality, Result};
-use datafusion::physical_expr::expressions::Column;
+use datafusion::common::config::ConfigOptions;
+use datafusion::common::{
+    internal_err, DataFusionError, JoinType, NullEquality, Result, ScalarValue,
+};
+use datafusion::functions::core::{coalesce, get_field, union_extract};
+use datafusion::physical_expr::expressions::{Column, Literal};
+// Column imported from expressions below
 use datafusion::physical_expr::PhysicalExpr;
+use datafusion::physical_expr::ScalarFunctionExpr;
 use datafusion::physical_plan::joins::{HashJoinExec, PartitionMode};
 use datafusion::physical_plan::union::UnionExec;
 use datafusion::physical_plan::ExecutionPlan;
@@ -28,7 +34,7 @@ use crate::datasource::{DataFusionMixins, PATH_COLUMN};
 use crate::kernel::{DeltaOperation, MergePredicate};
 use crate::options::TableDeltaOptions;
 use crate::physical_plan::{
-    DeltaCommitExec, DeltaFindFilesExec, DeltaRemoveActionsExec, DeltaWriterExec, COL_PATH,
+    DeltaCommitExec, DeltaFindFilesExec, DeltaRemoveActionsExec, DeltaWriterExec, COL_ACTION,
 };
 
 /// Entry point for MERGE execution. Expects the logical MERGE to be fully
@@ -136,12 +142,59 @@ async fn finalize_merge(
             version,
         ));
 
-        // touched_paths JOIN log_adds ON path
+        // touched_paths JOIN log_adds ON path (path is extracted from the union `action` column)
         let left_idx = touched_plan.schema().index_of(PATH_COLUMN)?;
-        let right_idx = log_adds.schema().index_of(COL_PATH)?;
+        let right_action_idx = log_adds.schema().index_of(COL_ACTION)?;
+
+        let config = Arc::new(ConfigOptions::default());
+        let schema = log_adds.schema();
+
+        let action_col =
+            Arc::new(Column::new(COL_ACTION, right_action_idx)) as Arc<dyn PhysicalExpr>;
+        let lit_add = Arc::new(Literal::new(ScalarValue::Utf8(Some("add".to_string()))))
+            as Arc<dyn PhysicalExpr>;
+        let lit_remove = Arc::new(Literal::new(ScalarValue::Utf8(Some("remove".to_string()))))
+            as Arc<dyn PhysicalExpr>;
+        let lit_path = Arc::new(Literal::new(ScalarValue::Utf8(Some("path".to_string()))))
+            as Arc<dyn PhysicalExpr>;
+
+        let add_struct = Arc::new(ScalarFunctionExpr::try_new(
+            union_extract(),
+            vec![Arc::clone(&action_col), lit_add],
+            schema.as_ref(),
+            Arc::clone(&config),
+        )?) as Arc<dyn PhysicalExpr>;
+        let add_path = Arc::new(ScalarFunctionExpr::try_new(
+            get_field(),
+            vec![add_struct, Arc::clone(&lit_path)],
+            schema.as_ref(),
+            Arc::clone(&config),
+        )?) as Arc<dyn PhysicalExpr>;
+
+        let remove_struct = Arc::new(ScalarFunctionExpr::try_new(
+            union_extract(),
+            vec![Arc::clone(&action_col), lit_remove],
+            schema.as_ref(),
+            Arc::clone(&config),
+        )?) as Arc<dyn PhysicalExpr>;
+        let remove_path = Arc::new(ScalarFunctionExpr::try_new(
+            get_field(),
+            vec![remove_struct, lit_path],
+            schema.as_ref(),
+            Arc::clone(&config),
+        )?) as Arc<dyn PhysicalExpr>;
+
+        // Join key = coalesce(path_from_add, path_from_remove)
+        let right_join_key = Arc::new(ScalarFunctionExpr::try_new(
+            coalesce(),
+            vec![add_path, remove_path],
+            schema.as_ref(),
+            config,
+        )?) as Arc<dyn PhysicalExpr>;
+
         let on: Vec<(Arc<dyn PhysicalExpr>, Arc<dyn PhysicalExpr>)> = vec![(
             Arc::new(Column::new(PATH_COLUMN, left_idx)) as Arc<dyn PhysicalExpr>,
-            Arc::new(Column::new(COL_PATH, right_idx)) as Arc<dyn PhysicalExpr>,
+            right_join_key,
         )];
         let joined: Arc<dyn ExecutionPlan> = Arc::new(HashJoinExec::try_new(
             touched_plan,

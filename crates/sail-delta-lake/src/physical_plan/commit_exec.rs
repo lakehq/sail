@@ -42,7 +42,9 @@ use crate::kernel::models::{Action, Add, Metadata, Protocol, RemoveOptions};
 use crate::kernel::transaction::{CommitBuilder, CommitProperties, TableReference};
 use crate::kernel::{DeltaOperation, SaveMode};
 use crate::physical_plan::action_schema::CommitMeta;
-use crate::physical_plan::{current_timestamp_millis, decode_actions_and_meta_from_batch};
+use crate::physical_plan::{
+    current_timestamp_millis, decode_actions_and_meta_from_batch, COL_ACTION,
+};
 use crate::schema::normalize_delta_schema;
 use crate::storage::{get_object_store_from_context, StorageConfig};
 use crate::table::{create_delta_table_with_object_store, open_table_with_object_store};
@@ -241,7 +243,7 @@ impl ExecutionPlan for DeltaCommitExec {
                 let batch = batch_result?;
 
                 // Arrow-native action rows + optional CommitMeta row only.
-                if batch.column_by_name("action_type").is_some() {
+                if batch.column_by_name(COL_ACTION).is_some() {
                     let (decoded_actions, decoded_meta) =
                         decode_actions_and_meta_from_batch(&batch)?;
                     for a in decoded_actions {

@@ -34,7 +34,7 @@ use url::Url;
 use crate::datasource::scan::FileScanParams;
 use crate::datasource::{build_file_scan_config, DeltaScanConfigBuilder};
 use crate::kernel::models::Add;
-use crate::physical_plan::decode_adds_from_batch;
+use crate::physical_plan::{decode_adds_from_batch, COL_ACTION};
 use crate::storage::StorageConfig;
 use crate::table::open_table_with_object_store;
 
@@ -223,11 +223,11 @@ impl ExecutionPlan for DeltaScanByAddsExec {
                 }
 
                 // Arrow-native action rows only.
-                if batch.column_by_name("action_type").is_some() {
+                if batch.column_by_name(COL_ACTION).is_some() {
                     candidate_adds.extend(decode_adds_from_batch(&batch)?);
                 } else {
                     return Err(DataFusionError::Plan(
-                        "DeltaScanByAddsExec input must be delta action rows ('action_type')"
+                        "DeltaScanByAddsExec input must be delta action rows ('action')"
                             .to_string(),
                     ));
                 }
