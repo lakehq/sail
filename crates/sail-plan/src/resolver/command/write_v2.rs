@@ -74,7 +74,12 @@ impl PlanResolver<'_> {
                         table,
                         column_match: WriteColumnMatch::ByName,
                     })
-                    .with_mode(WriteMode::OverwriteIf { condition });
+                    .with_mode(WriteMode::OverwriteIf {
+                        condition: Box::new(spec::ExprWithSource {
+                            expr: *condition,
+                            source: None,
+                        }),
+                    });
             }
             WriteToMode::OverwritePartitions => {
                 builder = builder

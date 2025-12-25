@@ -4,14 +4,13 @@ use std::sync::Arc;
 use datafusion::execution::SessionState;
 use datafusion::physical_expr::expressions::Literal;
 use datafusion::physical_plan::ExecutionPlan;
-use datafusion::scalar::ScalarValue;
-use datafusion::sql::unparser::expr_to_sql;
-use datafusion_common::{internal_err, Result};
+use datafusion_common::{internal_err, Result, ScalarValue};
 use sail_common_datafusion::datasource::{
     MergeInfo as PhysicalMergeInfo, MergePredicateInfo, MergeTargetInfo, OperationOverride,
     TableFormatRegistry,
 };
 use sail_common_datafusion::extension::SessionExtensionAccessor;
+use sail_common_datafusion::physical_expr::PhysicalExprWithSource;
 use sail_logical_plan::merge::MergeIntoWriteNode;
 
 fn convert_options(options: &[Vec<(String, String)>]) -> Vec<HashMap<String, String>> {
@@ -52,7 +51,7 @@ pub async fn create_preexpanded_merge_physical_plan(
 
     let opts = node.options();
     let operation_override = {
-        let merge_predicate = Some(format!("{}", expr_to_sql(&opts.on_condition)?));
+        let merge_predicate = opts.on_condition.source.clone();
 
         let matched_predicates = opts
             .matched_clauses
@@ -64,11 +63,7 @@ pub async fn create_preexpanded_merge_physical_plan(
                     | sail_logical_plan::merge::MergeMatchedAction::UpdateSet(_) => "update",
                 }
                 .to_string();
-                let predicate = c
-                    .condition
-                    .as_ref()
-                    .map(|e| expr_to_sql(e).map(|ast| format!("{}", ast)))
-                    .transpose()?;
+                let predicate = c.condition.as_ref().and_then(|x| x.source.clone());
                 Ok(MergePredicateInfo {
                     action_type,
                     predicate,
@@ -80,11 +75,7 @@ pub async fn create_preexpanded_merge_physical_plan(
             .not_matched_by_target_clauses
             .iter()
             .map(|c| {
-                let predicate = c
-                    .condition
-                    .as_ref()
-                    .map(|e| expr_to_sql(e).map(|ast| format!("{}", ast)))
-                    .transpose()?;
+                let predicate = c.condition.as_ref().and_then(|x| x.source.clone());
                 Ok(MergePredicateInfo {
                     action_type: "insert".to_string(),
                     predicate,
@@ -103,11 +94,7 @@ pub async fn create_preexpanded_merge_physical_plan(
                     }
                 }
                 .to_string();
-                let predicate = c
-                    .condition
-                    .as_ref()
-                    .map(|e| expr_to_sql(e).map(|ast| format!("{}", ast)))
-                    .transpose()?;
+                let predicate = c.condition.as_ref().and_then(|x| x.source.clone());
                 Ok(MergePredicateInfo {
                     action_type,
                     predicate,
@@ -128,8 +115,6 @@ pub async fn create_preexpanded_merge_physical_plan(
         && opts.not_matched_by_source_clauses.is_empty()
         && !opts.not_matched_by_target_clauses.is_empty();
 
-    let dummy_expr = Arc::new(Literal::new(ScalarValue::Boolean(Some(true))));
-
     let info = PhysicalMergeInfo {
         target,
         target_input: write_input.clone(),
@@ -145,7 +130,10 @@ pub async fn create_preexpanded_merge_physical_plan(
         } else {
             Some(touched_plan.clone())
         },
-        on_condition: dummy_expr.clone(),
+        on_condition: PhysicalExprWithSource::new(
+            Arc::new(Literal::new(ScalarValue::Boolean(Some(true)))),
+            Some("true".to_string()),
+        ),
         join_keys: vec![],
         join_filter: None,
         target_only_filters: vec![],

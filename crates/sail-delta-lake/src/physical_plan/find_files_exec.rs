@@ -27,7 +27,6 @@ use async_trait::async_trait;
 use datafusion::arrow::array::{Array, StringArray};
 use datafusion::arrow::datatypes::{DataType, Field, Schema, SchemaRef};
 use datafusion::arrow::record_batch::RecordBatch;
-use datafusion::catalog::Session;
 use datafusion::datasource::memory::MemorySourceConfig;
 use datafusion::datasource::source::DataSourceExec;
 use datafusion::datasource::TableProvider;
@@ -137,16 +136,12 @@ impl DeltaFindFilesExec {
             .map_err(|e| DataFusionError::External(Box::new(e)))?
             .clone();
 
-        let session_state = SessionStateBuilder::new()
-            .with_runtime_env(context.runtime_env().clone())
-            .with_config(context.session_config().clone())
-            .build();
         let adapter_factory = Arc::new(DeltaPhysicalExprAdapterFactory {});
 
         let find_result = find_files_physical(
             &snapshot,
             table.log_store(),
-            &session_state,
+            context,
             self.predicate.clone(),
             adapter_factory,
         )
@@ -275,7 +270,7 @@ async fn collect_add_actions(
 pub async fn scan_memory_table_physical(
     snapshot: &DeltaTableState,
     log_store: &dyn LogStore,
-    state: &dyn Session,
+    ctx: Arc<TaskContext>,
     physical_predicate: Arc<dyn PhysicalExpr>,
 ) -> DeltaResult<Vec<Add>> {
     let actions = collect_add_actions(snapshot, log_store).await?;
@@ -322,7 +317,6 @@ pub async fn scan_memory_table_physical(
 
     let filter_exec = Arc::new(FilterExec::try_new(physical_predicate, memory_exec)?);
 
-    let task_ctx = Arc::new(TaskContext::from(state));
     let mut partitions = Vec::new();
 
     for i in 0..filter_exec
@@ -330,7 +324,7 @@ pub async fn scan_memory_table_physical(
         .output_partitioning()
         .partition_count()
     {
-        let stream = filter_exec.execute(i, task_ctx.clone())?;
+        let stream = filter_exec.execute(i, ctx.clone())?;
         let data = collect(stream).await?;
         partitions.extend(data);
     }
@@ -347,7 +341,7 @@ pub async fn scan_memory_table_physical(
 pub async fn find_files_scan_physical(
     snapshot: &DeltaTableState,
     log_store: LogStoreRef,
-    state: &dyn Session,
+    ctx: Arc<TaskContext>,
     physical_predicate: Arc<dyn PhysicalExpr>,
 ) -> DeltaResult<Vec<Add>> {
     let candidate_map: HashMap<String, Add> = collect_add_actions(snapshot, log_store.as_ref())
@@ -390,19 +384,24 @@ pub async fn find_files_scan_physical(
 
     let table_provider = DeltaTableProvider::try_new(snapshot.clone(), log_store, scan_config)?;
 
+    // FIXME: avoid creating a new session state
+    let session_state = SessionStateBuilder::new()
+        .with_runtime_env(ctx.runtime_env().clone())
+        .with_config(ctx.session_config().clone())
+        .build();
+
     // Scan without filtering first, then apply the physical predicate
     let scan = table_provider
-        .scan(state, Some(&used_columns), &[], Some(1))
+        .scan(&session_state, Some(&used_columns), &[], Some(1))
         .await?;
 
     // For non-partition columns, Scan without filtering to identify candidate files
     let limit: Arc<dyn ExecutionPlan> = scan;
 
-    let task_ctx = Arc::new(TaskContext::from(state));
     let mut partitions = Vec::new();
 
     for i in 0..limit.properties().output_partitioning().partition_count() {
-        let stream = limit.execute(i, task_ctx.clone())?;
+        let stream = limit.execute(i, ctx.clone())?;
         let data = collect(stream).await?;
         partitions.extend(data);
     }
@@ -415,7 +414,7 @@ pub async fn find_files_scan_physical(
 pub async fn find_files_physical(
     snapshot: &DeltaTableState,
     log_store: LogStoreRef,
-    state: &dyn Session,
+    ctx: Arc<TaskContext>,
     predicate: Option<Arc<dyn PhysicalExpr>>,
     adapter_factory: Arc<dyn PhysicalExprAdapterFactory>,
 ) -> DeltaResult<FindFiles> {
@@ -447,7 +446,7 @@ pub async fn find_files_physical(
                 let candidates = scan_memory_table_physical(
                     snapshot,
                     log_store.as_ref(),
-                    state,
+                    ctx.clone(),
                     adapted_predicate,
                 )
                 .await?;
@@ -463,7 +462,7 @@ pub async fn find_files_physical(
 
                 // Use full file scanning
                 let candidates =
-                    find_files_scan_physical(snapshot, log_store, state, adapted_predicate).await?;
+                    find_files_scan_physical(snapshot, log_store, ctx, adapted_predicate).await?;
                 Ok(FindFiles {
                     candidates,
                     partition_scan: false,
