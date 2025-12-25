@@ -13,7 +13,7 @@
 use std::sync::Arc;
 
 use datafusion::common::Result;
-use datafusion::physical_expr::{LexRequirement, PhysicalExpr};
+use datafusion::physical_expr::LexRequirement;
 use datafusion::physical_plan::ExecutionPlan;
 use sail_common_datafusion::datasource::{MergeInfo, PhysicalSinkMode};
 
@@ -26,6 +26,7 @@ mod op_update;
 mod op_write;
 
 pub use context::{DeltaTableConfig, PlannerContext};
+use sail_common_datafusion::physical_expr::PhysicalExprWithSource;
 
 pub struct DeltaPhysicalPlanner<'a> {
     ctx: PlannerContext<'a>,
@@ -48,7 +49,7 @@ impl<'a> DeltaPhysicalPlanner<'a> {
 
 pub async fn plan_delete(
     ctx: &PlannerContext<'_>,
-    condition: Arc<dyn PhysicalExpr>,
+    condition: PhysicalExprWithSource,
 ) -> Result<Arc<dyn ExecutionPlan>> {
     op_delete::build_delete_plan(ctx, condition).await
 }

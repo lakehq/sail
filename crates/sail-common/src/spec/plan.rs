@@ -444,7 +444,7 @@ pub enum CommandNode {
     Delete {
         table: ObjectName,
         table_alias: Option<Identifier>,
-        condition: Option<Expr>,
+        condition: Option<ExprWithSource>,
     },
     AlterTable {
         table: ObjectName,
@@ -518,7 +518,7 @@ pub struct MergeInto {
     pub target: ObjectName,
     pub target_alias: Option<Identifier>,
     pub source: MergeSource,
-    pub on_condition: Expr,
+    pub on_condition: ExprWithSource,
     pub clauses: Vec<MergeClause>,
     pub with_schema_evolution: bool,
 }
@@ -547,7 +547,7 @@ pub enum MergeClause {
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct MergeMatchedClause {
-    pub condition: Option<Expr>,
+    pub condition: Option<ExprWithSource>,
     pub action: MergeMatchedAction,
 }
 
@@ -562,7 +562,7 @@ pub enum MergeMatchedAction {
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct MergeNotMatchedBySourceClause {
-    pub condition: Option<Expr>,
+    pub condition: Option<ExprWithSource>,
     pub action: MergeNotMatchedBySourceAction,
 }
 
@@ -576,7 +576,7 @@ pub enum MergeNotMatchedBySourceAction {
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct MergeNotMatchedByTargetClause {
-    pub condition: Option<Expr>,
+    pub condition: Option<ExprWithSource>,
     pub action: MergeNotMatchedByTargetAction,
 }
 
@@ -1023,7 +1023,7 @@ pub enum InsertMode {
         overwrite: bool,
     },
     Replace {
-        condition: Box<Expr>,
+        condition: Box<ExprWithSource>,
     },
 }
 
@@ -1271,5 +1271,16 @@ pub enum AlterViewOperation {
 pub struct Delete {
     pub table: ObjectName,
     pub table_alias: Option<Identifier>,
-    pub condition: Option<Expr>,
+    pub condition: Option<ExprWithSource>,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ExprWithSource {
+    pub expr: Expr,
+    /// An optional SQL source string for information purposes.
+    /// This source string may not be syntactically correct, or
+    /// may not be an exact representation of the expression
+    /// if the expression is not created from SQL.
+    pub source: Option<String>,
 }

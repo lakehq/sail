@@ -105,6 +105,9 @@ impl DeltaScanByAddsExec {
             .build(&snapshot)
             .map_err(|e| DataFusionError::External(Box::new(e)))?;
 
+        // FIXME: avoid creating a new session state
+        //   We should probably refactor this into a general physical node
+        //   that scans Parquet files.
         let session_state = SessionStateBuilder::new()
             .with_runtime_env(context.runtime_env().clone())
             .build();

@@ -21,14 +21,14 @@
       'matchedPredicates': list([
         dict({
           'actionType': 'update',
-          'predicate': "(flag = 'update')",
+          'predicate': "t . flag = 'update' ",
         }),
       ]),
-      'mergePredicate': '(id = __sail_src_id)',
+      'mergePredicate': 't . id = s . id ',
       'notMatchedBySourcePredicates': list([
         dict({
           'actionType': 'update',
-          'predicate': "(flag = 'orphan')",
+          'predicate': "t . flag = 'orphan' ",
         }),
       ]),
       'notMatchedPredicates': list([
@@ -59,7 +59,7 @@
     'operationParameters': dict({
       'matchedPredicates': list([
       ]),
-      'mergePredicate': '(id = __sail_src_id)',
+      'mergePredicate': 't . id = s . id ',
       'notMatchedBySourcePredicates': list([
       ]),
       'notMatchedPredicates': list([
@@ -93,14 +93,14 @@
       'matchedPredicates': list([
         dict({
           'actionType': 'update',
-          'predicate': "(flag = 'archive')",
+          'predicate': "t . flag = 'archive' ",
         }),
       ]),
-      'mergePredicate': '(id = __sail_src_id)',
+      'mergePredicate': 't . id = s . id ',
       'notMatchedBySourcePredicates': list([
         dict({
           'actionType': 'delete',
-          'predicate': "(flag = 'trim')",
+          'predicate': "t . flag = 'trim' ",
         }),
       ]),
       'notMatchedPredicates': list([
@@ -131,7 +131,7 @@
       'writeTimeMs': '<time_ms>',
     }),
     'operationParameters': dict({
-      'predicate': 'department = Engineering',
+      'predicate': "department = 'Engineering' ",
     }),
     'timestamp': '<timestamp>',
   })
@@ -160,13 +160,13 @@
           'actionType': 'update',
         }),
       ]),
-      'mergePredicate': '(id = __sail_src_id)',
+      'mergePredicate': 't . id = s . id ',
       'notMatchedBySourcePredicates': list([
       ]),
       'notMatchedPredicates': list([
         dict({
           'actionType': 'insert',
-          'predicate': '(__sail_src_id = 3)',
+          'predicate': 's . id = 3 ',
         }),
         dict({
           'actionType': 'insert',
@@ -198,14 +198,14 @@
       'matchedPredicates': list([
         dict({
           'actionType': 'update',
-          'predicate': "(flag = 'update')",
+          'predicate': "t . flag = 'update' ",
         }),
         dict({
           'actionType': 'delete',
-          'predicate': "(flag = 'delete')",
+          'predicate': "t . flag = 'delete' ",
         }),
       ]),
-      'mergePredicate': '(id = __sail_src_id)',
+      'mergePredicate': 't . id = s . id ',
       'notMatchedBySourcePredicates': list([
       ]),
       'notMatchedPredicates': list([

@@ -19,6 +19,7 @@ use sail_sql_parser::ast::statement::{
     PropertyList, PropertyValue, RowFormat, RowFormatDelimitedClause, SetClause, SortColumn,
     SortColumnList, Statement, UpdateTableAlias, ViewColumn,
 };
+use sail_sql_parser::tree::TreeText;
 
 use crate::data_type::from_ast_data_type;
 use crate::error::{SqlError, SqlResult};
@@ -506,11 +507,15 @@ pub fn from_ast_statement(statement: Statement) -> SqlResult<spec::Plan> {
                 r#where: _,
                 condition,
             } = r#where;
+            let source = condition.text();
             let node = spec::CommandNode::InsertInto {
                 input: Box::new(query),
                 table: from_ast_object_name(name)?,
                 mode: spec::InsertMode::Replace {
-                    condition: Box::new(from_ast_expression(condition)?),
+                    condition: Box::new(spec::ExprWithSource {
+                        expr: from_ast_expression(condition)?,
+                        source: Some(source),
+                    }),
                 },
                 partition: vec![],
                 if_not_exists: false,
@@ -611,14 +616,14 @@ pub fn from_ast_statement(statement: Statement) -> SqlResult<spec::Plan> {
                     MergeMatchClause::Matched {
                         condition, action, ..
                     } => {
-                        let condition = merge_optional_condition(condition)?;
+                        let condition = from_ast_merge_optional_condition(condition)?;
                         let action = match action {
                             MergeMatchedAction::Delete(_) => spec::MergeMatchedAction::Delete,
                             MergeMatchedAction::UpdateAll(_, _, _) => {
                                 spec::MergeMatchedAction::UpdateAll
                             }
                             MergeMatchedAction::Update(_, _, assignments) => {
-                                let assignments = merge_assignment_list(assignments)?;
+                                let assignments = from_ast_merge_assignment_list(assignments)?;
                                 spec::MergeMatchedAction::UpdateSet(assignments)
                             }
                         };
@@ -630,13 +635,13 @@ pub fn from_ast_statement(statement: Statement) -> SqlResult<spec::Plan> {
                     MergeMatchClause::NotMatchedBySource {
                         condition, action, ..
                     } => {
-                        let condition = merge_optional_condition(condition)?;
+                        let condition = from_ast_merge_optional_condition(condition)?;
                         let action = match action {
                             MergeNotMatchedBySourceAction::Delete(_) => {
                                 spec::MergeNotMatchedBySourceAction::Delete
                             }
                             MergeNotMatchedBySourceAction::Update(_, _, assignments) => {
-                                let assignments = merge_assignment_list(assignments)?;
+                                let assignments = from_ast_merge_assignment_list(assignments)?;
                                 spec::MergeNotMatchedBySourceAction::UpdateSet(assignments)
                             }
                         };
@@ -647,7 +652,7 @@ pub fn from_ast_statement(statement: Statement) -> SqlResult<spec::Plan> {
                     MergeMatchClause::NotMatchedByTarget {
                         condition, action, ..
                     } => {
-                        let condition = merge_optional_condition(condition)?;
+                        let condition = from_ast_merge_optional_condition(condition)?;
                         let action = match action {
                             MergeNotMatchedByTargetAction::InsertAll(_, _) => {
                                 spec::MergeNotMatchedByTargetAction::InsertAll
@@ -703,11 +708,16 @@ pub fn from_ast_statement(statement: Statement) -> SqlResult<spec::Plan> {
                 })
                 .collect::<SqlResult<Vec<_>>>()?;
 
+            let on_condition_source = on_expr.text();
+            let on_condition = spec::ExprWithSource {
+                expr: from_ast_expression(on_expr)?,
+                source: Some(on_condition_source),
+            };
             let node = spec::CommandNode::MergeInto(spec::MergeInto {
                 target: from_ast_object_name(target)?,
                 target_alias,
                 source,
-                on_condition: from_ast_expression(on_expr)?,
+                on_condition,
                 clauses,
                 with_schema_evolution: with_schema_evolution.is_some(),
             });
@@ -802,7 +812,11 @@ pub fn from_ast_statement(statement: Statement) -> SqlResult<spec::Plan> {
                         r#where: _,
                         condition,
                     } = x;
-                    from_ast_expression(condition)
+                    let source = condition.text();
+                    Ok::<_, SqlError>(spec::ExprWithSource {
+                        expr: from_ast_expression(condition)?,
+                        source: Some(source),
+                    })
                 })
                 .transpose()?;
             let node = spec::CommandNode::Delete {
@@ -1747,13 +1761,22 @@ fn from_ast_column_alteration_list(items: ColumnAlterationList) -> SqlResult<()>
     Ok(())
 }
 
-fn merge_optional_condition<T>(condition: Option<(T, Expr)>) -> SqlResult<Option<spec::Expr>> {
+fn from_ast_merge_optional_condition<T>(
+    condition: Option<(T, Expr)>,
+) -> SqlResult<Option<spec::ExprWithSource>> {
     condition
-        .map(|(_, expr)| from_ast_expression(expr))
+        .map(|(_, expr)| {
+            let source = expr.text();
+            let expr = from_ast_expression(expr)?;
+            Ok(spec::ExprWithSource {
+                expr,
+                source: Some(source),
+            })
+        })
         .transpose()
 }
 
-fn merge_assignment_list(
+fn from_ast_merge_assignment_list(
     assignments: AssignmentList,
 ) -> SqlResult<Vec<(spec::ObjectName, spec::Expr)>> {
     let assignments = match assignments {

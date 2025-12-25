@@ -6,6 +6,8 @@ pub mod error;
 pub mod extension;
 pub mod formatter;
 pub mod literal;
+pub mod logical_expr;
+pub mod physical_expr;
 pub mod rename;
 pub mod schema_adapter;
 pub mod session;

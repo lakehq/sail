@@ -14,6 +14,7 @@ use sail_common_datafusion::catalog::{
 };
 use sail_common_datafusion::datasource::{BucketBy, SinkMode};
 use sail_common_datafusion::extension::SessionExtensionAccessor;
+use sail_common_datafusion::logical_expr::ExprWithSource;
 use sail_common_datafusion::rename::logical_plan::rename_logical_plan;
 use sail_common_datafusion::rename::schema::rename_schema;
 use sail_common_datafusion::utils::items::ItemTaker;
@@ -29,7 +30,9 @@ pub(super) enum WriteMode {
     IgnoreIfExists,
     Append,
     Overwrite,
-    OverwriteIf { condition: Box<spec::Expr> },
+    OverwriteIf {
+        condition: Box<spec::ExprWithSource>,
+    },
     OverwritePartitions,
 }
 
@@ -381,10 +384,12 @@ impl PlanResolver<'_> {
                 let names = state.register_fields(schema.fields());
                 let schema = rename_schema(schema, &names)?;
                 let schema = Arc::new(DFSchema::try_from(schema)?);
-                let condition = self.resolve_expression(*condition, &schema, state).await?;
-                let condition = self.rewrite_expression_for_external_schema(condition, state)?;
+                let expr = self
+                    .resolve_expression(condition.expr, &schema, state)
+                    .await?;
+                let expr = self.rewrite_expression_for_external_schema(expr, state)?;
                 Ok(SinkMode::OverwriteIf {
-                    condition: Box::new(condition),
+                    condition: Box::new(ExprWithSource::new(expr, condition.source)),
                 })
             }
             WriteMode::OverwritePartitions => Ok(SinkMode::OverwritePartitions),
