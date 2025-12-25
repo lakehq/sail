@@ -112,24 +112,48 @@ def _normalize_delta_commit_info_for_snapshot(commit_info: dict) -> dict:
 
 
 class _PathExpressionError(ValueError):
-    def __init__(self, *, code: str, path: str, raw: str | None = None) -> None:
+    def __init__(
+        self,
+        *,
+        code: str,
+        path: str,
+        raw_expression: str | None = None,
+        raw: str | None = None,
+    ) -> None:
         self.code = code
         self.path = path
-        self.raw = raw
+        if raw_expression is not None and raw is not None:
+            raise ValueError("Specify only one of 'raw_expression' or legacy 'raw'.")  # noqa: TRY003, EM101
+        if raw is not None:
+            raw_expression = raw
+        self.raw_expression = raw_expression
+        self.raw = raw_expression
         super().__init__()
 
     def __str__(self) -> str:
-        if self.raw is None:
+        if self.raw_expression is None:
             return f"{self.code} (path={self.path!r})"
-        return f"{self.code} (raw={self.raw!r}, path={self.path!r})"
+        return f"{self.code} (raw={self.raw_expression!r}, path={self.path!r})"
 
     @classmethod
     def empty(cls, *, path: str) -> _PathExpressionError:
         return cls(code="empty path", path=path)
 
     @classmethod
-    def invalid(cls, *, path: str, raw: str) -> _PathExpressionError:
-        return cls(code="invalid path expression", path=path, raw=raw)
+    def invalid(
+        cls,
+        *,
+        path: str,
+        raw_expression: str | None = None,
+        raw: str | None = None,
+    ) -> _PathExpressionError:
+        if raw_expression is not None and raw is not None:
+            raise ValueError("Specify only one of 'raw_expression' or legacy 'raw'.")  # noqa: TRY003, EM101
+        if raw is not None:
+            raw_expression = raw
+        if raw_expression is None:
+            raise ValueError("A raw JSONPath expression must be provided.")  # noqa: TRY003, EM101
+        return cls(code="invalid path expression", path=path, raw_expression=raw_expression)
 
 
 class _JsonPathNgRequiredError(RuntimeError):
@@ -171,7 +195,7 @@ def _compile_jsonpath(path: str):
     try:
         return jsonpath_parse(expr_str)
     except (JsonPathParserError, Exception) as e:
-        raise _PathExpressionError.invalid(path=path, raw=expr_str) from e
+        raise _PathExpressionError.invalid(path=path, raw_expression=expr_str) from e
 
 
 def _get_by_path(obj: object, path: str) -> object:
@@ -204,19 +228,20 @@ def _parse_expected_value(raw: str) -> object:
         return raw
 
 
-def _normalize_column_mapping_schema(schema: dict) -> dict:
+def _normalize_column_mapping_schema(schema: object, field_path: str = "") -> object:
     if not isinstance(schema, dict):
         return schema
     normalized = dict(schema)
     if "fields" in normalized and isinstance(normalized["fields"], list):
         for i, field in enumerate(normalized["fields"]):
+            current_path = f"{field_path}.{i}" if field_path else str(i)
             if isinstance(field, dict) and "metadata" in field:
                 meta = field.get("metadata", {})
                 phys = meta.get("delta.columnMapping.physicalName", "")
                 if isinstance(phys, str) and phys.startswith("col-"):
-                    meta["delta.columnMapping.physicalName"] = f"<physical_name_{i}>"
-                if "type" in field and isinstance(field["type"], dict):
-                    field["type"] = _normalize_column_mapping_schema(field["type"])
+                    meta["delta.columnMapping.physicalName"] = f"<physical_name_{current_path}>"
+            if isinstance(field, dict) and "type" in field and isinstance(field["type"], dict):
+                field["type"] = _normalize_column_mapping_schema(field["type"], field_path=current_path)
     return normalized
 
 

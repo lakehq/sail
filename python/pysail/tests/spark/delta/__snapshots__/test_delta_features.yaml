@@ -190,13 +190,13 @@ data:
           fields:
           - metadata:
               delta.columnMapping.id: 3
-              delta.columnMapping.physicalName: <physical_name_0>
+              delta.columnMapping.physicalName: <physical_name_1.0>
             name: name
             nullable: true
             type: string
           - metadata:
               delta.columnMapping.id: 4
-              delta.columnMapping.physicalName: <physical_name_1>
+              delta.columnMapping.physicalName: <physical_name_1.1>
             name: age
             nullable: true
             type: integer

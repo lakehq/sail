@@ -113,7 +113,7 @@ Feature: Delta Lake Column Mapping (DDL TBLPROPERTIES)
         | metaData.configuration["delta.columnMapping.maxColumnId"] | "5"      |
         | metaData.schemaString.fields[1].name               | "user"           |
         | metaData.schemaString.fields[1].type.fields[0].metadata["delta.columnMapping.id"] | 3 |
-        | metaData.schemaString.fields[1].type.fields[0].metadata["delta.columnMapping.physicalName"] | "<physical_name_0>" |
+        | metaData.schemaString.fields[1].type.fields[0].metadata["delta.columnMapping.physicalName"] | "<physical_name_1.0>" |
 
   Rule: Column mapping with partitioned table
     Background:

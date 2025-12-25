@@ -203,9 +203,6 @@ class YamlDataSerializer:
         def flush() -> None:
             nonlocal current_name, collecting_data, data_lines
             if current_name is None:
-                current_name = None
-                collecting_data = False
-                data_lines = []
                 return
             data_yaml = "\n".join(data_lines).rstrip("\n")
             if not data_yaml:

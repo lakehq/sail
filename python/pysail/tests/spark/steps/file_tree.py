@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import os
 import re
 import textwrap
 from pathlib import Path
@@ -68,38 +67,30 @@ def render_normalized_file_tree(root_path: Path) -> str:
     if not root_path.exists():
         return ""
 
-    for dirpath, dirnames, filenames in os.walk(root_path, topdown=True):
-        current = Path(dirpath)
+    def render_dir(current: Path, *, depth: int) -> None:
+        entries: list[Path] = sorted(current.iterdir(), key=lambda p: p.name)
 
-        # Filter + sort directories in-place (also controls recursion).
-        kept_dirs: list[str] = []
-        for d in dirnames:
-            nd = _normalize_name(d)
-            if nd is None:
-                continue
-            kept_dirs.append(d)
-        dirnames[:] = sorted(kept_dirs)
-
-        # Render sub-directories first (like `tree`).
-        rel_dir = current.relative_to(root_path)
-        for d in dirnames:
-            rel = rel_dir / d if str(rel_dir) != "." else Path(d)
-            depth = len(rel.parts) - 1
-            indent = "  " * depth
-            rendered = _normalize_name(d)
+        dirs: list[tuple[str, Path]] = []
+        files: list[tuple[str, Path]] = []
+        for p in entries:
+            rendered = _normalize_name(p.name)
             if rendered is None:
                 continue
-            lines.append(f"{indent}📂 {rendered}")
+            if p.is_dir():
+                dirs.append((rendered, p))
+            else:
+                files.append((rendered, p))
 
-        # Then render files (sorted for determinism).
-        for f in sorted(filenames):
-            rendered = _normalize_name(f)
-            if rendered is None:
-                continue
-            rel = rel_dir / f if str(rel_dir) != "." else Path(f)
-            depth = len(rel.parts) - 1
+        for name, p in dirs:
             indent = "  " * depth
-            lines.append(f"{indent}📄 {rendered}")
+            lines.append(f"{indent}📂 {name}")
+            render_dir(p, depth=depth + 1)
+
+        for name, _p in files:
+            indent = "  " * depth
+            lines.append(f"{indent}📄 {name}")
+
+    render_dir(root_path, depth=0)
 
     return "\n".join(lines)
 

@@ -39,8 +39,8 @@ Feature: Delta Lake File Layout
       Then file tree in location matches
         """
         📂 year=2025
-        📂 year=2026
           📄 part-<id>.<codec>.parquet
+        📂 year=2026
           📄 part-<id>.<codec>.parquet
         """
 
@@ -83,14 +83,14 @@ Feature: Delta Lake File Layout
       Then file tree in location matches
         """
         📂 region=1
+          📂 category=1
+            📄 part-<id>.<codec>.parquet
+          📂 category=2
+            📄 part-<id>.<codec>.parquet
         📂 region=2
           📂 category=1
+            📄 part-<id>.<codec>.parquet
           📂 category=2
-            📄 part-<id>.<codec>.parquet
-            📄 part-<id>.<codec>.parquet
-          📂 category=1
-          📂 category=2
-            📄 part-<id>.<codec>.parquet
             📄 part-<id>.<codec>.parquet
         """
 
@@ -139,11 +139,11 @@ Feature: Delta Lake File Layout
       Then file tree in location matches
         """
         📂 category=A
+          📄 part-<id>.<codec>.parquet
+          📄 part-<id>.<codec>.parquet
         📂 category=B
+          📄 part-<id>.<codec>.parquet
         📂 category=C
-          📄 part-<id>.<codec>.parquet
-          📄 part-<id>.<codec>.parquet
-          📄 part-<id>.<codec>.parquet
           📄 part-<id>.<codec>.parquet
         """
 
