@@ -20,11 +20,11 @@ data:
   operationParameters:
     matchedPredicates:
     - actionType: update
-      predicate: (flag = 'update')
-    mergePredicate: (id = __sail_src_id)
+      predicate: 't . flag = ''update'' '
+    mergePredicate: 't . id = s . id '
     notMatchedBySourcePredicates:
     - actionType: update
-      predicate: (flag = 'orphan')
+      predicate: 't . flag = ''orphan'' '
     notMatchedPredicates:
     - actionType: insert
   timestamp: <timestamp>
@@ -236,7 +236,7 @@ data:
     writeTimeMs: <time_ms>
   operationParameters:
     matchedPredicates: []
-    mergePredicate: (id = __sail_src_id)
+    mergePredicate: 't . id = s . id '
     notMatchedBySourcePredicates: []
     notMatchedPredicates:
     - actionType: insert
@@ -262,11 +262,11 @@ data:
   operationParameters:
     matchedPredicates:
     - actionType: update
-      predicate: (flag = 'archive')
-    mergePredicate: (id = __sail_src_id)
+      predicate: 't . flag = ''archive'' '
+    mergePredicate: 't . id = s . id '
     notMatchedBySourcePredicates:
     - actionType: delete
-      predicate: (flag = 'trim')
+      predicate: 't . flag = ''trim'' '
     notMatchedPredicates:
     - actionType: insert
   timestamp: <timestamp>
@@ -289,7 +289,7 @@ data:
     numRemovedFiles: 1
     writeTimeMs: <time_ms>
   operationParameters:
-    predicate: department = Engineering
+    predicate: 'department = ''Engineering'' '
   timestamp: <timestamp>
 ---
 name: "test_specific_not_matched_inserts_run_before_the_default_clause"
@@ -312,11 +312,11 @@ data:
   operationParameters:
     matchedPredicates:
     - actionType: update
-    mergePredicate: (id = __sail_src_id)
+    mergePredicate: 't . id = s . id '
     notMatchedBySourcePredicates: []
     notMatchedPredicates:
     - actionType: insert
-      predicate: (__sail_src_id = 3)
+      predicate: 's . id = 3 '
     - actionType: insert
   timestamp: <timestamp>
 ---
@@ -340,10 +340,10 @@ data:
   operationParameters:
     matchedPredicates:
     - actionType: update
-      predicate: (flag = 'update')
+      predicate: 't . flag = ''update'' '
     - actionType: delete
-      predicate: (flag = 'delete')
-    mergePredicate: (id = __sail_src_id)
+      predicate: 't . flag = ''delete'' '
+    mergePredicate: 't . id = s . id '
     notMatchedBySourcePredicates: []
     notMatchedPredicates:
     - actionType: insert

@@ -51,7 +51,7 @@ Feature: Delta Lake Merge
       Then delta log latest commit info contains
         | path                                               | value                  |
         | operation                                          | "MERGE"                |
-        | operationParameters.mergePredicate                 | "(id = __sail_src_id)" |
+        | operationParameters.mergePredicate                 | "t . id = s . id " |
         | operationParameters.matchedPredicates[0].actionType | "update"               |
         | operationParameters.matchedPredicates[1].actionType | "delete"               |
         | operationParameters.notMatchedPredicates[0].actionType | "insert"            |
@@ -219,7 +219,7 @@ Feature: Delta Lake Merge
       Then delta log latest commit info contains
         | path                                               | value                  |
         | operation                                          | "MERGE"                |
-        | operationParameters.mergePredicate                 | "(id = __sail_src_id)" |
+        | operationParameters.mergePredicate                 | "t . id = s . id " |
         | operationParameters.matchedPredicates              | []                     |
         | operationParameters.notMatchedBySourcePredicates   | []                     |
         | operationParameters.notMatchedPredicates[0].actionType | "insert"            |
@@ -297,7 +297,7 @@ Feature: Delta Lake Merge
       Then delta log latest commit info contains
         | path                                               | value                  |
         | operation                                          | "MERGE"                |
-        | operationParameters.mergePredicate                 | "(id = __sail_src_id)" |
+        | operationParameters.mergePredicate                 | "t . id = s . id " |
         | operationParameters.matchedPredicates[0].actionType | "update"               |
         | operationParameters.notMatchedBySourcePredicates[0].actionType | "update"      |
         | operationParameters.notMatchedPredicates[0].actionType | "insert"            |
@@ -364,7 +364,7 @@ Feature: Delta Lake Merge
       Then delta log latest commit info contains
         | path                                               | value                  |
         | operation                                          | "MERGE"                |
-        | operationParameters.mergePredicate                 | "(id = __sail_src_id)" |
+        | operationParameters.mergePredicate                 | "t . id = s . id " |
         | operationParameters.matchedPredicates[0].actionType | "update"               |
         | operationParameters.notMatchedBySourcePredicates[0].actionType | "delete"      |
         | operationParameters.notMatchedPredicates[0].actionType | "insert"            |
@@ -432,9 +432,9 @@ Feature: Delta Lake Merge
       Then delta log latest commit info contains
         | path                                               | value                   |
         | operation                                          | "MERGE"                 |
-        | operationParameters.mergePredicate                 | "(id = __sail_src_id)"  |
+        | operationParameters.mergePredicate                 | "t . id = s . id "  |
         | operationParameters.notMatchedPredicates[0].actionType | "insert"             |
-        | operationParameters.notMatchedPredicates[0].predicate | "(__sail_src_id = 3)" |
+        | operationParameters.notMatchedPredicates[0].predicate | "s . id = 3 " |
       When query
         """
         SELECT id, category, amount, note FROM delta_merge_conditional ORDER BY id

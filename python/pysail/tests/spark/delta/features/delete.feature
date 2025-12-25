@@ -49,7 +49,7 @@ Feature: Delta Lake Delete
       Then delta log latest commit info contains
         | path                        | value                    |
         | operation                   | "DELETE"                 |
-        | operationParameters.predicate | "department = Engineering" |
+        | operationParameters.predicate | "department = 'Engineering' " |
       When query
         """
         SELECT * FROM delta_delete_basic
