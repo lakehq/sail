@@ -24,7 +24,6 @@ use std::fmt;
 use std::sync::Arc;
 
 use async_trait::async_trait;
-use datafusion::arrow::array::{Array, StringArray};
 use datafusion::arrow::datatypes::{DataType, Field, Schema, SchemaRef};
 use datafusion::arrow::record_batch::RecordBatch;
 use datafusion::datasource::memory::MemorySourceConfig;
@@ -52,7 +51,9 @@ use crate::datasource::{
 };
 use crate::kernel::models::Add;
 use crate::kernel::{DeltaResult, DeltaTableError};
-use crate::physical_plan::{join_batches_with_add_actions, DeltaPhysicalExprAdapterFactory};
+use crate::physical_plan::{
+    encode_add_actions, join_batches_with_add_actions, DeltaPhysicalExprAdapterFactory,
+};
 use crate::storage::{get_object_store_from_context, LogStore, LogStoreRef, StorageConfig};
 use crate::table::{open_table_with_object_store, DeltaTableState};
 
@@ -74,12 +75,16 @@ impl DeltaFindFilesExec {
         table_schema: Option<SchemaRef>,
         version: i64,
     ) -> Self {
-        let schema = Arc::new(Schema::new(vec![
-            // JSON-serialized Add action
-            Field::new("add", DataType::Utf8, false),
-            // Boolean flag indicating if it was a partition-only scan
-            Field::new("partition_scan", DataType::Boolean, false),
-        ]));
+        let mut fields = crate::physical_plan::delta_action_schema()
+            .fields()
+            .to_vec();
+        // Boolean flag indicating if it was a partition-only scan
+        fields.push(Arc::new(Field::new(
+            "partition_scan",
+            DataType::Boolean,
+            false,
+        )));
+        let schema = Arc::new(Schema::new(fields));
         let cache = Self::compute_properties(schema);
         Self {
             table_url,
@@ -199,19 +204,15 @@ impl ExecutionPlan for DeltaFindFilesExec {
                 return Ok(RecordBatch::new_empty(schema));
             }
 
-            let adds_json: Vec<String> = adds
-                .into_iter()
-                .map(|add| serde_json::to_string(&add))
-                .collect::<serde_json::Result<_>>()
-                .map_err(|e| DataFusionError::External(Box::new(e)))?;
-
-            let adds_array = Arc::new(StringArray::from(adds_json));
+            let action_batch = encode_add_actions(adds)?;
             let scan_array = Arc::new(datafusion::arrow::array::BooleanArray::from(vec![
                 partition_scan;
-                adds_array.len()
+                action_batch.num_rows()
             ]));
 
-            RecordBatch::try_new(schema, vec![adds_array, scan_array])
+            let mut cols = action_batch.columns().to_vec();
+            cols.push(scan_array);
+            RecordBatch::try_new(schema, cols)
                 .map_err(|e| DataFusionError::ArrowError(Box::new(e), None))
         };
 

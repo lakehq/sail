@@ -31,6 +31,7 @@ use serde_json::Value;
 use crate::kernel::models::Action;
 use crate::kernel::DeltaOperation;
 
+mod action_schema;
 mod commit_exec;
 mod expr_adapter;
 mod file_lookup_exec;
@@ -40,6 +41,13 @@ mod scan_by_adds_exec;
 mod utils;
 mod writer_exec;
 
+pub use action_schema::{
+    decode_actions_and_meta_from_batch, decode_adds_from_batch, delta_action_schema,
+    encode_add_actions, encode_commit_meta, encode_metadata_action, encode_protocol_action,
+    encode_remove_actions, CommitMeta, ACTION_TYPE_ADD, ACTION_TYPE_COMMIT_META,
+    ACTION_TYPE_METADATA, ACTION_TYPE_PROTOCOL, ACTION_TYPE_REMOVE, COL_ACTION_TYPE,
+    COL_PARTITION_VALUES, COL_PATH,
+};
 pub use commit_exec::DeltaCommitExec;
 pub use expr_adapter::DeltaPhysicalExprAdapterFactory;
 pub use file_lookup_exec::DeltaFileLookupExec;

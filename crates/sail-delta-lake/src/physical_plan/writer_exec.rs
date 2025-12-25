@@ -25,7 +25,8 @@ use std::time::Instant;
 
 use async_trait::async_trait;
 use chrono::Utc;
-use datafusion::arrow::array::{ArrayRef, PrimitiveArray, StringArray};
+use datafusion::arrow::array::{ArrayRef, PrimitiveArray};
+use datafusion::arrow::compute::concat_batches;
 use datafusion::arrow::datatypes::{
     ArrowTimestampType, DataType, Field, Schema, SchemaRef, TimeUnit, TimestampMicrosecondType,
     TimestampMillisecondType, TimestampNanosecondType, TimestampSecondType,
@@ -55,7 +56,10 @@ use crate::kernel::models::{contains_timestampntz, Action, Metadata, Protocol};
 use crate::kernel::{DeltaOperation, SaveMode};
 use crate::operations::write::writer::{DeltaWriter, WriterConfig};
 use crate::options::{ColumnMappingModeOption, TableDeltaOptions};
-use crate::physical_plan::CommitInfo;
+use crate::physical_plan::{
+    delta_action_schema, encode_add_actions, encode_commit_meta, encode_metadata_action,
+    encode_protocol_action, CommitMeta,
+};
 use crate::schema::{
     annotate_for_column_mapping, compute_max_column_id, evolve_schema, get_physical_schema,
     normalize_delta_schema,
@@ -114,7 +118,7 @@ impl DeltaWriterExec {
         sink_schema: SchemaRef,
         operation_override: Option<DeltaOperation>,
     ) -> Self {
-        let schema = Arc::new(Schema::new(vec![Field::new("data", DataType::Utf8, true)]));
+        let schema = delta_action_schema();
         let cache = Self::compute_properties(schema);
         Self {
             input,
@@ -330,23 +334,11 @@ impl ExecutionPlan for DeltaWriterExec {
                 }
                 PhysicalSinkMode::IgnoreIfExists => {
                     if table_exists {
-                        // Table exists, ignore the write operation and return empty commit info
+                        // Table exists, ignore the write operation and return "no-op" output.
                         // Still update execution metrics so callers see a completed node.
                         output_rows.add(0);
                         output_bytes.add(0);
-                        let commit_info = CommitInfo {
-                            row_count: 0,
-                            actions: Vec::new(),
-                            initial_actions: Vec::new(),
-                            operation: None,
-                            operation_metrics: HashMap::new(),
-                        };
-                        let commit_info_json = serde_json::to_string(&commit_info)
-                            .map_err(|e| DataFusionError::External(Box::new(e)))?;
-
-                        let data_array = Arc::new(StringArray::from(vec![commit_info_json]));
-                        let batch = RecordBatch::try_new(schema, vec![data_array])?;
-                        return Ok(batch);
+                        return encode_commit_meta(CommitMeta::default());
                     }
                 }
                 PhysicalSinkMode::OverwritePartitions => {
@@ -677,22 +669,50 @@ impl ExecutionPlan for DeltaWriterExec {
                 Value::from(exec_start.elapsed().as_millis() as u64),
             );
 
-            let commit_info = CommitInfo {
-                row_count: total_rows,
-                actions,
-                initial_actions,
-                operation,
-                operation_metrics,
-            };
-
             output_rows.add(usize::try_from(total_rows).unwrap_or(usize::MAX));
             output_bytes.add(usize::try_from(num_added_bytes).unwrap_or(usize::MAX));
 
-            let commit_info_json = serde_json::to_string(&commit_info)
-                .map_err(|e| DataFusionError::External(Box::new(e)))?;
+            // Build row-per-action output:
+            // - protocol/metadata "initial actions" (when present)
+            // - schema evolution actions (metadata)
+            // - Add actions (one row per file)
+            // - CommitMeta row (row_count + operation + metrics)
+            let mut out_batches: Vec<RecordBatch> = Vec::new();
 
-            let data_array = Arc::new(StringArray::from(vec![commit_info_json]));
-            let batch = RecordBatch::try_new(schema, vec![data_array])?;
+            for ia in &initial_actions {
+                match ia {
+                    Action::Protocol(p) => out_batches.push(encode_protocol_action(p.clone())?),
+                    Action::Metadata(m) => out_batches.push(encode_metadata_action(m.clone())?),
+                    _ => {}
+                }
+            }
+            for sa in &actions {
+                match sa {
+                    Action::Metadata(m) => out_batches.push(encode_metadata_action(m.clone())?),
+                    Action::Protocol(p) => out_batches.push(encode_protocol_action(p.clone())?),
+                    _ => {}
+                }
+            }
+
+            // Add actions
+            out_batches.push(encode_add_actions(
+                actions
+                    .into_iter()
+                    .filter_map(|a| match a {
+                        Action::Add(add) => Some(add),
+                        _ => None,
+                    })
+                    .collect(),
+            )?);
+
+            out_batches.push(encode_commit_meta(CommitMeta {
+                row_count: total_rows,
+                operation,
+                operation_metrics,
+            })?);
+
+            let batch = concat_batches(&schema, &out_batches)
+                .map_err(|e| DataFusionError::ArrowError(Box::new(e), None))?;
             Ok(batch)
         };
 

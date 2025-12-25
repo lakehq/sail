@@ -12,7 +12,10 @@
 
 use std::sync::Arc;
 
-use datafusion::common::{internal_err, DataFusionError, Result};
+use datafusion::common::{internal_err, DataFusionError, JoinType, NullEquality, Result};
+use datafusion::physical_expr::expressions::Column;
+use datafusion::physical_expr::PhysicalExpr;
+use datafusion::physical_plan::joins::{HashJoinExec, PartitionMode};
 use datafusion::physical_plan::union::UnionExec;
 use datafusion::physical_plan::ExecutionPlan;
 use sail_common_datafusion::datasource::{
@@ -21,11 +24,11 @@ use sail_common_datafusion::datasource::{
 use url::Url;
 
 use super::context::PlannerContext;
-use crate::datasource::DataFusionMixins;
+use crate::datasource::{DataFusionMixins, PATH_COLUMN};
 use crate::kernel::{DeltaOperation, MergePredicate};
 use crate::options::TableDeltaOptions;
 use crate::physical_plan::{
-    DeltaCommitExec, DeltaFileLookupExec, DeltaRemoveActionsExec, DeltaWriterExec,
+    DeltaCommitExec, DeltaFindFilesExec, DeltaRemoveActionsExec, DeltaWriterExec, COL_PATH,
 };
 
 /// Entry point for MERGE execution. Expects the logical MERGE to be fully
@@ -125,15 +128,34 @@ async fn finalize_merge(
     let mut action_inputs: Vec<Arc<dyn ExecutionPlan>> = vec![writer.clone()];
 
     if let Some(touched_plan) = touched_file_plan {
-        // Convert Path stream -> Add(JSON) stream on the Worker.
-        let lookup_plan = Arc::new(DeltaFileLookupExec::new(
-            touched_plan,
+        // Build a log-side stream of Add rows.
+        let log_adds: Arc<dyn ExecutionPlan> = Arc::new(DeltaFindFilesExec::new(
             table_url.clone(),
+            None, // no predicate
+            None, // schema not needed without predicate
             version,
         ));
 
-        // Convert Add(JSON) -> Remove actions commit info.
-        let remove_plan = Arc::new(DeltaRemoveActionsExec::new(lookup_plan));
+        // touched_paths JOIN log_adds ON path
+        let left_idx = touched_plan.schema().index_of(PATH_COLUMN)?;
+        let right_idx = log_adds.schema().index_of(COL_PATH)?;
+        let on: Vec<(Arc<dyn PhysicalExpr>, Arc<dyn PhysicalExpr>)> = vec![(
+            Arc::new(Column::new(PATH_COLUMN, left_idx)) as Arc<dyn PhysicalExpr>,
+            Arc::new(Column::new(COL_PATH, right_idx)) as Arc<dyn PhysicalExpr>,
+        )];
+        let joined: Arc<dyn ExecutionPlan> = Arc::new(HashJoinExec::try_new(
+            touched_plan,
+            log_adds,
+            on,
+            None, // filter
+            &JoinType::Inner,
+            None, // projection
+            PartitionMode::Auto,
+            NullEquality::NullEqualsNothing,
+        )?);
+
+        // Convert joined Add rows -> Remove action rows.
+        let remove_plan = Arc::new(DeltaRemoveActionsExec::new(joined));
         action_inputs.push(remove_plan);
     }
 

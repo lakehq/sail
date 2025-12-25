@@ -41,7 +41,10 @@ use url::Url;
 use crate::kernel::models::{Action, Add, Metadata, Protocol, RemoveOptions};
 use crate::kernel::transaction::{CommitBuilder, CommitProperties, TableReference};
 use crate::kernel::{DeltaOperation, SaveMode};
-use crate::physical_plan::{current_timestamp_millis, CommitInfo};
+use crate::physical_plan::action_schema::CommitMeta;
+use crate::physical_plan::{
+    current_timestamp_millis, decode_actions_and_meta_from_batch, CommitInfo,
+};
 use crate::schema::normalize_delta_schema;
 use crate::storage::{get_object_store_from_context, StorageConfig};
 use crate::table::{create_delta_table_with_object_store, open_table_with_object_store};
@@ -228,6 +231,8 @@ impl ExecutionPlan for DeltaCommitExec {
 
             let mut total_rows = 0u64;
             let mut has_data = false;
+            // "data" actions (Add/Remove/other) and "initial" actions (Protocol/Metadata)
+            // are kept separate so we can preserve the required action ordering on commit.
             let mut actions: Vec<Action> = Vec::new();
             let mut initial_actions: Vec<Action> = Vec::new();
             let mut operation: Option<DeltaOperation> = None;
@@ -237,35 +242,67 @@ impl ExecutionPlan for DeltaCommitExec {
             while let Some(batch_result) = data.next().await {
                 let batch = batch_result?;
 
-                // Extract commit info from the single data column (skip empty/invalid rows)
-                if let Some(array) = batch.column(0).as_any().downcast_ref::<StringArray>() {
-                    for i in 0..array.len() {
-                        let s = array.value(i);
-                        if s.trim().is_empty() {
-                            continue;
-                        }
-                        let parsed: Result<CommitInfo, _> = serde_json::from_str(s);
-                        let commit_info = match parsed {
-                            Ok(ci) => ci,
-                            Err(e) => {
-                                return Err(DataFusionError::External(Box::new(e)));
+                // Backward compatible input parsing:
+                // - Old path: single Utf8("data") column containing JSON CommitInfo.
+                // - New path: Arrow-native action rows + optional CommitMeta row.
+                if batch.column_by_name("data").is_some() {
+                    // Extract commit info from the single data column (skip empty/invalid rows)
+                    if let Some(array) = batch.column(0).as_any().downcast_ref::<StringArray>() {
+                        for i in 0..array.len() {
+                            let s = array.value(i);
+                            if s.trim().is_empty() {
+                                continue;
                             }
-                        };
+                            let parsed: Result<CommitInfo, _> = serde_json::from_str(s);
+                            let commit_info = match parsed {
+                                Ok(ci) => ci,
+                                Err(e) => {
+                                    return Err(DataFusionError::External(Box::new(e)));
+                                }
+                            };
 
-                        total_rows += commit_info.row_count;
-                        actions.extend(commit_info.actions);
-                        if initial_actions.is_empty() {
-                            initial_actions = commit_info.initial_actions;
+                            total_rows += commit_info.row_count;
+                            actions.extend(commit_info.actions);
+                            if initial_actions.is_empty() {
+                                initial_actions = commit_info.initial_actions;
+                            }
+                            if operation.is_none() {
+                                operation = commit_info.operation;
+                            }
+                            merge_operation_metrics(
+                                &mut operation_metrics,
+                                commit_info.operation_metrics,
+                            );
+                            has_data = true;
                         }
-                        if operation.is_none() {
-                            operation = commit_info.operation;
-                        }
-                        merge_operation_metrics(
-                            &mut operation_metrics,
-                            commit_info.operation_metrics,
-                        );
-                        has_data = true;
                     }
+                } else if batch.column_by_name("action_type").is_some() {
+                    let (decoded_actions, decoded_meta) =
+                        decode_actions_and_meta_from_batch(&batch)?;
+                    for a in decoded_actions {
+                        match a {
+                            Action::Protocol(_) | Action::Metadata(_) => initial_actions.push(a),
+                            _ => actions.push(a),
+                        }
+                    }
+                    if let Some(CommitMeta {
+                        row_count,
+                        operation: op,
+                        operation_metrics: metrics,
+                    }) = decoded_meta
+                    {
+                        total_rows = total_rows.saturating_add(row_count);
+                        if operation.is_none() {
+                            operation = op;
+                        }
+                        merge_operation_metrics(&mut operation_metrics, metrics);
+                    }
+                    has_data = has_data || batch.num_rows() > 0;
+                } else {
+                    return Err(DataFusionError::Plan(
+                        "DeltaCommitExec input must be either CommitInfo(data: Utf8) or delta action rows (action_type: UInt8)"
+                            .to_string(),
+                    ));
                 }
             }
 
