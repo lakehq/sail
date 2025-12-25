@@ -27,16 +27,6 @@ Feature: Delta Lake Column Mapping (DDL TBLPROPERTIES)
         INSERT INTO delta_cm_name_snapshot VALUES (1, 'test', 1.0)
         """
       Then delta log first commit protocol and metadata matches snapshot
-      Then delta log first commit protocol and metadata contains
-        | path                                               | value            |
-        | protocol.minReaderVersion                          | 3                |
-        | protocol.minWriterVersion                          | 7                |
-        | protocol.readerFeatures[0]                         | "columnMapping"  |
-        | protocol.writerFeatures[0]                         | "columnMapping"  |
-        | metaData.configuration["delta.columnMapping.mode"] | "name"           |
-        | metaData.configuration["delta.columnMapping.maxColumnId"] | "3"      |
-        | metaData.schemaString.fields[0].metadata["delta.columnMapping.id"] | 1     |
-        | metaData.schemaString.fields[0].metadata["delta.columnMapping.physicalName"] | "<physical_name_0>" |
 
   Rule: Column mapping id mode creates proper protocol and metadata
     Background:
@@ -65,16 +55,6 @@ Feature: Delta Lake Column Mapping (DDL TBLPROPERTIES)
         INSERT INTO delta_cm_id_snapshot VALUES (1, 'test', 1.0)
         """
       Then delta log first commit protocol and metadata matches snapshot
-      Then delta log first commit protocol and metadata contains
-        | path                                               | value            |
-        | protocol.minReaderVersion                          | 3                |
-        | protocol.minWriterVersion                          | 7                |
-        | protocol.readerFeatures[0]                         | "columnMapping"  |
-        | protocol.writerFeatures[0]                         | "columnMapping"  |
-        | metaData.configuration["delta.columnMapping.mode"] | "id"             |
-        | metaData.configuration["delta.columnMapping.maxColumnId"] | "3"      |
-        | metaData.schemaString.fields[0].metadata["delta.columnMapping.id"] | 1     |
-        | metaData.schemaString.fields[0].metadata["delta.columnMapping.physicalName"] | "<physical_name_0>" |
 
   Rule: Column mapping with nested struct creates proper schema annotations
     Background:
@@ -103,17 +83,6 @@ Feature: Delta Lake Column Mapping (DDL TBLPROPERTIES)
         INSERT INTO delta_cm_nested_snapshot VALUES (1, named_struct('name', 'alice', 'age', 30), array('a', 'b'))
         """
       Then delta log first commit protocol and metadata matches snapshot
-      Then delta log first commit protocol and metadata contains
-        | path                                               | value            |
-        | protocol.minReaderVersion                          | 3                |
-        | protocol.minWriterVersion                          | 7                |
-        | protocol.readerFeatures[0]                         | "columnMapping"  |
-        | protocol.writerFeatures[0]                         | "columnMapping"  |
-        | metaData.configuration["delta.columnMapping.mode"] | "name"           |
-        | metaData.configuration["delta.columnMapping.maxColumnId"] | "5"      |
-        | metaData.schemaString.fields[1].name               | "user"           |
-        | metaData.schemaString.fields[1].type.fields[0].metadata["delta.columnMapping.id"] | 3 |
-        | metaData.schemaString.fields[1].type.fields[0].metadata["delta.columnMapping.physicalName"] | "<physical_name_1.0>" |
 
   Rule: Column mapping with partitioned table
     Background:
@@ -143,13 +112,3 @@ Feature: Delta Lake Column Mapping (DDL TBLPROPERTIES)
         INSERT INTO delta_cm_partitioned_snapshot VALUES (1, 'test', 'us')
         """
       Then delta log first commit protocol and metadata matches snapshot
-      Then delta log first commit protocol and metadata contains
-        | path                                               | value            |
-        | protocol.minReaderVersion                          | 3                |
-        | protocol.minWriterVersion                          | 7                |
-        | protocol.readerFeatures[0]                         | "columnMapping"  |
-        | protocol.writerFeatures[0]                         | "columnMapping"  |
-        | metaData.configuration["delta.columnMapping.mode"] | "name"           |
-        | metaData.configuration["delta.columnMapping.maxColumnId"] | "3"      |
-        | metaData.partitionColumns[0]                       | "region"         |
-
