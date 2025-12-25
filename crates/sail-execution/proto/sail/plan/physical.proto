@@ -371,6 +371,9 @@ message DeltaFindFilesExecNode {
   optional bytes predicate = 2;
   optional bytes table_schema = 3;
   int64 version = 4;
+  optional bytes input = 5;
+  repeated string input_partition_columns = 6;
+  bool input_partition_scan = 7;
 }
 
 message DeltaRemoveActionsExecNode {

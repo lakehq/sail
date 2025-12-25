@@ -590,6 +590,9 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
                 predicate,
                 table_schema,
                 version,
+                input,
+                input_partition_columns,
+                input_partition_scan,
             }) => {
                 let table_url = Url::parse(&table_url)
                     .map_err(|e| plan_datafusion_err!("failed to parse table URL: {e}"))?;
@@ -610,12 +613,25 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
                 } else {
                     None
                 };
-                Ok(Arc::new(DeltaFindFilesExec::new(
-                    table_url,
-                    predicate,
-                    table_schema,
-                    version,
-                )))
+                if let Some(input) = input {
+                    let input = self.try_decode_plan(&input, ctx)?;
+                    Ok(Arc::new(DeltaFindFilesExec::with_input(
+                        input,
+                        table_url,
+                        predicate,
+                        table_schema,
+                        version,
+                        input_partition_columns,
+                        input_partition_scan,
+                    )))
+                } else {
+                    Ok(Arc::new(DeltaFindFilesExec::new(
+                        table_url,
+                        predicate,
+                        table_schema,
+                        version,
+                    )))
+                }
             }
             NodeKind::DeltaRemoveActions(gen::DeltaRemoveActionsExecNode { input }) => {
                 let input = self.try_decode_plan(&input, ctx)?;
@@ -1099,6 +1115,11 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
         } else if let Some(delta_find_files_exec) =
             node.as_any().downcast_ref::<DeltaFindFilesExec>()
         {
+            let input = if let Some(input) = delta_find_files_exec.input() {
+                Some(self.try_encode_plan(input)?)
+            } else {
+                None
+            };
             let predicate = if let Some(pred) = delta_find_files_exec.predicate() {
                 let predicate_node = serialize_physical_expr(&pred.clone(), self)?;
                 Some(self.try_encode_message(predicate_node)?)
@@ -1115,6 +1136,9 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
                 predicate,
                 table_schema,
                 version: delta_find_files_exec.version(),
+                input,
+                input_partition_columns: delta_find_files_exec.input_partition_columns().to_vec(),
+                input_partition_scan: delta_find_files_exec.input_partition_scan(),
             })
         } else if let Some(delta_remove_actions_exec) =
             node.as_any().downcast_ref::<DeltaRemoveActionsExec>()

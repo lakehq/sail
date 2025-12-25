@@ -169,6 +169,21 @@ impl DeltaFindFilesExec {
         self.version
     }
 
+    /// Get the optional upstream metadata input plan.
+    pub fn input(&self) -> Option<Arc<dyn ExecutionPlan>> {
+        self.input.clone()
+    }
+
+    /// Get partition columns carried by the upstream metadata plan.
+    pub fn input_partition_columns(&self) -> &[String] {
+        &self.input_partition_columns
+    }
+
+    /// Whether the upstream metadata plan is already a partition-only scan.
+    pub fn input_partition_scan(&self) -> bool {
+        self.input_partition_scan
+    }
+
     async fn find_files(&self, context: Arc<TaskContext>) -> Result<(Vec<Add>, bool)> {
         if let Some(input) = &self.input {
             return self.find_files_from_input(Arc::clone(input), context).await;

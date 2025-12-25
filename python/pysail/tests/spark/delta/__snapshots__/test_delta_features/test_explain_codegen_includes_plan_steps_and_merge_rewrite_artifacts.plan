@@ -758,8 +758,10 @@ OutputRequirementExec: order_by=[], dist_by=Unspecified
               RepartitionExec: partitioning=Hash([coalesce(get_field(union_extract(action@0, add), path), get_field(union_extract(action@0, remove), path))], <partitions>), input_partitions=<partitions>
                 RepartitionExec: partitioning=RoundRobinBatch(<partitions>), input_partitions=<partitions>
                   DeltaFindFilesExec(table_path=file://<tmp>/merge_explain_codegen/)
-                    DeltaLogScanExec(table_path=file://<tmp>/merge_explain_codegen/, version=0)
-                      DataSourceExec: file_groups={1 group: [[<tmp>/merge_explain_codegen/_delta_log/00000000000000000000.checkpoint.parquet]]}, projection=[add, remove, metaData, protocol, txn, sidecar], file_type=parquet
+                    CoalescePartitionsExec
+                      DeltaLogScanExec(table_path=file://<tmp>/merge_explain_codegen/, version=0)
+                        RepartitionExec: partitioning=RoundRobinBatch(<partitions>), input_partitions=<partitions>
+                          DataSourceExec: file_groups={1 group: [[<tmp>/merge_explain_codegen/_delta_log/00000000000000000000.checkpoint.parquet]]}, projection=[add, remove, metaData, protocol, txn, sidecar], file_type=parquet
 
 
 physical_plan after CombinePartialFinalAggregate:
@@ -816,8 +818,10 @@ OutputRequirementExec: order_by=[], dist_by=Unspecified
               RepartitionExec: partitioning=Hash([coalesce(get_field(union_extract(action@0, add), path), get_field(union_extract(action@0, remove), path))], <partitions>), input_partitions=<partitions>
                 RepartitionExec: partitioning=RoundRobinBatch(<partitions>), input_partitions=<partitions>
                   DeltaFindFilesExec(table_path=file://<tmp>/merge_explain_codegen/)
-                    DeltaLogScanExec(table_path=file://<tmp>/merge_explain_codegen/, version=0)
-                      DataSourceExec: file_groups={1 group: [[<tmp>/merge_explain_codegen/_delta_log/00000000000000000000.checkpoint.parquet]]}, projection=[add, remove, metaData, protocol, txn, sidecar], file_type=parquet
+                    CoalescePartitionsExec
+                      DeltaLogScanExec(table_path=file://<tmp>/merge_explain_codegen/, version=0)
+                        RepartitionExec: partitioning=RoundRobinBatch(<partitions>), input_partitions=<partitions>
+                          DataSourceExec: file_groups={1 group: [[<tmp>/merge_explain_codegen/_delta_log/00000000000000000000.checkpoint.parquet]]}, projection=[add, remove, metaData, protocol, txn, sidecar], file_type=parquet
 
 
 physical_plan after coalesce_batches:
@@ -874,8 +878,10 @@ OutputRequirementExec: order_by=[], dist_by=Unspecified
                   RepartitionExec: partitioning=Hash([coalesce(get_field(union_extract(action@0, add), path), get_field(union_extract(action@0, remove), path))], <partitions>), input_partitions=<partitions>
                     RepartitionExec: partitioning=RoundRobinBatch(<partitions>), input_partitions=<partitions>
                       DeltaFindFilesExec(table_path=file://<tmp>/merge_explain_codegen/)
-                        DeltaLogScanExec(table_path=file://<tmp>/merge_explain_codegen/, version=0)
-                          DataSourceExec: file_groups={1 group: [[<tmp>/merge_explain_codegen/_delta_log/00000000000000000000.checkpoint.parquet]]}, projection=[add, remove, metaData, protocol, txn, sidecar], file_type=parquet
+                        CoalescePartitionsExec
+                          DeltaLogScanExec(table_path=file://<tmp>/merge_explain_codegen/, version=0)
+                            RepartitionExec: partitioning=RoundRobinBatch(<partitions>), input_partitions=<partitions>
+                              DataSourceExec: file_groups={1 group: [[<tmp>/merge_explain_codegen/_delta_log/00000000000000000000.checkpoint.parquet]]}, projection=[add, remove, metaData, protocol, txn, sidecar], file_type=parquet
 
 
 physical_plan after coalesce_async_exec_input:
@@ -934,8 +940,10 @@ DeltaCommitExec(table_path=file://<tmp>/merge_explain_codegen/)
                 RepartitionExec: partitioning=Hash([coalesce(get_field(union_extract(action@0, add), path), get_field(union_extract(action@0, remove), path))], <partitions>), input_partitions=<partitions>
                   RepartitionExec: partitioning=RoundRobinBatch(<partitions>), input_partitions=<partitions>
                     DeltaFindFilesExec(table_path=file://<tmp>/merge_explain_codegen/)
-                      DeltaLogScanExec(table_path=file://<tmp>/merge_explain_codegen/, version=0)
-                        DataSourceExec: file_groups={1 group: [[<tmp>/merge_explain_codegen/_delta_log/00000000000000000000.checkpoint.parquet]]}, projection=[add, remove, metaData, protocol, txn, sidecar], file_type=parquet
+                      CoalescePartitionsExec
+                        DeltaLogScanExec(table_path=file://<tmp>/merge_explain_codegen/, version=0)
+                          RepartitionExec: partitioning=RoundRobinBatch(<partitions>), input_partitions=<partitions>
+                            DataSourceExec: file_groups={1 group: [[<tmp>/merge_explain_codegen/_delta_log/00000000000000000000.checkpoint.parquet]]}, projection=[add, remove, metaData, protocol, txn, sidecar], file_type=parquet
 
 
 physical_plan after LimitAggregation:
@@ -998,8 +1006,10 @@ DeltaCommitExec(table_path=file://<tmp>/merge_explain_codegen/)
                 RepartitionExec: partitioning=Hash([coalesce(get_field(union_extract(action@0, add), path), get_field(union_extract(action@0, remove), path))], <partitions>), input_partitions=<partitions>
                   RepartitionExec: partitioning=RoundRobinBatch(<partitions>), input_partitions=<partitions>
                     DeltaFindFilesExec(table_path=file://<tmp>/merge_explain_codegen/)
-                      DeltaLogScanExec(table_path=file://<tmp>/merge_explain_codegen/, version=0)
-                        DataSourceExec: file_groups={1 group: [[<tmp>/merge_explain_codegen/_delta_log/00000000000000000000.checkpoint.parquet]]}, projection=[add, remove, metaData, protocol, txn, sidecar], file_type=parquet
+                      CoalescePartitionsExec
+                        DeltaLogScanExec(table_path=file://<tmp>/merge_explain_codegen/, version=0)
+                          RepartitionExec: partitioning=RoundRobinBatch(<partitions>), input_partitions=<partitions>
+                            DataSourceExec: file_groups={1 group: [[<tmp>/merge_explain_codegen/_delta_log/00000000000000000000.checkpoint.parquet]]}, projection=[add, remove, metaData, protocol, txn, sidecar], file_type=parquet
 
 
 physical_plan after EnsureCooperative:
@@ -1065,8 +1075,10 @@ DeltaCommitExec(table_path=file://<tmp>/merge_explain_codegen/)
                 RepartitionExec: partitioning=Hash([coalesce(get_field(union_extract(action@0, add), path), get_field(union_extract(action@0, remove), path))], <partitions>), input_partitions=<partitions>
                   RepartitionExec: partitioning=RoundRobinBatch(<partitions>), input_partitions=<partitions>
                     DeltaFindFilesExec(table_path=file://<tmp>/merge_explain_codegen/)
-                      DeltaLogScanExec(table_path=file://<tmp>/merge_explain_codegen/, version=0)
-                        DataSourceExec: file_groups={1 group: [[<tmp>/merge_explain_codegen/_delta_log/00000000000000000000.checkpoint.parquet]]}, projection=[add, remove, metaData, protocol, txn, sidecar], file_type=parquet
+                      CoalescePartitionsExec
+                        DeltaLogScanExec(table_path=file://<tmp>/merge_explain_codegen/, version=0)
+                          RepartitionExec: partitioning=RoundRobinBatch(<partitions>), input_partitions=<partitions>
+                            DataSourceExec: file_groups={1 group: [[<tmp>/merge_explain_codegen/_delta_log/00000000000000000000.checkpoint.parquet]]}, projection=[add, remove, metaData, protocol, txn, sidecar], file_type=parquet
 
 
 == Physical Plan ==
@@ -1120,5 +1132,7 @@ DeltaCommitExec(table_path=file://<tmp>/merge_explain_codegen/)
                 RepartitionExec: partitioning=Hash([coalesce(get_field(union_extract(action@0, add), path), get_field(union_extract(action@0, remove), path))], <partitions>), input_partitions=<partitions>
                   RepartitionExec: partitioning=RoundRobinBatch(<partitions>), input_partitions=<partitions>
                     DeltaFindFilesExec(table_path=file://<tmp>/merge_explain_codegen/)
-                      DeltaLogScanExec(table_path=file://<tmp>/merge_explain_codegen/, version=0)
-                        DataSourceExec: file_groups={1 group: [[<tmp>/merge_explain_codegen/_delta_log/00000000000000000000.checkpoint.parquet]]}, projection=[add, remove, metaData, protocol, txn, sidecar], file_type=parquet
+                      CoalescePartitionsExec
+                        DeltaLogScanExec(table_path=file://<tmp>/merge_explain_codegen/, version=0)
+                          RepartitionExec: partitioning=RoundRobinBatch(<partitions>), input_partitions=<partitions>
+                            DataSourceExec: file_groups={1 group: [[<tmp>/merge_explain_codegen/_delta_log/00000000000000000000.checkpoint.parquet]]}, projection=[add, remove, metaData, protocol, txn, sidecar], file_type=parquet

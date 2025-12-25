@@ -170,12 +170,16 @@ OutputRequirementExec: order_by=[], dist_by=Unspecified
               RepartitionExec: partitioning=RoundRobinBatch(<partitions>), input_partitions=<partitions>
                 DeltaScanByAddsExec(table_path=file://<tmp>/delete_explain_codegen/)
                   DeltaFindFilesExec(table_path=file://<tmp>/delete_explain_codegen/)
-                    DeltaLogScanExec(table_path=file://<tmp>/delete_explain_codegen/, version=0)
-                      DataSourceExec: file_groups={1 group: [[<tmp>/delete_explain_codegen/_delta_log/00000000000000000000.checkpoint.parquet]]}, projection=[add, remove, metaData, protocol, txn, sidecar], file_type=parquet
+                    CoalescePartitionsExec
+                      DeltaLogScanExec(table_path=file://<tmp>/delete_explain_codegen/, version=0)
+                        RepartitionExec: partitioning=RoundRobinBatch(<partitions>), input_partitions=<partitions>
+                          DataSourceExec: file_groups={1 group: [[<tmp>/delete_explain_codegen/_delta_log/00000000000000000000.checkpoint.parquet]]}, projection=[add, remove, metaData, protocol, txn, sidecar], file_type=parquet
         DeltaRemoveActionsExec
           DeltaFindFilesExec(table_path=file://<tmp>/delete_explain_codegen/)
-            DeltaLogScanExec(table_path=file://<tmp>/delete_explain_codegen/, version=0)
-              DataSourceExec: file_groups={1 group: [[<tmp>/delete_explain_codegen/_delta_log/00000000000000000000.checkpoint.parquet]]}, projection=[add, remove, metaData, protocol, txn, sidecar], file_type=parquet
+            CoalescePartitionsExec
+              DeltaLogScanExec(table_path=file://<tmp>/delete_explain_codegen/, version=0)
+                RepartitionExec: partitioning=RoundRobinBatch(<partitions>), input_partitions=<partitions>
+                  DataSourceExec: file_groups={1 group: [[<tmp>/delete_explain_codegen/_delta_log/00000000000000000000.checkpoint.parquet]]}, projection=[add, remove, metaData, protocol, txn, sidecar], file_type=parquet
 
 
 physical_plan after CombinePartialFinalAggregate:
@@ -202,12 +206,16 @@ OutputRequirementExec: order_by=[], dist_by=Unspecified
                 RepartitionExec: partitioning=RoundRobinBatch(<partitions>), input_partitions=<partitions>
                   DeltaScanByAddsExec(table_path=file://<tmp>/delete_explain_codegen/)
                     DeltaFindFilesExec(table_path=file://<tmp>/delete_explain_codegen/)
-                      DeltaLogScanExec(table_path=file://<tmp>/delete_explain_codegen/, version=0)
-                        DataSourceExec: file_groups={1 group: [[<tmp>/delete_explain_codegen/_delta_log/00000000000000000000.checkpoint.parquet]]}, projection=[add, remove, metaData, protocol, txn, sidecar], file_type=parquet
+                      CoalescePartitionsExec
+                        DeltaLogScanExec(table_path=file://<tmp>/delete_explain_codegen/, version=0)
+                          RepartitionExec: partitioning=RoundRobinBatch(<partitions>), input_partitions=<partitions>
+                            DataSourceExec: file_groups={1 group: [[<tmp>/delete_explain_codegen/_delta_log/00000000000000000000.checkpoint.parquet]]}, projection=[add, remove, metaData, protocol, txn, sidecar], file_type=parquet
         DeltaRemoveActionsExec
           DeltaFindFilesExec(table_path=file://<tmp>/delete_explain_codegen/)
-            DeltaLogScanExec(table_path=file://<tmp>/delete_explain_codegen/, version=0)
-              DataSourceExec: file_groups={1 group: [[<tmp>/delete_explain_codegen/_delta_log/00000000000000000000.checkpoint.parquet]]}, projection=[add, remove, metaData, protocol, txn, sidecar], file_type=parquet
+            CoalescePartitionsExec
+              DeltaLogScanExec(table_path=file://<tmp>/delete_explain_codegen/, version=0)
+                RepartitionExec: partitioning=RoundRobinBatch(<partitions>), input_partitions=<partitions>
+                  DataSourceExec: file_groups={1 group: [[<tmp>/delete_explain_codegen/_delta_log/00000000000000000000.checkpoint.parquet]]}, projection=[add, remove, metaData, protocol, txn, sidecar], file_type=parquet
 
 
 physical_plan after coalesce_async_exec_input:
@@ -224,12 +232,16 @@ DeltaCommitExec(table_path=file://<tmp>/delete_explain_codegen/)
               RepartitionExec: partitioning=RoundRobinBatch(<partitions>), input_partitions=<partitions>
                 DeltaScanByAddsExec(table_path=file://<tmp>/delete_explain_codegen/)
                   DeltaFindFilesExec(table_path=file://<tmp>/delete_explain_codegen/)
-                    DeltaLogScanExec(table_path=file://<tmp>/delete_explain_codegen/, version=0)
-                      DataSourceExec: file_groups={1 group: [[<tmp>/delete_explain_codegen/_delta_log/00000000000000000000.checkpoint.parquet]]}, projection=[add, remove, metaData, protocol, txn, sidecar], file_type=parquet
+                    CoalescePartitionsExec
+                      DeltaLogScanExec(table_path=file://<tmp>/delete_explain_codegen/, version=0)
+                        RepartitionExec: partitioning=RoundRobinBatch(<partitions>), input_partitions=<partitions>
+                          DataSourceExec: file_groups={1 group: [[<tmp>/delete_explain_codegen/_delta_log/00000000000000000000.checkpoint.parquet]]}, projection=[add, remove, metaData, protocol, txn, sidecar], file_type=parquet
       DeltaRemoveActionsExec
         DeltaFindFilesExec(table_path=file://<tmp>/delete_explain_codegen/)
-          DeltaLogScanExec(table_path=file://<tmp>/delete_explain_codegen/, version=0)
-            DataSourceExec: file_groups={1 group: [[<tmp>/delete_explain_codegen/_delta_log/00000000000000000000.checkpoint.parquet]]}, projection=[add, remove, metaData, protocol, txn, sidecar], file_type=parquet
+          CoalescePartitionsExec
+            DeltaLogScanExec(table_path=file://<tmp>/delete_explain_codegen/, version=0)
+              RepartitionExec: partitioning=RoundRobinBatch(<partitions>), input_partitions=<partitions>
+                DataSourceExec: file_groups={1 group: [[<tmp>/delete_explain_codegen/_delta_log/00000000000000000000.checkpoint.parquet]]}, projection=[add, remove, metaData, protocol, txn, sidecar], file_type=parquet
 
 
 physical_plan after LimitAggregation:
@@ -267,12 +279,16 @@ DeltaCommitExec(table_path=file://<tmp>/delete_explain_codegen/)
               RepartitionExec: partitioning=RoundRobinBatch(<partitions>), input_partitions=<partitions>
                 DeltaScanByAddsExec(table_path=file://<tmp>/delete_explain_codegen/)
                   DeltaFindFilesExec(table_path=file://<tmp>/delete_explain_codegen/)
-                    DeltaLogScanExec(table_path=file://<tmp>/delete_explain_codegen/, version=0)
-                      DataSourceExec: file_groups={1 group: [[<tmp>/delete_explain_codegen/_delta_log/00000000000000000000.checkpoint.parquet]]}, projection=[add, remove, metaData, protocol, txn, sidecar], file_type=parquet
+                    CoalescePartitionsExec
+                      DeltaLogScanExec(table_path=file://<tmp>/delete_explain_codegen/, version=0)
+                        RepartitionExec: partitioning=RoundRobinBatch(<partitions>), input_partitions=<partitions>
+                          DataSourceExec: file_groups={1 group: [[<tmp>/delete_explain_codegen/_delta_log/00000000000000000000.checkpoint.parquet]]}, projection=[add, remove, metaData, protocol, txn, sidecar], file_type=parquet
       DeltaRemoveActionsExec
         DeltaFindFilesExec(table_path=file://<tmp>/delete_explain_codegen/)
-          DeltaLogScanExec(table_path=file://<tmp>/delete_explain_codegen/, version=0)
-            DataSourceExec: file_groups={1 group: [[<tmp>/delete_explain_codegen/_delta_log/00000000000000000000.checkpoint.parquet]]}, projection=[add, remove, metaData, protocol, txn, sidecar], file_type=parquet
+          CoalescePartitionsExec
+            DeltaLogScanExec(table_path=file://<tmp>/delete_explain_codegen/, version=0)
+              RepartitionExec: partitioning=RoundRobinBatch(<partitions>), input_partitions=<partitions>
+                DataSourceExec: file_groups={1 group: [[<tmp>/delete_explain_codegen/_delta_log/00000000000000000000.checkpoint.parquet]]}, projection=[add, remove, metaData, protocol, txn, sidecar], file_type=parquet
 
 
 == Physical Plan ==
@@ -286,9 +302,13 @@ DeltaCommitExec(table_path=file://<tmp>/delete_explain_codegen/)
               RepartitionExec: partitioning=RoundRobinBatch(<partitions>), input_partitions=<partitions>
                 DeltaScanByAddsExec(table_path=file://<tmp>/delete_explain_codegen/)
                   DeltaFindFilesExec(table_path=file://<tmp>/delete_explain_codegen/)
-                    DeltaLogScanExec(table_path=file://<tmp>/delete_explain_codegen/, version=0)
-                      DataSourceExec: file_groups={1 group: [[<tmp>/delete_explain_codegen/_delta_log/00000000000000000000.checkpoint.parquet]]}, projection=[add, remove, metaData, protocol, txn, sidecar], file_type=parquet
+                    CoalescePartitionsExec
+                      DeltaLogScanExec(table_path=file://<tmp>/delete_explain_codegen/, version=0)
+                        RepartitionExec: partitioning=RoundRobinBatch(<partitions>), input_partitions=<partitions>
+                          DataSourceExec: file_groups={1 group: [[<tmp>/delete_explain_codegen/_delta_log/00000000000000000000.checkpoint.parquet]]}, projection=[add, remove, metaData, protocol, txn, sidecar], file_type=parquet
       DeltaRemoveActionsExec
         DeltaFindFilesExec(table_path=file://<tmp>/delete_explain_codegen/)
-          DeltaLogScanExec(table_path=file://<tmp>/delete_explain_codegen/, version=0)
-            DataSourceExec: file_groups={1 group: [[<tmp>/delete_explain_codegen/_delta_log/00000000000000000000.checkpoint.parquet]]}, projection=[add, remove, metaData, protocol, txn, sidecar], file_type=parquet
+          CoalescePartitionsExec
+            DeltaLogScanExec(table_path=file://<tmp>/delete_explain_codegen/, version=0)
+              RepartitionExec: partitioning=RoundRobinBatch(<partitions>), input_partitions=<partitions>
+                DataSourceExec: file_groups={1 group: [[<tmp>/delete_explain_codegen/_delta_log/00000000000000000000.checkpoint.parquet]]}, projection=[add, remove, metaData, protocol, txn, sidecar], file_type=parquet

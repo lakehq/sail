@@ -37,6 +37,7 @@ use datafusion::arrow::record_batch::RecordBatch;
 use datafusion::execution::context::TaskContext;
 use datafusion::physical_plan::execution_plan::{Boundedness, EmissionType};
 use datafusion::physical_plan::stream::RecordBatchStreamAdapter;
+use datafusion::physical_plan::ExecutionPlanProperties;
 use datafusion::physical_plan::{
     DisplayAs, DisplayFormatType, ExecutionPlan, Partitioning, PlanProperties,
     SendableRecordBatchStream,
@@ -80,9 +81,10 @@ impl DeltaLogScanExec {
         commit_files: Vec<String>,
     ) -> Self {
         let schema = Self::output_schema(&partition_columns);
+        let output_partitions = input.output_partitioning().partition_count();
         let cache = PlanProperties::new(
             EquivalenceProperties::new(schema),
-            Partitioning::UnknownPartitioning(1),
+            Partitioning::UnknownPartitioning(output_partitions),
             EmissionType::Final,
             Boundedness::Bounded,
         );
@@ -290,7 +292,7 @@ impl ExecutionPlan for DeltaLogScanExec {
     }
 
     fn required_input_distribution(&self) -> Vec<Distribution> {
-        vec![Distribution::SinglePartition]
+        vec![Distribution::UnspecifiedDistribution]
     }
 
     fn children(&self) -> Vec<&Arc<dyn ExecutionPlan>> {
@@ -319,11 +321,8 @@ impl ExecutionPlan for DeltaLogScanExec {
         partition: usize,
         context: Arc<TaskContext>,
     ) -> Result<SendableRecordBatchStream> {
-        if partition != 0 {
-            return internal_err!("DeltaLogScanExec can only be executed in a single partition");
-        }
         let schema = self.schema();
-        let mut input_stream = self.input.execute(0, context)?;
+        let mut input_stream = self.input.execute(partition, context)?;
         let this = self.clone();
         let s = async_stream::try_stream! {
             while let Some(batch) = input_stream.try_next().await? {

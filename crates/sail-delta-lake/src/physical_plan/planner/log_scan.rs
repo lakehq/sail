@@ -23,6 +23,7 @@ use datafusion::datasource::schema_adapter::DefaultSchemaAdapterFactory;
 use datafusion::datasource::source::DataSourceExec;
 use datafusion::physical_plan::union::UnionExec;
 use datafusion::physical_plan::ExecutionPlan;
+use futures::{stream, StreamExt, TryStreamExt};
 use object_store::path::{Path, DELIMITER};
 use object_store::{ObjectMeta, ObjectStore};
 
@@ -45,16 +46,26 @@ async fn head_many(
     table_root_path: &str,
     files: &[String],
 ) -> Result<Vec<ObjectMeta>> {
-    let mut metas = Vec::with_capacity(files.len());
-    for f in files {
-        let p = log_file_path(table_root_path, f);
-        let meta = store
-            .head(&p)
-            .await
-            .map_err(|e| DataFusionError::External(Box::new(e)))?;
-        metas.push(meta);
+    if files.is_empty() {
+        return Ok(vec![]);
     }
-    Ok(metas)
+
+    // Concurrency is intentionally bounded to avoid overwhelming object stores.
+    let concurrency = std::cmp::min(64usize, files.len());
+    stream::iter(files.iter().cloned())
+        .map(|f| {
+            let store = Arc::clone(store);
+            let p = log_file_path(table_root_path, &f);
+            async move {
+                store
+                    .head(&p)
+                    .await
+                    .map_err(|e| DataFusionError::External(Box::new(e)))
+            }
+        })
+        .buffer_unordered(concurrency)
+        .try_collect::<Vec<_>>()
+        .await
 }
 
 fn to_partitioned_files(metas: Vec<ObjectMeta>) -> Vec<PartitionedFile> {
@@ -71,6 +82,29 @@ fn to_partitioned_files(metas: Vec<ObjectMeta>) -> Vec<PartitionedFile> {
         .collect()
 }
 
+fn to_file_groups(metas: Vec<ObjectMeta>, target_partitions: usize) -> Vec<FileGroup> {
+    let target_partitions = target_partitions.max(1);
+    if metas.is_empty() {
+        return vec![];
+    }
+
+    let mut files = to_partitioned_files(metas);
+    let num_groups = std::cmp::min(target_partitions, files.len());
+    let chunk_size = files.len().div_ceil(num_groups);
+
+    let mut groups = Vec::with_capacity(num_groups);
+    while !files.is_empty() {
+        let rest = if files.len() > chunk_size {
+            files.split_off(chunk_size)
+        } else {
+            Vec::new()
+        };
+        groups.push(FileGroup::from(std::mem::take(&mut files)));
+        files = rest;
+    }
+    groups
+}
+
 /// Build a `UnionExec` over `_delta_log` checkpoint parquet + commit json files using DataFusion's
 /// `DataSourceExec`. Returns `(plan, checkpoint_filenames, commit_filenames)` for observability.
 pub async fn build_delta_log_datasource_union(
@@ -84,8 +118,10 @@ pub async fn build_delta_log_datasource_union(
         .map_err(|e| DataFusionError::External(Box::new(e)))?;
 
     let table_root_path = log_store.config().location.path();
-    let checkpoint_metas = head_many(&store, table_root_path, &checkpoint_files).await?;
-    let commit_metas = head_many(&store, table_root_path, &commit_files).await?;
+    let (checkpoint_metas, commit_metas) = tokio::try_join!(
+        head_many(&store, table_root_path, &checkpoint_files),
+        head_many(&store, table_root_path, &commit_files)
+    )?;
 
     // Infer schemas (best-effort). If there are no files for either side, we still build an empty
     // scan of the other side.
@@ -123,11 +159,12 @@ pub async fn build_delta_log_datasource_union(
     };
 
     let mut inputs: Vec<Arc<dyn ExecutionPlan>> = Vec::new();
+    let target_partitions = ctx.session().config().target_partitions();
 
     if !checkpoint_metas.is_empty() {
         let source = datafusion::datasource::physical_plan::ParquetSource::default()
             .with_schema_adapter_factory(Arc::new(DefaultSchemaAdapterFactory {}))?;
-        let groups = vec![FileGroup::from(to_partitioned_files(checkpoint_metas))];
+        let groups = to_file_groups(checkpoint_metas, target_partitions);
         let conf =
             FileScanConfigBuilder::new(object_store_url.clone(), Arc::clone(&merged), source)
                 .with_file_groups(groups)
@@ -137,7 +174,7 @@ pub async fn build_delta_log_datasource_union(
 
     if !commit_metas.is_empty() {
         let source = Arc::new(datafusion::datasource::physical_plan::JsonSource::new());
-        let groups = vec![FileGroup::from(to_partitioned_files(commit_metas))];
+        let groups = to_file_groups(commit_metas, target_partitions);
         let conf = FileScanConfigBuilder::new(object_store_url, Arc::clone(&merged), source)
             .with_file_groups(groups)
             .build();
