@@ -309,8 +309,8 @@ rank: 1
 | `try_mod`            | :white_check_mark: |
 | `try_subtract`       | :white_check_mark: |
 | `unhex`              | :white_check_mark: |
+| `uniform`            | :white_check_mark: |
 | `width_bucket`       | :white_check_mark: |
-| `uniform`            | :construction:     |
 
 ## Misc
 
