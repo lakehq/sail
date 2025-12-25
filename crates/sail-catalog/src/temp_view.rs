@@ -3,11 +3,10 @@ use std::sync::{Arc, RwLock, RwLockReadGuard, RwLockWriteGuard};
 
 use datafusion_expr::LogicalPlan;
 use lazy_static::lazy_static;
+use sail_common_datafusion::catalog::TableColumnStatus;
 
 use crate::error::{CatalogError, CatalogResult};
-use crate::provider::{
-    CreateTemporaryViewColumnOptions, CreateTemporaryViewOptions, TableColumnStatus,
-};
+use crate::provider::{CreateTemporaryViewColumnOptions, CreateTemporaryViewOptions};
 use crate::utils::match_pattern;
 
 lazy_static! {

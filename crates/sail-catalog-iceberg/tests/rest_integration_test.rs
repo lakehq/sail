@@ -16,13 +16,15 @@ use std::collections::HashMap;
 
 use arrow::datatypes::DataType;
 use sail_catalog::provider::{
-    CatalogProvider, CatalogTableConstraint, CatalogTableSort, CreateDatabaseOptions,
-    CreateTableColumnOptions, CreateTableOptions, CreateViewColumnOptions, CreateViewOptions,
-    DropDatabaseOptions, DropTableOptions, DropViewOptions, Namespace, RuntimeAwareCatalogProvider,
-    TableColumnStatus, TableKind,
+    CatalogProvider, CreateDatabaseOptions, CreateTableColumnOptions, CreateTableOptions,
+    CreateViewColumnOptions, CreateViewOptions, DropDatabaseOptions, DropTableOptions,
+    DropViewOptions, Namespace, RuntimeAwareCatalogProvider,
 };
 use sail_catalog_iceberg::{IcebergRestCatalogProvider, REST_CATALOG_PROP_URI};
 use sail_common::runtime::RuntimeHandle;
+use sail_common_datafusion::catalog::{
+    CatalogTableConstraint, CatalogTableSort, TableColumnStatus, TableKind,
+};
 use testcontainers::core::{ContainerPort, WaitFor};
 use testcontainers::runners::AsyncRunner;
 use testcontainers::{ContainerAsync, GenericImage, ImageExt};
@@ -681,7 +683,7 @@ async fn test_create_table() {
     assert_eq!(options, Vec::<(String, String)>::new());
     assert_eq!(columns.len(), 3);
     assert!(
-        columns.contains(&sail_catalog::provider::TableColumnStatus {
+        columns.contains(&sail_common_datafusion::catalog::TableColumnStatus {
             name: "foo".to_string(),
             data_type: DataType::Utf8,
             nullable: true,
@@ -694,7 +696,7 @@ async fn test_create_table() {
         })
     );
     assert!(
-        columns.contains(&sail_catalog::provider::TableColumnStatus {
+        columns.contains(&sail_common_datafusion::catalog::TableColumnStatus {
             name: "bar".to_string(),
             data_type: DataType::Int32,
             nullable: false,
@@ -707,7 +709,7 @@ async fn test_create_table() {
         })
     );
     assert!(
-        columns.contains(&sail_catalog::provider::TableColumnStatus {
+        columns.contains(&sail_common_datafusion::catalog::TableColumnStatus {
             name: "baz".to_string(),
             data_type: DataType::Boolean,
             nullable: true,
@@ -850,7 +852,7 @@ async fn test_create_table() {
     assert!(properties.contains(&("team".to_string(), "data-eng".to_string())));
     assert_eq!(columns.len(), 3);
     assert!(
-        columns.contains(&sail_catalog::provider::TableColumnStatus {
+        columns.contains(&sail_common_datafusion::catalog::TableColumnStatus {
             name: "foo".to_string(),
             data_type: DataType::Utf8,
             nullable: true,
@@ -863,7 +865,7 @@ async fn test_create_table() {
         })
     );
     assert!(
-        columns.contains(&sail_catalog::provider::TableColumnStatus {
+        columns.contains(&sail_common_datafusion::catalog::TableColumnStatus {
             name: "bar".to_string(),
             data_type: DataType::Int32,
             nullable: false,
@@ -876,7 +878,7 @@ async fn test_create_table() {
         })
     );
     assert!(
-        columns.contains(&sail_catalog::provider::TableColumnStatus {
+        columns.contains(&sail_common_datafusion::catalog::TableColumnStatus {
             name: "baz".to_string(),
             data_type: DataType::Boolean,
             nullable: true,
@@ -1082,7 +1084,7 @@ async fn test_get_table() {
     assert_eq!(options, vec![("key1".to_string(), "value1".to_string())]);
     assert_eq!(columns.len(), 3);
     assert!(
-        columns.contains(&sail_catalog::provider::TableColumnStatus {
+        columns.contains(&sail_common_datafusion::catalog::TableColumnStatus {
             name: "foo".to_string(),
             data_type: DataType::Utf8,
             nullable: true,
@@ -1095,7 +1097,7 @@ async fn test_get_table() {
         })
     );
     assert!(
-        columns.contains(&sail_catalog::provider::TableColumnStatus {
+        columns.contains(&sail_common_datafusion::catalog::TableColumnStatus {
             name: "bar".to_string(),
             data_type: DataType::Int32,
             nullable: false,
@@ -1108,7 +1110,7 @@ async fn test_get_table() {
         })
     );
     assert!(
-        columns.contains(&sail_catalog::provider::TableColumnStatus {
+        columns.contains(&sail_common_datafusion::catalog::TableColumnStatus {
             name: "baz".to_string(),
             data_type: DataType::Boolean,
             nullable: true,

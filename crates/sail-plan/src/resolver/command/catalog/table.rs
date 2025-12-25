@@ -1,10 +1,10 @@
 use datafusion_expr::LogicalPlan;
 use sail_catalog::command::CatalogCommand;
-use sail_catalog::provider::{
-    CatalogTableBucketBy, CatalogTableConstraint, CatalogTableSort, CreateTableColumnOptions,
-    CreateTableOptions,
-};
+use sail_catalog::provider::{CreateTableColumnOptions, CreateTableOptions};
 use sail_common::spec;
+use sail_common_datafusion::catalog::{
+    CatalogTableBucketBy, CatalogTableConstraint, CatalogTableSort,
+};
 use sail_common_datafusion::utils::items::ItemTaker;
 use uuid::Uuid;
 

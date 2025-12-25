@@ -19,6 +19,7 @@ sail-common = { path = "../sail-common" }
 sail-execution = { path = "../sail-execution" }
 sail-telemetry = { path = "../sail-telemetry" }
 sail-spark-connect = { path = "../sail-spark-connect" }
+sail-session = { path = "../sail-session" }
 
 mimalloc = { workspace = true, optional = true }
 clap = { workspace = true }

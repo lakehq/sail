@@ -1,6 +1,5 @@
 use std::collections::HashMap;
 use std::mem;
-use std::sync::Arc;
 
 use fastrace::future::FutureExt;
 use fastrace::Span;
@@ -9,9 +8,8 @@ use sail_server::actor::{Actor, ActorAction, ActorContext};
 
 use crate::driver::job_scheduler::{JobScheduler, JobSchedulerOptions};
 use crate::driver::worker_pool::{WorkerPool, WorkerPoolOptions};
-use crate::driver::{DriverActor, DriverEvent, DriverOptions, WorkerManagerOptions};
+use crate::driver::{DriverActor, DriverEvent, DriverOptions};
 use crate::rpc::ServerMonitor;
-use crate::worker_manager::{KubernetesWorkerManager, LocalWorkerManager, WorkerManager};
 
 #[tonic::async_trait]
 impl Actor for DriverActor {
@@ -23,15 +21,10 @@ impl Actor for DriverActor {
     }
 
     fn new(options: DriverOptions) -> Self {
-        let worker_manager: Arc<dyn WorkerManager> = match &options.worker_manager {
-            WorkerManagerOptions::Local => {
-                Arc::new(LocalWorkerManager::new(options.runtime.clone()))
-            }
-            WorkerManagerOptions::Kubernetes(options) => {
-                Arc::new(KubernetesWorkerManager::new(options.clone()))
-            }
-        };
-        let worker_pool = WorkerPool::new(worker_manager, WorkerPoolOptions::new(&options));
+        let worker_pool = WorkerPool::new(
+            options.worker_manager.clone(),
+            WorkerPoolOptions::new(&options),
+        );
         let job_scheduler = JobScheduler::new(JobSchedulerOptions::new(&options));
         Self {
             options,

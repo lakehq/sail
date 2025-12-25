@@ -50,9 +50,6 @@ class TestDeltaIO:
 
         df.write.format("delta").mode("overwrite").save(str(delta_path))
 
-        data_files = get_data_files(str(delta_path))
-        assert len(data_files) == 1, f"Expected exactly 1 data file, got {len(data_files)}"
-
         result_df = spark.read.format("delta").load(f"{delta_path}").sort("id")
 
         assert_frame_equal(
@@ -88,6 +85,7 @@ class TestDeltaIO:
 
         df1.write.format("delta").mode("overwrite").save(str(delta_path))
 
+        # Keep lifecycle assertion in Python tests (BDD covers structural layout separately).
         files_v0 = set(get_data_files(str(delta_path)))
         assert len(files_v0) > 0, "Initial write should create files"
 

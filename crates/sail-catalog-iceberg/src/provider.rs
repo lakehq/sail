@@ -15,16 +15,16 @@ use std::sync::Arc;
 
 use sail_catalog::error::{CatalogError, CatalogResult};
 use sail_catalog::provider::{
-    CatalogProvider, CatalogTableConstraint, CatalogTableSort, CreateDatabaseOptions,
-    CreateTableColumnOptions, CreateTableOptions, CreateViewColumnOptions, CreateViewOptions,
-    DatabaseStatus, DropDatabaseOptions, DropTableOptions, DropViewOptions, Namespace,
-    TableColumnStatus, TableKind, TableStatus,
+    CatalogProvider, CreateDatabaseOptions, CreateTableColumnOptions, CreateTableOptions,
+    CreateViewColumnOptions, CreateViewOptions, DropDatabaseOptions, DropTableOptions,
+    DropViewOptions, Namespace,
 };
 use sail_catalog::utils::get_property;
-use sail_iceberg::{
-    arrow_type_to_iceberg, iceberg_type_to_arrow, Literal, NestedField, StructType,
-    DEFAULT_SCHEMA_ID,
+use sail_common_datafusion::catalog::{
+    CatalogTableConstraint, CatalogTableSort, DatabaseStatus, TableColumnStatus, TableKind,
+    TableStatus,
 };
+use sail_iceberg::{arrow_type_to_iceberg, iceberg_type_to_arrow, NestedField, StructType};
 use tokio::sync::OnceCell;
 
 use crate::apis::configuration::Configuration;
@@ -133,7 +133,7 @@ impl IcebergRestCatalogProvider {
                 props.extend(self.catalog_config.props.clone());
                 props.extend(config.overrides);
 
-                Ok(RestCatalogConfig {
+                Ok::<_, CatalogError>(RestCatalogConfig {
                     uri,
                     warehouse: self.catalog_config.warehouse.clone(),
                     props,
@@ -1265,8 +1265,6 @@ fn build_sort_order(
 #[allow(clippy::unwrap_used, clippy::panic)]
 #[cfg(test)]
 mod tests {
-    use std::sync::Arc;
-
     use wiremock::matchers::{method, path, query_param, query_param_is_missing};
     use wiremock::{Mock, MockServer, ResponseTemplate};
 

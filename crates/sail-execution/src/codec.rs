@@ -58,6 +58,7 @@ use prost::bytes::BytesMut;
 use prost::Message;
 use sail_common_datafusion::array::record_batch::{read_record_batches, write_record_batches};
 use sail_common_datafusion::datasource::PhysicalSinkMode;
+use sail_common_datafusion::physical_expr::PhysicalExprWithSource;
 use sail_common_datafusion::udf::StreamUDF;
 use sail_data_source::formats::binary::source::BinarySource;
 use sail_data_source::formats::console::ConsoleSinkExec;
@@ -148,6 +149,7 @@ use sail_iceberg::TableIcebergOptions;
 use sail_logical_plan::range::Range;
 use sail_logical_plan::show_string::{ShowStringFormat, ShowStringStyle};
 use sail_physical_plan::map_partitions::MapPartitionsExec;
+use sail_physical_plan::merge_cardinality_check::MergeCardinalityCheckExec;
 use sail_physical_plan::range::RangeExec;
 use sail_physical_plan::schema_pivot::SchemaPivotExec;
 use sail_physical_plan::show_string::ShowStringExec;
@@ -525,12 +527,6 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
                 let options =
                     serde_json::from_str(&options).map_err(|e| plan_datafusion_err!("{e}"))?;
 
-                // Extract condition from sink_mode for DeltaWriterExec
-                let condition = match &sink_mode {
-                    PhysicalSinkMode::OverwriteIf { condition } => Some(condition.clone()),
-                    _ => None,
-                };
-
                 let operation_override = if let Some(s) = operation_override_json.as_ref() {
                     Some(serde_json::from_str(s).map_err(|e| plan_datafusion_err!("{e}"))?)
                 } else {
@@ -544,7 +540,6 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
                     sink_mode,
                     table_exists,
                     Arc::new(sink_schema),
-                    condition,
                     operation_override,
                 )))
             }
@@ -759,6 +754,17 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
                 let input = self.try_decode_plan(&input, ctx)?;
                 Ok(Arc::new(StreamSourceAdapterExec::new(input)))
             }
+            NodeKind::MergeCardinalityCheck(gen::MergeCardinalityCheckExecNode {
+                input,
+                target_row_id_col,
+                target_present_col,
+                source_present_col,
+            }) => Ok(Arc::new(MergeCardinalityCheckExec::new(
+                self.try_decode_plan(&input, ctx)?,
+                target_row_id_col,
+                target_present_col,
+                source_present_col,
+            )?)),
             NodeKind::IcebergWriter(gen::IcebergWriterExecNode {
                 input,
                 table_url,
@@ -1215,6 +1221,16 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
         {
             let input = self.try_encode_plan(stream_source_adapter.input().clone())?;
             NodeKind::StreamSourceAdapter(gen::StreamSourceAdapterExecNode { input })
+        } else if let Some(cardinality_check) =
+            node.as_any().downcast_ref::<MergeCardinalityCheckExec>()
+        {
+            let input = self.try_encode_plan(cardinality_check.input().clone())?;
+            NodeKind::MergeCardinalityCheck(gen::MergeCardinalityCheckExecNode {
+                input,
+                target_row_id_col: cardinality_check.target_row_id_col().to_string(),
+                target_present_col: cardinality_check.target_present_col().to_string(),
+                source_present_col: cardinality_check.source_present_col().to_string(),
+            })
         } else if let Some(iceberg_writer_exec) = node.as_any().downcast_ref::<IcebergWriterExec>()
         {
             let input = self.try_encode_plan(iceberg_writer_exec.input().clone())?;
@@ -1849,22 +1865,31 @@ impl RemoteExecutionCodec {
     ) -> Result<PhysicalSinkMode> {
         let gen::PhysicalSinkMode { mode } = proto_mode;
         match mode {
-            Some(gen::physical_sink_mode::Mode::Append(_)) => Ok(PhysicalSinkMode::Append),
-            Some(gen::physical_sink_mode::Mode::Overwrite(_)) => Ok(PhysicalSinkMode::Overwrite),
-            Some(gen::physical_sink_mode::Mode::OverwriteIf(overwrite_if)) => {
-                let expr_node = self.try_decode_message(&overwrite_if.condition)?;
-                let condition = parse_physical_expr(&expr_node, ctx, schema, self)?;
-                Ok(PhysicalSinkMode::OverwriteIf { condition })
+            Some(gen::physical_sink_mode::Mode::Append(gen::AppendMode {})) => {
+                Ok(PhysicalSinkMode::Append)
             }
-            Some(gen::physical_sink_mode::Mode::ErrorIfExists(_)) => {
+            Some(gen::physical_sink_mode::Mode::Overwrite(gen::OverwriteMode {})) => {
+                Ok(PhysicalSinkMode::Overwrite)
+            }
+            Some(gen::physical_sink_mode::Mode::OverwriteIf(gen::OverwriteIfMode {
+                condition,
+                source,
+            })) => {
+                let expr = self.try_decode_message(&condition)?;
+                let expr = parse_physical_expr(&expr, ctx, schema, self)?;
+                Ok(PhysicalSinkMode::OverwriteIf {
+                    condition: PhysicalExprWithSource::new(expr, source),
+                })
+            }
+            Some(gen::physical_sink_mode::Mode::ErrorIfExists(gen::ErrorIfExistsMode {})) => {
                 Ok(PhysicalSinkMode::ErrorIfExists)
             }
-            Some(gen::physical_sink_mode::Mode::IgnoreIfExists(_)) => {
+            Some(gen::physical_sink_mode::Mode::IgnoreIfExists(gen::IgnoreIfExistsMode {})) => {
                 Ok(PhysicalSinkMode::IgnoreIfExists)
             }
-            Some(gen::physical_sink_mode::Mode::OverwritePartitions(_)) => {
-                Ok(PhysicalSinkMode::OverwritePartitions)
-            }
+            Some(gen::physical_sink_mode::Mode::OverwritePartitions(
+                gen::OverwritePartitionsMode {},
+            )) => Ok(PhysicalSinkMode::OverwritePartitions),
             None => plan_err!("PhysicalSinkMode is missing"),
         }
     }
@@ -1878,11 +1903,13 @@ impl RemoteExecutionCodec {
             PhysicalSinkMode::Overwrite => {
                 gen::physical_sink_mode::Mode::Overwrite(gen::OverwriteMode {})
             }
-            PhysicalSinkMode::OverwriteIf { condition } => {
-                let proto_expr = serialize_physical_expr(condition, self)?;
-                let condition_bytes = self.try_encode_message(proto_expr)?;
+            PhysicalSinkMode::OverwriteIf {
+                condition: PhysicalExprWithSource { expr, source },
+            } => {
+                let expr = serialize_physical_expr(expr, self)?;
                 gen::physical_sink_mode::Mode::OverwriteIf(gen::OverwriteIfMode {
-                    condition: condition_bytes,
+                    condition: self.try_encode_message(expr)?,
+                    source: source.clone(),
                 })
             }
             PhysicalSinkMode::ErrorIfExists => {

@@ -2,6 +2,138 @@
   "tests": [
     {
       "input": {
+        "query": "SELECT LENGTH(kll_sketch_to_string_bigint(kll_sketch_agg_bigint(col))) > 0 FROM VALUES (1), (2), (3), (4), (5) tab(col);",
+        "result": [
+          "true"
+        ],
+        "schema": {
+          "type": "struct",
+          "fields": [
+            {
+              "name": "(length(kll_sketch_to_string_bigint(kll_sketch_agg_bigint(col))) > 0)",
+              "nullable": false,
+              "type": "boolean",
+              "metadata": {}
+            }
+          ]
+        }
+      },
+      "output": {
+        "failure": "not supported: unknown function: kll_sketch_agg_bigint"
+      }
+    },
+    {
+      "input": {
+        "query": "SELECT LENGTH(kll_sketch_to_string_bigint(kll_sketch_agg_bigint(col, 400))) > 0 FROM VALUES (1), (2), (3), (4), (5) tab(col);",
+        "result": [
+          "true"
+        ],
+        "schema": {
+          "type": "struct",
+          "fields": [
+            {
+              "name": "(length(kll_sketch_to_string_bigint(kll_sketch_agg_bigint(col, 400))) > 0)",
+              "nullable": false,
+              "type": "boolean",
+              "metadata": {}
+            }
+          ]
+        }
+      },
+      "output": {
+        "failure": "not supported: unknown function: kll_sketch_agg_bigint"
+      }
+    },
+    {
+      "input": {
+        "query": "SELECT LENGTH(kll_sketch_to_string_double(kll_sketch_agg_double(col))) > 0 FROM VALUES (CAST(1.0 AS DOUBLE)), (CAST(2.0 AS DOUBLE)), (CAST(3.0 AS DOUBLE)), (CAST(4.0 AS DOUBLE)), (CAST(5.0 AS DOUBLE)) tab(col);",
+        "result": [
+          "true"
+        ],
+        "schema": {
+          "type": "struct",
+          "fields": [
+            {
+              "name": "(length(kll_sketch_to_string_double(kll_sketch_agg_double(col))) > 0)",
+              "nullable": false,
+              "type": "boolean",
+              "metadata": {}
+            }
+          ]
+        }
+      },
+      "output": {
+        "failure": "not supported: unknown function: kll_sketch_agg_double"
+      }
+    },
+    {
+      "input": {
+        "query": "SELECT LENGTH(kll_sketch_to_string_double(kll_sketch_agg_double(col, 400))) > 0 FROM VALUES (CAST(1.0 AS DOUBLE)), (CAST(2.0 AS DOUBLE)), (CAST(3.0 AS DOUBLE)), (CAST(4.0 AS DOUBLE)), (CAST(5.0 AS DOUBLE)) tab(col);",
+        "result": [
+          "true"
+        ],
+        "schema": {
+          "type": "struct",
+          "fields": [
+            {
+              "name": "(length(kll_sketch_to_string_double(kll_sketch_agg_double(col, 400))) > 0)",
+              "nullable": false,
+              "type": "boolean",
+              "metadata": {}
+            }
+          ]
+        }
+      },
+      "output": {
+        "failure": "not supported: unknown function: kll_sketch_agg_double"
+      }
+    },
+    {
+      "input": {
+        "query": "SELECT LENGTH(kll_sketch_to_string_float(kll_sketch_agg_float(col))) > 0 FROM VALUES (CAST(1.0 AS FLOAT)), (CAST(2.0 AS FLOAT)), (CAST(3.0 AS FLOAT)), (CAST(4.0 AS FLOAT)), (CAST(5.0 AS FLOAT)) tab(col);",
+        "result": [
+          "true"
+        ],
+        "schema": {
+          "type": "struct",
+          "fields": [
+            {
+              "name": "(length(kll_sketch_to_string_float(kll_sketch_agg_float(col))) > 0)",
+              "nullable": false,
+              "type": "boolean",
+              "metadata": {}
+            }
+          ]
+        }
+      },
+      "output": {
+        "failure": "not supported: unknown function: kll_sketch_agg_float"
+      }
+    },
+    {
+      "input": {
+        "query": "SELECT LENGTH(kll_sketch_to_string_float(kll_sketch_agg_float(col, 400))) > 0 FROM VALUES (CAST(1.0 AS FLOAT)), (CAST(2.0 AS FLOAT)), (CAST(3.0 AS FLOAT)), (CAST(4.0 AS FLOAT)), (CAST(5.0 AS FLOAT)) tab(col);",
+        "result": [
+          "true"
+        ],
+        "schema": {
+          "type": "struct",
+          "fields": [
+            {
+              "name": "(length(kll_sketch_to_string_float(kll_sketch_agg_float(col, 400))) > 0)",
+              "nullable": false,
+              "type": "boolean",
+              "metadata": {}
+            }
+          ]
+        }
+      },
+      "output": {
+        "failure": "not supported: unknown function: kll_sketch_agg_float"
+      }
+    },
+    {
+      "input": {
         "query": "SELECT any(col) FROM VALUES (NULL), (true), (false) AS tab(col);",
         "result": [
           "true"
@@ -248,6 +380,258 @@
       },
       "output": {
         "failure": "error in DataFusion: Error during planning: Failed to coerce arguments to satisfy a call to 'approx_percentile_cont' function: coercion from Duration(µs), List(Decimal128(1, 1)), Int32 to the signature OneOf([Exact([Int8, Float64]), Exact([Int8, Float64, Int8]), Exact([Int8, Float64, Int16]), Exact([Int8, Float64, Int32]), Exact([Int8, Float64, Int64]), Exact([Int8, Float64, UInt8]), Exact([Int8, Float64, UInt16]), Exact([Int8, Float64, UInt32]), Exact([Int8, Float64, UInt64]), Exact([Int16, Float64]), Exact([Int16, Float64, Int8]), Exact([Int16, Float64, Int16]), Exact([Int16, Float64, Int32]), Exact([Int16, Float64, Int64]), Exact([Int16, Float64, UInt8]), Exact([Int16, Float64, UInt16]), Exact([Int16, Float64, UInt32]), Exact([Int16, Float64, UInt64]), Exact([Int32, Float64]), Exact([Int32, Float64, Int8]), Exact([Int32, Float64, Int16]), Exact([Int32, Float64, Int32]), Exact([Int32, Float64, Int64]), Exact([Int32, Float64, UInt8]), Exact([Int32, Float64, UInt16]), Exact([Int32, Float64, UInt32]), Exact([Int32, Float64, UInt64]), Exact([Int64, Float64]), Exact([Int64, Float64, Int8]), Exact([Int64, Float64, Int16]), Exact([Int64, Float64, Int32]), Exact([Int64, Float64, Int64]), Exact([Int64, Float64, UInt8]), Exact([Int64, Float64, UInt16]), Exact([Int64, Float64, UInt32]), Exact([Int64, Float64, UInt64]), Exact([UInt8, Float64]), Exact([UInt8, Float64, Int8]), Exact([UInt8, Float64, Int16]), Exact([UInt8, Float64, Int32]), Exact([UInt8, Float64, Int64]), Exact([UInt8, Float64, UInt8]), Exact([UInt8, Float64, UInt16]), Exact([UInt8, Float64, UInt32]), Exact([UInt8, Float64, UInt64]), Exact([UInt16, Float64]), Exact([UInt16, Float64, Int8]), Exact([UInt16, Float64, Int16]), Exact([UInt16, Float64, Int32]), Exact([UInt16, Float64, Int64]), Exact([UInt16, Float64, UInt8]), Exact([UInt16, Float64, UInt16]), Exact([UInt16, Float64, UInt32]), Exact([UInt16, Float64, UInt64]), Exact([UInt32, Float64]), Exact([UInt32, Float64, Int8]), Exact([UInt32, Float64, Int16]), Exact([UInt32, Float64, Int32]), Exact([UInt32, Float64, Int64]), Exact([UInt32, Float64, UInt8]), Exact([UInt32, Float64, UInt16]), Exact([UInt32, Float64, UInt32]), Exact([UInt32, Float64, UInt64]), Exact([UInt64, Float64]), Exact([UInt64, Float64, Int8]), Exact([UInt64, Float64, Int16]), Exact([UInt64, Float64, Int32]), Exact([UInt64, Float64, Int64]), Exact([UInt64, Float64, UInt8]), Exact([UInt64, Float64, UInt16]), Exact([UInt64, Float64, UInt32]), Exact([UInt64, Float64, UInt64]), Exact([Float32, Float64]), Exact([Float32, Float64, Int8]), Exact([Float32, Float64, Int16]), Exact([Float32, Float64, Int32]), Exact([Float32, Float64, Int64]), Exact([Float32, Float64, UInt8]), Exact([Float32, Float64, UInt16]), Exact([Float32, Float64, UInt32]), Exact([Float32, Float64, UInt64]), Exact([Float64, Float64]), Exact([Float64, Float64, Int8]), Exact([Float64, Float64, Int16]), Exact([Float64, Float64, Int32]), Exact([Float64, Float64, Int64]), Exact([Float64, Float64, UInt8]), Exact([Float64, Float64, UInt16]), Exact([Float64, Float64, UInt32]), Exact([Float64, Float64, UInt64])]) failed No function matches the given name and argument types 'approx_percentile_cont(Duration(µs), List(Decimal128(1, 1)), Int32)'. You might need to add explicit type casts.\n\tCandidate functions:\n\tapprox_percentile_cont(Int8, Float64)\n\tapprox_percentile_cont(Int8, Float64, Int8)\n\tapprox_percentile_cont(Int8, Float64, Int16)\n\tapprox_percentile_cont(Int8, Float64, Int32)\n\tapprox_percentile_cont(Int8, Float64, Int64)\n\tapprox_percentile_cont(Int8, Float64, UInt8)\n\tapprox_percentile_cont(Int8, Float64, UInt16)\n\tapprox_percentile_cont(Int8, Float64, UInt32)\n\tapprox_percentile_cont(Int8, Float64, UInt64)\n\tapprox_percentile_cont(Int16, Float64)\n\tapprox_percentile_cont(Int16, Float64, Int8)\n\tapprox_percentile_cont(Int16, Float64, Int16)\n\tapprox_percentile_cont(Int16, Float64, Int32)\n\tapprox_percentile_cont(Int16, Float64, Int64)\n\tapprox_percentile_cont(Int16, Float64, UInt8)\n\tapprox_percentile_cont(Int16, Float64, UInt16)\n\tapprox_percentile_cont(Int16, Float64, UInt32)\n\tapprox_percentile_cont(Int16, Float64, UInt64)\n\tapprox_percentile_cont(Int32, Float64)\n\tapprox_percentile_cont(Int32, Float64, Int8)\n\tapprox_percentile_cont(Int32, Float64, Int16)\n\tapprox_percentile_cont(Int32, Float64, Int32)\n\tapprox_percentile_cont(Int32, Float64, Int64)\n\tapprox_percentile_cont(Int32, Float64, UInt8)\n\tapprox_percentile_cont(Int32, Float64, UInt16)\n\tapprox_percentile_cont(Int32, Float64, UInt32)\n\tapprox_percentile_cont(Int32, Float64, UInt64)\n\tapprox_percentile_cont(Int64, Float64)\n\tapprox_percentile_cont(Int64, Float64, Int8)\n\tapprox_percentile_cont(Int64, Float64, Int16)\n\tapprox_percentile_cont(Int64, Float64, Int32)\n\tapprox_percentile_cont(Int64, Float64, Int64)\n\tapprox_percentile_cont(Int64, Float64, UInt8)\n\tapprox_percentile_cont(Int64, Float64, UInt16)\n\tapprox_percentile_cont(Int64, Float64, UInt32)\n\tapprox_percentile_cont(Int64, Float64, UInt64)\n\tapprox_percentile_cont(UInt8, Float64)\n\tapprox_percentile_cont(UInt8, Float64, Int8)\n\tapprox_percentile_cont(UInt8, Float64, Int16)\n\tapprox_percentile_cont(UInt8, Float64, Int32)\n\tapprox_percentile_cont(UInt8, Float64, Int64)\n\tapprox_percentile_cont(UInt8, Float64, UInt8)\n\tapprox_percentile_cont(UInt8, Float64, UInt16)\n\tapprox_percentile_cont(UInt8, Float64, UInt32)\n\tapprox_percentile_cont(UInt8, Float64, UInt64)\n\tapprox_percentile_cont(UInt16, Float64)\n\tapprox_percentile_cont(UInt16, Float64, Int8)\n\tapprox_percentile_cont(UInt16, Float64, Int16)\n\tapprox_percentile_cont(UInt16, Float64, Int32)\n\tapprox_percentile_cont(UInt16, Float64, Int64)\n\tapprox_percentile_cont(UInt16, Float64, UInt8)\n\tapprox_percentile_cont(UInt16, Float64, UInt16)\n\tapprox_percentile_cont(UInt16, Float64, UInt32)\n\tapprox_percentile_cont(UInt16, Float64, UInt64)\n\tapprox_percentile_cont(UInt32, Float64)\n\tapprox_percentile_cont(UInt32, Float64, Int8)\n\tapprox_percentile_cont(UInt32, Float64, Int16)\n\tapprox_percentile_cont(UInt32, Float64, Int32)\n\tapprox_percentile_cont(UInt32, Float64, Int64)\n\tapprox_percentile_cont(UInt32, Float64, UInt8)\n\tapprox_percentile_cont(UInt32, Float64, UInt16)\n\tapprox_percentile_cont(UInt32, Float64, UInt32)\n\tapprox_percentile_cont(UInt32, Float64, UInt64)\n\tapprox_percentile_cont(UInt64, Float64)\n\tapprox_percentile_cont(UInt64, Float64, Int8)\n\tapprox_percentile_cont(UInt64, Float64, Int16)\n\tapprox_percentile_cont(UInt64, Float64, Int32)\n\tapprox_percentile_cont(UInt64, Float64, Int64)\n\tapprox_percentile_cont(UInt64, Float64, UInt8)\n\tapprox_percentile_cont(UInt64, Float64, UInt16)\n\tapprox_percentile_cont(UInt64, Float64, UInt32)\n\tapprox_percentile_cont(UInt64, Float64, UInt64)\n\tapprox_percentile_cont(Float32, Float64)\n\tapprox_percentile_cont(Float32, Float64, Int8)\n\tapprox_percentile_cont(Float32, Float64, Int16)\n\tapprox_percentile_cont(Float32, Float64, Int32)\n\tapprox_percentile_cont(Float32, Float64, Int64)\n\tapprox_percentile_cont(Float32, Float64, UInt8)\n\tapprox_percentile_cont(Float32, Float64, UInt16)\n\tapprox_percentile_cont(Float32, Float64, UInt32)\n\tapprox_percentile_cont(Float32, Float64, UInt64)\n\tapprox_percentile_cont(Float64, Float64)\n\tapprox_percentile_cont(Float64, Float64, Int8)\n\tapprox_percentile_cont(Float64, Float64, Int16)\n\tapprox_percentile_cont(Float64, Float64, Int32)\n\tapprox_percentile_cont(Float64, Float64, Int64)\n\tapprox_percentile_cont(Float64, Float64, UInt8)\n\tapprox_percentile_cont(Float64, Float64, UInt16)\n\tapprox_percentile_cont(Float64, Float64, UInt32)\n\tapprox_percentile_cont(Float64, Float64, UInt64)"
+      }
+    },
+    {
+      "input": {
+        "query": "SELECT approx_top_k(expr) FROM VALUES (0), (0), (1), (1), (2), (3), (4), (4) AS tab(expr);",
+        "result": [
+          "[{\"item\":0,\"count\":2},{\"item\":4,\"count\":2},{\"item\":1,\"count\":2},{\"item\":2,\"count\":1},{\"item\":3,\"count\":1}]"
+        ],
+        "schema": {
+          "type": "struct",
+          "fields": [
+            {
+              "name": "approx_top_k(expr, 5, 10000)",
+              "nullable": false,
+              "type": {
+                "type": "array",
+                "elementType": {
+                  "type": "struct",
+                  "fields": [
+                    {
+                      "name": "item",
+                      "nullable": true,
+                      "type": "integer",
+                      "metadata": {}
+                    },
+                    {
+                      "name": "count",
+                      "nullable": false,
+                      "type": "long",
+                      "metadata": {}
+                    }
+                  ]
+                },
+                "containsNull": false
+              },
+              "metadata": {}
+            }
+          ]
+        }
+      },
+      "output": {
+        "failure": "not supported: unknown function: approx_top_k"
+      }
+    },
+    {
+      "input": {
+        "query": "SELECT approx_top_k(expr, 10, 100) FROM VALUES (0), (1), (1), (2), (2), (2) AS tab(expr);",
+        "result": [
+          "[{\"item\":2,\"count\":3},{\"item\":1,\"count\":2},{\"item\":0,\"count\":1}]"
+        ],
+        "schema": {
+          "type": "struct",
+          "fields": [
+            {
+              "name": "approx_top_k(expr, 10, 100)",
+              "nullable": false,
+              "type": {
+                "type": "array",
+                "elementType": {
+                  "type": "struct",
+                  "fields": [
+                    {
+                      "name": "item",
+                      "nullable": true,
+                      "type": "integer",
+                      "metadata": {}
+                    },
+                    {
+                      "name": "count",
+                      "nullable": false,
+                      "type": "long",
+                      "metadata": {}
+                    }
+                  ]
+                },
+                "containsNull": false
+              },
+              "metadata": {}
+            }
+          ]
+        }
+      },
+      "output": {
+        "failure": "not supported: unknown function: approx_top_k"
+      }
+    },
+    {
+      "input": {
+        "query": "SELECT approx_top_k(expr, 2) FROM VALUES 'a', 'b', 'c', 'c', 'c', 'c', 'd', 'd' AS tab(expr);",
+        "result": [
+          "[{\"item\":\"c\",\"count\":4},{\"item\":\"d\",\"count\":2}]"
+        ],
+        "schema": {
+          "type": "struct",
+          "fields": [
+            {
+              "name": "approx_top_k(expr, 2, 10000)",
+              "nullable": false,
+              "type": {
+                "type": "array",
+                "elementType": {
+                  "type": "struct",
+                  "fields": [
+                    {
+                      "name": "item",
+                      "nullable": true,
+                      "type": "string",
+                      "metadata": {}
+                    },
+                    {
+                      "name": "count",
+                      "nullable": false,
+                      "type": "long",
+                      "metadata": {}
+                    }
+                  ]
+                },
+                "containsNull": false
+              },
+              "metadata": {}
+            }
+          ]
+        }
+      },
+      "output": {
+        "failure": "not supported: unknown function: approx_top_k"
+      }
+    },
+    {
+      "input": {
+        "query": "SELECT approx_top_k_estimate(approx_top_k_accumulate(expr)) FROM VALUES (0), (0), (1), (1), (2), (3), (4), (4) AS tab(expr);",
+        "result": [
+          "[{\"item\":0,\"count\":2},{\"item\":4,\"count\":2},{\"item\":1,\"count\":2},{\"item\":2,\"count\":1},{\"item\":3,\"count\":1}]"
+        ],
+        "schema": {
+          "type": "struct",
+          "fields": [
+            {
+              "name": "approx_top_k_estimate(approx_top_k_accumulate(expr, 10000), 5)",
+              "nullable": false,
+              "type": {
+                "type": "array",
+                "elementType": {
+                  "type": "struct",
+                  "fields": [
+                    {
+                      "name": "item",
+                      "nullable": true,
+                      "type": "integer",
+                      "metadata": {}
+                    },
+                    {
+                      "name": "count",
+                      "nullable": false,
+                      "type": "long",
+                      "metadata": {}
+                    }
+                  ]
+                },
+                "containsNull": false
+              },
+              "metadata": {}
+            }
+          ]
+        }
+      },
+      "output": {
+        "failure": "not supported: unknown function: approx_top_k_accumulate"
+      }
+    },
+    {
+      "input": {
+        "query": "SELECT approx_top_k_estimate(approx_top_k_accumulate(expr, 100), 2) FROM VALUES 'a', 'b', 'c', 'c', 'c', 'c', 'd', 'd' AS tab(expr);",
+        "result": [
+          "[{\"item\":\"c\",\"count\":4},{\"item\":\"d\",\"count\":2}]"
+        ],
+        "schema": {
+          "type": "struct",
+          "fields": [
+            {
+              "name": "approx_top_k_estimate(approx_top_k_accumulate(expr, 100), 2)",
+              "nullable": false,
+              "type": {
+                "type": "array",
+                "elementType": {
+                  "type": "struct",
+                  "fields": [
+                    {
+                      "name": "item",
+                      "nullable": true,
+                      "type": "string",
+                      "metadata": {}
+                    },
+                    {
+                      "name": "count",
+                      "nullable": false,
+                      "type": "long",
+                      "metadata": {}
+                    }
+                  ]
+                },
+                "containsNull": false
+              },
+              "metadata": {}
+            }
+          ]
+        }
+      },
+      "output": {
+        "failure": "not supported: unknown function: approx_top_k_accumulate"
+      }
+    },
+    {
+      "input": {
+        "query": "SELECT approx_top_k_estimate(approx_top_k_combine(sketch, 10000), 5) FROM (SELECT approx_top_k_accumulate(expr) AS sketch FROM VALUES (0), (0), (1), (1) AS tab(expr) UNION ALL SELECT approx_top_k_accumulate(expr) AS sketch FROM VALUES (2), (3), (4), (4) AS tab(expr));",
+        "result": [
+          "[{\"item\":0,\"count\":2},{\"item\":4,\"count\":2},{\"item\":1,\"count\":2},{\"item\":2,\"count\":1},{\"item\":3,\"count\":1}]"
+        ],
+        "schema": {
+          "type": "struct",
+          "fields": [
+            {
+              "name": "approx_top_k_estimate(approx_top_k_combine(sketch, 10000), 5)",
+              "nullable": false,
+              "type": {
+                "type": "array",
+                "elementType": {
+                  "type": "struct",
+                  "fields": [
+                    {
+                      "name": "item",
+                      "nullable": true,
+                      "type": "integer",
+                      "metadata": {}
+                    },
+                    {
+                      "name": "count",
+                      "nullable": false,
+                      "type": "long",
+                      "metadata": {}
+                    }
+                  ]
+                },
+                "containsNull": false
+              },
+              "metadata": {}
+            }
+          ]
+        }
+      },
+      "output": {
+        "failure": "not supported: unknown function: approx_top_k_accumulate"
       }
     },
     {
@@ -3440,6 +3824,50 @@
     },
     {
       "input": {
+        "query": "SELECT substring(hex(bitmap_and_agg(col)), 0, 6) FROM VALUES (X 'F0'), (X '70'), (X '30') AS tab(col);",
+        "result": [
+          "300000"
+        ],
+        "schema": {
+          "type": "struct",
+          "fields": [
+            {
+              "name": "substring(hex(bitmap_and_agg(col)), 0, 6)",
+              "nullable": false,
+              "type": "string",
+              "metadata": {}
+            }
+          ]
+        }
+      },
+      "output": {
+        "failure": "not supported: unknown function: bitmap_and_agg"
+      }
+    },
+    {
+      "input": {
+        "query": "SELECT substring(hex(bitmap_and_agg(col)), 0, 6) FROM VALUES (X 'FF'), (X 'FF'), (X 'FF') AS tab(col);",
+        "result": [
+          "FF0000"
+        ],
+        "schema": {
+          "type": "struct",
+          "fields": [
+            {
+              "name": "substring(hex(bitmap_and_agg(col)), 0, 6)",
+              "nullable": false,
+              "type": "string",
+              "metadata": {}
+            }
+          ]
+        }
+      },
+      "output": {
+        "failure": "not supported: unknown function: bitmap_and_agg"
+      }
+    },
+    {
+      "input": {
         "query": "SELECT substring(hex(bitmap_construct_agg(bitmap_bit_position(col))), 0, 6) FROM VALUES (1), (1), (1) AS tab(col);",
         "result": [
           "010000"
@@ -3590,6 +4018,72 @@
       },
       "output": {
         "failure": "error in DataFusion: Error during planning: Execution error: Function 'sum' user-defined coercion failed with \"Execution error: Sum not supported for Null\" No function matches the given name and argument types 'sum(Null)'. You might need to add explicit type casts.\n\tCandidate functions:\n\tsum(UserDefined)"
+      }
+    },
+    {
+      "input": {
+        "query": "SELECT theta_sketch_estimate(theta_intersection_agg(sketch)) FROM (SELECT theta_sketch_agg(col) as sketch FROM VALUES (1) tab(col) UNION ALL SELECT theta_sketch_agg(col, 20) as sketch FROM VALUES (1) tab(col));",
+        "result": [
+          "1"
+        ],
+        "schema": {
+          "type": "struct",
+          "fields": [
+            {
+              "name": "theta_sketch_estimate(theta_intersection_agg(sketch))",
+              "nullable": false,
+              "type": "long",
+              "metadata": {}
+            }
+          ]
+        }
+      },
+      "output": {
+        "failure": "not supported: unknown function: theta_sketch_agg"
+      }
+    },
+    {
+      "input": {
+        "query": "SELECT theta_sketch_estimate(theta_sketch_agg(col, 12)) FROM VALUES (1), (1), (2), (2), (3) tab(col);",
+        "result": [
+          "3"
+        ],
+        "schema": {
+          "type": "struct",
+          "fields": [
+            {
+              "name": "theta_sketch_estimate(theta_sketch_agg(col, 12))",
+              "nullable": false,
+              "type": "long",
+              "metadata": {}
+            }
+          ]
+        }
+      },
+      "output": {
+        "failure": "not supported: unknown function: theta_sketch_agg"
+      }
+    },
+    {
+      "input": {
+        "query": "SELECT theta_sketch_estimate(theta_union_agg(sketch)) FROM (SELECT theta_sketch_agg(col) as sketch FROM VALUES (1) tab(col) UNION ALL SELECT theta_sketch_agg(col, 20) as sketch FROM VALUES (1) tab(col));",
+        "result": [
+          "1"
+        ],
+        "schema": {
+          "type": "struct",
+          "fields": [
+            {
+              "name": "theta_sketch_estimate(theta_union_agg(sketch, 12))",
+              "nullable": false,
+              "type": "long",
+              "metadata": {}
+            }
+          ]
+        }
+      },
+      "output": {
+        "failure": "not supported: unknown function: theta_sketch_agg"
       }
     },
     {

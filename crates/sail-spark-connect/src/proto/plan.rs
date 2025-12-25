@@ -11,7 +11,8 @@ use crate::spark::connect::relation::RelType;
 use crate::spark::connect::write_stream_operation_start::SinkDestination;
 use crate::spark::connect::{
     plan, Catalog, CreateDataFrameViewCommand, Plan, Relation, RelationCommon,
-    StreamingForeachFunction, WriteOperation, WriteOperationV2, WriteStreamOperationStart,
+    StreamingForeachFunction, TransformWithStateInfo, WriteOperation, WriteOperationV2,
+    WriteStreamOperationStart,
 };
 
 struct RelationMetadata {
@@ -40,6 +41,9 @@ impl TryFrom<Plan> for spec::QueryPlan {
         let relation = match op.required("plan op")? {
             plan::OpType::Root(relation) => relation,
             plan::OpType::Command(_) => return Err(SparkError::invalid("relation expected")),
+            plan::OpType::CompressedOperation(_) => {
+                return Err(SparkError::unsupported("compressed operation"))
+            }
         };
         relation.try_into()
     }
@@ -860,6 +864,7 @@ impl TryFrom<RelType> for RelationNode {
                     output_mode,
                     timeout_conf,
                     state_schema,
+                    transform_with_state_info,
                 } = *group_map;
                 let input = input.required("group map input")?;
                 let grouping_expressions = grouping_expressions
@@ -882,6 +887,9 @@ impl TryFrom<RelType> for RelationNode {
                     .map(|x| x.try_into())
                     .transpose()?
                     .map(|x: spec::DataType| x.into_schema(DEFAULT_FIELD_NAME, true));
+                let transform_with_state_info = transform_with_state_info
+                    .map(|x| x.try_into())
+                    .transpose()?;
                 Ok(RelationNode::Query(spec::QueryNode::GroupMap(
                     spec::GroupMap {
                         input: Box::new((*input).try_into()?),
@@ -894,6 +902,7 @@ impl TryFrom<RelType> for RelationNode {
                         output_mode,
                         timeout_conf,
                         state_schema,
+                        transform_with_state_info,
                     },
                 )))
             }
@@ -1027,6 +1036,9 @@ impl TryFrom<RelType> for RelationNode {
                 Err(SparkError::todo("unresolved table valued function"))
             }
             RelType::LateralJoin(_) => Err(SparkError::todo("lateral join")),
+            RelType::ChunkedCachedLocalRelation(_) => {
+                Err(SparkError::todo("chunked cached local relation"))
+            }
             RelType::FillNa(fill_na) => {
                 let sc::NaFill {
                     input,
@@ -1491,6 +1503,28 @@ impl TryFrom<Catalog> for spec::CommandNode {
                 Ok(spec::CommandNode::ListCatalogs { pattern })
             }
         }
+    }
+}
+
+impl TryFrom<TransformWithStateInfo> for spec::TransformWithStateInfo {
+    type Error = SparkError;
+
+    fn try_from(info: TransformWithStateInfo) -> SparkResult<spec::TransformWithStateInfo> {
+        let TransformWithStateInfo {
+            time_mode,
+            event_time_column_name,
+            output_schema,
+        } = info;
+        let event_time_column_name = event_time_column_name.map(|x| x.into());
+        let output_schema = output_schema
+            .map(|x| x.try_into())
+            .transpose()?
+            .map(|x: spec::DataType| x.into_schema(DEFAULT_FIELD_NAME, true));
+        Ok(spec::TransformWithStateInfo {
+            time_mode,
+            event_time_column_name,
+            output_schema,
+        })
     }
 }
 

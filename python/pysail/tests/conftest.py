@@ -15,3 +15,9 @@ def pytest_configure(config):
     # In common cases, plugins only access the configuration for the first time after this hook,
     # so the cache is not a problem.
     config.inicfg["doctest_optionflags"] = "ELLIPSIS NORMALIZE_WHITESPACE IGNORE_EXCEPTION_DETAIL"
+
+    # Syrupy snapshots:
+    # Default Syrupy format is Amber (`.ambr`), but we prefer standard YAML multi-doc files.
+    default_ext = getattr(config.option, "default_extension", None)
+    if default_ext is None:
+        config.option.default_extension = "pysail.tests.snapshot_yaml.YamlSnapshotExtension"

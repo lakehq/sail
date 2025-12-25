@@ -10,14 +10,15 @@ use datafusion::prelude::SessionContext;
 use datafusion_common::{exec_datafusion_err, internal_datafusion_err, DFSchema};
 use datafusion_expr::{TableScan, UNNAMED_TABLE};
 use sail_catalog::command::CatalogCommand;
-use sail_catalog::display::CatalogDisplay;
 use sail_catalog::manager::CatalogManager;
-use sail_catalog::provider::{DatabaseStatus, TableColumnStatus, TableKind, TableStatus};
 use sail_catalog::utils::quote_names_if_needed;
+use sail_common_datafusion::catalog::display::CatalogObjectDisplay;
+use sail_common_datafusion::catalog::{DatabaseStatus, TableColumnStatus, TableKind, TableStatus};
 use sail_common_datafusion::extension::SessionExtensionAccessor;
+use sail_common_datafusion::session::PlanFormatter;
 use sail_common_datafusion::utils::items::ItemTaker;
 
-use crate::formatter::{PlanFormatter, SparkPlanFormatter};
+use crate::formatter::SparkPlanFormatter;
 
 #[derive(Clone, Debug, Eq, PartialEq, Hash)]
 pub(crate) struct CatalogCommandNode {
@@ -48,9 +49,9 @@ impl PartialOrd for CatalogCommandNode {
 }
 
 impl CatalogCommandNode {
-    pub(crate) fn try_new(command: CatalogCommand) -> Result<Self> {
+    pub(crate) fn try_new(ctx: &SessionContext, command: CatalogCommand) -> Result<Self> {
         let schema = command
-            .schema::<SparkCatalogDisplay>()
+            .schema(ctx)
             .map_err(|e| internal_datafusion_err!("{e}"))?;
         Ok(Self {
             name: format!("CatalogCommand: {}", command.name()),
@@ -66,7 +67,7 @@ impl CatalogCommandNode {
         let batch = self
             .command
             .clone()
-            .execute::<SparkCatalogDisplay>(ctx, manager.as_ref())
+            .execute(ctx, manager.as_ref())
             .await
             .map_err(|e| exec_datafusion_err!("{e}"))?;
         let provider = MemTable::try_new(batch.schema(), vec![vec![batch]])?;
@@ -157,9 +158,10 @@ mod display {
     }
 }
 
-struct SparkCatalogDisplay;
+#[derive(Default)]
+pub struct SparkCatalogObjectDisplay;
 
-impl CatalogDisplay for SparkCatalogDisplay {
+impl CatalogObjectDisplay for SparkCatalogObjectDisplay {
     type Catalog = display::SparkCatalog;
     type Database = display::SparkDatabase;
     type Table = display::SparkTable;
@@ -215,6 +217,17 @@ impl CatalogDisplay for SparkCatalogDisplay {
             is_partition: status.is_partition,
             is_bucket: status.is_bucket,
             is_cluster: status.is_cluster,
+        }
+    }
+
+    fn function(name: String) -> Self::Function {
+        Self::Function {
+            name,
+            catalog: None,
+            namespace: None,
+            description: None,
+            class_name: "".to_string(),
+            is_temporary: false,
         }
     }
 }
