@@ -14,13 +14,17 @@ DeltaCommitExec(table_path=file://<tmp>/logscan_parallel/)
                         CoalescePartitionsExec
                           ProjectionExec: expr=[id@<i> as id, value@<i> as value, __sail_file_path@<i> as __sail_file_path, __sail_merge_target_row_id@<i> as __sail_merge_target_row_id, __sail_merge_target_row_present@<i> as __sail_merge_target_row_present, __sail_src_id@<i> as __sail_src_id, __sail_src_value@<i> as __sail_src_value, __sail_merge_source_row_present@<i> as __sail_merge_source_row_present]
                             CoalesceBatchesExec: target_batch_size=8192
-                              HashJoinExec: mode=CollectLeft, join_type=Full, on=[(__sail_src_id@<i>, id@<i>)]
-                                ProjectionExec: expr=[__sail_src_id@<i> as __sail_src_id, __sail_src_value@<i> as __sail_src_value, true as __sail_merge_source_row_present]
-                                  ProjectionExec: expr=[column1@<i> as __sail_src_id, column2@<i> as __sail_src_value]
-                                    DataSourceExec: partitions=1, partition_sizes=[<sizes>]
-                                ProjectionExec: expr=[id@<i> as id, value@<i> as value, __sail_file_path@<i> as __sail_file_path, __sail_merge_target_row_id@<i> as __sail_merge_target_row_id, true as __sail_merge_target_row_present]
-                                  ProjectionExec: expr=[id@<i> as id, value@<i> as value, __sail_file_path@<i> as __sail_file_path, uuid() as __sail_merge_target_row_id]
-                                    DataSourceExec: file_groups={3 groups: [[<tmp>/logscan_parallel/part-<id>.snappy.parquet], [<tmp>/logscan_parallel/part-<id>.snappy.parquet], [<tmp>/logscan_parallel/part-<id>.snappy.parquet]]}, projection=[id, value, __sail_file_path], file_type=parquet
+                              HashJoinExec: mode=Partitioned, join_type=Full, on=[(__sail_src_id@<i>, id@<i>)]
+                                CoalesceBatchesExec: target_batch_size=8192
+                                  RepartitionExec: partitioning=Hash([__sail_src_id@<i>], <partitions>), input_partitions=<partitions>
+                                    ProjectionExec: expr=[__sail_src_id@<i> as __sail_src_id, __sail_src_value@<i> as __sail_src_value, true as __sail_merge_source_row_present]
+                                      ProjectionExec: expr=[column1@<i> as __sail_src_id, column2@<i> as __sail_src_value]
+                                        DataSourceExec: partitions=1, partition_sizes=[<sizes>]
+                                CoalesceBatchesExec: target_batch_size=8192
+                                  RepartitionExec: partitioning=Hash([id@<i>], <partitions>), input_partitions=<partitions>
+                                    ProjectionExec: expr=[id@<i> as id, value@<i> as value, __sail_file_path@<i> as __sail_file_path, __sail_merge_target_row_id@<i> as __sail_merge_target_row_id, true as __sail_merge_target_row_present]
+                                      ProjectionExec: expr=[id@<i> as id, value@<i> as value, __sail_file_path@<i> as __sail_file_path, uuid() as __sail_merge_target_row_id]
+                                        DataSourceExec: file_groups={3 groups: [[<tmp>/logscan_parallel/part-<id>.snappy.parquet], [<tmp>/logscan_parallel/part-<id>.snappy.parquet], [<tmp>/logscan_parallel/part-<id>.snappy.parquet]]}, projection=[id, value, __sail_file_path], file_type=parquet
             CoalesceBatchesExec: target_batch_size=8192
               HashJoinExec: mode=CollectLeft, join_type=Inner, on=[(__sail_file_path@<i>, __sail_file_path@<i>)], projection=[id@<i>, value@<i>]
                 CoalescePartitionsExec
@@ -35,13 +39,17 @@ DeltaCommitExec(table_path=file://<tmp>/logscan_parallel/)
                                   CoalescePartitionsExec
                                     ProjectionExec: expr=[id@<i> as id, value@<i> as value, __sail_file_path@<i> as __sail_file_path, __sail_merge_target_row_id@<i> as __sail_merge_target_row_id, __sail_merge_target_row_present@<i> as __sail_merge_target_row_present, __sail_src_id@<i> as __sail_src_id, __sail_src_value@<i> as __sail_src_value, __sail_merge_source_row_present@<i> as __sail_merge_source_row_present]
                                       CoalesceBatchesExec: target_batch_size=8192
-                                        HashJoinExec: mode=CollectLeft, join_type=Full, on=[(__sail_src_id@<i>, id@<i>)]
-                                          ProjectionExec: expr=[__sail_src_id@<i> as __sail_src_id, __sail_src_value@<i> as __sail_src_value, true as __sail_merge_source_row_present]
-                                            ProjectionExec: expr=[column1@<i> as __sail_src_id, column2@<i> as __sail_src_value]
-                                              DataSourceExec: partitions=1, partition_sizes=[<sizes>]
-                                          ProjectionExec: expr=[id@<i> as id, value@<i> as value, __sail_file_path@<i> as __sail_file_path, __sail_merge_target_row_id@<i> as __sail_merge_target_row_id, true as __sail_merge_target_row_present]
-                                            ProjectionExec: expr=[id@<i> as id, value@<i> as value, __sail_file_path@<i> as __sail_file_path, uuid() as __sail_merge_target_row_id]
-                                              DataSourceExec: file_groups={3 groups: [[<tmp>/logscan_parallel/part-<id>.snappy.parquet], [<tmp>/logscan_parallel/part-<id>.snappy.parquet], [<tmp>/logscan_parallel/part-<id>.snappy.parquet]]}, projection=[id, value, __sail_file_path], file_type=parquet
+                                        HashJoinExec: mode=Partitioned, join_type=Full, on=[(__sail_src_id@<i>, id@<i>)]
+                                          CoalesceBatchesExec: target_batch_size=8192
+                                            RepartitionExec: partitioning=Hash([__sail_src_id@<i>], <partitions>), input_partitions=<partitions>
+                                              ProjectionExec: expr=[__sail_src_id@<i> as __sail_src_id, __sail_src_value@<i> as __sail_src_value, true as __sail_merge_source_row_present]
+                                                ProjectionExec: expr=[column1@<i> as __sail_src_id, column2@<i> as __sail_src_value]
+                                                  DataSourceExec: partitions=1, partition_sizes=[<sizes>]
+                                          CoalesceBatchesExec: target_batch_size=8192
+                                            RepartitionExec: partitioning=Hash([id@<i>], <partitions>), input_partitions=<partitions>
+                                              ProjectionExec: expr=[id@<i> as id, value@<i> as value, __sail_file_path@<i> as __sail_file_path, __sail_merge_target_row_id@<i> as __sail_merge_target_row_id, true as __sail_merge_target_row_present]
+                                                ProjectionExec: expr=[id@<i> as id, value@<i> as value, __sail_file_path@<i> as __sail_file_path, uuid() as __sail_merge_target_row_id]
+                                                  DataSourceExec: file_groups={3 groups: [[<tmp>/logscan_parallel/part-<id>.snappy.parquet], [<tmp>/logscan_parallel/part-<id>.snappy.parquet], [<tmp>/logscan_parallel/part-<id>.snappy.parquet]]}, projection=[id, value, __sail_file_path], file_type=parquet
                 ProjectionExec: expr=[CASE WHEN __common_expr_<id>@<i> THEN __sail_src_id@<i> ELSE id@<i> END as id, CASE WHEN __sail_merge_target_row_present@<i> IS NOT NULL AND __sail_merge_source_row_present@<i> IS NOT NULL THEN __sail_src_value@<i> WHEN __common_expr_<id>@<i> THEN __sail_src_value@<i> ELSE value@<i> END as value, __sail_file_path@<i> as __sail_file_path]
                   ProjectionExec: expr=[__sail_merge_target_row_present@<i> IS NULL AND __sail_merge_source_row_present@<i> IS NOT NULL as __common_expr_<id>, id@<i> as id, value@<i> as value, __sail_file_path@<i> as __sail_file_path, __sail_merge_target_row_id@<i> as __sail_merge_target_row_id, __sail_merge_target_row_present@<i> as __sail_merge_target_row_present, __sail_src_id@<i> as __sail_src_id, __sail_src_value@<i> as __sail_src_value, __sail_merge_source_row_present@<i> as __sail_merge_source_row_present]
                     CoalesceBatchesExec: target_batch_size=8192
@@ -51,13 +59,17 @@ DeltaCommitExec(table_path=file://<tmp>/logscan_parallel/)
                             CoalescePartitionsExec
                               ProjectionExec: expr=[id@<i> as id, value@<i> as value, __sail_file_path@<i> as __sail_file_path, __sail_merge_target_row_id@<i> as __sail_merge_target_row_id, __sail_merge_target_row_present@<i> as __sail_merge_target_row_present, __sail_src_id@<i> as __sail_src_id, __sail_src_value@<i> as __sail_src_value, __sail_merge_source_row_present@<i> as __sail_merge_source_row_present]
                                 CoalesceBatchesExec: target_batch_size=8192
-                                  HashJoinExec: mode=CollectLeft, join_type=Full, on=[(__sail_src_id@<i>, id@<i>)]
-                                    ProjectionExec: expr=[__sail_src_id@<i> as __sail_src_id, __sail_src_value@<i> as __sail_src_value, true as __sail_merge_source_row_present]
-                                      ProjectionExec: expr=[column1@<i> as __sail_src_id, column2@<i> as __sail_src_value]
-                                        DataSourceExec: partitions=1, partition_sizes=[<sizes>]
-                                    ProjectionExec: expr=[id@<i> as id, value@<i> as value, __sail_file_path@<i> as __sail_file_path, __sail_merge_target_row_id@<i> as __sail_merge_target_row_id, true as __sail_merge_target_row_present]
-                                      ProjectionExec: expr=[id@<i> as id, value@<i> as value, __sail_file_path@<i> as __sail_file_path, uuid() as __sail_merge_target_row_id]
-                                        DataSourceExec: file_groups={3 groups: [[<tmp>/logscan_parallel/part-<id>.snappy.parquet], [<tmp>/logscan_parallel/part-<id>.snappy.parquet], [<tmp>/logscan_parallel/part-<id>.snappy.parquet]]}, projection=[id, value, __sail_file_path], file_type=parquet
+                                  HashJoinExec: mode=Partitioned, join_type=Full, on=[(__sail_src_id@<i>, id@<i>)]
+                                    CoalesceBatchesExec: target_batch_size=8192
+                                      RepartitionExec: partitioning=Hash([__sail_src_id@<i>], <partitions>), input_partitions=<partitions>
+                                        ProjectionExec: expr=[__sail_src_id@<i> as __sail_src_id, __sail_src_value@<i> as __sail_src_value, true as __sail_merge_source_row_present]
+                                          ProjectionExec: expr=[column1@<i> as __sail_src_id, column2@<i> as __sail_src_value]
+                                            DataSourceExec: partitions=1, partition_sizes=[<sizes>]
+                                    CoalesceBatchesExec: target_batch_size=8192
+                                      RepartitionExec: partitioning=Hash([id@<i>], <partitions>), input_partitions=<partitions>
+                                        ProjectionExec: expr=[id@<i> as id, value@<i> as value, __sail_file_path@<i> as __sail_file_path, __sail_merge_target_row_id@<i> as __sail_merge_target_row_id, true as __sail_merge_target_row_present]
+                                          ProjectionExec: expr=[id@<i> as id, value@<i> as value, __sail_file_path@<i> as __sail_file_path, uuid() as __sail_merge_target_row_id]
+                                            DataSourceExec: file_groups={3 groups: [[<tmp>/logscan_parallel/part-<id>.snappy.parquet], [<tmp>/logscan_parallel/part-<id>.snappy.parquet], [<tmp>/logscan_parallel/part-<id>.snappy.parquet]]}, projection=[id, value, __sail_file_path], file_type=parquet
       DeltaRemoveActionsExec
         DeltaFindFilesExec(table_path=file://<tmp>/logscan_parallel/)
           CoalescePartitionsExec
@@ -75,13 +87,17 @@ DeltaCommitExec(table_path=file://<tmp>/logscan_parallel/)
                                   CoalescePartitionsExec
                                     ProjectionExec: expr=[id@<i> as id, value@<i> as value, __sail_file_path@<i> as __sail_file_path, __sail_merge_target_row_id@<i> as __sail_merge_target_row_id, __sail_merge_target_row_present@<i> as __sail_merge_target_row_present, __sail_src_id@<i> as __sail_src_id, __sail_src_value@<i> as __sail_src_value, __sail_merge_source_row_present@<i> as __sail_merge_source_row_present]
                                       CoalesceBatchesExec: target_batch_size=8192
-                                        HashJoinExec: mode=CollectLeft, join_type=Full, on=[(__sail_src_id@<i>, id@<i>)]
-                                          ProjectionExec: expr=[__sail_src_id@<i> as __sail_src_id, __sail_src_value@<i> as __sail_src_value, true as __sail_merge_source_row_present]
-                                            ProjectionExec: expr=[column1@<i> as __sail_src_id, column2@<i> as __sail_src_value]
-                                              DataSourceExec: partitions=1, partition_sizes=[<sizes>]
-                                          ProjectionExec: expr=[id@<i> as id, value@<i> as value, __sail_file_path@<i> as __sail_file_path, __sail_merge_target_row_id@<i> as __sail_merge_target_row_id, true as __sail_merge_target_row_present]
-                                            ProjectionExec: expr=[id@<i> as id, value@<i> as value, __sail_file_path@<i> as __sail_file_path, uuid() as __sail_merge_target_row_id]
-                                              DataSourceExec: file_groups={3 groups: [[<tmp>/logscan_parallel/part-<id>.snappy.parquet], [<tmp>/logscan_parallel/part-<id>.snappy.parquet], [<tmp>/logscan_parallel/part-<id>.snappy.parquet]]}, projection=[id, value, __sail_file_path], file_type=parquet
+                                        HashJoinExec: mode=Partitioned, join_type=Full, on=[(__sail_src_id@<i>, id@<i>)]
+                                          CoalesceBatchesExec: target_batch_size=8192
+                                            RepartitionExec: partitioning=Hash([__sail_src_id@<i>], <partitions>), input_partitions=<partitions>
+                                              ProjectionExec: expr=[__sail_src_id@<i> as __sail_src_id, __sail_src_value@<i> as __sail_src_value, true as __sail_merge_source_row_present]
+                                                ProjectionExec: expr=[column1@<i> as __sail_src_id, column2@<i> as __sail_src_value]
+                                                  DataSourceExec: partitions=1, partition_sizes=[<sizes>]
+                                          CoalesceBatchesExec: target_batch_size=8192
+                                            RepartitionExec: partitioning=Hash([id@<i>], <partitions>), input_partitions=<partitions>
+                                              ProjectionExec: expr=[id@<i> as id, value@<i> as value, __sail_file_path@<i> as __sail_file_path, __sail_merge_target_row_id@<i> as __sail_merge_target_row_id, true as __sail_merge_target_row_present]
+                                                ProjectionExec: expr=[id@<i> as id, value@<i> as value, __sail_file_path@<i> as __sail_file_path, uuid() as __sail_merge_target_row_id]
+                                                  DataSourceExec: file_groups={3 groups: [[<tmp>/logscan_parallel/part-<id>.snappy.parquet], [<tmp>/logscan_parallel/part-<id>.snappy.parquet], [<tmp>/logscan_parallel/part-<id>.snappy.parquet]]}, projection=[id, value, __sail_file_path], file_type=parquet
                 DeltaLogScanExec(table_path=file://<tmp>/logscan_parallel/, version=2)
                   RepartitionExec: partitioning=RoundRobinBatch(<partitions>), input_partitions=<partitions>
                     UnionExec

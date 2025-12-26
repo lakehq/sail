@@ -71,9 +71,11 @@ DeltaCommitExec(table_path=file://<tmp>/merge_cardinality_skip/)
                 CoalesceBatchesExec: target_batch_size=8192
                   FilterExec: __sail_file_path@<i> IS NULL AND (__sail_merge_target_row_present@<i> IS NOT NULL OR __sail_merge_target_row_present@<i> IS NULL AND __sail_merge_source_row_present@<i> IS NOT NULL)
                     CoalesceBatchesExec: target_batch_size=8192
-                      HashJoinExec: mode=CollectLeft, join_type=Full, on=[(id@<i>, __sail_src_id@<i>)]
-                        ProjectionExec: expr=[id@<i> as id, value@<i> as value, __sail_file_path@<i> as __sail_file_path, true as __sail_merge_target_row_present]
-                          DataSourceExec: file_groups={1 group: [[<tmp>/merge_cardinality_skip/part-<id>.snappy.parquet]]}, projection=[id, value, __sail_file_path], file_type=parquet
+                      HashJoinExec: mode=Partitioned, join_type=Full, on=[(id@<i>, __sail_src_id@<i>)]
+                        CoalesceBatchesExec: target_batch_size=8192
+                          RepartitionExec: partitioning=Hash([id@<i>], <partitions>), input_partitions=<partitions>
+                            ProjectionExec: expr=[id@<i> as id, value@<i> as value, __sail_file_path@<i> as __sail_file_path, true as __sail_merge_target_row_present]
+                              DataSourceExec: file_groups={1 group: [[<tmp>/merge_cardinality_skip/part-<id>.snappy.parquet]]}, projection=[id, value, __sail_file_path], file_type=parquet
                         ProjectionExec: expr=[__sail_src_id@<i> as __sail_src_id, __sail_src_value@<i> as __sail_src_value, true as __sail_merge_source_row_present]
                           ProjectionExec: expr=[#2@<i> as __sail_src_id, max(src.#3)@<i> as __sail_src_value]
                             AggregateExec: mode=FinalPartitioned, gby=[#2@<i> as #2], aggr=[max(src.#3)]
@@ -108,9 +110,11 @@ DeltaCommitExec(table_path=file://<tmp>/merge_cardinality_skip/)
                     CoalesceBatchesExec: target_batch_size=8192
                       FilterExec: __sail_merge_target_row_present@<i> IS NOT NULL OR __sail_merge_target_row_present@<i> IS NULL AND __sail_merge_source_row_present@<i> IS NOT NULL
                         CoalesceBatchesExec: target_batch_size=8192
-                          HashJoinExec: mode=CollectLeft, join_type=Full, on=[(id@<i>, __sail_src_id@<i>)]
-                            ProjectionExec: expr=[id@<i> as id, value@<i> as value, __sail_file_path@<i> as __sail_file_path, true as __sail_merge_target_row_present]
-                              DataSourceExec: file_groups={1 group: [[<tmp>/merge_cardinality_skip/part-<id>.snappy.parquet]]}, projection=[id, value, __sail_file_path], file_type=parquet
+                          HashJoinExec: mode=Partitioned, join_type=Full, on=[(id@<i>, __sail_src_id@<i>)]
+                            CoalesceBatchesExec: target_batch_size=8192
+                              RepartitionExec: partitioning=Hash([id@<i>], <partitions>), input_partitions=<partitions>
+                                ProjectionExec: expr=[id@<i> as id, value@<i> as value, __sail_file_path@<i> as __sail_file_path, true as __sail_merge_target_row_present]
+                                  DataSourceExec: file_groups={1 group: [[<tmp>/merge_cardinality_skip/part-<id>.snappy.parquet]]}, projection=[id, value, __sail_file_path], file_type=parquet
                             ProjectionExec: expr=[__sail_src_id@<i> as __sail_src_id, __sail_src_value@<i> as __sail_src_value, true as __sail_merge_source_row_present]
                               ProjectionExec: expr=[#2@<i> as __sail_src_id, max(src.#3)@<i> as __sail_src_value]
                                 AggregateExec: mode=FinalPartitioned, gby=[#2@<i> as #2], aggr=[max(src.#3)]
