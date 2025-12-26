@@ -27,8 +27,6 @@ use async_trait::async_trait;
 use datafusion::arrow::array::Array;
 use datafusion::arrow::datatypes::{DataType, Field, Schema, SchemaRef};
 use datafusion::arrow::record_batch::RecordBatch;
-use datafusion::datasource::memory::MemorySourceConfig;
-use datafusion::datasource::source::DataSourceExec;
 use datafusion::datasource::TableProvider;
 use datafusion::execution::context::TaskContext;
 use datafusion::execution::SessionStateBuilder;
@@ -47,15 +45,14 @@ use futures::{stream, TryStreamExt};
 use url::Url;
 
 use crate::datasource::{
-    collect_physical_columns, DataFusionMixins, DeltaScanConfigBuilder, DeltaTableProvider,
-    PredicateProperties, PATH_COLUMN,
+    collect_physical_columns, DeltaScanConfigBuilder, DeltaTableProvider, PATH_COLUMN,
 };
 use crate::kernel::models::Add;
-use crate::kernel::{DeltaResult, DeltaTableError};
+use crate::kernel::DeltaResult;
 use crate::physical_plan::{
     encode_add_actions, join_batches_with_add_actions, DeltaPhysicalExprAdapterFactory,
 };
-use crate::storage::{get_object_store_from_context, LogStore, LogStoreRef, StorageConfig};
+use crate::storage::{get_object_store_from_context, LogStoreRef, StorageConfig};
 use crate::table::{open_table_with_object_store, DeltaTableState};
 
 /// Physical execution node for finding files in a Delta table that match a predicate.
@@ -65,19 +62,24 @@ pub struct DeltaFindFilesExec {
     predicate: Option<Arc<dyn PhysicalExpr>>,
     table_schema: Option<SchemaRef>, // Schema of the table for predicate evaluation
     version: i64,
-    input: Option<Arc<dyn ExecutionPlan>>,
+    input: Arc<dyn ExecutionPlan>,
     input_partition_columns: Vec<String>,
     input_partition_scan: bool,
     cache: PlanProperties,
 }
 
 impl DeltaFindFilesExec {
-    /// Create a new DeltaFindFilesExec instance
+    /// Create a new DeltaFindFilesExec instance.
+    ///
+    /// `DeltaFindFilesExec` always consumes an upstream metadata plan (`input`).
     pub fn new(
+        input: Arc<dyn ExecutionPlan>,
         table_url: Url,
         predicate: Option<Arc<dyn PhysicalExpr>>,
         table_schema: Option<SchemaRef>,
         version: i64,
+        partition_columns: Vec<String>,
+        partition_scan: bool,
     ) -> Self {
         let mut fields = crate::physical_plan::delta_action_schema()
             .fields()
@@ -95,9 +97,9 @@ impl DeltaFindFilesExec {
             predicate,
             table_schema,
             version,
-            input: None,
-            input_partition_columns: vec![],
-            input_partition_scan: false,
+            input,
+            input_partition_columns: partition_columns,
+            input_partition_scan: partition_scan,
             cache,
         }
     }
@@ -115,11 +117,15 @@ impl DeltaFindFilesExec {
         partition_columns: Vec<String>,
         partition_scan: bool,
     ) -> Self {
-        let mut this = Self::new(table_url, None, None, version);
-        this.input = Some(input);
-        this.input_partition_columns = partition_columns;
-        this.input_partition_scan = partition_scan;
-        this
+        Self::new(
+            input,
+            table_url,
+            None,
+            None,
+            version,
+            partition_columns,
+            partition_scan,
+        )
     }
 
     /// Create a DeltaFindFilesExec that consumes an upstream metadata plan and can still apply
@@ -133,11 +139,15 @@ impl DeltaFindFilesExec {
         partition_columns: Vec<String>,
         partition_scan: bool,
     ) -> Self {
-        let mut this = Self::new(table_url, predicate, table_schema, version);
-        this.input = Some(input);
-        this.input_partition_columns = partition_columns;
-        this.input_partition_scan = partition_scan;
-        this
+        Self::new(
+            input,
+            table_url,
+            predicate,
+            table_schema,
+            version,
+            partition_columns,
+            partition_scan,
+        )
     }
 
     fn compute_properties(schema: SchemaRef) -> PlanProperties {
@@ -169,9 +179,9 @@ impl DeltaFindFilesExec {
         self.version
     }
 
-    /// Get the optional upstream metadata input plan.
-    pub fn input(&self) -> Option<Arc<dyn ExecutionPlan>> {
-        self.input.clone()
+    /// Get the upstream metadata input plan.
+    pub fn input(&self) -> Arc<dyn ExecutionPlan> {
+        Arc::clone(&self.input)
     }
 
     /// Get partition columns carried by the upstream metadata plan.
@@ -182,42 +192,6 @@ impl DeltaFindFilesExec {
     /// Whether the upstream metadata plan is already a partition-only scan.
     pub fn input_partition_scan(&self) -> bool {
         self.input_partition_scan
-    }
-
-    async fn find_files(&self, context: Arc<TaskContext>) -> Result<(Vec<Add>, bool)> {
-        if let Some(input) = &self.input {
-            return self.find_files_from_input(Arc::clone(input), context).await;
-        }
-
-        let object_store = get_object_store_from_context(&context, &self.table_url)?;
-
-        let mut table =
-            open_table_with_object_store(self.table_url.clone(), object_store, StorageConfig)
-                .await
-                .map_err(|e| DataFusionError::External(Box::new(e)))?;
-        table
-            .load_version(self.version)
-            .await
-            .map_err(|e| DataFusionError::External(Box::new(e)))?;
-
-        let snapshot = table
-            .snapshot()
-            .map_err(|e| DataFusionError::External(Box::new(e)))?
-            .clone();
-
-        let adapter_factory = Arc::new(DeltaPhysicalExprAdapterFactory {});
-
-        let find_result = find_files_physical(
-            &snapshot,
-            table.log_store(),
-            context,
-            self.predicate.clone(),
-            adapter_factory,
-        )
-        .await
-        .map_err(|e| DataFusionError::External(Box::new(e)))?;
-
-        Ok((find_result.candidates, find_result.partition_scan))
     }
 
     async fn find_files_from_input(
@@ -406,16 +380,17 @@ async fn find_files_scan_physical_with_candidates(
 
     // Adapt the predicate to the projected scan schema (Column indices are schema-dependent).
     let adapter_factory = Arc::new(DeltaPhysicalExprAdapterFactory {});
-    let adapter = adapter_factory.create(
-        Arc::clone(&logical_schema),
-        scan.schema(),
-    );
+    let adapter = adapter_factory.create(Arc::clone(&logical_schema), scan.schema());
     let adapted_predicate = adapter.rewrite(physical_predicate)?;
 
     let filtered: Arc<dyn ExecutionPlan> = Arc::new(FilterExec::try_new(adapted_predicate, scan)?);
 
     let mut partitions = Vec::new();
-    for i in 0..filtered.properties().output_partitioning().partition_count() {
+    for i in 0..filtered
+        .properties()
+        .output_partitioning()
+        .partition_count()
+    {
         let stream = filtered.execute(i, ctx.clone())?;
         let data = collect(stream).await?;
         partitions.extend(data);
@@ -440,31 +415,24 @@ impl ExecutionPlan for DeltaFindFilesExec {
     }
 
     fn required_input_distribution(&self) -> Vec<Distribution> {
-        if self.input.is_some() {
-            vec![Distribution::SinglePartition]
-        } else {
-            vec![]
-        }
+        vec![Distribution::SinglePartition]
     }
 
     fn children(&self) -> Vec<&Arc<dyn ExecutionPlan>> {
-        self.input.as_ref().map(|c| vec![c]).unwrap_or_default()
+        vec![&self.input]
     }
 
     fn with_new_children(
         self: Arc<Self>,
         _children: Vec<Arc<dyn ExecutionPlan>>,
     ) -> Result<Arc<dyn ExecutionPlan>> {
-        if self.input.is_none() {
-            return Ok(self);
-        }
         if _children.len() != 1 {
             return internal_err!(
                 "DeltaFindFilesExec requires exactly one child when used as a unary node"
             );
         }
         let mut cloned = (*self).clone();
-        cloned.input = Some(_children[0].clone());
+        cloned.input = _children[0].clone();
         Ok(Arc::new(cloned))
     }
 
@@ -480,7 +448,9 @@ impl ExecutionPlan for DeltaFindFilesExec {
         let schema = self.schema();
         let find_files_exec = self.clone();
         let future = async move {
-            let (adds, partition_scan) = find_files_exec.find_files(context).await?;
+            let (adds, partition_scan) = find_files_exec
+                .find_files_from_input(Arc::clone(&find_files_exec.input), context)
+                .await?;
 
             if adds.is_empty() {
                 return Ok(RecordBatch::new_empty(schema));
@@ -522,243 +492,14 @@ impl DisplayAs for DeltaFindFilesExec {
 
 impl Clone for DeltaFindFilesExec {
     fn clone(&self) -> Self {
-        let mut this = Self::new(
+        Self::new(
+            Arc::clone(&self.input),
             self.table_url.clone(),
             self.predicate.clone(),
             self.table_schema.clone(),
             self.version,
-        );
-        this.input = self.input.clone();
-        this.input_partition_columns = self.input_partition_columns.clone();
-        this.input_partition_scan = self.input_partition_scan;
-        this
-    }
-}
-
-#[derive(Debug, Hash, Eq, PartialEq)]
-pub struct FindFiles {
-    pub candidates: Vec<Add>,
-    pub partition_scan: bool,
-}
-
-async fn collect_add_actions(
-    snapshot: &DeltaTableState,
-    log_store: &dyn LogStore,
-) -> DeltaResult<Vec<Add>> {
-    snapshot
-        .snapshot()
-        .files(log_store, None)
-        .map_ok(|view| view.add_action())
-        .try_collect()
-        .await
-}
-
-/// Scan memory table (for partition-only predicates)
-pub async fn scan_memory_table_physical(
-    snapshot: &DeltaTableState,
-    log_store: &dyn LogStore,
-    ctx: Arc<TaskContext>,
-    physical_predicate: Arc<dyn PhysicalExpr>,
-) -> DeltaResult<Vec<Add>> {
-    let actions = collect_add_actions(snapshot, log_store).await?;
-    let batch = snapshot.add_actions_table(true)?;
-    let mut arrays = Vec::new();
-    let mut fields = Vec::new();
-
-    let schema = batch.schema();
-
-    arrays.push(
-        batch
-            .column_by_name("path")
-            .ok_or(DeltaTableError::generic(
-                "Column with name `path` does not exist".to_owned(),
-            ))?
-            .to_owned(),
-    );
-    fields.push(Field::new(PATH_COLUMN, DataType::Utf8, false));
-
-    for partition_column in snapshot.metadata().partition_columns() {
-        // In add_actions_table, partition columns are prefixed with "partition."
-        let partition_column_name = format!("partition.{}", partition_column);
-        if let Some(array) = batch.column_by_name(&partition_column_name) {
-            arrays.push(array.to_owned());
-            let field = schema
-                .field_with_name(&partition_column_name)
-                .map_err(|err| DeltaTableError::generic(err.to_string()))?;
-            // Create a new field with the original partition column name (without "partition." prefix)
-            let partition_field = Field::new(
-                partition_column,
-                field.data_type().clone(),
-                field.is_nullable(),
-            );
-            fields.push(partition_field);
-        }
-    }
-
-    let schema = Arc::new(Schema::new(fields));
-    let batch = RecordBatch::try_new(schema.clone(), arrays)
-        .map_err(|err| DeltaTableError::generic(err.to_string()))?;
-
-    let memory_source = MemorySourceConfig::try_new(&[vec![batch]], schema, None)?;
-    let memory_exec = DataSourceExec::from_data_source(memory_source);
-
-    let filter_exec = Arc::new(FilterExec::try_new(physical_predicate, memory_exec)?);
-
-    let mut partitions = Vec::new();
-
-    for i in 0..filter_exec
-        .properties()
-        .output_partitioning()
-        .partition_count()
-    {
-        let stream = filter_exec.execute(i, ctx.clone())?;
-        let data = collect(stream).await?;
-        partitions.extend(data);
-    }
-
-    let map = actions
-        .into_iter()
-        .map(|action| (action.path.clone(), action))
-        .collect::<HashMap<String, Add>>();
-
-    join_batches_with_add_actions(partitions, map, PATH_COLUMN, false)
-}
-
-/// Scan files for non-partition-only predicates
-pub async fn find_files_scan_physical(
-    snapshot: &DeltaTableState,
-    log_store: LogStoreRef,
-    ctx: Arc<TaskContext>,
-    physical_predicate: Arc<dyn PhysicalExpr>,
-) -> DeltaResult<Vec<Add>> {
-    let candidate_map: HashMap<String, Add> = collect_add_actions(snapshot, log_store.as_ref())
-        .await?
-        .into_iter()
-        .map(|add| (add.path.clone(), add))
-        .collect();
-
-    let scan_config = DeltaScanConfigBuilder::new()
-        .with_file_column(true)
-        .build(snapshot)?;
-
-    let logical_schema =
-        crate::datasource::df_logical_schema(snapshot, &scan_config.file_column_name, None)?;
-
-    let mut used_columns = Vec::new();
-
-    let referenced_columns = collect_physical_columns(&physical_predicate);
-
-    for (i, field) in logical_schema.fields().iter().enumerate() {
-        if referenced_columns.contains(field.name()) {
-            used_columns.push(i);
-        }
-    }
-
-    if let Some(file_column_name) = &scan_config.file_column_name {
-        if let Ok(idx) = logical_schema.index_of(file_column_name) {
-            if !used_columns.contains(&idx) {
-                used_columns.push(idx);
-            }
-        }
-    }
-
-    // If no columns were referenced, include all columns to be safe
-    if used_columns.is_empty() {
-        for (i, _field) in logical_schema.fields().iter().enumerate() {
-            used_columns.push(i);
-        }
-    }
-
-    let table_provider = DeltaTableProvider::try_new(snapshot.clone(), log_store, scan_config)?;
-
-    // FIXME: avoid creating a new session state
-    let session_state = SessionStateBuilder::new()
-        .with_runtime_env(ctx.runtime_env().clone())
-        .with_config(ctx.session_config().clone())
-        .build();
-
-    // Scan without filtering first, then apply the physical predicate
-    let scan = table_provider
-        .scan(&session_state, Some(&used_columns), &[], Some(1))
-        .await?;
-
-    // For non-partition columns, Scan without filtering to identify candidate files
-    let limit: Arc<dyn ExecutionPlan> = scan;
-
-    let mut partitions = Vec::new();
-
-    for i in 0..limit.properties().output_partitioning().partition_count() {
-        let stream = limit.execute(i, ctx.clone())?;
-        let data = collect(stream).await?;
-        partitions.extend(data);
-    }
-
-    let map = candidate_map.into_iter().collect::<HashMap<String, Add>>();
-
-    join_batches_with_add_actions(partitions, map, PATH_COLUMN, true)
-}
-
-pub async fn find_files_physical(
-    snapshot: &DeltaTableState,
-    log_store: LogStoreRef,
-    ctx: Arc<TaskContext>,
-    predicate: Option<Arc<dyn PhysicalExpr>>,
-    adapter_factory: Arc<dyn PhysicalExprAdapterFactory>,
-) -> DeltaResult<FindFiles> {
-    let current_metadata = snapshot.metadata();
-
-    match predicate {
-        Some(physical_predicate) => {
-            let logical_schema = snapshot.arrow_schema()?;
-
-            // Check if the predicate only references partition columns
-            let mut expr_properties =
-                PredicateProperties::new(current_metadata.partition_columns().clone());
-            expr_properties.analyze_predicate(&physical_predicate)?;
-
-            if expr_properties.partition_only {
-                // For partition-only predicates, create a schema with just path and partition columns
-                let mut fields = vec![Field::new(PATH_COLUMN, DataType::Utf8, false)];
-                for partition_column in current_metadata.partition_columns() {
-                    if let Ok(field) = logical_schema.field_with_name(partition_column) {
-                        fields.push(field.clone());
-                    }
-                }
-                let partition_schema = Arc::new(Schema::new(fields));
-
-                let adapter = adapter_factory.create(logical_schema.clone(), partition_schema);
-                let adapted_predicate = adapter.rewrite(physical_predicate)?;
-
-                // Use partition-only scanning (memory table approach)
-                let candidates = scan_memory_table_physical(
-                    snapshot,
-                    log_store.as_ref(),
-                    ctx.clone(),
-                    adapted_predicate,
-                )
-                .await?;
-                Ok(FindFiles {
-                    candidates,
-                    partition_scan: true,
-                })
-            } else {
-                // For non-partition predicates, use the full schema
-                let physical_schema = logical_schema.clone();
-                let adapter = adapter_factory.create(logical_schema, physical_schema);
-                let adapted_predicate = adapter.rewrite(physical_predicate)?;
-
-                // Use full file scanning
-                let candidates =
-                    find_files_scan_physical(snapshot, log_store, ctx, adapted_predicate).await?;
-                Ok(FindFiles {
-                    candidates,
-                    partition_scan: false,
-                })
-            }
-        }
-        None => Ok(FindFiles {
-            candidates: collect_add_actions(snapshot, log_store.as_ref()).await?,
-            partition_scan: true,
-        }),
+            self.input_partition_columns.clone(),
+            self.input_partition_scan,
+        )
     }
 }

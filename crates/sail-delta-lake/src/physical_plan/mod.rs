@@ -29,7 +29,6 @@ use datafusion_physical_expr::expressions::{lit, Column as PhysicalColumn};
 mod action_schema;
 mod commit_exec;
 mod expr_adapter;
-mod file_lookup_exec;
 pub mod find_files_exec;
 mod log_scan_exec;
 mod remove_actions_exec;
@@ -44,7 +43,6 @@ pub use action_schema::{
 };
 pub use commit_exec::DeltaCommitExec;
 pub use expr_adapter::DeltaPhysicalExprAdapterFactory;
-pub use file_lookup_exec::DeltaFileLookupExec;
 pub use find_files_exec::DeltaFindFilesExec;
 pub use log_scan_exec::DeltaLogScanExec;
 pub mod planner;

@@ -32,7 +32,6 @@ message ExtendedPhysicalPlanNode {
     DeltaScanByAddsExecNode delta_scan_by_adds = 18;
     DeltaFindFilesExecNode delta_find_files = 19;
     DeltaRemoveActionsExecNode delta_remove_actions = 20;
-    DeltaFileLookupExecNode delta_file_lookup = 21;
     AvroExecNode avro = 22;
     ConsoleSinkExecNode console_sink = 23;
     SocketSourceExecNode socket_source = 24;
@@ -378,12 +377,6 @@ message DeltaFindFilesExecNode {
 
 message DeltaRemoveActionsExecNode {
   bytes input = 1;
-}
-
-message DeltaFileLookupExecNode {
-  bytes input = 1;
-  string table_url = 2;
-  int64 version = 3;
 }
 
 message ConsoleSinkExecNode {
