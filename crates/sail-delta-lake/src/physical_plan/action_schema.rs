@@ -103,7 +103,7 @@ struct ActionRow {
 fn delta_action_tracing_options() -> serde_arrow::schema::TracingOptions {
     use serde_arrow::schema::TracingOptions;
 
-    TracingOptions::default()
+    let opts = TracingOptions::default()
         .map_as_struct(false)
         .strings_as_large_utf8(false)
         .sequence_as_large_list(false)
@@ -111,24 +111,35 @@ fn delta_action_tracing_options() -> serde_arrow::schema::TracingOptions {
         .overwrite(
             "action.add.partition_values",
             Field::new(COL_PARTITION_VALUES, partition_values_type(), false),
-        )
-        .expect("overwrite action.add.partition_values")
-        .overwrite(
-            "action.remove.partition_values",
-            Field::new(COL_PARTITION_VALUES, partition_values_type(), false),
-        )
-        .expect("overwrite action.remove.partition_values")
+        );
+    let opts = match opts {
+        Ok(v) => v,
+        Err(e) => panic!("overwrite action.add.partition_values: {e}"),
+    };
+
+    let opts = opts.overwrite(
+        "action.remove.partition_values",
+        Field::new(COL_PARTITION_VALUES, partition_values_type(), false),
+    );
+    match opts {
+        Ok(v) => v,
+        Err(e) => panic!("overwrite action.remove.partition_values: {e}"),
+    }
 }
 
+#[allow(clippy::panic)]
 fn delta_action_fields() -> &'static Vec<datafusion::arrow::datatypes::FieldRef> {
     use serde_arrow::schema::SchemaLike;
 
     static FIELDS: OnceLock<Vec<datafusion::arrow::datatypes::FieldRef>> = OnceLock::new();
     FIELDS.get_or_init(|| {
-        Vec::<datafusion::arrow::datatypes::FieldRef>::from_type::<ActionRow>(
+        let fields = Vec::<datafusion::arrow::datatypes::FieldRef>::from_type::<ActionRow>(
             delta_action_tracing_options(),
-        )
-        .expect("ActionRow schema tracing should succeed")
+        );
+        match fields {
+            Ok(v) => v,
+            Err(e) => panic!("ActionRow schema tracing should succeed: {e}"),
+        }
     })
 }
 
@@ -389,7 +400,10 @@ mod tests {
         assert_eq!(actions.len(), 2);
         assert!(matches!(actions[0], Action::Add(_)));
         assert!(matches!(actions[1], Action::Remove(_)));
-        assert_eq!(decoded_meta.unwrap().row_count, 10);
+        let decoded_meta = decoded_meta.ok_or_else(|| {
+            DataFusionError::Internal("expected CommitMeta to be present in roundtrip batch".into())
+        })?;
+        assert_eq!(decoded_meta.row_count, 10);
         Ok(())
     }
 }

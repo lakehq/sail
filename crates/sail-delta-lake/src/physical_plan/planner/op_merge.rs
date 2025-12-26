@@ -28,8 +28,7 @@ use url::Url;
 
 use super::context::PlannerContext;
 use super::log_scan::build_delta_log_datasource_union;
-use crate::datasource::DataFusionMixins;
-use crate::datasource::PATH_COLUMN;
+use crate::datasource::{DataFusionMixins, PATH_COLUMN};
 use crate::kernel::{DeltaOperation, MergePredicate};
 use crate::options::TableDeltaOptions;
 use crate::physical_plan::{
@@ -125,6 +124,7 @@ pub async fn build_merge_plan(
     .await
 }
 
+#[allow(clippy::too_many_arguments)]
 async fn finalize_merge(
     ctx: &PlannerContext<'_>,
     projected: Arc<dyn ExecutionPlan>,

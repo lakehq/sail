@@ -115,10 +115,12 @@ impl<'a> PlannerContext<'a> {
 
     pub async fn open_table(&self) -> Result<DeltaTable> {
         let object_store = self.object_store()?;
-        let mut table_config = KernelDeltaTableConfig::default();
         // Planning-time code only needs the log segment / metadata; avoid eagerly materializing
         // the full active file list on the driver.
-        table_config.require_files = false;
+        let table_config = KernelDeltaTableConfig {
+            require_files: false,
+            ..Default::default()
+        };
 
         open_table_with_object_store_and_table_config(
             self.config.table_url.clone(),

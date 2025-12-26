@@ -88,6 +88,8 @@ def normalize_plan_text(plan_text: str) -> str:
 
         # Parse top-level groups inside the outer list.
         # groups_list looks like: "[[a], [b]]" or "[[a]]"
+        # Depth 2 means we're inside an inner group (outer list is depth 1, inner group is depth 2)
+        inner_group_depth = 2
         groups: list[str] = []
         depth = 0
         current: list[str] = []
@@ -95,12 +97,12 @@ def normalize_plan_text(plan_text: str) -> str:
         for ch in groups_list:
             if ch == "[":
                 depth += 1
-                if depth == 2:
+                if depth == inner_group_depth:
                     in_group = True
             if in_group:
                 current.append(ch)
             if ch == "]":
-                if depth == 2 and in_group:
+                if depth == inner_group_depth and in_group:
                     # End of one group
                     grp = "".join(current).strip()
                     if grp:
