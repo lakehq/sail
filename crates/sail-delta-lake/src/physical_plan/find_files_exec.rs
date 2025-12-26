@@ -80,8 +80,8 @@ impl DeltaFindFilesExec {
         version: i64,
         partition_columns: Vec<String>,
         partition_scan: bool,
-    ) -> Self {
-        let mut fields = crate::physical_plan::delta_action_schema()
+    ) -> Result<Self> {
+        let mut fields = crate::physical_plan::delta_action_schema()?
             .fields()
             .to_vec();
         // Boolean flag indicating if it was a partition-only scan
@@ -92,7 +92,7 @@ impl DeltaFindFilesExec {
         )));
         let schema = Arc::new(Schema::new(fields));
         let cache = Self::compute_properties(schema);
-        Self {
+        Ok(Self {
             table_url,
             predicate,
             table_schema,
@@ -101,7 +101,7 @@ impl DeltaFindFilesExec {
             input_partition_columns: partition_columns,
             input_partition_scan: partition_scan,
             cache,
-        }
+        })
     }
 
     /// Create a DeltaFindFilesExec that consumes an upstream metadata plan.
@@ -116,7 +116,7 @@ impl DeltaFindFilesExec {
         version: i64,
         partition_columns: Vec<String>,
         partition_scan: bool,
-    ) -> Self {
+    ) -> Result<Self> {
         Self::new(
             input,
             table_url,
@@ -138,7 +138,7 @@ impl DeltaFindFilesExec {
         version: i64,
         partition_columns: Vec<String>,
         partition_scan: bool,
-    ) -> Self {
+    ) -> Result<Self> {
         Self::new(
             input,
             table_url,
@@ -492,14 +492,15 @@ impl DisplayAs for DeltaFindFilesExec {
 
 impl Clone for DeltaFindFilesExec {
     fn clone(&self) -> Self {
-        Self::new(
-            Arc::clone(&self.input),
-            self.table_url.clone(),
-            self.predicate.clone(),
-            self.table_schema.clone(),
-            self.version,
-            self.input_partition_columns.clone(),
-            self.input_partition_scan,
-        )
+        Self {
+            table_url: self.table_url.clone(),
+            predicate: self.predicate.clone(),
+            table_schema: self.table_schema.clone(),
+            version: self.version,
+            input: Arc::clone(&self.input),
+            input_partition_columns: self.input_partition_columns.clone(),
+            input_partition_scan: self.input_partition_scan,
+            cache: self.cache.clone(),
+        }
     }
 }

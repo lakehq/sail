@@ -18,7 +18,7 @@
 //! Note: MERGE joins on file path. With a union-only schema, the join key is derived using
 //! DataFusion scalar functions `union_extract + get_field` (see `planner/op_merge.rs`).
 use std::collections::{BTreeMap, HashMap};
-use std::sync::{Arc, OnceLock};
+use std::sync::{Arc, LazyLock};
 
 use datafusion::arrow::datatypes::{DataType, Field, Schema, SchemaRef};
 use datafusion::arrow::record_batch::RecordBatch;
@@ -31,6 +31,15 @@ use crate::kernel::DeltaOperation;
 
 pub const COL_ACTION: &str = "action";
 const COL_PARTITION_VALUES: &str = "partition_values";
+
+static ACTION_FIELDS: LazyLock<
+    std::result::Result<Vec<datafusion::arrow::datatypes::FieldRef>, String>,
+> = LazyLock::new(delta_action_fields_build);
+static ACTION_SCHEMA: LazyLock<std::result::Result<SchemaRef, String>> =
+    LazyLock::new(|| match (*ACTION_FIELDS).as_ref() {
+        Ok(fields) => Ok(Arc::new(Schema::new(fields.clone()))),
+        Err(msg) => Err(msg.clone()),
+    });
 
 #[derive(Debug, Clone, Default)]
 pub struct CommitMeta {
@@ -100,10 +109,11 @@ struct ActionRow {
     action: ExecAction,
 }
 
-fn delta_action_tracing_options() -> serde_arrow::schema::TracingOptions {
+fn delta_action_tracing_options() -> std::result::Result<serde_arrow::schema::TracingOptions, String>
+{
     use serde_arrow::schema::TracingOptions;
 
-    let opts = TracingOptions::default()
+    TracingOptions::default()
         .map_as_struct(false)
         .strings_as_large_utf8(false)
         .sequence_as_large_list(false)
@@ -111,51 +121,47 @@ fn delta_action_tracing_options() -> serde_arrow::schema::TracingOptions {
         .overwrite(
             "action.add.partition_values",
             Field::new(COL_PARTITION_VALUES, partition_values_type(), false),
-        );
-    let opts = match opts {
-        Ok(v) => v,
-        Err(e) => panic!("overwrite action.add.partition_values: {e}"),
-    };
+        )
+        .and_then(|opts| {
+            opts.overwrite(
+                "action.remove.partition_values",
+                Field::new(COL_PARTITION_VALUES, partition_values_type(), false),
+            )
+        })
+        .map_err(|e| format!("failed to overwrite partition_values field: {e}"))
+}
 
-    let opts = opts.overwrite(
-        "action.remove.partition_values",
-        Field::new(COL_PARTITION_VALUES, partition_values_type(), false),
-    );
-    match opts {
-        Ok(v) => v,
-        Err(e) => panic!("overwrite action.remove.partition_values: {e}"),
+fn delta_action_fields_build(
+) -> std::result::Result<Vec<datafusion::arrow::datatypes::FieldRef>, String> {
+    use serde_arrow::schema::SchemaLike;
+
+    Vec::<datafusion::arrow::datatypes::FieldRef>::from_type::<ActionRow>(
+        delta_action_tracing_options()?,
+    )
+    .map_err(|e| format!("ActionRow schema tracing failed: {e}"))
+}
+
+fn delta_action_fields() -> Result<&'static Vec<datafusion::arrow::datatypes::FieldRef>> {
+    match (*ACTION_FIELDS).as_ref() {
+        Ok(v) => Ok(v),
+        Err(msg) => Err(DataFusionError::Internal(format!(
+            "delta action fields initialization failed: {msg}"
+        ))),
     }
 }
 
-#[allow(clippy::panic)]
-fn delta_action_fields() -> &'static Vec<datafusion::arrow::datatypes::FieldRef> {
-    use serde_arrow::schema::SchemaLike;
-
-    static FIELDS: OnceLock<Vec<datafusion::arrow::datatypes::FieldRef>> = OnceLock::new();
-    FIELDS.get_or_init(|| {
-        let fields = Vec::<datafusion::arrow::datatypes::FieldRef>::from_type::<ActionRow>(
-            delta_action_tracing_options(),
-        );
-        match fields {
-            Ok(v) => v,
-            Err(e) => panic!("ActionRow schema tracing should succeed: {e}"),
-        }
-    })
-}
-
-pub fn delta_action_schema() -> SchemaRef {
-    static SCHEMA: OnceLock<SchemaRef> = OnceLock::new();
-    SCHEMA
-        .get_or_init(|| {
-            let schema_fields = delta_action_fields().clone();
-            Arc::new(Schema::new(schema_fields))
-        })
-        .clone()
+pub fn delta_action_schema() -> Result<SchemaRef> {
+    match &*ACTION_SCHEMA {
+        Ok(schema) => Ok(Arc::clone(schema)),
+        Err(msg) => Err(DataFusionError::Internal(format!(
+            "delta action schema initialization failed: {msg}"
+        ))),
+    }
 }
 
 pub fn encode_add_actions(adds: Vec<Add>) -> Result<RecordBatch> {
     if adds.is_empty() {
-        return Ok(RecordBatch::new_empty(delta_action_schema()));
+        return Ok(RecordBatch::new_empty(delta_action_schema()?));
     }
 
     let rows: Vec<ActionRow> = adds
@@ -172,13 +178,13 @@ pub fn encode_add_actions(adds: Vec<Add>) -> Result<RecordBatch> {
         })
         .collect();
 
-    serde_arrow::to_record_batch(delta_action_fields(), &rows)
+    serde_arrow::to_record_batch(delta_action_fields()?, &rows)
         .map_err(|e| DataFusionError::External(Box::new(e)))
 }
 
 pub fn encode_remove_actions(removes: Vec<Remove>) -> Result<RecordBatch> {
     if removes.is_empty() {
-        return Ok(RecordBatch::new_empty(delta_action_schema()));
+        return Ok(RecordBatch::new_empty(delta_action_schema()?));
     }
 
     let rows: Vec<ActionRow> = removes
@@ -195,7 +201,7 @@ pub fn encode_remove_actions(removes: Vec<Remove>) -> Result<RecordBatch> {
         })
         .collect();
 
-    serde_arrow::to_record_batch(delta_action_fields(), &rows)
+    serde_arrow::to_record_batch(delta_action_fields()?, &rows)
         .map_err(|e| DataFusionError::External(Box::new(e)))
 }
 
@@ -205,7 +211,7 @@ pub fn encode_protocol_action(protocol: Protocol) -> Result<RecordBatch> {
     let rows = vec![ActionRow {
         action: ExecAction::Protocol(protocol_json),
     }];
-    serde_arrow::to_record_batch(delta_action_fields(), &rows)
+    serde_arrow::to_record_batch(delta_action_fields()?, &rows)
         .map_err(|e| DataFusionError::External(Box::new(e)))
 }
 
@@ -215,7 +221,7 @@ pub fn encode_metadata_action(metadata: Metadata) -> Result<RecordBatch> {
     let rows = vec![ActionRow {
         action: ExecAction::Metadata(metadata_json),
     }];
-    serde_arrow::to_record_batch(delta_action_fields(), &rows)
+    serde_arrow::to_record_batch(delta_action_fields()?, &rows)
         .map_err(|e| DataFusionError::External(Box::new(e)))
 }
 
@@ -237,7 +243,7 @@ pub fn encode_commit_meta(meta: CommitMeta) -> Result<RecordBatch> {
             operation_metrics_json,
         }),
     }];
-    serde_arrow::to_record_batch(delta_action_fields(), &rows)
+    serde_arrow::to_record_batch(delta_action_fields()?, &rows)
         .map_err(|e| DataFusionError::External(Box::new(e)))
 }
 
@@ -348,7 +354,7 @@ mod tests {
         }];
 
         let rb = encode_add_actions(adds)?;
-        assert_eq!(rb.schema(), delta_action_schema());
+        assert_eq!(rb.schema(), delta_action_schema()?);
         assert_eq!(rb.num_rows(), 1);
         assert!(rb.column_by_name(COL_ACTION).is_some());
         Ok(())
@@ -387,7 +393,7 @@ mod tests {
             operation_metrics: HashMap::new(),
         };
 
-        let schema = delta_action_schema();
+        let schema = delta_action_schema()?;
         let out_batches: Vec<RecordBatch> = vec![
             encode_add_actions(adds)?,
             encode_remove_actions(removes)?,

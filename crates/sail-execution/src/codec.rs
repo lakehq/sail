@@ -540,7 +540,7 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
                     table_exists,
                     Arc::new(sink_schema),
                     operation_override,
-                )))
+                )?))
             }
             NodeKind::DeltaCommit(gen::DeltaCommitExecNode {
                 input,
@@ -624,11 +624,11 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
                     version,
                     input_partition_columns,
                     input_partition_scan,
-                )))
+                )?))
             }
             NodeKind::DeltaRemoveActions(gen::DeltaRemoveActionsExecNode { input }) => {
                 let input = self.try_decode_plan(&input, ctx)?;
-                Ok(Arc::new(DeltaRemoveActionsExec::new(input)))
+                Ok(Arc::new(DeltaRemoveActionsExec::new(input)?))
             }
             NodeKind::DeltaLogScan(gen::DeltaLogScanExecNode {
                 input,

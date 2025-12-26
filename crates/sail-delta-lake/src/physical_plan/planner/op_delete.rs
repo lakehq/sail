@@ -100,7 +100,7 @@ pub async fn build_delete_plan(
         version,
         partition_columns.clone(),
         expr_props.partition_only,
-    ));
+    )?);
 
     let scan_exec = Arc::new(DeltaScanByAddsExec::new(
         Arc::clone(&find_files_exec),
@@ -131,9 +131,9 @@ pub async fn build_delete_plan(
         ctx.table_exists(),
         table_schema.clone(),
         operation_override,
-    ));
+    )?);
 
-    let remove_exec = Arc::new(DeltaRemoveActionsExec::new(find_files_exec));
+    let remove_exec = Arc::new(DeltaRemoveActionsExec::new(find_files_exec)?);
     let union_exec = UnionExec::try_new(vec![writer_exec, remove_exec])?;
 
     Ok(Arc::new(DeltaCommitExec::new(

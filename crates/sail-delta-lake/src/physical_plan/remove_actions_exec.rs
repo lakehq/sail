@@ -46,20 +46,20 @@ pub struct DeltaRemoveActionsExec {
 }
 
 impl DeltaRemoveActionsExec {
-    pub fn new(input: Arc<dyn ExecutionPlan>) -> Self {
+    pub fn new(input: Arc<dyn ExecutionPlan>) -> Result<Self> {
         // Output schema must match DeltaWriterExec output schema (row-per-action).
-        let schema = delta_action_schema();
+        let schema = delta_action_schema()?;
         let cache = PlanProperties::new(
             EquivalenceProperties::new(schema),
             Partitioning::UnknownPartitioning(1),
             EmissionType::Final,
             Boundedness::Bounded,
         );
-        Self {
+        Ok(Self {
             input,
             metrics: ExecutionPlanMetricsSet::new(),
             cache,
-        }
+        })
     }
 
     pub(crate) async fn create_remove_actions(adds: Vec<Add>) -> Result<Vec<Remove>> {
@@ -122,7 +122,7 @@ impl ExecutionPlan for DeltaRemoveActionsExec {
         if children.len() != 1 {
             return internal_err!("DeltaRemoveActionsExec requires exactly one child");
         }
-        Ok(Arc::new(DeltaRemoveActionsExec::new(children[0].clone())))
+        Ok(Arc::new(DeltaRemoveActionsExec::new(children[0].clone())?))
     }
 
     fn required_input_distribution(&self) -> Vec<Distribution> {

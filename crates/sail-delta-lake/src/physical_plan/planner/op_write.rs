@@ -97,7 +97,7 @@ async fn build_overwrite_if_plan(
         ctx.table_exists(),
         union_plan.schema(),
         None,
-    ));
+    )?);
 
     let mut expr_props = PredicateProperties::new(partition_columns.clone());
     expr_props
@@ -147,8 +147,8 @@ async fn build_overwrite_if_plan(
         version,
         partition_columns.clone(),
         expr_props.partition_only,
-    ));
-    let remove_plan = Arc::new(DeltaRemoveActionsExec::new(find_files_plan));
+    )?);
+    let remove_plan = Arc::new(DeltaRemoveActionsExec::new(find_files_plan)?);
 
     let union_actions = UnionExec::try_new(vec![writer, remove_plan])?;
 
@@ -222,7 +222,7 @@ async fn build_old_data_plan(
         version,
         ctx.partition_columns().to_vec(),
         expr_props.partition_only,
-    ));
+    )?);
 
     let scan_exec = Arc::new(DeltaScanByAddsExec::new(
         Arc::clone(&find_files_exec),

@@ -117,10 +117,10 @@ impl DeltaWriterExec {
         table_exists: bool,
         sink_schema: SchemaRef,
         operation_override: Option<DeltaOperation>,
-    ) -> Self {
-        let schema = delta_action_schema();
+    ) -> Result<Self> {
+        let schema = delta_action_schema()?;
         let cache = Self::compute_properties(schema);
-        Self {
+        Ok(Self {
             input,
             table_url,
             options,
@@ -131,7 +131,7 @@ impl DeltaWriterExec {
             operation_override,
             metrics: ExecutionPlanMetricsSet::new(),
             cache,
-        }
+        })
     }
 
     fn compute_properties(schema: SchemaRef) -> PlanProperties {
@@ -219,7 +219,7 @@ impl ExecutionPlan for DeltaWriterExec {
             self.table_exists,
             self.sink_schema.clone(),
             self.operation_override.clone(),
-        )))
+        )?))
     }
 
     fn execute(

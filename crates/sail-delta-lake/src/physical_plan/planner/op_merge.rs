@@ -251,7 +251,7 @@ async fn finalize_merge(
         true,
         table_schema.clone(),
         operation_override,
-    ));
+    )?);
 
     let mut action_inputs: Vec<Arc<dyn ExecutionPlan>> = vec![writer.clone()];
 
@@ -316,10 +316,10 @@ async fn finalize_merge(
             version,
             partition_columns.clone(),
             true, // partition_scan
-        ));
+        )?);
 
         // Convert Add rows -> Remove action rows (touched-only).
-        let remove_plan = Arc::new(DeltaRemoveActionsExec::new(touched_adds));
+        let remove_plan = Arc::new(DeltaRemoveActionsExec::new(touched_adds)?);
         action_inputs.push(remove_plan);
     }
 
