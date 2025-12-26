@@ -36,9 +36,9 @@ MergeIntoWrite: options=MergeIntoOptions { target_alias: Some("t"), source_alias
 == Physical Plan ==
 DeltaCommitExec(table_path=file://<tmp>/merge_insert_only/)
   DeltaWriterExec(table_path=file://<tmp>/merge_insert_only/)
-    ProjectionExec: expr=[__sail_src_id@0 as id, __sail_src_value@1 as value]
+    ProjectionExec: expr=[__sail_src_id@<i> as id, __sail_src_value@<i> as value]
       CoalesceBatchesExec: target_batch_size=8192
-        HashJoinExec: mode=CollectLeft, join_type=RightAnti, on=[(id@0, __sail_src_id@0)]
+        HashJoinExec: mode=CollectLeft, join_type=RightAnti, on=[(id@<i>, __sail_src_id@<i>)]
           DataSourceExec: file_groups={1 group: [[<tmp>/merge_insert_only/part-<id>.snappy.parquet]]}, projection=[id, value, __sail_file_path], file_type=parquet
-          ProjectionExec: expr=[column1@0 as __sail_src_id, column2@1 as __sail_src_value]
+          ProjectionExec: expr=[column1@<i> as __sail_src_id, column2@<i> as __sail_src_value]
             DataSourceExec: partitions=1, partition_sizes=[<sizes>]

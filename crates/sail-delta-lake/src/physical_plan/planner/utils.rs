@@ -46,7 +46,7 @@ pub fn build_standard_write_layers(
         ctx.table_exists(),
         writer_schema,
         None,
-    ));
+    )?);
 
     Ok(Arc::new(DeltaCommitExec::new(
         writer,

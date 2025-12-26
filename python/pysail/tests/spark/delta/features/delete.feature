@@ -173,6 +173,74 @@ Feature: Delta Lake Delete
         | 7  | Grace | 2024 | 2     | 700   |
         | 8  | Henry | 2024 | 2     | 800   |
 
+    Scenario: EXPLAIN shows partition filter pushdown for mixed predicates
+      When query
+        """
+        EXPLAIN
+        DELETE FROM delta_delete_partitioned
+        WHERE year = 2024
+          AND value > 650
+        """
+      Then query plan matches snapshot
+
+    Scenario: EXPLAIN includes json delta log commits when present
+      Given statement
+        """
+        INSERT INTO delta_delete_partitioned
+        SELECT * FROM VALUES
+          (9, 'Ivy', 2024, 2, 900)
+        """
+      When query
+        """
+        EXPLAIN
+        DELETE FROM delta_delete_partitioned
+        WHERE year = 2024
+          AND value > 650
+        """
+      Then query plan matches snapshot
+
+    Scenario: EXPLAIN includes multiple json delta log commits when present
+      Given statement
+        """
+        INSERT INTO delta_delete_partitioned
+        SELECT * FROM VALUES
+          (9, 'Ivy', 2024, 2, 900)
+        """
+      Given statement
+        """
+        INSERT INTO delta_delete_partitioned
+        SELECT * FROM VALUES
+          (10, 'Jack', 2024, 2, 901)
+        """
+      When query
+        """
+        EXPLAIN
+        DELETE FROM delta_delete_partitioned
+        WHERE year = 2024
+          AND value > 650
+        """
+      Then query plan matches snapshot
+      Given statement
+        """
+        DELETE FROM delta_delete_partitioned
+        WHERE year = 2024
+          AND value > 650
+        """
+      When query
+        """
+        SELECT id, name, year, month, value
+        FROM delta_delete_partitioned
+        ORDER BY id
+        """
+      Then query result ordered
+        | id | name    | year | month | value |
+        | 1  | Alice   | 2023 | 1     | 100   |
+        | 2  | Bob     | 2023 | 1     | 200   |
+        | 3  | Charlie | 2023 | 2     | 300   |
+        | 4  | Diana   | 2023 | 2     | 400   |
+        | 5  | Eve     | 2024 | 1     | 500   |
+        | 6  | Frank   | 2024 | 1     | 600   |
+
   Rule: Operations with string comparisons
     Background:
       Given variable location for temporary directory x
