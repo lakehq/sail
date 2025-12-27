@@ -133,6 +133,7 @@ jobs:
           token: ${{ secrets.CODECOV_TOKEN }}
           files: coverage-ibis.info
           flags: ibis-tests
+          name: ibis-tests
           fail_ci_if_error: true
           env_vars: OS
 

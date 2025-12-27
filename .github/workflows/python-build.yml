@@ -92,5 +92,6 @@ jobs:
           token: ${{ secrets.CODECOV_TOKEN }}
           files: coverage-python-${{ matrix.spark-version }}.info
           flags: python-unit
+          name: python-unit
           fail_ci_if_error: true
           env_vars: OS

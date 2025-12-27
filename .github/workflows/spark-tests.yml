@@ -166,6 +166,7 @@ jobs:
           token: ${{ secrets.CODECOV_TOKEN }}
           files: coverage-spark-${{ inputs.spark_version }}.info
           flags: spark-tests
+          name: spark-tests
           fail_ci_if_error: true
           env_vars: OS
 
