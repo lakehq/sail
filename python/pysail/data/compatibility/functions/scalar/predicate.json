@@ -60,6 +60,11 @@
   },
   {
     "module": "pyspark.sql.functions",
+    "function": "equal_null",
+    "status": "supported"
+  },
+  {
+    "module": "pyspark.sql.functions",
     "function": "ilike",
     "status": "supported"
   },

@@ -7,7 +7,8 @@
   {
     "module": "pyspark.sql.functions",
     "function": "map",
-    "status": "supported"
+    "status": "supported",
+    "note": "Spark SQL only; not available in PySpark"
   },
   {
     "module": "pyspark.sql.functions",

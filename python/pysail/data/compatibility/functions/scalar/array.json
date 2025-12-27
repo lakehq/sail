@@ -22,7 +22,8 @@
   {
     "module": "pyspark.sql.functions",
     "function": "array_contains_all",
-    "status": "supported"
+    "status": "supported",
+    "note": "not part of Apache Spark SQL or PySpark; sail proprietary"
   },
   {
     "module": "pyspark.sql.functions",

@@ -51,18 +51,17 @@
   },
   {
     "module": "pyspark.sql.functions",
-    "function": "equal_null",
-    "status": "supported"
-  },
-  {
-    "module": "pyspark.sql.functions",
     "function": "from_avro",
-    "status": "??? not on roadmap"
+    "status": "planned",
+    "note": "Spark SQL only; not available in PySpark",
+    "ref": "???"
   },
   {
     "module": "pyspark.sql.functions",
     "function": "from_protobuf",
-    "status": "??? not on roadmap"
+    "status": "planned",
+    "note": "Spark SQL only; not available in PySpark",
+    "ref": "???"
   },
   {
     "module": "pyspark.sql.functions",
@@ -151,12 +150,13 @@
   {
     "module": "pyspark.sql.functions",
     "function": "try_aes_encrypt",
-    "status": "supported"
+    "status": "??? questionable"
   },
   {
     "module": "pyspark.sql.functions",
     "function": "try_reflect",
-    "status": "not supported"
+    "status": "not supported",
+    "note": "Java specific"
   },
   {
     "module": "pyspark.sql.functions",

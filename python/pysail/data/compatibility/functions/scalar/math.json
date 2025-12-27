@@ -127,7 +127,8 @@
   {
     "module": "pyspark.sql.functions",
     "function": "div",
-    "status": "supported"
+    "status": "supported",
+    "note": "Spark SQL only; not available in PySpark"
   },
   {
     "module": "pyspark.sql.functions",
@@ -202,7 +203,8 @@
   {
     "module": "pyspark.sql.functions",
     "function": "mod",
-    "status": "supported"
+    "status": "supported",
+    "note": "Spark SQL only; not available in PySpark"
   },
   {
     "module": "pyspark.sql.functions",
