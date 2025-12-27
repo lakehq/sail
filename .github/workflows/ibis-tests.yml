@@ -2,6 +2,9 @@ name: Ibis Tests
 
 on:
   workflow_call:
+    secrets:
+      CODECOV_TOKEN:
+        required: false
 
 jobs:
   setup:
@@ -34,6 +37,8 @@ jobs:
     env:
       # Set the Hatch environment for `hatch run` commands.
       HATCH_ENV: "test-ibis"
+      RUSTC_WORKSPACE_WRAPPER: ${{ github.workspace }}/.github/scripts/rustc-workspace-wrapper.sh
+      LLVM_PROFILE_FILE: ${{ github.workspace }}/target/sail-ibis-%p-%m.profraw
 
     steps:
       - uses: actions/checkout@v4
@@ -44,6 +49,16 @@ jobs:
 
       - name: Install Hatch
         uses: pypa/hatch@install
+
+      - name: Install Rust toolchain and coverage tools
+        run: |
+          {
+            rustup toolchain install stable
+            rustup component add --toolchain stable llvm-tools-preview
+          } &
+
+      - name: Install grcov
+        uses: taiki-e/install-action@grcov
 
       - name: Checkout ibis testing data
         uses: actions/checkout@v4
@@ -90,6 +105,37 @@ jobs:
         if: always()
         run: |
           scripts/spark-tests/stop-server.sh
+
+      # Generate coverage report after Ibis tests
+      - name: Generate coverage report
+        run: |
+          # Wait for background Rust toolchain installation to complete
+          wait
+          BINARY_PATH=$(hatch run python -c 'import pysail._native; import os; print(os.path.dirname(pysail._native.__file__))')
+          echo "Binary path: $BINARY_PATH"
+          LLVM_PATH=$(.github/scripts/find-llvm-profdata.sh)
+          grcov target --binary-path "$BINARY_PATH" -s . \
+            --llvm-path "$LLVM_PATH" \
+            -t lcov --branch --ignore-not-existing \
+            -o coverage-ibis.info
+
+      - name: Upload ibis coverage artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: ibis-coverage-report
+          path: coverage-ibis.info
+          retention-days: 1
+
+      - name: Upload Ibis coverage to Codecov
+        if: ${{ github.actor != 'dependabot[bot]' }}
+        uses: codecov/codecov-action@v5
+        with:
+          token: ${{ secrets.CODECOV_TOKEN }}
+          files: coverage-ibis.info
+          flags: ibis-tests
+          name: ibis-tests
+          fail_ci_if_error: true
+          env_vars: OS
 
       - name: Upload Test Logs
         uses: actions/upload-artifact@v4
