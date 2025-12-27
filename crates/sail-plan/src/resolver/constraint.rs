@@ -1,6 +1,6 @@
 use datafusion::arrow::datatypes::Schema;
 use datafusion_common::{Constraint, Constraints};
-use sail_catalog::provider::CatalogTableConstraint;
+use sail_common_datafusion::catalog::CatalogTableConstraint;
 
 use crate::error::{PlanError, PlanResult};
 use crate::resolver::PlanResolver;

@@ -3,6 +3,7 @@ use std::sync::Arc;
 
 use datafusion_common::{DFSchema, DFSchemaRef};
 use datafusion_expr::{Expr, LogicalPlan, UserDefinedLogicalNodeCore};
+use sail_common_datafusion::logical_expr::ExprWithSource;
 use sail_common_datafusion::utils::items::ItemTaker;
 
 #[derive(Clone, Debug, Eq, PartialEq, Hash, PartialOrd)]
@@ -10,7 +11,7 @@ pub struct FileDeleteOptions {
     pub table_name: Vec<String>,
     pub path: String,
     pub format: String,
-    pub condition: Option<Expr>,
+    pub condition: Option<ExprWithSource>,
     pub options: Vec<Vec<(String, String)>>,
 }
 
@@ -83,9 +84,7 @@ impl UserDefinedLogicalNodeCore for FileDeleteNode {
         inputs.zero()?;
 
         Ok(Self {
-            options: FileDeleteOptions {
-                ..self.options.clone()
-            },
+            options: self.options.clone(),
             schema: self.schema.clone(),
         })
     }

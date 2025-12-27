@@ -7,9 +7,10 @@ use fastrace::collector::SpanContext;
 use fastrace::future::FutureExt;
 use fastrace::Span;
 use futures::stream;
-use log::debug;
+use log::{debug, warn};
 use sail_common::spec;
 use sail_common_datafusion::extension::SessionExtensionAccessor;
+use sail_common_datafusion::session::JobService;
 use sail_plan::resolve_and_execute_plan;
 use tonic::codegen::tokio_stream::wrappers::ReceiverStream;
 use tonic::codegen::tokio_stream::Stream;
@@ -25,10 +26,10 @@ use crate::spark::connect::execute_plan_response::{
     ResponseType, ResultComplete, SqlCommandResult,
 };
 use crate::spark::connect::{
-    relation, CommonInlineUserDefinedFunction, CommonInlineUserDefinedTableFunction,
-    CreateDataFrameViewCommand, ExecutePlanResponse, GetResourcesCommand, LocalRelation, Relation,
-    SqlCommand, StreamingQueryCommand, StreamingQueryCommandResult,
-    StreamingQueryListenerBusCommand, StreamingQueryManagerCommand,
+    relation, CheckpointCommand, CheckpointCommandResult, CommonInlineUserDefinedFunction,
+    CommonInlineUserDefinedTableFunction, CreateDataFrameViewCommand, ExecutePlanResponse,
+    GetResourcesCommand, LocalRelation, Relation, SqlCommand, StreamingQueryCommand,
+    StreamingQueryCommandResult, StreamingQueryListenerBusCommand, StreamingQueryManagerCommand,
     StreamingQueryManagerCommandResult, WriteOperation, WriteOperationV2,
     WriteStreamOperationStart, WriteStreamOperationStartResult,
 };
@@ -83,6 +84,10 @@ impl Stream for ExecutePlanResponseStream {
                         response.response_type =
                             Some(ResponseType::StreamingQueryManagerCommandResult(*result));
                     }
+                    ExecutorBatch::CheckpointCommandResult(result) => {
+                        response.response_type =
+                            Some(ResponseType::CheckpointCommandResult(*result));
+                    }
                     ExecutorBatch::Schema(schema) => {
                         response.schema = Some(*schema);
                     }
@@ -118,11 +123,12 @@ async fn handle_execute_plan(
 ) -> SparkResult<ExecutePlanResponseStream> {
     let span = Span::root("handle_execute_plan", SpanContext::random());
     let spark = ctx.extension::<SparkSession>()?;
+    let service = ctx.extension::<JobService>()?;
     let operation_id = metadata.operation_id.clone();
     let (plan, _) = resolve_and_execute_plan(ctx, spark.plan_config()?, plan).await?;
     let stream = {
         let span = Span::enter_with_parent("JobRunner::execute", &span);
-        spark.job_runner().execute(ctx, plan).in_span(span).await?
+        service.runner().execute(ctx, plan).in_span(span).await?
     };
     let rx = match mode {
         ExecutePlanMode::Lazy => {
@@ -209,6 +215,7 @@ pub(crate) async fn handle_execute_sql_command(
     metadata: ExecutorMetadata,
 ) -> SparkResult<ExecutePlanResponseStream> {
     let spark = ctx.extension::<SparkSession>()?;
+    let service = ctx.extension::<JobService>()?;
     let relation = if let Some(input) = sql.input {
         input
     } else {
@@ -229,7 +236,7 @@ pub(crate) async fn handle_execute_sql_command(
         spec::Plan::Query(_) => relation,
         command @ spec::Plan::Command(_) => {
             let (plan, _) = resolve_and_execute_plan(ctx, spark.plan_config()?, command).await?;
-            let stream = spark.job_runner().execute(ctx, plan).await?;
+            let stream = service.runner().execute(ctx, plan).await?;
             let schema = stream.schema();
             let data = read_stream(stream).await?;
             let data = concat_batches(&schema, data.iter())?;
@@ -262,12 +269,13 @@ pub(crate) async fn handle_execute_write_stream_operation_start(
     metadata: ExecutorMetadata,
 ) -> SparkResult<ExecutePlanResponseStream> {
     let spark = ctx.extension::<SparkSession>()?;
+    let service = ctx.extension::<JobService>()?;
     let operation_id = metadata.operation_id.clone();
     let reattachable = metadata.reattachable;
     let query_name = start.query_name.clone();
     let plan = spec::Plan::Command(spec::CommandPlan::new(start.try_into()?));
     let (plan, info) = resolve_and_execute_plan(ctx, spark.plan_config()?, plan).await?;
-    let stream = spark.job_runner().execute(ctx, plan).await?;
+    let stream = service.runner().execute(ctx, plan).await?;
     let id = spark.start_streaming_query(query_name.clone(), info, stream)?;
     let result = WriteStreamOperationStartResult {
         query_id: Some(id.into()),
@@ -490,6 +498,28 @@ pub(crate) async fn handle_execute_streaming_query_listener_bus_command(
 ) -> SparkResult<ExecutePlanResponseStream> {
     Err(SparkError::NotImplemented(
         "streaming query listener bus".to_string(),
+    ))
+}
+
+pub(crate) async fn handle_execute_checkpoint_command(
+    ctx: &SessionContext,
+    _checkpoint: CheckpointCommand,
+    metadata: ExecutorMetadata,
+) -> SparkResult<ExecutePlanResponseStream> {
+    // TODO: Implement
+    warn!("Checkpoint operation is not yet supported and is a no-op");
+    let spark = ctx.extension::<SparkSession>()?;
+    let result = CheckpointCommandResult { relation: None };
+    let mut output = vec![ExecutorOutput::new(ExecutorBatch::CheckpointCommandResult(
+        Box::new(result),
+    ))];
+    if metadata.reattachable {
+        output.push(ExecutorOutput::complete());
+    }
+    Ok(ExecutePlanResponseStream::new(
+        spark.session_id().to_string(),
+        metadata.operation_id,
+        Box::pin(stream::iter(output)),
     ))
 }
 

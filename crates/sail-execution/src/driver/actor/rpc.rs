@@ -4,14 +4,11 @@ use sail_server::ServerBuilder;
 use tokio::net::{TcpListener, ToSocketAddrs};
 use tonic::codec::CompressionEncoding;
 
-use crate::driver::actor::core::DriverActor;
+use crate::driver::actor::DriverActor;
 use crate::driver::gen::driver_service_server::DriverServiceServer;
 use crate::driver::server::DriverServer;
-use crate::driver::state::WorkerState;
 use crate::driver::DriverEvent;
 use crate::error::{ExecutionError, ExecutionResult};
-use crate::id::WorkerId;
-use crate::rpc::ClientOptions;
 
 impl DriverActor {
     pub(super) async fn serve(
@@ -41,26 +38,5 @@ impl DriverActor {
             })
             .await
             .map_err(|e| ExecutionError::InternalError(e.to_string()))
-    }
-
-    pub(super) fn worker_client_options(&mut self, id: WorkerId) -> ExecutionResult<ClientOptions> {
-        let worker = self
-            .state
-            .get_worker(id)
-            .ok_or_else(|| ExecutionError::InternalError(format!("worker not found: {id}")))?;
-        let (host, port) = match &worker.state {
-            WorkerState::Running { host, port, .. } => (host.clone(), *port),
-            _ => {
-                return Err(ExecutionError::InternalError(format!(
-                    "worker not active: {id}"
-                )))
-            }
-        };
-        let enable_tls = self.options().enable_tls;
-        Ok(ClientOptions {
-            enable_tls,
-            host,
-            port,
-        })
     }
 }

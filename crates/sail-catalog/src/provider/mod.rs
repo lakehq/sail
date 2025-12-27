@@ -1,12 +1,11 @@
 mod namespace;
 mod options;
 mod runtime;
-mod status;
 
 pub use namespace::*;
 pub use options::*;
 pub use runtime::*;
-pub use status::*;
+use sail_common_datafusion::catalog::{DatabaseStatus, TableStatus};
 
 use crate::error::CatalogResult;
 

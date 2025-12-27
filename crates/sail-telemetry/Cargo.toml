@@ -26,6 +26,8 @@ tower = { workspace = true }
 tonic = { workspace = true }
 pin-project-lite = { workspace = true }
 num-traits = { workspace = true }
+tokio = { workspace = true }
+paste = { workspace = true }
 
 [build-dependencies]
 serde = { workspace = true }

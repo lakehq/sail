@@ -2,7 +2,6 @@ use std::collections::HashMap;
 use std::sync::Arc;
 
 use sail_plan::config::{DefaultTimestampType, PlanConfig};
-use sail_plan::formatter::SparkPlanFormatter;
 use sail_python_udf::config::PySparkUdfConfig;
 
 use crate::error::{SparkError, SparkResult};
@@ -229,7 +228,6 @@ impl TryFrom<&SparkRuntimeConfig> for PlanConfig {
             output.ansi_mode = value;
         }
 
-        output.plan_formatter = Arc::new(SparkPlanFormatter);
         output.pyspark_udf_config = Arc::new(PySparkUdfConfig::try_from(config)?);
 
         Ok(output)

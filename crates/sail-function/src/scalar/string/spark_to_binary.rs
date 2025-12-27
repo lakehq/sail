@@ -11,7 +11,7 @@ use datafusion_expr_common::columnar_value::ColumnarValue;
 use datafusion_expr_common::signature::{Signature, TypeSignature, Volatility};
 use sail_common_datafusion::utils::items::ItemTaker;
 
-use crate::scalar::math::spark_hex_unhex::SparkUnHex;
+use crate::scalar::math::spark_unhex::SparkUnHex;
 use crate::scalar::string::spark_base64::SparkUnbase64;
 
 #[derive(Debug, PartialEq, Eq, Hash)]

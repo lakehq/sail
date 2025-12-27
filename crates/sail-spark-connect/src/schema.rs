@@ -118,7 +118,10 @@ fn format_type_name(f: &mut fmt::Formatter, data_type: Option<&sc::DataType>) ->
                 write!(f, "userdefined")
             }
         }
+        Kind::Geometry(_) => write!(f, "geometry"),
+        Kind::Geography(_) => write!(f, "geography"),
         Kind::Unparsed(_) => write!(f, "unparsed"),
+        Kind::Time(_) => write!(f, "time"),
     }
 }
 

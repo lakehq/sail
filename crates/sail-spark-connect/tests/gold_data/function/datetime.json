@@ -353,6 +353,116 @@
     },
     {
       "input": {
+        "query": "SELECT current_time();",
+        "result": [
+          "15:49:11.914120"
+        ],
+        "schema": {
+          "type": "struct",
+          "fields": [
+            {
+              "name": "current_time(6)",
+              "nullable": false,
+              "type": "time(6)",
+              "metadata": {}
+            }
+          ]
+        }
+      },
+      "output": {
+        "success": "ok"
+      }
+    },
+    {
+      "input": {
+        "query": "SELECT current_time(0);",
+        "result": [
+          "15:49:11"
+        ],
+        "schema": {
+          "type": "struct",
+          "fields": [
+            {
+              "name": "current_time(0)",
+              "nullable": false,
+              "type": "time(0)",
+              "metadata": {}
+            }
+          ]
+        }
+      },
+      "output": {
+        "failure": "error in DataFusion: Error during planning: The function 'current_time' expected zero argument but received 1 No function matches the given name and argument types 'current_time(Int32)'. You might need to add explicit type casts.\n\tCandidate functions:\n\tcurrent_time(NullAry())"
+      }
+    },
+    {
+      "input": {
+        "query": "SELECT current_time(1+1);",
+        "result": [
+          "15:49:11.91"
+        ],
+        "schema": {
+          "type": "struct",
+          "fields": [
+            {
+              "name": "current_time((1 + 1))",
+              "nullable": false,
+              "type": "time(2)",
+              "metadata": {}
+            }
+          ]
+        }
+      },
+      "output": {
+        "failure": "error in DataFusion: Error during planning: The function 'current_time' expected zero argument but received 1 No function matches the given name and argument types 'current_time(Int32)'. You might need to add explicit type casts.\n\tCandidate functions:\n\tcurrent_time(NullAry())"
+      }
+    },
+    {
+      "input": {
+        "query": "SELECT current_time(3);",
+        "result": [
+          "15:49:11.914"
+        ],
+        "schema": {
+          "type": "struct",
+          "fields": [
+            {
+              "name": "current_time(3)",
+              "nullable": false,
+              "type": "time(3)",
+              "metadata": {}
+            }
+          ]
+        }
+      },
+      "output": {
+        "failure": "error in DataFusion: Error during planning: The function 'current_time' expected zero argument but received 1 No function matches the given name and argument types 'current_time(Int32)'. You might need to add explicit type casts.\n\tCandidate functions:\n\tcurrent_time(NullAry())"
+      }
+    },
+    {
+      "input": {
+        "query": "SELECT current_time;",
+        "result": [
+          "15:49:11.914120"
+        ],
+        "schema": {
+          "type": "struct",
+          "fields": [
+            {
+              "name": "current_time(6)",
+              "nullable": false,
+              "type": "time(6)",
+              "metadata": {}
+            }
+          ]
+        }
+      },
+      "output": {
+        "failure": "analysis error: cannot resolve attribute: ObjectName([Identifier(\"current_time\")])"
+      }
+    },
+    {
+      "input": {
         "query": "SELECT current_timestamp();",
         "result": [
           "2020-04-25 15:49:11.914"
@@ -1189,6 +1299,28 @@
     },
     {
       "input": {
+        "query": "SELECT extract(HOUR FROM time '09:08:01.000001');",
+        "result": [
+          "9"
+        ],
+        "schema": {
+          "type": "struct",
+          "fields": [
+            {
+              "name": "extract(HOUR FROM TIME '09:08:01.000001')",
+              "nullable": true,
+              "type": "integer",
+              "metadata": {}
+            }
+          ]
+        }
+      },
+      "output": {
+        "failure": "invalid argument: found '09:08:01.000001' at 30:47 expected '->', '.', '(', '[', '::', 'ESCAPE', 'IS', 'NOT', 'IN', '*', '/', '%', 'DIV', '+', '-', '||', '>>>', '>>', '<<', '&', '^', '|', '!=', '!>', '!<', '==', '=', '>=', '>', '<=>', '<=', '<>', '<', 'BETWEEN', 'LIKE', 'ILIKE', 'RLIKE', 'REGEXP', 'SIMILAR', 'AND', 'OR', or ')'"
+      }
+    },
+    {
+      "input": {
         "query": "SELECT extract(MINUTE FROM INTERVAL '123 23:55:59.002001' DAY TO SECOND);",
         "result": [
           "55"
@@ -1211,6 +1343,28 @@
     },
     {
       "input": {
+        "query": "SELECT extract(MINUTE FROM time '09:08:01.000001');",
+        "result": [
+          "8"
+        ],
+        "schema": {
+          "type": "struct",
+          "fields": [
+            {
+              "name": "extract(MINUTE FROM TIME '09:08:01.000001')",
+              "nullable": true,
+              "type": "integer",
+              "metadata": {}
+            }
+          ]
+        }
+      },
+      "output": {
+        "failure": "invalid argument: found '09:08:01.000001' at 32:49 expected '->', '.', '(', '[', '::', 'ESCAPE', 'IS', 'NOT', 'IN', '*', '/', '%', 'DIV', '+', '-', '||', '>>>', '>>', '<<', '&', '^', '|', '!=', '!>', '!<', '==', '=', '>=', '>', '<=>', '<=', '<>', '<', 'BETWEEN', 'LIKE', 'ILIKE', 'RLIKE', 'REGEXP', 'SIMILAR', 'AND', 'OR', or ')'"
+      }
+    },
+    {
+      "input": {
         "query": "SELECT extract(MONTH FROM INTERVAL '2021-11' YEAR TO MONTH);",
         "result": [
           "11"
@@ -1229,6 +1383,28 @@
       },
       "output": {
         "success": "ok"
+      }
+    },
+    {
+      "input": {
+        "query": "SELECT extract(SECOND FROM time '09:08:01.000001');",
+        "result": [
+          "1.000001"
+        ],
+        "schema": {
+          "type": "struct",
+          "fields": [
+            {
+              "name": "extract(SECOND FROM TIME '09:08:01.000001')",
+              "nullable": true,
+              "type": "decimal(8, 6)",
+              "metadata": {}
+            }
+          ]
+        }
+      },
+      "output": {
+        "failure": "invalid argument: found '09:08:01.000001' at 32:49 expected '->', '.', '(', '[', '::', 'ESCAPE', 'IS', 'NOT', 'IN', '*', '/', '%', 'DIV', '+', '-', '||', '>>>', '>>', '<<', '&', '^', '|', '!=', '!>', '!<', '==', '=', '>=', '>', '<=>', '<=', '<>', '<', 'BETWEEN', 'LIKE', 'ILIKE', 'RLIKE', 'REGEXP', 'SIMILAR', 'AND', 'OR', or ')'"
       }
     },
     {
@@ -1431,7 +1607,7 @@
     },
     {
       "input": {
-        "query": "SELECT hour('2009-07-30 12:58:59');",
+        "query": "SELECT hour('2018-02-14 12:58:59');",
         "result": [
           "12"
         ],
@@ -1439,7 +1615,7 @@
           "type": "struct",
           "fields": [
             {
-              "name": "hour(2009-07-30 12:58:59)",
+              "name": "hour(2018-02-14 12:58:59)",
               "nullable": true,
               "type": "integer",
               "metadata": {}
@@ -1449,6 +1625,28 @@
       },
       "output": {
         "success": "ok"
+      }
+    },
+    {
+      "input": {
+        "query": "SELECT hour(TIME'13:59:59.999999');",
+        "result": [
+          "13"
+        ],
+        "schema": {
+          "type": "struct",
+          "fields": [
+            {
+              "name": "hour(TIME '13:59:59.999999')",
+              "nullable": true,
+              "type": "integer",
+              "metadata": {}
+            }
+          ]
+        }
+      },
+      "output": {
+        "failure": "invalid argument: found '13:59:59.999999' at 16:33 expected '->', '.', '(', '[', '::', 'ESCAPE', 'IS', 'NOT', 'IN', '*', '/', '%', 'DIV', '+', '-', '||', '>>>', '>>', '<<', '&', '^', '|', '!=', '!>', '!<', '==', '=', '>=', '>', '<=>', '<=', '<>', '<', 'BETWEEN', 'LIKE', 'ILIKE', 'RLIKE', 'REGEXP', 'SIMILAR', 'AND', 'OR', '=>', ',', 'RESPECT', 'IGNORE', or ')'"
       }
     },
     {
@@ -1673,6 +1871,50 @@
     },
     {
       "input": {
+        "query": "SELECT make_time(6, 30, 45.887);",
+        "result": [
+          "06:30:45.887"
+        ],
+        "schema": {
+          "type": "struct",
+          "fields": [
+            {
+              "name": "make_time(6, 30, 45.887)",
+              "nullable": true,
+              "type": "time(6)",
+              "metadata": {}
+            }
+          ]
+        }
+      },
+      "output": {
+        "failure": "not supported: unknown function: make_time"
+      }
+    },
+    {
+      "input": {
+        "query": "SELECT make_time(NULL, 30, 0);",
+        "result": [
+          "NULL"
+        ],
+        "schema": {
+          "type": "struct",
+          "fields": [
+            {
+              "name": "make_time(NULL, 30, 0)",
+              "nullable": true,
+              "type": "time(6)",
+              "metadata": {}
+            }
+          ]
+        }
+      },
+      "output": {
+        "failure": "not supported: unknown function: make_time"
+      }
+    },
+    {
+      "input": {
         "query": "SELECT make_timestamp(2014, 12, 28, 6, 30, 45.887);",
         "result": [
           "2014-12-28 06:30:45.887"
@@ -1717,15 +1959,15 @@
     },
     {
       "input": {
-        "query": "SELECT make_timestamp(2019, 6, 30, 23, 59, 1);",
+        "query": "SELECT make_timestamp(DATE'2014-12-28');",
         "result": [
-          "2019-06-30 23:59:01"
+          "2014-12-28 00:00:00"
         ],
         "schema": {
           "type": "struct",
           "fields": [
             {
-              "name": "make_timestamp(2019, 6, 30, 23, 59, 1)",
+              "name": "make_timestamp(DATE '2014-12-28')",
               "nullable": false,
               "type": "timestamp",
               "metadata": {}
@@ -1734,20 +1976,20 @@
         }
       },
       "output": {
-        "success": "ok"
+        "failure": "invalid argument: make_timestamp requires 6 or 7 arguments, got [Literal(Date32(\"2014-12-28\"), None)]"
       }
     },
     {
       "input": {
-        "query": "SELECT make_timestamp(2019, 6, 30, 23, 59, 60);",
+        "query": "SELECT make_timestamp(DATE'2014-12-28', TIME'6:30:45.887');",
         "result": [
-          "2019-07-01 00:00:00"
+          "2014-12-28 06:30:45.887"
         ],
         "schema": {
           "type": "struct",
           "fields": [
             {
-              "name": "make_timestamp(2019, 6, 30, 23, 59, 60)",
+              "name": "make_timestamp(DATE '2014-12-28', TIME '06:30:45.887')",
               "nullable": false,
               "type": "timestamp",
               "metadata": {}
@@ -1756,21 +1998,21 @@
         }
       },
       "output": {
-        "success": "ok"
+        "failure": "invalid argument: found '6:30:45.887' at 44:57 expected '->', '.', '(', '[', '::', 'ESCAPE', 'IS', 'NOT', 'IN', '*', '/', '%', 'DIV', '+', '-', '||', '>>>', '>>', '<<', '&', '^', '|', '!=', '!>', '!<', '==', '=', '>=', '>', '<=>', '<=', '<>', '<', 'BETWEEN', 'LIKE', 'ILIKE', 'RLIKE', 'REGEXP', 'SIMILAR', 'AND', 'OR', '=>', ',', 'RESPECT', 'IGNORE', or ')'"
       }
     },
     {
       "input": {
-        "query": "SELECT make_timestamp(null, 7, 22, 15, 30, 0);",
+        "query": "SELECT make_timestamp(DATE'2014-12-28', TIME'6:30:45.887', 'CET');",
         "result": [
-          "NULL"
+          "2014-12-27 21:30:45.887"
         ],
         "schema": {
           "type": "struct",
           "fields": [
             {
-              "name": "make_timestamp(NULL, 7, 22, 15, 30, 0)",
-              "nullable": true,
+              "name": "make_timestamp(DATE '2014-12-28', TIME '06:30:45.887', CET)",
+              "nullable": false,
               "type": "timestamp",
               "metadata": {}
             }
@@ -1778,7 +2020,7 @@
         }
       },
       "output": {
-        "success": "ok"
+        "failure": "invalid argument: found '6:30:45.887' at 44:57 expected '->', '.', '(', '[', '::', 'ESCAPE', 'IS', 'NOT', 'IN', '*', '/', '%', 'DIV', '+', '-', '||', '>>>', '>>', '<<', '&', '^', '|', '!=', '!>', '!<', '==', '=', '>=', '>', '<=>', '<=', '<>', '<', 'BETWEEN', 'LIKE', 'ILIKE', 'RLIKE', 'REGEXP', 'SIMILAR', 'AND', 'OR', '=>', ',', 'RESPECT', 'IGNORE', or ')'"
       }
     },
     {
@@ -1849,6 +2091,50 @@
     },
     {
       "input": {
+        "query": "SELECT make_timestamp_ltz(DATE'2014-12-28', TIME'6:30:45.887');",
+        "result": [
+          "2014-12-28 06:30:45.887"
+        ],
+        "schema": {
+          "type": "struct",
+          "fields": [
+            {
+              "name": "make_timestamp(DATE '2014-12-28', TIME '06:30:45.887')",
+              "nullable": false,
+              "type": "timestamp",
+              "metadata": {}
+            }
+          ]
+        }
+      },
+      "output": {
+        "failure": "invalid argument: found '6:30:45.887' at 48:61 expected '->', '.', '(', '[', '::', 'ESCAPE', 'IS', 'NOT', 'IN', '*', '/', '%', 'DIV', '+', '-', '||', '>>>', '>>', '<<', '&', '^', '|', '!=', '!>', '!<', '==', '=', '>=', '>', '<=>', '<=', '<>', '<', 'BETWEEN', 'LIKE', 'ILIKE', 'RLIKE', 'REGEXP', 'SIMILAR', 'AND', 'OR', '=>', ',', 'RESPECT', 'IGNORE', or ')'"
+      }
+    },
+    {
+      "input": {
+        "query": "SELECT make_timestamp_ltz(DATE'2014-12-28', TIME'6:30:45.887', 'CET');",
+        "result": [
+          "2014-12-27 21:30:45.887"
+        ],
+        "schema": {
+          "type": "struct",
+          "fields": [
+            {
+              "name": "make_timestamp(DATE '2014-12-28', TIME '06:30:45.887', CET)",
+              "nullable": false,
+              "type": "timestamp",
+              "metadata": {}
+            }
+          ]
+        }
+      },
+      "output": {
+        "failure": "invalid argument: found '6:30:45.887' at 48:61 expected '->', '.', '(', '[', '::', 'ESCAPE', 'IS', 'NOT', 'IN', '*', '/', '%', 'DIV', '+', '-', '||', '>>>', '>>', '<<', '&', '^', '|', '!=', '!>', '!<', '==', '=', '>=', '>', '<=>', '<=', '<>', '<', 'BETWEEN', 'LIKE', 'ILIKE', 'RLIKE', 'REGEXP', 'SIMILAR', 'AND', 'OR', '=>', ',', 'RESPECT', 'IGNORE', or ')'"
+      }
+    },
+    {
+      "input": {
         "query": "SELECT make_timestamp_ltz(null, 7, 22, 15, 30, 0);",
         "result": [
           "NULL"
@@ -1911,6 +2197,28 @@
       },
       "output": {
         "success": "ok"
+      }
+    },
+    {
+      "input": {
+        "query": "SELECT make_timestamp_ntz(DATE'2014-12-28', TIME'6:30:45.887');",
+        "result": [
+          "2014-12-28 06:30:45.887"
+        ],
+        "schema": {
+          "type": "struct",
+          "fields": [
+            {
+              "name": "make_timestamp_ntz(DATE '2014-12-28', TIME '06:30:45.887')",
+              "nullable": true,
+              "type": "timestamp_ntz",
+              "metadata": {}
+            }
+          ]
+        }
+      },
+      "output": {
+        "failure": "invalid argument: found '6:30:45.887' at 48:61 expected '->', '.', '(', '[', '::', 'ESCAPE', 'IS', 'NOT', 'IN', '*', '/', '%', 'DIV', '+', '-', '||', '>>>', '>>', '<<', '&', '^', '|', '!=', '!>', '!<', '==', '=', '>=', '>', '<=>', '<=', '<>', '<', 'BETWEEN', 'LIKE', 'ILIKE', 'RLIKE', 'REGEXP', 'SIMILAR', 'AND', 'OR', '=>', ',', 'RESPECT', 'IGNORE', or ')'"
       }
     },
     {
@@ -2043,6 +2351,28 @@
       },
       "output": {
         "success": "ok"
+      }
+    },
+    {
+      "input": {
+        "query": "SELECT minute(TIME'23:59:59.999999');",
+        "result": [
+          "59"
+        ],
+        "schema": {
+          "type": "struct",
+          "fields": [
+            {
+              "name": "minute(TIME '23:59:59.999999')",
+              "nullable": true,
+              "type": "integer",
+              "metadata": {}
+            }
+          ]
+        }
+      },
+      "output": {
+        "failure": "invalid argument: found '23:59:59.999999' at 18:35 expected '->', '.', '(', '[', '::', 'ESCAPE', 'IS', 'NOT', 'IN', '*', '/', '%', 'DIV', '+', '-', '||', '>>>', '>>', '<<', '&', '^', '|', '!=', '!>', '!<', '==', '=', '>=', '>', '<=>', '<=', '<>', '<', 'BETWEEN', 'LIKE', 'ILIKE', 'RLIKE', 'REGEXP', 'SIMILAR', 'AND', 'OR', '=>', ',', 'RESPECT', 'IGNORE', or ')'"
       }
     },
     {
@@ -2201,7 +2531,7 @@
     },
     {
       "input": {
-        "query": "SELECT second('2009-07-30 12:58:59');",
+        "query": "SELECT second('2018-02-14 12:58:59');",
         "result": [
           "59"
         ],
@@ -2209,7 +2539,7 @@
           "type": "struct",
           "fields": [
             {
-              "name": "second(2009-07-30 12:58:59)",
+              "name": "second(2018-02-14 12:58:59)",
               "nullable": true,
               "type": "integer",
               "metadata": {}
@@ -2219,6 +2549,138 @@
       },
       "output": {
         "success": "ok"
+      }
+    },
+    {
+      "input": {
+        "query": "SELECT second(TIME'13:25:59.999999');",
+        "result": [
+          "59"
+        ],
+        "schema": {
+          "type": "struct",
+          "fields": [
+            {
+              "name": "second(TIME '13:25:59.999999')",
+              "nullable": true,
+              "type": "integer",
+              "metadata": {}
+            }
+          ]
+        }
+      },
+      "output": {
+        "failure": "invalid argument: found '13:25:59.999999' at 18:35 expected '->', '.', '(', '[', '::', 'ESCAPE', 'IS', 'NOT', 'IN', '*', '/', '%', 'DIV', '+', '-', '||', '>>>', '>>', '<<', '&', '^', '|', '!=', '!>', '!<', '==', '=', '>=', '>', '<=>', '<=', '<>', '<', 'BETWEEN', 'LIKE', 'ILIKE', 'RLIKE', 'REGEXP', 'SIMILAR', 'AND', 'OR', '=>', ',', 'RESPECT', 'IGNORE', or ')'"
+      }
+    },
+    {
+      "input": {
+        "query": "SELECT time_diff('HOUR', TIME'20:30:29', TIME'12:00:00');",
+        "result": [
+          "-8"
+        ],
+        "schema": {
+          "type": "struct",
+          "fields": [
+            {
+              "name": "time_diff(HOUR, TIME '20:30:29', TIME '12:00:00')",
+              "nullable": true,
+              "type": "long",
+              "metadata": {}
+            }
+          ]
+        }
+      },
+      "output": {
+        "failure": "invalid argument: found '20:30:29' at 29:39 expected '->', '.', '(', '[', '::', 'ESCAPE', 'IS', 'NOT', 'IN', '*', '/', '%', 'DIV', '+', '-', '||', '>>>', '>>', '<<', '&', '^', '|', '!=', '!>', '!<', '==', '=', '>=', '>', '<=>', '<=', '<>', '<', 'BETWEEN', 'LIKE', 'ILIKE', 'RLIKE', 'REGEXP', 'SIMILAR', 'AND', 'OR', '=>', ',', 'RESPECT', 'IGNORE', or ')'"
+      }
+    },
+    {
+      "input": {
+        "query": "SELECT time_diff('HOUR', TIME'20:30:29', TIME'21:30:28');",
+        "result": [
+          "0"
+        ],
+        "schema": {
+          "type": "struct",
+          "fields": [
+            {
+              "name": "time_diff(HOUR, TIME '20:30:29', TIME '21:30:28')",
+              "nullable": true,
+              "type": "long",
+              "metadata": {}
+            }
+          ]
+        }
+      },
+      "output": {
+        "failure": "invalid argument: found '20:30:29' at 29:39 expected '->', '.', '(', '[', '::', 'ESCAPE', 'IS', 'NOT', 'IN', '*', '/', '%', 'DIV', '+', '-', '||', '>>>', '>>', '<<', '&', '^', '|', '!=', '!>', '!<', '==', '=', '>=', '>', '<=>', '<=', '<>', '<', 'BETWEEN', 'LIKE', 'ILIKE', 'RLIKE', 'REGEXP', 'SIMILAR', 'AND', 'OR', '=>', ',', 'RESPECT', 'IGNORE', or ')'"
+      }
+    },
+    {
+      "input": {
+        "query": "SELECT time_diff('HOUR', TIME'20:30:29', TIME'21:30:29');",
+        "result": [
+          "1"
+        ],
+        "schema": {
+          "type": "struct",
+          "fields": [
+            {
+              "name": "time_diff(HOUR, TIME '20:30:29', TIME '21:30:29')",
+              "nullable": true,
+              "type": "long",
+              "metadata": {}
+            }
+          ]
+        }
+      },
+      "output": {
+        "failure": "invalid argument: found '20:30:29' at 29:39 expected '->', '.', '(', '[', '::', 'ESCAPE', 'IS', 'NOT', 'IN', '*', '/', '%', 'DIV', '+', '-', '||', '>>>', '>>', '<<', '&', '^', '|', '!=', '!>', '!<', '==', '=', '>=', '>', '<=>', '<=', '<>', '<', 'BETWEEN', 'LIKE', 'ILIKE', 'RLIKE', 'REGEXP', 'SIMILAR', 'AND', 'OR', '=>', ',', 'RESPECT', 'IGNORE', or ')'"
+      }
+    },
+    {
+      "input": {
+        "query": "SELECT time_trunc('HOUR', TIME'09:32:05.359');",
+        "result": [
+          "09:00:00"
+        ],
+        "schema": {
+          "type": "struct",
+          "fields": [
+            {
+              "name": "time_trunc(HOUR, TIME '09:32:05.359')",
+              "nullable": true,
+              "type": "time(6)",
+              "metadata": {}
+            }
+          ]
+        }
+      },
+      "output": {
+        "failure": "invalid argument: found '09:32:05.359' at 30:44 expected '->', '.', '(', '[', '::', 'ESCAPE', 'IS', 'NOT', 'IN', '*', '/', '%', 'DIV', '+', '-', '||', '>>>', '>>', '<<', '&', '^', '|', '!=', '!>', '!<', '==', '=', '>=', '>', '<=>', '<=', '<>', '<', 'BETWEEN', 'LIKE', 'ILIKE', 'RLIKE', 'REGEXP', 'SIMILAR', 'AND', 'OR', '=>', ',', 'RESPECT', 'IGNORE', or ')'"
+      }
+    },
+    {
+      "input": {
+        "query": "SELECT time_trunc('MILLISECOND', TIME'09:32:05.123456');",
+        "result": [
+          "09:32:05.123"
+        ],
+        "schema": {
+          "type": "struct",
+          "fields": [
+            {
+              "name": "time_trunc(MILLISECOND, TIME '09:32:05.123456')",
+              "nullable": true,
+              "type": "time(6)",
+              "metadata": {}
+            }
+          ]
+        }
+      },
+      "output": {
+        "failure": "invalid argument: found '09:32:05.123456' at 37:54 expected '->', '.', '(', '[', '::', 'ESCAPE', 'IS', 'NOT', 'IN', '*', '/', '%', 'DIV', '+', '-', '||', '>>>', '>>', '<<', '&', '^', '|', '!=', '!>', '!<', '==', '=', '>=', '>', '<=>', '<=', '<>', '<', 'BETWEEN', 'LIKE', 'ILIKE', 'RLIKE', 'REGEXP', 'SIMILAR', 'AND', 'OR', '=>', ',', 'RESPECT', 'IGNORE', or ')'"
       }
     },
     {
@@ -2351,6 +2813,50 @@
       },
       "output": {
         "success": "ok"
+      }
+    },
+    {
+      "input": {
+        "query": "SELECT to_time('00:12:00');",
+        "result": [
+          "00:12:00"
+        ],
+        "schema": {
+          "type": "struct",
+          "fields": [
+            {
+              "name": "to_time(00:12:00)",
+              "nullable": true,
+              "type": "time(6)",
+              "metadata": {}
+            }
+          ]
+        }
+      },
+      "output": {
+        "failure": "not supported: unknown function: to_time"
+      }
+    },
+    {
+      "input": {
+        "query": "SELECT to_time('12.10.05', 'HH.mm.ss');",
+        "result": [
+          "12:10:05"
+        ],
+        "schema": {
+          "type": "struct",
+          "fields": [
+            {
+              "name": "to_time(12.10.05, HH.mm.ss)",
+              "nullable": true,
+              "type": "time(6)",
+              "metadata": {}
+            }
+          ]
+        }
+      },
+      "output": {
+        "failure": "not supported: unknown function: to_time"
       }
     },
     {
@@ -2817,6 +3323,72 @@
     },
     {
       "input": {
+        "query": "SELECT try_make_timestamp(DATE'2014-12-28');",
+        "result": [
+          "2014-12-28 00:00:00"
+        ],
+        "schema": {
+          "type": "struct",
+          "fields": [
+            {
+              "name": "try_make_timestamp(DATE '2014-12-28')",
+              "nullable": false,
+              "type": "timestamp",
+              "metadata": {}
+            }
+          ]
+        }
+      },
+      "output": {
+        "failure": "not implemented: function: try_make_timestamp"
+      }
+    },
+    {
+      "input": {
+        "query": "SELECT try_make_timestamp(DATE'2014-12-28', TIME'6:30:45.887');",
+        "result": [
+          "2014-12-28 06:30:45.887"
+        ],
+        "schema": {
+          "type": "struct",
+          "fields": [
+            {
+              "name": "try_make_timestamp(DATE '2014-12-28', TIME '06:30:45.887')",
+              "nullable": false,
+              "type": "timestamp",
+              "metadata": {}
+            }
+          ]
+        }
+      },
+      "output": {
+        "failure": "invalid argument: found '6:30:45.887' at 48:61 expected '->', '.', '(', '[', '::', 'ESCAPE', 'IS', 'NOT', 'IN', '*', '/', '%', 'DIV', '+', '-', '||', '>>>', '>>', '<<', '&', '^', '|', '!=', '!>', '!<', '==', '=', '>=', '>', '<=>', '<=', '<>', '<', 'BETWEEN', 'LIKE', 'ILIKE', 'RLIKE', 'REGEXP', 'SIMILAR', 'AND', 'OR', '=>', ',', 'RESPECT', 'IGNORE', or ')'"
+      }
+    },
+    {
+      "input": {
+        "query": "SELECT try_make_timestamp(DATE'2014-12-28', TIME'6:30:45.887', 'CET');",
+        "result": [
+          "2014-12-27 21:30:45.887"
+        ],
+        "schema": {
+          "type": "struct",
+          "fields": [
+            {
+              "name": "try_make_timestamp(DATE '2014-12-28', TIME '06:30:45.887', CET)",
+              "nullable": false,
+              "type": "timestamp",
+              "metadata": {}
+            }
+          ]
+        }
+      },
+      "output": {
+        "failure": "invalid argument: found '6:30:45.887' at 48:61 expected '->', '.', '(', '[', '::', 'ESCAPE', 'IS', 'NOT', 'IN', '*', '/', '%', 'DIV', '+', '-', '||', '>>>', '>>', '<<', '&', '^', '|', '!=', '!>', '!<', '==', '=', '>=', '>', '<=>', '<=', '<>', '<', 'BETWEEN', 'LIKE', 'ILIKE', 'RLIKE', 'REGEXP', 'SIMILAR', 'AND', 'OR', '=>', ',', 'RESPECT', 'IGNORE', or ')'"
+      }
+    },
+    {
+      "input": {
         "query": "SELECT try_make_timestamp(null, 7, 22, 15, 30, 0);",
         "result": [
           "NULL"
@@ -2927,6 +3499,50 @@
     },
     {
       "input": {
+        "query": "SELECT try_make_timestamp_ltz(DATE'2014-12-28', TIME'6:30:45.887');",
+        "result": [
+          "2014-12-28 06:30:45.887"
+        ],
+        "schema": {
+          "type": "struct",
+          "fields": [
+            {
+              "name": "make_timestamp(DATE '2014-12-28', TIME '06:30:45.887')",
+              "nullable": false,
+              "type": "timestamp",
+              "metadata": {}
+            }
+          ]
+        }
+      },
+      "output": {
+        "failure": "invalid argument: found '6:30:45.887' at 52:65 expected '->', '.', '(', '[', '::', 'ESCAPE', 'IS', 'NOT', 'IN', '*', '/', '%', 'DIV', '+', '-', '||', '>>>', '>>', '<<', '&', '^', '|', '!=', '!>', '!<', '==', '=', '>=', '>', '<=>', '<=', '<>', '<', 'BETWEEN', 'LIKE', 'ILIKE', 'RLIKE', 'REGEXP', 'SIMILAR', 'AND', 'OR', '=>', ',', 'RESPECT', 'IGNORE', or ')'"
+      }
+    },
+    {
+      "input": {
+        "query": "SELECT try_make_timestamp_ltz(DATE'2014-12-28', TIME'6:30:45.887', 'CET');",
+        "result": [
+          "2014-12-27 21:30:45.887"
+        ],
+        "schema": {
+          "type": "struct",
+          "fields": [
+            {
+              "name": "make_timestamp(DATE '2014-12-28', TIME '06:30:45.887', CET)",
+              "nullable": false,
+              "type": "timestamp",
+              "metadata": {}
+            }
+          ]
+        }
+      },
+      "output": {
+        "failure": "invalid argument: found '6:30:45.887' at 52:65 expected '->', '.', '(', '[', '::', 'ESCAPE', 'IS', 'NOT', 'IN', '*', '/', '%', 'DIV', '+', '-', '||', '>>>', '>>', '<<', '&', '^', '|', '!=', '!>', '!<', '==', '=', '>=', '>', '<=>', '<=', '<>', '<', 'BETWEEN', 'LIKE', 'ILIKE', 'RLIKE', 'REGEXP', 'SIMILAR', 'AND', 'OR', '=>', ',', 'RESPECT', 'IGNORE', or ')'"
+      }
+    },
+    {
+      "input": {
         "query": "SELECT try_make_timestamp_ltz(null, 7, 22, 15, 30, 0);",
         "result": [
           "NULL"
@@ -3015,6 +3631,28 @@
     },
     {
       "input": {
+        "query": "SELECT try_make_timestamp_ntz(DATE'2014-12-28', TIME'6:30:45.887');",
+        "result": [
+          "2014-12-28 06:30:45.887"
+        ],
+        "schema": {
+          "type": "struct",
+          "fields": [
+            {
+              "name": "try_make_timestamp_ntz(make_timestamp_ntz(DATE '2014-12-28', TIME '06:30:45.887'))",
+              "nullable": true,
+              "type": "timestamp_ntz",
+              "metadata": {}
+            }
+          ]
+        }
+      },
+      "output": {
+        "failure": "invalid argument: found '6:30:45.887' at 52:65 expected '->', '.', '(', '[', '::', 'ESCAPE', 'IS', 'NOT', 'IN', '*', '/', '%', 'DIV', '+', '-', '||', '>>>', '>>', '<<', '&', '^', '|', '!=', '!>', '!<', '==', '=', '>=', '>', '<=>', '<=', '<>', '<', 'BETWEEN', 'LIKE', 'ILIKE', 'RLIKE', 'REGEXP', 'SIMILAR', 'AND', 'OR', '=>', ',', 'RESPECT', 'IGNORE', or ')'"
+      }
+    },
+    {
+      "input": {
         "query": "SELECT try_make_timestamp_ntz(null, 7, 22, 15, 30, 0);",
         "result": [
           "NULL"
@@ -3033,6 +3671,138 @@
       },
       "output": {
         "failure": "not implemented: function: try_make_timestamp_ntz"
+      }
+    },
+    {
+      "input": {
+        "query": "SELECT try_to_date('2016-12-31');",
+        "result": [
+          "2016-12-31"
+        ],
+        "schema": {
+          "type": "struct",
+          "fields": [
+            {
+              "name": "try_to_date(2016-12-31)",
+              "nullable": true,
+              "type": "date",
+              "metadata": {}
+            }
+          ]
+        }
+      },
+      "output": {
+        "failure": "not supported: unknown function: try_to_date"
+      }
+    },
+    {
+      "input": {
+        "query": "SELECT try_to_date('2016-12-31', 'yyyy-MM-dd');",
+        "result": [
+          "2016-12-31"
+        ],
+        "schema": {
+          "type": "struct",
+          "fields": [
+            {
+              "name": "try_to_date(2016-12-31, yyyy-MM-dd)",
+              "nullable": true,
+              "type": "date",
+              "metadata": {}
+            }
+          ]
+        }
+      },
+      "output": {
+        "failure": "not supported: unknown function: try_to_date"
+      }
+    },
+    {
+      "input": {
+        "query": "SELECT try_to_date('foo', 'yyyy-MM-dd');",
+        "result": [
+          "NULL"
+        ],
+        "schema": {
+          "type": "struct",
+          "fields": [
+            {
+              "name": "try_to_date(foo, yyyy-MM-dd)",
+              "nullable": true,
+              "type": "date",
+              "metadata": {}
+            }
+          ]
+        }
+      },
+      "output": {
+        "failure": "not supported: unknown function: try_to_date"
+      }
+    },
+    {
+      "input": {
+        "query": "SELECT try_to_time('00:12:00.001');",
+        "result": [
+          "00:12:00.001"
+        ],
+        "schema": {
+          "type": "struct",
+          "fields": [
+            {
+              "name": "try_to_time(to_time(00:12:00.001))",
+              "nullable": true,
+              "type": "time(6)",
+              "metadata": {}
+            }
+          ]
+        }
+      },
+      "output": {
+        "failure": "not supported: unknown function: try_to_time"
+      }
+    },
+    {
+      "input": {
+        "query": "SELECT try_to_time('12.10.05.999999', 'HH.mm.ss.SSSSSS');",
+        "result": [
+          "12:10:05.999999"
+        ],
+        "schema": {
+          "type": "struct",
+          "fields": [
+            {
+              "name": "try_to_time(to_time(12.10.05.999999, HH.mm.ss.SSSSSS))",
+              "nullable": true,
+              "type": "time(6)",
+              "metadata": {}
+            }
+          ]
+        }
+      },
+      "output": {
+        "failure": "not supported: unknown function: try_to_time"
+      }
+    },
+    {
+      "input": {
+        "query": "SELECT try_to_time('foo', 'HH:mm:ss');",
+        "result": [
+          "NULL"
+        ],
+        "schema": {
+          "type": "struct",
+          "fields": [
+            {
+              "name": "try_to_time(to_time(foo, HH:mm:ss))",
+              "nullable": true,
+              "type": "time(6)",
+              "metadata": {}
+            }
+          ]
+        }
+      },
+      "output": {
+        "failure": "not supported: unknown function: try_to_time"
       }
     },
     {

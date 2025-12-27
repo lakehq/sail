@@ -82,6 +82,7 @@ impl From<CommonError> for PlanError {
 impl From<CatalogError> for PlanError {
     fn from(error: CatalogError) -> Self {
         match error {
+            CatalogError::DataFusionError(e) => PlanError::DataFusionError(e),
             CatalogError::InvalidArgument(message) => PlanError::InvalidArgument(message),
             e @ CatalogError::NotFound(_, _) => PlanError::AnalysisError(e.to_string()),
             e @ CatalogError::AlreadyExists(_, _) => PlanError::AnalysisError(e.to_string()),

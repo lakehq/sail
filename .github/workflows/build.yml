@@ -114,7 +114,7 @@ jobs:
     uses: ./.github/workflows/spark-tests.yml
     strategy:
       matrix:
-        spark-version: ["3.5.5", "4.0.0"]
+        spark-version: ["3.5.7", "4.1.0"]
     with:
       spark_version: ${{ matrix.spark-version }}
     needs:
@@ -189,7 +189,7 @@ jobs:
           echo "coverage_count=$coverage_count" >> $GITHUB_OUTPUT
 
       - name: Upload all coverage reports to Codecov
-        if: steps.coverage-check.outputs.coverage_count >= 4
+        if: steps.coverage-check.outputs.coverage_count >= 5
         uses: codecov/codecov-action@v5
         with:
           token: ${{ secrets.CODECOV_TOKEN }}
