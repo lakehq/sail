@@ -49,3 +49,9 @@ There is no support for Spark RDD in Sail since it relies on the JVM implementat
 | RDD                  | `pyspark.SparkContext`     | :x:                          |
 
 As you go through the rest of the documentation, you will find more details about the supported features as we cover different aspects of Sail.
+
+### Check your code for compatibility
+
+Sail comes with an _experimental function_ :construction: that helps you assess whether Sail already covers all PySpark functionality used in your project. It searches a given folder for `*.py` and `*.ipynb` files and analyzes the code for used PySpark functions. The output shows which functions are used in your code and the corresponding Sail support status.
+
+To run it, simply execute `python -m pysail.examples.spark.compatibility_check <directory>` in your terminal after installing Sail. The command also allows you to specify the desired output format using `--output=text` (human-readable), `--output=json`, or `--output=csv`.

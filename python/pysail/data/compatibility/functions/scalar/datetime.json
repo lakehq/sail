@@ -1,7 +1,7 @@
 [
   {
     "module": "pyspark.sql.functions",
-    "function": "add_years",
+    "function": "add_days",
     "status": "supported"
   },
   {
@@ -11,7 +11,7 @@
   },
   {
     "module": "pyspark.sql.functions",
-    "function": "add_days",
+    "function": "add_years",
     "status": "supported"
   },
   {
@@ -221,6 +221,22 @@
   },
   {
     "module": "pyspark.sql.functions",
+    "function": "session_window",
+    "status": "planned",
+    "ref": "https://github.com/lakehq/sail/issues/505"
+  },
+  {
+    "module": "pyspark.sql.functions",
+    "function": "timestamp_add",
+    "status": "??? not on roadmap"
+  },
+  {
+    "module": "pyspark.sql.functions",
+    "function": "timestamp_diff",
+    "status": "??? not on roadmap"
+  },
+  {
+    "module": "pyspark.sql.functions",
     "function": "timestamp_micros",
     "status": "supported"
   },
@@ -271,6 +287,26 @@
   },
   {
     "module": "pyspark.sql.functions",
+    "function": "try_make_interval",
+    "status": "??? not on roadmap"
+  },
+  {
+    "module": "pyspark.sql.functions",
+    "function": "try_make_timestamp",
+    "status": "??? not on roadmap"
+  },
+  {
+    "module": "pyspark.sql.functions",
+    "function": "try_make_timestamp_ltz",
+    "status": "??? not on roadmap"
+  },
+  {
+    "module": "pyspark.sql.functions",
+    "function": "try_make_timestamp_ntz",
+    "status": "??? not on roadmap"
+  },
+  {
+    "module": "pyspark.sql.functions",
     "function": "try_to_timestamp",
     "status": "supported"
   },
@@ -311,42 +347,19 @@
   },
   {
     "module": "pyspark.sql.functions",
-    "function": "year",
-    "status": "supported"
-  },
-  {
-    "module": "pyspark.sql.functions",
-    "function": "session_window",
-    "status": "in progress"
-  },
-  {
-    "module": "pyspark.sql.functions",
-    "function": "try_make_interval",
-    "status": "in progress"
-  },
-  {
-    "module": "pyspark.sql.functions",
-    "function": "try_make_timestamp",
-    "status": "in progress"
-  },
-  {
-    "module": "pyspark.sql.functions",
-    "function": "try_make_timestamp_ltz",
-    "status": "in progress"
-  },
-  {
-    "module": "pyspark.sql.functions",
-    "function": "try_make_timestamp_ntz",
-    "status": "in progress"
-  },
-  {
-    "module": "pyspark.sql.functions",
     "function": "window",
-    "status": "in progress"
+    "status": "planned",
+    "ref": "https://github.com/lakehq/sail/issues/505"
   },
   {
     "module": "pyspark.sql.functions",
     "function": "window_time",
-    "status": "in progress"
+    "status": "planned",
+    "ref": "https://github.com/lakehq/sail/issues/505"
+  },
+  {
+    "module": "pyspark.sql.functions",
+    "function": "year",
+    "status": "supported"
   }
 ]

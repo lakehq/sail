@@ -1,22 +1,56 @@
 [
   {
     "module": "pyspark.sql.DataFrame",
-    "function": "write",
+    "function": "agg",
     "status": "supported"
   },
   {
     "module": "pyspark.sql.DataFrame",
-    "function": "writeTo",
+    "function": "alias",
     "status": "supported"
   },
   {
     "module": "pyspark.sql.DataFrame",
-    "function": "show",
-    "status": "supported"
+    "function": "approxQuantile",
+    "status": "??? not on roadmap"
+  },
+  {
+    "module": "pyspark.sql.DataFrame",
+    "function": "cache",
+    "status": "partially supported",
+    "info": "currently has no effect; but calling it will cause no error"
+  },
+  {
+    "module": "pyspark.sql.DataFrame",
+    "function": "checkpoint",
+    "status": "planned",
+    "ref": "https://github.com/lakehq/sail/issues/476"
+  },
+  {
+    "module": "pyspark.sql.DataFrame",
+    "function": "coalesce",
+    "status": "planned",
+    "ref": "https://github.com/lakehq/sail/issues/477"
+  },
+  {
+    "module": "pyspark.sql.DataFrame",
+    "function": "colRegex",
+    "status": "planned",
+    "ref": "https://github.com/lakehq/sail/issues/473"
   },
   {
     "module": "pyspark.sql.DataFrame",
     "function": "collect",
+    "status": "supported"
+  },
+  {
+    "module": "pyspark.sql.DataFrame",
+    "function": "columns",
+    "status": "supported"
+  },
+  {
+    "module": "pyspark.sql.DataFrame",
+    "function": "corr",
     "status": "supported"
   },
   {
@@ -26,7 +60,325 @@
   },
   {
     "module": "pyspark.sql.DataFrame",
+    "function": "cov",
+    "status": "supported",
+    "issue": ""
+  },
+  {
+    "module": "pyspark.sql.DataFrame",
+    "function": "createGlobalTempView",
+    "status": "supported"
+  },
+  {
+    "module": "pyspark.sql.DataFrame",
+    "function": "createOrReplaceGlobalTempView",
+    "status": "supported"
+  },
+  {
+    "module": "pyspark.sql.DataFrame",
+    "function": "createOrReplaceTempView",
+    "status": "supported"
+  },
+  {
+    "module": "pyspark.sql.DataFrame",
+    "function": "createTempView",
+    "status": "supported"
+  },
+  {
+    "module": "pyspark.sql.DataFrame",
+    "function": "crossJoin",
+    "status": "supported"
+  },
+  {
+    "module": "pyspark.sql.DataFrame",
+    "function": "crosstab",
+    "status": "supported"
+  },
+  {
+    "module": "pyspark.sql.DataFrame",
+    "function": "cube",
+    "status": "supported"
+  },
+  {
+    "module": "pyspark.sql.DataFrame",
+    "function": "describe",
+    "status": "supported"
+  },
+  {
+    "module": "pyspark.sql.DataFrame",
+    "function": "distinct",
+    "status": "supported"
+  },
+  {
+    "module": "pyspark.sql.DataFrame",
+    "function": "drop",
+    "status": "supported"
+  },
+  {
+    "module": "pyspark.sql.DataFrame",
+    "function": "dropDuplicates",
+    "status": "supported"
+  },
+  {
+    "module": "pyspark.sql.DataFrame",
+    "function": "dropDuplicatesWithinWatermark",
+    "status": "??? not on roadmap"
+  },
+  {
+    "module": "pyspark.sql.DataFrame",
+    "function": "drop_duplicates",
+    "status": "supported"
+  },
+  {
+    "module": "pyspark.sql.DataFrame",
+    "function": "dropna",
+    "status": "supported"
+  },
+  {
+    "module": "pyspark.sql.DataFrame",
+    "function": "dtypes",
+    "status": "supported"
+  },
+  {
+    "module": "pyspark.sql.DataFrame",
+    "function": "exceptAll",
+    "status": "supported"
+  },
+  {
+    "module": "pyspark.sql.DataFrame",
+    "function": "exists",
+    "status": "??? not on roadmap"
+  },
+  {
+    "module": "pyspark.sql.DataFrame",
+    "function": "explain",
+    "status": "supported"
+  },
+  {
+    "module": "pyspark.sql.DataFrame",
+    "function": "fillna",
+    "status": "supported"
+  },
+  {
+    "module": "pyspark.sql.DataFrame",
+    "function": "filter",
+    "status": "supported"
+  },
+  {
+    "module": "pyspark.sql.DataFrame",
+    "function": "first",
+    "status": "supported"
+  },
+  {
+    "module": "pyspark.sql.DataFrame",
+    "function": "foreach",
+    "status": "planned",
+    "ref": "https://github.com/lakehq/sail/issues/478"
+  },
+  {
+    "module": "pyspark.sql.DataFrame",
+    "function": "foreachPartition",
+    "status": "planned",
+    "ref": "https://github.com/lakehq/sail/issues/479"
+  },
+  {
+    "module": "pyspark.sql.DataFrame",
+    "function": "freqItems",
+    "status": "??? not on roadmap"
+  },
+  {
+    "module": "pyspark.sql.DataFrame",
+    "function": "groupBy",
+    "status": "supported"
+  },
+  {
+    "module": "pyspark.sql.DataFrame",
+    "function": "groupingSets",
+    "status": "??? not on roadmap"
+  },
+  {
+    "module": "pyspark.sql.DataFrame",
+    "function": "head",
+    "status": "supported"
+  },
+  {
+    "module": "pyspark.sql.DataFrame",
+    "function": "hint",
+    "status": "planned",
+    "ref": "https://github.com/lakehq/sail/issues/480"
+  },
+  {
+    "module": "pyspark.sql.DataFrame",
+    "function": "inputFiles",
+    "status": "planned",
+    "ref": "https://github.com/lakehq/sail/issues/481"
+  },
+  {
+    "module": "pyspark.sql.DataFrame",
+    "function": "intersect",
+    "status": "supported"
+  },
+  {
+    "module": "pyspark.sql.DataFrame",
+    "function": "intersectAll",
+    "status": "supported"
+  },
+  {
+    "module": "pyspark.sql.DataFrame",
+    "function": "isEmpty",
+    "status": "supported"
+  },
+  {
+    "module": "pyspark.sql.DataFrame",
+    "function": "isLocal",
+    "status": "??? not on roadmap"
+  },
+  {
+    "module": "pyspark.sql.DataFrame",
+    "function": "isStreaming",
+    "status": "??? not on roadmap"
+  },
+  {
+    "module": "pyspark.sql.DataFrame",
+    "function": "join",
+    "status": "supported"
+  },
+  {
+    "module": "pyspark.sql.DataFrame",
+    "function": "lateralJoin",
+    "status": "??? not on roadmap"
+  },
+  {
+    "module": "pyspark.sql.DataFrame",
+    "function": "limit",
+    "status": "supported"
+  },
+  {
+    "module": "pyspark.sql.DataFrame",
+    "function": "localCheckpoint",
+    "status": "planned",
+    "ref": "https://github.com/lakehq/sail/issues/482"
+  },
+  {
+    "module": "pyspark.sql.DataFrame",
+    "function": "mapInArrow",
+    "status": "supported"
+  },
+  {
+    "module": "pyspark.sql.DataFrame",
+    "function": "mapInPandas",
+    "status": "supported"
+  },
+  {
+    "module": "pyspark.sql.DataFrame",
+    "function": "melt",
+    "status": "supported"
+  },
+  {
+    "module": "pyspark.sql.DataFrame",
+    "function": "mergeInto",
+    "status": "??? not on roadmap"
+  },
+  {
+    "module": "pyspark.sql.DataFrame",
+    "function": "na",
+    "status": "supported"
+  },
+  {
+    "module": "pyspark.sql.DataFrame",
+    "function": "observe",
+    "status": "??? not on roadmap"
+  },
+  {
+    "module": "pyspark.sql.DataFrame",
+    "function": "offset",
+    "status": "supported"
+  },
+  {
+    "module": "pyspark.sql.DataFrame",
+    "function": "orderBy",
+    "status": "supported"
+  },
+  {
+    "module": "pyspark.sql.DataFrame",
+    "function": "pandas_api",
+    "status": "??? not on roadmap"
+  },
+  {
+    "module": "pyspark.sql.DataFrame",
+    "function": "persist",
+    "status": "??? not on roadmap"
+  },
+  {
+    "module": "pyspark.sql.DataFrame",
+    "function": "plot",
+    "status": "??? not on roadmap"
+  },
+  {
+    "module": "pyspark.sql.DataFrame",
     "function": "printSchema",
+    "status": "supported"
+  },
+  {
+    "module": "pyspark.sql.DataFrame",
+    "function": "randomSplit",
+    "status": "planned",
+    "ref": "https://github.com/lakehq/sail/issues/483"
+  },
+  {
+    "module": "pyspark.sql.DataFrame",
+    "function": "rdd",
+    "status": "not supported"
+  },
+  {
+    "module": "pyspark.sql.DataFrame",
+    "function": "registerTempTable",
+    "status": "supported"
+  },
+  {
+    "module": "pyspark.sql.DataFrame",
+    "function": "repartition",
+    "status": "supported"
+  },
+  {
+    "module": "pyspark.sql.DataFrame",
+    "function": "repartitionByRange",
+    "status": "supported"
+  },
+  {
+    "module": "pyspark.sql.DataFrame",
+    "function": "replace",
+    "status": "supported"
+  },
+  {
+    "module": "pyspark.sql.DataFrame",
+    "function": "rollup",
+    "status": "supported"
+  },
+  {
+    "module": "pyspark.sql.DataFrame",
+    "function": "sameSemantics",
+    "status": "planned",
+    "ref": "https://github.com/lakehq/sail/issues/472"
+  },
+  {
+    "module": "pyspark.sql.DataFrame",
+    "function": "sample",
+    "status": "supported"
+  },
+  {
+    "module": "pyspark.sql.DataFrame",
+    "function": "sampleBy",
+    "status": "supported"
+  },
+  {
+    "module": "pyspark.sql.DataFrame",
+    "function": "scalar",
+    "status": "??? not on roadmap"
+  },
+  {
+    "module": "pyspark.sql.DataFrame",
+    "function": "schema",
     "status": "supported"
   },
   {
@@ -41,62 +393,12 @@
   },
   {
     "module": "pyspark.sql.DataFrame",
-    "function": "withColumn",
-    "status": "supported"
+    "function": "semanticHash",
+    "status": "??? not on roadmap"
   },
   {
     "module": "pyspark.sql.DataFrame",
-    "function": "replace",
-    "status": "supported"
-  },
-  {
-    "module": "pyspark.sql.DataFrame",
-    "function": "drop",
-    "status": "supported"
-  },
-  {
-    "module": "pyspark.sql.DataFrame",
-    "function": "filter",
-    "status": "supported"
-  },
-  {
-    "module": "pyspark.sql.DataFrame",
-    "function": "agg",
-    "status": "supported"
-  },
-  {
-    "module": "pyspark.sql.DataFrame",
-    "function": "groupBy",
-    "status": "supported"
-  },
-  {
-    "module": "pyspark.sql.DataFrame",
-    "function": "join",
-    "status": "supported"
-  },
-  {
-    "module": "pyspark.sql.DataFrame",
-    "function": "union",
-    "status": "supported"
-  },
-  {
-    "module": "pyspark.sql.DataFrame",
-    "function": "intersect",
-    "status": "supported"
-  },
-  {
-    "module": "pyspark.sql.DataFrame",
-    "function": "exceptAll",
-    "status": "supported"
-  },
-  {
-    "module": "pyspark.sql.DataFrame",
-    "function": "offset",
-    "status": "supported"
-  },
-  {
-    "module": "pyspark.sql.DataFrame",
-    "function": "limit",
+    "function": "show",
     "status": "supported"
   },
   {
@@ -106,27 +408,159 @@
   },
   {
     "module": "pyspark.sql.DataFrame",
-    "function": "orderBy",
+    "function": "sortWithinPartitions",
     "status": "supported"
   },
   {
     "module": "pyspark.sql.DataFrame",
-    "function": "na",
+    "function": "sparkSession",
     "status": "supported"
   },
   {
     "module": "pyspark.sql.DataFrame",
     "function": "stat",
-    "status": "in progress"
-  },
-  {
-    "module": "pyspark.sql.DataFrame",
-    "function": "createOrReplaceTempView",
     "status": "supported"
   },
   {
     "module": "pyspark.sql.DataFrame",
-    "function": "rdd",
-    "status": "not supported"
+    "function": "storageLevel",
+    "status": "planned",
+    "ref": "https://github.com/lakehq/sail/issues/484"
+  },
+  {
+    "module": "pyspark.sql.DataFrame",
+    "function": "subtract",
+    "status": "supported"
+  },
+  {
+    "module": "pyspark.sql.DataFrame",
+    "function": "summary",
+    "status": "supported"
+  },
+  {
+    "module": "pyspark.sql.DataFrame",
+    "function": "tail",
+    "status": "supported"
+  },
+  {
+    "module": "pyspark.sql.DataFrame",
+    "function": "take",
+    "status": "supported"
+  },
+  {
+    "module": "pyspark.sql.DataFrame",
+    "function": "to",
+    "status": "supported"
+  },
+  {
+    "module": "pyspark.sql.DataFrame",
+    "function": "toArrow",
+    "status": "supported"
+  },
+  {
+    "module": "pyspark.sql.DataFrame",
+    "function": "toDF",
+    "status": "supported"
+  },
+  {
+    "module": "pyspark.sql.DataFrame",
+    "function": "toJSON",
+    "status": "planned",
+    "ref": "https://github.com/lakehq/sail/issues/470"
+  },
+  {
+    "module": "pyspark.sql.DataFrame",
+    "function": "toLocalIterator",
+    "status": "supported"
+  },
+  {
+    "module": "pyspark.sql.DataFrame",
+    "function": "toPandas",
+    "status": "supported"
+  },
+  {
+    "module": "pyspark.sql.DataFrame",
+    "function": "transform",
+    "status": "supported"
+  },
+  {
+    "module": "pyspark.sql.DataFrame",
+    "function": "transpose",
+    "status": "??? not on roadmap"
+  },
+  {
+    "module": "pyspark.sql.DataFrame",
+    "function": "union",
+    "status": "supported"
+  },
+  {
+    "module": "pyspark.sql.DataFrame",
+    "function": "unionAll",
+    "status": "supported"
+  },
+  {
+    "module": "pyspark.sql.DataFrame",
+    "function": "unionByName",
+    "status": "supported"
+  },
+  {
+    "module": "pyspark.sql.DataFrame",
+    "function": "unpersist",
+    "status": "??? not on roadmap"
+  },
+  {
+    "module": "pyspark.sql.DataFrame",
+    "function": "unpivot",
+    "status": "supported"
+  },
+  {
+    "module": "pyspark.sql.DataFrame",
+    "function": "where",
+    "status": "supported"
+  },
+  {
+    "module": "pyspark.sql.DataFrame",
+    "function": "withColumn",
+    "status": "supported"
+  },
+  {
+    "module": "pyspark.sql.DataFrame",
+    "function": "withColumnRenamed",
+    "status": "supported"
+  },
+  {
+    "module": "pyspark.sql.DataFrame",
+    "function": "withColumns",
+    "status": "supported"
+  },
+  {
+    "module": "pyspark.sql.DataFrame",
+    "function": "withColumnsRenamed",
+    "status": "supported"
+  },
+  {
+    "module": "pyspark.sql.DataFrame",
+    "function": "withMetadata",
+    "status": "supported"
+  },
+  {
+    "module": "pyspark.sql.DataFrame",
+    "function": "withWatermark",
+    "status": "??? not on roadmap"
+  },
+  {
+    "module": "pyspark.sql.DataFrame",
+    "function": "write",
+    "status": "supported"
+  },
+  {
+    "module": "pyspark.sql.DataFrame",
+    "function": "writeStream",
+    "status": "??? not on roadmap"
+  },
+  {
+    "module": "pyspark.sql.DataFrame",
+    "function": "writeTo",
+    "status": "supported"
   }
 ]
