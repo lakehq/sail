@@ -2,6 +2,8 @@ use std::pin::Pin;
 use std::task::{Context, Poll};
 
 use datafusion::arrow::compute::concat_batches;
+use datafusion::execution::SendableRecordBatchStream;
+use datafusion::physical_plan::stream::RecordBatchStreamAdapter;
 use datafusion::prelude::SessionContext;
 use fastrace::collector::SpanContext;
 use fastrace::future::FutureExt;
@@ -271,11 +273,14 @@ pub(crate) async fn handle_execute_write_stream_operation_start(
     let spark = ctx.extension::<SparkSession>()?;
     let service = ctx.extension::<JobService>()?;
     let operation_id = metadata.operation_id.clone();
-    let reattachable = metadata.reattachable;
     let query_name = start.query_name.clone();
     let plan = spec::Plan::Command(spec::CommandPlan::new(start.try_into()?));
     let (plan, info) = resolve_and_execute_plan(ctx, spark.plan_config()?, plan).await?;
     let stream = service.runner().execute(ctx, plan).await?;
+
+    // Get the schema before moving the stream
+    let schema = stream.schema();
+
     let id = spark.start_streaming_query(query_name.clone(), info, stream)?;
     let result = WriteStreamOperationStartResult {
         query_id: Some(id.into()),
@@ -283,16 +288,32 @@ pub(crate) async fn handle_execute_write_stream_operation_start(
         // The event is for the client-side listener, which is not supported yet.
         query_started_event_json: None,
     };
-    let mut output = vec![ExecutorOutput::new(
+
+    // Create an empty stream for the executor - the actual streaming query runs in background
+    use datafusion::arrow::record_batch::RecordBatch;
+    let empty_batch = RecordBatch::new_empty(schema.clone());
+    let empty_stream = stream::once(async move { Ok(empty_batch) });
+    let empty_stream = Box::pin(RecordBatchStreamAdapter::new(schema, empty_stream));
+
+    let executor = Executor::new(
+        metadata,
+        empty_stream,
+        spark.options().execution_heartbeat_interval,
+    );
+
+    // Add the WriteStreamOperationStartResult as the first output
+    let out = ExecutorOutput::new(
         ExecutorBatch::WriteStreamOperationStartResult(Box::new(result)),
-    )];
-    if reattachable {
-        output.push(ExecutorOutput::complete());
-    }
+    );
+    executor.add_initial_output(out)?;
+
+    let rx = executor.start()?;
+    spark.add_executor(executor)?;
+
     Ok(ExecutePlanResponseStream::new(
         spark.session_id().to_string(),
         operation_id,
-        Box::pin(stream::iter(output)),
+        Box::pin(rx),
     ))
 }
 

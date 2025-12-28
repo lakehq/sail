@@ -1,16 +1,70 @@
 use std::any::Any;
 use std::io::Write;
+use std::pin::Pin;
 use std::sync::Arc;
+use std::task::{Context, Poll};
 
-use datafusion::arrow::datatypes::Schema;
+use datafusion::arrow::datatypes::{Schema, SchemaRef};
+use datafusion::arrow::record_batch::RecordBatch;
 use datafusion::arrow::util::pretty::pretty_format_batches;
-use datafusion::execution::{SendableRecordBatchStream, TaskContext};
+use datafusion::execution::{RecordBatchStream, SendableRecordBatchStream, TaskContext};
 use datafusion::physical_expr::{EquivalenceProperties, Partitioning};
 use datafusion::physical_plan::execution_plan::{Boundedness, EmissionType};
-use datafusion::physical_plan::stream::RecordBatchStreamAdapter;
 use datafusion::physical_plan::{DisplayAs, ExecutionPlan, PlanProperties};
 use datafusion_common::{plan_err, Result};
-use futures::StreamExt;
+use futures::{Stream, StreamExt};
+use futures::FutureExt;
+use tokio::task::JoinHandle;
+
+/// A stream that stays active while a background task runs.
+/// - First poll: emits an empty batch to signal the operation started
+/// - Subsequent polls: stays pending until background task completes
+/// - On drop: aborts the background task for graceful shutdown
+struct BackgroundTaskStream {
+    schema: SchemaRef,
+    handle: Option<JoinHandle<()>>,
+    sent_initial_batch: bool,
+}
+
+impl Stream for BackgroundTaskStream {
+    type Item = Result<RecordBatch>;
+
+    fn poll_next(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Option<Self::Item>> {
+        // First poll: return an empty batch to signal operation started
+        if !self.sent_initial_batch {
+            self.sent_initial_batch = true;
+            let batch = RecordBatch::new_empty(Arc::clone(&self.schema));
+            return Poll::Ready(Some(Ok(batch)));
+        }
+
+        // Subsequent polls: wait for background task to complete
+        if let Some(ref mut handle) = self.handle {
+            match handle.poll_unpin(cx) {
+                Poll::Ready(_) => {
+                    self.handle = None;
+                    Poll::Ready(None) // Task done, stream ends
+                }
+                Poll::Pending => Poll::Pending, // Task running, query stays active
+            }
+        } else {
+            Poll::Ready(None)
+        }
+    }
+}
+
+impl RecordBatchStream for BackgroundTaskStream {
+    fn schema(&self) -> SchemaRef {
+        Arc::clone(&self.schema)
+    }
+}
+
+impl Drop for BackgroundTaskStream {
+    fn drop(&mut self) {
+        if let Some(handle) = self.handle.take() {
+            handle.abort();
+        }
+    }
+}
 
 #[derive(Debug)]
 pub struct ConsoleSinkExec {
@@ -80,32 +134,40 @@ impl ExecutionPlan for ConsoleSinkExec {
         context: Arc<TaskContext>,
     ) -> Result<SendableRecordBatchStream> {
         let stream = self.input.execute(partition, context)?;
-        let output = futures::stream::once(async move {
-            stream
-                .enumerate()
-                .for_each(|(i, batch)| async move {
-                    let text = match batch {
-                        Ok(batch) => match pretty_format_batches(&[batch]) {
-                            Ok(batch) => format!("{batch}"),
-                            Err(e) => {
-                                format!("error formatting batch: {e}")
-                            }
-                        },
-                        Err(e) => {
-                            format!("error: {e}")
-                        }
-                    };
+        let schema = self.schema();
+
+        // Process the stream in the background and return an empty stream immediately.
+        // This prevents deadlock: the caller can poll the returned stream while we
+        // consume and print batches asynchronously.
+        let handle = tokio::spawn(async move {
+            let mut stream = stream;
+            let mut i = 0;
+            while let Some(batch) = stream.next().await {
+                let text = match batch {
+                    Ok(batch) => match pretty_format_batches(&[batch]) {
+                        Ok(formatted) => format!("{formatted}"),
+                        Err(e) => format!("error formatting batch: {e}"),
+                    },
+                    Err(e) => format!("error: {e}"),
+                };
+                // Use spawn_blocking to avoid blocking the tokio runtime on stdout I/O
+                let batch_num = i;
+                let _ = tokio::task::spawn_blocking(move || {
                     let mut stdout = std::io::stdout().lock();
-                    let _ = writeln!(stdout, "partition {partition} batch {i}");
+                    let _ = writeln!(stdout, "partition {partition} batch {batch_num}");
                     let _ = writeln!(stdout, "{text}");
                 })
                 .await;
-            futures::stream::empty()
-        })
-        .flatten();
-        Ok(Box::pin(RecordBatchStreamAdapter::new(
-            self.schema(),
-            output,
-        )))
+                i += 1;
+            }
+        });
+
+        // Return a stream that stays active while the background task runs.
+        // This keeps the streaming query "active" until processing completes or is stopped.
+        Ok(Box::pin(BackgroundTaskStream {
+            schema,
+            handle: Some(handle),
+            sent_initial_batch: false,
+        }))
     }
 }
