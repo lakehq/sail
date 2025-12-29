@@ -7,22 +7,21 @@ use std::task::{Context, Poll};
 use datafusion::arrow::datatypes::{Schema, SchemaRef};
 use datafusion::arrow::record_batch::RecordBatch;
 use datafusion::arrow::util::pretty::pretty_format_batches;
+use datafusion::common::runtime::SpawnedTask;
 use datafusion::execution::{RecordBatchStream, SendableRecordBatchStream, TaskContext};
 use datafusion::physical_expr::{EquivalenceProperties, Partitioning};
 use datafusion::physical_plan::execution_plan::{Boundedness, EmissionType};
 use datafusion::physical_plan::{DisplayAs, ExecutionPlan, PlanProperties};
 use datafusion_common::{plan_err, Result};
-use futures::{Stream, StreamExt};
-use futures::FutureExt;
-use tokio::task::JoinHandle;
+use futures::{FutureExt, Stream, StreamExt};
 
 /// A stream that stays active while a background task runs.
 /// - First poll: emits an empty batch to signal the operation started
 /// - Subsequent polls: stays pending until background task completes
-/// - On drop: aborts the background task for graceful shutdown
+/// - On drop: SpawnedTask automatically aborts the background task
 struct BackgroundTaskStream {
     schema: SchemaRef,
-    handle: Option<JoinHandle<()>>,
+    task: Option<SpawnedTask<()>>,
     sent_initial_batch: bool,
 }
 
@@ -38,10 +37,10 @@ impl Stream for BackgroundTaskStream {
         }
 
         // Subsequent polls: wait for background task to complete
-        if let Some(ref mut handle) = self.handle {
-            match handle.poll_unpin(cx) {
+        if let Some(ref mut task) = self.task {
+            match task.poll_unpin(cx) {
                 Poll::Ready(_) => {
-                    self.handle = None;
+                    self.task = None;
                     Poll::Ready(None) // Task done, stream ends
                 }
                 Poll::Pending => Poll::Pending, // Task running, query stays active
@@ -58,13 +57,7 @@ impl RecordBatchStream for BackgroundTaskStream {
     }
 }
 
-impl Drop for BackgroundTaskStream {
-    fn drop(&mut self) {
-        if let Some(handle) = self.handle.take() {
-            handle.abort();
-        }
-    }
-}
+// No Drop impl needed - SpawnedTask automatically aborts on drop
 
 #[derive(Debug)]
 pub struct ConsoleSinkExec {
@@ -139,7 +132,8 @@ impl ExecutionPlan for ConsoleSinkExec {
         // Process the stream in the background and return an empty stream immediately.
         // This prevents deadlock: the caller can poll the returned stream while we
         // consume and print batches asynchronously.
-        let handle = tokio::spawn(async move {
+        // Using SpawnedTask instead of tokio::spawn for DataFusion integration and telemetry.
+        let task = SpawnedTask::spawn(async move {
             let mut stream = stream;
             let mut i = 0;
             while let Some(batch) = stream.next().await {
@@ -152,11 +146,12 @@ impl ExecutionPlan for ConsoleSinkExec {
                 };
                 // Use spawn_blocking to avoid blocking the tokio runtime on stdout I/O
                 let batch_num = i;
-                let _ = tokio::task::spawn_blocking(move || {
+                let _ = SpawnedTask::spawn_blocking(move || {
                     let mut stdout = std::io::stdout().lock();
                     let _ = writeln!(stdout, "partition {partition} batch {batch_num}");
                     let _ = writeln!(stdout, "{text}");
                 })
+                .join()
                 .await;
                 i += 1;
             }
@@ -166,7 +161,7 @@ impl ExecutionPlan for ConsoleSinkExec {
         // This keeps the streaming query "active" until processing completes or is stopped.
         Ok(Box::pin(BackgroundTaskStream {
             schema,
-            handle: Some(handle),
+            task: Some(task),
             sent_initial_batch: false,
         }))
     }

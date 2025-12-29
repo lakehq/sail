@@ -180,23 +180,6 @@ impl Executor {
         }
     }
 
-    /// Add initial outputs to the executor's buffer before it starts running.
-    /// This is useful for operations that need to send custom results immediately.
-    pub(crate) fn add_initial_output(&self, output: ExecutorOutput) -> SparkResult<()> {
-        let mut state = self.state.lock()?;
-        match state.deref_mut() {
-            ExecutorState::Pending { context, .. } => {
-                context.save_output(&output)?;
-            }
-            _ => {
-                return Err(SparkError::internal(
-                    "cannot add initial output: executor not in pending state",
-                ));
-            }
-        }
-        Ok(())
-    }
-
     async fn run_internal(
         context: &mut ExecutorTaskContext,
         tx: mpsc::Sender<ExecutorOutput>,
