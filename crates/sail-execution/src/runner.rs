@@ -47,8 +47,8 @@ impl JobRunner for LocalJobRunner {
         let options = TracingExecOptions {
             metric_registry: global_metric_registry(),
             job_id: Some(job_id),
-            task_id: None,
-            task_attempt: None,
+            stage: None,
+            attempt: None,
             operator_id: None,
         };
         let plan = trace_execution_plan(plan, options)?;

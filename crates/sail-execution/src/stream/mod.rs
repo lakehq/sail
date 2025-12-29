@@ -1,5 +1,11 @@
-pub(crate) mod channel;
-pub(crate) mod error;
-pub(crate) mod merge;
-pub(crate) mod reader;
-pub(crate) mod writer;
+pub mod error;
+pub mod merge;
+pub mod reader;
+pub mod writer;
+
+#[allow(clippy::all)]
+mod gen {
+    tonic::include_proto!("sail.stream");
+}
+
+pub(crate) use gen::TaskStreamTicket;

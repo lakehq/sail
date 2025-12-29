@@ -29,23 +29,29 @@ impl TaskStreamReader for WorkerStreamAccessor {
     ) -> Result<TaskStreamSource> {
         let (tx, rx) = oneshot::channel();
         let event = match location {
-            TaskReadLocation::Worker { worker_id, channel } => {
+            TaskReadLocation::Driver { key } => WorkerEvent::FetchDriverStream {
+                key: key.clone(),
+                schema,
+                result: tx,
+            },
+            TaskReadLocation::Worker { worker_id, key } => {
                 if *worker_id == self.worker_id {
                     WorkerEvent::FetchThisWorkerStream {
-                        channel: channel.clone(),
+                        key: key.clone(),
                         result: tx,
                     }
                 } else {
                     WorkerEvent::FetchOtherWorkerStream {
                         worker_id: *worker_id,
-                        channel: channel.clone(),
+                        key: key.clone(),
                         schema,
                         result: tx,
                     }
                 }
             }
-            TaskReadLocation::Remote { uri } => WorkerEvent::FetchRemoteStream {
+            TaskReadLocation::Remote { uri, key } => WorkerEvent::FetchRemoteStream {
                 uri: uri.clone(),
+                key: key.clone(),
                 schema,
                 result: tx,
             },
@@ -69,14 +75,15 @@ impl TaskStreamWriter for WorkerStreamAccessor {
     ) -> Result<Box<dyn TaskStreamSink>> {
         let (tx, rx) = oneshot::channel();
         let event = match location {
-            TaskWriteLocation::Local { channel, storage } => WorkerEvent::CreateLocalStream {
-                channel: channel.clone(),
+            TaskWriteLocation::Local { key, storage } => WorkerEvent::CreateLocalStream {
+                key: key.clone(),
                 storage: *storage,
                 schema,
                 result: tx,
             },
-            TaskWriteLocation::Remote { uri } => WorkerEvent::CreateRemoteStream {
+            TaskWriteLocation::Remote { uri, key } => WorkerEvent::CreateRemoteStream {
                 uri: uri.clone(),
+                key: key.clone(),
                 schema,
                 result: tx,
             },

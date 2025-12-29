@@ -10,6 +10,7 @@ use crate::driver::job_scheduler::{JobScheduler, JobSchedulerOptions};
 use crate::driver::worker_pool::{WorkerPool, WorkerPoolOptions};
 use crate::driver::{DriverActor, DriverEvent, DriverOptions};
 use crate::rpc::ServerMonitor;
+use crate::stream_manager::{StreamManager, StreamManagerOptions};
 
 #[tonic::async_trait]
 impl Actor for DriverActor {
@@ -26,13 +27,14 @@ impl Actor for DriverActor {
             WorkerPoolOptions::new(&options),
         );
         let job_scheduler = JobScheduler::new(JobSchedulerOptions::new(&options));
+        let stream_manager = StreamManager::new(StreamManagerOptions::new_for_driver(&options));
         Self {
             options,
             server: ServerMonitor::new(),
             worker_pool,
             job_scheduler,
+            stream_manager,
             task_sequences: HashMap::new(),
-            job_outputs: HashMap::new(),
         }
     }
 
@@ -78,15 +80,28 @@ impl Actor for DriverActor {
             DriverEvent::ExecuteJob { plan, result } => self.handle_execute_job(ctx, plan, result),
             DriverEvent::CleanUpJob { job_id } => self.handle_clean_up_job(ctx, job_id),
             DriverEvent::UpdateTask {
-                instance,
+                key,
                 status,
                 message,
                 cause,
                 sequence,
-            } => self.handle_update_task(ctx, instance, status, message, cause, sequence),
-            DriverEvent::ProbePendingTask { instance } => {
-                self.handle_probe_pending_task(ctx, instance)
+            } => self.handle_update_task(ctx, key, status, message, cause, sequence),
+            DriverEvent::ProbePendingTask { key } => self.handle_probe_pending_task(ctx, key),
+            DriverEvent::FetchDriverStream { key, result } => {
+                self.handle_fetch_driver_stream(ctx, key, result)
             }
+            DriverEvent::FetchWorkerStream {
+                worker_id,
+                key,
+                schema,
+                result,
+            } => self.handle_fetch_worker_stream(ctx, worker_id, key, schema, result),
+            DriverEvent::FetchRemoteStream {
+                uri,
+                key,
+                schema,
+                result,
+            } => self.handle_fetch_remote_stream(ctx, uri, key, schema, result),
             DriverEvent::Shutdown => ActorAction::Stop,
         }
     }

@@ -7,7 +7,7 @@ use datafusion::datasource::physical_plan::{FileScanConfigBuilder, ParquetSource
 use datafusion::datasource::source::DataSourceExec;
 use datafusion::execution::SendableRecordBatchStream;
 use datafusion::physical_plan::display::DisplayableExecutionPlan;
-use datafusion::physical_plan::ExecutionPlan;
+use datafusion::physical_plan::{ExecutionPlan, ExecutionPlanProperties};
 use datafusion_proto::physical_plan::AsExecutionPlan;
 use datafusion_proto::protobuf::PhysicalPlanNode;
 use log::{debug, error, info, warn};
@@ -22,16 +22,15 @@ use tokio::sync::oneshot;
 
 use crate::driver::TaskStatus;
 use crate::error::{ExecutionError, ExecutionResult};
-use crate::id::{TaskInstance, WorkerId};
+use crate::id::{JobId, TaskKey, TaskKeyDisplay, TaskStreamKey, WorkerId};
 use crate::plan::{ShuffleReadExec, ShuffleWriteExec};
-use crate::stream::channel::ChannelName;
 use crate::stream::reader::TaskStreamSource;
 use crate::stream::writer::{LocalStreamStorage, TaskStreamSink};
-use crate::worker::actor::local_stream::{EphemeralStream, LocalStream, MemoryStream};
 use crate::worker::actor::stream_accessor::WorkerStreamAccessor;
-use crate::worker::actor::stream_monitor::TaskStreamMonitor;
+use crate::worker::actor::task_monitor::TaskMonitor;
 use crate::worker::actor::WorkerActor;
 use crate::worker::event::WorkerLocation;
+use crate::worker::task::{TaskDefinition, TaskInput, TaskOutput};
 use crate::worker::WorkerEvent;
 
 impl WorkerActor {
@@ -58,7 +57,7 @@ impl WorkerActor {
             port
         };
         let retry_strategy = self.options.rpc_retry_strategy.clone();
-        let client = self.driver_client.clone();
+        let client = self.driver_client_set.core.clone();
         let handle = ctx.handle().clone();
         ctx.spawn(async move {
             if let Err(e) = retry_strategy
@@ -82,7 +81,7 @@ impl WorkerActor {
 
     pub(super) fn handle_start_heartbeat(&mut self, ctx: &mut ActorContext<Self>) -> ActorAction {
         let worker_id = self.options.worker_id;
-        let client = self.driver_client.clone();
+        let client = self.driver_client_set.core.clone();
         let interval = self.options.worker_heartbeat_interval;
         ctx.spawn(async move {
             loop {
@@ -103,7 +102,7 @@ impl WorkerActor {
         peer_worker_ids: Vec<WorkerId>,
     ) -> ActorAction {
         let worker_id = self.options.worker_id;
-        let client = self.driver_client.clone();
+        let client = self.driver_client_set.core.clone();
         ctx.spawn(async move {
             if let Err(e) = client
                 .report_worker_known_peers(worker_id, peer_worker_ids)
@@ -118,18 +117,16 @@ impl WorkerActor {
     pub(super) fn handle_run_task(
         &mut self,
         ctx: &mut ActorContext<Self>,
-        instance: TaskInstance,
-        plan: Vec<u8>,
-        partition: usize,
-        channel: Option<ChannelName>,
+        key: TaskKey,
+        definition: TaskDefinition,
         peers: Vec<WorkerLocation>,
     ) -> ActorAction {
         self.peer_tracker.track(ctx, peers);
-        let stream = match self.execute_plan(ctx, &instance, plan, partition) {
+        let stream = match self.execute_plan(ctx, &key, definition) {
             Ok(x) => x,
             Err(e) => {
                 let event = WorkerEvent::ReportTaskStatus {
-                    instance,
+                    key,
                     status: TaskStatus::Failed,
                     message: Some(format!("failed to execute plan: {e}")),
                     cause: Some(CommonErrorCause::new::<PyErrExtractor>(&e)),
@@ -140,27 +137,8 @@ impl WorkerActor {
         };
         let handle = ctx.handle().clone();
         let (tx, rx) = oneshot::channel();
-        self.task_signals.insert(instance.clone(), tx);
-        let monitor = if let Some(channel) = channel {
-            let mut output = EphemeralStream::new(self.options.worker_stream_buffer);
-            let writer = match output.publish(ctx) {
-                Ok(x) => x,
-                Err(e) => {
-                    let event = WorkerEvent::ReportTaskStatus {
-                        instance,
-                        status: TaskStatus::Failed,
-                        message: Some(format!("failed to create output stream writer: {e}")),
-                        cause: None,
-                    };
-                    ctx.send(event);
-                    return ActorAction::Continue;
-                }
-            };
-            self.local_streams.insert(channel, Box::new(output));
-            TaskStreamMonitor::new(handle, instance, stream, Some(writer), rx)
-        } else {
-            TaskStreamMonitor::new(handle, instance, stream, None, rx)
-        };
+        self.task_signals.insert(key.clone(), tx);
+        let monitor = TaskMonitor::new(handle, key, stream, rx);
         ctx.spawn(monitor.run());
         ActorAction::Continue
     }
@@ -168,9 +146,9 @@ impl WorkerActor {
     pub(super) fn handle_stop_task(
         &mut self,
         _ctx: &mut ActorContext<Self>,
-        instance: TaskInstance,
+        key: TaskKey,
     ) -> ActorAction {
-        if let Some(signal) = self.task_signals.remove(&instance) {
+        if let Some(signal) = self.task_signals.remove(&key) {
             let _ = signal.send(());
         }
         ActorAction::Continue
@@ -179,7 +157,7 @@ impl WorkerActor {
     pub(super) fn handle_report_task_status(
         &mut self,
         ctx: &mut ActorContext<Self>,
-        instance: TaskInstance,
+        key: TaskKey,
         status: TaskStatus,
         message: Option<String>,
         cause: Option<CommonErrorCause>,
@@ -192,31 +170,28 @@ impl WorkerActor {
                 return ActorAction::Stop;
             }
         };
-        let client = self.driver_client.clone();
+        let client = self.driver_client_set.core.clone();
         let handle = ctx.handle().clone();
         let retry_strategy = self.options.rpc_retry_strategy.clone();
         ctx.spawn(async move {
             if let Err(e) = retry_strategy
                 .run(|| {
                     let client = client.clone();
+                    let key = key.clone();
                     let message = message.clone();
                     let cause = cause.clone();
                     async move {
                         client
-                            .report_task_status(
-                                instance.job_id,
-                                instance.task_id,
-                                instance.attempt,
-                                status,
-                                message,
-                                cause,
-                                sequence,
-                            )
+                            .report_task_status(key, status, message, cause, sequence)
                             .await
                     }
                 })
                 .await
             {
+                // Failure to report task status is considered fatal so that
+                // the driver can eventually detect this lost worker due to
+                // missing worker heartbeats and mark all the task attempts
+                // on this worker as failed.
                 error!("failed to report task status with retries: {e}");
                 let _ = handle.send(WorkerEvent::Shutdown).await;
             }
@@ -226,62 +201,53 @@ impl WorkerActor {
 
     pub(super) fn handle_create_local_stream(
         &mut self,
-        ctx: &mut ActorContext<Self>,
-        channel: ChannelName,
+        _ctx: &mut ActorContext<Self>,
+        key: TaskStreamKey,
         storage: LocalStreamStorage,
-        _schema: SchemaRef,
+        schema: SchemaRef,
         result: oneshot::Sender<ExecutionResult<Box<dyn TaskStreamSink>>>,
     ) -> ActorAction {
-        let mut stream: Box<dyn LocalStream> = match storage {
-            LocalStreamStorage::Ephemeral => {
-                Box::new(EphemeralStream::new(self.options.worker_stream_buffer))
-            }
-            LocalStreamStorage::Memory => Box::new(MemoryStream::new()),
-            LocalStreamStorage::Disk => {
-                error!("not implemented: create disk stream");
-                return ActorAction::Stop;
-            }
-        };
-        let _ = result.send(stream.publish(ctx));
-        self.local_streams.insert(channel, stream);
+        let _ = result.send(
+            self.stream_manager
+                .create_local_stream(key, storage, schema),
+        );
         ActorAction::Continue
     }
 
     pub(super) fn handle_create_remote_stream(
         &mut self,
         _ctx: &mut ActorContext<Self>,
-        _uri: String,
-        _schema: SchemaRef,
+        uri: String,
+        key: TaskStreamKey,
+        schema: SchemaRef,
         result: oneshot::Sender<ExecutionResult<Box<dyn TaskStreamSink>>>,
     ) -> ActorAction {
-        let _ = result.send(Err(ExecutionError::InternalError(
-            "not implemented: create remote stream".to_string(),
-        )));
+        let _ = result.send(self.stream_manager.create_remote_stream(uri, key, schema));
+        ActorAction::Continue
+    }
+
+    pub(super) fn handle_fetch_driver_stream(
+        &mut self,
+        ctx: &mut ActorContext<Self>,
+        key: TaskStreamKey,
+        schema: SchemaRef,
+        result: oneshot::Sender<ExecutionResult<TaskStreamSource>>,
+    ) -> ActorAction {
+        let client = self.driver_client_set.flight.clone();
+        ctx.spawn(async move {
+            let out = client.fetch_task_stream(key, schema).await;
+            let _ = result.send(out);
+        });
         ActorAction::Continue
     }
 
     pub(super) fn handle_fetch_this_worker_stream(
         &mut self,
-        ctx: &mut ActorContext<Self>,
-        channel: ChannelName,
+        _ctx: &mut ActorContext<Self>,
+        key: TaskStreamKey,
         result: oneshot::Sender<ExecutionResult<TaskStreamSource>>,
     ) -> ActorAction {
-        let out = self
-            .local_streams
-            .get_mut(&channel)
-            .map(|x| {
-                x.subscribe(ctx).map_err(|e| {
-                    ExecutionError::InternalError(format!(
-                        "failed to read task stream {channel}: {e}"
-                    ))
-                })
-            })
-            .unwrap_or_else(|| {
-                Err(ExecutionError::InternalError(format!(
-                    "task stream not found: {channel}"
-                )))
-            });
-        let _ = result.send(out);
+        let _ = result.send(self.stream_manager.fetch_local_stream(&key));
         ActorAction::Continue
     }
 
@@ -289,19 +255,19 @@ impl WorkerActor {
         &mut self,
         ctx: &mut ActorContext<Self>,
         worker_id: WorkerId,
-        channel: ChannelName,
+        key: TaskStreamKey,
         schema: SchemaRef,
         result: oneshot::Sender<ExecutionResult<TaskStreamSource>>,
     ) -> ActorAction {
-        let client = match self.peer_tracker.get_client(worker_id) {
-            Ok(x) => x,
+        let client = match self.peer_tracker.get_client_set(worker_id) {
+            Ok(x) => x.flight,
             Err(e) => {
                 let _ = result.send(Err(e));
                 return ActorAction::Continue;
             }
         };
         ctx.spawn(async move {
-            let out = client.fetch_task_stream(channel, schema).await;
+            let out = client.fetch_task_stream(key, schema).await;
             let _ = result.send(out);
         });
         ActorAction::Continue
@@ -310,61 +276,50 @@ impl WorkerActor {
     pub(super) fn handle_fetch_remote_stream(
         &mut self,
         _ctx: &mut ActorContext<Self>,
-        _uri: String,
-        _schema: SchemaRef,
+        uri: String,
+        key: TaskStreamKey,
+        schema: SchemaRef,
         result: oneshot::Sender<ExecutionResult<TaskStreamSource>>,
     ) -> ActorAction {
-        let _ = result.send(Err(ExecutionError::InternalError(
-            "not implemented: fetch remote stream".to_string(),
-        )));
+        let _ = result.send(self.stream_manager.fetch_remote_stream(uri, &key, schema));
         ActorAction::Continue
     }
 
     pub(super) fn handle_remove_local_stream(
         &mut self,
         _ctx: &mut ActorContext<Self>,
-        channel_prefix: String,
+        job_id: JobId,
+        stage: Option<usize>,
     ) -> ActorAction {
-        let mut keys = Vec::new();
-        for key in self.local_streams.keys() {
-            if key.has_prefix(&channel_prefix) {
-                keys.push(key.clone());
-            }
-        }
-        for key in keys {
-            self.local_streams.remove(&key);
-        }
+        self.stream_manager.remove_local_stream(job_id, stage);
         ActorAction::Continue
     }
 
     fn execute_plan(
         &mut self,
         ctx: &mut ActorContext<Self>,
-        instance: &TaskInstance,
-        plan: Vec<u8>,
-        partition: usize,
+        key: &TaskKey,
+        definition: TaskDefinition,
     ) -> ExecutionResult<SendableRecordBatchStream> {
         let task_ctx = self.options.session.task_ctx();
-        let plan = PhysicalPlanNode::decode(plan.as_slice())?;
+        let plan = PhysicalPlanNode::decode(definition.plan.as_ref())?;
         let plan = plan.try_into_physical_plan(&task_ctx, self.physical_plan_codec.as_ref())?;
         let plan = self.rewrite_parquet_adapters(plan)?;
-        let plan = self.rewrite_shuffle(ctx, plan)?;
+        let plan = self.rewrite_shuffle(ctx, key, &definition.inputs, &definition.output, plan)?;
         debug!(
-            "job {} task {} attempt {} execution plan\n{}",
-            instance.job_id,
-            instance.task_id,
-            instance.attempt,
+            "{} execution plan\n{}",
+            TaskKeyDisplay(key),
             DisplayableExecutionPlan::new(plan.as_ref()).indent(true)
         );
         let options = TracingExecOptions {
             metric_registry: global_metric_registry(),
-            job_id: Some(instance.job_id.into()),
-            task_id: Some(instance.task_id.into()),
-            task_attempt: Some(instance.attempt),
+            job_id: Some(key.job_id.into()),
+            stage: Some(key.stage.into()),
+            attempt: Some(key.attempt),
             operator_id: None,
         };
         let plan = trace_execution_plan(plan, options)?;
-        let stream = plan.execute(partition, task_ctx)?;
+        let stream = plan.execute(key.partition, task_ctx)?;
         Ok(stream)
     }
 
@@ -393,23 +348,49 @@ impl WorkerActor {
     fn rewrite_shuffle(
         &mut self,
         ctx: &mut ActorContext<Self>,
+        key: &TaskKey,
+        inputs: &[TaskInput],
+        output: &TaskOutput,
         plan: Arc<dyn ExecutionPlan>,
     ) -> ExecutionResult<Arc<dyn ExecutionPlan>> {
         let worker_id = self.options.worker_id;
         let handle = ctx.handle();
         let result = plan.transform(move |node| {
-            if let Some(shuffle) = node.as_any().downcast_ref::<ShuffleReadExec>() {
+            if let Some(placeholder) = node.as_any().downcast_ref::<ShuffleReadExec>() {
+                let partitioning = placeholder.properties().output_partitioning().clone();
+                let mut locations = vec![vec![]; partitioning.partition_count()];
+                // FIXME
                 let accessor = WorkerStreamAccessor::new(worker_id, handle.clone());
-                let shuffle = shuffle.clone().with_reader(Some(Arc::new(accessor)));
-                Ok(Transformed::yes(Arc::new(shuffle)))
-            } else if let Some(shuffle) = node.as_any().downcast_ref::<ShuffleWriteExec>() {
-                let accessor = WorkerStreamAccessor::new(worker_id, handle.clone());
-                let shuffle = shuffle.clone().with_writer(Some(Arc::new(accessor)));
+                let shuffle = ShuffleReadExec::new(
+                    locations,
+                    Arc::new(accessor),
+                    placeholder.schema(),
+                    partitioning,
+                );
                 Ok(Transformed::yes(Arc::new(shuffle)))
             } else {
                 Ok(Transformed::no(node))
             }
         });
-        Ok(result.data()?)
+        let plan = result.data()?;
+        let schema = plan.schema();
+        let accessor = WorkerStreamAccessor::new(worker_id, handle.clone());
+        let mut locations = vec![vec![]; plan.output_partitioning().partition_count()];
+        match locations.get_mut(key.partition) {
+            Some(x) => x.extend(output.locations(key)),
+            None => {
+                return Err(ExecutionError::InternalError(format!(
+                    "invalid partition: {}",
+                    TaskKeyDisplay(key)
+                )));
+            }
+        };
+        let partitioning = output.partitioning(
+            &self.options.session.task_ctx(),
+            &schema,
+            self.physical_plan_codec.as_ref(),
+        )?;
+        let shuffle = ShuffleWriteExec::new(plan, locations, Arc::new(accessor), partitioning);
+        Ok(Arc::new(shuffle))
     }
 }

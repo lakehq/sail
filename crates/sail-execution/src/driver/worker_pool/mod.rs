@@ -5,12 +5,10 @@ mod state;
 use std::collections::HashMap;
 use std::sync::Arc;
 
-use datafusion_proto::physical_plan::PhysicalExtensionCodec;
 pub use options::WorkerPoolOptions;
 
-use crate::codec::RemoteExecutionCodec;
 use crate::driver::worker_pool::state::WorkerDescriptor;
-use crate::id::{IdGenerator, WorkerId};
+use crate::id::{IdGenerator, TaskKey, WorkerId};
 use crate::worker_manager::WorkerManager;
 
 pub struct WorkerPool {
@@ -19,7 +17,13 @@ pub struct WorkerPool {
     worker_manager: Arc<dyn WorkerManager>,
     workers: HashMap<WorkerId, WorkerDescriptor>,
     worker_id_generator: IdGenerator<WorkerId>,
-    physical_plan_codec: Box<dyn PhysicalExtensionCodec>,
+    /// A lookup table from task attempts to the worker they are assigned to.
+    /// This is more convenient than finding the task attempt in the worker descriptors.
+    /// Each task attempt can only be assigned to one worker throughout its lifetime.
+    /// This lookup table is updated when the task attempt is assigned to a worker,
+    /// but there is no need to remove the task attempt when it is completed, as
+    /// the mapping is still valid for historical purposes.
+    task_assignments: HashMap<TaskKey, WorkerId>,
 }
 
 impl WorkerPool {
@@ -30,7 +34,7 @@ impl WorkerPool {
             worker_manager,
             workers: HashMap::new(),
             worker_id_generator: IdGenerator::new(),
-            physical_plan_codec: Box::new(RemoteExecutionCodec),
+            task_assignments: HashMap::new(),
         }
     }
 }

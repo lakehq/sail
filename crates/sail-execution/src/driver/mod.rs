@@ -4,7 +4,6 @@ mod event;
 pub(super) mod job_scheduler;
 mod options;
 pub(super) mod output;
-mod planner;
 mod server;
 pub(super) mod worker_pool;
 
@@ -17,7 +16,7 @@ mod gen {
 }
 
 pub(crate) use actor::DriverActor;
-pub(crate) use client::DriverClient;
+pub(crate) use client::{DriverClient, DriverClientSet};
 pub(crate) use event::{DriverEvent, TaskStatus};
 pub(crate) use gen::driver_service_client::DriverServiceClient;
 pub use options::DriverOptions;

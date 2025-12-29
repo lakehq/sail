@@ -3,13 +3,14 @@ use sail_server::actor::ActorHandle;
 use tonic::{Request, Response, Status};
 
 use crate::error::{ExecutionError, ExecutionResult};
-use crate::id::TaskInstance;
+use crate::id::TaskKey;
 use crate::worker::actor::WorkerActor;
 use crate::worker::gen::worker_service_server::WorkerService;
 use crate::worker::gen::{
     RemoveStreamRequest, RemoveStreamResponse, RunTaskRequest, RunTaskResponse, StopTaskRequest,
     StopTaskResponse, StopWorkerRequest, StopWorkerResponse,
 };
+use crate::worker::task::TaskDefinition;
 use crate::worker::WorkerEvent;
 
 pub struct WorkerServer {
@@ -32,26 +33,26 @@ impl WorkerService for WorkerServer {
         debug!("{request:?}");
         let RunTaskRequest {
             job_id,
-            task_id,
-            attempt,
+            stage,
             partition,
-            plan,
-            channel,
+            attempt,
+            definition,
             peers,
         } = request;
         let peers = peers
             .into_iter()
             .map(|x| x.try_into())
             .collect::<ExecutionResult<Vec<_>>>()?;
+        let definition =
+            definition.ok_or_else(|| Status::invalid_argument("missing task definition"))?;
         let event = WorkerEvent::RunTask {
-            instance: TaskInstance {
+            key: TaskKey {
                 job_id: job_id.into(),
-                task_id: task_id.into(),
+                stage: stage as usize,
+                partition: partition as usize,
                 attempt: attempt as usize,
             },
-            partition: partition as usize,
-            plan,
-            channel: channel.map(|x| x.into()),
+            definition: TaskDefinition::try_from(definition)?,
             peers,
         };
         self.handle
@@ -71,13 +72,15 @@ impl WorkerService for WorkerServer {
         debug!("{request:?}");
         let StopTaskRequest {
             job_id,
-            task_id,
+            stage,
+            partition,
             attempt,
         } = request;
         let event = WorkerEvent::StopTask {
-            instance: TaskInstance {
+            key: TaskKey {
                 job_id: job_id.into(),
-                task_id: task_id.into(),
+                stage: stage as usize,
+                partition: partition as usize,
                 attempt: attempt as usize,
             },
         };
@@ -96,8 +99,11 @@ impl WorkerService for WorkerServer {
     ) -> Result<Response<RemoveStreamResponse>, Status> {
         let request = request.into_inner();
         debug!("{request:?}");
-        let RemoveStreamRequest { channel_prefix } = request;
-        let event = WorkerEvent::RemoveLocalStream { channel_prefix };
+        let RemoveStreamRequest { job_id, stage } = request;
+        let event = WorkerEvent::RemoveLocalStream {
+            job_id: job_id.into(),
+            stage: stage.map(|x| x as usize),
+        };
         self.handle
             .send(event)
             .await

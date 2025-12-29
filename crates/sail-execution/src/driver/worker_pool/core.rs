@@ -1,36 +1,25 @@
 use std::collections::HashSet;
 use std::sync::Arc;
 
-use datafusion::common::DataFusionError;
-use datafusion::execution::SendableRecordBatchStream;
-use datafusion::physical_plan::stream::RecordBatchStreamAdapter;
-use datafusion::physical_plan::ExecutionPlan;
-use datafusion_proto::physical_plan::AsExecutionPlan;
-use datafusion_proto::protobuf::PhysicalPlanNode;
 use fastrace::collector::SpanContext;
 use fastrace::Span;
-use futures::future::try_join_all;
-use futures::TryStreamExt;
 use log::{error, info, warn};
-use prost::bytes::BytesMut;
-use prost::Message;
 use sail_common_datafusion::error::CommonErrorCause;
 use sail_python_udf::error::PyErrExtractor;
 use sail_server::actor::ActorContext;
 use sail_telemetry::common::SpanAttribute;
 use tokio::time::Instant;
 
-use crate::driver::job_scheduler::{JobOutputMetadata, TaskSchedule, TaskSchedulePlan};
-use crate::driver::worker_pool::state::WorkerState;
+use crate::driver::worker_pool::state::{TaskSlot, WorkerState};
 use crate::driver::worker_pool::{
     WorkerDescriptor, WorkerIdle, WorkerLost, WorkerPool, WorkerPoolOptions, WorkerTimeout,
 };
 use crate::driver::{DriverActor, DriverEvent, TaskStatus};
 use crate::error::{ExecutionError, ExecutionResult};
-use crate::id::{JobId, TaskInstance, WorkerId};
+use crate::id::{JobId, TaskKey, TaskKeyDisplay, WorkerId};
 use crate::rpc::ClientOptions;
-use crate::stream::merge::MergedRecordBatchStream;
-use crate::worker::{WorkerClient, WorkerLocation};
+use crate::worker::task::TaskDefinition;
+use crate::worker::{WorkerClientSet, WorkerLocation};
 use crate::worker_manager::WorkerLaunchOptions;
 
 impl WorkerPool {
@@ -113,8 +102,8 @@ impl WorkerPool {
                 worker.state = WorkerState::Running {
                     host,
                     port,
-                    tasks: Default::default(),
-                    jobs: Default::default(),
+                    slots: vec![TaskSlot::default(); self.options.worker_task_slots],
+                    streams: vec![],
                     updated_at: Instant::now(),
                     heartbeat_at: Instant::now(),
                     client: None,
@@ -153,8 +142,8 @@ impl WorkerPool {
             }
             WorkerState::Running { .. } => {
                 info!("stopping worker {worker_id}");
-                let client = match Self::get_worker_client(worker_id, worker, &self.options) {
-                    Ok(x) => x,
+                let client = match Self::get_worker_client_set(worker_id, worker, &self.options) {
+                    Ok(x) => x.core,
                     Err(e) => {
                         warn!("failed to stop worker {worker_id}: {e}");
                         return;
@@ -214,8 +203,8 @@ impl WorkerPool {
             .iter()
             .filter_map(|(id, worker)| {
                 let count = match &worker.state {
-                    WorkerState::Running { tasks, .. } => {
-                        self.options.worker_task_slots.saturating_sub(tasks.len())
+                    WorkerState::Running { slots, .. } => {
+                        slots.iter().filter(|s| s.is_vacant()).count()
                     }
                     _ => 0,
                 };
@@ -277,13 +266,13 @@ impl WorkerPool {
             return WorkerIdle::No;
         };
         if let WorkerState::Running {
-            tasks,
-            jobs,
+            slots,
+            streams,
             updated_at,
             ..
         } = &worker.state
         {
-            if tasks.is_empty() && jobs.is_empty() && *updated_at <= instant {
+            if slots.iter().all(|s| s.is_vacant()) && streams.is_empty() && *updated_at <= instant {
                 return WorkerIdle::Yes;
             }
         }
@@ -303,36 +292,32 @@ impl WorkerPool {
         WorkerLost::No
     }
 
-    pub fn find_tasks_for_worker(&self, worker_id: WorkerId) -> Vec<TaskInstance> {
+    pub fn find_tasks_for_worker(&self, worker_id: WorkerId) -> Vec<TaskKey> {
         let Some(worker) = self.workers.get(&worker_id) else {
             warn!("worker {worker_id} not found");
             return vec![];
         };
         match &worker.state {
-            WorkerState::Running { tasks, .. } => tasks.iter().cloned().collect(),
+            WorkerState::Running { slots, .. } => slots
+                .iter()
+                .flat_map(|x| x.iter().cloned().collect::<Vec<_>>())
+                .collect(),
             _ => vec![],
         }
     }
 
-    pub fn run_task(&mut self, ctx: &mut ActorContext<DriverActor>, schedule: TaskSchedule) {
+    pub fn run_task(
+        &mut self,
+        ctx: &mut ActorContext<DriverActor>,
+        worker_id: WorkerId,
+        key: TaskKey,
+        definition: TaskDefinition,
+    ) {
         let running_worker_locations = self.list_running_workers();
-        let plan = match schedule.plan {
-            TaskSchedulePlan::Valid(plan) => plan,
-            TaskSchedulePlan::Invalid { message, cause } => {
-                ctx.send(DriverEvent::UpdateTask {
-                    instance: schedule.instance,
-                    status: TaskStatus::Failed,
-                    message: Some(message),
-                    cause,
-                    sequence: None,
-                });
-                return;
-            }
-        };
-        let Some(worker) = self.workers.get_mut(&schedule.worker_id) else {
-            let message = format!("worker {} not found", schedule.worker_id);
+        let Some(worker) = self.workers.get_mut(&worker_id) else {
+            let message = format!("worker {} not found", worker_id);
             ctx.send(DriverEvent::UpdateTask {
-                instance: schedule.instance,
+                key,
                 status: TaskStatus::Failed,
                 message: Some(message),
                 cause: None,
@@ -340,13 +325,13 @@ impl WorkerPool {
             });
             return;
         };
-        let client = match Self::get_worker_client(schedule.worker_id, worker, &self.options) {
-            Ok(client) => client,
+        let client = match Self::get_worker_client_set(worker_id, worker, &self.options) {
+            Ok(client) => client.core,
             Err(e) => {
-                let message = format!("failed to get worker {} client: {e}", schedule.worker_id);
+                let message = format!("failed to get worker {} client: {e}", worker_id);
                 let cause = CommonErrorCause::new::<PyErrExtractor>(&e);
                 ctx.send(DriverEvent::UpdateTask {
-                    instance: schedule.instance,
+                    key,
                     status: TaskStatus::Failed,
                     message: Some(message),
                     cause: Some(cause),
@@ -357,25 +342,22 @@ impl WorkerPool {
         };
         match &mut worker.state {
             WorkerState::Running {
-                tasks,
-                jobs,
+                slots,
+                streams,
                 updated_at,
                 ..
             } => {
-                tasks.insert(schedule.instance.clone());
-                jobs.insert(schedule.instance.job_id);
+                todo!();
                 *updated_at = Instant::now();
             }
             _ => {
                 let message = format!(
-                    "cannot assign job {} task {} attempt {} to worker {} that is not running",
-                    schedule.instance.job_id,
-                    schedule.instance.task_id,
-                    schedule.instance.attempt,
-                    schedule.worker_id
+                    "cannot assign {} to worker {} that is not running",
+                    TaskKeyDisplay(&key),
+                    worker_id
                 );
                 ctx.send(DriverEvent::UpdateTask {
-                    instance: schedule.instance,
+                    key,
                     status: TaskStatus::Failed,
                     message: Some(message),
                     cause: None,
@@ -388,41 +370,12 @@ impl WorkerPool {
             .into_iter()
             .filter(|x| !worker.peers.contains(&x.worker_id))
             .collect();
-        let plan = match self.encode_plan(plan) {
-            Ok(plan) => plan,
-            Err(e) => {
-                let message = format!(
-                    "failed to encode plan for job {} task {}: {e}",
-                    schedule.instance.job_id, schedule.instance.task_id
-                );
-                let cause = CommonErrorCause::new::<PyErrExtractor>(&e);
-                ctx.send(DriverEvent::UpdateTask {
-                    instance: schedule.instance,
-                    status: TaskStatus::Failed,
-                    message: Some(message),
-                    cause: Some(cause),
-                    sequence: None,
-                });
-                return;
-            }
-        };
         let handle = ctx.handle().clone();
         ctx.spawn(async move {
-            if let Err(e) = client
-                .run_task(
-                    schedule.instance.job_id,
-                    schedule.instance.task_id,
-                    schedule.instance.attempt,
-                    plan,
-                    schedule.partition,
-                    schedule.channel,
-                    peers,
-                )
-                .await
-            {
+            if let Err(e) = client.run_task(key.clone(), definition, peers).await {
                 let _ = handle
                     .send(DriverEvent::UpdateTask {
-                        instance: schedule.instance,
+                        key,
                         status: TaskStatus::Failed,
                         message: Some(format!("failed to run task via the worker client: {e}")),
                         cause: None,
@@ -433,34 +386,28 @@ impl WorkerPool {
         });
     }
 
-    pub fn cancel_task(&mut self, ctx: &mut ActorContext<DriverActor>, instance: &TaskInstance) {
-        let Some(worker_id) = self.detach_task(ctx, instance) else {
+    pub fn cancel_task(&mut self, ctx: &mut ActorContext<DriverActor>, key: &TaskKey) {
+        let Some(worker_id) = self.detach_task(ctx, key) else {
             return;
         };
         let Some(worker) = self.workers.get_mut(&worker_id) else {
             warn!("worker {worker_id} not found");
             return;
         };
-        let client = match Self::get_worker_client(worker_id, worker, &self.options) {
-            Ok(x) => x,
+        let client = match Self::get_worker_client_set(worker_id, worker, &self.options) {
+            Ok(x) => x.core,
             Err(e) => {
                 warn!(
-                    "failed to cancel job {} task {} attempt {} in worker {worker_id}: {e}",
-                    instance.job_id, instance.task_id, instance.attempt
+                    "failed to cancel {} in worker {worker_id}: {e}",
+                    TaskKeyDisplay(key)
                 );
                 return;
             }
         };
-        let instance = instance.clone();
+        let key = key.clone();
         ctx.spawn(async move {
-            if let Err(e) = client
-                .stop_task(instance.job_id, instance.task_id, instance.attempt)
-                .await
-            {
-                warn!(
-                    "failed to stop job {} task {} attempt {}: {e}",
-                    instance.job_id, instance.task_id, instance.attempt
-                );
+            if let Err(e) = client.stop_task(key.clone()).await {
+                warn!("failed to stop {}: {e}", TaskKeyDisplay(&key));
             }
         });
     }
@@ -468,14 +415,14 @@ impl WorkerPool {
     pub fn detach_task(
         &mut self,
         ctx: &mut ActorContext<DriverActor>,
-        instance: &TaskInstance,
+        key: &TaskKey,
     ) -> Option<WorkerId> {
         for (&worker_id, worker) in self.workers.iter_mut() {
             if let WorkerState::Running {
-                tasks, updated_at, ..
+                slots, updated_at, ..
             } = &mut worker.state
             {
-                if tasks.remove(instance) {
+                if slots.iter_mut().any(|x| x.remove(key)) {
                     *updated_at = Instant::now();
                     Self::schedule_idle_worker_probe(ctx, worker_id, worker, &self.options);
                     return Some(worker_id);
@@ -487,13 +434,8 @@ impl WorkerPool {
 
     pub fn detach_job(&mut self, ctx: &mut ActorContext<DriverActor>, job_id: JobId) {
         for (&worker_id, worker) in self.workers.iter_mut() {
-            if let WorkerState::Running {
-                jobs, updated_at, ..
-            } = &mut worker.state
-            {
-                if !jobs.remove(&job_id) {
-                    continue;
-                }
+            if let WorkerState::Running { updated_at, .. } = &mut worker.state {
+                todo!();
                 *updated_at = Instant::now();
                 Self::schedule_idle_worker_probe(ctx, worker_id, worker, &self.options);
                 Self::remove_worker_streams(ctx, job_id, worker_id, worker, &self.options);
@@ -501,56 +443,11 @@ impl WorkerPool {
         }
     }
 
-    fn encode_plan(&self, plan: Arc<dyn ExecutionPlan>) -> ExecutionResult<Vec<u8>> {
-        let plan =
-            PhysicalPlanNode::try_from_physical_plan(plan, self.physical_plan_codec.as_ref())?;
-        let mut buffer = BytesMut::new();
-        plan.encode(&mut buffer)?;
-        Ok(buffer.freeze().into())
-    }
-
-    pub fn build_job_output_stream(
-        &mut self,
-        metadata: JobOutputMetadata,
-    ) -> ExecutionResult<SendableRecordBatchStream> {
-        let channels = metadata
-            .channels
-            .into_iter()
-            .map(|channel| {
-                let Some(worker) = self.workers.get_mut(&channel.worker_id) else {
-                    return Err(ExecutionError::InternalError(format!(
-                        "worker {} not found for job output stream",
-                        channel.worker_id
-                    )));
-                };
-                let client = Self::get_worker_client(channel.worker_id, worker, &self.options)?;
-                Ok((channel.channel, client))
-            })
-            .collect::<ExecutionResult<Vec<_>>>()?;
-        let schema = metadata.schema.clone();
-        let output = futures::stream::once(async move {
-            let futures = channels.into_iter().map(|(channel, client)| {
-                let channel_schema = schema.clone();
-                async move { client.fetch_task_stream(channel, channel_schema).await }
-            });
-            let streams = try_join_all(futures)
-                .await
-                .map_err(|e| DataFusionError::External(Box::new(e)))?;
-            Ok(Box::pin(MergedRecordBatchStream::new(schema, streams)))
-                as Result<_, DataFusionError>
-        })
-        .try_flatten();
-        Ok(Box::pin(RecordBatchStreamAdapter::new(
-            metadata.schema,
-            output,
-        )))
-    }
-
-    fn get_worker_client(
+    fn get_worker_client_set(
         worker_id: WorkerId,
         worker: &mut WorkerDescriptor,
         options: &WorkerPoolOptions,
-    ) -> ExecutionResult<WorkerClient> {
+    ) -> ExecutionResult<WorkerClientSet> {
         match &mut worker.state {
             WorkerState::Running {
                 host, port, client, ..
@@ -561,7 +458,7 @@ impl WorkerPool {
                         host: host.clone(),
                         port: *port,
                     };
-                    WorkerClient::new(options)
+                    WorkerClientSet::new(options)
                 });
                 Ok(client.clone())
             }
@@ -578,16 +475,15 @@ impl WorkerPool {
         worker: &mut WorkerDescriptor,
         options: &WorkerPoolOptions,
     ) {
-        let client = match Self::get_worker_client(worker_id, worker, options) {
-            Ok(x) => x,
+        let client = match Self::get_worker_client_set(worker_id, worker, options) {
+            Ok(x) => x.core,
             Err(e) => {
                 warn!("failed to remove streams in worker {worker_id}: {e}");
                 return;
             }
         };
         ctx.spawn(async move {
-            let prefix = format!("job-{job_id}/");
-            if let Err(e) = client.remove_stream(prefix).await {
+            if let Err(e) = client.remove_stream(job_id, None).await {
                 error!("failed to remove streams in worker {worker_id}: {e}");
             }
         });

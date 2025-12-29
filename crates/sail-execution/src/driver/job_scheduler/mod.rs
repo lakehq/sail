@@ -3,24 +3,21 @@ mod options;
 mod state;
 
 use std::collections::{HashMap, VecDeque};
-use std::sync::Arc;
 
-use datafusion::arrow::datatypes::Schema;
-use datafusion::physical_plan::ExecutionPlan;
+use datafusion_proto::physical_plan::PhysicalExtensionCodec;
 pub use options::JobSchedulerOptions;
-use sail_common_datafusion::error::CommonErrorCause;
 
+use crate::codec::RemoteExecutionCodec;
 use crate::driver::job_scheduler::state::JobDescriptor;
-use crate::id::{IdGenerator, JobId, TaskInstance, WorkerId};
-use crate::stream::channel::ChannelName;
+use crate::id::{IdGenerator, JobId, TaskKey};
 
 pub struct JobScheduler {
     options: JobSchedulerOptions,
     jobs: HashMap<JobId, JobDescriptor>,
     job_id_generator: IdGenerator<JobId>,
-    /// The queue of tasks that need to be scheduled.
-    /// A task is enqueued after all its dependencies in the previous job stage.
-    task_queue: VecDeque<TaskInstance>,
+    /// The queue of jobs that need to be scheduled.
+    job_queue: VecDeque<JobId>,
+    physical_plan_codec: Box<dyn PhysicalExtensionCodec>,
 }
 
 impl JobScheduler {
@@ -29,38 +26,14 @@ impl JobScheduler {
             options,
             jobs: HashMap::new(),
             job_id_generator: IdGenerator::new(),
-            task_queue: VecDeque::new(),
+            job_queue: VecDeque::new(),
+            physical_plan_codec: Box::new(RemoteExecutionCodec),
         }
     }
 }
 
-pub enum TaskTimeout {
-    Yes,
-    No,
-}
-
-pub struct TaskSchedule {
-    pub instance: TaskInstance,
-    pub worker_id: WorkerId,
-    pub plan: TaskSchedulePlan,
-    pub partition: usize,
-    pub channel: Option<ChannelName>,
-}
-
-pub enum TaskSchedulePlan {
-    Valid(Arc<dyn ExecutionPlan>),
-    Invalid {
-        message: String,
-        cause: Option<CommonErrorCause>,
-    },
-}
-
-pub struct JobOutputMetadata {
-    pub schema: Arc<Schema>,
-    pub channels: Vec<JobOutputChannel>,
-}
-
-pub struct JobOutputChannel {
-    pub worker_id: WorkerId,
-    pub channel: ChannelName,
+pub enum JobSchedulerAction {
+    ScheduleTasks { tasks: Vec<Vec<TaskKey>> },
+    CancelTasks { tasks: Vec<TaskKey> },
+    FailJob { job_id: JobId },
 }
