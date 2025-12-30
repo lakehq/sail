@@ -7,6 +7,9 @@ on:
         description: The Spark version to test
         type: string
         default: "4.1.0"
+    secrets:
+      CODECOV_TOKEN:
+        required: false
 
 jobs:
   setup:
@@ -155,6 +158,17 @@ jobs:
           name: spark-coverage-report-${{ inputs.spark_version }}
           path: coverage-spark-${{ inputs.spark_version }}.info
           retention-days: 1
+
+      - name: Upload Spark coverage to Codecov
+        if: ${{ github.actor != 'dependabot[bot]' }}
+        uses: codecov/codecov-action@v5
+        with:
+          token: ${{ secrets.CODECOV_TOKEN }}
+          files: coverage-spark-${{ inputs.spark_version }}.info
+          flags: spark-tests
+          name: spark-tests
+          fail_ci_if_error: true
+          env_vars: OS
 
       - name: Upload Test Logs
         uses: actions/upload-artifact@v4
