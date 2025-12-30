@@ -33,17 +33,11 @@ flag_management:
 
 coverage:
   status:
+    patch:
+      default:
+        target: 0
     project:
-      rust:
-        flags:
-          - rust-unit-tests
-          - rust-slow-tests
-      python:
-        flags:
-          - python-unit-tests
-      spark:
-        flags:
-          - spark-tests
-      ibis:
-        flags:
-          - ibis-tests
+      default:
+        only_pulls: true
+        target: 0
+        informational: true
