@@ -25,11 +25,11 @@ coverage:
     project:
       rust:
         flags:
-          - rust-unit
-          - rust-slow
+          - rust-unit-tests
+          - rust-slow-tests
       python:
         flags:
-          - python-unit
+          - python-unit-tests
       spark:
         flags:
           - spark-tests

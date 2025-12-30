@@ -99,9 +99,8 @@ jobs:
           path: coverage-rust-unit.info
           retention-days: 1
 
-      - name:
-          Upload Rust unit coverage to Codecov
-          # Dependabot does not operate from a fork of the repository, so a token
+      - name: Upload Rust unit coverage to Codecov
+        # Dependabot does not operate from a fork of the repository, so a token
         # is required to upload coverage reports to Codecov. However, Dependabot
         # cannot access Actions secrets. Instead of configuring Dependabot secrets
         # separately, we skip coverage upload for Dependabot to avoid failures,
@@ -111,8 +110,8 @@ jobs:
         with:
           token: ${{ secrets.CODECOV_TOKEN }}
           files: coverage-rust-unit.info
-          flags: rust-unit
-          name: rust-unit
+          flags: rust-unit-tests
+          name: rust-unit-tests
           fail_ci_if_error: true
           env_vars: OS
 
@@ -146,8 +145,8 @@ jobs:
         with:
           token: ${{ secrets.CODECOV_TOKEN }}
           files: coverage-rust-slow.info
-          flags: rust-slow
-          name: rust-slow
+          flags: rust-slow-tests
+          name: rust-slow-tests
           fail_ci_if_error: true
           env_vars: OS
 
