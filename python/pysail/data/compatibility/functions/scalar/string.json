@@ -124,7 +124,8 @@
   {
     "module": "pyspark.sql.functions",
     "function": "len",
-    "status": "supported"
+    "status": "supported",
+    "note": "Spark SQL only; not available in PySpark"
   },
   {
     "module": "pyspark.sql.functions",
@@ -160,6 +161,7 @@
     "module": "pyspark.sql.functions",
     "function": "luhn_check",
     "status": "planned",
+    "note": "Spark SQL only; not available in PySpark",
     "ref": "https://github.com/lakehq/sail/issues/508"
   },
   {
@@ -272,7 +274,8 @@
   {
     "module": "pyspark.sql.functions",
     "function": "space",
-    "status": "supported"
+    "status": "supported",
+    "note": "Spark SQL only; not available in PySpark"
   },
   {
     "module": "pyspark.sql.functions",

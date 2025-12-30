@@ -119,7 +119,8 @@
   {
     "module": "pyspark.sql.functions",
     "function": "schema_of_avro",
-    "status": "??? not on roadmap"
+    "status": "??? not on roadmap",
+    "note": "Spark SQL only; not available in PySpark"
   },
   {
     "module": "pyspark.sql.functions",
@@ -135,12 +136,14 @@
   {
     "module": "pyspark.sql.functions",
     "function": "to_avro",
-    "status": "??? not on roadmap"
+    "status": "??? not on roadmap",
+    "note": "Spark SQL only; not available in PySpark"
   },
   {
     "module": "pyspark.sql.functions",
     "function": "to_protobuf",
-    "status": "??? not on roadmap"
+    "status": "??? not on roadmap",
+    "note": "Spark SQL only; not available in PySpark"
   },
   {
     "module": "pyspark.sql.functions",
