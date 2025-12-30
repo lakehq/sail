@@ -15,12 +15,12 @@ flag_management:
   default_rules:
     carryforward: false
   statuses:
-  - type: project
-    target: 0
-    informational: true
-  - type: patch
-    target: 0
-    informational: true
+    - type: project
+      target: 0
+      informational: true
+    - type: patch
+      target: 0
+      informational: true
   individual_flags:
     - name: rust-unit-tests
       carryforward: true
@@ -43,4 +43,4 @@ coverage:
         informational: true
 
 github_checks:
-    annotations: false
+  annotations: false
