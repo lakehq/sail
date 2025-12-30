@@ -33,11 +33,5 @@ flag_management:
 
 coverage:
   status:
-    patch:
-      default:
-        target: 0
-    project:
-      default:
-        only_pulls: true
-        target: 0
-        informational: true
+    patch: off
+    project: off
