@@ -5,7 +5,7 @@ codecov:
     manual_trigger: true
 
 comment:
-  layout: "header, files"
+  layout: "header, diff, flags, components, tree"
   show_carryforward_flags: true
 
 ignore:
@@ -22,7 +22,6 @@ flag_management:
 
 coverage:
   status:
-    patch: off
     project:
       rust:
         flags:
