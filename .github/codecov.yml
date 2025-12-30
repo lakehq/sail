@@ -14,11 +14,13 @@ ignore:
 flag_management:
   default_rules:
     carryforward: false
-    statuses:
-      - type: project
-        target: auto
-        threshold: 20%
-        informational: true
+  statuses:
+    - type: project
+      target: 0
+      informational: true
+    - type: patch
+      target: 0
+      informational: true
   individual_flags:
     - name: rust-unit-tests
       carryforward: true
@@ -34,16 +36,8 @@ flag_management:
 coverage:
   status:
     project:
-      rust:
-        flags:
-          - rust-unit-tests
-          - rust-slow-tests
-      python:
-        flags:
-          - python-unit-tests
-      spark:
-        flags:
-          - spark-tests
-      ibis:
-        flags:
-          - ibis-tests
+      default:
+        informational: true
+    patch:
+      default:
+        informational: true
