@@ -55,7 +55,7 @@ jobs:
     env:
       # Coverage environment variables
       RUSTC_WORKSPACE_WRAPPER: ${{ github.workspace }}/.github/scripts/rustc-workspace-wrapper.sh
-      LLVM_PROFILE_FILE: ${{ github.workspace }}/target/sail-%p-%m.profraw
+      LLVM_PROFILE_FILE: ${{ github.workspace }}/target/llvm-profiles/rust-unit/sail-%p-%m.profraw
     steps:
       - uses: actions/checkout@v4
 
@@ -69,6 +69,11 @@ jobs:
 
       - uses: ./.github/actions/setup-rust
 
+      - name: Prepare coverage directories
+        run: |
+          mkdir -p target/llvm-profiles/rust-unit
+          mkdir -p target/llvm-profiles/rust-slow
+
       - name: Run Format Check
         run: cargo +nightly fmt -- --check
 
@@ -78,25 +83,72 @@ jobs:
       - name: Run Cargo Test
         run: cargo nextest run
 
-      - name: Run Cargo Test (Ignored)
-        if: ${{ github.event_name == 'push' }}
-        run: cargo nextest run --run-ignored ignored-only -j 6
-
-      # Generate coverage report after tests
-      - name: Generate coverage report
+      # Generate coverage report after unit tests (runs in PRs and pushes)
+      - name: Generate Rust unit coverage report
         run: |
           LLVM_PATH=$(.github/scripts/find-llvm-profdata.sh)
-          grcov target --binary-path target/debug/ -s . \
+          grcov target/llvm-profiles/rust-unit --binary-path target/debug/ -s . \
             --llvm-path "$LLVM_PATH" \
             -t lcov --branch --ignore-not-existing \
-            -o coverage-build.info
+            -o coverage-rust-unit.info
 
-      - name: Upload cargo coverage artifact
+      - name: Upload rust unit coverage artifact
         uses: actions/upload-artifact@v4
         with:
-          name: cargo-coverage-report
-          path: coverage-build.info
+          name: rust-unit-coverage-report
+          path: coverage-rust-unit.info
           retention-days: 1
+
+      - name: Upload Rust unit coverage to Codecov
+        # Dependabot does not operate from a fork of the repository, so a token
+        # is required to upload coverage reports to Codecov. However, Dependabot
+        # cannot access Actions secrets. Instead of configuring Dependabot secrets
+        # separately, we skip coverage upload for Dependabot to avoid failures,
+        # since coverage reports from Dependabot runs are not useful.
+        if: ${{ github.actor != 'dependabot[bot]' }}
+        uses: codecov/codecov-action@v5
+        with:
+          token: ${{ secrets.CODECOV_TOKEN }}
+          files: coverage-rust-unit.info
+          flags: rust-unit-tests
+          name: rust-unit-tests
+          fail_ci_if_error: true
+          env_vars: OS
+
+      - name: Run Cargo Test (Ignored)
+        if: ${{ github.event_name == 'push' }}
+        env:
+          LLVM_PROFILE_FILE: ${{ github.workspace }}/target/llvm-profiles/rust-slow/sail-%p-%m.profraw
+        run: cargo nextest run --run-ignored ignored-only -j 6
+
+      # Generate coverage report after ignored tests (push to main only)
+      - name: Generate Rust slow coverage report
+        if: ${{ github.event_name == 'push' }}
+        run: |
+          LLVM_PATH=$(.github/scripts/find-llvm-profdata.sh)
+          grcov target/llvm-profiles/rust-slow --binary-path target/debug/ -s . \
+            --llvm-path "$LLVM_PATH" \
+            -t lcov --branch --ignore-not-existing \
+            -o coverage-rust-slow.info
+
+      - name: Upload rust slow coverage artifact
+        if: ${{ github.event_name == 'push' }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: rust-slow-coverage-report
+          path: coverage-rust-slow.info
+          retention-days: 1
+
+      - name: Upload Rust slow coverage to Codecov
+        if: ${{ github.event_name == 'push' && github.actor != 'dependabot[bot]' }}
+        uses: codecov/codecov-action@v5
+        with:
+          token: ${{ secrets.CODECOV_TOKEN }}
+          files: coverage-rust-slow.info
+          flags: rust-slow-tests
+          name: rust-slow-tests
+          fail_ci_if_error: true
+          env_vars: OS
 
       - name: Build Python Package
         uses: PyO3/maturin-action@v1
@@ -112,6 +164,8 @@ jobs:
     name: Spark Tests
     if: ${{ needs.setup.outputs.build_package == 'true' }}
     uses: ./.github/workflows/spark-tests.yml
+    secrets:
+      CODECOV_TOKEN: ${{ secrets.CODECOV_TOKEN }}
     strategy:
       matrix:
         spark-version: ["3.5.7", "4.1.0"]
@@ -125,6 +179,8 @@ jobs:
     name: Ibis Tests
     if: ${{ needs.setup.outputs.build_package == 'true' }}
     uses: ./.github/workflows/ibis-tests.yml
+    secrets:
+      CODECOV_TOKEN: ${{ secrets.CODECOV_TOKEN }}
     needs:
       - setup
       - build
@@ -133,9 +189,32 @@ jobs:
     name: Python Build
     if: ${{ needs.setup.outputs.build_package == 'true' }}
     uses: ./.github/workflows/python-build.yml
+    secrets:
+      CODECOV_TOKEN: ${{ secrets.CODECOV_TOKEN }}
     needs:
       - setup
       - build
+
+  codecov-notify:
+    name: Codecov Finalize
+    if: ${{ always() && github.actor != 'dependabot[bot]' }}
+    runs-on: ubuntu-latest
+    needs:
+      - build
+      - python-build
+      - spark-tests
+      - ibis-tests
+    env:
+      CODECOV_TOKEN: ${{ secrets.CODECOV_TOKEN }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Codecov
+        if: ${{ env.CODECOV_TOKEN != '' }}
+        uses: codecov/codecov-action@v5
+        with:
+          run_command: send-notifications
+          token: ${{ env.CODECOV_TOKEN }}
 
   docs-build:
     name: Docs Build
@@ -152,50 +231,6 @@ jobs:
       stage: ${{ matrix.stage }}
       version: main
       package_run_id: ${{ needs.setup.outputs.build_package == 'true' && github.run_id || needs.setup.outputs.baseline_run_id }}
-
-  upload-coverage:
-    name: Upload Coverage Reports
-    # Dependabot does not operate from a fork of the repository, so a token
-    # is required to upload coverage reports to Codecov. However, Dependabot
-    # cannot access Actions secrets. Instead of configuring Dependabot secrets
-    # separately, we skip coverage upload for Dependabot to avoid failures,
-    # since coverage reports from Dependabot runs are not useful.
-    if: ${{ github.actor != 'dependabot[bot]' }}
-    runs-on: ubuntu-latest
-    needs:
-      - build
-      - python-build
-      - spark-tests
-    steps:
-      - uses: actions/checkout@v4
-
-      - name: Download all coverage artifacts
-        uses: actions/download-artifact@v4
-        with:
-          path: coverage-reports
-          pattern: "*-coverage-report*"
-          merge-multiple: true
-
-      - name: List downloaded files and count coverage files
-        id: coverage-check
-        run: |
-          echo "Downloaded coverage reports:"
-          find coverage-reports -type f -name "*.info" || echo "No .info files found"
-          ls -la coverage-reports/ || echo "No coverage-reports directory"
-
-          # Count the number of .info files
-          coverage_count=$(find coverage-reports -type f -name "*.info" 2>/dev/null | wc -l)
-          echo "Number of coverage files found: $coverage_count"
-          echo "coverage_count=$coverage_count" >> $GITHUB_OUTPUT
-
-      - name: Upload all coverage reports to Codecov
-        if: steps.coverage-check.outputs.coverage_count >= 5
-        uses: codecov/codecov-action@v5
-        with:
-          token: ${{ secrets.CODECOV_TOKEN }}
-          directory: ./coverage-reports/
-          fail_ci_if_error: true
-          env_vars: OS
 
   docs-deploy:
     name: Docs Deploy
