@@ -30,20 +30,3 @@ flag_management:
       carryforward: true
     - name: ibis-tests
       carryforward: true
-
-coverage:
-  status:
-    project:
-      rust:
-        flags:
-          - rust-unit-tests
-          - rust-slow-tests
-      python:
-        flags:
-          - python-unit-tests
-      spark:
-        flags:
-          - spark-tests
-      ibis:
-        flags:
-          - ibis-tests
