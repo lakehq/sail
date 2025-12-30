@@ -14,11 +14,7 @@ ignore:
 flag_management:
   default_rules:
     carryforward: false
-    statuses:
-      - type: project
-        target: auto
-        threshold: 20%
-        informational: true
+    informational: true
   individual_flags:
     - name: rust-unit-tests
       carryforward: true
