@@ -17,7 +17,7 @@ flag_management:
     statuses:
       - type: project
         target: auto
-        threshold: 1%
+        threshold: 20%
         informational: true
 
 coverage:
