@@ -204,16 +204,12 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      - uses: actions/setup-python@v5
-        with:
-          python-version: "3.11"
-
-      - name: Install codecov-cli
-        run: python -m pip install --upgrade --no-cache-dir codecov-cli
-
-      - name: Send Codecov notifications (manual_trigger)
+      - name: Codecov
         if: ${{ env.CODECOV_TOKEN != '' }}
-        run: codecovcli send-notifications
+        uses: codecov/codecov-action@v5
+        with:
+          run_command: send-notifications
+          token: ${{ env.CODECOV_TOKEN }}
 
   docs-build:
     name: Docs Build
