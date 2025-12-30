@@ -12,6 +12,7 @@ path = "src/main.rs"
 
 [features]
 mimalloc = ["dep:mimalloc"]
+python = ["sail-session/python"]
 default = ["mimalloc"]
 
 [dependencies]

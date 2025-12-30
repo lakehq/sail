@@ -6045,10 +6045,14 @@ dependencies = [
 name = "sail-data-source"
 version = "0.4.6"
 dependencies = [
+ "arrow",
+ "arrow-pyarrow",
+ "arrow-schema",
  "async-trait",
  "bytes",
  "chrono",
  "chumsky",
+ "dashmap",
  "datafusion",
  "datafusion-common",
  "datafusion-datasource",
@@ -6057,9 +6061,11 @@ dependencies = [
  "glob",
  "log",
  "object_store",
+ "once_cell",
  "percent-encoding",
  "prettyplease",
  "proc-macro2",
+ "pyo3",
  "quote",
  "regex",
  "sail-common-datafusion",
