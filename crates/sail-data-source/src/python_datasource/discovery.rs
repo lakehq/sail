@@ -86,70 +86,43 @@ impl Default for PythonDataSourceRegistry {
 #[cfg(feature = "python")]
 pub fn discover_datasources() -> Result<usize> {
     pyo3::Python::attach(|py| {
-        // Import importlib.metadata
-        let metadata = py.import("importlib.metadata").map_err(|e| {
-            DataFusionError::External(Box::new(std::io::Error::other(format!(
-                "Failed to import importlib.metadata: {}",
-                e
-            ))))
-        })?;
-
-        // Get entry points for sail.datasources group (Python 3.10+ API)
-        let kwargs = pyo3::types::PyDict::new(py);
-        kwargs.set_item("group", "sail.datasources").map_err(|e| {
-            DataFusionError::External(Box::new(std::io::Error::other(format!(
-                "Failed to set kwargs: {}",
-                e
-            ))))
-        })?;
-
-        let eps = metadata
-            .call_method("entry_points", (), Some(&kwargs))
-            .map_err(|e| {
-                DataFusionError::External(Box::new(std::io::Error::other(format!(
-                    "Failed to get entry_points: {}",
-                    e
-                ))))
-            })?;
-
-        log::debug!("Discovered entry points for sail.datasources group");
-
         let mut count = 0;
 
-        // Iterate over entry points
-        if let Ok(eps_iter) = eps.try_iter() {
-            for ep in eps_iter.flatten() {
-                // Load the datasource class
-                if let Ok(cls) = ep.call_method0("load") {
-                    // Validate it's a proper datasource
-                    if validate_datasource_class(py, &cls).is_ok() {
-                        // Pickle the class for GIL-free storage
-                        if let Ok(pickled) = pickle_class(py, &cls) {
-                            let name = ep
-                                .getattr("name")
-                                .and_then(|n| n.extract::<String>())
-                                .unwrap_or_else(|_| format!("unknown_{}", count));
+        if let Ok(base_module) = py.import("pysail.spark.datasource.base") {
+            if let Ok(discover_fn) = base_module.getattr("discover_entry_points") {
+                if let Ok(entries) = discover_fn.call0() {
+                    if let Ok(iter) = entries.try_iter() {
+                        for entry in iter.flatten() {
+                            if let Ok((name, cls)) =
+                                entry.extract::<(String, pyo3::Bound<'_, pyo3::PyAny>)>()
+                            {
+                                if DATASOURCE_REGISTRY.contains(&name) {
+                                    continue;
+                                }
+                                if validate_datasource_class(py, &cls).is_ok() {
+                                    if let Ok(pickled) = pickle_class(py, &cls) {
+                                        let module_path = cls
+                                            .getattr("__module__")
+                                            .and_then(|m| m.extract::<String>())
+                                            .unwrap_or_default();
 
-                            let module_path = ep
-                                .getattr("value")
-                                .and_then(|v| v.extract::<String>())
-                                .unwrap_or_default();
+                                        DATASOURCE_REGISTRY.register(DataSourceEntry {
+                                            name: name.clone(),
+                                            pickled_class: pickled,
+                                            module_path,
+                                        });
 
-                            DATASOURCE_REGISTRY.register(DataSourceEntry {
-                                name: name.clone(),
-                                pickled_class: pickled,
-                                module_path,
-                            });
-
-                            log::info!("Discovered datasource: {}", name);
-                            count += 1;
+                                        log::info!("Discovered datasource: {}", name);
+                                        count += 1;
+                                    }
+                                }
+                            }
                         }
                     }
                 }
             }
         }
 
-        // Also discover from the Python-side registry (from @register decorator)
         count += discover_from_python_registry(py)?;
 
         Ok(count)

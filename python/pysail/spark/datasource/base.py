@@ -31,6 +31,7 @@ from typing import Any, Dict, Iterator, List, Optional, Tuple, Union
 
 try:
     import pyarrow as pa
+
     HAS_PYARROW = True
 except ImportError:
     HAS_PYARROW = False
@@ -61,9 +62,11 @@ class CaseInsensitiveDict(dict):
 # Filter Classes (PySpark-compatible)
 # ============================================================================
 
+
 @dataclass(frozen=True)
 class EqualTo:
     """Filter: column == value"""
+
     column: ColumnPath
     value: Any
 
@@ -71,6 +74,7 @@ class EqualTo:
 @dataclass(frozen=True)
 class EqualNullSafe:
     """Filter: column <=> value (null-safe equals)"""
+
     column: ColumnPath
     value: Any
 
@@ -78,6 +82,7 @@ class EqualNullSafe:
 @dataclass(frozen=True)
 class GreaterThan:
     """Filter: column > value"""
+
     column: ColumnPath
     value: Any
 
@@ -85,6 +90,7 @@ class GreaterThan:
 @dataclass(frozen=True)
 class GreaterThanOrEqual:
     """Filter: column >= value"""
+
     column: ColumnPath
     value: Any
 
@@ -92,6 +98,7 @@ class GreaterThanOrEqual:
 @dataclass(frozen=True)
 class LessThan:
     """Filter: column < value"""
+
     column: ColumnPath
     value: Any
 
@@ -99,6 +106,7 @@ class LessThan:
 @dataclass(frozen=True)
 class LessThanOrEqual:
     """Filter: column <= value"""
+
     column: ColumnPath
     value: Any
 
@@ -106,6 +114,7 @@ class LessThanOrEqual:
 @dataclass(frozen=True)
 class In:
     """Filter: column IN (values)"""
+
     column: ColumnPath
     values: Tuple[Any, ...]
 
@@ -113,24 +122,28 @@ class In:
 @dataclass(frozen=True)
 class IsNull:
     """Filter: column IS NULL"""
+
     column: ColumnPath
 
 
 @dataclass(frozen=True)
 class IsNotNull:
     """Filter: column IS NOT NULL"""
+
     column: ColumnPath
 
 
 @dataclass(frozen=True)
 class Not:
     """Filter: NOT child"""
+
     child: Any  # Another filter
 
 
 @dataclass(frozen=True)
 class And:
     """Filter: left AND right"""
+
     left: Any  # Another filter
     right: Any  # Another filter
 
@@ -138,6 +151,7 @@ class And:
 @dataclass(frozen=True)
 class Or:
     """Filter: left OR right"""
+
     left: Any  # Another filter
     right: Any  # Another filter
 
@@ -145,6 +159,7 @@ class Or:
 @dataclass(frozen=True)
 class StringStartsWith:
     """Filter: column LIKE 'value%'"""
+
     column: ColumnPath
     value: str
 
@@ -152,6 +167,7 @@ class StringStartsWith:
 @dataclass(frozen=True)
 class StringEndsWith:
     """Filter: column LIKE '%value'"""
+
     column: ColumnPath
     value: str
 
@@ -159,21 +175,35 @@ class StringEndsWith:
 @dataclass(frozen=True)
 class StringContains:
     """Filter: column LIKE '%value%'"""
+
     column: ColumnPath
     value: str
 
 
 # All filter types for convenience
 Filter = Union[
-    EqualTo, EqualNullSafe, GreaterThan, GreaterThanOrEqual,
-    LessThan, LessThanOrEqual, In, IsNull, IsNotNull, Not,
-    And, Or, StringStartsWith, StringEndsWith, StringContains
+    EqualTo,
+    EqualNullSafe,
+    GreaterThan,
+    GreaterThanOrEqual,
+    LessThan,
+    LessThanOrEqual,
+    In,
+    IsNull,
+    IsNotNull,
+    Not,
+    And,
+    Or,
+    StringStartsWith,
+    StringEndsWith,
+    StringContains,
 ]
 
 
 # ============================================================================
 # Core Classes
 # ============================================================================
+
 
 class InputPartition:
     """
@@ -351,6 +381,32 @@ def list_registered_datasources() -> List[str]:
     return list(_REGISTERED_DATASOURCES.keys())
 
 
+def discover_entry_points(group: str = "sail.datasources") -> List[Tuple[str, type]]:
+    """
+    Discover datasources from Python entry points.
+
+    Compatible with Python 3.9+ (handles API differences between 3.9 and 3.10+).
+    """
+    from importlib.metadata import entry_points
+
+    try:
+        # Python 3.10+: entry_points(group=...) returns iterable
+        eps = entry_points(group=group)
+    except TypeError:
+        # Python 3.9: entry_points() returns SelectableGroups (dict-like)
+        all_eps = entry_points()
+        eps = getattr(all_eps, "get", lambda g, d: d)(group, [])
+
+    result = []
+    for ep in eps:
+        try:
+            cls = ep.load()
+            result.append((ep.name, cls))
+        except Exception:
+            pass
+    return result
+
+
 # ============================================================================
 # Re-exports for convenience
 # ============================================================================
@@ -383,4 +439,5 @@ __all__ = [
     "register",
     "get_registered_datasource",
     "list_registered_datasources",
+    "discover_entry_points",
 ]
