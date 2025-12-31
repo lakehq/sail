@@ -135,6 +135,8 @@ jobs:
     runs-on: ubuntu-latest
     needs:
       - setup
+    env:
+      RUSTC_WORKSPACE_WRAPPER: ${{ github.workspace }}/.github/scripts/rustc-workspace-wrapper.sh
     steps:
       - uses: actions/checkout@v4
 
