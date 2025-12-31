@@ -86,13 +86,6 @@ jobs:
             -t lcov --branch --ignore-not-existing \
             -o coverage-rust-unit.info
 
-      - name: Upload rust unit coverage artifact
-        uses: actions/upload-artifact@v4
-        with:
-          name: rust-unit-coverage-report
-          path: coverage-rust-unit.info
-          retention-days: 1
-
       - name: Upload Rust unit coverage to Codecov
         # Dependabot does not operate from a fork of the repository, so a token
         # is required to upload coverage reports to Codecov. However, Dependabot
@@ -124,14 +117,6 @@ jobs:
             --llvm-path "$LLVM_PATH" \
             -t lcov --branch --ignore-not-existing \
             -o coverage-rust-slow.info
-
-      - name: Upload rust slow coverage artifact
-        if: ${{ github.event_name == 'push' }}
-        uses: actions/upload-artifact@v4
-        with:
-          name: rust-slow-coverage-report
-          path: coverage-rust-slow.info
-          retention-days: 1
 
       - name: Upload Rust slow coverage to Codecov
         if: ${{ github.event_name == 'push' && github.actor != 'dependabot[bot]' }}
