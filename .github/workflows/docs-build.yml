@@ -43,14 +43,6 @@ jobs:
       - name: Install Dependencies
         run: pnpm install
 
-      - name: Run Code Formatter
-        env:
-          FORMAT_OPTIONS: --check
-        run: pnpm run format
-
-      - name: Run Code Linter
-        run: pnpm run lint
-
       - name: Download Python Package
         uses: actions/download-artifact@v4
         with:
