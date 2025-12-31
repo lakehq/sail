@@ -119,13 +119,6 @@ jobs:
             -t lcov --branch --ignore-not-existing \
             -o coverage-ibis.info
 
-      - name: Upload ibis coverage artifact
-        uses: actions/upload-artifact@v4
-        with:
-          name: ibis-coverage-report
-          path: coverage-ibis.info
-          retention-days: 1
-
       - name: Upload Ibis coverage to Codecov
         if: ${{ github.actor != 'dependabot[bot]' }}
         uses: codecov/codecov-action@v5
