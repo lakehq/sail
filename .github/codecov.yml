@@ -11,27 +11,17 @@ comment:
 ignore:
   - "crates/sail-gold-test"
 
-flag_management:
-  default_rules:
-    carryforward: false
-  statuses:
-    - type: project
-      target: 0
-      informational: true
-    - type: patch
-      target: 0
-      informational: true
-  individual_flags:
-    - name: rust-unit-tests
-      carryforward: true
-    - name: rust-slow-tests
-      carryforward: true
-    - name: python-unit-tests
-      carryforward: true
-    - name: spark-tests
-      carryforward: true
-    - name: ibis-tests
-      carryforward: true
+flags:
+  rust-unit-tests:
+    carryforward: true
+  rust-slow-tests:
+    carryforward: true
+  python-unit-tests:
+    carryforward: true
+  spark-tests:
+    carryforward: true
+  ibis-tests:
+    carryforward: true
 
 coverage:
   status:
