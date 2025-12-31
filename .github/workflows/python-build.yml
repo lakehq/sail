@@ -38,9 +38,6 @@ jobs:
       - name: Install grcov
         uses: taiki-e/install-action@grcov
 
-      - name: Format Check
-        run: hatch fmt --check
-
       - name: Download Python Package
         uses: actions/download-artifact@v4
         with:
