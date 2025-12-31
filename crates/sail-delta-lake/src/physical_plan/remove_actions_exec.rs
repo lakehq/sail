@@ -17,9 +17,7 @@ use std::sync::Arc;
 use std::time::Instant;
 
 use async_trait::async_trait;
-use datafusion::arrow::array::{Array, StringArray};
-use datafusion::arrow::datatypes::{DataType, Field, Schema};
-use datafusion::arrow::record_batch::RecordBatch;
+use datafusion::arrow::compute::concat_batches;
 use datafusion::execution::context::TaskContext;
 use datafusion::physical_plan::execution_plan::{Boundedness, EmissionType};
 use datafusion::physical_plan::metrics::{ExecutionPlanMetricsSet, MetricBuilder, MetricsSet};
@@ -33,8 +31,11 @@ use datafusion_physical_expr::{Distribution, EquivalenceProperties};
 use futures::stream::{self, StreamExt};
 use serde_json::Value;
 
-use crate::kernel::models::{Action, Add, RemoveOptions};
-use crate::physical_plan::{current_timestamp_millis, CommitInfo};
+use crate::kernel::models::{Add, Remove, RemoveOptions};
+use crate::physical_plan::{
+    current_timestamp_millis, decode_adds_from_batch, delta_action_schema, encode_commit_meta,
+    encode_remove_actions, CommitMeta, COL_ACTION,
+};
 
 /// Physical execution node to convert Add actions (from FindFiles) into Remove actions
 #[derive(Debug)]
@@ -45,35 +46,35 @@ pub struct DeltaRemoveActionsExec {
 }
 
 impl DeltaRemoveActionsExec {
-    pub fn new(input: Arc<dyn ExecutionPlan>) -> Self {
-        // Output schema must match DeltaWriterExec output schema
-        let schema = Arc::new(Schema::new(vec![Field::new("data", DataType::Utf8, true)]));
+    pub fn new(input: Arc<dyn ExecutionPlan>) -> Result<Self> {
+        // Output schema must match DeltaWriterExec output schema (row-per-action).
+        let schema = delta_action_schema()?;
         let cache = PlanProperties::new(
             EquivalenceProperties::new(schema),
             Partitioning::UnknownPartitioning(1),
             EmissionType::Final,
             Boundedness::Bounded,
         );
-        Self {
+        Ok(Self {
             input,
             metrics: ExecutionPlanMetricsSet::new(),
             cache,
-        }
+        })
     }
 
-    pub(crate) async fn create_remove_actions(adds: Vec<Add>) -> Result<Vec<Action>> {
+    pub(crate) async fn create_remove_actions(adds: Vec<Add>) -> Result<Vec<Remove>> {
         let deletion_timestamp = current_timestamp_millis()?;
 
         Ok(adds
             .into_iter()
             .map(|add| {
-                Action::Remove(add.into_remove_with_options(
+                add.into_remove_with_options(
                     deletion_timestamp,
                     RemoveOptions {
                         extended_file_metadata: Some(true),
                         include_tags: false,
                     },
-                ))
+                )
             })
             .collect())
     }
@@ -121,7 +122,7 @@ impl ExecutionPlan for DeltaRemoveActionsExec {
         if children.len() != 1 {
             return internal_err!("DeltaRemoveActionsExec requires exactly one child");
         }
-        Ok(Arc::new(DeltaRemoveActionsExec::new(children[0].clone())))
+        Ok(Arc::new(DeltaRemoveActionsExec::new(children[0].clone())?))
     }
 
     fn required_input_distribution(&self) -> Vec<Distribution> {
@@ -153,31 +154,19 @@ impl ExecutionPlan for DeltaRemoveActionsExec {
             while let Some(batch_result) = stream.next().await {
                 let batch = batch_result?;
 
-                // The input should have an "add" column containing JSON-serialized Add actions
-                let adds_col = batch
-                    .column_by_name("add")
-                    .ok_or_else(|| {
-                        DataFusionError::Internal(
-                            "Expected 'add' column in input batch".to_string(),
-                        )
-                    })?
-                    .as_any()
-                    .downcast_ref::<StringArray>()
-                    .ok_or_else(|| {
-                        DataFusionError::Internal(
-                            "Expected StringArray for 'add' column".to_string(),
-                        )
-                    })?;
-
-                for add_json in adds_col.iter().flatten() {
-                    if add_json.trim().is_empty() {
-                        continue;
+                // Arrow-native action rows only.
+                if batch.column_by_name(COL_ACTION).is_some() {
+                    let adds = decode_adds_from_batch(&batch)?;
+                    for add in adds {
+                        num_removed_bytes = num_removed_bytes
+                            .saturating_add(u64::try_from(add.size).unwrap_or_default());
+                        adds_to_remove.push(add);
                     }
-                    let add: Add = serde_json::from_str(add_json)
-                        .map_err(|e| DataFusionError::External(Box::new(e)))?;
-                    num_removed_bytes = num_removed_bytes
-                        .saturating_add(u64::try_from(add.size).unwrap_or_default());
-                    adds_to_remove.push(add);
+                } else {
+                    return Err(DataFusionError::Plan(
+                        "DeltaRemoveActionsExec input must be delta action rows ('action')"
+                            .to_string(),
+                    ));
                 }
             }
 
@@ -202,18 +191,13 @@ impl ExecutionPlan for DeltaRemoveActionsExec {
                 Value::from(exec_start.elapsed().as_millis() as u64),
             );
 
-            let commit_info = CommitInfo {
+            let removes_batch = encode_remove_actions(remove_actions)?;
+            let meta_batch = encode_commit_meta(CommitMeta {
                 row_count: 0,
-                actions: remove_actions,
-                initial_actions: Vec::new(),
                 operation: None,
                 operation_metrics,
-            };
-
-            let json = serde_json::to_string(&commit_info)
-                .map_err(|e| DataFusionError::External(Box::new(e)))?;
-            let data_array = Arc::new(StringArray::from(vec![json]));
-            RecordBatch::try_new(schema, vec![data_array])
+            })?;
+            concat_batches(&schema, &[removes_batch, meta_batch])
                 .map_err(|e| DataFusionError::ArrowError(Box::new(e), None))
         };
 

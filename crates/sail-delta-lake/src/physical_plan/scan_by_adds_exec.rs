@@ -34,6 +34,7 @@ use url::Url;
 use crate::datasource::scan::FileScanParams;
 use crate::datasource::{build_file_scan_config, DeltaScanConfigBuilder};
 use crate::kernel::models::Add;
+use crate::physical_plan::{decode_adds_from_batch, COL_ACTION};
 use crate::storage::StorageConfig;
 use crate::table::open_table_with_object_store;
 
@@ -206,37 +207,29 @@ impl ExecutionPlan for DeltaScanByAddsExec {
                     continue;
                 }
 
-                let scan_col = batch
-                    .column_by_name("partition_scan")
-                    .ok_or_else(|| {
-                        DataFusionError::Internal("Missing partition_scan column".to_string())
-                    })?
-                    .as_any()
-                    .downcast_ref::<datafusion::arrow::array::BooleanArray>()
-                    .ok_or_else(|| {
-                        DataFusionError::Internal(
-                            "partition_scan column is not a BooleanArray".to_string(),
-                        )
-                    })?;
-                partition_scan = scan_col.value(0);
+                // partition_scan is optional (planner can decide); default to false when absent.
+                if let Some(scan_col) = batch.column_by_name("partition_scan") {
+                    let scan_col = scan_col
+                        .as_any()
+                        .downcast_ref::<datafusion::arrow::array::BooleanArray>()
+                        .ok_or_else(|| {
+                            DataFusionError::Internal(
+                                "partition_scan column is not a BooleanArray".to_string(),
+                            )
+                        })?;
+                    partition_scan = scan_col.value(0);
+                } else {
+                    partition_scan = false;
+                }
 
-                let adds_col = batch
-                    .column_by_name("add")
-                    .ok_or_else(|| DataFusionError::Internal("Missing add column".to_string()))?
-                    .as_any()
-                    .downcast_ref::<datafusion::arrow::array::StringArray>()
-                    .ok_or_else(|| {
-                        DataFusionError::Internal("add column is not a StringArray".to_string())
-                    })?;
-                for i in 0..adds_col.len() {
-                    let add_json = adds_col.value(i);
-                    if add_json.trim().is_empty() {
-                        continue;
-                    }
-                    match serde_json::from_str::<Add>(add_json) {
-                        Ok(add) => candidate_adds.push(add),
-                        Err(e) => return Err(DataFusionError::External(Box::new(e))),
-                    }
+                // Arrow-native action rows only.
+                if batch.column_by_name(COL_ACTION).is_some() {
+                    candidate_adds.extend(decode_adds_from_batch(&batch)?);
+                } else {
+                    return Err(DataFusionError::Plan(
+                        "DeltaScanByAddsExec input must be delta action rows ('action')"
+                            .to_string(),
+                    ));
                 }
             }
 
