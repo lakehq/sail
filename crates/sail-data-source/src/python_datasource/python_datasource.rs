@@ -2,20 +2,19 @@
 ///
 /// This module provides the bridge between Rust and Python DataSources, managing
 /// the Python interpreter lifecycle and invoking Python DataSource methods.
-
 use arrow_schema::SchemaRef;
 use datafusion_common::Result;
+#[cfg(feature = "python")]
+use pyo3::prelude::*;
+#[cfg(feature = "python")]
+use pyo3::types::PyBytes;
+
 #[cfg(feature = "python")]
 use super::arrow_utils::py_schema_to_rust;
 #[cfg(feature = "python")]
 use super::error::PythonDataSourceError;
 #[cfg(feature = "python")]
 use super::executor::InputPartition;
-
-#[cfg(feature = "python")]
-use pyo3::prelude::*;
-#[cfg(feature = "python")]
-use pyo3::types::PyBytes;
 
 /// Represents a Python-defined DataSource.
 ///
@@ -174,12 +173,13 @@ impl PythonDataSource {
                 })?;
 
                 // Convert to list
-                let partitions_list = partitions.downcast::<pyo3::types::PyList>().map_err(|e| {
-                    PythonDataSourceError::PythonError(format!(
-                        "partitioning() must return a list: {}",
-                        e
-                    ))
-                })?;
+                let partitions_list =
+                    partitions.downcast::<pyo3::types::PyList>().map_err(|e| {
+                        PythonDataSourceError::PythonError(format!(
+                            "partitioning() must return a list: {}",
+                            e
+                        ))
+                    })?;
 
                 Ok(partitions_list.len())
             })
@@ -214,10 +214,7 @@ impl PythonDataSource {
 
             // Get partitions
             let partitions = reader.call_method0("partitions").map_err(|e| {
-                PythonDataSourceError::PythonError(format!(
-                    "Failed to call partitions(): {}",
-                    e
-                ))
+                PythonDataSourceError::PythonError(format!("Failed to call partitions(): {}", e))
             })?;
 
             // Convert to list
@@ -263,7 +260,10 @@ impl PythonDataSource {
 
     /// Get input partitions (non-Python fallback).
     #[cfg(not(feature = "python"))]
-    pub fn get_partitions(&self, _schema: &SchemaRef) -> Result<Vec<super::executor::InputPartition>> {
+    pub fn get_partitions(
+        &self,
+        _schema: &SchemaRef,
+    ) -> Result<Vec<super::executor::InputPartition>> {
         datafusion_common::exec_err!("Python support not enabled in this build")
     }
 
@@ -332,19 +332,17 @@ impl PythonDataSource {
         // Use DataFusion's SQL parser for DDL schema parsing
         use datafusion::sql::sqlparser::dialect::GenericDialect;
         use datafusion::sql::sqlparser::parser::Parser;
-        
+
         // Wrap DDL in CREATE TABLE to parse
         let sql = format!("CREATE TABLE t ({})", ddl);
         let dialect = GenericDialect {};
-        
+
         let statements = Parser::parse_sql(&dialect, &sql).map_err(|e| {
             PythonDataSourceError::SchemaError(format!("Failed to parse DDL schema: {}", e))
         })?;
 
         if statements.is_empty() {
-            return Err(
-                PythonDataSourceError::SchemaError("Empty DDL schema".to_string()).into(),
-            );
+            return Err(PythonDataSourceError::SchemaError("Empty DDL schema".to_string()).into());
         }
 
         // Extract column definitions from parsed statement

@@ -1,3 +1,5 @@
+use std::sync::Arc;
+
 /// Arrow conversion utilities for Python DataSources.
 ///
 /// This module provides efficient conversion between Arrow and Python types
@@ -14,7 +16,6 @@
 /// Additional types are added in later PRs:
 /// - PR #2: Binary, Decimal128, Int8, Int16
 /// - PR #4: List<T>, Struct, Map<K,V>, LargeUtf8
-
 use arrow::array::{
     ArrayRef, BooleanArray, Date32Array, Float32Array, Float64Array, Int32Array, Int64Array,
     NullArray, RecordBatch, StringArray, TimestampMicrosecondArray,
@@ -22,8 +23,6 @@ use arrow::array::{
 use arrow::datatypes::{DataType, Field, Schema, TimeUnit};
 use arrow_schema::SchemaRef;
 use datafusion_common::{DataFusionError, Result};
-use std::sync::Arc;
-
 #[cfg(feature = "python")]
 use pyo3::prelude::*;
 #[cfg(feature = "python")]
@@ -33,14 +32,17 @@ use pyo3::types::PyAnyMethods;
 ///
 /// Uses the Arrow C Data Interface for zero-copy conversion.
 #[cfg(feature = "python")]
-pub fn py_record_batch_to_rust(_py: Python<'_>, py_batch: &Bound<'_, PyAny>) -> Result<RecordBatch> {
+pub fn py_record_batch_to_rust(
+    _py: Python<'_>,
+    py_batch: &Bound<'_, PyAny>,
+) -> Result<RecordBatch> {
     use arrow_pyarrow::FromPyArrow;
 
     RecordBatch::from_pyarrow_bound(py_batch).map_err(|e| {
-        DataFusionError::External(Box::new(std::io::Error::new(
-            std::io::ErrorKind::Other,
-            format!("Failed to convert PyArrow RecordBatch: {}", e),
-        )))
+        DataFusionError::External(Box::new(std::io::Error::other(format!(
+            "Failed to convert PyArrow RecordBatch: {}",
+            e
+        ))))
     })
 }
 
@@ -52,10 +54,10 @@ pub fn rust_schema_to_py(py: Python<'_>, schema: &SchemaRef) -> Result<Py<PyAny>
     ToPyArrow::to_pyarrow(schema.as_ref(), py)
         .map(|obj| obj.unbind())
         .map_err(|e| {
-            DataFusionError::External(Box::new(std::io::Error::new(
-                std::io::ErrorKind::Other,
-                format!("Failed to convert schema to PyArrow: {}", e),
-            )))
+            DataFusionError::External(Box::new(std::io::Error::other(format!(
+                "Failed to convert schema to PyArrow: {}",
+                e
+            ))))
         })
 }
 
@@ -64,10 +66,10 @@ pub fn py_schema_to_rust(_py: Python<'_>, py_schema: &Bound<'_, PyAny>) -> Resul
     use arrow_pyarrow::FromPyArrow;
 
     let schema = Schema::from_pyarrow_bound(py_schema).map_err(|e| {
-        DataFusionError::External(Box::new(std::io::Error::new(
-            std::io::ErrorKind::Other,
-            format!("Failed to convert PyArrow Schema: {}", e),
-        )))
+        DataFusionError::External(Box::new(std::io::Error::other(format!(
+            "Failed to convert PyArrow Schema: {}",
+            e
+        ))))
     })?;
 
     Ok(Arc::new(schema))
@@ -161,10 +163,10 @@ pub fn convert_rows_to_batch(schema: &SchemaRef, pickled_rows: &[Vec<u8>]) -> Re
             .collect::<Result<_>>()?;
 
         RecordBatch::try_new(schema.clone(), arrays).map_err(|e| {
-            DataFusionError::External(Box::new(std::io::Error::new(
-                std::io::ErrorKind::Other,
-                format!("Failed to create RecordBatch: {}", e),
-            )))
+            DataFusionError::External(Box::new(std::io::Error::other(format!(
+                "Failed to create RecordBatch: {}",
+                e
+            ))))
         })
     })
 }
@@ -226,10 +228,7 @@ fn build_array_from_rows(
                 .map(|row| extract_value(row, col_idx))
                 .collect::<Result<_>>()?;
             Ok(Arc::new(StringArray::from(
-                values
-                    .iter()
-                    .map(|v| v.as_deref())
-                    .collect::<Vec<_>>(),
+                values.iter().map(|v| v.as_deref()).collect::<Vec<_>>(),
             )))
         }
 
@@ -268,17 +267,12 @@ fn extract_value<'py, T: pyo3::FromPyObject<'py>>(
         return Ok(None);
     }
 
-    item.extract::<T>()
-        .map(Some)
-        .map_err(|e| py_err(pyo3::PyErr::from(e)))
+    item.extract::<T>().map(Some).map_err(py_err)
 }
 
 #[cfg(feature = "python")]
 fn py_err(e: pyo3::PyErr) -> DataFusionError {
-    DataFusionError::External(Box::new(std::io::Error::new(
-        std::io::ErrorKind::Other,
-        e.to_string(),
-    )))
+    DataFusionError::External(Box::new(std::io::Error::other(e.to_string())))
 }
 
 #[cfg(test)]
@@ -294,7 +288,10 @@ mod tests {
         assert!(is_mvp_type(&DataType::Utf8));
         assert!(is_mvp_type(&DataType::Boolean));
         assert!(is_mvp_type(&DataType::Date32));
-        assert!(is_mvp_type(&DataType::Timestamp(TimeUnit::Microsecond, None)));
+        assert!(is_mvp_type(&DataType::Timestamp(
+            TimeUnit::Microsecond,
+            None
+        )));
         assert!(is_mvp_type(&DataType::Null));
 
         // Not in MVP

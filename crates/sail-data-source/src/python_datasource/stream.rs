@@ -1,3 +1,13 @@
+use std::pin::Pin;
+use std::task::{Context, Poll};
+
+use arrow::array::RecordBatch;
+use arrow_schema::SchemaRef;
+use datafusion::physical_plan::RecordBatchStream;
+use datafusion_common::{DataFusionError, Result};
+use futures::Stream;
+use tokio::sync::{mpsc, oneshot};
+
 /// RecordBatch stream from Python DataSource.
 ///
 /// This stream reads from a Python datasource in a dedicated thread,
@@ -7,16 +17,7 @@
 /// - std::thread::spawn for Python (GIL constraints)
 /// - oneshot signal for graceful shutdown
 /// - Thread join in Drop to prevent leaks
-
 use super::executor::InputPartition;
-use arrow::array::RecordBatch;
-use arrow_schema::SchemaRef;
-use datafusion::physical_plan::RecordBatchStream;
-use datafusion_common::{DataFusionError, Result};
-use futures::Stream;
-use std::pin::Pin;
-use std::task::{Context, Poll};
-use tokio::sync::{mpsc, oneshot};
 
 /// Default batch size for collecting rows.
 pub const DEFAULT_BATCH_SIZE: usize = 8192;
@@ -47,11 +48,7 @@ impl PythonDataSourceStream {
     ///
     /// Spawns a dedicated thread for Python execution.
     #[cfg(feature = "python")]
-    pub fn new(
-        command: Vec<u8>,
-        partition: InputPartition,
-        schema: SchemaRef,
-    ) -> Result<Self> {
+    pub fn new(command: Vec<u8>, partition: InputPartition, schema: SchemaRef) -> Result<Self> {
         let (tx, rx) = mpsc::channel(16);
         let (stop_tx, stop_rx) = oneshot::channel();
 
@@ -103,7 +100,9 @@ impl PythonDataSourceStream {
             let reader = datasource
                 .call_method1("reader", (schema_obj,))
                 .map_err(py_err)?;
-            let iterator = reader.call_method1("read", (py_partition,)).map_err(py_err)?;
+            let iterator = reader
+                .call_method1("read", (py_partition,))
+                .map_err(py_err)?;
 
             // Iterate over results
             loop {
@@ -120,7 +119,7 @@ impl PythonDataSourceStream {
                     Ok(item) => {
                         // Convert to RecordBatch
                         let batch = super::arrow_utils::py_record_batch_to_rust(py, &item)?;
-                        
+
                         // Send batch
                         if tx.blocking_send(Ok(batch)).is_err() {
                             // Receiver dropped, stop
@@ -150,11 +149,7 @@ impl PythonDataSourceStream {
 
     /// Create a placeholder stream (for non-Python builds).
     #[cfg(not(feature = "python"))]
-    pub fn new(
-        _command: Vec<u8>,
-        _partition: InputPartition,
-        schema: SchemaRef,
-    ) -> Result<Self> {
+    pub fn new(_command: Vec<u8>, _partition: InputPartition, schema: SchemaRef) -> Result<Self> {
         Err(DataFusionError::NotImplemented(
             "Python support not enabled".to_string(),
         ))
@@ -166,9 +161,7 @@ impl Stream for PythonDataSourceStream {
 
     fn poll_next(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Option<Self::Item>> {
         match &mut self.state {
-            StreamState::Running { rx, .. } => {
-                Pin::new(rx).poll_recv(cx)
-            }
+            StreamState::Running { rx, .. } => Pin::new(rx).poll_recv(cx),
             StreamState::Stopped => Poll::Ready(None),
         }
     }
@@ -183,7 +176,7 @@ impl RecordBatchStream for PythonDataSourceStream {
 impl Drop for PythonDataSourceStream {
     fn drop(&mut self) {
         let state = std::mem::replace(&mut self.state, StreamState::Stopped);
-        
+
         match state {
             StreamState::Running {
                 stop_signal,
@@ -209,10 +202,7 @@ impl Drop for PythonDataSourceStream {
 /// Convert PyO3 error to DataFusion error.
 #[cfg(feature = "python")]
 fn py_err(e: pyo3::PyErr) -> DataFusionError {
-    DataFusionError::External(Box::new(std::io::Error::new(
-        std::io::ErrorKind::Other,
-        e.to_string(),
-    )))
+    DataFusionError::External(Box::new(std::io::Error::other(e.to_string())))
 }
 
 /// Helper for collecting rows into batches.
@@ -267,32 +257,32 @@ impl RowBatchCollector {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
-    use arrow::datatypes::{DataType, Field, Schema};
     use std::sync::Arc;
+
+    use arrow::datatypes::{DataType, Field, Schema};
+
+    use super::*;
 
     #[test]
     fn test_row_batch_collector() {
-        let schema = Arc::new(Schema::new(vec![
-            Field::new("id", DataType::Int32, false),
-        ]));
+        let schema = Arc::new(Schema::new(vec![Field::new("id", DataType::Int32, false)]));
 
         let mut collector = RowBatchCollector::new(schema, 100);
-        
+
         assert!(!collector.is_ready());
-        
+
         // Add rows
         for _ in 0..50 {
             collector.add_row(vec![1, 2, 3]);
         }
-        
+
         assert!(!collector.is_ready());
-        
+
         // Add more to reach threshold
         for _ in 0..60 {
             collector.add_row(vec![1, 2, 3]);
         }
-        
+
         assert!(collector.is_ready());
     }
 }

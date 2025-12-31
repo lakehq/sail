@@ -62,6 +62,11 @@ Issues = "https://github.com/lakehq/sail/issues"
 [project.scripts]
 sail = "pysail.cli:main"
 
+[project.entry-points."sail.datasources"]
+range = "pysail.spark.datasource.examples:RangeDataSource"
+constant = "pysail.spark.datasource.examples:ConstantDataSource"
+flappy_bird = "pysail.spark.datasource.examples:FlappyBirdDataSource"
+
 [build-system]
 requires = ["maturin>=1.0,<2.0"]
 build-backend = "maturin"

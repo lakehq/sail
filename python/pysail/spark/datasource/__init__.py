@@ -38,6 +38,8 @@ from .examples import (
     RangeInputPartition,
     ConstantDataSource,
     ConstantDataSourceReader,
+    FlappyBirdDataSource,
+    FlappyBirdReader,
 )
 
 __all__ = [
@@ -74,4 +76,6 @@ __all__ = [
     "RangeInputPartition",
     "ConstantDataSource",
     "ConstantDataSourceReader",
+    "FlappyBirdDataSource",
+    "FlappyBirdReader",
 ]

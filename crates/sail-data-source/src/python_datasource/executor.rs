@@ -5,13 +5,11 @@
 /// - `RemoteExecutor`: Subprocess isolation via gRPC (PR #3)
 ///
 /// The abstraction ensures we can add subprocess isolation without rewriting core logic.
-
 use arrow::array::RecordBatch;
 use arrow_schema::SchemaRef;
 use async_trait::async_trait;
 use datafusion_common::Result;
 use futures::stream::BoxStream;
-
 #[cfg(feature = "python")]
 use pyo3::prelude::*;
 #[cfg(feature = "python")]
@@ -62,6 +60,7 @@ pub trait PythonExecutor: Send + Sync {
 #[cfg(feature = "python")]
 pub struct InProcessExecutor {
     /// Python version for compatibility checking
+    #[allow(dead_code)]
     python_ver: String,
 }
 
@@ -78,14 +77,14 @@ impl InProcessExecutor {
 impl PythonExecutor for InProcessExecutor {
     async fn get_schema(&self, command: &[u8]) -> Result<SchemaRef> {
         let command = command.to_vec();
-        
+
         // Use spawn_blocking for GIL-bound operations
         tokio::task::spawn_blocking(move || {
             pyo3::Python::attach(|py| {
                 // Deserialize and call schema()
                 let datasource = deserialize_datasource(py, &command)?;
                 let schema_obj = datasource.call_method0("schema").map_err(py_err)?;
-                
+
                 // Convert to Arrow schema
                 super::arrow_utils::py_schema_to_rust(py, &schema_obj)
             })
@@ -96,20 +95,20 @@ impl PythonExecutor for InProcessExecutor {
 
     async fn get_partitions(&self, command: &[u8]) -> Result<Vec<InputPartition>> {
         let command = command.to_vec();
-        
+
         tokio::task::spawn_blocking(move || {
             pyo3::Python::attach(|py| {
                 let datasource = deserialize_datasource(py, &command)?;
-                
+
                 // Get reader and partitions
                 let reader = datasource.call_method0("reader").map_err(py_err)?;
                 let partitions = reader.call_method0("partitions").map_err(py_err)?;
-                
+
                 // Convert Python partitions to Rust
                 let partitions_list = partitions
                     .downcast::<pyo3::types::PyList>()
                     .map_err(|e| datafusion_common::DataFusionError::Execution(e.to_string()))?;
-                
+
                 let mut result = Vec::with_capacity(partitions_list.len());
                 for (i, partition) in partitions_list.iter().enumerate() {
                     // Pickle each partition for distribution
@@ -119,7 +118,7 @@ impl PythonExecutor for InProcessExecutor {
                         data: pickled,
                     });
                 }
-                
+
                 Ok(result)
             })
         })
@@ -134,13 +133,9 @@ impl PythonExecutor for InProcessExecutor {
         schema: SchemaRef,
     ) -> Result<BoxStream<'static, Result<RecordBatch>>> {
         use super::stream::PythonDataSourceStream;
-        
-        let stream = PythonDataSourceStream::new(
-            command.to_vec(),
-            partition.clone(),
-            schema,
-        )?;
-        
+
+        let stream = PythonDataSourceStream::new(command.to_vec(), partition.clone(), schema)?;
+
         Ok(Box::pin(stream))
     }
 }
@@ -152,10 +147,10 @@ fn deserialize_datasource<'py>(
     command: &[u8],
 ) -> Result<pyo3::Bound<'py, pyo3::PyAny>> {
     use pyo3::types::PyBytes;
-    
+
     let cloudpickle = py.import("cloudpickle").map_err(py_err)?;
     let py_bytes = PyBytes::new(py, command);
-    
+
     cloudpickle
         .call_method1("loads", (py_bytes,))
         .map_err(py_err)
@@ -175,10 +170,7 @@ fn pickle_object(py: pyo3::Python<'_>, obj: &pyo3::Bound<'_, pyo3::PyAny>) -> Re
 /// Convert PyO3 error to DataFusion error.
 #[cfg(feature = "python")]
 fn py_err(e: pyo3::PyErr) -> datafusion_common::DataFusionError {
-    datafusion_common::DataFusionError::External(Box::new(std::io::Error::new(
-        std::io::ErrorKind::Other,
-        e.to_string(),
-    )))
+    datafusion_common::DataFusionError::External(Box::new(std::io::Error::other(e.to_string())))
 }
 
 #[cfg(test)]

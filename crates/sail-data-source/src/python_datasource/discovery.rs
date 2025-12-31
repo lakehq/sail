@@ -6,11 +6,9 @@
 /// - Datasource validation for security
 ///
 /// Entry points are registered under the group `sail.datasources`.
-
 use dashmap::DashMap;
 use datafusion_common::{exec_err, DataFusionError, Result};
 use once_cell::sync::Lazy;
-
 #[cfg(feature = "python")]
 use pyo3::types::PyAnyMethods;
 
@@ -90,78 +88,145 @@ pub fn discover_datasources() -> Result<usize> {
     pyo3::Python::attach(|py| {
         // Import importlib.metadata
         let metadata = py.import("importlib.metadata").map_err(|e| {
-            DataFusionError::External(Box::new(std::io::Error::new(
-                std::io::ErrorKind::Other,
-                format!("Failed to import importlib.metadata: {}", e),
-            )))
+            DataFusionError::External(Box::new(std::io::Error::other(format!(
+                "Failed to import importlib.metadata: {}",
+                e
+            ))))
         })?;
 
-        // Get entry points for sail.datasources group
-        let entry_points = metadata
-            .call_method1("entry_points", ())
+        // Get entry points for sail.datasources group (Python 3.10+ API)
+        let kwargs = pyo3::types::PyDict::new(py);
+        kwargs.set_item("group", "sail.datasources").map_err(|e| {
+            DataFusionError::External(Box::new(std::io::Error::other(format!(
+                "Failed to set kwargs: {}",
+                e
+            ))))
+        })?;
+
+        let eps = metadata
+            .call_method("entry_points", (), Some(&kwargs))
             .map_err(|e| {
-                DataFusionError::External(Box::new(std::io::Error::new(
-                    std::io::ErrorKind::Other,
-                    format!("Failed to get entry_points: {}", e),
-                )))
+                DataFusionError::External(Box::new(std::io::Error::other(format!(
+                    "Failed to get entry_points: {}",
+                    e
+                ))))
             })?;
 
-        // Filter to our group (Python 3.10+ API)
-        let group_eps = entry_points
-            .call_method1("select", ())
-            .and_then(|eps| eps.call_method1("group", ("sail.datasources",)))
-            .or_else(|_| {
-                // Fallback for Python 3.9
-                entry_points.get_item("sail.datasources")
-            });
-
-        let eps = match group_eps {
-            Ok(eps) => eps,
-            Err(_) => {
-                // No entry points found, not an error
-                return Ok(0);
-            }
-        };
+        log::debug!("Discovered entry points for sail.datasources group");
 
         let mut count = 0;
 
         // Iterate over entry points
         if let Ok(eps_iter) = eps.try_iter() {
-            for ep in eps_iter {
-                if let Ok(ep) = ep {
-                    // Load the datasource class
-                    if let Ok(cls) = ep.call_method0("load") {
-                        // Validate it's a proper datasource
-                        if validate_datasource_class(py, &cls).is_ok() {
-                            // Pickle the class for GIL-free storage
-                            if let Ok(pickled) = pickle_class(py, &cls) {
-                                let name = ep
-                                    .getattr("name")
-                                    .and_then(|n| n.extract::<String>())
-                                    .unwrap_or_else(|_| format!("unknown_{}", count));
+            for ep in eps_iter.flatten() {
+                // Load the datasource class
+                if let Ok(cls) = ep.call_method0("load") {
+                    // Validate it's a proper datasource
+                    if validate_datasource_class(py, &cls).is_ok() {
+                        // Pickle the class for GIL-free storage
+                        if let Ok(pickled) = pickle_class(py, &cls) {
+                            let name = ep
+                                .getattr("name")
+                                .and_then(|n| n.extract::<String>())
+                                .unwrap_or_else(|_| format!("unknown_{}", count));
 
-                                let module_path = ep
-                                    .getattr("value")
-                                    .and_then(|v| v.extract::<String>())
-                                    .unwrap_or_default();
+                            let module_path = ep
+                                .getattr("value")
+                                .and_then(|v| v.extract::<String>())
+                                .unwrap_or_default();
 
-                                DATASOURCE_REGISTRY.register(DataSourceEntry {
-                                    name: name.clone(),
-                                    pickled_class: pickled,
-                                    module_path,
-                                });
+                            DATASOURCE_REGISTRY.register(DataSourceEntry {
+                                name: name.clone(),
+                                pickled_class: pickled,
+                                module_path,
+                            });
 
-                                log::info!("Discovered datasource: {}", name);
-                                count += 1;
-                            }
+                            log::info!("Discovered datasource: {}", name);
+                            count += 1;
                         }
                     }
                 }
             }
         }
 
+        // Also discover from the Python-side registry (from @register decorator)
+        count += discover_from_python_registry(py)?;
+
         Ok(count)
     })
+}
+
+/// Discover datasources from the Python-side registry.
+///
+/// This finds datasources registered via the `@register` decorator in Python.
+#[cfg(feature = "python")]
+fn discover_from_python_registry(py: pyo3::Python<'_>) -> Result<usize> {
+    // Try to import the datasource module
+    let module = match py.import("pysail.spark.datasource") {
+        Ok(m) => m,
+        Err(_) => {
+            // Module not available, try direct path
+            match py.import("datasource") {
+                Ok(m) => m,
+                Err(_) => return Ok(0), // Neither import works, skip
+            }
+        }
+    };
+
+    // Get the _REGISTERED_DATASOURCES dict from base module
+    let base_module = match module.getattr("base") {
+        Ok(m) => m,
+        Err(_) => {
+            // Try getting from the module directly (if it re-exports)
+            match module.getattr("_REGISTERED_DATASOURCES") {
+                Ok(_) => module.clone().into_any(),
+                Err(_) => return Ok(0),
+            }
+        }
+    };
+
+    let registry = match base_module.getattr("_REGISTERED_DATASOURCES") {
+        Ok(r) => r,
+        Err(_) => return Ok(0),
+    };
+
+    let mut count = 0;
+
+    // Iterate over the registry dict
+    if let Ok(items) = registry.call_method0("items") {
+        if let Ok(items_iter) = items.try_iter() {
+            for item in items_iter.flatten() {
+                // Each item is (name, class)
+                if let Ok((name, cls)) = item.extract::<(String, pyo3::Bound<'_, pyo3::PyAny>)>() {
+                    // Skip if already registered
+                    if DATASOURCE_REGISTRY.contains(&name) {
+                        continue;
+                    }
+
+                    // Validate and pickle
+                    if validate_datasource_class(py, &cls).is_ok() {
+                        if let Ok(pickled) = pickle_class(py, &cls) {
+                            let module_path = cls
+                                .getattr("__module__")
+                                .and_then(|m| m.extract::<String>())
+                                .unwrap_or_default();
+
+                            DATASOURCE_REGISTRY.register(DataSourceEntry {
+                                name: name.clone(),
+                                pickled_class: pickled,
+                                module_path,
+                            });
+
+                            log::info!("Discovered datasource from registry: {}", name);
+                            count += 1;
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    Ok(count)
 }
 
 /// Validate that a Python class is a valid datasource.
@@ -189,19 +254,13 @@ pub fn validate_datasource_class(
     }
 
     // Verify it's callable (is a class)
-    let builtins = py.import("builtins").map_err(|e| {
-        DataFusionError::External(Box::new(std::io::Error::new(
-            std::io::ErrorKind::Other,
-            e.to_string(),
-        )))
-    })?;
+    let builtins = py
+        .import("builtins")
+        .map_err(|e| DataFusionError::External(Box::new(std::io::Error::other(e.to_string()))))?;
 
-    let callable = builtins.getattr("callable").map_err(|e| {
-        DataFusionError::External(Box::new(std::io::Error::new(
-            std::io::ErrorKind::Other,
-            e.to_string(),
-        )))
-    })?;
+    let callable = builtins
+        .getattr("callable")
+        .map_err(|e| DataFusionError::External(Box::new(std::io::Error::other(e.to_string()))))?;
 
     let is_callable = callable
         .call1((cls,))
@@ -217,6 +276,7 @@ pub fn validate_datasource_class(
 
 /// Validate a datasource instance has required methods.
 #[cfg(feature = "python")]
+#[allow(dead_code)]
 pub fn validate_datasource_instance(
     _py: pyo3::Python<'_>,
     instance: &pyo3::Bound<'_, pyo3::PyAny>,
@@ -239,24 +299,24 @@ pub fn validate_datasource_instance(
 #[cfg(feature = "python")]
 fn pickle_class(py: pyo3::Python<'_>, cls: &pyo3::Bound<'_, pyo3::PyAny>) -> Result<Vec<u8>> {
     let cloudpickle = py.import("cloudpickle").map_err(|e| {
-        DataFusionError::External(Box::new(std::io::Error::new(
-            std::io::ErrorKind::Other,
-            format!("Failed to import cloudpickle: {}", e),
-        )))
+        DataFusionError::External(Box::new(std::io::Error::other(format!(
+            "Failed to import cloudpickle: {}",
+            e
+        ))))
     })?;
 
     let pickled = cloudpickle.call_method1("dumps", (cls,)).map_err(|e| {
-        DataFusionError::External(Box::new(std::io::Error::new(
-            std::io::ErrorKind::Other,
-            format!("Failed to pickle datasource class: {}", e),
-        )))
+        DataFusionError::External(Box::new(std::io::Error::other(format!(
+            "Failed to pickle datasource class: {}",
+            e
+        ))))
     })?;
 
     pickled.extract::<Vec<u8>>().map_err(|e| {
-        DataFusionError::External(Box::new(std::io::Error::new(
-            std::io::ErrorKind::Other,
-            format!("Failed to extract pickled bytes: {}", e),
-        )))
+        DataFusionError::External(Box::new(std::io::Error::other(format!(
+            "Failed to extract pickled bytes: {}",
+            e
+        ))))
     })
 }
 
@@ -278,7 +338,9 @@ mod tests {
         // Get entry
         let entry = registry.get("test");
         assert!(entry.is_some());
-        assert_eq!(entry.unwrap().name, "test");
+        if let Some(e) = entry {
+            assert_eq!(e.name, "test");
+        }
 
         // List entries
         let names = registry.list();

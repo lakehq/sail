@@ -1,5 +1,6 @@
-use datafusion_common::DataFusionError;
 use std::fmt;
+
+use datafusion_common::DataFusionError;
 
 /// Errors specific to Python DataSource operations
 #[derive(Debug)]

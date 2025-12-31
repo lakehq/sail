@@ -8,7 +8,6 @@
 /// - Implements `DisplayAs` for clear EXPLAIN output
 /// - Source node with no children
 /// - Uses `PythonDataSourceStream` for actual data reading
-
 use std::any::Any;
 use std::fmt;
 use std::sync::Arc;
@@ -134,8 +133,9 @@ impl ExecutionPlan for PythonDataSourceExec {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
     use arrow::datatypes::{DataType, Field, Schema};
+
+    use super::*;
 
     #[test]
     fn test_python_datasource_exec_properties() {

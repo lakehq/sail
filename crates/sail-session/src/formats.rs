@@ -12,10 +12,10 @@ use sail_data_source::formats::parquet::ParquetTableFormat;
 use sail_data_source::formats::rate::RateTableFormat;
 use sail_data_source::formats::socket::SocketTableFormat;
 use sail_data_source::formats::text::TextTableFormat;
-use sail_delta_lake::DeltaTableFormat;
-use sail_iceberg::IcebergTableFormat;
 #[cfg(feature = "python")]
 use sail_data_source::python_datasource::{discover_datasources, PythonTableFormat};
+use sail_delta_lake::DeltaTableFormat;
+use sail_iceberg::IcebergTableFormat;
 
 pub fn create_table_format_registry() -> Result<Arc<TableFormatRegistry>> {
     let registry = Arc::new(TableFormatRegistry::new());

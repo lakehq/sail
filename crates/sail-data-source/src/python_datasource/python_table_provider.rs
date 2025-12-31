@@ -1,9 +1,6 @@
-/// TableProvider implementation for Python DataSources.
-///
-/// This integrates Python DataSources with DataFusion's catalog and execution system.
+use std::any::Any;
+use std::sync::Arc;
 
-use super::exec::PythonDataSourceExec;
-use super::python_datasource::PythonDataSource;
 use arrow_schema::SchemaRef;
 use async_trait::async_trait;
 use datafusion::catalog::TableProvider;
@@ -11,8 +8,12 @@ use datafusion::datasource::TableType;
 use datafusion::logical_expr::{Expr, TableProviderFilterPushDown};
 use datafusion::physical_plan::ExecutionPlan;
 use datafusion_common::Result;
-use std::any::Any;
-use std::sync::Arc;
+
+/// TableProvider implementation for Python DataSources.
+///
+/// This integrates Python DataSources with DataFusion's catalog and execution system.
+use super::exec::PythonDataSourceExec;
+use super::python_datasource::PythonDataSource;
 
 /// TableProvider for Python-defined DataSources.
 ///
@@ -94,7 +95,10 @@ impl TableProvider for PythonTableProvider {
     ) -> Result<Vec<TableProviderFilterPushDown>> {
         // For MVP: indicate that filters are not pushed down
         // They will be applied by DataFusion after reading
-        Ok(vec![TableProviderFilterPushDown::Unsupported; filters.len()])
+        Ok(vec![
+            TableProviderFilterPushDown::Unsupported;
+            filters.len()
+        ])
     }
 }
 

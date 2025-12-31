@@ -9,44 +9,84 @@
 /// - Membership: In
 /// - Logical: Not, And, Or
 /// - String patterns: StartsWith, EndsWith, Contains
-
 use datafusion::logical_expr::{Expr, Operator};
 use datafusion_common::ScalarValue;
-
 #[cfg(feature = "python")]
 use pyo3::prelude::*;
 #[cfg(feature = "python")]
-use pyo3::IntoPyObject;
-#[cfg(feature = "python")]
 use pyo3::types::{PyAnyMethods, PyList, PyTuple};
+#[cfg(feature = "python")]
+use pyo3::IntoPyObject;
 
 /// Represents a filter that can be pushed to Python.
 #[derive(Debug, Clone)]
 pub enum PythonFilter {
     // Comparison filters
-    EqualTo { column: ColumnPath, value: FilterValue },
-    EqualNullSafe { column: ColumnPath, value: FilterValue },
-    GreaterThan { column: ColumnPath, value: FilterValue },
-    GreaterThanOrEqual { column: ColumnPath, value: FilterValue },
-    LessThan { column: ColumnPath, value: FilterValue },
-    LessThanOrEqual { column: ColumnPath, value: FilterValue },
+    EqualTo {
+        column: ColumnPath,
+        value: FilterValue,
+    },
+    EqualNullSafe {
+        column: ColumnPath,
+        value: FilterValue,
+    },
+    GreaterThan {
+        column: ColumnPath,
+        value: FilterValue,
+    },
+    GreaterThanOrEqual {
+        column: ColumnPath,
+        value: FilterValue,
+    },
+    LessThan {
+        column: ColumnPath,
+        value: FilterValue,
+    },
+    LessThanOrEqual {
+        column: ColumnPath,
+        value: FilterValue,
+    },
 
     // Null checks
-    IsNull { column: ColumnPath },
-    IsNotNull { column: ColumnPath },
+    IsNull {
+        column: ColumnPath,
+    },
+    IsNotNull {
+        column: ColumnPath,
+    },
 
     // Membership
-    In { column: ColumnPath, values: Vec<FilterValue> },
+    In {
+        column: ColumnPath,
+        values: Vec<FilterValue>,
+    },
 
     // Logical
-    Not { child: Box<PythonFilter> },
-    And { left: Box<PythonFilter>, right: Box<PythonFilter> },
-    Or { left: Box<PythonFilter>, right: Box<PythonFilter> },
+    Not {
+        child: Box<PythonFilter>,
+    },
+    And {
+        left: Box<PythonFilter>,
+        right: Box<PythonFilter>,
+    },
+    Or {
+        left: Box<PythonFilter>,
+        right: Box<PythonFilter>,
+    },
 
     // String patterns
-    StringStartsWith { column: ColumnPath, value: String },
-    StringEndsWith { column: ColumnPath, value: String },
-    StringContains { column: ColumnPath, value: String },
+    StringStartsWith {
+        column: ColumnPath,
+        value: String,
+    },
+    StringEndsWith {
+        column: ColumnPath,
+        value: String,
+    },
+    StringContains {
+        column: ColumnPath,
+        value: String,
+    },
 }
 
 /// Column path as tuple of strings (for nested columns).
@@ -176,9 +216,8 @@ fn expr_to_filter(expr: &Expr) -> Option<PythonFilter> {
         // IN list
         Expr::InList(in_list) => {
             let column = expr_to_column(&in_list.expr)?;
-            let values: Option<Vec<FilterValue>> =
-                in_list.list.iter().map(expr_to_value).collect();
-            
+            let values: Option<Vec<FilterValue>> = in_list.list.iter().map(expr_to_value).collect();
+
             let filter = PythonFilter::In {
                 column,
                 values: values?,
@@ -206,7 +245,7 @@ fn expr_to_filter(expr: &Expr) -> Option<PythonFilter> {
                             value: inner.to_string(),
                         });
                     }
-                } else if pattern.ends_with('%') && !pattern[..pattern.len()-1].contains('%') {
+                } else if pattern.ends_with('%') && !pattern[..pattern.len() - 1].contains('%') {
                     return Some(PythonFilter::StringStartsWith {
                         column,
                         value: pattern[..pattern.len() - 1].to_string(),
@@ -243,18 +282,20 @@ fn expr_to_value(expr: &Expr) -> Option<FilterValue> {
 
 /// Convert Python filters to Python objects.
 #[cfg(feature = "python")]
+#[allow(dead_code)]
 pub fn filters_to_python(py: Python<'_>, filters: &[PythonFilter]) -> PyResult<Py<PyAny>> {
     let datasource_module = py.import("pysail.spark.datasource.base")?;
-    
+
     let py_filters: Vec<Py<PyAny>> = filters
         .iter()
         .map(|f| filter_to_python(py, &datasource_module, f))
         .collect::<PyResult<_>>()?;
-    
+
     Ok(PyList::new(py, py_filters)?.into_any().unbind())
 }
 
 #[cfg(feature = "python")]
+#[allow(dead_code)]
 fn filter_to_python(
     py: Python<'_>,
     module: &Bound<'_, PyAny>,
@@ -320,39 +361,46 @@ fn filter_to_python(
                 .map(|v| v.to_python(py))
                 .collect::<PyResult<_>>()?;
             let values_tuple = PyTuple::new(py, py_values)?;
-            cls.call1((col_tuple, values_tuple)).map(|o| o.into_any().unbind())
+            cls.call1((col_tuple, values_tuple))
+                .map(|o| o.into_any().unbind())
         }
         PythonFilter::And { left, right } => {
             let cls = module.getattr("And")?;
             let left_obj = filter_to_python(py, module, left)?;
             let right_obj = filter_to_python(py, module, right)?;
-            cls.call1((left_obj, right_obj)).map(|o| o.into_any().unbind())
+            cls.call1((left_obj, right_obj))
+                .map(|o| o.into_any().unbind())
         }
         PythonFilter::Or { left, right } => {
             let cls = module.getattr("Or")?;
             let left_obj = filter_to_python(py, module, left)?;
             let right_obj = filter_to_python(py, module, right)?;
-            cls.call1((left_obj, right_obj)).map(|o| o.into_any().unbind())
+            cls.call1((left_obj, right_obj))
+                .map(|o| o.into_any().unbind())
         }
         PythonFilter::StringStartsWith { column, value } => {
             let cls = module.getattr("StringStartsWith")?;
             let col_tuple = column_to_python(py, column)?;
-            cls.call1((col_tuple, value.as_str())).map(|o| o.into_any().unbind())
+            cls.call1((col_tuple, value.as_str()))
+                .map(|o| o.into_any().unbind())
         }
         PythonFilter::StringEndsWith { column, value } => {
             let cls = module.getattr("StringEndsWith")?;
             let col_tuple = column_to_python(py, column)?;
-            cls.call1((col_tuple, value.as_str())).map(|o| o.into_any().unbind())
+            cls.call1((col_tuple, value.as_str()))
+                .map(|o| o.into_any().unbind())
         }
         PythonFilter::StringContains { column, value } => {
             let cls = module.getattr("StringContains")?;
             let col_tuple = column_to_python(py, column)?;
-            cls.call1((col_tuple, value.as_str())).map(|o| o.into_any().unbind())
+            cls.call1((col_tuple, value.as_str()))
+                .map(|o| o.into_any().unbind())
         }
     }
 }
 
 #[cfg(feature = "python")]
+#[allow(dead_code)]
 fn column_to_python(py: Python<'_>, column: &ColumnPath) -> PyResult<Py<PyAny>> {
     let parts: Vec<&str> = column.iter().map(|s| s.as_str()).collect();
     Ok(PyTuple::new(py, parts)?.into_any().unbind())
@@ -360,24 +408,24 @@ fn column_to_python(py: Python<'_>, column: &ColumnPath) -> PyResult<Py<PyAny>> 
 
 #[cfg(test)]
 mod tests {
-    use super::*;
     use datafusion::prelude::*;
+
+    use super::*;
 
     #[test]
     fn test_simple_equality_filter() {
         let expr = col("id").eq(lit(42i32));
         let filter = expr_to_filter(&expr);
-        
+
         assert!(filter.is_some());
-        match filter.unwrap() {
-            PythonFilter::EqualTo { column, value } => {
-                assert_eq!(column, vec!["id".to_string()]);
-                match value {
-                    FilterValue::Int32(v) => assert_eq!(v, 42),
-                    _ => panic!("Expected Int32"),
-                }
-            }
-            _ => panic!("Expected EqualTo filter"),
+        if let Some(f) = filter {
+            assert!(
+                matches!(&f, PythonFilter::EqualTo { column, value }
+                    if column == &vec!["id".to_string()] && matches!(value, FilterValue::Int32(42))
+                ),
+                "Expected EqualTo filter with id=42, got {:?}",
+                f
+            );
         }
     }
 
@@ -385,7 +433,7 @@ mod tests {
     fn test_comparison_filters() {
         let expr = col("age").gt(lit(18i32));
         let filter = expr_to_filter(&expr);
-        
+
         assert!(matches!(filter, Some(PythonFilter::GreaterThan { .. })));
     }
 
@@ -393,7 +441,7 @@ mod tests {
     fn test_null_filters() {
         let expr = col("name").is_null();
         let filter = expr_to_filter(&expr);
-        
+
         assert!(matches!(filter, Some(PythonFilter::IsNull { .. })));
     }
 
@@ -402,7 +450,7 @@ mod tests {
         // Complex expression that can't be pushed down
         let expr = col("a").add(col("b")).eq(lit(10i32));
         let filter = expr_to_filter(&expr);
-        
+
         assert!(filter.is_none());
     }
 }

@@ -19,37 +19,36 @@
 /// - `executor`: Python execution abstraction
 /// - `stream`: RecordBatch streaming with RAII cleanup
 /// - `arrow_utils`: Arrow ↔ Python conversion utilities
-
 pub mod arrow_utils;
 mod discovery;
 mod error;
 mod exec;
 mod executor;
 mod filter;
+#[allow(clippy::module_inception)]
 mod python_datasource;
 mod python_table_provider;
 mod stream;
 mod table_format;
 
 // Public exports - always available
-pub use error::PythonDataSourceError;
-pub use filter::{exprs_to_python_filters, ColumnPath, FilterValue, PythonFilter};
-
 // Public exports - require python feature
 #[cfg(feature = "python")]
 pub use discovery::{
     discover_datasources, validate_datasource_class, DataSourceEntry, PythonDataSourceRegistry,
     DATASOURCE_REGISTRY,
 };
+pub use error::PythonDataSourceError;
+#[cfg(feature = "python")]
+pub use exec::PythonDataSourceExec;
 #[cfg(feature = "python")]
 pub use executor::{InProcessExecutor, InputPartition, PythonExecutor};
+pub use filter::{exprs_to_python_filters, ColumnPath, FilterValue, PythonFilter};
 #[cfg(feature = "python")]
 pub use python_datasource::PythonDataSource;
 #[cfg(feature = "python")]
 pub use python_table_provider::PythonTableProvider;
 #[cfg(feature = "python")]
 pub use stream::{PythonDataSourceStream, RowBatchCollector, DEFAULT_BATCH_SIZE};
-#[cfg(feature = "python")]
-pub use exec::PythonDataSourceExec;
 #[cfg(feature = "python")]
 pub use table_format::PythonTableFormat;
