@@ -152,13 +152,6 @@ jobs:
             -t lcov --branch --ignore-not-existing \
             -o coverage-spark-${{ inputs.spark_version }}.info
 
-      - name: Upload spark coverage artifact
-        uses: actions/upload-artifact@v4
-        with:
-          name: spark-coverage-report-${{ inputs.spark_version }}
-          path: coverage-spark-${{ inputs.spark_version }}.info
-          retention-days: 1
-
       - name: Upload Spark coverage to Codecov
         if: ${{ github.actor != 'dependabot[bot]' }}
         uses: codecov/codecov-action@v5
