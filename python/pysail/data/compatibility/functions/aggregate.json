@@ -2,7 +2,8 @@
   {
     "module": "pyspark.sql.functions",
     "function": "any",
-    "status": "supported"
+    "status": "supported",
+    "note": "Spark SQL only; not available in PySpark"
   },
   {
     "module": "pyspark.sql.functions",
@@ -46,6 +47,18 @@
   },
   {
     "module": "pyspark.sql.functions",
+    "function": "bitmap_construct_agg",
+    "status": "planned",
+    "ref": "https://github.com/lakehq/sail/issues/309"
+  },
+  {
+    "module": "pyspark.sql.functions",
+    "function": "bitmap_or_agg",
+    "status": "planned",
+    "ref": "https://github.com/lakehq/sail/issues/309"
+  },
+  {
+    "module": "pyspark.sql.functions",
     "function": "bool_and",
     "status": "supported"
   },
@@ -62,7 +75,8 @@
   {
     "module": "pyspark.sql.functions",
     "function": "collect_set",
-    "status": "supported"
+    "status": "partially supported",
+    "ref": "https://github.com/lakehq/sail/pull/585"
   },
   {
     "module": "pyspark.sql.functions",
@@ -76,8 +90,19 @@
   },
   {
     "module": "pyspark.sql.functions",
+    "function": "count_distinct",
+    "status": "supported"
+  },
+  {
+    "module": "pyspark.sql.functions",
     "function": "count_if",
     "status": "supported"
+  },
+  {
+    "module": "pyspark.sql.functions",
+    "function": "count_min_sketch",
+    "status": "planned",
+    "ref": "https://github.com/lakehq/sail/issues/309"
   },
   {
     "module": "pyspark.sql.functions",
@@ -111,6 +136,30 @@
   },
   {
     "module": "pyspark.sql.functions",
+    "function": "grouping_id",
+    "status": "planned",
+    "ref": "https://github.com/lakehq/sail/issues/309"
+  },
+  {
+    "module": "pyspark.sql.functions",
+    "function": "histogram_numeric",
+    "status": "planned",
+    "ref": "https://github.com/lakehq/sail/issues/309"
+  },
+  {
+    "module": "pyspark.sql.functions",
+    "function": "hll_sketch_agg",
+    "status": "planned",
+    "ref": "https://github.com/lakehq/sail/issues/309"
+  },
+  {
+    "module": "pyspark.sql.functions",
+    "function": "hll_union_agg",
+    "status": "planned",
+    "ref": "https://github.com/lakehq/sail/issues/309"
+  },
+  {
+    "module": "pyspark.sql.functions",
     "function": "kurtosis",
     "status": "supported"
   },
@@ -127,6 +176,11 @@
   {
     "module": "pyspark.sql.functions",
     "function": "listagg",
+    "status": "supported"
+  },
+  {
+    "module": "pyspark.sql.functions",
+    "function": "listagg_distinct",
     "status": "supported"
   },
   {
@@ -166,8 +220,33 @@
   },
   {
     "module": "pyspark.sql.functions",
+    "function": "percentile",
+    "status": "planned",
+    "ref": "https://github.com/lakehq/sail/issues/309"
+  },
+  {
+    "module": "pyspark.sql.functions",
     "function": "percentile_approx",
     "status": "supported"
+  },
+  {
+    "module": "pyspark.sql.functions",
+    "function": "percentile_cont",
+    "status": "planned",
+    "note": "Spark SQL only; not available in PySpark",
+    "ref": "https://github.com/lakehq/sail/issues/309"
+  },
+  {
+    "module": "pyspark.sql.functions",
+    "function": "percentile_disc",
+    "status": "planned",
+    "note": "Spark SQL only; not available in PySpark",
+    "ref": "https://github.com/lakehq/sail/issues/309"
+  },
+  {
+    "module": "pyspark.sql.functions",
+    "function": "product",
+    "status": "??? not on roadmap"
   },
   {
     "module": "pyspark.sql.functions",
@@ -251,18 +330,30 @@
   },
   {
     "module": "pyspark.sql.functions",
+    "function": "string_agg_distinct",
+    "status": "supported"
+  },
+  {
+    "module": "pyspark.sql.functions",
     "function": "sum",
     "status": "supported"
   },
   {
     "module": "pyspark.sql.functions",
-    "function": "try_avg",
+    "function": "sum_distinct",
     "status": "supported"
   },
   {
     "module": "pyspark.sql.functions",
+    "function": "try_avg",
+    "status": "supported",
+    "ref": "https://github.com/lakehq/sail/pull/1012"
+  },
+  {
+    "module": "pyspark.sql.functions",
     "function": "try_sum",
-    "status": "supported"
+    "status": "supported",
+    "ref": "https://github.com/lakehq/sail/pull/960"
   },
   {
     "module": "pyspark.sql.functions",
@@ -278,55 +369,5 @@
     "module": "pyspark.sql.functions",
     "function": "variance",
     "status": "supported"
-  },
-  {
-    "module": "pyspark.sql.functions",
-    "function": "bitmap_construct_agg",
-    "status": "in progress"
-  },
-  {
-    "module": "pyspark.sql.functions",
-    "function": "bitmap_or_agg",
-    "status": "in progress"
-  },
-  {
-    "module": "pyspark.sql.functions",
-    "function": "count_min_sketch",
-    "status": "in progress"
-  },
-  {
-    "module": "pyspark.sql.functions",
-    "function": "grouping_id",
-    "status": "in progress"
-  },
-  {
-    "module": "pyspark.sql.functions",
-    "function": "histogram_numeric",
-    "status": "in progress"
-  },
-  {
-    "module": "pyspark.sql.functions",
-    "function": "hll_sketch_agg",
-    "status": "in progress"
-  },
-  {
-    "module": "pyspark.sql.functions",
-    "function": "hll_union_agg",
-    "status": "in progress"
-  },
-  {
-    "module": "pyspark.sql.functions",
-    "function": "percentile",
-    "status": "in progress"
-  },
-  {
-    "module": "pyspark.sql.functions",
-    "function": "percentile_cont",
-    "status": "in progress"
-  },
-  {
-    "module": "pyspark.sql.functions",
-    "function": "percentile_disc",
-    "status": "in progress"
   }
 ]

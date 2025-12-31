@@ -1,28 +1,27 @@
 [
   {
     "module": "pyspark.sql.functions",
-    "function": "parse_url",
+    "function": "call_udf",
     "status": "supported"
   },
   {
     "module": "pyspark.sql.functions",
-    "function": "try_parse_url",
+    "function": "pandas_udf",
     "status": "supported"
   },
   {
     "module": "pyspark.sql.functions",
-    "function": "try_url_decode",
-    "status": "planned",
-    "ref": "https://github.com/lakehq/sail/issues/230"
-  },
-  {
-    "module": "pyspark.sql.functions",
-    "function": "url_decode",
+    "function": "udf",
     "status": "supported"
   },
   {
     "module": "pyspark.sql.functions",
-    "function": "url_encode",
+    "function": "udtf",
+    "status": "supported"
+  },
+  {
+    "module": "pyspark.sql.functions",
+    "function": "unwrap_udt",
     "status": "supported"
   }
 ]

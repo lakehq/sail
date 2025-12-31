@@ -127,7 +127,8 @@
   {
     "module": "pyspark.sql.functions",
     "function": "div",
-    "status": "supported"
+    "status": "supported",
+    "note": "Spark SQL only; not available in PySpark"
   },
   {
     "module": "pyspark.sql.functions",
@@ -202,6 +203,12 @@
   {
     "module": "pyspark.sql.functions",
     "function": "mod",
+    "status": "supported",
+    "note": "Spark SQL only; not available in PySpark"
+  },
+  {
+    "module": "pyspark.sql.functions",
+    "function": "negate",
     "status": "supported"
   },
   {
@@ -246,17 +253,17 @@
   },
   {
     "module": "pyspark.sql.functions",
-    "function": "random_poisson",
-    "status": "supported"
-  },
-  {
-    "module": "pyspark.sql.functions",
     "function": "randn",
     "status": "supported"
   },
   {
     "module": "pyspark.sql.functions",
     "function": "random",
+    "status": "supported"
+  },
+  {
+    "module": "pyspark.sql.functions",
+    "function": "random_poisson",
     "status": "supported"
   },
   {
@@ -321,12 +328,12 @@
   },
   {
     "module": "pyspark.sql.functions",
-    "function": "try_multiply",
+    "function": "try_mod",
     "status": "supported"
   },
   {
     "module": "pyspark.sql.functions",
-    "function": "try_mod",
+    "function": "try_multiply",
     "status": "supported"
   },
   {
@@ -341,12 +348,14 @@
   },
   {
     "module": "pyspark.sql.functions",
-    "function": "width_bucket",
-    "status": "supported"
+    "function": "uniform",
+    "status": "planned",
+    "ref": "https://github.com/lakehq/sail/pull/1074"
   },
   {
     "module": "pyspark.sql.functions",
-    "function": "uniform",
-    "status": "in progress"
+    "function": "width_bucket",
+    "status": "supported",
+    "ref": "https://github.com/lakehq/sail/issues/1067"
   }
 ]

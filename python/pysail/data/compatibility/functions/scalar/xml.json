@@ -2,61 +2,73 @@
   {
     "module": "pyspark.sql.functions",
     "function": "from_xml",
-    "status": "in progress"
+    "status": "planned",
+    "ref": "https://github.com/lakehq/sail/issues/231"
   },
   {
     "module": "pyspark.sql.functions",
     "function": "schema_of_xml",
-    "status": "in progress"
+    "status": "planned",
+    "ref": "https://github.com/lakehq/sail/issues/231"
   },
   {
     "module": "pyspark.sql.functions",
     "function": "to_xml",
-    "status": "in progress"
+    "status": "planned",
+    "ref": "https://github.com/lakehq/sail/issues/231"
   },
   {
     "module": "pyspark.sql.functions",
     "function": "xpath",
-    "status": "in progress"
+    "status": "planned",
+    "ref": "https://github.com/lakehq/sail/issues/231"
   },
   {
     "module": "pyspark.sql.functions",
     "function": "xpath_boolean",
-    "status": "in progress"
+    "status": "planned",
+    "ref": "https://github.com/lakehq/sail/issues/231"
   },
   {
     "module": "pyspark.sql.functions",
     "function": "xpath_double",
-    "status": "in progress"
+    "status": "planned",
+    "ref": "https://github.com/lakehq/sail/issues/231"
   },
   {
     "module": "pyspark.sql.functions",
     "function": "xpath_float",
-    "status": "in progress"
+    "status": "planned",
+    "ref": "https://github.com/lakehq/sail/issues/231"
   },
   {
     "module": "pyspark.sql.functions",
     "function": "xpath_int",
-    "status": "in progress"
+    "status": "planned",
+    "ref": "https://github.com/lakehq/sail/issues/231"
   },
   {
     "module": "pyspark.sql.functions",
     "function": "xpath_long",
-    "status": "in progress"
+    "status": "planned",
+    "ref": "https://github.com/lakehq/sail/issues/231"
   },
   {
     "module": "pyspark.sql.functions",
     "function": "xpath_number",
-    "status": "in progress"
+    "status": "planned",
+    "ref": "https://github.com/lakehq/sail/issues/231"
   },
   {
     "module": "pyspark.sql.functions",
     "function": "xpath_short",
-    "status": "in progress"
+    "status": "planned",
+    "ref": "https://github.com/lakehq/sail/issues/231"
   },
   {
     "module": "pyspark.sql.functions",
     "function": "xpath_string",
-    "status": "in progress"
+    "status": "planned",
+    "ref": "https://github.com/lakehq/sail/issues/231"
   }
 ]
