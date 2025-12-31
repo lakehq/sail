@@ -107,3 +107,4 @@ AGENTS.md
 
 # Reference/backup directories
 sail2/
+# hook test - this edit should trigger cargo clippy
